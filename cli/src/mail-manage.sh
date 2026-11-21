@@ -154,14 +154,14 @@ cmd_mail_external() {
     if _wants_help "$@"; then cmd_help_mail_link; exit 0; fi
     local sub=""
     case "${1:-}" in
-        add|list|remove|upgrade|calendars) sub="$1"; shift ;;
+        add|list|remove|upgrade|relink|calendars) sub="$1"; shift ;;
         "") cmd_help_mail_link; exit 0 ;;
         -*) sub="list" ;;  # bare `k2 mail link --json` = list
         grant|revoke)
             _mail_err "usage" "per-workspace access moved — use 'k2 mail access ${1} <address> <workspace>'"
             exit 2 ;;
         *)
-            _mail_err "usage" "unknown link command '${1:-}' — usage: k2 mail link <add|upgrade|calendars|list|remove>"
+            _mail_err "usage" "unknown link command '${1:-}' — usage: k2 mail link <add|upgrade|relink|calendars|list|remove>"
             exit 2 ;;
     esac
     local address="" workspace="" host="" port="" tls="" user="" name="" \
@@ -299,6 +299,22 @@ cmd_mail_external() {
             fi
             local M_VERB="link_oauth_upgrade" M_JSON="$as_json" M_ADDRESS="$address" \
                   M_PROVIDER="$provider" M_FEATURES="$features"
+            _mail_py ;;
+        relink)
+            # 0.46.17: sign in again IN PLACE for what the link already has
+            # (same row id, grants, levels, calendar features) — the fix
+            # for 'needs re-link'. A person's step: it opens a Google or
+            # Microsoft sign-in; agent tokens get owner_only (exit 3).
+            if [ -z "$address" ]; then
+                _mail_err "usage" "link relink requires the <address> ('k2 mail link list' marks the ones that need it)"
+                exit 2
+            fi
+            if [ -n "$host" ] || $pass_stdin || [ -n "$pass_ref" ] || [ -n "$workspace" ] || [ -n "$features" ]; then
+                _mail_err "usage" "link relink takes only <address> [--json] (it keeps the link's features; add more with 'k2 mail link upgrade')"
+                exit 2
+            fi
+            local M_VERB="link_oauth_upgrade" M_JSON="$as_json" M_ADDRESS="$address" \
+                  M_PROVIDER="$provider" M_FEATURES="" M_RELINK=true
             _mail_py ;;
         calendars)
             # MCS3: show or set the per-server switch for calendars on

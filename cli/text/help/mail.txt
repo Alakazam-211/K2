@@ -23,9 +23,10 @@ DISCOVER & READ
 WRITE
   draft <message-id>          Reply DRAFT in the inbox's Drafts (hosted or linked);
                               a person edits/sends it from the top of its thread.
-                              --reply-all, --cc, --bcc: who else it goes to
+                              --to, --reply-all, --cc, --bcc: who it goes to
   draft --to --subject        LINKED: compose a brand-new draft (no message-id)
-  drafts                      Your reply drafts and what a person did with each
+  draft delete <draft-id>     Delete a draft YOU saved (others: exit 3)
+  drafts                      Your drafts and what a person did with each
   send <to>                   Send from an inbox you have 'send' on — hosted OR a linked
                               inbox over SMTP — gated off | approval | on (human's choice)
   reply <message-id>          Guardrailed reply (needs 'send' on the receiving inbox);
@@ -43,9 +44,10 @@ ORGANIZE (needs canManage; delete needs canDelete — the owner grants these via
   folder list|create|rename   Folder management on an inbox
 
 CONNECT & SHARE
-  link add|upgrade|list|remove
+  link add|upgrade|relink|list|remove
                               Connect your OWN external accounts (IMAP, Gmail or
-                              Microsoft 365 OAuth); upgrade adds a read-only calendar
+                              Microsoft 365 OAuth); upgrade adds a read-only calendar;
+                              relink signs in again in place (a person's step)
   oauth-config show|set|clear Your own Google / Microsoft OAuth app + the Microsoft
                               tenant (owner)
   access grant|revoke|primary|level|manage

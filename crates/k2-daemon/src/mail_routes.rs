@@ -346,6 +346,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/mail/folder/create"
         | "/cli/mail/folder/rename"
         | "/cli/mail/draft"
+        | "/cli/mail/draft/delete"
         | "/cli/mail/import"
         | "/cli/mail/cert/renew"
         | "/cli/mail/alias/remove"
@@ -394,7 +395,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
 
         _ => CliResponse::not_found(),
     };
-    Some(resp)
+    // 0.46.17: a linked inbox's session cap / provider cool-down answer
+    // 429 inbox_busy / 503 inbox_throttled, whatever route met it.
+    Some(crate::mail::imap_guard::rewrite_response(resp))
 }
 
 /// Dispatch a `/cli/mail/*` POST body to its per-concern handler.
@@ -409,7 +412,7 @@ pub fn dispatch_post(path: &str, body: &[u8]) -> CliResponse {
 /// Same as [`dispatch_post`], with the live daemon HTTP port for mail
 /// Enable → `skin_door::apply` (dispatcher `state.port`).
 pub fn dispatch_post_at(path: &str, body: &[u8], daemon_port: Option<u16>) -> CliResponse {
-    match path {
+    let resp = match path {
         "/cli/mail/server/enable" => routes_server::handle_server_enable_at(body, daemon_port),
         "/cli/mail/server/disable" => routes_server::handle_server_disable(body),
         "/cli/mail/server/rotate-admin" => routes_server::handle_server_rotate_admin(body),
@@ -471,6 +474,8 @@ pub fn dispatch_post_at(path: &str, body: &[u8], daemon_port: Option<u16>) -> Cl
         "/cli/mail/folder/create" => routes_messages::handle_folder_create(body),
         "/cli/mail/folder/rename" => routes_messages::handle_folder_rename(body),
         "/cli/mail/draft" => routes_external::handle_draft(body),
+        // 0.46.17: an agent deletes a draft it saved (`k2 mail draft delete`).
+        "/cli/mail/draft/delete" => crate::mail::draft_delete::handle_draft_delete(body),
         "/cli/mail/import" => crate::mail::import::handle_import(body),
         "/cli/mail/quota" => crate::mail::quota::handle_quota_set(body),
         "/cli/mail/catchall" => crate::mail::catchall::handle_catchall_post(body),
@@ -556,7 +561,8 @@ pub fn dispatch_post_at(path: &str, body: &[u8], daemon_port: Option<u16>) -> Cl
         "/cli/mail/calendar/calendars" => crate::mail::calendar_link_routes::handle_calendars_post(body),
         "/cli/mail/calendar/link-request" => crate::mail::calendar_link_routes::handle_link_request(body),
         _ => CliResponse::not_found(),
-    }
+    };
+    crate::mail::imap_guard::rewrite_response(resp)
 }
 
 /// Owner-level `/cli/mail/*` mutations — the paths the dispatcher's

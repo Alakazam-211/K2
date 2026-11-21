@@ -1026,11 +1026,20 @@ cmd_mail_approvals() {
 # (`can_draft`); sending needs level send AND Sending=on.
 cmd_mail_draft() {
     if _wants_help "$@"; then cmd_help_mail_draft; exit 0; fi
-    local id="" body="" body_file="" as_json=false
+    # 0.46.17: `k2 mail draft delete <d_id>` — a draft this agent saved.
+    if [ "${1:-}" = "delete" ]; then
+        shift
+        cmd_mail_draft_delete "$@"
+        return
+    fi
+    local id="" body="" body_file="" as_json=false key=""
     local to="" subject="" cc="" bcc="" from="" attach="" reply_all=false
     while [ $# -gt 0 ]; do
         case "$1" in
             --reply-all) reply_all=true; shift ;;
+            --idempotency-key)
+                [ $# -ge 2 ] || { _mail_err "usage" "--idempotency-key requires a key (8-128 of letters, digits, . _ : -)"; exit 2; }
+                key="$2"; shift 2 ;;
             --reply-to)
                 [ $# -ge 2 ] || { _mail_err "usage" "--reply-to requires a message id (from 'k2 mail messages')"; exit 2; }
                 if [ -n "$id" ] && [ "$id" != "$2" ]; then
@@ -1064,7 +1073,7 @@ cmd_mail_draft() {
                 attach="${attach}${attach:+$'\n'}$2"; shift 2 ;;
             --json) as_json=true; shift ;;
             -*)
-                _mail_err "usage" "unknown flag '$1' — usage: k2 mail draft <message-id> (--body <text> | --body-file <f>) [--reply-all] [--cc <addr>] [--bcc <addr>] [--attach <path>]  OR  k2 mail draft --to <addr> --subject <s> (--body <text> | --body-file <f>) [--cc <addr>] [--bcc <addr>] [--attach <path>] [--from <linked>]"
+                _mail_err "usage" "unknown flag '$1' — usage: k2 mail draft <message-id> (--body <text> | --body-file <f>) [--to <addr> | --reply-all] [--cc <addr>] [--bcc <addr>] [--attach <path>]  OR  k2 mail draft --to <addr> --subject <s> (--body <text> | --body-file <f>) [--cc <addr>] [--bcc <addr>] [--attach <path>] [--from <linked>]  OR  k2 mail draft delete <draft-id>"
                 exit 2 ;;
             *)
                 if [ -z "$id" ]; then id="$1"; elif [ "$id" != "$1" ]; then
@@ -1074,8 +1083,12 @@ cmd_mail_draft() {
                 shift ;;
         esac
     done
-    if [ -n "$id" ] && { [ -n "$to" ] || [ -n "$subject" ]; }; then
-        _mail_err "usage" "pass either a <message-id> (reply draft) or --to/--subject (compose draft), not both"
+    if [ -n "$id" ] && [ -n "$subject" ]; then
+        _mail_err "usage" "a reply draft keeps the original's subject (Re: …) — pass either a <message-id> (reply draft) or --to/--subject (compose draft), not both"
+        exit 2
+    fi
+    if [ -n "$id" ] && [ -n "$to" ] && $reply_all; then
+        _mail_err "usage" "--to sets who the reply goes to and --reply-all copies everyone on the original: pick one (add others with --cc)"
         exit 2
     fi
     if [ -z "$id" ] && $reply_all; then
@@ -1116,7 +1129,33 @@ cmd_mail_draft() {
     fi
     local M_VERB="draft" M_JSON="$as_json" M_ID="$id" M_BODY="$body" \
           M_TO="$to" M_SUBJECT="$subject" M_CC="$cc" M_BCC="$bcc" M_FROM="$from" M_ATTACH="$attach" \
-          M_REPLY_ALL="$reply_all"
+          M_REPLY_ALL="$reply_all" M_KEY="$key"
+    _mail_py
+}
+
+# 0.46.17: delete a draft THIS workspace's agent saved (POST
+# /cli/mail/draft/delete). Hosted: removed from Drafts; linked IMAP: moved
+# to Trash. Anyone else's draft is refused (403 not_your_draft, exit 3).
+cmd_mail_draft_delete() {
+    if _wants_help "$@"; then cmd_help_mail_draft; exit 0; fi
+    local id="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*) _mail_err "usage" "unknown flag '$1' — usage: k2 mail draft delete <draft-id> [--json]"; exit 2 ;;
+            *)
+                if [ -n "$id" ]; then
+                    _mail_err "usage" "one draft id only — usage: k2 mail draft delete <draft-id> [--json]"
+                    exit 2
+                fi
+                id="$1"; shift ;;
+        esac
+    done
+    if [ -z "$id" ]; then
+        _mail_err "usage" "draft delete requires the draft id (d_…) — 'k2 mail drafts' lists yours"
+        exit 2
+    fi
+    local M_VERB="draft_delete" M_JSON="$as_json" M_ID="$id"
     _mail_py
 }
 

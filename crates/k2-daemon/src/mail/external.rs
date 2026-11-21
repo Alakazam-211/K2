@@ -353,7 +353,15 @@ pub fn fresh_access_token(
         client.secret.as_deref(),
         http,
     )
-    .map_err(|e| format!("oauth token for inbox {inbox_id}: {e}"))?;
+    .map_err(|e| {
+        let msg = format!("oauth token for inbox {inbox_id}: {e}");
+        // A refused refresh (invalid_grant, a revoked app) is a re-link:
+        // every transport (IMAP, SMTP, Graph) passes here.
+        if crate::mail::relink::is_credential_refused(&msg) {
+            record_check(inbox_id, Err(&msg));
+        }
+        msg
+    })?;
     if fresh.refreshed {
         persist_refresh(inbox_id, fresh.token_expires_at, fresh.scope.as_deref());
     } else if meta.granted_scopes.is_none() {
@@ -884,10 +892,14 @@ fn format_mailbox(name: Option<&str>, email: &str) -> String {
 /// `"A" <a@x>, "B" <b@y>` — a header-injection-proof address list (each
 /// mailbox goes through [`format_mailbox`], which strips CR/LF).
 fn format_addr_list(list: &[MailAddr]) -> String {
-    list.iter()
-        .map(|a| format_mailbox(a.name.as_deref(), &a.email))
-        .collect::<Vec<_>>()
-        .join(", ")
+    let parts: Vec<String> = list.iter().map(|a| format_mailbox(a.name.as_deref(), &a.email)).collect();
+    let one_line = parts.join(", ");
+    // RFC 5322 caps a line at 998 octets: a long list (a draft's 500 Bcc)
+    // folds after each comma instead. Short lists stay on one line.
+    if one_line.len() + "Bcc: ".len() <= 998 {
+        return one_line;
+    }
+    parts.join(",\r\n ")
 }
 
 /// Base64 body wrapped at 76 columns with CRLF (fully-ASCII output —
@@ -1894,30 +1906,6 @@ fn resolved_drafts_folder(
     }
 }
 
-fn append_draft_bytes(
-    ops: &dyn ImapOps,
-    inbox: &MailExternalInbox,
-    password: &str,
-    folder: &str,
-    rfc822: &[u8],
-) -> Result<String, ExtError> {
-    match ops.append_draft(inbox, password, folder, rfc822) {
-        Ok(()) => {
-            record_check(&inbox.id, Ok(()));
-            k2_core::log_debug!(
-                "[mail/external] draft appended to '{}' in {}",
-                folder,
-                inbox.email_address
-            );
-            Ok(folder.to_string())
-        }
-        Err(e) => {
-            record_check(&inbox.id, Err(&e));
-            Err(ExtError::Engine(format!("draft APPEND failed: {e}")))
-        }
-    }
-}
-
 /// The agent draft flow: fetch the source (must live in THIS inbox),
 /// extract the reply context, compose, APPEND with `\Draft` into the
 /// resolved Drafts folder. Returns the folder used. Health is stamped
@@ -2116,6 +2104,24 @@ pub fn save_compose_draft(
     body: &str,
     attachments: &[Rfc822Attachment],
 ) -> Result<String, ExtError> {
+    save_compose_draft_located(ops, inbox, password, to, cc, bcc, subject, body, attachments).map(|(f, _)| f)
+}
+
+/// [`save_compose_draft`], answering where the draft landed too (its
+/// `uid:<validity>:<uid>` token when the server says), so K2 can record it
+/// and the agent can delete it later (0321).
+#[allow(clippy::too_many_arguments)]
+pub fn save_compose_draft_located(
+    ops: &dyn ImapOps,
+    inbox: &MailExternalInbox,
+    password: &str,
+    to: &[MailAddr],
+    cc: &[MailAddr],
+    bcc: &[MailAddr],
+    subject: &str,
+    body: &str,
+    attachments: &[Rfc822Attachment],
+) -> Result<(String, Option<String>), ExtError> {
     if to.is_empty() {
         return Err(ExtError::Usage(
             "a compose draft needs at least one To recipient".to_string(),
@@ -2128,7 +2134,7 @@ pub fn save_compose_draft(
         inbox, to, cc, bcc, subject, body, &date, attachments, &boundary,
     )
     .map_err(ExtError::Engine)?;
-    append_draft_bytes(ops, inbox, password, &folder, &rfc822)
+    append_draft_located(ops, inbox, password, &folder, &rfc822)
 }
 
 /// Pure drafts-folder pick over a LIST survey: a `\Drafts` SPECIAL-USE

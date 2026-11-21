@@ -74,6 +74,9 @@ fn imap_err(what: &str, e: impl std::fmt::Display) -> String {
 /// There is no plaintext arm (the 0074 CHECK makes any other value
 /// unreachable; fail loud if the impossible happens).
 fn connect(inbox: &MailExternalInbox) -> Result<imap::Client<imap::Connection>, String> {
+    if let Some(plain) = plaintext_stub_connect(inbox) {
+        return plain;
+    }
     let mode = match inbox.tls.as_str() {
         TLS_IMPLICIT => ImapTlsMode::Implicit,
         TLS_STARTTLS => ImapTlsMode::StartTls,
@@ -97,13 +100,66 @@ fn connect_plaintext_for_test(
         .map_err(|e| imap_err("connect", e))
 }
 
-/// The SINGLE auth point for every read/draft/manage op. Two branches
-/// (O2): an `auth_kind='oauth'` row authenticates with SASL XOAUTH2
-/// against a freshly-minted access token; every other row keeps the
-/// EXACT app-password `LOGIN` path, byte-for-byte unchanged. The oauth
-/// columns live off the [`MailExternalInbox`] struct, so one raw-SQL
-/// read decides the branch.
-fn login(inbox: &MailExternalInbox, password: &str) -> Result<ImapSession, String> {
+/// Test-only: a loopback stub registered in [`plaintext_ports`] is reached
+/// in plaintext. A release build has no such door.
+#[cfg(test)]
+fn plaintext_stub_connect(inbox: &MailExternalInbox) -> Option<Result<imap::Client<imap::Connection>, String>> {
+    let port = inbox.port as u16;
+    let registered = plaintext_ports().lock().unwrap_or_else(|p| p.into_inner()).contains(&port);
+    (inbox.host == "127.0.0.1" && registered).then(|| connect_plaintext_for_test("127.0.0.1", port))
+}
+
+#[cfg(not(test))]
+fn plaintext_stub_connect(_inbox: &MailExternalInbox) -> Option<Result<imap::Client<imap::Connection>, String>> {
+    None
+}
+
+/// Test-only: loopback ports whose stub IMAP server speaks plaintext, so
+/// a test can drive the real [`login`] (session cap, cool-down).
+#[cfg(test)]
+pub(crate) fn plaintext_ports() -> &'static Mutex<std::collections::HashSet<u16>> {
+    static PORTS: OnceLock<Mutex<std::collections::HashSet<u16>>> = OnceLock::new();
+    PORTS.get_or_init(|| Mutex::new(std::collections::HashSet::new()))
+}
+
+/// A session that holds its place under the per-inbox cap
+/// ([`crate::mail::imap_guard`]) until it is dropped.
+pub type GuardedSession = crate::mail::imap_guard::Guarded<ImapSession>;
+
+/// The SINGLE auth point for every read/draft/manage op. First the
+/// per-inbox guard (0.46.17): no login during a provider cool-down, and at
+/// most `MAX_SESSIONS_PER_INBOX` sessions at once (a call past that
+/// queues briefly, then answers `inbox_busy`). A refused login is recorded
+/// on the row (`needs re-link`) and fed to the guard.
+fn login(inbox: &MailExternalInbox, password: &str) -> Result<GuardedSession, String> {
+    let permit = crate::mail::imap_guard::acquire(&inbox.id)?;
+    let session = login_now(inbox, password)?;
+    Ok(crate::mail::imap_guard::Guarded::new(session, permit))
+}
+
+/// [`login`] without a place under the cap (the mail watcher's one
+/// long-lived session), still never during a cool-down.
+fn login_now(inbox: &MailExternalInbox, password: &str) -> Result<ImapSession, String> {
+    crate::mail::imap_guard::check_cooldown(&inbox.id)?;
+    match login_inner(inbox, password) {
+        Ok(s) => {
+            crate::mail::imap_guard::note_success(&inbox.id);
+            Ok(s)
+        }
+        Err(e) => {
+            let e = crate::mail::relink::explain_xoauth2_refusal(&inbox.id, e);
+            crate::mail::relink::note_login_failure(&inbox.id, &e);
+            Err(e)
+        }
+    }
+}
+
+/// Two branches (O2): an `auth_kind='oauth'` row authenticates with SASL
+/// XOAUTH2 against a freshly-minted access token; every other row keeps
+/// the EXACT app-password `LOGIN` path, byte-for-byte unchanged. The oauth
+/// columns live off the [`MailExternalInbox`] struct, so one raw-SQL read
+/// decides the branch.
+fn login_inner(inbox: &MailExternalInbox, password: &str) -> Result<ImapSession, String> {
     let auth = external::read_oauth_fields(&inbox.id)?;
     if auth.auth_kind == external::AUTH_OAUTH {
         return oauth_login(inbox, &auth);
@@ -790,7 +846,7 @@ fn summary_from_fetch(
 
 /// Log in for the mail watcher: the same one auth point as every other read.
 pub fn watch_open(inbox: &MailExternalInbox, password: &str) -> Result<ImapSession, String> {
-    login(inbox, password)
+    login_now(inbox, password)
 }
 
 /// One poll: `EXAMINE` (read-only, so no flag on any message can change) and a

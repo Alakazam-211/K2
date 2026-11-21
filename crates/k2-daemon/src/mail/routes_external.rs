@@ -292,6 +292,9 @@ struct DraftBody {
     reply_all: bool,
     from: String,
     attachments: serde_json::Value,
+    /// The save's idempotency key (0.46.17, [`crate::mail::draft_keys`]):
+    /// the same key again answers the draft already saved.
+    idempotency_key: String,
 }
 
 /// POST `/cli/mail/draft` — agent verb. Two mutually exclusive forms:
@@ -347,11 +350,22 @@ fn handle_draft_with(body: &[u8], ops: &dyn ImapOps) -> CliResponse {
     let has_to = !to_raw.is_empty();
     let has_subject = !b.subject.trim().is_empty();
     let has_from = !b.from.trim().is_empty();
-    if has_id && (has_to || has_subject) {
+    // A reply draft takes --to (it replaces who the reply goes to; the
+    // thread stays), never --subject (a reply keeps "Re: <original>").
+    if has_id && has_subject {
         return error_response(
             "400 Bad Request",
             "usage",
-            "pass either a message id (reply draft) or --to/--subject (compose draft), not both",
+            "a reply draft keeps the original's subject (Re: …) — pass either a message id (reply \
+             draft) or --to/--subject (compose draft), not both",
+        );
+    }
+    if has_id && has_to && b.reply_all {
+        return error_response(
+            "400 Bad Request",
+            "usage",
+            "--to sets who the reply goes to and --reply-all copies everyone on the original: pick \
+             one (add others with --cc)",
         );
     }
     if !has_id && b.reply_all {
@@ -361,17 +375,10 @@ fn handle_draft_with(body: &[u8], ops: &dyn ImapOps) -> CliResponse {
             "--reply-all needs the message you're answering: k2 mail draft <message-id> --reply-all",
         );
     }
-    // Same always-on recipient cap as send: to + cc + bcc together.
-    let raw_total = to_raw.len() + cc_raw.len() + bcc_raw.len();
-    if raw_total > send::MAX_RECIPIENTS {
-        return error_response(
-            "400 Bad Request",
-            "usage",
-            &format!(
-                "too many recipients ({raw_total}) — max {} per message, counting to + cc + bcc",
-                send::MAX_RECIPIENTS
-            ),
-        );
+    // A draft's caps (a person reviews and sends it): To + Cc at the send
+    // cap, Bcc up to 500. Sends keep 10 over to + cc + bcc.
+    if let Err(h) = crate::mail::drafts::check_draft_caps(to_raw.len() + cc_raw.len(), bcc_raw.len()) {
+        return error_response("400 Bad Request", "usage", &h);
     }
     if has_id && has_from {
         return error_response(
@@ -407,6 +414,13 @@ fn handle_draft_with(body: &[u8], ops: &dyn ImapOps) -> CliResponse {
         Ok(v) => v,
         Err(resp) => return resp,
     };
+    // A key already used answers its draft; one still saving answers busy.
+    let key = b.idempotency_key.trim().to_string();
+    let _slot = match crate::mail::draft_keys::begin(&project_id, &key) {
+        Ok(s) => s,
+        Err(resp) => return resp,
+    };
+    let client_key = (!key.is_empty()).then_some(key.as_str());
 
     enum DraftKind {
         Reply { address: String, email_id: String, source_id: String, ask: ReplyAsk },
@@ -420,7 +434,8 @@ fn handle_draft_with(body: &[u8], ops: &dyn ImapOps) -> CliResponse {
                 "invalid message id — use an id from 'k2 mail messages'",
             );
         };
-        // `--reply-all` / `--cc` / `--bcc`: checked like a send's recipients.
+        // `--reply-all` / `--cc` / `--bcc` / `--to`: checked like a send's
+        // recipients; the draft rules (caps, sent-item reply) apply.
         let ask = ReplyAsk {
             all: b.reply_all,
             cc: match normalize_draft_recipients(&cc_raw) {
@@ -431,6 +446,11 @@ fn handle_draft_with(body: &[u8], ops: &dyn ImapOps) -> CliResponse {
                 Ok(c) => c,
                 Err(resp) => return resp,
             },
+            to: match normalize_draft_recipients(&to_raw) {
+                Ok(t) => t,
+                Err(resp) => return resp,
+            },
+            draft: true,
         };
         DraftKind::Reply { address, email_id, source_id: b.id.clone(), ask }
     } else {
@@ -467,7 +487,7 @@ fn handle_draft_with(body: &[u8], ops: &dyn ImapOps) -> CliResponse {
                          with 'k2 mail reply <id> --attach'",
                     );
                 }
-                return crate::mail::drafts::save_hosted_reply(&project_id, &path, &ai, email_id, source_id, &b.body, ask);
+                return crate::mail::drafts::save_hosted_reply(&project_id, &path, &ai, email_id, source_id, &b.body, ask, client_key);
             }
         }
     }
@@ -501,14 +521,15 @@ fn handle_draft_with(body: &[u8], ops: &dyn ImapOps) -> CliResponse {
     };
     let parts: Vec<Rfc822Attachment> = attachments.into_iter().map(out_to_rfc822).collect();
 
-    let ok_draft = |folder: String| {
+    let ok_draft = |folder: String, draft_id: &str| {
         let mut v = serde_json::json!({
             "ok": true,
             "address": inbox.email_address,
             "folder": folder,
+            "draftId": draft_id,
             "hint": format!(
-                "draft saved to '{folder}' in {} — your human can review and send it from \
-                 their own mail client",
+                "draft {draft_id} saved to '{folder}' in {} — your human can review and send it from \
+                 their own mail client; 'k2 mail draft delete {draft_id}' removes it",
                 inbox.email_address
             ),
         });
@@ -532,20 +553,24 @@ fn handle_draft_with(body: &[u8], ops: &dyn ImapOps) -> CliResponse {
                 .collect();
             let saved = match &kind {
                 DraftKind::Reply { email_id, ask, .. } => {
-                    // Graph picks the locked recipient itself; anyone else
-                    // the draft copies is planned here from the source.
-                    let parties = if ask.is_plain() {
-                        None
-                    } else {
-                        match graph_reply_parties(&backend, &inbox, email_id, ask, &b.id) {
-                            Ok(p) => Some(p),
-                            Err(resp) => return resp,
-                        }
+                    // Graph picks the locked recipient itself; the draft's
+                    // recipients are planned here from the source (always:
+                    // a reply to our own sent message must not go back to us).
+                    let parties = match graph_reply_parties(&backend, &inbox, email_id, ask, &b.id) {
+                        Ok(p) => p,
+                        Err(resp) => return resp,
                     };
-                    let (to, cc, bcc) = parties
-                        .map(|p| (p.extra_to_emails(), p.cc_emails(), p.bcc_emails()))
-                        .unwrap_or_default();
-                    backend.save_reply_draft_with(&inbox.id, email_id, &b.body, &to, &cc, &bcc, &atts)
+                    let to = if parties.replaced_to { parties.to_emails() } else { parties.extra_to_emails() };
+                    backend.save_reply_draft_with(
+                        &inbox.id,
+                        email_id,
+                        &b.body,
+                        &to,
+                        parties.replaced_to,
+                        &parties.cc_emails(),
+                        &parties.bcc_emails(),
+                        &atts,
+                    )
                 }
                 DraftKind::Compose { to, cc, bcc, subject } => backend.save_compose_draft(
                     &inbox.id, to, cc, bcc, subject, &b.body, &atts,
@@ -554,29 +579,33 @@ fn handle_draft_with(body: &[u8], ops: &dyn ImapOps) -> CliResponse {
             match saved {
                 // A Microsoft 365 reply draft is tracked, but Graph doesn't
                 // say where it went: the reader shows it, read only.
-                Ok(folder) if source_id.is_some() => {
-                    match crate::mail::drafts::record_new(
-                        Source::Linked,
-                        &inbox.id,
-                        &inbox.email_address,
-                        &project_id,
-                        &path,
-                        source_id.as_deref().unwrap_or_default(),
-                        None,
-                        None,
-                        None,
-                        None,
-                    ) {
-                        Ok(d) => ok_json(crate::mail::drafts::saved_answer(
+                // Compose drafts are recorded the same way (0321).
+                Ok(folder) => {
+                    let reply_of = source_id.as_deref().unwrap_or_default();
+                    match crate::mail::drafts::record(crate::mail::drafts::NewDraft {
+                        source: Source::Linked,
+                        inbox_id: &inbox.id,
+                        address: &inbox.email_address,
+                        project_id: &project_id,
+                        project_path: &path,
+                        reply_of,
+                        kind: if source_id.is_some() { crate::mail::drafts::KIND_REPLY } else { crate::mail::drafts::KIND_COMPOSE },
+                        thread_ref: None,
+                        in_reply_to: None,
+                        refs: None,
+                        backend_ref: None,
+                        client_key,
+                    }) {
+                        Ok(d) if source_id.is_some() => ok_json(crate::mail::drafts::saved_answer(
                             &inbox.email_address,
                             &folder,
-                            source_id.as_deref().unwrap_or_default(),
+                            reply_of,
                             Some(&d),
                         )),
+                        Ok(d) => ok_draft(folder, &d),
                         Err(resp) => resp,
                     }
                 }
-                Ok(folder) => ok_draft(folder),
                 Err(graph::GraphSendError::TooLarge(h)) => {
                     error_response("400 Bad Request", "attachment_too_large", &h)
                 }
@@ -600,18 +629,20 @@ fn handle_draft_with(body: &[u8], ops: &dyn ImapOps) -> CliResponse {
                     match external::save_reply_draft_located(
                         ops, &inbox, &password, email_id, &b.body, &parts, ask,
                     ) {
-                        Ok(saved) => match crate::mail::drafts::record_new(
-                            Source::Linked,
-                            &inbox.id,
-                            &inbox.email_address,
-                            &project_id,
-                            &path,
-                            token,
-                            None,
-                            saved.in_reply_to,
-                            saved.references,
-                            saved.uid_token,
-                        ) {
+                        Ok(saved) => match crate::mail::drafts::record(crate::mail::drafts::NewDraft {
+                            source: Source::Linked,
+                            inbox_id: &inbox.id,
+                            address: &inbox.email_address,
+                            project_id: &project_id,
+                            project_path: &path,
+                            reply_of: token,
+                            kind: crate::mail::drafts::KIND_REPLY,
+                            thread_ref: None,
+                            in_reply_to: saved.in_reply_to,
+                            refs: saved.references,
+                            backend_ref: saved.uid_token,
+                            client_key,
+                        }) {
                             Ok(d) => ok_json(crate::mail::drafts::saved_answer(
                                 &inbox.email_address,
                                 &saved.folder,
@@ -627,11 +658,27 @@ fn handle_draft_with(body: &[u8], ops: &dyn ImapOps) -> CliResponse {
                     let to_addrs = as_mailaddrs(to);
                     let cc_addrs = as_mailaddrs(cc);
                     let bcc_addrs = as_mailaddrs(bcc);
-                    match external::save_compose_draft(
+                    match external::save_compose_draft_located(
                         ops, &inbox, &password, &to_addrs, &cc_addrs, &bcc_addrs, subject,
                         &b.body, &parts,
                     ) {
-                        Ok(folder) => ok_draft(folder),
+                        Ok((folder, uid_token)) => match crate::mail::drafts::record(crate::mail::drafts::NewDraft {
+                            source: Source::Linked,
+                            inbox_id: &inbox.id,
+                            address: &inbox.email_address,
+                            project_id: &project_id,
+                            project_path: &path,
+                            reply_of: "",
+                            kind: crate::mail::drafts::KIND_COMPOSE,
+                            thread_ref: None,
+                            in_reply_to: None,
+                            refs: None,
+                            backend_ref: uid_token,
+                            client_key,
+                        }) {
+                            Ok(d) => ok_draft(folder, &d),
+                            Err(resp) => resp,
+                        },
                         Err(e) => ext_error_response(e),
                     }
                 }
@@ -1187,18 +1234,28 @@ mod tests {
         assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
         assert!(resp.body.contains("--reply-all needs the message"), "{}", resp.body);
 
+        // A draft: To + Cc keep the send cap of 10; Bcc takes up to 500.
         let resp = handle_draft(
             serde_json::json!({
                 "project": "/tmp/x", "subject": "s", "body": "hi",
                 "to": (0..6).map(|i| format!("t{i}@x.example")).collect::<Vec<_>>(),
-                "cc": ["c1@x.example", "c2@x.example"],
-                "bcc": ["b1@x.example", "b2@x.example", "b3@x.example"],
+                "cc": (0..5).map(|i| format!("c{i}@x.example")).collect::<Vec<_>>(),
             })
             .to_string()
             .as_bytes(),
         );
         assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
-        assert!(resp.body.contains("too many recipients (11)"), "{}", resp.body);
+        assert!(resp.body.contains("too many recipients in To + Cc (11)"), "{}", resp.body);
+        let resp = handle_draft(
+            serde_json::json!({
+                "project": "/tmp/x", "subject": "s", "body": "hi", "to": "t@x.example",
+                "bcc": (0..501).map(|i| format!("b{i}@x.example")).collect::<Vec<_>>(),
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
+        assert!(resp.body.contains("too many blind copies (501)"), "{}", resp.body);
 
         let (name, path) = unique("compose-bcc");
         let project_id = insert_project(&name, &path);
@@ -1313,6 +1370,114 @@ mod tests {
         assert!(!text.contains("\r\nBcc:"), "{text}");
         assert!(text.contains("In-Reply-To: <multi-1@mailer.example>\r\n"), "{text}");
         drop(appended);
+
+        let _ = std::fs::remove_dir_all(&path);
+        cleanup_project(&project_id);
+    }
+
+    /// 0.46.17 on a linked IMAP inbox: a reply draft's `--to` replaces who
+    /// it goes to and keeps the thread; a reply to a message this inbox
+    /// SENT goes to that message's To, not back to the inbox; a compose
+    /// draft takes 500 blind copies (folded, RFC 5322 line length) and is
+    /// recorded (kind compose); the same idempotency key answers the same
+    /// draft and appends nothing twice.
+    #[test]
+    fn linked_reply_to_override_sent_item_reply_big_bcc_and_one_save_per_key() {
+        let (name, path) = unique("drafts-0-46-17");
+        let project_id = insert_project(&name, &path);
+        std::fs::create_dir_all(&path).ok();
+        let mine = format!("me-{}@ext.example", &project_id[..8]);
+        seed_linked(&project_id, &mine, "imap", "oauth", Some("Drafts"));
+        let raw_from = |from: &str| {
+            format!(
+                "Date: Wed, 08 Jul 2026 10:15:00 +0000\r\n\
+                 Message-ID: <sent-1@ext.example>\r\n\
+                 From: {from}\r\n\
+                 To: \"Ada\" <ada@example.com>, bo@example.com\r\n\
+                 Cc: cy@example.com\r\n\
+                 Subject: Notice\r\n\
+                 Content-Type: text/plain; charset=utf-8\r\n\
+                 \r\n\
+                 Hello all.\r\n"
+            )
+        };
+        let mut ops = crate::mail::external::tests::FakeOps {
+            folders: vec![("Drafts".to_string(), true)],
+            ..Default::default()
+        };
+        for (tok, from) in [("uid:7:1", "pat@sender.example".to_string()), ("uid:7:2", mine.to_ascii_uppercase())] {
+            ops.raw_by_token.insert(
+                tok.to_string(),
+                crate::mail::external::RawEmail {
+                    received_at_iso: "2026-07-08T10:15:00Z".to_string(),
+                    unread: false,
+                    raw: raw_from(&from).into_bytes(),
+                },
+            );
+        }
+        let received = messages::encode_message_id(&mine, "uid:7:1");
+        let sent = messages::encode_message_id(&mine, "uid:7:2");
+        let post = |v: serde_json::Value| handle_draft_with(v.to_string().as_bytes(), &ops);
+        let header = |i: usize, name: &str| -> String {
+            let appended = ops.appended.lock().expect("lock");
+            let text = String::from_utf8(appended[i].1.clone()).expect("ascii");
+            let unfolded = text.replace("\r\n ", " ");
+            unfolded
+                .split("\r\n")
+                .find(|l| l.starts_with(name))
+                .unwrap_or_default()
+                .to_string()
+        };
+
+        // --to replaces the reply's To; the thread stays.
+        let resp = post(serde_json::json!({ "project": path, "id": received, "body": "fyi", "to": ["boss@example.com"], "cc": ["cy@example.com"] }));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        assert_eq!(header(0, "To:"), "To: <boss@example.com>");
+        assert_eq!(header(0, "Cc:"), "Cc: <cy@example.com>");
+        assert_eq!(header(0, "In-Reply-To:"), "In-Reply-To: <sent-1@ext.example>");
+        // --to with --reply-all is refused, and --subject on a reply too.
+        let resp = post(serde_json::json!({ "project": path, "id": received, "body": "x", "to": ["a@example.com"], "replyAll": true }));
+        assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
+        let resp = post(serde_json::json!({ "project": path, "id": received, "body": "x", "subject": "s" }));
+        assert!(resp.body.contains("not both"), "{}", resp.body);
+
+        // A reply to our own sent message goes to its To.
+        let resp = post(serde_json::json!({ "project": path, "id": sent, "body": "Reminder" }));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        assert_eq!(header(1, "To:"), "To: \"Ada\" <ada@example.com>, <bo@example.com>");
+        assert!(!header(1, "To:").to_ascii_lowercase().contains(&mine), "never to ourselves");
+
+        // A compose draft with 500 blind copies, saved once per key.
+        let bcc: Vec<String> = (0..500).map(|i| format!("member{i}@example.org")).collect();
+        let body = serde_json::json!({
+            "project": path, "to": mine, "subject": "Members notice", "body": "Dear members",
+            "bcc": bcc, "idempotencyKey": "k2d_test_key_0001",
+        });
+        let resp = post(body.clone());
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let first: serde_json::Value = body_json(&resp);
+        let draft_id = first["draftId"].as_str().expect("draftId").to_string();
+        {
+            let appended = ops.appended.lock().expect("lock");
+            let text = String::from_utf8(appended[2].1.clone()).expect("ascii");
+            for line in text.split("\r\n") {
+                assert!(line.len() <= 998, "an RFC 5322 line: {} octets", line.len());
+            }
+        }
+        assert_eq!(header(2, "Bcc:").matches('@').count(), 500);
+        let row = crate::mail::drafts::load(&draft_id).expect("recorded");
+        assert_eq!(row.kind, crate::mail::drafts::KIND_COMPOSE);
+        assert_eq!(row.author, project_id);
+        let again = post(body);
+        assert_eq!(again.status, "200 OK", "{}", again.body);
+        let again = body_json(&again);
+        assert_eq!(again["draftId"], draft_id.as_str());
+        assert_eq!(again["replayed"], true);
+        assert_eq!(ops.appended.lock().expect("lock").len(), 3, "nothing appended twice");
+        // A bad key is a usage error before anything is saved.
+        let resp = post(serde_json::json!({ "project": path, "to": mine, "subject": "s", "body": "b", "idempotencyKey": "bad key" }));
+        assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
+        assert_eq!(ops.appended.lock().expect("lock").len(), 3);
 
         let _ = std::fs::remove_dir_all(&path);
         cleanup_project(&project_id);

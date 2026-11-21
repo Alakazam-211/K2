@@ -64,6 +64,37 @@ fn error_response(status: &'static str, code: &str, hint: &str) -> CliResponse {
     }
 }
 
+/// A failed attachment fetch (list or download), saying whether to retry
+/// (0.46.17): `retry` = `safe` (a passing failure: the fetch only reads,
+/// and --out is written only once the whole attachment has arrived, so
+/// nothing was written), `after_relink` (the provider refused the
+/// credential: retrying won't help until a person links the inbox again).
+/// K2's own busy / cool-down answers keep their `retry_after_s`.
+fn attachment_fetch_error(hint: String) -> CliResponse {
+    if crate::mail::imap_guard::parse_tag(&hint).is_some() {
+        return read_error_response(ReadError::Engine(hint));
+    }
+    let (retry, tail) = if crate::mail::relink::is_credential_refused(&hint) {
+        (
+            "after_relink",
+            "Retrying won't help: a person links this inbox again ('k2 mail link relink <address>'). \
+             Nothing was written.",
+        )
+    } else {
+        (
+            "safe",
+            "Safe to retry (once, not in a loop): nothing was written, and a retry fetches the \
+             same attachment again.",
+        )
+    };
+    let mut resp = error_response("502 Bad Gateway", "engine", &format!("{hint} — {tail}"));
+    if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&resp.body) {
+        v["error"]["retry"] = serde_json::json!(retry);
+        resp.body = v.to_string();
+    }
+    resp
+}
+
 fn read_error_response(err: ReadError) -> CliResponse {
     match err {
         ReadError::Usage(hint) => error_response("400 Bad Request", "usage", &hint),
@@ -852,7 +883,7 @@ fn attachments_with_backend(
                 &format!("no message '{token}' in this workspace"),
             )
         }
-        Err(hint) => return read_error_response(ReadError::Engine(hint)),
+        Err(hint) => return attachment_fetch_error(hint),
     };
     let Some((n, target)) = get else {
         let list: Vec<serde_json::Value> = full
@@ -901,7 +932,7 @@ fn attachments_with_backend(
     };
     let bytes = match backend.fetch_blob(account_id, &meta.blob_id, &name, &meta.mime) {
         Ok(b) => b,
-        Err(hint) => return read_error_response(ReadError::Engine(hint)),
+        Err(hint) => return attachment_fetch_error(hint),
     };
     let written = if daemon_named {
         std::fs::OpenOptions::new()
@@ -2391,5 +2422,22 @@ mod tests {
             "DELETE FROM mail_external_inboxes WHERE id = ?1",
             rusqlite::params![id],
         );
+    }
+
+    /// 0.46.17: a failed attachment fetch says whether a retry is worth it.
+    #[test]
+    fn a_failed_attachment_fetch_says_whether_to_retry() {
+        let j = |r: &CliResponse| serde_json::from_str::<serde_json::Value>(&r.body).expect("json");
+        let transient = attachment_fetch_error("FETCH: connection reset by peer".to_string());
+        assert_eq!(transient.status, "502 Bad Gateway");
+        assert_eq!(j(&transient)["error"]["retry"], "safe");
+        assert!(j(&transient)["error"]["hint"].as_str().expect("hint").contains("nothing was written"));
+        let refused = attachment_fetch_error(
+            "Gmail rejected the OAuth access token (XOAUTH2 status 400) — the inbox must be re-linked".to_string(),
+        );
+        assert_eq!(j(&refused)["error"]["retry"], "after_relink");
+        let busy = crate::mail::imap_guard::rewrite_response(attachment_fetch_error(crate::mail::imap_guard::busy_error(5)));
+        assert_eq!(busy.status, "429 Too Many Requests");
+        assert_eq!(j(&busy)["error"]["code"], "inbox_busy");
     }
 }

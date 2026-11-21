@@ -9,6 +9,13 @@
 //! backend (hosted, linked IMAP/Gmail, Microsoft 365), so the rule can't
 //! drift between them.
 //!
+//! Drafts only (0.46.17; a person reviews and sends them): `--to` replaces
+//! the reply's To (threading stays); a reply to a message this inbox SENT
+//! goes to that message's To (and, with `--reply-all`, its Cc), like Gmail's
+//! Reply on a sent item, not back to the inbox; and a draft may carry up to
+//! [`crate::mail::drafts::MAX_DRAFT_BCC`] blind copies while To + Cc keep
+//! the send cap. A SENT reply keeps the old rules on all three.
+//!
 //! A SENT reply (`k2 mail reply`) may reach only people already on the
 //! original under the reply's own rules: an explicit `--cc` / `--bcc` that
 //! isn't on it ([`outside_addresses`]) is a new recipient, and the route
@@ -29,12 +36,18 @@ pub struct ReplyAsk {
     pub all: bool,
     pub cc: Vec<String>,
     pub bcc: Vec<String>,
+    /// Drafts only: the reply's To, replacing the locked recipient (checked
+    /// addresses; empty = the usual To).
+    pub to: Vec<String>,
+    /// This is a draft (a person sends it): `to`, the sent-item rule and
+    /// the draft caps apply. `false` = a sent reply, the old rules.
+    pub draft: bool,
 }
 
 impl ReplyAsk {
     /// Nothing beyond the locked recipient (a plain reply, as before).
     pub fn is_plain(&self) -> bool {
-        !self.all && self.cc.is_empty() && self.bcc.is_empty()
+        !self.all && self.cc.is_empty() && self.bcc.is_empty() && self.to.is_empty()
     }
 }
 
@@ -50,12 +63,16 @@ pub struct SourceParties {
     pub on_original: Vec<String>,
 }
 
-/// The reply's recipients. `to[0]` is always the locked recipient.
+/// The reply's recipients. `to[0]` is the locked recipient unless
+/// `replaced_to` (a draft's `--to`, or a reply to the inbox's own sent
+/// message): then `to` is the whole To and a provider that picks the
+/// locked recipient itself must overwrite it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReplyParties {
     pub to: Vec<MailAddr>,
     pub cc: Vec<MailAddr>,
     pub bcc: Vec<MailAddr>,
+    pub replaced_to: bool,
 }
 
 impl ReplyParties {
@@ -88,7 +105,8 @@ fn key(email: &str) -> Option<String> {
 /// (any case). The locked recipient stays first and as given; addresses the
 /// original carried that aren't replyable are left out; explicit `cc` /
 /// `bcc` are kept even when they name the inbox itself (the caller asked
-/// for them). Refuses (usage words) past [`crate::mail::send::MAX_RECIPIENTS`].
+/// for them). Refuses (usage words) past [`crate::mail::send::MAX_RECIPIENTS`]
+/// (a draft: [`crate::mail::drafts::check_draft_caps`]).
 pub fn plan(
     primary: &MailAddr,
     orig_to: &[MailAddr],
@@ -97,11 +115,42 @@ pub fn plan(
     ask: &ReplyAsk,
 ) -> Result<ReplyParties, String> {
     let own: HashSet<String> = own.iter().filter_map(|a| key(a)).collect();
+    if ask.draft && ask.all && !ask.to.is_empty() {
+        return Err("--to sets who the reply goes to and --reply-all copies everyone on the original: \
+                    pick one (add others with --cc)"
+            .to_string());
+    }
+    let primary_key = key(&primary.email).unwrap_or_else(|| primary.email.trim().to_ascii_lowercase());
     let mut seen: HashSet<String> = HashSet::new();
-    seen.insert(key(&primary.email).unwrap_or_else(|| primary.email.trim().to_ascii_lowercase()));
-    let mut to = vec![primary.clone()];
+    let mut to = Vec::new();
     let mut cc = Vec::new();
     let mut bcc = Vec::new();
+    let mut replaced_to = false;
+    // A draft's `--to`: the whole To, as asked.
+    if ask.draft && !ask.to.is_empty() {
+        for e in &ask.to {
+            let k = key(e).unwrap_or_else(|| e.trim().to_ascii_lowercase());
+            if seen.insert(k.clone()) {
+                to.push(MailAddr { name: None, email: k });
+            }
+        }
+        replaced_to = true;
+    } else if ask.draft && own.contains(&primary_key) {
+        // A draft answering the inbox's OWN sent message: to the people it
+        // went to, never back to the inbox (Gmail's Reply on a sent item).
+        for a in orig_to {
+            let Some(k) = key(&a.email) else { continue };
+            if own.contains(&k) || !seen.insert(k.clone()) {
+                continue;
+            }
+            to.push(MailAddr { name: a.name.clone(), email: k });
+        }
+        replaced_to = !to.is_empty();
+    }
+    if !replaced_to {
+        seen.insert(primary_key);
+        to = vec![primary.clone()];
+    }
     let take_original = |list: &[MailAddr], out: &mut Vec<MailAddr>, seen: &mut HashSet<String>| {
         for a in list {
             let Some(k) = key(&a.email) else { continue };
@@ -112,7 +161,9 @@ pub fn plan(
         }
     };
     if ask.all {
-        take_original(orig_to, &mut to, &mut seen);
+        if !replaced_to {
+            take_original(orig_to, &mut to, &mut seen);
+        }
         take_original(orig_cc, &mut cc, &mut seen);
     }
     for (list, out) in [(&ask.cc, &mut cc), (&ask.bcc, &mut bcc)] {
@@ -123,7 +174,11 @@ pub fn plan(
             }
         }
     }
-    let parties = ReplyParties { to, cc, bcc };
+    let parties = ReplyParties { to, cc, bcc, replaced_to };
+    if ask.draft {
+        crate::mail::drafts::check_draft_caps(parties.to.len() + parties.cc.len(), parties.bcc.len())?;
+        return Ok(parties);
+    }
     let max = crate::mail::send::MAX_RECIPIENTS;
     if parties.total() > max {
         return Err(format!(
@@ -244,6 +299,7 @@ mod tests {
                 all: true,
                 cc: vec!["bo@example.com".into(), "cy@example.com".into(), "cy@example.com".into()],
                 bcc: vec!["cy@example.com".into(), "di@example.com".into(), "sender@example.com".into()],
+                ..Default::default()
             },
         )
         .expect("plan");
@@ -259,7 +315,7 @@ mod tests {
             &[a("ada@example.com")],
             &[a("bo@example.com")],
             &[],
-            &ReplyAsk { all: false, cc: vec!["a@example.com".into(), "b@example.com".into()], bcc: vec!["c@example.com".into()] },
+            &ReplyAsk { all: false, cc: vec!["a@example.com".into(), "b@example.com".into()], bcc: vec!["c@example.com".into()], ..Default::default() },
         )
         .expect("plan");
         assert_eq!(emails(&p.to), ["sender@example.com"], "no reply-all: the original's parties stay off");
@@ -302,9 +358,82 @@ mod tests {
             all: true,
             cc: vec!["ada@example.com".into(), "eve@example.com".into(), "REPLIES@example.com".into()],
             bcc: vec!["bo@example.com".into(), "mal@example.net".into(), "eve@example.com".into()],
+            ..Default::default()
         };
         assert_eq!(outside_addresses(&on, &ask), ["eve@example.com", "mal@example.net"]);
         assert!(outside_addresses(&on, &ReplyAsk { all: true, ..Default::default() }).is_empty(), "reply-all alone adds nobody new");
+    }
+
+    fn draft() -> ReplyAsk {
+        ReplyAsk { draft: true, ..Default::default() }
+    }
+
+    #[test]
+    fn a_draft_to_replaces_the_locked_recipient() {
+        let p = plan(
+            &a("sender@example.com"),
+            &[a("ada@example.com")],
+            &[],
+            &["bot@example.org".to_string()],
+            &ReplyAsk { to: vec!["Boss@Example.com".into(), "boss@example.com".into()], cc: vec!["cy@example.com".into()], ..draft() },
+        )
+        .expect("plan");
+        assert_eq!(emails(&p.to), ["boss@example.com"], "--to is the whole To, once");
+        assert!(p.replaced_to);
+        assert_eq!(emails(&p.cc), ["cy@example.com"]);
+        let err = plan(&a("s@example.com"), &[], &[], &[], &ReplyAsk { all: true, to: vec!["x@example.com".into()], ..draft() })
+            .expect_err("--to with --reply-all");
+        assert!(err.contains("pick one"), "{err}");
+        // A sent reply ignores `to` (the route never sets it there).
+        let sent = plan(&a("s@example.com"), &[], &[], &[], &ReplyAsk { to: vec!["x@example.com".into()], ..Default::default() })
+            .expect("plan");
+        assert_eq!(emails(&sent.to), ["s@example.com"]);
+        assert!(!sent.replaced_to);
+    }
+
+    #[test]
+    fn a_draft_answering_our_own_sent_message_goes_to_its_recipients() {
+        let own = vec!["bot@example.org".to_string()];
+        let p = plan(
+            &a("Bot@Example.org"),
+            &[named("Ada", "ada@example.com"), a("bot@example.org"), a("bo@example.com")],
+            &[a("cy@example.com")],
+            &own,
+            &draft(),
+        )
+        .expect("plan");
+        assert_eq!(emails(&p.to), ["ada@example.com", "bo@example.com"], "never back to ourselves");
+        assert!(p.replaced_to);
+        assert!(p.cc.is_empty(), "plain reply: no Cc");
+        let all = plan(&a("bot@example.org"), &[a("ada@example.com")], &[a("cy@example.com"), a("bot@example.org")], &own, &ReplyAsk { all: true, ..draft() })
+            .expect("plan");
+        assert_eq!(emails(&all.to), ["ada@example.com"]);
+        assert_eq!(emails(&all.cc), ["cy@example.com"]);
+        // Sent only to ourselves: the reply stays addressed to us.
+        let me = plan(&a("bot@example.org"), &[a("bot@example.org")], &[], &own, &draft()).expect("plan");
+        assert_eq!(emails(&me.to), ["bot@example.org"]);
+        assert!(!me.replaced_to);
+        // A SENT reply keeps the old rule (the route decides sends).
+        let sent = plan(&a("bot@example.org"), &[a("ada@example.com")], &[], &own, &ReplyAsk::default()).expect("plan");
+        assert_eq!(emails(&sent.to), ["bot@example.org"]);
+    }
+
+    #[test]
+    fn a_draft_takes_500_blind_copies_but_keeps_the_to_cc_cap() {
+        let bcc: Vec<String> = (0..crate::mail::drafts::MAX_DRAFT_BCC).map(|i| format!("m{i}@example.com")).collect();
+        let p = plan(&a("sender@example.com"), &[], &[], &[], &ReplyAsk { bcc: bcc.clone(), ..draft() }).expect("500 bcc fit a draft");
+        assert_eq!(p.bcc.len(), 500);
+        let mut over = bcc.clone();
+        over.push("one-more@example.com".into());
+        let err = plan(&a("sender@example.com"), &[], &[], &[], &ReplyAsk { bcc: over, ..draft() }).expect_err("501");
+        assert!(err.contains("500"), "{err}");
+        let cc: Vec<String> = (0..crate::mail::send::MAX_RECIPIENTS).map(|i| format!("c{i}@example.com")).collect();
+        let err = plan(&a("sender@example.com"), &[], &[], &[], &ReplyAsk { cc, ..draft() }).expect_err("11 in To + Cc");
+        assert!(err.contains("To + Cc"), "{err}");
+        // A SENT reply: still 10 counting Bcc.
+        let err = plan(&a("sender@example.com"), &[], &[], &[], &ReplyAsk { bcc: bcc[..10].to_vec(), ..Default::default() })
+            .expect_err("a send keeps the cap");
+        assert!(err.contains("too many recipients (11)"), "{err}");
     }
 
     #[test]

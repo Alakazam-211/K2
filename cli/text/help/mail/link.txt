@@ -69,9 +69,20 @@ USAGE
   k2 mail link add <address> --provider gmail|microsoft --workspace <ws>
                    [--features mail|calendar-read|mail,calendar-read|calendar] [--json]
   k2 mail link upgrade <address> --features calendar-read|mail|calendar [--json]
+  k2 mail link relink <address> [--json]
   k2 mail link calendars [on|off] [--json]
   k2 mail link list [--json]
   k2 mail link remove <address> [--json]
+
+RE-LINK (a person's step: it opens a Google or Microsoft sign-in)
+'k2 mail link list' says "needs re-link" when the provider refused the
+inbox's sign-in, and "mail access not granted" when Google's consent lacks
+the Gmail permission (it was unticked on Google's page: tick it this time).
+'k2 mail link relink <address>' signs in again IN PLACE for what the link
+already has: same inbox, grants, levels, calendar features and ids. Agents
+get owner_only (exit 3): ask your human. "throttled (wait)" means the
+provider is limiting the account (too many connections or failed logins):
+K2 pauses it for 5 minutes or more; wait, linking again won't help.
 
 FLAGS (OAuth add / upgrade)
   --provider <p>         gmail (IMAP-XOAUTH2, system-browser + loopback) or
@@ -109,6 +120,7 @@ EXAMPLES
   k2 mail link add me@company.com --provider microsoft --workspace acme-ops \
       --features mail,calendar-read
   k2 mail link upgrade me@company.com --features calendar-read
+  k2 mail link relink me@company.com
   k2 mail link add organiser@gmail.com --provider gmail --workspace meet \
       --features calendar-read
   k2 mail link calendars off

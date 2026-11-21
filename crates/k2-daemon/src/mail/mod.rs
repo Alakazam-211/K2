@@ -204,6 +204,14 @@ pub mod secrets;
 pub mod fwd_message;
 // Drafted replies K2 tracks (the reader shows them on their thread; 0292).
 pub mod drafts;
+// A draft save asked twice answers one draft (idempotency keys, 0321).
+pub mod draft_keys;
+// `k2 mail draft delete`: an agent deletes a draft it saved (0.46.17).
+pub mod draft_delete;
+// Linked inboxes that need a person to re-link, and why (0.46.17).
+pub mod relink;
+// Per-inbox IMAP session cap and provider-throttle cool-down (0.46.17).
+pub mod imap_guard;
 #[cfg(test)]
 mod fake_jmap;
 // OA0 (0.46.11): people's mailboxes through a named workspace, end to end.
@@ -223,6 +231,9 @@ mod reader_drafts_tests;
 // `--reply-all` / `--cc` / `--bcc` on hosted reply drafts and replies.
 #[cfg(test)]
 mod reply_all_tests;
+// The per-inbox IMAP session cap and cool-down against a stub server.
+#[cfg(test)]
+mod imap_guard_tests;
 pub mod send;
 // `--reply-all` / `--cc` / `--bcc` on reply drafts and replies (0.46.15).
 pub mod reply_all;

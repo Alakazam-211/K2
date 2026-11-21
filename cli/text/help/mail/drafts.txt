@@ -1,9 +1,11 @@
-k2 mail drafts — your drafted replies, and what a person did with each
+k2 mail drafts — your drafts, and what a person did with each
 
 A reply draft ('k2 mail draft <message-id> --body <text>') sits at the top of
 its thread in K2's Mail page, marked "Draft, not sent". A person there can edit
 it, send it (by your workspace's send rule) or discard it. This lists your
-drafts newest first with where each stands. No mail text is shown here.
+drafts newest first with where each stands (a compose draft, 'k2 mail draft
+--to --subject', shows as "compose"). No mail text is shown here. Delete one
+you saved with 'k2 mail draft delete <draft-id>'.
 
 USAGE
   k2 mail drafts [--limit <n>] [--json]
@@ -14,11 +16,12 @@ STATUS
   sent        a person sent it ("outbox <id>": see it with 'k2 mail outbox <id>')
   held        a person sent it and it waits for your human's approval
               ('k2 mail outbox <id>' shows it)
-  discarded   a person removed it, or it left the mailbox's Drafts folder
+  discarded   a person removed it, you deleted it ('k2 mail draft delete'),
+              or it left the mailbox's Drafts folder
 
 FLAGS
   --limit <n>   how many (default 50, up to 200)
-  --json        the daemon's JSON ({ok, count, drafts:[{id, inbox, replyOf,
+  --json        the daemon's JSON ({ok, count, drafts:[{id, inbox, kind, replyOf,
                 status, author, createdAt, editedAt, editedBy, stateAt,
                 stateBy, outboundId, editable}]})
 

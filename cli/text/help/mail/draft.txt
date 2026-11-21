@@ -3,13 +3,26 @@ Save a DRAFT into an inbox's Drafts folder. It never sends. Two forms:
   Reply draft (any inbox you have 'draft' on: K2-hosted, or a linked
   Gmail/IMAP/Microsoft 365 account): threaded onto the message (In-Reply-To,
   References, "Re:" subject, addressed to its sender; with --reply-all, to
-  everyone on it too). It shows at the top
+  everyone on it too; with --to, to whoever you name instead). A reply to a
+  message your inbox SENT goes to that message's To (its Cc too with
+  --reply-all), not back to your inbox. It shows at the top
   of its thread in K2's Mail page, marked "Draft, not sent", where a person
   can edit it, send it (by your workspace's send rule) or discard it.
   'k2 mail drafts' shows what became of it.
 
   Compose draft (linked inboxes only): a brand-new To/Subject in your
   human's own Gmail/IMAP Drafts, for them to finish in their mail client.
+
+  Delete a draft you saved: 'k2 mail draft delete <draft-id>' (hosted:
+  removed from Drafts; linked: moved to Trash). A draft someone else saved
+  is refused (not_your_draft, exit 3) and nothing is touched.
+
+A draft takes up to 10 addresses in To + Cc and up to 500 in Bcc (a notice
+to many members: put them in --bcc). Sending keeps the cap of 10 over
+to + cc + bcc. A slow save is safe to repeat: each save carries an
+idempotency key, and the same key answers the same draft (the CLI waits
+and asks again by itself; on a timeout it prints the key to pass with
+--idempotency-key).
 
 Sending yourself is 'k2 mail reply' / 'k2 mail send' (level 'send' and the
 workspace's Sending rule). A hosted reply draft takes no --attach yet (it
@@ -18,9 +31,10 @@ send it yourself with 'k2 mail reply <id> --attach <path>' or ask your
 human. Your level on each inbox (read < draft < send): 'k2 mail inboxes'.
 
 USAGE
-  k2 mail draft <message-id> (--body <text> | --body-file <f>) [--reply-all] [--cc <addr>] [--bcc <addr>] [--attach <path>] [--json]
-  k2 mail draft --reply-to <message-id> (--body <text> | --body-file <f>) [--reply-all] [--cc <addr>] [--bcc <addr>] [--json]
-  k2 mail draft --to <addr> --subject <s> (--body <text> | --body-file <f>) [--cc <addr>] [--bcc <addr>] [--attach <path>] [--from <linked>] [--json]
+  k2 mail draft <message-id> (--body <text> | --body-file <f>) [--to <addr> | --reply-all] [--cc <addr>] [--bcc <addr>] [--attach <path>] [--idempotency-key <k>] [--json]
+  k2 mail draft --reply-to <message-id> (--body <text> | --body-file <f>) [--to <addr> | --reply-all] [--cc <addr>] [--bcc <addr>] [--json]
+  k2 mail draft --to <addr> --subject <s> (--body <text> | --body-file <f>) [--cc <addr>] [--bcc <addr>] [--attach <path>] [--from <linked>] [--idempotency-key <k>] [--json]
+  k2 mail draft delete <draft-id> [--json]
 
 ARGUMENTS
   <message-id>           Reply form: a message id from 'k2 mail messages'
@@ -31,18 +45,33 @@ FLAGS
   --reply-all            Reply form: also address everyone on the original
                          (its To join the draft's To, its Cc the draft's Cc),
                          without your own inbox's addresses and repeats
-  --to <addr>            Compose form: recipient (repeatable)
+  --to <addr>            Compose form: recipient (repeatable). Reply form:
+                         who the reply goes to INSTEAD of the original's
+                         sender (the thread stays); not with --reply-all
   --subject <s>          Compose form: subject (required with --to)
   --cc <addr>            Cc (repeatable or comma-separated). On a reply draft
                          it adds to the reply's recipients.
   --bcc <addr>           Bcc (repeatable or comma-separated). Saved as the
                          draft's Bcc; the mail client keeps it blind when
-                         the draft is sent. to + cc + bcc max 10.
+                         the draft is sent. Up to 500 on a draft (To + Cc
+                         max 10).
   --from <linked-addr>   Compose: which linked inbox (required when several)
   --body <text>          The draft text
   --body-file <f>        Read the draft text from a file
   --attach <path>        Workspace-relative file to attach (repeatable; 10 / 25MiB;
                          linked inboxes only)
-  --json                 JSON output ({ok,id?,draftId?,address,folder,hint}):
-                         id = the message the draft answers (m_…); draftId =
-                         the draft itself (d_…), as 'k2 mail drafts' lists it
+  --idempotency-key <k>  The save's key (8-128 of letters, digits, . _ : -).
+                         Default: a fresh one. The same key again answers
+                         the draft already saved (replayed: true), never a
+                         second copy
+  --json                 JSON output ({ok,id?,draftId?,address,folder,hint,
+                         replayed?}): id = the message the draft answers
+                         (m_…); draftId = the draft itself (d_…), as
+                         'k2 mail drafts' lists it
+
+ERRORS
+  inbox_busy (exit 2)       the linked inbox already has 4 mail sessions open;
+                            retry after retry_after_s, and run fewer at once
+  inbox_throttled (exit 3)  the provider is limiting the account; wait
+                            retry_after_s. Linking it again won't help
+  not_your_draft (exit 3)   delete: that draft wasn't saved by your agent

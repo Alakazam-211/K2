@@ -306,22 +306,27 @@ fn complete_with_tokens(
             return;
         }
     };
-    let granted = tokens
-        .scope
-        .as_deref()
-        .map(|s| oauth::features_granted(plan.provider, s))
-        .unwrap_or(plan.features);
+    // 0.46.17: Google always says which scopes it granted; a Google token
+    // answer without them is taken as granting nothing (a link saved as
+    // "connected" whose every IMAP login then failed was the field report).
+    let granted = match tokens.scope.as_deref() {
+        Some(s) => oauth::features_granted(plan.provider, s),
+        None if plan.provider == OauthProvider::Gmail => Features { mail: false, calendar: false },
+        None => plan.features,
+    };
     if plan.features.mail && !granted.mail {
-        set_failure(
-            link_id,
-            LinkStatus::Error,
-            "scope_not_granted",
+        let hint = if plan.provider == OauthProvider::Gmail {
+            format!(
+                "Google didn't grant mail access for {address}. Sign in again and tick the Gmail \
+                 permission on Google's page. Nothing was stored"
+            )
+        } else {
             format!(
                 "mail access was not granted for {address} — link again and allow K2 to read \
                  and send mail. Nothing was stored"
-            ),
-            None,
-        );
+            )
+        };
+        set_failure(link_id, LinkStatus::Error, "scope_not_granted", hint, None);
         return;
     }
     // A calendar-only link whose calendar scope was unticked would store
@@ -407,6 +412,8 @@ fn complete_with_tokens(
             match external::upgrade_oauth_inbox(secrets, row_id, tokens, &meta, now) {
                 Ok(_) => {
                     link_audit(plan, address, None, "link_upgrade");
+                    // A re-link: the watcher may poll again now.
+                    crate::mail::relink::after_relink(row_id);
                     set_terminal(
                         link_id,
                         LinkStatus::Connected,
@@ -777,6 +784,10 @@ struct StartBody {
     /// GC-6: how long a client-capture link waits for `complete` (the
     /// headless paste-back asks 900). 0 = the default 300 s.
     capture_ttl_secs: u64,
+    /// `k2 mail link relink` (0.46.17): with `inbox` and no `features`,
+    /// re-consent in place for what the row already has (same row id,
+    /// grants, levels and calendar features).
+    relink: bool,
 }
 
 /// How long a client capture waits for `complete` by default, and at most
@@ -851,6 +862,13 @@ pub fn handle_link_oauth_start(body: &[u8]) -> CliResponse {
     if !b.inbox.trim().is_empty() {
         return start_upgrade(&b, requested);
     }
+    if b.relink {
+        return error_response(
+            "400 Bad Request",
+            "usage",
+            "a re-link needs 'inbox' — the linked inbox (id or address) to sign in again",
+        );
+    }
     let features = requested.unwrap_or(Features::MAIL);
     if b.address.trim().is_empty() {
         return error_response(
@@ -919,14 +937,16 @@ pub fn handle_link_oauth_start(body: &[u8]) -> CliResponse {
 /// are the row's own (a mismatching body value is a usage error); the new
 /// consent asks for the union of what it has and what is asked.
 fn start_upgrade(b: &StartBody, requested: Option<Features>) -> CliResponse {
-    let Some(add) = requested else {
+    // `relink: true` (`k2 mail link relink`, 0.46.17) re-consents for what
+    // the row already has when no features are named.
+    if requested.is_none() && !b.relink {
         return error_response(
             "400 Bad Request",
             "usage",
             "an upgrade needs 'features' — what to add: mail, calendar-read (read-only) or \
              calendar (read and write)",
         );
-    };
+    }
     let Some(row) = external::inbox_for_id_or_address(&b.inbox) else {
         return error_response(
             "404 Not Found",
@@ -969,9 +989,19 @@ fn start_upgrade(b: &StartBody, requested: Option<Features>) -> CliResponse {
             "'address' and 'inbox' name different accounts — pass just the inbox to upgrade",
         );
     }
+    // A provider cool-down is the account's limit, not the token's: a new
+    // sign-in won't lift it, so a re-link waits it out (0.46.17).
+    if let Some(left) = crate::mail::imap_guard::cooldown_left(&row.id) {
+        return crate::mail::imap_guard::rewrite_response(error_response(
+            "502 Bad Gateway",
+            "engine",
+            &crate::mail::imap_guard::throttled_error(left),
+        ));
+    }
     let have = external::read_oauth_meta(&row.id)
         .and_then(|m| Features::parse(&m.features).ok().flatten())
         .unwrap_or(Features::MAIL);
+    let add = requested.unwrap_or(have);
     // vs-live-2 CV-3: an upgrade only adds. Read-only on a link that can
     // write would be a silent no-op; going down means a new link.
     if add.calendar == CalAccess::Read && have.calendar == CalAccess::Write {
@@ -2070,6 +2100,101 @@ mod tests {
             .unwrap()
         };
         assert_eq!(level, "send", "levels survive the upgrade");
+        cleanup(&project);
+    }
+
+    /// 0.46.17 field reports: (a) a person unticked the Gmail permission
+    /// and the link saved as connected; (b) a reconnect left a workspace's
+    /// sending on. A Gmail mail link without the Gmail scope, or with no
+    /// scope list at all, is refused and nothing is stored; a good link
+    /// lands at level draft and never touches the sending gate.
+    #[test]
+    fn gmail_without_the_gmail_permission_is_refused_and_links_never_turn_sending_on() {
+        let project = insert_project();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute("UPDATE projects SET mail_agent_send = 'off' WHERE id = ?1", rusqlite::params![project])
+                .expect("gate off");
+        }
+        for (tag, scope) in [("unticked", Some("openid https://www.googleapis.com/auth/userinfo.email")), ("noscope", None)] {
+            let address = format!("pc-{tag}-{}@gmail.com", &project[..8]);
+            let link_id = uuid::Uuid::new_v4().to_string();
+            insert_pending(&link_id, &address);
+            let tokens = Tokens {
+                access_token: "GAT-secret".into(),
+                refresh_token: Some("GRT-secret".into()),
+                scope: scope.map(str::to_string),
+                token_type: "Bearer".into(),
+                expires_in: 3600,
+                id_token: Some(fake_id_token(serde_json::json!({ "email": address, "email_verified": true }))),
+            };
+            let plan = plan_new(OauthProvider::Gmail, &project, &address, Features::MAIL);
+            complete_with_tokens(&MemStore::default(), &MockHttp::new(&[]), &plan, &link_id, &tokens, 3_000);
+            let st = body_json(&handle_link_oauth_status(&HashMap::from([("linkId".to_string(), link_id)])));
+            assert_eq!(st["state"], "error", "{tag}: {st}");
+            assert_eq!(st["code"], "scope_not_granted", "{tag}: {st}");
+            assert!(st["hint"].as_str().expect("hint").contains("tick the Gmail permission"), "{st}");
+            assert!(row_oauth(&address).is_none(), "{tag}: nothing stored");
+        }
+        let address = format!("pc-ok-{}@gmail.com", &project[..8]);
+        let link_id = uuid::Uuid::new_v4().to_string();
+        insert_pending(&link_id, &address);
+        let tokens = Tokens {
+            access_token: "GAT-secret".into(),
+            refresh_token: Some("GRT-secret".into()),
+            scope: Some(oauth::scope_for(OauthProvider::Gmail, Features::MAIL)),
+            token_type: "Bearer".into(),
+            expires_in: 3600,
+            id_token: Some(fake_id_token(serde_json::json!({ "email": address, "email_verified": true }))),
+        };
+        let plan = plan_new(OauthProvider::Gmail, &project, &address, Features::MAIL);
+        complete_with_tokens(&MemStore::default(), &MockHttp::new(&[]), &plan, &link_id, &tokens, 3_000);
+        let st = body_json(&handle_link_oauth_status(&HashMap::from([("linkId".to_string(), link_id)])));
+        assert_eq!(st["state"], "connected", "{st}");
+        let (level, gate): (String, Option<String>) = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let level = conn
+                .query_row("SELECT primary_level FROM mail_external_inboxes WHERE email_address = ?1", rusqlite::params![address], |r| r.get(0))
+                .expect("row");
+            let gate = conn
+                .query_row("SELECT mail_agent_send FROM projects WHERE id = ?1", rusqlite::params![project], |r| r.get(0))
+                .expect("project");
+            (level, gate)
+        };
+        assert_eq!(level, "draft", "a new link never starts at send");
+        assert_eq!(gate.as_deref(), Some("off"), "linking never turns the sending gate on");
+        cleanup(&project);
+    }
+
+    /// `relink: true` re-consents in place for what the row has; it needs
+    /// an inbox, and a running provider cool-down refuses it (a new token
+    /// doesn't lift the account's limit).
+    #[test]
+    fn relink_needs_an_inbox_and_waits_out_a_cooldown() {
+        let resp = handle_link_oauth_start(serde_json::json!({ "relink": true }).to_string().as_bytes());
+        assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
+        let project = insert_project();
+        let address = format!("rl-{}@gmail.com", &project[..8]);
+        let row_id = uuid::Uuid::new_v4().to_string();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO mail_external_inboxes (id, owner_project_id, email_address, host, port, username, created_at, \
+                 auth_kind, provider, features) VALUES (?1, ?2, ?3, 'imap.gmail.com', 993, ?3, 100, 'oauth', 'gmail', 'mail,calendar')",
+                rusqlite::params![row_id, project, address],
+            )
+            .expect("row");
+        }
+        assert!(crate::mail::imap_guard::note_failure(&row_id, "Too many simultaneous connections"));
+        let resp = handle_link_oauth_start(serde_json::json!({ "inbox": address, "relink": true }).to_string().as_bytes());
+        assert_eq!(resp.status, "503 Service Unavailable", "{}", resp.body);
+        let j = body_json(&resp);
+        assert_eq!(j["error"]["code"], "inbox_throttled");
+        assert!(j["error"]["retry_after_s"].as_u64().expect("retry") > 0);
+        crate::mail::imap_guard::reset_for_test(&row_id);
         cleanup(&project);
     }
 

@@ -96,6 +96,8 @@ pub(super) const ROWS: &[Route] = &[
     post("/cli/mail/domain/remove", Admin),
     get("/cli/mail/domain/show", Admin),
     post("/cli/mail/draft", Member),
+    // 0.46.17: `k2 mail draft delete` (the agent's own drafts only).
+    post("/cli/mail/draft/delete", Member),
     // `k2 mail drafts`: the workspace agent's own drafted replies and what
     // became of them (records only, no mail).
     get("/cli/mail/drafts", Member),

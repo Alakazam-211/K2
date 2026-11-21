@@ -34,6 +34,11 @@ pub enum PollError {
 
 /// Whether a failure message says the credential itself was refused.
 pub fn is_auth_failure(msg: &str) -> bool {
+    // K2's own per-inbox guard (busy, cool-down) and a provider throttle
+    // are "later", never "the credential was refused" (0.46.17).
+    if crate::mail::imap_guard::parse_tag(msg).is_some() || crate::mail::imap_guard::is_throttle(msg) {
+        return false;
+    }
     let m = msg.to_ascii_lowercase();
     [
         "authenticationfailed",

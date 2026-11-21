@@ -60,7 +60,7 @@ _mail_py() {
     M_LABEL="${M_LABEL:-}" M_SELECTOR="${M_SELECTOR:-}" \
     M_BODY="${M_BODY:-}" M_CC="${M_CC:-}" M_BCC="${M_BCC:-}" M_ATTACH="${M_ATTACH:-}" \
     M_REPLY_TO="${M_REPLY_TO:-}" M_REPLY_TO_ORIGINAL="${M_REPLY_TO_ORIGINAL:-false}" M_AS_EML="${M_AS_EML:-false}" \
-    M_REPLY_ALL="${M_REPLY_ALL:-false}" \
+    M_REPLY_ALL="${M_REPLY_ALL:-false}" M_KEY="${M_KEY:-}" M_RELINK="${M_RELINK:-false}" \
     M_ALWAYS_BCC="${M_ALWAYS_BCC:-}" M_ALWAYS_BCC_SET="${M_ALWAYS_BCC_SET:-false}" \
     M_WAIT="${M_WAIT:-false}" M_CONFIRM="${M_CONFIRM:-false}" M_PURGE="${M_PURGE:-false}" \
     M_NOTE="${M_NOTE:-}" M_HEALTH="${M_HEALTH:-false}" \
@@ -147,6 +147,11 @@ def die(err, exit_code=None, permission=None):
     for k in ("cap", "reason", "fix"):
         if err.get(k):
             out[k] = err[k]
+    # 0.46.17: a linked inbox's session cap / provider cool-down say when to
+    # try again; a failed attachment fetch says whether a retry is worth it.
+    for k in ("retry_after_s", "retry"):
+        if err.get(k) is not None:
+            out[k] = err[k]
     sys.stderr.write(dumps({"error": out}) + "\n")
     # Permission cards (vs-live C4): a refusal sent to an agent while its
     # switches are on carries `permission`; it ends with the one closing
@@ -167,7 +172,11 @@ def die(err, exit_code=None, permission=None):
         # owner surfaces for valid agent passports (not "invalid token").
         # 0.45.0: agent_send_path_only = an agent asked for an IMAP/SMTP
         # secret; the hint already names `k2 mail send` + the owner verb.
-        exit_code = 3 if code in ("gated", "forbidden", "owner_only", "agent_send_path_only", "capability_missing") else 2 if code in ("usage", "attachment_secret", "attachment_too_large") else 1
+        # 0.46.17: inbox_busy = try again shortly (2, like a timeout);
+        # inbox_throttled = the provider is limiting the account, stop (3);
+        # not_your_draft = another agent's or a person's draft (3). The CLI
+        # never retries any of them by itself.
+        exit_code = 3 if code in ("gated", "forbidden", "owner_only", "agent_send_path_only", "capability_missing", "inbox_throttled", "not_your_draft") else 2 if code in ("usage", "attachment_secret", "attachment_too_large", "inbox_busy") else 1
     sys.exit(exit_code)
 
 def _is_socket_timeout(exc):
@@ -526,6 +535,17 @@ def send_outcome(d, waiting, timeout_secs):
 def _level_word(lvl):
     return {"read": "read", "draft": "draft", "send": "send"}.get(lvl, lvl or "?")
 
+def inbox_status_word(r):
+    # 0.46.17: a linked inbox that needs a person, or is paused by its provider.
+    why = r.get("relinkReason")
+    if why == "throttled":
+        return "throttled (wait)"
+    if why == "mail_access_not_granted":
+        return "mail access not granted"
+    if r.get("needsRelink"):
+        return "needs re-link"
+    return r.get("status", "?")
+
 def print_inboxes(rows, agent_view):
     if not rows:
         print("No inboxes you can access — mint a hosted address (k2 hostmail create) "
@@ -549,7 +569,7 @@ def print_inboxes(rows, agent_view):
             print(("%-" + str(w) + "s%-9s%-7s%-10s%-7s%s") % (
                 r.get("address", ""), r.get("source", "?"),
                 _level_word(r.get("yourLevel")), _send_word(st),
-                r.get("maxLevel", "?"), r.get("status", "?")))
+                r.get("maxLevel", "?"), inbox_status_word(r)))
         print()
         print("read: k2 mail messages [<address>]   send needs level 'send' (hosted, or a linked inbox with SMTP)")
         print("MAX is the CEILING, not a promise — sending also needs a send transport configured.")
@@ -942,10 +962,11 @@ elif verb == "drafts":
     else:
         rows = d.get("drafts") or []
         if not rows:
-            print("No drafted replies yet — 'k2 mail draft <message-id> --body <text>' makes one.")
+            print("No drafts yet — 'k2 mail draft <message-id> --body <text>' makes one.")
         for r in rows:
             st = r.get("status") or "?"
-            line = "%s  %-9s %-34s answers %s" % (r.get("id"), st, r.get("inbox"), r.get("replyOf"))
+            what = "compose" if r.get("kind") == "compose" else "answers %s" % r.get("replyOf")
+            line = "%s  %-9s %-34s %s" % (r.get("id"), st, r.get("inbox"), what)
             if r.get("editedBy"):
                 line += "  · edited by %s" % r["editedBy"]
             if st in ("sent", "held", "discarded") and r.get("stateBy"):
@@ -1748,12 +1769,47 @@ elif verb == "draft":
     attach = env_lines("M_ATTACH")
     if attach:
         body["attachments"] = attach
-    d = call("POST", "/cli/mail/draft", body=body)
+    # 0.46.17: every save carries an idempotency key. A slow save (the
+    # daemon keeps going after we stop waiting) is asked again with the
+    # same key: it answers the draft it saved, or "busy" while it is still
+    # saving, and never saves twice. Only a timeout, a dropped answer or
+    # that busy is asked again; every other answer (inbox_busy and
+    # inbox_throttled included) is final.
+    import uuid
+    key = env("M_KEY") or ("k2d_" + uuid.uuid4().hex)
+    body["idempotencyKey"] = key
+    deadline = time.time() + 150
+    dropped = 0
+    while True:
+        d = request("POST", "/cli/mail/draft", body=body, timeout=60)
+        code = ((d or {}).get("error") or {}).get("code")
+        if d is None:
+            dropped += 1
+        again = (d is None and dropped <= 2) or code in ("timeout", "busy")
+        if not again or time.time() >= deadline:
+            break
+        time.sleep(3)
+    if d is None or code in ("timeout", "busy"):
+        die({"code": "timeout",
+             "hint": "the draft save hasn't answered yet and may still land. Run the same "
+                     "command again with --idempotency-key %s: it answers that draft if it "
+                     "was saved, and saves it once if not" % key}, 2)
+    if d.get("error"):
+        die(d["error"], permission=d.get("permission"))
     if as_json:
         print(dumps(d))
     else:
-        print(d.get("hint") or "draft saved to '%s' in %s"
-              % (d.get("folder", "?"), d.get("address", "?")))
+        hint = d.get("hint") or "draft saved to '%s' in %s" % (d.get("folder", "?"), d.get("address", "?"))
+        print(hint)
+        if d.get("draftId") and d["draftId"] not in hint:
+            print("draft id: %s ('k2 mail draft delete %s' removes it)" % (d["draftId"], d["draftId"]))
+
+elif verb == "draft_delete":
+    d = call("POST", "/cli/mail/draft/delete", body={"project": ws_path, "id": env("M_ID")})
+    if as_json:
+        print(dumps(d))
+    else:
+        print(d.get("hint") or "draft %s deleted" % env("M_ID"))
 
 elif verb == "external_add":
     # S9 owner verb: connect an external account and bind it to ONE
@@ -1813,8 +1869,15 @@ elif verb in ("link_oauth_add", "link_oauth_upgrade"):
     # existing row in place for more features (same flow, `inbox` set).
     provider = env("M_PROVIDER")
     upgrade = verb == "link_oauth_upgrade"
+    relink = env("M_RELINK") == "true"
     if upgrade:
-        body = {"inbox": env("M_ADDRESS"), "features": env("M_FEATURES")}
+        body = {"inbox": env("M_ADDRESS")}
+        # 0.46.17 `k2 mail link relink`: sign in again for what the link
+        # already has (same row, grants, levels, calendar features).
+        if relink:
+            body["relink"] = True
+        if env("M_FEATURES"):
+            body["features"] = env("M_FEATURES")
         if provider:
             body["provider"] = provider
     else:
@@ -1830,7 +1893,7 @@ elif verb in ("link_oauth_add", "link_oauth_upgrade"):
     provider = provider or ("microsoft" if flow == "device" else "gmail")
     if flow == "device":
         sys.stderr.write("To %s %s (%s): open %s and enter the code %s — sign in as %s\n"
-                         % ("upgrade" if upgrade else "connect", env("M_ADDRESS"),
+                         % ("re-link" if relink else "upgrade" if upgrade else "connect", env("M_ADDRESS"),
                             d.get("features", "mail"), d.get("verificationUrl", "?"),
                             d.get("userCode", "?"), d.get("address") or env("M_ADDRESS")))
     else:
@@ -1862,6 +1925,9 @@ elif verb in ("link_oauth_add", "link_oauth_upgrade"):
     if state == "connected":
         if as_json:
             print(dumps(final))
+        elif relink:
+            print("re-linked %s (%s)" % (final.get("address") or env("M_ADDRESS"), provider))
+            print("its grants, levels, calendar features and ids are unchanged.")
         elif upgrade:
             print("upgraded %s (%s)" % (final.get("address") or env("M_ADDRESS"), provider))
             print(final.get("hint") or "its grants, levels and ids are unchanged.")
@@ -2007,11 +2073,15 @@ elif verb == "link_list":
         print("No linked accounts — add one: k2 mail link add <address> --host <imap-host> --workspace <ws> --pass-stdin")
     else:
         w = max(max(len(r.get("address", "")) for r in rows), len("ADDRESS")) + 2
-        print(("%-" + str(w) + "s%-11s%-22s%s") % ("ADDRESS", "STATUS", "PRIMARY", "HOST"))
+        print(("%-" + str(w) + "s%-25s%-22s%s") % ("ADDRESS", "STATUS", "PRIMARY", "HOST"))
+        notes = []
         for r in rows:
             pri = r.get("primary") or {}
-            print(("%-" + str(w) + "s%-11s%-22s%s") % (
-                r.get("address", ""), r.get("status", "?"),
+            st = inbox_status_word(r)
+            if st != r.get("status"):
+                notes.append((r.get("address", ""), r.get("relinkReason")))
+            print(("%-" + str(w) + "s%-25s%-22s%s") % (
+                r.get("address", ""), st,
                 pri.get("workspace") or pri.get("projectId") or "?",
                 "%s (%s)" % (r.get("host", "?"), r.get("tls", "?"))))
             for g in (r.get("grants") or []):
@@ -2023,6 +2093,17 @@ elif verb == "link_list":
                                                        g.get("workspace") or g.get("projectId", "?")))
                 print("    grant: %-20s %s%s" % (
                     g.get("workspace") or g.get("projectId", "?"), g.get("level", "?"), note))
+        for addr, why in notes:
+            print()
+            if why == "throttled":
+                print("%s: the provider is limiting this account (too many connections or failed "
+                      "logins). Wait; linking it again won't help. Run fewer mail calls at once." % addr)
+            elif why == "mail_access_not_granted":
+                print("%s: Google's consent doesn't include the Gmail permission. A person runs "
+                      "'k2 mail link relink %s' and ticks the Gmail permission." % (addr, addr))
+            else:
+                print("%s: the provider refused the sign-in. A person runs 'k2 mail link relink %s' "
+                      "(same inbox, grants and ids)." % (addr, addr))
 
 elif verb == "access_grant":
     body = {"address": env("M_ADDRESS"), "project": env("M_WORKSPACE"), "level": env("M_LEVEL")}

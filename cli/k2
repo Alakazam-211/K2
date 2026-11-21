@@ -55695,16 +55695,17 @@ cmd_schema() {
     },
     {
       "name": "mail draft",
-      "usage": "k2 mail draft <message-id> (--body <text> | --body-file <f>) [--reply-all] [--cc <addr>] [--bcc <addr>] [--attach <path>] [--json]  |  k2 mail draft --to <addr> --subject <s> (--body <text> | --body-file <f>) [--cc <addr>] [--bcc <addr>] [--attach <path>] [--from <linked-addr>] [--json]",
-      "description": "Save a DRAFT into your human's linked Gmail/IMAP Drafts folder (APPEND \\Draft) — they review and send from their own client. Two forms: reply (positional <message-id> or --reply-to <id>; threaded, inherits To/Subject; --reply-all also addresses the original's To and Cc minus your own inbox; --cc/--bcc add copies) or compose (--to and --subject, no id). Works at the 'draft' level; a send is a different verb (k2 mail send/reply need level send AND Sending=on). --attach matches send caps (10 files / 25MiB) on both forms. Graph/Microsoft compose and Graph attachments are out of v1 (teaching error). For K2-hosted messages use 'k2 mail reply'.",
+      "usage": "k2 mail draft <message-id> (--body <text> | --body-file <f>) [--to <addr> | --reply-all] [--cc <addr>] [--bcc <addr>] [--attach <path>] [--idempotency-key <k>] [--json]  |  k2 mail draft --to <addr> --subject <s> (--body <text> | --body-file <f>) [--cc <addr>] [--bcc <addr>] [--attach <path>] [--from <linked-addr>] [--idempotency-key <k>] [--json]  |  k2 mail draft delete <draft-id> [--json]",
+      "description": "Save a DRAFT into your human's linked Gmail/IMAP Drafts folder (APPEND \\Draft) — they review and send from their own client. Two forms: reply (positional <message-id> or --reply-to <id>; threaded, inherits To/Subject; --reply-all also addresses the original's To and Cc minus your own inbox; --to replaces who the reply goes to, keeping the thread; a reply to a message your inbox SENT goes to that message's To, not back to you; --cc/--bcc add copies) or compose (--to and --subject, no id). A draft takes To + Cc max 10 and Bcc up to 500 (sending keeps 10 over to + cc + bcc). Every save carries an idempotency key: the same key answers the same draft (replayed: true), so a slow save is safe to repeat. 'k2 mail draft delete <d_id>' deletes a draft YOUR agent saved (hosted: removed from Drafts; linked: moved to Trash); anyone else's is 403 not_your_draft, exit 3, nothing touched. POST /cli/mail/draft/delete {project, id}. inbox_busy (429, exit 2) and inbox_throttled (503, exit 3) carry retry_after_s; the CLI never retries them. Works at the 'draft' level; a send is a different verb (k2 mail send/reply need level send AND Sending=on). --attach matches send caps (10 files / 25MiB) on both forms. Graph/Microsoft compose and Graph attachments are out of v1 (teaching error). For K2-hosted messages use 'k2 mail reply'.",
       "args": [{"name": "message-id", "required": false}],
       "flags": [
         {"name": "--reply-to", "arg": "message-id", "description": "Reply form, spelled as a flag (same as <message-id>)."},
         {"name": "--reply-all", "arg": null, "description": "Reply form: also address everyone on the original (its To join the draft's To, its Cc the draft's Cc), without your own inbox's addresses and repeats."},
-        {"name": "--to", "arg": "addr", "description": "Compose: recipient (repeatable / comma-separated). Mutually exclusive with <message-id>."},
+        {"name": "--to", "arg": "addr", "description": "Compose: recipient (repeatable / comma-separated). Reply: who the reply goes to instead of the original's sender (thread kept); not with --reply-all."},
         {"name": "--subject", "arg": "s", "description": "Compose: subject. Required with --to."},
         {"name": "--cc", "arg": "addr", "description": "Cc (repeatable / comma-separated). On a reply draft it adds to the reply's recipients."},
-        {"name": "--bcc", "arg": "addr", "description": "Bcc (repeatable / comma-separated), saved as the draft's Bcc. to + cc + bcc max 10."},
+        {"name": "--bcc", "arg": "addr", "description": "Bcc (repeatable / comma-separated), saved as the draft's Bcc. Up to 500 on a draft (To + Cc max 10)."},
+        {"name": "--idempotency-key", "arg": "k", "description": "The save's key (8-128 of letters, digits, . _ : -; default a fresh one). The same key again answers the draft already saved, never a second copy."},
         {"name": "--from", "arg": "linked-addr", "description": "Compose: which linked inbox to draft FROM (needed with several; one may be implicit)."},
         {"name": "--body", "arg": "text", "description": "The draft text."},
         {"name": "--body-file", "arg": "f", "description": "Read the draft text from a file."},
@@ -55751,8 +55752,8 @@ cmd_schema() {
     },
     {
       "name": "mail link",
-      "usage": "k2 mail link add <address> (--host <imap-host> (--pass-stdin | --pass-ref <ref>) [--port <n>] [--tls implicit-tls|starttls] [--user <login>] [--name <display>] [--drafts-folder <f>] [--smtp-host <h>] [--smtp-port <n>] [--smtp-tls implicit-tls|starttls] | --provider gmail|microsoft [--features mail|calendar-read|mail,calendar-read|calendar]) --workspace <ws> | upgrade <address> --features calendar-read|mail|calendar | calendars [on|off] | list | remove <address>",
-      "description": "Connect the user's OWN external email accounts as LINKED assistant inboxes (was 'mail external') — OWNER verbs (agent tokens exit 3). Two add paths: (1) generic IMAP with an app-password (Gmail app-password, Fastmail, company IMAP), or (2) OAuth with --provider gmail|microsoft (NO password): Gmail links over IMAP-XOAUTH2 via the system browser + a 127.0.0.1 loopback (do it ON the daemon's machine; a remote daemon returns a 'link on the daemon's box' teaching error), Microsoft over the Microsoft Graph API via a device code you enter in any browser. The OAuth flow runs SERVER-SIDE (the daemon polls/exchanges); codes and tokens NEVER reach the CLI and are vaulted daemon-side. Each inbox binds to ONE PRIMARY workspace whose agents read it (via messages/read/wait) and save reply drafts via 'k2 mail draft'. Drafting is always on; sending is OFF by default — raise a workspace to level 'send' to let its agents send (app-password and Gmail-OAuth inboxes over SMTP, Microsoft 365 over Microsoft Graph), governed by the workspace's Email sending mode (off / approval / on). Share with more workspaces via 'k2 mail access grant'. The password/tokens are vaulted daemon-side, never in the DB, never in output, never on argv. 'calendars [on|off]' shows or sets the per-server switch for calendars on LINKED inboxes (default on; off = every linked calendar verb exits 3 capability_missing/owner_disabled; hosted calendars keep k2 hostmail calendar enable|disable). GET|POST /cli/mail/link/calendars {enabled}.",
+      "usage": "k2 mail link add <address> (--host <imap-host> (--pass-stdin | --pass-ref <ref>) [--port <n>] [--tls implicit-tls|starttls] [--user <login>] [--name <display>] [--drafts-folder <f>] [--smtp-host <h>] [--smtp-port <n>] [--smtp-tls implicit-tls|starttls] | --provider gmail|microsoft [--features mail|calendar-read|mail,calendar-read|calendar]) --workspace <ws> | upgrade <address> --features calendar-read|mail|calendar | relink <address> | calendars [on|off] | list | remove <address>",
+      "description": "Connect the user's OWN external email accounts as LINKED assistant inboxes (was 'mail external') — OWNER verbs (agent tokens exit 3). Two add paths: (1) generic IMAP with an app-password (Gmail app-password, Fastmail, company IMAP), or (2) OAuth with --provider gmail|microsoft (NO password): Gmail links over IMAP-XOAUTH2 via the system browser + a 127.0.0.1 loopback (do it ON the daemon's machine; a remote daemon returns a 'link on the daemon's box' teaching error), Microsoft over the Microsoft Graph API via a device code you enter in any browser. The OAuth flow runs SERVER-SIDE (the daemon polls/exchanges); codes and tokens NEVER reach the CLI and are vaulted daemon-side. Each inbox binds to ONE PRIMARY workspace whose agents read it (via messages/read/wait) and save reply drafts via 'k2 mail draft'. Drafting is always on; sending is OFF by default — raise a workspace to level 'send' to let its agents send (app-password and Gmail-OAuth inboxes over SMTP, Microsoft 365 over Microsoft Graph), governed by the workspace's Email sending mode (off / approval / on). Share with more workspaces via 'k2 mail access grant'. The password/tokens are vaulted daemon-side, never in the DB, never in output, never on argv. 'calendars [on|off]' shows or sets the per-server switch for calendars on LINKED inboxes (default on; off = every linked calendar verb exits 3 capability_missing/owner_disabled; hosted calendars keep k2 hostmail calendar enable|disable). GET|POST /cli/mail/link/calendars {enabled}. 'relink <address>' signs in again IN PLACE for what the link already has (same row, grants, levels, calendar features; POST /cli/mail/link/oauth/start {inbox, relink: true}); 'list' shows needs re-link (the provider refused the sign-in), mail access not granted (Google's consent lacks the Gmail permission) or throttled (wait; the provider is limiting the account, relinking won't help); JSON needsRelink + relinkReason.",
       "args": [{"name": "address", "required": false}],
       "flags": [
         {"name": "--provider", "arg": "p", "description": "OAuth link: gmail (IMAP-XOAUTH2, system-browser loopback) | microsoft (Graph, device code). No --host/password; the daemon runs the flow and the CLI long-polls to connected (add). The signed-in account must be <address> (else account_mismatch, nothing stored)."},
@@ -67846,7 +67847,19 @@ AGENT SURFACE
                    the rest in a digest (k2 study mail-watch)
   k2 mail send / reply / outbox
   k2 mail draft    reply drafts in Drafts (hosted or linked; a person edits
-                   and sends them from the thread); k2 mail drafts = their state
+                   and sends them from the thread); k2 mail drafts = their state.
+                   --to on a reply replaces who it goes to (thread kept); a reply
+                   to your own sent mail goes to its To. A draft: To + Cc max 10,
+                   Bcc up to 500 (a send keeps 10 in all). A slow save is safe to
+                   repeat (idempotency key; same key = same draft).
+                   k2 mail draft delete <d_id> = delete one YOU saved (others: 3)
+  BUSY/THROTTLED   inbox_busy (exit 2): a linked inbox has 4 sessions open, wait
+                   retry_after_s and run fewer calls at once. inbox_throttled
+                   (exit 3): the provider is limiting the account; wait, never
+                   loop, never ask for a re-link. Never fan out parallel reads.
+  NEEDS RE-LINK    k2 mail link list says needs re-link / mail access not
+                   granted: ask your human for 'k2 mail link relink <address>'
+                   (a person's sign-in; agents exit 3)
   k2 calendar      calendars of a HOSTED inbox or a LINKED Microsoft 365
                    or Google account (alias k2 cal; other linked inboxes exit 3
                    capability_missing with the fix). Existing
@@ -83321,7 +83334,7 @@ _mail_py() {
     M_LABEL="${M_LABEL:-}" M_SELECTOR="${M_SELECTOR:-}" \
     M_BODY="${M_BODY:-}" M_CC="${M_CC:-}" M_BCC="${M_BCC:-}" M_ATTACH="${M_ATTACH:-}" \
     M_REPLY_TO="${M_REPLY_TO:-}" M_REPLY_TO_ORIGINAL="${M_REPLY_TO_ORIGINAL:-false}" M_AS_EML="${M_AS_EML:-false}" \
-    M_REPLY_ALL="${M_REPLY_ALL:-false}" \
+    M_REPLY_ALL="${M_REPLY_ALL:-false}" M_KEY="${M_KEY:-}" M_RELINK="${M_RELINK:-false}" \
     M_ALWAYS_BCC="${M_ALWAYS_BCC:-}" M_ALWAYS_BCC_SET="${M_ALWAYS_BCC_SET:-false}" \
     M_WAIT="${M_WAIT:-false}" M_CONFIRM="${M_CONFIRM:-false}" M_PURGE="${M_PURGE:-false}" \
     M_NOTE="${M_NOTE:-}" M_HEALTH="${M_HEALTH:-false}" \
@@ -83408,6 +83421,11 @@ def die(err, exit_code=None, permission=None):
     for k in ("cap", "reason", "fix"):
         if err.get(k):
             out[k] = err[k]
+    # 0.46.17: a linked inbox's session cap / provider cool-down say when to
+    # try again; a failed attachment fetch says whether a retry is worth it.
+    for k in ("retry_after_s", "retry"):
+        if err.get(k) is not None:
+            out[k] = err[k]
     sys.stderr.write(dumps({"error": out}) + "\n")
     # Permission cards (vs-live C4): a refusal sent to an agent while its
     # switches are on carries `permission`; it ends with the one closing
@@ -83428,7 +83446,11 @@ def die(err, exit_code=None, permission=None):
         # owner surfaces for valid agent passports (not "invalid token").
         # 0.45.0: agent_send_path_only = an agent asked for an IMAP/SMTP
         # secret; the hint already names `k2 mail send` + the owner verb.
-        exit_code = 3 if code in ("gated", "forbidden", "owner_only", "agent_send_path_only", "capability_missing") else 2 if code in ("usage", "attachment_secret", "attachment_too_large") else 1
+        # 0.46.17: inbox_busy = try again shortly (2, like a timeout);
+        # inbox_throttled = the provider is limiting the account, stop (3);
+        # not_your_draft = another agent's or a person's draft (3). The CLI
+        # never retries any of them by itself.
+        exit_code = 3 if code in ("gated", "forbidden", "owner_only", "agent_send_path_only", "capability_missing", "inbox_throttled", "not_your_draft") else 2 if code in ("usage", "attachment_secret", "attachment_too_large", "inbox_busy") else 1
     sys.exit(exit_code)
 
 def _is_socket_timeout(exc):
@@ -83787,6 +83809,17 @@ def send_outcome(d, waiting, timeout_secs):
 def _level_word(lvl):
     return {"read": "read", "draft": "draft", "send": "send"}.get(lvl, lvl or "?")
 
+def inbox_status_word(r):
+    # 0.46.17: a linked inbox that needs a person, or is paused by its provider.
+    why = r.get("relinkReason")
+    if why == "throttled":
+        return "throttled (wait)"
+    if why == "mail_access_not_granted":
+        return "mail access not granted"
+    if r.get("needsRelink"):
+        return "needs re-link"
+    return r.get("status", "?")
+
 def print_inboxes(rows, agent_view):
     if not rows:
         print("No inboxes you can access — mint a hosted address (k2 hostmail create) "
@@ -83810,7 +83843,7 @@ def print_inboxes(rows, agent_view):
             print(("%-" + str(w) + "s%-9s%-7s%-10s%-7s%s") % (
                 r.get("address", ""), r.get("source", "?"),
                 _level_word(r.get("yourLevel")), _send_word(st),
-                r.get("maxLevel", "?"), r.get("status", "?")))
+                r.get("maxLevel", "?"), inbox_status_word(r)))
         print()
         print("read: k2 mail messages [<address>]   send needs level 'send' (hosted, or a linked inbox with SMTP)")
         print("MAX is the CEILING, not a promise — sending also needs a send transport configured.")
@@ -84203,10 +84236,11 @@ elif verb == "drafts":
     else:
         rows = d.get("drafts") or []
         if not rows:
-            print("No drafted replies yet — 'k2 mail draft <message-id> --body <text>' makes one.")
+            print("No drafts yet — 'k2 mail draft <message-id> --body <text>' makes one.")
         for r in rows:
             st = r.get("status") or "?"
-            line = "%s  %-9s %-34s answers %s" % (r.get("id"), st, r.get("inbox"), r.get("replyOf"))
+            what = "compose" if r.get("kind") == "compose" else "answers %s" % r.get("replyOf")
+            line = "%s  %-9s %-34s %s" % (r.get("id"), st, r.get("inbox"), what)
             if r.get("editedBy"):
                 line += "  · edited by %s" % r["editedBy"]
             if st in ("sent", "held", "discarded") and r.get("stateBy"):
@@ -85009,12 +85043,47 @@ elif verb == "draft":
     attach = env_lines("M_ATTACH")
     if attach:
         body["attachments"] = attach
-    d = call("POST", "/cli/mail/draft", body=body)
+    # 0.46.17: every save carries an idempotency key. A slow save (the
+    # daemon keeps going after we stop waiting) is asked again with the
+    # same key: it answers the draft it saved, or "busy" while it is still
+    # saving, and never saves twice. Only a timeout, a dropped answer or
+    # that busy is asked again; every other answer (inbox_busy and
+    # inbox_throttled included) is final.
+    import uuid
+    key = env("M_KEY") or ("k2d_" + uuid.uuid4().hex)
+    body["idempotencyKey"] = key
+    deadline = time.time() + 150
+    dropped = 0
+    while True:
+        d = request("POST", "/cli/mail/draft", body=body, timeout=60)
+        code = ((d or {}).get("error") or {}).get("code")
+        if d is None:
+            dropped += 1
+        again = (d is None and dropped <= 2) or code in ("timeout", "busy")
+        if not again or time.time() >= deadline:
+            break
+        time.sleep(3)
+    if d is None or code in ("timeout", "busy"):
+        die({"code": "timeout",
+             "hint": "the draft save hasn't answered yet and may still land. Run the same "
+                     "command again with --idempotency-key %s: it answers that draft if it "
+                     "was saved, and saves it once if not" % key}, 2)
+    if d.get("error"):
+        die(d["error"], permission=d.get("permission"))
     if as_json:
         print(dumps(d))
     else:
-        print(d.get("hint") or "draft saved to '%s' in %s"
-              % (d.get("folder", "?"), d.get("address", "?")))
+        hint = d.get("hint") or "draft saved to '%s' in %s" % (d.get("folder", "?"), d.get("address", "?"))
+        print(hint)
+        if d.get("draftId") and d["draftId"] not in hint:
+            print("draft id: %s ('k2 mail draft delete %s' removes it)" % (d["draftId"], d["draftId"]))
+
+elif verb == "draft_delete":
+    d = call("POST", "/cli/mail/draft/delete", body={"project": ws_path, "id": env("M_ID")})
+    if as_json:
+        print(dumps(d))
+    else:
+        print(d.get("hint") or "draft %s deleted" % env("M_ID"))
 
 elif verb == "external_add":
     # S9 owner verb: connect an external account and bind it to ONE
@@ -85074,8 +85143,15 @@ elif verb in ("link_oauth_add", "link_oauth_upgrade"):
     # existing row in place for more features (same flow, `inbox` set).
     provider = env("M_PROVIDER")
     upgrade = verb == "link_oauth_upgrade"
+    relink = env("M_RELINK") == "true"
     if upgrade:
-        body = {"inbox": env("M_ADDRESS"), "features": env("M_FEATURES")}
+        body = {"inbox": env("M_ADDRESS")}
+        # 0.46.17 `k2 mail link relink`: sign in again for what the link
+        # already has (same row, grants, levels, calendar features).
+        if relink:
+            body["relink"] = True
+        if env("M_FEATURES"):
+            body["features"] = env("M_FEATURES")
         if provider:
             body["provider"] = provider
     else:
@@ -85091,7 +85167,7 @@ elif verb in ("link_oauth_add", "link_oauth_upgrade"):
     provider = provider or ("microsoft" if flow == "device" else "gmail")
     if flow == "device":
         sys.stderr.write("To %s %s (%s): open %s and enter the code %s — sign in as %s\n"
-                         % ("upgrade" if upgrade else "connect", env("M_ADDRESS"),
+                         % ("re-link" if relink else "upgrade" if upgrade else "connect", env("M_ADDRESS"),
                             d.get("features", "mail"), d.get("verificationUrl", "?"),
                             d.get("userCode", "?"), d.get("address") or env("M_ADDRESS")))
     else:
@@ -85123,6 +85199,9 @@ elif verb in ("link_oauth_add", "link_oauth_upgrade"):
     if state == "connected":
         if as_json:
             print(dumps(final))
+        elif relink:
+            print("re-linked %s (%s)" % (final.get("address") or env("M_ADDRESS"), provider))
+            print("its grants, levels, calendar features and ids are unchanged.")
         elif upgrade:
             print("upgraded %s (%s)" % (final.get("address") or env("M_ADDRESS"), provider))
             print(final.get("hint") or "its grants, levels and ids are unchanged.")
@@ -85268,11 +85347,15 @@ elif verb == "link_list":
         print("No linked accounts — add one: k2 mail link add <address> --host <imap-host> --workspace <ws> --pass-stdin")
     else:
         w = max(max(len(r.get("address", "")) for r in rows), len("ADDRESS")) + 2
-        print(("%-" + str(w) + "s%-11s%-22s%s") % ("ADDRESS", "STATUS", "PRIMARY", "HOST"))
+        print(("%-" + str(w) + "s%-25s%-22s%s") % ("ADDRESS", "STATUS", "PRIMARY", "HOST"))
+        notes = []
         for r in rows:
             pri = r.get("primary") or {}
-            print(("%-" + str(w) + "s%-11s%-22s%s") % (
-                r.get("address", ""), r.get("status", "?"),
+            st = inbox_status_word(r)
+            if st != r.get("status"):
+                notes.append((r.get("address", ""), r.get("relinkReason")))
+            print(("%-" + str(w) + "s%-25s%-22s%s") % (
+                r.get("address", ""), st,
                 pri.get("workspace") or pri.get("projectId") or "?",
                 "%s (%s)" % (r.get("host", "?"), r.get("tls", "?"))))
             for g in (r.get("grants") or []):
@@ -85284,6 +85367,17 @@ elif verb == "link_list":
                                                        g.get("workspace") or g.get("projectId", "?")))
                 print("    grant: %-20s %s%s" % (
                     g.get("workspace") or g.get("projectId", "?"), g.get("level", "?"), note))
+        for addr, why in notes:
+            print()
+            if why == "throttled":
+                print("%s: the provider is limiting this account (too many connections or failed "
+                      "logins). Wait; linking it again won't help. Run fewer mail calls at once." % addr)
+            elif why == "mail_access_not_granted":
+                print("%s: Google's consent doesn't include the Gmail permission. A person runs "
+                      "'k2 mail link relink %s' and ticks the Gmail permission." % (addr, addr))
+            else:
+                print("%s: the provider refused the sign-in. A person runs 'k2 mail link relink %s' "
+                      "(same inbox, grants and ids)." % (addr, addr))
 
 elif verb == "access_grant":
     body = {"address": env("M_ADDRESS"), "project": env("M_WORKSPACE"), "level": env("M_LEVEL")}
@@ -87504,12 +87598,14 @@ cmd_mail_reply() {
 
 cmd_help_mail_drafts() {
     cat <<'EOF'
-k2 mail drafts — your drafted replies, and what a person did with each
+k2 mail drafts — your drafts, and what a person did with each
 
 A reply draft ('k2 mail draft <message-id> --body <text>') sits at the top of
 its thread in K2's Mail page, marked "Draft, not sent". A person there can edit
 it, send it (by your workspace's send rule) or discard it. This lists your
-drafts newest first with where each stands. No mail text is shown here.
+drafts newest first with where each stands (a compose draft, 'k2 mail draft
+--to --subject', shows as "compose"). No mail text is shown here. Delete one
+you saved with 'k2 mail draft delete <draft-id>'.
 
 USAGE
   k2 mail drafts [--limit <n>] [--json]
@@ -87520,11 +87616,12 @@ STATUS
   sent        a person sent it ("outbox <id>": see it with 'k2 mail outbox <id>')
   held        a person sent it and it waits for your human's approval
               ('k2 mail outbox <id>' shows it)
-  discarded   a person removed it, or it left the mailbox's Drafts folder
+  discarded   a person removed it, you deleted it ('k2 mail draft delete'),
+              or it left the mailbox's Drafts folder
 
 FLAGS
   --limit <n>   how many (default 50, up to 200)
-  --json        the daemon's JSON ({ok, count, drafts:[{id, inbox, replyOf,
+  --json        the daemon's JSON ({ok, count, drafts:[{id, inbox, kind, replyOf,
                 status, author, createdAt, editedAt, editedBy, stateAt,
                 stateBy, outboundId, editable}]})
 
@@ -87979,11 +88076,20 @@ cmd_mail_approvals() {
 # (`can_draft`); sending needs level send AND Sending=on.
 cmd_mail_draft() {
     if _wants_help "$@"; then cmd_help_mail_draft; exit 0; fi
-    local id="" body="" body_file="" as_json=false
+    # 0.46.17: `k2 mail draft delete <d_id>` — a draft this agent saved.
+    if [ "${1:-}" = "delete" ]; then
+        shift
+        cmd_mail_draft_delete "$@"
+        return
+    fi
+    local id="" body="" body_file="" as_json=false key=""
     local to="" subject="" cc="" bcc="" from="" attach="" reply_all=false
     while [ $# -gt 0 ]; do
         case "$1" in
             --reply-all) reply_all=true; shift ;;
+            --idempotency-key)
+                [ $# -ge 2 ] || { _mail_err "usage" "--idempotency-key requires a key (8-128 of letters, digits, . _ : -)"; exit 2; }
+                key="$2"; shift 2 ;;
             --reply-to)
                 [ $# -ge 2 ] || { _mail_err "usage" "--reply-to requires a message id (from 'k2 mail messages')"; exit 2; }
                 if [ -n "$id" ] && [ "$id" != "$2" ]; then
@@ -88017,7 +88123,7 @@ cmd_mail_draft() {
                 attach="${attach}${attach:+$'\n'}$2"; shift 2 ;;
             --json) as_json=true; shift ;;
             -*)
-                _mail_err "usage" "unknown flag '$1' — usage: k2 mail draft <message-id> (--body <text> | --body-file <f>) [--reply-all] [--cc <addr>] [--bcc <addr>] [--attach <path>]  OR  k2 mail draft --to <addr> --subject <s> (--body <text> | --body-file <f>) [--cc <addr>] [--bcc <addr>] [--attach <path>] [--from <linked>]"
+                _mail_err "usage" "unknown flag '$1' — usage: k2 mail draft <message-id> (--body <text> | --body-file <f>) [--to <addr> | --reply-all] [--cc <addr>] [--bcc <addr>] [--attach <path>]  OR  k2 mail draft --to <addr> --subject <s> (--body <text> | --body-file <f>) [--cc <addr>] [--bcc <addr>] [--attach <path>] [--from <linked>]  OR  k2 mail draft delete <draft-id>"
                 exit 2 ;;
             *)
                 if [ -z "$id" ]; then id="$1"; elif [ "$id" != "$1" ]; then
@@ -88027,8 +88133,12 @@ cmd_mail_draft() {
                 shift ;;
         esac
     done
-    if [ -n "$id" ] && { [ -n "$to" ] || [ -n "$subject" ]; }; then
-        _mail_err "usage" "pass either a <message-id> (reply draft) or --to/--subject (compose draft), not both"
+    if [ -n "$id" ] && [ -n "$subject" ]; then
+        _mail_err "usage" "a reply draft keeps the original's subject (Re: …) — pass either a <message-id> (reply draft) or --to/--subject (compose draft), not both"
+        exit 2
+    fi
+    if [ -n "$id" ] && [ -n "$to" ] && $reply_all; then
+        _mail_err "usage" "--to sets who the reply goes to and --reply-all copies everyone on the original: pick one (add others with --cc)"
         exit 2
     fi
     if [ -z "$id" ] && $reply_all; then
@@ -88069,7 +88179,33 @@ cmd_mail_draft() {
     fi
     local M_VERB="draft" M_JSON="$as_json" M_ID="$id" M_BODY="$body" \
           M_TO="$to" M_SUBJECT="$subject" M_CC="$cc" M_BCC="$bcc" M_FROM="$from" M_ATTACH="$attach" \
-          M_REPLY_ALL="$reply_all"
+          M_REPLY_ALL="$reply_all" M_KEY="$key"
+    _mail_py
+}
+
+# 0.46.17: delete a draft THIS workspace's agent saved (POST
+# /cli/mail/draft/delete). Hosted: removed from Drafts; linked IMAP: moved
+# to Trash. Anyone else's draft is refused (403 not_your_draft, exit 3).
+cmd_mail_draft_delete() {
+    if _wants_help "$@"; then cmd_help_mail_draft; exit 0; fi
+    local id="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*) _mail_err "usage" "unknown flag '$1' — usage: k2 mail draft delete <draft-id> [--json]"; exit 2 ;;
+            *)
+                if [ -n "$id" ]; then
+                    _mail_err "usage" "one draft id only — usage: k2 mail draft delete <draft-id> [--json]"
+                    exit 2
+                fi
+                id="$1"; shift ;;
+        esac
+    done
+    if [ -z "$id" ]; then
+        _mail_err "usage" "draft delete requires the draft id (d_…) — 'k2 mail drafts' lists yours"
+        exit 2
+    fi
+    local M_VERB="draft_delete" M_JSON="$as_json" M_ID="$id"
     _mail_py
 }
 
@@ -88229,14 +88365,14 @@ cmd_mail_external() {
     if _wants_help "$@"; then cmd_help_mail_link; exit 0; fi
     local sub=""
     case "${1:-}" in
-        add|list|remove|upgrade|calendars) sub="$1"; shift ;;
+        add|list|remove|upgrade|relink|calendars) sub="$1"; shift ;;
         "") cmd_help_mail_link; exit 0 ;;
         -*) sub="list" ;;  # bare `k2 mail link --json` = list
         grant|revoke)
             _mail_err "usage" "per-workspace access moved — use 'k2 mail access ${1} <address> <workspace>'"
             exit 2 ;;
         *)
-            _mail_err "usage" "unknown link command '${1:-}' — usage: k2 mail link <add|upgrade|calendars|list|remove>"
+            _mail_err "usage" "unknown link command '${1:-}' — usage: k2 mail link <add|upgrade|relink|calendars|list|remove>"
             exit 2 ;;
     esac
     local address="" workspace="" host="" port="" tls="" user="" name="" \
@@ -88374,6 +88510,22 @@ cmd_mail_external() {
             fi
             local M_VERB="link_oauth_upgrade" M_JSON="$as_json" M_ADDRESS="$address" \
                   M_PROVIDER="$provider" M_FEATURES="$features"
+            _mail_py ;;
+        relink)
+            # 0.46.17: sign in again IN PLACE for what the link already has
+            # (same row id, grants, levels, calendar features) — the fix
+            # for 'needs re-link'. A person's step: it opens a Google or
+            # Microsoft sign-in; agent tokens get owner_only (exit 3).
+            if [ -z "$address" ]; then
+                _mail_err "usage" "link relink requires the <address> ('k2 mail link list' marks the ones that need it)"
+                exit 2
+            fi
+            if [ -n "$host" ] || $pass_stdin || [ -n "$pass_ref" ] || [ -n "$workspace" ] || [ -n "$features" ]; then
+                _mail_err "usage" "link relink takes only <address> [--json] (it keeps the link's features; add more with 'k2 mail link upgrade')"
+                exit 2
+            fi
+            local M_VERB="link_oauth_upgrade" M_JSON="$as_json" M_ADDRESS="$address" \
+                  M_PROVIDER="$provider" M_FEATURES="" M_RELINK=true
             _mail_py ;;
         calendars)
             # MCS3: show or set the per-server switch for calendars on
@@ -95760,9 +95912,10 @@ DISCOVER & READ
 WRITE
   draft <message-id>          Reply DRAFT in the inbox's Drafts (hosted or linked);
                               a person edits/sends it from the top of its thread.
-                              --reply-all, --cc, --bcc: who else it goes to
+                              --to, --reply-all, --cc, --bcc: who it goes to
   draft --to --subject        LINKED: compose a brand-new draft (no message-id)
-  drafts                      Your reply drafts and what a person did with each
+  draft delete <draft-id>     Delete a draft YOU saved (others: exit 3)
+  drafts                      Your drafts and what a person did with each
   send <to>                   Send from an inbox you have 'send' on — hosted OR a linked
                               inbox over SMTP — gated off | approval | on (human's choice)
   reply <message-id>          Guardrailed reply (needs 'send' on the receiving inbox);
@@ -95780,9 +95933,10 @@ ORGANIZE (needs canManage; delete needs canDelete — the owner grants these via
   folder list|create|rename   Folder management on an inbox
 
 CONNECT & SHARE
-  link add|upgrade|list|remove
+  link add|upgrade|relink|list|remove
                               Connect your OWN external accounts (IMAP, Gmail or
-                              Microsoft 365 OAuth); upgrade adds a read-only calendar
+                              Microsoft 365 OAuth); upgrade adds a read-only calendar;
+                              relink signs in again in place (a person's step)
   oauth-config show|set|clear Your own Google / Microsoft OAuth app + the Microsoft
                               tenant (owner)
   access grant|revoke|primary|level|manage
@@ -96575,13 +96729,26 @@ Save a DRAFT into an inbox's Drafts folder. It never sends. Two forms:
   Reply draft (any inbox you have 'draft' on: K2-hosted, or a linked
   Gmail/IMAP/Microsoft 365 account): threaded onto the message (In-Reply-To,
   References, "Re:" subject, addressed to its sender; with --reply-all, to
-  everyone on it too). It shows at the top
+  everyone on it too; with --to, to whoever you name instead). A reply to a
+  message your inbox SENT goes to that message's To (its Cc too with
+  --reply-all), not back to your inbox. It shows at the top
   of its thread in K2's Mail page, marked "Draft, not sent", where a person
   can edit it, send it (by your workspace's send rule) or discard it.
   'k2 mail drafts' shows what became of it.
 
   Compose draft (linked inboxes only): a brand-new To/Subject in your
   human's own Gmail/IMAP Drafts, for them to finish in their mail client.
+
+  Delete a draft you saved: 'k2 mail draft delete <draft-id>' (hosted:
+  removed from Drafts; linked: moved to Trash). A draft someone else saved
+  is refused (not_your_draft, exit 3) and nothing is touched.
+
+A draft takes up to 10 addresses in To + Cc and up to 500 in Bcc (a notice
+to many members: put them in --bcc). Sending keeps the cap of 10 over
+to + cc + bcc. A slow save is safe to repeat: each save carries an
+idempotency key, and the same key answers the same draft (the CLI waits
+and asks again by itself; on a timeout it prints the key to pass with
+--idempotency-key).
 
 Sending yourself is 'k2 mail reply' / 'k2 mail send' (level 'send' and the
 workspace's Sending rule). A hosted reply draft takes no --attach yet (it
@@ -96590,9 +96757,10 @@ send it yourself with 'k2 mail reply <id> --attach <path>' or ask your
 human. Your level on each inbox (read < draft < send): 'k2 mail inboxes'.
 
 USAGE
-  k2 mail draft <message-id> (--body <text> | --body-file <f>) [--reply-all] [--cc <addr>] [--bcc <addr>] [--attach <path>] [--json]
-  k2 mail draft --reply-to <message-id> (--body <text> | --body-file <f>) [--reply-all] [--cc <addr>] [--bcc <addr>] [--json]
-  k2 mail draft --to <addr> --subject <s> (--body <text> | --body-file <f>) [--cc <addr>] [--bcc <addr>] [--attach <path>] [--from <linked>] [--json]
+  k2 mail draft <message-id> (--body <text> | --body-file <f>) [--to <addr> | --reply-all] [--cc <addr>] [--bcc <addr>] [--attach <path>] [--idempotency-key <k>] [--json]
+  k2 mail draft --reply-to <message-id> (--body <text> | --body-file <f>) [--to <addr> | --reply-all] [--cc <addr>] [--bcc <addr>] [--json]
+  k2 mail draft --to <addr> --subject <s> (--body <text> | --body-file <f>) [--cc <addr>] [--bcc <addr>] [--attach <path>] [--from <linked>] [--idempotency-key <k>] [--json]
+  k2 mail draft delete <draft-id> [--json]
 
 ARGUMENTS
   <message-id>           Reply form: a message id from 'k2 mail messages'
@@ -96603,21 +96771,36 @@ FLAGS
   --reply-all            Reply form: also address everyone on the original
                          (its To join the draft's To, its Cc the draft's Cc),
                          without your own inbox's addresses and repeats
-  --to <addr>            Compose form: recipient (repeatable)
+  --to <addr>            Compose form: recipient (repeatable). Reply form:
+                         who the reply goes to INSTEAD of the original's
+                         sender (the thread stays); not with --reply-all
   --subject <s>          Compose form: subject (required with --to)
   --cc <addr>            Cc (repeatable or comma-separated). On a reply draft
                          it adds to the reply's recipients.
   --bcc <addr>           Bcc (repeatable or comma-separated). Saved as the
                          draft's Bcc; the mail client keeps it blind when
-                         the draft is sent. to + cc + bcc max 10.
+                         the draft is sent. Up to 500 on a draft (To + Cc
+                         max 10).
   --from <linked-addr>   Compose: which linked inbox (required when several)
   --body <text>          The draft text
   --body-file <f>        Read the draft text from a file
   --attach <path>        Workspace-relative file to attach (repeatable; 10 / 25MiB;
                          linked inboxes only)
-  --json                 JSON output ({ok,id?,draftId?,address,folder,hint}):
-                         id = the message the draft answers (m_…); draftId =
-                         the draft itself (d_…), as 'k2 mail drafts' lists it
+  --idempotency-key <k>  The save's key (8-128 of letters, digits, . _ : -).
+                         Default: a fresh one. The same key again answers
+                         the draft already saved (replayed: true), never a
+                         second copy
+  --json                 JSON output ({ok,id?,draftId?,address,folder,hint,
+                         replayed?}): id = the message the draft answers
+                         (m_…); draftId = the draft itself (d_…), as
+                         'k2 mail drafts' lists it
+
+ERRORS
+  inbox_busy (exit 2)       the linked inbox already has 4 mail sessions open;
+                            retry after retry_after_s, and run fewer at once
+  inbox_throttled (exit 3)  the provider is limiting the account; wait
+                            retry_after_s. Linking it again won't help
+  not_your_draft (exit 3)   delete: that draft wasn't saved by your agent
 EOF
 }
 
@@ -96722,9 +96905,20 @@ USAGE
   k2 mail link add <address> --provider gmail|microsoft --workspace <ws>
                    [--features mail|calendar-read|mail,calendar-read|calendar] [--json]
   k2 mail link upgrade <address> --features calendar-read|mail|calendar [--json]
+  k2 mail link relink <address> [--json]
   k2 mail link calendars [on|off] [--json]
   k2 mail link list [--json]
   k2 mail link remove <address> [--json]
+
+RE-LINK (a person's step: it opens a Google or Microsoft sign-in)
+'k2 mail link list' says "needs re-link" when the provider refused the
+inbox's sign-in, and "mail access not granted" when Google's consent lacks
+the Gmail permission (it was unticked on Google's page: tick it this time).
+'k2 mail link relink <address>' signs in again IN PLACE for what the link
+already has: same inbox, grants, levels, calendar features and ids. Agents
+get owner_only (exit 3): ask your human. "throttled (wait)" means the
+provider is limiting the account (too many connections or failed logins):
+K2 pauses it for 5 minutes or more; wait, linking again won't help.
 
 FLAGS (OAuth add / upgrade)
   --provider <p>         gmail (IMAP-XOAUTH2, system-browser + loopback) or
@@ -96762,6 +96956,7 @@ EXAMPLES
   k2 mail link add me@company.com --provider microsoft --workspace acme-ops \
       --features mail,calendar-read
   k2 mail link upgrade me@company.com --features calendar-read
+  k2 mail link relink me@company.com
   k2 mail link add organiser@gmail.com --provider gmail --workspace meet \
       --features calendar-read
   k2 mail link calendars off

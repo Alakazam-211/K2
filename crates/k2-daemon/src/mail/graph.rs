@@ -929,7 +929,7 @@ impl GraphBackend {
     /// save_reply_draft` APPEND path), so the Graph backend satisfies the
     /// full seam surface.
     pub fn save_reply_draft(&self, account_id: &str, email_id: &str, body: &str) -> Result<String, String> {
-        self.save_reply_draft_with(account_id, email_id, body, &[], &[], &[], &[]).map_err(|e| e.to_string())
+        self.save_reply_draft_with(account_id, email_id, body, &[], false, &[], &[], &[]).map_err(|e| e.to_string())
     }
 
     /// [`Self::save_reply_draft`] with attachments (MCS2): createReply →
@@ -938,12 +938,17 @@ impl GraphBackend {
     /// (`--reply-all`, `--cc`, `--bcc`); Graph picks the locked recipient
     /// itself, so `to` only adds people beyond it.
     #[allow(clippy::too_many_arguments)]
+    /// `replace_to`: `to` is the draft's whole To (a draft's `--to`, or a
+    /// reply to this inbox's own sent message), overwriting the recipient
+    /// `createReply` chose; otherwise `to` adds to it.
+    #[allow(clippy::too_many_arguments)]
     pub fn save_reply_draft_with(
         &self,
         account_id: &str,
         email_id: &str,
         body: &str,
         to: &[String],
+        replace_to: bool,
         cc: &[String],
         bcc: &[String],
         attachments: &[GraphAttachment],
@@ -952,7 +957,11 @@ impl GraphBackend {
         check_inline_attachments(attachments, 0)?;
         let draft = self.create_reply(email_id)?;
         let mut patch = serde_json::json!({ "body": { "contentType": "text", "content": body } });
-        add_reply_recipients(&mut patch, &draft.to, to, cc, bcc);
+        let locked: &[String] = if replace_to && !to.is_empty() { &[] } else { &draft.to };
+        add_reply_recipients(&mut patch, locked, to, cc, bcc);
+        if replace_to && !to.is_empty() {
+            patch["toRecipients"] = serde_json::json!(recipients_json(to));
+        }
         self.patch_message(&draft.id, &patch)?;
         self.attach_all(&draft.id, attachments)?;
         Ok("Drafts".to_string())
@@ -1755,6 +1764,31 @@ mod tests {
         assert!(seen.iter().all(|s| !s.url.contains("/send")), "no send: {seen:?}");
     }
 
+    /// A draft whose To was replaced (`--to`, or a reply to our own sent
+    /// item, where createReply addresses us): the PATCH overwrites
+    /// createReply's recipient with exactly the planned To.
+    #[test]
+    fn a_replaced_to_overwrites_create_replys_recipient() {
+        let mock = MockGraph::new(vec![
+            (201, None, r#"{"id":"DRAFT2","toRecipients":[{"emailAddress":{"address":"me@shop.example"}}]}"#),
+            (200, None, r#"{"id":"DRAFT2"}"#),
+        ]);
+        let be = backend(mock.clone());
+        let to = vec!["ada@example.com".to_string(), "bo@example.com".to_string()];
+        be.save_reply_draft_with("row-1", "graph:AAA", "Following up", &to, true, &["cy@example.com".to_string()], &[], &[])
+            .expect("draft");
+        let seen = mock.seen();
+        let patch = seen[1].body.as_ref().expect("patch body");
+        let got: Vec<&str> = patch["toRecipients"]
+            .as_array()
+            .expect("toRecipients")
+            .iter()
+            .map(|r| r["emailAddress"]["address"].as_str().expect("address"))
+            .collect();
+        assert_eq!(got, ["ada@example.com", "bo@example.com"], "never back to ourselves: {patch}");
+        assert_eq!(patch["ccRecipients"][0]["emailAddress"]["address"], "cy@example.com");
+    }
+
     // ── MCS2: send, reply, compose drafts, attachments ──
 
     fn att<'a>(name: &'a str, bytes: &'a [u8]) -> GraphAttachment<'a> {
@@ -1966,7 +2000,7 @@ mod tests {
             (201, None, r#"{"id":"A1"}"#),
         ]);
         let be = backend(mock.clone());
-        be.save_reply_draft_with("row-1", "graph:AAA", "ok", &[], &[], &[], &[att("a.txt", b"a")]).expect("draft");
+        be.save_reply_draft_with("row-1", "graph:AAA", "ok", &[], false, &[], &[], &[att("a.txt", b"a")]).expect("draft");
         let seen = mock.seen();
         assert_eq!(seen.len(), 3);
         assert!(seen.iter().all(|s| !s.url.contains("/send")), "{seen:?}");

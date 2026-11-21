@@ -454,6 +454,8 @@ async fn d8_a_microsoft_graph_draft_is_read_only() {
         state_at: None,
         state_by: None,
         outbound_id: None,
+        kind: crate::mail::drafts::KIND_REPLY.to_string(),
+        client_key: None,
     };
     crate::mail::drafts::insert(&row).expect("record the Graph draft");
     block(|| {

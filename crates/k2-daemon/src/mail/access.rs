@@ -874,10 +874,12 @@ pub fn set_primary(
         .clamp_to(target.source);
     let db = k2_core::db::shared();
     let conn = db.lock();
-    // The new primary inherits its prior grant level (if any), else the
-    // source ceiling — it is now the manager.
+    // The new primary inherits its prior grant level (if any), else
+    // 'draft' — never 'send' by default (0.46.17: a workspace moved onto an
+    // inbox it had no grant on got the 'send' ceiling, and Settings then
+    // offered "Turn on sending" for it). Raising it is set-level's job.
     let new_primary_level = grant_level_conn(&conn, target.source, &target.inbox_id, new_project_id)
-        .unwrap_or_else(|| target.source.max_level())
+        .unwrap_or(Level::Draft)
         .clamp_to(target.source);
     let table = match target.source {
         Source::Hosted => "mail_addresses",
@@ -1335,6 +1337,15 @@ pub fn catalog_json(viewer: Option<&str>) -> serde_json::Value {
                 Source::Linked => {
                     obj.insert("host".to_string(), serde_json::json!(row.host));
                     obj.insert("tls".to_string(), serde_json::json!(row.tls));
+                    // 0.46.17: does it need a person to link it again, and
+                    // why (credential_refused | mail_access_not_granted |
+                    // throttled: wait, linking again won't help).
+                    let reason = crate::mail::relink::relink_reason(&conn, &row.inbox_id);
+                    obj.insert(
+                        "needsRelink".to_string(),
+                        serde_json::json!(matches!(reason, Some("credential_refused" | "mail_access_not_granted"))),
+                    );
+                    obj.insert("relinkReason".to_string(), serde_json::json!(reason));
                 }
             }
         }
@@ -1576,6 +1587,46 @@ mod tests {
         // same-primary transfer teaches.
         assert!(matches!(set_primary(&hosted, &heir), Err(AccessError::Usage(_))));
 
+        cleanup(&owner);
+        cleanup(&heir);
+    }
+
+    /// 0.46.17 field report: after a reconnect a workspace's sending showed
+    /// ON. Moving an inbox's primary to a workspace with no grant gave it
+    /// the 'send' ceiling; it now gets 'draft'. And nothing on the link
+    /// path writes a workspace's sending gate.
+    #[test]
+    fn a_new_primary_without_a_grant_gets_draft_not_send_and_the_gate_stays() {
+        let owner = unique_project();
+        let heir = unique_project();
+        let linked = unique_addr("spd");
+        seed_linked(&owner, &linked);
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute("UPDATE projects SET mail_agent_send = 'off' WHERE id = ?1", rusqlite::params![heir])
+                .expect("gate off");
+        }
+        set_primary(&linked, &heir).expect("transfer");
+        let level: String = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.query_row(
+                "SELECT primary_level FROM mail_external_inboxes WHERE lower(email_address) = lower(?1)",
+                rusqlite::params![linked],
+                |r| r.get(0),
+            )
+            .expect("row")
+        };
+        assert_eq!(level, "draft", "never send by default");
+        assert!(can_send(&heir, &linked).is_err());
+        let gate: Option<String> = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.query_row("SELECT mail_agent_send FROM projects WHERE id = ?1", rusqlite::params![heir], |r| r.get(0))
+                .expect("project")
+        };
+        assert_eq!(gate.as_deref(), Some("off"), "the sending gate is the person's, untouched");
         cleanup(&owner);
         cleanup(&heir);
     }

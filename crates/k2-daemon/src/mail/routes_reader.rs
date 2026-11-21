@@ -161,6 +161,16 @@ pub fn dispatch(
     params: &HashMap<String, String>,
     body: &[u8],
 ) -> CliResponse {
+    // A linked inbox's session cap / provider cool-down (0.46.17).
+    crate::mail::imap_guard::rewrite_response(dispatch_inner(path, is_post, params, body))
+}
+
+fn dispatch_inner(
+    path: &str,
+    is_post: bool,
+    params: &HashMap<String, String>,
+    body: &[u8],
+) -> CliResponse {
     if mailbox_guard::viewer_info().is_none() {
         return agent_refusal();
     }
@@ -996,12 +1006,10 @@ fn draft_values(
     if subject.len() + body.len() > crate::mail::send::MAX_MESSAGE_BYTES {
         return Err(usage(&format!("draft too large — max {} bytes of text", crate::mail::send::MAX_MESSAGE_BYTES)));
     }
-    if to.len() + cc.len() + bcc.len() > crate::mail::send::MAX_RECIPIENTS {
-        return Err(usage(&format!(
-            "too many recipients ({}) — max {} per message, counting to + cc + bcc",
-            to.len() + cc.len() + bcc.len(),
-            crate::mail::send::MAX_RECIPIENTS
-        )));
+    // A draft's caps (To + Cc 10, Bcc 500). draft-send then goes through
+    // the send pipeline, which keeps 10 over to + cc + bcc.
+    if let Err(h) = drafts::check_draft_caps(to.len() + cc.len(), bcc.len()) {
+        return Err(usage(&h));
     }
     let norm = |l: &[String]| {
         crate::mail::send::normalize_recipients(l).map_err(|e| match e {

@@ -55,7 +55,40 @@ pub struct DraftRow {
     pub state_at: Option<i64>,
     pub state_by: Option<String>,
     pub outbound_id: Option<String>,
+    /// `reply` | `compose` (0321). A compose draft's `reply_of` is ''.
+    pub kind: String,
+    /// The idempotency key the save carried (0321), unique per workspace.
+    pub client_key: Option<String>,
 }
+
+/// The most blind copies a DRAFT may carry (0.46.17: a member-wide notice
+/// drafted for a person to review and send). To + Cc keep the send cap
+/// ([`crate::mail::send::MAX_RECIPIENTS`]). Nothing that SENDS uses this:
+/// `k2 mail send`/`reply` and the reader's draft-send keep the §8.4 cap of
+/// 10 over to + cc + bcc.
+pub const MAX_DRAFT_BCC: usize = 500;
+
+/// A draft's recipient caps: To + Cc at most the send cap, Bcc at most
+/// [`MAX_DRAFT_BCC`]. Usage words on refusal.
+pub fn check_draft_caps(to_cc: usize, bcc: usize) -> Result<(), String> {
+    let max = crate::mail::send::MAX_RECIPIENTS;
+    if to_cc > max {
+        return Err(format!(
+            "too many recipients in To + Cc ({to_cc}) — a draft takes at most {max} there; put a \
+             long list in --bcc (up to {MAX_DRAFT_BCC} on a draft)"
+        ));
+    }
+    if bcc > MAX_DRAFT_BCC {
+        return Err(format!(
+            "too many blind copies ({bcc}) — a draft takes at most {MAX_DRAFT_BCC} in Bcc; split the \
+             list across drafts"
+        ));
+    }
+    Ok(())
+}
+
+pub const KIND_REPLY: &str = "reply";
+pub const KIND_COMPOSE: &str = "compose";
 
 pub const STATE_OPEN: &str = "open";
 pub const STATE_SENT: &str = "sent";
@@ -116,7 +149,7 @@ pub fn viewer_label() -> Option<String> {
 
 const COLUMNS: &str = "id, inbox_source, inbox_id, address, project_id, reply_of, thread_ref, in_reply_to, refs, \
      backend_ref, author_kind, author, author_label, created_at, edited_at, edited_by, state, state_at, state_by, \
-     outbound_id";
+     outbound_id, kind, client_key";
 
 fn row_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<DraftRow> {
     let source: String = r.get(1)?;
@@ -141,6 +174,8 @@ fn row_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<DraftRow> {
         state_at: r.get(17)?,
         state_by: r.get(18)?,
         outbound_id: r.get(19)?,
+        kind: r.get(20)?,
+        client_key: r.get(21)?,
     })
 }
 
@@ -148,7 +183,7 @@ pub fn insert(row: &DraftRow) -> rusqlite::Result<()> {
     let db = k2_core::db::shared();
     let conn = db.lock();
     conn.execute(
-        &format!("INSERT INTO mail_drafts ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)"),
+        &format!("INSERT INTO mail_drafts ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)"),
         rusqlite::params![
             row.id,
             row.source.as_str(),
@@ -170,6 +205,8 @@ pub fn insert(row: &DraftRow) -> rusqlite::Result<()> {
             row.state_at,
             row.state_by,
             row.outbound_id,
+            row.kind,
+            row.client_key,
         ],
     )?;
     Ok(())
@@ -196,7 +233,7 @@ pub fn load(id: &str) -> Option<DraftRow> {
 /// the backend thread `thread_ref`. Newest edit first.
 pub fn open_in_thread(address: &str, reply_tokens: &[String], thread_ref: Option<&str>) -> Vec<DraftRow> {
     let mut rows = query(
-        "WHERE lower(address) = ?1 AND state = 'open' ORDER BY edited_at DESC, created_at DESC",
+        "WHERE lower(address) = ?1 AND state = 'open' AND kind = 'reply' ORDER BY edited_at DESC, created_at DESC",
         &[address.trim().to_ascii_lowercase().into()],
     );
     rows.retain(|r| {
@@ -206,12 +243,23 @@ pub fn open_in_thread(address: &str, reply_tokens: &[String], thread_ref: Option
     rows
 }
 
-/// Every draft K2 tracks in `address`, open ones first, then the newest.
+/// Every reply draft K2 tracks in `address`, open ones first, then the
+/// newest. (Compose drafts are the agent's own list, `k2 mail drafts`.)
 pub fn list_for_address(address: &str, limit: usize) -> Vec<DraftRow> {
     query(
-        "WHERE lower(address) = ?1 ORDER BY (state = 'open') DESC, edited_at DESC LIMIT ?2",
+        "WHERE lower(address) = ?1 AND kind = 'reply' ORDER BY (state = 'open') DESC, edited_at DESC LIMIT ?2",
         &[address.trim().to_ascii_lowercase().into(), (limit as i64).into()],
     )
+}
+
+/// The draft this workspace saved with idempotency key `key`, if any.
+pub fn find_by_key(project_id: &str, key: &str) -> Option<DraftRow> {
+    query(
+        "WHERE project_id = ?1 AND client_key = ?2",
+        &[project_id.to_string().into(), key.to_string().into()],
+    )
+    .into_iter()
+    .next()
 }
 
 /// The drafts this workspace's agent wrote, newest first.
@@ -306,7 +354,8 @@ fn meta_json_fields(row: &DraftRow) -> serde_json::Value {
     serde_json::json!({
         "id": row.id,
         "inbox": row.address,
-        "replyOf": row.reply_of,
+        "kind": row.kind,
+        "replyOf": if row.kind == KIND_COMPOSE { serde_json::Value::Null } else { serde_json::json!(row.reply_of) },
         "status": status_wire(row),
         "author": { "kind": row.author_kind, "name": row.author_label },
         "createdAt": row.created_at,
@@ -387,34 +436,42 @@ pub fn saved_answer(address: &str, folder: &str, source_token: &str, draft_id: O
     v
 }
 
-/// Record a new reply draft. A failed write after the draft is already in
-/// the mailbox says so plainly (the draft exists; K2 just can't show it).
-#[allow(clippy::too_many_arguments)]
-pub fn record_new(
-    source: Source,
-    inbox_id: &str,
-    address: &str,
-    project_id: &str,
-    project_path: &str,
-    reply_of: &str,
-    thread_ref: Option<String>,
-    in_reply_to: Option<String>,
-    refs: Option<String>,
-    backend_ref: Option<String>,
-) -> Result<String, CliResponse> {
-    let author = author_now(project_id, project_path);
+/// A new draft to record (no mail content).
+pub struct NewDraft<'a> {
+    pub source: Source,
+    pub inbox_id: &'a str,
+    pub address: &'a str,
+    pub project_id: &'a str,
+    pub project_path: &'a str,
+    /// The `m_…` id it answers; '' for a compose draft.
+    pub reply_of: &'a str,
+    /// [`KIND_REPLY`] | [`KIND_COMPOSE`].
+    pub kind: &'static str,
+    pub thread_ref: Option<String>,
+    pub in_reply_to: Option<String>,
+    pub refs: Option<String>,
+    pub backend_ref: Option<String>,
+    /// The save's idempotency key, when it carried one.
+    pub client_key: Option<&'a str>,
+}
+
+/// Record a new draft. A failed write after the draft is already in the
+/// mailbox says so plainly (the draft exists; K2 just can't show it).
+pub fn record(d: NewDraft<'_>) -> Result<String, CliResponse> {
+    let author = author_now(d.project_id, d.project_path);
     let now = now_secs();
+    let address = d.address;
     let row = DraftRow {
         id: new_id(),
-        source,
-        inbox_id: inbox_id.to_string(),
+        source: d.source,
+        inbox_id: d.inbox_id.to_string(),
         address: address.to_string(),
-        project_id: project_id.to_string(),
-        reply_of: reply_of.to_string(),
-        thread_ref,
-        in_reply_to,
-        refs,
-        backend_ref,
+        project_id: d.project_id.to_string(),
+        reply_of: d.reply_of.to_string(),
+        thread_ref: d.thread_ref,
+        in_reply_to: d.in_reply_to,
+        refs: d.refs,
+        backend_ref: d.backend_ref,
         author_kind: author.kind.to_string(),
         author: author.key,
         author_label: author.label,
@@ -425,6 +482,8 @@ pub fn record_new(
         state_at: None,
         state_by: None,
         outbound_id: None,
+        kind: d.kind.to_string(),
+        client_key: d.client_key.map(str::to_string),
     };
     insert(&row).map_err(|e| {
         error_response(
@@ -432,7 +491,8 @@ pub fn record_new(
             "not_ready",
             &format!(
                 "the draft was saved to the Drafts folder of {address}, but K2 couldn't record it ({e}), so it \
-                 won't show at the top of its thread; 'k2 doctor' checks the daemon's database"
+                 won't show at the top of its thread and 'k2 mail draft delete' can't find it; 'k2 doctor' \
+                 checks the daemon's database"
             ),
         )
     })?;
@@ -442,6 +502,7 @@ pub fn record_new(
 /// `k2 mail draft <id>` on a message in a HOSTED inbox: a real draft in the
 /// account's Drafts mailbox, threaded onto the message, addressed back to its
 /// sender. `inbox` already passed the draft gate.
+#[allow(clippy::too_many_arguments)]
 pub fn save_hosted_reply(
     project_id: &str,
     project_path: &str,
@@ -450,6 +511,7 @@ pub fn save_hosted_reply(
     source_token: &str,
     body: &str,
     ask: &crate::mail::reply_all::ReplyAsk,
+    client_key: Option<&str>,
 ) -> CliResponse {
     let Some(account) = inbox.account_id.clone().filter(|a| !a.is_empty()) else {
         return error_response(
@@ -502,18 +564,20 @@ pub fn save_hosted_reply(
         Err(hint) => return error_response("502 Bad Gateway", "engine", &hint),
     };
     let inbox_id = hosted_inbox_id(&inbox.address).unwrap_or_default();
-    match record_new(
-        Source::Hosted,
-        &inbox_id,
-        &inbox.address,
+    match record(NewDraft {
+        source: Source::Hosted,
+        inbox_id: &inbox_id,
+        address: &inbox.address,
         project_id,
         project_path,
-        source_token,
-        ctx.thread_id.clone(),
-        ctx.message_id.clone(),
+        reply_of: source_token,
+        kind: KIND_REPLY,
+        thread_ref: ctx.thread_id.clone(),
+        in_reply_to: ctx.message_id.clone(),
         refs,
-        Some(backend_ref),
-    ) {
+        backend_ref: Some(backend_ref),
+        client_key,
+    }) {
         Ok(id) => CliResponse::ok_json(saved_answer(&inbox.address, "Drafts", source_token, Some(&id)).to_string()),
         Err(resp) => resp,
     }
@@ -790,6 +854,8 @@ mod tests {
             state_at: None,
             state_by: None,
             outbound_id: None,
+            kind: KIND_REPLY.into(),
+            client_key: None,
         };
         assert_eq!(status_wire(&r), "waiting");
         r.edited_by = Some("ada".into());

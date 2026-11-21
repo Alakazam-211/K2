@@ -2148,6 +2148,11 @@ const MIGRATIONS_BY_HAND: &[(&str, &str)] = &[
         // 0320 — a phone's PushKit VoIP token (0.46.17): a DM call's ring
         // goes to it (CallKit); store: `crate::push_devices`.
         ("0320_push_device_voip", include_str!("../../drizzle_sql/0320_push_device_voip.sql")),
+        // 0321 — what K2 keeps about an agent's drafts (0.46.17): `kind`
+        // (reply | compose, so compose drafts can be deleted by the agent
+        // that saved them) and `client_key` (a save asked again with the
+        // same key answers the same draft); store: k2-daemon `mail::drafts`.
+        ("0321_mail_drafts_kind_key", include_str!("../../drizzle_sql/0321_mail_drafts_kind_key.sql")),
     ];
 
 /// [`run_migrations`], stopping after `last` when given (tests build an
@@ -2847,7 +2852,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0320_push_device_voip",
+            last_name, "0321_mail_drafts_kind_key",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -3142,6 +3147,8 @@ mod tests {
                 "0308_cli_usage_counts",
                 // 0.46.17: a phone's PushKit VoIP token.
                 "0320_push_device_voip",
+                // 0.46.17: draft kind and idempotency key.
+                "0321_mail_drafts_kind_key",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -3372,6 +3379,8 @@ mod tests {
                 "0308_cli_usage_counts",
                 // 0.46.17: a phone's PushKit VoIP token.
                 "0320_push_device_voip",
+                // 0.46.17: draft kind and idempotency key.
+                "0321_mail_drafts_kind_key",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -3644,7 +3653,7 @@ mod tests {
 
         run_migrations(&conn).unwrap();
         let top: String = conn.query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap();
-        assert_eq!(top, "0320_push_device_voip", "0320 (VoIP token) runs last, after 0308 (k5 CLI usage counts), 0314 (LLM auto-rotate), 0318 (permission request approvers), 0316 (calendar S1), 0319 (hiring restored, 0.46.16), 0311 (Postal friends), 0310 (delivery badges), 0315 (Claude sign-in warnings), 0313 (compute job env), 0312 (compute_jobs indexes), 0307 (Home chat rows apart), 0306 (Home chat rows), 0305 (Home groups), 0303 (signed approvals), 0302 (0.46.13), 0299 (0.46.12) and 0295 (CI test history)");
+        assert_eq!(top, "0321_mail_drafts_kind_key", "0321 (draft kind and key) runs last, after 0320 (VoIP token), 0308 (k5 CLI usage counts), 0314 (LLM auto-rotate), 0318 (permission request approvers), 0316 (calendar S1), 0319 (hiring restored, 0.46.16), 0311 (Postal friends), 0310 (delivery badges), 0315 (Claude sign-in warnings), 0313 (compute job env), 0312 (compute_jobs indexes), 0307 (Home chat rows apart), 0306 (Home chat rows), 0305 (Home groups), 0303 (signed approvals), 0302 (0.46.13), 0299 (0.46.12) and 0295 (CI test history)");
         let last: String = conn
             .query_row("SELECT name FROM _migrations WHERE name < '0224' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
             .unwrap();
@@ -3760,8 +3769,10 @@ mod tests {
                 "0308_cli_usage_counts",
                 // 0.46.17: a phone's PushKit VoIP token.
                 "0320_push_device_voip",
+                // 0.46.17: draft kind and idempotency key.
+                "0321_mail_drafts_kind_key",
             ],
-            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258, 0259, 0260 and 0262, then 0.46.9's 0268, 0269, 0270 and 0271, then 0.46.9's 0272, then 0.46.10's 0273, 0274 and 0275, then 0.46.11's 0276, 0277, 0278, 0279, 0280, 0281, 0282, 0283, 0284, 0285, 0286, 0287, 0288 and 0289, then the setup checklist's 0290, then 0292, then the K5 seat's 0293, then 0294, then 0295, 0296, 0297, 0299 and 0300, then 0.46.12's 0301, then 0302 and 0303, then suite Apps' 0304, then 0305, then 0306, then 0307, then 0.46.15's 0312, 0313 and 0315, then 0310, 0311 and 0319, then 0.46.17's 0316, 0318 and 0314, then 0308, then 0320)"
+            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258, 0259, 0260 and 0262, then 0.46.9's 0268, 0269, 0270 and 0271, then 0.46.9's 0272, then 0.46.10's 0273, 0274 and 0275, then 0.46.11's 0276, 0277, 0278, 0279, 0280, 0281, 0282, 0283, 0284, 0285, 0286, 0287, 0288 and 0289, then the setup checklist's 0290, then 0292, then the K5 seat's 0293, then 0294, then 0295, 0296, 0297, 0299 and 0300, then 0.46.12's 0301, then 0302 and 0303, then suite Apps' 0304, then 0305, then 0306, then 0307, then 0.46.15's 0312, 0313 and 0315, then 0310, 0311 and 0319, then 0.46.17's 0316, 0318 and 0314, then 0308, then 0320, then 0321)"
         );
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM app_resource_samples", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0, "the trends table starts empty");
@@ -4637,6 +4648,10 @@ mod tests {
             // 0320 (the VoIP token, 0.46.17) came after it: its record goes
             // too (its column re-add is skipped as a duplicate).
             conn.execute("DELETE FROM _migrations WHERE name = '0320_push_device_voip'", []).unwrap();
+            // 0321 (draft kind and key, 0.46.17) came after it: its record
+            // goes too (its column re-adds are skipped as duplicates and its
+            // index is IF NOT EXISTS).
+            conn.execute("DELETE FROM _migrations WHERE name = '0321_mail_drafts_kind_key'", []).unwrap();
             // 0297 and 0296 (CI monitors, job stats) came before 0299: their records go (IF NOT EXISTS).
             conn.execute("DELETE FROM _migrations WHERE name IN ('0297_ci_monitors', '0296_compute_job_stats')", []).unwrap();
             // 0295 (CI test history) came before 0297: its record goes (IF NOT EXISTS).

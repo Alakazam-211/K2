@@ -1583,7 +1583,7 @@ fn reply_ask(v: &serde_json::Value) -> Result<crate::mail::reply_all::ReplyAsk, 
         let raw = string_list(&v[field], field)?;
         send::normalize_recipients(&raw).map_err(send_error_response)
     };
-    Ok(crate::mail::reply_all::ReplyAsk { all, cc: norm("cc")?, bcc: norm("bcc")? })
+    Ok(crate::mail::reply_all::ReplyAsk { all, cc: norm("cc")?, bcc: norm("bcc")?, ..Default::default() })
 }
 
 // ── POST /cli/mail/forward-message ──────────────────────────────────────

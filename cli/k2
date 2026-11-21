@@ -81432,10 +81432,19 @@ cmd_feedback_ask() {
         printf '%s\n' "${FB_SESSION_KIND:-}"
         exit 0
     fi
+    # In a session the passport is the agent: K2's server stamps its name
+    # and session, and refuses a body naming another (not_this_agent), so
+    # neither is sent. Outside a session they go as before.
+    local fb_agent fb_stamped=""
+    fb_agent="$(_envn AGENT_NAME)"
+    if _envn_any HOOK_SOCK; then
+        fb_agent=""
+        fb_stamped=1
+    fi
     FB_TITLE="$title" FB_BODY="$body" FB_BODY_PATH="$body_file" FB_HTML_PATH="$html_path" \
     FB_KIND="$kind" FB_OPTIONS="$options" FB_OPTION_JSON="$option_json" \
     FB_PRIORITY="$priority" FB_ASSIGN="$assign" FB_WAIT="$wait" FB_TIMEOUT="$timeout" FB_JSON="$as_json" \
-    FB_PROJECT="$PROJECT" FB_AGENT="$(_envn AGENT_NAME)" \
+    FB_PROJECT="$PROJECT" FB_AGENT="$fb_agent" FB_STAMPED="$fb_stamped" \
     FB_SESSION_ID="$FB_SESSION_ID" FB_SESSION_KIND="$FB_SESSION_KIND" FB_FILES="$files_json" \
     FB_FILES_PY="$_ticket_files_check_py" \
     ABASE="$BASE_URL" ATOKEN="$TOKEN" _K5_PY_HTTP="$_K5_PY_HTTP" _K5_PY_HEADERS="$(_k5_py_headers)" python3 - <<'PYEOF'
@@ -81459,7 +81468,7 @@ def die(err, exit_code=None):
     sys.stderr.write(json.dumps({"error": err}) + "\n")
     if exit_code is None:
         code = str(err.get("code") or "")
-        if code in ("person_only", "own_workspace_only"):
+        if code in ("person_only", "own_workspace_only", "not_this_agent"):
             # Refused: not this agent's to do (K2's refused exit).
             exit_code = 3
         elif code in ("not_found", "ambiguous_id"):
@@ -81556,7 +81565,11 @@ if os.environ.get("FB_FILES"):
     payload["attachments"] = json.loads(os.environ["FB_FILES"])
     sent_files = bool(payload["attachments"])
 # Session auto-detection result (may be absent — must not fail the ask).
-if os.environ.get("FB_SESSION_ID"):
+# In a session (FB_STAMPED) the server stamps the session; its kind still goes.
+if os.environ.get("FB_STAMPED") == "1":
+    if os.environ.get("FB_SESSION_KIND"):
+        payload["sessionKind"] = os.environ["FB_SESSION_KIND"]
+elif os.environ.get("FB_SESSION_ID"):
     payload["sessionId"] = os.environ["FB_SESSION_ID"]
     if os.environ.get("FB_SESSION_KIND"):
         payload["sessionKind"] = os.environ["FB_SESSION_KIND"]
@@ -81724,7 +81737,7 @@ if err is not None:
         err = {"code": "error", "hint": err}
     sys.stderr.write(json.dumps({"error": err}) + "\n")
     code = err.get("code")
-    sys.exit(3 if code in ("person_only", "own_workspace_only") else 4 if code in ("not_found", "ambiguous_id") else 2 if code == "usage" else 1)
+    sys.exit(3 if code in ("person_only", "own_workspace_only", "not_this_agent") else 4 if code in ("not_found", "ambiguous_id") else 2 if code == "usage" else 1)
 if os.environ.get("AS_JSON") == "true":
     print(json.dumps(d))
     sys.exit(0)
@@ -81784,7 +81797,7 @@ def die(err):
         err = {"code": "error", "hint": err}
     sys.stderr.write(json.dumps({"error": err}) + "\n")
     code = err.get("code")
-    sys.exit(3 if code in ("person_only", "own_workspace_only") else 4 if code in ("not_found", "ambiguous_id") else 2 if code == "usage" else 1)
+    sys.exit(3 if code in ("person_only", "own_workspace_only", "not_this_agent") else 4 if code in ("not_found", "ambiguous_id") else 2 if code == "usage" else 1)
 
 raw = sys.stdin.buffer.read().decode("utf-8", "replace")
 try:
@@ -81964,11 +81977,15 @@ cmd_feedback_comment() {
     local author
     _envn_into author AGENT_NAME
     [ -z "$author" ] && author="$(basename "$PROJECT")"
+    # In a session the server stamps the passport's own name (see ask).
+    if _envn_any HOOK_SOCK; then author=""; fi
     local body resp
     # Files: an array embedded in the body (TA22); relative paths resolve
     # against the TICKET's workspace on the daemon.
     body=$(FB_ID="$id" FB_TEXT="$text" FB_AUTHOR="$author" FB_FILES="$files_json" python3 -c 'import json,os
-b = {"id": os.environ["FB_ID"], "body": os.environ["FB_TEXT"], "author": os.environ["FB_AUTHOR"]}
+b = {"id": os.environ["FB_ID"], "body": os.environ["FB_TEXT"]}
+if os.environ.get("FB_AUTHOR"):
+    b["author"] = os.environ["FB_AUTHOR"]
 if os.environ.get("FB_FILES"):
     b["attachments"] = json.loads(os.environ["FB_FILES"])
 print(json.dumps(b))')
@@ -81987,7 +82004,7 @@ if err is not None:
         err = {"code": "error", "hint": err}
     sys.stderr.write(json.dumps({"error": err}) + "\n")
     code = err.get("code")
-    sys.exit(3 if code in ("person_only", "own_workspace_only") else 4 if code in ("not_found", "ambiguous_id") else 2 if code == "usage" else 1)
+    sys.exit(3 if code in ("person_only", "own_workspace_only", "not_this_agent") else 4 if code in ("not_found", "ambiguous_id") else 2 if code == "usage" else 1)
 ticket_files_check(os.environ.get("SENT_FILES", "0") != "0", d)
 if os.environ.get("AS_JSON") == "true":
     print(json.dumps(d))
@@ -82048,13 +82065,16 @@ cmd_feedback_resolve() {
     local author
     _envn_into author AGENT_NAME
     [ -z "$author" ] && author="$(basename "$PROJECT")"
+    # In a session the server stamps the passport's own name (see ask).
+    if _envn_any HOOK_SOCK; then author=""; fi
     local body resp
     body=$(FB_ID="$id" FB_ANSWERED="$answered" FB_HAS_ANSWERED="$has_answered" FB_AUTHOR="$author" FB_FILES="$files_json" python3 -c 'import json,os
 b = {"id": os.environ["FB_ID"]}
 if os.environ.get("FB_HAS_ANSWERED") == "true":
     b["status"] = "answered"
     b["answer"] = os.environ["FB_ANSWERED"]
-    b["author"] = os.environ["FB_AUTHOR"]
+    if os.environ.get("FB_AUTHOR"):
+        b["author"] = os.environ["FB_AUTHOR"]
 if os.environ.get("FB_FILES"):
     b["attachments"] = json.loads(os.environ["FB_FILES"])
 print(json.dumps(b))')
@@ -82073,7 +82093,7 @@ if err is not None:
         err = {"code": "error", "hint": err}
     sys.stderr.write(json.dumps({"error": err}) + "\n")
     code = err.get("code")
-    sys.exit(3 if code in ("person_only", "own_workspace_only") else 4 if code in ("not_found", "ambiguous_id") else 2 if code == "usage" else 1)
+    sys.exit(3 if code in ("person_only", "own_workspace_only", "not_this_agent") else 4 if code in ("not_found", "ambiguous_id") else 2 if code == "usage" else 1)
 ticket_files_check(os.environ.get("SENT_FILES", "0") != "0", d)
 if os.environ.get("AS_JSON") == "true":
     print(json.dumps(d))
@@ -82144,7 +82164,7 @@ if err is not None:
         err = {"code": "error", "hint": err}
     sys.stderr.write(json.dumps({"error": err}) + "\n")
     code = err.get("code")
-    sys.exit(3 if code in ("person_only", "own_workspace_only") else 4 if code in ("not_found", "ambiguous_id") else 2 if code == "usage" else 1)
+    sys.exit(3 if code in ("person_only", "own_workspace_only", "not_this_agent") else 4 if code in ("not_found", "ambiguous_id") else 2 if code == "usage" else 1)
 # Warnings (assignee_unknown: a name that is not a user on this server)
 # print as JSON on stderr and never change the exit code.
 for w in d.get("warnings") or []:
@@ -82222,7 +82242,7 @@ if err is not None:
         err = {"code": "error", "hint": err}
     sys.stderr.write(json.dumps({"error": err}) + "\n")
     code = err.get("code")
-    if code in ("owner_only", "role_required", "forbidden", "person_only", "own_workspace_only"):
+    if code in ("owner_only", "role_required", "forbidden", "person_only", "own_workspace_only", "not_this_agent"):
         sys.exit(3)
     sys.exit(2 if code in ("usage", "bad_value", "bad_request", "unknown_user") else 1)
 if os.environ.get("AS_JSON") == "true":
@@ -82329,14 +82349,16 @@ OUTPUT CONTRACT
 EXIT CODES
   0 ok · 1 error · 2 bad usage · 3 refused: a K2 session with no passport
   (nothing is sent), or not the agent's to do (person_only,
-  own_workspace_only) · 4 not found (ambiguous id prefix = 4 too, with the
+  own_workspace_only, not_this_agent) · 4 not found (ambiguous id prefix = 4 too, with the
   matching candidates listed in the hint) · 5 ask --wait: the person wrote
   free text instead of picking an option (needs_discussion)
 
 WHO
   Inside a K2 terminal these commands send the session passport: an agent
   asks in its own workspace and works its own workspace's tickets only
-  (another workspace's ticket is not found).
+  (another workspace's ticket is not found). K2's server records the
+  session's own agent and session on what it writes, so the command sends
+  no name of its own there.
 
 Run 'k2 feedback <command> --help' for details on a command.
 EOF

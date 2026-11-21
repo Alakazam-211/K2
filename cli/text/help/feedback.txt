@@ -45,13 +45,15 @@ OUTPUT CONTRACT
 EXIT CODES
   0 ok · 1 error · 2 bad usage · 3 refused: a K2 session with no passport
   (nothing is sent), or not the agent's to do (person_only,
-  own_workspace_only) · 4 not found (ambiguous id prefix = 4 too, with the
+  own_workspace_only, not_this_agent) · 4 not found (ambiguous id prefix = 4 too, with the
   matching candidates listed in the hint) · 5 ask --wait: the person wrote
   free text instead of picking an option (needs_discussion)
 
 WHO
   Inside a K2 terminal these commands send the session passport: an agent
   asks in its own workspace and works its own workspace's tickets only
-  (another workspace's ticket is not found).
+  (another workspace's ticket is not found). K2's server records the
+  session's own agent and session on what it writes, so the command sends
+  no name of its own there.
 
 Run 'k2 feedback <command> --help' for details on a command.

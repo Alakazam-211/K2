@@ -17,8 +17,13 @@
 #   4. Outside a session the owner token on disk is sent, as before (so the
 #      stub really sees it when it is sent).
 #   5. A refusal that isn't the agent's to get past (own_workspace_only,
-#      person_only) exits 3 on every verb that can meet one, with the
-#      daemon's error on stderr and nothing on stdout.
+#      person_only, not_this_agent) exits 3 on every verb that can meet one,
+#      with the daemon's error on stderr and nothing on stdout.
+#   6. In a session (with K2_AGENT_NAME and K2_SESSION_ID set) ask sends no
+#      agentName and no sessionId but keeps sessionKind, and comment and
+#      resolve --answered send no author: K2's server stamps the passport's
+#      own and refuses another (not_this_agent). Outside a session they go
+#      as before.
 #
 # Bash 3.2 safe. No daemon build. Never touches ~/.k2.
 
@@ -79,6 +84,8 @@ class H(BaseHTTPRequestHandler):
             req = {}
         marked = (query.get("id") == ["refused1"] or req.get("id") == "refused1"
                   or req.get("title") == "refused" or query.get("status") == ["planned"])
+        if req.get("title") == "notme":
+            return self.reply({"ok": False, "error": {"code": "not_this_agent", "hint": "stub refusal", "field": "agentName"}}, 403)
         if marked:
             code = "person_only" if path == "/cli/feedback/resolve" else "own_workspace_only"
             return self.reply({"ok": False, "error": {"code": code, "hint": "stub refusal"}}, 403)
@@ -139,15 +146,19 @@ ok()  { echo "PASS: $1"; PASS=$((PASS + 1)); }
 bad() { echo "FAIL: $1" >&2; FAIL=$((FAIL + 1)); }
 
 RC=0
-# run <mode> <args…>: mode is session (a passport), bare (a session with no
-# passport) or outside (no session). Only the variables named here reach
-# the CLI (env -i), so the caller's own K2_* never do.
+# run <mode> <args…>: mode is session (a passport), named (a passport, with
+# an agent name, a session id and a cell set as a session has them), bare (a
+# session with no passport), outside or outside_named (no session). Only the
+# variables named here reach the CLI (env -i), so the caller's own K2_* never do.
 run() {
     local mode="$1"; shift
     local -a envs=(PATH="$PATH" HOME="$FAKE_HOME" K2_HOME="$FAKE_HOME/.k2"
         K2_PORT="$STUB_PORT" K2_PROJECT_PATH="$WORK/proj")
     case "$mode" in
         session) envs+=(K2_HOOK_SOCK="$WORK/no.sock" K2_HOOK_TOKEN="$PASSPORT") ;;
+        named) envs+=(K2_HOOK_SOCK="$WORK/no.sock" K2_HOOK_TOKEN="$PASSPORT"
+            K2_AGENT_NAME="named-agent" K2_SESSION_ID="sess-d1b" K2_CELL="canonical") ;;
+        outside_named) envs+=(K2_AGENT_NAME="named-agent" K2_SESSION_ID="sess-d1b" K2_CELL="canonical") ;;
         bare) envs+=(K2_HOOK_SOCK="$WORK/no.sock") ;;
         outside) ;;
         *) echo "FAIL: unknown mode $mode" >&2; exit 1 ;;
@@ -256,6 +267,46 @@ refused_row "comment" own_workspace_only tickets comment refused1 "hi"
 refused_row "resolve" person_only tickets resolve refused1
 refused_row "resolve --answered" person_only tickets resolve refused1 --answered "done"
 refused_row "assign" own_workspace_only tickets assign refused1 owner
+refused_row "ask (another agent)" not_this_agent tickets ask notme --kind fyi
+
+# 6. The identity fields: none in a session, as before outside one.
+# body_row <label> <mode> <path> <python check on the body `b`> <args…>
+body_row() {
+    local label="$1" mode="$2" want_path="$3" check="$4"; shift 4
+    local before why
+    before="$(count)"
+    run "$mode" "$@"
+    if [ "$RC" -ne 0 ]; then
+        bad "$label: exit $RC, err=$(cat "$WORK/err")"
+        return
+    fi
+    if why="$(python3 - "$WORK/requests.jsonl" "$before" "$want_path" "$check" <<'PY'
+import json, sys
+path, start, want, check = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
+rows = [json.loads(l) for l in open(path).read().splitlines()[start:]]
+hit = [r for r in rows if r["method"] == "POST" and r["path"] == want]
+if len(hit) != 1:
+    sys.exit("expected one POST %s, saw %s" % (want, [(r["method"], r["path"]) for r in rows]))
+b = json.loads(hit[0]["body"])
+if not eval(check, {"b": b}):
+    sys.exit("body %s fails: %s" % (json.dumps(b, sort_keys=True), check))
+PY
+)"; then
+        ok "$label"
+    else
+        bad "$label: $why"
+    fi
+}
+body_row "in a session, ask sends no agentName or sessionId, and keeps sessionKind" named /cli/feedback/create \
+    '"agentName" not in b and "sessionId" not in b and b.get("sessionKind") == "canonical"' tickets ask "Ship it?" --kind fyi
+body_row "in a session, comment sends no author" named /cli/feedback/comment \
+    '"author" not in b and b.get("body") == "Looking now"' tickets comment fb0d1b00 "Looking now"
+body_row "in a session, resolve --answered sends no author" named /cli/feedback/resolve \
+    '"author" not in b and b.get("status") == "answered" and b.get("answer") == "Shipped"' tickets resolve fb0d1b00 --answered "Shipped"
+body_row "outside a session, ask sends agentName and sessionId as before" outside_named /cli/feedback/create \
+    'b.get("agentName") == "named-agent" and b.get("sessionId") == "sess-d1b" and b.get("sessionKind") == "canonical"' tickets ask "Ship it?" --kind fyi
+body_row "outside a session, comment sends its author as before" outside_named /cli/feedback/comment \
+    'b.get("author") == "named-agent"' tickets comment fb0d1b00 "Looking now"
 
 # 4. Outside a session the owner token on disk is what goes, as before.
 before="$(count)"

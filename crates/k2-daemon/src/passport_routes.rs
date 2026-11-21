@@ -426,16 +426,7 @@ fn actor_is_the_passport(path: &str, params: &mut HashMap<String, String>, princ
     };
     let me = principal.agent_address.trim();
     match params.get("agent").map(|s| s.trim()).filter(|s| !s.is_empty()) {
-        Some(named) if named != me => Some(CliResponse {
-            status: "403 Forbidden",
-            content_type: "application/json",
-            body: serde_json::json!({ "error": {
-                "code": "not_this_agent",
-                "hint": format!("this session is '{me}'; {what} records the session's own agent: send that name or none"),
-                "agent": me,
-            } })
-            .to_string(),
-        }),
+        Some(named) if named != me => Some(not_this_agent(me, what, None)),
         _ if path == "/cli/agent/complete" && !is_agent_name(me) => {
             Some(own_only("this session's name is not an agent's work folder; a person completes this item"))
         }
@@ -443,6 +434,26 @@ fn actor_is_the_passport(path: &str, params: &mut HashMap<String, String>, princ
             params.insert("agent".to_string(), me.to_string());
             None
         }
+    }
+}
+
+/// The refusal when a request names an agent other than the passport's own
+/// (`403 not_this_agent`), naming the session's agent: `agent=` on `done` and
+/// `agent complete`, and a ticket body's identity fields ([`ticket_names_other`],
+/// which says which `field` differed).
+fn not_this_agent(me: &str, what: &str, field: Option<&str>) -> CliResponse {
+    let mut error = serde_json::json!({
+        "code": "not_this_agent",
+        "hint": format!("this session is '{me}'; {what} records the session's own agent: send that name or none"),
+        "agent": me,
+    });
+    if let Some(field) = field {
+        error["field"] = serde_json::json!(field);
+    }
+    CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: serde_json::json!({ "error": error }).to_string(),
     }
 }
 
@@ -681,8 +692,9 @@ pub fn is_ticket_write(path: &str) -> bool {
 /// - `assign`: its own ticket, as a Connect login may on any ticket.
 ///
 /// Another workspace's ticket answers as an unknown id does. The body's
-/// identity fields (`agentName`, `author`, `sessionId`, `optionPick`) are
-/// the server's, never the request's.
+/// identity fields (`agentName`, `sessionId`, `author`) are the passport's:
+/// the same value or none is stamped, another is refused (`not_this_agent`,
+/// [`ticket_names_other`]). An `optionPick` never makes a comment a person's.
 pub(crate) fn ticket_write(path: &str, body: &[u8], session_id: &str, principal: &HookPrincipal) -> CliResponse {
     use crate::feedback_routes::usage_error;
     if !is_ticket_write(path) {
@@ -714,8 +726,6 @@ pub(crate) fn ticket_write(path: &str, body: &[u8], session_id: &str, principal:
         }
         let own_path = params.get("project").cloned().unwrap_or_default();
         v["project"] = serde_json::json!(own_path);
-        v["agentName"] = serde_json::json!(agent);
-        v["sessionId"] = serde_json::json!(session_id);
     } else {
         let id = v.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string();
         if !id.is_empty() {
@@ -733,10 +743,39 @@ pub(crate) fn ticket_write(path: &str, body: &[u8], session_id: &str, principal:
                     k2_core::cli_name!()
                 ));
             }
-            v["author"] = serde_json::json!(agent);
         }
     }
+    if let Some(refused) = ticket_names_other(path, &v, agent.trim(), session_id) {
+        return refused;
+    }
+    if path == "/cli/feedback/create" {
+        v["agentName"] = serde_json::json!(agent);
+        v["sessionId"] = serde_json::json!(session_id);
+    } else if path == "/cli/feedback/resolve" {
+        v["author"] = serde_json::json!(agent);
+    }
     dispatch_post_as_agent(path, v.to_string().as_bytes(), &agent)
+}
+
+/// A ticket body's identity fields are the passport's, as `agent=` is on
+/// `done` and `agent complete`: `agentName` and `sessionId` on `ask`,
+/// `author` on `comment` and `resolve`. One that names another agent or
+/// session (a non-empty string that differs once trimmed, or any value that
+/// isn't a string) is refused (`not_this_agent`), never replaced. The same
+/// name, or none, is stamped by [`ticket_write`].
+fn ticket_names_other(path: &str, v: &serde_json::Value, me: &str, session_id: &str) -> Option<CliResponse> {
+    let (what, fields) = match path {
+        "/cli/feedback/create" => ("tickets ask", vec![("agentName", me), ("sessionId", session_id)]),
+        "/cli/feedback/comment" => ("tickets comment", vec![("author", me)]),
+        "/cli/feedback/resolve" => ("tickets resolve", vec![("author", me)]),
+        _ => return None,
+    };
+    let differs = |key: &str, mine: &str| match v.get(key) {
+        None | Some(serde_json::Value::Null) => false,
+        Some(serde_json::Value::String(s)) => !s.trim().is_empty() && s.trim() != mine.trim(),
+        Some(_) => true,
+    };
+    fields.into_iter().find(|&(key, mine)| differs(key, mine)).map(|(key, _)| not_this_agent(me, what, Some(key)))
 }
 
 /// The handler for a ticket write [`ticket_write`] checked and stamped.
@@ -904,6 +943,44 @@ mod tests {
         for p in ["/cli/feedback/answer", "/cli/feedback/list-all", "/cli/feedback/waiting-count", "/cli/feedback/attachment", "/cli/tickets/settings"] {
             assert!(!is_ticket_write(p), "{p} must not be a passport ticket write");
         }
+    }
+
+    #[test]
+    fn a_ticket_body_names_only_the_passport() {
+        let me = "d1-agent";
+        let sid = "0f8a2c1e-0000-4000-8000-000000000000";
+        let refused = |path: &str, body: serde_json::Value| ticket_names_other(path, &body, me, sid);
+        // Absent, null, empty or the same: nothing to refuse.
+        for body in [
+            serde_json::json!({}),
+            serde_json::json!({ "agentName": null, "sessionId": "" }),
+            serde_json::json!({ "agentName": " d1-agent ", "sessionId": sid }),
+        ] {
+            assert!(refused("/cli/feedback/create", body.clone()).is_none(), "{body}");
+        }
+        for path in ["/cli/feedback/comment", "/cli/feedback/resolve"] {
+            assert!(refused(path, serde_json::json!({ "author": me })).is_none(), "{path}");
+            assert!(refused(path, serde_json::json!({})).is_none(), "{path}");
+        }
+        // Another name or session, or a value that isn't a string: refused,
+        // with D1's code and wording, naming the field.
+        for (path, body, field) in [
+            ("/cli/feedback/create", serde_json::json!({ "agentName": "owner" }), "agentName"),
+            ("/cli/feedback/create", serde_json::json!({ "agentName": 7 }), "agentName"),
+            ("/cli/feedback/create", serde_json::json!({ "sessionId": "forged-session" }), "sessionId"),
+            ("/cli/feedback/comment", serde_json::json!({ "author": "owner" }), "author"),
+            ("/cli/feedback/resolve", serde_json::json!({ "status": "answered", "author": "backend" }), "author"),
+        ] {
+            let r = refused(path, body.clone()).unwrap_or_else(|| panic!("{path} {body} must be refused"));
+            assert!(r.status.starts_with("403"), "{path} {body}: {}", r.status);
+            let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+            assert_eq!(v["error"]["code"], "not_this_agent", "{}", r.body);
+            assert_eq!(v["error"]["field"], field, "{}", r.body);
+            assert_eq!(v["error"]["agent"], me, "{}", r.body);
+            assert!(v["error"]["hint"].as_str().expect("hint").contains("send that name or none"), "{}", r.body);
+        }
+        // assign has no identity field.
+        assert!(refused("/cli/feedback/assign", serde_json::json!({ "author": "owner" })).is_none());
     }
 
     #[test]

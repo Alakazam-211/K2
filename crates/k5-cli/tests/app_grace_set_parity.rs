@@ -212,7 +212,7 @@ fn the_cross_over_reads_answer_as_the_shell_does() {
             stop(
                 "requests: --since last",
                 &["requests", "acme", "--since"],
-                12,
+                2,
             ),
             // native: app requests
             traceback(one(

@@ -402,7 +402,7 @@ fn data_answers_as_the_shell_does() {
             stop(
                 "data put: --to last",
                 &["data", "put", "acme", "x", "--to"],
-                12,
+                2,
             ),
             // native: app data
             stop("data: the page", &["data"], 0),

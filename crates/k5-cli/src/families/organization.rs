@@ -5,7 +5,9 @@
 //! What runs, in the shell's order:
 //!
 //! 1. The settings ([`crate::daemon`]), a re-minted passport taken at once,
-//!    and the two gates ([`crate::prelude`]).
+//!    and the two gates ([`crate::prelude`]). `organization` alone (or an
+//!    empty verb) is the help page ([`bare`]), past the guard but not the
+//!    connection gate.
 //! 2. `organization` is an `id` tool: in a session (`HOOK_SOCK` set) a
 //!    passport the daemon no longer knows with its socket gone, and no
 //!    passport at all, are refused with exit 3
@@ -35,9 +37,9 @@
 //!    worked.
 //!
 //! The shell CLI answers these forms itself ([`run`] returns `None`), so
-//! there is one copy of each: `organization` alone, `organization help`
-//! and any form with `-h` or `--help` (the help, which the front sends to
-//! a page or the shell, [`crate::front`]); a word that is not UTF-8; a
+//! there is one copy of each: `organization help` and any form with `-h`
+//! or `--help` (the help, which the front sends to a page or the shell,
+//! [`crate::front`]); a word that is not UTF-8; a
 //! port that is set but is no port curl takes; a `python3` the binary
 //! can't tell ([`crate::families`], Without Python); the shared Codex
 //! server check; and `bulletin set --file <path>` when the file can't be
@@ -510,7 +512,10 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .skip(1)
         .map(|a| a.to_str())
         .collect::<Option<_>>()?;
-    let (verb, rest) = words.split_first()?;
+    // `organization` alone, or an empty verb: the help page ([`bare`]).
+    let Some((verb, rest)) = words.split_first().filter(|(v, _)| !v.is_empty()) else {
+        return bare(args, hook_sock.as_deref());
+    };
     // The help, alone or anywhere: the front's page or the shell's.
     if matches!(*verb, "" | "help" | "-h" | "--help")
         || rest.iter().any(|w| matches!(*w, "-h" | "--help"))
@@ -545,6 +550,37 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         hook_sock.as_deref(),
         settings,
     ))
+}
+
+/// `organization` alone (or with an empty verb, whatever follows it):
+/// `cmd_organization`'s `''` arm, the help page on
+/// stdout, exit 0, nothing sent. The shell skips its connection gate for
+/// it (`cli/src/cli-tools-policy.sh`), not the virtual desktop's guard;
+/// then the `id` tool's lines.
+fn bare(args: &[OsString], hook_sock: Option<&Path>) -> Option<Exit> {
+    if !python::family_native(python::here()) {
+        return None;
+    }
+    let settings = match daemon::current() {
+        Ok(s) => s,
+        Err(e) => {
+            out::stderr_line(&format!("Error: {e}"));
+            return Some(Exit::Error);
+        }
+    };
+    let gate = prelude::gate(&settings);
+    if gate.is_none() && settings.port_text.as_deref().and_then(curl_port).is_none() {
+        return None;
+    }
+    if let Some(gate) = gate.filter(|g| *g != prelude::Gate::CannotConnect) {
+        return Some(gate.stop());
+    }
+    let would_refuse = passport::current(args).would_refuse();
+    if let Some(stop) = prelude::id_tool(&settings, hook_sock, would_refuse, TOOL) {
+        return Some(stop);
+    }
+    let page = crate::text::help("organization")?;
+    Some(Shown::out(page).print())
 }
 
 fn run_with(

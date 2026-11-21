@@ -20,8 +20,10 @@
 //!   re-minted and a healed passport; the gates.
 //! - No answer (an empty reply, a reset, not HTTP, nothing listening):
 //!   the line, exit 1.
-//! - What the binary hands to the shell: `organization` alone, help, a
-//!   port that is no port, a file it can't read.
+//! - `organization` alone: the help page, with no daemon too (the shell
+//!   skips its connection gate), the guard and the id tool's checks.
+//! - What the binary hands to the shell: help, a port that is no port, a
+//!   file it can't read.
 
 #![cfg(unix)]
 
@@ -954,6 +956,53 @@ fn organization_with_no_answer() {
 /// What the binary hands to the shell, before it prints or sends
 /// anything: both sides are the shell's.
 #[test]
+fn organization_alone_is_the_help_page() {
+    let rig = Rig::new(VERB, "alone");
+    let session = |c: Case| Case {
+        env: with_passport(&[("K2_HOOK_SOCK", "{sock}")]),
+        setup: port_only,
+        ..c
+    };
+    let v = vec![
+        // native: organization
+        case("alone", &[], &[], vec![], owner_and_port, 0, 0),
+        case("alone, no daemon", &[], &[], vec![], nothing, 0, 0),
+        case("an empty verb", &[""], &[], vec![], owner_and_port, 0, 0),
+        case(
+            "an empty verb, words after it, no daemon",
+            &["", "list", "--json"],
+            &[],
+            vec![],
+            nothing,
+            0,
+            0,
+        ),
+        session(case("alone in a session", &[], &[], vec![], port_only, 0, 0)),
+        case(
+            "alone: the virtual desktop's guard",
+            &[],
+            &[("K2_NO_OWNER_FALLBACK", "1")],
+            vec![],
+            owner_and_port,
+            3,
+            0,
+        ),
+        case(
+            "alone: HOOK_SOCK set and no passport",
+            &[],
+            &[("K2_HOOK_SOCK", "{sock}")],
+            vec![],
+            owner_and_port,
+            3,
+            0,
+        ),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}
+
+#[test]
 fn organization_hands_these_to_the_shell() {
     let rig = Rig::new(VERB, "shell");
     let shell = |c: Case| Case {
@@ -961,15 +1010,6 @@ fn organization_hands_these_to_the_shell() {
         ..c
     };
     let v = vec![
-        shell(case(
-            "organization alone",
-            &[],
-            &[],
-            vec![],
-            owner_and_port,
-            0,
-            0,
-        )),
         shell(case("help", &["help"], &[], vec![], owner_and_port, 0, 0)),
         shell(case(
             "list -h",

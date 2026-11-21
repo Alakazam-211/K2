@@ -29,8 +29,12 @@
 //! been applied, is the transport's line, then `_k2_end_command` from
 //! inside the pipe: the command dies of SIGPIPE ([`super::end_in_pipe`]).
 //!
+//! `remind` alone, or with an empty first word and no time, is the help
+//! page (`cmd_help_remind`), exit 0, after the gates and the `id` tool's
+//! checks ([`super::heartbeat::remind_alone`]).
+//!
 //! The shell CLI answers these forms itself ([`run`] returns `None`): the
-//! help (`remind` alone, `help`, and any `-h` or `--help`, which the front
+//! other help forms (`help`, and any `-h` or `--help`, which the front
 //! sends to a page or the shell); a word that is not UTF-8; a port curl
 //! won't take; a `python3` the binary can't tell; the shared Codex server
 //! check; and a `--workspace` folder the binary can't resolve as bash's
@@ -463,7 +467,10 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     let cdpath = std::env::var_os("CDPATH").is_some();
     let resolve = |w: &str| register::path(RegisterVerb::Open, w, &pwd, cdpath);
     let form = parse(&words, &resolve)?;
-    if form == Form::Help {
+    // `remind` alone (or with an empty first word, and no time) is the
+    // help page, after the gates ([`run_with`]), as `heartbeat remind`
+    // alone is; every other help form is the front's page or the shell's.
+    if form == Form::Help && !super::heartbeat::remind_alone(&all) {
         return None;
     }
     if !python::family_native(python::here()) {
@@ -505,8 +512,14 @@ fn run_with(
             }
             return Exit::Usage;
         }
-        // `run` hands the help to the shell.
-        Form::Help => return Exit::Usage,
+        // `remind` alone (`run` hands every other help form on):
+        // `cmd_help_remind`, exit 0, nothing sent.
+        Form::Help => {
+            return match crate::text::help("remind") {
+                Some(page) => Shown::out(page).print(),
+                None => Exit::Usage,
+            }
+        }
     };
     // `run` hands a port curl won't take to the shell.
     settings.port = settings.port_text.as_deref().and_then(curl_port);

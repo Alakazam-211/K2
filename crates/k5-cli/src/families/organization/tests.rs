@@ -988,11 +988,10 @@ fn where_the_python_raises() {
 #[test]
 fn the_help_and_the_odd_forms_are_the_shell_s() {
     // The help is a page or the shell's: `run` hands it on before it
-    // reads anything.
+    // reads anything (`organization` alone, and an empty verb, are
+    // [`bare`]'s).
     for list in [
-        &["organization"][..],
-        &["organization", ""],
-        &["organization", "help"],
+        &["organization", "help"][..],
         &["organization", "list", "-h"],
         &["organization", "list", "--help", "x"],
     ] {

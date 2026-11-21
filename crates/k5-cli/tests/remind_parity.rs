@@ -16,7 +16,10 @@
 //!   the bulletin's mark, Python's raise part way.
 //! - A passport over TCP and on the cell socket (not served goes on to
 //!   TCP), the id tool's checks, the gates; no answer.
-//! - What the binary hands to the shell: the help, a port curl won't take.
+//! - `remind` alone: the help page, after the gates and the id tool's
+//!   checks.
+//! - What the binary hands to the shell: the other help forms, a port curl
+//!   won't take.
 
 #![cfg(unix)]
 
@@ -589,6 +592,52 @@ fn remind_with_no_answer() {
 }
 
 #[test]
+fn remind_alone_is_the_help_page() {
+    let rig = Rig::new("remind", "alone");
+    let session = |c: Case| Case {
+        env: with_passport(&[("K2_HOOK_SOCK", "{sock}")]),
+        setup: port_only,
+        ..c
+    };
+    let v = vec![
+        case("alone", &[], &[], vec![], owner_and_port, 0, 0),
+        case("an empty word", &[""], &[], vec![], owner_and_port, 0, 0),
+        case(
+            "an empty word and text, no time",
+            &["", "call back"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        ),
+        case("alone, no daemon: the gate", &[], &[], vec![], nothing, 1, 0),
+        session(case("alone in a session", &[], &[], vec![], port_only, 0, 0)),
+        case(
+            "alone: the virtual desktop's guard",
+            &[],
+            &[("K2_NO_OWNER_FALLBACK", "1")],
+            vec![],
+            owner_and_port,
+            3,
+            0,
+        ),
+        case(
+            "alone: HOOK_SOCK set and no passport",
+            &[],
+            &[("K2_HOOK_SOCK", "{sock}")],
+            vec![],
+            owner_and_port,
+            3,
+            0,
+        ),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}
+
+#[test]
 fn remind_hands_these_to_the_shell() {
     let rig = Rig::new("remind", "shell");
     let shell = |c: Case| Case {
@@ -596,7 +645,6 @@ fn remind_hands_these_to_the_shell() {
         ..c
     };
     let v = vec![
-        shell(case("remind alone", &[], &[], vec![], owner_and_port, 0, 0)),
         shell(case("help", &["help"], &[], vec![], owner_and_port, 0, 0)),
         shell(case(
             "list -h",

@@ -29,7 +29,7 @@ cmd_inbox_list() {
     local folder=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --folder) folder="$2"; shift 2 ;;
+            --folder) _need_value "$@"; folder="$2"; shift 2 ;;
             -*) shift ;;
             *) [[ -z "$folder" ]] && folder="$1"; shift ;;
         esac
@@ -75,12 +75,12 @@ cmd_inbox_compose() {
     local title="" body="" priority="" source="" from="" summary=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --summary) summary="$2"; shift 2 ;;
-            --title) title="$2"; shift 2 ;;
-            --body) body="$2"; shift 2 ;;
-            --priority) priority="$2"; shift 2 ;;
-            --source) source="$2"; shift 2 ;;
-            --from) from="$2"; shift 2 ;;
+            --summary) _need_value "$@"; summary="$2"; shift 2 ;;
+            --title) _need_value "$@"; title="$2"; shift 2 ;;
+            --body) _need_value "$@"; body="$2"; shift 2 ;;
+            --priority) _need_value "$@"; priority="$2"; shift 2 ;;
+            --source) _need_value "$@"; source="$2"; shift 2 ;;
+            --from) _need_value "$@"; from="$2"; shift 2 ;;
             *) shift ;;
         esac
     done

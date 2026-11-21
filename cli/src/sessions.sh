@@ -180,12 +180,12 @@ cmd_sessions_roster() {
             --all|-a) all=1; shift ;;
             --json) as_json=1; shift ;;
             --past) past=1; shift ;;
-            --search) search="${2:-}"; past=1; shift 2 ;;
-            --days) days="${2:-}"; past=1; shift 2 ;;
-            --cli) cli="${2:-}"; past=1; shift 2 ;;
-            --limit) limit="${2:-}"; past=1; shift 2 ;;
+            --search) _need_value "$@"; search="${2:-}"; past=1; shift 2 ;;
+            --days) _need_value "$@"; days="${2:-}"; past=1; shift 2 ;;
+            --cli) _need_value "$@"; cli="${2:-}"; past=1; shift 2 ;;
+            --limit) _need_value "$@"; limit="${2:-}"; past=1; shift 2 ;;
             --archived) archived=1; past=1; shift ;;
-            --workspace) workspace="${2:-}"; shift 2 ;;
+            --workspace) _need_value "$@"; workspace="${2:-}"; shift 2 ;;
             -h|--help) _sessions_usage; exit 0 ;;
             *) echo "usage: unknown flag '$1' (k2 sessions --help)" >&2; exit 2 ;;
         esac
@@ -213,7 +213,7 @@ cmd_sessions_main() {
     local action="" id="" workspace="" as_json=0 thread="keep-main"
     while [ $# -gt 0 ]; do
         case "$1" in
-            --workspace) workspace="${2:-}"; shift 2 ;;
+            --workspace) _need_value "$@"; workspace="${2:-}"; shift 2 ;;
             --json) as_json=1; shift ;;
             --thread)
                 thread="${2:-}"
@@ -251,8 +251,8 @@ cmd_sessions_show() {
     local id="" workspace="" tail="" as_json=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --tail) tail="${2:-}"; shift 2 ;;
-            --workspace) workspace="${2:-}"; shift 2 ;;
+            --tail) _need_value "$@"; tail="${2:-}"; shift 2 ;;
+            --workspace) _need_value "$@"; workspace="${2:-}"; shift 2 ;;
             --json) as_json=1; shift ;;
             -*) echo "usage: unknown flag '$1' (k2 sessions --help)" >&2; exit 2 ;;
             *)
@@ -300,12 +300,12 @@ cmd_sessions_open() {
     local id="" name="" brief_file="" brief_text="" have_text=0 workspace="" harness="" model="" force=0 as_json=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --name) name="${2:-}"; shift 2 ;;
-            --brief) brief_file="${2:-}"; shift 2 ;;
-            --brief-text) brief_text="${2:-}"; have_text=1; shift 2 ;;
-            --workspace) workspace="${2:-}"; shift 2 ;;
-            --harness) harness="${2:-}"; shift 2 ;;
-            --model) model="${2:-}"; shift 2 ;;
+            --name) _need_value "$@"; name="${2:-}"; shift 2 ;;
+            --brief) _need_value "$@"; brief_file="${2:-}"; shift 2 ;;
+            --brief-text) _need_value "$@"; brief_text="${2:-}"; have_text=1; shift 2 ;;
+            --workspace) _need_value "$@"; workspace="${2:-}"; shift 2 ;;
+            --harness) _need_value "$@"; harness="${2:-}"; shift 2 ;;
+            --model) _need_value "$@"; model="${2:-}"; shift 2 ;;
             --force) force=1; shift ;;
             --json) as_json=1; shift ;;
             -*) echo "usage: unknown flag '$1' (k2 sessions --help)" >&2; exit 2 ;;
@@ -351,12 +351,12 @@ cmd_sessions_new() {
     local name="" cli="" harness="" brief_file="" brief_text="" have_text=0 workspace="" model="" as_json=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --cli) cli="${2:-}"; shift 2 ;;
-            --harness) harness="${2:-}"; shift 2 ;;
-            --brief) brief_file="${2:-}"; shift 2 ;;
-            --brief-text) brief_text="${2:-}"; have_text=1; shift 2 ;;
-            --workspace) workspace="${2:-}"; shift 2 ;;
-            --model) model="${2:-}"; shift 2 ;;
+            --cli) _need_value "$@"; cli="${2:-}"; shift 2 ;;
+            --harness) _need_value "$@"; harness="${2:-}"; shift 2 ;;
+            --brief) _need_value "$@"; brief_file="${2:-}"; shift 2 ;;
+            --brief-text) _need_value "$@"; brief_text="${2:-}"; have_text=1; shift 2 ;;
+            --workspace) _need_value "$@"; workspace="${2:-}"; shift 2 ;;
+            --model) _need_value "$@"; model="${2:-}"; shift 2 ;;
             --worktree|--base)
                 echo "usage: k2 sessions new has no $1. For a sidecar in its own git worktree: k2 sidecar new <name> --harness <preset> --worktree [--base <ref>] (k2 sidecar --help)" >&2
                 exit 2 ;;

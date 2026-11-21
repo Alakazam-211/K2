@@ -818,8 +818,8 @@ except Exception as e:
             local name="" source_skill="" role=""
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --template|--from) source_skill="$2"; shift 2 ;;
-                    --role) role="$2"; shift 2 ;;
+                    --template|--from) _need_value "$@"; source_skill="$2"; shift 2 ;;
+                    --role) _need_value "$@"; role="$2"; shift 2 ;;
                     --*) shift ;;
                     *) [ -z "$name" ] && name="$1"; shift ;;
                 esac
@@ -1356,11 +1356,11 @@ cmd_workspace_remove() {
     local target_path="" mode="" apps_way="" drop=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --mode) mode="$2"; shift 2 ;;
+            --mode) _need_value "$@"; mode="$2"; shift 2 ;;
             --mode=*) mode="${1#--mode=}"; shift ;;
             # Q8: a workspace that maintains Apps goes only after they do:
             # handover:<ws> (owner) | uninstall | park (k2 app release).
-            --apps) apps_way="${2:-}"; shift 2 ;;
+            --apps) _need_value "$@"; apps_way="${2:-}"; shift 2 ;;
             --apps=*) apps_way="${1#--apps=}"; shift ;;
             --drop-access) drop=1; shift ;;
             -*) echo "Unknown flag: $1" >&2; exit 1 ;;

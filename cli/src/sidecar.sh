@@ -299,12 +299,12 @@ cmd_sidecar_new() {
                     name="$1"; shift
                 fi
                 ;;
-            --base) base="${2:-}"; shift 2 ;;
-            --harness) harness="${2:-}"; shift 2 ;;
-            --brief) brief_file="${2:-}"; shift 2 ;;
-            --brief-text) brief_text="${2:-}"; have_text=1; shift 2 ;;
-            --workspace) workspace="${2:-}"; shift 2 ;;
-            --model) model="${2:-}"; shift 2 ;;
+            --base) _need_value "$@"; base="${2:-}"; shift 2 ;;
+            --harness) _need_value "$@"; harness="${2:-}"; shift 2 ;;
+            --brief) _need_value "$@"; brief_file="${2:-}"; shift 2 ;;
+            --brief-text) _need_value "$@"; brief_text="${2:-}"; have_text=1; shift 2 ;;
+            --workspace) _need_value "$@"; workspace="${2:-}"; shift 2 ;;
+            --model) _need_value "$@"; model="${2:-}"; shift 2 ;;
             --json) as_json=1; shift ;;
             --) shift; break ;;
             -*) echo "usage: unknown flag '$1' (k2 sidecar --help)" >&2; exit 2 ;;
@@ -378,7 +378,7 @@ cmd_sidecar_list() {
     local workspace="" as_json=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --workspace) workspace="${2:-}"; shift 2 ;;
+            --workspace) _need_value "$@"; workspace="${2:-}"; shift 2 ;;
             --json) as_json=1; shift ;;
             *) echo "usage: k2 sidecar list [--workspace <ws>] [--json]" >&2; exit 2 ;;
         esac
@@ -394,7 +394,7 @@ cmd_sidecar_archive() {
     local name="" workspace="" all=0 as_json=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --workspace) workspace="${2:-}"; shift 2 ;;
+            --workspace) _need_value "$@"; workspace="${2:-}"; shift 2 ;;
             --all-stopped) all=1; shift ;;
             --json) as_json=1; shift ;;
             -*) echo "usage: unknown flag '$1' (k2 sidecar --help)" >&2; exit 2 ;;
@@ -427,7 +427,7 @@ cmd_sidecar_stop() {
     local name="" workspace="" force=0 as_json=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --workspace) workspace="${2:-}"; shift 2 ;;
+            --workspace) _need_value "$@"; workspace="${2:-}"; shift 2 ;;
             --force) force=1; shift ;;
             --json) as_json=1; shift ;;
             -*) echo "usage: unknown flag '$1' (k2 sidecar --help)" >&2; exit 2 ;;
@@ -464,7 +464,7 @@ _sidecar_name_args() {
     _SCW_NAME="" _SCW_WS="" _SCW_JSON=0 _SCW_YES=0 _SCW_FLAGS=" "
     while [ $# -gt 0 ]; do
         case "$1" in
-            --workspace) _SCW_WS="${2:-}"; shift 2 ;;
+            --workspace) _need_value "$@"; _SCW_WS="${2:-}"; shift 2 ;;
             --json) _SCW_JSON=1; shift ;;
             --yes|-y) _SCW_YES=1; shift ;;
             --keep|--discard|--keep-branch) _SCW_FLAGS="${_SCW_FLAGS}$1 "; shift ;;
@@ -588,7 +588,7 @@ cmd_sidecar_access() {
     shift 2>/dev/null || true
     while [ $# -gt 0 ]; do
         case "$1" in
-            --workspace) workspace="${2:-}"; shift 2 ;;
+            --workspace) _need_value "$@"; workspace="${2:-}"; shift 2 ;;
             *) echo "usage: k2 sidecar access on|off|status [--workspace <ws>]" >&2; exit 2 ;;
         esac
     done

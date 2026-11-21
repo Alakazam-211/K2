@@ -124,6 +124,7 @@ VERBS=(
     "organization"
     "permission list"
     "postal status"
+    "agent context list"
 )
 
 run_all() { # extra env words…
@@ -164,6 +165,41 @@ marked="$(count uds 1)"
 if [ "$marked" -gt 0 ]; then ok "$marked request(s) the CLI used to send over TCP went over the socket, marked X-K2-Via-Tcp"; else bad "no request carried X-K2-Via-Tcp (the reroute never ran)"; fi
 native="$(count uds 0)"
 if [ "$native" -gt 0 ]; then ok "$native native socket request(s) are not marked"; else bad "no native (unmarked) socket requests"; fi
+
+# The embedded Python's urlopen, in a fenced session (no owner token on
+# disk to fall back on, so the call carries the passport).
+mv "$FAKE_HOME/.k2/heartbeat.token" "$WORK/owner.aside"
+: >"$LOG_FILE"
+(cd "$WS" && env -i PATH="/usr/bin:/bin" HOME="$FAKE_HOME" K2_HOME="$FAKE_HOME/.k2" K2_PROJECT_PATH="$WS" \
+    K2_HOOK_SOCK="$SOCK" K2_HOOK_TOKEN="$PASSPORT" K2_AGENT_CGROUP=a-ws1 \
+    "$K2_CLI" agent context list >/dev/null 2>&1 </dev/null) || true
+mv "$WORK/owner.aside" "$FAKE_HOME/.k2/heartbeat.token"
+py_on_sock="$("$PY" -c 'import json, sys
+print(sum(1 for l in open(sys.argv[1]) for r in [json.loads(l)]
+          if r["via"] == "uds" and r["path"] == "/cli/context/layers" and r.get("viaTcp") == "1" and r.get("auth") == "Bearer " + sys.argv[2]))' "$LOG_FILE" "$PASSPORT")"
+if [ "$py_on_sock" -gt 0 ]; then ok "the embedded Python (k2 agent context list, urlopen) went over the socket, marked (review R6)"; else bad "k2 agent context list never reached the socket: $(grep context "$LOG_FILE" || true)"; fi
+
+mv "$FAKE_HOME/.k2/heartbeat.token" "$WORK/owner.aside"
+: >"$LOG_FILE"
+(cd "$WS" && env -i PATH="/usr/bin:/bin" HOME="$FAKE_HOME" K2_HOME="$FAKE_HOME/.k2" K2_PROJECT_PATH="$WS" \
+    K2_HOOK_SOCK="$SOCK" K2_HOOK_TOKEN="$PASSPORT" K2_AGENT_CGROUP=a-ws1 K2_VIA_TCP=1 \
+    "$K2_CLI" agent context list >/dev/null 2>&1 </dev/null) || true
+mv "$WORK/owner.aside" "$FAKE_HOME/.k2/heartbeat.token"
+if [ "$(passport_over_tcp 2>/dev/null)" -gt 0 ]; then ok "BITE: with K2_VIA_TCP=1 the Python's passport request goes to TCP"; else bad "BITE: the Python's request never reached TCP with the reroute off: $(cat "$LOG_FILE")"; fi
+
+echo "== k2 app shell (a WebSocket) goes over the socket too (review R6)"
+: >"$LOG_FILE"
+(cd "$WS" && env -i PATH="/usr/bin:/bin" HOME="$FAKE_HOME" K2_HOME="$FAKE_HOME/.k2" K2_PROJECT_PATH="$WS" \
+    K2_HOOK_SOCK="$SOCK" K2_HOOK_TOKEN="$PASSPORT" K2_AGENT_CGROUP=a-ws1 \
+    "$K2_CLI" app shell some-app >/dev/null 2>&1 </dev/null) || true
+if "$PY" -c 'import json, sys
+sys.exit(0 if any(r["via"] == "uds" and r["path"] == "/cli/app/shell" and r.get("viaTcp") == "1" and r.get("auth") == "Bearer " + sys.argv[2]
+                  for l in open(sys.argv[1]) for r in [json.loads(l)]) else 1)' "$LOG_FILE" "$PASSPORT"; then
+    ok "k2 app shell opened its upgrade on the session socket, marked"
+else
+    bad "k2 app shell did not use the session socket: $(cat "$LOG_FILE")"
+fi
+if [ "$(passport_over_tcp 2>/dev/null)" = 0 ]; then ok "k2 app shell sent no passport over TCP"; else bad "k2 app shell sent its passport over TCP"; fi
 
 echo "== bite: K2_VIA_TCP=1 sends them to TCP again"
 run_all K2_VIA_TCP=1

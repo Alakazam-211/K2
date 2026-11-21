@@ -468,6 +468,27 @@ _k5_py_headers() {
     # A Codex call's conversation headers (_k2_codex_headers).
     _k2_codex_headers
     if [ "${#_K2_CODEX_HDRS[@]}" -gt 0 ]; then printf '%s\n' "${_K2_CODEX_HDRS[@]}"; fi
+    _k2_py_session_sock_lines
+}
+# Agent Isolation M1 (review R6): the Python side of _k2_via_session_sock.
+# In a session the daemon placed in its agent's cgroup, two lines that
+# k5_request keeps off the wire: the session socket, and the SHA-256 of
+# the session's passport (the Python routes a loopback daemon request over
+# the socket only when it carries exactly that passport; the passport
+# itself never rides argv or a new variable).
+_k2_py_session_sock_lines() {
+    local sock h
+    [ "${K2_VIA_TCP:-0}" = 1 ] && return 0
+    [ -n "${SCOPED_TOKEN:-}" ] || return 0
+    # The mark (_envn AGENT_CGROUP), read plainly: nothing else is needed
+    # outside a placed session.
+    [ -n "${K5_AGENT_CGROUP:-}${K2_AGENT_CGROUP:-}${K2SO_AGENT_CGROUP:-}" ] || return 0
+    _cli_skip_uds && return 0
+    sock="$(_hook_sock)"
+    { [ -n "$sock" ] && [ -S "$sock" ]; } || return 0
+    h="$(printf '%s' "$SCOPED_TOKEN" | { sha256sum 2>/dev/null || shasum -a 256; } | cut -d' ' -f1)"
+    [ -n "$h" ] || return 0
+    printf 'X-K2-Py-Session-Sock: %s\nX-K2-Py-Session-Hash: %s\n' "$sock" "$h"
 }
 # The embedded Python's side. A python3 block that calls urlopen gets this
 # text and the headers on its own command line, never exported, runs the
@@ -483,7 +504,8 @@ _k5_py_headers() {
 # any of this.
 _K5_PY_HTTP='
 import os as _k5_os, urllib.request as _k5_urlreq
-k5_headers = [tuple(h.split(": ", 1)) for h in _k5_os.environ.pop("_K5_PY_HEADERS").split("\n") if h]
+_k5_all = [tuple(h.split(": ", 1)) for h in _k5_os.environ.pop("_K5_PY_HEADERS").split("\n") if h]
+k5_headers = [h for h in _k5_all if not h[0].startswith("X-K2-Py-")]
 def k5_request(req):
     """req (a urllib Request, or a URL) with the hand-over headers on it."""
     if isinstance(req, str):
@@ -491,6 +513,54 @@ def k5_request(req):
     for name, value in k5_headers:
         req.add_header(name, value)
     return req
+# Agent Isolation M1: a request to this machine'"'"'s daemon that carries
+# the session'"'"'s own passport goes over the session socket (the daemon
+# accepts a bound passport only there), marked X-K2-Via-Tcp for the same
+# TCP route code. The socket gone or refusing the connection: loopback TCP.
+_k5_via = dict(h for h in _k5_all if h[0].startswith("X-K2-Py-"))
+if _k5_via.get("X-K2-Py-Session-Sock") and _k5_via.get("X-K2-Py-Session-Hash"):
+    import hashlib as _k5_hl, http.client as _k5_hc, socket as _k5_so, urllib.parse as _k5_up
+    _k5_sock_path, _k5_sock_hash = _k5_via["X-K2-Py-Session-Sock"], _k5_via["X-K2-Py-Session-Hash"]
+    class _K5SockGone(OSError):
+        pass
+    class _K5SockConn(_k5_hc.HTTPConnection):
+        def connect(self):
+            s = _k5_so.socket(_k5_so.AF_UNIX, _k5_so.SOCK_STREAM)
+            if self.timeout is not _k5_so._GLOBAL_DEFAULT_TIMEOUT:
+                s.settimeout(self.timeout)
+            try:
+                s.connect(_k5_sock_path)
+            except OSError as e:
+                s.close()
+                raise _K5SockGone(str(e))
+            self.sock = s
+    def _k5_on_socket(req):
+        if req.type != "http":
+            return False
+        if (req.host or "").rsplit(":", 1)[0].strip("[]") not in ("127.0.0.1", "localhost", "::1"):
+            return False
+        cred = req.get_header("Authorization") or ""
+        if cred.startswith("Bearer "):
+            cred = cred[7:]
+        else:
+            cred = (_k5_up.parse_qs(_k5_up.urlsplit(req.full_url).query).get("token") or [""])[0]
+        return bool(cred) and _k5_hl.sha256(cred.encode()).hexdigest() == _k5_sock_hash
+    class _K5SessionSock(_k5_urlreq.HTTPHandler):
+        handler_order = 400
+        def http_open(self, req):
+            if not _k5_on_socket(req):
+                return None
+            req.add_unredirected_header("X-K2-Via-Tcp", "1")
+            try:
+                return self.do_open(_K5SockConn, req)
+            except _k5_urlreq.URLError as e:
+                if not isinstance(e.reason, _K5SockGone):
+                    raise
+                req.remove_header("X-K2-Via-Tcp")
+                return None
+    if _k5_urlreq._opener is None:
+        _k5_urlreq.install_opener(_k5_urlreq.build_opener())
+    _k5_urlreq._opener.add_handler(_K5SessionSock())
 '
 
 # _k2_curl CFG curl-args… — run curl with CFG (config lines) on stdin.

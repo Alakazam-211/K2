@@ -2009,7 +2009,15 @@ cmd_app_shell() {
     if [ $# -gt 0 ]; then
         argv_json="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$@")"
     fi
-    K2_SH_BASE="$BASE_URL" K2_SH_TOKEN="$TOKEN" K2_SH_APP="$app" K2_SH_ARGV="$argv_json" _K2_PY_TLS="$_K2_PY_TLS" python3 -c "$_K2_APP_SHELL_PY"
+    # The session socket when this is the session's own passport to this
+    # machine's daemon (_k2_via_session_sock's rule).
+    local sh_sock=""
+    case "$BASE_URL" in http://127.0.0.1:*|http://localhost:*|http://\[::1\]:*)
+        if [ -n "${SCOPED_TOKEN:-}" ] && [ "$TOKEN" = "$SCOPED_TOKEN" ] && [ -n "$(_k2_py_session_sock_lines)" ]; then
+            sh_sock="$(_hook_sock)"
+        fi ;;
+    esac
+    K2_SH_BASE="$BASE_URL" K2_SH_TOKEN="$TOKEN" K2_SH_APP="$app" K2_SH_ARGV="$argv_json" K2_SH_SOCK="$sh_sock" _K2_PY_TLS="$_K2_PY_TLS" python3 -c "$_K2_APP_SHELL_PY"
 }
 
 # The `k2 app shell` WebSocket client (stdlib only). The token rides the
@@ -2036,12 +2044,27 @@ if argv:
 path = "/cli/app/shell?" + urllib.parse.urlencode(q)
 host = u.hostname or "127.0.0.1"
 port = u.port or (443 if u.scheme == "https" else 80)
-s = socket.create_connection((host, port), timeout=15)
-if u.scheme == "https":
-    s = (k2_tls_context() or ssl.create_default_context()).wrap_socket(s, server_hostname=host)
+# Agent Isolation M1: in a session the daemon placed in its agent'"'"'s
+# cgroup, its passport works only on the session socket; the socket hands
+# the upgrade on to the same route (X-K2-Via-Tcp). Gone: loopback TCP.
+via = ""
+s = None
+sock_path = os.environ.get("K2_SH_SOCK", "")
+if sock_path and u.scheme == "http":
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(15)
+        s.connect(sock_path)
+        via = "X-K2-Via-Tcp: 1\r\n"
+    except OSError:
+        s = None
+if s is None:
+    s = socket.create_connection((host, port), timeout=15)
+    if u.scheme == "https":
+        s = (k2_tls_context() or ssl.create_default_context()).wrap_socket(s, server_hostname=host)
 key = base64.b64encode(os.urandom(16)).decode()
 req = ("GET %s HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
-       "Sec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\nAuthorization: Bearer %s\r\n\r\n") % (path, host, key, tok)
+       "Sec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\nAuthorization: Bearer %s\r\n%s\r\n") % (path, host, key, tok, via)
 s.sendall(req.encode())
 head = b""
 while b"\r\n\r\n" not in head:

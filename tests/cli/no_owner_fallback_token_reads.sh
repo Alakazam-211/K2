@@ -110,7 +110,7 @@ esac
 # Python call to the daemon passes on, with the Codex header helpers
 # _k5_py_headers calls) is always defined. Sets OUT and RC.
 fn() {
-    local names=(_k5_headers _k5_py_headers _cli_codex_bind_on _k2_codex_headers) envs=() n body
+    local names=(_k5_headers _k5_py_headers _cli_codex_bind_on _k2_codex_headers _k2_py_session_sock_lines) envs=() n body
     local defs
     defs="$(sed -n "/^_K5_PY_HTTP='\$/,/^'\$/p; /^_K5_NOUN_RE=/p; /^_K2_CODEX_ID_RE=/p" "$CLI_BASH_SOURCE")"$'\n'
     case "$defs" in *"def k5_request"*"_K5_NOUN_RE="*|*"_K5_NOUN_RE="*"def k5_request"*) ;; *) die "no _K5_PY_HTTP or _K5_NOUN_RE in $CLI_BASH_SOURCE" ;; esac

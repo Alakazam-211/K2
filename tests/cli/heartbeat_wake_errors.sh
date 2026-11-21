@@ -177,7 +177,7 @@ WAKE_DEF="$(awk '$0 ~ "^cmd_heartbeat_wake\\(\\) \\{" {on=1} on {print} on && /^
 # too, from the same source, as the prelude leaves them (with the Codex
 # conversation headers _k5_py_headers adds).
 K5_DEF="$(sed -n "/^_K5_PY_HTTP='\$/,/^'\$/p; /^_K5_NOUN_RE=/p; /^_K2_CODEX_ID_RE=/p" "$CLI_BASH_SOURCE")"
-for _k5f in _k5_headers _k5_py_headers _cli_codex_bind_on _k2_codex_headers; do
+for _k5f in _k5_headers _k5_py_headers _cli_codex_bind_on _k2_codex_headers _k2_py_session_sock_lines; do
     K5_DEF="$K5_DEF"$'\n'"$(awk -v n="$_k5f() {" '$0 == n {on=1} on {print} on && /^}/ {exit}' "$CLI_BASH_SOURCE")"
 done
 case "$K5_DEF" in *"def k5_request"*) ;; *) echo "FAIL: no _K5_PY_HTTP in $CLI_BASH_SOURCE" >&2; exit 1 ;; esac

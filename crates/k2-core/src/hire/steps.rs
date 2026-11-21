@@ -82,13 +82,18 @@ pub fn set_display_name(path: &str, name: &str) -> Result<bool, HireError> {
     Ok(true)
 }
 
-/// A hire's `preset` must name a preset that exists: its id, or the first
-/// word of its command (`claude`, `codex`), the two ways the launch
-/// resolver reads `default_agent`. Anything else is refused (400 `usage`)
-/// before anything is written. Disabled presets count: they exist.
-pub fn check_preset(value: Option<&str>) -> Result<(), HireError> {
+/// A hire's `preset` must name a preset that exists: its id, the first
+/// word of its command (`claude`, `codex`), or its label (`Cursor Agent`),
+/// matched in full and ignoring case. Anything else is refused (400
+/// `usage`) before anything is written. Disabled presets count: they exist.
+///
+/// Returns the value to save as `default_agent`: an id or a command word as
+/// given (the two ways the launch resolver reads it), a label as its
+/// preset's id (the resolver doesn't read labels). A label two presets
+/// share is refused with their ids.
+pub fn check_preset(value: Option<&str>) -> Result<Option<String>, HireError> {
     let Some(v) = value.map(str::trim).filter(|s| !s.is_empty()) else {
-        return Ok(());
+        return Ok(None);
     };
     let presets = {
         let db = crate::db::shared();
@@ -96,7 +101,13 @@ pub fn check_preset(value: Option<&str>) -> Result<(), HireError> {
         crate::db::schema::AgentPreset::list(&conn).map_err(|e| HireError::internal(format!("read presets: {e}")))?
     };
     if presets.iter().any(|p| p.id == v || p.command.split_whitespace().next() == Some(v)) {
-        return Ok(());
+        return Ok(Some(v.to_string()));
+    }
+    let by_label: Vec<&str> = presets.iter().filter(|p| p.label.trim().eq_ignore_ascii_case(v)).map(|p| p.id.as_str()).collect();
+    match by_label.as_slice() {
+        [id] => return Ok(Some((*id).to_string())),
+        [] => {}
+        ids => return Err(HireError::usage(format!("preset {v} is the label of more than one preset; pass one of their ids: {}", ids.join(", ")))),
     }
     // Name the fix: the server's presets, as `k2 preset list` orders
     // them, each by its command word and its id.

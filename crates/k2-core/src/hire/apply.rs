@@ -312,8 +312,8 @@ fn apply_plan(plan: &Plan, instance_id: &str, caller: &HireCaller, undo: &mut Ve
         if let Some(c) = r.color.as_deref() {
             steps::set_color(&path_s, c)?;
         }
-        if let Some(p) = r.preset.as_deref() {
-            steps::set_setting(&path_s, "default_agent", p)?;
+        if let Some(p) = steps::check_preset(r.preset.as_deref())? {
+            steps::set_setting(&path_s, "default_agent", &p)?;
         }
         if let Some(md) = r.model.as_deref() {
             steps::set_setting(&path_s, "default_model", md)?;

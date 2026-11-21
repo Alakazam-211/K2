@@ -428,7 +428,7 @@ pub fn converge(
         }
     };
     check_db_access(caller, req.db_access.as_deref(), auth.max_db)?;
-    steps::check_preset(req.preset.as_deref())?;
+    let preset = steps::check_preset(req.preset.as_deref())?;
     if existing.is_none() {
         if !auth.may_create {
             return Err(HireError::new(
@@ -559,7 +559,7 @@ pub fn converge(
             steps_out.push(skipped("set-name", "already named"));
         }
     }
-    if let Some(preset) = req.preset.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(preset) = preset.as_deref() {
         let did = steps::set_setting(&path, "default_agent", preset)?;
         changed |= did;
         steps_out.push(if did { done("set-default-agent") } else { skipped("set-default-agent", "already set") });

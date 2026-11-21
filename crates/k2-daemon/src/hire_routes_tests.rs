@@ -1307,6 +1307,74 @@ fn preset_hire_refuses_a_preset_that_does_not_exist() {
     }
 }
 
+fn saved_default_agent(path: &str) -> Option<String> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.query_row("SELECT default_agent FROM projects WHERE path = ?1", rusqlite::params![path], |r| r.get(0)).expect("registered")
+}
+
+/// Labels are what people type: a preset's label, in full and in any case,
+/// hires and saves the preset's id (the launch resolver reads ids and
+/// command words, not labels). Part of a label is not a label: refused with
+/// the server's presets, nothing made. A label two presets share is refused
+/// with their ids. The plain door, the template door and the recipe alike.
+#[test]
+fn preset_hire_takes_a_label_and_saves_its_id() {
+    let _home = k2_core::test_env::TempHome::new();
+    let root = ensure_test_root();
+    let (_, agent) = hiring_agent("pl");
+    let cursor_id = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.query_row("SELECT id FROM agent_presets WHERE label = 'Cursor Agent' AND is_built_in = 1", [], |r| r.get::<_, String>(0)).expect("built-in Cursor Agent")
+    };
+    for who in [Who::Owner, agent.clone()] {
+        for label in ["Cursor Agent", "cursor agent", "CURSOR AGENT"] {
+            let path = root.join(uniq("pl-ok")).to_string_lossy().into_owned();
+            let (st, v) = hire_as(&who, &json!({ "path": path, "preset": label }));
+            assert_eq!(st, 200, "{label}: {v}");
+            assert_eq!(saved_default_agent(&path).as_deref(), Some(cursor_id.as_str()), "{label}: the id is saved");
+        }
+        let path = root.join(uniq("pl-tpl")).to_string_lossy().into_owned();
+        let (st, v) = hire_as(&who, &json!({ "template": "writer", "path": path, "name": "Label Tpl", "preset": "Cursor Agent", "launch": false }));
+        assert_eq!(st, 200, "template: {v}");
+        assert_eq!(saved_default_agent(&path).as_deref(), Some(cursor_id.as_str()), "template: the id is saved");
+        // A prefix, or a label with a word missing, is no label.
+        for part in ["Cursor", "cursor ag", "Agent"] {
+            let path = root.join(uniq("pl-part")).to_string_lossy().into_owned();
+            let (st, v) = hire_as(&who, &json!({ "path": path, "preset": part }));
+            assert_eq!((st, v["error"]["code"].as_str()), (400, Some("usage")), "{part}: {v}");
+            let hint = v["error"]["hint"].as_str().expect("hint");
+            assert!(hint.contains(&format!("preset {part} no longer exists on this server; pick one of: ")), "{hint}");
+            assert!(hint.contains(&format!("cursor-agent ({cursor_id})")), "the list names it: {hint}");
+            assert!(!Path::new(&path).exists() && !registered(&path), "{part}: nothing created");
+        }
+    }
+    // The recipe door saves the id too.
+    let handle = uniq("pl-key");
+    let (st, v) = call(V1_HIRE, &owner(), true, json!({ "agent": { "handle": handle, "preset": "cursor agent" } }), None);
+    assert_eq!(st, 200, "{v}");
+    let (_, path) = project_by_handle(&handle).expect("hired");
+    assert_eq!(saved_default_agent(&path).as_deref(), Some(cursor_id.as_str()), "recipe: the id is saved");
+    // Two presets with one label: refused with both ids, nothing made.
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        for (id, order) in [("twin-label-a", 90), ("twin-label-b", 91)] {
+            k2_core::db::schema::AgentPreset::create(&conn, id, "Twin Tool", &format!("{id} --go"), None, 1, order, 0).expect("custom preset");
+        }
+    }
+    let path = root.join(uniq("pl-twin")).to_string_lossy().into_owned();
+    let (st, v) = hire_as(&Who::Owner, &json!({ "path": path, "preset": "twin tool" }));
+    assert_eq!((st, v["error"]["code"].as_str()), (400, Some("usage")), "{v}");
+    let hint = v["error"]["hint"].as_str().expect("hint");
+    assert!(hint.ends_with("preset twin tool is the label of more than one preset; pass one of their ids: twin-label-a, twin-label-b"), "{hint}");
+    assert!(!Path::new(&path).exists() && !registered(&path), "twin: nothing created");
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.execute("DELETE FROM agent_presets WHERE id IN ('twin-label-a', 'twin-label-b')", []).expect("remove the twins");
+}
+
 /// K2's ruling: an agent hires only inside the hire root. Outside it the
 /// hire is refused (403 `outside_hire_root`, saying where agents may hire)
 /// with nothing made, the template door and its dry run too; inside it

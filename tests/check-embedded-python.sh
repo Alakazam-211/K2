@@ -20,6 +20,15 @@
 # static value: it becomes the identifier XVAR, so the rest still compiles.
 # Each block is compile()d under the running interpreter.
 #
+# A helper function that runs one of its arguments as Python (`python3 -c
+# "$1"`, or `PYSRC="$1" python3 -c '... exec(os.environ["PYSRC"])'`, or
+# a call of another such helper) counts as python3 too: each call's code
+# argument is checked, and a `NAME='...'` the call passes as "$NAME".
+# A quote inside a program that closes its shell string early leaves a
+# cut program (it fails to compile) or, for a `NAME='...'` assignment
+# over several lines, a command after it (`NAME='...'mail ...` runs mail
+# when the file loads): both fail here, with the file and line.
+#
 # Skipped, counted and printed, by one rule: the code is only a bash
 # expansion with no `NAME='...'` assignment in the same file (a function
 # argument like "$1", or a $(...) substitution). Not looked at: text that
@@ -79,11 +88,14 @@ class LexError(Exception):
 
 
 class Word:
-    __slots__ = ("parts", "pos")
+    __slots__ = ("parts", "pos", "sq_bare")
 
     def __init__(self, pos):
         self.parts = []  # ("lit", text) | ("exp", raw bash)
         self.pos = pos
+        # A '...' piece with bare text right after it ('...'k2): what a
+        # quote inside a single-quoted program leaves behind.
+        self.sq_bare = False
 
     def lit(self, s):
         self.parts.append(("lit", s))
@@ -114,11 +126,12 @@ class Heredoc:
 
 
 class Cmd:
-    __slots__ = ("words", "redirs")
+    __slots__ = ("words", "redirs", "func")
 
     def __init__(self):
         self.words = []
         self.redirs = []
+        self.func = None  # the shell function it is in, if any
 
 
 class Lexer:
@@ -133,6 +146,11 @@ class Lexer:
         self.base_line = base_line
         self.cmds = []
         self.pending = []
+        # Shell functions: `name() {` opens one; its body ends at the `}`
+        # that closes that brace.
+        self.fn_pending = None
+        self.fn_stack = []  # (name, brace depth inside its body)
+        self.brace = 0
 
     def line(self, pos):
         return self.base_line + bisect.bisect_left(self.nl, pos)
@@ -194,6 +212,13 @@ class Lexer:
                 if case_pat and case_pat[-1]:
                     i += 1  # optional leading ( of a case pattern
                     continue
+                m = re.match(r"\([ \t]*\)", t[i:i + 16])
+                names = [w.literal() for w in cmd.words]
+                if m and (len(names) == 1 or (len(names) == 2 and names[0] == "function")):
+                    self.fn_pending = names[-1]  # `name()`: a function
+                    cmd = Cmd()
+                    i += m.end()
+                    continue
                 depth += 1
                 self.finish(cmd)
                 cmd = Cmd()
@@ -237,8 +262,20 @@ class Lexer:
             cmd.words.append(w)
 
     def finish(self, cmd):
-        if cmd.words or cmd.redirs:
-            self.cmds.append(cmd)
+        if not (cmd.words or cmd.redirs):
+            return
+        first = cmd.words[0].literal() if cmd.words else None
+        if first == "{":
+            self.brace += 1
+            if self.fn_pending:
+                self.fn_stack.append((self.fn_pending, self.brace))
+        self.fn_pending = None
+        cmd.func = self.fn_stack[-1][0] if self.fn_stack else None
+        if first == "}":
+            if self.fn_stack and self.fn_stack[-1][1] == self.brace:
+                self.fn_stack.pop()
+            self.brace = max(0, self.brace - 1)
+        self.cmds.append(cmd)
 
     def redirect(self, i, cmd, fd):
         t = self.t
@@ -298,15 +335,18 @@ class Lexer:
     def read_word(self, i):
         t, n = self.t, self.n
         w = Word(i)
+        after_sq = False
         while i < n:
             c = t[i]
             if c in "<>" and t.startswith("(", i + 1):
                 j = self.parse_list(i + 2, ")")
                 w.exp(t[i:j])
                 i = j
+                after_sq = False
                 continue
             if c in WORD_END:
                 break
+            sq = False
             if c == "\\":
                 if t.startswith("\n", i + 1):
                     i += 2
@@ -319,6 +359,7 @@ class Lexer:
                     self.fail(i, "unterminated single quote")
                 w.lit(t[i + 1:j])
                 i = j + 1
+                sq = True
             elif c == '"':
                 i = self.parse_dq(i + 1, w)
             elif c == "$":
@@ -326,8 +367,11 @@ class Lexer:
             elif c == "`":
                 i = self.parse_backtick(i + 1, w)
             else:
+                if after_sq:
+                    w.sq_bare = True
                 w.lit(c)
                 i += 1
+            after_sq = sq
         return w, i
 
     def parse_dq(self, i, w):
@@ -427,6 +471,9 @@ class Lexer:
         inner = re.sub(r"\\([\\$`])", r"\1", t[i:j])
         sub = Lexer(inner, self.line(i))
         sub.parse_list(0, None)
+        here = self.fn_stack[-1][0] if self.fn_stack else None
+        for c in sub.cmds:
+            c.func = c.func or here
         self.cmds.extend(sub.cmds)
         w.exp(t[i - 1:j + 1])
         return j + 1
@@ -570,13 +617,166 @@ def code_var(word):
     return m.group(1) if m else None
 
 
+ASSIGN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+POS_RE = re.compile(r"\$\{?([0-9])\}?")
+
+
+def is_assignment(word):
+    """True for a NAME=value word (bash reads it as an assignment)."""
+    return bool(ASSIGN_RE.match(word.value()))
+
+
+def command_index(cmd):
+    """Index of the command word, after any NAME=value prefixes."""
+    k = 0
+    while k < len(cmd.words) and is_assignment(cmd.words[k]):
+        k += 1
+    return k
+
+
+def assigned_positional(word):
+    """(NAME, N) for a `NAME="$N"` word, else None."""
+    lits, exps, seen_exp = [], [], False
+    for k, s in word.parts:
+        if k == "exp":
+            exps.append(s)
+            seen_exp = True
+        elif seen_exp:
+            if s:
+                return None
+        else:
+            lits.append(s)
+    m = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*)=", "".join(lits))
+    if not m or len(exps) != 1:
+        return None
+    p = POS_RE.fullmatch(exps[0])
+    return (m.group(1), p.group(1)) if p else None
+
+
+def runner_functions(lx):
+    """{function: N} for each shell function that runs its argument $N as
+    a Python program: `python3 -c "$N"` (or a local copy of $N), an
+    environment variable set to it that the Python exec()s, or a call of
+    another such function with it."""
+    alias = {}  # (function, NAME) -> N
+    for cmd in lx.cmds:
+        if cmd.func is None:
+            continue
+        for w in cmd.words:
+            got = assigned_positional(w)
+            if got:
+                alias[(cmd.func, got[0])] = got[1]
+
+    def positional(func, word):
+        name = code_var(word) if word.expansion_only() else None
+        if name is None:
+            return None
+        return name if name.isdigit() else alias.get((func, name))
+
+    def env_positional(func, word):
+        exps = [x for kk, x in word.parts if kk == "exp"]
+        vm = VAR_RE.fullmatch(exps[0]) if len(exps) == 1 else None
+        if not vm:
+            return None
+        name = vm.group(1)
+        return name if name.isdigit() else alias.get((func, name))
+
+    runners = {}
+    changed = True
+    while changed:
+        changed = False
+        for cmd in lx.cmds:
+            f = cmd.func
+            if f is None or f in runners:
+                continue
+            found = None
+            for k, w in enumerate(cmd.words):
+                lit = w.literal()
+                if lit is None:
+                    continue
+                base = lit.rsplit("/", 1)[-1]
+                if PY_RE.fullmatch(base):
+                    got = python_code(cmd, k)
+                    if got and got[0] == "c":
+                        found = positional(f, got[1])
+                    if found is None and got:
+                        code = got[1].value()
+                        for pw in cmd.words[:k]:
+                            m = ASSIGN_RE.match(pw.value())
+                            if m and pw.value() == m.group(0) + PH:
+                                n = env_positional(f, pw)
+                                if n and exec_reads(code, m.group(0)[:-1]):
+                                    found = n
+                                    break
+                    break
+                if lit in runners and k == command_index(cmd):
+                    j = k + int(runners[lit])
+                    if j < len(cmd.words):
+                        found = positional(f, cmd.words[j])
+                    break
+            if found:
+                runners[f] = found
+                changed = True
+    return runners, alias
+
+
+def exec_reads(code, var):
+    """True when the Python exec()s the environment variable var."""
+    return re.search(r"exec\(\s*os\.environ(\[|\.get\(|\.pop\()\s*[\"']%s[\"']"
+                     % re.escape(var), code) is not None
+
+
+def stray_assignments(lx):
+    """Yield (line, message) for each `NAME='...'` over several lines that
+    ends in bare text ('...'k2) with a command after it: a quote inside the
+    value closed it early."""
+    for cmd in lx.cmds:
+        k = command_index(cmd)
+        if k == 0 or k >= len(cmd.words):
+            continue
+        multi = [w for w in cmd.words[:k] if w.sq_bare and "\n" in w.value()]
+        if not multi:
+            continue
+        w = multi[-1]
+        name = w.value().split("=", 1)[0]
+        cmd_word = cmd.words[k].value()
+        yield lx.line(w.pos), (
+            "%s= is a value over several lines with a command after it "
+            "(%r on line %d): a quote inside the value closed it early"
+            % (name, cmd_word[:40], lx.line(cmd.words[k].pos)))
+
+
 def blocks(text, base_line=1, depth=0):
     """Yield (kind, Word-or-str-or-None, line, skip_reason) per block."""
     lx = Lexer(text, base_line)
     lx.parse_list(0, None)
+    runners, alias = runner_functions(lx)
     var_uses = []  # (name, line) for `python3 -c "$NAME"`
+
+    def own_program(cmd, name):
+        """True when python3 -c "$name" runs the argument that makes the
+        function it is in a runner (each call's argument is checked)."""
+        pos = name if name.isdigit() else alias.get((cmd.func, name))
+        return pos is not None and runners.get(cmd.func) == pos
+
     for ci, cmd in enumerate(lx.cmds):
         used = None
+        # A call of a helper that runs one of its arguments as Python.
+        k0 = command_index(cmd)
+        if k0 < len(cmd.words) and cmd.words[k0].literal() in runners:
+            j = k0 + int(runners[cmd.words[k0].literal()])
+            if j < len(cmd.words):
+                arg = cmd.words[j]
+                line = lx.line(arg.pos)
+                cv = code_var(arg) if arg.expansion_only() else None
+                if not arg.expansion_only():
+                    yield "helper", arg.value(), line, None
+                elif cv is None:
+                    yield "helper", None, line, "the code is a bash substitution"
+                elif not cv.isdigit() and (cmd.func, cv) not in alias:
+                    var_uses.append((cv, line))
+                # "$N" or a copy of it: a helper passing its own argument
+                # on; its callers are checked.
         for k, w in enumerate(cmd.words):
             lit = w.literal()
             if lit is None:
@@ -589,6 +789,8 @@ def blocks(text, base_line=1, depth=0):
                     line = lx.line(code.pos)
                     if not code.expansion_only():
                         yield kind, code.value(), line, None
+                    elif code_var(code) and own_program(cmd, code_var(code)):
+                        pass
                     elif code_var(code):
                         var_uses.append((code_var(code), line))
                         # `{ _k2_stdin_secrets …; cat; } <<'PY' | … python3 -c
@@ -641,9 +843,11 @@ def blocks(text, base_line=1, depth=0):
     for name, line in var_uses:
         if name not in found:
             yield "c", None, line, f"the code is ${name}, not assigned in this file"
+    for line, msg in stray_assignments(lx):
+        yield "stray", msg, line, None
 
 
-KINDS = ("c", "stdin", "var")
+KINDS = ("c", "stdin", "var", "helper")
 checked = {"cli/k2": dict.fromkeys(KINDS, 0), "other": dict.fromkeys(KINDS, 0)}
 skipped = []
 broken = []
@@ -659,6 +863,9 @@ for f in files:
         setup_errors.append(f"{rel}: {e}")
         continue
     for kind, code, line, reason in found:
+        if kind == "stray":
+            broken.append((rel, line, code, ""))
+            continue
         if reason:
             skipped.append((rel, line, reason))
             continue
@@ -686,7 +893,8 @@ print(f"Scanned {len(files)} shell files")
 for g, c in checked.items():
     label = "cli/k2" if g == "cli/k2" else "other files"
     print(f"  {label:12} compiled {c['c']:5} python3 -c blocks, {c['stdin']:4} heredoc"
-          f" blocks, {c['var']:3} blocks held in a variable")
+          f" blocks, {c['var']:3} blocks held in a variable, {c['helper']:3} passed to a"
+          f" helper")
 print(f"  skipped by rule: {len(skipped)}")
 for rel, line, reason in skipped:
     print(f"    {rel}:{line}  {reason}")

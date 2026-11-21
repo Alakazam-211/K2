@@ -142,24 +142,24 @@ expect_in "delete -h prints help" "$out" "k2 mail draft delete <draft-id>"
 echo "== link relink and link list =="
 reset
 script cli_mail_link_oauth_start $'403\t{"ok":false,"error":{"code":"owner_only","hint":"owner surface"}}'
-run mail link relink me@gmail.com
+run mail link relink me@example.com
 expect_exit "an agent's relink" 3 "$rc"
 expect_in "relink asks for inbox + relink" "$(nth_body relink 1)" "true"
-expect_in "relink names the inbox" "$(nth_body inbox 1)" "me@gmail.com"
+expect_in "relink names the inbox" "$(nth_body inbox 1)" "me@example.com"
 [ "$(nth_body features 1)" = "null" ] && ok "relink sends no features (keeps the link's)" || bad "relink sent features"
-run mail link relink me@gmail.com --features calendar
+run mail link relink me@example.com --features calendar
 expect_exit "relink --features" 2 "$rc"
 run mail link relink
 expect_exit "relink without an address" 2 "$rc"
 reset
-script cli_mail_inboxes $'200\t{"ok":true,"inboxes":[{"address":"a@gmail.com","source":"linked","status":"connected","needsRelink":true,"relinkReason":"credential_refused","host":"imap.gmail.com","tls":"implicit-tls"},{"address":"b@gmail.com","source":"linked","status":"connected","needsRelink":true,"relinkReason":"mail_access_not_granted","host":"imap.gmail.com","tls":"implicit-tls"},{"address":"c@gmail.com","source":"linked","status":"connected","needsRelink":false,"relinkReason":"throttled","host":"imap.gmail.com","tls":"implicit-tls"}]}'
+script cli_mail_inboxes $'200\t{"ok":true,"inboxes":[{"address":"a@example.com","source":"linked","status":"connected","needsRelink":true,"relinkReason":"credential_refused","host":"imap.gmail.com","tls":"implicit-tls"},{"address":"b@example.com","source":"linked","status":"connected","needsRelink":true,"relinkReason":"mail_access_not_granted","host":"imap.gmail.com","tls":"implicit-tls"},{"address":"c@example.com","source":"linked","status":"connected","needsRelink":false,"relinkReason":"throttled","host":"imap.gmail.com","tls":"implicit-tls"}]}'
 run mail link list
 expect_exit "link list" 0 "$rc"
 expect_in "needs re-link" "$out" "needs re-link"
 expect_in "mail access not granted" "$out" "mail access not granted"
 expect_in "throttled" "$out" "throttled (wait)"
-expect_in "relink hint" "$out" "k2 mail link relink a@gmail.com"
-run mail link relink me@gmail.com -h
+expect_in "relink hint" "$out" "k2 mail link relink a@example.com"
+run mail link relink me@example.com -h
 expect_exit "relink -h" 0 "$rc"
 [ "$(count /cli/mail/link/oauth/start)" = "0" ] && ok "relink -h sends nothing" || bad "relink -h sent a request"
 

@@ -13,6 +13,8 @@
 #     with -h as the move key.
 #   - `k2 reserve --help` and `k2 release --help` were the usage error
 #     "'--help' is not a path" (exit 2): they had no help.
+#   - `k2 read --help` asked to read a workspace named --help, and
+#     `--lines`, `--agent`, `--session` and `--token` took the help word.
 #
 # Each section: every help form, with --help and with -h, prints exactly
 # the page's cli/text/help file and the stub daemon records nothing; the
@@ -183,6 +185,15 @@ page release.txt release --agent @H
 page release.txt release --agent tester @H
 sends '^POST /cli/reserve ' reserve --agent tester some/path
 sends '^POST /cli/release ' release --agent tester
+
+echo "== read =="
+page read.txt read @H
+page read.txt read scout @H
+page read.txt read scout --lines @H
+page read.txt read scout --agent @H
+page read.txt read --session @H
+page read.txt read scout@remote.example --token @H
+sends '^GET /cli/terminal/read ' read scout
 
 echo ""
 echo "help_acts_10: $pass passed, $fail failed"

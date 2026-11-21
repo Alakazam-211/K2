@@ -22,8 +22,8 @@
 //!   (an empty line on stderr, exit 1).
 //! - What the binary hands to the shell: a workspace on another server, a
 //!   `--lines` with a space or a `#`, `HOOK_SOCK` naming a live socket and
-//!   no passport, `--help` (which the shell reads as the workspace
-//!   `--help`), a port that is no port.
+//!   no passport, `--help` (the shell prints the read help and sends
+//!   nothing, since 0.46.17), a port that is no port.
 
 #![cfg(unix)]
 
@@ -901,24 +901,25 @@ fn read_hands_these_to_the_shell() {
             0,
             1,
         )),
-        // The shell has no help for read: it reads the workspace `--help`.
+        // Help never acts (0.46.17): the shell prints the read help and
+        // reads nothing, even as a flag's value.
         shell(case(
-            "--help reads the workspace --help",
+            "--help prints the read help",
             &["--help"],
             &[],
-            vec![ok(LINES)],
+            vec![],
             owner_and_port,
             0,
-            1,
+            0,
         )),
         shell(case(
             "--agent --help",
             &["acme", "--agent", "--help"],
             &[],
-            vec![ok(LINES)],
+            vec![],
             owner_and_port,
             0,
-            1,
+            0,
         )),
         shell(case(
             "a port that is no port: the shell's port refusal",

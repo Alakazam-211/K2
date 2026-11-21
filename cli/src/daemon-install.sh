@@ -799,6 +799,9 @@ for line in data.get('lines', []):
 # to peek another agent before injecting (human-in-the-loop) or to
 # diagnose a stuck agent.
 cmd_read() {
+    # 0.46.17: -h/--help anywhere before a bare -- prints the read help and
+    # reads nothing (`read --help` read a workspace named --help).
+    if _wants_help "$@"; then cmd_help_read; return 0; fi
     local workspace="${1:-}"
     local lines=50
     local agent=""

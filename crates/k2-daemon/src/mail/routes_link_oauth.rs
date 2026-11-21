@@ -412,8 +412,6 @@ fn complete_with_tokens(
             match external::upgrade_oauth_inbox(secrets, row_id, tokens, &meta, now) {
                 Ok(_) => {
                     link_audit(plan, address, None, "link_upgrade");
-                    // A re-link: the watcher may poll again now.
-                    crate::mail::relink::after_relink(row_id);
                     set_terminal(
                         link_id,
                         LinkStatus::Connected,
@@ -2061,6 +2059,17 @@ mod tests {
         );
         let kept = oauth::load_tokens(&store, &row.id).unwrap();
         assert_eq!(kept.access_token, "AT-1", "a failed upgrade keeps the old bundle");
+        // The watcher had stopped on a refused sign-in; the re-consent
+        // resumes it at once (0.46.17).
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT OR REPLACE INTO mail_watch_cursors (source, inbox_id, needs_relink, next_poll_at) VALUES ('linked', ?1, 1, 9999999999)",
+                rusqlite::params![row.id],
+            )
+            .unwrap();
+        }
         // The real upgrade: same row id, new bundle, calendar recorded.
         let link_c = uuid::Uuid::new_v4().to_string();
         insert_pending(&link_c, &address);
@@ -2100,6 +2109,17 @@ mod tests {
             .unwrap()
         };
         assert_eq!(level, "send", "levels survive the upgrade");
+        let (marked, next): (i64, i64) = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.query_row(
+                "SELECT needs_relink, next_poll_at FROM mail_watch_cursors WHERE source = 'linked' AND inbox_id = ?1",
+                rusqlite::params![row.id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap()
+        };
+        assert_eq!((marked, next), (0, 0), "the watcher resumes at once after a re-consent");
         cleanup(&project);
     }
 

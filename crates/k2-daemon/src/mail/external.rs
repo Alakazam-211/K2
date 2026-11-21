@@ -1726,13 +1726,18 @@ pub fn upgrade_oauth_inbox(
         )
     };
     match updated {
-        Ok(1) => Ok(serde_json::json!({
-            "ok": true,
-            "id": row.id,
-            "address": row.email_address,
-            "features": meta.features,
-            "upgraded": true,
-        })),
+        Ok(1) => {
+            // A re-consent is a new credential: the mail watcher resumes at
+            // once, not on its next cycle (0.46.17).
+            crate::mail::relink::after_relink(&row.id);
+            Ok(serde_json::json!({
+                "ok": true,
+                "id": row.id,
+                "address": row.email_address,
+                "features": meta.features,
+                "upgraded": true,
+            }))
+        }
         Ok(_) => Err(ExtError::NotFound(format!("no linked inbox '{row_id}'"))),
         Err(e) => Err(ExtError::Engine(format!("update linked inbox: {e}"))),
     }

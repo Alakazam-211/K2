@@ -19,9 +19,12 @@
 //!   on Google's page): the stored scopes say so, the XOAUTH2 error says
 //!   so ([`explain_xoauth2_refusal`]) and `relinkReason` is
 //!   `mail_access_not_granted`, rather than "the token expired".
-//! * **A re-link** (`k2 mail link relink`, the in-place re-consent) clears
-//!   the watcher's mark at once ([`after_relink`]); the row's status was
-//!   already reset by `external::upgrade_oauth_inbox`.
+//! * **A re-link** (`k2 mail link relink`, Settings' Sign in again: the
+//!   in-place re-consent) resets the row's status and clears the watcher's
+//!   mark at once (`external::upgrade_oauth_inbox` calls [`after_relink`]).
+//! * The catalog's `signInRefused` is the same truth as `needsRelink`
+//!   (credential refused, or mail access not granted); a network error or
+//!   a provider throttle is never a refusal.
 
 /// Did the provider refuse the credential itself (not the network, not a
 /// busy server)? Narrower than the watcher's rule: a bare IMAP `NO` is not
@@ -187,6 +190,15 @@ mod tests {
         assert!(explained.contains("mail access not granted"), "{explained}");
         let other = explain_xoauth2_refusal(&ok, "Gmail rejected the OAuth access token (XOAUTH2 status 400)".into());
         assert!(!other.contains("not granted"), "{other}");
+
+        // The catalog carries the inbox id, signInRefused and the reason.
+        note_login_failure(&ok, "Gmail rejected the OAuth access token (XOAUTH2 status 400) — the inbox must be re-linked");
+        let all = crate::mail::access::catalog_json(None);
+        let row = all["inboxes"].as_array().expect("inboxes").iter().find(|i| i["id"] == ok.as_str()).cloned().expect("listed by id");
+        assert_eq!(row["signInRefused"], true, "{row}");
+        assert_eq!(row["needsRelink"], true);
+        assert_eq!(row["relinkReason"], "credential_refused");
+        crate::mail::external::record_check(&ok, Ok(()));
 
         // The watcher's mark counts, and a re-link clears it.
         let watched = seed("connected", None, "gmail", "mail", Some(gmail));

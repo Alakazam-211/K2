@@ -1289,6 +1289,9 @@ pub fn catalog_json(viewer: Option<&str>) -> serde_json::Value {
             _ => None,
         };
         let mut entry = serde_json::json!({
+            // 0.46.17: the inbox's id (mail_addresses.id / the linked row
+            // id); routes taking an inbox accept it or the address.
+            "id": row.inbox_id,
             "address": row.address,
             "source": row.source.as_str(),
             "displayName": row.display_name,
@@ -1340,11 +1343,13 @@ pub fn catalog_json(viewer: Option<&str>) -> serde_json::Value {
                     // 0.46.17: does it need a person to link it again, and
                     // why (credential_refused | mail_access_not_granted |
                     // throttled: wait, linking again won't help).
+                    // `signInRefused`: the provider refused the sign-in (not
+                    // a network error, not a throttle); same truth as
+                    // `needsRelink`, one field for the Reconnect button.
                     let reason = crate::mail::relink::relink_reason(&conn, &row.inbox_id);
-                    obj.insert(
-                        "needsRelink".to_string(),
-                        serde_json::json!(matches!(reason, Some("credential_refused" | "mail_access_not_granted"))),
-                    );
+                    let refused = matches!(reason, Some("credential_refused" | "mail_access_not_granted"));
+                    obj.insert("needsRelink".to_string(), serde_json::json!(refused));
+                    obj.insert("signInRefused".to_string(), serde_json::json!(refused));
                     obj.insert("relinkReason".to_string(), serde_json::json!(reason));
                 }
             }

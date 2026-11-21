@@ -304,7 +304,7 @@ fn notify_relink(sink: &dyn Sink, source: Source, inbox_id: &str) {
     let address = inbox_address(source, inbox_id).unwrap_or_else(|| inbox_id.to_string());
     for (project_id, _) in watchers {
         if let Some(path) = workspace_path(&project_id) {
-            sink.note(&path, &format!("Mail notifications for {address} stopped: its login was refused. Reconnect the inbox and they start again."));
+            sink.note(&path, &format!("Mail notifications for {address} stopped: its sign-in was refused. A person signs in again (Settings → Email Link → Sign in again, or 'k2 mail link relink {address}') and they start again."));
         }
     }
 }

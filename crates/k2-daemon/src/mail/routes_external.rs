@@ -528,8 +528,12 @@ fn handle_draft_with(body: &[u8], ops: &dyn ImapOps) -> CliResponse {
             "folder": folder,
             "draftId": draft_id,
             "hint": format!(
-                "draft {draft_id} saved to '{folder}' in {} — your human can review and send it from \
-                 their own mail client; 'k2 mail draft delete {draft_id}' removes it",
+                concat!(
+                    "draft {draft_id} saved to '{folder}' in {} — your human can review and send it from \
+                     their own mail client; '",
+                    k2_core::cli_name!(),
+                    " mail draft delete {draft_id}' removes it"
+                ),
                 inbox.email_address
             ),
         });

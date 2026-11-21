@@ -81,11 +81,14 @@ pub fn explain_xoauth2_refusal(row_id: &str, msg: String) -> String {
     let meta = crate::mail::external::read_oauth_meta(row_id).unwrap_or_default();
     let provider = fields.as_ref().and_then(|f| f.provider.as_deref());
     if mail_scope_missing(provider, &meta.features, meta.granted_scopes.as_deref()) {
-        return "Gmail rejected the login: mail access not granted — Google's consent for this \
-                inbox doesn't include the Gmail permission (it was unticked on Google's page). A \
-                person links it again with 'k2 mail link relink <address>' and ticks the Gmail \
-                permission"
-            .to_string();
+        return concat!(
+            "Gmail rejected the login: mail access not granted — Google's consent for this \
+             inbox doesn't include the Gmail permission (it was unticked on Google's page). A \
+             person links it again with '",
+            k2_core::cli_name!(),
+            " mail link relink <address>' and ticks the Gmail permission"
+        )
+        .to_string();
     }
     msg
 }

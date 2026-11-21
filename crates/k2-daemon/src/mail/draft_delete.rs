@@ -49,7 +49,7 @@ fn handle_with(body: &[u8], remove: Remove<'_>) -> CliResponse {
         return error_response(
             "400 Bad Request",
             "usage",
-            "pass a draft id (d_ and 32 hex) — 'k2 mail drafts' lists yours",
+            concat!("pass a draft id (d_ and 32 hex) — '", k2_core::cli_name!(), " mail drafts' lists yours"),
         );
     }
     let (_path, project_id) = match crate::mail::identity::resolve_caller(&b.project) {
@@ -60,17 +60,19 @@ fn handle_with(body: &[u8], remove: Remove<'_>) -> CliResponse {
         return error_response(
             "404 Not Found",
             "not_found",
-            &format!("no draft '{id}' — 'k2 mail drafts' lists the drafts you saved"),
+            &format!(concat!("no draft '{id}' — '", k2_core::cli_name!(), " mail drafts' lists the drafts you saved")),
         );
     };
     if row.author_kind != "agent" || row.author != project_id {
         return error_response(
             "403 Forbidden",
             "not_your_draft",
-            &format!(
+            &format!(concat!(
                 "draft {id} wasn't saved by this workspace's agent, so it can't delete it; nothing was \
-                 touched. A person can discard it in the Mail page ('k2 mail reader draft-discard {id}')"
-            ),
+                 touched. A person can discard it in the Mail page ('",
+                k2_core::cli_name!(),
+                " mail reader draft-discard {id}')"
+            )),
         );
     }
     let ai = match crate::mail::access::can_draft(&project_id, &row.address) {

@@ -129,7 +129,19 @@ AGENT SURFACE
                    the rest in a digest (k2 study mail-watch)
   k2 mail send / reply / outbox
   k2 mail draft    reply drafts in Drafts (hosted or linked; a person edits
-                   and sends them from the thread); k2 mail drafts = their state
+                   and sends them from the thread); k2 mail drafts = their state.
+                   --to on a reply replaces who it goes to (thread kept); a reply
+                   to your own sent mail goes to its To. A draft: To + Cc max 10,
+                   Bcc up to 500 (a send keeps 10 in all). A slow save is safe to
+                   repeat (idempotency key; same key = same draft).
+                   k2 mail draft delete <d_id> = delete one YOU saved (others: 3)
+  BUSY/THROTTLED   inbox_busy (exit 2): a linked inbox has 4 sessions open, wait
+                   retry_after_s and run fewer calls at once. inbox_throttled
+                   (exit 3): the provider is limiting the account; wait, never
+                   loop, never ask for a re-link. Never fan out parallel reads.
+  NEEDS RE-LINK    k2 mail link list says needs re-link / mail access not
+                   granted: ask your human for 'k2 mail link relink <address>'
+                   (a person's sign-in; agents exit 3)
   k2 calendar      calendars of a HOSTED inbox or a LINKED Microsoft 365
                    or Google account (alias k2 cal; other linked inboxes exit 3
                    capability_missing with the fix). Existing

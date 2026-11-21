@@ -77,8 +77,11 @@ fn attachment_fetch_error(hint: String) -> CliResponse {
     let (retry, tail) = if crate::mail::relink::is_credential_refused(&hint) {
         (
             "after_relink",
-            "Retrying won't help: a person links this inbox again ('k2 mail link relink <address>'). \
-             Nothing was written.",
+            concat!(
+                "Retrying won't help: a person links this inbox again ('",
+                k2_core::cli_name!(),
+                " mail link relink <address>'). Nothing was written."
+            ),
         )
     } else {
         (

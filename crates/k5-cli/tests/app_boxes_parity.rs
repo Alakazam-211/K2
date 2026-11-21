@@ -353,7 +353,7 @@ fn box_verbs_answer_as_the_shell_does() {
             words(
                 "prepare --runtime last: set -e",
                 &["box", "prepare", "--runtime"],
-                1,
+                2,
             ),
         ],
     );

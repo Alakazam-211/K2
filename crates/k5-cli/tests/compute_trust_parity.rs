@@ -223,7 +223,7 @@ fn compute_roster() {
         words(
             "retire, --reason last",
             &["roster", "retire", "mini", "--reason"],
-            1,
+            2,
         ),
         // covers: compute roster revoke
         one(
@@ -340,7 +340,7 @@ fn compute_seats() {
         words(
             "request, --lane last",
             &["seats", "request", "box", "--lane"],
-            1,
+            2,
         ),
         // covers: compute seats offer
         one(
@@ -354,7 +354,7 @@ fn compute_seats() {
         words(
             "offer, --nodes last",
             &["seats", "offer", "ctr_1", "--nodes"],
-            1,
+            2,
         ),
         reply(
             "offer, a permission card",

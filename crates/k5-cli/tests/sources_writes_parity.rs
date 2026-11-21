@@ -478,7 +478,7 @@ fn sources_try() {
             &[],
             vec![],
             owner_and_port,
-            1,
+            2,
             0,
         ),
         case(
@@ -635,7 +635,7 @@ fn sources_approve_and_secret() {
             &[],
             vec![],
             owner_and_port,
-            1,
+            2,
             0,
         ),
         case(
@@ -1056,7 +1056,7 @@ fn sources_pin_and_trigger() {
             &[],
             vec![],
             owner_and_port,
-            1,
+            2,
             0,
         ),
         case(

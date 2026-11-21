@@ -2571,7 +2571,7 @@ fn hostchat_apps_as_the_shell_does() {
             &[],
             vec![],
             owner_and_port,
-            1,
+            2,
             0,
         ),
         // covers: hostchat pass-keys

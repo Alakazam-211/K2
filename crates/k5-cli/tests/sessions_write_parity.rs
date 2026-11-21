@@ -197,7 +197,7 @@ fn sessions_open_as_the_shell_does() {
             "open: a value flag last",
             &["open", "a", "--name"],
             vec![],
-            1,
+            2,
             0,
         ),
         row(
@@ -308,7 +308,7 @@ fn sessions_main_set_as_the_shell_does() {
             "main set: --workspace last",
             &["main", "set", "x", "--workspace"],
             vec![],
-            1,
+            2,
             0,
         ),
     ];
@@ -383,7 +383,7 @@ fn sessions_new_and_stop_as_the_shell_does() {
             "new: a value flag last",
             &["new", "a", "--model"],
             vec![],
-            1,
+            2,
             0,
         ),
         // covers: sessions stop
@@ -413,7 +413,7 @@ fn sessions_new_and_stop_as_the_shell_does() {
             "stop: --workspace last",
             &["stop", "a", "--workspace"],
             vec![],
-            1,
+            2,
             0,
         ),
     ];

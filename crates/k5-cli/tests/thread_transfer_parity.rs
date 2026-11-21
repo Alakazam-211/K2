@@ -77,7 +77,7 @@ fn thread_transfer_as_the_shell_does_it() {
             "export, --since-days last",
             &["export", "ws", "--since-days"],
             vec![],
-            1,
+            2,
             0,
         ),
         plain("an unknown flag", &["export", "ws", "--zap"], vec![], 2, 0),

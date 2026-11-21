@@ -787,7 +787,7 @@ fn compute_logs() {
             &[],
             vec![],
             owner_and_port,
-            1,
+            2,
             0,
         ),
         case(
@@ -896,7 +896,7 @@ fn compute_logs() {
             &[],
             vec![],
             owner_and_port,
-            1,
+            2,
             0,
         ),
     ] {

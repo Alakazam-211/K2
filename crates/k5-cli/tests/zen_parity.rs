@@ -1378,7 +1378,7 @@ fn zen_gardens_and_settings_answer_as_the_shell_does() {
             &[],
             vec![],
             owner_and_port,
-            1,
+            2,
             0,
         ),
         // covers: zen theme

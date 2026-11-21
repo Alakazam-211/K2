@@ -531,7 +531,7 @@ fn api_key_create_answers_as_the_shell_does() {
             &[],
             vec![],
             owner_and_port,
-            1,
+            2,
             0,
         ),
         // covers: api-key create
@@ -1036,7 +1036,7 @@ fn api_key_hire_ceiling_answers_as_the_shell_does() {
             &[],
             vec![],
             owner_and_port,
-            1,
+            2,
             0,
         ),
         // covers: api-key hire-ceiling
@@ -1076,7 +1076,7 @@ fn api_key_hire_ceiling_answers_as_the_shell_does() {
             &[],
             vec![],
             owner_and_port,
-            1,
+            2,
             0,
         ),
     ];

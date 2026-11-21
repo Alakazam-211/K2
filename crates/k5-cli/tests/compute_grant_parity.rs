@@ -201,7 +201,7 @@ fn compute_grant() {
             &[],
             vec![],
             owner_and_port,
-            1,
+            2,
             0,
         ),
         case(

@@ -359,7 +359,7 @@ fn compute_cancel_words() {
             &[],
             vec![],
             owner_and_port,
-            1,
+            2,
             0,
         ),
         case("the gate", &["cancel", "a"], &[], vec![], nothing, 1, 0),

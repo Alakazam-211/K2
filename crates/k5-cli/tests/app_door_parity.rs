@@ -83,7 +83,7 @@ fn suspend_self_and_usage_answer_as_the_shell_does() {
             &[],
             vec![],
             owner_and_port,
-            1,
+            2,
             0,
         ),
         case(
@@ -268,7 +268,7 @@ fn members_answers_as_the_shell_does() {
             &[],
             vec![],
             owner_and_port,
-            1,
+            2,
             0,
         ),
         traceback(case(
@@ -649,7 +649,7 @@ fn resume_and_audit_answer_as_the_shell_does() {
         stop(
             "audit: --limit given last",
             &["audit", "acme", "--limit"],
-            1,
+            2,
         ),
         stop("audit: an unknown flag", &["audit", "acme", "--x"], 2),
     ];

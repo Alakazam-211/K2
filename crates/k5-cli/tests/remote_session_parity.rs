@@ -346,7 +346,7 @@ fn remote_session_verbs() {
             &[],
             vec![],
             owner_and_port,
-            1,
+            2,
             0,
         ),
         case(
@@ -355,7 +355,7 @@ fn remote_session_verbs() {
             &[],
             vec![],
             owner_and_port,
-            1,
+            2,
             0,
         ),
     ];

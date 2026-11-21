@@ -149,7 +149,7 @@ fn links_writes_answer_as_the_shell_does() {
         stop(
             "links set: --ios given last",
             &["links", "set", "acme", "--ios"],
-            1,
+            2,
         ),
         stop(
             "links check: a second App",
@@ -241,7 +241,7 @@ fn pairing_writes_answer_as_the_shell_does() {
         stop(
             "pairing setup: --host given last",
             &["pairing", "setup", "a", "--host"],
-            1,
+            2,
         ),
         refused(
             "pairing setup: a refusal",
@@ -428,7 +428,7 @@ fn push_writes_answer_as_the_shell_does() {
         stop(
             "push set: --chat given last",
             &["push", "set", "acme", "--chat"],
-            1,
+            2,
         ),
         case(
             "push send, queued (202)",
@@ -701,7 +701,7 @@ fn email_writes_answer_as_the_shell_does() {
         stop(
             "email send: --to given last",
             &["email", "send", "acme", "--to"],
-            1,
+            2,
         ),
         refused("email test: a refusal", &["email", "test", "acme"]),
         case(

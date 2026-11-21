@@ -257,7 +257,7 @@ fn promote_rollback_and_pull_answer_as_the_shell_does() {
         stop(
             "rollback: --to given last",
             &["updates", "rollback", "acme", "--to"],
-            1,
+            2,
         ),
         // covers: app updates pull
         one(
@@ -479,7 +479,7 @@ fn push_answers_as_the_shell_does() {
         stop(
             "push: --channel given last",
             &["updates", "push", "acme", "--channel"],
-            1,
+            2,
         ),
     ];
     for c in v {

@@ -121,7 +121,7 @@ fn notifications_answer_as_the_shell_does() {
         stop(
             "sender add: --name last",
             &["email", "sender", "add", "a@x", "--name"],
-            1,
+            2,
         ),
         // covers: notifications email sender list
         run(

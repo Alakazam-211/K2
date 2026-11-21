@@ -151,7 +151,7 @@ fn deny_answers_as_the_shell_does() {
         stop(
             "deny: --reason given last",
             &["deny", "req-1", "--reason"],
-            1,
+            2,
         ),
         traceback(case(
             "deny: no request",

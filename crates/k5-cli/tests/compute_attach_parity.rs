@@ -244,7 +244,7 @@ fn compute_attach() {
             &[],
             vec![],
             owner_and_port,
-            1,
+            2,
             0,
         ),
     ];

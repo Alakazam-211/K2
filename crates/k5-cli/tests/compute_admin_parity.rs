@@ -136,7 +136,7 @@ fn compute_revoke() {
             &[],
             vec![],
             owner_and_port,
-            1,
+            2,
             0,
         ),
     ];
@@ -362,7 +362,7 @@ fn compute_access_operate_manage() {
             &[],
             vec![],
             owner_and_port,
-            1,
+            2,
             0,
         ),
         // covers: compute operate
@@ -581,7 +581,7 @@ fn compute_retier() {
             &[],
             vec![],
             owner_and_port,
-            1,
+            2,
             0,
         ),
     ];
@@ -845,7 +845,7 @@ fn compute_move() {
             &[],
             vec![],
             owner_and_port,
-            1,
+            2,
             0,
         ),
         case(
@@ -1021,7 +1021,7 @@ fn compute_cache() {
             &[],
             vec![],
             owner_and_port,
-            1,
+            2,
             0,
         ),
         case(

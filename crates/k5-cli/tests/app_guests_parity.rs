@@ -209,7 +209,7 @@ fn guest_reads_and_sets() {
             words(
                 "guest list: --cursor last",
                 &["guest", "list", "acme", "--cursor"],
-                1,
+                2,
             ),
             // covers: app guest list
             words("guest list: a flag", &["guest", "list", "acme", "-z"], 2),

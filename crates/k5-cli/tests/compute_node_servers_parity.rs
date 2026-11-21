@@ -287,7 +287,7 @@ fn compute_node_servers() {
         words(
             "limits, --reason last",
             &["node", "servers", "mini", "limits", "g", "--reason"],
-            1,
+            2,
         ),
         // covers: compute node servers owner
         case(
@@ -316,7 +316,7 @@ fn compute_node_servers() {
         words(
             "owner, --old last",
             &["node", "servers", "mini", "owner", "g", "--old"],
-            1,
+            2,
         ),
         // covers: compute node servers approve
         words(
@@ -468,7 +468,7 @@ fn compute_node_servers() {
         words(
             "add, --url last",
             &["node", "servers", "mini", "add", "--url"],
-            1,
+            2,
         ),
         raises(one(
             "add, an answer that is a list",

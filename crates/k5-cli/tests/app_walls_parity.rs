@@ -91,7 +91,7 @@ fn egress_answers_as_the_shell_does() {
         stop(
             "egress: --tail given last",
             &["egress", "acme", "--tail"],
-            1,
+            2,
         ),
         fail(
             "egress: a host that is a number",
@@ -152,7 +152,7 @@ fn box_service_answers_as_the_shell_does() {
         stop(
             "box-service: --reason given last",
             &["box-service", "acme", "--reason"],
-            1,
+            2,
         ),
         fail(
             "box-service: a note that is a number",

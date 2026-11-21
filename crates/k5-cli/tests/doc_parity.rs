@@ -233,7 +233,7 @@ fn doc_answers_as_the_shell_does() {
         r("view", &["view", "--lines", "1,2", "a.md"], vec![ok(TOOL)], 0),
         r("view --region", &["view", "--region", "page 3", "a.pdf"], vec![ok(r#"{"region":"page 3","doc":{"path":"/w/a.pdf"}}"#)], 0),
         r("view --region=", &["view", "--region=", "a.pdf"], vec![ok(r#"{"doc":{"path":"/w/a.pdf"}}"#)], 0),
-        stop("view --region last", &["view", "a.pdf", "--region"], 1),
+        stop("view --region last", &["view", "a.pdf", "--region"], 2),
         // covers: doc diff
         fed(b"my copy\n", r("diff", &["diff", "a.md"], vec![ok(TOOL)], 0)),
         r(
@@ -311,7 +311,7 @@ fn doc_answers_as_the_shell_does() {
         // covers: doc cursor
         r("cursor", &["cursor", "--at", "1:2", "--select", "1:9", "a.md"], vec![ok(r#"{"cursor":{"anchor":3,"head":10}}"#)], 0),
         stop("cursor: no --at", &["cursor", "a.md"], 2),
-        stop("cursor --at last", &["cursor", "a.md", "--at"], 1),
+        stop("cursor --at last", &["cursor", "a.md", "--at"], 2),
         // covers: doc claim
         r(
             "claim",

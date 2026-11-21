@@ -488,7 +488,7 @@ fn compute_lanes() {
             &[],
             vec![],
             owner_and_port,
-            1,
+            2,
             0,
         ),
         case(
@@ -750,7 +750,7 @@ fn compute_local() {
             &[],
             vec![],
             owner_and_port,
-            1,
+            2,
             0,
         ),
         case(

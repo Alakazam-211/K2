@@ -156,7 +156,7 @@ fn build_answers_as_the_shell_does() {
             words(
                 "--manifest last: set -e",
                 &["build", "site", "--manifest"],
-                1,
+                2,
             ),
         ],
     );
@@ -252,7 +252,7 @@ fn install_answers_as_the_shell_does() {
             // native: app install
             words("an unknown flag", &["install", "acme", "--zap"], 2),
             // native: app install
-            words("--seed last: set -e", &["install", "acme", "--seed"], 1),
+            words("--seed last: set -e", &["install", "acme", "--seed"], 2),
         ],
     );
 }
@@ -383,7 +383,7 @@ fn deploy_answers_as_the_shell_does() {
             words(
                 "--reason last: set -e",
                 &["deploy", "acme", "s", "--reason"],
-                1,
+                2,
             ),
         ],
     );
@@ -736,7 +736,7 @@ fn config_answers_as_the_shell_does() {
             // native: app config
             words("an unknown flag", &["config", "acme", "--zap"], 2),
             // native: app config
-            words("--memory last: set -e", &["config", "acme", "--memory"], 1),
+            words("--memory last: set -e", &["config", "acme", "--memory"], 2),
         ],
     );
 }

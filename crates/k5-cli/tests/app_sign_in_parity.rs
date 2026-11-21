@@ -172,7 +172,7 @@ fn auth_answers_as_the_shell_does() {
             words(
                 "auth: --origin last",
                 &["auth", "origins", "acme", "--origin"],
-                1,
+                2,
             ),
             // covers: app auth
             words("auth: a flag first", &["auth", "--zap"], 2),
@@ -276,7 +276,7 @@ fn login_settings_answer_as_the_shell_does() {
             words_with_files(
                 "login settings: --reset-ttl last",
                 &["login", "settings", "acme", "--reset-ttl"],
-                1,
+                2,
             ),
             // covers: app login settings
             words_with_files(

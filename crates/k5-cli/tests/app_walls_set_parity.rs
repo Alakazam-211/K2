@@ -159,7 +159,7 @@ fn egress_writes_answer_as_the_shell_does() {
         stop(
             "egress add: --reason given last",
             &["egress", "add", "a", "h", "--reason"],
-            1,
+            2,
         ),
         stop(
             "egress add: an unknown flag",

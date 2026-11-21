@@ -127,7 +127,7 @@ fn notify_answers_as_the_shell_does() {
             2,
         ),
         stop("no subject", &["email", "ada", "--text", "t"], 2),
-        stop("--subject last", &["email", "ada", "--subject"], 1),
+        stop("--subject last", &["email", "ada", "--subject"], 2),
         stop("a stray word", &["email", "ada", "now"], 2),
         traceback(run(
             "the answer is not JSON",

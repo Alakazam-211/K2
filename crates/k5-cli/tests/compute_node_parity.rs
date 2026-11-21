@@ -479,7 +479,7 @@ fn compute_node_wall_and_policy() {
         words(
             "wall, --reason last",
             &["node", "wall", "mini", "--reason"],
-            1,
+            2,
         ),
         // covers: compute node policy show
         one(
@@ -555,7 +555,7 @@ fn compute_node_wall_and_policy() {
         words(
             "policy set, --reason last",
             &["node", "policy", "mini", "set", "a=1", "--reason"],
-            1,
+            2,
         ),
     ];
     for c in v {
@@ -653,7 +653,7 @@ fn compute_node_update_and_rollout() {
         words(
             "rollout, --id last",
             &["node", "rollout", "resume", "--id"],
-            1,
+            2,
         ),
     ];
     for c in v {
@@ -763,7 +763,7 @@ fn compute_node_admin() {
         words(
             "propose, --reason last",
             &["node", "admin", "propose", "mini", "x", "--reason"],
-            1,
+            2,
         ),
         // covers: compute node admin deny
         one(

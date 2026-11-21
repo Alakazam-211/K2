@@ -217,7 +217,7 @@ fn uninstall_expose_park_answer_as_the_shell_does() {
             words(
                 "park --reason last: set -e",
                 &["park", "acme", "--reason"],
-                1,
+                2,
             ),
         ],
     );
@@ -589,7 +589,7 @@ fn release_and_exception_answer_as_the_shell_does() {
             words(
                 "exception --device last: set -e",
                 &["exception", "acme", "on", "--device"],
-                1,
+                2,
             ),
         ],
     );

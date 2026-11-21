@@ -149,7 +149,7 @@ fn compute_node_packages() {
         words(
             "request, --why last",
             &["node", "packages", "request", "mini", "jq", "--why"],
-            1,
+            2,
         ),
         // covers: compute node packages requests
         one(
@@ -202,7 +202,7 @@ fn compute_node_packages() {
         words(
             "requests, --node last",
             &["node", "packages", "requests", "--node"],
-            1,
+            2,
         ),
         // covers: compute node packages approve
         case(
@@ -276,7 +276,7 @@ fn compute_node_packages() {
         words(
             "deny, --note last",
             &["node", "packages", "deny", "a", "--note"],
-            1,
+            2,
         ),
         // covers: compute node packages policy
         one(
@@ -343,7 +343,7 @@ fn compute_node_packages() {
         words(
             "policy, --reason last",
             &["node", "packages", "policy", "mini", "--reason"],
-            1,
+            2,
         ),
         // covers: compute node packages policy --json
         one(

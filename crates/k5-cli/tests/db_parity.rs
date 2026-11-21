@@ -149,7 +149,7 @@ fn db_answers_as_the_shell_does() {
             &[],
             vec![],
             owner_and_port,
-            1,
+            2,
             0,
         ),
         case(
@@ -1237,7 +1237,7 @@ fn db_compute_verbs_answer_as_the_shell_does() {
             &[],
             vec![],
             owner_and_port,
-            1,
+            2,
             0,
         ),
         case(
@@ -1812,7 +1812,7 @@ fn db_run_answers_as_the_shell_does() {
             &[],
             vec![],
             owner_and_port,
-            1,
+            2,
             0,
         ),
         // A file execve won't run (no `#!`): bash runs it itself, so the

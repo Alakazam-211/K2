@@ -957,7 +957,7 @@ fn triage_remove_resources_preview() {
         ),
         stop("remove: no path", &["remove"], 1),
         stop("remove: an unknown flag", &["remove", "ws1", "-f"], 1),
-        stop("remove: --apps with no value", &["remove", "ws1", "--apps"], 1),
+        stop("remove: --apps with no value", &["remove", "ws1", "--apps"], 2),
         case(
             "resources list",
             &["resources", "list"],

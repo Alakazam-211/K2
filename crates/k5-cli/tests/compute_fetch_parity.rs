@@ -364,7 +364,7 @@ fn compute_fetch_words() {
             &[],
             vec![],
             owner_and_port,
-            1,
+            2,
             0,
         ),
         case(
@@ -391,7 +391,7 @@ fn compute_fetch_words() {
             &[],
             vec![],
             owner_and_port,
-            1,
+            2,
             0,
         ),
     ];

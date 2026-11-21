@@ -94,7 +94,7 @@ fn list_and_show_answer_as_the_shell_does() {
         stop(
             "catalog: --id given last",
             &["catalog", "show", "a", "--id"],
-            1,
+            2,
         ),
         traceback(ends(
             "catalog: a label that is a number",
@@ -299,7 +299,7 @@ fn check_answers_as_the_shell_does() {
         stop(
             "check: --id given last",
             &["catalog", "check", "a", "b", "--id"],
-            1,
+            2,
         ),
         traceback(ends(
             "check: an answer that is a list",
@@ -587,7 +587,7 @@ fn install_catalog_answers_as_the_shell_does() {
         stop(
             "--version last",
             &["install", "--catalog", "x", "--version"],
-            1,
+            2,
         ),
         // native: app install
         traceback(ends(

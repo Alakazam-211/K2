@@ -102,8 +102,8 @@ fn help_and_usage() {
         ),
         // The shell's `shift 2` fails under `set -e`: exit 1, nothing
         // printed.
-        case("export, --to last", &["export-secrets", "--to"], 1),
-        case("export, -o last", &["export-secrets", "--to", "a", "-o"], 1),
+        case("export, --to last", &["export-secrets", "--to"], 2),
+        case("export, -o last", &["export-secrets", "--to", "a", "-o"], 2),
         case("import with nothing", &["import-secrets"], 2),
         case("import, a flag", &["import-secrets", "--nope"], 2),
         case("import, --apply alone", &["import-secrets", "--apply"], 2),

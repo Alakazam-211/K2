@@ -908,5 +908,127 @@ fn read_chunked(r: &mut impl BufRead) -> Body {
     }
 }
 
+/// Where [`open_url`] goes: a full URL's host and port, its netloc as
+/// written (urllib's `Host` header) and whether it is `https://`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Place {
+    pub host: String,
+    pub port: u16,
+    pub netloc: String,
+    pub tls: bool,
+}
+
+/// The bytes http.client writes for a Python block whose `Request` names
+/// every header itself, `User-Agent` among them, and that sends no
+/// hand-over headers (`_K5_PY_HEADERS=""`: a server that is not the
+/// daemon): http.client's `Accept-Encoding`, its `Content-Length: 0` for
+/// a POST with no data, urllib's form type for data with no type of the
+/// caller's, `Content-Length` and `Host`, then the request's headers in
+/// their order, then `Connection: close`.
+pub fn encode_plain(netloc: &str, req: &Request) -> Vec<u8> {
+    let mut head = format!(
+        "{} {} HTTP/1.1\r\nAccept-Encoding: identity\r\n",
+        req.method.as_str(),
+        req.selector()
+    );
+    if req.data.is_none() && req.method == Method::Post {
+        head.push_str("Content-Length: 0\r\n");
+    }
+    let has = |name: &str| {
+        req.headers
+            .iter()
+            .any(|(n, _)| n.eq_ignore_ascii_case(name))
+    };
+    if let Some(data) = &req.data {
+        if !has("Content-Type") {
+            head.push_str("Content-Type: application/x-www-form-urlencoded\r\n");
+        }
+        head.push_str(&format!("Content-Length: {}\r\n", data.len()));
+    }
+    head.push_str(&format!("Host: {netloc}\r\n"));
+    for (name, value) in &req.headers {
+        head.push_str(&format!("{name}: {value}\r\n"));
+    }
+    head.push_str("Connection: close\r\n\r\n");
+    let mut out = head.into_bytes();
+    if let Some(data) = &req.data {
+        out.extend_from_slice(data);
+    }
+    out
+}
+
+/// What a failed TLS handshake raises: a `URLError`, its reason the
+/// binary's own words. Python's `ssl` texts (`[SSL:
+/// CERTIFICATE_VERIFY_FAILED] ...`) are OpenSSL's and not copied (the
+/// named difference python-tls-error-text); like Python's, nothing of the
+/// request was sent.
+fn tls_raised(f: &super::wire::Failure) -> Raised {
+    use super::wire::Failure;
+    let (kind, reason) = match f {
+        Failure::ConnectTimedOut => (Kind::Timeout, "_ssl.c: The handshake operation timed out".to_string()),
+        Failure::Broken { why, .. } => (Kind::Other, format!("[SSL] {why}")),
+        other => (Kind::Other, format!("[SSL] {other:?}")),
+    };
+    Raised {
+        class: Class::UrlError,
+        kind,
+        reason,
+    }
+}
+
+/// One `urllib.request.urlopen(req, timeout=...)` of `place` and the body
+/// read after it, for a Python block that talks to a server that is not
+/// the daemon (the Connect account server): plain TCP, or TLS over it for
+/// `https://` ([`super::tls`], K2's ruling D5), with
+/// [`encode_plain`]'s request. Never a proxy: a caller hands a URL the
+/// person's proxy would carry to the shell. The answer and the
+/// exceptions are [`Opener::open`]'s.
+pub fn open_url(place: &Place, req: &Request) -> Outcome {
+    let tcp = match connect(&place.host, place.port, req.timeout) {
+        Ok(s) => s,
+        Err(r) => return Outcome::Raised(Raised::url_error(r)),
+    };
+    let mut conn = if place.tls {
+        let limit = std::time::Instant::now() + req.timeout;
+        match super::tls::connect(tcp, &place.host, limit) {
+            Ok(s) => super::wire::Conn::Tls(Box::new(s)),
+            Err(f) => return Outcome::Raised(tls_raised(&f)),
+        }
+    } else {
+        super::wire::Conn::Tcp(tcp)
+    };
+    let timeouts = match &conn {
+        super::wire::Conn::Tcp(s) => s
+            .set_write_timeout(Some(req.timeout))
+            .and_then(|()| s.set_read_timeout(Some(req.timeout))),
+        super::wire::Conn::Tls(s) => super::tls::stream_timeouts(s, req.timeout),
+        #[cfg(unix)]
+        super::wire::Conn::Unix(_) => Ok(()),
+    };
+    let sent = timeouts
+        .and_then(|()| conn.write_all(&encode_plain(&place.netloc, req)))
+        .and_then(|()| conn.flush());
+    if let Err(e) = sent {
+        return Outcome::Raised(Raised::url_error(os_error(&e)));
+    }
+    let mut reader = BufReader::with_capacity(8192, conn);
+    let head = match read_head(&mut reader) {
+        Ok(h) => h,
+        Err(r) => return Outcome::Raised(r),
+    };
+    let body = read_body(&mut reader, &head);
+    if (200..300).contains(&head.status) {
+        Outcome::Answer {
+            status: head.status,
+            body,
+        }
+    } else {
+        Outcome::HttpError {
+            code: head.status,
+            body,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests;

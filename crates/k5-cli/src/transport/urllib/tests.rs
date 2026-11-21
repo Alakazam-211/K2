@@ -358,3 +358,61 @@ fn a_refused_connect_is_tried_four_times() {
     let took = t0.elapsed();
     assert!(took >= Duration::from_millis(150), "{took:?}");
 }
+
+#[test]
+fn a_request_with_its_own_headers_is_http_client_s() {
+    let req = Request::new(
+        Method::Post,
+        "/base/auth/v1/token?grant_type=password",
+        Duration::from_secs(30),
+    )
+    .data(b"{}".to_vec())
+    .header("Apikey", "k")
+    .header("User-Agent", "k2-cli/1.2.3")
+    .header("Content-Type", "application/json");
+    assert_eq!(
+        String::from_utf8(encode_plain("db.example", &req)).unwrap(),
+        "POST /base/auth/v1/token?grant_type=password HTTP/1.1\r\nAccept-Encoding: identity\r\nContent-Length: 2\r\nHost: db.example\r\nApikey: k\r\nUser-Agent: k2-cli/1.2.3\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}"
+    );
+    let get = Request::new(Method::Get, "/rest/v1/x?select=a,b", Duration::from_secs(30))
+        .header("Authorization", "Bearer t");
+    assert_eq!(
+        String::from_utf8(encode_plain("127.0.0.1:9", &get)).unwrap(),
+        "GET /rest/v1/x?select=a,b HTTP/1.1\r\nAccept-Encoding: identity\r\nHost: 127.0.0.1:9\r\nAuthorization: Bearer t\r\nConnection: close\r\n\r\n"
+    );
+}
+
+#[test]
+fn open_url_reads_a_plain_answer_and_names_a_failed_handshake() {
+    let (port, log) = server(vec![
+        Act::Write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n[]"),
+        Act::Write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n[]"),
+    ]);
+    let place = |tls| Place {
+        host: "127.0.0.1".into(),
+        port,
+        netloc: format!("127.0.0.1:{port}"),
+        tls,
+    };
+    let req = Request::new(Method::Get, "/x", Duration::from_secs(5));
+    assert_eq!(
+        open_url(&place(false), &req),
+        Outcome::Answer {
+            status: 200,
+            body: Ok(b"[]".to_vec())
+        }
+    );
+    // A server that speaks no TLS (it waits for an HTTP head that never
+    // comes): a URLError, and no request sent.
+    let short = Request::new(Method::Get, "/x", Duration::from_secs(1));
+    match open_url(&place(true), &short) {
+        Outcome::Raised(r) => {
+            assert_eq!(r.class, Class::UrlError);
+            assert!(r.text().starts_with("<urlopen error "), "{}", r.text());
+        }
+        other => panic!("{other:?}"),
+    }
+    let got = log.lock().unwrap();
+    assert!(String::from_utf8_lossy(&got[0]).starts_with("GET /x HTTP/1.1\r\n"));
+    assert!(!String::from_utf8_lossy(&got[1]).contains("GET /x"));
+}

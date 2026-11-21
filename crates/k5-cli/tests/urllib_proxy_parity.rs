@@ -320,3 +320,39 @@ fn a_certificate_nothing_trusts_stops_the_request() {
     );
     tunnel::assert_unprinted(c.name, &[b, r], &[OWNER, PROXY_PASS]);
 }
+
+/// The named difference python-proxy-other-scheme: a proxy URL with
+/// another scheme (here `socks5://`, pointed at the recording proxy).
+/// Bash's Python sends a plain CONNECT to that host anyway, which tunnels
+/// here; the binary sends nothing and says why on its first stderr line,
+/// naming the scheme only (the URL may hold the proxy's password), and
+/// exits non-zero.
+#[test]
+fn a_proxy_with_another_scheme_is_named() {
+    let w = World::new("db", "socks", STATUS, ProxyMode::Tunnel);
+    let socks = format!(
+        "socks5://{PROXY_USER}:{PROXY_PASS}@127.0.0.1:{}",
+        w.proxy.port
+    );
+    let c = w.case("https_proxy=socks5://…", &["status"], HOST, &[("https_proxy", socks)]);
+    let [b, r] = w.both(&c);
+    assert_eq!(b.out.code, Some(0), "bash's Python tunnels: {b:?}");
+    assert_eq!(b.proxy.len(), 1, "bash's plain CONNECT: {b:?}");
+    assert_eq!(
+        r.out.stderr.lines().next(),
+        Some("Error: proxy socks5://\u{2026} is not supported: only http:// proxies are"),
+        "{r:?}"
+    );
+    assert_eq!(
+        r.out.stderr.matches("is not supported").count(),
+        1,
+        "said once: {r:?}"
+    );
+    assert_ne!(r.out.code, Some(0), "{r:?}");
+    assert!(
+        r.proxy.is_empty() && r.tls.is_empty() && r.daemon.is_empty(),
+        "the binary sent: {r:?}"
+    );
+    tunnel::assert_unprinted(c.name, &[b, r], &[OWNER, PROXY_PASS]);
+    println!("named difference python-proxy-other-scheme: {}", c.name);
+}

@@ -246,6 +246,37 @@ pub fn parse(raw: &str) -> Option<Proxy> {
     })
 }
 
+/// A proxy URL's scheme when it is one urllib reads as a URL but the
+/// binary doesn't carry (anything but `http`), in lower case:
+/// `_splittype`'s scheme, the text before the first `:` with no `/` in
+/// it, followed by `/`; one of a URL scheme's own bytes only.
+pub fn other_scheme(raw: &str) -> Option<String> {
+    let i = raw.find(':').filter(|&i| i > 0 && !raw[..i].contains('/'))?;
+    let scheme = raw[..i].to_ascii_lowercase();
+    let plain = scheme
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'.' | b'-'));
+    (plain && raw[i + 1..].starts_with('/') && scheme != "http").then_some(scheme)
+}
+
+/// The line the binary prints, once, when it sends nothing because the
+/// person's https proxy has a scheme it doesn't carry (the named
+/// difference python-proxy-other-scheme: bash's Python sends a plain
+/// CONNECT to that host). Only the scheme is named: the URL may hold the
+/// proxy's password. `None` for every other setting.
+pub fn unsupported_line(env: &Env) -> Option<String> {
+    if matches!(env.no, Some(Err(NotText))) {
+        return None;
+    }
+    let Some(Ok(raw)) = &env.https else {
+        return None;
+    };
+    let scheme = other_scheme(raw)?;
+    Some(format!(
+        "Error: proxy {scheme}://\u{2026} is not supported: only http:// proxies are"
+    ))
+}
+
 /// The route for an https request to the daemon whose URL's `host:port`
 /// is `netloc` (`k2_direct` already said it is another machine).
 pub fn decide(netloc: &str, env: &Env) -> Route {

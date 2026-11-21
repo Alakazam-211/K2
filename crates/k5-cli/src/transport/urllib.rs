@@ -537,7 +537,12 @@ impl Opener {
         match super::remote::python_daemon_route(&self.host, &netloc, &self.py_proxy) {
             Route::Direct => Ok(None),
             Route::Via(p) => Ok(Some(p)),
-            Route::Shell => Err(format!("https://{netloc}")),
+            Route::Shell => {
+                if let Some(line) = super::proxy::python::unsupported_line(&self.py_proxy) {
+                    say_once(&line);
+                }
+                Err(format!("https://{netloc}"))
+            }
         }
     }
 
@@ -880,6 +885,15 @@ fn gai_error(e: &io::Error) -> Raised {
             Some(n) => format!("[Errno {n}] {text}"),
             None => text,
         },
+    }
+}
+
+/// `line` on stderr, the first time in this run only (a family may open
+/// several requests, each refused the same way).
+fn say_once(line: &str) {
+    static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !SAID.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        crate::out::stderr_line(line);
     }
 }
 

@@ -205,10 +205,12 @@ EXPECTED_DIFFS=(
     "curl-config-files|K2 and the Steward, K5 shared transport|the binary never reads curl's config files (~/.curlrc, CURL_HOME): one can carry options that change where the token goes. Bash's curl reads ~/.curlrc on every call it makes, so a header that file adds (the check: header = \"X-From-Curlrc: acme\") is on bash's request to the daemon and not on the binary's. The rest of the request, stdout, stderr and the exit code are the same (\`feedback list\`). The binary does read CURL_CA_BUNDLE and SSL_CERT_FILE, as curl does"
     "macos-system-proxy|K2 ruling, K5 shared transport|on macOS the system proxy (System Settings, Network, Proxies; no environment variable) is read by python3's urllib (urllib.request.getproxies_macosx_sysconf, when no proxy variable is set), so a bash Python block that reaches another machine over https may go through it; the binary reads only the proxy variables, as curl does, and never the system setting (it links no SystemConfiguration framework). Every bash request made with curl ignores the system setting too. Linux has no such setting: not proven there"
     "curl-version-proxy-exit|K2 ruling, K5 shared transport|a proxy that refuses the tunnel (407) to a K2 daemon at K2_HOST=https://<name> (the check: \`whoami\`, https_proxy set): the binary sends one CONNECT and stops, as curl 8.5 does (exit 56, never tried again by _k2_curl). A newer curl (8.23 on one node) fails that CONNECT with exit 7, which _k2_curl tries 4 times in all, 1 s apart, so bash sends 4 CONNECTs and prints what its curl 7 means; the binary's one CONNECT, exit and lines are the same on every node. Where bash's curl exits 56 the two are the same: not proven there"
-    "python-tls-error-text|K2 ruling, K5 lane small6 (connect login)|a TLS handshake to the Connect account server that fails (\`connect login\`'s account calls, the shell's Python urllib): bash prints OpenSSL's reason inside Python's URLError (\"<urlopen error [SSL: WRONG_VERSION_NUMBER] wrong version number (_ssl.c:1000)>\"), the binary its own words (\"<urlopen error [SSL] TLS handshake: ...>\"). The exit code (1), every line before that one and that no byte of the HTTP request was sent are the same"
+    "python-tls-error-text|K2 ruling, K5 lane small6 (connect login)|a TLS handshake to the Connect account server that fails (\`connect login\`'s account calls, the shell's Python urllib): bash prints OpenSSL's reason inside Python's URLError (\"<urlopen error [SSL: WRONG_VERSION_NUMBER] wrong version number (_ssl.c:1000)>\"), the binary its own words (\"<urlopen error [SSL] TLS handshake: ...>\"). The exit code (1), every line before that one and that no byte of the HTTP request was sent are the same. The same holds for a daemon at K2_HOST=https://<name> whose certificate nothing trusts, reached through the person's proxy by a urllib family (\`db status\`; crates/k5-cli/tests/urllib_proxy_parity.rs, a_certificate_nothing_trusts_stops_the_request): both stop at the handshake inside the tunnel with no byte of the request sent and the same exit, and each words the reason its own way"
     "getpass-no-tty-warning|K2 ruling, K5 lane small6 (connect login)|\`connect login\`'s password with no terminal (no /dev/tty to open, stdin a pipe), read from stdin: bash's Python getpass warns with its own file and line, \"<path>/getpass.py:<n>: GetPassWarning: Can not control echo on the terminal.\" (and the source line Python shows under it when it has one); the binary prints one line of its own that says the same, \"Warning: Can not control echo on the terminal.\". Both then print Python's \"Warning: Password input may be echoed.\" and the prompt, read the line from stdin and send the same request; every other line and the exit code are the same"
     "picker-env-size|K2 ruling, K5 lane small6 (connect login)|\`connect login\` with a subdomain list above what one environment variable may hold (128 KiB on Linux; about 1 MiB for the whole environment on macOS): bash's picker gets the list (tunnel tokens taken out) in SUBS_JSON and can't start, \"<path>: line <n>: <python3>: Argument list too long\" on stderr, nothing on stdout, exit 1, after the list request and before anything is asked of the daemon. The binary reads the list itself, picks, claims, binds and starts: \"✓ live at <url>\", exit 0"
     "nul-in-stdin-text|K2 ruling, as nul-in-answer (the K5 lane misc3)|a NUL byte in the text \`hostmail ooo set <addr> --text -\` or \`hostmail footer set --text -\` reads on stdin: bash's text=\$(_hostmail_read_text -) drops it and, from bash 4.4 on, writes one line on stderr, \"<path to cli/k2>: line <n>: warning: command substitution: ignored null byte in input\", so bash sends the text without it; the binary keeps the text as read and sends each NUL in place as JSON's \\u0000, never cutting the text there. stdout and the exit code are the same, and each sends one request"
+    "python-proxy-other-scheme|K2 ruling, K5 urllib families through the proxy (the Steward's line)|a daemon at K2_HOST=https://<name> with the person's https_proxy set to a URL of another scheme (socks5://, https://; the check: \`db status\`, socks5:// at a stand-in proxy that answers every CONNECT 407): bash's Python (urllib's ProxyHandler) sends a plain HTTP CONNECT to that host whatever the scheme; the binary sends nothing, prints \"Error: proxy socks5://… is not supported: only http:// proxies are\" as its first stderr line (the scheme only: the URL may hold the proxy's password) and exits non-zero (crates/k5-cli/tests/urllib_proxy_parity.rs, a_proxy_with_another_scheme_is_named)"
+    "python-connect-host|K2 ruling, K5 urllib families through the proxy|the CONNECT head a urllib family sends to the person's http:// proxy for a daemon at K2_HOST=https://<name> (the check: \`db status\` at a stand-in proxy that answers every CONNECT 407): the binary writes Python 3.12's, \"CONNECT <name>:<port> HTTP/1.1\", a Proxy-Authorization line when the proxy URL has a user and a password, then \"Host: <name>:<port>\"; Python 3.11 and older send no Host line. On Python 3.12 and later the two heads are the same byte for byte (proven there); the difference holds on an older python3 only"
     "nul-in-answer|K2 ruling at the 0.46.15 rebase|a NUL byte in the daemon's answer to \`feedback list\` or \`feedback show <id>\`: bash's resp=\$(cli_request ...) drops it and, from bash 4.4 on, writes one line on stderr, \"<path to cli/k2>: line <n>: warning: command substitution: ignored null byte in input\"; the binary drops it silently. stdout, the exit code and the requests are the same (bash 3.2 writes no warning, so there the two are exact)"
     "passport-heal-once|K2 ruling, the doc lane's follow-ups|a doc call that sends a whole file or a tool call (_doc_xfer: \`doc cat\`, \`append\`, \`write\`, \`show --version\`, \`export\`) whose passport the daemon's auth gate refuses (403 and exactly {\"error\":\"Invalid or missing auth token\"}, sent before any handler runs, so nothing was done), in a session whose passport was minted again: bash's _doc_xfer never tries the new passport and the command ends on the refusal (exit 3); the binary sends the same call once more with the new passport and answers it (cli_send_json's one heal, which bash's other doc calls already make). An answer a handler gave that holds those words (a document's text, a conflict) is never sent again by either: one request, the same output"
     "doc-mktemp-wording|K2 ruling, the doc lane's follow-ups|a doc verb that needs a temp folder (_doc_tmp) where TMPDIR can't hold one: the binary words mktemp's line as GNU mktemp does in the C locale (\"mktemp: failed to create directory via template '<TMPDIR>/k2doc.XXXXXX': No such file or directory\"; GNU's in a UTF-8 locale quotes the template with curly quotes); macOS's mktemp words it its own way (\"mktemp: mkdtemp failed on <TMPDIR>/k2doc.XXXXXX: No such file or directory\"; a newer macOS names the folder it tried, the six X filled in). The two lines after it (\"Error: can't make a temp folder\" and the tmp error's JSON), the exit (2) and stdout (nothing) are the same, and neither sends anything. The same holds for \`app exec\` with stdin on a pipe (k2-exec-XXXXXX) and \`hostchat open\` (k2-hostchat-open.XXXXXX) where TMPDIR can't hold the folder: on a newer macOS mktemp's line names the folder it tried, which the binary can't know, so the parity rows (Compare::MktempTried) take mktemp's line as the same when only that random name differs: the same folder and stem before it, one or more of [A-Za-z0-9.] in its place, the same reason after it, the same exit, and every other line byte for byte"
@@ -1931,6 +1933,114 @@ check_clone_proxy_unread() {
     [ ${#problems[@]} -eq 0 ] && return 0
     printf '%s\n' "${problems[@]}"
     return 1
+}
+
+# check_python_proxy_other_scheme: a stand-in proxy that logs each
+# connection's head and answers every CONNECT 407; both CLIs run `db
+# status` at K2_HOST=https://cp.example.invalid (it never resolves) with
+# https_proxy=socks5://<the stand-in>. Bash's Python sends it a plain
+# CONNECT; the binary sends nothing, its first stderr line names the
+# scheme, and both exit non-zero.
+check_python_proxy_other_scheme() {
+    local d="$WORK/pxscheme" side rc problems=() want
+    want="Error: proxy socks5://$(printf '\342\200\246') is not supported: only http:// proxies are"
+    _px407_start "$d" || { echo "the stand-in proxy didn't start"; return 1; }
+    for side in bash binary; do
+        : >"$d/log"
+        rc=0; _px407_db "$d" "$side" "socks5://acme:pr0xy-s3cret@127.0.0.1:$(cat "$d/port")" || rc=$?
+        [ "$rc" != 0 ] || problems+=("$side exited 0")
+        cp "$d/log" "$d/log.$side"
+    done
+    _px407_stop "$d"
+    grep -q '^CONNECT cp.example.invalid:4711 HTTP/1.1' "$d/log.bash" \
+        || problems+=("bash's Python sent no plain CONNECT: $(head -c 300 "$d/log.bash")")
+    [ ! -s "$d/log.binary" ] || problems+=("the binary sent: $(head -c 300 "$d/log.binary")")
+    [ "$(head -n 1 "$d/err.binary")" = "$want" ] \
+        || problems+=("the binary's first stderr line: $(head -n 1 "$d/err.binary")")
+    ! grep -q 'pr0xy' "$d/err.binary" "$d/out.binary" || problems+=("the binary printed the proxy's password")
+    [ ${#problems[@]} -eq 0 ] && return 0
+    printf '%s\n' "${problems[@]}"
+    return 1
+}
+
+# check_python_connect_host: the same stand-in at https_proxy=http://…;
+# each side's one CONNECT head, as the proxy got it. The binary's is
+# Python 3.12's exactly; bash's is that one on python3 3.12 and later
+# (NOT PROVEN here: the same), and that one less its Host line before.
+check_python_connect_host() {
+    local d="$WORK/pxhost" side rc problems=() want v
+    want='CONNECT cp.example.invalid:4711 HTTP/1.1\r\nHost: cp.example.invalid:4711\r\n\r\n'
+    _px407_start "$d" || { echo "the stand-in proxy didn't start"; return 1; }
+    for side in bash binary; do
+        : >"$d/log"
+        rc=0; _px407_db "$d" "$side" "http://127.0.0.1:$(cat "$d/port")" || rc=$?
+        [ "$rc" != 0 ] || problems+=("$side exited 0")
+        cp "$d/log" "$d/log.$side"
+    done
+    _px407_stop "$d"
+    [ "$(cat "$d/log.binary")" = "$want" ] || problems+=("the binary's CONNECT: $(cat "$d/log.binary")")
+    ! grep -q 'owner-tok-parity' "$d/log.bash" "$d/log.binary" || problems+=("the token reached the proxy")
+    v="$(python3 -I -c 'import sys; print(sys.version_info >= (3, 12))')"
+    if [ "$v" = True ]; then
+        [ "$(cat "$d/log.bash")" = "$want" ] || problems+=("bash's CONNECT on python3 3.12+: $(cat "$d/log.bash")")
+        [ ${#problems[@]} -eq 0 ] && { echo "python3 $(python3 -I -c 'import platform; print(platform.python_version())') sends the binary's head byte for byte; the difference is on python3 3.11 and older"; return 3; }
+    else
+        [ "$(cat "$d/log.bash")" = 'CONNECT cp.example.invalid:4711 HTTP/1.1\r\n\r\n' ] \
+            || problems+=("bash's CONNECT on an older python3: $(cat "$d/log.bash")")
+        [ ${#problems[@]} -eq 0 ] && return 0
+    fi
+    printf '%s\n' "${problems[@]}"
+    return 1
+}
+
+# _px407_start DIR: a stand-in proxy on loopback that writes each
+# connection's head (to its blank line), escaped, as one line of DIR/log,
+# and answers 407. Its port in DIR/port, its pid in DIR/pid.
+_px407_start() {
+    local d="$1" n
+    mkdir -p "$d/home/.k2" "$d/ws/.k2"
+    printf 'owner-tok-parity\n' >"$d/home/.k2/heartbeat.token"
+    rm -f "$d/port"; : >"$d/log"
+    python3 -I -c '
+import os, socket, sys
+d = sys.argv[1]
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+s.listen(8)
+open(os.path.join(d, "port.tmp"), "w").write(str(s.getsockname()[1]))
+os.rename(os.path.join(d, "port.tmp"), os.path.join(d, "port"))
+while True:
+    c, _ = s.accept()
+    c.settimeout(5)
+    got = b""
+    try:
+        while b"\r\n\r\n" not in got:
+            b = c.recv(1)
+            if not b:
+                break
+            got += b
+    except Exception:
+        pass
+    with open(os.path.join(d, "log"), "a") as f:
+        f.write(got.decode("latin-1").replace("\r", "\\r").replace("\n", "\\n") + "\n")
+    try:
+        c.sendall(b"HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0\r\n\r\n")
+    except Exception:
+        pass
+    c.close()
+' "$d" &
+    echo "$!" >"$d/pid"
+    for n in $(seq 1 50); do [ -s "$d/port" ] && return 0; sleep 0.1; done
+    return 1
+}
+_px407_stop() { kill "$(cat "$1/pid")" 2>/dev/null || true; wait "$(cat "$1/pid")" 2>/dev/null || true; }
+# _px407_db DIR SIDE PROXY: `db status` at an https daemon through PROXY.
+_px407_db() {
+    local d="$1" side="$2" proxy="$3" tmp
+    tmp="$(mktemp -d "$d/tmp.XXXXXX")"
+    if [ "$side" = binary ]; then set -- "$WORK/bin/k5"; else set -- bash "$ROOT/cli/k2"; fi
+    (cd "$d/ws" && exec env -i PATH="$PATH" HOME="$d/home" TMPDIR="$tmp" K2_HOST=https://cp.example.invalid \
+        K2_PORT=4711 https_proxy="$proxy" "$@" db status) >"$d/out.$side" 2>"$d/err.$side" </dev/null
 }
 
 for entry in "${EXPECTED_DIFFS[@]}"; do

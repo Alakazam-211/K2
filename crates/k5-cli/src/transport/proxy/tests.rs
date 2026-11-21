@@ -704,3 +704,30 @@ fn a_tunnel_head_opens_on_the_callers_rule() {
     assert!(tunnel_head(&p(port), head, |c| c == 200, soon(), plain_tcp).is_ok());
     assert_eq!(sent.join().unwrap(), head);
 }
+
+/// A proxy URL with another scheme: its scheme, and the one line that
+/// names it (never the rest of the URL, which may hold a password).
+#[test]
+fn python_other_scheme_line() {
+    for (raw, want) in [
+        ("socks5://u:secret@s:1", Some("socks5")),
+        ("HTTPS://p:3128", Some("https")),
+        ("http://p:3128", None),
+        ("p:3128", None),
+        ("u:p@p:3128", None),
+        ("we ird://p", None),
+    ] {
+        assert_eq!(python::other_scheme(raw).as_deref(), want, "{raw}");
+    }
+    let env = python::env([("https_proxy", "socks5://u:secret@s:1")]);
+    let line = python::unsupported_line(&env).expect("a line");
+    assert_eq!(
+        line,
+        "Error: proxy socks5://\u{2026} is not supported: only http:// proxies are"
+    );
+    assert!(!line.contains("secret"));
+    assert_eq!(
+        python::unsupported_line(&python::env([("https_proxy", "http://p:1")])),
+        None
+    );
+}

@@ -261,8 +261,8 @@ class _UConn(http.client.HTTPConnection):
         self.sock = s
 
 
-def vault_sock(route, body):
-    c = _UConn(VSOCK, 180)
+def vault_sock(route, body, timeout=180):
+    c = _UConn(VSOCK, timeout)
     try:
         c.request("POST", "/cli/vault/" + route, body=json.dumps(body),
                   headers={"Content-Type": "application/json", "X-K2-Tty": "1" if TTY else "0", **dict(k5_headers)})
@@ -277,6 +277,35 @@ def vault_sock(route, body):
 
 
 NEEDS_A_PERSON = "this needs your confirm: run it from a terminal (not --yes, not a pipe)"
+
+
+def _envn(name):
+    for p in ("K5_", "K2_", "K2SO_"):
+        v = os.environ.get(p + name)
+        if v:
+            return v
+    return ""
+
+
+def phone_card(started, start):
+    """0.46.17: also raise the owner's phone card for this confirm (the
+    first answer, this Mac's or the phone's, wins), when the daemon offers
+    it. Returns the card's request id, or None (this Mac alone)."""
+    if not started.get("phoneOffered") or _envn("VAULT_CONFIRM_METHOD") == "local":
+        return None
+    body = dict(start)
+    body.update(phone=True, workspacePath=_envn("PROJECT_PATH") or os.getcwd())
+    if _envn("VAULT_CONFIRM_THREAD"):
+        body["thread"] = _envn("VAULT_CONFIRM_THREAD")
+    try:
+        p = vault_sock("confirm/start", body).get("phone") or {}
+    except Fail as e:
+        say("(no phone card: %s)" % e.hint)
+        return None
+    if not p.get("request"):
+        return None
+    say("  or on your phone: card %s on %s's Thread. Waiting for your phone… (5 minutes; the first answer wins)" % (p["request"], p.get("addr", "")))
+    return p["request"]
 
 
 def read_line(fd, prompt, needs=NEEDS_A_PERSON):
@@ -338,15 +367,21 @@ def confirm(side, action, secret_id, label):
     if local:
         need_vault_sock()
     start = {"action": action}
+    started = {}
     if local:
-        methods = vault_sock("confirm/start", start).get("methods") or []
+        started = vault_sock("confirm/start", start)
+        methods = started.get("methods") or []
     else:
         https_gate(side, password=True)
         methods = call(side, "POST", "/cli/vault/confirm/start", start).get("methods") or []
     body = {"action": action, "secretId": secret_id}
+    wait = 180
     if local and "local-auth" in methods:
         say("Approve on this Mac (Touch ID or your login password): %s" % label)
         body.update(method="local-auth", label=label)
+        req = phone_card(started, {"action": action, "secretId": secret_id, "label": label})
+        if req:
+            body["phoneRequest"], wait = req, 330
     elif "connect-password" in methods:
         body.update(method="connect-password", password=password("Your password on %s (%s): " % (side[1], label)))
     elif "vault-password" in methods:
@@ -354,7 +389,7 @@ def confirm(side, action, secret_id, label):
     else:
         raise Fail("no_confirm_method", "set a vault password first: k2 vault confirm-password set (from a terminal outside K2)", 3)
     if local:
-        tok = vault_sock("confirm/finish", body)["token"]
+        tok = vault_sock("confirm/finish", body, wait)["token"]
     else:
         tok = call(side, "POST", "/cli/vault/confirm/finish", body)["token"]
     body.pop("password", None)
@@ -399,18 +434,24 @@ def carry_confirm_call(side, ask, pv, proposal=None):
     if proposal:
         reason = "approve the clone proposal and " + reason
     if local:
-        methods = vault_sock("confirm/start", {"action": "clone-carry"}).get("methods") or []
+        started = vault_sock("confirm/start", {"action": "clone-carry"})
+        methods = started.get("methods") or []
         body = {"action": "clone-carry", "clonePlan": ask}
         if proposal:
             body["proposal"] = proposal
+        wait = 180
         if "local-auth" in methods:
             say("Approve on this Mac (Touch ID or your login password): %s" % reason)
             body["method"] = "local-auth"
+            # A clone proposal's one confirm is answered at the Mac only.
+            req = None if proposal else phone_card(started, {"action": "clone-carry", "clonePlan": ask})
+            if req:
+                body["phoneRequest"], wait = req, 330
         elif "vault-password" in methods:
             body.update(method="vault-password", password=password("Vault password (%s): " % reason))
         else:
             raise Fail("no_confirm_method", "set a vault password first: k2 vault confirm-password set (from a terminal outside K2)", 3)
-        r = vault_sock("confirm/finish", body)
+        r = vault_sock("confirm/finish", body, wait)
         body.pop("password", None)
         return r
     https_gate(side, password=True)

@@ -122,7 +122,7 @@ fn card_token(e: &Env, who: &VaultCaller, request: &str, method: &str, password:
 }
 
 fn allow(e: &Env, user: &str, card: &str, token: &str) -> (String, Value) {
-    answer_as(user, &e.ws, card, json!({ "answer": "Allow", "confirmToken": token, "client": "phone" }))
+    answer_as(user, &e.ws, card, json!({ "answer": "Allow", "confirmToken": token }))
 }
 
 /// Wait until the card is up for answers (the terminal's finish is running).

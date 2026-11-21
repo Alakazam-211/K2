@@ -686,7 +686,8 @@ o = json.loads(sys.argv[1]); o.update(json.loads(sys.argv[2])); print(urllib.par
                 local gsid gtok
                 gsid="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["secret"]["id"])')"
                 echo "Sharing ${name} this way lets ${to} read the value: confirm to go ahead (nothing is shared if you cancel)." >&2
-                gtok="$(_vault_confirm_token grant-read "$gsid" "share $name with $to")" || exit 3
+                # The phone card names the share itself and binds it (0.46.17).
+                gtok="$(_vault_confirm_token grant-read "$gsid" "share $name with $to" "$(printf '%s' "$(_vault_merge "$sj" "$nj" "$gj")" | python3 -c 'import json,sys; print(json.dumps({"grant": json.load(sys.stdin)}))')")" || exit 3
                 _vault_sock_call POST grant "$(_with_confirm_token "$(_vault_merge "$sj" "$nj" "$gj")" "$gtok")"
             fi
             [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"

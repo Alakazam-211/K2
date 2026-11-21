@@ -128,16 +128,18 @@ _vault_person_guard() {
 
 # _vault_sock_call POST <route> <json> → _SC_BODY/_SC_STATUS (no exit).
 _vault_sock_call() {
-    local method="$1" route="$2" payload="${3:-}" tty="0" out
+    # $4: the call's time limit in seconds (180; the phone confirm waits up
+    # to 5 minutes for an answer).
+    local method="$1" route="$2" payload="${3:-}" tty="0" out maxt="${4:-180}"
     [ -t 0 ] && [ -t 1 ] && tty="1"
     [ -t 0 ] && [ -t 2 ] && tty="1"
     if [ "$method" = "GET" ]; then
         out="$(_k2_curl "" -s -G --unix-socket "$(_vault_sock)" "http://localhost/cli/vault/${route}" \
-            -H "X-K2-Tty: ${tty}" --connect-timeout 5 --max-time 180 -w $'\n%{http_code}' 2>/dev/null)" || out=""
+            -H "X-K2-Tty: ${tty}" --connect-timeout 5 --max-time "$maxt" -w $'\n%{http_code}' 2>/dev/null)" || out=""
     else
         out="$(printf '%s' "$payload" | _k2_curl "" -s -X POST --unix-socket "$(_vault_sock)" "http://localhost/cli/vault/${route}" \
             -H "X-K2-Tty: ${tty}" -H "Content-Type: application/json" --data-binary @- \
-            --connect-timeout 5 --max-time 180 -w $'\n%{http_code}' 2>/dev/null)" || out=""
+            --connect-timeout 5 --max-time "$maxt" -w $'\n%{http_code}' 2>/dev/null)" || out=""
     fi
     _sidecar_split "$out"
 }
@@ -311,15 +313,54 @@ b[field] = tok or None
 print(json.dumps(b))'
 }
 
+# Raise the phone card for this confirm (0.46.17): the owner answers it on
+# their phone with the confirm sheet, the first answer (this computer's or
+# the phone's) wins. $1 action, $2 secretId, $3 label, $4 extra JSON (a
+# share's `grant`). The card goes on the Thread of the workspace this
+# terminal is in, or K2_VAULT_CONFIRM_THREAD's. Sets _VPC_REQ and _VPC_LINE
+# (where to answer); on a refusal prints why (and sets neither).
+_vault_phone_raise() {
+    local action="$1" secret_id="${2:-}" label="${3:-}" extra="${4:-}"
+    local where thread
+    _envn_into where PROJECT_PATH "$PWD"
+    _envn_into thread VAULT_CONFIRM_THREAD ""
+    _VPC_REQ=""; _VPC_LINE=""
+    _vault_sock_call POST "confirm/start" "$(printf '%s' "$extra" | python3 -c '
+import json, sys
+o = {"action": sys.argv[1], "secretId": sys.argv[2] or None, "label": sys.argv[3], "phone": True, "workspacePath": sys.argv[4]}
+if sys.argv[5]: o["thread"] = sys.argv[5]
+o.update(json.loads(sys.stdin.read() or "{}"))
+print(json.dumps(o))' "$action" "$secret_id" "$label" "$where" "$thread")"
+    if [ "$_SC_STATUS" != "200" ]; then
+        printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+try:
+    e = json.load(sys.stdin).get("error") or {}
+except Exception:
+    e = {}
+print("(no phone card: %s)" % (e.get("hint") or e.get("code") or "the daemon did not answer"), file=sys.stderr)'
+        return 0
+    fi
+    IFS=$'\t' read -r _VPC_REQ _VPC_LINE < <(printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+p = json.load(sys.stdin).get("phone") or {}
+print("%s\tcard %s on %s'"'"'s Thread (%s)" % (p.get("request", ""), p.get("request", ""), p.get("addr", ""), p.get("text", "")))')
+}
+
 # Ask the daemon for a confirm token over vault.sock (Touch ID sheet on a
-# Mac, else the vault password typed here). Prints the token. Some steps
+# Mac, else the vault password typed here). 0.46.17: the owner's terminal
+# can also ask the phone (`phoneOffered`): with this computer's own prompt,
+# both at once (first answer wins); with only a typed password and no
+# terminal to type it in, the phone alone. K2_VAULT_CONFIRM_METHOD=phone:
+# the phone only; =local: never the phone. $4: extra JSON for the phone
+# card (a share's `grant`). Prints the token. Some steps
 # take this computer's own user check instead (the daemon's presence
 # actions: vault-password-set, recovery-setup, backup-export-initial,
 # box-move-export, backup-key-add, owner-login): the Mac's sheet, Windows
 # Hello, on a Linux server an owner login's sign-in password, or for a
 # server's first owner login, this terminal (outside K2).
 _vault_confirm_token() {
-    local action="$1" secret_id="${2:-}" label="${3:-}"
+    local action="$1" secret_id="${2:-}" label="${3:-}" phone_extra="${4:-}"
     _vault_sock_call POST "confirm/start" "$(python3 -c 'import json,sys; print(json.dumps({"action": sys.argv[1], "secretId": sys.argv[2] or None}))' "$action" "$secret_id")"
     [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
     local methods login
@@ -341,14 +382,41 @@ _vault_confirm_token() {
             *) echo "no_confirm_method: K2_VAULT_CONFIRM_METHOD=vault-password, but no vault password is set (k2 vault confirm-password set)" >&2; exit 3 ;;
         esac
     fi
+    local phone_ok want_m maxt=180
+    phone_ok="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print("1" if json.load(sys.stdin).get("phoneOffered") else "")')"
+    want_m="$(_envn VAULT_CONFIRM_METHOD)"
+    if [ "$want_m" = "phone" ]; then
+        [ "$phone_ok" = "1" ] || { echo "no_phone_confirm: this step can't be confirmed from a phone here (the owner's own terminal, permission cards on, and not an owner-login change); unset K2_VAULT_CONFIRM_METHOD to confirm at this computer" >&2; exit 3; }
+        methods="phone"
+    elif [ "$phone_ok" = "1" ] && [ "$want_m" != "local" ] && [ ! -t 0 ]; then
+        # Only a typed password here, and no terminal to type it in: the phone.
+        case " $methods " in *" local-auth "*|*" windows-hello "*|*" terminal "*) ;; *) methods="phone" ;; esac
+    fi
+    [ "$want_m" = "local" ] && phone_ok=""
     case " $methods " in
-        *" local-auth "*)
-            echo "Approve on this Mac (Touch ID or your login password)…" >&2
-            body="$(python3 -c 'import json,sys; print(json.dumps({"action": sys.argv[1], "secretId": sys.argv[2] or None, "method": "local-auth", "label": sys.argv[3]}))' "$action" "$secret_id" "$label")"
+        *" phone "*)
+            _vault_phone_raise "$action" "$secret_id" "$label" "$phone_extra"
+            [ -n "$_VPC_REQ" ] || { echo "no_phone_confirm: the phone card could not be raised (above)" >&2; exit 3; }
+            echo "Approve on your phone: ${_VPC_LINE}. Waiting for your phone… (5 minutes)" >&2
+            maxt=330
+            body="$(python3 -c 'import json,sys; print(json.dumps({"action": sys.argv[1], "secretId": sys.argv[2] or None, "method": "phone", "label": sys.argv[3], "phoneRequest": sys.argv[4]}))' "$action" "$secret_id" "$label" "$_VPC_REQ")"
             ;;
-        *" windows-hello "*)
-            echo "Approve on this PC (Windows Hello or your Windows password)…" >&2
-            body="$(python3 -c 'import json,sys; print(json.dumps({"action": sys.argv[1], "secretId": sys.argv[2] or None, "method": "windows-hello"}))' "$action" "$secret_id")"
+        *" local-auth "*|*" windows-hello "*)
+            local lm="local-auth" where_word="this Mac (Touch ID or your login password)"
+            case " $methods " in *" local-auth "*) ;; *) lm="windows-hello"; where_word="this PC (Windows Hello or your Windows password)" ;; esac
+            _VPC_REQ=""
+            [ "$phone_ok" = "1" ] && _vault_phone_raise "$action" "$secret_id" "$label" "$phone_extra"
+            if [ -n "$_VPC_REQ" ]; then
+                echo "Approve on ${where_word}, or on your phone: ${_VPC_LINE}. Waiting for your phone… (5 minutes; the first answer wins)" >&2
+                maxt=330
+            else
+                echo "Approve on ${where_word}…" >&2
+            fi
+            body="$(python3 -c '
+import json, sys
+o = {"action": sys.argv[1], "secretId": sys.argv[2] or None, "method": sys.argv[4], "label": sys.argv[3]}
+if sys.argv[5]: o["phoneRequest"] = sys.argv[5]
+print(json.dumps(o))' "$action" "$secret_id" "$label" "$lm" "$_VPC_REQ")"
             ;;
         *" terminal "*)
             # A server's first owner login: this terminal, outside K2, is
@@ -381,10 +449,15 @@ _vault_confirm_token() {
             exit 3
             ;;
     esac
-    _vault_sock_call POST "confirm/finish" "$body"
+    _vault_sock_call POST "confirm/finish" "$body" "$maxt"
     body=""
     [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
-    printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])'
+    printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+if v.get("confirmedOn") == "phone":
+    print("Confirmed on your phone.", file=sys.stderr)
+print(v["token"])'
 }
 
 # k2 vault fetch — K2 makes the HTTPS call and adds the secret where its

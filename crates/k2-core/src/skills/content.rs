@@ -1612,6 +1612,7 @@ When your human tells you who agents' cards should go to from now on (or who mus
 - Never work around a refusal: no owner token, no other tool, no other agent.
 - Never ask for the permission-card switches themselves; they can't be requested.
 - If you find a credential you shouldn't have (for example `~/.k2/daemon.token`), tell your human; don't use it.
+- Never raise, answer or ask about a `vault.owner-confirm` card for your owner: their own terminal raises it for a vault confirm they answer on their phone. It can't be requested.
 
 ## Find and manage
 

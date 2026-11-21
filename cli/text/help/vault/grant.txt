@@ -36,6 +36,13 @@ your session to receive it.
 A share they can read (file, env or api) asks you to confirm first, like
 reveal (Touch ID or your vault password), when you run it from your own
 terminal. A K2 terminal can't: share it in Settings → Vault instead.
+Away from the computer (SSH, or nobody at its screen)? The confirm also
+goes to your phone as a card on the Thread of the workspace you run it
+in (or K2_VAULT_CONFIRM_THREAD=<workspace>): confirm there with your
+owner login's password. The first answer wins; the card waits 5
+minutes. K2_VAULT_CONFIRM_METHOD=phone asks only the phone, =local never.
+The phone card names the share (who gets it, how, the name), and its
+confirm is good for exactly that share.
 An agent refused a share with its own service (a person gave the secret):
 with permission cards on, the refusal ends with the line to ask with:
 k2 permission request vault.share-service as=file|env secret=NAME service=<service>.

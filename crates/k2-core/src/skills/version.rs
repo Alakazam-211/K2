@@ -399,7 +399,9 @@ pub const SKILL_VERSION_WORKSPACE: u32 = 66;
 /// take your secrets without a card" (`vault.accept-from`).
 /// v24 = 0.46.17: a test login's rooms (`apps.test-guest-rooms`,
 /// `k2 app user rooms-ok`).
-pub const SKILL_VERSION_PERMISSIONS: u32 = 24;
+/// v25 = 0.46.17: never raise or answer `vault.owner-confirm` (the owner's
+/// own terminal's vault confirm, answered on their phone).
+pub const SKILL_VERSION_PERMISSIONS: u32 = 25;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

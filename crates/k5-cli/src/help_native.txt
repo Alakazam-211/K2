@@ -240,6 +240,8 @@ front --help|front|out|0
 front -h|front|out|0
 git-tools --help|git-tools|out|0
 git-tools -h|git-tools|out|0
+glossary --help|glossary|out|0
+glossary -h|glossary|out|0
 heartbeat --help|heartbeat|out|0
 heartbeat -h|heartbeat|out|0
 help --advanced|_advanced|out|0

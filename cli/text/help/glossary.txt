@@ -1,0 +1,4 @@
+k2 glossary — what K2's own words mean
+
+  k2 glossary           every term, with a one-line summary
+  k2 glossary <term>    one term's full definition (try k2 glossary inbox)

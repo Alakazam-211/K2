@@ -1,6 +1,15 @@
 # ── Phase 2.1: Glossary (A10) ─────────────────────────────────────────
 
+_glossary_usage() {
+    cat <<'EOF'
+%include cli/text/help/glossary.txt
+EOF
+}
+
 cmd_glossary() {
+    # 0.46.17: -h/--help anywhere before a bare -- prints the help and asks
+    # nothing (`glossary --help` looked up a term named --help).
+    if _wants_help "$@"; then _glossary_usage; return 0; fi
     local term="${1:-}"
     if [[ -z "$term" ]]; then
         # List all terms.

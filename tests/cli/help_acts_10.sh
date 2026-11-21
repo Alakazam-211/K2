@@ -17,6 +17,7 @@
 #     `--lines`, `--agent`, `--session` and `--token` took the help word.
 #   - `k2 reviews --help` asked for the review list (it reads no words).
 #   - `k2 trust-folders --help` sent the trust POST (it reads no words).
+#   - `k2 glossary --help` looked up a term named --help.
 #
 # Each section: every help form, with --help and with -h, prints exactly
 # the page's cli/text/help file and the stub daemon records nothing; the
@@ -206,6 +207,12 @@ echo "== trust-folders =="
 page trust-folders.txt trust-folders @H
 page trust-folders.txt trust-folders now @H
 sends '^POST /cli/trust-folders ' trust-folders
+
+echo "== glossary =="
+page glossary.txt glossary @H
+page glossary.txt glossary inbox @H
+sends '^GET /cli/glossary/get ' glossary inbox
+sends '^GET /cli/glossary/list ' glossary
 
 echo ""
 echo "help_acts_10: $pass passed, $fail failed"

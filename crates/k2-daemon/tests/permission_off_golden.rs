@@ -60,6 +60,11 @@
 //! One wall's hint was re-captured on purpose: `hire_off` (0.46.17) also says
 //! how a person turns permission cards on, since with them off no card can
 //! go up (`hire_routes::hire_off_hint`); still no `permission` object.
+//! Re-captured on purpose too (0.46.17, the owner's standing rule that a
+//! person who must change something gets a one-tap card): an agent's held
+//! App answer (`walls/v1_apps_*`) now carries K2's own `apps.approve` card
+//! in `card` (raised, on its Thread, who it went to) with the Beta off, and
+//! its hints name the card. Still no `permission` object.
 //!
 //! No vault, keychain, real `~/.k2` or running daemon is touched: `$HOME` is
 //! a short temp dir under /tmp (Unix socket paths are length-capped).

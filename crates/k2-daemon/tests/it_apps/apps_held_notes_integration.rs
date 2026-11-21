@@ -50,7 +50,7 @@ async fn held_app_requests_say_where_the_owner_sees_them() {
     assert_eq!((v["card"]["raised"].as_bool(), v["card"]["new"].as_bool()), (Some(true), Some(true)), "{v}");
     let first_card = v["card"]["id"].as_str().expect("card id").to_string();
     let where_ = v["card"]["where"].as_str().unwrap();
-    assert!(where_.contains("App Approvals") && where_.contains("pass --assign <login>"), "{v}");
+    assert!(where_.contains("App Approvals") && where_.contains(" sent to "), "{v}");
     assert!(v.get("permission").is_none(), "cards off: no teaching object: {v}");
 
     // The push: the badge count.

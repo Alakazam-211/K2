@@ -265,6 +265,8 @@ fn sent_to(to: &[String], assigned: bool, narrowed: bool) -> String {
         format!("sent to {names}, as you asked (--assign)")
     } else if narrowed {
         format!("sent to {names} (the owner's default for cards); pass --assign <login> to send it to someone else")
+    } else if to.is_empty() {
+        "sent to the owner (no other owner or admin logins on this server)".to_string()
     } else {
         format!("sent to every owner and admin ({names}); pass --assign <login> to send it to one")
     }

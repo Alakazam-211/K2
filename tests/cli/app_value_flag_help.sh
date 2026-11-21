@@ -6,6 +6,8 @@
 # Regression (0.46.17):
 #   - `k2 app data put <app> <path> --to -h` sent the put with `to` set
 #     to `-h`.
+#   - `k2 app key mint <app> --scopes u --label -h` sent the mint with
+#     the label `-h`.
 #
 # Each help row: exactly the page on stdout, nothing on stderr, exit 0,
 # nothing sent. Each verb's plain form then still sends, so the stub is
@@ -173,6 +175,25 @@ run app data put shop notes.txt --to sub
 sent_line "the put" 1 '^POST /cli/app/data/put .*"to": "sub"'
 [ "$(wc -l <"$REQ_LOG" | tr -d ' ')" = 1 ] && ok "data put: one request" \
     || { bad "data put: not one request"; sed 's/^/      | /' "$REQ_LOG" >&2; }
+
+echo "== app key mint: a value flag never takes -h =="
+# native: app key mint
+page app/grace.txt app key mint shop --scopes u --label -h
+# native: app key mint
+page app/grace.txt app key mint shop --scopes -h
+# native: app key mint
+page app/grace.txt app key mint shop --scope users --rooms --help
+# native: app key mint
+page app/grace.txt app key mint shop --scopes users --roles -h --show
+# native: app key mint
+page app/grace.txt app key mint --label --help shop --scopes users
+echo "== app key mint: the plain mint still sends =="
+# native: app key mint
+run app key mint shop --scopes users --label L
+[ "$RC" -eq 0 ] && ok "k2 app key mint shop --scopes users --label L: exit 0" || { bad "key mint: exit $RC"; show "$ERR"; }
+sent_line "the mint" 1 '^POST /cli/app/key/mint .*"label": "L"'
+[ "$(wc -l <"$REQ_LOG" | tr -d ' ')" = 1 ] && ok "key mint: one request" \
+    || { bad "key mint: not one request"; sed 's/^/      | /' "$REQ_LOG" >&2; }
 
 echo ""
 echo "app_value_flag_help: $pass passed, $fail failed"

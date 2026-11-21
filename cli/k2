@@ -19454,6 +19454,8 @@ print("%s %s (%s)" % ("revoked" if v.get("revoked") else "already revoked:", v.g
 }
 
 cmd_app_key_mint() {
+    # Help wins: -h or --help anywhere, even as a value flag's word.
+    if _wants_help "$@"; then _app_grace_usage; return 0; fi
     local app="" scopes="" rooms="" roles="" label="" show=0 json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in

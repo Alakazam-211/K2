@@ -164,6 +164,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **`k2 mail link list` names a sign-in fix only for an account that needs one.** A linked account whose row carries no status no longer gets the line "the provider refused the sign-in"; an account marked "needs re-link" still does.
 - **A `k2 mail link relink` or `upgrade` that runs out of time names the right command to run again.** The hint says `k2 mail link relink <address>` for a relink and `k2 mail link upgrade <address> --features <f>` for an upgrade; before, both said `k2 mail link add --provider …`, which starts a new link.
 - **A value flag on `k2 app data put` never takes `-h` or `--help` as its value.** Before, `k2 app data put <app> <path> --to -h` sent the copy with `-h` as the folder. Now `-h` or `--help` anywhere prints the `k2 app data` help on stdout, exits 0 and sends nothing.
+- **A value flag on `k2 app key mint` never takes `-h` or `--help` as its value.** Before, `k2 app key mint <app> --scopes users --label -h` asked for a key labelled `-h`. Now `-h` or `--help` anywhere prints the help on stdout, exits 0 and sends nothing.
 
 ### Settings
 - **Changes to the Send feedback settings are recorded.** When the owner or an admin turns "Allow sending feedback to K2", "Agents may send feedback to K2" or "Agents may include K2 details" on or off (Settings → General → Send feedback), Settings → Logs → Access Audit records who changed which one, from what to what. A change that leaves a setting as it was, or a refused attempt, records nothing.

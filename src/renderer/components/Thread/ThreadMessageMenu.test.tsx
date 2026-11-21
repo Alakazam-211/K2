@@ -206,6 +206,9 @@ describe('the message menu', () => {
     fireEvent.contextMenu(bubbles()[0], { clientX: 10, clientY: 20 })
     expect(useContextMenuStore.getState().isOpen).toBe(true)
     expect(menuLabels()).toEqual(['Reply', 'Copy text', 'Save to stash'])
+    // Every row has its mark, so the labels start on one edge.
+    const rows = useContextMenuStore.getState().items.filter((i) => i.type !== 'separator')
+    expect(rows.every((i) => !!i.icon)).toBe(true)
   })
 
   it('opens on a long press (touch); a press that moves does not', () => {

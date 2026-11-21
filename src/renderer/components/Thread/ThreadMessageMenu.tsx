@@ -107,7 +107,7 @@ export function threadMessageMenuItems(args: ThreadMessageMenuArgs, selection: s
   const items: ContextMenuItemDef[] = []
   if (reply && selection) items.push({ id: 'reply-selection', label: 'Reply to selection', icon: <ReplyGlyph size={12} /> })
   if (reply) items.push({ id: 'reply', label: 'Reply', icon: <ReplyGlyph size={12} /> })
-  items.push({ id: 'copy', label: selection ? 'Copy selection' : 'Copy text', enabled: (selection ?? args.text).length > 0 })
+  items.push({ id: 'copy', label: selection ? 'Copy selection' : 'Copy text', icon: <CopyGlyph size={12} />, enabled: (selection ?? args.text).length > 0 })
   items.push({ id: 'sep', label: '', type: 'separator' })
   items.push({
     id: 'stash',
@@ -117,7 +117,7 @@ export function threadMessageMenuItems(args: ThreadMessageMenuArgs, selection: s
   })
   if (args.del) {
     items.push({ id: 'sep-delete', label: '', type: 'separator' })
-    items.push({ id: 'delete', label: 'Delete message' })
+    items.push({ id: 'delete', label: 'Delete message', icon: <DeleteGlyph size={12} /> })
   }
   return items
 }
@@ -259,6 +259,27 @@ export function ReplyGlyph({ size = 12 }: { size?: number }): JSX.Element {
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0 }}>
       <polyline points="9 14 4 9 9 4" />
       <path d="M20 20v-7a4 4 0 0 0-4-4H4" />
+    </svg>
+  )
+}
+
+/** Copy text's mark: two sheets. */
+export function CopyGlyph({ size = 12 }: { size?: number }): JSX.Element {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0 }}>
+      <rect x="9" y="9" width="12" height="12" rx="2" />
+      <path d="M5 15V5a2 2 0 0 1 2-2h10" />
+    </svg>
+  )
+}
+
+/** Delete message's mark: a bin. */
+export function DeleteGlyph({ size = 12 }: { size?: number }): JSX.Element {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0 }}>
+      <path d="M4 7h16" />
+      <path d="M9 7V4h6v3" />
+      <path d="M6 7l1 13h10l1-13" />
     </svg>
   )
 }

@@ -279,7 +279,34 @@ _daemon_status_linux() {
     _daemon_status_ptyd_lines "$ptyd"
 }
 
+# `k2 daemon start` on Linux: the unit `k2 daemon status` finds. A user
+# unit is started; a system unit needs root, so only the line to run is
+# printed; with no unit, there is nothing to start until `k2 daemon install`.
+_daemon_start_linux() {
+    local su scope unit
+    su=$(_daemon_linux_unit) || su=""
+    if [ -z "$su" ]; then
+        echo "daemon start: no systemd unit for the daemon (k2-daemon.service, user or system)." >&2
+        echo "Install it first: k2 daemon install" >&2
+        exit 1
+    fi
+    scope=${su%% *}; unit=${su#* }
+    if [ "$scope" = "system" ]; then
+        echo "Starting a system unit needs root: sudo systemctl start $unit" >&2
+        exit 1
+    fi
+    if _daemon_systemctl user start "$unit"; then
+        echo "Daemon started ($unit)."
+        return 0
+    fi
+    exit 1
+}
+
 cmd_daemon_start() {
+    if [ "$(_daemon_os)" = "linux" ]; then
+        _daemon_start_linux
+        return $?
+    fi
     if [ ! -f "$_daemon_plist" ]; then
         echo "Daemon plist not installed at $_daemon_plist" >&2
         echo "Open K2 → Settings → General → Server → K2 server → Install." >&2
@@ -643,11 +670,50 @@ cmd_daemon_log() {
     fi
 }
 
+# Whether the unit is down: `systemctl is-active` says inactive (or failed:
+# its process ended with an error, so it is down too).
+_daemon_unit_down() {
+    local st
+    st=$(_daemon_systemctl "$1" is-active "$2" 2>/dev/null) || true
+    case "$st" in inactive|failed) return 0 ;; esac
+    return 1
+}
+
+# Whether the unit is down and won't start again at boot (not enabled).
+_daemon_unit_off() {
+    _daemon_unit_down "$1" "$2" || return 1
+    ! _daemon_systemctl "$1" is-enabled "$2" >/dev/null 2>&1
+}
+
+# Linux: `k2 daemon uninstall` takes the daemon's files away only once its
+# unit (found as `k2 daemon status` finds it) is down. A user unit is
+# stopped and disabled here, and checked. A system unit needs root: unless
+# it is already down and disabled, the lines to run are printed and nothing
+# is removed. Removing the port and token files under a running daemon
+# leaves it running with no way for k2 to reach it.
 cmd_daemon_uninstall() {
-    local force=0
+    local force=0 su="" scope="" unit=""
     [ "${1:-}" = "--yes" ] || [ "${1:-}" = "-y" ] && force=1
+    if [ "$(_daemon_os)" = "linux" ]; then
+        su=$(_daemon_linux_unit) || su=""
+        if [ -n "$su" ]; then
+            scope=${su%% *}; unit=${su#* }
+        fi
+        if [ "$scope" = "system" ] && ! _daemon_unit_off system "$unit"; then
+            echo "The daemon's unit is a system unit ($unit): stopping and disabling it needs root. Nothing was removed." >&2
+            echo "Run:" >&2
+            echo "  sudo systemctl stop $unit" >&2
+            echo "  sudo systemctl disable $unit" >&2
+            echo "then run k2 daemon uninstall again." >&2
+            exit 1
+        fi
+    fi
     if [ "$force" != "1" ]; then
-        echo "This will remove the K2 daemon launch agent and stop the daemon."
+        if [ "$scope" = "user" ]; then
+            echo "This will stop and disable the K2 daemon's systemd unit ($unit) and remove its port and token files."
+        else
+            echo "This will remove the K2 daemon launch agent and stop the daemon."
+        fi
         echo "Your workspace data (~/.k2 database + agent files) is preserved."
         printf "Proceed? [y/N] "
         read -r answer
@@ -655,6 +721,24 @@ cmd_daemon_uninstall() {
             y|Y|yes|YES) ;;
             *) echo "Cancelled."; return 1 ;;
         esac
+    fi
+    if [ "$scope" = "user" ]; then
+        # A stop, not a restart: its agents end (as `k2 daemon stop`).
+        _daemon_write_stop_intent cli || true
+        if ! _daemon_systemctl user stop "$unit"; then
+            rm -f "$K2_HOME/run/stop-intent.json"
+            echo "daemon uninstall: systemctl --user stop $unit failed. Nothing was removed." >&2
+            exit 1
+        fi
+        if ! _daemon_systemctl user disable "$unit"; then
+            echo "daemon uninstall: systemctl --user disable $unit failed. Nothing was removed." >&2
+            exit 1
+        fi
+        if ! _daemon_unit_down user "$unit"; then
+            rm -f "$K2_HOME/run/stop-intent.json"
+            echo "daemon uninstall: $unit is still running after the stop. Nothing was removed." >&2
+            exit 1
+        fi
     fi
     if [ -f "$_daemon_plist" ]; then
         launchctl unload -w "$_daemon_plist" 2>/dev/null || true

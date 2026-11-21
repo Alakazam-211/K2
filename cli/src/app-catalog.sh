@@ -195,6 +195,12 @@ print("File: %s/%s sha256 %s" % (f.get("tag"), f.get("file"), f.get("sha256")))
 
 # k2 app catalog [list|show|check|job|retry]
 cmd_app_catalog() {
+    # -h/--help anywhere before a bare -- prints the catalog help and sends
+    # nothing, even right after a flag that takes a value (0.46.17: `k2 app
+    # catalog job --app -h` asked for the jobs of an App named -h), as
+    # app install --catalog does. A value flag as the last word is a usage
+    # error, exit 2.
+    if _wants_help "$@"; then _app_catalog_usage; return 0; fi
     local sub="${1:-list}"
     case "$sub" in
         -h|--help|help) _app_catalog_usage; return 0 ;;
@@ -206,10 +212,13 @@ cmd_app_catalog() {
     local json_out=0 args=() id="" app=""
     while [ $# -gt 0 ]; do
         case "$1" in
+            --id|--app)
+                [ $# -ge 2 ] || { echo "usage: $1 needs a value (k2 app catalog --help)" >&2; exit 2; } ;;
+        esac
+        case "$1" in
             --json) json_out=1; shift ;;
-            --id) _need_value "$@"; id="${2:-}"; shift 2 ;;
-            --app) _need_value "$@"; app="${2:-}"; shift 2 ;;
-            -h|--help) _app_catalog_usage; return 0 ;;
+            --id) id="$2"; shift 2 ;;
+            --app) app="$2"; shift 2 ;;
             -*) echo "Unknown flag: $1 (k2 app catalog --help)" >&2; exit 2 ;;
             *) args+=("$1"); shift ;;
         esac

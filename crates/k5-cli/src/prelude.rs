@@ -211,6 +211,18 @@ pub fn gate(s: &Settings) -> Option<Gate> {
     None
 }
 
+/// Whether `args` (the whole command line after the program's name) has
+/// `-h` or `--help` in it and a gate stops it ([`gate`]). The shell's
+/// gates read those words (`_k2_offline_verb` lets such a line by the
+/// virtual desktop's guard, and some families skip the connection gate
+/// for it), so a family that answers a help line itself
+/// ([`crate::text::FAMILY_FORMS`]) hands it to the shell there, before
+/// anything is printed or sent. Where no gate stops it, the words change
+/// nothing in the gates.
+pub fn help_line_gated(args: &[std::ffi::OsString], s: &Settings) -> bool {
+    args.iter().any(|a| a == "-h" || a == "--help") && gate(s).is_some()
+}
+
 /// What the EXIT trap prints, gathered from the answers.
 #[derive(Debug, Default)]
 pub struct Closing {
@@ -580,6 +592,23 @@ mod tests {
             session: false,
             secrets_dir: None,
             home: "/h".into(),
+        }
+    }
+
+    #[test]
+    fn a_gated_help_line_is_the_shell_s() {
+        let line = |w: &[&str]| -> Vec<std::ffi::OsString> { w.iter().map(Into::into).collect() };
+        let owner = settings(Some("1"), Auth::Owner("o".into()), false);
+        let guarded = settings(Some("1"), Auth::None, true);
+        let no_port = settings(None, Auth::Owner("o".into()), false);
+        for help in [&["read", "--help"][..], &["inbox", "list", "-h"], &["x", "-h", "y"]] {
+            assert!(!help_line_gated(&line(help), &owner), "{help:?}");
+            assert!(help_line_gated(&line(help), &guarded), "{help:?}");
+            assert!(help_line_gated(&line(help), &no_port), "{help:?}");
+        }
+        for plain in [&["read", "acme"][..], &["setup", "help"], &["x", "--helpx"]] {
+            assert!(!help_line_gated(&line(plain), &guarded), "{plain:?}");
+            assert!(!help_line_gated(&line(plain), &no_port), "{plain:?}");
         }
     }
 

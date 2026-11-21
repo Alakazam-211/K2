@@ -97,6 +97,9 @@ pub enum Ask {
     Named(Named),
     /// `upgrade`.
     Upgrade(Upgrade),
+    /// `browse`, `list --all`, `request-read` and `requests`
+    /// ([`super::read`]).
+    Read(super::read::Ask),
 }
 
 /// `_db_named_post`'s `what`.
@@ -382,17 +385,23 @@ pub fn upgrade(a: &mut Words) -> Result<Form, Form> {
 }
 
 /// Whether the shell answers `ask`, from the environment's names and
-/// values: its compute library's internals, or `K2_CP_MAX_TIME` for the
-/// one call that reads it.
+/// values: its compute library's internals, `K2_CP_MAX_TIME` for
+/// `versions-access`, or a `K2_CP_MAX_TIME` the binary can't read as curl
+/// does for `request-read`'s POST.
 pub fn shells(
     ask: &Ask,
     vars: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
 ) -> bool {
+    let posts = matches!(ask, Ask::Read(super::read::Ask::RequestRead(_)));
     vars.into_iter().any(|(name, value)| {
+        let odd_max = || {
+            crate::families::compute::writes::post_max_time(Some(value.clone())).is_none()
+        };
         let name = name.to_string_lossy();
         !value.is_empty()
             && (matches!(name.as_ref(), "_K2_REFUSAL_AREA" | "_K2_NOANSWER_SOFT")
-                || (name == "K2_CP_MAX_TIME" && matches!(ask, Ask::VersionsAccess { .. })))
+                || (name == "K2_CP_MAX_TIME" && matches!(ask, Ask::VersionsAccess { .. }))
+                || (name == "K2_CP_MAX_TIME" && posts && odd_max()))
     })
 }
 
@@ -460,7 +469,7 @@ impl Cp<'_> {
     /// `_compute_split "$(_compute_send …)"`: the status and the body.
     /// `Err`: a POST that may have been applied, or a session's TCP call
     /// that would carry the owner token: its line, exit 1.
-    fn send(
+    pub(super) fn send(
         &mut self,
         post: bool,
         path: &str,
@@ -501,12 +510,13 @@ pub fn run(cp: &mut Cp, project: &str, ask: &Ask) -> Exit {
         Ask::VersionsAccess { on, json } => versions_access_send(cp, project, *on, *json),
         Ask::Named(k) => named_send(cp, project, k),
         Ask::Upgrade(u) => upgrade_send(cp, u),
+        Ask::Read(r) => super::read::run(cp, r),
     };
     r.unwrap_or_else(|e| e)
 }
 
 /// `printf '%s\n' "$_CP_BODY"`.
-fn print_body(body: &[u8]) -> Exit {
+pub(super) fn print_body(body: &[u8]) -> Exit {
     let mut text = body.to_vec();
     text.push(b'\n');
     match out::write_flushed(&mut std::io::stdout().lock(), &text) {
@@ -907,7 +917,7 @@ fn named_fail(body: &[u8]) -> Shown {
 }
 
 /// `raw[:200] or "no answer from the K2 daemon"`.
-fn hint_of(raw: &str) -> Value {
+pub(super) fn hint_of(raw: &str) -> Value {
     let head: String = raw.chars().take(200).collect();
     s(if head.is_empty() { NO_ANSWER } else { &head })
 }

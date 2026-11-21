@@ -1885,6 +1885,540 @@ fn db_compute_verbs_answer_as_the_shell_does() {
     }
 }
 
+const BROWSE: &str = r#"{"ok":true,"databases":[{"id":"d1","name":"ws_o_jobs","owner":"ops","apps":["jobs"],"yours":null},{"id":"d2","name":"ws_o_notes é","owner":"ops","apps":[],"yours":"read"},{"id":"d3","name":"a_database_name_longer_than_thirty","owner":null,"apps":["a","b"],"yours":"write"},{"id":"d4"}],"hint":"names only: no DSN"}"#;
+
+const CARD_UP: &str = r#"{"id":"pr_1","status":"pending","action":"db.read","text":"Let reader read the ws_o_jobs database (owned by ops, App jobs).","approvers":"owner or admin","routedTo":[{"login":"ada","role":"admin"},{"role":"owner"},{"login":"bo"}],"addr":"reader","next":"check once: k2 db requests"}"#;
+
+const CARD_WAITING: &str = r#"{"id":"pr_1","status":"already_pending","text":"","approvers":"owner or admin","routedTo":[]}"#;
+
+const DRY_RUN: &str = r#"{"status":"dry_run","action":"db.read","text":"Let reader read the ws_o_jobs database (owned by ops, App jobs).","routedTo":[{"login":"ada","role":"admin"}]}"#;
+
+const READ_ONLY: &str = r#"{"ok":true,"status":"read_only","readOnly":true,"name":"ws_o_notes","dsn":"postgres://ws_r_agent@127.0.0.1:5432/ws_o_notes","dsnHasPassword":false,"dsnHint":"no password shown"}"#;
+
+const REQUESTS: &str = r#"{"requests":[{"id":"pr_1","action":"db.read","params":{"db":"ws_o_jobs"},"state":"approved","message":"reader can read ws_o_jobs now"},{"id":"pr_2","params":null,"state":"pending","reason":"verify é"},{"id":"pr_3","params":{"db":null},"state":"denied"}]}"#;
+
+/// Thousands of databases, above 256 KiB.
+fn many_browsed(n: usize) -> String {
+    let rows: Vec<String> = (0..n)
+        .map(|i| {
+            format!(
+                r#"{{"id":"d{i}","name":"ws_owner_{i}_{}","owner":"workspace_{}","apps":["app_{i}","é"],"yours":{}}}"#,
+                "x".repeat(i % 40),
+                i % 7,
+                if i % 2 == 0 { "null" } else { r#""read""# }
+            )
+        })
+        .collect();
+    format!(r#"{{"ok":true,"databases":[{}]}}"#, rows.join(","))
+}
+
+/// q17's `db browse` (and `list --all`), `db request-read` and `db
+/// requests`: another workspace's database, read-only, on a card.
+#[test]
+fn db_reads_another_workspace_s_database() {
+    let rig = Rig::new(VERB, "dbread");
+    let big = many_browsed(3000);
+    assert!(
+        big.len() > 256 * 1024,
+        "the large answer is {} bytes",
+        big.len()
+    );
+    let cases = vec![
+        // browse.
+        // covers: db browse
+        ok_owner("browse", &["browse"], vec![ok(BROWSE)]),
+        // covers: db browse --json
+        ok_owner(
+            "browse --app --json",
+            &["browse", "--app", "jobs", "--json"],
+            vec![ok(BROWSE)],
+        ),
+        ok_owner(
+            "browse --app= with a space and an accent",
+            &["browse", "--app=a b/é"],
+            vec![ok(r#"{"databases":[]}"#)],
+        ),
+        ok_owner("list --all is browse", &["list", "--all"], vec![ok(BROWSE)]),
+        ok_owner(
+            "list --json --all",
+            &["list", "--json", "--all"],
+            vec![ok(BROWSE)],
+        ),
+        case(
+            "browse --workspace a folder",
+            &["browse", "--workspace", "sub"],
+            &[],
+            vec![ok(BROWSE)],
+            with_sub,
+            0,
+            1,
+        ),
+        ok_owner(
+            "browse, thousands of databases",
+            &["browse"],
+            vec![ok(&big)],
+        ),
+        ok_owner(
+            "browse --json, thousands of databases",
+            &["browse", "--json"],
+            vec![ok(&big)],
+        ),
+        case(
+            "browse, an unknown App: exit 4",
+            &["browse", "--app", "nope"],
+            &[],
+            vec![answer(
+                404,
+                r#"{"ok":false,"error":{"code":"app_not_found","hint":"this server has no App nope"}}"#,
+            )],
+            owner_and_port,
+            4,
+            1,
+        ),
+        case(
+            "browse, a 400 whose error is a word: exit 2",
+            &["browse"],
+            &[],
+            vec![answer(400, r#"{"error":"bad_app","hint":"h é"}"#)],
+            owner_and_port,
+            2,
+            1,
+        ),
+        case(
+            "browse, an error with a message only",
+            &["browse"],
+            &[],
+            vec![answer(403, r#"{"error":null,"message":"nope"}"#)],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "browse, an answer that is no JSON",
+            &["browse"],
+            &[],
+            vec![answer(502, "<html>bad gateway</html>")],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "browse, a list for an answer",
+            &["browse"],
+            &[],
+            vec![answer(500, "[1]")],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "browse, the permission note",
+            &["browse"],
+            &[],
+            vec![answer(403, PERMISSION_ASK)],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "browse, closed with nothing",
+            &["browse"],
+            &[],
+            vec![Reply::Close],
+            owner_and_port,
+            3,
+            1,
+        ),
+        traceback(case(
+            "browse, rows that are a number",
+            &["browse"],
+            &[],
+            vec![ok(r#"{"databases":5}"#)],
+            owner_and_port,
+            1,
+            1,
+        )),
+        traceback(case(
+            "browse, an App that is no word",
+            &["browse"],
+            &[],
+            vec![ok(r#"{"databases":[{"name":"a","apps":["x"]},{"name":"b","apps":[1]}]}"#)],
+            owner_and_port,
+            1,
+            1,
+        )),
+        traceback(case(
+            "browse, an answer that is no JSON",
+            &["browse"],
+            &[],
+            vec![ok("not json")],
+            owner_and_port,
+            1,
+            1,
+        )),
+        case("browse --app with no value", &["browse", "--app"], &[], vec![], owner_and_port, 2, 0),
+        case(
+            "browse --app then a flag",
+            &["browse", "--app", "--json"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case("browse, a stray word", &["browse", "x"], &[], vec![], owner_and_port, 2, 0),
+        case(
+            "list --all, a stray flag",
+            &["list", "--all", "--frob"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        // request-read.
+        // covers: db request-read
+        ok_owner(
+            "request-read: the card is up",
+            &[
+                "request-read",
+                "--db",
+                "ws_o_jobs",
+                "--why",
+                "verify the import",
+                "--assign",
+                "ada",
+            ],
+            vec![ok(CARD_UP)],
+        ),
+        // covers: db request-read --json
+        ok_owner(
+            "request-read --json: the card is up",
+            &["request-read", "--json", "--db", "ws_o_jobs"],
+            vec![ok(CARD_UP)],
+        ),
+        ok_owner(
+            "request-read --app --dry-run",
+            &["request-read", "--app", "jobs", "--dry-run"],
+            vec![ok(DRY_RUN)],
+        ),
+        ok_owner(
+            "request-read, a dry run nobody is routed to",
+            &["request-read", "--app=jobs", "--dry-run"],
+            vec![ok(r#"{"status":"dry_run","text":null}"#)],
+        ),
+        ok_owner(
+            "request-read, the card already waiting",
+            &["request-read", "--to=ada", "--app=jobs", "--why=é"],
+            vec![ok(CARD_WAITING)],
+        ),
+        ok_owner(
+            "request-read, already read",
+            &["request-read", "--db=ws_o_jobs"],
+            vec![ok(r#"{"status":"already_done","text":"you already read ws_o_jobs"}"#)],
+        ),
+        ok_owner(
+            "request-read, an answer with no text",
+            &["request-read", "--db", "d1"],
+            vec![ok(r#"{"status":"done","db":"é"}"#)],
+        ),
+        ok_owner(
+            "request-read, read-only",
+            &["request-read", "--db", "d2"],
+            vec![ok(READ_ONLY)],
+        ),
+        case(
+            "request-read, not found: exit 4",
+            &["request-read", "--db", "missing"],
+            &[],
+            vec![answer(
+                404,
+                r#"{"ok":false,"error":{"code":"not_found","hint":"this server has no database missing"}}"#,
+            )],
+            owner_and_port,
+            4,
+            1,
+        ),
+        case(
+            "request-read, your own: exit 3",
+            &["request-read", "--db", "mine"],
+            &[],
+            vec![answer(
+                409,
+                r#"{"ok":false,"error":{"code":"db_read_own","hint":"you own it"}}"#,
+            )],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "request-read, cards off: exit 3",
+            &["request-read", "--db", "off"],
+            &[],
+            vec![answer(
+                403,
+                r#"{"ok":false,"error":{"code":"permission_cards_off","hint":"an owner or admin turns on \"Let this agent ask for permission\""}}"#,
+            )],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "request-read, a 400: exit 2",
+            &["request-read", "--db", "x"],
+            &[],
+            vec![answer(400, r#"{"error":{"code":"usage"}}"#)],
+            owner_and_port,
+            2,
+            1,
+        ),
+        case(
+            "request-read, the permission note",
+            &["request-read", "--db", "x"],
+            &[],
+            vec![answer(403, PERMISSION_ASK)],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "request-read, closed with nothing",
+            &["request-read", "--db", "x"],
+            &[],
+            vec![Reply::Close],
+            owner_and_port,
+            3,
+            1,
+        ),
+        traceback(case(
+            "request-read, an answer that is no JSON",
+            &["request-read", "--db", "x"],
+            &[],
+            vec![ok("not json")],
+            owner_and_port,
+            1,
+            1,
+        )),
+        traceback(case(
+            "request-read --json, an answer that is a list",
+            &["request-read", "--db", "x", "--json"],
+            &[],
+            vec![ok("[1]")],
+            owner_and_port,
+            1,
+            1,
+        )),
+        traceback(case(
+            "request-read, an addr that is a number",
+            &["request-read", "--db", "x"],
+            &[],
+            vec![ok(r#"{"id":"p","status":"pending","addr":7}"#)],
+            owner_and_port,
+            1,
+            1,
+        )),
+        traceback(case(
+            "request-read, a login that is a number",
+            &["request-read", "--db", "x"],
+            &[],
+            vec![ok(r#"{"id":"p","status":"pending","routedTo":[{"login":"a"},{"login":2}]}"#)],
+            owner_and_port,
+            1,
+            1,
+        )),
+        traceback(case(
+            "request-read, a routed row that is a word",
+            &["request-read", "--db", "x", "--dry-run"],
+            &[],
+            vec![ok(r#"{"status":"dry_run","routedTo":["ada"]}"#)],
+            owner_and_port,
+            1,
+            1,
+        )),
+        Case {
+            env: with_passport(&[]),
+            ..case(
+                "request-read with a passport",
+                &["request-read", "--db", "ws_o_jobs"],
+                &[],
+                vec![ok(CARD_UP)],
+                nothing,
+                0,
+                1,
+            )
+        },
+        cell(case(
+            "request-read on the cell socket",
+            &["request-read", "--db", "ws_o_jobs"],
+            &[],
+            vec![ok(CARD_UP)],
+            nothing,
+            0,
+            1,
+        )),
+        waited(cell(case(
+            "request-read on the cell socket, closed with nothing",
+            &["request-read", "--db", "ws_o_jobs"],
+            &[],
+            vec![Reply::Close],
+            nothing,
+            1,
+            1,
+        ))),
+        case(
+            "request-read with K2_CP_MAX_TIME set",
+            &["request-read", "--db", "ws_o_jobs"],
+            &[("K2_CP_MAX_TIME", "30")],
+            vec![ok(CARD_UP)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        shell(case(
+            "request-read with a K2_CP_MAX_TIME curl reads its own way",
+            &["request-read", "--db", "ws_o_jobs"],
+            &[("K2_CP_MAX_TIME", "1e3")],
+            vec![ok(CARD_UP)],
+            owner_and_port,
+            0,
+            1,
+        )),
+        case("request-read alone", &["request-read"], &[], vec![], owner_and_port, 2, 0),
+        case(
+            "request-read --db with no value",
+            &["request-read", "--db"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "request-read --why with no value",
+            &["request-read", "--why"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "request-read --db then a flag",
+            &["request-read", "--db", "-x"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "request-read, a stray flag",
+            &["request-read", "--db", "x", "--frob"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "request-read --why alone",
+            &["request-read", "--why", "w", "--db="],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        // requests.
+        // covers: db requests
+        ok_owner("requests", &["requests"], vec![ok(REQUESTS)]),
+        // covers: db requests --json
+        ok_owner("requests --json", &["requests", "--json"], vec![ok(REQUESTS)]),
+        ok_owner(
+            "requests, none asked",
+            &["requests"],
+            vec![ok(r#"{"requests":[]}"#)],
+        ),
+        case(
+            "requests, cards off: exit 3",
+            &["requests"],
+            &[],
+            vec![answer(404, "")],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "requests, cards off with the permission note",
+            &["requests", "--json"],
+            &[],
+            vec![answer(404, PERMISSION_ASK)],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "requests, a refusal",
+            &["requests"],
+            &[],
+            vec![answer(500, r#"{"error":{"code":"boom","hint":"h"}}"#)],
+            owner_and_port,
+            3,
+            1,
+        ),
+        traceback(case(
+            "requests, params that are a word",
+            &["requests"],
+            &[],
+            vec![ok(r#"{"requests":[{"id":"a","params":"x"}]}"#)],
+            owner_and_port,
+            1,
+            1,
+        )),
+        case("requests, a stray word", &["requests", "extra"], &[], vec![], owner_and_port, 2, 0),
+        // Help never acts.
+        shell(case(
+            "request-read --help",
+            &["request-read", "--help"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        )),
+        shell(case(
+            "request-read --db x -h",
+            &["request-read", "--db", "x", "-h"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        )),
+        shell(case(
+            "browse --help",
+            &["browse", "--help"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        )),
+        shell(case(
+            "requests --help",
+            &["requests", "--help"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        )),
+    ];
+    for c in &cases {
+        rig.check(c);
+    }
+}
+
 const DSN: &str = r#"{"ok":true,"dsn":"postgres://u:pw@127.0.0.1:5432/app"}"#;
 
 /// A rig whose `PATH` starts with `dbkid`: it logs its argv and the

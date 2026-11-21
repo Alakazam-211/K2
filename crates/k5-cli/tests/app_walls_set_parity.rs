@@ -595,6 +595,171 @@ fn db_check_and_disconnect_answer_as_the_shell_does() {
     }
 }
 
+const CARD_UP: &str = r#"{"id":"pr_1","status":"pending","action":"db.read","text":"Let reader read the ws_o_jobs database (owned by ops, App jobs).","approvers":"owner or admin","routedTo":[{"login":"owner","role":"owner"}],"addr":"reader","next":"check once: k2 db requests"}"#;
+
+const READ_ONLY: &str = r#"{"ok":true,"status":"read_only","readOnly":true,"name":"ws_o_notes","dsn":"postgres://ws_r_agent@127.0.0.1:5432/ws_o_notes","dsnHasPassword":false,"dsnHint":"no password shown"}"#;
+
+/// q17's `db connect <app> --read-only`: the ask of `db request-read`
+/// with `connect`. A card that is up is held (2); once the caller reads
+/// the database, its read-only DSN with no password (0).
+#[test]
+fn db_connect_read_only() {
+    let rig = Rig::new(VERB, "dbro");
+    let v = vec![
+        one(
+            "db connect --read-only: the card is up, held",
+            &["db", "connect", "jobs", "--read-only", "--why", "verify"],
+            200,
+            CARD_UP,
+            2,
+        ),
+        one(
+            "db connect --read-only --json: held",
+            &["db", "connect", "--read-only", "jobs", "--json", "--assign", "ada"],
+            200,
+            CARD_UP,
+            2,
+        ),
+        one(
+            "db connect --read-only: --reason is the why",
+            &["db", "connect", "jobs", "--read-only", "--reason", "r é", "--db=d"],
+            200,
+            CARD_UP,
+            2,
+        ),
+        one(
+            "db connect --read-only: --why over --reason",
+            &["db", "connect", "jobs", "--read-only", "--reason", "r", "--why", "w"],
+            200,
+            r#"{"id":"pr_1","status":"already_pending"}"#,
+            2,
+        ),
+        one(
+            "db connect --read-only: the read-only DSN",
+            &["db", "connect", "readable", "--read-only"],
+            200,
+            READ_ONLY,
+            0,
+        ),
+        one(
+            "db connect --read-only --json: the read-only DSN",
+            &["db", "connect", "readable", "--read-only", "--json"],
+            200,
+            READ_ONLY,
+            0,
+        ),
+        one(
+            "db connect --read-only: your own App's database, exit 3",
+            &["db", "connect", "mine", "--read-only"],
+            409,
+            r#"{"ok":false,"error":{"code":"db_read_own","hint":"you own it"}}"#,
+            3,
+        ),
+        one(
+            "db connect --read-only: not found, exit 4",
+            &["db", "connect", "gone", "--read-only"],
+            404,
+            r#"{"ok":false,"error":{"code":"app_not_found","hint":"no App gone"}}"#,
+            4,
+        ),
+        one(
+            "db connect --read-only: a 400, exit 2",
+            &["db", "connect", "jobs", "--read-only"],
+            400,
+            r#"{"error":"usage"}"#,
+            2,
+        ),
+        one(
+            "db connect --read-only: the permission note",
+            &["db", "connect", "jobs", "--read-only"],
+            403,
+            PERMISSION_ASK,
+            3,
+        ),
+        traceback(one(
+            "db connect --read-only: an answer that is no JSON",
+            &["db", "connect", "jobs", "--read-only"],
+            200,
+            "not json",
+            1,
+        )),
+        case(
+            "db connect --read-only: closed with nothing",
+            &["db", "connect", "jobs", "--read-only"],
+            &[],
+            vec![Reply::Close],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "db connect --read-only with K2_CP_MAX_TIME set",
+            &["db", "connect", "jobs", "--read-only"],
+            &[("K2_CP_MAX_TIME", "30")],
+            vec![Reply::Answer(200, CARD_UP.to_string())],
+            owner_and_port,
+            2,
+            1,
+        ),
+        shell(case(
+            "db connect --read-only with a K2_CP_MAX_TIME curl reads its own way",
+            &["db", "connect", "jobs", "--read-only"],
+            &[("K2_CP_MAX_TIME", "1e3")],
+            vec![Reply::Answer(200, CARD_UP.to_string())],
+            owner_and_port,
+            2,
+            1,
+        )),
+        // Usage: nothing sent, exit 1.
+        stop(
+            "db connect --read-only --new",
+            &["db", "connect", "jobs", "--read-only", "--new"],
+            1,
+        ),
+        stop(
+            "db connect --read-only --as",
+            &["db", "connect", "jobs", "--read-only", "--as", "X_URL"],
+            1,
+        ),
+        stop(
+            "db connect --read-only --wait",
+            &["db", "connect", "jobs", "--wait", "--read-only"],
+            1,
+        ),
+        stop(
+            "db connect --new --assign: no --read-only",
+            &["db", "connect", "jobs", "--new", "--assign", "ada"],
+            1,
+        ),
+        stop(
+            "db connect --why with no value",
+            &["db", "connect", "jobs", "--read-only", "--why"],
+            1,
+        ),
+        stop(
+            "db connect --read-only with no App",
+            &["db", "connect", "--read-only"],
+            1,
+        ),
+        // `db status` reads the same words: --read-only and --why are taken.
+        one(
+            "db status --read-only --why w",
+            &["db", "status", "jobs", "--read-only", "--why", "w"],
+            200,
+            r#"{"app":"jobs","kind":"node","running":true,"postgres":true,"connections":[]}"#,
+            0,
+        ),
+        shell(stop(
+            "db connect --read-only --help",
+            &["db", "connect", "jobs", "--read-only", "--help"],
+            0,
+        )),
+    ];
+    for c in &v {
+        rig.check(c);
+    }
+}
+
 #[test]
 fn help_never_acts() {
     let rig = Rig::new(VERB, "wshelp");

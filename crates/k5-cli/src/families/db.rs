@@ -51,6 +51,7 @@ use std::path::{Path, PathBuf};
 pub mod cp;
 pub mod home;
 pub mod py;
+pub mod read;
 pub mod run;
 #[cfg(test)]
 mod tests;
@@ -274,15 +275,26 @@ fn verb(words: &[&str]) -> Result<Form, Form> {
                 "doctor" => Verb::Doctor,
                 _ => Verb::List,
             });
+            let mut all = false;
             while let Some(w) = a.first() {
                 match w {
                     "--json" => k.json = true,
+                    "--all" if sub == "list" => all = true,
                     _ => return Err(unexpected(w)),
                 }
                 a.shift(1);
             }
+            if all {
+                return Ok(read::form(read::Ask::Browse {
+                    json: k.json,
+                    app: String::new(),
+                }));
+            }
             Form::Py(Box::new(k))
         }
+        "browse" => read::browse(&mut a)?,
+        "request-read" => read::request_read(&mut a)?,
+        "requests" => read::requests(&mut a)?,
         "run" => run::parse(&mut a)?,
         "versions-access" => cp::versions_access(&mut a)?,
         "cluster" => cp::cluster(&mut a)?,

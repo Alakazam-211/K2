@@ -10,6 +10,10 @@
 //!   exit 2; with `--wait` the card goes to stderr and the status is read
 //!   every 5 seconds until the owner answers or `--timeout` runs out.
 //! - `check` and `disconnect` POST once (curl's 300 seconds).
+//! - `connect --read-only` (0.46.17) is the ask `db request-read` makes,
+//!   with `connect` ([`crate::families::db::read::posted`]): a card that
+//!   is up is held (2); once the caller reads the database, its read-only
+//!   DSN with no password.
 //!
 //! Only ids and names are printed, never a URL.
 
@@ -25,6 +29,18 @@ use crate::transport::encode::quote;
 use k2_client::cli_name;
 use std::time::Duration;
 
+/// `connect --read-only` with a flag that makes a new connection.
+const READ_ONLY_ALONE: &str = concat!(
+    "{\"error\":\"usage\",\"hint\":\"--read-only takes the App and, when it uses several databases, --db <name>; not --new, --major, --cluster, --name, --as, --no-migrate-url or --wait (",
+    cli_name!(),
+    " app db --help)\"}"
+);
+/// `--why` or `--assign` on a connect without `--read-only`.
+const WHY_READ_ONLY: &str = concat!(
+    "{\"error\":\"usage\",\"hint\":\"--why and --assign go with --read-only (an App connect takes --reason) (",
+    cli_name!(),
+    " app db --help)\"}"
+);
 /// `connect` with neither `--new` nor `--db`.
 const WHICH_DB: &str = concat!(
     "{\"error\":\"usage\",\"hint\":\"say which database: --new or --db <name> (",
@@ -51,6 +67,11 @@ pub struct Words {
     pub timeout: i64,
     pub drop_roles: bool,
     pub reason: String,
+    /// `--read-only` (0.46.17): another workspace's App database, read
+    /// only, on a card ([`read_only`]).
+    pub read_only: bool,
+    pub why: String,
+    pub assign: String,
 }
 
 /// `cmd_app_db`'s loop and checks for `sub`. A mistake is
@@ -70,7 +91,9 @@ pub fn words(sub: &str, words: &[&str]) -> Result<Words, Stop> {
             "--no-migrate-url" => w.no_migrate_url = true,
             "--wait" => w.wait = true,
             "--drop-roles" => w.drop_roles = true,
-            "--db" | "--major" | "--cluster" | "--name" | "--as" | "--timeout" | "--reason" => {
+            "--read-only" => w.read_only = true,
+            "--db" | "--major" | "--cluster" | "--name" | "--as" | "--timeout" | "--reason"
+            | "--why" | "--assign" => {
                 let v = rest.get(1).copied().unwrap_or("");
                 if v.is_empty() {
                     bad = format!("{word} needs a value");
@@ -84,6 +107,8 @@ pub fn words(sub: &str, words: &[&str]) -> Result<Words, Stop> {
                     "--name" => w.name = v,
                     "--as" => w.r#as = v,
                     "--reason" => w.reason = v,
+                    "--why" => w.why = v,
+                    "--assign" => w.assign = v,
                     _ => w.timeout = compute_secs(&v)?,
                 }
                 rest = &rest[2..];
@@ -196,6 +221,17 @@ pub fn parse(words: &[&str]) -> Option<Result<Ask, Stop>> {
         return None;
     }
     let write = match *words.first()? {
+        // `--read-only`'s POST reads `K2_CP_MAX_TIME` as curl does: a
+        // value the binary can't read the same way is the shell's.
+        "connect"
+            if words.contains(&"--read-only")
+                && crate::families::compute::writes::post_max_time(std::env::var_os(
+                    "K2_CP_MAX_TIME",
+                ))
+                .is_none() =>
+        {
+            return None
+        }
         "connect" => Write::Connect,
         "check" => Write::Check,
         "disconnect" => Write::Disconnect,
@@ -266,7 +302,48 @@ fn printed(body: &[u8], json: bool) -> Shown {
     super::access::answer(body, false, print_lines)
 }
 
+/// `connect --read-only`: the ask `db request-read` makes, with
+/// `connect` (`_db_read_post … 2`): a card that is up is held, exit 2;
+/// once the caller reads the database, its read-only DSN (no password).
+fn read_only(ctx: &mut Ctx, w: &Words) -> Answer {
+    if w.new
+        || !format!("{}{}{}{}", w.major, w.cluster, w.name, w.r#as).is_empty()
+        || w.no_migrate_url
+        || w.wait
+    {
+        out::stderr_line(READ_ONLY_ALONE);
+        return Err(Exit::Error);
+    }
+    let why = if w.why.is_empty() { &w.reason } else { &w.why };
+    let body = Cj::new()
+        .s("app", &w.app)
+        .s("db", &w.db)
+        .s("why", why)
+        .s("assign", &w.assign)
+        .b("connect", "1")
+        .body();
+    let max = crate::families::compute::writes::post_max_time(std::env::var_os("K2_CP_MAX_TIME"))
+        .flatten();
+    let before = std::mem::replace(&mut ctx.client.compute_post_max_time, max);
+    let sent = ctx.send(true, "/cli/db/request-read", &body, false);
+    ctx.client.compute_post_max_time = before;
+    let s = sent?;
+    Err(crate::families::db::read::posted(
+        &s.status,
+        &s.body,
+        w.json,
+        Exit::Usage,
+    ))
+}
+
 fn connect(ctx: &mut Ctx, w: &Words) -> Answer {
+    if w.read_only {
+        return read_only(ctx, w);
+    }
+    if !w.why.is_empty() || !w.assign.is_empty() {
+        out::stderr_line(WHY_READ_ONLY);
+        return Err(Exit::Error);
+    }
     if !w.new && w.db.is_empty() {
         out::stderr_line(WHICH_DB);
         return Err(Exit::Error);

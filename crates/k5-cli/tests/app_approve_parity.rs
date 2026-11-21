@@ -346,7 +346,6 @@ fn approvals_name_each_card_as_the_shell_does() {
     let rig = Rig::new(VERB, "apprcards");
     let can = CARDS.replacen(r#""canApprove":false"#, r#""canApprove":true"#, 1);
     let v = vec![
-        // covers: app approvals
         read("approvals <id>: the card lines", &["approvals", "w_abc"], CARDS),
         read(
             "approvals --state denied --app",
@@ -363,7 +362,6 @@ fn approvals_name_each_card_as_the_shell_does() {
             &["approvals", "--state", "denied", "--all"],
             CARDS,
         ),
-        // covers: app approvals --json
         read("approvals <id> --json", &["approvals", "w_abc", "--json"], CARDS),
         stop("approvals: --state given last", &["approvals", "--state"], 2),
         stop(

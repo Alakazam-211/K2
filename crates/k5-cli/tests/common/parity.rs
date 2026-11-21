@@ -1149,7 +1149,8 @@ pub fn python3_version() -> (u32, u32) {
 const NUL_WARNING: &str = ": warning: command substitution: ignored null byte in input\n";
 
 /// `stderr` without its one line `<cli/k2>: line <n>: <array>[@]: unbound
-/// variable` naming one of `arrays` ([`EmptyArray`]).
+/// variable` (or `<array>[*]`, where the script reads `"${a[*]}"`) naming
+/// one of `arrays` ([`EmptyArray`]).
 fn without_unbound_line(name: &str, stderr: &str, arrays: &[&str]) -> String {
     let head = format!("{}: line ", cli_k2().display());
     let unbound = |l: &str| {
@@ -1158,9 +1159,10 @@ fn without_unbound_line(name: &str, stderr: &str, arrays: &[&str]) -> String {
             .is_some_and(|(n, what)| {
                 !n.is_empty()
                     && n.bytes().all(|b| b.is_ascii_digit())
-                    && arrays
-                        .iter()
-                        .any(|a| what == format!("{a}[@]: unbound variable\n"))
+                    && arrays.iter().any(|a| {
+                        what == format!("{a}[@]: unbound variable\n")
+                            || what == format!("{a}[*]: unbound variable\n")
+                    })
             })
     };
     let (lines, rest): (Vec<&str>, Vec<&str>) =

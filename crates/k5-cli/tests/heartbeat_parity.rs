@@ -1632,15 +1632,22 @@ fn heartbeat_with_no_answer() {
                 1,
             )
         },
-        waited(case(
-            "an empty reply to a fire",
-            &["fire", "x"],
-            &[],
-            vec![Reply::Close],
-            owner_and_port,
-            141,
-            1,
-        )),
+        // bash32-pipe-reader: the fire's reader too.
+        Case {
+            compare: Compare::Bash32PipeReader {
+                stdout: "",
+                stderr: "Error: Expecting value: line 1 column 1 (char 0)\n",
+            },
+            ..case(
+                "an empty reply to a fire",
+                &["fire", "x"],
+                &[],
+                vec![Reply::Close],
+                owner_and_port,
+                141,
+                1,
+            )
+        },
         waited(with(
             cell(),
             case(

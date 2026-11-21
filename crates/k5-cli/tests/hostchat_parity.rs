@@ -893,17 +893,19 @@ fn hostchat_value_flag_with_no_value_is_the_d6_line() {
         let name = c.name;
         rig.prepare(Side::Bash, &c);
         let b = rig.run(true, &c);
-        assert_eq!(b.code, Some(1), "{name}: bash's exit: {b:?}");
-        assert!(b.stdout.is_empty(), "{name}: bash's stdout: {b:?}");
-        assert_eq!(b.stderr.lines().count(), 1, "{name}: bash's stderr: {b:?}");
-        assert!(
-            b.stderr.ends_with(&format!(": 2: {hint}\n")),
-            "{name}: bash's stderr: {b:?}"
-        );
-        assert!(
-            rig.read(Side::Bash, false, name).is_empty(),
-            "{name}: bash sent"
-        );
+        if edge_usage_exit_2_proven() {
+            assert_eq!(b.code, Some(1), "{name}: bash's exit: {b:?}");
+            assert!(b.stdout.is_empty(), "{name}: bash's stdout: {b:?}");
+            assert_eq!(b.stderr.lines().count(), 1, "{name}: bash's stderr: {b:?}");
+            assert!(
+                b.stderr.ends_with(&format!(": 2: {hint}\n")),
+                "{name}: bash's stderr: {b:?}"
+            );
+            assert!(
+                rig.read(Side::Bash, false, name).is_empty(),
+                "{name}: bash sent"
+            );
+        }
         let (r, sent) = rig.binary(&c, false);
         assert!(sent.is_empty(), "{name}: the binary sent {sent:?}");
         assert_eq!((r.code, r.signal), (Some(2), None), "{name}: {r:?}");

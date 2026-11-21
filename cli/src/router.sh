@@ -807,15 +807,16 @@ case "${1:-help}" in
             grant)
                 case "${3:-}" in
                     ""|list|add|create|rm|remove|delete|revoke|copy-host|copyhost|-h|--help)
-                        if _wants_help "${@:2}"; then _skin_usage; _app_rt_usage >&2; exit 0; fi
+                        if _wants_help "${@:2}"; then _app_family_usage; _app_rt_usage; exit 0; fi
                         ;;
                 esac
                 shift; cmd_app "$@"
                 ;;
             *)
+                # Help on stdout, exit 0, as every other help page.
                 if _wants_help "${@:2}"; then
-                    _skin_usage
-                    _app_rt_usage >&2
+                    _app_family_usage
+                    _app_rt_usage
                     exit 0
                 fi
                 shift; cmd_app "$@"

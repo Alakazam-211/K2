@@ -86,9 +86,11 @@ while [ $# -gt 0 ]; do
 done
 
 # Pages printed by a command other than the one their name gives:
-# <file under cli/text/help>|<argv>
+# <file under cli/text/help>|<argv> (a trailing " 2>" on the argv: that
+# command prints it on stderr, whatever stream its opener names; `k2 app
+# help` is a usage error, while `k2 app --help` prints the page on stdout)
 ENTRY='
-app.txt|app help
+app.txt|app help 2>
 app/box-service.txt|app box-service help
 app/doctor-store.txt|app doctor --store --help
 app/door.txt|app door help
@@ -132,7 +134,7 @@ help deprecated|_deprecated.txt ... _deprecated-end.txt
 chat --help|chat/_head.txt chat/_manage.txt chat/_end.txt
 sources propose --help|... sources/_flags.txt
 app doctor --help|app/_runtime.txt
-app --help 2>|app.txt app/_runtime.txt
+app --help|app.txt app/_runtime.txt
 wiki nope 2>|... wiki/_unknown.txt
 '
 
@@ -215,6 +217,7 @@ for rel in $files; do
     [ -n "$opener" ] || { bad "$rel is not included by any part"; continue; }
     to_err=0
     case "$opener" in *">&2"*) to_err=1 ;; esac
+    case "$argv" in *" 2>") to_err=1; argv="${argv% 2>}" ;; esac
     want_of "$rel" "$SANDBOX/out/want"
     # shellcheck disable=SC2086  # argv is words
     check "$rel" "$SANDBOX/out/want" "$to_err" $argv

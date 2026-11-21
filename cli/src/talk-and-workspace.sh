@@ -2883,11 +2883,17 @@ _teach_skin_token_now_app_token() {
     echo "k2 skin-token is now k2 app token — this command still works." >&2
 }
 
-_skin_usage() {
-    # `#if-cards` / `#if-no-cards` lines: `_perm_lines` (permission.sh).
-    cat <<'EOF' | _perm_lines >&2
+# The App family page on stdout, for `k2 app --help`. `#if-cards` /
+# `#if-no-cards` lines: `_perm_lines` (permission.sh).
+_app_family_usage() {
+    cat <<'EOF' | _perm_lines
 %include cli/text/help/app.txt
 EOF
+}
+
+# The same page on stderr, for a usage error.
+_skin_usage() {
+    _app_family_usage >&2
 }
 
 # Shared printer for validate answers ({ok, status, errors, warnings, ...}):

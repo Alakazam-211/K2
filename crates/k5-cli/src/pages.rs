@@ -130,7 +130,7 @@ pub const APPS_WITH_PASSPORT: bool = true;
 /// are on: on, its page (text or `--json`); off, an unknown topic. True:
 /// the binary asks the same way and prints the page or the shell's error
 /// for the answer. False: the shell answers it. Without a passport it is
-/// always the shell's error.
+/// always the shell's error, which the binary prints (nothing asked).
 pub const PERMISSIONS_WITH_PASSPORT: bool = true;
 
 /// The captured help forms whose page goes through the permission cards
@@ -593,13 +593,8 @@ pub fn study_page(
     let on = match cards_switch(s) {
         None => false,
         // No passport: cards are off and nothing is asked; the cards-only
-        // topic is then unknown (the shell's error).
-        Some(_) if !p.passport => {
-            if cards_only {
-                return None;
-            }
-            false
-        }
+        // topic is then unknown (the refusal below).
+        Some(_) if !p.passport => false,
         Some(false) => return None,
         Some(true) => {
             // What python3 will read must be known to read as here before
@@ -1454,9 +1449,13 @@ mod tests {
                 assert_eq!(study_page(s, &with, &env, never), None, "{s:?}");
             }
             // No passport: cards off, nothing asked; the cards-only topic
-            // is the shell's error.
-            let page = study_page(s, &without, &env, never);
-            assert_eq!(page.is_none(), s == apps("permissions"), "{s:?}");
+            // is the shell's error, the refusal and the usage on stderr.
+            let page = study_page(s, &without, &env, never).expect("the page");
+            if s == apps("permissions") {
+                assert!(page.stderr, "{s:?}");
+                assert_eq!(page.exit, Exit::Usage, "{s:?}");
+                assert!(page.text.starts_with("Error: unknown study topic 'permissions'\n"));
+            }
         }
         let errors = Study::Page {
             topic: "errors",

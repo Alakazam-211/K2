@@ -26,9 +26,8 @@
 #    the binary's hand-over to bash broken: K5_HOME_OVERRIDE set to a
 #    relative path, which bash never reads and the binary refuses before
 #    it runs bash. So a pass is the binary's own answer. The forms bash
-#    keeps (the list as JSON, an unknown topic, the bash pages, the cards
-#    page without a passport, errors) must fail that way, never print a
-#    page.
+#    keeps (an unknown topic, the bash pages, errors but the cards page's
+#    refusal without a passport) must fail that way, never print a page.
 # 4. Also with the binary: with a passport, the pages that ask the daemon
 #    whether permission cards are on (the list, the usage, apps, skins,
 #    permissions), against a stub daemon of this script's own that says
@@ -232,7 +231,10 @@ if [ "$NEW" != "$CLI_BASH_SOURCE" ]; then
     native --json
     native list --json
     handed nope
-    handed "$CARDS_ONLY"
+    # The cards-only topic with no passport: cards are off without asking,
+    # so it is the refusal and the usage, which the binary prints itself.
+    native "$CARDS_ONLY"
+    native "$CARDS_ONLY" --json
     handed --bogus
     handed errors db
     handed -- errors

@@ -76,13 +76,12 @@ fn shell(who: CalledAs, args: &[OsString]) -> Exit {
     fallthrough::hand_off(who, args)
 }
 
-/// A line a family handed back: its captured help page
-/// ([`front::captured_help`]), or the shell's.
-fn handed_back(who: CalledAs, args: &[OsString]) -> Exit {
-    match front::captured_help(args) {
-        Some(form) => page(who, args, |p, env| {
-            pages::help_page(form, p, env, || passport::current(args).would_refuse())
-        }),
+/// A help page the binary could not print (its gate): a native family's
+/// help-word line goes to the family's own code first
+/// ([`front::help_word_family`]), anything else to the shell.
+fn after_help_gate(who: CalledAs, args: &[OsString]) -> Exit {
+    match front::help_word_family(args) {
+        Some(noun) => (noun.run)(args).unwrap_or_else(|| shell(who, args)),
         None => shell(who, args),
     }
 }
@@ -94,13 +93,22 @@ fn page(
     args: &[OsString],
     answer: impl FnOnce(&Prelude, &Env) -> Option<Page>,
 ) -> Exit {
+    page_or(answer, || shell(who, args))
+}
+
+/// [`page`], with `otherwise` in place of the shell when the binary
+/// can't print it.
+fn page_or(
+    answer: impl FnOnce(&Prelude, &Env) -> Option<Page>,
+    otherwise: impl FnOnce() -> Exit,
+) -> Exit {
     let env = Env::current();
     let found = offline::shell_pwd(&env)
         .and_then(|cwd| offline::prelude(&env, &cwd))
         .ok()
         .and_then(|p| answer(&p, &env));
     let Some(page) = found else {
-        return shell(who, args);
+        return otherwise();
     };
     if let Some(lead) = &page.lead {
         // As `echo ... >&2` under `set -e`: a stderr that can't be written
@@ -152,16 +160,16 @@ fn main() {
         Route::CliStatus { json } => cli_status(&args, json),
         Route::CliHelp => print(cli_status::HELP, Exit::Ok),
         // A family's code (its row's `run`, in its module): a form it
-        // hands back goes to the shell before anything is printed or sent,
-        // or, when it is a captured help line, to that page.
-        Route::Family(noun) => (noun.run)(&args).unwrap_or_else(|| handed_back(who, &args)),
+        // hands back goes to the shell before anything is printed or sent.
+        Route::Family(noun) => (noun.run)(&args).unwrap_or_else(|| shell(who, &args)),
         Route::Spec(row) => spec::run(row, &args).unwrap_or_else(|| shell(who, &args)),
         Route::Study(s) => page(who, &args, |p, env| {
             pages::study_page(s, p, env, || passport::current(&args).would_refuse())
         }),
-        Route::Help(form) => page(who, &args, |p, env| {
-            pages::help_page(form, p, env, || passport::current(&args).would_refuse())
-        }),
+        Route::Help(form) => page_or(
+            |p, env| pages::help_page(form, p, env, || passport::current(&args).would_refuse()),
+            || after_help_gate(who, &args),
+        ),
         Route::Daily => page(who, &args, |p, env| {
             pages::daily_page(p, env, || passport::current(&args).would_refuse())
         }),

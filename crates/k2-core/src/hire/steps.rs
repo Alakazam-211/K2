@@ -98,10 +98,17 @@ pub fn check_preset(value: Option<&str>) -> Result<(), HireError> {
     if presets.iter().any(|p| p.id == v || p.command.split_whitespace().next() == Some(v)) {
         return Ok(());
     }
-    Err(HireError::usage(format!(
-        "preset '{v}' doesn't exist: use a preset id, or its command, from `{} preset list`",
-        crate::brand::CLI_NAME
-    )))
+    // Name the fix: the server's presets, as `k2 preset list` orders
+    // them, each by its command word and its id.
+    let choices: Vec<String> = presets
+        .iter()
+        .map(|p| match p.command.split_whitespace().next() {
+            Some(word) => format!("{word} ({})", p.id),
+            None => p.id.clone(),
+        })
+        .collect();
+    let choices = if choices.is_empty() { "none (add one: `{cli} preset add`)".replace("{cli}", crate::brand::CLI_NAME) } else { choices.join(", ") };
+    Err(HireError::usage(format!("preset {v} no longer exists on this server; pick one of: {choices}")))
 }
 
 pub fn set_color(path: &str, color: &str) -> Result<bool, HireError> {

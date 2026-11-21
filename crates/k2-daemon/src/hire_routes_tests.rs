@@ -1237,7 +1237,20 @@ const NO_SUCH_PRESET: &str = "00000000-0000-4000-8000-0000000000ff";
 fn assert_no_such_preset(st: u16, v: &Value) {
     assert_eq!((st, v["error"]["code"].as_str()), (400, Some("usage")), "{v}");
     let hint = v["error"]["hint"].as_str().expect("hint");
-    assert!(hint.contains(&format!("preset '{NO_SUCH_PRESET}' doesn't exist")), "{hint}");
+    assert!(hint.contains(&format!("preset {NO_SUCH_PRESET} no longer exists on this server; pick one of: ")), "{hint}");
+    // The fix is named: the server's presets, by command word and id, in
+    // `k2 preset list` order.
+    let list: Vec<String> = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::db::schema::AgentPreset::list(&conn)
+            .expect("presets")
+            .iter()
+            .map(|p| format!("{} ({})", p.command.split_whitespace().next().expect("a command"), p.id))
+            .collect()
+    };
+    assert!(list.iter().any(|c| c.starts_with("codex (")), "the built-ins are seeded: {list:?}");
+    assert!(hint.ends_with(&format!("pick one of: {}", list.join(", "))), "{hint}");
 }
 
 /// K2's ruling: every hire door refuses a preset that doesn't exist (400,

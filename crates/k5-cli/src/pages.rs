@@ -1135,8 +1135,7 @@ mod tests {
     /// the default brand (`brand/k2`), so under another brand
     /// (`K2_BRAND_DIR`) this build's product name goes back to that one.
     fn as_the_shell_spells(line: &str) -> String {
-        let p = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../brand/k2/brand.toml");
+        let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../brand/k2/brand.toml");
         let toml =
             std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("read {}: {e}", p.display()));
         let product = toml

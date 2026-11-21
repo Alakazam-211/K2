@@ -178,7 +178,10 @@ fn a_value_flag_with_no_value_is_the_d6_line() {
         want("--public-url")
     );
     assert_eq!(media::parse(&["probe", "--udp"]), want("--udp"));
-    assert_eq!(media::parse(&["install", "--voice-url", ""]), want("--voice-url"));
+    assert_eq!(
+        media::parse(&["install", "--voice-url", ""]),
+        want("--voice-url")
+    );
     assert_eq!(users::parse(&["invite", "ann", "--email"]), want("--email"));
 }
 
@@ -212,7 +215,9 @@ fn owner_sessions_words() {
     let usage = |hint: &str| Plan::Bad(crate::families::chat::bad_line(hint));
     assert_eq!(
         admin::owner_sessions(&["end", "--all", "own_1"]),
-        usage(&format!("{CLI_NAME} hostchat owner-sessions end <own_\u{2026}> | end --all"))
+        usage(&format!(
+            "{CLI_NAME} hostchat owner-sessions end <own_\u{2026}> | end --all"
+        ))
     );
     assert_eq!(
         admin::owner_sessions(&["end", "sid_1"]),
@@ -222,6 +227,8 @@ fn owner_sessions_words() {
     );
     assert_eq!(
         admin::owner_sessions(&["list", "--all"]),
-        usage(&format!("{CLI_NAME} hostchat owner-sessions [list] [--json]"))
+        usage(&format!(
+            "{CLI_NAME} hostchat owner-sessions [list] [--json]"
+        ))
     );
 }

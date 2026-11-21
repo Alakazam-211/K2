@@ -370,7 +370,11 @@ pub fn owner_sessions(words: &[&str]) -> Plan {
             w => pos.push(w),
         }
     }
-    let end_usage = || bad(format!("{c} hostchat owner-sessions end <own_\u{2026}> | end --all"));
+    let end_usage = || {
+        bad(format!(
+            "{c} hostchat owner-sessions end <own_\u{2026}> | end --all"
+        ))
+    };
     match sub {
         "list" => {
             if all || !pos.is_empty() {

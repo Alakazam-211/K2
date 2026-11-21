@@ -796,8 +796,16 @@ fn hostchat_value_flag_with_no_value_is_the_d6_line() {
             "--recovery-key-file",
             "--recovery-key-file FILE",
         ),
-        (&["enable", "--identity"], "--identity", "--identity k2|standalone"),
-        (&["enable", "--voice-url"], "--voice-url", "--voice-url wss://HOST"),
+        (
+            &["enable", "--identity"],
+            "--identity",
+            "--identity k2|standalone",
+        ),
+        (
+            &["enable", "--voice-url"],
+            "--voice-url",
+            "--voice-url wss://HOST",
+        ),
         (
             &["enable", "--media-tarball"],
             "--media-tarball",
@@ -814,23 +822,63 @@ fn hostchat_value_flag_with_no_value_is_the_d6_line() {
             "--confirm-hostname",
             "--confirm-hostname HOST",
         ),
-        (&["config", "--public-url"], "--public-url", "--public-url https://HOST"),
+        (
+            &["config", "--public-url"],
+            "--public-url",
+            "--public-url https://HOST",
+        ),
         (&["media", "install", "--url"], "--url", "--url wss://HOST"),
-        (&["media", "url", "--voice-url"], "--voice-url", "--url wss://HOST"),
-        (&["media", "url", "--public-url", ""], "--public-url", "--url wss://HOST"),
-        (&["media", "install", "--node-ip"], "--node-ip", "--node-ip IP"),
-        (&["media", "install", "--tarball"], "--tarball", "--tarball FILE"),
-        (&["media", "install", "--media-tarball"], "--media-tarball", "--tarball FILE"),
-        (&["media", "probe", "--udp", "", "--tcp", "ok"], "--udp", "--udp ok|fail"),
+        (
+            &["media", "url", "--voice-url"],
+            "--voice-url",
+            "--url wss://HOST",
+        ),
+        (
+            &["media", "url", "--public-url", ""],
+            "--public-url",
+            "--url wss://HOST",
+        ),
+        (
+            &["media", "install", "--node-ip"],
+            "--node-ip",
+            "--node-ip IP",
+        ),
+        (
+            &["media", "install", "--tarball"],
+            "--tarball",
+            "--tarball FILE",
+        ),
+        (
+            &["media", "install", "--media-tarball"],
+            "--media-tarball",
+            "--tarball FILE",
+        ),
+        (
+            &["media", "probe", "--udp", "", "--tcp", "ok"],
+            "--udp",
+            "--udp ok|fail",
+        ),
         (&["media", "probe", "--tcp"], "--tcp", "--tcp ok|fail"),
-        (&["media", "probe", "--turn-tls"], "--turn-tls", "--turn-tls ok|fail"),
+        (
+            &["media", "probe", "--turn-tls"],
+            "--turn-tls",
+            "--turn-tls ok|fail",
+        ),
         (
             &["users", "invite", "ann", "--display-name"],
             "--display-name",
             "--display-name NAME",
         ),
-        (&["users", "role", "ann", "--role", ""], "--role", "--role member|admin|guest"),
-        (&["user", "invite", "ann", "--email"], "--email", "--email EMAIL"),
+        (
+            &["users", "role", "ann", "--role", ""],
+            "--role",
+            "--role member|admin|guest",
+        ),
+        (
+            &["user", "invite", "ann", "--email"],
+            "--email",
+            "--email EMAIL",
+        ),
     ];
     for &(args, flag, hint) in rows {
         let c = case(
@@ -1288,9 +1336,10 @@ fn hostchat_open_through_a_private_page() {
         &ok_rec,
         3,
     );
-    no_tmp
-        .env
-        .push(("TMPDIR", rig.path().join("no-such-tmp").display().to_string()));
+    no_tmp.env.push((
+        "TMPDIR",
+        rig.path().join("no-such-tmp").display().to_string(),
+    ));
     v.push(no_tmp);
     for c in &v {
         rig.check(c);
@@ -1994,7 +2043,10 @@ fn shell_has_owner_sessions() -> bool {
 /// A request as the rig logs it: its request line and its body.
 fn line_and_body(r: &str) -> (String, String) {
     let line = r.lines().nth(1).unwrap_or_default().to_string();
-    let body = r.split_once("\n\n").map(|(_, b)| b.to_string()).unwrap_or_default();
+    let body = r
+        .split_once("\n\n")
+        .map(|(_, b)| b.to_string())
+        .unwrap_or_default();
     (line, body)
 }
 
@@ -2030,11 +2082,16 @@ fn assert_shell_lacks_it(name: &str, out: &Out, sent: usize) {
 }
 
 fn check_want(name: &str, out: &Out, sent: &[String], code: i32, w: &Want) {
-    assert_eq!((out.code, out.signal), (Some(code), None), "{name}: {out:?}");
+    assert_eq!(
+        (out.code, out.signal),
+        (Some(code), None),
+        "{name}: {out:?}"
+    );
     assert_eq!(out.stdout, w.stdout, "{name}: stdout");
     if w.traceback {
         assert!(
-            out.stderr.starts_with("Traceback (most recent call last):\n")
+            out.stderr
+                .starts_with("Traceback (most recent call last):\n")
                 && out.stderr.ends_with(&w.stderr),
             "{name}: stderr: {:?}",
             out.stderr
@@ -2066,8 +2123,18 @@ fn hostchat_owner_sessions_follows_5b6759be0d() {
     let product = k2_client::brand::PRODUCT_NAME;
     let get = ("GET /cli/sew/owner-sessions HTTP/1.1", "");
     let utc = |c: Case| with(vec![("TZ", "UTC".to_string())], c);
-    let usage = |hint: String| want("", &format!("{{\"error\": \"usage\", \"hint\": \"{hint}\"}}\n"), &[]);
-    let end_usage = || usage(format!("{cli} hostchat owner-sessions end <own_\\u2026> | end --all"));
+    let usage = |hint: String| {
+        want(
+            "",
+            &format!("{{\"error\": \"usage\", \"hint\": \"{hint}\"}}\n"),
+            &[],
+        )
+    };
+    let end_usage = || {
+        usage(format!(
+            "{cli} hostchat owner-sessions end <own_\\u2026> | end --all"
+        ))
+    };
     let mut raise = want("", "TypeError: 'int' object is not iterable\n", &[get]);
     raise.traceback = true;
     let rows: Vec<(Case, Want)> = vec![
@@ -2223,13 +2290,15 @@ fn hostchat_owner_sessions_end_follows_5b6759be0d() {
                 &["owner-sessions", "end", "own_a"],
                 vec![
                     Reply::Answer(403, HELD_OWNER_SESSION.into()),
-                    ok(r#"{"queued":"own_a","ended":["own_a","own_b"],"takesEffect":"as soon as Sew receives it"}"#),
+                    ok(
+                        r#"{"queued":"own_a","ended":["own_a","own_b"],"takesEffect":"as soon as Sew receives it"}"#,
+                    ),
                 ],
                 0,
             ),
             want(
                 "end queued: own_a\nmarked: own_a, own_b\nas soon as Sew receives it\n",
-                "",
+                "Vault password: \n",
                 &[
                     (post, r#"{"sid": "own_a"}"#),
                     (post, r#"{"sid": "own_a", "confirmToken": "ctok-5150"}"#),
@@ -2248,7 +2317,7 @@ fn hostchat_owner_sessions_end_follows_5b6759be0d() {
             ),
             want(
                 "{\"queued\":\"all\"}\n",
-                "",
+                "Vault password: \n",
                 &[
                     (post, r#"{"all": true}"#),
                     (post, r#"{"all": true, "confirmToken": "ctok-5150"}"#),
@@ -2263,7 +2332,10 @@ fn hostchat_owner_sessions_end_follows_5b6759be0d() {
     at_once.daemon = vec![ok(r#"{"queued":true,"ended":[]}"#)];
     at_once.daemon_requests = 1;
     let mut v = rows;
-    v.push((at_once, want("end queued: True\n\n", "", &[(post, r#"{"sid": "own_a"}"#)])));
+    v.push((
+        at_once,
+        want("end queued: True\n\n", "", &[(post, r#"{"sid": "own_a"}"#)]),
+    ));
     for (c, w) in &v {
         if has {
             rig.check(c);
@@ -2273,7 +2345,12 @@ fn hostchat_owner_sessions_end_follows_5b6759be0d() {
         }
         let r = rig.run(false, false, c);
         check_want(c.name, &r.out, &r.daemon, c.code, w);
-        assert_eq!(r.vault.len(), c.vault_requests, "{}: vault requests", c.name);
+        assert_eq!(
+            r.vault.len(),
+            c.vault_requests,
+            "{}: vault requests",
+            c.name
+        );
         rig.no_secret_to_a_child(c);
     }
 }

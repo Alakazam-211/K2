@@ -334,14 +334,14 @@ ls {sibling} > out 2> err; echo "sibling_ls_rc $? $(cat err)" >> $R
 cat {k2_home}/daemon.token > out 2> err; echo "token_read_rc $? $(cat err)" >> $R
 ls {k2_home} > out 2> err; echo "k2_home_ls_rc $? $(cat err)" >> $R
 # 4. It can't leave its cgroup.
-echo $$ > {sib_cg}/cgroup.procs 2> err; echo "cgroup_move_rc $? $(cat err)" >> $R
-echo 0 > {sib_cg}/../cgroup.procs 2> err; echo "cgroup_leaf_move_rc $? $(cat err)" >> $R
+{{ echo $$ > {sib_cg}/cgroup.procs; }} 2> err; echo "cgroup_move_rc $? $(cat err)" >> $R
+{{ echo 0 > {sib_cg}/../cgroup.procs; }} 2> err; echo "cgroup_leaf_move_rc $? $(cat err)" >> $R
 mkdir {sib_cg}/../a-escape 2> err; echo "cgroup_mkdir_rc $? $(cat err)" >> $R
 echo "cgroup_after $(cat /proc/self/cgroup)" >> $R
 unshare -U -m true > out 2> err; echo "unshare_rc $? $(cat err)" >> $R
 sudo -n true > out 2> err; echo "sudo_rc $? $(cat err)" >> $R
 # Its own k2 call goes over its session socket (the CLI's own route).
-bash {cli} whoami --json > k2.out 2> k2.err; echo "k2_whoami_rc $? $(cat k2.out k2.err | tr '\n' ' ' | cut -c1-400)" >> $R
+bash -x {cli} whoami --json > k2.out 2> k2.err; echo "k2_whoami_rc $? $(cat k2.out | tr '\n' ' ' | cut -c1-300) trace: $(grep -v "^+* *_" k2.err | tail -n 12 | tr '\n' ' ' | cut -c1-900)" >> $R
 echo "phase1 done" >> $R
 # 5. A stolen passport is worthless.
 while [ ! -f {ws}/stolen ]; do sleep 0.2; done
@@ -465,7 +465,7 @@ fn the_five_step_demo_on_a_real_kernel() {
     assert_eq!(s, 403, "a passport never asks whois");
 
     // ps shows the agent at a glance.
-    let ps = Command::new("ps").args(["-o", "pid,cgroup,cmd", "-p", &a_pid.to_string()]).output().unwrap();
+    let ps = Command::new("ps").args(["-ww", "-o", "pid,cgroup:160,args", "-p", &a_pid.to_string()]).output().unwrap();
     println!("──── ps -o pid,cgroup,cmd ────\n{}", String::from_utf8_lossy(&ps.stdout));
     assert!(String::from_utf8_lossy(&ps.stdout).contains(&format!("a-{a_id}")));
     let _ = (a_sid, b_sid);

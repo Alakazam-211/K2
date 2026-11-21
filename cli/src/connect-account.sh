@@ -100,10 +100,14 @@ _connect_require_daemon() {
             if [ -n "${DISK_OWNER_TOKEN:-}" ]; then
                 TOKEN="$DISK_OWNER_TOKEN"
             elif [ -r "${K2_HOME}/heartbeat.token" ]; then
-                DISK_OWNER_TOKEN="$(cat "${K2_HOME}/heartbeat.token" 2>/dev/null)"
+                # A folder fence (Agent Isolation) can deny the read where -r says yes:
+                # an empty token, never an exit under set -e.
+                DISK_OWNER_TOKEN="$(cat "${K2_HOME}/heartbeat.token" 2>/dev/null)" || DISK_OWNER_TOKEN=""
                 TOKEN="$DISK_OWNER_TOKEN"
             elif [ -r "${K2_HOME}/daemon.token" ]; then
-                DISK_OWNER_TOKEN="$(cat "${K2_HOME}/daemon.token" 2>/dev/null)"
+                # A folder fence (Agent Isolation) can deny the read where -r says yes:
+                # an empty token, never an exit under set -e.
+                DISK_OWNER_TOKEN="$(cat "${K2_HOME}/daemon.token" 2>/dev/null)" || DISK_OWNER_TOKEN=""
                 TOKEN="$DISK_OWNER_TOKEN"
             fi
         fi

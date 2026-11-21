@@ -560,13 +560,17 @@ if [ "$(_envn NO_OWNER_FALLBACK)" = "1" ]; then
     _k2_no_owner_fallback=1
 fi
 if [ -z "$_k2_no_owner_fallback" ] && [ -r "${K2_HOME}/heartbeat.token" ]; then
-    DISK_OWNER_TOKEN="$(cat "${K2_HOME}/heartbeat.token" 2>/dev/null)"
+    # A folder fence (Agent Isolation) can deny the read where -r says yes:
+    # an empty token, never an exit under set -e.
+    DISK_OWNER_TOKEN="$(cat "${K2_HOME}/heartbeat.token" 2>/dev/null)" || DISK_OWNER_TOKEN=""
 fi
 # Fresh headless boxes always get daemon.token; heartbeat.token is the
 # same secret written alongside. Prefer heartbeat (CLI convention) but
 # accept daemon.token so external owner ops work when only one is present.
 if [ -z "$_k2_no_owner_fallback" ] && [ -z "$DISK_OWNER_TOKEN" ] && [ -r "${K2_HOME}/daemon.token" ]; then
-    DISK_OWNER_TOKEN="$(cat "${K2_HOME}/daemon.token" 2>/dev/null)"
+    # A folder fence (Agent Isolation) can deny the read where -r says yes:
+    # an empty token, never an exit under set -e.
+    DISK_OWNER_TOKEN="$(cat "${K2_HOME}/daemon.token" 2>/dev/null)" || DISK_OWNER_TOKEN=""
 fi
 if [ -z "$TOKEN" ] && [ -n "$DISK_OWNER_TOKEN" ]; then
     TOKEN="$DISK_OWNER_TOKEN"
@@ -54432,10 +54436,14 @@ _connect_require_daemon() {
             if [ -n "${DISK_OWNER_TOKEN:-}" ]; then
                 TOKEN="$DISK_OWNER_TOKEN"
             elif [ -r "${K2_HOME}/heartbeat.token" ]; then
-                DISK_OWNER_TOKEN="$(cat "${K2_HOME}/heartbeat.token" 2>/dev/null)"
+                # A folder fence (Agent Isolation) can deny the read where -r says yes:
+                # an empty token, never an exit under set -e.
+                DISK_OWNER_TOKEN="$(cat "${K2_HOME}/heartbeat.token" 2>/dev/null)" || DISK_OWNER_TOKEN=""
                 TOKEN="$DISK_OWNER_TOKEN"
             elif [ -r "${K2_HOME}/daemon.token" ]; then
-                DISK_OWNER_TOKEN="$(cat "${K2_HOME}/daemon.token" 2>/dev/null)"
+                # A folder fence (Agent Isolation) can deny the read where -r says yes:
+                # an empty token, never an exit under set -e.
+                DISK_OWNER_TOKEN="$(cat "${K2_HOME}/daemon.token" 2>/dev/null)" || DISK_OWNER_TOKEN=""
                 TOKEN="$DISK_OWNER_TOKEN"
             fi
         fi

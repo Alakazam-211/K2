@@ -95,6 +95,7 @@ pub const USAGE: &str = concat!(
     "                                                   --to: only these people are asked (owners or\n",
     "                                                   admins who may answer, or owner); else the\n",
     "                                                   owner's default, else everyone who may answer\n",
+    "                                                   (--assign is the same flag, as on ", cli_name!(), " app)\n",
     "  ", cli_name!(), " permission update <id> --why \"<new facts>\"   once, on a denied request\n",
     "  ", cli_name!(), " permission status [<id>]                      check once; never loop\n",
     "  ", cli_name!(), " permission cancel <id>\n",
@@ -437,7 +438,13 @@ fn parse_request(rest: &[&str]) -> Ask {
     let (mut action, mut why, mut to) = (String::new(), String::new(), String::new());
     let (mut dry, mut json_out) = (false, false);
     let mut kv: Vec<&str> = Vec::new();
-    const TO_NEEDS: &str = "Error: --to needs one or more logins, comma-separated (--to ada,owner)";
+    // `$1 needs …`: 0.46.17's `--assign` is the same flag as `--to`.
+    let needs = |flag: &str| {
+        stop(
+            format!("Error: {flag} needs one or more logins, comma-separated ({flag} ada,owner)"),
+            Exit::Usage,
+        )
+    };
     let mut i = 0;
     while let Some(w) = rest.get(i) {
         let w = *w;
@@ -451,18 +458,19 @@ fn parse_request(rest: &[&str]) -> Ask {
                 continue;
             }
             w if w.starts_with("--why=") => why = w["--why=".len()..].to_string(),
-            "--to" => match rest.get(i + 1) {
+            "--to" | "--assign" => match rest.get(i + 1) {
                 Some(v) if !v.is_empty() => {
                     to = (*v).to_string();
                     i += 2;
                     continue;
                 }
-                _ => return stop(TO_NEEDS, Exit::Usage),
+                _ => return needs(w),
             },
-            w if w.starts_with("--to=") => {
-                to = w["--to=".len()..].to_string();
+            w if w.starts_with("--to=") || w.starts_with("--assign=") => {
+                let (flag, value) = w.split_once('=').unwrap_or((w, ""));
+                to = value.to_string();
                 if to.is_empty() {
-                    return stop(TO_NEEDS, Exit::Usage);
+                    return needs(flag);
                 }
             }
             "--dry-run" => dry = true,

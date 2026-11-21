@@ -17,6 +17,8 @@
 //! - A person's verbs refused with a passport; a session with no passport
 //!   (nothing sent as the owner); a healed passport; a POST on the cell
 //!   socket that got no answer (never sent again); no answer over TCP.
+//! - 0.46.17: `--assign` is the same flag as `--to` on `request` (the
+//!   same body; its own name in the usage lines: last, empty, `=` empty).
 //! - The bulletin line on success.
 
 #![cfg(unix)]
@@ -237,6 +239,24 @@ fn request_answers_as_the_shell_does() {
                     "ask", "--why=a \"quoted\" é why", "x.y", "a=1", "b=", "a=2", "=v", "-k=v",
                     "--to", "ada,owner",
                 ],
+                &[],
+                vec![on(), ok(r#"{"id":"pr_3","status":"pending"}"#)],
+                owner_and_port,
+                0,
+                2,
+            ),
+            case(
+                "--assign, the same body as --to",
+                &["request", "x", "--assign", "ada,owner", "--why", "w"],
+                &[],
+                vec![on(), ok(r#"{"id":"pr_3","status":"pending"}"#)],
+                owner_and_port,
+                0,
+                2,
+            ),
+            case(
+                "--assign=, then --to: the last one stands",
+                &["request", "x", "--assign=bo", "--to", "ada", "--why", "w"],
                 &[],
                 vec![on(), ok(r#"{"id":"pr_3","status":"pending"}"#)],
                 owner_and_port,
@@ -493,6 +513,17 @@ fn request_s_words_as_the_shell_reads_them() {
             one("--to last", &["request", "x", "--to"], 2),
             one("--to empty", &["request", "x", "--to", "", "--why", "w"], 2),
             one("--to= empty", &["request", "x", "--to=", "--why", "w"], 2),
+            one("--assign last", &["request", "x", "--assign"], 2),
+            one(
+                "--assign empty",
+                &["request", "x", "--assign", "", "--why", "w"],
+                2,
+            ),
+            one(
+                "--assign= empty",
+                &["request", "x", "--assign=", "--why", "w"],
+                2,
+            ),
             one("an unknown flag", &["request", "x", "--now"], 2),
             one("--dry-run=1 is a flag", &["request", "x", "--dry-run=1"], 2),
             one("two actions", &["request", "x", "y", "--why", "w"], 2),
@@ -1383,4 +1414,35 @@ fn help_later_on_the_line_is_the_usage() {
             )),
         ],
     );
+}
+
+/// 0.46.17: the usage's `--assign` line names the brand's command.
+#[test]
+fn the_assign_line_says_the_brand_s_name() {
+    let rig = Rig::new(VERB, "assignbrand");
+    let cli = k2_client::brand::CLI_NAME;
+    let c = case("brand: the usage", &[], &[], vec![on()], owner_and_port, 0, 1);
+    let (ran, _) = rig.binary(&c, false);
+    assert!(
+        ran.stdout
+            .contains(&format!("(--assign is the same flag, as on {cli} app)\n")),
+        "{}",
+        ran.stdout
+    );
+    assert_eq!(ran.code, Some(0));
+    let c = case(
+        "brand: --assign= empty",
+        &["request", "x", "--assign=", "--why", "w"],
+        &[],
+        vec![on()],
+        owner_and_port,
+        2,
+        1,
+    );
+    let (ran, _) = rig.binary(&c, false);
+    assert_eq!(
+        ran.stderr,
+        "Error: --assign needs one or more logins, comma-separated (--assign ada,owner)\n"
+    );
+    assert_eq!(ran.code, Some(2));
 }

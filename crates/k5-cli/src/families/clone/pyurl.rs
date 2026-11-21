@@ -157,8 +157,8 @@ pub fn target(url: &str) -> Result<Target, Miss> {
         }
         host = &host[..i];
     }
-    if host.len() >= 2 && host.starts_with('[') && host.ends_with(']') {
-        host = &host[1..host.len() - 1];
+    if let Some(inner) = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
+        host = inner;
     }
     if host.is_empty() {
         return Err(Miss::Unsendable);

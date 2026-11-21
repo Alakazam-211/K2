@@ -23734,6 +23734,11 @@ _app_take_assign() {
         case "$1" in
             --) _APP_ARGS+=("$@"); return 0 ;;
             --assign)
+                # Help wins: `--assign -h` is a help request, never a login.
+                # The flag goes; the help word stays for the verb's own page.
+                if [ $# -ge 2 ] && _wants_help "$2"; then
+                    _APP_ARGS+=("$2"); shift 2; continue
+                fi
                 if [ $# -lt 2 ] || [ -z "$2" ]; then
                     echo '{"error":"usage","hint":"--assign takes logins, comma-separated (--assign ada or --assign ada,owner): who gets the card if this is held"}' >&2
                     exit 2

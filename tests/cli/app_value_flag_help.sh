@@ -12,6 +12,10 @@
 #     stderr from the router (after asking the daemon about permission
 #     cards); cmd_app_access would have read -h as --build's value. The
 #     router hands access its words now, and help is the grace page.
+#   - `k2 app data put <app> <path> --assign -h` took `-h` as the login
+#     to send a held card to, and sent the put: `--assign` is taken out of
+#     the line before the verb's own help check sees it. Now `--assign -h`
+#     (or `--help`) leaves the help word for the verb, on every k2 app verb.
 #
 # Each help row: exactly the page on stdout, nothing on stderr, exit 0,
 # nothing sent. Each verb's plain form then still sends, so the stub is
@@ -221,6 +225,27 @@ run app access ws
 sent_line "the read" 1 '^GET /cli/app/list '
 [ "$(wc -l <"$REQ_LOG" | tr -d ' ')" = 1 ] && ok "access: one request" \
     || { bad "access: not one request"; sed 's/^/      | /' "$REQ_LOG" >&2; }
+
+echo "== --assign never takes -h: the verb's own page, nothing sent =="
+# native: app data put
+page app/data.txt app data put shop notes.txt --assign -h
+# native: app data put
+page app/data.txt app data put shop notes.txt --assign --help
+# native: app data put
+page app/data.txt app data put shop --assign -h notes.txt --to sub
+# native: app key mint
+page app/grace.txt app key mint shop --scopes users --assign -h
+# native: app key mint
+page app/grace.txt app key mint shop --assign --help --scopes users
+# native: app access
+page app/grace.txt app access ws --build on --assign -h
+echo "== --assign <login>: the put still sends =="
+# native: app data put
+run app data put shop notes.txt --to sub --assign ada
+[ "$RC" -eq 0 ] && ok "k2 app data put shop notes.txt --to sub --assign ada: exit 0" || { bad "data put --assign ada: exit $RC"; show "$ERR"; }
+sent_line "the put with --assign" 1 '^POST /cli/app/data/put .*"to": "sub"'
+[ "$(wc -l <"$REQ_LOG" | tr -d ' ')" = 1 ] && ok "data put --assign ada: one request" \
+    || { bad "data put --assign ada: not one request"; sed 's/^/      | /' "$REQ_LOG" >&2; }
 
 echo ""
 echo "app_value_flag_help: $pass passed, $fail failed"

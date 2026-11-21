@@ -649,6 +649,8 @@ struct Head {
     /// `None`: read to the end of the stream.
     length: Option<u64>,
     server_version: Option<String>,
+    /// The `Location` header, as http.client keeps it.
+    location: Option<String>,
 }
 
 /// `fp.readline(_MAXLINE + 1)`: a line with its end, or less at the end
@@ -805,7 +807,75 @@ fn read_head(r: &mut impl BufRead) -> Result<Head, Raised> {
         chunked,
         length,
         server_version: header(&lines, SERVER_VERSION_HEADER).map(|v| v.trim().to_string()),
+        location: header(&lines, "location").map(str::to_string),
     })
+}
+
+/// One answer read after a request ([`read_answer`]): what urlopen came
+/// to, and the answer's `Location` header (a redirect's new place).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Answered {
+    pub outcome: Outcome,
+    pub location: Option<String>,
+}
+
+/// The answer on `r` as http.client reads it after a request was sent
+/// (the head, then the body, as [`Opener::open`] reads them), with its
+/// `Location` header. For a caller that writes the request itself (a
+/// Unix socket, or a stream it watches for a stop).
+pub fn read_answer(r: &mut impl BufRead) -> Answered {
+    let head = match read_head(r) {
+        Ok(h) => h,
+        Err(raised) => {
+            return Answered {
+                outcome: Outcome::Raised(raised),
+                location: None,
+            }
+        }
+    };
+    let body = read_body(r, &head);
+    let outcome = if (200..300).contains(&head.status) {
+        Outcome::Answer {
+            status: head.status,
+            body,
+        }
+    } else {
+        Outcome::HttpError {
+            code: head.status,
+            body,
+        }
+    };
+    Answered {
+        outcome,
+        location: head.location,
+    }
+}
+
+/// The bytes Python's `http.client.HTTPConnection.request(method, url,
+/// body, headers)` writes with no urllib around it (`_UConn`, a Unix
+/// socket): `Host: <host>` and `Accept-Encoding: identity` first,
+/// `Content-Length` (0 for a POST with no body), then the caller's
+/// headers in their order. No `User-Agent`, no `Connection`.
+pub fn encode_http_client(host: &str, req: &Request) -> Vec<u8> {
+    let mut head = format!(
+        "{} {} HTTP/1.1\r\nHost: {host}\r\nAccept-Encoding: identity\r\n",
+        req.method.as_str(),
+        req.selector()
+    );
+    match &req.data {
+        Some(data) => head.push_str(&format!("Content-Length: {}\r\n", data.len())),
+        None if req.method == Method::Post => head.push_str("Content-Length: 0\r\n"),
+        None => {}
+    }
+    for (name, value) in &req.headers {
+        head.push_str(&format!("{name}: {value}\r\n"));
+    }
+    head.push_str("\r\n");
+    let mut out = head.into_bytes();
+    if let Some(data) = &req.data {
+        out.extend_from_slice(data);
+    }
+    out
 }
 
 fn incomplete(got: usize, expected: Option<u64>) -> Raised {

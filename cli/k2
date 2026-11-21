@@ -85910,9 +85910,9 @@ elif verb in ("link_oauth_add", "link_oauth_upgrade"):
             break
         time.sleep(3)
     if final is None:
+        again = ("k2 mail link relink %s" % env("M_ADDRESS") if relink else "k2 mail link upgrade %s --features %s" % (env("M_ADDRESS"), env("M_FEATURES")) if upgrade else "k2 mail link add --provider %s" % provider)
         die({"code": "timeout",
-             "hint": "the link did not complete in time — run "
-                     "'k2 mail link add --provider %s' again" % provider}, 2)
+             "hint": "the link did not complete in time — run '%s' again" % again}, 2)
     state = final.get("state")
     if state == "connected":
         if as_json:

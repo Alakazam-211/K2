@@ -5,7 +5,8 @@
 # link list status words (a row with no status gets no fix line), and
 # `k2 mail draft delete --help` printing its own page. A fake daemon
 # answers from a script; no live daemon, no mail. Fail-loud: no
-# skip-if-missing.
+# skip-if-missing. The link wait's timeout hint is in
+# mail_link_wait_timeout.sh (it fakes the Python clock).
 # Run with: bash tests/cli/mail_draft_keys_delete_relink.sh
 
 set -euo pipefail

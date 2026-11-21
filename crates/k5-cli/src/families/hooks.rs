@@ -17,10 +17,15 @@
 //!    `cli_post_json /cli/hooks/install` over TCP with `{}` or
 //!    `{"remove":true}`. Other words are skipped.
 //! 4. The answer as the shell holds it in `raw=$(…)`: NULs and trailing
-//!    newlines dropped. `--json` echoes it. Otherwise the shell's Python
-//!    renders it. `status` ([`status_text`]) has its stderr thrown away;
-//!    where that Python raises, what it printed before is followed by
-//!    `raw` and a newline (`|| echo "$raw"`), exit 0. `install`
+//!    newlines dropped. `--json` echoes it; for `install` and `uninstall`
+//!    an answer with an `error` key then exits 1, or 3 with a `permission`
+//!    object (`_hooks_answer_error quiet`, [`answer_error`]). Otherwise
+//!    the shell's Python renders it. `status` first: an `error` key is
+//!    `Error: <the error>` on stderr and exit 1, or 3
+//!    (`_hooks_answer_error say`); else its reader ([`status_text`]) has
+//!    its stderr thrown away; where that Python raises, what it printed
+//!    before is followed by `raw` and a newline (`|| echo "$raw"`), exit
+//!    0. `install`
 //!    ([`install_out`]): an answer that is not a JSON object prints as it
 //!    came; one with an `error` key is `Error: <the error>` on stderr and
 //!    exit 1, or 3 with a `permission` object; a report it can't lay out
@@ -39,7 +44,7 @@
 use super::{curl_port, without_nuls};
 use crate::daemon::{self, Settings};
 use crate::exit::Exit;
-use crate::out::json::Value;
+use crate::out::json::{Text, Value};
 use crate::out::pylib::json::loads;
 use crate::out::pylib::ops::py_eq;
 use crate::out::{self, py};
@@ -210,17 +215,26 @@ fn send(args: &[OsString], ask: Ask, settings: Settings) -> Exit {
             while raw.last() == Some(&b'\n') {
                 raw.pop();
             }
-            let (text, error) = if json {
+            // An error line that is empty prints nothing (install --json).
+            let (text, error) = if json && status {
                 (echo(&raw), None)
+            } else if json {
+                let quiet = answer_error(&raw).map(|(_, exit)| (String::new(), exit));
+                (echo(&raw), quiet)
             } else if status {
-                (rendered(&raw), None)
+                match answer_error(&raw) {
+                    Some(e) => (Vec::new(), Some(e)),
+                    None => (rendered(&raw), None),
+                }
             } else {
                 install_out(&raw)
             };
             match out::write_flushed(&mut std::io::stdout().lock(), &text) {
                 Ok(()) => match error {
                     Some((line, exit)) => {
-                        out::stderr_line(&line);
+                        if !line.is_empty() {
+                            out::stderr_line(&line);
+                        }
                         exit
                     }
                     None => Exit::Ok,
@@ -585,23 +599,8 @@ pub fn install_out(raw: &[u8]) -> (Vec<u8>, Option<(String, Exit)>) {
     let Some(data @ Value::Object(pairs)) = &data else {
         return (input, None);
     };
-    if let Some(err) = super::get(pairs, "error") {
-        // `err.get('hint') or err.get('code')` for an object; `f'{err}'`,
-        // on stderr, where a lone surrogate is written `\udXXX`.
-        let err = match err {
-            Value::Object(e) => super::get(e, "hint")
-                .filter(|h| py::truthy(h))
-                .or_else(|| super::get(e, "code"))
-                .cloned()
-                .unwrap_or(Value::Null),
-            other => other.clone(),
-        };
-        let refused = matches!(super::get(pairs, "permission"), Some(Value::Object(_)));
-        let exit = if refused { Exit::Refused } else { Exit::Error };
-        return (
-            Vec::new(),
-            Some((format!("Error: {}", py::str_of(&err)), exit)),
-        );
+    if let Some(e) = error_of(pairs) {
+        return (Vec::new(), Some(e));
     }
     let mut printed = String::new();
     let ok = install_text(data, &mut printed).is_ok();
@@ -610,6 +609,36 @@ pub fn install_out(raw: &[u8]) -> (Vec<u8>, Option<(String, Exit)>) {
         out.extend(input);
     }
     (out, None)
+}
+
+/// An object's `error` key as both readers say it: `Error: <the error>`
+/// and exit 1, or 3 with a `permission` object. `None`: no `error` key.
+fn error_of(pairs: &[(Text, Value)]) -> Option<(String, Exit)> {
+    let err = super::get(pairs, "error")?;
+    // `err.get('hint') or err.get('code')` for an object; `f'{err}'`,
+    // on stderr, where a lone surrogate is written `\udXXX`.
+    let err = match err {
+        Value::Object(e) => super::get(e, "hint")
+            .filter(|h| py::truthy(h))
+            .or_else(|| super::get(e, "code"))
+            .cloned()
+            .unwrap_or(Value::Null),
+        other => other.clone(),
+    };
+    let refused = matches!(super::get(pairs, "permission"), Some(Value::Object(_)));
+    let exit = if refused { Exit::Refused } else { Exit::Error };
+    Some((format!("Error: {}", py::str_of(&err)), exit))
+}
+
+/// `printf '%s' "$raw" | _hooks_answer_error`: the `Error:` line and the
+/// exit when `raw` is a JSON object with an `error` key; `None` for
+/// anything else (not UTF-8, not JSON, not an object, no `error` key).
+pub fn answer_error(raw: &[u8]) -> Option<(String, Exit)> {
+    let text = std::str::from_utf8(raw).ok()?;
+    match loads(text).ok()? {
+        Value::Object(pairs) => error_of(&pairs),
+        _ => None,
+    }
 }
 
 /// `cmd_hooks_install`' Python inside its `try`, for an object with no
@@ -701,6 +730,10 @@ mod tests {
             "        err = err.get('hint') or err.get('code')",
             "    sys.exit(3 if isinstance(data.get('permission'), dict) else 1)",
             r#"" || rc=$?"#,
+            r#"printf '%s' "$raw" | _hooks_answer_error say || erc=$?"#,
+            r#"printf '%s' "$raw" | _hooks_answer_error quiet || jrc=$?"#,
+            r#"if not isinstance(data, dict) or "error" not in data:"#,
+            r#"    err = err.get("hint") or err.get("code")"#,
         ] {
             assert!(text.contains(shell), "the shell no longer has {shell:?}");
         }

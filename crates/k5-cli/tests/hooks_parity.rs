@@ -10,10 +10,12 @@
 //!   nothing sent), `--json` (echoed, echo's own options too), the
 //!   reader's lines for a bare answer, a full one, each section's odd
 //!   shapes, and where the reader raises: what it printed, then the raw
-//!   answer, exit 0. One answer above 256 KiB.
+//!   answer, exit 0; an `error` key: its `Error:` line, exit 1, or 3 with
+//!   a `permission` object. One answer above 256 KiB.
 //! - `install` and `uninstall`: the body, the reader's lines (a report,
 //!   skipped, an `error` key: its `Error:` line, exit 1, or 3 with a
-//!   `permission` object), `--json`.
+//!   `permission` object), `--json` (as it came; an `error` key exits 1,
+//!   or 3).
 //! - No answer: a reset.
 //! - Help: `-h` or `--help` anywhere prints the hooks page and sends
 //!   nothing (`hooks -h` and `hooks --help` the binary's own page, the
@@ -211,13 +213,63 @@ fn hooks_status_as_the_shell_does() {
             r#"{"recent_events":[{"timestamp":"aTbTcTdTeTfTgThTiTjTk","verdict":true,"raw_event":2.5,"tool_name":7,"pane_id":[1]}]}"#,
         ),
         case(
-            "an error status: the reader's lines",
+            "an error, 500: its Error line, exit 1",
             &["status"],
             &[],
             vec![Reply::Answer(500, r#"{"error":"boom"}"#.into())],
             owner_and_port,
-            0,
             1,
+            1,
+        ),
+        case(
+            "an error object: its hint",
+            &["status", "--limit", "5"],
+            &[],
+            vec![ok(r#"{"error":{"code":"c","hint":"the hint"}}"#)],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "an error object: its code",
+            &["status"],
+            &[],
+            vec![ok(r#"{"error":{"code":"admin_only","hint":""}}"#)],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "an error null",
+            &["status"],
+            &[],
+            vec![ok(r#"{"error":null,"port":1}"#)],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "an error with a lone surrogate",
+            &["status"],
+            &[],
+            vec![ok(r#"{"error":"bad \ud800 name"}"#)],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "a refusal: the Error line, Ask with, exit 3",
+            &["status"],
+            &[],
+            vec![Reply::Answer(403, PERMISSION_ASK.into())],
+            owner_and_port,
+            3,
+            1,
+        ),
+        one(
+            "--json: an error answer as it came",
+            &["status", "--json"],
+            r#"{"error":"boom"}"#,
         ),
         case(
             "a reset",
@@ -413,6 +465,34 @@ fn hooks_install_as_the_shell_does() {
                 r#"{"report":{"clis":[{"cli":null}]}}"#,
             ),
             one("--json", json, r#"{"report":{"action":"install"}}"#),
+            one("--json: not JSON", json, "nope"),
+            case(
+                "--json: an error key, as it came, exit 1",
+                json,
+                &[],
+                vec![ok(r#"{"error":"denied"}"#)],
+                owner_and_port,
+                1,
+                1,
+            ),
+            case(
+                "--json: an error object, exit 1",
+                json,
+                &[],
+                vec![Reply::Answer(500, r#"{"error":{"code":"c"}}"#.into())],
+                owner_and_port,
+                1,
+                1,
+            ),
+            case(
+                "--json: a refusal, as it came, Ask with, exit 3",
+                json,
+                &[],
+                vec![Reply::Answer(403, PERMISSION_ASK.into())],
+                owner_and_port,
+                3,
+                1,
+            ),
             case(
                 "a refusal: the Error line, Ask with, exit 3",
                 args,

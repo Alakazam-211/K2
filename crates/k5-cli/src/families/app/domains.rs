@@ -10,7 +10,8 @@
 //! is its traceback and the plain printer runs next), then prints it with
 //! `_app_custom_print` or the label's own lines.
 //!
-//! `app domain` alone prints the page on stdout and exits 2.
+//! `app domain` alone is the usage line, as an unknown verb is (exit 2);
+//! `-h` and `--help` are the shell's (the page on stdout, exit 0).
 
 use super::call::{Cj, Ctx};
 use super::grace_set::{help, walk};
@@ -69,8 +70,6 @@ const RELAY_WORDS: [(&str, &str); 4] = [
 /// What the words ask for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ask {
-    /// `app domain` alone: the page on stdout, exit 2.
-    Page,
     /// `domain add|rm`.
     Label {
         verb: &'static str,
@@ -106,7 +105,6 @@ pub fn parse(verb: &str, words: &[&str]) -> Option<Result<Ask, Stop>> {
 fn domain(words: &[&str]) -> Result<Ask, Stop> {
     let rest = words.get(1..).unwrap_or_default();
     match words.first().copied().unwrap_or("") {
-        "" => Ok(Ask::Page),
         v @ ("add" | "rm") => label(if v == "add" { "add" } else { "rm" }, rest),
         v @ ("check" | "primary") => custom(if v == "check" { "check" } else { "primary" }, rest),
         "external" => external(rest),
@@ -223,11 +221,6 @@ fn printed(body: &[u8], lines: fn(&[u8], &mut Out) -> Result<(), Raise>) -> Show
 /// Runs it: what it printed, or the exit it ended with.
 pub fn run(ctx: &mut Ctx, ask: &Ask) -> Answer {
     match ask {
-        Ask::Page => {
-            let mut page = Shown::out(crate::text::help(PAGE).unwrap_or_default());
-            page.exit = Exit::Usage;
-            Ok(page)
-        }
         Ask::Label { verb, body, json } => {
             let s = ctx.send(true, &format!("/cli/app/domain/{verb}"), body, false)?;
             let body = match super::grace::done(ctx, s, *json) {
@@ -598,7 +591,12 @@ mod tests {
 
     #[test]
     fn the_loops_read_the_words_as_the_shell_does() {
-        assert_eq!(parse("domain", &[]), Some(Ok(Ask::Page)));
+        assert_eq!(parse("domain", &[]), Some(Err(Stop::usage(usage::DOMAIN))));
+        assert_eq!(
+            parse("domain", &["--json"]),
+            Some(Err(Stop::usage(usage::DOMAIN)))
+        );
+        assert!(parse("domain", &["-h"]).is_none());
         assert!(crate::text::help(PAGE).is_some());
         assert_eq!(
             parse("domain", &["rm", "a", "b", "--external"]),

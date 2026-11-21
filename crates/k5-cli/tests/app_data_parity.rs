@@ -5,7 +5,8 @@
 //!
 //! - `domain add|rm`: a label's lines, a custom domain's, held, the plain
 //!   printer after the custom check raised; `check|primary|external`;
-//!   `domains` with every kind of row; the page (exit 2); usage lines.
+//!   `domains` with every kind of row; alone, the usage line; usage
+//!   lines.
 //! - `data ls`; `data get` to a file (two pieces), to stdout, `--json`, a
 //!   size that changed, a piece the reader can't read, a refusal mid-way
 //!   (no part file left); `rm`, `mv`, `put` (a path made absolute).
@@ -175,7 +176,9 @@ fn domains_answer_as_the_shell_does() {
                 1,
             )),
             // native: app domain
-            stop("domain: the page, exit 2", &["domain"], 2),
+            stop("domain: alone is the usage line", &["domain"], 2),
+            // native: app domain
+            stop("domain: --json alone", &["domain", "--json"], 2),
             // native: app domain
             stop("domain: a word it doesn't take", &["domain", "move"], 2),
             // native: app domain rm
@@ -279,6 +282,19 @@ fn data_answers_as_the_shell_does() {
             case(
                 "data get: the size changed",
                 &["data", "get", "acme", "notes/changed.txt"],
+                &[],
+                vec![
+                    ok(PIECE_1),
+                    ok(r#"{"data":"bG8=","size":6,"mtime":10,"eof":true,"offset":3,"length":2}"#),
+                ],
+                owner_and_port,
+                3,
+                2,
+            ),
+            // native: app data get
+            case(
+                "data get: the size changed, a quote and a backslash in the path",
+                &["data", "get", "acme", r#"notes/say "hi"\back.txt"#],
                 &[],
                 vec![
                     ok(PIECE_1),
@@ -607,6 +623,12 @@ fn the_changes_help_never_acts() {
         &["domain", "external", "acme", "h", "on", "--help"],
         &["data", "rm", "acme", "x", "-h"],
         &["data", "put", "acme", ".", "--help"],
+        &["data", "put", "-h"],
+        &["data", "put", "--help"],
+        &["data", "put", "acme", "--json", "-h", "x"],
+        &["domain", "-h"],
+        &["domain", "--help"],
+        &["domain", "rm", "--help", "acme", "shop"],
         &["data", "get", "acme", "p", "-h"],
         &["resources", "settings", "--mode", "off", "-h"],
         &["resources", "clean", "--help"],
@@ -629,6 +651,11 @@ fn the_lines_say_the_brand_s_name() {
         (
             &["domains"][..],
             format!("usage: {cli} app domains <app-id> [--json]\n"),
+            2,
+        ),
+        (
+            &["domain"],
+            format!("usage: {cli} app domain add|rm <app-id> <subdomain> [--json]\n"),
             2,
         ),
         (

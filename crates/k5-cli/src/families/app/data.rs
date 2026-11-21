@@ -547,14 +547,18 @@ fn add(a: &Value, b: &Value, line: u32) -> Result<String, Raise> {
     }
 }
 
+/// `_compute_json K2_CJ_error=<error> K2_CJ_hint=<hint> >&2`: a quote or
+/// backslash in the hint is escaped.
+fn error_line(error: &str, hint: &str) {
+    out::stderr_line(&Cj::new().s("error", error).s("hint", hint).body());
+}
+
 /// `_app_data_get`'s loop and its end. The part file goes on any end but
 /// the rename.
 fn get_run(ctx: &mut Ctx, app: &str, path: &str, to: &str, part: &str, json: bool) -> Answer {
     if !part.is_empty() && std::fs::write(part, b"").is_err() {
         // Checked when the words were read; the shell's line all the same.
-        out::stderr_line(&format!(
-            "{{\"error\":\"local_write\",\"hint\":\"can't write {to}\"}}"
-        ));
+        error_line("local_write", &format!("can't write {to}"));
         return Err(Exit::Refused);
     }
     let r = pieces(ctx, app, path, part);
@@ -608,10 +612,11 @@ fn pieces(ctx: &mut Ctx, app: &str, path: &str, part: &str) -> Result<(String, S
         };
         if let Some((size, mtime)) = first.as_ref() {
             if *size != p.size || *mtime != p.mtime {
-                out::stderr_line(&format!(
-                    "{{\"error\":\"data_changed\",\"hint\":\"{path} changed while it was read (size {size} \u{2192} {}): get it again\"}}",
+                let hint = format!(
+                    "{path} changed while it was read (size {size} \u{2192} {}): get it again",
                     p.size
-                ));
+                );
+                error_line("data_changed", &hint);
                 return Err(Exit::Refused);
             }
         }

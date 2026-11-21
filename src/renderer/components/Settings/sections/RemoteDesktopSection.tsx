@@ -457,7 +457,7 @@ export function RemoteDesktopSection({ scope = primaryScope() }: { scope?: Serve
           >
             <div className="type-row text-[var(--color-text-primary)]">Share this screen</div>
             <div className={SETTING_ROW_HINT}>
-              Owners and Admins can open it and use it. Members can only watch, and only if you let them. It stays on until an Owner
+              Owners and Admins can open it and use it. Members can only watch it, and only if you let them (they can still use terminal sessions, which run as this server’s user). It stays on until an Owner
               turns it off.
             </div>
             {switchNote.note ? (

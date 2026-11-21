@@ -539,7 +539,7 @@ export function startRefusalText(err: unknown): string {
 
 /** The S14 sentence the off card shows before turning it on. */
 export const DESKTOP_ENABLE_CARD =
-  "Anyone you allow can see and do anything you can on this computer, including your mail, files and passwords. Owners and Admins can open it; Members only with your grant, and only to watch. It stays on until an Owner turns it off. On Linux, K2 can't hide password apps from the picture, and notifications (2FA codes too) show in it."
+  "Anyone you allow can see and do anything you can on this computer, including your mail, files and passwords. Owners and Admins can open it; Members only with your grant, and only to watch (Members can still use terminal sessions, which run as this server's user). It stays on until an Owner turns it off. On Linux, K2 can't hide password apps from the picture, and notifications (2FA codes too) show in it."
 
 /** The `virtual` switch's card (§4 item 2, LD-18), word for word as the
  *  daemon's constant. */

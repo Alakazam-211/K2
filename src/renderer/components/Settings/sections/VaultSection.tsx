@@ -568,7 +568,7 @@ export function VaultSection({ scope }: { scope: ServerScope }): React.JSX.Eleme
       <div className="flex items-center justify-between gap-6">
         <p className="type-hint text-[var(--color-text-secondary)] leading-relaxed max-w-[75ch]">
           {member
-            ? 'As a Member you can add secrets for a workspace and change the ones you added. Seeing a value needs an Owner or Admin.'
+            ? 'As a Member you can add secrets for a workspace and change the ones you added. Seeing a value here needs an Owner or Admin.'
             : 'Grouped by which agents can use them. Show a value, rotate it or change where it goes from its row.'}
         </p>
         <div className="flex items-center gap-2 flex-shrink-0">

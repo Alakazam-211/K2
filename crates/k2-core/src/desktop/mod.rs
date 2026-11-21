@@ -53,7 +53,7 @@ pub const VIRTUAL_FEATURE_KEY: &str = "virtual-desktop-v1";
 pub const FEATURE_KEY: &str = "remote-desktop-v1";
 
 /// The enable card (S14), returned by `enable` and shown before Turn on.
-pub const ENABLE_CARD: &str = "Anyone you allow can see and do anything you can on this computer, including your mail, files and passwords. Owners and Admins can open it; Members only with your grant, and only to watch. It stays on until an Owner turns it off. On Linux, K2 can't hide password apps from the picture, and notifications (2FA codes too) show in it.";
+pub const ENABLE_CARD: &str = "Anyone you allow can see and do anything you can on this computer, including your mail, files and passwords. Owners and Admins can open it; Members only with your grant, and only to watch (Members can still use terminal sessions, which run as this server's user). It stays on until an Owner turns it off. On Linux, K2 can't hide password apps from the picture, and notifications (2FA codes too) show in it.";
 
 /// The enable card for the `virtual` switch (LD-18): every virtual
 /// desktop on the server, the shared one and each agent's.

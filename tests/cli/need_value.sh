@@ -194,6 +194,11 @@ last heartbeat log --limit
 last heartbeat log -n
 last heartbeat schedule add --name
 
+echo "== daemon install =="
+last daemon install --version
+last daemon install --bin-dir
+last daemon install --dry-run --manifest-url
+
 echo "== mail =="
 last mail watch inboxes --add
 last mail watch inboxes --wake

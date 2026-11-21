@@ -358,6 +358,9 @@ code=$(curl -s -o o3 -w '%{{http_code}}' -H "Authorization: Bearer $STOLEN_TOKEN
 code=$(curl -s -o o4 -w '%{{http_code}}' --unix-socket "$K2_HOOK_SOCK" -H "Authorization: Bearer $STOLEN_TOKEN" http://localhost/cli/whoami); echo "stolen_on_own_socket $code $(cat o4)" >> $R
 code=$(curl -s -o o5 -w '%{{http_code}}' --unix-socket "$K2_HOOK_SOCK" -H "Authorization: Bearer $K2_HOOK_TOKEN" http://localhost/cli/capabilities); echo "own_on_own_socket $code $(cat o5 | cut -c1-300)" >> $R
 bash {cli} capabilities --json > o9 2>&1; echo "own_cli_rc $? $(cat o9 | tr '\n' ' ' | cut -c1-300)" >> $R
+# A request the socket doesn't serve, with no X-K2-Via-Tcp (a client that
+# used to take "not served" to TCP): the socket hands it on itself.
+code=$(curl -s -o o12 -w '%{{http_code}}' --unix-socket "$K2_HOOK_SOCK" -X POST -H "Authorization: Bearer $K2_HOOK_TOKEN" http://localhost/cli/capabilities); echo "unserved_handed_on $code $(cut -c1-200 o12)" >> $R
 # Review F3: the smuggling request (B's passport in the query, its own in
 # the form body, a bare LF hiding a session header) on its own socket.
 python3 - "$K2_HOOK_SOCK" "$STOLEN_TOKEN" "$STOLEN_SID" "$K2_HOOK_TOKEN" > o10 2>&1 <<'PY'
@@ -485,6 +488,11 @@ fn the_five_step_demo_on_a_real_kernel() {
     // the CLI (review: never a 400 counted as working).
     assert_eq!(code("own_on_own_socket"), "200", "A's own passport on its own socket, /cli/capabilities: {}", r["own_on_own_socket"]);
     assert!(r["own_cli_rc"].starts_with("0 {"), "k2 capabilities --json from the fenced terminal: {}", r["own_cli_rc"]);
+    assert!(
+        !r["unserved_handed_on"].starts_with("000") && !r["unserved_handed_on"].contains("not served on cell socket") && !r["unserved_handed_on"].contains("passport_needs_socket"),
+        "a route the socket doesn't serve is answered by the TCP route code, not 'not served': {}",
+        r["unserved_handed_on"]
+    );
     // Review F3: the smuggling shapes never run as B.
     assert!(r["smuggled_query"].contains("403"), "B's passport in the query, own in the body, a bare LF: {}", r["smuggled_query"]);
     assert!(r["smuggled_bearer"].contains("400"), "own Bearer with a bare-LF smuggled session header is refused: {}", r["smuggled_bearer"]);

@@ -54,6 +54,9 @@ mod unix_impl {
 
     use crate::session_token::{HookPrincipal, ValidatedHook};
 
+    /// The socket's answer for a route it doesn't serve (no handler ran).
+    const NOT_SERVED_HERE: &str = "route not served on cell socket";
+
     /// Max request-head size before we refuse with 414 (mirrors the TCP
     /// dispatcher's head cap). Bodies are read AFTER the head via
     /// Content-Length; the head itself (request line + headers) is tiny.
@@ -733,6 +736,13 @@ mod unix_impl {
         // never names a session, so a cell can only ever write its OWN log. Clone
         // the bound session id into the worker (the other moved vars own their data).
         let sid_for_dispatch = this_session_id.clone();
+        // Agent Isolation M1: a bound passport can't take a "not served
+        // here" answer to TCP (TCP refuses it there), so the socket hands
+        // such a request to the TCP route code itself, as for X-K2-Via-Tcp
+        // (any client: the Rust k5 CLI, a script). No handler ran for it.
+        let forward_if_unserved = validated.as_ref().is_some_and(|v| v.agent_cgroup.is_some())
+            && k2_core::agent_cgroup::availability().is_ok();
+        let fwd_body = if forward_if_unserved { body.clone() } else { Vec::new() };
         // A slow verb logs its route and this cell's workspace (slow_request).
         let slow_trace = crate::slow_request::Trace::new(
             crate::slow_request::Via::Cell,
@@ -773,6 +783,10 @@ mod unix_impl {
             )
         });
 
+        if forward_if_unserved && status.starts_with("404") && out.contains(NOT_SERVED_HERE) {
+            crate::agent_isolation::forward_to_tcp(&mut stream, &head, &fwd_body, &this_session_id, &presented).await;
+            return;
+        }
         // Who this terminal acts as, on an App or role refusal (0.46.18).
         let out = crate::acting_as::stamp_cell(&status, path, &out, &feed_principal).unwrap_or(out);
         // Permission cards (PRD rev 3.1 §3.1): an agent verb's refusal (or

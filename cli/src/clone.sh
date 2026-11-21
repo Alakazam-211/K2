@@ -112,9 +112,10 @@ _clone_local_plain_http_warn() {
     [ -z "${_K2_PLAIN_HTTP_WARNED:-}" ] || return 0
     _envn_into ok PLAIN_HTTP_OK
     [ "$ok" != 1 ] || return 0
-    python3 -c "$_CLONE_URL_RULE
-import sys
-sys.exit(0 if clone_local_warns(sys.argv[1]) else 1)" "${HOST:-127.0.0.1}" || return 0
+    _CLONE_URL_RULE="$_CLONE_URL_RULE" python3 -c '
+import os, sys
+exec(os.environ.pop("_CLONE_URL_RULE"))
+sys.exit(0 if clone_local_warns(sys.argv[1]) else 1)' "${HOST:-127.0.0.1}" || return 0
     # The command's own name (white-label).
     me="${0##*/}"; case "$0" in /dev/fd/*) me=K2 ;; esac
     echo "warning: ${me} is sending this server's owner token to ${HOST} over plain http, unencrypted. That's fine on a private network such as a tailnet; elsewhere use https." >&2
@@ -124,12 +125,13 @@ sys.exit(0 if clone_local_warns(sys.argv[1]) else 1)" "${HOST:-127.0.0.1}" || re
 # _clone_https_gate URL: refuse (exit 3, the line on stderr) a remote URL a
 # token may not go to, before anything is looked up or sent.
 _clone_https_gate() {
-    python3 -c "$_CLONE_URL_RULE
-import sys
+    _CLONE_URL_RULE="$_CLONE_URL_RULE" python3 -c '
+import os, sys
+exec(os.environ.pop("_CLONE_URL_RULE"))
 line = clone_url_refusal(sys.argv[1])
 if line:
     print(line, file=sys.stderr)
-    sys.exit(3)" "$1"
+    sys.exit(3)' "$1"
 }
 
 # The engine: preview, push, pull, here, show, approve. Python so the

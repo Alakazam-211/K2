@@ -652,7 +652,8 @@ fn argv_of(input: &Input) -> Result<Vec<String>, CliResponse> {
 
 /// `explain` and `capabilities`: the kit's, with the board's file verbs as
 /// the file registry (`source: "file"`). `None` for any other verb.
-fn meta_verb(argv: &[String], json_out: bool, path: &str) -> Option<CliResponse> {
+/// `GET /cli/kit/explain` (`kit_explain_route`) answers its `explain` too.
+pub(crate) fn meta_verb(argv: &[String], json_out: bool, path: &str) -> Option<CliResponse> {
     let out = k2_mpc_board_bridge::kit::errors::run_meta(argv, json_out, &[k2_mpc_board_bridge::registry::registry()], &k2_mpc_board_bridge::kit::session::Config::default())?;
     Some(match out.refusal {
         Some(report) => kit_refused(&Refused { on: unread(path), why: Why::Report(report) }),

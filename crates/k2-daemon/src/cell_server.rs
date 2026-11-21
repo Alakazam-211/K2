@@ -933,6 +933,15 @@ mod unix_impl {
                 let who = crate::compute_routes::who_from_cell(this_session_id, principal);
                 from_cli(crate::capabilities::handle(who, params))
             }
+            // 0.46.17: `k2 explain <kit id>` from a K2 terminal, the Markdown
+            // kit's page. A read: GET only, Board files on or off.
+            p if p == crate::kit_explain_route::ROUTE => {
+                if is_post {
+                    return from_cli(crate::cli_response::CliResponse::method_not_allowed());
+                }
+                let who = crate::compute_routes::who_from_cell(this_session_id, principal);
+                from_cli(crate::kit_explain_route::handle(&who, params))
+            }
             // 0.46.11 (prd-k2-product-feedback-v1): `k2 send-feedback` from a
             // K2 terminal. The handler gates agents (the switch, the box
             // limits, diagnostics only with agentDiagnostics) and refuses a
@@ -2451,6 +2460,28 @@ mod unix_impl {
                 let (status, _, body) = dispatch_cell_verb("GET", path, &params, b"", &p, "sid-res");
                 assert_eq!(status, "405 Method Not Allowed", "{path}: {body}");
             }
+        }
+
+        /// 0.46.17 `GET /cli/kit/explain` on the cell socket: the kit's page
+        /// for this cell's passport with Board files off, the same answer
+        /// as the handler gives; a POST is 405, never the TCP sentinel.
+        #[test]
+        fn cell_dispatch_serves_the_kit_explain_with_board_files_off() {
+            let _home = crate::test_support::TempHome::new();
+            k2_core::board_preview::set_enabled(false);
+            assert!(!k2_core::board_preview::enabled(), "this test needs {} unset", k2_core::board_preview::ENV);
+            let p = principal();
+            let route = crate::kit_explain_route::ROUTE;
+            assert!(crate::session_token::is_agent_verb(route));
+            let params: HashMap<String, String> = [("id".to_string(), "MPC-E160".to_string())].into_iter().collect();
+            let (status, ctype, body) = dispatch_cell_verb("GET", route, &params, b"", &p, "sid-kit");
+            assert_eq!(status, "200 OK", "{body}");
+            let direct = crate::kit_explain_route::handle(&crate::compute_routes::who_from_cell("sid-kit", &p), &params);
+            assert_eq!((ctype, body.as_str()), (direct.content_type, direct.body.as_str()));
+            let v: serde_json::Value = serde_json::from_str(&body).expect("JSON body");
+            assert!(v["stdout"].as_str().is_some_and(|s| s.starts_with("MPC-E160 ")), "the kit's page: {body}");
+            let (status, _, body) = dispatch_cell_verb("POST", route, &params, b"{}", &p, "sid-kit");
+            assert_eq!(status, "405 Method Not Allowed", "{body}");
         }
 
         #[test]

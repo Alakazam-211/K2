@@ -719,6 +719,10 @@ pub(super) const ROWS: &[Route] = &[
     // re-points the k2 and k5 commands (`cli_beta_routes`). Owner only, and
     // the handler refuses passports and App passes too.
     both("/cli/k5-cli", Owner),
+    // `k2 explain <kit id>` (0.46.17): the Markdown kit's page for one of
+    // its error ids. Documentation, so a read at the Member floor that any
+    // agent's passport may make too (`kit_explain_route`).
+    get("/cli/kit/explain", Member),
     // LLM login wallet (Settings → LLMs, `k2 llm accounts`): the
     // `/cli/agents/*` floor. Passports are read-only in the handler.
     // Changing the server default (switch / next) is Admin and above

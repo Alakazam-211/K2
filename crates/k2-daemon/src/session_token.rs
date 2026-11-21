@@ -1106,6 +1106,9 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/app/status",
         // 0.46.7 (TC-17): k2 capabilities, its own workspace's Apps and nodes.
         "/cli/capabilities",
+        // 0.46.17: `k2 explain <kit id>`, the Markdown kit's page for one of
+        // its error ids. Documentation: a read, no file, no workspace.
+        "/cli/kit/explain",
         "/cli/app/box/prepare",
         "/cli/app/build",
         // 0.46.3: data in, and the label from its own legacy service.

@@ -30,6 +30,8 @@ pub mod boot_phases;
 pub mod boot_status;
 /// `k2 capabilities` (prd-tauri-core-0467-v1 TC-17).
 pub mod capabilities;
+/// `GET /cli/kit/explain`: `k2 explain <kit id>`, the Markdown kit's page.
+pub mod kit_explain_route;
 pub mod ptyd_status;
 pub mod ptyd_adopt;
 pub mod daemon_stop;

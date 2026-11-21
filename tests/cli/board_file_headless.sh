@@ -712,6 +712,24 @@ owner POST /cli/fs/rename "$(pj '{"old_path": A, "new_name": "renamed.k5board"}'
 owner GET /cli/board/file/read "" "path=$A/renamed.k5board"; jok "$BODY" 'len(j["held"]) == 1' "a K2 rename takes its held edits along"
 # An agent's conflict isn't kept.
 
+echo "== k2 explain <kit id> with Board files off (GET /cli/kit/explain) =="
+owner POST /cli/settings/update '{"boardFilePreview": false}'; want 200 "turn the preview off"
+owner POST /cli/board/file/verb '{"argv": ["explain", "MPC-E160"]}'; want 404 "the board verb, off"; code_is not_enabled "the board verb, off"
+for who in owner agent; do
+    "k2_as_$who" explain MPC-E160; want_rc 0 "k2 explain MPC-E160 as the $who, Board files off"
+    case "$OUT" in "MPC-E160 "*) ok "as the $who: the kit's page" ;; *) fail "as the $who: not the kit's page: $OUT / $ERR" ;; esac
+    "k2_as_$who" explain MPC-E160 --json; want_rc 0 "k2 explain MPC-E160 --json as the $who"
+    jok "$OUT" 'j["id"] == "MPC-E160"' "as the $who, --json: the kit's JSON"
+    "k2_as_$who" explain MPC-E999; want_rc 4 "k2 explain MPC-E999 as the $who: the kit's unknown id row"
+    has "$ERR" "MPC-E160" "as the $who: the unknown id row names its own id"
+done
+agent GET /cli/kit/explain "" "id=MPC-E160"; want 200 "the cell socket serves it to a passport"
+jok "$BODY" 'j["exit"] == 0 and j["stdout"].startswith("MPC-E160 ")' "the cell socket: the kit's page"
+Q2="path=$A/renamed.k5board" owner GET /cli/kit/explain "" "id=MPC-E160"; want 400 "a path field"; code_is bad_request "a path field"
+Q2="file=notes.md" owner GET /cli/kit/explain "" "id=MPC-E160"; want 400 "a file field"; code_is bad_request "a file field"
+owner POST /cli/kit/explain '{"id": "MPC-E160"}'; want 405 "a read: POST is refused"
+owner POST /cli/settings/update '{"boardFilePreview": true}'; want 200 "turn the preview back on"
+
 echo "== temp files =="
 
 ls -a "$A" | grep -q '\.tmp$' && fail "a temp file was left beside the boards"

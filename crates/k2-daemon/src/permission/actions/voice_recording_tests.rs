@@ -115,35 +115,37 @@ fn a_person_sets_the_start_level_and_those_it_changes_hear_it() {
     assert_eq!(s, "200 OK", "{a}");
     assert_eq!(level_now(), None, "a Deny changes nothing");
 
-    // An Admin's Allow: the level, as them; everyone's right was unknown.
-    let asked = ask_ok(&ws, START_ACTION, json!({ "level": "member" }));
+    // An Admin's Allow (another level: the denied one waits a day): the
+    // level, as them; from inherit, everyone's right was unknown.
+    let asked = ask_ok(&ws, START_ACTION, json!({ "level": "moderator" }));
     let (id, card) = (id_of(&asked), card_of(&asked));
     let mut rx = crate::session_events::subscribe();
     let tok = e.vault.confirm.mint(START_CONFIRM, Some(&id), &format!("connect:{admin}"), "local-auth");
     let (s, a) = answer_as(&admin, &ws, &card, json!({ "answer": "Allow", "confirmToken": tok }));
     assert_eq!(s, "200 OK", "{a}");
     assert_eq!(a["action"]["result"]["outcome"], "approved", "{a}");
-    assert_eq!(level_now().as_deref(), Some("member"));
+    assert_eq!(level_now().as_deref(), Some("moderator"));
     let heard = told(&mut rx);
-    assert!(heard.contains(&member) && heard.contains(&admin), "inherit to member: {heard:?}");
+    assert!(heard.contains(&member) && heard.contains(&admin), "inherit to moderator: {heard:?}");
 
-    // Member to moderator: the Member's right goes, the Admin's stays.
-    let asked = ask_ok(&ws, START_ACTION, json!({ "level": "moderator" }));
+    // Moderator to none: the Admin's right goes, the Member had none.
+    let asked = ask_ok(&ws, START_ACTION, json!({ "level": "none" }));
     let (id, card) = (id_of(&asked), card_of(&asked));
     let mut rx = crate::session_events::subscribe();
     let tok = e.vault.confirm.mint(START_CONFIRM, Some(&id), "owner", "local-auth");
     let (s, a) = answer_as("owner", &ws, &card, json!({ "answer": "Allow", "confirmToken": tok }));
     assert_eq!(s, "200 OK", "{a}");
-    assert_eq!(level_now().as_deref(), Some("moderator"));
+    assert_eq!(level_now().as_deref(), Some("none"));
     let heard = told(&mut rx);
-    assert!(heard.contains(&member), "{heard:?}");
-    assert!(!heard.contains(&admin), "an Admin may start recordings either way: {heard:?}");
+    assert!(heard.contains(&admin), "{heard:?}");
+    assert!(!heard.contains(&member), "a Member could start none either way: {heard:?}");
 
-    let (s, again) = ask(&ws, START_ACTION, json!({ "level": "moderator" }));
+    let (s, again) = ask(&ws, START_ACTION, json!({ "level": "none" }));
     assert_eq!((s.as_str(), &again["status"]), ("200 OK", &json!("already_done")), "{again}");
 }
 
-/// The dm card: a Member's Allow is refused, a Deny changes nothing, the
+/// The dm card: a Member's Allow is refused, a Deny (of dm=off) changes
+/// nothing, the
 /// owner's Allow turns `recording.dm_enabled` on through the policy route
 /// (its own confirm, minted for the same person), and every login hears
 /// `access_changed`.
@@ -154,7 +156,7 @@ fn a_person_turns_dm_recording_on() {
     let ws = seed("dmr");
     hook::note_features_for_tests(&["app_recording", "voice_record_cap", "recording_required", "mgmt_recording_reads"]).expect("flags");
     let member = login("dmm", Role::Member);
-    let asked = ask_ok(&ws, DM_ACTION, json!({ "dm": "on" }));
+    let asked = ask_ok(&ws, DM_ACTION, json!({ "dm": "off" }));
     let (id, card) = (id_of(&asked), card_of(&asked));
     let tok = e.vault.confirm.mint(DM_CONFIRM, Some(&id), &format!("connect:{member}"), "local-auth");
     below_floor(answer_as(&member, &ws, &card, json!({ "answer": "Allow", "confirmToken": tok })), "admin");

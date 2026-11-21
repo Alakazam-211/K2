@@ -125,7 +125,7 @@ pub const BACKFILL_MARK: &str = "ticket-backfill";
 /// A notice K2 itself wrote (`k2`, `k2-disk`, `K2 Postgres`, …).
 fn is_k2_name(author: &str) -> bool {
     let l = author.trim().to_ascii_lowercase();
-    l == "k2" || l.starts_with("k2-") || l.starts_with("k2 ")
+    l == AUTHOR_K2 || l.strip_prefix(AUTHOR_K2).is_some_and(|rest| rest.starts_with(['-', ' ']))
 }
 
 /// Is `name` an App guest's username on this server? An unreadable answer
@@ -166,7 +166,7 @@ pub fn old_author(conn: &Connection, author: &str, agent_name: &str, connect: &s
     let a = author.trim();
     let named = |kind: &str, login: &str| PostAuthor { kind: kind.to_string(), login: login.to_string(), name: Some(a.to_string()) };
     if is_k2_name(a) {
-        return Some(named(AUTHOR_K2, "k2"));
+        return Some(named(AUTHOR_K2, AUTHOR_K2));
     }
     if a == agent_name.trim() {
         return None;

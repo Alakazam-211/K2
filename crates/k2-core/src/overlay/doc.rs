@@ -485,7 +485,7 @@ impl PostAuthor {
 
     /// K2 itself (see [`AUTHOR_SYSTEM`]).
     pub fn system() -> Self {
-        Self { kind: AUTHOR_SYSTEM.to_string(), login: "k2".to_string(), name: None }
+        Self { kind: AUTHOR_SYSTEM.to_string(), login: AUTHOR_K2.to_string(), name: None }
     }
 
     /// True for K2's own stamp ([`AUTHOR_SYSTEM`]).

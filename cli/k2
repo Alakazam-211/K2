@@ -41214,9 +41214,8 @@ print("%s\tcard %s on %s'"'"'s Thread (%s)" % (p.get("request", ""), p.get("requ
 
 # Ask the daemon for a confirm token over vault.sock (Touch ID sheet on a
 # Mac, else the vault password typed here). 0.46.17: the owner's terminal
-# can also ask the phone (`phoneOffered`): with this computer's own prompt,
-# both at once (first answer wins); with only a typed password and no
-# terminal to type it in, the phone alone. K2_VAULT_CONFIRM_METHOD=phone:
+# can also ask the phone (`phoneOffered`), beside this computer's own
+# prompt: both at once, the first answer wins. K2_VAULT_CONFIRM_METHOD=phone:
 # the phone only; =local: never the phone. $4: extra JSON for the phone
 # card (a share's `grant`). Prints the token. Some steps
 # take this computer's own user check instead (the daemon's presence
@@ -41253,11 +41252,11 @@ _vault_confirm_token() {
     if [ "$want_m" = "phone" ]; then
         [ "$phone_ok" = "1" ] || { echo "no_phone_confirm: this step can't be confirmed from a phone here (the owner's own terminal, permission cards on, and not an owner-login change); unset K2_VAULT_CONFIRM_METHOD to confirm at this computer" >&2; exit 3; }
         methods="phone"
-    elif [ "$phone_ok" = "1" ] && [ "$want_m" != "local" ] && [ ! -t 0 ]; then
-        # Only a typed password here, and no terminal to type it in: the phone.
-        case " $methods " in *" local-auth "*|*" windows-hello "*|*" terminal "*) ;; *) methods="phone" ;; esac
     fi
-    [ "$want_m" = "local" ] && phone_ok=""
+    # The phone rides along with this computer's own prompt only; a typed
+    # password (the vault password, an owner login's) stays as it was.
+    # K2_VAULT_CONFIRM_METHOD=local (or =vault-password): never the phone.
+    [ -n "$want_m" ] && [ "$want_m" != "phone" ] && phone_ok=""
     case " $methods " in
         *" phone "*)
             _vault_phone_raise "$action" "$secret_id" "$label" "$phone_extra"

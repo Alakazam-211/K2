@@ -19,6 +19,11 @@
 //!   only, through the person's proxy when one is set. The daemon's own
 //!   targets (loopback TCP, the cell socket) never read a proxy setting.
 //!
+//! The daemon's host (`K2_HOST`) on another computer over plain http is
+//! the prelude's business, not a request's: one warning line per run, or
+//! a password flag refused ([`crate::prelude::plain_http`]). Every
+//! connection runs that step first ([`wire::connect`]).
+//!
 //! # The requests
 //!
 //! Every request has curl's head (see [`wire`]): the request line,

@@ -136,6 +136,7 @@ fn is_tty(fd: i32) -> bool {
 /// `printf '%s' "$text" >&2`. A stderr that can't be written is no error
 /// to the shell's `printf` either way the caller goes on.
 pub fn prompt(text: &str) {
+    crate::prelude::plain_http::run();
     let mut e = io::stderr().lock();
     let _ = e.write_all(text.as_bytes());
     let _ = e.flush();
@@ -143,6 +144,7 @@ pub fn prompt(text: &str) {
 
 /// `IFS= read -r[s] v` on stdin, then the caller's `||` ([`AtEof`]).
 pub fn read_line(echo: Echo, at_eof: AtEof) -> Secret {
+    crate::prelude::plain_http::run();
     let hidden = echo == Echo::Hidden && stdin_is_tty();
     let guard = if hidden { NoEcho::start(0) } else { None };
     let (line, ended) = read_until_newline(&mut Fd0);
@@ -155,6 +157,7 @@ pub fn read_line(echo: Echo, at_eof: AtEof) -> Secret {
 /// there with exit 1, saying nothing). A terminal's Ctrl-D on an empty
 /// line is such an end, not an empty answer.
 pub fn read_line_or_end(echo: Echo) -> Option<Secret> {
+    crate::prelude::plain_http::run();
     let hidden = echo == Echo::Hidden && stdin_is_tty();
     let guard = if hidden { NoEcho::start(0) } else { None };
     let (line, ended) = read_until_newline(&mut Fd0);

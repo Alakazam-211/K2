@@ -121,51 +121,6 @@ pub fn literal_loopback(host: &str) -> bool {
     h == "localhost" || h.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
 }
 
-/// A Tailscale address as written, never looked up: an IPv4 literal in
-/// 100.64.0.0/10, an IPv6 literal in fd7a:115c:a1e0::/48 (bracketed or
-/// not), or a name ending in `.ts.net`.
-pub fn is_tailnet_literal(host: &str) -> bool {
-    let h = host
-        .strip_prefix('[')
-        .and_then(|h| h.strip_suffix(']'))
-        .unwrap_or(host);
-    match h.parse::<IpAddr>() {
-        Ok(IpAddr::V4(v)) => u32::from(v) & 0xffc0_0000 == 0x6440_0000,
-        Ok(IpAddr::V6(v)) => v.segments()[..3] == [0xfd7a, 0x115c, 0xa1e0],
-        Err(_) => h.ends_with(".ts.net"),
-    }
-}
-
-/// The settings that silence [`plain_http_daemon_note`].
-pub const PLAIN_HTTP_OK: &[&str] = &["K2_PLAIN_HTTP_OK"];
-
-/// The daemon's host (`HOST`) is reached over plain http: the owner's
-/// token goes there unencrypted. Allowed (Rosson's ruling), with one
-/// stderr line per run at the first request that carries a token, unless
-/// the host is a loopback or Tailscale literal ([`literal_loopback`],
-/// [`is_tailnet_literal`]) or `K2_PLAIN_HTTP_OK=1`.
-pub fn plain_http_daemon_note(host: &str) {
-    static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    let ok = PLAIN_HTTP_OK
-        .iter()
-        .any(|n| std::env::var_os(n).is_some_and(|v| v == "1"));
-    if let Some(line) = plain_http_daemon_line(host, ok) {
-        if !SAID.swap(true, std::sync::atomic::Ordering::SeqCst) {
-            crate::out::stderr_line(&line);
-        }
-    }
-}
-
-/// [`plain_http_daemon_note`]'s line, when one is due.
-pub fn plain_http_daemon_line(host: &str, ok: bool) -> Option<String> {
-    (!ok && !literal_loopback(host) && !is_tailnet_literal(host)).then(|| {
-        format!(
-            "warning: {} is sending this server's owner token to {host} over plain http, unencrypted. That's fine on a private network such as a tailnet; elsewhere use https.",
-            k2_client::cli_name!()
-        )
-    })
-}
-
 /// The plain-http refusal's line ([`plain_http_refusal`]).
 pub fn plain_http_line(url: &str) -> String {
     format!("Error: plain http:// only to this computer; use https:// (got: {url})")
@@ -182,7 +137,6 @@ pub fn apply(client: &mut Client, base: &Base, token: String) {
     client.owner_from_disk = false;
     client.no_token = false;
     client.force_tcp = true;
-    client.remote = true;
     // The K2 home's port file is this machine's daemon, not the host's.
     client.port_file = None;
 }
@@ -476,39 +430,6 @@ mod tests {
         for ok in ["http://127.0.0.1:9", "http://localhost:9"] {
             assert_eq!(plain_http_refusal(&base(ok).unwrap(), ok), None, "{ok}");
         }
-    }
-
-    #[test]
-    fn tailnet_literals_as_written() {
-        for (host, want) in [
-            ("100.64.0.1", true),
-            ("100.127.255.254", true),
-            ("100.63.255.255", false),
-            ("100.128.0.1", false),
-            ("fd7a:115c:a1e0::1", true),
-            ("[fd7a:115c:a1e0:ab12::5]", true),
-            ("fd7a:115c:a1e1::1", false),
-            ("box.tail1234.ts.net", true),
-            ("ts.net", false),
-            ("box.ts.net.evil.example", false),
-            ("10.0.0.5", false),
-            ("box.example", false),
-        ] {
-            assert_eq!(is_tailnet_literal(host), want, "{host}");
-        }
-        let line = |h: &str, ok: bool| plain_http_daemon_line(h, ok);
-        assert_eq!(line("127.0.0.1", false), None);
-        assert_eq!(line("localhost", false), None);
-        assert_eq!(line("100.100.1.2", false), None);
-        assert_eq!(line("box.tail1234.ts.net", false), None);
-        assert_eq!(line("10.0.0.5", true), None, "K2_PLAIN_HTTP_OK=1");
-        let name = k2_client::cli_name!();
-        assert_eq!(
-            line("10.0.0.5", false).as_deref(),
-            Some(format!("warning: {name} is sending this server's owner token to 10.0.0.5 over plain http, unencrypted. That's fine on a private network such as a tailnet; elsewhere use https.").as_str())
-        );
-        // As written: a name under localhost is not this computer.
-        assert!(line("x.localhost", false).is_some());
     }
 
     #[test]

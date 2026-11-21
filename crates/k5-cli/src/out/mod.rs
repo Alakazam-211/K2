@@ -16,8 +16,10 @@ pub mod pylib;
 use crate::exit::Exit;
 use std::io::{self, Write};
 
-/// Writes `bytes` to `w` and flushes it.
+/// Writes `bytes` to `w` and flushes it. The prelude's plain-http step
+/// runs first, once ([`crate::prelude::plain_http`]).
 pub fn write_flushed(w: &mut impl Write, bytes: &[u8]) -> io::Result<()> {
+    crate::prelude::plain_http::run();
     w.write_all(bytes)?;
     w.flush()
 }

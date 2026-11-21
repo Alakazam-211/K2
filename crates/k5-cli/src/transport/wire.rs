@@ -384,7 +384,10 @@ fn is_timeout(e: &io::Error) -> bool {
 
 /// Opens the connection: within `connect` and before `deadline`,
 /// whichever comes first, as curl's `--connect-timeout` and `--max-time`.
+/// The prelude's plain-http step runs first, once
+/// ([`crate::prelude::plain_http`]).
 pub fn connect(target: &Target, connect: Duration, deadline: Instant) -> Result<Conn, Failure> {
+    crate::prelude::plain_http::run();
     let start = Instant::now();
     let limit = (start + connect).min(deadline);
     match target {

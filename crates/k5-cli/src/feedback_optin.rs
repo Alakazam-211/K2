@@ -162,7 +162,7 @@ mod tests {
             "        _k2_cfg_add header \"Authorization: Bearer ${SCOPED_TOKEN}\"\n",
             "        out=\"$(_k2_curl \"$_K2_CFG\" -s -G --unix-socket \"$sock\" \"http://localhost/cli/product-feedback/settings\" \\\n            --connect-timeout 1 --max-time 2 -w $'\\n%{http_code}' 2>/dev/null)\" || out=\"\"\n",
             "    elif [ -n \"${PORT:-}\" ]; then\n        _k2_cfg_auth \"$SCOPED_TOKEN\"\n",
-            "        out=\"$(_k2_curl \"$_K2_CFG\" -s -G \"http://${HOST}:${PORT}/cli/product-feedback/settings\" \\\n            --connect-timeout 1 --max-time 2 -w $'\\n%{http_code}' 2>/dev/null)\" || out=\"\"\n",
+            "        local base\n        _k2_daemon_base base; out=\"$(_k2_curl \"$_K2_CFG\" -s -G \"${base}/cli/product-feedback/settings\" \\\n            --connect-timeout 1 --max-time 2 -w $'\\n%{http_code}' 2>/dev/null)\" || out=\"\"\n",
             "    [[ \"$out\" == *$'\\n200' ]] || return 1\n    out=\"${out%$'\\n200'}\"\n    printf '%s' \"$out\" | python3 -c '\n",
             "sys.exit(0 if isinstance(v, dict) and v.get(\"agents\") is False and v.get(\"senderKind\") == \"agent\" else 1)\n",
         ] {

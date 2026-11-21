@@ -520,6 +520,9 @@ pub fn hand_off(who: CalledAs, args: &[OsString]) -> Exit {
     }
     trace::mark("passport rule");
     let err = run(who, args);
+    // The shell never ran: nothing went to the daemon, so no plain-http
+    // line before the front's own.
+    crate::prelude::plain_http::skip();
     crate::out::stderr_line(&err.line(who));
     err.exit()
 }

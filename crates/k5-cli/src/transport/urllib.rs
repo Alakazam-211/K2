@@ -579,8 +579,10 @@ fn is_timeout_errno(_code: i32) -> bool {
 }
 
 /// `socket.create_connection((host, port), timeout)`: each address in
-/// turn; the first error when none connects.
+/// turn; the first error when none connects. The prelude's plain-http
+/// step runs first, once ([`crate::prelude::plain_http`]).
 pub fn connect(host: &str, port: u16, timeout: Duration) -> Result<TcpStream, Raised> {
+    crate::prelude::plain_http::run();
     let addrs: Vec<_> = (host, port)
         .to_socket_addrs()
         .map_err(|e| gai_error(&e))?

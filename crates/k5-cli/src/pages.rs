@@ -1578,7 +1578,7 @@ mod tests {
             .find("_skip_conn_gate=0\n")
             .expect("the gates' start");
         let end = policy
-            .find("\nBASE_URL=\"http://${HOST}:${PORT}\"\n")
+            .find("\n_k2_daemon_base BASE_URL\n")
             .expect("BASE_URL");
         let gates = &policy[start..end];
         let mut words = std::collections::BTreeSet::new();

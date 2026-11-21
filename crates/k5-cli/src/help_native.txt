@@ -555,6 +555,8 @@ mail domains --help|mail/domains|out|0
 mail domains -h|mail/domains|out|0
 mail draft --help|mail/draft|out|0
 mail draft -h|mail/draft|out|0
+mail draft delete --help|mail/draft/delete|out|0
+mail draft delete -h|mail/draft/delete|out|0
 mail drafts --help|mail/drafts|out|0
 mail drafts -h|mail/drafts|out|0
 mail forward --help|mail/forward|out|0

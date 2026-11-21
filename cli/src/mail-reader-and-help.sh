@@ -503,6 +503,12 @@ cmd_help_mail_draft() {
 EOF
 }
 
+cmd_help_mail_draft_delete() {
+    cat <<'EOF'
+%include cli/text/help/mail/draft/delete.txt
+EOF
+}
+
 cmd_help_mail_inboxes() {
     cat <<'EOF'
 %include cli/text/help/mail/inboxes.txt

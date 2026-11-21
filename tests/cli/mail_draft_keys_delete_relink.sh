@@ -2,8 +2,9 @@
 # Loud harness for the 0.46.17 mail drafting CLI: `k2 mail draft <id> --to`,
 # the idempotency key and its retry, `k2 mail draft delete`, `k2 mail link
 # relink`, the inbox_busy / inbox_throttled exits (never retried) and the
-# link list status words. A fake daemon answers from a script; no live
-# daemon, no mail. Fail-loud: no skip-if-missing.
+# link list status words, and `k2 mail draft delete --help` printing its
+# own page. A fake daemon answers from a script; no live daemon, no mail.
+# Fail-loud: no skip-if-missing.
 # Run with: bash tests/cli/mail_draft_keys_delete_relink.sh
 
 set -euo pipefail
@@ -74,6 +75,9 @@ script() { printf '%s\n' "${@:2}" > "$WORKDIR/script/$1"; }
 count() { grep -c "\"path\": \"$1\"" "$WORKDIR/requests.jsonl" 2>/dev/null || true; }
 nth_body() { sed -n "${2}p" "$WORKDIR/requests.jsonl" | python3 -c "import json,sys; print(json.dumps(json.load(sys.stdin)['body'].get('$1')))"; }
 run() { set +e; out="$("${K2[@]}" "$K2_CLI" "$@" 2>&1)"; rc=$?; set -e; }
+# run_split: stdout and stderr to their own files, byte for byte.
+run_split() { set +e; "${K2[@]}" "$K2_CLI" "$@" >"$WORKDIR/stdout" 2>"$WORKDIR/stderr"; rc=$?; set -e; }
+HELP_DIR="$SCRIPT_DIR/../../cli/text/help/mail"
 
 echo "== reply draft takes --to; every save carries a key =="
 reset
@@ -138,6 +142,26 @@ run mail draft delete d_1 -h
 expect_exit "delete -h" 0 "$rc"
 expect_in "delete -h prints help" "$out" "k2 mail draft delete <draft-id>"
 [ -f "$WORKDIR/requests.jsonl" ] && bad "help sent a request" || ok "help sends nothing"
+
+echo "== draft delete --help prints its own page, never the draft page =="
+for form in "delete --help" "delete -h" "delete d_1 --help" "delete --json -h"; do
+    reset
+    # shellcheck disable=SC2086
+    run_split mail draft $form
+    expect_exit "draft $form" 0 "$rc"
+    cmp -s "$WORKDIR/stdout" "$HELP_DIR/draft/delete.txt" \
+        && ok "draft $form prints help/mail/draft/delete.txt" \
+        || bad "draft $form printed: $(cat "$WORKDIR/stdout")"
+    [ -s "$WORKDIR/stderr" ] && bad "draft $form wrote stderr: $(cat "$WORKDIR/stderr")" || ok "draft $form: stderr empty"
+    [ -f "$WORKDIR/requests.jsonl" ] && bad "draft $form sent a request" || ok "draft $form sends nothing"
+done
+reset
+run_split mail draft --help
+expect_exit "draft --help" 0 "$rc"
+cmp -s "$WORKDIR/stdout" "$HELP_DIR/draft.txt" \
+    && ok "draft --help still prints help/mail/draft.txt" \
+    || bad "draft --help printed: $(cat "$WORKDIR/stdout")"
+[ -f "$WORKDIR/requests.jsonl" ] && bad "draft --help sent a request" || ok "draft --help sends nothing"
 
 echo "== link relink and link list =="
 reset

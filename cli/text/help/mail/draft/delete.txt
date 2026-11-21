@@ -1,0 +1,18 @@
+Delete a draft your agent saved ('k2 mail draft'). A hosted inbox's draft
+is removed from Drafts; a linked inbox's draft is moved to Trash. Nothing
+is sent. A draft someone else saved is refused and nothing is touched.
+'k2 mail drafts' lists yours with their ids; afterwards it shows the
+draft as discarded.
+
+USAGE
+  k2 mail draft delete <draft-id> [--json]
+
+ARGUMENTS
+  <draft-id>             The draft's id (d_…), as 'k2 mail drafts' lists it
+                         and 'k2 mail draft' printed when it saved it
+
+FLAGS
+  --json                 JSON output ({ok,draftId,inbox,draftStatus,hint})
+
+ERRORS
+  not_your_draft (exit 3)   that draft wasn't saved by your agent

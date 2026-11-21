@@ -1025,13 +1025,14 @@ cmd_mail_approvals() {
 # (`--to --subject --body`). Agent verb — drafting is always on
 # (`can_draft`); sending needs level send AND Sending=on.
 cmd_mail_draft() {
-    if _wants_help "$@"; then cmd_help_mail_draft; exit 0; fi
     # 0.46.17: `k2 mail draft delete <d_id>` — a draft this agent saved.
+    # Ahead of the help check, so `draft delete --help` prints its own page.
     if [ "${1:-}" = "delete" ]; then
         shift
         cmd_mail_draft_delete "$@"
         return
     fi
+    if _wants_help "$@"; then cmd_help_mail_draft; exit 0; fi
     local id="" body="" body_file="" as_json=false key=""
     local to="" subject="" cc="" bcc="" from="" attach="" reply_all=false
     while [ $# -gt 0 ]; do
@@ -1137,7 +1138,7 @@ cmd_mail_draft() {
 # /cli/mail/draft/delete). Hosted: removed from Drafts; linked IMAP: moved
 # to Trash. Anyone else's draft is refused (403 not_your_draft, exit 3).
 cmd_mail_draft_delete() {
-    if _wants_help "$@"; then cmd_help_mail_draft; exit 0; fi
+    if _wants_help "$@"; then cmd_help_mail_draft_delete; exit 0; fi
     local id="" as_json=false
     while [ $# -gt 0 ]; do
         case "$1" in

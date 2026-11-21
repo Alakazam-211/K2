@@ -42,9 +42,12 @@
 //! An address `handle::label.postal.bot` first is Postal mail
 //! ([`super::postal`]), and so is one msg's own loop reads after a value
 //! flag ([`super::postal::after_loop`]): there a flag Postal mail can't
-//! honour is refused with the address-first form's line, never dropped. The shell answers these forms itself ([`parse`]
+//! honour is refused with the address-first form's line, never dropped.
+//! A bare `--` ends the flags: the words after it are the address and the
+//! text as typed (a text may start with a dash or be `--help`), and an
+//! address right after it is Postal mail too. The shell answers these forms itself ([`parse`]
 //! says [`Parsed::Shell`]): a tray form's `~name` path
-//! ([`super::tray`]), and a `--secret` the vault's handoff leaves to the
+//! ([`super::tray`]), a tray or signal line with a bare `--` in it, and a `--secret` the vault's handoff leaves to the
 //! shell ([`vault::handoff::native`]), or with a `python3` the binary
 //! can't tell. An address on another server
 //! (`agent::host`, `agent@host`) goes over federation ([`super::remote`]).
@@ -342,15 +345,40 @@ pub fn parse(words: &[&str]) -> Parsed {
     if words.iter().any(|w| matches!(*w, "--help" | "-h")) {
         return Parsed::Shell;
     }
-    if let Some(at) = words.iter().position(|w| !w.starts_with('-')) {
-        if is_postal(words[at]) {
-            return match super::postal::parse(words, at) {
-                Ok(m) => Parsed::Postal(m),
-                Err(line) => Parsed::Stop(format!("{line}\n"), Exit::Usage),
-            };
+    // `cmd_msg_v2`: a Postal address, the first word that isn't a flag, or
+    // the word right after a bare `--` (the flags before it, then `--` and
+    // the text): Postal mail ([`super::postal::parse`]).
+    let mail = |to: &str, args: Vec<&str>| match super::postal::parse(to, &args) {
+        Ok(m) => Parsed::Postal(m),
+        Err(line) => Parsed::Stop(format!("{line}\n"), Exit::Usage),
+    };
+    for (i, w) in words.iter().enumerate() {
+        if *w == "--" {
+            if let Some(to) = words.get(i + 1).filter(|t| is_postal(t)) {
+                let mut args = words[..i].to_vec();
+                args.push("--");
+                args.extend_from_slice(&words[i + 2..]);
+                return mail(*to, args);
+            }
+            break;
+        }
+        if !w.starts_with('-') {
+            if is_postal(w) {
+                let mut args = words[..i].to_vec();
+                args.extend_from_slice(&words[i + 1..]);
+                return mail(*w, args);
+            }
+            break;
         }
     }
-    let has = |f: &str| words.contains(&f);
+    // The form scans stop at a bare `--`: the words after it are text.
+    let before = &words[..words.iter().position(|w| *w == "--").unwrap_or(words.len())];
+    let has = |f: &str| before.contains(&f);
+    // A tray or signal line with a `--` in it is the shell's.
+    let dashdash = before.len() < words.len();
+    if dashdash && ["--signal", "--inbox", "--inbox-silent", "--inbox-wake"].iter().any(|f| has(*f)) {
+        return Parsed::Shell;
+    }
     if has("--signal") {
         return match super::signal::parse(words) {
             super::signal::Parsed::Shell => Parsed::Shell,
@@ -437,6 +465,17 @@ pub fn parse(words: &[&str]) -> Parsed {
                 i += 1;
             }
             "--agent" => return Parsed::Stop(AGENT_RETIRED.to_string(), Exit::Error),
+            // The rest is the address and the text, as typed.
+            "--" => {
+                for w in &words[i + 1..] {
+                    if m.target.is_empty() {
+                        m.target = (*w).to_string();
+                    } else {
+                        m.text = (*w).to_string();
+                    }
+                }
+                break;
+            }
             w if w.starts_with('-') => return Parsed::Stop(unknown_flag(w), Exit::Error),
             w => {
                 if m.target.is_empty() {

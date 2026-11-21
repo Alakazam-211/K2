@@ -540,6 +540,50 @@ fn postal_mail() {
 /// In a session (`PS`), a person's step ends with where a person takes
 /// it, unless the daemon's hint already says; outside a session it never
 /// does. Each line number names the line of `_postal_print`'s Python.
+/// A bare `--` ends the flags (the shell's 99123b0514 and 70eb148ba6):
+/// the words after it are the address and the text as typed.
+#[test]
+fn text_after_dashdash_is_sent_as_typed() {
+    use super::postal::{self, Mail};
+    let to = "ops::beta.postal.bot";
+    let mail = |text: &str, wake: bool, json: bool| {
+        Parsed::Postal(Mail {
+            to: to.into(),
+            text: text.into(),
+            wake,
+            json,
+        })
+    };
+    assert_eq!(parse(&["--", to, "-x"]), mail("-x", true, false));
+    assert_eq!(
+        parse(&["--no-wake", "--json", "--", to, "-x", "--y"]),
+        mail("-x --y", false, true)
+    );
+    assert_eq!(parse(&[to, "--no-wake", "--", "-x"]), mail("-x", false, false));
+    assert_eq!(
+        parse(&["--", to]),
+        Parsed::Stop(format!("{}\n", postal::usage(to)), Exit::Usage)
+    );
+    // A flag Postal mail can't honour before the `--` is still refused,
+    // flag first or address first.
+    let refused = Parsed::Stop(format!("{}\n", postal::k2_only("--from", to)), Exit::Usage);
+    assert_eq!(parse(&["--from", "me", to, "--", "-x"]), refused);
+    assert_eq!(parse(&[to, "--from", "me", "--", "-x"]), refused);
+    // A local address: the last word after `--` is the text.
+    match parse(&["--from", "me", "--", "ws", "-x"]) {
+        Parsed::Send(m) => {
+            assert_eq!((m.target.as_str(), m.text.as_str(), m.from.as_str()), ("ws", "-x", "me"));
+        }
+        other => panic!("{other:?}"),
+    }
+    match parse(&["ws", "--", "--signal", "--inbox"]) {
+        Parsed::Send(m) => assert_eq!((m.target.as_str(), m.text.as_str()), ("ws", "--inbox")),
+        other => panic!("{other:?}"),
+    }
+    // A tray or signal line with a `--` in it is the shell's.
+    assert_eq!(parse(&["ws", "--signal", "k", "--", "x"]), Parsed::Shell);
+}
+
 #[test]
 fn postal_mail_in_a_session() {
     use super::postal;

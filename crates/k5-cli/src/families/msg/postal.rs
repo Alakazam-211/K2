@@ -84,37 +84,43 @@ pub fn usage(to: &str) -> String {
     )
 }
 
-/// The words around the address (`at` is its place), read as
-/// `_postal_send_teach` reads them.
-pub fn parse(words: &[&str], at: usize) -> Result<Mail, String> {
-    let to = words[at].to_string();
+/// `_postal_send_teach <to> <args…>`: the words handed with the address,
+/// read as it reads them. A bare `--` makes the rest the text, as typed
+/// (a word there may start with a dash or be `--help`).
+pub fn parse(to: &str, args: &[&str]) -> Result<Mail, String> {
     let mut m = Mail {
-        to: to.clone(),
+        to: to.to_string(),
         text: String::new(),
         wake: true,
         json: false,
     };
-    for (i, w) in words.iter().enumerate() {
-        if i == at {
-            continue;
+    let add = |m: &mut Mail, t: &str| {
+        if m.text.is_empty() {
+            m.text = t.to_string();
+        } else {
+            m.text = format!("{} {t}", m.text);
         }
-        match *w {
+    };
+    let mut i = 0;
+    while i < args.len() {
+        match args[i] {
             "--no-wake" => m.wake = false,
             "--wake" => {}
             "--json" => m.json = true,
-            f if K2_ONLY.contains(&f) => return Err(k2_only(f, &to)),
-            f if f.starts_with('-') => return Err(unknown_flag(f)),
-            t => {
-                if m.text.is_empty() {
-                    m.text = t.to_string();
-                } else {
-                    m.text = format!("{} {t}", m.text);
+            "--" => {
+                for t in &args[i + 1..] {
+                    add(&mut m, t);
                 }
+                break;
             }
+            f if K2_ONLY.contains(&f) => return Err(k2_only(f, to)),
+            f if f.starts_with('-') => return Err(unknown_flag(f)),
+            t => add(&mut m, t),
         }
+        i += 1;
     }
     if m.text.is_empty() {
-        return Err(usage(&to));
+        return Err(usage(to));
     }
     Ok(m)
 }

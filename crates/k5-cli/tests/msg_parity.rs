@@ -332,6 +332,44 @@ fn msg_sends_as_the_shell_does() {
             1,
             1,
         ),
+        // After a bare `--` the words are the address and the text as typed
+        // (the shell's 99123b0514 and 70eb148ba6).
+        plain(
+            "Postal mail after --: a text with a dash first",
+            &["--", "a::abc.postal.bot", "-x"],
+            vec![ok(POSTAL_SENT)],
+            0,
+            1,
+        ),
+        plain(
+            "Postal mail, --no-wake --json, then -- and the text",
+            &["--no-wake", "--json", "--", "a::abc.postal.bot", "-x", "--y"],
+            vec![ok(POSTAL_SENT)],
+            0,
+            1,
+        ),
+        plain(
+            "Postal mail, the address first, then -- and the text",
+            &["a::abc.postal.bot", "--no-wake", "--", "-x"],
+            vec![ok(POSTAL_SENT)],
+            0,
+            1,
+        ),
+        plain("Postal mail after --, no text", &["--", "a::abc.postal.bot"], vec![], 2, 0),
+        plain(
+            "Postal mail, --from first, the text after --",
+            &["--from", "me", "a::abc.postal.bot", "--", "-x"],
+            vec![],
+            2,
+            0,
+        ),
+        plain(
+            "a live send, the address and text after --",
+            &["--from", "me", "--idempotency-key", KEY, "--", "ws", "-x"],
+            vec![ok(ON), ok(SENT)],
+            0,
+            2,
+        ),
         // The words.
         plain(
             "--session",

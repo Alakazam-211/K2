@@ -2078,7 +2078,7 @@ elif verb == "link_list":
         for r in rows:
             pri = r.get("primary") or {}
             st = inbox_status_word(r)
-            if st != r.get("status"):
+            if st != r.get("status", "?"):
                 notes.append((r.get("address", ""), r.get("relinkReason")))
             print(("%-" + str(w) + "s%-25s%-22s%s") % (
                 r.get("address", ""), st,

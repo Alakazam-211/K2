@@ -2,9 +2,10 @@
 # Loud harness for the 0.46.17 mail drafting CLI: `k2 mail draft <id> --to`,
 # the idempotency key and its retry, `k2 mail draft delete`, `k2 mail link
 # relink`, the inbox_busy / inbox_throttled exits (never retried) and the
-# link list status words, and `k2 mail draft delete --help` printing its
-# own page. A fake daemon answers from a script; no live daemon, no mail.
-# Fail-loud: no skip-if-missing.
+# link list status words (a row with no status gets no fix line), and
+# `k2 mail draft delete --help` printing its own page. A fake daemon
+# answers from a script; no live daemon, no mail. Fail-loud: no
+# skip-if-missing.
 # Run with: bash tests/cli/mail_draft_keys_delete_relink.sh
 
 set -euo pipefail
@@ -18,6 +19,7 @@ ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
 bad() { echo "  FAIL: $1" >&2; fail=$((fail + 1)); }
 expect_exit() { if [ "$3" = "$2" ]; then ok "$1 (exit $3)"; else bad "$1: expected exit $2, got $3"; fi; }
 expect_in() { if printf '%s' "$2" | grep -qF -- "$3"; then ok "$1"; else bad "$1: '$3' not in: $2"; fi; }
+expect_not_in() { if printf '%s' "$2" | grep -qF -- "$3"; then bad "$1: '$3' in: $2"; else ok "$1"; fi; }
 
 WORKDIR="$(mktemp -d -t k2-mail-draft-keys-XXXXXX)"
 trap 'rm -rf "$WORKDIR"' EXIT
@@ -183,6 +185,19 @@ expect_in "needs re-link" "$out" "needs re-link"
 expect_in "mail access not granted" "$out" "mail access not granted"
 expect_in "throttled" "$out" "throttled (wait)"
 expect_in "relink hint" "$out" "k2 mail link relink a@example.com"
+# A linked row with no status field is not a refused sign-in: no fix line.
+reset
+script cli_mail_inboxes $'200\t{"ok":true,"inboxes":[{"address":"d@example.com","source":"linked","host":"imap.example.com","tls":"implicit-tls"}]}'
+run mail link list
+expect_exit "link list, a row with no status" 0 "$rc"
+expect_in "the row is listed" "$out" "d@example.com"
+expect_not_in "no refused sign-in line for it" "$out" "refused the sign-in"
+expect_not_in "no relink hint for it" "$out" "k2 mail link relink d@example.com"
+reset
+script cli_mail_inboxes $'200\t{"ok":true,"inboxes":[{"address":"e@example.com","source":"linked","needsRelink":true,"relinkReason":"credential_refused","host":"imap.example.com","tls":"implicit-tls"}]}'
+run mail link list
+expect_exit "link list, no status but needs re-link" 0 "$rc"
+expect_in "needs re-link still names the fix" "$out" "e@example.com: the provider refused the sign-in. A person runs 'k2 mail link relink e@example.com'"
 run mail link relink me@example.com -h
 expect_exit "relink -h" 0 "$rc"
 [ "$(count /cli/mail/link/oauth/start)" = "0" ] && ok "relink -h sends nothing" || bad "relink -h sent a request"

@@ -151,6 +151,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **`k2 app data put -h` prints the `k2 app data` help**, as `k2 app data get -h` and the other data verbs do. Before, it printed the App cross-over page.
 - **`k2 app domain` alone prints its usage line on stderr**, as an unknown verb does, and exits 2. Before, it printed the whole domain page on stdout and still exited 2. `k2 app domain -h` and `--help` print the page on stdout and exit 0, as before.
 - **`k2 mail draft delete --help` prints its own page.** It shows the delete usage, its `--json` fields and the not_your_draft refusal, on stdout with exit 0, and sends nothing. Before, it printed the whole `k2 mail draft` page.
+- **`k2 mail link list` names a sign-in fix only for an account that needs one.** A linked account whose row carries no status no longer gets the line "the provider refused the sign-in"; an account marked "needs re-link" still does.
 
 ### Settings
 - **Changes to the Send feedback settings are recorded.** When the owner or an admin turns "Allow sending feedback to K2", "Agents may send feedback to K2" or "Agents may include K2 details" on or off (Settings → General → Send feedback), Settings → Logs → Access Audit records who changed which one, from what to what. A change that leaves a setting as it was, or a refused attempt, records nothing.

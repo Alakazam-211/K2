@@ -739,6 +739,16 @@ pub fn handle_terminal_spawn_background(
     )
 }
 
+/// Whether the `sandbox` param asks for a sandbox. No param or an explicit
+/// no (`false`, `0`, `no`, `off`, empty) is a plain spawn; any other value is
+/// a request (fail closed).
+fn terminal_sandbox_requested(params: &HashMap<String, String>) -> bool {
+    params
+        .get("sandbox")
+        .map(|v| !matches!(v.trim().to_ascii_lowercase().as_str(), "" | "false" | "0" | "no" | "off"))
+        .unwrap_or(false)
+}
+
 fn spawn_terminal_impl(
     params: &HashMap<String, String>,
     project_path: &str,
@@ -747,6 +757,17 @@ fn spawn_terminal_impl(
 ) -> CliResponse {
     use crate::spawn::{spawn_agent_session_v2_blocking, SpawnWorkspaceSessionRequest};
 
+    // `sandbox=true` (`k2 terminal spawn --sandbox`): a real sandbox or a
+    // 409 before anything runs. Before 0.46.17 the route ignored the flag
+    // and the session ran unsandboxed on every build.
+    let sandbox_requested = terminal_sandbox_requested(params);
+    if sandbox_requested && !crate::v2_spawn::can_sandbox() {
+        return CliResponse {
+            status: "409 Conflict",
+            content_type: "application/json",
+            body: crate::v2_spawn::sandbox_unavailable_body("--sandbox"),
+        };
+    }
     let agent_param = params.get("agent").cloned().unwrap_or_default();
     if require_agent && agent_param.is_empty() {
         return CliResponse::bad_request("missing agent param");
@@ -802,24 +823,49 @@ fn spawn_terminal_impl(
         k2_core::workspace::agent_identity::resolve_project_id(&conn, &cwd)
             .or_else(|| k2_core::workspace::agent_identity::resolve_project_id(&conn, project_path))
     };
-    let outcome = match spawn_agent_session_v2_blocking(SpawnWorkspaceSessionRequest {
-        agent_name: agent_name.clone(),
-        project_id,
-        cwd: cwd.clone(),
-        command: command.clone(),
-        args: None,
-        cols,
-        rows,
-        canonical_key: None,
-        // Ad-hoc terminal (caller-supplied command, no preset
-        // resolution) — no preset env to merge.
-        env: Default::default(),
-        env_owner_set: false,
-        launch_prompt: None,
-        label: None,
-    }) {
-        Ok(o) => o,
-        Err(e) => return crate::folder_trust::spawn_failed_response(&e),
+    let (terminal_id, pending_drained, sandbox_in_force) = if sandbox_requested {
+        // The same door as `/cli/sessions/v2/spawn {"sandbox":true}`: a
+        // microVM cell, or that door's own 409 with nothing spawned.
+        let body = serde_json::json!({
+            "agent_name": agent_name,
+            "cwd": cwd,
+            "command": command,
+            "cols": cols,
+            "rows": rows,
+            "sandbox": true,
+        });
+        let r = crate::v2_spawn::handle_v2_spawn(body.to_string().as_bytes());
+        if r.status != "200 OK" {
+            return CliResponse { status: r.status, content_type: "application/json", body: r.body };
+        }
+        let v: serde_json::Value = match serde_json::from_str(&r.body) {
+            Ok(v) => v,
+            Err(e) => return CliResponse::bad_request(format!("sandboxed spawn answer: {e}")),
+        };
+        let sid = v["sessionId"].as_str().unwrap_or_default().to_string();
+        let backend = v["sandbox"].as_str().unwrap_or("none").to_string();
+        (sid, 0, backend)
+    } else {
+        let outcome = match spawn_agent_session_v2_blocking(SpawnWorkspaceSessionRequest {
+            agent_name: agent_name.clone(),
+            project_id,
+            cwd: cwd.clone(),
+            command: command.clone(),
+            args: None,
+            cols,
+            rows,
+            canonical_key: None,
+            // Ad-hoc terminal (caller-supplied command, no preset
+            // resolution) — no preset env to merge.
+            env: Default::default(),
+            env_owner_set: false,
+            launch_prompt: None,
+            label: None,
+        }) {
+            Ok(o) => o,
+            Err(e) => return crate::folder_trust::spawn_failed_response(&e),
+        };
+        (outcome.session_id.to_string(), outcome.pending_drained, "none".to_string())
     };
 
     // Emit the HookEvent so Tauri (or any other subscriber on the
@@ -832,7 +878,7 @@ fn spawn_terminal_impl(
         .map(|v| matches!(v.as_str(), "1" | "true"))
         .unwrap_or(false);
     let payload = serde_json::json!({
-        "terminalId": outcome.session_id.to_string(),
+        "terminalId": &terminal_id,
         "agentName": &agent_name,
         "command": command,
         "cwd": cwd,
@@ -845,9 +891,12 @@ fn spawn_terminal_impl(
     CliResponse::ok_json(
         serde_json::json!({
             "success": true,
-            "terminalId": outcome.session_id.to_string(),
+            "terminalId": terminal_id,
             "agentName": agent_name,
-            "pendingDrained": outcome.pending_drained,
+            "pendingDrained": pending_drained,
+            // What is in force: "microvm" for a sandbox, "none" for a plain
+            // PTY that runs as the daemon's user (0.46.17).
+            "sandbox": sandbox_in_force,
         })
         .to_string(),
     )
@@ -1022,5 +1071,78 @@ mod tests {
         let key = build_canonical_read_key(pid, Some("frontend-eng"));
         assert!(key.contains(':'));
         assert_eq!(key, "abc:frontend-eng");
+    }
+
+    #[test]
+    fn terminal_sandbox_param_values() {
+        let p = |v: &str| HashMap::from([("sandbox".to_string(), v.to_string())]);
+        assert!(!terminal_sandbox_requested(&HashMap::new()), "no param: plain spawn");
+        for no in ["false", "0", "no", "off", "", " FALSE "] {
+            assert!(!terminal_sandbox_requested(&p(no)), "{no:?} is an explicit no");
+        }
+        for yes in ["true", "1", "yes", "TRUE", "please"] {
+            assert!(terminal_sandbox_requested(&p(yes)), "{yes:?} asks for a sandbox");
+        }
+    }
+
+    /// `k2 terminal spawn --sandbox` (`sandbox=true`) on a build that can't
+    /// sandbox: 409 with the plain line and no session started under the
+    /// name, on both routes. Before 0.46.17 the route ignored the flag and
+    /// started the shell as you (200, a live session).
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn terminal_spawn_sandbox_refuses_409_and_runs_nothing() {
+        assert!(!crate::v2_spawn::can_sandbox(), "test premise: this build cannot sandbox");
+        let _ = k2_core::db::init_for_tests();
+        let home = crate::test_support::TempHome::new();
+        let ws = home.path().join(format!("ws-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&ws).expect("workspace folder");
+        let ws_str = dunce::canonicalize(&ws).expect("canonical folder").to_string_lossy().into_owned();
+        // `sh`: a system shell the test spawn guard allows, so a spawn that
+        // wrongly goes ahead really starts (and shows up in the map).
+        let params_for = |agent: &str, sandbox: &str| {
+            HashMap::from([
+                ("agent".to_string(), agent.to_string()),
+                ("command".to_string(), "sh".to_string()),
+                ("cwd".to_string(), ws_str.clone()),
+                ("sandbox".to_string(), sandbox.to_string()),
+            ])
+        };
+        for (route, background) in [("spawn", false), ("spawn-background", true)] {
+            let agent = format!("agent-a-sandbox-{route}-{}", uuid::Uuid::new_v4().simple());
+            let params = params_for(&agent, "true");
+            let resp = if background {
+                handle_terminal_spawn_background(&params, &ws_str)
+            } else {
+                handle_terminal_spawn(&params, &ws_str)
+            };
+            let leaked = crate::v2_session_map::unregister(&agent);
+            if let Some(ref s) = leaked {
+                s.kill();
+            }
+            assert_eq!(resp.status, "409 Conflict", "{route}: body={}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).expect("409 body is JSON");
+            assert_eq!(
+                v["error"],
+                serde_json::json!("this computer can't run a sandboxed session. Run it without --sandbox, knowing it runs as you."),
+                "{route}: body={}",
+                resp.body
+            );
+            assert_eq!(v["code"], serde_json::json!("sandbox_unavailable"));
+            assert!(leaked.is_none(), "{route}: a refused sandbox request must start no session");
+        }
+
+        // `--no-sandbox` (`sandbox=false`) is the plain spawn, and the reply
+        // says plainly that no sandbox is in force.
+        let agent = format!("agent-a-plain-{}", uuid::Uuid::new_v4().simple());
+        let resp = handle_terminal_spawn(&params_for(&agent, "false"), &ws_str);
+        let live = crate::v2_session_map::unregister(&agent);
+        if let Some(ref s) = live {
+            s.kill();
+        }
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
+        assert_eq!(v["sandbox"], serde_json::json!("none"), "body={}", resp.body);
+        assert!(live.is_some(), "the plain spawn started a session");
     }
 }

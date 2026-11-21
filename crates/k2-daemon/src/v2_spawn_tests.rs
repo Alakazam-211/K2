@@ -41,58 +41,108 @@ fn spawn_request_rejects_empty_agent_name() {
     assert!(result.body.contains("agent_name required"));
 }
 
-// ── Sandbox P1 selection ─────────────────────────────────────────────
+// ── Sandbox requests fail closed (0.46.17) ───────────────────────────
 
 #[test]
-fn resolve_sandbox_is_always_passthrough() {
+fn resolve_sandbox_refuses_a_request_on_this_build() {
     use k2_core::terminal::SandboxSpec;
-    // Accept-and-mark: requested or not, this build resolves to Passthrough.
-    assert_eq!(resolve_sandbox(false), SandboxSpec::Passthrough);
-    assert_eq!(resolve_sandbox(true), SandboxSpec::Passthrough);
-    assert_eq!(resolve_sandbox(true).backend().name(), "passthrough");
+    // Not requested: the plain spawn.
+    assert_eq!(resolve_sandbox(false), Some(SandboxSpec::Passthrough));
+    // Requested on a build that can't sandbox: no spec at all, so the
+    // caller refuses. Never the old silent Passthrough, never Microvm.
+    assert!(!can_sandbox(), "test premise: this build cannot sandbox");
+    assert_eq!(resolve_sandbox(true), None, "a sandbox request must not resolve to an unsandboxed spec");
 }
 
-// ── Sandbox P2a — fail-closed selection matrix ───────────────────────
-
 #[test]
-fn resolve_sandbox_never_microvm_on_this_build() {
-    use k2_core::terminal::SandboxSpec;
-    // P2a fail-safe: on this (macOS, feature-off) build a sandbox request
-    // MUST degrade to Passthrough and MUST NEVER resolve to Microvm — we
-    // never report isolation we can't deliver. The truthful echo is
-    // therefore "passthrough", never "microvm".
-    let resolved = resolve_sandbox(true);
-    assert_ne!(
-        resolved,
-        SandboxSpec::Microvm,
-        "macOS/feature-off must NEVER resolve a spawn to Microvm"
+fn sandbox_unavailable_body_is_one_plain_line_with_a_code() {
+    let v: serde_json::Value = serde_json::from_str(&sandbox_unavailable_body("--sandbox")).expect("json");
+    assert_eq!(
+        v["error"],
+        serde_json::json!("this computer can't run a sandboxed session. Run it without --sandbox, knowing it runs as you.")
     );
-    assert_eq!(resolved, SandboxSpec::Passthrough);
-    assert_ne!(resolved.backend().name(), "microvm");
+    assert_eq!(v["code"], serde_json::json!("sandbox_unavailable"));
+    assert!(!v["error"].as_str().expect("error string").contains('\n'));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn spawn_with_sandbox_true_echoes_passthrough() {
-    // `{"sandbox":true}` is accepted (never rejected) and the response
-    // carries the literal backend NAME "passthrough". (async test: the
-    // spawn path's child-exit observer uses `tokio::spawn`.)
+async fn spawn_with_sandbox_true_refuses_409_and_spawns_nothing() {
+    // `{"sandbox":true}` on a build that can't sandbox: 409 with the plain
+    // line, no session registered under the name, no process started.
+    // Before 0.46.17 this answered 200 with "sandbox":"passthrough" and a
+    // live unsandboxed PTY. Two names: a renderer tab, and an `api-…` cell
+    // tab remounting with its command after its daemon lost the sandbox.
+    // (async test: a spawn would use `tokio::spawn`.)
+    let _ = k2_core::db::init_for_tests();
+    let (_home, ws) = clean_spawn_dir();
+    let (shell, flag) = if cfg!(windows) { ("cmd", "/C") } else { ("sh", "-c") };
+    for agent in [uniq_agent_name(), format!("api-owner-{}", uuid::Uuid::new_v4())] {
+        let marker = std::path::Path::new(&ws).join(format!("ran-{agent}"));
+        let body = serde_json::json!({
+            "agent_name": agent,
+            "cwd": ws,
+            "command": shell,
+            "args": [flag, format!("echo ran > \"{}\"", marker.display())],
+            "sandbox": true,
+        })
+        .to_string();
+        let result = handle_v2_spawn(body.as_bytes());
+        let leaked = crate::v2_session_map::unregister(&agent);
+        if let Some(ref s) = leaked {
+            s.kill();
+        }
+        assert_eq!(result.status, "409 Conflict", "{agent}: body={}", result.body);
+        let v: serde_json::Value = serde_json::from_str(&result.body).expect("409 body is JSON");
+        assert_eq!(v["code"], serde_json::json!("sandbox_unavailable"), "{agent}: body={}", result.body);
+        assert!(
+            v["error"].as_str().expect("error line").starts_with("this computer can't run a sandboxed session."),
+            "{agent}: body={}",
+            result.body
+        );
+        assert!(leaked.is_none(), "{agent}: a refused sandbox request must register no session");
+        // Give a wrongly started child time to write its marker.
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        assert!(!marker.exists(), "{agent}: a refused sandbox request must run nothing");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sandbox_true_never_attaches_to_a_live_unsandboxed_session() {
+    // A live plain session under the name: a later `{"sandbox":true}` for the
+    // same name is refused and the live session is left as it was (not
+    // reused and labelled, not killed).
     let _ = k2_core::db::init_for_tests();
     let (_home, ws) = clean_spawn_dir();
     let agent = uniq_agent_name();
-    let body = sleep_spawn_body(&agent, &ws, true);
-    let result = handle_v2_spawn(&body);
-    // Clean up the spawned session before asserting so a failure can't
-    // leak the child/io-thread.
+    let first = handle_v2_spawn(&sleep_spawn_body(&agent, &ws, false));
+    assert_eq!(first.status, "200 OK", "body={}", first.body);
+    let first_id = serde_json::from_str::<serde_json::Value>(&first.body).expect("json")["sessionId"].clone();
+    let again = handle_v2_spawn(&sleep_spawn_body(&agent, &ws, true));
+    let live = crate::v2_session_map::unregister(&agent);
+    let live_id = live.as_ref().map(|s| s.session_id.to_string());
+    if let Some(ref s) = live {
+        s.kill();
+    }
+    assert_eq!(again.status, "409 Conflict", "body={}", again.body);
+    assert!(!again.body.contains("\"reused\""), "body={}", again.body);
+    assert_eq!(live_id.map(serde_json::Value::String), Some(first_id), "the live session stays as it was");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spawn_with_sandbox_false_echoes_passthrough() {
+    // `{"sandbox":false}` asks for the plain spawn and says so truthfully.
+    let _ = k2_core::db::init_for_tests();
+    let (_home, ws) = clean_spawn_dir();
+    let agent = uniq_agent_name();
+    let (cmd, args) = k2_core::test_env::sleep_command(30);
+    let body = serde_json::json!({ "agent_name": agent, "cwd": ws, "command": cmd, "args": args, "sandbox": false });
+    let result = handle_v2_spawn(body.to_string().as_bytes());
     let session = crate::v2_session_map::unregister(&agent);
     if let Some(ref s) = session {
         s.kill();
     }
     assert_eq!(result.status, "200 OK", "body={}", result.body);
-    assert!(
-        result.body.contains(r#""sandbox":"passthrough""#),
-        "sandbox:true must echo the passthrough backend name; body={}",
-        result.body
-    );
+    assert!(result.body.contains(r#""sandbox":"passthrough""#), "body={}", result.body);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

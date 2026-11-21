@@ -4584,10 +4584,10 @@ cmd_terminal_spawn() {
             --agent) _need_value "$@"; agent="$2"; shift 2 ;;
             --cwd) _need_value "$@"; cwd="$2"; shift 2 ;;
             --wait) wait="1"; shift ;;
-            # Sandbox P1 (accept-and-mark): request/decline a sandbox. In P1
-            # this resolves to the host-direct "passthrough" backend (no real
-            # isolation yet) and is never rejected. Default: omit the param
-            # entirely so the spawn body is byte-identical to pre-seam.
+            # Request/decline a sandbox. Where this computer can't sandbox,
+            # K2's server refuses --sandbox (409, nothing runs) and this
+            # command prints its line and exits 1 (0.46.17; before, the
+            # session ran unsandboxed). Default: no param, a plain spawn.
             --sandbox) sandbox="true"; shift ;;
             --no-sandbox) sandbox="false"; shift ;;
             *) shift ;;

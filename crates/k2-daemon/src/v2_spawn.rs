@@ -156,11 +156,11 @@ pub struct SpawnRequest {
     /// tabs whose label is the session-derived friendly name.
     #[serde(default)]
     pub label_locked: Option<bool>,
-    /// Sandbox P1: opt-in request to sandbox this session. In P1 this is
-    /// ACCEPT-AND-MARK — `true` resolves to the host-direct Passthrough
-    /// backend (no real isolation yet) and is echoed back as the literal
-    /// backend NAME, never rejected. Absent ⇒ default path (response
-    /// unchanged, byte-identical to pre-seam).
+    /// Opt-in request to sandbox this session. `true` on a daemon that can't
+    /// run a sandbox ([`can_sandbox`] false) is refused with 409 and nothing
+    /// is spawned (0.46.17; before, it ran unsandboxed). `false` asks for the
+    /// plain spawn and echoes `"sandbox":"passthrough"`. Absent ⇒ default
+    /// path (response unchanged, no `sandbox` field).
     #[serde(default)]
     pub sandbox: Option<bool>,
     /// P3b: a daemon-provisioned EPHEMERAL workspace dir to remove on
@@ -345,6 +345,21 @@ pub fn can_sandbox() -> bool {
     {
         false
     }
+}
+
+/// Machine code on every "can't sandbox here" refusal.
+pub const SANDBOX_UNAVAILABLE_CODE: &str = "sandbox_unavailable";
+
+/// The one line a refused sandbox request answers with. `ask` names how the
+/// caller asked (`--sandbox` for the CLI, `"sandbox": true` for a route body).
+pub fn sandbox_unavailable_line(ask: &str) -> String {
+    format!("this computer can't run a sandboxed session. Run it without {ask}, knowing it runs as you.")
+}
+
+/// 409 JSON body for a sandbox request this daemon can't honour. Nothing may
+/// have been spawned or provisioned when a caller returns this.
+pub fn sandbox_unavailable_body(ask: &str) -> String {
+    serde_json::json!({ "error": sandbox_unavailable_line(ask), "code": SANDBOX_UNAVAILABLE_CODE }).to_string()
 }
 
 /// 0.38.5 restart-recovery, extracted from `spawn_session` (Slice 3b) so the
@@ -706,6 +721,12 @@ pub fn handle_v2_spawn_as(body: &[u8], owner_set_env: bool) -> HandlerResult {
 /// `/v1/sandboxes` calls it directly with a host-trusted request from the
 /// policy-resolver.
 pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
+    // Fail closed: a sandbox request this daemon can't honour spawns nothing,
+    // attaches to nothing and provisions nothing (0.46.17).
+    if req.sandbox == Some(true) && !can_sandbox() {
+        log_debug!("[sandbox] refused agent={}: this build can't sandbox; nothing spawned", req.agent_name);
+        return HandlerResult { status: "409 Conflict", body: sandbox_unavailable_body("\"sandbox\": true") };
+    }
     if req.agent_name.is_empty() {
         return HandlerResult {
             status: "400 Bad Request",
@@ -1121,10 +1142,21 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
                 &existing.args,
             ),
         );
-        // A2/B3a — reuse-echo. Mirror the cold-spawn accept-and-mark rule:
-        // echo the EXISTING session's resolved backend name only when the
-        // caller asked for a sandbox. Absent ⇒ no field ⇒ response
-        // byte-identical to pre-seam (default-path regression guard).
+        // A sandbox request never attaches to a session that isn't one.
+        if req.sandbox == Some(true)
+            && !matches!(existing.sandbox, k2_core::terminal::SandboxSpec::Microvm)
+        {
+            return HandlerResult {
+                status: "409 Conflict",
+                body: serde_json::json!({
+                    "error": "the running session under this name isn't sandboxed. Close it first, or attach without \"sandbox\": true.",
+                    "code": SANDBOX_UNAVAILABLE_CODE,
+                })
+                .to_string(),
+            };
+        }
+        // A2/B3a — reuse-echo: echo the EXISTING session's resolved backend
+        // name only when the caller sent `sandbox`. Absent ⇒ no field.
         if req.sandbox.is_some() {
             out["sandbox"] =
                 serde_json::Value::String(existing.sandbox.backend().name().to_string());
@@ -1270,12 +1302,13 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
     } else {
         k2_core::terminal::LabelSource::Pty
     };
-    // Sandbox P1 — accept-and-mark. `--sandbox`/`{"sandbox":true}` resolves to
-    // a backend NAME (Passthrough in P1, no real isolation yet); we echo that
-    // name in the response when the caller asked, and never reject. When the
-    // request omits `sandbox`, `sandbox_echo` stays `None` and the response is
-    // byte-identical to pre-seam (default-path regression guard).
-    let sandbox_spec = resolve_sandbox(req.sandbox.unwrap_or(false));
+    // `{"sandbox":true}` resolves to a real backend or is refused (fail
+    // closed; `spawn_session` refuses first, this is the second lock). The
+    // resolved NAME is echoed when the caller sent `sandbox`. When the
+    // request omits it, `sandbox_echo` stays `None` (no field).
+    let Some(sandbox_spec) = resolve_sandbox(req.sandbox.unwrap_or(false)) else {
+        return HandlerResult { status: "409 Conflict", body: sandbox_unavailable_body("\"sandbox\": true") };
+    };
     let sandbox_echo: Option<&'static str> = req.sandbox.map(|_| sandbox_spec.backend().name());
     let mut cfg = DaemonPtyConfig {
         // Sandbox v2: honor a HOST-DECIDED session id (workspace-scoped door) so
@@ -1925,35 +1958,29 @@ fn k2_sandbox_enabled() -> bool {
         .unwrap_or(false)
 }
 
-/// Sandbox selection (P2a). Maps a requested-bool to a [`SandboxSpec`].
+/// Sandbox selection. Maps a requested-bool to a [`SandboxSpec`], or `None`
+/// when a sandbox was requested and this build can't deliver one.
 ///
 /// The microVM jail only materializes on a Linux build compiled with
-/// `sandbox-microvm` AND with the `K2_SANDBOX` env flag enabled at runtime. On
-/// EVERY other build/platform — including this macOS build — a request degrades
-/// to [`SandboxSpec::Passthrough`] (NO isolation) and logs the downgrade.
-///
-/// We degrade LOUD, never SILENT, and never reject `--sandbox`: the response
-/// echoes the resolved backend name truthfully ("passthrough" when degraded),
-/// so the absence of isolation is visible rather than a fail. We never resolve
-/// to `Microvm` on a build that can't deliver it.
-fn resolve_sandbox(requested: bool) -> k2_core::terminal::SandboxSpec {
+/// `sandbox-microvm` AND with the `K2_SANDBOX` env flag enabled at runtime.
+/// Everywhere else a request resolves to `None` and the caller refuses
+/// (409): a requested sandbox never degrades to an unsandboxed spawn.
+fn resolve_sandbox(requested: bool) -> Option<k2_core::terminal::SandboxSpec> {
     use k2_core::terminal::SandboxSpec;
 
     if !requested {
-        return SandboxSpec::Passthrough;
+        return Some(SandboxSpec::Passthrough);
     }
 
     #[cfg(all(target_os = "linux", feature = "sandbox-microvm"))]
     {
         if k2_sandbox_enabled() {
-            return SandboxSpec::Microvm;
+            return Some(SandboxSpec::Microvm);
         }
     }
 
-    log_debug!(
-        "[sandbox] requested but unavailable on this build/platform → passthrough, no isolation"
-    );
-    SandboxSpec::Passthrough
+    log_debug!("[sandbox] requested but unavailable on this build/platform → refused");
+    None
 }
 
 /// Pure decision for whether `/cli/sessions/v2/close` is allowed to

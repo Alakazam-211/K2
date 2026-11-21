@@ -14,6 +14,9 @@
 //! - `subdomain claim` and `unclaim`.
 //! - `publish` alone, `help`, an unknown verb (the other verbs: tests/publish_cp_parity.rs).
 //! - The owner from disk, the cell socket, no answer, the gates.
+//! - 0.46.17: `run --assign` (one login, a comma list, `--assign=`, the
+//!   value stripped, an empty `--assign=` left out of the body), and its
+//!   usage line (no value, an empty one; `--json` seen before it).
 //! - Help never acts; one large list (above 256 KiB).
 
 #![cfg(unix)]
@@ -917,6 +920,80 @@ fn help_never_acts() {
         v.push(shell(on("help", args, vec![], 0, 0)));
     }
     check_all(&rig, v);
+}
+
+/// 0.46.17: who a held run's permission card goes to, in the body.
+#[test]
+fn run_assign_answers_as_the_shell_does() {
+    let rig = Rig::new(VERB, "assign");
+    let held = r#"{"ok":true,"status":"held","request":{"id":"w_run1","summary":"run web"},"card":{"where":"a permission card w_run1 is on a's Thread: sent to ada"},"hint":"The owner decides."}"#;
+    check_all(
+        &rig,
+        vec![
+            on(
+                "run --assign: held",
+                &[
+                    "run", "web", "--cmd", "python3 -m http.server 8999", "--port", "8999",
+                    "--no-tunnel", "--assign", "ada",
+                ],
+                vec![ok(held)],
+                2,
+                1,
+            ),
+            on(
+                "run --assign= a comma list, --dev",
+                &[
+                    "run", "web", "--assign=ada,owner", "--dev", "--cmd", "x", "--port", "1",
+                    "--mem", "2G",
+                ],
+                vec![ok(held)],
+                2,
+                1,
+            ),
+            on(
+                "run --assign: the value stripped",
+                &["run", "web", "--cmd", "x", "--port", "1", "--assign", " ada é "],
+                vec![ok(held)],
+                2,
+                1,
+            ),
+            on(
+                "run --assign= empty: no assign",
+                &["run", "web", "--cmd", "x", "--port", "1", "--assign="],
+                vec![ok(held)],
+                2,
+                1,
+            ),
+            on(
+                "run --assign: blank, no assign",
+                &["run", "web", "--cmd", "x", "--port", "1", "--assign", "  "],
+                vec![ok(held)],
+                2,
+                1,
+            ),
+            on(
+                "run: --assign given last",
+                &["run", "web", "--cmd", "x", "--port", "1", "--assign"],
+                vec![],
+                2,
+                0,
+            ),
+            on(
+                "run --json: --assign empty",
+                &["run", "web", "--json", "--assign", "", "--cmd", "x"],
+                vec![],
+                2,
+                0,
+            ),
+            shell(on(
+                "help never acts: run --assign ada --help",
+                &["run", "web", "--cmd", "x", "--port", "1", "--assign", "ada", "--help"],
+                vec![],
+                0,
+                0,
+            )),
+        ],
+    );
 }
 
 /// The binary's lines name the brand's command and product.

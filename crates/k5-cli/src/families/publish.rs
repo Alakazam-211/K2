@@ -749,6 +749,8 @@ struct RunLine {
     idle: String,
     mem: String,
     cpus: String,
+    /// `--assign`: who a held run's permission card goes to (0.46.17).
+    assign: String,
 }
 
 const RUN_USAGE: &str = concat!(
@@ -756,6 +758,10 @@ const RUN_USAGE: &str = concat!(
     k2_client::cli_name!(),
     " publish run <name> (--cmd <shell>|--skin [<dir>]) --port <n> [--no-tunnel] [--cwd <path>]"
 );
+
+/// `publish run --assign` with no logins after it.
+const ASSIGN_NEEDS: &str =
+    "--assign takes logins, comma-separated (--assign ada): who gets the card if the run is held";
 
 fn parse_run(rest: &[&str], project: &str, home: Option<&str>) -> Act {
     let mut l = RunLine::default();
@@ -777,6 +783,22 @@ fn parse_run(rest: &[&str], project: &str, home: Option<&str>) -> Act {
     ];
     while i < rest.len() {
         let w = rest[i];
+        // 0.46.17: `--assign <logins>` (never empty) and `--assign=<logins>`.
+        if w == "--assign" {
+            match rest.get(i + 1) {
+                Some(v) if !v.is_empty() => {
+                    l.assign = (*v).to_string();
+                    i += 2;
+                    continue;
+                }
+                _ => return usage("usage", ASSIGN_NEEDS, l.json),
+            }
+        }
+        if let Some(v) = w.strip_prefix("--assign=") {
+            l.assign = v.to_string();
+            i += 1;
+            continue;
+        }
         let mut took = None;
         for (flag, missing) in valued {
             if w == *flag {
@@ -927,6 +949,11 @@ fn parse_run(rest: &[&str], project: &str, home: Option<&str>) -> Act {
         ),
         ("project", read::s(project)),
     ];
+    let strip = |t: &str| t.trim_matches(crate::families::py_space).to_string();
+    let assign = strip(&l.assign);
+    if !assign.is_empty() {
+        pairs.push(("assign", read::s(&assign)));
+    }
     if l.dev {
         pairs.push(("dev", Value::Bool(true)));
         for (k, v) in [("idle", &l.idle), ("mem", &l.mem), ("cpus", &l.cpus)] {
@@ -947,7 +974,6 @@ fn parse_run(rest: &[&str], project: &str, home: Option<&str>) -> Act {
     if l.transfer {
         pairs.push(("transfer", Value::Bool(true)));
     }
-    let strip = |t: &str| t.trim_matches(crate::families::py_space).to_string();
     let pt = strip(&l.probe_timeout);
     if !pt.is_empty() {
         pairs.push(("probeTimeout", read::s(&pt)));

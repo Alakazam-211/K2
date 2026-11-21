@@ -447,7 +447,9 @@ async fn a_newer_codex_passes_only_with_a_log_it_can_parse() {
     let got = tcp_call(t.port, &tab.token, Some("conv-W"), None).await;
     assert_refused(got.clone(), "codex_version_unverified", "newer Codex, unparseable log, TCP");
     let msg = got.1["message"].as_str().expect("message");
-    assert!(msg.contains("(0.999.0)") && msg.contains("K2_CODEX_PASSPORT_BIND=0"), "{msg}");
+    assert!(msg.contains("(0.999.0)"), "{msg}");
+    assert!(msg.ends_with("send Codex one message and run the command again"), "{msg}");
+    assert!(!msg.contains("K2_CODEX_PASSPORT_BIND"), "{msg}");
     assert_refused(tool_call(&tab, Some("conv-W"), None), "codex_version_unverified", "newer Codex, unparseable log, socket");
 
     let tab = spawn_tab(&workspace("older"), "0.154.0", &["--yolo", "resume", "conv-O"]);

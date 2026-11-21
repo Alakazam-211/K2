@@ -153,19 +153,19 @@ fn unsettled_msg() -> String {
 
 fn older_msg(shown: &str) -> String {
     format!(
-        "this Codex version ({shown}) is older than {P} supports: update Codex, then close this tab and reopen it from {P}, or set {BIND_ENV}=0 (owner only)"
+        "this Codex version ({shown}) is older than {P} supports: update Codex, then close this tab and reopen it from {P}"
     )
 }
 
 fn unreadable_msg(shown: &str) -> String {
     format!(
-        "{P} couldn't read this tab's Codex version ({shown}): check that `codex --version` works, then close this tab and reopen it from {P}, or set {BIND_ENV}=0 (owner only)"
+        "{P} couldn't read this tab's Codex version ({shown}): check that `codex --version` works, then close this tab and reopen it from {P}"
     )
 }
 
 fn newer_unconfirmed_msg(shown: &str) -> String {
     format!(
-        "this Codex version ({shown}) is newer than {P} has tested, and {P} couldn't confirm this conversation from its log: send Codex one message and run the command again, or set {BIND_ENV}=0 (owner only)"
+        "this Codex version ({shown}) is newer than {P} has tested, and {P} couldn't confirm this conversation from its log: send Codex one message and run the command again"
     )
 }
 

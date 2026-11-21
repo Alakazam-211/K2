@@ -205,19 +205,26 @@ fn on_the_socket_the_caller_must_descend_from_the_tab() {
 
 #[test]
 fn an_unchecked_codex_version_fails_closed() {
-    for (answer, shown) in [
+    let reopen = format!("then close this tab and reopen it from {P}");
+    let resend = "send Codex one message and run the command again".to_string();
+    for (answer, shown, fix) in [
         // Newer, with no log that confirms the conversation.
-        (Ok("codex-cli 0.172.0".to_string()), "0.172.0"),
-        (Ok("codex-cli 0.154.0".to_string()), "0.154.0"),
-        (Ok("codex-cli 0.163.0-alpha.2".to_string()), "codex-cli 0.163.0-alpha.2"),
-        (Err("probe timed out".to_string()), "unknown"),
+        (Ok("codex-cli 0.172.0".to_string()), "0.172.0", &resend),
+        // Older than every checked release.
+        (Ok("codex-cli 0.154.0".to_string()), "0.154.0", &reopen),
+        // A version K2 can't read.
+        (Ok("codex-cli 0.163.0-alpha.2".to_string()), "codex-cli 0.163.0-alpha.2", &reopen),
+        (Err("probe timed out".to_string()), "unknown", &reopen),
     ] {
         let mut f = two_tabs();
         f.versions.insert(A.to_string(), answer.clone());
         let r = decide(&f, A, &hdr(Some("conv-A"), None), sock(150)).expect_err("unchecked version refused");
         assert_eq!(r.code, "codex_version_unverified", "{answer:?}");
         assert!(r.message.contains(&format!("({shown})")), "{}", r.message);
-        assert!(r.message.contains("K2_CODEX_PASSPORT_BIND=0 (owner only)"), "{}", r.message);
+        // The agent's refusal ends at its fix. The off switch is the
+        // owner's, in the docs, never offered to the agent.
+        assert!(r.message.ends_with(fix.as_str()), "{}", r.message);
+        assert!(!r.message.contains(BIND_ENV), "{}", r.message);
     }
 }
 

@@ -171,6 +171,16 @@ fn py_exit(x: Option<&Value>, stderr: &mut String) -> Exit {
     }
 }
 
+/// The line for a server from before [`KIT_ROUTE`] (it answers 404 or
+/// 405): no fallback to another route (K2's ruling).
+pub const OLDER_SERVER: &str = concat!(
+    "This ",
+    product_name!(),
+    " server is older and can't explain kit codes yet; update it (",
+    cli_name!(),
+    " update)."
+);
+
 /// `_explain_kit`'s reader on `_compute_split`'s status and body.
 pub fn kit_answer(status: &str, body: &[u8], as_json: bool) -> super::Shown {
     let raw = String::from_utf8_lossy(body);
@@ -197,6 +207,13 @@ pub fn kit_answer(status: &str, body: &[u8], as_json: bool) -> super::Shown {
                 exit,
             };
         }
+    }
+    if status == "404" || status == "405" {
+        return super::Shown {
+            stdout,
+            stderr: format!("{OLDER_SERVER}\n"),
+            exit: Exit::Error,
+        };
     }
     let shown = |stdout, stderr, exit| super::Shown {
         stdout,
@@ -838,15 +855,28 @@ mod tests {
                 k2_client::brand::PRODUCT_NAME
             )
         );
-        let off = br#"{"error": {"code": "not_enabled", "hint": "Board files are a preview"}}"#;
-        let a = kit_answer("404", off, false);
+        let refused = br#"{"error": {"code": "forbidden", "hint": "not for this caller"}}"#;
+        let a = kit_answer("403", refused, false);
         assert_eq!(
             (a.stderr.as_str(), a.exit),
-            (
-                "Error [not_enabled]: Board files are a preview\n",
-                Exit::Refused
-            )
+            ("Error [forbidden]: not for this caller\n", Exit::Refused)
         );
+        for (status, body, as_json) in [
+            (
+                "404",
+                &br#"{"error": {"code": "not_found", "hint": "no such route"}}"#[..],
+                false,
+            ),
+            ("404", &br#"{"error": "not found"}"#[..], true),
+            ("405", &br#"{"error": "GET or POST only"}"#[..], false),
+        ] {
+            let a = kit_answer(status, body, as_json);
+            assert_eq!(
+                (a.stdout.as_str(), a.stderr.as_str(), a.exit),
+                ("", format!("{OLDER_SERVER}\n").as_str(), Exit::Error),
+                "{status}"
+            );
+        }
         let a = kit_answer("500", b"not json", false);
         assert_eq!(
             (a.stderr.as_str(), a.exit),
@@ -870,6 +900,8 @@ mod tests {
             r#"        print("Error [%s] %s: %s" % (v.get("code"), v.get("id"), v.get("message")), file=sys.stderr)"#,
             r#"hint = err.get("hint") or ("no answer from the K2 daemon" if status == "000" else "the daemon refused (HTTP %s)" % status)"#,
             r#"sys.exit(3 if code in ("not_enabled", "forbidden", "not_connected", "sandboxed_agent", "core_off") else 1)"#,
+            r#"if status in ("404", "405"):"#,
+            r#"    print("This K2 server is older and can'"'"'t explain kit codes yet; update it (k2 update).", file=sys.stderr)"#,
         ] {
             assert!(sh.contains(line), "explain.sh no longer has {line:?}");
         }

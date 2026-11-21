@@ -18,7 +18,8 @@
 //!   `GET /cli/kit/explain?id=<id>[&json=1]` (it answers with Board files
 //!   off), one GET with no path, beside a decoy file of the id's name; the
 //!   kit's page (and one above 256 KiB), its JSON, its row, a refusal, an
-//!   older daemon without the route, an answer that is not JSON.
+//!   older daemon without the route (404 or 405: one line saying to update
+//!   it, exit 1), an answer that is not JSON.
 
 #![cfg(unix)]
 
@@ -449,6 +450,13 @@ fn a_kit_id_is_the_kit_s_explain() {
             r#"{"error":"not found"}"#,
             1,
         ),
+        answer(
+            "an older daemon without the route: a 405",
+            &["MPC-E001"],
+            405,
+            r#"{"error":"GET or POST only"}"#,
+            1,
+        ),
         one("an id curl must escape", &["MPC-E 1&x=%"], KIT, 0),
         answer("an answer that is not JSON", &["MPC-E001"], 500, "oops", 1),
         answer(
@@ -473,7 +481,13 @@ fn a_kit_id_is_the_kit_s_explain() {
     ];
     for c in native {
         rig.check(&c);
-        let (_, sent) = rig.binary(&c, false);
+        let (out, sent) = rig.binary(&c, false);
+        // K2's ruling: an older daemon (no such route) is one line, exit 1.
+        if c.name.starts_with("an older daemon") {
+            let line = format!("{}\n", k5_cli::families::explain::OLDER_SERVER);
+            assert_eq!(out.stderr, line, "{}", c.name);
+            assert_eq!((out.stdout.as_str(), out.code), ("", Some(1)), "{}", c.name);
+        }
         assert!(
             !k5_cli::fallthrough::cache_dir(&rig.k2home).exists(),
             "{}: the binary handed the line to the shell",
@@ -524,7 +538,8 @@ fn a_kit_id_is_the_kit_s_explain() {
 }
 
 /// The lines name the brand (in a build with `K2_BRAND_DIR=brand/xy` they
-/// say `xy`): the usage of a usage error, and a kit id's error line.
+/// say `xy` and `XY`): the usage of a usage error, a kit id's error line,
+/// and the older server's line.
 #[test]
 fn explain_lines_say_the_brand_s_name() {
     let cli = k2_client::brand::CLI_NAME;
@@ -553,4 +568,25 @@ fn explain_lines_say_the_brand_s_name() {
         out.stderr
     );
     assert_eq!(log.len(), 1, "{log:?}");
+    let product = k2_client::brand::PRODUCT_NAME;
+    let c = case(
+        "an older daemon",
+        &["MPC-E001"],
+        &[],
+        vec![common::stub::Reply::Answer(
+            404,
+            r#"{"error":"not found"}"#.into(),
+        )],
+        decoys,
+        1,
+        1,
+    );
+    let (out, log) = rig.binary(&c, false);
+    assert_eq!(
+        out.stderr,
+        format!(
+            "This {product} server is older and can't explain kit codes yet; update it ({cli} update).\n"
+        )
+    );
+    assert_eq!((out.code, log.len()), (Some(1), 1), "{out:?}");
 }

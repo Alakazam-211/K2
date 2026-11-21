@@ -16,6 +16,10 @@
 #     was (`k2 app key revoke --json k1` revoked a key named --json) and
 #     never printed JSON. The id can't start with -, one id only, and
 #     --json anywhere prints the answer as JSON.
+#   - `k2 app label -h` (anywhere) printed the whole `k2 app` page on
+#     stderr, from the router, and cmd_app_label read -h first as a
+#     verb (a usage error). The router hands label its words now, and
+#     -h prints the grace page on stdout.
 #
 # Each refusal row: the exact line on stderr, nothing on stdout, exit 2,
 # and the stub daemon records no request. Each row that should send then
@@ -251,6 +255,24 @@ revoked "k2 app key revoke k1 --json" "$J_REVOKED" app key revoke k1 --json
 revoked "k2 app key revoke --json k1" "$J_REVOKED" app key revoke --json k1
 # native: app key
 revoked "k2 app key rm k1 --json" "$J_REVOKED" app key rm k1 --json
+
+echo "== app label: -h or --help anywhere is the help, nothing sent =="
+# native: app label
+page app/grace.txt app label -h
+# native: app label
+page app/grace.txt app label --help
+# native: app label
+page app/grace.txt app label -h take shop www
+# native: app label
+page app/grace.txt app label take -h
+# native: app label
+page app/grace.txt app label take shop www --help
+# native: app label
+page app/grace.txt app label return shop www -h
+# native: app label
+refused "usage: k2 app label take|return <app-id> <label> [--json]" app label
+# native: app label
+refused "usage: k2 app label take|return <app-id> <label> [--json]" app label give shop www
 
 echo ""
 echo "app_usage_before_send: $pass passed, $fail failed"

@@ -625,6 +625,7 @@ cmd_app_label() {
     shift || true
     case "$verb" in
         take|return) ;;
+        -h|--help) _app_grace_usage; return 0 ;;
         *) echo "usage: k2 app label take|return <app-id> <label> [--json]" >&2; exit 2 ;;
     esac
     local app="" label="" json_out=0

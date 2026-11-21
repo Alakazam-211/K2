@@ -172,6 +172,15 @@ pub fn connect_credential() -> Result<(String, String), CallError> {
     Ok((token, label))
 }
 
+/// What a decide-token mint came back with. No `Debug`: the token never
+/// reaches a log line.
+pub enum Mint {
+    /// A new token for `label` (shown once: store it, never log it).
+    Minted { token: String, label: String },
+    /// The plane holds an active one already (`409 already_minted`).
+    AlreadyMinted,
+}
+
 struct Session {
     token: String,
     label: String,
@@ -262,6 +271,51 @@ impl Plane {
             .map_err(CallError::NoConnect)?
             .ok_or_else(|| CallError::NoOwnerLink(label.to_string()))?;
         self.transport.call(&token, req).map_err(CallError::Transport)
+    }
+
+    /// The Connect label this box's credential names (no plane call).
+    pub fn connect_label(&self) -> Result<String, CallError> {
+        (self.credential)().map(|(_, l)| l.trim().to_ascii_lowercase())
+    }
+
+    /// `POST /decide-token` with the box's Connect credential: the owner's
+    /// `k2c_pd_` decide token for this box's label. The plane mints one at
+    /// a time: `409 already_minted` while one is active.
+    pub fn decide_token_mint(&self) -> Result<Mint, CallError> {
+        let (connect, label) = (self.credential)()?;
+        let req = Request { method: Method::Post, path: format!("{}/decide-token", plane::API), body: Some("{}".into()) };
+        let (status, body) = self.transport.call(&connect, &req).map_err(CallError::Transport)?;
+        #[derive(serde::Deserialize)]
+        struct M {
+            token: String,
+            #[serde(default)]
+            label: String,
+        }
+        let m: M = match plane::parse(status, &body) {
+            Ok(m) => m,
+            Err(e) => {
+                let e = CallError::Plane(e);
+                return if e.code() == "already_minted" { Ok(Mint::AlreadyMinted) } else { Err(e) };
+            }
+        };
+        if !m.token.starts_with("k2c_pd_") {
+            return Err(CallError::Plane(PlaneError::BadBody("decide token is not a k2c_pd_".into())));
+        }
+        let label = if m.label.trim().is_empty() { label } else { m.label };
+        Ok(Mint::Minted { token: m.token, label: label.trim().to_ascii_lowercase() })
+    }
+
+    /// `POST /decide-token/revoke` with the box's Connect credential: how
+    /// many tokens it revoked (none is fine: it is idempotent).
+    pub fn decide_token_revoke(&self) -> Result<u64, CallError> {
+        let (connect, _) = (self.credential)()?;
+        let req = Request { method: Method::Post, path: format!("{}/decide-token/revoke", plane::API), body: Some("{}".into()) };
+        let (status, body) = self.transport.call(&connect, &req).map_err(CallError::Transport)?;
+        #[derive(serde::Deserialize)]
+        struct R {
+            revoked: u64,
+        }
+        plane::parse::<R>(status, &body).map(|r| r.revoked).map_err(CallError::Plane)
     }
 
     /// Start the owner's postal-decide device grant for `label` (RFC 8628):

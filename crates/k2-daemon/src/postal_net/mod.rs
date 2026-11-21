@@ -9,6 +9,8 @@
 //!   both boxes, the owner-only confirm.
 //! - [`receive`]: hold pull, open and verify, store before ACK, land.
 //! - [`send`]: the outbox, hold only.
+//! - [`decide_token`]: the owner's decide token, minted on the owner's
+//!   switch-on and revoked on switch-off.
 //! - [`live`]: the live listener's check, not mounted (S6 waits on the
 //!   plane's P-6).
 //!
@@ -20,6 +22,7 @@
 //! loop for a pass now and resets the backoff ([`wake`]), at most once per
 //! [`WAKE_EVERY`].
 
+pub mod decide_token;
 pub mod live;
 pub mod pairing;
 pub mod plane;

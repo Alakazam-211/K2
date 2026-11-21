@@ -646,7 +646,7 @@ pub(crate) fn decide_as(who: &Who, ws_id: &str, id: &str, accept: bool, code: Op
 /// A person's accept of a request that carries a pairing code: the code
 /// they typed (from the OTHER side's screen) goes to the SDK, which checks
 /// it and only then signs; the owner's token sends it.
-fn confirm_with_code(who: &Who, ws: &Ws, id: &str, code: Option<&str>) -> CliResponse {
+pub(crate) fn confirm_with_code(who: &Who, ws: &Ws, id: &str, code: Option<&str>) -> CliResponse {
     let Some(typed) = code.and_then(k2_core::postal::gate::normalize_code) else {
         return err(
             "400 Bad Request",
@@ -664,6 +664,12 @@ fn confirm_with_code(who: &Who, ws: &Ws, id: &str, code: Option<&str>) -> CliRes
     let Some(net) = crate::postal_net::net() else {
         return err("503 Service Unavailable", "postal_unreachable", "this server has no Postal network client");
     };
+    // A person's Accept with no decide token here asks the plane for one, once.
+    let label = k2_core::postal::parse_address(&handle.address).map(|a| a.label).unwrap_or_default();
+    if let Err(e) = crate::postal_net::decide_token::ensure_for_accept(&net, &label, &actor(who)) {
+        let status = if e.is_retryable() { "503 Service Unavailable" } else { "409 Conflict" };
+        return err(status, &e.code(), format!("{} (the owner can also link approvals with {} postal owner-link)", e.hint(), cli_name!()));
+    }
     match crate::postal_net::pairing::confirm(&net, &f, &typed, &actor(who)) {
         Ok(crate::postal_net::pairing::Outcome::Accepted { friends }) => {
             let f = k2_core::db::read(|conn| store::friend(conn, id)).unwrap_or(f);
@@ -794,6 +800,7 @@ pub(crate) fn enable_as(who: &Who) -> CliResponse {
 }
 
 fn settings(who: &Who, is_post: bool, v: &Value) -> CliResponse {
+    let mut token: Option<Value> = None;
     if is_post {
         if who.passport().is_some() || !who.is_owner() {
             return err("403 Forbidden", "owner_only", "the server's owner turns Postal on or off");
@@ -811,16 +818,27 @@ fn settings(who: &Who, is_post: bool, v: &Value) -> CliResponse {
         if partial.is_empty() {
             return err("400 Bad Request", "usage", "send enabled and/or adminsMayAccept (true or false)");
         }
+        let was_on = k2_core::postal::enabled();
         match k2_core::app_settings::update(Value::Object(partial)) {
             Ok(merged) => {
                 k2_core::postal::set_enabled(merged.postal_enabled);
                 crate::hire_routes::audit("postal-settings", &actor(who), &format!("enabled={} adminsMayAccept={}", merged.postal_enabled, merged.postal_admins_may_accept));
+                // The owner's switch: on mints the decide token, off revokes it.
+                token = match (was_on, merged.postal_enabled) {
+                    (false, true) => Some(crate::postal_net::decide_token::on_switch_on(&actor(who))),
+                    (true, false) => Some(crate::postal_net::decide_token::on_switch_off(&actor(who))),
+                    _ => None,
+                };
             }
             Err(e) => return err("500 Internal Server Error", "internal", e),
         }
     }
     let s = k2_core::app_settings::load();
-    ok(json!({ "ok": true, "enabled": k2_core::postal::enabled(), "adminsMayAccept": s.postal_admins_may_accept }))
+    let mut out = json!({ "ok": true, "enabled": k2_core::postal::enabled(), "adminsMayAccept": s.postal_admins_may_accept });
+    if let Some(d) = token {
+        out["decideToken"] = d;
+    }
+    ok(out)
 }
 
 // ── send, route, code, owner link (S4, S5, S3 network) ─────────────────

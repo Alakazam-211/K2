@@ -149,6 +149,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **`k2 app key revoke` takes one key id and `--json`.** Before, it took the next word as the id whatever it was, so `k2 app key revoke --json <id>` tried to revoke a key named `--json`, and it never printed JSON. Now the id can't start with `-` (a usage error, exit 2, nothing sent), `--json` anywhere prints the answer as JSON, and `-h` anywhere prints the help and revokes nothing.
 - **`-h` or `--help` anywhere on `k2 app label` prints the page that describes it** (the App cross-over page) on stdout, exits 0 and sends nothing. Before, it printed the whole `k2 app` page on stderr.
 - **`k2 app data put -h` prints the `k2 app data` help**, as `k2 app data get -h` and the other data verbs do. Before, it printed the App cross-over page.
+- **`k2 app domain` alone prints its usage line on stderr**, as an unknown verb does, and exits 2. Before, it printed the whole domain page on stdout and still exited 2. `k2 app domain -h` and `--help` print the page on stdout and exit 0, as before.
 
 ### Settings
 - **Changes to the Send feedback settings are recorded.** When the owner or an admin turns "Allow sending feedback to K2", "Agents may send feedback to K2" or "Agents may include K2 details" on or off (Settings → General → Send feedback), Settings → Logs → Access Audit records who changed which one, from what to what. A change that leaves a setting as it was, or a refused attempt, records nothing.

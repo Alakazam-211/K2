@@ -883,11 +883,11 @@ cmd_app_domain() {
         check|primary) cmd_app_domain_custom "$verb" "$@"; return ;;
         external) cmd_app_domain_external "$@"; return ;;
         list) cmd_app_domains "$@"; return ;;
-        -h|--help|"")
+        -h|--help)
             cat <<'EOF'
 %include cli/text/help/app/domain.txt
 EOF
-            [ -n "$verb" ] && return 0 || exit 2 ;;
+            return 0 ;;
         *) echo "usage: k2 app domain add|rm <app-id> <subdomain> [--json]" >&2; exit 2 ;;
     esac
     local app="" label="" json_out=0 transfer="" external=""

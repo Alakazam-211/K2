@@ -22,6 +22,8 @@
 #     -h prints the grace page on stdout.
 #   - `k2 app data put -h` printed the grace page; it prints the data
 #     page, as every other `k2 app data` verb does.
+#   - `k2 app domain` alone printed its page on stdout and exited 2; it
+#     is the usage line on stderr now, and -h prints the page (exit 0).
 #
 # Each refusal row: the exact line on stderr, nothing on stdout, exit 2,
 # and the stub daemon records no request. Each row that should send then
@@ -285,6 +287,23 @@ page app/data.txt app data put --help
 page app/data.txt app data put shop notes.txt -h
 # native: app data put
 page app/data.txt app data put shop --json --help notes.txt
+
+echo "== app domain: no verb or an unknown one is the usage line; -h is the page =="
+U_DOMAIN="usage: k2 app domain add|rm <app-id> <subdomain> [--json]"
+# native: app domain
+refused "$U_DOMAIN" app domain
+# native: app domain
+refused "$U_DOMAIN" app domain frobnicate shop www
+# native: app domain
+refused "$U_DOMAIN" app domain --json
+# native: app domain
+page app/domain.txt app domain -h
+# native: app domain
+page app/domain.txt app domain --help
+# native: app domain
+page app/domain.txt app domain add shop www -h
+# native: app domain
+page app/domain.txt app domain rm --help shop www
 
 echo ""
 echo "app_usage_before_send: $pass passed, $fail failed"

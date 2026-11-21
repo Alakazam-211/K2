@@ -18763,7 +18763,7 @@ cmd_app_domain() {
         check|primary) cmd_app_domain_custom "$verb" "$@"; return ;;
         external) cmd_app_domain_external "$@"; return ;;
         list) cmd_app_domains "$@"; return ;;
-        -h|--help|"")
+        -h|--help)
             cat <<'EOF'
 k2 app domain — more hostnames for an App (0.46.4; custom domains 0.46.6)
 
@@ -18911,7 +18911,7 @@ SUBDOMAINS (k2 app domain add <app-id> <subdomain>)
   already serves something and that no workspace holds is repointed only
   by the owner, deliberately: --transfer (never by an agent).
 EOF
-            [ -n "$verb" ] && return 0 || exit 2 ;;
+            return 0 ;;
         *) echo "usage: k2 app domain add|rm <app-id> <subdomain> [--json]" >&2; exit 2 ;;
     esac
     local app="" label="" json_out=0 transfer="" external=""

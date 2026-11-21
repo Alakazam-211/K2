@@ -150,6 +150,8 @@ app data --help|app/data|out|0
 app data -h|app/data|out|0
 app db --help|app/db|out|0
 app db -h|app/db|out|0
+app domain --help|app/domain|out|0
+app domain -h|app/domain|out|0
 app egress --help|app/egress|out|0
 app egress -h|app/egress|out|0
 app expose --help|app/expose|out|0

@@ -204,6 +204,13 @@ fn the_reader_asks_deny_changes_nothing_and_an_admins_allow_grants_read_on_exact
     let (s, v) = ask(&me, json!({}));
     assert_eq!((s.as_str(), &v["error"]["code"]), ("400 Bad Request", &json!(codes::USAGE)), "{v}");
 
+    // Deny on the other database's card (alone on the Thread): nothing granted.
+    let (_, v2) = ask(&me, json!({ "db": other }));
+    let (s, d) = crate::sql::routes::with_fake_ops(ops, || answer_as("owner", &reader, &card_of(&v2), json!({ "answer": "Deny" })));
+    assert_eq!(s, "200 OK", "{d}");
+    assert_eq!(row(&id_of(&v2)).state.as_str(), "denied", "{d}");
+    assert_eq!(grant_of(&other, &reader), None, "Deny changes nothing");
+
     // The ask by App: its one database. The card says K2's words, no secret.
     let (s, v) = ask(&me, json!({ "app": app, "why": "verify the jobs import" }));
     assert_eq!((s.as_str(), &v["status"]), ("200 OK", &json!("pending")), "{v}");
@@ -236,12 +243,6 @@ fn the_reader_asks_deny_changes_nothing_and_an_admins_allow_grants_read_on_exact
     assert_eq!(row(&id).state.as_str(), "pending", "still waiting for a person");
     assert_eq!(grant_of(&jobs, &reader), None);
 
-    // Deny on the other database's card: nothing granted, there or here.
-    let (_, v2) = ask(&me, json!({ "db": other }));
-    let (s, d) = crate::sql::routes::with_fake_ops(ops, || answer_as("owner", &reader, &card_of(&v2), json!({ "answer": "Deny" })));
-    assert_eq!(s, "200 OK", "{d}");
-    assert_eq!(row(&id_of(&v2)).state.as_str(), "denied", "{d}");
-    assert_eq!(grant_of(&other, &reader), None, "Deny changes nothing");
 
     // An Admin taps Allow: read, no manage, on jobs only.
     let admin = login("dbaa", Role::Admin);

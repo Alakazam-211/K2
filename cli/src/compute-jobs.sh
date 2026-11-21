@@ -63,37 +63,52 @@ if name.startswith("/") or any(p in ("", ".", "..") for p in parts):
     sys.stderr.write(json.dumps({"error": "artifact_name_unsafe", "hint": name}) + "\n"); sys.exit(3)
 out = os.environ["K2_CP_OUT"]
 path = os.path.join(out, *parts)
-# No link inside the folder is followed: one on the way is refused, and
-# the file is written from the folders opened one at a time with
-# O_NOFOLLOW (its first chunk made fresh with O_EXCL, the rest appended).
-p = out
-for part in parts:
-    p = os.path.join(p, part)
-    try:
-        if stat.S_ISLNK(os.lstat(p).st_mode):
-            sys.stderr.write(json.dumps({"error": "artifact_path_unsafe", "hint": "%s: %s is a link, not followed; nothing written there" % (name, p)}) + "\n"); sys.exit(3)
-    except (FileNotFoundError, NotADirectoryError):
-        break
 data = base64.b64decode(v["data"])
+# No link inside the folder is followed. The folders are opened one at a
+# time from the folder before with O_NOFOLLOW, the first chunk is made
+# fresh with O_EXCL, the rest appended with O_NOFOLLOW; an open that
+# meets a link (there before, or put there since) is refused.
+def refuse(i):
+    sys.stderr.write(json.dumps({"error": "artifact_path_unsafe", "hint": "%s: %s is a link, not followed; nothing written there" % (name, os.path.join(out, *parts[:i + 1]))}) + "\n")
+    sys.exit(3)
+def linked(d, i):
+    try:
+        return stat.S_ISLNK(os.stat(parts[i], dir_fd=d, follow_symlinks=False).st_mode)
+    except OSError:
+        return False
+last = len(parts) - 1
 d = os.open(out, os.O_RDONLY | os.O_DIRECTORY)
 try:
-    for part in parts[:-1]:
+    for i, part in enumerate(parts[:-1]):
         try:
             os.mkdir(part, 0o777, dir_fd=d)
         except FileExistsError:
             pass
-        sub = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=d)
+        try:
+            sub = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=d)
+        except OSError:
+            if linked(d, i):
+                refuse(i)
+            raise
         os.close(d)
         d = sub
     if os.environ.get("K2_CP_FIRST") == "1":
+        if linked(d, last):
+            refuse(last)
         try:
             if stat.S_ISREG(os.stat(parts[-1], dir_fd=d, follow_symlinks=False).st_mode):
                 os.unlink(parts[-1], dir_fd=d)
         except FileNotFoundError:
             pass
-        fd = os.open(parts[-1], os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o666, dir_fd=d)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
     else:
-        fd = os.open(parts[-1], os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW, dir_fd=d)
+        flags = os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW
+    try:
+        fd = os.open(parts[-1], flags, 0o666, dir_fd=d)
+    except OSError:
+        if linked(d, last):
+            refuse(last)
+        raise
 finally:
     os.close(d)
 with os.fdopen(fd, "wb") as f:
@@ -104,10 +119,21 @@ print("%d %d %s %s %s" % (v["offset"] + len(data), 1 if v["eof"] else 0, v["sha2
             read -r offset eof sha bytes path <<<"$step"
             first=0
         done
-        entry="$(K2_CP_PATH="$path" K2_CP_SHA="$sha" K2_CP_BYTES="$bytes" K2_CP_NAME="$name" python3 -c '
+        entry="$(K2_CP_PATH="$path" K2_CP_SHA="$sha" K2_CP_BYTES="$bytes" K2_CP_NAME="$name" K2_CP_OUT="$out" python3 -c '
 import hashlib, json, os, sys
 p = os.environ["K2_CP_PATH"]
-with os.fdopen(os.open(p, os.O_RDONLY | os.O_NOFOLLOW), "rb") as f:
+# Read from the folders as it was written: each opened with O_NOFOLLOW.
+parts = os.environ["K2_CP_NAME"].split("/")
+d = os.open(os.environ["K2_CP_OUT"], os.O_RDONLY | os.O_DIRECTORY)
+try:
+    for part in parts[:-1]:
+        sub = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=d)
+        os.close(d)
+        d = sub
+    fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=d)
+finally:
+    os.close(d)
+with os.fdopen(fd, "rb") as f:
     data = f.read()
 h = hashlib.sha256(data).hexdigest()
 if h != os.environ["K2_CP_SHA"] or len(data) != int(os.environ["K2_CP_BYTES"]):

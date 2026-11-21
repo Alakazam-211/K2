@@ -8,7 +8,9 @@
 # appended to); a link inside --out on an artifact's way (a linked folder
 # pointing outside, or a linked artifact file) is refused with exit 3 and
 # one code: hint line, and nothing is written through it (the link's
-# target is as it was).
+# target is as it was). So is a link put in the file's place between two
+# of its chunks (the stub swaps it in before it answers the second): the
+# open that meets it refuses, with the same line.
 #
 # No daemon build, no real ~/.k2 (HOME is a temp dir), no network.
 set -euo pipefail
@@ -39,7 +41,7 @@ cleanup() {
 trap cleanup EXIT
 
 python3 - "$WORK" <<'PYEOF' &
-import base64, hashlib, json, sys, urllib.parse
+import base64, hashlib, json, os, sys, urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 work = sys.argv[1]
 FILES = {"b.txt": b"bravo bytes\n", "sub/a.txt": b"alpha, a little longer\n"}
@@ -61,6 +63,13 @@ class H(BaseHTTPRequestHandler):
         else:
             data = FILES[q["name"]]
             off = int(q.get("offset", "0"))
+            swap = work + "/swap"
+            if off > 0 and os.path.exists(swap):
+                # A link put in the file's place between two chunks.
+                at, target = open(swap).read().split("\n")[:2]
+                os.remove(swap)
+                os.symlink(target, at + ".new")
+                os.replace(at + ".new", at)
             chunk = data[off:off + STEP]
             out = {"name": q["name"], "offset": off, "data": base64.b64encode(chunk).decode(),
                    "eof": off + len(chunk) >= len(data), "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)}
@@ -130,6 +139,16 @@ rc "a linked file" 3 compute fetch j1 --out "$OUT"
 eq "a linked file: says why" "$(cat "$WORK/err")" "$(refusal "b.txt: $OUT/b.txt is a link, not followed; nothing written there")"
 eq "a linked file: its target is untouched" "$(cat "$WORK/box/target.txt")" "keep"
 eq "a linked file: the link is as it was" "$(readlink "$OUT/b.txt")" "../target.txt"
+rm -rf "$OUT"
+
+echo "== a link put in the file's place between two chunks =="
+mkdir -p "$OUT"
+printf 'keep\n' >"$WORK/box/target.txt"
+printf '%s\n%s\n' "$OUT/b.txt" "../target.txt" >"$WORK/swap"
+rc "a link swapped in" 3 compute fetch j1 b.txt --out "$OUT"
+eq "a link swapped in: says why" "$(cat "$WORK/err")" "$(refusal "b.txt: $OUT/b.txt is a link, not followed; nothing written there")"
+eq "a link swapped in: the stub swapped it" "$([ -e "$WORK/swap" ] && echo still-there || echo used)" "used"
+eq "a link swapped in: its target is untouched" "$(cat "$WORK/box/target.txt")" "keep"
 eq "nothing beside --out" "$(cd "$WORK/box" && ls -A | tr '\n' ' ')" "elsewhere out target.txt "
 
 echo

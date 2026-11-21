@@ -3911,15 +3911,18 @@ mod tests {
             }
         }
         assert_eq!(found, Vec::<String>::new());
-        // And in remote.rs a reader is called only by `routed` (curl's
-        // reading for a remote base), `python_route` (a Python block's
-        // urllib to a host it names) and `python_proxy_env` (the urllib
-        // families' https daemon).
+        // And in remote.rs a reader is called only by `process_env` (curl's
+        // reading, the one place for `routed`, a remote base, and
+        // `python_route`, a Python block's urllib to a host it names) and
+        // `python_proxy_env` (the urllib families' https daemon); and
+        // `process_env` only by `routed` and `python_route`.
         let remote = std::fs::read_to_string(src.join("transport/remote.rs")).unwrap();
+        let curl_reader = "process_env";
         let mut callers = Vec::new();
+        let mut users = Vec::new();
         let mut within = String::new();
         for line in remote.lines() {
-            if let Some(rest) = line.strip_prefix("pub fn ") {
+            if let Some(rest) = line.strip_prefix("pub fn ").or(line.strip_prefix("fn ")) {
                 within = rest.split('(').next().unwrap_or("").to_string();
             }
             let code = line.trim_start();
@@ -3928,14 +3931,14 @@ mod tests {
             }
             if readers.iter().any(|r| code.contains(r.as_str())) {
                 callers.push(within.clone());
+            } else if code.contains(curl_reader) && within != curl_reader {
+                users.push(within.clone());
             }
         }
         callers.dedup();
-        assert_eq!(
-            callers,
-            ["routed", "python_route", "python_proxy_env"],
-            "remote.rs"
-        );
+        users.dedup();
+        assert_eq!(callers, [curl_reader, "python_proxy_env"], "remote.rs");
+        assert_eq!(users, ["routed", "python_route"], "remote.rs");
     }
 
     /// No credential ever follows a redirect: a 3xx is the answer, on the

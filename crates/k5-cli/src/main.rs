@@ -76,6 +76,17 @@ fn shell(who: CalledAs, args: &[OsString]) -> Exit {
     fallthrough::hand_off(who, args)
 }
 
+/// A line a family handed back: its captured help page
+/// ([`front::captured_help`]), or the shell's.
+fn handed_back(who: CalledAs, args: &[OsString]) -> Exit {
+    match front::captured_help(args) {
+        Some(form) => page(who, args, |p, env| {
+            pages::help_page(form, p, env, || passport::current(args).would_refuse())
+        }),
+        None => shell(who, args),
+    }
+}
+
 /// A page: printed here when the shell's environment lets the binary
 /// answer it ([`pages`]), else handed to the shell.
 fn page(
@@ -141,8 +152,9 @@ fn main() {
         Route::CliStatus { json } => cli_status(&args, json),
         Route::CliHelp => print(cli_status::HELP, Exit::Ok),
         // A family's code (its row's `run`, in its module): a form it
-        // hands back goes to the shell before anything is printed or sent.
-        Route::Family(noun) => (noun.run)(&args).unwrap_or_else(|| shell(who, &args)),
+        // hands back goes to the shell before anything is printed or sent,
+        // or, when it is a captured help line, to that page.
+        Route::Family(noun) => (noun.run)(&args).unwrap_or_else(|| handed_back(who, &args)),
         Route::Spec(row) => spec::run(row, &args).unwrap_or_else(|| shell(who, &args)),
         Route::Study(s) => page(who, &args, |p, env| {
             pages::study_page(s, p, env, || passport::current(&args).would_refuse())

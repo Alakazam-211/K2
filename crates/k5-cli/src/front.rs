@@ -19,7 +19,10 @@
 //! before it, or whatever it does with such a word where it reads a
 //! value), with its connection gate in front of it, exactly as it always
 //! has. A line with neither that is exactly a captured form (`agent team
-//! help`) is that page too. No copy of the text lives here: a page is the
+//! help`) is the family's first: a family that answers its own help word
+//! keeps it, with its own guard (`vault help` refuses with no owner, as
+//! the shell does), and one that hands it back gets that page
+//! ([`captured_help`]). No copy of the text lives here: a page is the
 //! shell's own file or what `tests/cli/help_native.sh` captured from it.
 //!
 //! A family's bare line (the first word alone, or it and `--json`) that
@@ -115,6 +118,15 @@ pub fn route(args: &[OsString]) -> Route {
             Route::Fallthrough
         }
     }
+}
+
+/// The captured page of a line a family handed back: a help line with no
+/// `-h` or `--help` in it that the shell only prints for (`agent team
+/// help`). A family that answers its own help word never gets here, so
+/// its guard stands.
+pub fn captured_help(args: &[OsString]) -> Option<&'static HelpForm> {
+    let words: Option<Vec<&str>> = args.iter().map(|a| a.to_str()).collect();
+    text::captured_form(&words?)
 }
 
 /// Whether `args` is a page the front puts together ([`pages::composed`]).
@@ -217,11 +229,9 @@ fn native(noun: &'static Noun, args: &[OsString]) -> Route {
     if noun.names("setup") && words.iter().skip(1).any(|w| *w == "help") {
         return help_route(args).map_or(Route::Fallthrough, Route::Help);
     }
-    // A help line with no `-h` or `--help` in it (`agent team help`) that
-    // the shell only prints for: what it printed.
-    if text::captured_form(&words).is_some() {
-        return captured();
-    }
+    // A help line with no `-h` or `--help` in it (`agent team help`) is
+    // the family's first; one it hands back is its captured page
+    // ([`captured_help`]).
     Route::Family(noun)
 }
 
@@ -899,10 +909,13 @@ mod tests {
                 json: false
             })
         );
-        // The shell's: the list as JSON, unknown and bash topics, errors.
+        assert_eq!(
+            route(&args(&["study", "--json"])),
+            Route::Study(Study::CatalogJson)
+        );
+        // The shell's: unknown and bash topics, errors.
         for shell in [
-            &["study", "--json"][..],
-            &["study", "nope"],
+            &["study", "nope"][..],
             &["study", "app-api"],
             &["study", "errors", "db"],
             &["study", "--x"],

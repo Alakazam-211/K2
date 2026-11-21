@@ -15,13 +15,16 @@
 #   1. a TCP server that accepts and never answers: POST and GET are sent
 #      once, and the server sees exactly one request;
 #   2. the same over a Unix socket (the cell socket's path);
-#   3. a connect that times out (a listener whose backlog is full): GET and
-#      POST are tried $_K2_CURL_TRIES times;
+#   3. a connect that times out (a listener whose backlog is full, or on
+#      macOS a documentation address nothing answers): GET and POST are
+#      tried $_K2_CURL_TRIES times;
 #   4. a -w the helper can't extend (-w@file), so the connect state is
 #      unknown: a POST is sent once, a GET still tries again;
 #   5. a normal answer: the caller's bytes are unchanged (no marker);
 #   6. the decision itself (_cli_connect_none) on fixed traces.
-# No daemon, no real ~/.k2 (HOME is a temp dir), no network.
+# No daemon, no real ~/.k2 (HOME is a temp dir). The only packets that
+# leave the machine are unanswered connects to an RFC 5737 address, and
+# only where a loopback connect can't be made to time out (macOS).
 # Run with: bash tests/cli/curl_connect_retry.sh
 # bash-only: runs functions from the bash CLI's source.
 set -euo pipefail
@@ -132,12 +135,20 @@ read -r SP FP <"$W/ports"
 
 # The connect timeout must be real here: curl times out (28) and says no
 # connect completed. Without that, rows 3 and 4 would prove nothing.
-pre_rc=0
-pre="$("$REAL_CURL" -s -o /dev/null --connect-timeout 1 --max-time 3 -w '%{time_connect}' "http://127.0.0.1:$FP/x")" || pre_rc=$?
-if [ "$pre_rc" != 28 ] || [ "$(printf '%s' "$pre" | tr -d '0.,')" != "" ]; then
-    echo "FAIL: the full-backlog listener didn't give a connect timeout (curl exit $pre_rc, time_connect $pre)" >&2
-    exit 1
-fi
+# Linux drops a new connect to the full backlog; macOS completes it, so
+# there it is a documentation address nothing answers (RFC 5737).
+CT=""
+for target in "127.0.0.1:$FP" "192.0.2.1:9" "198.51.100.1:9" "203.0.113.1:9"; do
+    pre_rc=0
+    pre="$("$REAL_CURL" -s -o /dev/null --connect-timeout 1 --max-time 3 -w '%{time_connect}' "http://$target/x")" || pre_rc=$?
+    if [ "$pre_rc" = 28 ] && [ -n "$pre" ] && [ "$(printf '%s' "$pre" | tr -d '0.,')" = "" ]; then
+        CT="$target"
+        break
+    fi
+    echo "  note: $target gives no connect timeout here (curl exit $pre_rc, time_connect $pre)"
+done
+[ -n "$CT" ] || { echo "FAIL: no address on this machine gives a connect timeout" >&2; exit 1; }
+echo "  connect timeouts go to $CT"
 
 # cc ARGS…: _cli_curl as the request helpers call it, in a clean shell.
 # Sets $rc, $out (stdout), $runs (curl runs), $arr (requests that arrived).
@@ -174,19 +185,19 @@ assert_eq "POST: curl ran once" "$runs" "1"
 assert_eq "POST: exactly one request reached the socket" "$arr" "1"
 
 echo "== 3. a connect that times out =="
-cc -sS -v -G -w "$WS" --connect-timeout 1 --max-time 3 "http://127.0.0.1:$FP/cli/read"
+cc -sS -v -G -w "$WS" --connect-timeout 1 --max-time 3 "http://$CT/cli/read"
 assert_eq "GET: exit 28 after the tries" "$rc" "28"
 assert_eq "GET: tried $TRIES times" "$runs" "$TRIES"
-cc -sS -v -X POST -w "$WS" --connect-timeout 1 --max-time 3 --data-raw "" "http://127.0.0.1:$FP/cli/done"
+cc -sS -v -X POST -w "$WS" --connect-timeout 1 --max-time 3 --data-raw "" "http://$CT/cli/done"
 assert_eq "POST: exit 28 after the tries" "$rc" "28"
 assert_eq "POST: tried $TRIES times (it never connected)" "$runs" "$TRIES"
 
 echo "== 4. the connect state is unknown (a -w the helper can't extend) =="
 printf '%s' "$WS" >"$W/wfmt"
-cc -sS -v -X POST "-w@$W/wfmt" --connect-timeout 1 --max-time 3 --data-raw "" "http://127.0.0.1:$FP/cli/done"
+cc -sS -v -X POST "-w@$W/wfmt" --connect-timeout 1 --max-time 3 --data-raw "" "http://$CT/cli/done"
 assert_eq "POST: exit 28" "$rc" "28"
 assert_eq "POST: sent once, never again" "$runs" "1"
-cc -sS -v -G "-w@$W/wfmt" --connect-timeout 1 --max-time 3 "http://127.0.0.1:$FP/cli/read"
+cc -sS -v -G "-w@$W/wfmt" --connect-timeout 1 --max-time 3 "http://$CT/cli/read"
 assert_eq "GET: exit 28 after the tries" "$rc" "28"
 assert_eq "GET: tried $TRIES times" "$runs" "$TRIES"
 

@@ -33,6 +33,10 @@
 //!    else the call's.
 //! 6. The EXIT trap's lines ([`crate::prelude::Closing`]).
 //!
+//! A value flag as the last word (`--lines`, `--agent`, `--session`,
+//! `--token`) is [`out::need_value`]'s line and exit 2 after the gates,
+//! nothing sent: the shell's `_need_value` line, the same.
+//!
 //! A request with no answer is the transport's line, and the command then
 //! dies of SIGPIPE with nothing else printed, as the shell's
 //! `_k2_end_command` ends a pipe ([`super::end_in_pipe`]).
@@ -54,9 +58,8 @@
 //!   [`remote::sends_here`]: a path after the host, a user part, IPv6;
 //!   HTTPS where curl would use a proxy; plain http to anything but a
 //!   literal loopback address);
-//! - a value flag as the last word (the shell's `_need_value` line,
-//!   `Error: <flag> takes a value`, exit 2), a word that is not UTF-8,
-//!   and a command line with `-h` or `--help` ([`crate::front`]);
+//! - a word that is not UTF-8, and a command line with `-h` or `--help`
+//!   ([`crate::front`]);
 //! - a `--lines` value with a byte that is not printable ASCII, or a `#`:
 //!   the shell hands it to curl as it is, and curl refuses it or cuts it;
 //! - a port that is set but is no port curl takes, and a `python3` the
@@ -111,7 +114,7 @@ pub struct Ask {
 }
 
 /// The words after `read`, as `cmd_read`'s loop reads them. `None`: a
-/// value flag with nothing after it (the shell's).
+/// value flag with nothing after it, the last word ([`needs_value`]).
 pub fn parse(words: &[&str]) -> Option<Ask> {
     let mut ask = Ask {
         workspace: words.first().map_or_else(String::new, |w| (*w).to_string()),
@@ -228,7 +231,9 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .skip(1)
         .map(|a| a.to_str())
         .collect::<Option<_>>()?;
-    let ask = parse(&words)?;
+    let Some(ask) = parse(&words) else {
+        return Some(needs_value(words.last().copied().unwrap_or_default()));
+    };
     let (bare, host) = split_remote(&ask.workspace);
     if !sendable_lines(&ask.lines) || !python::family_native(python::here()) {
         return None;
@@ -255,6 +260,22 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     }
     let token = token(&words);
     Some(run_with(args, &ask, &bare, token, target, settings))
+}
+
+/// A value flag as the last word: after the settings and the gates,
+/// [`out::need_value`]'s line and exit 2, nothing sent.
+fn needs_value(flag: &str) -> Exit {
+    let settings = match daemon::current() {
+        Ok(s) => s,
+        Err(e) => {
+            out::stderr_line(&format!("Error: {e}"));
+            return Exit::Error;
+        }
+    };
+    if let Some(gate) = prelude::gate(&settings) {
+        return gate.stop();
+    }
+    out::stop_need_value(flag)
 }
 
 fn run_with(

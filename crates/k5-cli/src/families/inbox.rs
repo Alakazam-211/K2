@@ -13,7 +13,10 @@
 //!    require-passport lines; both exit 3 ([`crate::prelude::id_tool`]).
 //! 3. The words ([`parse`]). `read` with no id is `Usage: k2 inbox read
 //!    <id>`, exit 2; `search` with no query is `Usage: k2 inbox search
-//!    "query"`, exit 1.
+//!    "query"`, exit 1. A value flag as the last word (`list --folder`,
+//!    and `compose`'s `--title`, `--body`, `--priority`, `--source`,
+//!    `--from` and `--summary`) is [`out::need_value`]'s line and exit 2,
+//!    nothing sent: the shell's `_need_value` line, the same.
 //! 4. One `cli_send cli_request <route> [<key>=<escaped>]` on the left of
 //!    a pipe into the shell's Python ([`super::request_piped`]): the cell
 //!    socket first when there is a passport with a live socket (every
@@ -42,9 +45,7 @@
 //! The shell CLI answers these forms itself ([`run`] returns `None`):
 //!
 //! - a command line with `-h` or `--help` (the front sends those on,
-//!   [`crate::front`]), a word that is not UTF-8, and `--folder` (or a
-//!   `compose` value flag) as the last word (the shell's `_need_value`
-//!   line, `Error: <flag> takes a value`, exit 2);
+//!   [`crate::front`]) and a word that is not UTF-8;
 //! - `HOOK_SOCK` set with a `CODEX_` variable exported (the shell looks
 //!   for a shared Codex server first, [`crate::prelude::codex_env`]);
 //! - a port that is set but is no port curl takes (the shell's curl fails
@@ -165,11 +166,13 @@ pub enum Ask {
         pairs: Option<Vec<String>>,
         usage: &'static str,
     },
+    /// A value flag as the last word (`list --folder`, a `compose` value
+    /// flag), as typed.
+    NeedsValue(String),
 }
 
 /// The words after `inbox`, as `cmd_inbox` and its verbs read them.
-/// `None`: the shell's (`-h` or `--help` as the verb, or a value flag
-/// with nothing after it).
+/// `None`: the shell's (`-h` or `--help` as the verb).
 pub fn parse(words: &[&str]) -> Option<Ask> {
     let first = |rest: &[&str]| rest.first().map_or_else(String::new, |w| (*w).to_string());
     match words.first() {
@@ -196,7 +199,7 @@ pub fn parse(words: &[&str]) -> Option<Ask> {
 }
 
 /// `cmd_inbox_compose`'s loop: each value flag takes the next word (none:
-/// the shell's), any other word is skipped.
+/// [`Ask::NeedsValue`]), any other word is skipped.
 fn compose(words: &[&str]) -> Option<Ask> {
     const FIELDS: [&str; 6] = ["title", "body", "priority", "source", "from", "summary"];
     let mut vals: [&str; 6] = [""; 6];
@@ -207,7 +210,10 @@ fn compose(words: &[&str]) -> Option<Ask> {
             .and_then(|f| FIELDS.iter().position(|x| *x == f))
         {
             Some(k) => {
-                vals[k] = *words.get(i + 1)?;
+                let Some(v) = words.get(i + 1) else {
+                    return Some(Ask::NeedsValue((*w).to_string()));
+                };
+                vals[k] = v;
                 i += 2;
             }
             None => i += 1,
@@ -257,7 +263,10 @@ fn list(words: &[&str]) -> Option<Ask> {
     while let Some(w) = words.get(i) {
         match *w {
             "--folder" => {
-                folder = (*words.get(i + 1)?).to_string();
+                let Some(v) = words.get(i + 1) else {
+                    return Some(Ask::NeedsValue("--folder".into()));
+                };
+                folder = (*v).to_string();
                 i += 2;
             }
             w if w.starts_with('-') => i += 1,
@@ -317,6 +326,7 @@ fn run_with(
         return stop;
     }
     match ask {
+        Ask::NeedsValue(flag) => return out::stop_need_value(flag),
         Ask::Read { id } if id.is_empty() => {
             out::stderr_line(READ_USAGE);
             return Exit::Usage;
@@ -359,7 +369,7 @@ fn run_with(
             let pairs: Vec<&str> = pairs.iter().map(String::as_str).collect();
             return write(&mut client, closing, route, &pairs);
         }
-        Ask::Compose { form: None } | Ask::Write { pairs: None, .. } => {
+        Ask::Compose { form: None } | Ask::Write { pairs: None, .. } | Ask::NeedsValue(_) => {
             unreachable!("a usage line above")
         }
         Ask::List { folder } => (
@@ -376,7 +386,9 @@ fn run_with(
         Ask::List { .. } | Ask::Search { .. } => Shown::out(format_inbox(&piped.body)),
         Ask::Read { .. } => read_item(&piped.body),
         Ask::Folders => folders(&piped.body),
-        Ask::Compose { .. } | Ask::Write { .. } => unreachable!("a write returned above"),
+        Ask::Compose { .. } | Ask::Write { .. } | Ask::NeedsValue(_) => {
+            unreachable!("a write returned above")
+        }
     };
     let exit = pipefail(piped.exit, shown.print());
     closing.flush(&mut client, exit);
@@ -777,8 +789,10 @@ mod tests {
         assert_eq!(parse(&["list", "--folder", "", "z"]), list("z"));
         assert_eq!(parse(&["list", "--folder", "-x"]), list("-x"));
         assert_eq!(parse(&["list", "-"]), list(""));
-        assert_eq!(parse(&["list", "--folder"]), None);
-        assert_eq!(parse(&["--folder"]), None);
+        let needs = |f: &str| Some(Ask::NeedsValue(f.into()));
+        assert_eq!(parse(&["list", "--folder"]), needs("--folder"));
+        assert_eq!(parse(&["--folder"]), needs("--folder"));
+        assert_eq!(parse(&["x", "--folder"]), needs("--folder"));
         // A first word that is no verb is list's, itself included.
         assert_eq!(parse(&["--json", "zz"]), list("zz"));
         assert_eq!(parse(&["projects"]), list("projects"));
@@ -814,7 +828,10 @@ mod tests {
             parse(&["compose", "--body", "x"]),
             Some(Ask::Compose { form: None })
         );
-        assert_eq!(parse(&["compose", "--title"]), None);
+        for f in ["title", "body", "priority", "source", "from", "summary"] {
+            let flag = format!("--{f}");
+            assert_eq!(parse(&["compose", "x", &flag]), needs(&flag));
+        }
         assert_eq!(
             parse(&["move", "a", "f/g"]),
             Some(Ask::Write {

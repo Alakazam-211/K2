@@ -26,9 +26,12 @@
 //! each is an open tool. A request with no answer is the transport's
 //! line, exit 1 (`reviews`: the line, then SIGPIPE). The shell answers:
 //! `-h` or `--help` (the front sends those on; the shell prints the usage
-//! and sends nothing), `commit`'s `-m` as the last
-//! word (its `_need_value` line), a word that is not UTF-8, a port curl
-//! won't take, and a `python3` the binary can't tell.
+//! and sends nothing), a word that is not UTF-8, a port curl won't take,
+//! and a `python3` the binary can't tell.
+//!
+//! `commit`'s `-m` (or `--message`) as the last word is
+//! [`out::need_value`]'s line and exit 2, nothing sent, after the gates:
+//! the shell's `_need_value` line, the same.
 
 use super::{curl_port, ljust, pipefail, py_iter, raised, without_nuls, Raise, Shown};
 use crate::daemon;
@@ -176,7 +179,10 @@ pub fn parse(words: &[&str]) -> Option<Ask> {
             let mut i = 0;
             while i < rest.len() {
                 if matches!(rest[i], "-m" | "--message") {
-                    message = rest.get(i + 1)?.to_string();
+                    let Some(value) = rest.get(i + 1) else {
+                        return Some(Ask::Lines(vec![out::need_value(rest[i])], Exit::Usage));
+                    };
+                    message = value.to_string();
                     i += 2;
                 } else {
                     i += 1;
@@ -431,7 +437,17 @@ mod tests {
             matches!(parse(&["checkin", "a", "--status"]), Some(Ask::Lines(l, Exit::Usage)) if l.len() == 2)
         );
         assert!(matches!(parse(&["checkin"]), Some(Ask::Lines(l, _)) if l.len() == 3));
-        assert_eq!(parse(&["commit", "-m"]), None);
+        assert_eq!(
+            parse(&["commit", "-m"]),
+            Some(Ask::Lines(vec!["Error: -m takes a value".into()], Exit::Usage))
+        );
+        assert_eq!(
+            parse(&["commit", "x", "--message", "--merge"]),
+            Some(Ask::Lines(
+                vec!["Error: --message takes a value".into()],
+                Exit::Usage
+            ))
+        );
         assert_eq!(
             parse(&["commit", "--merge"]),
             Some(Ask::Commit(

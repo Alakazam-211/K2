@@ -34,9 +34,12 @@
 //! ([`pyjson`]). Where the shell's Python raises on an answer of a shape
 //! it doesn't expect, this prints a Python 3.12 traceback.
 //!
-//! Still the shell's: a value flag as the last word (`--subdomain`,
-//! `--token`: the shell's `_need_value` line), a
-//! word that is not UTF-8, a command line with `-h` or `--help` that is
+//! A value flag as the last word (`start` or `enable` with `--subdomain`,
+//! `switch` with `--token`) is [`out::need_value`]'s line and exit 2
+//! after the gates (and `switch`'s air-gap refusal), nothing sent: the shell's
+//! `_need_value` line, the same.
+//!
+//! Still the shell's: a word that is not UTF-8, a command line with `-h` or `--help` that is
 //! not a help page ([`crate::front`]), a port that is set but is no port
 //! curl takes, and a `python3` the binary can't tell. `switch
 //! --token-stdin` at a terminal reads the token with no echo, as the
@@ -191,6 +194,8 @@ pub enum Form {
     Help,
     Boot(Boot),
     Unknown,
+    /// A value flag as the last word.
+    NeedsValue(&'static str),
 }
 
 /// `switch`'s words.
@@ -216,7 +221,7 @@ pub enum Boot {
 }
 
 /// The words after `tunnel`: the form, or `None` when the shell answers
-/// (a value flag as the last word, `-h` or `--help`).
+/// (`-h` or `--help`).
 pub fn parse(words: &[&str]) -> Option<Form> {
     let (sub, rest) = match words.split_first() {
         None => ("status", &[][..]),
@@ -229,7 +234,10 @@ pub fn parse(words: &[&str]) -> Option<Form> {
             let mut i = 0;
             while i < rest.len() {
                 if rest[i] == "--subdomain" {
-                    subdomain = Some(rest.get(i + 1)?.to_string());
+                    let Some(v) = rest.get(i + 1) else {
+                        return Some(Form::NeedsValue("--subdomain"));
+                    };
+                    subdomain = Some(v.to_string());
                     i += 2;
                 } else {
                     i += 1;
@@ -245,7 +253,10 @@ pub fn parse(words: &[&str]) -> Option<Form> {
             while i < rest.len() {
                 match rest[i] {
                     "--subdomain" => {
-                        subdomain = rest.get(i + 1)?.to_string();
+                        let Some(v) = rest.get(i + 1) else {
+                            return Some(Form::NeedsValue("--subdomain"));
+                        };
+                        subdomain = v.to_string();
                         i += 2;
                     }
                     "--no-auto-start" => {
@@ -290,7 +301,10 @@ fn switch_words(rest: &[&str]) -> Option<Switch> {
     while i < rest.len() {
         match rest[i] {
             "--token" => {
-                token = rest.get(i + 1)?;
+                let Some(v) = rest.get(i + 1) else {
+                    return Some(Switch::Stop(out::need_value("--token")));
+                };
+                token = v;
                 i += 2;
             }
             "--token-stdin" => {
@@ -417,6 +431,7 @@ fn run_with(
             return lines(&RELEASE_REST, Exit::Error);
         }
         Form::Switch(Switch::Stop(line)) => return lines(&[line.as_str()], Exit::Usage),
+        Form::NeedsValue(flag) => return out::stop_need_value(flag),
         Form::Help => {
             let page = crate::text::help("tunnel").unwrap_or_default();
             return match out::stdout(page) {
@@ -504,7 +519,9 @@ fn run_with(
                 Err(exit) => exit,
             }
         }
-        Form::Help | Form::Unknown | Form::Boot(Boot::Usage) => Exit::Error,
+        Form::Help | Form::Unknown | Form::Boot(Boot::Usage) | Form::NeedsValue(_) => {
+            Exit::Error
+        }
     };
     closing.flush(&mut client, exit);
     exit

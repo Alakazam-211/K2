@@ -36,10 +36,15 @@
 //! Handed to the shell, before anything is printed or sent: a word that is
 //! not UTF-8, `-h` or `--help` anywhere (the front's: `spawn` and `read`
 //! print their usage and send nothing; `write` still takes them as the
-//! message and sends it, a bash bug), a value-taking word with nothing
-//! after it (`spawn --title`, `read <id> --lines`: the shell's
-//! `_need_value` line), `HOOK_SOCK` set with a `CODEX_` variable
-//! exported, a port curl won't take, a `python3` the binary can't tell.
+//! message and sends it, a bash bug), `HOOK_SOCK` set with a `CODEX_`
+//! variable exported, a port curl won't take, a `python3` the binary
+//! can't tell.
+//!
+//! A value-taking word with nothing after it (`spawn --title`, also
+//! `--command`, `--agent` and `--cwd`; `read <id> --lines`) is
+//! [`out::need_value`]'s line and exit 2 after the session checks,
+//! nothing sent: the shell's
+//! `_need_value` line, the same.
 //!
 //! `resolve_write_session_id` hands `--agent`'s value to its Python in
 //! argv (`agent = sys.argv[1]`): the name is data, matched exactly as it
@@ -117,10 +122,11 @@ pub enum Ask {
         id: String,
         lines: String,
     },
+    /// A value-taking word with nothing after it (the word as typed).
+    NeedsValue(String),
 }
 
-/// The words after `terminal`. `None`: the shell's (a value-taking word
-/// with nothing after it).
+/// The words after `terminal`.
 pub fn parse(words: &[&str]) -> Option<Ask> {
     let verb = words.first().copied().unwrap_or("");
     let rest = words.get(1..).unwrap_or_default();
@@ -133,7 +139,10 @@ pub fn parse(words: &[&str]) -> Option<Ask> {
             while let Some(&w) = rest.get(i) {
                 match w {
                     "--title" | "--command" | "--agent" | "--cwd" => {
-                        let v = (*rest.get(i + 1)?).to_string();
+                        let Some(v) = rest.get(i + 1) else {
+                            return Some(Ask::NeedsValue(w.to_string()));
+                        };
+                        let v = (*v).to_string();
                         match w {
                             "--title" => title = v,
                             "--command" => command = v,
@@ -184,7 +193,10 @@ pub fn parse(words: &[&str]) -> Option<Ask> {
             let mut i = 0;
             while let Some(&w) = more.get(i) {
                 if w == "--lines" {
-                    lines = (*more.get(i + 1)?).to_string();
+                    let Some(v) = more.get(i + 1) else {
+                        return Some(Ask::NeedsValue(w.to_string()));
+                    };
+                    lines = (*v).to_string();
                     i += 1;
                 }
                 i += 1;
@@ -239,6 +251,9 @@ fn run_ask(ask: Ask, mut settings: Settings, would_refuse: bool) -> Exit {
         }
         return Exit::Error;
     }
+    if let Ask::NeedsValue(flag) = &ask {
+        return out::stop_need_value(flag);
+    }
     settings.port = settings.port_text.as_deref().and_then(curl_port);
     let mut client = match settings.client(would_refuse) {
         Ok(c) => c,
@@ -249,7 +264,7 @@ fn run_ask(ask: Ask, mut settings: Settings, would_refuse: bool) -> Exit {
     };
     let mut closing = Closing::default();
     let exit = match ask {
-        Ask::Usage => Exit::Error,
+        Ask::Usage | Ask::NeedsValue(_) => Exit::Error,
         Ask::Spawn {
             command,
             title,
@@ -533,9 +548,24 @@ mod tests {
     fn the_words() {
         assert_eq!(parse(&[]), Some(Ask::Usage));
         assert_eq!(parse(&["nope"]), Some(Ask::Usage));
-        assert_eq!(parse(&["spawn", "--title"]), None);
-        assert_eq!(parse(&["read", "x", "--lines"]), None);
-        assert_eq!(parse(&["write", "ws", "--agent"]), None);
+        for flag in ["--title", "--command", "--agent", "--cwd"] {
+            assert_eq!(
+                parse(&["spawn", "--wait", flag]),
+                Some(Ask::NeedsValue(flag.into()))
+            );
+        }
+        assert_eq!(
+            parse(&["read", "x", "--lines"]),
+            Some(Ask::NeedsValue("--lines".into()))
+        );
+        assert_eq!(
+            parse(&["write", "ws", "--agent"]),
+            Some(Ask::Write {
+                target: "ws".into(),
+                agent: String::new(),
+                message: "--agent".into()
+            })
+        );
         assert_eq!(
             parse(&["write", "ws", "--agent", "a", "hi", "there"]),
             Some(Ask::Write {

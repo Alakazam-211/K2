@@ -279,7 +279,10 @@ fn the_words() {
         p(&["start", "x", "--subdomain", "a b", "--subdomain", "acme"]),
         Some(Form::Start(Some("subdomain=acme".into())))
     );
-    assert_eq!(p(&["start", "--subdomain"]), None);
+    assert_eq!(
+        p(&["start", "x", "--subdomain"]),
+        Some(Form::NeedsValue("--subdomain"))
+    );
     assert_eq!(
         p(&["enable", "--no-auto-start", "--subdomain", "é"]),
         Some(Form::Enable("auto_start=0&subdomain=%C3%A9".into()))
@@ -288,7 +291,10 @@ fn the_words() {
         p(&["enable", "--no-auto-start", "--auto-start"]),
         Some(Form::Enable("auto_start=1".into()))
     );
-    assert_eq!(p(&["enable", "--subdomain"]), None);
+    assert_eq!(
+        p(&["enable", "--subdomain"]),
+        Some(Form::NeedsValue("--subdomain"))
+    );
     assert_eq!(p(&["release", "x", "--confirm"]), Some(Form::Release(true)));
     assert_eq!(p(&["forget"]), Some(Form::Forget(false)));
     assert_eq!(p(&["help", "x"]), Some(Form::Help));
@@ -332,7 +338,10 @@ fn the_words() {
         p(&["switch", "a", "--token", "t", "--token-stdin"]),
         stop(format!("{SWITCH_PREFIX}{SWITCH_BOTH}"))
     );
-    assert_eq!(p(&["switch", "--token"]), None);
+    assert_eq!(
+        p(&["switch", "a", "--token"]),
+        stop("Error: --token takes a value".into())
+    );
 }
 
 #[test]

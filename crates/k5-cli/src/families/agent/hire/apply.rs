@@ -1,4 +1,4 @@
-//! The real run (`<stdin>` lines 819 to 1244): each step in turn, a
+//! The real run (`<stdin>` lines 863 to 1320): each step in turn, a
 //! failed one reported and the rest going on, unless the workspace itself
 //! couldn't be made.
 
@@ -37,6 +37,27 @@ fn get_or_dump(resp: &Value, key: &str) -> Value {
         .unwrap_or_else(|| s(&dumps_head(resp, 300)))
 }
 
+/// `resp.get("httpStatus") == 403`.
+fn is_403(v: Option<&Value>) -> bool {
+    v.is_some_and(|v| ops::py_eq(v, &Value::Int("403".to_string())))
+}
+
+/// `d[key]` on a dict of the block's own, which has it.
+fn field(d: &Value, key: &str) -> Value {
+    act::get(d, key).cloned().unwrap_or(Value::Null)
+}
+
+/// A context row the hire core stacks in a session: pending, of kind
+/// catalog.
+fn catalog_pending(x: &Value) -> bool {
+    act::pending(x) && act::is(x, "kind", "catalog")
+}
+
+/// `key in body`.
+fn body_has(body: &Value, key: &str) -> bool {
+    act::get(body, key).is_some()
+}
+
 fn pending_at(h: &Hire, i: Option<usize>) -> Option<usize> {
     i.filter(|&i| act::pending(&h.actions[i]))
 }
@@ -45,8 +66,14 @@ pub fn apply(h: &mut Hire) -> R<()> {
     let path = h.path.clone();
     let a = h.a;
 
-    // 1-3: the hire core.
-    let pending_core: Vec<usize> = CORE_STEPS
+    // 1-3: the hire core. In a session it also names the agent, sets its
+    // default tool and stacks catalog context: their own routes are the
+    // owner's.
+    let mut core_steps = CORE_STEPS.to_vec();
+    if h.in_session {
+        core_steps.extend(["set-name", "set-default-agent"]);
+    }
+    let pending_core: Vec<usize> = core_steps
         .iter()
         .filter_map(|st| pending_at(h, h.one(st)))
         .collect();
@@ -92,6 +119,23 @@ pub fn apply(h: &mut Hire) -> R<()> {
                 act::set(&mut body, "brief", Value::Str(b.clone()));
             }
         }
+        if h.in_session {
+            if let Some(i) = pending_at(h, h.one("set-name")) {
+                act::set(&mut body, "name", field(&h.actions[i], "name"));
+            }
+            if let Some(p) = &h.resolved_preset {
+                act::set(&mut body, "preset", field(p, "id"));
+            }
+            let ctx_ids: Vec<Value> = h
+                .all("seed-context")
+                .into_iter()
+                .filter(|&i| catalog_pending(&h.actions[i]))
+                .map(|i| field(&h.actions[i], "catalog"))
+                .collect();
+            if !ctx_ids.is_empty() {
+                act::set(&mut body, "context", Value::Array(ctx_ids));
+            }
+        }
         if tpl.is_some() {
             act::set(&mut body, "launch", Value::Bool(a.launch));
             if a.launch && !a.onboard.is_empty() {
@@ -99,8 +143,8 @@ pub fn apply(h: &mut Hire) -> R<()> {
             }
         }
         let resp = h.post_json("/cli/agents/hire", &body)?;
-        let err = pget(&resp, "error", &[(882, "<module>")])?.cloned();
-        if err.as_ref().is_some_and(py::truthy) || !ptrue(&resp, "ok", &[(883, "<module>")])? {
+        let err = pget(&resp, "error", &[(940, "<module>")])?.cloned();
+        if err.as_ref().is_some_and(py::truthy) || !ptrue(&resp, "ok", &[(941, "<module>")])? {
             h.note_permission(&resp);
             let (code, hint) = match &err {
                 Some(e @ Value::Object(_)) => (
@@ -121,30 +165,32 @@ pub fn apply(h: &mut Hire) -> R<()> {
                     .or(tpl)
                     .expect("the core runs for a pending step or a template"),
             };
+            // In a session a refusal (403) exits 3 whatever its code.
             let refused = ["owner_only", "hire_off", "main_only"]
                 .iter()
-                .any(|c| ops::py_eq(&code, &s(c)));
+                .any(|c| ops::py_eq(&code, &s(c)))
+                || is_403(act::get(&resp, "httpStatus"));
             let exit_for = if refused {
                 Some(3)
             } else if tpl.is_some() {
-                Some(template_exit(&code, &[(889, "<module>")])?)
+                Some(template_exit(&code, &[(949, "<module>")])?)
             } else {
                 None
             };
             let code = or(Some(&code), s("daemon_error"));
-            return step_failed(h, bad, code, hint, exit_for, true, 890);
+            return step_failed(h, bad, code, hint, exit_for, true, 950);
         }
         let steps = act::get(&resp, "steps")
             .cloned()
             .unwrap_or(Value::Array(vec![]));
         let mut by_core: Vec<(Value, Value)> = Vec::new();
-        for x in py_iter(&steps, 891)? {
-            let k = pget(&x, "step", &[(891, "<module>")])?
+        for x in py_iter(&steps, 951)? {
+            let k = pget(&x, "step", &[(951, "<module>")])?
                 .cloned()
                 .unwrap_or(Value::Null);
             if matches!(k, Value::Array(_) | Value::Object(_)) {
                 return Err(raise(
-                    &[(891, "<module>")],
+                    &[(951, "<module>")],
                     format!("TypeError: unhashable type: '{}'", py::type_name(&k)),
                 )
                 .into());
@@ -155,7 +201,7 @@ pub fn apply(h: &mut Hire) -> R<()> {
             }
         }
         if let Some(i) = tpl {
-            take_template_rows(h, i, &resp, true, 893)?;
+            take_template_rows(h, i, &resp, true, 953)?;
             h.changed = h.changed || act::is(&h.actions[i], "status", "done");
             template_hello = act::get(&resp, "hello").cloned().unwrap_or(Value::Null);
             hello_by_daemon = matches!(act::get(&resp, "helloDelivered"), Some(Value::Bool(true)));
@@ -176,7 +222,7 @@ pub fn apply(h: &mut Hire) -> R<()> {
                 _ => act::set(&mut h.actions[ta], "status", s("done")),
             }
         }
-        for st in CORE_STEPS {
+        for st in &core_steps {
             if let Some(i) = pending_at(h, h.one(st)) {
                 let got = by_core
                     .iter()
@@ -188,7 +234,29 @@ pub fn apply(h: &mut Hire) -> R<()> {
                 if let Some(r) = act::get(&got, "reason").filter(|r| py::truthy(r)) {
                     act::set(&mut h.actions[i], "reason", r.clone());
                 }
-                h.changed = h.changed || act::is(&h.actions[i], "status", "done");
+            }
+        }
+        // The shell's block (`cli/src/agent.sh`) keeps its `changed = changed
+        // or a["status"] == "done"` in the loop below, not in the one above:
+        // the core's own steps no longer count as a change, and in a session
+        // it reads the last core step (`set-default-agent`), which may be
+        // None. Copied as it is (the R3 rule).
+        if body_has(&body, "context") {
+            let last = core_steps.last().and_then(|st| h.one(st));
+            for i in h.all("seed-context") {
+                if catalog_pending(&h.actions[i]) {
+                    act::set(&mut h.actions[i], "status", s("done"));
+                }
+                if !h.changed {
+                    let Some(l) = last else {
+                        return Err(raise(
+                            &[(979, "<module>")],
+                            "TypeError: 'NoneType' object is not subscriptable",
+                        )
+                        .into());
+                    };
+                    h.changed = act::is(&h.actions[l], "status", "done");
+                }
             }
         }
         if h.one("register-workspace")
@@ -242,10 +310,10 @@ pub fn apply(h: &mut Hire) -> R<()> {
             "/cli/workspace/set",
             &obj(vec![("project", s(&path)), ("fields", obj(fields))]),
         )?;
-        let bad = ptrue(&resp, "error", &[(954, "<module>")])?
-            || !ptrue(&resp, "ok", &[(954, "<module>")])?;
+        let bad = ptrue(&resp, "error", &[(1019, "<module>")])?
+            || !ptrue(&resp, "ok", &[(1019, "<module>")])?;
         if bad {
-            let hint = hint_of(&resp, 956)?;
+            let hint = hint_of(&resp, 1021)?;
             for i in [ma, ea, da, dba].into_iter().flatten() {
                 if act::pending(&h.actions[i]) {
                     step_failed_on(
@@ -261,8 +329,8 @@ pub fn apply(h: &mut Hire) -> R<()> {
             .cloned()
             .unwrap_or(Value::Array(vec![]));
         let mut by_field: Vec<(Value, Value)> = Vec::new();
-        for x in py_iter(&list, 961)? {
-            let k = pget(&x, "field", &[(961, "<module>")])?
+        for x in py_iter(&list, 1026)? {
+            let k = pget(&x, "field", &[(1026, "<module>")])?
                 .cloned()
                 .unwrap_or(Value::Null);
             let v = act::get(&x, "status").cloned().unwrap_or(Value::Null);
@@ -312,8 +380,8 @@ pub fn apply(h: &mut Hire) -> R<()> {
             vec![("project_path", path.clone()), ("name", name)],
             super::http::DEFAULT,
         )?;
-        let bad = ptrue(&resp, "error", &[(989, "<module>")])?
-            || !ptrue(&resp, "success", &[(989, "<module>")])?;
+        let bad = ptrue(&resp, "error", &[(1054, "<module>")])?
+            || !ptrue(&resp, "success", &[(1054, "<module>")])?;
         if bad {
             let why = get_or_dump(&resp, "error");
             step_failed_on(
@@ -339,8 +407,8 @@ pub fn apply(h: &mut Hire) -> R<()> {
     };
     if need_id && !py::truthy(&workspace_id) {
         let conf2 = h.get(super::super::CONF, vec![("q", path.clone())])?;
-        if ptrue(&conf2, "ok", &[(1003, "<module>")])?
-            && ptrue(&conf2, "id", &[(1003, "<module>")])?
+        if ptrue(&conf2, "ok", &[(1068, "<module>")])?
+            && ptrue(&conf2, "id", &[(1068, "<module>")])?
         {
             workspace_id = act::get(&conf2, "id").cloned().unwrap_or(Value::Null);
             h.conf = conf2;
@@ -380,8 +448,8 @@ pub fn apply(h: &mut Hire) -> R<()> {
             "/cli/projects/update",
             &obj(vec![("id", workspace_id.clone()), ("color", color)]),
         )?;
-        if ptrue(&resp, "error", &[(1021, "<module>")])? {
-            let hint = hint_of(&resp, 1023)?;
+        if ptrue(&resp, "error", &[(1086, "<module>")])? {
+            let hint = hint_of(&resp, 1088)?;
             step_failed_on(
                 &mut h.actions[i],
                 s("daemon_error"),
@@ -404,8 +472,8 @@ pub fn apply(h: &mut Hire) -> R<()> {
                 ("focusGroupId", group),
             ]),
         )?;
-        if ptrue(&resp, "error", &[(1033, "<module>")])? {
-            let hint = hint_of(&resp, 1035)?;
+        if ptrue(&resp, "error", &[(1098, "<module>")])? {
+            let hint = hint_of(&resp, 1100)?;
             step_failed_on(
                 &mut h.actions[i],
                 s("daemon_error"),
@@ -435,7 +503,7 @@ pub fn apply(h: &mut Hire) -> R<()> {
             ],
             super::http::DEFAULT,
         )?;
-        let err = pget(&resp, "error", &[(1053, "<module>")])?.cloned();
+        let err = pget(&resp, "error", &[(1118, "<module>")])?.cloned();
         if let Some(err) = err.filter(py::truthy) {
             let (code, hint) = match &err {
                 Value::Object(_) => (
@@ -479,9 +547,9 @@ pub fn apply(h: &mut Hire) -> R<()> {
             "/cli/project-group/add-member",
             &obj(vec![("group", group), ("workspace", s(&path))]),
         )?;
-        let err = pget(&resp, "error", &[(1077, "<module>")])?.cloned();
+        let err = pget(&resp, "error", &[(1142, "<module>")])?.cloned();
         if err.as_ref().is_some_and(py::truthy) || !act::get(&resp, "ok").is_some_and(py::truthy) {
-            let hint = hint_of(&resp, 1079)?;
+            let hint = hint_of(&resp, 1144)?;
             let project = act::get(&h.actions[i], "project")
                 .map(py::str_of)
                 .unwrap_or_default();
@@ -517,15 +585,26 @@ pub fn apply(h: &mut Hire) -> R<()> {
         seed_context(h, i, &path)?;
     }
 
-    // 7: the launch.
-    if let Some(i) = pending_at(h, h.one("launch")) {
+    // 7: the launch. In a session only a template hire gets here (the
+    // shell refused the rest), and the hire core started it with its
+    // hello; the launch route is the owner's, so nothing more is sent.
+    if let (Some(i), true) = (pending_at(h, h.one("launch")), h.in_session) {
+        let a = &mut h.actions[i];
+        if hello_by_daemon {
+            act::set(a, "status", s("done"));
+            act::set(a, "reason", s(&format!("started by {} with its hello", product())));
+        } else {
+            act::set(a, "status", s("skipped"));
+            act::set(a, "reason", s(&format!("its hello went before: {} msg wakes it", cli())));
+        }
+    } else if let Some(i) = pending_at(h, h.one("launch")) {
         let resp = h.post_query(
             "/cli/workspace/ensure-canonical-session",
             vec![("project", path.clone())],
             120,
         )?;
-        let bad = ptrue(&resp, "error", &[(1159, "<module>")])?
-            || !ptrue(&resp, "success", &[(1159, "<module>")])?;
+        let bad = ptrue(&resp, "error", &[(1231, "<module>")])?
+            || !ptrue(&resp, "success", &[(1231, "<module>")])?;
         if bad {
             let why = get_or_dump(&resp, "error");
             step_failed_on(
@@ -552,6 +631,18 @@ pub fn apply(h: &mut Hire) -> R<()> {
         }
     }
 
+    // Who the hello and --onboard messages are from: in a session, this
+    // agent (the passport sends them, so "owner" would not be true).
+    let msg_from = if h.in_session {
+        if h.from.is_empty() {
+            "agent".to_string()
+        } else {
+            h.from.clone()
+        }
+    } else {
+        "owner".to_string()
+    };
+
     // 7b: the template's hello.
     if py::truthy(&template_hello) || hello_by_daemon {
         let mut ha = obj(vec![("step", s("hello")), ("status", s("pending"))]);
@@ -577,10 +668,10 @@ pub fn apply(h: &mut Hire) -> R<()> {
         } else {
             let resp = h.post_query(
                 "/cli/workspace/msg",
-                msg_params(&path, &template_hello),
+                msg_params(&path, &template_hello, &msg_from),
                 180,
             )?;
-            let e = pget(&resp, "error", &[(1191, "<module>")])?.cloned();
+            let e = pget(&resp, "error", &[(1267, "<module>")])?.cloned();
             let str_err = matches!(&e, Some(v @ Value::Str(_)) if py::truthy(v));
             if str_err || !act::get(&resp, "success").is_some_and(py::truthy) {
                 let why = e
@@ -625,9 +716,12 @@ pub fn apply(h: &mut Hire) -> R<()> {
             act::set(&mut h.actions[i], "status", s("not-run"));
             act::set(&mut h.actions[i], "reason", s("launch failed"));
         } else {
-            let resp =
-                h.post_query("/cli/workspace/msg", msg_params(&path, &s(&a.onboard)), 180)?;
-            let e = pget(&resp, "error", &[(1216, "<module>")])?.cloned();
+            let resp = h.post_query(
+                "/cli/workspace/msg",
+                msg_params(&path, &s(&a.onboard), &msg_from),
+                180,
+            )?;
+            let e = pget(&resp, "error", &[(1292, "<module>")])?.cloned();
             match e {
                 Some(v @ Value::Str(_)) if py::truthy(&v) => step_failed_on(
                     &mut h.actions[i],
@@ -659,7 +753,7 @@ pub fn apply(h: &mut Hire) -> R<()> {
             act::set(&mut body, "brief", Value::Str(b.clone()));
         }
         let resp = h.post_json("/cli/app/handover", &body)?;
-        match pget(&resp, "error", &[(1233, "<module>")])?.cloned() {
+        match pget(&resp, "error", &[(1309, "<module>")])?.cloned() {
             Some(e @ Value::Object(_)) => {
                 act::set(
                     &mut h.actions[i],
@@ -673,7 +767,7 @@ pub fn apply(h: &mut Hire) -> R<()> {
             _ => {
                 let hv = or(act::get(&resp, "handover"), obj(vec![]));
                 let r = act::get(&resp, "request").cloned().unwrap_or(Value::Null);
-                let fr = [(1239, "<module>")];
+                let fr = [(1315, "<module>")];
                 let id = pget(&hv, "id", &fr)?.cloned().unwrap_or(Value::Null);
                 let state = pget(&hv, "state", &fr)?.cloned().unwrap_or(Value::Null);
                 let request = match &r {
@@ -692,22 +786,22 @@ pub fn apply(h: &mut Hire) -> R<()> {
     }
 
     let changed = h.changed;
-    finish(h, changed, 1244)
+    finish(h, changed, 1320)
 }
 
 /// `/cli/workspace/msg`'s query, as the hello and the onboard message
 /// send it.
-fn msg_params(path: &str, text: &Value) -> Vec<(&'static str, String)> {
+fn msg_params(path: &str, text: &Value, from: &str) -> Vec<(&'static str, String)> {
     vec![
         ("workspace", path.to_string()),
         ("text", py::str_of(text)),
-        ("from", "owner".to_string()),
+        ("from", from.to_string()),
         ("wake", "true".to_string()),
         ("wake_timeout", "120".to_string()),
     ]
 }
 
-/// One `--context` layer (lines 1097 to 1152).
+/// One `--context` layer (lines 1162 to 1217).
 fn seed_context(h: &mut Hire, i: usize, path: &str) -> R<()> {
     let cli = cli();
     if !act::pending(&h.actions[i]) {
@@ -727,14 +821,14 @@ fn seed_context(h: &mut Hire, i: usize, path: &str) -> R<()> {
         act::set(&mut body, "path", or(act::get(&a, "path"), context.clone()));
     }
     let resp = h.post_json("/cli/context/add", &body)?;
-    let err = pget(&resp, "error", &[(1106, "<module>")])?.cloned();
+    let err = pget(&resp, "error", &[(1171, "<module>")])?.cloned();
     let ctx = py::str_of(&context);
     if let Some(err) = err.filter(py::truthy) {
         let err = match err {
             Value::Str(_) => obj(vec![("code", s("error")), ("hint", err)]),
             other => other,
         };
-        let fr = [(1110, "<module>")];
+        let fr = [(1175, "<module>")];
         let code_v = or(pget(&err, "code", &fr)?, s("error"));
         let code = super::lower(&code_v, &fr)?;
         let hint = act::get(&err, "hint")
@@ -801,7 +895,7 @@ fn seed_context(h: &mut Hire, i: usize, path: &str) -> R<()> {
         return Ok(());
     }
     let layer = or(act::get(&resp, "layer"), obj(vec![]));
-    let fr = [(1143, "<module>")];
+    let fr = [(1208, "<module>")];
     let id = pget(&layer, "id", &fr)?.cloned().unwrap_or(Value::Null);
     let lpath = act::get(&layer, "path").filter(|v| py::truthy(v)).cloned();
     let x = &mut h.actions[i];

@@ -17,6 +17,13 @@ pub const DEFAULT: u64 = 30;
 
 impl Hire<'_> {
     fn call(&self, req: Request, route: &str) -> R<Value> {
+        self.call_as(req, route, false)
+    }
+
+    /// `status`: `http_post_json`'s session rule, the HTTP status of an
+    /// error answer kept in it as `httpStatus` (a session's refusal exits 3
+    /// whatever its code).
+    fn call_as(&self, req: Request, route: &str, status: bool) -> R<Value> {
         let out = match self.op.open_ruled(&req) {
             Ok(out) => out,
             Err(r) => return Err(Stop::Refused(r.line)),
@@ -29,7 +36,12 @@ impl Hire<'_> {
             Outcome::Answer { body: Err(r), .. } => failed(route, &r.text()),
             Outcome::HttpError { code, body } => {
                 match body.ok().and_then(|b| pyjson::loads(&decode(&b)).ok()) {
-                    Some(v) => v,
+                    Some(mut v) => {
+                        if status && matches!(v, Value::Object(_)) {
+                            super::act::set(&mut v, "httpStatus", Value::Int(code.to_string()));
+                        }
+                        v
+                    }
                     None => obj(vec![("error", s(&format!("HTTP {code} on {route}")))]),
                 }
             }
@@ -60,13 +72,13 @@ impl Hire<'_> {
     }
 
     /// `http_post_json(route, body)`: the token is the same whichever the
-    /// block names (`tok=core_token`, `tok=proj_token`) outside a session
-    /// with a passport, the only place this runs.
+    /// block names (`tok=core_token`, `tok=proj_token`): the owner's (or
+    /// the token set) outside a session, the session's passport in one.
     pub fn post_json(&self, route: &str, body: &Value) -> R<Value> {
         let req = Request::new(Method::Post, route, Duration::from_secs(DEFAULT))
             .data(dumps(body).into_bytes())
             .header("Content-Type", "application/json");
-        self.call(self.auth(req), route)
+        self.call_as(self.auth(req), route, self.in_session)
     }
 }
 

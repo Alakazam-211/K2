@@ -6,8 +6,8 @@
 //! (`cli/src/agent-context.sh`), `template` (`cli/src/agent-template.sh`;
 //! its help forms stay the shell's), `identity` (an `id` tool: the
 //! session rules of [`crate::prelude::id_tool`]), `access`, and `harness`
-//! and `refresh` (the `id` tool `agent-harness`), `hire` ([`hire`];
-//! a session with a passport is the shell's still), `team`,
+//! and `refresh` (the `id` tool `agent-harness`), `hire` ([`hire`],
+//! in a session too, with the session's passport), `team`,
 //! `instances` and `hire-root` ([`teams`]; `team` and `instances` are the
 //! `id` tool `agent-teams`), `profile` (`workspace profile`'s own code,
 //! [`super::workspace`]), and the family alone, `update`, `complete`
@@ -242,7 +242,15 @@ fn run_words(args: &[OsString], words: &[&str], note: Option<&str>) -> Option<Ex
         "retire" => retire::parse_retire(rest).map(Form::Retire),
         "restart" => retire::parse_restart(rest).map(Form::Restart),
         "set" => set::parse(rest).map(Form::Set),
-        "hire" => hire::parse(rest)?.map(|a| Form::Hire(Box::new(a))),
+        "hire" => {
+            // `_cli_caller_is_agent_passport`: a cell socket and a passport.
+            let token = k2_client::env_names::first_nonempty_os_in(
+                k2_client::env_names::HOOK_TOKEN,
+                |n| std::env::var_os(n),
+            );
+            let agent_passport = hook_sock.is_some() && token.is_some();
+            hire::parse(rest, agent_passport)?.map(|a| Form::Hire(Box::new(a)))
+        }
         "context" => Ok(Form::Context(context::parse(rest))),
         "template" | "templates" => match template::parse(rest)? {
             Ok((v, json)) => Ok(Form::Template(v, json)),
@@ -272,15 +280,6 @@ fn run_words(args: &[OsString], words: &[&str], note: Option<&str>) -> Option<Ex
             return Some(Exit::Error);
         }
     };
-    // A hire in a session with a passport: the shell sends the owner
-    // token from disk to the new workspace's routes, which the binary
-    // never sends (PRD 13.9 #4) and the passport can't do yet (D1).
-    if verb == "hire"
-        && settings.session
-        && matches!(settings.auth, crate::transport::Auth::Passport { .. })
-    {
-        return None;
-    }
     // `update` in a session with no passport and a live cell socket: the
     // shell tries the socket with an empty Bearer first.
     if verb == "update"
@@ -341,6 +340,24 @@ fn run_form(args: &[OsString], form: Result<Form, String>, mut settings: Setting
     // `_cli_caller_is_agent_passport`: a cell socket set and a passport.
     let scoped = matches!(settings.auth, crate::transport::Auth::Passport { .. });
     let agent_passport = settings.session && scoped;
+    // `agent hire`: the self-grant refusal, then `_agent_hire_session` in
+    // a session (a cell socket set), before anything is sent.
+    let mut hire_in_session = false;
+    if let Form::Hire(a) = &form {
+        if a.self_grant {
+            out::stderr_line(&hire::self_grant_line());
+            return Exit::Refused;
+        }
+        if settings.session {
+            if let Some(lines) = hire::session_stop(a, scoped) {
+                for l in lines {
+                    out::stderr_line(&l);
+                }
+                return Exit::Refused;
+            }
+            hire_in_session = true;
+        }
+    }
     let mut client = match settings.client(passport::current(args).would_refuse()) {
         Ok(c) => c,
         Err(e) => {
@@ -387,7 +404,10 @@ fn run_form(args: &[OsString], form: Result<Form, String>, mut settings: Setting
             }
         },
         Form::Set(a) => set::set(&mut client, &mut closing, &a),
-        Form::Hire(a) => hire::hire(&mut client, &mut closing, &a),
+        Form::Hire(a) => {
+            let from = hire::basename(&project);
+            hire::hire(&mut client, &mut closing, &a, hire_in_session, &from)
+        }
         Form::Teams(a) => teams::run(&mut client, &mut closing, &a),
         Form::Complete(agent, file) => plane::complete(&mut client, &mut closing, &agent, &file),
         Form::Bare | Form::Unknown(_) | Form::Halt(..) | Form::Update(_) => {

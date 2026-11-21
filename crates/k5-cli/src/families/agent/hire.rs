@@ -21,13 +21,17 @@
 //!    step failed.
 //!
 //! Every call is the block's own urllib call (K2's ruling D4) with the
-//! shell's credential: `$TOKEN` for every route, and, for the hire core,
-//! the handover and the project membership, the session passport in a
-//! session with one. That one case (a cell socket and a passport) is the
-//! shell's still: the shell sends the owner token from disk on the other
-//! routes, and the binary never does (PRD 13.9 #4), so [`super::run`]
-//! hands it back before anything is printed or sent. Everywhere else the
-//! token is one and the same.
+//! shell's credential: outside a session `$TOKEN` (the owner token, or the
+//! token set) for every route. In a session (a cell socket set) the hire
+//! acts as this agent ([`session_stop`], `_agent_hire_session`): with no
+//! passport it ends on two lines, exit 3, and sends nothing; the steps
+//! only a person's routes take are refused the same way; else every
+//! request carries the session's passport, the conf probe and the mode
+//! step are left out, the hire core also takes the name, the preset as
+//! typed and the catalog context, the dry run asks the core about the
+//! preset, the launch route is never asked and the hello and onboard
+//! messages are from this agent. `--db-access read|write` from a session
+//! with a passport is the self-grant refusal ([`self_grant_line`]).
 //!
 //! Also the shell's, before anything is printed or sent: a `--brief` file
 //! with a NUL byte in it (bash drops it with a warning naming its own
@@ -88,6 +92,9 @@ pub struct HireArgs {
     pub params: Vec<(String, String)>,
     /// `--answer`: the key stripped, each once.
     pub answers: Vec<(String, String)>,
+    /// `--db-access read|write` from a session with a passport: the
+    /// shell's `_cli_refuse_agent_self_grant`, before anything after it.
+    pub self_grant: bool,
 }
 
 /// The value after a flag, or the shell's line for its absence.
@@ -102,15 +109,18 @@ fn is_file(p: &str) -> bool {
 
 /// The words, in the shell's order of checks. `None`: the shell's (a
 /// brief it reads otherwise, or a value too large for its environment).
-pub fn parse(rest: &[&str]) -> Option<Result<HireArgs, String>> {
-    match parse_words(rest) {
+///
+/// `agent_passport`: `_cli_caller_is_agent_passport` (a cell socket and a
+/// passport), for the self-grant check.
+pub fn parse(rest: &[&str], agent_passport: bool) -> Option<Result<HireArgs, String>> {
+    match parse_words(rest, agent_passport) {
         Ok(Some(a)) => Some(Ok(a)),
         Ok(None) => None,
         Err(hint) => Some(Err(hint)),
     }
 }
 
-fn parse_words(rest: &[&str]) -> Result<Option<HireArgs>, String> {
+fn parse_words(rest: &[&str], agent_passport: bool) -> Result<Option<HireArgs>, String> {
     let cli = cli();
     let mut a = HireArgs::default();
     let mut brief_file = String::new();
@@ -301,9 +311,9 @@ fn parse_words(rest: &[&str]) -> Result<Option<HireArgs>, String> {
             a.db_access
         ));
     }
-    // The self-grant check is a session's with a passport: the shell's.
-    if !a.onboard.is_empty() {
-        a.launch = true;
+    if matches!(a.db_access.as_str(), "read" | "write") && agent_passport {
+        a.self_grant = true;
+        return Ok(Some(a));
     }
     if !brief_file.is_empty() {
         if a.take_app.is_empty() {
@@ -355,6 +365,92 @@ fn parse_words(rest: &[&str]) -> Result<Option<HireArgs>, String> {
         return Ok(None);
     }
     Ok(Some(a))
+}
+
+/// `_cli_refuse_agent_self_grant "db_agent_access" …`: one line of JSON,
+/// exit 3.
+pub fn self_grant_line() -> String {
+    let cli = cli();
+    let product = super::product();
+    super::err_json(
+        "owner_only",
+        &format!(
+            "An agent can't grant itself 'db_agent_access'. Ask a human (owner or admin) to change it: Settings \u{2192} Workspaces / Agents \u{2192} (workspace) \u{2192} Permissions \u{2192} Database \u{2192} \"Let this agent create databases\", or `{cli} agent hire <dir> --db-access write` from their own terminal \u{2014} or run this from a terminal outside a {product} agent session."
+        ),
+    )
+}
+
+/// `_AGENT_HIRE_PERSON_LINE`: where a person takes the steps a session
+/// may not take.
+fn person_line() -> String {
+    format!(
+        "A person does this in Settings \u{2192} Workspaces / Agents \u{2192} the agent, or with {} agent hire from a terminal outside {}.",
+        cli(),
+        super::product()
+    )
+}
+
+/// `_agent_hire_session` in a session (a cell socket is set): the two
+/// lines it ends on (exit 3, nothing sent), or `None` when the hire goes
+/// on as this agent. `passport`: the session has one.
+pub fn session_stop(a: &HireArgs, passport: bool) -> Option<Vec<String>> {
+    let cli = cli();
+    if !passport {
+        return Some(vec![
+            format!(
+                "Error: in a session, {cli} agent hire doesn't act as this server's owner, and this session has no passport, so nothing was sent."
+            ),
+            person_line(),
+        ]);
+    }
+    let mut refused: Vec<String> = Vec::new();
+    if !matches!(a.mode.as_str(), "" | "custom") {
+        refused.push(format!("--mode {}", a.mode));
+    }
+    if !a.enabled.is_empty() {
+        refused.push("--enabled".to_string());
+    }
+    if !a.color.is_empty() {
+        refused.push("--color".to_string());
+    }
+    if !a.focus_group.is_empty() {
+        refused.push("--focus-group".to_string());
+    }
+    if a.launch && a.template.is_empty() {
+        refused.push("--launch (with no --template)".to_string());
+    }
+    for c in &a.contexts {
+        if c.contains('/')
+            || c.starts_with('.')
+            || c.ends_with(".md")
+            || c.ends_with(".markdown")
+            || c.starts_with('~')
+        {
+            refused.push(format!("--context {c} (a path)"));
+        } else if !a.template.is_empty() {
+            refused.push(format!("--context {c} (with --template)"));
+        }
+    }
+    if refused.is_empty() {
+        return None;
+    }
+    Some(vec![
+        format!(
+            "Error: in a session, {cli} agent hire acts as this agent, and these steps are a person's: {}. Nothing was sent.",
+            refused.join(", ")
+        ),
+        person_line(),
+    ])
+}
+
+/// `basename "${PROJECT:-$PWD}"`: the last part of the path, its
+/// trailing slashes dropped (`/` for a path of only slashes).
+pub fn basename(p: &str) -> String {
+    let t = p.trim_end_matches('/');
+    if t.is_empty() {
+        return p.get(..1).unwrap_or_default().to_string();
+    }
+    t.rsplit('/').next().unwrap_or(t).to_string()
 }
 
 /// A list of strings as a JSON value.
@@ -559,6 +655,11 @@ pub(super) struct Hire<'a> {
     pub registered: bool,
     pub resolved_preset: Option<Value>,
     pub persona_content: Option<String>,
+    /// `IN_SESSION`: the hire acts as this agent, with its passport.
+    pub in_session: bool,
+    /// `AFROM`: who the hello and the onboard message are from in a
+    /// session.
+    pub from: String,
 }
 
 impl Hire<'_> {
@@ -651,8 +752,23 @@ pub(super) fn exit_of(code: i64) -> Exit {
     }
 }
 
-/// `cmd_agent_hire`'s Python block.
-pub fn hire(client: &mut Client, _closing: &mut Closing, a: &HireArgs) -> Exit {
+/// `cmd_agent_hire`'s Python block. `in_session`: `_agent_hire_session`
+/// let the hire go on as this agent (every request with its passport);
+/// `from`: `basename "${PROJECT:-$PWD}"`.
+pub fn hire(
+    client: &mut Client,
+    _closing: &mut Closing,
+    a: &HireArgs,
+    in_session: bool,
+    from: &str,
+) -> Exit {
+    // --onboard implies --launch, but in a session only with a template:
+    // there the message's own wake starts the agent.
+    let mut a = a.clone();
+    if !a.onboard.is_empty() && (!in_session || !a.template.is_empty()) {
+        a.launch = true;
+    }
+    let a = &a;
     let mut h = Hire {
         op: Opener::from_client(client),
         a,
@@ -669,6 +785,8 @@ pub fn hire(client: &mut Client, _closing: &mut Closing, a: &HireArgs) -> Exit {
         registered: false,
         resolved_preset: None,
         persona_content: None,
+        in_session,
+        from: from.to_string(),
     };
     let exit = match run_block(&mut h) {
         Ok(()) => Exit::Ok,
@@ -705,7 +823,7 @@ mod tests {
     use super::*;
 
     fn words(w: &[&str]) -> Result<HireArgs, String> {
-        parse(w).expect("native")
+        parse(w, false).expect("native")
     }
 
     #[test]
@@ -758,7 +876,8 @@ mod tests {
     fn empty_words_wait_for_the_folder() {
         let a = words(&["", "", "d"]).unwrap();
         assert_eq!(a.dir, "d");
-        assert!(words(&["--onboard", "hi", "d"]).unwrap().launch);
+        // --onboard's launch is the block's to add (a session's differs).
+        assert!(!words(&["--onboard", "hi", "d"]).unwrap().launch);
     }
 
     #[test]
@@ -773,10 +892,50 @@ mod tests {
         std::fs::write(&fits, format!("{}\n\n", "x".repeat(ENV_MAX))).unwrap();
         for (f, native) in [(&nul, false), (&big, false), (&fits, true)] {
             let f = f.to_str().unwrap();
-            let got = parse(&["d", "--take-app", "a", "--brief", f]);
+            let got = parse(&["d", "--take-app", "a", "--brief", f], false);
             assert_eq!(got.is_some(), native, "{f}");
         }
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_session_refuses_a_person_s_steps_in_the_shell_s_order() {
+        let a = words(&[
+            "d", "--mode", "k2so", "--launch", "--context", "~x", "--context", "wiki",
+            "--focus-group", "f", "--enabled", "true", "--color", "red",
+        ])
+        .unwrap();
+        let lines = session_stop(&a, true).expect("refused");
+        assert_eq!(
+            lines[0],
+            format!(
+                "Error: in a session, {} agent hire acts as this agent, and these steps are a person's: --mode k2so, --enabled, --color, --focus-group, --launch (with no --template), --context ~x (a path). Nothing was sent.",
+                cli()
+            )
+        );
+        let t = words(&["--template", "t", "--launch", "--mode", "custom", "--context", "wiki"]).unwrap();
+        assert!(session_stop(&t, true).expect("refused")[0].contains(": --context wiki (with --template)."));
+        let ok = words(&["d", "--mode", "custom", "--context", "wiki", "--onboard", "hi"]).unwrap();
+        assert_eq!(session_stop(&ok, true), None);
+        assert!(session_stop(&ok, false).expect("no passport")[0].contains("has no passport"));
+    }
+
+    #[test]
+    fn the_self_grant_comes_before_the_brief() {
+        assert_eq!(
+            words(&["d", "--db-access", "write", "--brief", "nope"]).unwrap_err(),
+            "--brief goes with --take-app"
+        );
+        assert!(parse(&["d", "--db-access", "write", "--brief", "nope"], true).expect("native").unwrap().self_grant);
+        assert!(!parse(&["d", "--db-access", "off"], true).expect("native").unwrap().self_grant);
+    }
+
+    #[test]
+    fn basename_as_the_shell_s() {
+        assert_eq!(basename("/srv/ws/"), "ws");
+        assert_eq!(basename("ws"), "ws");
+        assert_eq!(basename("///"), "/");
+        assert_eq!(basename(""), "");
     }
 
     #[test]

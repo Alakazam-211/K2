@@ -1,5 +1,5 @@
-//! The block from the folder to the plan (`<stdin>` lines 136 to 604),
-//! and the dry run (lines 780 to 817).
+//! The block from the folder to the plan (`<stdin>` lines 144 to 626),
+//! and the dry run (lines 802 to 861).
 
 use super::super::{abs_user, cli, expanduser, obj, product, py_strip, s};
 use super::color::normalize;
@@ -12,7 +12,7 @@ use crate::out::pylib::{ops, path as pypath};
 
 /// `core_error(resp)`, called from `from`.
 pub fn core_error(resp: &Value, from: u32) -> Result<(Value, Value), crate::families::Raise> {
-    let err = pget(resp, "error", &[(from, "<module>"), (123, "core_error")])?.cloned();
+    let err = pget(resp, "error", &[(from, "<module>"), (131, "core_error")])?.cloned();
     let (code, hint) = match &err {
         Some(e @ Value::Object(_)) => (
             act::get(e, "code").cloned().unwrap_or(Value::Null),
@@ -36,10 +36,10 @@ fn code_word(code: &Value, fr: &[Frame]) -> Result<String, crate::families::Rais
     }
 }
 
-/// `template_exit(code)`, called from `fr` (its line is 129).
+/// `template_exit(code)`, called from `fr` (its line is 137).
 pub fn template_exit(code: &Value, fr: &[Frame]) -> Result<i64, crate::families::Raise> {
     let mut f = fr.to_vec();
-    f.push((129, "template_exit"));
+    f.push((137, "template_exit"));
     Ok(match code_word(code, &f)?.as_str() {
         "usage" | "bad_template" => 2,
         "unknown_template" | "not_found" => 4,
@@ -49,10 +49,10 @@ pub fn template_exit(code: &Value, fr: &[Frame]) -> Result<i64, crate::families:
     })
 }
 
-/// `exit_code_for(code)`, called from `fr` (its line is 734).
+/// `exit_code_for(code)`, called from `fr` (its line is 756).
 pub fn exit_code_for(code: &Value, fr: &[Frame]) -> Result<i64, crate::families::Raise> {
     let mut f = fr.to_vec();
-    f.push((734, "exit_code_for"));
+    f.push((756, "exit_code_for"));
     Ok(match code_word(code, &f)?.as_str() {
         "bad_usage" | "path_escape" | "catalog_unknown" | "usage" => 2,
         "duplicate_layer" | "refused" | "precondition" | "owner_only" | "hire_off"
@@ -174,11 +174,11 @@ fn skipped(step: &str, reason: &str) -> Value {
     ])
 }
 
-/// Lines 136 to 604: the folder, the look-ups, the conf and the plan.
+/// Lines 144 to 626: the folder, the look-ups, the conf and the plan.
 pub fn plan(h: &mut Hire) -> R<()> {
     let cli = cli();
     let a = h.a;
-    // 136: the folder.
+    // 144: the folder.
     if !a.dir.is_empty() {
         h.path = abs_user(&a.dir);
     } else {
@@ -186,14 +186,14 @@ pub fn plan(h: &mut Hire) -> R<()> {
             "/cli/agents/hire",
             &h.template_body(vec![("dryRun", Value::Bool(true))]),
         )?;
-        let err = ptrue(&probe, "error", &[(140, "<module>")])?;
-        if err || !ptrue(&probe, "path", &[(140, "<module>")])? {
+        let err = ptrue(&probe, "error", &[(148, "<module>")])?;
+        if err || !ptrue(&probe, "path", &[(148, "<module>")])? {
             h.note_permission(&probe);
-            let (code, hint) = core_error(&probe, 142)?;
-            let exit = template_exit(&code, &[(143, "<module>")])?;
+            let (code, hint) = core_error(&probe, 150)?;
+            let exit = template_exit(&code, &[(151, "<module>")])?;
             return Err(h.fail(code, hint, exit_of(exit)));
         }
-        h.path = pget(&probe, "path", &[(144, "<module>")])?
+        h.path = pget(&probe, "path", &[(152, "<module>")])?
             .map(py::str_of)
             .unwrap_or_default();
     }
@@ -206,8 +206,16 @@ pub fn plan(h: &mut Hire) -> R<()> {
         ));
     }
 
-    // 181: --agent against the preset roster.
-    if !a.agent_preset.is_empty() {
+    // 189: --agent against the preset roster.
+    if !a.agent_preset.is_empty() && h.in_session {
+        // The value goes to the hire core as typed: the daemon resolves an
+        // id, a label or a command word, or refuses one it doesn't have.
+        h.resolved_preset = Some(obj(vec![
+            ("id", s(&a.agent_preset)),
+            ("label", s(&a.agent_preset)),
+            ("enabled", Value::Bool(true)),
+        ]));
+    } else if !a.agent_preset.is_empty() {
         let presets = h.get("/cli/presets/list", vec![])?;
         let Value::Array(list) = &presets else {
             let err = match &presets {
@@ -222,7 +230,7 @@ pub fn plan(h: &mut Hire) -> R<()> {
             ));
         };
         let want = py_strip(&a.agent_preset).to_string();
-        let fr = [(193, "<module>"), (189, "preset_matches")];
+        let fr = [(205, "<module>"), (201, "preset_matches")];
         let mut hits = Vec::new();
         for p in list {
             let command = or(pget(p, "command", &fr)?, s(""));
@@ -239,10 +247,10 @@ pub fn plan(h: &mut Hire) -> R<()> {
                     .into())
                 }
             };
-            let fr2 = [(193, "<module>"), (190, "preset_matches")];
+            let fr2 = [(205, "<module>"), (202, "preset_matches")];
             let by_id = pget(p, "id", &fr2)?.is_some_and(|v| ops::py_eq(v, &s(&want)));
             let hit = by_id || {
-                let fr3 = [(193, "<module>"), (191, "preset_matches")];
+                let fr3 = [(205, "<module>"), (203, "preset_matches")];
                 let label = or(pget(p, "label", &fr3)?, s(""));
                 lower(&label, &fr3)? == want.to_lowercase()
                     || first.as_deref() == Some(want.as_str())
@@ -252,12 +260,32 @@ pub fn plan(h: &mut Hire) -> R<()> {
             }
         }
         if hits.is_empty() {
+            // As the hire core says it: usage, with the server's presets in
+            // `preset list` order, each by its command word and its id.
+            // Every preset is a dict whose command splits: the matching
+            // above read each one so.
+            let choices: Vec<String> = list
+                .iter()
+                .map(|p| {
+                    let id = py::str_of(&act::get(p, "id").cloned().unwrap_or(Value::Null));
+                    let command = or(act::get(p, "command"), s(""));
+                    match first_word(&py::str_of(&command)) {
+                        Some(w) => format!("{w} ({id})"),
+                        None => id,
+                    }
+                })
+                .collect();
+            let choices = if choices.is_empty() {
+                format!("none (add one: `{cli} preset add`)")
+            } else {
+                choices.join(", ")
+            };
             return Err(h.fail(
-                s("not_found"),
+                s("usage"),
                 s(&format!(
-                    "no agent preset matches '{want}' \u{2014} run `{cli} preset list` (id, label, or command token)"
+                    "preset {want} no longer exists on this server; pick one of: {choices}"
                 )),
-                Exit::NotFound,
+                Exit::Usage,
             ));
         }
         let mut ids = Set::default();
@@ -265,7 +293,7 @@ pub fn plan(h: &mut Hire) -> R<()> {
             for p in &hits {
                 ids.add(
                     act::get(p, "id").cloned().unwrap_or(Value::Null),
-                    &[(198, "<module>")],
+                    &[(214, "<module>")],
                 )?;
             }
         }
@@ -295,17 +323,17 @@ pub fn plan(h: &mut Hire) -> R<()> {
         h.resolved_preset = Some(first);
     }
 
-    // 213: --project selectors.
+    // 229: --project selectors.
     let mut resolved_projects: Vec<(Value, Value, bool)> = Vec::new();
     for sel in &a.projects {
         let d = h.get("/cli/project-group/show", vec![("group", sel.clone())])?;
-        let err = pget(&d, "error", &[(215, "<module>")])?.cloned();
+        let err = pget(&d, "error", &[(231, "<module>")])?.cloned();
         if let Some(err) = err.filter(py::truthy) {
             let err = match err {
                 Value::Str(_) => obj(vec![("code", s("error")), ("hint", err)]),
                 other => other,
             };
-            let mut code = pget(&err, "code", &[(219, "<module>")])?
+            let mut code = pget(&err, "code", &[(235, "<module>")])?
                 .cloned()
                 .unwrap_or_else(|| s("error"));
             if ops::py_eq(&code, &s("ambiguous_id")) {
@@ -331,7 +359,7 @@ pub fn plan(h: &mut Hire) -> R<()> {
                 Exit::Error,
             ));
         }
-        if !ptrue(&d, "ok", &[(227, "<module>")])? || !ptrue(&d, "id", &[(227, "<module>")])? {
+        if !ptrue(&d, "ok", &[(243, "<module>")])? || !ptrue(&d, "id", &[(243, "<module>")])? {
             return Err(h.fail(
                 s("daemon_error"),
                 s(&format!(
@@ -352,7 +380,7 @@ pub fn plan(h: &mut Hire) -> R<()> {
         }
     }
 
-    // 234: --color.
+    // 250: --color.
     let mut wanted_color = None;
     if !a.color.is_empty() {
         wanted_color = normalize(&a.color);
@@ -368,7 +396,7 @@ pub fn plan(h: &mut Hire) -> R<()> {
         }
     }
 
-    // 241: --focus-group.
+    // 257: --focus-group.
     let mut wanted_focus: Option<(Value, Value)> = None;
     if !a.focus_group.is_empty() {
         let sel = py_strip(&a.focus_group).to_string();
@@ -391,10 +419,10 @@ pub fn plan(h: &mut Hire) -> R<()> {
             };
             let mut hits = Vec::new();
             for g in list {
-                let fr = [(256, "<module>"), (254, "group_matches")];
+                let fr = [(272, "<module>"), (270, "group_matches")];
                 let by_id = pget(g, "id", &fr)?.is_some_and(|v| ops::py_eq(v, &s(&sel)));
                 let hit = by_id || {
-                    let fr = [(256, "<module>"), (255, "group_matches")];
+                    let fr = [(272, "<module>"), (271, "group_matches")];
                     let name = or(pget(g, "name", &fr)?, s(""));
                     lower(&name, &fr)? == low
                 };
@@ -405,7 +433,7 @@ pub fn plan(h: &mut Hire) -> R<()> {
             if hits.is_empty() {
                 let mut prefixes = Vec::new();
                 for g in list {
-                    let fr = [(259, "<module>")];
+                    let fr = [(275, "<module>")];
                     let name = or(pget(g, "name", &fr)?, s(""));
                     if lower(&name, &fr)?.starts_with(&low) {
                         prefixes.push(g.clone());
@@ -451,9 +479,15 @@ pub fn plan(h: &mut Hire) -> R<()> {
         }
     }
 
-    // 273: the conf (what makes hire idempotent).
-    let conf = h.get(super::super::CONF, vec![("q", path.clone())])?;
-    let probe_err = pget(&conf, "error", &[(274, "<module>")])?.cloned();
+    // 291: the conf (what makes hire idempotent).
+    // In a session the probe is the owner's route: the hire core looks
+    // for itself and reports each step done or skipped.
+    let conf = if h.in_session {
+        obj(vec![])
+    } else {
+        h.get(super::super::CONF, vec![("q", path.clone())])?
+    };
+    let probe_err = pget(&conf, "error", &[(292, "<module>")])?.cloned();
     if let Some(e) = probe_err.filter(py::truthy) {
         let not_found = matches!(&e, Value::Object(_))
             && act::get(&e, "code").is_some_and(|c| ops::py_eq(c, &s("not_found")));
@@ -469,7 +503,7 @@ pub fn plan(h: &mut Hire) -> R<()> {
             ));
         }
     }
-    let registered = ptrue(&conf, "ok", &[(281, "<module>")])?;
+    let registered = ptrue(&conf, "ok", &[(299, "<module>")])?;
     h.registered = registered;
     let dir_exists = is_dir(&path);
     let trimmed = path.trim_end_matches('/');
@@ -527,40 +561,40 @@ pub fn plan(h: &mut Hire) -> R<()> {
     let mut live = false;
     if registered {
         let conns = or(act::get(&conf, "connections"), Value::Array(vec![]));
-        for c in py_iter(&conns, 322)? {
-            let p = pget(&c, "peer", &[(323, "<module>")])?.cloned();
+        for c in py_iter(&conns, 340)? {
+            let p = pget(&c, "peer", &[(341, "<module>")])?.cloned();
             if let Some(p) = p.filter(py::truthy) {
-                existing_peers.add(s(&lower(&p, &[(325, "<module>")])?), &[])?;
+                existing_peers.add(s(&lower(&p, &[(343, "<module>")])?), &[])?;
             }
         }
         let projs = or(act::get(&conf, "projects"), Value::Array(vec![]));
-        for p in py_iter(&projs, 326)? {
-            if ptrue(&p, "id", &[(327, "<module>")])? {
+        for p in py_iter(&projs, 344)? {
+            if ptrue(&p, "id", &[(345, "<module>")])? {
                 let id = act::get(&p, "id").cloned().unwrap_or(Value::Null);
-                existing_group_ids.add(id, &[(328, "<module>")])?;
+                existing_group_ids.add(id, &[(346, "<module>")])?;
             }
         }
         let l = or(act::get(&conf, "live"), obj(vec![]));
-        live = ptrue(&l, "active", &[(329, "<module>")])?;
+        live = ptrue(&l, "active", &[(347, "<module>")])?;
         let layers = h.get("/cli/context/layers", vec![("project", path.clone())])?;
         let has_layers =
-            ptrue(&layers, "ok", &[(332, "<module>")])? || act::get(&layers, "layers").is_some();
+            ptrue(&layers, "ok", &[(350, "<module>")])? || act::get(&layers, "layers").is_some();
         if has_layers {
             let list = or(act::get(&layers, "layers"), Value::Array(vec![]));
-            for l in py_iter(&list, 333)? {
-                let p = or(pget(&l, "path", &[(334, "<module>")])?, s(""));
-                let lp = strip_of(&p, &[(334, "<module>")])?;
+            for l in py_iter(&list, 351)? {
+                let p = or(pget(&l, "path", &[(352, "<module>")])?, s(""));
+                let lp = strip_of(&p, &[(352, "<module>")])?;
                 let lp = py_strip(&lp.replace('\\', "/")).to_string();
                 let lp = lstrip_dot_slash(&lp).to_string();
                 if !lp.is_empty() {
                     existing_context_paths.add(s(&lp), &[])?;
                 }
-                let src = or(pget(&l, "source", &[(337, "<module>")])?, s(""));
+                let src = or(pget(&l, "source", &[(355, "<module>")])?, s(""));
                 let src = match &src {
                     Value::Str(_) => py_strip(&py::str_of(&src)).to_string(),
                     other => {
                         return Err(raise(
-                            &[(337, "<module>")],
+                            &[(355, "<module>")],
                             format!(
                                 "AttributeError: '{}' object has no attribute 'strip'",
                                 py::type_name(other)
@@ -576,7 +610,7 @@ pub fn plan(h: &mut Hire) -> R<()> {
         }
     }
 
-    // 353: the plan.
+    // 371: the plan.
     let mut actions = Vec::new();
     actions.push(if dir_exists {
         skipped("create-dir", "exists")
@@ -630,20 +664,25 @@ pub fn plan(h: &mut Hire) -> R<()> {
     });
     let conf_mode = act::get(&conf, "mode").cloned().unwrap_or(Value::Null);
     let same_mode = ops::py_eq(&conf_mode, &s(&desired_mode));
-    actions.push(if registered && same_mode {
-        obj(vec![
-            ("step", s("set-mode")),
-            ("mode", s(&desired_mode)),
-            ("status", s("skipped")),
-            ("reason", s(&format!("already {desired_mode}"))),
-        ])
-    } else {
-        obj(vec![
-            ("step", s("set-mode")),
-            ("mode", s(&desired_mode)),
-            ("status", s("pending")),
-        ])
-    });
+    // In a session only custom gets here (the shell refused the rest):
+    // the hire core makes a new workspace custom, and the mode route is
+    // the owner's.
+    if !h.in_session {
+        actions.push(if registered && same_mode {
+            obj(vec![
+                ("step", s("set-mode")),
+                ("mode", s(&desired_mode)),
+                ("status", s("skipped")),
+                ("reason", s(&format!("already {desired_mode}"))),
+            ])
+        } else {
+            obj(vec![
+                ("step", s("set-mode")),
+                ("mode", s(&desired_mode)),
+                ("status", s("pending")),
+            ])
+        });
+    }
     if !a.enabled.is_empty() {
         let want = a.enabled == "true";
         let conf_enabled = act::get(&conf, "enabled").is_some_and(py::truthy);
@@ -767,7 +806,7 @@ pub fn plan(h: &mut Hire) -> R<()> {
                 act::set(&mut c, "resolved", resolved);
                 if ops::py_eq(&kind, &s("remote")) {
                     let addr = or(act::get(&r, "address"), s(""));
-                    if existing_peers.has_str(&lower(&addr, &[(460, "<module>")])?) {
+                    if existing_peers.has_str(&lower(&addr, &[(482, "<module>")])?) {
                         act::set(&mut c, "status", s("skipped"));
                         act::set(&mut c, "reason", s("edge exists"));
                     }
@@ -799,7 +838,7 @@ pub fn plan(h: &mut Hire) -> R<()> {
     if let Some(color) = &wanted_color {
         let current = if registered {
             let c = or(act::get(&conf, "color"), s(""));
-            lower(&c, &[(481, "<module>")])?
+            lower(&c, &[(503, "<module>")])?
         } else {
             String::new()
         };
@@ -956,7 +995,7 @@ pub fn perms_note() -> String {
 /// `take_template_rows(a, resp, applied)`, called from module line `from`.
 pub fn take_template_rows(h: &mut Hire, i: usize, resp: &Value, applied: bool, from: u32) -> R<()> {
     let fr = |line: u32| [(from, "<module>"), (line, "take_template_rows")];
-    let rows = or(pget(resp, "rows", &fr(762))?, Value::Array(vec![]));
+    let rows = or(pget(resp, "rows", &fr(784))?, Value::Array(vec![]));
     let info = or(act::get(resp, "template"), obj(vec![]));
     let perms = or(act::get(resp, "permissions"), obj(vec![]));
     let qs = or(act::get(resp, "questions"), Value::Array(vec![]));
@@ -968,21 +1007,21 @@ pub fn take_template_rows(h: &mut Hire, i: usize, resp: &Value, applied: bool, f
     if let Some(hs @ Value::Object(_)) = act::get(resp, "hireSwitch") {
         act::set(a, "hireSwitch", hs.clone());
     }
-    let note = (ptrue(&perms, "suggested", &fr(770))? || ptrue(&perms, "cards", &fr(770))?)
-        && !ptrue(&perms, "granted", &fr(770))?;
+    let note = (ptrue(&perms, "suggested", &fr(792))? || ptrue(&perms, "cards", &fr(792))?)
+        && !ptrue(&perms, "granted", &fr(792))?;
     if note {
         act::set(a, "permissionsNote", s(&perms_note()));
     }
     let mut busy = false;
-    for r in py_iter(&rows, 772).map_err(|mut e| {
-        e.frames = fr(772).to_vec();
+    for r in py_iter(&rows, 794).map_err(|mut e| {
+        e.frames = fr(794).to_vec();
         e
     })? {
-        let st = pget(&r, "status", &fr(772))?
+        let st = pget(&r, "status", &fr(794))?
             .cloned()
             .unwrap_or(Value::Null);
         if ops::py_eq(&st, &s("write")) || ops::py_eq(&st, &s("done")) {
-            let step = pget(&r, "step", &fr(772))?.cloned().unwrap_or(Value::Null);
+            let step = pget(&r, "step", &fr(794))?.cloned().unwrap_or(Value::Null);
             if !(ops::py_eq(&step, &s("folder")) || ops::py_eq(&step, &s("register"))) {
                 busy = true;
             }
@@ -1000,7 +1039,7 @@ pub fn take_template_rows(h: &mut Hire, i: usize, resp: &Value, applied: bool, f
     Ok(())
 }
 
-/// Lines 780 to 817: the dry run's question to the hire core, then the
+/// Lines 802 to 861: the dry run's question to the hire core, then the
 /// plan.
 pub fn dry_run(h: &mut Hire) -> R<()> {
     if let Some(i) = h.one("apply-template") {
@@ -1013,18 +1052,18 @@ pub fn dry_run(h: &mut Hire) -> R<()> {
             );
         }
         let resp = h.post_json("/cli/agents/hire", &pb)?;
-        let bad = ptrue(&resp, "error", &[(787, "<module>")])?
-            || !ptrue(&resp, "ok", &[(787, "<module>")])?;
+        let bad = ptrue(&resp, "error", &[(809, "<module>")])?
+            || !ptrue(&resp, "ok", &[(809, "<module>")])?;
         if bad {
             h.note_permission(&resp);
-            let (code, hint) = core_error(&resp, 789)?;
-            let exit = template_exit(&code, &[(792, "<module>")])?;
+            let (code, hint) = core_error(&resp, 811)?;
+            let exit = template_exit(&code, &[(814, "<module>")])?;
             let a = &mut h.actions[i];
             act::set(a, "status", s("failed"));
             act::set(a, "error", obj(vec![("code", code), ("hint", hint)]));
             act::set(a, "exitCode", Value::Int(exit.to_string()));
         } else {
-            take_template_rows(h, i, &resp, false, 794)?;
+            take_template_rows(h, i, &resp, false, 816)?;
         }
     } else if h.op.token().is_some() {
         let core: Vec<usize> = (0..h.actions.len())
@@ -1037,14 +1076,51 @@ pub fn dry_run(h: &mut Hire) -> R<()> {
             })
             .collect();
         if let Some(&first) = core.first() {
-            let resp = h.post_json(
-                "/cli/agents/hire",
-                &obj(vec![("dryRun", Value::Bool(true))]),
-            )?;
+            // --agent goes too in a session: the daemon runs the hire's own
+            // preset check and answers the id the hire would save. Its
+            // refusal ("preset X ..." usage) ends the dry run as it ends the
+            // hire. A daemon from before this answers no preset and the
+            // plan stays as typed.
+            let mut dry_body = obj(vec![("dryRun", Value::Bool(true))]);
+            let da = h.one("set-default-agent");
+            let with_preset = h.in_session && da.is_some();
+            if with_preset {
+                act::set(&mut dry_body, "preset", s(&h.a.agent_preset));
+            }
+            let resp = h.post_json("/cli/agents/hire", &dry_body)?;
             let gerr = match &resp {
                 Value::Object(_) => act::get(&resp, "error").cloned(),
                 _ => None,
             };
+            if let (Some(i), true, Some(g @ Value::Object(_))) = (da, with_preset, &gerr) {
+                let code = act::get(g, "code").cloned().unwrap_or(Value::Null);
+                let hint = act::get(g, "hint").cloned().unwrap_or(Value::Null);
+                let said = py::str_of(&or(Some(&hint), s("")));
+                if ops::py_eq(&code, &s("usage")) && said.starts_with("preset ") {
+                    let a = &mut h.actions[i];
+                    act::set(a, "status", s("failed"));
+                    act::set(
+                        a,
+                        "error",
+                        obj(vec![("code", s("usage")), ("hint", hint.clone())]),
+                    );
+                    act::set(a, "exitCode", Value::Int("2".to_string()));
+                    for a in h.actions.iter_mut() {
+                        if act::pending(a) {
+                            act::set(a, "status", s("not-run"));
+                            act::set(a, "reason", s("the hire would be refused"));
+                        }
+                    }
+                    super::emit::emit(h, false, false, &[(847, "<module>")])?;
+                    return Err(h.fail(s("usage"), hint, Exit::Usage));
+                }
+            }
+            if let (Some(i), true, Value::Object(_)) = (da, with_preset, &resp) {
+                if let Some(p @ Value::Str(_)) = act::get(&resp, "preset") {
+                    let p = p.clone();
+                    act::set(&mut h.actions[i], "preset", p);
+                }
+            }
             if let Some(g @ Value::Object(_)) = gerr {
                 let code = act::get(&g, "code").cloned().unwrap_or(Value::Null);
                 if ops::py_eq(&code, &s("hire_off")) || ops::py_eq(&code, &s("main_only")) {
@@ -1065,7 +1141,7 @@ pub fn dry_run(h: &mut Hire) -> R<()> {
         }
     }
     let changed = h.actions.iter().any(act::pending);
-    super::emit::finish(h, changed, 817)
+    super::emit::finish(h, changed, 861)
 }
 
 #[cfg(test)]

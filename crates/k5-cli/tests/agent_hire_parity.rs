@@ -19,7 +19,9 @@
 //!   the rest go on, the workspace step that stops the rest (exit 3 and
 //!   the card's lines), an answer the block's Python can't read (its
 //!   traceback), no answer, no daemon.
-//! - A session with a passport: the shell's ([`Compare::Shell`]). A brief
+//! - A session: the passport on every request, the core's own steps, the
+//!   dry run's preset check, the refused steps, the self-grant line, a
+//!   403's exit 3, the launch and the messages as this agent. A brief
 //!   with a NUL in it is the shell's too, but bash's warning names its
 //!   own path, so that hand-back is the unit test's
 //!   (`families::agent::hire::tests`).
@@ -310,13 +312,13 @@ fn hire_a_new_folder() {
             1,
         ),
         case(
-            "a session with no passport: the owner token from disk",
+            "a session with no passport: two lines, exit 3, nothing sent",
             &["hire", "newbie"],
             &[],
-            three(),
+            vec![],
             files,
-            0,
             3,
+            0,
         ),
     ];
     let mut v = v;
@@ -511,10 +513,24 @@ fn hire_the_look_ups() {
     };
     let v = vec![
         one(
-            "no preset matches",
+            "no preset matches: usage, the server's presets",
             &["hire", "d", "--agent", "zz"],
             ok(PRESETS),
-            4,
+            2,
+        ),
+        one(
+            "no preset matches and the server has none",
+            &["hire", "d", "--agent", " zz "],
+            ok("[]"),
+            2,
+        ),
+        one(
+            "no preset matches: a preset with no command word, a null id",
+            &["hire", "d", "--agent", "zz"],
+            ok(
+                r#"[{"id":"p1","label":"One","command":"  "},{"label":"Two","command":null},{"id":7,"label":"Three","command":"run\tfast"}]"#,
+            ),
+            2,
         ),
         one(
             "two presets by label",
@@ -927,22 +943,178 @@ fn hire_a_template() {
     check(&rig, v);
 }
 
+/// A session's passport and cell socket (over TCP: the socket isn't
+/// there), with `extra` settings.
+fn session(extra: &[(&'static str, &str)]) -> Vec<(&'static str, String)> {
+    let mut e = vec![("K2_HOOK_SOCK", "{nosock}")];
+    e.extend_from_slice(extra);
+    with_passport(&e)
+}
+
+fn in_session(c: Case) -> Case {
+    Case {
+        env: session(&[]),
+        ..c
+    }
+}
+
+const CORE_SESSION: &str = r#"{"ok":true,"steps":[{"step":"create-dir","status":"done"},{"step":"write-persona","status":"done"},{"step":"register-workspace","status":"done"},{"step":"set-name","status":"done"},{"step":"set-default-agent","status":"skipped","reason":"already"}]}"#;
+
+const PRESET_REFUSED: &str = r#"{"ok":false,"error":{"code":"usage","hint":"preset zz no longer exists on this server; pick one of: claude (claude), codex (codex)"}}"#;
+
+/// In a session the hire acts as this agent: every request carries the
+/// passport; no conf probe and no mode step; the core takes the name, the
+/// preset as typed and catalog context; a dry run asks the core about the
+/// preset; the steps only a person's routes take are refused before
+/// anything is sent; a 403 exits 3 whatever its code; the launch route is
+/// never asked and the messages are from this agent.
 #[test]
-fn hire_the_shell_s_cases() {
-    let rig = Rig::new(VERB, "hireshell");
-    let c = case(
-        "a session with a passport: the shell's (the owner token to the new workspace)",
-        &["hire", "newbie", "--dry-run"],
-        &[],
-        vec![not_found(), ok(r#"{"ok":true}"#)],
-        files,
-        0,
-        2,
-    );
-    rig.check(&Case {
-        env: with_passport(&[("K2_HOOK_SOCK", "{nosock}")]),
-        ..with(c, Compare::Shell)
-    });
+fn hire_in_a_session() {
+    let rig = Rig::new(VERB, "hiresess");
+    let one = |name, args: &[&str], replies: Vec<Reply>, code, n| {
+        in_session(case(name, leak(args), &[], replies, files, code, n))
+    };
+    let mut v = vec![
+        // covers: agent hire
+        one("the core alone, with the passport", &["hire", "newbie"], vec![ok(CORE_OK)], 0, 1),
+        one(
+            "the name, the preset as typed and a catalog context go to the core",
+            &["hire", "newbie", "--name", "Bo", "--agent", "Cursor Agent", "--context", "k2"],
+            vec![ok(CORE_SESSION)],
+            0,
+            1,
+        ),
+        // covers: agent hire --json
+        one(
+            "the same as JSON",
+            &["hire", "newbie", "--name", "Bo", "--agent", "codex", "--context", "k2", "--json"],
+            vec![ok(CORE_SESSION)],
+            0,
+            1,
+        ),
+        one(
+            "a dry run: the core answers the preset's id",
+            &["hire", "newbie", "--agent", "cursor agent", "--dry-run"],
+            vec![ok(r#"{"ok":true,"dryRun":true,"hire":"allowed","preset":"cursor-1"}"#)],
+            0,
+            1,
+        ),
+        one(
+            "a dry run as JSON with the preset's id",
+            &["hire", "newbie", "--agent", "cursor agent", "--dry-run", "--json"],
+            vec![ok(r#"{"ok":true,"dryRun":true,"hire":"allowed","preset":"cursor-1"}"#)],
+            0,
+            1,
+        ),
+        one(
+            "a dry run, the preset refused: the hire's line, exit 2",
+            &["hire", "newbie", "--agent", "zz", "--dry-run"],
+            vec![Reply::Answer(400, PRESET_REFUSED.to_string())],
+            2,
+            1,
+        ),
+        one(
+            "a dry run as JSON, the preset refused",
+            &["hire", "newbie", "--agent", "zz", "--dry-run", "--json"],
+            vec![Reply::Answer(400, PRESET_REFUSED.to_string())],
+            2,
+            1,
+        ),
+        one(
+            "a dry run, an older daemon: the plan as typed",
+            &["hire", "newbie", "--agent", "zz", "--dry-run"],
+            vec![Reply::Answer(
+                400,
+                r#"{"ok":false,"error":{"code":"usage","hint":"missing path"}}"#.to_string(),
+            )],
+            0,
+            1,
+        ),
+        one(
+            "a dry run with no --agent: no preset sent",
+            &["hire", "newbie", "--dry-run", "--name", "Bo"],
+            vec![ok(r#"{"ok":true,"dryRun":true,"hire":"allowed"}"#)],
+            0,
+            1,
+        ),
+        one(
+            "the steps a person takes: refused, nothing sent",
+            &[
+                "hire", "newbie", "--mode", "manager", "--enabled", "true", "--color", "#fff",
+                "--focus-group", "f", "--launch", "--context", "./x.md", "--context", "k2",
+            ],
+            vec![],
+            3,
+            0,
+        ),
+        one(
+            "--context with --template: refused",
+            &["hire", "newbie", "--template", "qa-bot", "--context", "k2", "--mode", "custom"],
+            vec![],
+            3,
+            0,
+        ),
+        one(
+            "--db-access write: the self-grant refusal",
+            &["hire", "newbie", "--db-access", "write", "--brief", "nope.txt"],
+            vec![],
+            3,
+            0,
+        ),
+        one(
+            "a 403 with another code: exit 3",
+            &["hire", "newbie", "--name", "Bo"],
+            vec![Reply::Answer(
+                403,
+                r#"{"ok":false,"error":{"code":"outside_hire_root","hint":"inside the hire root only"}}"#
+                    .to_string(),
+            )],
+            3,
+            1,
+        ),
+        one(
+            "a 403 with an empty error: the hint is the answer, its status kept",
+            &["hire", "newbie", "--json"],
+            vec![Reply::Answer(403, r#"{"ok":false,"error":""}"#.to_string())],
+            3,
+            1,
+        ),
+        one(
+            "the onboard message, no template: no launch, from this agent",
+            &["hire", "newbie", "--onboard", "hi"],
+            vec![ok(CORE_OK), ok(r#"{"success":true}"#)],
+            0,
+            2,
+        ),
+        one(
+            "a template with --onboard: started by the server with its hello",
+            &["hire", "hire-me", "--template", "qa-bot", "--onboard", "hi"],
+            vec![ok(TPL_APPLIED)],
+            0,
+            1,
+        ),
+        one(
+            "a template with --launch, an older daemon: the hello from this agent",
+            &["hire", "hire-me", "--template", "qa-bot", "--launch"],
+            vec![ok(TPL_OLD), ok(r#"{"success":true}"#)],
+            0,
+            2,
+        ),
+    ];
+    // The shell's block reads the last core step (`set-default-agent`)
+    // in the context loop: with no --agent it is None, so its Python
+    // raises (copied: the R3 rule).
+    v.push(with(
+        one(
+            "a catalog context with no --agent: the TypeError",
+            &["hire", "newbie", "--context", "k2"],
+            vec![ok(CORE_OK)],
+            1,
+            1,
+        ),
+        Compare::Traceback,
+    ));
+    check(&rig, v);
 }
 
 /// The lines name the command by the brand's name (in a build with
@@ -973,12 +1145,40 @@ fn the_lines_say_the_brand_s_name() {
         &[],
         vec![ok("[]")],
         files,
-        4,
+        2,
         1,
     );
+    let product = k2_client::brand::PRODUCT_NAME;
+    let person = format!("A person does this in Settings \u{2192} Workspaces / Agents \u{2192} the agent, or with {cli} agent hire from a terminal outside {product}.\n");
+    for (env, args, want) in [
+        (
+            vec![("K2_PORT", PORT.to_string()), ("K2_HOOK_SOCK", "{nosock}".to_string())],
+            &["hire", "d"][..],
+            format!("Error: in a session, {cli} agent hire doesn't act as this server's owner, and this session has no passport, so nothing was sent.\n{person}"),
+        ),
+        (
+            session(&[]),
+            &["hire", "d", "--color", "red"],
+            format!("Error: in a session, {cli} agent hire acts as this agent, and these steps are a person's: --color. Nothing was sent.\n{person}"),
+        ),
+        (
+            session(&[]),
+            &["hire", "d", "--db-access", "read"],
+            format!("{{\"error\": {{\"code\": \"owner_only\", \"hint\": \"An agent can't grant itself 'db_agent_access'. Ask a human (owner or admin) to change it: Settings \\u2192 Workspaces / Agents \\u2192 (workspace) \\u2192 Permissions \\u2192 Database \\u2192 \\\"Let this agent create databases\\\", or `{cli} agent hire <dir> --db-access write` from their own terminal \\u2014 or run this from a terminal outside a {product} agent session.\"}}}}\n"),
+        ),
+    ] {
+        let c = Case {
+            env,
+            ..case("brand", leak(args), &[], vec![], files, 3, 0)
+        };
+        let (out, log) = rig.binary(&c, false);
+        assert_eq!(out.stderr, want, "{args:?}");
+        assert_eq!(out.code, Some(3), "{args:?}");
+        assert!(log.is_empty(), "{args:?}");
+    }
     let (out, _) = rig.binary(&c, false);
     assert_eq!(
         out.stderr,
-        format!("{{\"error\": {{\"code\": \"not_found\", \"hint\": \"no agent preset matches 'zz' \\u2014 run `{cli} preset list` (id, label, or command token)\"}}}}\n")
+        format!("{{\"error\": {{\"code\": \"usage\", \"hint\": \"preset zz no longer exists on this server; pick one of: none (add one: `{cli} preset add`)\"}}}}\n")
     );
 }

@@ -1,5 +1,5 @@
 //! The block's `emit(ok, changed)` and `finish(changed)` (`<stdin>` lines
-//! 606 to 757): every step's line, or the JSON, then the exit.
+//! 628 to 779): every step's line, or the JSON, then the exit.
 
 use super::super::{dumps, obj, s};
 use super::plan::exit_code_for;
@@ -154,7 +154,7 @@ pub fn emit(h: &mut Hire, ok: bool, changed: bool, from: &[Frame]) -> R<()> {
             "apply-template" => {
                 let t = super::or(g("info"), obj(vec![]));
                 let mut l = format!("template: {}", line_of(g("template")));
-                if pget(&t, "id", &fr(669))?.is_some_and(py::truthy) {
+                if pget(&t, "id", &fr(691))?.is_some_and(py::truthy) {
                     l.push_str(&format!(
                         " ({} v{})",
                         line_of(act::get(&t, "id")),
@@ -175,7 +175,7 @@ pub fn emit(h: &mut Hire, ok: bool, changed: bool, from: &[Frame]) -> R<()> {
                             Value::Str(_) => format!(", card {}", py::str_of(r)),
                             other => {
                                 return Err(raise(
-                                    &fr(681),
+                                    &fr(703),
                                     format!(
                                         "TypeError: can only concatenate str (not \"{}\") to str",
                                         py::type_name(other)
@@ -215,16 +215,16 @@ pub fn emit(h: &mut Hire, ok: bool, changed: bool, from: &[Frame]) -> R<()> {
                 Some("skipped") => "skipped",
                 Some("failed") => "FAILED",
                 Some("not-run") => "not run",
-                _ => return Err(raise(&fr(688), format!("KeyError: {}", py::repr(&status))).into()),
+                _ => return Err(raise(&fr(710), format!("KeyError: {}", py::repr(&status))).into()),
             },
             Value::Array(_) | Value::Object(_) => {
                 return Err(raise(
-                    &fr(688),
+                    &fr(710),
                     format!("TypeError: unhashable type: '{}'", py::type_name(&status)),
                 )
                 .into())
             }
-            other => return Err(raise(&fr(688), format!("KeyError: {}", py::repr(&other))).into()),
+            other => return Err(raise(&fr(710), format!("KeyError: {}", py::repr(&other))).into()),
         };
         h.stdout
             .push_str(&format!("  {} {line}\n", ljust(&format!("[{marker}]"), 14)));
@@ -257,15 +257,15 @@ pub fn emit(h: &mut Hire, ok: bool, changed: bool, from: &[Frame]) -> R<()> {
     Ok(())
 }
 
-/// The template's own rows under its line (lines 691 to 723).
+/// The template's own rows under its line (lines 713 to 745).
 fn template_rows(h: &mut Hire, a: &Value, fr: &dyn Fn(u32) -> Vec<Frame>) -> R<()> {
     let rows = super::or(act::get(a, "rows"), Value::Array(vec![]));
-    let rows = py_iter(&rows, 695).map_err(|mut e| {
-        e.frames = fr(695);
+    let rows = py_iter(&rows, 717).map_err(|mut e| {
+        e.frames = fr(717);
         e
     })?;
     for r in &rows {
-        let step = pget(r, "step", &fr(696))?.cloned().unwrap_or(Value::Null);
+        let step = pget(r, "step", &fr(718))?.cloned().unwrap_or(Value::Null);
         if ops::py_eq(&step, &s("folder")) || ops::py_eq(&step, &s("register")) {
             continue;
         }
@@ -285,7 +285,7 @@ fn template_rows(h: &mut Hire, a: &Value, fr: &dyn Fn(u32) -> Vec<Frame>) -> R<(
             },
             Value::Array(_) | Value::Object(_) => {
                 return Err(raise(
-                    &fr(701),
+                    &fr(723),
                     format!("TypeError: unhashable type: '{}'", py::type_name(&st)),
                 )
                 .into())
@@ -329,35 +329,35 @@ fn template_rows(h: &mut Hire, a: &Value, fr: &dyn Fn(u32) -> Vec<Frame>) -> R<(
                 .is_some_and(|v| ops::py_eq(v, &s("write")) || ops::py_eq(v, &s("done")))
     });
     if py::truthy(&qs) && writes_role {
-        let items = py_iter(&qs, 716).map_err(|mut e| {
-            e.frames = fr(716);
+        let items = py_iter(&qs, 738).map_err(|mut e| {
+            e.frames = fr(738);
             e
         })?;
         let mut got = Vec::new();
         for q in &items {
-            if pget(q, "answered", &fr(716))?.is_some_and(py::truthy) {
-                got.push(index_id(q, &fr(716))?);
+            if pget(q, "answered", &fr(738))?.is_some_and(py::truthy) {
+                got.push(index_id(q, &fr(738))?);
             }
         }
         let mut left = Vec::new();
         for q in &items {
-            if !pget(q, "answered", &fr(717))?.is_some_and(py::truthy) {
+            if !pget(q, "answered", &fr(739))?.is_some_and(py::truthy) {
                 left.push(q.clone());
             }
         }
         if !got.is_empty() {
-            let j = join(&got, &fr(719))?;
+            let j = join(&got, &fr(741))?;
             h.stdout
                 .push_str(&format!("      {} {j}\n", ljust("answered", 12)));
         }
         if !left.is_empty() {
             let mut ids = Vec::new();
-            let mut inner = fr(721);
-            inner.push((721, "<genexpr>"));
+            let mut inner = fr(743);
+            inner.push((743, "<genexpr>"));
             for q in &left {
                 ids.push(index_id(q, &inner)?);
             }
-            let j = join(&ids, &fr(721))?;
+            let j = join(&ids, &fr(743))?;
             h.stdout.push_str(&format!(
                 "      {} {j}  (the agent asks its person on its first start)\n",
                 ljust("open", 12)
@@ -392,7 +392,7 @@ pub fn finish(h: &mut Hire, changed: bool, from: u32) -> R<()> {
         h,
         failed.is_empty(),
         changed,
-        &[(from, "<module>"), (747, "finish")],
+        &[(from, "<module>"), (769, "finish")],
     )?;
     let Some(first_failed) = failed.first() else {
         return Err(Stop::Exit(Exit::Ok));
@@ -422,7 +422,7 @@ pub fn finish(h: &mut Hire, changed: bool, from: u32) -> R<()> {
     );
     let exit = match act::get(first_failed, "exitCode").filter(|v| py::truthy(v)) {
         Some(Value::Int(n)) => n.parse().unwrap_or(1),
-        _ => exit_code_for(&code_v, &[(from, "<module>"), (754, "finish")])?,
+        _ => exit_code_for(&code_v, &[(from, "<module>"), (776, "finish")])?,
     };
     Err(h.fail(code, s(&hint), exit_of(exit)))
 }
@@ -454,11 +454,11 @@ pub fn step_failed(
         h,
         false,
         changed,
-        &[(from, "<module>"), (834, "step_failed")],
+        &[(from, "<module>"), (878, "step_failed")],
     )?;
     let exit = match exit {
         Some(n) => n,
-        None => exit_code_for(&code, &[(from, "<module>"), (835, "step_failed")])?,
+        None => exit_code_for(&code, &[(from, "<module>"), (879, "step_failed")])?,
     };
     Err(h.fail(code, hint, exit_of(exit)))
 }

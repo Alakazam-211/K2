@@ -337,6 +337,10 @@ def one(r):
     tail = (" (" + "; ".join(extra) + ")") if extra else ""
     if r.get("moved"):
         return "job %s: moved %s -> %s (%s)%s. %s" % (r["job"], r["from"], r["node"], r["mode"], tail, r.get("note") or "")
+    if r.get("pulling"):
+        # 0.46.17: it waited in the own queue of a shared node; that node is
+        # asked to give it back, then K2 places it again (or pins it).
+        return "job %s: pulling back from %s (%s)%s. %s" % (r["job"], r["from"], r["mode"], tail, r.get("note") or "")
     if r.get("mode") == "auto":
         return "job %s: auto-placed now%s. %s" % (r["job"], tail, r.get("note") or "")
     return "job %s: %s" % (r["job"], r.get("note") or "pinned to " + str(r.get("node")))

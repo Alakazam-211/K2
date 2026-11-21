@@ -18,8 +18,9 @@ WHERE IT RUNS (0.46.6)
   room for --mem/--cpus, --timeout within the grant), and picks one that
   starts it now: a warm one (it built this repo before) unless it is
   busier, else the least loaded. A burst of jobs spreads across nodes.
-  Nothing free: it queues where the wait looks shortest and moves if
-  another node frees up first. Every run (attached, --wait or --detach)
+  Nothing free: it is HELD on this server (0.46.17), never in a node's own
+  queue, and goes to the first node that fits it once one has a free slot
+  (Priority before Standard, oldest first). Every run (attached, --wait or --detach)
   prints where and why, right after its job line:
     [k2 compute] placed on linux-1 (auto): starts now · warm slot (this commit) · 46/110 GB, 8/12 CPUs free · 6 nodes fit, 2 skipped (1 offline, 1 too small for --mem 24G)
   k2 compute get <job> shows the same line later; --plan shows it first.
@@ -32,7 +33,13 @@ WHERE IT RUNS (0.46.6)
 PINNED OR AUTO (0.46.8)
   A job with a node named is PINNED: it waits for that node however long,
   even while other nodes sit idle. A job with no node named is AUTO: while
-  it waits, K2 moves it (every 5 s) to a node that can start it now.
+  no node that fits has a free slot it is held on this server, and K2
+  (every 5 s) sends it to the first that has one. Its wait says so:
+    held: waiting for a node with a free slot (fits: linux-1, linux-2)
+  (get, wait; jobs shows "held (auto)"; JSON: wait.reason "held",
+  queue.held true, queue.fits the node names). Nothing to poll: k2 compute
+  wait <job> returns when it ends. Only a pinned job ever waits in a
+  node's own queue.
   k2 compute status and queue mark each queued job pinned or auto, jobs
   shows "queued (pin)" or "queued (auto)"; JSON: "pinned": true|false.
   When the node you named can't start the job now and another could, run
@@ -51,11 +58,18 @@ PINNED OR AUTO (0.46.8)
   It becomes auto, as if you had named no node: --needs, --mem, --cpus,
   the tier, --cache, --exclusive and your grants still apply. It keeps the
   OS and arch of the node it waited on unless you say otherwise (--os
-  macos, --os any). If no node can start it now, it waits where it is and
-  moves later. An auto job takes move --auto again to add --avoid, --os
-  or --label (the same ask twice: already_auto). Pin a queued job to
+  macos, --os any). If no node can start it now, it is held here and goes
+  later. An auto job takes move --auto again to add --avoid, --os or
+  --label (the same ask twice: already_auto). Pin a queued job to
   another node instead:
     k2 compute move ab12cd34 --to linux-2
+  A job already in a shared node's own queue (one sent the moment that
+  node filled, or pinned there) is PULLED BACK (0.46.17): K2 asks the
+  node to give it back if it hasn't started it, then places it again
+  (--auto: held here for the first node that fits with a free slot) or
+  pins it to the --to node. move answers "pulling": true at once; get
+  says "pulling back" until the node answers. If the node started it
+  first, it stays there (a started job never moves).
   --to takes no --avoid/--os/--label (bad_request, exit 2). Node names
   in --to and --avoid work as in run: the full name or a start that
   fits one node (else node_ambiguous, exit 2).
@@ -323,12 +337,13 @@ TIERS (queue lines, like an airport; 0.46.6)
   Tiers never stop a running job. They only order the queue: nothing is
   reserved, nothing is killed or paused. A node starts a job only when its
   slots AND memory both fit, whatever the line or turn.
-  An auto Priority or CI job (no node named) never waits in a shared
-  node's own queue (0.46.17): it waits on this server until some node can
-  start it now, then goes to the first that can (its wait line: "waits on
-  this server until a node can start it now"). Its --queue-timeout still
-  bounds the wait. A Standard job waits here a minute, then joins the
-  queue of the node with the shortest wait.
+  No auto job (no node named), whatever its tier, waits in a node's own
+  queue (0.46.17): it is held on this server until a node that fits has a
+  free slot, then goes to the first that has one, CI first, then
+  Priority, Standard, Batch, oldest first in each (its wait: "held:
+  waiting for a node with a free slot (fits: …)"). Your grant's parallel
+  limit on a node counts there too. Its --queue-timeout still bounds the
+  wait.
   On a node another server owns, your Priority counts only where its owner
   allows it (else it runs as Standard: priority_downgraded), and your CI
   only where your share has gate. On a node only this server uses, this
@@ -657,11 +672,11 @@ CODES (0.46.7)
                            it at once, and no other node can take it now:
                            nothing changed (exit 3). Without ruling its node
                            out, the job just waits there until one frees.
-    in_node_queue          the job waits inside a shared node's own queue;
-                           K2 can't pull it out at once. A plain move --auto
-                           works (K2 asks the node for it back when another
-                           node can start it); --to, or --auto --avoid <that
-                           node>, is refused: cancel and run it again (exit 3).
+    in_node_queue          the job waits inside a shared node's own queue
+                           and that node still has to answer an earlier
+                           ask about it (a pull back, a move, a cancel);
+                           try again once it has (exit 3). Otherwise move
+                           pulls such a job back (0.46.17).
     not_granted            move --to a node not granted to you (exit 3).
   Placement codes (get's "placed on …" line, placement.code in JSON):
     released_auto          a pinned job you released with move --auto; it

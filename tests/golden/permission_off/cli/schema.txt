@@ -4547,10 +4547,10 @@ exit: 0
     {
       "name": "compute move",
       "usage": "k2 compute move <job>... --auto [--avoid <node>]... [--os O|any] [--arch A|any] [--label k=v] [--json] | k2 compute move <job>... --to <node> [--json] | k2 compute move --all-mine|--workspace-all [--tag T] [--node N] [--workspace WS] (--auto … | --to <node>)",
-      "description": "Move queued jobs: no cancel, no new job id. A started job is never moved (job_started, exit 3).",
+      "description": "Move queued jobs: no cancel, no new job id. A job waiting in a shared node's own queue is pulled back (the node gives it back if it hasn't started it; \"pulling\": true), then placed again or pinned. A started job is never moved (job_started, exit 3).",
       "args": [{"name": "job", "required": false}],
       "flags": [
-        {"name": "--auto", "arg": null, "description": "Let K2 place a job that was pinned to a named node: it moves within about 5 s to a node that can start it now, else waits where it is."},
+        {"name": "--auto", "arg": null, "description": "Let K2 place a job that was pinned to a named node: it moves within about 5 s to a node that can start it now, else it is held on this server for the first node that fits with a free slot."},
         {"name": "--to", "arg": "NODE", "description": "Move the job to that node and pin it there (the same checks as naming the node in run)."},
         {"name": "--avoid", "arg": "NODE", "description": "With --auto: keep it off this node (repeatable)."},
         {"name": "--os", "arg": "O|any", "description": "With --auto: another OS than its node's (any = either)."},

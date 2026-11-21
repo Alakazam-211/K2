@@ -1466,3 +1466,129 @@ async fn a_draining_node_takes_no_auto_job_and_its_queued_auto_jobs_leave() {
     compute_ws::test_detach("dr-a");
     compute_ws::test_detach("dr-b");
 }
+
+// ── the central hold and pulling back (0.46.17) ──────────────────────
+
+/// 11-20: auto jobs sat in one busy node's own queue while other nodes
+/// went idle. Now an auto job no node can start is held on this server
+/// (in neither busy node's queue), and when one of them frees it goes
+/// there, never to the one still busy.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_held_job_goes_to_the_node_that_frees_never_into_the_busy_ones_queue() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let ws = seed_ws(&env, "central");
+    active_node("ch-a", "node-a", "linux", &ws);
+    active_node("ch-b", "node-b", "linux", &ws);
+    // Both shared and full: every slot runs another server's job.
+    let full_node = || fresh(offer(&["artifacts", "stall", FEATURE_QUEUE], 2, Some(view(Role::Tenant, 0, 0))));
+    let mut a = compute_ws::test_attach("ch-a", full_node());
+    let mut b = compute_ws::test_attach("ch-b", full_node());
+    let r = run(d.port, OWNER, json!({"any": true, "workspace": ws.id})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let job = j(&r)["job"]["id"].as_str().unwrap().to_string();
+    let first = row(&job).node_id;
+    assert!(assigns(&a.frames()).is_empty() && assigns(&b.frames()).is_empty(), "into neither node's queue");
+    let rj = row(&job);
+    assert_eq!((rj.state.as_str(), rj.reason.as_deref(), rj.node_queued), ("queued", Some("any_hold"), false), "held here: {rj:?}");
+    let g = j(&get(d.port, "/cli/compute/jobs/get", OWNER, &format!("job={job}")).await);
+    assert_eq!(g["wait"]["reason"], "held", "{g}");
+    assert_eq!(g["queue"]["line"], "held: waiting for a node with a free slot (fits: node-a, node-b)", "{g}");
+    // Sweeps while both stay full: it stays held, nothing is sent.
+    k2_daemon::compute_place::sweep(k2_core::compute::now());
+    assert!(assigns(&a.frames()).is_empty() && assigns(&b.frames()).is_empty());
+    // The node it was NOT first placed on frees a slot: it goes there.
+    let (idle_id, mut idle, mut busy) = if first == "ch-a" { ("ch-b", b, a) } else { ("ch-a", a, b) };
+    compute_ws::test_frame(idle_id, Frame::Offer(fresh(offer(&["artifacts", "stall", FEATURE_QUEUE], 1, Some(view(Role::Tenant, 0, 0))))));
+    k2_daemon::compute_place::sweep(k2_core::compute::now());
+    let rj = row(&job);
+    assert_eq!((rj.node_id.as_str(), rj.state.as_str()), (idle_id, "assigned"), "sent to the node that freed: {rj:?}");
+    assert_eq!(assigns(&idle.frames()).iter().map(|x| x.0.clone()).collect::<Vec<_>>(), vec![job.clone()]);
+    assert!(assigns(&busy.frames()).is_empty(), "never into the busy node's queue");
+    compute_ws::test_detach("ch-a");
+    compute_ws::test_detach("ch-b");
+}
+
+/// `k2 compute move` on a job in a shared node's own queue pulls it back
+/// (it used to be refused `in_node_queue`): `--auto` asks the node to give
+/// it back (the protocol-3 withdraw), and once it is back it is held here,
+/// not sent into the still-busy node's queue again; `--to` pins a second
+/// one to the named node once it is back. A second ask while the answer
+/// travels is `in_node_queue`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn move_pulls_a_job_back_from_a_shared_nodes_queue() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let ws = seed_ws(&env, "puller");
+    active_node("pb-a", "node-a", "linux", &ws);
+    active_node("pb-b", "node-b", "linux", &ws);
+    {
+        let db = k2_core::db::shared();
+        let three = store::GrantLimits { max_parallel: Some(3), ..Default::default() };
+        store::set_grant(&db.lock(), "pb-a", &ws.id, &three, "owner", 4).expect("grant a");
+    }
+    let mut a = compute_ws::test_attach("pb-a", offer(&["artifacts", "stall", FEATURE_QUEUE], 1, Some(view(Role::Tenant, 1, 0))));
+    let job = queued_any_on(d.port, &ws, "pb-a", &mut a).await;
+    assert!(row(&job).node_queued);
+    // B: shared and full, so nothing can start it now.
+    let mut b = compute_ws::test_attach("pb-b", fresh(offer(&["artifacts", "stall", FEATURE_QUEUE], 2, Some(view(Role::Tenant, 0, 0)))));
+
+    // move --auto on an auto job in A's queue: pulled back, not already_auto.
+    let r = post(d.port, "/cli/compute/jobs/move", OWNER, json!({"job": job, "auto": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let mv = j(&r);
+    assert_eq!((mv["pulling"].as_bool(), mv["moved"].as_bool(), mv["mode"].as_str()), (Some(true), Some(false), Some("auto")), "{mv}");
+    assert!(mv["note"].as_str().unwrap().starts_with("asked node-a to give it back from its queue"), "{mv}");
+    assert_eq!(cancels(&a.frames()), vec![(job.clone(), 1, CANCEL_WITHDRAW.to_string())], "the node is asked to give it back");
+    let rj = row(&job);
+    assert_eq!((rj.state.as_str(), rj.reason.as_deref()), ("assigned", Some("pull_requested")), "{rj:?}");
+    // While the answer travels: get says so, and a second ask waits.
+    let g = j(&get(d.port, "/cli/compute/jobs/get", OWNER, &format!("job={job}")).await);
+    assert_eq!(g["move"]["moving"], true, "{g}");
+    assert!(g["move"]["note"].as_str().unwrap().starts_with("pulling back: node-a was asked to give it back"), "{g}");
+    let r = post(d.port, "/cli/compute/jobs/move", OWNER, json!({"job": job, "to": "node-b"})).await;
+    assert_eq!((r.status, code(&r)), (409, "in_node_queue".to_string()), "{}", r.body);
+    // The sweeper doesn't ask again meanwhile.
+    k2_daemon::compute_place::sweep(k2_core::compute::now());
+    assert!(cancels(&a.frames()).is_empty());
+    // The node gives it back: a new generation, no retry used, held here.
+    compute_ws::test_frame("pb-a", state(&job, 1, JobState::Cancelled, Some("withdrawn"), None));
+    let rj = row(&job);
+    assert_eq!((rj.state.as_str(), rj.generation, rj.ctl.retries_used, rj.reason.as_deref()), ("queued", 2, 0, Some("any_hold")), "{rj:?}");
+    assert!(rj.ctl.pull.is_none(), "the ask is done: {rj:?}");
+    assert!(assigns(&a.frames()).is_empty(), "not sent back into busy A's queue");
+    assert!(assigns(&b.frames()).is_empty(), "nor into busy B's");
+    assert_eq!(events("pull", &job), 1);
+
+    // A job pinned to A (it went into A's queue at once), then move --to B.
+    let r = run(d.port, OWNER, json!({"node": "node-a", "workspace": ws.id})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let pinned = j(&r)["job"]["id"].as_str().unwrap().to_string();
+    let sent = assigns(&a.frames());
+    assert_eq!(sent.iter().map(|x| x.0.clone()).collect::<Vec<_>>(), vec![pinned.clone()], "pinned: into A's queue at once, as before");
+    compute_ws::test_frame("pb-a", state(&pinned, sent[0].1, JobState::Queued, Some("node_queued"), None));
+    let r = post(d.port, "/cli/compute/jobs/move", OWNER, json!({"job": pinned, "to": "node-b"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let mv = j(&r);
+    assert_eq!((mv["pulling"].as_bool(), mv["mode"].as_str(), mv["node"].as_str()), (Some(true), Some("pinned"), Some("node-b")), "{mv}");
+    assert_eq!(cancels(&a.frames()), vec![(pinned.clone(), sent[0].1, CANCEL_WITHDRAW.to_string())]);
+    compute_ws::test_frame("pb-a", state(&pinned, sent[0].1, JobState::Cancelled, Some("withdrawn"), None));
+    let rp = row(&pinned);
+    assert_eq!((rp.node_id.as_str(), rp.ctl.any.is_none()), ("pb-b", true), "pinned to B: {rp:?}");
+    assert_eq!(rp.ctl.placement.as_ref().map(|p| p.code.as_str()), Some("moved_to"), "{rp:?}");
+    // Pinned to B: it goes into B's queue at once, busy or not (pinned jobs keep today's rule).
+    assert_eq!(assigns(&b.frames()).iter().map(|x| x.0.clone()).collect::<Vec<_>>(), vec![pinned.clone()]);
+
+    // A job that started before the node got the ask stays where it runs.
+    let r = run(d.port, OWNER, json!({"node": "node-a", "workspace": ws.id})).await;
+    let raced = j(&r)["job"]["id"].as_str().unwrap().to_string();
+    let sent = assigns(&a.frames());
+    compute_ws::test_frame("pb-a", state(&raced, sent[0].1, JobState::Queued, Some("node_queued"), None));
+    let r = post(d.port, "/cli/compute/jobs/move", OWNER, json!({"job": raced, "auto": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    compute_ws::test_frame("pb-a", state(&raced, sent[0].1, JobState::Running, Some("job_started"), None));
+    let rr = row(&raced);
+    assert_eq!((rr.node_id.as_str(), rr.state.as_str(), rr.generation), ("pb-a", "running", i64::from(sent[0].1)), "{rr:?}");
+    compute_ws::test_detach("pb-a");
+    compute_ws::test_detach("pb-b");
+}

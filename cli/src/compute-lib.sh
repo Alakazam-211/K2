@@ -613,7 +613,7 @@ elif verb == "get":
             print("  waiting for the node to answer: %s" % q["reason"])
     elif j.get("queue") and j["queue"].get("held"):
         # 0.46.17: held on this server until a node that fits has a free
-        # slot; no node's line to show.
+        # slot; it is in no line of a node yet.
         print("  %s" % j["queue"]["line"])
     elif j.get("queue"):
         q = j["queue"]

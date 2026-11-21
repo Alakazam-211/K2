@@ -31458,9 +31458,12 @@ Agents:
                  setup card first); k2 compute git-access --help
   k2 compute run [<node>] [--os linux|macos] [--arch x86_64] [--label k=v]
                  No node: K2 picks one of the nodes granted to you that can
-                 start the job now (a warm one if it isn't busier), else the
-                 one with the shortest wait, and prints where and why
-                 ("placed on …"). Name a node only to pin the job there
+                 start the job now (a warm one if it isn't busier), and
+                 prints where and why ("placed on …"). None free: it is
+                 held on this server (never in a node's own queue) and
+                 goes to the first node that fits with a free slot; get
+                 says "held: waiting for a node with a free slot (fits:
+                 …)". Name a node only to pin the job there
                  (its full name, or a start of it that fits only one: win
                  for win-1; a start that fits two or more: node_ambiguous,
                  exit 2).
@@ -31840,12 +31843,17 @@ Agents:
                  let K2 move a QUEUED job that was pinned to a named node: it
                  becomes auto-placed (as if no node had been named) and moves
                  within ~5 s to a node that can start it now; if none can, it
-                 waits where it is. It keeps the OS and arch of its node
-                 unless --os/--arch say otherwise (any = either). --avoid
-                 keeps it off a node. No cancel, no new job id
+                 is held on this server for the first that frees. It keeps
+                 the OS and arch of its node unless --os/--arch say
+                 otherwise (any = either). --avoid keeps it off a node. No
+                 cancel, no new job id. A job waiting in a shared node's own
+                 queue is pulled back: the node is asked to give it back if
+                 it hasn't started it ("pulling": true), then it is placed
+                 again
   k2 compute move <job>... --to <node> [--json]
                  move a QUEUED job to that node and pin it there (the same
-                 checks as naming the node in run)
+                 checks as naming the node in run); from a shared node's own
+                 queue it is pulled back first, then pinned there
   k2 compute move --all-mine|--workspace-all [--tag T] [--node N] [--workspace WS] (--auto … | --to <node>)
                  every QUEUED job this session (or the workspace) sent that
                  matches; e.g. move --all-mine --node linux-1 --auto.
@@ -32658,13 +32666,23 @@ elif verb == "jobs":
         # 0.46.8: a queued job says pinned (a node named; k2 compute move
         # <id> --auto releases it) or auto.
         state = j["state"]
-        if state == "queued" and "pinned" in j:
+        node, reason = j.get("node") or "?", j.get("reason") or ""
+        if state == "queued" and (j.get("wait") or {}).get("reason") == "held":
+            # 0.46.17: an auto job held on this server until a node that
+            # fits has a free slot; it is on no node yet (get names them).
+            state, node, reason = "held (auto)", "-", "waits for a free slot"
+        elif state == "queued" and "pinned" in j:
             state += " (pin)" if j["pinned"] else " (auto)"
         # 0.46.16: WHEN = started (the real start) and queued.
-        print("%s  %-2s %-12s %-15s exit %-4s %-22s %-34s %-16s %-24s %s" % (j["short"], tier_tag(j.get("tier")), (j.get("node") or "?")[:12], state, "-" if j.get("exitCode") is None else j["exitCode"], j.get("reason") or "", when_col(j), (j.get("tag") or "-")[:16], who[:24], " ".join(j.get("argv") or [])[:60]))
+        print("%s  %-2s %-12s %-15s exit %-4s %-22s %-34s %-16s %-24s %s" % (j["short"], tier_tag(j.get("tier")), node[:12], state, "-" if j.get("exitCode") is None else j["exitCode"], reason, when_col(j), (j.get("tag") or "-")[:16], who[:24], " ".join(j.get("argv") or [])[:60]))
 elif verb == "get":
     j = v
-    print("job %s on %s: %s%s" % (j["short"], j.get("node"), j["state"], (" (%s)" % j["reason"]) if j.get("reason") else ""))
+    if j.get("state") == "queued" and (j.get("queue") or {}).get("held"):
+        # 0.46.17: held on this server, on no node yet (its line names
+        # the nodes it fits).
+        print("job %s: held on this server (auto)" % j["short"])
+    else:
+        print("job %s on %s: %s%s" % (j["short"], j.get("node"), j["state"], (" (%s)" % j["reason"]) if j.get("reason") else ""))
     # 0.46.7: a long command (an inline base64 script) is summarized;
     # --full prints all of it.
     argv = " ".join(j.get("argv") or [])
@@ -32743,8 +32761,14 @@ elif verb == "get":
         # In the queue of a shared node: its place and ETA (0.46.3).
         q = j["queue"]
         print("  %s%s" % (q["message"], ("  [class %s]" % j["class"]) if j.get("class") else ""))
-        if q.get("reason") and q["reason"] != "node_queued":
+        if q.get("reason") == "pull_requested":
+            print("  waiting for the node to give it back (k2 compute move); it is placed again then")
+        elif q.get("reason") and q["reason"] != "node_queued":
             print("  waiting for the node to answer: %s" % q["reason"])
+    elif j.get("queue") and j["queue"].get("held"):
+        # 0.46.17: held on this server until a node that fits has a free
+        # slot; it is in no line of a node yet.
+        print("  %s" % j["queue"]["line"])
     elif j.get("queue"):
         q = j["queue"]
         at = q.get("aheadTiers") or {}
@@ -36133,6 +36157,10 @@ def one(r):
     tail = (" (" + "; ".join(extra) + ")") if extra else ""
     if r.get("moved"):
         return "job %s: moved %s -> %s (%s)%s. %s" % (r["job"], r["from"], r["node"], r["mode"], tail, r.get("note") or "")
+    if r.get("pulling"):
+        # 0.46.17: it waited in the own queue of a shared node; that node is
+        # asked to give it back, then K2 places it again (or pins it).
+        return "job %s: pulling back from %s (%s)%s. %s" % (r["job"], r["from"], r["mode"], tail, r.get("note") or "")
     if r.get("mode") == "auto":
         return "job %s: auto-placed now%s. %s" % (r["job"], tail, r.get("note") or "")
     return "job %s: %s" % (r["job"], r.get("note") or "pinned to " + str(r.get("node")))
@@ -58510,10 +58538,10 @@ cmd_schema() {
     {
       "name": "compute move",
       "usage": "k2 compute move <job>... --auto [--avoid <node>]... [--os O|any] [--arch A|any] [--label k=v] [--json] | k2 compute move <job>... --to <node> [--json] | k2 compute move --all-mine|--workspace-all [--tag T] [--node N] [--workspace WS] (--auto … | --to <node>)",
-      "description": "Move queued jobs: no cancel, no new job id. A started job is never moved (job_started, exit 3).",
+      "description": "Move queued jobs: no cancel, no new job id. A job waiting in a shared node's own queue is pulled back (the node gives it back if it hasn't started it; \"pulling\": true), then placed again or pinned. A started job is never moved (job_started, exit 3).",
       "args": [{"name": "job", "required": false}],
       "flags": [
-        {"name": "--auto", "arg": null, "description": "Let K2 place a job that was pinned to a named node: it moves within about 5 s to a node that can start it now, else waits where it is."},
+        {"name": "--auto", "arg": null, "description": "Let K2 place a job that was pinned to a named node: it moves within about 5 s to a node that can start it now, else it is held on this server for the first node that fits with a free slot."},
         {"name": "--to", "arg": "NODE", "description": "Move the job to that node and pin it there (the same checks as naming the node in run)."},
         {"name": "--avoid", "arg": "NODE", "description": "With --auto: keep it off this node (repeatable)."},
         {"name": "--os", "arg": "O|any", "description": "With --auto: another OS than its node's (any = either)."},
@@ -70679,8 +70707,9 @@ WHERE IT RUNS (0.46.6)
   room for --mem/--cpus, --timeout within the grant), and picks one that
   starts it now: a warm one (it built this repo before) unless it is
   busier, else the least loaded. A burst of jobs spreads across nodes.
-  Nothing free: it queues where the wait looks shortest and moves if
-  another node frees up first. Every run (attached, --wait or --detach)
+  Nothing free: it is HELD on this server (0.46.17), never in a node's own
+  queue, and goes to the first node that fits it once one has a free slot
+  (Priority before Standard, oldest first). Every run (attached, --wait or --detach)
   prints where and why, right after its job line:
     [k2 compute] placed on linux-1 (auto): starts now · warm slot (this commit) · 46/110 GB, 8/12 CPUs free · 6 nodes fit, 2 skipped (1 offline, 1 too small for --mem 24G)
   k2 compute get <job> shows the same line later; --plan shows it first.
@@ -70693,7 +70722,13 @@ WHERE IT RUNS (0.46.6)
 PINNED OR AUTO (0.46.8)
   A job with a node named is PINNED: it waits for that node however long,
   even while other nodes sit idle. A job with no node named is AUTO: while
-  it waits, K2 moves it (every 5 s) to a node that can start it now.
+  no node that fits has a free slot it is held on this server, and K2
+  (every 5 s) sends it to the first that has one. Its wait says so:
+    held: waiting for a node with a free slot (fits: linux-1, linux-2)
+  (get, wait; jobs shows "held (auto)"; JSON: wait.reason "held",
+  queue.held true, queue.fits the node names). Nothing to poll: k2 compute
+  wait <job> returns when it ends. Only a pinned job ever waits in a
+  node's own queue.
   k2 compute status and queue mark each queued job pinned or auto, jobs
   shows "queued (pin)" or "queued (auto)"; JSON: "pinned": true|false.
   When the node you named can't start the job now and another could, run
@@ -70712,11 +70747,18 @@ PINNED OR AUTO (0.46.8)
   It becomes auto, as if you had named no node: --needs, --mem, --cpus,
   the tier, --cache, --exclusive and your grants still apply. It keeps the
   OS and arch of the node it waited on unless you say otherwise (--os
-  macos, --os any). If no node can start it now, it waits where it is and
-  moves later. An auto job takes move --auto again to add --avoid, --os
-  or --label (the same ask twice: already_auto). Pin a queued job to
+  macos, --os any). If no node can start it now, it is held here and goes
+  later. An auto job takes move --auto again to add --avoid, --os or
+  --label (the same ask twice: already_auto). Pin a queued job to
   another node instead:
     k2 compute move ab12cd34 --to linux-2
+  A job already in a shared node's own queue (one sent the moment that
+  node filled, or pinned there) is PULLED BACK (0.46.17): K2 asks the
+  node to give it back if it hasn't started it, then places it again
+  (--auto: held here for the first node that fits with a free slot) or
+  pins it to the --to node. move answers "pulling": true at once; get
+  says "pulling back" until the node answers. If the node started it
+  first, it stays there (a started job never moves).
   --to takes no --avoid/--os/--label (bad_request, exit 2). Node names
   in --to and --avoid work as in run: the full name or a start that
   fits one node (else node_ambiguous, exit 2).
@@ -70984,12 +71026,13 @@ TIERS (queue lines, like an airport; 0.46.6)
   Tiers never stop a running job. They only order the queue: nothing is
   reserved, nothing is killed or paused. A node starts a job only when its
   slots AND memory both fit, whatever the line or turn.
-  An auto Priority or CI job (no node named) never waits in a shared
-  node's own queue (0.46.17): it waits on this server until some node can
-  start it now, then goes to the first that can (its wait line: "waits on
-  this server until a node can start it now"). Its --queue-timeout still
-  bounds the wait. A Standard job waits here a minute, then joins the
-  queue of the node with the shortest wait.
+  No auto job (no node named), whatever its tier, waits in a node's own
+  queue (0.46.17): it is held on this server until a node that fits has a
+  free slot, then goes to the first that has one, CI first, then
+  Priority, Standard, Batch, oldest first in each (its wait: "held:
+  waiting for a node with a free slot (fits: …)"). Your grant's parallel
+  limit on a node counts there too. Its --queue-timeout still bounds the
+  wait.
   On a node another server owns, your Priority counts only where its owner
   allows it (else it runs as Standard: priority_downgraded), and your CI
   only where your share has gate. On a node only this server uses, this
@@ -71318,11 +71361,11 @@ CODES (0.46.7)
                            it at once, and no other node can take it now:
                            nothing changed (exit 3). Without ruling its node
                            out, the job just waits there until one frees.
-    in_node_queue          the job waits inside a shared node's own queue;
-                           K2 can't pull it out at once. A plain move --auto
-                           works (K2 asks the node for it back when another
-                           node can start it); --to, or --auto --avoid <that
-                           node>, is refused: cancel and run it again (exit 3).
+    in_node_queue          the job waits inside a shared node's own queue
+                           and that node still has to answer an earlier
+                           ask about it (a pull back, a move, a cancel);
+                           try again once it has (exit 3). Otherwise move
+                           pulls such a job back (0.46.17).
     not_granted            move --to a node not granted to you (exit 3).
   Placement codes (get's "placed on …" line, placement.code in JSON):
     released_auto          a pinned job you released with move --auto; it

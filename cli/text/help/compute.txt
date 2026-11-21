@@ -45,9 +45,12 @@ Agents:
                  setup card first); k2 compute git-access --help
   k2 compute run [<node>] [--os linux|macos] [--arch x86_64] [--label k=v]
                  No node: K2 picks one of the nodes granted to you that can
-                 start the job now (a warm one if it isn't busier), else the
-                 one with the shortest wait, and prints where and why
-                 ("placed on …"). Name a node only to pin the job there
+                 start the job now (a warm one if it isn't busier), and
+                 prints where and why ("placed on …"). None free: it is
+                 held on this server (never in a node's own queue) and
+                 goes to the first node that fits with a free slot; get
+                 says "held: waiting for a node with a free slot (fits:
+                 …)". Name a node only to pin the job there
                  (its full name, or a start of it that fits only one: win
                  for win-1; a start that fits two or more: node_ambiguous,
                  exit 2).
@@ -427,12 +430,17 @@ Agents:
                  let K2 move a QUEUED job that was pinned to a named node: it
                  becomes auto-placed (as if no node had been named) and moves
                  within ~5 s to a node that can start it now; if none can, it
-                 waits where it is. It keeps the OS and arch of its node
-                 unless --os/--arch say otherwise (any = either). --avoid
-                 keeps it off a node. No cancel, no new job id
+                 is held on this server for the first that frees. It keeps
+                 the OS and arch of its node unless --os/--arch say
+                 otherwise (any = either). --avoid keeps it off a node. No
+                 cancel, no new job id. A job waiting in a shared node's own
+                 queue is pulled back: the node is asked to give it back if
+                 it hasn't started it ("pulling": true), then it is placed
+                 again
   k2 compute move <job>... --to <node> [--json]
                  move a QUEUED job to that node and pin it there (the same
-                 checks as naming the node in run)
+                 checks as naming the node in run); from a shared node's own
+                 queue it is pulled back first, then pinned there
   k2 compute move --all-mine|--workspace-all [--tag T] [--node N] [--workspace WS] (--auto … | --to <node>)
                  every QUEUED job this session (or the workspace) sent that
                  matches; e.g. move --all-mine --node linux-1 --auto.

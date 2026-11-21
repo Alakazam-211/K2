@@ -50,5 +50,8 @@ crates/k2-node/src/toolchain.rs :: root.join(".k2/compute.toml") :: a repo's com
 crates/k2-daemon/src/v1_capabilities.rs :: workspace.join(".k2").join("caps") :: debt: capability token staging; sign-off area
 crates/k2-daemon/src/v1_capabilities.rs :: fs::set_permissions(workspace.join(".k2") :: debt: capability token staging; sign-off area
 
+# ── The Rust CLI copying a shell lookup that names both folder names in order.
+crates/k5-cli/src/families/agent/hire/plan.rs :: for dot in [".k2", ".k2so"] :: parity: agent hire's persona walk, as cli/src/agent.sh's Python (`for dot in (".k2", ".k2so")`) tries ROLE.md and AGENT.md, never .k5
+
 # ── Test-only module included by #[path] under #[cfg(test)].
 crates/k2-daemon/src/apps/db_connect_real_pg.rs :: ws_dir.join(".k2/db/migrations :: test-only module (#[cfg(test)] #[path] from db_connect.rs): a fixture workspace's layout

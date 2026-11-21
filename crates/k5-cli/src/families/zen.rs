@@ -238,16 +238,10 @@ pub fn temp_fails(folder: bool, name: &str, line: &str) -> Option<crate::familie
 /// `_zen_dir_call`'s and the shot's line when `mktemp` fails.
 pub const NO_TEMP_FILE: &str = "Error: can't make a temp file";
 
-/// `_ws_dot_dir ROOT`.
+/// `_ws_dot_dir ROOT`: `.k2` when it is a folder, else `.k2so` when that
+/// is one (or a `.k2` file is in the way), else `.k2`.
 fn dot_dir(root: &str) -> PathBuf {
-    let k2 = Path::new(root).join(".k2");
-    if k2.is_dir() {
-        k2
-    } else if Path::new(root).join(".k2so").is_dir() || k2.exists() {
-        Path::new(root).join(".k2so")
-    } else {
-        k2
-    }
+    crate::home::workspace_dot_dir(root)
 }
 
 /// `_zen_garden_changes_hint WORDS…`: once per workspace, the line about
@@ -276,11 +270,8 @@ pub fn changes_hint(words: &[&str]) {
     }
     // The prelude's `K2_HOME`: `$HOME/.k2`, else `$HOME/.k2so`.
     if let Some(h) = std::env::var_os("HOME").map(PathBuf::from) {
-        let home = if h.join(".k2").is_dir() {
-            h.join(".k2")
-        } else {
-            h.join(".k2so")
-        };
+        let k2 = k2_client::paths::k2_home_in(&h);
+        let home = if k2.is_dir() { k2 } else { h.join(".k2so") };
         if home.is_dir() {
             let same = match (std::fs::canonicalize(&dot), std::fs::canonicalize(&home)) {
                 (Ok(a), Ok(b)) => a == b,

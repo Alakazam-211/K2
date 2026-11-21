@@ -60,7 +60,9 @@
 # older_slice_error for a traceback's dict sliced), and
 # compute_render_oracle.rs for a dict sliced. They meet nul-in-answer in
 # feedback_parity.rs's "a NUL in a string" rows of list and show, through
-# Compare::NulInAnswer. They meet feedback-optin-without-python3 in
+# Compare::NulInAnswer, and nul-in-stdin-text in
+# hostmail_notices_parity.rs's "a NUL on stdin" row, the same way. They
+# meet feedback-optin-without-python3 in
 # help_feedback_optin_parity.rs: every row's run with no python3 prints
 # what the binary prints with one, and its no-python3 test checks the
 # rows that answer otherwise there. They meet env-answer-large in
@@ -194,6 +196,7 @@ EXPECTED_DIFFS=(
     "python-tls-error-text|K2 ruling, K5 lane small6 (connect login)|a TLS handshake to the Connect account server that fails (\`connect login\`'s account calls, the shell's Python urllib): bash prints OpenSSL's reason inside Python's URLError (\"<urlopen error [SSL: WRONG_VERSION_NUMBER] wrong version number (_ssl.c:1000)>\"), the binary its own words (\"<urlopen error [SSL] TLS handshake: ...>\"). The exit code (1), every line before that one and that no byte of the HTTP request was sent are the same"
     "getpass-no-tty-warning|K2 ruling, K5 lane small6 (connect login)|\`connect login\`'s password with no terminal (no /dev/tty to open, stdin a pipe), read from stdin: bash's Python getpass warns with its own file and line, \"<path>/getpass.py:<n>: GetPassWarning: Can not control echo on the terminal.\" (and the source line Python shows under it when it has one); the binary prints one line of its own that says the same, \"Warning: Can not control echo on the terminal.\". Both then print Python's \"Warning: Password input may be echoed.\" and the prompt, read the line from stdin and send the same request; every other line and the exit code are the same"
     "picker-env-size|K2 ruling, K5 lane small6 (connect login)|\`connect login\` with a subdomain list above what one environment variable may hold (128 KiB on Linux; about 1 MiB for the whole environment on macOS): bash's picker gets the list (tunnel tokens taken out) in SUBS_JSON and can't start, \"<path>: line <n>: <python3>: Argument list too long\" on stderr, nothing on stdout, exit 1, after the list request and before anything is asked of the daemon. The binary reads the list itself, picks, claims, binds and starts: \"✓ live at <url>\", exit 0"
+    "nul-in-stdin-text|for K2 to rule (as nul-in-answer), the K5 lane misc3|a NUL byte in the text \`hostmail ooo set <addr> --text -\` or \`hostmail footer set --text -\` reads on stdin: bash's text=\$(_hostmail_read_text -) drops it and, from bash 4.4 on, writes one line on stderr, \"<path to cli/k2>: line <n>: warning: command substitution: ignored null byte in input\"; the binary drops it silently. The request (the text without the NUL), stdout and the exit code are the same (bash 3.2 writes no warning, so there the two are exact)"
     "nul-in-answer|K2 ruling at the 0.46.15 rebase|a NUL byte in the daemon's answer to \`feedback list\` or \`feedback show <id>\`: bash's resp=\$(cli_request ...) drops it and, from bash 4.4 on, writes one line on stderr, \"<path to cli/k2>: line <n>: warning: command substitution: ignored null byte in input\"; the binary drops it silently. stdout, the exit code and the requests are the same (bash 3.2 writes no warning, so there the two are exact)"
     "passport-heal-once|K2 ruling, the doc lane's follow-ups|a doc call that sends a whole file or a tool call (_doc_xfer: \`doc cat\`, \`append\`, \`write\`, \`show --version\`, \`export\`) whose passport the daemon's auth gate refuses (403 and exactly {\"error\":\"Invalid or missing auth token\"}, sent before any handler runs, so nothing was done), in a session whose passport was minted again: bash's _doc_xfer never tries the new passport and the command ends on the refusal (exit 3); the binary sends the same call once more with the new passport and answers it (cli_send_json's one heal, which bash's other doc calls already make). An answer a handler gave that holds those words (a document's text, a conflict) is never sent again by either: one request, the same output"
     "doc-mktemp-wording|K2 ruling, the doc lane's follow-ups|a doc verb that needs a temp folder (_doc_tmp) where TMPDIR can't hold one: the binary words mktemp's line as GNU mktemp does in the C locale (\"mktemp: failed to create directory via template '<TMPDIR>/k2doc.XXXXXX': No such file or directory\"; GNU's in a UTF-8 locale quotes the template with curly quotes); macOS's mktemp words it its own way (\"mktemp: mkdtemp failed on <TMPDIR>/k2doc.XXXXXX: No such file or directory\"; a newer macOS names the folder it tried, the six X filled in). The two lines after it (\"Error: can't make a temp folder\" and the tmp error's JSON), the exit (2) and stdout (nothing) are the same, and neither sends anything. The same holds for \`app exec\` with stdin on a pipe (k2-exec-XXXXXX) and \`hostchat open\` (k2-hostchat-open.XXXXXX) where TMPDIR can't hold the folder: on a newer macOS mktemp's line names the folder it tried, which the binary can't know, so the parity rows (Compare::MktempTried) take mktemp's line as the same when only that random name differs: the same folder and stem before it, one or more of [A-Za-z0-9.] in its place, the same reason after it, the same exit, and every other line byte for byte"
@@ -446,7 +449,8 @@ WIKIBIG = {
 ENVBIG = dict(WIKIBIG)
 ENVBIG["/cli/mail/send"] = b"{\"ok\":true,\"queued\":true,\"id\":\"out_9\"}"
 ENVBIG["/cli/zen/history"] = b"{\"files\":[" + b",".join(b"{\"file\":\"gardens/g%d.toml\",\"snapshots\":[{\"name\":\"snap-%d\",\"at\":\"2026-11-01T10:00:00Z\",\"clean\":true}]}" % (i, i) for i in range(12000)) + b"]}"
-TABLE = {"nul": NUL, "optin": OPTIN, "envbig": ENVBIG}.get(mode, {})
+OOO = {"/cli/mail/ooo": b"{\"ok\":true,\"address\":\"sales@acme.example\"}"}
+TABLE = {"nul": NUL, "optin": OPTIN, "envbig": ENVBIG, "ooo": OOO}.get(mode, {})
 HELPERS = {"vaultrun": "helper", "vaultrun-dir": "dir-helper"}
 if mode in HELPERS:
     TABLE = {"/cli/vault/run-helper": json.dumps({"helper": os.path.join(d, HELPERS[mode]), "tokenFd": True}).encode()}
@@ -512,7 +516,8 @@ stop_stub() {
 
 # run_side <dir> <shell|binary> <words...>: one CLI's run, in <dir>/ws
 # with HOME <dir>/home (the owner token and the stub's port on disk), a
-# fresh TMPDIR, no K2_*/K5_* variable and stdin from /dev/null. <shell>
+# fresh TMPDIR, no K2_*/K5_* variable and stdin from RUN_SIDE_STDIN
+# (default /dev/null). <shell>
 # is the bash to run cli/k2 with. Its stdout goes to <dir>/out, stderr to
 # <dir>/err, the requests to <dir>/log; returns its exit code.
 run_side() {
@@ -522,7 +527,7 @@ run_side() {
     tmp="$(mktemp -d "$d/tmp.XXXXXX")"
     if [ "$side" = binary ]; then set -- "$WORK/bin/k5" "$@"; else set -- "$side" "$ROOT/cli/k2" "$@"; fi
     (cd "$d/ws" && exec env -i PATH="$PATH" HOME="$d/home" TMPDIR="$tmp" "$@") \
-        >"$d/out" 2>"$d/err" </dev/null || rc=$?
+        >"$d/out" 2>"$d/err" <"${RUN_SIDE_STDIN:-/dev/null}" || rc=$?
     return "$rc"
 }
 
@@ -736,6 +741,53 @@ check_nul_in_answer() {
         ! grep -q 'null byte' "$d/err" || problems+=("the binary's $words wrote about the NUL: $(head -c 300 "$d/err")")
     done
     stop_stub
+    if [ ${#problems[@]} -gt 0 ]; then
+        printf '%s\n' "${problems[@]}"
+        return 1
+    fi
+    [ "$warns" = 1 ] && return 0
+    echo "bash on PATH is $ver, which drops a NUL silently as the binary does (the warning came in bash 4.4): the two are exact here, so the difference itself was not proven on this host"
+    return 3
+}
+
+# check_nul_in_stdin_text: both CLIs run `hostmail ooo set
+# sales@acme.example --text -` with text on stdin that holds two NULs,
+# the owner token and port on disk (stub mode ooo). Both exit 0 and send
+# the same one request, its text without the NULs; stdout is the same;
+# bash's stderr is the binary's plus one warning line from bash 4.4 on.
+# With an older bash the two are exact: the check says the difference
+# itself was not proven here, and returns 3.
+check_nul_in_stdin_text() {
+    local d="$WORK/nul-stdin" ver major minor warns=0 rc rr n line problems=()
+    mkdir -p "$d/home/.k2" "$d/ws/.k2"
+    printf 'owner-tok-parity\n' >"$d/home/.k2/heartbeat.token"
+    printf 'Away \000from\000 Acme.\n' >"$d/stdin"
+    ver="$(bash -c 'echo "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}"')"
+    major="${ver%%.*}" minor="${ver#*.}"
+    if [ "$major" -gt 4 ] || { [ "$major" -eq 4 ] && [ "$minor" -ge 4 ]; }; then warns=1; fi
+    start_stub "$d" ooo || { echo "the stub daemon didn't start"; return 1; }
+    printf '%s\n' "$STUB_PORT" >"$d/home/.k2/heartbeat.port"
+    rc=0; RUN_SIDE_STDIN="$d/stdin" run_side "$d" bash hostmail ooo set sales@acme.example --text - || rc=$?
+    cp "$d/out" "$d/out.bash"; cp "$d/err" "$d/err.bash"; cp "$d/log" "$d/log.bash"
+    rr=0; RUN_SIDE_STDIN="$d/stdin" run_side "$d" binary hostmail ooo set sales@acme.example --text - || rr=$?
+    stop_stub
+    [ "$rc" = 0 ] || problems+=("bash exited $rc: $(head -c 300 "$d/err.bash")")
+    [ "$rr" = 0 ] || problems+=("the binary exited $rr: $(head -c 300 "$d/err")")
+    grep -qF 'POST /cli/mail/ooo {"address":"sales@acme.example","text":"Away from Acme."}' "$d/log.bash" \
+        || problems+=("bash's request is not the text without its NULs: $(head -c 300 "$d/log.bash")")
+    [ "$(wc -l <"$d/log.bash" | tr -d ' ')" = 1 ] || problems+=("bash sent, want one request: $(head -c 300 "$d/log.bash")")
+    cmp -s "$d/log.bash" "$d/log" || problems+=("the requests differ: bash '$(head -c 300 "$d/log.bash")', the binary '$(head -c 300 "$d/log")'")
+    cmp -s "$d/out.bash" "$d/out" || problems+=("stdout differs: bash '$(head -c 300 "$d/out.bash")', the binary '$(head -c 300 "$d/out")'")
+    n=0; : >"$d/err.rest"
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            "$ROOT/cli/k2: line "*": warning: command substitution: ignored null byte in input") n=$((n + 1)) ;;
+            *) printf '%s\n' "$line" >>"$d/err.rest" ;;
+        esac
+    done <"$d/err.bash"
+    [ "$n" = "$warns" ] || problems+=("bash $ver wrote $n NUL warning lines, want $warns (bash warns from 4.4 on): $(head -c 300 "$d/err.bash")")
+    cmp -s "$d/err.rest" "$d/err" || problems+=("stderr but bash's NUL warning differs: bash '$(head -c 300 "$d/err.rest")', the binary '$(head -c 300 "$d/err")'")
+    ! grep -q 'null byte' "$d/err" || problems+=("the binary wrote about the NUL: $(head -c 300 "$d/err")")
     if [ ${#problems[@]} -gt 0 ]; then
         printf '%s\n' "${problems[@]}"
         return 1

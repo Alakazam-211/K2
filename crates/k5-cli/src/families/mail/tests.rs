@@ -633,6 +633,46 @@ fn int_is_pythons() {
     );
 }
 
+/// `dumps(body).encode()`: a body that is UTF-8 is its bytes; a lone
+/// surrogate (a byte of stdin that is not UTF-8) is Python's refusal,
+/// placed by code points in the dumped text, a run of them as a range.
+#[test]
+fn encode_body_refuses_a_lone_surrogate_as_python_does() {
+    use super::core::{encode_body, obj};
+    use crate::confirm::text_of_bytes;
+    fn body(text: &[u8]) -> crate::out::json::Value {
+        obj(vec![
+            ("address", super::py::sv("a@x")),
+            ("text", text_of_bytes(text)),
+        ])
+    }
+    assert_eq!(
+        encode_body(&body("Away é now".as_bytes())),
+        Ok(r#"{"address":"a@x","text":"Away é now"}"#.as_bytes().to_vec())
+    );
+    let refused = |at: &str| {
+        Err(format!(
+            "UnicodeEncodeError: 'utf-8' codec can't encode {at}: surrogates not allowed"
+        ))
+    };
+    assert_eq!(
+        encode_body(&body(b"Away \xff now")),
+        refused("character '\\udcff' in position 30")
+    );
+    assert_eq!(
+        encode_body(&body(b"Away \xff\xfe")),
+        refused("characters in position 30-31")
+    );
+    assert_eq!(
+        encode_body(&body(b"a\nb\xe2\x82 \x80")),
+        refused("characters in position 29-30")
+    );
+    assert_eq!(
+        encode_body(&body(b"\xc3\xa9\x80")),
+        refused("character '\\udc80' in position 26")
+    );
+}
+
 /// `_mail_py`'s script as python3 compiles it: line 1 is the one after
 /// the command line that feeds the heredoc.
 fn mail_py_script() -> Vec<String> {
@@ -673,6 +713,10 @@ fn the_lines_that_raise_are_the_shell_s() {
         ),
         (super::core::line::DIE_CAP, "if err.get(k):"),
         (super::core::line::REQUEST_FLOAT, "timeout = float(env_t)"),
+        (
+            super::core::line::REQUEST_DATA,
+            "data = dumps(body).encode() if body is not None el",
+        ),
         (
             super::core::line::REQUEST_READ,
             "raw = e.read().decode(\"utf-8\", \"replace\")",

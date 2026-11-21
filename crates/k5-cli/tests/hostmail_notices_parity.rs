@@ -7,7 +7,8 @@
 //! - ooo set (the text itself, from a file with its trailing newlines
 //!   dropped, days, until), unset and show (on with its text, off);
 //!   footer set, unset (with and without a domain) and show.
-//! - `--text -`: the text on stdin, read past the gates; none; twice.
+//! - `--text -`: the text on stdin, read past the gates; none; twice;
+//!   not UTF-8 (the shell's raise); a NUL (`nul-in-stdin-text`).
 //! - A refusal, an answer the Python raises on, and no answer.
 //! - Help never acts.
 
@@ -338,6 +339,57 @@ fn hostmail_notices_answer_as_the_shell_does() {
             owner_and_port,
             1,
             1,
+        ),
+    ];
+    for c in &v {
+        rig.check(c);
+    }
+}
+
+/// `--text -` with bytes that are not plain text. Not UTF-8: Python
+/// holds each bad byte as its surrogate escape and `dumps(body).encode()`
+/// raises, nothing sent (one byte; a run of them, named as a range). A
+/// NUL: dropped by both, and from bash 4.4 bash warns on stderr naming
+/// its own line, the named difference `nul-in-stdin-text`
+/// (`scripts/cli-parity.sh`).
+#[test]
+fn text_on_stdin_that_is_not_plain() {
+    let rig = Rig::new(VERB, "nstdin");
+    let v = vec![
+        Case {
+            stdin: Some(b"Away \xff now.\n"),
+            ..case(
+                "ooo set, stdin not UTF-8: the shell's raise, nothing sent",
+                &["ooo", "set", "sales@acme.example", "--text", "-"],
+                &[],
+                vec![],
+                owner_and_port,
+                1,
+                0,
+            )
+        },
+        Case {
+            stdin: Some(b"\xe2\x82 Sent by Acme \xff\xfe\n"),
+            ..case(
+                "footer set, stdin with a run of bad bytes: the range",
+                &["footer", "set", "--text", "-", "--json"],
+                &[],
+                vec![],
+                owner_and_port,
+                1,
+                0,
+            )
+        },
+        compare(
+            Compare::NulInAnswer,
+            Case {
+                stdin: Some(b"Away \x00from\x00 Acme.\n\x00\n"),
+                ..ok_case(
+                    "ooo set, a NUL on stdin: dropped",
+                    &["ooo", "set", "sales@acme.example", "--text", "-"],
+                    r#"{"ok":true,"address":"sales@acme.example"}"#,
+                )
+            },
         ),
     ];
     for c in &v {

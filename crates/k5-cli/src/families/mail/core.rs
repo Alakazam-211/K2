@@ -48,6 +48,7 @@ use crate::prelude;
 use crate::python;
 use crate::transport::urllib::{self, Kind, Method, Opener, Outcome, Request};
 use k2_client::{cli_name, product_name};
+use std::collections::HashSet;
 use std::ffi::OsString;
 use std::path::Path;
 use std::time::Duration;
@@ -84,6 +85,7 @@ pub mod line {
     pub const DIE_CONCAT: u32 = 31;
     pub const DIE_CAP: u32 = 36;
     pub const REQUEST_FLOAT: u32 = 97;
+    pub const REQUEST_DATA: u32 = 100;
     pub const REQUEST_READ: u32 = 116;
     pub const CALL_REQUEST: u32 = 155;
     pub const CALL_TIMEOUT: u32 = 158;
@@ -301,6 +303,103 @@ pub fn dumps(v: &Value) -> String {
         )
         .unwrap_or_default()
     })
+}
+
+/// `dumps(body).encode()` (`request`'s `data`): the bytes; or, where a
+/// string holds a lone surrogate (text on stdin that is not UTF-8, held
+/// as Python's `surrogateescape` holds it), the exception's line, as
+/// Python words UTF-8's refusal: the first run of surrogates, by its
+/// place in the dumped text.
+pub fn encode_body(v: &Value) -> Result<Vec<u8>, String> {
+    let opts = Options {
+        compact: true,
+        ensure_ascii: false,
+        indent: None,
+        sort_keys: false,
+    };
+    if let Ok(s) = json::to_string(v, &opts) {
+        return Ok(s.into_bytes());
+    }
+    // Each lone surrogate stands as one code point no string holds, so
+    // its place in the dump is the surrogate's.
+    let mut held = HashSet::new();
+    let mut lone = Vec::new();
+    code_points_of(v, &mut held, &mut lone);
+    // A text that holds every other code point can't be sent anyway.
+    let marker = (0xE000..=0x10FFFF)
+        .rev()
+        .filter(|c| !held.contains(c))
+        .find_map(char::from_u32)
+        .unwrap_or('\u{10FFFF}');
+    let text = json::to_string(&marked(v, marker), &opts).unwrap_or_default();
+    let chars: Vec<char> = text.chars().collect();
+    let at = chars.iter().position(|c| *c == marker).unwrap_or(0);
+    let run = chars[at..].iter().take_while(|c| **c == marker).count();
+    Err(if run <= 1 {
+        format!(
+            "UnicodeEncodeError: 'utf-8' codec can't encode character '\\u{:04x}' in position {at}: surrogates not allowed",
+            lone.first().copied().unwrap_or(0xDC80)
+        )
+    } else {
+        format!(
+            "UnicodeEncodeError: 'utf-8' codec can't encode characters in position {at}-{}: surrogates not allowed",
+            at + run - 1
+        )
+    })
+}
+
+fn is_surrogate(c: u32) -> bool {
+    (0xD800..=0xDFFF).contains(&c)
+}
+
+/// Every code point the strings hold, and the lone surrogates in the
+/// order the dump writes them.
+fn code_points_of(v: &Value, held: &mut HashSet<u32>, lone: &mut Vec<u32>) {
+    fn text(t: &Text, held: &mut HashSet<u32>, lone: &mut Vec<u32>) {
+        for c in t.code_points() {
+            held.insert(c);
+            if is_surrogate(c) {
+                lone.push(c);
+            }
+        }
+    }
+    match v {
+        Value::Str(t) => text(t, held, lone),
+        Value::Array(items) => {
+            for item in items {
+                code_points_of(item, held, lone);
+            }
+        }
+        Value::Object(pairs) => {
+            for (k, item) in pairs {
+                text(k, held, lone);
+                code_points_of(item, held, lone);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// `v` with each lone surrogate as `marker`.
+fn marked(v: &Value, marker: char) -> Value {
+    let text = |t: &Text| -> Text {
+        t.code_points()
+            .into_iter()
+            .map(|c| char::from_u32(c).unwrap_or(marker))
+            .collect::<String>()
+            .into()
+    };
+    match v {
+        Value::Str(t) => Value::Str(text(t)),
+        Value::Array(items) => Value::Array(items.iter().map(|i| marked(i, marker)).collect()),
+        Value::Object(pairs) => Value::Object(
+            pairs
+                .iter()
+                .map(|(k, item)| (text(k), marked(item, marker)))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
 }
 
 /// A dict of these pairs.
@@ -663,12 +762,20 @@ impl Py {
                 }))
             }
         };
+        let data = match body.map(encode_body).transpose() {
+            Ok(d) => d,
+            Err(exception) => {
+                return Err(End::Raise(Tb {
+                    frames: vec![(line::REQUEST_DATA, "request")],
+                    exception,
+                }))
+            }
+        };
         let Some(dur) = socket_timeout(timeout.as_f64()) else {
             return Ok(None);
         };
         let mut req = Request::new(method, route, dur).query(params.to_vec());
-        if let Some(b) = body {
-            let data = dumps(b).into_bytes();
+        if let Some(data) = data {
             req = req.data(data.clone());
             if !data.is_empty() {
                 req = req.header("Content-Type", "application/json");

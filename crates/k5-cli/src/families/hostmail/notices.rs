@@ -10,11 +10,13 @@
 //! binary hands to the shell an `@<path>` file that holds a NUL, is not
 //! UTF-8 or can't be read, and a `--days` past bash's 64-bit integers.
 //!
-//! Where this differs from the shell: text on stdin with a NUL (bash drops
-//! it and warns on stderr, naming its own line; this drops it quietly),
-//! or bytes that are not UTF-8 (Python's environment reads each as
-//! `surrogateescape`, sent as `\udcXX`; this sends U+FFFD). Once stdin is
-//! read the line can't be handed on.
+//! Text on stdin that is not UTF-8 is held as Python's environment holds
+//! it (each bad byte its surrogate escape), so the request's
+//! `dumps(body).encode()` raises as the shell's does, nothing sent. Where
+//! this differs from the shell: text on stdin with a NUL (bash drops it
+//! and, from bash 4.4, warns on stderr naming its own line; this drops it
+//! quietly: `scripts/cli-parity.sh`'s named difference
+//! `nul-in-stdin-text`). Once stdin is read the line can't be handed on.
 
 use super::words::{scan, wants_help, Spec};
 use crate::families::mail::core::{self, run_env, usage, At, Plan, Py, MODULE, R};
@@ -99,16 +101,17 @@ impl Texts {
     }
 }
 
-/// `M_TEXT`: the text, read from stdin now where it was `--text -`
-/// (`$(cat)`: NULs and trailing newlines dropped).
-fn text(py_: &mut Py) -> String {
+/// `env("M_TEXT")`: the text; where it was `--text -`, stdin read now
+/// (`$(cat)`: NULs and trailing newlines dropped), as Python reads those
+/// bytes from its environment: UTF-8, a byte that isn't kept as its
+/// surrogate escape, which `dumps(body).encode()` then refuses
+/// ([`core::encode_body`]).
+fn text(py_: &mut Py) -> Value {
     if py_.env(STDIN) == "1" {
         let all = crate::prompt::read_all_stdin();
-        let t = String::from_utf8_lossy(all.expose()).into_owned();
-        py_.env.set(STDIN, "");
-        py_.env.set("M_TEXT", t);
+        return crate::confirm::text_of_bytes(all.expose());
     }
-    py_.env("M_TEXT").to_string()
+    sv(py_.env("M_TEXT"))
 }
 
 /// `text="$(_hostmail_read_text "$raw")"`: the text, the usage line, or
@@ -392,7 +395,7 @@ fn ooo_get_py(py_: &mut Py) -> R<()> {
 fn ooo_set_py(py_: &mut Py) -> R<()> {
     let mut body = vec![
         ("address", sv(py_.env("M_ADDRESS"))),
-        ("text", sv(&text(py_))),
+        ("text", text(py_)),
     ];
     if !py_.env("M_DAYS").is_empty() {
         let n = p::py_int(&sv(py_.env("M_DAYS"))).at(line::OOO_SET_DAYS, MODULE)?;
@@ -448,7 +451,7 @@ fn footer_get_py(py_: &mut Py) -> R<()> {
 fn footer_change_py(py_: &mut Py, set: bool) -> R<()> {
     let mut body = Vec::new();
     if set {
-        body.push(("text", sv(&text(py_))));
+        body.push(("text", text(py_)));
     }
     if !py_.env("M_DOMAIN").is_empty() {
         body.push(("domain", sv(py_.env("M_DOMAIN"))));

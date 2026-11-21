@@ -857,6 +857,138 @@ fn skin_hands_these_to_the_shell() {
     );
 }
 
+const CHAT: &str = r#"{"username":"bob","scope":"guest","enabled":true,"managedBy":"app","app":"acme","members":3,"maxMembers":null,"principalId":"p-bob","warning":"near the cap"}"#;
+
+/// `user chat` (`_compute_call`) through `skin` (the teaching line first)
+/// and through `app` (none): the read, a change, `--json`, the words'
+/// stops, a refusal, Python raising part way.
+#[test]
+fn user_chat_as_the_shell_does() {
+    for (noun, tag) in [("skin", "chat"), ("app", "appchat")] {
+        let rig = Rig::new(noun, tag);
+        check(
+            &rig,
+            vec![
+                // native: skin user chat
+                // native: app user chat
+                one("user chat: the read", &["user", "chat", "bob"], CHAT, 0),
+                one(
+                    "user chat --app: the read for an App",
+                    &["user", "chat", "bob é", "--app", "acme site"],
+                    r#"{"username":"bob","scope":null,"principalId":"p"}"#,
+                    0,
+                ),
+                one(
+                    "users chat bob none: a change, unchanged, switched off",
+                    &["users", "chat", "bob", "none", "--app", "acme"],
+                    r#"{"username":"bob","scope":"member","enabled":false,"managedBy":"owner","app":"acme","members":2,"maxMembers":10,"changed":false,"principalId":"p"}"#,
+                    0,
+                ),
+                one(
+                    "user chat --json",
+                    &["user", "chat", "--json", "bob", "member"],
+                    CHAT,
+                    0,
+                ),
+                words("user chat: no username", &["user", "chat"], 2),
+                words("user chat: a bad scope", &["user", "chat", "bob", "admin"], 2),
+                words(
+                    "user chat: a third word",
+                    &["user", "chat", "bob", "guest", "x"],
+                    2,
+                ),
+                words("user chat: a flag it doesn't take", &["user", "chat", "bob", "-q"], 2),
+                words("user chat: --app last", &["user", "chat", "bob", "--app"], 1),
+                words(
+                    "user chat: --role with no --app",
+                    &["user", "chat", "bob", "--role", "r"],
+                    2,
+                ),
+                case(
+                    "user chat: a refusal",
+                    &["user", "chat", "bob", "guest"],
+                    &[],
+                    vec![Reply::Answer(
+                        403,
+                        r#"{"error":{"code":"owner_only","hint":"the owner's"}}"#.into(),
+                    )],
+                    owner_and_port,
+                    3,
+                    1,
+                ),
+                traceback(one(
+                    "user chat: a warning that is no string",
+                    &["user", "chat", "bob"],
+                    r#"{"username":"bob","principalId":"p","warning":["x"]}"#,
+                    1,
+                )),
+                traceback(one(
+                    "user chat: an answer that is a list",
+                    &["user", "chat", "bob"],
+                    "[1]",
+                    1,
+                )),
+                case(
+                    "user chat, no daemon: the gate",
+                    &["user", "chat", "bob"],
+                    &[],
+                    vec![],
+                    nothing,
+                    1,
+                    0,
+                ),
+            ],
+        );
+    }
+}
+
+const COPIED_HOST: &str = r#"{"dryRun":false,"added":["ann"],"appInfo":{"handle":"acme-h"},"skippedOtherAppRoleCount":1,"skippedOtherAppRole":["dee"]}"#;
+
+/// `skin grant copy-host` is `cmd_skin`'s arm, the one `app grant
+/// copy-host` runs: the teaching line, then the same requests and lines
+/// (app_guests_parity.rs has the rest of its rows).
+#[test]
+fn skin_grant_copy_host_as_the_shell_does() {
+    let rig = Rig::new(VERB, "copyhost");
+    check(
+        &rig,
+        vec![
+            // native: skin grant copy-host
+            one(
+                "grant copy-host",
+                &["grant", "copy-host", "acme"],
+                COPIED_HOST,
+                0,
+            ),
+            // native: skin grant copyhost
+            one(
+                "grants copyhost --dry-run --json",
+                &["grants", "copyhost", "acme", "--dry-run", "--json"],
+                COPIED_HOST,
+                0,
+            ),
+            words("grant copy-host: no app", &["grant", "copy-host"], 1),
+            words(
+                "grant copy-host: a flag it doesn't take",
+                &["grant", "copy-host", "acme", "-q"],
+                1,
+            ),
+            case(
+                "grant copy-host: held for the owner",
+                &["grant", "copy-host", "acme"],
+                &[],
+                vec![Reply::Answer(
+                    202,
+                    r#"{"status":"held","request":{"id":"r9","summary":"copy-host on acme"},"hint":"The owner decides."}"#.into(),
+                )],
+                owner_and_port,
+                2,
+                1,
+            ),
+        ],
+    );
+}
+
 /// `app` alone and `app --json`: `cmd_app` hands them to `cmd_skin`,
 /// which prints the App family's page through the permission-card
 /// filter, with no teaching line (the family's bare row).

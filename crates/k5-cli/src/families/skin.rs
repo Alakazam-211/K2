@@ -28,10 +28,7 @@
 //! is printed):
 //! - `skin` alone, an unknown verb, and the help forms: `_skin_usage`
 //!   prints the App family's page through `_perm_lines`;
-//! - `user chat` and `role suggest` (`_compute_call`), and `grant
-//!   copy-host` (`_app_rt_post`; `app grant copy-host` is the App
-//!   family's, [`super::app::guests`]); `grant hooks` with `-h` or
-//!   `--help` ([`hooks`] answers the rest);
+//! - `grant hooks` with `-h` or `--help` ([`hooks`] answers the rest);
 //! - test guests (`user add|remove|password … --test`, `_app_test_guest`):
 //!   the shell's fix that takes the password on stdin is not on the line;
 //! - `grant add` and `grant rm` with a passport: `_grant_owner_next_step`
@@ -45,6 +42,7 @@
 
 pub mod hooks;
 pub mod print;
+pub mod user_chat;
 
 use super::curl_port;
 use super::skin_token::{self, py};
@@ -162,6 +160,11 @@ pub enum Ask {
     Usage,
     /// `role suggest [--json]`: `_compute_call GET /cli/skin/roles/suggest`.
     RoleSuggest { json: bool },
+    /// `user chat …` ([`user_chat`]): `_compute_call`.
+    UserChat(user_chat::Ask),
+    /// `grant copy-host <app> [--dry-run] [--json]`: `_app_rt_post`, the
+    /// App family's code (`app grant copy-host` is the same arm).
+    CopyHost(super::app::guests::Ask),
     /// The shell answers it.
     Shell,
 }
@@ -354,7 +357,14 @@ fn user(words: &[&str]) -> Result<Ask, Stop> {
         "invite" => user_invite(rest),
         "reset" => user_reset(rest),
         "password" => user_password(rest),
-        "chat" => Ok(Ask::Shell),
+        "chat" => match user_chat::parse(rest) {
+            Some(Ok(a)) => Ok(Ask::UserChat(a)),
+            Some(Err(stop)) => Err(Stop::err(
+                &stop.line.as_deref().into_iter().collect::<Vec<_>>(),
+                stop.exit,
+            )),
+            None => Ok(Ask::Shell),
+        },
         "unlock" => user_unlock(rest),
         "email" => user_email(rest),
         "full-name" | "fullname" => user_full_name(rest),
@@ -1324,7 +1334,12 @@ fn grant(words: &[&str]) -> Result<Ask, Stop> {
             Some(r) => r.map(Ask::Hooks),
             None => Ok(Ask::Shell),
         },
-        "copy-host" | "copyhost" => Ok(Ask::Shell),
+        "copy-host" | "copyhost" => match super::app::guests::parse_grant(words) {
+            Some(Ok(a)) => Ok(Ask::CopyHost(a)),
+            Some(Err(stop)) if stop.line.is_empty() => Err(Stop::err(&[], stop.exit)),
+            Some(Err(stop)) => Err(Stop::err(&[&stop.line], stop.exit)),
+            None => Ok(Ask::Shell),
+        },
         "--help" | "-h" => Err(Stop::err(&[GRANT_USAGE], Exit::Ok)),
         _ => Err(Stop::err(&[GRANT_USAGE], Exit::Error)),
     }
@@ -1860,8 +1875,44 @@ fn run_with(
             cp_closing.flush(&mut client, exit);
             return finish(&mut client, closing, exit);
         }
+        Ask::UserChat(a) => {
+            let ctx = app_ctx(client, args, &settings);
+            return app_run(ctx, closing, |ctx| user_chat::run(ctx, &a));
+        }
+        Ask::CopyHost(g) => {
+            let ctx = app_ctx(client, args, &settings);
+            return app_run(ctx, closing, |ctx| super::app::guests::run(ctx, &g));
+        }
         Ask::Shell => unreachable!("handed to the shell before the run"),
     };
+    finish(&mut client, closing, exit)
+}
+
+/// The App family's context for a verb its code answers: `_K2_ARGS_JSON`
+/// from the whole command line.
+fn app_ctx(client: Client, args: &[OsString], settings: &Settings) -> super::app::call::Ctx {
+    let mut ctx = super::app::call::Ctx::new(client, args.iter().any(|a| a == "--json"));
+    ctx.vault_sock = confirm::sock_path(&settings.home);
+    ctx.project = settings.project.clone();
+    ctx
+}
+
+/// Runs `f` in the App family's context, then both EXIT traps' lines.
+fn app_run(
+    mut ctx: super::app::call::Ctx,
+    closing: Closing,
+    f: impl FnOnce(&mut super::app::call::Ctx) -> super::app::Answer,
+) -> Exit {
+    let exit = match f(&mut ctx) {
+        Ok(s) => s.print(),
+        Err(exit) => exit,
+    };
+    let super::app::call::Ctx {
+        mut client,
+        closing: cp_closing,
+        ..
+    } = ctx;
+    cp_closing.flush(&mut client, exit);
     finish(&mut client, closing, exit)
 }
 

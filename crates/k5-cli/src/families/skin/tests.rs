@@ -29,15 +29,33 @@ fn source() -> String {
 #[test]
 fn the_shell_hands_these_on() {
     for w in [
-        &["user", "chat", "bob"] as &[&str],
-        &["user", "add", "bob", "--test"],
+        &["user", "add", "bob", "--test"] as &[&str],
         &["grant", "hooks", "retry", "o1", "-h"],
-        &["grant", "copy-host", "acme"],
         &["front-door", "direct", "--ui-port", "\u{663}"],
     ] {
         assert_eq!(ask(w), Ok(Ask::Shell), "{w:?}");
     }
     assert!(matches!(ask(&["grant", "hooks"]), Ok(Ask::Hooks(_))));
+}
+
+#[test]
+fn user_chat_and_copy_host_are_the_app_code_s() {
+    assert!(matches!(ask(&["user", "chat", "bob"]), Ok(Ask::UserChat(_))));
+    assert!(matches!(ask(&["users", "chat", "bob", "guest"]), Ok(Ask::UserChat(_))));
+    assert!(matches!(ask(&["grant", "copy-host", "acme"]), Ok(Ask::CopyHost(_))));
+    assert!(matches!(ask(&["grant", "copyhost", "acme", "--dry-run"]), Ok(Ask::CopyHost(_))));
+    let stop = |w: &[&str]| ask(w).expect_err("a stop");
+    assert_eq!(stop(&["user", "chat"]).exit, Exit::Usage);
+    assert_eq!(stop(&["user", "chat", "bob", "--app"]).exit, Exit::Error);
+    assert!(stop(&["user", "chat", "bob", "--app"]).stderr.is_empty());
+    assert_eq!(stop(&["grant", "copy-host"]).exit, Exit::Error);
+    // `--role` with no `--app` is the user arm's own stop, first.
+    assert_eq!(
+        stop(&["user", "chat", "bob", "--role", "r"]).stderr,
+        [USER_ROLE_ERR]
+    );
+    assert_eq!(ask(&["user", "chat", "bob", "-h"]), Ok(Ask::Shell));
+    assert_eq!(ask(&["grant", "copy-host", "acme", "--help"]), Ok(Ask::Shell));
 }
 
 #[test]

@@ -26,6 +26,7 @@ mod system_notice;
 mod ask_once;
 mod closed_cards;
 mod secret_delivery;
+mod card_meta;
 use closed_cards::expired_or_not_pending;
 use system_notice::{post_not_taken_notice, post_system_line, refuse_system_notice_param};
 pub(crate) use system_notice::FEATURE_THREAD_SYSTEM_NOTICE;
@@ -2186,14 +2187,8 @@ fn handle_ask(params: &HashMap<String, String>, session_author: &str) -> CliResp
         Ok(o) => (o.options, o.hint),
         Err(e) => return e,
     };
-    // §6.10 (prd-agent-settings-cards-v1): at most 8 options of 80
-    // characters and a 1,000-character prompt.
-    if let Err(e) = overlay::check_ask_caps(&prompt, &options) {
-        return usage(e);
-    }
-    // 0.46.17: the asker's metadata map, checked before anything is stored.
-    let meta = match opt_param(params, "meta").map(|raw| overlay::card_meta::parse_param(&raw)).transpose() {
-        Ok(m) => m.flatten(),
+    let meta = match card_meta::check_ask(params, &prompt, &options) {
+        Ok(m) => m,
         Err(e) => return usage(e),
     };
     let allow_custom = bool_param(params, "allow_custom") || bool_param(params, "allow-custom");
@@ -2260,11 +2255,7 @@ fn handle_ask(params: &HashMap<String, String>, session_author: &str) -> CliResp
             });
             // An `--options` value with commas and no `;` stayed one option.
             if let Some(hint) = options_hint { body["hint"] = serde_json::Value::String(hint); }
-            // The stored map, only when the card has one (no empty field).
-            if let Some(m) = choice.and_then(|c| c.meta.clone()) {
-                body["meta"] = serde_json::Value::Object(m);
-            }
-            CliResponse::ok_json(with_moved_from(body, &resolved))
+            CliResponse::ok_json(with_moved_from(card_meta::with_meta(body, choice), &resolved))
         }
         Err(e) => error_json("400 Bad Request", "usage", e),
     }
@@ -5612,12 +5603,10 @@ fn merge_body(params: &mut HashMap<String, String>, body: &[u8]) {
                 } else if val.is_number() || val.is_boolean() {
                     params.insert(k.clone(), val.to_string());
                 } else if val.is_array() || (val.is_object() && (k == "origin" || k == "context" || k == "inject" || k == "meta")) {
-                    // `origin` (UWB12a) and `context` (thread-context-v1)
-                    // are the object fields a Thread post takes; `inject`
-                    // (`{dst, fmt}`) is how a secret card sends its value
-                    // (prd-secret-card-injection-v1); `meta` is a choice
-                    // card's metadata map (0.46.17). Each rides as its
-                    // JSON text.
+                    // `origin` (UWB12a) and `context` (thread-context-v1) are a Thread
+                    // post's object fields; `inject` (`{dst, fmt}`) is how a secret card
+                    // sends its value (prd-secret-card-injection-v1); `meta` is a choice
+                    // card's metadata map (0.46.17). Each rides as its JSON text.
                     params.insert(k.clone(), val.to_string());
                 }
             }

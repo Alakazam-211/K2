@@ -732,18 +732,22 @@ pub fn bash_heads_as_312(name: &str, heads: &[String]) -> Vec<String> {
             let target = line
                 .strip_prefix("CONNECT ")
                 .and_then(|t| t.strip_suffix(" HTTP/1.0"))
-                .unwrap_or_else(|| panic!("{name}: bash's CONNECT line on python3 before 3.12: {h:?}"));
+                .unwrap_or_else(|| {
+                    panic!("{name}: bash's CONNECT line on python3 before 3.12: {h:?}")
+                });
             // Nothing after the CONNECT line but the proxy's own
             // credential, if any, and the blank line.
             let basic = match rest {
                 "\r\n" => None,
-                _ => Some(rest.strip_suffix("\r\n\r\n").unwrap_or_else(|| {
-                    panic!("{name}: bash's CONNECT head's end: {h:?}")
-                })),
+                _ => Some(
+                    rest.strip_suffix("\r\n\r\n")
+                        .unwrap_or_else(|| panic!("{name}: bash's CONNECT head's end: {h:?}")),
+                ),
             };
             assert!(
-                basic.is_none_or(|b| b.starts_with("Proxy-Authorization: Basic ")
-                    && !b.contains('\n')),
+                basic.is_none_or(
+                    |b| b.starts_with("Proxy-Authorization: Basic ") && !b.contains('\n')
+                ),
                 "{name}: more than the proxy's credential in bash's CONNECT head: {h:?}"
             );
             assert_eq!(

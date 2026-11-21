@@ -251,7 +251,9 @@ pub fn parse(raw: &str) -> Option<Proxy> {
 /// `_splittype`'s scheme, the text before the first `:` with no `/` in
 /// it, followed by `/`; one of a URL scheme's own bytes only.
 pub fn other_scheme(raw: &str) -> Option<String> {
-    let i = raw.find(':').filter(|&i| i > 0 && !raw[..i].contains('/'))?;
+    let i = raw
+        .find(':')
+        .filter(|&i| i > 0 && !raw[..i].contains('/'))?;
     let scheme = raw[..i].to_ascii_lowercase();
     let plain = scheme
         .bytes()

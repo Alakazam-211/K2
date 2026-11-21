@@ -124,12 +124,7 @@ fn open_tcp(t: &Target, via: Option<&Proxy>, timeout: Duration) -> Result<TcpStr
 
 /// One urllib request to `t` (TLS for `https`), through `via` when the
 /// person's proxy carries it: `bytes` written, the answer read.
-pub fn over_tcp(
-    t: &Target,
-    via: Option<&Proxy>,
-    bytes: &[u8],
-    timeout: Duration,
-) -> Sent {
+pub fn over_tcp(t: &Target, via: Option<&Proxy>, bytes: &[u8], timeout: Duration) -> Sent {
     let tcp = match open_tcp(t, via, timeout) {
         Ok(s) => s,
         Err(r) => return raised(r),

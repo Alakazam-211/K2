@@ -490,7 +490,10 @@ mod tests {
         assert_eq!(status_of(&["status", "--json"]), Some(true));
         assert_eq!(status_of(&["status", "x", "--json"]), Some(false));
         // `--json` alone is no verb: the usage, as the shell's `*)` arm.
-        assert!(matches!(ask(&["--json"]), Some(Ask::Life(life::Life::Usage))));
+        assert!(matches!(
+            ask(&["--json"]),
+            Some(Ask::Life(life::Life::Usage))
+        ));
     }
 
     #[test]

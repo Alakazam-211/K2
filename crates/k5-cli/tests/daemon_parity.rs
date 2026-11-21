@@ -298,7 +298,9 @@ fn daemon_status_json_escapes_its_values() {
                 "a PID, an exit code and a ptyd answer with a quote, a backslash and a newline",
                 &["status", "--json"],
                 &[],
-                vec![ok(r#"{"ptyd":"on \"q\" back\\slash\nline two","adopted":2}"#)],
+                vec![ok(
+                    r#"{"ptyd":"on \"q\" back\\slash\nline two","adopted":2}"#,
+                )],
                 odd_pid_files,
                 0,
                 1,

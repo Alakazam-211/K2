@@ -735,7 +735,15 @@ fn store_widget_answers_as_the_shell_does() {
         // (the shell's 1cbdc5ab06: digits only reach its arithmetic).
         case(
             "blob get, a len that names a variable",
-            &["blob", "get", "k2blob:sha256-cc", "--widget", "w", "--out", "got.bin"],
+            &[
+                "blob",
+                "get",
+                "k2blob:sha256-cc",
+                "--widget",
+                "w",
+                "--out",
+                "got.bin",
+            ],
             &[],
             vec![ok(&format!(
                 r#"{{"base64":"{B64}","offset":0,"len":"BASH_VERSINFO","eof":false,"size":22}}"#
@@ -746,7 +754,15 @@ fn store_widget_answers_as_the_shell_does() {
         ),
         case(
             "blob get, a len with a subscript",
-            &["blob", "get", "k2blob:sha256-cc", "--widget", "w", "--out", "got.bin"],
+            &[
+                "blob",
+                "get",
+                "k2blob:sha256-cc",
+                "--widget",
+                "w",
+                "--out",
+                "got.bin",
+            ],
             &[],
             vec![ok(&format!(
                 r#"{{"base64":"{B64}","offset":0,"len":"x[$(true)]","eof":true,"size":22}}"#
@@ -757,7 +773,15 @@ fn store_widget_answers_as_the_shell_does() {
         ),
         case(
             "blob get, a len of 5.0",
-            &["blob", "get", "k2blob:sha256-cc", "--widget", "w", "--out", "got.bin"],
+            &[
+                "blob",
+                "get",
+                "k2blob:sha256-cc",
+                "--widget",
+                "w",
+                "--out",
+                "got.bin",
+            ],
             &[],
             vec![ok(&format!(
                 r#"{{"base64":"{B64}","offset":0,"len":5.0,"eof":true,"size":22}}"#

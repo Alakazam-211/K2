@@ -559,7 +559,10 @@ fn text_after_dashdash_is_sent_as_typed() {
         parse(&["--no-wake", "--json", "--", to, "-x", "--y"]),
         mail("-x --y", false, true)
     );
-    assert_eq!(parse(&[to, "--no-wake", "--", "-x"]), mail("-x", false, false));
+    assert_eq!(
+        parse(&[to, "--no-wake", "--", "-x"]),
+        mail("-x", false, false)
+    );
     assert_eq!(
         parse(&["--", to]),
         Parsed::Stop(format!("{}\n", postal::usage(to)), Exit::Usage)
@@ -572,7 +575,10 @@ fn text_after_dashdash_is_sent_as_typed() {
     // A local address: the last word after `--` is the text.
     match parse(&["--from", "me", "--", "ws", "-x"]) {
         Parsed::Send(m) => {
-            assert_eq!((m.target.as_str(), m.text.as_str(), m.from.as_str()), ("ws", "-x", "me"));
+            assert_eq!(
+                (m.target.as_str(), m.text.as_str(), m.from.as_str()),
+                ("ws", "-x", "me")
+            );
         }
         other => panic!("{other:?}"),
     }

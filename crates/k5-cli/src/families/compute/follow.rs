@@ -325,7 +325,9 @@ fn end(cp: &mut Cp<'_>, f: &Follow, st: &State) -> Exit {
         }
         // A signal that isn't digits is none: 128, as with no signal.
         let sig = if digits(&st.sig) { st.sig.as_str() } else { "" };
-        out::stderr_line(&format!("[{CLI_NAME} compute] killed by signal {sig}{took}"));
+        out::stderr_line(&format!(
+            "[{CLI_NAME} compute] killed by signal {sig}{took}"
+        ));
         return Exit::from_curl((128i64.wrapping_add(arith(sig)) & 255) as i32);
     }
     let reason = if st.reason.is_empty() {
@@ -528,7 +530,16 @@ mod tests {
         for yes in ["0", "9", "0042"] {
             assert!(digits(yes), "{yes}");
         }
-        for no in ["", "-3", "x", "BASH_VERSINFO[$(true)]", " 9", "9 ", "+9", "\u{663}"] {
+        for no in [
+            "",
+            "-3",
+            "x",
+            "BASH_VERSINFO[$(true)]",
+            " 9",
+            "9 ",
+            "+9",
+            "\u{663}",
+        ] {
             assert!(!digits(no), "{no:?}");
         }
     }

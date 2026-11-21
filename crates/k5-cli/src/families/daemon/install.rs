@@ -8,8 +8,8 @@
 //!
 //! 1. `_k2_refuse_if_airgap` (exit 1), then the words: `--version`,
 //!    `--bin-dir` and `--manifest-url` take a value (one as the last word
-//!    is the shell's `shift 2` failing under `set -e`: exit 1, nothing
-//!    printed), `--no-service`, `--dry-run`; any other word is exit 2.
+//!    is `_need_value`'s "Error: <flag> takes a value", exit 2),
+//!    `--no-service`, `--dry-run`; any other word is exit 2.
 //! 2. The manifest's URL (`--manifest-url`, else the release of
 //!    `--version`, else the newest), a version older than
 //!    [`FIRST_U2_VERSION`] refused, the platform from `uname -s` and
@@ -46,8 +46,8 @@ use super::life::{launchd, user_home};
 use super::{capture, linux_unit, on_path, systemctl};
 use crate::daemon::Settings;
 use crate::exit::Exit;
-use crate::offline::Env;
 use crate::families::update;
+use crate::offline::Env;
 use crate::out;
 use k2_client::brand::{
     CLI_NAME as CLI, DAEMON_FEED_URL, PRODUCT_NAME as PRODUCT, RELEASE_DOWNLOAD_BASE,
@@ -102,9 +102,9 @@ pub enum Words {
     Opts(Opts),
     /// A word the loop doesn't take: exit 2.
     Unknown(String),
-    /// A value flag as the last word: `shift 2` fails under `set -e`,
-    /// exit 1 with nothing printed.
-    Dangling,
+    /// A value flag as the last word (`_need_value`): "Error: <flag>
+    /// takes a value", exit 2.
+    Dangling(String),
 }
 
 /// `cmd_daemon_install`'s `while` loop (`-h` and `--help` never get
@@ -117,7 +117,7 @@ pub fn parse(rest: &[String]) -> Words {
         match w {
             "--version" | "--bin-dir" | "--manifest-url" => {
                 let Some(v) = rest.get(i + 1) else {
-                    return Words::Dangling;
+                    return Words::Dangling(w.to_string());
                 };
                 let v = v.clone();
                 match w {
@@ -354,10 +354,7 @@ fn github_get(url: &str, file: &str) -> bool {
     let mut url = OsString::from(url);
     let mut hops = 0;
     loop {
-        let mut args: Vec<&OsStr> = update::CURL_GUARD
-            .iter()
-            .map(|a| OsStr::new(*a))
-            .collect();
+        let mut args: Vec<&OsStr> = update::CURL_GUARD.iter().map(|a| OsStr::new(*a)).collect();
         args.extend(["-fsS", "-o", file].map(OsStr::new));
         args.extend(update::CURL_WRITE_OUT.iter().map(|a| OsStr::new(*a)));
         args.push(url.as_os_str());
@@ -621,7 +618,7 @@ pub fn run(s: &Settings, words: &[String]) -> Option<Exit> {
         Words::Unknown(w) => {
             fail!(Exit::Usage; format!("{CLI} daemon install: unknown argument: {w}"))
         }
-        Words::Dangling => return Some(Exit::Error),
+        Words::Dangling(flag) => fail!(Exit::Usage; format!("Error: {flag} takes a value")),
     };
     let home = user_home();
     let version = o
@@ -1030,7 +1027,10 @@ mod tests {
                 ..Opts::default()
             })
         );
-        assert_eq!(w(&["--manifest-url"]), Words::Dangling);
+        assert_eq!(
+            w(&["--manifest-url"]),
+            Words::Dangling("--manifest-url".into())
+        );
         assert_eq!(
             w(&["--bogus", "--version"]),
             Words::Unknown("--bogus".into())

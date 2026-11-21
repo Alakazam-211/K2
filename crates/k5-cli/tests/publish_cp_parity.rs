@@ -601,7 +601,14 @@ fn create_point_and_rm_answer_as_the_shell_does() {
                 "create: --target with nothing after it",
                 &["subdomain", "create", "staging", "--target"],
                 vec![],
-                1,
+                2,
+                0,
+            ),
+            on(
+                "point: --target with nothing after it",
+                &["subdomain", "point", "staging", "--target"],
+                vec![],
+                2,
                 0,
             ),
             on(
@@ -1307,13 +1314,31 @@ fn a_dash_label_and_a_bare_dashdash_are_usage_errors() {
         .map(|a| on("a usage error", a, vec![], 2, 0))
         .collect();
     check_all(&rig, v);
-    // The binary's own words for the two rules.
+}
+
+/// The two rules' lines, the binary's own, the command named by the brand.
+#[test]
+fn the_dash_lines_say_the_brand_s_name() {
+    let rig = Rig::new(VERB, "dashbrand");
     let (out, log) = rig.binary(&on("dash", &["subdomain", "rm", "-x"], vec![], 2, 0), false);
     assert_eq!(out.stderr, "Error: unknown flag '-x'\n");
     assert!(log.is_empty(), "{log:?}");
-    let (out, _) = rig.binary(&on("dashdash", &["subdomain", "claim", "--", "acme"], vec![], 2, 0), false);
+    let (out, log) = rig.binary(
+        &on(
+            "dashdash",
+            &["subdomain", "claim", "--", "acme"],
+            vec![],
+            2,
+            0,
+        ),
+        false,
+    );
     let cli = k2_client::brand::CLI_NAME;
-    assert_eq!(out.stderr, format!("usage: publish takes no '--' ({cli} help publish)\n"));
+    assert_eq!(
+        out.stderr,
+        format!("usage: publish takes no '--' ({cli} help publish)\n")
+    );
+    assert!(log.is_empty(), "{log:?}");
 }
 
 /// The binary's lines name the brand's command and product.

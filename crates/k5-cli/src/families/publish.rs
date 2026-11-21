@@ -1480,7 +1480,11 @@ mod tests {
         // create and point still skip an unknown long flag, and --target
         // takes a dash value.
         assert!(matches!(
-            parse(&["subdomain", "create", "a", "--nope", "--target", "-t"], "/p", None),
+            parse(
+                &["subdomain", "create", "a", "--nope", "--target", "-t"],
+                "/p",
+                None
+            ),
             Act::Connect(cp::Form::Create { .. })
         ));
     }

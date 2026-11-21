@@ -884,7 +884,8 @@ fn claim_help_and_the_words_answer_as_the_shell_does() {
             // covers: publish --json
             on("publish --json: an unknown verb", &["--json"], vec![], 1, 0),
             on("an unknown verb", &["deploy"], vec![], 1, 0),
-            shell(on("subdomain claim -h: the shell's (a bash bug: it claims '-h')", &["subdomain", "claim", "-h"], vec![ok(r#"{"success":true}"#)], 0, 1)),
+            // 0.46.17 (8803c691a0): help anywhere is the help, nothing sent.
+            shell(on("subdomain claim -h: the help", &["subdomain", "claim", "-h"], vec![], 0, 0)),
         ],
     );
 }
@@ -895,7 +896,7 @@ fn claim_help_and_the_words_answer_as_the_shell_does() {
 fn help_never_acts() {
     let rig = Rig::new(VERB, "help");
     let mut v = Vec::new();
-    let lines: [&'static [&'static str]; 12] = [
+    let lines: [&'static [&'static str]; 15] = [
         &["run", "web", "--cmd", "x", "--port", "1", "-h"],
         &["run", "--help"],
         &["start", "web", "--help"],
@@ -906,45 +907,16 @@ fn help_never_acts() {
         &["open", "web", "-h"],
         &["sessions", "web", "--revoke-all", "--help"],
         &["subdomain", "claim", "--help"],
+        &["subdomain", "claim", "acme", "-h"],
+        &["subdomain", "unclaim", "acme", "--help"],
+        &["subdomain", "claim", "--transfer", "acme", "-h"],
         &["-h"],
         &["--help"],
     ];
     for args in lines {
         v.push(shell(on("help", args, vec![], 0, 0)));
     }
-    for c in &mut v {
-        if c.args.first() == Some(&"subdomain") {
-            // `--help` is an unknown flag to claim: exit 2, nothing sent.
-            c.code = 2;
-        }
-    }
     check_all(&rig, v);
-}
-
-/// `claim <label> -h` makes the claim: a bash bug (help must never act),
-/// checked on bash alone so it flips when bash's fix lands.
-#[test]
-fn claim_takes_help_as_its_label_bash_bug() {
-    let rig = Rig::new(VERB, "claimbug");
-    let c = on(
-        "claim acme -h",
-        &["subdomain", "claim", "acme", "-h"],
-        vec![ok(r#"{"success":true,"projectId":"p1"}"#)],
-        0,
-        1,
-    );
-    rig.prepare(Side::Bash, &c);
-    let bash = rig.run(true, &c);
-    assert_eq!(bash.code, Some(0), "{bash:?}");
-    assert_eq!(
-        bash.stdout,
-        "Claimed acme for this workspace (project p1).\n"
-    );
-    assert_eq!(
-        rig.read(Side::Bash, false, c.name).len(),
-        1,
-        "bash claimed it"
-    );
 }
 
 /// The binary's lines name the brand's command and product.

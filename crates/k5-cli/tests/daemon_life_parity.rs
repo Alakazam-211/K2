@@ -1775,7 +1775,14 @@ fn daemon_help_lines_never_act() {
         ),
     ];
     for c in rows {
-        let page = matches!(c.name, "stop -h" | "restart -h");
+        // A line the front prints a page for is the binary's; any other
+        // goes to the shell.
+        let mut line = vec![std::ffi::OsString::from(VERB)];
+        line.extend(c.args.iter().map(std::ffi::OsString::from));
+        let page = matches!(
+            k5_cli::front::route(&line),
+            k5_cli::front::Route::Help(_)
+        );
         check(&r, &c, &[], page);
     }
 }
@@ -2851,7 +2858,7 @@ fn daemon_install_refusals_and_dry_runs_answer_as_the_shell_does() {
                 &[],
                 vec![],
                 fx_latest,
-                1,
+                2,
                 0,
             ),
             vec![],

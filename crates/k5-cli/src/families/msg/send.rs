@@ -358,7 +358,7 @@ pub fn parse(words: &[&str]) -> Parsed {
                 let mut args = words[..i].to_vec();
                 args.push("--");
                 args.extend_from_slice(&words[i + 2..]);
-                return mail(*to, args);
+                return mail(to, args);
             }
             break;
         }
@@ -366,7 +366,7 @@ pub fn parse(words: &[&str]) -> Parsed {
             if is_postal(w) {
                 let mut args = words[..i].to_vec();
                 args.extend_from_slice(&words[i + 1..]);
-                return mail(*w, args);
+                return mail(w, args);
             }
             break;
         }
@@ -376,7 +376,11 @@ pub fn parse(words: &[&str]) -> Parsed {
     let has = |f: &str| before.contains(&f);
     // A tray or signal line with a `--` in it is the shell's.
     let dashdash = before.len() < words.len();
-    if dashdash && ["--signal", "--inbox", "--inbox-silent", "--inbox-wake"].iter().any(|f| has(*f)) {
+    if dashdash
+        && ["--signal", "--inbox", "--inbox-silent", "--inbox-wake"]
+            .iter()
+            .any(|f| has(f))
+    {
         return Parsed::Shell;
     }
     if has("--signal") {

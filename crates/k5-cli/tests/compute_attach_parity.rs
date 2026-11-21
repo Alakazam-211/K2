@@ -362,7 +362,12 @@ fn compute_follow_reads_only_digits() {
         ),
         follow(
             "a signal that names a variable",
-            vec![logs("", true, job(r#""BASH_VERSINFO""#, "1000", "1125"), "{}")],
+            vec![logs(
+                "",
+                true,
+                job(r#""BASH_VERSINFO""#, "1000", "1125"),
+                "{}",
+            )],
             128,
         ),
         follow(

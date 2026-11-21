@@ -122,11 +122,16 @@ pub fn parse_subdomain(rest: &[&str]) -> Act {
                 let w = words[i];
                 match w {
                     "--target" => {
-                        // `target="${2:-}"; shift 2`: with no word after it,
-                        // `shift 2` fails and `set -e` ends the command.
+                        // `_need_value "$@"`: the flag as the last word is a
+                        // usage error, exit 2, nothing sent.
                         match words.get(i + 1) {
                             Some(t) => target = (*t).to_string(),
-                            None => return Act::Lines(String::new(), Exit::Error),
+                            None => {
+                                return Act::Lines(
+                                    "Error: --target takes a value\n".to_string(),
+                                    Exit::Usage,
+                                )
+                            }
                         }
                         i += 2;
                         continue;

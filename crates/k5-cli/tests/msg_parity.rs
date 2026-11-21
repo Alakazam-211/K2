@@ -343,7 +343,14 @@ fn msg_sends_as_the_shell_does() {
         ),
         plain(
             "Postal mail, --no-wake --json, then -- and the text",
-            &["--no-wake", "--json", "--", "a::abc.postal.bot", "-x", "--y"],
+            &[
+                "--no-wake",
+                "--json",
+                "--",
+                "a::abc.postal.bot",
+                "-x",
+                "--y",
+            ],
             vec![ok(POSTAL_SENT)],
             0,
             1,
@@ -355,7 +362,13 @@ fn msg_sends_as_the_shell_does() {
             0,
             1,
         ),
-        plain("Postal mail after --, no text", &["--", "a::abc.postal.bot"], vec![], 2, 0),
+        plain(
+            "Postal mail after --, no text",
+            &["--", "a::abc.postal.bot"],
+            vec![],
+            2,
+            0,
+        ),
         plain(
             "Postal mail, --from first, the text after --",
             &["--from", "me", "a::abc.postal.bot", "--", "-x"],

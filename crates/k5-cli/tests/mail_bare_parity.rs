@@ -107,3 +107,20 @@ fn mail_with_no_verb_as_the_shell_does() {
         answered_here(&rig, &c);
     }
 }
+
+#[test]
+fn the_unknown_command_line_says_the_brand_s_name() {
+    let rig = Rig::new(VERB, "brand");
+    let cli = k2_client::brand::CLI_NAME;
+    let c = case("brand", &["--json"], &[], vec![], owner_and_port, 2, 0);
+    let (out, log) = rig.binary(&c, false);
+    assert!(
+        out.stderr
+            .contains(&format!("unknown command '--json' \u{2014} see {cli} mail --help")),
+        "{}",
+        out.stderr
+    );
+    assert_eq!(out.stdout, "");
+    assert_eq!(out.code, Some(2));
+    assert!(log.is_empty(), "nothing sent: {log:?}");
+}

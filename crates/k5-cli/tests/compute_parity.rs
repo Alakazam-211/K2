@@ -961,3 +961,18 @@ fn the_pull_line_says_the_brand_s_name() {
     assert_eq!(out.code, Some(0));
     assert_eq!(log.len(), 1, "one GET, nothing else sent: {log:?}");
 }
+
+#[test]
+fn the_unknown_verb_line_says_the_brand_s_name() {
+    let rig = Rig::new(VERB, "unknownbrand");
+    let cli = k2_client::brand::CLI_NAME;
+    let c = usage_case("brand", &["packages"]);
+    let (out, log) = rig.binary(&c, false);
+    assert_eq!(
+        out.stderr,
+        format!("usage: unknown compute verb 'packages' ({cli} compute --help)\n")
+    );
+    assert_eq!(out.stdout, "");
+    assert_eq!(out.code, Some(2));
+    assert!(log.is_empty(), "nothing sent: {log:?}");
+}

@@ -399,7 +399,7 @@ pub(crate) fn privilege_sync_sql(db_name: &str, extra_grants: &[SyncGrant]) -> S
              EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I REVOKE ALL ON SEQUENCES FROM %I', {mig_lit}, sch, {role_lit});\n"
         ));
     }
-    let fence = crate::sql_k2_tables::fence_sql(&format!("{db_name}_agent")); let mut after = String::new();
+    let keep: Vec<String> = broad.iter().map(|(r, _)| r.clone()).chain(listed.iter().map(|(g, _)| g.role.clone())).collect(); let mut after = String::new();
     for (grant, write) in &listed {
         let role_lit = pg_quote_literal(&grant.role);
         let mut schemas: Vec<&str> = Vec::new();
@@ -453,7 +453,7 @@ pub(crate) fn privilege_sync_sql(db_name: &str, extra_grants: &[SyncGrant]) -> S
            END LOOP;\n\
          {after}\
          END\n\
-         $k2priv$;\n{fence}"
+         $k2priv$;\n{}\n{}", crate::sql_k2_tables::fence_sql(&format!("{db_name}_agent")), crate::sql_stale_sweep::sweep_sql(db_name, &keep)
     )
 }
 
@@ -489,7 +489,7 @@ fn apply_privilege_sync(
 ) -> Result<(), OpsError> {
     let sql = privilege_sync_sql(&row.name, grants);
     let (user, pw) = migrator_creds(secrets, row)?;
-    exec_as(ops, &row.name, &user, &pw, &sql)?;
+    crate::sql_stale_sweep::log_swept(&row.name, &exec_as(ops, &row.name, &user, &pw, &sql)?);
     Ok(())
 }
 
@@ -637,9 +637,9 @@ fn count_active(conn: &rusqlite::Connection, project_id: &str) -> u32 {
     .max(0) as u32
 }
 
-struct DbRow {
-    id: String,
-    name: String,
+pub(crate) struct DbRow {
+    pub(crate) id: String,
+    pub(crate) name: String,
     project_id: String,
     agent_secret_ref: Option<String>,
     migrator_secret_ref: Option<String>,
@@ -1623,7 +1623,7 @@ fn owner_agent_password(secrets: &dyn SecretStore, row: &DbRow) -> Result<String
         .ok_or_else(|| OpsError::Engine("agent secret missing from vault".into()))
 }
 
-fn migrator_creds(secrets: &dyn SecretStore, row: &DbRow) -> Result<(String, String), OpsError> {
+pub(crate) fn migrator_creds(secrets: &dyn SecretStore, row: &DbRow) -> Result<(String, String), OpsError> {
     let sref = row
         .migrator_secret_ref
         .as_deref()
@@ -1635,7 +1635,7 @@ fn migrator_creds(secrets: &dyn SecretStore, row: &DbRow) -> Result<(String, Str
     Ok((format!("{}_migrator", row.name), pw))
 }
 
-fn exec_as(
+pub(crate) fn exec_as(
     ops: &dyn SystemOps,
     db: &str,
     user: &str,
@@ -3398,7 +3398,7 @@ fn relations_for(
     Ok(out)
 }
 
-fn sync_grants_for(
+pub(crate) fn sync_grants_for(
     conn: &rusqlite::Connection,
     database_id: &str,
 ) -> Result<Vec<SyncGrant>, OpsError> {
@@ -4536,7 +4536,7 @@ mod tests;
 
 // ── `k2 db upgrade` (S5): what the move needs from K2's records ─────────
 
-fn active_row_by_name(db_name: &str) -> Result<DbRow, OpsError> {
+pub(crate) fn active_row_by_name(db_name: &str) -> Result<DbRow, OpsError> {
     let db = k2_core::db::shared();
     let conn = db.lock();
     conn.query_row(

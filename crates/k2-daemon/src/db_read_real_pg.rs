@@ -265,6 +265,55 @@ fn real_pg_read_grant_reads_and_never_writes() {
     let hist_rows = srv.su("rdr_main", "select count(*) from public._k2_migrations");
     check("the history is unchanged", hist_rows == "1", &hist_rows, &mut fails);
 
+    // ── Rights an older K2 left (≤0.41.5 grant, then a revoke that never
+    // reached public), cleared by the first start's sweep. A hand-made role
+    // keeps what its owner gave it; the current grantee keeps its read.
+    let tag = &uuid::Uuid::new_v4().simple().to_string()[..6];
+    let old = format!("ws_rdrold{tag}_agent");
+    let hand = format!("reporting_{tag}");
+    let mig = {
+        let row = crate::sql::ops::active_row_by_name("rdr_main").expect("rdr_main");
+        crate::sql::ops::migrator_creds(&secrets, &row).expect("migrator")
+    };
+    srv.su("postgres", &format!("CREATE ROLE \"{old}\" LOGIN PASSWORD 'old-pw-1'; CREATE ROLE \"{hand}\" LOGIN PASSWORD 'hand-pw-1'"));
+    // The 0.41.5 grant script, as K2's superuser ran it.
+    srv.su(
+        "rdr_main",
+        &format!(
+            "GRANT CONNECT ON DATABASE rdr_main TO \"{old}\"; GRANT USAGE ON SCHEMA public TO \"{old}\"; \
+             GRANT SELECT ON ALL TABLES IN SCHEMA public TO \"{old}\"; GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO \"{old}\"; \
+             ALTER DEFAULT PRIVILEGES FOR ROLE \"{m}\" IN SCHEMA public GRANT SELECT ON TABLES TO \"{old}\"; \
+             ALTER DEFAULT PRIVILEGES FOR ROLE \"{m}\" IN SCHEMA public GRANT SELECT ON SEQUENCES TO \"{old}\"; \
+             GRANT SELECT ON public.notes TO \"{hand}\"",
+            m = mig.0
+        ),
+    );
+    // The revoke of 0.41.6 to 0.46.16: CONNECT only (PUBLIC still has it), public untouched.
+    srv.su("postgres", &format!("REVOKE CONNECT ON DATABASE rdr_main FROM \"{old}\""));
+    let made_after = srv.as_role(&mig.0, &mig.1, "rdr_main", "create table later_t (x int); insert into later_t values (1)");
+    check("the migrator makes a table after the revoke", made_after.is_ok(), format!("{made_after:?}"), &mut fails);
+    let leak = srv.as_role(&old, "old-pw-1", "rdr_main", "select count(*) from later_t");
+    check("before the sweep: the old role reads a table made after its revoke (the leak)", leak.as_deref() == Ok("1"), format!("{leak:?}"), &mut fails);
+
+    let lines = crate::sql_stale_sweep::boot_once(srv);
+    let main_line = lines.iter().find(|l| l.starts_with("rdr_main:")).cloned().unwrap_or_default();
+    check("the first start sweeps rdr_main and clears one role", main_line.contains("from 1 role(s)"), format!("{lines:?}"), &mut fails);
+    check("the log names it by hash, never by name", !main_line.contains(&old) && main_line.contains(&crate::sql_stale_sweep::role_hash(&old)), &main_line, &mut fails);
+    for tbl in ["notes", "later_t"] {
+        let r = srv.as_role(&old, "old-pw-1", "rdr_main", &format!("select count(*) from {tbl}"));
+        check(&format!("after the sweep the old role can't read {tbl}"), denied(&r), format!("{r:?}"), &mut fails);
+    }
+    let _ = srv.as_role(&mig.0, &mig.1, "rdr_main", "create table later_still (x int)");
+    let still = srv.as_role(&old, "old-pw-1", "rdr_main", "select count(*) from later_still");
+    check("nor a table made after the sweep (its default privileges are gone)", denied(&still), format!("{still:?}"), &mut fails);
+    let defacl = srv.su("rdr_main", &format!("select count(*) from pg_default_acl d, aclexplode(d.defaclacl) a where a.grantee = '\"{old}\"'::regrole"));
+    check("no default privilege names it", defacl == "0", &defacl, &mut fails);
+    let kept = srv.as_role(&hand, "hand-pw-1", "rdr_main", "select body from notes");
+    check("a hand-made role keeps the SELECT its owner gave it", kept.as_deref() == Ok("hello"), format!("{kept:?}"), &mut fails);
+    let reader_kept = srv.as_role(&t.user, &t.password, "rdr_main", "select body from notes");
+    check("the current grantee still reads", reader_kept.as_deref() == Ok("hello"), format!("{reader_kept:?}"), &mut fails);
+    check("a second start runs nothing (recorded)", crate::sql_stale_sweep::boot_once(srv).is_empty(), "boot_once ran again", &mut fails);
+
     // Exactly the database the card named.
     let other = srv.as_role(&t.user, &t.password, "rdr_other", "select body from notes");
     check("the owner's other database stays closed", denied(&other), format!("{other:?}"), &mut fails);

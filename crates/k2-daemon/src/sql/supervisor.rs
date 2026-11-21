@@ -433,6 +433,13 @@ pub fn spawn_health_loop() {
                         eprintln!("[db] boot seal: {line}");
                     }
                 });
+                // 0.46.17: rights an older K2 left on `public` for
+                // workspaces no longer granted, cleared once per database.
+                let _ = std::panic::catch_unwind(|| {
+                    for line in crate::sql_stale_sweep::boot_once(&RealSystemOps) {
+                        eprintln!("[db] {line}");
+                    }
+                });
             }
         });
 }

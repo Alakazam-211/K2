@@ -177,6 +177,8 @@ pub mod sql;
 pub mod sql_routes;
 // K2's own `_k2_*` tables keep K2's grants only (0.46.17).
 pub(crate) mod sql_k2_tables;
+// Rights an older K2 left on `public` for workspaces no longer granted (0.46.17).
+pub(crate) mod sql_stale_sweep;
 // `k2 db browse` / `k2 db request-read`: another workspace's database, read-only, on a card (0.46.17).
 pub mod db_read_routes;
 pub mod v1_db;

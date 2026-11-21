@@ -1721,7 +1721,15 @@ pub fn handle_revoke(body: &[u8]) -> CliResponse {
         Err(resp) => return resp,
     };
     match ops::revoke_access(ops(), caller_project_id().as_deref(), &b.db, &grantee) {
-        Ok(v) => ok_json(with_app_reach(v)),
+        Ok(v) => {
+            // 0.46.17: and any right an older K2 left for another workspace.
+            match v["name"].as_str().map(|n| crate::sql_stale_sweep::sweep_db(ops(), n)) {
+                Some(Ok(swept)) if !swept.is_empty() => eprintln!("[db] {}", crate::sql_stale_sweep::log_line(v["name"].as_str().unwrap_or(""), &swept)),
+                Some(Err(e)) => k2_core::log_debug!("[db] revoke: the older-version sweep didn't run: {}", e.hint()),
+                _ => {}
+            }
+            ok_json(with_app_reach(v))
+        }
         Err(e) => ops_err(e),
     }
 }

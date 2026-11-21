@@ -102,7 +102,9 @@ enum Cmp {
 
 struct CCase {
     name: &'static str,
-    /// `{remote}` is the side's remote stub (`http://127.0.0.1:<port>`).
+    /// `{remote}` is the side's remote stub (`http://127.0.0.1:<port>`);
+    /// `{remote_big}` the same with the port 65536 past it, which glibc
+    /// would cut back to the stub's.
     args: Vec<&'static str>,
     env: Vec<(&'static str, &'static str)>,
     stdin: Option<&'static [u8]>,
@@ -225,6 +227,7 @@ impl CRig {
     fn mask(&self, side: &Side, text: &str) -> String {
         let mut t = text
             .replace(&side.dir.display().to_string(), "<dir>")
+            .replace(&format!("127.0.0.1:{}", big(side.remote.port)), "<remote+65536>")
             .replace(&format!("127.0.0.1:{}", side.remote.port), "<remote>")
             .replace(&format!("127.0.0.1:{}", side.local.port), "<local>");
         t = t.replace(&format!(":+{}", side.remote_tls.port), ":+<rtls>");
@@ -273,6 +276,10 @@ impl CRig {
         let side = &self.sides[i];
         let fill = |v: &str| {
             v.replace(
+                "{remote_big}",
+                &format!("http://127.0.0.1:{}", big(side.remote.port)),
+            )
+            .replace(
                 "{remote}",
                 &format!("http://127.0.0.1:{}", side.remote.port),
             )
@@ -541,6 +548,11 @@ fn bin() -> PathBuf {
 }
 
 /// `:<port>` (not followed by another digit) as `:<name>`.
+/// `port` + 65536: where a port cut to 16 bits lands back on `port`.
+fn big(port: u16) -> u32 {
+    u32::from(port) + 65536
+}
+
 fn mask_port(t: &str, port: u16, name: &str) -> String {
     let needle = format!(":{port}");
     let mut out = String::new();
@@ -1199,6 +1211,65 @@ fn the_stops_before_anything_is_sent() {
             code: 2,
             ..case("a bare word with no --dest", &["ws1"])
         },
+        // A server port outside 1 to 65535 (`_clone_port_gate`): a usage
+        // line, exit 2, nothing sent. Port + 65536 would reach the remote
+        // stub on Linux if it went out.
+        CCase {
+            code: 2,
+            ..case(
+                "preview --host: a port 65536 past the remote's",
+                &["preview", "ws1", "--host", "{remote_big}", "--token", "t"],
+            )
+        },
+        CCase {
+            code: 2,
+            ..case(
+                "to: a port 65536 past the remote's",
+                &["to", "{remote_big}", "ws1", "--token", "t", "--json"],
+            )
+        },
+        CCase {
+            code: 2,
+            ..case(
+                "from: a port 65536 past the remote's",
+                &["from", "{remote_big}:ws1", "--token", "t"],
+            )
+        },
+        CCase {
+            code: 2,
+            ..case(
+                "preview --host: a bracketed IPv6 address's port",
+                &["preview", "ws1", "--host", "http://[::1]:70000", "--token", "t"],
+            )
+        },
+        CCase {
+            code: 2,
+            ..case(
+                "preview --host: a port in a % escape",
+                &["preview", "ws1", "--host", "https://cp.example.invalid%3A70000", "--token", "t"],
+            )
+        },
+        CCase {
+            code: 2,
+            ..case(
+                "preview --host: a leading zero",
+                &["preview", "ws1", "--host", "https://cp.example.invalid:0443", "--token", "t"],
+            )
+        },
+        CCase {
+            code: 2,
+            ..case(
+                "preview --host: a sign",
+                &["preview", "ws1", "--host", "https://cp.example.invalid:+443", "--token", "t"],
+            )
+        },
+        CCase {
+            code: 2,
+            ..case(
+                "preview --host: port 0",
+                &["preview", "ws1", "--host", "https://cp.example.invalid:0", "--token", "t"],
+            )
+        },
         CCase {
             code: 2,
             ..case("--json alone", &["--json"])
@@ -1451,10 +1522,9 @@ fn clone_remote_urls_as_python_reads_them() {
             )
         },
         CCase {
-            code: 1,
-            cmp: Cmp::Traceback,
+            code: 2,
             ..case(
-                "to: a port that isn't a number",
+                "to: a port that isn't a number is refused as typed",
                 &[
                     "to",
                     "https://cp.example.invalid:abc",

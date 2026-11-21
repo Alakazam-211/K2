@@ -26,9 +26,11 @@
 //!
 //! What the binary refuses instead (K2's ruling R10, a clear usage line,
 //! nothing sent; the shell's Python would try): a byte outside printable
-//! ASCII or a blank anywhere in the URL or the decoded host, an empty
-//! host before a port, and a port `int()` reads that no socket takes
-//! (above 65535, or below 0).
+//! ASCII or a blank anywhere in the URL or the decoded host, and an empty
+//! host before a port. A remote server's port outside 1 to 65535 never
+//! gets here: the shell and the binary refuse it as it is typed
+//! ([`port_text`], `_clone_port_gate`); this server's is the checked
+//! port setting.
 
 /// Where one request goes, as `http.client` connects.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -176,6 +178,38 @@ pub fn target(url: &str) -> Result<Target, Miss> {
     })
 }
 
+/// Python's `str.isspace()` for `str.strip()`: Unicode's white space and
+/// the four separators U+001C to U+001F.
+fn py_space(c: char) -> bool {
+    c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c)
+}
+
+/// The port text the shell's `_clone_port_gate` (`cli/src/clone.sh`)
+/// reads from a server URL: `urllib.request.Request(url).host` (the URL
+/// stripped, cut at its last `#`, the host after `//` up to the first
+/// `/`, `?` or `#`, `%` escapes decoded), then the text after its last
+/// `:` when that comes after its last `]`. Empty: no port, the scheme's
+/// own. The URL always starts with `http://` or `https://` there.
+pub fn port_text(url: &str) -> String {
+    let url = url.trim_matches(py_space);
+    let url = url.rsplit_once('#').map_or(url, |(u, _)| u);
+    let rest = match url.find([':', '/']) {
+        Some(i) if i > 0 && url.as_bytes()[i] == b':' => &url[i + 1..],
+        _ => return String::new(),
+    };
+    let Some(after) = rest.strip_prefix("//") else {
+        return String::new();
+    };
+    let end = after.find(['/', '#', '?']).unwrap_or(after.len());
+    let host = unquote(&after[..end]);
+    let colon = host.rfind(':');
+    let bracket = host.rfind(']');
+    match colon.filter(|i| bracket.is_none_or(|j| *i > j)) {
+        Some(i) => host[i + 1..].to_string(),
+        None => String::new(),
+    }
+}
+
 /// Would any request to `base` be refused by the binary (R10)? Checked
 /// once, before anything is sent: a route the engine adds never makes a
 /// sendable base unsendable.
@@ -269,6 +303,27 @@ mod tests {
         assert_eq!(target("https://h%20x/cli"), Err(Miss::Unsendable));
         assert_eq!(target("https://h\u{e9}.example/cli"), Err(Miss::Unsendable));
         assert!(unsendable("https://h.example:99999"));
+    }
+
+    #[test]
+    fn the_port_text_as_the_shell_s_gate_reads_it() {
+        for (url, want) in [
+            ("http://127.0.0.1:131072", "131072"),
+            ("https://[::1]:70000", "70000"),
+            ("https://[::1]", ""),
+            ("https://[::1]:", ""),
+            ("http://127.0.0.1%3A131072", "131072"),
+            ("https://h:80/x?y#z", "80"),
+            ("https://u@h:9/", "9"),
+            ("https://h#:99999", ""),
+            ("https://h?:99999", ""),
+            ("https://h:+443", "+443"),
+            ("https://h:70000 ", "70000"),
+            ("https://h:0443/#a#b", "0443"),
+            ("https://h", ""),
+        ] {
+            assert_eq!(port_text(url), want, "{url:?}");
+        }
         assert!(!unsendable("https://h.example:abc"));
         assert!(!unsendable("https://h.example/?x#y"));
     }

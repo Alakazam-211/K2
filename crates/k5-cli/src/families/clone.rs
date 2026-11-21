@@ -16,7 +16,9 @@
 //! with its note, the plain-http warning for this server's own side, the
 //! verb's count, the person guard (a passport, or any `HOOK_TOKEN`: exit
 //! 3), the remote URL's rule ([`rule`]: exit 3, nothing looked up or
-//! sent) and the remote token.
+//! sent), its port (`_clone_port_gate`: a number from 1 to 65535 as
+//! urllib reads it, [`pyurl::port_text`], else a usage line, exit 2,
+//! nothing looked up or sent) and the remote token.
 //!
 //! A value flag as the last word is `_need_value`'s line, exit 2, in the
 //! usage stops' place.
@@ -28,14 +30,13 @@
 //! The engine sends every request itself, as its Python does ([`pyurl`]):
 //! this server's `BASE_URL` (plain http, an IPv6 address, or TLS for
 //! `K2_HOST=https://<name>`), the remote URL as typed (a query, a
-//! fragment, a `%` escape, a port that is not a number), and the
-//! person's proxy for an `https://` server that isn't this computer
-//! (the shared CONNECT path, by curl's rules: K2's ruling R4). Refused
-//! instead, nothing sent (R10): a URL with a byte outside printable
-//! ASCII, an empty host, a port no socket takes, and a proxy setting the
-//! binary doesn't read (the named differences clone-url-not-printable,
-//! clone-url-empty-host, clone-url-port-range and clone-proxy-unread in
-//! `scripts/cli-parity.sh`).
+//! fragment, a `%` escape), and the person's proxy for an `https://`
+//! server that isn't this computer (the shared CONNECT path, by curl's
+//! rules: K2's ruling R4). Refused instead, nothing sent (R10): a URL
+//! with a byte outside printable ASCII, an empty host, and a proxy
+//! setting the binary doesn't read (the named differences
+//! clone-url-not-printable, clone-url-empty-host and clone-proxy-unread
+//! in `scripts/cli-parity.sh`).
 
 #[cfg(unix)]
 pub mod engine;
@@ -275,6 +276,11 @@ fn die(code: &str, hint: &str, exit: Exit) -> Exit {
     exit
 }
 
+/// `_clone_port_gate`'s hint for a server URL whose port isn't one.
+pub fn port_refusal(url: &str) -> String {
+    format!("the server's port must be a number from 1 to 65535 (got: {url})")
+}
+
 /// `_clone_remote`'s URL for a host as typed: the URL less one trailing
 /// `/`, or `https://<host>`.
 pub fn remote_url(host: &str) -> String {
@@ -497,6 +503,11 @@ fn clone_remote(
     if let Some(line) = rule::url_refusal(&url, false) {
         out::stderr_line(&line);
         return Err(Exit::Refused);
+    }
+    // `_clone_port_gate`: a port outside 1 to 65535, as urllib reads it.
+    let port = pyurl::port_text(&url);
+    if !port.is_empty() && crate::port::parse(port.as_bytes()).is_none() {
+        return Err(die("usage", &port_refusal(&url), Exit::Usage));
     }
     use crate::transport::remote;
     let tok = if saved {

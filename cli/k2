@@ -28352,15 +28352,18 @@ cmd_sessions_compact() {
     # Filename pattern: archive.NNN.ndjson (NOT archive.ndjson,
     # NOT *.ndjson.gz).
     while IFS= read -r -d '' seg; do
+        # `wc -c <file` is the size on BSD and GNU alike (`stat -f` is
+        # "the file system" to GNU's stat). BSD's pads it with spaces,
+        # which the arithmetic skips.
         local before_size
-        before_size=$(stat -f '%z' "$seg" 2>/dev/null || stat -c '%s' "$seg" 2>/dev/null || echo 0)
+        before_size=$(wc -c <"$seg" 2>/dev/null) || before_size=0
         compacted_bytes_before=$((compacted_bytes_before + before_size))
 
         # `gzip -f` overwrites if a *.gz already exists; we checked
         # above that the .gz form doesn't exist for this segment.
         if gzip -f "$seg"; then
             local after_size
-            after_size=$(stat -f '%z' "$seg.gz" 2>/dev/null || stat -c '%s' "$seg.gz" 2>/dev/null || echo 0)
+            after_size=$(wc -c <"$seg.gz" 2>/dev/null) || after_size=0
             compacted_bytes_after=$((compacted_bytes_after + after_size))
             count=$((count + 1))
         else

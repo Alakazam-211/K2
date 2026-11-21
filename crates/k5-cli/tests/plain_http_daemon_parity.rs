@@ -152,7 +152,11 @@ fn wiki_status_to_a_daemon_on_the_network_warns_once() {
         2,
     ));
     let out = checked(&rig, &c);
-    assert_eq!(out.stderr.matches(&warning("0.0.0.0")).count(), 1, "{out:?}");
+    assert_eq!(
+        out.stderr.matches(&warning("0.0.0.0")).count(),
+        1,
+        "{out:?}"
+    );
 }
 
 /// A password never goes over plain http to another computer: exit 2,

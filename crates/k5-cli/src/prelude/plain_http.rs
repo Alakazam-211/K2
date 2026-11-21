@@ -126,16 +126,21 @@ pub fn refusal_line(base_url: &str) -> String {
 pub fn offline_verb(args: &[OsString]) -> bool {
     let first = args.first().map_or(OsStr::new(""), OsString::as_os_str);
     let local = [
-        "", "study", "help", "--help", "-h", "--schema", "version", "--version",
+        "",
+        "study",
+        "help",
+        "--help",
+        "-h",
+        "--schema",
+        "version",
+        "--version",
     ];
     local.iter().any(|w| first == *w) || args.iter().any(|a| a == "-h" || a == "--help")
 }
 
 /// `--password`, `--password-stdin` or `--password=...`.
 fn password_flag(a: &OsStr) -> bool {
-    a == "--password"
-        || a == "--password-stdin"
-        || a.as_encoded_bytes().starts_with(b"--password=")
+    a == "--password" || a == "--password-stdin" || a.as_encoded_bytes().starts_with(b"--password=")
 }
 
 /// `_k2_daemon_is_plain_remote`: the daemon at `host` is reached over
@@ -230,9 +235,7 @@ mod tests {
         assert!(p.contains(
             "    _envn_into _k2_plain_ok PLAIN_HTTP_OK\n    if [ \"$_k2_plain_ok\" != 1 ] && ! _k2_host_is_tailnet_literal \"$HOST\"; then\n"
         ));
-        assert!(p.contains(
-            "            --password|--password-stdin|--password=*)\n"
-        ));
+        assert!(p.contains("            --password|--password-stdin|--password=*)\n"));
         assert!(p.contains(
             "case \"${1:-}\" in \"\"|study|help|--help|-h|--schema|version|--version) _k2_offline_verb=1 ;; esac\nfor _a in \"$@\"; do case \"$_a\" in -h|--help) _k2_offline_verb=1 ;; esac; done\n"
         ));
@@ -242,8 +245,12 @@ mod tests {
     fn the_step_for_each_command_line() {
         let port = || "4711".to_string();
         let name = k2_client::cli_name!();
-        let warn = |h: &str| Step::Warn(format!("warning: {name} is sending this server's owner token to {h} over plain http, unencrypted. That's fine on a private network such as a tailnet; elsewhere use https."));
-        let refuse = |u: &str| Step::Refuse(format!("Error: a password never goes over plain http:// to another computer; use K2_HOST=https://<name> (got: {u})"));
+        let warn = |h: &str| {
+            Step::Warn(format!("warning: {name} is sending this server's owner token to {h} over plain http, unencrypted. That's fine on a private network such as a tailnet; elsewhere use https."))
+        };
+        let refuse = |u: &str| {
+            Step::Refuse(format!("Error: a password never goes over plain http:// to another computer; use K2_HOST=https://<name> (got: {u})"))
+        };
         let w = words(&["whoami"]);
         assert_eq!(step(&w, "10.0.0.5", false, port), warn("10.0.0.5"));
         assert_eq!(step(&w, "box.example", false, port), warn("box.example"));
@@ -292,18 +299,45 @@ mod tests {
             &["whoami", "--", "--help"],
         ];
         for local in locals {
-            assert_eq!(step(&words(local), "10.0.0.5", false, port), Step::Quiet, "{local:?}");
+            assert_eq!(
+                step(&words(local), "10.0.0.5", false, port),
+                Step::Quiet,
+                "{local:?}"
+            );
         }
         // A password, the switch or not; never asked for this computer.
         for pw in ["--password", "--password-stdin", "--password=x"] {
             let w = words(&["users", "add", "bob", pw]);
-            assert_eq!(step(&w, "10.0.0.5", true, port), refuse("http://10.0.0.5:4711"));
-            assert_eq!(step(&w, "100.64.0.1", false, port), refuse("http://100.64.0.1:4711"));
+            assert_eq!(
+                step(&w, "10.0.0.5", true, port),
+                refuse("http://10.0.0.5:4711")
+            );
+            assert_eq!(
+                step(&w, "100.64.0.1", false, port),
+                refuse("http://100.64.0.1:4711")
+            );
             assert_eq!(step(&w, "127.0.0.1", false, || unreachable!()), Step::Quiet);
-            assert_eq!(step(&w, "https://box", false, || unreachable!()), Step::Quiet);
+            assert_eq!(
+                step(&w, "https://box", false, || unreachable!()),
+                Step::Quiet
+            );
         }
         let w = words(&["users", "add", "bob", "--passwords"]);
         assert_eq!(step(&w, "10.0.0.5", false, port), warn("10.0.0.5"));
+    }
+
+    /// The warning names the command by the brand: "xy" in the
+    /// placeholder build, never a typed k2 or k5.
+    #[test]
+    fn the_lines_say_the_brand_s_name() {
+        let cli = k2_client::brand::CLI_NAME;
+        let line = warning_line("10.0.0.5");
+        assert!(line.starts_with(&format!("warning: {cli} is sending ")), "{line}");
+        if cli != "k2" {
+            for l in [line, refusal_line("http://10.0.0.5:4711")] {
+                assert!(!l.contains("k2 ") && !l.contains("k5 "), "{l}");
+            }
+        }
     }
 
     #[test]

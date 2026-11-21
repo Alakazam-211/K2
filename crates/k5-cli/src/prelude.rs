@@ -8,10 +8,10 @@
 //!
 //! 1. [`gate`]: the virtual desktop's guard (`NO_OWNER_FALLBACK=1` and no
 //!    passport: exit 3), then the connection gate (no port or no token:
-//!    exit 1). Each prints the shell's three lines.
-//! 1b. [`plain_http`]: a daemon on another computer over plain http, one
-//!    warning line (or a password flag refused, exit 2). The binary runs
-//!    it just before the first thing it prints or sends.
+//!    exit 1). Each prints the shell's three lines. Then [`plain_http`]:
+//!    a daemon on another computer over plain http, one warning line (or
+//!    a password flag refused, exit 2). The binary runs it just before
+//!    the first thing it prints or sends.
 //! 2. For a verb the shell's tool policy calls an `id` tool, in a session
 //!    with `HOOK_SOCK` set (`_cli_check_session_passport`,
 //!    `_cli_apply_auth_for_verb`): a passport the daemon no longer knows

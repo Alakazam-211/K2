@@ -478,8 +478,18 @@ mod tests {
             c
         };
         for (host, port, name, header) in [
-            ("https://box.example", 4711, "box.example", "box.example:4711"),
-            ("https://box.example/", 4711, "box.example", "box.example:4711"),
+            (
+                "https://box.example",
+                4711,
+                "box.example",
+                "box.example:4711",
+            ),
+            (
+                "https://box.example/",
+                4711,
+                "box.example",
+                "box.example:4711",
+            ),
             ("HTTPS://localhost", 443, "localhost", "localhost"),
         ] {
             let c = client(host, port);
@@ -493,7 +503,11 @@ mod tests {
             assert_eq!(c.unsendable, None, "{host}");
             assert!(!c.force_tcp, "the cell socket stays the daemon's: {host}");
         }
-        for host in ["https://[fd00::1]", "https://box.example:8443", "https://box/x"] {
+        for host in [
+            "https://[fd00::1]",
+            "https://box.example:8443",
+            "https://box/x",
+        ] {
             let c = client(host, 4711);
             assert!(c.tls, "{host}");
             assert_eq!(

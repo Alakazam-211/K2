@@ -706,7 +706,7 @@ cmd_tunnel() {
             local subdomain=""
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --subdomain) subdomain="$2"; shift 2 ;;
+                    --subdomain) _need_value "$@"; subdomain="$2"; shift 2 ;;
                     *) shift ;;
                 esac
             done
@@ -773,7 +773,7 @@ print("Re-enable with: k2 tunnel enable")
             local subdomain="" auto_start="1"
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --subdomain) subdomain="$2"; shift 2 ;;
+                    --subdomain) _need_value "$@"; subdomain="$2"; shift 2 ;;
                     --no-auto-start) auto_start="0"; shift ;;
                     --auto-start) auto_start="1"; shift ;;
                     *) shift ;;
@@ -811,7 +811,7 @@ elif d.get("autoStart") is False:
             local subdomain="" token="" token_stdin=0 start=""
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --token) token="$2"; shift 2 ;;
+                    --token) _need_value "$@"; token="$2"; shift 2 ;;
                     --token-stdin) token_stdin=1; shift ;;
                     --start) start="true"; shift ;;
                     --no-start) start="false"; shift ;;

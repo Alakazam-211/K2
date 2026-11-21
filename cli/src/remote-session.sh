@@ -153,8 +153,8 @@ cmd_remote_session() {
             local host="" token="" token_stdin=0 json=0
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --host)  host="${2:-}"; shift 2 ;;
-                    --token) token="${2:-}"; shift 2 ;;
+                    --host)  _need_value "$@"; host="${2:-}"; shift 2 ;;
+                    --token) _need_value "$@"; token="${2:-}"; shift 2 ;;
                     --token-stdin) token_stdin=1; shift ;;
                     --json)  json=1; shift ;;
                     --help|-h) cmd_help_remote_session; return 0 ;;
@@ -213,8 +213,8 @@ else:
             local host="" token="" token_stdin=0
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --host)  host="${2:-}"; shift 2 ;;
-                    --token) token="${2:-}"; shift 2 ;;
+                    --host)  _need_value "$@"; host="${2:-}"; shift 2 ;;
+                    --token) _need_value "$@"; token="${2:-}"; shift 2 ;;
                     --token-stdin) token_stdin=1; shift ;;
                     --help|-h) cmd_help_remote_session; return 0 ;;
                     *) echo "Unknown flag: $1" >&2; return 2 ;;
@@ -246,12 +246,12 @@ if killed is not None:
             local host="" token="" token_stdin=0 scope="shell" ttl_raw="30m" label=""
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --host)  host="${2:-}"; shift 2 ;;
-                    --token) token="${2:-}"; shift 2 ;;
+                    --host)  _need_value "$@"; host="${2:-}"; shift 2 ;;
+                    --token) _need_value "$@"; token="${2:-}"; shift 2 ;;
                     --token-stdin) token_stdin=1; shift ;;
-                    --scope) scope="${2:-}"; shift 2 ;;
-                    --ttl)   ttl_raw="${2:-}"; shift 2 ;;
-                    --label) label="${2:-}"; shift 2 ;;
+                    --scope) _need_value "$@"; scope="${2:-}"; shift 2 ;;
+                    --ttl)   _need_value "$@"; ttl_raw="${2:-}"; shift 2 ;;
+                    --label) _need_value "$@"; label="${2:-}"; shift 2 ;;
                     --help|-h) cmd_help_remote_session; return 0 ;;
                     *) echo "Unknown flag: $1" >&2; return 2 ;;
                 esac
@@ -304,8 +304,8 @@ print("Scope: %s" % (g.get("scope") or "shell"))
             local host="" token="" token_stdin=0 json=0
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --host)  host="${2:-}"; shift 2 ;;
-                    --token) token="${2:-}"; shift 2 ;;
+                    --host)  _need_value "$@"; host="${2:-}"; shift 2 ;;
+                    --token) _need_value "$@"; token="${2:-}"; shift 2 ;;
                     --token-stdin) token_stdin=1; shift ;;
                     --json)  json=1; shift ;;
                     --help|-h) cmd_help_remote_session; return 0 ;;
@@ -367,8 +367,8 @@ for r in rows:
             local id="" host="" token="" token_stdin=0
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --host)  host="${2:-}"; shift 2 ;;
-                    --token) token="${2:-}"; shift 2 ;;
+                    --host)  _need_value "$@"; host="${2:-}"; shift 2 ;;
+                    --token) _need_value "$@"; token="${2:-}"; shift 2 ;;
                     --token-stdin) token_stdin=1; shift ;;
                     --help|-h) cmd_help_remote_session; return 0 ;;
                     -*)
@@ -411,10 +411,10 @@ if killed is not None:
             local host="" token="" token_stdin=0 cwd=""
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --host)  host="${2:-}"; shift 2 ;;
-                    --token) token="${2:-}"; shift 2 ;;
+                    --host)  _need_value "$@"; host="${2:-}"; shift 2 ;;
+                    --token) _need_value "$@"; token="${2:-}"; shift 2 ;;
                     --token-stdin) token_stdin=1; shift ;;
-                    --cwd)   cwd="${2:-}"; shift 2 ;;
+                    --cwd)   _need_value "$@"; cwd="${2:-}"; shift 2 ;;
                     --help|-h) cmd_help_remote_session; return 0 ;;
                     *) echo "Unknown flag: $1" >&2; return 2 ;;
                 esac
@@ -454,8 +454,8 @@ print("  k2 remote-session read  %s [--lines 50] --token-stdin" % sid)
             local sid="" text="" host="" token="" token_stdin=0
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --host)  host="${2:-}"; shift 2 ;;
-                    --token) token="${2:-}"; shift 2 ;;
+                    --host)  _need_value "$@"; host="${2:-}"; shift 2 ;;
+                    --token) _need_value "$@"; token="${2:-}"; shift 2 ;;
                     --token-stdin) token_stdin=1; shift ;;
                     --help|-h) cmd_help_remote_session; return 0 ;;
                     -*)
@@ -525,10 +525,10 @@ sys.exit(0 if isinstance(d,dict) and (d.get("ok") is True or "success" in d) els
             local sid="" lines=50 host="" token="" token_stdin=0
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --host)  host="${2:-}"; shift 2 ;;
-                    --token) token="${2:-}"; shift 2 ;;
+                    --host)  _need_value "$@"; host="${2:-}"; shift 2 ;;
+                    --token) _need_value "$@"; token="${2:-}"; shift 2 ;;
                     --token-stdin) token_stdin=1; shift ;;
-                    --lines) lines="${2:-}"; shift 2 ;;
+                    --lines) _need_value "$@"; lines="${2:-}"; shift 2 ;;
                     --help|-h) cmd_help_remote_session; return 0 ;;
                     -*)
                         echo "Unknown flag: $1" >&2; return 2 ;;

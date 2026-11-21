@@ -105,11 +105,11 @@ cmd_fed() {
                     local label="" subdomain="" url=""
                     while [ $# -gt 0 ]; do
                         case "$1" in
-                            --label) label="${2:-}"; shift 2 ;;
+                            --label) _need_value "$@"; label="${2:-}"; shift 2 ;;
                             --label=*) label="${1#--label=}"; shift ;;
-                            --subdomain) subdomain="${2:-}"; shift 2 ;;
+                            --subdomain) _need_value "$@"; subdomain="${2:-}"; shift 2 ;;
                             --subdomain=*) subdomain="${1#--subdomain=}"; shift ;;
-                            --url|--base-url|--baseUrl) url="${2:-}"; shift 2 ;;
+                            --url|--base-url|--baseUrl) _need_value "$@"; url="${2:-}"; shift 2 ;;
                             --url=*|--base-url=*|--baseUrl=*) url="${1#*=}"; shift ;;
                             *) echo "k2 fed pair-start: unknown arg: $1" >&2; exit 2 ;;
                         esac
@@ -196,13 +196,13 @@ else:
             local pubkey_file="" label="" subdomain="" url=""
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --pubkey) pubkey_file="${2:-}"; shift 2 ;;
+                    --pubkey) _need_value "$@"; pubkey_file="${2:-}"; shift 2 ;;
                     --pubkey=*) pubkey_file="${1#--pubkey=}"; shift ;;
-                    --label) label="${2:-}"; shift 2 ;;
+                    --label) _need_value "$@"; label="${2:-}"; shift 2 ;;
                     --label=*) label="${1#--label=}"; shift ;;
-                    --subdomain) subdomain="${2:-}"; shift 2 ;;
+                    --subdomain) _need_value "$@"; subdomain="${2:-}"; shift 2 ;;
                     --subdomain=*) subdomain="${1#--subdomain=}"; shift ;;
-                    --url|--base-url|--baseUrl) url="${2:-}"; shift 2 ;;
+                    --url|--base-url|--baseUrl) _need_value "$@"; url="${2:-}"; shift 2 ;;
                     --url=*|--base-url=*|--baseUrl=*) url="${1#*=}"; shift ;;
                     *) echo "k2 fed pair-request: unknown arg: $1" >&2; exit 2 ;;
                 esac

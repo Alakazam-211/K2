@@ -29,8 +29,7 @@
 //!   a child's environment.
 //!
 //! The binary hands these to the shell ([`parse`] says `None`) before it
-//! prints, reads or sends anything: `log --tail` or `log -n`
-//! as the last word (the shell's own `$2` failure); `restart --host` with a host
+//! prints, reads or sends anything: `restart --host` with a host
 //! that is not an `http://` or `https://` URL the shared remote reader
 //! takes ([`remote::base`]: the shell's curl would read a bare name as
 //! `http://`, a path or a user part as they are); and `restart --host
@@ -85,6 +84,8 @@ pub enum Life {
         tail: String,
         follow: bool,
     },
+    /// `log --tail` or `-n` as the last word: exit 2.
+    LogNeeds(String),
     Uninstall {
         yes: bool,
     },
@@ -140,7 +141,10 @@ pub fn parse(verb: &str, rest: &[&str]) -> Option<Life> {
             while i < rest.len() {
                 match rest[i] {
                     "--tail" | "-n" => {
-                        tail = rest.get(i + 1)?.to_string();
+                        let Some(v) = rest.get(i + 1) else {
+                            return Some(Life::LogNeeds(rest[i].to_string()));
+                        };
+                        tail = v.to_string();
                         i += 2;
                     }
                     "--follow" | "-f" => {
@@ -500,6 +504,10 @@ pub fn run(s: &Settings, client: &mut Client, v: Life) -> Exit {
         }
         Life::Survive(sv) => survive(client, sv),
         Life::Log { tail, follow } => log(s, &tail, follow),
+        Life::LogNeeds(flag) => {
+            out::stderr_line(&format!("Error: {flag} takes a number"));
+            Exit::Usage
+        }
         Life::Uninstall { yes } => uninstall(s, yes),
     }
 }
@@ -1241,7 +1249,10 @@ mod tests {
             Some(Life::Stop { keep: true })
         );
         assert_eq!(parse("stop", &["x"]), Some(Life::StopUsage));
-        assert_eq!(parse("log", &["--tail"]), None);
+        assert_eq!(
+            parse("log", &["--tail"]),
+            Some(Life::LogNeeds("--tail".into()))
+        );
         assert_eq!(
             parse("logs", &["-n", "5", "-f"]),
             Some(Life::Log {

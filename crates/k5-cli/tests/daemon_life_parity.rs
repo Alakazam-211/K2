@@ -1201,6 +1201,24 @@ fn daemon_log_uninstall_start_and_usage_answer_as_the_shell_does() {
             0,
         ),
         case(
+            "log --tail as the last word",
+            &["log", "--tail"],
+            &[],
+            vec![],
+            with_log,
+            2,
+            0,
+        ),
+        case(
+            "logs -n 2 -n: the second -n as the last word",
+            &["logs", "-n", "2", "-n"],
+            &[],
+            vec![],
+            with_log,
+            2,
+            0,
+        ),
+        case(
             "log --tail with no number tail takes",
             &["log", "--tail", "abc"],
             &[],
@@ -1750,16 +1768,14 @@ fn daemon_help_lines_never_act() {
     }
 }
 
-/// `log`'s value flag as the last word is the shell's (`install` never
-/// reaches [`life::parse`]: [`k5_cli::families::daemon::install`] reads
-/// it; `restart --host` or `--token` as the last word is the binary's: a
-/// usage error, exit 2).
+/// No value flag as the last word is the shell's any more (`install`
+/// never reaches [`life::parse`]: [`k5_cli::families::daemon::install`]
+/// reads it; `restart --host` or `--token`, and `log --tail` or `-n`, as
+/// the last word are the binary's: a usage error, exit 2).
 #[test]
 fn a_last_value_flag_is_the_shell_s() {
     for (verb, rest) in [
         ("install", &[][..]),
-        ("log", &["--tail"][..]),
-        ("logs", &["-n"][..]),
         ("restart", &["--host", "k2.example"][..]),
     ] {
         assert_eq!(

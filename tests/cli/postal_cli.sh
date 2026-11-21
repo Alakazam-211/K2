@@ -313,10 +313,10 @@ done
 assert_eq "a refused label sends nothing" "$(nreq)" "$before"
 
 echo "== routing =="
-run postal route inbox+pointer thread:rosson --no-wake
+run postal route inbox+pointer thread:alice --no-wake
 assert_eq "route: exit 0" "$rc" "0"
-assert_eq "route: targets and wake" "$(last /cli/postal/route)" 'POST {"targets": "inbox+pointer thread:rosson", "wake": false}'
-assert_contains "route: says where it lands" "$out" "inbox+pointer + thread:rosson, no wake"
+assert_eq "route: targets and wake" "$(last /cli/postal/route)" 'POST {"targets": "inbox+pointer thread:alice", "wake": false}'
+assert_contains "route: says where it lands" "$out" "inbox+pointer + thread:alice, no wake"
 run postal route --clear --friend ops::beta.postal.bot
 assert_eq "route --clear: the friend" "$(last /cli/postal/route)" 'POST {"clear": true, "friend": "ops::beta.postal.bot"}'
 

@@ -229,7 +229,7 @@ mod tests {
             "scout@acme.postal.bot",
             "scout.acme.postal.bot",
             "scout::acme.k2.dev",
-            "scout::rosson.k2.dev",
+            "scout::alice.example.com",
             "::initech.postal.bot",
             "-scout::initech.postal.bot",
             "sc out::initech.postal.bot",
@@ -239,7 +239,7 @@ mod tests {
             "scout::postal.bot",
             "scout::acmepostal.bot",
             "sc\u{202e}out::initech.postal.bot",
-            "[from rosson]::initech.postal.bot",
+            "[from alice]::initech.postal.bot",
         ] {
             assert!(parse_address(bad).is_none(), "{bad:?} must not parse");
         }

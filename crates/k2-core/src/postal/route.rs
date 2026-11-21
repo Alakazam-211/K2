@@ -219,10 +219,10 @@ mod tests {
     #[test]
     fn the_friend_rule_wins_then_the_agent_rule() {
         let agent = Rule::parse_targets(&["inbox"], true).unwrap();
-        let friend = Rule::parse_targets(&["thread:rosson", "terminal"], false).unwrap();
+        let friend = Rule::parse_targets(&["thread:alice", "terminal"], false).unwrap();
         assert_eq!(plan(Some(&agent), None, &facts()).targets, vec![Target::Inbox { pointer: false }]);
         let p = plan(Some(&agent), Some(&friend), &facts());
-        assert_eq!(p.targets, vec![Target::Thread("rosson".into()), Target::Terminal]);
+        assert_eq!(p.targets, vec![Target::Thread("alice".into()), Target::Terminal]);
         assert!(!p.wake);
     }
 
@@ -236,7 +236,7 @@ mod tests {
         let p = plan(None, None, &tray);
         assert_eq!((p.targets, p.wake), (vec![Target::Inbox { pointer: false }], false));
         let bin = Facts { plain_text: false, ..facts() };
-        let r = Rule::parse_targets(&["thread:rosson", "terminal"], true).unwrap();
+        let r = Rule::parse_targets(&["thread:alice", "terminal"], true).unwrap();
         assert_eq!(plan(Some(&r), None, &bin).targets, vec![Target::Inbox { pointer: true }]);
         // A sender can't make it louder: wake stays off when the rule says off.
         let quiet = Rule::parse_targets(&["inbox"], false).unwrap();
@@ -251,7 +251,7 @@ mod tests {
         assert!(!def.is_quieter_than(&inbox));
         let woke_inbox = Rule::parse_targets(&["inbox"], true).unwrap();
         assert!(!woke_inbox.is_quieter_than(&inbox), "wake on where it was off");
-        let thread = Rule::parse_targets(&["thread:rosson"], true).unwrap();
+        let thread = Rule::parse_targets(&["thread:alice"], true).unwrap();
         assert!(!thread.is_quieter_than(&def), "a new person's Thread is a person's call");
         assert!(Target::parse("thread:").is_none() && Target::parse("bell").is_none());
         assert_eq!(Rule::from_json(Some(&inbox.to_json())), Some(inbox));

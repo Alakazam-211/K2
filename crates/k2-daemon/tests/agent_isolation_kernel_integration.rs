@@ -334,7 +334,7 @@ git init -q gitws 2>git.err && cd gitws && echo x > f && git add f && git -c use
 cat {sibling}/README.md > out 2> err; echo "sibling_read_rc $? $(cat err)" >> $R
 ls {sibling} > out 2> err; echo "sibling_ls_rc $? $(cat err)" >> $R
 # 2b. Nor a sibling's passport out of its process (/proc/<pid>/environ).
-tr '\0' '\n' < /proc/{bpid}/environ > out 2> err; echo "sibling_environ_rc $? $(grep -c K2_HOOK_TOKEN out) $(cat err)" >> $R
+: > out; {{ tr '\0' '\n' < /proc/{bpid}/environ > out; }} 2> err; echo "sibling_environ_rc $? $(grep -c K2_HOOK_TOKEN out) $(cat err)" >> $R
 kill -0 {bpid} 2> err; echo "sibling_signal_rc $? $(cat err)" >> $R
 # 3. It can't read the owner token.
 cat {k2_home}/daemon.token > out 2> err; echo "token_read_rc $? $(cat err)" >> $R

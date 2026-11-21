@@ -553,6 +553,8 @@ notifications --help|notifications|out|0
 notifications -h|notifications|out|0
 notify --help|notify|out|0
 notify -h|notify|out|0
+onboarding --help|onboarding|out|0
+onboarding -h|onboarding|out|0
 organization --help|organization|out|0
 organization -h|organization|out|0
 preset --help|preset|out|0

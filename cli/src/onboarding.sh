@@ -4,6 +4,13 @@
 # lives in k2-core::agents::onboarding so the Tauri modal and the
 # CLI share a single implementation. Project path defaults to $PWD.
 
+# The onboarding help: on stdout for -h/--help anywhere (the router's arm).
+_onboarding_usage() {
+    cat <<'EOF'
+%include cli/text/help/onboarding.txt
+EOF
+}
+
 # k2 onboarding scan [project-path]
 #   List workspace harness files (CLAUDE.md, GEMINI.md, .cursor/rules,
 #   etc.) that have substantive user content. Empty result == no

@@ -2209,6 +2209,12 @@ fi
 if [ "${1:-}" = "hooks" ]; then
     for _a in "${@:2}"; do [ "$_a" = "--" ] && break; case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done
 fi
+# 0.46.17: these families print their help for -h/--help anywhere before a
+# bare -- and send nothing, so help needs no daemon.
+case "${1:-}" in
+    onboarding)
+        for _a in "${@:2}"; do [ "$_a" = "--" ] && break; case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
+esac
 # `k2 checkin` is retired: its stub prints pointers and never calls the daemon.
 [ "${1:-}" = "checkin" ] && _skip_conn_gate=1
 # Signed approvals: verify, show and key-id run k2-approve locally (no daemon).
@@ -74328,6 +74334,25 @@ cmd_update() {
 # lives in k2-core::agents::onboarding so the Tauri modal and the
 # CLI share a single implementation. Project path defaults to $PWD.
 
+# The onboarding help: on stdout for -h/--help anywhere (the router's arm).
+_onboarding_usage() {
+    cat <<'EOF'
+k2 onboarding — what K2 does with a workspace's own harness files
+(CLAUDE.md, GEMINI.md, .cursor/rules and the like) when it is added
+
+  k2 onboarding scan [<workspace-path>]          list its harness files with your own content
+                                                 (none listed: nothing to decide)
+  k2 onboarding adopt <file> [<workspace-path>]  seed .k2/PROJECT.md from that file; the file
+                                                 is archived in the workspace, then removed
+  k2 onboarding defer [<workspace-path>]         leave its harness files alone for now;
+                                                 K2 still writes its own files
+  k2 onboarding start-fresh [<workspace-path>]   archive them and use K2's own instead
+
+<workspace-path> is the current folder when left out. later and fresh are
+the old names of defer and start-fresh.
+EOF
+}
+
 # k2 onboarding scan [project-path]
 #   List workspace harness files (CLAUDE.md, GEMINI.md, .cursor/rules,
 #   etc.) that have substantive user content. Empty result == no
@@ -117768,6 +117793,10 @@ case "${1:-help}" in
     onboarding)
         # Phase 2.1 A5: later → defer, fresh → start-fresh.
         # Old names still work but warn.
+        # 0.46.17: -h/--help anywhere before a bare -- prints the onboarding
+        # help on stdout and sends nothing (`onboarding adopt --help` sent
+        # an adopt of a file named --help; the other verbs ran cd on it).
+        if _wants_help "${@:2}"; then _onboarding_usage; exit 0; fi
         case "${2:-}" in
             scan)         shift 2; cmd_onboarding_scan "$@" ;;
             adopt)        shift 2; cmd_onboarding_adopt "$@" ;;

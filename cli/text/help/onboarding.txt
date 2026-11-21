@@ -1,0 +1,13 @@
+k2 onboarding — what K2 does with a workspace's own harness files
+(CLAUDE.md, GEMINI.md, .cursor/rules and the like) when it is added
+
+  k2 onboarding scan [<workspace-path>]          list its harness files with your own content
+                                                 (none listed: nothing to decide)
+  k2 onboarding adopt <file> [<workspace-path>]  seed .k2/PROJECT.md from that file; the file
+                                                 is archived in the workspace, then removed
+  k2 onboarding defer [<workspace-path>]         leave its harness files alone for now;
+                                                 K2 still writes its own files
+  k2 onboarding start-fresh [<workspace-path>]   archive them and use K2's own instead
+
+<workspace-path> is the current folder when left out. later and fresh are
+the old names of defer and start-fresh.

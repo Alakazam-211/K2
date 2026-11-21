@@ -1644,6 +1644,12 @@ fi
 if [ "${1:-}" = "hooks" ]; then
     for _a in "${@:2}"; do [ "$_a" = "--" ] && break; case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done
 fi
+# 0.46.17: these families print their help for -h/--help anywhere before a
+# bare -- and send nothing, so help needs no daemon.
+case "${1:-}" in
+    onboarding)
+        for _a in "${@:2}"; do [ "$_a" = "--" ] && break; case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
+esac
 # `k2 checkin` is retired: its stub prints pointers and never calls the daemon.
 [ "${1:-}" = "checkin" ] && _skip_conn_gate=1
 # Signed approvals: verify, show and key-id run k2-approve locally (no daemon).

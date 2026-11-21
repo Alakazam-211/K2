@@ -362,6 +362,10 @@ case "${1:-help}" in
     onboarding)
         # Phase 2.1 A5: later → defer, fresh → start-fresh.
         # Old names still work but warn.
+        # 0.46.17: -h/--help anywhere before a bare -- prints the onboarding
+        # help on stdout and sends nothing (`onboarding adopt --help` sent
+        # an adopt of a file named --help; the other verbs ran cd on it).
+        if _wants_help "${@:2}"; then _onboarding_usage; exit 0; fi
         case "${2:-}" in
             scan)         shift 2; cmd_onboarding_scan "$@" ;;
             adopt)        shift 2; cmd_onboarding_adopt "$@" ;;

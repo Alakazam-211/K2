@@ -1284,13 +1284,13 @@ fn inbox_hands_these_to_the_shell() {
         )),
         shell(case("-h", &["-h"], &[], vec![], owner_and_port, 0, 0)),
         shell(case(
-            "read --help reads the item --help",
+            "read --help: the help, nothing sent",
             &["read", "--help"],
             &[],
-            vec![ok(CONTENT)],
+            vec![],
             owner_and_port,
             0,
-            1,
+            0,
         )),
         shell(with(
             c(&[("CODEX_THREAD_ID", "t1")]),
@@ -1638,14 +1638,11 @@ fn inbox_writes_as_the_shell_does() {
     }
 }
 
-/// The writes with `-h` or `--help` anywhere. A bash bug: `cmd_inbox`
-/// takes `-h` or `--help` only as the verb, and each write's own function
-/// skips it (`compose`) or reads it as a word (`move`, `archive`,
-/// `delete`), so bash SENDS the write (cli/src/inbox.sh,
-/// cmd_inbox_compose to cmd_inbox_delete). The front hands these lines to
-/// the shell, so the binary does the same. Each row says so; it flips to
-/// "the help, nothing sent" when the shell's fix lands. `respond` flipped
-/// (99123b0514): its help before a bare `--` sends nothing.
+/// The writes with `-h` or `--help` anywhere: the help, nothing sent.
+/// The shell's fix made `cmd_inbox` read help anywhere before a bare `--`
+/// (it used to send `compose`, `move`, `archive` and `delete`); the front
+/// hands these lines to the shell, so both sides are the shell's.
+/// `respond` flipped with 99123b0514.
 #[test]
 fn inbox_help_acts_bash_bug() {
     let rig = Rig::new(VERB, "whelp");
@@ -1673,13 +1670,13 @@ fn inbox_help_acts_bash_bug() {
         rig.check(&Case {
             compare: Compare::Shell,
             ..case(
-                "help acts (bash bug): the write is sent",
+                "the write's help, nothing sent",
                 line,
                 &[],
-                vec![ok(DONE)],
+                vec![],
                 owner_and_port,
                 0,
-                1,
+                0,
             )
         });
     }

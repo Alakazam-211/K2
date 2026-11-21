@@ -20,10 +20,9 @@
 //!   `--timeout`, `--release`).
 //! - A passport over TCP, the cell socket, no answer and no daemon.
 //! - Help never acts: each verb that changes something with `-h` or
-//!   `--help` sends nothing. The rows named `bash acts:` are a bash bug,
-//!   copied until it is fixed: a help flag right after a value flag is
-//!   that flag's value (`cli/src/desktop.sh`, `cmd_desktop`'s `shift 2`
-//!   arms), so the line goes on and its request is sent.
+//!   `--help` sends nothing, a help flag right after a value flag too
+//!   (`cmd_desktop` reads `_wants_help` first now; it used to take it as
+//!   the flag's value and send).
 //! - A `--timeout` that isn't digits and one unit letter is the usage
 //!   line before anything is sent (0f25406366); a leading 0 is decimal.
 
@@ -1123,22 +1122,22 @@ fn desktop_help_never_acts() {
         v.push(case(name, args, &[], vec![], owner_and_port, 0, 0));
     }
     v.push(shell(case(
-        "bash acts: grant ann --desktop -h",
+        "grant ann --desktop -h: the help, nothing sent",
         &["grant", "ann", "--desktop", "-h"],
         &[],
-        vec![ok(r#"{"grant":{"user":"ann","mode":"view"}}"#)],
+        vec![],
         owner_and_port,
         0,
-        1,
+        0,
     )));
     v.push(shell(case(
-        "bash acts: policy --hide-app --help",
+        "policy --hide-app --help: the help, nothing sent",
         &["policy", "--hide-app", "--help"],
         &[],
-        vec![ok(r#"{"hideApps":["--help"]}"#)],
+        vec![],
         owner_and_port,
         0,
-        1,
+        0,
     )));
     for c in v {
         rig.check(&c);

@@ -1611,21 +1611,20 @@ fn ci_help_forms() {
         3,
         0,
     ));
-    // A bash bug (cli/src/ci.sh, cmd_ci's signer branch reads only the
-    // word after `signer` for the help): `signer remove <fp> -h` removes
-    // the signer. The front hands a `-h` line that is no help page to the
-    // shell, so both sides are the shell's. This row flips to "sends
-    // nothing" when the shell is fixed.
+    // `signer remove <fp> -h`: the help, nothing sent (the shell's fix,
+    // 96ab12123f; it used to remove the signer). The front hands a `-h`
+    // line that is no help page to the shell, so both sides are the
+    // shell's.
     v.push(Case {
         compare: Compare::Shell,
         ..case(
-            "signer remove <fp> -h: the shell acts (a bash bug)",
+            "signer remove <fp> -h: the help, nothing sent",
             &["signer", "remove", "fp1", "-h"],
             &[],
-            vec![ok(r#"{"ok":true}"#)],
+            vec![],
             owner_and_port,
             0,
-            1,
+            0,
         )
     });
     for c in v {

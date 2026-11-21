@@ -1712,6 +1712,8 @@ for c in v.get("coreList") or []:
 }
 
 cmd_app_access() {
+    # Help wins: -h or --help anywhere, even as a value flag's word.
+    if _wants_help "$@"; then _app_grace_usage; return 0; fi
     local ws="" build="" manage="" users="" open="" json_out=0 cores=""
     local _usage="usage: k2 app access <workspace> [--build on|off] [--manage on|off] [--users on|off] [--core db|files|thread|mail|sew=on|off[,…]]… [--json]"
     while [ $# -gt 0 ]; do

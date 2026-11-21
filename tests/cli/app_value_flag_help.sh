@@ -8,6 +8,10 @@
 #     to `-h`.
 #   - `k2 app key mint <app> --scopes u --label -h` sent the mint with
 #     the label `-h`.
+#   - `k2 app access <ws> --build -h` printed the whole `k2 app` page on
+#     stderr from the router (after asking the daemon about permission
+#     cards); cmd_app_access would have read -h as --build's value. The
+#     router hands access its words now, and help is the grace page.
 #
 # Each help row: exactly the page on stdout, nothing on stderr, exit 0,
 # nothing sent. Each verb's plain form then still sends, so the stub is
@@ -194,6 +198,29 @@ run app key mint shop --scopes users --label L
 sent_line "the mint" 1 '^POST /cli/app/key/mint .*"label": "L"'
 [ "$(wc -l <"$REQ_LOG" | tr -d ' ')" = 1 ] && ok "key mint: one request" \
     || { bad "key mint: not one request"; sed 's/^/      | /' "$REQ_LOG" >&2; }
+
+echo "== app access: a value flag never takes -h; help is the page that describes it =="
+# native: app access
+page app/grace.txt app access ws --build -h
+# native: app access
+page app/grace.txt app access ws --users --help
+# native: app access
+page app/grace.txt app access ws --manage -h --build on
+# native: app access
+page app/grace.txt app access ws --core -h
+# native: app access
+page app/grace.txt app access ws --open --help
+# native: app access
+page app/grace.txt app access ws -h
+# native: app access
+page app/grace.txt app access --help
+echo "== app access: the plain read still sends =="
+# native: app access
+run app access ws
+[ "$RC" -eq 0 ] && ok "k2 app access ws: exit 0" || { bad "access: exit $RC"; show "$ERR"; }
+sent_line "the read" 1 '^GET /cli/app/list '
+[ "$(wc -l <"$REQ_LOG" | tr -d ' ')" = 1 ] && ok "access: one request" \
+    || { bad "access: not one request"; sed 's/^/      | /' "$REQ_LOG" >&2; }
 
 echo ""
 echo "app_value_flag_help: $pass passed, $fail failed"

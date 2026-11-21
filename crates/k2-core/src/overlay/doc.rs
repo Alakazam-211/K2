@@ -434,6 +434,17 @@ pub const AUTHOR_SYSTEM: &str = "system";
 /// the daemon's Postal delivery stamps it. An older viewer treats it as
 /// an unknown kind and shows its `from` (the same address).
 pub const AUTHOR_POSTAL: &str = "postal";
+/// [`PostAuthor::kind`] on a ticket message moved from before
+/// ticket-thread-v1 (0.46.17) that K2 itself wrote (a notice's author such
+/// as `k2-disk`): `login` is `k2`, `name` the original author text. Only
+/// the ticket backfill stamps it (`crate::feedback_thread`); it is never a
+/// post door's. Older viewers show its `from`.
+pub const AUTHOR_K2: &str = "k2";
+/// [`PostAuthor::kind`] on a ticket message moved from before
+/// ticket-thread-v1 whose writer can't be told (a name that is both, or
+/// neither, a Connect login and an App guest): `login` and `name` are the
+/// original author text, shown as text, never as a login of this server.
+pub const AUTHOR_UNKNOWN: &str = "unknown";
 
 impl PostAuthor {
     pub fn owner() -> Self {

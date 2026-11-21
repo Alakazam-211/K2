@@ -177,7 +177,17 @@ fn an_old_ticket_moves_to_its_thread_with_the_same_comments() {
     let docs = ticket::read_messages(&id).expect("docs");
     assert_eq!(docs[0].doc.author, None, "the ticket's agent: no stamp");
     assert_eq!(docs[1].doc.author, Some(PostAuthor::owner()));
-    assert_eq!(docs[2].doc.author, Some(PostAuthor::user("alice")));
+    assert_eq!(
+        docs[2].doc.author,
+        Some(PostAuthor { kind: "unknown".into(), login: "alice".into(), name: Some("alice".into()) }),
+        "a name that is neither a Connect login nor an App guest can't be told"
+    );
+    for d in &docs {
+        let meta = d.doc.imported.as_ref().unwrap_or_else(|| panic!("a moved message is marked imported: {:?}", d.doc));
+        assert_eq!(meta.clone_id, BACKFILL_MARK);
+        assert_eq!(meta.source_doc_id, d.id);
+        assert_eq!(meta.from.as_deref(), Some(d.doc.from.as_str()), "the original author text rides along");
+    }
     assert_eq!(crate::overlay::store::import_id(&ticket::import_key(&cids[1])).expect("key"), Some(cids[1].clone()));
 
     // A failed move is all or nothing: undo the mark by hand and move again,
@@ -343,9 +353,89 @@ fn a_deleted_message_leaves_show_and_the_counts() {
     {
         let db = crate::db::shared();
         let conn = db.lock();
-        assert_eq!(note_deleted(&conn, &conv, 1).unwrap(), Some(item.id.clone()));
-        assert_eq!(note_deleted(&conn, "conv-other", 1).unwrap(), None);
+        assert_eq!(note_deleted(&conn, &conv, &c.id, 1).unwrap(), Some(item.id.clone()));
+        assert_eq!(note_deleted(&conn, "conv-other", &c.id, 1).unwrap(), None);
+        let copies: i64 = conn
+            .query_row("SELECT COUNT(*) FROM feedback_comments WHERE id = ?1", params![c.id], |r| r.get(0))
+            .unwrap();
+        assert_eq!(copies, 0, "a deleted message leaves no rollback copy");
     }
     let after = feedback::get_item(&item.id).unwrap();
     assert_eq!((after.comment_count, after.file_count), (1, 0));
+}
+
+/// Bite (rollback, 0.46.17 only): every new message lands in the Thread AND
+/// in `feedback_comments` under the same id (redacted, with its files), so
+/// 0.46.16 put back reads the same discussion.
+#[test]
+fn a_new_message_lands_in_the_thread_and_the_rollback_copy() {
+    let p = pid("dual");
+    let item = ask(&p, "Both?");
+    let c = feedback::add_comment_with_files(&item.id, "alice", "copy me", &[file("d.md")]).unwrap();
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let rows: Vec<(String, String, String, Option<String>)> = conn
+        .prepare("SELECT id, author, body, attachments_json FROM feedback_comments WHERE feedback_id = ?1 ORDER BY created_at, rowid")
+        .unwrap()
+        .query_map(params![item.id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    drop(conn);
+    let docs = ticket::read_messages(&item.id).unwrap();
+    assert_eq!(rows.iter().map(|r| r.0.clone()).collect::<Vec<_>>(), docs.iter().map(|d| d.id.clone()).collect::<Vec<_>>(), "same ids, same order");
+    assert_eq!((rows[1].1.as_str(), rows[1].2.as_str()), ("alice", "copy me"));
+    assert!(rows[1].3.as_deref().is_some_and(|j| j.contains("d.md")), "{:?}", rows[1]);
+    assert_eq!(rows[1].0, c.id);
+}
+
+/// Bite (rollback then upgrade again): rows an older release wrote to
+/// `feedback_comments` only are imported into the Thread (marked imported),
+/// the counters come right, and a second pass changes nothing.
+#[test]
+fn rows_an_older_release_wrote_come_back_into_the_thread() {
+    let _db = crate::db::scoped_for_test();
+    let p = pid("reconcile");
+    let item = ask(&p, "Rolled back?");
+    let old_id = uuid::Uuid::new_v4().to_string();
+    {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        // What 0.46.16 does: a row in feedback_comments, no counter change.
+        conn.execute(
+            "INSERT INTO feedback_comments (id, feedback_id, author, body, created_at, attachments_json) VALUES (?1, ?2, 'owner', 'written while rolled back', 99999999999, NULL)",
+            params![old_id, item.id],
+        )
+        .unwrap();
+    }
+    assert_eq!(reconcile_all().unwrap(), 1);
+    let (after, comments) = feedback::get_with_comments(&item.id).unwrap();
+    assert_eq!(comments.iter().map(|c| c.body.as_str()).collect::<Vec<_>>(), vec!["Rolled back?", "written while rolled back"]);
+    assert_eq!(comments[1].id, old_id);
+    assert_eq!(after.comment_count, 2);
+    let docs = ticket::read_messages(&item.id).unwrap();
+    assert!(docs[1].doc.imported.as_ref().is_some_and(|m| m.clone_id == BACKFILL_MARK));
+    assert!(docs[0].doc.imported.is_none(), "the dual-written seed is not imported again");
+    assert_eq!(reconcile_all().unwrap(), 0, "nothing left to bring up");
+    assert_eq!(ticket::read_messages(&item.id).unwrap().len(), 2);
+}
+
+/// Old authors: K2's notice author is `k2`, the ticket's agent has no
+/// stamp, `owner` is the owner, and a name that can't be told is `unknown`
+/// (never a Connect user).
+#[test]
+fn old_authors_are_read_without_inventing_connect_users() {
+    let _db = crate::db::scoped_for_test();
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let none = std::collections::HashSet::new();
+    let k2 = old_author(&conn, "k2-disk", "k2-disk", &none).expect("K2 stamp");
+    assert_eq!((k2.kind.as_str(), k2.login.as_str(), k2.name.as_deref()), ("k2", "k2", Some("k2-disk")));
+    assert_eq!(old_author(&conn, "K2 Postgres", "agent-a", &none).map(|a| a.kind), Some("k2".into()));
+    assert_eq!(old_author(&conn, "agent-a", "agent-a", &none), None);
+    assert_eq!(old_author(&conn, "owner", "agent-a", &none), Some(PostAuthor::owner()));
+    let u = old_author(&conn, "dana", "agent-a", &none).expect("stamp");
+    assert_eq!((u.kind.as_str(), u.name.as_deref()), ("unknown", Some("dana")));
+    let connect: std::collections::HashSet<String> = ["alice".to_string()].into_iter().collect();
+    assert_eq!(old_author(&conn, "Alice", "agent-a", &connect).map(|a| a.kind), Some("user".into()), "a Connect login only");
 }

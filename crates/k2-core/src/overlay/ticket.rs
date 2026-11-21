@@ -97,6 +97,8 @@ pub struct OldComment<'a> {
     pub comment_id: &'a str,
     pub message: TicketMessage<'a>,
     pub created_at: i64,
+    /// The imported stamp (who and when, from the old row).
+    pub imported: Option<super::ImportedMeta>,
 }
 
 /// The backfill's import key of an old comment (`ticket/<comment id>`):
@@ -124,6 +126,7 @@ pub fn import_comments(
         .map(|c| {
             let mut doc = message_doc(c.comment_id.to_string(), &c.message);
             doc.created_at = c.created_at;
+            doc.imported = c.imported.clone();
             (import_key(c.comment_id), doc)
         })
         .collect();

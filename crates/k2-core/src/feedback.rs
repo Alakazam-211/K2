@@ -42,8 +42,9 @@
 //! `from`, its body, its time, its files). A ticket filed before 0.46.17
 //! reads its old `feedback_comments` rows until the background backfill
 //! ([`crate::feedback_thread`]) moves it, or until its next message moves it
-//! first. `feedback_comments` is read-only from 0.46.17 (kept one release
-//! for rollback). The list's counts live on the row (`comment_count`,
+//! first. For 0.46.17 only, each new message is ALSO written to
+//! `feedback_comments` under the same id (rollback safety; reads come from
+//! the Thread; removed in 0.46.18). The list's counts live on the row (`comment_count`,
 //! `file_count`), bumped with each message.
 
 use rusqlite::params;
@@ -296,6 +297,8 @@ pub fn create_with_brief_and_files(
         crate::overlay::ThreadPost::Posted(item, links) => (item, links),
         crate::overlay::ThreadPost::Duplicate(_) => return Err("feedback seed: a keyless post found a client key".to_string()),
     };
+    // 0.46.17 rollback copy; remove in 0.46.18 (`feedback_thread::dual_write`).
+    crate::feedback_thread::dual_write(&tx, &id, &seed_item)?;
     tx.commit().map_err(|e| format!("feedback commit failed: {e}"))?;
     drop(conn);
     crate::feedback_thread::notify_posted(&seed_item, &seed_links);
@@ -927,6 +930,8 @@ pub fn add_comment_by(
         params![id, item.doc.created_at, attachments.len() as i64],
     )
     .map_err(|e| format!("feedback touch failed: {e}"))?;
+    // 0.46.17 rollback copy; remove in 0.46.18 (`feedback_thread::dual_write`).
+    crate::feedback_thread::dual_write(&conn, id, &item)?;
     drop(conn);
     crate::feedback_thread::notify_posted(&item, &links);
     Ok(CommentWrite::Stored(

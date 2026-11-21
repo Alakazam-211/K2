@@ -281,27 +281,47 @@ pub(super) fn post(
     CliResponse::ok_json(body.to_string())
 }
 
-/// After a message of a ticket's Thread is deleted: the row's counts drop,
-/// and the ticket's views refresh (`FeedbackCommented`, `TicketChanged`).
-pub(super) fn after_delete(resolved: &ResolvedOverlay, before: &overlay::OverlayDoc, by: &str) {
+/// After a message of a ticket's Thread is deleted: the row's counts drop
+/// (and its rollback copy goes), the ticket's views refresh
+/// (`FeedbackCommented`, `TicketChanged`), and the ticket's agent hears it
+/// as every ticket event, `[feedback:<id>] <who> deleted a message …`
+/// (names and a time only, never the message). `false` for any other
+/// Thread (the caller tells its agent the Thread way).
+pub(super) fn after_delete(resolved: &ResolvedOverlay, doc_id: &str, before: &overlay::OverlayDoc, by: &str) -> bool {
     if !is_ticket(resolved) {
-        return;
+        return false;
     }
     let noted = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        k2_core::feedback_thread::note_deleted(&conn, &resolved.conversation_id, before.attachments.len())
+        k2_core::feedback_thread::note_deleted(&conn, &resolved.conversation_id, doc_id, before.attachments.len())
     };
-    match noted {
-        Ok(Some(id)) => {
-            crate::feedback_routes::emit_commented(&id, by);
-            if let Some(item) = feedback::get_item(&id) {
-                crate::feedback_routes::emit_ticket_changed(&item, crate::feedback_routes::CHANGE_COMMENTED, None);
-            }
+    let id = match noted {
+        Ok(Some(id)) => id,
+        Ok(None) => return true,
+        Err(e) => {
+            k2_core::log_debug!("[ticket-thread] delete count on {}: {e}", resolved.conversation_id);
+            return true;
         }
-        Ok(None) => {}
-        Err(e) => k2_core::log_debug!("[ticket-thread] delete count on {}: {e}", resolved.conversation_id),
-    }
+    };
+    crate::feedback_routes::emit_commented(&id, by);
+    let Some(item) = feedback::get_item(&id) else { return true };
+    crate::feedback_routes::emit_ticket_changed(&item, crate::feedback_routes::CHANGE_COMMENTED, None);
+    let skin = request_skin();
+    let deleter = skin.as_ref().map(skin_from_stamp).unwrap_or_else(|| by.to_string());
+    let note = message_delete::agent_note(&deleter, Some(&before.from), before.created_at);
+    let _ = crate::feedback_routes::deliver_ticket_words(&item, skin.as_ref(), by, &note, None, &[]);
+    true
+}
+
+/// `GET /cli/thread/activity?addr=ticket:<id>` for an App pass: the ticket's
+/// read right (`tickets:read`, checked when the address resolved) is the
+/// gate, not `activity:read`. Counts only, as every guest turn.
+pub(super) fn guest_activity(resolved: &ResolvedOverlay) -> CliResponse {
+    let turn = crate::thread_activity::current_turn_guest(&resolved.conversation_id);
+    CliResponse::ok_json(
+        serde_json::json!({ "ok": true, "addr": resolved.addr, "conversation_id": resolved.conversation_id, "turn": turn }).to_string(),
+    )
 }
 
 /// The overlay socket's gate for `conversation=ticket:<id>`: `Some(Ok(project))`

@@ -5180,6 +5180,9 @@ fn guest_thread_activity(params: &HashMap<String, String>, pass: &SkinPass) -> C
         Ok(r) => r,
         Err(e) => return e,
     };
+    if ticket_addr::is_ticket(&resolved) {
+        return ticket_addr::guest_activity(&resolved);
+    }
     for cap in [crate::skin_routes::THREAD_READ, crate::skin_routes::ACTIVITY_READ] {
         if !pass.has_cap_in_room(&resolved.project_id, cap) {
             return crate::thread_attachments::cap_refused(cap);

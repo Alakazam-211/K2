@@ -312,7 +312,7 @@ async fn a_ticket_thread_streams_on_the_tickets_rights() {
     let conv = format!("ticket:{id}");
 
     let (mut owner_sock, _) = tokio_tungstenite::connect_async(&overlay_url(port, &conv, OWNER)).await.expect("owner socket");
-    let tickets_pass = role_pass(port, &ws, &format!("sk{tag}"), &["tickets:read"]).await;
+    let tickets_pass = role_pass(port, &ws, &format!("sk{tag}"), &["tickets:read", "tickets:post"]).await;
     let (mut app_sock, _) = tokio_tungstenite::connect_async(&overlay_url(port, &conv, &tickets_pass)).await.expect("tickets:read opens it");
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     let r = post(port, "/cli/feedback/comment", OWNER, json!({ "id": id, "body": "via the ticket route", "author": "agent-a" })).await;
@@ -322,6 +322,21 @@ async fn a_ticket_thread_streams_on_the_tickets_rights() {
     assert_eq!((f["collection"].clone(), f["doc"]["body"].clone(), f["doc"]["ticket"].clone()), (json!("thread"), json!("via the ticket route"), json!(id)), "{f}");
     let g = frame_for(&mut app_sock, &cid).await;
     assert_eq!(g["doc"]["body"], "via the ticket route", "{g}");
+
+    // (a) An App pass with tickets:post types on its ticket's Thread; the
+    // owner's socket hears it.
+    {
+        use futures_util::SinkExt;
+        let frame = json!({ "t": "typing", "thread": conv }).to_string();
+        app_sock.send(tokio_tungstenite::tungstenite::Message::Text(frame.into())).await.expect("send typing");
+    }
+    let t = frame_for(&mut owner_sock, &conv).await;
+    assert_eq!(t["collection"], "typing", "{t}");
+
+    // (b) Its activity read needs tickets:read there, not activity:read.
+    let r = get(port, "/cli/thread/activity", &tickets_pass, &format!("addr={}", enc(&conv))).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.json()["conversation_id"], conv.as_str(), "{}", r.body);
 
     // thread:read alone, and a Member on K2's own notice: refused.
     let thread_pass = role_pass(port, &ws, &format!("st{tag}"), &["thread:read"]).await;
@@ -340,4 +355,60 @@ async fn a_ticket_thread_streams_on_the_tickets_rights() {
     let notice_conv = format!("ticket:{}", notice.id);
     assert!(tokio_tungstenite::connect_async(&overlay_url(port, &notice_conv, &member_tok)).await.is_err(), "a Member never watches a notice");
     assert!(tokio_tungstenite::connect_async(&overlay_url(port, &conv, &member_tok)).await.is_ok(), "a Member watches an ordinary ticket");
+}
+
+fn rollback_copy(comment_id: &str) -> Option<String> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.query_row("SELECT body FROM feedback_comments WHERE id = ?1", rusqlite::params![comment_id], |r| r.get::<_, String>(0))
+        .ok()
+}
+
+/// Bites: (1) a Thread post lands in the ticket's Thread AND its rollback
+/// copy; (d) deleting it tells the agent `[feedback:<id>] …`, takes the
+/// copy, and leaves `show`; (c) file links on a notice follow the Member
+/// rule.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_ticket_message_is_copied_deleted_and_linked_by_the_tickets_rules() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let tag = &uuid::Uuid::new_v4().to_string()[..6];
+    let ws = seed_ws(&env, &format!("ttd{tag}"));
+    let id = create(port, &ws, "Copies?").await;
+    let addr = format!("ticket:{id}");
+
+    let r = post(port, "/cli/thread/post", OWNER, json!({ "addr": addr, "text": "oops, a password here", "via": "compose" })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let mid = r.json()["id"].as_str().unwrap().to_string();
+    assert_eq!(rollback_copy(&mid).as_deref(), Some("oops, a password here"), "the post lands in feedback_comments too, same id");
+
+    let r = post(port, "/cli/thread/message/delete", OWNER, json!({ "addr": addr, "id": mid })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.json()["deleted"], true, "{}", r.body);
+    let inject = k2_daemon::ticket_attachments::last_inject(&id).expect("the agent hears the delete");
+    assert!(inject.contains(&format!("[feedback:{}]", &id[..8])) && inject.contains("deleted a message"), "{inject}");
+    assert!(!inject.contains("password"), "never the message: {inject}");
+    assert_eq!(rollback_copy(&mid), None, "the copy goes with the message");
+    let s = show(port, OWNER, &id).await;
+    assert_eq!((s["comments"].as_array().unwrap().len(), s["commentCount"].clone()), (1, json!(1)), "{s}");
+
+    // (c) File links on K2's own notice: a Member gets not found.
+    write(&ws.path, "a.md", b"a\n");
+    let notice = k2_core::feedback::create(k2_core::feedback::NewFeedback {
+        project_id: k2_core::db::AUDIT_SENTINEL_IDS[0].to_string(),
+        agent_name: "K2".into(),
+        kind: "fyi".into(),
+        title: "Disk".into(),
+        ..Default::default()
+    })
+    .expect("notice");
+    let member = format!("dmem{tag}");
+    k2_core::connect_users::add_user(&member, "password123").expect("add_user");
+    let member_tok = k2_core::connect_users::create_session(&member);
+    let notice_addr = format!("ticket:{}", notice.id);
+    let r = post(port, "/cli/fs/resolve-links", &member_tok, json!({ "workspace": notice_addr, "paths": ["a.md"] })).await;
+    assert_eq!((r.status, code_of(&r).as_str()), (404, "not_found"), "{}", r.body);
+    let r = post(port, "/cli/fs/resolve-links", &member_tok, json!({ "workspace": addr, "paths": ["a.md"] })).await;
+    assert_eq!(r.status, 200, "a Member links an ordinary ticket's files: {}", r.body);
 }

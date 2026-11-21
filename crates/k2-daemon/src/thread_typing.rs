@@ -212,9 +212,16 @@ pub fn own_person_of_pass(pass: &k2_core::skin::SkinPass) -> String {
 
 /// An App pass may show as typing in `room`'s Thread only with
 /// `thread:post` there (Sew's SEND_MESSAGES rule: only someone who can post
-/// is typing). Reading alone lets it receive, never send.
-pub fn pass_may_post(pass: &k2_core::skin::SkinPass, room: &str) -> bool {
-    pass.has_cap_in_room(room, crate::skin_routes::THREAD_POST)
+/// is typing). Reading alone lets it receive, never send. On a ticket's
+/// Thread (`ticket:<id>`, ticket-thread-v1) the post right is
+/// `tickets:post`.
+pub fn pass_may_post(pass: &k2_core::skin::SkinPass, room: &str, conversation: &str) -> bool {
+    let cap = if k2_core::overlay::ticket::is_ticket(conversation) {
+        crate::skin_routes::TICKETS_POST
+    } else {
+        crate::skin_routes::THREAD_POST
+    };
+    pass.has_cap_in_room(room, cap)
 }
 
 /// Whether anyone may post in `conversation` at all: never in imported

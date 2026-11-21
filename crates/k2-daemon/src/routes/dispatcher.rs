@@ -9668,7 +9668,7 @@ async fn handle_one_request(
                 return DispatchOutcome::Done;
             }
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
-            let result = dispatch_unit6_post(p, &body_bytes, &crate::sandbox_chat_routes::ReopenCaller::of(&query, state.token.as_str()));
+            let result = crate::read_routes::with_read_login(if p == "/cli/fs/resolve-links" { read_person_login(&query, bearer_token.as_deref(), state.token.as_str()) } else { None }, || dispatch_unit6_post(p, &body_bytes, &crate::sandbox_chat_routes::ReopenCaller::of(&query, state.token.as_str())));
             super::http::send_response(&mut *stream, result.status, "application/json", &result.body)
                 .await;
         }

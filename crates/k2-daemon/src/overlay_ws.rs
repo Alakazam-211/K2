@@ -368,7 +368,17 @@ pub(crate) enum GuestNow {
 }
 
 pub(crate) fn guest_now(link: Option<&crate::apps::gateway::LinkCtx>, raw: &str, room: &str, conversation: &str) -> GuestNow {
-    guest_now_of(crate::socket_access::room_access(link, raw, room, &[crate::skin_routes::THREAD_READ]), room, conversation)
+    guest_now_of(crate::socket_access::room_access(link, raw, room, &[read_cap(conversation)]), room, conversation)
+}
+
+/// The cap a guest socket keeps reading with: `thread:read`, or on a
+/// ticket's Thread (ticket-thread-v1) `tickets:read`.
+fn read_cap(conversation: &str) -> &'static str {
+    if k2_core::overlay::ticket::is_ticket(conversation) {
+        crate::skin_routes::TICKETS_READ
+    } else {
+        crate::skin_routes::THREAD_READ
+    }
 }
 
 /// [`guest_now`] under an answer already in hand. Still reads the room's pin.
@@ -378,6 +388,10 @@ fn guest_now_of(access: crate::socket_access::RoomAccess, room: &str, conversati
         RoomAccess::Still(p) => p,
         other => return GuestNow::Close(other.close_message()),
     };
+    // A ticket's Thread is its room's for the ticket's life: no pin to follow.
+    if k2_core::overlay::ticket::is_ticket(conversation) {
+        return GuestNow::Send(pass);
+    }
     let db = k2_core::db::shared();
     let conn = db.lock();
     let pin = k2_core::db::schema::WorkspaceSession::get(&conn, room).ok().flatten().and_then(|s| s.session_id);
@@ -417,7 +431,7 @@ impl GuestProbe {
     /// [`Self::now`] under the hub's answer: no resolve.
     async fn answered(&mut self, answer: crate::access_live::Answer) -> GuestNow {
         let (room, conversation) = (self.room.clone(), self.conversation.clone());
-        let (access, generation) = answer.room_access(&room, &[crate::skin_routes::THREAD_READ]);
+        let (access, generation) = answer.room_access(&room, &[read_cap(&conversation)]);
         let now = tokio::task::spawn_blocking(move || guest_now_of(access, &room, &conversation)).await.unwrap_or_else(|e| {
             log_debug!("[daemon/overlay_ws] guest check panicked: {e}");
             GuestNow::Close(Message::Close(None))
@@ -1036,7 +1050,7 @@ pub async fn serve_overlay_events_connection(
                                 match probe.now().await {
                                     GuestNow::Send(fresh) => {
                                         let typist = crate::thread_typing::typist_of_pass(&fresh)
-                                            .filter(|_| crate::thread_typing::pass_may_post(&fresh, &room));
+                                            .filter(|_| crate::thread_typing::pass_may_post(&fresh, &room, &conv));
                                         if let Some(g) = guest_wire.as_mut() {
                                             g.pass = fresh;
                                         }

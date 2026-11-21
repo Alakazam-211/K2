@@ -3,9 +3,11 @@
 //!
 //! Sends only `{"kind":"hello"}` once, then `{"kind":"voice_rooms_changed",
 //! "rev":n}` from the same publisher the app socket carries
-//! (`voice::occupancy::emit_rooms_changed`), plus WebSocket pings. Nothing
-//! else from the session bus ever goes out here: no workspace, session or
-//! person frame. Any live login may use it (a Voice & Chat only login is the
+//! (`voice::occupancy::emit_rooms_changed`), the login's own
+//! `{"kind":"access_changed"}` (`login_access_live`: a share revoked or
+//! changed reaches a Voice & Chat only phone without a reconnect), plus
+//! WebSocket pings. Nothing else from the session bus ever goes out here:
+//! no workspace, session or person frame, and never another login's access. Any live login may use it (a Voice & Chat only login is the
 //! reason it exists: it never gets `/cli/sessions/events`), and a new client
 //! uses it for every server that isn't its window's own, which before got
 //! only a 60 s sweep (V21). The owner token too. Dark (404 `voice_rooms_off`,
@@ -72,11 +74,16 @@ pub fn slot_for(login: &str, role: k2_core::connect_users::Role) -> Result<Optio
     take_slot(login).map(Some).ok_or(())
 }
 
-/// The one frame this socket forwards, as JSON (None for every other event).
-pub fn frame_for(event: &SessionEvent) -> Option<String> {
+/// The frames this socket forwards, as JSON (None for every other event).
+/// `login` holds the socket (`None` for the owner token): an
+/// `access_changed` leaves only when it names that very login.
+pub fn frame_for(event: &SessionEvent, login: Option<&str>) -> Option<String> {
     match event {
         SessionEvent::VoiceRoomsChanged { rev } => {
             Some(serde_json::json!({ "kind": "voice_rooms_changed", "rev": rev }).to_string())
+        }
+        SessionEvent::AccessChanged { .. } if crate::session_events_ws::login_may_see(event, login) => {
+            Some(serde_json::json!({ "kind": "access_changed" }).to_string())
         }
         _ => None,
     }
@@ -96,6 +103,19 @@ pub async fn serve(stream: &mut TcpStream, token: String, owner_token: String) {
     let mut rx = session_events::subscribe();
     let still = |t: &str, o: &str| crate::routes::http::login_still_admitted(t, o, Floor::VoiceChat);
     let mut seen = k2_core::connect_users::auth_generation();
+    // Whose `access_changed` this socket carries: its own login's only. Read
+    // before the hello, so a change after the client's first read is heard.
+    let login = crate::session_events_ws::socket_login(crate::presence::resolve_identity(&token, &owner_token).as_ref());
+    let _access_hold = match login.clone() {
+        Some(l) => match tokio::task::spawn_blocking(move || crate::login_access_live::hold(&l)).await {
+            Ok(held) => held,
+            Err(e) => {
+                k2_core::log_debug!("[voice/events] access hold failed: {e}");
+                None
+            }
+        },
+        None => None,
+    };
     if write.send(Message::Text(serde_json::json!({ "kind": "hello" }).to_string().into())).await.is_err() {
         return;
     }
@@ -118,7 +138,7 @@ pub async fn serve(stream: &mut TcpStream, token: String, owner_token: String) {
             recv = rx.recv() => {
                 match recv {
                     Ok(event) => {
-                        let Some(frame) = frame_for(&event) else { continue };
+                        let Some(frame) = frame_for(&event, login.as_deref()) else { continue };
                         let now = k2_core::connect_users::auth_generation();
                         if now != seen {
                             if !still(&token, &owner_token) {
@@ -193,11 +213,19 @@ mod tests {
     }
 
     #[test]
-    fn only_rooms_changed_frames_leave() {
-        assert_eq!(
-            frame_for(&SessionEvent::VoiceRoomsChanged { rev: 7 }).as_deref(),
-            Some(r#"{"kind":"voice_rooms_changed","rev":7}"#)
-        );
-        assert_eq!(frame_for(&SessionEvent::DomainsChanged { reason: "x".into(), apex: None }), None);
+    fn only_rooms_changed_and_the_login_s_own_access_frames_leave() {
+        for login in [None, Some("vcgina")] {
+            assert_eq!(
+                frame_for(&SessionEvent::VoiceRoomsChanged { rev: 7 }, login).as_deref(),
+                Some(r#"{"kind":"voice_rooms_changed","rev":7}"#)
+            );
+            assert_eq!(frame_for(&SessionEvent::DomainsChanged { reason: "x".into(), apex: None }, login), None);
+        }
+        let access = SessionEvent::AccessChanged { login: "vcgina".into() };
+        assert_eq!(frame_for(&access, Some("vcgina")).as_deref(), Some(r#"{"kind":"access_changed"}"#));
+        assert_eq!(frame_for(&access, Some("vcbob")), None, "another login's access");
+        assert_eq!(frame_for(&access, None), None, "the owner token");
+        let person = SessionEvent::HomesChanged { person: "vcgina".into(), cursor: 1 };
+        assert_eq!(frame_for(&person, Some("vcgina")), None, "still no person frame");
     }
 }

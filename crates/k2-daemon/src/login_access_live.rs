@@ -1,9 +1,11 @@
-//! A Connect login hears when its own access changes, on `/cli/sessions/events`.
+//! A Connect login hears when its own access changes, on `/cli/sessions/events`
+//! and `/cli/voice/events`.
 //!
 //! An App pass hears it on `me.events` (`access_live`), which refuses every
 //! credential but an App pass. A person's login (the desktop, or a phone paired
-//! as that login) holds `/cli/sessions/events` instead, so it gets the same frame
-//! there: `{"kind":"access_changed"}`, nothing else. The client reads its access
+//! as that login) holds `/cli/sessions/events` instead, and a Voice & Chat only
+//! login `/cli/voice/events`, so it gets the same frame there:
+//! `{"kind":"access_changed"}`, nothing else. The client reads its access
 //! again (`GET /cli/auth/whoami`, and in a call its recording controls).
 //!
 //! **Whose.** Only the sockets of the login whose access changed

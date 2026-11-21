@@ -114,3 +114,79 @@ async fn a_login_hears_only_its_own_access_change() {
     hears_none(&mut g, "gina, on bob's change").await;
     hears_none(&mut o, "the owner token, on bob's change").await;
 }
+
+// ── `/cli/voice/events`, a Voice & Chat only login's socket ───────────
+
+/// The voice rooms preview for this test only (the socket is dark without it).
+struct VoicePreview;
+
+impl VoicePreview {
+    fn on() -> Self {
+        k2_core::voice_preview::set_enabled(true);
+        VoicePreview
+    }
+}
+
+impl Drop for VoicePreview {
+    fn drop(&mut self) {
+        k2_core::voice_preview::set_enabled(false);
+    }
+}
+
+async fn voice_chat_login(port: u16, username: &str, agents: &[&str]) -> String {
+    owner_ok(
+        port,
+        "/cli/users/add",
+        json!({ "username": username, "password": LOGIN_PW, "mustChangePassword": false, "role": "voice_chat", "shareAgents": agents }),
+    )
+    .await;
+    let b = json!({ "username": username, "password": LOGIN_PW }).to_string();
+    let r = tokio::task::spawn_blocking(move || req_blocking(port, "POST", "/cli/auth/login", Some(b))).await.expect("join");
+    assert_eq!(r.status, 200, "login: {}", r.body);
+    r.json()["token"].as_str().expect("token").to_string()
+}
+
+/// A `/cli/voice/events` socket, past its hello.
+async fn voice_events(port: u16, token: &str) -> Sock {
+    let mut s = open(port, &format!("/cli/voice/events?token={}", enc(token))).await;
+    match next_frame(&mut s, 5_000).await {
+        Ok(Some(f)) => assert_eq!(f, r#"{"kind":"hello"}"#, "the first frame is the hello"),
+        other => panic!("no hello: {other:?}"),
+    }
+    s
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_voice_chat_login_hears_its_share_change_on_the_voice_socket() {
+    let env = setup(&[]);
+    let _preview = VoicePreview::on();
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let ws = seed_ws(&env, "lavcagent");
+    pin_chat(&ws);
+    let vc = voice_chat_login(port, "lavcgina", &[ws.handle.as_str()]).await;
+    let other = voice_chat_login(port, "lavcbob", &[]).await;
+    let mut v = voice_events(port, &vc).await;
+    let mut o = voice_events(port, &other).await;
+    hears_none(&mut v, "gina at rest").await;
+
+    // The owner revokes Gina's share: her voice socket hears it once, and her
+    // shares read then shows it.
+    let r = get(port, "/cli/shared", &vc, "x=1").await;
+    assert_eq!(r.status, 200, "shared: {}", r.body);
+    assert_eq!(r.json()["agents"].as_array().map(Vec::len), Some(1), "{}", r.body);
+    owner_ok(port, "/cli/users/set-shares", json!({ "username": "lavcgina", "agents": [], "gardens": [] })).await;
+    hears_once(&mut v, "gina's voice socket").await;
+    let r = get(port, "/cli/shared", &vc, "x=1").await;
+    assert_eq!(r.json()["agents"].as_array().map(Vec::len), Some(0), "the read after the frame shows the change: {}", r.body);
+    hears_none(&mut o, "bob's voice socket, on gina's change").await;
+
+    // The rooms frame reaches both, as before.
+    k2_daemon::session_events::emit(k2_daemon::session_events::SessionEvent::VoiceRoomsChanged { rev: 9 }).expect("emit");
+    for (who, s) in [("gina", &mut v), ("bob", &mut o)] {
+        let seen = watch(s, QUIET_MS).await;
+        assert!(!seen.ended, "{who}: {seen:?}");
+        assert!(seen.frames.iter().any(|f| f == r#"{"kind":"voice_rooms_changed","rev":9}"#), "{who}: the rooms frame: {seen:?}");
+        assert!(!seen.has("access_changed"), "{who}: no access frame rides with it: {seen:?}");
+    }
+}

@@ -42,6 +42,8 @@ export interface SessionViewChromeValue {
   /** Thread view's drawer on top leaves at least this much for the Thread
    *  (px). Undefined: the drawer's own default. */
   revealThreadMinPx?: number
+  /** ... and is never shorter than this (px). Undefined: its own minimum. */
+  revealDrawerMinPx?: number
 }
 
 export const SessionViewChromeContext = createContext<SessionViewChromeValue | null>(null)

@@ -509,6 +509,7 @@ export function PinnedSessionBody({
   openTerminal,
   draftId,
   revealThreadMinPx,
+  revealDrawerMinPx,
   children,
 }: {
   viewTab: SessionViewTab
@@ -540,6 +541,8 @@ export function PinnedSessionBody({
   draftId?: string
   /** The drawer on top leaves at least this much for the Thread (px). */
   revealThreadMinPx?: number
+  /** ... and is never shorter than this (px). */
+  revealDrawerMinPx?: number
   children: ReactNode
 }): JSX.Element {
   const chrome = useMemo<SessionViewChromeValue>(
@@ -559,8 +562,9 @@ export function PinnedSessionBody({
       viewSwitch,
       openTerminal,
       ...(revealThreadMinPx !== undefined ? { revealThreadMinPx } : {}),
+      ...(revealDrawerMinPx !== undefined ? { revealDrawerMinPx } : {}),
     }),
-    [viewTab, splitLeft, splitRight, addr, conversationId, agentName, displayName, terminalRevealed, terminalRevealKey, threadPanel, setThreadPanel, projectPath, viewSwitch, openTerminal, revealThreadMinPx],
+    [viewTab, splitLeft, splitRight, addr, conversationId, agentName, displayName, terminalRevealed, terminalRevealKey, threadPanel, setThreadPanel, projectPath, viewSwitch, openTerminal, revealThreadMinPx, revealDrawerMinPx],
   )
   // The session's columns are drawn here, around the terminal pane
   // (`children`), so a respawn that rebuilds the pane keeps the Thread, its

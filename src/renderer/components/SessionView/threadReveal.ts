@@ -50,13 +50,14 @@ export function revealTerminalSizePx(
   paneW: number,
   paneH: number,
   threadPx: number = REVEAL_TOP_THREAD_PX,
+  minPx: number = REVEAL_TOP_MIN_SIZE_PX,
 ): number {
   if (placement === 'left') {
     const raw = paneW * REVEAL_LEFT_FRACTION
     return Math.round(Math.min(REVEAL_LEFT_MAX_SIZE_PX, Math.max(REVEAL_LEFT_MIN_SIZE_PX, raw)))
   }
   const raw = Math.min(paneH * REVEAL_TOP_FRACTION, paneH - threadPx)
-  return Math.round(Math.max(REVEAL_TOP_MIN_SIZE_PX, raw))
+  return Math.round(Math.max(minPx, raw))
 }
 
 // ── Slide timing: the Style's own tokens ───────────────────────────────
@@ -97,6 +98,9 @@ export interface TerminalReveal {
   /** A top drawer leaves at least this much for the Thread (px), where the
    *  pane allows. Absent: REVEAL_TOP_THREAD_PX. */
   threadMinPx?: number
+  /** A top drawer is never shorter than this (px). Absent:
+   *  REVEAL_TOP_MIN_SIZE_PX. */
+  drawerMinPx?: number
 }
 
 /** Whether the revealed terminal is laid out: `open`, or sliding shut. Set
@@ -275,7 +279,7 @@ export function useTerminalRevealLayout(
     }
     const rect = container.getBoundingClientRect()
     const place = open ? revealPlacementNext(rect.width, null) : placementRef.current
-    const sizePx = revealTerminalSizePx(place, rect.width, rect.height, latest.current?.threadMinPx)
+    const sizePx = revealTerminalSizePx(place, rect.width, rect.height, latest.current?.threadMinPx, latest.current?.drawerMinPx)
     const anims = slide(terminal, thread, threadFloatsIn(container), place, sizePx)
     m.anims = anims
     if (!open) for (const a of anims) a.reverse()
@@ -290,7 +294,7 @@ export function useTerminalRevealLayout(
     }
   }, [available, open, motionKey, terminalRef, threadRef, containerRef, clearSlides])
 
-  return { placement, sizePx: revealTerminalSizePx(placement, box.w, box.h, reveal?.threadMinPx) }
+  return { placement, sizePx: revealTerminalSizePx(placement, box.w, box.h, reveal?.threadMinPx, reveal?.drawerMinPx) }
 }
 
 // ── The chord: which pane Ctrl+` acts on ────────────────────────────────

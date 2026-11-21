@@ -67,8 +67,10 @@ export interface TicketPatch {
 }
 
 /** The terminal drawer leaves the Thread at least this much (px): about
- *  three messages, the quick answers and the box at 1280 by 800. */
-export const TICKET_DRAWER_THREAD_PX = 460
+ *  three messages, the quick answers and the box at 1280 by 800, with the
+ *  drawer itself no shorter than TICKET_DRAWER_MIN_PX (about eight rows). */
+export const TICKET_DRAWER_THREAD_PX = 500
+export const TICKET_DRAWER_MIN_PX = 140
 
 /** Room between the newest message and the quick answers (px): it rests
  *  clear of the band over the box, where Jump to bottom sits. */
@@ -189,6 +191,7 @@ function TicketThreadBody({
           projectPath={projectPath ?? undefined}
           openTerminal={terminalOn ? openTerminal : undefined}
           revealThreadMinPx={TICKET_DRAWER_THREAD_PX}
+          revealDrawerMinPx={TICKET_DRAWER_MIN_PX}
         >
           {terminalOn ? (
             <TicketDrawerTerminal>

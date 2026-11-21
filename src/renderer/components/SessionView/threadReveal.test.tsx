@@ -55,6 +55,8 @@ describe('revealTerminalSizePx', () => {
     expect(revealTerminalSizePx('top', 460, 640, 460)).toBe(180)
     expect(revealTerminalSizePx('top', 460, 1000, 460)).toBe(450)
     expect(revealTerminalSizePx('left', 1200, 800, 460)).toBe(540)
+    // ... and may let the drawer be shorter than its usual 180.
+    expect(revealTerminalSizePx('top', 460, 640, 500, 140)).toBe(140)
   })
 })
 

@@ -16,6 +16,9 @@
 //! - [`reader`]: `mail reader`, the mail reader for people.
 //! - The retired owner verbs ([`RETIRED`]): each is the router's
 //!   moved-verb usage line, exit 2, after the gates.
+//! - The bare line ([`bare`]): `mail` alone is the family's help page,
+//!   exit 0; `mail --json` the unknown-command line, exit 2; each after
+//!   the gates.
 //!
 //! The route table sends a verb here only once it has a row of its own
 //! ([`crate::route`]); [`run`] returns `None` for anything else, and the
@@ -38,9 +41,10 @@ pub const WORDS: &[&str] = &["mail"];
 /// The shell's but for [`VERBS`].
 pub const OWNER: crate::route::Owner = crate::route::Owner::Bash;
 /// `watch`, the reads, the writes, the owner's verbs, `forward`, `reader`
-/// and the retired verbs; every other verb, and `mail` alone, is the
-/// shell's. One verb row each, so each can turn back alone.
+/// and the retired verbs, and the bare line ([`bare`]); every other verb
+/// is the shell's. One verb row each, so each can turn back alone.
 pub const VERBS: &[crate::route::Verb] = &[
+    crate::route::Verb::bare(crate::route::Owner::Native),
     native(&["watch"]),
     native(&["inboxes"]),
     native(&["addresses"]),
@@ -151,7 +155,32 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         Some(v) if forward::VERBS.contains(&v) => core::run(args, forward::parse, exec),
         Some("reader") => core::run(args, reader::parse, exec),
         Some(v) if RETIRED.contains(&v) => core::run(args, retired, exec),
+        _ if crate::route::is_bare(args) => bare(args),
         _ => None,
+    }
+}
+
+/// The bare line (`mail`, `mail --json`), through the gates the verbs
+/// take ([`core::run`]): `mail` alone is read there as an empty verb
+/// word.
+pub fn bare(args: &[OsString]) -> Option<Exit> {
+    if args.len() == 1 {
+        let padded = [args[0].clone(), OsString::new()];
+        return core::run(&padded, bare_plan, exec);
+    }
+    core::run(args, bare_plan, exec)
+}
+
+/// The router's `mail` arm with no verb: `''` is `cmd_help_mail`, exit
+/// 0; `--json` is no verb (`*)`: the unknown-command line, exit 2).
+pub fn bare_plan(verb: &str, words: &[&str]) -> core::Plan {
+    match (verb, words) {
+        ("", []) => core::Plan::Help("mail"),
+        ("--json", []) => core::usage(format!(
+            "unknown command '--json' \u{2014} see {} mail --help",
+            k2_client::brand::CLI_NAME
+        )),
+        _ => core::Plan::Shell,
     }
 }
 

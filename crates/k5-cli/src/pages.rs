@@ -1094,6 +1094,22 @@ mod tests {
         std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("read {}: {e}", p.display()))
     }
 
+    /// `line` as the shell CLI's source spells it: the shell is built in
+    /// the default brand (`brand/k2`), so under another brand
+    /// (`K2_BRAND_DIR`) this build's product name goes back to that one.
+    fn as_the_shell_spells(line: &str) -> String {
+        let p = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../brand/k2/brand.toml");
+        let toml =
+            std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("read {}: {e}", p.display()));
+        let product = toml
+            .lines()
+            .find_map(|l| l.strip_prefix("product = \""))
+            .and_then(|l| l.strip_suffix('"'))
+            .expect("brand/k2/brand.toml names the product");
+        line.replace(k2_client::brand::PRODUCT_NAME, product)
+    }
+
     fn page(topic: &'static str, json: bool) -> Option<Study> {
         Some(Study::Page { topic, json })
     }
@@ -1436,7 +1452,8 @@ mod tests {
         let index = src("study-index.sh");
         assert!(index.contains(&format!("        echo \"{CARDS_USAGE_LINE}\"\n")));
         let awk = format!(
-            "            awk '{{ print }} /^  design   / {{ print \"{CARDS_CATALOG_LINE}\" }}'\n"
+            "            awk '{{ print }} /^  design   / {{ print \"{}\" }}'\n",
+            as_the_shell_spells(CARDS_CATALOG_LINE)
         );
         assert!(index.contains(&awk), "no {awk:?} in study-index.sh");
         assert!(src("garden-data.sh").contains(
@@ -1602,7 +1619,8 @@ mod tests {
         ));
         assert!(src("wiki.sh").contains("        '')                       cmd_help_v2_daily ;;\n"));
         let daily = format!(
-            "cmd_help_v2_daily() {{\n    cat <<'EOF'\n%include cli/text/help/_daily.txt\nEOF\n    # 0.46.17: not in an agent's help while agents may not report\n    # (_sf_agents_off_here). Everyone else: today's text.\n    if ! _sf_agents_off_here; then\n        cat <<'EOF'\n%include cli/text/help/_daily-feedback.txt\nEOF\n    fi\n    # Permission cards (Beta): one line, only while both switches are on\n    # for this agent (PRD rev 3.1 \u{a7}11.4). Off = today's text.\n    if _permission_cli_enabled; then\n        echo '{CARDS_HELP_LINE}'\n    fi\n    cat <<'EOF'\n%include cli/text/help/_daily-end.txt\nEOF\n}}\n"
+            "cmd_help_v2_daily() {{\n    cat <<'EOF'\n%include cli/text/help/_daily.txt\nEOF\n    # 0.46.17: not in an agent's help while agents may not report\n    # (_sf_agents_off_here). Everyone else: today's text.\n    if ! _sf_agents_off_here; then\n        cat <<'EOF'\n%include cli/text/help/_daily-feedback.txt\nEOF\n    fi\n    # Permission cards (Beta): one line, only while both switches are on\n    # for this agent (PRD rev 3.1 \u{a7}11.4). Off = today's text.\n    if _permission_cli_enabled; then\n        echo '{}'\n    fi\n    cat <<'EOF'\n%include cli/text/help/_daily-end.txt\nEOF\n}}\n",
+            as_the_shell_spells(CARDS_HELP_LINE)
         );
         assert!(src("help.sh").contains(&daily), "cmd_help_v2_daily moved");
         let (head, block, end) = (
@@ -1626,13 +1644,14 @@ mod tests {
         assert!(head.ends_with('\n') && block.ends_with('\n'));
         assert!(!CARDS_HELP_LINE.contains('\''));
         // The block is the blank line, the heading and send-feedback's
-        // three lines.
-        let heading = concat!(
+        // three lines. The block is the help file's text, which keeps the
+        // shell's spelling.
+        let heading = as_the_shell_spells(concat!(
             "\n",
             k2_client::product_name!(),
             " ITSELF\n  send-feedback "
-        );
-        assert!(block.starts_with(heading) && block.lines().count() == 5);
+        ));
+        assert!(block.starts_with(&heading) && block.lines().count() == 5);
     }
 
     #[test]

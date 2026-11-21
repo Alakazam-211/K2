@@ -897,8 +897,14 @@ fn status(args: &[&str]) -> Option<Form> {
     let mut i = 0;
     while i < args.len() {
         match args[i] {
-            "--limit" | "-n" => {
-                limit = args.get(i + 1)?.to_string();
+            // Digits only, as the shell reads it: anything else (or no
+            // word) is "Error: <flag> needs a number", exit 2.
+            flag @ ("--limit" | "-n") => {
+                let v = args.get(i + 1).copied().unwrap_or("");
+                if v.is_empty() || !v.bytes().all(|b| b.is_ascii_digit()) {
+                    return usage(format!("Error: {flag} needs a number"), Exit::Usage);
+                }
+                limit = v.to_string();
                 i += 1;
             }
             a => {
@@ -1298,7 +1304,7 @@ impl Hb {
                 if exit != Exit::Ok || printed != Exit::Ok {
                     return Exit::Error;
                 }
-                let params = format!("{}&limit={limit}", name_param(&name));
+                let params = format!("{}&limit={}", name_param(&name), quote(&limit));
                 let p = self.get_piped(STATUS, &[params]);
                 Self::shown(&p, read::status_history(&text(&p.body), &name))
             }

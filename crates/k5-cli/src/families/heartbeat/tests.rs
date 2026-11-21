@@ -72,10 +72,38 @@ fn the_shell_s_own_forms() {
     assert_eq!(form(&["wake"]), Some(Form::Wake(None)));
     assert_eq!(form(&["signal", "wake", "x"]), Some(Form::Wake(None)));
     assert_eq!(form(&["session", "a", "--set"]), None);
-    assert_eq!(form(&["status", "a", "--limit"]), None);
     assert_eq!(form(&["log", "-n"]), None);
     assert_eq!(form(&["add", "--name"]), None);
     assert_eq!(form(&["add", "--name", "a", "--daily", "--time"]), None);
+}
+
+#[test]
+fn status_takes_a_limit_of_digits_only() {
+    for (args, flag) in [
+        (&["status", "a", "--limit"][..], "--limit"),
+        (&["status", "a", "-n"][..], "-n"),
+        (&["status", "a", "--limit", "5x"][..], "--limit"),
+        (&["status", "a", "--limit", ""][..], "--limit"),
+        (&["status", "--limit", "-3", "a"][..], "--limit"),
+        (&["status", "a", "-n", "5", "--limit", "x"][..], "--limit"),
+    ] {
+        let Some(Form::Stop(lines, exit)) = form(args) else {
+            panic!("{args:?}: not a stop");
+        };
+        assert_eq!(exit, Exit::Usage, "{args:?}");
+        assert_eq!(
+            lines,
+            vec![format!("Error: {flag} needs a number")],
+            "{args:?}"
+        );
+    }
+    assert_eq!(
+        form(&["status", "a", "-n", "5", "--limit", "007"]),
+        Some(Form::Status {
+            name: "a".into(),
+            limit: "007".into()
+        })
+    );
 }
 
 #[test]

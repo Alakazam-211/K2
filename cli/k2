@@ -9578,8 +9578,7 @@ external API clients are framed as non-owners. Callers cannot set this.
 
 Also writable via: k2 agent set / POST /cli/workspace/set field api_guest_policy
 EOF
-            [[ -z "$sub" || "$sub" == "help" || "$sub" == "-h" || "$sub" == "--help" ]] && exit 0
-            exit 2
+            exit 0
             ;;
         *)
             echo "Unknown api-guest-policy subcommand: $sub" >&2
@@ -9739,8 +9738,7 @@ Whether /v1 host-session spawns keep agent auto-approve flags
 
 Also: POST /cli/workspace/set {"project":"…","fields":{"api_skip_permissions":"0"|"1"}}
 EOF
-            [[ -z "$sub" || "$sub" == "help" || "$sub" == "-h" || "$sub" == "--help" ]] && exit 0
-            exit 2
+            exit 0
             ;;
         *)
             echo "Unknown api-skip-permissions subcommand: $sub" >&2
@@ -9868,8 +9866,7 @@ Per-workspace default LLM model spliced onto new agent sessions
 
 API POST /v1/w/<ws>/host-sessions {"model":"…"} overrides this per call.
 EOF
-            [[ -z "$sub" || "$sub" == "help" || "$sub" == "-h" || "$sub" == "--help" ]] && exit 0
-            exit 2
+            exit 0
             ;;
         *)
             echo "Unknown default-model subcommand: $sub" >&2
@@ -10006,8 +10003,7 @@ on a host-session still applies on resume regardless.
   set <ws> on|1         Splice default model on resume
   set <ws> off|0        Leave resume argv unpinned
 EOF
-            [[ -z "$sub" || "$sub" == "help" || "$sub" == "-h" || "$sub" == "--help" ]] && exit 0
-            exit 2
+            exit 0
             ;;
         *)
             echo "Unknown force-model-on-resume subcommand: $sub" >&2
@@ -10174,8 +10170,7 @@ agents still need `k2 done` to avoid accretion.
 
 Also: POST /cli/workspace/set {"project":"…","fields":{"host_session_cell_cap":"64"|"default"}}
 EOF
-            [[ -z "$sub" || "$sub" == "help" || "$sub" == "-h" || "$sub" == "--help" ]] && exit 0
-            exit 2
+            exit 0
             ;;
         *)
             echo "Unknown host-session-cell-cap subcommand: $sub" >&2

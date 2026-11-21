@@ -1485,8 +1485,7 @@ else:
             cat <<'EOF' >&2
 %include cli/text/help/workspace/api-guest-policy.txt
 EOF
-            [[ -z "$sub" || "$sub" == "help" || "$sub" == "-h" || "$sub" == "--help" ]] && exit 0
-            exit 2
+            exit 0
             ;;
         *)
             echo "Unknown api-guest-policy subcommand: $sub" >&2
@@ -1636,8 +1635,7 @@ print("api_skip_permissions set to %s." % state)
             cat <<'EOF' >&2
 %include cli/text/help/workspace/api-skip-permissions.txt
 EOF
-            [[ -z "$sub" || "$sub" == "help" || "$sub" == "-h" || "$sub" == "--help" ]] && exit 0
-            exit 2
+            exit 0
             ;;
         *)
             echo "Unknown api-skip-permissions subcommand: $sub" >&2
@@ -1756,8 +1754,7 @@ else:
             cat <<'EOF' >&2
 %include cli/text/help/workspace/default-model.txt
 EOF
-            [[ -z "$sub" || "$sub" == "help" || "$sub" == "-h" || "$sub" == "--help" ]] && exit 0
-            exit 2
+            exit 0
             ;;
         *)
             echo "Unknown default-model subcommand: $sub" >&2
@@ -1886,8 +1883,7 @@ print("force_model_on_resume set to %s." % state)
             cat <<'EOF' >&2
 %include cli/text/help/workspace/force-model-on-resume.txt
 EOF
-            [[ -z "$sub" || "$sub" == "help" || "$sub" == "-h" || "$sub" == "--help" ]] && exit 0
-            exit 2
+            exit 0
             ;;
         *)
             echo "Unknown force-model-on-resume subcommand: $sub" >&2
@@ -2042,8 +2038,7 @@ else:
             cat <<'EOF' >&2
 %include cli/text/help/workspace/host-session-cell-cap.txt
 EOF
-            [[ -z "$sub" || "$sub" == "help" || "$sub" == "-h" || "$sub" == "--help" ]] && exit 0
-            exit 2
+            exit 0
             ;;
         *)
             echo "Unknown host-session-cell-cap subcommand: $sub" >&2

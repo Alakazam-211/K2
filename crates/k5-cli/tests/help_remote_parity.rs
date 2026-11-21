@@ -28,6 +28,16 @@ fn help_remote_as_the_shell_does() {
     for c in [
         // native: help remote
         case("the usage", &["remote"], &[], vec![], owner_and_port, 0, 0),
+        // `cmd_help` reads only its first word.
+        case(
+            "more words after it",
+            &["remote", "logout", "x"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        ),
         Case {
             env: with_passport(&[("K2_HOOK_SOCK", "{sock}")]),
             ..case("in a session", &["remote"], &[], vec![], port_only, 0, 0)

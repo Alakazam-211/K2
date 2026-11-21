@@ -38,13 +38,13 @@ pub const VERBS: &[crate::route::Verb] = &[crate::route::Verb {
     owner: crate::route::Owner::Native,
 }];
 
-/// `k5 help remote`: after the connection gate (the virtual desktop's
-/// guard passes `help`),
+/// `k5 help remote` (and words after it, which `cmd_help` never reads):
+/// after the connection gate (the virtual desktop's guard passes `help`),
 /// `_remote_usage` on stdout, exit 0. `help` is an open tool, so the
 /// session checks pass it. `None`: the shell answers any other line.
 pub fn run(args: &[OsString]) -> Option<Exit> {
     let words: Vec<&str> = args.iter().map(|a| a.to_str()).collect::<Option<_>>()?;
-    if words != ["help", "remote"] {
+    if !matches!(words.as_slice(), ["help", "remote", ..]) {
         return None;
     }
     if !crate::python::family_native(crate::python::here()) {

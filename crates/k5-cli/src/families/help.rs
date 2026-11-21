@@ -15,9 +15,9 @@
 //! is), and a line with `-h` or `--help` in it only to a page from that
 //! list, which `--help`, `-h` and `--help <word>` for a word with no page
 //! aren't on. So the rows turn when the front sends those lines to their
-//! pages first. What the shell still answers itself: `help <word> <more
-//! words>` (`cmd_help` reads only the first) and a tier word with words
-//! after it (its arm reads none).
+//! pages first. Words after the one that picks the page are read as
+//! bash reads them, not at all (`cmd_help` reads only its first word,
+//! the `help-*` arms none): the front looks the page up without them.
 //!
 //! [`shell_prelude`] and [`show`] are for the families that print a page
 //! themselves (`--schema`, `explain`).

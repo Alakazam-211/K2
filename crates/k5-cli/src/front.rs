@@ -2,7 +2,8 @@
 //! to the shell CLI.
 //!
 //! The route table ([`crate::route`]) says who answers. Its `Native` rows
-//! are the version (alone, or exactly `--version --check`), `cli`
+//! are the version (with any words after it; exactly `--version --check`
+//! is the binary's check), `cli`
 //! (`cli status [--json]` and its help), `study`, and the families in
 //! [`crate::families`], each run by its row's code ([`Route::Family`]). A
 //! form the front's code does not take falls through, as does everything
@@ -55,7 +56,8 @@ use std::ffi::OsString;
 /// Where a command line goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Route {
-    /// `--version`, `-v` or `version`, with nothing after it.
+    /// `--version`, `-v` or `version`, and any words after it but exactly
+    /// `--check` after `--version`.
     Version,
     /// Exactly `--version --check`: the version, then the server's
     /// ([`crate::check`]).
@@ -106,10 +108,11 @@ pub fn route(args: &[OsString]) -> Route {
             let Some(words) = words else {
                 return Route::Fallthrough;
             };
-            if let Some(c) = pages::composed(&words) {
+            let page = page_words(&words);
+            if let Some(c) = pages::composed(page) {
                 return Route::Composed(c);
             }
-            if let Some(form) = text::help_form(&words) {
+            if let Some(form) = text::help_form(page) {
                 return Route::Help(form);
             }
             // The router's `*)` arm: a first word no row names.
@@ -118,6 +121,18 @@ pub fn route(args: &[OsString]) -> Route {
             }
             Route::Fallthrough
         }
+    }
+}
+
+/// The words of a help line that pick its page: `cmd_help` reads only its
+/// first word (`help`, `--help` or `-h` and one more), and the router's
+/// `help-advanced`, `help-internal` and `help-deprecated` arms read none.
+/// Every other line is itself.
+fn page_words<'a>(words: &'a [&'a str]) -> &'a [&'a str] {
+    match words {
+        [first, _, _, ..] if pages::HELP_FIRST.contains(first) => &words[..2],
+        ["help-advanced" | "help-internal" | "help-deprecated", _, ..] => &words[..1],
+        _ => words,
     }
 }
 
@@ -210,11 +225,12 @@ fn native(noun: &'static Noun, args: &[OsString]) -> Route {
     // A line the front's own code doesn't take: a captured help form's
     // page, or the shell's.
     let captured = || text::captured_form(&words).map_or(Route::Fallthrough, Route::Help);
+    // The router's `version|--version|-v` arm reads no word after it;
+    // exactly `--version --check` is the binary's own check.
     if noun.names("version") {
         return match words.as_slice() {
-            [_] => Route::Version,
             ["--version", "--check"] => Route::VersionCheck,
-            _ => captured(),
+            _ => Route::Version,
         };
     }
     if noun.names("study") {
@@ -307,6 +323,20 @@ mod tests {
         for one in ["--version", "-v", "version"] {
             assert_eq!(route(&args(&[one])), Route::Version, "{one}");
         }
+        assert_eq!(route(&args(&["--version", "--check"])), Route::VersionCheck);
+        // The router's arm reads no word after it.
+        for row in [
+            &["--version", "--json"][..],
+            &["--version", "--check", "x"],
+            &["-v", "--check"],
+            &["version", "--check"],
+            &["--version", "--Check"],
+            &["version", "x"],
+            &["version", "--help"],
+            &["-v", ""],
+        ] {
+            assert_eq!(route(&args(row)), Route::Version, "{row:?}");
+        }
         let rows: &[&[&str]] = &[
             &["-h"],
             &["-V"],
@@ -314,14 +344,7 @@ mod tests {
             &["versions"],
             &["--version="],
             &[" --version"],
-            &["--version", "--json"],
-            &["--version", "--check", "x"],
-            &["-v", "--check"],
-            &["version", "--check"],
             &["--check", "--version"],
-            &["--version", "--Check"],
-            &["version", "x"],
-            &["-v", ""],
             &["--json", "--version"],
             &["msg", "--version"],
             &[""],
@@ -333,7 +356,6 @@ mod tests {
                 "{row:?}: {r:?}"
             );
         }
-        assert_eq!(route(&args(&["--version", "--json"])), Route::Fallthrough);
         assert_eq!(route(&args(&["-V"])), Route::Unknown, "no row has -V");
     }
 
@@ -353,6 +375,9 @@ mod tests {
             &["-h", "nope"],
             &["help", ""],
             &["help", "app"],
+            // `cmd_help` reads only its first word.
+            &["help", "nope", "x"],
+            &["-h", "-h", "x"],
         ] {
             assert_eq!(
                 route(&args(other)),
@@ -360,9 +385,7 @@ mod tests {
                 "{other:?}"
             );
         }
-        for shell in [&["help", "nope", "x"][..], &["", "x"], &["-h", "-h", "x"]] {
-            assert_eq!(route(&args(shell)), Route::Fallthrough, "{shell:?}");
-        }
+        assert_eq!(route(&args(&["", "x"])), Route::Fallthrough);
         assert_eq!(
             route(&args(&["help", "mail"])),
             Route::Help(text::help_form(&["help", "mail"]).unwrap())
@@ -936,11 +959,15 @@ mod tests {
             route(&args(&["study", "--json"])),
             Route::Study(Study::CatalogJson)
         );
-        // The shell's: unknown and bash topics, errors.
+        // A second topic: the refusal and the usage.
+        assert_eq!(
+            route(&args(&["study", "errors", "db"])),
+            Route::Study(Study::Extra { word: "db" })
+        );
+        // The shell's: unknown and bash topics, an unknown flag.
         for shell in [
             &["study", "nope"][..],
             &["study", "app-api"],
-            &["study", "errors", "db"],
             &["study", "--x"],
         ] {
             assert_eq!(route(&args(shell)), Route::Fallthrough, "{shell:?}");
@@ -961,11 +988,22 @@ mod tests {
         // the pieces' pages [`Route::Composed`] (the_composed_forms).
         for shell in [
             &["mail", "send", "x", "--help"][..],
-            &["help", "mail", "send"],
             &["chat", "--help", "x"],
             &["app", "nope", "--help"],
         ] {
             assert_eq!(route(&args(shell)), Route::Fallthrough, "{shell:?}");
+        }
+        // `cmd_help` reads only its first word; the help-* arms read none.
+        for (line, page) in [
+            (&["help", "mail", "send"][..], &["help", "mail"][..]),
+            (&["help", "msg", "x"], &["help", "msg"]),
+            (&["--help", "--advanced", "x"], &["--help", "--advanced"]),
+            (&["help-advanced", "x"], &["help-advanced"]),
+            (&["help-internal", "x", "y"], &["help-internal"]),
+            (&["help-advanced", "--help"], &["help-advanced"]),
+        ] {
+            assert_eq!(route(&args(line)), route(&args(page)), "{line:?}");
+            assert!(matches!(route(&args(line)), Route::Help(_)), "{line:?}");
         }
         // A word after a captured help-word line: the family's line.
         assert_eq!(
@@ -1005,6 +1043,11 @@ mod tests {
             (&["chat", "help"], Composed::Chat),
             (&["help", "chat"], Composed::Chat),
             (&["-h", "chat"], Composed::Chat),
+            (&["help-deprecated", "x"], Composed::Deprecated),
+            (&["help", "deprecated", "x"], Composed::Deprecated),
+            (&["help", "chat", "x"], Composed::Chat),
+            (&["help", "nope", "x"], Composed::Daily),
+            (&["-h", "", "x"], Composed::Daily),
         ] {
             assert_eq!(route(&args(line)), Route::Composed(want), "{line:?}");
         }

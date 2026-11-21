@@ -80,6 +80,9 @@ pub enum Study {
     CatalogJson,
     /// A topic's page (after the heartbeats aliases), as text or JSON.
     Page { topic: &'static str, json: bool },
+    /// A second topic: `cmd_study`'s refusal of it, then the usage, on
+    /// stderr, exit 2.
+    Extra { word: &'static str },
 }
 
 /// What people call heartbeats (`cmd_study`): each is the heartbeats page.
@@ -149,9 +152,15 @@ pub fn study(rest: &[&str]) -> Option<Study> {
         match *arg {
             "--help" | "-h" => return Some(Study::Usage),
             "--json" => json = true,
-            // An unknown flag, then a second topic: the shell's errors.
+            // An unknown flag: the shell's error.
             a if a.starts_with("--") => return None,
-            _ if !topic.is_empty() => return None,
+            // A second topic. The word lives as long as the run (one
+            // refusal per process).
+            a if !topic.is_empty() => {
+                return Some(Study::Extra {
+                    word: Box::leak(a.to_string().into_boxed_str()),
+                })
+            }
             a => topic = a,
         }
     }
@@ -238,7 +247,9 @@ fn catalog(on: bool) -> Option<Cow<'static, str>> {
 /// and if so its switch.
 fn cards_switch(s: Study) -> Option<bool> {
     match s {
-        Study::Usage | Study::Catalog | Study::CatalogJson => Some(LIST_WITH_PASSPORT),
+        Study::Usage | Study::Catalog | Study::CatalogJson | Study::Extra { .. } => {
+            Some(LIST_WITH_PASSPORT)
+        }
         Study::Page { topic, .. } if topic == CARDS_PAGE || topic == "skins" => {
             Some(APPS_WITH_PASSPORT)
         }
@@ -623,8 +634,17 @@ pub fn study_page(
             lead: None,
         });
     }
+    if let Study::Extra { word } = s {
+        return Some(Page {
+            text: format!("Error: unexpected extra argument '{word}'\n{}", usage(on)?).into(),
+            stderr: true,
+            exit: Exit::Usage,
+            lead: None,
+        });
+    }
     let text: Cow<'static, str> = match s {
         Study::Usage => usage(on)?,
+        Study::Extra { .. } => unreachable!("printed above"),
         Study::Catalog => catalog(on)?,
         Study::CatalogJson => catalog_json(on).into(),
         Study::Page { json: false, .. } if hidden => off_page(),
@@ -1256,13 +1276,17 @@ mod tests {
         }
         assert_eq!(study(&["--json"]), Some(Study::CatalogJson));
         assert_eq!(study(&["list", "--json"]), Some(Study::CatalogJson));
-        // The shell's: errors (an unknown flag, a second topic, before any
-        // --help), unknown topics and the bash pages.
+        // A second topic, before any --help: its refusal.
+        let extra = |word| Some(Study::Extra { word });
+        assert_eq!(study(&["errors", "db"]), extra("db"));
+        assert_eq!(study(&["errors", "db", "--help"]), extra("db"));
+        assert_eq!(study(&["", "x", "y"]), extra("y"));
+        // The shell's: errors (an unknown flag, before any --help),
+        // unknown topics and the bash pages.
         for shell in [
             &["--bogus", "--help"][..],
             &["--"],
-            &["errors", "db"],
-            &["errors", "db", "--help"],
+            &["errors", "--bogus", "db"],
             &["nope"],
             &["-x"],
             &["app-api"],

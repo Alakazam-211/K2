@@ -236,7 +236,9 @@ if [ "$NEW" != "$CLI_BASH_SOURCE" ]; then
     native "$CARDS_ONLY"
     native "$CARDS_ONLY" --json
     handed --bogus
-    handed errors db
+    # A second topic: the refusal and the usage.
+    native errors db
+    native errors db --json
     handed -- errors
     # A passport, and a page that asks nothing: the binary's own page.
     RUN_ENV=("K2_HOOK_TOKEN=sessT.notreal1" "$BROKEN")

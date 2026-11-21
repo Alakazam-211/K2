@@ -174,3 +174,22 @@ fn study_permissions_without_a_passport() {
         rig.check(&case(name, args, &[], vec![], owner_and_port, 2, 0));
     }
 }
+
+/// A second topic: `cmd_study`'s refusal of it, then the usage, exit 2
+/// (with a passport the usage asks whether cards are on, as the shell's
+/// does).
+#[test]
+fn study_a_second_topic() {
+    let rig = Rig::new("study", "extra");
+    for (name, args) in [
+        ("cli x", &["cli", "x"][..]),
+        ("errors db --help", &["errors", "db", "--help"]),
+        ("--json errors x", &["--json", "errors", "x"]),
+        ("'' errors x", &["", "errors", "x"]),
+    ] {
+        rig.check(&case(name, args, &[], vec![], owner_and_port, 2, 0));
+    }
+    for c in common::cards::rows(&rig, &["cli", "x"], 2, 2) {
+        rig.check(&c);
+    }
+}

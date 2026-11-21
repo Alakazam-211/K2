@@ -131,7 +131,13 @@ fn kit(args: &[OsString], id: &str, as_json: bool) -> Option<Exit> {
     let words: Vec<&str> = args.iter().skip(1).filter_map(|a| a.to_str()).collect();
     let mut ctx = super::app::call::Ctx::new(client, super::app::call::args_json(&words));
     let exit = match ctx.send(false, KIT_ROUTE, &kit_query(id, as_json), false) {
-        Ok(split) => kit_answer(&split.status, &split.body, as_json).print(),
+        Ok(split) => {
+            // A 403 on the cell socket: the daemon's version decides.
+            let older = split.status == "403"
+                && ctx.client.has_cell_socket()
+                && daemon_before_kit_route(args, &settings);
+            kit_answer(&split.status, &split.body, as_json, older).print()
+        }
         Err(exit) => exit,
     };
     let super::app::call::Ctx {
@@ -141,6 +147,73 @@ fn kit(args: &[OsString], id: &str, as_json: bool) -> Option<Exit> {
     } = ctx;
     closing.flush(&mut client, exit);
     Some(exit)
+}
+
+/// The release that adds [`KIT_ROUTE`].
+pub const KIT_ROUTE_SINCE: &str = "0.46.17";
+
+/// After a 403 on the cell socket, `_explain_kit`'s look at the daemon's
+/// version: a daemon before [`KIT_ROUTE_SINCE`] answers the route so on
+/// the socket (it isn't an agent verb there), and so does a real refusal
+/// (K2's ruling: the 403 alone decides nothing). The version from
+/// `/boot-status` on `127.0.0.1` at the settings' port, as
+/// `_update_daemon_version` reads it ([`super::update::daemon_version`]):
+/// true only for one older than [`KIT_ROUTE_SINCE`]; no answer or no
+/// version is false.
+fn daemon_before_kit_route(args: &[OsString], settings: &crate::daemon::Settings) -> bool {
+    let Some(port) = settings.port else {
+        return false;
+    };
+    let local = crate::daemon::Settings {
+        host: "127.0.0.1".to_string(),
+        port: Some(port),
+        ..settings.clone()
+    };
+    let Ok(mut client) = local.client(crate::passport::current(args).would_refuse()) else {
+        return false;
+    };
+    let Ok(r) = client.get_update_version(super::update::BOOT_STATUS) else {
+        return false;
+    };
+    super::update::daemon_version(&r.body)
+        .is_some_and(|v| version_before(&v, KIT_ROUTE_SINCE))
+}
+
+/// `[[ "$v" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+ ]] && _daemon_version_lt
+/// "${BASH_REMATCH[0]}" <since>`, for `v` as
+/// [`super::update::daemon_version`] gives it: the shell's `^v?` is the
+/// one leading `v` that already took off. True when the leading `x.y.z`
+/// is older than `since`, by number; no leading `x.y.z` is false.
+pub fn version_before(v: &str, since: &str) -> bool {
+    fn triple(v: &str) -> Option<[&str; 3]> {
+        let mut parts = [""; 3];
+        let mut rest = v;
+        for (i, part) in parts.iter_mut().enumerate() {
+            let n = rest.bytes().take_while(u8::is_ascii_digit).count();
+            if n == 0 {
+                return None;
+            }
+            *part = &rest[..n];
+            rest = &rest[n..];
+            if i < 2 {
+                rest = rest.strip_prefix('.')?;
+            }
+        }
+        Some(parts)
+    }
+    // By number: leading zeros gone, then the longer is larger.
+    fn cmp(a: &str, b: &str) -> std::cmp::Ordering {
+        let (a, b) = (a.trim_start_matches('0'), b.trim_start_matches('0'));
+        a.len().cmp(&b.len()).then_with(|| a.cmp(b))
+    }
+    let (Some(a), Some(b)) = (triple(v), triple(since)) else {
+        return false;
+    };
+    a.iter()
+        .zip(b.iter())
+        .map(|(x, y)| cmp(x, y))
+        .find(|o| o.is_ne())
+        .is_some_and(|o| o.is_lt())
 }
 
 /// The request's query, as `_explain_kit` builds it (`urlencode`).
@@ -172,7 +245,8 @@ fn py_exit(x: Option<&Value>, stderr: &mut String) -> Exit {
 }
 
 /// The line for a server from before [`KIT_ROUTE`] (it answers 404 or
-/// 405): no fallback to another route (K2's ruling).
+/// 405, or 403 on the cell socket with an older version): no fallback to
+/// another route (K2's ruling).
 pub const OLDER_SERVER: &str = concat!(
     "This ",
     product_name!(),
@@ -181,8 +255,10 @@ pub const OLDER_SERVER: &str = concat!(
     " update)."
 );
 
-/// `_explain_kit`'s reader on `_compute_split`'s status and body.
-pub fn kit_answer(status: &str, body: &[u8], as_json: bool) -> super::Shown {
+/// `_explain_kit`'s reader on `_compute_split`'s status and body; `older`:
+/// a 403 on the cell socket from a daemon before [`KIT_ROUTE_SINCE`]
+/// ([`daemon_before_kit_route`]).
+pub fn kit_answer(status: &str, body: &[u8], as_json: bool, older: bool) -> super::Shown {
     let raw = String::from_utf8_lossy(body);
     let stripped = raw.trim_matches(super::py_space);
     let v = if stripped.is_empty() {
@@ -208,7 +284,7 @@ pub fn kit_answer(status: &str, body: &[u8], as_json: bool) -> super::Shown {
             };
         }
     }
-    if status == "404" || status == "405" {
+    if status == "404" || status == "405" || older {
         return super::Shown {
             stdout,
             stderr: format!("{OLDER_SERVER}\n"),
@@ -820,13 +896,13 @@ mod tests {
             kit_query("mpc-\"\\x &", true),
             "id=mpc-%22%5Cx%20%26&json=1"
         );
-        let a = kit_answer("200", br#"{"exit": 0, "stdout": "page\n"}"#, false);
+        let a = kit_answer("200", br#"{"exit": 0, "stdout": "page\n"}"#, false, false);
         assert_eq!(
             (a.stdout.as_str(), a.stderr.as_str(), a.exit),
             ("page\n", "", Exit::Ok)
         );
         let row = br#"{"id": "MPC-E110", "code": "unknown_id", "message": "no error id x", "next": "list them", "exit": 4}"#;
-        let a = kit_answer("422", row, false);
+        let a = kit_answer("422", row, false, false);
         assert_eq!(
             (a.stderr.as_str(), a.exit),
             (
@@ -834,9 +910,9 @@ mod tests {
                 Exit::NotFound
             )
         );
-        let a = kit_answer("422", row, true);
+        let a = kit_answer("422", row, true, false);
         assert_eq!(a.stdout, format!("{}\n", String::from_utf8_lossy(row)));
-        let a = kit_answer("000", b"", false);
+        let a = kit_answer("000", b"", false, false);
         assert_eq!(
             (a.stderr, a.exit),
             (
@@ -847,7 +923,7 @@ mod tests {
                 Exit::Error
             )
         );
-        let a = kit_answer("000", b"", true);
+        let a = kit_answer("000", b"", true, false);
         assert_eq!(
             a.stdout,
             format!(
@@ -856,7 +932,7 @@ mod tests {
             )
         );
         let refused = br#"{"error": {"code": "forbidden", "hint": "not for this caller"}}"#;
-        let a = kit_answer("403", refused, false);
+        let a = kit_answer("403", refused, false, false);
         assert_eq!(
             (a.stderr.as_str(), a.exit),
             ("Error [forbidden]: not for this caller\n", Exit::Refused)
@@ -870,14 +946,41 @@ mod tests {
             ("404", &br#"{"error": "not found"}"#[..], true),
             ("405", &br#"{"error": "GET or POST only"}"#[..], false),
         ] {
-            let a = kit_answer(status, body, as_json);
+            let a = kit_answer(status, body, as_json, false);
             assert_eq!(
                 (a.stdout.as_str(), a.stderr.as_str(), a.exit),
                 ("", format!("{OLDER_SERVER}\n").as_str(), Exit::Error),
                 "{status}"
             );
         }
-        let a = kit_answer("500", b"not json", false);
+        // A 403 on the cell socket from an older daemon (`older`): the
+        // line, plain or --json; the same 403 from a newer one: the refusal.
+        let socket_403 = br#"{"error":"Invalid or missing auth token"}"#;
+        for as_json in [false, true] {
+            let a = kit_answer("403", socket_403, as_json, true);
+            assert_eq!(
+                (a.stdout.as_str(), a.stderr.as_str(), a.exit),
+                ("", format!("{OLDER_SERVER}\n").as_str(), Exit::Error)
+            );
+        }
+        let a = kit_answer("403", socket_403, false, false);
+        assert_eq!(
+            (a.stdout.as_str(), a.stderr.as_str(), a.exit),
+            (
+                "",
+                "Error [error]: the daemon refused (HTTP 403)\n",
+                Exit::Error
+            )
+        );
+        let a = kit_answer("403", socket_403, true, false);
+        assert_eq!(
+            (a.stdout.as_str(), a.exit),
+            (
+                "{\"error\":\"Invalid or missing auth token\"}\n",
+                Exit::Error
+            )
+        );
+        let a = kit_answer("500", b"not json", false, false);
         assert_eq!(
             (a.stderr.as_str(), a.exit),
             (
@@ -885,6 +988,49 @@ mod tests {
                 Exit::Error
             )
         );
+    }
+
+    /// `_explain_kit`'s version test after a 403 on the cell socket.
+    #[test]
+    fn a_version_before_the_kit_route() {
+        assert_eq!(KIT_ROUTE_SINCE, "0.46.17");
+        for (v, before) in [
+            ("0.46.16", true),
+            ("0.46.9", true),
+            ("0.45.99", true),
+            // The daemon said "vv0.46.16": the shell's `^v?` takes one.
+            ("v0.46.16", false),
+            ("0.46.16-dev", true),
+            ("0.46.016", true),
+            ("0.46.17", false),
+            ("0.46.17-rc1", false),
+            ("0.46.18", false),
+            ("0.47.0", false),
+            ("1.0.0", false),
+            ("0.46.0100", false),
+            ("", false),
+            ("0.46", false),
+            ("x0.46.16", false),
+            ("0.46.", false),
+            ("unknown", false),
+        ] {
+            assert_eq!(version_before(v, KIT_ROUTE_SINCE), before, "{v:?}");
+        }
+        // Through `_update_daemon_version`'s reader, as the shell's.
+        let older = |body: &[u8]| {
+            super::super::update::daemon_version(body)
+                .is_some_and(|v| version_before(&v, KIT_ROUTE_SINCE))
+        };
+        assert!(older(br#"{"phase": "ready", "version": "0.46.16"}"#));
+        assert!(older(br#"{"version": "v0.46.16"}"#));
+        assert!(older(br#"{"version": " 0.46.16 "}"#));
+        assert!(!older(br#"{"version": "vv0.46.16"}"#));
+        assert!(!older(br#"{"version": "0.46.17"}"#));
+        assert!(!older(br#"{"version": 46}"#));
+        assert!(!older(br#"{"phase": "ready"}"#));
+        assert!(!older(br#"{"error": "the test sends nothing over TCP"}"#));
+        assert!(!older(b"not json"));
+        assert!(!older(b""));
     }
 
     /// The shell's `_explain_kit`: its request and its reader's lines.
@@ -900,7 +1046,12 @@ mod tests {
             r#"        print("Error [%s] %s: %s" % (v.get("code"), v.get("id"), v.get("message")), file=sys.stderr)"#,
             r#"hint = err.get("hint") or ("no answer from the K2 daemon" if status == "000" else "the daemon refused (HTTP %s)" % status)"#,
             r#"sys.exit(3 if code in ("not_enabled", "forbidden", "not_connected", "sandboxed_agent", "core_off") else 1)"#,
-            r#"if status in ("404", "405"):"#,
+            r#"if status in ("404", "405") or older:"#,
+            r#"    if [ "$_CP_STATUS" = 403 ]; then"#,
+            r#"        if [ -n "$sock" ] && [ -S "$sock" ] && ! _cli_skip_uds && [ -n "${SCOPED_TOKEN:-}" ]; then"#,
+            r#"            dver="$(_update_daemon_version)""#,
+            r#"            if [[ "$dver" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+ ]] && _daemon_version_lt "${BASH_REMATCH[0]}" 0.46.17; then"#,
+            r#"' "$_CP_STATUS" "$json_out" "$older""#,
             r#"    print("This K2 server is older and can'"'"'t explain kit codes yet; update it (k2 update).", file=sys.stderr)"#,
         ] {
             assert!(sh.contains(line), "explain.sh no longer has {line:?}");

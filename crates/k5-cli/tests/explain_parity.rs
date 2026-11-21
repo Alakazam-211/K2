@@ -20,6 +20,11 @@
 //!   kit's page (and one above 256 KiB), its JSON, its row, a refusal, an
 //!   older daemon without the route (404 or 405: one line saying to update
 //!   it, exit 1), an answer that is not JSON.
+//! - A 403 on the cell socket, as an older daemon answers the route there
+//!   and as a real refusal does: one GET of loopback `/boot-status`, then
+//!   the older line for a version before 0.46.17, else the refusal (a
+//!   newer version, a failing or empty `/boot-status`). Over TCP a 403 is
+//!   the refusal, and `/boot-status` is not asked.
 
 #![cfg(unix)]
 
@@ -535,6 +540,171 @@ fn a_kit_id_is_the_kit_s_explain() {
         ),
     );
     rig.check(&guard);
+}
+
+/// A 403 on the cell socket (K2's ruling): a daemon before 0.46.17 answers
+/// the kit route so there (it isn't an agent verb on the socket), and so
+/// does a real refusal. The 403 alone decides nothing: one GET of
+/// `/boot-status` on loopback, with no credential, and only a version
+/// before 0.46.17 is the older line. Then the exit trap's passport check
+/// (`/cli/whoami`, on a "missing auth token" answer), which this stub
+/// doesn't refuse.
+#[test]
+fn a_403_on_the_cell_socket_asks_the_version() {
+    const SOCKET_403: &str = r#"{"error":"Invalid or missing auth token"}"#;
+    const WHOAMI: &str = r#"{"name":"tester"}"#;
+    let rig = Rig::new(VERB, "kit403");
+    let boot = |v: &str| ok(leak(format!(r#"{{"phase":"ready","version":"{v}"}}"#)));
+    let row = |name: &'static str, args: &'static [&'static str], boot: common::stub::Reply| {
+        with(
+            with_passport(&[("K2_HOOK_SOCK", "{sock}")]),
+            case(
+                name,
+                args,
+                &[],
+                vec![
+                    common::stub::Reply::Answer(403, SOCKET_403.into()),
+                    boot,
+                    ok(WHOAMI),
+                ],
+                port_only,
+                1,
+                3,
+            ),
+        )
+    };
+    let older = format!("{}\n", k5_cli::families::explain::OLDER_SERVER);
+    let rows = [
+        // covers: explain
+        (
+            row(
+                "403 on the socket, server 0.46.16",
+                &["MPC-E001"],
+                boot("0.46.16"),
+            ),
+            true,
+        ),
+        // covers: explain --json
+        (
+            row(
+                "403 on the socket, server 0.46.16, as JSON",
+                &["MPC-E001", "--json"],
+                boot("0.46.16"),
+            ),
+            true,
+        ),
+        (
+            row(
+                "403 on the socket, server v0.45.3-dev",
+                &["MPC-E001"],
+                boot("v0.45.3-dev"),
+            ),
+            true,
+        ),
+        (
+            row(
+                "403 on the socket, server 0.46.17",
+                &["MPC-E001"],
+                boot("0.46.17"),
+            ),
+            false,
+        ),
+        (
+            row(
+                "403 on the socket, server 0.47.0, as JSON",
+                &["MPC-E001", "--json"],
+                boot("0.47.0"),
+            ),
+            false,
+        ),
+        (
+            row(
+                "403 on the socket, /boot-status failing",
+                &["MPC-E001"],
+                common::stub::Reply::Answer(500, r#"{"error":"down"}"#.into()),
+            ),
+            false,
+        ),
+        (
+            row(
+                "403 on the socket, /boot-status with no version",
+                &["MPC-E001"],
+                ok(r#"{"phase":"ready"}"#),
+            ),
+            false,
+        ),
+    ];
+    for (c, is_older) in rows {
+        rig.check(&c);
+        let (out, sent) = rig.binary(&c, false);
+        if is_older {
+            assert_eq!(
+                (out.stdout.as_str(), out.stderr.as_str(), out.code),
+                ("", older.as_str(), Some(1)),
+                "{}",
+                c.name
+            );
+        } else {
+            // The refusal, not the older line.
+            assert_ne!(out.stderr, older, "{}", c.name);
+            assert_eq!(out.code, Some(1), "{}", c.name);
+        }
+        let lines: Vec<String> = sent
+            .iter()
+            .map(|r| {
+                let (head, _) = r.split_once("\n\n").unwrap_or((r.as_str(), ""));
+                let mut it = head.lines();
+                let channel = it.next().unwrap_or_default().to_string();
+                let line = it
+                    .find(|l| l.starts_with("GET ") || l.starts_with("POST "))
+                    .unwrap_or_else(|| panic!("{}: no request line: {head}", c.name));
+                let auth = head
+                    .lines()
+                    .filter(|l| l.to_ascii_lowercase().starts_with("authorization:"))
+                    .count();
+                let target = line.rsplit_once(' ').unwrap().0;
+                format!("{channel} {target} auth={auth}")
+            })
+            .collect();
+        let get = if c.args.contains(&"--json") {
+            "GET /cli/kit/explain?id=MPC-E001&json=1"
+        } else {
+            "GET /cli/kit/explain?id=MPC-E001"
+        };
+        assert_eq!(
+            lines,
+            [
+                format!("[uds] {get} auth=1"),
+                "[tcp] GET /boot-status auth=0".to_string(),
+                "[tcp] GET /cli/whoami auth=1".to_string(),
+            ],
+            "{}",
+            c.name
+        );
+    }
+    // Over TCP (no cell socket) a 403 is the refusal: no /boot-status.
+    let tcp = with(
+        with_passport(&[]),
+        case(
+            "403 over TCP",
+            &["MPC-E001"],
+            &[],
+            vec![
+                common::stub::Reply::Answer(403, SOCKET_403.into()),
+                ok(WHOAMI),
+            ],
+            port_only,
+            1,
+            2,
+        ),
+    );
+    rig.check(&tcp);
+    let (out, sent) = rig.binary(&tcp, false);
+    assert_ne!(out.stderr, older, "over TCP: the refusal");
+    assert!(
+        sent.iter().all(|r| !r.contains("/boot-status")),
+        "over TCP: no /boot-status: {sent:?}"
+    );
 }
 
 /// The lines name the brand (in a build with `K2_BRAND_DIR=brand/xy` they

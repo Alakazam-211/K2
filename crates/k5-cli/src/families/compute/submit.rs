@@ -71,7 +71,9 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .skip(1)
         .map(|a| a.to_str())
         .collect::<Option<_>>()?;
-    if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
+    // A help word before the first bare `--` is the front's or the
+    // shell's (`cmd_compute`'s `_wants_help`); after it, the command's.
+    if crate::dashdash::wants_help(&words) {
         return None;
     }
     let verb = *words.first()?;

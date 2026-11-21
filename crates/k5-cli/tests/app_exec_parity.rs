@@ -223,16 +223,46 @@ fn mktemp_tried_holds_only_the_random_name() {
         let got = mktemp_tried_same("k2-exec-", (Some(1), binary.as_str()), (code, bash));
         assert_eq!(got, want, "{what}: the binary {binary:?}, bash {bash:?}");
     };
-    row("macOS names the folder it tried", Some(1), &tried("k2-exec-iHMPOm"), true);
+    row(
+        "macOS names the folder it tried",
+        Some(1),
+        &tried("k2-exec-iHMPOm"),
+        true,
+    );
     row("an older macOS prints the template", Some(1), &binary, true);
-    row("a dot in the random name", Some(1), &tried("k2-exec-a.Bc12"), true);
+    row(
+        "a dot in the random name",
+        Some(1),
+        &tried("k2-exec-a.Bc12"),
+        true,
+    );
     row("another exit", Some(2), &tried("k2-exec-iHMPOm"), false);
     row("no exit", None, &tried("k2-exec-iHMPOm"), false);
     row("another stem", Some(1), &tried("k2-exed-iHMPOm"), false);
-    row("another folder", Some(1), &binary.replace(DIR, "/t/other"), false);
-    row("another reason", Some(1), &binary.replace(WHY, "Permission denied"), false);
-    row("a slash in the name", Some(1), &tried("k2-exec-iH/POm"), false);
-    row("a dash in the name", Some(1), &tried("k2-exec-iH-POm"), false);
+    row(
+        "another folder",
+        Some(1),
+        &binary.replace(DIR, "/t/other"),
+        false,
+    );
+    row(
+        "another reason",
+        Some(1),
+        &binary.replace(WHY, "Permission denied"),
+        false,
+    );
+    row(
+        "a slash in the name",
+        Some(1),
+        &tried("k2-exec-iH/POm"),
+        false,
+    );
+    row(
+        "a dash in the name",
+        Some(1),
+        &tried("k2-exec-iH-POm"),
+        false,
+    );
     row("no name", Some(1), &tried("k2-exec-"), false);
     row("GNU's line", Some(1), &gnu, false);
     row("a line more", Some(1), &format!("{binary}x\n"), false);

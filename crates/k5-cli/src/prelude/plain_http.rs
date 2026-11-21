@@ -332,7 +332,10 @@ mod tests {
     fn the_lines_say_the_brand_s_name() {
         let cli = k2_client::brand::CLI_NAME;
         let line = warning_line("10.0.0.5");
-        assert!(line.starts_with(&format!("warning: {cli} is sending ")), "{line}");
+        assert!(
+            line.starts_with(&format!("warning: {cli} is sending ")),
+            "{line}"
+        );
         if cli != "k2" {
             for l in [line, refusal_line("http://10.0.0.5:4711")] {
                 assert!(!l.contains("k2 ") && !l.contains("k5 "), "{l}");

@@ -194,11 +194,10 @@ fn hire_a_new_folder() {
         case("the conf, the core, the settings", &["hire", "newbie"], &[], three(), files, 0, 3),
         // covers: agent hire --json
         case("the same as JSON", &["hire", "newbie", "--json"], &[], three(), files, 0, 3),
-        // The shell's block counts no change from the core's own steps
-        // (its `changed` line sits in the context loop): with the mode
-        // already set, the hire that made the workspace says no changes.
+        // The core's own done steps count as a change: with the mode
+        // already set, the hire that made the workspace still changed it.
         case(
-            "the core makes it, the mode was set: the shell's changed",
+            "the core makes it, the mode was set: changed",
             &["hire", "newbie"],
             &[],
             vec![not_found(), ok(CORE_OK), ok(SET_SKIPPED)],
@@ -207,7 +206,7 @@ fn hire_a_new_folder() {
             3,
         ),
         case(
-            "the same as JSON: changed as the shell has it",
+            "the same as JSON: changed",
             &["hire", "newbie", "--json"],
             &[],
             vec![not_found(), ok(CORE_OK), ok(SET_SKIPPED)],
@@ -998,7 +997,7 @@ fn hire_in_a_session() {
     let one = |name, args: &[&str], replies: Vec<Reply>, code, n| {
         in_session(case(name, leak(args), &[], replies, files, code, n))
     };
-    let mut v = vec![
+    let v = vec![
         // covers: agent hire
         one("the core alone, with the passport", &["hire", "newbie"], vec![ok(CORE_OK)], 0, 1),
         one(
@@ -1124,20 +1123,21 @@ fn hire_in_a_session() {
             0,
             2,
         ),
-    ];
-    // The shell's block reads the last core step (`set-default-agent`)
-    // in the context loop: with no --agent it is None, so its Python
-    // raises (copied: the R3 rule).
-    v.push(with(
         one(
-            "a catalog context with no --agent: the TypeError",
+            "a catalog context with no --agent: the core stacks it",
             &["hire", "newbie", "--context", "k2"],
             vec![ok(CORE_OK)],
-            1,
+            0,
             1,
         ),
-        Compare::Traceback,
-    ));
+        one(
+            "the same as JSON: changed",
+            &["hire", "newbie", "--context", "k2", "--json"],
+            vec![ok(CORE_OK)],
+            0,
+            1,
+        ),
+    ];
     check(&rig, v);
 }
 

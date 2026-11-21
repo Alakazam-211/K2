@@ -1,4 +1,4 @@
-//! The real run (`<stdin>` lines 863 to 1320): each step in turn, a
+//! The real run (`<stdin>` lines 863 to 1321): each step in turn, a
 //! failed one reported and the rest going on, unless the workspace itself
 //! couldn't be made.
 
@@ -234,28 +234,15 @@ pub fn apply(h: &mut Hire) -> R<()> {
                 if let Some(r) = act::get(&got, "reason").filter(|r| py::truthy(r)) {
                     act::set(&mut h.actions[i], "reason", r.clone());
                 }
+                h.changed = h.changed || act::is(&h.actions[i], "status", "done");
             }
         }
-        // The shell's block (`cli/src/agent.sh`) keeps its `changed = changed
-        // or a["status"] == "done"` in the loop below, not in the one above:
-        // the core's own steps no longer count as a change, and in a session
-        // it reads the last core step (`set-default-agent`), which may be
-        // None. Copied as it is (the R3 rule).
         if body_has(&body, "context") {
-            let last = core_steps.last().and_then(|st| h.one(st));
+            // The core stacked them (a layer already there is left as it is).
             for i in h.all("seed-context") {
                 if catalog_pending(&h.actions[i]) {
                     act::set(&mut h.actions[i], "status", s("done"));
-                }
-                if !h.changed {
-                    let Some(l) = last else {
-                        return Err(raise(
-                            &[(979, "<module>")],
-                            "TypeError: 'NoneType' object is not subscriptable",
-                        )
-                        .into());
-                    };
-                    h.changed = act::is(&h.actions[l], "status", "done");
+                    h.changed = true;
                 }
             }
         }
@@ -310,10 +297,10 @@ pub fn apply(h: &mut Hire) -> R<()> {
             "/cli/workspace/set",
             &obj(vec![("project", s(&path)), ("fields", obj(fields))]),
         )?;
-        let bad = ptrue(&resp, "error", &[(1019, "<module>")])?
-            || !ptrue(&resp, "ok", &[(1019, "<module>")])?;
+        let bad = ptrue(&resp, "error", &[(1020, "<module>")])?
+            || !ptrue(&resp, "ok", &[(1020, "<module>")])?;
         if bad {
-            let hint = hint_of(&resp, 1021)?;
+            let hint = hint_of(&resp, 1022)?;
             for i in [ma, ea, da, dba].into_iter().flatten() {
                 if act::pending(&h.actions[i]) {
                     step_failed_on(
@@ -329,8 +316,8 @@ pub fn apply(h: &mut Hire) -> R<()> {
             .cloned()
             .unwrap_or(Value::Array(vec![]));
         let mut by_field: Vec<(Value, Value)> = Vec::new();
-        for x in py_iter(&list, 1026)? {
-            let k = pget(&x, "field", &[(1026, "<module>")])?
+        for x in py_iter(&list, 1027)? {
+            let k = pget(&x, "field", &[(1027, "<module>")])?
                 .cloned()
                 .unwrap_or(Value::Null);
             let v = act::get(&x, "status").cloned().unwrap_or(Value::Null);
@@ -380,8 +367,8 @@ pub fn apply(h: &mut Hire) -> R<()> {
             vec![("project_path", path.clone()), ("name", name)],
             super::http::DEFAULT,
         )?;
-        let bad = ptrue(&resp, "error", &[(1054, "<module>")])?
-            || !ptrue(&resp, "success", &[(1054, "<module>")])?;
+        let bad = ptrue(&resp, "error", &[(1055, "<module>")])?
+            || !ptrue(&resp, "success", &[(1055, "<module>")])?;
         if bad {
             let why = get_or_dump(&resp, "error");
             step_failed_on(
@@ -407,8 +394,8 @@ pub fn apply(h: &mut Hire) -> R<()> {
     };
     if need_id && !py::truthy(&workspace_id) {
         let conf2 = h.get(super::super::CONF, vec![("q", path.clone())])?;
-        if ptrue(&conf2, "ok", &[(1068, "<module>")])?
-            && ptrue(&conf2, "id", &[(1068, "<module>")])?
+        if ptrue(&conf2, "ok", &[(1069, "<module>")])?
+            && ptrue(&conf2, "id", &[(1069, "<module>")])?
         {
             workspace_id = act::get(&conf2, "id").cloned().unwrap_or(Value::Null);
             h.conf = conf2;
@@ -448,8 +435,8 @@ pub fn apply(h: &mut Hire) -> R<()> {
             "/cli/projects/update",
             &obj(vec![("id", workspace_id.clone()), ("color", color)]),
         )?;
-        if ptrue(&resp, "error", &[(1086, "<module>")])? {
-            let hint = hint_of(&resp, 1088)?;
+        if ptrue(&resp, "error", &[(1087, "<module>")])? {
+            let hint = hint_of(&resp, 1089)?;
             step_failed_on(
                 &mut h.actions[i],
                 s("daemon_error"),
@@ -472,8 +459,8 @@ pub fn apply(h: &mut Hire) -> R<()> {
                 ("focusGroupId", group),
             ]),
         )?;
-        if ptrue(&resp, "error", &[(1098, "<module>")])? {
-            let hint = hint_of(&resp, 1100)?;
+        if ptrue(&resp, "error", &[(1099, "<module>")])? {
+            let hint = hint_of(&resp, 1101)?;
             step_failed_on(
                 &mut h.actions[i],
                 s("daemon_error"),
@@ -503,7 +490,7 @@ pub fn apply(h: &mut Hire) -> R<()> {
             ],
             super::http::DEFAULT,
         )?;
-        let err = pget(&resp, "error", &[(1118, "<module>")])?.cloned();
+        let err = pget(&resp, "error", &[(1119, "<module>")])?.cloned();
         if let Some(err) = err.filter(py::truthy) {
             let (code, hint) = match &err {
                 Value::Object(_) => (
@@ -547,9 +534,9 @@ pub fn apply(h: &mut Hire) -> R<()> {
             "/cli/project-group/add-member",
             &obj(vec![("group", group), ("workspace", s(&path))]),
         )?;
-        let err = pget(&resp, "error", &[(1142, "<module>")])?.cloned();
+        let err = pget(&resp, "error", &[(1143, "<module>")])?.cloned();
         if err.as_ref().is_some_and(py::truthy) || !act::get(&resp, "ok").is_some_and(py::truthy) {
-            let hint = hint_of(&resp, 1144)?;
+            let hint = hint_of(&resp, 1145)?;
             let project = act::get(&h.actions[i], "project")
                 .map(py::str_of)
                 .unwrap_or_default();
@@ -611,8 +598,8 @@ pub fn apply(h: &mut Hire) -> R<()> {
             vec![("project", path.clone())],
             120,
         )?;
-        let bad = ptrue(&resp, "error", &[(1231, "<module>")])?
-            || !ptrue(&resp, "success", &[(1231, "<module>")])?;
+        let bad = ptrue(&resp, "error", &[(1232, "<module>")])?
+            || !ptrue(&resp, "success", &[(1232, "<module>")])?;
         if bad {
             let why = get_or_dump(&resp, "error");
             step_failed_on(
@@ -679,7 +666,7 @@ pub fn apply(h: &mut Hire) -> R<()> {
                 msg_params(&path, &template_hello, &msg_from),
                 180,
             )?;
-            let e = pget(&resp, "error", &[(1267, "<module>")])?.cloned();
+            let e = pget(&resp, "error", &[(1268, "<module>")])?.cloned();
             let str_err = matches!(&e, Some(v @ Value::Str(_)) if py::truthy(v));
             if str_err || !act::get(&resp, "success").is_some_and(py::truthy) {
                 let why = e
@@ -729,7 +716,7 @@ pub fn apply(h: &mut Hire) -> R<()> {
                 msg_params(&path, &s(&a.onboard), &msg_from),
                 180,
             )?;
-            let e = pget(&resp, "error", &[(1292, "<module>")])?.cloned();
+            let e = pget(&resp, "error", &[(1293, "<module>")])?.cloned();
             match e {
                 Some(v @ Value::Str(_)) if py::truthy(&v) => step_failed_on(
                     &mut h.actions[i],
@@ -761,7 +748,7 @@ pub fn apply(h: &mut Hire) -> R<()> {
             act::set(&mut body, "brief", Value::Str(b.clone()));
         }
         let resp = h.post_json("/cli/app/handover", &body)?;
-        match pget(&resp, "error", &[(1309, "<module>")])?.cloned() {
+        match pget(&resp, "error", &[(1310, "<module>")])?.cloned() {
             Some(e @ Value::Object(_)) => {
                 act::set(
                     &mut h.actions[i],
@@ -775,7 +762,7 @@ pub fn apply(h: &mut Hire) -> R<()> {
             _ => {
                 let hv = or(act::get(&resp, "handover"), obj(vec![]));
                 let r = act::get(&resp, "request").cloned().unwrap_or(Value::Null);
-                let fr = [(1315, "<module>")];
+                let fr = [(1316, "<module>")];
                 let id = pget(&hv, "id", &fr)?.cloned().unwrap_or(Value::Null);
                 let state = pget(&hv, "state", &fr)?.cloned().unwrap_or(Value::Null);
                 let request = match &r {
@@ -794,7 +781,7 @@ pub fn apply(h: &mut Hire) -> R<()> {
     }
 
     let changed = h.changed;
-    finish(h, changed, 1320)
+    finish(h, changed, 1321)
 }
 
 /// `/cli/workspace/msg`'s query, as the hello and the onboard message
@@ -809,7 +796,7 @@ fn msg_params(path: &str, text: &Value, from: &str) -> Vec<(&'static str, String
     ]
 }
 
-/// One `--context` layer (lines 1162 to 1217).
+/// One `--context` layer (lines 1163 to 1218).
 fn seed_context(h: &mut Hire, i: usize, path: &str) -> R<()> {
     let cli = cli();
     if !act::pending(&h.actions[i]) {
@@ -829,14 +816,14 @@ fn seed_context(h: &mut Hire, i: usize, path: &str) -> R<()> {
         act::set(&mut body, "path", or(act::get(&a, "path"), context.clone()));
     }
     let resp = h.post_json("/cli/context/add", &body)?;
-    let err = pget(&resp, "error", &[(1171, "<module>")])?.cloned();
+    let err = pget(&resp, "error", &[(1172, "<module>")])?.cloned();
     let ctx = py::str_of(&context);
     if let Some(err) = err.filter(py::truthy) {
         let err = match err {
             Value::Str(_) => obj(vec![("code", s("error")), ("hint", err)]),
             other => other,
         };
-        let fr = [(1175, "<module>")];
+        let fr = [(1176, "<module>")];
         let code_v = or(pget(&err, "code", &fr)?, s("error"));
         let code = super::lower(&code_v, &fr)?;
         let hint = act::get(&err, "hint")
@@ -903,7 +890,7 @@ fn seed_context(h: &mut Hire, i: usize, path: &str) -> R<()> {
         return Ok(());
     }
     let layer = or(act::get(&resp, "layer"), obj(vec![]));
-    let fr = [(1208, "<module>")];
+    let fr = [(1209, "<module>")];
     let id = pget(&layer, "id", &fr)?.cloned().unwrap_or(Value::Null);
     let lpath = act::get(&layer, "path").filter(|v| py::truthy(v)).cloned();
     let x = &mut h.actions[i];

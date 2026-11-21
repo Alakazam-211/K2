@@ -829,7 +829,7 @@ fn validate_rejects_impossible_figures() {
 fn the_engine_refuses_a_bad_dsp_sched() {
     let cfg = crate::EngineConfig::null(crate::NullDevice::default())
         .with_dsp_sched(DspSchedConfig::default().with_interval_deadline(Duration::ZERO));
-    let e = crate::AudioEngine::start(cfg).err().expect("refused");
+    let e = crate::AudioEngine::start(cfg).expect_err("refused");
     assert_eq!(e.code, ErrorCode::InvalidConfig);
 }
 

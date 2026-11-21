@@ -504,11 +504,14 @@ sec_case "read --token-stdin" /cli/terminal/read "remote token" "$REMOTE_SENTINE
 # 23. k2 daemon restart --host <url> --token-stdin: the token reaches that
 #     daemon's restart route and no child's argv or environment, nor k2's
 #     own argv. The remote restart needs only curl, so this case checks
-#     for curl children itself.
+#     for curl children itself. The k5 binary answers it itself: no
+#     python3 or curl child at all.
 fresh
 printf '%s\n' "$REMOTE_SENTINEL" | k2run daemon restart --host "http://127.0.0.1:$(cat "$W/tcp-port")" --token-stdin >/dev/null 2>&1 || true
 assert_tcp_got "daemon restart --token-stdin" /cli/daemon/restart "token" "$REMOTE_SENTINEL"
-if grep -q '^curl ' "$ARGLOG"; then ok "daemon restart --token-stdin: curl children were logged"; else bad "daemon restart --token-stdin: no curl child was logged"; fi
+if [ -n "${K5_CLI_UNDER_TEST:-}" ]; then
+    if grep -Eq '^(python3|curl) ' "$ARGLOG"; then bad "daemon restart --token-stdin: the binary started a python3 or curl child"; else ok "daemon restart --token-stdin: the binary started no python3 or curl child"; fi
+elif grep -q '^curl ' "$ARGLOG"; then ok "daemon restart --token-stdin: curl children were logged"; else bad "daemon restart --token-stdin: no curl child was logged"; fi
 assert_off_children "daemon restart --token-stdin" "token" "$REMOTE_SENTINEL"
 
 # 24. k2 talk <ws>@<host> "text" --token-stdin: the remote server's token

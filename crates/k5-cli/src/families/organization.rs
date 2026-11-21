@@ -514,7 +514,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .collect::<Option<_>>()?;
     // `organization` alone, or an empty verb: the help page ([`bare`]).
     let Some((verb, rest)) = words.split_first().filter(|(v, _)| !v.is_empty()) else {
-        return bare(args, hook_sock.as_deref());
+        return bare();
     };
     // The help, alone or anywhere: the front's page or the shell's.
     if matches!(*verb, "" | "help" | "-h" | "--help")
@@ -555,9 +555,10 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
 /// `organization` alone (or with an empty verb, whatever follows it):
 /// `cmd_organization`'s `''` arm, the help page on
 /// stdout, exit 0, nothing sent. The shell skips its connection gate for
-/// it (`cli/src/cli-tools-policy.sh`), not the virtual desktop's guard;
-/// then the `id` tool's lines.
-fn bare(args: &[OsString], hook_sock: Option<&Path>) -> Option<Exit> {
+/// it (`cli/src/cli-tools-policy.sh`), not the virtual desktop's guard,
+/// and names no tool for it (`_cli_tool_id_for_verb`'s `""` arm), so no
+/// `id` tool's lines either.
+fn bare() -> Option<Exit> {
     if !python::family_native(python::here()) {
         return None;
     }
@@ -574,10 +575,6 @@ fn bare(args: &[OsString], hook_sock: Option<&Path>) -> Option<Exit> {
     }
     if let Some(gate) = gate.filter(|g| *g != prelude::Gate::CannotConnect) {
         return Some(gate.stop());
-    }
-    let would_refuse = passport::current(args).would_refuse();
-    if let Some(stop) = prelude::id_tool(&settings, hook_sock, would_refuse, TOOL) {
-        return Some(stop);
     }
     let page = crate::text::help("organization")?;
     Some(Shown::out(page).print())

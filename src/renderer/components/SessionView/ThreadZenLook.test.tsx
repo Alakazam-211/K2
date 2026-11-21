@@ -907,7 +907,10 @@ describe('frosted glass behind the message box', () => {
 
   it("Glass's bottom band tints with the page's own colour, never black, in every palette", () => {
     const css = src('../globals.css')
-    const rules = css.split('\n').filter((l) => l.includes('.thread-footer-fade > .thread-footer-tint'))
+    // Glass's own (a ticket's discussion keeps a flush band in Terminal).
+    const rules = css
+      .split('\n')
+      .filter((l) => l.includes('.thread-footer-fade > .thread-footer-tint') && l.startsWith('html[data-style="glass"]'))
     // The blur band and its no-blur fallback: one rule each, for every palette.
     expect(rules).toHaveLength(2)
     expect(rules.some((l) => l.includes('[data-palette='))).toBe(false)

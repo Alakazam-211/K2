@@ -1188,7 +1188,7 @@
 /* Light glass inverts the selected pill: a dark wash, normal ink. Not
    Thread view's drawers (a floating capsule): the open drawer keeps the
    accent circle, so its pressed state reads at a glance on the light page. */
-[data-style="glass"][data-palette="veil"] [data-page-tab][data-selected]:not([data-zen-root] *, [data-k2-float="capsule"] > *) {
+[data-style="glass"][data-palette="veil"] [data-page-tab][data-selected]:not([data-k2-float="capsule"] > *):not([data-zen-root] *) {
   background: rgba(0, 0, 0, 0.07);
   color: var(--color-text-primary);
   box-shadow: none;

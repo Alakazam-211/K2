@@ -425,14 +425,30 @@ pub fn connect(target: &Target, connect: Duration, deadline: Instant) -> Result<
     }
 }
 
+/// curl's own rule (RFC 6761): the name `localhost`, and any name under
+/// it, is this computer, `127.0.0.1` and `::1`, never asked of the
+/// resolver. Any case, one trailing dot allowed.
+fn localhost_addrs(host: &str, port: u16) -> Option<Vec<std::net::SocketAddr>> {
+    let h = host.strip_suffix('.').unwrap_or(host).to_ascii_lowercase();
+    (h == "localhost" || h.ends_with(".localhost")).then(|| {
+        vec![
+            std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+            std::net::SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, port)),
+        ]
+    })
+}
+
 /// The TCP connect of [`connect`], before `limit`.
 fn tcp(host: &str, port: u16, limit: Instant) -> Result<std::net::TcpStream, Failure> {
     use std::net::ToSocketAddrs;
     // A name that doesn't resolve is curl's exit 6, never retried.
-    let addrs: Vec<_> = (host, port)
-        .to_socket_addrs()
-        .map_err(|e| broken(curl::COULDNT_RESOLVE_HOST, format!("resolve {host}: {e}")))?
-        .collect();
+    let addrs: Vec<_> = match localhost_addrs(host, port) {
+        Some(addrs) => addrs,
+        None => (host, port)
+            .to_socket_addrs()
+            .map_err(|e| broken(curl::COULDNT_RESOLVE_HOST, format!("resolve {host}: {e}")))?
+            .collect(),
+    };
     let mut last = io::Error::new(io::ErrorKind::NotFound, format!("{host} has no address"));
     for addr in addrs {
         let Some(budget) = remaining(limit) else {
@@ -691,6 +707,31 @@ mod tests {
                 .collect(),
             body,
         }
+    }
+
+    /// curl's rule: localhost and every name under it are this computer,
+    /// never a lookup; a name that only looks like it is not.
+    #[test]
+    fn localhost_names_are_this_computer() {
+        for h in ["localhost", "LocalHost", "x.localhost", "a.b.localhost.", "localhost."] {
+            let a = localhost_addrs(h, 9).unwrap_or_else(|| panic!("{h}"));
+            assert_eq!(
+                a,
+                [
+                    std::net::SocketAddr::from(([127, 0, 0, 1], 9)),
+                    std::net::SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, 9)),
+                ],
+                "{h}"
+            );
+        }
+        for h in ["localhost.example", "xlocalhost", "127.0.0.1", "box.example", ""] {
+            assert_eq!(localhost_addrs(h, 9), None, "{h}");
+        }
+        // x.localhost reaches a listener on 127.0.0.1.
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let limit = Instant::now() + std::time::Duration::from_secs(5);
+        assert!(tcp("x.localhost", port, limit).is_ok());
     }
 
     #[test]

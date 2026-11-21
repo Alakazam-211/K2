@@ -14,7 +14,8 @@
 //!   migrating, trailing newlines.
 //! - The owner from disk, a passport over TCP (the workspace from
 //!   `/cli/whoami`, on the cell socket or TCP), re-minted, healed, dead;
-//!   `HOOK_SOCK` with the owner on disk (PRD 13.9 #4); PROJECT_PATH; the
+//!   `HOOK_SOCK` with the owner on disk (the passport), with no passport
+//!   (refused, exit 3), the refusals that exit 3; PROJECT_PATH; the
 //!   gates; the passport rule's would-refuse mark.
 //! - No answer: an empty reply, a 5xx with no body and none in time are
 //!   the line and exit 1; a reset (56), not HTTP (000), TMPDIR unusable
@@ -30,7 +31,8 @@
 //! an id that needs escaping; the daemon's error (each code, text, a
 //! number, a permission card, migrating then the answer); not JSON, a
 //! NUL, not an object; Python's raises; the words; a passport over TCP
-//! only (re-minted; refused: one heal; dead: the restart line), PRD 13.9 #4;
+//! only (re-minted; refused: one heal; dead: the restart line), the
+//! passport in a session, none (refused, exit 3);
 //! no answer (an empty reply and an empty 5xx: the transport's line; a
 //! reset, not HTTP, TMPDIR unusable, none in time, no daemon:
 //! `daemon_unreachable`, as `list`'s); and what it hands to the shell (help). A port with a leading zero is
@@ -622,21 +624,18 @@ fn list_with_a_passport() {
                 2,
             ),
         ),
-        Case {
-            compare: Compare::OwnerTokenWithPassport,
-            ..with(
-                cell(&[("K2_PROJECT_PATH", "/set")]),
-                case(
-                    "HOOK_SOCK and the owner on disk (PRD 13.9 #4)",
-                    &["list"],
-                    &[],
-                    vec![ok(LIST)],
-                    owner_and_port,
-                    0,
-                    1,
-                ),
-            )
-        },
+        with(
+            cell(&[("K2_PROJECT_PATH", "/set")]),
+            case(
+                "HOOK_SOCK and the owner on disk: the passport, both sides",
+                &["list"],
+                &[],
+                vec![ok(LIST)],
+                owner_and_port,
+                0,
+                1,
+            ),
+        ),
         with(
             cell(&[]),
             case(
@@ -662,13 +661,37 @@ fn list_with_a_passport() {
             ),
         ),
         case(
-            "HOOK_SOCK set and no passport: an open tool, the owner",
+            "HOOK_SOCK set and no passport: the tickets line, exit 3, nothing sent",
             &["list"],
             &[("K2_HOOK_SOCK", "{sock}")],
-            vec![ok(LIST)],
+            vec![],
             owner_and_port,
+            3,
             0,
-            1,
+        ),
+        case(
+            "HOOK_SOCK set and no passport: refused before the words",
+            &["list", "--bogus"],
+            &[("K2_HOOK_SOCK", "{sock}")],
+            vec![],
+            owner_and_port,
+            3,
+            0,
+        ),
+        with(
+            cell(&[("K2_PROJECT_PATH", "/set")]),
+            case(
+                "a person_only refusal exits 3",
+                &["list"],
+                &[],
+                vec![Reply::Answer(
+                    403,
+                    r#"{"error":{"code":"person_only","hint":"a person's"}}"#.into(),
+                )],
+                port_only,
+                3,
+                1,
+            ),
         ),
     ];
     for c in v {
@@ -1508,29 +1531,41 @@ fn show_with_a_passport() {
                 1,
             ),
         ),
-        Case {
-            compare: Compare::OwnerTokenWithPassport,
-            ..with(
-                cell(&[]),
-                case(
-                    "HOOK_SOCK and the owner on disk (PRD 13.9 #4)",
-                    &["show", "x"],
-                    &[],
-                    vec![ok(PLAIN)],
-                    owner_and_port,
-                    0,
-                    1,
-                ),
-            )
-        },
+        with(
+            cell(&[]),
+            case(
+                "HOOK_SOCK and the owner on disk: the passport, both sides",
+                &["show", "x"],
+                &[],
+                vec![ok(PLAIN)],
+                owner_and_port,
+                0,
+                1,
+            ),
+        ),
         case(
-            "HOOK_SOCK set and no passport: the owner",
+            "HOOK_SOCK set and no passport: the tickets line, exit 3, nothing sent",
             &["show", "x"],
             &[("K2_HOOK_SOCK", "{sock}")],
-            vec![ok(PLAIN)],
+            vec![],
             owner_and_port,
+            3,
             0,
-            1,
+        ),
+        with(
+            cell(&[]),
+            case(
+                "an own_workspace_only refusal exits 3",
+                &["show", "x"],
+                &[],
+                vec![Reply::Answer(
+                    403,
+                    r#"{"error":{"code":"own_workspace_only","hint":"not yours"}}"#.into(),
+                )],
+                port_only,
+                3,
+                1,
+            ),
         ),
     ];
     for c in v {

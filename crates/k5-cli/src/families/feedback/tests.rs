@@ -88,7 +88,7 @@ fn list_s_python() {
         (line::L_CODE, r#"code = err.get("code")"#),
         (
             16,
-            r#"sys.exit(4 if code in ("not_found", "ambiguous_id") else 2 if code == "usage" else 1)"#,
+            r#"sys.exit(3 if code in ("person_only", "own_workspace_only", "not_this_agent") else 4 if code in ("not_found", "ambiguous_id") else 2 if code == "usage" else 1)"#,
         ),
         (line::L_JSON, "print(json.dumps(d))"),
         (line::L_FOR, r#"for i in d.get("items", []):"#),

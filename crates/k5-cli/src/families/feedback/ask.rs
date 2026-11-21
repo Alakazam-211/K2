@@ -54,21 +54,21 @@ pub const BRIEF_TEMP: &str = "k2-brief-XXXXXX";
 /// The lines of the Python block that raise (`<stdin>`).
 pub mod line {
     pub const DIE_CODE: u32 = 20;
-    pub const WARN_GET: u32 = 129;
-    pub const WARN_W: u32 = 131;
-    pub const ERROR: u32 = 123;
-    pub const DIE_ERROR: u32 = 124;
-    pub const FID: u32 = 136;
-    pub const SHORT: u32 = 142;
-    pub const JOIN: u32 = 144;
-    pub const FILES: u32 = 151;
-    pub const REVERSED: u32 = 175;
-    pub const ATTS: u32 = 179;
-    pub const ABSPATH: u32 = 183;
-    pub const NOTE: u32 = 189;
-    pub const HUMAN: u32 = 196;
-    pub const HUMAN_BODY: u32 = 199;
-    pub const HINT: u32 = 204;
+    pub const WARN_GET: u32 = 136;
+    pub const WARN_W: u32 = 138;
+    pub const ERROR: u32 = 130;
+    pub const DIE_ERROR: u32 = 131;
+    pub const FID: u32 = 143;
+    pub const SHORT: u32 = 149;
+    pub const JOIN: u32 = 151;
+    pub const FILES: u32 = 158;
+    pub const REVERSED: u32 = 182;
+    pub const ATTS: u32 = 186;
+    pub const ABSPATH: u32 = 190;
+    pub const NOTE: u32 = 196;
+    pub const HUMAN: u32 = 203;
+    pub const HUMAN_BODY: u32 = 206;
+    pub const HINT: u32 = 211;
 }
 
 /// What the words ask for.
@@ -219,10 +219,14 @@ pub struct Ctx {
     pub opener: Opener,
     /// `$PROJECT`.
     pub project: String,
-    /// `_envn AGENT_NAME`.
+    /// `_envn AGENT_NAME`, or nothing in a session.
     pub agent: String,
     /// `_feedback_detect_session`'s id and kind.
     pub session: (String, String),
+    /// `FB_STAMPED`: in a session (a cell socket set) the passport is the
+    /// agent, so K2's server stamps its name and session, and a body naming
+    /// another is refused (`not_this_agent`): neither is sent.
+    pub stamped: bool,
     /// `_envn TEST_FEEDBACK_DETECT` is `1`.
     pub detect_only: bool,
     /// The shell's `mktemp`, for `--html -`.
@@ -468,7 +472,12 @@ impl Ctx {
             sent_files = py::truthy(files);
             payload.push(("attachments", files.clone()));
         }
-        if !self.session.0.is_empty() {
+        // In a session the server stamps the session; its kind still goes.
+        if self.stamped {
+            if !self.session.1.is_empty() {
+                payload.push(("sessionKind", s(&self.session.1)));
+            }
+        } else if !self.session.0.is_empty() {
             payload.push(("sessionId", s(&self.session.0)));
             if !self.session.1.is_empty() {
                 payload.push(("sessionKind", s(&self.session.1)));
@@ -841,7 +850,8 @@ fn die_with(o: &mut PyOut, code: &str, hint: &str) -> Result<Exit, Raise> {
     die(o, &obj(vec![("code", s(code)), ("hint", s(hint))]), 0)
 }
 
-/// The block's `die(err)`: the error as JSON on stderr, then 4 for
+/// The block's `die(err)`: the error as JSON on stderr, then 3 for
+/// `person_only`, `own_workspace_only` and `not_this_agent`, 4 for
 /// `not_found` and `ambiguous_id`, 2 for `usage` and the `brief_` and
 /// `assignee_` codes, else 1. `err.get` on what is not a dict raises
 /// (called from line `from`).
@@ -864,7 +874,10 @@ fn die(o: &mut PyOut, err: &Value, from: u32) -> Result<Exit, Raise> {
     let code = get(pairs, "code")
         .filter(|v| py::truthy(v))
         .map_or_else(String::new, str_of);
-    Ok(if code == "not_found" || code == "ambiguous_id" {
+    Ok(if matches!(code.as_str(), "person_only" | "own_workspace_only" | "not_this_agent") {
+        // Refused: not this agent's to do.
+        Exit::Refused
+    } else if code == "not_found" || code == "ambiguous_id" {
         Exit::NotFound
     } else if code == "usage" || code.starts_with("brief_") || code.starts_with("assignee_") {
         Exit::Usage

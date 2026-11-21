@@ -9,14 +9,15 @@
 //! 1. The settings and the two gates ([`crate::prelude`]). `template`
 //!    never asks the daemon, so only the virtual desktop's guard stops it
 //!    (`_skip_conn_gate`).
-//! 2. The credential: `feedback` is an open tool, so in a session
-//!    (`HOOK_SOCK` set) with the owner token on disk the shell sends the
-//!    owner token over TCP, a passport or not (COMPAT-58,
-//!    `_cli_apply_auth_for_verb`). `ask`, `comment`, `resolve` and `assign`
-//!    carry it on purpose: the daemon's `/cli/feedback/*` doors are
-//!    decided by it (`feedback_routes.rs`). This copies it
-//!    ([`open_tool`]); `settings` reads with it too and writes with the
-//!    session's passport (`cmd_feedback_settings`).
+//! 2. The credential (`_cli_apply_auth_for_verb`'s tickets rule,
+//!    `_cli_tickets_sends_passport`): outside a session the owner token
+//!    (or the token set); in a session (`HOOK_SOCK` set) `ask`, `comment`,
+//!    `resolve`, `assign` and `settings` send the session's passport, and
+//!    a session with none gets one line, exit 3, and sends nothing
+//!    ([`super::no_passport_stop`]). In a session K2's server stamps the
+//!    agent's name and session, so `ask` sends no `agentName` or
+//!    `sessionId` (its `sessionKind` still goes) and `comment` and
+//!    `resolve` no `author`.
 //! 3. The verb's words ([`Form::parse`]); a word it can't take is one line
 //!    of JSON on stderr (`_feedback_err "usage" …`), exit 2, nothing sent.
 //! 4. `comment`, `resolve` and `assign`: one `cli_post_json` over TCP
@@ -49,7 +50,7 @@ use crate::passport;
 use crate::prelude::{self, Closing, Gate};
 use crate::python;
 use crate::transport::urllib::Opener;
-use crate::transport::{Auth, Call, Channel, Client, Error};
+use crate::transport::{Call, Channel, Client, Error};
 use k2_client::{cli_name, env_names};
 use std::ffi::OsString;
 
@@ -625,33 +626,6 @@ fn python_names() -> Vec<&'static str> {
     .collect()
 }
 
-/// `$(cat file)` of the owner token files the shell's prelude reads
-/// (`heartbeat.token`, then `daemon.token`): its NULs and trailing
-/// newlines dropped, the first that is not empty.
-fn disk_owner(home: &std::path::Path) -> Option<String> {
-    ["heartbeat.token", "daemon.token"].iter().find_map(|f| {
-        let raw = std::fs::read(home.join(f)).ok()?;
-        let held = super::super::connections::held(&raw);
-        let t = String::from_utf8_lossy(&held).into_owned();
-        (!t.is_empty()).then_some(t)
-    })
-}
-
-/// `_cli_apply_auth_for_verb feedback …` for an open tool: in a session
-/// (`HOOK_SOCK` set) with the owner token on disk, the owner token, a
-/// passport or not (COMPAT-58). With a passport the shell sends no
-/// `X-K5-Owner-Source` (its `SCOPED_TOKEN` is set).
-pub fn open_tool(settings: &Settings) -> Settings {
-    let mut s = settings.clone();
-    if s.session && !s.no_owner_fallback && matches!(s.auth, Auth::Passport { .. }) {
-        if let Some(t) = disk_owner(&s.home) {
-            s.auth = Auth::Owner(t);
-            s.owner_from_disk = false;
-        }
-    }
-    s
-}
-
 /// `k5 feedback <words>` for every form but `list` and `show`. `None`: the
 /// shell CLI answers it (see the module's notes).
 pub fn run(args: &[OsString], words: &[&str]) -> Option<Exit> {
@@ -739,9 +713,11 @@ fn run_form(
         _ => {}
     }
     settings.port = settings.port_text.as_deref().and_then(curl_port);
+    if let Some(stop) = super::no_passport_stop(&settings) {
+        return stop;
+    }
     let would_refuse = passport::current(args).would_refuse();
-    let open = open_tool(&settings);
-    let mut client = match open.client(would_refuse) {
+    let mut client = match settings.client(would_refuse) {
         Ok(c) => c,
         Err(e) => {
             out::stderr_line(&format!("Error: {e}"));
@@ -752,7 +728,12 @@ fn run_form(
     let agent = env_names::first_nonempty_in(env_names::AGENT_NAME, env)
         .map(|(_, v)| v)
         .unwrap_or_default();
-    let author = if agent.is_empty() {
+    // In a session the server stamps the passport's own name and session,
+    // so `ask` sends neither and `comment` and `resolve` no author.
+    let stamped = settings.session;
+    let author = if stamped {
+        String::new()
+    } else if agent.is_empty() {
         basename(&settings.project)
     } else {
         agent.clone()
@@ -768,8 +749,9 @@ fn run_form(
             let ctx = Ctx {
                 opener,
                 project: settings.project.clone(),
-                agent,
+                agent: if stamped { String::new() } else { agent },
                 session: ask::detect_session(env),
+                stamped,
                 detect_only: env_names::first_nonempty_in(env_names::TEST_FEEDBACK_DETECT, env)
                     .is_some_and(|(_, v)| v == "1"),
                 mktemp,
@@ -782,11 +764,10 @@ fn run_form(
         Form::Comment(Err(l)) | Form::Resolve(Err(l)) | Form::Assign(Err(l)) => return stop(&l),
         Form::Settings(Err(l)) => return stop(&l),
         Form::Comment(Ok(c)) => {
-            let mut body = vec![
-                ("id", s(&c.id)),
-                ("body", s(&c.text)),
-                ("author", s(&author)),
-            ];
+            let mut body = vec![("id", s(&c.id)), ("body", s(&c.text))];
+            if !author.is_empty() {
+                body.push(("author", s(&author)));
+            }
             if !c.files.is_empty() {
                 body.push(("attachments", attachments(&c.files, &cwd, home.as_deref())));
             }
@@ -801,7 +782,9 @@ fn run_form(
             if let Some(a) = &r.answered {
                 body.push(("status", s("answered")));
                 body.push(("answer", s(a)));
-                body.push(("author", s(&author)));
+                if !author.is_empty() {
+                    body.push(("author", s(&author)));
+                }
             }
             if !r.files.is_empty() {
                 body.push(("attachments", attachments(&r.files, &cwd, home.as_deref())));
@@ -843,14 +826,6 @@ fn run_form(
                 if let Some(d) = &st.default {
                     body.push(("defaultAssignee", s(d)));
                 }
-                // In a session: the passport, never the owner token.
-                client = match settings.client(would_refuse) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        out::stderr_line(&format!("Error: {e}"));
-                        return Exit::Error;
-                    }
-                };
                 post(&mut client, &mut closing, SETTINGS, &dumps(&obj(body)))
             } else {
                 answer(&mut client, &mut closing, SETTINGS, Call::Request(&[]))
@@ -1115,7 +1090,10 @@ fn settings_exit(code: Option<&Value>) -> Exit {
         Value::Str(t) => t.as_str(),
         _ => None,
     }) {
-        Some("owner_only" | "role_required" | "forbidden") => Exit::Refused,
+        Some(
+            "owner_only" | "role_required" | "forbidden" | "person_only" | "own_workspace_only"
+            | "not_this_agent",
+        ) => Exit::Refused,
         Some("usage" | "bad_value" | "bad_request" | "unknown_user") => Exit::Usage,
         _ => Exit::Error,
     }

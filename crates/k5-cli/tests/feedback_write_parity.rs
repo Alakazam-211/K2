@@ -27,6 +27,14 @@ mod common;
 use common::parity::*;
 use common::stub::Reply;
 
+fn leak(args: &[&str]) -> &'static [&'static str] {
+    let owned: Vec<&'static str> = args
+        .iter()
+        .map(|a| &*Box::leak(a.to_string().into_boxed_str()))
+        .collect();
+    Box::leak(owned.into_boxed_slice())
+}
+
 const VERB: &str = "feedback";
 const CREATED: &str = r#"{"ok":true,"id":"fb_0123456789","title":"Ship it?","kind":"question","priority":3,"status":"waiting","assignees":[]}"#;
 
@@ -1373,156 +1381,212 @@ fn settings() {
     check(&rig, v);
 }
 
-/// In a session (`HOOK_SOCK` set) with the owner token on disk, the shell
-/// sends the owner token over TCP for these verbs, a passport or not
-/// (COMPAT-58), and so does the binary; a settings change sends the
-/// passport.
+/// In a session (`HOOK_SOCK` set) every verb sends the session's
+/// passport, never the owner token, an owner token on disk or not
+/// (`_cli_tickets_sends_passport`), and K2's server stamps the agent's name
+/// and session: `ask` sends no `agentName` or `sessionId` (its
+/// `sessionKind` still goes), `comment` and `resolve` no `author`. A
+/// session with no passport gets one line, exit 3, before its words are
+/// read, and sends nothing. The refusals `person_only`,
+/// `own_workspace_only` and `not_this_agent` exit 3.
 #[test]
 fn the_credential_in_a_session() {
     let rig = Rig::new(VERB, "session");
     let sock = with_passport(&[("K2_HOOK_SOCK", "{nosock}")]);
+    let named = with_passport(&[
+        ("K2_HOOK_SOCK", "{nosock}"),
+        ("K2_AGENT_NAME", "ada"),
+        ("K2_SESSION_ID", "sess-1"),
+        ("K2_CELL", "sidecar"),
+    ]);
     let no_passport = vec![
         ("K2_PORT", PORT.to_string()),
         ("K2_HOOK_SOCK", "{nosock}".to_string()),
     ];
     let read = r#"{"briefPolicy":"off","assigneePolicy":"off","canEdit":false}"#;
-    check(
-        &rig,
-        vec![
-            with(
-                sock.clone(),
-                case(
-                    "ask: the owner token",
-                    &["ask", "t"],
-                    &[],
-                    vec![ok(CREATED)],
-                    files,
-                    0,
-                    1,
-                ),
+    let refused = |code: &str| {
+        Reply::Answer(
+            403,
+            format!(r#"{{"error":{{"code":"{code}","hint":"not this agent's to do"}}}}"#),
+        )
+    };
+    let mut v = vec![
+        with(
+            sock.clone(),
+            case("ask: the passport", &["ask", "t"], &[], vec![ok(CREATED)], files, 0, 1),
+        ),
+        with(
+            named.clone(),
+            case(
+                "ask: no agentName or sessionId, the sessionKind",
+                &["ask", "t"],
+                &[],
+                vec![ok(CREATED)],
+                files,
+                0,
+                1,
             ),
-            with(
-                sock.clone(),
-                case(
-                    "comment: the owner token",
-                    &["comment", "fb", "x"],
-                    &[],
-                    vec![ok(r#"{"ok":true,"id":"fb"}"#)],
-                    files,
-                    0,
-                    1,
-                ),
+        ),
+        with(
+            named.clone(),
+            case(
+                "comment: no author",
+                &["comment", "fb", "x"],
+                &[],
+                vec![ok(r#"{"ok":true,"id":"fb"}"#)],
+                files,
+                0,
+                1,
             ),
-            with(
-                sock.clone(),
-                case(
-                    "resolve: the owner token",
-                    &["resolve", "fb"],
-                    &[],
-                    vec![ok(r#"{"ok":true,"id":"fb"}"#)],
-                    files,
-                    0,
-                    1,
-                ),
+        ),
+        with(
+            named.clone(),
+            case(
+                "resolve --answered: no author",
+                &["resolve", "fb", "--answered", "yes"],
+                &[],
+                vec![ok(r#"{"ok":true,"id":"fb"}"#)],
+                files,
+                0,
+                1,
             ),
-            with(
-                sock.clone(),
-                case(
-                    "assign: the owner token",
-                    &["assign", "fb", "ada"],
-                    &[],
-                    vec![ok(r#"{"ok":true,"id":"fb"}"#)],
-                    files,
-                    0,
-                    1,
-                ),
+        ),
+        with(
+            sock.clone(),
+            case(
+                "assign: the passport",
+                &["assign", "fb", "ada"],
+                &[],
+                vec![ok(r#"{"ok":true,"id":"fb"}"#)],
+                files,
+                0,
+                1,
             ),
-            with(
-                sock.clone(),
-                case(
-                    "settings read: the owner token",
-                    &["settings"],
-                    &[],
-                    vec![ok(read)],
-                    files,
-                    0,
-                    1,
-                ),
+        ),
+        with(
+            sock.clone(),
+            case("settings read: the passport", &["settings"], &[], vec![ok(read)], files, 0, 1),
+        ),
+        with(
+            sock.clone(),
+            case(
+                "settings change: the passport",
+                &["settings", "--brief", "warn"],
+                &[],
+                vec![ok(read)],
+                files,
+                0,
+                1,
             ),
-            with(
-                sock.clone(),
-                case(
-                    "settings change: the passport",
-                    &["settings", "--brief", "warn"],
-                    &[],
-                    vec![ok(read)],
-                    files,
-                    0,
-                    1,
-                ),
+        ),
+        with(
+            sock.clone(),
+            case(
+                "no owner token on disk: the passport",
+                &["comment", "fb", "x"],
+                &[],
+                vec![ok(r#"{"ok":true,"id":"fb"}"#)],
+                port_only,
+                0,
+                1,
             ),
-            with(
-                sock.clone(),
-                case(
-                    "no owner token on disk: the passport",
-                    &["comment", "fb", "x"],
-                    &[],
-                    vec![ok(r#"{"ok":true,"id":"fb"}"#)],
-                    port_only,
-                    0,
-                    1,
-                ),
+        ),
+        with(
+            sock.clone(),
+            case(
+                "comment refused, not_this_agent: exit 3",
+                &["comment", "fb", "x"],
+                &[],
+                vec![refused("not_this_agent")],
+                files,
+                3,
+                1,
             ),
-            with(
-                sock.clone(),
-                case(
-                    "ask, no owner token on disk: the passport",
-                    &["ask", "t"],
-                    &[],
-                    vec![ok(CREATED)],
-                    port_only,
-                    0,
-                    1,
-                ),
+        ),
+        with(
+            sock.clone(),
+            case(
+                "ask refused, person_only: exit 3",
+                &["ask", "t"],
+                &[],
+                vec![refused("person_only")],
+                files,
+                3,
+                1,
             ),
-            with(
-                no_passport.clone(),
-                case(
-                    "no passport: the owner token, from disk",
-                    &["ask", "t"],
-                    &[],
-                    vec![ok(CREATED)],
-                    files,
-                    0,
-                    1,
-                ),
+        ),
+        with(
+            sock.clone(),
+            case(
+                "resolve refused, own_workspace_only: exit 3",
+                &["resolve", "fb"],
+                &[],
+                vec![refused("own_workspace_only")],
+                files,
+                3,
+                1,
             ),
-            with(
-                no_passport,
-                case(
-                    "no passport, comment",
-                    &["comment", "fb", "x"],
-                    &[],
-                    vec![ok(r#"{"ok":true,"id":"fb"}"#)],
-                    files,
-                    0,
-                    1,
-                ),
+        ),
+        with(
+            sock.clone(),
+            case(
+                "assign refused, not_this_agent: exit 3",
+                &["assign", "fb", "ada"],
+                &[],
+                vec![refused("not_this_agent")],
+                files,
+                3,
+                1,
             ),
-            with(
-                with_passport(&[]),
-                case(
-                    "a passport, no session: the passport",
-                    &["ask", "t"],
-                    &[],
-                    vec![ok(CREATED)],
-                    files,
-                    0,
-                    1,
-                ),
+        ),
+        with(
+            sock.clone(),
+            case(
+                "settings change refused, person_only: exit 3",
+                &["settings", "--brief", "warn"],
+                &[],
+                vec![refused("person_only")],
+                files,
+                3,
+                1,
             ),
-        ],
-    );
+        ),
+        with(
+            with_passport(&[("K2_AGENT_NAME", "ada"), ("K2_SESSION_ID", "sess-1")]),
+            case(
+                "a passport, no session: the name and session go",
+                &["ask", "t"],
+                &[],
+                vec![ok(CREATED)],
+                files,
+                0,
+                1,
+            ),
+        ),
+    ];
+    // No passport in a session: the line, exit 3, nothing sent, before
+    // the words are read.
+    for args in [
+        &["ask", "t"][..],
+        &["comment", "fb", "x"],
+        &["resolve", "fb"],
+        &["assign", "fb", "ada"],
+        &["settings"],
+        &["settings", "--brief", "warn"],
+        &["comment"],
+        &["ask", "--bogus"],
+    ] {
+        v.push(with(
+            no_passport.clone(),
+            case("no passport: refused", leak(args), &[], vec![], files, 3, 0),
+        ));
+    }
+    // `template` sends nothing, so it is no tickets request.
+    v.push(with(
+        no_passport,
+        case("no passport: template still prints", &["template"], &[], vec![], files, 0, 0),
+    ));
+    check(&rig, v);
 }
 
 /// The named difference: the shell hands the answer to its Python in the
@@ -1612,5 +1676,29 @@ fn ask_usage_says_the_brand_s_name_and_semicolons() {
     );
     assert!(!out.stderr.contains("a,b,c"), "{}", out.stderr);
     assert_eq!(out.code, Some(2));
+    assert!(log.is_empty(), "{log:?}");
+}
+
+/// A session with no passport: the line names the command and the
+/// product by the brand's names (`xy` in a `K2_BRAND_DIR=brand/xy`
+/// build), and nothing is sent.
+#[test]
+fn the_session_line_says_the_brand_s_name() {
+    let cli = k2_client::brand::CLI_NAME;
+    let product = k2_client::brand::PRODUCT_NAME;
+    let rig = Rig::new(VERB, "brandsess");
+    let c = Case {
+        env: vec![
+            ("K2_PORT", PORT.to_string()),
+            ("K2_HOOK_SOCK", "{nosock}".to_string()),
+        ],
+        ..case("brand", &["comment", "fb", "x"], &[], vec![], files, 3, 0)
+    };
+    let (out, log) = rig.binary(&c, false);
+    assert_eq!(
+        out.stderr,
+        format!("Error: {cli} tickets in a {product} session sends this session's passport, and the session has none, so nothing was sent.\n")
+    );
+    assert_eq!(out.code, Some(3));
     assert!(log.is_empty(), "{log:?}");
 }

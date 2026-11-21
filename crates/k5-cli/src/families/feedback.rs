@@ -6,8 +6,10 @@
 //!
 //! 1. The settings ([`crate::daemon`]), a re-minted passport taken at once,
 //!    and the two gates ([`crate::prelude`]).
-//!    `feedback` is no tool in the shell's policy, so it is an open one:
-//!    no passport check comes after them.
+//!    `feedback` is no tool in the shell's policy, so it is an open one,
+//!    but in a session (a cell socket set) its verbs send the session's
+//!    passport, never the owner token, and a session with none gets one
+//!    line, exit 3, and sends nothing ([`no_passport_stop`]).
 //! 2. The words ([`parse`]). A word the verb doesn't take, a missing
 //!    value or id, and a status that is not one of [`STATUSES`] are
 //!    `_feedback_err "usage" …`: one line of JSON on stderr
@@ -32,7 +34,8 @@
 //! Both readers get the answer on stdin and decode it as UTF-8 with
 //! `replace`.
 //!
-//! The daemon's error is one line of JSON on stderr, exit 4 for
+//! The daemon's error is one line of JSON on stderr, exit 3 for
+//! `person_only`, `own_workspace_only` and `not_this_agent`, 4 for
 //! `not_found` and `ambiguous_id`, 2 for `usage`, else 1.
 //!
 //! Every other form (`feedback` alone, an unknown verb, `ask`,
@@ -59,7 +62,7 @@ use crate::passport;
 use crate::prelude::{self, Closing};
 use crate::python;
 use crate::transport::encode::quote;
-use crate::transport::{Call, Channel, Client, Error};
+use crate::transport::{Auth, Call, Channel, Client, Error};
 use std::ffi::OsString;
 
 /// The router arm's words: this family's row of [`crate::route::TABLE`].
@@ -264,6 +267,9 @@ fn run_with(args: &[OsString], ask: Result<Ask, String>, mut settings: Settings)
     if let Some(gate) = prelude::gate(&settings) {
         return gate.stop();
     }
+    if let Some(stop) = no_passport_stop(&settings) {
+        return stop;
+    }
     let ask = match ask {
         Ok(a) => a,
         Err(line) => {
@@ -287,6 +293,22 @@ fn run_with(args: &[OsString], ask: Result<Ask, String>, mut settings: Settings)
     };
     closing.flush(&mut client, exit);
     exit
+}
+
+/// `_cli_apply_auth_for_verb`'s tickets rule: in a session (a cell socket
+/// set) `ask`, `list`, `show`, `comment`, `resolve`, `assign` and
+/// `settings` send the session's passport, never the owner token, and a
+/// session with none gets this line, exit 3, and sends nothing.
+pub fn no_passport_stop(settings: &Settings) -> Option<Exit> {
+    if !settings.session || matches!(settings.auth, Auth::Passport { .. }) {
+        return None;
+    }
+    out::stderr_line(&format!(
+        "Error: {} tickets in a {} session sends this session's passport, and the session has none, so nothing was sent.",
+        k2_client::brand::CLI_NAME,
+        k2_client::brand::PRODUCT_NAME
+    ));
+    Some(Exit::Refused)
 }
 
 fn unreachable_line() -> Shown {
@@ -705,6 +727,7 @@ fn code_exit(code: Option<&Value>) -> Exit {
         Value::Str(t) => t.as_str(),
         _ => None,
     }) {
+        Some("person_only" | "own_workspace_only" | "not_this_agent") => Exit::Refused,
         Some("not_found" | "ambiguous_id") => Exit::NotFound,
         Some("usage") => Exit::Usage,
         _ => Exit::Error,

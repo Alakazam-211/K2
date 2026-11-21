@@ -356,7 +356,29 @@ code=$(curl -s -o o1 -w '%{{http_code}}' --unix-socket "$STOLEN_SOCK" -H "Author
 code=$(curl -s -o o2 -w '%{{http_code}}' --unix-socket "$STOLEN_SOCK" -H "Authorization: Bearer $STOLEN_TOKEN" -H "X-K2-Via-Tcp: 1" http://localhost/cli/projects/list); echo "stolen_on_its_socket_via_tcp $code $(cat o2 | cut -c1-300)" >> $R
 code=$(curl -s -o o3 -w '%{{http_code}}' -H "Authorization: Bearer $STOLEN_TOKEN" http://127.0.0.1:$PORT/cli/whoami); echo "stolen_over_tcp $code $(cat o3)" >> $R
 code=$(curl -s -o o4 -w '%{{http_code}}' --unix-socket "$K2_HOOK_SOCK" -H "Authorization: Bearer $STOLEN_TOKEN" http://localhost/cli/whoami); echo "stolen_on_own_socket $code $(cat o4)" >> $R
-code=$(curl -s -o o5 -w '%{{http_code}}' --unix-socket "$K2_HOOK_SOCK" -H "Authorization: Bearer $K2_HOOK_TOKEN" http://localhost/cli/whoami); echo "own_on_own_socket $code $(cat o5 | cut -c1-300)" >> $R
+code=$(curl -s -o o5 -w '%{{http_code}}' --unix-socket "$K2_HOOK_SOCK" -H "Authorization: Bearer $K2_HOOK_TOKEN" "http://localhost/cli/thread?addr=$OWN_ADDR&limit=1"); echo "own_on_own_socket $code $(cat o5 | cut -c1-300)" >> $R
+bash {cli} thread "$OWN_ADDR" "from the fenced terminal" > o9 2>&1; echo "own_cli_thread_rc $? $(cat o9 | tr '\n' ' ' | cut -c1-300)" >> $R
+# Review F3: the smuggling request (B's passport in the query, its own in
+# the form body, a bare LF hiding a session header) on its own socket.
+python3 - "$K2_HOOK_SOCK" "$STOLEN_TOKEN" "$STOLEN_SID" "$K2_HOOK_TOKEN" > o10 2>&1 <<'PY'
+import socket, sys
+sock, stolen, stolen_sid, own = sys.argv[1:5]
+def ask(head, body):
+    s = socket.socket(socket.AF_UNIX)
+    s.connect(sock)
+    s.sendall(head.encode() + body)
+    out = b""
+    while True:
+        b = s.recv(65536)
+        if not b:
+            break
+        out += b
+    return out.decode(errors="replace").split("\r\n")[0]
+body = ("token=" + own).encode()
+print("smuggled_query " + ask("POST /cli/thread?addr=B&token=%s HTTP/1.1\r\nHost: k2\r\nX-K2-Via-Tcp: 1\r\nFoo: x\nX-K2-Cell-Session: %s\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: %d\r\n\r\n" % (stolen, stolen_sid, len(body)), body))
+print("smuggled_bearer " + ask("POST /cli/thread?addr=B&token=%s HTTP/1.1\r\nHost: k2\r\nAuthorization: Bearer %s\r\nX-K2-Via-Tcp: 1\r\nFoo: x\nX-K2-Cell-Session: %s\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: %d\r\n\r\n" % (stolen, own, stolen_sid, len(body)), body))
+PY
+cat o10 >> $R
 code=$(curl -s -o o6 -w '%{{http_code}}' -H "Authorization: Bearer $K2_HOOK_TOKEN" http://127.0.0.1:$PORT/cli/whoami); echo "own_over_tcp $code $(cat o6)" >> $R
 code=$(curl -s -o o7 -w '%{{http_code}}' -H "Authorization: Bearer $OWNER" "http://127.0.0.1:$PORT/cli/agent-whois?pid=$$"); echo "owner_pasted_over_tcp $code $(cat o7 | cut -c1-200)" >> $R
 code=$(curl -s -o o8 -w '%{{http_code}}' --unix-socket "$K2_HOOK_SOCK" -H "Authorization: Bearer $OWNER" http://localhost/cli/whoami); echo "owner_pasted_on_socket $code $(cat o8 | cut -c1-200)" >> $R
@@ -443,7 +465,14 @@ fn the_five_step_demo_on_a_real_kernel() {
     // 5. B's passport, copied into A's shell.
     std::fs::write(
         a_ws.join("stolen"),
-        format!("STOLEN_TOKEN='{}'\nSTOLEN_SOCK='{}'\nPORT={}\nOWNER='{}'\n", b_env["K2_HOOK_TOKEN"], b_env["K2_HOOK_SOCK"], d.port, d.token()),
+        format!(
+            "STOLEN_TOKEN='{}'\nSTOLEN_SID='{}'\nSTOLEN_SOCK='{}'\nPORT={}\nOWNER='{}'\nOWN_ADDR='A'\n",
+            b_env["K2_HOOK_TOKEN"],
+            b_env["K2_HOOK_TOKEN"].split_once('.').expect("passport shape").0,
+            b_env["K2_HOOK_SOCK"],
+            d.port,
+            d.token()
+        ),
     )
     .unwrap();
     let r = results(&a_ws.join("results"), "phase2 done");
@@ -452,8 +481,15 @@ fn the_five_step_demo_on_a_real_kernel() {
     assert!(code("stolen_on_its_socket_via_tcp") == "403" && r["stolen_on_its_socket_via_tcp"].contains("passport_wrong_cgroup"), "{}", r["stolen_on_its_socket_via_tcp"]);
     assert!(code("stolen_over_tcp") == "403" && r["stolen_over_tcp"].contains("passport_needs_socket"), "{}", r["stolen_over_tcp"]);
     assert_eq!(code("stolen_on_own_socket"), "403", "B's passport on A's socket: {}", r["stolen_on_own_socket"]);
-    let own = r["own_on_own_socket"].split_once(' ').map(|(c, b)| (c.parse::<u16>().unwrap_or(0), b.to_string())).unwrap();
-    assert!(served(own.0, &own.1), "A's own passport on its own socket works: {}", r["own_on_own_socket"]);
+    // A's own passport works: a 2xx on a real agent verb, raw and through
+    // the CLI (review: never a 400 counted as working).
+    assert_eq!(code("own_on_own_socket"), "200", "A's own passport on its own socket, /cli/thread: {}", r["own_on_own_socket"]);
+    assert!(r["own_cli_thread_rc"].starts_with("0"), "k2 thread from the fenced terminal: {}", r["own_cli_thread_rc"]);
+    let (s, b) = http(d.port, "GET", &format!("/cli/thread?addr=A&limit=20&token={}", d.token()), "");
+    assert!(s == 200 && b.contains("from the fenced terminal"), "the fenced agent's Thread post landed: {s} {b}");
+    // Review F3: the smuggling shapes never run as B.
+    assert!(r["smuggled_query"].contains("403"), "B's passport in the query, own in the body, a bare LF: {}", r["smuggled_query"]);
+    assert!(r["smuggled_bearer"].contains("400"), "own Bearer with a bare-LF smuggled session header is refused: {}", r["smuggled_bearer"]);
     assert!(code("own_over_tcp") == "403" && r["own_over_tcp"].contains("passport_needs_socket"), "{}", r["own_over_tcp"]);
     assert_eq!(code("owner_pasted_on_socket"), "403", "the owner token on a session socket: {}", r["owner_pasted_on_socket"]);
     // Known and reported (M2's nftables rule closes it): the owner token,
@@ -471,6 +507,22 @@ fn the_five_step_demo_on_a_real_kernel() {
         "an audit row: B's passport from A's cgroup"
     );
     assert!(audit.lines().any(|l| l.contains("agent.passport_needs_socket") && l.contains(&format!("agent:{b_id}"))), "an audit row: B's passport over TCP");
+    assert!(audit.lines().any(|l| l.contains("agent.passport_wrong_socket") && l.contains(&format!("agent:{b_id}"))), "an audit row: B's passport on A's socket (the F3 shape)");
+
+    // Review F4: B's passport in the session cookie, or in a TCP form body.
+    let b_tok = &b_env["K2_HOOK_TOKEN"];
+    let mut s = TcpStream::connect(("127.0.0.1", d.port)).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+    let (st, body) = exchange(&mut s, &format!("GET /cli/thread?addr=B&limit=1 HTTP/1.1\r\nHost: 127.0.0.1\r\nCookie: k2_session={b_tok}\r\n"), "");
+    println!("cookie passport over TCP: {st} {body}");
+    assert!(st == 403 && body.contains("passport_needs_socket"), "a passport in the k2_session cookie: {st} {body}");
+    let form = format!("token={b_tok}&message=x");
+    let mut s = TcpStream::connect(("127.0.0.1", d.port)).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+    let (st, body) = exchange(&mut s, "POST /cli/respond HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/x-www-form-urlencoded\r\n", &form);
+    println!("form-body passport over TCP: {st} {body}");
+    assert!((st == 401 || st == 403) && !body.contains("\"ok\":true"), "a passport in a TCP form body: {st} {body}");
+    assert!(d.audit().lines().any(|l| l.contains("in a TCP form body") && l.contains(&format!("agent:{b_id}"))), "an audit row: the form-body passport");
 
     // whois (owner only), and an agent's passport can't ask.
     let (s, b) = http(d.port, "GET", &format!("/cli/agent-whois?pid={a_pid}&token={}", d.token()), "");
@@ -583,4 +635,82 @@ fn the_bites_each_guarantee_fails_without_its_mechanism() {
     assert!(served(s, &b), "BITE identity off: B's passport works over TCP: {s} {b}");
     let log = std::fs::read_to_string(d.home.join(format!("daemon-{}.log", d.boots))).unwrap_or_default();
     assert!(log.contains("K2_AGENT_CGROUP_IDENTITY=0"), "the switch is logged loudly at boot");
+}
+
+/// Review F1: a `k2 job` run is the agent's like its terminals: in its
+/// cgroup, under its fence, with a bound passport and a session socket of
+/// its own. Review F2: a link planted in the agent's own login slot, or a
+/// harness home outside its slot, never widens the fence.
+#[test]
+#[ignore = "needs a delegated cgroup v2 system unit on Linux: scripts/agent-isolation-kernel-tests.sh"]
+fn job_runs_and_login_slots_stay_inside_the_fence() {
+    let _unit = preflight();
+    let mut d = Daemon::new("jobs");
+    d.start();
+    let (a_id, a_ws) = d.workspace("A");
+    d.set_fence(&a_id, true);
+    let token = d.token();
+    // F1: the owner adds a job to A and runs it; it reports what it is.
+    let script = format!(
+        r#"R={ws}/job.results; : > $R
+echo "cgroup $(cat /proc/self/cgroup)" >> $R
+cat {k2}/daemon.token > /dev/null 2> {ws}/job.err; echo "token_read_rc $? $(cat {ws}/job.err)" >> $R
+echo "sock [${{K2_HOOK_SOCK:-}}]" >> $R
+code=$(curl -s -o {ws}/job.o1 -w '%{{http_code}}' --unix-socket "$K2_HOOK_SOCK" -H "Authorization: Bearer $K2_HOOK_TOKEN" "http://localhost/cli/thread?addr=A&limit=1"); echo "own_on_socket $code" >> $R
+code=$(curl -s -o {ws}/job.o2 -w '%{{http_code}}' -H "Authorization: Bearer $K2_HOOK_TOKEN" "http://127.0.0.1:$K2_PORT/cli/thread?addr=A&limit=1"); echo "own_over_tcp $code $(cut -c1-120 {ws}/job.o2)" >> $R
+echo "pid $$" >> $R
+echo "job done" >> $R
+sleep 5
+"#,
+        ws = a_ws.display(),
+        k2 = d.k2.display()
+    );
+    let (s, b) = http(d.port, "POST", &format!("/cli/jobs/add?token={token}"), &json!({"workspace": a_id, "name": "probe", "every": "24h", "argv": ["sh", "-c", script]}).to_string());
+    assert_eq!(s, 200, "jobs/add: {b}");
+    let (s, b) = http(d.port, "POST", &format!("/cli/jobs/run?token={token}"), &json!({"workspace": a_id, "name": "probe"}).to_string());
+    assert_eq!(s, 200, "jobs/run: {b}");
+    let r = results(&a_ws.join("job.results"), "job done");
+    assert!(r["cgroup"].ends_with(&format!("/agents/a-{a_id}")), "the job runs in A's cgroup: {}", r["cgroup"]);
+    assert!(denied_at(&r["token_read_rc"], "daemon.token"), "the job is fenced: {}", r["token_read_rc"]);
+    assert!(r["sock"].ends_with(".sock]") && r["sock"].contains("job-"), "the job has its own session socket: {}", r["sock"]);
+    assert_eq!(r["own_on_socket"], "200", "the job's passport works on its socket");
+    assert!(r["own_over_tcp"].starts_with("403") && r["own_over_tcp"].contains("passport_needs_socket"), "the job's passport is bound: {}", r["own_over_tcp"]);
+    let job_pid: u32 = r["pid"].trim().parse().unwrap();
+    let (s, b) = http(d.port, "GET", &format!("/cli/agent-whois?pid={job_pid}&token={token}"), "");
+    assert!(s == 200 && serde_json::from_str::<Value>(&b).unwrap()["workspaceId"] == json!(a_id), "whois names the job's agent: {s} {b}");
+
+    // F2: A's pinned login slot with K2's own link and two planted ones.
+    let home = d.home.clone();
+    let slot = d.k2.join("llm-accounts/codex/acct-1");
+    for dir in [slot.clone(), home.join(".ssh"), home.join(".codex/sessions")] {
+        std::fs::create_dir_all(&dir).unwrap();
+    }
+    std::fs::write(home.join(".ssh/id_test"), "secret key").unwrap();
+    std::os::unix::fs::symlink(home.join(".codex/sessions"), slot.join("sessions")).unwrap();
+    std::os::unix::fs::symlink(home.join(".ssh"), slot.join("x")).unwrap();
+    std::os::unix::fs::symlink(&home, slot.join("everything")).unwrap();
+    let probe = format!(
+        r#"R={ws}/slot.results; : > $R
+cat {home}/.ssh/id_test > /dev/null 2> {ws}/s.err; echo "ssh_rc $? $(cat {ws}/s.err)" >> $R
+cat $CODEX_HOME/x/id_test > /dev/null 2> {ws}/s.err; echo "link_rc $? $(cat {ws}/s.err)" >> $R
+ls $CODEX_HOME/everything/ > /dev/null 2> {ws}/s.err; echo "home_rc $? $(cat {ws}/s.err)" >> $R
+touch $CODEX_HOME/sessions/ok 2> {ws}/s.err; echo "own_link_rc $? $(cat {ws}/s.err)" >> $R
+echo "slot done" >> $R; exec sleep 3600
+"#,
+        ws = a_ws.display(),
+        home = home.display()
+    );
+    let body = json!({"agent_name": "tab-slot", "cwd": a_ws.to_string_lossy(), "command": "/bin/sh", "args": ["-c", probe], "cols": 100, "rows": 30, "env": {"CODEX_HOME": slot.to_string_lossy()}}).to_string();
+    let (s, resp) = http(d.port, "POST", &format!("/cli/sessions/v2/spawn?token={token}"), &body);
+    assert_eq!(s, 200, "spawn with a pinned slot: {resp}");
+    let r = results(&a_ws.join("slot.results"), "slot done");
+    assert!(denied_at(&r["ssh_rc"], ".ssh/id_test"), "~/.ssh stays denied: {}", r["ssh_rc"]);
+    assert!(denied(&r["link_rc"]), "a planted slot link to ~/.ssh grants nothing: {}", r["link_rc"]);
+    assert!(denied(&r["home_rc"]), "a planted slot link to the home grants nothing: {}", r["home_rc"]);
+    assert!(r["own_link_rc"].starts_with("0"), "K2's own slot link (Codex sessions) works: {}", r["own_link_rc"]);
+    // A harness home that is neither its slot nor the tool's own home.
+    let body = json!({"agent_name": "tab-bad", "cwd": a_ws.to_string_lossy(), "command": "/bin/sh", "args": ["-c", "exec sleep 60"], "cols": 100, "rows": 30, "env": {"CODEX_HOME": home.join(".ssh").to_string_lossy()}}).to_string();
+    let (s, resp) = http(d.port, "POST", &format!("/cli/sessions/v2/spawn?token={token}"), &body);
+    println!("spawn with CODEX_HOME=~/.ssh: {s} {resp}");
+    assert!(s != 200 && resp.contains("isolation"), "the spawn refuses a harness home outside its slot: {s} {resp}");
 }

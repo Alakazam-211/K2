@@ -149,18 +149,22 @@ pub fn git_dirs(workspace: &Path) -> Vec<PathBuf> {
 /// separate from the owner's secrets (the home folder itself, or a folder
 /// holding `~/.k2`).
 pub fn default_view(i: &ViewInputs) -> Result<FenceView, String> {
-    let ws = i.workspace;
-    if !ws.is_absolute() {
-        return Err(format!("the workspace path {} isn't absolute", ws.display()));
+    if !i.workspace.is_absolute() {
+        return Err(format!("the workspace path {} isn't absolute", i.workspace.display()));
     }
-    if ws == i.home || under(i.k2_home, ws) || under(i.home, ws) {
+    // Checked and opened as the kernel will see them (review F2: a
+    // workspace path that is a link to the home would pass a lexical check).
+    let ws_c = canon(i.workspace);
+    let ws = ws_c.as_path();
+    let (home_c, k2_c) = (canon(i.home), canon(i.k2_home));
+    if ws == home_c || under(&k2_c, ws) || under(&home_c, ws) || ws == i.home || under(i.k2_home, ws) || under(i.home, ws) {
         return Err(format!(
             "the workspace {} holds the home folder or ~/.k2, so a fence can't keep the owner's keys out; \
              give the agent its own folder first",
             ws.display()
         ));
     }
-    if under(ws, i.k2_home) {
+    if under(ws, i.k2_home) || under(ws, &k2_c) {
         return Err(format!("the workspace {} is inside ~/.k2", ws.display()));
     }
     let mut v = FenceView { required: vec![s(ws)], ..FenceView::default() };
@@ -242,22 +246,32 @@ fn harness_rules(i: &ViewInputs, slots: &Path, v: &mut FenceView) -> Result<(), 
         match i.env.get(*var).map(String::as_str).filter(|v| !v.trim().is_empty()) {
             Some(dir) => {
                 let dir = PathBuf::from(dir);
-                if under(&dir, i.k2_home) {
-                    // Only a slot, never the wallet or another part of ~/.k2.
-                    let rel = dir.strip_prefix(&slots).ok().map(|r| r.components().count());
-                    if rel != Some(2) {
-                        return Err(format!("{var} points inside ~/.k2 but not at one login slot: {}", dir.display()));
-                    }
+                let tool_home = i.home.join(default_dir);
+                // Only one login slot (`~/.k2/llm-accounts/<tool>/<id>`), the
+                // tool's own default home, or the home the daemon itself was
+                // started with for that tool (its owner's choice). Anything
+                // else gets no rule and the spawn refuses (review F2).
+                let rel = dir.strip_prefix(slots).ok().map(|r| r.components().count());
+                let slot = rel == Some(2) && !dir.components().any(|c| matches!(c, std::path::Component::ParentDir));
+                let daemon_own = std::env::var(var).ok().filter(|d| !d.trim().is_empty()).map(PathBuf::from);
+                let known = slot || canon(&dir) == canon(&tool_home) || daemon_own.as_deref().is_some_and(|d| canon(d) == canon(&dir));
+                if !known {
+                    return Err(format!("{var} points at {}, which is neither its login slot nor the tool's own home", dir.display()));
+                }
+                if under(&canon(&dir), &canon(i.k2_home)) && !slot {
+                    return Err(format!("{var} points inside ~/.k2 but not at one login slot: {}", dir.display()));
                 }
                 v.rw.push(s(&dir));
-                // A slot's links into the tool's own home (shared settings,
-                // skills; a Codex slot's sessions): what they point at.
-                for (target, write) in slot_links(&dir, var) {
-                    if !under(&target, i.k2_home) {
-                        if write {
-                            v.rw.push(s(&target));
-                        } else {
-                            v.ro.push(s(&target));
+                // A slot's links into the tool's own home: only the ones K2's
+                // slot code makes, each to the same-named entry there.
+                if slot {
+                    for (target, write) in slot_links(&dir, &tool_home, var) {
+                        if !under(&target, &canon(i.k2_home)) {
+                            if write {
+                                v.rw.push(s(&target));
+                            } else {
+                                v.ro.push(s(&target));
+                            }
                         }
                     }
                 }
@@ -273,16 +287,30 @@ fn harness_rules(i: &ViewInputs, slots: &Path, v: &mut FenceView) -> Result<(), 
     Ok(())
 }
 
-/// The symlinks directly inside a login slot and where they point. A Codex
-/// slot writes through its links (shared sessions); a Claude slot only
-/// reads its linked settings, skills and plugins.
-fn slot_links(slot: &Path, var: &str) -> Vec<(PathBuf, bool)> {
+/// The links inside a login slot that K2's slot code makes
+/// (`llm_accounts::pins`), and where they point: each must resolve to the
+/// same-named entry directly inside the tool's own home (a Claude slot:
+/// only [`crate::llm_accounts::pins::CLAUDE_SHARED_ENTRIES`]). A link the
+/// agent planted (the slot is read-write to it) to anywhere else gets no
+/// rule (review F2). A Codex slot writes through its links (shared
+/// sessions); a Claude slot only reads its linked settings and skills.
+pub fn slot_links(slot: &Path, tool_home: &Path, var: &str) -> Vec<(PathBuf, bool)> {
     let write = var == "CODEX_HOME";
+    let tool_home = canon(tool_home);
     let Ok(rd) = std::fs::read_dir(slot) else { return Vec::new() };
     rd.flatten()
         .filter(|e| e.file_type().is_ok_and(|t| t.is_symlink()))
-        .filter_map(|e| std::fs::canonicalize(e.path()).ok())
-        .map(|t| (t, write))
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if var == "CLAUDE_CONFIG_DIR" && !crate::llm_accounts::pins::CLAUDE_SHARED_ENTRIES.contains(&name.as_str()) {
+                return None;
+            }
+            if var != "CLAUDE_CONFIG_DIR" && var != "CODEX_HOME" {
+                return None;
+            }
+            let target = std::fs::canonicalize(e.path()).ok()?;
+            (target == tool_home.join(&name)).then_some((target, write))
+        })
         .collect()
 }
 
@@ -359,6 +387,21 @@ pub fn rule_rights(rw: bool, is_dir: bool, handled: u64) -> u64 {
     }
 }
 
+/// Landlock scopes (ABI 6, Linux 6.12; review F11): a fenced agent can't
+/// signal processes outside its domain (the daemon, ptyd, other agents) or
+/// connect to an abstract Unix socket outside it. Below ABI 6 there is no
+/// scope: signals stay a known gap until the Jail or Guard.
+pub const SCOPE_ABSTRACT_UNIX_SOCKET: u64 = 1 << 0;
+pub const SCOPE_SIGNAL: u64 = 1 << 1;
+
+pub fn scoped_for_abi(abi: i64) -> u64 {
+    if abi >= 6 {
+        SCOPE_ABSTRACT_UNIX_SOCKET | SCOPE_SIGNAL
+    } else {
+        0
+    }
+}
+
 /// What the fence did (for the session's audit line and the tests).
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct FenceReport {
@@ -398,8 +441,8 @@ mod ll {
         }
     }
 
-    pub fn create(handled: u64) -> std::io::Result<OwnedFd> {
-        let attr = RulesetAttr { handled_access_fs: handled, handled_access_net: 0, scoped: 0 };
+    pub fn create(handled: u64, scoped: u64) -> std::io::Result<OwnedFd> {
+        let attr = RulesetAttr { handled_access_fs: handled, handled_access_net: 0, scoped };
         // SAFETY: attr outlives the call; the size is its size (the
         // kernel accepts a larger struct whose extra fields are zero).
         let fd = unsafe {
@@ -465,7 +508,7 @@ pub fn apply_fence(view: &FenceView) -> Result<FenceReport, String> {
         use std::os::fd::{FromRawFd, OwnedFd};
         let abi = landlock_abi()?;
         let handled = handled_for_abi(abi);
-        let ruleset = ll::create(handled).map_err(|e| format!("Landlock ruleset: {e}"))?;
+        let ruleset = ll::create(handled, scoped_for_abi(abi)).map_err(|e| format!("Landlock ruleset: {e}"))?;
         let mut rep = FenceReport { abi, ..FenceReport::default() };
         for req in &view.required {
             if !Path::new(req).exists() {
@@ -669,9 +712,50 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// Review F2: a link the agent plants in its own (read-write) slot, a
+    /// harness home pointing anywhere else, or a workspace that is a link to
+    /// the home never widens the fence.
+    #[test]
+    fn planted_links_and_odd_harness_homes_never_widen_the_fence() {
+        let root = std::env::temp_dir().join(format!("k2-f2-{}", uuid::Uuid::new_v4().simple()));
+        let home = root.join("home");
+        let k2 = home.join(".k2");
+        let slot = k2.join("llm-accounts/codex/acct-1");
+        for d in [slot.clone(), home.join(".ssh"), home.join(".codex/sessions"), home.join("ws/A"), home.join(".claude/skills")] {
+            std::fs::create_dir_all(&d).unwrap();
+        }
+        std::fs::write(home.join(".codex/config.toml"), "x").unwrap();
+        // K2's own link (same name in the tool home) and two planted ones.
+        std::os::unix::fs::symlink(home.join(".codex/sessions"), slot.join("sessions")).unwrap();
+        std::os::unix::fs::symlink(home.join(".ssh"), slot.join("x")).unwrap();
+        std::os::unix::fs::symlink(&home, slot.join("everything")).unwrap();
+        std::os::unix::fs::symlink(home.join(".codex/config.toml"), slot.join("renamed.toml")).unwrap();
+        let tmp = root.join("tmp");
+        let mut env = BTreeMap::new();
+        env.insert("CODEX_HOME".to_string(), s(&slot));
+        let v = default_view(&inputs(&home, &k2, &home.join("ws/A"), &tmp, &env)).unwrap();
+        let all: Vec<PathBuf> = v.rw.iter().chain(&v.ro).map(|p| canon(Path::new(p))).collect();
+        assert!(all.contains(&canon(&home.join(".codex/sessions"))), "K2's own slot link is followed: {all:?}");
+        for bad in [home.join(".ssh"), canon(&home), home.join(".codex/config.toml")] {
+            assert!(!all.contains(&canon(&bad)), "a planted link widened the fence to {}: {all:?}", bad.display());
+        }
+        // A harness home that is neither a slot nor the tool's own home.
+        env.insert("CODEX_HOME".to_string(), s(&home.join(".ssh")));
+        assert!(default_view(&inputs(&home, &k2, &home.join("ws/A"), &tmp, &env)).is_err());
+        env.insert("CODEX_HOME".to_string(), s(&home.join(".codex")));
+        assert!(default_view(&inputs(&home, &k2, &home.join("ws/A"), &tmp, &env)).is_ok(), "the tool's own home");
+        // A workspace that is a link to the home.
+        std::os::unix::fs::symlink(&home, root.join("ws-link")).unwrap();
+        let env = BTreeMap::new();
+        assert!(default_view(&inputs(&home, &k2, &root.join("ws-link"), &tmp, &env)).is_err(), "a link to the home is the home");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn rights_follow_the_abi_and_the_file_kind() {
         use access::*;
+        assert_eq!((scoped_for_abi(4), scoped_for_abi(5)), (0, 0), "no scopes before ABI 6");
+        assert_eq!(scoped_for_abi(6), SCOPE_ABSTRACT_UNIX_SOCKET | SCOPE_SIGNAL);
         assert_eq!(handled_for_abi(0), 0);
         assert_eq!(handled_for_abi(1), (1 << 13) - 1);
         assert_eq!(handled_for_abi(4), handled_for_abi(3), "ABI 4 adds network rights only");

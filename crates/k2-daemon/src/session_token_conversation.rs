@@ -384,12 +384,13 @@ pub async fn socket_refusal(validated: Option<&ValidatedHook>, path: &str, head:
 /// The TCP prologue's door (dispatcher): only a request whose credential
 /// (the bearer, else `?token=`) is a valid tab passport is checked; the
 /// owner token and logins never are. `Some(403 body)` refuses it.
-pub async fn tcp_refusal(path_and_query: &str, bearer: Option<&str>, head: &str) -> Option<String> {
+pub async fn tcp_refusal(path_and_query: &str, bearer: Option<&str>, head: &str, peer: Option<std::net::SocketAddr>) -> Option<String> {
     let (path, query) = path_and_query.split_once('?').unwrap_or((path_and_query, ""));
     // Agent Isolation M1: a passport bound to its agent's cgroup works only
     // on its session socket (TCP names no process to check), except the
-    // socket's own forward: 403 `passport_needs_socket` and an audit row.
-    if let Some(body) = crate::agent_isolation::tcp_refusal(query, bearer, head, "tcp") {
+    // socket's own forward (its recorded source port, `peer`): 403
+    // `passport_needs_socket` and an audit row.
+    if let Some(body) = crate::agent_isolation::tcp_refusal(query, head, peer, "tcp") {
         return Some(body);
     }
     let presented = crate::routes::http::presented_bearer(query, bearer);

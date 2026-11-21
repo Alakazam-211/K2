@@ -434,6 +434,11 @@ fn heal_passport(session: &k2_core::terminal::DaemonPtySession, key: &str, meta:
         PassportHeal::Lost(why) => (vec![], vec![(sid.clone(), why)]),
         PassportHeal::Reminted => (vec![sid.clone()], vec![]),
     };
+    // Agent Isolation (review F10): a re-minted passport is bound from the
+    // cgroup the session's process is really in, when that is its agent's.
+    if let (false, Some(pid)) = (reminted.is_empty(), session.child_pid()) {
+        crate::agent_isolation::bind_from_live_cgroup(&session.session_id, pid as u32, meta.get("workspace_uuid").and_then(Value::as_str));
+    }
     if late {
         say_passport_trouble(&reminted, &unusable);
     }

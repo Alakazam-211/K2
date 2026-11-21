@@ -4,7 +4,7 @@ USAGE
   k2 agent isolation <workspace> fence|off [--json]
 
 WHAT IT DOES
-  fence  The agent's next terminals start under a folder fence that K5 loads
+  fence  The agent's next terminals, job runs and services start under a folder fence that K5 loads
          into the standard Linux kernel (Landlock). They can open their own
          workspace, their own temp folder, their own harness login and the
          shared build caches, and read the system and the toolchains.

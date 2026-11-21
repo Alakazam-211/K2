@@ -16,20 +16,20 @@
 //!   socket's own forward ([`forward_to_tcp`]): the `k2` CLI in a session
 //!   sends every passport request over the socket, marking the ones it
 //!   used to send over TCP (`X-K2-Via-Tcp: 1`); the socket checks the
-//!   cgroup, then hands the request to the TCP dispatcher unchanged with a
-//!   proof only this daemon process holds. The same route code and the same
-//!   guards as TCP, for every route, with no per-route list to fall behind.
+//!   cgroup, then hands the request to the TCP dispatcher, its head rebuilt
+//!   around the one passport it validated, from a source port it recorded
+//!   for that session ([`is_forward_from`]: no secret in any header). The
+//!   same route code and guards as TCP, for every route.
 //! - **whois** ([`handle_whois`], `GET /cli/agent-whois?pid=N`, owner
 //!   only): which agent owns a process.
 //! - **The fence switch** (`POST /cli/agent-access/set {toggle: "fence"}`,
 //!   owner; an Admin may only turn it on): per agent, off by default.
 //!
-//! The claim is "traceable, and a copied passport alone no longer works"
+//! The claim is "labelled by agent; a fenced agent can't change its label"
 //! ([`k2_core::agent_cgroup::CLAIM`]); never "cannot be forged" while the
 //! cgroups belong to the K2 user (plan M1b: root-owned cgroups).
 
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 
 use k2_core::agent_cgroup::{self, Decision, PeerAgent, SessionIsolation};
 use k2_core::log_debug;
@@ -39,9 +39,6 @@ use k2_core::session::SessionId;
 pub const WHOIS_ROUTE: &str = "/cli/agent-whois";
 /// The CLI's mark on a request it used to send over loopback TCP.
 pub const VIA_TCP_HEADER: &str = "x-k2-via-tcp";
-/// The socket's forward to TCP: this process's proof, and the session.
-pub const PROOF_HEADER: &str = "x-k2-cell-proof";
-pub const PROOF_SESSION_HEADER: &str = "x-k2-cell-session";
 
 // ── spawn ─────────────────────────────────────────────────────────────
 
@@ -76,6 +73,68 @@ pub fn for_spawn(sid: &SessionId, ws: &str, cwd: &str, passthrough: bool, minted
     Some(iso)
 }
 
+/// Review F1: a `k2 job` run of workspace `ws` (selector `run_sid`) gets
+/// what the agent's terminals get: its processes start through the exec
+/// helper (the agent's cgroup; the fence when on), and when the box has the
+/// identity its passport is bound to that cgroup and it gets a session
+/// socket of its own (`K2_HOOK_SOCK` into `env`), since a bound passport
+/// never works over TCP. `Ok(None)`: as before (no identity, no fence).
+/// `Err`: the run doesn't start (never a job outside what was promised).
+#[cfg(unix)]
+pub fn for_job(run_sid: &str, ws: &str, root: &Path, env: &mut std::collections::HashMap<String, String>) -> Result<Option<SessionIsolation>, String> {
+    let ws = ws.trim();
+    let (path, fence) = workspace_and_fence(ws);
+    let workspace = path.unwrap_or_else(|| root.to_path_buf());
+    let Some(iso) = agent_cgroup::intent(ws, true, fence, Some(&workspace)) else { return Ok(None) };
+    if iso.identity {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = crate::cell_uds::cells_dir();
+        std::fs::create_dir_all(&dir).map_err(|e| format!("the job's session socket folder: {e}"))?;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).map_err(|e| format!("the job's session socket folder: {e}"))?;
+        let sock = job_socket(run_sid);
+        let _ = std::fs::remove_file(&sock);
+        let listener = std::os::unix::net::UnixListener::bind(&sock).map_err(|e| format!("the job's session socket: {e}"))?;
+        std::fs::set_permissions(&sock, std::fs::Permissions::from_mode(0o600)).map_err(|e| format!("the job's session socket: {e}"))?;
+        let rt = crate::rt::handle().ok_or("no runtime for the job's session socket")?;
+        let _g = rt.enter();
+        crate::cell_server::serve_cell_at(run_sid.to_string(), sock.clone(), listener, None);
+        env.insert("K2_HOOK_SOCK".into(), sock.to_string_lossy().into_owned());
+        if !crate::session_token::bind_agent_cgroup_sid(run_sid, ws) {
+            return Err("the job's passport is gone".into());
+        }
+    }
+    Ok(Some(iso))
+}
+
+/// Review F10: bind a re-minted passport (adoption after the store was
+/// lost) when the session's process is in its own agent's cgroup now.
+pub fn bind_from_live_cgroup(sid: &SessionId, pid: u32, ws: Option<&str>) {
+    let (Some(ws), Ok(a)) = (ws.map(str::trim).filter(|w| !w.is_empty()), agent_cgroup::availability()) else { return };
+    match agent_cgroup::cgroup_of_pid(pid).map(|p| agent_cgroup::classify(&a.agents_rel, &p)) {
+        Ok(peer) if peer.ws() == Some(ws) => {
+            if crate::session_token::bind_agent_cgroup(sid, ws) {
+                log_debug!("[agents] session={sid}: the re-minted passport is bound to agent {ws} (its live cgroup)");
+            }
+        }
+        Ok(peer) => log_debug!("[agents] session={sid}: re-minted passport left unbound: the session is in {}", peer.describe()),
+        Err(e) => log_debug!("[agents] session={sid}: re-minted passport left unbound: {e}"),
+    }
+}
+
+/// Review F1: a workspace's published `--cmd` service runs in its agent's
+/// cgroup and under its fence (no passport: services don't call the daemon).
+pub fn for_service(ws: &str, cwd: &Path) -> Option<SessionIsolation> {
+    let (path, fence) = workspace_and_fence(ws.trim());
+    let workspace = path.unwrap_or_else(|| cwd.to_path_buf());
+    agent_cgroup::intent(ws, true, fence, Some(&workspace))
+}
+
+/// A job run's session socket.
+#[cfg(unix)]
+pub fn job_socket(run_sid: &str) -> PathBuf {
+    crate::cell_uds::cells_dir().join(format!("{run_sid}.sock"))
+}
+
 // ── audit ─────────────────────────────────────────────────────────────
 
 /// One audit row for a refused passport: the passport's agent, where it
@@ -94,6 +153,15 @@ pub fn audit_refusal(event: &str, passport_ws: &str, sid: &str, detail: &str, in
 
 // ── the session socket ────────────────────────────────────────────────
 
+/// A bound passport of another session presented on this session's
+/// socket (a copied passport): an audit row naming both. Nothing for an
+/// unbound or invalid credential.
+pub fn audit_wrong_socket(presented: &str, this_sid: &str) {
+    if let Some((sid, ws)) = crate::session_token::bound_agent_of_bearer(presented).filter(|(sid, _)| sid != this_sid) {
+        audit_refusal("agent.passport_wrong_socket", &ws, &sid, &format!("the passport of agent {ws} was presented on another session's socket ({this_sid})"), "cell-socket");
+    }
+}
+
 /// The refusal body for a passport presented from the wrong cgroup.
 pub fn wrong_cgroup_body(detail: &str) -> String {
     serde_json::json!({
@@ -109,10 +177,22 @@ pub fn wrong_cgroup_body(detail: &str) -> String {
 #[cfg(unix)]
 pub fn check_socket_peer(fd: std::os::fd::RawFd, v: &crate::session_token::ValidatedHook) -> Option<String> {
     let bound = v.agent_cgroup.as_deref()?;
-    let Ok(a) = agent_cgroup::availability() else {
-        // Identity unavailable now (the off-switch, or the box lost its
-        // delegated unit): passports as before.
-        return None;
+    let a = match agent_cgroup::availability() {
+        Ok(a) => a,
+        Err(why) => {
+            // Identity unavailable now (the off-switch, or the box lost its
+            // delegated unit): passports as before. Without the switch that
+            // is a box that lost what bound this passport: said loudly, once
+            // per boot, with an audit row (review F12).
+            if !agent_cgroup::switch_off() {
+                static SAID: std::sync::Once = std::sync::Once::new();
+                SAID.call_once(|| {
+                    audit_refusal("agent.identity_lost", bound, &v.session_id, &format!("accepted without the cgroup check: {why}"), "cell-socket");
+                    eprintln!("k2-daemon: WARNING: agent cgroup identity is unavailable ({why}) while bound passports exist: they are accepted without the check");
+                });
+            }
+            return None;
+        }
     };
     #[cfg(target_os = "linux")]
     let (peer, pid, _pinned) = agent_cgroup::peer_of_socket(fd, &a);
@@ -134,72 +214,206 @@ pub fn check_socket_peer(fd: std::os::fd::RawFd, v: &crate::session_token::Valid
     }
 }
 
-/// This daemon process's proof for the socket's forward to TCP (random,
-/// in memory only: never on disk, never in a child's environment).
-fn proof() -> &'static str {
-    static P: OnceLock<String> = OnceLock::new();
-    P.get_or_init(|| format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple()))
-}
-
 fn ct_eq(a: &str, b: &str) -> bool {
     use subtle::ConstantTimeEq;
     a.len() == b.len() && bool::from(a.as_bytes().ct_eq(b.as_bytes()))
 }
 
-/// The request head as the socket forwards it: the client's own
-/// `X-K2-Cell-*` / `X-K2-Via-Tcp` / `Connection` lines dropped, then this
-/// process's proof for `sid` and `Connection: close`.
-pub fn forward_head(head: &str, sid: &str) -> String {
+// ── the socket's forward to TCP (review F3, F5) ───────────────────────
+//
+// No secret travels in a header. The forwarder records the loopback source
+// port of its own connection for the session before it writes a byte; the
+// TCP gate accepts a bound passport only on a connection from a recorded
+// port for that same session ([`is_forward_from`]), and the record goes when
+// the forward ends. A route that logs or proxies the request learns nothing
+// reusable. The forwarded head is rebuilt, never passed through: strict
+// CRLF, the client's credentials (Authorization, Cookie, `token=` in the
+// query or a form body) dropped, and the one passport the socket validated
+// put back.
+
+static FORWARDS: std::sync::Mutex<Option<std::collections::HashMap<u16, String>>> = std::sync::Mutex::new(None);
+
+struct ForwardRecord(u16);
+
+impl ForwardRecord {
+    fn new(port: u16, sid: &str) -> Self {
+        FORWARDS.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(Default::default).insert(port, sid.to_string());
+        ForwardRecord(port)
+    }
+}
+
+impl Drop for ForwardRecord {
+    fn drop(&mut self) {
+        if let Some(m) = FORWARDS.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+            m.remove(&self.0);
+        }
+    }
+}
+
+/// `true` when `peer` is one of this daemon's own forwards for `sid`: a
+/// loopback connection from the source port the forwarder recorded.
+pub fn is_forward_from(peer: Option<std::net::SocketAddr>, sid: &str) -> bool {
+    let Some(p) = peer.filter(|p| p.ip().is_loopback()) else { return false };
+    FORWARDS.lock().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|m| m.get(&p.port())).is_some_and(|s| s == sid)
+}
+
+/// A query or form key as the parsers read it (`%XX`, `+`).
+fn decoded_key(raw: &str) -> String {
+    let b = raw.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'+' => out.push(b' '),
+            b'%' if i + 2 < b.len() => {
+                match std::str::from_utf8(&b[i + 1..i + 3]).ok().and_then(|h| u8::from_str_radix(h, 16).ok()).ok_or(()) {
+                    Ok(v) => {
+                        out.push(v);
+                        i += 2;
+                    }
+                    Err(_) => out.push(b'%'),
+                }
+            }
+            c => out.push(c),
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// `a=1&token=x&b=2` → `a=1&b=2`: every pair whose key reads `token`
+/// (raw or decoded) dropped.
+pub fn strip_token_pairs(qs: &str) -> String {
+    qs.split('&')
+        .filter(|p| !p.is_empty())
+        .filter(|p| {
+            let k = p.split('=').next().unwrap_or("");
+            k != "token" && decoded_key(k).trim() != "token"
+        })
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+/// The request as the socket forwards it to TCP: `head` (up to, not
+/// including, the blank line) and `body`, rebuilt around `passport`.
+/// Refuses (400) a bare CR or LF, a folded or nameless header line, or a
+/// request line that isn't `METHOD target HTTP/1.x`.
+pub fn rebuild_forward(head: &str, body: &[u8], passport: &str) -> Result<(String, Vec<u8>), &'static str> {
+    if head.replace("\r\n", "").contains(['\r', '\n']) {
+        return Err("a bare CR or LF in the request head");
+    }
     let mut lines = head.split("\r\n");
-    let mut out = String::with_capacity(head.len() + 160);
-    out.push_str(lines.next().unwrap_or(""));
-    out.push_str("\r\n");
+    let req = lines.next().ok_or("no request line")?;
+    let parts: Vec<&str> = req.split(' ').collect();
+    let [method, target, version] = parts[..] else { return Err("a malformed request line") };
+    if !version.starts_with("HTTP/1.") || method.is_empty() || !method.bytes().all(|b| b.is_ascii_uppercase()) || !target.starts_with('/') {
+        return Err("a malformed request line");
+    }
+    let target = match target.split_once('?') {
+        Some((p, q)) => {
+            let q = strip_token_pairs(q);
+            if q.is_empty() {
+                p.to_string()
+            } else {
+                format!("{p}?{q}")
+            }
+        }
+        None => target.to_string(),
+    };
+    let mut out = format!("{method} {target} {version}\r\n");
     for l in lines {
-        let name = l.split(':').next().unwrap_or("").trim().to_ascii_lowercase();
-        if l.is_empty() || name.starts_with("x-k2-cell-") || name == VIA_TCP_HEADER || name == "connection" || name == "proxy-connection" {
+        if l.is_empty() || l.starts_with([' ', '\t']) {
+            return Err("a folded or empty header line");
+        }
+        let (name, _) = l.split_once(':').ok_or("a header line without a name")?;
+        let name = name.to_ascii_lowercase();
+        if name.is_empty() || name.contains(|c: char| c.is_ascii_whitespace()) {
+            return Err("a malformed header name");
+        }
+        if matches!(
+            name.as_str(),
+            "authorization" | "cookie" | "connection" | "proxy-connection" | "keep-alive" | "content-length" | "transfer-encoding" | "te" | "upgrade"
+        ) || name == VIA_TCP_HEADER
+            || name.starts_with("x-k2-cell-")
+        {
             continue;
         }
         out.push_str(l);
         out.push_str("\r\n");
     }
-    out.push_str(&format!("X-K2-Cell-Proof: {}\r\nX-K2-Cell-Session: {sid}\r\nConnection: close\r\n\r\n", proof()));
-    out
-}
-
-/// `true` when the request is the session socket's forward for `sid`.
-pub fn is_forward_for(head: &str, sid: &str) -> bool {
-    let p = crate::routes::http::extract_header(head, PROOF_HEADER).unwrap_or("");
-    let s = crate::routes::http::extract_header(head, PROOF_SESSION_HEADER).unwrap_or("");
-    !p.is_empty() && ct_eq(p.trim(), proof()) && s.trim() == sid
+    let form = !body.is_empty() && {
+        let t = String::from_utf8_lossy(body);
+        let t = t.trim_start();
+        !t.starts_with('{') && !t.starts_with('[')
+    };
+    let body = if form {
+        let s = std::str::from_utf8(body).map_err(|_| "a form body that isn't UTF-8")?;
+        strip_token_pairs(s.trim_end_matches(['\r', '\n'])).into_bytes()
+    } else {
+        body.to_vec()
+    };
+    out.push_str(&format!("Authorization: Bearer {passport}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()));
+    Ok((out, body))
 }
 
 /// Hand a request the CLI marked `X-K2-Via-Tcp` to the TCP dispatcher on
-/// loopback, after the socket's checks, and copy its answer back.
+/// loopback, after the socket's checks (`passport` is the one the socket
+/// validated for `sid`), and copy its answer back.
 #[cfg(unix)]
-pub async fn forward_to_tcp(stream: &mut tokio::net::UnixStream, head: &str, body: &[u8], sid: &str) {
+pub async fn forward_to_tcp(stream: &mut tokio::net::UnixStream, head: &str, body: &[u8], sid: &str, passport: &str) {
     use tokio::io::AsyncWriteExt;
-    let port = k2_core::hook_config::get_port();
-    let mut tcp = match tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
-        Ok(t) => t,
-        Err(e) => {
-            let b = serde_json::json!({ "error": format!("the session socket couldn't reach the daemon's own port: {e}") }).to_string();
-            let resp = format!(
-                "HTTP/1.1 502 Bad Gateway\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{b}",
-                k2_core::frame_policy::CONNECT_HEADER_LINES,
-                b.len()
-            );
-            let _ = stream.write_all(resp.as_bytes()).await;
+    let answer = |status: &str, msg: String| {
+        let b = serde_json::json!({ "error": msg }).to_string();
+        format!(
+            "HTTP/1.1 {status}\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{b}",
+            k2_core::frame_policy::CONNECT_HEADER_LINES,
+            b.len()
+        )
+    };
+    let (fwd, body) = match rebuild_forward(head, body, passport) {
+        Ok(x) => x,
+        Err(why) => {
+            let _ = stream.write_all(answer("400 Bad Request", format!("the session socket refused the request: {why}")).as_bytes()).await;
             let _ = stream.shutdown().await;
             return;
         }
     };
-    let fwd = forward_head(head, sid);
-    if tcp.write_all(fwd.as_bytes()).await.is_err() || tcp.write_all(body).await.is_err() {
+    let port = k2_core::hook_config::get_port();
+    let sock = match tokio::net::TcpSocket::new_v4() {
+        Ok(s) => s,
+        Err(e) => {
+            let _ = stream.write_all(answer("502 Bad Gateway", format!("the session socket couldn't open a socket: {e}")).as_bytes()).await;
+            let _ = stream.shutdown().await;
+            return;
+        }
+    };
+    // Bind first, so the source port is known (and recorded) before the
+    // daemon can read a byte from this connection.
+    let local = sock.bind(std::net::SocketAddr::from(([127, 0, 0, 1], 0))).and_then(|_| sock.local_addr());
+    let record = match local {
+        Ok(a) => ForwardRecord::new(a.port(), sid),
+        Err(e) => {
+            let _ = stream.write_all(answer("502 Bad Gateway", format!("the session socket couldn't bind: {e}")).as_bytes()).await;
+            let _ = stream.shutdown().await;
+            return;
+        }
+    };
+    let mut tcp = match sock.connect(std::net::SocketAddr::from(([127, 0, 0, 1], port))).await {
+        Ok(t) => t,
+        Err(e) => {
+            drop(record);
+            let _ = stream.write_all(answer("502 Bad Gateway", format!("the session socket couldn't reach the daemon's own port: {e}")).as_bytes()).await;
+            let _ = stream.shutdown().await;
+            return;
+        }
+    };
+    if tcp.write_all(fwd.as_bytes()).await.is_err() || tcp.write_all(&body).await.is_err() {
         let _ = stream.shutdown().await;
         return;
     }
     // Answers stream (watch / tail -f): copy until the daemon closes.
     let _ = tokio::io::copy(&mut tcp, stream).await;
+    drop(record);
     let _ = stream.shutdown().await;
 }
 
@@ -220,20 +434,44 @@ pub fn needs_socket_body() -> String {
 
 /// The TCP dispatcher's gate: `Some(body)` = 403 for a request carrying a
 /// passport bound to an agent cgroup, unless it is the session socket's own
-/// forward for that session. Inert when identity is unavailable (the
-/// emergency off-switch included).
-pub fn tcp_refusal(query: &str, bearer: Option<&str>, head: &str, ingress: &str) -> Option<String> {
-    let presented = crate::routes::http::presented_bearer(query, bearer);
-    if presented.is_empty() || !presented.contains('.') {
-        return None;
-    }
-    let (sid, ws) = crate::session_token::bound_agent_of_bearer(presented)?;
+/// forward for that session ([`is_forward_from`]). It reads the credential
+/// the routes will use: the dispatcher's own fold (Bearer, else `?token=`,
+/// else the session cookie; review F4), and also a Bearer or query or
+/// cookie passport that the fold would pass over (any bound one refuses).
+/// Inert when identity is unavailable (the emergency off-switch included).
+pub fn tcp_refusal(query: &str, head: &str, peer: Option<std::net::SocketAddr>, ingress: &str) -> Option<String> {
     agent_cgroup::availability().ok()?;
-    if is_forward_for(head, &sid) {
-        return None;
+    let (folded, _) = crate::routes::http::effective_auth_query(query, head);
+    let mut seen: Vec<String> = Vec::new();
+    seen.extend(crate::routes::http::extract_token(&folded).map(str::to_string));
+    seen.extend(crate::routes::http::extract_token(query).map(str::to_string));
+    seen.extend(crate::routes::http::extract_bearer(head).map(str::to_string));
+    seen.extend(crate::routes::http::extract_session_cookie(head).map(str::to_string));
+    seen.extend(crate::routes::http::extract_skin_session_cookie(head).map(str::to_string));
+    for t in seen.iter().filter(|t| t.contains('.')) {
+        let Some((sid, ws)) = crate::session_token::bound_agent_of_bearer(t) else { continue };
+        if is_forward_from(peer, &sid) {
+            continue;
+        }
+        audit_refusal("agent.passport_needs_socket", &ws, &sid, "a bound passport was presented over TCP", ingress);
+        return Some(needs_socket_body());
     }
-    audit_refusal("agent.passport_needs_socket", &ws, &sid, "a bound passport was presented over TCP", ingress);
-    Some(needs_socket_body())
+    None
+}
+
+/// A form body's params for the routes that still take a body `token`
+/// (`/cli/respond`, `/cli/session/complete`), minus a bound passport there
+/// (refused with an audit row: a body never carries one past the TCP gate;
+/// review F4).
+pub fn form_body_without_bound_passport(body: &[u8]) -> std::collections::HashMap<String, String> {
+    let mut m = crate::routes::http::parse_form_body(body);
+    if agent_cgroup::availability().is_ok() {
+        if let Some((sid, ws)) = m.get("token").and_then(|t| crate::session_token::bound_agent_of_bearer(t)) {
+            audit_refusal("agent.passport_needs_socket", &ws, &sid, "a bound passport was presented in a TCP form body", "tcp");
+            m.remove("token");
+        }
+    }
+    m
 }
 
 // ── whois ─────────────────────────────────────────────────────────────
@@ -276,18 +514,71 @@ pub fn describe(p: &PeerAgent) -> String {
 mod tests {
     use super::*;
 
+    /// Review F3: the forward carries exactly the passport the socket
+    /// validated. The client's own Authorization, Cookie and `token=` (query,
+    /// form body, percent-encoded) go; a bare LF (smuggled header) refuses.
     #[test]
-    fn the_forward_drops_client_proofs_and_adds_this_processes() {
-        let head = "POST /cli/x HTTP/1.1\r\nHost: localhost\r\nX-K2-Cell-Proof: forged\r\nx-k2-cell-session: other\r\nX-K2-Via-Tcp: 1\r\nConnection: keep-alive\r\nContent-Length: 2";
-        let f = forward_head(head, "sid-1");
-        assert!(f.starts_with("POST /cli/x HTTP/1.1\r\n"));
-        assert!(!f.contains("forged") && !f.contains("other") && !f.to_ascii_lowercase().contains("x-k2-via-tcp") && !f.contains("keep-alive"), "{f}");
-        assert!(f.contains("Content-Length: 2\r\n") && f.ends_with("Connection: close\r\n\r\n"), "{f}");
-        assert!(is_forward_for(&f, "sid-1"));
-        assert!(!is_forward_for(&f, "sid-2"), "the proof names one session");
-        assert!(!is_forward_for(head, "sid-1"), "a client's own proof is never this process's");
-        let forged = "GET / HTTP/1.1\r\nX-K2-Cell-Proof: 00000000\r\nX-K2-Cell-Session: sid-1\r\n";
-        assert!(!is_forward_for(forged, "sid-1"));
+    fn the_forward_carries_only_the_validated_passport() {
+        let head = "POST /cli/x?token=B.secret&a=1&%74oken=B2.x HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer B.secret\r\nCookie: k2_session=B.secret\r\nX-K2-Cell-Session: other\r\nX-K2-Via-Tcp: 1\r\nConnection: keep-alive\r\nContent-Length: 30\r\nContent-Type: application/x-www-form-urlencoded";
+        let (f, body) = rebuild_forward(head, b"token=B.secret&message=hi", "A.mine").unwrap();
+        assert!(f.starts_with("POST /cli/x?a=1 HTTP/1.1\r\n"), "{f}");
+        for gone in ["B.secret", "B2.x", "other", "keep-alive", "Cookie", "X-K2-Via-Tcp"] {
+            assert!(!f.contains(gone), "{gone} in {f}");
+        }
+        assert_eq!(f.matches("Authorization:").count(), 1, "{f}");
+        assert!(f.contains("Authorization: Bearer A.mine\r\n") && f.ends_with("Connection: close\r\n\r\n"), "{f}");
+        assert_eq!(body, b"message=hi".to_vec());
+        assert!(f.contains(&format!("Content-Length: {}\r\n", body.len())), "{f}");
+        // The smuggling shape: a bare LF inside a header value.
+        let smuggled = "POST /cli/x HTTP/1.1\r\nFoo: x\nX-K2-Cell-Session: sid-B\r\nHost: k2";
+        assert!(rebuild_forward(smuggled, b"", "A.mine").is_err());
+        assert!(rebuild_forward("GET /x HTTP/1.1\r\nFoo: x\rBar: y", b"", "A.mine").is_err(), "a bare CR");
+        assert!(rebuild_forward("GET /x HTTP/1.1\r\n folded", b"", "A.mine").is_err());
+        assert!(rebuild_forward("GET x HTTP/1.1", b"", "A.mine").is_err());
+        // A JSON body is left as it is (no route reads a credential there).
+        let (_, j) = rebuild_forward("POST /x HTTP/1.1", br#"{"token":"x"}"#, "A.mine").unwrap();
+        assert_eq!(j, br#"{"token":"x"}"#.to_vec());
+        assert_eq!(strip_token_pairs("token=a&x=1&%74%6Fken=b&tok%65n=c&token2=d"), "x=1&token2=d");
+    }
+
+    /// Review F5: the forward's proof is its own recorded source port, for
+    /// one session, only while the forward lives.
+    #[test]
+    fn a_forward_is_recognised_by_its_recorded_port_only() {
+        let peer = |p: u16| Some(std::net::SocketAddr::from(([127, 0, 0, 1], p)));
+        assert!(!is_forward_from(peer(40001), "sid-1"));
+        {
+            let _r = ForwardRecord::new(40001, "sid-1");
+            assert!(is_forward_from(peer(40001), "sid-1"));
+            assert!(!is_forward_from(peer(40001), "sid-2"), "the record names one session");
+            assert!(!is_forward_from(peer(40002), "sid-1"), "another connection");
+            assert!(!is_forward_from(Some(std::net::SocketAddr::from(([10, 0, 0, 5], 40001))), "sid-1"), "not loopback");
+            assert!(!is_forward_from(None, "sid-1"));
+        }
+        assert!(!is_forward_from(peer(40001), "sid-1"), "the record goes with the forward");
+    }
+
+    /// Review F1: every place the daemon starts an agent-supplied command
+    /// for a workspace goes through the isolation (the exec helper, the
+    /// agent's cgroup, its fence). A new spawn site that runs a workspace's
+    /// command must be added here, or this fails.
+    #[test]
+    fn every_agent_command_spawn_site_goes_through_the_isolation() {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let read = |f: &str| std::fs::read_to_string(src.join(f)).unwrap_or_else(|e| panic!("{f}: {e}"));
+        // Terminals: both spawn paths decide the isolation with the passport.
+        for f in ["v2_spawn.rs", "spawn.rs"] {
+            assert!(read(f).contains("agent_isolation::for_spawn("), "{f} spawns terminals without agent_isolation::for_spawn");
+        }
+        // `k2 job` runs and published `--cmd` services wrap their command.
+        let jobs = read("jobs/runner.rs");
+        assert!(jobs.contains("agent_isolation::for_job(") && jobs.contains("agent_cgroup::wrap("), "k2 job runs skip the isolation");
+        let publish = read("publish_runtime.rs");
+        assert!(publish.contains("agent_isolation::for_service(") && publish.contains("agent_cgroup::wrap("), "published services skip the isolation");
+        // Terminals a passport can't open or drive at all.
+        for p in ["/cli/terminal/create", "/cli/terminal/write", "/cli/terminal/kill", "/cli/sessions/v2/spawn"] {
+            assert!(!crate::session_token::is_agent_verb(p), "{p} is an agent verb: a passport could start or drive a terminal outside the isolation");
+        }
     }
 
     #[test]

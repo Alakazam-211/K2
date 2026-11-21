@@ -4,15 +4,15 @@ USAGE
   k2 agent whois <pid> [--json]
 
 WHAT IT SAYS
-  The process's cgroup and the agent it belongs to: every terminal session
-  of an agent, and every process it starts, runs in the agent's own cgroup
-  (agents/a-<workspace id>/ under the daemon's unit). Also visible with
-  systemd-cgls and ps -o pid,cgroup,cmd.
+  The process's cgroup and the agent it is labelled with: every terminal,
+  job run and published service of an agent starts in the agent's own
+  cgroup (agents/a-<workspace id>/ under the daemon's unit). Also visible
+  with systemd-cgls and ps -o pid,cgroup,cmd.
 
-  Traceable is not unforgeable: an agent without the folder fence runs as
-  you, so it can move a process into another agent's cgroup, or read the
-  owner token on disk. The fence (k2 agent isolation <ws> fence) closes
-  both for that agent.
+  A label is not proof: an agent without the folder fence runs as you, so
+  it can move a process out of its label or into another agent's cgroup,
+  or read the owner token on disk. A fenced agent can't change its label
+  (k2 agent isolation <ws> fence).
 
 WHO MAY
   The server's owner, from a terminal outside K2 (an agent's passport is

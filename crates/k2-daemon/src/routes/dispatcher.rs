@@ -1675,7 +1675,7 @@ async fn handle_one_request(
     }
 
     // A tab passport's Codex call must come from that tab's conversation (+ agent_isolation::tcp_refusal).
-    if let Some(body) = crate::session_token::tcp_refusal(path_and_query, bearer_token.as_deref(), &req).await {
+    if let Some(body) = crate::session_token::tcp_refusal(path_and_query, bearer_token.as_deref(), &req, stream.peer_addr().ok()).await {
         let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
         super::http::send_response(&mut *stream, "403 Forbidden", "application/json", &body).await;
         return DispatchOutcome::Done;
@@ -4010,7 +4010,7 @@ async fn handle_one_request(
             // key collision — the inbox-routes convention.
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
             let mut params = super::http::parse_params(&path, &query);
-            for (k, v) in super::http::parse_form_body(&body_bytes) {
+            for (k, v) in crate::agent_isolation::form_body_without_bound_passport(&body_bytes) {
                 params.insert(k, v);
             }
             let unclaim = p.ends_with("/unclaim");
@@ -7163,7 +7163,7 @@ async fn handle_one_request(
             };
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
             let mut params = super::http::parse_params(&path, &query);
-            for (k, v) in super::http::parse_form_body(&body_bytes) {
+            for (k, v) in crate::agent_isolation::form_body_without_bound_passport(&body_bytes) {
                 params.insert(k, v);
             }
             if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body_bytes) {
@@ -11263,7 +11263,7 @@ async fn handle_one_request(
             // ~2.7KB. Query-only senders (older CLIs) keep working.
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
             let mut params = super::http::parse_params(&path, &query);
-            for (k, v) in super::http::parse_form_body(&body_bytes) {
+            for (k, v) in crate::agent_isolation::form_body_without_bound_passport(&body_bytes) {
                 params.insert(k, v);
             }
             // Preserve compose TARGET across identity stamp. Stamp rewrites
@@ -11336,7 +11336,7 @@ async fn handle_one_request(
             }
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
             let mut params = super::http::parse_params(&path, &query);
-            for (k, v) in super::http::parse_form_body(&body_bytes) {
+            for (k, v) in crate::agent_isolation::form_body_without_bound_passport(&body_bytes) {
                 params.insert(k, v);
             }
             super::http::merge_json_object_params(&mut params, &body_bytes);
@@ -11383,7 +11383,7 @@ async fn handle_one_request(
             }
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
             let mut params = super::http::parse_params(&path, &query);
-            for (k, v) in super::http::parse_form_body(&body_bytes) {
+            for (k, v) in crate::agent_isolation::form_body_without_bound_passport(&body_bytes) {
                 params.insert(k, v);
             }
             // JSON body optional: { "enabled": true, "port": 0, "project": "..." }
@@ -11447,7 +11447,7 @@ async fn handle_one_request(
             }
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
             let mut params = super::http::parse_params(&path, &query);
-            for (k, v) in super::http::parse_form_body(&body_bytes) {
+            for (k, v) in crate::agent_isolation::form_body_without_bound_passport(&body_bytes) {
                 params.insert(k, v);
             }
             // 0.46.4 stamp-strip: identity keys come from the token only,
@@ -11520,7 +11520,7 @@ async fn handle_one_request(
             }
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
             let mut params = super::http::parse_params(&path, &query);
-            for (k, v) in super::http::parse_form_body(&body_bytes) {
+            for (k, v) in crate::agent_isolation::form_body_without_bound_passport(&body_bytes) {
                 params.insert(k, v);
             }
             let presented = bearer_token
@@ -11577,7 +11577,7 @@ async fn handle_one_request(
             }
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
             let mut params = super::http::parse_params(&path, &query);
-            for (k, v) in super::http::parse_form_body(&body_bytes) {
+            for (k, v) in crate::agent_isolation::form_body_without_bound_passport(&body_bytes) {
                 params.insert(k, v);
             }
             let presented = bearer_token
@@ -11642,7 +11642,7 @@ async fn handle_one_request(
             // session_id/text/command — `from` is NEVER read from the body
             // (D3), it is resolved below from the token.
             let mut params = super::http::parse_params(&path, &query);
-            for (k, v) in super::http::parse_form_body(&body_bytes) {
+            for (k, v) in crate::agent_isolation::form_body_without_bound_passport(&body_bytes) {
                 params.insert(k, v);
             }
             if let Ok(serde_json::Value::Object(map)) =

@@ -286,6 +286,9 @@ pub fn parse_stat_ppid(stat: &str) -> Option<u32> {
     rest.split_whitespace().nth(1)?.parse().ok()
 }
 
+/// The exec helper's `comm` (the daemon's own binary, `--agent-exec`).
+pub const EXEC_HELPER_COMM: &str = "k2-daemon";
+
 /// k2-ptyd: every child it has is an agent session.
 fn is_ptyd(procs: &dyn Procs, pid: u32) -> bool {
     procs.comm(pid).is_some_and(|c| c == "k2-ptyd")
@@ -313,6 +316,13 @@ pub fn misplaced(daemon_pids: &[u32], agent_pids: &HashSet<u32>, procs: &dyn Pro
         .copied()
         .filter(|&pid| {
             if is_ptyd(procs, pid) {
+                return false;
+            }
+            // An exec helper (`k2-daemon --agent-exec`) places itself in its
+            // agent's cgroup before the program runs: a sweep that listed it
+            // here a moment before must not pull it out again into the shared
+            // leaf (Agent Isolation review F9).
+            if procs.comm(pid).is_some_and(|c| c == EXEC_HELPER_COMM) {
                 return false;
             }
             let mut cur = procs.ppid(pid);
@@ -382,6 +392,11 @@ pub fn sweep_with(cg: &dyn Cg, procs: &dyn Procs, l: &Leaves) -> Swept {
     let mut out = Swept::default();
     for pid in misplaced(&pids(cg, &l.base.join(DAEMON_LEAF)), &in_agents, procs) {
         let dest = home_for(pid, &groups, procs);
+        // Still in daemon/? (It may have joined its agent's cgroup since the
+        // listing; never move it back out, review F9.)
+        if !pids(cg, &l.base.join(DAEMON_LEAF)).contains(&pid) {
+            continue;
+        }
         match cg.write(&dest.join("cgroup.procs"), &pid.to_string()) {
             Ok(()) => out.moved.push(pid),
             // Exited in between: gone already, fine.
@@ -1133,19 +1148,25 @@ mod tests {
             // A child of A's session in daemon/ (forked before a join).
             procs.add(303, 301, "node");
             cg.write(&base.join("daemon/cgroup.procs"), "303").unwrap();
+            // An exec helper still in daemon/ (ptyd's child, about to join its
+            // agent's cgroup itself): the sweep leaves it alone (review F9).
+            procs.add(304, 300, EXEC_HELPER_COMM);
+            cg.write(&base.join("daemon/cgroup.procs"), "304").unwrap();
             let s = sweep_with(&cg, &procs, &l);
             assert_eq!((s.moved.clone(), s.failed.len()), (vec![303], 0), "{guard:?}");
-            assert_eq!(sorted(cg.procs(&a)), vec![301, 303], "{guard:?}: the child follows its agent, not the shared leaf");
+            assert!(cg.procs(&base.join("daemon")).contains(&304), "{guard:?}: the sweep never moves an exec helper");
+            cg.write(&a.join("cgroup.procs"), "304").unwrap();
+            assert_eq!(sorted(cg.procs(&a)), vec![301, 303, 304], "{guard:?}: the child follows its agent, not the shared leaf");
             assert_eq!(cg.procs(&base.join("agents")), vec![302]);
             let i = inspect_with(&cg, &procs, &base);
-            assert_eq!((i.sessions, i.sessions_in_leaf, i.misplaced), (2, 2, 0), "{guard:?}: sessions in per-agent cgroups count as in the leaf");
+            assert_eq!((i.sessions, i.sessions_in_leaf, i.misplaced), (3, 3, 0), "{guard:?}: sessions in per-agent cgroups count as in the leaf");
             for n in 0..3 {
                 systemd_stop(&cg, guard, Some(main));
                 main = 120 + n;
                 procs.add(main, 1, "k2-daemon");
                 systemd_start(&cg, guard, main).unwrap_or_else(|e| panic!("{guard:?} restart {n}: {e}"));
                 setup_with(&cg, &procs, &cg.root, &self_path(guard), UID, "max", guard).unwrap();
-                assert_eq!(sorted(cg.procs(&a)), vec![301, 303], "{guard:?} restart {n}: the agent's cgroup and its sessions stay");
+                assert_eq!(sorted(cg.procs(&a)), vec![301, 303, 304], "{guard:?} restart {n}: the agent's cgroup and its sessions stay");
                 assert_eq!(cg.procs(&base.join("agents")), vec![302], "{guard:?} restart {n}");
                 assert!(controllers(&cg, &base.join("agents")).is_empty(), "never controllers inside agents/");
                 assert_eq!(controllers(&cg, &base), vec!["cpu", "memory", "pids"]);

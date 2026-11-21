@@ -301,6 +301,28 @@ fn spawn(job: &Job, live: &Arc<Live>, log_path: &Path) -> Result<Started, (JobEr
     let (prog, args) = k2_core::terminal::win_cmd::resolve_command(&job.argv[0], &job.argv[1..], env.get("PATH").map(String::as_str).unwrap_or(""));
     #[cfg(not(windows))]
     let (prog, args) = (job.argv[0].clone(), job.argv[1..].to_vec());
+    // Agent Isolation (review F1): the run starts through the exec helper,
+    // in the agent's cgroup and under its fence, like its terminals.
+    #[cfg(unix)]
+    let (prog, args) = match crate::agent_isolation::for_job(&live.session_id, &job.workspace_id, &root, &mut env) {
+        Ok(None) => (prog, args),
+        Ok(Some(iso)) => match k2_core::agent_cgroup::wrap(&iso, prog, args, &env) {
+            Ok((helper, argv, spec)) => {
+                env.insert(k2_core::agent_fence::ENV_SPEC.into(), spec);
+                (helper, argv)
+            }
+            Err(e) => {
+                crate::session_token::revoke_job_passport(&live.session_id);
+                let _ = std::fs::remove_file(crate::agent_isolation::job_socket(&live.session_id));
+                return Err((JobError::new("isolation_refused", 409, format!("agent isolation: {e}")), Some(mat)));
+            }
+        },
+        Err(e) => {
+            crate::session_token::revoke_job_passport(&live.session_id);
+            let _ = std::fs::remove_file(crate::agent_isolation::job_socket(&live.session_id));
+            return Err((JobError::new("isolation_refused", 409, format!("agent isolation: {e}")), Some(mat)));
+        }
+    };
     let mut cmd = k2_core::bg_proc::command(&prog);
     cmd.args(&args)
         .current_dir(&cwd)
@@ -476,6 +498,9 @@ fn supervise(job: Job, live: Arc<Live>, mut s: Started) {
 /// Revoke the passport, free the slot, close the row, prune old logs.
 fn finish(live: &Live, code: Option<i64>, outcome: &str, _note: Option<&str>, bytes: u64) {
     crate::session_token::revoke_job_passport(&live.session_id);
+    // Its session socket (agent isolation) goes too; the accept loop stops.
+    #[cfg(unix)]
+    let _ = std::fs::remove_file(crate::agent_isolation::job_socket(&live.session_id));
     super::release(&live.job_id, &live.run_id);
     let db = k2_core::db::shared();
     let drop_logs = {

@@ -38,7 +38,7 @@
 //!     the daemon's own uid (the bare-PTY child runs as the same user).
 
 #[cfg(unix)]
-pub use unix_impl::serve_cell;
+pub use unix_impl::{serve_cell, serve_cell_at};
 
 #[cfg(unix)]
 mod unix_impl {
@@ -262,19 +262,29 @@ mod unix_impl {
         listener: std::os::unix::net::UnixListener,
         cell_uid: Option<u32>,
     ) {
+        serve_cell_at(session_id.to_string(), crate::cell_uds::cell_socket_path(&session_id), listener, cell_uid)
+    }
+
+    /// [`serve_cell`] for a passport selector that isn't a `SessionId` (a
+    /// `k2 job` run's `job-<run id>`, Agent Isolation review F1), its
+    /// socket at `sock_path`. Must run inside the daemon's runtime.
+    pub fn serve_cell_at(
+        sid_str: String,
+        sock_path: std::path::PathBuf,
+        listener: std::os::unix::net::UnixListener,
+        cell_uid: Option<u32>,
+    ) {
         if let Err(e) = listener.set_nonblocking(true) {
-            log_debug!("[hook-scoped] WARN set_nonblocking cell sock {session_id}: {e}");
+            log_debug!("[hook-scoped] WARN set_nonblocking cell sock {sid_str}: {e}");
             return;
         }
         let tok_listener = match tokio::net::UnixListener::from_std(listener) {
             Ok(l) => l,
             Err(e) => {
-                log_debug!("[hook-scoped] WARN from_std cell sock {session_id}: {e}");
+                log_debug!("[hook-scoped] WARN from_std cell sock {sid_str}: {e}");
                 return;
             }
         };
-        let sid_str = session_id.to_string();
-        let sock_path = crate::cell_uds::cell_socket_path(&session_id);
         let uid = self_uid();
 
         tokio::spawn(async move {
@@ -492,8 +502,9 @@ mod unix_impl {
 
         // Bearer header preferred (kept out of logs/transcripts); `?token=`
         // is the fallback. The credential is the per-cell SCOPED token from
-        // the child's `K2_HOOK_TOKEN` env.
-        let req_token = params.get("token").cloned().unwrap_or_default();
+        // the child's `K2_HOOK_TOKEN` env. Never a form body's `token`: one
+        // precedence rule here and on TCP (Bearer, then the query; review F3).
+        let req_token = crate::routes::http::extract_token(query).unwrap_or_default().to_string();
         let presented = crate::routes::http::extract_bearer(&head)
             .filter(|s| !s.is_empty())
             .map(str::to_string)
@@ -509,6 +520,7 @@ mod unix_impl {
             let v = crate::session_token::validate_hook(&presented)
                 .filter(|v| cell_verb_authorized(Some(v), &this_session_id, peer_uid, self_uid, cell_uid));
             let Some(v) = v else {
+                crate::agent_isolation::audit_wrong_socket(&presented, &this_session_id);
                 write_response(&mut stream, "403 Forbidden", "application/json", r#"{"error":"Invalid or missing auth token"}"#, k5_version).await;
                 return;
             };
@@ -516,7 +528,7 @@ mod unix_impl {
                 write_response(&mut stream, "403 Forbidden", "application/json", &body, k5_version).await;
                 return;
             }
-            crate::agent_isolation::forward_to_tcp(&mut stream, &head, &body, &this_session_id).await;
+            crate::agent_isolation::forward_to_tcp(&mut stream, &head, &body, &this_session_id, &presented).await;
             return;
         }
 
@@ -563,6 +575,7 @@ mod unix_impl {
             cell_verb_authorized(validated.as_ref(), &this_session_id, peer_uid, self_uid, cell_uid)
         };
         if !authorized {
+            crate::agent_isolation::audit_wrong_socket(&presented, &this_session_id);
             // Permission cards (PRD rev 3.1 §3.1, vs-live C3): a route that
             // isn't an agent verb is refused here, before any handler. With
             // the gate on for a VALID passport bound to this cell, that

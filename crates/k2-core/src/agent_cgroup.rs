@@ -4,12 +4,15 @@
 //! session socket by the cgroup its process is in
 //! (`plan-agent-isolation-build-v1` §1, §3; owner decisions 2026-11-21).
 //!
-//! **What it gives.** Every session and every process it starts is
-//! traceable to one agent (`systemd-cgls`, `ps -o cgroup`, `k2 agent whois
-//! <pid>`), and a passport copied out of one agent's terminal no longer
-//! works anywhere else: the daemon accepts a session's passport on its
-//! socket only from a process in that session's agent cgroup, and never
-//! over loopback TCP (no peer process there).
+//! **What it gives.** Every terminal, `k2 job` run and published service of
+//! an agent is labelled by agent: its processes start in the agent's cgroup
+//! (`systemd-cgls`, `ps -o cgroup`, `k2 agent whois <pid>`), and a fenced
+//! agent can't change its label. A copied terminal or job passport alone no
+//! longer works: the daemon accepts it on its session socket only from a
+//! process in that agent's cgroup, and over loopback TCP only as that
+//! socket's own forward (no peer process there otherwise). Passports that
+//! are never bound (App exec, microVM cells, sessions from before 0.46.17)
+//! work as before.
 //!
 //! **What it doesn't give (said everywhere it shows).** The cgroup files
 //! belong to the K2 user, so an *unfenced* agent (the same user) can write
@@ -17,8 +20,8 @@
 //! owner token on disk and call as the owner over TCP. Only the folder
 //! fence (Landlock, [`crate::agent_fence`]) closes those for one agent;
 //! root-owned per-agent cgroups placed by the root helper close the first
-//! for all (plan M1b). So the claim is "traceable, and a copied passport
-//! alone no longer works", never "cannot be forged".
+//! for all (plan M1b). So the claim is "labelled by agent; a fenced agent
+//! can't change its label", never "cannot be forged".
 //!
 //! **Where it applies.** Linux, a system unit the daemon's box prep
 //! delegated, with the restart guard (the agents' leaf is on). Anywhere
@@ -51,9 +54,10 @@ pub const PREFIX: &str = "a-";
 pub const ENV_SESSION_MARK: &str = "K2_AGENT_CGROUP";
 
 /// What the claim is, in the words every surface uses.
-pub const CLAIM: &str = "each agent's terminals run in its own cgroup: traceable to the agent, and a passport copied out \
-     of one agent's terminal no longer works on its own. An unfenced agent (same user) can still move into another \
-     agent's cgroup, or read the owner token on disk; the folder fence closes both for one agent";
+pub const CLAIM: &str = "labelled by agent: each agent's terminals, job runs and published services run in its own cgroup, \
+     and a fenced agent can't change its label. A copied terminal or job passport alone no longer works (App exec and \
+     microVM cell passports aren't bound and work as before). An unfenced agent (same user) can still move itself into \
+     another agent's cgroup, or read the owner token on disk; the folder fence closes both for one agent";
 
 /// `true` when the switch says off (`0`, `false`, `off`, `no`).
 pub fn switch_off_from(v: Option<&str>) -> bool {

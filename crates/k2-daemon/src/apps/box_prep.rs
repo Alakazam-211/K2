@@ -697,8 +697,9 @@ fn agent_identity_check(v: Option<&J>) -> Option<Check> {
                 "agentIdentity",
                 "ok",
                 format!(
-                    "agent cgroup identity on under {} ({n} agent cgroup(s)): traceable, and a copied passport alone no longer works; \
-                     an unfenced agent can still move into another agent's cgroup or read the owner token. {landlock}",
+                    "agent cgroup identity on under {} ({n} agent cgroup(s)): labelled by agent, a fenced agent can't change its label, and a copied terminal or job passport alone \
+                     no longer works (App exec and microVM cell passports aren't bound); an unfenced agent can still move into another \
+                     agent's cgroup or read the owner token. {landlock}",
                     id["agentsCgroup"].as_str().unwrap_or("?")
                 ),
                 None,

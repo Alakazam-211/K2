@@ -580,7 +580,26 @@ fn spawn_child(
 ) -> Result<(Child, i32, Option<WinJobSlot>), String> {
     #[cfg(unix)]
     {
-        let (mut c, scoped) = shell_command(cmd, name, dev);
+        // Agent Isolation (review F1): a workspace's `--cmd` service starts
+        // through the exec helper, in its agent's cgroup and under its fence.
+        // A dev server's capped user scope would put it outside that cgroup,
+        // so it runs uncapped while isolation applies (said in the log).
+        let iso = crate::agent_isolation::for_service(project_id, cwd);
+        let mut spec_env: Option<String> = None;
+        let (mut c, scoped) = match &iso {
+            Some(iso) => {
+                if dev.is_some() {
+                    log_debug!("[publish] {name}: dev server caps not applied: the agent's cgroup holds it");
+                }
+                let (helper, argv, spec) = k2_core::agent_cgroup::wrap(iso, "sh".into(), vec!["-c".into(), cmd.to_string()], &Default::default())
+                    .map_err(|e| format!("agent isolation: {e}"))?;
+                let mut c = k2_core::bg_proc::command(helper);
+                c.args(argv);
+                spec_env = Some(spec);
+                (c, false)
+            }
+            None => shell_command(cmd, name, dev),
+        };
         c.current_dir(cwd);
         // K2 vault (§10.5, Q16): clean env + granted secrets for new
         // services; services from before the vault keep inheriting.
@@ -594,6 +613,10 @@ fn spawn_child(
         apply_dev_env(&mut c, name, service.map_or(0, |(_, port)| port), dev.is_some());
         if scoped {
             c.envs(crate::publish_dev::user_manager_env());
+        }
+        // Last: the vault's clean mode clears the environment above.
+        if let Some(spec) = spec_env {
+            c.env(k2_core::agent_fence::ENV_SPEC, spec);
         }
         spawn_prepared(c, project_id, name, enrich)
     }

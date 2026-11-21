@@ -1899,8 +1899,13 @@ pub fn workspace_for_session(session_id: &str) -> Option<String> {
 /// (the spawn placed the session there) and persist it, so a restarted
 /// daemon still knows (`hook-sessions.json`).
 pub fn bind_agent_cgroup(session_id: &SessionId, ws: &str) -> bool {
+    bind_agent_cgroup_sid(&session_id.to_string(), ws)
+}
+
+/// [`bind_agent_cgroup`] by selector (a `k2 job` run's `job-<run id>`).
+pub fn bind_agent_cgroup_sid(sid: &str, ws: &str) -> bool {
     let mut g = registry().lock().unwrap_or_else(|e| e.into_inner());
-    let ok = g.bind_agent_cgroup(&session_id.to_string(), ws);
+    let ok = g.bind_agent_cgroup(sid, ws);
     if ok {
         save_to_disk(&g);
     }

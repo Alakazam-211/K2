@@ -87688,9 +87688,9 @@ cmd_mail_watch() {
             local add="" remove="" wake=""
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --add) add="$2"; shift 2 ;;
-                    --remove) remove="$2"; shift 2 ;;
-                    --wake) wake="$2"; shift 2 ;;
+                    --add) _need_value "$@"; add="$2"; shift 2 ;;
+                    --remove) _need_value "$@"; remove="$2"; shift 2 ;;
+                    --wake) _need_value "$@"; wake="$2"; shift 2 ;;
                     *) echo "Error: usage: k2 mail watch inboxes [--add <addr> [--wake vip|all]] [--remove <addr>]" >&2; exit 2 ;;
                 esac
             done
@@ -87734,8 +87734,8 @@ cmd_mail_watch() {
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --weekdays) days="mon,tue,wed,thu,fri"; shift ;;
-                    --days) days="$2"; shift 2 ;;
-                    --tz) tz="$2"; shift 2 ;;
+                    --days) _need_value "$@"; days="$2"; shift 2 ;;
+                    --tz) _need_value "$@"; tz="$2"; shift 2 ;;
                     *) echo "Error: unknown flag: $1" >&2; exit 2 ;;
                 esac
             done
@@ -87807,7 +87807,7 @@ print(sum(int(a)*units[b] for a,b in parts))
             local dur="" resume="false" all=0
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --for) dur="$2"; shift 2 ;;
+                    --for) _need_value "$@"; dur="$2"; shift 2 ;;
                     --resume) resume="true"; shift ;;
                     --all) all=1; shift ;;
                     *) echo "Error: usage: k2 mail watch pause [--for 2h | --resume]" >&2; exit 2 ;;
@@ -87826,7 +87826,7 @@ print(sum(int(a)*units[b] for a,b in parts))
             local limit=""
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --limit) limit="$2"; shift 2 ;;
+                    --limit) _need_value "$@"; limit="$2"; shift 2 ;;
                     *) echo "Error: usage: k2 mail watch log [--limit n] [--json]" >&2; exit 2 ;;
                 esac
             done

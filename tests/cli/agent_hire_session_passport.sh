@@ -95,7 +95,10 @@ def hire(who, body):
         return 400, {"ok": False, "error": {"code": "usage",
                      "hint": "preset No Such Tool no longer exists on this server; pick one of: claude (b0a1c2d3-e4f5-6789-abcd-ef0123456001)"}}
     if body.get("dryRun") and not body.get("template"):
-        return 200, {"ok": True, "dryRun": True, "hire": "allowed"}
+        out = {"ok": True, "dryRun": True, "hire": "allowed"}
+        if body.get("preset") == "Cursor Agent":
+            out["preset"] = "b0a1c2d3-e4f5-6789-abcd-ef0123456006"
+        return 200, out
     if body.get("template"):
         launch = body.get("launch") is True
         return 200, {"ok": True, "path": body.get("path"), "id": "w_tpl", "changed": True, "created": True,
@@ -360,6 +363,20 @@ assert_eq "unknown preset: exit 2, the daemon's usage" "$rc" "2"
 owner_never_sent "unknown preset"
 assert_eq "unknown preset: only the hire core asked, nothing after" "$(field path | sort -u | tr '\n' ' ')" "/cli/agents/hire "
 assert_contains "unknown preset: the daemon's list" "$err" "preset No Such Tool no longer exists on this server; pick one of: claude ("
+real_err="$err"
+
+echo "== in a session: a dry run checks --agent as the hire does =="
+run "${SESSION[@]}" -- agent hire "$WORK/drylabel" --agent "Cursor Agent" --dry-run --json
+assert_eq "dry label: exit 0 ($err)" "$rc" "0"
+all_passport "dry label"
+assert_eq "dry label: only the hire core asked" "$(field path | sort -u | tr '\n' ' ')" "/cli/agents/hire "
+assert_eq "dry label: the core is asked with the label" "$(body_of /cli/agents/hire)" '{"dryRun": true, "preset": "Cursor Agent"}'
+st="$("$PY" -c 'import json,sys; d=json.loads(sys.argv[1]); print(" ".join("%s|%s|%s" % (a["status"], a["label"], a["preset"]) for a in d["actions"] if a["step"]=="set-default-agent"))' "$out")"
+assert_eq "dry label: the plan shows the resolved id" "$st" "pending|Cursor Agent|b0a1c2d3-e4f5-6789-abcd-ef0123456006"
+run "${SESSION[@]}" -- agent hire "$WORK/nosuch" --agent "No Such Tool" --dry-run
+assert_eq "dry unknown preset: exit 2, as the hire" "$rc" "2"
+assert_eq "dry unknown preset: only the hire core asked" "$(field path | sort -u | tr '\n' ' ')" "/cli/agents/hire "
+assert_eq "dry unknown preset: the hire's own error line" "$(printf '%s\n' "$err" | tail -n 1)" "$(printf '%s\n' "$real_err" | tail -n 1)"
 
 echo "== in a session with no passport: nothing sent =="
 run K2_HOOK_SOCK="$SOCK" -- agent hire "$WORK/nopass" --name Nope

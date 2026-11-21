@@ -629,6 +629,40 @@ fn a_plain_dry_run_tells_the_truth_and_the_refusal_teaches_the_card() {
     assert_eq!((r.status, v["hire"].as_str()), ("200 OK", Some("allowed")), "{}", r.body);
 }
 
+/// A plain dry run with a preset runs the real hire's preset check: a label
+/// comes back as the id the hire would save, an id or command word as
+/// given, and a preset this server doesn't have (a part of a label too) is
+/// the same usage refusal with the server's presets. Nothing is written.
+#[test]
+fn a_plain_dry_run_checks_the_preset_as_the_hire_would() {
+    let _home = k2_core::test_env::TempHome::new();
+    let root = ensure_test_root();
+    let (_, agent) = hiring_agent("dp");
+    let cursor_id = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.query_row("SELECT id FROM agent_presets WHERE label = 'Cursor Agent' AND is_built_in = 1", [], |r| r.get::<_, String>(0)).expect("built-in Cursor Agent")
+    };
+    for who in [agent.clone(), Who::Owner] {
+        for (preset, want) in [("cursor agent", cursor_id.as_str()), (cursor_id.as_str(), cursor_id.as_str()), ("codex", "codex")] {
+            let (st, v) = hire_as(&who, &json!({ "dryRun": true, "preset": preset }));
+            assert_eq!((st, v["hire"].as_str(), v["preset"].as_str()), (200, Some("allowed"), Some(want)), "{preset}: {v}");
+        }
+        let (st, v) = hire_as(&who, &json!({ "dryRun": true }));
+        assert_eq!((st, v["hire"].as_str()), (200, Some("allowed")), "{v}");
+        assert!(v.get("preset").is_none(), "no preset asked, none answered: {v}");
+        for bad in ["Cursor", NO_SUCH_PRESET] {
+            let path = root.join(uniq("dp-bad")).to_string_lossy().into_owned();
+            let (st, v) = hire_as(&who, &json!({ "path": path, "dryRun": true, "preset": bad }));
+            let real = hire_as(&who, &json!({ "path": path, "preset": bad }));
+            assert_eq!((st, v["error"]["code"].as_str()), (400, Some("usage")), "{bad}: {v}");
+            assert_eq!((st, &v), (real.0, &real.1), "{bad}: the dry run refuses as the hire does");
+            assert!(v["error"]["hint"].as_str().expect("hint").contains(&format!("preset {bad} no longer exists on this server; pick one of: ")), "{v}");
+            assert!(!Path::new(&path).exists() && !registered(&path), "{bad}: nothing written");
+        }
+    }
+}
+
 #[test]
 fn passport_converge_never_raises_db_access() {
     let _home = k2_core::test_env::TempHome::new();

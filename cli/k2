@@ -76596,8 +76596,30 @@ if dry_run:
         core_pending = [a for a in actions if a["step"] in ("create-dir", "write-persona", "register-workspace", "set-db-access")
                         and a["status"] == "pending"]
         if core_pending:
-            resp = http_post_json("/cli/agents/hire", {"dryRun": True}, tok=core_token)
+            # --agent goes too: the daemon runs the hire's own preset check
+            # and answers the id the hire would save. Its refusal ("preset X
+            # ..." usage) ends the dry run as it ends the hire: that message,
+            # exit 2. A daemon from before this answers no preset and the
+            # plan stays as typed.
+            dry_body = {"dryRun": True}
+            da_ = next((x for x in actions if x["step"] == "set-default-agent"), None)
+            if in_session and da_:
+                dry_body["preset"] = agent_preset
+            resp = http_post_json("/cli/agents/hire", dry_body, tok=core_token)
             gerr = resp.get("error") if isinstance(resp, dict) else None
+            if (da_ and "preset" in dry_body and isinstance(gerr, dict) and gerr.get("code") == "usage"
+                    and str(gerr.get("hint") or "").startswith("preset ")):
+                da_["status"] = "failed"
+                da_["error"] = {"code": "usage", "hint": gerr["hint"]}
+                da_["exitCode"] = 2
+                for a in actions:
+                    if a["status"] == "pending":
+                        a["status"] = "not-run"
+                        a["reason"] = "the hire would be refused"
+                emit(False, False)
+                fail("usage", gerr["hint"], 2)
+            if da_ and "preset" in dry_body and isinstance(resp, dict) and isinstance(resp.get("preset"), str):
+                da_["preset"] = resp["preset"]
             if isinstance(gerr, dict) and gerr.get("code") in ("hire_off", "main_only"):
                 note_permission(resp)
                 core_pending[0]["status"] = "failed"

@@ -947,9 +947,18 @@ fn cli_converge(who: &Who, body: &[u8]) -> CliResponse {
     // taught like the real hire) or the real hire would pass it. Nothing
     // else in the body is read and nothing is written; `k2 agent hire
     // --dry-run` sends it without a path, so a daemon from before this
-    // answers `usage: missing path` instead of hiring.
+    // answers `usage: missing path` instead of hiring. A `preset` in the
+    // body gets the real hire's check: one this server doesn't have is the
+    // same usage refusal, and one it has comes back as the value the hire
+    // would save (a label as its preset's id).
     if extra.get("dryRun").and_then(|v| v.as_bool()) == Some(true) {
-        return ok(serde_json::json!({ "ok": true, "dryRun": true, "hire": "allowed" }));
+        let mut v = serde_json::json!({ "ok": true, "dryRun": true, "hire": "allowed" });
+        match k2_core::hire::steps::check_preset(req.preset.as_deref()) {
+            Ok(Some(preset)) => v["preset"] = serde_json::Value::String(preset),
+            Ok(None) => {}
+            Err(e) => return hire_error_response(&e),
+        }
+        return ok(v);
     }
     let auth = match passport_authority(who) {
         Ok(a) => a,

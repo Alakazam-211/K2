@@ -96,6 +96,7 @@ Agents (in a K2 terminal):
                                                    --to: only these people are asked (owners or
                                                    admins who may answer, or owner); else the
                                                    owner's default, else everyone who may answer
+                                                   (--assign is the same flag, as on k2 app)
   k2 permission update <id> --why "<new facts>"   once, on a denied request
   k2 permission status [<id>]                      check once; never loop
   k2 permission cancel <id>
@@ -230,8 +231,9 @@ _permission_request() {
             --why) [ $# -ge 2 ] || { echo "Error: --why needs a value" >&2; exit 2; }; why="$2"; shift 2 ;;
             --why=*) why="${1#--why=}"; shift ;;
             # 0.46.16: only these people are asked (each must be able to answer).
-            --to) [ $# -ge 2 ] && [ -n "$2" ] || { echo "Error: --to needs one or more logins, comma-separated (--to ada,owner)" >&2; exit 2; }; to="$2"; shift 2 ;;
-            --to=*) to="${1#--to=}"; [ -n "$to" ] || { echo "Error: --to needs one or more logins, comma-separated (--to ada,owner)" >&2; exit 2; }; shift ;;
+            # 0.46.17: --assign is the same flag (k2 app's name for it).
+            --to|--assign) [ $# -ge 2 ] && [ -n "$2" ] || { echo "Error: $1 needs one or more logins, comma-separated ($1 ada,owner)" >&2; exit 2; }; to="$2"; shift 2 ;;
+            --to=*|--assign=*) to="${1#*=}"; [ -n "$to" ] || { echo "Error: ${1%%=*} needs one or more logins, comma-separated (${1%%=*} ada,owner)" >&2; exit 2; }; shift ;;
             --dry-run) dry=1; shift ;;
             --json) json=1; shift ;;
             -h|--help) _permission_usage; exit 0 ;;

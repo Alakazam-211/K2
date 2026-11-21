@@ -372,6 +372,16 @@ grep -q '^POST /cli/permission/request {"action": "compute.use", "params": {}, "
     || bad "permission request --to: wrong request: $(cat "$LOG")"
 run agent permission request compute.use --why "x" --to
 [ "$RC" = 2 ] && ok || bad "permission request --to with no value: exit $RC, want 2"
+# 0.46.17: --assign is the same flag (k2 app's name for it), on every card.
+: >"$LOG"
+run agent permission request vault.send secret=MINE to=bob::heldbox --why "Bob needs it" --assign ada
+[ "$RC" = 0 ] && ok || bad "permission request --assign: exit $RC ($ERR)"
+grep -q '"to": "ada"}$' "$LOG" && ok || bad "permission request --assign rides as to: $(cat "$LOG")"
+: >"$LOG"
+run agent permission request compute.use --why "x" --assign=ada,owner
+grep -q '"to": "ada,owner"}$' "$LOG" && ok || bad "permission request --assign=: $(cat "$LOG")"
+run agent permission request compute.use --why "x" --assign
+[ "$RC" = 2 ] && ok || bad "permission request --assign with no value: exit $RC, want 2"
 # The owner's default, from a terminal outside K2: a settings write.
 run person permission approvers ada,owner
 grep -q '^POST /cli/settings/update {"permissionApprovers": \["ada", "owner"\]}$' "$LOG" && ok || bad "permission approvers: wrong request: $(cat "$LOG")"

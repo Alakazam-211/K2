@@ -9,7 +9,9 @@ trap 'rm -rf "$T"' EXIT
 pass=0
 
 # The step: from its echo to the line before the SKIP_BUILD fi.
-awk '/^echo "Step 1.5: Verifying WHATS_NEW.md/ {on=1} /^fi # SKIP_BUILD/ {on=0} on' "$HERE/scripts/release.sh" > "$T/step.sh"
+# The step's lines end at the SKIP_BUILD block's top-level `else` (a resumed
+# run's timer rows) or, with no else, at its `fi`.
+awk '/^echo "Step 1.5: Verifying WHATS_NEW.md/ {on=1} on && (/^else$/ || /^fi # SKIP_BUILD/) {on=0} on' "$HERE/scripts/release.sh" > "$T/step.sh"
 grep -q 'scripts/whatsnew.sh build' "$T/step.sh" || { echo "FAIL: Step 1.5 was not found in release.sh, or has no whatsnew hook" >&2; exit 1; }
 
 fresh() {

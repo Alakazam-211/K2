@@ -814,7 +814,20 @@ mod tests {
                     .unwrap_or_else(|e| panic!("read {}: {e}", p.display())),
             );
         }
-        s
+        // The shell builds its release URLs from prelude.sh's repo.
+        let p = dir.join("prelude.sh");
+        let prelude =
+            std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("read {}: {e}", p.display()));
+        let repo = k2_client::brand::RELEASE_REPO;
+        assert!(
+            prelude.contains(&format!("\n_K2_RELEASE_REPO=\"{repo}\"\n")),
+            "prelude.sh's release repo is not {repo}"
+        );
+        assert!(
+            s.contains("${_K2_RELEASE_REPO}"),
+            "update.sh no longer builds its URLs from _K2_RELEASE_REPO"
+        );
+        s.replace("${_K2_RELEASE_REPO}", repo)
     }
 
     #[test]

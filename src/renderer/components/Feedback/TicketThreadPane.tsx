@@ -15,6 +15,12 @@
 //   - the box draws the ticket's quick answers above it, as before, and has
 //     no "/" commands;
 //   - its draft is the ticket's, never the agent's own chat's;
+//   - a message moved in from the ticket's older store names its author as
+//     text only;
+//   - the strip over the box is the agent's own session at work (the
+//     ticket's Thread has no activity of its own);
+//   - a post's answer says the ticket's new status (the header follows it
+//     without a refetch) and whether the agent got the message;
 //   - Zen's Tickets view draws it with no terminal.
 
 import React, { useCallback, useContext, useMemo, useState } from 'react'
@@ -38,11 +44,27 @@ import {
 } from '@/components/SessionView/threadFloats'
 import { ThreadFloatMerge } from '@/components/SessionView/ThreadFloatMerge'
 import { ThreadChatChip, ThreadChatChips, ThreadChatNote } from '@/components/Thread/ThreadChat'
+import { useChatSessionTurn } from '@/components/Thread/sessionTurn'
 import { workspaceHandle } from '@/lib/home-address'
 import { TILE_FOOT_CLIP } from '@/components/ui'
 import { AgentTab, TicketRailTerminalContext } from './TicketAgentTerminal'
-import { postTicketOptionPick, ticketConversationId, ticketDraftId, ticketThreadAddr } from './ticket-thread-contract'
-import type { FeedbackSessionKind, FeedbackShow, QuickAnswerOption } from './feedback-api'
+import {
+  postTicketOptionPick,
+  ticketConversationId,
+  ticketDraftId,
+  ticketPostOutcome,
+  ticketThreadAddr,
+  ticketThreadItem,
+  type TicketPostOutcome,
+} from './ticket-thread-contract'
+import type { FeedbackSessionKind, FeedbackShow, FeedbackStatus, QuickAnswerOption } from './feedback-api'
+
+/** What a post told the pane about its ticket: the header shows it at once. */
+export interface TicketPatch {
+  status: FeedbackStatus
+  /** Set when the post was the ticket's answer. */
+  answer?: string
+}
 
 export interface TicketThreadPaneProps {
   feedbackId: string
@@ -52,8 +74,11 @@ export interface TicketThreadPaneProps {
   options: QuickAnswerOption[]
   /** Picks are live until the ticket is closed. */
   optionsLive: boolean
-  /** After a pick: refetch the ticket and the list. */
+  /** After a change the pane can't describe: refetch the ticket and the list. */
   onChanged: () => void
+  /** A post changed the ticket (its answer said so): show it without a
+   *  refetch. Absent: `onChanged`. */
+  onTicketPatch?: (patch: TicketPatch) => void
   projectId: string
   projectPath: string | null
   sessionId: string | null
@@ -75,6 +100,7 @@ function TicketThreadBody({
   options,
   optionsLive,
   onChanged,
+  onTicketPatch,
   projectId,
   projectPath,
   sessionId,
@@ -103,15 +129,24 @@ function TicketThreadBody({
   const agentHandle = project ? workspaceHandle(project) : (projectPath?.split('/').filter(Boolean).pop() ?? null)
   const agentName = item?.agentName || project?.name || 'the agent'
 
-  const quick = useQuickAnswers({ feedbackId, item, options, optionsLive, onChanged })
+  // The agent's own session at work: the daemon delivers every reply on a
+  // ticket to the workspace agent, whose pinned chat's agent name is the
+  // project id. An unlinked ticket has none.
+  const sessionTarget = useMemo(() => (projectPath && projectId ? { agentName: projectId } : null), [projectId, projectPath])
+  const turn = useChatSessionTurn(room.scope, sessionTarget)
+
+  const quick = useQuickAnswers({ feedbackId, item, options, optionsLive, onChanged, onTicketPatch })
+  const onPosted = quick.onPosted
   const extras = useMemo<ThreadComposeExtras>(
     () => ({
       above: quick.above,
       placeholder: quick.shown ? 'Or type your own' : undefined,
       slash: false,
-      fileWorkspace: agentHandle,
+      mapItem: ticketThreadItem,
+      turn,
+      onPosted,
     }),
-    [quick.above, quick.shown, agentHandle],
+    [quick.above, quick.shown, turn, onPosted],
   )
 
   return (
@@ -212,25 +247,42 @@ function TicketThreadHeader({
 }
 
 /** The ticket's quick answers over the message box, as before: a pick is
- *  the answer; a closed ticket says a reply reopens it. */
+ *  the answer; a closed ticket says a reply reopens it. Every post's answer
+ *  (a pick, or the box's own) moves the header and says when the agent
+ *  didn't get the message. */
 function useQuickAnswers({
   feedbackId,
   item,
   options,
   optionsLive,
   onChanged,
+  onTicketPatch,
 }: {
   feedbackId: string
   item: FeedbackShow | null
   options: QuickAnswerOption[]
   optionsLive: boolean
   onChanged: () => void
-}): { above: React.ReactNode; shown: boolean } {
+  onTicketPatch?: (patch: TicketPatch) => void
+}): { above: React.ReactNode; shown: boolean; onPosted: (resp: Record<string, unknown>) => void } {
+  const room = useRoom()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [deliveryMiss, setDeliveryMiss] = useState<string | null>(null)
   const shown = item !== null && options.length > 0 && optionsLive
   const closed = item !== null && options.length > 0 && !optionsLive
+
+  const applyOutcome = useCallback(
+    (outcome: TicketPostOutcome | null, answer?: string): void => {
+      setDeliveryMiss(outcome?.delivered === false ? outcome.deliveryReason ?? 'not delivered' : null)
+      if (outcome?.status && onTicketPatch) {
+        onTicketPatch({ status: outcome.status, ...(outcome.answered && answer !== undefined ? { answer } : {}) })
+      } else {
+        onChanged()
+      }
+    },
+    [onChanged, onTicketPatch],
+  )
 
   const pick = useCallback(
     async (answer: string): Promise<void> => {
@@ -238,16 +290,22 @@ function useQuickAnswers({
       setBusy(true)
       setError(null)
       try {
-        const res = await postTicketOptionPick(feedbackId, answer)
-        setDeliveryMiss(res?.delivered === false ? res.deliveryReason ?? 'not delivered' : null)
-        onChanged()
+        applyOutcome(await postTicketOptionPick(room.scope, feedbackId, answer), answer)
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e))
       } finally {
         setBusy(false)
       }
     },
-    [busy, feedbackId, onChanged],
+    [busy, room.scope, feedbackId, applyOutcome],
+  )
+
+  const onPosted = useCallback(
+    (resp: Record<string, unknown>): void => {
+      setError(null)
+      applyOutcome(ticketPostOutcome(resp))
+    },
+    [applyOutcome],
   )
 
   const status = item?.status
@@ -286,5 +344,5 @@ function useQuickAnswers({
     )
   }, [error, deliveryMiss, shown, closed, status, answered, options, busy, pick])
 
-  return { above, shown }
+  return { above, shown, onPosted }
 }

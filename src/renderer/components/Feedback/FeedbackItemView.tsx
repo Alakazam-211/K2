@@ -56,6 +56,8 @@ import { PriorityBadge, StatusBadge, StatusMark } from './badges'
 import { BriefFrame, useBriefThemeKey } from './BriefFrame'
 import { cardAssigneeNames, isViewer } from './TicketCard'
 import { TicketAgentRail } from './TicketAgentRail'
+import type { TicketPatch } from './TicketThreadPane'
+import { ticketThreadOn } from './ticket-thread-contract'
 import { SelectableRegion, clearStuckBodyUserSelect } from '@/components/common/SelectableText'
 import { ChatMessageBody } from '@/components/common/ChatMessage'
 import { hasSelectionWithin } from '@/components/FileViewerPane/FileViewerPane'
@@ -215,6 +217,12 @@ export function FeedbackItemView({
     void load()
   }, [load])
 
+  // On the Thread store (ticket-thread-v1) the discussion follows the
+  // Thread's socket, a post's answer moves the header (patchTicket), and the
+  // list's own refetch brings changes made elsewhere (onListRow below): no
+  // `show` refetch per event.
+  const onThread = ticketThreadOn(primaryScope())
+
   // Event-driven refresh: any feedback event bumps the store revision and
   // the OPEN ticket refetches. Bursts coalesce on a trailing 300ms window.
   // Deferred while the user is drag-selecting ticket text (the body or the
@@ -223,6 +231,7 @@ export function FeedbackItemView({
   useEffect(() => {
     if (revision === seenRevision.current) return
     seenRevision.current = revision
+    if (onThread) return
     const timer = setTimeout(() => {
       const threads = document.querySelectorAll(`[data-ticket-thread="${id}"]`)
       for (const t of Array.from(threads)) {
@@ -231,7 +240,27 @@ export function FeedbackItemView({
       void load()
     }, 300)
     return () => clearTimeout(timer)
-  }, [revision, load, id])
+  }, [revision, load, id, onThread])
+
+  // On the Thread store: the list row (refetched on every ticket event)
+  // carries a change made elsewhere (the agent resolved it, the phone
+  // answered); the newer of the two wins.
+  useEffect(() => {
+    if (!onThread) return
+    setItem((prev) =>
+      prev && prev.id === listRow.id && listRow.updatedAt >= prev.updatedAt
+        ? {
+            ...prev,
+            status: listRow.status,
+            answer: listRow.answer,
+            priority: listRow.priority,
+            assignees: listRow.assignees,
+            title: listRow.title,
+            updatedAt: listRow.updatedAt,
+          }
+        : prev,
+    )
+  }, [onThread, listRow])
 
   // HTML brief (prd-ticket-html-brief-v1 H39): fetched ONCE per ticket via
   // `show?brief=1`; the event refetch stays on plain `show`.
@@ -350,6 +379,25 @@ export function FeedbackItemView({
     void load()
     onMutated()
   }, [load, onMutated])
+
+  // A post's answer said what it did to the ticket: show it now, and let
+  // the list catch up.
+  const patchTicket = useCallback(
+    (patch: TicketPatch) => {
+      setItem((prev) =>
+        prev
+          ? {
+              ...prev,
+              status: patch.status,
+              ...(patch.answer !== undefined ? { answer: patch.answer } : {}),
+              updatedAt: Math.max(prev.updatedAt, Math.floor(Date.now() / 1000)),
+            }
+          : prev,
+      )
+      onMutated()
+    },
+    [onMutated],
+  )
 
   // The brief's Options (else the structured --options) as quick answers,
   // shown above the rail's text area.
@@ -552,6 +600,7 @@ export function FeedbackItemView({
           options={quick}
           optionsLive={item ? quickAnswersLive(item.status) : false}
           onChanged={onChanged}
+          onTicketPatch={patchTicket}
           projectId={view.projectId}
           projectPath={projectPath}
           sessionId={view.sessionId}

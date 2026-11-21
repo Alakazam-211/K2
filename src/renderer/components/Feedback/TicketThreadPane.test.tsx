@@ -52,7 +52,18 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { TicketAgentRail, TicketRailTerminalContext } from './TicketAgentRail'
 import type { FeedbackShow, QuickAnswerOption } from './feedback-api'
 import { primaryScope } from '@/kessel/server-scope'
-import { TICKET_THREAD_FEATURE, ticketConversationId, ticketDraftId, ticketThreadAddr } from './ticket-thread-contract'
+import {
+  TICKET_THREAD_FEATURE,
+  ticketConversationId,
+  ticketDraftId,
+  ticketImportedAuthor,
+  ticketPostOutcome,
+  ticketThreadAddr,
+  ticketThreadItem,
+} from './ticket-thread-contract'
+import { threadSender } from '@/components/Thread/threadSenders'
+import { threadAuthorLabel } from '@/components/SessionView/ThreadOverlayPane'
+import type { OverlayThreadItem } from '@/components/SessionView/overlayThread'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -90,7 +101,20 @@ const OPTIONS: QuickAnswerOption[] = [
 
 let features = new Set<string>()
 
-function rail(opts: { zen?: boolean; item?: FeedbackShow; live?: boolean; onChanged?: () => void } = {}): HTMLElement {
+/** The daemon's answer to a ticket post (the Thread post's shape plus
+ *  `ticket`). */
+let ticketAnswer: Record<string, unknown> = { status: 'answered', answered: true, delivered: true, deliveryReason: null }
+function threadPostAnswer(body: { text: string; optionPick?: boolean }): Record<string, unknown> {
+  return {
+    ok: true, id: 'm-new', seq: 9, from: 'owner', to: `ticket:${TICKET}`, kind: 'text', body: body.text, via: 'ticket',
+    author: { kind: 'owner', login: 'owner' }, created_at: NOW, conversation_id: `ticket:${TICKET}`, addr: `ticket:${TICKET}`, mine: true,
+    ticket: { id: TICKET, ...ticketAnswer },
+  }
+}
+
+function rail(
+  opts: { zen?: boolean; item?: FeedbackShow; live?: boolean; onChanged?: () => void; onTicketPatch?: (p: unknown) => void } = {},
+): HTMLElement {
   const el = (
     <TicketAgentRail
       feedbackId={TICKET}
@@ -100,6 +124,7 @@ function rail(opts: { zen?: boolean; item?: FeedbackShow; live?: boolean; onChan
       options={OPTIONS}
       optionsLive={opts.live ?? true}
       onChanged={opts.onChanged ?? (() => {})}
+      onTicketPatch={opts.onTicketPatch}
       projectId="p1"
       projectPath="/ws"
       sessionId={null}
@@ -115,13 +140,16 @@ function rail(opts: { zen?: boolean; item?: FeedbackShow; live?: boolean; onChan
 
 beforeEach(() => {
   localStorage.clear()
+  ticketAnswer = { status: 'answered', answered: true, delivered: true, deliveryReason: null }
   column.props = []
   features = new Set([TICKET_THREAD_FEATURE])
   vi.spyOn(primaryScope(), 'serverSupports').mockImplementation((f) => features.has(f))
   cli.post.mockReset()
-  cli.post.mockImplementation(async (path: string) =>
-    path === 'feedback/comment' ? { ok: true, delivered: true, deliveryReason: null } : { ok: true },
-  )
+  cli.post.mockImplementation(async (path: string, body?: unknown) => {
+    if (path === 'feedback/comment') return { ok: true, delivered: true, deliveryReason: null }
+    if (path === 'thread/post') return threadPostAnswer(body as { text: string; optionPick?: boolean })
+    return { ok: true }
+  })
   cli.get.mockReset()
   cli.get.mockImplementation(async (path: string) => (path === 'sessions/list-for-workspace' ? [] : {}))
 })
@@ -137,6 +165,31 @@ describe('the contract seam', () => {
     expect(ticketConversationId(TICKET)).toBe(`ticket:${TICKET}`)
     expect(ticketDraftId(TICKET)).toBe(`ticket:${TICKET}`)
     expect(TICKET_THREAD_FEATURE).toBe('ticket-thread-v1')
+  })
+
+  it('a post’s answer says the ticket’s status and whether the agent got it', () => {
+    expect(ticketPostOutcome({ ok: true, ticket: { id: TICKET, status: 'needs_discussion', answered: false, delivered: false, deliveryReason: 'the agent is asleep' } })).toEqual({
+      status: 'needs_discussion', answered: false, delivered: false, deliveryReason: 'the agent is asleep',
+    })
+    expect(ticketPostOutcome({ ok: true, ticket: { id: TICKET, status: 'waiting', answered: false, delivered: null, deliveryReason: null } })?.delivered).toBeNull()
+    expect(ticketPostOutcome({ ok: true })).toBeNull()
+  })
+
+  it('a message moved in from the old store names its author as text only', () => {
+    expect(ticketImportedAuthor({ imported: 'jordan' })).toBe('jordan')
+    expect(ticketImportedAuthor({ imported: { author: 'jordan' } })).toBe('jordan')
+    expect(ticketImportedAuthor({})).toBeNull()
+    const moved: OverlayThreadItem = {
+      collection: 'thread', seq: 1, id: 'c-1',
+      doc: { id: 'c-1', kind: 'text', from: 'owner', body: 'Looks close.', created_at: NOW, via: 'ticket', author: { kind: 'owner', login: 'owner' }, mine: true, imported: { author: 'jordan' } },
+    }
+    const shown = ticketThreadItem(moved)
+    // A name, not a person (no roster lookup) and not an agent (no picture).
+    expect(threadSender(shown.doc)).toEqual({ key: 'name:jordan', kind: 'name', label: 'jordan', id: '' })
+    expect(threadAuthorLabel(shown.doc, { kind: 'owner', login: 'owner' } as never)).toEqual({ label: 'jordan', mine: false })
+    // A message written on the Thread comes back as it is.
+    const plain: OverlayThreadItem = { ...moved, doc: { ...moved.doc, imported: undefined } }
+    expect(ticketThreadItem(plain)).toBe(plain)
   })
 })
 
@@ -194,7 +247,25 @@ describe('ticket-thread-v1 on', () => {
       fireEvent.click(chips[1])
     })
     await waitFor(() => expect(onChanged).toHaveBeenCalled())
-    expect(cli.post).toHaveBeenCalledWith('feedback/comment', { id: TICKET, body: 'Postgres', optionPick: true })
+    // One Thread post on the ticket, sent once: it is the answer.
+    const [path, body] = cli.post.mock.calls.find((c) => c[0] === 'thread/post')!
+    expect(path).toBe('thread/post')
+    expect(body).toMatchObject({ addr: `ticket:${TICKET}`, text: 'Postgres', via: 'compose', optionPick: true })
+    expect(typeof (body as { clientMsgId?: unknown }).clientMsgId).toBe('string')
+    expect(cli.post.mock.calls.map((c) => c[0])).not.toContain('feedback/comment')
+  })
+
+  it('a pick’s answer moves the header at once, and says when the agent didn’t get it', async () => {
+    const onTicketPatch = vi.fn()
+    const onChanged = vi.fn()
+    ticketAnswer = { status: 'answered', answered: true, delivered: false, deliveryReason: 'the agent is asleep' }
+    rail({ onTicketPatch, onChanged })
+    await act(async () => {
+      fireEvent.click(screen.getAllByTestId('ticket-quick-answer')[0])
+    })
+    await waitFor(() => expect(onTicketPatch).toHaveBeenCalledWith({ status: 'answered', answer: 'SQLite' }))
+    expect(onChanged).not.toHaveBeenCalled()
+    expect(screen.getByText('Saved. The agent did not receive it (the agent is asleep).')).toBeTruthy()
   })
 
   it('a closed ticket says a reply reopens it, and takes no pick', () => {

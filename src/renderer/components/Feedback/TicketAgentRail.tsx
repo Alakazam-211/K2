@@ -87,7 +87,7 @@ import { StatusMark } from './badges'
 import { useToastStore } from '@/stores/toast'
 import { PROJECT_BAR_ROW_HEIGHT } from '@/components/Projects/project-bar-height'
 import { AgentTab, TicketRailTerminalContext } from './TicketAgentTerminal'
-import { TicketThreadPane } from './TicketThreadPane'
+import { TicketThreadPane, type TicketPatch } from './TicketThreadPane'
 import { ticketThreadOn } from './ticket-thread-contract'
 import {
   TICKET_ATTACHMENTS_FEATURE,
@@ -123,6 +123,7 @@ export function TicketAgentRail({
   options,
   optionsLive,
   onChanged,
+  onTicketPatch,
   projectId,
   projectPath,
   sessionId,
@@ -148,6 +149,9 @@ export function TicketAgentRail({
   optionsLive: boolean
   /** After a successful send: refetch the ticket + the list. */
   onChanged: () => void
+  /** On the Thread store: a post's answer moved the ticket (the header
+   *  shows it without a refetch). */
+  onTicketPatch?: (patch: TicketPatch) => void
   projectId: string
   projectPath: string | null
   sessionId: string | null
@@ -220,6 +224,7 @@ export function TicketAgentRail({
             options={options}
             optionsLive={optionsLive}
             onChanged={onChanged}
+            onTicketPatch={onTicketPatch}
             projectId={projectId}
             projectPath={projectPath}
             sessionId={sessionId}

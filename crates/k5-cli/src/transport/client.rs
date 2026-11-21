@@ -368,7 +368,7 @@ enum Kind {
     /// is not the daemon), no `project=`; only `_k2_curl`'s tries; no
     /// heal, no line, no note. The token is only ever that header.
     ControlPlane {
-        put: bool,
+        method: Method,
     },
 }
 
@@ -1296,7 +1296,20 @@ impl Client {
     /// header and nowhere else. `put`: the repoint, else a POST. The body
     /// comes back whatever the status.
     pub fn control_plane(&mut self, put: bool, path: &str, body: &[u8]) -> Result<Response, Error> {
-        let kind = Kind::ControlPlane { put };
+        let method = if put { Method::Put } else { Method::Post };
+        self.control_plane_as(method, path, body)
+    }
+
+    /// [`Client::control_plane`] with any method: `_connect_curl GET`
+    /// (the list), `POST`, `PUT` or `DELETE` (the remove). A body that is
+    /// empty is no body (no `Content-Type` either), as the shell's.
+    pub fn control_plane_as(
+        &mut self,
+        method: Method,
+        path: &str,
+        body: &[u8],
+    ) -> Result<Response, Error> {
+        let kind = Kind::ControlPlane { method };
         self.run(kind, Channel::Tcp, path, &[], body, Instant::now())
             .map_err(|f| f.error)
     }
@@ -2119,8 +2132,7 @@ impl Client {
             | Kind::Own { post: true, .. } => {
                 (Method::Post, endpoint.to_string(), json(&mut headers))
             }
-            Kind::ControlPlane { put } => {
-                let method = if put { Method::Put } else { Method::Post };
+            Kind::ControlPlane { method } => {
                 let body = if body.is_empty() {
                     None
                 } else {
@@ -2643,7 +2655,12 @@ mod tests {
             (Kind::BootStatus, 10),
             (Kind::SendOnce, 5),
             (Kind::ConnectProxy, 45),
-            (Kind::ControlPlane { put: true }, 30),
+            (
+                Kind::ControlPlane {
+                    method: Method::Put,
+                },
+                30,
+            ),
         ] {
             assert_eq!(c.max_time(k), Duration::from_secs(want), "{k:?}");
         }
@@ -3697,7 +3714,9 @@ mod tests {
             Kind::BootStatus,
             Kind::SendOnce,
             Kind::ConnectProxy,
-            Kind::ControlPlane { put: false },
+            Kind::ControlPlane {
+                method: Method::Get,
+            },
             Kind::VaultSockGet,
             Kind::VaultSockPost,
         ];

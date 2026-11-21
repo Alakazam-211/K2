@@ -51,6 +51,8 @@ pub enum Method {
     Post,
     /// The Connect control plane's repoint (`_connect_curl PUT`).
     Put,
+    /// The Connect control plane's remove (`_connect_curl DELETE`).
+    Delete,
 }
 
 impl Method {
@@ -60,6 +62,7 @@ impl Method {
             Method::Get => "GET",
             Method::Post => "POST",
             Method::Put => "PUT",
+            Method::Delete => "DELETE",
         }
     }
 }

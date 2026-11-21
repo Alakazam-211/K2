@@ -912,7 +912,7 @@ fn done_escapes_the_agent() {
 #[test]
 fn done_in_a_session_the_api_started() {
     let rig = Rig::new(VERB, "api");
-    let api = |extra: &[(&'static str, &str)]| {
+    let api = |extra: &[(&'static str, &'static str)]| -> Vec<(&'static str, &'static str)> {
         let mut e = vec![("K2_API_CELL", "1")];
         e.extend_from_slice(extra);
         e

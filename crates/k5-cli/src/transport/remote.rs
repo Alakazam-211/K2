@@ -437,8 +437,10 @@ mod tests {
 
     #[test]
     fn where_the_binary_sends_a_token_itself() {
-        let none = |_: &str| None;
-        let proxied = |n: &str| (n == "HTTPS_PROXY").then(|| "http://proxy:3128".into());
+        let none = |_: &str| -> Option<std::ffi::OsString> { None };
+        let proxied = |n: &str| -> Option<std::ffi::OsString> {
+            (n == "HTTPS_PROXY").then(|| "http://proxy:3128".into())
+        };
         let here = |h: &str, env: &dyn Fn(&str) -> Option<std::ffi::OsString>| {
             sends_here(h, &base(h).expect("a host the binary reads"), env)
         };

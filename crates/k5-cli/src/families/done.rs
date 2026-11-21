@@ -281,7 +281,7 @@ pub mod api {
             match words[i] {
                 "--reason" => match words.get(i + 1) {
                     Some(r) => {
-                        reason = r;
+                        reason = *r;
                         i += 2;
                     }
                     None => return Some(Err(REASON_NEEDS_TEXT.to_string())),
@@ -439,7 +439,7 @@ pub mod api {
             let c = k2_client::brand::CLI_NAME;
             let as_k2 = |l: &str| l.replace(&format!("{c} done"), "k2 done");
             for line in [
-                format!("echo \"{}\" >&2; exit 2; }};", as_k2(REASON_NEEDS_TEXT)),
+                format!("echo \"{}\" >&2; exit 2; }}\n", as_k2(REASON_NEEDS_TEXT)),
                 format!("echo \"{}\" >&2", as_k2(NO_SESSION)),
                 r#"-*) echo "k2 done: unknown flag '$1'. Here k2 done takes --reason <text> (k2 done --help)." >&2; exit 2 ;;"#.to_string(),
                 r#"form="reason=$(urlencode "$reason")""#.to_string(),

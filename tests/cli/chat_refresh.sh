@@ -9,7 +9,11 @@
 #      the same launch options, the note in the handoff, the Thread at the
 #      address, the sidecar still live;
 #   4. "from now on" through the switch: the agent's own call just runs; a
-#      sidecar's passport is refused either way;
+#      sidecar's passport is refused either way. The codex sidecar asks as
+#      the k2 CLI does from a Codex tool call: its conversation in
+#      X-K2-Conversation and X-K2-Thread, in curl's config, never in argv,
+#      never the owner token; without the conversation K2 refuses its
+#      passport (conversation_missing);
 #   5. a person's call, the older door, GET is 405.
 # Build first: cargo build -p k2-daemon (CARGO_TARGET_DIR honoured).
 set -euo pipefail
@@ -23,12 +27,25 @@ command -v jq >/dev/null || { echo "FAIL: jq is required" >&2; exit 1; }
 for v in $(env | cut -d= -f1 | grep -E '^(K2|K2SO)_' || true); do unset "$v"; done
 export K2_AIRGAP=1
 SHIM_DIR="$(mktemp -d -t k2-refresh-shim-XXXXXX)"
+# The Codex release K2 checked last (the daemon reads a Codex tab's version
+# before it lets that tab's passport through).
+CODEX_CHECKED="$(sed -n 's/^ *last: (\([0-9]*\), \([0-9]*\), \([0-9]*\)),$/\1.\2.\3/p' \
+    "$ROOT/crates/k2-core/src/terminal/codex_version.rs" | head -1)"
+[ -n "$CODEX_CHECKED" ] || { echo "FAIL: no checked Codex release in codex_version.rs" >&2; exit 1; }
 # Turns bracketed paste on, as a real TUI does when it's ready, and appends
-# what it reads, so the test can see what reached the new chat.
+# what it reads, so the test can see what reached the new chat. The codex
+# one answers as a Codex K2 checked: --help lists --no-daemon (so K2 starts
+# it with its own app-server and marks the tab) and --version names that
+# release.
 for cli in claude codex; do
+    if [ "$cli" = codex ]; then
+        own="--help) printf '      --no-daemon\\n'; exit 0 ;; --version) echo 'codex-cli $CODEX_CHECKED'; exit 0 ;;"
+    else
+        own=""
+    fi
     cat >"$SHIM_DIR/$cli" <<EOF
 #!/bin/sh
-case "\$1" in --version|-v|version|--help|app-server) echo "0.0.0-shim"; exit 0 ;; esac
+case "\$1" in $own --version|-v|version|--help|app-server) echo "0.0.0-shim"; exit 0 ;; esac
 printf '%s\n' "\$@" >>"$SHIM_DIR/$cli.argv"
 echo "--" >>"$SHIM_DIR/$cli.argv"
 env >"$SHIM_DIR/$cli.env"
@@ -52,6 +69,39 @@ as_agent() {
     env -i HOME="$SANDBOX_HOME" PATH="$PATH" K2_AIRGAP=1 K2_HOST=127.0.0.1 \
         K2_PORT="$K2SO_PORT" K2_HOOK_TOKEN="$PASSPORT" \
         K2_HOOK_SOCK="$SHIM_DIR/not-a-socket.sock" K2_PROJECT_PATH="$A" "$K2_CLI" "$@"
+}
+# A curl that keeps each call's argv and the config it read (curl -K),
+# then runs the real one. Only as_codex puts it first on PATH.
+CURL_LOGGER_DIR="$SHIM_DIR/curl-logger"
+CURL_LOG="$SHIM_DIR/curl-log"
+mkdir -p "$CURL_LOGGER_DIR" "$CURL_LOG"
+REAL_CURL="$(command -v curl)"
+cat >"$CURL_LOGGER_DIR/curl" <<EOF
+#!/usr/bin/env bash
+n="\$(mktemp "$CURL_LOG/call.XXXXXX")"
+printf '%s\n' "\$*" >"\$n.argv"
+if [ "\${1:-}" = -K ] && [ "\${2:-}" = - ]; then
+    cfg="\$(cat)"
+    printf '%s\n' "\$cfg" >"\$n.cfg"
+    printf '%s' "\$cfg" | "$REAL_CURL" "\$@"
+    exit \$?
+fi
+if [ "\${1:-}" = -K ]; then cat "\$2" >"\$n.cfg"; else : >"\$n.cfg"; fi
+exec "$REAL_CURL" "\$@"
+EOF
+chmod +x "$CURL_LOGGER_DIR/curl"
+# A k2 call from a Codex tool call in the codex sidecar's tab: the tab's
+# env (its passport and the marker K2 set) plus what Codex sets on every
+# tool call, CODEX_SESSION_ID (the conversation's root) and CODEX_THREAD_ID
+# (a top-level conversation's root is its own thread).
+CODEX_CONV=""
+CODEX_MARK=""
+as_codex() {
+    env -i HOME="$SANDBOX_HOME" PATH="$CURL_LOGGER_DIR:$PATH" K2_AIRGAP=1 K2_HOST=127.0.0.1 \
+        K2_PORT="$K2SO_PORT" K2_HOOK_TOKEN="$PASSPORT" \
+        K2_HOOK_SOCK="$SHIM_DIR/not-a-socket.sock" K2_PROJECT_PATH="$A" \
+        K2_CODEX_TAB_ISOLATED="$CODEX_MARK" CODEX_SESSION_ID="$CODEX_CONV" CODEX_THREAD_ID="$CODEX_CONV" \
+        "$K2_CLI" "$@"
 }
 
 pass=0
@@ -206,12 +256,60 @@ run as_agent sidecar new helper --harness codex --brief-text "wait"
 wait_starts codex 1
 wait_passport codex ""
 sidecar_passport="$PASSPORT"
+# K2 started the sidecar's Codex with its own app-server and marked the
+# tab with its passport's session, so the k2 CLI keeps the passport there.
+has "$(last_argv codex)" "--no-daemon"
+CODEX_MARK="$(sed -n 's/^K2_CODEX_TAB_ISOLATED=//p' "$SHIM_DIR/codex.env" | head -1)"
+[ "$CODEX_MARK" = "${sidecar_passport%%.*}" ] \
+    || fail "the sidecar's tab marker is '$CODEX_MARK', want ${sidecar_passport%%.*}"
+# Codex starts its conversation: the rollout log it writes, whose header
+# names the conversation and the folder. K2 learns the sidecar's
+# conversation from it.
+codex_home="$(sed -n 's/^CODEX_HOME=//p' "$SHIM_DIR/codex.env" | head -1)"
+[ -n "$codex_home" ] || codex_home="$SANDBOX_HOME/.codex"
+CODEX_CONV="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+codex_day="$codex_home/sessions/$(date -u +%Y/%m/%d)"
+mkdir -p "$codex_day"
+codex_ts="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
+jq -cn --arg id "$CODEX_CONV" --arg ts "$codex_ts" --arg cwd "$A" \
+    '{timestamp: $ts, type: "session_meta", payload: {id: $id, timestamp: $ts, cwd: $cwd, originator: "codex_cli_rs"}}' \
+    >"$codex_day/rollout-$(date -u +%Y-%m-%dT%H-%M-%S)-$CODEX_CONV.jsonl"
+# Until K2 has adopted it, the call names a conversation K2 doesn't know.
+for i in $(seq 1 150); do
+    run as_codex agent refresh
+    case "$out" in *unknown_conversation*|*conversation_unsettled*) sleep 0.2 ;; *) break ;; esac
+done
+# Without its conversation, the sidecar's passport is refused.
 run as_agent agent refresh
+[ "$rc" = 3 ] || fail "sidecar refresh with no conversation exit $rc: $out"
+has "$out" "conversation_missing"
+rm -f "$CURL_LOG"/*
+run as_codex agent refresh
 [ "$rc" = 3 ] || fail "sidecar refresh exit $rc: $out"
 has "$out" "chat_refresh_main_only"
-run as_agent permission request chat.refresh --why "no" --json
+run as_codex permission request chat.refresh --why "no" --json
 [ "$rc" != 0 ] || fail "a sidecar asked: $out"
 has "$out" "chat_refresh_main_only"
+# Every request carried the conversation in curl's config: never in argv,
+# never the owner token.
+calls=0
+for f in "$CURL_LOG"/*.argv; do
+    [ -f "$f" ] || continue
+    calls=$((calls + 1))
+    cfg="$(cat "${f%.argv}.cfg")"
+    argv="$(cat "$f")"
+    has "$cfg" "X-K2-Conversation: $CODEX_CONV"
+    has "$cfg" "X-K2-Thread: $CODEX_CONV"
+    hasnt "$cfg" "$K2SO_TOKEN"
+    hasnt "$argv" "$CODEX_CONV"
+    hasnt "$argv" "X-K2-"
+    hasnt "$argv" "$sidecar_passport"
+    hasnt "$argv" "$K2SO_TOKEN"
+done
+[ "$calls" -ge 2 ] || fail "the sidecar's calls ran curl $calls time(s)"
+has "$(cat "$CURL_LOG"/*.cfg)" "/cli/agent/refresh"
+has "$(cat "$CURL_LOG"/*.cfg)" "/cli/permission/request"
+ok "the codex sidecar's calls name its conversation in curl's config, never argv or the owner token"
 PASSPORT="$main_passport"
 run as_agent agent refresh --json
 [ "$rc" = 0 ] || fail "main refresh with a sidecar up exit $rc: $out"

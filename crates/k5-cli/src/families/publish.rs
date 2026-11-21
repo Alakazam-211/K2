@@ -1,9 +1,12 @@
 //! `k5 publish`, as the shell CLI's `cmd_publish` answers it
 //! (`cli/src/connect.sh`): the services this workspace hosts. The
-//! binary answers `run`, `start`, `stop`, `rm`, `ps` (`list`, `ls`),
-//! `logs`, `frame`, `visibility`, `open`, `sessions`, `subdomain claim`
-//! and `unclaim`, `publish` alone or `help`, and an unknown verb. The
-//! readers are [`read`]'s.
+//! binary answers every verb: `run`, `start`, `stop`, `rm`, `ps` (`list`,
+//! `ls`), `logs`, `frame`, `visibility`, `open`, `sessions`, `subdomain
+//! claim` and `unclaim`, `publish` alone or `help`, and an unknown verb
+//! (the readers are [`read`]'s); `client-ip`, `status <name>`, and
+//! `secret` (`secrets`) and `env`, which hand over to the vault's `grant`,
+//! `revoke` and `service` ([`local`]); `status` with no name and the
+//! other `subdomain` verbs, the K2 Connect control plane ([`cp`]).
 //!
 //! What runs, in the shell's order:
 //!
@@ -29,9 +32,11 @@
 //! asks `Go ahead? [y/N]` and sends again.
 //!
 //! A command line with `-h` or `--help` is the front's ([`crate::front`]).
-//! The shell CLI answers ([`run`] returns `None`): `status`, `subdomain`
-//! but `claim` and `unclaim` (the K2 Connect control plane), `client-ip`,
-//! `secret`, `env`; a word that is not UTF-8; `HOOK_SOCK` set with a
+//! The shell CLI answers ([`run`] returns `None`): a control-plane verb
+//! when `tunnel.json` holds a token, air-gap is off and the control
+//! plane's base or the person's proxy setting is one the binary doesn't
+//! send through itself (it might have to call the control plane itself,
+//! [`cp::prep`]); a word that is not UTF-8; `HOOK_SOCK` set with a
 //! `CODEX_` variable exported; a `python3` the binary can't tell; a port
 //! that is set but is no port curl takes; a `--port` too long for bash's
 //! `test` (its own error line); `~` in `--cwd` with no `HOME`.
@@ -48,6 +53,8 @@
 //! - Where Python raises, the traceback is Python 3.12's, without source
 //!   lines.
 
+pub mod cp;
+pub mod local;
 pub mod read;
 
 use self::read::{err_line, Mode};
@@ -91,9 +98,6 @@ pub const SESSIONS: &str = "/cli/publish/sessions";
 pub const SESSIONS_REVOKE: &str = "/cli/publish/sessions/revoke";
 pub const CLAIM: &str = "/cli/publish/subdomain/claim";
 pub const UNCLAIM: &str = "/cli/publish/subdomain/unclaim";
-
-/// The verbs the shell CLI keeps.
-const SHELL_VERBS: &[&str] = &["status", "client-ip", "secret", "secrets", "env"];
 
 /// What `visibility <name> <mode>` sends and asks.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -156,6 +160,27 @@ pub enum Act {
         label: String,
         transfer: bool,
     },
+    /// `status <name>`: `/cli/publish/list`, then `_publish_app_status`.
+    AppStatus { name: String, json: bool },
+    /// `client-ip`: the list, or the switch.
+    ClientIp {
+        endpoint: &'static str,
+        call: Req,
+        json: bool,
+    },
+    /// A help page (`publish/secret`), on stdout or stderr, then `exit`.
+    Page {
+        key: &'static str,
+        stderr: bool,
+        exit: Exit,
+    },
+    /// `cmd_vault <sub> <words…>`: `secret add|remove|list` and `env`.
+    Vault {
+        sub: &'static str,
+        words: Vec<String>,
+    },
+    /// A K2 Connect control-plane verb ([`cp`]).
+    Connect(cp::Form),
 }
 
 /// A request's shape.
@@ -182,7 +207,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
         return None;
     }
-    if shell_form(&words) || !python::family_native(python::here()) {
+    if !python::family_native(python::here()) {
         return None;
     }
     let settings = match daemon::current() {
@@ -199,18 +224,19 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     }
     let home = std::env::var("HOME").ok();
     let act = parse(&words, &settings.project, home.as_deref());
-    if act == Act::Shell {
-        return None;
-    }
-    Some(run_with(args, act, hook_sock.as_deref(), settings))
-}
-
-/// The forms the shell CLI keeps, from the words alone.
-pub fn shell_form(words: &[&str]) -> bool {
-    match words.first().copied().unwrap_or("") {
-        "subdomain" => !matches!(words.get(1).copied(), Some("claim" | "unclaim")),
-        sub => SHELL_VERBS.contains(&sub),
-    }
+    let prep = match &act {
+        Act::Shell => return None,
+        Act::Vault { sub, words } => {
+            let refs: Vec<&str> = words.iter().map(String::as_str).collect();
+            if !super::vault::native(sub, &refs) {
+                return None;
+            }
+            None
+        }
+        Act::Connect(_) => Some(cp::prep(&settings.home)?),
+        _ => None,
+    };
+    Some(run_with(args, act, hook_sock.as_deref(), settings, prep))
 }
 
 /// What the request and its reader need.
@@ -264,7 +290,13 @@ impl Cx {
     }
 }
 
-fn run_with(args: &[OsString], act: Act, hook_sock: Option<&Path>, mut settings: Settings) -> Exit {
+fn run_with(
+    args: &[OsString],
+    act: Act,
+    hook_sock: Option<&Path>,
+    mut settings: Settings,
+    prep: Option<cp::Prep>,
+) -> Exit {
     if let Some(gate) = prelude::gate(&settings) {
         return gate.stop();
     }
@@ -287,6 +319,7 @@ fn run_with(args: &[OsString], act: Act, hook_sock: Option<&Path>, mut settings:
             let _ = out::write_flushed(&mut std::io::stderr().lock(), lines.as_bytes());
             return *exit;
         }
+        Act::Page { key, stderr, exit } => return page(key, *stderr, *exit),
         Act::Claim { action, .. } if no_daemon(&settings) => return claim_unreachable(action),
         _ => {}
     }
@@ -299,15 +332,31 @@ fn run_with(args: &[OsString], act: Act, hook_sock: Option<&Path>, mut settings:
             return Exit::Error;
         }
     };
+    if let Act::Vault { sub, words } = &act {
+        // `cmd_vault <sub> …` past the gates `publish` already passed.
+        let mut ctx = super::vault::Ctx {
+            client,
+            closing: Closing::default(),
+            sock: crate::confirm::sock_path(&settings.home),
+            args: args.to_vec(),
+        };
+        let refs: Vec<&str> = words.iter().map(String::as_str).collect();
+        let exit = super::vault::verbs::run(&mut ctx, sub, &refs);
+        ctx.closing.flush(&mut ctx.client, exit);
+        return exit;
+    }
     let passport = client.passport().is_some();
     let mut cx = Cx {
         client,
         closing: Closing::default(),
         passport,
     };
-    let exit = match flow(&mut cx, act, &settings.project) {
-        Ok(shown) => shown.print(),
-        Err(exit) => exit,
+    let exit = match (act, prep.as_ref()) {
+        (Act::Connect(form), Some(prep)) => cp::Run { cx: &mut cx, prep }.run(&form),
+        (act, _) => match flow(&mut cx, act, &settings.project) {
+            Ok(shown) => shown.print(),
+            Err(exit) => exit,
+        },
     };
     let Cx {
         mut client,
@@ -330,6 +379,22 @@ fn claim_unreachable(action: &str) -> Exit {
     ));
     out::stderr_line("(Connection details: ~/.k2/heartbeat.port and ~/.k2/heartbeat.token)");
     Exit::Error
+}
+
+/// A help page on stdout (or stderr), then `exit`.
+fn page(key: &str, stderr: bool, exit: Exit) -> Exit {
+    let Some(text) = text::help(key) else {
+        out::stderr_line(&format!("Error: no help page {key}"));
+        return Exit::Error;
+    };
+    if stderr {
+        let _ = out::write_flushed(&mut std::io::stderr().lock(), text.as_bytes());
+        return exit;
+    }
+    match out::stdout(text) {
+        Ok(()) => exit,
+        Err(e) => out::after_stdout_error(&e),
+    }
 }
 
 /// `_publish_usage`: the help page on stderr, then `exit`.
@@ -404,6 +469,18 @@ fn flow(cx: &mut Cx, act: Act, project: &str) -> Result<Shown, Exit> {
             let answer = cx.client.send(endpoint, Call::QueryPost(&refs));
             let raw = cx.held(answer, true)?;
             Ok(read::claimed(&raw, action, &label))
+        }
+        Act::AppStatus { name, json } => {
+            let raw = cx.send(LIST, &Req::Get(Vec::new()))?;
+            Ok(local::app_status(&raw, &name, json))
+        }
+        Act::ClientIp {
+            endpoint,
+            call,
+            json,
+        } => {
+            let raw = cx.send(endpoint, &call)?;
+            Ok(local::client_ip(&raw, json))
         }
         _ => unreachable!("handled before the requests"),
     }
@@ -577,9 +654,15 @@ pub fn parse(words: &[&str], project: &str, home: Option<&str>) -> Act {
         "visibility" => parse_visibility(rest),
         "open" => parse_open(rest, project),
         "sessions" => parse_sessions(rest, project),
-        "subdomain" => parse_claim(rest),
+        "subdomain" => match rest.first().copied() {
+            Some("claim" | "unclaim") => parse_claim(rest),
+            _ => cp::parse_subdomain(rest),
+        },
+        "status" => cp::parse_status(rest),
+        "client-ip" => local::parse_client_ip(rest),
+        "secret" | "secrets" => local::parse_secret(rest),
+        "env" => local::parse_env(rest),
         "" | "help" => Act::Help,
-        _ if shell_form(words) => Act::Shell,
         sub => Act::Unknown(sub.to_string()),
     }
 }
@@ -1322,21 +1405,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_shell_keeps_its_forms() {
+    fn every_verb_is_the_binary_s() {
         for w in [
             &["status"][..],
+            &["status", "web"],
             &["subdomain"],
             &["subdomain", "list"],
             &["subdomain", "create", "a"],
             &["client-ip"],
             &["secret", "add"],
+            &["secrets"],
             &["env", "x"],
+            &["ps"],
+            &["subdomain", "claim", "a"],
+            &[],
+            &["nope"],
         ] {
-            assert!(shell_form(w), "{w:?}");
-            assert_eq!(parse(w, "/p", None), Act::Shell, "{w:?}");
-        }
-        for w in [&["ps"][..], &["subdomain", "claim", "a"], &[], &["nope"]] {
-            assert!(!shell_form(w), "{w:?}");
+            assert_ne!(parse(w, "/p", None), Act::Shell, "{w:?}");
         }
     }
 

@@ -12,7 +12,7 @@
 //!   `needs_yes` with no terminal), `open --no-browser`, `sessions` and
 //!   `--revoke-all`.
 //! - `subdomain claim` and `unclaim`.
-//! - `publish` alone, `help`, an unknown verb; the forms the shell keeps.
+//! - `publish` alone, `help`, an unknown verb (the other verbs: tests/publish_cp_parity.rs).
 //! - The owner from disk, the cell socket, no answer, the gates.
 //! - Help never acts; one large list (above 256 KiB).
 
@@ -884,8 +884,6 @@ fn claim_help_and_the_words_answer_as_the_shell_does() {
             // covers: publish --json
             on("publish --json: an unknown verb", &["--json"], vec![], 1, 0),
             on("an unknown verb", &["deploy"], vec![], 1, 0),
-            shell(on("status: the shell's", &["status", "web"], vec![ok(r#"{"services":[{"name":"web","status":"running"}]}"#)], 0, 1)),
-            shell(on("client-ip: the shell's", &["client-ip"], vec![ok(r#"{"labels":[]}"#)], 0, 1)),
             shell(on("subdomain claim -h: the shell's (a bash bug: it claims '-h')", &["subdomain", "claim", "-h"], vec![ok(r#"{"success":true}"#)], 0, 1)),
         ],
     );

@@ -94,8 +94,21 @@
 //!
 //! # Where this differs from Python, on purpose
 //!
-//! - A redirect (301, 302, 303, 307, 308 with a `Location`) is an
-//!   [`Outcome::HttpError`]; urllib would follow it. The daemon sends none.
+//! - [`Opener::open`] and [`Opener::open_retrying`] hand a redirect back
+//!   as an [`Outcome::HttpError`]; plain urllib would follow it.
+//!
+//! # Redirects
+//!
+//! Every shell block runs `_K2_PY_PROXY_RULE` first, whose
+//! `_K2NoRedirect` follows no redirect: a 3xx urllib's handler would
+//! follow is refused with one line on stderr and `SystemExit(3)`, and
+//! nothing goes to the place it names. [`Opener::open_ruled`] and
+//! [`Opener::open_retrying_ruled`] are that opener: such an answer is a
+//! [`Refused`] ([`redirect_refusal`] has the rule and the line), its body
+//! never read. The caller writes the line where its block's stderr goes
+//! ([`Refused::write`]) and ends with [`Refused::EXIT`]. Every block that
+//! calls the daemon runs the rule, so a family moves to the `_ruled` pair
+//! as it is checked against it.
 //! - A version of the daemon that is not the binary's prints the binary's
 //!   one line ([`super::skew`]), as every native call does.
 
@@ -104,6 +117,8 @@ use super::client::{VIA_HEADER, VIA_NATIVE, WOULD_REFUSE_HEADER};
 use super::encode::quote_bytes;
 use super::skew;
 use super::wire::SERVER_VERSION_HEADER;
+use crate::exit::Exit;
+use std::convert::Infallible;
 use std::io::{self, BufRead, BufReader, Read as _, Write as _};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
@@ -489,27 +504,53 @@ impl Opener {
     }
 
     /// One `urllib.request.urlopen(k5_request(req), timeout=...)`, and the
-    /// body read after it.
+    /// body read after it. A redirect is the answer (an
+    /// [`Outcome::HttpError`]); [`Opener::open_ruled`] refuses it.
     pub fn open(&self, req: &Request) -> Outcome {
+        let Ok(out) = self.exchange(req, |_| Ok::<(), Infallible>(()));
+        out
+    }
+
+    /// [`Opener::open`] under `_K2_PY_PROXY_RULE`: a redirect urllib would
+    /// follow is a [`Refused`], before its body is read. The request's URL
+    /// is [`Opener::base`]'s, as urllib sends it.
+    pub fn open_ruled(&self, req: &Request) -> Result<Outcome, Refused> {
+        self.exchange(req, |head| {
+            let to = head.location.as_deref().or(head.uri.as_deref());
+            match redirect_refusal(&self.base(), head.status, to) {
+                Some(r) => Err(r),
+                None => Ok(()),
+            }
+        })
+    }
+
+    /// The exchange: connect, send, the head (`check` may end it there),
+    /// then the body.
+    fn exchange<E>(
+        &self,
+        req: &Request,
+        check: impl FnOnce(&Head) -> Result<(), E>,
+    ) -> Result<Outcome, E> {
         if let Some(url) = &self.unsendable {
-            return Outcome::Raised(Raised {
+            return Ok(Outcome::Raised(Raised {
                 class: Class::UrlError,
                 kind: Kind::Other,
                 reason: format!("won't send to {url}: a proxy or URL this command doesn't carry"),
-            });
+            }));
         }
         let tls = self.tls.then_some(self.host.as_str());
         let mut reader = match start(&self.host, self.port, tls, &self.encode(req), req.timeout) {
             Ok(r) => r,
-            Err(r) => return Outcome::Raised(r),
+            Err(r) => return Ok(Outcome::Raised(r)),
         };
         let head = match read_head(&mut reader) {
             Ok(h) => h,
-            Err(r) => return Outcome::Raised(r),
+            Err(r) => return Ok(Outcome::Raised(r)),
         };
         skew::note(&self.version, head.server_version.as_deref());
+        check(&head)?;
         let body = read_body(&mut reader, &head);
-        if (200..300).contains(&head.status) {
+        Ok(if (200..300).contains(&head.status) {
             Outcome::Answer {
                 status: head.status,
                 body,
@@ -519,7 +560,7 @@ impl Opener {
                 code: head.status,
                 body,
             }
-        }
+        })
     }
 
     /// `_mail_py`'s and `_cal_py`'s loop around [`Opener::open`] (k2-ptyd
@@ -529,10 +570,26 @@ impl Opener {
     /// shell's `_is_timeout` comes first), as does anything else. The
     /// last outcome is the caller's.
     pub fn open_retrying(&self, req: &Request) -> Outcome {
+        let Ok(out) = self.retrying(req, |r| Ok::<_, Infallible>(self.open(r)));
+        out
+    }
+
+    /// [`Opener::open_retrying`] under `_K2_PY_PROXY_RULE`: a refused
+    /// redirect ends the loop at once (`SystemExit` is no exception the
+    /// loop catches).
+    pub fn open_retrying_ruled(&self, req: &Request) -> Result<Outcome, Refused> {
+        self.retrying(req, |r| self.open_ruled(r))
+    }
+
+    fn retrying<E>(
+        &self,
+        req: &Request,
+        open: impl Fn(&Request) -> Result<Outcome, E>,
+    ) -> Result<Outcome, E> {
         let mut dropped = false;
         let mut attempt = 0;
         loop {
-            let out = self.open(req);
+            let out = open(req)?;
             let last = attempt >= 3;
             let again = match &out {
                 Outcome::HttpError {
@@ -551,12 +608,100 @@ impl Opener {
                 },
             };
             if !again {
-                return out;
+                return Ok(out);
             }
             std::thread::sleep(self.pause);
             attempt += 1;
         }
     }
+}
+
+/// A redirect `_K2NoRedirect` refused: the line `k2_redirect_refused`
+/// writes before `SystemExit(3)`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Refused {
+    pub line: String,
+}
+
+impl Refused {
+    /// The block's exit after the line.
+    pub const EXIT: Exit = Exit::Refused;
+
+    /// The line on stderr now, flushed, for a family that writes its
+    /// stderr as it goes. The exit, [`Refused::EXIT`].
+    pub fn write(&self) -> Exit {
+        crate::out::stderr_line(&self.line);
+        Refused::EXIT
+    }
+}
+
+/// What `_K2NoRedirect` does with an answer `code` to a request to
+/// `url` whose `Location` (else `URI`) is `to`. urllib's handler takes
+/// 301, 302, 303, 307 and 308 with one of them, to `http`, `https`, `ftp`
+/// or no scheme (any other is its own `HTTPError`, and none here); it
+/// quotes the new URL (`quote(newurl, encoding="iso-8859-1",
+/// safe=string.punctuation)`) and joins it to the request's, and the
+/// refusal names both places by their netloc less any user part, or the
+/// whole new URL when it has none. Quoted, every character is printable,
+/// so the rule's `?` for one that isn't never shows.
+pub fn redirect_refusal(url: &str, code: u16, to: Option<&str>) -> Option<Refused> {
+    if !matches!(code, 301 | 302 | 303 | 307 | 308) {
+        return None;
+    }
+    let to = to?;
+    if !matches!(split_place(to).0.as_str(), "http" | "https" | "ftp" | "") {
+        return None;
+    }
+    let quoted: String = to
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c.is_ascii_punctuation() {
+                c.to_string()
+            } else {
+                // A header is read as ISO-8859-1: one byte a character.
+                format!("%{:02X}", u32::from(c) & 0xff)
+            }
+        })
+        .collect();
+    let after_at = |s: &str| s.rsplit_once('@').map_or(s, |(_, h)| h).to_string();
+    let (base_scheme, netloc) = split_place(url);
+    // urljoin onto the request's URL: another scheme keeps its own URL;
+    // the same or none takes the new netloc, else the old one.
+    let (scheme, place) = split_place(&quoted);
+    let there = if place.is_empty() && (scheme.is_empty() || scheme == base_scheme) {
+        after_at(&netloc)
+    } else {
+        Some(after_at(&place))
+            .filter(|p| !p.is_empty())
+            .unwrap_or(quoted)
+    };
+    let here = after_at(&netloc);
+    let p = k2_client::product_name!();
+    Some(Refused {
+        line: format!(
+            "refused: {here} answered {code}, sending {p} to {there}; {p} does not follow a redirect with your token or password, so nothing was sent there"
+        ),
+    })
+}
+
+/// `urlsplit(url)`'s scheme (in lower case) and netloc.
+fn split_place(url: &str) -> (String, String) {
+    let mut rest = url;
+    let mut scheme = String::new();
+    if let Some((s, after)) = url.split_once(':') {
+        let ok = s.bytes().next().is_some_and(|b| b.is_ascii_alphabetic())
+            && s.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.'));
+        if ok {
+            scheme = s.to_ascii_lowercase();
+            rest = after;
+        }
+    }
+    let netloc = rest.strip_prefix("//").map_or(String::new(), |after| {
+        let end = after.find(['/', '?', '#']).unwrap_or(after.len());
+        after[..end].to_string()
+    });
+    (scheme, netloc)
 }
 
 /// The text of an `OSError` as Python prints it: `[Errno N] strerror`.
@@ -736,6 +881,9 @@ struct Head {
     server_version: Option<String>,
     /// The `Location` header, as http.client keeps it.
     location: Option<String>,
+    /// The `URI` header (urllib's redirect handler reads it when there is
+    /// no `Location`).
+    uri: Option<String>,
 }
 
 /// `fp.readline(_MAXLINE + 1)`: a line with its end, or less at the end
@@ -893,6 +1041,7 @@ fn read_head(r: &mut impl BufRead) -> Result<Head, Raised> {
         length,
         server_version: header(&lines, SERVER_VERSION_HEADER).map(|v| v.trim().to_string()),
         location: header(&lines, "location").map(str::to_string),
+        uri: header(&lines, "uri").map(str::to_string),
     })
 }
 

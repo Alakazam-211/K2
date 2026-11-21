@@ -11,6 +11,8 @@ enum Act {
     Write(&'static [u8]),
     /// Reads the request, waits, closes.
     Wait(Duration),
+    /// Reads the request, writes these bytes, waits, closes.
+    WriteHold(&'static [u8], Duration),
 }
 
 /// A loopback server that answers each connection with the next act and
@@ -47,6 +49,10 @@ fn server(acts: Vec<Act>) -> (u16, Arc<Mutex<Vec<Vec<u8>>>>) {
                     let _ = conn.write_all(bytes);
                 }
                 Act::Wait(d) => std::thread::sleep(d),
+                Act::WriteHold(bytes, d) => {
+                    let _ = conn.write_all(bytes);
+                    std::thread::sleep(d);
+                }
             }
         }
     });
@@ -481,5 +487,155 @@ fn open_url_reads_a_plain_answer_and_names_a_failed_handshake() {
     // The handshake's bytes, if the server logged them yet, hold no request.
     for g in &got[1..] {
         assert!(!String::from_utf8_lossy(g).contains("GET /x"));
+    }
+}
+
+/// The line `_K2NoRedirect` writes, with this build's product name.
+fn refused(here: &str, code: u16, there: &str) -> Refused {
+    let p = k2_client::product_name!();
+    Refused {
+        line: format!(
+            "refused: {here} answered {code}, sending {p} to {there}; {p} does not follow a redirect with your token or password, so nothing was sent there"
+        ),
+    }
+}
+
+/// urllib's redirect handler and the rule's line, case by case: the
+/// codes it takes, `Location` joined to the request's URL, user parts
+/// off, the new URL quoted as ISO-8859-1 bytes, and what it hands back
+/// as the 3xx itself.
+#[test]
+fn redirect_refusal_is_the_rule_s() {
+    let here = "127.0.0.1:4100";
+    let r = |code, to: Option<&str>| redirect_refusal("http://127.0.0.1:4100", code, to);
+    for code in [301, 302, 303, 307, 308] {
+        assert_eq!(
+            r(code, Some("http://127.0.0.1:9/elsewhere")),
+            Some(refused(here, code, "127.0.0.1:9")),
+            "{code}"
+        );
+    }
+    // Not a code the handler takes, or nothing to go to: urlopen's HTTPError.
+    assert_eq!(r(300, Some("http://127.0.0.1:9/")), None);
+    assert_eq!(r(304, Some("http://127.0.0.1:9/")), None);
+    assert_eq!(r(302, None), None);
+    // A scheme it won't follow is its own HTTPError.
+    assert_eq!(r(302, Some("mailto:a@x.example")), None);
+    assert_eq!(r(302, Some("file:///etc/passwd")), None);
+    // https, ftp, and the scheme in any case.
+    assert_eq!(
+        r(307, Some("https://h.example:8443/x")),
+        Some(refused(here, 307, "h.example:8443"))
+    );
+    assert_eq!(
+        r(302, Some("FTP://h.example/x")),
+        Some(refused(here, 302, "h.example"))
+    );
+    // Relative: the request's own place.
+    assert_eq!(r(303, Some("/moved?x=1")), Some(refused(here, 303, here)));
+    assert_eq!(r(302, Some("")), Some(refused(here, 302, here)));
+    assert_eq!(r(302, Some("http:/x")), Some(refused(here, 302, here)));
+    // Scheme-relative takes its netloc.
+    assert_eq!(
+        r(302, Some("//other.example:1/p")),
+        Some(refused(here, 302, "other.example:1"))
+    );
+    // A user part is never shown, on either side.
+    assert_eq!(
+        redirect_refusal("http://u@127.0.0.1:4100", 302, Some("http://user:pw@h.example/")),
+        Some(refused(here, 302, "h.example"))
+    );
+    // Quoted as ISO-8859-1 bytes: a space and a byte past ASCII as %XX
+    // (the header was read as Latin-1, so `é` sent as UTF-8 is two).
+    assert_eq!(
+        r(302, Some("http://a b\u{c3}\u{a9}.example/")),
+        Some(refused(here, 302, "a%20b%C3%A9.example"))
+    );
+    // Another scheme with no netloc: the whole new URL; the same scheme
+    // as the request's (https to a remote K2): the request's place.
+    assert_eq!(
+        r(302, Some("https:no-netloc")),
+        Some(refused(here, 302, "https:no-netloc"))
+    );
+    assert_eq!(
+        redirect_refusal("https://k2.example:4100", 302, Some("https:/x")),
+        Some(refused("k2.example:4100", 302, "k2.example:4100"))
+    );
+}
+
+/// The ruled opener refuses a redirect before its body (a server that
+/// holds the connection open after the head doesn't hold it up), never
+/// connects to the place it names, and leaves every other answer as
+/// `open` gives it. `open` still hands the 3xx back.
+#[test]
+fn the_ruled_opener_refuses_a_redirect_and_sends_nothing_there() {
+    let there = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let tp = there.local_addr().expect("addr").port();
+    there.set_nonblocking(true).expect("nonblocking");
+    let leak = |s: String| -> &'static [u8] { Box::leak(s.into_boxed_str()).as_bytes() };
+    let redirect = leak(format!(
+        "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{tp}/x\r\nContent-Length: 100\r\n\r\n"
+    ));
+    let uri = leak(format!(
+        "HTTP/1.1 301 Moved\r\nURI: http://127.0.0.1:{tp}/y\r\nContent-Length: 0\r\n\r\n"
+    ));
+    let (port, log) = server(vec![
+        Act::WriteHold(redirect, Duration::from_secs(3)),
+        Act::Write(redirect),
+        Act::Write(uri),
+        Act::Write(b"HTTP/1.1 302 Found\r\nContent-Length: 2\r\n\r\n{}"),
+        Act::Write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}"),
+        Act::Write(redirect),
+    ]);
+    let o = opener(port);
+    let here = format!("127.0.0.1:{port}");
+    let t0 = std::time::Instant::now();
+    assert_eq!(
+        o.open_ruled(&get("/a")),
+        Err(refused(&here, 302, &format!("127.0.0.1:{tp}")))
+    );
+    // The body (100 bytes promised, the connection held) was never
+    // waited for.
+    assert!(t0.elapsed() < Duration::from_secs(2), "{:?}", t0.elapsed());
+    // The retrying loop ends at once on it: one request.
+    assert_eq!(
+        o.open_retrying_ruled(&get("/b")),
+        Err(refused(&here, 302, &format!("127.0.0.1:{tp}")))
+    );
+    assert_eq!(log.lock().expect("lock").len(), 2);
+    // `URI` when there is no `Location`.
+    assert_eq!(
+        o.open_ruled(&get("/c")),
+        Err(refused(&here, 301, &format!("127.0.0.1:{tp}")))
+    );
+    // A 3xx with nowhere to go, and a 200: as `open` gives them.
+    assert_eq!(
+        o.open_ruled(&get("/d")),
+        Ok(Outcome::HttpError {
+            code: 302,
+            body: Ok(b"{}".to_vec())
+        })
+    );
+    assert_eq!(
+        o.open_ruled(&get("/e")),
+        Ok(Outcome::Answer {
+            status: 200,
+            body: Ok(b"{}".to_vec())
+        })
+    );
+    // The plain opener still hands a redirect back (its body cut short).
+    assert!(matches!(
+        o.open(&get("/f")),
+        Outcome::HttpError {
+            code: 302,
+            body: Err(_)
+        }
+    ));
+    assert_eq!(log.lock().expect("lock").len(), 6);
+    std::thread::sleep(Duration::from_millis(200));
+    match there.accept() {
+        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+        Ok((_, from)) => panic!("the redirect was followed: a connection from {from}"),
+        Err(e) => panic!("accept: {e}"),
     }
 }

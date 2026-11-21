@@ -29,6 +29,9 @@
 #   K2_GH_REPO             repo for the default base URL       (default: Alakazam-211/K2)
 #   K2_GUEST_BASE          guest rootfs install path           (default: /opt/k2/guest-base-v2)
 #   K2_CELL_USER           legacy shared cell drop-user        (default: k2cell)
+#   K2_BOOTSTRAP_SANDBOX_API  1 = also turn on the /v1 sandbox API families
+#                          (K2_SANDBOX_API in the unit). Default: off; the
+#                          sandbox stack itself (K2_SANDBOX) is on either way
 #   K2_SPAWN_PROBE         1 = if boot-status lacks api.sandboxes (pre-0.40.30
 #                          daemon), acceptance falls back to a REAL spawn
 #                          probe (temp API key → POST /v1/sandboxes) (default: 1)
@@ -65,6 +68,7 @@ K2_ARTIFACTS_VERSION="${K2_ARTIFACTS_VERSION:-v1}"
 K2_GH_REPO="${K2_GH_REPO:-Alakazam-211/K2}"
 K2_ARTIFACTS_BASE_URL="${K2_ARTIFACTS_BASE_URL:-https://github.com/${K2_GH_REPO}/releases/download/dedicated-artifacts-${K2_ARTIFACTS_VERSION}}"
 K2_SPAWN_PROBE="${K2_SPAWN_PROBE:-1}"
+K2_BOOTSTRAP_SANDBOX_API="${K2_BOOTSTRAP_SANDBOX_API:-0}"
 RAW_BASE="https://raw.githubusercontent.com/Alakazam-211/K2/main"
 
 log() { printf '\033[1;35m[dedicated]\033[0m %s\n' "$*"; }
@@ -285,6 +289,13 @@ usermod -aG kvm "$K2_RUN_USER"     # daemon side (also granted via Supplementary
 # ── 9. rewrite the systemd unit WITH the sandbox environment ─────────
 UNIT_FILE="/etc/systemd/system/${K2_UNIT_NAME}.service"
 log "writing $UNIT_FILE (sandboxes ON)"
+if [ "$K2_BOOTSTRAP_SANDBOX_API" = "1" ]; then
+	SANDBOX_API_LINE="Environment=K2_SANDBOX_API=1"
+	log "Sandbox API families on (K2_BOOTSTRAP_SANDBOX_API=1)"
+else
+	SANDBOX_API_LINE="# K2_SANDBOX_API stays off (K2_BOOTSTRAP_SANDBOX_API=1 turns the sandbox API families on)"
+	log "Sandbox API families stay off; set K2_BOOTSTRAP_SANDBOX_API=1 to turn them on"
+fi
 cat > "$UNIT_FILE" <<EOF
 [Unit]
 Description=K2 daemon (Dedicated — libkrun sandbox host)
@@ -298,11 +309,11 @@ Group=${K2_RUN_USER}
 SupplementaryGroups=kvm
 Environment=HOME=${K2_HOME}
 Environment=PATH=/usr/local/bin:/usr/bin:/bin:${BIN_DIR}
-# Standard /v1 surface + the sandbox families (all default-OFF in the binary;
-# a Dedicated box is exactly these flags):
+# Standard /v1 surface + the sandbox stack (all default-OFF in the binary).
+# The /v1 sandbox API families are opt-in (K2_BOOTSTRAP_SANDBOX_API=1):
 Environment=K2_API=1
 Environment=K2_SANDBOX=1
-Environment=K2_SANDBOX_API=1
+${SANDBOX_API_LINE}
 Environment=K2_HOOK_SCOPED=1
 Environment=K2_SANDBOX_GUEST_BASE=${K2_GUEST_BASE}
 Environment=RUST_LOG=info
@@ -441,7 +452,10 @@ case "$SBX" in
 		check "boot-status api.sandboxes == microvm" 1 \
 			"daemon reports 'none' — this daemon build lacks the sandbox-microvm feature (needs a sandbox-enabled Linux release, 0.40.30+)" ;;
 	*)
-		if [ "$K2_SPAWN_PROBE" = "1" ]; then
+		if [ "$K2_SPAWN_PROBE" = "1" ] && [ "$K2_BOOTSTRAP_SANDBOX_API" != "1" ]; then
+			check "sandbox capability (api.sandboxes absent; the spawn probe needs the sandbox API)" 1 \
+				"update the daemon to 0.40.30+, or set K2_BOOTSTRAP_SANDBOX_API=1 for the probe"
+		elif [ "$K2_SPAWN_PROBE" = "1" ]; then
 			log "boot-status has no api.sandboxes (pre-0.40.30 daemon) — running spawn probe"
 			PROBE_OK=1
 			CREATE=$(k2_curl "$BASE/cli/api-keys/create?token=$TOKEN" \
@@ -481,6 +495,7 @@ fi
 echo "  daemon:     $(systemctl is-active "$K2_UNIT_NAME") on 127.0.0.1:${PORT} (unit ${K2_UNIT_NAME})"
 [ -n "${K2_SUBDOMAIN:-}" ] && echo "  address:    https://${K2_SUBDOMAIN}.k2.dev"
 echo "  sandboxes:  $([ "$FAILS" = "0" ] && echo "ON (microvm)" || echo "NOT VERIFIED")"
+echo "  sandbox API families: $([ "$K2_BOOTSTRAP_SANDBOX_API" = "1" ] && echo "on" || echo "off (K2_BOOTSTRAP_SANDBOX_API=1 turns them on)")"
 echo "  artifacts:  ${K2_ARTIFACTS_BASE_URL}"
 echo "  guest base: ${K2_GUEST_BASE}"
 echo "  worker:     ${WORKER_DST} (setuid-root — re-run this script after any daemon update)"

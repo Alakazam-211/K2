@@ -210,6 +210,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Messages and files from paired servers are checked more strictly.** A sender's name, a file's name and its title must be in plain form, or K2 refuses them.
 - **The off-box backup alarm counts K2 backups (restic).** When this server's own backups copy chat's backups off the box, the alarm no longer says nothing is copied; it warns when the newest copy is over 36 hours old.
 - **Signing out of a connected server sends its token in a request header, not in the address.**
+- **A new Dedicated server starts with the sandbox API families off.** Turn them on by provisioning with `K2_BOOTSTRAP_SANDBOX_API=1`.
 
 ### Databases
 - **Turn WAL archiving on or off on a named cluster you already have.** `k2 db cluster archive <name> on|off` sets the same archiving `k2 db cluster create --wal-archive` sets at creation, then restarts that cluster if it is running. Off stops archiving but keeps the spool and every WAL file already in it for your backup to ship. The owner runs it, or an agent with "Let this agent manage Postgres versions" on its own workspace's cluster; it needs the root helper from this release (`k2 root-helper update`).

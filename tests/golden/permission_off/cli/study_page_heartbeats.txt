@@ -16,6 +16,11 @@ WHICH ONE
   Once, on a date                      k2 remind "renew cert" --on 2026-10-30
   Run a script, no agent               k2 job add ... (k2 study jobs)
 
+NOT YOUR HARNESS'S SCHEDULER
+  Use these, never your harness's own scheduler (cron jobs, /loop, timers).
+  Those die with the session and your human can't see them. K2's reminders
+  and heartbeats survive restarts and show in K2's Heartbeats panel.
+
 HEARTBEATS REPEAT
   Each one is a WAKEUP.md under .k2/heartbeats/<name>/. It fires into your
   pinned chat by default. A missed slot catches up once within 12 hours;

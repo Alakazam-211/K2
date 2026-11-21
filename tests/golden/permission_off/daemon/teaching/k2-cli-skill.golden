@@ -1,15 +1,29 @@
 ---
 k2_skill: k2-cli
-skill_version: 65
-skill_checksum: 837ed51f0fd8cc35
+skill_version: 66
+skill_checksum: 16977519b6caec51
 name: k2-cli
-description: K2 CLI reference — msg, inbox, activity, connections, heartbeat
+description: K2 CLI reference — msg, inbox, activity, connections, heartbeat, remind. Use it for remind me, reminder, alarm, follow up later, at <time>, every morning, schedule, cron
 ---
 
 <!-- K2:MANAGED:BEGIN -->
 # K2 CLI
 
 How to drive the K2 agent system from a workspace via the `k2` CLI.
+
+## When the person asks → use
+| When | Use |
+|---|---|
+| "Remind me", follow up later, at a time | `k2 remind "…" --at 15:00` (or `--in 45m`, `--on 2026-10-30`) |
+| Repeat on a schedule ("every morning") | `k2 heartbeat schedule add --name <n> --daily --time 09:00 --instructions "…"` |
+| You need a secret from them | `k2 thread secret <addr> --name NAME` |
+| You need a decision from them | `k2 thread ask <addr> "…" --option "…" --option "…"` (a card) |
+| Send another agent a file | `k2 msg <handle> --inbox-wake <path>` |
+| Tell the person something | `k2 thread <addr> "…"` |
+
+Never your harness's own scheduler (cron jobs, /loop, timers): it dies with
+the session and your human can't see it. K2's reminders and heartbeats survive
+restarts and show in K2. `k2 study heartbeats`.
 
 ## Who am I
 `k2 whoami` prints this cell (same fields a Claude/Grok/Pi launch already

@@ -1821,7 +1821,6 @@ clone_refusal_refused() {
         || problems+=("$l: the binary's stderr isn't the refusal line alone: $(head -c 300 "$d/err.$l.binary")")
     [ ! -s "$d/out.$l.binary" ] || problems+=("$l: the binary printed on stdout: $(head -c 300 "$d/out.$l.binary")")
     [ ! -s "$d/heads.$l.binary" ] || problems+=("$l: the binary sent something: $(head -c 300 "$d/heads.$l.binary")")
-    ! grep -q 'tok-refusal-parity' "$d/heads.$l.bash" || problems+=("$l: bash's token reached the listener")
 }
 
 # check_clone_url_not_printable: a non-ASCII byte in the remote URL's
@@ -1915,6 +1914,7 @@ check_clone_proxy_unread() {
         clone_refusal_refused "$d" "$l" "$hint"
         [ "$(wc -l <"$d/heads.$l.bash" | tr -d ' ')" = 1 ] && grep -Eq '^CONNECT cp\.example\.invalid:443 HTTP/1\.[01] ' "$d/heads.$l.bash" \
             || problems+=("$l: bash's Python didn't send one CONNECT for cp.example.invalid:443: $(head -c 300 "$d/heads.$l.bash")")
+        ! grep -q 'tok-refusal-parity' "$d/heads.$l.bash" || problems+=("$l: bash's token reached the proxy")
         rc="$(cat "$d/rc.$l.bash")"
         [ "$rc" = 3 ] || problems+=("$l: bash exited $rc, want 3")
         grep -q '^{"error": "daemon_unreachable", "hint": "remote server https://cp.example.invalid: ' "$d/err.$l.bash" \

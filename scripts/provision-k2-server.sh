@@ -170,16 +170,19 @@ _prov_github_where() {
 	printf '%s' "$rest" | LC_ALL=C tr -cd '[:graph:]'
 }
 
-# provision_github_fetch <url> <file>: GET <url> into <file>, following
-# redirects on those hosts one hop at a time (at most _PROV_GITHUB_MAX_REDIRS),
-# https only, also when a ~/.curlrc says -L. Sends no token: plain curl, no
+# provision_github_fetch <url> <file> [curl args...]: GET <url> into <file>
+# (each hop with those curl args too, such as --retry), following redirects
+# on those hosts one hop at a time (at most _PROV_GITHUB_MAX_REDIRS), https
+# only, also when a ~/.curlrc says -L. Every GitHub fetch in this script goes
+# through it; none uses curl -L. Sends no token: plain curl, no
 # config, no Authorization header. Returns 1 when curl fails (curl's own line
 # on stderr). A redirect off the list, to anything but https, or past the cap
 # prints one line on stderr and returns 2; nothing is sent to that address.
 provision_github_fetch() {
 	local url="$1" file="$2" hops=0 next
+	shift 2
 	while :; do
-		next=$(curl --no-location --proto =https -fsS -o "$file" -w '%{redirect_url}' "$url") || return 1
+		next=$(curl --no-location --proto =https -fsS "$@" -o "$file" -w '%{redirect_url}' "$url") || return 1
 		[ -n "$next" ] || return 0
 		hops=$((hops + 1))
 		if [ "$hops" -gt "$_PROV_GITHUB_MAX_REDIRS" ]; then
@@ -279,8 +282,8 @@ if [ "$NEED_FRPC" = 1 ]; then
 	log "installing frpc v${FRP_VERSION} (${FRP_ARCH})"
 	FRP_DIR="frp_${FRP_VERSION}_linux_${FRP_ARCH}"
 	TMP=$(mktemp -d)
-	curl -fsSL "https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/${FRP_DIR}.tar.gz" \
-		-o "$TMP/frp.tar.gz"
+	provision_github_fetch "https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/${FRP_DIR}.tar.gz" \
+		"$TMP/frp.tar.gz"
 	tar -xzf "$TMP/frp.tar.gz" -C "$TMP"
 	install -m 0755 "$TMP/${FRP_DIR}/frpc" /usr/local/bin/frpc
 	rm -rf "$TMP"
@@ -294,10 +297,12 @@ fi
 # Plain x.y.z only: it becomes part of download URLs.
 if [ -z "$K2_VERSION" ]; then
 	log "resolving the latest daemon release"
-	K2_VERSION="$(curl -fsSL --retry 3 --retry-delay 2 \
-		"https://github.com/Alakazam-211/K2/releases/latest/download/daemon-latest.json" \
-		| sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)" \
-		|| die "could not resolve the latest daemon release; set K2_VERSION=<x.y.z>"
+	_MANIFEST_TMP="$(mktemp)" || die "mktemp failed"
+	provision_github_fetch "https://github.com/Alakazam-211/K2/releases/latest/download/daemon-latest.json" \
+		"$_MANIFEST_TMP" --retry 3 --retry-delay 2 \
+		|| { rm -f "$_MANIFEST_TMP"; die "could not resolve the latest daemon release; set K2_VERSION=<x.y.z>"; }
+	K2_VERSION="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$_MANIFEST_TMP" | head -n1)"
+	rm -f "$_MANIFEST_TMP"
 fi
 K2_VERSION="${K2_VERSION#v}"
 [[ "$K2_VERSION" =~ ^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$ ]] \
@@ -341,8 +346,8 @@ else
 	# The CLI from the same release as the daemon, not main: a release daemon
 	# with main's CLI is a mix no release was tested as.
 	log "fetching k2 CLI for v$K2_VERSION"
-	curl -fsSL --retry 3 --retry-delay 2 \
-		"https://raw.githubusercontent.com/Alakazam-211/K2/v$K2_VERSION/cli/k2" -o /usr/local/bin/k2 \
+	provision_github_fetch "https://raw.githubusercontent.com/Alakazam-211/K2/v$K2_VERSION/cli/k2" \
+		/usr/local/bin/k2 --retry 3 --retry-delay 2 \
 		|| die "could not fetch the k2 CLI for v$K2_VERSION"
 	chmod 0755 /usr/local/bin/k2
 fi
@@ -539,7 +544,7 @@ else
 		LEGACY_TMP="$(mktemp -d)" || root_helper_die "mktemp failed"
 		LEGACY_URL="https://github.com/Alakazam-211/K2/releases/download/v${DAEMON_VERSION}/install-mail-helper.sh"
 		log "daemon v${DAEMON_VERSION} predates the root helper — installing its k2-mail-helper (${LEGACY_URL})"
-		curl -fsSL --retry 3 --retry-delay 2 "$LEGACY_URL" -o "$LEGACY_TMP/install-mail-helper.sh" \
+		provision_github_fetch "$LEGACY_URL" "$LEGACY_TMP/install-mail-helper.sh" --retry 3 --retry-delay 2 \
 			|| root_helper_die "could not download $LEGACY_URL"
 		bash "$LEGACY_TMP/install-mail-helper.sh" --version "$DAEMON_VERSION" --user "$K2_RUN_USER" \
 			|| root_helper_die "install-mail-helper.sh --version $DAEMON_VERSION failed (output above)"
@@ -655,7 +660,7 @@ elif [ "$WITH_DB" = 1 ]; then
 		if [ ! -f "$PG_HELPER_SRC" ]; then
 			PG_TMP="$(mktemp -d)" || die "mktemp failed"
 			PG_HELPER_SRC="$PG_TMP/k2-pg-helper"
-			curl -fsSL --retry 3 "$RAW_BASE/scripts/k2-pg-helper" -o "$PG_HELPER_SRC" \
+			provision_github_fetch "$RAW_BASE/scripts/k2-pg-helper" "$PG_HELPER_SRC" --retry 3 \
 				|| die "could not download k2-pg-helper for the legacy daemon"
 		fi
 		install -d -m 0755 /usr/local/libexec

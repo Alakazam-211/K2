@@ -33,6 +33,8 @@ L_BAKE_EXIT="$(line_of 'bake complete')"
 [ "$L_HELPER" -lt "$L_BAKE_EXIT" ] || fail "root helper step must run before the bake exit (bake images get it too)"
 ok "step 7a runs after the daemon install and before the bake exit"
 BLOCK="$(sed -n '/^# ── 7a\. root helper/,/^# ── 7b\./p' "$PROVISION")"
+FETCH_BLOCK="$(sed -n '/^# ── GitHub fetch: begin/,/^# ── GitHub fetch: end/p' "$PROVISION")"
+[ -n "$FETCH_BLOCK" ] || fail "the GitHub fetch block not found"
 STEP4="$(sed -n '/^# ── 4\. daemon binary/,/^# ── 5\./p' "$PROVISION")"
 [ -n "$STEP4" ] || fail "step 4 not found"
 # One install path: step 4's install-daemon.sh installs the helper (through
@@ -195,7 +197,8 @@ STEP="$WORK/step.sh"
 	echo 'set -euo pipefail'
 	echo 'log() { printf "[provision] %s\n" "$*"; }'
 	echo 'die() { printf "[provision] ERROR: %s\n" "$*" >&2; exit 1; }'
-	printf '%s\n' "$BLOCK"
+	# The legacy path downloads through the script's GitHub fetch block.
+	printf '%s\n' "$FETCH_BLOCK" "$BLOCK"
 	echo 'echo "SUMMARY=${MAIL_HELPER_LINE}"'
 } >"$STEP"
 

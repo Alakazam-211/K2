@@ -129,7 +129,16 @@ starts = {
     "/repos/Alakazam-211/K2/releases?per_page=10": "list",
     "/Alakazam-211/K2/releases/latest/download/daemon-latest.json": "manifest",
     "/Alakazam-211/K2/main/scripts/install-daemon.sh": "raw",
+    # The provisioning script's other GitHub fetches.
+    "/fatedier/frp/releases/download/v0.61.1/frp_0.61.1_linux_amd64.tar.gz": "file:frp",
+    "/Alakazam-211/K2/v0.46.7/cli/k2": "file:cli",
+    "/Alakazam-211/K2/releases/download/v0.45.3/install-mail-helper.sh": "file:legacy",
+    "/Alakazam-211/K2/main/scripts/k2-pg-helper": "file:pg",
 }
+# A moved repository: the owner part of each start path becomes Moved-Org.
+def moved_path(p):
+    return "/Moved-Org/" + p.split("/", 2)[2]
+moved = {moved_path(p): k for p, k in starts.items()}
 repo = "/repos/Alakazam-211/K2"
 lock = threading.Lock()
 
@@ -152,6 +161,9 @@ class H(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def answer(self, kind):
+        if kind.startswith("file:"):
+            self.send(200, ("stand-in %s\n" % kind[5:]).encode())
+            return
         if kind == "raw":
             self.send(200, b"#!/bin/sh\necho stand-in installer\n")
             return
@@ -169,12 +181,10 @@ class H(BaseHTTPRequestHandler):
             mode = f.read().strip()
         kind = starts.get(self.path)
         if kind is not None:
-            if mode == "moved" and kind == "raw":
-                # A renamed repository's raw URL, on raw.githubusercontent.com.
-                self.send(301, b"", "https://%s%s" % (host, self.path.replace("/Alakazam-211/", "/Moved-Org/")))
-            elif mode == "moved" and kind == "manifest":
-                # A moved repository's release download, on github.com.
-                self.send(301, b"", "https://%s%s" % (host, self.path.replace("/Alakazam-211/", "/Moved-Org/")))
+            if mode == "moved" and (kind in ("raw", "manifest") or kind.startswith("file:")):
+                # A moved repository's release download or raw file, on the
+                # same host.
+                self.send(301, b"", "https://%s%s" % (host, moved_path(self.path)))
             elif mode == "moved":
                 # GitHub's own shape: /repos/<owner>/<repo>/... moves
                 # to /repositories/<id>/... on the same host.
@@ -188,11 +198,8 @@ class H(BaseHTTPRequestHandler):
             else:
                 self.send(500, b"bad mode")
             return
-        if self.path == "/Moved-Org/K2/releases/latest/download/daemon-latest.json":
-            self.answer("manifest")
-            return
-        if self.path == "/Moved-Org/K2/main/scripts/install-daemon.sh":
-            self.answer("raw")
+        if self.path in moved:
+            self.answer(moved[self.path])
             return
         if self.path.startswith("/repositories/42/"):
             self.answer(starts[repo + self.path[len("/repositories/42"):]])
@@ -524,6 +531,101 @@ https://raw.githubusercontent.com:8443/x|Error: GitHub redirected to https://raw
 http://raw.githubusercontent.com/x|Error: GitHub redirected to http://raw.githubusercontent.com, which is not https; nothing was sent there
 http://evil.example/x|Error: GitHub redirected to http://evil.example, which is not https; nothing was sent there
 EOF
+echo "== scripts/provision-k2-server.sh: no GitHub fetch can follow a redirect on curl's own =="
+PROV_CODE="$(grep -v '^[[:space:]]*#' "$PROVISION")"
+if printf '%s\n' "$PROV_CODE" | grep -nE 'curl([[:space:]][^|;]*)?[[:space:]](-[a-zA-Z]*L[a-zA-Z]*|--location(-trusted)?)([[:space:]]|$)' >"$WORK/curl-L.txt"; then
+    bad "provision: a curl that follows redirects itself"; show "$(cat "$WORK/curl-L.txt")"
+else
+    ok "provision: no curl -L or --location anywhere"
+fi
+if printf '%s\n' "$PROV_CODE" | grep -nE '(^|[^_])curl[[:space:]][^#]*(github|githubusercontent)' >"$WORK/curl-gh.txt"; then
+    bad "provision: a GitHub URL fetched with plain curl"; show "$(cat "$WORK/curl-gh.txt")"
+else
+    ok "provision: every GitHub URL goes through provision_github_fetch"
+fi
+[ "$(grep -c 'provision_github_fetch "' "$PROVISION")" = 6 ] && ok "provision: six GitHub fetches through provision_github_fetch" \
+    || { bad "provision: $(grep -c 'provision_github_fetch "' "$PROVISION") calls of provision_github_fetch (want 6)"; show "$(grep -n 'provision_github_fetch "' "$PROVISION")"; }
+
+echo "== scripts/provision-k2-server.sh: each GitHub fetch, cut out and run alone =="
+# stmt <fixed text>: the statement that starts on the line holding <fixed
+# text>, through its continuation lines (each ending in a backslash).
+stmt() {
+    awk -v want="$1" 'go == 0 && index($0, want) { go = 1 }
+        go == 1 { print; if ($0 !~ /\\$/) exit }' "$PROVISION"
+}
+RH_DIE="$(sed -n '/^root_helper_die() {/,/^}/p' "$PROVISION")"
+SITE_FRP="$(stmt 'provision_github_fetch "https://github.com/fatedier/frp/')"
+SITE_MANIFEST="$(sed -n '/^[[:space:]]*_MANIFEST_TMP="\$(mktemp)"/,/^[[:space:]]*rm -f "\$_MANIFEST_TMP"$/p' "$PROVISION")"
+SITE_CLI="$(stmt 'provision_github_fetch "https://raw.githubusercontent.com/Alakazam-211/K2/v$K2_VERSION/cli/k2"')"
+SITE_LEGACY="$(stmt 'provision_github_fetch "$LEGACY_URL"')"
+SITE_PG="$(stmt 'provision_github_fetch "$RAW_BASE/scripts/k2-pg-helper"')"
+LEGACY_URL_LINE="$(grep -m1 '^[[:space:]]*LEGACY_URL=' "$PROVISION")"
+for v in RH_DIE SITE_FRP SITE_MANIFEST SITE_CLI SITE_LEGACY SITE_PG LEGACY_URL_LINE; do
+    eval "x=\$$v"
+    [ -n "$x" ] && ok "provision: found $v" || bad "provision: $v not found"
+done
+# The CLI's line writes /usr/local/bin/k2: here it writes the scratch copy.
+SITE_CLI="$(printf '%s\n' "$SITE_CLI" | sed "s#/usr/local/bin/k2#\"\$O/k2\"#")"
+# site_run <name> <mode> <the site's lines> <setup>: sets OUT, ERR, RC.
+site_run() {
+    printf '%s\n' "$2" >"$WORK/mode"
+    : >"$WORK/gh.log"; : >"$WORK/off.log"; : >"$WORK/curl.log"; : >"$WORK/standin.log"
+    rm -rf "$WORK/site-out"; mkdir -p "$WORK/site-out"
+    {
+        echo 'set -euo pipefail'
+        printf '%s\n' "$DIE" "$RH_DIE" "$RAW_BASE_LINE" "$FETCH_BLOCK"
+        echo 'O="$1"'
+        printf '%s\n' "$4" "$3"
+    } >"$WORK/site.sh"
+    set +e
+    env -i PATH="$STUBS:/usr/bin:/bin" HOME="$H" TMPDIR="$T" K2_TOKEN="$TOKEN" \
+        bash "$WORK/site.sh" "$WORK/site-out" </dev/null >"$WORK/out" 2>"$WORK/err"
+    RC=$?
+    set -e
+    OUT="$(cat "$WORK/out")"
+    ERR="$(cat "$WORK/err")"
+    [ ! -s "$WORK/standin.log" ] && ok "provision $1 $2: no system tool ran" \
+        || { bad "provision $1 $2: a stand-in ran"; show "$(cat "$WORK/standin.log")"; }
+}
+PROV_RED='\033[1;31m[provision] ERROR:\033[0m'
+OFF_LINE="Error: GitHub redirected to https://evil.example, which is not GitHub; nothing was sent there"
+# name|the site's variable|its setup|the file it writes|what lands there|its stop line after OFF_LINE (empty: none)
+while IFS='|' read -r name var setup file want stop; do
+    eval "site=\$$var"
+    # The legacy line's URL comes from the script; the manifest's version is
+    # printed so the row can read it.
+    [ "$name" = legacy ] && setup="$setup
+$LEGACY_URL_LINE"
+    [ "$name" = manifest ] && site="$site
+echo \"K2_VERSION=\$K2_VERSION\""
+    site_run "$name" moved "$site" "$setup"
+    same "provision $name, a moved repository: exit 0" "$RC" 0
+    same "provision $name, a moved repository: stderr empty" "$ERR" ""
+    if [ "$name" = manifest ]; then
+        same "provision manifest, a moved repository: the version read" "$OUT" "K2_VERSION=0.46.7"
+    else
+        same "provision $name, a moved repository: the file" "$(cat "$WORK/site-out/$file" 2>&1)" "$want"
+    fi
+    gh_count "provision $name, a moved repository" 2
+    grep -q ' /Moved-Org/' "$WORK/gh.log" && ok "provision $name: asked the new path" || { bad "provision $name: never asked the new path"; show "$(cat "$WORK/gh.log")"; }
+    nothing_else "provision $name, a moved repository"
+    site_run "$name" "to:https://evil.example/x" "$site" "$setup"
+    [ "$RC" -ne 0 ] && ok "provision $name, off GitHub: exit $RC" || bad "provision $name, off GitHub: exit 0"
+    if [ -n "$stop" ]; then
+        same "provision $name, off GitHub: the lines" "$ERR" "$(printf "%s\n$PROV_RED %s" "$OFF_LINE" "$stop")"
+    else
+        same "provision $name, off GitHub: the line" "$ERR" "$OFF_LINE"
+    fi
+    gh_count "provision $name, off GitHub" 1
+    nothing_else "provision $name, off GitHub"
+done <<'EOF'
+frp|SITE_FRP|FRP_VERSION=0.61.1; FRP_DIR=frp_0.61.1_linux_amd64; TMP="$O"|frp.tar.gz|stand-in frp|
+manifest|SITE_MANIFEST|K2_VERSION=""|-|-|could not resolve the latest daemon release; set K2_VERSION=<x.y.z>
+cli|SITE_CLI|K2_VERSION=0.46.7|k2|stand-in cli|could not fetch the k2 CLI for v0.46.7
+legacy|SITE_LEGACY|DAEMON_VERSION=0.45.3; LEGACY_TMP="$O"|install-mail-helper.sh|stand-in legacy|root helper: could not download https://github.com/Alakazam-211/K2/releases/download/v0.45.3/install-mail-helper.sh — provisioning stopped. Fix it and re-run this script (idempotent), or run install-root-helper.sh --version <daemon version> by hand.
+pg|SITE_PG|PG_HELPER_SRC="$O/k2-pg-helper"|k2-pg-helper|stand-in pg|could not download k2-pg-helper for the legacy daemon
+EOF
+
 echo "== raw.githubusercontent.com is the provisioning script's only: k2 update refuses it =="
 run "to:https://raw.githubusercontent.com/x" update --app
 same "k2 update to raw: exit 1" "$RC" 1

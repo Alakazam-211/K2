@@ -17,7 +17,11 @@
 //!      the terminal, the POST, and up to ten reads of its state, half a
 //!      second apart, until it is no longer waiting.
 //!
-//!    Each request is `_compute_call` ([`cp::call`]).
+//!    Each request is `_sf_call` ([`sf_call`]): in a session (`HOOK_SOCK`
+//!    set, no remote host) it carries the session's passport, never the
+//!    owner token, also when the cell socket doesn't serve the route and
+//!    it goes over TCP; a session with no passport is [`NO_PASSPORT`],
+//!    exit 3, nothing sent. Then `_compute_call` ([`cp::call`]).
 //! 3. The EXIT trap's lines ([`cp::close`]).
 //!
 //! `[[:space:]]` is read as the C locale reads it (ASCII white space), as
@@ -57,6 +61,26 @@ const SETTINGS_USAGE: &str = concat!(
     cli_name!(),
     " send-feedback settings [--enabled on|off] [--agents off|cli|all] [--attach <parts>|none|all] [--agent-diagnostics on|off] [--json]"
 );
+
+/// `_sf_session_token`'s line: a session with no passport.
+pub const NO_PASSPORT: &str = concat!(
+    "Error: in a session, ",
+    cli_name!(),
+    " send-feedback doesn't act as this server's owner, and this session has no passport, so nothing was sent."
+);
+
+/// `_sf_call <GET|POST> <path> [payload]`: `_sf_session_token`, then
+/// `_compute_call`. In a session on this machine with no passport: its
+/// line, exit 3, nothing sent. With one, the client's TCP credential is
+/// the passport already (there is no owner token in it).
+fn sf_call(ctx: &mut Ctx, post: bool, path: &str, payload: &str) -> Result<Vec<u8>, Exit> {
+    let c = &ctx.client;
+    if c.session && !c.force_tcp && c.passport().is_none() {
+        out::stderr_line(NO_PASSPORT);
+        return Err(Exit::Refused);
+    }
+    cp::call(ctx, post, path, payload)
+}
 
 /// `k5 send-feedback ...`: `args` is the whole command line after
 /// `argv[0]`. `None`: the shell CLI answers it.
@@ -282,7 +306,7 @@ fn send(ctx: &mut Ctx, words: &[&str]) -> Exit {
             .s("page", "cli")
             .s("cliVersion", crate::embedded::version())
             .body();
-        let preview = match cp::call(ctx, true, "/cli/product-feedback/diagnostics", &d) {
+        let preview = match sf_call(ctx, true, "/cli/product-feedback/diagnostics", &d) {
             Ok(b) => b,
             Err(e) => return e,
         };
@@ -350,7 +374,7 @@ fn send(ctx: &mut Ctx, words: &[&str]) -> Exit {
     }
     let payload =
         json::to_string(&Value::Object(b), &Options::default()).expect("json.dumps of strings");
-    let answer = match cp::call(ctx, true, "/cli/product-feedback/send", &payload) {
+    let answer = match sf_call(ctx, true, "/cli/product-feedback/send", &payload) {
         Ok(b) => b,
         Err(e) => return e,
     };
@@ -365,7 +389,7 @@ fn send(ctx: &mut Ctx, words: &[&str]) -> Exit {
     let query = format!("id={}", quote(&id));
     let mut shown = Vec::new();
     for _ in 0..10 {
-        shown = match cp::call(ctx, false, "/cli/product-feedback/show", &query) {
+        shown = match sf_call(ctx, false, "/cli/product-feedback/show", &query) {
             Ok(b) => b,
             Err(e) => return e,
         };
@@ -537,7 +561,7 @@ fn list(ctx: &mut Ctx, rest: &[&str]) -> Exit {
     } else {
         format!("state={}", quote(&state))
     };
-    let body = match cp::call(ctx, false, "/cli/product-feedback/list", &q) {
+    let body = match sf_call(ctx, false, "/cli/product-feedback/list", &q) {
         Ok(b) => b,
         Err(e) => return e,
     };
@@ -641,7 +665,7 @@ fn show_one(ctx: &mut Ctx, rest: &[&str]) -> Exit {
     if id.is_empty() {
         return usage(SHOW_USAGE);
     }
-    let body = match cp::call(
+    let body = match sf_call(
         ctx,
         false,
         "/cli/product-feedback/show",
@@ -761,7 +785,7 @@ fn transition(ctx: &mut Ctx, verb: &str, rest: &[&str]) -> Exit {
         }
     };
     let body = Cj::new().s("id", id).body();
-    if let Err(e) = cp::call(ctx, true, &format!("/cli/product-feedback/{verb}"), &body) {
+    if let Err(e) = sf_call(ctx, true, &format!("/cli/product-feedback/{verb}"), &body) {
         return e;
     }
     stdout_line(&if verb == "retry" {
@@ -877,7 +901,7 @@ fn settings(ctx: &mut Ctx, rest: &[&str]) -> Exit {
         Err(line) => return usage(&line),
     };
     let body = match settings_calls(&a, &mut |post, payload| {
-        cp::call(ctx, post, SETTINGS, payload)
+        sf_call(ctx, post, SETTINGS, payload)
     }) {
         Ok(b) => b,
         Err(e) => return e,

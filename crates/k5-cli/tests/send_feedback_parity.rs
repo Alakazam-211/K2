@@ -396,3 +396,70 @@ fn the_lines_say_the_brand_s_names() {
         assert!(log.is_empty(), "{args:?}");
     }
 }
+
+/// In a session (`HOOK_SOCK` set) every request carries the session's
+/// passport, never the owner token from disk, also over TCP when there is
+/// no cell socket; a session with no passport is one line, exit 3, and
+/// nothing is sent, the words' usage lines first (`_sf_session_token`).
+#[test]
+fn a_session_sends_its_passport_or_nothing() {
+    let rig = Rig::new("send-feedback", "session");
+    let no_passport = |name: &'static str, args: &'static [&'static str], code: i32| {
+        case(
+            name,
+            args,
+            &[("K2_HOOK_SOCK", "{nosock}")],
+            vec![],
+            owner_and_port,
+            code,
+            0,
+        )
+    };
+    let passport = |name: &'static str, args: &'static [&'static str], replies: Vec<Reply>| {
+        let n = replies.len();
+        Case {
+            env: with_passport(&[("K2_HOOK_SOCK", "{nosock}")]),
+            ..case(name, args, &[], replies, port_only, 0, n)
+        }
+    };
+    let v = vec![
+        no_passport("no passport: list", &["list"], 3),
+        no_passport("no passport: show", &["show", "pf_1"], 3),
+        no_passport("no passport: retry", &["retry", "pf_1"], 3),
+        no_passport("no passport: cancel", &["cancel", "pf_1"], 3),
+        no_passport("no passport: settings", &["settings"], 3),
+        no_passport(
+            "no passport: settings --enabled off",
+            &["settings", "--enabled", "off"],
+            3,
+        ),
+        no_passport(
+            "no passport: the opt-in",
+            &["settings", "--agents", "cli"],
+            3,
+        ),
+        no_passport("no passport: a report", &["it broke"], 3),
+        no_passport(
+            "no passport: a report with diagnostics",
+            &["it broke", "--diagnostics", "--yes"],
+            3,
+        ),
+        no_passport("no passport: a usage line first", &["list", "--state"], 2),
+        no_passport("no passport: show with no id", &["show"], 2),
+        passport("a passport over TCP: list", &["list"], vec![ok(r#"{"items":[]}"#)]),
+        passport(
+            "a passport over TCP: the opt-in",
+            &["settings", "--agents", "cli"],
+            vec![ok(NEW_SETTINGS), ok(NEW_SETTINGS)],
+        ),
+        passport(
+            "a passport over TCP: a report with diagnostics",
+            &["x broke", "--category", "bug", "--diagnostics", "--yes"],
+            vec![ok(DIAG), ok(r#"{"id":"pf_1"}"#), ok(SENT)],
+        ),
+        passport("a passport over TCP: retry", &["retry", "pf_1"], vec![ok("{}")]),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}

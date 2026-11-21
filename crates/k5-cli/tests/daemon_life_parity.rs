@@ -1355,8 +1355,10 @@ fn daemon_verbs_keep_the_gates() {
     }
 }
 
-/// Help never acts: with `-h` or `--help` on the line the front hands it
-/// to the shell, which prints its usage line and touches nothing.
+/// Help never acts: with `-h` or `--help` on the line it prints the
+/// shell's usage line and touches nothing. A line that is exactly a
+/// captured help form (`stop -h`, `restart -h`) is the binary's page;
+/// any other is handed to the shell.
 #[test]
 fn daemon_help_lines_never_act() {
     let r = rig("help");
@@ -1391,7 +1393,8 @@ fn daemon_help_lines_never_act() {
         ),
     ];
     for c in rows {
-        check(&r, &c, &[], false);
+        let page = matches!(c.name, "stop -h" | "restart -h");
+        check(&r, &c, &[], page);
     }
 }
 
@@ -2498,7 +2501,9 @@ fn port_only_install(r: &Rig) {
 }
 
 /// Help never acts: `install -h` anywhere is the shell's help, with no
-/// fetch, no service call and nothing written.
+/// fetch, no service call and nothing written. `install -h` alone is a
+/// captured help form, the binary's page; with more words it is handed
+/// to the shell.
 #[test]
 fn daemon_install_help_never_acts() {
     let r = rig("install-help");
@@ -2523,7 +2528,7 @@ fn daemon_install_help_never_acts() {
         ),
     ];
     for c in rows {
-        check(&r, &c, &[], false);
+        check(&r, &c, &[], c.name == "install -h");
         assert!(installed(&r).is_empty(), "{}: wrote a file", c.name);
     }
 }

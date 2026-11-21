@@ -790,6 +790,7 @@ mod tests {
         ("k2-control-plane.service", "K2 Connect control plane; an allowed target"),
         ("k2a-daemon.service", "test fixture: a daemon.toml unit"),
         ("k2b-daemon.service", "test fixture: a daemon.toml unit"),
+        ("k2iso-daemon.service", "the isolation test box's persistent test daemon (agent-isolation-m1b-kernel-tests.sh), never a fleet unit"),
         ("k2-user.service", "test fixture: a user-scope daemon.toml unit"),
         ("k2-gone.service", "test fixture: a removed daemon"),
         ("k2-front-443.service", "doc: the service systemd would look for, never written"),

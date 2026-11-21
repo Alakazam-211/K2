@@ -2727,7 +2727,7 @@ mod unix_impl {
         #[test]
         fn only_the_not_served_arms_flag_no_handler_ran() {
             let none = HashMap::new();
-            let ((status, _, body), unserved) = dispatch_cell_verb_flagged("POST", "/cli/capabilities", &none, b"", &principal(), "sid-t2");
+            let ((status, _, body), unserved) = dispatch_cell_verb_flagged("POST", "/cli/skin/users/sessions/revoke", &none, b"{}", &principal(), "sid-t2");
             assert!(unserved && status.starts_with("404") && body.contains(NOT_SERVED_HERE), "{status} {body}");
             let mut q = HashMap::new();
             q.insert("project".to_string(), format!("/nowhere/{NOT_SERVED_HERE}"));

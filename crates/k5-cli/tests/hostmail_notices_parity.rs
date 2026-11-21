@@ -7,7 +7,7 @@
 //! - ooo set (the text itself, from a file with its trailing newlines
 //!   dropped, days, until), unset and show (on with its text, off);
 //!   footer set, unset (with and without a domain) and show.
-//! - `--text -` is the shell's: the case runs the shell on both sides.
+//! - `--text -`: the text on stdin, read past the gates; none; twice.
 //! - A refusal, an answer the Python raises on, and no answer.
 //! - Help never acts.
 
@@ -252,17 +252,63 @@ fn hostmail_notices_answer_as_the_shell_does() {
             &["footer", "show"],
             r#"{"ok":true,"enabled":true,"text":""}"#,
         ),
-        compare(
-            Compare::Shell,
-            Case {
-                stdin: Some(b"Away from stdin.\n"),
-                ..ok_case(
-                    "ooo set, the text on stdin: the shell's",
-                    &["ooo", "set", "sales@acme.example", "--text", "-"],
-                    r#"{"ok":true}"#,
-                )
-            },
+        // native: hostmail ooo set --text -
+        Case {
+            stdin: Some(b"Away from stdin.\nBack \xc3\xa9 soon.\n\n"),
+            ..ok_case(
+                "ooo set, the text on stdin",
+                &["ooo", "set", "sales@acme.example", "--text", "-"],
+                r#"{"ok":true,"address":"sales@acme.example"}"#,
+            )
+        },
+        ok_case(
+            "ooo set, the text on stdin: none (closed)",
+            &["ooo", "set", "sales@acme.example", "--text", "-", "--json"],
+            r#"{"ok":true}"#,
         ),
+        Case {
+            stdin: Some(b"read once"),
+            ..ok_case(
+                "ooo set, stdin twice: the second reads nothing",
+                &["ooo", "set", "a@x", "--text", "-", "--text", "-"],
+                r#"{"ok":true}"#,
+            )
+        },
+        Case {
+            stdin: Some(b"read once"),
+            ..ok_case(
+                "ooo set, stdin then the text itself",
+                &["ooo", "set", "a@x", "--text", "-", "--text", "Away"],
+                r#"{"ok":true}"#,
+            )
+        },
+        Case {
+            stdin: Some(b"never read"),
+            ..usage_case(
+                "ooo set --text -, a bad --days: the usage",
+                &["ooo", "set", "a@x", "--text", "-", "--days", "99"],
+            )
+        },
+        Case {
+            stdin: Some(b"never read"),
+            ..case(
+                "ooo set --text -, no daemon: the gate first",
+                &["ooo", "set", "a@x", "--text", "-"],
+                &[],
+                vec![],
+                nothing,
+                1,
+                0,
+            )
+        },
+        Case {
+            stdin: Some(b"Sent by Acme.\n"),
+            ..ok_case(
+                "footer set, the text on stdin",
+                &["footer", "set", "--text", "-"],
+                r#"{"ok":true}"#,
+            )
+        },
         case(
             "an agent without the toggle",
             &["footer", "unset"],

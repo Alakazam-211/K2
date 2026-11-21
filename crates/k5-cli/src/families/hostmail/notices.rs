@@ -5,11 +5,16 @@
 //!
 //! `--text` is the text itself, `@<path>` (the file's text) or `-` (stdin),
 //! read by `_hostmail_read_text` inside `$(…)`, so its trailing newlines
-//! are dropped. The binary hands to the shell: `--text -` (once stdin is
-//! read it can't be handed on, and bash drops a NUL in it with a warning
-//! or sends text that is not UTF-8 as Python's environment decodes it),
-//! an `@<path>` file that holds a NUL, is not UTF-8 or can't be read, and
-//! a `--days` past bash's 64-bit integers.
+//! are dropped. `-` is read when the verb runs, past the gates
+//! ([`STDIN`]); a second `-` reads what the first left: nothing. The
+//! binary hands to the shell an `@<path>` file that holds a NUL, is not
+//! UTF-8 or can't be read, and a `--days` past bash's 64-bit integers.
+//!
+//! Where this differs from the shell: text on stdin with a NUL (bash drops
+//! it and warns on stderr, naming its own line; this drops it quietly),
+//! or bytes that are not UTF-8 (Python's environment reads each as
+//! `surrogateescape`, sent as `\udcXX`; this sends U+FFFD). Once stdin is
+//! read the line can't be handed on.
 
 use super::words::{scan, wants_help, Spec};
 use crate::families::mail::core::{self, run_env, usage, At, Plan, Py, MODULE, R};
@@ -54,14 +59,66 @@ pub fn parse(verb: &str, words: &[&str]) -> Plan {
     r.unwrap_or_else(|p| p)
 }
 
+/// Set (to `1`) where `--text -` was the last `--text`: the verb reads
+/// stdin for `M_TEXT` when it runs ([`text`]).
+pub const STDIN: &str = "M_TEXT_STDIN";
+
+/// What a `--text` gives.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Text {
+    Given(String),
+    /// `-`: stdin, read when the verb runs.
+    Stdin,
+}
+
+/// The last `--text`: what it gives, or nothing where a `-` before it
+/// had read stdin already.
+#[derive(Debug, Default)]
+struct Texts {
+    last: Option<Text>,
+    stdin_read: bool,
+}
+
+impl Texts {
+    fn take(&mut self, t: Text) {
+        if self.last == Some(Text::Stdin) {
+            self.stdin_read = true;
+        }
+        self.last = Some(match t {
+            Text::Stdin if self.stdin_read => Text::Given(String::new()),
+            t => t,
+        });
+    }
+
+    /// `M_TEXT` and [`STDIN`] for the verb, or `None` with no `--text`.
+    fn env(self) -> Option<(String, &'static str)> {
+        match self.last? {
+            Text::Given(t) => Some((t, "")),
+            Text::Stdin => Some((String::new(), "1")),
+        }
+    }
+}
+
+/// `M_TEXT`: the text, read from stdin now where it was `--text -`
+/// (`$(cat)`: NULs and trailing newlines dropped).
+fn text(py_: &mut Py) -> String {
+    if py_.env(STDIN) == "1" {
+        let all = crate::prompt::read_all_stdin();
+        let t = String::from_utf8_lossy(all.expose()).into_owned();
+        py_.env.set(STDIN, "");
+        py_.env.set("M_TEXT", t);
+    }
+    py_.env("M_TEXT").to_string()
+}
+
 /// `text="$(_hostmail_read_text "$raw")"`: the text, the usage line, or
 /// the shell's (`Err(Plan::Shell)`).
-fn read_text(raw: &str) -> Result<String, Plan> {
+fn read_text(raw: &str) -> Result<Text, Plan> {
     if raw == "-" {
-        return Err(Plan::Shell);
+        return Ok(Text::Stdin);
     }
     let Some(path) = raw.strip_prefix('@') else {
-        return Ok(raw.trim_end_matches('\n').to_string());
+        return Ok(Text::Given(raw.trim_end_matches('\n').to_string()));
     };
     if path.is_empty() {
         return Err(usage("--text @path needs a path"));
@@ -74,7 +131,7 @@ fn read_text(raw: &str) -> Result<String, Plan> {
         return Err(Plan::Shell);
     }
     let text = String::from_utf8(bytes).map_err(|_| Plan::Shell)?;
-    Ok(text.trim_end_matches('\n').to_string())
+    Ok(Text::Given(text.trim_end_matches('\n').to_string()))
 }
 
 /// A value flag's value, or its usage line.
@@ -138,7 +195,7 @@ fn ooo_set(words: &[&str]) -> Result<Plan, Plan> {
         "{CLI_NAME} hostmail ooo set <addr> --text FILE_OR_STRING [--days N] [--until DATE]"
     );
     let (mut address, mut text, mut days, mut until) =
-        (String::new(), None::<String>, String::new(), String::new());
+        (String::new(), Texts::default(), String::new(), String::new());
     let mut json = false;
     let mut i = 0;
     while i < words.len() {
@@ -146,7 +203,7 @@ fn ooo_set(words: &[&str]) -> Result<Plan, Plan> {
             "--json" => json = true,
             "--text" => {
                 let raw = value(words, i, "--text requires a value (literal, @path, or -)")?;
-                text = Some(read_text(raw)?);
+                text.take(read_text(raw)?);
                 i += 1;
             }
             "--days" => {
@@ -179,7 +236,7 @@ fn ooo_set(words: &[&str]) -> Result<Plan, Plan> {
     if address.is_empty() {
         return Err(usage(use_));
     }
-    let Some(text) = text else {
+    let Some((text, stdin)) = text.env() else {
         return Err(usage("ooo set needs --text (literal, @path, or -)"));
     };
     if !days.is_empty() {
@@ -194,6 +251,7 @@ fn ooo_set(words: &[&str]) -> Result<Plan, Plan> {
         run_env("ooo_set", json)
             .with("M_ADDRESS", address)
             .with("M_TEXT", text)
+            .with(STDIN, stdin)
             .with("M_DAYS", days)
             .with("M_UNTIL", until),
     ))
@@ -223,14 +281,14 @@ fn footer(words: &[&str]) -> Result<Plan, Plan> {
         other => format!("{CLI_NAME} hostmail footer {other}"),
     };
     let reserved = "--domain is reserved (footer is host-wide)";
-    let (mut text, mut domain, mut json) = (None::<String>, String::new(), false);
+    let (mut text, mut domain, mut json) = (Texts::default(), String::new(), false);
     let mut i = 0;
     while i < rest.len() {
         match rest[i] {
             "--json" => json = true,
             "--text" if *sub == "set" => {
                 let raw = value(rest, i, "--text requires a value (literal, @path, or -)")?;
-                text = Some(read_text(raw)?);
+                text.take(read_text(raw)?);
                 i += 1;
             }
             "--domain" if *sub == "show" => {
@@ -251,11 +309,12 @@ fn footer(words: &[&str]) -> Result<Plan, Plan> {
     }
     Ok(Plan::Run(match *sub {
         "set" => {
-            let Some(text) = text else {
+            let Some((text, stdin)) = text.env() else {
                 return Err(usage("footer set needs --text (literal, @path, or -)"));
             };
             run_env("footer_set", json)
                 .with("M_TEXT", text)
+                .with(STDIN, stdin)
                 .with("M_DOMAIN", domain)
         }
         "unset" => run_env("footer_unset", json).with("M_DOMAIN", domain),
@@ -329,7 +388,7 @@ fn ooo_get_py(py_: &mut Py) -> R<()> {
 fn ooo_set_py(py_: &mut Py) -> R<()> {
     let mut body = vec![
         ("address", sv(py_.env("M_ADDRESS"))),
-        ("text", sv(py_.env("M_TEXT"))),
+        ("text", sv(&text(py_))),
     ];
     if !py_.env("M_DAYS").is_empty() {
         let n = p::py_int(&sv(py_.env("M_DAYS"))).at(line::OOO_SET_DAYS, MODULE)?;
@@ -385,7 +444,7 @@ fn footer_get_py(py_: &mut Py) -> R<()> {
 fn footer_change_py(py_: &mut Py, set: bool) -> R<()> {
     let mut body = Vec::new();
     if set {
-        body.push(("text", sv(py_.env("M_TEXT"))));
+        body.push(("text", sv(&text(py_))));
     }
     if !py_.env("M_DOMAIN").is_empty() {
         body.push(("domain", sv(py_.env("M_DOMAIN"))));

@@ -210,7 +210,9 @@ pub fn parse(words: &[&str]) -> Line {
         sels: Vec::new(),
         form,
     };
-    if words.is_empty() || words.iter().any(|w| matches!(*w, "--help" | "-h")) {
+    // `_wants_help`: a help word before the first bare `--` (after it,
+    // `db run`'s command's own).
+    if words.is_empty() || crate::dashdash::wants_help(words) {
         return plain(Form::Help);
     }
     if words[0] == "home" {

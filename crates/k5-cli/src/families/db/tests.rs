@@ -246,6 +246,8 @@ fn ask(words: &[&str]) -> Ask {
 fn the_words_come_to_the_shell_s_forms() {
     assert_eq!(form(&[]), Form::Help);
     assert_eq!(form(&["list", "-h"]), Form::Help);
+    assert_eq!(form(&["run", "-h", "--", "x"]), Form::Help);
+    assert_ne!(form(&["run", "--", "x", "-h"]), Form::Help);
     assert_eq!(
         hint(&["help"]),
         concat!(

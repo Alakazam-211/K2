@@ -375,11 +375,7 @@ fn token_in(file: &Path) -> String {
 
 /// What the verbs say the daemon is at: `$BASE_URL`.
 fn base_url(s: &Settings) -> String {
-    format!(
-        "http://{}:{}",
-        s.host,
-        s.port_text.as_deref().unwrap_or_default()
-    )
+    crate::transport::remote::daemon_base(&s.host, s.port_text.as_deref().unwrap_or_default())
 }
 
 /// `_daemon_local_post <path> 2>/dev/null | grep -q <want>`.

@@ -141,6 +141,20 @@ pub fn plain_http_line(url: &str) -> String {
     format!("Error: plain http:// only to this computer; use https:// (got: {url})")
 }
 
+/// `BASE_URL` as the shell's `_k2_daemon_base` writes it for `host` and
+/// the port's text: `https://<name>:<port>` for an `https://` (or
+/// `HTTPS://`) host, one trailing `/` of the name dropped, else
+/// `http://<host>:<port>`.
+pub fn daemon_base(host: &str, port: &str) -> String {
+    match host
+        .strip_prefix("https://")
+        .or_else(|| host.strip_prefix("HTTPS://"))
+    {
+        Some(rest) => format!("https://{}:{port}", rest.strip_suffix('/').unwrap_or(rest)),
+        None => format!("http://{host}:{port}"),
+    }
+}
+
 /// `K2_HOST=https://<name>` (or `HTTPS://`): a daemon behind K2's TLS or
 /// K2 Connect. The shell's `_k2_daemon_base` makes `BASE_URL`
 /// `https://<name>:<PORT>` (one trailing `/` of the name dropped), and
@@ -448,6 +462,15 @@ fn run_quiet(program: &str, args: &[&str]) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn daemon_base_is_the_shell_s() {
+        assert_eq!(daemon_base("127.0.0.1", "1234"), "http://127.0.0.1:1234");
+        assert_eq!(daemon_base("box.lan", "1"), "http://box.lan:1");
+        assert_eq!(daemon_base("https://acme.example/", "443"), "https://acme.example:443");
+        assert_eq!(daemon_base("HTTPS://acme.example", "443"), "https://acme.example:443");
+        assert_eq!(daemon_base("127.0.0.1", ""), "http://127.0.0.1:");
+    }
+
     use super::*;
 
     #[test]

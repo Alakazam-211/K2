@@ -229,10 +229,9 @@ fn run_with(args: &[OsString], ready: Ready, mut settings: Settings) -> Exit {
     };
     let mut ws = Ws {
         closing: Closing::default(),
-        base_url: format!(
-            "http://{}:{}",
-            settings.host,
-            settings.port_text.as_deref().unwrap_or_default()
+        base_url: crate::transport::remote::daemon_base(
+            &settings.host,
+            settings.port_text.as_deref().unwrap_or_default(),
         ),
     };
     let project = settings.project.clone();

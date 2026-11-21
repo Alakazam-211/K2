@@ -11,11 +11,21 @@
 //!    `owner-token-with-passport`, PRD 13.9 #4).
 //! 2. The verb, `${1:-status}`; an unknown one is three usage lines on
 //!    stderr, exit 2.
-//! 3. `on` and `off`: `cli_post_json /cli/settings/update
-//!    {"apiEnabled":true|false}` over TCP, on the left of a pipe into the
-//!    shell's Python ([`switch_reader`]), whose lines all go to stdout. No
-//!    answer is the transport's line, then death by SIGPIPE
-//!    ([`super::end_in_pipe`]).
+//! 3. `on` and `off`: `resp=$(cli_post_json /cli/settings/update
+//!    {"apiEnabled":true|false})` over TCP. `$(…)` drops the answer's NULs
+//!    and trailing newlines ([`super::connections::held`]). A call that
+//!    failed ends the command there with its code (`set -e`); one with no
+//!    answer is the transport's line and exit 1. Then the shell's Python
+//!    on `resp` ([`saved_reader`]): the daemon's error, an answer that is
+//!    not JSON or a raise is what it printed, held by `saved=$(…)` and
+//!    printed again with one newline, exit 1. Else the switch as the
+//!    answer says it was saved (not as the verb asked):
+//!    - on: the ON line;
+//!    - off: `/boot-status` read as `status` reads it (step 4), then
+//!      [`off_reader`] on `api.enabled`: `true` (an env flag forces the
+//!      surface on) is [`STILL_ON`] on stderr, exit 1, no OFF line;
+//!      `false` is the OFF line; anything else the OFF line and
+//!      [`NOTE_OFF`].
 //! 4. `status`: `_k2_curl` of `/boot-status` with the token as Bearer, at
 //!    most 10 s, any failure read as nothing; then `cli_request
 //!    /cli/settings/get` (no answer: the line and exit 1; any other failure
@@ -26,9 +36,16 @@
 //! those on), a word that is not UTF-8, a port curl won't take, and a
 //! `python3` the binary can't tell. Where the shell's Python raises, this
 //! prints a Python 3.12 traceback.
+//!
+//! `on`/`off` hand both answers to Python in an environment variable. One
+//! above what a variable may hold (128 KiB on Linux) stops bash there
+//! ("Argument list too long"); the binary reads it, as in the cases of
+//! the named difference `env-answer-large` (`scripts/cli-parity.sh`).
+//! No row here: neither answer comes near that size.
 
 use super::skin_token::py::{self, at, dict};
-use super::{curl_port, end_in_pipe, piped_body, pipefail, raised, Piped, Raise, Shown};
+use super::connections::held;
+use super::{curl_port, Raise, Shown};
 use crate::daemon::{self, Settings};
 use crate::exit::Exit;
 use crate::out::json::{Text, Value};
@@ -66,12 +83,14 @@ pub const NOTE_OFF: &str = concat!(
     cli_name!(),
     " api status"
 );
+/// `off` when the surface stays on: on stderr, exit 1, no OFF line.
+pub const STILL_ON: &str = "The public API is still ON: K2_API or K2_SANDBOX_API is set in the daemon's environment and forces it on. The setting is saved as off; to turn the API off, remove that variable from the daemon's service and restart it.";
 /// `status` when the env flag forces the surface on.
 pub const FORCED: &str = "  (forced on by the K2_API or legacy K2_SANDBOX_API env flag)";
 
 /// The lines of the shell's Python that raise (`tests` pins them).
 pub mod line {
-    /// `on`/`off`'s `python3 -c "…"`.
+    /// `on`/`off`'s `python3 -c '…'` on the settings answer.
     pub mod switch {
         pub const IN: u32 = 9;
         pub const INDEX: u32 = 10;
@@ -149,11 +168,7 @@ fn run_with(args: &[OsString], ask: Ask, mut settings: Settings) -> Exit {
     };
     let mut closing = Closing::default();
     let exit = match ask {
-        Ask::Switch(on) => {
-            let left = post_piped(&mut client, &mut closing, on);
-            let shown = switch_reader(&String::from_utf8_lossy(&left.body));
-            pipefail(left.exit, shown.print())
-        }
+        Ask::Switch(on) => switch(&mut client, &mut closing, on),
         Ask::Status => status(&mut client, &mut closing),
         Ask::Usage => Exit::Usage,
     };
@@ -161,52 +176,78 @@ fn run_with(args: &[OsString], ask: Ask, mut settings: Settings) -> Exit {
     exit
 }
 
-/// `cli_post_json /cli/settings/update '{"apiEnabled":<on>}'` on the left
-/// of a pipe.
-fn post_piped(client: &mut Client, closing: &mut Closing, on: bool) -> Piped {
+/// `on`/`off`: the settings post, the Python on its answer, then for a
+/// switch saved as off the surface as `/boot-status` gives it.
+fn switch(client: &mut Client, closing: &mut Closing, on: bool) -> Exit {
     let body = format!("{{\"apiEnabled\":{on}}}");
     let passport = client.passport().is_some();
-    match client.call(Channel::Tcp, UPDATE, Call::PostJson(body.as_bytes())) {
+    let resp = match client.call(Channel::Tcp, UPDATE, Call::PostJson(body.as_bytes())) {
         Ok(r) => {
             closing.answer(&r, passport);
-            Piped {
-                body: piped_body(&r),
-                exit: Exit::Ok,
-            }
+            held(&r.body)
         }
         Err(Error::NoAnswer(n)) => {
             out::stderr_line(&n.to_string());
-            end_in_pipe()
+            return Exit::Error;
         }
-        Err(e) => Piped {
-            body: Vec::new(),
-            exit: Exit::from_curl(e.curl_code()),
-        },
+        Err(e) => return Exit::from_curl(e.curl_code()),
+    };
+    match saved_reader(&String::from_utf8_lossy(&resp)) {
+        Saved::On => Shown::out(format!("{}\n", setting_line(true))).print(),
+        Saved::Failed(shown) => shown.print(),
+        Saved::Off => {
+            let boot = match client.get_boot_status(BOOT) {
+                Ok(r) => held(&r.body),
+                Err(_) => Vec::new(),
+            };
+            off_reader(&String::from_utf8_lossy(&boot)).print()
+        }
     }
 }
 
-/// `on`/`off`'s Python on what the call printed.
-pub fn switch_reader(raw: &str) -> Shown {
+/// `Public /v1 API setting: ON|OFF (…)`.
+pub fn setting_line(on: bool) -> String {
+    format!(
+        "Public /v1 API setting: {} (live now \u{2014} no restart needed)",
+        if on { "ON" } else { "OFF" }
+    )
+}
+
+/// What `saved=$(python3 …)` made of the settings answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Saved {
+    On,
+    Off,
+    /// The Python failed: what the shell prints then (`printf '%s\n'
+    /// "$saved"` on stdout, Python's traceback on stderr), exit 1.
+    Failed(Shown),
+}
+
+/// The Python on the settings answer (what `resp=$(…)` held).
+pub fn saved_reader(raw: &str) -> Saved {
+    let failed = |stdout: &str, stderr: String| {
+        // `$(…)` drops the NULs and the trailing newlines; printf adds one.
+        let held: String = stdout.chars().filter(|c| *c != '\0').collect();
+        Saved::Failed(Shown {
+            stdout: format!("{}\n", held.trim_end_matches('\n')),
+            stderr,
+            exit: Exit::Error,
+        })
+    };
     let Ok(d) = crate::out::json::parse(raw) else {
         let head = Value::Str(Text::from(py::head(raw, 200)));
-        return Shown {
-            stdout: format!("{UNPARSEABLE}{}\n", pyout::repr(&head)),
-            stderr: String::new(),
-            exit: Exit::Error,
-        };
+        return failed(&format!("{UNPARSEABLE}{}\n", pyout::repr(&head)), String::new());
     };
-    let mut stdout = String::new();
-    match switch_lines(&d, &mut stdout) {
-        Ok(exit) => Shown {
-            stdout,
-            stderr: String::new(),
-            exit,
-        },
-        Err(r) => raised(stdout, String::new(), &r),
+    match saved_on(&d) {
+        Ok(Ok(true)) => Saved::On,
+        Ok(Ok(false)) => Saved::Off,
+        Ok(Err(line)) => failed(&line, String::new()),
+        Err(r) => failed("", r.text()),
     }
 }
 
-fn switch_lines(d: &Value, o: &mut String) -> Result<Exit, Raise> {
+/// The switch as saved, or the daemon's `Error: …` line.
+fn saved_on(d: &Value) -> Result<Result<bool, String>, Raise> {
     if py::py_in("error", d, line::switch::IN)? {
         let err = match d {
             Value::Object(_) => at(d, "error").cloned().unwrap_or(Value::Null),
@@ -223,20 +264,30 @@ fn switch_lines(d: &Value, o: &mut String) -> Result<Exit, Raise> {
                 ))
             }
         };
-        o.push_str(&format!("Error: {}\n", pyout::str_of(&err)));
-        return Ok(Exit::Error);
+        return Ok(Err(format!("Error: {}\n", pyout::str_of(&err))));
     }
     let d = dict(d, line::switch::GET)?;
-    let on = at(d, "apiEnabled").is_some_and(pyout::truthy);
-    o.push_str(&format!(
-        "Public /v1 API setting: {} (live now \u{2014} no restart needed)\n",
-        if on { "ON" } else { "OFF" }
-    ));
-    if !on {
-        o.push_str(NOTE_OFF);
-        o.push('\n');
+    Ok(Ok(at(d, "apiEnabled").is_some_and(pyout::truthy)))
+}
+
+/// The surface as the second Python reads `/boot-status` (what `boot=$(…)`
+/// held): `api.enabled` when it is `true` or `false`, else unknown.
+pub fn surface(boot: &str) -> Option<bool> {
+    let d = parse_or_empty(boot);
+    match at(&d, "api").and_then(|api| at(api, "enabled")) {
+        Some(Value::Bool(b)) => Some(*b),
+        _ => None,
     }
-    Ok(Exit::Ok)
+}
+
+/// After a switch saved as off: the lines for the surface `/boot-status`
+/// gives.
+pub fn off_reader(boot: &str) -> Shown {
+    match surface(boot) {
+        Some(true) => Shown::err(format!("{STILL_ON}\n"), Exit::Error),
+        Some(false) => Shown::out(format!("{}\n", setting_line(false))),
+        None => Shown::out(format!("{}\n{NOTE_OFF}\n", setting_line(false))),
+    }
 }
 
 /// `status`: the two reads, then the Python.

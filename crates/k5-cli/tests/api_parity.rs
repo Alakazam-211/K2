@@ -2,7 +2,12 @@
 //! ([`common::parity`]): the same requests, stdout, stderr and exit code.
 //!
 //! - `on` and `off`: the switch's answers, the daemon's error, not JSON,
-//!   Python's raise; a heal; no answer (the line, then SIGPIPE).
+//!   Python's raise; a heal; a call that failed (`set -e`: its code); no
+//!   answer (the line, exit 1).
+//! - `off` reads the surface (`/boot-status` `api.enabled`, as `status`
+//!   does): forced on by an env flag (the still-ON line on stderr, exit 1,
+//!   no OFF line), really off (the OFF line), unknown (the OFF line and the
+//!   note); `on` never reads it (`tests/cli/api_off_forced_on.sh`).
 //! - `status`: the two reads (`/boot-status` with the token as Bearer,
 //!   then `/cli/settings/get`), each answer kind, either one failing.
 //! - The words: `${1:-status}`, the usage lines (exit 2), the gate first.
@@ -22,6 +27,8 @@ use std::time::Duration;
 const VERB: &str = "api";
 const BOOT_ON: &str = r#"{"version":"0.46.17","api":{"enabled":true}}"#;
 const SET_OFF: &str = r#"{"apiEnabled":false,"other":1}"#;
+/// `/boot-status` with no `api` object: the surface is unknown.
+const BOOT_BARE: &str = r#"{"ok":true}"#;
 
 fn traceback(c: Case) -> Case {
     Case {
@@ -41,17 +48,6 @@ fn with(env: Vec<(&'static str, String)>, c: Case) -> Case {
     Case { env, ..c }
 }
 
-/// No answer on the left of the pipe: the line, then SIGPIPE (141);
-/// macOS's bash 3.2 runs the reader on an empty input instead.
-fn in_pipe(c: Case) -> Case {
-    Case {
-        compare: Compare::Bash32PipeReader {
-            stdout: "Error: daemon returned an unparseable response: ''\n",
-            stderr: "",
-        },
-        ..c
-    }
-}
 
 #[test]
 fn api_on_and_off_answer_as_the_shell_does() {
@@ -70,19 +66,19 @@ fn api_on_and_off_answer_as_the_shell_does() {
             "off",
             &["off", "x"],
             &[],
-            vec![ok(r#"{"apiEnabled":false}"#)],
+            vec![ok(r#"{"apiEnabled":false}"#), ok(BOOT_BARE)],
             owner_and_port,
             0,
-            1,
+            2,
         ),
         case(
-            "on, the answer says off",
+            "on, the answer says off: the surface is read",
             &["on"],
             &[],
-            vec![ok("{}")],
+            vec![ok("{}"), ok(BOOT_BARE)],
             owner_and_port,
             0,
-            1,
+            2,
         ),
         case(
             "the owner-only refusal",
@@ -109,10 +105,10 @@ fn api_on_and_off_answer_as_the_shell_does() {
             "the bulletin",
             &["on"],
             &[],
-            vec![ok(BULLETIN)],
+            vec![ok(BULLETIN), ok(BOOT_BARE)],
             owner_and_port,
             0,
-            1,
+            2,
         ),
         case(
             "not JSON",
@@ -169,21 +165,21 @@ fn api_on_and_off_answer_as_the_shell_does() {
             1,
         )),
         case(
-            "a reset (56): the reader's line",
+            "a reset (56): set -e ends it with 56",
             &["on"],
             &[],
             vec![Reply::Reset],
             owner_and_port,
-            1,
+            56,
             1,
         ),
-        in_pipe(case(
-            "an empty reply (52): the line, SIGPIPE",
-            &["on"],
+        waited(case(
+            "an empty reply (52): the line, exit 1",
+            &["off"],
             &[],
             vec![Reply::Close],
             owner_and_port,
-            141,
+            1,
             1,
         )),
         // The words and the gates.
@@ -350,10 +346,10 @@ fn api_with_a_passport() {
                 "a session with no owner token on disk: the passport",
                 &["off"],
                 &[],
-                vec![ok(r#"{"apiEnabled":false}"#)],
+                vec![ok(r#"{"apiEnabled":false}"#), ok(BOOT_BARE)],
                 port_only,
                 0,
-                1,
+                2,
             ),
         ),
         Case {
@@ -401,18 +397,242 @@ fn api_with_no_daemon() {
             0,
         ),
         case(
-            "on, nothing listens (7): the reader's line",
+            "on, nothing listens (7): set -e ends it with 7",
             &["on"],
             &[("K2_PORT", port.as_str())],
             vec![],
             owner_only,
-            1,
+            7,
+            0,
+        ),
+        case(
+            "off, nothing listens (7): set -e ends it with 7",
+            &["off"],
+            &[("K2_PORT", port.as_str())],
+            vec![],
+            owner_only,
+            7,
             0,
         ),
     ];
     for c in v {
         rig.check(&c);
     }
+}
+
+/// `off` after the setting is saved: the surface as `/boot-status` gives
+/// it (`api.enabled`, read as `status` reads it). The rows of
+/// `tests/cli/api_off_forced_on.sh` (its 13 checks: each row here holds
+/// stdout, stderr, the exit and the requests), then more answers.
+#[test]
+fn api_off_says_when_the_surface_stays_on() {
+    let rig = Rig::new(VERB, "surface");
+    let saved_off = || ok(r#"{"apiEnabled":false}"#);
+    let v = vec![
+        // Checks 1-5: exit 1, the still-ON line on stderr, nothing on
+        // stdout, the setting still posted, boot-status read.
+        case(
+            "forced on: the still-ON line, exit 1, no OFF line",
+            &["off"],
+            &[],
+            vec![saved_off(), ok(r#"{"api":{"enabled":true}}"#)],
+            owner_and_port,
+            1,
+            2,
+        ),
+        // Checks 6-8: exit 0, the OFF line alone, nothing on stderr.
+        case(
+            "really off: the OFF line alone",
+            &["off"],
+            &[],
+            vec![saved_off(), ok(r#"{"api":{"enabled":false}}"#)],
+            owner_and_port,
+            0,
+            2,
+        ),
+        // Checks 9-10: exit 0, the OFF line and the note.
+        case(
+            "boot-status says nothing about the API: the OFF line and the note",
+            &["off"],
+            &[],
+            vec![saved_off(), ok(BOOT_BARE)],
+            owner_and_port,
+            0,
+            2,
+        ),
+        // Checks 11-13: exit 0, the ON line, no boot-status read.
+        case(
+            "api on: the ON line, the surface never read",
+            &["on"],
+            &[],
+            vec![ok(r#"{"apiEnabled":true}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        // More answers.
+        case(
+            "forced on, the full boot-status",
+            &["off"],
+            &[],
+            vec![saved_off(), ok(BOOT_ON)],
+            owner_and_port,
+            1,
+            2,
+        ),
+        case(
+            "on, saved as off, forced on: the still-ON line",
+            &["on"],
+            &[],
+            vec![ok(SET_OFF), ok(BOOT_ON)],
+            owner_and_port,
+            1,
+            2,
+        ),
+        case(
+            "off, saved as on: the ON line, the surface never read",
+            &["off"],
+            &[],
+            vec![ok(r#"{"apiEnabled":1}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "enabled is 1, not true: unknown",
+            &["off"],
+            &[],
+            vec![saved_off(), ok(r#"{"api":{"enabled":1}}"#)],
+            owner_and_port,
+            0,
+            2,
+        ),
+        case(
+            "api is null: unknown",
+            &["off"],
+            &[],
+            vec![saved_off(), ok(r#"{"api":null}"#)],
+            owner_and_port,
+            0,
+            2,
+        ),
+        case(
+            "boot-status is not JSON: unknown",
+            &["off"],
+            &[],
+            vec![saved_off(), ok("nope")],
+            owner_and_port,
+            0,
+            2,
+        ),
+        case(
+            "boot-status is a list: unknown",
+            &["off"],
+            &[],
+            vec![saved_off(), ok("[true]")],
+            owner_and_port,
+            0,
+            2,
+        ),
+        case(
+            "boot-status closes: unknown",
+            &["off"],
+            &[],
+            vec![saved_off(), Reply::Close],
+            owner_and_port,
+            0,
+            2,
+        ),
+        case(
+            "boot-status answers 500 with the surface on: the still-ON line",
+            &["off"],
+            &[],
+            vec![
+                saved_off(),
+                Reply::Answer(500, r#"{"api":{"enabled":true}}"#.into()),
+            ],
+            owner_and_port,
+            1,
+            2,
+        ),
+        case(
+            "a refusal with a permission card: never reads the surface",
+            &["off"],
+            &[],
+            vec![Reply::Answer(403, PERMISSION_ASK.into())],
+            owner_and_port,
+            1,
+            1,
+        ),
+        with(
+            with_passport(&[]),
+            case(
+                "forced on, with a passport: the still-ON line",
+                &["off"],
+                &[],
+                vec![saved_off(), ok(BOOT_ON)],
+                port_only,
+                1,
+                2,
+            ),
+        ),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}
+
+/// The note names the command by the brand's name (in a build with
+/// `K2_BRAND_DIR=brand/xy` it says `xy`), never a typed `k2` or `k5`; the
+/// still-ON line names only the daemon's environment variables.
+#[test]
+fn the_lines_say_the_brand_s_name() {
+    let rig = Rig::new(VERB, "brand");
+    let cli = k2_client::brand::CLI_NAME;
+    let off = "Public /v1 API setting: OFF (live now \u{2014} no restart needed)";
+    let c = case(
+        "brand: unknown",
+        &["off"],
+        &[],
+        vec![ok(r#"{"apiEnabled":false}"#), ok(BOOT_BARE)],
+        owner_and_port,
+        0,
+        2,
+    );
+    let (out, log) = rig.binary(&c, false);
+    assert_eq!(
+        out.stdout,
+        format!(
+            "{off}\nNote: where the K2_API (or legacy K2_SANDBOX_API) env flag is set, it still forces the surface on; check with: {cli} api status\n"
+        )
+    );
+    assert_eq!((out.stderr.as_str(), out.code), ("", Some(0)));
+    assert_eq!(log.len(), 2);
+    let c = case(
+        "brand: forced on",
+        &["off"],
+        &[],
+        vec![ok(r#"{"apiEnabled":false}"#), ok(BOOT_ON)],
+        owner_and_port,
+        1,
+        2,
+    );
+    let (out, log) = rig.binary(&c, false);
+    assert_eq!(out.stdout, "");
+    assert_eq!(
+        out.stderr,
+        "The public API is still ON: K2_API or K2_SANDBOX_API is set in the daemon's environment and forces it on. The setting is saved as off; to turn the API off, remove that variable from the daemon's service and restart it.\n"
+    );
+    assert_eq!(out.code, Some(1));
+    assert_eq!(log.len(), 2);
+    let c = case("brand: usage", &["enable"], &[], vec![], owner_and_port, 2, 0);
+    let (out, log) = rig.binary(&c, false);
+    assert!(
+        out.stderr.starts_with(&format!("Usage: {cli} api <on|off|status>\n")),
+        "{}",
+        out.stderr
+    );
+    assert!(log.is_empty());
 }
 
 /// `/boot-status` gives up after 10 s, read as nothing. Slow.

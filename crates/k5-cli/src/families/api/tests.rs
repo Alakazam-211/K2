@@ -9,23 +9,63 @@ fn cmd_api() -> String {
     text[start..end].to_string()
 }
 
+/// The `python3 -c '…'` scripts in `cmd_api`, in order, as `-c` numbers
+/// their lines (line 1 is the empty one after `-c '`).
+fn single_quoted_python() -> Vec<Vec<String>> {
+    let f = cmd_api();
+    f.split("python3 -c '")
+        .skip(1)
+        .map(|py| {
+            let end = py.find("\n')\"").expect("the end of the Python");
+            py[..end].split('\n').map(str::to_string).collect()
+        })
+        .collect()
+}
+
 #[test]
 fn the_shell_s_lines() {
     let f = cmd_api();
+    let echo = |indent: usize, text: &str, tail: &str| {
+        format!("{}echo \"{}\"{tail}", " ".repeat(indent), k2(text))
+    };
     for shell in [
-        r#"    local sub="${1:-status}""#,
-        r#"            cli_post_json "/cli/settings/update" "{\"apiEnabled\":${val}}" | python3 -c ""#,
-        r#"            _k2_cfg_add url "${BASE_URL}/boot-status""#,
-        r#"                _k2_cfg_add header "Authorization: Bearer ${TOKEN}""#,
-        r#"            boot="$(_k2_curl "$_K2_CFG" -s --connect-timeout 5 --max-time 10 2>/dev/null || true)""#,
-        r#"            settings="$(cli_request "/cli/settings/get" || true)""#,
-        "            exit 2",
+        r#"    local sub="${1:-status}""#.to_string(),
+        // Apart from the assignment, so `set -e` ends the command on a
+        // call that failed.
+        "            local resp saved".to_string(),
+        r#"            resp="$(cli_post_json "/cli/settings/update" "{\"apiEnabled\":${val}}")""#
+            .to_string(),
+        r#"            saved="$(K2_API_RESP="$resp" python3 -c '"#.to_string(),
+        r#"')" || { printf '%s\n' "$saved"; exit 1; }"#.to_string(),
+        r#"            if [[ "$saved" == "off" ]]; then"#.to_string(),
+        r#"                _k2_cfg_add url "${BASE_URL}/boot-status""#.to_string(),
+        r#"                    _k2_cfg_add header "Authorization: Bearer ${TOKEN}""#.to_string(),
+        r#"                boot="$(_k2_curl "$_K2_CFG" -s --connect-timeout 5 --max-time 10 2>/dev/null || true)""#
+            .to_string(),
+        r#"                eff="$(K2_API_BOOT="$boot" python3 -c '"#.to_string(),
+        r#"                if [[ "$eff" == "on" ]]; then"#.to_string(),
+        echo(20, STILL_ON, " >&2"),
+        "                    exit 1".to_string(),
+        echo(16, &setting_line(false), ""),
+        r#"                if [[ "$eff" != "off" ]]; then"#.to_string(),
+        echo(20, NOTE_OFF, ""),
+        echo(16, &setting_line(true), ""),
+        r#"            _k2_cfg_add url "${BASE_URL}/boot-status""#.to_string(),
+        r#"                _k2_cfg_add header "Authorization: Bearer ${TOKEN}""#.to_string(),
+        r#"            boot="$(_k2_curl "$_K2_CFG" -s --connect-timeout 5 --max-time 10 2>/dev/null || true)""#
+            .to_string(),
+        r#"            settings="$(cli_request "/cli/settings/get" || true)""#.to_string(),
+        "            exit 2".to_string(),
     ] {
         assert!(
             f.lines().any(|l| l == shell),
             "cmd_api no longer has {shell:?}"
         );
     }
+    // The still-ON line comes before the OFF line, which it replaces.
+    let still = f.find(echo(20, STILL_ON, " >&2").as_str()).expect("the still-ON line");
+    let off = f.find(echo(16, &setting_line(false), "").as_str()).expect("the OFF line");
+    assert!(still < off);
     // -h or --help anywhere: the usage on stdout, exit 0, nothing sent.
     assert!(f.contains("    if _wants_help \"$@\"; then\n        _api_usage\n        return 0\n"));
     // An unknown verb: the usage on stderr, exit 2.
@@ -43,7 +83,6 @@ fn the_shell_s_lines() {
         .map(|l| format!("    echo \"{}\"", k2(l)))
         .collect();
     assert_eq!(usage.lines().collect::<Vec<_>>(), want);
-    assert!(f.contains(&format!("    print('{}')\n", k2(NOTE_OFF))));
     assert!(f.contains(&format!("    print('{FORCED}')\n")));
     let router = source("router.sh");
     assert!(router.contains("    api)\n"));
@@ -56,16 +95,40 @@ fn the_shell_s_lines() {
 #[test]
 fn the_python() {
     let f = cmd_api();
-    let switch = super::super::shell_python("talk-and-workspace.sh", "cmd_api() {");
     let at_line = |lines: &[String], n: u32| lines[n as usize - 1].trim().to_string();
-    assert_eq!(at_line(&switch, line::switch::IN), "if 'error' in d:");
+    let scripts = single_quoted_python();
+    assert_eq!(scripts.len(), 2, "on/off's two python3 -c scripts");
+    let saved = &scripts[0];
+    assert_eq!(at_line(saved, 3), r#"raw = os.environ.get("K2_API_RESP", "")"#);
     assert_eq!(
-        at_line(&switch, line::switch::INDEX),
-        "print('Error: %s' % d['error'])"
+        at_line(saved, 7),
+        r#"print("Error: daemon returned an unparseable response: %r" % raw[:200])"#
+    );
+    assert_eq!(UNPARSEABLE, "Error: daemon returned an unparseable response: ");
+    assert_eq!(at_line(saved, line::switch::IN), r#"if "error" in d:"#);
+    assert_eq!(
+        at_line(saved, line::switch::INDEX),
+        r#"print("Error: %s" % d["error"])"#
     );
     assert_eq!(
-        at_line(&switch, line::switch::GET),
-        "on = bool(d.get('apiEnabled'))"
+        at_line(saved, line::switch::GET),
+        r#"print("on" if d.get("apiEnabled") else "off")"#
+    );
+    assert_eq!(saved.len(), 12, "{saved:#?}");
+    let boot: Vec<String> = scripts[1].iter().map(|l| l.trim().to_string()).collect();
+    assert_eq!(
+        boot,
+        [
+            "",
+            "import json, os",
+            "try:",
+            r#"d = json.loads(os.environ.get("K2_API_BOOT", "") or "{}")"#,
+            "except Exception:",
+            "d = {}",
+            r#"api = d.get("api") if isinstance(d, dict) else None"#,
+            r#"e = api.get("enabled") if isinstance(api, dict) else None"#,
+            r#"print("on" if e is True else ("off" if e is False else "?"))"#,
+        ]
     );
     let doc = f.split_once("python3 <<'PY'\n").expect("the heredoc").1;
     let doc: Vec<String> = doc.lines().map(str::to_string).collect();
@@ -88,41 +151,82 @@ fn the_words() {
     assert_eq!(parse(&["ON"]), Ask::Usage);
 }
 
+fn failed(stdout: &str, exit: Exit) -> Saved {
+    Saved::Failed(Shown {
+        stdout: stdout.to_string(),
+        stderr: String::new(),
+        exit,
+    })
+}
+
 #[test]
-fn the_switch_reader() {
+fn the_saved_reader() {
+    assert_eq!(saved_reader(r#"{"apiEnabled":true}"#), Saved::On);
+    assert_eq!(saved_reader(r#"{"apiEnabled":1,"x":2}"#), Saved::On);
+    assert_eq!(saved_reader(r#"{"apiEnabled":false}"#), Saved::Off);
+    assert_eq!(saved_reader("{}"), Saved::Off);
     assert_eq!(
-        switch_reader(r#"{"apiEnabled":true}"#).stdout,
-        "Public /v1 API setting: ON (live now \u{2014} no restart needed)\n"
+        saved_reader(r#"{"error":{"code":"owner_only"}}"#),
+        failed("Error: {'code': 'owner_only'}\n", Exit::Error)
+    );
+    // `saved=$(…)` keeps no trailing newline and no NUL; printf adds one.
+    assert_eq!(
+        saved_reader(r#"{"error":"a\u0000b\n\n"}"#),
+        failed("Error: ab\n", Exit::Error)
     );
     assert_eq!(
-        switch_reader("{}").stdout,
-        format!("Public /v1 API setting: OFF (live now \u{2014} no restart needed)\n{NOTE_OFF}\n")
-    );
-    let e = switch_reader(r#"{"error":{"code":"owner_only"}}"#);
-    assert_eq!(
-        (e.stdout.as_str(), e.exit),
-        ("Error: {'code': 'owner_only'}\n", Exit::Error)
-    );
-    let e = switch_reader("");
-    assert_eq!(
-        (e.stdout.as_str(), e.exit),
-        (
+        saved_reader(""),
+        failed(
             "Error: daemon returned an unparseable response: ''\n",
             Exit::Error
         )
     );
-    let e = switch_reader("\"an error\"");
-    assert!(e.stderr.ends_with(
+    // A raise: the traceback on stderr, an empty line on stdout, exit 1.
+    let raised = |raw: &str| match saved_reader(raw) {
+        Saved::Failed(s) => {
+            assert_eq!((s.stdout.as_str(), s.exit), ("\n", Exit::Error), "{raw}");
+            s.stderr
+        }
+        other => panic!("{raw}: {other:?}"),
+    };
+    assert!(raised("\"an error\"").ends_with(
         "line 10, in <module>\nTypeError: string indices must be integers, not 'str'\n"
     ));
-    let e = switch_reader("5");
-    assert!(e
-        .stderr
+    assert!(raised("5")
         .ends_with("line 9, in <module>\nTypeError: argument of type 'int' is not iterable\n"));
-    let e = switch_reader("[]");
-    assert!(e
-        .stderr
+    assert!(raised("[]")
         .ends_with("line 12, in <module>\nAttributeError: 'list' object has no attribute 'get'\n"));
+    assert!(raised("\"plain\"")
+        .ends_with("line 12, in <module>\nAttributeError: 'str' object has no attribute 'get'\n"));
+}
+
+#[test]
+fn the_off_reader() {
+    let off = format!("{}\n", setting_line(false));
+    // An env flag forces the surface on: stderr only, exit 1, no OFF line.
+    let s = off_reader(r#"{"version":"0.46.17","api":{"enabled":true}}"#);
+    assert_eq!(s, Shown::err(format!("{STILL_ON}\n"), Exit::Error));
+    assert_eq!(off_reader(r#"{"api":{"enabled":false}}"#), Shown::out(off.clone()));
+    // Anything but true or false is unknown: the OFF line and the note.
+    let unknown = Shown::out(format!("{off}{NOTE_OFF}\n"));
+    for boot in [
+        "",
+        "not json",
+        r#"{"ok":true}"#,
+        r#"{"api":null}"#,
+        r#"{"api":{"enabled":1}}"#,
+        r#"{"api":{"enabled":"true"}}"#,
+        r#"{"api":[true]}"#,
+        "[1]",
+        "5",
+    ] {
+        assert_eq!(off_reader(boot), unknown, "{boot}");
+    }
+    // A key given twice: Python's dict keeps the last.
+    assert_eq!(
+        off_reader(r#"{"api":{"enabled":true},"api":{"enabled":false}}"#),
+        Shown::out(off)
+    );
 }
 
 #[test]

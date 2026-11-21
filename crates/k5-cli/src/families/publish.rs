@@ -212,8 +212,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     }
     // The prelude refuses `subdomain` (but `claim` and `unclaim`) under
     // air-gap before its gates (`cli/src/cli-tools-policy.sh`).
-    if words.first() == Some(&"subdomain")
-        && !matches!(words.get(1), Some(&("claim" | "unclaim")))
+    if words.first() == Some(&"subdomain") && !matches!(words.get(1), Some(&("claim" | "unclaim")))
     {
         let (state, file) = crate::airgap::state(&crate::offline::Env::current())?;
         if let Some(mut line) = crate::airgap::refusal(state, &file) {

@@ -312,7 +312,7 @@ fn idle_script(dir: &Path) -> String {
 /// The fenced agent's demo script (plan §6.3): every attempt's raw output
 /// goes into `results`, then it waits for a stolen passport (`stolen`, a
 /// file of `KEY=value` lines) and tries it everywhere.
-fn demo_script(ws: &Path, sibling: &Path, sibling_cgroup: &Path, k2_home: &Path, cli: &Path) -> String {
+fn demo_script(ws: &Path, sibling: &Path, sibling_cgroup: &Path, k2_home: &Path, cli: &Path, sibling_pid: i32) -> String {
     format!(
         r#"set +e
 cd {ws}
@@ -333,6 +333,9 @@ git init -q gitws 2>git.err && cd gitws && echo x > f && git add f && git -c use
 # 2. It can't read a sibling's folder.
 cat {sibling}/README.md > out 2> err; echo "sibling_read_rc $? $(cat err)" >> $R
 ls {sibling} > out 2> err; echo "sibling_ls_rc $? $(cat err)" >> $R
+# 2b. Nor a sibling's passport out of its process (/proc/<pid>/environ).
+tr '\0' '\n' < /proc/{bpid}/environ > out 2> err; echo "sibling_environ_rc $? $(grep -c K2_HOOK_TOKEN out) $(cat err)" >> $R
+kill -0 {bpid} 2> err; echo "sibling_signal_rc $? $(cat err)" >> $R
 # 3. It can't read the owner token.
 cat {k2_home}/daemon.token > out 2> err; echo "token_read_rc $? $(cat err)" >> $R
 ls {k2_home} > out 2> err; echo "k2_home_ls_rc $? $(cat err)" >> $R
@@ -365,6 +368,7 @@ exec sleep 3600
         sib_cg = sibling_cgroup.display(),
         k2_home = k2_home.display(),
         cli = cli.display(),
+        bpid = sibling_pid,
     )
 }
 
@@ -394,7 +398,7 @@ fn the_five_step_demo_on_a_real_kernel() {
     d.pids.push(b_pid);
     assert!(cgroup_of(b_pid).ends_with(&format!("/agents/a-{b_id}")), "B runs in its own cgroup: {}", cgroup_of(b_pid));
 
-    let script = demo_script(&a_ws, &b_ws, &agents_dir.join(format!("a-{b_id}")), &d.k2, &d.k2.join("bin/k2"));
+    let script = demo_script(&a_ws, &b_ws, &agents_dir.join(format!("a-{b_id}")), &d.k2, &d.k2.join("bin/k2"), b_pid);
     let a_sid = d.spawn("tab-a", &a_ws, &script);
     let r = results(&a_ws.join("results"), "phase1 done");
     let a_pid: i32 = r["pid"].trim().parse().expect("A's pid");
@@ -411,6 +415,9 @@ fn the_five_step_demo_on_a_real_kernel() {
     // 2. A sibling's folder.
     assert!(denied(&r["sibling_read_rc"]), "reading B's README must be denied: {}", r["sibling_read_rc"]);
     assert!(denied(&r["sibling_ls_rc"]), "listing B's folder must be denied: {}", r["sibling_ls_rc"]);
+    assert!(denied(&r["sibling_environ_rc"]), "reading B's passport from /proc/<pid>/environ must be denied: {}", r["sibling_environ_rc"]);
+    // Known (M2/M5): Landlock on 6.8 doesn't scope signals (ABI 6, 6.12+).
+    println!("KNOWN GAP: a fenced agent signalling a sibling (kill -0): {}", r["sibling_signal_rc"]);
     // 3. The owner token.
     assert!(denied(&r["token_read_rc"]), "reading the owner token must be denied: {}", r["token_read_rc"]);
     assert!(denied(&r["k2_home_ls_rc"]), "listing ~/.k2 must be denied: {}", r["k2_home_ls_rc"]);
@@ -540,12 +547,13 @@ fn the_bites_each_guarantee_fails_without_its_mechanism() {
     let b_pid: i32 = wait_for("B's pid", Duration::from_secs(30), || std::fs::read_to_string(b_ws.join("pid")).ok()?.trim().parse().ok());
     d.pids.push(b_pid);
     // Fence OFF (the default): the same demo script reads what the fence hid.
-    let script = demo_script(&a_ws, &b_ws, &unit.join("agents").join(format!("a-{b_id}")), &d.k2, &d.k2.join("bin/k2"));
+    let script = demo_script(&a_ws, &b_ws, &unit.join("agents").join(format!("a-{b_id}")), &d.k2, &d.k2.join("bin/k2"), b_pid);
     d.spawn("tab-a", &a_ws, &script);
     let r = results(&a_ws.join("results"), "phase1 done");
     d.pids.push(r["pid"].trim().parse().unwrap());
     assert!(r["sibling_read_rc"].starts_with("0"), "BITE fence off: A reads B's README: {}", r["sibling_read_rc"]);
     assert!(r["token_read_rc"].starts_with("0"), "BITE fence off: A reads the owner token: {}", r["token_read_rc"]);
+    assert!(r["sibling_environ_rc"].starts_with("0 1"), "BITE fence off: A reads B's passport from /proc: {}", r["sibling_environ_rc"]);
     // Known gap until M1b: unfenced, A moved itself into B's cgroup.
     assert!(r["cgroup_move_rc"].starts_with("0"), "unfenced, the move into B's cgroup works (M1b closes it): {}", r["cgroup_move_rc"]);
     // …and then out of it into the shared leaf (the script's next step).

@@ -88,6 +88,10 @@ pub struct Ctx {
     pub vault_sock: std::path::PathBuf,
     /// `$PROJECT`: the checkout `_compute_ws` names outside a session.
     pub project: String,
+    /// `_K2_REFUSAL_AREA=app` (`cmd_app` sets it): a refusal carries the
+    /// registry's fix. Off where the shell reaches the same code from
+    /// `skin` (`cmd_skin`), which leaves it empty.
+    pub app_refusals: bool,
 }
 
 impl Ctx {
@@ -98,6 +102,7 @@ impl Ctx {
             args_json,
             vault_sock: std::path::PathBuf::new(),
             project: String::new(),
+            app_refusals: true,
         }
     }
 
@@ -204,7 +209,7 @@ impl Ctx {
     /// `_compute_fail "$_CP_STATUS" "$_CP_BODY"`: its lines on stderr, and
     /// the exit.
     pub fn fail(&self, s: &Split) -> Exit {
-        let line = fail_line(&s.status, &s.body, self.args_json);
+        let line = fail_line_in(&s.status, &s.body, self.args_json, self.app_refusals);
         out::stderr_line(&line);
         fail_exit(&s.status)
     }
@@ -273,10 +278,16 @@ pub fn fail_exit(status: &str) -> Exit {
 /// printed, `$(…)` taking the trailing newlines off, or the no-answer line
 /// when it printed nothing.
 pub fn fail_line(status: &str, body: &[u8], args_json: bool) -> String {
+    fail_line_in(status, body, args_json, true)
+}
+
+/// [`fail_line`], with the registry's fix only when `app` (the shell's
+/// `_K2_REFUSAL_AREA` is `app`).
+pub fn fail_line_in(status: &str, body: &[u8], args_json: bool, app: bool) -> String {
     let mut line = if body.is_empty() {
         String::new()
     } else {
-        fail_python(body, args_json)
+        fail_python(body, args_json, app)
     };
     while line.ends_with('\n') {
         line.pop();
@@ -289,7 +300,7 @@ pub fn fail_line(status: &str, body: &[u8], args_json: bool) -> String {
 
 /// `_compute_fail`'s Python on the body. Nothing when it raises (the shell
 /// sends its stderr to /dev/null).
-fn fail_python(body: &[u8], args_json: bool) -> String {
+fn fail_python(body: &[u8], args_json: bool, app: bool) -> String {
     let Ok(raw) = std::str::from_utf8(body) else {
         return String::new();
     };
@@ -336,7 +347,7 @@ fn fail_python(body: &[u8], args_json: bool) -> String {
         ],
     };
     let code = out[0].1.clone();
-    let row = if code == s("error") {
+    let row = if !app || code == s("error") {
         None
     } else {
         registry_row(&code)

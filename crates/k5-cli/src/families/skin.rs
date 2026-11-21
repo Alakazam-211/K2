@@ -1876,11 +1876,11 @@ fn run_with(
             return finish(&mut client, closing, exit);
         }
         Ask::UserChat(a) => {
-            let ctx = app_ctx(client, args, &settings);
+            let ctx = app_ctx(client, args, &settings, teach);
             return app_run(ctx, closing, |ctx| user_chat::run(ctx, &a));
         }
         Ask::CopyHost(g) => {
-            let ctx = app_ctx(client, args, &settings);
+            let ctx = app_ctx(client, args, &settings, teach);
             return app_run(ctx, closing, |ctx| super::app::guests::run(ctx, &g));
         }
         Ask::Shell => unreachable!("handed to the shell before the run"),
@@ -1889,9 +1889,17 @@ fn run_with(
 }
 
 /// The App family's context for a verb its code answers: `_K2_ARGS_JSON`
-/// from the whole command line.
-fn app_ctx(client: Client, args: &[OsString], settings: &Settings) -> super::app::call::Ctx {
+/// from the whole command line. From `skin` (`teach`) the refusals carry
+/// no registry fix: `cmd_skin` leaves `_K2_REFUSAL_AREA` empty, where
+/// `cmd_app` sets it to `app`.
+fn app_ctx(
+    client: Client,
+    args: &[OsString],
+    settings: &Settings,
+    teach: bool,
+) -> super::app::call::Ctx {
     let mut ctx = super::app::call::Ctx::new(client, args.iter().any(|a| a == "--json"));
+    ctx.app_refusals = !teach;
     ctx.vault_sock = confirm::sock_path(&settings.home);
     ctx.project = settings.project.clone();
     ctx

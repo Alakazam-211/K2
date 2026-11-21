@@ -891,14 +891,26 @@ fn user_chat_as_the_shell_does() {
                     0,
                 ),
                 words("user chat: no username", &["user", "chat"], 2),
-                words("user chat: a bad scope", &["user", "chat", "bob", "admin"], 2),
+                words(
+                    "user chat: a bad scope",
+                    &["user", "chat", "bob", "admin"],
+                    2,
+                ),
                 words(
                     "user chat: a third word",
                     &["user", "chat", "bob", "guest", "x"],
                     2,
                 ),
-                words("user chat: a flag it doesn't take", &["user", "chat", "bob", "-q"], 2),
-                words("user chat: --app last", &["user", "chat", "bob", "--app"], 1),
+                words(
+                    "user chat: a flag it doesn't take",
+                    &["user", "chat", "bob", "-q"],
+                    2,
+                ),
+                words(
+                    "user chat: --app last",
+                    &["user", "chat", "bob", "--app"],
+                    1,
+                ),
                 words(
                     "user chat: --role with no --app",
                     &["user", "chat", "bob", "--role", "r"],
@@ -983,6 +995,21 @@ fn skin_grant_copy_host_as_the_shell_does() {
                 )],
                 owner_and_port,
                 2,
+                1,
+            ),
+            // From `skin` the refusal carries no registry fix: cmd_skin
+            // leaves _K2_REFUSAL_AREA empty (app_guests_parity.rs has it
+            // from `app`).
+            case(
+                "grant copy-host: a refusal",
+                &["grant", "copy-host", "acme"],
+                &[],
+                vec![Reply::Answer(
+                    403,
+                    r#"{"error":{"code":"owner_only","hint":"the owner's"}}"#.into(),
+                )],
+                owner_and_port,
+                3,
                 1,
             ),
         ],

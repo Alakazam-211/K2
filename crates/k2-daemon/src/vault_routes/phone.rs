@@ -1,5 +1,5 @@
 //! The owner answers their own terminal's vault confirm from the phone
-//! (0.46.17, Rosson's card #12917).
+//! (0.46.17, card #12917).
 //!
 //! The owner token's vault confirms (grant a value someone can read,
 //! reveal, the first-setup steps, rekey and the rest) asked only this

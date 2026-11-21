@@ -1,4 +1,4 @@
-//! `vault.owner-confirm` (0.46.17, Rosson's card #12917): the owner answers
+//! `vault.owner-confirm` (0.46.17, card #12917): the owner answers
 //! their own terminal's vault confirm from the phone.
 //!
 //! K2 presents this card itself, never an agent: the owner ran a vault step

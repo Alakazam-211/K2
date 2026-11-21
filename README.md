@@ -153,7 +153,7 @@ What's separate today:
 
 ### What this means for security, and what to be careful of
 - **An agent can do what the server's owner can do.** Treat any agent on the server as you would the owner's own terminal.
-- **A Member login can use terminal sessions.** A Member can open and type into terminal sessions on this server, and they run as the server's own user, so a Member can reach what the owner can. Give Member, or any role above it, only to people you'd trust with the server. A later update is planned to let you give people access without terminal access.
+- **A Member login can use terminal sessions.** A Member login can open and use terminal sessions, and they run as the server's user, so give Member only to people you'd trust with the server. A later update is planned to let you give people access without terminal access.
 - **Be careful what agents read.** Instructions hidden in a web page, an email, a document or another person's chat message can steer an agent, and an agent acting on them has the owner's reach. Prefer agents that only read sources you trust, and use permission cards for anything that changes access.
 - **Keep secrets in K2's vault, not in files.** A plain file in a workspace is readable by every agent; the vault keeps secrets encrypted and out of the workspace, and hands them to tools without printing them.
 - **Separate people, separate servers.** If people or clients mustn't see each other's work, give each of them their own K2 server rather than sharing one.

@@ -38,7 +38,9 @@
 //!
 //! The shell CLI answers these forms itself ([`run`] returns `None`):
 //!
-//! - `compact` and `archives` (the owner's on-disk view), `help`, and a command line with `-h` or `--help` ([`crate::front`]);
+//! - `help`, and a command line with `-h` or `--help` ([`crate::front`]);
+//!   `compact` and `archives` (the owner's on-disk view, [`disk`]) where
+//!   [`disk`] says;
 //! - a value flag as the last word (the shell's `_need_value` line,
 //!   `Error: <flag> takes a value`, exit 2), and a word that is not UTF-8;
 //! - `HOOK_SOCK` set with a `CODEX_` variable exported, a port that is set
@@ -394,6 +396,9 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .skip(1)
         .map(|a| a.to_str())
         .collect::<Option<_>>()?;
+    if let Some(answer) = disk_line(args, &words, hook_sock.as_deref()) {
+        return answer;
+    }
     if let Some(m) = more::parse(&words) {
         if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
             return None;
@@ -445,6 +450,45 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         Ok(ask) => run_with(args, ask, hook_sock.as_deref(), settings),
         Err(plan) => run_write(args, plan, hook_sock.as_deref(), settings),
     })
+}
+
+/// `sessions archives` and `sessions compact` ([`disk`]): `None` for any
+/// other line; `Some(None)` hands it to the shell.
+#[cfg(unix)]
+fn disk_line(
+    args: &[OsString],
+    words: &[&str],
+    hook_sock: Option<&Path>,
+) -> Option<Option<Exit>> {
+    let d = disk::parse(words)?;
+    if words.iter().any(|w| matches!(*w, "-h" | "--help"))
+        || !python::family_native(python::here())
+    {
+        return Some(None);
+    }
+    let settings = match daemon::current() {
+        Ok(s) => s,
+        Err(e) => {
+            out::stderr_line(&format!("Error: {e}"));
+            return Some(Some(Exit::Error));
+        }
+    };
+    if let Some(gate) = prelude::gate(&settings) {
+        return Some(Some(gate.stop()));
+    }
+    let would_refuse = passport::current(args).would_refuse();
+    if let Some(stop) = prelude::id_tool(&settings, hook_sock, would_refuse, TOOL) {
+        return Some(Some(stop));
+    }
+    Some(match d {
+        disk::Disk::Archives { json } => disk::archives(&settings.project, json),
+        disk::Disk::Compact(id) => disk::compact(&settings.project, &id),
+    })
+}
+
+#[cfg(not(unix))]
+fn disk_line(_: &[OsString], _: &[&str], _: Option<&Path>) -> Option<Option<Exit>> {
+    None
 }
 
 /// [`write`]'s verbs, after the same gates as the reads.
@@ -1150,6 +1194,8 @@ fn main_lines(v: &Value, o: &mut Out) -> Result<Exit, Raise> {
     Ok(Exit::Ok)
 }
 
+#[cfg(unix)]
+pub mod disk;
 pub mod live;
 pub mod more;
 pub mod write;

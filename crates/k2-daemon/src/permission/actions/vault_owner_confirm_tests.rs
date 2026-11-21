@@ -173,11 +173,17 @@ async fn the_phone_answers_a_reveal_and_the_computer_prompt_closes() {
     let (name, id) = secret(&e, "STRIPE");
     let step = json!({ "action": "reveal", "secretId": id, "label": "something else entirely" });
 
-    // Offered to the owner's terminal only.
-    let (s, r) = call(&e.v, vr::CONFIRM_START, &owner(), json!({ "action": "reveal", "secretId": id }));
-    assert_eq!((s, &r["phoneOffered"]), (200, &json!(true)), "{r}");
-    let (s, r) = call(&e.v, vr::CONFIRM_START, &as_login("lee", k2_vault::Role::Owner), json!({ "action": "reveal", "secretId": id }));
-    assert_eq!((s, &r["phoneOffered"]), (200, &json!(false)), "{r}");
+    // Offered to the owner's terminal only (beside this computer's own
+    // prompt; a step that needs no secret, so every OS has a check here).
+    {
+        let _p = PresenceOffers::local();
+        let (s, r) = call(&e.v, vr::CONFIRM_START, &owner(), json!({ "action": presence::RECOVERY_SETUP }));
+        assert_eq!((s, &r["phoneOffered"]), (200, &json!(true)), "{r}");
+        let (s, r) = call(&e.v, vr::CONFIRM_START, &as_login("lee", k2_vault::Role::Owner), json!({ "action": presence::RECOVERY_SETUP }));
+        assert_eq!((s, &r["phoneOffered"]), (200, &json!(false)), "{r}");
+        let (s, r) = call(&e.v, vr::CONFIRM_START, &owner(), json!({ "action": presence::OWNER_LOGIN, "secretId": "role:alice" }));
+        assert_eq!((s, &r["phoneOffered"]), (200, &json!(false)), "an owner-login change stays at the computer: {r}");
+    }
 
     let (request, card, r) = raise(&e, step.clone());
     // The card names the step from the vault's own record, never the label.

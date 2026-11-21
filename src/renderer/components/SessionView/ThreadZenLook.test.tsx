@@ -917,7 +917,7 @@ describe('frosted glass behind the message box', () => {
     // The drawers' cut cells take the cut ring, not the square outline.
     const css = src('../globals.css')
     expect(css).toContain(
-      'html[data-style="terminal"] [data-k2-float="capsule"] > [data-page-tab][data-k2-chamfer]:focus-visible:not([data-zen-root] *) { outline: none; }',
+      'html[data-style="terminal"] [data-k2-float="capsule"] > [data-page-tab][data-k2-chamfer]:focus-visible:not([data-zen-root] *, [data-k2-thread-zen] *) { outline: none; }',
     )
   })
 

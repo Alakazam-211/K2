@@ -2785,7 +2785,7 @@ html:is([data-style="glass"], [data-style="glass-classic"]) button[data-k2-float
 [data-k2-float="capsule"] > [data-page-tab]:focus-visible { outline: 2px solid var(--color-accent-text); outline-offset: -2px; }
 /* Terminal: a drawer cell is cut (ThreadDrawerSelector), and the cut buttons'
    ring follows it, so no square outline inside it. */
-html[data-style="terminal"] [data-k2-float="capsule"] > [data-page-tab][data-k2-chamfer]:focus-visible:not([data-zen-root] *) { outline: none; }
+html[data-style="terminal"] [data-k2-float="capsule"] > [data-page-tab][data-k2-chamfer]:focus-visible:not([data-zen-root] *, [data-k2-thread-zen] *) { outline: none; }
 /* The same capsule in an agent tile's bar (`switch` mode, Projects): the
    view picker. Its cells are the float's 24px; Terminal boxes them in a
    hairline so the four read as one control. Glass draws the page tabs'

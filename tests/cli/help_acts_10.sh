@@ -29,6 +29,8 @@
 #     resume --help` resumed a sender named --help, `system-sender set
 #     --help` set it, `clear --help` cleared it, `test --help` sent the
 #     test mail, `relay rm --help` removed a relay named --help.
+#   - `k2 notify email mute --help` muted a workspace named --help (and
+#     unmute unmuted it); --subject and --text took the help word.
 #
 # Each section: every help form, with --help and with -h, prints exactly
 # the page's cli/text/help file and the stub daemon records nothing; the
@@ -270,6 +272,16 @@ page notifications.txt notifications email relay test r1 --from @H
 page notifications.txt notifications email settings --owner-email @H
 sends '^POST /cli/notifications/email/relay/rm ' notifications email relay rm r1
 sends '^POST /cli/notifications/email/system-sender/clear ' notifications email system-sender clear
+
+echo "== notify =="
+page notify.txt notify @H email
+page notify.txt notify email mute @H
+page notify.txt notify email mute myws @H
+page notify.txt notify email unmute @H
+page notify.txt notify email off @H
+page notify.txt notify email owner --subject @H --text hi
+page notify.txt notify email owner --subject hi --text @H
+sends '^POST /cli/notify/email/mute .*"muted": true' notify email mute myws
 
 echo ""
 echo "help_acts_10: $pass passed, $fail failed"

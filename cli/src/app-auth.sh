@@ -1046,6 +1046,9 @@ EOF
 }
 
 cmd_notify() {
+    # 0.46.17: -h/--help anywhere before a bare -- prints the help and sends
+    # nothing (`email mute --help` muted a workspace named --help).
+    if _wants_help "$@"; then _notify_usage; return 0; fi
     case "${1:-}" in
         email) shift; cmd_notify_email "$@" ;;
         ""|-h|--help|help) _notify_usage ;;

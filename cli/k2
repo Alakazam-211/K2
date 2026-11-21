@@ -2212,7 +2212,7 @@ fi
 # 0.46.17: these families print their help for -h/--help anywhere before a
 # bare -- and send nothing, so help needs no daemon.
 case "${1:-}" in
-    onboarding|reserve|release|read|reviews|trust-folders|glossary|sessions|notifications)
+    onboarding|reserve|release|read|reviews|trust-folders|glossary|sessions|notifications|notify)
         for _a in "${@:2}"; do [ "$_a" = "--" ] && break; case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
 esac
 # `k2 checkin` is retired: its stub prints pointers and never calls the daemon.
@@ -21494,6 +21494,9 @@ EOF
 }
 
 cmd_notify() {
+    # 0.46.17: -h/--help anywhere before a bare -- prints the help and sends
+    # nothing (`email mute --help` muted a workspace named --help).
+    if _wants_help "$@"; then _notify_usage; return 0; fi
     case "${1:-}" in
         email) shift; cmd_notify_email "$@" ;;
         ""|-h|--help|help) _notify_usage ;;

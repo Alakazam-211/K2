@@ -22,7 +22,9 @@
 //! `testdata/sew/sew-0.11.3.SHA256SUMS` and a test holds this entry to it.
 //!
 //! Migrations: still 0.11.0's two (release.json `schema_max` 1100101, as
-//! 0.11.1's); 0.11.3 adds none. From 0.11.1 the upgrade and the way back are
+//! 0.11.1's; the release binary's `sew version --json` reports schema max
+//! 1100101, min 30001, 83 migrations); 0.11.3 adds none. Its feature list
+//! is 0.11.1's fifty-one, unchanged (`tool_hook::features`). From 0.11.1 the upgrade and the way back are
 //! plain ones. The way back from it to 0.10.6 or any earlier release crosses
 //! 0.11.0's two (`k2 hostchat rollback --accept-data-loss`, Sew's
 //! `--accept-data-loss-since=<the pre-upgrade bundle>`; a plain rollback is

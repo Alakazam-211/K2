@@ -99,12 +99,18 @@ fn the_python() {
     let scripts = single_quoted_python();
     assert_eq!(scripts.len(), 2, "on/off's two python3 -c scripts");
     let saved = &scripts[0];
-    assert_eq!(at_line(saved, 3), r#"raw = os.environ.get("K2_API_RESP", "")"#);
+    assert_eq!(
+        at_line(saved, 3),
+        r#"raw = os.environ.get("K2_API_RESP", "")"#
+    );
     assert_eq!(
         at_line(saved, 7),
         r#"print("Error: daemon returned an unparseable response: %r" % raw[:200])"#
     );
-    assert_eq!(UNPARSEABLE, "Error: daemon returned an unparseable response: ");
+    assert_eq!(
+        UNPARSEABLE,
+        "Error: daemon returned an unparseable response: "
+    );
     assert_eq!(at_line(saved, line::switch::IN), r#"if "error" in d:"#);
     assert_eq!(
         at_line(saved, line::switch::INDEX),
@@ -206,7 +212,10 @@ fn the_off_reader() {
     // An env flag forces the surface on: stderr only, exit 1, no OFF line.
     let s = off_reader(r#"{"version":"0.46.17","api":{"enabled":true}}"#);
     assert_eq!(s, Shown::err(format!("{STILL_ON}\n"), Exit::Error));
-    assert_eq!(off_reader(r#"{"api":{"enabled":false}}"#), Shown::out(off.clone()));
+    assert_eq!(
+        off_reader(r#"{"api":{"enabled":false}}"#),
+        Shown::out(off.clone())
+    );
     // Anything but true or false is unknown: the OFF line and the note.
     let unknown = Shown::out(format!("{off}{NOTE_OFF}\n"));
     for boot in [

@@ -43,8 +43,8 @@
 //! the named difference `env-answer-large` (`scripts/cli-parity.sh`).
 //! No row here: neither answer comes near that size.
 
-use super::skin_token::py::{self, at, dict};
 use super::connections::held;
+use super::skin_token::py::{self, at, dict};
 use super::{curl_port, Raise, Shown};
 use crate::daemon::{self, Settings};
 use crate::exit::Exit;
@@ -236,7 +236,10 @@ pub fn saved_reader(raw: &str) -> Saved {
     };
     let Ok(d) = crate::out::json::parse(raw) else {
         let head = Value::Str(Text::from(py::head(raw, 200)));
-        return failed(&format!("{UNPARSEABLE}{}\n", pyout::repr(&head)), String::new());
+        return failed(
+            &format!("{UNPARSEABLE}{}\n", pyout::repr(&head)),
+            String::new(),
+        );
     };
     match saved_on(&d) {
         Ok(Ok(true)) => Saved::On,

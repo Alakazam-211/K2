@@ -48,7 +48,6 @@ fn with(env: Vec<(&'static str, String)>, c: Case) -> Case {
     Case { env, ..c }
 }
 
-
 #[test]
 fn api_on_and_off_answer_as_the_shell_does() {
     let rig = Rig::new(VERB, "switch");
@@ -625,10 +624,19 @@ fn the_lines_say_the_brand_s_name() {
     );
     assert_eq!(out.code, Some(1));
     assert_eq!(log.len(), 2);
-    let c = case("brand: usage", &["enable"], &[], vec![], owner_and_port, 2, 0);
+    let c = case(
+        "brand: usage",
+        &["enable"],
+        &[],
+        vec![],
+        owner_and_port,
+        2,
+        0,
+    );
     let (out, log) = rig.binary(&c, false);
     assert!(
-        out.stderr.starts_with(&format!("Usage: {cli} api <on|off|status>\n")),
+        out.stderr
+            .starts_with(&format!("Usage: {cli} api <on|off|status>\n")),
         "{}",
         out.stderr
     );

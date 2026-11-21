@@ -6191,13 +6191,20 @@ cmd_hooks_status() {
     local limit="20"
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --limit|-n) limit="$2"; shift 2 ;;
+            # The limit is digits only, and goes in the query URL-encoded
+            # (0.46.17: any word was sent as typed, and a --limit as the
+            # last word stopped on "$2: unbound variable").
+            --limit|-n)
+                case "${2:-}" in
+                    ''|*[!0123456789]*) echo "Error: $1 needs a number" >&2; exit 2 ;;
+                esac
+                limit="$2"; shift 2 ;;
             --json) local as_json=1; shift ;;
             *) shift ;;
         esac
     done
     local raw
-    raw=$(cli_request "/cli/hooks/status" "limit=$limit")
+    raw=$(cli_request "/cli/hooks/status" "limit=$(urlencode "$limit")")
     if [ "${as_json:-0}" = "1" ]; then
         echo "$raw"
         return 0

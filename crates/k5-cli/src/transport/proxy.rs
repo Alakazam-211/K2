@@ -134,14 +134,20 @@ pub(in crate::transport) fn from_process_env(name: &str) -> Lookup {
 }
 
 /// The shell's `_k2_direct_url` for `https://<host>`: this computer
-/// (`localhost`, a name under `.localhost`, `127.*`, `[::1]`), by the
-/// text alone. One trailing dot is dropped, case ignored.
+/// (`localhost`, a name under `.localhost`, `[::1]`, or an address in
+/// 127.0.0.0/8 written as four numbers, as `_k2_url_is_literal_loopback`
+/// reads it), by the text alone. `127.example` is a name, which may use
+/// the proxy. One trailing dot is dropped, case ignored.
 pub fn loopback(host: &str) -> bool {
     if host == "[::1]" {
         return true;
     }
     let h = host.strip_suffix('.').unwrap_or(host).to_ascii_lowercase();
-    h == "localhost" || h.ends_with(".localhost") || h.starts_with("127.")
+    // Ipv4Addr reads four numbers, each 0 to 255 with no leading zero:
+    // the shell's pattern.
+    h == "localhost"
+        || h.ends_with(".localhost")
+        || h.parse::<Ipv4Addr>().is_ok_and(|ip| ip.octets()[0] == 127)
 }
 
 /// A URL's host, cut as the shell cuts it in `_k2_direct_url`: after the

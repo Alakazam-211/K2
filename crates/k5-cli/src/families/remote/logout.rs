@@ -152,10 +152,8 @@ pub fn direct_url(url: &str) -> bool {
     if h == "[::1]" || h.starts_with("[::1]:") {
         return true;
     }
-    let mut h = h.split(':').next().unwrap_or("");
-    h = h.strip_suffix('.').unwrap_or(h);
-    let h = h.to_ascii_lowercase();
-    h == "localhost" || h.ends_with(".localhost") || h.starts_with("127.")
+    // One trailing dot off, case ignored, 127 only as four numbers.
+    crate::transport::proxy::loopback(h.split(':').next().unwrap_or(""))
 }
 
 /// The homes and labels `_remote_forget_token`'s Python writes: the K2
@@ -668,6 +666,8 @@ mod tests {
             ("https://u@127.0.0.9", true),
             ("https://[::1]:8", true),
             ("https://[::2]", false),
+            ("https://127.evil.example", false),
+            ("https://127.0.0.1.example/x", false),
         ] {
             assert_eq!(direct_url(url), want, "{url}");
         }

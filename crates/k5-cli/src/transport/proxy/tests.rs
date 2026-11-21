@@ -231,12 +231,20 @@ fn loopback_is_the_shells_direct_rule() {
         "a.localhost",
         "127.0.0.1",
         "127.9.9.9",
-        "127.x",
+        "127.255.255.255",
+        "127.0.0.1.",
         "[::1]",
     ] {
         assert!(loopback(h), "{h}");
     }
+    // A 127 address counts only as four numbers: these are names.
     for h in [
+        "127.x",
+        "127.evil.example",
+        "127.0.0.1.example",
+        "127.01.0.1",
+        "127.256.0.1",
+        "127.0.0",
         "box.example",
         "10.0.0.5",
         "localhost.example",

@@ -687,12 +687,19 @@ sleep 5
     std::os::unix::fs::symlink(home.join(".codex/sessions"), slot.join("sessions")).unwrap();
     std::os::unix::fs::symlink(home.join(".ssh"), slot.join("x")).unwrap();
     std::os::unix::fs::symlink(&home, slot.join("everything")).unwrap();
+    // Review R2: same-named links to the default Codex login and config.
+    std::fs::write(home.join(".codex/auth.json"), "{\"default\":\"login\"}").unwrap();
+    std::fs::write(home.join(".codex/config.toml"), "notify = []\n").unwrap();
+    std::os::unix::fs::symlink(home.join(".codex/auth.json"), slot.join("auth.json")).unwrap();
+    std::os::unix::fs::symlink(home.join(".codex/config.toml"), slot.join("config.toml")).unwrap();
     let probe = format!(
         r#"R={ws}/slot.results; : > $R
 cat {home}/.ssh/id_test > /dev/null 2> {ws}/s.err; echo "ssh_rc $? $(cat {ws}/s.err)" >> $R
 cat $CODEX_HOME/x/id_test > /dev/null 2> {ws}/s.err; echo "link_rc $? $(cat {ws}/s.err)" >> $R
 ls $CODEX_HOME/everything/ > /dev/null 2> {ws}/s.err; echo "home_rc $? $(cat {ws}/s.err)" >> $R
 touch $CODEX_HOME/sessions/ok 2> {ws}/s.err; echo "own_link_rc $? $(cat {ws}/s.err)" >> $R
+cat $CODEX_HOME/auth.json > /dev/null 2> {ws}/s.err; echo "auth_link_rc $? $(cat {ws}/s.err)" >> $R
+echo 'notify = ["sh"]' >> $CODEX_HOME/config.toml 2> {ws}/s.err; echo "config_link_rc $? $(cat {ws}/s.err)" >> $R
 echo "slot done" >> $R; exec sleep 3600
 "#,
         ws = a_ws.display(),
@@ -706,9 +713,101 @@ echo "slot done" >> $R; exec sleep 3600
     assert!(denied(&r["link_rc"]), "a planted slot link to ~/.ssh grants nothing: {}", r["link_rc"]);
     assert!(denied(&r["home_rc"]), "a planted slot link to the home grants nothing: {}", r["home_rc"]);
     assert!(r["own_link_rc"].starts_with("0"), "K2's own slot link (Codex sessions) works: {}", r["own_link_rc"]);
+    assert!(denied(&r["auth_link_rc"]), "a same-named link to the default Codex login grants nothing: {}", r["auth_link_rc"]);
+    assert!(denied(&r["config_link_rc"]), "a same-named link to the shared Codex config grants nothing: {}", r["config_link_rc"]);
+    assert_eq!(std::fs::read_to_string(home.join(".codex/config.toml")).unwrap(), "notify = []\n", "the shared config is unchanged");
     // A harness home that is neither its slot nor the tool's own home.
     let body = json!({"agent_name": "tab-bad", "cwd": a_ws.to_string_lossy(), "command": "/bin/sh", "args": ["-c", "exec sleep 60"], "cols": 100, "rows": 30, "env": {"CODEX_HOME": home.join(".ssh").to_string_lossy()}}).to_string();
     let (s, resp) = http(d.port, "POST", &format!("/cli/sessions/v2/spawn?token={token}"), &body);
     println!("spawn with CODEX_HOME=~/.ssh: {s} {resp}");
     assert!(s != 200 && resp.contains("isolation"), "the spawn refuses a harness home outside its slot: {s} {resp}");
+}
+
+/// The local ports of the live TCP connections from 127.0.0.1 to the
+/// daemon's port that isn't the daemon's own end (`/proc/net/tcp`).
+fn forwards_to(port: u16) -> Vec<u16> {
+    let t = std::fs::read_to_string("/proc/net/tcp").expect("/proc/net/tcp");
+    let to = format!("0100007F:{port:04X}");
+    t.lines()
+        .skip(1)
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split_whitespace().collect();
+            let (local, remote, state) = (f.get(1)?, f.get(2)?, f.get(3)?);
+            // ESTABLISHED or CLOSE_WAIT (the daemon has sent all and closed).
+            (*remote == to && local.starts_with("0100007F:") && matches!(*state, "01" | "08")).then(|| u16::from_str_radix(&local[9..], 16).ok())?
+        })
+        .collect()
+}
+
+/// Review R1: a held-open forward is recognised by its full source address
+/// (127.0.0.1 and the port), never by the port alone. While A's own
+/// forward holds 127.0.0.1:P, anyone may bind 127.0.0.2:P; a copied A
+/// passport presented from there must get 403 passport_needs_socket.
+#[test]
+#[ignore = "needs a delegated cgroup v2 system unit on Linux: scripts/agent-isolation-kernel-tests.sh"]
+fn a_held_forward_is_recognised_by_its_full_address_only() {
+    let _unit = preflight();
+    let mut d = Daemon::new("held");
+    d.start();
+    let (_a_id, a_ws) = d.workspace("A");
+    // A ~9.5 MB file, committed, then one line changed: diff-file?sides=1
+    // answers both sides (~19 MB), far more than the socket buffers hold,
+    // so A's forward stays open while A doesn't read its answer.
+    let line = "x".repeat(94);
+    let big: String = (0..100_000).map(|i| format!("{i:06}{line}\n")).collect();
+    std::fs::write(a_ws.join("big.txt"), &big).unwrap();
+    let git = |args: &[&str]| {
+        let o = Command::new("git").args(["-c", "user.email=t@k2.test", "-c", "user.name=t"]).args(args).current_dir(&a_ws).output().expect("git");
+        assert!(o.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&o.stderr));
+    };
+    git(&["init", "-q"]);
+    git(&["add", "big.txt"]);
+    git(&["commit", "-q", "-m", "big"]);
+    std::fs::write(a_ws.join("big.txt"), big.replacen("000000", "CHANGED", 1)).unwrap();
+    let script = format!(
+        r#"echo $$ > {ws}/pid; env -0 > {ws}/env.tmp && mv {ws}/env.tmp {ws}/env
+python3 - "$K2_HOOK_SOCK" "$K2_HOOK_TOKEN" "{ws}" <<'PY'
+import socket, sys, time
+sock, tok, ws = sys.argv[1:4]
+s = socket.socket(socket.AF_UNIX)
+s.connect(sock)
+s.sendall(("GET /cli/git/diff-file?path=%s&file_path=big.txt&sides=1 HTTP/1.1\r\nHost: k2\r\nAuthorization: Bearer %s\r\nX-K2-Via-Tcp: 1\r\n\r\n" % (ws, tok)).encode())
+first = s.recv(64).decode(errors="replace").split("\r\n")[0]
+open(ws + "/held.results", "w").write("held " + first + "\n")
+time.sleep(120)
+PY
+exec sleep 3600
+"#,
+        ws = a_ws.display()
+    );
+    let before = forwards_to(d.port);
+    d.spawn("tab-held", &a_ws, &script);
+    let a_env = env_dump(&a_ws.join("env"));
+    let r = results(&a_ws.join("held.results"), "held");
+    assert!(r["held"].contains(" 200 "), "A's forward answered and is being held: {}", r["held"]);
+    let ports: Vec<u16> = forwards_to(d.port).into_iter().filter(|p| !before.contains(p)).collect();
+    assert_eq!(ports.len(), 1, "one held forward to the daemon (before: {before:?}): {ports:?}");
+    let p = ports[0];
+    // From 127.0.0.2, the held forward's port, A's copied passport.
+    let out = Command::new("python3")
+        .args(["-c", r#"import socket, sys
+s = socket.socket()
+s.bind(("127.0.0.2", int(sys.argv[1])))
+s.connect(("127.0.0.1", int(sys.argv[2])))
+s.sendall(("GET /cli/capabilities HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer %s\r\nConnection: close\r\n\r\n" % sys.argv[3]).encode())
+out = b""
+while True:
+    b = s.recv(65536)
+    if not b:
+        break
+    out += b
+print(out.decode(errors="replace").split("\r\n")[0])
+print(out.decode(errors="replace").split("\r\n\r\n", 1)[-1][:200])"#, &p.to_string(), &d.port.to_string(), &a_env["K2_HOOK_TOKEN"]])
+        .output()
+        .expect("python3");
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    println!("127.0.0.2:{p} with A's passport, while 127.0.0.1:{p} is A's held forward:\n{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(out.status.success(), "the 127.0.0.2 client ran: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains(" 403 ") && text.contains("passport_needs_socket"), "same port, another loopback address: {text}");
+    assert!(forwards_to(d.port).contains(&p), "A's forward was still held during the attempt");
 }

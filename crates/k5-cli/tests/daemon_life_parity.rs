@@ -928,6 +928,30 @@ fn daemon_restart_answers_as_the_shell_does() {
         ),
         (
             case(
+                "restart --host as the last word",
+                &["restart", "--host"],
+                &[],
+                vec![],
+                user_unit,
+                2,
+                0,
+            ),
+            vec![],
+        ),
+        (
+            case(
+                "restart --token as the last word",
+                &["restart", "--wait", "--token"],
+                &[],
+                vec![],
+                user_unit,
+                2,
+                0,
+            ),
+            vec![],
+        ),
+        (
+            case(
                 "restart with a word it doesn't take",
                 &["restart", "--wait", "--bogus"],
                 &[],
@@ -1403,12 +1427,12 @@ fn daemon_uninstall_and_start_on_linux_answer_as_the_shell_does() {
         ),
         (
             case(
-                "uninstall: --yes not first, the input ends",
+                "uninstall: --yes anywhere",
                 &["uninstall", "x", "--yes"],
                 &[],
                 vec![],
                 base,
-                1,
+                0,
                 0,
             ),
             NO_UNIT.to_vec(),
@@ -1617,22 +1641,25 @@ fn daemon_verbs_keep_the_gates() {
     }
 }
 
-/// Help never acts: with `-h` or `--help` on the line it prints the
-/// shell's usage line and touches nothing. A line that is exactly a
-/// captured help form (`stop -h`, `restart -h`) is the binary's page;
-/// any other is handed to the shell.
+/// Help never acts: with `-h` or `--help` anywhere on the line it prints
+/// the daemon usage (survive's own help for survive) on stdout, exit 0,
+/// and touches nothing: no service call, no request, no file. A line that
+/// is exactly a captured help form (`stop -h`, `restart -h`) is the
+/// binary's page; any other is handed to the shell.
 #[test]
 fn daemon_help_lines_never_act() {
     let r = rig("help");
     let rows: Vec<Case> = vec![
-        case("stop -h", &["stop", "-h"], &[], vec![], user_unit, 2, 0),
+        case("-h", &["-h"], &[], vec![], user_unit, 0, 0),
+        case("start -h", &["start", "-h"], &[], vec![], user_unit, 0, 0),
+        case("stop -h", &["stop", "-h"], &[], vec![], user_unit, 0, 0),
         case(
             "stop --keep-agents --help",
             &["stop", "--keep-agents", "--help"],
             &[],
             vec![],
             user_unit,
-            2,
+            0,
             0,
         ),
         case(
@@ -1641,7 +1668,7 @@ fn daemon_help_lines_never_act() {
             &[],
             vec![],
             user_unit,
-            2,
+            0,
             0,
         ),
         case(
@@ -1650,7 +1677,70 @@ fn daemon_help_lines_never_act() {
             &[],
             vec![],
             user_unit,
-            2,
+            0,
+            0,
+        ),
+        case(
+            "restart --token -h",
+            &["restart", "--token", "-h"],
+            &[],
+            vec![],
+            user_unit,
+            0,
+            0,
+        ),
+        case(
+            "survive on -h",
+            &["survive", "on", "-h"],
+            &[],
+            vec![],
+            user_unit,
+            0,
+            0,
+        ),
+        case(
+            "survive off --help",
+            &["survive", "off", "--help"],
+            &[],
+            vec![],
+            user_unit,
+            0,
+            0,
+        ),
+        case(
+            "uninstall -h",
+            &["uninstall", "-h"],
+            &[],
+            vec![],
+            user_unit,
+            0,
+            0,
+        ),
+        case(
+            "uninstall --yes --help",
+            &["uninstall", "--yes", "--help"],
+            &[],
+            vec![],
+            user_unit,
+            0,
+            0,
+        ),
+        case(
+            "macOS: start -h",
+            &["start", "-h"],
+            &[],
+            vec![],
+            mac_plist,
+            0,
+            0,
+        ),
+        case(
+            "macOS: uninstall -y --help",
+            &["uninstall", "-y", "--help"],
+            &[],
+            vec![],
+            mac_plist,
+            0,
             0,
         ),
     ];
@@ -1660,16 +1750,16 @@ fn daemon_help_lines_never_act() {
     }
 }
 
-/// A value flag as the last word is the shell's (`install` never reaches
-/// [`life::parse`]: [`k5_cli::families::daemon::install`] reads it).
+/// `log`'s value flag as the last word is the shell's (`install` never
+/// reaches [`life::parse`]: [`k5_cli::families::daemon::install`] reads
+/// it; `restart --host` or `--token` as the last word is the binary's: a
+/// usage error, exit 2).
 #[test]
 fn a_last_value_flag_is_the_shell_s() {
     for (verb, rest) in [
         ("install", &[][..]),
         ("log", &["--tail"][..]),
         ("logs", &["-n"][..]),
-        ("restart", &["--host"][..]),
-        ("restart", &["--token"][..]),
         ("restart", &["--host", "k2.example"][..]),
     ] {
         assert_eq!(

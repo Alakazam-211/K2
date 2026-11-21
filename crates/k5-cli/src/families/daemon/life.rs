@@ -29,9 +29,8 @@
 //!   a child's environment.
 //!
 //! The binary hands these to the shell ([`parse`] says `None`) before it
-//! prints, reads or sends anything: a value flag as the last
-//! word (`restart --host`, `restart --token`, `log --tail`, `log -n`: the
-//! shell's own `shift 2` or `$2` failure); `restart --host` with a host
+//! prints, reads or sends anything: `log --tail` or `log -n`
+//! as the last word (the shell's own `$2` failure); `restart --host` with a host
 //! that is not an `http://` or `https://` URL the shared remote reader
 //! takes ([`remote::base`]: the shell's curl would read a bare name as
 //! `http://`, a path or a user part as they are); and `restart --host
@@ -79,6 +78,8 @@ pub enum Life {
     Restart(Restart),
     /// `restart` with a word it doesn't take: exit 2.
     RestartUnknown(String),
+    /// `restart --host` or `--token` as the last word: exit 2.
+    RestartNeeds(String),
     Survive(Survive),
     Log {
         tail: String,
@@ -153,7 +154,7 @@ pub fn parse(verb: &str, rest: &[&str]) -> Option<Life> {
         }
         "install" => return None,
         "uninstall" => Life::Uninstall {
-            yes: matches!(rest.first().copied(), Some("--yes" | "-y")),
+            yes: rest.iter().any(|w| matches!(*w, "--yes" | "-y")),
         },
         _ => Life::Usage,
     })
@@ -168,7 +169,10 @@ fn restart_words(rest: &[&str]) -> Option<Life> {
         match w {
             "--sessions" => r.sessions = true,
             "--host" | "--token" => {
-                let v = rest.get(i + 1)?.to_string();
+                let Some(v) = rest.get(i + 1) else {
+                    return Some(Life::RestartNeeds(w.to_string()));
+                };
+                let v = v.to_string();
                 if w == "--host" {
                     r.host = v;
                 } else {
@@ -488,6 +492,10 @@ pub fn run(s: &Settings, client: &mut Client, v: Life) -> Exit {
         Life::Restart(r) => restart(s, client, r),
         Life::RestartUnknown(w) => {
             out::stderr_line(&format!("daemon restart: unknown argument: {w}"));
+            Exit::Usage
+        }
+        Life::RestartNeeds(flag) => {
+            out::stderr_line(&format!("daemon restart: {flag} needs a value"));
             Exit::Usage
         }
         Life::Survive(sv) => survive(client, sv),
@@ -1243,10 +1251,17 @@ mod tests {
         );
         assert_eq!(
             parse("uninstall", &["x", "--yes"]),
+            Some(Life::Uninstall { yes: true })
+        );
+        assert_eq!(
+            parse("uninstall", &["x"]),
             Some(Life::Uninstall { yes: false })
         );
         assert_eq!(parse("survive", &[]), Some(Life::Survive(Survive::Status)));
-        assert_eq!(parse("restart", &["--host"]), None);
+        assert_eq!(
+            parse("restart", &["--host"]),
+            Some(Life::RestartNeeds("--host".into()))
+        );
         assert_eq!(parse("restart", &["--host", "k2.example"]), None);
         assert_eq!(
             parse("restart", &["--wait", "nope", "--host"]),

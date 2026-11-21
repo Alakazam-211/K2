@@ -166,9 +166,10 @@ fn real_pg_read_grant_reads_and_never_writes() {
     k2_core::db::init_for_tests();
     let owner_id = format!("ws-rdr-own-{}", &uuid::Uuid::new_v4().simple().to_string()[..6]);
     let ws_dir = std::env::temp_dir().join(format!("k2-rdr-ws-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(ws_dir.join(".k2/db/migrations")).unwrap();
+    let migrations = k2_core::workspace_dot_dir(&ws_dir).join("db").join("migrations");
+    std::fs::create_dir_all(&migrations).unwrap();
     std::fs::write(
-        ws_dir.join(".k2/db/migrations/0001_notes.sql"),
+        migrations.join("0001_notes.sql"),
         "CREATE TABLE notes (id serial PRIMARY KEY, body text NOT NULL);\nINSERT INTO notes (body) VALUES ('hello');\n",
     )
     .unwrap();

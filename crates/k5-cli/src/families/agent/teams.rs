@@ -16,12 +16,12 @@
 //!   nothing printed, exit 1.
 
 use super::{cli, dumps, obj, s};
-use crate::exit::Exit;
 use crate::cards::Decode;
+use crate::exit::Exit;
 use crate::families::doc::py::{decode_here, escaped};
 use crate::families::{
-    end_in_pipe, get, piped_body, pipefail, py_get, py_iter, request_piped_tcp, without_nuls,
-    Piped, Raise, Shown,
+    end_in_pipe, get, piped_body, pipefail, py_get, py_iter, raised, request_piped_tcp,
+    without_nuls, Piped, Raise, Shown,
 };
 use crate::out::json::{self, Options, Text, Value};
 use crate::out::pylib::{json as pyjson, ops};
@@ -66,12 +66,28 @@ pub enum View {
 pub enum Ask {
     /// `team [served] [--workspace <ws>] [--json]`: an empty `ws` is the
     /// workspace's own (`$PROJECT`).
-    Links { view: View, ws: String, json: bool },
+    Links {
+        view: View,
+        ws: String,
+        json: bool,
+    },
     /// `team link`: the body Python wrote.
-    Link { body: String, json: bool },
-    Unlink { id: String },
-    Show { id: String, json: bool },
-    Retire { id: String, force: bool, json: bool },
+    Link {
+        body: String,
+        json: bool,
+    },
+    Unlink {
+        id: String,
+    },
+    Show {
+        id: String,
+        json: bool,
+    },
+    Retire {
+        id: String,
+        force: bool,
+        json: bool,
+    },
     /// `instances hire <file|->`.
     Hire {
         file: String,
@@ -80,9 +96,16 @@ pub enum Ask {
         json: bool,
     },
     /// `instances [--key <k>] [--json]`.
-    List { key: String, json: bool },
-    Root { json: bool },
-    SetRoot { dir: String },
+    List {
+        key: String,
+        json: bool,
+    },
+    Root {
+        json: bool,
+    },
+    SetRoot {
+        dir: String,
+    },
 }
 
 /// What the words ask for: a verb, or lines on stderr and an exit.
@@ -129,7 +152,9 @@ pub fn parse_team(rest: &[&str]) -> Option<Parsed> {
                     }
                     "--mesh" => mesh = true,
                     "--json" => json = true,
-                    _ if w.starts_with('-') => return stop(format!("Unknown flag: {w}"), Exit::Usage),
+                    _ if w.starts_with('-') => {
+                        return stop(format!("Unknown flag: {w}"), Exit::Usage)
+                    }
                     _ if team.is_empty() => team = w.to_string(),
                     _ if ws.is_empty() => ws = w.to_string(),
                     _ => return stop(format!("Unexpected: {w}"), Exit::Usage),
@@ -387,7 +412,11 @@ pub fn run(client: &mut Client, closing: &mut Closing, ask: &Ask) -> Exit {
         }
         Ask::List { key, json } => {
             let q = format!("key={}", quote(key));
-            let args: Vec<&str> = if key.is_empty() { vec![] } else { vec![q.as_str()] };
+            let args: Vec<&str> = if key.is_empty() {
+                vec![]
+            } else {
+                vec![q.as_str()]
+            };
             let left = request_piped_tcp(client, closing, INSTANCES, &args);
             read(left, View::Instances, *json)
         }
@@ -410,7 +439,12 @@ fn read(left: Piped, view: View, json: bool) -> Exit {
 }
 
 /// `cli_post_json <endpoint> <body>` on the left of a pipe.
-fn post_json_piped(client: &mut Client, closing: &mut Closing, endpoint: &str, body: &str) -> Piped {
+fn post_json_piped(
+    client: &mut Client,
+    closing: &mut Closing,
+    endpoint: &str,
+    body: &str,
+) -> Piped {
     let passport = client.passport().is_some();
     match client.call(Channel::Tcp, endpoint, Call::PostJson(body.as_bytes())) {
         Ok(r) => {
@@ -476,7 +510,12 @@ fn read_recipe(file: &str) -> Result<Vec<u8>, Shown> {
             Ok(b) => b,
             // `cat` says why on stderr, and the failed `$(…)` ends the
             // command under `set -e`.
-            Err(e) => return Err(Shown::err(format!("cat: {file}: {}\n", why(&e)), Exit::Error)),
+            Err(e) => {
+                return Err(Shown::err(
+                    format!("cat: {file}: {}\n", why(&e)),
+                    Exit::Error,
+                ))
+            }
         }
     };
     let mut held = without_nuls(&bytes);
@@ -710,7 +749,7 @@ pub fn hire_print(raw: &str, view: View, as_json: bool) -> Shown {
             stderr: String::new(),
             exit,
         },
-        Err(r) => super::raised(out, String::new(), &r),
+        Err(r) => raised(out, String::new(), &r),
     }
 }
 
@@ -737,7 +776,7 @@ fn refused(d: &Value) -> Option<Shown> {
                     12,
                     "TypeError: can only concatenate list (not \"str\") to list",
                 );
-                return Some(super::raised(String::new(), String::new(), &r));
+                return Some(raised(String::new(), String::new(), &r));
             }
             other => {
                 let r = Raise::at(
@@ -747,7 +786,7 @@ fn refused(d: &Value) -> Option<Shown> {
                         py::type_name(other)
                     ),
                 );
-                return Some(super::raised(String::new(), String::new(), &r));
+                return Some(raised(String::new(), String::new(), &r));
             }
         }
     };
@@ -762,7 +801,7 @@ fn refused(d: &Value) -> Option<Shown> {
         Value::Str(_) => py::str_of(&hint).to_lowercase().contains("token"),
         other => {
             let r = Raise::no_attribute(13, other, "lower");
-            return Some(super::raised(String::new(), line, &r));
+            return Some(raised(String::new(), line, &r));
         }
     };
     if token {
@@ -773,7 +812,7 @@ fn refused(d: &Value) -> Option<Shown> {
             15,
             format!("TypeError: unhashable type: '{}'", py::type_name(&code)),
         );
-        return Some(super::raised(String::new(), line, &r));
+        return Some(raised(String::new(), line, &r));
     }
     let exit = if ops::py_eq(&code, &s("not_found")) {
         Exit::NotFound
@@ -797,10 +836,7 @@ fn link_line(l: &Value, out_side: bool, from: u32) -> Result<String, Raise> {
         "consumerHandle"
     };
     let other = py_get(l, other_key, 20).map_err(inside)?.cloned();
-    let team = or(
-        at(l, "teamName"),
-        or(at(l, "teamLeadHandle"), s("?")),
-    );
+    let team = or(at(l, "teamName"), or(at(l, "teamLeadHandle"), s("?")));
     let scope = match at(l, "scope") {
         Some(v) if *v != Value::Null => dumps(v),
         _ => "-".to_string(),
@@ -1042,11 +1078,7 @@ fn retire(d: &Value, out: &mut String) -> Result<Exit, Raise> {
         let h = ops::index(&m, "handle", 75)?;
         let st = ops::index(&m, "status", 75)?;
         let why = reason(&m, 75)?;
-        out.push_str(&format!(
-            "  {} {}{why}\n",
-            py::str_of(h),
-            py::str_of(st)
-        ));
+        out.push_str(&format!("  {} {}{why}\n", py::str_of(h), py::str_of(st)));
     }
     if let Some(h) = at(d, "hint").filter(|h| py::truthy(h)) {
         out.push_str(&py::str_of(h));
@@ -1120,7 +1152,10 @@ mod tests {
                 json: true
             }))
         );
-        assert_eq!(team(&["--workspace"]), Some(Parsed::Stop(vec![], Exit::Error)));
+        assert_eq!(
+            team(&["--workspace"]),
+            Some(Parsed::Stop(vec![], Exit::Error))
+        );
         assert!(matches!(team(&[""]), Some(Parsed::Stop(_, Exit::Usage))));
         assert_eq!(
             team(&["link", "t", "w", "--kind", "serves", "--mesh", "--scope", "{\"a\": 1}"]),
@@ -1131,9 +1166,15 @@ mod tests {
         );
         assert_eq!(
             team(&["link", "t", "w", "--scope", "nope"]),
-            Some(Parsed::Stop(vec!["--scope must be JSON".into()], Exit::Usage))
+            Some(Parsed::Stop(
+                vec!["--scope must be JSON".into()],
+                Exit::Usage
+            ))
         );
-        assert_eq!(team(&["link", "t", "--kind"]), Some(Parsed::Stop(vec![], Exit::Error)));
+        assert_eq!(
+            team(&["link", "t", "--kind"]),
+            Some(Parsed::Stop(vec![], Exit::Error))
+        );
         assert_eq!(
             team(&["link", "", "t", "w"]),
             Some(Parsed::Ask(Ask::Link {
@@ -1170,7 +1211,10 @@ mod tests {
                 json: false
             }))
         );
-        assert_eq!(parse_instances(&["--key"]), Some(Parsed::Stop(vec![], Exit::Error)));
+        assert_eq!(
+            parse_instances(&["--key"]),
+            Some(Parsed::Stop(vec![], Exit::Error))
+        );
     }
 
     #[test]
@@ -1201,7 +1245,10 @@ mod tests {
             View::Root,
             false,
         );
-        assert_eq!((p.stderr.as_str(), p.exit), ("Error: owner_only: no\n", Exit::Refused));
+        assert_eq!(
+            (p.stderr.as_str(), p.exit),
+            ("Error: owner_only: no\n", Exit::Refused)
+        );
         let p = hire_print(r#"{"root": "/srv/h", "default": true}"#, View::Root, false);
         assert_eq!(p.stdout, "/srv/h  (default)\n");
         let p = hire_print(
@@ -1210,7 +1257,11 @@ mod tests {
             false,
         );
         assert_eq!(p.stdout, "i1  [live]  -  a,b  by key abcdefgh\n");
-        let p = hire_print(r#"{"instances": [{"members": [{}]}]}"#, View::Instances, false);
+        let p = hire_print(
+            r#"{"instances": [{"members": [{}]}]}"#,
+            View::Instances,
+            false,
+        );
         assert!(p.stderr.ends_with(
             "line 46, in <module>\n  File \"<string>\", line 46, in <genexpr>\nKeyError: 'handle'\n"
         ));

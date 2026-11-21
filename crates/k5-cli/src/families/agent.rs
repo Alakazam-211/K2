@@ -68,8 +68,8 @@ mod set;
 mod teams;
 mod template;
 
-use super::{curl_port, live_socket};
 use super::feedback::write::traceback_stdin;
+use super::{curl_port, live_socket};
 use super::{Raise, Shown};
 use crate::daemon::{self, Settings};
 use crate::exit::Exit;

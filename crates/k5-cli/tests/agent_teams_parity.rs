@@ -179,7 +179,14 @@ fn the_words() {
     // native: agent
     // native: agent template
     // native: agent templates
-    for args in [&[][..], &[""], &["", "x"], &["template"], &["templates"], &["template", ""]] {
+    for args in [
+        &[][..],
+        &[""],
+        &["", "x"],
+        &["template"],
+        &["templates"],
+        &["template", ""],
+    ] {
         v.push(case(
             "a help page",
             leak(args),
@@ -582,7 +589,9 @@ fn instance_reads() {
             "a member with no handle",
             &["instances"],
             &[],
-            vec![ok(r#"{"instances":[{"id":"i","status":"s","members":[{}]}]}"#)],
+            vec![ok(
+                r#"{"instances":[{"id":"i","status":"s","members":[{}]}]}"#,
+            )],
             owner_and_port,
             1,
             1,
@@ -591,7 +600,9 @@ fn instance_reads() {
             "a key id that is a number",
             &["instances"],
             &[],
-            vec![ok(r#"{"instances":[{"id":"i","status":"s","apiKeyId":7}]}"#)],
+            vec![ok(
+                r#"{"instances":[{"id":"i","status":"s","apiKeyId":7}]}"#,
+            )],
             owner_and_port,
             1,
             1,
@@ -939,7 +950,14 @@ fn update_complete_profile() {
     let v = vec![
         case(
             "update",
-            &["update", "qa", "--field", "Work Sources", "--value", "a & b"],
+            &[
+                "update",
+                "qa",
+                "--field",
+                "Work Sources",
+                "--value",
+                "a & b",
+            ],
             &[],
             vec![ok(r#"{"success":true}"#)],
             owner_and_port,
@@ -948,7 +966,9 @@ fn update_complete_profile() {
         ),
         case(
             "update, --name wins the first word",
-            &["update", "--name", "qa", "x", "--field", "role", "--value", "v"],
+            &[
+                "update", "--name", "qa", "x", "--field", "role", "--value", "v",
+            ],
             &[],
             vec![ok(r#"{"success":true}"#)],
             owner_and_port,
@@ -1071,7 +1091,10 @@ fn update_complete_profile() {
             "profile, an error",
             &["profile", "nope"],
             &[],
-            vec![Reply::Answer(404, r#"{"error":"no such workspace"}"#.into())],
+            vec![Reply::Answer(
+                404,
+                r#"{"error":"no such workspace"}"#.into(),
+            )],
             owner_and_port,
             1,
             1,

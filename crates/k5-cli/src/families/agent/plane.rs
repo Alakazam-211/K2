@@ -176,8 +176,13 @@ pub fn update(
         format!("value={}", quote(&u.value)),
     ];
     let refs: Vec<&str> = pairs.iter().map(String::as_str).collect();
-    let exit = match ws_request(&mut ws, &mut first, AGENT_UPDATE, Call::RequestPost(&refs), false)
-    {
+    let exit = match ws_request(
+        &mut ws,
+        &mut first,
+        AGENT_UPDATE,
+        Call::RequestPost(&refs),
+        false,
+    ) {
         Err(exit) => exit,
         Ok(answer) => match verdict(&answer, AGENT_UPDATE) {
             Verdict::Error(err) => {
@@ -236,7 +241,10 @@ pub fn template_page() -> &'static str {
 pub fn unknown(word: &str) -> Exit {
     let key = format!("agent {word}");
     if let Some(new) = crate::retired::find(&key) {
-        out::stderr_line(&format!("Error: '{key}' is retired. Use instead: {}", branded(new)));
+        out::stderr_line(&format!(
+            "Error: '{key}' is retired. Use instead: {}",
+            branded(new)
+        ));
         return Exit::Error;
     }
     let mut text = format!("Unknown agent subcommand: {word}\n");

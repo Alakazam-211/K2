@@ -62512,14 +62512,31 @@ if row.get("aliases"):
 # refusal by its row (exit the row's); a 404 or 405 (an older daemon with
 # no such route) one line saying to update it, exit 1; any other error as
 # k2 board prints it.
+#
+# A 403 on the cell socket can be an older daemon too: before 0.46.17 the
+# socket doesn't count this route as an agent verb, so it answers "Invalid
+# or missing auth token". It can also be a real refusal, so the 403 alone
+# decides nothing (K2's ruling): the daemon's version from loopback
+# /boot-status (_update_daemon_version) older than 0.46.17 gets the update
+# line; any other version, or no answer, the refusal as before.
 _explain_kit() {
-    local id="$1" json_out="$2" query
+    local id="$1" json_out="$2" query sock dver older=0
     query="id=$(urlencode "$id")"
     [ "$json_out" = 1 ] && query="${query}&json=1"
     _compute_split "$(_compute_send GET /cli/kit/explain "$query")"
+    if [ "$_CP_STATUS" = 403 ]; then
+        # The cell socket was asked: _compute_send's own test for it.
+        sock="$(_hook_sock)"
+        if [ -n "$sock" ] && [ -S "$sock" ] && ! _cli_skip_uds && [ -n "${SCOPED_TOKEN:-}" ]; then
+            dver="$(_update_daemon_version)"
+            if [[ "$dver" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+ ]] && _daemon_version_lt "${BASH_REMATCH[0]}" 0.46.17; then
+                older=1
+            fi
+        fi
+    fi
     printf '%s' "$_CP_BODY" | python3 -c '
 import json, sys
-status, as_json = sys.argv[1], sys.argv[2] == "1"
+status, as_json, older = sys.argv[1], sys.argv[2] == "1", sys.argv[3] == "1"
 raw = sys.stdin.read()
 try:
     v = json.loads(raw) if raw.strip() else {}
@@ -62530,7 +62547,7 @@ if not isinstance(v, dict):
 if status == "200" and isinstance(v.get("stdout"), str):
     sys.stdout.write(v["stdout"])
     sys.exit(v.get("exit") or 0)
-if status in ("404", "405"):
+if status in ("404", "405") or older:
     # An older daemon has no /cli/kit/explain (K2 ruling: no fallback).
     print("This K2 server is older and can'"'"'t explain kit codes yet; update it (k2 update).", file=sys.stderr)
     sys.exit(1)
@@ -62551,7 +62568,7 @@ if as_json:
 else:
     print("Error [%s]: %s" % (code, hint), file=sys.stderr)
 sys.exit(3 if code in ("not_enabled", "forbidden", "not_connected", "sandboxed_agent", "core_off") else 1)
-' "$_CP_STATUS" "$json_out"
+' "$_CP_STATUS" "$json_out" "$older"
 }
 
 # `k2 capabilities [--json] [--node <n>]` (TC-17).

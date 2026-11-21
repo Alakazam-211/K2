@@ -19,9 +19,18 @@
 #     no passport: msg is a passport tool, so it stops with exit 3 before
 #     any request (no verb reaches this helper without a passport today;
 #     the helper's own guard is there for the next one).
+#   _explain_kit (k2 explain MPC-E301, GET /cli/kit/explain) answered 403 on
+#   the socket, as a daemon from before 0.46.17 answers it (the socket
+#   didn't count the route as an agent verb) and as a real refusal does.
+#   The 403 alone decides nothing (K2's ruling): one GET of loopback
+#   /boot-status, then
+#     version 0.46.16: "This K2 server is older ..." on stderr, exit 1;
+#     version 0.46.17: the refusal as before, exit 1;
+#     /boot-status failing (500, no version): the refusal as before.
 #
-# Hermetic: temp HOME, a stub daemon on loopback (it must get nothing) and
-# a stub cell socket that logs each request's raw head. No real ~/.k2.
+# Hermetic: temp HOME, a stub daemon on loopback (it must get nothing but
+# the kit rows' /boot-status and passport check) and a stub cell socket
+# that logs each request's raw head. No real ~/.k2.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -80,11 +89,16 @@ def serve_uds(conn):
         with open(uds_log, "a") as f:
             f.write(json.dumps({"head": head.decode(), "body": rest.decode()}) + "\n")
         target = head.split(b"\r\n")[0].split(b" ")[1].split(b"?")[0]
+        status = b"200 OK"
         if target == b"/cli/terminal/read":
             body = b'{"lines": ["hello from acme"]}'
+        elif target == b"/cli/kit/explain":
+            # The socket's own refusal (cell_server.rs).
+            status = b"403 Forbidden"
+            body = b'{"error":"Invalid or missing auth token"}'
         else:
             body = b'{"success": true, "ok": true}'
-        conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n" % len(body) + body)
+        conn.sendall(b"HTTP/1.1 %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n" % (status, len(body)) + body)
     finally:
         conn.close()
 
@@ -104,6 +118,17 @@ class H(BaseHTTPRequestHandler):
     def answer(self):
         with open(tcp_log, "a") as f:
             f.write(json.dumps({"method": self.command, "target": self.path}) + "\n")
+        # /boot-status: the version in boot.version, or a 500 when it says fail.
+        version_file = os.path.join(root, "boot.version")
+        version = open(version_file).read().strip() if os.path.exists(version_file) else "fail"
+        if self.command == "GET" and self.path == "/boot-status" and version != "fail":
+            body = json.dumps({"phase": "ready", "version": version}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         body = b'{"error": "the test sends nothing over TCP"}'
         self.send_response(500)
         self.send_header("Content-Type", "application/json")
@@ -230,6 +255,68 @@ if [ "$RC" = 3 ] && [ -z "$TCP" ] && [ -z "$HEADS" ] && grep -q "requires sessio
 else
     bad "msg --signal, no passport: rc=$RC tcp=[$TCP] socket=[$HEADS] stderr=[$ERR]"
 fi
+
+echo "== _explain_kit: a 403 on the cell socket, then the daemon's version =="
+OLD_LINE="This K2 server is older and can't explain kit codes yet; update it (k2 update)."
+REFUSAL="Error [error]: the daemon refused (HTTP 403)"
+KIT_GET="GET /cli/kit/explain?id=MPC-E301 HTTP/1.1"
+KIT_GET_JSON="GET /cli/kit/explain?id=MPC-E301&json=1 HTTP/1.1"
+# kit_case <boot.version> <label> <k2 args...>: runs it with a passport on
+# the socket; KIT_REQS is the socket's request lines then the TCP targets.
+kit_case() {
+    printf '%s\n' "$1" > "$WORKDIR/boot.version"
+    shift
+    run "${PASS[@]}" -- "$@"
+    local sock_lines tcp_lines
+    sock_lines="$(grep -E '^(GET|POST) ' <<<"$HEADS" || true)"
+    tcp_lines="$(python3 -c '
+import json, sys
+for l in open(sys.argv[1]):
+    if l.strip():
+        r = json.loads(l)
+        print("tcp " + r["method"] + " " + r["target"])
+' "$WORKDIR/tcp.jsonl")"
+    KIT_REQS="$sock_lines"$'\n'"$tcp_lines"
+}
+# kit_reqs_ok <request line>: the requests were that one socket GET, with
+# the passport once and no owner token, then loopback /boot-status, then
+# the exit trap's passport check on a "missing auth token" answer
+# (_permission_note_flush: /cli/whoami, which this stub doesn't refuse).
+kit_reqs_ok() {
+    local h; h="$(head_of "$1")"
+    [ "$KIT_REQS" = "$1"$'\n'"tcp GET /boot-status"$'\n'"tcp GET /cli/whoami" ] &&
+        [ "$(grep -ci '^authorization:' <<<"$h")" = 1 ] && grep -qx 'Authorization: Bearer pp-acme.s3cret' <<<"$h" &&
+        ! grep -q 'owner-secret-token' <<<"$HEADS"
+}
+
+kit_case 0.46.16 explain MPC-E301
+if [ "$RC" = 1 ] && [ -z "$OUT" ] && [ "$ERR" = "$OLD_LINE" ] && kit_reqs_ok "$KIT_GET"; then
+    ok "explain MPC-E301, 403 on the socket, server 0.46.16: the older line, exit 1; one socket GET, one /boot-status"
+else
+    bad "explain, 403, server 0.46.16: rc=$RC out=[$OUT] stderr=[$ERR] requests=[$KIT_REQS]"
+fi
+
+kit_case 0.46.16 explain MPC-E301 --json
+if [ "$RC" = 1 ] && [ -z "$OUT" ] && [ "$ERR" = "$OLD_LINE" ] && kit_reqs_ok "$KIT_GET_JSON"; then
+    ok "explain MPC-E301 --json, 403, server 0.46.16: the older line, exit 1"
+else
+    bad "explain --json, 403, server 0.46.16: rc=$RC out=[$OUT] stderr=[$ERR] requests=[$KIT_REQS]"
+fi
+
+kit_case 0.46.17 explain MPC-E301
+if [ "$RC" = 1 ] && [ -z "$OUT" ] && [ "$ERR" = "$REFUSAL" ] && kit_reqs_ok "$KIT_GET"; then
+    ok "explain MPC-E301, 403 on the socket, server 0.46.17: the refusal as before, exit 1; one socket GET, one /boot-status"
+else
+    bad "explain, 403, server 0.46.17: rc=$RC out=[$OUT] stderr=[$ERR] requests=[$KIT_REQS]"
+fi
+
+kit_case fail explain MPC-E301
+if [ "$RC" = 1 ] && [ -z "$OUT" ] && [ "$ERR" = "$REFUSAL" ] && kit_reqs_ok "$KIT_GET"; then
+    ok "explain MPC-E301, 403 on the socket, /boot-status failing: the refusal as before, exit 1"
+else
+    bad "explain, 403, /boot-status failing: rc=$RC out=[$OUT] stderr=[$ERR] requests=[$KIT_REQS]"
+fi
+rm -f "$WORKDIR/boot.version"
 
 echo
 echo "cell_socket_auth_line: $pass passed, $fail failed"

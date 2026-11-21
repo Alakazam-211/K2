@@ -817,6 +817,8 @@ fn read_head(r: &mut impl BufRead) -> Result<Head, Raised> {
 pub struct Answered {
     pub outcome: Outcome,
     pub location: Option<String>,
+    /// The daemon's version header, for [`skew::note`].
+    pub server_version: Option<String>,
 }
 
 /// The answer on `r` as http.client reads it after a request was sent
@@ -830,6 +832,7 @@ pub fn read_answer(r: &mut impl BufRead) -> Answered {
             return Answered {
                 outcome: Outcome::Raised(raised),
                 location: None,
+                server_version: None,
             }
         }
     };
@@ -848,6 +851,7 @@ pub fn read_answer(r: &mut impl BufRead) -> Answered {
     Answered {
         outcome,
         location: head.location,
+        server_version: head.server_version,
     }
 }
 

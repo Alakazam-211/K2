@@ -386,7 +386,7 @@ fn a_verb_that_falls_through_without_python3_says_so_and_runs_nothing() {
     let path = common::path_without_python3(&rig.dir);
     for (name, case) in [
         ("k5", shell_family_line()),
-        ("k2", args(&["compute", "list"])),
+        ("k2", shell_family_line()),
         ("k5", unknown()),
     ] {
         let noun = k5_cli::fallthrough::noun(&case);

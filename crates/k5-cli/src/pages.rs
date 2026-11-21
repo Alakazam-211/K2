@@ -27,11 +27,11 @@
 //! `k2 study` (`cli/src/study-command.sh`): its arguments are read in
 //! order, as the shell reads them. The binary answers the list (`study`,
 //! `study list`), the usage (`--help` or `-h` anywhere after the errors
-//! the shell reports first), and every topic with a page under
-//! `cli/text/study`, as text or `--json`. The shell keeps: the list as
-//! JSON (it needs the titles, which live in the shell), the topics still
-//! written in bash (`app-api`, `app-errors`, `live`, no file), an unknown
-//! topic, and every error.
+//! the shell reports first), the list as JSON (`study --json`, `study
+//! list --json`: each topic's id and title, [`STUDY_TITLES`]), and every
+//! topic with a page under `cli/text/study`, as text or `--json`. The
+//! shell keeps: the topics still written in bash (`app-api`,
+//! `app-errors`, `live`, no file), an unknown topic, and every error.
 //!
 //! With a passport, the list, the usage, the apps page (and `skins`) and
 //! the cards-only `permissions` topic depend on whether permission cards
@@ -72,6 +72,8 @@ pub enum Study {
     Usage,
     /// No topic, or `list`, without `--json`: `_study_catalog_all`.
     Catalog,
+    /// No topic, or `list`, with `--json`: each topic's id and title.
+    CatalogJson,
     /// A topic's page (after the heartbeats aliases), as text or JSON.
     Page { topic: &'static str, json: bool },
 }
@@ -143,7 +145,11 @@ pub fn study(rest: &[&str]) -> Option<Study> {
         }
     }
     if topic.is_empty() || topic == "list" {
-        return (!json).then_some(Study::Catalog);
+        return Some(if json {
+            Study::CatalogJson
+        } else {
+            Study::Catalog
+        });
     }
     let topic = if HEARTBEAT_ALIASES.contains(&topic) {
         "heartbeats"
@@ -221,13 +227,133 @@ fn catalog(on: bool) -> Option<Cow<'static, str>> {
 /// and if so its switch.
 fn cards_switch(s: Study) -> Option<bool> {
     match s {
-        Study::Usage | Study::Catalog => Some(LIST_WITH_PASSPORT),
+        Study::Usage | Study::Catalog | Study::CatalogJson => Some(LIST_WITH_PASSPORT),
         Study::Page { topic, .. } if topic == CARDS_PAGE || topic == "skins" => {
             Some(APPS_WITH_PASSPORT)
         }
         Study::Page { topic, .. } if topic == CARDS_ONLY => Some(PERMISSIONS_WITH_PASSPORT),
         Study::Page { .. } => None,
     }
+}
+
+/// `_STUDY_TOPIC_IDS` in its order, then the cards-only topic, each
+/// with its `_study_title` (`cli/src/study-index.sh`; the product and
+/// command names are the brand's).
+pub const STUDY_TITLES: &[(&str, &str)] = &[
+    ("what", concat!("What ", k2_client::product_name!(), " is")),
+    ("source", "License and repo boundary"),
+    ("map", "How the surface is organized"),
+    ("identity", "Who you are"),
+    ("send", "How to send work"),
+    ("human", "Talking to your human"),
+    ("people", "Four people lists"),
+    ("auth", "Identity and gates"),
+    ("errors", "Exit codes"),
+    ("context", "Always-on context"),
+    ("db", "Workspace database"),
+    ("mail", "Agent email"),
+    ("connect-boundary", concat!(k2_client::product_name!(), " vs Connect")),
+    ("apps", "Apps"),
+    ("app-deploys", "Deploying Apps"),
+    ("app-move", "Moving your --cmd service to an App"),
+    ("app-api", "The App API: server SDK and gateway routes"),
+    ("app-errors", "App refusals: every id, its fix and who fixes it"),
+    ("live", "Live surfaces: what an App or a Garden widget can show live"),
+    ("app-heartbeats", "Heartbeats in an app"),
+    ("app-tickets", "Tickets in an app"),
+    ("app-identity", "An agent's name, color, picture and handle in an app"),
+    ("app-surfaces", "Room members, and an App's own self and usage"),
+    ("app-resources", "Disk and memory, the disk guard, clean and trends"),
+    ("app-runtime", concat!(k2_client::product_name!(), " updates and your App: the re-host")),
+    ("app-handover", "Handing an App to another agent"),
+    ("app-push", "Notifications to a custom App's own phone app"),
+    ("app-pairing", "Pairing a custom App's own phone app by QR"),
+    ("auth-pages", concat!("Your own sign-in pages: passwords straight to ", k2_client::product_name!())),
+    ("app-profile", "A person's own profile, picture and sessions in an App"),
+    ("app-account-deletion", "A person deletes their own App account: store rules, modes, what stays"),
+    ("app-transfers", "Big files that survive the app in the background"),
+    ("app-transfers-http", "Resumable uploads over plain HTTP: every field, refusal and curl"),
+    ("app-chat", "Chat, voice and calls in your App"),
+    ("app-recording", "Recording in an App's calls: consent, required, server reads, the lock"),
+    ("chat-voice", "Voice rooms and channels in your App: the setup"),
+    ("chat-voice-rooms", "Rooms and channels in your App Space"),
+    ("voice-rooms", "Voice rooms on this server (preview)"),
+    ("tauri", concat!("The ", k2_client::product_name!(), " side of a Tauri app, end to end")),
+    ("tauri-voice", "Calls inside a Tauri app's window"),
+    ("skins", "Apps"),
+    ("feedback-loop", "Changing this box"),
+    ("ticket-brief", "Ticket HTML brief"),
+    ("zen", "Zen Gardens"),
+    ("sidecars", "Sidecars"),
+    ("sessions", "Sessions in this workspace"),
+    ("llm-tokens", "LLM tokens"),
+    ("llm-accounts", "LLM tokens"),
+    ("publish-framing", "Who may frame your App"),
+    ("publish-visibility", "Private, PIN or public: who may open your site"),
+    ("publish-dev", "Host a dev server with hot reload"),
+    ("compute", "Compute nodes"),
+    ("compute-shared", "Shared compute nodes"),
+    ("ci", concat!("CI on ", k2_client::product_name!(), " Compute")),
+    ("ci-release", concat!("Signed release builds on ", k2_client::product_name!(), " Compute")),
+    ("ci-stats", "CI stats, monitors and the [ci] run message"),
+    ("provenance", "Build statements: what a node signs about a build, and how to check one"),
+    ("vault", "Secrets (the vault)"),
+    ("notifications", "Thread posts and phone pushes"),
+    ("data-sources", "Data sources and triggers"),
+    ("projects", concat!(k2_client::product_name!(), " projects and who may change them")),
+    ("hooks", "Custom agents: Thread and lifecycle hooks"),
+    ("agent-hire", "Hiring agents through the v1 API"),
+    ("garden-data", "Garden data: a widget's keyspace and grants"),
+    ("garden-access", "Garden access: who may edit a Garden"),
+    ("garden-changes", "What changed for Gardens in 0.46.3"),
+    ("changes", "Git changes: review, stage, discard, commit"),
+    ("docs", "Live docs: edit Markdown, code and text with people and agents"),
+    ("sim", "The mobile device: tree first, act, read the diff"),
+    ("design", "Design notes: what a Design tab sends you"),
+    ("db-upgrade", "Moving a database to a newer Postgres"),
+    ("app-databases", "An App's database: what reaches what, and connecting one"),
+    ("jobs", "Scheduled jobs the daemon runs"),
+    ("heartbeats", "Heartbeats and one-time reminders (routines, cron)"),
+    ("mail-watch", "Hear that mail arrived: VIPs, the digest, what's safe"),
+    ("mail-reader", "The mail reader: people open inboxes; agents can't; every access logged"),
+    ("folder-trust", "Who may start AI tools in a folder"),
+    ("email-notifications", "One-way email from senders no agent can read"),
+    ("box-move", "Moving a box: the vault and the tunnel token"),
+    ("board", concat!("The Board Garden: ", k2_client::cli_name!(), " board, grants, the rules")),
+    ("chat-refresh", concat!("Refreshing your own chat: ", k2_client::cli_name!(), " agent refresh, the note, what carries on")),
+    ("desktop", "Remote desktop: this computer's screen in a Desktop tab (people only)"),
+    ("send-feedback", concat!("Telling ", k2_client::product_name!(), "'s makers about ", k2_client::product_name!(), ": ", k2_client::cli_name!(), " send-feedback, what is sent, agents' limits")),
+    ("organization", "The Org Chart: orgs, heads and the daily bulletin"),
+    ("agent-templates", "Agent templates: hire a type, save your own, upgrade"),
+    ("suite-apps", "One-click suite Apps (Hearth, Meet)"),
+    ("postal", "Postal: friends on other machines (Beta)"),
+    ("permissions", concat!("Permission cards: ask a person to allow what ", k2_client::product_name!(), " refused you")),
+];
+
+/// `study --json` (and `study list --json`): every topic of
+/// `_study_topic_ids_all` (the cards-only one while cards are `on`) with
+/// its title, as the shell's `python3` prints them:
+/// `json.dumps({"topics": [{"id": …, "title": …}, …]},
+/// separators=(",", ":"))`.
+pub fn catalog_json(on: bool) -> String {
+    let topics = STUDY_TITLES
+        .iter()
+        .filter(|(id, _)| on || *id != CARDS_ONLY)
+        .map(|(id, title)| {
+            Value::Object(vec![
+                ("id".into(), Value::Str((*id).into())),
+                ("title".into(), Value::Str((*title).into())),
+            ])
+        })
+        .collect();
+    let value = Value::Object(vec![("topics".into(), Value::Array(topics))]);
+    let options = json::Options {
+        compact: true,
+        ..json::Options::default()
+    };
+    let mut out = json::to_string(&value, &options).expect("a str holds no lone surrogate");
+    out.push('\n');
+    out
 }
 
 /// `--json` for a page: the shell pipes the page through
@@ -312,6 +438,10 @@ pub fn study_page(
         }
         _ => false,
     };
+    // The list as JSON: its python3 must read the titles as here.
+    if s == Study::CatalogJson && !native_json(env, &catalog_json(true)) {
+        return None;
+    }
     let cards_only = matches!(s, Study::Page { topic, .. } if topic == CARDS_ONLY);
     let on = match cards_switch(s) {
         None => false,
@@ -354,6 +484,7 @@ pub fn study_page(
     let text: Cow<'static, str> = match s {
         Study::Usage => usage(on)?,
         Study::Catalog => catalog(on)?,
+        Study::CatalogJson => catalog_json(on).into(),
         Study::Page { json: false, .. } if hidden => off_page(),
         Study::Page { topic, json: false } => study_text(topic, on)?,
         Study::Page { topic, json: true } => {
@@ -831,6 +962,40 @@ mod tests {
         Some(Study::Page { topic, json })
     }
 
+    /// [`STUDY_TITLES`] is `_STUDY_TOPIC_IDS` in its order, then
+    /// `permissions`, each with `_study_title`'s line (the names the
+    /// brand's: a `K2_BRAND_DIR=brand/xy` build says `xy` and `XY`).
+    #[test]
+    fn the_titles_are_the_shell_s() {
+        let sh = src("study-index.sh");
+        let ids = sh
+            .lines()
+            .find_map(|l| l.strip_prefix("_STUDY_TOPIC_IDS=\""))
+            .and_then(|l| l.strip_suffix('"'))
+            .expect("_STUDY_TOPIC_IDS");
+        let mut want: Vec<&str> = ids.split(' ').collect();
+        want.push(CARDS_ONLY);
+        let have: Vec<&str> = STUDY_TITLES.iter().map(|(id, _)| *id).collect();
+        assert_eq!(have, want);
+        let (cli, product) = (k2_client::brand::CLI_NAME, k2_client::brand::PRODUCT_NAME);
+        for (id, title) in STUDY_TITLES {
+            let as_k2 = title.replace(product, "K2").replace(cli, "k2");
+            let line = format!("        {id}) echo \"{as_k2}\" ;;\n");
+            assert!(sh.contains(&line), "_study_title has no {line:?}");
+            if cli != "k2" {
+                assert!(!title.contains("k2") && !title.contains("K2"), "{title}");
+            }
+        }
+        let all = catalog_json(true);
+        assert!(all.starts_with("{\"topics\":[{\"id\":\"what\",\"title\":\"What "), "{all}");
+        assert!(all.ends_with(&format!(
+            "{{\"id\":\"permissions\",\"title\":\"Permission cards: ask a person to allow what {product} refused you\"}}]}}\n"
+        )), "{all}");
+        let off = catalog_json(false);
+        assert!(!off.contains("\"permissions\""), "{off}");
+        assert!(off.ends_with("\"id\":\"postal\",\"title\":\"Postal: friends on other machines (Beta)\"}]}\n"), "{off}");
+    }
+
     #[test]
     fn the_arguments_are_read_as_the_shell_reads_them() {
         assert_eq!(study(&[]), Some(Study::Catalog));
@@ -857,11 +1022,11 @@ mod tests {
         ] {
             assert_eq!(study(usage), Some(Study::Usage), "{usage:?}");
         }
-        // The shell's: the list as JSON, errors (an unknown flag, a second
-        // topic, before any --help), unknown topics and the bash pages.
+        assert_eq!(study(&["--json"]), Some(Study::CatalogJson));
+        assert_eq!(study(&["list", "--json"]), Some(Study::CatalogJson));
+        // The shell's: errors (an unknown flag, a second topic, before any
+        // --help), unknown topics and the bash pages.
         for shell in [
-            &["--json"][..],
-            &["list", "--json"],
             &["--bogus", "--help"],
             &["--"],
             &["errors", "db"],

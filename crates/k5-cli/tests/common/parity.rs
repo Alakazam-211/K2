@@ -300,11 +300,7 @@ fn mktemp_tried_line<'a>(line: &'a str, stem: &str) -> Option<(&'a str, &'a str)
 /// line, but for mktemp's line, which may name a different folder on each
 /// side ([`mktemp_tried_line`]): the same fixed prefix (the folder and
 /// `stem`), the same reason, and only the random name apart.
-pub fn mktemp_tried_same(
-    stem: &str,
-    rust: (Option<i32>, &str),
-    bash: (Option<i32>, &str),
-) -> bool {
+pub fn mktemp_tried_same(stem: &str, rust: (Option<i32>, &str), bash: (Option<i32>, &str)) -> bool {
     let lines = |t: &str| t.split('\n').count();
     rust.0 == bash.0
         && lines(rust.1) == lines(bash.1)

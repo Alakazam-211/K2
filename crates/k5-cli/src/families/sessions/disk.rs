@@ -409,6 +409,16 @@ mod tests {
     }
 
     #[test]
+    fn the_disk_lines_say_the_brand_s_name() {
+        let c = k2_client::brand::CLI_NAME;
+        assert_eq!(COMPACT_USAGE[0], format!("Usage: {c} sessions compact <session-id>"));
+        assert_eq!(
+            COMPACT_USAGE[1],
+            format!("(use '{c} sessions list' to find session ids)")
+        );
+    }
+
+    #[test]
     fn the_shell_s_lines() {
         let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/awareness.sh");
         let sh = std::fs::read_to_string(&p).expect("awareness.sh");

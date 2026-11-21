@@ -432,7 +432,7 @@ pub mod api {
         }
 
         #[test]
-        fn the_shell_s_lines() {
+        fn the_api_lines_are_the_shell_s_in_the_brand_s_name() {
             let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../../cli/src/session-complete.sh");
             let sh = std::fs::read_to_string(&p).expect("session-complete.sh");

@@ -966,7 +966,7 @@ mod tests {
     /// `permissions`, each with `_study_title`'s line (the names the
     /// brand's: a `K2_BRAND_DIR=brand/xy` build says `xy` and `XY`).
     #[test]
-    fn the_titles_are_the_shell_s() {
+    fn the_study_titles_are_the_shell_s_in_the_brand_s_name() {
         let sh = src("study-index.sh");
         let ids = sh
             .lines()

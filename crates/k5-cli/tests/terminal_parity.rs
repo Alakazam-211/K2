@@ -11,8 +11,10 @@
 //!   Python can't read, no answer to the lookup.
 //! - `read`: the lines, an answer the Python can't read (asked again),
 //!   `--lines`, no answer.
-//! - Help on a line: the shell's (it takes `--help` as a word and acts,
-//!   a known bash bug), so both sides send what the shell sends.
+//! - `write`'s `--agent` with no value (one line, exit 2) and its bare
+//!   `--` before the message.
+//! - Help on a line: the shell's (each verb's usage, nothing sent; after
+//!   `write`'s `--` it is the message).
 
 #![cfg(unix)]
 
@@ -266,13 +268,62 @@ fn write() {
                 0,
                 3,
             ),
+            // `--agent` with no word after it: one line, exit 2, nothing
+            // sent (it was the message once).
             case(
-                "--agent as the last word: the _need_value line",
+                "--agent as the last word: it takes a value",
                 &["write", "acme", "--agent"],
                 &[],
                 vec![],
                 owner_and_port,
                 2,
+                0,
+            ),
+            case(
+                "--agent as the last word after a session id",
+                &["write", UUID, "--agent"],
+                &[],
+                vec![],
+                owner_and_port,
+                2,
+                0,
+            ),
+            case(
+                "--agent as the last word in a session with no passport",
+                &["write", UUID, "--agent"],
+                &[("K2_HOOK_SOCK", "{nosock}"), ("K2_PORT", PORT)],
+                vec![],
+                owner_and_port,
+                3,
+                0,
+            ),
+            // One bare `--` before the message is dropped; the rest is
+            // the message as typed.
+            case(
+                "-- before a message that starts with a dash",
+                &["write", UUID, "--", "-text", "--"],
+                &[],
+                vec![ok(r#"{"ok":true}"#)],
+                owner_and_port,
+                0,
+                1,
+            ),
+            case(
+                "--agent, then -- and the message",
+                &["write", "acme", "--agent", "qa", "--", "--", "hi"],
+                &[],
+                vec![resolved.clone(), sessions.clone(), ok("{}")],
+                owner_and_port,
+                0,
+                3,
+            ),
+            case(
+                "-- and no message: the usage",
+                &["write", UUID, "--"],
+                &[],
+                vec![],
+                owner_and_port,
+                1,
                 0,
             ),
             case(
@@ -453,8 +504,27 @@ fn help_on_a_line_is_the_shell_s() {
         &rig,
         vec![
             shell(case(
-                "BASH BUG, help acts: write <id> --help sends a message",
+                "write <id> --help: the usage, nothing sent",
                 &["write", UUID, "--help"],
+                &[],
+                vec![],
+                owner_and_port,
+                0,
+                0,
+            )),
+            shell(case(
+                "write <id> -h -- hi: the usage, nothing sent",
+                &["write", UUID, "-h", "--", "hi"],
+                &[],
+                vec![],
+                owner_and_port,
+                0,
+                0,
+            )),
+            // After `--` it is the message, sent as typed.
+            shell(case(
+                "write <id> -- --help: sent as the message",
+                &["write", UUID, "--", "--help"],
                 &[],
                 vec![ok("{}")],
                 owner_and_port,

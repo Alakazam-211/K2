@@ -15,7 +15,10 @@
 //!    spawn returned no body`, exit 1; then `cli_print_or_fail "$resp"`
 //!    (with no route named: only a daemon's error stops it) and
 //!    `Terminal spawned: <title or command>`.
-//! 4. `write <id|workspace> [--agent <name>] <message…>`: a session id
+//! 4. `write <id|workspace> [--agent <name>] [--] <message…>`: a leading
+//!    `--agent` with no word after it is `Error: --agent takes a value`,
+//!    exit 2, after the session checks and with nothing sent; one bare
+//!    `--` before the message is dropped. A session id
 //!    (any line of the word a UUID) goes as it is; else
 //!    `resolve_write_session_id`: `/cli/workspace/resolve` for the path,
 //!    `/cli/sessions/list-for-workspace` for its sessions (a v2 one first,
@@ -34,9 +37,8 @@
 //! shown and the command dies of SIGPIPE ([`super::end_in_pipe`]).
 //!
 //! Handed to the shell, before anything is printed or sent: a word that is
-//! not UTF-8, `-h` or `--help` anywhere (the front's: `spawn` and `read`
-//! print their usage and send nothing; `write` still takes them as the
-//! message and sends it, a bash bug), `HOOK_SOCK` set with a `CODEX_`
+//! not UTF-8, `-h` or `--help` anywhere (the front's: each verb prints its
+//! usage and sends nothing), `HOOK_SOCK` set with a `CODEX_`
 //! variable exported, a port curl won't take, a `python3` the binary
 //! can't tell.
 //!
@@ -124,7 +126,12 @@ pub enum Ask {
     },
     /// A value-taking word with nothing after it (the word as typed).
     NeedsValue(String),
+    /// `write <target> --agent` with no word after it.
+    AgentNoValue,
 }
+
+/// `cmd_terminal_write`'s line for `--agent` with no word after it.
+pub const AGENT_NO_VALUE: &str = "Error: --agent takes a value";
 
 /// The words after `terminal`.
 pub fn parse(words: &[&str]) -> Option<Ask> {
@@ -171,14 +178,18 @@ pub fn parse(words: &[&str]) -> Option<Ask> {
             let target = rest.first().copied().unwrap_or("").to_string();
             let mut more = rest.get(1..).unwrap_or_default();
             let mut agent = String::new();
-            // `--agent` as the last word: the shell's `_need_value` line
-            // (the shell's).
-            if more == ["--agent"] {
-                return None;
-            }
-            if more.first() == Some(&"--agent") && more.len() >= 2 {
-                agent = more[1].to_string();
+            // A leading `--agent` takes the next word, whatever it is;
+            // with none it is a usage error. Then one bare `--` before
+            // the message is dropped.
+            if more.first() == Some(&"--agent") {
+                let Some(v) = more.get(1) else {
+                    return Some(Ask::AgentNoValue);
+                };
+                agent = (*v).to_string();
                 more = &more[2..];
+            }
+            if more.first() == Some(&"--") {
+                more = &more[1..];
             }
             Some(Ask::Write {
                 target,
@@ -254,6 +265,10 @@ fn run_ask(ask: Ask, mut settings: Settings, would_refuse: bool) -> Exit {
     if let Ask::NeedsValue(flag) = &ask {
         return out::stop_need_value(flag);
     }
+    if ask == Ask::AgentNoValue {
+        out::stderr_line(AGENT_NO_VALUE);
+        return Exit::Usage;
+    }
     settings.port = settings.port_text.as_deref().and_then(curl_port);
     let mut client = match settings.client(would_refuse) {
         Ok(c) => c,
@@ -264,7 +279,7 @@ fn run_ask(ask: Ask, mut settings: Settings, would_refuse: bool) -> Exit {
     };
     let mut closing = Closing::default();
     let exit = match ask {
-        Ask::Usage | Ask::NeedsValue(_) => Exit::Error,
+        Ask::Usage | Ask::NeedsValue(_) | Ask::AgentNoValue => Exit::Error,
         Ask::Spawn {
             command,
             title,
@@ -558,12 +573,37 @@ mod tests {
             parse(&["read", "x", "--lines"]),
             Some(Ask::NeedsValue("--lines".into()))
         );
+        assert_eq!(parse(&["write", "ws", "--agent"]), Some(Ask::AgentNoValue));
         assert_eq!(
-            parse(&["write", "ws", "--agent"]),
+            parse(&["write", "ws", "--agent", "--", "hi"]),
+            Some(Ask::Write {
+                target: "ws".into(),
+                agent: "--".into(),
+                message: "hi".into()
+            })
+        );
+        assert_eq!(
+            parse(&["write", "ws", "--", "-text", "--"]),
             Some(Ask::Write {
                 target: "ws".into(),
                 agent: String::new(),
-                message: "--agent".into()
+                message: "-text --".into()
+            })
+        );
+        assert_eq!(
+            parse(&["write", "ws", "--agent", "a", "--", "--", "x"]),
+            Some(Ask::Write {
+                target: "ws".into(),
+                agent: "a".into(),
+                message: "-- x".into()
+            })
+        );
+        assert_eq!(
+            parse(&["write", "ws", "--"]),
+            Some(Ask::Write {
+                target: "ws".into(),
+                agent: String::new(),
+                message: String::new()
             })
         );
         assert_eq!(
@@ -574,6 +614,31 @@ mod tests {
                 message: "hi there".into()
             })
         );
+    }
+
+    /// `cmd_terminal_write`'s `--agent` and `--` lines, as [`parse`]
+    /// reads them.
+    #[test]
+    fn the_shell_s_write_lines() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../cli/src/daemon-install.sh");
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        let body = text
+            .split_once("cmd_terminal_write() {\n")
+            .expect("cmd_terminal_write")
+            .1;
+        let body = &body[..body.find("\n}\n").expect("its end")];
+        for shell in [
+            r#"if [ "${1:-}" = "--agent" ]; then"#,
+            r#"[ $# -ge 2 ] || { echo "Error: --agent takes a value" >&2; exit 2; }"#,
+            r#"agent="$2"; shift 2"#,
+            r#"[ "${1:-}" != "--" ] || shift"#,
+            r#"local message="$*""#,
+        ] {
+            assert!(body.contains(shell), "cmd_terminal_write no longer has {shell:?}");
+        }
+        assert!(body.contains(&format!("echo \"{AGENT_NO_VALUE}\" >&2; exit 2;")));
     }
 
     #[test]

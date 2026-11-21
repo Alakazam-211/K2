@@ -333,10 +333,7 @@ mod tests {
             parse(Verb::Reserve, &["p", "--agent", "a b&c=d#e%41+é"], ""),
             send("agent=a%20b%26c%3Dd%23e%2541%2B%C3%A9&paths=p")
         );
-        assert_eq!(
-            parse(Verb::Release, &[], "x&y"),
-            send("agent=x%26y")
-        );
+        assert_eq!(parse(Verb::Release, &[], "x&y"), send("agent=x%26y"));
         assert_eq!(parse(Verb::Reserve, &["p\n"], "a"), None);
         assert_eq!(parse(Verb::Reserve, &["-h"], "a"), None);
     }

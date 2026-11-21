@@ -246,11 +246,8 @@ pub fn secs(v: &str, flag: &str) -> Result<String, Stop> {
 
 /// `_sources_b2_secs "$v"`: the seconds as text, or its line (exit 2).
 pub fn b2_secs(v: &str) -> Result<String, Stop> {
-    let (num, mult) = duration(v).ok_or_else(|| {
-        Stop::Usage(format!(
-            "usage: bad duration '{v}' (use 30s, 5m, 2h, 1d)"
-        ))
-    })?;
+    let (num, mult) = duration(v)
+        .ok_or_else(|| Stop::Usage(format!("usage: bad duration '{v}' (use 30s, 5m, 2h, 1d)")))?;
     seconds(num, mult).map(|n| n.to_string())
 }
 

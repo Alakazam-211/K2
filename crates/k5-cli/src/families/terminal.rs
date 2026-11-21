@@ -636,7 +636,10 @@ mod tests {
             r#"[ "${1:-}" != "--" ] || shift"#,
             r#"local message="$*""#,
         ] {
-            assert!(body.contains(shell), "cmd_terminal_write no longer has {shell:?}");
+            assert!(
+                body.contains(shell),
+                "cmd_terminal_write no longer has {shell:?}"
+            );
         }
         assert!(body.contains(&format!("echo \"{AGENT_NO_VALUE}\" >&2; exit 2;")));
     }

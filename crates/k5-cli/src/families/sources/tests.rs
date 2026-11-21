@@ -156,7 +156,11 @@ fn the_verbs_words() {
     }
     // A leading zero is decimal (10#), not octal.
     assert_eq!(
-        ask("history", &w(&["a", "f", "--from", "08h", "--to", "0009s"]), 100_000),
+        ask(
+            "history",
+            &w(&["a", "f", "--from", "08h", "--to", "0009s"]),
+            100_000
+        ),
         Ok(Ask::Get {
             route: "history",
             query: "name=a&field=f&from=71200&to=99991".into(),

@@ -1043,7 +1043,16 @@ fn sources_pin_and_trigger() {
         ),
         case(
             "trigger --cooldown, a unit with no digits",
-            &["trigger", "add", "--source", "web", "--on", "went_crit", "--cooldown", "m"],
+            &[
+                "trigger",
+                "add",
+                "--source",
+                "web",
+                "--on",
+                "went_crit",
+                "--cooldown",
+                "m",
+            ],
             &[],
             vec![],
             owner_and_port,

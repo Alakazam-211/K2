@@ -1299,7 +1299,9 @@ fn db_compute_verbs_answer_as_the_shell_does() {
             "cluster archive, already in that state",
             &["cluster", "archive", "fb", "off"],
             &[],
-            vec![ok(r#"{"cluster":"17/fb","walArchive":false,"changed":false}"#)],
+            vec![ok(
+                r#"{"cluster":"17/fb","walArchive":false,"changed":false}"#,
+            )],
             owner_and_port,
             0,
             1,
@@ -1392,7 +1394,10 @@ fn db_compute_verbs_answer_as_the_shell_does() {
             "cluster archive, not found",
             &["cluster", "archive", "fb", "on"],
             &[],
-            vec![answer(404, r#"{"error":{"code":"unknown_cluster","hint":"none"}}"#)],
+            vec![answer(
+                404,
+                r#"{"error":{"code":"unknown_cluster","hint":"none"}}"#,
+            )],
             owner_and_port,
             1,
             1,
@@ -2046,15 +2051,17 @@ fn db_run_answers_as_the_shell_does() {
             0,
             1,
         )),
-        // Help never acts, even after --.
+        // A -h after the bare -- is the command's (the shell's help scans
+        // stop at it): the DSN is asked and the command runs. The front
+        // still hands the line to the shell (a help word on the line).
         shell(case(
-            "run -- dbkid -h",
+            "run -- dbkid -h: the command's -h",
             &["run", "--", "dbkid", "-h"],
             &[],
-            vec![],
+            vec![ok(DSN)],
             owner_and_port,
             0,
-            0,
+            1,
         )),
     ];
     for c in &cases {

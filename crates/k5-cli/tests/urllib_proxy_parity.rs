@@ -255,12 +255,14 @@ fn a_proxy_that_refuses_the_tunnel() {
         let [b, r] = w.both(&c);
         tunnel::assert_same_python(c.name, &b, &r);
         let target = format!("{HOST}:{}", w.port());
+        // The proxy URL's own credential rides the CONNECT, on both sides.
+        let basic = tunnel::basic_line(PROXY_USER, PROXY_PASS);
         for run in [&b, &r] {
             assert_eq!(run.proxy.len(), 1, "{verb}: one CONNECT: {run:?}");
             let native = std::ptr::eq(run, &r);
             assert_eq!(
                 run.proxy[0],
-                tunnel::python_connect_head(&target, None, native || tunnel::python_312()),
+                tunnel::python_connect_head(&target, Some(&basic), native || tunnel::python_312()),
                 "{run:?}"
             );
             assert!(!run.proxy[0].contains(OWNER), "{run:?}");
@@ -340,7 +342,12 @@ fn a_proxy_with_another_scheme_is_named() {
         "socks5://{PROXY_USER}:{PROXY_PASS}@127.0.0.1:{}",
         w.proxy.port
     );
-    let c = w.case("https_proxy=socks5://…", &["status"], HOST, &[("https_proxy", socks)]);
+    let c = w.case(
+        "https_proxy=socks5://…",
+        &["status"],
+        HOST,
+        &[("https_proxy", socks)],
+    );
     let [b, r] = w.both(&c);
     assert_eq!(b.out.code, Some(0), "bash's Python tunnels: {b:?}");
     assert_eq!(b.proxy.len(), 1, "bash's plain CONNECT: {b:?}");

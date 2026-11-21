@@ -2,7 +2,8 @@
 //! `cmd_reserve` and `cmd_release` (`cli/src/usage.sh`), on the parity rig
 //! ([`common::parity`]): the same requests, stdout, stderr and exit code.
 //!
-//! - The words: paths and `--agent`, the agent from `AGENT_NAME`, each
+//! - The words: paths and `--agent`, the agent from `AGENT_NAME` (escaped
+//!   as urlencode escapes it, odd bytes and all), each
 //!   usage line (`--agent` with no name, a word that is no path, no agent,
 //!   `reserve` with no path), `release` with no path.
 //! - The credential: the owner from disk, a passport over TCP; the
@@ -78,6 +79,26 @@ fn shared() -> Vec<Case> {
             "odd bytes in a path",
             &["é & = /x \"q\" 'y' %41,#z", "--agent", "a.b-c_d~e"],
             &[],
+            vec![ok(OK)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        // The agent goes through urlencode: '&', '=', '#', '%', '+', a
+        // space and UTF-8 reach the daemon as one value.
+        case(
+            "odd bytes in the agent",
+            &["p", "--agent", "a b&c=d#e%41+é"],
+            &[],
+            vec![ok(OK)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "odd bytes in the agent from the setting",
+            &["p"],
+            &[("K2_AGENT_NAME", "x&paths=y#z %2F")],
             vec![ok(OK)],
             owner_and_port,
             0,

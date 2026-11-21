@@ -18,8 +18,8 @@
 //!    K2_AGENT_NAME)`, exit 1. `reserve` with no path is `Error: at least
 //!    one path required`, exit 1.
 //! 3. One `cli_request_post /cli/reserve` (or `/cli/release`) over TCP:
-//!    `agent=<agent>` as it is (the shell doesn't escape it), then
-//!    `&paths=<the paths joined by commas, escaped as urlencode does>`
+//!    `agent=<the agent, escaped as urlencode does>`, then
+//!    `&paths=<the paths joined by commas, escaped the same way>`
 //!    (`release` sends no `paths` when it has none).
 //! 4. The answer's bytes on stdout as they came, NULs dropped, and exit 0
 //!    whatever the status.
@@ -32,8 +32,6 @@
 //!
 //! The shell answers ([`run`] returns `None`): `-h` or `--help` (the front
 //! sends those on; `_reserve_args` reads them as words that are no path),
-//! an agent with a byte the URL would carry otherwise than as it is (the
-//! shell puts it in the URL raw, and curl then sends, refuses or cuts it),
 //! paths whose joined text ends in a newline (`$(…)` drops it), a word that
 //! is not UTF-8, `HOOK_SOCK` set with a `CODEX_` variable exported, and a
 //! `python3` the binary can't tell.
@@ -101,14 +99,6 @@ pub enum Ask {
     Stop(String, Exit),
 }
 
-/// Whether the shell's raw `agent=` value reaches the daemon as it is: no
-/// byte that a URL escapes, cuts or curl refuses.
-fn plain(agent: &str) -> bool {
-    agent
-        .bytes()
-        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~'))
-}
-
 /// `_reserve_args <verb> <words>` and the checks after it, with `agent`
 /// from the environment (empty when unset). `None`: the shell's.
 pub fn parse(verb: Verb, words: &[&str], agent: &str) -> Option<Ask> {
@@ -161,10 +151,7 @@ pub fn parse(verb: Verb, words: &[&str], agent: &str) -> Option<Ask> {
     if verb == Verb::Reserve && paths.is_empty() {
         return Some(Ask::Stop(PATH_REQUIRED.into(), Exit::Error));
     }
-    if !plain(&agent) {
-        return None;
-    }
-    let mut param = format!("agent={agent}");
+    let mut param = format!("agent={}", quote(&agent));
     if !paths.is_empty() {
         let joined = paths.join(",");
         if joined.ends_with('\n') {
@@ -295,7 +282,8 @@ mod tests {
             r#"echo "k2 $verb: '$1' is not a path. k2 $verb takes paths and --agent <name> only, and is being retired." >&2"#,
             r#"[[ -z "$_RS_AGENT" ]] && { echo "Error: --agent required (or set K2_AGENT_NAME)" >&2; exit 1; }"#,
             r#"[[ ${#_RS_PATHS[@]} -eq 0 ]] && { echo "Error: at least one path required" >&2; exit 1; }"#,
-            r#"cli_request_post "/cli/reserve" "agent=$_RS_AGENT&paths=$(urlencode "$joined")""#,
+            r#"cli_request_post "/cli/reserve" "agent=$(urlencode "$_RS_AGENT")&paths=$(urlencode "$joined")""#,
+            r#"local params="agent=$(urlencode "$_RS_AGENT")""#,
             r#"params="$params&paths=$(urlencode "$joined")""#,
             r#"cli_request_post "/cli/release" "$params""#,
         ] {
@@ -340,7 +328,15 @@ mod tests {
                 Exit::Usage
             ))
         );
-        assert_eq!(parse(Verb::Reserve, &["p", "--agent", "a b"], ""), None);
+        // The agent is escaped as urlencode escapes it.
+        assert_eq!(
+            parse(Verb::Reserve, &["p", "--agent", "a b&c=d#e%41+é"], ""),
+            send("agent=a%20b%26c%3Dd%23e%2541%2B%C3%A9&paths=p")
+        );
+        assert_eq!(
+            parse(Verb::Release, &[], "x&y"),
+            send("agent=x%26y")
+        );
         assert_eq!(parse(Verb::Reserve, &["p\n"], "a"), None);
         assert_eq!(parse(Verb::Reserve, &["-h"], "a"), None);
     }

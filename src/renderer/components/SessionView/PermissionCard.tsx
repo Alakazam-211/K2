@@ -290,6 +290,7 @@ type CardConfirmAction =
   | 'apps-recording'
   | 'voice-recording-start-level'
   | 'voice-recording-dm'
+  | 'vault-owner-confirm'
 
 /** The password-reset card's Allow, by the mode the agent asked for. */
 const REVEAL_ALLOW_LABEL: Record<RevealMode, string> = {
@@ -317,7 +318,8 @@ function confirmActionOf(action: string | undefined): CardConfirmAction | null {
     action === 'sew-recording-enable' ||
     action === 'apps-recording' ||
     action === 'voice-recording-start-level' ||
-    action === 'voice-recording-dm'
+    action === 'voice-recording-dm' ||
+    action === 'vault-owner-confirm'
     ? action
     : null
 }

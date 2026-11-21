@@ -178,6 +178,7 @@ describe('PermissionCard: a confirm action (§17.11.3, §17.4)', () => {
     ['apps-recording', 'pr_rec'],
     ['voice-recording-start-level', 'pr_lvl'],
     ['voice-recording-dm', 'pr_dm'],
+    ['vault-owner-confirm', 'pr_voc'],
   ])('the %s card takes its own confirm, bound to the request', async (action, id) => {
     const actions = actionsMock()
     const view = { ...CONFIRM_VIEW, proof: { kind: 'confirm', action, secretId: id } }

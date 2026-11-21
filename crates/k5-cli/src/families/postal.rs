@@ -31,7 +31,8 @@
 //!    ends with [`PERSON_LINE`].
 //!
 //! Handed to the shell, before anything is printed or sent: a word that is
-//! not UTF-8, `-h` or `--help` anywhere (the front's), `send` or `route`
+//! not UTF-8, `-h` or `--help` as the verb or before a bare `--` (the
+//! front's, or a help page the shell prints), `send` or `route`
 //! with no port (the shell sends them to `http://HOST:`, a bash bug), a
 //! port curl won't take, and a `python3` the binary can't tell.
 
@@ -167,7 +168,8 @@ pub struct Words {
     pub args: Vec<String>,
 }
 
-/// The flag loop: the words, or the line that stops it (exit 2).
+/// The flag loop: the words, or the line that stops it (exit 2). After a
+/// bare `--` every word is a plain word, as typed.
 pub fn parse(rest: &[&str]) -> Result<Words, String> {
     let mut w = Words::default();
     let mut i = 0;
@@ -191,6 +193,11 @@ pub fn parse(rest: &[&str]) -> Result<Words, String> {
                 }
                 i += 1;
                 continue;
+            }
+            // The rest is plain words (an address, a message), as typed.
+            "--" => {
+                w.args.extend(rest[i + 1..].iter().map(|a| (*a).to_string()));
+                break;
             }
             f if f.starts_with('-') => {
                 return Err(format!(
@@ -311,7 +318,10 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .skip(1)
         .map(|a| a.to_str())
         .collect::<Option<_>>()?;
-    if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
+    // `cmd_postal`'s help: the verb, or a word its flag loop reaches (it
+    // stops at a bare `--`).
+    let verb_help = matches!(words.first(), Some(&("-h" | "--help")));
+    if verb_help || crate::dashdash::wants_help(words.get(1..).unwrap_or_default()) {
         return None;
     }
     if !python::family_native(python::here()) {
@@ -514,7 +524,12 @@ fn run_verb(args: &[OsString], sub: &str, rest: &[&str], mut settings: Settings)
                     Exit::Usage,
                 );
             }
-            let text = w.args[1..].join(" ");
+            // `_postal_send_teach "$one" … -- "${args[@]:1}"`: the words
+            // after the address are the text, as typed.
+            let mut text = String::new();
+            for a in &w.args[1..] {
+                super::msg::postal::join(&mut text, a);
+            }
             if text.is_empty() {
                 return stop(
                     &format!("Usage: {CLI_NAME} msg {one} \"text\" [--no-wake] [--json]"),
@@ -1277,6 +1292,11 @@ mod tests {
 
     #[test]
     fn the_words() {
+        // After a bare `--` every word is plain, as typed.
+        let w = parse(&["a", "--json", "--", "--help", "-x", "--", ""]).unwrap();
+        assert_eq!(w.args, vec!["a", "--help", "-x", "--", ""]);
+        assert!(w.json);
+        assert_eq!(parse(&["--why", "--", "a"]).unwrap().why, "--");
         assert!(parse(&["--why"])
             .unwrap_err()
             .contains("--why needs the reason"));

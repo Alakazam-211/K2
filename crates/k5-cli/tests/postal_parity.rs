@@ -137,6 +137,90 @@ fn usage_help_and_words() {
     check(&rig, v);
 }
 
+/// After a bare `--` every word is plain, as typed (`cmd_postal`'s `--)`
+/// arm): `send`'s text may start with a dash or be `--help`; help before
+/// `--` is still help.
+#[test]
+fn words_after_dashes() {
+    let rig = Rig::new(VERB, "dashes");
+    let held = r#"{"ok":true,"status":"held","to":"scout::initech.postal.bot","badge":"b1","deliveryId":"p_abc"}"#;
+    let v = vec![
+        case(
+            "send: the text --help after --",
+            &["send", "--no-wake", ADDR, "--", "--help"],
+            &[],
+            vec![ok(held)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "send: the address and dashed words after --",
+            &["send", "--json", "--", ADDR, "-x", "--no-wake", "-h"],
+            &[],
+            vec![ok(held)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "send: an empty first word after --",
+            &["send", ADDR, "--", "", "hi"],
+            &[],
+            vec![ok(held)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "send: -- and no text",
+            &["send", ADDR, "--"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "send: a flag-looking word after -- is no address",
+            &["send", "--", "--json", "hi"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "claim: the address after --",
+            &["claim", "--why", "w", "--", ADDR],
+            &[],
+            vec![ok(ASKED)],
+            owner_and_port,
+            2,
+            1,
+        ),
+        case(
+            "help before --",
+            &["send", ADDR, "-h", "--", "hi"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        ),
+        case(
+            "the verb --, then --help: the usage",
+            &["--", "--help"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        ),
+    ];
+    check(&rig, v);
+}
+
 #[test]
 fn each_view() {
     let rig = Rig::new(VERB, "views");

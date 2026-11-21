@@ -143,6 +143,66 @@ fn an_empty_post_gets_urllib_s_form_type_and_the_owner_s_source() {
     assert_eq!(o.base(), "http://h:04100");
 }
 
+/// `HOST=https://<name>`: TLS to the name, the `Host` header the URL's
+/// netloc with no scheme (a family's own `HOST` text too); through the
+/// person's proxy, or a URL the shared transport doesn't read, nothing is
+/// sent at all, never a plain request in its place.
+#[test]
+fn an_https_daemon() {
+    let mut c = Client::new("box.example", 4711, "/p", Auth::Owner("t".into()));
+    c.tls = true;
+    let mut o = Opener::from_client(&c);
+    assert!(o.tls && o.unsendable.is_none(), "{o:?}");
+    assert_eq!(o.base(), "https://box.example:4711");
+    for (netloc, want) in [
+        ("box.example:4711", "box.example:4711"),
+        ("https://box.example:4711", "box.example:4711"),
+        ("HTTPS://box.example/:04711", "box.example:04711"),
+    ] {
+        o.netloc = netloc.into();
+        assert_eq!(o.host_header(), want, "{netloc}");
+    }
+    // A plain client's netloc is written as it is.
+    let mut plain = Opener::from_client(&Client::new("h", 1, "/p", Auth::None));
+    plain.netloc = "https://h:1".into();
+    assert!(!plain.tls);
+    assert_eq!(plain.host_header(), "https://h:1");
+    // Through the person's proxy: nothing sent.
+    let act = Act::Write(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+    let (port, log) = server(vec![act]);
+    let mut c = Client::new("127.0.0.1", port, "/p", Auth::Owner("t".into()));
+    c.tls = true;
+    c.via = Some(crate::transport::proxy::Proxy {
+        host: "127.0.0.1".into(),
+        port,
+        auth: None,
+    });
+    let o = Opener::from_client(&c);
+    let want = format!("https://127.0.0.1:{port}");
+    assert_eq!(o.unsendable.as_deref(), Some(want.as_str()));
+    let mut unread = Client::new("127.0.0.1", port, "/p", Auth::Owner("t".into()));
+    unread.tls = true;
+    unread.unsendable = Some("https://[::1]:1".into());
+    for o in [o, Opener::from_client(&unread)] {
+        match o.open(&Request::new(Method::Get, "/r", Duration::from_secs(2))) {
+            Outcome::Raised(r) => {
+                assert_eq!((r.class, r.kind), (Class::UrlError, Kind::Other), "{r:?}");
+                assert!(
+                    r.text()
+                        .starts_with("<urlopen error won't send to https://"),
+                    "{r:?}"
+                );
+            }
+            other => panic!("sent: {other:?}"),
+        }
+    }
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(
+        log.lock().expect("log").is_empty(),
+        "a request reached the server"
+    );
+}
+
 #[test]
 fn a_status_line_python_refuses() {
     let read = |b: &[u8]| read_status(&mut &b[..]);

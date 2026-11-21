@@ -358,6 +358,105 @@ fn whoami_over_tls_through_the_proxy() {
     tunnel::assert_unprinted(c.name, &[b, r], &["pr0xy-s3cret", OWNER]);
 }
 
+const PRESETS: &str = r#"[{"id":"claude","label":"Claude Code","command":"claude","enabled":true,"is_built_in":true}]"#;
+
+/// The shell's Python blocks open its `BASE_URL`: with
+/// `K2_HOST=https://localhost`, TLS straight there (loopback never uses a
+/// proxy, and one is set), the URL's netloc as `Host`, no warning. The
+/// binary's urllib adapter does the same: `preset list` here.
+#[test]
+fn preset_list_over_tls_to_an_https_host() {
+    let rig = Rig::new("preset", "httpshost");
+    let pki = tunnel::Pki::new(&rig.dir.join("pki"));
+    let daemon = TlsStub::start(&pki, 200, PRESETS);
+    let proxy = ProxyStub::start(ProxyMode::Tunnel);
+    let port = daemon.port.to_string();
+    let ca = pki.ca_file.to_string_lossy().into_owned();
+    let px = proxy.url(None);
+    let c = on(
+        case(
+            "preset list: K2_HOST=https://localhost",
+            &["list"],
+            &[],
+            vec![],
+            owner_only,
+            0,
+            0,
+        ),
+        &[
+            ("K2_HOST", "https://localhost"),
+            ("K2_PORT", port.as_str()),
+            ("SSL_CERT_FILE", ca.as_str()),
+            ("https_proxy", px.as_str()),
+        ],
+    );
+    let [b, r] = tunnel::both(&rig, &c, &proxy, &daemon);
+    tunnel::assert_same(c.name, &b, &r);
+    no_warning(c.name, &[&b, &r]);
+    for run in [&b, &r] {
+        assert!(run.proxy.is_empty(), "loopback never via a proxy: {run:?}");
+        assert_eq!(run.tls.len(), 1, "{run:?}");
+        let head = &run.tls[0].0;
+        assert!(head.starts_with("GET /cli/presets/list "), "{head:?}");
+        assert!(
+            head.contains(&format!("\r\nHost: localhost:{port}\r\n")),
+            "{run:?}"
+        );
+        assert!(
+            head.contains(&format!("\r\nAuthorization: Bearer {OWNER}\r\n")),
+            "{run:?}"
+        );
+    }
+    assert_eq!(r.out.code, Some(0), "{r:?}");
+    assert!(r.out.stdout.contains("Claude Code"), "{r:?}");
+}
+
+/// `K2_HOST=https://<a name>` with the person's proxy: the shell's Python
+/// tunnels through it as http.client does; the binary's urllib adapter
+/// doesn't copy that tunnel, so it sends nothing at all (no plain or
+/// direct request in its place, the token nowhere) and fails (the
+/// adapter's `URLError` says why: `urllib::tests::an_https_daemon`).
+/// Bash's side is checked to have tunnelled.
+#[test]
+fn preset_list_over_tls_through_the_proxy_sends_nothing() {
+    let rig = Rig::new("preset", "httpsproxy");
+    let pki = tunnel::Pki::new(&rig.dir.join("pki"));
+    let daemon = TlsStub::start(&pki, 200, PRESETS);
+    let proxy = ProxyStub::start(ProxyMode::Tunnel);
+    let port = daemon.port.to_string();
+    let ca = pki.ca_file.to_string_lossy().into_owned();
+    let px = proxy.url(None);
+    let k2_host = format!("https://{HOST}");
+    let c = on(
+        case(
+            "preset list: K2_HOST=https://<name> through https_proxy",
+            &["list"],
+            &[],
+            vec![],
+            owner_only,
+            0,
+            0,
+        ),
+        &[
+            ("K2_HOST", k2_host.as_str()),
+            ("K2_PORT", port.as_str()),
+            ("SSL_CERT_FILE", ca.as_str()),
+            ("https_proxy", px.as_str()),
+        ],
+    );
+    let [b, r] = tunnel::both(&rig, &c, &proxy, &daemon);
+    assert_eq!(b.out.code, Some(0), "{b:?}");
+    assert!(!b.proxy.is_empty() && b.tls.len() == 1, "{b:?}");
+    // preset's Python reads any failed urlopen as no answer.
+    assert!(r.out.stderr.contains("no response from the "), "{r:?}");
+    assert_ne!(r.out.code, Some(0), "{r:?}");
+    assert!(
+        r.proxy.is_empty() && r.tls.is_empty() && r.tls_errors.is_empty() && r.daemon.is_empty(),
+        "the binary sent: {r:?}"
+    );
+    tunnel::assert_unprinted(c.name, &[r], &[OWNER]);
+}
+
 /// A proxy that refuses the tunnel (407) is final: the binary sends one
 /// CONNECT and stops with curl 8.5's exit 56, as bash's curl 8.5 does.
 /// Newer curl exits 7 there, which `_k2_curl` tries 4 times: the named

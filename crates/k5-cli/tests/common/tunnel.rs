@@ -259,7 +259,7 @@ fn proxy_one(mut c: TcpStream, heads: &Log, mode: ProxyMode) {
 }
 
 /// A request with the two CLIs' own lines masked: the `User-Agent`
-/// (`k5/…` or `curl/…`), the hand-over `X-K5-Cli-Via` (masked) and the
+/// (`k5/…`, `curl/…`, or `Python-urllib/…` for the shell's Python), the hand-over `X-K5-Cli-Via` (masked) and the
 /// side's own `X-K5-Cli-Version` and `X-K5-Cli-Noun` (dropped). Also
 /// returns whether the binary sent it (`User-Agent: k5/`).
 pub fn masked(request: &str) -> (String, bool) {
@@ -275,7 +275,9 @@ pub fn masked(request: &str) -> (String, bool) {
         if line.starts_with("User-Agent: k5/") {
             native = true;
             out.push("User-Agent: <ua>".to_string());
-        } else if line.starts_with("User-Agent: curl/") {
+        } else if line.starts_with("User-Agent: curl/")
+            || line.starts_with("User-Agent: Python-urllib/")
+        {
             out.push("User-Agent: <ua>".to_string());
         } else if line.starts_with("X-K5-Cli-Via: ") {
             out.push("X-K5-Cli-Via: <via>".to_string());

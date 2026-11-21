@@ -8,9 +8,14 @@
 //!
 //! # The request
 //!
-//! Always TCP to `http://HOST:PORT` (the shell's `BASE_URL`; urllib has
-//! no cell socket), never a proxy (`_K2_PY_PROXY_RULE`: plain http is
-//! direct). Written as Python 3's `http.client` writes it for urllib:
+//! Always TCP to the shell's `BASE_URL` (urllib has no cell socket):
+//! `http://HOST:PORT`, never a proxy (`_K2_PY_PROXY_RULE`: plain http is
+//! direct), or, for `HOST=https://<name>`, TLS to `<name>` on the port
+//! ([`super::tls`], K2's ruling D5), as the shell's Python opens its
+//! `https://` `BASE_URL`. Where that Python would go through the person's
+//! proxy, or the shared transport doesn't read the URL, nothing is sent
+//! ([`Opener::open`]): never a plain or direct request in its place.
+//! Written as Python 3's `http.client` writes it for urllib:
 //!
 //! ```text
 //! <METHOD> <route>[?<urlencode(query)>] HTTP/1.1
@@ -357,6 +362,12 @@ pub struct Opener {
     pub pause: Duration,
     /// The binary's version, for the daemon's ([`skew`]).
     version: String,
+    /// `HOST=https://<name>`: TLS to [`Opener::host`].
+    tls: bool,
+    /// An `https://` URL the binary won't open as the shell's Python
+    /// would: through the person's proxy, or one the shared transport
+    /// doesn't read ([`super::remote::daemon_https`]). Nothing is sent.
+    unsendable: Option<String>,
 }
 
 impl Opener {
@@ -383,6 +394,14 @@ impl Opener {
         // `_k5_py_headers` prints a Codex call's conversation headers
         // after its hand-over headers.
         handover.extend(client.conversation.iter().cloned());
+        // The daemon's client over TLS through the person's proxy: the
+        // shell's Python tunnels as http.client does, which the binary
+        // doesn't copy.
+        let unsendable = match (&client.unsendable, client.tls && client.via.is_some()) {
+            (Some(url), _) => Some(url.clone()),
+            (None, true) => Some(format!("https://{}:{}", client.host, client.port)),
+            (None, false) => None,
+        };
         Opener {
             host: client.host.clone(),
             port: client.port,
@@ -392,6 +411,26 @@ impl Opener {
             user_agent: format!("k5/{}", client.version),
             pause: Duration::from_secs(1),
             version: client.version.clone(),
+            tls: client.tls,
+            unsendable,
+        }
+    }
+
+    /// The `Host` header: [`Opener::netloc`], with the `https://` (or
+    /// `HTTPS://`) a family's own `HOST` text carries taken off, and the
+    /// name's one trailing `/`, as `_k2_daemon_base` writes `BASE_URL`
+    /// and urllib sends that URL's netloc.
+    fn host_header(&self) -> String {
+        let n = self.netloc.as_str();
+        let Some(rest) = n
+            .strip_prefix("https://")
+            .or_else(|| n.strip_prefix("HTTPS://"))
+        else {
+            return n.to_string();
+        };
+        match rest.rsplit_once(':') {
+            Some((name, port)) => format!("{}:{port}", name.strip_suffix('/').unwrap_or(name)),
+            None => rest.to_string(),
         }
     }
 
@@ -401,8 +440,12 @@ impl Opener {
         self.token.as_deref().filter(|t| !t.is_empty())
     }
 
-    /// `ABASE`: `http://HOST:PORT`, as the shell typed it.
+    /// `ABASE`: `http://HOST:PORT` as the shell typed it, or
+    /// `https://<name>:PORT` for `HOST=https://<name>`.
     pub fn base(&self) -> String {
+        if self.tls {
+            return format!("https://{}", self.host_header());
+        }
         format!("http://{}", self.netloc)
     }
 
@@ -429,7 +472,7 @@ impl Opener {
             }
             head.push_str(&format!("Content-Length: {}\r\n", data.len()));
         }
-        head.push_str(&format!("Host: {}\r\n", self.netloc));
+        head.push_str(&format!("Host: {}\r\n", self.host_header()));
         head.push_str(&format!("User-Agent: {}\r\n", self.user_agent));
         for (name, value) in req.headers.iter().chain(&self.handover) {
             head.push_str(&format!("{name}: {value}\r\n"));
@@ -445,14 +488,18 @@ impl Opener {
     /// One `urllib.request.urlopen(k5_request(req), timeout=...)`, and the
     /// body read after it.
     pub fn open(&self, req: &Request) -> Outcome {
-        let stream = match connect(&self.host, self.port, req.timeout) {
-            Ok(s) => s,
-            Err(r) => return Outcome::Raised(Raised::url_error(r)),
-        };
-        if let Err(e) = send(&stream, &self.encode(req), req.timeout) {
-            return Outcome::Raised(Raised::url_error(os_error(&e)));
+        if let Some(url) = &self.unsendable {
+            return Outcome::Raised(Raised {
+                class: Class::UrlError,
+                kind: Kind::Other,
+                reason: format!("won't send to {url}: a proxy or URL this command doesn't carry"),
+            });
         }
-        let mut reader = BufReader::with_capacity(8192, stream);
+        let tls = self.tls.then_some(self.host.as_str());
+        let mut reader = match start(&self.host, self.port, tls, &self.encode(req), req.timeout) {
+            Ok(r) => r,
+            Err(r) => return Outcome::Raised(r),
+        };
         let head = match read_head(&mut reader) {
             Ok(h) => h,
             Err(r) => return Outcome::Raised(r),
@@ -638,12 +685,42 @@ fn gai_error(e: &io::Error) -> Raised {
 }
 
 /// `sock.sendall(request)` with the socket's timeout.
-fn send(stream: &TcpStream, bytes: &[u8], timeout: Duration) -> io::Result<()> {
-    stream.set_write_timeout(Some(timeout))?;
-    stream.set_read_timeout(Some(timeout))?;
-    let mut s = stream;
-    s.write_all(bytes)?;
-    s.flush()
+/// `urlopen`'s connection: [`connect`], TLS over it to the name `tls`
+/// gives ([`super::tls`]), each send and read on `timeout`, and `bytes`
+/// sent. What fails is a `URLError`, nothing of the request sent past a
+/// failed handshake.
+fn start(
+    host: &str,
+    port: u16,
+    tls: Option<&str>,
+    bytes: &[u8],
+    timeout: Duration,
+) -> Result<BufReader<super::wire::Conn>, Raised> {
+    use super::wire::Conn;
+    let tcp = connect(host, port, timeout).map_err(Raised::url_error)?;
+    let mut conn = match tls {
+        Some(name) => {
+            let limit = std::time::Instant::now() + timeout;
+            match super::tls::connect(tcp, name, limit) {
+                Ok(s) => Conn::Tls(Box::new(s)),
+                Err(f) => return Err(tls_raised(&f)),
+            }
+        }
+        None => Conn::Tcp(tcp),
+    };
+    let timeouts = match &conn {
+        Conn::Tcp(s) => s
+            .set_write_timeout(Some(timeout))
+            .and_then(|()| s.set_read_timeout(Some(timeout))),
+        Conn::Tls(s) => super::tls::stream_timeouts(s, timeout),
+        #[cfg(unix)]
+        Conn::Unix(_) => Ok(()),
+    };
+    timeouts
+        .and_then(|()| conn.write_all(bytes))
+        .and_then(|()| conn.flush())
+        .map_err(|e| Raised::url_error(os_error(&e)))?;
+    Ok(BufReader::with_capacity(8192, conn))
 }
 
 /// The answer's head as http.client keeps it.
@@ -1066,34 +1143,12 @@ fn tls_raised(f: &super::wire::Failure) -> Raised {
 /// person's proxy would carry to the shell. The answer and the
 /// exceptions are [`Opener::open`]'s.
 pub fn open_url(place: &Place, req: &Request) -> Outcome {
-    let tcp = match connect(&place.host, place.port, req.timeout) {
-        Ok(s) => s,
-        Err(r) => return Outcome::Raised(Raised::url_error(r)),
+    let tls = place.tls.then_some(place.host.as_str());
+    let bytes = encode_plain(&place.netloc, req);
+    let mut reader = match start(&place.host, place.port, tls, &bytes, req.timeout) {
+        Ok(r) => r,
+        Err(r) => return Outcome::Raised(r),
     };
-    let mut conn = if place.tls {
-        let limit = std::time::Instant::now() + req.timeout;
-        match super::tls::connect(tcp, &place.host, limit) {
-            Ok(s) => super::wire::Conn::Tls(Box::new(s)),
-            Err(f) => return Outcome::Raised(tls_raised(&f)),
-        }
-    } else {
-        super::wire::Conn::Tcp(tcp)
-    };
-    let timeouts = match &conn {
-        super::wire::Conn::Tcp(s) => s
-            .set_write_timeout(Some(req.timeout))
-            .and_then(|()| s.set_read_timeout(Some(req.timeout))),
-        super::wire::Conn::Tls(s) => super::tls::stream_timeouts(s, req.timeout),
-        #[cfg(unix)]
-        super::wire::Conn::Unix(_) => Ok(()),
-    };
-    let sent = timeouts
-        .and_then(|()| conn.write_all(&encode_plain(&place.netloc, req)))
-        .and_then(|()| conn.flush());
-    if let Err(e) = sent {
-        return Outcome::Raised(Raised::url_error(os_error(&e)));
-    }
-    let mut reader = BufReader::with_capacity(8192, conn);
     let head = match read_head(&mut reader) {
         Ok(h) => h,
         Err(r) => return Outcome::Raised(r),

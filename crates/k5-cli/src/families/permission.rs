@@ -573,10 +573,7 @@ impl OwnerProbe {
             Ok(r) => {
                 r.status == 200
                     && match self.reader {
-                        Reader::Python(decode) => {
-                            self.client.refused_before_answer() == 0
-                                && cards::enabled(&r.body, decode)
-                        }
+                        Reader::Python(decode) => cards::enabled(&r.body, decode),
                         Reader::ShellWithout => false,
                         Reader::Own => cards::enabled(&r.body, Decode::Lossy),
                     }

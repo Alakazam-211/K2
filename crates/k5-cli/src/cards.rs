@@ -15,16 +15,12 @@
 //!   the query.
 //! - Else off, nothing asked.
 //!
-//! Connect 1 s, at most 1 s, and only `_k2_curl`'s tries: a refused
-//! connect again up to four times a second apart (over TCP, to a port
-//! the daemon moved to). On only for a 200 whose body the shell's Python
-//! reads as a JSON object with `"enabled"` exactly `true`, on the first
-//! try: curl's `-w '\n%{http_code}'` writes `\n000` for each refused try
-//! into the same `$(…)`, so an answer after one reads as `\n000<body>`,
-//! which is not JSON (a shell bug, kept here for parity); anything else
-//! is off: no answer in time (curl 28), a close with nothing (52), a
-//! reset (56), an empty or non-JSON body, a status other than 200, a
-//! refused connect after the tries (7). The shell prints nothing for any
+//! One try (`_K2_CURL_TRIES=1`), connect 1 s, at most 1 s: a refused
+//! connect is not tried again, so help stays quick with the daemon down.
+//! On only for a 200 whose body the shell's Python reads as a JSON object
+//! with `"enabled"` exactly `true`; anything else is off: no answer in
+//! time (curl 28), a close with nothing (52), a reset (56), an empty or
+//! non-JSON body, a status other than 200, a refused connect (7). The shell prints nothing for any
 //! of them, and neither does this. One request per command: the shell
 //! keeps the answer for the rest of the run.
 //!
@@ -39,7 +35,7 @@
 //! probe can't read any answer, so it is always off there. The binary's
 //! own probe gives the real answer instead (K2's ruling,
 //! [`crate::python::NATIVE_WITHOUT_PYTHON3`]): a 200 whose JSON says
-//! `"enabled": true` is on, after a refused try too, and neither a
+//! `"enabled": true` is on, and neither a
 //! `PYTHON*` setting nor the locale counts, as no Python reads it.
 //!
 //! Where this differs from the shell, on purpose or as a known gap: the
@@ -204,13 +200,7 @@ pub fn on(ask: Ask) -> bool {
             Ok(r) => {
                 r.status == 200
                     && match reader {
-                        // A refused try then an answer: `-w` printed
-                        // `\n000` for the failed try into `$(…)` first, so
-                        // the shell's Python reads `\n000<body>`, which is
-                        // not JSON: off.
-                        Reader::Python(decode) => {
-                            client.refused_before_answer() == 0 && enabled(&r.body, decode)
-                        }
+                        Reader::Python(decode) => enabled(&r.body, decode),
                         Reader::ShellWithout => false,
                         Reader::Own => enabled(&r.body, Decode::Lossy),
                     }

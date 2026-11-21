@@ -43,15 +43,15 @@ pub const PASSPORT_PROJECT_MAX_TIME: Duration = Duration::from_secs(15);
 /// Where `_permission_probe` asks whether permission cards are on
 /// (`cli/src/permission.sh`).
 pub const CARDS_ENDPOINT: &str = "/cli/permission/enabled";
-/// `_permission_probe`'s `--connect-timeout 1 --max-time 1`.
+/// `_permission_probe`'s `--connect-timeout 1 --max-time 1`, one try.
 pub const CARDS_TIME: Duration = Duration::from_secs(1);
 /// Where `_sf_agents_off_probe` reads whether agents may report
 /// (`cli/src/send-feedback.sh`).
 pub const FEEDBACK_SETTINGS_ENDPOINT: &str = "/cli/product-feedback/settings";
 /// `_sf_agents_off_probe`'s `--connect-timeout 1`.
 pub const FEEDBACK_CONNECT_TIMEOUT: Duration = Duration::from_secs(1);
-/// `_sf_agents_off_probe`'s `--max-time 2`.
-pub const FEEDBACK_MAX_TIME: Duration = Duration::from_secs(2);
+/// `_sf_agents_off_probe`'s `--max-time 1`, one try.
+pub const FEEDBACK_MAX_TIME: Duration = Duration::from_secs(1);
 /// `k2 update --cli`'s `--connect-timeout 2` (`_update_daemon_version`,
 /// `cli/src/update.sh`).
 pub const UPDATE_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -298,12 +298,12 @@ enum Kind {
     /// [`CARDS_ENDPOINT`] with `-G` and no data of the caller's, on the
     /// cell socket (the passport as Bearer) or over TCP (the token as
     /// Bearer), never both. Connect 1 s, at
-    /// most 1 s; only `_k2_curl`'s tries (a refused connect, and a moved
-    /// port over TCP); no heal, no line, no note.
+    /// most 1 s; `_K2_CURL_TRIES=1`: one try (a refused connect is not
+    /// tried again); no heal, no line, no note.
     Cards,
     /// `_sf_agents_off_probe` (`cli/src/send-feedback.sh`): the request of
     /// [`Kind::Cards`] for [`FEEDBACK_SETTINGS_ENDPOINT`], connect 1 s, at
-    /// most 2 s.
+    /// most 1 s, one try.
     FeedbackOptin,
     /// `_update_daemon_version` (`cli/src/update.sh`): `_K2_CURL_TRIES=1
     /// _k2_curl "" -s --connect-timeout 2 --max-time 4` of
@@ -494,7 +494,12 @@ impl Kind {
     fn once(self) -> bool {
         matches!(
             self,
-            Kind::PostJsonStdin | Kind::UpdateVersion | Kind::VaultSockPost | Kind::SendOnce
+            Kind::PostJsonStdin
+                | Kind::UpdateVersion
+                | Kind::VaultSockPost
+                | Kind::SendOnce
+                | Kind::Cards
+                | Kind::FeedbackOptin
         )
     }
 }
@@ -2498,7 +2503,7 @@ mod tests {
                 false,
                 false,
             ),
-            (Cards, false, false, false, false, false, false, false),
+            (Cards, false, false, false, false, false, false, true),
             (
                 FeedbackOptin,
                 false,
@@ -2507,7 +2512,7 @@ mod tests {
                 false,
                 false,
                 false,
-                false,
+                true,
             ),
             (
                 UpdateVersion,
@@ -2576,7 +2581,7 @@ mod tests {
             (Kind::VaultSockPost, 180),
             (Kind::PassportProject, 15),
             (Kind::Cards, 1),
-            (Kind::FeedbackOptin, 2),
+            (Kind::FeedbackOptin, 1),
             (Kind::UpdateVersion, 4),
             (Kind::SetupGet, 30),
             (Kind::SetupPost, 30),

@@ -6,11 +6,10 @@
 //! none) and print the same page with the same exit.
 //!
 //! With no `python3` the binary's probe reads the daemon's answer itself
-//! (K2's ruling), so three rows answer otherwise there, on purpose: a
+//! (K2's ruling), so two rows answer otherwise there, on purpose: a
 //! `PYTHON*` setting and a locale that is not UTF-8 (no Python reads the
-//! answer, so neither counts) and the daemon that moved its port (no
-//! shell `$(…)` holds the refused try's `000`). Each reads the daemon's
-//! "on" as on ([`check_without_python3`]).
+//! answer, so neither counts). Each reads the daemon's "on" as on
+//! ([`check_without_python3`]).
 //!
 //! The daily tier of the help asks the feedback probe first
 //! (`_sf_agents_off_here`, [`k5_cli::feedback_optin`]): its rows
@@ -310,9 +309,9 @@ pub fn rows(rig: &Rig, args: &'static [&'static str], on_code: i32, off_code: i3
                 )
             },
         ),
-        // The shell's curl writes `-w`'s `\n000` for the refused try into
-        // the same `$(…)` as the answer, so its Python reads `\n000{...}`:
-        // off, though the moved daemon said on.
+        // The probe has one try (`_K2_CURL_TRIES=1`): a refused connect is
+        // not tried again at the port the daemon moved to, so nothing is
+        // asked there: off.
         with(
             vec![
                 ("K2_PORT", dead_port()),
@@ -320,12 +319,11 @@ pub fn rows(rig: &Rig, args: &'static [&'static str], on_code: i32, off_code: i3
             ],
             Case {
                 setup: moved,
-                no_python3: NoPython3::Own,
                 ..row(
-                    "the daemon moved its port: asked again there, read as off",
-                    vec![ok(ON)],
+                    "the daemon moved its port: one try, not asked there, off",
+                    vec![],
                     off_code,
-                    1,
+                    0,
                 )
             },
         ),
@@ -394,7 +392,7 @@ fn own_without_python3(rig: &Rig, args: &'static [&'static str], on_code: i32, a
         .iter()
         .filter(|c| c.no_python3 == NoPython3::Own)
         .collect();
-    assert_eq!(own.len(), 3, "{args:?}: the rows that differ");
+    assert_eq!(own.len(), 2, "{args:?}: the rows that differ");
     for c in own {
         let (got, log) = rig.binary(c, true);
         let name = c.name;

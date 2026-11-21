@@ -237,19 +237,18 @@ fn rows(args: &'static [&'static str], daily: bool) -> Vec<Case> {
                 Some(ok(OFF)),
             )
         },
-        // The refused try's `\n000` comes before the answer in the
-        // shell's `$(…)`, so its Python reads no JSON: shown, though the
-        // moved daemon said agents off.
+        // The probe has one try (`_K2_CURL_TRIES=1`): a refused connect
+        // is not tried again at the port the daemon moved to, so nothing
+        // is asked there and the page shows.
         Case {
             setup: moved,
-            no_python3: NoPython3::Own,
             ..r(
-                "the daemon moved its port: asked again there, read as shown",
+                "the daemon moved its port: one try, not asked there: shown",
                 vec![
                     ("K2_PORT", dead_port()),
                     ("K2_HOOK_TOKEN", PASSPORT.to_string()),
                 ],
-                Some(ok(OFF)),
+                None,
             )
         },
     ];
@@ -378,7 +377,7 @@ fn the_opt_in_reads_the_daemon_itself_without_python3() {
             .iter()
             .filter(|c| c.no_python3 == NoPython3::Own)
             .collect();
-        assert_eq!(own.len(), 2, "{args:?}: the rows that differ");
+        assert_eq!(own.len(), 1, "{args:?}: the rows that differ");
         for c in own {
             let (got, log) = rig.binary(c, true);
             let name = c.name;

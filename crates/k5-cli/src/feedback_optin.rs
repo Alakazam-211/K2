@@ -13,14 +13,13 @@
 //! - Else, a port: the same GET over TCP, the passport as Bearer.
 //! - Else shown, nothing asked.
 //!
-//! Connect 1 s, at most 2 s, and only `_k2_curl`'s tries, as for the
+//! One try, connect 1 s, at most 1 s, as for the
 //! permission cards probe ([`crate::cards`]), which asks the same way:
 //! [`ask`] is [`cards::ask`], with its rules for when the page goes to the
 //! shell instead. Hidden only for a 200 whose body the shell's Python
 //! reads as a JSON object with `"agents"` exactly `false` and
-//! `"senderKind"` exactly `"agent"`, on the first try (a refused try's
-//! `\n000` lands in front of the answer in `$(…)`, which is then not
-//! JSON); anything else shows everything and prints nothing. The answer
+//! `"senderKind"` exactly `"agent"`; anything else shows everything and
+//! prints nothing. The answer
 //! is kept for the rest of the process ([`hidden`]).
 //!
 //! With no `python3` the shell's probe can't read any answer, so it always
@@ -78,9 +77,7 @@ fn read(mut client: Box<Client>, reader: Reader) -> bool {
         Ok(r) => {
             r.status == 200
                 && match reader {
-                    Reader::Python(decode) => {
-                        client.refused_before_answer() == 0 && agents_off(&r.body, decode)
-                    }
+                    Reader::Python(decode) => agents_off(&r.body, decode),
                     Reader::ShellWithout => false,
                     Reader::Own => agents_off(&r.body, Decode::Lossy),
                 }
@@ -160,9 +157,9 @@ mod tests {
             "        if [ -n \"${SCOPED_TOKEN:-}\" ] && _sf_agents_off_probe; then\n",
             "    if [ -n \"$sock\" ] && [ -S \"$sock\" ] && ! _cli_skip_uds; then\n",
             "        _k2_cfg_add header \"Authorization: Bearer ${SCOPED_TOKEN}\"\n",
-            "        out=\"$(_k2_curl \"$_K2_CFG\" -s -G --unix-socket \"$sock\" \"http://localhost/cli/product-feedback/settings\" \\\n            --connect-timeout 1 --max-time 2 -w $'\\n%{http_code}' 2>/dev/null)\" || out=\"\"\n",
+            "        out=\"$(_K2_CURL_TRIES=1 _k2_curl \"$_K2_CFG\" -s -G --unix-socket \"$sock\" \"http://localhost/cli/product-feedback/settings\" \\\n            --connect-timeout 1 --max-time 1 -w $'\\n%{http_code}' 2>/dev/null)\" || out=\"\"\n",
             "    elif [ -n \"${PORT:-}\" ]; then\n        _k2_cfg_auth \"$SCOPED_TOKEN\"\n",
-            "        local base\n        _k2_daemon_base base; out=\"$(_k2_curl \"$_K2_CFG\" -s -G \"${base}/cli/product-feedback/settings\" \\\n            --connect-timeout 1 --max-time 2 -w $'\\n%{http_code}' 2>/dev/null)\" || out=\"\"\n",
+            "        local base\n        _k2_daemon_base base; out=\"$(_K2_CURL_TRIES=1 _k2_curl \"$_K2_CFG\" -s -G \"${base}/cli/product-feedback/settings\" \\\n            --connect-timeout 1 --max-time 1 -w $'\\n%{http_code}' 2>/dev/null)\" || out=\"\"\n",
             "    [[ \"$out\" == *$'\\n200' ]] || return 1\n    out=\"${out%$'\\n200'}\"\n    printf '%s' \"$out\" | python3 -c '\n",
             "sys.exit(0 if isinstance(v, dict) and v.get(\"agents\") is False and v.get(\"senderKind\") == \"agent\" else 1)\n",
         ] {
@@ -177,7 +174,7 @@ mod tests {
                 crate::transport::client::FEEDBACK_CONNECT_TIMEOUT.as_secs(),
                 crate::transport::client::FEEDBACK_MAX_TIME.as_secs()
             ),
-            (1, 2)
+            (1, 1)
         );
     }
 

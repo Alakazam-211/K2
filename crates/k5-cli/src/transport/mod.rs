@@ -66,8 +66,8 @@
 //! | `_compute_send POST` | `POST <ep>`, JSON | `POST <ep>`, JSON; never with `tcp` |
 //! | (none: [`client::Client::get_public`]) | `GET <ep>`: no credential, no `project=`, no Owner-Source | none |
 //! | `k2 respond`'s own curl ([`client::Client::post_form_bearer`]) | `POST <ep>`, the passport as Bearer, body `args`, the form type; no query | none |
-//! | `_permission_probe` ([`client::Client::permission_enabled`]) | `GET /cli/permission/enabled` (-G); connect 1 s, at most 1 s | `GET /cli/permission/enabled` (-G), likewise; never both |
-//! | `_sf_agents_off_probe` ([`client::Client::feedback_settings`]) | `GET /cli/product-feedback/settings` (-G); connect 1 s, at most 2 s | `GET /cli/product-feedback/settings` (-G), likewise; never both |
+//! | `_permission_probe` ([`client::Client::permission_enabled`]) | `GET /cli/permission/enabled` (-G); one try, connect 1 s, at most 1 s | `GET /cli/permission/enabled` (-G), likewise; never both |
+//! | `_sf_agents_off_probe` ([`client::Client::feedback_settings`]) | `GET /cli/product-feedback/settings` (-G); one try, connect 1 s, at most 1 s | `GET /cli/product-feedback/settings` (-G), likewise; never both |
 //!
 //! The credential is never in the query or on argv: on the cell socket it
 //! is the passport, over TCP the passport or else the owner token, always

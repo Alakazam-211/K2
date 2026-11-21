@@ -60,7 +60,7 @@ fn handle_with(body: &[u8], remove: Remove<'_>) -> CliResponse {
         return error_response(
             "404 Not Found",
             "not_found",
-            &format!(concat!("no draft '{id}' — '", k2_core::cli_name!(), " mail drafts' lists the drafts you saved")),
+            &format!(concat!("no draft '{id}' — '", k2_core::cli_name!(), " mail drafts' lists the drafts you saved"), id = id),
         );
     };
     if row.author_kind != "agent" || row.author != project_id {
@@ -72,7 +72,7 @@ fn handle_with(body: &[u8], remove: Remove<'_>) -> CliResponse {
                  touched. A person can discard it in the Mail page ('",
                 k2_core::cli_name!(),
                 " mail reader draft-discard {id}')"
-            )),
+            ), id = id),
         );
     }
     let ai = match crate::mail::access::can_draft(&project_id, &row.address) {

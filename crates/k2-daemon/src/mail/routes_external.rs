@@ -534,7 +534,9 @@ fn handle_draft_with(body: &[u8], ops: &dyn ImapOps) -> CliResponse {
                     k2_core::cli_name!(),
                     " mail draft delete {draft_id}' removes it"
                 ),
-                inbox.email_address
+                inbox.email_address,
+                draft_id = draft_id,
+                folder = folder
             ),
         });
         if let Some(id) = &source_id {

@@ -1319,7 +1319,9 @@ mod tests {
         assert_eq!(stop("build", &["--manifest"]), Stop::silent(Exit::Error));
         assert_eq!(stop("build", &["--x"]).line, "Unknown flag: --x");
         assert_eq!(parse("build", &["a", "-h"]), None);
-        assert_eq!(parse("install", &["a", "--catalog=x"]), None);
+        assert!(catalog_install(&["a", "--catalog=x"]));
+        assert!(catalog_install(&["--seed", "--catalog"]));
+        assert!(!catalog_install(&["a", "--catalogue"]));
         assert_eq!(
             stop("install", &["a", "--pg-major", "1"]).line,
             usage::PG_MAJOR

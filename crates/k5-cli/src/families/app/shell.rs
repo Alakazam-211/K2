@@ -739,7 +739,8 @@ mod tests {
         assert_eq!(ask(&["acme"]).argv, Vec::<String>::new());
         assert_eq!(ask(&["acme", "ls", "-l"]).argv, vec!["ls", "-l"]);
         assert_eq!(ask(&["acme", "--", "-x"]).argv, vec!["-x"]);
-        assert_eq!(ask(&["--", "acme"]).app, "");
+        // `--` first: no App, the usage line (the shell's loop stops there).
+        assert!(matches!(parse(&["--", "acme"]), Some(Err(s)) if s.line == usage::SHELL));
         assert!(matches!(parse(&[]), Some(Err(s)) if s.line == usage::SHELL));
         assert!(matches!(parse(&["acme", "-x"]), Some(Err(s)) if s.line == "Unknown flag: -x"));
         assert_eq!(parse(&["-h"]), None);

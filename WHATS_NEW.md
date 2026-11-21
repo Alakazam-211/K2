@@ -143,6 +143,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Draft saves take `--idempotency-key`.** A slow save can be retried safely: the same key returns the draft already saved, never a second copy.
 - **`k2 mail link relink <address>` signs an inbox in again in place, keeping its access.** It's a person's step: it opens the Google or Microsoft sign-in. `k2 mail link list` shows when an inbox needs it: `needs re-link`, `mail access not granted`, or `throttled (wait)`.
 - **Each linked inbox allows at most 4 mail sessions at once.** A busy inbox answers `inbox_busy` (exit 2): retry a little later. When the provider throttles an account, K2 pauses its logins and answers `inbox_throttled` (exit 3): wait, don't re-link.
+- **`k2 app access <workspace>` checks every value before it changes anything.** Before, `k2 app access <workspace> --build on --users maybe` turned "Build and run Apps" on and only then stopped on `--users` with a usage error. Now a `--build`, `--manage` or `--users` value other than `on` or `off`, or a bad `--core`, is a usage error (exit 2) and nothing is sent.
 
 ### Settings
 - **Changes to the Send feedback settings are recorded.** When the owner or an admin turns "Allow sending feedback to K2", "Agents may send feedback to K2" or "Agents may include K2 details" on or off (Settings → General → Send feedback), Settings → Logs → Access Audit records who changed which one, from what to what. A change that leaves a setting as it was, or a refused attempt, records nothing.

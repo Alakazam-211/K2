@@ -1744,9 +1744,11 @@ print(json.dumps(out))')" || { echo "usage: --core <core>=on|off[,<core>=on|offâ
         echo "    for the owner or an admin, who approves it in person: k2 app approvals, then k2 app approve <id> (outside K2)." >&2
         exit 2
     fi
+    # Every value is checked before the first change is sent: a bad one
+    # is a usage error with nothing changed.
     local t v
-    for t in build manage; do
-        [ "$t" = build ] && v="$build" || v="$manage"
+    for t in build manage users; do
+        case "$t" in build) v="$build" ;; manage) v="$manage" ;; *) v="$users" ;; esac
         [ -z "$v" ] && continue
         case "$v" in on|off) ;; *) echo "usage: --$t on|off" >&2; exit 2 ;; esac
     done
@@ -1766,7 +1768,6 @@ print(json.dumps(out))')" || { echo "usage: --core <core>=on|off[,<core>=on|offâ
     done
     if [ -n "$users" ]; then
         # "Let this agent manage its Apps' users" (0225): the owner, both ways.
-        case "$users" in on|off) ;; *) echo "usage: --users on|off" >&2; exit 2 ;; esac
         _compute_call POST /cli/agent-access/set "$(_compute_json K2_CJ_workspace="$ws" K2_CJ_toggle=app_users K2_CJ_value_b="$([ "$users" = on ] && echo 1 || echo 0)")"
     fi
     if [ -n "$cores_j" ]; then

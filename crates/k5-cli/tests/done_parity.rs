@@ -301,7 +301,7 @@ fn done_answers_as_the_shell_does() {
             &[("K2_PORT", "41o0")],
             vec![],
             owner_only,
-            3,
+            2,
             0,
         ),
         named(
@@ -619,12 +619,12 @@ fn done_with_no_answer() {
             1,
         )),
         no_tmp(named(
-            "TMPDIR unusable: a port that is no port is 76",
+            "TMPDIR unusable: a port that is no port is refused first",
             &[],
             &[("K2_PORT", "41o0")],
             vec![],
             owner_only,
-            76,
+            2,
             0,
         )),
     ];

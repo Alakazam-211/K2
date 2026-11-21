@@ -11,8 +11,7 @@
 mod common;
 
 use common::parity::{
-    case, dead_port, heal, nothing, ok, owner_and_port, with_passport, Case, Compare, Rig, PORT,
-    REFUSED,
+    case, dead_port, heal, nothing, ok, owner_and_port, with_passport, Case, Compare, Rig, REFUSED,
 };
 use common::stub::Reply;
 
@@ -136,17 +135,17 @@ fn a_family_s_help_with_hook_sock() {
         ),
         with(
             vec![
-                ("K2_PORT", format!("0{PORT}")),
+                ("K2_PORT", "04100".to_string()),
                 ("K2_HOOK_TOKEN", common::parity::PASSPORT.to_string()),
                 ("K2_HOOK_SOCK", "{nosock}".to_string()),
             ],
             Case {
                 compare: Compare::Shell,
                 ..base(
-                    "a port with a leading zero: the shell's probe",
-                    vec![ok("{}")],
+                    "a port with a leading zero: refused before the probe",
+                    vec![],
+                    2,
                     0,
-                    1,
                 )
             },
         ),

@@ -415,7 +415,7 @@ fn update_cli_answers_as_the_shell_does() {
                 &[],
                 vec![],
                 owner_only,
-                0,
+                2,
                 0,
             ),
         )),
@@ -575,12 +575,12 @@ fn update_app_answers_as_the_shell_does() {
         with(
             [gh(newest), vec![("K2_PORT", "1x".into())]].concat(),
             case(
-                "--app, a port that is no port: unused",
+                "--app, a port that is no port: refused first",
                 &["--app"],
                 &[],
                 vec![],
                 owner_only,
-                0,
+                2,
                 0,
             ),
         ),

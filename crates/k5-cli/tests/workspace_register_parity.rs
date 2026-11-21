@@ -611,12 +611,12 @@ fn workspace_create_and_open_hand_these_to_the_shell() {
             1,
         )),
         shell(case(
-            "a port that is no port: curl's 3, the line, exit 1",
+            "a port that is no port: the shell's port refusal",
             &["create", "x"],
             &[("K2_PORT", "41o0")],
             vec![],
             owner_only,
-            1,
+            2,
             0,
         )),
     ];

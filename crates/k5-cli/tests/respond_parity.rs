@@ -281,13 +281,13 @@ fn respond_answers_as_the_shell_does() {
         with(
             c(&[("K2_PORT", "41o0")]),
             case(
-                "a port that is no port: the socket doesn't need it",
+                "a port that is no port, with a socket: refused first",
                 &["x"],
                 &[],
-                vec![ok(OK)],
+                vec![],
                 nothing,
+                2,
                 0,
-                1,
             ),
         ),
         with(
@@ -354,12 +354,12 @@ fn respond_answers_as_the_shell_does() {
         with(
             h(&[("K2_HOOK_SOCK", "{nosock}"), ("K2_PORT", "41o0")]),
             case(
-                "the socket gone and a port that is no port: no probe, curl's 3",
+                "the socket gone and a port that is no port: the shell's port refusal",
                 &["x"],
                 &[],
                 vec![],
                 nothing,
-                3,
+                2,
                 0,
             ),
         ),
@@ -455,12 +455,12 @@ fn respond_answers_as_the_shell_does() {
         with(
             h(&[("K2_PORT", "41o0")]),
             case(
-                "a port that is no port over TCP: curl's 3",
+                "a port that is no port over TCP: the shell's port refusal",
                 &["x"],
                 &[],
                 vec![],
                 nothing,
-                3,
+                2,
                 0,
             ),
         ),

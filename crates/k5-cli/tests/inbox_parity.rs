@@ -1370,22 +1370,22 @@ fn inbox_hands_these_to_the_shell() {
         shell(with(
             c(&[("K2_PORT", "41o0")]),
             case(
-                "a port that is no port: the cell socket answers",
+                "a port that is no port, with a cell socket: refused first",
                 &[],
                 &[],
-                vec![ok(ITEMS)],
+                vec![],
                 nothing,
+                2,
                 0,
-                1,
             ),
         )),
         shell(case(
-            "a port that is no port over TCP: curl's 3",
+            "a port that is no port over TCP: the shell's port refusal",
             &[],
             &[("K2_PORT", "41o0")],
             vec![],
             owner_only,
-            3,
+            2,
             0,
         )),
     ];

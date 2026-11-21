@@ -33,8 +33,8 @@
 //! only (re-minted; refused: one heal; dead: the restart line), PRD 13.9 #4;
 //! no answer (an empty reply and an empty 5xx: the transport's line; a
 //! reset, not HTTP, TMPDIR unusable, none in time, no daemon:
-//! `daemon_unreachable`, as `list`'s); and what it hands to the shell (help). A port with a leading zero is the
-//! binary's own, as `list`'s is.
+//! `daemon_unreachable`, as `list`'s); and what it hands to the shell (help). A port with a leading zero is
+//! refused before anything, as every port that isn't one is (`port_range_parity.rs`).
 //!
 //! Neither verb sends a request on the left of a pipe (`list` holds its
 //! answer in `$(…)`, and so does `show`), so no case dies of
@@ -863,7 +863,7 @@ fn feedback_hands_these_to_the_shell() {
             &[("K2_PORT", "41o0")],
             vec![],
             owner_only,
-            1,
+            2,
             0,
         )),
     ];
@@ -1681,7 +1681,6 @@ fn tickets_show_is_feedback_show() {
 #[test]
 fn show_hands_these_to_the_shell() {
     let rig = Rig::new(VERB, "sshell");
-    let zero_port = format!("0{PORT}");
     let v = vec![
         shell(case(
             "show -h",
@@ -1701,15 +1700,15 @@ fn show_hands_these_to_the_shell() {
             0,
             0,
         )),
-        // The binary's own now, as `list`'s: curl reads the port as a number.
+        // Refused before anything, as every port that isn't one is.
         case(
             "a port with a leading zero",
             &["show", "x"],
-            &[("K2_PORT", zero_port.as_str())],
-            vec![ok(PLAIN)],
+            &[("K2_PORT", "04100")],
+            vec![],
             owner_only,
+            2,
             0,
-            1,
         ),
     ];
     for c in v {

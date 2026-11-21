@@ -1279,10 +1279,8 @@ impl Client {
         }
         let text = std::fs::read_to_string(file).ok()?;
         let digits: String = text.chars().filter(|c| !c.is_whitespace()).collect();
-        if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
-            return None;
-        }
-        let p: u16 = digits.parse().ok()?;
+        // A port as the shell's rule has it (`_k2_follow_port_move`).
+        let p = crate::port::parse(digits.as_bytes())?;
         (p != port).then_some(p)
     }
 
@@ -2573,6 +2571,9 @@ mod tests {
             ("40a1", "127.0.0.1", None),
             ("-4001", "127.0.0.1", None),
             ("99999", "127.0.0.1", None),
+            ("65536\n", "127.0.0.1", None),
+            ("0\n", "127.0.0.1", None),
+            ("04001\n", "127.0.0.1", None),
         ] {
             std::fs::write(&file, content).unwrap();
             assert_eq!(c.moved_port(host, 4000), want, "{content:?} {host}");

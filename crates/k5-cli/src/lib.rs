@@ -46,6 +46,8 @@
 //!   the copy of `cli/k2` packed into the binary ([`embedded`]).
 //! - [`passport`]: the passport rule the front applies before a verb
 //!   falls through. It only counts for now.
+//! - [`port`]: the shell's port check, before any command runs: a port
+//!   setting or saved port outside 1 to 65535 stops it (exit 2).
 //! - [`trace`]: opt-in timing of the front's phases on stderr
 //!   (`K5_CLI_TRACE_TIMING`).
 //! - [`text`]: the study and help pages, embedded from `cli/text`, and the
@@ -82,6 +84,7 @@ pub mod offline;
 pub mod out;
 pub mod pages;
 pub mod passport;
+pub mod port;
 pub mod prelude;
 pub mod python;
 pub mod retired;

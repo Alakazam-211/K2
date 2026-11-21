@@ -772,7 +772,7 @@ fn no_answer() {
             &[("K2_PORT", "41o0")],
             vec![],
             owner_only,
-            1,
+            2,
             0,
         ),
     ];

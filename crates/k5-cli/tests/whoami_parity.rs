@@ -663,7 +663,7 @@ fn cases(rig: &Rig) -> Vec<Case> {
             &[("K2_PORT", "41o0")],
             vec![],
             |r| r.owner_on_disk(),
-            3,
+            2,
             0,
         ),
         case(
@@ -1056,12 +1056,12 @@ fn whoami_with_a_broken_exchange() {
             1,
         )),
         no_tmp(case(
-            "TMPDIR unusable: a port that is no port is 76",
+            "TMPDIR unusable: a port that is no port is refused first",
             &[],
             &[("K2_PORT", "41o0")],
             vec![],
             |r| r.owner_on_disk(),
-            76,
+            2,
             0,
         )),
         no_tmp(case(

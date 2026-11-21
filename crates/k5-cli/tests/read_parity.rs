@@ -921,12 +921,12 @@ fn read_hands_these_to_the_shell() {
             1,
         )),
         shell(case(
-            "a port that is no port: curl's 3, the reader's 1",
+            "a port that is no port: the shell's port refusal",
             &["acme"],
             &[("K2_PORT", "41o0")],
             vec![],
             owner_only,
-            1,
+            2,
             0,
         )),
     ];

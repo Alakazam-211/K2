@@ -665,7 +665,7 @@ fn connect_status_hands_these_to_the_shell() {
                 files(r, None, None);
                 owner_only(r)
             },
-            0,
+            2,
             0,
         )),
     ];

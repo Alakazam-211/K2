@@ -17,7 +17,9 @@ use k5_cli::exit::Exit;
 use k5_cli::front::{self, Route};
 use k5_cli::offline::{self, Env, Prelude};
 use k5_cli::pages::{self, Page};
-use k5_cli::{check, cli_status, daemon, embedded, fallthrough, families, out, passport, trace};
+use k5_cli::{
+    check, cli_status, daemon, embedded, fallthrough, families, out, passport, port, trace,
+};
 use std::ffi::OsString;
 
 /// Writes `text` to stdout; the exit after it.
@@ -129,6 +131,20 @@ fn main() {
     let args: Vec<OsString> = argv.collect();
     let who = CalledAs::current(&argv0);
     trace::mark("called_as");
+    // The shell's prelude checks the port before anything else runs: a
+    // setting or saved port that isn't one stops every command, a native
+    // verb's too.
+    match port::check_current() {
+        port::Check::Go => {}
+        port::Check::Refuse(line) => {
+            // As `printf ... >&2`: a stderr that can't be written changes
+            // nothing.
+            let _ = out::write_flushed(&mut std::io::stderr().lock(), &line);
+            std::process::exit(Exit::Usage.code());
+        }
+        port::Check::Shell => std::process::exit(shell(who, &args).code()),
+    }
+    trace::mark("port");
     let route = front::route(&args);
     trace::mark("route");
     let exit = match route {

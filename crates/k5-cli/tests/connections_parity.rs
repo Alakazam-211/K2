@@ -754,7 +754,7 @@ fn connections_hands_these_to_the_shell() {
             &[("K2_PORT", "41o0")],
             vec![],
             owner_only,
-            3,
+            2,
             0,
         )),
     ];

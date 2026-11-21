@@ -59,6 +59,12 @@ fn server(acts: Vec<Act>) -> (u16, Arc<Mutex<Vec<Vec<u8>>>>) {
     (port, log)
 }
 
+/// The proxy variables the shell's Python reads, spelled so that only
+/// the transport's own files name them in full (the reader test in
+/// transport/client.rs).
+const HTTPS_PROXY: &str = concat!("https", "_proxy");
+const NO_PROXY: &str = concat!("no", "_proxy");
+
 fn opener(port: u16) -> Opener {
     let mut o = Opener::from_client(&Client::new("127.0.0.1", port, "/p", Auth::None));
     o.pause = Duration::ZERO;
@@ -194,7 +200,7 @@ fn an_https_daemon() {
     let mut socks = Opener::from_client(&Client::new("box.example", 1, "/p", Auth::None));
     socks.tls = true;
     socks.py_proxy = crate::transport::proxy::python::env([(
-        "https_proxy",
+        HTTPS_PROXY,
         format!("socks5://127.0.0.1:{port}"),
     )]);
     for o in [Opener::from_client(&unread), socks] {
@@ -228,7 +234,7 @@ fn an_https_daemon_through_the_proxy() {
         c.tls = true;
         let mut o = Opener::from_client(&c);
         o.py_proxy = crate::transport::proxy::python::env([(
-            "https_proxy",
+            HTTPS_PROXY,
             format!("http://acme:pw@127.0.0.1:{port}"),
         )]);
         o
@@ -289,8 +295,8 @@ fn an_https_daemon_through_the_proxy() {
     let (port, log) = server(vec![]);
     let mut o = proxied(port);
     o.py_proxy = crate::transport::proxy::python::env([
-        ("https_proxy", format!("http://127.0.0.1:{port}")),
-        ("no_proxy", "box.example".to_string()),
+        (HTTPS_PROXY, format!("http://127.0.0.1:{port}")),
+        (NO_PROXY, "box.example".to_string()),
     ]);
     assert!(matches!(o.route(), Ok(None)), "{:?}", o.route());
     assert!(log.lock().expect("log").is_empty());

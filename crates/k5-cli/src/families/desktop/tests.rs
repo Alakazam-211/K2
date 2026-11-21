@@ -36,14 +36,29 @@ fn the_words_as_the_shell_reads_them() {
 }
 
 #[test]
-fn a_timeout_the_shell_reads_as_plain_decimal() {
-    assert_eq!(plain_secs("90s"), Some(90));
-    assert_eq!(plain_secs("2m"), Some(120));
-    assert_eq!(plain_secs("1h"), Some(3600));
-    assert_eq!(plain_secs("600"), Some(600));
-    assert_eq!(plain_secs("0"), Some(0));
-    for odd in ["", "s", "08", "010m", "1x", "1hm", "9999999999999"] {
-        assert_eq!(plain_secs(odd), None, "{odd}");
+fn a_timeout_is_digits_and_one_unit() {
+    assert_eq!(timeout_secs("90s"), Timeout::Secs(90));
+    assert_eq!(timeout_secs("2m"), Timeout::Secs(120));
+    assert_eq!(timeout_secs("1h"), Timeout::Secs(3600));
+    assert_eq!(timeout_secs("600"), Timeout::Secs(600));
+    assert_eq!(timeout_secs("0"), Timeout::Secs(0));
+    assert_eq!(timeout_secs("00s"), Timeout::Secs(0));
+    // A leading 0 is decimal (`10#`), as _compute_secs reads it.
+    assert_eq!(timeout_secs("08"), Timeout::Secs(8));
+    assert_eq!(timeout_secs("010m"), Timeout::Secs(600));
+    assert_eq!(timeout_secs("000999999999999h"), Timeout::Secs(999_999_999_999 * 3600));
+    for bad in ["", "s", "1x", "1hm", "x", "HOME", "1.5m", "-1", " 1", "1d"] {
+        assert_eq!(timeout_secs(bad), Timeout::Bad, "{bad}");
+    }
+    assert_eq!(timeout_secs("9999999999999"), Timeout::Long);
+    // The shell's helper, as its source spells it.
+    let src = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/desktop.sh"),
+    )
+    .expect("desktop.sh");
+    assert!(src.contains("    [[ \"$1\" =~ ^[0-9]+[smh]?$ ]] || { echo \"$2\" >&2; exit 2; }\n"));
+    for line in [SETUP_TIMEOUT_USAGE, ENV_TIMEOUT_USAGE] {
+        assert!(src.contains(&format!("\"{line}\")")), "{line}");
     }
 }
 

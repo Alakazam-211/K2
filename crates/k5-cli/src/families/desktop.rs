@@ -28,10 +28,10 @@
 //! The shell CLI answers these itself ([`run`] returns `None`): a word
 //! that is not UTF-8, `HOOK_SOCK` set with a `CODEX_` variable exported,
 //! a port that is set but is no port curl takes, a `python3` the binary
-//! can't tell, and a `--timeout` its arithmetic reads otherwise than as
-//! plain decimal seconds, minutes or hours (TODO, follows 0f25406366: the
-//! shell's fix makes those the usage line, exit 2, before anything is
-//! sent; then this answers them).
+//! can't tell, and a `--timeout` of more than 12 digits that count, which
+//! its arithmetic reads. A `--timeout` that isn't digits and one unit
+//! letter is the usage line, exit 2, before anything is sent
+//! ([`timeout_secs`], 0f25406366).
 //!
 //! The renderers' Python reads the answer from an environment variable,
 //! which Linux caps at 128 KiB: above it the shell stops on python3's
@@ -245,23 +245,43 @@ fn set_value(a: &mut Ask, flag: &str, v: &str) {
     }
 }
 
-/// A `--timeout` the shell's arithmetic reads as plain decimal: digits
-/// (no leading zero, at most 12) and one unit letter or none. Its seconds.
-/// `None`: the shell reads it its own way (the binary hands it over).
-pub fn plain_secs(v: &str) -> Option<u64> {
-    let (digits, mult) = match v.as_bytes().last()? {
-        b'h' => (&v[..v.len() - 1], 3600),
-        b'm' => (&v[..v.len() - 1], 60),
-        b's' => (&v[..v.len() - 1], 1),
+/// What `_desktop_secs` makes of a `--timeout`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Timeout {
+    /// Digits and one unit letter or none, read as decimal (`10#`).
+    Secs(u64),
+    /// Anything else: the verb's usage line, exit 2, before anything is
+    /// sent.
+    Bad,
+    /// More than 12 digits that count: the binary leaves it to the shell's
+    /// arithmetic.
+    Long,
+}
+
+/// `_desktop_secs`: a `--timeout` of digits and one unit letter or none
+/// (`^[0-9]+[smh]?$`), read as decimal.
+pub fn timeout_secs(v: &str) -> Timeout {
+    let (digits, mult) = match v.as_bytes().last() {
+        Some(b'h') => (&v[..v.len() - 1], 3600),
+        Some(b'm') => (&v[..v.len() - 1], 60),
+        Some(b's') => (&v[..v.len() - 1], 1),
         _ => (v, 1),
     };
-    let ok = !digits.is_empty()
-        && digits.len() <= 12
-        && digits.bytes().all(|b| b.is_ascii_digit())
-        && (digits == "0" || !digits.starts_with('0'));
-    ok.then(|| digits.parse::<u64>().ok().map(|n| n * mult))
-        .flatten()
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return Timeout::Bad;
+    }
+    let counted = digits.trim_start_matches('0');
+    if counted.len() > 12 {
+        return Timeout::Long;
+    }
+    // All zeros is 0.
+    Timeout::Secs(counted.parse::<u64>().unwrap_or(0) * mult)
 }
+
+/// `setup`'s usage line for a bad `--timeout`.
+pub const SETUP_TIMEOUT_USAGE: &str = "usage: --timeout 10m|90s|600";
+/// `env`'s usage line for a bad `--timeout`.
+pub const ENV_TIMEOUT_USAGE: &str = "usage: --timeout 2m|90s|120";
 
 /// What a verb sends, and how its answer shows.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -514,9 +534,9 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     let words = all.get(1..).unwrap_or_default();
     let parsed = parse(words);
     if let Parsed::Call(a) = &parsed {
-        // TODO(follows 0f25406366): answer these as the usage line, exit 2.
+        // Past 12 digits: the shell's arithmetic.
         let waits = a.sub == "setup" || a.sub == "env";
-        if waits && !a.wait_for.is_empty() && plain_secs(&a.wait_for).is_none() {
+        if waits && !a.wait_for.is_empty() && timeout_secs(&a.wait_for) == Timeout::Long {
             return None;
         }
     }
@@ -575,6 +595,18 @@ fn run_with(
         Ok(r) => r,
         Err(line) => return Shown::err(format!("{line}\n"), Exit::Usage).print(),
     };
+    // `_desktop_secs`: a bad `--timeout` is the usage line before anything
+    // is sent (`setup` checks it first; `env` after its words).
+    let bad_timeout = match &req {
+        Request::Setup => Some(SETUP_TIMEOUT_USAGE),
+        Request::Env(_) => Some(ENV_TIMEOUT_USAGE),
+        Request::One { .. } => None,
+    };
+    if let Some(line) = bad_timeout {
+        if !ask.wait_for.is_empty() && timeout_secs(&ask.wait_for) == Timeout::Bad {
+            return Shown::err(format!("{line}\n"), Exit::Usage).print();
+        }
+    }
     settings.port = settings.port_text.as_deref().and_then(curl_port);
     let mut client = match settings.client(would_refuse) {
         Ok(c) => c,
@@ -1521,7 +1553,10 @@ fn setup_wait(client: &mut Client, a: &Ask, status: &str, body: &[u8]) -> Exit {
     let secs = if a.wait_for.is_empty() {
         600
     } else {
-        plain_secs(&a.wait_for).expect("run hands the rest to the shell")
+        match timeout_secs(&a.wait_for) {
+            Timeout::Secs(n) => n,
+            other => unreachable!("run_with stops a bad one, run hands a long one on: {other:?}"),
+        }
     };
     if !a.json {
         out::stderr_line(INSTALLING);
@@ -1602,7 +1637,10 @@ fn env_loop(client: &mut Client, a: &Ask, body: &str) -> Exit {
     let secs = if a.wait_for.is_empty() {
         120
     } else {
-        plain_secs(&a.wait_for).expect("run hands the rest to the shell")
+        match timeout_secs(&a.wait_for) {
+            Timeout::Secs(n) => n,
+            other => unreachable!("run_with stops a bad one, run hands a long one on: {other:?}"),
+        }
     };
     let mut waited: u64 = 0;
     let out_body = loop {

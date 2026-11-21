@@ -24,9 +24,8 @@
 //!   copied until it is fixed: a help flag right after a value flag is
 //!   that flag's value (`cli/src/desktop.sh`, `cmd_desktop`'s `shift 2`
 //!   arms), so the line goes on and its request is sent.
-//! - `follows 0f25406366`: a `--timeout` bash's arithmetic reads its own
-//!   way goes to the shell for now; the shell's fix makes it the usage
-//!   line before anything is sent, and the binary then answers it.
+//! - A `--timeout` that isn't digits and one unit letter is the usage
+//!   line before anything is sent (0f25406366); a leading 0 is decimal.
 
 #![cfg(unix)]
 
@@ -938,25 +937,61 @@ fn desktop_setup_and_env_wait_as_the_shell_does() {
             3,
             1,
         ),
-        // follows 0f25406366: the shell answers these until its fix lands.
-        shell(case(
-            "follows 0f25406366: env --timeout x",
+        // A bad --timeout: the usage line, nothing sent (0f25406366).
+        case(
+            "env --timeout x",
             &["env", "--timeout", "x"],
             &[],
             vec![],
             owner_and_port,
             2,
             0,
-        )),
-        shell(case(
-            "follows 0f25406366: setup --timeout x answers before it waits",
+        ),
+        case(
+            "env --timeout that names a variable",
+            &["env", "--timeout", "HOMEm", "--json"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "env --timeout with words: the words' line first",
+            &["env", "x", "--timeout", "x"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "setup --timeout x",
             &["setup", "--timeout", "x"],
             &[],
-            vec![ok(r#"{"state":"closed","ok":true}"#)],
+            vec![],
             owner_and_port,
+            2,
             0,
+        ),
+        case(
+            "setup --timeout 1.5m",
+            &["setup", "--timeout", "1.5m", "--no-wait"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "setup --timeout 00s: a leading 0 is decimal",
+            &["setup", "--timeout", "00s"],
+            &[],
+            vec![installing(), installing()],
+            owner_and_port,
             1,
-        )),
+            2,
+        ),
     ];
     for c in v {
         rig.check(&c);

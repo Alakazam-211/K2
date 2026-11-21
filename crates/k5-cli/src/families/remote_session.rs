@@ -37,10 +37,18 @@
 //! or `--help` (the front sends those on; the router prints the help page
 //! and acts on nothing), `HOOK_SOCK` set with a `CODEX_` variable
 //! exported, a port that is set but is no port curl takes, a `python3` the
-//! binary can't tell, `--host` (a remote server over Connect: its own TLS
-//! client is not here yet), a grant token with a session passport, and a
-//! `read --lines` that is not a plain word (the shell puts it in the URL
-//! as it is).
+//! binary can't tell, a `--host` the binary doesn't send a token to
+//! itself ([`remote::base`], [`remote::sends_here`]), `--host` or a grant
+//! token with a session passport (the shell's heal and closing lines
+//! then read a passport the calls don't send), and a `read --lines` that
+//! is not a plain word (the shell puts it in the URL as it is).
+//!
+//! `--host HOST` (`_rs_apply_target`, then `_apply_remote_host`): after
+//! the token is read (`--token`, or `--token-stdin` as above), the host's
+//! token ([`remote::token_for_host`]: that token, else `*_REMOTE_TOKEN`,
+//! else the K2 home's files; none is two lines, exit 1), and every call
+//! goes to `https://HOST` (or the URL as given) over TCP with it
+//! ([`remote::apply`], TLS by [`crate::transport::tls`]).
 
 use super::{get, py_iter, py_len, py_space, Raise, Shown};
 use crate::daemon::{self, Settings};
@@ -52,7 +60,7 @@ use crate::passport;
 use crate::prelude::{self, Closing};
 use crate::prompt;
 use crate::python;
-use crate::transport::{Auth, Call, Channel, Client, Error};
+use crate::transport::{remote, Auth, Call, Channel, Client, Error};
 use k2_client::cli_name;
 use std::ffi::OsString;
 use std::path::Path;
@@ -324,9 +332,16 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         return None;
     }
     let (form, target) = parse(&words);
-    if !target.host.is_empty() {
-        return None;
-    }
+    let acts = !matches!(form, Form::Help | Form::Stop { .. });
+    let base = if target.host.is_empty() || !acts {
+        None
+    } else {
+        let b = remote::base(&target.host)?;
+        if !remote::sends_here(&target.host, &b, |n| std::env::var_os(n)) {
+            return None;
+        }
+        Some(b)
+    };
     if let Form::Read { lines, .. } = &form {
         if !lines
             .bytes()
@@ -343,7 +358,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         }
     };
     let grant_token = !target.token.is_empty() || target.stdin;
-    if grant_token && matches!(settings.auth, Auth::Passport { .. }) {
+    if (grant_token || base.is_some()) && matches!(settings.auth, Auth::Passport { .. }) {
         return None;
     }
     if let Some(gate) = prelude::gate(&settings) {
@@ -353,7 +368,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     Some(run_with(
         args,
         form,
-        target,
+        (target, base),
         settings,
         port,
         hook_sock.as_deref(),
@@ -363,7 +378,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
 fn run_with(
     args: &[OsString],
     form: Form,
-    target: Target,
+    (target, base): (Target, Option<remote::Base>),
     settings: Settings,
     port: u16,
     hook_sock: Option<&Path>,
@@ -397,7 +412,16 @@ fn run_with(
         Err(exit) => return exit,
     };
     let mut client = settings.client_on(port, would_refuse);
-    if let Some(t) = token {
+    if let Some(b) = &base {
+        let explicit = token.unwrap_or_default();
+        let Some(found) = remote::token_for_host(&target.host, &explicit, &settings.home) else {
+            for line in remote::no_token_lines(&target.host, &settings.home) {
+                out::stderr_line(&line);
+            }
+            return Exit::Error;
+        };
+        remote::apply(&mut client, b, found);
+    } else if let Some(t) = token {
         client.auth = Auth::Owner(t);
         client.owner_from_disk = false;
     }

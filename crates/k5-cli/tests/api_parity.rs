@@ -752,14 +752,14 @@ fn api_hands_these_to_the_shell() {
             0,
             0,
         ),
-        // curl refuses the URL (3); `set -e` ends the command with it.
+        // The prelude refuses the port (2) before anything is sent.
         shell(case(
-            "a port that is no port: curl's 3",
+            "a port that is no port: the shell's port refusal",
             &["on"],
             &[("K2_PORT", "41o0")],
             vec![],
             owner_only,
-            3,
+            2,
             0,
         )),
     ];

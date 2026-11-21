@@ -1030,12 +1030,12 @@ fn organization_hands_these_to_the_shell() {
             0,
         )),
         shell(case(
-            "a port that is no port",
+            "a port that is no port: the shell's port refusal",
             &["list"],
             &[("K2_PORT", "41o0")],
             vec![],
             owner_only,
-            1,
+            2,
             0,
         )),
         shell(case(

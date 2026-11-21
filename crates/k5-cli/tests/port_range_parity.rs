@@ -151,6 +151,19 @@ fn the_native_families_stop_on_a_port_that_isn_t_one() {
         ("read", &["acme"][..], "41o0"),
         ("update", &["--cli"][..], "1x"),
         ("update", &["--app"][..], "1x"),
+        ("api-key", &["list"][..], "41o0"),
+        ("api", &["on"][..], "41o0"),
+        ("cert", &["list"][..], "41o0"),
+        ("compute", &["cancel", "j1"][..], "41o0"),
+        ("compute", &["jobs"][..], "41o0"),
+        ("focus-group", &["list"][..], "41o0"),
+        ("glossary", &["x"][..], "41o0"),
+        ("organization", &["list"][..], "41o0"),
+        ("permission", &["status"][..], "41o0"),
+        ("remind", &["list"][..], "41o0"),
+        ("skin-token", &["list"][..], "41o0"),
+        ("skin", &["role", "list"][..], "41o0"),
+        ("wiki", &["status"][..], "41o0"),
     ] {
         let rig = Rig::new(verb, "port");
         let args: &'static [&'static str] = Box::leak(args.to_vec().into_boxed_slice());

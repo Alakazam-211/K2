@@ -531,12 +531,12 @@ fn compute_cancel_hands_these_to_the_shell() {
             1,
         )),
         shell(case(
-            "a port that is no port",
+            "a port that is no port: the shell's port refusal",
             &["cancel", "j1"],
             &[("K2_PORT", "41o0")],
             vec![],
             owner_only,
-            3,
+            2,
             0,
         )),
     ];

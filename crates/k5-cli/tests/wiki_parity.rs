@@ -812,12 +812,12 @@ fn wiki_hands_these_to_the_shell() {
         6,
     ));
     v.push(shell(case(
-        "a port that is no port",
+        "a port that is no port: the shell's port refusal",
         &["status"],
         &[("K2_PORT", "41o0")],
         vec![],
         owner_only,
-        3,
+        2,
         0,
     )));
     for c in v {

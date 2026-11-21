@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# `k2 update` / `--app` / `--list`, `k2 daemon install` and the public
-# installer (scripts/install-daemon.sh) follow GitHub's own redirects, and
-# only those.
+# `k2 update` / `--app` / `--list`, `k2 daemon install`, the public
+# installer (scripts/install-daemon.sh) and the provisioning script's fetch
+# of it (scripts/provision-k2-server.sh, which also allows
+# raw.githubusercontent.com) follow GitHub's own redirects, and only those.
 #
 # Regression: `k2 update` asked GitHub with `curl -fsS` and no -L. After a
 # repository move api.github.com answers the old path with a 301 to the
@@ -26,7 +27,11 @@
 # K2_NO_SERVICE=1 and K2_NO_ROOT_HELPER=1, under sh, with stand-ins for
 # systemctl, launchctl, sudo, runuser and minisign that log any call (none
 # may come). K2_TEST_INSTALLER names another copy of the installer (the
-# bite). Run with: bash tests/cli/update_github_redirects.sh
+# bite). The provisioning script never runs: only its GitHub fetch block and
+# the line that fetches install-daemon.sh, cut out and run alone under bash
+# with the same stand-ins (apt-get, useradd, chown and visudo too);
+# K2_TEST_PROVISION names another copy (the bite).
+# Run with: bash tests/cli/update_github_redirects.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -37,6 +42,7 @@ done
 # The system curl, the one a person's k2 runs.
 REAL_CURL="$(PATH=/usr/bin:/bin command -v curl)" || { echo "FAIL: no curl in /usr/bin or /bin" >&2; exit 1; }
 INSTALLER="${K2_TEST_INSTALLER:-$ROOT/scripts/install-daemon.sh}"
+PROVISION="${K2_TEST_PROVISION:-$ROOT/scripts/provision-k2-server.sh}"
 
 pass=0
 fail=0
@@ -62,6 +68,8 @@ printf '%s' "$TOKEN" >"$H/.k2/heartbeat.token"
 printf '1' >"$H/.k2/heartbeat.port"
 
 GH_HOSTS="api.github.com github.com objects.githubusercontent.com release-assets.githubusercontent.com"
+# Allowed only for the provisioning script's fetch.
+RAW_HOST="raw.githubusercontent.com"
 
 echo "== a test CA and a certificate for GitHub's hosts =="
 cat >"$TLS/ca.cnf" <<'EOF'
@@ -86,7 +94,7 @@ CN = api.github.com
 basicConstraints = CA:false
 keyUsage = critical,digitalSignature,keyEncipherment
 extendedKeyUsage = serverAuth
-subjectAltName = DNS:api.github.com,DNS:github.com,DNS:objects.githubusercontent.com,DNS:release-assets.githubusercontent.com
+subjectAltName = DNS:api.github.com,DNS:github.com,DNS:objects.githubusercontent.com,DNS:release-assets.githubusercontent.com,DNS:raw.githubusercontent.com
 EOF
 openssl req -x509 -new -newkey rsa:2048 -nodes -sha256 -days 2 -config "$TLS/ca.cnf" \
     -keyout "$TLS/ca.key" -out "$TLS/ca.pem" 2>"$TLS/err" || { show "$(cat "$TLS/err")"; echo "FAIL: openssl (CA)" >&2; exit 1; }
@@ -120,6 +128,7 @@ starts = {
     "/repos/Alakazam-211/K2/releases/latest": "latest",
     "/repos/Alakazam-211/K2/releases?per_page=10": "list",
     "/Alakazam-211/K2/releases/latest/download/daemon-latest.json": "manifest",
+    "/Alakazam-211/K2/main/scripts/install-daemon.sh": "raw",
 }
 repo = "/repos/Alakazam-211/K2"
 lock = threading.Lock()
@@ -143,6 +152,9 @@ class H(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def answer(self, kind):
+        if kind == "raw":
+            self.send(200, b"#!/bin/sh\necho stand-in installer\n")
+            return
         body = {"latest": latest, "list": listing, "manifest": manifest}[kind]
         self.send(200, json.dumps(body).encode())
 
@@ -157,7 +169,10 @@ class H(BaseHTTPRequestHandler):
             mode = f.read().strip()
         kind = starts.get(self.path)
         if kind is not None:
-            if mode == "moved" and kind == "manifest":
+            if mode == "moved" and kind == "raw":
+                # A renamed repository's raw URL, on raw.githubusercontent.com.
+                self.send(301, b"", "https://%s%s" % (host, self.path.replace("/Alakazam-211/", "/Moved-Org/")))
+            elif mode == "moved" and kind == "manifest":
                 # A moved repository's release download, on github.com.
                 self.send(301, b"", "https://%s%s" % (host, self.path.replace("/Alakazam-211/", "/Moved-Org/")))
             elif mode == "moved":
@@ -175,6 +190,9 @@ class H(BaseHTTPRequestHandler):
             return
         if self.path == "/Moved-Org/K2/releases/latest/download/daemon-latest.json":
             self.answer("manifest")
+            return
+        if self.path == "/Moved-Org/K2/main/scripts/install-daemon.sh":
+            self.answer("raw")
             return
         if self.path.startswith("/repositories/42/"):
             self.answer(starts[repo + self.path[len("/repositories/42"):]])
@@ -232,7 +250,7 @@ ok "the stub GitHub listens on $GH_PORT, the other listener on $OFF_PORT"
     echo '#!/bin/sh'
     printf 'printf "curl %%s\\n" "$*" >>"%s"\n' "$WORK/curl.log"
     printf 'exec "%s" --noproxy "*" --cacert "%s"' "$REAL_CURL" "$TLS/ca.pem"
-    for h in $GH_HOSTS; do printf ' --connect-to %s:443:127.0.0.1:%s' "$h" "$GH_PORT"; done
+    for h in $GH_HOSTS $RAW_HOST; do printf ' --connect-to %s:443:127.0.0.1:%s' "$h" "$GH_PORT"; done
     printf ' --connect-to ::127.0.0.1:%s "$@"\n' "$OFF_PORT"
 } >"$STUBS/curl"
 # daemon install reads the platform from uname: Linux x86_64 everywhere.
@@ -246,7 +264,7 @@ case "\${1:-}" in
 esac
 EOF
 chmod +x "$STUBS/curl" "$STUBS/uname"
-for t in systemctl launchctl sudo runuser minisign; do
+for t in systemctl launchctl sudo runuser minisign apt-get useradd chown visudo; do
     printf '#!/bin/sh\necho "STANDIN %s $*" >>"%s"\nexit 97\n' "$t" "$WORK/standin.log" >"$STUBS/$t"
     chmod +x "$STUBS/$t"
 done
@@ -438,6 +456,81 @@ https://github.com@evil.example/x|Error: GitHub redirected to https://github.com
 http://github.com/x|Error: GitHub redirected to http://github.com, which is not https; nothing was sent there
 http://evil.example/x|Error: GitHub redirected to http://evil.example, which is not https; nothing was sent there
 EOF
+
+echo "== scripts/provision-k2-server.sh: its fetch of install-daemon.sh follows GitHub's redirects only =="
+RAW_URL="https://raw.githubusercontent.com/Alakazam-211/K2/main/scripts/install-daemon.sh"
+grep -q 'curl -fsSL "$RAW_BASE/scripts/install-daemon.sh"' "$PROVISION" \
+    && bad "provision: still fetches install-daemon.sh with curl -fsSL" || ok "provision: no curl -fsSL for install-daemon.sh"
+FETCH_BLOCK="$(sed -n '/^# ── GitHub fetch: begin/,/^# ── GitHub fetch: end/p' "$PROVISION")"
+CALL="$(sed -n '/^[[:space:]]*provision_github_fetch "\$RAW_BASE\/scripts\/install-daemon.sh" "\$INSTALLER"/,/|| die /p' "$PROVISION")"
+DIE="$(grep -m1 '^die() {' "$PROVISION")"
+RAW_BASE_LINE="$(grep -m1 '^RAW_BASE=' "$PROVISION")"
+[ -n "$FETCH_BLOCK" ] && ok "provision: the GitHub fetch block" || bad "provision: no GitHub fetch block"
+[ "$(printf '%s\n' "$CALL" | grep -c .)" = 2 ] && ok "provision: the line that fetches install-daemon.sh uses it" \
+    || { bad "provision: the install-daemon.sh fetch line"; show "$CALL"; }
+{
+    echo 'set -euo pipefail'
+    printf '%s\n' "$DIE" "$RAW_BASE_LINE" "$FETCH_BLOCK"
+    echo 'INSTALLER="$1"'
+    printf '%s\n' "$CALL"
+} >"$WORK/prov-fetch.sh"
+# prov <mode>: the cut-out fetch; sets OUT, ERR, RC; clears the logs.
+prov() {
+    printf '%s\n' "$1" >"$WORK/mode"
+    : >"$WORK/gh.log"; : >"$WORK/off.log"; : >"$WORK/curl.log"; : >"$WORK/standin.log"
+    rm -rf "$WORK/prov-out"; mkdir -p "$WORK/prov-out"
+    set +e
+    env -i PATH="$STUBS:/usr/bin:/bin" HOME="$H" TMPDIR="$T" K2_TOKEN="$TOKEN" \
+        bash "$WORK/prov-fetch.sh" "$WORK/prov-out/install-daemon.sh" </dev/null >"$WORK/out" 2>"$WORK/err"
+    RC=$?
+    set -e
+    OUT="$(cat "$WORK/out")"
+    ERR="$(cat "$WORK/err")"
+    [ ! -s "$WORK/standin.log" ] && ok "provision $1: no system tool ran" \
+        || { bad "provision $1: a stand-in ran"; show "$(cat "$WORK/standin.log")"; }
+}
+PROV_FAILED="$(printf '\033[1;31m[provision] ERROR:\033[0m could not fetch https://raw.githubusercontent.com/Alakazam-211/K2/main/scripts/install-daemon.sh')"
+prov moved
+same "provision, a renamed repository: exit 0" "$RC" 0
+same "provision, a renamed repository: stderr empty" "$ERR" ""
+same "provision, a renamed repository: the file" "$(cat "$WORK/prov-out/install-daemon.sh" 2>&1)" "$(printf '#!/bin/sh\necho stand-in installer')"
+same "provision, a renamed repository: the old path, then the new one" "$(cat "$WORK/gh.log")" \
+    "$(printf 'raw.githubusercontent.com /Alakazam-211/K2/main/scripts/install-daemon.sh noauth\nraw.githubusercontent.com /Moved-Org/K2/main/scripts/install-daemon.sh noauth')"
+nothing_else "provision, a renamed repository"
+prov chain:5
+same "provision, 5 redirects: exit 0" "$RC" 0
+gh_count "provision, 5 redirects" 6
+for h in $GH_HOSTS $RAW_HOST; do
+    grep -q "^$h " "$WORK/gh.log" && ok "provision, 5 redirects: reached $h" || { bad "provision, 5 redirects: never reached $h"; show "$(cat "$WORK/gh.log")"; }
+done
+nothing_else "provision, 5 redirects"
+prov chain:6
+same "provision, 6 redirects: exit 1" "$RC" 1
+same "provision, 6 redirects: the lines" "$ERR" \
+    "$(printf 'Error: GitHub redirected more than 5 times (the last to https://objects.githubusercontent.com); stopped there\n%s' "$PROV_FAILED")"
+gh_count "provision, 6 redirects" 6
+nothing_else "provision, 6 redirects"
+while IFS='|' read -r to want; do
+    prov "to:$to"
+    same "provision, to $to: exit 1" "$RC" 1
+    same "provision, to $to: the lines" "$ERR" "$(printf '%s\n%s' "$want" "$PROV_FAILED")"
+    gh_count "provision, to $to" 1
+    nothing_else "provision, to $to"
+done <<'EOF'
+https://evil.example/install-daemon.sh|Error: GitHub redirected to https://evil.example, which is not GitHub; nothing was sent there
+https://raw.githubusercontent.com.evil.example/x|Error: GitHub redirected to https://raw.githubusercontent.com.evil.example, which is not GitHub; nothing was sent there
+https://raw.githubusercontent.com@evil.example/x|Error: GitHub redirected to https://raw.githubusercontent.com@evil.example, which is not GitHub; nothing was sent there
+https://raw.githubusercontent.com:8443/x|Error: GitHub redirected to https://raw.githubusercontent.com:8443, which is not GitHub; nothing was sent there
+http://raw.githubusercontent.com/x|Error: GitHub redirected to http://raw.githubusercontent.com, which is not https; nothing was sent there
+http://evil.example/x|Error: GitHub redirected to http://evil.example, which is not https; nothing was sent there
+EOF
+echo "== raw.githubusercontent.com is the provisioning script's only: k2 update refuses it =="
+run "to:https://raw.githubusercontent.com/x" update --app
+same "k2 update to raw: exit 1" "$RC" 1
+same "k2 update to raw: the one stderr line" "$ERR" \
+    "Error: GitHub redirected to https://raw.githubusercontent.com, which is not GitHub; nothing was sent there"
+gh_count "k2 update to raw" 1
+nothing_else "k2 update to raw"
 
 echo ""
 echo "update_github_redirects: $pass passed, $fail failed"

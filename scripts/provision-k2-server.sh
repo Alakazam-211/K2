@@ -132,6 +132,74 @@ export K2_CALLBACK_TOKEN="${K2_CALLBACK_TOKEN:-}"
 log() { printf '\033[1;36m[provision]\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m[provision] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
+# ── GitHub fetch: begin (tests/cli/update_github_redirects.sh runs this block alone) ──
+# The hosts a fetch from GitHub follows a redirect to: raw.githubusercontent.com
+# (RAW_BASE: a renamed repository's raw URLs redirect to the new name) and
+# GitHub's own four (api.github.com, github.com, objects.githubusercontent.com,
+# release-assets.githubusercontent.com). Curl can't limit -L to a list of
+# hosts, so provision_github_fetch never uses -L: it follows each hop itself,
+# https only, after checking the host, and refuses a redirect anywhere else
+# before that address is contacted. The same walk as the k2 CLI's
+# _k2_github_curl (cli/src/update.sh) and install-daemon.sh's github_fetch;
+# this script carries its own copy.
+_PROV_GITHUB_HOSTS="raw.githubusercontent.com api.github.com github.com objects.githubusercontent.com release-assets.githubusercontent.com"
+# The most redirects one fetch follows.
+_PROV_GITHUB_MAX_REDIRS=5
+
+# _prov_github_ok <url>: 0 when <url> is https on one of those hosts, with no
+# name before an @ and no port.
+_prov_github_ok() {
+	local rest host h
+	case "$1" in https://*) ;; *) return 1 ;; esac
+	rest="${1#https://}"
+	host="${rest%%[/?#]*}"
+	for h in $_PROV_GITHUB_HOSTS; do
+		[ "$host" = "$h" ] && return 0
+	done
+	return 1
+}
+
+# _prov_github_where <url>: the scheme and host of <url>, printable characters
+# only, for an error line (never the path or the query).
+_prov_github_where() {
+	local rest
+	case "$1" in
+		*://*) rest="${1#*://}"; rest="${1%%://*}://${rest%%[/?#]*}" ;;
+		*) rest="${1%%[/?#]*}" ;;
+	esac
+	printf '%s' "$rest" | LC_ALL=C tr -cd '[:graph:]'
+}
+
+# provision_github_fetch <url> <file>: GET <url> into <file>, following
+# redirects on those hosts one hop at a time (at most _PROV_GITHUB_MAX_REDIRS),
+# https only, also when a ~/.curlrc says -L. Sends no token: plain curl, no
+# config, no Authorization header. Returns 1 when curl fails (curl's own line
+# on stderr). A redirect off the list, to anything but https, or past the cap
+# prints one line on stderr and returns 2; nothing is sent to that address.
+provision_github_fetch() {
+	local url="$1" file="$2" hops=0 next
+	while :; do
+		next=$(curl --no-location --proto =https -fsS -o "$file" -w '%{redirect_url}' "$url") || return 1
+		[ -n "$next" ] || return 0
+		hops=$((hops + 1))
+		if [ "$hops" -gt "$_PROV_GITHUB_MAX_REDIRS" ]; then
+			echo "Error: GitHub redirected more than $_PROV_GITHUB_MAX_REDIRS times (the last to $(_prov_github_where "$next")); stopped there" >&2
+			return 2
+		fi
+		case "$next" in
+			https://*) ;;
+			*) echo "Error: GitHub redirected to $(_prov_github_where "$next"), which is not https; nothing was sent there" >&2
+			   return 2 ;;
+		esac
+		if ! _prov_github_ok "$next"; then
+			echo "Error: GitHub redirected to $(_prov_github_where "$next"), which is not GitHub; nothing was sent there" >&2
+			return 2
+		fi
+		url="$next"
+	done
+}
+# ── GitHub fetch: end ──
+
 # The agents leaf's protected floor for K2's cores, in MiB, from MemTotal
 # in KiB (/proc/meminfo): about 1/16 of the RAM rounded to whole GiB, at
 # least 2 GiB, at most 8 GiB (2 GiB at 32 GB or less, 4 GiB at 64 GB, 8 GiB
@@ -239,7 +307,8 @@ if [ ! -f "$INSTALLER" ]; then
 	INSTALLER="$(mktemp -d)/install-daemon.sh"
 	chmod 0755 "$(dirname "$INSTALLER")"
 	log "fetching install-daemon.sh from the repo"
-	curl -fsSL "$RAW_BASE/scripts/install-daemon.sh" -o "$INSTALLER"
+	provision_github_fetch "$RAW_BASE/scripts/install-daemon.sh" "$INSTALLER" \
+		|| die "could not fetch $RAW_BASE/scripts/install-daemon.sh"
 	chmod +x "$INSTALLER"
 fi
 # The root helper's source: a local build wins (K2_ROOT_HELPER_BIN, beside

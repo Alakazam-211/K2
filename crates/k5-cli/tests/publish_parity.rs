@@ -933,8 +933,15 @@ fn run_assign_answers_as_the_shell_does() {
             on(
                 "run --assign: held",
                 &[
-                    "run", "web", "--cmd", "python3 -m http.server 8999", "--port", "8999",
-                    "--no-tunnel", "--assign", "ada",
+                    "run",
+                    "web",
+                    "--cmd",
+                    "python3 -m http.server 8999",
+                    "--port",
+                    "8999",
+                    "--no-tunnel",
+                    "--assign",
+                    "ada",
                 ],
                 vec![ok(held)],
                 2,
@@ -943,8 +950,16 @@ fn run_assign_answers_as_the_shell_does() {
             on(
                 "run --assign= a comma list, --dev",
                 &[
-                    "run", "web", "--assign=ada,owner", "--dev", "--cmd", "x", "--port", "1",
-                    "--mem", "2G",
+                    "run",
+                    "web",
+                    "--assign=ada,owner",
+                    "--dev",
+                    "--cmd",
+                    "x",
+                    "--port",
+                    "1",
+                    "--mem",
+                    "2G",
                 ],
                 vec![ok(held)],
                 2,
@@ -952,7 +967,9 @@ fn run_assign_answers_as_the_shell_does() {
             ),
             on(
                 "run --assign: the value stripped",
-                &["run", "web", "--cmd", "x", "--port", "1", "--assign", " ada é "],
+                &[
+                    "run", "web", "--cmd", "x", "--port", "1", "--assign", " ada é ",
+                ],
                 vec![ok(held)],
                 2,
                 1,
@@ -987,7 +1004,9 @@ fn run_assign_answers_as_the_shell_does() {
             ),
             shell(on(
                 "help never acts: run --assign ada --help",
-                &["run", "web", "--cmd", "x", "--port", "1", "--assign", "ada", "--help"],
+                &[
+                    "run", "web", "--cmd", "x", "--port", "1", "--assign", "ada", "--help",
+                ],
                 vec![],
                 0,
                 0,

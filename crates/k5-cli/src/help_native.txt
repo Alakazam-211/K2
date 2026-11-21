@@ -647,6 +647,8 @@ thread secret --help|thread/secret|out|0
 thread secret -h|thread/secret|out|0
 trust-folders --help|trust-folders|out|0
 trust-folders -h|trust-folders|out|0
+tunnel --help|tunnel|out|0
+tunnel -h|tunnel|out|0
 usage --help|usage|out|0
 usage -h|usage|out|0
 users --help|users|err|0
@@ -673,6 +675,8 @@ vault doctor --help|vault/doctor|out|0
 vault doctor -h|vault/doctor|out|0
 vault env-file --help|vault/env-file|out|0
 vault env-file -h|vault/env-file|out|0
+vault fetch --help|vault/fetch|out|0
+vault fetch -h|vault/fetch|out|0
 vault file --help|vault/file|out|0
 vault file -h|vault/file|out|0
 vault get --help|vault/get|out|0

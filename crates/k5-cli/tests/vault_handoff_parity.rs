@@ -825,7 +825,14 @@ fn accept_from_add_asks_on_one_card() {
         ),
         in_terminal(
             "accept-from add, several receivers, a sender with a space",
-            &["accept-from", "add", "bo b", "--workspace", "c,d é", "--json"],
+            &[
+                "accept-from",
+                "add",
+                "bo b",
+                "--workspace",
+                "c,d é",
+                "--json",
+            ],
             ("K5_HOOK_TOKEN", PASSPORT.to_string()),
         ),
         in_terminal(
@@ -856,7 +863,11 @@ fn accept_from_add_asks_on_one_card() {
 fn the_accept_from_ask_line_says_the_brand_s_name() {
     let rig = VRig::new();
     let cli = k2_client::brand::CLI_NAME;
-    let mut c = refused("brand", &["accept-from", "add", "bob", "--workspace", "p"], 3);
+    let mut c = refused(
+        "brand",
+        &["accept-from", "add", "bob", "--workspace", "p"],
+        3,
+    );
     c.env = vec![("K2_HOOK_TOKEN", PASSPORT.to_string())];
     let ran = rig.run(false, false, &c);
     assert_eq!(

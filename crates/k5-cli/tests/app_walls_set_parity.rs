@@ -910,14 +910,23 @@ fn held_cards_and_assign_answer_as_the_shell_does() {
         ),
         shell(one(
             "--assign before egress: the shell's",
-            &["--assign", "ada,owner", "egress", "add", "app1", "api.example.com"],
+            &[
+                "--assign",
+                "ada,owner",
+                "egress",
+                "add",
+                "app1",
+                "api.example.com",
+            ],
             202,
             egress_held,
             2,
         )),
         shell(stop(
             "help never acts: db connect --assign ada --help",
-            &["db", "connect", "app1", "--new", "--assign", "ada", "--help"],
+            &[
+                "db", "connect", "app1", "--new", "--assign", "ada", "--help",
+            ],
             0,
         )),
     ];

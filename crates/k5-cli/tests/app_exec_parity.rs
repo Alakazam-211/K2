@@ -323,7 +323,9 @@ fn exec_assign_answers_as_the_shell_does() {
     for (name, args) in [
         (
             "--assign before --, and the command's after it",
-            &["exec", "acme", "--assign", "ada", "--", "echo", "--assign", "x"][..],
+            &[
+                "exec", "acme", "--assign", "ada", "--", "echo", "--assign", "x",
+            ][..],
         ),
         (
             "--assign only after --: the command's",

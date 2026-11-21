@@ -346,7 +346,11 @@ fn approvals_name_each_card_as_the_shell_does() {
     let rig = Rig::new(VERB, "apprcards");
     let can = CARDS.replacen(r#""canApprove":false"#, r#""canApprove":true"#, 1);
     let v = vec![
-        read("approvals <id>: the card lines", &["approvals", "w_abc"], CARDS),
+        read(
+            "approvals <id>: the card lines",
+            &["approvals", "w_abc"],
+            CARDS,
+        ),
         read(
             "approvals --state denied --app",
             &["approvals", "--state", "denied", "--app", "app1 é"],
@@ -362,8 +366,16 @@ fn approvals_name_each_card_as_the_shell_does() {
             &["approvals", "--state", "denied", "--all"],
             CARDS,
         ),
-        read("approvals <id> --json", &["approvals", "w_abc", "--json"], CARDS),
-        stop("approvals: --state given last", &["approvals", "--state"], 2),
+        read(
+            "approvals <id> --json",
+            &["approvals", "w_abc", "--json"],
+            CARDS,
+        ),
+        stop(
+            "approvals: --state given last",
+            &["approvals", "--state"],
+            2,
+        ),
         stop(
             "approvals: a state that isn't one",
             &["approvals", "--state", "nonsense", "--all"],
@@ -401,7 +413,9 @@ fn approvals_name_each_card_as_the_shell_does() {
             "approvals: a login that isn't a string",
             &["approvals"],
             &[],
-            vec![ok(r#"{"requests":[{"id":"w","status":"pending","kind":"k","appLabel":"a","requestedBy":"r","summary":"s","card":{"id":"w","routedTo":[{"login":7}]}}]}"#)],
+            vec![ok(
+                r#"{"requests":[{"id":"w","status":"pending","kind":"k","appLabel":"a","requestedBy":"r","summary":"s","card":{"id":"w","routedTo":[{"login":7}]}}]}"#,
+            )],
             owner_and_port,
             1,
             1,
@@ -410,7 +424,9 @@ fn approvals_name_each_card_as_the_shell_does() {
             "approvals: routedTo that isn't a list",
             &["approvals"],
             &[],
-            vec![ok(r#"{"requests":[{"id":"w","status":"pending","kind":"k","appLabel":"a","requestedBy":"r","summary":"s","card":{"id":"w","routedTo":5}}]}"#)],
+            vec![ok(
+                r#"{"requests":[{"id":"w","status":"pending","kind":"k","appLabel":"a","requestedBy":"r","summary":"s","card":{"id":"w","routedTo":5}}]}"#,
+            )],
             owner_and_port,
             1,
             1,
@@ -438,7 +454,11 @@ fn assign_rides_the_posts_as_the_shell_s_does() {
             &["deny", "--assign", "ada,owner é", "req-1", "--reason", "r"],
             denied,
         ),
-        read("deny --assign=bo", &["deny", "req-1", "--assign=bo"], denied),
+        read(
+            "deny --assign=bo",
+            &["deny", "req-1", "--assign=bo"],
+            denied,
+        ),
         read(
             "deny: the last --assign stands",
             &["deny", "--assign", "ada", "req-1", "--assign=bo"],
@@ -454,13 +474,21 @@ fn assign_rides_the_posts_as_the_shell_s_does() {
             &["approvals", "--assign", "ada", "w_abc"],
             CARDS,
         ),
-        stop("deny: --assign given last", &["deny", "req-1", "--assign"], 2),
+        stop(
+            "deny: --assign given last",
+            &["deny", "req-1", "--assign"],
+            2,
+        ),
         stop(
             "deny: --assign with an empty value",
             &["deny", "req-1", "--assign", ""],
             2,
         ),
-        stop("deny: --assign= with none", &["deny", "req-1", "--assign="], 2),
+        stop(
+            "deny: --assign= with none",
+            &["deny", "req-1", "--assign="],
+            2,
+        ),
         stop(
             "approvals: --assign's usage before the verb's own",
             &["approvals", "-x", "--assign"],
@@ -548,7 +576,9 @@ fn the_held_card_lines_say_the_brand_s_name() {
     ));
     let (ran, _) = rig.binary(&c, false);
     assert!(
-        ran.stdout.ends_with(&format!("you can withdraw one: {cli} app deny <request-id>.\n")),
+        ran.stdout.ends_with(&format!(
+            "you can withdraw one: {cli} app deny <request-id>.\n"
+        )),
         "{}",
         ran.stdout
     );

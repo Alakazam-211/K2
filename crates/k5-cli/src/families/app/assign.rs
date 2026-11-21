@@ -137,10 +137,7 @@ mod tests {
         }
         assert_eq!(take(&["x", "--assign="]), Err(usage(USAGE_EQ)));
         // The first bad one stops it, even after a good one.
-        assert_eq!(
-            take(&["--assign", "a", "x", "--assign"]),
-            Err(usage(USAGE))
-        );
+        assert_eq!(take(&["--assign", "a", "x", "--assign"]), Err(usage(USAGE)));
     }
 
     /// The skin family's one request to `/cli/app/…` is `user chat`'s,
@@ -178,7 +175,10 @@ mod tests {
             path(true, "/cli/app/x?a=1", "ada,owner é"),
             "/cli/app/x?a=1&assign=ada%2Cowner%20%C3%A9"
         );
-        assert_eq!(path(false, "/cli/app/approvals", "ada"), "/cli/app/approvals");
+        assert_eq!(
+            path(false, "/cli/app/approvals", "ada"),
+            "/cli/app/approvals"
+        );
         assert_eq!(path(true, "/cli/skin/x", "ada"), "/cli/skin/x");
         assert_eq!(path(true, "/cli/app", "ada"), "/cli/app");
     }

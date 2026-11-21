@@ -1421,7 +1421,15 @@ fn help_later_on_the_line_is_the_usage() {
 fn the_assign_line_says_the_brand_s_name() {
     let rig = Rig::new(VERB, "assignbrand");
     let cli = k2_client::brand::CLI_NAME;
-    let c = case("brand: the usage", &[], &[], vec![on()], owner_and_port, 0, 1);
+    let c = case(
+        "brand: the usage",
+        &[],
+        &[],
+        vec![on()],
+        owner_and_port,
+        0,
+        1,
+    );
     let (ran, _) = rig.binary(&c, false);
     assert!(
         ran.stdout

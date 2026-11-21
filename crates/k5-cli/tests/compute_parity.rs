@@ -943,6 +943,80 @@ fn compute_logs() {
 /// A pull back's line names the command by the brand's name (in a build
 /// with `K2_BRAND_DIR=brand/xy` it says `xy`), never a typed `k2` or `k5`;
 /// the move note around it is the daemon's own words.
+/// `compute wait --failures`: after the end, each failed job's
+/// `── failures in …` line and its `compute logs <id> --failures --tail
+/// 60` (a subshell: its exit is not the wait's); a job that worked has
+/// none. With `--any`, the one that ended, when it failed.
+#[test]
+fn compute_wait_failures() {
+    let rig = Rig::new(VERB, "waitfailures");
+    let p1 = page(10, &[LOG1, LOG2], "[]");
+    let p2 = page(10, &[], "[]");
+    let failed = r#"{"id":"abcd1234ffff","short":"abcd1234","state":"done","node":"mini","exitCode":1,"startedAt":1000,"endedAt":1125}"#;
+    let worked = r#"{"id":"bbbb2222cccc","short":"bbbb2222","state":"done","node":"n2","exitCode":0}"#;
+    let v = vec![
+        // native: compute wait --failures
+        case(
+            "wait --failures: a failed job's failing tests",
+            &["wait", "abcd1234", "--failures"],
+            &[],
+            vec![ok(failed), ok(TESTED), ok(TESTED), ok(&p1), ok(&p2)],
+            owner_and_port,
+            1,
+            5,
+        ),
+        case(
+            "wait --failures: a job that worked has none",
+            &["wait", "bbbb2222", "--failures"],
+            &[],
+            vec![ok(worked)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "wait --failures --json, two jobs",
+            &["wait", "bbbb2222", "abcd1234", "--failures", "--json"],
+            &[],
+            vec![
+                ok(worked),
+                ok(failed),
+                ok(TESTED),
+                ok(TESTED),
+                ok(&p1),
+                ok(&p2),
+            ],
+            owner_and_port,
+            1,
+            6,
+        ),
+        case(
+            "wait --failures: the logs refused, the wait's exit stands",
+            &["wait", "abcd1234", "--failures"],
+            &[],
+            vec![
+                ok(failed),
+                Reply::Answer(404, r#"{"error":{"code":"not_found"}}"#.into()),
+            ],
+            owner_and_port,
+            1,
+            2,
+        ),
+        case(
+            "wait --any --failures: the first ended, failed",
+            &["wait", "abcd1234", "bbbb2222", "--any", "--failures"],
+            &[],
+            vec![ok(failed), ok(TESTED), ok(TESTED), ok(&p1), ok(&p2)],
+            owner_and_port,
+            1,
+            5,
+        ),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}
+
 #[test]
 fn the_pull_line_says_the_brand_s_name() {
     let rig = Rig::new(VERB, "pullbrand");

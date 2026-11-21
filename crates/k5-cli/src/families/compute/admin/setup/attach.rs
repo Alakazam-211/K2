@@ -85,6 +85,7 @@ pub fn send(cp: &mut Cp<'_>, a: &Ask) -> Exit {
             start: Start::Seq(since.to_string()),
             as_json: false,
             deadline: None,
+            deadline_exit: Exit::Refused,
         },
     )
 }

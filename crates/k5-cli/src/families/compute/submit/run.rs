@@ -966,6 +966,7 @@ pub fn send(cp: &mut Cp<'_>, a: &Ask) -> Exit {
                     start: Start::Cursor("0".into()),
                     as_json: false,
                     deadline,
+                    deadline_exit: Exit::Refused,
                 },
             );
         }
@@ -993,6 +994,7 @@ pub fn send(cp: &mut Cp<'_>, a: &Ask) -> Exit {
             start: Start::Cursor("0".into()),
             as_json: a.as_json,
             deadline: None,
+            deadline_exit: Exit::Refused,
         },
     )
 }

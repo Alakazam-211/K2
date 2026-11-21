@@ -252,3 +252,76 @@ fn compute_attach() {
         rig.check(&c);
     }
 }
+
+/// `compute wait <job> --follow`: `_compute_follow <job> 0 0 0`, from the
+/// start (cursor 0), as attach follows: the output, the end line and its
+/// exit; a limit that has passed is still_running with 124 for
+/// `--timeout`, 3 for `--max-wait`; more than one job, `--json` or
+/// `--quiet` is the usage line.
+#[test]
+fn compute_wait_follow() {
+    let rig = Rig::new(VERB, "waitfollow");
+    let out_err = format!(
+        r#"{{"seq":1,"stream":"out","data":"{RED}"}},{{"seq":2,"stream":"err","data":"{WARN}"}}"#
+    );
+    let v = vec![
+        // native: compute wait --follow
+        case(
+            "wait --follow: done, exit 7",
+            &["wait", "abcd1234", "--follow"],
+            &[],
+            vec![logs(&out_err, true, &done("7"), "null")],
+            owner_and_port,
+            7,
+            1,
+        ),
+        case(
+            "wait -f, a generous limit: done, exit 0",
+            &["wait", "-f", "abcd1234", "--timeout", "1h"],
+            &[],
+            vec![logs(&out_err, true, &done("0"), "{}")],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "wait --follow --timeout 0: still running, 124",
+            &["wait", "abcd1234", "--follow", "--timeout", "0"],
+            &[],
+            vec![],
+            owner_and_port,
+            124,
+            0,
+        ),
+        case(
+            "wait --follow --max-wait 0: still running, 3",
+            &["wait", "abcd1234", "--follow", "--max-wait", "0"],
+            &[],
+            vec![],
+            owner_and_port,
+            3,
+            0,
+        ),
+        case(
+            "wait --follow, two jobs: the usage",
+            &["wait", "a", "b", "--follow"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "wait --follow --json: the usage",
+            &["wait", "a", "--follow", "--json"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}

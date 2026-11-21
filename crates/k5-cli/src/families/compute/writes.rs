@@ -127,8 +127,12 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         Some(&"wait") => {
             let w = wait::parse(&words[1..])?;
             // `mktemp -d` before the first poll: where it can't make its
-            // folder, the shell says so in its own words.
-            if matches!(&w, Words::Ask(a) if !a.any) && !wait::temp_usable() {
+            // folder, the shell says so in its own words. A follow makes
+            // its own file instead ([`wait::follow_handed`]).
+            if matches!(&w, Words::Ask(a) if !a.any && !a.follow) && !wait::temp_usable() {
+                return None;
+            }
+            if matches!(&w, Words::Ask(a) if wait::follow_handed(a)) {
                 return None;
             }
             Form::Wait(w)

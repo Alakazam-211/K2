@@ -19,10 +19,20 @@
 //!   60 in a row, `lost_contact` and exit 3. Any other status but 200 is
 //!   `_compute_fail`'s line, 404 exit 4.
 //!
-//! What goes to the shell: `--follow` (it streams the job's output),
-//! `--failures` (it prints `compute logs`), a `--timeout` or `--max-wait`
-//! that is no duration (the shell's arithmetic fails on it), and, without `--any`, a
-//! temp folder `mktemp -d` can't make.
+//! - `--failures`: after the end, for each job that failed (`--any`: the
+//!   one that ended, when it failed), a `── failures in …` line and its
+//!   `compute logs <id> --failures --tail 60` ([`super::super::logs`]),
+//!   as the shell runs it in a subshell: its end and its EXIT trap's notes
+//!   are its own.
+//! - `--follow`: one job (no `--json` or `--quiet`: the usage line), its
+//!   output followed to its end ([`super::super::follow`]), past
+//!   `--timeout` 124 (3 past `--max-wait`).
+//!
+//! What goes to the shell: `--follow` with `--failures` (the follow's
+//! failures go to stderr), `--follow` with `_CP_LAST_Q` set or where the
+//! follow's `mktemp` would fail, a `--timeout` or `--max-wait` that is no
+//! duration (the shell's arithmetic fails on it), and, without `--any` or
+//! `--follow`, a temp folder `mktemp -d` can't make.
 
 use super::{dumps, int_of, load, object, stopped, str_at, str_value, Cp, Words, NO_STATUS};
 use crate::exit::Exit;
@@ -103,6 +113,10 @@ pub struct Ask {
     pub max_wait: Option<u64>,
     /// The limit was `--timeout`: past it, 124 (else 3).
     pub timeout: bool,
+    /// `--failures`: each failed job's failing tests after the end.
+    pub failures: bool,
+    /// `--follow`: the one job's output, followed.
+    pub follow: bool,
 }
 
 impl Ask {
@@ -154,10 +168,33 @@ pub fn parse(words: &[&str]) -> Option<Words<Ask>> {
     if !max_wait.is_empty() {
         a.max_wait = Some(secs(&max_wait)?);
     }
-    if follow || failures {
-        return None;
+    if follow {
+        if a.jobs.len() != 1 || a.json || a.quiet {
+            return Some(Words::Usage(FOLLOW_USAGE.to_string()));
+        }
+        // The follow's failures go to stderr: the shell's.
+        if failures {
+            return None;
+        }
     }
+    a.failures = failures;
+    a.follow = follow;
     Some(Words::Ask(a))
+}
+
+/// `--follow` with more than one job, `--json` or `--quiet`.
+pub const FOLLOW_USAGE: &str = concat!(
+    "usage: ",
+    k2_client::cli_name!(),
+    " compute wait <job> --follow [--failures] [--timeout 9m]   (one job; no --json or --quiet)"
+);
+
+/// Whether the shell answers a `--follow`: `_CP_LAST_Q` set (the follow
+/// reads it) or a follow `mktemp` can't make its file for.
+pub fn follow_handed(a: &Ask) -> bool {
+    a.follow
+        && (std::env::var_os("_CP_LAST_Q").is_some_and(|v| !v.is_empty())
+            || !super::super::follow::usable())
 }
 
 /// `_compute_secs`: plain seconds, or `<n>h`, `<n>m` and `<n>s` parts in
@@ -273,6 +310,20 @@ fn poll(cp: &mut Cp<'_>, job: &str, w: u64) -> Result<super::Split, Exit> {
 /// The requests and what they print.
 pub fn send(cp: &mut Cp<'_>, a: &Ask) -> Exit {
     let deadline = a.max_wait.map(|s| now() + s);
+    if a.follow {
+        use super::super::follow::{self, Follow, Start};
+        return follow::follow(
+            cp,
+            &Follow {
+                job: a.jobs[0].clone(),
+                raw: false,
+                start: Start::Cursor("0".into()),
+                as_json: false,
+                deadline: deadline.map(|d| d as i64),
+                deadline_exit: a.limit_exit(),
+            },
+        );
+    }
     if a.any {
         return any(cp, a, deadline).unwrap_or_else(|e| e);
     }
@@ -344,7 +395,40 @@ pub fn send(cp: &mut Cp<'_>, a: &Ask) -> Exit {
         }
         bodies.push(answer);
     }
-    end_of(&bodies, a.json, a.limit_exit()).print()
+    let (shown, failed) = end_with_ids(&bodies, a.json, a.limit_exit());
+    let exit = shown.print();
+    if a.failures {
+        for id in &failed {
+            failures_of(cp, id);
+        }
+    }
+    exit
+}
+
+/// `echo "── failures in ${fid:0:8} (…) ──"; ( cmd_compute_logs "$fid"
+/// --failures --tail 60 ) || true`: the subshell's end and EXIT trap
+/// notes are its own.
+fn failures_of(cp: &mut Cp<'_>, id: &str) {
+    let id8: String = id.chars().take(8).collect();
+    let line = format!(
+        concat!(
+            "\u{2500}\u{2500} failures in {id8} (",
+            k2_client::cli_name!(),
+            " compute logs {id8} --failures --tail 60) \u{2500}\u{2500}"
+        ),
+        id8 = id8
+    );
+    if out::stdout_line(&line).is_err() {
+        return;
+    }
+    let logs = super::super::logs::Logs {
+        job: id.to_string(),
+        tail: "60".into(),
+        failures: true,
+        ..Default::default()
+    };
+    let mut theirs = crate::prelude::Closing::default();
+    let _ = super::super::logs::run(&mut *cp.client, &mut theirs, &logs);
 }
 
 /// `_compute_fail` with 4 for a 404 (`wait` and `wait --any` pass it).
@@ -623,6 +707,12 @@ type EndRead = (Option<String>, Vec<String>, Vec<Value>);
 /// `--json`'s list on stdout, and the exit. The stderr lines are
 /// written as the reader goes, so a raise comes after the ones before it.
 pub fn end_of(bodies: &[Vec<u8>], json: bool, limit: Exit) -> Shown {
+    end_with_ids(bodies, json, limit).0
+}
+
+/// [`end_of`], and the failed jobs' ids as the `RC` line names them (none
+/// where the reader raised).
+pub fn end_with_ids(bodies: &[Vec<u8>], json: bool, limit: Exit) -> (Shown, Vec<String>) {
     use line::end as l;
     let r = (|| -> Result<EndRead, Raise> {
         let mut values = Vec::new();
@@ -745,20 +835,23 @@ pub fn end_of(bodies: &[Vec<u8>], json: bool, limit: Exit) -> Shown {
         Ok((rc, ids, values))
     })();
     match r {
-        Ok((rc, _ids, values)) => {
+        Ok((rc, ids, values)) => {
             let rc = rc.unwrap_or_else(|| "0".to_string());
             let stdout = if json {
                 format!("{}\n", dumps(&Value::Array(values)))
             } else {
                 String::new()
             };
-            Shown {
+            let shown = Shown {
                 stdout,
                 stderr: String::new(),
                 exit: exit_of(&rc),
-            }
+            };
+            // `for fid in $(… | cut -d' ' -f3-)`: the words of the joined ids.
+            let words = ids.join(" ").split_whitespace().map(str::to_string).collect();
+            (shown, words)
         }
-        Err(e) => stopped(String::new(), &e),
+        Err(e) => (stopped(String::new(), &e), Vec::new()),
     }
 }
 
@@ -824,6 +917,14 @@ fn any(cp: &mut Cp<'_>, a: &Ask, deadline: Option<u64>) -> Result<Exit, Exit> {
                     l = list
                 ));
             }
+            if a.failures && ended.rc != "0" {
+                // `fid="$(printf '%s' "$tail_line" | cut -d' ' -f3)"`.
+                let tail = format!("RC {} {}", ended.rc, ended.id);
+                let fid = tail.split(' ').nth(2).unwrap_or("");
+                if !fid.is_empty() {
+                    failures_of(cp, fid);
+                }
+            }
             return Ok(exit_of(&ended.rc));
         }
         if deadline.is_some_and(|d| now() >= d) {
@@ -859,6 +960,8 @@ pub struct AnyEnded {
     pub json: Option<String>,
     /// The code, as `RC <code>` holds it.
     pub rc: String,
+    /// `j.get("id") or ""`, as the `RC` line holds it after the code.
+    pub id: String,
 }
 
 /// `--any`'s reader on one answer: `None` while the job runs; else its
@@ -884,8 +987,13 @@ pub fn any_reader(body: &[u8], json: bool) -> Result<Option<AnyEnded>, Raise> {
         what,
         took
     ));
+    let id = match get(p, "id") {
+        Some(v) if py::truthy(v) => py::str_of(v),
+        _ => String::new(),
+    };
     Ok(Some(AnyEnded {
         json: json.then(|| dumps(&j)),
         rc: code,
+        id,
     }))
 }

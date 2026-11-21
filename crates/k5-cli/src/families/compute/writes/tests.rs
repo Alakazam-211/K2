@@ -691,6 +691,7 @@ mod wait_verb {
     fn the_words() {
         let usage = || Some(Words::Usage(wait::USAGE.to_string()));
         let once = || Some(Words::Usage(format!("{}{}", wait::USAGE, wait::ONCE)));
+        let follow_usage = || Some(Words::Usage(wait::FOLLOW_USAGE.to_string()));
         let takes = |f: &str| {
             Some(Words::Usage(format!(
                 "{}{}",
@@ -738,9 +739,25 @@ mod wait_verb {
             (&[], usage()),
             (&["--json"], usage()),
             (&["a", "--x"], usage()),
-            (&["a", "--follow"], None),
+            (
+                &["a", "--follow"],
+                ask(|a| {
+                    a.jobs = vec!["a".into()];
+                    a.follow = true;
+                }),
+            ),
             (&["a", "-f", "--x"], usage()),
-            (&["a", "--failures"], None),
+            (
+                &["a", "--failures"],
+                ask(|a| {
+                    a.jobs = vec!["a".into()];
+                    a.failures = true;
+                }),
+            ),
+            (&["a", "--follow", "--failures"], None),
+            (&["a", "b", "--follow"], follow_usage()),
+            (&["a", "--follow", "--json"], follow_usage()),
+            (&["a", "-q", "-f"], follow_usage()),
             (&["a", "--max-wait", "5x"], None),
             (&["a", "--timeout", "5x"], None),
             (&["--max-wait", "5x"], usage()),

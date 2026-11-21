@@ -66,6 +66,9 @@ pub struct Follow {
     pub as_json: bool,
     /// `_CP_DEADLINE`: epoch seconds.
     pub deadline: Option<i64>,
+    /// `${_CP_DEADLINE_RC:-3}`: the exit past the deadline (`wait --follow
+    /// --timeout` sets 124).
+    pub deadline_exit: Exit,
 }
 
 /// Whether the shell's `mktemp -t k2-compute-XXXXXX` would make its file.
@@ -197,10 +200,9 @@ fn follow_on(cp: &mut Cp<'_>, f: &Follow, job8: &str) -> Exit {
                 out::stderr_line(&format!(
                     "{{\"error\":\"still_running\",\"jobs\":[\"{job8}\"],\"hint\":\"the wait limit passed; the job keeps going: {CLI_NAME} compute wait {job8} --follow\"}}"
                 ));
-                // `${_CP_DEADLINE_RC:-3}`: the binary follows only with it
-                // unset (run hands the line to the shell when it is set;
-                // wait --follow is the shell's), so 3.
-                return Exit::Refused;
+                // `${_CP_DEADLINE_RC:-3}`: run hands the line to the shell
+                // when it is set from outside; wait --follow sets its own.
+                return f.deadline_exit;
             }
             poll = poll.min(left);
         }

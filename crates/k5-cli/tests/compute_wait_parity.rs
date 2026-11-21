@@ -14,8 +14,9 @@
 //!   refusals (404 is exit 4); Python's raise; the cell socket.
 //! - The words: none, an unknown flag, `--timeout` or `--max-wait` last
 //!   or empty, both limits, one twice.
-//! - What the binary hands to the shell: `--follow`, `--failures`, no
-//!   temp folder (Linux; macOS's mktemp falls back, so it is native
+//! - `--follow` and `--failures` are compute_attach_parity.rs's and
+//!   compute_parity.rs's rows.
+//! - What the binary hands to the shell: no temp folder (Linux; macOS's mktemp falls back, so it is native
 //!   there), help. A duration that is none goes to the shell too;
 //!   bash's own arithmetic error names the script's path there, so it has
 //!   no row until D6's named difference.
@@ -469,24 +470,6 @@ fn compute_wait_hands_these_to_the_shell() {
         ..c
     };
     let v = vec![
-        shell(case(
-            "--follow with two jobs",
-            &["wait", "a", "b", "--follow"],
-            &[],
-            vec![],
-            owner_and_port,
-            2,
-            0,
-        )),
-        shell(case(
-            "--failures",
-            &["wait", "aaaa1111", "--failures"],
-            &[],
-            vec![ok(DONE)],
-            owner_and_port,
-            0,
-            1,
-        )),
         shell(case(
             "wait --help",
             &["wait", "--help"],

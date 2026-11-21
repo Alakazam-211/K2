@@ -155,8 +155,8 @@ macro_rules! family {
 /// workspace: it sends, [`crate::families::notify`]); `approve verify`
 /// (the words go to `k2-approve`, which answers its own help,
 /// [`crate::families::approve`]); `hostchat media`, `people` and
-/// `approvals` (the flag is the sub-command: the unknown-command line or
-/// the usage, [`crate::families::hostchat`]).
+/// `approvals` (the flag is the sub-command: `media`'s help page, or the
+/// usage line, [`crate::families::hostchat`]).
 ///
 /// `done --help` and `done -h` ([`crate::families::done`]): the help is
 /// the loop's, after the gates (`_done_usage`).

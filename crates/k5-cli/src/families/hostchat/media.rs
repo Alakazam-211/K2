@@ -95,7 +95,8 @@ pub fn parse(words: &[&str]) -> Plan {
     match sub {
         "preflight" | "status" | "install" | "url" | "renew" | "rebind" | "tier" | "probe"
         | "uninstall" => Plan::Media(m),
-        "" | "help" => Plan::Help,
+        // `""|-h|--help|help) _hostchat_usage`: the sub-command's place.
+        "" | "-h" | "--help" | "help" => Plan::Help,
         _ => Plan::Bad(format!(
             "{{\"error\":\"usage\",\"hint\":\"unknown media command '{sub}' ({c} hostchat --help)\"}}"
         )),

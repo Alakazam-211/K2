@@ -32,8 +32,8 @@
 //! naming its own path).
 //!
 //! `media`, `people` and `approvals` with one help flag after them read
-//! it as their sub-command, as the shell's do (its unknown-command line,
-//! or `people`'s and `approvals`' usage): help forms whose page is this
+//! it as their sub-command, as the shell's do (`media`'s help page, exit
+//! 0; `people`'s and `approvals`' usage line, exit 2): help forms whose page is this
 //! code ([`crate::text::FAMILY_FORMS`]); a help line a gate stops is the
 //! shell's ([`prelude::help_line_gated`]: the shell skips its connection
 //! gate for a help line).

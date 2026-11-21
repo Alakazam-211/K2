@@ -2972,19 +2972,32 @@ fn hostchat_apps_a_person_s_steps() {
 
 /// `media`, `people` and `approvals` with one help flag after them
 /// (`text::FAMILY_FORMS`): the flag is the sub-command, as the shell's
-/// parsers read it: the unknown-command line or the usage, exit 2,
-/// nothing sent. A help line a gate stops is the shell's (it skips its
+/// parsers read it: `media`'s help page (exit 0), `people`'s and
+/// `approvals`' usage line (exit 2); nothing sent. A help line a gate stops is the shell's (it skips its
 /// connection gate for a help line).
 #[test]
 fn hostchat_help_as_a_sub_command() {
     let rig = Rig::new(VERB, "helpsub");
     for c in [
         // native: hostchat media --help
-        bad(
-            "media --help: an unknown media command",
+        case(
+            "media --help: the help page",
             &["media", "--help"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
         ),
-        bad("media -h: an unknown media command", &["media", "-h"]),
+        case(
+            "media -h: the help page",
+            &["media", "-h"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        ),
         // native: hostchat people --help
         bad("people --help: the usage", &["people", "--help"]),
         bad("people -h: the usage", &["people", "-h"]),
@@ -3011,7 +3024,7 @@ fn hostchat_help_as_a_sub_command() {
                 &[],
                 vec![],
                 owner_only,
-                2,
+                0,
                 0,
             )
         },

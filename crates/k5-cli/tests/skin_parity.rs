@@ -909,7 +909,7 @@ fn user_chat_as_the_shell_does() {
                 words(
                     "user chat: --app last",
                     &["user", "chat", "bob", "--app"],
-                    1,
+                    2,
                 ),
                 words(
                     "user chat: --role with no --app",

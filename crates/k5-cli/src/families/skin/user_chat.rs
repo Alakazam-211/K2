@@ -6,7 +6,7 @@
 //! the shell's Python ([`lines`]).
 //!
 //! The words, as the arm's loop reads them: `--app` takes the next word
-//! (as the last word, its `shift 2` fails: exit 1, nothing printed);
+//! (as the last word, `_need_value`'s line, exit 2);
 //! `--json`; any other flag is `Unknown flag: <flag>`, a third word
 //! `Unexpected: <word>`, no username the usage line, a scope that is not
 //! `member`, `guest` or `none` its line: each exit 2, nothing sent.
@@ -41,17 +41,16 @@ pub struct Ask {
     pub json: bool,
 }
 
-/// Why the words send nothing: the line (none for a failed `shift 2`) and
-/// the exit.
+/// Why the words send nothing: the line and the exit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Stop {
-    pub line: Option<String>,
+    pub line: String,
     pub exit: Exit,
 }
 
 fn usage(line: impl Into<String>) -> Stop {
     Stop {
-        line: Some(line.into()),
+        line: line.into(),
         exit: Exit::Usage,
     }
 }
@@ -70,12 +69,9 @@ pub fn parse(words: &[&str]) -> Option<Result<Ask, Stop>> {
         let w = words[i];
         match w {
             "--app" => {
-                // `app="${2:-}"; shift 2`.
+                // `_need_value "$@"; app="${2:-}"; shift 2`.
                 let Some(v) = words.get(i + 1) else {
-                    return Some(Err(Stop {
-                        line: None,
-                        exit: Exit::Error,
-                    }));
+                    return Some(Err(usage(crate::out::need_value(w))));
                 };
                 a.app = (*v).to_string();
                 i += 2;
@@ -218,10 +214,7 @@ mod tests {
         assert_eq!(stop(&["bob", "-q"]), usage("Unknown flag: -q"));
         assert_eq!(
             stop(&["bob", "--app"]),
-            Stop {
-                line: None,
-                exit: Exit::Error
-            }
+            usage("Error: --app takes a value")
         );
         assert_eq!(parse(&["bob", "-h"]), None);
     }

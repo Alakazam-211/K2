@@ -359,10 +359,7 @@ fn user(words: &[&str]) -> Result<Ask, Stop> {
         "password" => user_password(rest),
         "chat" => match user_chat::parse(rest) {
             Some(Ok(a)) => Ok(Ask::UserChat(a)),
-            Some(Err(stop)) => Err(Stop::err(
-                &stop.line.as_deref().into_iter().collect::<Vec<_>>(),
-                stop.exit,
-            )),
+            Some(Err(stop)) => Err(Stop::err(&[stop.line.as_str()], stop.exit)),
             None => Ok(Ask::Shell),
         },
         "unlock" => user_unlock(rest),

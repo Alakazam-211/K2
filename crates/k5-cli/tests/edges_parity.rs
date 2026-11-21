@@ -32,7 +32,11 @@ fn needs_value(rig: &Rig, args: &'static [&'static str], flag: &str) {
     assert_eq!((b.code, b.signal), (Some(2), None), "{name}: bash: {b:?}");
     assert_eq!(b.stdout, "", "{name}: bash's stdout");
     assert_eq!(b.stderr, want, "{name}: bash's stderr");
-    assert!(sent.is_empty(), "{name}: bash sent {} request(s)", sent.len());
+    assert!(
+        sent.is_empty(),
+        "{name}: bash sent {} request(s)",
+        sent.len()
+    );
     for without_python3 in [false, true] {
         let (r, sent) = rig.binary(&c, without_python3);
         assert!(sent.is_empty(), "{name}: the binary sent {sent:?}");

@@ -507,8 +507,14 @@ mod tests {
     fn daemon_base_is_the_shell_s() {
         assert_eq!(daemon_base("127.0.0.1", "1234"), "http://127.0.0.1:1234");
         assert_eq!(daemon_base("box.lan", "1"), "http://box.lan:1");
-        assert_eq!(daemon_base("https://acme.example/", "443"), "https://acme.example:443");
-        assert_eq!(daemon_base("HTTPS://acme.example", "443"), "https://acme.example:443");
+        assert_eq!(
+            daemon_base("https://acme.example/", "443"),
+            "https://acme.example:443"
+        );
+        assert_eq!(
+            daemon_base("HTTPS://acme.example", "443"),
+            "https://acme.example:443"
+        );
         assert_eq!(daemon_base("127.0.0.1", ""), "http://127.0.0.1:");
     }
 

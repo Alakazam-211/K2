@@ -242,8 +242,9 @@ impl Choice {
     }
 
     pub fn write(&self, text: &str) -> Result<(), Stop> {
-        write_all(self.fd, text.as_bytes())
-            .map_err(|()| take().unwrap_or_else(|| Stop::Raised("OSError: [Errno 5] Input/output error".into())))
+        write_all(self.fd, text.as_bytes()).map_err(|()| {
+            take().unwrap_or_else(|| Stop::Raised("OSError: [Errno 5] Input/output error".into()))
+        })
     }
 
     /// `t.readline()`.

@@ -358,7 +358,13 @@ impl Engine {
         let sent = match w {
             Which::Local => {
                 let bytes = self.opener.encode(&req);
-                net::over_tcp(&self.opener.host, self.opener.port, false, &bytes, timeout_d)
+                net::over_tcp(
+                    &self.opener.host,
+                    self.opener.port,
+                    false,
+                    &bytes,
+                    timeout_d,
+                )
             }
             Which::Remote => {
                 let pl = self
@@ -447,7 +453,8 @@ impl Engine {
         let bytes = urllib::encode_http_client("localhost", &req);
         let r = net::over_unix(&self.vsock, &bytes, Duration::from_secs(180));
         net::wipe(&mut req);
-        let unreachable = |e: &str| Stop::fail("vault_unreachable", format!("vault socket {vs}: {e}"), 3);
+        let unreachable =
+            |e: &str| Stop::fail("vault_unreachable", format!("vault socket {vs}: {e}"), 3);
         let a = match r {
             Err(e) => return Err(unreachable(&e.text())),
             Ok(Sent::Stopped) => return Err(tty::take().unwrap_or(Stop::Cancelled)),
@@ -516,7 +523,10 @@ impl Engine {
         self.need_vault_sock()?;
         let start = obj(vec![("action", s(action))]);
         let methods = or(
-            dget_v(&self.vault_sock("confirm/start", dumps(&start).into_bytes())?, "methods")?,
+            dget_v(
+                &self.vault_sock("confirm/start", dumps(&start).into_bytes())?,
+                "methods",
+            )?,
             Value::Array(Vec::new()),
         );
         let mut body = obj(vec![("action", s(action)), ("secretId", secret_id.clone())]);
@@ -598,10 +608,16 @@ impl Engine {
         if local {
             let start = obj(vec![("action", s("clone-carry"))]);
             let methods = or(
-                dget_v(&self.vault_sock("confirm/start", dumps(&start).into_bytes())?, "methods")?,
+                dget_v(
+                    &self.vault_sock("confirm/start", dumps(&start).into_bytes())?,
+                    "methods",
+                )?,
                 Value::Array(Vec::new()),
             );
-            let mut body = obj(vec![("action", s("clone-carry")), ("clonePlan", ask.clone())]);
+            let mut body = obj(vec![
+                ("action", s("clone-carry")),
+                ("clonePlan", ask.clone()),
+            ]);
             if py::truthy(proposal) {
                 set(&mut body, "proposal", proposal.clone());
             }
@@ -642,7 +658,14 @@ impl Engine {
                 3,
             ));
         };
-        self.call(w, Method::Post, "/cli/clone/vault/confirm", Some(data), &[], 120)
+        self.call(
+            w,
+            Method::Post,
+            "/cli/clone/vault/confirm",
+            Some(data),
+            &[],
+            120,
+        )
     }
 
     /// `approve_proposal(approve_token)`.
@@ -651,7 +674,10 @@ impl Engine {
         self.post(
             Which::Local,
             "/cli/clone-proposal/approve",
-            &obj(vec![("proposal", pid.clone()), ("confirmToken", approve_token)]),
+            &obj(vec![
+                ("proposal", pid.clone()),
+                ("confirmToken", approve_token),
+            ]),
             120,
         )?;
         if !self.approved.contains(&pid) {
@@ -770,11 +796,10 @@ impl Engine {
             }
         };
         for r in &rows {
-            let mut d = or(
-                or(dget_v(r, "choice")?, dget_v(r, "default")?),
-                s("skip"),
-            );
-            if d == s("copy") && !(can_copy && py::truthy(&p::dget_or(r, "copyable", Value::Bool(false))?)) {
+            let mut d = or(or(dget_v(r, "choice")?, dget_v(r, "default")?), s("skip"));
+            if d == s("copy")
+                && !(can_copy && py::truthy(&p::dget_or(r, "copyable", Value::Bool(false))?))
+            {
                 d = s("blank");
             }
             let name = index(r, "name")?;
@@ -796,7 +821,8 @@ impl Engine {
             self.say("Secrets (names only). Enter keeps the default.");
             for r in &rows {
                 let name = index(r, "name")?;
-                let copyable = py::truthy(&p::dget_or(r, "copyable", Value::Bool(false))?) && can_copy;
+                let copyable =
+                    py::truthy(&p::dget_or(r, "copyable", Value::Bool(false))?) && can_copy;
                 let now = get(&choices, &name);
                 let c = self.ask_choice(r, copyable, &now)?;
                 put(&mut choices, name, c);
@@ -807,9 +833,16 @@ impl Engine {
             if get(&choices, &name) == s("copy")
                 && !py::truthy(&p::dget_or(r, "copyable", Value::Bool(false))?)
             {
-                let note = or(dget_v(r, "note")?, s("copying secrets needs an Owner or Admin"));
+                let note = or(
+                    dget_v(r, "note")?,
+                    s("copying secrets needs an Owner or Admin"),
+                );
                 return Err(Stop::fail(
-                    if can_copy { "usage" } else { "clone_secrets_owner_or_admin" },
+                    if can_copy {
+                        "usage"
+                    } else {
+                        "clone_secrets_owner_or_admin"
+                    },
                     format!("'{}' can't be copied by you ({})", st(&name), st(&note)),
                     if can_copy { 2 } else { 3 },
                 ));
@@ -919,7 +952,8 @@ impl Engine {
                         )))
                     }
                 };
-                let tok = self.confirm_local("clone-approve", &pid, &format!("approve {summary}"))?;
+                let tok =
+                    self.confirm_local("clone-approve", &pid, &format!("approve {summary}"))?;
                 self.approve_proposal(tok)?;
             }
             return Ok(body);
@@ -975,7 +1009,11 @@ impl Engine {
             if last {
                 let fin = dget_v(&r, "path")?;
                 if !py::truthy(&fin) {
-                    return Err(Stop::fail("upload_failed", "the upload finished without a path", 3));
+                    return Err(Stop::fail(
+                        "upload_failed",
+                        "the upload finished without a path",
+                        3,
+                    ));
                 }
                 return Ok(fin);
             }
@@ -1046,9 +1084,16 @@ impl Engine {
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                     // Left by a run that was killed outright (SIGKILL).
                     let _ = std::fs::remove_file(&part);
-                    open().map_err(|e| Stop::Raised(format!("OSError: {}", urllib::os_error(&e).reason)))?
+                    open().map_err(|e| {
+                        Stop::Raised(format!("OSError: {}", urllib::os_error(&e).reason))
+                    })?
                 }
-                Err(e) => return Err(Stop::Raised(format!("OSError: {}", urllib::os_error(&e).reason))),
+                Err(e) => {
+                    return Err(Stop::Raised(format!(
+                        "OSError: {}",
+                        urllib::os_error(&e).reason
+                    )))
+                }
             };
             let mut off: u64 = 0;
             loop {
@@ -1062,9 +1107,11 @@ impl Engine {
                     ],
                     600,
                 )?;
-                let data = crate::families::mail::reads::b64decode(&or(dget_v(&r, "base64")?, s("")))?;
-                f.write_all(&data)
-                    .map_err(|e| Stop::Raised(format!("OSError: {}", urllib::os_error(&e).reason)))?;
+                let data =
+                    crate::families::mail::reads::b64decode(&or(dget_v(&r, "base64")?, s("")))?;
+                f.write_all(&data).map_err(|e| {
+                    Stop::Raised(format!("OSError: {}", urllib::os_error(&e).reason))
+                })?;
                 off += data.len() as u64;
                 tty::check()?;
                 if truthy_get(&r, "eof")? || data.is_empty() {
@@ -1210,7 +1257,10 @@ impl Engine {
             let tail = if self.opts.env_files {
                 String::new()
             } else {
-                format!(" (move them into the vault: {} vault import .env)", cli_name!())
+                format!(
+                    " (move them into the vault: {} vault import .env)",
+                    cli_name!()
+                )
             };
             self.say(&format!("  .env files held back: {names}{tail}"));
         }
@@ -1260,7 +1310,10 @@ impl Engine {
         let choices = self.choose_secrets(&pv)?;
         let body = self.bundle_body(Which::Remote, &pv, &choices, &target, true)?;
         self.say(&format!("Packing on {}\u{2026}", self.remote_url));
-        let job = index(&self.post(Which::Remote, "/cli/clone/pack", &body, 120)?, "job_id")?;
+        let job = index(
+            &self.post(Which::Remote, "/cli/clone/pack", &body, 120)?,
+            "job_id",
+        )?;
         let deadline = std::time::Instant::now() + Duration::from_secs(3600);
         let stat = loop {
             let stat = self.get(
@@ -1308,7 +1361,10 @@ impl Engine {
         }
         let local_bundle = got?;
         let dest = or(self.opts.dest.clone(), s(&expand_home()));
-        let mut ub = obj(vec![("bundle_path", s(&local_bundle)), ("dest_parent", dest)]);
+        let mut ub = obj(vec![
+            ("bundle_path", s(&local_bundle)),
+            ("dest_parent", dest),
+        ]);
         if truthy_get(&stat, "vault_carry_b64")? {
             set(&mut ub, "vault_carry_b64", index(&stat, "vault_carry_b64")?);
         }
@@ -1336,11 +1392,15 @@ impl Engine {
         let u = self.post(
             Which::Local,
             "/cli/clone/unpack",
-            &obj(vec![("bundle_path", index(&b, "bundle_path")?), ("dest_parent", dest)]),
+            &obj(vec![
+                ("bundle_path", index(&b, "bundle_path")?),
+                ("dest_parent", dest),
+            ]),
             3600,
         )?;
         let mut extra = Vec::new();
-        let any_kept = matches!(&choices, Value::Object(pairs) if pairs.iter().any(|(_, c)| *c != s("skip")));
+        let any_kept =
+            matches!(&choices, Value::Object(pairs) if pairs.iter().any(|(_, c)| *c != s("skip")));
         if py::truthy(&target) && any_kept {
             let ask = self.carry_ask(&path, &target, &choices, false);
             let mut cbody = ask.clone();
@@ -1349,7 +1409,10 @@ impl Engine {
                 let r = self.carry_confirm_call(Which::Local, &ask, &pv, &Value::Null)?;
                 set(&mut cbody, "confirm_token", index(&r, "token")?);
             }
-            extra.push(("vault", self.post(Which::Local, "/cli/clone/vault/copy", &cbody, 600)?));
+            extra.push((
+                "vault",
+                self.post(Which::Local, "/cli/clone/vault/copy", &cbody, 600)?,
+            ));
         }
         self.result_json("here", &pv, &choices, &u, extra)
     }

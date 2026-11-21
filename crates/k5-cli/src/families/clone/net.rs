@@ -201,7 +201,13 @@ pub fn redirect_line(url: &str, code: u16, location: &str) -> String {
         .unwrap_or(joined);
     let there: String = there
         .chars()
-        .map(|c| if crate::out::py::isprintable(c) { c } else { '?' })
+        .map(|c| {
+            if crate::out::py::isprintable(c) {
+                c
+            } else {
+                '?'
+            }
+        })
         .collect();
     let p = k2_client::product_name!();
     format!(
@@ -213,7 +219,9 @@ pub fn redirect_line(url: &str, code: u16, location: &str) -> String {
 /// `//netloc` one names its own; anything else stays on the base's.
 fn join(base: &str, url: &str) -> String {
     if url.starts_with("//") {
-        let scheme = super::rule::urlsplit(base).map(|u| u.scheme).unwrap_or_default();
+        let scheme = super::rule::urlsplit(base)
+            .map(|u| u.scheme)
+            .unwrap_or_default();
         return format!("{scheme}:{url}");
     }
     match super::rule::urlsplit(url) {
@@ -229,6 +237,8 @@ pub fn redirects(code: u16, location: Option<&str>) -> Option<String> {
         return None;
     }
     let loc = location?;
-    let scheme = super::rule::urlsplit(loc).map(|u| u.scheme).unwrap_or_default();
+    let scheme = super::rule::urlsplit(loc)
+        .map(|u| u.scheme)
+        .unwrap_or_default();
     matches!(scheme.as_str(), "http" | "https" | "ftp" | "").then(|| loc.to_string())
 }

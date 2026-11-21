@@ -163,14 +163,20 @@ impl CRig {
                 out.push(l.to_string());
             }
         }
-        self.mask(side, &format!("[{}]\n{}\n\n{body}", r.channel, out.join("\n")))
+        self.mask(
+            side,
+            &format!("[{}]\n{}\n\n{body}", r.channel, out.join("\n")),
+        )
     }
 
     fn run(&self, i: usize, c: &CCase) -> Ran {
         let side = &self.sides[i];
         let fill = |v: &str| {
-            v.replace("{remote}", &format!("http://127.0.0.1:{}", side.remote.port))
-                .replace("{dir}", &side.dir.display().to_string())
+            v.replace(
+                "{remote}",
+                &format!("http://127.0.0.1:{}", side.remote.port),
+            )
+            .replace("{dir}", &side.dir.display().to_string())
         };
         let replies = |rs: &[Reply]| -> Vec<Reply> {
             rs.iter()
@@ -206,7 +212,7 @@ impl CRig {
         }
         let mut cmd = if i == 0 {
             let mut b = Command::new("bash");
-            b.arg(cli_k2()).env("K5_CLI_VIA", "rust");
+            b.arg(cli_k2());
             b
         } else {
             Command::new(BIN)
@@ -223,6 +229,9 @@ impl CRig {
                 },
             )
             .current_dir(side.dir.join("proj"));
+        if i == 0 {
+            cmd.env("K5_CLI_VIA", "rust");
+        }
         for (k, v) in &c.env {
             cmd.env(k, fill(v));
         }
@@ -538,7 +547,10 @@ fn clone_to_and_from() {
             files: vec![("bundle-1.tar", DATA)],
             local_requests: 2,
             remote_requests: 4,
-            ..case("to: one chunk, the token from the env", &["to", "{remote}", "ws1"])
+            ..case(
+                "to: one chunk, the token from the env",
+                &["to", "{remote}", "ws1"],
+            )
         }
         .env(vec![("K2_REMOTE_TOKEN", "rtok-2")]),
         CCase {
@@ -553,7 +565,18 @@ fn clone_to_and_from() {
             stdin: Some(b"stdin-tok\r\n"),
             local_requests: 2,
             remote_requests: 4,
-            ..case("to --token-stdin --json --dest", &["to", "{remote}", "ws1", "--token-stdin", "--json", "--dest", "/there"])
+            ..case(
+                "to --token-stdin --json --dest",
+                &[
+                    "to",
+                    "{remote}",
+                    "ws1",
+                    "--token-stdin",
+                    "--json",
+                    "--dest",
+                    "/there",
+                ],
+            )
         },
         CCase {
             local: to_local.clone(),
@@ -562,7 +585,10 @@ fn clone_to_and_from() {
             local_requests: 2,
             remote_requests: 2,
             code: 3,
-            ..case("to: the remote names no home", &["to", "{remote}", "ws1", "--token", "t2"])
+            ..case(
+                "to: the remote names no home",
+                &["to", "{remote}", "ws1", "--token", "t2"],
+            )
         },
         CCase {
             local: vec![ok(RECIPIENT)],
@@ -570,13 +596,19 @@ fn clone_to_and_from() {
                 ok(PREVIEW_PLAIN),
                 ok(r#"{"job_id":"job-1"}"#),
                 ok(r#"{"phase":"packing"}"#),
-                ok(&format!(r#"{{"phase":"done","bundle_path":"/rb/bundle-job-1.tar","size_bytes":{}}}"#, DATA.len())),
+                ok(&format!(
+                    r#"{{"phase":"done","bundle_path":"/rb/bundle-job-1.tar","size_bytes":{}}}"#,
+                    DATA.len()
+                )),
                 ok(&format!(r#"{{"base64":"{b64}","eof":true}}"#)),
                 ok(r#"{"ok":true}"#),
             ],
             local_requests: 1,
             remote_requests: 6,
-            ..case("from: pack, wait, download, unpack here", &["from", "{remote}:ws1", "--token", "t3"])
+            ..case(
+                "from: pack, wait, download, unpack here",
+                &["from", "{remote}:ws1", "--token", "t3"],
+            )
         }
         .with_local_tail(ok(UNPACKED)),
         CCase {
@@ -591,7 +623,10 @@ fn clone_to_and_from() {
             local_requests: 1,
             remote_requests: 5,
             code: 3,
-            ..case("from: a short download leaves no .part", &["from", "{remote}:ws1", "--token", "t3"])
+            ..case(
+                "from: a short download leaves no .part",
+                &["from", "{remote}:ws1", "--token", "t3"],
+            )
         },
         CCase {
             local: vec![ok(RECIPIENT)],
@@ -605,7 +640,10 @@ fn clone_to_and_from() {
             local_requests: 1,
             remote_requests: 5,
             code: 3,
-            ..case("from: a refused range, the cleanup still asked", &["from", "{remote}:ws1", "--token", "t3"])
+            ..case(
+                "from: a refused range, the cleanup still asked",
+                &["from", "{remote}:ws1", "--token", "t3"],
+            )
         },
         CCase {
             local: vec![ok(RECIPIENT)],
@@ -617,7 +655,10 @@ fn clone_to_and_from() {
             local_requests: 1,
             remote_requests: 3,
             code: 3,
-            ..case("from: the pack failed", &["from", "{remote}:ws1", "--token", "t3"])
+            ..case(
+                "from: the pack failed",
+                &["from", "{remote}:ws1", "--token", "t3"],
+            )
         },
     ];
     for c in &cases {
@@ -655,7 +696,10 @@ fn clone_approve() {
                 ok(r#"{"ok":true}"#),
             ],
             local_requests: 10,
-            ..case("approve here by a prefix: one confirm approves it", &["approve", "cp-7"])
+            ..case(
+                "approve here by a prefix: one confirm approves it",
+                &["approve", "cp-7"],
+            )
         },
         CCase {
             local: vec![ok(r#"{"proposals":[]}"#)],
@@ -667,7 +711,10 @@ fn clone_approve() {
             local: vec![ok(PROPOSALS_HOST)],
             local_requests: 1,
             code: 3,
-            ..case("approve a host: no saved token, nothing sent", &["approve", "cp-78"])
+            ..case(
+                "approve a host: no saved token, nothing sent",
+                &["approve", "cp-78"],
+            )
         }
         .env(vec![("K2_REMOTE_TOKEN", "never-sent")]),
         CCase {
@@ -675,7 +722,10 @@ fn clone_approve() {
             tokens: Some(r#"{"{remote}": "saved-tok"}"#),
             local_requests: 2,
             code: 3,
-            ..case("approve a host: no terminal, nothing sent there", &["approve", "cp-78", "--yes"])
+            ..case(
+                "approve a host: no terminal, nothing sent there",
+                &["approve", "cp-78", "--yes"],
+            )
         },
         CCase {
             local: vec![
@@ -691,7 +741,10 @@ fn clone_approve() {
             ],
             local_requests: 9,
             code: 3,
-            ..case("approve: a failed run is finished as not ok", &["approve", "cp-77", "--json"])
+            ..case(
+                "approve: a failed run is finished as not ok",
+                &["approve", "cp-77", "--json"],
+            )
         },
     ];
     for c in &cases {
@@ -705,11 +758,17 @@ fn the_stops_before_anything_is_sent() {
     let cases = vec![
         CCase {
             code: 3,
-            ..case("to: plain http to a name is refused", &["to", "http://h.example:9", "ws1", "--token", "t"])
+            ..case(
+                "to: plain http to a name is refused",
+                &["to", "http://h.example:9", "ws1", "--token", "t"],
+            )
         },
         CCase {
             code: 3,
-            ..case("from: a name before an @ is refused", &["from", "https://ann:pw@h.example:ws1"])
+            ..case(
+                "from: a name before an @ is refused",
+                &["from", "https://ann:pw@h.example:ws1"],
+            )
         },
         CCase {
             code: 3,
@@ -718,15 +777,24 @@ fn the_stops_before_anything_is_sent() {
         CCase {
             code: 2,
             stdin: Some(b""),
-            ..case("--token-stdin with nothing on stdin", &["here", "ws1", "--token-stdin"])
+            ..case(
+                "--token-stdin with nothing on stdin",
+                &["here", "ws1", "--token-stdin"],
+            )
         },
         CCase {
             code: 2,
-            ..case("--token-stdin and --token", &["to", "h", "w", "--token-stdin", "--token", "x"])
+            ..case(
+                "--token-stdin and --token",
+                &["to", "h", "w", "--token-stdin", "--token", "x"],
+            )
         },
         CCase {
             code: 2,
-            ..case("approve takes no --token", &["approve", "cp-1", "--token", "x"])
+            ..case(
+                "approve takes no --token",
+                &["approve", "cp-1", "--token", "x"],
+            )
         },
         CCase {
             code: 3,
@@ -736,7 +804,10 @@ fn the_stops_before_anything_is_sent() {
         CCase {
             code: 2,
             env: vec![("K2_HOST", "h.example")],
-            ..case("this server over plain http: the warning once, then the usage", &["preview"])
+            ..case(
+                "this server over plain http: the warning once, then the usage",
+                &["preview"],
+            )
         },
         CCase {
             code: 2,

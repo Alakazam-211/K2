@@ -291,9 +291,7 @@ fn sends_to(url: &str) -> bool {
 fn remote_of(sub: &Sub, o: &Opts) -> Option<String> {
     match sub {
         Sub::To if o.args.len() == 2 => Some(remote_url(&o.args[0])),
-        Sub::From if o.args.len() == 1 => o.args[0]
-            .rsplit_once(':')
-            .map(|(h, _)| remote_url(h)),
+        Sub::From if o.args.len() == 1 => o.args[0].rsplit_once(':').map(|(h, _)| remote_url(h)),
         Sub::Preview if o.args.len() == 1 && !o.host.is_empty() => Some(remote_url(&o.host)),
         _ => None,
     }
@@ -354,8 +352,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
 /// `_clone_person_guard`: a passport (`_compute_in_session`) or any
 /// `HOOK_TOKEN` refuses.
 fn person_guard(settings: &Settings) -> Option<Exit> {
-    let hook =
-        k2_client::env_names::first_nonempty_os(k2_client::env_names::HOOK_TOKEN).is_some();
+    let hook = k2_client::env_names::first_nonempty_os(k2_client::env_names::HOOK_TOKEN).is_some();
     if !hook && !super::compute::writes::in_session(&settings.auth) {
         return None;
     }
@@ -373,7 +370,8 @@ fn person_guard(settings: &Settings) -> Option<Exit> {
 /// prelude's own line didn't come (it says it once for both).
 fn local_plain_http_warn(settings: &Settings, args: &[OsString]) {
     let first = |names: &[&'static str]| {
-        k2_client::env_names::first_nonempty_os(names).map(|(_, v)| v.to_string_lossy().into_owned())
+        k2_client::env_names::first_nonempty_os(names)
+            .map(|(_, v)| v.to_string_lossy().into_owned())
     };
     if first(k2_client::env_names::PLAIN_HTTP_OK).is_some_and(|v| v == "1") {
         return;
@@ -519,7 +517,10 @@ fn clone_remote(
     }
     use crate::transport::remote;
     let tok = if saved {
-        let homes = remote::homes(k2_home, std::env::var_os("HOME").map(std::path::PathBuf::from));
+        let homes = remote::homes(
+            k2_home,
+            std::env::var_os("HOME").map(std::path::PathBuf::from),
+        );
         let t = match remote::lookup(host, &homes) {
             Some(remote::Found::Token(t)) => Some(t),
             Some(remote::Found::HostId(id)) => remote::keychain(&id),
@@ -604,7 +605,10 @@ fn stopped(stop: Stop) -> Exit {
             if plain {
                 out::stderr_line(&py::str_of(&hint));
             } else {
-                let v = Value::Object(vec![(Text::from("error"), code), (Text::from("hint"), hint)]);
+                let v = Value::Object(vec![
+                    (Text::from("error"), code),
+                    (Text::from("hint"), hint),
+                ]);
                 out::stderr_line(&json::to_string(&v, &Options::default()).unwrap_or_default());
             }
             Exit::from_curl(rc)
@@ -916,7 +920,10 @@ mod tests {
         let (sub, o) = run_of(parse(&["preview", "w", "--host", "h"]));
         assert_eq!((sub, o.host.as_str(), o.args.len()), (Sub::Preview, "h", 1));
         let (sub, o) = run_of(parse(&["w1", "--dest", "/d"]));
-        assert_eq!((sub, o.args), (Sub::Bare("w1".into()), vec!["w1".to_string()]));
+        assert_eq!(
+            (sub, o.args),
+            (Sub::Bare("w1".into()), vec!["w1".to_string()])
+        );
         let (sub, o) = run_of(parse(&["--json"]));
         assert_eq!((sub, o.json), (Sub::Bare("--json".into()), true));
         let (_, o) = run_of(parse(&["to", "h", "w", "--token", "", "--token-stdin"]));
@@ -925,7 +932,9 @@ mod tests {
             parse(&["withdraw", "--bogus"]),
             Some(Form::Die("usage", _, Exit::Usage))
         ));
-        let (_, o) = run_of(parse(&["propose", "--to", "h", "--copy", "a, b", "--copy", ",c"]));
+        let (_, o) = run_of(parse(&[
+            "propose", "--to", "h", "--copy", "a, b", "--copy", ",c",
+        ]));
         assert_eq!(o.copy, vec!["a", "b", "c"]);
         assert_eq!(
             die_line("usage", "x \u{2026}"),
@@ -938,9 +947,15 @@ mod tests {
         assert_eq!(remote_url("h.example/"), "https://h.example/");
         assert_eq!(remote_url("http://127.0.0.1:9/"), "http://127.0.0.1:9");
         let o = run_of(parse(&["from", "https://h.example:ws1"])).1;
-        assert_eq!(remote_of(&Sub::From, &o).as_deref(), Some("https://h.example"));
+        assert_eq!(
+            remote_of(&Sub::From, &o).as_deref(),
+            Some("https://h.example")
+        );
         let pl = rule::place("http://[::1]:8080/k2").unwrap();
-        assert_eq!((pl.host.as_str(), pl.port, pl.prefix.as_str()), ("::1", 8080, "/k2"));
+        assert_eq!(
+            (pl.host.as_str(), pl.port, pl.prefix.as_str()),
+            ("::1", 8080, "/k2")
+        );
         assert!(rule::place("https://h.example:x").is_none());
         assert!(rule::place("https://h.example/?q").is_none());
     }

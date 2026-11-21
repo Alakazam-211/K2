@@ -25,7 +25,10 @@ impl Split {
     /// `u.hostname`: the netloc less any user part and port, brackets off,
     /// in lower case; `None` when empty.
     pub fn hostname(&self) -> Option<String> {
-        let host = self.netloc.rsplit_once('@').map_or(&*self.netloc, |(_, h)| h);
+        let host = self
+            .netloc
+            .rsplit_once('@')
+            .map_or(&*self.netloc, |(_, h)| h);
         let host = if let Some(rest) = host.strip_prefix('[') {
             rest.split_once(']').map_or(rest, |(h, _)| h)
         } else {
@@ -42,12 +45,8 @@ pub fn urlsplit(url: &str) -> Option<Split> {
     let mut rest = url;
     let mut scheme = String::new();
     if let Some((s, after)) = url.split_once(':') {
-        let ok = s
-            .bytes()
-            .next()
-            .is_some_and(|b| b.is_ascii_alphabetic())
-            && s
-                .bytes()
+        let ok = s.bytes().next().is_some_and(|b| b.is_ascii_alphabetic())
+            && s.bytes()
                 .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.'));
         if ok {
             scheme = s.to_ascii_lowercase();
@@ -96,7 +95,8 @@ pub fn loopback_literal(host: &str) -> bool {
     if let Ok(a) = host.parse::<Ipv4Addr>() {
         return a.octets()[0] == 127;
     }
-    host.parse::<Ipv6Addr>().is_ok_and(|a| a == Ipv6Addr::LOCALHOST)
+    host.parse::<Ipv6Addr>()
+        .is_ok_and(|a| a == Ipv6Addr::LOCALHOST)
 }
 
 /// `clone_tailnet_literal`: an address in 100.64.0.0/10 or
@@ -237,7 +237,10 @@ mod tests {
         let line = url_refusal("http://h.example:8", false).unwrap();
         assert!(line.contains("refused: h.example:8 isn't https"), "{line}");
         let at = url_refusal("https://ann:pw@h.example", false).unwrap();
-        assert!(at.contains("for h.example has a name") && !at.contains("ann"), "{at}");
+        assert!(
+            at.contains("for h.example has a name") && !at.contains("ann"),
+            "{at}"
+        );
         assert!(urlsplit("http://[::1").is_none());
         assert!(local_warns("h.example"));
         assert!(!local_warns("[FD7A:115C:A1E0::1]"));

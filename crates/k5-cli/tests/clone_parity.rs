@@ -345,7 +345,9 @@ fn clone_lines_say_the_brand_s_name() {
     let (out, _) = rig.binary(&c, false);
     assert_eq!(
         out.stderr,
-        format!("{{\"error\": \"usage\", \"hint\": \"usage: {cli} clone here <ws> [--dest DIR]\"}}\n")
+        format!(
+            "{{\"error\": \"usage\", \"hint\": \"usage: {cli} clone here <ws> [--dest DIR]\"}}\n"
+        )
     );
 }
 

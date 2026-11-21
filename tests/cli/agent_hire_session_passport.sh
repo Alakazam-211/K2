@@ -406,6 +406,11 @@ assert_contains "owner label: the preset list asked" "$(field path | tr '\n' ' '
 assert_eq "owner label: the id is saved, not the label" \
     "$("$PY" -c 'import json,sys; print(json.loads(sys.argv[1])["fields"].get("default_agent"))' "$(body_of /cli/workspace/set)")" \
     "b0a1c2d3-e4f5-6789-abcd-ef0123456006"
+run -- agent hire "$WORK/owner-nosuch" --agent "No Such Tool"
+assert_eq "owner unknown preset: exit 2, usage" "$rc" "2"
+assert_eq "owner unknown preset: only the preset list asked, nothing written" "$(field path | tr '\n' ' ')" "/cli/presets/list "
+assert_contains "owner unknown preset: usage, with the server's presets" "$err" \
+    '"code": "usage", "hint": "preset No Such Tool no longer exists on this server; pick one of: cursor-agent (b0a1c2d3-e4f5-6789-abcd-ef0123456006), codex (b0a1c2d3-e4f5-6789-abcd-ef0123456002)"'
 
 echo
 echo "agent_hire_session_passport: $pass passed, $fail failed"

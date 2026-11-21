@@ -1554,9 +1554,13 @@ elif agent_preset:
                 or (first_token and first_token[0] == want))
     hits = [p for p in presets if preset_matches(p)]
     if not hits:
-        fail("not_found",
-             "no agent preset matches '%s' — run `k2 preset list` (id, label, or command token)" % want,
-             4)
+        # As the hire core says it: usage, with the server's presets in
+        # `k2 preset list` order, each by its command word and its id.
+        choices = ["%s (%s)" % ((p.get("command") or "").split()[0], p.get("id")) if (p.get("command") or "").split()
+                   else str(p.get("id")) for p in presets]
+        fail("usage",
+             "preset %s no longer exists on this server; pick one of: %s" %
+             (want, ", ".join(choices) if choices else "none (add one: `k2 preset add`)"), 2)
     if len(hits) > 1 and len({p.get("id") for p in hits}) > 1:
         fail("bad_usage",
              "'%s' is ambiguous across presets: %s — pass the preset id" %

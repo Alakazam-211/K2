@@ -61,9 +61,9 @@ fn cloud(url: &str, relay: Arc<Relay>) -> K2Cloud {
     K2Cloud::with_config(
         GatewayConfig {
             url: url.into(),
-            tunnel: Some(("tunnel-tok".into(), "rosson".into())),
+            tunnel: Some(("tunnel-tok".into(), "owner-sub".into())),
             shared_token: None,
-            subdomain: "rosson".into(),
+            subdomain: "owner-sub".into(),
         },
         relay,
     )
@@ -136,7 +136,7 @@ fn not_rings() -> Vec<PushEvent> {
         call(CallPushState::Answered),
         thread,
         badge(),
-        PushEvent::FeedbackCreated { agent_name: "cortana".into(), feedback_id: "fb-1".into(), assignees: vec!["owner".into()] },
+        PushEvent::FeedbackCreated { agent_name: "agent-a".into(), feedback_id: "fb-1".into(), assignees: vec!["owner".into()] },
         PushEvent::ProjectMessageCreated { project_name: "Apollo".into(), group_id: "pg-1".into() },
     ]
 }

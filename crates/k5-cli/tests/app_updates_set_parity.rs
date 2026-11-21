@@ -106,7 +106,7 @@ fn key_and_token_answer_as_the_shell_does() {
         ),
         stop("key --set: empty", &["updates", "key", "acme", "--set", ""], 2),
         stop("key --set-file: not a file", &["updates", "key", "acme", "--set-file", "nope.pub"], 2),
-        stop("key --set given last", &["updates", "key", "acme", "--set"], 1),
+        stop("key --set given last", &["updates", "key", "acme", "--set"], 2),
         stop("key: two Apps", &["updates", "key", "a", "b"], 2),
         stop("key: no App", &["updates", "key"], 2),
         // covers: app updates token

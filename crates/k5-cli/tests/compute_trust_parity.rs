@@ -206,7 +206,7 @@ fn compute_roster() {
             &["roster", "set", "mini", "--frob"],
             2,
         ),
-        words("set, --host last", &["roster", "set", "mini", "--host"], 1),
+        words("set, --host last", &["roster", "set", "mini", "--host"], 2),
         // covers: compute roster retire
         one(
             "retire",
@@ -365,7 +365,7 @@ fn compute_seats() {
         // covers: compute seats end
         words("end, no seat", &["seats", "end"], 2),
         words("end, an unknown word", &["seats", "end", "seat_1", "x"], 2),
-        words("end, --why last", &["seats", "end", "seat_1", "--why"], 1),
+        words("end, --why last", &["seats", "end", "seat_1", "--why"], 2),
         in_session(case(
             "end in a session",
             &["seats", "end", "seat_1"],

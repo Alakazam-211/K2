@@ -215,10 +215,10 @@ fn request_answers_as_the_shell_does() {
             0,
         ),
         req(
-            "--payload last: shift fails",
+            "--payload last",
             &["request", "--payload"],
             vec![],
-            1,
+            2,
             0,
         ),
         req("no --payload", &["request", "--wait"], vec![], 2, 0),
@@ -334,9 +334,9 @@ fn status_cancel_and_agents_answer_as_the_shell_does() {
         ),
         stop("status: an unknown flag", &["status", "--all"], 2),
         stop(
-            "status --out last: shift fails",
+            "status --out last",
             &["status", "ap_1", "--out"],
-            1,
+            2,
         ),
         case(
             "status: no answer",

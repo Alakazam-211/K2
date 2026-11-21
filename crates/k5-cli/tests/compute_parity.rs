@@ -117,11 +117,11 @@ fn compute_reads_as_the_shell_does() {
         ok_case("jobs --tier ci", &["jobs", "--tier", "ci"], r#"{"jobs":[]}"#),
         usage_case("jobs --tier bad", &["jobs", "--tier", "x"]),
         usage_case("jobs, a word it doesn't take", &["jobs", "x"]),
-        case("jobs --node last: shift runs out", &["jobs", "--node"], &[], vec![], owner_and_port, 1, 0),
+        case("jobs --node last", &["jobs", "--node"], &[], vec![], owner_and_port, 2, 0),
         ok_case("list is jobs", &["list"], JOBS),
         ok_case("list --mine --state done --json", &["list", "--mine", "--state", "done", "--json"], JOBS),
         usage_case("list, a word it doesn't take", &["list", "x"]),
-        case("list --tag last: shift runs out", &["list", "--tag"], &[], vec![], owner_and_port, 1, 0),
+        case("list --tag last", &["list", "--tag"], &[], vec![], owner_and_port, 2, 0),
         // covers: compute get
         ok_case("get", &["get", "abcd1234"], JOB),
         ok_case("get --full", &["get", "abcd1234", "--full"], JOB),
@@ -185,7 +185,7 @@ fn compute_reads_as_the_shell_does() {
         ok_case("grants", &["grants"], GRANTS),
         // covers: compute grants --json
         ok_case("grants filtered --json", &["grants", "--node", "n1", "--workspace", "/w", "--json"], GRANTS),
-        case("grants --workspace last", &["grants", "--workspace"], &[], vec![], owner_and_port, 1, 0),
+        case("grants --workspace last", &["grants", "--workspace"], &[], vec![], owner_and_port, 2, 0),
         // covers: compute receipt
         ok_case("receipt", &["receipt", "abcd1234"], RECEIPT),
         // covers: compute receipt --json
@@ -228,7 +228,7 @@ fn compute_reads_as_the_shell_does() {
         usage_case("rightsize: none of the three", &["rightsize"]),
         usage_case("rightsize: two of them", &["rightsize", "--check", "a", "--tag", "b"]),
         usage_case("rightsize --days x", &["rightsize", "--check", "a", "--days", "x"]),
-        case("rightsize --days last", &["rightsize", "--check", "a", "--days"], &[], vec![], owner_and_port, 1, 0),
+        case("rightsize --days last", &["rightsize", "--check", "a", "--days"], &[], vec![], owner_and_port, 2, 0),
         // covers: compute preview
         ok_case("preview", &["preview"], r#"{"computePreview":true}"#),
         ok_case("preview status", &["preview", "status"], r#"{}"#),

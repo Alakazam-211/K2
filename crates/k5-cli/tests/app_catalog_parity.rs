@@ -176,7 +176,7 @@ fn jobs_answer_as_the_shell_does() {
             &["catalog", "jobs", "--json"],
             r#"{"jobs":[]}"#,
         ),
-        stop("job: --app given last", &["catalog", "job", "--app"], 1),
+        stop("job: --app given last", &["catalog", "job", "--app"], 2),
         traceback(ends(
             "job: a step that is a list",
             &["catalog", "job", "cj-1"],

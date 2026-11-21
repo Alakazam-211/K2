@@ -130,7 +130,7 @@ fn compute_node_add() {
             1,
         ),
         words("no name", &["node", "add", "--json"], 2),
-        words("--url last", &["node", "add", "mini", "--url"], 1),
+        words("--url last", &["node", "add", "mini", "--url"], 2),
     ];
     for c in v {
         rig.check(&c);
@@ -367,8 +367,8 @@ fn compute_node_alerts() {
             2,
         ),
         words("no node, no --to", &["node", "alerts"], 2),
-        words("--to last", &["node", "alerts", "mini", "--to"], 1),
-        words("--after last", &["node", "alerts", "mini", "--after"], 1),
+        words("--to last", &["node", "alerts", "mini", "--to"], 2),
+        words("--after last", &["node", "alerts", "mini", "--after"], 2),
     ];
     for c in v {
         rig.check(&c);
@@ -691,7 +691,7 @@ fn compute_node_admin() {
             1,
         )),
         words("list, a bad flag", &["node", "admin", "list", "--all"], 2),
-        words("list, --node last", &["node", "admin", "list", "--node"], 1),
+        words("list, --node last", &["node", "admin", "list", "--node"], 2),
         // covers: compute node admin propose
         one(
             "a proposal, held",

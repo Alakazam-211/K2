@@ -251,7 +251,7 @@ fn app_user_reads_and_writes() {
             words(
                 "user rooms --agent as the last word",
                 &["user", "rooms", "bob", "--agent"],
-                1,
+                2,
             ),
             // covers: app user role
             one(
@@ -391,7 +391,7 @@ fn app_tokens() {
             words(
                 "token create --name as the last word",
                 &["tokens", "create", "--name"],
-                1,
+                2,
             ),
             // covers: app token rooms
             one(

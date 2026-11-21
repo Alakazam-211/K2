@@ -657,7 +657,7 @@ fn compute_run_words() {
         ("two nodes", &["run", "a", "b", "--", "x"], 2),
         ("an unknown flag", &["run", "--bogus", "--", "x"], 2),
         ("--avoid empty", &["run", "--avoid", "", "--", "x"], 2),
-        ("--only last", &["run", "--only"], 1),
+        ("--only last", &["run", "--only"], 2),
         ("--preset bad", &["run", "--preset", "Bad", "--", "x"], 2),
         ("--tag bad", &["run", "--tag", "a b", "--", "x"], 2),
         (
@@ -670,7 +670,7 @@ fn compute_run_words() {
         ("--with no dir", &["run", "--with", "@abc", "--", "x"], 2),
         ("--cache bad", &["run", "--cache", "-x", "--", "x"], 2),
         ("--tier bad", &["run", "--tier", "fast", "--", "x"], 2),
-        ("--tier last", &["run", "--tier"], 1),
+        ("--tier last", &["run", "--tier"], 2),
         (
             "--supersede with a space",
             &["run", "--supersede", " k", "--", "x"],
@@ -838,8 +838,8 @@ fn compute_test() {
             &["test", "mini", "--shards", "2"],
             2,
         ),
-        ("--profile last", &["test", "--profile"], 1),
-        ("a run flag last", &["test", "--os"], 1),
+        ("--profile last", &["test", "--profile"], 2),
+        ("a run flag last", &["test", "--os"], 2),
         ("run's own usage", &["test", "--priority"], 2),
         ("run's checks", &["test", "--exclusive"], 2),
     ];
@@ -1006,7 +1006,7 @@ fn compute_prewarm() {
         case("--plan --wait", &["prewarm", "--plan", "--wait"], &[], vec![], owner_and_port, 2, 0),
         case("--label with no =", &["prewarm", "--label", "x"], &[], vec![], owner_and_port, 2, 0),
         case("--distro bad", &["prewarm", "--distro", "A"], &[], vec![], owner_and_port, 2, 0),
-        case("--node last", &["prewarm", "--node"], &[], vec![], owner_and_port, 1, 0),
+        case("--node last", &["prewarm", "--node"], &[], vec![], owner_and_port, 2, 0),
     ];
     for c in v {
         rig.check(&c);

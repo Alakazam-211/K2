@@ -335,7 +335,7 @@ fn grant_kinds() {
             // covers: app grant guests-rooms
             words("a kind but no App", &["grant", "--kind", "guests-rooms"], 2),
             // covers: app grant guests-rooms
-            words("--kind given last", &["grant", "acme", "--kind"], 1),
+            words("--kind given last", &["grant", "acme", "--kind"], 2),
             // covers: app grant guests-rooms
             words("an unknown flag", &["grant", "acme", "--zap"], 2),
             // covers: app grant chat-key

@@ -401,7 +401,7 @@ fn init_and_store_doctor_answer_as_the_shell_does() {
             // covers: app init
             words_with_files("init: two folders", &["init", "a", "b"], 2),
             // covers: app init
-            words_with_files("init: --template last", &["init", "--template"], 1),
+            words_with_files("init: --template last", &["init", "--template"], 2),
             // covers: app init
             with_files(
                 "init: a refusal",

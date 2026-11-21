@@ -59,7 +59,7 @@ fn approvals_answer_as_the_shell_does() {
         ),
         read("approvals --json", &["approvals", "--json"], LIST),
         stop("approvals: an unknown argument", &["approvals", "req-1"], 2),
-        stop("approvals: --app given last", &["approvals", "--app"], 1),
+        stop("approvals: --app given last", &["approvals", "--app"], 2),
         traceback(case(
             "approvals: a request with no id",
             &["approvals"],

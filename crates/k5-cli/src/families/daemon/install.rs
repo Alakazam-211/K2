@@ -14,7 +14,8 @@
 //!    `--version`, else the newest), a version older than
 //!    [`FIRST_U2_VERSION`] refused, the platform from `uname -s` and
 //!    `uname -m`.
-//! 3. The manifest: a `file://` one read with `cat`, else `curl -fsSL`.
+//! 3. The manifest: a `file://` one read with `cat`, else fetched
+//!    ([`fetch`]) into a `mktemp` file and read with `cat`.
 //!    Its fields are read as the shell's `sed` reads them ([`field`],
 //!    [`top_version`]).
 //! 4. Linux, unless `--no-service`: an installed unit
@@ -22,7 +23,7 @@
 //!    replace ([`exec_path`]).
 //! 5. `--dry-run` prints what it would do. Else: `minisign` on `PATH`, a
 //!    `mktemp -d` folder, the binary and its `sig2` signature fetched
-//!    (`curl -fsSL … -o`, `cp` for `file://`, or the manifest's own text),
+//!    ([`fetch`], `cp` for `file://`, or the manifest's own text),
 //!    a signature that is not minisig text base64-decoded with `base64`,
 //!    then [`verify`]: prehashed only, `minisign -V` with each update key,
 //!    and the signed trusted comment naming exactly this asset and
@@ -46,10 +47,12 @@ use super::{capture, linux_unit, on_path, systemctl};
 use crate::daemon::Settings;
 use crate::exit::Exit;
 use crate::offline::Env;
+use crate::families::update;
 use crate::out;
 use k2_client::brand::{
     CLI_NAME as CLI, DAEMON_FEED_URL, PRODUCT_NAME as PRODUCT, RELEASE_DOWNLOAD_BASE,
 };
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -277,6 +280,11 @@ pub fn dirname(p: &str) -> String {
 /// (and the NULs the shell drops), and its exit code (`128 + n` for a
 /// signal, 127 when it can't start).
 fn output(prog: &str, args: &[&str]) -> (Vec<u8>, i32) {
+    output_os(prog, &args.iter().map(OsStr::new).collect::<Vec<_>>())
+}
+
+/// [`output`] with arguments that need not be UTF-8.
+fn output_os(prog: &str, args: &[&OsStr]) -> (Vec<u8>, i32) {
     match Command::new(prog)
         .args(args)
         .stderr(Stdio::inherit())
@@ -320,6 +328,74 @@ fn code_of(s: std::process::ExitStatus) -> i32 {
         }
     }
     s.code().unwrap_or(1)
+}
+
+/// `_daemon_fetch <url> <file>`: download `url` into `file`. A URL on
+/// one of GitHub's hosts (the release's manifest, binary and signature)
+/// follows only GitHub's own redirects, https only, at most
+/// [`update::MAX_REDIRS`] ([`github_get`]). Any other URL is one the
+/// person or their manifest named (a mirror, `--manifest-url`): `curl
+/// -fsSL`. Whether it got it.
+fn fetch(url: &str, file: &str) -> bool {
+    if update::github_url_ok(url.as_bytes()) {
+        github_get(url, file)
+    } else {
+        status("curl", &["-fsSL", url, "-o", file]) == 0
+    }
+}
+
+/// `_k2_github_get <url> <file>`: `_k2_github_curl "$1" -fsS -o "$2"`.
+/// One curl per hop, `--no-location --proto =https`, where a redirect
+/// points read from its stdout (`-w %{redirect_url}`); curl's own error
+/// on stderr. A redirect off GitHub's hosts, to anything but https, or
+/// past the cap is refused before it is contacted: `Error:` and the
+/// reason ([`update::refusal`]). No token is sent.
+fn github_get(url: &str, file: &str) -> bool {
+    let mut url = OsString::from(url);
+    let mut hops = 0;
+    loop {
+        let mut args: Vec<&OsStr> = update::CURL_GUARD
+            .iter()
+            .map(|a| OsStr::new(*a))
+            .collect();
+        args.extend(["-fsS", "-o", file].map(OsStr::new));
+        args.extend(update::CURL_WRITE_OUT.iter().map(|a| OsStr::new(*a)));
+        args.push(url.as_os_str());
+        let (next, code) = output_os("curl", &args);
+        if code != 0 {
+            return false;
+        }
+        if next.is_empty() {
+            return true;
+        }
+        hops += 1;
+        if let Some(why) = update::refusal(hops, &next) {
+            out::stderr_line(&format!("Error: {why}"));
+            return false;
+        }
+        url = os_of(next);
+    }
+}
+
+/// The bytes `$(…)` kept, as a path or argument.
+fn os_of(bytes: Vec<u8>) -> OsString {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        OsString::from_vec(bytes)
+    }
+    #[cfg(not(unix))]
+    {
+        OsString::from(String::from_utf8_lossy(&bytes).into_owned())
+    }
+}
+
+/// `${TMPDIR:-/tmp}`.
+fn tmp_root() -> String {
+    std::env::var_os("TMPDIR")
+        .filter(|t| !t.is_empty())
+        .map(|t| t.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "/tmp".into())
 }
 
 /// The exit for a failed command under the shell's `set -e`: its code.
@@ -591,10 +667,24 @@ pub fn run(s: &Settings, words: &[String]) -> Option<Exit> {
         if !on_path("curl") {
             fail!(Exit::Error; "curl is required to fetch the daemon manifest.");
         }
-        let (m, code) = output("curl", &["-fsSL", &manifest_url]);
+        let template = format!("{}/k2-daemon-manifest.XXXXXX", tmp_root());
+        let (mfile, code) = output("mktemp", &[template.as_str()]);
         if code != 0 {
+            fail!(Exit::Error; "Failed to create temp file.");
+        }
+        let mfile = os_of(mfile);
+        let mfile = mfile.to_string_lossy();
+        if !fetch(&manifest_url, &mfile) {
+            let _ = std::fs::remove_file(&*mfile);
             fail!(Exit::Error; format!("Failed to fetch daemon manifest: {manifest_url}"));
         }
+        // `manifest=$(cat "$mfile")`: a cat that fails ends it, as `set -e`
+        // does, before the `rm -f`.
+        let (m, code) = output("cat", &[&*mfile]);
+        if code != 0 {
+            return Some(set_e(code));
+        }
+        let _ = std::fs::remove_file(&*mfile);
         m
     };
 
@@ -703,13 +793,9 @@ pub fn run(s: &Settings, words: &[String]) -> Option<Exit> {
             "Refusing to install an unverified binary.",
         );
     }
-    let tmp_root = std::env::var_os("TMPDIR")
-        .filter(|t| !t.is_empty())
-        .map(|t| t.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "/tmp".into());
     let (tmp, code) = output(
         "mktemp",
-        &["-d", &format!("{tmp_root}/k2-daemon-install.XXXXXX")],
+        &["-d", &format!("{}/k2-daemon-install.XXXXXX", tmp_root())],
     );
     if code != 0 {
         fail!(Exit::Error; "Failed to create temp dir.");
@@ -722,7 +808,7 @@ pub fn run(s: &Settings, words: &[String]) -> Option<Exit> {
     say!("Downloading daemon binary ({platform}, manifest ver {mver})...");
     let got = match url.strip_prefix("file://") {
         Some(src) => status("cp", &[src, &dl_bin]),
-        None => status("curl", &["-fsSL", &url, "-o", &dl_bin]),
+        None => i32::from(!fetch(&url, &dl_bin)),
     };
     if got != 0 {
         fail!(Exit::Error; format!("Failed to download binary: {url}"));
@@ -730,7 +816,7 @@ pub fn run(s: &Settings, words: &[String]) -> Option<Exit> {
 
     // `sig2`: a URL, a file, or the signature's own text.
     if sig.starts_with("http://") || sig.starts_with("https://") {
-        if status("curl", &["-fsSL", &sig, "-o", &dl_sig]) != 0 {
+        if !fetch(&sig, &dl_sig) {
             fail!(Exit::Error; format!("Failed to download signature: {sig}"));
         }
     } else if let Some(src) = sig.strip_prefix("file://") {

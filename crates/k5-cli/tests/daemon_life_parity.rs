@@ -2267,14 +2267,20 @@ fn installed(r: &Rig) -> Vec<(String, String, bool)> {
     out
 }
 
-/// `line` with each side's `mktemp -d` folder written `{tmp}`.
+/// `line` with each side's `mktemp -d` folder written `{tmp}`, and its
+/// manifest's `mktemp` file `{manifest}`.
 fn mask_tmp(r: &Rig, line: &str) -> String {
     let mut line = line.to_string();
     for sub in ["tmp-bash", "tmp-rust", "tmp-nopy"] {
-        let prefix = format!("{}/k2-daemon-install.", r.dir.join(sub).display());
-        while let Some(at) = line.find(&prefix) {
-            let end = (at + prefix.len() + 6).min(line.len());
-            line.replace_range(at..end, "{tmp}");
+        for (name, mask) in [
+            ("k2-daemon-install.", "{tmp}"),
+            ("k2-daemon-manifest.", "{manifest}"),
+        ] {
+            let prefix = format!("{}/{name}", r.dir.join(sub).display());
+            while let Some(at) = line.find(&prefix) {
+                let end = (at + prefix.len() + 6).min(line.len());
+                line.replace_range(at..end, mask);
+            }
         }
     }
     line
@@ -2305,7 +2311,7 @@ fn assert_no_scratch(r: &Rig, name: &str) {
         for e in rd {
             let n = e.unwrap().file_name().to_string_lossy().into_owned();
             assert!(
-                !n.starts_with("k2-daemon-install."),
+                !n.starts_with("k2-daemon-install.") && !n.starts_with("k2-daemon-manifest."),
                 "{name}: {sub}/{n} was left behind"
             );
         }
@@ -2377,12 +2383,24 @@ fn s(v: &[&str]) -> Vec<String> {
     v.iter().map(|x| x.to_string()).collect()
 }
 
+/// `_daemon_fetch <url> <out>`'s curl: on GitHub's hosts one hop of
+/// `_k2_github_curl` (no `-L`, https only, where a redirect points on
+/// stdout), anywhere else `curl -fsSL`.
+fn fetch_into(url: &str, out: &str) -> String {
+    if k5_cli::families::update::github_url_ok(url.as_bytes()) {
+        format!("curl --no-location --proto =https -fsS -o {out} -w %{{redirect_url}} {url}")
+    } else {
+        format!("curl -fsSL {url} -o {out}")
+    }
+}
+
+/// The manifest's fetch, into its `mktemp` file.
 fn fetch(url: &str) -> String {
-    format!("curl -fsSL {url}")
+    fetch_into(url, "{manifest}")
 }
 
 fn fetch_to(url: &str, file: &str) -> String {
-    format!("curl -fsSL {url} -o {{tmp}}/{file}")
+    fetch_into(url, &format!("{{tmp}}/{file}"))
 }
 
 fn verify_with(key: &str) -> String {

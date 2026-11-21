@@ -62,7 +62,7 @@ class H(http.server.BaseHTTPRequestHandler):
                        "approvers": "owner or admin", "routedTo": [{"login": "ada", "role": "admin"}]}
             else:
                 out = {"id": "pr_1", "status": "pending", "action": "db.read", "text": "Let reader read the ws_o_jobs database (owned by ops, App jobs).",
-                       "approvers": "owner or admin", "routedTo": [{"login": b.get("assign") or "rosson", "role": "owner"}], "card": "c1", "addr": "reader",
+                       "approvers": "owner or admin", "routedTo": [{"login": b.get("assign") or "owner", "role": "owner"}], "card": "c1", "addr": "reader",
                        "db": "ws_o_jobs", "dbId": "d1", "owner": "ops, App jobs", "next": "check once: k2 db requests"}
         elif u.path == "/cli/permission/status":
             out = {"requests": [{"id": "pr_1", "action": "db.read", "params": {"db": "ws_o_jobs"}, "state": "approved",

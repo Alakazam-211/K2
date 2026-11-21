@@ -10,7 +10,8 @@
 //!   not, a Tailscale host too.
 //! - `K2_HOST=https://<name>` reaches the daemon over TLS, through the
 //!   person's proxy for a name that isn't this computer (its user and
-//!   password are allowed: K2's ruling), with no warning.
+//!   password are allowed: K2's ruling), with no warning. A proxy that
+//!   refuses the tunnel (407) is final: one CONNECT, curl 8.5's exit 56.
 //!
 //! The stub daemon listens on 127.0.0.1; `K2_HOST=0.0.0.0` reaches it
 //! (Linux and macOS connect 0.0.0.0 to this machine) and is no loopback
@@ -305,4 +306,49 @@ fn whoami_over_tls_through_the_proxy() {
     no_warning(c.name, &[&b, &r]);
     assert_eq!(r.out.code, Some(0), "{r:?}");
     tunnel::assert_unprinted(c.name, &[b, r], &["pr0xy-s3cret", OWNER]);
+}
+
+/// A proxy that refuses the tunnel (407) is final: the binary sends one
+/// CONNECT and stops with curl 8.5's exit 56, as bash's curl 8.5 does.
+/// Newer curl exits 7 there, which `_k2_curl` tries 4 times: the named
+/// difference curl-version-proxy-exit (scripts/cli-parity.sh). On such a
+/// node only the binary's side is checked here, and the row says so.
+#[test]
+fn whoami_through_a_proxy_that_refuses_the_tunnel() {
+    let rig = Rig::new("whoami", "httpsrefused");
+    let pki = tunnel::Pki::new(&rig.dir.join("pki"));
+    let daemon = TlsStub::start(&pki, 200, WHOAMI);
+    let proxy = ProxyStub::start(ProxyMode::Refuse);
+    let port = daemon.port.to_string();
+    let target = format!("{HOST}:{port}");
+    let k2_host = format!("https://{HOST}");
+    let px = proxy.url(None);
+    let c = tls_case(
+        "whoami: K2_HOST=https://<name>, the proxy says 407",
+        &[
+            ("K2_HOST", k2_host.as_str()),
+            ("K2_PORT", port.as_str()),
+            ("https_proxy", px.as_str()),
+        ],
+    );
+    let [b, r] = tunnel::both(&rig, &c, &proxy, &daemon);
+    assert_eq!(r.proxy.len(), 1, "one CONNECT, never tried again: {r:?}");
+    assert!(
+        r.proxy[0].starts_with(&format!("CONNECT {target} HTTP/1.1\r\n")),
+        "{r:?}"
+    );
+    no_warning(c.name, &[&b, &r]);
+    for run in [&b, &r] {
+        assert!(run.tls.is_empty(), "nothing past the refusal: {run:?}");
+        assert_ne!(run.out.code, Some(0), "{run:?}");
+    }
+    tunnel::assert_unprinted(c.name, &[b.clone(), r.clone()], &[OWNER]);
+    match b.proxy.len() {
+        1 => tunnel::assert_same(c.name, &b, &r),
+        4 => println!(
+            "named difference curl-version-proxy-exit: {}: bash's curl tried the CONNECT 4 times; the binary's side alone",
+            c.name
+        ),
+        n => panic!("{}: bash sent {n} CONNECTs, want 1 (curl 8.5) or 4 (newer curl): {b:?}", c.name),
+    }
 }

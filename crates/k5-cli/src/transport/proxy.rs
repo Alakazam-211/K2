@@ -32,6 +32,15 @@
 //!   request was sent. A proxy that refuses the connection is curl's 7
 //!   (tried again as any refused connect is), one whose name doesn't
 //!   resolve curl's 5, one that doesn't answer in time curl's 28.
+//! - A refused CONNECT (a 407, say) is final (K2's ruling): one CONNECT,
+//!   never tried again, curl 8.5's exit 56. A newer curl (8.23) exits 7
+//!   there, which the shell's `_k2_curl` tries 4 times: the named
+//!   difference curl-version-proxy-exit (`scripts/cli-parity.sh`).
+//!
+//! A proxy URL's user and password (`http://user:pass@proxy:port`) are
+//! allowed (K2's ruling): no refusal and no warning. They are the
+//! person's own credential for their proxy, sent only to it, in the
+//! CONNECT head; the token rides inside the tunnel, never to the proxy.
 //!
 //! What the binary leaves to the shell ([`Route::Shell`]), where curl
 //! versions differ or the binary has no client: an `https://`, `socks*`

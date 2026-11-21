@@ -65,7 +65,12 @@
 # wiki_parity.rs's wiki_status_with_a_large_answer and
 # mail_writes_parity.rs's a_large_body, zen_parity.rs's
 # zen_history_with_a_large_answer, agent_parity.rs's
-# a_list_above_the_environment_s_limit and publish_parity.rs's ps_large.)
+# a_list_above_the_environment_s_limit and publish_parity.rs's ps_large. They meet
+# curl-version-proxy-exit where the node's curl exits 7 on a refused
+# tunnel: plain_http_daemon_parity.rs's
+# whoami_through_a_proxy_that_refuses_the_tunnel checks the binary's side
+# alone there, by the difference's name, and wiki_parity.rs's
+# wiki_publish_through_the_proxy takes bash's 4 tries.)
 # garden_blobs.sh meets expect-100-continue against a real daemon: its
 # one-chunk put of a body over 1 MiB goes through a relay that records each
 # request, and the test checks each side's head by the difference's name.
@@ -183,6 +188,7 @@ EXPECTED_DIFFS=(
     "exec-child-env|K2 ruling 1b, vault run (db run's ruling 2a child the same)|the program a command runs in its place (vault run's helper, db run's command, named in families::vault::run and families::db::run): bash's child also gets bash's own environment changes, SHLVL and _K2_PY_PROXY_RULE (the shell CLI's Python proxy rule), and _ (the program's path) where bash's exec sets it, none of which the binary's child gets; and an exec that fails (a folder the daemon named) exits 126 on both, worded \"<path to cli/k2>: line <n>: <helper>: Is a directory\" by bash (\"is a directory\" by macOS bash 3.2) and \"exec: <helper>: Permission denied (os error 13)\" by the binary. The request each sends is the same"
     "curl-config-files|K2 and the Steward, K5 shared transport|the binary never reads curl's config files (~/.curlrc, CURL_HOME): one can carry options that change where the token goes. Bash's curl reads ~/.curlrc on every call it makes, so a header that file adds (the check: header = \"X-From-Curlrc: acme\") is on bash's request to the daemon and not on the binary's. The rest of the request, stdout, stderr and the exit code are the same (\`feedback list\`). The binary does read CURL_CA_BUNDLE and SSL_CERT_FILE, as curl does"
     "macos-system-proxy|K2 ruling, K5 shared transport|on macOS the system proxy (System Settings, Network, Proxies; no environment variable) is read by python3's urllib (urllib.request.getproxies_macosx_sysconf, when no proxy variable is set), so a bash Python block that reaches another machine over https may go through it; the binary reads only the proxy variables, as curl does, and never the system setting (it links no SystemConfiguration framework). Every bash request made with curl ignores the system setting too. Linux has no such setting: not proven there"
+    "curl-version-proxy-exit|K2 ruling, K5 shared transport|a proxy that refuses the tunnel (407) to a K2 daemon at K2_HOST=https://<name> (the check: \`whoami\`, https_proxy set): the binary sends one CONNECT and stops, as curl 8.5 does (exit 56, never tried again by _k2_curl). A newer curl (8.23 on one node) fails that CONNECT with exit 7, which _k2_curl tries 4 times in all, 1 s apart, so bash sends 4 CONNECTs and prints what its curl 7 means; the binary's one CONNECT, exit and lines are the same on every node. Where bash's curl exits 56 the two are the same: not proven there"
     "nul-in-answer|K2 ruling at the 0.46.15 rebase|a NUL byte in the daemon's answer to \`feedback list\` or \`feedback show <id>\`: bash's resp=\$(cli_request ...) drops it and, from bash 4.4 on, writes one line on stderr, \"<path to cli/k2>: line <n>: warning: command substitution: ignored null byte in input\"; the binary drops it silently. stdout, the exit code and the requests are the same (bash 3.2 writes no warning, so there the two are exact)"
     "passport-heal-once|K2 ruling, the doc lane's follow-ups|a doc call that sends a whole file or a tool call (_doc_xfer: \`doc cat\`, \`append\`, \`write\`, \`show --version\`, \`export\`) whose passport the daemon's auth gate refuses (403 and exactly {\"error\":\"Invalid or missing auth token\"}, sent before any handler runs, so nothing was done), in a session whose passport was minted again: bash's _doc_xfer never tries the new passport and the command ends on the refusal (exit 3); the binary sends the same call once more with the new passport and answers it (cli_send_json's one heal, which bash's other doc calls already make). An answer a handler gave that holds those words (a document's text, a conflict) is never sent again by either: one request, the same output"
     "doc-mktemp-wording|K2 ruling, the doc lane's follow-ups|a doc verb that needs a temp folder (_doc_tmp) where TMPDIR can't hold one: the binary words mktemp's line as GNU mktemp does in the C locale (\"mktemp: failed to create directory via template '<TMPDIR>/k2doc.XXXXXX': No such file or directory\"; GNU's in a UTF-8 locale quotes the template with curly quotes); macOS's mktemp words it its own way (\"mktemp: mkdtemp failed on <TMPDIR>/k2doc.XXXXXX: No such file or directory\"; a newer macOS names the folder it tried, the six X filled in). The two lines after it (\"Error: can't make a temp folder\" and the tmp error's JSON), the exit (2) and stdout (nothing) are the same, and neither sends anything. The same holds for \`app exec\` with stdin on a pipe (k2-exec-XXXXXX) and \`hostchat open\` (k2-hostchat-open.XXXXXX) where TMPDIR can't hold the folder: on a newer macOS mktemp's line names the folder it tried, which the binary can't know, so the parity rows (Compare::MktempTried) take mktemp's line as the same when only that random name differs: the same folder and stem before it, one or more of [A-Za-z0-9.] in its place, the same reason after it, the same exit, and every other line byte for byte"
@@ -479,6 +485,15 @@ class H(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
     do_POST = do_GET
+    def do_CONNECT(self):
+        # Mode refuse407: a proxy that refuses every tunnel.
+        with open(os.path.join(d, "log"), "a") as f:
+            f.write("proxy " + self.requestline + "\n")
+        self.close_connection = True
+        self.send_response(407)
+        self.send_header("Proxy-Authenticate", "Basic realm=\"acme\"")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
     def log_message(self, *a):
         pass
 s = HTTPServer(("127.0.0.1", 0), H)
@@ -1022,6 +1037,56 @@ sys.exit(0 if ok else 1)
     [ ${#problems[@]} -eq 0 ] && return 0
     printf '%s\n' "${problems[@]}"
     return 1
+}
+
+# check_curl_version_proxy_exit: a stub proxy that answers every CONNECT
+# with 407, K2_HOST=https://cp.example.invalid (never resolves: only the
+# proxy can reach it) and port 443, the owner token on disk, and both CLIs
+# run `whoami`. The binary: exactly one CONNECT, for cp.example.invalid:443,
+# a non-zero exit. Bash: 4 CONNECTs (its curl exits 7: the difference
+# holds), or one (its curl exits 56: then stdout, stderr and the exit are
+# the binary's, and it is not proven on this host: 3).
+check_curl_version_proxy_exit() {
+    local d="$WORK/proxy407" side r rc=0 rr=0 nb nr problems=()
+    mkdir -p "$d/home/.k2" "$d/ws/.k2"
+    printf 'owner-tok-parity\n' >"$d/home/.k2/heartbeat.token"
+    start_stub "$d" refuse407 || { echo "the stub proxy didn't start"; return 1; }
+    for side in bash binary; do
+        : >"$d/log"
+        if [ "$side" = bash ]; then set -- K5_CLI_VIA=rust bash "$ROOT/cli/k2"; else set -- "$WORK/bin/k5"; fi
+        r=0
+        (cd "$d/ws" && exec env -i PATH="$PATH" HOME="$d/home" K2_HOST=https://cp.example.invalid K2_PORT=443 \
+            https_proxy="http://127.0.0.1:$STUB_PORT" "$@" whoami) >"$d/out.$side" 2>"$d/err.$side" </dev/null || r=$?
+        cp "$d/log" "$d/log.$side"
+        if [ "$side" = bash ]; then rc=$r; else rr=$r; fi
+    done
+    stop_stub
+    nb="$(grep -c '^proxy CONNECT cp.example.invalid:443 HTTP/1.1$' "$d/log.bash" || true)"
+    nr="$(grep -c '^proxy CONNECT cp.example.invalid:443 HTTP/1.1$' "$d/log.binary" || true)"
+    [ "$(wc -l <"$d/log.bash" | tr -d ' ')" = "$nb" ] || problems+=("bash's log has more than its CONNECTs: $(tr '\n' ';' <"$d/log.bash")")
+    [ "$(wc -l <"$d/log.binary" | tr -d ' ')" = "$nr" ] || problems+=("the binary's log has more than its CONNECTs: $(tr '\n' ';' <"$d/log.binary")")
+    [ "$nr" = 1 ] || problems+=("the binary sent $nr CONNECTs, want 1")
+    [ "$rr" != 0 ] || problems+=("the binary exited 0 past a refused tunnel")
+    [ "$rc" != 0 ] || problems+=("bash exited 0 past a refused tunnel")
+    ! grep -q 'over plain http' "$d/err.bash" "$d/err.binary" || problems+=("a plain-http warning for an https host")
+    case "$nb" in
+        4) ;;
+        1)
+            [ "$rc" = "$rr" ] || problems+=("bash's curl exits 56 here, yet bash exited $rc, the binary $rr")
+            cmp -s "$d/out.bash" "$d/out.binary" || problems+=("stdout differs: bash '$(head -c 300 "$d/out.bash")', the binary '$(head -c 300 "$d/out.binary")'")
+            cmp -s "$d/err.bash" "$d/err.binary" || problems+=("stderr differs: bash '$(head -c 300 "$d/err.bash")', the binary '$(head -c 300 "$d/err.binary")'")
+            ;;
+        *) problems+=("bash sent $nb CONNECTs, want 4 (a newer curl) or 1 (curl 8.5)") ;;
+    esac
+    if [ ${#problems[@]} -gt 0 ]; then
+        printf '%s\n' "${problems[@]}"
+        return 1
+    fi
+    if [ "$nb" = 1 ]; then
+        echo "bash's curl ($(curl --version | head -1 | cut -d' ' -f1-2)) exits 56 on a refused tunnel, as the binary: proven on a node whose curl exits 7"
+        return 3
+    fi
+    return 0
 }
 
 check_expect_100_continue() {

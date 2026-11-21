@@ -267,7 +267,7 @@ async fn a_ticket_thread_follows_the_tickets_rights() {
     // File links: `ticket:<id>` names the ticket's workspace.
     let r = post(port, "/cli/fs/resolve-links", OWNER, json!({ "workspace": addr, "paths": ["docs/a.md"] })).await;
     assert_eq!(r.status, 200, "{}", r.body);
-    assert_eq!(r.json()["root"], ws.path.to_string_lossy().as_ref(), "{}", r.body);
+    assert_eq!(r.json()["root"], json!(ws.path.to_string_lossy()), "{}", r.body);
     assert_eq!(r.json()["links"][0]["linkable"], true, "{}", r.body);
 
     // The attachment door on the ticket's address.
@@ -275,4 +275,69 @@ async fn a_ticket_thread_follows_the_tickets_rights() {
     let with_file = s["comments"].as_array().unwrap().iter().find(|c| c.get("attachments").is_some()).cloned().expect("a message with a file");
     let r = get(port, "/cli/thread/attachment", OWNER, &format!("addr={}&id={}&n=0&mode=meta", enc(&addr), with_file["id"].as_str().unwrap())).await;
     assert_eq!(r.status, 200, "{}", r.body);
+}
+
+type Sock = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+async fn frame_for(sock: &mut Sock, id: &str) -> Value {
+    use futures_util::StreamExt;
+    loop {
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(10), sock.next())
+            .await
+            .expect("a frame")
+            .expect("open")
+            .expect("ok");
+        let Ok(t) = msg.to_text() else { continue };
+        let Ok(v) = serde_json::from_str::<Value>(t) else { continue };
+        if v["id"] == id {
+            return v;
+        }
+    }
+}
+
+fn overlay_url(port: u16, conversation: &str, token: &str) -> String {
+    format!("ws://127.0.0.1:{port}/cli/overlay/events?conversation={}&token={}", enc(conversation), enc(token))
+}
+
+/// Bite: the overlay socket on `ticket:<id>` carries every stored ticket
+/// message (from the ticket route too), on the ticket's rights.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_ticket_thread_streams_on_the_tickets_rights() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let tag = &uuid::Uuid::new_v4().to_string()[..6];
+    let ws = seed_ws(&env, &format!("tts{tag}"));
+    let id = create(port, &ws, "Live?").await;
+    let conv = format!("ticket:{id}");
+
+    let (mut owner_sock, _) = tokio_tungstenite::connect_async(&overlay_url(port, &conv, OWNER)).await.expect("owner socket");
+    let tickets_pass = role_pass(port, &ws, &format!("sk{tag}"), &["tickets:read"]).await;
+    let (mut app_sock, _) = tokio_tungstenite::connect_async(&overlay_url(port, &conv, &tickets_pass)).await.expect("tickets:read opens it");
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let r = post(port, "/cli/feedback/comment", OWNER, json!({ "id": id, "body": "via the ticket route", "author": "agent-a" })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let cid = r.json()["commentId"].as_str().unwrap().to_string();
+    let f = frame_for(&mut owner_sock, &cid).await;
+    assert_eq!((f["collection"].clone(), f["doc"]["body"].clone(), f["doc"]["ticket"].clone()), (json!("thread"), json!("via the ticket route"), json!(id)), "{f}");
+    let g = frame_for(&mut app_sock, &cid).await;
+    assert_eq!(g["doc"]["body"], "via the ticket route", "{g}");
+
+    // thread:read alone, and a Member on K2's own notice: refused.
+    let thread_pass = role_pass(port, &ws, &format!("st{tag}"), &["thread:read"]).await;
+    assert!(tokio_tungstenite::connect_async(&overlay_url(port, &conv, &thread_pass)).await.is_err(), "thread:read never opens a ticket");
+    let notice = k2_core::feedback::create(k2_core::feedback::NewFeedback {
+        project_id: k2_core::db::AUDIT_SENTINEL_IDS[0].to_string(),
+        agent_name: "K2".into(),
+        kind: "fyi".into(),
+        title: "Disk".into(),
+        ..Default::default()
+    })
+    .expect("notice");
+    let member = format!("smem{tag}");
+    k2_core::connect_users::add_user(&member, "password123").expect("add_user");
+    let member_tok = k2_core::connect_users::create_session(&member);
+    let notice_conv = format!("ticket:{}", notice.id);
+    assert!(tokio_tungstenite::connect_async(&overlay_url(port, &notice_conv, &member_tok)).await.is_err(), "a Member never watches a notice");
+    assert!(tokio_tungstenite::connect_async(&overlay_url(port, &conv, &member_tok)).await.is_ok(), "a Member watches an ordinary ticket");
 }

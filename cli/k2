@@ -44660,6 +44660,14 @@ else:
 cmd_migrate() {
     local sub="${1:-}"
     [ $# -gt 0 ] && shift
+    # 0.46.17: -h/--help anywhere before a bare -- prints the help and sends
+    # nothing (`status --help` asked for the status, and `export-secrets
+    # --to -h --out f` sent the export with -h as its key). approve keeps
+    # its own line, and an unknown verb stays the usage error.
+    case "$sub" in
+        status|export-secrets|import-secrets)
+            if _wants_help "$@"; then _migrate_help; return 0; fi ;;
+    esac
     case "$sub" in
         ""|-h|--help|help) _migrate_help; return 0 ;;
         status)

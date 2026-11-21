@@ -8,6 +8,9 @@
 #     `cd` on the word: cd's error, or (bash 4 and later, --help) the
 #     request sent with cd's help text as the folder. `adopt --help` sent
 #     an adopt of a file named --help.
+#   - `k2 migrate status --help` asked for the status, and a value flag
+#     took the help word: `export-secrets --to -h --out f` sent the export
+#     with -h as the move key.
 #
 # Each section: every help form, with --help and with -h, prints exactly
 # the page's cli/text/help file and the stub daemon records nothing; the
@@ -153,6 +156,19 @@ page onboarding.txt onboarding adopt CLAUDE.md @H
 page onboarding.txt onboarding adopt CLAUDE.md "$WORK/proj" @H
 sends '^GET /cli/onboarding/scan ' onboarding scan "$WORK/proj"
 sends '^POST /cli/onboarding/skip ' onboarding defer "$WORK/proj"
+
+echo "== migrate =="
+page migrate.txt migrate status @H
+page migrate.txt migrate status --json @H
+page migrate.txt migrate @H status
+page migrate.txt migrate export-secrets --to @H --out f.k2mv
+page migrate.txt migrate export-secrets --to age1x --out @H
+page migrate.txt migrate export-secrets --to age1x --out f.k2mv @H
+page migrate.txt migrate export-secrets --unfreeze @H
+page migrate.txt migrate import-secrets begin @H
+page migrate.txt migrate import-secrets f.k2mv --apply @H
+page migrate.txt migrate import-secrets --undo @H
+sends '^GET /cli/migrate/secrets/status ' migrate status
 
 echo ""
 echo "help_acts_10: $pass passed, $fail failed"

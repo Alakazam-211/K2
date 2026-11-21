@@ -752,13 +752,13 @@ mod unix_impl {
         );
         // The pure handlers lock the DB / sleep across inject windows, so run
         // them on the blocking pool exactly like the TCP dispatcher does.
-        let (status, ctype, out): (String, &'static str, String) = crate::slow_request::watch_cell(
+        let ((status, ctype, out), no_handler_ran): ((String, &'static str, String), bool) = crate::slow_request::watch_cell(
             tokio::task::spawn_blocking(move || {
                 // Wave 0: install principal for body-based identity resolution
                 // (mail/DNS POST handlers read JSON `project`, not the stamped
                 // params map). Cleared when the closure returns.
                 crate::caller_workspace::with_request_principal(Some(principal.clone()), || {
-                    dispatch_cell_verb(
+                    dispatch_cell_verb_flagged(
                         &method_owned,
                         &path_owned,
                         &params,
@@ -770,20 +770,23 @@ mod unix_impl {
             }),
             slow_trace,
             |r| match r {
-                Ok((status, _, _)) => crate::slow_request::status_code(status),
+                Ok(((status, _, _), _)) => crate::slow_request::status_code(status),
                 Err(_) => Some(500),
             },
         )
         .await
         .unwrap_or_else(|e| {
             (
-                "500 Internal Server Error".to_string(),
-                "application/json",
-                serde_json::json!({ "error": format!("worker join: {e}") }).to_string(),
+                (
+                    "500 Internal Server Error".to_string(),
+                    "application/json",
+                    serde_json::json!({ "error": format!("worker join: {e}") }).to_string(),
+                ),
+                false,
             )
         });
 
-        if forward_if_unserved && status.starts_with("404") && out.contains(NOT_SERVED_HERE) {
+        if forward_if_unserved && no_handler_ran {
             crate::agent_isolation::forward_to_tcp(&mut stream, &head, &fwd_body, &this_session_id, &presented).await;
             return;
         }
@@ -1668,22 +1671,40 @@ mod unix_impl {
                         let peer = params.get("peer").cloned();
                         from_cli(crate::federation_rosters::handle_peer_rosters(peer.as_deref()))
                     }
-                    _ => (
-                        "404 Not Found".to_string(),
-                        "application/json",
-                        r#"{"error":"route not served on cell socket"}"#.to_string(),
-                    ),
+                    _ => not_served(),
                 }
             }
             p if crate::session_token::is_agent_verb(p) && !is_post => {
                 from_cli(crate::cli::dispatch(p, params))
             }
-            _ => (
-                "404 Not Found".to_string(),
-                "application/json",
-                r#"{"error":"route not served on cell socket"}"#.to_string(),
-            ),
+            _ => not_served(),
         }
+    }
+
+    thread_local! {
+        /// Set when [`dispatch_cell_verb`] answered "not served here": no
+        /// handler ran (review T2: a typed flag, never the answer's text).
+        static NO_HANDLER_RAN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    /// The socket's answer for a route it doesn't serve, flagged.
+    fn not_served() -> (String, &'static str, String) {
+        NO_HANDLER_RAN.with(|f| f.set(true));
+        ("404 Not Found".to_string(), "application/json", format!(r#"{{"error":"{NOT_SERVED_HERE}"}}"#))
+    }
+
+    /// [`dispatch_cell_verb`] plus whether no handler ran (on this thread).
+    fn dispatch_cell_verb_flagged(
+        method: &str,
+        path: &str,
+        params: &HashMap<String, String>,
+        body: &[u8],
+        principal: &HookPrincipal,
+        sid: &str,
+    ) -> ((String, &'static str, String), bool) {
+        NO_HANDLER_RAN.with(|f| f.set(false));
+        let r = dispatch_cell_verb(method, path, params, body, principal, sid);
+        (r, NO_HANDLER_RAN.with(|f| f.replace(false)))
     }
 
     /// Normalize a `CliResponse` into the `(status, content_type, body)`
@@ -2697,6 +2718,23 @@ mod unix_impl {
                     assert_eq!(status, "405 Method Not Allowed", "{path}");
                 }
             }
+        }
+
+        /// Agent Isolation review T2: "no handler ran" is a typed flag set
+        /// only by the not-served arms; a served handler's 404 that echoes
+        /// the caller's text with the same words never sets it.
+        #[test]
+        fn only_the_not_served_arms_flag_no_handler_ran() {
+            let none = HashMap::new();
+            let ((status, _, body), unserved) = dispatch_cell_verb_flagged("POST", "/cli/capabilities", &none, b"", &principal(), "sid-t2");
+            assert!(unserved && status.starts_with("404") && body.contains(NOT_SERVED_HERE), "{status} {body}");
+            let mut q = HashMap::new();
+            q.insert("project".to_string(), format!("/nowhere/{NOT_SERVED_HERE}"));
+            q.insert("id".to_string(), NOT_SERVED_HERE.to_string());
+            let ((status, _, body), unserved) = dispatch_cell_verb_flagged("GET", "/cli/inbox/read", &q, b"", &principal(), "sid-t2");
+            assert!(!unserved, "a served handler's answer ({status} {body}) must not count as 'no handler ran'");
+            let ((_, _, _), unserved) = dispatch_cell_verb_flagged("GET", "/cli/capabilities", &none, b"", &principal(), "sid-t2");
+            assert!(!unserved, "the flag never leaks from an earlier call on this thread");
         }
 
         // ── awareness body re-stamp (identity from principal, not body) ──

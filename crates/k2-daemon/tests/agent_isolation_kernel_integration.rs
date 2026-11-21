@@ -756,6 +756,9 @@ fn forwards_to(port: u16) -> Vec<u16> {
 fn a_held_forward_is_recognised_by_its_full_address_only() {
     let _unit = preflight();
     let mut d = Daemon::new("held");
+    // LAN listening on (0.0.0.0): review T1's second row connects to the
+    // box's LAN address.
+    d.env.push(("K2_LISTEN".into(), "lan".into()));
     d.start();
     let (_a_id, a_ws) = d.workspace("A");
     // 30 inbox items with ~900 KB titles: A's `inbox/list` (a passport
@@ -812,5 +815,88 @@ print(out.decode(errors="replace").split("\r\n\r\n", 1)[-1][:200])"#, &p.to_stri
     println!("127.0.0.2:{p} with A's passport, while 127.0.0.1:{p} is A's held forward:\n{text}{}", String::from_utf8_lossy(&out.stderr));
     assert!(out.status.success(), "the 127.0.0.2 client ran: {}", String::from_utf8_lossy(&out.stderr));
     assert!(text.contains(" 403 ") && text.contains("passport_needs_socket"), "same port, another loopback address: {text}");
-    assert!(forwards_to(d.port).contains(&p), "A's forward was still held during the attempt");
+
+    // Review T1 (a): nothing else can hold 127.0.0.1:P while the forward
+    // does, not even with SO_REUSEADDR + SO_REUSEPORT.
+    let out = Command::new("python3")
+        .args(["-c", r#"import errno, socket, sys
+s = socket.socket()
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+try:
+    s.bind(("127.0.0.1", int(sys.argv[1])))
+    print("bound", s.getsockname())
+except OSError as e:
+    print("refused", errno.errorcode.get(e.errno, e.errno))"#, &p.to_string()])
+        .output()
+        .expect("python3");
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    println!("bind 127.0.0.1:{p} with SO_REUSEADDR + SO_REUSEPORT during the hold: {text}");
+    assert_eq!(text, "refused EADDRINUSE", "127.0.0.1:{p} while A's forward holds it");
+
+    // Review T1 (b): with the daemon on 0.0.0.0, a connect from 127.0.0.1 to
+    // the box's LAN address never gets port P. The ephemeral range is set to
+    // P alone for the few connects below (and put back), so any port the
+    // kernel would hand out could only be P.
+    let lan = String::from_utf8_lossy(
+        &Command::new("python3")
+            .args(["-c", "import socket\ns = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\ns.connect(('192.0.2.1', 9))\nprint(s.getsockname()[0])"])
+            .output()
+            .expect("python3")
+            .stdout,
+    )
+    .trim()
+    .to_string();
+    assert!(!lan.is_empty() && !lan.starts_with("127."), "the box has a LAN address: {lan:?}");
+    let (s, _) = http_at(&lan, d.port, "GET", "/boot-status", "");
+    assert_eq!(s, 200, "the daemon listens on the LAN address {lan}:{}", d.port);
+    let range = std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range").unwrap().split_whitespace().collect::<Vec<_>>().join(" ");
+    struct PutBack(String);
+    impl Drop for PutBack {
+        fn drop(&mut self) {
+            let st = Command::new("sudo").args(["-n", "sysctl", "-q", "-w", &format!("net.ipv4.ip_local_port_range={}", self.0)]).status();
+            if !st.is_ok_and(|s| s.success()) {
+                // Never a panic in a drop: loud, and the gate's own check
+                // (agent-isolation-kernel-tests.sh) reads the range after.
+                eprintln!("FAILED to put the ephemeral port range back to {}", self.0);
+            }
+        }
+    }
+    let st = Command::new("sudo").args(["-n", "sysctl", "-q", "-w", &format!("net.ipv4.ip_local_port_range={p} {p}")]).status().expect("sudo sysctl");
+    assert!(st.success(), "set the ephemeral port range to {p}");
+    let put_back = PutBack(range);
+    let out = Command::new("python3")
+        .args(["-c", r#"import errno, socket, sys
+lan, port, p = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+IP_BIND_ADDRESS_NO_PORT = 24
+def attempt(name, prep):
+    s = socket.socket()
+    try:
+        prep(s)
+        s.connect((lan, port))
+        print(name, "port", s.getsockname()[1], "P" if s.getsockname()[1] == p else "other")
+    except OSError as e:
+        print(name, "refused", errno.errorcode.get(e.errno, e.errno))
+    finally:
+        s.close()
+attempt("from_127_no_port", lambda s: (s.setsockopt(socket.IPPROTO_IP, IP_BIND_ADDRESS_NO_PORT, 1), s.bind(("127.0.0.1", 0))))
+attempt("from_127_bind0", lambda s: s.bind(("127.0.0.1", 0)))
+attempt("from_127_reuse", lambda s: (s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1), s.setsockopt(socket.IPPROTO_IP, IP_BIND_ADDRESS_NO_PORT, 1), s.bind(("127.0.0.1", 0))))"#, &lan, &d.port.to_string(), &p.to_string()])
+        .output()
+        .expect("python3");
+    drop(put_back);
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    println!("connects from 127.0.0.1 to {lan}:{} with the ephemeral range = {p} only, during the hold:\n{text}{}", d.port, String::from_utf8_lossy(&out.stderr));
+    assert_eq!(text.lines().count(), 3, "three connect attempts: {text}");
+    for l in text.lines() {
+        assert!(!l.ends_with(" P"), "a connect from 127.0.0.1 got the held forward's port: {l}");
+    }
+    assert!(forwards_to(d.port).contains(&p), "A's forward was still held during the attempts");
+}
+
+/// `http` to another address of this box.
+fn http_at(host: &str, port: u16, method: &str, path: &str, body: &str) -> (u16, String) {
+    let Ok(mut s) = TcpStream::connect((host, port)) else { return (0, String::new()) };
+    s.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+    exchange(&mut s, &format!("{method} {path} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\n"), body)
 }

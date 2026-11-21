@@ -29,7 +29,11 @@ echo "box: $(hostname) · $(. /etc/os-release && echo "$PRETTY_NAME") · kernel 
 echo "LSMs: $(cat /sys/kernel/security/lsm)"
 args=(--ignored --test-threads=1 --nocapture)
 [ -n "$filter" ] && args=("$filter" "${args[@]}")
-exec sudo systemd-run --uid="$(id -u)" --gid="$(id -g)" \
+# One test (review T1) narrows the ephemeral port range for a moment and
+# puts it back; the range must be the same after the run.
+range_before="$(cat /proc/sys/net/ipv4/ip_local_port_range)"
+set +e
+sudo systemd-run --uid="$(id -u)" --gid="$(id -g)" \
     -p Delegate=yes -p DelegateSubgroup=daemon -p KillMode=process \
     --wait --pipe --collect --quiet \
     --setenv=HOME="$HOME" --setenv=USER="$(id -un)" --setenv=PATH="$path" \
@@ -40,3 +44,12 @@ exec sudo systemd-run --uid="$(id -u)" --gid="$(id -g)" \
     --setenv=K2_ISO_TOOLCHAIN_HOME="$tc" \
     --setenv=RUST_BACKTRACE=1 \
     "$dir/agent_isolation_kernel_integration" "${args[@]}"
+rc=$?
+set -e
+range_after="$(cat /proc/sys/net/ipv4/ip_local_port_range)"
+if [ "$range_after" != "$range_before" ]; then
+    echo "FAIL: the ephemeral port range changed: $range_before -> $range_after (putting it back)" >&2
+    sudo sysctl -q -w "net.ipv4.ip_local_port_range=$range_before"
+    exit 1
+fi
+exit "$rc"

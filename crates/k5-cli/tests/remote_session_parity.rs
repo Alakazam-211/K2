@@ -647,21 +647,21 @@ fn remote_session_on_another_server() {
         one(
             "grant, the token as --token",
             &["grant", "--ttl", "30m", "--label", "ci", "--host", H, "--token", "remote-tok-1"],
-            r#"{"ok":true,"grantId":"g1","token":"k2rs_x","expiresAt":1700000000}"#,
+            r#"{"ok":true,"token":"k2rs_abc","grant":{"id":"g1","expiresAt":1763600000,"label":"ci"}}"#,
         ),
         // native: remote-session grants --host
         remote(one("grants --json", &["grants", "--json", "--host", H], r#"{"ok":true,"grants":[]}"#)),
         // native: remote-session revoke --host
-        remote(one("revoke", &["revoke", "g1", "--host", H], r#"{"ok":true,"revoked":"g1"}"#)),
+        remote(one("revoke", &["revoke", "g1", "--host", H], r#"{"ok":true,"grant":{"id":"g1"},"killedSessions":0}"#)),
         // native: remote-session shell --host
-        remote(one("shell", &["shell", "--cwd", "/tmp", "--host", H], r#"{"ok":true,"sessionId":"s9"}"#)),
+        remote(one("shell", &["shell", "--cwd", "/tmp", "--host", H], r#"{"ok":true,"sessionId":"s9","grantId":"g1","ready":true}"#)),
         // native: remote-session write --host
         stdin(
             b"remote-tok-2\n",
             one("write, the token on stdin", &["write", "s9", "ls -la", "--host", H, "--token-stdin"], r#"{"ok":true}"#),
         ),
         // native: remote-session read --host
-        remote(one("read", &["read", "s9", "--lines", "20", "--host", H], r#"{"ok":true,"lines":["a","b"]}"#)),
+        remote(one("read", &["read", "s9", "--lines", "20", "--host", H], r#"{"lines":["a","b"]}"#)),
         remote(case(
             "the other server's refusal",
             &["status", "--host", H],

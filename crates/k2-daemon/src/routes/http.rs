@@ -1351,6 +1351,17 @@ pub(crate) fn merge_json_object_params(
         return;
     };
     for (k, val) in obj {
+        // A JSON body never sets the credential (Agent Isolation review
+        // R3): the request was authorised from its query, header or cookie
+        // before the body was read, and a `token` merged in afterwards
+        // would be a second, unchecked credential for the handler (a bound
+        // passport smuggled past the TCP gate).
+        if k == "token" {
+            if let serde_json::Value::String(t) = val {
+                crate::agent_isolation::audit_body_passport(t, "a JSON body");
+            }
+            continue;
+        }
         let s = match val {
             serde_json::Value::String(s) => s.clone(),
             serde_json::Value::Bool(b) => b.to_string(),
@@ -2493,6 +2504,20 @@ mod tests {
                     Host: x\r\n\
                     Cookie: theme=dark; k2_session=sessdeadbeef; other=1\r\n\r\n";
         assert_eq!(extract_session_cookie(head), Some("sessdeadbeef"));
+    }
+
+    /// Agent Isolation review R3: a JSON body merged into the params never
+    /// sets the credential, whatever else it sets.
+    #[test]
+    fn a_json_body_never_sets_the_token() {
+        let mut params = std::collections::HashMap::new();
+        params.insert("token".to_string(), "from-the-query".to_string());
+        merge_json_object_params(&mut params, br#"{"token":"sid.secret","project":"A","enabled":true}"#);
+        assert_eq!(params.get("token").map(String::as_str), Some("from-the-query"));
+        assert_eq!((params["project"].as_str(), params["enabled"].as_str()), ("A", "true"));
+        let mut empty = std::collections::HashMap::new();
+        merge_json_object_params(&mut empty, br#"{"token":"sid.secret"}"#);
+        assert!(!empty.contains_key("token"), "{empty:?}");
     }
 
     #[test]

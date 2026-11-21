@@ -287,27 +287,50 @@ fn harness_rules(i: &ViewInputs, slots: &Path, v: &mut FenceView) -> Result<(), 
     Ok(())
 }
 
+/// The Codex home entries a fenced session may reach through its slot's
+/// links, by name (review R2): `Some(true)` read-write (its conversations
+/// and their state), `Some(false)` read-only (shared skills, prompts,
+/// instructions), `None` never: `auth.json`, `config.toml` (its notify and
+/// MCP commands run in unfenced sessions), and every name not listed (a
+/// link K2 didn't make, or a new Codex entry, stays outside the fence
+/// until it is listed here).
+pub fn codex_link_access(name: &str) -> Option<bool> {
+    const RW: &[&str] = &["sessions", "archived_sessions", "history.jsonl"];
+    const RO: &[&str] = &["skills", "prompts", "AGENTS.md", "rules"];
+    if RW.contains(&name) || codex_state_db(name) {
+        return Some(true);
+    }
+    RO.contains(&name).then_some(false)
+}
+
+/// Codex's state database: `state_<n>.sqlite`, with `-wal` / `-shm`.
+fn codex_state_db(name: &str) -> bool {
+    let base = name.strip_suffix("-wal").or_else(|| name.strip_suffix("-shm")).unwrap_or(name);
+    base.strip_prefix("state_")
+        .and_then(|r| r.strip_suffix(".sqlite"))
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
 /// The links inside a login slot that K2's slot code makes
 /// (`llm_accounts::pins`), and where they point: each must resolve to the
 /// same-named entry directly inside the tool's own home (a Claude slot:
 /// only [`crate::llm_accounts::pins::CLAUDE_SHARED_ENTRIES`]). A link the
 /// agent planted (the slot is read-write to it) to anywhere else gets no
-/// rule (review F2). A Codex slot writes through its links (shared
-/// sessions); a Claude slot only reads its linked settings and skills.
+/// rule (review F2). A Codex slot only by name too ([`codex_link_access`],
+/// review R2): it writes through its conversation links and reads its
+/// skills; a Claude slot only reads its linked settings and skills.
 pub fn slot_links(slot: &Path, tool_home: &Path, var: &str) -> Vec<(PathBuf, bool)> {
-    let write = var == "CODEX_HOME";
     let tool_home = canon(tool_home);
     let Ok(rd) = std::fs::read_dir(slot) else { return Vec::new() };
     rd.flatten()
         .filter(|e| e.file_type().is_ok_and(|t| t.is_symlink()))
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
-            if var == "CLAUDE_CONFIG_DIR" && !crate::llm_accounts::pins::CLAUDE_SHARED_ENTRIES.contains(&name.as_str()) {
-                return None;
-            }
-            if var != "CLAUDE_CONFIG_DIR" && var != "CODEX_HOME" {
-                return None;
-            }
+            let write = match var {
+                "CLAUDE_CONFIG_DIR" if crate::llm_accounts::pins::CLAUDE_SHARED_ENTRIES.contains(&name.as_str()) => false,
+                "CODEX_HOME" => codex_link_access(&name)?,
+                _ => return None,
+            };
             let target = std::fs::canonicalize(e.path()).ok()?;
             (target == tool_home.join(&name)).then_some((target, write))
         })
@@ -730,13 +753,22 @@ mod tests {
         std::os::unix::fs::symlink(home.join(".ssh"), slot.join("x")).unwrap();
         std::os::unix::fs::symlink(&home, slot.join("everything")).unwrap();
         std::os::unix::fs::symlink(home.join(".codex/config.toml"), slot.join("renamed.toml")).unwrap();
+        // Review R2: same-named links to the default login and its config.
+        std::fs::write(home.join(".codex/auth.json"), "{}").unwrap();
+        std::os::unix::fs::symlink(home.join(".codex/auth.json"), slot.join("auth.json")).unwrap();
+        std::os::unix::fs::symlink(home.join(".codex/config.toml"), slot.join("config.toml")).unwrap();
+        std::fs::write(home.join(".codex/state_5.sqlite"), "").unwrap();
+        std::os::unix::fs::symlink(home.join(".codex/state_5.sqlite"), slot.join("state_5.sqlite")).unwrap();
+        assert_eq!(slot_links(&slot, &home.join(".codex"), "CODEX_HOME").len(), 2, "only sessions and the state db: {:?}", slot_links(&slot, &home.join(".codex"), "CODEX_HOME"));
+        assert_eq!((codex_link_access("auth.json"), codex_link_access("config.toml"), codex_link_access("state_5.sqlite-wal")), (None, None, Some(true)));
+        assert_eq!((codex_link_access("state_.sqlite"), codex_link_access("skills"), codex_link_access("anything")), (None, Some(false), None));
         let tmp = root.join("tmp");
         let mut env = BTreeMap::new();
         env.insert("CODEX_HOME".to_string(), s(&slot));
         let v = default_view(&inputs(&home, &k2, &home.join("ws/A"), &tmp, &env)).unwrap();
         let all: Vec<PathBuf> = v.rw.iter().chain(&v.ro).map(|p| canon(Path::new(p))).collect();
         assert!(all.contains(&canon(&home.join(".codex/sessions"))), "K2's own slot link is followed: {all:?}");
-        for bad in [home.join(".ssh"), canon(&home), home.join(".codex/config.toml")] {
+        for bad in [home.join(".ssh"), canon(&home), home.join(".codex/config.toml"), home.join(".codex/auth.json")] {
             assert!(!all.contains(&canon(&bad)), "a planted link widened the fence to {}: {all:?}", bad.display());
         }
         // A harness home that is neither a slot nor the tool's own home.

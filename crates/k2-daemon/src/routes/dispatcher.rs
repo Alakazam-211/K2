@@ -7166,21 +7166,7 @@ async fn handle_one_request(
             for (k, v) in crate::agent_isolation::form_body_without_bound_passport(&body_bytes) {
                 params.insert(k, v);
             }
-            if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body_bytes) {
-                if let Some(obj) = v.as_object() {
-                    for (k, val) in obj {
-                        let s = match val {
-                            serde_json::Value::String(s) => s.clone(),
-                            serde_json::Value::Bool(b) => b.to_string(),
-                            serde_json::Value::Number(n) => n.to_string(),
-                            _ => continue,
-                        };
-                        if !s.is_empty() {
-                            params.insert(k.clone(), s);
-                        }
-                    }
-                }
-            }
+            super::http::merge_json_object_params(&mut params, &body_bytes);
             let p_owned = p.to_string();
             let result = tokio::task::spawn_blocking(move || match skin_pass {
                 Some(pass) if p_owned == "/cli/workspace/resources/add" => {
@@ -11386,22 +11372,8 @@ async fn handle_one_request(
             for (k, v) in crate::agent_isolation::form_body_without_bound_passport(&body_bytes) {
                 params.insert(k, v);
             }
-            // JSON body optional: { "enabled": true, "port": 0, "project": "..." }
-            if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body_bytes) {
-                if let Some(obj) = v.as_object() {
-                    for (k, val) in obj {
-                        let s = match val {
-                            serde_json::Value::String(s) => s.clone(),
-                            serde_json::Value::Bool(b) => b.to_string(),
-                            serde_json::Value::Number(n) => n.to_string(),
-                            _ => continue,
-                        };
-                        if !s.is_empty() {
-                            params.insert(k.clone(), s);
-                        }
-                    }
-                }
-            }
+            // JSON body optional: { "enabled": true, "port": 0, "project": "..." } (never `token`).
+            super::http::merge_json_object_params(&mut params, &body_bytes);
             let p_owned = p.to_string();
             let result = tokio::task::spawn_blocking(move || {
                 crate::wiki_routes::dispatch_post(&p_owned, &params)

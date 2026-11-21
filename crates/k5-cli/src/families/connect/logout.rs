@@ -217,11 +217,7 @@ pub fn run(words: &[&str], home: &Path) -> Option<Exit> {
     let to = if words.is_empty() && !token.is_empty() {
         let t = target(&base)?;
         let direct = k2_client::proxy_rule::direct(&format!("{base}{LOGOUT}"));
-        if !direct
-            && super::super::remote::logout::PROXY_ENV
-                .iter()
-                .any(|n| std::env::var_os(n).is_some_and(|v| !v.is_empty()))
-        {
+        if !direct && super::super::remote::logout::proxied(&base) {
             return None;
         }
         Some(t)

@@ -196,15 +196,10 @@ fn restart_words(rest: &[&str]) -> Option<Life> {
     Some(Life::Restart(r))
 }
 
-/// `_k2_curl` would send to `host` through the person's proxy: an
-/// `https://` URL that is not this machine's (`_k2_direct_url`), with a
-/// proxy set. The shared client has no proxy, so these are the shell's.
+/// `_k2_curl` would send to `host` through the person's proxy
+/// ([`crate::families::remote::logout::proxied`]): the shell's.
 fn proxied(host: &str) -> bool {
-    use crate::families::remote::logout::{direct_url, PROXY_ENV};
-    !direct_url(host)
-        && PROXY_ENV
-            .iter()
-            .any(|n| std::env::var_os(n).is_some_and(|v| !v.is_empty()))
+    crate::families::remote::logout::proxied(host)
 }
 
 /// `--host`'s server, when it is a URL the binary sends to itself.

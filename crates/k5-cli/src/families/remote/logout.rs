@@ -36,8 +36,24 @@ use std::time::Duration;
 pub const LOGOUT: &str = "/cli/auth/logout";
 /// `--max-time 20`.
 pub const MAX_TIME: Duration = Duration::from_secs(20);
-/// The environment curl reads a proxy for an `https://` URL from.
-pub const PROXY_ENV: [&str; 4] = ["https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"];
+/// `_k2_curl` would send to `url` through the person's proxy: an
+/// `https://` URL that is not this machine's ([`direct_url`]) whose host
+/// the person's proxy settings route through a proxy, or settings the
+/// binary doesn't read ([`remote::routed`], curl's rule). The callers
+/// send direct, so these are the shell's.
+pub fn proxied(url: &str) -> bool {
+    if direct_url(url) {
+        return false;
+    }
+    let origin = match url.split_once("://") {
+        Some((scheme, rest)) => format!(
+            "{scheme}://{}",
+            rest.split(['/', '?']).next().unwrap_or("")
+        ),
+        None => url.to_string(),
+    };
+    !matches!(remote::routed(&origin), Some(b) if b.via.is_none())
+}
 
 /// What the words ask for.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -504,11 +520,7 @@ pub fn run(words: &[&str], home: &Path, hand: (bool, bool)) -> Option<Exit> {
         } => (host, base, from_stdin),
     };
     let target = remote::base(&base)?;
-    if !direct_url(&base)
-        && PROXY_ENV
-            .iter()
-            .any(|n| std::env::var_os(n).is_some_and(|v| !v.is_empty()))
-    {
+    if proxied(&base) {
         return None;
     }
     let user_home = std::env::var_os("HOME").map(PathBuf::from);

@@ -47,7 +47,8 @@ pub const OFFLINE_FIRST: &[&str] = &[
     "--version",
 ];
 
-/// An argument that makes any command offline, wherever it is.
+/// An argument that makes any command offline, anywhere before the first
+/// bare `--` (the words after it are a child command's, as the shell's loop).
 pub const OFFLINE_ANYWHERE: &[&str] = &["-h", "--help"];
 
 /// The settings that say a harness or a K2 session started this process.
@@ -162,6 +163,7 @@ pub fn is_offline(args: &[OsString]) -> bool {
     OFFLINE_FIRST.iter().any(|v| first == *v)
         || args
             .iter()
+            .take_while(|a| *a != "--")
             .any(|a| OFFLINE_ANYWHERE.iter().any(|v| a == *v))
 }
 
@@ -398,8 +400,7 @@ mod tests {
             &["--version"],
             &["msg", "--help"],
             &["msg", "a", "-h"],
-            // As the shell's loop: `--` doesn't stop it.
-            &["msg", "--", "-h"],
+            &["msg", "-h", "--", "x"],
         ];
         for row in offline {
             assert!(is_offline(&args(row)), "{row:?}");
@@ -414,6 +415,9 @@ mod tests {
             &["msg", "help"],
             &["Help"],
             &[" help"],
+            // As the shell's loop: a bare `--` stops it.
+            &["msg", "--", "-h"],
+            &["msg", "--", "--help"],
         ];
         for row in online {
             assert!(!is_offline(&args(row)), "{row:?}");

@@ -22,7 +22,7 @@ fn offline_block() -> String {
     common::block(
         &policy(),
         r#"_k2_offline_verb="""#,
-        r#"for _a in "$@"; do case "$_a" in -h|--help) _k2_offline_verb=1 ;; esac; done"#,
+        r#"for _a in "$@"; do [ "$_a" = "--" ] && break; case "$_a" in -h|--help) _k2_offline_verb=1 ;; esac; done"#,
     )
 }
 
@@ -68,6 +68,7 @@ fn every_command_line_is_offline_as_the_shell_says() {
         &["msg"],
         &["msg", "x", "--help"],
         &["msg", "--", "-h"],
+        &["msg", "-h", "--", "x"],
         &["msg", "-help"],
         &["msg", "help"],
         &["Help"],

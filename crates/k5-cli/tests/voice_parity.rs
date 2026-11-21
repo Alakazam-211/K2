@@ -23,6 +23,9 @@ mod common;
 use common::parity::*;
 use common::stub::Reply;
 
+/// The daemon's walled refusal of an agent's `--start-level member`.
+const LEVEL_CARD: &str = r#"{"ok":false,"code":"recording_level_needs_owner","hint":"nothing changed: the owner or an Admin sets who may start recordings in the K5 rooms","error":{"code":"recording_level_needs_owner","hint":"nothing changed: the owner or an Admin sets who may start recordings in the K5 rooms"},"permission":{"requestable":true,"action":"voice.recording-start-level","approvers":"owner or admin","command":"k2 permission request voice.recording-start-level level=member --why \"<what you need it for>\""}}"#;
+
 const VERB: &str = "voice";
 const ROOMS: &str = r#"{"server":"acme","hosting":{"state":"degraded","line":"slow","detail":"x"},"rooms":[{"slug":"lounge","name":"Lounge","occupants":[{"user":"ann","muted":true,"deafened":1},{"user":"bob"}],"limit":10,"closing":true},{"slug":"b","unavailable":"sew down"}],"me":{"inCall":true,"here":true,"room":{"name":"Lounge"},"presenceLagSecs":30}}"#;
 const STATUS: &str = r#"{"hosting":{"state":"ok"},"count":3,"tier":{"state":"ok","reading":"live","reason":"r"},"space":{"state":"made","spaceId":"s1","lastCheck":{"outcome":"remade","from":"a","to":"b"}},"spaceHealth":{"state":"suspect","line":"l","fix":"f"},"rooms":[{"slug":"l","wantName":"Lounge","state":"open","closeNow":1}],"members":[{"externalId":"ann","state":"added","wantLevel":1,"level":1.0},{"externalId":"bob","state":"added","wantLevel":"mod","level":"member","why":"w é"},{"externalId":"cy","state":"pending"}],"holds":[{"op":"add","subject":"x","state":"held","error":"e"}],"carriedAgents":["a","b"],"staleSpaces":[{"slug":"old"},{}],"lane":{"state":"up","reason":"fine"},"feed":{"state":"on","lastError":"late"}}"#;
@@ -285,6 +288,18 @@ fn voice_writes_answer_as_the_shell_does() {
             &["status"],
             &[],
             vec![Reply::Answer(500, String::new())],
+            owner_and_port,
+            3,
+            1,
+        ),
+        // covers: voice settings
+        // 0.46.17: an agent's start level, refused with its own code and
+        // the `voice.recording-start-level` card's Ask-with line.
+        case(
+            "settings --start-level: the card",
+            &["settings", "--start-level", "member"],
+            &[],
+            vec![Reply::Answer(403, LEVEL_CARD.into())],
             owner_and_port,
             3,
             1,

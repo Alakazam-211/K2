@@ -64,6 +64,9 @@ fn many(name: &'static str, args: &'static [&'static str], bodies: &[&str], code
     case(name, args, &[], replies, owner_and_port, code, n)
 }
 
+/// The daemon's walled refusal of an agent's `policy set dm_enabled on`.
+const DM_CARD: &str = r#"{"ok":false,"error":{"code":"person_only","hint":"nothing changed: a person does this, never an agent or a K2 terminal (the server's recording policies)"},"permission":{"requestable":true,"action":"voice.recording-dm","approvers":"owner or admin","command":"k2 permission request voice.recording-dm dm=on --why \"<what you need it for>\""}}"#;
+
 fn bad(name: &'static str, args: &'static [&'static str]) -> Case {
     case(name, args, &[], vec![], owner_and_port, 2, 0)
 }
@@ -1555,6 +1558,20 @@ fn hostchat_recording_as_the_shell_does() {
                     403,
                     r#"{"error":{"code":"vault_confirm_required","hint":"in person"}}"#.into(),
                 )],
+                port_only,
+                3,
+                1,
+            ),
+        ),
+        // 0.46.17: `dm_enabled` alone, in a session: person_only with the
+        // `voice.recording-dm` card's Ask-with line, no confirm.
+        with(
+            with_passport(&[]),
+            case(
+                "recording policy set dm_enabled in a session: the card",
+                &["recording", "policy", "set", "dm_enabled", "on"],
+                &[],
+                vec![Reply::Answer(403, DM_CARD.into())],
                 port_only,
                 3,
                 1,

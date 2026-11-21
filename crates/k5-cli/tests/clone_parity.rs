@@ -6,7 +6,8 @@
 //!
 //! - Each verb's answer, `--json`, the daemon's refusals (`_compute_fail`
 //!   lines and exits), Python's raise on an odd answer.
-//! - The usage stops (`_clone_die`'s JSON line), the person guard.
+//! - The usage stops (`_clone_die`'s JSON line), a value flag as the last
+//!   word on each verb (`_need_value`'s line, exit 2), the person guard.
 //! - The cell socket in a session, `deny` over TCP; no answer.
 //! - One large list (above 256 KiB).
 
@@ -173,6 +174,96 @@ fn clone_proposals_answer_as_the_shell_does() {
         case(
             "propose: an unknown flag",
             &["propose", "--frob"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "proposals: --why last",
+            &["proposals", "--why"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "propose: --since-days last",
+            &["propose", "--to", "here", "--since-days"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "withdraw: --reason last",
+            &["withdraw", "cp-1", "--reason"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "deny: --workspace last",
+            &["deny", "cp-1", "--workspace"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "preview: --host last",
+            &["preview", "ws1", "--host"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "to: --token last",
+            &["to", "https://h.example", "ws1", "--token"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "from: --skip last",
+            &["from", "h.example:ws1", "--copy", "a", "--skip"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "here: --dest last",
+            &["here", "ws1", "--dest"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "approve: --to last",
+            &["approve", "cp-1", "--to"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "a bare workspace: --blank last",
+            &["ws1", "--blank"],
             &[],
             vec![],
             owner_and_port,

@@ -18,9 +18,11 @@
 //! 3), the remote URL's rule ([`rule`]: exit 3, nothing looked up or
 //! sent) and the remote token.
 //!
+//! A value flag as the last word is `_need_value`'s line, exit 2, in the
+//! usage stops' place.
+//!
 //! Still the shell's ([`run`] returns `None`): any `-h` or `--help` (the
-//! front's), a value flag as the last word (`shift 2` out of range), a
-//! word that is not UTF-8, the shell's own settings in the environment,
+//! front's), a word that is not UTF-8, the shell's own settings in the environment,
 //! a port curl won't take and a `python3` the binary can't tell.
 //!
 //! The engine sends every request itself, as its Python does ([`pyurl`]):
@@ -131,6 +133,8 @@ pub enum Form {
     Help,
     /// `_clone_die <code> <hint> <rc>`.
     Die(&'static str, String, Exit),
+    /// `_need_value`'s line for this flag, exit 2.
+    NeedValue(String),
     Run(Sub, Box<Opts>),
 }
 
@@ -151,18 +155,14 @@ fn opts(words: &[&str]) -> Option<Result<Opts, Form>> {
     let mut i = 0;
     while i < words.len() {
         let w = words[i];
+        // `_need_value "$@"` before each value flag's `shift 2`.
         let next = words.get(i + 1).copied();
-        let two = |slot: &mut String| -> Option<()> {
-            *slot = next?.to_string();
-            Some(())
-        };
-        let append = |acc: &mut String| -> Option<()> {
-            let v = next?;
+        let need = || Some(Err(Form::NeedValue(w.to_string())));
+        let append = |acc: &mut String, v: &str| {
             if !acc.is_empty() {
                 acc.push(',');
             }
             acc.push_str(v);
-            Some(())
         };
         match w {
             "--no-threads" => o.no_threads = true,
@@ -175,23 +175,27 @@ fn opts(words: &[&str]) -> Option<Result<Opts, Form>> {
             "--all" => o.all = true,
             "--token-stdin" => o.token_stdin = true,
             "--threads-since" | "--since-days" => {
-                let mut v = String::new();
-                two(&mut v)?;
-                o.since = Some(v);
+                let Some(v) = next else { return need() };
+                o.since = Some(v.to_string());
                 i += 2;
                 continue;
             }
             "--copy" | "--blank" | "--skip" => {
-                append(match w {
-                    "--copy" => &mut copy,
-                    "--blank" => &mut blank,
-                    _ => &mut skip,
-                })?;
+                let Some(v) = next else { return need() };
+                append(
+                    match w {
+                        "--copy" => &mut copy,
+                        "--blank" => &mut blank,
+                        _ => &mut skip,
+                    },
+                    v,
+                );
                 i += 2;
                 continue;
             }
             "--dest" | "--to" | "--why" | "--reason" | "--workspace" | "--host" | "--token" => {
-                two(match w {
+                let Some(v) = next else { return need() };
+                *(match w {
                     "--dest" => &mut o.dest,
                     "--to" => &mut o.to,
                     "--why" => &mut o.why,
@@ -199,7 +203,7 @@ fn opts(words: &[&str]) -> Option<Result<Opts, Form>> {
                     "--workspace" => &mut o.workspace,
                     "--host" => &mut o.host,
                     _ => &mut o.token,
-                })?;
+                }) = v.to_string();
                 if w == "--token" {
                     o.token_flag = true;
                 }
@@ -381,6 +385,7 @@ fn run_with(args: &[OsString], form: Form, mut settings: Settings) -> Exit {
             return super::Shown::out(text).print();
         }
         Form::Die(code, hint, exit) => return die(code, &hint, exit),
+        Form::NeedValue(flag) => return out::stop_need_value(&flag),
         Form::Run(sub, o) => (sub, *o),
     };
     // The remote token off argv: --token-stdin reads one line from stdin.
@@ -928,8 +933,18 @@ mod tests {
     #[test]
     fn the_forms() {
         assert_eq!(parse(&[]), Some(Form::Help));
-        assert_eq!(parse(&["proposals", "--why"]), None);
-        assert_eq!(parse(&["to", "--token"]), None);
+        assert_eq!(
+            parse(&["proposals", "--why"]),
+            Some(Form::NeedValue("--why".into()))
+        );
+        assert_eq!(
+            parse(&["to", "h", "w", "--token"]),
+            Some(Form::NeedValue("--token".into()))
+        );
+        assert_eq!(
+            parse(&["w1", "--copy", "a", "--copy"]),
+            Some(Form::NeedValue("--copy".into()))
+        );
         assert_eq!(parse(&["here", "w", "-h"]), None);
         let (sub, o) = run_of(parse(&["preview", "w", "--host", "h"]));
         assert_eq!((sub, o.host.as_str(), o.args.len()), (Sub::Preview, "h", 1));

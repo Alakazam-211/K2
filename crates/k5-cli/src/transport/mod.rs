@@ -34,6 +34,16 @@
 //!
 //! 1. `Authorization: Bearer <passport>`, on the cell socket only (a
 //!    config line read before the command line's `-H`s).
+//!    Then a Codex call's `X-K2-Conversation: <CODEX_SESSION_ID>` and
+//!    `X-K2-Thread: <CODEX_THREAD_ID>` ([`client::codex_headers`]: only
+//!    with `CODEX_THREAD_ID` set, `K2_CODEX_PASSPORT_BIND` not off, and
+//!    each value 1 to 128 of letters, digits, `-` and `_`), lines of the
+//!    shell's curl config too. A body on stdin with no config of the
+//!    caller's (`cli_post_json_stdin`, the vault socket's POST) has them
+//!    after the hand-over headers instead. On every daemon request, on
+//!    either channel, from curl and from the embedded Python alike (there
+//!    after the hand-over headers); never to the Connect control plane or
+//!    the account server.
 //! 2. `X-K5-Would-Refuse: 1`, when the passport rule would refuse the
 //!    call, and never otherwise.
 //! 3. `X-K5-Cli-Via`: `fallthrough` from the shell when the front ran it,

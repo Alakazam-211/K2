@@ -108,6 +108,67 @@ pub const WOULD_REFUSE_HEADER: &str = "X-K5-Would-Refuse";
 pub const OWNER_SOURCE_HEADER: &str = "X-K5-Owner-Source";
 /// Its one value.
 pub const OWNER_SOURCE_DISK: &str = "disk";
+/// A Codex call's conversation: the root thread of the conversation
+/// (`CODEX_SESSION_ID`; a subagent's call names its parent's).
+pub const CONVERSATION_HEADER: &str = "X-K2-Conversation";
+/// A Codex call's own thread (`CODEX_THREAD_ID`).
+pub const THREAD_HEADER: &str = "X-K2-Thread";
+/// The switch that turns the conversation headers off: one of `0`,
+/// `off`, `false` or `no`, as written.
+pub const CODEX_BIND_SWITCH: &str = "K2_CODEX_PASSPORT_BIND";
+
+/// The shell's `_k2_codex_headers` (`cli/src/cli-tools-policy.sh`): a
+/// Codex call's conversation headers, sent on every daemon request.
+/// None unless `thread` (`CODEX_THREAD_ID`, which Codex sets on every
+/// tool call) is set and not empty and `switch`
+/// ([`CODEX_BIND_SWITCH`]) is not one of `0`, `off`, `false` or `no`
+/// (`_cli_codex_bind_on`). Then [`CONVERSATION_HEADER`] with `root`
+/// (`CODEX_SESSION_ID`) and [`THREAD_HEADER`] with `thread`, in that
+/// order, each only when its value is 1 to 128 of ASCII letters, digits,
+/// `-` and `_` (`_K2_CODEX_ID_RE`); one that is not is left out on its
+/// own. So a value never needs escaping, and never holds a line break.
+pub fn codex_headers(
+    thread: Option<&std::ffi::OsStr>,
+    root: Option<&std::ffi::OsStr>,
+    switch: Option<&std::ffi::OsStr>,
+) -> Vec<(String, String)> {
+    if thread.is_none_or(|t| t.is_empty()) {
+        return Vec::new();
+    }
+    if matches!(
+        switch.and_then(|s| s.to_str()),
+        Some("0" | "off" | "false" | "no")
+    ) {
+        return Vec::new();
+    }
+    let id = |v: Option<&std::ffi::OsStr>| {
+        v.and_then(|v| v.to_str())
+            .filter(|v| {
+                (1..=128).contains(&v.len())
+                    && v.bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+            })
+            .map(str::to_string)
+    };
+    let mut headers = Vec::new();
+    if let Some(root) = id(root) {
+        headers.push((CONVERSATION_HEADER.to_string(), root));
+    }
+    if let Some(thread) = id(thread) {
+        headers.push((THREAD_HEADER.to_string(), thread));
+    }
+    headers
+}
+
+/// [`codex_headers`] from this process's environment.
+pub fn codex_headers_from_env() -> Vec<(String, String)> {
+    let var = std::env::var_os;
+    codex_headers(
+        var("CODEX_THREAD_ID").as_deref(),
+        var("CODEX_SESSION_ID").as_deref(),
+        var(CODEX_BIND_SWITCH).as_deref(),
+    )
+}
 
 /// A session passport. Never empty, so an empty Bearer is never sent.
 #[derive(Clone, PartialEq, Eq)]
@@ -745,6 +806,11 @@ pub struct Client {
     /// `X-K5-Owner-Source: disk` on every call made with it. Never sent
     /// with a passport or no credential.
     pub owner_from_disk: bool,
+    /// A Codex call's conversation headers ([`codex_headers`]), on every
+    /// request to the daemon, on either channel; never on a call to
+    /// something else (the Connect control plane). [`Client::new`] reads
+    /// them from the environment.
+    pub conversation: Vec<(String, String)>,
     /// `HOOK_SOCK` is set: a session. With no passport, a socket-first
     /// call refuses to send the owner token from disk
     /// ([`Error::NoOwnerInSession`]).
@@ -849,6 +915,13 @@ impl Client {
             auth,
             would_refuse: false,
             owner_from_disk: false,
+            // The unit tests' clients start with none, whatever the
+            // environment that runs them holds.
+            conversation: if cfg!(test) {
+                Vec::new()
+            } else {
+                codex_headers_from_env()
+            },
             session: false,
             no_token: false,
             version: crate::embedded::version().to_string(),
@@ -1996,6 +2069,17 @@ impl Client {
             }
         };
         let daemon = !matches!(kind, Kind::ControlPlane { .. });
+        // A Codex call's conversation headers: `_k2_curl` adds them to
+        // every daemon request (not a `_K2_CURL_NOT_DAEMON` one) as lines
+        // of its curl config, which curl reads before the command line's
+        // `-H`s: right after the credential. A body on stdin with no
+        // config of the caller's (`cli_post_json_stdin`, the vault
+        // socket's POST) gets them from a config file of its own, put
+        // after the hand-over headers.
+        let stdin_body = matches!(kind, Kind::PostJsonStdin | Kind::VaultSockPost);
+        if daemon && !stdin_body {
+            headers.extend(self.conversation.iter().cloned());
+        }
         if self.would_refuse && daemon {
             headers.push((WOULD_REFUSE_HEADER.into(), "1".into()));
         }
@@ -2009,6 +2093,9 @@ impl Client {
             && kind != Kind::Public
         {
             headers.push((OWNER_SOURCE_HEADER.into(), OWNER_SOURCE_DISK.into()));
+        }
+        if daemon && stdin_body {
+            headers.extend(self.conversation.iter().cloned());
         }
         headers.extend(late_credential);
         if let Some((_, tty)) = self.vault_sock.as_ref().filter(|_| vault_sock) {
@@ -3873,5 +3960,264 @@ mod tests {
             Ok((_, from)) => panic!("the redirect was followed: a connection from {from}"),
             Err(e) => panic!("accept: {e}"),
         }
+    }
+
+    /// `_k2_codex_headers`: both headers only with `CODEX_THREAD_ID` set
+    /// and not empty and the switch not off; each id checked on its own.
+    #[test]
+    fn codex_headers_follow_the_shell_s_rules() {
+        use std::ffi::OsStr;
+        let h = |t: Option<&str>, r: Option<&str>, s: Option<&str>| {
+            codex_headers(t.map(OsStr::new), r.map(OsStr::new), s.map(OsStr::new))
+        };
+        let both = vec![
+            (CONVERSATION_HEADER.to_string(), "root-1".to_string()),
+            (THREAD_HEADER.to_string(), "thread-1".to_string()),
+        ];
+        assert_eq!(h(Some("thread-1"), Some("root-1"), None), both);
+        // No thread, or an empty one: none, the root's either.
+        assert_eq!(h(None, Some("root-1"), None), vec![]);
+        assert_eq!(h(Some(""), Some("root-1"), None), vec![]);
+        // The switch: exactly 0, off, false or no turns them off.
+        for off in ["0", "off", "false", "no"] {
+            assert_eq!(
+                h(Some("thread-1"), Some("root-1"), Some(off)),
+                vec![],
+                "{off}"
+            );
+        }
+        for on in ["", "1", "on", "OFF", "No", " 0", "0 "] {
+            assert_eq!(
+                h(Some("thread-1"), Some("root-1"), Some(on)),
+                both,
+                "{on:?}"
+            );
+        }
+        // Only the thread: its header alone.
+        assert_eq!(
+            h(Some("thread-1"), None, None),
+            vec![(THREAD_HEADER.to_string(), "thread-1".to_string())]
+        );
+        // An id that is not 1 to 128 of [A-Za-z0-9_-] is left out alone.
+        let long = "a".repeat(129);
+        let max = "Z9_-".repeat(32);
+        for bad in ["", "a b", "a\nb", "a.b", "a/b", "\u{e9}", long.as_str()] {
+            assert_eq!(
+                h(Some("thread-1"), Some(bad), None),
+                vec![(THREAD_HEADER.to_string(), "thread-1".to_string())],
+                "{bad:?}"
+            );
+        }
+        assert_eq!(
+            h(Some("bad id"), Some("root-1"), None),
+            vec![(CONVERSATION_HEADER.to_string(), "root-1".to_string())]
+        );
+        assert_eq!(
+            h(Some(max.as_str()), Some(max.as_str()), None),
+            vec![
+                (CONVERSATION_HEADER.to_string(), max.clone()),
+                (THREAD_HEADER.to_string(), max.clone()),
+            ]
+        );
+    }
+
+    /// Not UTF-8: a thread still turns the switch on (the shell's `-n`),
+    /// but no id that is not ASCII is sent; a switch that is not UTF-8
+    /// is not off.
+    #[cfg(unix)]
+    #[test]
+    fn codex_headers_of_bytes_that_are_not_utf8() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let bad = OsStr::from_bytes(b"t\xff");
+        assert_eq!(
+            codex_headers(Some(bad), Some(OsStr::new("root-1")), None),
+            vec![(CONVERSATION_HEADER.to_string(), "root-1".to_string())]
+        );
+        assert_eq!(
+            codex_headers(
+                Some(OsStr::new("thread-1")),
+                None,
+                Some(OsStr::from_bytes(b"0\xff"))
+            ),
+            vec![(THREAD_HEADER.to_string(), "thread-1".to_string())]
+        );
+    }
+
+    /// Where `_k2_curl` puts them: right after the credential (its curl
+    /// config is read first), on every daemon kind and both channels;
+    /// after the hand-over headers for a body on stdin with no config
+    /// (`cli_post_json_stdin`, the vault socket's POST); never to the
+    /// Connect control plane. The embedded Python's come after its
+    /// hand-over headers.
+    #[test]
+    fn codex_headers_go_where_k2_curl_puts_them() {
+        let conv = vec![
+            (CONVERSATION_HEADER.to_string(), "root-1".to_string()),
+            (THREAD_HEADER.to_string(), "thread-1".to_string()),
+        ];
+        let names =
+            |r: &Request| -> Vec<String> { r.headers.iter().map(|(n, _)| n.clone()).collect() };
+        let mut owner = Client::new("127.0.0.1", 9, "/p", Auth::Owner("o".into()));
+        owner.conversation = conv.clone();
+        owner.owner_from_disk = true;
+        owner.would_refuse = true;
+        let first = [
+            "Authorization",
+            CONVERSATION_HEADER,
+            THREAD_HEADER,
+            WOULD_REFUSE_HEADER,
+            VERSION_HEADER,
+            VIA_HEADER,
+            OWNER_SOURCE_HEADER,
+        ];
+        for kind in [
+            Kind::Request,
+            Kind::RequestPost,
+            Kind::SendJsonGet,
+            Kind::QueryPost,
+        ] {
+            let (_, r) = owner.build(kind, Channel::Tcp, "/cli/x", &[], &[]).unwrap();
+            assert_eq!(names(&r), first, "{kind:?}");
+            assert_eq!(r.headers[1].1, "root-1");
+            assert_eq!(r.headers[2].1, "thread-1");
+        }
+        let (_, r) = owner
+            .build(Kind::PostJson, Channel::Tcp, "/cli/x", &[], b"{}")
+            .unwrap();
+        assert_eq!(names(&r), [&first[..], &["Content-Type"]].concat());
+        // A body on stdin: after the hand-over headers, before its Bearer.
+        let (_, r) = owner
+            .build(Kind::PostJsonStdin, Channel::Tcp, "/cli/x", &[], b"{}")
+            .unwrap();
+        assert_eq!(
+            names(&r),
+            [
+                WOULD_REFUSE_HEADER,
+                VERSION_HEADER,
+                VIA_HEADER,
+                OWNER_SOURCE_HEADER,
+                CONVERSATION_HEADER,
+                THREAD_HEADER,
+                "Authorization",
+                "Content-Type"
+            ]
+        );
+        // No credential (the public GET): first.
+        let (_, r) = owner
+            .build(Kind::Public, Channel::Tcp, "/boot-status", &[], &[])
+            .unwrap();
+        assert_eq!(
+            names(&r),
+            [
+                CONVERSATION_HEADER,
+                THREAD_HEADER,
+                WOULD_REFUSE_HEADER,
+                VERSION_HEADER,
+                VIA_HEADER
+            ]
+        );
+        // The cell socket: after the passport.
+        let mut pass = Client::new(
+            "127.0.0.1",
+            9,
+            "/p",
+            Auth::Passport {
+                passport: Passport::new("s.t").unwrap(),
+                sock: Some(PathBuf::from("/tmp/cell.sock")),
+            },
+        );
+        pass.conversation = conv.clone();
+        for kind in [Kind::Request, Kind::SendJsonPost] {
+            let (_, r) = pass
+                .build(kind, Channel::Uds, "/cli/x", &[], b"{}")
+                .unwrap();
+            let n = names(&r);
+            assert_eq!(
+                &n[..5],
+                [
+                    "Authorization",
+                    CONVERSATION_HEADER,
+                    THREAD_HEADER,
+                    VERSION_HEADER,
+                    VIA_HEADER
+                ],
+                "{kind:?}"
+            );
+        }
+        // The vault socket: GET first; POST (stdin) after the hand-over ones.
+        pass.vault_sock = Some((PathBuf::from("/tmp/vault.sock"), true));
+        let (_, r) = pass
+            .build(
+                Kind::VaultSockGet,
+                Channel::Uds,
+                "/cli/vault/status",
+                &[],
+                &[],
+            )
+            .unwrap();
+        assert_eq!(
+            names(&r),
+            [
+                CONVERSATION_HEADER,
+                THREAD_HEADER,
+                VERSION_HEADER,
+                VIA_HEADER,
+                TTY_HEADER
+            ]
+        );
+        let (_, r) = pass
+            .build(
+                Kind::VaultSockPost,
+                Channel::Uds,
+                "/cli/vault/reveal",
+                &[],
+                b"{}",
+            )
+            .unwrap();
+        assert_eq!(
+            names(&r),
+            [
+                VERSION_HEADER,
+                VIA_HEADER,
+                CONVERSATION_HEADER,
+                THREAD_HEADER,
+                TTY_HEADER,
+                "Content-Type"
+            ]
+        );
+        // The Connect control plane is not the daemon: none.
+        let (_, r) = owner
+            .build(
+                Kind::ControlPlane { put: false },
+                Channel::Tcp,
+                "/v1/x",
+                &[],
+                b"{}",
+            )
+            .unwrap();
+        assert_eq!(names(&r), ["Authorization", "Content-Type"]);
+        // With none set, nothing new on any of them.
+        let plain = Client::new("127.0.0.1", 9, "/p", Auth::Owner("o".into()));
+        let (_, r) = plain
+            .build(Kind::Request, Channel::Tcp, "/cli/x", &[], &[])
+            .unwrap();
+        assert_eq!(names(&r), ["Authorization", VERSION_HEADER, VIA_HEADER]);
+        // The embedded Python: after its hand-over headers.
+        let opener = super::super::urllib::Opener::from_client(&owner);
+        let hand: Vec<&str> = opener.handover.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(
+            hand,
+            [
+                WOULD_REFUSE_HEADER,
+                VERSION_HEADER,
+                VIA_HEADER,
+                OWNER_SOURCE_HEADER,
+                CONVERSATION_HEADER,
+                THREAD_HEADER
+            ]
+        );
+        let opener = super::super::urllib::Opener::from_client(&plain);
+        assert!(opener.handover.iter().all(|(n, _)| !n.starts_with("X-K2-")));
     }
 }

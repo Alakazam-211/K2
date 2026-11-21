@@ -34,8 +34,10 @@
 //! are the native ones, in the shell's place (`k5_request()` adds them
 //! last): `X-K5-Would-Refuse: 1` when the passport rule would refuse,
 //! `X-K5-Cli-Version`, `X-K5-Cli-Via: native`, and `X-K5-Owner-Source:
-//! disk` on a call made with the owner token from disk. The shell's
-//! `X-K5-Cli-Noun` is the shell's only, as for curl's calls.
+//! disk` on a call made with the owner token from disk, then a Codex
+//! call's `X-K2-Conversation` and `X-K2-Thread`
+//! ([`super::client::codex_headers`]). The shell's `X-K5-Cli-Noun` is
+//! the shell's only, as for curl's calls.
 //!
 //! The credential is the caller's to add (`if token:
 //! req.add_header("Authorization", "Bearer " + token)`), from
@@ -378,6 +380,9 @@ impl Opener {
                 OWNER_SOURCE_DISK.to_string(),
             ));
         }
+        // `_k5_py_headers` prints a Codex call's conversation headers
+        // after its hand-over headers.
+        handover.extend(client.conversation.iter().cloned());
         Opener {
             host: client.host.clone(),
             port: client.port,

@@ -96,6 +96,8 @@
 //!
 //! - [`Opener::open`] and [`Opener::open_retrying`] hand a redirect back
 //!   as an [`Outcome::HttpError`]; plain urllib would follow it.
+//! - A version of the daemon that is not the binary's prints the binary's
+//!   one line ([`super::skew`]), as every native call does.
 //!
 //! # Redirects
 //!
@@ -109,8 +111,6 @@
 //! ([`Refused::write`]) and ends with [`Refused::EXIT`]. Every block that
 //! calls the daemon runs the rule, so a family moves to the `_ruled` pair
 //! as it is checked against it.
-//! - A version of the daemon that is not the binary's prints the binary's
-//!   one line ([`super::skew`]), as every native call does.
 
 use super::client::{Auth, Client, OWNER_SOURCE_DISK, OWNER_SOURCE_HEADER, VERSION_HEADER};
 use super::client::{VIA_HEADER, VIA_NATIVE, WOULD_REFUSE_HEADER};

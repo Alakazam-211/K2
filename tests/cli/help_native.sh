@@ -32,8 +32,10 @@
 #      stream is exactly one cli/text/help file while the other is empty;
 #   2. the trace (bash -x) from the router's case to the EXIT trap is the
 #      same in all, and each step in it is one of: case, shift, local,
-#      for, return, exit, true, :, break, continue, a variable assignment,
-#      a call of a function the script defines, `[` or `[[` comparing two
+#      for, return, exit, true, :, break, continue, a variable assignment
+#      (`=` or `+=`), `set --` (it only sets the positional words: cmd_app's
+#      --assign pre-scan), a call of a function the script defines, `[` or
+#      `[[` comparing two
 #      words, and exactly one `cat` with no arguments (the quoted heredoc);
 #      never a subshell or command substitution, an echo or printf, a file
 #      or string test (-f, -n, ...), another program, or a step that spans
@@ -388,7 +390,11 @@ def plain(steps, want_cats=1):
             cats += 1
         elif word in OK_WORDS:
             continue
-        elif re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", word):
+        elif re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", word):
+            continue
+        elif word == "set" and (rest == "--" or rest.startswith("-- ")):
+            # `set -- …` sets the positional words and nothing else (0.46.17:
+            # cmd_app's --assign pre-scan, `set -- "${_APP_ARGS[@]}"`).
             continue
         elif word in ("'['", "[", "[["):
             toks = rest.split(" ")

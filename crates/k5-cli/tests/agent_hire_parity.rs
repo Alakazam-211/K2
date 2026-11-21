@@ -84,8 +84,7 @@ fn not_found() -> Reply {
 
 const CORE_OK: &str = r#"{"ok":true,"steps":[{"step":"create-dir","status":"done"},{"step":"write-persona","status":"done"},{"step":"register-workspace","status":"done"}]}"#;
 
-const SET_SKIPPED: &str =
-    r#"{"ok":true,"actions":[{"field":"agent_mode","status":"skipped","reason":"already custom"}]}"#;
+const SET_SKIPPED: &str = r#"{"ok":true,"actions":[{"field":"agent_mode","status":"skipped","reason":"already custom"}]}"#;
 
 const SET_OK: &str = r#"{"ok":true,"actions":[{"field":"agent_mode","status":"done"}]}"#;
 

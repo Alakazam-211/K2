@@ -1243,42 +1243,36 @@ fn help_never_acts() {
     check_all(&rig, v);
 }
 
-/// `subdomain create|point|rm` take `-h` and `--help` for words and act:
-/// a shell bug (help must never act), checked on bash alone so it flips
-/// when bash's fix lands. The binary hands these lines to the shell.
+/// `subdomain create|point|rm` with `-h` or `--help` anywhere: the help,
+/// no request (the shell's fix: help never acts; this row checked the
+/// shell's bug on bash alone until it landed).
 #[test]
-fn subdomain_writes_act_on_help_bash_bug() {
+fn subdomain_writes_on_help_never_act() {
     let rig = Rig::new(VERB, "helpbug");
-    for (args, replies, n) in [
-        (
-            &["subdomain", "rm", "--help"][..],
-            vec![ok(CHECKED), relayed(200, "{}"), ok(CHECKED), ok("{}")],
-            4,
-        ),
-        (
-            &[
-                "subdomain",
-                "create",
-                "a",
-                "--target",
-                "example.invalid:1",
-                "-h",
-            ],
-            vec![ok(CHECKED), relayed(201, "{}"), ok(CHECKED), ok("{}")],
-            4,
-        ),
-    ] {
-        let args: &'static [&'static str] = Box::leak(args.to_vec().into_boxed_slice());
-        let c = on("acts on help", args, replies, 0, n);
-        rig.prepare(Side::Bash, &c);
-        let bash = rig.run(true, &c);
-        assert_eq!(bash.code, Some(0), "{args:?}: {bash:?}");
-        assert_eq!(
-            rig.read(Side::Bash, false, c.name).len(),
-            n,
-            "{args:?}: bash sent them"
-        );
-    }
+    let lines: [&'static [&'static str]; 3] = [
+        &["subdomain", "rm", "--help"],
+        &[
+            "subdomain",
+            "create",
+            "a",
+            "--target",
+            "example.invalid:1",
+            "-h",
+        ],
+        &[
+            "subdomain",
+            "point",
+            "a",
+            "--target",
+            "example.invalid:1",
+            "--help",
+        ],
+    ];
+    let v = lines
+        .into_iter()
+        .map(|a| shell(on("help", a, vec![], 0, 0)))
+        .collect();
+    check_all(&rig, v);
 }
 
 /// The binary's lines name the brand's command and product.

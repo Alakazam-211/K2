@@ -796,7 +796,12 @@ fn read_on_the_cell_socket_with_no_passport() {
             sent[0]
         );
         if sent.len() > 1 {
-            assert!(sent[1].contains(&format!("Bearer {OWNER}")), "{}: {}", c.name, sent[1]);
+            assert!(
+                sent[1].contains(&format!("Bearer {OWNER}")),
+                "{}: {}",
+                c.name,
+                sent[1]
+            );
         }
     }
 }
@@ -819,7 +824,9 @@ fn read_lines_say_the_brand_s_name() {
     );
     let (out, log) = rig.binary(&c, false);
     assert!(
-        out.stderr.contains(&format!("Error: in a session, {product} doesn't act as the owner")),
+        out.stderr.contains(&format!(
+            "Error: in a session, {product} doesn't act as the owner"
+        )),
         "{}",
         out.stderr
     );

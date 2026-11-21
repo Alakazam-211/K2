@@ -1422,8 +1422,17 @@ impl Client {
     /// where the owner token from disk is never sent
     /// ([`Error::NoOwnerInSession`]). With a passport, or no live socket,
     /// it is [`Client::send`].
-    pub fn send_bare(&mut self, sock: &Path, endpoint: &str, call: Call<'_>) -> Result<Response, Error> {
-        if self.passport().is_some() || self.force_tcp || !is_socket(sock) || !uds_eligible(endpoint) {
+    pub fn send_bare(
+        &mut self,
+        sock: &Path,
+        endpoint: &str,
+        call: Call<'_>,
+    ) -> Result<Response, Error> {
+        if self.passport().is_some()
+            || self.force_tcp
+            || !is_socket(sock)
+            || !uds_eligible(endpoint)
+        {
             return self.send(endpoint, call);
         }
         let t0 = Instant::now();

@@ -491,8 +491,15 @@ fn a_kit_id_is_the_kit_s_explain() {
         let query = target
             .strip_prefix("/cli/kit/explain?")
             .unwrap_or_else(|| panic!("{}: one GET of the kit's explain: {line}", c.name));
-        let keys: Vec<_> = query.split('&').map(|kv| kv.split('=').next().unwrap()).collect();
-        let want: &[&str] = if c.args.contains(&"--json") { &["id", "json"] } else { &["id"] };
+        let keys: Vec<_> = query
+            .split('&')
+            .map(|kv| kv.split('=').next().unwrap())
+            .collect();
+        let want: &[&str] = if c.args.contains(&"--json") {
+            &["id", "json"]
+        } else {
+            &["id"]
+        };
         assert_eq!(keys, want, "{}: no path or file is sent: {line}", c.name);
         assert_eq!(body, "", "{}: a GET has no body", c.name);
         assert!(
@@ -524,7 +531,10 @@ fn explain_lines_say_the_brand_s_name() {
     let rig = Rig::new(VERB, "brand");
     let c = case("two ids", &["a", "b"], &[], vec![], owner_and_port, 2, 0);
     let (out, log) = rig.binary(&c, false);
-    assert_eq!(out.stderr, format!("usage: {cli} explain [<id>] [--json]\n"));
+    assert_eq!(
+        out.stderr,
+        format!("usage: {cli} explain [<id>] [--json]\n")
+    );
     assert!(log.is_empty(), "{log:?}");
     let c = case(
         "a kit id's row",
@@ -537,6 +547,10 @@ fn explain_lines_say_the_brand_s_name() {
     );
     let (out, log) = rig.binary(&c, false);
     assert_eq!(out.code, Some(4), "{out:?}");
-    assert!(!out.stderr.contains("k5 ") && !out.stderr.contains("k2 "), "{}", out.stderr);
+    assert!(
+        !out.stderr.contains("k5 ") && !out.stderr.contains("k2 "),
+        "{}",
+        out.stderr
+    );
     assert_eq!(log.len(), 1, "{log:?}");
 }

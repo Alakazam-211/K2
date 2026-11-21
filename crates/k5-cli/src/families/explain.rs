@@ -799,7 +799,10 @@ mod tests {
     #[test]
     fn the_kit_s_request_and_answers() {
         assert_eq!(kit_query("MPC-E301", false), "id=MPC-E301");
-        assert_eq!(kit_query("mpc-\"\\x &", true), "id=mpc-%22%5Cx%20%26&json=1");
+        assert_eq!(
+            kit_query("mpc-\"\\x &", true),
+            "id=mpc-%22%5Cx%20%26&json=1"
+        );
         let a = kit_answer("200", br#"{"exit": 0, "stdout": "page\n"}"#, false);
         assert_eq!(
             (a.stdout.as_str(), a.stderr.as_str(), a.exit),

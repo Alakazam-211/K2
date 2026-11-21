@@ -141,7 +141,10 @@ impl CRig {
     }
 
     fn mask(&self, side: &Side, text: &str) -> String {
-        let t = text.replace(&side.dir.display().to_string(), "<dir>");
+        let t = text
+            .replace(&side.dir.display().to_string(), "<dir>")
+            .replace(&format!("127.0.0.1:{}", side.remote.port), "<remote>")
+            .replace(&format!("127.0.0.1:{}", side.local.port), "<local>");
         mask_ids(&t)
     }
 
@@ -305,7 +308,23 @@ impl CRig {
                 want.stderr = traceback_shape(&want.stderr);
                 got.stderr = traceback_shape(&got.stderr);
             }
-            assert_eq!(got, want, "{}: the {} side", c.name, SIDES[i]);
+            let fields = [
+                ("exit", format!("{:?}", got.code), format!("{:?}", want.code)),
+                ("stdout", got.stdout.clone(), want.stdout.clone()),
+                ("stderr", got.stderr.clone(), want.stderr.clone()),
+                ("local", got.local.join("\n----\n"), want.local.join("\n----\n")),
+                ("remote", got.remote.join("\n----\n"), want.remote.join("\n----\n")),
+                ("clone-tmp", got.tmp.join("\n"), want.tmp.join("\n")),
+            ];
+            for (what, g, w) in fields {
+                assert!(
+                    g == w,
+                    "{}: the {} side's {what} differs from bash's\n--- {}:\n{g}\n--- bash:\n{w}",
+                    c.name,
+                    SIDES[i],
+                    SIDES[i]
+                );
+            }
         }
     }
 }

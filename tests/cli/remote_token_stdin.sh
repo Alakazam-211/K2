@@ -200,7 +200,7 @@ token_case() {
 }
 
 # 1. k2 clone preview <ws> --host H.
-token_case "clone preview" /cli/clone/preview clone preview ws1 --host "$REMOTE" --json
+TOKEN_CASE_NATIVE=native token_case "clone preview" /cli/clone/preview clone preview ws1 --host "$REMOTE" --json
 run_k2 "" clone --help
 case "$OUT" in *"--token-stdin                remote token on stdin"*) ok "clone help: --token-stdin is shown" ;; *) bad "clone help: no --token-stdin line" ;; esac
 

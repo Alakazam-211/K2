@@ -370,7 +370,7 @@ hanging() {
     local i
     for i in $(seq 1 300); do [ -f "$W/hanging" ] && break; sleep 0.1; done
     [ -f "$W/hanging" ] || { bad "the download never reached the second range"; return 1; }
-    if [ -n "${K5_CLI_UNDER_TEST:-}" ]; then
+    if [ "$K2" != "$CLI_BASH_SOURCE" ]; then
         # The k5 binary is its own engine: no python3 child.
         ENGINE="$BG"
     else
@@ -682,7 +682,8 @@ echo "== a Tailscale address as written may take the token over plain http =="
 eval "$(awk "/^_CLONE_URL_RULE='/,/^'\$/" "$CLI_BASH_SOURCE")"
 [ -n "${_CLONE_URL_RULE:-}" ] || { bad "no _CLONE_URL_RULE in $CLI_BASH_SOURCE"; }
 # connecting PID HOST: PID has a TCP connection to HOST open or opening
-# (the k5 binary starts no python3 for the audit hook to see).
+# (the k5 binary starts no python3 for the audit hook to see; the test
+# unsets K5_*, so the binary is told by $K2 not being the shell's source).
 connecting() {
     local hex
     if [ -r /proc/net/tcp ]; then
@@ -707,7 +708,7 @@ for h in 100.64.0.1 "[fd7a:115c:a1e0::1]"; do
     bg clone preview ws1 --host "http://$h:9" --json
     seen=""
     for _ in $(seq 1 150); do
-        if [ -n "${K5_CLI_UNDER_TEST:-}" ]; then
+        if [ "$K2" != "$CLI_BASH_SOURCE" ]; then
             connecting "$BG" "${h//[\[\]]/}" && { seen="${h//[\[\]]/}"; break; }
         else
             grep -Fq "${h//[\[\]]/}" "$W/audit.log" && { seen="$(cat "$W/audit.log")"; break; }
@@ -717,6 +718,12 @@ for h in 100.64.0.1 "[fd7a:115c:a1e0::1]"; do
     pkill -P "$BG" 2>/dev/null || true
     kill "$BG" 2>/dev/null || true
     bg_wait
+    # The binary's connect can fail at once (no route to the address): its
+    # daemon_unreachable line for that host says it tried, as Python's
+    # audit hook does for the shell's engine.
+    if [ -z "$seen" ] && [ "$K2" != "$CLI_BASH_SOURCE" ]; then
+        case "$ERR" in *daemon_unreachable*"remote server http://$h:9:"*) seen="${h//[\[\]]/}" ;; esac
+    fi
     expect_has "http://$h: allowed, so the engine connects there" "$seen" "${h//[\[\]]/}"
     expect_not "http://$h: not refused" "$ERR" "refused:"
     expect_not "http://$h: no warning" "$ERR" "warning:"

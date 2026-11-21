@@ -874,6 +874,7 @@ fn spawn_cat_live() -> session_lookup::LiveSession {
         overlay: None,
         survive: false,
         ptyd_meta: None,
+        isolation: None,
     };
     let s = k2_core::test_env::spawn_plain_pty(cfg).expect("spawn cat");
     session_lookup::LiveSession(s)

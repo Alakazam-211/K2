@@ -1,0 +1,15 @@
+-- 0323: an agent's isolation mode (Agent Isolation M1, 0.46.17;
+-- plan-agent-isolation-build-v1 §6, owner decision 2026-11-21).
+--
+-- `projects.isolation_mode`: 'off' (the default, every agent today) or
+-- 'fence' (the agent's terminals start under a Landlock folder fence: its
+-- workspace, its own login slot and the build caches, nothing else; Linux).
+-- 'jail' is kept for M6. Written only by POST /cli/agent-access/set
+-- {toggle: "fence"}: the owner turns it on or off, an Admin may only turn
+-- it on, an agent never (a passport never reaches that route). Read at
+-- each spawn by k2-daemon `agent_isolation::workspace_and_fence`.
+--
+-- The per-agent cgroup identity is not a column: it is on for every agent
+-- wherever the box has it (k2_core::agent_cgroup), with one daemon-wide
+-- emergency off-switch in the environment.
+ALTER TABLE projects ADD COLUMN isolation_mode TEXT NOT NULL DEFAULT 'off' CHECK (isolation_mode IN ('off', 'fence', 'jail'));

@@ -1,0 +1,22 @@
+k2 agent whois — which agent owns a process (owner only)
+
+USAGE
+  k2 agent whois <pid> [--json]
+
+WHAT IT SAYS
+  The process's cgroup and the agent it belongs to: every terminal session
+  of an agent, and every process it starts, runs in the agent's own cgroup
+  (agents/a-<workspace id>/ under the daemon's unit). Also visible with
+  systemd-cgls and ps -o pid,cgroup,cmd.
+
+  Traceable is not unforgeable: an agent without the folder fence runs as
+  you, so it can move a process into another agent's cgroup, or read the
+  owner token on disk. The fence (k2 agent isolation <ws> fence) closes
+  both for that agent.
+
+WHO MAY
+  The server's owner, from a terminal outside K2 (an agent's passport is
+  refused). Linux only; elsewhere it says identity is unavailable.
+
+SEE ALSO
+  k2 study isolation · k2 app doctor (agentIdentity)

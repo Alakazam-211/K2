@@ -1,0 +1,29 @@
+k2 agent isolation — turn an agent's folder fence on or off (Linux)
+
+USAGE
+  k2 agent isolation <workspace> fence|off [--json]
+
+WHAT IT DOES
+  fence  The agent's next terminals start under a folder fence that K5 loads
+         into the standard Linux kernel (Landlock). They can open their own
+         workspace, their own temp folder, their own harness login and the
+         shared build caches, and read the system and the toolchains.
+         Nothing else: not a sibling agent's folder, not ~/.k2 (the owner
+         token, the vault), not ~/.ssh, and they can't leave their cgroup.
+  off    Back to the default: the agent's terminals see what you see.
+
+  Off by default for every agent. Running terminals keep what they started
+  with; restart the agent (k2 agent restart <name>) to apply a change.
+
+WHO MAY
+  The server's owner turns it on or off. An admin may turn it on, not off.
+  An agent can't change its own (exit 3).
+
+NEEDS
+  Linux with Landlock (Ubuntu 24.04's kernel has it on). Refused (exit 3,
+  fence_unavailable) where the kernel has none, or when the agent's
+  workspace is your home folder or holds ~/.k2. Macs get their fence in a
+  later release.
+
+SEE ALSO
+  k2 study isolation · k2 agent whois <pid> · k2 app doctor (agentIdentity)

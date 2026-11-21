@@ -23,6 +23,8 @@ COMMANDS
   identity [<name>]       Show or change the picture, color and name (an agent: its own color and picture)
   access set <ws> chat_manage on|off
                           "Manage chat and voice" for that workspace's agent (the owner or an admin)
+  isolation <ws> fence|off  The agent's folder fence (Linux; off by default; the owner's switch)
+  whois <pid>             Which agent owns a process (owner only; Linux)
   context <subcommand>    Manage the always-on AGENTS.md context stack (layers)
   team [served|link|unlink]  Team links: who serves this agent, who it serves (agents read their own)
   instances [show|hire|retire]  Hires made from an inline recipe (owner/admin; v1 API keys hire too)

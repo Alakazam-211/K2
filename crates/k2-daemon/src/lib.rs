@@ -304,6 +304,9 @@ pub mod seed_users;
 // (default ON; opt out with K2_HOOK_SCOPED=0). Owner never enters agent env.
 pub mod cell_identity;
 pub mod cell_server;
+// Agent Isolation M1: per-agent cgroup identity, the passport checks on the
+// session socket and TCP, whois, and the per-agent folder fence switch.
+pub mod agent_isolation;
 // A /cli/* request over 5 s (or still running at 30 s) logs one line.
 pub mod slow_request;
 // gzip for JSON that leaves this machine; ETag/304 on the projects list.

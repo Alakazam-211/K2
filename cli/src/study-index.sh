@@ -90,6 +90,7 @@ _study_title() {
         send-feedback) echo "Telling K2's makers about K2: k2 send-feedback, what is sent, agents' limits" ;;
         organization) echo "The Org Chart: orgs, heads and the daily bulletin" ;;
         agent-templates) echo "Agent templates: hire a type, save your own, upgrade" ;;
+        isolation) echo "Agent isolation: each agent's own cgroup, passports, the folder fence" ;;
         postal) echo "Postal: friends on other machines (Beta)" ;;
         notifications) echo "Thread posts and phone pushes" ;;
         data-sources) echo "Data sources and triggers" ;;
@@ -250,6 +251,7 @@ _study_page() {
         send-feedback) _study_page_send_feedback ;;
         organization) _study_page_organization ;;
         agent-templates) _study_page_agent_templates ;;
+        isolation) _study_page_isolation ;;
         postal) _study_page_postal ;;
         *) return 1 ;;
     esac

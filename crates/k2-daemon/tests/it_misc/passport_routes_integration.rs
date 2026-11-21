@@ -150,6 +150,7 @@ fn live_passport(cwd: &Path, ws_id: &str, key: &str, address: &str) -> (String, 
         overlay: None,
         survive: false,
         ptyd_meta: None,
+        isolation: None,
     })
     .expect("spawn a live session");
     k2_daemon::v2_session_map::register(key.to_string(), session.clone());

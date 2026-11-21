@@ -410,6 +410,10 @@ pub struct DaemonPtyConfig {
     /// ignored for in-process sessions. Identity only: never env values,
     /// tokens or keys (P72).
     pub ptyd_meta: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Agent Isolation M1: the session runs in its agent's cgroup and, when
+    /// the owner turned it on, under the agent's folder fence (Linux,
+    /// passthrough sessions; `crate::agent_cgroup`). `None`: as before.
+    pub isolation: Option<crate::agent_cgroup::SessionIsolation>,
 }
 
 impl Default for DaemonPtyConfig {
@@ -431,6 +435,7 @@ impl Default for DaemonPtyConfig {
             overlay: None,
             survive: false,
             ptyd_meta: None,
+            isolation: None,
         }
     }
 }
@@ -1079,6 +1084,45 @@ impl DaemonPtySession {
             }
         }
 
+        // Agent Isolation M1: an isolated session starts through the exec
+        // helper, which joins the agent's cgroup and applies its fence
+        // before the program runs (both backends; `agent_cgroup::wrap`).
+        // Anything it can't do fails the spawn here, with the reason:
+        // never a session outside its cgroup, never silently unfenced.
+        let shell = match cfg.isolation.as_ref() {
+            Some(iso) if matches!(cfg.sandbox, crate::terminal::SandboxSpec::Passthrough) => {
+                let (program, args) = match shell {
+                    Some(s) => (s.program, s.args),
+                    None => {
+                        #[cfg(unix)]
+                        {
+                            let user = crate::terminal::ptyd::env::ShellUser::from_env()?;
+                            let mut argv = crate::terminal::ptyd::env::default_shell_argv(&user).into_iter();
+                            (argv.next().unwrap_or_else(|| "/bin/sh".into()), argv.collect())
+                        }
+                        #[cfg(not(unix))]
+                        {
+                            return Err(io::Error::other("agent isolation is Linux only"));
+                        }
+                    }
+                };
+                let (helper, argv, spec) = crate::agent_cgroup::wrap(iso, program, args, &child_env).map_err(|e| {
+                    log_debug!("[agents] session={} not started: isolation refused: {e}", cfg.session_id);
+                    io::Error::new(io::ErrorKind::PermissionDenied, format!("K5 agent isolation: {e}"))
+                })?;
+                child_env.insert(crate::agent_fence::ENV_SPEC.to_string(), spec);
+                log_debug!(
+                    "[agents] session={} agent={} identity={} fence={}",
+                    cfg.session_id,
+                    iso.ws,
+                    iso.identity,
+                    iso.fence
+                );
+                Some(ShellSpec { program: helper, args: argv })
+            }
+            _ => shell,
+        };
+
         // Capture spawn-failure diagnostics before `req` takes ownership
         // of `shell` / `child_env`. PATH entry count helps distinguish
         // bare-name ENOENT (PATH too thin) from other spawn errors.
@@ -1182,7 +1226,9 @@ impl DaemonPtySession {
         };
         // S17 / AR18: the session's child joins the agents' memory budget
         // (a no-op unless the daemon's unit is delegated; agents_leaf).
-        if let Some(pid) = child_pid.and_then(|p| u32::try_from(p).ok()) {
+        // An identity session joined its own cgroup itself (the helper).
+        let self_placed = cfg.isolation.as_ref().is_some_and(|i| i.identity);
+        if let Some(pid) = child_pid.and_then(|p| u32::try_from(p).ok()).filter(|_| !self_placed) {
             crate::agents_leaf::join(pid);
         }
 
@@ -1404,7 +1450,10 @@ impl DaemonPtySession {
         // daemon unit's cgroup tree and owned by the same user. What the
         // child forked before this move, and the sessions an older ptyd
         // kept across a restart, follow on agents_leaf's sweep.
-        if let Ok(p) = u32::try_from(pid) {
+        // An identity session joined its own cgroup itself (the helper);
+        // moving it to the shared leaf would undo that.
+        let self_placed = cfg.isolation.as_ref().is_some_and(|i| i.identity);
+        if let (false, Ok(p)) = (self_placed, u32::try_from(pid)) {
             crate::agents_leaf::join(p);
         }
         // The vault binds this session's agent socket record to this ptyd

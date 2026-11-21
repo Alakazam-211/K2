@@ -1,25 +1,32 @@
-//! Per-cell Unix-domain-socket hook server (#58 Phase 1 — flag-gated by
-//! `K2_HOOK_SCOPED`, default ON; opt out with `0`/`false`/`off`).
+//! The per-session Unix socket (`<sid>.sock`, `$K2_HOOK_SOCK`): every agent
+//! terminal's own door into the daemon (#58; on unless `K2_HOOK_SCOPED=0`).
 //!
-//! ## What this is
+//! ## What it serves (0.46.17)
 //!
-//! Phase 0 built the per-cell `UnixListener` bind helper ([`crate::cell_uds`])
-//! and the scoped-token registry ([`crate::session_token`]) but never SERVED
-//! traffic on the socket. Phase 1 turns it on: when scoped hooks are enabled,
-//! [`crate::v2_spawn::handle_v2_spawn`] mints a per-cell token, binds the
-//! cell's socket, and hands the listener here. [`serve_cell`] runs a small
-//! accept loop that authenticates + serves the agent **lifecycle hook**
-//! (`/hook/complete`) for exactly THAT cell.
+//! `v2_spawn` and `spawn` mint the session's passport, bind
+//! this socket and hand the listener to [`serve_cell`]. It answers:
+//! - the lifecycle hooks (`/hook/complete`, `/hook/event`), pinned to the
+//!   session's pane;
+//! - the agent verbs ([`crate::session_token::is_agent_verb`]): the routes
+//!   in `dispatch_cell_verb` with their own arm, and every other agent-verb
+//!   GET through `cli::dispatch`; a route with no arm answers the
+//!   "not served on cell socket" 404 and the CLI goes on over TCP;
+//! - **any route the CLI would send over loopback TCP** (Agent Isolation
+//!   M1): the `k2` CLI in a session sends every passport request here, the
+//!   ones it used to send over TCP marked `X-K2-Via-Tcp: 1`. After this
+//!   socket's checks they go to the TCP dispatcher unchanged, with a proof
+//!   only this daemon process holds ([`crate::agent_isolation`]), so they
+//!   meet exactly the route code and guards they met on TCP.
 //!
-//! ## Why a dedicated mini-server instead of the TCP dispatcher
+//! ## Agent identity (Agent Isolation M1)
 //!
-//! The PRD's full "generalize `dispatch` over a stream trait" is a larger
-//! change (and the H1 close); Phase 1 keeps the TCP `routes::dispatcher`
-//! UNTOUCHED and serves only the one route the cell channel needs now. The
-//! general `k2` verbs (`msg`/`reply`/…) still ride loopback-TCP in Phase 1
-//! (with the disk OWNER token — see the `cli/k2` + `notify.sh` inversion), so
-//! anything other than `/hook/complete` here returns 404 and the caller falls
-//! back to TCP. No stranding; minimal blast radius.
+//! A session placed in its agent's cgroup (`agents/a-<workspace id>`) has
+//! its passport bound to it. This socket accepts a bound passport only from
+//! a process in that cgroup (the peer's pidfd → its cgroup): a passport
+//! copied to another agent's shell, or any shell outside, gets 403
+//! `passport_wrong_cgroup` and an audit row. Loopback TCP refuses a bound
+//! passport outright (no peer process there), except this socket's own
+//! forward.
 //!
 //! ## Identity = the connection, never the body (PRD §3.2)
 //!
@@ -492,6 +499,27 @@ mod unix_impl {
             .map(str::to_string)
             .unwrap_or(req_token);
 
+        // Agent Isolation M1: a request the `k2` CLI used to send over
+        // loopback TCP, sent here instead (`X-K2-Via-Tcp: 1`). Its passport
+        // must be THIS cell's and come from this agent's cgroup; then the
+        // TCP dispatcher answers it, with its own route code and guards
+        // (agent_isolation::forward_to_tcp). TCP refuses a bound passport
+        // that didn't come this way.
+        if crate::routes::http::extract_header(&head, crate::agent_isolation::VIA_TCP_HEADER).is_some() {
+            let v = crate::session_token::validate_hook(&presented)
+                .filter(|v| cell_verb_authorized(Some(v), &this_session_id, peer_uid, self_uid, cell_uid));
+            let Some(v) = v else {
+                write_response(&mut stream, "403 Forbidden", "application/json", r#"{"error":"Invalid or missing auth token"}"#, k5_version).await;
+                return;
+            };
+            if let Some(body) = crate::agent_isolation::check_socket_peer(stream.as_raw_fd(), &v) {
+                write_response(&mut stream, "403 Forbidden", "application/json", &body, k5_version).await;
+                return;
+            }
+            crate::agent_isolation::forward_to_tcp(&mut stream, &head, &body, &this_session_id).await;
+            return;
+        }
+
         // require_hook = capability allowlist (default-deny) + scoped-token
         // validation against the process registry. Computed ONCE for every
         // verb, before any handler runs.
@@ -560,6 +588,15 @@ mod unix_impl {
             let body = gated.as_deref().unwrap_or(r#"{"error":"Invalid or missing auth token"}"#);
             write_response(&mut stream, "403 Forbidden", "application/json", body, k5_version).await;
             return;
+        }
+
+        // Agent Isolation M1: a passport bound to its agent's cgroup is
+        // accepted only from a process in that cgroup (403 + audit row).
+        if let Some(v) = validated.as_ref() {
+            if let Some(body) = crate::agent_isolation::check_socket_peer(stream.as_raw_fd(), v) {
+                write_response(&mut stream, "403 Forbidden", "application/json", &body, k5_version).await;
+                return;
+            }
         }
 
         // A Codex call must come from this tab's conversation, and from a
@@ -1764,6 +1801,7 @@ mod unix_impl {
                 },
                 cred_mode: crate::session_token::CredMode::default(),
                 provider: crate::session_token::Provider::default(),
+                agent_cgroup: None,
             }
         }
 

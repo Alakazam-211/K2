@@ -51,6 +51,10 @@ case "${1:-help}" in
             # Sew for Apps (0.46.6): the switch the Sew hints name
             # (`k2 agent access set <ws> chat_manage on`), owner/admin only.
             access) shift 2; cmd_agent_access "$@" ;;
+            # 0.46.17 Agent Isolation M1: the per-agent folder fence (owner)
+            # and which agent owns a process (owner only).
+            isolation) shift 2; cmd_agent_isolation "$@" ;;
+            whois) shift 2; cmd_agent_whois "$@" ;;
             # 0.45.6 agent hire: team links, hire instances, the hire root.
             team|teams) shift 2; cmd_agent_team "$@" ;;
             instances|instance) shift 2; cmd_agent_instances "$@" ;;

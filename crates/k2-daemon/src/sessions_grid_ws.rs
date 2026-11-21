@@ -2675,6 +2675,7 @@ mod tests {
             overlay: None,
             survive: false,
             ptyd_meta: None,
+            isolation: None,
         };
         k2_core::test_env::spawn_plain_pty(cfg).expect("spawn cat")
     }

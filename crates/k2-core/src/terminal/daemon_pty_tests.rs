@@ -177,6 +177,7 @@ fn spawn_with_an_overlong_multiline_path_entry_returns() {
     let cfg = DaemonPtyConfig {
         survive: false,
         ptyd_meta: None,
+        isolation: None,
         session_id: SessionId::new(),
         cols: 80,
         rows: 24,
@@ -324,6 +325,7 @@ fn label_starts_with_seed_and_source() {
     let cfg = DaemonPtyConfig {
         survive: false,
         ptyd_meta: None,
+        isolation: None,
         session_id: SessionId::new(),
         cols: 80,
         rows: 24,
@@ -351,6 +353,7 @@ fn try_set_label_from_pty_drops_locked() {
     let cfg = DaemonPtyConfig {
         survive: false,
         ptyd_meta: None,
+        isolation: None,
         session_id: SessionId::new(),
         cols: 80,
         rows: 24,
@@ -380,6 +383,7 @@ fn try_set_label_from_pty_accepts_pty_source() {
     let cfg = DaemonPtyConfig {
         survive: false,
         ptyd_meta: None,
+        isolation: None,
         session_id: SessionId::new(),
         cols: 80,
         rows: 24,
@@ -441,6 +445,7 @@ fn set_label_without_lock_keeps_source() {
     let cfg = DaemonPtyConfig {
         survive: false,
         ptyd_meta: None,
+        isolation: None,
         session_id: SessionId::new(),
         cols: 80,
         rows: 24,
@@ -480,6 +485,7 @@ fn kill_terminates_and_reaps_child() {
     let cfg = DaemonPtyConfig {
         survive: false,
         ptyd_meta: None,
+        isolation: None,
         session_id: SessionId::new(),
         cols: 80,
         rows: 24,
@@ -1631,6 +1637,7 @@ fn kill_is_idempotent() {
     let cfg = DaemonPtyConfig {
         survive: false,
         ptyd_meta: None,
+        isolation: None,
         session_id: SessionId::new(),
         cols: 80,
         rows: 24,

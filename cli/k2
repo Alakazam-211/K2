@@ -1385,6 +1385,27 @@ _k2_stdin_secrets() {
     printf '\0'
 }
 _K2_CURL_TRIES=4
+# _k2_via_session_sock CFG URL ARGS… — true when this daemon request should
+# go over the session socket (Agent Isolation M1): a K2 session with its
+# socket, the request's credential is the session passport (in the curl
+# config), the URL is this machine's daemon on loopback, and the request
+# isn't on a socket already. Sets _K2_VIA_SOCK. K2_VIA_TCP=1 turns it off
+# (the daemon then refuses a bound passport: for tests of that refusal).
+_k2_via_session_sock() {
+    local cfg="$1" url="$2" a
+    shift 2
+    _K2_VIA_SOCK=""
+    [ "${K2_VIA_TCP:-0}" = 1 ] && return 1
+    [ -n "${SCOPED_TOKEN:-}" ] || return 1
+    _cli_skip_uds && return 1
+    case "$url" in http://127.0.0.1:*|http://localhost:*|http://\[::1\]:*) ;; *) return 1 ;; esac
+    case "$cfg" in *"Authorization: Bearer ${SCOPED_TOKEN}"*) ;; *) return 1 ;; esac
+    for a in "$@"; do
+        [ "$a" = "--unix-socket" ] && return 1
+    done
+    _K2_VIA_SOCK="$(_hook_sock)"
+    [ -n "$_K2_VIA_SOCK" ] && [ -S "$_K2_VIA_SOCK" ]
+}
 _k2_curl() {
     local cfg="$1"; shift
     local try=1 rc once=0 a i hdr_file="" hdr_arg
@@ -1429,6 +1450,15 @@ _k2_curl() {
         for ((i = ${#_K5_HDRS[@]} - 1; i >= 0; i--)); do
             set -- -H "${_K5_HDRS[$i]}" "$@"
         done
+        # Agent Isolation M1: in a K2 session, a request that carries the
+        # session's passport to this machine's daemon goes over the session
+        # socket, never loopback TCP: the daemon accepts a passport bound to
+        # its agent's cgroup only there (it checks the caller's cgroup; TCP
+        # names no process). The socket hands the request to the same TCP
+        # route code (X-K2-Via-Tcp), so nothing else changes.
+        if _k2_via_session_sock "$cfg" "$url" "$@"; then
+            set -- --unix-socket "$_K2_VIA_SOCK" -H "X-K2-Via-Tcp: 1" "$@"
+        fi
     fi
     while :; do
         rc=0
@@ -25191,6 +25221,170 @@ cmd_app_guest() {
     printf '%s' "$_CP_BODY" | _app_guest_rooms_print
 }
 
+# Agent Isolation M1 (plan-agent-isolation-build-v1): `k2 agent isolation`
+# (an agent's folder fence, owner-controlled) and `k2 agent whois` (which
+# agent owns a process; owner only). The identity itself (each agent's
+# terminals in their own cgroup) has no switch here: it is on wherever the
+# box has it; `k2 app doctor` and /boot-status say whether it does.
+
+cmd_help_agent_isolation() {
+    cat <<'EOF'
+k2 agent isolation — turn an agent's folder fence on or off (Linux)
+
+USAGE
+  k2 agent isolation <workspace> fence|off [--json]
+
+WHAT IT DOES
+  fence  The agent's next terminals start under a folder fence that K5 loads
+         into the standard Linux kernel (Landlock). They can open their own
+         workspace, their own temp folder, their own harness login and the
+         shared build caches, and read the system and the toolchains.
+         Nothing else: not a sibling agent's folder, not ~/.k2 (the owner
+         token, the vault), not ~/.ssh, and they can't leave their cgroup.
+  off    Back to the default: the agent's terminals see what you see.
+
+  Off by default for every agent. Running terminals keep what they started
+  with; restart the agent (k2 agent restart <name>) to apply a change.
+
+WHO MAY
+  The server's owner turns it on or off. An admin may turn it on, not off.
+  An agent can't change its own (exit 3).
+
+NEEDS
+  Linux with Landlock (Ubuntu 24.04's kernel has it on). Refused (exit 3,
+  fence_unavailable) where the kernel has none, or when the agent's
+  workspace is your home folder or holds ~/.k2. Macs get their fence in a
+  later release.
+
+SEE ALSO
+  k2 study isolation · k2 agent whois <pid> · k2 app doctor (agentIdentity)
+EOF
+}
+
+cmd_help_agent_whois() {
+    cat <<'EOF'
+k2 agent whois — which agent owns a process (owner only)
+
+USAGE
+  k2 agent whois <pid> [--json]
+
+WHAT IT SAYS
+  The process's cgroup and the agent it belongs to: every terminal session
+  of an agent, and every process it starts, runs in the agent's own cgroup
+  (agents/a-<workspace id>/ under the daemon's unit). Also visible with
+  systemd-cgls and ps -o pid,cgroup,cmd.
+
+  Traceable is not unforgeable: an agent without the folder fence runs as
+  you, so it can move a process into another agent's cgroup, or read the
+  owner token on disk. The fence (k2 agent isolation <ws> fence) closes
+  both for that agent.
+
+WHO MAY
+  The server's owner, from a terminal outside K2 (an agent's passport is
+  refused). Linux only; elsewhere it says identity is unavailable.
+
+SEE ALSO
+  k2 study isolation · k2 app doctor (agentIdentity)
+EOF
+}
+
+_study_page_isolation() {
+    cat <<'EOF'
+Agent isolation (Linux servers)
+
+IDENTITY (on wherever the server can have it)
+  Every terminal session of an agent runs in that agent's own cgroup,
+  agents/a-<workspace id>/ inside the daemon's unit. K5 does this with the
+  standard Linux kernel; no custom kernel. It gives two things:
+  - Traceable: every process an agent starts is in its cgroup
+    (systemd-cgls, ps -o pid,cgroup,cmd, k2 agent whois <pid>).
+  - A copied passport alone no longer works: the daemon accepts a session's
+    passport only on that session's socket and only from a process in that
+    agent's cgroup (else 403 passport_wrong_cgroup, with an audit row), and
+    never over loopback TCP (403 passport_needs_socket). `k2` in an agent's
+    terminal sends its passport over the session socket by itself.
+
+  What it doesn't do, for an agent without the fence: that agent runs as
+  the server's user, so it can move a process into another agent's cgroup,
+  and it can read the owner token on disk and call as the owner.
+
+  Where it's unavailable (macOS, a user-unit install, a box prepared before
+  0.46.16, a container) passports work as before; /boot-status
+  (agentIsolation) and k2 app doctor (agentIdentity) say so and why.
+  Emergency off-switch for a broken box: K2_AGENT_CGROUP_IDENTITY=0 in the
+  daemon's environment (logged at boot, shown in the doctor).
+
+THE FOLDER FENCE (per agent, off by default, the owner's switch)
+  k2 agent isolation <workspace> fence. The agent's next terminals open
+  only their workspace, their own temp folder, their own harness login and
+  the build caches, and read the system and the toolchains (Landlock). Not
+  a sibling's folder, not ~/.k2 (owner token, vault), not ~/.ssh; no sudo;
+  no way out of their cgroup. A terminal that can't be fenced doesn't
+  start (it says why); never silently unfenced. An agent can't turn its own
+  fence off.
+
+  Inside a fence, something refused reads "Permission denied". Builds in the
+  workspace, git in the workspace, and the shared caches (cargo, npm, bun,
+  pip, uv) work. Installing software (brew, apt, cargo install, npm -g) and
+  ssh with your keys don't: ask your person.
+EOF
+}
+
+# k2 agent isolation <workspace> fence|off [--json]
+cmd_agent_isolation() {
+    local ws="" mode="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -h|--help) cmd_help_agent_isolation; return 0 ;;
+            --json) json_out=1; shift ;;
+            -*) echo "Unknown flag: $1" >&2; cmd_help_agent_isolation >&2; exit 2 ;;
+            *) if [ -z "$ws" ]; then ws="$1"; elif [ -z "$mode" ]; then mode="$1"; else cmd_help_agent_isolation >&2; exit 2; fi; shift ;;
+        esac
+    done
+    if [ -z "$ws" ] || [ -z "$mode" ]; then
+        cmd_help_agent_isolation >&2
+        exit 2
+    fi
+    local on
+    case "$mode" in
+        fence|on) on=1 ;;
+        off) on=0 ;;
+        *) echo "Error: the mode is fence or off (got '$mode')" >&2; exit 2 ;;
+    esac
+    _compute_call POST /cli/agent-access/set "$(_compute_json K2_CJ_workspace="$ws" K2_CJ_toggle=fence K2_CJ_value_b="$on")"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+state = "on" if v.get("fence") else "off"
+print("Folder fence is %s for %s: %s." % (state, v.get("workspace"), v.get("appliesTo", "its next terminals")))'
+}
+
+# k2 agent whois <pid> [--json]
+cmd_agent_whois() {
+    local pid="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -h|--help) cmd_help_agent_whois; return 0 ;;
+            --json) json_out=1; shift ;;
+            -*) echo "Unknown flag: $1" >&2; cmd_help_agent_whois >&2; exit 2 ;;
+            *) if [ -z "$pid" ]; then pid="$1"; else cmd_help_agent_whois >&2; exit 2; fi; shift ;;
+        esac
+    done
+    case "$pid" in
+        ''|*[!0-9]*) cmd_help_agent_whois >&2; exit 2 ;;
+    esac
+    _compute_call GET /cli/agent-whois "pid=$pid"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+print("pid %s: %s" % (v.get("pid"), v.get("who")))
+if v.get("workspace"):
+    print("  workspace: %s (folder fence %s)" % (v["workspace"], "on" if v.get("fence") else "off"))
+print("  cgroup: %s" % (v.get("cgroup") or "unknown"))
+print("  identity on this box: %s" % v.get("identity"))'
+}
 # ── App users' personal wallets (0.46.3) ─────────────────────────────
 # k2 app wallet settings|people|remove|personal-agent|personal-agents.
 # The owner side only: a person adds and signs in from the App itself
@@ -67513,6 +67707,7 @@ _study_title() {
         send-feedback) echo "Telling K2's makers about K2: k2 send-feedback, what is sent, agents' limits" ;;
         organization) echo "The Org Chart: orgs, heads and the daily bulletin" ;;
         agent-templates) echo "Agent templates: hire a type, save your own, upgrade" ;;
+        isolation) echo "Agent isolation: each agent's own cgroup, passports, the folder fence" ;;
         postal) echo "Postal: friends on other machines (Beta)" ;;
         notifications) echo "Thread posts and phone pushes" ;;
         data-sources) echo "Data sources and triggers" ;;
@@ -67666,6 +67861,7 @@ K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a bri
   send-feedback       Tell Alakazam Labs about K2 itself: what is sent, never sent, agents' limits
   organization        The Org Chart: read the bulletin daily, reach a head, heads and members
   agent-templates     Hire a type of agent, review first, save your own setup, upgrade safely
+  isolation           Each agent's own cgroup, why a copied passport fails, the folder fence
   postal              Friends on other machines (Beta): address, cards, [postal …] mail, k2 msg verify
 
 Usage: k2 study [list|<topic>|--json]
@@ -67769,6 +67965,7 @@ _study_page() {
         send-feedback) _study_page_send_feedback ;;
         organization) _study_page_organization ;;
         agent-templates) _study_page_agent_templates ;;
+        isolation) _study_page_isolation ;;
         postal) _study_page_postal ;;
         *) return 1 ;;
     esac
@@ -78205,6 +78402,8 @@ COMMANDS
   identity [<name>]       Show or change the picture, color and name (an agent: its own color and picture)
   access set <ws> chat_manage on|off
                           "Manage chat and voice" for that workspace's agent (the owner or an admin)
+  isolation <ws> fence|off  The agent's folder fence (Linux; off by default; the owner's switch)
+  whois <pid>             Which agent owns a process (owner only; Linux)
   context <subcommand>    Manage the always-on AGENTS.md context stack (layers)
   team [served|link|unlink]  Team links: who serves this agent, who it serves (agents read their own)
   instances [show|hire|retire]  Hires made from an inline recipe (owner/admin; v1 API keys hire too)
@@ -121002,6 +121201,10 @@ case "${1:-help}" in
             # Sew for Apps (0.46.6): the switch the Sew hints name
             # (`k2 agent access set <ws> chat_manage on`), owner/admin only.
             access) shift 2; cmd_agent_access "$@" ;;
+            # 0.46.17 Agent Isolation M1: the per-agent folder fence (owner)
+            # and which agent owns a process (owner only).
+            isolation) shift 2; cmd_agent_isolation "$@" ;;
+            whois) shift 2; cmd_agent_whois "$@" ;;
             # 0.45.6 agent hire: team links, hire instances, the hire root.
             team|teams) shift 2; cmd_agent_team "$@" ;;
             instances|instance) shift 2; cmd_agent_instances "$@" ;;

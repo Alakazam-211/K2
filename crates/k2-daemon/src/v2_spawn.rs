@@ -1351,6 +1351,7 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
         survive: k2_core::workspace_session_handles::may_survive_restart(&req.agent_name),
         // k2-ptyd S3: filled in just before `DaemonPtySession::spawn`.
         ptyd_meta: None,
+        isolation: None,
     };
     let session_id_for_response = cfg.session_id;
     // The env the caller and the agent's launch block set, before K2's own
@@ -1417,6 +1418,15 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
             provider,
             workspace_api_key.as_deref(),
             owner,
+        );
+        // Agent Isolation M1: the agent's own cgroup (and fence, when its
+        // owner turned it on); the passport is bound to that cgroup.
+        cfg.isolation = crate::agent_isolation::for_spawn(
+            &session_id_for_response,
+            &workspace_uuid,
+            &req.cwd,
+            matches!(cfg.sandbox, k2_core::terminal::SandboxSpec::Passthrough),
+            minted,
         );
         // K2 vault (KV19): this session's file/env secrets (env only in a
         // sandboxed cell).

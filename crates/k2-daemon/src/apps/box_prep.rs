@@ -512,6 +512,9 @@ pub fn doctor(f: &Facts) -> J {
         if let Some(ch) = daemon_slice_check(f.agents_leaf.as_ref()) {
             out.push(ch);
         }
+        if let Some(ch) = agent_identity_check(f.agents_leaf.as_ref()) {
+            out.push(ch);
+        }
         out.push(match (hs("/enginePresent").as_bool() == Some(true), &f.engine) {
             (true, Some(Ok(v)))
                 if v["version"].as_str() == Some(env!("CARGO_PKG_VERSION"))
@@ -674,6 +677,46 @@ fn agents_leaf_check(v: Option<&J>) -> Check {
         format!("agent sessions in {leaf} (memory.high {}{sessions}; restart guard {})", v["memoryHigh"].as_str().unwrap_or("?"), v["guard"].as_str().unwrap_or("?")),
         None,
     )
+}
+
+/// Agent Isolation M1: per-agent cgroup identity (`doctor_json().identity`,
+/// `k2_core::agent_cgroup::status_json`). Never part of readiness. `warn`
+/// while the emergency off-switch is set; `info`-level `ok` when the box
+/// can't have it (says why, and that passports are accepted as before).
+fn agent_identity_check(v: Option<&J>) -> Option<Check> {
+    let id = v?.get("identity")?;
+    let s = id["identity"].as_str().unwrap_or("?");
+    let landlock = match id["landlock"]["abi"].as_i64() {
+        Some(n) => format!("Landlock ABI {n} (the per-agent folder fence can be turned on)"),
+        None => format!("no Landlock ({}): the folder fence can't be turned on", id["landlock"]["why"].as_str().unwrap_or("?")),
+    };
+    Some(match s {
+        "on" => {
+            let n = id["agents"].as_array().map(|a| a.len()).unwrap_or(0);
+            c(
+                "agentIdentity",
+                "ok",
+                format!(
+                    "agent cgroup identity on under {} ({n} agent cgroup(s)): traceable, and a copied passport alone no longer works; \
+                     an unfenced agent can still move into another agent's cgroup or read the owner token. {landlock}",
+                    id["agentsCgroup"].as_str().unwrap_or("?")
+                ),
+                None,
+            )
+        }
+        "off" => c(
+            "agentIdentity",
+            "warn",
+            format!("agent cgroup identity is OFF by the emergency switch ({}): passports are accepted from any process. {landlock}", id["switch"].as_str().unwrap_or("?")),
+            Some("remove K2_AGENT_CGROUP_IDENTITY=0 from the daemon's environment once the box is fixed, then restart the daemon"),
+        ),
+        _ => c(
+            "agentIdentity",
+            "ok",
+            format!("agent cgroup identity unavailable here ({}): passports are accepted as before. {landlock}", id["why"].as_str().unwrap_or("?")),
+            None,
+        ),
+    })
 }
 
 /// 0.46.16: `Slice=` moves the daemon only at a reboot. A restart keeps the

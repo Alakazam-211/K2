@@ -430,6 +430,8 @@ fn spawn_agent_session_v2_with_inner(
     // k2-ptyd S3 (PRD §7.5 meta): what a restarted daemon needs to adopt
     // this session. Identity only (P72).
     let mut ptyd_meta = serde_json::Map::new();
+    // Agent Isolation M1 (set with the passport below).
+    let spawn_isolation;
 
     // COMPAT-58 (#58 Phase 1 / PR-A) — real passport at every agent spawn
     // path (wake / heartbeat / canonical / agents launch). Same seam as
@@ -462,6 +464,9 @@ fn spawn_agent_session_v2_with_inner(
             None, // bare-PTY — never stage workspace API keys
             owner,
         );
+        // Agent Isolation M1: the agent's own cgroup (and fence, when its
+        // owner turned it on); the passport is bound to that cgroup.
+        spawn_isolation = crate::agent_isolation::for_spawn(&session_id, &workspace_uuid, &req.cwd, true, minted);
         // K2 vault (KV19): this session's file/env secrets. References in
         // owner-set env resolve as the owner's; others need a grant (R8).
         let refs_from = crate::vault::spawn::SpawnRefs {
@@ -581,6 +586,7 @@ fn spawn_agent_session_v2_with_inner(
         // sessions (N8).
         survive: k2_core::workspace_session_handles::may_survive_restart(&req.agent_name),
         ptyd_meta: None,
+        isolation: spawn_isolation,
     };
     let session_id = cfg.session_id;
     let mut cfg = cfg;

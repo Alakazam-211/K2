@@ -335,13 +335,54 @@ pub struct Swept {
     pub failed: Vec<(u32, String)>,
 }
 
-/// Move the agent processes found in `daemon/` into `agents/`.
+/// The agents' leaf and its per-agent children (`agents/a-<ws>/`, Agent
+/// Isolation M1), each with its processes. The leaf comes first.
+fn agent_groups(cg: &dyn Cg, agents: &Path) -> Vec<(PathBuf, Vec<u32>)> {
+    let mut out = vec![(agents.to_path_buf(), pids(cg, agents))];
+    if let Ok(rd) = std::fs::read_dir(agents) {
+        let mut kids: Vec<PathBuf> = rd
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir() && p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with(crate::agent_cgroup::PREFIX)))
+            .collect();
+        kids.sort();
+        for k in kids {
+            let p = pids(cg, &k);
+            out.push((k, p));
+        }
+    }
+    out
+}
+
+/// Where a misplaced process goes: the cgroup of its nearest ancestor
+/// that is already in an agent's own cgroup (a session's child forked
+/// before the session moved), else the agents' leaf.
+fn home_for(pid: u32, groups: &[(PathBuf, Vec<u32>)], procs: &dyn Procs) -> PathBuf {
+    let mut cur = procs.ppid(pid);
+    for _ in 0..64 {
+        match cur {
+            None | Some(0) | Some(1) => break,
+            Some(a) => {
+                if let Some((dir, _)) = groups.iter().skip(1).find(|(_, p)| p.contains(&a)) {
+                    return dir.clone();
+                }
+                cur = procs.ppid(a);
+            }
+        }
+    }
+    groups[0].0.clone()
+}
+
+/// Move the agent processes found in `daemon/` into `agents/` (or into
+/// their agent's own cgroup under it).
 pub fn sweep_with(cg: &dyn Cg, procs: &dyn Procs, l: &Leaves) -> Swept {
     let agents = l.base.join(AGENTS_LEAF);
-    let in_agents: HashSet<u32> = pids(cg, &agents).into_iter().collect();
+    let groups = agent_groups(cg, &agents);
+    let in_agents: HashSet<u32> = groups.iter().flat_map(|(_, p)| p.iter().copied()).collect();
     let mut out = Swept::default();
     for pid in misplaced(&pids(cg, &l.base.join(DAEMON_LEAF)), &in_agents, procs) {
-        match cg.write(&agents.join("cgroup.procs"), &pid.to_string()) {
+        let dest = home_for(pid, &groups, procs);
+        match cg.write(&dest.join("cgroup.procs"), &pid.to_string()) {
             Ok(()) => out.moved.push(pid),
             // Exited in between: gone already, fine.
             Err(e) if e.raw_os_error() == Some(libc::ESRCH) => {}
@@ -469,7 +510,7 @@ pub struct Inspect {
 pub fn inspect_with(cg: &dyn Cg, procs: &dyn Procs, base: &Path) -> Inspect {
     let unit = pids(cg, base);
     let daemon = pids(cg, &base.join(DAEMON_LEAF));
-    let agents = pids(cg, &base.join(AGENTS_LEAF));
+    let agents: Vec<u32> = agent_groups(cg, &base.join(AGENTS_LEAF)).into_iter().flat_map(|(_, p)| p).collect();
     let in_agents: HashSet<u32> = agents.iter().copied().collect();
     let session = |p: &u32| procs.ppid(*p).is_some_and(|pp| is_ptyd(procs, pp));
     let sessions_in_leaf = agents.iter().filter(|p| session(p)).count();
@@ -585,6 +626,15 @@ pub fn join(pid: u32) {
     }
 }
 
+/// The leaves, or why there are none (Agent Isolation reads them).
+pub fn leaves() -> Result<Leaves, String> {
+    match STATE.get().map(|s| &s.leaves) {
+        Some(Ok(l)) => Ok(l.clone()),
+        Some(Err(e)) => Err(e.clone()),
+        None => Err("the agents' leaf isn't set up (the daemon sets it up at boot)".into()),
+    }
+}
+
 /// The leaf, or why there is none (cheap: `k2 app resources` reads it).
 pub fn status_json() -> serde_json::Value {
     match STATE.get().map(|s| &s.leaves) {
@@ -598,6 +648,12 @@ pub fn status_json() -> serde_json::Value {
 /// the unit's restart guard and its slice as configured vs as running.
 pub fn doctor_json() -> serde_json::Value {
     let mut v = status_json();
+    // Agent Isolation M1: the per-agent cgroups and the identity switch.
+    let mut id = crate::agent_cgroup::status_json();
+    if let Ok(a) = crate::agent_cgroup::availability() {
+        id["agents"] = serde_json::json!(crate::agent_cgroup::list(&a).iter().map(|(ws, n)| serde_json::json!({ "workspaceId": ws, "procs": n })).collect::<Vec<_>>());
+    }
+    v["identity"] = id;
     let Some(st) = STATE.get() else { return v };
     if st.leaves.is_ok() {
         sweep();
@@ -1047,6 +1103,54 @@ mod tests {
         let i = inspect_with(&cg, &procs, &base);
         assert_eq!((i.sessions, i.sessions_in_leaf, i.misplaced), (1, 1, 0));
         assert_eq!(sweep_with(&cg, &procs, &l), Swept::default(), "nothing more to move");
+    }
+
+    /// Agent Isolation M1, unknown U1: per-agent cgroups as children of
+    /// agents/ (no controllers inside agents/, so an older session may stay
+    /// in agents/ beside them) survive guarded restarts under
+    /// KillMode=process, and the sweep sends a child that landed in
+    /// daemon/ to its own agent's cgroup, not the shared leaf.
+    #[test]
+    fn per_agent_cgroups_survive_restarts_and_the_sweep_keeps_them() {
+        for guard in [Guard::Subgroup, Guard::StopClear] {
+            let cg = FakeCg::new(UID);
+            let procs = FakeProcs::default();
+            let base = cg.root.join(UNIT.trim_start_matches('/'));
+            let mut main = 100;
+            procs.add(main, 1, "k2-daemon");
+            systemd_start(&cg, guard, main).unwrap();
+            let l = setup_with(&cg, &procs, &cg.root, &self_path(guard), UID, "max", guard).unwrap();
+            procs.add(300, 1, "k2-ptyd");
+            cg.write(&base.join("daemon/cgroup.procs"), "300").unwrap();
+            let a = base.join("agents/a-wsA");
+            cg.mkdir(&a).unwrap();
+            // A's session joined its own cgroup before exec; an older
+            // session sits in the shared leaf, beside the child cgroup.
+            procs.add(301, 300, "claude");
+            cg.write(&a.join("cgroup.procs"), "301").unwrap();
+            procs.add(302, 300, "bash");
+            cg.write(&base.join("agents/cgroup.procs"), "302").unwrap();
+            // A child of A's session in daemon/ (forked before a join).
+            procs.add(303, 301, "node");
+            cg.write(&base.join("daemon/cgroup.procs"), "303").unwrap();
+            let s = sweep_with(&cg, &procs, &l);
+            assert_eq!((s.moved.clone(), s.failed.len()), (vec![303], 0), "{guard:?}");
+            assert_eq!(sorted(cg.procs(&a)), vec![301, 303], "{guard:?}: the child follows its agent, not the shared leaf");
+            assert_eq!(cg.procs(&base.join("agents")), vec![302]);
+            let i = inspect_with(&cg, &procs, &base);
+            assert_eq!((i.sessions, i.sessions_in_leaf, i.misplaced), (2, 2, 0), "{guard:?}: sessions in per-agent cgroups count as in the leaf");
+            for n in 0..3 {
+                systemd_stop(&cg, guard, Some(main));
+                main = 120 + n;
+                procs.add(main, 1, "k2-daemon");
+                systemd_start(&cg, guard, main).unwrap_or_else(|e| panic!("{guard:?} restart {n}: {e}"));
+                setup_with(&cg, &procs, &cg.root, &self_path(guard), UID, "max", guard).unwrap();
+                assert_eq!(sorted(cg.procs(&a)), vec![301, 303], "{guard:?} restart {n}: the agent's cgroup and its sessions stay");
+                assert_eq!(cg.procs(&base.join("agents")), vec![302], "{guard:?} restart {n}");
+                assert!(controllers(&cg, &base.join("agents")).is_empty(), "never controllers inside agents/");
+                assert_eq!(controllers(&cg, &base), vec!["cpu", "memory", "pids"]);
+            }
+        }
     }
 
     #[test]

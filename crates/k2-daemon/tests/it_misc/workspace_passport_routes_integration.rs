@@ -143,6 +143,7 @@ async fn workspace_routes_refuse_an_agent_passport_for_every_workspace() {
         overlay: None,
         survive: false,
         ptyd_meta: None,
+        isolation: None,
     })
     .expect("spawn a live session");
     let _live = Live(session.clone());

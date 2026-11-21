@@ -451,6 +451,7 @@ mod tests {
             overlay: None,
             survive: false,
             ptyd_meta: None,
+            isolation: None,
         })
         .expect("spawn bash");
         let key = format!("tab-bash-{}", uuid::Uuid::new_v4().simple());

@@ -502,6 +502,7 @@ impl RunningChat {
             overlay: None,
             survive: false,
             ptyd_meta: None,
+            isolation: None,
         })
         .expect("spawn the fake agent");
         crate::v2_session_map::register(project_id.to_string(), session.clone());

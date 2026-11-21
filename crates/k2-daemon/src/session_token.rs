@@ -198,6 +198,9 @@ pub struct ValidatedHook {
     pub cred_mode: CredMode,
     /// B3a — the model provider bound at mint.
     pub provider: Provider,
+    /// Agent Isolation M1: the agent whose cgroup the session is bound to
+    /// (see `TokenRecord::agent_cgroup`).
+    pub agent_cgroup: Option<String>,
 }
 
 /// A persisted scoped-token claim. The raw secret NEVER touches disk —
@@ -239,6 +242,14 @@ struct TokenRecord {
     /// B3a — model provider stamped host-side at mint (default `Anthropic`).
     #[serde(default)]
     provider: Provider,
+    /// Agent Isolation M1: the agent (workspace id) whose cgroup this
+    /// session runs in (`agents/a-<id>`). Set, the passport is accepted only
+    /// on the session socket and only from a process in that cgroup
+    /// (`k2_core::agent_cgroup::decide`); never over loopback TCP. `None`: a
+    /// session placed without identity (older, another box, a microVM
+    /// cell, a `k2 job` run): accepted as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent_cgroup: Option<String>,
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -331,6 +342,7 @@ impl SessionTokenRegistry {
             global_epoch: self.global_epoch,
             cred_mode,
             provider,
+            agent_cgroup: None,
         };
         self.records.insert(sid.clone(), record);
         format!("{sid}.{secret}")
@@ -394,7 +406,20 @@ impl SessionTokenRegistry {
             principal: rec.principal.clone(),
             cred_mode: rec.cred_mode,
             provider: rec.provider,
+            agent_cgroup: rec.agent_cgroup.clone(),
         })
+    }
+
+    /// Agent Isolation M1: bind a live session's passport to its agent's
+    /// cgroup. `false` when no record names the session.
+    pub fn bind_agent_cgroup(&mut self, sid: &str, ws: &str) -> bool {
+        match self.records.get_mut(sid) {
+            Some(r) => {
+                r.agent_cgroup = Some(ws.to_string());
+                true
+            }
+            None => false,
+        }
     }
 
     /// What the store says about one session's passport (no secret needed).
@@ -1870,6 +1895,24 @@ pub fn workspace_for_session(session_id: &str) -> Option<String> {
 /// calls this on cell teardown/kill (the child-exit observer) so a dead
 /// cell's token 403s immediately, no daemon restart.
 // COMPAT-58: remove in Phase 3 (owner-token deprecation).
+/// Agent Isolation M1: bind a session's passport to its agent's cgroup
+/// (the spawn placed the session there) and persist it, so a restarted
+/// daemon still knows (`hook-sessions.json`).
+pub fn bind_agent_cgroup(session_id: &SessionId, ws: &str) -> bool {
+    let mut g = registry().lock().unwrap_or_else(|e| e.into_inner());
+    let ok = g.bind_agent_cgroup(&session_id.to_string(), ws);
+    if ok {
+        save_to_disk(&g);
+    }
+    ok
+}
+
+/// The `(session id, agent)` a live passport is bound to, by the bearer.
+/// `None` for an unbound passport or no passport at all.
+pub fn bound_agent_of_bearer(bearer: &str) -> Option<(String, String)> {
+    validate_hook(bearer).and_then(|v| v.agent_cgroup.map(|ws| (v.session_id, ws)))
+}
+
 pub fn revoke_session(session_id: &SessionId) {
     let mut g = registry().lock().unwrap_or_else(|e| e.into_inner());
     // Two teardown paths can reach one session: the second has nothing to do.

@@ -33,6 +33,7 @@ app-door.sh
 app-people.sh
 app-recording.sh
 app-guests.sh
+agent-isolation.sh
 app-wallet.sh
 remote-session.sh
 msg-whoami-done.sh

@@ -1729,6 +1729,68 @@ fn handle_app_core(
     Ok((out, format!("ok {} app_core {}", ws.handle, summary.join(","))))
 }
 
+/// Agent Isolation M1: an agent's folder fence (Landlock, Linux; off by
+/// default, `projects.isolation_mode`). The owner turns it on or off; an
+/// Admin login may only turn it on (tightening); a passport never reaches
+/// here (`/cli/agent-access/set` is not an agent verb), so an agent can't
+/// loosen its own. It applies to the agent's next terminals: running ones
+/// keep what they started with (Landlock only ever narrows).
+fn set_fence(caller: &Caller, ws: &Workspace, on: bool) -> Result<(serde_json::Value, String), SidecarError> {
+    if !on && !caller_is_owner(caller) {
+        return Err(err(
+            "owner_only",
+            403,
+            "only the server's owner turns an agent's folder fence off (k2 agent isolation <agent> off from a terminal outside K2); an Admin may turn it on",
+        ));
+    }
+    if on {
+        k2_core::agent_fence::landlock_abi().map_err(|e| {
+            err("fence_unavailable", 409, format!("this machine can't fence an agent's folders: {e}. On Linux the fence needs Landlock (Ubuntu 24.04's kernel has it on); Macs get theirs in a later release"))
+        })?;
+        let home = k2_core::paths::home_dir().unwrap_or_default();
+        let k2_home = k2_core::paths::k2_home();
+        let env = std::collections::BTreeMap::new();
+        let tmp = k2_home.join("agents").join(&ws.id).join("tmp");
+        k2_core::agent_fence::default_view(&k2_core::agent_fence::ViewInputs {
+            home: &home,
+            k2_home: &k2_home,
+            workspace: std::path::Path::new(&ws.path),
+            tmp_dir: &tmp,
+            env: &env,
+        })
+        .map_err(|e| err("fence_unavailable", 409, e))?;
+    }
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let n = conn
+            .execute("UPDATE projects SET isolation_mode = ?1 WHERE id = ?2", rusqlite::params![if on { "fence" } else { "off" }, ws.id])
+            .map_err(|e| err("store_unavailable", 503, e.to_string()))?;
+        if n == 0 {
+            return Err(err("workspace_not_found", 404, format!("no workspace '{}'", ws.handle)));
+        }
+    }
+    k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+        "agent.fence_switch",
+        &caller.audit_user(),
+        format!("agent {} fence {}", ws.handle, if on { "on" } else { "off" }),
+        "-",
+        "-",
+        "cli",
+    ));
+    k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncProjects, serde_json::Value::Null);
+    Ok((
+        serde_json::json!({
+            "ok": true,
+            "workspace": ws.handle,
+            "toggle": "fence",
+            "fence": on,
+            "appliesTo": "the agent's next terminals (running ones keep what they started with)",
+        }),
+        format!("ok {} fence={on}", ws.handle),
+    ))
+}
+
 fn handle_access(
     caller: &Caller,
     body: &[u8],
@@ -1769,11 +1831,12 @@ fn handle_access(
         && toggle != "desktop"
         && toggle != "org_chart_manage"
         && toggle != "voice_transcripts"
+        && toggle != "fence"
     {
         return Err(err(
             "bad_request",
             400,
-            "toggle must be 'agents_hire', 'agents_manage', 'app_core', 'app_review', 'apps_build', 'apps_manage_full', 'chat_manage', 'chat_refresh', 'compute', 'compute_manage', 'compute_operate', 'db_upgrade', 'desktop', 'app_users', 'gardens_manage', 'org_chart_manage', 'permission_cards', 'projects_manage', 'sim', 'vault_manage' or 'voice_transcripts'",
+            "toggle must be 'agents_hire', 'agents_manage', 'app_core', 'app_review', 'apps_build', 'apps_manage_full', 'chat_manage', 'chat_refresh', 'compute', 'compute_manage', 'compute_operate', 'db_upgrade', 'desktop', 'app_users', 'fence', 'gardens_manage', 'org_chart_manage', 'permission_cards', 'projects_manage', 'sim', 'vault_manage' or 'voice_transcripts'",
         ));
     }
     if toggle == "app_core" || toggle == "app_review" {
@@ -1807,6 +1870,9 @@ fn handle_access(
         _ => return Err(err("bad_request", 400, "value must be true or false")),
     };
     let ws = target_workspace(caller, str_field(&v, "workspace"))?;
+    if toggle == "fence" {
+        return set_fence(caller, &ws, value);
+    }
     if toggle == "voice_transcripts" {
         // "Read call transcripts" (0.46.11, Rosson 2026-11-10: off by
         // default, the Owner turns it on). The owner raises; the owner or an

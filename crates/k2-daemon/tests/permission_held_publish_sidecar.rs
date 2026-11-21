@@ -101,6 +101,7 @@ fn live_sidecar(ws: &Ws, conv: &str) -> (String, Arc<DaemonPtySession>, String) 
         overlay: None,
         survive: false,
         ptyd_meta: None,
+        isolation: None,
     })
     .expect("spawn the fake claude");
     let agent_name = format!("tab-pane-{conv}");

@@ -46,6 +46,9 @@ pub mod boot_sweeps;
 pub mod active;
 // S17: agent sessions in their own memory budget inside the daemon's unit.
 pub mod agents_leaf;
+// Agent Isolation M1: per-agent cgroups (identity) and the folder fence.
+pub mod agent_cgroup;
+pub mod agent_fence;
 // prd-daemon-activity-and-thread-working-v1 S2: the per-session activity
 // row and state machine (pure; the daemon's `activity_store` owns rows).
 pub mod activity;

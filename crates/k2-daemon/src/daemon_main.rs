@@ -83,6 +83,12 @@ pub fn run() {
     if raw_args.get(1).is_some_and(|a| a == crate::vault::run::ARG) {
         std::process::exit(crate::vault::run::run_from_args(&raw_args));
     }
+    // Agent Isolation M1: the exec helper an isolated terminal starts
+    // through (join the agent's cgroup, apply its fence, exec the program).
+    // Same rule as the vault helper: raw argv, before anything else.
+    if raw_args.get(1).is_some_and(|a| a == k2_core::agent_fence::ARG) {
+        std::process::exit(k2_core::agent_fence::run_from_args(&raw_args));
+    }
     let args: Vec<String> = std::env::args().collect();
     if args.iter().skip(1).any(|a| a == "--skin-gateway") {
         std::process::exit(skin_gateway::run_from_args(&args));
@@ -541,6 +547,12 @@ async fn async_main() {
     // S17 / AR18: in a delegated unit (box prep's cores slice), agent
     // sessions get their own memory budget beside the daemon.
     k2_core::agents_leaf::init();
+    // Agent Isolation M1: per-agent cgroups under the leaf (or why not),
+    // and the exec helper isolated sessions start through (this binary).
+    if let Ok(exe) = std::env::current_exe() {
+        k2_core::agent_cgroup::set_exec_helper(exe);
+    }
+    k2_core::agent_cgroup::init();
     // App box prep: the nft table and io.cost don't survive a reboot.
     // Re-apply on a prepared box (Linux, preview on, helper protocol 6).
     crate::apps::box_prep::spawn_boot_reapply();

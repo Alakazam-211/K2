@@ -811,6 +811,27 @@ _k2_stdin_secrets() {
     printf '\0'
 }
 _K2_CURL_TRIES=4
+# _k2_via_session_sock CFG URL ARGS… — true when this daemon request should
+# go over the session socket (Agent Isolation M1): a K2 session with its
+# socket, the request's credential is the session passport (in the curl
+# config), the URL is this machine's daemon on loopback, and the request
+# isn't on a socket already. Sets _K2_VIA_SOCK. K2_VIA_TCP=1 turns it off
+# (the daemon then refuses a bound passport: for tests of that refusal).
+_k2_via_session_sock() {
+    local cfg="$1" url="$2" a
+    shift 2
+    _K2_VIA_SOCK=""
+    [ "${K2_VIA_TCP:-0}" = 1 ] && return 1
+    [ -n "${SCOPED_TOKEN:-}" ] || return 1
+    _cli_skip_uds && return 1
+    case "$url" in http://127.0.0.1:*|http://localhost:*|http://\[::1\]:*) ;; *) return 1 ;; esac
+    case "$cfg" in *"Authorization: Bearer ${SCOPED_TOKEN}"*) ;; *) return 1 ;; esac
+    for a in "$@"; do
+        [ "$a" = "--unix-socket" ] && return 1
+    done
+    _K2_VIA_SOCK="$(_hook_sock)"
+    [ -n "$_K2_VIA_SOCK" ] && [ -S "$_K2_VIA_SOCK" ]
+}
 _k2_curl() {
     local cfg="$1"; shift
     local try=1 rc once=0 a i hdr_file="" hdr_arg
@@ -855,6 +876,15 @@ _k2_curl() {
         for ((i = ${#_K5_HDRS[@]} - 1; i >= 0; i--)); do
             set -- -H "${_K5_HDRS[$i]}" "$@"
         done
+        # Agent Isolation M1: in a K2 session, a request that carries the
+        # session's passport to this machine's daemon goes over the session
+        # socket, never loopback TCP: the daemon accepts a passport bound to
+        # its agent's cgroup only there (it checks the caller's cgroup; TCP
+        # names no process). The socket hands the request to the same TCP
+        # route code (X-K2-Via-Tcp), so nothing else changes.
+        if _k2_via_session_sock "$cfg" "$url" "$@"; then
+            set -- --unix-socket "$_K2_VIA_SOCK" -H "X-K2-Via-Tcp: 1" "$@"
+        fi
     fi
     while :; do
         rc=0

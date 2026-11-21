@@ -292,6 +292,10 @@ fn full_body_base(settings: &k2_core::app_settings::AppSettings) -> serde_json::
             "supported": true,
             "enabled": crate::session_token::scoped_hooks_enabled(),
         },
+        // Agent Isolation M1: per-agent cgroup identity on this box (on |
+        // unavailable | off with the emergency switch, and why), the
+        // switch's state, and the kernel's Landlock ABI for the fence.
+        "agentIsolation": k2_core::agent_cgroup::status_json(),
         // Observability/Agent-Ops Phase E: read-only `/cli/ops/*`.
         "ops": {
             "supported": true,
@@ -1753,7 +1757,7 @@ mod tests {
         assert_eq!(full["protocolMin"], PROTOCOL_MIN);
         for k in [
             "version", "protocol", "phase", "detail", "instanceId", "serverId", "publicHost", "features",
-            "installKind", "webClient", "scopedHooks", "ops", "api", "airgap", "listen", "connectLogin", "homeDb",
+            "installKind", "webClient", "scopedHooks", "agentIsolation", "ops", "api", "airgap", "listen", "connectLogin", "homeDb",
             "rootHelper", "productName", "cliName", "hostedZones",
         ] {
             assert!(full.get(k).is_some(), "full keeps {k}");

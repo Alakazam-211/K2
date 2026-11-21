@@ -879,6 +879,7 @@ impl LiveCell {
             overlay: None,
             survive: false,
             ptyd_meta: None,
+            isolation: None,
         })
         .expect("spawn the fake claude");
         let agent_name = format!("tab-pane-{conv}");

@@ -2170,6 +2170,10 @@ const MIGRATIONS_BY_HAND: &[(&str, &str)] = &[
         // config lane C reads) and `app_identity_issuers`.
         ("0326_app_compat", include_str!("../../drizzle_sql/0326_app_compat.sql")),
         ("0328_app_cron", include_str!("../../drizzle_sql/0328_app_cron.sql")),
+        // 0323 — an agent's isolation mode (Agent Isolation M1, 0.46.17):
+        // `projects.isolation_mode` off | fence (| jail later), the owner's
+        // per-agent folder fence; read by k2-daemon `agent_isolation`.
+        ("0323_agent_isolation_mode", include_str!("../../drizzle_sql/0323_agent_isolation_mode.sql")),
     ];
 
 /// [`run_migrations`], stopping after `last` when given (tests build an
@@ -2953,7 +2957,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0328_app_cron",
+            last_name, "0323_agent_isolation_mode",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -3258,6 +3262,8 @@ mod tests {
                 "0326_app_compat",
                 // After 0.46.17: App cron and point-in-time restore records.
                 "0328_app_cron",
+                // 0.46.17: an agent's isolation mode.
+                "0323_agent_isolation_mode",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -3498,6 +3504,8 @@ mod tests {
                 "0326_app_compat",
                 // After 0.46.17: App cron and point-in-time restore records.
                 "0328_app_cron",
+                // 0.46.17: an agent's isolation mode.
+                "0323_agent_isolation_mode",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -3770,7 +3778,7 @@ mod tests {
 
         run_migrations(&conn).unwrap();
         let top: String = conn.query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap();
-        assert_eq!(top, "0328_app_cron", "0328 (App cron) runs last, after 0326 (compat layer), after 0333 (compute userns grant), after 0322 (ticket threads), 0321 (draft kind and key), 0320 (VoIP token), 0308 (k5 CLI usage counts), 0314 (LLM auto-rotate), 0318 (permission request approvers), 0316 (calendar S1), 0319 (hiring restored, 0.46.16), 0311 (Postal friends), 0310 (delivery badges), 0315 (Claude sign-in warnings), 0313 (compute job env), 0312 (compute_jobs indexes), 0307 (Home chat rows apart), 0306 (Home chat rows), 0305 (Home groups), 0303 (signed approvals), 0302 (0.46.13), 0299 (0.46.12) and 0295 (CI test history)");
+        assert_eq!(top, "0323_agent_isolation_mode", "0323 (isolation mode) runs last, after 0328 (App cron), after 0326 (compat layer), after 0333 (compute userns grant), after 0322 (ticket threads), 0321 (draft kind and key), 0320 (VoIP token), 0308 (k5 CLI usage counts), 0314 (LLM auto-rotate), 0318 (permission request approvers), 0316 (calendar S1), 0319 (hiring restored, 0.46.16), 0311 (Postal friends), 0310 (delivery badges), 0315 (Claude sign-in warnings), 0313 (compute job env), 0312 (compute_jobs indexes), 0307 (Home chat rows apart), 0306 (Home chat rows), 0305 (Home groups), 0303 (signed approvals), 0302 (0.46.13), 0299 (0.46.12) and 0295 (CI test history)");
         let last: String = conn
             .query_row("SELECT name FROM _migrations WHERE name < '0224' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
             .unwrap();
@@ -3896,8 +3904,10 @@ mod tests {
                 "0326_app_compat",
                 // After 0.46.17: App cron and point-in-time restore records.
                 "0328_app_cron",
+                // 0.46.17: an agent's isolation mode.
+                "0323_agent_isolation_mode",
             ],
-            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258, 0259, 0260 and 0262, then 0.46.9's 0268, 0269, 0270 and 0271, then 0.46.9's 0272, then 0.46.10's 0273, 0274 and 0275, then 0.46.11's 0276, 0277, 0278, 0279, 0280, 0281, 0282, 0283, 0284, 0285, 0286, 0287, 0288 and 0289, then the setup checklist's 0290, then 0292, then the K5 seat's 0293, then 0294, then 0295, 0296, 0297, 0299 and 0300, then 0.46.12's 0301, then 0302 and 0303, then suite Apps' 0304, then 0305, then 0306, then 0307, then 0.46.15's 0312, 0313 and 0315, then 0310, 0311 and 0319, then 0.46.17's 0316, 0318 and 0314, then 0308, then 0320, then 0321, then 0322, then 0333, then 0326, then 0328)"
+            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258, 0259, 0260 and 0262, then 0.46.9's 0268, 0269, 0270 and 0271, then 0.46.9's 0272, then 0.46.10's 0273, 0274 and 0275, then 0.46.11's 0276, 0277, 0278, 0279, 0280, 0281, 0282, 0283, 0284, 0285, 0286, 0287, 0288 and 0289, then the setup checklist's 0290, then 0292, then the K5 seat's 0293, then 0294, then 0295, 0296, 0297, 0299 and 0300, then 0.46.12's 0301, then 0302 and 0303, then suite Apps' 0304, then 0305, then 0306, then 0307, then 0.46.15's 0312, 0313 and 0315, then 0310, 0311 and 0319, then 0.46.17's 0316, 0318 and 0314, then 0308, then 0320, then 0321, then 0322, then 0333, then 0326, then 0328, then 0323)"
         );
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM app_resource_samples", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0, "the trends table starts empty");
@@ -4790,6 +4800,9 @@ mod tests {
             // 0328 (App cron and restore records) came after it: its record
             // goes too (its tables and indexes are IF NOT EXISTS).
             conn.execute("DELETE FROM _migrations WHERE name = '0328_app_cron'", []).unwrap();
+            // 0323 (an agent's isolation mode, 0.46.17) came after it: its
+            // record goes too (its column re-add is skipped as a duplicate).
+            conn.execute("DELETE FROM _migrations WHERE name = '0323_agent_isolation_mode'", []).unwrap();
             // 0297 and 0296 (CI monitors, job stats) came before 0299: their records go (IF NOT EXISTS).
             conn.execute("DELETE FROM _migrations WHERE name IN ('0297_ci_monitors', '0296_compute_job_stats')", []).unwrap();
             // 0295 (CI test history) came before 0297: its record goes (IF NOT EXISTS).

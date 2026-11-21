@@ -1602,6 +1602,7 @@ fn live_msg_chatter_carries_the_delivery_id() {
         overlay: None,
         survive: false,
         ptyd_meta: None,
+        isolation: None,
     })
     .expect("spawn cat");
     crate::v2_session_map::register(agent_name.clone(), session.clone());

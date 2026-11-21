@@ -115,6 +115,42 @@ fn host_port(request: &str, port: u16) -> String {
         .join("\n")
 }
 
+/// `scripts/cli-parity.sh`'s named difference `bash32-empty-brace`: an
+/// empty payload takes cmd_signal's default, `"${3:-{\}}"`, which bash
+/// before 4 (macOS's `/bin/bash` 3.2) keeps as `{\}`, so bash sends the
+/// text `{\}` where the binary, as bash 4 and later, sends "". Only there,
+/// bash's request is compared with that text read as "" (and its length
+/// four bytes shorter). The shell's fix makes bash 3.2 send "" too: the
+/// row then fails, saying the mark goes.
+const EMPTY_BRACE: &str = "presence, an empty payload and kind, --inbox-silent";
+
+fn bash32_empty_brace(name: &str, requests: Vec<String>) -> Vec<String> {
+    const SENT: &str = r#""text": "{\\}""#;
+    if name != EMPTY_BRACE || bash_version() >= (4, 0) {
+        return requests;
+    }
+    requests
+        .into_iter()
+        .map(|r| {
+            assert!(
+                r.contains(SENT),
+                "{name}: bash {:?} sends no text {{\\}}: the bash32-empty-brace mark goes\n{r}",
+                bash_version()
+            );
+            let r = r.replacen(SENT, r#""text": """#, 1);
+            let (head, body) = r.split_once("\n\n").expect("a head and a body");
+            let head: Vec<String> = head
+                .split('\n')
+                .map(|l| match l.strip_prefix("Content-Length: ") {
+                    Some(n) => format!("Content-Length: {}", n.parse::<usize>().unwrap() - 4),
+                    None => l.to_string(),
+                })
+                .collect();
+            format!("{}\n\n{body}", head.join("\n"))
+        })
+        .collect()
+}
+
 /// The binary's runs (with and without `python3`) and bash's, with the
 /// signal's id and time masked: the requests, the programs run, the exit,
 /// stdout and stderr.
@@ -143,6 +179,7 @@ fn masked(rig: &Rig, c: &Case) {
         .collect();
     assert_eq!(b.code, Some(c.code), "{name}: bash's exit: {b:?}");
     assert_eq!(bl.len(), c.requests, "{name}: bash's requests: {bl:#?}");
+    let bl = bash32_empty_brace(name, bl);
     for without in [false, true] {
         let side = if without { Side::NoPython3 } else { Side::Rust };
         let (r, rl) = rig.binary(c, without);

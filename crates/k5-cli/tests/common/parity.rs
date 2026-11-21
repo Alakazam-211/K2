@@ -1192,7 +1192,7 @@ pub fn edge_usage_exit_2_proven() -> bool {
 }
 
 /// The `bash` the rig runs: its major and minor version.
-fn bash_version() -> (u32, u32) {
+pub fn bash_version() -> (u32, u32) {
     static V: std::sync::OnceLock<(u32, u32)> = std::sync::OnceLock::new();
     *V.get_or_init(|| {
         let o = Command::new("bash")

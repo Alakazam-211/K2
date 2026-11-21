@@ -50,7 +50,9 @@
 # api_key_parity.rs, agent_parity.rs, glossary_parity.rs,
 # heartbeat_parity.rs (list), msg_parity.rs (the sender lookup),
 # postal_parity.rs, talk_parity.rs and tunnel_parity.rs, through the rig's
-# Compare::Bash32PipeReader on macOS. They meet python-version-error-text
+# Compare::Bash32PipeReader on macOS. They meet bash32-empty-brace in
+# msg_signal_parity.rs's empty-payload row, on a bash before 4 (macOS's
+# /bin/bash 3.2). They meet python-version-error-text
 # wherever the shell's Python words an error otherwise than 3.12: the rig
 # takes it for every row (common/parity.rs, as_this_python, and
 # older_slice_error for a traceback's dict sliced), and
@@ -171,6 +173,7 @@ EXPECTED_DIFFS=(
     "native-without-python3|K2 ruling, out-of-box S1|a native k5 command runs when python3 is missing; that is a named, beneficial difference, and parity stays exact everywhere python3 exists. Hand-offs to bash for anything not native stay, with a plain line naming what is missing (python3 on a fresh Mac, Git Bash on Windows): with no python3 on PATH, study errors --json prints its JSON as with python3 where bash prints none, and a family still handed to the shell (the first of a list the check walks) prints one line naming Python 3 and exits 69 without starting bash"
     "owner-token-with-passport|13.9 #4|an open verb (whoami, done, activity, feedback list and show, api) in a session with a cell socket set and the owner token on disk: bash sends the owner token over TCP (COMPAT-58, _cli_apply_auth_for_verb); the binary sends the passport, never the owner token. Also workspace_swap_canonical.sh's swap lookup: bash looks the workspace up with the owner token; the binary's passport is refused there, so it sends the typed name and the swap gets 400 not registered (K2 ruling; until the daemon's handle_swap_canonical resolves names itself, after r3)"
     "bash32-pipe-reader|R3.3, K2 ruling at the 0.46.15 rebase|a request on the left of a pipe into a python3 reader that gets no answer (the check: an empty reply, one request over TCP, the owner token on disk): \`inbox\`, \`inbox read a1\`, \`inbox folders\`, \`read acme\`, \`activity\`, \`connect status\` (GETs), \`connections add beta\`, \`connections remove beta\`, \`api on\` and \`api-key revoke k1\` (POSTs), and \`api-key list\` (a GET). Both print the no-answer line (\"Error: K2's server ...\"); the binary then dies of SIGPIPE (141) with nothing on stdout, as bash 5 does. macOS's /bin/bash 3.2 runs the reader on the empty input and exits 1 with its output added: inbox \"No items.\" on stdout, inbox read \"Error: no answer from the K2 daemon (...). Try again: k2 inbox read <id>\" on stderr, inbox folders \"No folders yet. Create one by moving an item:\" and \"  k2 inbox move <id> projects\" on stdout, read an empty line on stderr, activity \"Error: the K2 daemon gave no usable answer: ''\" on stderr, connections add and remove \"Error: daemon returned an unparseable response: ''\" on stderr (0.46.17), api on the same line on stdout, api-key list and revoke \"Error: Expecting value: line 1 column 1 (char 0)\" on stderr, connect status nothing. The pipe mark (_K2_PIPE_MARK) quiets only the heartbeat readers that set it, not these"
+    "bash32-empty-brace|K2 ruling, macOS bash 3.2 until the shell's fix|\`msg ws --signal <kind> --payload ''\` with an empty payload (msg_signal_parity.rs, \"presence, an empty payload and kind, --inbox-silent\"): the payload takes cmd_signal's default, \"\${3:-{\\}}\"; macOS's /bin/bash 3.2 keeps the backslash there, so bash sends the text \"{\\}\" where the binary sends \"\" (bash 4 and later read {}, as the binary does). The rest of the request, the output and the exit are the same. The shell's fix (the default quoted) retires it"
     "feedback-optin-without-python3|K2 ruling at the 0.46.17 feedback opt-in|an agent (a passport over TCP) whose server says agents may not report (\"agents\": false, \"senderKind\": \"agent\"), cards off: with python3 both CLIs leave send-feedback's block out of \`help\` and print the one line for \`study send-feedback\`; with no python3 on PATH bash's probe can't read the answer, so bash prints the full help and the full page, while the binary reads the answer itself and still leaves the block out and prints the one line, as it does with python3. Both send the same requests either way (help: the settings read, then the cards; study: the settings read)"
     "env-answer-large|K2 ruling, the K5 lanes' large answers|bash hands a daemon answer to Python in an environment variable, so above the kernel's argument limit bash stops with 'Argument list too long' (exit 126) and k5 prints the answer. The cases, each with its own large-answer row: \`wiki status\` with an index above 1 MiB (wiki_parity.rs, wiki_status_with_a_large_answer; on macOS its /bin/bash 3.2 exits 1, and both send the same two requests), \`mail send --body-file\` with a body above 128 KiB (mail_writes_parity.rs, a_large_body; the body rides M_BODY: on Linux bash sends nothing, the binary sends it once; macOS has one limit for the whole environment, where both send it), and \`zen\`'s large answer (zen_parity.rs, with the zen lane)"
     "expect-100-continue|K2 ruling, K5 transport|a POST whose body is over 1 MiB (\`store blob put\` of a 1.2 MB file, one 2 MiB chunk, 1.6 MB of JSON): bash's curl adds \"Expect: 100-continue\" to the request's head and waits for the daemon's 100 before the body; the binary never sends it and sends the body at once. Everything else in the two requests is the same (the parity rig's hand-over headers masked), and a body under 1 MiB goes out the same from both. stdout, stderr and the exit code are the same"
@@ -574,6 +577,56 @@ check_bash32_pipe_reader() {
     fi
     [ "$ver" = 3.2 ] && return 0
     echo "checked only on bash 3.2, macOS's /bin/bash (the macOS parity job runs it); here $shell is bash $ver, where bash and the binary answer alike on all eleven (SIGPIPE 141, nothing on stdout, the same stderr), so the difference itself was not proven on this host"
+    return 3
+}
+
+# check_bash32_empty_brace: both CLIs run `msg ws --signal "" --payload ""
+# --inbox-silent` (an empty kind and payload), the owner token and port on
+# disk, the stub answering. Both exit 0 with the same stdout and stderr and
+# send one POST /cli/awareness/publish (its id and time masked). On macOS
+# with /bin/bash 3.2, bash's default for the empty payload, "${3:-{\}}",
+# keeps the backslash: its body's text is "{\}" (JSON "{\\}") where the
+# binary's is "" (bash 4 and later read {}); everything else in the
+# requests is the same. With any other bash the requests must be the same,
+# and the check says the difference itself was not proven here (returns 3).
+check_bash32_empty_brace() {
+    local d="$WORK/bash32-brace" shell=bash ver rc rr b r side f note="" problems=()
+    local from='"text": "{\\}"' to='"text": ""'
+    local words=(msg ws --signal "" --payload "" --inbox-silent)
+    mkdir -p "$d/home/.k2" "$d/ws/.k2"
+    printf 'owner-tok-parity\n' >"$d/home/.k2/heartbeat.token"
+    [ "$(uname -s)" != Darwin ] || shell=/bin/bash
+    ver="$("$shell" -c 'echo "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}"')"
+    start_stub "$d" plain || { echo "the stub daemon didn't start"; return 1; }
+    printf '%s\n' "$STUB_PORT" >"$d/home/.k2/heartbeat.port"
+    rc=0; run_side "$d" "$shell" "${words[@]}" || rc=$?
+    cp "$d/out" "$d/out.bash"; cp "$d/err" "$d/err.bash"; cp "$d/log" "$d/log.bash"
+    rr=0; run_side "$d" binary "${words[@]}" || rr=$?
+    stop_stub
+    [ "$rc" = 0 ] || problems+=("$shell ($ver) exited $rc, want 0: $(head -c 300 "$d/err.bash")")
+    [ "$rr" = 0 ] || problems+=("the binary exited $rr, want 0: $(head -c 300 "$d/err")")
+    cmp -s "$d/out.bash" "$d/out" || problems+=("stdout differs: bash '$(head -c 300 "$d/out.bash")', the binary '$(head -c 300 "$d/out")'")
+    cmp -s "$d/err.bash" "$d/err" || problems+=("stderr differs: bash '$(head -c 300 "$d/err.bash")', the binary '$(head -c 300 "$d/err")'")
+    for side in bash binary; do
+        if [ "$side" = bash ]; then f="$d/log.bash"; else f="$d/log"; fi
+        [ "$(wc -l <"$f" | tr -d ' ')" = 1 ] && grep -q '^POST /cli/awareness/publish ' "$f" \
+            || problems+=("$side sent, want one POST /cli/awareness/publish: $(head -c 300 "$f")")
+    done
+    b="$(sed -E 's/"id": "[0-9a-f-]{36}"/"id": "<id>"/; s/"at": "[^"]*"/"at": "<at>"/' "$d/log.bash")"
+    r="$(sed -E 's/"id": "[0-9a-f-]{36}"/"id": "<id>"/; s/"at": "[^"]*"/"at": "<at>"/' "$d/log")"
+    case "$r" in *'"kind": {"kind": "msg", "data": {"text": ""}}'*) ;; *) problems+=("the binary's body has no empty msg text: $(head -c 400 "$d/log")") ;; esac
+    if [ "$ver" = 3.2 ]; then
+        case "$b" in *"$from"*) ;; *) problems+=("$shell ($ver) sent no text \"{\\}\": the difference is gone or changed: $(head -c 400 "$d/log.bash")") ;; esac
+        b="${b//"$from"/$to}"
+        note=", bash 3.2's text \"{\\}\" read as \"\""
+    fi
+    [ "$b" = "$r" ] || problems+=("the requests differ (id and time masked$note): bash '$(printf '%s' "$b" | head -c 400)', the binary '$(printf '%s' "$r" | head -c 400)'")
+    if [ ${#problems[@]} -gt 0 ]; then
+        printf '%s\n' "${problems[@]}"
+        return 1
+    fi
+    [ "$ver" = 3.2 ] && return 0
+    echo "checked only on bash 3.2, macOS's /bin/bash (the macOS parity job runs it); here $shell is bash $ver, which reads the empty payload's default as {} as the binary does, so the difference itself was not proven on this host"
     return 3
 }
 

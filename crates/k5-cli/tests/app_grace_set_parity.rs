@@ -177,7 +177,7 @@ fn the_cross_over_reads_answer_as_the_shell_does() {
             // native: app move-plan
             stop("move-plan: no service", &["move-plan", "--request"], 2),
             // native: app move-plan
-            stop("move-plan: --app last", &["move-plan", "site", "--app"], 1),
+            stop("move-plan: --app last", &["move-plan", "site", "--app"], 2),
             // native: app move-plan
             traceback(one(
                 "move-plan: no steps",
@@ -212,7 +212,7 @@ fn the_cross_over_reads_answer_as_the_shell_does() {
             stop(
                 "requests: --since last",
                 &["requests", "acme", "--since"],
-                1,
+                12,
             ),
             // native: app requests
             traceback(one(
@@ -234,6 +234,12 @@ fn the_cross_over_reads_answer_as_the_shell_does() {
             one("quota --json", &["quota", "acme", "--json"], ok(QUOTA), 0),
             // native: app quota
             stop("quota: no App", &["quota", "--reset"], 2),
+            // native: app quota
+            stop("quota: --rps last", &["quota", "acme", "--rps"], 2),
+            // native: app token rotate
+            stop("token rotate: --ttl last", &["token", "rotate", "acme", "--ttl"], 2),
+            // native: app key mint
+            stop("key mint: --scope last", &["key", "mint", "acme", "--scope"], 2),
             // native: app quota
             stop(
                 "quota: a number that isn't",
@@ -463,7 +469,7 @@ fn the_cross_over_changes_answer_as_the_shell_does() {
             // native: app key mint
             stop("key mint: no scopes", &["key", "mint", "acme"], 2),
             // native: app key mint
-            stop("key mint: --label last", &["key", "mint", "acme", "--label"], 1),
+            stop("key mint: --label last", &["key", "mint", "acme", "--label"], 2),
             // native: app label take
             one(
                 "label take, copied",
@@ -762,7 +768,7 @@ fn access_answers_as_the_shell_does() {
                 2,
             ),
             // native: app access
-            stop("access: --core last", &["access", "ws", "--core"], 1),
+            stop("access: --core last", &["access", "ws", "--core"], 2),
             // native: app invite-settings
             one(
                 "invite-settings: the read",

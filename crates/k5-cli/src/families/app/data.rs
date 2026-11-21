@@ -354,7 +354,7 @@ fn put(words: &[&str]) -> Option<Result<Ask, Stop>> {
         match w {
             "--to" | "--disk-override" => {
                 let Some(v) = rest.get(1) else {
-                    return Some(Err(Stop::silent(Exit::Error)));
+                    return Some(Err(Stop::need_value(w)));
                 };
                 if w == "--to" {
                     to = v.to_string();
@@ -839,7 +839,7 @@ mod tests {
         );
         assert_eq!(
             parse(&["put", "a", "x", "--to"]),
-            Some(Err(Stop::silent(Exit::Error)))
+            Some(Err(Stop::usage("Error: --to takes a value")))
         );
         assert!(parse(&["get", "a", "/"]).is_none(), "an empty name");
     }

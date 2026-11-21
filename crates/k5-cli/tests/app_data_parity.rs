@@ -402,7 +402,7 @@ fn data_answers_as_the_shell_does() {
             stop(
                 "data put: --to last",
                 &["data", "put", "acme", "x", "--to"],
-                1,
+                12,
             ),
             // native: app data
             stop("data: the page", &["data"], 0),
@@ -485,7 +485,11 @@ fn resources_answer_as_the_shell_does() {
             // native: app resources
             stop("resources: a word", &["resources", "acme"], 2),
             // native: app resources
-            stop("resources: --app last", &["resources", "--app"], 1),
+            stop("resources: --app last", &["resources", "--app"], 2),
+            // native: app resources trends
+            stop("resources trends: --window last", &["resources", "trends", "--window"], 2),
+            // native: app resources settings
+            stop("resources settings: --mode last", &["resources", "settings", "--mode"], 2),
             // native: app resources settings
             one(
                 "resources settings: the read",

@@ -135,7 +135,7 @@ fn view(words: &[&str]) -> Result<Ask, Stop> {
 
 /// The shell's loop of value flags and switches, in order: a word that is
 /// neither ends it with `other`'s line (exit 2); a value flag given last
-/// ends it as `set -e` does (exit 1).
+/// is `_need_value`'s line (exit 2).
 fn loop_words(
     words: &[&str],
     values: &[&'static str],
@@ -146,7 +146,7 @@ fn loop_words(
     while let Some(w) = rest.first().copied() {
         if values.contains(&w) {
             if rest.len() < 2 {
-                return Err(Stop::silent(Exit::Error));
+                return Err(Stop::need_value(w));
             }
             rest = &rest[2..];
             continue;
@@ -904,7 +904,7 @@ mod tests {
         );
         assert_eq!(
             parse(&["trends", "--app"]),
-            Some(Err(Stop::silent(Exit::Error)))
+            Some(Err(Stop::usage("Error: --app takes a value")))
         );
     }
 }

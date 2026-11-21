@@ -190,8 +190,7 @@ impl Words {
 /// The shell's usual loop: `--<flag>) x="${2:-}"; shift 2` for each of
 /// `values` (each a name and the names that mean it too), the `switches`,
 /// `-*` an unknown flag (exit 2), any other word plain. A value flag given
-/// last ends the command as `set -e` does (`shift 2` with one word left:
-/// exit 1, nothing said).
+/// last is `_need_value`'s line, exit 2 ([`Stop::need_value`]).
 pub fn walk(
     words: &[&str],
     values: &[&[&'static str]],
@@ -202,7 +201,7 @@ pub fn walk(
     while let Some(w) = rest.first().copied() {
         if let Some(names) = values.iter().find(|n| n.contains(&w)) {
             let Some(v) = rest.get(1) else {
-                return Err(Stop::silent(Exit::Error));
+                return Err(Stop::need_value(w));
             };
             out.values.push((names[0], v.to_string()));
             rest = &rest[2..];
@@ -1032,7 +1031,7 @@ mod tests {
     fn the_loops_read_the_words_as_the_shell_does() {
         assert_eq!(
             parsed("key", &["mint", "a", "--scope", "users", "--label"]),
-            Err(Stop::silent(Exit::Error))
+            Err(Stop::usage("Error: --label takes a value"))
         );
         for w in [&[][..], &["frobnicate"], &["--json"]] {
             assert_eq!(parsed("key", w), Err(Stop::usage(usage::KEY)), "{w:?}");

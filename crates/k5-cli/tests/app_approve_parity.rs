@@ -547,13 +547,20 @@ fn assign_help_never_acts() {
         &["deny", "req-1", "--assign", "ada", "-h"],
         0,
     )));
-    // The shell's pre-scan takes `-h` as --assign's value and sends (bash
-    // bug, app-wallet.sh _app_take_assign; the row flips when it's fixed).
-    rig.check(&shell(read(
-        "help as --assign's value acts: deny --assign -h (bash bug)",
+    // A help word after --assign is help, never a login (the shell's
+    // pre-scan, app-wallet.sh _app_take_assign): the page, nothing sent.
+    let forms: [&'static [&'static str]; 3] = [
         &["deny", "req-1", "--assign", "-h"],
-        r#"{"request":{"id":"req-1","status":"denied","summary":"s"}}"#,
-    )));
+        &["deny", "req-1", "--assign", "--help"],
+        &["deny", "req-1", "--json", "--assign", "-h", "--reason", "r"],
+    ];
+    for args in forms {
+        rig.check(&shell(stop(
+            "help never acts: --assign <help word>",
+            args,
+            0,
+        )));
+    }
 }
 
 /// The binary's lines name the brand's command.

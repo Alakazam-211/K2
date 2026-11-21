@@ -6,8 +6,10 @@
 //!   `--assign <v>` and `--assign=<v>` before a bare `--` is taken out of
 //!   the words (the last one stands), before the verb's own loop reads
 //!   them. A `--` and every word after it stay as they are (`k5 app exec
-//!   <app> -- cmd --assign x` keeps the command's words). With no value,
-//!   or an empty one, it is the usage line on stderr and exit 2, before
+//!   <app> -- cmd --assign x` keeps the command's words). A help word after
+//!   `--assign` (`-h`, `--help`) is never a login: the flag goes and the
+//!   help word stays, so the verb prints its own page. With no value, or
+//!   an empty one, it is the usage line on stderr and exit 2, before
 //!   anything is sent.
 //! - [`path`] is `_compute_assign_path`: a POST to `/cli/app/…` carries
 //!   the value as `?assign=` (`&assign=` when the path has a query
@@ -49,6 +51,12 @@ pub fn take<'a>(words: &[&'a str]) -> Result<Taken<'a>, Stop> {
                 break;
             }
             "--assign" => match words.get(i + 1) {
+                // Help wins: the flag goes, the help word stays.
+                Some(&h @ ("-h" | "--help")) => {
+                    kept.push(h);
+                    i += 2;
+                    continue;
+                }
                 Some(v) if !v.is_empty() => {
                     assign = (*v).to_string();
                     i += 2;
@@ -114,7 +122,21 @@ mod tests {
         );
         // The last one stands; a value may look like a flag.
         assert_eq!(
+            take(&["deny", "--assign", "a", "--assign", "-x", "w"]),
+            taken("-x", &["deny", "w"])
+        );
+        // A help word is never a login: the flag goes, the word stays.
+        assert_eq!(
             take(&["deny", "--assign", "a", "--assign", "-h", "w"]),
+            taken("a", &["deny", "-h", "w"])
+        );
+        assert_eq!(
+            take(&["data", "put", "s", "--assign", "--help"]),
+            taken("", &["data", "put", "s", "--help"])
+        );
+        // `--assign=` takes what follows the `=`, a help word too.
+        assert_eq!(
+            take(&["deny", "--assign=-h", "w"]),
             taken("-h", &["deny", "w"])
         );
         // After `--`, the words are the command's own.

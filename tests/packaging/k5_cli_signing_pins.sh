@@ -224,6 +224,15 @@ for c in callers:
         continue
     if not sn < outer[0] < vn:
         bad(f"ORDER: {c}: k5-cli must be signed (line {sn}) before the outer app (line {outer[0]}) and checked after it (line {vn})")
+    # 0.46.17: k5-cli's universal file has an x86_64 slice the linker leaves
+    # unsigned, and codesign refuses the main executable while unsigned code
+    # sits beside it, so k5-cli is signed before Contents/MacOS/k2 too.
+    main_t = app[:-1] + '/Contents/MacOS/k2"' if app.endswith('"') else app + "/Contents/MacOS/k2"
+    main = [n for n, t in code if (m := OUTER.match(t)) and m.group(1) == main_t]
+    if len(main) != 1:
+        bad(f"ORDER: {c}: signs the main executable {main_t} {len(main)} times, want once")
+    elif not sn < main[0]:
+        bad(f"ORDER: {c}: k5-cli must be signed (line {sn}) before the main executable (line {main[0]})")
     if c == "scripts/release.sh":
         steps = [
             (r'^ditto -c -k --keepParent "K2\.app" "/tmp/K2_\$\{VERSION\}\.zip"$', "zips the signed app"),
@@ -346,6 +355,9 @@ fresh "$R"
 B=scripts/build-app.sh
 echo 'codesign --force --timestamp --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/k5-cli"' >>"$T/$B"
 expect_fail "build-app.sh codesigning k5-cli itself" "SIGN: $B:"
+fresh "$B"
+edit "$B" 's.replace("k2_k5_cli_sign \"$APP\" \"$SIGNING_IDENTITY\" || exit 1\n", "", 1).replace("--sign \"$SIGNING_IDENTITY\" \"$APP/Contents/MacOS/k2-node\"\n", "--sign \"$SIGNING_IDENTITY\" \"$APP/Contents/MacOS/k2-node\"\nk2_k5_cli_sign \"$APP\" \"$SIGNING_IDENTITY\" || exit 1\n", 1)'
+expect_fail "build-app.sh signing k5-cli after the main executable" "ORDER: $B: k5-cli must be signed (line"
 fresh "$B"
 D=scripts/dev-build.sh
 echo 'codesign --force --deep --sign "$SIGNING_IDENTITY" /Applications/K2.app' >>"$T/$D"

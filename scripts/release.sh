@@ -1439,6 +1439,13 @@ fi
 # Inner binaries first (Apple requires sub-binaries signed before the
 # outer bundle, otherwise codesign rejects with 'resource fork … not
 # allowed').
+# The k5 command's program first: the same Developer ID, its own identifier
+# (dev.k2.app.k5-cli, never the daemon's), hardened runtime, no
+# entitlements and so no keychain access group. Notarized with the app.
+# Its universal file has an x86_64 slice the linker leaves unsigned, and
+# signing Contents/MacOS/k2 (the bundle's main executable) refuses unsigned
+# code beside it ("code object is not signed at all ... k5-cli").
+k2_k5_cli_sign "target/release/bundle/macos/K2.app" "$SIGNING_IDENTITY" || exit 1
 codesign --force --options runtime --timestamp \
     --entitlements "$ENTITLEMENTS" \
     --sign "$SIGNING_IDENTITY" \
@@ -1459,10 +1466,6 @@ codesign --force --options runtime --timestamp \
 codesign --force --options runtime --timestamp \
     --sign "$SIGNING_IDENTITY" \
     "target/release/bundle/macos/K2.app/Contents/MacOS/k2-node"
-# The k5 command's program: the same Developer ID, its own identifier
-# (dev.k2.app.k5-cli, never the daemon's), hardened runtime, no
-# entitlements and so no keychain access group. Notarized with the app.
-k2_k5_cli_sign "target/release/bundle/macos/K2.app" "$SIGNING_IDENTITY" || exit 1
 # frpc tunnel sidecar (Tauri externalBin → Contents/MacOS/frpc). Re-sign
 # with hardened runtime so the binary the app stages to ~/.k2/bin/frpc
 # is notarization-covered and runs without a Gatekeeper quarantine block.

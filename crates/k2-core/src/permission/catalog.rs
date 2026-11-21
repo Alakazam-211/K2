@@ -347,10 +347,15 @@ pub enum ConfirmAction {
     /// it into the policy route's own (`recording-policy`, this install).
     #[serde(rename = "voice-recording-dm")]
     VoiceRecordingDm,
+    /// The owner answering their own terminal's vault confirm from the
+    /// phone (0.46.17, the card `vault.owner-confirm`); bound to the request
+    /// id, whose stored values name the exact step.
+    #[serde(rename = "vault-owner-confirm")]
+    VaultOwnerConfirm,
 }
 
 impl ConfirmAction {
-    pub const ALL: [ConfirmAction; 12] = [
+    pub const ALL: [ConfirmAction; 13] = [
         ConfirmAction::AppApprove,
         ConfirmAction::NodeAdmin,
         ConfirmAction::VaultMove,
@@ -363,6 +368,7 @@ impl ConfirmAction {
         ConfirmAction::AppsRecording,
         ConfirmAction::VoiceRecordingStartLevel,
         ConfirmAction::VoiceRecordingDm,
+        ConfirmAction::VaultOwnerConfirm,
     ];
 
     /// The `CONFIRM_ACTIONS` string (`vaultApi.confirmStart(<this>, …)`).
@@ -380,6 +386,7 @@ impl ConfirmAction {
             ConfirmAction::AppsRecording => "apps-recording",
             ConfirmAction::VoiceRecordingStartLevel => "voice-recording-start-level",
             ConfirmAction::VoiceRecordingDm => "voice-recording-dm",
+            ConfirmAction::VaultOwnerConfirm => "vault-owner-confirm",
         }
     }
 }
@@ -814,7 +821,8 @@ mod tests {
                 "sew-recording-enable",
                 "apps-recording",
                 "voice-recording-start-level",
-                "voice-recording-dm"
+                "voice-recording-dm",
+                "vault-owner-confirm"
             ]
         );
         for c in ConfirmAction::ALL {

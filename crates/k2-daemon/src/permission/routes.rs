@@ -360,6 +360,14 @@ fn request(workspace_id: &str, session_id: &str, body: &Map<String, Value>) -> C
     let Some(action_id) = str_field(body, "action") else {
         return err(400, code::BAD_ACTION, concat!("name the action: ", cli_name!(), " permission request <action> (see ", cli_name!(), " permission list)"));
     };
+    if !super::actions::vault_owner_confirm::requestable(action_id) {
+        // K2 raises it for the owner's own terminal; no agent asks for it.
+        return err(
+            403,
+            code::NOT_CARDABLE,
+            format!("{action_id} is {}'s own card for the owner's terminal; an agent never asks for it. It can't be requested.", k2_core::brand::PRODUCT_NAME),
+        );
+    }
     let Some(registered) = present::find_action(action_id) else {
         if let Some(r) = not_cardable(action_id) {
             return r;
@@ -836,7 +844,7 @@ fn list(workspace_id: &str, area: Option<&str>, search: Option<&str>) -> CliResp
     let search = search.map(str::to_ascii_lowercase);
     for r in present::all_actions() {
         let s = r.spec;
-        if area.is_some_and(|a| a != s.area.as_str()) {
+        if area.is_some_and(|a| a != s.area.as_str()) || !super::actions::vault_owner_confirm::requestable(s.id) {
             continue;
         }
         let w = present::words(s, &ctx);

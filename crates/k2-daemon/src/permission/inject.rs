@@ -127,6 +127,10 @@ pub(crate) fn send_outcome(req: &PermissionRequest) {
     if super::actions::postal::quiet(req) {
         return;
     }
+    // The owner's own terminal step (0.46.17): no agent asked, none is woken.
+    if super::actions::vault_owner_confirm::quiet(req) {
+        return;
+    }
     let now = k2_core::overlay::now_secs();
     let Some(line) = outcome_line(req, now) else { return };
     let addr = req.addr.clone().unwrap_or_else(|| present::workspace_handle(&req.workspace_id));

@@ -296,7 +296,7 @@ pub fn binding(action: &str, secret_id: Option<&str>) -> Result<Option<String>, 
 /// What a token is bound to beyond the step: the caller, and (for the
 /// vault's own steps, minted and taken on the same transport) this
 /// request's peer.
-fn bound_stamp(c: &VaultCaller, action: &str) -> String {
+pub(super) fn bound_stamp(c: &VaultCaller, action: &str) -> String {
     let stamp = c.actor.stamp();
     if action == OWNER_LOGIN {
         // Minted on the vault socket or TCP, taken on the users routes
@@ -409,6 +409,10 @@ pub fn take(vault: &LocalVault, c: &VaultCaller, action: &str, secret: Option<&s
     let proof = vault.confirm.take(t, action, secret, &bound_stamp(c, action)).map_err(|_| again(action))?;
     match &proof {
         HumanProof::Confirmed { method } if m.contains(&method.as_str()) => Ok(proof),
+        // 0.46.17: the owner's phone answered this step's card with an owner
+        // login's own password (`phone`): never minted for an owner-login
+        // change, nor from the vault password.
+        HumanProof::Confirmed { method } if method == super::phone::METHOD && super::phone::eligible(action) => Ok(proof),
         _ => Err(again(action)),
     }
 }
@@ -445,7 +449,7 @@ pub(crate) fn owner_login_change_on(vault: Option<&LocalVault>, binding: &str, t
 
 /// An owner login's sign-in password. `username` names the login; with
 /// none given, the server's only owner login.
-fn owner_login_check(vault: &LocalVault, action: &str, username: Option<&str>, password: &str) -> Result<(), VaultError> {
+pub(super) fn owner_login_check(vault: &LocalVault, action: &str, username: Option<&str>, password: &str) -> Result<(), VaultError> {
     let owners = owner_logins();
     let user = match username.map(str::trim).filter(|u| !u.is_empty()) {
         Some(u) => {

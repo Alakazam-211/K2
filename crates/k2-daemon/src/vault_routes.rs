@@ -33,6 +33,9 @@ use crate::vault::actor::{Channel, VaultCaller};
 
 /// The computer's own user check for the vault's first-setup steps.
 pub(crate) mod presence;
+/// The owner answers their own terminal's vault confirm from the phone
+/// (0.46.17).
+pub(crate) mod phone;
 
 pub const STATUS: &str = "/cli/vault/status";
 pub const LIST: &str = "/cli/vault/list";
@@ -717,7 +720,7 @@ pub fn handle_on(
         REVOKE => revoke(vault, &c, body),
         DISABLE | ENABLE | DESTROY => status_change(vault, &c, path, body),
         GET => get_value(vault, &c, body),
-        CONFIRM_START => confirm_start(vault, &c, body),
+        CONFIRM_START => confirm_start(vault, &c, body, ingress),
         CONFIRM_FINISH => confirm_finish(vault, &c, body, ingress),
         CONFIRM_PASSWORD_SET => confirm_password_set(vault, &c, body, ingress, not_person),
         REVEAL => reveal(vault, &c, body, ingress),
@@ -1872,7 +1875,8 @@ fn grant(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, Vaul
                         delivery.as_str()
                     ),
                 )),
-                Some(t) => take_proof(vault, c, GRANT_READ_CONFIRM_ACTION, Some(&m.id), Some(t)).map(|_| ()),
+                Some(t) => phone::check_grant(vault, t, &phone::grant_detail(&m.id, &consumer, delivery, b.env_name.as_deref(), b.file_name.as_deref()))
+                    .and_then(|()| take_proof(vault, c, GRANT_READ_CONFIRM_ACTION, Some(&m.id), Some(t)).map(|_| ())),
             };
             if let Err(e) = proof {
                 crate::vault::auth_audit("vault-grant-read", &stamp, &format!("deny {}: {}", m.name, e.code), "-");
@@ -2318,6 +2322,20 @@ struct ConfirmBody {
     /// `clone-approve` token (`approveToken`), so approving and copying is
     /// one person interaction (`clone_vault::confirm_for_proposal`).
     proposal: Option<String>,
+    /// `confirm/start` from the owner's terminal (0.46.17): also raise the
+    /// phone card for this step (`phone::raise`).
+    phone: Option<bool>,
+    /// `confirm/finish`: the phone card raised for this step (`pr_…`); the
+    /// computer's own check and the card at once (`phone::finish`).
+    phone_request: Option<String>,
+    /// `phone: true`: the terminal's folder; the card goes on the Thread of
+    /// the workspace it is in.
+    workspace_path: Option<String>,
+    /// `phone: true`: a workspace to put the card on instead.
+    thread: Option<String>,
+    /// `phone: true` for `grant-read`: the share itself (the grant body),
+    /// named on the card and bound to the token.
+    grant: Option<Value>,
 }
 
 /// Sending a person-given secret to another server (prd-agent-secret-
@@ -2498,15 +2516,32 @@ const CONFIRM_ACTIONS: &[&str] = &[
     // person's own decision (it may conflict with the provider's terms), so
     // never the owner token alone (`secretId` = the tool).
     k2_core::llm_accounts::auto_next::CONFIRM_ACTION,
+    // The owner answering their own terminal's vault confirm from the phone
+    // (0.46.17, the `vault.owner-confirm` card): bound to the request id.
+    phone::CARD_CONFIRM,
 ];
 
-fn confirm_start(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {
+fn confirm_start(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &str) -> Result<Value, VaultError> {
     human_admin(c)?;
     let b: ConfirmBody = parse(body)?;
     let action = b.action.as_deref().unwrap_or("");
     if !CONFIRM_ACTIONS.contains(&action) {
         return Err(err("bad_action", 400, "unknown confirm action"));
     }
+    if action == phone::CARD_CONFIRM {
+        return phone::card_start(vault, c, b.secret_id.as_deref());
+    }
+    if b.phone == Some(true) {
+        return phone::raise(vault, c, action, &b, ingress);
+    }
+    let mut out = confirm_start_here(vault, c, action, &b)?;
+    // 0.46.17: whether the owner's terminal may also ask the phone.
+    out["phoneOffered"] = json!(phone::offered(c, action).is_ok());
+    Ok(out)
+}
+
+/// `/cli/vault/confirm/start` without the phone: the checks here.
+fn confirm_start_here(vault: &LocalVault, c: &VaultCaller, action: &str, b: &ConfirmBody) -> Result<Value, VaultError> {
     if presence::is_action(action) {
         return presence::start(c, action, b.secret_id.as_deref());
     }
@@ -2559,6 +2594,27 @@ fn confirm_finish(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &st
     if !CONFIRM_ACTIONS.contains(&action) {
         return Err(err("bad_action", 400, "unknown confirm action"));
     }
+    if action == phone::CARD_CONFIRM {
+        return phone::card_finish(vault, c, &b, ingress);
+    }
+    if let Some(request) = b.phone_request.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
+        // The phone path (0.46.17): this computer's own check and the
+        // owner's phone card at once; the first answer wins.
+        if b.proposal.as_deref().is_some_and(|p| !p.trim().is_empty()) {
+            return Err(err("bad_method", 400, "a clone proposal's confirm is answered at the computer"));
+        }
+        let (secret_id, reason, stamp) = phone::step_of(vault, c, action, &b)?;
+        let method = b.method.as_deref().unwrap_or("");
+        let (t, on) = phone::finish(vault, c, action, secret_id.as_deref(), &reason, &stamp, method, request, ingress)?;
+        let mut out = json!({ "token": t, "expiresIn": 60, "confirmedOn": on });
+        if action == crate::vault_systemd_routes::CONFIRM_ACTION || b.rollback_plan.is_some() {
+            out["reason"] = json!(reason);
+        }
+        if let Some(s) = secret_id.filter(|_| action == crate::clone_vault::CONFIRM_ACTION) {
+            out["secretId"] = json!(s);
+        }
+        return Ok(out);
+    }
     if presence::is_action(action) {
         // Bound to the daemon's own form of the folder, key or login.
         let method = b.method.as_deref().unwrap_or("");
@@ -2571,13 +2627,31 @@ fn confirm_finish(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &st
             return crate::clone_vault::confirm_for_proposal(vault, c, ask, pid, b.method.as_deref().unwrap_or(""), b.password.as_deref(), ingress);
         }
     }
+    let (secret_id, reason) = bound_step(vault, c, action, &b)?;
+    let t = confirm_check(vault, c, action, secret_id.as_deref(), b.method.as_deref().unwrap_or(""), b.password.as_deref(), &reason, ingress)?;
+    let mut out = json!({ "token": t, "expiresIn": 60 });
+    if action == crate::vault_systemd_routes::CONFIRM_ACTION || b.rollback_plan.is_some() {
+        out["reason"] = json!(reason);
+    }
+    if let Some(s) = secret_id.filter(|_| action == crate::clone_vault::CONFIRM_ACTION) {
+        out["secretId"] = json!(s);
+    }
+    Ok(out)
+}
+
+/// What a confirm for `action` is bound to and the words the person reads:
+/// the daemon's own form of `secretId` (a folder, a key, a plan's digest,
+/// a stored request), never the client's label where the daemon knows
+/// better. Shared by the computer's own check (`confirm_finish`) and the
+/// phone (`phone`), so both bind the same step to the same words.
+fn bound_step(vault: &LocalVault, c: &VaultCaller, action: &str, b: &ConfirmBody) -> Result<(Option<String>, String), VaultError> {
     // CL14: a clone-carry confirm is bound to the plan the daemon builds
     // from the request, and the sheet says what the plan does.
     let rollback_bound = match (action, b.rollback_plan.as_ref()) {
         ("rollback", Some(plan)) => crate::vault_systemd_routes::rollback_binding(vault, c, plan)?,
         _ => None,
     };
-    let (secret_id, reason) = if let Some((digest, text)) = rollback_bound {
+    Ok(if let Some((digest, text)) = rollback_bound {
         (Some(digest), text)
     } else if let Some(bound) = crate::vault_use_routes::confirm_binding(vault, action, b.secret_id.as_deref()) {
         // Backup key / backup export (VU-B1): the daemon names the key's
@@ -2647,16 +2721,7 @@ fn confirm_finish(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &st
     } else {
         let label = b.label.as_deref().map(|l| format!(" {}", l.chars().take(64).collect::<String>())).unwrap_or_default();
         (b.secret_id.clone(), format!("{}{label}", action.replace('-', " ")))
-    };
-    let t = confirm_check(vault, c, action, secret_id.as_deref(), b.method.as_deref().unwrap_or(""), b.password.as_deref(), &reason, ingress)?;
-    let mut out = json!({ "token": t, "expiresIn": 60 });
-    if action == crate::vault_systemd_routes::CONFIRM_ACTION || b.rollback_plan.is_some() {
-        out["reason"] = json!(reason);
-    }
-    if let Some(s) = secret_id.filter(|_| action == crate::clone_vault::CONFIRM_ACTION) {
-        out["secretId"] = json!(s);
-    }
-    Ok(out)
+    })
 }
 
 /// Check one person-confirm method and mint a token bound to (action,
@@ -2680,6 +2745,10 @@ pub(crate) fn confirm_check(
     if presence::is_action(action) {
         // Only this computer's own user check mints these (`presence`).
         return Err(presence::required(action));
+    }
+    if action == phone::CARD_CONFIRM {
+        // Only the card's own confirm mints these (`phone::card_finish`).
+        return Err(err("bad_action", 400, "this confirm is the phone card's own"));
     }
     let stamp = c.actor.stamp();
     let res: Result<(), VaultError> = match method {

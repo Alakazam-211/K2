@@ -100,7 +100,8 @@ pub(crate) fn push_card(conversation_id: &str, project_id: &str, addr: &str, car
     let seen = eligible.iter().any(|p| viewers.visible_within(p, conversation_id, VISIBLE_WINDOW, now));
     // Narrowed to no login (only `owner`): no item, which would be
     // unassigned and so seen by every owner.
-    let item_ok = narrowed.is_none() || !logins.is_empty();
+    // The owner's own terminal step (0.46.17) lasts minutes: no Tickets item.
+    let item_ok = (narrowed.is_none() || !logins.is_empty()) && !super::actions::vault_owner_confirm::quiet(&req);
     if !seen && item_ok {
         let (title, body) = notice_text(&req, &agent, addr);
         let assignees: Vec<String> = logins.to_vec();

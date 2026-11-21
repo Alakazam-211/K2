@@ -181,10 +181,16 @@ fn rooms_outside_the_card_stay_refused_and_a_changed_role_needs_a_new_card() {
     .expect("role grows");
     assert_eq!(rooms_now(&user, &f.svc), sorted(vec![f.a.id.clone(), f.b.id.clone()]), "c was never on a card");
 
-    // A card asked for the role it had; the role changes before the click:
-    // stale, nothing opens.
+    // A card asked for the role it had; the role changes before the click
+    // (to one naming the same rooms, so only the role tells them apart):
+    // stale, nothing opens, and what the old role opened doesn't carry over.
     let other = format!("other{}", uniq());
-    skin::create_role_for_app(&other, &policy(&[(&f.a.id, &["thread:read"]), (&f.c.id, &["thread:read"])]), Some(&f.svc)).expect("role 2");
+    skin::create_role_for_app(
+        &other,
+        &policy(&[(&f.a.id, &["thread:read"]), (&f.b.id, &["thread:read"]), (&f.c.id, &["thread:read"])]),
+        Some(&f.svc),
+    )
+    .expect("role 2");
     let asked = ask_with(&f.a, json!({ "app": f.app_id, "login": user, "role": f.role, "rooms": [f.b.handle, f.c.handle] }));
     let card = card_of(&asked);
     let grant = skin::list_grants().expect("grants").into_iter().find(|g| g.subject_id == p.id && g.target_id == f.svc).expect("grant");

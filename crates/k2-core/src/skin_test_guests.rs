@@ -91,20 +91,35 @@ pub(super) fn ensure_schema(conn: &Connection) -> Result<(), String> {
 
 /// The `(app, room)` pairs opened to `principal_id` that still hold.
 pub(crate) fn opened_rooms_conn(conn: &Connection, principal_id: &str) -> Result<Vec<(String, String)>, String> {
+    // Only access tables here (`access_live::ACCESS_TABLES`): a pass resolve
+    // reads this. The login is a test guest: the rows are only ever written for
+    // one (`open_rooms`), and both go with the principal.
     let mut st = conn
         .prepare(
-            "SELECT r.app_id, r.room FROM app_test_guest_rooms r
-               JOIN app_test_guests t ON t.principal_id = r.principal_id AND t.app_id = r.app_id
+            "SELECT r.app_id, r.room, ro.room_policy FROM app_test_guest_rooms r
                JOIN grants g ON g.subject_kind = 'principal' AND g.subject_id = r.principal_id AND g.kind = 'app'
                             AND g.target_id = r.app_id AND g.enabled != 0 AND g.role_id = r.role_id
                JOIN roles ro ON ro.id = r.role_id
               WHERE r.principal_id = ?1
-                AND EXISTS (SELECT 1 FROM json_each(ro.room_policy) j WHERE j.key = r.room)
               ORDER BY r.room",
         )
         .map_err(|e| format!("test guest rooms: {e}"))?;
-    let rows = st.query_map(params![principal_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).map_err(|e| format!("test guest rooms: {e}"))?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(|e| format!("test guest rooms: {e}"))
+    let rows = st
+        .query_map(params![principal_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?)))
+        .map_err(|e| format!("test guest rooms: {e}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("test guest rooms: {e}"))?;
+    // The role still names the room (a role that can't be read names none).
+    Ok(rows
+        .into_iter()
+        .filter(|(_, room, policy)| {
+            policy
+                .as_deref()
+                .and_then(|p| serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(p).ok())
+                .is_some_and(|m| m.contains_key(room))
+        })
+        .map(|(app, room, _)| (app, room))
+        .collect())
 }
 
 /// [`opened_rooms_conn`] on its own connection.

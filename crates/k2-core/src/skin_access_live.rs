@@ -39,7 +39,7 @@ use rusqlite::Connection;
 /// resolve under an authorizer and fails if it reads a table not listed here, so a
 /// new access table can't be forgotten.
 pub const ACCESS_TABLES: &[&str] =
-    &["grants", "roles", "principals", "principal_agent_ties", "agent_written_access", "app_owner_grants", "tokens"];
+    &["grants", "roles", "principals", "principal_agent_ties", "agent_written_access", "app_owner_grants", "tokens", "app_test_guest_rooms"];
 
 /// Rows a `tokens` write may name before it just counts as a full walk.
 const MAX_NAMED_TOKENS: usize = 256;

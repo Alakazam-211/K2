@@ -501,3 +501,247 @@ fn whoami_through_a_proxy_that_refuses_the_tunnel() {
         n => panic!("{}: bash sent {n} CONNECTs, want 1 (curl 8.5) or 4 (newer curl): {b:?}", c.name),
     }
 }
+
+// The shared client's CONNECT tunnel (the Steward's conditions for it):
+// the certificate is checked inside the tunnel, `no_proxy` and loopback
+// go direct, and a proxy that won't tunnel is final. The daemon's name
+// here is `0.0.0.0`: no loopback name, so it is proxied, yet a direct
+// connect reaches the TLS stub, so a direct try in place of the tunnel
+// shows in the stub's log. Its certificate holds `0.0.0.0`.
+
+/// A daemon's PKI for `0.0.0.0` and `127.0.0.1` in its own folder.
+fn ip_pki(rig: &Rig, name: &str) -> tunnel::Pki {
+    tunnel::Pki::for_names(&rig.dir.join(name), &["0.0.0.0", "127.0.0.1"])
+}
+
+/// Nothing reached the TLS stub (no request, no connection) and the
+/// command failed, on both sides; the token printed nowhere.
+fn nothing_past_the_proxy(name: &str, b: &SideRun, r: &SideRun) {
+    no_warning(name, &[b, r]);
+    for run in [b, r] {
+        assert!(
+            run.tls.is_empty() && run.tls_errors.is_empty(),
+            "{name}: the daemon was reached: {run:?}"
+        );
+        assert_ne!(run.out.code, Some(0), "{name}: {run:?}");
+    }
+    tunnel::assert_unprinted(name, &[b.clone(), r.clone()], &[OWNER]);
+}
+
+/// The proxy tunnels to a daemon whose certificate is from a CA the
+/// person doesn't trust: refused inside the tunnel as it is direct
+/// (curl's 60), nothing sent, the token never in the clear.
+#[test]
+fn whoami_through_the_proxy_to_a_certificate_from_another_ca() {
+    let rig = Rig::new("whoami", "httpsotherca");
+    let trusted = ip_pki(&rig, "trusted");
+    let other = ip_pki(&rig, "other");
+    let daemon = TlsStub::start(&other, 200, WHOAMI);
+    let proxy = ProxyStub::start(ProxyMode::Tunnel);
+    let port = daemon.port.to_string();
+    let ca = trusted.ca_file.to_string_lossy().into_owned();
+    let px = proxy.url(None);
+    let c = tls_case(
+        "whoami: K2_HOST=https://0.0.0.0 through https_proxy, another CA's certificate",
+        &[
+            ("K2_HOST", "https://0.0.0.0"),
+            ("K2_PORT", port.as_str()),
+            ("SSL_CERT_FILE", ca.as_str()),
+            ("https_proxy", px.as_str()),
+        ],
+    );
+    let [b, r] = tunnel::both(&rig, &c, &proxy, &daemon);
+    let target = format!("0.0.0.0:{port}");
+    for run in [&b, &r] {
+        assert!(
+            !run.proxy.is_empty()
+                && run
+                    .proxy
+                    .iter()
+                    .all(|h| h.starts_with(&format!("CONNECT {target} HTTP/1.1\r\n"))
+                        && !h.contains(OWNER)),
+            "{}: the CONNECTs: {run:?}",
+            c.name
+        );
+        assert!(
+            run.tls.is_empty(),
+            "{}: a request was sent: {run:?}",
+            c.name
+        );
+        // The handshake reached the stub through the tunnel, and only
+        // through it: one try per CONNECT, none direct.
+        assert!(
+            !run.tls_errors.is_empty() && run.tls_errors.len() <= run.proxy.len(),
+            "{}: {run:?}",
+            c.name
+        );
+        assert_ne!(run.out.code, Some(0), "{}: {run:?}", c.name);
+    }
+    assert_eq!(b.out.code, r.out.code, "{}: bash, then the binary", c.name);
+    no_warning(c.name, &[&b, &r]);
+    tunnel::assert_unprinted(c.name, &[b, r], &[OWNER]);
+}
+
+/// `no_proxy` naming the daemon's host: straight there, the proxy sees
+/// nothing (curl's rules: `proxy::tests::no_proxy_matches_as_curl_does`).
+#[test]
+fn whoami_with_no_proxy_naming_the_host_goes_direct() {
+    let rig = Rig::new("whoami", "httpsnoproxy");
+    let pki = ip_pki(&rig, "pki");
+    let daemon = TlsStub::start(&pki, 200, WHOAMI);
+    let proxy = ProxyStub::start(ProxyMode::Tunnel);
+    let port = daemon.port.to_string();
+    let ca = pki.ca_file.to_string_lossy().into_owned();
+    let px = proxy.url(None);
+    let c = tls_case(
+        "whoami: K2_HOST=https://0.0.0.0, https_proxy, no_proxy=0.0.0.0",
+        &[
+            ("K2_HOST", "https://0.0.0.0"),
+            ("K2_PORT", port.as_str()),
+            ("SSL_CERT_FILE", ca.as_str()),
+            ("https_proxy", px.as_str()),
+            ("no_proxy", "0.0.0.0"),
+        ],
+    );
+    let [b, r] = tunnel::both(&rig, &c, &proxy, &daemon);
+    tunnel::assert_same(c.name, &b, &r);
+    no_warning(c.name, &[&b, &r]);
+    for run in [&b, &r] {
+        assert!(
+            run.proxy.is_empty(),
+            "{}: the proxy was used: {run:?}",
+            c.name
+        );
+        assert_eq!(run.tls.len(), 1, "{}: {run:?}", c.name);
+        assert!(
+            run.tls[0]
+                .0
+                .contains(&format!("\r\nAuthorization: Bearer {OWNER}\r\n")),
+            "{}: {run:?}",
+            c.name
+        );
+    }
+    assert_eq!(r.out.code, Some(0), "{r:?}");
+    assert!(r.out.stdout.contains("sales"), "{r:?}");
+}
+
+/// A loopback address with a proxy set: straight there, the proxy never
+/// touched (`whoami_over_tls_to_an_https_host` is the `localhost` row).
+#[test]
+fn whoami_on_a_loopback_address_never_uses_the_proxy() {
+    let rig = Rig::new("whoami", "httpsloopback");
+    let pki = ip_pki(&rig, "pki");
+    let daemon = TlsStub::start(&pki, 200, WHOAMI);
+    let proxy = ProxyStub::start(ProxyMode::Tunnel);
+    let port = daemon.port.to_string();
+    let ca = pki.ca_file.to_string_lossy().into_owned();
+    let px = proxy.url(None);
+    let c = tls_case(
+        "whoami: K2_HOST=https://127.0.0.1 with https_proxy set",
+        &[
+            ("K2_HOST", "https://127.0.0.1"),
+            ("K2_PORT", port.as_str()),
+            ("SSL_CERT_FILE", ca.as_str()),
+            ("https_proxy", px.as_str()),
+            ("HTTPS_PROXY", px.as_str()),
+            ("all_proxy", px.as_str()),
+        ],
+    );
+    let [b, r] = tunnel::both(&rig, &c, &proxy, &daemon);
+    tunnel::assert_same(c.name, &b, &r);
+    no_warning(c.name, &[&b, &r]);
+    for run in [&b, &r] {
+        assert!(
+            run.proxy.is_empty(),
+            "{}: the proxy was used: {run:?}",
+            c.name
+        );
+        assert_eq!(run.tls.len(), 1, "{}: {run:?}", c.name);
+    }
+    assert_eq!(r.out.code, Some(0), "{r:?}");
+}
+
+/// A proxy that answers the CONNECT with anything but a 2xx is final:
+/// nothing past it, no direct or plain try in its place (curl 8.5's 56;
+/// newer curl's 7 is tried 4 times by `_k2_curl`: the named difference
+/// curl-version-proxy-exit, as for the 407 row).
+#[test]
+fn whoami_through_a_proxy_that_answers_403_or_502() {
+    for (name, line) in [
+        (
+            "whoami: K2_HOST=https://0.0.0.0, the proxy says 403",
+            "403 Forbidden",
+        ),
+        (
+            "whoami: K2_HOST=https://0.0.0.0, the proxy says 502",
+            "502 Bad Gateway",
+        ),
+    ] {
+        let rig = Rig::new("whoami", "httpsproxystatus");
+        let pki = ip_pki(&rig, "pki");
+        let daemon = TlsStub::start(&pki, 200, WHOAMI);
+        let proxy = ProxyStub::start(ProxyMode::Status(line));
+        let port = daemon.port.to_string();
+        let ca = pki.ca_file.to_string_lossy().into_owned();
+        let px = proxy.url(None);
+        let c = tls_case(
+            name,
+            &[
+                ("K2_HOST", "https://0.0.0.0"),
+                ("K2_PORT", port.as_str()),
+                ("SSL_CERT_FILE", ca.as_str()),
+                ("https_proxy", px.as_str()),
+            ],
+        );
+        let [b, r] = tunnel::both(&rig, &c, &proxy, &daemon);
+        assert_eq!(
+            r.proxy.len(),
+            1,
+            "{name}: one CONNECT, never tried again: {r:?}"
+        );
+        assert!(
+            r.proxy[0].starts_with(&format!("CONNECT 0.0.0.0:{port} HTTP/1.1\r\n")),
+            "{name}: {r:?}"
+        );
+        nothing_past_the_proxy(name, &b, &r);
+        match b.proxy.len() {
+            1 => tunnel::assert_same(name, &b, &r),
+            4 => println!(
+                "named difference curl-version-proxy-exit: {name}: bash's curl tried the CONNECT 4 times; the binary's side alone"
+            ),
+            n => panic!("{name}: bash sent {n} CONNECTs, want 1 (curl 8.5) or 4 (newer curl): {b:?}"),
+        }
+    }
+}
+
+/// A proxy nothing listens on: the command fails, and nothing goes to
+/// the daemon direct in its place.
+#[test]
+fn whoami_through_a_proxy_that_refuses_the_connection() {
+    let rig = Rig::new("whoami", "httpsproxydown");
+    let pki = ip_pki(&rig, "pki");
+    let daemon = TlsStub::start(&pki, 200, WHOAMI);
+    // Records nothing: only its log is read, and it is never the proxy.
+    let unused = ProxyStub::start(ProxyMode::Tunnel);
+    let port = daemon.port.to_string();
+    let ca = pki.ca_file.to_string_lossy().into_owned();
+    let px = format!("http://127.0.0.1:{}", common::stub::dead_port());
+    let c = tls_case(
+        "whoami: K2_HOST=https://0.0.0.0, https_proxy at a closed port",
+        &[
+            ("K2_HOST", "https://0.0.0.0"),
+            ("K2_PORT", port.as_str()),
+            ("SSL_CERT_FILE", ca.as_str()),
+            ("https_proxy", px.as_str()),
+        ],
+    );
+    let [b, r] = tunnel::both(&rig, &c, &unused, &daemon);
+    nothing_past_the_proxy(c.name, &b, &r);
+    assert_eq!(
+        (b.out.code, &b.out.stdout, &b.out.stderr),
+        (r.out.code, &r.out.stdout, &r.out.stderr),
+        "{}: bash, then the binary",
+        c.name
+    );
+    assert_eq!(b.daemon, r.daemon, "{}: the daemon's requests", c.name);
+}

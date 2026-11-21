@@ -10,7 +10,10 @@
 //! - each form that is not an alias with `--help` after it (a help form);
 //! - each form whose `--schema` entry takes `--json` with `--json` after it;
 //! - the shapes of `tests/data/native_bar_shapes.tsv`: documented flags,
-//!   and error and environment edges, each with its class.
+//!   and error and environment edges, each with its class;
+//! - [`PROXIED`]: one form of each family the shell answers with its
+//!   Python's urllib, with `K2_HOST=https://<name>` through the person's
+//!   proxy (K2's ruling): see [`proxied_falls_through`].
 //!
 //! How: the built binary, with a scratch home and K2 home, a stub daemon
 //! that answers every request with 200 and the owner token and port on
@@ -32,6 +35,14 @@
 //! - P an edge that exists only because python3 is missing (the
 //!   native-without-python3 difference): listed, not counted.
 //!
+//! A [`PROXIED`] probe is class V, and it falls through when the binary
+//! sends nothing at all and fails (it doesn't tunnel through the proxy as
+//! the shell's Python does: it fails closed); it is native when its
+//! request reached the daemon inside a CONNECT tunnel. Either way the
+//! stub proxy and the stub daemons record every connection, and the test
+//! fails if anything went to the daemon direct, in plain text, or to the
+//! local plain-http daemon, or if the owner token reached the proxy.
+//!
 //! The test fails when a probe falls through that the ceiling doesn't
 //! list, and when a ceiling row is native now or names no probe: the
 //! ceiling can only fall. The ship bar is a ceiling with no counted row.
@@ -44,11 +55,12 @@
 mod common;
 
 use common::stub::Stub;
+use common::tunnel::{self, ProxyMode, ProxyStub, TlsStub};
 use std::collections::BTreeSet;
 use std::fs;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -62,6 +74,21 @@ const NO_PYTHON: &str = "is not built into k5 yet and needs Python 3";
 /// How long a probe may run: past it, it is in its own code.
 const DEADLINE: Duration = Duration::from_secs(10);
 const WORKERS: usize = 8;
+/// The owner token on the scratch machine's disk.
+const OWNER: &str = "owner-tok-7171";
+/// One form per family whose shell code is a Python urllib block, probed
+/// with `K2_HOST=https://0.0.0.0` through `https_proxy` ([`proxied`]).
+/// `0.0.0.0` is no loopback name, so it is proxied, yet a direct connect
+/// reaches the stub daemon, so a direct try shows in its log.
+const PROXIED: &[(&str, &str)] = &[
+    ("db", "db list"),
+    ("calendar", "calendar list"),
+    ("project", "project list"),
+    ("store", "store list"),
+    ("workspace", "workspace list"),
+];
+/// A [`PROXIED`] probe's name after its form.
+const PROXIED_AS: &str = "(K2_HOST=https://<name> through https_proxy)";
 /// Stand-ins for programs that act on the machine.
 const STAND_INS: &[&str] = &[
     "open",
@@ -198,11 +225,42 @@ fn probes() -> Vec<Probe> {
             env,
         });
     }
+    out.extend(proxied());
     let mut seen = BTreeSet::new();
     for p in &out {
         assert!(seen.insert(&p.form), "two probes are named {:?}", p.form);
     }
     out
+}
+
+/// The [`PROXIED`] probes: each names a router form.
+fn proxied() -> Vec<Probe> {
+    let forms: BTreeSet<String> = rows(
+        FORMS,
+        &[
+            "form", "argv", "alias_of", "anchor", "entry", "json", "source",
+        ],
+    )
+    .into_iter()
+    .map(|r| r[0].clone())
+    .collect();
+    PROXIED
+        .iter()
+        .map(|(family, form)| {
+            assert!(forms.contains(*form), "{form:?} is no router form");
+            Probe {
+                class: "V".into(),
+                family: (*family).into(),
+                form: format!("{form} {PROXIED_AS}"),
+                argv: words(form),
+                env: Vec::new(),
+            }
+        })
+        .collect()
+}
+
+fn is_proxied(p: &Probe) -> bool {
+    p.form.ends_with(PROXIED_AS)
 }
 
 /// A scratch machine: home, K2 home with the owner token and the stub's
@@ -213,7 +271,7 @@ struct Machine {
     proj: PathBuf,
     tmp: PathBuf,
     path: String,
-    _stub: Stub,
+    stub: Stub,
 }
 
 fn scratch() -> Machine {
@@ -243,18 +301,20 @@ fn scratch() -> Machine {
         proj,
         tmp,
         path,
-        _stub: stub,
+        stub,
     }
 }
 
-/// Whether `p` falls through: the hand-off's exit and line.
-fn falls_through(b: &Machine, p: &Probe) -> bool {
+/// Runs `p` with `env` on top of its own: its exit (`None`: still
+/// running at [`DEADLINE`], killed) and its stderr.
+fn spawn(b: &Machine, p: &Probe, env: &[(String, String)]) -> (Option<ExitStatus>, String) {
     let mut cmd = Command::new(BIN);
     cmd.env_clear()
         .env("PATH", &b.path)
         .env("HOME", &b.home)
         .env("TMPDIR", &b.tmp)
         .envs(p.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+        .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
         .current_dir(&b.proj)
         .args(&p.argv)
         .process_group(0)
@@ -290,6 +350,12 @@ fn falls_through(b: &Machine, p: &Probe) -> bool {
         std::thread::sleep(Duration::from_millis(5));
     };
     let stderr = String::from_utf8_lossy(&reader.join().expect("its stderr")).into_owned();
+    (status, stderr)
+}
+
+/// Whether `p` falls through: the hand-off's exit and line.
+fn falls_through(b: &Machine, p: &Probe) -> bool {
+    let (status, stderr) = spawn(b, p, &[]);
     let Some(status) = status else {
         // Still in its own code at the deadline: native.
         return false;
@@ -304,29 +370,118 @@ fn falls_through(b: &Machine, p: &Probe) -> bool {
     said
 }
 
-/// The probes that fall through, in probe order.
+/// The probes that fall through, in probe order: the [`PROXIED`] ones
+/// after the others, one at a time.
 fn run(probes: &[Probe]) -> Vec<Probe> {
     let b = scratch();
+    let (plain, proxy): (Vec<&Probe>, Vec<&Probe>) = probes.iter().partition(|p| !is_proxied(p));
     let next = AtomicUsize::new(0);
-    let fell = Mutex::new(vec![false; probes.len()]);
+    let fell = Mutex::new(vec![false; plain.len()]);
     std::thread::scope(|s| {
         for _ in 0..WORKERS {
             s.spawn(|| loop {
                 let i = next.fetch_add(1, Ordering::SeqCst);
-                let Some(p) = probes.get(i) else { break };
+                let Some(p) = plain.get(i) else { break };
                 let f = falls_through(&b, p);
                 fell.lock().expect("the results")[i] = f;
             });
         }
     });
     let fell = fell.into_inner().expect("the results");
-    let _ = fs::remove_dir_all(&b.dir);
-    probes
+    let pki = tunnel::Pki::for_names(&b.dir.join("pki"), &["0.0.0.0"]);
+    let proxy_fell: Vec<bool> = proxy
         .iter()
+        .map(|p| proxied_falls_through(&b, &pki, p))
+        .collect();
+    let _ = fs::remove_dir_all(&b.dir);
+    plain
+        .into_iter()
         .zip(fell)
+        .chain(proxy.into_iter().zip(proxy_fell))
         .filter(|(_, f)| *f)
         .map(|(p, _)| p.clone())
         .collect()
+}
+
+/// A [`PROXIED`] probe, against a stub proxy and a stub `https://`
+/// daemon of its own, both recording: whether it falls through (it sent
+/// nothing and failed: closed). Fails if anything reached the local
+/// plain-http daemon, went past the proxy other than in a CONNECT, put
+/// the token in a CONNECT, or reached the daemon other than through a
+/// tunnel; or if it answered 0 having sent nothing.
+fn proxied_falls_through(b: &Machine, pki: &tunnel::Pki, p: &Probe) -> bool {
+    let daemon = TlsStub::start(pki, 200, "{}");
+    let proxy = ProxyStub::start(ProxyMode::Tunnel);
+    b.stub.take_log();
+    let env: Vec<(String, String)> = [
+        ("K2_HOST", "https://0.0.0.0".to_string()),
+        ("K2_PORT", daemon.port.to_string()),
+        ("SSL_CERT_FILE", pki.ca_file.to_string_lossy().into_owned()),
+        ("https_proxy", proxy.url(None)),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v))
+    .collect();
+    let (status, stderr) = spawn(b, p, &env);
+    // The stubs log on their own threads: let a connection that ended
+    // with the process land.
+    std::thread::sleep(Duration::from_millis(300));
+    let heads = tunnel::take(&proxy.heads);
+    let sent = tunnel::take(&daemon.log);
+    let broken = tunnel::take(&daemon.errors);
+    let plain = b.stub.unread();
+    let record = format!(
+        "exit {:?}; CONNECTs {heads:?}; daemon requests {sent:?}; daemon connections with no request {broken:?}; local plain daemon {} requests; stderr {stderr:?}",
+        status.map(|s| s.code()),
+        plain.len()
+    );
+    let name = &p.form;
+    let Some(status) = status else {
+        panic!("{name}: still running at the deadline: {record}");
+    };
+    assert!(
+        plain.is_empty(),
+        "{name}: the local plain-http daemon got requests: {record}"
+    );
+    let target = format!("CONNECT 0.0.0.0:{} HTTP/1.1\r\n", daemon.port);
+    for h in &heads {
+        assert!(
+            h.starts_with(&target),
+            "{name}: the proxy got more than a CONNECT: {record}"
+        );
+        assert!(
+            !h.contains(OWNER),
+            "{name}: the token reached the proxy: {record}"
+        );
+    }
+    assert!(
+        sent.len() + broken.len() <= heads.len(),
+        "{name}: the daemon was reached other than through the tunnel: {record}"
+    );
+    assert!(
+        !stderr.contains(OWNER),
+        "{name}: the token was printed: {record}"
+    );
+    let fell = sent.is_empty();
+    if fell {
+        assert!(
+            !status.success(),
+            "{name}: exit 0 with nothing sent: {record}"
+        );
+        assert!(
+            heads.is_empty() && broken.is_empty(),
+            "{name}: a tunnel with no request in it: {record}"
+        );
+    }
+    println!(
+        "{name}: {}: {record}",
+        if fell {
+            "sent nothing, failed closed"
+        } else {
+            "native: through the tunnel"
+        }
+    );
+    fell
 }
 
 fn ceiling_text(fell: &[Probe], total: usize) -> String {

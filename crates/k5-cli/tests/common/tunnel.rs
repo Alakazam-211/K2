@@ -10,7 +10,7 @@
 //! - [`ProxyStub`]: an HTTP proxy on loopback that records every
 //!   connection's CONNECT head (or whatever came instead), then answers
 //!   as its [`ProxyMode`] says: open the tunnel to the TLS stub at the
-//!   CONNECT's port, or refuse with a 407.
+//!   CONNECT's port, refuse with a 407, or answer another status.
 //!
 //! The target name is under `.invalid` (RFC 6761): it never resolves, so
 //! a side that goes direct where it should have used the proxy fails to
@@ -37,7 +37,14 @@ pub struct Pki {
 }
 
 impl Pki {
+    /// A CA of its own and a certificate for [`HOST`] and `localhost`.
     pub fn new(dir: &Path) -> Pki {
+        Pki::for_names(dir, &[HOST, "localhost"])
+    }
+
+    /// A CA of its own and a certificate for `names` (an IP address is an
+    /// IP address name). Two `Pki`s never trust each other's certificates.
+    pub fn for_names(dir: &Path, names: &[&str]) -> Pki {
         use rcgen::{
             BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, KeyPair,
             KeyUsagePurpose,
@@ -57,9 +64,9 @@ impl Pki {
         let ca_key = KeyPair::generate().unwrap();
         let ca = ca_params.self_signed(&ca_key).unwrap();
         let leaf_key = KeyPair::generate().unwrap();
-        // `localhost` too: a daemon at `K2_HOST=https://localhost`.
         let mut leaf_params =
-            CertificateParams::new(vec![HOST.to_string(), "localhost".to_string()]).unwrap();
+            CertificateParams::new(names.iter().map(|n| (*n).to_string()).collect::<Vec<_>>())
+                .unwrap();
         leaf_params
             .distinguished_name
             .push(DnType::CommonName, HOST);
@@ -184,6 +191,8 @@ pub enum ProxyMode {
     Tunnel,
     /// `407 Proxy Authentication Required`, then close.
     Refuse,
+    /// This status line (`403 Forbidden`, `502 Bad Gateway`), then close.
+    Status(&'static str),
 }
 
 /// A recording HTTP proxy on loopback.
@@ -235,6 +244,12 @@ fn proxy_one(mut c: TcpStream, heads: &Log, mode: ProxyMode) {
         .and_then(|r| r.split(' ').next())
         .and_then(|a| a.rsplit_once(':'))
         .and_then(|(_, p)| p.parse::<u16>().ok());
+    if let ProxyMode::Status(line) = mode {
+        let _ = c.write_all(
+            format!("HTTP/1.1 {line}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes(),
+        );
+        return;
+    }
     let (ProxyMode::Tunnel, Some(port)) = (mode, target_port) else {
         let _ = c.write_all(
             b"HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"acme\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",

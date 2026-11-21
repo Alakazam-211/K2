@@ -10,7 +10,7 @@
 //! - `GET /cli/vault/incoming` / `GET /cli/vault/sent` — names only.
 //! - `POST /cli/vault/incoming/decide` — a person accepts or declines.
 //! - `GET|POST /cli/vault/accept-from` — the per-agent allow-list (POST:
-//!   people only, H19).
+//!   people only, H19; the owner token or an Owner or Admin login).
 //!
 //! Every step writes a `vault-handoff` line to the auth audit (Settings →
 //! Logs → Access Audit) and a row to the vault's own audit chain: send,
@@ -929,6 +929,13 @@ fn accept_from_post(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &
     let b: AcceptFromBody = parse(body)?;
     if c.is_passport() || !matches!(c.actor, Actor::Owner | Actor::Login { .. }) {
         let e = VaultError::forbidden("handoff_person_only", "only a person on this server edits who an agent accepts secrets from (H19)");
+        audit(&stamp, &format!("deny accept-from {}: {}", b.action, e.code), ingress);
+        return Err(e);
+    }
+    // The vault.accept-from card's floor (Admin): the owner token, an Owner
+    // or an Admin login. Any other login gets the vault's role refusal.
+    if c.actor.is_member() {
+        let e = VaultError::forbidden("role_required", "editing who an agent accepts secrets from takes an Owner or Admin login (or the owner)");
         audit(&stamp, &format!("deny accept-from {}: {}", b.action, e.code), ingress);
         return Err(e);
     }

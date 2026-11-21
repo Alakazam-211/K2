@@ -41221,7 +41221,7 @@ k2 vault send — hand a vault secret to another agent by name (you never see th
   People only (your own terminal, not a K2 terminal; the card does the same):
   k2 vault incoming accept <id> [--as NEW] [--replace] [--always] [--json]
   k2 vault incoming decline <id> [--json]
-  k2 vault accept-from add|remove <ws:agent|agent|agent::host|team:id> --workspace <ws> [--json]
+  k2 vault accept-from add|remove <ws:agent|agent|agent::host|team:id> --workspace <ws> [--json]   (an owner or admin login)
   k2 vault send-allow add|remove NAME --to <agent>::<host> --workspace <ws> [--json]   (add asks for the vault confirm)
   k2 vault send NAME --to <agent> --workspace <ws> | --scope ws:<ws>|server
                                     which secret of that name (an agent sends its own workspace's)

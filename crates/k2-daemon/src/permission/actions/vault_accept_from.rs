@@ -12,7 +12,7 @@
 //! - **One card, several receivers:** "Let {receivers} accept vault sends
 //!   from {sender}", every receiver named, with the agent's why.
 //! - **Who answers:** the owner token, an Owner or an Admin login (a card's
-//!   lowest floor; the route itself takes any person). An agent never: the
+//!   lowest floor, and the route's own: it refuses any other login). An agent never: the
 //!   card is a person's, and the route refuses a passport.
 //! - **Proof:** a click by a person, the same as the command today (it takes
 //!   no vault confirm).

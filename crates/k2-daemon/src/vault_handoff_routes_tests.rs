@@ -682,6 +682,37 @@ fn a_cross_server_key_without_sites_lands_as_a_file_the_agent_reads() {
     });
 }
 
+/// The accept-from list takes the vault.accept-from card's floor (Admin):
+/// a Member login is refused with `role_required` on add and remove and
+/// nothing changes; an Admin login and the owner token edit it.
+#[test]
+fn accept_from_edits_take_an_owner_or_admin_login() {
+    with_temp_home(|| {
+        let _db = k2_core::db::scoped_for_test();
+        let v = crate::vault::ensure_test_vault();
+        let (sales, ops) = (workspace("sales"), workspace("ops"));
+        let member = VaultCaller { actor: Actor::Login { username: "mia".into(), role: Role::Member }, channel: Channel::Login, session_id: None };
+        let admin = VaultCaller { actor: Actor::Login { username: "lee".into(), role: Role::Admin }, channel: Channel::Login, session_id: None };
+        let listed = || -> usize {
+            let (st, j, raw) = call_p(&v, ACCEPT_FROM, &owner(), Value::Null, HashMap::from([("workspace".to_string(), ops.id.clone())]));
+            assert_eq!(st, 200, "{raw}");
+            j["entries"].as_array().expect("entries").len()
+        };
+        let (st, j, _) = call(&v, ACCEPT_FROM, &member, json!({ "workspace": ops.id, "sender": sales.name, "action": "add" }));
+        assert_eq!((st, code(&j)), (403, "role_required"), "{j}");
+        assert_eq!(listed(), 0, "a refused add adds nothing");
+        let (st, j, raw) = call(&v, ACCEPT_FROM, &admin, json!({ "workspace": ops.id, "sender": sales.name, "action": "add" }));
+        assert_eq!(st, 200, "{raw}");
+        assert_eq!(j["entries"].as_array().expect("entries").len(), 1, "{j}");
+        let (st, j, _) = call(&v, ACCEPT_FROM, &member, json!({ "workspace": ops.id, "sender": sales.name, "action": "remove" }));
+        assert_eq!((st, code(&j)), (403, "role_required"), "{j}");
+        assert_eq!(listed(), 1, "a refused remove removes nothing");
+        let (st, _, raw) = call(&v, ACCEPT_FROM, &owner(), json!({ "workspace": ops.id, "sender": sales.name, "action": "remove" }));
+        assert_eq!(st, 200, "{raw}");
+        assert_eq!(listed(), 0);
+    });
+}
+
 /// Accept cards from Home (prd-accept-cards-from-home-v1 §3.3, tests 7–11):
 /// a person's login decides from Home or K2's conversation widget (the same
 /// request on the wire), but a request that carries a Garden widget's

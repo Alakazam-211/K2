@@ -443,7 +443,7 @@ pub(crate) fn privilege_sync_sql(db_name: &str, extra_grants: &[SyncGrant]) -> S
              SELECT n.nspname\n\
              FROM pg_namespace n\n\
              JOIN pg_roles r ON r.oid = n.nspowner\n\
-             WHERE r.rolname = current_user\n\
+             WHERE (r.rolname = current_user OR n.nspname = 'public')\n\
                AND n.nspname <> 'pg_catalog'\n\
                AND n.nspname <> 'information_schema'\n\
                AND n.nspname NOT LIKE 'pg_toast%'\n\
@@ -2953,7 +2953,7 @@ fn revoke_grantee_privileges_sql(db_name: &str, role: &str) -> String {
              SELECT n.nspname\n\
              FROM pg_namespace n\n\
              JOIN pg_roles r ON r.oid = n.nspowner\n\
-             WHERE r.rolname = {mig_lit}\n\
+             WHERE (r.rolname = {mig_lit} OR n.nspname = 'public')\n\
                AND n.nspname <> 'pg_catalog'\n\
                AND n.nspname <> 'information_schema'\n\
                AND n.nspname NOT LIKE 'pg_toast%'\n\

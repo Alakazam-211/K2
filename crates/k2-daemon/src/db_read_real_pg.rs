@@ -249,6 +249,16 @@ fn real_pg_read_grant_reads_and_never_writes() {
     };
     check("one read grant, no manage", grants == 1, grants, &mut fails);
 
+    // k2 db revoke takes it away again: no privilege left on the public
+    // tables (PUBLIC keeps CONNECT on every database, so the grants are what
+    // stops it).
+    let revoked = crate::sql::routes::with_test_ops(srv, || crate::sql::ops::revoke_access(srv, None, "rdr_main", &reader.id));
+    check("k2 db revoke answers", revoked.is_ok(), format!("{revoked:?}"), &mut fails);
+    let left = srv.su("rdr_main", &format!("select has_table_privilege('{}', 'public.notes', 'SELECT')", t.user));
+    check("after revoke it holds no SELECT on the table", left == "f", &left, &mut fails);
+    let after = srv.as_role(&t.user, &t.password, "rdr_main", "select body from notes");
+    check("and can't read it", after.is_err(), format!("{after:?}"), &mut fails);
+
     let _ = std::fs::remove_dir_all(&ws_dir);
     assert!(fails.is_empty(), "{} check(s) failed:\n{}", fails.len(), fails.join("\n"));
 }

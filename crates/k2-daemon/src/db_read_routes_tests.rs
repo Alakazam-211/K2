@@ -239,7 +239,8 @@ fn the_reader_asks_deny_changes_nothing_and_an_admins_allow_grants_read_on_exact
     // Deny on the other database's card: nothing granted, there or here.
     let (_, v2) = ask(&me, json!({ "db": other }));
     let (s, d) = crate::sql::routes::with_fake_ops(ops, || answer_as("owner", &reader, &card_of(&v2), json!({ "answer": "Deny" })));
-    assert_eq!((s.as_str(), &d["action"]["result"]["outcome"]), ("200 OK", &json!("denied")), "{d}");
+    assert_eq!(s, "200 OK", "{d}");
+    assert_eq!(row(&id_of(&v2)).state.as_str(), "denied", "{d}");
     assert_eq!(grant_of(&other, &reader), None, "Deny changes nothing");
 
     // An Admin taps Allow: read, no manage, on jobs only.

@@ -164,6 +164,7 @@ pub const VOICE_CHAT_ALLOWLIST: &[(&str, &str)] = &[
     // every Home chat route and its events socket; the handler takes a
     // person's own login only and checks channel rights against K2's ledger.
     ("POST", "/cli/home-chat/ack"),
+    ("GET", "/cli/home-chat/calls"),
     ("GET", "/cli/home-chat/channels"),
     ("POST", "/cli/home-chat/channels/add"),
     ("POST", "/cli/home-chat/channels/allow-agents"),

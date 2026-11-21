@@ -989,6 +989,12 @@ async fn a_voice_chat_only_callee_gets_the_ring_on_its_socket_and_may_answer() {
     assert_eq!(calls.len(), 1, "{hello2}");
     assert_eq!((calls[0]["callId"].clone(), calls[0]["conv"].clone(), calls[0]["ringing"].clone()), (json!("77"), json!("900"), json!(true)));
 
+    // 0.46.17: a phone woken by a PushKit ring asks for its rings with no
+    // socket: the live follower's ring, the same entry `hello` shows.
+    let rings = routes::route(routes::CALLS, &c, &HashMap::new(), b"").expect("calls");
+    assert_eq!(rings["chat"], "live", "{rings}");
+    assert_eq!(rings["calls"], hello2["calls"], "the same entries as hello: {rings}");
+
     // Answered on another device: the stop reaches both sockets.
     let stop = json!({"call_id": "77", "channel_id": "900", "ringing": false, "reason": "accepted"});
     gw.push.send(json!({"op": 0, "t": "call_ring", "s": 3, "d": stop})).expect("the gateway socket is open");
@@ -997,6 +1003,8 @@ async fn a_voice_chat_only_callee_gets_the_ring_on_its_socket_and_may_answer() {
         assert_eq!((f["d"]["ringing"].clone(), f["d"]["reason"].clone()), (json!(false), json!("accepted")), "{f}");
     }
     assert!(h.state.lock().unwrap().incoming_ring("900").is_none(), "no ring left");
+    let rings = routes::route(routes::CALLS, &c, &HashMap::new(), b"").expect("calls");
+    assert_eq!((rings["chat"].clone(), rings["calls"].clone()), (json!("live"), json!([])), "{rings}");
 
     drop((ws, ws2));
     tokio::time::timeout(Duration::from_secs(5), server).await.expect("the first socket's handler ends").expect("join");
@@ -1044,4 +1052,126 @@ fn replies_read_a_recording_cards_lines_as_the_person() {
     assert_eq!(r.code, "agents_use_k2_chat", "no agent reads a DM recording's lines");
     assert!(crate::routes::route_policy::VOICE_CHAT_ALLOWLIST.contains(&("GET", "/cli/home-chat/replies")));
     done();
+}
+
+// ── GET /cli/home-chat/calls (0.46.17, a PushKit-woken phone) ─────────────
+
+/// A ring for this person on DM 900 (Sew's `call_ring`).
+fn ring_77() -> Value {
+    json!({"call_id": "77", "channel_id": "900", "started_by": "42", "ringing": true, "silent": false, "expires_at": "2026-11-20T12:00:45Z"})
+}
+
+/// `[]` when nothing rings, and `chat: connecting` right after a restart
+/// (the follower knows no ring yet, so the phone must not trust the empty
+/// list). A ring for the caller shows, exactly as `hello` shows it; a call
+/// the caller started (ringing someone else) and another person's ring
+/// never do; the ring's stop clears it.
+#[test]
+fn the_calls_route_lists_only_the_callers_own_rings() {
+    let _g = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let (_home, _api) = chat_box();
+    let calls = || routes::route(routes::CALLS, &alex(), &HashMap::new(), b"").expect("calls");
+    // No runtime here: the follower never connects, as right after a restart.
+    let h = follower::hold(ALEX);
+    assert_eq!(calls(), json!({"ok": true, "chat": "connecting", "calls": []}));
+    h.state.lock().unwrap().apply_ready(&ready_body());
+    assert_eq!(calls()["calls"], json!([]), "nothing rings");
+
+    // The caller's own outgoing call (it rings member 42, not them).
+    let mine = json!({"id": "90", "channel_id": "900", "started_by": "41", "state": "active", "rings": [{"member_id": "42", "state": "ringing"}]});
+    h.state.lock().unwrap().apply_call_event("call_updated", &json!({"call": mine}));
+    assert_eq!(h.state.lock().unwrap().calls_view().len(), 1, "hello shows it");
+    assert_eq!(calls()["calls"], json!([]), "it doesn't ring for the caller");
+
+    // Another person's ring stays theirs.
+    let other = follower::hold("k2:connect:5a6b7c8d-0000-4000-8000-0000000000aa");
+    other.state.lock().unwrap().apply_call_event("call_ring", &json!({"call_id": "66", "channel_id": "905", "ringing": true}));
+    assert_eq!(calls()["calls"], json!([]), "never another person's ring");
+
+    // A ring for the caller shows, the entry `hello` shows.
+    h.state.lock().unwrap().apply_call_event("call_ring", &ring_77());
+    let v = calls();
+    assert_eq!(
+        v["calls"],
+        json!([{"callId": "77", "conv": "900", "startedBy": "42", "ringing": true, "silent": false, "expiresAt": "2026-11-20T12:00:45Z", "call": null}]),
+        "{v}"
+    );
+    let hello: Vec<Value> = h.state.lock().unwrap().calls_view().into_iter().filter(|c| c["ringing"] == true).collect();
+    assert_eq!(v["calls"], json!(hello));
+
+    // The stop (answered elsewhere) clears it.
+    h.state.lock().unwrap().apply_call_event("call_ring", &json!({"call_id": "77", "channel_id": "900", "ringing": false, "reason": "accepted"}));
+    assert_eq!(calls()["calls"], json!([]), "cleared");
+    done();
+}
+
+/// Only a person's own login: the owner token, an agent's passport, an App
+/// session and an unknown token are refused with their codes and no calls.
+/// A Voice & Chat only login passes the role gate (its phone rings too).
+/// A POST is 405. While Sew isn't ready: 503 `chat_unavailable`.
+#[test]
+fn the_calls_route_takes_a_persons_own_login_and_get_only() {
+    let _g = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let (_home, _api) = chat_box();
+    let get = |c| routes::handle(routes::CALLS, c, false, &HashMap::new(), b"");
+    for (who, presented, status, code) in [
+        (Who::Owner, "owner-token", "403", "person_login_required"),
+        (Who::Agent { project_id: "p".into(), session_id: "s".into() }, "x", "403", "agents_use_k2_chat"),
+        (Who::Wrong, "k2skn_x", "403", "app_session_not_allowed"),
+        (Who::Invalid, "nope", "401", "unauthenticated"),
+    ] {
+        let r = get(people::caller_of(who, presented, "owner-token"));
+        assert!(r.status.starts_with(status), "{code}: {} {}", r.status, r.body);
+        let v: Value = serde_json::from_str(&r.body).expect("json");
+        assert_eq!(v["error"]["code"], code, "{}", r.body);
+        assert!(v.get("calls").is_none(), "{}", r.body);
+    }
+
+    const OWNER: &str = "owner-token-for-the-calls-test";
+    k2_core::connect_users::add_user("vcphone", "a-long-password-4").expect("add_user");
+    k2_core::connect_users::set_role("vcphone", Role::VoiceChat).expect("set_role");
+    let tok = k2_core::connect_users::create_session("vcphone");
+    if let Some(r) = crate::routes::route_policy::role_gate("GET", routes::CALLS, &format!("token={tok}"), OWNER) {
+        panic!("a Voice & Chat only login is refused: {} {}", r.status, r.body);
+    }
+    assert!(crate::routes::route_policy::VOICE_CHAT_ALLOWLIST.contains(&("GET", routes::CALLS)));
+
+    let r = routes::handle(routes::CALLS, Ok(alex()), true, &HashMap::new(), b"{}");
+    assert!(r.status.starts_with("405"), "{} {}", r.status, r.body);
+    assert!(r.body.contains("method_not_allowed"), "{}", r.body);
+
+    // On, but Sew isn't set up on this box: unavailable, not an empty list.
+    k2_core::home_chat::set_enabled(true);
+    let r = get(Ok(alex()));
+    k2_core::home_chat::set_enabled(false);
+    assert!(r.status.starts_with("503"), "{} {}", r.status, r.body);
+    assert!(r.body.contains("chat_unavailable") && !r.body.contains("\"calls\""), "{}", r.body);
+    done();
+}
+
+/// Dark while Home chat is off: 404 `home_chat_off`, through the family's
+/// own serve path (the one the dispatcher hands it).
+#[tokio::test]
+async fn the_calls_route_is_dark_while_home_chat_is_off() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let _g = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    k2_core::home_chat::set_enabled(false);
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = l.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut s, _) = l.accept().await.unwrap();
+        let mut buf = vec![0u8; 1024];
+        super::serve(&mut s, &mut buf, routes::CALLS, routes::CALLS, "", false, None, "owner-token").await;
+    });
+    let mut c = tokio::net::TcpStream::connect(addr).await.unwrap();
+    c.write_all(b"\r\n").await.unwrap();
+    let mut got = String::new();
+    let mut chunk = [0u8; 2048];
+    while !got.contains("home_chat_off") {
+        let n = tokio::time::timeout(Duration::from_secs(10), c.read(&mut chunk)).await.expect("an answer").expect("read");
+        assert!(n > 0, "closed before the answer: {got}");
+        got.push_str(&String::from_utf8_lossy(&chunk[..n]));
+    }
+    assert!(got.starts_with("HTTP/1.1 404"), "{got}");
+    server.await.expect("serve ends");
 }

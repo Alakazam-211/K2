@@ -344,6 +344,14 @@ impl PersonState {
         v.into_iter().map(CallSeen::view).collect()
     }
 
+    /// The DM calls ringing for this person now (`GET /cli/home-chat/calls`),
+    /// each as `hello` shows it, by call id. Empty when nothing rings.
+    pub fn ringing_view(&self) -> Vec<Value> {
+        let mut v: Vec<&CallSeen> = self.calls.values().filter(|c| c.ringing_me).collect();
+        v.sort_by(|a, b| a.call_id.cmp(&b.call_id));
+        v.into_iter().map(CallSeen::view).collect()
+    }
+
     /// `GET /api/v1/me/sync` after `410 resync_required`: every read state
     /// rebuilt (the gateway session is kept).
     pub fn apply_sync(&mut self, d: &Value) {

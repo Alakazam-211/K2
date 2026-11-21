@@ -26,8 +26,14 @@ use crate::voice::routes::refuse;
 
 pub const EVENTS: &str = "/cli/home-chat/events";
 
+/// `GET /cli/home-chat/calls` (0.46.17): the DM calls ringing for the
+/// caller now, so a phone woken by a PushKit ring (no webview, no events
+/// socket) can answer from CallKit. GET only: a POST answers 405.
+pub const CALLS: &str = "/cli/home-chat/calls";
+
 /// GET rows.
 pub const GET_ROUTES: &[&str] = &[
+    CALLS,
     "/cli/home-chat/channels",
     "/cli/home-chat/channels/members",
     "/cli/home-chat/messages",
@@ -94,6 +100,9 @@ pub fn handle(path: &str, caller: R<Caller>, is_post: bool, params: &HashMap<Str
     if is_post_route(path) && !is_post {
         return refuse(&Refusal::new(405, "method_not_allowed", "this route takes POST"));
     }
+    if path == CALLS && is_post {
+        return refuse(&Refusal::new(405, "method_not_allowed", "this route takes GET"));
+    }
     let r = (|| {
         let c = caller?;
         if path == "/cli/home-chat/status" {
@@ -122,6 +131,7 @@ pub(super) fn route(path: &str, c: &Caller, p: &HashMap<String, String>, body: &
         })),
         "/cli/home-chat/channels" => channels(c, p),
         "/cli/home-chat/summary" => summary(c, p),
+        CALLS => calls(c),
         "/cli/home-chat/messages" => messages(c, p),
         "/cli/home-chat/reactors" => reactors(c, p),
         "/cli/home-chat/replies" => replies(c, p),
@@ -266,6 +276,21 @@ fn channels(c: &Caller, p: &HashMap<String, String>) -> R<Value> {
         }));
     }
     Ok(json!({"ok": true, "channels": out, "next": body.get("next").cloned().unwrap_or(Value::Null)}))
+}
+
+/// [`CALLS`]: the caller's own ringing DM calls, read from their follower's
+/// state (the same state `hello`'s `calls` shows; only the ones ringing for
+/// them, `[]` when none). `chat` says whether to trust an empty list: right
+/// after a restart the follower is `connecting` and knows no ring yet.
+fn calls(c: &Caller) -> R<Value> {
+    let h = follower::hold(&c.ext);
+    let calls = h.state.lock().unwrap_or_else(|e| e.into_inner()).ringing_view();
+    let chat = match h.status() {
+        "live" => "live",
+        "connecting" => "connecting",
+        _ => "unavailable",
+    };
+    Ok(json!({"ok": true, "chat": chat, "calls": calls}))
 }
 
 fn summary(c: &Caller, p: &HashMap<String, String>) -> R<Value> {

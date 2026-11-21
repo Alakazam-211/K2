@@ -13,6 +13,8 @@ pub(super) const ROWS: &[Route] = &[
     // passports and App sessions get 403. Mgmt changes are checked against
     // K2's ledger (creator, member, Owner or Admin) in the handler.
     post("/cli/home-chat/ack", VoiceChat),
+    // 0.46.17: the calls ringing for the caller (a PushKit-woken phone).
+    get("/cli/home-chat/calls", VoiceChat),
     get("/cli/home-chat/channels", VoiceChat),
     post("/cli/home-chat/channels/add", VoiceChat),
     post("/cli/home-chat/channels/allow-agents", VoiceChat),

@@ -216,6 +216,35 @@ check_has "remove from a group it isn't in: says so" "$OUT" "sales is not in foc
 run person focus-group create Lab --json
 check_eq "create --json: the daemon's answer" "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["id"])' "$OUT")" "g-new"
 
+echo "== the other names and the --json forms =="
+# native: focus-groups
+run person focus-groups
+check_eq "focus-groups: exit 0" "$RC" 0
+check_eq "focus-groups: one GET of the list" "$(sent)" "owner GET /cli/focus-groups/list "
+check_has "focus-groups lists" "$OUT" "Client A"
+# native: focus-group ls
+run person focus-group ls
+check_eq "ls: exit 0" "$RC" 0
+check_has "ls lists" "$OUT" "Infra"
+# native: focus-group rm
+run person focus-group rm Infra inside-ops
+check_eq "rm: POST focusGroupId null" "$(changes)" 'owner POST /cli/focus-groups/assign {"projectId": "w-inside-ops", "focusGroupId": null}'
+# native: focus-group add --json
+run person focus-group add "client a" sales --json
+check_eq "add --json: the daemon's answer" "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["focusGroupId"])' "$OUT")" "g-ca"
+run person focus-group add Infra inside-ops --json
+check_eq "add --json, already there: unchanged" "$OUT" '{"ok":true,"changed":false}'
+check_eq "add --json, already there: no change" "$(changes)" ""
+# native: focus-group remove --json
+run person focus-group remove Infra sales --json
+check_eq "remove --json from a group it isn't in: unchanged" "$OUT" '{"ok":true,"changed":false}'
+# native: focus-group rename --json
+run person focus-group rename Infra Ops --json
+check_eq "rename --json: the daemon's answer" "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["name"])' "$OUT")" "Ops"
+run person focus-group add Nope sales --json
+check_eq "an unknown group --json: exit 4" "$RC" 4
+check_eq "an unknown group --json: the error" "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["error"]["code"])' "$ERR")" "not_found"
+
 echo "== agent set --focus-group =="
 # covers: agent set
 run person agent set sales --focus-group Infra
@@ -229,6 +258,10 @@ check_eq "agent set: already there sends no change" "$(changes)" ""
 check_has "agent set: skipped" "$OUT" "already Infra"
 run person agent set sales --focus-group Infra --dry-run
 check_eq "agent set --dry-run: no change" "$(changes)" ""
+# covers: agent set --json
+run person agent set sales --focus-group "client a" --json
+check_eq "agent set --json: exit 0" "$RC" 0
+check_eq "agent set --json: the step, done" "$(python3 -c 'import json,sys; a=json.loads(sys.argv[1])["actions"][0]; print(a["step"], a["group"], a["focusGroupId"], a["status"])' "$OUT")" "set-focus-group Client A g-ca done"
 
 echo "== an agent's change is refused with the card to ask with =="
 run agent focus-group create "Client work"

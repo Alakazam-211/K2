@@ -73,6 +73,10 @@ use crate::prelude::{self, Closing};
 use crate::python;
 use std::ffi::OsString;
 
+/// `_agent_conf_fetch <token>`, for the families that look a workspace up
+/// by its conf as the shell's do (`focus-group add|remove`).
+pub use conf::fetch as conf_fetch;
+
 /// The router arm's words: this family's row of [`crate::route::TABLE`].
 pub const WORDS: &[&str] = &["agent"];
 /// Every form is the family's; [`run`] hands back what is still the

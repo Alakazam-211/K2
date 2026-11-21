@@ -54,10 +54,7 @@ fn audit(words: &[&str]) -> Result<Ask, Stop> {
         };
         if let Some(slot) = slot {
             // `x="${2:-}"; shift 2`: with no word left, `_need_value`'s line.
-            *slot = rest
-                .get(1)
-                .ok_or_else(|| Stop::need_value(w))?
-                .to_string();
+            *slot = rest.get(1).ok_or_else(|| Stop::need_value(w))?.to_string();
             rest = &rest[2..];
             continue;
         }

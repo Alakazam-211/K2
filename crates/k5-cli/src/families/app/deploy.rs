@@ -1316,7 +1316,10 @@ mod tests {
     #[test]
     fn the_words_as_the_shell_reads_them() {
         assert_eq!(stop("build", &[]).line, usage::BUILD);
-        assert_eq!(stop("build", &["--manifest"]), Stop::need_value("--manifest"));
+        assert_eq!(
+            stop("build", &["--manifest"]),
+            Stop::need_value("--manifest")
+        );
         assert_eq!(stop("build", &["--x"]).line, "Unknown flag: --x");
         assert_eq!(parse("build", &["a", "-h"]), None);
         assert!(catalog_install(&["a", "--catalog=x"]));

@@ -96,7 +96,10 @@ mod tests {
     #[test]
     fn the_words() {
         assert_eq!(parse(&[]), Some(Words::Usage(USAGE.into())));
-        assert_eq!(parse(&["j", "--since"]), Some(Words::ShiftFailed("--since".into())));
+        assert_eq!(
+            parse(&["j", "--since"]),
+            Some(Words::ShiftFailed("--since".into()))
+        );
         assert_eq!(parse(&["j", "--since", "a b"]), None);
         assert_eq!(
             parse(&["--raw", "j1", "--since", "12"]),

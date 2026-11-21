@@ -217,7 +217,10 @@ mod tests {
             r#"{"name": "ci", "from": "ci-standard", "set": {"cpus": 8, "isolation": ["vm", "net"], "name": "x=y", "profiles": ["a"], "big": Infinity}}"#
         );
         assert_eq!(parse(&["set"]), Words::Usage(SET_USAGE.into()));
-        assert_eq!(parse(&["set", "ci", "--from"]), Words::ShiftFailed("--from".into()));
+        assert_eq!(
+            parse(&["set", "ci", "--from"]),
+            Words::ShiftFailed("--from".into())
+        );
         assert_eq!(
             parse(&["set", "ci", "nope"]),
             Words::Usage(SET_USAGE.into())

@@ -287,7 +287,12 @@ fn value<'a>(rest: &[&'a str], i: usize) -> Option<(&'a str, usize)> {
 /// `$(_compute_secs "$v")` in an assignment: the seconds, the usage line
 /// (exit 2), or `None` for the shell's.
 fn secs(v: &str) -> Option<Result<i64, Words<Ask>>> {
-    an::secs(v)
+    match an::secs(v)? {
+        Ok(n) => Some(Ok(n)),
+        Err(Words::Usage(l)) => Some(Err(Words::Usage(l))),
+        Err(Words::ShiftFailed(f)) => Some(Err(Words::ShiftFailed(f))),
+        Err(Words::Ask(_)) => None,
+    }
 }
 
 /// The `--for` value as `for_n`: `""`, `0`, days times 86400, or

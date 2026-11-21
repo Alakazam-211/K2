@@ -113,10 +113,7 @@ fn list(words: &[&str]) -> Result<Ask, Stop> {
         match w {
             "--app" => {
                 // `app="${2:-}"; shift 2`: with no word left, `_need_value`'s line.
-                app = rest
-                    .get(1)
-                    .ok_or_else(|| Stop::need_value(w))?
-                    .to_string();
+                app = rest.get(1).ok_or_else(|| Stop::need_value(w))?.to_string();
                 rest = &rest[2..];
                 continue;
             }
@@ -175,10 +172,7 @@ fn deny(words: &[&str]) -> Result<Ask, Stop> {
     while let Some(w) = rest.first().copied() {
         match w {
             "--reason" => {
-                reason = rest
-                    .get(1)
-                    .ok_or_else(|| Stop::need_value(w))?
-                    .to_string();
+                reason = rest.get(1).ok_or_else(|| Stop::need_value(w))?.to_string();
                 rest = &rest[2..];
                 continue;
             }

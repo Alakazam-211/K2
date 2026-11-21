@@ -667,7 +667,10 @@ mod tests {
             parse(&["enable", "--remote-admin", "some"]),
             Words::Usage(LEVEL_LINE.into())
         );
-        assert_eq!(parse(&["enable", "--remote-admin"]), Words::ShiftFailed("--remote-admin".into()));
+        assert_eq!(
+            parse(&["enable", "--remote-admin"]),
+            Words::ShiftFailed("--remote-admin".into())
+        );
         assert_eq!(parse(&["enable", "--x"]), Words::Usage(ENABLE_USAGE.into()));
         assert_eq!(
             parse(&["remote-admin"]),

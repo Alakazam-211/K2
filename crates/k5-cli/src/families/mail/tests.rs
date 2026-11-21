@@ -332,26 +332,32 @@ fn read(reply: &str, printer: Printer, json: bool) -> (String, String, Exit) {
     (s.stdout, s.stderr, s.exit)
 }
 
-const STATUS: &str = r#"{"enabled":true,"inboxes":[{"address":"a@x.io","wake":"vip","needsRelink":true},{"address":"b@x.io","wake":"all","lastError":"auth"},{"address":"c@x.io"}],"vips":["boss@x.io","@x.io"],"digest":{"start":"09:00","end":"17:00","days":["mon","tue"],"tz":"A/B","everySeconds":5400,"nextFireAt":"2026-11-20T09:00:00Z"},"vipOutsideWindow":false,"vipSessionLine":true,"snippets":false,"pausedUntil":"2026-11-21","last24h":{"vipDelivered":2,"failedAuth":null}}"#;
+const STATUS: &str = r#"{"enabled":true,"inboxes":[{"address":"a@x.io","wake":"vip","needsRelink":true},{"address":"l@x.io","wake":"vip","source":"linked","needsRelink":true,"lastError":"x"},{"address":"m@x.io","wake":"vip","source":"Linked","needsRelink":true},{"address":"b@x.io","wake":"all","source":"linked","lastError":"auth"},{"address":"c@x.io"}],"vips":["boss@x.io","@x.io"],"digest":{"start":"09:00","end":"17:00","days":["mon","tue"],"tz":"A/B","everySeconds":5400,"nextFireAt":"2026-11-20T09:00:00Z"},"vipOutsideWindow":false,"vipSessionLine":true,"snippets":false,"pausedUntil":"2026-11-21","last24h":{"vipDelivered":2,"failedAuth":null}}"#;
 
 #[test]
 fn the_status_prints_as_the_shell_prints_it() {
     let (out, err, exit) = read(&format!("{STATUS}\n200"), Printer::Status, false);
     assert_eq!(err, "");
     assert_eq!(exit, Exit::Ok);
+    // A linked inbox's refused sign-in has its own line; any other
+    // inbox's (no source, or another one) is the login line.
     assert_eq!(
         out,
-        "Mail notices: on\n\
-         Inboxes chosen: a@x.io (vip), b@x.io (all)\n\
-         Can also choose: c@x.io\n\
-         VIPs: boss@x.io, @x.io\n\
-         Check window: 09:00-17:00 mon,tue (A/B)\n\
-         Digest every 90 min; next: 2026-11-20T09:00:00Z\n\
-         VIP mail outside the window: hold; session line: on; snippets: off\n\
-         Paused until 2026-11-21\n\
-         Stopped: a@x.io refused its sign-in. A person signs in again (Settings → Email Link → Sign in again, or k2 mail link relink a@x.io) and it starts again.\n\
-         Last poll problem for b@x.io: auth\n\
-         Last 24h: 2 VIP delivered, 0 digested, None failed authentication\n"
+        format!(
+            "Mail notices: on\n\
+             Inboxes chosen: a@x.io (vip), l@x.io (vip), m@x.io (vip), b@x.io (all)\n\
+             Can also choose: c@x.io\n\
+             VIPs: boss@x.io, @x.io\n\
+             Check window: 09:00-17:00 mon,tue (A/B)\n\
+             Digest every 90 min; next: 2026-11-20T09:00:00Z\n\
+             VIP mail outside the window: hold; session line: on; snippets: off\n\
+             Paused until 2026-11-21\n\
+             Stopped: a@x.io refused its login. Reconnect the inbox and it starts again.\n\
+             Stopped: l@x.io refused its sign-in. A person signs it in again in place, in a browser (Settings → Email Link → Sign in again, or the owner runs {CLI_NAME} mail link relink l@x.io). Notices start again after the next check. Do not remove and link it again ({CLI_NAME} mail link --help).\n\
+             Stopped: m@x.io refused its login. Reconnect the inbox and it starts again.\n\
+             Last poll problem for b@x.io: auth\n\
+             Last 24h: 2 VIP delivered, 0 digested, None failed authentication\n"
+        )
     );
     let bare = r#"{"enabled":0,"inboxes":[],"vips":"ab","digest":{"everySeconds":"-61"},"vipOutsideWindow":1,"vipSessionLine":0,"snippets":1}"#;
     let (out, _, exit) = read(&format!("{bare}\n201"), Printer::Status, false);
@@ -458,10 +464,17 @@ fn the_status_printer_is_the_shells_source() {
         (15, "    print(\"Digest every "),
         (16, "print(\"VIP mail outside the window: \""),
         (17, "if d.get(\"pausedUntil\"): print("),
-        (19, "    if i.get(\"needsRelink\"): print("),
-        (20, "    elif i.get(\"lastError\"): print("),
-        (21, "c = d.get(\"last24h\") or {}"),
-        (22, "print(\"Last 24h: "),
+        (
+            19,
+            "    if i.get(\"needsRelink\") and i.get(\"source\") == \"linked\": print(\"Stopped: %s refused its sign-in. A person signs it in again in place, in a browser (Settings → Email Link → Sign in again, or the owner runs k2 mail link relink %s). Notices start again after the next check. Do not remove and link it again (k2 mail link --help).\" % (i[\"address\"], i[\"address\"]))",
+        ),
+        (
+            20,
+            "    elif i.get(\"needsRelink\"): print(\"Stopped: %s refused its login. Reconnect the inbox and it starts again.\" % i[\"address\"])",
+        ),
+        (21, "    elif i.get(\"lastError\"): print("),
+        (22, "c = d.get(\"last24h\") or {}"),
+        (23, "print(\"Last 24h: "),
     ];
     for (n, start) in want {
         assert!(

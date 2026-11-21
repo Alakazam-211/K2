@@ -983,25 +983,43 @@ fn status_lines(d: &Value, json_flag: bool, o: &mut String) -> Result<(), Raise>
         line(o, &concat("Paused until ", &p).map_err(at(17))?);
     }
     for i in &ibx {
-        if attr_get(i, "needsRelink")
-            .map_err(at(19))?
-            .is_some_and(|v| py::truthy(&v))
-        {
+        let relink = |n: u32| -> Result<bool, Raise> {
+            Ok(attr_get(i, "needsRelink")
+                .map_err(at(n))?
+                .is_some_and(|v| py::truthy(&v)))
+        };
+        // `i.get("needsRelink") and i.get("source") == "linked"`: the
+        // source is read only when the first is true.
+        let linked = relink(19)?
+            && matches!(
+                attr_get(i, "source").map_err(at(19))?,
+                Some(Value::Str(ref s)) if s.as_str() == Some("linked")
+            );
+        if linked {
             let a = py_index(i, "address").map_err(at(19))?;
             line(
                 o,
                 &format!(
-                    "Stopped: {a} refused its sign-in. A person signs in again (Settings → Email Link → Sign in again, or {cli} mail link relink {a}) and it starts again.",
+                    "Stopped: {a} refused its sign-in. A person signs it in again in place, in a browser (Settings → Email Link → Sign in again, or the owner runs {cli} mail link relink {a}). Notices start again after the next check. Do not remove and link it again ({cli} mail link --help).",
                     a = py::str_of(&a),
                     cli = k2_client::brand::CLI_NAME
                 ),
             );
+        } else if relink(20)? {
+            let a = py_index(i, "address").map_err(at(20))?;
+            line(
+                o,
+                &format!(
+                    "Stopped: {} refused its login. Reconnect the inbox and it starts again.",
+                    py::str_of(&a)
+                ),
+            );
         } else if attr_get(i, "lastError")
-            .map_err(at(20))?
+            .map_err(at(21))?
             .is_some_and(|v| py::truthy(&v))
         {
-            let a = py_index(i, "address").map_err(at(20))?;
-            let e = py_index(i, "lastError").map_err(at(20))?;
+            let a = py_index(i, "address").map_err(at(21))?;
+            let e = py_index(i, "lastError").map_err(at(21))?;
             line(
                 o,
                 &format!(
@@ -1012,11 +1030,11 @@ fn status_lines(d: &Value, json_flag: bool, o: &mut String) -> Result<(), Raise>
             );
         }
     }
-    let c = or_empty(attr_get(d, "last24h").map_err(at(21))?);
+    let c = or_empty(attr_get(d, "last24h").map_err(at(22))?);
     let count = |key: &str| {
         attr_get(&c, key)
             .map(|v| py::str_of(&v.unwrap_or(Value::Int("0".into()))))
-            .map_err(at(22))
+            .map_err(at(23))
     };
     let vip = count("vipDelivered")?;
     let digested = count("digested")?;

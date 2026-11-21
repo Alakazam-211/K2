@@ -39,7 +39,7 @@ use common::stub::Reply;
 
 const VERB: &str = "mail";
 
-const STATUS: &str = r#"{"ok":true,"enabled":true,"inboxes":[{"address":"a@x.io","wake":"vip","needsRelink":true},{"address":"b@x.io","wake":"all","lastError":"auth é"},{"address":"c@x.io"}],"vips":["boss@x.io","@x.io"],"digest":{"start":"09:00","end":"17:00","days":["mon","tue"],"tz":"Europe/Paris","everySeconds":5400,"nextFireAt":"2026-11-20T09:00:00Z"},"vipOutsideWindow":false,"vipSessionLine":true,"snippets":false,"pausedUntil":"2026-11-21T10:00:00Z","last24h":{"vipDelivered":2,"digested":5}}"#;
+const STATUS: &str = r#"{"ok":true,"enabled":true,"inboxes":[{"address":"a@x.io","wake":"vip","needsRelink":true},{"address":"l@x.io","wake":"vip","source":"linked","needsRelink":true},{"address":"n@x.io","wake":"all","source":"linked","needsRelink":false,"lastError":"e"},{"address":"o@x.io","wake":"all","source":["linked"],"needsRelink":1},{"address":"b@x.io","wake":"all","lastError":"auth é"},{"address":"c@x.io"}],"vips":["boss@x.io","@x.io"],"digest":{"start":"09:00","end":"17:00","days":["mon","tue"],"tz":"Europe/Paris","everySeconds":5400,"nextFireAt":"2026-11-20T09:00:00Z"},"vipOutsideWindow":false,"vipSessionLine":true,"snippets":false,"pausedUntil":"2026-11-21T10:00:00Z","last24h":{"vipDelivered":2,"digested":5}}"#;
 const LOG: &str = r#"{"ok":true,"log":[{"receivedAt":"2026-11-19T10:00:00Z","class":"vip","state":"delivered","from":"boss@x.io","inbox":"a@x.io"},{"receivedAt":"2026-11-19T11:00:00Z","class":"digest","state":"held","from":"n@y.io","inbox":"b@x.io","reason":"outside window"}]}"#;
 
 fn compare(compare: Compare, c: Case) -> Case {

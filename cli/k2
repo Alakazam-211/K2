@@ -6251,6 +6251,31 @@ Usage: k2 hooks status [--limit N] [--json]
 EOF
 }
 
+# _hooks_answer_error <say|quiet>: the daemon's answer on stdin. A JSON
+# object with an `error` key ends with 1, or 3 for a refusal with a
+# `permission` object (the EXIT trap then adds its Ask-with line); with
+# `say` it first prints `Error: <the error>` on stderr (an error object
+# gives its hint, else its code), as install's reader does. Anything else
+# (not JSON, not UTF-8, not an object, no `error` key) ends with 0.
+_hooks_answer_error() {
+    HK_SAY="$1" python3 -c '
+import json, os, sys
+raw = sys.stdin.buffer.read()
+try:
+    data = json.loads(raw.decode("utf-8"))
+except ValueError:
+    sys.exit(0)
+if not isinstance(data, dict) or "error" not in data:
+    sys.exit(0)
+err = data["error"]
+if isinstance(err, dict):
+    err = err.get("hint") or err.get("code")
+if os.environ["HK_SAY"] == "say":
+    print(f"Error: {err}", file=sys.stderr)
+sys.exit(3 if isinstance(data.get("permission"), dict) else 1)
+'
+}
+
 cmd_hooks_status() {
     local limit="20"
     while [[ $# -gt 0 ]]; do
@@ -6273,6 +6298,14 @@ cmd_hooks_status() {
         echo "$raw"
         return 0
     fi
+    # An answer with an `error` key is one Error: line on stderr and exit 1
+    # (3 for a refusal you can ask for), never the raw answer with exit 0
+    # (0.46.17: the reader's error went to /dev/null and its `|| echo`
+    # printed the raw JSON). An answer the reader can't lay out still
+    # prints as it came.
+    local erc=0
+    printf '%s' "$raw" | _hooks_answer_error say || erc=$?
+    [ "$erc" -eq 0 ] || exit "$erc"
     echo "$raw" | python3 -c "
 import json, sys, time
 data = json.loads(sys.stdin.read())

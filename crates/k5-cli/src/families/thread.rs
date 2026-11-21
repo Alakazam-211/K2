@@ -29,8 +29,8 @@
 //! - `HOOK_SOCK` set with a `CODEX_` variable exported
 //!   ([`crate::prelude::codex_env`]), a word that is not UTF-8, a port
 //!   curl won't take, and a `python3` the binary can't tell;
-//! - a `--file` the binary can't resolve as Python would (a `~user`
-//!   path, or a digit outside ASCII), named in [`post`].
+//! - a `--file` the binary can't resolve as Python would (a digit
+//!   outside ASCII, a folder that is not UTF-8), named in [`post`].
 
 use crate::exit::Exit;
 use crate::python;

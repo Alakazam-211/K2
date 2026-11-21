@@ -30,9 +30,12 @@
 //! A value flag (`--from`, `--limit`, `--before-seq`) as the last word is
 //! [`needs_value`]'s line and exit 2, the shell's own (`_need_value`).
 //!
-//! The shell answers a `--file` the binary can't resolve as Python's
-//! `os.path` would: a `~user` path, `~` with no `HOME`, a line break in
-//! it, or a digit outside ASCII (Python's `\d`).
+//! A `--file` path that starts with `~` expands as Python's
+//! `os.path.expanduser` does: `HOME` (with none, this user's folder in the
+//! password database), or `~name`'s folder there. The shell answers a
+//! `--file` the binary can't resolve as Python's `os.path` would: a line
+//! break in it, a digit outside ASCII (Python's `\d`), or a `~` path whose
+//! folder is not UTF-8 (or with no password database to read).
 
 use super::super::msg::send::{echo, handle_of, moved_note};
 use super::super::msg::send_once::{self, held};
@@ -219,17 +222,14 @@ pub fn bash_number(n: &str) -> Option<i64> {
     }))
 }
 
-/// A `--file` spec [`attachments`] reads as Python does.
+/// A `--file` spec [`attachments`] reads as Python does: both ways it
+/// may read it, the whole spec and its path before a `:N`.
 pub fn resolvable(spec: &str) -> bool {
     if spec.contains(['\n', '\r']) || spec.chars().any(|c| c.is_numeric() && !c.is_ascii_digit()) {
         return false;
     }
-    match spec.strip_prefix('~') {
-        None => true,
-        Some(rest) => {
-            (rest.is_empty() || rest.starts_with('/')) && std::env::var_os("HOME").is_some()
-        }
-    }
+    expanduser(spec).is_some()
+        && split_line(spec).is_none_or(|(path, _, _)| expanduser(&path).is_some())
 }
 
 /// The write or the read (steps 2 to 5 of the module's notes).
@@ -304,8 +304,9 @@ pub fn sender(client: &mut Client, closing: &mut Closing, explicit: &str) -> Str
 /// line?, lineEnd?}`. A `:N` or `:N-M` ending is a line only when the
 /// whole spec is no file here; a path that is a file here goes absolute.
 pub fn attachments(cwd: &str, specs: &[String]) -> String {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let here = |p: &str| pylib::path::join(cwd, &expanduser(p, &home));
+    // [`resolvable`] took every spec, so each expands.
+    let expand = |p: &str| expanduser(p).unwrap_or_else(|| p.to_string());
+    let here = |p: &str| pylib::path::join(cwd, &expand(p));
     let mut out = Vec::new();
     for spec in specs {
         let (mut path, mut line, mut end) = (spec.clone(), None, None);
@@ -331,19 +332,18 @@ pub fn attachments(cwd: &str, specs: &[String]) -> String {
     dumps(&Value::Array(out))
 }
 
-/// `os.path.expanduser` for a path [`resolvable`] took.
-fn expanduser(p: &str, home: &str) -> String {
-    match p.strip_prefix('~') {
-        Some(rest) if rest.is_empty() || rest.starts_with('/') => {
-            let joined = format!("{}{rest}", home.trim_end_matches('/'));
-            if joined.is_empty() {
-                "/".into()
-            } else {
-                joined
-            }
-        }
-        _ => p.to_string(),
+/// `os.path.expanduser(p)` ([`pylib::path::expanduser`]) with this
+/// process's `HOME`. `None`: the binary can't tell what Python gives (a
+/// `HOME` or a folder that is not UTF-8, no password database).
+fn expanduser(p: &str) -> Option<String> {
+    if !p.starts_with('~') {
+        return Some(p.to_string());
     }
+    let home = std::env::var_os("HOME")
+        .map(|h| h.into_string())
+        .transpose()
+        .ok()?;
+    pylib::path::expanduser(p, home.as_deref())
 }
 
 /// `re.match(r"^(.+?):(\d+)(?:-(\d+))?$", spec)`: the path, the line and

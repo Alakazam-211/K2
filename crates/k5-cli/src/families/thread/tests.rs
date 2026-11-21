@@ -72,8 +72,12 @@ fn a_write_and_a_read_read_their_words() {
     for flag in ["--from", "--limit", "--before-seq"] {
         assert_eq!(stop(&["bob", flag]), (post::needs_value(flag), Exit::Usage));
     }
+    // A `~name` path expands as Python's does.
+    assert!(matches!(
+        post::parse(&["bob", "--file", "~k5-no-such-user-7171/x"]),
+        Some(Ok(_))
+    ));
     // Specs Python would read in its own way go to the shell.
-    assert_eq!(post::parse(&["bob", "--file", "~ada/x"]), None);
     assert_eq!(post::parse(&["bob", "--file", "a:\u{0663}"]), None);
     assert_eq!(post::parse(&["bob", "--file", "a\nb"]), None);
 }

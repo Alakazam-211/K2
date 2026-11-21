@@ -692,3 +692,45 @@ fn ask_usage_says_the_brand_s_name_and_semicolons() {
     assert_eq!(out.code, Some(1));
     assert!(log.is_empty(), "{log:?}");
 }
+
+/// A `--file` path that starts with `~name`: Python's `expanduser` reads
+/// that user's folder from the password database (root's is there on
+/// every machine), and a name with no entry stays as it is.
+#[test]
+fn thread_files_with_a_user_s_folder() {
+    let rig = Rig::new(VERB, "tilde");
+    for (name, args) in [
+        // A probe of the native bar: `thread --file ~user/x`.
+        (
+            "~nobody/k5-bar",
+            &[
+                "w1",
+                "hello",
+                "--file",
+                "~nobody/k5-bar",
+                "--from",
+                "me",
+                "--idempotency-key",
+                KEY,
+            ][..],
+        ),
+        (
+            "~root/ and ~root/:3",
+            &[
+                "bob",
+                "--file",
+                "~root/",
+                "--file",
+                "~root/:3",
+                "--file",
+                "~k5-no-such-user-7171/a.rs:2-4",
+                "--from",
+                "me",
+                "--idempotency-key",
+                KEY,
+            ],
+        ),
+    ] {
+        rig.check(&plain(name, args, vec![ok(ON), ok(POSTED)], 0, 2));
+    }
+}

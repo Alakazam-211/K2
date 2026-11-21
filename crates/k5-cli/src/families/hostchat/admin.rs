@@ -59,11 +59,11 @@ pub enum Admin {
         query: String,
         json: bool,
     },
-    /// `owner-sessions [list]` (follows 5b6759be0d).
+    /// `owner-sessions [list]`.
     OwnerSessions {
         json: bool,
     },
-    /// `owner-sessions end <own_…> | end --all` (follows 5b6759be0d).
+    /// `owner-sessions end <own_…> | end --all`.
     OwnerSessionsEnd {
         payload: String,
         label: String,
@@ -339,13 +339,9 @@ pub fn log(words: &[&str]) -> Plan {
 /// `owner-sessions …` (`_hostchat_owner_sessions`): the owner chat
 /// sessions K2 opened with an owner handoff code. Listing: the owner or
 /// an admin. Ending: a person, with a vault confirm bound to the session
-/// or "all"; never an agent.
-///
-/// TODO(follows 5b6759be0d): the shell on this line has no
-/// `owner-sessions` yet (it says "unknown hostchat command"); the
-/// 0.46.17 queue's does (5b6759be0d), and this is a copy of it. The
-/// parity rows marked `follows 5b6759be0d` compare both sides once the
-/// replay brings it.
+/// or "all"; never an agent. `-h` or `--help` is the shell's page (the
+/// front prints the captured one; [`super::run`] hands any other line
+/// with it to the shell).
 pub fn owner_sessions(words: &[&str]) -> Plan {
     let c = CLI_NAME;
     let (sub, rest): (&str, &[&str]) = match words.split_first() {
@@ -575,7 +571,7 @@ fn step(ctx: &mut Ctx, a: &Admin) -> Result<Exit, Exit> {
             json,
         } => {
             if ctx.in_session {
-                out::stderr_line(&format!("{{\"error\":\"person_only\",\"hint\":\"a person ends the owner's chat sessions, from a terminal outside {PRODUCT_NAME} (Touch ID or the vault password)\"}}"));
+                out::stderr_line(&owner_sessions_person_only());
                 return Err(Exit::Refused);
             }
             let body = confirmed_post(ctx, "/cli/sew/owner-sessions/revoke", payload, label)?;
@@ -621,6 +617,11 @@ fn step(ctx: &mut Ctx, a: &Admin) -> Result<Exit, Exit> {
             Ok(lines(r, p))
         }
     }
+}
+
+/// `owner-sessions end` in a session: a person's step, never an agent's.
+pub(super) fn owner_sessions_person_only() -> String {
+    format!("{{\"error\":\"person_only\",\"hint\":\"a person ends the owner's chat sessions, from a terminal outside {PRODUCT_NAME} (Touch ID or the vault password)\"}}")
 }
 
 /// `owner-sessions list`'s Python: one line a session, or the line for

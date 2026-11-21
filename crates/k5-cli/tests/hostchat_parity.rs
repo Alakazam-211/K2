@@ -2062,15 +2062,6 @@ fn hostchat_chat_administration_a_person_s_steps() {
     }
 }
 
-/// Whether the shell CLI on this line has `hostchat owner-sessions`: the
-/// 0.46.17 queue's 5b6759be0d. Until the replay brings it, the shell says
-/// "unknown hostchat command" there.
-fn shell_has_owner_sessions() -> bool {
-    std::fs::read_to_string(cli_k2())
-        .expect("read cli/k2")
-        .contains("_hostchat_owner_sessions()")
-}
-
 /// A request as the rig logs it: its request line and its body.
 fn line_and_body(r: &str) -> (String, String) {
     let line = r.lines().nth(1).unwrap_or_default().to_string();
@@ -2081,10 +2072,12 @@ fn line_and_body(r: &str) -> (String, String) {
     (line, body)
 }
 
-/// What the binary must print and send for a `follows 5b6759be0d` row.
+/// What an `owner-sessions` row must print and send, on top of the
+/// shell's answer: the rows pin the answer itself, so both sides being
+/// wrong the same way still fails.
 struct Want {
     stdout: String,
-    /// stderr exactly, or (for a traceback) its first and last line.
+    /// stderr exactly, or (for a traceback) its last line.
     stderr: String,
     traceback: bool,
     sent: Vec<(&'static str, &'static str)>,
@@ -2097,19 +2090,6 @@ fn want(stdout: &str, stderr: &str, sent: &[(&'static str, &'static str)]) -> Wa
         traceback: false,
         sent: sent.to_vec(),
     }
-}
-
-/// The shell on this line has no `owner-sessions` yet: it answers the
-/// words with a usage line (an unknown command or flag), exit 2, and
-/// sends nothing.
-fn assert_shell_lacks_it(name: &str, out: &Out, sent: usize) {
-    assert_eq!(out.code, Some(2), "{name}: bash's exit: {out:?}");
-    assert!(out.stdout.is_empty(), "{name}: bash's stdout: {out:?}");
-    assert!(
-        out.stderr.starts_with(r#"{"error":"usage","hint":"#),
-        "{name}: bash's stderr: {out:?}"
-    );
-    assert_eq!(sent, 0, "{name}: bash sent");
 }
 
 fn check_want(name: &str, out: &Out, sent: &[String], code: i32, w: &Want) {
@@ -2141,18 +2121,18 @@ fn check_want(name: &str, out: &Out, sent: &[String], code: i32, w: &Want) {
 
 const OWNER_SESSIONS: &str = r#"{"sessions":[{"sid":"own_a","mintedAt":1790000000,"mintedBy":"ann","redeemedAt":1790000060},{"sid":"own_b","mintedAt":1790000000,"mintedBy":"ann","redeemedAt":null,"end":{"queuedAt":1790000120,"by":"bob"},"delivered":true},{"sid":"own_c","mintedAt":"x","mintedBy":"ann","end":{"queuedAt":1790000120,"by":"bob","via":"all","outbox":"ob_1"}},{"sid":"own_d","end":{"queuedAt":null,"by":null}}]}"#;
 
-/// `hostchat owner-sessions`, as the 0.46.17 queue's shell answers it.
-/// TODO(follows 5b6759be0d): every row is checked against what the
-/// binary must print and send; once the replay brings the shell's
-/// `owner-sessions`, each row is compared with the shell's answer too
-/// (and before that, the shell's "unknown" usage line is checked).
+/// `hostchat owner-sessions` (`_hostchat_owner_sessions`,
+/// cli/src/hostmail-app-cert-backup.sh): the list and its `--json`, the
+/// alias, the usage lines, the refusals, a session's person-only stop
+/// and Python's raise, each compared with the shell's answer and pinned
+/// to what it must be.
 #[test]
-fn hostchat_owner_sessions_follows_5b6759be0d() {
+fn hostchat_owner_sessions_as_the_shell_does() {
     let rig = Rig::new(VERB, "owner-sessions");
-    let has = shell_has_owner_sessions();
     let cli = k2_client::brand::CLI_NAME;
     let product = k2_client::brand::PRODUCT_NAME;
     let get = ("GET /cli/sew/owner-sessions HTTP/1.1", "");
+    let post = "POST /cli/sew/owner-sessions/revoke HTTP/1.1";
     let utc = |c: Case| with(vec![("TZ", "UTC".to_string())], c);
     let usage = |hint: String| {
         want(
@@ -2166,13 +2146,13 @@ fn hostchat_owner_sessions_follows_5b6759be0d() {
             "{cli} hostchat owner-sessions end <own_\\u2026> | end --all"
         ))
     };
+    let person_only = format!("{{\"error\":\"person_only\",\"hint\":\"a person ends the owner's chat sessions, from a terminal outside {product} (Touch ID or the vault password)\"}}\n");
     let mut raise = want("", "TypeError: 'int' object is not iterable\n", &[get]);
     raise.traceback = true;
     let rows: Vec<(Case, Want)> = vec![
-        // TODO(follows 5b6759be0d): the tag "covers: hostchat owner-sessions"
-        // here once the replay puts the form in the census.
+        // covers: hostchat owner-sessions
         (
-            utc(one("follows 5b6759be0d: list: every state", &["owner-sessions"], OWNER_SESSIONS)),
+            utc(one("list: every state", &["owner-sessions"], OWNER_SESSIONS)),
             want(
                 concat!(
                     "own_a  minted 2026-09-21 14:13 by ann  opened 2026-09-21 14:14  live until Sew ends it\n",
@@ -2184,18 +2164,18 @@ fn hostchat_owner_sessions_follows_5b6759be0d() {
                 &[get],
             ),
         ),
-        // TODO(follows 5b6759be0d): the tag "covers: hostchat owner-sessions
-        // --json" here once the replay puts the form in the census.
+        // native: hostchat owner-sessions list
         (
-            one("follows 5b6759be0d: list --json", &["owner-sessions", "list", "--json"], OWNER_SESSIONS),
+            one("list --json", &["owner-sessions", "list", "--json"], OWNER_SESSIONS),
             want(&format!("{OWNER_SESSIONS}\n"), "", &[get]),
         ),
         (
-            one("follows 5b6759be0d: --json alone is the list", &["owner-sessions", "--json"], r#"{"x":1}"#),
+            one("--json alone is the list", &["owner-sessions", "--json"], r#"{"x":1}"#),
             want("{\"x\":1}\n", "", &[get]),
         ),
+        // native: hostchat owner-session
         (
-            one("follows 5b6759be0d: owner-session \"\": none", &["owner-session", ""], r#"{"sessions":[]}"#),
+            one("owner-session \"\": none", &["owner-session", ""], r#"{"sessions":[]}"#),
             want(
                 "(no owner chat sessions recorded in the last 30 days; end --all still ends any owner session)\n",
                 "",
@@ -2203,8 +2183,20 @@ fn hostchat_owner_sessions_follows_5b6759be0d() {
             ),
         ),
         (
+            utc(one(
+                "list: times as text, numbers and a float",
+                &["owner-sessions", "list"],
+                r#"{"sessions":[{"sid":"own_t","mintedAt":"1790000000","mintedBy":7,"redeemedAt":1790000060.9,"end":{"queuedAt":true,"by":"x","via":"sid","outbox":""},"delivered":0}]}"#,
+            )),
+            want(
+                "own_t  minted 2026-09-21 14:13 by 7  opened 2026-09-21 14:14  end queued 1970-01-01 00:00 by x, outbox -\n",
+                "",
+                &[get],
+            ),
+        ),
+        (
             traceback(case(
-                "follows 5b6759be0d: list: sessions that are a number",
+                "list: sessions that are a number",
                 &["owner-sessions"],
                 &[],
                 vec![ok(r#"{"sessions":5}"#)],
@@ -2216,7 +2208,7 @@ fn hostchat_owner_sessions_follows_5b6759be0d() {
         ),
         (
             case(
-                "follows 5b6759be0d: list refused",
+                "list refused",
                 &["owner-sessions"],
                 &[],
                 vec![Reply::Answer(403, r#"{"error":{"code":"forbidden","hint":"the owner or an admin"}}"#.into())],
@@ -2227,42 +2219,127 @@ fn hostchat_owner_sessions_follows_5b6759be0d() {
             want("", "{\"error\": \"forbidden\", \"hint\": \"the owner or an admin\"}\n", &[get]),
         ),
         (
-            bad("follows 5b6759be0d: list with a word", &["owner-sessions", "list", "x"]),
+            case(
+                "list: a 500 that is no JSON",
+                &["owner-sessions"],
+                &[],
+                vec![Reply::Answer(500, "boom".into())],
+                owner_and_port,
+                1,
+                1,
+            ),
+            want("", "{\"error\": \"daemon_error\", \"hint\": \"boom\"}\n", &[get]),
+        ),
+        (
+            bad("list with a word", &["owner-sessions", "list", "x"]),
             usage(format!("{cli} hostchat owner-sessions [list] [--json]")),
         ),
         (
-            bad("follows 5b6759be0d: list --all", &["owner-sessions", "list", "--all"]),
+            bad("list --all", &["owner-sessions", "list", "--all"]),
             usage(format!("{cli} hostchat owner-sessions [list] [--json]")),
         ),
         (
-            bad("follows 5b6759be0d: end with no id", &["owner-sessions", "end"]),
+            bad("--all alone is the list's", &["owner-sessions", "--all"]),
+            usage(format!("{cli} hostchat owner-sessions [list] [--json]")),
+        ),
+        // native: hostchat owner-sessions end
+        (
+            bad("end with no id", &["owner-sessions", "end"]),
             end_usage(),
         ),
         (
-            bad("follows 5b6759be0d: end with two ids", &["owner-sessions", "end", "own_1", "own_2"]),
+            bad("end with two ids", &["owner-sessions", "end", "own_1", "own_2"]),
+            end_usage(),
+        ),
+        // native: hostchat owner-sessions revoke
+        (
+            bad("end --all with an id", &["owner-sessions", "revoke", "--all", "own_1"]),
             end_usage(),
         ),
         (
-            bad("follows 5b6759be0d: end --all with an id", &["owner-sessions", "revoke", "--all", "own_1"]),
-            end_usage(),
-        ),
-        (
-            bad("follows 5b6759be0d: end, not an own_ id", &["owner-sessions", "end", "sid_1"]),
+            bad("end, not an own_ id", &["owner-sessions", "end", "sid_1"]),
             usage(format!("an owner session's id starts with own_ ({cli} hostchat owner-sessions)")),
         ),
         (
-            bad("follows 5b6759be0d: an unknown verb", &["owner-sessions", "nope"]),
+            bad("end, an empty id", &["owner-sessions", "end", ""]),
+            usage(format!("an owner session's id starts with own_ ({cli} hostchat owner-sessions)")),
+        ),
+        (
+            bad("an unknown verb", &["owner-sessions", "nope"]),
             usage(format!("{cli} hostchat owner-sessions [list] | end <own_\\u2026> | end --all")),
         ),
         (
-            bad("follows 5b6759be0d: an unknown flag", &["owner-sessions", "end", "--x"]),
+            bad("help is no verb here", &["owner-sessions", "help"]),
+            usage(format!("{cli} hostchat owner-sessions [list] | end <own_\\u2026> | end --all")),
+        ),
+        (
+            bad("an unknown flag", &["owner-sessions", "end", "--x"]),
             usage(format!("unknown flag --x ({cli} hostchat owner-sessions --help)")),
+        ),
+        (
+            bad("a lone dash is a flag", &["owner-sessions", "-"]),
+            usage(format!("unknown flag - ({cli} hostchat owner-sessions --help)")),
+        ),
+        (
+            // An answer at once (no confirm asked): what was queued, and
+            // the id as one field, a newline and `Token=` in it as they
+            // are (_compute_json reads every value on stdin).
+            case(
+                "end: an id with a newline and Token= in it, answered at once",
+                &["owner-sessions", "end", "own_a\nToken=b"],
+                &[],
+                vec![ok(r#"{"queued":"own_a\nToken=b","ended":[]}"#)],
+                owner_and_port,
+                0,
+                1,
+            ),
+            want(
+                "end queued: own_a\nToken=b\n\n",
+                "",
+                &[(post, r#"{"sid": "own_a\nToken=b"}"#)],
+            ),
+        ),
+        (
+            case(
+                "end: refused outright (no confirm named)",
+                &["owner-sessions", "end", "--all"],
+                &[],
+                vec![Reply::Answer(403, r#"{"error":{"code":"forbidden","hint":"the owner or an admin"}}"#.into())],
+                owner_and_port,
+                3,
+                1,
+            ),
+            want(
+                "",
+                "{\"error\": \"forbidden\", \"hint\": \"the owner or an admin\"}\n",
+                &[(post, r#"{"all": true}"#)],
+            ),
+        ),
+        (
+            traceback(case(
+                "end: marked ids that are numbers",
+                &["owner-sessions", "end", "own_a"],
+                &[],
+                vec![ok(r#"{"queued":1,"ended":[1,2]}"#)],
+                owner_and_port,
+                1,
+                1,
+            )),
+            {
+                let mut w = want(
+                    "end queued: 1\n",
+                    "TypeError: sequence item 0: expected str instance, int found\n",
+                    &[(post, r#"{"sid": "own_a"}"#)],
+                );
+                w.traceback = true;
+                w
+            },
         ),
         (
             with(
                 with_passport(&[]),
                 case(
-                    "follows 5b6759be0d: end in a session: a person's step",
+                    "end in a session: a person's step",
                     &["owner-sessions", "end", "own_1"],
                     &[],
                     vec![],
@@ -2271,13 +2348,13 @@ fn hostchat_owner_sessions_follows_5b6759be0d() {
                     0,
                 ),
             ),
-            want("", &format!("{{\"error\":\"person_only\",\"hint\":\"a person ends the owner's chat sessions, from a terminal outside {product} (Touch ID or the vault password)\"}}\n"), &[]),
+            want("", &person_only, &[]),
         ),
         (
             with(
                 with_passport(&[]),
                 case(
-                    "follows 5b6759be0d: end --all in a session: a person's step",
+                    "end --all in a session: a person's step",
                     &["owner-sessions", "end", "--all"],
                     &[],
                     vec![],
@@ -2286,38 +2363,183 @@ fn hostchat_owner_sessions_follows_5b6759be0d() {
                     0,
                 ),
             ),
-            want("", &format!("{{\"error\":\"person_only\",\"hint\":\"a person ends the owner's chat sessions, from a terminal outside {product} (Touch ID or the vault password)\"}}\n"), &[]),
+            want("", &person_only, &[]),
+        ),
+        (
+            with(
+                with_passport(&[]),
+                case(
+                    "end in a session with a bad id: the usage line first",
+                    &["owner-sessions", "end", "x"],
+                    &[],
+                    vec![],
+                    port_only,
+                    2,
+                    0,
+                ),
+            ),
+            usage(format!("an owner session's id starts with own_ ({cli} hostchat owner-sessions)")),
+        ),
+        (
+            with(
+                with_passport(&[]),
+                case(
+                    "list in a session: the daemon decides",
+                    &["owner-sessions"],
+                    &[],
+                    vec![Reply::Answer(403, r#"{"error":{"code":"person_only","hint":"never an agent"}}"#.into())],
+                    port_only,
+                    3,
+                    1,
+                ),
+            ),
+            want("", "{\"error\": \"person_only\", \"hint\": \"never an agent\"}\n", &[get]),
         ),
     ];
     for (c, w) in &rows {
-        if has {
-            rig.check(c);
-        } else {
-            rig.prepare(Side::Bash, c);
-            let b = rig.run(true, c);
-            let sent = rig.read(Side::Bash, false, c.name).len();
-            assert_shell_lacks_it(c.name, &b, sent);
-        }
+        rig.check(c);
         let (r, sent) = rig.binary(c, false);
         check_want(c.name, &r, &sent, c.code, w);
     }
 }
 
+/// `owner-sessions` with no answer: a GET on the cell socket goes again
+/// over TCP; a POST with no answer is not sent again; nothing listening
+/// is `_chat_fail`'s line for status 000, exit 1.
+#[test]
+fn hostchat_owner_sessions_with_no_answer() {
+    let rig = Rig::new(VERB, "owner-sessions-gone");
+    let cell = || with_passport(&[("K2_HOOK_SOCK", "{sock}")]);
+    let port = dead_port();
+    for c in [
+        with(
+            cell(),
+            case(
+                "list: no answer on the cell socket, then TCP",
+                &["owner-sessions"],
+                &[],
+                vec![Reply::Close, ok(r#"{"sessions":[]}"#)],
+                port_only,
+                0,
+                2,
+            ),
+        ),
+        case(
+            "end: no answer (curl 52): not sent again",
+            &["owner-sessions", "end", "own_a"],
+            &[],
+            vec![Reply::Close],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "end --all: a reset (curl 56): not sent again",
+            &["owner-sessions", "end", "--all"],
+            &[],
+            vec![Reply::Reset],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "list: nothing listens (curl 7): status 000, exit 1",
+            &["owner-sessions"],
+            &[("K2_PORT", port.as_str())],
+            vec![],
+            owner_only,
+            1,
+            0,
+        ),
+    ] {
+        rig.check(&c);
+    }
+}
+
+/// Help never acts (K2's rule): `-h` or `--help` anywhere on an
+/// `owner-sessions` line prints its help and sends nothing, on both
+/// sides. The exact help forms are the front's captured pages; the rest
+/// the binary hands to the shell, whose loop prints the same page.
+#[test]
+fn hostchat_owner_sessions_help_never_acts() {
+    let rig = Rig::new(VERB, "owner-sessions-help");
+    let lines: &[&'static [&'static str]] = &[
+        &["owner-sessions", "--help"],
+        &["owner-sessions", "list", "-h"],
+        &["owner-sessions", "end", "--help"],
+        &["owner-sessions", "end", "own_a", "-h"],
+        &["owner-sessions", "end", "own_a", "--help"],
+        &["owner-sessions", "end", "--all", "-h"],
+        &["owner-sessions", "end", "-h", "--all"],
+        &["owner-sessions", "-h", "end", "--all"],
+        &["owner-sessions", "revoke", "--all", "--help"],
+        &["owner-session", "end", "own_a", "--json", "-h"],
+        // A bad id before the help word: the loop reads every word before
+        // it looks at the id, so this is help too.
+        &["owner-sessions", "end", "x", "-h"],
+    ];
+    for &args in lines {
+        let name = leak(args.join(" "));
+        rig.check(&case(name, args, &[], vec![], owner_and_port, 0, 0));
+    }
+    // An unknown flag before the help word is the usage line: the loop
+    // stops there.
+    rig.check(&bad(
+        "end --x -h: the unknown flag first",
+        &["owner-sessions", "end", "--x", "-h"],
+    ));
+}
+
+/// The large list: above 256 KiB, thousands of sessions, one line each.
+#[test]
+fn hostchat_owner_sessions_large() {
+    let rig = Rig::new(VERB, "owner-sessions-large");
+    let rows: Vec<String> = (0..3000)
+        .map(|i| {
+            let q = 1_790_000_100 + i;
+            let end = match i % 3 {
+                0 => String::new(),
+                1 => format!(r#","end":{{"queuedAt":{q},"by":"login:ann"}},"delivered":true"#),
+                _ => format!(
+                    r#","end":{{"queuedAt":{q},"by":"owner","via":"all","outbox":"ob_{i}"}}"#
+                ),
+            };
+            format!(
+                r#"{{"sid":"own_{i:032x}","mintedAt":{},"mintedBy":"owner-token","redeemedAt":{}{end}}}"#,
+                1_790_000_000 + i,
+                1_790_000_010 + i
+            )
+        })
+        .collect();
+    let body = format!(r#"{{"sessions":[{}]}}"#, rows.join(","));
+    assert!(body.len() > 256 * 1024, "{}", body.len());
+    let c = with(
+        vec![("TZ", "UTC".to_string())],
+        one("a large list", &["owner-sessions"], &body),
+    );
+    rig.check(&c);
+    let (r, _) = rig.binary(&c, false);
+    assert_eq!(r.code, Some(0), "{r:?}");
+    assert_eq!(r.stdout.lines().count(), 3000, "one line a session");
+    rig.check(&with(
+        vec![("TZ", "UTC".to_string())],
+        one("a large list --json", &["owner-sessions", "--json"], &body),
+    ));
+}
+
 const HELD_OWNER_SESSION: &str = r#"{"error":{"code":"confirm_required","hint":"in person","details":{"action":"chat-owner-session-end","secretId":"own_a"}}}"#;
 
 /// `owner-sessions end` as a person: the daemon holds it for a confirm,
-/// the vault gives the token, the same body goes again with it.
-/// TODO(follows 5b6759be0d): as above, compared with the shell's once
-/// the replay brings it.
+/// the vault gives the token (the vault password typed on stdin, the
+/// house rig), the same body goes again with it.
 #[test]
-fn hostchat_owner_sessions_end_follows_5b6759be0d() {
+fn hostchat_owner_sessions_a_person_s_steps() {
     let rig = VRig::new();
-    let has = shell_has_owner_sessions();
     let post = "POST /cli/sew/owner-sessions/revoke HTTP/1.1";
-    let rows: Vec<(VCase, Want)> = vec![
+    let mut rows: Vec<(VCase, Want)> = vec![
         (
             person(
-                "follows 5b6759be0d: end own_a: held, then confirmed",
+                "end own_a: held, then confirmed",
                 &["owner-sessions", "end", "own_a"],
                 vec![
                     Reply::Answer(403, HELD_OWNER_SESSION.into()),
@@ -2338,7 +2560,7 @@ fn hostchat_owner_sessions_end_follows_5b6759be0d() {
         ),
         (
             person(
-                "follows 5b6759be0d: end --all --json: held, then confirmed",
+                "end --all --json: held, then confirmed",
                 &["owner-sessions", "end", "--all", "--json"],
                 vec![
                     Reply::Answer(403, HELD_OWNER_SESSION.replace("own_a", "all")),
@@ -2355,25 +2577,72 @@ fn hostchat_owner_sessions_end_follows_5b6759be0d() {
                 ],
             ),
         ),
+        (
+            person(
+                "owner-session revoke own_a: confirmed, then refused",
+                &["owner-session", "revoke", "own_a"],
+                vec![
+                    Reply::Answer(403, HELD_OWNER_SESSION.into()),
+                    Reply::Answer(
+                        403,
+                        r#"{"error":{"code":"confirm_required","hint":"wrong confirm"}}"#.into(),
+                    ),
+                ],
+                3,
+            ),
+            want(
+                "",
+                "Vault password: \n{\"error\": \"confirm_required\", \"hint\": \"wrong confirm\"}\n",
+                &[
+                    (post, r#"{"sid": "own_a"}"#),
+                    (post, r#"{"sid": "own_a", "confirmToken": "ctok-5150"}"#),
+                ],
+            ),
+        ),
     ];
     let mut at_once = vcase(
-        "follows 5b6759be0d: end own_a: answered at once",
+        "end own_a: answered at once",
         &["owner-sessions", "end", "own_a"],
     );
     at_once.daemon = vec![ok(r#"{"queued":true,"ended":[]}"#)];
     at_once.daemon_requests = 1;
-    let mut v = rows;
-    v.push((
+    rows.push((
         at_once,
         want("end queued: True\n\n", "", &[(post, r#"{"sid": "own_a"}"#)]),
     ));
-    for (c, w) in &v {
-        if has {
-            rig.check(c);
-        } else {
-            let b = rig.run(true, false, c);
-            assert_shell_lacks_it(c.name, &b.out, b.daemon.len() + b.vault.len());
-        }
+    let mut nameless = vcase(
+        "end own_a: held, but no action named: the refusal",
+        &["owner-sessions", "end", "own_a"],
+    );
+    nameless.daemon = vec![Reply::Answer(
+        403,
+        r#"{"error":{"code":"confirm_required","hint":"in person"}}"#.into(),
+    )];
+    nameless.daemon_requests = 1;
+    nameless.code = 3;
+    rows.push((
+        nameless,
+        want(
+            "",
+            "{\"error\": \"confirm_required\", \"hint\": \"in person\"}\n",
+            &[(post, r#"{"sid": "own_a"}"#)],
+        ),
+    ));
+    let mut refused = vcase(
+        "end --all: the vault refuses the confirm",
+        &["owner-sessions", "end", "--all"],
+    );
+    refused.daemon = vec![Reply::Answer(403, HELD_OWNER_SESSION.replace("own_a", "all"))];
+    refused.daemon_requests = 1;
+    refused.vault = Some(vec![Reply::Answer(
+        403,
+        r#"{"error":{"code":"denied","hint":"no"}}"#.into(),
+    )]);
+    refused.vault_requests = 1;
+    refused.code = 3;
+    rig.check(&refused);
+    for (c, w) in &rows {
+        rig.check(c);
         let r = rig.run(false, false, c);
         check_want(c.name, &r.out, &r.daemon, c.code, w);
         assert_eq!(

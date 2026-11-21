@@ -203,8 +203,8 @@ fn a_value_flag_with_no_value_is_the_d6_line() {
     assert_eq!(users::parse(&["invite", "ann", "--email"]), last("--email"));
 }
 
-/// `owner-sessions` (follows 5b6759be0d): the words as the 0.46.17
-/// queue's shell reads them.
+/// `owner-sessions`: the words as the shell reads them
+/// (`_hostchat_owner_sessions`).
 #[test]
 fn owner_sessions_words() {
     use admin::Admin;
@@ -249,4 +249,53 @@ fn owner_sessions_words() {
             "{CLI_NAME} hostchat owner-sessions [list] [--json]"
         ))
     );
+}
+
+/// `owner-sessions`'s lines name the command and the product by the
+/// brand's names (in a build with `K2_BRAND_DIR=brand/xy` they say `xy`),
+/// never a typed `k2`, `k5` or `K2`.
+#[test]
+fn owner_sessions_lines_say_the_brand_s_name() {
+    let c = CLI_NAME;
+    let usage = |hint: &str| Plan::Bad(crate::families::chat::bad_line(hint));
+    let rows: &[(&[&str], String)] = &[
+        (
+            &["list", "x"],
+            format!("{c} hostchat owner-sessions [list] [--json]"),
+        ),
+        (
+            &["end"],
+            format!("{c} hostchat owner-sessions end <own_\u{2026}> | end --all"),
+        ),
+        (
+            &["end", "x"],
+            format!("an owner session's id starts with own_ ({c} hostchat owner-sessions)"),
+        ),
+        (
+            &["nope"],
+            format!("{c} hostchat owner-sessions [list] | end <own_\u{2026}> | end --all"),
+        ),
+        (
+            &["--x"],
+            format!("unknown flag --x ({c} hostchat owner-sessions --help)"),
+        ),
+    ];
+    for (words, hint) in rows {
+        let plan = admin::owner_sessions(words);
+        assert_eq!(plan, usage(hint), "{words:?}");
+        let Plan::Bad(line) = plan else {
+            unreachable!()
+        };
+        if c != "k2" {
+            assert!(!line.contains("k2 ") && !line.contains("k5 "), "{line}");
+        }
+    }
+    let line = admin::owner_sessions_person_only();
+    assert!(
+        line.contains(&format!("from a terminal outside {PRODUCT_NAME} (")),
+        "{line}"
+    );
+    if PRODUCT_NAME != "K2" {
+        assert!(!line.contains("K2"), "{line}");
+    }
 }

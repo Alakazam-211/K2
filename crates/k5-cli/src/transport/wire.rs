@@ -271,8 +271,8 @@ impl Write for Conn {
 pub enum Failure {
     /// Nothing accepted the connection (curl exit 7).
     Connect(io::Error),
-    /// The connect took longer than allowed (curl exit 28 with no
-    /// "Connected to" in its trace).
+    /// The connect took longer than allowed (curl exit 28 with
+    /// `%{time_connect}` at 0: no connect completed).
     ConnectTimedOut,
     /// Connected, and not one byte of the request went out (the first
     /// write failed).

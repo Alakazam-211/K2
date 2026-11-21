@@ -107,8 +107,10 @@
 //!   stdin (the shell's test: a curl argument that is exactly `@-`; an
 //!   `@-` inside a URL keeps the tries); a loopback one then tries the
 //!   port in `daemon.port` when it differs ([`client::Client::port_file`]).
-//! - The connect timed out (curl 28 before "Connected to"): again, the
-//!   same way, for `cli_request` and `cli_request_post` and their twins.
+//! - The connect timed out (curl 28 with curl's `%{time_connect}` at 0,
+//!   no connect completed): again, the same way, for `cli_request` and
+//!   `cli_request_post` and their twins. A timeout after the connect is
+//!   never sent again.
 //! - `503` with `"state":"migrating"`: again, at most [`client::TRIES`]
 //!   tries, a second apart, the same four. The status decides, never the
 //!   body alone.

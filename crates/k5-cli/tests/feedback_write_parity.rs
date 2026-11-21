@@ -793,6 +793,67 @@ fn template() {
     );
 }
 
+/// After a bare `--` the words are the id and the text, as typed
+/// (`cmd_feedback_comment`'s `--)` arm): a text that starts with a dash or
+/// is `--help` is sent; help before `--` sends nothing. `tickets` is the
+/// same verb.
+#[test]
+fn comment_after_dashes() {
+    let sent = r#"{"ok":true,"id":"fb_0123456789"}"#;
+    for (verb, tag) in [("feedback", "cdash"), ("tickets", "tcdash")] {
+        let rig = Rig::new(verb, tag);
+        let v = vec![
+            // covers: feedback comment
+            case(
+                "the text --help after --",
+                &["comment", "fb_0123", "--", "--help"],
+                &[],
+                vec![ok(sent)],
+                files,
+                0,
+                1,
+            ),
+            case(
+                "--json, then a dashed text after --",
+                &["comment", "--json", "--", "fb_0123", "-x -h"],
+                &[],
+                vec![ok(sent)],
+                files,
+                0,
+                1,
+            ),
+            case(
+                "a third word after --",
+                &["comment", "fb_1", "--", "a", "-b"],
+                &[],
+                vec![],
+                files,
+                2,
+                0,
+            ),
+            case(
+                "-- and no text",
+                &["comment", "fb_1", "--"],
+                &[],
+                vec![],
+                files,
+                2,
+                0,
+            ),
+            case(
+                "help before --",
+                &["comment", "fb_1", "-h", "--", "x"],
+                &[],
+                vec![],
+                files,
+                0,
+                0,
+            ),
+        ];
+        check(&rig, v);
+    }
+}
+
 #[test]
 fn comment() {
     let rig = Rig::new(VERB, "comment");

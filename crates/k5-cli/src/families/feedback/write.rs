@@ -404,6 +404,15 @@ impl Form {
     }
 }
 
+/// A third word: the comment's text must be one word (quoted).
+fn extra_word(w: &str) -> String {
+    usage(&format!(
+        "unexpected extra argument '{w}' \u{2014} quote the comment text"
+    ))
+}
+
+/// `cmd_feedback_comment`'s loop: after a bare `--` the words are the id
+/// and the text, as typed.
 pub fn parse_comment(rest: &[&str]) -> Result<Comment, String> {
     let mut c = Comment::default();
     let mut i = 0;
@@ -415,6 +424,19 @@ pub fn parse_comment(rest: &[&str]) -> Result<Comment, String> {
                     .push(rest.get(i + 1).ok_or_else(|| usage(FILE_NEEDS))?.to_string());
                 i += 1;
             }
+            // The rest is the id and the text, as typed.
+            "--" => {
+                for w in &rest[i + 1..] {
+                    if c.id.is_empty() {
+                        c.id = w.to_string();
+                    } else if c.text.is_empty() {
+                        c.text = w.to_string();
+                    } else {
+                        return Err(extra_word(w));
+                    }
+                }
+                break;
+            }
             f if f.starts_with('-') => {
                 return Err(usage(&format!(
                     "unknown flag '{f}' \u{2014} usage: {} tickets comment <id> [<text>] [--file path[:line]]\u{2026} [--json]",
@@ -423,11 +445,7 @@ pub fn parse_comment(rest: &[&str]) -> Result<Comment, String> {
             }
             w if c.id.is_empty() => c.id = w.to_string(),
             w if c.text.is_empty() => c.text = w.to_string(),
-            w => {
-                return Err(usage(&format!(
-                    "unexpected extra argument '{w}' \u{2014} quote the comment text"
-                )))
-            }
+            w => return Err(extra_word(w)),
         }
         i += 1;
     }
@@ -629,8 +647,9 @@ fn python_names() -> Vec<&'static str> {
 /// `k5 feedback <words>` for every form but `list` and `show`. `None`: the
 /// shell CLI answers it (see the module's notes).
 pub fn run(args: &[OsString], words: &[&str]) -> Option<Exit> {
-    // Help is the front's: a help page, or the shell's.
-    if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
+    // Help is the front's: a help page, or the shell's. Each verb's
+    // `_wants_help` stops at a bare `--`.
+    if crate::dashdash::wants_help(words) {
         return None;
     }
     let form = Form::parse(words);
@@ -1228,6 +1247,23 @@ mod tests {
     #[test]
     fn the_words_stop_where_the_shell_s_do() {
         assert!(parse_comment(&["x"]).is_err());
+        // After `--`: the id and the text as typed; a third word is one too
+        // many; a second `--` is a word.
+        assert_eq!(
+            parse_comment(&["--json", "--", "-t1", "--help"]).unwrap(),
+            Comment {
+                id: "-t1".into(),
+                text: "--help".into(),
+                json: true,
+                ..Comment::default()
+            }
+        );
+        assert_eq!(
+            parse_comment(&["t1", "--", "a", "b"]).unwrap_err(),
+            extra_word("b")
+        );
+        assert_eq!(parse_comment(&["t1", "--", "--"]).unwrap().text, "--");
+        assert!(parse_comment(&["t1", "--"]).is_err());
         assert_eq!(
             parse_comment(&["", "x", "t"]).unwrap(),
             Comment {

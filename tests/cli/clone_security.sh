@@ -32,8 +32,8 @@
 #   (100.64.0.0/10, fd7a:115c:a1e0::/48), never to a *.ts.net name, and a
 #   password still never goes over plain http; this server's own side
 #   (K2_HOST over plain http) warns once per command, except for a
-#   loopback or Tailscale address or a *.ts.net name as written, or with
-#   K2_PLAIN_HTTP_OK=1; the help says the confirms ask whoever is at the
+#   loopback or Tailscale address or a *.ts.net name as written, an
+#   https:// K2_HOST (not plain http), or with K2_PLAIN_HTTP_OK=1; the help says the confirms ask whoever is at the
 #   terminal and are no boundary against programs run as the same user.
 #
 # Run on compute (it starts stubs and opens ports):
@@ -712,6 +712,13 @@ done
 for h in 127.0.0.1 localhost ::1 100.100.1.2 fd7a:115c:a1e0::5 box.tail1234.ts.net; do
     fresh
     K2_HOST="$h" k2 clone to http://box.example ws1 --json
+    expect_not "K2_HOST=$h: no warning" "$ERR" "warning:"
+done
+# https to this server is not plain http, whatever the host: no warning.
+for h in https://192.0.2.10 https://box.lan HTTPS://box.lan; do
+    fresh
+    K2_HOST="$h" k2 clone to http://box.example ws1 --json
+    expect_eq "K2_HOST=$h: refused as before (exit 3)" "$RC" "3"
     expect_not "K2_HOST=$h: no warning" "$ERR" "warning:"
 done
 fresh

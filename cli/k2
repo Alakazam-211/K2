@@ -49303,10 +49303,12 @@ def clone_url_refusal(url, password=False):
 # _clone_local_plain_http_warn: this server's side. The owner token goes
 # to $HOST over plain http; to a host that, as written, isn't this
 # computer, a Tailscale address or a *.ts.net name, one warning line per
-# command, before its first request. K2_PLAIN_HTTP_OK=1 silences it.
+# command, before its first request. K2_PLAIN_HTTP_OK=1 silences it. An
+# https:// K2_HOST is not plain http (_k2_daemon_base): no warning.
 _clone_local_plain_http_warn() {
     local ok="" me
     [ -z "${_K2_PLAIN_HTTP_WARNED:-}" ] || return 0
+    case "${HOST:-}" in https://*|HTTPS://*) return 0 ;; esac
     _envn_into ok PLAIN_HTTP_OK
     [ "$ok" != 1 ] || return 0
     _CLONE_URL_RULE="$_CLONE_URL_RULE" python3 -c '

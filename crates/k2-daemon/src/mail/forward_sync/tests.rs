@@ -218,6 +218,36 @@ fn the_ooo_block_survives_every_forward_change() {
     assert_eq!((s.ooo, s.forward), (Some(ooo), None));
 }
 
+/// A NUL in the vacation text, as `hostmail ooo set --text -` sends it
+/// (JSON's `\u0000`; the CLI keeps the text as read): the route answers
+/// without a 500 or a panic, and the script it writes reads back with the
+/// text byte for byte, or it refuses the text with a plain 400.
+#[test]
+fn an_ooo_text_with_a_nul_is_stored_and_read_back_or_refused_plainly() {
+    let _g = setup();
+    let io = install(false);
+    seed_mailbox("nul@brand.test", "direct");
+    let text = "Away \u{0}from\u{0} Acme.\nBack \u{0}Monday.";
+    let body = serde_json::json!({ "address": "nul@brand.test", "text": text }).to_string();
+    assert!(body.contains("Away \\u0000from\\u0000 Acme."), "{body}");
+    let r = crate::mail::ooo::handle_ooo_set(body.as_bytes());
+    println!("ooo set with a NUL: {} {}", r.status, r.body);
+    match r.status {
+        "200 OK" => {
+            let v: serde_json::Value = serde_json::from_str(&r.body).expect("the answer is JSON");
+            assert_eq!(v["text"].as_str(), Some(text), "{}", r.body);
+            let src = io.src("acc-nul").expect("the script was written");
+            assert_eq!(sieve_user::parse(&src).ooo.map(|o| o.text), Some(text.to_string()), "{src:?}");
+        }
+        "400 Bad Request" => {
+            let v: serde_json::Value = serde_json::from_str(&r.body).expect("the refusal is JSON");
+            assert!(v["error"]["hint"].as_str().is_some_and(|h| !h.is_empty()), "{}", r.body);
+            assert!(io.src("acc-nul").is_none(), "a refusal writes nothing");
+        }
+        other => panic!("ooo set with a NUL: {other}: {}", r.body),
+    }
+}
+
 #[test]
 fn reconcile_restores_a_tampered_script_and_logs_drift() {
     let _g = setup();

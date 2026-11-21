@@ -586,22 +586,32 @@ if d.get("tokenSet") is False and not d.get("subdomain"):
 ' || return 1
 
     local start_resp
+    # The tunnel is live only when the daemon says so: no answer (curl
+    # refused, timed out or got an empty reply), an answer that isn't JSON,
+    # one that isn't an object and an error answer each end with exit 1,
+    # never the live line.
     start_resp=$(cli_send cli_post "/cli/tunnel/start" "subdomain=$(urlencode "$label")") || start_resp=""
     printf '%s' "$start_resp" | LABEL="$label" python3 -c '
 import json, os, sys
 raw = sys.stdin.read()
 label = os.environ.get("LABEL") or "?"
+if not raw.strip():
+    sys.stderr.write("Error starting tunnel: no answer from the K2 daemon on /cli/tunnel/start; check with: k2 connect status\n")
+    sys.exit(1)
 try:
-    d = json.loads(raw) if raw.strip() else {}
+    d = json.loads(raw)
 except Exception:
     sys.stderr.write("Error: tunnel/start returned unparseable response: %r\n" % (raw[:200],))
     sys.exit(1)
-err = d.get("error") if isinstance(d, dict) else None
+if not isinstance(d, dict):
+    sys.stderr.write("Error: tunnel/start failed: %s\n" % raw[:200])
+    sys.exit(1)
+err = d.get("error")
 if err is not None:
     hint = err.get("hint") if isinstance(err, dict) else err
     sys.stderr.write("Error starting tunnel: %s\n" % hint)
     sys.exit(1)
-url = (d.get("public_url") if isinstance(d, dict) else None) or ("https://%s.k2.dev" % label)
+url = d.get("public_url") or ("https://%s.k2.dev" % label)
 print("✓ live at %s" % url)
 ' || return 1
 }

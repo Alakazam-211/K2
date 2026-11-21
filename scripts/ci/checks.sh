@@ -110,6 +110,7 @@ part_web() {
     step "k2 ci signer add takes the pairing code on stdin (stub daemon and vault)"; bash tests/cli/ci_signer_code_stdin.sh
     step "k2 compute local enable takes the enroll code and ticket on stdin (stub daemon)"; bash tests/cli/compute_local_enable_stdin.sh
     step "remote tokens have a stdin form and stay off every child's argv and environment (stub server)"; bash tests/cli/remote_token_stdin.sh
+    step "k2 connect login says live only when the tunnel started (stub server)"; bash tests/cli/connect_login_live.sh
     step "k2 compute fetch gets every file of a job with many (stub daemon)"; bash tests/cli/compute_fetch_many_artifacts.sh
     step "k2 never sends a daemon request through a proxy (stub daemon)"; bash tests/cli/no_proxy_to_daemon.sh
     step "one proxy rule in Rust, the CLI's curl and its Python (parity table)"; bash tests/cli/proxy_rule_parity.sh

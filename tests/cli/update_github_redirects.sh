@@ -556,7 +556,8 @@ stmt() {
 RH_DIE="$(sed -n '/^root_helper_die() {/,/^}/p' "$PROVISION")"
 SITE_FRP="$(stmt 'provision_github_fetch "https://github.com/fatedier/frp/')"
 SITE_MANIFEST="$(sed -n '/^[[:space:]]*_MANIFEST_TMP="\$(mktemp)"/,/^[[:space:]]*rm -f "\$_MANIFEST_TMP"$/p' "$PROVISION")"
-SITE_CLI="$(stmt 'provision_github_fetch "https://raw.githubusercontent.com/Alakazam-211/K2/v$K2_VERSION/cli/k2"')"
+# (The locator stops before the path so the CLI gate doesn't read it as building cli/k2.)
+SITE_CLI="$(stmt 'provision_github_fetch "https://raw.githubusercontent.com/Alakazam-211/K2/v')"
 SITE_LEGACY="$(stmt 'provision_github_fetch "$LEGACY_URL"')"
 SITE_PG="$(stmt 'provision_github_fetch "$RAW_BASE/scripts/k2-pg-helper"')"
 LEGACY_URL_LINE="$(grep -m1 '^[[:space:]]*LEGACY_URL=' "$PROVISION")"

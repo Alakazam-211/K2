@@ -769,19 +769,15 @@ fn hostchat_hands_these_to_the_shell() {
         compare: Compare::Shell,
         ..c
     };
-    for c in [
-        shell(case(
-            "_K2_REFUSAL_AREA set: the shell reads it",
-            &["status"],
-            &[("_K2_REFUSAL_AREA", "app")],
-            vec![ok(r#"{"state":"x"}"#)],
-            owner_and_port,
-            0,
-            1,
-        )),
-    ] {
-        rig.check(&c);
-    }
+    rig.check(&shell(case(
+        "_K2_REFUSAL_AREA set: the shell reads it",
+        &["status"],
+        &[("_K2_REFUSAL_AREA", "app")],
+        vec![ok(r#"{"state":"x"}"#)],
+        owner_and_port,
+        0,
+        1,
+    )));
 }
 
 /// A value flag as the last word, or with an empty value: bash stops on

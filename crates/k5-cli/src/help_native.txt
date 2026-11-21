@@ -643,6 +643,8 @@ thread --help|thread|out|0
 thread -h|thread|out|0
 thread secret --help|thread/secret|out|0
 thread secret -h|thread/secret|out|0
+trust-folders --help|trust-folders|out|0
+trust-folders -h|trust-folders|out|0
 usage --help|usage|out|0
 usage -h|usage|out|0
 users --help|users|err|0

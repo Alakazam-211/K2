@@ -182,6 +182,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **`k2 reserve --help` and `k2 release --help` print a short page.** Both commands are retiring, and `--help` or `-h` anywhere was a usage error ("'--help' is not a path", exit 2). Now it prints what the command does and that a later release removes it, exits 0 and sends nothing, with no connection to K2 needed.
 - **`-h` or `--help` anywhere on `k2 read` prints the read help and reads nothing.** Before, `k2 read --help` asked K2 for the terminal of a workspace named `--help`, and `--lines`, `--agent`, `--session` and `--token` took the help word as their value. Help needs no connection to K2.
 - **`k2 reviews --help` prints a help page and asks nothing.** Before, `k2 reviews` read no words, so `--help` or `-h` asked K2 for the review list. The page says what the list shows and points to `k2 review --help`; it needs no connection to K2.
+- **`k2 trust-folders --help` prints a help page and changes nothing.** Before, `k2 trust-folders` read no words, so `--help` or `-h` told the coding tools again to trust every workspace folder. It needs no connection to K2.
 
 ### Settings
 - **Changes to the Send feedback settings are recorded.** When the owner or an admin turns "Allow sending feedback to K2", "Agents may send feedback to K2" or "Agents may include K2 details" on or off (Settings → General → Send feedback), Settings → Logs → Access Audit records who changed which one, from what to what. A change that leaves a setting as it was, or a refused attempt, records nothing.

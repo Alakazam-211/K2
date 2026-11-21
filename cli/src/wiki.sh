@@ -1036,10 +1036,19 @@ cmd_workspace_create() {
     cli_print_or_fail "$_WS_ANSWER" /cli/workspace/create
 }
 
+_trust_folders_usage() {
+    cat <<'EOF'
+%include cli/text/help/trust-folders.txt
+EOF
+}
+
 # P13: re-assert Claude/Codex/Grok/Gemini folder trust for every registered
 # workspace. Since 0.46.4 (SS9) only folders a decision covers (or clean ones)
 # are re-asserted; a risky folder with no decision is never granted.
 cmd_trust_folders() {
+    # 0.46.17: -h/--help anywhere before a bare -- prints the help and sends
+    # nothing (it reads no words, so `trust-folders --help` sent the POST).
+    if _wants_help "$@"; then _trust_folders_usage; return 0; fi
     cli_request_post "/cli/trust-folders"
 }
 

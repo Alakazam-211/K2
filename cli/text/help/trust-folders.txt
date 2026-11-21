@@ -1,0 +1,10 @@
+k2 trust-folders — tell Claude, Codex, Grok and Gemini again to trust each
+workspace folder on this server
+
+  k2 trust-folders    trust every registered workspace's folder again, where
+                      K2 may: a folder a trust decision covers, or one with
+                      nothing in it that runs commands. A folder with
+                      settings that run commands and no decision is left
+                      untrusted.
+
+One folder's trust, and deciding on it: k2 workspace trust --help.

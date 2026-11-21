@@ -1129,6 +1129,7 @@ export function TerminalComposeBar({
         } else {
           release()
           setThreadAddrError(null)
+          if (result.resp) extras?.onPosted?.(result.resp)
           // The chip goes with the send (a refused send keeps it).
           if (replyTo) reply.clear()
           if (files.length > 0) {
@@ -1165,7 +1166,7 @@ export function TerminalComposeBar({
     } finally {
       setSending(false)
     }
-  }, [draft, sending, sessionId, sendOnThread, threadAddr, slashCommand, sessionChrome?.viewTab, sessionChrome?.retryOverlayAddr, pendingFiles, scope, reply, draftKey])
+  }, [draft, sending, sessionId, sendOnThread, threadAddr, slashCommand, sessionChrome?.viewTab, sessionChrome?.retryOverlayAddr, pendingFiles, scope, reply, draftKey, extras])
 
   // A waiting send goes once the Thread has its address (with the words in
   // the box then); emptying the box calls it off.

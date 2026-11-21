@@ -69,7 +69,7 @@ export const OVERLAY_SEARCH_PAGE_SIZE = 500
  *  bubble). */
 type DocExtras = Pick<
   OverlayDoc,
-  'widget' | 'author' | 'mine' | 'design' | 'attachments' | 'context' | 'stash' | 'clientMsgId' | 'deleted' | 'deletedAt' | 'deletedBy' | 'systemNotice'
+  'widget' | 'author' | 'mine' | 'design' | 'attachments' | 'context' | 'stash' | 'clientMsgId' | 'deleted' | 'deletedAt' | 'deletedBy' | 'systemNotice' | 'imported'
 >
 function docExtras(src: Record<string, unknown>): DocExtras {
   const out: DocExtras = {}
@@ -98,6 +98,9 @@ function docExtras(src: Record<string, unknown>): DocExtras {
   const author: OverlayDoc['author'] = isSystemThreadAuthor(src.author) ? systemAuthorOf(src.author) : parseThreadAuthor(src.author)
   if (author) out.author = author
   if (src.systemNotice && typeof src.systemNotice === 'object' && !Array.isArray(src.systemNotice)) out.systemNotice = src.systemNotice
+  // A message moved in from an older store (a ticket's comments): carried
+  // as sent, read by the host that knows its shape.
+  if (src.imported !== undefined && src.imported !== null) out.imported = src.imported
   const design = coerceDesign(src.design)
   if (design) out.design = design
   const attachments = coerceThreadFileObjects(src.attachments)
@@ -443,6 +446,13 @@ export interface OverlayDoc {
   deleted?: boolean | null
   deletedAt?: number | null
   deletedBy?: ThreadAuthor | null
+  /** A message moved in from an older store (a ticket's comments before
+   *  they lived on the Thread): its original author, as sent. Read only by
+   *  the host that knows the shape (Feedback/ticket-thread-contract). */
+  imported?: unknown
+  /** Set by the renderer, never sent: the sender is this name, drawn as
+   *  text only (no person or agent lookup). */
+  senderName?: string
 }
 
 /** `doc.stash` on a `stash.offer` card. */
@@ -712,7 +722,13 @@ export function overlayItemFromThreadPost(
 export type ThreadComposeResult =
   /** `contextRefused`: the server took the message but not its Board
    *  context (thread-context-v1), and says why. */
-  | { ok: true; item: OverlayThreadItem | null; contextRefused?: { code: string; message: string } }
+  | {
+      ok: true
+      item: OverlayThreadItem | null
+      contextRefused?: { code: string; message: string }
+      /** The server's whole answer (a ticket's post carries `ticket`). */
+      resp?: Record<string, unknown>
+    }
   /** `code`: the daemon's refusal code when it sent one (`attachment_*`).
    *  `kept`: the send failed on the way (network, a 5xx, a reused id) and
    *  stays in the Thread as a "Not sent" bubble with Retry (only for a
@@ -861,7 +877,7 @@ function composeResult(out: OutboxSendOutcome): ThreadComposeResult {
   switch (out.kind) {
     case 'sent': {
       const refused = out.resp ? contextRefusedOf(out.resp) : null
-      return { ok: true, item: out.item, ...(refused ? { contextRefused: refused } : {}) }
+      return { ok: true, item: out.item, ...(refused ? { contextRefused: refused } : {}), ...(out.resp ? { resp: out.resp } : {}) }
     }
     case 'transient':
     case 'final':
@@ -962,7 +978,7 @@ async function sendThreadPost(
   const item = overlayItemFromThreadPost(resp, text)
   if (item) ingestOverlayThreadItem(item)
   const refused = contextRefusedOf(resp)
-  return refused ? { ok: true, item, contextRefused: refused } : { ok: true, item }
+  return refused ? { ok: true, item, contextRefused: refused, resp } : { ok: true, item, resp }
 }
 
 /**

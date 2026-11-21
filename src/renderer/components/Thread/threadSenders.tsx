@@ -57,7 +57,9 @@ export const SENDER_MOTION_CLASS = 'thread-sender-motion'
 export interface ThreadSender {
   /** Identity for "same sender" (a person by login, an agent by address). */
   key: string
-  kind: 'agent' | 'person'
+  /** `name`: a name only (a message moved in from an older store): its
+   *  letter, never a person's or an agent's picture. */
+  kind: 'agent' | 'person' | 'name'
   /** The name on the picture's tooltip (and its letter). */
   label: string
   /** A person: the login the roster keys colours and names by. An agent:
@@ -103,6 +105,8 @@ function isPersonDoc(doc: OverlayDoc): boolean {
  *  this Thread shows it (an old address reads as the current one). */
 export function threadSender(doc: OverlayDoc, currentAddr?: string, pastAddresses?: readonly string[]): ThreadSender {
   const from = doc.from?.trim() || ''
+  const named = doc.senderName?.trim()
+  if (named) return { key: `name:${fold(named)}`, kind: 'name', label: named, id: '' }
   if (isPersonDoc(doc)) {
     const author = parseThreadAuthor(doc.author)
     const login = author ? (author.kind === 'owner' ? 'owner' : author.login) : from

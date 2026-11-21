@@ -12,6 +12,7 @@ import { measureThreadDock, writeThreadDock } from './threadDock'
 import { threadComposeCapWidth } from './threadTextWidth'
 import { FOOTER_FADE_TARGETS, ThreadFooterFade, threadFadeTop } from '@/components/Thread/ThreadZenKit'
 import { ProgressiveHeaderBlur } from '@/components/ui'
+import { useThreadComposeExtras } from './threadComposeExtras'
 import {
   ThreadComposeDropContext,
   ThreadDropOverlay,
@@ -102,7 +103,11 @@ export function ThreadOverlayColumn({
   // measures 0: the list keeps the drawer then.
   const composeShown = hasCompose && bottom > 0
   const editorFontSize = useSettingsStore((s) => s.editor.fontSize) || 13
-  const drawer = useMemo<ThreadComposeDrawer>(() => ({ turn, onStop }), [turn, onStop])
+  // A ticket's replies reach the agent's own session: its strip, not the
+  // Thread's (threadComposeExtras).
+  const turnOverride = useThreadComposeExtras()?.turn
+  const drawerTurn = turnOverride !== undefined ? turnOverride : turn
+  const drawer = useMemo<ThreadComposeDrawer>(() => ({ turn: drawerTurn, onStop }), [drawerTurn, onStop])
   const reducedMotion = useReducedMotion()
   const { handler: dropHandler, slot: dropSlot } = useThreadComposeDropSlot()
   const drop = useThreadDropZone(rootRef, hasCompose ? dropHandler : null)

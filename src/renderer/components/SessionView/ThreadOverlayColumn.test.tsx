@@ -3,6 +3,9 @@ import { describe, expect, it, afterEach, vi } from 'vitest'
 import { screen, cleanup, act, fireEvent } from '@testing-library/react'
 import { COMPOSE_DROP_SURFACE_SELECTOR } from '@/lib/compose-surface-drop'
 import { ThreadOverlayColumn } from './ThreadOverlayColumn'
+import { ThreadComposeExtrasContext } from './threadComposeExtras'
+import { useThreadComposeDrawer } from './threadComposeDrawer'
+import type { ThreadTurn } from './overlayThread'
 import { renderInRoom, testRoom } from '@/test-utils/room'
 import { primaryScope as overlayPrimaryScope } from '@/kessel/server-scope'
 
@@ -98,6 +101,22 @@ describe('ThreadOverlayColumn', () => {
 
     Element.prototype.getBoundingClientRect = orig
     vi.unstubAllGlobals()
+  })
+
+  it('a host can put its own working strip over the box (a ticket: the agent’s own session)', () => {
+    const seen: Array<unknown> = []
+    function Probe(): null {
+      seen.push(useThreadComposeDrawer()?.turn)
+      return null
+    }
+    const turn = { turnId: 't1', state: 'working' } as unknown as ThreadTurn
+    renderInRoom(
+      overlayRoom,
+      <ThreadComposeExtrasContext.Provider value={{ turn }}>
+        <ThreadOverlayColumn addr="ticket:t-1" conversationId="ticket:t-1" active composeBar={<Probe />} />
+      </ThreadComposeExtrasContext.Provider>,
+    )
+    expect(seen.at(-1)).toBe(turn)
   })
 
   it('is an image compose-drop surface for the thread column', () => {

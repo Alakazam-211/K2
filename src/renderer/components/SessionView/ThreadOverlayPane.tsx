@@ -241,9 +241,8 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
   // Thread file links: the room's own server decides which printed paths
   // are files in this Thread's workspace; a click opens them in this room.
   const fileLinkTransport = useMemo(() => scopeFileLinkTransport(roomScope), [roomScope])
-  // A Thread whose address isn't a workspace's (a ticket's) names the
-  // workspace its paths resolve in.
-  const fileWorkspace = useThreadComposeExtras()?.fileWorkspace || addr
+  // A Thread that isn't an agent's chat (a ticket's) may redraw its rows.
+  const mapItem = useThreadComposeExtras()?.mapItem
   const openFileLink = useCallback<FileLinkOpen>(
     (link, line, col, opts) => openThreadFileLink(room, link, line, col, opts),
     [room],
@@ -253,13 +252,13 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
   const fileActions = useMemo<ThreadFileActions>(
     () => ({
       open: (file, opts) => {
-        void openThreadAttachment(room, fileLinkTransport, fileWorkspace, file, opts).catch((err: unknown) =>
+        void openThreadAttachment(room, fileLinkTransport, addr, file, opts).catch((err: unknown) =>
           console.warn('[thread] open attachment failed:', err),
         )
       },
       find: (file) => findThreadAttachment(room, file),
     }),
-    [room, fileLinkTransport, fileWorkspace],
+    [room, fileLinkTransport, addr],
   )
   // Image attachments (thread-images-v1) read their pictures from the
   // room's own server, by this Thread's address.
@@ -284,9 +283,10 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
 
   // This window's unconfirmed sends draw last, as pending bubbles (Fix 3).
   const visible = useMemo(() => {
-    const shown = items.filter((it) => !isVoidedHitl(it.doc))
+    const kept = items.filter((it) => !isVoidedHitl(it.doc))
+    const shown = mapItem ? kept.map(mapItem) : kept
     return outbox.length > 0 ? [...shown, ...outbox] : shown
-  }, [items, outbox])
+  }, [items, outbox, mapItem])
   const keys = useMemo(() => visible.map((it) => it.id), [visible])
   // A send shows at once (the outbox), so the first message counts before
   // the daemon confirms it. Layout effect: the column places its message box
@@ -644,7 +644,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
         <ThreadAttachmentSourceProvider value={attachmentSource}>
         <ThreadSenderAvatarContext.Provider value={ThreadSenderPicture}>
         <ThreadFileActionsProvider value={fileActions}>
-        <FileLinkProvider workspace={fileWorkspace} transport={fileLinkTransport} open={openFileLink}>
+        <FileLinkProvider workspace={addr} transport={fileLinkTransport} open={openFileLink}>
           {/* Narrow (< 480px): bubbles use the column (ThreadColumn). */}
           <ThreadMessageColumn
             ref={contentRef}
@@ -724,11 +724,15 @@ export function threadAuthorLabel(
   // UWB12a: a post a Garden widget sent for a person says which widget;
   // Design notes (D-A10) say "via Design".
   const viaWidget = isPersonPost(doc) ? doc.widget?.widget?.trim() || (doc.design ? 'Design' : '') : ''
+  // A name only (a message moved in from an older store) reads as sent.
+  const named = doc.senderName?.trim()
   const name = mine
     ? 'You'
-    : isPersonPost(doc)
-      ? doc.from?.trim() || 'someone'
-      : displayThreadAddress(doc.from || '', currentAddr, pastAddresses) || 'unknown'
+    : named
+      ? named
+      : isPersonPost(doc)
+        ? doc.from?.trim() || 'someone'
+        : displayThreadAddress(doc.from || '', currentAddr, pastAddresses) || 'unknown'
   return { label: viaWidget ? `${name} · via ${viaWidget}` : name, mine }
 }
 

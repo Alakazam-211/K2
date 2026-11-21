@@ -69,6 +69,20 @@ export function AgentAvatar({
   )
 }
 
+/** A name only (a message moved in from an older store): its letter, with
+ *  no lookup. */
+function NameAvatar({ label }: { label: string }): JSX.Element {
+  return (
+    <ProjectAvatar
+      projectPath={`thread-sender-name:${label}`}
+      projectName={label}
+      projectColor="var(--color-text-muted)"
+      size={SENDER_AVATAR_PX}
+      fetchIcon={false}
+    />
+  )
+}
+
 /** A person's chip: the roster's colour and names for that login. */
 function PersonAvatar({ login, label }: { login: string; label: string }): JSX.Element {
   const color = usePresenceStore((s) => s.colors[login] ?? null)
@@ -78,6 +92,7 @@ function PersonAvatar({ login, label }: { login: string; label: string }): JSX.E
 
 /** The picture for a row's sender (inside `ThreadSenderFrame`). */
 export function ThreadSenderPicture({ slot }: { slot: ThreadSenderSlot }): JSX.Element {
+  if (slot.kind === 'name') return <NameAvatar label={slot.label} />
   return slot.kind === 'agent' ? (
     <AgentAvatar addr={slot.id} label={slot.label} host={slot.host} />
   ) : (

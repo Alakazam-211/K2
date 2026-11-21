@@ -123,6 +123,9 @@ def answer(path, method, query, who, body):
         return 200, {"ok": True}
     if path == "/cli/workspace/msg":
         return 200, {"success": True}
+    if path == "/cli/presets/list":
+        return 200, [{"id": "b0a1c2d3-e4f5-6789-abcd-ef0123456006", "label": "Cursor Agent", "command": "cursor-agent", "enabled": True},
+                     {"id": "b0a1c2d3-e4f5-6789-abcd-ef0123456002", "label": "Codex", "command": "codex --yolo", "enabled": True}]
     if path == "/cli/agent/conf":
         return 404, {"error": {"code": "not_found", "hint": "no agent there"}}
     if path == "/cli/workspace/set":
@@ -395,6 +398,14 @@ paths="$(field path | tr '\n' ' ')"
 for p in /cli/agent/conf /cli/agents/hire /cli/workspace/set /cli/workspace/set-agent-display-name; do
     assert_contains "owner hire: asks $p" "$paths" "$p"
 done
+
+echo "== outside a session: a preset's label still hires, and its id is saved =="
+run -- agent hire "$WORK/owner-label" --agent "cursor agent" --json
+assert_eq "owner label: exit 0 ($err)" "$rc" "0"
+assert_contains "owner label: the preset list asked" "$(field path | tr '\n' ' ')" "/cli/presets/list"
+assert_eq "owner label: the id is saved, not the label" \
+    "$("$PY" -c 'import json,sys; print(json.loads(sys.argv[1])["fields"].get("default_agent"))' "$(body_of /cli/workspace/set)")" \
+    "b0a1c2d3-e4f5-6789-abcd-ef0123456006"
 
 echo
 echo "agent_hire_session_passport: $pass passed, $fail failed"

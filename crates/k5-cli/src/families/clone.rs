@@ -30,8 +30,10 @@
 //! person's proxy for an `https://` server that isn't this computer
 //! (the shared CONNECT path, by curl's rules: K2's ruling R4). Refused
 //! instead, nothing sent (R10): a URL with a byte outside printable
-//! ASCII, a port no socket takes, and a proxy setting the binary doesn't
-//! read.
+//! ASCII, an empty host, a port no socket takes, and a proxy setting the
+//! binary doesn't read (the named differences clone-url-not-printable,
+//! clone-url-empty-host, clone-url-port-range and clone-proxy-unread in
+//! `scripts/cli-parity.sh`).
 
 #[cfg(unix)]
 pub mod engine;

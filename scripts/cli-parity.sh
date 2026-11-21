@@ -78,6 +78,16 @@
 # garden_blobs.sh meets expect-100-continue against a real daemon: its
 # one-chunk put of a body over 1 MiB goes through a relay that records each
 # request, and the test checks each side's head by the difference's name.
+# The clone engine's refusals (K2's ruling R10) are checked here only,
+# each by its own named difference: clone-url-not-printable,
+# clone-url-empty-host, clone-url-port-range and clone-proxy-unread. Where
+# the shell's Python would try, the binary sends nothing and prints one
+# usage line on stderr, exit 2:
+#   {"error": "usage", "hint": "<url> isn't an address k2 sends to itself"}
+#     for a byte outside printable ASCII or a blank, an empty host before
+#     a port, or a port above 65535 or below 0;
+#   {"error": "usage", "hint": "k2 won't send to <url>: a proxy setting it doesn't read (an http:// proxy only)"}
+#     for a socks or https proxy URL, or a blank-separated no_proxy.
 #
 # --shard I/N runs every Nth test starting at the Ith (1-based), so the
 # list can be split across jobs. Names after `--` run only those tests.
@@ -201,6 +211,10 @@ EXPECTED_DIFFS=(
     "passport-heal-once|K2 ruling, the doc lane's follow-ups|a doc call that sends a whole file or a tool call (_doc_xfer: \`doc cat\`, \`append\`, \`write\`, \`show --version\`, \`export\`) whose passport the daemon's auth gate refuses (403 and exactly {\"error\":\"Invalid or missing auth token\"}, sent before any handler runs, so nothing was done), in a session whose passport was minted again: bash's _doc_xfer never tries the new passport and the command ends on the refusal (exit 3); the binary sends the same call once more with the new passport and answers it (cli_send_json's one heal, which bash's other doc calls already make). An answer a handler gave that holds those words (a document's text, a conflict) is never sent again by either: one request, the same output"
     "doc-mktemp-wording|K2 ruling, the doc lane's follow-ups|a doc verb that needs a temp folder (_doc_tmp) where TMPDIR can't hold one: the binary words mktemp's line as GNU mktemp does in the C locale (\"mktemp: failed to create directory via template '<TMPDIR>/k2doc.XXXXXX': No such file or directory\"; GNU's in a UTF-8 locale quotes the template with curly quotes); macOS's mktemp words it its own way (\"mktemp: mkdtemp failed on <TMPDIR>/k2doc.XXXXXX: No such file or directory\"; a newer macOS names the folder it tried, the six X filled in). The two lines after it (\"Error: can't make a temp folder\" and the tmp error's JSON), the exit (2) and stdout (nothing) are the same, and neither sends anything. The same holds for \`app exec\` with stdin on a pipe (k2-exec-XXXXXX) and \`hostchat open\` (k2-hostchat-open.XXXXXX) where TMPDIR can't hold the folder: on a newer macOS mktemp's line names the folder it tried, which the binary can't know, so the parity rows (Compare::MktempTried) take mktemp's line as the same when only that random name differs: the same folder and stem before it, one or more of [A-Za-z0-9.] in its place, the same reason after it, the same exit, and every other line byte for byte"
     "python-proxy-rule|K2 ruling R4, the clone engine's port|the person's proxy for a clone request to an https server that isn't this computer (the check: \`clone preview ws1 --host https://cp.example.invalid --token-stdin\` with only ALL_PROXY set): the shell's Python urllib reads https_proxy and HTTPS_PROXY only (never ALL_PROXY), its own no_proxy rule, opens a tunnel only on a 200 and writes its own CONNECT head, so it goes straight there; the binary takes the shared CONNECT path with curl's rules (all_proxy and ALL_PROXY too, curl's no_proxy, any 2xx, curl's head) and sends one CONNECT. Either way the token rides inside the tunnel only, never to the proxy"
+    "clone-url-not-printable|K2 ruling R10, the clone engine's port|a clone server URL with a byte outside printable ASCII anywhere in it, a blank too (the remote URL as typed, or this server's address from K2_HOST): the binary sends nothing and prints one usage line on stderr, exit 2, stdout empty: {\"error\": \"usage\", \"hint\": \"<url> isn't an address k2 sends to itself\"} (json.dumps, so the check's é is \\u00e9). The check: \`clone preview ws1 --host 'http://127.0.0.1:<port>/#café' --token-stdin --json\`; the shell's Python tries it: urllib drops the fragment and sends its POST / to <port> (the check's listener answers 403, so bash prints {\"error\": \"error\", \"hint\": \"recorded\"}, exit 3)"
+    "clone-url-empty-host|K2 ruling R10, the clone engine's port|a clone server URL with an empty host before a port (the check: \`clone preview ws1 --host https://:<port> --token-stdin --json\`): the binary sends nothing and prints one usage line on stderr, exit 2, stdout empty: {\"error\": \"usage\", \"hint\": \"https://:<port> isn't an address k2 sends to itself\"}. The shell's Python tries the empty name: where the resolver makes it this computer (macOS) it connects to <port> and then raises at the TLS step (a traceback ending \"ValueError: check_hostname requires server_hostname\", exit 1); where the lookup fails, {\"error\": \"daemon_unreachable\", \"hint\": \"remote server https://:<port>: ...\"}, exit 3"
+    "clone-url-port-range|K2 ruling R10, the clone engine's port|a clone server URL whose port Python's int() reads but no socket takes, above 65535 or below 0 (the check: \`clone preview ws1 --host http://127.0.0.1:<65536 + port> --token-stdin --json\`): the binary sends nothing and prints one usage line on stderr, exit 2, stdout empty: {\"error\": \"usage\", \"hint\": \"http://127.0.0.1:<n> isn't an address k2 sends to itself\"}. The shell's Python asks the resolver for that port, which refuses it: {\"error\": \"daemon_unreachable\", \"hint\": \"remote server http://127.0.0.1:<n>: ...\"}, exit 3; neither reaches <port>, where a port cut to 16 bits would land"
+    "clone-proxy-unread|K2 ruling R10, the clone engine's port|a clone request to an https server that isn't this computer with a proxy setting the binary doesn't read (the checks: \`clone preview ws1 --host https://cp.example.invalid --token-stdin --json\` with https_proxy=socks5://127.0.0.1:<port>; with https_proxy=https://127.0.0.1:<port>; with https_proxy=http://127.0.0.1:<port> and no_proxy='a.example b.example', blank-separated): the binary sends nothing and prints one usage line on stderr, exit 2, stdout empty: {\"error\": \"usage\", \"hint\": \"k2 won't send to https://cp.example.invalid: a proxy setting it doesn't read (an http:// proxy only)\"}. The shell's Python urllib sends one plain CONNECT cp.example.invalid:443 to <port> each time (it uses a socks or an https proxy URL as an http proxy, and its no_proxy splits on commas only), the token never in it; the proxy's 407 is its {\"error\": \"daemon_unreachable\", ...}, exit 3"
 )
 
 # check_version_offline: both CLIs run `--version` with a temp HOME and no
@@ -1694,6 +1708,218 @@ PY
     ! grep -q 'tok-pyproxy-parity' "$d/heads.bash" "$d/heads.binary" || problems+=("the token reached the proxy")
     grep -q '"daemon_unreachable"' "$d/err.bash" || problems+=("bash didn't go straight there: $(head -c 300 "$d/err.bash")")
     grep -q 'Tunnel connection failed: 407' "$d/err.binary" || problems+=("the binary's refused tunnel isn't its line: $(head -c 300 "$d/err.binary")")
+    [ ${#problems[@]} -eq 0 ] && return 0
+    printf '%s\n' "${problems[@]}"
+    return 1
+}
+
+# The clone engine's R10 refusals (clone-url-not-printable,
+# clone-url-empty-host, clone-url-port-range, clone-proxy-unread): each
+# check starts one recording listener, then runs `clone preview ws1 --host
+# <url> --token-stdin --json` on both sides. clone_refusal_start <dir>
+# starts it (CLONE_REC_PID, CLONE_REC_PORT): one line per connection in
+# <dir>/heads, written before it answers; a CONNECT gets 407, any other
+# request 403 {"error":"recorded"}, anything that isn't HTTP is closed.
+clone_refusal_start() {
+    local d="$1"
+    mkdir -p "$d/home/.k2" "$d/ws"
+    printf 'owner-tok-parity\n' >"$d/home/.k2/heartbeat.token"
+    printf '1\n' >"$d/home/.k2/heartbeat.port"
+    : >"$d/heads"
+    python3 -I - "$d" >"$d/listener.log" 2>&1 <<'PY' &
+import os, socket, sys
+d = sys.argv[1]
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+s.listen(8)
+with open(os.path.join(d, "port.tmp"), "w") as f:
+    f.write(str(s.getsockname()[1]))
+os.rename(os.path.join(d, "port.tmp"), os.path.join(d, "port"))
+body = b'{"error":"recorded"}'
+while True:
+    c, _ = s.accept()
+    c.settimeout(10)
+    data, reply = b"", None
+    try:
+        data = c.recv(4096)
+        if data[:1].isalpha():
+            while b"\r\n\r\n" not in data:
+                more = c.recv(4096)
+                if not more:
+                    break
+                data += more
+            head, _, rest = data.partition(b"\r\n\r\n")
+            n = 0
+            for h in head.split(b"\r\n")[1:]:
+                k, _, v = h.partition(b":")
+                if k.strip().lower() == b"content-length":
+                    n = int(v.strip() or b"0")
+            while len(rest) < n:
+                more = c.recv(4096)
+                if not more:
+                    break
+                rest += more
+            line = head.replace(b"\r\n", b" | ")
+            if head.startswith(b"CONNECT "):
+                reply = b"HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            else:
+                reply = b"HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s" % (len(body), body)
+        else:
+            line = b"not http: %d bytes" % len(data)
+    except OSError:
+        line = data[:200].replace(b"\r\n", b" | ") + b" (cut off)"
+    with open(os.path.join(d, "heads"), "ab") as f:
+        f.write(line + b"\n")
+    if reply:
+        try:
+            c.sendall(reply)
+        except OSError:
+            pass
+    c.close()
+PY
+    CLONE_REC_PID=$!
+    for _ in $(seq 1 50); do [ -s "$d/port" ] && break; sleep 0.1; done
+    if [ ! -s "$d/port" ]; then
+        kill "$CLONE_REC_PID" 2>/dev/null || true
+        echo "the recording listener didn't start: $(head -c 300 "$d/listener.log")"
+        return 1
+    fi
+    CLONE_REC_PORT="$(cat "$d/port")"
+}
+
+clone_refusal_stop() {
+    kill "$CLONE_REC_PID" 2>/dev/null || true
+    wait "$CLONE_REC_PID" 2>/dev/null || true
+}
+
+# clone_refusal_run <dir> <bash|binary> <label> <url> [NAME=value ...]:
+# one run, the settings in its environment; its stdout, stderr, exit code
+# and what reached the listener in <dir>/{out,err,rc,heads}.<label>.<side>.
+clone_refusal_run() {
+    local d="$1" side="$2" l="$3" url="$4" tmp rc=0
+    shift 4
+    local cli=("$WORK/bin/k5")
+    [ "$side" = binary ] || cli=(bash "$ROOT/cli/k2")
+    : >"$d/heads"
+    tmp="$(mktemp -d "$d/tmp.XXXXXX")"
+    (cd "$d/ws" && printf 'tok-refusal-parity\n' | exec env -i PATH="$PATH" HOME="$d/home" TMPDIR="$tmp" "$@" \
+        "${cli[@]}" clone preview ws1 --host "$url" --token-stdin --json) \
+        >"$d/out.$l.$side" 2>"$d/err.$l.$side" || rc=$?
+    printf '%s\n' "$rc" >"$d/rc.$l.$side"
+    sleep 0.2
+    cp "$d/heads" "$d/heads.$l.$side"
+}
+
+# clone_refusal_refused <dir> <label> <hint>: the binary's side, into the
+# caller's problems: exit 2, the usage line alone on stderr, nothing on
+# stdout, nothing reached the listener.
+clone_refusal_refused() {
+    local d="$1" l="$2" rc
+    rc="$(cat "$d/rc.$l.binary")"
+    [ "$rc" = 2 ] || problems+=("$l: the binary exited $rc, want 2")
+    printf '{"error": "usage", "hint": "%s"}\n' "$3" | cmp -s - "$d/err.$l.binary" \
+        || problems+=("$l: the binary's stderr isn't the refusal line alone: $(head -c 300 "$d/err.$l.binary")")
+    [ ! -s "$d/out.$l.binary" ] || problems+=("$l: the binary printed on stdout: $(head -c 300 "$d/out.$l.binary")")
+    [ ! -s "$d/heads.$l.binary" ] || problems+=("$l: the binary sent something: $(head -c 300 "$d/heads.$l.binary")")
+    ! grep -q 'tok-refusal-parity' "$d/heads.$l.bash" || problems+=("$l: bash's token reached the listener")
+}
+
+# check_clone_url_not_printable: a non-ASCII byte in the remote URL's
+# fragment. Bash's Python drops the fragment and sends its POST; the
+# binary refuses and sends nothing.
+check_clone_url_not_printable() {
+    local d="$WORK/clone-printable" port url side rc problems=()
+    clone_refusal_start "$d" || return 1
+    port="$CLONE_REC_PORT"
+    url="http://127.0.0.1:$port/#caf$(printf '\303\251')"
+    for side in bash binary; do clone_refusal_run "$d" "$side" frag "$url"; done
+    clone_refusal_stop
+    clone_refusal_refused "$d" frag "http://127.0.0.1:$port/#caf\\u00e9 isn't an address k2 sends to itself"
+    [ "$(wc -l <"$d/heads.frag.bash" | tr -d ' ')" = 1 ] && grep -q '^POST / HTTP/1.1 ' "$d/heads.frag.bash" \
+        || problems+=("bash's Python didn't send one POST to /: $(head -c 300 "$d/heads.frag.bash")")
+    rc="$(cat "$d/rc.frag.bash")"
+    [ "$rc" = 3 ] || problems+=("bash exited $rc, want 3 (the listener's 403)")
+    printf '%s\n' '{"error": "error", "hint": "recorded"}' | cmp -s - "$d/err.frag.bash" \
+        || problems+=("bash's stderr isn't the listener's 403: $(head -c 300 "$d/err.frag.bash")")
+    [ ${#problems[@]} -eq 0 ] && return 0
+    printf '%s\n' "${problems[@]}"
+    return 1
+}
+
+# check_clone_url_empty_host: `https://:<port>`. Bash's Python tries the
+# empty name; the binary refuses and sends nothing.
+check_clone_url_empty_host() {
+    local d="$WORK/clone-emptyhost" port url side rc problems=()
+    clone_refusal_start "$d" || return 1
+    port="$CLONE_REC_PORT"
+    url="https://:$port"
+    for side in bash binary; do clone_refusal_run "$d" "$side" empty "$url"; done
+    clone_refusal_stop
+    clone_refusal_refused "$d" empty "https://:$port isn't an address k2 sends to itself"
+    rc="$(cat "$d/rc.empty.bash")"
+    case "$rc" in
+        1)
+            [ "$(tail -n 1 "$d/err.empty.bash")" = "ValueError: check_hostname requires server_hostname" ] \
+                || problems+=("bash exited 1 without the TLS step's ValueError: $(tail -c 300 "$d/err.empty.bash")")
+            ;;
+        3)
+            grep -q "^{\"error\": \"daemon_unreachable\", \"hint\": \"remote server https://:$port: " "$d/err.empty.bash" \
+                || problems+=("bash exited 3 without daemon_unreachable: $(head -c 300 "$d/err.empty.bash")")
+            ;;
+        *) problems+=("bash exited $rc, want 1 (the empty name reached) or 3 (not looked up): $(tail -c 300 "$d/err.empty.bash")") ;;
+    esac
+    [ ${#problems[@]} -eq 0 ] && return 0
+    printf '%s\n' "${problems[@]}"
+    return 1
+}
+
+# check_clone_url_port_range: a port above 65535, 65536 past the
+# listener's (where a port cut to 16 bits would land). Bash's Python asks
+# the resolver, which refuses that port; the binary refuses first.
+check_clone_url_port_range() {
+    local d="$WORK/clone-portrange" port big url side rc problems=()
+    clone_refusal_start "$d" || return 1
+    port="$CLONE_REC_PORT"
+    big=$((65536 + port))
+    url="http://127.0.0.1:$big"
+    for side in bash binary; do clone_refusal_run "$d" "$side" port "$url"; done
+    clone_refusal_stop
+    clone_refusal_refused "$d" port "http://127.0.0.1:$big isn't an address k2 sends to itself"
+    [ ! -s "$d/heads.port.bash" ] || problems+=("bash reached the listener: $(head -c 300 "$d/heads.port.bash")")
+    rc="$(cat "$d/rc.port.bash")"
+    [ "$rc" = 3 ] || problems+=("bash exited $rc, want 3")
+    grep -q "^{\"error\": \"daemon_unreachable\", \"hint\": \"remote server http://127.0.0.1:$big: " "$d/err.port.bash" \
+        || problems+=("bash's line isn't daemon_unreachable for the port: $(head -c 300 "$d/err.port.bash")")
+    [ ${#problems[@]} -eq 0 ] && return 0
+    printf '%s\n' "${problems[@]}"
+    return 1
+}
+
+# check_clone_proxy_unread: https to a server that isn't this computer
+# with a socks proxy, an https proxy URL, or a blank-separated no_proxy.
+# Bash's Python sends one plain CONNECT each time; the binary refuses and
+# sends nothing.
+check_clone_proxy_unread() {
+    local d="$WORK/clone-proxyunread" port url l side rc problems=()
+    local hint="k2 won't send to https://cp.example.invalid: a proxy setting it doesn't read (an http:// proxy only)"
+    clone_refusal_start "$d" || return 1
+    port="$CLONE_REC_PORT"
+    url="https://cp.example.invalid"
+    for side in bash binary; do
+        clone_refusal_run "$d" "$side" socks "$url" "https_proxy=socks5://127.0.0.1:$port"
+        clone_refusal_run "$d" "$side" httpsproxy "$url" "https_proxy=https://127.0.0.1:$port"
+        clone_refusal_run "$d" "$side" noproxy "$url" "https_proxy=http://127.0.0.1:$port" "no_proxy=a.example b.example"
+    done
+    clone_refusal_stop
+    for l in socks httpsproxy noproxy; do
+        clone_refusal_refused "$d" "$l" "$hint"
+        [ "$(wc -l <"$d/heads.$l.bash" | tr -d ' ')" = 1 ] && grep -Eq '^CONNECT cp\.example\.invalid:443 HTTP/1\.[01] ' "$d/heads.$l.bash" \
+            || problems+=("$l: bash's Python didn't send one CONNECT for cp.example.invalid:443: $(head -c 300 "$d/heads.$l.bash")")
+        rc="$(cat "$d/rc.$l.bash")"
+        [ "$rc" = 3 ] || problems+=("$l: bash exited $rc, want 3")
+        grep -q '^{"error": "daemon_unreachable", "hint": "remote server https://cp.example.invalid: ' "$d/err.$l.bash" \
+            || problems+=("$l: bash's line isn't daemon_unreachable: $(head -c 300 "$d/err.$l.bash")")
+    done
     [ ${#problems[@]} -eq 0 ] && return 0
     printf '%s\n' "${problems[@]}"
     return 1

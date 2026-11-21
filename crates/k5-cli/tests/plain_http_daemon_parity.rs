@@ -363,7 +363,9 @@ const PRESETS: &str = r#"[{"id":"claude","label":"Claude Code","command":"claude
 /// The shell's Python blocks open its `BASE_URL`: with
 /// `K2_HOST=https://localhost`, TLS straight there (loopback never uses a
 /// proxy, and one is set), the URL's netloc as `Host`, no warning. The
-/// binary's urllib adapter does the same: `preset list` here.
+/// binary's urllib adapter does the same: `preset list` here. The
+/// shell's python3 trusts the throwaway CA through `PYTHONPATH`
+/// ([`tunnel::Pki::py_trust`]: macOS's python3 ignores `SSL_CERT_FILE`).
 #[test]
 fn preset_list_over_tls_to_an_https_host() {
     let rig = Rig::new("preset", "httpshost");
@@ -373,6 +375,7 @@ fn preset_list_over_tls_to_an_https_host() {
     let port = daemon.port.to_string();
     let ca = pki.ca_file.to_string_lossy().into_owned();
     let px = proxy.url(None);
+    let py = pki.py_trust.to_string_lossy().into_owned();
     let c = on(
         case(
             "preset list: K2_HOST=https://localhost",
@@ -387,6 +390,7 @@ fn preset_list_over_tls_to_an_https_host() {
             ("K2_HOST", "https://localhost"),
             ("K2_PORT", port.as_str()),
             ("SSL_CERT_FILE", ca.as_str()),
+            ("PYTHONPATH", py.as_str()),
             ("https_proxy", px.as_str()),
         ],
     );
@@ -416,7 +420,8 @@ fn preset_list_over_tls_to_an_https_host() {
 /// doesn't copy that tunnel, so it sends nothing at all (no plain or
 /// direct request in its place, the token nowhere) and fails (the
 /// adapter's `URLError` says why: `urllib::tests::an_https_daemon`).
-/// Bash's side is checked to have tunnelled.
+/// Bash's side is checked to have tunnelled (its python3 trusting the
+/// throwaway CA as in the row above).
 #[test]
 fn preset_list_over_tls_through_the_proxy_sends_nothing() {
     let rig = Rig::new("preset", "httpsproxy");
@@ -427,6 +432,7 @@ fn preset_list_over_tls_through_the_proxy_sends_nothing() {
     let ca = pki.ca_file.to_string_lossy().into_owned();
     let px = proxy.url(None);
     let k2_host = format!("https://{HOST}");
+    let py = pki.py_trust.to_string_lossy().into_owned();
     let c = on(
         case(
             "preset list: K2_HOST=https://<name> through https_proxy",
@@ -441,6 +447,7 @@ fn preset_list_over_tls_through_the_proxy_sends_nothing() {
             ("K2_HOST", k2_host.as_str()),
             ("K2_PORT", port.as_str()),
             ("SSL_CERT_FILE", ca.as_str()),
+            ("PYTHONPATH", py.as_str()),
             ("https_proxy", px.as_str()),
         ],
     );

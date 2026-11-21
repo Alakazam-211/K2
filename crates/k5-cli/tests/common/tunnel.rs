@@ -32,6 +32,12 @@ pub const HOST: &str = "cp.example.invalid";
 pub struct Pki {
     /// The CA's PEM file, for `SSL_CERT_FILE`.
     pub ca_file: PathBuf,
+    /// A `PYTHONPATH` directory whose `sitecustomize.py` makes python3's
+    /// default TLS context trust [`Pki::ca_file`] as well. macOS's
+    /// python3 doesn't read `SSL_CERT_FILE` (its TLS library ignores it)
+    /// and refused the throwaway CA on the shell's side; where python3
+    /// reads it (Linux) this adds nothing.
+    pub py_trust: PathBuf,
     leaf: CertificateDer<'static>,
     key: PrivateKeyDer<'static>,
 }
@@ -77,13 +83,31 @@ impl Pki {
         std::fs::create_dir_all(dir).unwrap();
         let ca_file = dir.join("throwaway-ca.pem");
         std::fs::write(&ca_file, ca.pem()).unwrap();
+        let py_trust = dir.join("py-trust");
+        std::fs::create_dir_all(&py_trust).unwrap();
+        std::fs::write(py_trust.join("sitecustomize.py"), PY_TRUST).unwrap();
         Pki {
             ca_file,
+            py_trust,
             leaf: leaf.der().clone(),
             key: PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(leaf_key.serialize_der())),
         }
     }
 }
+
+/// [`Pki::py_trust`]'s `sitecustomize.py`: the default context loads
+/// `SSL_CERT_FILE` itself. A file it can't load stops python3.
+const PY_TRUST: &str = "import os, ssl
+_ca = os.environ.get('SSL_CERT_FILE')
+if _ca:
+    _default = ssl.create_default_context
+    def _trusting(*args, **kwargs):
+        ctx = _default(*args, **kwargs)
+        ctx.load_verify_locations(cafile=_ca)
+        return ctx
+    ssl.create_default_context = _trusting
+    ssl._create_default_https_context = _trusting
+";
 
 /// Each request a server got, as it came.
 pub type Log = Arc<Mutex<Vec<String>>>;

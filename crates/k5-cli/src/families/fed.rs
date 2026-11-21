@@ -31,10 +31,13 @@
 //!    - anything else (no verb too): the usage lines, exit 2.
 //! 5. The EXIT trap's lines ([`crate::prelude::Closing`]).
 //!
+//! A token from a terminal (`--token-stdin` or `-`) is read as the
+//! shell's `_cli_read_secret_stdin "Token: "` reads it: the prompt, no
+//! echo, a newline ([`super::tunnel::secret_line`]).
+//!
 //! Still the shell's: a word that is not UTF-8, a command line with `-h`
 //! or `--help` ([`crate::front`]; the shell has no help page for `fed`:
-//! it prints the usage on stdout, exit 0, and sends nothing), a token on stdin from a terminal (the no-echo read is
-//! the vault lane's), `pubkey` where `shasum` or `awk` is missing (the
+//! it prints the usage on stdout, exit 0, and sends nothing), `pubkey` where `shasum` or `awk` is missing (the
 //! shell's "command not found" line names its script), a port that is
 //! set but is no port curl takes, and a `python3` the binary can't tell.
 
@@ -55,7 +58,6 @@ use crate::python;
 use crate::transport::{Client, OwnCurl, Response};
 use k2_client::cli_name;
 use std::ffi::OsString;
-use std::io::IsTerminal;
 use std::path::Path;
 use std::time::Duration;
 
@@ -261,9 +263,6 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     let form = parse(&words);
     let mut decode = Decode::Strict;
     if form.reads_stdin() {
-        if std::io::stdin().is_terminal() {
-            return None;
-        }
         decode = crate::cards::decode(&Env::current())?;
     }
     if let Form::Pubkey(_) = form {
@@ -441,7 +440,7 @@ fn answer(
                 return no_owner(&step);
             }
             let bytes = if token == "--token-stdin" || token == "-" {
-                super::tunnel::first_line()
+                super::tunnel::secret_line("Token: ")
             } else {
                 token.into_bytes()
             };

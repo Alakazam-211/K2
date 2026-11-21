@@ -37,10 +37,11 @@
 //! Still the shell's: a value flag as the last word (`--subdomain`,
 //! `--token`: the shell stops on `$2: unbound variable`, K2's D6 class), a
 //! word that is not UTF-8, a command line with `-h` or `--help` that is
-//! not a help page ([`crate::front`]), `switch --token-stdin` with a
-//! terminal on stdin (the no-echo read is the vault lane's), a port that
-//! is set but is no port curl takes, and a `python3` the binary can't
-//! tell.
+//! not a help page ([`crate::front`]), a port that is set but is no port
+//! curl takes, and a `python3` the binary can't tell. `switch
+//! --token-stdin` at a terminal reads the token with no echo, as the
+//! shell's `_cli_read_secret_stdin "Tunnel token: "` does
+//! ([`secret_line`]).
 
 pub mod pyjson;
 pub mod status;
@@ -368,13 +369,9 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         }
     }
     let form = parse(&words)?;
-    // The no-echo read is not here yet: a terminal on stdin is the shell's,
-    // and so is a locale the binary can't read Python's stdin by.
+    // A locale the binary can't read Python's stdin by is the shell's.
     let mut decode = Decode::Strict;
     if let Form::Switch(Switch::Ask { stdin: true, .. }) = form {
-        if std::io::stdin().is_terminal() {
-            return None;
-        }
         decode = crate::cards::decode(&Env::current())?;
     }
     Some(run_with(args, form, settings, port, decode))
@@ -591,7 +588,7 @@ pub fn post_json_piped(
 /// command in a UTF-8 locale (exit 1), and are kept as stand-ins
 /// (`surrogateescape`) in C or POSIX. `None`: no token.
 fn read_token(decode: Decode) -> Result<Option<Text>, Shown> {
-    let bytes = first_line();
+    let bytes = secret_line("Tunnel token: ");
     if bytes.is_empty() {
         return Ok(None);
     }
@@ -610,6 +607,20 @@ fn read_token(decode: Decode) -> Result<Option<Text>, Shown> {
             ))
         }
         Err(e) => Ok(Some(escaped(e.as_bytes()))),
+    }
+}
+
+/// `_cli_read_secret_stdin PROMPT`'s bytes: at a terminal, the prompt on
+/// stderr, the line read with no echo, then a newline on stderr
+/// ([`crate::prompt::ask_hidden`]; a line cut off by the end of input is
+/// none); else [`first_line`].
+pub fn secret_line(prompt_text: &str) -> Vec<u8> {
+    if std::io::stdin().is_terminal() {
+        let mut b = crate::prompt::ask_hidden(prompt_text).expose().to_vec();
+        b.retain(|c| *c != 0);
+        b
+    } else {
+        first_line()
     }
 }
 

@@ -415,8 +415,8 @@ const PREVIEW_PLAIN: &str = r#"{"workspace":{"path":"/w/ws1/","handle":"ws1"},"h
 const UNPACKED: &str = r#"{"dest_path":"/dest/ws1","project":{"id":"p1","name":"ws1","path":"/dest/ws1"},"threads_imported":4,"vault_imported":[]}"#;
 const DATA: &[u8] = b"bundle-bytes-bundle-bytes";
 
-// covers: clone preview
-// covers: clone preview --json
+// native: clone preview
+// native: clone preview --json
 #[test]
 fn clone_preview_and_here() {
     let rig = CRig::new();
@@ -476,7 +476,7 @@ fn clone_preview_and_here() {
             local_requests: 4,
             ..case("here --json --no-threads --live-only", &["here", "ws1", "--json", "--no-threads", "--live-only"])
         },
-        // covers: clone <ws>
+        // native: clone
         CCase {
             local: vec![ok(RECIPIENT), ok(PREVIEW_PLAIN), ok(r#"{"bundle_path":"/b/x.tar"}"#), ok(UNPACKED)],
             local_requests: 4,
@@ -556,8 +556,8 @@ impl CCase {
     }
 }
 
-// covers: clone to
-// covers: clone from
+// native: clone to
+// native: clone from
 #[test]
 fn clone_to_and_from() {
     let rig = CRig::new();
@@ -708,7 +708,7 @@ impl CCase {
 const PROPOSALS_HERE: &str = r#"{"proposals":[{"id":"cp-77","status":"open","summary":"clone ws1 to here","proposedBy":"agent:kessel","why":"a backup","target":"here","workspacePath":"/w/ws1","options":{"threads":false,"secrets":{}}}]}"#;
 const PROPOSALS_HOST: &str = r#"{"proposals":[{"id":"cp-78","status":"open","summary":"clone ws1 to a host","proposedBy":"agent:kessel","target":"{remote}","workspacePath":"/w/ws1","options":{}}]}"#;
 
-// covers: clone approve
+// native: clone approve
 #[test]
 fn clone_approve() {
     let rig = CRig::new();

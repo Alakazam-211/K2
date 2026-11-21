@@ -257,8 +257,10 @@ fn a_proxy_that_refuses_the_tunnel() {
         let target = format!("{HOST}:{}", w.port());
         for run in [&b, &r] {
             assert_eq!(run.proxy.len(), 1, "{verb}: one CONNECT: {run:?}");
-            assert!(
-                run.proxy[0].starts_with(&format!("CONNECT {target} HTTP/1.1\r\n")),
+            let native = std::ptr::eq(run, &r);
+            assert_eq!(
+                run.proxy[0],
+                tunnel::python_connect_head(&target, None, native || tunnel::python_312()),
                 "{run:?}"
             );
             assert!(!run.proxy[0].contains(OWNER), "{run:?}");
@@ -313,7 +315,11 @@ fn a_certificate_nothing_trusts_stops_the_request() {
         assert_ne!(run.out.code, Some(0), "{run:?}");
     }
     assert_eq!(b.out.code, r.out.code, "{b:?} {r:?}");
-    assert_eq!(b.proxy, r.proxy, "the CONNECT heads");
+    assert_eq!(
+        tunnel::bash_heads_as_312(c.name, &b.proxy),
+        r.proxy,
+        "the CONNECT heads"
+    );
     println!(
         "named difference python-tls-error-text: {}: bash {:?}, the binary {:?}",
         c.name, b.out.stderr, r.out.stderr

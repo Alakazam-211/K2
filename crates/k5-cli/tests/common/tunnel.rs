@@ -635,7 +635,11 @@ pub fn assert_same_python(name: &str, b: &SideRun, r: &SideRun) {
         "{name}: bash, then the binary"
     );
     assert_eq!(b.daemon, r.daemon, "{name}: the daemon's requests");
-    assert_eq!(b.proxy, r.proxy, "{name}: the CONNECT heads");
+    assert_eq!(
+        bash_heads_as_312(name, &b.proxy),
+        r.proxy,
+        "{name}: the CONNECT heads (bash's as Python 3.12 writes them)"
+    );
     for h in b.proxy.iter().chain(&r.proxy) {
         assert!(!h.contains("User-Agent"), "{name}: {h:?}");
     }
@@ -667,10 +671,9 @@ pub fn assert_tunnel_only_python(
         !run.proxy.is_empty(),
         "{name}: the proxy saw nothing: {run:?}"
     );
-    let want = match basic {
-        Some(line) => format!("CONNECT {target} HTTP/1.1\r\n{line}\r\nHost: {target}\r\n\r\n"),
-        None => format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n"),
-    };
+    // The binary's head is always Python 3.12's; bash's is its python3's.
+    let native = !run.tls.is_empty() && run.tls.iter().all(|(_, native)| *native);
+    let want = python_connect_head(target, basic, native || python_312());
     for h in &run.proxy {
         assert_eq!(h, &want, "{name}: the CONNECT head");
         assert!(
@@ -690,4 +693,69 @@ pub fn assert_tunnel_only_python(
             "{name}: the token in the tunnel: {r:?}"
         );
     }
+}
+
+/// Whether the python3 bash runs is 3.12 or later: its CONNECT head is
+/// the binary's then. Python 3.9 to 3.11 write `HTTP/1.0` and no `Host`
+/// line (the named difference python-connect-host).
+pub fn python_312() -> bool {
+    super::parity::python3_version() >= (3, 12)
+}
+
+/// `http.client`'s CONNECT head for `target` (`host:port`) with the
+/// proxy's own `basic` line when given: Python 3.12's when `modern`
+/// (`HTTP/1.1`, then `Host: <target>`, its host without brackets), else
+/// Python 3.9 to 3.11's (`HTTP/1.0`, no `Host`).
+pub fn python_connect_head(target: &str, basic: Option<&str>, modern: bool) -> String {
+    let auth = basic.map_or(String::new(), |line| format!("{line}\r\n"));
+    if modern {
+        let host = target.replacen('[', "", 1).replacen(']', "", 1);
+        format!("CONNECT {target} HTTP/1.1\r\n{auth}Host: {host}\r\n\r\n")
+    } else {
+        format!("CONNECT {target} HTTP/1.0\r\n{auth}\r\n")
+    }
+}
+
+/// Bash's CONNECT heads as Python 3.12 writes them, for a byte-for-byte
+/// comparison with the binary's. On 3.12 and later they are as they came.
+/// Before 3.12 each must be exactly that Python's form (`HTTP/1.0`, no
+/// `Host` line), checked here, and is rewritten to 3.12's: the named
+/// difference python-connect-host, never a skip.
+pub fn bash_heads_as_312(name: &str, heads: &[String]) -> Vec<String> {
+    if python_312() {
+        return heads.to_vec();
+    }
+    heads
+        .iter()
+        .map(|h| {
+            let (line, rest) = h.split_once("\r\n").unwrap_or((h, ""));
+            let target = line
+                .strip_prefix("CONNECT ")
+                .and_then(|t| t.strip_suffix(" HTTP/1.0"))
+                .unwrap_or_else(|| panic!("{name}: bash's CONNECT line on python3 before 3.12: {h:?}"));
+            // Nothing after the CONNECT line but the proxy's own
+            // credential, if any, and the blank line.
+            let basic = match rest {
+                "\r\n" => None,
+                _ => Some(rest.strip_suffix("\r\n\r\n").unwrap_or_else(|| {
+                    panic!("{name}: bash's CONNECT head's end: {h:?}")
+                })),
+            };
+            assert!(
+                basic.is_none_or(|b| b.starts_with("Proxy-Authorization: Basic ")
+                    && !b.contains('\n')),
+                "{name}: more than the proxy's credential in bash's CONNECT head: {h:?}"
+            );
+            assert_eq!(
+                h,
+                &python_connect_head(target, basic, false),
+                "{name}: bash's CONNECT head on python3 before 3.12"
+            );
+            println!(
+                "named difference python-connect-host: {name}: bash's python3 {:?} wrote {h:?}",
+                super::parity::python3_version()
+            );
+            python_connect_head(target, basic, true)
+        })
+        .collect()
 }

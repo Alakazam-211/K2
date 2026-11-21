@@ -804,6 +804,20 @@ fn fetch() {
             3,
         ),
         refused("fetch, no URL", &["fetch", "-s", "API"]),
+        // covers: vault fetch --json
+        refused("fetch --json, no text", &["fetch", "--json"]),
+        refused(
+            "fetch, -s as the last word",
+            &["fetch", "https://h/x", "-s"],
+        ),
+        refused(
+            "fetch, --scope as the last word",
+            &["fetch", "-s", "A", "u", "--scope"],
+        ),
+        refused(
+            "fetch, -o as the last word",
+            &["fetch", "-s", "A", "u", "-o"],
+        ),
         refused("fetch, no secret", &["fetch", "https://h/x"]),
         refused("fetch, two URLs", &["fetch", "-s", "A", "u1", "u2"]),
         refused(

@@ -327,11 +327,17 @@ const FETCH_VALUES: &[&str] = &[
     "--fmt",
 ];
 
+/// The value flags the shell reads with `"${2:-}"; shift 2` and no check
+/// first: as the last word, its `shift 2` fails.
+const FETCH_UNCHECKED: &[&str] = &["--max-bytes", "--timeout", "--dst", "--fmt"];
+
 /// The fetch lines the binary answers: not one whose last word is a
-/// value flag (the shell's `shift 2` fails there), and not one with a
-/// file path `cli_abs_path` would make that the binary isn't sure of.
+/// value flag the shell reads unchecked ([`FETCH_UNCHECKED`]: its `shift
+/// 2` fails there; a checked one, such as `--json`, is its usage line),
+/// and not one with a file path `cli_abs_path` would make that the binary
+/// isn't sure of.
 fn fetch_native(rest: &[&str]) -> bool {
-    if rest.last().is_some_and(|w| FETCH_VALUES.contains(w)) {
+    if rest.last().is_some_and(|w| FETCH_UNCHECKED.contains(w)) {
         return false;
     }
     let Some(pwd) = pwd() else {
@@ -341,7 +347,10 @@ fn fetch_native(rest: &[&str]) -> bool {
     while i < rest.len() {
         let w = rest[i];
         if FETCH_VALUES.contains(&w) {
-            let v = rest[i + 1];
+            // A checked flag as the last word: its usage line.
+            let Some(&v) = rest.get(i + 1) else {
+                break;
+            };
             let path = match w {
                 "-o" | "--output" => Some(v),
                 "-d" | "--data" | "--json" => v.strip_prefix('@'),

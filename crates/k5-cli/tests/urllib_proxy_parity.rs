@@ -52,6 +52,8 @@ struct World {
     daemon: TlsStub,
     proxy: ProxyStub,
     ca: String,
+    /// The CA hook's `PYTHONPATH` ([`tunnel::Pki::py_trust`]).
+    py: String,
 }
 
 impl World {
@@ -61,11 +63,13 @@ impl World {
         let daemon = TlsStub::start(&pki, 200, body);
         let proxy = ProxyStub::start(mode);
         let ca = pki.ca_file.to_string_lossy().into_owned();
+        let py = pki.py_trust.to_string_lossy().into_owned();
         World {
             rig,
             daemon,
             proxy,
             ca,
+            py,
         }
     }
 
@@ -85,6 +89,10 @@ impl World {
         c.env.push(("K2_HOST", format!("https://{host}")));
         c.env.push(("K2_PORT", self.port()));
         c.env.push(("SSL_CERT_FILE", self.ca.clone()));
+        // macOS's python3 ignores SSL_CERT_FILE: the CA hook
+        // ([`tunnel::Pki::py_trust`]) makes the shell's trust it. It does
+        // nothing where SSL_CERT_FILE is unset.
+        c.env.push(("PYTHONPATH", self.py.clone()));
         c.env.extend(extra.iter().cloned());
         c
     }

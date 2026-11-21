@@ -345,6 +345,11 @@ impl CRig {
             .current_dir(side.dir.join("proj"));
         if i == 0 {
             cmd.env("K5_CLI_VIA", "rust");
+            // macOS's python3 ignores SSL_CERT_FILE: the shell's python3
+            // trusts it through the CA hook ([`tunnel::Pki::py_trust`]).
+            if c.env.iter().any(|(k, _)| *k == "SSL_CERT_FILE") {
+                cmd.env("PYTHONPATH", &self.pki.py_trust);
+            }
         }
         for (k, v) in &c.env {
             cmd.env(k, fill(v));

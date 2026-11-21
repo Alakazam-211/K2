@@ -183,16 +183,18 @@ fn size_bytes(s: &str) -> Option<Result<String, Stop>> {
     let mut end = digits;
     let b = t.as_bytes();
     if b.get(end) == Some(&b'.') {
-        let frac = b[end + 1..].iter().take_while(|c| c.is_ascii_digit()).count();
+        let frac = b[end + 1..]
+            .iter()
+            .take_while(|c| c.is_ascii_digit())
+            .count();
         if frac == 0 {
             return bad();
         }
         end += 1 + frac;
     }
     let number = &t[..end];
-    let mut rest = t[end..].trim_start_matches(|c: char| {
-        c.is_ascii_whitespace() || ('\x1c'..='\x1f').contains(&c)
-    });
+    let mut rest = t[end..]
+        .trim_start_matches(|c: char| c.is_ascii_whitespace() || ('\x1c'..='\x1f').contains(&c));
     let mult: f64 = match rest.chars().next().map(|c| c.to_ascii_lowercase()) {
         Some(c @ ('k' | 'm' | 'g' | 't')) => {
             rest = &rest[1..];
@@ -452,7 +454,8 @@ fn settings_gib(b: &Value, from: u32) -> Result<String, Raise> {
     if *b == Value::Null {
         return Ok("\u{2014}".into());
     }
-    let x = py::div(b, 1_073_741_824.0, 9).map_err(|e| Raise::inside(from, 9, "gib", e.exception))?;
+    let x =
+        py::div(b, 1_073_741_824.0, 9).map_err(|e| Raise::inside(from, 9, "gib", e.exception))?;
     round_int(x, 10).map_err(|e| Raise::inside(from, 10, "gib", e.exception))?;
     let places = if (x - x.round_ties_even()).abs() < 0.05 {
         0
@@ -477,7 +480,10 @@ fn settings_lines(body: &[u8], o: &mut Out) -> Result<(), Raise> {
     ));
     let warn = py::dget(&l, "warnPct", 14)?;
     let wf = settings_gib(&py::dget(&l, "warnFreeBytes", 14)?, 14)?;
-    o.line(&format!("warn      {}% used or under {wf} free", py::s(&warn)));
+    o.line(&format!(
+        "warn      {}% used or under {wf} free",
+        py::s(&warn)
+    ));
     let refuse = py::dget(&l, "refusePct", 15)?;
     let rs = settings_gib(&py::dget(&l, "reserveBytes", 15)?, 15)?;
     o.line(&format!(
@@ -614,12 +620,30 @@ fn spark(vals: &[Value], top: &Value, from: u32) -> Result<String, Raise> {
         return Ok(String::new());
     }
     let hi = if py::truthy(top) {
-        num(top, from, 17, "spark", "unsupported operand type(s) for /: 'float' and")?
+        num(
+            top,
+            from,
+            17,
+            "spark",
+            "unsupported operand type(s) for /: 'float' and",
+        )?
     } else {
         // `max(known) or 1`.
-        let mut m = num(known[0], from, 17, "spark", "'>' not supported between instances of 'int' and")?;
+        let mut m = num(
+            known[0],
+            from,
+            17,
+            "spark",
+            "'>' not supported between instances of 'int' and",
+        )?;
         for x in &known[1..] {
-            let y = num(x, from, 17, "spark", "'>' not supported between instances of 'int' and")?;
+            let y = num(
+                x,
+                from,
+                17,
+                "spark",
+                "'>' not supported between instances of 'int' and",
+            )?;
             if y > m {
                 m = y;
             }
@@ -646,7 +670,13 @@ fn spark(vals: &[Value], top: &Value, from: u32) -> Result<String, Raise> {
         }
         let mut sum = 0.0;
         for x in &chunk {
-            sum += num(x, from, 27, "spark", "unsupported operand type(s) for +: 'int' and")?;
+            sum += num(
+                x,
+                from,
+                27,
+                "spark",
+                "unsupported operand type(s) for +: 'int' and",
+            )?;
         }
         let x = sum / chunk.len() as f64;
         let k = (x / hi * 7.0 + 0.5).trunc();
@@ -678,7 +708,8 @@ fn trends_gib(b: &Value, from: u32) -> Result<String, Raise> {
     if *b == Value::Null {
         return Ok("\u{2014}".into());
     }
-    let g = float(b, 8).map_err(|e| Raise::inside(from, 8, "gib", e.exception))? / f64::from(1u32 << 30);
+    let g = float(b, 8).map_err(|e| Raise::inside(from, 8, "gib", e.exception))?
+        / f64::from(1u32 << 30);
     Ok(if g >= 10.0 {
         format!("{} GiB", py::f(g, 0, 0))
     } else {
@@ -856,10 +887,7 @@ mod tests {
 
     #[test]
     fn the_loops_read_the_words_as_the_shell_does() {
-        assert_eq!(
-            parse(&["--wait"]),
-            Some(Err(Stop::usage(usage::WAIT)))
-        );
+        assert_eq!(parse(&["--wait"]), Some(Err(Stop::usage(usage::WAIT))));
         assert_eq!(parse(&["x"]), Some(Err(Stop::usage(usage::VIEW))));
         assert_eq!(
             parse(&["settings", "x"]),
@@ -874,6 +902,9 @@ mod tests {
                 "percent lines are whole numbers 1-99 (got 100)"
             )))
         );
-        assert_eq!(parse(&["trends", "--app"]), Some(Err(Stop::silent(Exit::Error))));
+        assert_eq!(
+            parse(&["trends", "--app"]),
+            Some(Err(Stop::silent(Exit::Error)))
+        );
     }
 }

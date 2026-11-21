@@ -159,7 +159,10 @@ fn custom(verb: &'static str, words: &[&str]) -> Result<Ask, Stop> {
     let w = walk(words, &[], &["--json"])?;
     let (app, host) = two(&w.plain);
     if app.is_empty() || host.is_empty() {
-        return Err(Stop::usage(format!("{}{verb} <app-id> <host>", usage::VERB)));
+        return Err(Stop::usage(format!(
+            "{}{verb} <app-id> <host>",
+            usage::VERB
+        )));
     }
     Ok(Ask::Custom {
         path: format!("/cli/app/domain/{verb}"),
@@ -509,11 +512,7 @@ fn domains_lines(body: &[u8], o: &mut Out) -> Result<(), Raise> {
         } else {
             ""
         };
-        o.line(&format!(
-            "{}   {}{primary}",
-            py::s(&name),
-            state_word(&st)
-        ));
+        o.line(&format!("{}   {}{primary}", py::s(&name), state_word(&st)));
         o.line(&format!("  {}", py::s(&py::dget(&c, "words", 14)?)));
         if py::truthy(&py::dget(&c, "lastError", 15)?) {
             o.line(&format!(
@@ -544,12 +543,11 @@ fn domains_lines(body: &[u8], o: &mut Out) -> Result<(), Raise> {
             let relay = py::idx(&c, "relay", 25)?;
             let err = py::dget(&relay, "error", 25)?;
             let tail = if py::truthy(&err)
-                && !py_eq(&py::idx(&relay, "error", 25)?, &py::dget(&c, "lastError", 25)?)
-            {
-                format!(
-                    "{})",
-                    py::concat(" (", &py::idx(&relay, "error", 25)?, 25)?
-                )
+                && !py_eq(
+                    &py::idx(&relay, "error", 25)?,
+                    &py::dget(&c, "lastError", 25)?,
+                ) {
+                format!("{})", py::concat(" (", &py::idx(&relay, "error", 25)?, 25)?)
             } else {
                 String::new()
             };

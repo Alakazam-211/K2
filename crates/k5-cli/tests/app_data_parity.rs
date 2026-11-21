@@ -51,7 +51,8 @@ fn check(rig: &Rig, v: Vec<Case>) {
     }
 }
 
-const HELD: &str = r#"{"status":"held","request":{"id":"r9","summary":"domain add"},"hint":"The owner decides."}"#;
+const HELD: &str =
+    r#"{"status":"held","request":{"id":"r9","summary":"domain add"},"hint":"The owner decides."}"#;
 const CUSTOM: &str = r#"{"custom":{"hostname":"shop.example.com","state":"pending","words":"waiting for DNS é","lastError":"no A record","relay":{"state":"claimed"},"setup":{"message":"set these","records":"advanced","advanced":"Advanced: both"},"records":[{"type":"A","name":"shop","value":"203.0.113.5"},{"type":"ALIAS","name":"@","value":"box.example","note":"if your DNS has ALIAS"}],"next":"run check","ownServer":"or your own server"},"txt":{"planted":true},"note":"bound"}"#;
 const DOMAINS: &str = r#"{"own":{"label":"acme"},"taken":[{"host":"site.box.example","from":"ws/site"}],"attached":[{"label":"shop","addedBy":"ann","previousTarget":"ws/old"},{"host":"x.example","addedBy":"bo"}],"custom":[{"hostname":"shop.example.com","state":"live","primary":true,"words":"serving","path":"connect","setup":{"pathB":{"proxy":{"state":"waiting","words":"proxy waits"}}},"relay":{"state":"verified","error":"slow"},"lastError":"old"},{"hostname":"own.example","state":"external","words":"yours","path":"direct"},{"hostname":"new.example","state":"pending","words":"set DNS","setup":{"message":"m","records":"plain"},"records":[{"type":"CNAME","name":"new","value":"acme.box"}],"relay":{"state":"odd"},"next":"wait"}],"pathB":{"available":true,"meter":"2 of 5"},"maxCustomNames":5}"#;
 const RESOURCES: &str = r#"{"box":{"host":"box1","cores":8,"memBytes":17179869184,"checkedAt":1700000000},"guard":{"mode":"on","modeSource":"setting","lines":{"warnPct":85,"warnFreeBytes":21474836480,"refusePct":95,"reserveBytes":10737418240,"criticalPct":98,"criticalFreeBytes":2147483648}},"disks":[{"mount":"/","usedBytes":123456789012,"totalBytes":500000000000,"usedPct":24.7,"freeBytes":376543210988,"level":"ok"}],"mem":{"totalBytes":17179869184,"availableBytes":1610612736},"consumers":[],"byOwner":[]}"#;
@@ -132,7 +133,9 @@ fn domains_answer_as_the_shell_does() {
             one(
                 "domain external on, no change",
                 &["domain", "external", "acme", "own.example", "on"],
-                ok(r#"{"custom":{"hostname":"own.example","state":"external","words":"yours"},"already":true,"external":true,"txt":{"why":"not your zone"}}"#),
+                ok(
+                    r#"{"custom":{"hostname":"own.example","state":"external","words":"yours"},"already":true,"external":true,"txt":{"why":"not your zone"}}"#,
+                ),
                 0,
             ),
             // native: app domain external --json
@@ -143,7 +146,11 @@ fn domains_answer_as_the_shell_does() {
                 0,
             ),
             // native: app domain external
-            stop("domain external: no mode", &["domain", "external", "acme", "own.example"], 2),
+            stop(
+                "domain external: no mode",
+                &["domain", "external", "acme", "own.example"],
+                2,
+            ),
             // native: app domains
             one("domains", &["domains", "acme"], ok(DOMAINS), 0),
             // native: app domain list
@@ -154,7 +161,12 @@ fn domains_answer_as_the_shell_does() {
                 0,
             ),
             // native: app domains --json
-            one("domains --json", &["domains", "--json", "acme"], ok(DOMAINS), 0),
+            one(
+                "domains --json",
+                &["domains", "--json", "acme"],
+                ok(DOMAINS),
+                0,
+            ),
             // native: app domains
             traceback(one(
                 "domains: its own label missing",
@@ -167,13 +179,22 @@ fn domains_answer_as_the_shell_does() {
             // native: app domain
             stop("domain: a word it doesn't take", &["domain", "move"], 2),
             // native: app domain rm
-            stop("domain rm --external", &["domain", "rm", "acme", "shop", "--external"], 2),
+            stop(
+                "domain rm --external",
+                &["domain", "rm", "acme", "shop", "--external"],
+                2,
+            ),
             // native: app domain add
             stop("domain add: no label", &["domain", "add", "acme"], 2),
             // native: app domains
             stop("domains: no App", &["domains"], 2),
             // native: app domain add
-            one("domain add: refused", &["domain", "add", "acme", "shop"], refused(), 3),
+            one(
+                "domain add: refused",
+                &["domain", "add", "acme", "shop"],
+                refused(),
+                3,
+            ),
         ],
     );
 }
@@ -188,7 +209,9 @@ fn data_answers_as_the_shell_does() {
             one(
                 "data ls",
                 &["data", "ls", "acme"],
-                ok(r#"{"at":"/","kind":"dir","entries":[{"type":"dir","name":"logs","size":4096,"mtime":1700000000},{"type":"file","name":"big.bin","size":5000000000,"mtime":1700000000.5},{"type":"link","name":"l","size":null},{"type":"file","name":"tiny","size":12}],"truncated":true,"max":1000}"#),
+                ok(
+                    r#"{"at":"/","kind":"dir","entries":[{"type":"dir","name":"logs","size":4096,"mtime":1700000000},{"type":"file","name":"big.bin","size":5000000000,"mtime":1700000000.5},{"type":"link","name":"l","size":null},{"type":"file","name":"tiny","size":12}],"truncated":true,"max":1000}"#,
+                ),
                 0,
             ),
             // native: app data list
@@ -199,7 +222,12 @@ fn data_answers_as_the_shell_does() {
                 0,
             ),
             // native: app data ls --json
-            one("data ls --json", &["data", "ls", "--json", "acme"], ok(r#"{"entries":[]}"#), 0),
+            one(
+                "data ls --json",
+                &["data", "ls", "--json", "acme"],
+                ok(r#"{"entries":[]}"#),
+                0,
+            ),
             // native: app data ls
             stop("data ls: three words", &["data", "ls", "a", "b", "c"], 2),
             // native: app data ls
@@ -222,7 +250,15 @@ fn data_answers_as_the_shell_does() {
             // native: app data get --json
             case(
                 "data get --to --json",
-                &["data", "get", "acme", "notes/hello.txt", "--to", "copy.txt", "--json"],
+                &[
+                    "data",
+                    "get",
+                    "acme",
+                    "notes/hello.txt",
+                    "--to",
+                    "copy.txt",
+                    "--json",
+                ],
                 &[],
                 vec![ok(PIECE_1), ok(PIECE_2)],
                 owner_and_port,
@@ -273,9 +309,17 @@ fn data_answers_as_the_shell_does() {
                 2,
             ),
             // native: app data get
-            stop("data get: --to empty", &["data", "get", "acme", "p", "--to", ""], 2),
+            stop(
+                "data get: --to empty",
+                &["data", "get", "acme", "p", "--to", ""],
+                2,
+            ),
             // native: app data get
-            stop("data get: --json and -", &["data", "get", "acme", "p", "-", "--json"], 2),
+            stop(
+                "data get: --json and -",
+                &["data", "get", "acme", "p", "-", "--json"],
+                2,
+            ),
             // native: app data get
             stop("data get: no path", &["data", "get", "acme"], 2),
             // native: app data rm
@@ -307,12 +351,26 @@ fn data_answers_as_the_shell_does() {
                 0,
             ),
             // native: app data mv
-            stop("data mv: four words", &["data", "mv", "a", "b", "c", "d"], 2),
+            stop(
+                "data mv: four words",
+                &["data", "mv", "a", "b", "c", "d"],
+                2,
+            ),
             // native: app data put
             one(
                 "data put: a path made absolute",
-                &["data", "put", "acme", ".", "--to", "in", "--disk-override=space é"],
-                ok(r#"{"files":3,"from":"/w","to":"in","app":"acme","diskWarning":{"hint":"85% used"}}"#),
+                &[
+                    "data",
+                    "put",
+                    "acme",
+                    ".",
+                    "--to",
+                    "in",
+                    "--disk-override=space é",
+                ],
+                ok(
+                    r#"{"files":3,"from":"/w","to":"in","app":"acme","diskWarning":{"hint":"85% used"}}"#,
+                ),
                 0,
             ),
             // native: app data put
@@ -325,7 +383,11 @@ fn data_answers_as_the_shell_does() {
             // native: app data put
             stop("data put: no path", &["data", "put", "acme"], 2),
             // native: app data put
-            stop("data put: --to last", &["data", "put", "acme", "x", "--to"], 1),
+            stop(
+                "data put: --to last",
+                &["data", "put", "acme", "x", "--to"],
+                1,
+            ),
             // native: app data
             stop("data: the page", &["data"], 0),
             // native: app data
@@ -393,7 +455,11 @@ fn resources_answer_as_the_shell_does() {
                 "resources --rescan --wait: done at the first look",
                 &["resources", "--rescan", "--wait"],
                 &[],
-                vec![ok(r#"{"running":true}"#), ok(r#"{"scan":{"running":false}}"#), ok(RESOURCES)],
+                vec![
+                    ok(r#"{"running":true}"#),
+                    ok(r#"{"scan":{"running":false}}"#),
+                    ok(RESOURCES),
+                ],
                 owner_and_port,
                 0,
                 3,
@@ -405,7 +471,12 @@ fn resources_answer_as_the_shell_does() {
             // native: app resources
             stop("resources: --app last", &["resources", "--app"], 1),
             // native: app resources settings
-            one("resources settings: the read", &["resources", "settings"], ok(RESOURCES), 0),
+            one(
+                "resources settings: the read",
+                &["resources", "settings"],
+                ok(RESOURCES),
+                0,
+            ),
             // native: app resources settings --json
             one(
                 "resources settings --json: the read",
@@ -417,10 +488,24 @@ fn resources_answer_as_the_shell_does() {
             one(
                 "resources settings: set",
                 &[
-                    "resources", "settings", "--mode", "warn", "--warn", "80", "--warn-free", "20G",
-                    "--refuse", "09", "--reserve", "1.5 GiB", "--critical-free", "512m",
+                    "resources",
+                    "settings",
+                    "--mode",
+                    "warn",
+                    "--warn",
+                    "80",
+                    "--warn-free",
+                    "20G",
+                    "--refuse",
+                    "09",
+                    "--reserve",
+                    "1.5 GiB",
+                    "--critical-free",
+                    "512m",
                 ],
-                ok(r#"{"changed":true,"guard":{"mode":"warn","modeSource":"setting","lines":{"warnPct":80,"warnFreeBytes":21474836480,"reserveBytes":1610612736}},"note":"saved é"}"#),
+                ok(
+                    r#"{"changed":true,"guard":{"mode":"warn","modeSource":"setting","lines":{"warnPct":80,"warnFreeBytes":21474836480,"reserveBytes":1610612736}},"note":"saved é"}"#,
+                ),
                 0,
             ),
             // native: app resources settings
@@ -431,25 +516,45 @@ fn resources_answer_as_the_shell_does() {
                 3,
             ),
             // native: app resources settings
-            stop("resources settings: a bad size", &["resources", "settings", "--reserve", "10X"], 2),
+            stop(
+                "resources settings: a bad size",
+                &["resources", "settings", "--reserve", "10X"],
+                2,
+            ),
             // native: app resources settings
-            stop("resources settings: a bad mode", &["resources", "settings", "--mode", "auto"], 2),
+            stop(
+                "resources settings: a bad mode",
+                &["resources", "settings", "--mode", "auto"],
+                2,
+            ),
             // native: app resources settings
-            stop("resources settings: a bad percent", &["resources", "settings", "--warn", "100"], 2),
+            stop(
+                "resources settings: a bad percent",
+                &["resources", "settings", "--warn", "100"],
+                2,
+            ),
             // native: app resources settings
-            stop("resources settings: a word", &["resources", "settings", "now"], 2),
+            stop(
+                "resources settings: a word",
+                &["resources", "settings", "now"],
+                2,
+            ),
             // native: app resources clean
             one(
                 "resources clean --dry-run",
                 &["resources", "clean", "--dry-run"],
-                ok(r#"{"dryRun":true,"scope":"box","items":[{"kind":"seed","bytes":3200000000,"app":"acme","id":"seed-1"},{"kind":"odd","bytes":null,"id":"x","error":"busy"}],"totals":{"bytes":3200000000},"never":"never your data","hint":"run it for real"}"#),
+                ok(
+                    r#"{"dryRun":true,"scope":"box","items":[{"kind":"seed","bytes":3200000000,"app":"acme","id":"seed-1"},{"kind":"odd","bytes":null,"id":"x","error":"busy"}],"totals":{"bytes":3200000000},"never":"never your data","hint":"run it for real"}"#,
+                ),
                 0,
             ),
             // native: app resources clean
             one(
                 "resources clean",
                 &["resources", "clean"],
-                ok(r#"{"items":[{"kind":"image","bytes":999,"id":"img","removed":false}],"totals":{"freedBytes":0},"engine":{"status":"error: down"}}"#),
+                ok(
+                    r#"{"items":[{"kind":"image","bytes":999,"id":"img","removed":false}],"totals":{"freedBytes":0},"engine":{"status":"error: down"}}"#,
+                ),
                 0,
             ),
             // native: app resources clean --json
@@ -471,7 +576,12 @@ fn resources_answer_as_the_shell_does() {
                 0,
             ),
             // native: app resources trends --json
-            one("resources trends --json", &["resources", "trends", "--json"], ok(TRENDS), 0),
+            one(
+                "resources trends --json",
+                &["resources", "trends", "--json"],
+                ok(TRENDS),
+                0,
+            ),
             // native: app resources trends
             traceback(one(
                 "resources trends: a point that is a word",
@@ -480,7 +590,11 @@ fn resources_answer_as_the_shell_does() {
                 1,
             )),
             // native: app resources trends
-            stop("resources trends: a word", &["resources", "trends", "now"], 2),
+            stop(
+                "resources trends: a word",
+                &["resources", "trends", "now"],
+                2,
+            ),
         ],
     );
 }

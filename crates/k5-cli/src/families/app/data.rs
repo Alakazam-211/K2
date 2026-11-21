@@ -231,7 +231,11 @@ fn mv(words: &[&str]) -> Result<Ask, Stop> {
 fn basename(p: &str) -> String {
     let t = p.trim_end_matches('/');
     if t.is_empty() {
-        return if p.is_empty() { String::new() } else { "/".into() };
+        return if p.is_empty() {
+            String::new()
+        } else {
+            "/".into()
+        };
     }
     t.rsplit('/').next().unwrap_or(t).to_string()
 }
@@ -338,8 +342,13 @@ fn get(words: &[&str]) -> Option<Result<Ask, Stop>> {
 }
 
 fn put(words: &[&str]) -> Option<Result<Ask, Stop>> {
-    let (mut app, mut from, mut to, mut dov, mut json) =
-        (String::new(), String::new(), String::new(), String::new(), false);
+    let (mut app, mut from, mut to, mut dov, mut json) = (
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        false,
+    );
     let mut rest = words;
     while let Some(w) = rest.first().copied() {
         match w {
@@ -514,7 +523,10 @@ fn add(a: &Value, b: &Value, line: u32) -> Result<String, Raise> {
     match (int(a), int(b)) {
         (Some(x), Some(y)) => Ok((x + y).to_string()),
         _ => match (a, b) {
-            (Value::Float(_) | Value::Int(_) | Value::Bool(_), Value::Float(_) | Value::Int(_) | Value::Bool(_)) => {
+            (
+                Value::Float(_) | Value::Int(_) | Value::Bool(_),
+                Value::Float(_) | Value::Int(_) | Value::Bool(_),
+            ) => {
                 let f = |v: &Value| match v {
                     Value::Float(x) => *x,
                     Value::Bool(x) => f64::from(u8::from(*x)),
@@ -635,7 +647,8 @@ fn human(n: &Value) -> Result<String, Raise> {
         }
     };
     if x < 1024.0 {
-        let d = crate::families::py_d(n, 9).map_err(|e| Raise::inside(21, 9, "human", e.exception))?;
+        let d =
+            crate::families::py_d(n, 9).map_err(|e| Raise::inside(21, 9, "human", e.exception))?;
         return Ok(format!("{d} B"));
     }
     for u in ["KiB", "MiB", "GiB"] {
@@ -782,7 +795,11 @@ mod tests {
             ("./x", ".", "x"),
             ("/", "/", "/"),
         ] {
-            assert_eq!((dirname(p), basename(p)), (d.to_string(), b.to_string()), "{p}");
+            assert_eq!(
+                (dirname(p), basename(p)),
+                (d.to_string(), b.to_string()),
+                "{p}"
+            );
         }
     }
 
@@ -815,7 +832,10 @@ mod tests {
                 json: false
             }))
         );
-        assert_eq!(parse(&["put", "a", "x", "--to"]), Some(Err(Stop::silent(Exit::Error))));
+        assert_eq!(
+            parse(&["put", "a", "x", "--to"]),
+            Some(Err(Stop::silent(Exit::Error)))
+        );
         assert!(parse(&["get", "a", "/"]).is_none(), "an empty name");
     }
 

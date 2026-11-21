@@ -117,9 +117,13 @@ echo "== flags become the route's query =="
 k app requests jobs --since 1h --until 10m --status 5xx --path /upload --method POST --limit 50 >/dev/null
 q="$(cat "$SANDBOX/queries")"
 expect_has "the route" "$q" "/cli/app/requests "
-for want in "app=jobs" "since=1h" "until=10m" "status=5xx" "path_prefix=%2fupload" "method=POST" "limit=50"; do
+for want in "app=jobs" "since=1h" "until=10m" "status=5xx" "method=POST" "limit=50"; do
     expect_has "sends $want" "$q" "$want"
 done
+# The %XX hex's case is the sender's: curl 8.5 and 8.7 write -G data's
+# escapes in lower case, curl 8.23 and the k5 binary in upper case (the
+# daemon decodes either; crates/k5-cli/src/transport/wire.rs).
+expect_has "sends path_prefix=%2fupload" "$(printf '%s' "$q" | tr 'A-F' 'a-f')" "path_prefix=%2fupload"
 
 echo "== --json is the daemon's answer =="
 out="$(k app requests jobs --json)"

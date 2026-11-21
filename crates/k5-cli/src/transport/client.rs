@@ -4189,7 +4189,9 @@ mod tests {
         // The Connect control plane is not the daemon: none.
         let (_, r) = owner
             .build(
-                Kind::ControlPlane { put: false },
+                Kind::ControlPlane {
+                    method: Method::Post,
+                },
                 Channel::Tcp,
                 "/v1/x",
                 &[],

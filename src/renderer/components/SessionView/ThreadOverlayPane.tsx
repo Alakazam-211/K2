@@ -66,6 +66,7 @@ import { scopeMayWrite } from '@/kessel/server-scope'
 
 // The choice card lives in its own file; Zen and Grok Bots import it from here.
 import { CloneProposalsBanner } from '@/components/CloneToDialog/CloneProposalsBanner'
+import { useThreadComposeExtras } from './threadComposeExtras'
 export { ChoiceCard, choiceLetter } from './ChoiceCard'
 
 // Sender pictures read the projects, presence and Home avatar stores: loaded
@@ -240,6 +241,9 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
   // Thread file links: the room's own server decides which printed paths
   // are files in this Thread's workspace; a click opens them in this room.
   const fileLinkTransport = useMemo(() => scopeFileLinkTransport(roomScope), [roomScope])
+  // A Thread whose address isn't a workspace's (a ticket's) names the
+  // workspace its paths resolve in.
+  const fileWorkspace = useThreadComposeExtras()?.fileWorkspace || addr
   const openFileLink = useCallback<FileLinkOpen>(
     (link, line, col, opts) => openThreadFileLink(room, link, line, col, opts),
     [room],
@@ -249,13 +253,13 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
   const fileActions = useMemo<ThreadFileActions>(
     () => ({
       open: (file, opts) => {
-        void openThreadAttachment(room, fileLinkTransport, addr, file, opts).catch((err: unknown) =>
+        void openThreadAttachment(room, fileLinkTransport, fileWorkspace, file, opts).catch((err: unknown) =>
           console.warn('[thread] open attachment failed:', err),
         )
       },
       find: (file) => findThreadAttachment(room, file),
     }),
-    [room, fileLinkTransport, addr],
+    [room, fileLinkTransport, fileWorkspace],
   )
   // Image attachments (thread-images-v1) read their pictures from the
   // room's own server, by this Thread's address.
@@ -640,7 +644,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
         <ThreadAttachmentSourceProvider value={attachmentSource}>
         <ThreadSenderAvatarContext.Provider value={ThreadSenderPicture}>
         <ThreadFileActionsProvider value={fileActions}>
-        <FileLinkProvider workspace={addr} transport={fileLinkTransport} open={openFileLink}>
+        <FileLinkProvider workspace={fileWorkspace} transport={fileLinkTransport} open={openFileLink}>
           {/* Narrow (< 480px): bubbles use the column (ThreadColumn). */}
           <ThreadMessageColumn
             ref={contentRef}

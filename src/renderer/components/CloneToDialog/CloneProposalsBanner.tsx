@@ -23,7 +23,8 @@ import { denyProposal, fetchOpenProposals, proposerName, type CloneProposal } fr
 /** The workspace part of a Thread address, or null for a non-workspace one. */
 export function proposalWorkspaceOf(addr: string): string | null {
   const a = addr.trim()
-  if (!a || a.startsWith('import:') || a.startsWith('gb:')) return null
+  // A ticket's discussion (`ticket:<id>`) is no workspace's Thread either.
+  if (!a || a.startsWith('import:') || a.startsWith('gb:') || a.startsWith('ticket:')) return null
   return a.split('/')[0] || null
 }
 

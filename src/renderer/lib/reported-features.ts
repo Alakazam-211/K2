@@ -247,6 +247,13 @@ export const REPORTED_FEATURES = {
    *  block). Listed only while the server's Postal switch is on (off by
    *  default). The workspace Postal tab shows only then. */
   postal: 'postal',
+  /** ticket-thread-v1 (0.46.17): a ticket's discussion is a Thread
+   *  conversation (`ticket:<id>`), read and posted through the Thread
+   *  routes with the ticket's own rules. With it the ticket column draws
+   *  the Thread pane and floating header, with the ticket's agent terminal
+   *  as its drawer, and no Thread | Agent tabs; without it the old column
+   *  (Feedback/ticket-thread-contract.ts). */
+  'ticket-thread-v1': 'ticket-thread-v1',
 } as const
 
 export type ReportedFeatureKey = keyof typeof REPORTED_FEATURES

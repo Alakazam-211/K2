@@ -90,6 +90,7 @@ describe('proposal helpers', () => {
     expect(proposalWorkspaceOf('sales/reviewer')).toBe('sales')
     expect(proposalWorkspaceOf('import:abc')).toBeNull()
     expect(proposalWorkspaceOf('gb:bot')).toBeNull()
+    expect(proposalWorkspaceOf('ticket:aaaa-1')).toBeNull()
     expect(hostForTarget([LARKSPUR], 'LARKSPUR.k2.dev')).toBe(LARKSPUR)
     expect(hostForTarget([LARKSPUR], 'larkspur.k2.dev:443')).toBe(LARKSPUR)
     expect(hostForTarget([LARKSPUR], 'here')).toBeNull()

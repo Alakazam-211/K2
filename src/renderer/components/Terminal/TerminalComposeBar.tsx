@@ -77,6 +77,7 @@ import {
   writeComposeCaret,
 } from './terminalCompose'
 import { useSessionViewChrome } from '@/components/SessionView/sessionViewChrome'
+import { useThreadComposeExtras } from '@/components/SessionView/threadComposeExtras'
 import { postThreadCompose } from '@/components/SessionView/overlayThread'
 import {
   isInsideWorkspace,
@@ -248,9 +249,13 @@ export function TerminalComposeBar({
     composeAgentNameFromProjects(projects, workspacePath),
   )
   const sessionChrome = useSessionViewChrome()
+  // A ticket's discussion (TicketThreadPane): its quick answers over the
+  // box, its own hint, and no "/" commands.
+  const extras = useThreadComposeExtras()
+  const slashOn = extras?.slash !== false
   // The agent by the name its view shows ("Message Atlas", as its tile's bar
   // and the Thread's empty state say), else the Agents-list name.
-  const messagePlaceholder = composeMessagePlaceholder(sessionChrome?.displayName || agentName)
+  const messagePlaceholder = extras?.placeholder ?? composeMessagePlaceholder(sessionChrome?.displayName || agentName)
   // The Thread's bar wears the Zen Thread widget's look (2026-10-16); the
   // terminal's bar keeps its own. Same keys, same commands, same send.
   const zenLook = sendDestination === 'thread'
@@ -1640,14 +1645,14 @@ export function TerminalComposeBar({
           historyDraftRef.current = ''
         }
         // `/model ` (and maybe a search): the model picker, pre-filtered.
-        const modelQuery = composeModelTyped(value)
+        const modelQuery = slashOn ? composeModelTyped(value) : null
         if (modelQuery != null) {
           setDraft('')
           closeSlashMenu()
           composeModel.open(modelQuery)
           return
         }
-        const spaceCommit = composeSlashSpaceCommit(value)
+        const spaceCommit = slashOn ? composeSlashSpaceCommit(value) : null
         if (spaceCommit) {
           setSlashCommand(spaceCommit.command)
           setDraft(spaceCommit.remainder)
@@ -1672,7 +1677,7 @@ export function TerminalComposeBar({
         }
         setDraft(value)
         noteTyping(value)
-        const query = composeSlashTypeaheadQuery(value)
+        const query = slashOn ? composeSlashTypeaheadQuery(value) : null
         if (query != null) {
           const matches = filterComposeSlashMenu(query)
           if (matches.length > 0) {
@@ -1764,6 +1769,7 @@ export function TerminalComposeBar({
         onDragOver={handleDragOver}
         onDrop={handleDrop}
       >
+        {extras?.above ? <div style={{ marginBottom: 6 }}>{extras.above}</div> : null}
         {addrError ? <div style={{ marginBottom: 6 }}>{addrError}</div> : null}
         {modelError ? <div style={{ marginBottom: 6 }}>{modelError}</div> : null}
         {waitingNote ? <div style={{ marginBottom: 6 }}>{waitingNote}</div> : null}
@@ -1826,6 +1832,7 @@ export function TerminalComposeBar({
           >
             <ComposePlusGlyph />
           </ThreadRoundButton>
+          {slashOn ? (
           <ThreadRoundButton
             label="Slash command"
             title={slashCommand ? `${slashCommand} selected` : 'Slash command'}
@@ -1843,6 +1850,7 @@ export function TerminalComposeBar({
           >
             <ComposeSlashGlyph />
           </ThreadRoundButton>
+          ) : null}
           </div>
           {slashMenu}
           {composeModel.picker}

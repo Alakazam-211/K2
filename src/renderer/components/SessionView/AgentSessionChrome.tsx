@@ -507,6 +507,7 @@ export function PinnedSessionBody({
   splitFloats,
   viewSwitch,
   openTerminal,
+  draftId,
   children,
 }: {
   viewTab: SessionViewTab
@@ -533,6 +534,9 @@ export function PinnedSessionBody({
   /** Put the terminal on screen (`useSessionViewTab`): a K2 notice's
    *  "Open its terminal". Absent: that button isn't drawn. */
   openTerminal?: () => void
+  /** The message box's draft owner when it isn't `agentName` (a ticket's
+   *  discussion, whose agent also has its own chat). */
+  draftId?: string
   children: ReactNode
 }): JSX.Element {
   const chrome = useMemo<SessionViewChromeValue>(
@@ -568,7 +572,7 @@ export function PinnedSessionBody({
               state={state}
               terminal={children}
               handle={handle}
-              draftId={agentName ?? ''}
+              draftId={draftId ?? agentName ?? ''}
               cwd={projectPath ?? ''}
             />
           </SessionColumnsContext.Provider>

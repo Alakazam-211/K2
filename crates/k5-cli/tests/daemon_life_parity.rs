@@ -660,7 +660,7 @@ fn daemon_stop_on_linux_answers_as_the_shell_does() {
             NO_UNIT.to_vec(),
         ),
         (
-            // native: daemon stop --keep-agents
+            // native: daemon stop
             case(
                 "stop --keep-agents: a user unit",
                 &["stop", "--keep-agents"],
@@ -752,7 +752,7 @@ fn daemon_restart_answers_as_the_shell_does() {
             user_restart.clone(),
         ),
         (
-            // native: daemon restart --wait
+            // native: daemon restart
             case(
                 "restart --wait: back up",
                 &["restart", "--wait"],
@@ -806,7 +806,7 @@ fn daemon_restart_answers_as_the_shell_does() {
             NO_UNIT.to_vec(),
         ),
         (
-            // native: daemon restart --sessions
+            // native: daemon restart
             case(
                 "restart --sessions",
                 &["restart", "--sessions"],
@@ -865,8 +865,8 @@ fn daemon_restart_host_answers_as_the_shell_does() {
     let r = rig("host");
     const HOST: &str = "http://127.0.0.1:{port}";
     let rows: Vec<Case> = vec![
-        // native: daemon restart --host
-        // native: daemon restart --host --token-stdin
+        // native: daemon restart
+        // native: daemon restart
         with_stdin(
             case(
                 "restart --host --token-stdin",

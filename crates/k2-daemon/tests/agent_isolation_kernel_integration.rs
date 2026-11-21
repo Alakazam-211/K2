@@ -372,6 +372,12 @@ exec sleep 3600
     )
 }
 
+/// Refused, and the refusal names this attempt's own path (a stale error
+/// from an earlier step can't pass for it).
+fn denied_at(v: &str, path: &str) -> bool {
+    denied(v) && v.contains(path)
+}
+
 fn denied(v: &str) -> bool {
     let (rc, rest) = v.split_once(' ').unwrap_or((v, ""));
     rc != "0" && (rest.contains("Permission denied") || rest.contains("Operation not permitted"))
@@ -413,18 +419,18 @@ fn the_five_step_demo_on_a_real_kernel() {
         assert!(r["build_rc"].starts_with("0 "), "cargo build in its own workspace: {}", r["build_rc"]);
     }
     // 2. A sibling's folder.
-    assert!(denied(&r["sibling_read_rc"]), "reading B's README must be denied: {}", r["sibling_read_rc"]);
-    assert!(denied(&r["sibling_ls_rc"]), "listing B's folder must be denied: {}", r["sibling_ls_rc"]);
-    assert!(denied(&r["sibling_environ_rc"]), "reading B's passport from /proc/<pid>/environ must be denied: {}", r["sibling_environ_rc"]);
+    assert!(denied_at(&r["sibling_read_rc"], "B/README.md"), "reading B's README must be denied: {}", r["sibling_read_rc"]);
+    assert!(denied_at(&r["sibling_ls_rc"], "DevProjects/B"), "listing B's folder must be denied: {}", r["sibling_ls_rc"]);
+    assert!(denied_at(&r["sibling_environ_rc"], "/environ"), "reading B's passport from /proc/<pid>/environ must be denied: {}", r["sibling_environ_rc"]);
     // Known (M2/M5): Landlock on 6.8 doesn't scope signals (ABI 6, 6.12+).
     println!("KNOWN GAP: a fenced agent signalling a sibling (kill -0): {}", r["sibling_signal_rc"]);
     // 3. The owner token.
-    assert!(denied(&r["token_read_rc"]), "reading the owner token must be denied: {}", r["token_read_rc"]);
-    assert!(denied(&r["k2_home_ls_rc"]), "listing ~/.k2 must be denied: {}", r["k2_home_ls_rc"]);
+    assert!(denied_at(&r["token_read_rc"], "daemon.token"), "reading the owner token must be denied: {}", r["token_read_rc"]);
+    assert!(denied_at(&r["k2_home_ls_rc"], ".k2'"), "listing ~/.k2 must be denied: {}", r["k2_home_ls_rc"]);
     // 4. Its cgroup.
-    assert!(denied(&r["cgroup_move_rc"]), "moving into B's cgroup must be denied: {}", r["cgroup_move_rc"]);
-    assert!(denied(&r["cgroup_leaf_move_rc"]), "moving into the shared leaf must be denied: {}", r["cgroup_leaf_move_rc"]);
-    assert!(denied(&r["cgroup_mkdir_rc"]), "making a cgroup must be denied: {}", r["cgroup_mkdir_rc"]);
+    assert!(denied_at(&r["cgroup_move_rc"], &format!("a-{b_id}/cgroup.procs")), "moving into B's cgroup must be denied: {}", r["cgroup_move_rc"]);
+    assert!(denied_at(&r["cgroup_leaf_move_rc"], "/../cgroup.procs"), "moving into the shared leaf must be denied: {}", r["cgroup_leaf_move_rc"]);
+    assert!(denied_at(&r["cgroup_mkdir_rc"], "a-escape"), "making a cgroup must be denied: {}", r["cgroup_mkdir_rc"]);
     assert!(r["cgroup_after"].ends_with(&format!("/agents/a-{a_id}")), "still in A's cgroup: {}", r["cgroup_after"]);
     assert!(!r["sudo_rc"].starts_with("0"), "no sudo in a fence: {}", r["sudo_rc"]);
     assert!(!r["unshare_rc"].starts_with("0"), "no new user+mount namespace: {}", r["unshare_rc"]);

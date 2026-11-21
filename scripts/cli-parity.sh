@@ -217,7 +217,7 @@ EXPECTED_DIFFS=(
     "clone-url-not-printable|K2 ruling R10, the clone engine's port|a clone server URL with a byte outside printable ASCII anywhere in it, a blank too (the remote URL as typed, or this server's address from K2_HOST): the binary sends nothing and prints one usage line on stderr, exit 2, stdout empty: {\"error\": \"usage\", \"hint\": \"<url> isn't an address k2 sends to itself\"} (json.dumps, so the check's é is \\u00e9). The check: \`clone preview ws1 --host 'http://127.0.0.1:<port>/#café' --token-stdin --json\`; the shell's Python tries it: urllib drops the fragment and sends its POST / to <port> (the check's listener answers 403, so bash prints {\"error\": \"error\", \"hint\": \"recorded\"}, exit 3)"
     "clone-url-empty-host|K2 ruling R10, the clone engine's port|a clone server URL with an empty host before a port (the check: \`clone preview ws1 --host https://:<port> --token-stdin --json\`): the binary sends nothing and prints one usage line on stderr, exit 2, stdout empty: {\"error\": \"usage\", \"hint\": \"https://:<port> isn't an address k2 sends to itself\"}. The shell's Python tries the empty name: where the resolver makes it this computer (macOS) it connects to <port> and then raises at the TLS step (a traceback ending \"ValueError: check_hostname requires server_hostname\", exit 1); where the lookup fails, {\"error\": \"daemon_unreachable\", \"hint\": \"remote server https://:<port>: ...\"}, exit 3"
     "clone-url-port-range|K2 ruling R10, the clone engine's port|a clone server URL whose port Python's int() reads but no socket takes, above 65535 or below 0 (the check: \`clone preview ws1 --host http://127.0.0.1:<65536 + port> --token-stdin --json\`): the binary sends nothing and prints one usage line on stderr, exit 2, stdout empty: {\"error\": \"usage\", \"hint\": \"http://127.0.0.1:<n> isn't an address k2 sends to itself\"}. On the shell's side this is a BASH BUG, reported to K2 and the Steward, not a behaviour to keep: clone.sh checks no port range and its Python (urllib, http.client) hands the port to the C library's getaddrinfo as it is; glibc cuts it to 16 bits, so on Linux bash sends its POST and the remote token (Authorization: Bearer) to <n> - 65536, which may be another service (here the check's listener, which answers 403, so bash prints {\"error\": \"error\", \"hint\": \"recorded\"}, exit 3); macOS's resolver refuses the port, {\"error\": \"daemon_unreachable\", \"hint\": \"remote server http://127.0.0.1:<n>: ...\"}, exit 3. The check proves the bug where it happens, so the bash fix flips it"
-    "clone-proxy-unread|K2 ruling R10, the clone engine's port|a clone request to an https server that isn't this computer with a proxy setting the binary doesn't read (the checks: \`clone preview ws1 --host https://cp.example.invalid --token-stdin --json\` with https_proxy=socks5://127.0.0.1:<port>; with https_proxy=https://127.0.0.1:<port>; with https_proxy=http://127.0.0.1:<port> and no_proxy='a.example b.example', blank-separated): the binary sends nothing and prints one usage line on stderr, exit 2, stdout empty: {\"error\": \"usage\", \"hint\": \"k2 won't send to https://cp.example.invalid: a proxy setting it doesn't read (an http:// proxy only)\"}. The shell's Python urllib sends one plain CONNECT cp.example.invalid:443 to <port> each time (it uses a socks or an https proxy URL as an http proxy, and its no_proxy splits on commas only), the token never in it; the proxy's 407 is its {\"error\": \"daemon_unreachable\", ...}, exit 3"
+    "clone-proxy-unread|K2 ruling R10, the clone engine's port (the Steward's line)|a clone request to an https server that isn't this computer with the person's https_proxy set to a URL of another scheme (the checks: \`clone preview ws1 --host https://cp.example.invalid --token-stdin --json\` with https_proxy=socks5://127.0.0.1:<port>, and with https_proxy=https://127.0.0.1:<port>): the binary sends nothing and prints one usage line on stderr naming the scheme, exit 2, stdout empty: {\"error\": \"usage\", \"hint\": \"proxy socks5://\\u2026 is not supported: only http:// proxies are\"} (https:// the same). The shell's Python urllib sends one plain CONNECT cp.example.invalid:443 to <port> each time (it uses a socks or an https proxy URL as an http proxy), the token never in it; the proxy's 407 is its {\"error\": \"daemon_unreachable\", ...}, exit 3. (A blank-separated no_proxy is no longer part of it: the binary reads no_proxy as the shell's Python does, K2's one proxy rule.)"
 )
 
 # check_version_offline: both CLIs run `--version` with a temp HOME and no
@@ -1839,23 +1839,22 @@ check_clone_url_port_range() {
 }
 
 # check_clone_proxy_unread: https to a server that isn't this computer
-# with a socks proxy, an https proxy URL, or a blank-separated no_proxy.
-# Bash's Python sends one plain CONNECT each time; the binary refuses and
-# sends nothing.
+# with a socks proxy or an https proxy URL. Bash's Python sends one plain
+# CONNECT each time; the binary refuses with the line that names the
+# scheme and sends nothing.
 check_clone_proxy_unread() {
-    local d="$WORK/clone-proxyunread" port url l side rc problems=()
-    local hint="k2 won't send to https://cp.example.invalid: a proxy setting it doesn't read (an http:// proxy only)"
+    local d="$WORK/clone-proxyunread" port url l side rc problems=() scheme
     clone_refusal_start "$d" || return 1
     port="$CLONE_REC_PORT"
     url="https://cp.example.invalid"
     for side in bash binary; do
         clone_refusal_run "$d" "$side" socks "$url" "https_proxy=socks5://127.0.0.1:$port"
         clone_refusal_run "$d" "$side" httpsproxy "$url" "https_proxy=https://127.0.0.1:$port"
-        clone_refusal_run "$d" "$side" noproxy "$url" "https_proxy=http://127.0.0.1:$port" "no_proxy=a.example b.example"
     done
     clone_refusal_stop
-    for l in socks httpsproxy noproxy; do
-        clone_refusal_refused "$d" "$l" "$hint"
+    for l in socks httpsproxy; do
+        case "$l" in socks) scheme=socks5 ;; *) scheme=https ;; esac
+        clone_refusal_refused "$d" "$l" "proxy $scheme://\\u2026 is not supported: only http:// proxies are"
         [ "$(wc -l <"$d/heads.$l.bash" | tr -d ' ')" = 1 ] && grep -Eq '^CONNECT cp\.example\.invalid:443 HTTP/1\.[01] ' "$d/heads.$l.bash" \
             || problems+=("$l: bash's Python didn't send one CONNECT for cp.example.invalid:443: $(head -c 300 "$d/heads.$l.bash")")
         ! grep -q 'tok-refusal-parity' "$d/heads.$l.bash" || problems+=("$l: bash's token reached the proxy")

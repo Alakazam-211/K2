@@ -62,7 +62,7 @@ fn cli_status_is_the_binary_own_verb() {
         assert_eq!(b.code, Some(2), "{name}: bash's exit: {b:?}");
         assert_eq!(b.stdout, "", "{name}: bash's stdout");
         assert_eq!(
-            b.stderr, "k5 cli status is answered by the k5 binary: run k5 cli status\n",
+            b.stderr, "k2 cli status is answered by the `k2` binary: run k2 cli status\n",
             "{name}: bash's line"
         );
         assert!(

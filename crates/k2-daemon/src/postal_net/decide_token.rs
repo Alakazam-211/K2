@@ -31,6 +31,7 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
+use super::off_async;
 use super::plane::{CallError, Mint, Plane};
 
 /// The waits before the second and third try after a 5xx (the switch only).
@@ -117,13 +118,6 @@ pub fn ensure(net: &Plane, why: Why, actor: &str) -> Result<Got, CallError> {
     };
     tell_owner(&got, why, actor);
     Ok(got)
-}
-
-/// Plane calls block (the HTTP client is reqwest's blocking one), and a
-/// card's answer can arrive on an async worker, where that client must not
-/// run: do the work on a plain thread and wait for it.
-fn off_async<T: Send>(f: impl FnOnce() -> T + Send) -> T {
-    std::thread::scope(|s| s.spawn(f).join()).unwrap_or_else(|p| std::panic::resume_unwind(p))
 }
 
 /// A person's Accept: when no token is here for the handle's label, ask

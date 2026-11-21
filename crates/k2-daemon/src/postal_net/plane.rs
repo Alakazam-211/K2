@@ -39,7 +39,10 @@ pub trait Transport: Send + Sync {
     fn post_open(&self, path: &str, body: &serde_json::Value) -> Result<Answer, String>;
 }
 
-/// reqwest, blocking (the Postal loop is a plain thread).
+/// reqwest, blocking (the Postal loop is a plain thread). The client is
+/// made, and every call sent, through [`super::off_async`]: a card's
+/// answer or a route can reach the plane from inside the tokio runtime,
+/// where this client must not run.
 pub struct Https {
     base: String,
     client: reqwest::blocking::Client,
@@ -47,6 +50,10 @@ pub struct Https {
 
 impl Https {
     pub fn new(base: String) -> Result<Self, String> {
+        super::off_async(move || Self::build(base))
+    }
+
+    fn build(base: String) -> Result<Self, String> {
         let mut builder = reqwest::blocking::Client::builder()
             // Long enough for a 25 s events long poll.
             .timeout(Duration::from_secs(45))
@@ -62,10 +69,8 @@ impl Https {
         let client = builder.build().map_err(|e| format!("postal http client: {e}"))?;
         Ok(Self { base, client })
     }
-}
 
-impl Transport for Https {
-    fn call(&self, bearer: &str, req: &Request) -> Result<Answer, String> {
+    fn send(&self, bearer: &str, req: &Request) -> Result<Answer, String> {
         let url = format!("{}{}", self.base, req.path);
         let rb = match req.method {
             Method::Get => self.client.get(&url),
@@ -90,12 +95,22 @@ impl Transport for Https {
         Ok((status, body))
     }
 
-    fn post_open(&self, path: &str, body: &serde_json::Value) -> Result<Answer, String> {
+    fn send_open(&self, path: &str, body: &serde_json::Value) -> Result<Answer, String> {
         let url = format!("{}{path}", self.base);
         let resp = self.client.post(&url).json(body).send().map_err(|e| format!("postal plane {path}: {}", short(&e.to_string())))?;
         let status = resp.status().as_u16();
         let body = resp.bytes().map_err(|e| format!("postal plane {path}: {}", short(&e.to_string())))?.to_vec();
         Ok((status, body))
+    }
+}
+
+impl Transport for Https {
+    fn call(&self, bearer: &str, req: &Request) -> Result<Answer, String> {
+        super::off_async(|| self.send(bearer, req))
+    }
+
+    fn post_open(&self, path: &str, body: &serde_json::Value) -> Result<Answer, String> {
+        super::off_async(|| self.send_open(path, body))
     }
 }
 

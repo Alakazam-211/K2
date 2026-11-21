@@ -959,3 +959,7 @@ pub(crate) fn not_cardable() -> Vec<&'static NotCardableSpec> {
 #[cfg(test)]
 #[path = "postal_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "postal_async_tests.rs"]
+mod async_tests;

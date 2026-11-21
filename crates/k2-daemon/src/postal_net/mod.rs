@@ -76,6 +76,32 @@ pub fn install(p: Arc<Plane>) {
     *NET.lock().unwrap_or_else(|p| p.into_inner()) = Some(p);
 }
 
+/// Tests: forget the plane, so the next [`net`] makes the daemon's.
+#[cfg(test)]
+pub(crate) fn forget_for_test() {
+    *NET.lock().unwrap_or_else(|p| p.into_inner()) = None;
+}
+
+/// Tests: is there a plane (installed, or made by [`net`])?
+#[cfg(test)]
+pub(crate) fn made_for_test() -> bool {
+    NET.lock().unwrap_or_else(|p| p.into_inner()).is_some()
+}
+
+/// Run `f` where reqwest's blocking client may run, and wait for it. The
+/// plane's HTTP client is that one ([`plane::Https`]), and a plane call
+/// can be reached from inside the tokio runtime: a card's Allow or Deny,
+/// a route. The client must not run there (a debug build panics with
+/// "Cannot drop a runtime in a context where blocking is not allowed").
+/// Inside the runtime `f` runs on a plain thread; anywhere else, such as
+/// the Postal loop's own thread, it runs here.
+pub(crate) fn off_async<T: Send>(f: impl FnOnce() -> T + Send) -> T {
+    if tokio::runtime::Handle::try_current().is_err() {
+        return f();
+    }
+    std::thread::scope(|s| s.spawn(f).join()).unwrap_or_else(|p| std::panic::resume_unwind(p))
+}
+
 /// The last network problem, for `k2 postal status`.
 pub fn last_problem() -> Option<Problem> {
     LAST.lock().unwrap_or_else(|p| p.into_inner()).clone()

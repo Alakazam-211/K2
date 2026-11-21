@@ -31,15 +31,15 @@
 # side of it exactly, by the difference's name, never by a skip:
 # socket_first_no_owner.sh (owner-token-with-passport: `read` when the
 # socket says "not served"), and
-# socket_first_no_owner_headless.sh (the same difference: `feedback
-# list` over TCP from a real session, refused for the passport).
+# socket_first_no_owner_headless.sh (written for the same difference:
+# `feedback list` over TCP from a real session).
 # (airgap_no_python.sh met native-without-python3 until `daemon
 # install` was native: its rows now expect bash's answer with no
 # python3 too.)
 # Any other is mapped to its difference the same way. (The
 # binary's own parity tests meet owner-token-with-passport:
-# crates/k5-cli/tests/whoami_parity.rs, done_parity.rs, activity_parity.rs
-# and feedback_parity.rs; since 0.46.17 the shell's read and setup send
+# crates/k5-cli/tests/whoami_parity.rs, done_parity.rs and
+# activity_parity.rs; since 0.46.17 the shell's read and setup send
 # the passport there too, so read_parity.rs and setup_parity.rs no longer
 # meet it. They meet
 # native-without-python3 in every case of the parity rig, in
@@ -179,7 +179,7 @@ done
 EXPECTED_DIFFS=(
     "version-offline|13.9 #3|--version (also -v and version, with any words after it but exactly --version --check, which the router's arm never reads) with no port or token: bash refuses (exit 1, \"Error: Cannot connect to K2.\"); the binary prints \"k2 <version>\" (exit 0), as help, --schema and --version never need the daemon"
     "native-without-python3|K2 ruling, out-of-box S1|a native k5 command runs when python3 is missing; that is a named, beneficial difference, and parity stays exact everywhere python3 exists. Hand-offs to bash for anything not native stay, with a plain line naming what is missing (python3 on a fresh Mac, Git Bash on Windows): with no python3 on PATH, study errors --json prints its JSON as with python3 where bash prints none, and a family still handed to the shell (the first of a list the check walks) prints one line naming Python 3 and exits 69 without starting bash"
-    "owner-token-with-passport|13.9 #4|an open verb (whoami, done, activity, feedback list and show, api) in a session with a cell socket set and the owner token on disk: bash sends the owner token over TCP (COMPAT-58, _cli_apply_auth_for_verb); the binary sends the passport, never the owner token. Also workspace_swap_canonical.sh's swap lookup: bash looks the workspace up with the owner token; the binary's passport is refused there, so it sends the typed name and the swap gets 400 not registered (K2 ruling; until the daemon's handle_swap_canonical resolves names itself, after r3)"
+    "owner-token-with-passport|13.9 #4|an open verb (whoami, done, activity, api off) in a session with a cell socket set and the owner token on disk: bash sends the owner token over TCP (COMPAT-58, _cli_apply_auth_for_verb); the binary sends the passport, never the owner token. Also workspace_swap_canonical.sh's swap lookup: bash looks the workspace up with the owner token; the binary's passport is refused there, so it sends the typed name and the swap gets 400 not registered (K2 ruling; until the daemon's handle_swap_canonical resolves names itself, after r3)"
     "bash32-pipe-reader|R3.3, K2 ruling at the 0.46.15 rebase|a request on the left of a pipe into a python3 reader that gets no answer (the check: an empty reply, one request over TCP, the owner token on disk): \`inbox\`, \`inbox read a1\`, \`inbox folders\`, \`read acme\`, \`activity\`, \`connect status\` (GETs), \`connections add beta\`, \`connections remove beta\`, \`api on\` and \`api-key revoke k1\` (POSTs), \`api-key list\` and \`agent template list\` (GETs), and \`agent template remove x\` (a POST). Both print the no-answer line (\"Error: K2's server ...\"); the binary then dies of SIGPIPE (141) with nothing on stdout, as bash 5 does. macOS's /bin/bash 3.2 runs the reader on the empty input and exits 1 with its output added: inbox \"No items.\" on stdout, inbox read \"Error: no answer from the K2 daemon (...). Try again: k2 inbox read <id>\" on stderr, inbox folders \"No folders yet. Create one by moving an item:\" and \"  k2 inbox move <id> projects\" on stdout, read an empty line on stderr, activity \"Error: the K2 daemon gave no usable answer: ''\" on stderr, connections add and remove \"Error: daemon returned an unparseable response: ''\" on stderr (0.46.17), api on the same line on stdout, api-key list and revoke \"Error: Expecting value: line 1 column 1 (char 0)\" on stderr, connect status nothing, agent template list and remove \"Error: daemon answered: \" on stderr. The pipe mark (_K2_PIPE_MARK) quiets only the heartbeat readers that set it, not these"
     "bash32-empty-brace|K2 ruling, macOS bash 3.2 until the shell's fix|\`msg ws --signal <kind> --payload ''\` with an empty payload (msg_signal_parity.rs, \"presence, an empty payload and kind, --inbox-silent\"): the payload takes cmd_signal's default, \"\${3:-{\\}}\"; macOS's /bin/bash 3.2 keeps the backslash there, so bash sends the text \"{\\}\" where the binary sends \"\" (bash 4 and later read {}, as the binary does). The rest of the request, the output and the exit are the same. The shell's fix (the default quoted) retires it"
     "feedback-optin-without-python3|K2 ruling at the 0.46.17 feedback opt-in|an agent (a passport over TCP) whose server says agents may not report (\"agents\": false, \"senderKind\": \"agent\"), cards off: with python3 both CLIs leave send-feedback's block out of \`help\` and print the one line for \`study send-feedback\`; with no python3 on PATH bash's probe can't read the answer, so bash prints the full help and the full page, while the binary reads the answer itself and still leaves the block out and prints the one line, as it does with python3. Both send the same requests either way (help: the settings read, then the cards; study: the settings read)"
@@ -328,14 +328,17 @@ check_native_without_python3() {
 }
 
 # check_owner_token_with_passport: both CLIs run `whoami --json`, `done`,
-# `read acme`, `activity`, `feedback list` and `feedback show x` with a
-# passport, K2_HOOK_SOCK set (no socket there, so both go over TCP),
-# K2_PROJECT_PATH set (so `activity` and `feedback list` ask no
+# `activity` and `api off` with a passport, K2_HOOK_SOCK set (no socket
+# there, so both go over TCP), K2_PROJECT_PATH set (so `activity` asks no
 # /cli/whoami first) and the owner token on disk, against a stub that logs
 # each request's credential: its Authorization: Bearer header (neither CLI
 # puts one in the query any more; one there is logged as "query:<T>").
+# Every request a verb makes must carry the side's credential (a verb may
+# make more than one). `feedback list` and `feedback show` left it: since
+# the tickets change the shell sends the session's passport there too
+# (`_cli_tickets_sends_passport`), as the binary does.
 check_owner_token_with_passport() {
-    local d="$WORK/owner-token" port="" pid rc side tok problems=()
+    local d="$WORK/owner-token" port="" pid rc side tok want what problems=()
     local owner="owner-tok-parity" passport="sessP.parity1"
     mkdir -p "$d/home/.k2" "$d/ws/.k2"
     printf '%s\n' "$owner" >"$d/home/.k2/heartbeat.token"
@@ -376,7 +379,7 @@ s.serve_forever()
     fi
     # (read left it in 0.46.17: its cli_send arm sends the passport on
     # TCP when the session's socket failed, as the binary does.)
-    for verb in "whoami --json" done activity "feedback list" "feedback show x" "api off"; do
+    for verb in "whoami --json" done activity "api off"; do
         for side in bash binary; do
             : >"$d/log"
             rc=0
@@ -384,13 +387,12 @@ s.serve_forever()
             # shellcheck disable=SC2086
             (cd "$d/ws" && env -i PATH="$PATH" HOME="$d/home" K2_PORT="$port" K2_HOOK_TOKEN="$passport" \
                 K2_HOOK_SOCK="$d/no-socket" K2_PROJECT_PATH="$d/ws" K2_AGENT_NAME=parity "$@" $verb) >"$d/out" 2>&1 </dev/null || rc=$?
-            tok="$(cat "$d/log")"
+            tok="$(tr '\n' ' ' <"$d/log")"
             [ "$rc" = 0 ] || problems+=("$side $verb exited $rc: $(head -c 200 "$d/out")")
-            if [ "$side" = bash ]; then
-                [ "$tok" = "$owner" ] || problems+=("bash $verb sent token '$tok', want the owner token")
-            else
-                [ "$tok" = "$passport" ] || problems+=("the binary's $verb sent token '$tok', want the passport")
-            fi
+            if [ "$side" = bash ]; then want="$owner" what="the owner token"; else want="$passport" what="the passport"; fi
+            # Each request's credential, one per line: at least one, all the side's.
+            [ -s "$d/log" ] && ! grep -qvxF "$want" "$d/log" \
+                || problems+=("$side $verb sent tokens '$tok', want $what on every request")
         done
     done
     kill "$pid" 2>/dev/null || true

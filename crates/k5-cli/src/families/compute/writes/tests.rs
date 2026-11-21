@@ -929,7 +929,10 @@ mod fetch_verb {
         assert!(at(&step, s::FOLDER).starts_with("sub = os.open(part, "));
         assert!(at(&step, s::STAT).starts_with("if stat.S_ISREG(os.stat(parts[-1]"));
         assert_eq!(at(&step, s::UNLINK), "os.unlink(parts[-1], dir_fd=d)");
-        assert_eq!(at(&step, s::OPEN), "fd = os.open(parts[-1], flags, 0o666, dir_fd=d)");
+        assert_eq!(
+            at(&step, s::OPEN),
+            "fd = os.open(parts[-1], flags, 0o666, dir_fd=d)"
+        );
         assert_eq!(at(&step, s::WRITE), "f.write(data)");
         assert!(at(&step, s::PRINT).starts_with(r#"print("%d %d %s %s %s""#));
         let check = python_after("compute-jobs.sh", "entry=\"$(K2_CP_PATH");

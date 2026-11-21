@@ -60,8 +60,8 @@ pub mod line {
     }
     /// The sha256 check's reader.
     pub mod check {
-        pub const OPEN: u32 = 82;
-        pub const INT: u32 = 88;
+        pub const OPEN: u32 = 12;
+        pub const INT: u32 = 18;
     }
 }
 

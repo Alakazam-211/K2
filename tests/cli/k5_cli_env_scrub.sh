@@ -133,11 +133,12 @@ PY
         bad "$label: the request's headers: $(tr '\n' ' ' <<<"$heads"), wanted fallthrough|1|$noun|disk"
     fi
 }
-# Two lines the binary hands to the shell: ci provenance with a word that
-# is not UTF-8 (every family hands such a line over; ci is native now), for
-# the shell's curl, and clone's engine, a python3 urlopen client.
+# Two lines the binary hands to the shell, each with a word that is not
+# UTF-8 (every family hands such a line over; ci and clone are native
+# now): ci provenance, for the shell's curl, and clone's engine, a
+# python3 urlopen client.
 run "ci provenance (curl)" /cli/ci/provenance ci curl ci provenance r1 --out "$WORK/prov-$(printf '\377')" --json
-run "clone preview (python3 urlopen)" /cli/clone/preview clone python3 clone preview w --json
+run "clone preview (python3 urlopen)" /cli/clone/preview clone python3 clone preview "w$(printf '\377')" --json
 
 echo
 echo "k5_cli_env_scrub: $pass passed, $fail failed"

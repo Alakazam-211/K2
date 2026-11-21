@@ -439,7 +439,7 @@ sec_case() {
 fresh
 "$K2_CLI" clone preview ws1 --host "http://127.0.0.1:$(cat "$W/tcp-port")" --token "$REMOTE_SENTINEL" --json </dev/null >/dev/null 2>&1 || true
 assert_tcp_got "clone preview --host" /cli/clone/preview "remote token" "$REMOTE_SENTINEL"
-assert_children_seen "clone preview --host"
+assert_children_native "clone preview --host"
 assert_off_children "clone preview --host" "remote token" "$REMOTE_SENTINEL"
 
 # 15b. k2 clone preview on this server: this server's own token reaches its
@@ -453,13 +453,13 @@ printf '%s\n' "$LOCAL_SENTINEL" >"$HOME/.k2/daemon.token"
 printf 'test-token\n' >"$HOME/.k2/heartbeat.token"
 printf 'test-token\n' >"$HOME/.k2/daemon.token"
 assert_tcp_got "clone preview (this server)" /cli/clone/preview "local token" "$LOCAL_SENTINEL"
-assert_children_seen "clone preview (this server)"
+assert_children_native "clone preview (this server)"
 assert_off_children "clone preview (this server)" "local token" "$LOCAL_SENTINEL"
 
 # 15c. k2 clone --host … --token-stdin: the remote server's token reaches
 #      that server's request and no child's argv or environment, nor k2's
 #      own argv.
-sec_case "clone preview --token-stdin" /cli/clone/preview "remote token" "$REMOTE_SENTINEL" clone preview ws1 --host "http://127.0.0.1:$(cat "$W/tcp-port")" --token-stdin --json
+SEC_CASE_CHILDREN=assert_children_native sec_case "clone preview --token-stdin" /cli/clone/preview "remote token" "$REMOTE_SENTINEL" clone preview ws1 --host "http://127.0.0.1:$(cat "$W/tcp-port")" --token-stdin --json
 
 # 16-17. An App user's password (k2 app user add / password --password-stdin).
 SEC_CASE_CHILDREN=assert_children_native sec_case "app user add" /cli/skin/users "password" "$PASS_SENTINEL" app user add bob --password-stdin

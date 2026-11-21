@@ -86726,7 +86726,7 @@ if dg:
 print("VIP mail outside the window: " + ("deliver" if d["vipOutsideWindow"] else "hold") + "; session line: " + ("on" if d["vipSessionLine"] else "off") + "; snippets: " + ("on" if d["snippets"] else "off"))
 if d.get("pausedUntil"): print("Paused until " + d["pausedUntil"])
 for i in ibx:
-    if i.get("needsRelink") and i.get("source") == "linked": print("Stopped: %s refused its sign-in. The owner signs it in again in place (Reconnect in Settings → Email Link, or k2 mail link upgrade %s --features <what it has now>); notices start again after." % (i["address"], i["address"]))
+    if i.get("needsRelink") and i.get("source") == "linked": print("Stopped: %s refused its sign-in. A person signs it in again in place, in a browser: Reconnect in Settings → Email Link, or the owner runs k2 mail link upgrade %s --features <account.features from k2 mail capabilities %s --json>. Notices start again after the next check. Do not remove and link it again (k2 mail link --help)." % (i["address"], i["address"], i["address"]))
     elif i.get("needsRelink"): print("Stopped: %s refused its login. Reconnect the inbox and it starts again." % i["address"])
     elif i.get("lastError"): print("Last poll problem for %s: %s" % (i["address"], i["lastError"]))
 c = d.get("last24h") or {}
@@ -96422,14 +96422,18 @@ Removing a Google link revokes K2's access at Google; Microsoft has no
 per-token revoke, so remove tells you where to remove the consent.
 
 When Google or Microsoft refuses a link's saved sign-in (`k2 mail watch`
-says Stopped; Settings → Email Link says Can't connect), sign in again in
-place (owner): `k2 mail link upgrade <address> --features <f>`, where <f>
-is what the link has now (usually mail, or mail,calendar-read; `k2 mail
-capabilities <address> --json` shows it as account.features), or
-Reconnect in Settings → Email Link. The
-inbox keeps its id, its workspace access and its calendar setting; only
-the saved sign-in is replaced. Don't remove it and link it again: that
-takes it away from every workspace.
+says Stopped; Settings → Email Link says Can't connect: the same state),
+a person signs it in again in place, in a browser: Reconnect in Settings →
+Email Link, or the owner runs `k2 mail link upgrade <address> --features
+<f>` (Microsoft prints a code, Google opens its page). <f> is what the
+link has now: the account.features value of `k2 mail capabilities
+<address> --json`, comma-separated with no spaces (usually mail or
+mail,calendar-read); naming more adds it. The inbox keeps its id, its
+workspace access and its calendar setting; only the saved sign-in is
+replaced, and `k2 mail watch` stops saying Stopped after its next check
+(usually within a minute). An agent can't do this: tell your person.
+Don't remove it and link it again: that takes it away from every
+workspace.
 
 Microsoft needs an OAuth app: K2's built-in one, or your own set with
 `k2 mail oauth-config set --provider microsoft --client-id <id>

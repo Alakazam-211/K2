@@ -188,14 +188,14 @@ impl Daemon {
     fn start(&mut self) {
         self.boots += 1;
         let log = std::fs::File::create(self.home.join(format!("daemon-{}.log", self.boots))).unwrap();
-        let agent = ptyd_bin("K2_PTYD_TEST_AGENT", "k2-ptyd-test-agent");
+        // The agents here are /bin/sh scripts, not the shim test agent.
+        let _ = ptyd_bin("K2_PTYD_TEST_AGENT", "k2-ptyd-test-agent");
         let mut c = Command::new(daemon_bin());
         c.env("K2_PTYD_BIN", ptyd_bin("K2_PTYD_BIN", "k2-ptyd"))
             .env("K2_PTYD", "1")
             .env("HOME", &self.home)
             .env("XDG_RUNTIME_DIR", self.home.join("xdg"))
             .env("TMPDIR", self.home.join("tmp"))
-            .env("K2_TEST_AGENT_SHIM_DIR", agent.parent().unwrap())
             .env("K2_TUNNEL_LEASE", "off")
             .env("K2_CONNECT_BASE", "http://127.0.0.1:1")
             .env("K2_CERT_BROKER_URL", "http://127.0.0.1:1")

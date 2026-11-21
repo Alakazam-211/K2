@@ -598,7 +598,10 @@ pub fn install_out(raw: &[u8]) -> (Vec<u8>, Option<(String, Exit)>) {
         };
         let refused = matches!(super::get(pairs, "permission"), Some(Value::Object(_)));
         let exit = if refused { Exit::Refused } else { Exit::Error };
-        return (Vec::new(), Some((format!("Error: {}", py::str_of(&err)), exit)));
+        return (
+            Vec::new(),
+            Some((format!("Error: {}", py::str_of(&err)), exit)),
+        );
     }
     let mut printed = String::new();
     let ok = install_text(data, &mut printed).is_ok();
@@ -701,14 +704,18 @@ mod tests {
         ] {
             assert!(text.contains(shell), "the shell no longer has {shell:?}");
         }
-        let page = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../cli/text/help/hooks.txt");
+        let page =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/text/help/hooks.txt");
         let page = std::fs::read_to_string(&page).unwrap_or_else(|e| panic!("read hooks.txt: {e}"));
         let lines: Vec<String> = USAGE
             .iter()
             .map(|l| l.replace(cli_name!(), "k2").replace(product_name!(), "K2"))
             .collect();
-        assert_eq!(page.lines().collect::<Vec<_>>(), lines, "the usage lines moved");
+        assert_eq!(
+            page.lines().collect::<Vec<_>>(),
+            lines,
+            "the usage lines moved"
+        );
     }
 
     #[test]
@@ -778,7 +785,10 @@ mod tests {
             err(r#"{"error":"a \ud800"}"#),
             Some(("Error: a \\ud800".into(), Exit::Error))
         );
-        assert_eq!(install_out(br#""an error""#), (b"\"an error\"\n".to_vec(), None));
+        assert_eq!(
+            install_out(br#""an error""#),
+            (b"\"an error\"\n".to_vec(), None)
+        );
         assert_eq!(install_out(b"-n"), (Vec::new(), None));
         assert_eq!(install_out(b"x\xff"), (b"x\xff\n".to_vec(), None));
         assert_eq!(

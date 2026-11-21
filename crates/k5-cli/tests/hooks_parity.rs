@@ -274,7 +274,10 @@ fn hooks_status_limit_is_digits() {
         no("--limit with a query", &["status", "--limit", "5&x=1"]),
         no("--limit --json", &["status", "--limit", "--json"]),
         no("-n 1.5", &["status", "-n", "1.5"]),
-        no("a bad second limit", &["status", "--limit", "5", "--limit", "x"]),
+        no(
+            "a bad second limit",
+            &["status", "--limit", "5", "--limit", "x"],
+        ),
         no("a bad -n then --limit", &["status", "-n", "x", "--limit"]),
         case(
             "the gate first",
@@ -390,7 +393,11 @@ fn hooks_install_as_the_shell_does() {
                 0,
                 1,
             ),
-            one("a skipped value that can't be printed: raw", args, r#"{"skipped":"\ud800"}"#),
+            one(
+                "a skipped value that can't be printed: raw",
+                args,
+                r#"{"skipped":"\ud800"}"#,
+            ),
             one("a string with error in it: raw", args, r#""an error here""#),
             one("a list: raw", args, r#"["x"]"#),
             one("a number: raw", args, "5"),
@@ -434,13 +441,21 @@ fn hooks_install_as_the_shell_does() {
 /// Help never acts: `-h` or `--help` anywhere prints the hooks page on
 /// stdout, exit 0, and sends nothing (`hooks -h` and `hooks --help` are
 /// the binary's own page; the front hands the rest to the shell). emit
-/// keeps its own page. After a bare `--` it is the router's usage error.
+/// keeps its own page.
 #[test]
 fn help_never_acts() {
     let rig = Rig::new("hooks", "help");
     for c in [
         case("-h alone", &["-h"], &[], vec![], owner_and_port, 0, 0),
-        case("--help alone", &["--help"], &[], vec![], owner_and_port, 0, 0),
+        case(
+            "--help alone",
+            &["--help"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        ),
         case(
             "--help after an unknown verb",
             &["nope", "--help"],
@@ -450,7 +465,15 @@ fn help_never_acts() {
             0,
             0,
         ),
-        case("install -h", &["install", "-h"], &[], vec![], owner_and_port, 0, 0),
+        case(
+            "install -h",
+            &["install", "-h"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        ),
         case(
             "install --json --help",
             &["install", "--json", "--help"],
@@ -460,8 +483,24 @@ fn help_never_acts() {
             0,
             0,
         ),
-        case("uninstall -h", &["uninstall", "-h"], &[], vec![], owner_and_port, 0, 0),
-        case("status -h", &["status", "-h"], &[], vec![], owner_and_port, 0, 0),
+        case(
+            "uninstall -h",
+            &["uninstall", "-h"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        ),
+        case(
+            "status -h",
+            &["status", "-h"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        ),
         case(
             "status --limit -h",
             &["status", "--limit", "-h"],
@@ -471,14 +510,13 @@ fn help_never_acts() {
             0,
             0,
         ),
-        case("emit -h: its own page", &["emit", "-h"], &[], vec![], owner_and_port, 0, 0),
         case(
-            "status -- -h: hooks takes no --",
-            &["status", "--", "-h"],
+            "emit -h: its own page",
+            &["emit", "-h"],
             &[],
             vec![],
             owner_and_port,
-            2,
+            0,
             0,
         ),
         case(

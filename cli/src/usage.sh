@@ -262,10 +262,23 @@ cmd_llm() {
 }
 
 # `k2 reserve` / `k2 release` are retiring: nothing reads reservations any
-# more. They are hidden (no help, study or schema entry) and take paths and
-# --agent <name> only. Any other argument starting with `-` is a usage
-# error that sends nothing: before, `k2 reserve --help` reserved a path
-# named `--help`. A later release removes both verbs.
+# more. They are hidden (no study or schema entry) and take paths and
+# --agent <name> only. -h or --help anywhere (before a bare --) prints a
+# short page and sends nothing (0.46.17); any other argument starting with
+# `-` is a usage error that sends nothing: before, `k2 reserve --help`
+# reserved a path named `--help`. A later release removes both verbs.
+_reserve_usage() {
+    cat <<'EOF'
+%include cli/text/help/reserve.txt
+EOF
+}
+
+_release_usage() {
+    cat <<'EOF'
+%include cli/text/help/release.txt
+EOF
+}
+
 # _reserve_args <verb> <args...> sets _RS_AGENT and _RS_PATHS.
 _reserve_args() {
     local verb="$1"; shift
@@ -285,6 +298,7 @@ _reserve_args() {
 }
 
 cmd_reserve() {
+    if _wants_help "$@"; then _reserve_usage; return 0; fi
     _reserve_args reserve "$@"
     [[ -z "$_RS_AGENT" ]] && { echo "Error: --agent required (or set K2_AGENT_NAME)" >&2; exit 1; }
     [[ ${#_RS_PATHS[@]} -eq 0 ]] && { echo "Error: at least one path required" >&2; exit 1; }
@@ -293,6 +307,7 @@ cmd_reserve() {
 }
 
 cmd_release() {
+    if _wants_help "$@"; then _release_usage; return 0; fi
     _reserve_args release "$@"
     [[ -z "$_RS_AGENT" ]] && { echo "Error: --agent required (or set K2_AGENT_NAME)" >&2; exit 1; }
     local params="agent=$(urlencode "$_RS_AGENT")"

@@ -2212,7 +2212,7 @@ fi
 # 0.46.17: these families print their help for -h/--help anywhere before a
 # bare -- and send nothing, so help needs no daemon.
 case "${1:-}" in
-    onboarding)
+    onboarding|reserve|release)
         for _a in "${@:2}"; do [ "$_a" = "--" ] && break; case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
 esac
 # `k2 checkin` is retired: its stub prints pointers and never calls the daemon.
@@ -46021,10 +46021,33 @@ cmd_llm() {
 }
 
 # `k2 reserve` / `k2 release` are retiring: nothing reads reservations any
-# more. They are hidden (no help, study or schema entry) and take paths and
-# --agent <name> only. Any other argument starting with `-` is a usage
-# error that sends nothing: before, `k2 reserve --help` reserved a path
-# named `--help`. A later release removes both verbs.
+# more. They are hidden (no study or schema entry) and take paths and
+# --agent <name> only. -h or --help anywhere (before a bare --) prints a
+# short page and sends nothing (0.46.17); any other argument starting with
+# `-` is a usage error that sends nothing: before, `k2 reserve --help`
+# reserved a path named `--help`. A later release removes both verbs.
+_reserve_usage() {
+    cat <<'EOF'
+k2 reserve <path>... [--agent <name>]       (retiring)
+
+Records that an agent is working on these paths. Nothing reads
+reservations any more, and a later release removes k2 reserve and
+k2 release. --agent defaults to this session's agent name; paths and
+--agent are all it takes.
+EOF
+}
+
+_release_usage() {
+    cat <<'EOF'
+k2 release [<path>...] [--agent <name>]     (retiring)
+
+Drops an agent's reservations: the paths named, or all of them. Nothing
+reads reservations any more, and a later release removes k2 reserve and
+k2 release. --agent defaults to this session's agent name; paths and
+--agent are all it takes.
+EOF
+}
+
 # _reserve_args <verb> <args...> sets _RS_AGENT and _RS_PATHS.
 _reserve_args() {
     local verb="$1"; shift
@@ -46044,6 +46067,7 @@ _reserve_args() {
 }
 
 cmd_reserve() {
+    if _wants_help "$@"; then _reserve_usage; return 0; fi
     _reserve_args reserve "$@"
     [[ -z "$_RS_AGENT" ]] && { echo "Error: --agent required (or set K2_AGENT_NAME)" >&2; exit 1; }
     [[ ${#_RS_PATHS[@]} -eq 0 ]] && { echo "Error: at least one path required" >&2; exit 1; }
@@ -46052,6 +46076,7 @@ cmd_reserve() {
 }
 
 cmd_release() {
+    if _wants_help "$@"; then _release_usage; return 0; fi
     _reserve_args release "$@"
     [[ -z "$_RS_AGENT" ]] && { echo "Error: --agent required (or set K2_AGENT_NAME)" >&2; exit 1; }
     local params="agent=$(urlencode "$_RS_AGENT")"

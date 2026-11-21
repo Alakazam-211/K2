@@ -3,7 +3,9 @@
 # more). In this release they are hidden and refuse any argument that
 # starts with `-` other than `--agent <name>`: before, `k2 reserve --help`
 # reserved a path named `--help`. The refusal is a usage error (exit 2,
-# the reason on stderr) and sends nothing. A call with paths still works.
+# the reason on stderr) and sends nothing. -h or --help anywhere prints a
+# short page instead (exit 0, sends nothing; tests/cli/help_acts_10.sh
+# checks each form). A call with paths still works.
 #
 # A stub daemon logs every request (method, path, query without the token
 # and project). No real daemon, no real home.
@@ -105,18 +107,35 @@ got
     ok
 }
 
-# ── Refused: any argument starting with `-` but --agent.
-refused "reserve --help"             reserve --help   tester --help
+# ── Refused: any argument starting with `-` but --agent (and the help
+# words, which print the page).
 refused "reserve -x"                 reserve -x       tester -x
 refused "release --foo"              release --foo    tester --foo
-refused "reserve -h"                 reserve -h       tester -h
-refused "release --help"             release --help   tester --help
 refused "reserve, a path then -x"    reserve -x       tester some/path -x
-refused "release, --agent then --help" release --help "" --agent tester --help
+refused "release, --agent then --x"  release --x      "" --agent tester --x
 refused "reserve, --agent=name"      reserve --agent=tester "" --agent=tester some/path
 # Refused before the agent check: with no agent name it is still exit 2.
-refused "reserve --help, no agent"   reserve --help   "" --help
+refused "reserve --nope, no agent"   reserve --nope   "" --nope
 refused "release -x, no agent"       release -x       "" -x
+# The help words print the page, exit 0, and send nothing.
+helped() { # helped <case> <verb> <agent> <args...>
+    local name="$1" verb="$2" agent="$3"; shift 3
+    k2_as "$agent" "$verb" "$@"
+    [ "$RC" = 0 ] || die "$name: exit $RC, wanted 0 (stderr: $ERR)"
+    ok
+    [ ! -s "$T/requests.log" ] || die "$name: a request was sent"
+    ok
+    [ -z "$ERR" ] || die "$name: stderr: $ERR"
+    ok
+    [ "$OUT" = "$(cat "$PROJECT_ROOT/cli/text/help/$verb.txt")" ] || die "$name: stdout was: $OUT"
+    ok
+}
+helped "reserve --help"              reserve tester --help
+helped "reserve -h"                  reserve tester -h
+helped "release --help"              release tester --help
+helped "release, --agent then --help" release "" --agent tester --help
+helped "reserve --help, no agent"    reserve "" --help
+helped "reserve --agent --help"      reserve "" --agent --help some/path
 # --agent's value is a name, never a flag, and it must be there.
 no_name() { # no_name <case> <verb> <args...>
     local name="$1" verb="$2"; shift 2
@@ -128,7 +147,7 @@ no_name() { # no_name <case> <verb> <args...>
     [ "$ERR" = "k2 $verb: '--agent' needs a name." ] || die "$name: stderr was: $ERR"
     ok
 }
-no_name "reserve --agent --help"     reserve --agent --help some/path
+no_name "reserve --agent --x"        reserve --agent --x some/path
 no_name "reserve --agent, no name"   reserve some/path --agent
 no_name "release --agent, no name"   release --agent
 
@@ -187,7 +206,7 @@ ok
 [ "$ERR" = "Error: at least one path required" ] || die "reserve with no path: stderr was: $ERR"
 ok
 
-# ── Hidden: no help page, study page or schema entry names them.
+# ── Hidden: no help tier, study page or schema entry names them.
 k2_as "" --help
 case "$OUT$ERR" in *"k2 reserve"*|*"k2 release"*) die "k2 --help names reserve or release" ;; esac
 ok

@@ -1,0 +1,6 @@
+k2 reserve <path>... [--agent <name>]       (retiring)
+
+Records that an agent is working on these paths. Nothing reads
+reservations any more, and a later release removes k2 reserve and
+k2 release. --agent defaults to this session's agent name; paths and
+--agent are all it takes.

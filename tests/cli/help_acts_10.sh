@@ -11,6 +11,8 @@
 #   - `k2 migrate status --help` asked for the status, and a value flag
 #     took the help word: `export-secrets --to -h --out f` sent the export
 #     with -h as the move key.
+#   - `k2 reserve --help` and `k2 release --help` were the usage error
+#     "'--help' is not a path" (exit 2): they had no help.
 #
 # Each section: every help form, with --help and with -h, prints exactly
 # the page's cli/text/help file and the stub daemon records nothing; the
@@ -169,6 +171,18 @@ page migrate.txt migrate import-secrets begin @H
 page migrate.txt migrate import-secrets f.k2mv --apply @H
 page migrate.txt migrate import-secrets --undo @H
 sends '^GET /cli/migrate/secrets/status ' migrate status
+
+echo "== reserve and release =="
+page reserve.txt reserve @H
+page reserve.txt reserve some/path @H
+page reserve.txt reserve --agent @H some/path
+page reserve.txt reserve --agent tester some/path @H
+page release.txt release @H
+page release.txt release some/path @H
+page release.txt release --agent @H
+page release.txt release --agent tester @H
+sends '^POST /cli/reserve ' reserve --agent tester some/path
+sends '^POST /cli/release ' release --agent tester
 
 echo ""
 echo "help_acts_10: $pass passed, $fail failed"

@@ -1,0 +1,6 @@
+k2 release [<path>...] [--agent <name>]     (retiring)
+
+Drops an agent's reservations: the paths named, or all of them. Nothing
+reads reservations any more, and a later release removes k2 reserve and
+k2 release. --agent defaults to this session's agent name; paths and
+--agent are all it takes.

@@ -601,10 +601,14 @@ publish subdomain list --help|publish/subdomain/list|out|0
 publish subdomain list -h|publish/subdomain/list|out|0
 push --help|push|out|0
 push -h|push|out|0
+release --help|release|out|0
+release -h|release|out|0
 remind --help|remind|out|0
 remind -h|remind|out|0
 remote-session --help|remote-session|out|0
 remote-session -h|remote-session|out|0
+reserve --help|reserve|out|0
+reserve -h|reserve|out|0
 root-helper --help|root-helper|out|0
 root-helper -h|root-helper|out|0
 send-feedback --help|send-feedback|out|0

@@ -334,6 +334,39 @@ run "$WORK/box-k5-dry" --version "$V5" --dry-run
 <<<"$out" grep -qF "k5 program:     https://github.com/Alakazam-211/K2/releases/download/v$V5/$K5A (+ .sig2: K2 update key, file:$K5A version:$V5)" || fail "dry run k5 line: $out"
 ok "dry run names the k5 program and the signature it will need"
 
+echo "== the first k5 release: 0.46.16 published no k5 program, 0.46.17 does =="
+# Pinned versions, not read from the script: v0.46.15 and v0.46.16 went out
+# with no k5-cli asset, so an install of either must not ask for one.
+# install_pinned <version> <box>: a fresh home, the curl log emptied, then
+# --version <version>.
+install_pinned() {
+	rm -rf "$WORK/home/k2/.local" "$WORK/home/k2/.config" "$WORK/curl.log"
+	run "$2" --version "$1"
+}
+release 0.46.16
+# As published: no k5-cli and no .sig2 in v0.46.16.
+rm -f "$WORK/rel/v0.46.16/$K5A" "$WORK/rel/v0.46.16/$K5A.sig2"
+install_pinned 0.46.16 "$WORK/box-k5-0.46.16"
+[ "$rc" -eq 0 ] || fail "a pinned 0.46.16 (no k5-cli published) must install: rc=$rc $out"
+! grep -q "/$K5A" "$WORK/curl.log" || fail "a pinned 0.46.16 asked for $K5A: $(cat "$WORK/curl.log")"
+[ ! -e "$K5" ] || fail "a pinned 0.46.16 installed $K5"
+cmp -s "$WORK/rel/v0.46.16/$DA" "$BIN" || fail "a pinned 0.46.16: the daemon is not the release asset"
+<<<"$out" grep -qF "The k5 program: v0.46.16 is older than 0.46.17, the first release that signs it; not installed" || fail "a pinned 0.46.16 must say k5 is skipped: $out"
+ok "pinned 0.46.16: no $K5A fetched or installed, the daemon installs (rc 0)"
+release 0.46.17
+d17="$WORK/rel/v0.46.17"
+{ printf '\177ELF'; printf 'K5_CLI_VERSION=0.46.17\0'; } >"$d17/$K5A"
+printf 'untrusted comment: test\nRUQGOOD-DAEMON-SIG SHA:%s\ntrusted comment: timestamp:1\tfile:%s\tversion:0.46.17\nGLOBAL\n' \
+	"$(sha "$d17/$K5A" | awk '{print $1}')" "$K5A" >"$d17/$K5A.sig2"
+install_pinned 0.46.17 "$WORK/box-k5-0.46.17"
+[ "$rc" -eq 0 ] || fail "a pinned 0.46.17 with a good k5 program: rc=$rc $out"
+grep -qx "https://github.com/Alakazam-211/K2/releases/download/v0.46.17/$K5A" "$WORK/curl.log" \
+	&& grep -qx "https://github.com/Alakazam-211/K2/releases/download/v0.46.17/$K5A.sig2" "$WORK/curl.log" \
+	|| fail "a pinned 0.46.17 must fetch $K5A and its .sig2: $(cat "$WORK/curl.log")"
+<<<"$out" grep -qF "Verifying the k5 program's minisign signature" && <<<"$out" grep -qF "Installed $K5, minisign-verified" || fail "a pinned 0.46.17 must verify and install k5: $out"
+cmp -s "$d17/$K5A" "$K5" || fail "a pinned 0.46.17: k5-cli is not the release asset"
+ok "pinned 0.46.17: $K5A and its .sig2 fetched, verified and installed beside the daemon"
+
 echo "== re-run with the helper current: nothing to change, no sudo =="
 SHIM_DOOR=0 run "$B1" --version "$V"
 [ "$rc" -eq 0 ] || fail "re-run: $out"
@@ -533,6 +566,22 @@ diff <(sed 's/^scope = .*//' "$B11/etc/k2-root-helper/daemon.toml") <(sed 's/^sc
 cmp -s "$B11/usr/local/libexec/k2-root-helper" "$B1/usr/local/libexec/k2-root-helper" \
 	&& cmp -s "$B11/etc/sudoers.d/k2-root-helper" "$B1/etc/sudoers.d/k2-root-helper" || fail "the two routes differ"
 ok "both routes end with the same helper bytes and sudoers line (scope follows the unit each one runs)"
+# provision-k2-server.sh (and bootstrap-k2-dedicated.sh, which runs it)
+# installs through install-daemon.sh: a pinned 0.46.16 there must not ask
+# for the k5 program either.
+B12="$WORK/box12"
+rm -rf "$WORK/home/k2/.local" "$WORK/irh.log" "$WORK/sudo.log" "$WORK/curl.log"
+set +e
+out="$(SHIM_UID=0 K2_INSTALL_ROOT="$B12" K2_ROOT_HELPER_TEST_PUBKEYS=RWTESTKEY K2_APP_ENGINE_PATH="$WORK/no-engine" \
+	SCRIPT_DIR="$SD" K2_RUN_USER=k2 K2_UNIT_NAME=k2-daemon K2_HOME="$WORK/home/k2" K2_VERSION=0.46.16 \
+	RAW_BASE="file:///nonexistent" bash "$STEP" 2>&1)"
+rc=$?
+set -e
+[ "$rc" -eq 0 ] || fail "provision steps 4 + 7a at 0.46.16: $out"
+! grep -q "/$K5A" "$WORK/curl.log" || fail "provisioning 0.46.16 asked for $K5A: $(cat "$WORK/curl.log")"
+[ ! -e "$K5" ] && cmp -s "$WORK/rel/v0.46.16/$DA" "$BIN" || fail "provisioning 0.46.16: k5 installed or the daemon missing"
+<<<"$out" grep -q "SUMMARY=installed (v0.46.16)" || fail "provisioning 0.46.16, 7a summary: $out"
+ok "provisioning a pinned 0.46.16: no $K5A fetched, the daemon and helper install"
 
 echo ""
 echo "PASS: install-daemon.sh root helper ($pass checks)"

@@ -133,21 +133,26 @@ pub(in crate::transport) fn from_process_env(name: &str) -> Lookup {
     }
 }
 
-/// The shell's `_k2_direct_url` for `https://<host>`: this computer
-/// (`localhost`, a name under `.localhost`, `[::1]`, or an address in
-/// 127.0.0.0/8 written as four numbers, as `_k2_url_is_literal_loopback`
-/// reads it), by the text alone. `127.example` is a name, which may use
-/// the proxy. One trailing dot is dropped, case ignored.
+/// The shell's `_k2_direct_url` for `https://<host>`, step for step:
+/// `host` is the URL's text after the scheme, cut at `/`, `?` and the
+/// last `@` (a caller may pass less: a name, or the text before its first
+/// `:`). This computer when it is `[::1]` or starts `[::1]:`; else, cut
+/// at its first `:`, one trailing dot off and lower-cased, `localhost` or
+/// a name ending `.localhost`; else what `_k2_url_is_literal_loopback`
+/// says for `https://<that>` (it cuts at `#` too: `localhost`, or an
+/// address in 127.0.0.0/8 written as four numbers). So `127.example` is
+/// a name, and `::1`, `::ffff:127.0.0.1` and `[::ffff:127.0.0.1]` are not
+/// this computer: they may use the proxy, as in the shell.
 pub fn loopback(host: &str) -> bool {
-    if host == "[::1]" {
+    if host == "[::1]" || host.starts_with("[::1]:") {
         return true;
     }
-    let h = host.strip_suffix('.').unwrap_or(host).to_ascii_lowercase();
-    // Ipv4Addr reads four numbers, each 0 to 255 with no leading zero:
-    // the shell's pattern.
-    h == "localhost"
-        || h.ends_with(".localhost")
-        || h.parse::<Ipv4Addr>().is_ok_and(|ip| ip.octets()[0] == 127)
+    let h = host.split(':').next().unwrap_or("");
+    let h = h.strip_suffix('.').unwrap_or(h).to_ascii_lowercase();
+    if h == "localhost" || h.ends_with(".localhost") {
+        return true;
+    }
+    crate::prelude::plain_http::url_is_literal_loopback(&format!("https://{h}"))
 }
 
 /// A URL's host, cut as the shell cuts it in `_k2_direct_url`: after the

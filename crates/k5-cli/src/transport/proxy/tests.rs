@@ -222,37 +222,107 @@ fn the_connect_head_is_curls() {
 }
 
 /// The shell's `_k2_direct_url` for `https://<host>`.
+/// The host part of an `https://` URL, and whether the shell's
+/// `_k2_direct_url` calls it this computer (no proxy). Read from the bash
+/// (cli/src/cli-tools-policy.sh), and checked against it below.
+const LOOPBACK_ROWS: &[(&str, bool)] = &[
+    ("localhost", true),
+    ("LOCALHOST", true),
+    ("localhost.", true),
+    ("LocalHost.", true),
+    ("localhost:8443", true),
+    ("LOCALHOST.:8443", true),
+    ("localhost#x", true),
+    ("a.localhost", true),
+    ("A.LOCALHOST.", true),
+    (".localhost", true),
+    ("127.0.0.1", true),
+    ("127.9.9.9", true),
+    ("127.255.255.255", true),
+    ("127.0.0.1.", true),
+    ("127.0.0.1:8443", true),
+    ("127.0.0.1#x", true),
+    ("[::1]", true),
+    ("[::1]:8443", true),
+    // A 127 address counts only as four numbers: these are names.
+    ("127.x", false),
+    ("127.evil.example", false),
+    ("127.0.0.1.example", false),
+    ("127.01.0.1", false),
+    ("127.256.0.1", false),
+    ("127.0.0", false),
+    ("127.0.0.1.#x", false),
+    ("box.example", false),
+    ("10.0.0.5", false),
+    ("localhost.example", false),
+    ("128.0.0.1", false),
+    ("localhost..", false),
+    ("x.localhost..", false),
+    ("a.localhost#x", false),
+    ("", false),
+    // IPv6: only [::1] as written. A bare ::1, an IPv4-mapped address
+    // and any other spelling of ::1 are cut at their first ':'.
+    ("::1", false),
+    ("::ffff:127.0.0.1", false),
+    ("[::ffff:127.0.0.1]", false),
+    ("[::ffff:127.0.0.1]:8443", false),
+    ("[::ffff:7f00:1]", false),
+    ("[0:0:0:0:0:0:0:1]", false),
+    ("[::1]x", false),
+    ("[::1].", false),
+];
+
 #[test]
 fn loopback_is_the_shells_direct_rule() {
-    for h in [
-        "localhost",
-        "LOCALHOST",
-        "localhost.",
-        "a.localhost",
-        "127.0.0.1",
-        "127.9.9.9",
-        "127.255.255.255",
-        "127.0.0.1.",
-        "[::1]",
-    ] {
-        assert!(loopback(h), "{h}");
+    for &(h, want) in LOOPBACK_ROWS {
+        assert_eq!(loopback(h), want, "{h}");
     }
-    // A 127 address counts only as four numbers: these are names.
-    for h in [
-        "127.x",
-        "127.evil.example",
-        "127.0.0.1.example",
-        "127.01.0.1",
-        "127.256.0.1",
-        "127.0.0",
-        "box.example",
-        "10.0.0.5",
-        "localhost.example",
-        "128.0.0.1",
-        "localhost..",
-        "",
-    ] {
-        assert!(!loopback(h), "{h}");
+}
+
+/// The shell's own `_k2_direct_url` (and the `_k2_url_is_literal_loopback`
+/// it calls), cut from cli/src/cli-tools-policy.sh and run by bash in the
+/// C locale, answers every row as the table does: the binary and the
+/// shell can't drift apart.
+#[cfg(unix)]
+#[test]
+fn the_shells_direct_url_answers_the_table() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../cli/src/cli-tools-policy.sh");
+    let src = std::fs::read_to_string(&path).expect("cli/src/cli-tools-policy.sh");
+    let cut = |name: &str| {
+        let head = format!("{name}() {{\n");
+        let start = src.find(&head).unwrap_or_else(|| panic!("{name} in {path:?}"));
+        let end = src[start..].find("\n}\n").expect("the function's end") + start + 3;
+        src[start..end].to_string()
+    };
+    let script = format!(
+        "set -u\n{}{}for h in \"$@\"; do if _k2_direct_url \"https://$h\"; then echo 1; else echo 0; fi; done\n",
+        cut("_k2_url_is_literal_loopback"),
+        cut("_k2_direct_url"),
+    );
+    let o = std::process::Command::new("bash")
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").expect("a PATH"))
+        .env("LC_ALL", "C")
+        .arg("-c")
+        .arg(&script)
+        .arg("bash")
+        .args(LOOPBACK_ROWS.iter().map(|(h, _)| *h))
+        .output()
+        .expect("run bash");
+    assert!(o.status.success(), "bash: {o:?}");
+    let said: Vec<bool> = String::from_utf8(o.stdout)
+        .expect("bash's answers")
+        .lines()
+        .map(|l| match l {
+            "1" => true,
+            "0" => false,
+            other => panic!("bash printed {other:?}"),
+        })
+        .collect();
+    assert_eq!(said.len(), LOOPBACK_ROWS.len(), "one answer per row");
+    for (&(h, want), got) in LOOPBACK_ROWS.iter().zip(said) {
+        assert_eq!(got, want, "the shell's _k2_direct_url for https://{h}");
     }
 }
 

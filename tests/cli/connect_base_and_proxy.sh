@@ -33,6 +33,9 @@
 #    call, with every proxy variable set. https to a remote control plane
 #    keeps the person's proxy (the stub proxy gets its CONNECT), and so
 #    does https to a name that only starts with 127 (127.evil.example).
+#    The other forms of the rule: localhost in any case or with one
+#    trailing dot, and [::1], go straight there; [::ffff:127.0.0.1] is not
+#    this computer as written and keeps the proxy.
 #
 # A stub daemon (loopback TCP), a stub control plane and a stub proxy each
 # log what reaches them. A second port is bound and closed: "no daemon"
@@ -305,6 +308,16 @@ reached "control plane on remote https: the person's proxy got the CONNECT" "^pr
 # the person's proxy.
 run nodaemon proxy "https://127.evil.example" publish subdomain list --json
 reached "control plane on https://127.evil.example: the person's proxy got the CONNECT" "^proxy CONNECT 127.evil.example:443 "
+# The rule's other loopback forms, as _k2_direct_url reads them: the name
+# localhost in any case and with one trailing dot, and [::1], go straight
+# there (a port nobody listens on); an IPv4-mapped address is not this
+# computer as written, so it keeps the person's proxy.
+for h in "localhost:$CLOSED" "LOCALHOST:$CLOSED" "localhost.:$CLOSED" "[::1]:$CLOSED"; do
+    run nodaemon proxy "https://$h" publish subdomain list --json
+    no_proxy_hit "control plane on https://$h"
+done
+run nodaemon proxy "https://[::ffff:127.0.0.1]:$CLOSED" publish subdomain list --json
+reached "control plane on https://[::ffff:127.0.0.1]: the person's proxy got the CONNECT" "^proxy CONNECT \[::ffff:(127\.0\.0\.1|7f00:1)\]:$CLOSED "
 
 echo "== 4. K2_HOST on another computer over plain http: one warning per run =="
 mkdir -p "$WORK/bin"

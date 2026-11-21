@@ -23,12 +23,12 @@ _permission_probe() {
     sock="$(_hook_sock)"
     if [ -n "${SCOPED_TOKEN:-}" ] && [ "$tok" = "$SCOPED_TOKEN" ] && [ -n "$sock" ] && [ -S "$sock" ] && ! _cli_skip_uds; then
         _k2_cfg_add header "Authorization: Bearer ${tok}"
-        out="$(_k2_curl "$_K2_CFG" -s -G --unix-socket "$sock" "http://localhost/cli/permission/enabled" \
+        out="$(_K2_CURL_TRIES=1 _k2_curl "$_K2_CFG" -s -G --unix-socket "$sock" "http://localhost/cli/permission/enabled" \
             --connect-timeout 1 --max-time 1 -w $'\n%{http_code}' 2>/dev/null)" || out=""
     elif [ -n "${PORT:-}" ]; then
         _k2_cfg_auth "$tok"
         local base
-        _k2_daemon_base base; out="$(_k2_curl "$_K2_CFG" -s -G "${base}/cli/permission/enabled" \
+        _k2_daemon_base base; out="$(_K2_CURL_TRIES=1 _k2_curl "$_K2_CFG" -s -G "${base}/cli/permission/enabled" \
             --connect-timeout 1 --max-time 1 -w $'\n%{http_code}' 2>/dev/null)" || out=""
     fi
     [[ "$out" == *$'\n200' ]] || return 1

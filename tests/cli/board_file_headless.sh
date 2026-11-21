@@ -184,9 +184,13 @@ assert z.testzip() is None
 PY
 ok "stock tools read it, and manifest.json comes first"
 owner POST /cli/board/file/create "$(pj '{"dir": A + "/nope"}' "$A" "$B")"; want 404 "no folder"; code_is not_a_workspace "no folder"
-owner POST /cli/board/file/create "$(pj '{"dir": A + "/.k2"}' "$A" "$B")"; want 422 "k2 folder"
+# Protected under .k2/ is an explicit list (the vault, secrets, the daemon's
+# own state; 00d860e5bd, the 11-18 ruling), so the vault folder is the refusal.
+mkdir -p "$A/.k2/vault"
+owner POST /cli/board/file/create "$(pj '{"dir": A + "/.k2/vault"}' "$A" "$B")"; want 422 "vault folder"; code_is protected "vault folder"
+[ -z "$(ls -A "$A/.k2/vault")" ] || fail "a refused create left a file in the vault folder: $(ls -A "$A/.k2/vault")"
 owner POST /cli/board/file/create '{"dir": "/tmp"}'; want 404 "outside"; code_is not_a_workspace "outside"
-ok "a new board goes only in a workspace's folder, never .k2/ or outside"
+ok "a new board goes only in a workspace's folder, never the vault folder or outside"
 curl -s -o /dev/null -w '%{http_code}' -X GET "$BASE/cli/board/file/create?token=$DTOKEN" | grep -q 405 || fail "GET create isn't 405"
 for r in start save blob/put copy copy/rescue; do
     code="$(curl -s -o /dev/null -w '%{http_code}' -X GET "$BASE/cli/board/file/$r?token=$DTOKEN")"

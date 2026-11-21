@@ -6,7 +6,7 @@
 //! agent subcommand`).
 //!
 //! - Every usage line, and a flag that takes a value as the last word
-//!   (`shift 2` under `set -e`: nothing printed, exit 1).
+//!   (`_need_value`'s line, exit 2, nothing sent).
 //! - `_hire_print`'s views, `--json`, each refusal's exit (3, 4, 2, 1), an
 //!   answer that is not JSON, a reader that raises (compared by its last
 //!   line), no answer (the line, then SIGPIPE), and one list above
@@ -115,10 +115,12 @@ fn the_words() {
         (&["team", "link", "t", "w", "x"], 2),
         (&["team", "link", "--x"], 2),
         (&["team", "link", "t", "w", "--scope", "{bad"], 2),
-        (&["team", "link", "t", "--kind"], 1),
+        (&["team", "link", "t", "--kind"], 2),
+        (&["team", "link", "t", "w", "--scope"], 2),
         (&["team", "unlink"], 2),
         (&["team", "unlink", ""], 2),
-        (&["team", "--workspace"], 1),
+        (&["team", "--workspace"], 2),
+        (&["team", "served", "--workspace"], 2),
         (&["team", "served", "x"], 2),
         (&["team", ""], 2),
         (&["team", "nope"], 2),
@@ -128,11 +130,13 @@ fn the_words() {
         (&["instances", "retire", "--x"], 2),
         (&["instances", "hire"], 2),
         (&["instances", "hire", "--x"], 2),
-        (&["instances", "hire", "--key"], 1),
+        (&["instances", "hire", "--key"], 2),
+        (&["instances", "hire", "r.json", "--key"], 2),
         (&["instances", "hire", "no-such.json"], 2),
         (&["instances", "x"], 2),
         (&["instances", "--json", "x"], 2),
-        (&["instance", "--key"], 1),
+        (&["instance", "--key"], 2),
+        (&["instances", "--json", "--key"], 2),
         (&["hire-root", "x"], 2),
         (&["hire-root", "set"], 2),
         (&["update"], 2),
@@ -142,6 +146,8 @@ fn the_words() {
         (&["complete"], 1),
         (&["complete", "--agent", "qa"], 1),
         (&["complete", "--agent", "", "--file", "f.md"], 1),
+        (&["complete", "--file", "f.md", "--agent"], 2),
+        (&["complete", "--agent"], 2),
     ] {
         v.push(case(
             "a usage line, nothing sent",

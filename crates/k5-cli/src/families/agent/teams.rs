@@ -12,8 +12,8 @@
 //! - The help word (`team help`, `instances help`) is handed back, before
 //!   anything: the front prints its captured page.
 //! - A flag that takes a value as the last word (`--kind`, `--scope`,
-//!   `--workspace`, `--key`) is `shift 2` past the end under `set -e`:
-//!   nothing printed, exit 1.
+//!   `--workspace`, `--key`) is `_need_value`'s line, exit 2, nothing
+//!   sent ([`out::need_value`]).
 
 use super::{cli, dumps, obj, s};
 use crate::cards::Decode;
@@ -119,9 +119,9 @@ fn stop(line: String, exit: Exit) -> Option<Parsed> {
     Some(Parsed::Stop(vec![line], exit))
 }
 
-/// `shift 2` with one word left, under `set -e`: exit 1, nothing printed.
-fn short() -> Option<Parsed> {
-    Some(Parsed::Stop(Vec::new(), Exit::Error))
+/// `_need_value "$@"` with no word after `flag`: its line, exit 2.
+fn short(flag: &str) -> Option<Parsed> {
+    Some(Parsed::Stop(vec![out::need_value(flag)], Exit::Usage))
 }
 
 /// The words after `team` (or `teams`). `None`: the help word.
@@ -140,7 +140,7 @@ pub fn parse_team(rest: &[&str]) -> Option<Parsed> {
                 match w {
                     "--kind" | "--scope" => {
                         let Some(v) = rest.get(i + 1) else {
-                            return short();
+                            return short(w);
                         };
                         if w == "--kind" {
                             kind = (*v).to_string();
@@ -203,7 +203,7 @@ pub fn parse_team(rest: &[&str]) -> Option<Parsed> {
                 match rest[i] {
                     "--workspace" => {
                         let Some(v) = rest.get(i + 1) else {
-                            return short();
+                            return short(rest[i]);
                         };
                         ws = (*v).to_string();
                         i += 2;
@@ -278,7 +278,7 @@ pub fn parse_instances(rest: &[&str]) -> Option<Parsed> {
                 match w {
                     "--key" => {
                         let Some(v) = rest.get(i + 1) else {
-                            return short();
+                            return short(rest[i]);
                         };
                         key = (*v).to_string();
                         i += 2;
@@ -314,7 +314,7 @@ pub fn parse_instances(rest: &[&str]) -> Option<Parsed> {
                 match rest[i] {
                     "--key" => {
                         let Some(v) = rest.get(i + 1) else {
-                            return short();
+                            return short(rest[i]);
                         };
                         key = (*v).to_string();
                         i += 2;
@@ -1154,7 +1154,10 @@ mod tests {
         );
         assert_eq!(
             team(&["--workspace"]),
-            Some(Parsed::Stop(vec![], Exit::Error))
+            Some(Parsed::Stop(
+                vec!["Error: --workspace takes a value".into()],
+                Exit::Usage
+            ))
         );
         assert!(matches!(team(&[""]), Some(Parsed::Stop(_, Exit::Usage))));
         assert_eq!(
@@ -1173,7 +1176,17 @@ mod tests {
         );
         assert_eq!(
             team(&["link", "t", "--kind"]),
-            Some(Parsed::Stop(vec![], Exit::Error))
+            Some(Parsed::Stop(
+                vec!["Error: --kind takes a value".into()],
+                Exit::Usage
+            ))
+        );
+        assert_eq!(
+            team(&["link", "t", "w", "--scope"]),
+            Some(Parsed::Stop(
+                vec!["Error: --scope takes a value".into()],
+                Exit::Usage
+            ))
         );
         assert_eq!(
             team(&["link", "", "t", "w"]),
@@ -1213,7 +1226,17 @@ mod tests {
         );
         assert_eq!(
             parse_instances(&["--key"]),
-            Some(Parsed::Stop(vec![], Exit::Error))
+            Some(Parsed::Stop(
+                vec!["Error: --key takes a value".into()],
+                Exit::Usage
+            ))
+        );
+        assert_eq!(
+            parse_instances(&["hire", "f.json", "--key"]),
+            Some(Parsed::Stop(
+                vec!["Error: --key takes a value".into()],
+                Exit::Usage
+            ))
         );
     }
 

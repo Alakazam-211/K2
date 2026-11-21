@@ -91,16 +91,17 @@ pub fn parse_update(words: &[&str]) -> Result<Update, Vec<String>> {
     Ok(Update { name, field, value })
 }
 
-/// `cmd_agent_complete`'s words: `(agent, file)`. `None`: a `--agent` or
-/// `--file` with nothing after it, where `set -u` stops the shell on
-/// `$2` with a line naming its own file (the shell's).
-pub fn parse_complete(words: &[&str]) -> Option<(String, String)> {
+/// `cmd_agent_complete`'s words: `(agent, file)`. `Err`: a `--agent` or
+/// `--file` with nothing after it, `_need_value`'s line (exit 2).
+pub fn parse_complete(words: &[&str]) -> Result<(String, String), String> {
     let (mut agent, mut file) = (String::new(), String::new());
     let mut i = 0;
     while i < words.len() {
         match words[i] {
             w @ ("--agent" | "--file") => {
-                let v = words.get(i + 1)?;
+                let Some(v) = words.get(i + 1) else {
+                    return Err(out::need_value(w));
+                };
                 if w == "--agent" {
                     agent = (*v).to_string();
                 } else {
@@ -111,7 +112,7 @@ pub fn parse_complete(words: &[&str]) -> Option<(String, String)> {
             _ => i += 1,
         }
     }
-    Some((agent, file))
+    Ok((agent, file))
 }
 
 /// `complete`, after the gates.
@@ -289,10 +290,17 @@ mod tests {
     fn the_complete_words() {
         assert_eq!(
             parse_complete(&["x", "--file", "f.md", "--agent", "qa"]),
-            Some(("qa".into(), "f.md".into()))
+            Ok(("qa".into(), "f.md".into()))
         );
-        assert_eq!(parse_complete(&["--agent"]), None);
-        assert_eq!(parse_complete(&[]), Some((String::new(), String::new())));
+        assert_eq!(
+            parse_complete(&["--agent"]),
+            Err("Error: --agent takes a value".to_string())
+        );
+        assert_eq!(
+            parse_complete(&["--file", "f.md", "--agent"]),
+            Err("Error: --agent takes a value".to_string())
+        );
+        assert_eq!(parse_complete(&[]), Ok((String::new(), String::new())));
     }
 
     #[test]

@@ -216,10 +216,10 @@ fn run_words(args: &[OsString], words: &[&str], note: Option<&str>) -> Option<Ex
         "team" | "teams" => teams_form(teams::parse_team(rest)?),
         "instances" | "instance" => teams_form(teams::parse_instances(rest)?),
         "hire-root" => teams_form(teams::parse_root(rest)),
-        "complete" => {
-            let (agent, file) = plane::parse_complete(rest)?;
-            Ok(Form::Complete(agent, file))
-        }
+        "complete" => match plane::parse_complete(rest) {
+            Ok((agent, file)) => Ok(Form::Complete(agent, file)),
+            Err(line) => Ok(Form::Halt(vec![line], Exit::Usage)),
+        },
         "update" => match plane::parse_update(rest) {
             Ok(u) => Ok(Form::Update(u)),
             Err(lines) => Ok(Form::Halt(lines, Exit::Usage)),
@@ -583,7 +583,6 @@ mod tests {
             &["agent", "templates", "help"][..],
             &["agent", "team", "help"],
             &["agent", "instances", "help"],
-            &["agent", "complete", "--file", "f", "--agent"],
             &["agent", "conf", "--help"],
             &["agent", "list", "-h"],
             &["agent", "nope", "-h"],

@@ -201,8 +201,8 @@ last clone preview ws1 --host
 last clone to https://h.example ws1 --token
 last clone ws1 --dest
 
-echo "== skin =="
-last skin user chat bob --app
+echo "== app user chat (cmd_skin) =="
+last app user chat bob --app
 
 echo "== inbox =="
 last inbox list --folder

@@ -121,7 +121,7 @@ pub enum Form {
     Help,
     /// `_clone_die <code> <hint> <rc>`.
     Die(&'static str, String, Exit),
-    Run(Sub, Opts),
+    Run(Sub, Box<Opts>),
 }
 
 /// `lst(k)`: the comma list's stripped, non-empty names.
@@ -242,7 +242,7 @@ pub fn parse(words: &[&str]) -> Option<Form> {
         w => (Sub::Bare(w.to_string()), words),
     };
     Some(match opts(rest)? {
-        Ok(o) => Form::Run(sub, o),
+        Ok(o) => Form::Run(sub, Box::new(o)),
         Err(f) => f,
     })
 }
@@ -405,7 +405,7 @@ fn run_with(args: &[OsString], form: Form, mut settings: Settings) -> Exit {
             return super::Shown::out(text).print();
         }
         Form::Die(code, hint, exit) => return die(code, &hint, exit),
-        Form::Run(sub, o) => (sub, o),
+        Form::Run(sub, o) => (sub, *o),
     };
     // The remote token off argv: --token-stdin reads one line from stdin.
     let mut stdin_token = crate::prompt::Secret::default();
@@ -902,7 +902,7 @@ mod tests {
 
     fn run_of(f: Option<Form>) -> (Sub, Opts) {
         match f {
-            Some(Form::Run(sub, o)) => (sub, o),
+            Some(Form::Run(sub, o)) => (sub, *o),
             other => panic!("not a run: {other:?}"),
         }
     }

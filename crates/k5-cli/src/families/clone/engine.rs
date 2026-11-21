@@ -177,7 +177,7 @@ fn py_in(x: &str, v: &Value) -> E<bool> {
 fn with_password(body: &Value, pw: &Secret) -> Vec<u8> {
     let head = dumps(body);
     let mut out: Vec<u8> = Vec::with_capacity(head.len() + pw.expose().len() * 6 + 16);
-    out.extend_from_slice(head[..head.len() - 1].as_bytes());
+    out.extend_from_slice(&head.as_bytes()[..head.len() - 1]);
     if head.len() > 2 {
         out.extend_from_slice(b", ");
     }

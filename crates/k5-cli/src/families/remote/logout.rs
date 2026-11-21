@@ -46,10 +46,9 @@ pub fn proxied(url: &str) -> bool {
         return false;
     }
     let origin = match url.split_once("://") {
-        Some((scheme, rest)) => format!(
-            "{scheme}://{}",
-            rest.split(['/', '?']).next().unwrap_or("")
-        ),
+        Some((scheme, rest)) => {
+            format!("{scheme}://{}", rest.split(['/', '?']).next().unwrap_or(""))
+        }
         None => url.to_string(),
     };
     !matches!(remote::routed(&origin), Some(b) if b.via.is_none())

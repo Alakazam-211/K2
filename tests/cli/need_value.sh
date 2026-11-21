@@ -168,6 +168,11 @@ echo "== agent =="
 last agent complete --agent
 last agent complete --agent a1 --file
 last agent team link --kind
+last agent team link t w --scope
+last agent team --workspace
+last agent team served --workspace
+last agent instances hire r.json --key
+last agent instances --key
 
 echo "== vault =="
 last vault fetch https://example.invalid/ --max-bytes
@@ -178,9 +183,26 @@ last vault fetch https://example.invalid/ --fmt
 echo "== app =="
 last app pairing setup --ios
 last app pairing setup --host
+last app requests acme --since
+last app key mint acme --label
+last app data put acme x --to
+last app resources --app
+last app resources trends --window
+last app access ws --core
 
 echo "== publish =="
 last publish subdomain create --target
+last publish subdomain point staging --target
+last publish subdomain target staging --target
+
+echo "== clone =="
+last clone proposals --why
+last clone preview ws1 --host
+last clone to https://h.example ws1 --token
+last clone ws1 --dest
+
+echo "== skin =="
+last skin user chat bob --app
 
 echo "== inbox =="
 last inbox list --folder

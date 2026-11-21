@@ -25,6 +25,7 @@
 
 import React, { useCallback, useContext, useMemo, useState } from 'react'
 import { PrimaryRoom } from '@/components/Room/PrimaryRoom'
+import { PageLiveContext } from '@/contexts/TabVisibilityContext'
 import { useRoom, useRoomProjects } from '@/components/Room/RoomContext'
 import { PinnedSessionBody } from '@/components/SessionView/AgentSessionChrome'
 import { SessionColumnsContext, useSessionColumnsHost } from '@/components/SessionView/SessionColumns'
@@ -87,10 +88,16 @@ export interface TicketThreadPaneProps {
 }
 
 export function TicketThreadPane(props: TicketThreadPaneProps): React.JSX.Element {
+  // On screen whenever it is drawn (the Tickets page, a ticket's window,
+  // Zen's Tickets view), though the window's page isn't the agents' room:
+  // the Thread follows the person's scroll (Jump to bottom) and marks what
+  // they read, as the old Agent tab's terminal did.
   return (
-    <PrimaryRoom>
-      <TicketThreadBody key={props.feedbackId} {...props} />
-    </PrimaryRoom>
+    <PageLiveContext.Provider value={true}>
+      <PrimaryRoom>
+        <TicketThreadBody key={props.feedbackId} {...props} />
+      </PrimaryRoom>
+    </PageLiveContext.Provider>
   )
 }
 

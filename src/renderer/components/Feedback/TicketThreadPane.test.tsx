@@ -35,23 +35,26 @@ vi.mock('@/kessel-term/TerminalPane', () => ({ TerminalPane: () => <div data-tes
 vi.mock('@/components/Thread/ThreadSenderAvatars', () => ({ AgentAvatar: () => null }))
 // The Thread's list is the agent chat's own (its tests cover it); this
 // stand-in records where it reads from and draws the real message box.
-const column = vi.hoisted(() => ({ props: [] as Array<{ addr: string; conversationId: string | null }> }))
-vi.mock('@/components/SessionView/ThreadOverlayColumn', () => ({
-  ThreadOverlayColumn: (p: { addr: string; conversationId: string | null; composeBar: React.ReactNode }) => {
+const column = vi.hoisted(() => ({ props: [] as Array<{ addr: string; conversationId: string | null }>, live: [] as boolean[] }))
+vi.mock('@/components/SessionView/ThreadOverlayColumn', async () => {
+  const { useIsTabVisible } = await import('@/contexts/TabVisibilityContext')
+  return { ThreadOverlayColumn: (p: { addr: string; conversationId: string | null; composeBar: React.ReactNode }) => {
     column.props.push({ addr: p.addr, conversationId: p.conversationId })
+    column.live.push(useIsTabVisible())
     return (
       <div data-testid="stub-thread-column" data-addr={p.addr}>
         {p.composeBar}
       </div>
     )
-  },
-}))
+  } }
+})
 
 import type React from 'react'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { TicketAgentRail, TicketRailTerminalContext } from './TicketAgentRail'
 import type { FeedbackShow, QuickAnswerOption } from './feedback-api'
 import { primaryScope } from '@/kessel/server-scope'
+import { PageLiveContext } from '@/contexts/TabVisibilityContext'
 import {
   TICKET_THREAD_FEATURE,
   ticketConversationId,
@@ -142,6 +145,7 @@ beforeEach(() => {
   localStorage.clear()
   ticketAnswer = { status: 'answered', answered: true, delivered: true, deliveryReason: null }
   column.props = []
+  column.live = []
   features = new Set([TICKET_THREAD_FEATURE])
   vi.spyOn(primaryScope(), 'serverSupports').mockImplementation((f) => features.has(f))
   cli.post.mockReset()
@@ -300,6 +304,22 @@ describe('ticket-thread-v1 on', () => {
     expect(keys.some((k) => k.endsWith(`k2:composer:draft:agent:ticket:${TICKET}:thread`))).toBe(true)
     // The workspace chat's own draft (its agent name is the project id).
     expect(keys.some((k) => k.endsWith('k2:composer:draft:agent:p1:thread'))).toBe(false)
+  })
+})
+
+describe('on screen off the agents’ page', () => {
+  it('the Thread counts as looked at (it follows the scroll and marks what is read)', () => {
+    // The window's page is Tickets (or Zen): the app says its primary room
+    // isn't live, but the ticket's Thread is on screen.
+    render(
+      <PageLiveContext.Provider value={false}>
+        <TicketAgentRail
+          feedbackId={TICKET} item={ITEM} error={null} nowSec={NOW} options={OPTIONS} optionsLive onChanged={() => {}}
+          projectId="p1" projectPath="/ws" sessionId={null} sessionKind={null} canonicalSessionId={null}
+        />
+      </PageLiveContext.Provider>,
+    )
+    expect(column.live.at(-1)).toBe(true)
   })
 })
 

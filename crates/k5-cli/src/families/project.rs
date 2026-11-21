@@ -452,8 +452,14 @@ fn parse_view(rest: &[&str]) -> Result<(Verb, bool), String> {
 fn parse_msg(rest: &[&str]) -> Result<(Verb, bool), String> {
     let mut j = false;
     let mut words: Vec<&str> = Vec::new();
+    // After a bare `--` every word is a positional, as typed.
+    let mut dashes = false;
     for w in rest {
-        if *w == "--json" {
+        if dashes {
+            words.push(w);
+        } else if *w == "--" {
+            dashes = true;
+        } else if *w == "--json" {
             j = true;
         } else if *w != "-" && w.starts_with('-') {
             return Err(usage(&format!(
@@ -2138,6 +2144,24 @@ mod tests {
         assert!(verb(&["view", "p", "--agent", ""]).is_err());
         assert!(verb(&["msg", "a", "b", "c"]).unwrap_err().contains("a b c"));
         assert!(verb(&["msg", "--x"]).is_err());
+        // After `--` a word with a dash is the text; a second `--` too.
+        assert_eq!(
+            verb(&["msg", "--", "-x", "--json"]).unwrap_err(),
+            usage(&format!(
+                "too many arguments \u{2014} did you mean: {} project msg \"-x --json\"?",
+                k2_client::brand::CLI_NAME
+            ))
+        );
+        assert_eq!(
+            verb(&["msg", "--"]).unwrap_err(),
+            usage("msg requires <text> (or \"-\" to read it from stdin)")
+        );
+        match verb(&["msg", "--json", "--", "--", "--help"]).unwrap() {
+            (Verb::Msg { project, text, two, .. }, j) => {
+                assert_eq!((project.as_str(), text.as_str(), two, j), ("--", "--help", true, true))
+            }
+            other => panic!("{other:?}"),
+        }
         assert_eq!(
             verb(&["msg", "-"]).unwrap().0,
             Verb::Msg {

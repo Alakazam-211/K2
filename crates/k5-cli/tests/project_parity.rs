@@ -166,6 +166,8 @@ fn the_words() {
         &["msg", "a", "b", "c d"],
         &["msg", "--x"],
         &["msg", "--"],
+        &["msg", "--", "-x", "--json", "y"],
+        &["msg", "--json", "--"],
         &["read", "--after"],
         &["read", "--limit"],
         &["read", "a", "b"],
@@ -616,6 +618,16 @@ fn msg_and_read() {
                 owner_and_port,
                 0,
                 4,
+            ),
+            // After a bare `--` the words are the text as typed.
+            case(
+                "msg: a text that starts with a dash, after --",
+                &["msg", "--json", "Acme", "--", "-- --help"],
+                &[],
+                vec![mine.clone(), posted("null", true)],
+                owner_and_port,
+                0,
+                2,
             ),
             case(
                 "msg: the author is the PoC",

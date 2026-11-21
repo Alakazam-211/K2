@@ -47,6 +47,8 @@ fn a_raise_part_way() {
     );
 }
 
+/// `_compute_json`: a key ending in `Token` first, the rest in order; a
+/// value is one field whatever it holds.
 #[test]
 fn compute_json_puts_a_token_first() {
     assert_eq!(
@@ -56,13 +58,27 @@ fn compute_json_puts_a_token_first() {
         ]),
         r#"{"confirmToken": "t1", "phase": "drop-prev"}"#
     );
+    // `Token=` in a value is no secret key: it keeps its place.
     assert_eq!(
         cj(&[
             ("purge", Field::B("1".into())),
             ("keep", Field::B("0".into())),
             ("host", Field::S("aToken=b".into()))
         ]),
-        r#"{"host": "aToken=b", "purge": true, "keep": false}"#
+        r#"{"purge": true, "keep": false, "host": "aToken=b"}"#
+    );
+    // A newline in a value never splits it into keys.
+    assert_eq!(
+        cj(&[("sid", Field::S("own_a\nToken=b".into()))]),
+        r#"{"sid": "own_a\nToken=b"}"#
+    );
+    // An empty secret is left out, as any empty value is.
+    assert_eq!(
+        cj(&[
+            ("confirmToken", Field::S(String::new())),
+            ("all", Field::B("1".into()))
+        ]),
+        r#"{"all": true}"#
     );
 }
 

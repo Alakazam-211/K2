@@ -480,39 +480,25 @@ impl Ctx {
     }
 }
 
-/// `_compute_json`, with its one rule [`sew::json`] has no room for: an
-/// argument `K2_CJ_<name>=<value>` with `Token=` in it rides stdin, so
-/// it comes first, as text, under its whole name.
+/// `_compute_json` (`cli/src/compute-lib.sh`): every value reaches its
+/// Python on stdin, and the keys the shell treats as secrets (a name
+/// ending in `Token`, here a string field) come first, then the rest,
+/// each in the order given. A value is one field whatever it holds (a
+/// newline or `Token=` in it changes nothing), and an empty one is left
+/// out ([`sew::json`]).
 pub fn cj(fields: &[(&'static str, Field)]) -> String {
-    let mut first: Vec<(String, Field)> = Vec::new();
-    let mut rest: Vec<(String, Field)> = Vec::new();
-    for (key, f) in fields {
-        let (suffix, text) = match f {
-            Field::S(t) => ("", t),
-            Field::N(t) => ("_n", t),
-            Field::B(t) => ("_b", t),
-            Field::J(t) => ("_j", t),
-            Field::V(_) => {
-                rest.push((key.to_string(), f.clone()));
-                continue;
-            }
-        };
-        let arg = format!("{key}{suffix}={text}");
-        if !arg.contains("Token=") {
-            rest.push((key.to_string(), f.clone()));
-            continue;
-        }
-        for line in arg.split('\n') {
-            if let Some((k, v)) = line.split_once('=') {
-                if !k.is_empty() && !v.is_empty() {
-                    first.push((k.to_string(), Field::S(v.to_string())));
-                }
+    fn secret(k: &str, f: &Field) -> bool {
+        k.ends_with("Token") && matches!(f, Field::S(_) | Field::V(_))
+    }
+    let mut ordered: Vec<(&str, Field)> = Vec::with_capacity(fields.len());
+    for first in [true, false] {
+        for (k, f) in fields {
+            if secret(k, f) == first {
+                ordered.push((*k, f.clone()));
             }
         }
     }
-    first.extend(rest);
-    let borrowed: Vec<(&str, Field)> = first.iter().map(|(k, f)| (k.as_str(), f.clone())).collect();
-    sew::json(&borrowed).unwrap_or_default()
+    sew::json(&ordered).unwrap_or_default()
 }
 
 #[cfg(test)]

@@ -314,6 +314,17 @@ pub(super) fn after_delete(resolved: &ResolvedOverlay, doc_id: &str, before: &ov
     true
 }
 
+/// The hint when a message moved from a ticket's old comments (marked
+/// imported) can't be deleted.
+pub(crate) const MOVED_READ_ONLY_HINT: &str = "This message came over from the ticket's old comments and can't be deleted.";
+
+/// The `409 imported_read_only` a ticket's Thread answers for a moved
+/// message, in the ticket's words; `None` for any other Thread (the clone
+/// wording stays).
+pub(super) fn moved_read_only(resolved: &ResolvedOverlay) -> Option<CliResponse> {
+    is_ticket(resolved).then(|| error_json("409 Conflict", "imported_read_only", MOVED_READ_ONLY_HINT))
+}
+
 /// `GET /cli/thread/activity?addr=ticket:<id>` for an App pass: the ticket's
 /// read right (`tickets:read`, checked when the address resolved) is the
 /// gate, not `activity:read`. Counts only, as every guest turn.

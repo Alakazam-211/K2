@@ -416,6 +416,40 @@ async fn every_ticket_change_moves_updated_at() {
     }
 }
 
+/// Bite: a message moved from a ticket's old comments can't be deleted, and
+/// the refusal says so in the ticket's words (never the clone wording).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_moved_ticket_message_refuses_delete_in_the_tickets_words() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let tag = &uuid::Uuid::new_v4().to_string()[..6];
+    let ws = seed_ws(&env, &format!("ttm{tag}"));
+    let id = uuid::Uuid::new_v4().to_string();
+    let old = uuid::Uuid::new_v4().to_string();
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO feedback (id, project_id, agent_name, kind, title, priority, status, created_at, updated_at) \
+             VALUES (?1, ?2, 'agent-a', 'question', 'old ask', 3, 'waiting', 1, 1)",
+            rusqlite::params![id, ws.id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO feedback_comments (id, feedback_id, author, body, created_at) VALUES (?1, ?2, 'owner', 'an old reply', 2)",
+            rusqlite::params![old, id],
+        )
+        .unwrap();
+        k2_core::feedback_thread::move_ticket_with(&conn, &id).expect("move");
+    }
+    let r = post(port, "/cli/thread/message/delete", OWNER, json!({ "addr": format!("ticket:{id}"), "id": old })).await;
+    assert_eq!((r.status, code_of(&r).as_str()), (409, "imported_read_only"), "{}", r.body);
+    assert_eq!(r.json()["error"]["hint"], "This message came over from the ticket's old comments and can't be deleted.", "{}", r.body);
+    assert!(!r.body.contains("clone"), "{}", r.body);
+    assert_eq!(show(port, OWNER, &id).await["comments"][0]["body"], "an old reply", "nothing was deleted");
+}
+
 fn rollback_copy(comment_id: &str) -> Option<String> {
     let db = k2_core::db::shared();
     let conn = db.lock();

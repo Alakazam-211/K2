@@ -92,7 +92,7 @@ pub(crate) fn handle(params: &HashMap<String, String>, session_author: &str) -> 
         Err(e) if e == overlay::DELETE_NOT_A_PERSONS_MESSAGE => {
             return error_json("409 Conflict", "not_a_persons_message", "only a person's own message can be deleted (an agent's post, a card or a notice can't)")
         }
-        Err(e) if e == overlay::IMPORTED_READ_ONLY => return imported_read_only(),
+        Err(e) if e == overlay::IMPORTED_READ_ONLY => return super::ticket_addr::moved_read_only(&resolved).unwrap_or_else(imported_read_only),
         Err(e) => return error_json("500 Internal Server Error", "store", e),
     };
     let already = d.before.is_none();

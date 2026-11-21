@@ -372,14 +372,14 @@ pub fn parse_secret(rest: &[&str]) -> Act {
     let sname = rest.get(2).copied().unwrap_or("");
     if act.is_empty() {
         return Act::Page {
-            key: "publish/secret",
+            key: super::SECRET_PAGE,
             stderr: true,
             exit: Exit::Usage,
         };
     }
     if act == "help" {
         return Act::Page {
-            key: "publish/secret",
+            key: super::SECRET_PAGE,
             stderr: false,
             exit: Exit::Ok,
         };

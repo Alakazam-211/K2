@@ -11,9 +11,10 @@
 //! What runs, in the shell's order:
 //!
 //! 1. The settings ([`crate::daemon`]), the two gates
-//!    ([`crate::prelude::gate`]); `publish` is an `id` tool, so with
-//!    `HOOK_SOCK` set: the stale-passport or require-passport lines, exit
-//!    3 ([`crate::prelude::id_tool`]).
+//!    ([`crate::prelude::gate`]; no connection gate for `secret` alone or
+//!    `secret help`, which only print a page); `publish` is an `id` tool,
+//!    so with `HOOK_SOCK` set: the stale-passport or require-passport
+//!    lines, exit 3 ([`crate::prelude::id_tool`]).
 //! 2. The words ([`parse`]): the help (on stderr, exit 0), a usage line
 //!    (`_publish_err usage <hint>`: `Error: <hint>`, or one line of JSON
 //!    after `--json`; exit 2), or the requests.
@@ -83,6 +84,8 @@ pub const VERBS: &[crate::route::Verb] = &[];
 
 /// The tool's name in the shell's policy (`_cli_tool_id_for_verb`).
 pub const TOOL: &str = "publish";
+/// `_publish_secret_usage`'s page (`cli/text/help/publish/secret.txt`).
+pub const SECRET_PAGE: &str = "publish/secret";
 
 /// The routes.
 pub const RUN: &str = "/cli/publish/run";
@@ -314,8 +317,14 @@ fn run_with(
     mut settings: Settings,
     prep: Option<cp::Prep>,
 ) -> Exit {
-    if let Some(gate) = prelude::gate(&settings) {
-        return gate.stop();
+    // The shell skips its connection gate for `secret` alone or `secret
+    // help` (`_skip_conn_gate`): only the page, no daemon needed. The
+    // virtual-desktop guard comes first and still holds.
+    let secret_page = matches!(act, Act::Page { key: SECRET_PAGE, .. });
+    match prelude::gate(&settings) {
+        Some(prelude::Gate::CannotConnect) if secret_page => {}
+        Some(gate) => return gate.stop(),
+        None => {}
     }
     let would_refuse = passport::current(args).would_refuse();
     if let Some(stop) = prelude::id_tool(&settings, hook_sock, would_refuse, TOOL) {

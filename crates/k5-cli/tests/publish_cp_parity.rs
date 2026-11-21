@@ -1393,3 +1393,65 @@ fn subdomain_list_large() {
         1,
     ));
 }
+
+/// `secret` alone and `secret help` need no daemon (the shell skips its
+/// connection gate for them): the page with no port and no token, nothing
+/// sent. A help flag there is the front's page or the shell's. The
+/// virtual-desktop guard still refuses the word `help` (exit 3).
+#[test]
+fn the_secret_page_needs_no_daemon() {
+    let rig = Rig::new(VERB, "secretnod");
+    let none = |name: &'static str, args: &'static [&'static str], code: i32| {
+        case(name, args, &[], vec![], nothing, code, 0)
+    };
+    check_all(
+        &rig,
+        vec![
+            // native: publish secret help
+            none("secret help, no daemon", &["secret", "help"], 0),
+            none("secrets help, no daemon", &["secrets", "help"], 0),
+            none(
+                "secret help and more words, no daemon",
+                &["secret", "help", "x", "y"],
+                0,
+            ),
+            // native: publish secret
+            none("secret alone, no daemon: on stderr", &["secret"], 2),
+            none("secret -h, no daemon", &["secret", "-h"], 0),
+            shell(none(
+                "secret add -h, no daemon",
+                &["secret", "add", "api", "K", "-h"],
+                0,
+            )),
+            shell(none(
+                "secrets list --help, no daemon",
+                &["secrets", "list", "--help"],
+                0,
+            )),
+            case(
+                "secret help, a port and no token",
+                &["secret", "help"],
+                &[],
+                vec![],
+                port_only,
+                0,
+                0,
+            ),
+            // Still gated: a verb that asks the daemon.
+            none(
+                "secret list, no daemon: cannot connect",
+                &["secret", "list", "api"],
+                1,
+            ),
+            case(
+                "secret help, no owner fallback and no passport: refused",
+                &["secret", "help"],
+                &[("K2_NO_OWNER_FALLBACK", "1")],
+                vec![],
+                nothing,
+                3,
+                0,
+            ),
+        ],
+    );
+}

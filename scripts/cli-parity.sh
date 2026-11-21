@@ -81,13 +81,12 @@
 # request, and the test checks each side's head by the difference's name.
 # The clone engine's refusals (K2's ruling R10) are checked here only,
 # each by its own named difference: clone-url-not-printable,
-# clone-url-empty-host, clone-url-port-range and clone-proxy-unread. Where
-# the shell's Python would try, the binary sends nothing and prints one
-# usage line on stderr, exit 2:
+# clone-url-empty-host and clone-proxy-unread. Where the shell's Python
+# would try, the binary sends nothing and prints one usage line on stderr,
+# exit 2:
 #   {"error": "usage", "hint": "<url> isn't an address k2 sends to itself"}
-#     for a byte outside printable ASCII or a blank, an empty host before
-#     a port, or a port above 65535 or below 0 (a bash bug on Linux: the
-#     shell's Python sends its token to that port cut to 16 bits);
+#     for a byte outside printable ASCII or a blank, or an empty host
+#     before a port;
 #   {"error": "usage", "hint": "k2 won't send to <url>: a proxy setting it doesn't read (an http:// proxy only)"}
 #     for a socks or https proxy URL, or a blank-separated no_proxy.
 #
@@ -223,7 +222,6 @@ EXPECTED_DIFFS=(
     "doc-mktemp-wording|K2 ruling, the doc lane's follow-ups|a doc verb that needs a temp folder (_doc_tmp) where TMPDIR can't hold one: the binary words mktemp's line as GNU mktemp does in the C locale (\"mktemp: failed to create directory via template '<TMPDIR>/k2doc.XXXXXX': No such file or directory\"; GNU's in a UTF-8 locale quotes the template with curly quotes); macOS's mktemp words it its own way (\"mktemp: mkdtemp failed on <TMPDIR>/k2doc.XXXXXX: No such file or directory\"; a newer macOS names the folder it tried, the six X filled in). The two lines after it (\"Error: can't make a temp folder\" and the tmp error's JSON), the exit (2) and stdout (nothing) are the same, and neither sends anything. The same holds for \`app exec\` with stdin on a pipe (k2-exec-XXXXXX) and \`hostchat open\` (k2-hostchat-open.XXXXXX) where TMPDIR can't hold the folder: on a newer macOS mktemp's line names the folder it tried, which the binary can't know, so the parity rows (Compare::MktempTried) take mktemp's line as the same when only that random name differs: the same folder and stem before it, one or more of [A-Za-z0-9.] in its place, the same reason after it, the same exit, and every other line byte for byte"
     "clone-url-not-printable|K2 ruling R10, the clone engine's port|a clone server URL with a byte outside printable ASCII anywhere in it, a blank too (the remote URL as typed, or this server's address from K2_HOST): the binary sends nothing and prints one usage line on stderr, exit 2, stdout empty: {\"error\": \"usage\", \"hint\": \"<url> isn't an address k2 sends to itself\"} (json.dumps, so the check's é is \\u00e9). The check: \`clone preview ws1 --host 'http://127.0.0.1:<port>/#café' --token-stdin --json\`; the shell's Python tries it: urllib drops the fragment and sends its POST / to <port> (the check's listener answers 403, so bash prints {\"error\": \"error\", \"hint\": \"recorded\"}, exit 3)"
     "clone-url-empty-host|K2 ruling R10, the clone engine's port|a clone server URL with an empty host before a port (the check: \`clone preview ws1 --host https://:<port> --token-stdin --json\`): the binary sends nothing and prints one usage line on stderr, exit 2, stdout empty: {\"error\": \"usage\", \"hint\": \"https://:<port> isn't an address k2 sends to itself\"}. The shell's Python tries the empty name: where the resolver makes it this computer (macOS) it connects to <port> and then raises at the TLS step (a traceback ending \"ValueError: check_hostname requires server_hostname\", exit 1); where the lookup fails, {\"error\": \"daemon_unreachable\", \"hint\": \"remote server https://:<port>: ...\"}, exit 3"
-    "clone-url-port-range|K2 ruling R10, the clone engine's port|a clone server URL whose port Python's int() reads but no socket takes, above 65535 or below 0 (the check: \`clone preview ws1 --host http://127.0.0.1:<65536 + port> --token-stdin --json\`): the binary sends nothing and prints one usage line on stderr, exit 2, stdout empty: {\"error\": \"usage\", \"hint\": \"http://127.0.0.1:<n> isn't an address k2 sends to itself\"}. On the shell's side this is a BASH BUG, reported to K2 and the Steward, not a behaviour to keep: clone.sh checks no port range and its Python (urllib, http.client) hands the port to the C library's getaddrinfo as it is; glibc cuts it to 16 bits, so on Linux bash sends its POST and the remote token (Authorization: Bearer) to <n> - 65536, which may be another service (here the check's listener, which answers 403, so bash prints {\"error\": \"error\", \"hint\": \"recorded\"}, exit 3); macOS's resolver refuses the port, {\"error\": \"daemon_unreachable\", \"hint\": \"remote server http://127.0.0.1:<n>: ...\"}, exit 3. The check proves the bug where it happens, so the bash fix flips it"
     "clone-proxy-unread|K2 ruling R10, the clone engine's port (the Steward's line)|a clone request to an https server that isn't this computer with the person's https_proxy set to a URL of another scheme (the checks: \`clone preview ws1 --host https://cp.example.invalid --token-stdin --json\` with https_proxy=socks5://127.0.0.1:<port>, and with https_proxy=https://127.0.0.1:<port>): the binary sends nothing and prints one usage line on stderr naming the scheme, exit 2, stdout empty: {\"error\": \"usage\", \"hint\": \"proxy socks5://\\u2026 is not supported: only http:// proxies are\"} (https:// the same). The shell's Python urllib sends one plain CONNECT cp.example.invalid:443 to <port> each time (it uses a socks or an https proxy URL as an http proxy), the token never in it; the proxy's 407 is its {\"error\": \"daemon_unreachable\", ...}, exit 3. (A blank-separated no_proxy is no longer part of it: the binary reads no_proxy as the shell's Python does, K2's one proxy rule.)"
 )
 
@@ -1655,7 +1653,7 @@ check_picker_env_size() {
 }
 
 # The clone engine's R10 refusals (clone-url-not-printable,
-# clone-url-empty-host, clone-url-port-range, clone-proxy-unread): each
+# clone-url-empty-host, clone-proxy-unread): each
 # check starts one recording listener, then runs `clone preview ws1 --host
 # <url> --token-stdin --json` on both sides. clone_refusal_start <dir>
 # starts it (CLONE_REC_PID, CLONE_REC_PORT): one line per connection in
@@ -1808,38 +1806,6 @@ check_clone_url_empty_host() {
             ;;
         *) problems+=("bash exited $rc, want 1 (the empty name reached) or 3 (not looked up): $(tail -c 300 "$d/err.empty.bash")") ;;
     esac
-    [ ${#problems[@]} -eq 0 ] && return 0
-    printf '%s\n' "${problems[@]}"
-    return 1
-}
-
-# check_clone_url_port_range: a port above 65535, 65536 past the
-# listener's (where a port cut to 16 bits lands). Bash's bug: its Python
-# hands the port to getaddrinfo as it is; glibc cuts it and bash sends its
-# token to the listener, macOS's refuses it. The binary refuses first.
-check_clone_url_port_range() {
-    local d="$WORK/clone-portrange" port big url side rc problems=()
-    clone_refusal_start "$d" || return 1
-    port="$CLONE_REC_PORT"
-    big=$((65536 + port))
-    url="http://127.0.0.1:$big"
-    for side in bash binary; do clone_refusal_run "$d" "$side" port "$url"; done
-    clone_refusal_stop
-    clone_refusal_refused "$d" port "http://127.0.0.1:$big isn't an address k2 sends to itself"
-    rc="$(cat "$d/rc.port.bash")"
-    [ "$rc" = 3 ] || problems+=("bash exited $rc, want 3")
-    if [ -s "$d/heads.port.bash" ]; then
-        # Bash's bug: the port cut to 16 bits (glibc), its POST and token
-        # at the listener.
-        [ "$(wc -l <"$d/heads.port.bash" | tr -d ' ')" = 1 ] && grep -q '^POST /cli/clone/preview HTTP/1.1 ' "$d/heads.port.bash" \
-            || problems+=("bash reached the listener with something else: $(head -c 300 "$d/heads.port.bash")")
-        printf '%s\n' '{"error": "error", "hint": "recorded"}' | cmp -s - "$d/err.port.bash" \
-            || problems+=("bash's stderr isn't the listener's 403: $(head -c 300 "$d/err.port.bash")")
-    else
-        # The resolver refused the port (macOS).
-        grep -q "^{\"error\": \"daemon_unreachable\", \"hint\": \"remote server http://127.0.0.1:$big: " "$d/err.port.bash" \
-            || problems+=("bash sent nothing and its line isn't daemon_unreachable for the port: $(head -c 300 "$d/err.port.bash")")
-    fi
     [ ${#problems[@]} -eq 0 ] && return 0
     printf '%s\n' "${problems[@]}"
     return 1

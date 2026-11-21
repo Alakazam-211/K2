@@ -31,7 +31,9 @@
 # Settings (env):
 #   K2_CI_RELEASE_BUILDS_X86  linux-x86_64,linux-app   [release] builds of run 1
 #   K2_CI_RELEASE_BUILDS_ARM  linux-aarch64            [release] builds of run 2
-#   K2_COMPUTE_WORKSPACE      --workspace for k2 ci (as compute-release.sh)
+#   K2_COMPUTE_WORKSPACE      --workspace for k2 ci (as compute-release.sh):
+#                             the pre-flight and submit refuse a handle whose
+#                             folder isn't this checkout
 #   K2_SIGNER_CMD             a stand-in for k2-signer (tests; release.sh refuses it)
 #
 # State (the audit dir, ~/k2-release-audit/<v>/compute): ci-run-x86.txt,
@@ -60,7 +62,14 @@ k2ccr_ci() {
 k2ccr_strip() { sed $'s/\x1b\\[[0-9;]*m//g'; }
 
 k2ccr_preflight() {
-    local version="$1" arm="$2" pf rc=0 out
+    local version="$1" arm="$2" pf rc=0 out wserr
+    # K2_COMPUTE_WORKSPACE must be this checkout's own workspace (a handle
+    # is per server; compute-release.sh's k2cr_check_workspace).
+    if ! wserr="$(k2cr_check_workspace 2>&1)"; then
+        echo "ERROR: $(printf '%s\n' "$wserr" | head -1 | sed 's/^ *✗ //')" >&2
+        printf '%s\n' "$wserr" | tail -n +2 >&2
+        return 1
+    fi
     if ! pf="$(k2s_run preflight k2 2>"${TMPDIR:-/tmp}/k2ccr-pf.$$")"; then
         echo "ERROR: the release signer isn't ready for project k2: $(k2ccr_strip < "${TMPDIR:-/tmp}/k2ccr-pf.$$" | tr '\n' ' ')" >&2
         echo "  (the setup: k2 ci setup --plan --out setup.json here, then at the signing Mac: sudo k2-signer-admin apply-setup <file>)" >&2
@@ -152,6 +161,7 @@ for p in v.get("placed") or []:
 k2ccr_submit() {
     local version="$1" commit="$2" rc=0
     [ -n "$K2CCR_KEYS" ] || { echo "  ✗ no accepted node keys (the pre-flight didn't run)" >&2; return 1; }
+    k2cr_check_workspace || return 1
     rm -f "$K2CR_STATE"/ci-run-*.txt
     k2ccr_submit_one x86 "${K2_CI_RELEASE_BUILDS_X86:-linux-x86_64,linux-app}" "$version" "$commit" || rc=1
     K2CR_ARM_SUBMIT_OK=""

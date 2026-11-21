@@ -288,7 +288,8 @@ boxes, and the daemon is the file the signing user signs from compute
 (0.46.9's shadow run reproduced it). Any difference fails the collect.
 
 **Running a compute release.** Before the first one:
-- the release checkout's workspace on z3mbpZ (`pod-leader`) needs grants
+- the release checkout's workspace on z3mbpZ (`$WS`: its own handle, read
+  as in the ops checklist's A.0; not plain `pod-leader`) needs grants
   with `--ci` on k2n7-vin to k2n10-vin and k2n12-vin (`--ci` also allows
   `--exclusive`; on a node z3mbpZ shares, its share needs `exclusive`);
 - each release node has `kernel.yama.ptrace_scope >= 1`;
@@ -405,9 +406,9 @@ line).
   plan; the values are sealed to the node when the job starts.
 - **Vault names and grants:** `K2_GMAIL_CLIENT_ID`,
   `K2_GMAIL_CLIENT_SECRET` and (optional) `K2_MICROSOFT_CLIENT_ID`, in
-  the release workspace (`pod-leader`). Only a person grants them, per
-  node:
-  `k2 vault grant K2_GMAIL_CLIENT_ID --to compute:pod-leader/k2n7-vin --as env --env-name BUILD_GMAIL_CLIENT_ID`
+  the release workspace (`$WS`, the checkout's own handle; A.0 below).
+  Only a person grants them, per node:
+  `k2 vault grant K2_GMAIL_CLIENT_ID --scope "ws:$WS" --to "compute:$WS/k2n7-vin" --as env --env-name BUILD_GMAIL_CLIENT_ID`
   (and the same for the others, as `BUILD_GMAIL_CLIENT_SECRET` and
   `BUILD_MICROSOFT_CLIENT_ID`). A grant can't use a `K2_*` env name; the
   job asks for the `BUILD_*` name and the build script maps it back.
@@ -464,10 +465,17 @@ Run in this order. "Owner" steps need Rosson (a person) in a K2 terminal
 or GUI shell on z3mbpZ. Nothing here needs a GitHub runner.
 
 **A. Rust and the release checkout**
+0. The release checkout's workspace handle, for every command below that
+   says `$WS`. It is per server, so don't assume it: on z3mbpZ it is
+   `pod-leader-4`, and plain `pod-leader` there is a different workspace.
+   From the release checkout, this reads the handle of the workspace whose
+   folder is the checkout; check that it prints the handle you expect (and
+   not `WS=`) before you paste anything that uses it:
+   `WS="$(k2 workspace list --json | python3 -c 'import json,os,sys; t=os.path.realpath(sys.argv[1]); print(next((w["handle"] for w in json.load(sys.stdin)["workspaces"] if os.path.realpath(w.get("path") or "") == t), ""))' "$(git rev-parse --show-toplevel)")"; echo "WS=$WS"`
 1. `rustup toolchain install 1.99.1 --profile minimal -c rustfmt,clippy`
    (release.sh Step 0.4 also does this).
 2. Grant the release workspace the Linux nodes, with CI (owner):
-   `for n in k2n7-vin k2n8-vin k2n9-vin k2n10-vin; do k2 compute grant $n --workspace pod-leader --ci --max-time 2h --max-parallel 3 --max-queued 20 --max-disk 200G; done`
+   `for n in k2n7-vin k2n8-vin k2n9-vin k2n10-vin; do k2 compute grant $n --workspace "$WS" --ci --max-time 2h --max-parallel 3 --max-queued 20 --max-disk 200G; done`
    Don't grant it k2-arch or k2n11-vin. `k2 compute nodes` (from the
    release checkout) must list them.
 
@@ -482,11 +490,11 @@ or GUI shell on z3mbpZ. Nothing here needs a GitHub runner.
    works today (job 288ebba1).
 
 **B. OAuth values for the release builds (owner, release checkout)**
-1. `(set -a; . ./.env; set +a; printf %s "$K2_GMAIL_CLIENT_ID" | k2 vault set K2_GMAIL_CLIENT_ID --scope ws:pod-leader --kind generic --delivery env; printf %s "$K2_GMAIL_CLIENT_SECRET" | k2 vault set K2_GMAIL_CLIENT_SECRET --scope ws:pod-leader --kind generic --delivery env)`
+1. `(set -a; . ./.env; set +a; printf %s "$K2_GMAIL_CLIENT_ID" | k2 vault set K2_GMAIL_CLIENT_ID --scope "ws:$WS" --kind generic --delivery env; printf %s "$K2_GMAIL_CLIENT_SECRET" | k2 vault set K2_GMAIL_CLIENT_SECRET --scope "ws:$WS" --kind generic --delivery env)`
    and the same for `K2_MICROSOFT_CLIENT_ID` if `.env` has a real one.
 2. For each of k2n7-vin, k2n8-vin, k2n9-vin:
-   `k2 vault grant K2_GMAIL_CLIENT_ID --to compute:pod-leader/<node> --as env --env-name BUILD_GMAIL_CLIENT_ID`
-   `k2 vault grant K2_GMAIL_CLIENT_SECRET --to compute:pod-leader/<node> --as env --env-name BUILD_GMAIL_CLIENT_SECRET`
+   `k2 vault grant K2_GMAIL_CLIENT_ID --scope "ws:$WS" --to "compute:$WS/<node>" --as env --env-name BUILD_GMAIL_CLIENT_ID`
+   `k2 vault grant K2_GMAIL_CLIENT_SECRET --scope "ws:$WS" --to "compute:$WS/<node>" --as env --env-name BUILD_GMAIL_CLIENT_SECRET`
    (and `K2_MICROSOFT_CLIENT_ID` as `BUILD_MICROSOFT_CLIENT_ID`).
 3. Try it with no release:
    `bash scripts/lib/compute-release.sh --shadow-only "$(git rev-parse HEAD)"`

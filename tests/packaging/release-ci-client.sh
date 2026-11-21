@@ -148,6 +148,10 @@ if a[:2] == ["ci", "evidence"]:
     sys.exit(0)
 if a[:2] == ["compute", "cancel"]:
     sys.exit(0)
+if a[:3] == ["workspace", "list", "--json"]:
+    p = os.environ.get("STUB_WS_FILE")
+    print(open(p).read() if p else json.dumps({"ok": True, "workspaces": []}))
+    sys.exit(0)
 print("k2 stand-in: unexpected " + " ".join(a), file=sys.stderr)
 sys.exit(2)
 STUB
@@ -234,6 +238,20 @@ rc="$(STUB_PLAN_RC_ARM=3 run armplan 'k2_linux_builds_preflight; mode')"
 rc="$(STUB_SIGNER=keychain run keychain 'k2_linux_builds_preflight; mode')"
 [ "$rc" = 0 ] && has keychain "MODE github github" && has keychain "needs K2_SIGNER=k2sign" && pass "K2_SIGNER=keychain: the client path can't sign, so GitHub" \
     || fail "keychain" "rc=$rc $(cat "$tmp/out-keychain")"
+
+# K2_COMPUTE_WORKSPACE must be this checkout's own workspace (a handle is per
+# server: on the release Mac plain pod-leader is another workspace).
+python3 -c 'import json,sys; json.dump({"ok": True, "workspaces": [{"handle": "rel-a", "path": sys.argv[1]}, {"handle": "rel-b", "path": sys.argv[2]}]}, open(sys.argv[3], "w"))' \
+    "$ROOT" "$tmp/elsewhere" "$tmp/workspaces.json"
+rc="$(cd "$ROOT" && STUB_WS_FILE="$tmp/workspaces.json" K2_COMPUTE_WORKSPACE=rel-a run wsown 'k2_linux_builds_preflight; mode')"
+[ "$rc" = 0 ] && has wsown "MODE compute compute" && called wsown "k2 workspace list --json" \
+    && called wsown "--only-keys $K1,$K2K --plan --workspace rel-a" \
+    && pass "K2_COMPUTE_WORKSPACE is this checkout's workspace: the plan goes with --workspace rel-a" || fail "ws own" "rc=$rc $(cat "$tmp/out-wsown" "$tmp/calls-wsown")"
+rc="$(cd "$ROOT" && STUB_WS_FILE="$tmp/workspaces.json" K2_COMPUTE_WORKSPACE=rel-b run wsother 'k2_linux_builds_preflight; mode')"
+[ "$rc" = 0 ] && has wsother "MODE github github" && has wsother "K2_COMPUTE_WORKSPACE=rel-b is the workspace at $tmp/elsewhere, not this checkout" \
+    && has wsother "FALL BACK TO GITHUB" && ! called wsother "ci release" && ! called wsother "k2-signer preflight" \
+    && pass "K2_COMPUTE_WORKSPACE names another folder's workspace: refused before the signer or any plan, so GitHub, loudly" \
+    || fail "ws other" "rc=$rc $(cat "$tmp/out-wsother" "$tmp/calls-wsother")"
 
 FLOW='k2_linux_builds_preflight; k2_shadow_start; k2_shadow_collect; k2_compute_stage; mode; echo "BUNDLE $(k2ccr_bundle)"; { cat "$K2_SHADOW_STATE/staged.txt" 2>/dev/null || true; } | sed "s/^/STAGED /"'
 echo "1.6c → 7.9c → 8.5:"

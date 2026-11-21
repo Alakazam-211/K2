@@ -345,6 +345,11 @@ fn local_plain_http_warn(settings: &Settings, args: &[OsString]) {
     }
     let host = first(k2_client::env_names::HOST)
         .unwrap_or_else(|| crate::daemon::DEFAULT_HOST.to_string());
+    // An https:// K2_HOST is not plain http: no warning. Only these two
+    // spellings, as the shell's `case` reads them.
+    if is_https_host(&host) {
+        return;
+    }
     let rest: Vec<OsString> = args.iter().skip(1).cloned().collect();
     let prelude = crate::prelude::plain_http::step(&rest, &host, false, String::new);
     if matches!(prelude, crate::prelude::plain_http::Step::Warn(_)) {
@@ -358,6 +363,12 @@ fn local_plain_http_warn(settings: &Settings, args: &[OsString]) {
         "warning: {} is sending this server's owner token to {host} over plain http, unencrypted. That's fine on a private network such as a tailnet; elsewhere use https.",
         cli_name!()
     ));
+}
+
+/// `case "$HOST" in https://*|HTTPS://*)`: the shell's test for an https
+/// daemon address, exactly those two spellings.
+fn is_https_host(host: &str) -> bool {
+    host.starts_with("https://") || host.starts_with("HTTPS://")
 }
 
 fn run_with(args: &[OsString], form: Form, mut settings: Settings) -> Exit {
@@ -902,6 +913,16 @@ mod tests {
             Some(Form::Run(sub, o)) => (sub, *o),
             other => panic!("not a run: {other:?}"),
         }
+    }
+
+    #[test]
+    fn an_https_daemon_address_is_the_shells_two_spellings() {
+        assert!(is_https_host("https://192.0.2.10"));
+        assert!(is_https_host("https://box.lan"));
+        assert!(is_https_host("HTTPS://box.lan"));
+        assert!(!is_https_host("Https://box.lan"));
+        assert!(!is_https_host("http://box.lan"));
+        assert!(!is_https_host("box.lan"));
     }
 
     #[test]

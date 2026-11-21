@@ -62494,23 +62494,18 @@ if row.get("aliases"):
 '
 }
 
-# _explain_kit ID JSON: the docs kit's `explain` for one of its ids, on the
-# route that answers the kit's own pages with no file
-# (/cli/board/file/verb: its explain and capabilities read no file, so no
-# path is sent). Before 0.46.17 a kit id went to `k2 doc explain <id>`,
-# which took the id as a doc's path: a file of that name here was opened
-# as the doc. Prints the kit's page (or its JSON with JSON=1) and exits
-# with the kit's exit; a refusal by its row (exit the row's); any other
-# error as k2 board prints it.
+# _explain_kit ID JSON: the docs kit's `explain` for one of its ids, on
+# GET /cli/kit/explain?id=<id>[&json=1]: documentation, so it answers with
+# Board files on or off, and it reads no file (no path is sent). Before
+# 0.46.17 a kit id went to `k2 doc explain <id>`, which took the id as a
+# doc's path: a file of that name here was opened as the doc. Prints the
+# kit's page (or its JSON with JSON=1) and exits with the kit's exit; a
+# refusal by its row (exit the row's); any other error as k2 board prints it.
 _explain_kit() {
-    local id="$1" json_out="$2" body
-    _setup_jstr "$id"
-    if [ "$json_out" = 1 ]; then
-        body="{\"argv\":[\"explain\",${_SETUP_J}],\"json\":true}"
-    else
-        body="{\"argv\":[\"explain\",${_SETUP_J}],\"json\":false}"
-    fi
-    _compute_split "$(_compute_send POST /cli/board/file/verb "$body")"
+    local id="$1" json_out="$2" query
+    query="id=$(urlencode "$id")"
+    [ "$json_out" = 1 ] && query="${query}&json=1"
+    _compute_split "$(_compute_send GET /cli/kit/explain "$query")"
     printf '%s' "$_CP_BODY" | python3 -c '
 import json, sys
 status, as_json = sys.argv[1], sys.argv[2] == "1"

@@ -3039,14 +3039,6 @@ html:not([data-style="glass"]) [data-ticket-thread-pane] > [data-ticket-thread-h
 }
 html:not([data-style="glass"]) [data-ticket-thread-pane] > [data-ticket-thread-header] > .thread-float-scrim,
 [data-zen-root] [data-ticket-thread-pane] > [data-ticket-thread-header] > .thread-float-scrim { display: none; }
-/* Glass: its foot follows the tile's inner curve with a plain overflow clip,
-   not the tile foot's clip-path (TILE_FOOT_CLIP), under which the frosted
-   bands' masks are lost and their fades end in a hard line. */
-html[data-style="glass"] [data-ticket-thread-pane]:not([data-zen-root] *) {
-  overflow: hidden;
-  border-bottom-left-radius: calc(var(--radius-box) - var(--tile-edge-width));
-  border-bottom-right-radius: calc(var(--radius-box) - var(--tile-edge-width));
-}
 /* Its band over the quick answers and the box reaches up over the room the
    newest message keeps from them (TICKET_REST_GAP_PX, 40px in all), so the
    newest message rests clear of it and Jump to bottom sits on it. */

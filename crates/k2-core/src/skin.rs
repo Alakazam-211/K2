@@ -7333,16 +7333,7 @@ fn resolve_token_by(key: TokenKey, used: bool) -> Result<Option<SkinPass>, Strin
                     let app_ok: bool = r.get(9)?;
                     let chat_ok: bool = r.get(10)?;
                     let tie = match (principal_id.as_ref(), r.get::<_, Option<String>>(11)?) {
-                        (Some(pid), Some(ws)) if session != 0 => Some(ties::Tie {
-                            principal_id: pid.clone(),
-                            workspace_id: ws,
-                            host_ok: r.get::<_, Option<i64>>(12)?.unwrap_or(0) != 0,
-                            reasons: serde_json::from_str(&r.get::<_, Option<String>>(13)?.unwrap_or_default()).unwrap_or_default(),
-                            set_by: r.get::<_, Option<String>>(14)?.unwrap_or_default(),
-                            set_at: r.get::<_, Option<i64>>(15)?.unwrap_or(0),
-                            // Filled below, outside this row read.
-                            rooms_ok: Vec::new(),
-                        }),
+                        (Some(pid), Some(ws)) if session != 0 => Some(ties::Tie::from_resolve_row(pid.clone(), ws, r)?),
                         _ => None,
                     };
                     let app = if session_b {

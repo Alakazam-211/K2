@@ -257,6 +257,21 @@ pub struct Tie {
 }
 
 impl Tie {
+    /// The tie a session token's row names (`skin::resolve_token_by`,
+    /// columns 12 to 15). `rooms_ok` is filled after the row read
+    /// (`with_opened_rooms`).
+    pub(crate) fn from_resolve_row(principal_id: String, workspace_id: String, r: &rusqlite::Row<'_>) -> rusqlite::Result<Tie> {
+        Ok(Tie {
+            principal_id,
+            workspace_id,
+            host_ok: r.get::<_, Option<i64>>(12)?.unwrap_or(0) != 0,
+            reasons: serde_json::from_str(&r.get::<_, Option<String>>(13)?.unwrap_or_default()).unwrap_or_default(),
+            set_by: r.get::<_, Option<String>>(14)?.unwrap_or_default(),
+            set_at: r.get::<_, Option<i64>>(15)?.unwrap_or(0),
+            rooms_ok: Vec::new(),
+        })
+    }
+
     /// Did an owner open `room` of `app` to this test login (0.46.17)?
     pub fn opened(&self, app: &str, room: &str) -> bool {
         self.rooms_ok.iter().any(|(a, r)| a == app && r == room)

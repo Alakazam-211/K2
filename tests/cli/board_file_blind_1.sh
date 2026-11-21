@@ -54,7 +54,7 @@ R=$(rev_of h-1)
 [ -n "$R" ] || die "no rev for h-1"
 apply "$(printf '{"ops":[{"op":"del","id":"h-1","rev":"%s"}]}' "$R")" || die "del h-1: exit $?"
 after=$(k2 board --file "$F" list) || die "list: exit $?"
-if <<<"$after" grep -Eq '(^|[^A-Za-z0-9-])c-1([^A-Za-z0-9-]|$)'; then
+if printf '%s\n' "$after" | grep -Eq '(^|[^A-Za-z0-9-])c-1([^A-Za-z0-9-]|$)'; then
   echo "connector c-1 survived the delete:"
   k2 board --file "$F" read c-1 || die "read c-1: exit $?"
 else

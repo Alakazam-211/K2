@@ -20,6 +20,7 @@ import { MicOffIcon } from '@/components/icons/K2Icons'
 import { pausedText, type VideoTile as Tile } from '@/lib/voice/video-labels'
 import { sinkZoom, viewTransform, zoomResetKey } from '@/lib/voice/share-zoom'
 import type { VideoController } from '@/stores/video-core'
+import { isOwnCameraTile, useNativeSelfView } from '@/lib/voice/native-self-view'
 import { useTileZoom, ZoomControls } from './TileZoom'
 
 function placeholderLine(t: Tile): string | null {
@@ -67,9 +68,12 @@ export interface VideoTileProps {
 export default function VideoTile({ tile, ctl, corner, fill = false, zoomable = false, compact = false }: VideoTileProps): React.JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const frameRef = useRef<HTMLDivElement>(null)
+  // Your camera in its own native window (lib/voice/native-self-view.ts):
+  // this tile shows your picture and opens no sink. Never a blank tile.
+  const nativeSelf = useNativeSelfView((s) => s.showing) && isOwnCameraTile(tile)
   const held = tile.state !== 'live'
   // Off and unsupported tracks never need a sink; paused ones keep theirs, held.
-  const wantsSink = tile.state === 'live' || tile.state === 'paused'
+  const wantsSink = !nativeSelf && (tile.state === 'live' || tile.state === 'paused')
   const sinkTile = tile.large ? 'large' : 'grid'
 
   useEffect(() => {
@@ -84,7 +88,7 @@ export default function VideoTile({ tile, ctl, corner, fill = false, zoomable = 
     ctl.setHeld(tile.key, held)
   }, [ctl, tile.key, held])
 
-  const zoomOn = zoomable && tile.state === 'live'
+  const zoomOn = zoomable && tile.state === 'live' && !nativeSelf
   const zoom = useTileZoom({ enabled: zoomOn, resetKey: zoomResetKey(tile.key, tile.state), frameRef, canvasRef })
   // The sink asks for a sharper picture while zoomed in; fit again after.
   const wantSharp = sinkZoom(zoom.view)
@@ -94,8 +98,8 @@ export default function VideoTile({ tile, ctl, corner, fill = false, zoomable = 
     return () => ctl.setZoom(tile.key, 1)
   }, [ctl, tile.key, wantSharp])
 
-  const line = placeholderLine(tile)
-  const cameraOff = tile.state === 'off' && tile.source === 'camera'
+  const line = nativeSelf ? 'Your camera is in its own window' : placeholderLine(tile)
+  const cameraOff = nativeSelf || (tile.state === 'off' && tile.source === 'camera')
   const avatarSize = compact ? 40 : tile.large || fill ? 72 : 56
   // The name's chip, with the mic when it's off: on the picture's bottom
   // left, or under the avatar while the camera's off.
@@ -150,6 +154,7 @@ export default function VideoTile({ tile, ctl, corner, fill = false, zoomable = 
       data-speaking={tile.speaking ? 'true' : 'false'}
       data-large={tile.large ? 'true' : 'false'}
       data-self={tile.self ? 'true' : 'false'}
+      data-native-self={nativeSelf ? 'true' : undefined}
       data-zoomable={zoomOn ? 'true' : undefined}
       data-zoomed={zoom.zoomed ? 'true' : undefined}
       data-k2-chamfer="surface"

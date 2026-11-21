@@ -1016,6 +1016,10 @@ pub fn run() {
             // so a call's log says whether it ran DeepFilterNet3.
             #[cfg(feature = "native-voice")]
             native_voice::log_noise_removal(app.handle());
+            // The native self-view's thread (0.46.17; macOS only, a no-op
+            // elsewhere): your own camera in a small window of its own.
+            #[cfg(feature = "native-voice")]
+            native_voice::self_view::init(app.handle());
 
             // 0.46.11 — macOS: `~/.local/bin/k2` + one marked PATH line, no
             // admin (k2_client::cli_install). The daemon runs the same heal
@@ -1549,6 +1553,7 @@ pub fn run() {
             commands::permissions::permissions_open_screen_settings,
             commands::native_voice::voice_native_status,
             commands::native_voice::voice_native_session_leave,
+            commands::native_voice::voice_self_view,
             commands::permissions::permissions_request_apple_events,
             commands::permissions::permissions_request_local_network,
             // Phase 2 Unit 6 — `commands::whats_new::*` shims

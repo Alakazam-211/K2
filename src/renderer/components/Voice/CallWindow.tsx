@@ -21,6 +21,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { useStore } from 'zustand'
 import DesktopChromeLeft from '@/components/TopBar/DesktopChromeLeft'
 import DesktopChromeRight from '@/components/TopBar/DesktopChromeRight'
 import { titleBarDragOnMouseDown, titleBarOnContextMenu, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
@@ -32,6 +33,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { keepCallWindowFrame, popInCall } from '@/stores/call-popout'
 import { loadSharePick } from '@/stores/call-share'
 import { retainVideo, video } from '@/stores/video'
+import { selfViewWanted, useNativeSelfViewWant } from '@/lib/voice/native-self-view'
 import { retainVoice, useVoice } from '@/stores/voice'
 import { Button } from '@/components/ui/Button'
 import CallControls, { CallControlBar } from './CallControls'
@@ -85,6 +87,9 @@ export default function CallWindow({ closeWindow = closeThisWindow }: CallWindow
   const preview = useSettingsStore((s) => s.videoRoomsPreview) === true
   const people = call?.participants ?? NO_PEOPLE
   const tiles = useStageTiles(video, people)
+  // Your camera in a native window of its own on this one (macOS).
+  const camera = useStore(video.store, (s) => s.local.camera)
+  useNativeSelfViewWant(selfViewWanted(camera, call !== null && native && preview))
   // The call's own clock: when it connected, as the first window to see it
   // knew (this window adopted it later).
   const startedAt = call ? (call.callId ? callStartedAt(call.callId, call.connectedAt) : call.connectedAt) : null

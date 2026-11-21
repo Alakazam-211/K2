@@ -119,8 +119,9 @@ parking_lot = "0.12"
 # carries the grace counters and the stage's clock stats (logged by native_voice).
 # Sew 0.11.3 (0.9.3, with sew-call-client 0.9.3 and the other Sew crates 0.11.3; needs
 # kessel-audio 0.2.5, K2's in-tree crate): additive. VoiceControl::set_dsp_sched (from the
-# next call), the capture_stage_dsp_* fields and the native self-view sink; K2 calls none
-# of them yet, so native_voice is unchanged.
+# next call), the capture_stage_dsp_* fields and the native self-view sink. Since 0.46.17
+# K2 opens the self-view sink (`local:camera`) on macOS for your camera's own window
+# (native_voice/self_view.rs); the other two it doesn't call yet.
 tauri-plugin-sew-voice = { version = "=0.9.3", optional = true, features = ["video", "dfn3"] }
 zeroize = { version = "1", optional = true }
 

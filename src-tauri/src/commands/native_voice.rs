@@ -45,6 +45,32 @@ pub fn voice_native_session_leave(target: String) -> NativeSessionLeave {
     NativeSessionLeave { posted: false, status: None }
 }
 
+/// The calling window shows the call with your camera on or paused (`want`),
+/// or no longer: the native self-view (native_voice/self_view.rs) shows in a
+/// small window of its own beside it while some window wants it. `anchor`:
+/// the call view's rect in this window (CSS pixels), for where it sits.
+/// Answers whether this app draws the self-view natively (macOS with native
+/// voice); false elsewhere, where the page keeps its own. Whether it shows
+/// comes as `self-view:state` events.
+#[cfg(feature = "native-voice")]
+#[tauri::command]
+pub fn voice_self_view(
+    app: tauri::AppHandle,
+    window: tauri::Window,
+    want: bool,
+    anchor: Option<crate::native_voice::self_view::CssRect>,
+) -> bool {
+    crate::native_voice::self_view::set_want(&app, window, want, anchor)
+}
+
+/// Without the feature there is no native self-view: the page keeps its own.
+#[cfg(not(feature = "native-voice"))]
+#[tauri::command]
+pub fn voice_self_view(want: bool, anchor: Option<serde_json::Value>) -> bool {
+    let _ = (want, anchor);
+    false
+}
+
 /// Quit with a call up: leave it, bounded. Nothing to do without the feature.
 #[cfg(feature = "native-voice")]
 pub fn leave_on_quit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
@@ -63,5 +89,6 @@ mod tests {
     #[test]
     fn a_build_without_the_feature_says_so() {
         assert_eq!(voice_native_status(), NativeVoiceStatus { available: false });
+        assert!(!voice_self_view(true, None));
     }
 }

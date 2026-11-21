@@ -13,6 +13,7 @@ import { useStore } from 'zustand'
 import { videoTiles, withSpeakerEmphasis, type CallPerson } from '@/lib/voice/video-labels'
 import { videoLive } from '@/lib/voice/call-tile-picture'
 import { peopleTiles } from '@/lib/voice/call-share'
+import { stageTilesForNativeSelf, useNativeSelfView } from '@/lib/voice/native-self-view'
 import type { VideoController } from '@/stores/video-core'
 import VideoTile from './VideoTile'
 import { ScreenPicker, VideoCallButtons, VideoNoticeLine } from './VideoControls'
@@ -42,12 +43,17 @@ export function useLastSpeaker(people: readonly CallPerson[]): string | null {
 }
 
 /** The call's tiles as the stage draws them: the last speaker large (3 or
- *  more tiles). */
+ *  more tiles). Your own camera's tile is left out while the native
+ *  self-view shows it in its own window (lib/voice/native-self-view.ts). */
 export function useStageTiles(ctl: VideoController, people: readonly CallPerson[]): ReturnType<typeof videoTiles> {
   const tracks = useStore(ctl.store, (s) => s.tracks)
   const local = useStore(ctl.store, (s) => s.local)
+  const nativeSelf = useNativeSelfView((s) => s.showing)
   const lastSpeaker = useLastSpeaker(people)
-  return useMemo(() => withSpeakerEmphasis(videoTiles(tracks, local, people), lastSpeaker), [tracks, local, people, lastSpeaker])
+  return useMemo(
+    () => withSpeakerEmphasis(stageTilesForNativeSelf(videoTiles(tracks, local, people), people, nativeSelf), lastSpeaker),
+    [tracks, local, people, nativeSelf, lastSpeaker],
+  )
 }
 
 /** Rows for n tiles (a large one counts 4) over `columns`. */

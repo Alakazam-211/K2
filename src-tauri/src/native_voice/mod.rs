@@ -17,6 +17,8 @@ use tauri_plugin_sew_voice::{Builder, VoiceService};
 
 pub mod device_keys;
 pub mod provider;
+/// Your own camera in a native window of its own (0.46.17, macOS).
+pub mod self_view;
 
 use provider::{K2Provider, SavedLogins};
 

@@ -28,6 +28,7 @@
 
 import { useEffect, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom'
+import { useStore } from 'zustand'
 import { isMacPlatform } from '@/lib/desktop-chrome'
 import { isCallExpandChord, isCallWindow, noteCallConnected, takeCallHandBack } from '@/lib/voice/call-view'
 import { getWindowLabel } from '@/lib/window-chrome'
@@ -39,6 +40,7 @@ import { noteCallWindowClosed, useIsCallHome, watchCallHome } from '@/stores/cal
 import { useSettingsStore } from '@/stores/settings'
 import { useVoice, voice } from '@/stores/voice'
 import { video } from '@/stores/video'
+import { selfViewWanted, useNativeSelfViewWant } from '@/lib/voice/native-self-view'
 import type { VoiceCall } from '@/stores/voice-core'
 import type { CallPerson } from '@/lib/voice/video-labels'
 import { useCallVideoLive } from './callHooks'
@@ -202,6 +204,10 @@ function InCall({ call }: { call: VoiceCall }): React.JSX.Element | null {
   const tileShown = useCallTileShown()
   const poppedOut = useCallPopout((s) => s.open)
   useCallExpandChord(here)
+  // Your camera in a native window of its own beside the call (macOS), from
+  // the window that shows the call (lib/voice/native-self-view.ts).
+  const camera = useStore(video.store, (s) => s.local.camera)
+  useNativeSelfViewWant(selfViewWanted(camera, useCallShowsHere()))
   // The call's window closed. Back to chat (not the OS's close) hands the
   // call back to the window that popped it out: its stage opens, and every
   // window takes up the share that was in the middle there.

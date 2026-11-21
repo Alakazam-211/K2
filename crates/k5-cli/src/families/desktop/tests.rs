@@ -46,7 +46,10 @@ fn a_timeout_is_digits_and_one_unit() {
     // A leading 0 is decimal (`10#`), as _compute_secs reads it.
     assert_eq!(timeout_secs("08"), Timeout::Secs(8));
     assert_eq!(timeout_secs("010m"), Timeout::Secs(600));
-    assert_eq!(timeout_secs("000999999999999h"), Timeout::Secs(999_999_999_999 * 3600));
+    assert_eq!(
+        timeout_secs("000999999999999h"),
+        Timeout::Secs(999_999_999_999 * 3600)
+    );
     for bad in ["", "s", "1x", "1hm", "x", "HOME", "1.5m", "-1", " 1", "1d"] {
         assert_eq!(timeout_secs(bad), Timeout::Bad, "{bad}");
     }

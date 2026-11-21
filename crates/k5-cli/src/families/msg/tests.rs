@@ -1382,8 +1382,14 @@ fn the_words_after_dashes_are_sent_as_typed() {
         other => panic!("{other:?}"),
     }
     // An empty first word leaves the address to the next one.
-    assert_eq!(parse(&["--", "", "t"]), Parsed::Stop(send::no_text(), Exit::Error));
-    assert_eq!(parse(&["ws", "--"]), Parsed::Stop(send::no_text(), Exit::Error));
+    assert_eq!(
+        parse(&["--", "", "t"]),
+        Parsed::Stop(send::no_text(), Exit::Error)
+    );
+    assert_eq!(
+        parse(&["ws", "--"]),
+        Parsed::Stop(send::no_text(), Exit::Error)
+    );
     assert_eq!(parse(&["--"]), Parsed::Stop(send::no_target(), Exit::Error));
     // Help before `--` is the shell's (the front's page); after it, text.
     assert_eq!(parse(&["ws", "-h", "--", "t"]), Parsed::Shell);
@@ -1429,7 +1435,10 @@ fn postal_mail_after_dashes() {
         Parsed::Stop(format!("{}\n", postal::usage(to)), Exit::Usage)
     );
     // Not an address after `--`: msg's own loop.
-    assert_eq!(parse(&["--", "ws"]), Parsed::Stop(send::no_text(), Exit::Error));
+    assert_eq!(
+        parse(&["--", "ws"]),
+        Parsed::Stop(send::no_text(), Exit::Error)
+    );
     // The flags before `--` are Postal mail's.
     assert_eq!(
         parse(&["--wake", "--no-wake", "--", to, "-t"]),

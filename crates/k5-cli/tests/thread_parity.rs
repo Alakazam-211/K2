@@ -871,14 +871,30 @@ fn thread_after_dashes_as_the_shell_does() {
         // covers: thread
         plain(
             "a write: the text --help after --",
-            &["--from", "me", "--idempotency-key", KEY, "--", "bob", "--help"],
+            &[
+                "--from",
+                "me",
+                "--idempotency-key",
+                KEY,
+                "--",
+                "bob",
+                "--help",
+            ],
             vec![ok(ON), ok(POSTED)],
             0,
             2,
         ),
         plain(
             "a write: a text that starts with a dash",
-            &["bob", "--from", "me", "--idempotency-key", KEY, "--", "-x --json"],
+            &[
+                "bob",
+                "--from",
+                "me",
+                "--idempotency-key",
+                KEY,
+                "--",
+                "-x --json",
+            ],
             vec![ok(ON), ok(POSTED)],
             0,
             2,

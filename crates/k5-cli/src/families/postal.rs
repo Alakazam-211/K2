@@ -196,7 +196,8 @@ pub fn parse(rest: &[&str]) -> Result<Words, String> {
             }
             // The rest is plain words (an address, a message), as typed.
             "--" => {
-                w.args.extend(rest[i + 1..].iter().map(|a| (*a).to_string()));
+                w.args
+                    .extend(rest[i + 1..].iter().map(|a| (*a).to_string()));
                 break;
             }
             f if f.starts_with('-') => {

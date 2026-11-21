@@ -947,8 +947,7 @@ pub fn remind_alone(rest: &[&str]) -> bool {
         return false;
     };
     let stops = |w: &&str| matches!(*w, "--in" | "--at" | "--on" | "-h" | "--help");
-    words.first().is_none_or(|w| w.is_empty())
-        && !crate::dashdash::before(words).iter().any(stops)
+    words.first().is_none_or(|w| w.is_empty()) && !crate::dashdash::before(words).iter().any(stops)
 }
 
 /// `k5 heartbeat ...`: `args` is the whole command line after `argv[0]`.

@@ -205,12 +205,58 @@ const CANDIDATES: &[(&[&str], &str)] = &[
     ),
 ];
 
-/// The first candidate the route table still gives the shell; it fails
+/// The hand-off's line when there is no `python3`
+/// ([`k5_cli::fallthrough::FrontError::NoPython`]).
+const NO_PYTHON: &str = "is not built into k5 yet and needs Python 3";
+
+/// Whether the built binary hands `line` to the shell: run with no
+/// `python3` on `PATH` (an empty folder), every hand-off stops on its one
+/// line and exit 69 before bash starts, as the native bar probes it. The
+/// route table alone can't say: a native family may still hand a verb
+/// back at run time (`setup agent-reports`, its `SHELL_VERBS`).
+fn falls_through(line: &[&str]) -> bool {
+    let dir = std::env::temp_dir().join(format!("k5-front-passport-probe-{}", std::process::id()));
+    let (bin, home) = (dir.join("bin"), dir.join("home"));
+    std::fs::create_dir_all(&bin).expect("the probe's empty PATH");
+    std::fs::create_dir_all(&home).expect("the probe's HOME");
+    let mut child = Command::new(BIN)
+        .args(line)
+        .env_clear()
+        .env("PATH", &bin)
+        .env("HOME", &home)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("run the binary");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        if let Some(st) = child.try_wait().expect("wait for the binary") {
+            break Some(st);
+        }
+        if Instant::now() > deadline {
+            // Still running: it is in its own code, so native.
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let mut err = String::new();
+    child
+        .stderr
+        .take()
+        .expect("the binary's stderr")
+        .read_to_string(&mut err)
+        .expect("read the binary's stderr");
+    status.is_some_and(|st| st.code() == Some(69)) && err.contains(NO_PYTHON)
+}
+
+/// The first candidate the binary still hands to the shell; it fails
 /// loudly when every one is native.
 fn shell_line() -> (&'static [&'static str], &'static str) {
     for &(line, path) in CANDIDATES {
-        let args: Vec<std::ffi::OsString> = line.iter().map(Into::into).collect();
-        if k5_cli::front::route(&args) == k5_cli::front::Route::Fallthrough {
+        if falls_through(line) {
             return (line, path);
         }
     }

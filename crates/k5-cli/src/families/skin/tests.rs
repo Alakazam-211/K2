@@ -40,10 +40,22 @@ fn the_shell_hands_these_on() {
 
 #[test]
 fn user_chat_and_copy_host_are_the_app_code_s() {
-    assert!(matches!(ask(&["user", "chat", "bob"]), Ok(Ask::UserChat(_))));
-    assert!(matches!(ask(&["users", "chat", "bob", "guest"]), Ok(Ask::UserChat(_))));
-    assert!(matches!(ask(&["grant", "copy-host", "acme"]), Ok(Ask::CopyHost(_))));
-    assert!(matches!(ask(&["grant", "copyhost", "acme", "--dry-run"]), Ok(Ask::CopyHost(_))));
+    assert!(matches!(
+        ask(&["user", "chat", "bob"]),
+        Ok(Ask::UserChat(_))
+    ));
+    assert!(matches!(
+        ask(&["users", "chat", "bob", "guest"]),
+        Ok(Ask::UserChat(_))
+    ));
+    assert!(matches!(
+        ask(&["grant", "copy-host", "acme"]),
+        Ok(Ask::CopyHost(_))
+    ));
+    assert!(matches!(
+        ask(&["grant", "copyhost", "acme", "--dry-run"]),
+        Ok(Ask::CopyHost(_))
+    ));
     let stop = |w: &[&str]| ask(w).expect_err("a stop");
     assert_eq!(stop(&["user", "chat"]).exit, Exit::Usage);
     assert_eq!(stop(&["user", "chat", "bob", "--app"]).exit, Exit::Error);

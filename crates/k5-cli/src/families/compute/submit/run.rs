@@ -980,6 +980,8 @@ pub fn send(cp: &mut Cp<'_>, a: &Ask) -> Exit {
                 max_wait: a.max_wait,
                 // run passes it on as --max-wait: 3 past it.
                 timeout: false,
+                failures: false,
+                follow: false,
             },
         );
     }

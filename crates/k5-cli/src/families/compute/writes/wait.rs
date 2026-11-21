@@ -848,7 +848,11 @@ pub fn end_with_ids(bodies: &[Vec<u8>], json: bool, limit: Exit) -> (Shown, Vec<
                 exit: exit_of(&rc),
             };
             // `for fid in $(… | cut -d' ' -f3-)`: the words of the joined ids.
-            let words = ids.join(" ").split_whitespace().map(str::to_string).collect();
+            let words = ids
+                .join(" ")
+                .split_whitespace()
+                .map(str::to_string)
+                .collect();
             (shown, words)
         }
         Err(e) => (stopped(String::new(), &e), Vec::new()),

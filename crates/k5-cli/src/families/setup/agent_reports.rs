@@ -177,8 +177,16 @@ mod tests {
         assert_eq!(jstr(b"a\"b\\c"), b"\"a\\\"b\\\\c\"");
         assert_eq!(jstr(b"\n\t\r\x01\x7f\xff"), b"\"\\n\\t\\r\\u0001\x7f\xff\"");
         // The same as the string form for text.
-        for s in ["K \"Five\" \\ 5", "runs\tand\nbooks\r", "a\u{1}b\u{1f}c\u{7f}d é"] {
-            assert_eq!(jstr(s.as_bytes()), super::super::jstr(s).into_bytes(), "{s:?}");
+        for s in [
+            "K \"Five\" \\ 5",
+            "runs\tand\nbooks\r",
+            "a\u{1}b\u{1f}c\u{7f}d é",
+        ] {
+            assert_eq!(
+                jstr(s.as_bytes()),
+                super::super::jstr(s).into_bytes(),
+                "{s:?}"
+            );
         }
     }
 

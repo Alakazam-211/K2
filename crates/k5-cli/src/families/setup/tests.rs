@@ -332,7 +332,10 @@ fn agent_reports_takes_the_words_after_it() {
         (&["agent-reports", "--json"], &["--json"]),
         (&["agent-reports", "--bogus"], &["--bogus"]),
         (&["agent-reports", "hide"], &["hide"]),
-        (&["--json", "--json", "agent-reports", "x"], &["--json", "x"]),
+        (
+            &["--json", "--json", "agent-reports", "x"],
+            &["--json", "x"],
+        ),
         (&["agent-reports", "-h"], &["-h"]),
     ] {
         assert_eq!(parse(words), reports(want), "{words:?}");

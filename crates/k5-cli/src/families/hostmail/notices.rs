@@ -194,8 +194,12 @@ fn ooo_set(words: &[&str]) -> Result<Plan, Plan> {
     let use_ = format!(
         "{CLI_NAME} hostmail ooo set <addr> --text FILE_OR_STRING [--days N] [--until DATE]"
     );
-    let (mut address, mut text, mut days, mut until) =
-        (String::new(), Texts::default(), String::new(), String::new());
+    let (mut address, mut text, mut days, mut until) = (
+        String::new(),
+        Texts::default(),
+        String::new(),
+        String::new(),
+    );
     let mut json = false;
     let mut i = 0;
     while i < words.len() {

@@ -13,6 +13,9 @@
 #   - `k2 permission beta on --help` turned permission cards on.
 #   - `k2 permission beta status --help` asked for the settings.
 #   - `k2 permission approvers --help` set the approvers to `--help`.
+#   - `k2 permission request <action> --to -h` (and `--to --help`,
+#     `--assign -h`, `--assign --help`) must never take the help word as
+#     the login to ask: help wins there too.
 #
 # Each help row: exactly the usage on stdout, nothing on stderr, exit 0,
 # only the probe sent. Each verb's plain form then still sends its
@@ -195,6 +198,14 @@ page permission update pr_1 --why -h
 page permission list --area --help
 page permission agent ws on --help
 page permission request compute.use --why -h
+
+echo "== permission request: --to and --assign never take the help word =="
+page permission request compute.use --why x --to -h
+page permission request compute.use --why x --to --help
+page permission request compute.use --assign -h --why x
+page permission request compute.use --why x --assign --help
+sends '^POST /cli/permission/request .*"to": "ada"' permission request compute.use --why x --to ada
+sends '^POST /cli/permission/request .*"to": "ada"' permission request compute.use --why x --assign ada
 
 echo ""
 echo "permission_help_never_acts: $pass passed, $fail failed"

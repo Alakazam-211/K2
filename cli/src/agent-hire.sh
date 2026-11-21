@@ -113,6 +113,9 @@ else:
 }
 
 cmd_agent_team() {
+    # Help wins: -h or --help anywhere prints these verbs' help and sends
+    # nothing (`team unlink --help` sent an unlink for `--help`).
+    if _wants_help "$@"; then _agent_hire_help; return 0; fi
     local sub="${1:-}"
     case "$sub" in
         --help|-h|help)
@@ -168,6 +171,9 @@ print(json.dumps(b))') || exit 2
 }
 
 cmd_agent_instances() {
+    # Help wins: -h or --help anywhere prints these verbs' help and sends
+    # nothing (`instances show --help` asked for an instance `--help`).
+    if _wants_help "$@"; then _agent_hire_help; return 0; fi
     local sub="${1:-}"
     case "$sub" in
         --help|-h|help)
@@ -239,6 +245,9 @@ print(json.dumps(b))') || exit 2
 }
 
 cmd_agent_hire_root() {
+    # Help wins: -h or --help anywhere prints the hire verbs' help, where
+    # hire-root is, and sets nothing (`hire-root set --help` set the root).
+    if _wants_help "$@"; then _agent_hire_help; return 0; fi
     case "${1:-}" in
         set)
             [ -n "${2:-}" ] || { echo "Usage: k2 agent hire-root set <dir>" >&2; exit 2; }

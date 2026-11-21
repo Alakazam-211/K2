@@ -223,6 +223,163 @@ pub fn dev_tty_readable() -> bool {
     std::fs::File::open("/dev/tty").is_ok()
 }
 
+/// How Python's `getpass.getpass` ended on the terminal.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Getpass {
+    /// The line, without its newline, as typed (NULs too).
+    Line(Secret),
+    /// The end of the input before anything was typed (`EOFError`), or
+    /// Ctrl-C (`KeyboardInterrupt`): the caller's `except` says so.
+    Cancelled,
+}
+
+/// `/dev/tty`, opened for reading and writing as Python's getpass opens
+/// it (`O_RDWR|O_NOCTTY`), when it is a terminal whose settings can be
+/// read (`tcgetattr`).
+#[cfg(unix)]
+fn getpass_tty_file() -> Option<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::io::AsRawFd;
+    let f = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NOCTTY)
+        .open("/dev/tty")
+        .ok()?;
+    let mut t = std::mem::MaybeUninit::<libc::termios>::uninit();
+    // SAFETY: tcgetattr only fills the struct.
+    (unsafe { libc::tcgetattr(f.as_raw_fd(), t.as_mut_ptr()) } == 0).then_some(f)
+}
+
+/// Python's getpass takes its first path here: a controlling terminal
+/// whose echo it can turn off. Else it falls back to stdin, with a
+/// warning that names its own source file and line, which the binary
+/// can't print: a caller hands that case to the shell.
+#[cfg(unix)]
+pub fn getpass_tty_ok() -> bool {
+    getpass_tty_file().is_some()
+}
+
+#[cfg(not(unix))]
+pub fn getpass_tty_ok() -> bool {
+    false
+}
+
+/// `getpass.getpass(prompt)` on the controlling terminal: the prompt
+/// written there, its echo off for one line read from it, the terminal
+/// put back, then a newline written there (not after an end of input or
+/// Ctrl-C). Never stdin or stderr. `None`: no such terminal
+/// ([`getpass_tty_ok`]).
+#[cfg(unix)]
+pub fn getpass_tty(prompt_text: &str) -> Option<Getpass> {
+    use std::os::unix::io::AsRawFd;
+    let tty = getpass_tty_file()?;
+    Some(getpass_on(tty.as_raw_fd(), prompt_text))
+}
+
+#[cfg(not(unix))]
+pub fn getpass_tty(_prompt_text: &str) -> Option<Getpass> {
+    None
+}
+
+#[cfg(unix)]
+mod cancel {
+    //! Ctrl-C during [`super::getpass_on`]'s read: Python's
+    //! `KeyboardInterrupt`, not the end of the process.
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    pub static HIT: AtomicBool = AtomicBool::new(false);
+
+    pub extern "C" fn on_int(_sig: i32) {
+        HIT.store(true, Ordering::SeqCst);
+    }
+
+    /// SIGINT caught (no `SA_RESTART`, so the read stops) until the
+    /// guard goes; the handler before it is put back then.
+    pub struct Caught(libc::sigaction);
+
+    impl Caught {
+        pub fn start() -> Option<Caught> {
+            HIT.store(false, Ordering::SeqCst);
+            // SAFETY: a zeroed sigaction with our handler and an empty
+            // mask; the old one is saved to put back.
+            unsafe {
+                let mut sa: libc::sigaction = std::mem::zeroed();
+                sa.sa_sigaction = on_int as extern "C" fn(i32) as libc::sighandler_t;
+                libc::sigemptyset(&mut sa.sa_mask);
+                let mut old: libc::sigaction = std::mem::zeroed();
+                (libc::sigaction(libc::SIGINT, &sa, &mut old) == 0).then_some(Caught(old))
+            }
+        }
+    }
+
+    impl Drop for Caught {
+        fn drop(&mut self) {
+            // SAFETY: puts back the action saved in `start`.
+            unsafe {
+                libc::sigaction(libc::SIGINT, &self.0, std::ptr::null_mut());
+            }
+        }
+    }
+}
+
+/// [`getpass_tty`] on the terminal `fd`.
+#[cfg(unix)]
+fn getpass_on(fd: i32, prompt_text: &str) -> Getpass {
+    use std::sync::atomic::Ordering;
+    write_fd(fd, prompt_text.as_bytes());
+    let echo = NoEcho::start(fd);
+    let caught = cancel::Caught::start();
+    let mut line = Vec::new();
+    let mut cancelled = false;
+    loop {
+        let mut b = 0u8;
+        // SAFETY: one byte into a live local.
+        let n = unsafe { libc::read(fd, (&mut b as *mut u8).cast(), 1) };
+        if n == 1 {
+            if b == b'\n' {
+                break;
+            }
+            line.push(b);
+            continue;
+        }
+        if n < 0 && io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
+            if cancel::HIT.load(Ordering::SeqCst) {
+                cancelled = true;
+                break;
+            }
+            continue;
+        }
+        // The end of the input: what was typed stands, if anything.
+        cancelled = line.is_empty();
+        break;
+    }
+    drop(caught);
+    drop(echo);
+    if cancelled {
+        drop(Secret::new(line));
+        return Getpass::Cancelled;
+    }
+    write_fd(fd, b"\n");
+    Getpass::Line(Secret::new(line))
+}
+
+/// All of `bytes` to `fd`; a failure is dropped, as a prompt's is.
+#[cfg(unix)]
+fn write_fd(fd: i32, mut bytes: &[u8]) {
+    while !bytes.is_empty() {
+        // SAFETY: writes from a live slice.
+        let n = unsafe { libc::write(fd, bytes.as_ptr().cast(), bytes.len()) };
+        if n > 0 {
+            bytes = &bytes[n as usize..];
+        } else if n < 0 && io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
+            continue;
+        } else {
+            return;
+        }
+    }
+}
+
 /// `v="$(cat)"`: all of stdin, NUL bytes dropped and the trailing
 /// newlines taken off. (Bash 4.4 and later also warn on stderr about a
 /// NUL; that line names the script and is not copied.)
@@ -534,6 +691,34 @@ mod tests {
         drop(guard);
         assert_eq!(lflag(fd), before);
         assert!(!restore::ARMED.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    /// getpass on a terminal: the line without its newline, no echo of
+    /// it, the terminal as it was after; the end of the input with
+    /// nothing typed is a cancel.
+    #[cfg(unix)]
+    #[test]
+    fn getpass_reads_a_line_with_the_echo_off() {
+        use std::io::Write as _;
+        use std::os::fd::{AsRawFd, FromRawFd};
+        let (master, far) = pty();
+        let fd = far.as_raw_fd();
+        let before = lflag(fd);
+        let mut m = unsafe { std::fs::File::from_raw_fd(libc::dup(master.as_raw_fd())) };
+        let reader = std::thread::spawn(move || getpass_on(fd, "pw: "));
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        m.write_all(b"s3cret\n").unwrap();
+        match reader.join().unwrap() {
+            Getpass::Line(s) => assert_eq!(s.expose(), b"s3cret"),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(lflag(fd), before);
+        let reader = std::thread::spawn(move || getpass_on(fd, "pw: "));
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        m.write_all(&[4]).unwrap();
+        assert_eq!(reader.join().unwrap(), Getpass::Cancelled);
+        assert_eq!(lflag(fd), before);
+        drop(far);
     }
 
     /// Not a terminal: nothing to turn off.

@@ -1754,19 +1754,68 @@ _cli_transport_failure() {
     return 0
 }
 
+# A curl 28 (timed out) is sent again only when the connect never
+# completed: nothing reached the daemon. curl says so in its -w output,
+# not in the -v trace, whose wording changes between versions (newer curl
+# no longer prints "Connected to"). _cli_curl adds this to the caller's
+# -w: %{stderr} (curl 7.63+) moves the rest to stderr, and
+# %{time_connect} is 0 when no connect completed.
+_K2_WCONN=$'%{stderr}\n__k2conn:%{time_connect}\n'
+
+# _cli_connect_none ERR GET: true only when the try that timed out surely
+# never connected. ERR is curl's stderr (the -v trace and the marker).
+#   - a request line ("> ") in the trace: the request went out. Never.
+#   - the marker (the last one; each try writes its own): 0 means no
+#     connect completed, anything else means it did. Locale-proof: only
+#     its digits count.
+#   - no marker (a -w we couldn't extend): unknown. Only a GET (GET=1)
+#     may go again, and only with no connect line in the trace. A POST
+#     whose connect state is unknown is never sent twice.
+_cli_connect_none() {
+    local err="$1" get="$2" v
+    case "$err" in "> "*|*$'\n> '*) return 1 ;; esac
+    case "$err" in
+        *$'\n__k2conn:'*)
+            v="${err##*$'\n__k2conn:'}"
+            v="${v%%$'\n'*}"
+            case "$v" in ''|*[!0-9.,]*) ;; *[1-9]*) return 1 ;; *[0-9]*) return 0 ;; esac
+            ;;
+    esac
+    [ "$get" -eq 1 ] || return 1
+    case "$err" in *"Connected to"*|*"Established connection"*) return 1 ;; esac
+    return 0
+}
+
 # Body on stdout. -v so modern curl's OS errno (EPERM vs refused) is visible.
 # `{ } 4>&1` + `1>&4` keeps the body on this function's stdout (so
 # `resp=$(cli_request …)` works); stderr is classified, never printed.
 # A leading `--k2-cfg CFG` hands curl secret config lines on stdin (_k2_curl).
 _cli_curl() {
-    local err rc=1 cfg="" try=1 a once=0
+    local err rc=1 cfg="" try=1 a once=0 get=0 wnext=0 wset=0
     if [ "${1:-}" = "--k2-cfg" ]; then
         cfg="$2"
         shift 2
     fi
+    # The caller's -w gets the connect marker (_K2_WCONN); with no -w,
+    # the marker is the -w. GET=1 only for -G/--get (the request helpers'
+    # GETs); everything else counts as a write.
+    local args=()
     for a in "$@"; do
-        case "$a" in @-|-T) once=1 ;; esac
+        if [ "$wnext" -eq 1 ]; then
+            args+=("${a}${_K2_WCONN}")
+            wnext=0
+            continue
+        fi
+        case "$a" in
+            @-|-T) once=1 ;;
+            -G|--get) get=1 ;;
+            -w|--write-out) wnext=1; wset=1 ;;
+            -w*|--write-out=*) wset=2 ;;
+        esac
+        args+=("$a")
     done
+    [ "$wset" -eq 0 ] && args+=(-w "$_K2_WCONN")
+    set -- "${args[@]}"
     local _had_e=0
     case $- in *e*) _had_e=1; set +e ;; esac
     while :; do
@@ -1774,10 +1823,10 @@ _cli_curl() {
             err=$(_k2_curl "$cfg" "$@" 2>&1 1>&4)
             rc=$?
         } 4>&1
-        # k2-ptyd S5 (P47): a connect that timed out (curl 28 with no
-        # "Connected to" in the -v trace) never reached the daemon: retry
-        # like a refused one. A timeout after connecting is never retried.
-        if [ "$rc" -eq 28 ] && [[ "$err" != *"Connected to"* ]] && [ "$once" -eq 0 ] && [ "$try" -lt "$_K2_CURL_TRIES" ]; then
+        # k2-ptyd S5 (P47): a connect that timed out never reached the
+        # daemon: retry like a refused one. A timeout after connecting is
+        # never retried (_cli_connect_none).
+        if [ "$rc" -eq 28 ] && [ "$once" -eq 0 ] && [ "$try" -lt "$_K2_CURL_TRIES" ] && _cli_connect_none "$err" "$get"; then
             try=$((try + 1))
             sleep 1
             continue

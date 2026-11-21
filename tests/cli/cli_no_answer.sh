@@ -10,13 +10,14 @@
 #
 # A python stub daemon answers /cli/heartbeat/list and /cli/inbox/list per a
 # mode file. Cases (each through the real cli/k2, no live K2):
-#   1. hangs past the CLI's 30 s limit → "didn't answer … within N s", fails
+#   1. hangs past the CLI's 30 s limit → "didn't answer … within N s", fails,
+#      and the request reached the stub once (a GET, then a POST: k2 done)
 #   2. closes the connection with no reply → "gave an empty answer", fails
 #      (heartbeat session, and inbox list, which used to say "No items.")
 #   3. a 500 with an empty body → the same plain error
 #   4. a cell socket that closes with no reply → quiet; the TCP try answers
 #   5. a normal answer is untouched
-# Case 1 waits out the 30 s limit once. Exit status: 1, or 141 when the CLI
+# Case 1 waits out the 30 s limit twice. Exit status: 1, or 141 when the CLI
 # ended a reader beside the request (see _k2_end_command in cli/k2).
 # Run with: bash tests/cli/cli_no_answer.sh
 set -euo pipefail
@@ -168,7 +169,11 @@ run_case() {
 }
 echo "== 1. the daemon hangs past the CLI's limit =="
 echo hang >"$WORKDIR/mode"
+: >"$WORKDIR/requests.log"
 run_case hang run_tcp heartbeat session nightly
+# It reached the daemon, so it is never sent again (newer curl words its
+# -v trace differently; the CLI must not read that as a connect timeout).
+assert_eq "the request reached the daemon exactly once" "$(grep -c . "$WORKDIR/requests.log")" "1"
 assert_failed ""
 assert_eq "nothing on stdout" "$out" ""
 if [[ "$err" =~ "Error: K2's server didn't answer /cli/heartbeat/list within "3[0-9]" s; run k2 daemon status" ]]; then
@@ -178,6 +183,19 @@ else
 fi
 assert_absent "no JSON parse error" "$err" "Expecting value"
 if [ "$took" -le 40 ]; then ok "ended within the limit (${took} s)"; else bad "took ${took} s"; fi
+
+echo "== 1b. a POST the daemon never answers is sent once =="
+echo hang >"$WORKDIR/mode"
+: >"$WORKDIR/requests.log"
+run_case hang-done run_tcp done --agent nightly
+assert_failed "done: "
+if [[ "$err" =~ "Error: K2's server didn't answer /cli/done within "3[0-9]" s; run k2 daemon status" ]]; then
+    ok "done: names the route and the wait"
+else
+    bad "done: plain timeout line missing: $(printf %q "$err")"
+fi
+assert_eq "done: the POST reached the daemon exactly once" "$(grep -c . "$WORKDIR/requests.log")" "1"
+if [ "$took" -le 40 ]; then ok "done: ended within the limit (${took} s)"; else bad "done: took ${took} s"; fi
 
 echo "== 2. the connection closes with no reply =="
 echo drop >"$WORKDIR/mode"

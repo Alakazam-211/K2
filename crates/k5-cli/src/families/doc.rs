@@ -136,6 +136,52 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     Some(run_with(args, &words, skip, hook_sock.as_deref(), settings))
 }
 
+/// `cmd_doc WORDS…` called from another family's arm, as `cmd_explain`
+/// calls `cmd_doc explain <kit id> [--json]` (explain's kit ids): no
+/// router gate and no `docs` tool check run (that arm's own ran before),
+/// the rest as [`run`]. `args` is the whole command line, for the
+/// passport rule. `None`: the shell CLI answers it (as [`run`]'s, and a
+/// line with no port curl takes or no token, which only the shell's
+/// gate-less call reads).
+pub(crate) fn run_called(args: &[OsString], words: &[&str]) -> Option<Exit> {
+    if handed_back(words) || !python::family_native(python::here()) || py::decode_here().is_none()
+    {
+        return None;
+    }
+    let mut settings = daemon::current().ok()?;
+    settings.port = settings.port_text.as_deref().and_then(curl_port);
+    if settings.port.is_none() || settings.auth == Auth::None {
+        return None;
+    }
+    let hook_sock = super::hook_sock();
+    let would_refuse = passport::current(args).would_refuse();
+    let client = settings.client(would_refuse).ok();
+    let passport = matches!(settings.auth, Auth::Passport { .. });
+    let in_cell = hook_sock.is_some() && passport && client.as_ref().is_some_and(|c| !c.force_tcp);
+    let mut ctx = Ctx {
+        client,
+        closing: Closing::default(),
+        json: false,
+        ws: String::new(),
+        ob: String::new(),
+        fence: None,
+        text: None,
+        file: String::new(),
+        in_cell,
+        passport,
+        tmp_made: false,
+        home: settings.home.clone(),
+    };
+    let words: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+    let exit = match ctx.dispatch(&words) {
+        Ok(e) | Err(e) => e,
+    };
+    if let Some(mut client) = ctx.client.take() {
+        ctx.closing.flush(&mut client, exit);
+    }
+    Some(exit)
+}
+
 fn run_with(
     args: &[OsString],
     words: &[&str],

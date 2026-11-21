@@ -22,13 +22,15 @@
 //! its row by id, then by alias ([`row_text`], or the row as JSON), or the
 //! unknown-id answer, exit 4.
 //!
-//! A Markdown kit id (`MPC-`, `MPCE-`, any case) is `cmd_doc explain
-//! <id> [--json]`, as bash calls it ([`super::doc::run_called`]): the
-//! docs kit's `explain` tool, with the id where the doc's path goes (bash
-//! reads it as a path in this folder, and so does this). The shell keeps
-//! ([`run`] gives `None`): a word that is not UTF-8, and a kit id where
-//! doc's own run would hand it back (no port curl takes, no token, a
-//! `python3` the binary can't tell). So does a line with `-h` or `--help` in it: the
+//! A Markdown kit id (`MPC-`, `MPCE-`, any case) is the kit's own
+//! explain, as the shell's `_explain_kit` asks it ([`kit`]): one
+//! `_compute_send POST /cli/board/file/verb {"argv": ["explain", <id>],
+//! "json": <bool>}`, the route that answers the kit's pages with no file,
+//! and no path in it, so no file is read. Before 0.46.17 both sides sent
+//! it to `cmd_doc explain`, which took the id as a doc's path. The shell
+//! keeps ([`run`] gives `None`): a word that is not UTF-8, and a kit id
+//! with no port curl takes, no token, or `HOOK_SOCK` with a `CODEX_`
+//! variable. So does a line with `-h` or `--help` in it: the
 //! front prints `explain --help` and `explain -h` as help pages and hands
 //! any other such line to the shell ([`crate::front`]); [`page`] still
 //! reads the words as `cmd_explain` does.
@@ -70,15 +72,13 @@ pub const VERBS: &[crate::route::Verb] = &[];
 pub fn run(args: &[OsString]) -> Option<Exit> {
     let (env, p) = shell_prelude()?;
     if let Some(words) = kit_call(args, &p, &env) {
-        let words: Vec<&str> = words.iter().map(String::as_str).collect();
-        return super::doc::run_called(args, &words);
+        return kit(args, &words[1], words.len() > 2);
     }
     Some(show(&page(args, &p, &env)?))
 }
 
-/// The words `cmd_explain` hands `cmd_doc` for a Markdown kit id
-/// (`explain <id> [--json]`), past the virtual desktop's guard; `None`
-/// for any other line.
+/// The words for a Markdown kit id (`explain <id> [--json]`), past the
+/// virtual desktop's guard; `None` for any other line.
 fn kit_call(args: &[OsString], p: &Prelude, env: &Env) -> Option<Vec<String>> {
     let words: Vec<&str> = args
         .iter()
@@ -101,6 +101,166 @@ fn kit_call(args: &[OsString], p: &Prelude, env: &Env) -> Option<Vec<String>> {
         }
         _ => None,
     }
+}
+
+/// The route that answers the kit's own pages with no file.
+pub const KIT_ROUTE: &str = "/cli/board/file/verb";
+
+/// `_explain_kit <id> <json>`: the kit's explain for `id` on [`KIT_ROUTE`],
+/// then the shell's reader ([`kit_answer`]) and the EXIT trap. `None`:
+/// the shell's (no port curl takes, no token, or a Codex session).
+fn kit(args: &[OsString], id: &str, as_json: bool) -> Option<Exit> {
+    if super::hook_sock().is_some()
+        && crate::prelude::codex_env(std::env::vars_os().map(|(n, _)| n))
+    {
+        return None;
+    }
+    let mut settings = crate::daemon::current().ok()?;
+    settings.port = settings.port_text.as_deref().and_then(super::curl_port);
+    if settings.port.is_none() || settings.auth == crate::transport::Auth::None {
+        return None;
+    }
+    let would_refuse = crate::passport::current(args).would_refuse();
+    let client = match settings.client(would_refuse) {
+        Ok(c) => c,
+        Err(e) => {
+            crate::out::stderr_line(&format!("Error: {e}"));
+            return Some(Exit::Error);
+        }
+    };
+    let words: Vec<&str> = args.iter().skip(1).filter_map(|a| a.to_str()).collect();
+    let mut ctx = super::app::call::Ctx::new(client, super::app::call::args_json(&words));
+    let exit = match ctx.send(true, KIT_ROUTE, &kit_body(id, as_json), false) {
+        Ok(split) => kit_answer(&split.status, &split.body, as_json).print(),
+        Err(exit) => exit,
+    };
+    let super::app::call::Ctx {
+        mut client,
+        closing,
+        ..
+    } = ctx;
+    closing.flush(&mut client, exit);
+    Some(exit)
+}
+
+/// The request's body, as `_explain_kit` builds it (`_setup_jstr`).
+pub fn kit_body(id: &str, as_json: bool) -> String {
+    format!(
+        "{{\"argv\":[\"explain\",{}],\"json\":{as_json}}}",
+        super::setup::jstr(id)
+    )
+}
+
+/// `sys.exit(x)`: an int its low byte (`True` 1), `None`, `False` and a
+/// missing one 0; anything else printed on stderr, then 1.
+fn py_exit(x: Option<&Value>, stderr: &mut String) -> Exit {
+    match x {
+        None | Some(Value::Null) | Some(Value::Bool(false)) => Exit::Ok,
+        Some(Value::Bool(true)) => Exit::Error,
+        Some(Value::Int(d)) => match d.parse::<i64>() {
+            Ok(n) => Exit::from_curl(i32::from(n.rem_euclid(256) as u8)),
+            Err(_) => Exit::Error,
+        },
+        Some(other) => {
+            stderr.push_str(&py::str_of(other));
+            stderr.push('\n');
+            Exit::Error
+        }
+    }
+}
+
+/// `_explain_kit`'s reader on `_compute_split`'s status and body.
+pub fn kit_answer(status: &str, body: &[u8], as_json: bool) -> super::Shown {
+    let raw = String::from_utf8_lossy(body);
+    let stripped = raw.trim_matches(super::py_space);
+    let v = if stripped.is_empty() {
+        Value::Object(Vec::new())
+    } else {
+        crate::out::pylib::json::loads(&raw).unwrap_or(Value::Object(Vec::new()))
+    };
+    let v = match v {
+        Value::Object(_) => v,
+        _ => Value::Object(Vec::new()),
+    };
+    let field = |k: &str| key(&v, k).cloned();
+    let (mut stdout, mut stderr) = (String::new(), String::new());
+    if status == "200" {
+        if let Some(Value::Str(t)) = field("stdout") {
+            stdout.push_str(&py::str_of(&Value::Str(t)));
+            let x = field("exit").filter(py::truthy);
+            let exit = py_exit(x.as_ref(), &mut stderr);
+            return super::Shown {
+                stdout,
+                stderr,
+                exit,
+            };
+        }
+    }
+    let shown = |stdout, stderr, exit| super::Shown {
+        stdout,
+        stderr,
+        exit,
+    };
+    let s_of = |x: Option<Value>| x.map_or_else(|| "None".to_string(), |x| py::str_of(&x));
+    if field("id").is_some() && field("exit").is_some() {
+        if as_json {
+            stdout = format!("{stripped}\n");
+        } else {
+            stderr = format!(
+                "Error [{}] {}: {}\n",
+                s_of(field("code")),
+                s_of(field("id")),
+                s_of(field("message"))
+            );
+            if let Some(next) = field("next").filter(py::truthy) {
+                stderr.push_str(&format!("Next: {}\n", py::str_of(&next)));
+            }
+        }
+        let exit = match field("exit") {
+            Some(x @ (Value::Int(_) | Value::Bool(_))) => py_exit(Some(&x), &mut stderr),
+            _ => Exit::Error,
+        };
+        return shown(stdout, stderr, exit);
+    }
+    let err = match field("error") {
+        Some(e @ Value::Object(_)) => e,
+        _ => Value::Object(Vec::new()),
+    };
+    let given = |k: &str| key(&err, k).filter(|x| py::truthy(x)).cloned();
+    let code = given("code").unwrap_or_else(|| {
+        Value::Str(Text::from(if status == "000" {
+            "daemon_unreachable"
+        } else {
+            "error"
+        }))
+    });
+    let hint = given("hint").unwrap_or_else(|| {
+        Value::Str(Text::from(if status == "000" {
+            concat!("no answer from the ", product_name!(), " daemon").to_string()
+        } else {
+            format!("the daemon refused (HTTP {status})")
+        }))
+    });
+    if as_json {
+        if stripped.is_empty() {
+            let e = Value::Object(vec![(
+                Text::from("error"),
+                Value::Object(vec![
+                    (Text::from("code"), code.clone()),
+                    (Text::from("hint"), hint.clone()),
+                ]),
+            )]);
+            stdout = format!("{}\n", dumps(&e));
+        } else {
+            stdout = format!("{stripped}\n");
+        }
+    } else {
+        stderr = format!("Error [{}]: {}\n", py::str_of(&code), py::str_of(&hint));
+    }
+    let refused = ["not_enabled", "forbidden", "not_connected", "sandboxed_agent", "core_off"]
+        .iter()
+        .any(|c| matches!(&code, Value::Str(t) if t.as_str() == Some(*c)));
+    shown(stdout, stderr, if refused { Exit::Refused } else { Exit::Error })
 }
 
 /// The usage line of a usage error.
@@ -625,7 +785,74 @@ mod tests {
     }
 
     #[test]
-    fn a_kit_id_is_doc_s_explain() {
+    fn the_kit_s_request_and_answers() {
+        assert_eq!(
+            kit_body("MPC-E301", false),
+            r#"{"argv":["explain","MPC-E301"],"json":false}"#
+        );
+        assert_eq!(
+            kit_body("mpc-\"\\x", true),
+            r#"{"argv":["explain","mpc-\"\\x"],"json":true}"#
+        );
+        let a = kit_answer("200", br#"{"exit": 0, "stdout": "page\n"}"#, false);
+        assert_eq!((a.stdout.as_str(), a.stderr.as_str(), a.exit), ("page\n", "", Exit::Ok));
+        let row = br#"{"id": "MPC-E110", "code": "unknown_id", "message": "no error id x", "next": "list them", "exit": 4}"#;
+        let a = kit_answer("422", row, false);
+        assert_eq!(
+            (a.stderr.as_str(), a.exit),
+            ("Error [unknown_id] MPC-E110: no error id x\nNext: list them\n", Exit::NotFound)
+        );
+        let a = kit_answer("422", row, true);
+        assert_eq!(a.stdout, format!("{}\n", String::from_utf8_lossy(row)));
+        let a = kit_answer("000", b"", false);
+        assert_eq!(
+            (a.stderr, a.exit),
+            (
+                format!("Error [daemon_unreachable]: no answer from the {} daemon\n", k2_client::brand::PRODUCT_NAME),
+                Exit::Error
+            )
+        );
+        let a = kit_answer("000", b"", true);
+        assert_eq!(
+            a.stdout,
+            format!(
+                "{{\"error\": {{\"code\": \"daemon_unreachable\", \"hint\": \"no answer from the {} daemon\"}}}}\n",
+                k2_client::brand::PRODUCT_NAME
+            )
+        );
+        let off = br#"{"error": {"code": "not_enabled", "hint": "Board files are a preview"}}"#;
+        let a = kit_answer("404", off, false);
+        assert_eq!(
+            (a.stderr.as_str(), a.exit),
+            ("Error [not_enabled]: Board files are a preview\n", Exit::Refused)
+        );
+        let a = kit_answer("500", b"not json", false);
+        assert_eq!(
+            (a.stderr.as_str(), a.exit),
+            ("Error [error]: the daemon refused (HTTP 500)\n", Exit::Error)
+        );
+    }
+
+    /// The shell's `_explain_kit`: its request and its reader's lines.
+    #[test]
+    fn the_shell_s_kit_lines() {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/explain.sh");
+        let sh = std::fs::read_to_string(&p).expect("explain.sh");
+        for line in [
+            r#"        MPC-*|MPCE-*) _explain_kit "$id" "$json_out"; return $? ;;"#,
+            r#"        body="{\"argv\":[\"explain\",${_SETUP_J}],\"json\":true}""#,
+            r#"        body="{\"argv\":[\"explain\",${_SETUP_J}],\"json\":false}""#,
+            r#"    _compute_split "$(_compute_send POST /cli/board/file/verb "$body")""#,
+            r#"        print("Error [%s] %s: %s" % (v.get("code"), v.get("id"), v.get("message")), file=sys.stderr)"#,
+            r#"hint = err.get("hint") or ("no answer from the K2 daemon" if status == "000" else "the daemon refused (HTTP %s)" % status)"#,
+            r#"sys.exit(3 if code in ("not_enabled", "forbidden", "not_connected", "sandboxed_agent", "core_off") else 1)"#,
+        ] {
+            assert!(sh.contains(line), "explain.sh no longer has {line:?}");
+        }
+    }
+
+    #[test]
+    fn a_kit_id_is_the_kit_s_explain() {
         let p = Prelude {
             port: true,
             token: true,

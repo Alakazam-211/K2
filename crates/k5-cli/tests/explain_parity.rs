@@ -14,6 +14,10 @@
 //!   over TCP, `HOOK_SOCK` with no passport, no token and no port (the
 //!   gate is skipped), the virtual desktop's guard (a help word lets it
 //!   by), a `CODEX_` setting.
+//! - A Markdown kit id: the kit's explain on the board route's meta verb,
+//!   one POST with no path, beside a decoy file of the id's name; the
+//!   kit's page (and one above 256 KiB), its JSON, its row, the route
+//!   refused, an answer that is not JSON.
 
 #![cfg(unix)]
 
@@ -338,46 +342,89 @@ fn the_settings() {
     }
 }
 
-/// What the docs kit's `explain` tool answers for a kit id.
-const KIT: &str = r#"{"stdout":"MPC-E001  a fence was left open\nfix: close it\n","exit":0,"doc":{"path":"/w/MPC-E001"}}"#;
-/// The same as JSON (`--json`: the tool's own page).
-const KIT_JSON: &str =
-    r#"{"result":{"exit":0},"stdout":"{\"id\":\"MPC-E001\",\"fix\":\"close it\"}\n"}"#;
+/// What the kit's explain answers for a kit id, on the board route's
+/// meta verb (`{exit, stdout}`).
+const KIT: &str = r#"{"exit":0,"stdout":"MPC-E001  a fence was left open\nfix: close it\n"}"#;
+/// The same as JSON (`json: true`: the kit's JSON page).
+const KIT_JSON: &str = r#"{"exit":0,"stdout":"{\"id\":\"MPC-E001\",\"fix\":\"close it\"}\n"}"#;
+/// The kit's row for an id it doesn't know.
+const KIT_ROW: &str = r#"{"id":"MPC-E110","code":"unknown_id","message":"no error id MPC-E404","next":"explain lists every id","exit":4,"on":{"path":""}}"#;
 
-/// A Markdown kit id is `cmd_doc explain <id> [--json]`: one POST of the
-/// docs kit's tool call, then its reader, as the shell's `cmd_explain`
-/// hands it on. Each native row is the binary's own answer.
+/// A decoy file named like each id the rows ask, where the command runs.
+fn decoys(r: &Rig) {
+    owner_and_port(r);
+    for id in ["MPC-E001", "mpc-e001", "MPCE-E002", "mpce-1", "MPC-E404"] {
+        std::fs::write(r.proj.join(id), "a decoy, never read\n").unwrap();
+    }
+}
+
+/// The kit's page above 256 KiB.
+fn big_page() -> &'static str {
+    let line = "MPC-E001  a line of the kit's page, long enough to add up\n";
+    let page: String = line.repeat(300 * 1024 / line.len() + 1);
+    let body = format!(
+        "{{\"exit\":0,\"stdout\":{}}}",
+        k5_cli::out::json::to_string(
+            &Value::Str(page.as_str().into()),
+            &json::Options {
+                compact: true,
+                ..json::Options::default()
+            }
+        )
+        .unwrap()
+    );
+    Box::leak(body.into_boxed_str())
+}
+
+/// A Markdown kit id is the kit's own explain (0.46.17): one POST of
+/// `{"argv": ["explain", <id>], "json": <bool>}` to the board route's meta
+/// verb, no path in it, then `_explain_kit`'s reader. Before 0.46.17 it was
+/// `cmd_doc explain <id>`, which took the id as a doc's path: each row
+/// runs beside a decoy file of the id's name, and no request names it.
 #[test]
-fn a_kit_id_is_doc_s_explain() {
+fn a_kit_id_is_the_kit_s_explain() {
     let rig = Rig::new(VERB, "kit");
-    let one = |name, args, body: &str, code| {
-        case(name, args, &[], vec![ok(body)], owner_and_port, code, 1)
+    let one = |name, args, body: &str, code| case(name, args, &[], vec![ok(body)], decoys, code, 1);
+    let answer = |name, args, status, body: &str, code| {
+        case(
+            name,
+            args,
+            &[],
+            vec![common::stub::Reply::Answer(status, body.into())],
+            decoys,
+            code,
+            1,
+        )
     };
     let native = vec![
-        // native: explain
+        // covers: explain
         one("a kit id", &["MPC-E001"], KIT, 0),
         one("in lower case", &["mpc-e001"], KIT, 0),
         one("an MPCE id", &["MPCE-E002"], KIT, 0),
+        // covers: explain --json
         one("as JSON", &["MPC-E001", "--json"], KIT_JSON, 0),
         one("--json first", &["--json", "mpce-1"], KIT_JSON, 0),
-        one(
-            "the tool's exit",
-            &["MPC-E404"],
-            r#"{"stdout":"","stderr":"no such kit id\n","exit":4,"doc":{"path":"/w/x"}}"#,
-            4,
-        ),
-        case(
-            "the daemon's refusal",
+        one("a quote and a backslash in the id", &["MPC-\"x\\y"], KIT, 0),
+        one("the kit's exit", &["MPC-E001"], r#"{"exit":5,"stdout":"held\n"}"#, 5),
+        one("a page above 256 KiB", &["MPC-E001"], big_page(), 0),
+        answer("the kit's row", &["MPC-E404"], 422, KIT_ROW, 4),
+        answer("the kit's row as JSON", &["MPC-E404", "--json"], 422, KIT_ROW, 4),
+        answer(
+            "board files off",
             &["MPC-E001"],
-            &[],
-            vec![common::stub::Reply::Answer(
-                404,
-                r#"{"error":"no_such_doc","hint":"no doc there"}"#.into(),
-            )],
-            owner_and_port,
-            4,
-            1,
+            404,
+            r#"{"error":{"code":"not_enabled","hint":"Board files are a preview"}}"#,
+            3,
         ),
+        answer(
+            "board files off, as JSON",
+            &["MPC-E001", "--json"],
+            404,
+            r#"{"error":{"code":"not_enabled","hint":"Board files are a preview"}}"#,
+            3,
+        ),
+        answer("an answer that is not JSON", &["MPC-E001"], 500, "oops", 1),
+        answer("an empty answer, as JSON", &["MPC-E001", "--json"], 502, "", 1),
         with(
             with_passport(&[("K2_HOOK_SOCK", "{sock}")]),
             case(
@@ -393,10 +440,28 @@ fn a_kit_id_is_doc_s_explain() {
     ];
     for c in native {
         rig.check(&c);
-        rig.binary(&c, false);
+        let (_, sent) = rig.binary(&c, false);
         assert!(
             !k5_cli::fallthrough::cache_dir(&rig.k2home).exists(),
             "{}: the binary handed the line to the shell",
+            c.name
+        );
+        assert_eq!(sent.len(), 1, "{}: {sent:?}", c.name);
+        let (head, body) = sent[0].split_once("\n\n").unwrap();
+        assert!(
+            head.contains("\nPOST /cli/board/file/verb HTTP/1.1\n"),
+            "{}: {head}",
+            c.name
+        );
+        let v = json::parse(body).unwrap_or_else(|e| panic!("{}: {body:?}: {e:?}", c.name));
+        let Value::Object(pairs) = &v else {
+            panic!("{}: {body}", c.name)
+        };
+        let keys: Vec<_> = pairs.iter().map(|(k, _)| k.as_str().unwrap()).collect();
+        assert_eq!(keys, ["argv", "json"], "{}: no path is sent: {body}", c.name);
+        assert!(
+            !body.contains("decoy") && !body.contains(&*rig.proj.to_string_lossy()),
+            "{}: {body}",
             c.name
         );
     }

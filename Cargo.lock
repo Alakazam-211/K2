@@ -7417,7 +7417,7 @@ checksum = "05c8b63e8d9609db387f0324918f81d68fe27748f084ef092fb35954d0539a85"
 [[package]]
 name = "postal-sdk"
 version = "0.0.1"
-source = "git+https://github.com/Alakazam-211/postal-bot?rev=9da217afc59b68df744d030bf1b22ada9454bada#9da217afc59b68df744d030bf1b22ada9454bada"
+source = "git+https://github.com/Alakazam-211/postal-bot?rev=dc38b8a655dd6e581e201bcc050240c1b36b9f1d#dc38b8a655dd6e581e201bcc050240c1b36b9f1d"
 dependencies = [
  "base64 0.22.1",
  "chacha20poly1305 0.10.1",

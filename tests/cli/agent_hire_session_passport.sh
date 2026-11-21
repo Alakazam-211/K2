@@ -17,7 +17,9 @@
 # off, the hire core's refusal ends with its card line. A refusal of the
 # hire itself (here: a folder the agent didn't hire) ends the run cleanly:
 # exit 3, nothing sent after it. Outside a session the owner token is sent
-# to the same routes as before.
+# to the same routes as before. In and out of a session, the hire core's own
+# done steps count as a change ("changed": true), and a session hire with a
+# catalog --context and no --agent finishes.
 #
 # Nothing is installed: the daemon is a stub that logs each request's
 # method, path, query, body, Bearer header and transport, and answers a
@@ -305,6 +307,33 @@ done
 st="$("$PY" -c 'import json,sys; d=json.loads(sys.argv[1]); print([a["step"] for a in d["actions"] if a["step"] in ("set-mode","launch")])' "$out")"
 assert_eq "session hire: no mode write and no launch route" "$st" "[]"
 
+echo "== in a session: catalog --context with no --agent =="
+# The core's own done steps and the stacked context both count as a change.
+# (A regression here read the last core step, which is None with no --agent:
+# a TypeError.)
+run "${SESSION[@]}" -- agent hire "$WORK/scribe" --name Scribe --context wiki:hygiene --json
+assert_eq "context, no --agent: exit 0 ($err)" "$rc" "0"
+assert_lacks "context, no --agent: no traceback" "$err" "Traceback"
+owner_never_sent "context, no --agent"
+all_passport "context, no --agent"
+assert_eq "context, no --agent: only the hire core asked" "$(field path | sort -u | tr '\n' ' ')" "/cli/agents/hire "
+core="$(body_of /cli/agents/hire)"
+assert_eq "context, no --agent: the core gets the context and no preset" \
+    "$("$PY" -c 'import json,sys; b=json.loads(sys.argv[1]); print(b.get("context"), b.get("preset"), b.get("name"))' "$core")" "['wiki:hygiene'] None Scribe"
+assert_eq "context, no --agent: ok and changed" \
+    "$("$PY" -c 'import json,sys; d=json.loads(sys.argv[1]); print(d["ok"], d["changed"])' "$out")" "True True"
+st="$("$PY" -c 'import json,sys; d=json.loads(sys.argv[1]); print(",".join("%s=%s" % (a["step"], a["status"]) for a in d["actions"] if a["step"] in ("create-dir","register-workspace","set-name","set-default-agent","seed-context")))' "$out")"
+assert_eq "context, no --agent: steps" "$st" "create-dir=done,register-workspace=done,set-name=done,seed-context=done"
+run "${SESSION[@]}" -- agent hire "$WORK/scribe2" --name Scribe --context wiki:hygiene
+assert_eq "context, no --agent, text: exit 0 ($err)" "$rc" "0"
+assert_lacks "context, no --agent, text: no traceback" "$err" "Traceback"
+assert_contains "context, no --agent, text: the context line" "$out" "[done]         context: catalog wiki:hygiene"
+last="$(printf '%s\n' "$out" | tail -n 1)"
+case "$last" in
+    "Scribe: "*" change(s) applied.") ok "context, no --agent, text: changes applied ($last)" ;;
+    *) bad "context, no --agent, text: last line $(printf %q "$last")" ;;
+esac
+
 echo "== in a session: a template hire's launch and onboard are the hire core's =="
 run "${SESSION[@]}" -- agent hire "$WORK/writer" --template worker --name Quill --launch --onboard "hi there" --json
 assert_eq "template hire: exit 0 ($err)" "$rc" "0"
@@ -415,6 +444,16 @@ paths="$(field path | tr '\n' ' ')"
 for p in /cli/agent/conf /cli/agents/hire /cli/workspace/set /cli/workspace/set-agent-display-name; do
     assert_contains "owner hire: asks $p" "$paths" "$p"
 done
+
+echo "== outside a session: the core's own steps count as a change =="
+# The stub's settings write answers the mode as already set, so the hire
+# core's done steps are the only change.
+run -- agent hire "$WORK/owner-bare" --json
+assert_eq "bare owner hire: exit 0 ($err)" "$rc" "0"
+assert_eq "bare owner hire: ok and changed" \
+    "$("$PY" -c 'import json,sys; d=json.loads(sys.argv[1]); print(d["ok"], d["changed"])' "$out")" "True True"
+st="$("$PY" -c 'import json,sys; d=json.loads(sys.argv[1]); print(",".join("%s=%s" % (a["step"], a["status"]) for a in d["actions"] if a["step"] in ("create-dir","register-workspace","set-mode")))' "$out")"
+assert_eq "bare owner hire: steps" "$st" "create-dir=done,register-workspace=done,set-mode=skipped"
 
 echo "== outside a session: a preset's label still hires, and its id is saved =="
 run -- agent hire "$WORK/owner-label" --agent "cursor agent" --json

@@ -2321,12 +2321,13 @@ if pending_core or tpl_action:
             a["status"] = got.get("status") or "done"
             if got.get("reason"):
                 a["reason"] = got["reason"]
+            changed = changed or a["status"] == "done"
     if "context" in core_body:
         # The core stacked them (a layer already there is left as it is).
         for x in by_step.get("seed-context", []):
             if x["status"] == "pending" and x.get("kind") == "catalog":
                 x["status"] = "done"
-            changed = changed or a["status"] == "done"
+                changed = True
     ra = one("register-workspace")
     if ra and ra["status"] == "done":
         ga = one("generate-agents-md")

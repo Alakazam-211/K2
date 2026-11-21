@@ -15,8 +15,10 @@
 //! - `compact <session-id>`: each `archive.NNN.ndjson` in the session's
 //!   folder (a plain file, by name), compressed in place by the system's
 //!   `gzip -f`, as the shell runs it: the same program, so the same bytes
-//!   (a Rust deflate would not write gzip's). Then one JSON line of the
-//!   counts, or the nothing-to-do line.
+//!   (a Rust deflate would not write gzip's). Each size is the file's
+//!   length, as the shell's `wc -c <FILE` reads it. Then one JSON line of
+//!   the counts, the id as `_setup_jstr` writes it, or the nothing-to-do
+//!   line.
 //!
 //! Before either: the router's gates and the `sessions-spawn` tool's
 //! session checks ([`super::more`]'s order).
@@ -25,13 +27,10 @@
 //! is printed or changed): a session folder or the sessions folder that
 //! can't be listed (Python raises), a name that is not UTF-8, a time the C
 //! library can't show; for `compact`, an id that ends in `/` (find prints
-//! the paths its own way there) and a `stat -f '%z'` that does not print
-//! a size. The shell reads each size with `stat -f '%z' FILE || stat -c
-//! '%s' FILE || echo 0`: GNU's `stat` reads `-f` as "the file system" and
-//! `%z` as a file, prints the file system's lines and fails, and the
-//! shell then adds those lines up as a number (a bash bug on Linux: the
-//! arithmetic stops the command). Only where `stat -f '%z'` prints the
-//! size does the binary compact.
+//! the paths its own way there). Before 0.46.17 the shell read each size
+//! with `stat -f '%z'`, which GNU's `stat` reads as "the file system", so
+//! compact stopped on Linux and the binary handed it on there; both now
+//! read the length, and compact is native on every system.
 
 use crate::exit::Exit;
 use crate::out::json::{self, Options, Text, Value};
@@ -294,28 +293,6 @@ pub fn rotated(dir: &Path) -> Option<Vec<PathBuf>> {
     Some(names.into_iter().map(|n| dir.join(n)).collect())
 }
 
-/// `stat -f '%z' FILE 2>/dev/null` as `$(…)` holds it, when it printed
-/// a size (BSD's `stat`): the size. `None`: it printed something else or
-/// failed (GNU's).
-fn bsd_stat(file: &Path) -> Option<u64> {
-    let out = Command::new("stat")
-        .arg("-f")
-        .arg("%z")
-        .arg(file)
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let text = String::from_utf8(out.stdout).ok()?;
-    let t = text.trim_end_matches('\n');
-    (!t.is_empty() && t.bytes().all(|b| b.is_ascii_digit()))
-        .then(|| t.parse().ok())
-        .flatten()
-}
-
 /// `compact <id>`, after the gates. `None`: the shell's (nothing printed
 /// or changed).
 pub fn compact(project: &str, id: &str) -> Option<Exit> {
@@ -342,12 +319,8 @@ pub fn compact(project: &str, id: &str) -> Option<Exit> {
         return Some(Exit::Error);
     };
     let segs = rotated(&dir)?;
-    // Each size as the shell reads it: only where `stat -f '%z'` prints
-    // one (see the module's notes).
-    if let Some(first) = segs.first() {
-        bsd_stat(first)?;
-    }
-    let size = |p: &Path| std::fs::symlink_metadata(p).map_or(0, |m| m.len());
+    // `wc -c <FILE`, or 0 when it can't be read.
+    let size = |p: &Path| std::fs::File::open(p).and_then(|f| f.metadata()).map_or(0, |m| m.len());
     let (mut count, mut before, mut after) = (0u64, 0u64, 0u64);
     for seg in &segs {
         before += size(seg);
@@ -372,11 +345,11 @@ pub fn compact(project: &str, id: &str) -> Option<Exit> {
         ));
         return Some(Exit::Ok);
     }
-    // Bash's 64-bit arithmetic; the id as it is (the shell doesn't escape
-    // it).
+    // Bash's 64-bit arithmetic; the id as `_setup_jstr` writes it.
     let saved = before as i64 - after as i64;
+    let jid = super::super::setup::jstr(id);
     Some(print(&format!(
-        "{{\"sessionId\":\"{id}\",\"compacted\":{count},\"bytesBefore\":{before},\"bytesAfter\":{after},\"bytesSaved\":{saved}}}\n"
+        "{{\"sessionId\":{jid},\"compacted\":{count},\"bytesBefore\":{before},\"bytesAfter\":{after},\"bytesSaved\":{saved}}}\n"
     )))
 }
 
@@ -438,7 +411,10 @@ mod tests {
             r#"        echo "Usage: k2 sessions compact <session-id>" >&2"#,
             r#"        echo "(use 'k2 sessions list' to find session ids)" >&2"#,
             r#"        echo "gzip not found in PATH — cannot compact" >&2"#,
-            r#"        before_size=$(stat -f '%z' "$seg" 2>/dev/null || stat -c '%s' "$seg" 2>/dev/null || echo 0)"#,
+            r#"        before_size=$(wc -c <"$seg" 2>/dev/null) || before_size=0"#,
+            r#"            after_size=$(wc -c <"$seg.gz" 2>/dev/null) || after_size=0"#,
+            r#"    _setup_jstr "$session_id""#,
+            r#"    echo "{\"sessionId\":${_SETUP_J},\"compacted\":$count,\"bytesBefore\":$compacted_bytes_before,\"bytesAfter\":$compacted_bytes_after,\"bytesSaved\":$saved}""#,
             r#"        if gzip -f "$seg"; then"#,
             r#"        -name 'archive.[0-9][0-9][0-9].ndjson' -print0 | sort -z)"#,
             r#"    print(json.dumps(rows, indent=2))"#,

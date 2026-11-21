@@ -8,9 +8,9 @@
 //!   with none, a name that is not ASCII, no sessions folder, one with no
 //!   folders in it, a large list (above 256 KiB); the gates.
 //! - `compact`: the usage, no such folder, nothing to compact, and the
-//!   segments compressed by the system's gzip. Where `stat -f '%z'` does
-//!   not print a size (GNU's `stat`), the shell's arithmetic on its lines
-//!   is the shell's: the binary hands that line on.
+//!   segments compressed by the system's gzip, on Linux and macOS alike
+//!   (both read each size as its length since 0.46.17), with an id that
+//!   has a quote and a backslash in it escaped in the JSON line.
 //!
 //! Each native row is the binary's own answer ([`answered_here`]).
 
@@ -165,13 +165,15 @@ fn compacted(r: &Rig) {
     file(&s, "archive.ndjson", 500, 1_700_000_300);
 }
 
-/// Whether this system's `stat -f '%z' FILE` prints the file's size.
-fn bsd_stat() -> bool {
-    let out = std::process::Command::new("stat")
-        .args(["-f", "%z", "/dev/null"])
-        .output()
-        .expect("stat runs");
-    out.status.success() && String::from_utf8_lossy(&out.stdout).trim_end_matches('\n') == "0"
+/// The id with a quote and a backslash in it.
+const ODD: &str = "we\"ird\\id";
+
+/// [`rotated`]'s segments under [`ODD`].
+fn rotated_odd(r: &Rig) {
+    owner_and_port(r);
+    let s = sessions(r).join(ODD);
+    file(&s, "archive.001.ndjson", 3_000, 1_700_000_000);
+    file(&s, "archive.ndjson", 10, 1_700_000_300);
 }
 
 #[test]
@@ -185,20 +187,33 @@ fn sessions_compact_as_the_shell_does() {
         row("no such folder", &["compact", "nope"], compacted, 1),
         row("nothing to compact", &["compact", "s1"], compacted, 0),
         row("the connection gate", &["compact", "s1"], nothing, 1),
+        // On Linux too: before 0.46.17 GNU's stat stopped the shell here.
+        row("the segments", &["compact", "s1"], rotated, 0),
+        row("an id with a quote and a backslash", &["compact", ODD], rotated_odd, 0),
     ] {
         answered_here(&rig, &c);
     }
-    let c = row("the segments", &["compact", "s1"], rotated, 0);
-    if bsd_stat() {
-        answered_here(&rig, &c);
-    } else {
-        // GNU's stat: the shell's own arithmetic (see the module's notes),
-        // so the binary hands the line on, before anything is changed.
-        rig.binary(&c, false);
-        assert!(
-            k5_cli::fallthrough::cache_dir(&rig.k2home).exists(),
-            "{}: the binary answered where GNU's stat stops the shell",
-            c.name
-        );
-    }
+    // The line itself, from the binary alone: the id parses back.
+    let c = row("the escaped id, read back", &["compact", ODD], rotated_odd, 0);
+    let (out, sent) = rig.binary(&c, false);
+    assert!(sent.is_empty(), "compact sent a request: {sent:?}");
+    assert_eq!(out.code, Some(0), "{out:?}");
+    let line = out.stdout.trim_end_matches('\n');
+    let v = k5_cli::out::json::parse(line).unwrap_or_else(|e| panic!("not JSON: {line:?}: {e:?}"));
+    let id = match &v {
+        k5_cli::out::json::Value::Object(pairs) => pairs
+            .iter()
+            .find(|(k, _)| k.as_str() == Some("sessionId"))
+            .map(|(_, v)| v.clone()),
+        _ => None,
+    };
+    assert_eq!(
+        id,
+        Some(k5_cli::out::json::Value::Str(ODD.into())),
+        "{line}"
+    );
+    assert!(
+        line.starts_with(r#"{"sessionId":"we\"ird\\id","compacted":1,"bytesBefore":3000,"#),
+        "{line}"
+    );
 }

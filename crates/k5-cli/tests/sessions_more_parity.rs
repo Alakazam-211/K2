@@ -166,7 +166,7 @@ fn sessions_set_label_as_the_shell_does() {
                 0,
             ),
             &["label_parts"],
-            Some((1, 0)),
+            Some((0, 0)),
         ),
         bash32_empty_array(
             case(
@@ -179,7 +179,7 @@ fn sessions_set_label_as_the_shell_does() {
                 0,
             ),
             &["label_parts"],
-            Some((1, 0)),
+            Some((0, 0)),
         ),
         case(
             "the gate: no port",

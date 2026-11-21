@@ -1610,10 +1610,6 @@ fn heartbeat_stops_and_reminders_answer_as_the_shell_does() {
 #[test]
 fn heartbeat_with_no_answer() {
     let rig = Rig::new(VERB, "none");
-    let waited = |c: Case| Case {
-        compare: Compare::Waited,
-        ..c
-    };
     let v = vec![
         // bash32-pipe-reader: on macOS's /bin/bash 3.2 the list's reader
         // runs on the empty input and the command exits 1.
@@ -1648,18 +1644,26 @@ fn heartbeat_with_no_answer() {
                 1,
             )
         },
-        waited(with(
-            cell(),
-            case(
-                "a fire the cell socket may have run",
-                &["fire", "x"],
-                &[],
-                vec![Reply::Close],
-                port_only,
-                141,
-                1,
-            ),
-        )),
+        // bash32-pipe-reader: on the cell socket the reader prints nothing
+        // more on bash 3.2, and the command exits 1.
+        Case {
+            compare: Compare::Bash32PipeReader {
+                stdout: "",
+                stderr: "",
+            },
+            ..with(
+                cell(),
+                case(
+                    "a fire the cell socket may have run",
+                    &["fire", "x"],
+                    &[],
+                    vec![Reply::Close],
+                    port_only,
+                    141,
+                    1,
+                ),
+            )
+        },
         case(
             "not HTTP",
             &["log"],

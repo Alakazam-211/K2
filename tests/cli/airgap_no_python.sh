@@ -122,29 +122,10 @@ run_install() {
     set -e
 }
 
-# The k5 binary with no python3 on PATH: `daemon install` is not built
-# into it, so it hands nothing to bash and runs nothing, by the K2 ruling
-# that scripts/cli-parity.sh names native-without-python3: one line naming
-# Python 3, exit 69, and nothing fetched, whatever the settings say.
-BIN_NOPY=""
-NO_PYTHON_LINE="k5 daemon: this command is not built into k5 yet and needs Python 3."
-expect_no_python() {
-    local label="$1"
-    if [ "$RC" -eq 69 ]; then ok "$label: exit 69 (the k5 binary)"; else bad "$label: exit $RC (want 69, the k5 binary)"; fi
-    case "$OUT" in
-        "$NO_PYTHON_LINE"*) ok "$label: the one line naming Python 3" ;;
-        *) bad "$label: not the no-Python line"; printf '%s\n' "$OUT" | sed 's/^/      | /' >&2 ;;
-    esac
-    if [ -s "$LOG" ]; then
-        bad "$label: reached the network:"; sed 's/^/      | /' "$LOG" >&2
-    else
-        ok "$label: nothing fetched"
-    fi
-}
-
+# The k5 binary answers `daemon install` itself, with or without python3,
+# so every mode below expects what bash does.
 expect_refused() {
     local label="$1" line="$2"
-    [ -z "$BIN_NOPY" ] || { expect_no_python "$label"; return; }
     if [ "$RC" -eq 1 ]; then ok "$label: exit 1"; else bad "$label: exit $RC (want 1)"; fi
     case "$OUT" in
         *"$line"*) ok "$label: says why" ;;
@@ -159,7 +140,6 @@ expect_refused() {
 
 expect_fetched() {
     local label="$1"
-    [ -z "$BIN_NOPY" ] || { expect_no_python "$label"; return; }
     if [ "$RC" -eq 1 ]; then ok "$label: exit 1 (the stub refused the fetch)"; else bad "$label: exit $RC (want 1)"; fi
     case "$OUT" in
         *"air-gap"*) bad "$label: refused as air-gap"; printf '%s\n' "$OUT" | sed 's/^/      | /' >&2 ;;
@@ -182,8 +162,6 @@ for mode in nopy standin normal; do
         normal) P="$PATH_NORMAL" ;;
     esac
     echo "== $mode =="
-    BIN_NOPY=""
-    [ "$mode" != nopy ] || [ "$CLI_UNDER_TEST" = "$CLI_BASH_SOURCE" ] || BIN_NOPY=1
 
     setup_home "$mode-on" on
     run_install "$P"
@@ -222,13 +200,7 @@ done
 echo "== the refusal reads the same with and without python3 =="
 # The HOME path differs per mode; compare with it taken out.
 norm() { printf '%s' "$1" | sed "s#$WORK/home-[a-z]*-on#HOME#g"; }
-if [ "$CLI_UNDER_TEST" != "$CLI_BASH_SOURCE" ]; then
-    # The binary's no-python3 run is its one line (checked above), not bash's.
-    case "$OUT_ON_nopy" in
-        "$NO_PYTHON_LINE"*) ok "no python3: the k5 binary's one line" ;;
-        *) bad "no python3: the k5 binary printed something else"; printf '%s\n' "$OUT_ON_nopy" | sed 's/^/      | /' >&2 ;;
-    esac
-elif [ "$(norm "$OUT_ON_nopy")" = "$(norm "$OUT_ON_normal")" ]; then
+if [ "$(norm "$OUT_ON_nopy")" = "$(norm "$OUT_ON_normal")" ]; then
     ok "no python3 = python3"
 else
     bad "no python3 differs from python3"

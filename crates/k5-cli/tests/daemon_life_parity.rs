@@ -167,7 +167,9 @@ if [ "$1" = --user ]; then scope=user; shift; fi
 read s u st pid slice cg < '{dir}/systemd'
 [ "$s" = "$scope" ] || exit 1
 case "$1" in
-  cat) [ "$2" = "$u" ] || exit 1; echo "ExecStart=/opt/k2/k2-daemon" ;;
+  cat)
+    [ "$2" = "$u" ] || exit 1
+    if [ -f '{dir}/systemd-exec' ]; then cat '{dir}/systemd-exec'; else echo "ExecStart=/opt/k2/k2-daemon"; fi ;;
   is-active) echo "$st"; [ "$st" = active ] ;;
   show)
     case "$3" in
@@ -200,7 +202,6 @@ exit 0
         "loginctl",
         "journalctl",
         "sudo",
-        "minisign",
         "sc",
         "schtasks",
     ] {
@@ -212,11 +213,49 @@ exit 0
             ),
         );
     }
+    // `minisign`: never run, but in an install row (a `fixtures` folder):
+    // `-V -P <key> -m <file> -x <sig> -Q` passes when the signature's
+    // second line is `RUQ<key>` and its fourth is the file's first line,
+    // and prints its trusted comment, as `minisign -Q` does.
+    exe(
+        &d.join("minisign"),
+        &format!(
+            r#"#!/bin/sh
+{}if [ ! -d '{dir}/fixtures' ]; then echo "stand-in minisign: never run" >&2; exit 1; fi
+key=; m=; x=; prev=
+for a in "$@"; do
+  case "$prev" in -P) key=$a ;; -m) m=$a ;; -x) x=$a ;; esac
+  prev=$a
+done
+if [ "$(sed -n 2p "$x")" != "RUQ$key" ]; then echo "stand-in minisign: not this key" >&2; exit 1; fi
+if [ "$(sed -n 4p "$x")" != "$(head -n 1 "$m")" ]; then echo "stand-in minisign: not this file" >&2; exit 1; fi
+sed -n 3p "$x" | sed 's/^trusted comment: //'
+"#,
+            logline("minisign")
+        ),
+    );
+    // `curl`: the real one for the shell's calls to the stub daemon; in
+    // an install row (a `fixtures` folder) it never reaches a network and
+    // serves each URL from its fixture, or fails as `curl -f` on a 404.
     let curl = which("curl").expect("a curl for the shell's calls to the stub daemon");
     exe(
         &d.join("curl"),
         &format!(
-            "#!/bin/sh\n{}exec '{}' \"$@\"\n",
+            r#"#!/bin/sh
+{}if [ -d '{dir}/fixtures' ]; then
+  url=; out=; prev=
+  for a in "$@"; do
+    if [ "$prev" = -o ]; then out=$a; fi
+    case "$a" in http://*|https://*) url=$a ;; esac
+    prev=$a
+  done
+  f='{dir}/fixtures/'"$(printf '%s' "$url" | tr -c 'A-Za-z0-9._-' '_')"
+  if [ ! -f "$f" ]; then echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; fi
+  if [ -n "$out" ]; then cat "$f" > "$out"; else cat "$f"; fi
+  exit 0
+fi
+exec '{}' "$@"
+"#,
             logline("curl"),
             curl.display()
         ),
@@ -286,6 +325,7 @@ fn base(r: &Rig) {
     let d = svc(r);
     for f in [
         "systemd",
+        "systemd-exec",
         "systemd-fail",
         "uname-s",
         "launchctl-load",
@@ -1361,22 +1401,10 @@ fn daemon_help_lines_never_act() {
     }
 }
 
-/// `install`, and a value flag as the last word, are the shell's.
+/// A value flag as the last word is the shell's (`install` never reaches
+/// [`life::parse`]: [`k5_cli::families::daemon::install`] reads it).
 #[test]
-fn daemon_install_and_a_last_value_flag_are_the_shell_s() {
-    let r = rig("handback");
-    let rows: Vec<Case> = vec![case(
-        "install --bogus",
-        &["install", "--bogus"],
-        &[],
-        vec![],
-        base,
-        2,
-        0,
-    )];
-    for c in rows {
-        check(&r, &c, &[], false);
-    }
+fn a_last_value_flag_is_the_shell_s() {
     for (verb, rest) in [
         ("install", &[][..]),
         ("log", &["--tail"][..]),
@@ -1404,6 +1432,7 @@ fn no_service_manager_is_named_by_an_absolute_path() {
         root.join("../../cli/src/daemon-install.sh"),
         root.join("src/families/daemon.rs"),
         root.join("src/families/daemon/life.rs"),
+        root.join("src/families/daemon/install.rs"),
     ];
     for f in files {
         let text = std::fs::read_to_string(&f).unwrap_or_else(|e| panic!("{}: {e}", f.display()));
@@ -1432,8 +1461,12 @@ fn no_service_manager_is_named_by_an_absolute_path() {
 fn daemon_life_lines_say_the_brand_s_name() {
     let r = rig("brand");
     let cli = k2_client::brand::CLI_NAME;
-    let rows: [(&'static [&'static str], String); 3] = [
+    let rows: [(&'static [&'static str], String); 4] = [
         (&["nosuch"], format!("Usage: {cli} daemon <status|")),
+        (
+            &["install", "--bogus"],
+            format!("{cli} daemon install: unknown argument: --bogus"),
+        ),
         (
             &["stop", "x"],
             format!("\"hint\":\"{cli} daemon stop [--keep-agents]\""),
@@ -1452,5 +1485,1013 @@ fn daemon_life_lines_say_the_brand_s_name() {
                 out.stderr
             );
         }
+    }
+}
+
+// ── daemon install ──────────────────────────────────────────────────
+//
+// Every row runs on the stand-ins: `curl` serves the fixtures below and
+// never a network, `minisign` checks the stand-in signatures, the units
+// are the `systemctl` stand-in's. HOME and the K2 home are the rig's.
+// Both sides must make the same calls, with the same URLs (asserted),
+// print the same, exit the same and leave the same files under HOME.
+
+/// The release the fixtures are.
+const FIX_VERSION: &str = "0.46.9";
+/// The stand-in daemon binary.
+const FIX_BIN: &str = "#!/bin/sh\necho stand-in k2-daemon\n";
+/// The update keys, U2 then U3 (the shell's `_DAEMON_UPDATE_PUBKEYS`).
+const U2: &str = k5_cli::families::daemon::install::UPDATE_KEYS[0];
+const U3: &str = k5_cli::families::daemon::install::UPDATE_KEYS[1];
+
+fn tagged_manifest(v: &str) -> String {
+    format!(
+        "{}/v{v}/daemon-latest.json",
+        k2_client::brand::RELEASE_DOWNLOAD_BASE
+    )
+}
+
+fn asset_url(platform: &str) -> String {
+    format!(
+        "{}/v{FIX_VERSION}/k2-daemon-{platform}",
+        k2_client::brand::RELEASE_DOWNLOAD_BASE
+    )
+}
+
+/// A fixture's file name: the URL with every byte but `[A-Za-z0-9._-]`
+/// made `_` (the `curl` stand-in's `tr -c`).
+fn fixture_name(url: &str) -> String {
+    url.bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-') {
+                b as char
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn fixtures(r: &Rig) -> PathBuf {
+    svc(r).join("fixtures")
+}
+
+fn serve(r: &Rig, url: &str, body: &str) {
+    std::fs::write(fixtures(r).join(fixture_name(url)), body).unwrap();
+}
+
+/// The sha256 of `text`, by this machine's own tool.
+fn sha256_hex(r: &Rig, text: &str) -> String {
+    let f = r.dir.join("sha-input");
+    std::fs::write(&f, text).unwrap();
+    let o = match which("sha256sum") {
+        Some(p) => std::process::Command::new(p).arg(&f).output().unwrap(),
+        None => std::process::Command::new(which("shasum").expect("a sha256 tool"))
+            .args(["-a", "256"])
+            .arg(&f)
+            .output()
+            .unwrap(),
+    };
+    assert!(o.status.success());
+    String::from_utf8(o.stdout).unwrap()[..64].to_string()
+}
+
+/// A stand-in signature: `line2` (`RUQ<key>` is a good one), a trusted
+/// comment naming `file` and `version`, and the binary's first line.
+fn minisig(line2: &str, file: &str, version: &str) -> String {
+    format!(
+        "untrusted comment: signature from a stand-in key\n{line2}\ntrusted comment: timestamp:1700000000\tfile:{file}\tversion:{version}\n{}\n",
+        FIX_BIN.lines().next().unwrap()
+    )
+}
+
+/// How a row's release looks.
+struct Release {
+    /// Where the manifest is served.
+    at: String,
+    version: &'static str,
+    platform: &'static str,
+    /// The signature's second line.
+    line2: String,
+    tc_file: String,
+    tc_version: &'static str,
+    /// The manifest's sha256, else the binary's.
+    sha: Option<&'static str>,
+    /// `sig2` holds the signature itself, base64.
+    inline_b64: bool,
+}
+
+impl Release {
+    fn good() -> Release {
+        Release {
+            at: k2_client::brand::DAEMON_FEED_URL.to_string(),
+            version: FIX_VERSION,
+            platform: "linux-x86_64",
+            line2: format!("RUQ{U2}"),
+            tc_file: "k2-daemon-linux-x86_64".into(),
+            tc_version: FIX_VERSION,
+            sha: None,
+            inline_b64: false,
+        }
+    }
+}
+
+fn b64(text: &str) -> String {
+    const A: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let b = text.as_bytes();
+    let mut o = String::new();
+    for c in b.chunks(3) {
+        let n = (u32::from(c[0]) << 16)
+            | (u32::from(*c.get(1).unwrap_or(&0)) << 8)
+            | u32::from(*c.get(2).unwrap_or(&0));
+        for i in 0..4 {
+            if i <= c.len() {
+                o.push(A[((n >> (18 - 6 * i)) & 63) as usize] as char);
+            } else {
+                o.push('=');
+            }
+        }
+    }
+    o
+}
+
+/// Every install row starts here: [`base`], nothing installed under HOME,
+/// and an empty fixtures folder (which puts `curl` and `minisign` in
+/// their install mode).
+fn install_base(r: &Rig) {
+    base(r);
+    for d in [".local", ".config", "opt", "sys"] {
+        let _ = std::fs::remove_dir_all(r.home.join(d));
+    }
+    let _ = std::fs::remove_dir_all(fixtures(r));
+    std::fs::create_dir_all(fixtures(r)).unwrap();
+}
+
+fn publish(r: &Rig, rel: &Release) {
+    let asset = asset_url(rel.platform);
+    let sig_url = format!("{asset}.sig2");
+    let sig = minisig(&rel.line2, &rel.tc_file, rel.tc_version);
+    let sha = match rel.sha {
+        Some(s) => s.to_string(),
+        None => sha256_hex(r, FIX_BIN),
+    };
+    let sig2 = if rel.inline_b64 { b64(&sig) } else { sig_url.clone() };
+    let manifest = format!(
+        "{{\n  \"version\": \"{}\",\n  \"platforms\": {{\n    \"{}\": {{\n      \"url\": \"{asset}\",\n      \"sig\": \"{asset}.sig\",\n      \"sha256\": \"{sha}\",\n      \"sig2\": \"{sig2}\"\n    }}\n  }}\n}}\n",
+        rel.version, rel.platform
+    );
+    serve(r, &rel.at, &manifest);
+    serve(r, &asset, FIX_BIN);
+    serve(r, &sig_url, &sig);
+}
+
+fn fx_latest(r: &Rig) {
+    install_base(r);
+    publish(r, &Release::good());
+}
+
+fn fx_tagged_backup_key(r: &Rig) {
+    install_base(r);
+    publish(
+        r,
+        &Release {
+            at: tagged_manifest(FIX_VERSION),
+            line2: format!("RUQ{U3}"),
+            ..Release::good()
+        },
+    );
+}
+
+fn fx_tagged_other_version(r: &Rig) {
+    install_base(r);
+    publish(
+        r,
+        &Release {
+            at: tagged_manifest(FIX_VERSION),
+            version: "0.46.10",
+            ..Release::good()
+        },
+    );
+}
+
+fn fx_bad_sig(r: &Rig) {
+    install_base(r);
+    publish(
+        r,
+        &Release {
+            line2: "RUQnot-an-update-key".into(),
+            ..Release::good()
+        },
+    );
+}
+
+fn fx_legacy_sig(r: &Rig) {
+    install_base(r);
+    publish(
+        r,
+        &Release {
+            line2: format!("RWQ{U2}"),
+            ..Release::good()
+        },
+    );
+}
+
+fn fx_other_file(r: &Rig) {
+    install_base(r);
+    publish(
+        r,
+        &Release {
+            tc_file: "k2-daemon-macos-aarch64".into(),
+            ..Release::good()
+        },
+    );
+}
+
+fn fx_other_signed_version(r: &Rig) {
+    install_base(r);
+    publish(
+        r,
+        &Release {
+            tc_version: "0.46.8",
+            ..Release::good()
+        },
+    );
+}
+
+fn fx_sha_mismatch(r: &Rig) {
+    install_base(r);
+    publish(
+        r,
+        &Release {
+            sha: Some("0000000000000000000000000000000000000000000000000000000000000000"),
+            ..Release::good()
+        },
+    );
+}
+
+fn fx_retired(r: &Rig) {
+    install_base(r);
+    publish(
+        r,
+        &Release {
+            version: "0.46.5",
+            ..Release::good()
+        },
+    );
+}
+
+fn fx_other_platform(r: &Rig) {
+    install_base(r);
+    publish(
+        r,
+        &Release {
+            platform: "linux-aarch64",
+            ..Release::good()
+        },
+    );
+}
+
+fn fx_inline_sig(r: &Rig) {
+    install_base(r);
+    publish(
+        r,
+        &Release {
+            inline_b64: true,
+            ..Release::good()
+        },
+    );
+}
+
+fn fx_mac(r: &Rig) {
+    install_base(r);
+    put(r, "uname-s", "Darwin\n");
+    publish(
+        r,
+        &Release {
+            platform: "macos-x86_64",
+            tc_file: "k2-daemon-macos-x86_64".into(),
+            ..Release::good()
+        },
+    );
+}
+
+fn fx_user_unit(r: &Rig) {
+    install_base(r);
+    put(
+        r,
+        "systemd",
+        "user k2-daemon.service active 4242 user.slice /user.slice/k2-daemon.service\n",
+    );
+    put(r, "systemd-exec", "ExecStart=-@%h/opt/k2-daemon --serve\n");
+    publish(r, &Release::good());
+}
+
+fn fx_user_unit_no_exec(r: &Rig) {
+    fx_user_unit(r);
+    put(r, "systemd-exec", "[Service]\nExecStart=\n");
+}
+
+fn fx_system_unit_failing(r: &Rig) {
+    install_base(r);
+    put(
+        r,
+        "systemd",
+        "system k2-daemon.service active 4242 system.slice /system.slice/k2-daemon.service\n",
+    );
+    put(r, "systemd-exec", "ExecStart=%h/sys/k2-daemon\n");
+    put(r, "systemd-fail", "");
+    publish(r, &Release::good());
+}
+
+/// No manifest served at all.
+fn fx_none(r: &Rig) {
+    install_base(r);
+}
+
+/// No daemon set up (no port, no token), a release served.
+fn fx_no_daemon(r: &Rig) {
+    fx_latest(r);
+    for f in ["heartbeat.port", "heartbeat.token"] {
+        let _ = std::fs::remove_file(r.k2home.join(f));
+    }
+}
+
+/// A `file://` release in the rig's secrets folder.
+fn fx_file_urls(r: &Rig) {
+    install_base(r);
+    let dir = r.secrets.display().to_string();
+    let sig = minisig(&format!("RUQ{U2}"), "k2-daemon-linux-x86_64", FIX_VERSION);
+    std::fs::write(r.secrets.join("k2-daemon-linux-x86_64"), FIX_BIN).unwrap();
+    std::fs::write(r.secrets.join("k2-daemon.sig2"), sig).unwrap();
+    let manifest = format!(
+        "{{\"version\":\"{FIX_VERSION}\",\"platforms\":{{\"linux-x86_64\":{{\"url\":\"file://{dir}/k2-daemon-linux-x86_64\",\"sha256\":\"{}\",\"sig2\":\"file://{dir}/k2-daemon.sig2\"}}}}}}\n",
+        sha256_hex(r, FIX_BIN)
+    );
+    std::fs::write(r.secrets.join("daemon-latest.json"), manifest).unwrap();
+}
+
+/// `file://` URLs to a signature that isn't there.
+fn fx_file_sig_missing(r: &Rig) {
+    fx_file_urls(r);
+    std::fs::remove_file(r.secrets.join("k2-daemon.sig2")).unwrap();
+}
+
+/// What a side left under HOME, outside the K2 home: each file's path,
+/// text and whether it can run.
+fn installed(r: &Rig) -> Vec<(String, String, bool)> {
+    fn walk(dir: &Path, root: &Path, skip: &Path, out: &mut Vec<(String, String, bool)>) {
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for e in rd {
+            let p = e.unwrap().path();
+            if p == skip {
+                continue;
+            }
+            let m = std::fs::symlink_metadata(&p).unwrap();
+            if m.is_dir() {
+                walk(&p, root, skip, out);
+            } else {
+                use std::os::unix::fs::PermissionsExt;
+                out.push((
+                    p.strip_prefix(root).unwrap().display().to_string(),
+                    String::from_utf8_lossy(&std::fs::read(&p).unwrap()).into_owned(),
+                    m.permissions().mode() & 0o111 != 0,
+                ));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(&r.home, &r.home, &r.k2home, &mut out);
+    out.sort();
+    out
+}
+
+/// `line` with each side's `mktemp -d` folder written `{tmp}`.
+fn mask_tmp(r: &Rig, line: &str) -> String {
+    let mut line = line.to_string();
+    for sub in ["tmp-bash", "tmp-rust", "tmp-nopy"] {
+        let prefix = format!("{}/k2-daemon-install.", r.dir.join(sub).display());
+        while let Some(at) = line.find(&prefix) {
+            let end = (at + prefix.len() + 6).min(line.len());
+            line.replace_range(at..end, "{tmp}");
+        }
+    }
+    line
+}
+
+/// The stand-ins' calls, `curl` among them, with the temporary folder
+/// masked. No token is in any of them.
+fn install_calls(r: &Rig, name: &str) -> Vec<String> {
+    let log = r.take_tool_log();
+    for t in [OWNER, DAEMON_TOKEN, REMOTE_TOKEN] {
+        assert!(
+            !log.contains(t),
+            "{name}: a token in a stand-in's arguments:\n{log}"
+        );
+    }
+    log.lines()
+        .filter(|l| STAND_INS.contains(&l.split(' ').next().unwrap_or("")))
+        .map(|l| mask_tmp(r, l))
+        .collect()
+}
+
+/// No side leaves its `mktemp -d` folder behind.
+fn assert_no_scratch(r: &Rig, name: &str) {
+    for sub in ["tmp-bash", "tmp-rust", "tmp-nopy"] {
+        let Ok(rd) = std::fs::read_dir(r.dir.join(sub)) else {
+            continue;
+        };
+        for e in rd {
+            let n = e.unwrap().file_name().to_string_lossy().into_owned();
+            assert!(
+                !n.starts_with("k2-daemon-install."),
+                "{name}: {sub}/{n} was left behind"
+            );
+        }
+    }
+}
+
+type InstallSeen = (
+    Option<i32>,
+    String,
+    String,
+    Vec<String>,
+    Vec<String>,
+    Vec<(String, String, bool)>,
+);
+
+/// Runs `c` on the shell, the binary and the binary with no `python3`,
+/// and compares them; `want` is the calls (`{home}`, `{uid}`, `{secrets}`
+/// and `{tmp}` filled in) the shell must make.
+fn check_install(r: &Rig, c: &Case, want: &[String]) {
+    let want: Vec<String> = want
+        .iter()
+        .map(|w| {
+            w.replace("{home}", &r.home.to_string_lossy())
+                .replace("{uid}", &uid())
+                .replace("{secrets}", &r.secrets.to_string_lossy())
+        })
+        .collect();
+    let bash_case = side_case(r, c, true);
+    r.prepare(Side::Bash, &bash_case);
+    let out = r.run(true, &bash_case);
+    let log = r.read(Side::Bash, false, c.name);
+    let bash: InstallSeen = (
+        out.code,
+        mask_tmp(r, &out.stdout),
+        mask_tmp(r, &out.stderr),
+        log.iter()
+            .map(|l| normalise(l, false, VERB, c.name))
+            .collect(),
+        install_calls(r, c.name),
+        installed(r),
+    );
+    println!("-- bash: {bash:?}");
+    assert_eq!(bash.0, Some(c.code), "{}: bash's exit", c.name);
+    assert!(bash.3.is_empty(), "{}: bash asked a daemon", c.name);
+    assert_eq!(bash.4, want, "{}: bash's calls", c.name);
+    assert_no_scratch(r, c.name);
+    for (side, python) in [(Side::Rust, true), (Side::NoPython3, false)] {
+        let run = side_case(r, c, python);
+        let (out, log) = r.binary(&run, !python);
+        assert!(
+            !k5_cli::fallthrough::cache_dir(&r.k2home).exists(),
+            "{}: {side:?} handed it to the shell",
+            c.name
+        );
+        let got: InstallSeen = (
+            out.code,
+            mask_tmp(r, &out.stdout),
+            mask_tmp(r, &out.stderr),
+            log,
+            install_calls(r, c.name),
+            installed(r),
+        );
+        assert_eq!(got, bash, "{}: {side:?} against bash", c.name);
+        assert_no_scratch(r, c.name);
+    }
+}
+
+fn s(v: &[&str]) -> Vec<String> {
+    v.iter().map(|x| x.to_string()).collect()
+}
+
+fn fetch(url: &str) -> String {
+    format!("curl -fsSL {url}")
+}
+
+fn fetch_to(url: &str, file: &str) -> String {
+    format!("curl -fsSL {url} -o {{tmp}}/{file}")
+}
+
+fn verify_with(key: &str) -> String {
+    format!("minisign -V -P {key} -m {{tmp}}/k2-daemon -x {{tmp}}/k2-daemon.minisig -Q")
+}
+
+/// The calls of a download of the good release's asset and signature.
+fn downloads(platform: &str) -> Vec<String> {
+    let a = asset_url(platform);
+    vec![
+        fetch_to(&a, "k2-daemon"),
+        fetch_to(&format!("{a}.sig2"), "k2-daemon.minisig"),
+    ]
+}
+
+#[test]
+fn daemon_install_downloads_verifies_and_installs_as_the_shell_does() {
+    let r = rig("install");
+    let latest = fetch(k2_client::brand::DAEMON_FEED_URL);
+    let tagged = fetch(&tagged_manifest(FIX_VERSION));
+    let no_unit = s(NO_UNIT);
+    let cat_then = |head: Vec<String>, tail: Vec<String>| -> Vec<String> {
+        let mut v = head;
+        v.extend(no_unit.clone());
+        v.extend(tail);
+        v
+    };
+    let mut good = downloads("linux-x86_64");
+    good.push(verify_with(U2));
+    let rows: Vec<(Case, Vec<String>)> = vec![
+        (
+            // native: daemon install
+            case(
+                "install: the newest release, no unit yet",
+                &["install"],
+                &[],
+                vec![],
+                fx_latest,
+                0,
+                0,
+            ),
+            cat_then(vec![latest.clone()], good.clone()),
+        ),
+        (
+            // native: daemon install --version
+            case(
+                "install --version v0.46.9: signed with the backup key",
+                &["install", "--version", "v0.46.9"],
+                &[],
+                vec![],
+                fx_tagged_backup_key,
+                0,
+                0,
+            ),
+            cat_then(vec![tagged.clone()], {
+                let mut v = downloads("linux-x86_64");
+                v.push(verify_with(U2));
+                v.push(verify_with(U3));
+                v
+            }),
+        ),
+        (
+            case(
+                "install: a signature no update key made is refused",
+                &["install"],
+                &[],
+                vec![],
+                fx_bad_sig,
+                1,
+                0,
+            ),
+            cat_then(vec![latest.clone()], {
+                let mut v = downloads("linux-x86_64");
+                v.push(verify_with(U2));
+                v.push(verify_with(U3));
+                v
+            }),
+        ),
+        (
+            case(
+                "install: a signature that is not prehashed is refused",
+                &["install"],
+                &[],
+                vec![],
+                fx_legacy_sig,
+                1,
+                0,
+            ),
+            cat_then(vec![latest.clone()], downloads("linux-x86_64")),
+        ),
+        (
+            case(
+                "install: a signature for another file is refused",
+                &["install"],
+                &[],
+                vec![],
+                fx_other_file,
+                1,
+                0,
+            ),
+            cat_then(vec![latest.clone()], good.clone()),
+        ),
+        (
+            case(
+                "install: a signature for another version is refused",
+                &["install"],
+                &[],
+                vec![],
+                fx_other_signed_version,
+                1,
+                0,
+            ),
+            cat_then(vec![latest.clone()], good.clone()),
+        ),
+        (
+            case(
+                "install: a sha256 that differs is refused",
+                &["install"],
+                &[],
+                vec![],
+                fx_sha_mismatch,
+                1,
+                0,
+            ),
+            cat_then(vec![latest.clone()], good.clone()),
+        ),
+        (
+            case(
+                "install: the signature inline in the manifest, base64",
+                &["install"],
+                &[],
+                vec![],
+                fx_inline_sig,
+                0,
+                0,
+            ),
+            cat_then(
+                vec![latest.clone()],
+                vec![
+                    fetch_to(&asset_url("linux-x86_64"), "k2-daemon"),
+                    verify_with(U2),
+                ],
+            ),
+        ),
+        (
+            // native: daemon install --no-service
+            case(
+                "install --no-service: no unit looked for or written",
+                &["install", "--no-service"],
+                &[],
+                vec![],
+                fx_latest,
+                0,
+                0,
+            ),
+            {
+                let mut v = vec![latest.clone()];
+                v.extend(good.clone());
+                v
+            },
+        ),
+        (
+            // native: daemon install --bin-dir
+            case(
+                "install --bin-dir: a user unit's binary is updated in place and restarted",
+                &["install", "--bin-dir", "{secrets}/bin"],
+                &[],
+                vec![],
+                fx_user_unit,
+                0,
+                0,
+            ),
+            {
+                let mut v = vec![latest.clone(), CAT_USER.into(), CAT_USER.into()];
+                v.extend(good.clone());
+                v.push("systemctl --user restart k2-daemon.service".into());
+                v
+            },
+        ),
+        (
+            case(
+                "install: a system unit whose restart needs root",
+                &["install"],
+                &[],
+                vec![],
+                fx_system_unit_failing,
+                1,
+                0,
+            ),
+            {
+                let mut v = vec![
+                    latest.clone(),
+                    CAT_USER.into(),
+                    CAT_USER_OLD.into(),
+                    CAT_SYSTEM.into(),
+                    CAT_SYSTEM.into(),
+                ];
+                v.extend(good.clone());
+                v.push("systemctl restart k2-daemon.service".into());
+                if uid() != "0" {
+                    v.push("sudo -n systemctl restart k2-daemon.service".into());
+                }
+                v
+            },
+        ),
+        (
+            case(
+                "install: a unit whose ExecStart= can't be read",
+                &["install"],
+                &[],
+                vec![],
+                fx_user_unit_no_exec,
+                1,
+                0,
+            ),
+            vec![latest.clone(), CAT_USER.into(), CAT_USER.into()],
+        ),
+        (
+            case(
+                "install on macOS: the launchd plist",
+                &["install"],
+                &[],
+                vec![],
+                fx_mac,
+                0,
+                0,
+            ),
+            {
+                let mut v = vec![latest.clone()];
+                v.extend(downloads("macos-x86_64"));
+                v.push(verify_with(U2));
+                v
+            },
+        ),
+        (
+            // native: daemon install --manifest-url
+            case(
+                "install --manifest-url file://: every file is copied",
+                &["install", "--manifest-url", "file://{secrets}/daemon-latest.json"],
+                &[],
+                vec![],
+                fx_file_urls,
+                0,
+                0,
+            ),
+            cat_then(vec![], vec![verify_with(U2)]),
+        ),
+        (
+            case(
+                "install --manifest-url file://: the signature isn't there",
+                &["install", "--manifest-url", "file://{secrets}/daemon-latest.json"],
+                &[],
+                vec![],
+                fx_file_sig_missing,
+                1,
+                0,
+            ),
+            no_unit.clone(),
+        ),
+    ];
+    for (c, want) in rows {
+        check_install(&r, &c, &want);
+    }
+}
+
+#[test]
+fn daemon_install_refusals_and_dry_runs_answer_as_the_shell_does() {
+    let r = rig("install-no");
+    let latest = fetch(k2_client::brand::DAEMON_FEED_URL);
+    let mut with_units = vec![latest.clone()];
+    with_units.extend(s(NO_UNIT));
+    let rows: Vec<(Case, Vec<String>)> = vec![
+        (
+            // native: daemon install --dry-run
+            case(
+                "install --dry-run",
+                &["install", "--dry-run"],
+                &[],
+                vec![],
+                fx_latest,
+                0,
+                0,
+            ),
+            with_units.clone(),
+        ),
+        (
+            case(
+                "install --dry-run --no-service --bin-dir",
+                &["install", "--dry-run", "--no-service", "--bin-dir", "{secrets}/bin"],
+                &[],
+                vec![],
+                fx_latest,
+                0,
+                0,
+            ),
+            vec![latest.clone()],
+        ),
+        (
+            case(
+                "install --dry-run with a user unit",
+                &["install", "--dry-run"],
+                &[],
+                vec![],
+                fx_user_unit,
+                0,
+                0,
+            ),
+            vec![latest.clone(), CAT_USER.into(), CAT_USER.into()],
+        ),
+        (
+            case(
+                "install --dry-run on macOS",
+                &["install", "--dry-run"],
+                &[],
+                vec![],
+                fx_mac,
+                0,
+                0,
+            ),
+            vec![latest.clone()],
+        ),
+        (
+            case(
+                "install --dry-run with no daemon set up: no connection gate",
+                &["install", "--dry-run"],
+                &[],
+                vec![],
+                fx_no_daemon,
+                0,
+                0,
+            ),
+            with_units.clone(),
+        ),
+        (
+            case(
+                "install --version 0.46.5: the retired key, nothing fetched",
+                &["install", "--version", "0.46.5"],
+                &[],
+                vec![],
+                fx_latest,
+                1,
+                0,
+            ),
+            vec![],
+        ),
+        (
+            case(
+                "install --version banana: not a version, nothing fetched",
+                &["install", "--version", "banana"],
+                &[],
+                vec![],
+                fx_latest,
+                1,
+                0,
+            ),
+            vec![],
+        ),
+        (
+            case(
+                "install: the newest manifest is older than the update keys",
+                &["install"],
+                &[],
+                vec![],
+                fx_retired,
+                1,
+                0,
+            ),
+            vec![latest.clone()],
+        ),
+        (
+            case(
+                "install: no artifact for this platform",
+                &["install"],
+                &[],
+                vec![],
+                fx_other_platform,
+                1,
+                0,
+            ),
+            vec![latest.clone()],
+        ),
+        (
+            case(
+                "install --version: the manifest is for another release",
+                &["install", "--version", "0.46.9"],
+                &[],
+                vec![],
+                fx_tagged_other_version,
+                1,
+                0,
+            ),
+            vec![fetch(&tagged_manifest(FIX_VERSION))],
+        ),
+        (
+            case(
+                "install: no manifest served",
+                &["install"],
+                &[],
+                vec![],
+                fx_none,
+                1,
+                0,
+            ),
+            vec![latest.clone()],
+        ),
+        (
+            case(
+                "install --manifest-url file:// that isn't there",
+                &["install", "--manifest-url", "file://{secrets}/nope.json"],
+                &[],
+                vec![],
+                fx_none,
+                1,
+                0,
+            ),
+            vec![],
+        ),
+        (
+            case(
+                "install --bogus",
+                &["install", "--bogus"],
+                &[],
+                vec![],
+                fx_latest,
+                2,
+                0,
+            ),
+            vec![],
+        ),
+        (
+            case(
+                "install --bin-dir as the last word",
+                &["install", "--no-service", "--bin-dir"],
+                &[],
+                vec![],
+                fx_latest,
+                1,
+                0,
+            ),
+            vec![],
+        ),
+        (
+            case(
+                "install with air-gap on",
+                &["install", "--bogus"],
+                &[("K2_AIRGAP", "1")],
+                vec![],
+                fx_latest,
+                1,
+                0,
+            ),
+            vec![],
+        ),
+        (
+            case(
+                "install: the guard",
+                &["install", "--dry-run"],
+                &[("K2_NO_OWNER_FALLBACK", "1")],
+                vec![],
+                port_only_install,
+                3,
+                0,
+            ),
+            vec![],
+        ),
+        (
+            case(
+                "install: a session with no passport",
+                &["install", "--dry-run"],
+                &[("K2_HOOK_SOCK", "{sock}")],
+                vec![],
+                fx_latest,
+                3,
+                0,
+            ),
+            vec![],
+        ),
+    ];
+    for (c, want) in rows {
+        check_install(&r, &c, &want);
+    }
+}
+
+/// A release served, and a port but no token.
+fn port_only_install(r: &Rig) {
+    fx_latest(r);
+    let _ = std::fs::remove_file(r.k2home.join("heartbeat.token"));
+    let _ = std::fs::remove_file(r.k2home.join("daemon.token"));
+}
+
+/// Help never acts: `install -h` anywhere is the shell's help, with no
+/// fetch, no service call and nothing written.
+#[test]
+fn daemon_install_help_never_acts() {
+    let r = rig("install-help");
+    let rows: Vec<Case> = vec![
+        case("install -h", &["install", "-h"], &[], vec![], fx_user_unit, 0, 0),
+        case(
+            "install --dry-run --help",
+            &["install", "--dry-run", "--help"],
+            &[],
+            vec![],
+            fx_user_unit,
+            0,
+            0,
+        ),
+    ];
+    for c in rows {
+        check(&r, &c, &[], false);
+        assert!(installed(&r).is_empty(), "{}: wrote a file", c.name);
     }
 }

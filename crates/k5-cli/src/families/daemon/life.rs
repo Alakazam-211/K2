@@ -1,7 +1,7 @@
 //! `k5 daemon start|stop|restart|survive|log|logs|uninstall`, and the
 //! daemon row's usage for any other word, as the shell CLI answers them:
 //! `cmd_daemon_*` (`cli/src/daemon.sh`) and the router's `daemon` arm
-//! (`cli/src/router.sh`). `install` stays the shell's.
+//! (`cli/src/router.sh`). `install` is [`super::install`]'s.
 //!
 //! The service is driven as the shell drives it: by the programs on
 //! `PATH`, by name (`systemctl`, `launchctl`, `id`, `uname`, `tail`), with
@@ -29,7 +29,7 @@
 //!   a child's environment.
 //!
 //! The binary hands these to the shell ([`parse`] says `None`) before it
-//! prints, reads or sends anything: `install`; a value flag as the last
+//! prints, reads or sends anything: a value flag as the last
 //! word (`restart --host`, `restart --token`, `log --tail`, `log -n`: the
 //! shell's own `shift 2` or `$2` failure); `restart --host` with a host
 //! that is not an `http://` or `https://` URL the shared remote reader
@@ -237,7 +237,7 @@ pub fn os() -> Os {
 }
 
 /// `$HOME` as the shell writes it into a path.
-fn user_home() -> String {
+pub(super) fn user_home() -> String {
     std::env::var_os("HOME")
         .map(|h| h.to_string_lossy().into_owned())
         .unwrap_or_default()
@@ -245,7 +245,7 @@ fn user_home() -> String {
 
 /// The launch agent's label and plist (`_daemon_label`, `_daemon_plist`):
 /// `dev.k2.daemon`, or the old label when only its plist is there.
-fn launchd() -> (&'static str, String) {
+pub(super) fn launchd() -> (&'static str, String) {
     let agents = format!("{}/Library/LaunchAgents", user_home());
     let plist = format!("{agents}/dev.k2.daemon.plist");
     let old = format!("{agents}/com.k2so.k2so-daemon.plist");

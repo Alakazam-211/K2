@@ -648,10 +648,7 @@ mod tests {
             })
         );
         assert_eq!(parse(&["help"], &same), Some(Form::Help));
-        assert_eq!(
-            parse(&["update", "--from"], &same),
-            Some(Form::ShiftFailed)
-        );
+        assert_eq!(parse(&["update", "--from"], &same), Some(Form::ShiftFailed));
         assert_eq!(
             parse(&["status", "--json", "--from"], &same),
             Some(Form::ShiftFailed)

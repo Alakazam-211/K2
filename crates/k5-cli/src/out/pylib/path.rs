@@ -188,7 +188,11 @@ pub fn expanduser(p: &str, home: Option<&str>) -> Option<String> {
         return Some(p.to_string());
     };
     let joined = format!("{}{tail}", userhome.trim_end_matches('/'));
-    Some(if joined.is_empty() { "/".into() } else { joined })
+    Some(if joined.is_empty() {
+        "/".into()
+    } else {
+        joined
+    })
 }
 
 /// The home folder in the password database for `name` (this user's

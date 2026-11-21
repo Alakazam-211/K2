@@ -519,9 +519,7 @@ fn run_with(
                 Err(exit) => exit,
             }
         }
-        Form::Help | Form::Unknown | Form::Boot(Boot::Usage) | Form::NeedsValue(_) => {
-            Exit::Error
-        }
+        Form::Help | Form::Unknown | Form::Boot(Boot::Usage) | Form::NeedsValue(_) => Exit::Error,
     };
     closing.flush(&mut client, exit);
     exit

@@ -159,8 +159,14 @@ fn study_permissions_without_a_passport() {
     let rig = Rig::new("study", "noperm-edge");
     for (name, args) in [
         ("permissions, no passport", &["permissions"][..]),
-        ("permissions --json, no passport", &["permissions", "--json"]),
-        ("--json permissions, no passport", &["--json", "permissions"]),
+        (
+            "permissions --json, no passport",
+            &["permissions", "--json"],
+        ),
+        (
+            "--json permissions, no passport",
+            &["--json", "permissions"],
+        ),
     ] {
         rig.check(&case(name, args, &[], vec![], owner_and_port, 2, 0));
     }

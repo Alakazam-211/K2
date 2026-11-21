@@ -1454,7 +1454,9 @@ mod tests {
             if s == apps("permissions") {
                 assert!(page.stderr, "{s:?}");
                 assert_eq!(page.exit, Exit::Usage, "{s:?}");
-                assert!(page.text.starts_with("Error: unknown study topic 'permissions'\n"));
+                assert!(page
+                    .text
+                    .starts_with("Error: unknown study topic 'permissions'\n"));
             }
         }
         let errors = Study::Page {

@@ -439,7 +439,10 @@ mod tests {
         assert!(matches!(parse(&["checkin"]), Some(Ask::Lines(l, _)) if l.len() == 3));
         assert_eq!(
             parse(&["commit", "-m"]),
-            Some(Ask::Lines(vec!["Error: -m takes a value".into()], Exit::Usage))
+            Some(Ask::Lines(
+                vec!["Error: -m takes a value".into()],
+                Exit::Usage
+            ))
         );
         assert_eq!(
             parse(&["commit", "x", "--message", "--merge"]),

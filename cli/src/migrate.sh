@@ -558,6 +558,9 @@ if sign:
     o["inject"] = {"sign": json.loads(sign)}
 print(json.dumps(o))' "$kind" "$hosts" "$preset" "$delivery" "$ceiling" "$describe" "$rotate_every" "$ttl" "$inject_header" "$inject_format" "$inject_dst" "$sjson")" || exit 2
             local body
+            # The value goes to the daemon (_vault_call), typed or piped:
+            # refused over plain http to another computer.
+            _k2_password_transport_ok
             body="$(_vault_body_with_value "$(_vault_merge "$sj" "$nj" "$opts")")" || exit 2
             _vault_call POST set "$body"
             body=""
@@ -576,6 +579,7 @@ if v.get("ttlCut"): print(v.get("ttlNote") or "kept for 7 d (the most for one se
             [ -n "$name" ] || { echo "usage: k2 vault rotate NAME < value" >&2; exit 2; }
             [ "${#pos[@]}" -eq 1 ] || { echo "value_on_argv: values are read from stdin, never an argument" >&2; exit 2; }
             local body
+            _k2_password_transport_ok
             body="$(_vault_body_with_value "$(_vault_merge "$sj" "$nj")")" || exit 2
             _vault_call POST rotate "$body"
             body=""
@@ -984,9 +988,6 @@ print()' >&2
         confirm-password)
             [ "${pos[0]:-}" = "set" ] || { echo "usage: k2 vault confirm-password set" >&2; exit 2; }
             _vault_person_guard
-            # The new password is typed below, after the confirm: refused
-            # over plain http before either.
-            _k2_password_transport_ok
             local tokj='{}'
             _vault_sock_call GET status
             [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
@@ -1176,7 +1177,6 @@ else:
             rd="$(cd "$from" 2>/dev/null && pwd)" || { echo "usage: $from isn't a folder" >&2; exit 2; }
             [ -f "$rd/vault.db" ] || { echo "usage: no vault.db in $rd" >&2; exit 2; }
             if [ -t 0 ]; then
-                _k2_password_transport_ok
                 if [ "$h" = "recovery" ]; then printf 'Recovery words (24, not shown): ' >&2; else printf 'Backup key (AGE-SECRET-KEY-1…, not shown): ' >&2; fi
                 IFS= read -rs secret_in || secret_in=""
                 echo >&2

@@ -685,8 +685,8 @@ if v.get("note"):
             [ "${#pos[@]}" -eq 2 ] || { echo "usage: k2 llm tokens add-key <tool> <label>   (the API token is read from stdin)" >&2; exit 2; }
             _llma_key_tool_ok "${pos[0]}"
             local api_key=""
+            _k2_password_transport_ok
             if [ -t 0 ]; then
-                _k2_password_transport_ok
                 printf 'Paste the API token: ' >&2
                 IFS= read -rs api_key || api_key=""
                 echo >&2

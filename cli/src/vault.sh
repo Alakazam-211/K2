@@ -149,7 +149,6 @@ _vault_body_with_value() {
     local base_json="$1"
     if [ -t 0 ]; then
         local v=""
-        _k2_password_transport_ok
         printf 'Value (not shown): ' >&2
         IFS= read -rs v || v=""
         echo >&2
@@ -359,7 +358,6 @@ _vault_confirm_token() {
             ;;
         *" owner-login-password "*)
             local pw=""
-            _k2_password_transport_ok
             if [ -z "$login" ]; then
                 printf 'Which owner login on this server (k2 users lists them): ' >&2
                 IFS= read -r login || login=""
@@ -372,7 +370,6 @@ _vault_confirm_token() {
             ;;
         *" vault-password "*)
             local pw=""
-            _k2_password_transport_ok
             printf 'Vault password: ' >&2
             IFS= read -rs pw || pw=""
             echo >&2

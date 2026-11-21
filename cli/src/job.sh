@@ -369,8 +369,8 @@ _vault_confirm_token_plan() {
     [ -n "$text" ] && echo "You are approving: $text" >&2
     local m=""
     case " $methods " in
-        *" vault-password "*) m="vault-password"; _k2_password_transport_ok; printf 'Vault password: ' >&2 ;;
-        *" connect-password "*) m="connect-password"; _k2_password_transport_ok; printf 'Your K2 Connect password: ' >&2 ;;
+        *" vault-password "*) m="vault-password"; printf 'Vault password: ' >&2 ;;
+        *" connect-password "*) m="connect-password"; printf 'Your K2 Connect password: ' >&2 ;;
         *) echo "no_confirm_method: set a vault password first: k2 vault confirm-password set" >&2; exit 3 ;;
     esac
     local pw=""

@@ -564,11 +564,14 @@ _k2_daemon_is_plain_remote() {
 }
 # _k2_password_transport_ok: a password never goes over plain http to
 # another computer (_k2_daemon_is_plain_remote), whether it came from a
-# flag or a prompt. The password-flag check below calls it, and so does
-# each prompt for a password, PIN, API key or secret value right before
-# it asks, so nobody types one that is then refused. Refused: the one
-# line below on stderr and exit 2. K2_PLAIN_HTTP_OK=1 and a tailnet host
-# don't change it.
+# flag, a prompt or a pipe. The password-flag check below calls it, and so
+# does each command that sends a typed or piped password, PIN, API key or
+# secret value to the daemon, before it asks or reads, so nobody types one
+# that is then refused. Not the prompts whose answer goes only to this
+# computer's vault socket (the vault confirms, k2 vault send --stdin,
+# confirm-password set, restore): nothing of theirs travels over http.
+# Refused: the one line below on stderr and exit 2. K2_PLAIN_HTTP_OK=1
+# and a tailnet host don't change it.
 _k2_password_transport_ok() {
     _k2_daemon_is_plain_remote || return 0
     local base
@@ -2054,11 +2057,11 @@ cli_post_json_stdin() {
 _cli_read_secret_stdin() {
     local prompt="${1:-Paste the key: }"
     _K2_SECRET=""
+    # A second argument "password": the value is a password or API key for
+    # the daemon, refused over plain http to another computer, typed or
+    # piped, before anything is read (_k2_password_transport_ok).
+    [ "${2:-}" != password ] || _k2_password_transport_ok
     if [ -t 0 ]; then
-        # A second argument "password": the value is a password or API key
-        # for the daemon, refused before the prompt over plain http to
-        # another computer (_k2_password_transport_ok).
-        [ "${2:-}" != password ] || _k2_password_transport_ok
         printf '%s' "$prompt" >&2
         IFS= read -rs _K2_SECRET || _K2_SECRET=""
         echo >&2

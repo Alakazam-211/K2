@@ -1485,8 +1485,8 @@ cmd_notifications_relay() {
             { [ -z "$host" ] || [ -z "$user" ] || [ -z "$dom" ]; } && { echo "usage: k2 notifications email relay add --host H [--port P] [--tls implicit|starttls] --username U --from-domain D (password on stdin)" >&2; exit 2; }
             case "$port" in ""|*[!0-9]*) [ -z "$port" ] || { echo "--port is a number" >&2; exit 2; } ;; esac
             local pw=""
+            _k2_password_transport_ok
             if [ -t 0 ]; then
-                _k2_password_transport_ok
                 printf 'Relay password (SMTP password or API key): ' >&2
                 IFS= read -rs pw || pw=""
                 echo >&2

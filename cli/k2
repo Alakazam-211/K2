@@ -1070,11 +1070,14 @@ _k2_daemon_is_plain_remote() {
 }
 # _k2_password_transport_ok: a password never goes over plain http to
 # another computer (_k2_daemon_is_plain_remote), whether it came from a
-# flag or a prompt. The password-flag check below calls it, and so does
-# each prompt for a password, PIN, API key or secret value right before
-# it asks, so nobody types one that is then refused. Refused: the one
-# line below on stderr and exit 2. K2_PLAIN_HTTP_OK=1 and a tailnet host
-# don't change it.
+# flag, a prompt or a pipe. The password-flag check below calls it, and so
+# does each command that sends a typed or piped password, PIN, API key or
+# secret value to the daemon, before it asks or reads, so nobody types one
+# that is then refused. Not the prompts whose answer goes only to this
+# computer's vault socket (the vault confirms, k2 vault send --stdin,
+# confirm-password set, restore): nothing of theirs travels over http.
+# Refused: the one line below on stderr and exit 2. K2_PLAIN_HTTP_OK=1
+# and a tailnet host don't change it.
 _k2_password_transport_ok() {
     _k2_daemon_is_plain_remote || return 0
     local base
@@ -2560,11 +2563,11 @@ cli_post_json_stdin() {
 _cli_read_secret_stdin() {
     local prompt="${1:-Paste the key: }"
     _K2_SECRET=""
+    # A second argument "password": the value is a password or API key for
+    # the daemon, refused over plain http to another computer, typed or
+    # piped, before anything is read (_k2_password_transport_ok).
+    [ "${2:-}" != password ] || _k2_password_transport_ok
     if [ -t 0 ]; then
-        # A second argument "password": the value is a password or API key
-        # for the daemon, refused before the prompt over plain http to
-        # another computer (_k2_password_transport_ok).
-        [ "${2:-}" != password ] || _k2_password_transport_ok
         printf '%s' "$prompt" >&2
         IFS= read -rs _K2_SECRET || _K2_SECRET=""
         echo >&2
@@ -21226,8 +21229,8 @@ cmd_notifications_relay() {
             { [ -z "$host" ] || [ -z "$user" ] || [ -z "$dom" ]; } && { echo "usage: k2 notifications email relay add --host H [--port P] [--tls implicit|starttls] --username U --from-domain D (password on stdin)" >&2; exit 2; }
             case "$port" in ""|*[!0-9]*) [ -z "$port" ] || { echo "--port is a number" >&2; exit 2; } ;; esac
             local pw=""
+            _k2_password_transport_ok
             if [ -t 0 ]; then
-                _k2_password_transport_ok
                 printf 'Relay password (SMTP password or API key): ' >&2
                 IFS= read -rs pw || pw=""
                 echo >&2
@@ -38250,8 +38253,8 @@ if v.get("note"):
             [ "${#pos[@]}" -eq 2 ] || { echo "usage: k2 llm tokens add-key <tool> <label>   (the API token is read from stdin)" >&2; exit 2; }
             _llma_key_tool_ok "${pos[0]}"
             local api_key=""
+            _k2_password_transport_ok
             if [ -t 0 ]; then
-                _k2_password_transport_ok
                 printf 'Paste the API token: ' >&2
                 IFS= read -rs api_key || api_key=""
                 echo >&2
@@ -40121,6 +40124,12 @@ Where the key goes is fixed by whoever creates the secret (header and
 format); agents name the secret and K2 adds it. The presets fill this in
 for common key formats, so you usually just confirm.
 
+K2_HOST on another computer over plain http: a password, key or value
+for the daemon is refused before it is asked for or read (k2 vault set,
+k2 vault rotate). The vault and K2 Connect passwords of a confirm, a value
+for k2 vault send --stdin, confirm-password set and restore still work:
+they go only to this computer's vault socket, never over http.
+
 Agents: use `k2 vault fetch` (K2 makes the call and adds the key), never
 paste a key into a file or chat; ask a person with `k2 thread secret`.
 Each verb has its own help: k2 vault <verb> --help.
@@ -40268,7 +40277,6 @@ _vault_body_with_value() {
     local base_json="$1"
     if [ -t 0 ]; then
         local v=""
-        _k2_password_transport_ok
         printf 'Value (not shown): ' >&2
         IFS= read -rs v || v=""
         echo >&2
@@ -40478,7 +40486,6 @@ _vault_confirm_token() {
             ;;
         *" owner-login-password "*)
             local pw=""
-            _k2_password_transport_ok
             if [ -z "$login" ]; then
                 printf 'Which owner login on this server (k2 users lists them): ' >&2
                 IFS= read -r login || login=""
@@ -40491,7 +40498,6 @@ _vault_confirm_token() {
             ;;
         *" vault-password "*)
             local pw=""
-            _k2_password_transport_ok
             printf 'Vault password: ' >&2
             IFS= read -rs pw || pw=""
             echo >&2
@@ -43262,8 +43268,8 @@ _vault_confirm_token_plan() {
     [ -n "$text" ] && echo "You are approving: $text" >&2
     local m=""
     case " $methods " in
-        *" vault-password "*) m="vault-password"; _k2_password_transport_ok; printf 'Vault password: ' >&2 ;;
-        *" connect-password "*) m="connect-password"; _k2_password_transport_ok; printf 'Your K2 Connect password: ' >&2 ;;
+        *" vault-password "*) m="vault-password"; printf 'Vault password: ' >&2 ;;
+        *" connect-password "*) m="connect-password"; printf 'Your K2 Connect password: ' >&2 ;;
         *) echo "no_confirm_method: set a vault password first: k2 vault confirm-password set" >&2; exit 3 ;;
     esac
     local pw=""
@@ -44028,6 +44034,9 @@ if sign:
     o["inject"] = {"sign": json.loads(sign)}
 print(json.dumps(o))' "$kind" "$hosts" "$preset" "$delivery" "$ceiling" "$describe" "$rotate_every" "$ttl" "$inject_header" "$inject_format" "$inject_dst" "$sjson")" || exit 2
             local body
+            # The value goes to the daemon (_vault_call), typed or piped:
+            # refused over plain http to another computer.
+            _k2_password_transport_ok
             body="$(_vault_body_with_value "$(_vault_merge "$sj" "$nj" "$opts")")" || exit 2
             _vault_call POST set "$body"
             body=""
@@ -44046,6 +44055,7 @@ if v.get("ttlCut"): print(v.get("ttlNote") or "kept for 7 d (the most for one se
             [ -n "$name" ] || { echo "usage: k2 vault rotate NAME < value" >&2; exit 2; }
             [ "${#pos[@]}" -eq 1 ] || { echo "value_on_argv: values are read from stdin, never an argument" >&2; exit 2; }
             local body
+            _k2_password_transport_ok
             body="$(_vault_body_with_value "$(_vault_merge "$sj" "$nj")")" || exit 2
             _vault_call POST rotate "$body"
             body=""
@@ -44454,9 +44464,6 @@ print()' >&2
         confirm-password)
             [ "${pos[0]:-}" = "set" ] || { echo "usage: k2 vault confirm-password set" >&2; exit 2; }
             _vault_person_guard
-            # The new password is typed below, after the confirm: refused
-            # over plain http before either.
-            _k2_password_transport_ok
             local tokj='{}'
             _vault_sock_call GET status
             [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
@@ -44646,7 +44653,6 @@ else:
             rd="$(cd "$from" 2>/dev/null && pwd)" || { echo "usage: $from isn't a folder" >&2; exit 2; }
             [ -f "$rd/vault.db" ] || { echo "usage: no vault.db in $rd" >&2; exit 2; }
             if [ -t 0 ]; then
-                _k2_password_transport_ok
                 if [ "$h" = "recovery" ]; then printf 'Recovery words (24, not shown): ' >&2; else printf 'Backup key (AGE-SECRET-KEY-1…, not shown): ' >&2; fi
                 IFS= read -rs secret_in || secret_in=""
                 echo >&2
@@ -47475,9 +47481,9 @@ PY
 # from stdin. Never on argv. Non-zero when the two don't match.
 _publish_read_pin() {
     _K2_PIN=""
+    _k2_password_transport_ok
     if [ -t 0 ]; then
         local again=""
-        _k2_password_transport_ok
         printf 'PIN for %s (6 to 64 characters): ' "$1" >&2
         IFS= read -rs _K2_PIN || _K2_PIN=""
         echo >&2
@@ -50679,8 +50685,8 @@ print(json.dumps(b))
     # A login (not the owner token) must type its password again.
     if printf '%s' "$resp" | grep -q 'type your password again to make a pairing code'; then
         local pw=""
+        _k2_password_transport_ok
         if [ -t 0 ]; then
-            _k2_password_transport_ok
             printf 'Password for your login: ' >&2
             IFS= read -rs pw || pw=""
             echo >&2

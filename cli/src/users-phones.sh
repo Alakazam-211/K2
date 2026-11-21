@@ -56,8 +56,8 @@ print(json.dumps(b))
     # A login (not the owner token) must type its password again.
     if printf '%s' "$resp" | grep -q 'type your password again to make a pairing code'; then
         local pw=""
+        _k2_password_transport_ok
         if [ -t 0 ]; then
-            _k2_password_transport_ok
             printf 'Password for your login: ' >&2
             IFS= read -rs pw || pw=""
             echo >&2

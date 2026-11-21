@@ -85,6 +85,12 @@ Where the key goes is fixed by whoever creates the secret (header and
 format); agents name the secret and K2 adds it. The presets fill this in
 for common key formats, so you usually just confirm.
 
+K2_HOST on another computer over plain http: a password, key or value
+for the daemon is refused before it is asked for or read (k2 vault set,
+k2 vault rotate). The vault and K2 Connect passwords of a confirm, a value
+for k2 vault send --stdin, confirm-password set and restore still work:
+they go only to this computer's vault socket, never over http.
+
 Agents: use `k2 vault fetch` (K2 makes the call and adds the key), never
 paste a key into a file or chat; ask a person with `k2 thread secret`.
 Each verb has its own help: k2 vault <verb> --help.

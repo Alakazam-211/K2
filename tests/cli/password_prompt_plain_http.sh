@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# A password never goes over plain http to another computer, from a flag
-# or from a prompt (security fix). With K2_HOST a name or address that
+# A password never goes over plain http to another computer, from a flag,
+# a prompt or a pipe (security fix). With K2_HOST a name or address that
 # isn't loopback as written (x.localhost here: curl sends it to loopback,
-# where the stub is), every prompt below for a password, PIN, API key or
-# secret value is refused BEFORE it asks:
+# where the stub is), every command below that sends a password, PIN, API
+# key or secret value to the daemon is refused BEFORE it asks or reads,
+# typed at a terminal or piped:
 #   Error: a password never goes over plain http:// to another computer; use K2_HOST=https://<name> (got: http://x.localhost:<port>)
 # as the last stderr line, exit 2, the prompt never shown, the typed line
 # never read, and nothing sent after the point where the prompt would be.
@@ -14,21 +15,20 @@
 # request (an https K2_HOST can't reach this plain stub, so the PIN and
 # pair-phone prompts, which follow a request, have loopback rows only).
 #
-# The vault confirm prompts (vault rollback here) run inside $(...) and
-# every caller of a failed confirm exits 3, so those rows want exit 3:
-# the line and the nothing-read, nothing-sent checks are the same.
+# Not refused (K2's ruling): the prompts whose answer goes only to this
+# computer's vault socket, never over http: the vault confirms (vault
+# password, K2 Connect password, owner login password), k2 vault send
+# --stdin, vault confirm-password set and vault restore. With the same
+# plain-http K2_HOST they still prompt, the value reaches the vault socket
+# and the daemon stub gets nothing at all.
 #
 # stdin is a pty (so the CLI asks a person) with the typed line already
 # waiting in it, echo off; stdout and stderr are files. After the run the
 # driver reads what is left in the pty: the whole typed line means the
 # CLI read nothing.
 #
-# Sites (cli/src):
-#   job.sh            vault plan confirm: vault or K2 Connect password
-#   vault.sh          vault confirm: vault password, owner login password;
-#                     a secret value typed in (vault set)
-#   migrate.sh        vault confirm-password set (new vault password),
-#                     vault restore (recovery words)
+# Refused (cli/src):
+#   migrate.sh        vault set, vault rotate (the value goes to the daemon)
 #   app-auth.sh       notifications email relay add (relay password)
 #   connect.sh        publish visibility ... pin (PIN)
 #   llm.sh            llm tokens add-key (API token)
@@ -36,6 +36,10 @@
 #   clone.sh          users add, users set-password (a login's password)
 #   talk-and-workspace.sh  workspace api-key --key-stdin, api-key create
 #                     --key-stdin (LLM API keys)
+# Each one that reads a pipe has a piped row too.
+# Exempt (vault socket only): job.sh (the plan confirm), vault.sh (the
+# confirm; send --stdin's value), migrate.sh (confirm-password set,
+# restore).
 #
 # Hermetic: throwaway HOME, every K2_*/K5_*/K2SO_* var unset, stub daemon
 # (loopback TCP) and stub vault socket. Opens ports: run it on K2 Compute.
@@ -181,7 +185,8 @@ chmod +x "$W/bin/curl"
 
 # ── The pty driver: ptyrun.py W STEPS -- cmd…
 # STEPS "-": stdin is a pty with echo off and $W/typed already waiting in
-# it. Else a JSON list of [text, bytes]: each time the text shows on
+# it. "pipe": stdin is a pipe holding $W/typed, its writer closed (what
+# is left in it after the run was not read). Else a JSON list of [text, bytes]: each time the text shows on
 # stderr, the bytes are typed (for Python's getpass, which flushes what
 # was typed before it asks). The
 # command runs in a new session with no controlling terminal (its leader is
@@ -192,7 +197,8 @@ chmod +x "$W/bin/curl"
 cat >"$W/ptyrun.py" <<'PYEOF'
 import json, os, subprocess, sys, termios, time
 W = sys.argv[1]
-steps = [] if sys.argv[2] == "-" else json.loads(sys.argv[2])
+pipe = sys.argv[2] == "pipe"
+steps = [] if sys.argv[2] in ("-", "pipe") else json.loads(sys.argv[2])
 cmd = sys.argv[sys.argv.index("--") + 1:]
 wrap = [sys.executable, "-c", """
 import os, sys
@@ -202,13 +208,19 @@ if pid == 0:
 _, st = os.waitpid(pid, 0)
 sys.exit(os.WEXITSTATUS(st) if os.WIFEXITED(st) else 128 + os.WTERMSIG(st))
 """] + cmd
-m, s = os.openpty()
-a = termios.tcgetattr(s)
-a[3] &= ~termios.ECHO
-termios.tcsetattr(s, termios.TCSANOW, a)
-if not steps:
+if pipe:
+    s, w = os.pipe()
     with open(os.path.join(W, "typed"), "rb") as f:
-        os.write(m, f.read())
+        os.write(w, f.read())
+    os.close(w)
+else:
+    m, s = os.openpty()
+    a = termios.tcgetattr(s)
+    a[3] &= ~termios.ECHO
+    termios.tcsetattr(s, termios.TCSANOW, a)
+    if not steps:
+        with open(os.path.join(W, "typed"), "rb") as f:
+            os.write(m, f.read())
 with open(os.path.join(W, "out"), "wb") as out, open(os.path.join(W, "err"), "wb") as err:
     p = subprocess.Popen(wrap, stdin=s, stdout=out, stderr=err, preexec_fn=os.setsid)
     end = time.time() + 30
@@ -339,6 +351,30 @@ sys.exit(1)' "$W/log-$n.jsonl" "$p" "$SECRET" "$SECRET_B64"; then
     fi
 }
 
+# piped LABEL ROUTE: stdin a pipe: no refusal, the pipe was read and the
+# value reached ROUTE ("NAME path").
+piped() {
+    local label="$1" route="$2" n p
+    n="${route%% *}"; p="${route#* }"
+    [ "$RC" != 124 ] && ok "$label: finished" || bad "$label: never finished (stderr: $(printf %q "$ERR"))"
+    case "$ERR" in
+        *"a password never goes over plain http"*) bad "$label: refused: $(printf %q "$ERR")" ;;
+        *) ok "$label: not refused" ;;
+    esac
+    [ -z "$UNREAD" ] && ok "$label: the pipe was read" || bad "$label: left unread: $(printf %q "$UNREAD")"
+    if [ -f "$W/log-$n.jsonl" ] && "$PY" -c '
+import json, sys
+for l in open(sys.argv[1]):
+    r = json.loads(l)
+    if r["path"] == sys.argv[2] and (sys.argv[3] in r["body"] or sys.argv[4] in r["body"]):
+        sys.exit(0)
+sys.exit(1)' "$W/log-$n.jsonl" "$p" "$SECRET" "$SECRET_B64"; then
+        ok "$label: the piped value reached $route"
+    else
+        bad "$label: the piped value never reached $route ($(reqs | tr '\n' ';'))"
+    fi
+}
+
 PLAIN=(K2_HOST=x.localhost)
 HTTPS=(K2_HOST=https://k2-lan.example.test PATH="$W/bin:$PATH")
 
@@ -347,52 +383,58 @@ rm -f "$W"/log-*.jsonl
 "$REAL_CURL" -s -o /dev/null --max-time 5 --noproxy '*' "http://x.localhost:$DPORT/probe" || true
 if [ "$(reqs)" = "daemon GET /probe" ]; then ok "curl sends x.localhost to loopback"; else bad "curl did not send x.localhost to the stub: $(reqs | tr '\n' ';')"; fi
 
-echo "== job.sh: the vault plan confirm (vault rollback of a secret a root unit loads) =="
-P='Vault password: '
+# exempt LABEL PROMPT ROUTE: with the plain-http K2_HOST, the prompt was
+# shown, no refusal, the typed line was read, the value reached the vault
+# socket's ROUTE and the daemon stub got no request at all.
+exempt() {
+    local label="$1" prompt="$2" route="$3"
+    prompted "$label" "$prompt" "vault $route"
+    if [ -s "$W/log-daemon.jsonl" ]; then bad "$label: the daemon (K2_HOST) got $(reqs | grep '^daemon' | tr '\n' ';')"; else ok "$label: the daemon (K2_HOST) got nothing"; fi
+}
+
+echo "== exempt: the vault plan confirm (job.sh; vault rollback of a secret a root unit loads) =="
 scn '{"placements": [{"target": "systemd_cred", "version": 1}], "methods": ["vault-password"]}'
 run "${PLAIN[@]}" -- vault rollback API_KEY --to 1
-refused "plan confirm, vault password" 3 "$P" "vault GET /cli/vault/show
-vault POST /cli/vault/confirm/start"
-run -- vault rollback API_KEY --to 1
-prompted "plan confirm, vault password, loopback" "$P" "vault /cli/vault/confirm/finish"
-run "${HTTPS[@]}" -- vault rollback API_KEY --to 1
-prompted "plan confirm, vault password, https" "$P" "vault /cli/vault/confirm/finish"
-P='Your K2 Connect password: '
+exempt "plan confirm, vault password, remote plain http" 'Vault password: ' /cli/vault/confirm/finish
 scn '{"placements": [{"target": "systemd_cred", "version": 1}], "methods": ["connect-password"]}'
 run "${PLAIN[@]}" -- vault rollback API_KEY --to 1
-refused "plan confirm, Connect password" 3 "$P" "vault GET /cli/vault/show
-vault POST /cli/vault/confirm/start"
-run -- vault rollback API_KEY --to 1
-prompted "plan confirm, Connect password, loopback" "$P" "vault /cli/vault/confirm/finish"
+exempt "plan confirm, Connect password, remote plain http" 'Your K2 Connect password: ' /cli/vault/confirm/finish
 
-echo "== vault.sh: the vault confirm (vault rollback) =="
-P='Vault password: '
+echo "== exempt: the vault confirm (vault.sh; vault rollback) =="
 scn '{"placements": [], "methods": ["vault-password"]}'
 run "${PLAIN[@]}" -- vault rollback API_KEY --to 1
-refused "confirm, vault password" 3 "$P" "vault GET /cli/vault/show
-vault POST /cli/vault/confirm/start"
-run -- vault rollback API_KEY --to 1
-prompted "confirm, vault password, loopback" "$P" "vault /cli/vault/confirm/finish"
-P='Sign-in password for owner login admin: '
+exempt "confirm, vault password, remote plain http" 'Vault password: ' /cli/vault/confirm/finish
 scn '{"placements": [], "methods": ["owner-login-password"], "login": "admin"}'
 run "${PLAIN[@]}" -- vault rollback API_KEY --to 1
-refused "confirm, owner login password" 3 "$P" "vault GET /cli/vault/show
-vault POST /cli/vault/confirm/start"
-run -- vault rollback API_KEY --to 1
-prompted "confirm, owner login password, loopback" "$P" "vault /cli/vault/confirm/finish"
-# No login named: the login question is not asked either.
-scn '{"placements": [], "methods": ["owner-login-password"]}'
-run "${PLAIN[@]}" -- vault rollback API_KEY --to 1
-refused "confirm, owner login password, no login named" 3 "Which owner login" "vault GET /cli/vault/show
-vault POST /cli/vault/confirm/start"
+exempt "confirm, owner login password, remote plain http" 'Sign-in password for owner login admin: ' /cli/vault/confirm/finish
 
-echo "== vault.sh: a secret value typed in (vault set) =="
-P='Value (not shown): '
+echo "== exempt: a value for vault send --stdin (vault.sh) =="
 scn '{}'
+run "${PLAIN[@]}" -- vault send API_KEY --to agent-a --stdin
+exempt "vault send --stdin value, remote plain http" 'Value (not shown): ' /cli/vault/send
+
+echo "== exempt: a new vault password (migrate.sh; vault confirm-password set) =="
+scn '{"methods": ["terminal"]}'
+TYPED_LINES=2
+run "${PLAIN[@]}" -- vault confirm-password set
+exempt "new vault password, remote plain http" 'New vault password' /cli/vault/confirm-password/set
+TYPED_LINES=1
+
+echo "== exempt: recovery words (migrate.sh; vault restore) =="
+scn '{}'
+run "${PLAIN[@]}" -- vault restore --from "$W/backup"
+exempt "recovery words, remote plain http" 'Recovery words' /cli/vault/restore
+
+echo "== migrate.sh: a secret value for the daemon (vault set, vault rotate) =="
+P='Value (not shown): '
 run "${PLAIN[@]}" -- vault set API_KEY
 refused "vault set value" 2 "$P" ""
+STEPS=pipe; run "${PLAIN[@]}" -- vault set API_KEY; STEPS=-
+refused "vault set value, piped" 2 "$P" ""
 run -- vault set API_KEY
 prompted "vault set value, loopback" "$P" "daemon /cli/vault/set"
+STEPS=pipe; run -- vault set API_KEY; STEPS=-
+piped "vault set value, piped, loopback" "daemon /cli/vault/set"
 run "${HTTPS[@]}" -- vault set API_KEY
 prompted "vault set value, https" "$P"
 # K2_PLAIN_HTTP_OK=1 and a tailnet host don't lift it.
@@ -403,34 +445,20 @@ WANT="$(want_line "http://box.tail1234.ts.net:$DPORT")"
 run K2_HOST=box.tail1234.ts.net -- vault set API_KEY
 refused "vault set value, a tailnet host" 2 "$P" ""
 WANT="$WANT_SAVED"
-
-echo "== migrate.sh: a new vault password (vault confirm-password set) =="
-P='New vault password'
-scn '{"methods": ["terminal"]}'
-TYPED_LINES=2
-run "${PLAIN[@]}" -- vault confirm-password set
-refused "new vault password" 2 "$P" ""
-run -- vault confirm-password set
-prompted "new vault password, loopback" "$P" "vault /cli/vault/confirm-password/set"
-run "${HTTPS[@]}" -- vault confirm-password set
-prompted "new vault password, https" "$P" "vault /cli/vault/confirm-password/set"
-TYPED_LINES=1
-
-echo "== migrate.sh: recovery words (vault restore) =="
-P='Recovery words'
-scn '{}'
-run "${PLAIN[@]}" -- vault restore --from "$W/backup"
-refused "recovery words" 2 "$P" ""
-run -- vault restore --from "$W/backup"
-prompted "recovery words, loopback" "$P" "vault /cli/vault/restore"
-run "${HTTPS[@]}" -- vault restore --from "$W/backup"
-prompted "recovery words, https" "$P" "vault /cli/vault/restore"
+STEPS=pipe; run "${PLAIN[@]}" -- vault rotate API_KEY; STEPS=-
+refused "vault rotate value, piped" 2 "$P" ""
+STEPS=pipe; run -- vault rotate API_KEY; STEPS=-
+piped "vault rotate value, piped, loopback" "daemon /cli/vault/rotate"
 
 echo "== app-auth.sh: a relay password (notifications email relay add) =="
 P='Relay password'
 RELAY=(notifications email relay add --host smtp.example.test --username u1 --from-domain example.test)
 run "${PLAIN[@]}" -- "${RELAY[@]}"
 refused "relay password" 2 "$P" ""
+STEPS=pipe; run "${PLAIN[@]}" -- "${RELAY[@]}"; STEPS=-
+refused "relay password, piped" 2 "$P" ""
+STEPS=pipe; run -- "${RELAY[@]}"; STEPS=-
+piped "relay password, piped, loopback" "daemon /cli/notifications/email/relay/add"
 run -- "${RELAY[@]}"
 prompted "relay password, loopback" "$P" "daemon /cli/notifications/email/relay/add"
 run "${HTTPS[@]}" -- "${RELAY[@]}"
@@ -441,6 +469,12 @@ P='PIN for acme'
 TYPED_LINES=2
 run "${PLAIN[@]}" -- publish visibility acme pin
 refused "site PIN" 2 "$P" "daemon POST /cli/publish/visibility"
+TYPED_LINES=1
+STEPS=pipe; run "${PLAIN[@]}" -- publish visibility acme pin; STEPS=-
+refused "site PIN, piped" 2 "$P" "daemon POST /cli/publish/visibility"
+STEPS=pipe; run -- publish visibility acme pin; STEPS=-
+piped "site PIN, piped, loopback" "daemon /cli/publish/visibility"
+TYPED_LINES=2
 run -- publish visibility acme pin
 prompted "site PIN, loopback" "$P" "daemon /cli/publish/visibility"
 TYPED_LINES=1
@@ -449,6 +483,10 @@ echo "== llm.sh: an API token (llm tokens add-key) =="
 P='Paste the API token: '
 run "${PLAIN[@]}" -- llm tokens add-key claude work
 refused "llm API token" 2 "$P" ""
+STEPS=pipe; run "${PLAIN[@]}" -- llm tokens add-key claude work; STEPS=-
+refused "llm API token, piped" 2 "$P" ""
+STEPS=pipe; run -- llm tokens add-key claude work; STEPS=-
+piped "llm API token, piped, loopback" "daemon /cli/llm/accounts/add-key"
 run -- llm tokens add-key claude work
 prompted "llm API token, loopback" "$P" "daemon /cli/llm/accounts/add-key"
 run "${HTTPS[@]}" -- llm tokens add-key claude work
@@ -458,6 +496,10 @@ echo "== users-phones.sh: a login password (users pair-phone) =="
 P='Password for your login: '
 run "${PLAIN[@]}" -- users pair-phone
 refused "login password" 2 "$P" "daemon POST /cli/auth/device/pair-code"
+STEPS=pipe; run "${PLAIN[@]}" -- users pair-phone; STEPS=-
+refused "login password, piped" 2 "$P" "daemon POST /cli/auth/device/pair-code"
+STEPS=pipe; run -- users pair-phone; STEPS=-
+piped "login password, piped, loopback" "daemon /cli/auth/device/pair-code"
 run -- users pair-phone
 prompted "login password, loopback" "$P" "daemon /cli/auth/device/pair-code"
 
@@ -483,6 +525,10 @@ echo "== talk-and-workspace.sh: LLM API keys (workspace api-key, api-key create)
 P='Paste the API key: '
 run "${PLAIN[@]}" -- workspace api-key ws1 --key-stdin
 refused "workspace API key" 2 "$P" ""
+STEPS=pipe; run "${PLAIN[@]}" -- workspace api-key ws1 --key-stdin; STEPS=-
+refused "workspace API key, piped" 2 "$P" ""
+STEPS=pipe; run -- workspace api-key ws1 --key-stdin; STEPS=-
+piped "workspace API key, piped, loopback" "daemon /cli/workspace/api-key"
 run -- workspace api-key ws1 --key-stdin
 prompted "workspace API key, loopback" "$P" "daemon /cli/workspace/api-key"
 run "${HTTPS[@]}" -- workspace api-key ws1 --key-stdin
@@ -490,6 +536,10 @@ prompted "workspace API key, https" "$P"
 P='Paste the LLM API key: '
 run "${PLAIN[@]}" -- api-key create --label mon --key-stdin
 refused "api-key LLM key" 2 "$P" ""
+STEPS=pipe; run "${PLAIN[@]}" -- api-key create --label mon --key-stdin; STEPS=-
+refused "api-key LLM key, piped" 2 "$P" ""
+STEPS=pipe; run -- api-key create --label mon --key-stdin; STEPS=-
+piped "api-key LLM key, piped, loopback" "daemon /cli/api-keys/create"
 run -- api-key create --label mon --key-stdin
 prompted "api-key LLM key, loopback" "$P" "daemon /cli/api-keys/create"
 run "${HTTPS[@]}" -- api-key create --label mon --key-stdin

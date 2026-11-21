@@ -1287,9 +1287,9 @@ PY
 # from stdin. Never on argv. Non-zero when the two don't match.
 _publish_read_pin() {
     _K2_PIN=""
+    _k2_password_transport_ok
     if [ -t 0 ]; then
         local again=""
-        _k2_password_transport_ok
         printf 'PIN for %s (6 to 64 characters): ' "$1" >&2
         IFS= read -rs _K2_PIN || _K2_PIN=""
         echo >&2

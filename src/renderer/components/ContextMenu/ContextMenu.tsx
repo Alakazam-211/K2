@@ -270,6 +270,7 @@ export default function ContextMenu(): React.JSX.Element | null {
   const y = useContextMenuStore((s) => s.y)
   const items = useContextMenuStore((s) => s.items)
   const look = useContextMenuStore((s) => s.look)
+  const bounds = useContextMenuStore((s) => s.bounds)
   const focusedIndex = useContextMenuStore((s) => s.focusedIndex)
   const close = useContextMenuStore((s) => s.close)
   const selectItem = useContextMenuStore((s) => s.selectItem)
@@ -304,6 +305,11 @@ export default function ContextMenu(): React.JSX.Element | null {
     let left = x
     let top = y
 
+    // A menu opened in a pane keeps inside it, where the pane is wide enough.
+    if (bounds && bounds.right - bounds.left >= width) {
+      if (left + width > bounds.right) left = bounds.right - width
+      if (left < bounds.left) left = bounds.left
+    }
     if (left + width > vw) {
       left = vw - width - 4
     }
@@ -314,7 +320,7 @@ export default function ContextMenu(): React.JSX.Element | null {
     if (top < 0) top = 4
 
     return { left, top }
-  }, [x, y])
+  }, [x, y, bounds])
 
   // Keyboard navigation
   useEffect(() => {

@@ -732,7 +732,8 @@ export const ThreadBubble = memo(function ThreadBubble({
   )
   const bubbleRef = useRef<HTMLDivElement | null>(null)
   const openMenu = useCallback(
-    (x: number, y: number, selection: string | null) => void openThreadMessageMenu(x, y, menuArgs, selection),
+    (x: number, y: number, selection: string | null) =>
+      void openThreadMessageMenu(x, y, menuArgs, selection, bubbleRef.current?.closest<HTMLElement>(`[${THREAD_ZEN_SCOPE_ATTR}]`)),
     [menuArgs],
   )
   const gestures = useThreadMessageGestures(bubbleRef, menuOn ? openMenu : null)

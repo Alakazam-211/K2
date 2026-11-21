@@ -56,12 +56,18 @@ export { clientToCssPx }
  *  blurred (FLOAT_CLEAR, components/ui/float-material.ts). */
 export interface ContextMenuOptions {
   look?: 'clear'
+  /** Keep the menu inside this box (window px, as a DOMRect) at `inset`
+   *  CSS px from its edges, where the window allows: a menu opened inside
+   *  a pane stays in that pane. Absent: the window. */
+  bounds?: { left: number; top: number; right: number; bottom: number; inset?: number }
 }
 
 interface ContextMenuState {
   isOpen: boolean
   /** The open menu's look (`showContextMenu`'s options). */
   look: ContextMenuOptions['look'] | null
+  /** The box the open menu keeps inside (CSS px), or null: the window. */
+  bounds: { left: number; top: number; right: number; bottom: number } | null
   x: number
   y: number
   items: ContextMenuItemDef[]
@@ -76,9 +82,21 @@ interface ContextMenuState {
   setFocusedIndex: (index: number) => void
 }
 
+/** A menu's box in CSS px, shrunk by its inset. */
+function cssBounds(b: NonNullable<ContextMenuOptions['bounds']>): NonNullable<ContextMenuState['bounds']> {
+  const inset = b.inset ?? 0
+  return {
+    left: clientToCssPx(b.left) + inset,
+    top: clientToCssPx(b.top) + inset,
+    right: clientToCssPx(b.right) - inset,
+    bottom: clientToCssPx(b.bottom) - inset,
+  }
+}
+
 export const useContextMenuStore = create<ContextMenuState>((set, get) => ({
   isOpen: false,
   look: null,
+  bounds: null,
   x: 0,
   y: 0,
   items: [],
@@ -99,6 +117,7 @@ export const useContextMenuStore = create<ContextMenuState>((set, get) => ({
         y: clientToCssPx(y),
         items,
         look: options?.look ?? null,
+        bounds: options?.bounds ? cssBounds(options.bounds) : null,
         onSelect: resolve,
         focusedIndex: -1
       })
@@ -118,6 +137,7 @@ export const useContextMenuStore = create<ContextMenuState>((set, get) => ({
     set({
       isOpen: false,
       look: null,
+      bounds: null,
       items: [],
       onSelect: null,
       focusedIndex: -1

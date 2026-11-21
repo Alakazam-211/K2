@@ -72,6 +72,14 @@ export const DELETE_MESSAGE_CONFIRM = {
 
 /** Confirm, then delete. The bubble turns into the "Message deleted" line
  *  when the daemon's frame (or the answer) comes back. */
+/** The Thread's box for its menu, at the Thread's own side inset
+ *  (--zen-gap, the list's padding). */
+export function threadMenuBounds(el: HTMLElement): { left: number; top: number; right: number; bottom: number; inset: number } {
+  const r = el.getBoundingClientRect()
+  const gap = parseFloat(getComputedStyle(el).getPropertyValue('--zen-gap'))
+  return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, inset: Number.isFinite(gap) ? gap : 12 }
+}
+
 /** A delete the server refused because the message is history
  *  (`409 imported_read_only`). */
 export const IMPORTED_READ_ONLY_TEXT = 'This message is from before the update and can’t be deleted.'
@@ -137,8 +145,10 @@ export async function openThreadMessageMenu(
   y: number,
   args: ThreadMessageMenuArgs,
   selection: string | null = null,
+  /** The Thread's own box: the menu keeps inside it, at its inset. */
+  within?: HTMLElement | null,
 ): Promise<void> {
-  const picked = await useContextMenuStore.getState().show(x, y, threadMessageMenuItems(args, selection))
+  const picked = await useContextMenuStore.getState().show(x, y, threadMessageMenuItems(args, selection), within ? { bounds: threadMenuBounds(within) } : undefined)
   if (picked === 'reply' && args.reply) {
     useThreadReplyStore.getState().set(args.reply.key, args.reply.target)
   } else if (picked === 'reply-selection' && args.reply && selection) {

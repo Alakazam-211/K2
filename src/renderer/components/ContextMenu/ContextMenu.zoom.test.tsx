@@ -37,7 +37,11 @@ function placedBox(panel: HTMLElement): HTMLElement {
   throw new Error('the context menu has no fixed box')
 }
 
-function openAt(z: number, client: { x: number; y: number }): HTMLElement {
+function openAt(
+  z: number,
+  client: { x: number; y: number },
+  bounds?: { left: number; top: number; right: number; bottom: number; inset?: number },
+): HTMLElement {
   setWindowSize(WIN.width, WIN.height)
   applyAppZoomForTest(z)
   // jsdom has no layout: the menu measures MENU drawn at zoom z.
@@ -49,7 +53,7 @@ function openAt(z: number, client: { x: number; y: number }): HTMLElement {
   })
   render(<ContextMenu />)
   act(() => {
-    void useContextMenuStore.getState().show(client.x, client.y, [{ id: 'a', label: 'Copy' }])
+    void useContextMenuStore.getState().show(client.x, client.y, [{ id: 'a', label: 'Copy' }], bounds ? { bounds } : undefined)
   })
   const panel = document.querySelector('[data-context-menu]')
   if (!(panel instanceof HTMLElement)) throw new Error('no open context menu')
@@ -72,6 +76,19 @@ describe('ContextMenu under the app zoom', () => {
       expect(box.bottom).toBeLessThanOrEqual(WIN.height)
       expect(box.left).toBeGreaterThanOrEqual(0)
       expect(box.top).toBeGreaterThanOrEqual(0)
+    })
+  }
+})
+
+describe('ContextMenu inside a pane', () => {
+  for (const z of [1, 1.5]) {
+    it(`at ${z * 100}%: a menu opened near a pane's right edge keeps inside it, at its inset`, () => {
+      // A pane at window px 300..700; the pointer 20px from its right edge.
+      const pane = { left: 300, top: 0, right: 700, bottom: 700, inset: 12 }
+      const menu = openAt(z, { x: 680, y: 200 }, pane)
+      const box = onScreen(menu, MENU, z)
+      expect(box.right).toBeLessThanOrEqual(700 - 12 * z + 0.01)
+      expect(box.left).toBeGreaterThanOrEqual(300 + 12 * z - 0.01)
     })
   }
 })

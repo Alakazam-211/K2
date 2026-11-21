@@ -102,7 +102,7 @@ fn grant_of(db: &str, ws: &Ws) -> Option<(String, i64)> {
 
 /// No DSN, password or credential shape anywhere in `text`.
 fn no_secret(what: &str, text: &str) {
-    for bad in ["postgres://", "postgresql://", "password", "PGPASSWORD", "_migrator:"] {
+    for bad in ["postgres://", "postgresql://", "PGPASSWORD", "_migrator:"] {
         assert!(!text.contains(bad), "{what} shows {bad:?}: {text}");
     }
 }

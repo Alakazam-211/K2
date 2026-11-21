@@ -895,11 +895,7 @@ pub fn run(words: &[&str], s: &Settings, would_refuse: bool) -> Option<Exit> {
     let (base, notes) = logout::resolve(env, &s.home.join("settings.json"));
     let (place, prefix) = place(&base)?;
     let direct = k2_client::proxy_rule::direct(&format!("{base}{SUBDOMAINS}"));
-    if !direct
-        && crate::families::remote::logout::PROXY_ENV
-            .iter()
-            .any(|n| std::env::var_os(n).is_some_and(|v| !v.is_empty()))
-    {
+    if !direct && crate::families::remote::logout::proxied(&base) {
         return None;
     }
     let parsed = parse(words);

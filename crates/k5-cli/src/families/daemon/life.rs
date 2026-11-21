@@ -71,15 +71,22 @@ pub enum Life {
     /// The router's usage (`*)`): exit 1.
     Usage,
     Start,
-    Stop { keep: bool },
+    Stop {
+        keep: bool,
+    },
     /// `stop` with a word other than `--keep-agents`: exit 2.
     StopUsage,
     Restart(Restart),
     /// `restart` with a word it doesn't take: exit 2.
     RestartUnknown(String),
     Survive(Survive),
-    Log { tail: String, follow: bool },
-    Uninstall { yes: bool },
+    Log {
+        tail: String,
+        follow: bool,
+    },
+    Uninstall {
+        yes: bool,
+    },
 }
 
 /// `restart`'s flags.
@@ -284,7 +291,10 @@ fn capture_both(prog: &str, args: &[&str]) -> String {
 /// `prog args…` with this process's stdin, stdout and stderr: whether it
 /// exited 0.
 fn run_inherited(prog: &str, args: &[&str]) -> bool {
-    Command::new(prog).args(args).status().is_ok_and(|s| s.success())
+    Command::new(prog)
+        .args(args)
+        .status()
+        .is_ok_and(|s| s.success())
 }
 
 /// `_daemon_systemctl <scope> <args…>`, its output the command's.
@@ -746,7 +756,10 @@ fn restart(s: &Settings, client: &mut Client, r: Restart) -> Exit {
     }
     let (label, _) = launchd();
     let (uid, _) = capture("id", &["-u"]);
-    let err = capture_both("launchctl", &["kickstart", "-k", &format!("gui/{uid}/{label}")]);
+    let err = capture_both(
+        "launchctl",
+        &["kickstart", "-k", &format!("gui/{uid}/{label}")],
+    );
     if says_missing(&err, false) {
         return start();
     }
@@ -947,8 +960,8 @@ pub fn switch_reader(raw: &str, want: &str) -> Shown {
         Err(r) => return raised(String::new(), String::new(), &r),
     };
     let got_text = got.as_ref().map_or("off".to_string(), py::str_of);
-    let same = matches!(&got, Some(Value::Str(_)) if got_text == want)
-        || (got.is_none() && want == "off");
+    let same =
+        matches!(&got, Some(Value::Str(_)) if got_text == want) || (got.is_none() && want == "off");
     if !same {
         return Shown::err(
             format!("Error: the daemon kept terminal.ptyd={got_text}\n"),
@@ -994,14 +1007,22 @@ pub fn status_reader(input: &str) -> Shown {
             )
         }
     };
-    let effective = if setting.trim_matches(crate::families::py_space).to_lowercase() == "off" {
+    let effective = if setting
+        .trim_matches(crate::families::py_space)
+        .to_lowercase()
+        == "off"
+    {
         "off"
     } else {
         "on"
     };
     stdout.push_str(&format!(
         "Setting:  terminal.ptyd = {} ({effective})\n",
-        if setting.is_empty() { "unset" } else { &setting }
+        if setting.is_empty() {
+            "unset"
+        } else {
+            &setting
+        }
     ));
     let b = match second {
         Some(t) if !t.trim_matches(crate::families::py_space).is_empty() => {
@@ -1015,7 +1036,10 @@ pub fn status_reader(input: &str) -> Shown {
     };
     if has {
         let ptyd = match &b {
-            Value::Object(_) => py_get(&b, "ptyd", line::status::INDEX).ok().flatten().cloned(),
+            Value::Object(_) => py_get(&b, "ptyd", line::status::INDEX)
+                .ok()
+                .flatten()
+                .cloned(),
             Value::Array(_) => {
                 return raised(
                     stdout,
@@ -1117,7 +1141,10 @@ mod tests {
     fn the_words_are_read_as_the_shell_reads_them() {
         assert_eq!(parse("install", &[]), None);
         assert_eq!(parse("--json", &[]), Some(Life::Usage));
-        assert_eq!(parse("stop", &["--keep-agents"]), Some(Life::Stop { keep: true }));
+        assert_eq!(
+            parse("stop", &["--keep-agents"]),
+            Some(Life::Stop { keep: true })
+        );
         assert_eq!(parse("stop", &["x"]), Some(Life::StopUsage));
         assert_eq!(parse("log", &["--tail"]), None);
         assert_eq!(
@@ -1127,7 +1154,10 @@ mod tests {
                 follow: true
             })
         );
-        assert_eq!(parse("uninstall", &["x", "--yes"]), Some(Life::Uninstall { yes: false }));
+        assert_eq!(
+            parse("uninstall", &["x", "--yes"]),
+            Some(Life::Uninstall { yes: false })
+        );
         assert_eq!(parse("survive", &[]), Some(Life::Survive(Survive::Status)));
         assert_eq!(parse("restart", &["--host"]), None);
         assert_eq!(parse("restart", &["--host", "k2.example"]), None);
@@ -1168,7 +1198,8 @@ mod tests {
         assert_eq!(switch_reader("{}", "off").exit, Exit::Ok);
         assert_eq!(switch_reader("[1]", "on").exit, Exit::Refused);
         assert_eq!(switch_reader("nope", "on").exit, Exit::Error);
-        let s = status_reader("{\"terminal\":{\"ptyd\":\" OFF \"}}\n{\"ptyd\":\"on\",\"adopted\":2}");
+        let s =
+            status_reader("{\"terminal\":{\"ptyd\":\" OFF \"}}\n{\"ptyd\":\"on\",\"adopted\":2}");
         assert_eq!(
             s.stdout,
             "Setting:  terminal.ptyd =  OFF  (off)\nBackend:  on\nAdopted at the last boot: 2\n"

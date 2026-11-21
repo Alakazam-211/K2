@@ -73,11 +73,60 @@ const NEVER_REAL: &[&str] = &[
 /// The ordinary tools the two CLIs may run, linked from this process's
 /// `PATH` when there.
 const TOOLS: &[&str] = &[
-    "bash", "sh", "env", "python3", "awk", "sed", "grep", "tr", "cat", "head", "tail", "cut",
-    "sort", "uniq", "wc", "date", "mkdir", "chmod", "mv", "rm", "cp", "ln", "id", "ps", "readlink",
-    "realpath", "dirname", "basename", "mktemp", "sleep", "stat", "touch", "od", "base64",
-    "sha256sum", "shasum", "kill", "find", "ls", "tee", "printf", "hostname", "whoami", "expr",
-    "test", "true", "false", "tty", "stty", "getconf", "seq", "cmp", "diff", "timeout",
+    "bash",
+    "sh",
+    "env",
+    "python3",
+    "awk",
+    "sed",
+    "grep",
+    "tr",
+    "cat",
+    "head",
+    "tail",
+    "cut",
+    "sort",
+    "uniq",
+    "wc",
+    "date",
+    "mkdir",
+    "chmod",
+    "mv",
+    "rm",
+    "cp",
+    "ln",
+    "id",
+    "ps",
+    "readlink",
+    "realpath",
+    "dirname",
+    "basename",
+    "mktemp",
+    "sleep",
+    "stat",
+    "touch",
+    "od",
+    "base64",
+    "sha256sum",
+    "shasum",
+    "kill",
+    "find",
+    "ls",
+    "tee",
+    "printf",
+    "hostname",
+    "whoami",
+    "expr",
+    "test",
+    "true",
+    "false",
+    "tty",
+    "stty",
+    "getconf",
+    "seq",
+    "cmp",
+    "diff",
+    "timeout",
 ];
 
 fn svc(r: &Rig) -> PathBuf {
@@ -147,7 +196,14 @@ exit 0
         logline("launchctl")
     );
     exe(&d.join("launchctl"), &launchctl);
-    for name in ["loginctl", "journalctl", "sudo", "minisign", "sc", "schtasks"] {
+    for name in [
+        "loginctl",
+        "journalctl",
+        "sudo",
+        "minisign",
+        "sc",
+        "schtasks",
+    ] {
         exe(
             &d.join(name),
             &format!(
@@ -285,7 +341,11 @@ fn no_daemon_token(r: &Rig) {
 
 fn with_log(r: &Rig) {
     base(r);
-    std::fs::write(r.k2home.join("daemon.stdout.log"), "one\ntwo\nthree\nfour\n").unwrap();
+    std::fs::write(
+        r.k2home.join("daemon.stdout.log"),
+        "one\ntwo\nthree\nfour\n",
+    )
+    .unwrap();
 }
 
 fn mac(r: &Rig) {
@@ -319,11 +379,7 @@ fn mac_load_fails(r: &Rig) {
 
 fn mac_not_loaded(r: &Rig) {
     mac_plist(r);
-    put(
-        r,
-        "launchctl-unload",
-        "Could not find specified service\n",
-    );
+    put(r, "launchctl-unload", "Could not find specified service\n");
     put(
         r,
         "launchctl-kickstart",
@@ -333,7 +389,9 @@ fn mac_not_loaded(r: &Rig) {
 
 fn mac_old_label(r: &Rig) {
     mac(r);
-    let old = r.home.join("Library/LaunchAgents/com.k2so.k2so-daemon.plist");
+    let old = r
+        .home
+        .join("Library/LaunchAgents/com.k2so.k2so-daemon.plist");
     std::fs::create_dir_all(old.parent().unwrap()).unwrap();
     std::fs::write(old, "<plist/>\n").unwrap();
 }
@@ -346,8 +404,14 @@ fn other_os(r: &Rig) {
 /// The files a verb may leave or take away.
 fn files_after(r: &Rig) -> Vec<(&'static str, bool)> {
     vec![
-        ("stop-intent", r.k2home.join("run/stop-intent.json").is_file()),
-        ("keep-intent", r.k2home.join("run/keep-intent.json").is_file()),
+        (
+            "stop-intent",
+            r.k2home.join("run/stop-intent.json").is_file(),
+        ),
+        (
+            "keep-intent",
+            r.k2home.join("run/keep-intent.json").is_file(),
+        ),
         ("daemon.token", r.k2home.join("daemon.token").exists()),
         ("daemon.port", r.k2home.join("daemon.port").exists()),
         ("plist", plist(r).exists()),
@@ -359,16 +423,28 @@ fn files_after(r: &Rig) -> Vec<(&'static str, bool)> {
 fn service_calls(r: &Rig, name: &str, native: bool) -> Vec<String> {
     let log = r.take_tool_log();
     for t in [OWNER, DAEMON_TOKEN, REMOTE_TOKEN] {
-        assert!(!log.contains(t), "{name}: a token in a stand-in's arguments:\n{log}");
+        assert!(
+            !log.contains(t),
+            "{name}: a token in a stand-in's arguments:\n{log}"
+        );
     }
-    let lines: Vec<String> = log.lines().map(str::to_string).collect();
+    // A line is a stand-in's: the shell's curl takes `-w` with a newline
+    // in it, so its argument goes on to a line of its own.
+    let calls: Vec<String> = log
+        .lines()
+        .filter(|l| STAND_INS.contains(&l.split(' ').next().unwrap_or("")))
+        .map(str::to_string)
+        .collect();
     if native {
         assert!(
-            lines.iter().all(|l| !l.starts_with("curl")),
+            calls.iter().all(|l| !l.starts_with("curl")),
             "{name}: the binary ran curl:\n{log}"
         );
     }
-    lines.into_iter().filter(|l| !l.starts_with("curl")).collect()
+    calls
+        .into_iter()
+        .filter(|l| !l.starts_with("curl"))
+        .collect()
 }
 
 fn uid() -> String {
@@ -454,7 +530,11 @@ fn check(r: &Rig, c: &Case, want: &[&str], native: bool) {
         let run = side_case(r, c, *python);
         let (out, log) = r.binary(&run, !*python);
         let handed = k5_cli::fallthrough::cache_dir(&r.k2home).exists();
-        assert_eq!(handed, !native, "{}: {side:?} handed it to the shell", c.name);
+        assert_eq!(
+            handed, !native,
+            "{}: {side:?} handed it to the shell",
+            c.name
+        );
         let got: Seen = (
             out.code,
             mask(*side, &out.stdout),
@@ -660,7 +740,15 @@ fn daemon_restart_answers_as_the_shell_does() {
     let rows: Vec<(Case, Vec<&str>)> = vec![
         (
             // native: daemon restart
-            case("restart: a user unit", &["restart"], &[], vec![], user_unit, 0, 0),
+            case(
+                "restart: a user unit",
+                &["restart"],
+                &[],
+                vec![],
+                user_unit,
+                0,
+                0,
+            ),
             user_restart.clone(),
         ),
         (
@@ -793,7 +881,12 @@ fn daemon_restart_host_answers_as_the_shell_does() {
         ),
         case(
             "restart --host=…/ --sessions --wait: daemon.token's token",
-            &["restart", "--host=http://127.0.0.1:{port}/", "--sessions", "--wait"],
+            &[
+                "restart",
+                "--host=http://127.0.0.1:{port}/",
+                "--sessions",
+                "--wait",
+            ],
             &[],
             vec![
                 ok(r#"{"restarting":true}"#),
@@ -958,7 +1051,15 @@ fn daemon_survive_answers_as_the_shell_does() {
             2,
         ),
         // native: daemon survive help
-        case("survive help", &["survive", "help"], &[], vec![], base, 0, 0),
+        case(
+            "survive help",
+            &["survive", "help"],
+            &[],
+            vec![],
+            base,
+            0,
+            0,
+        ),
         case(
             "survive with a word it doesn't take",
             &["survive", "maybe"],
@@ -1028,10 +1129,26 @@ fn daemon_log_uninstall_start_and_usage_answer_as_the_shell_does() {
             0,
         ),
         // native: daemon start
-        case("start on Linux: no plist", &["start"], &[], vec![], base, 1, 0),
+        case(
+            "start on Linux: no plist",
+            &["start"],
+            &[],
+            vec![],
+            base,
+            1,
+            0,
+        ),
         // native: daemon --json
         case("the usage", &["--json"], &[], vec![], base, 1, 0),
-        case("the usage for any word", &["nosuch", "x"], &[], vec![], base, 1, 0),
+        case(
+            "the usage for any word",
+            &["nosuch", "x"],
+            &[],
+            vec![],
+            base,
+            1,
+            0,
+        ),
         case(
             "other OS: stop with no plist",
             &["stop"],
@@ -1094,7 +1211,15 @@ fn daemon_verbs_on_macos_answer_as_the_shell_does() {
             vec![unload],
         ),
         (
-            case("stop: not loaded", &["stop"], &[], vec![], mac_not_loaded, 0, 0),
+            case(
+                "stop: not loaded",
+                &["stop"],
+                &[],
+                vec![],
+                mac_not_loaded,
+                0,
+                0,
+            ),
             vec![unload],
         ),
         (
@@ -1212,7 +1337,15 @@ fn daemon_help_lines_never_act() {
             2,
             0,
         ),
-        case("restart -h", &["restart", "-h"], &[], vec![], user_unit, 2, 0),
+        case(
+            "restart -h",
+            &["restart", "-h"],
+            &[],
+            vec![],
+            user_unit,
+            2,
+            0,
+        ),
         case(
             "restart --host … --help",
             &["restart", "--host", "http://127.0.0.1:1", "--help"],
@@ -1281,7 +1414,8 @@ fn no_service_manager_is_named_by_an_absolute_path() {
                     if let Some(at) = line.find(&abs) {
                         let after = line[at + abs.len()..].chars().next();
                         assert!(
-                            after.is_some_and(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+                            after
+                                .is_some_and(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
                             "{}:{}: {abs}",
                             f.display(),
                             i + 1
@@ -1312,7 +1446,11 @@ fn daemon_life_lines_say_the_brand_s_name() {
         let _ = r.take_tool_log();
         assert!(out.stderr.contains(&want), "{args:?}: {}", out.stderr);
         if cli != "k2" {
-            assert!(!out.stderr.contains("k2 daemon"), "{args:?}: {}", out.stderr);
+            assert!(
+                !out.stderr.contains("k2 daemon"),
+                "{args:?}: {}",
+                out.stderr
+            );
         }
     }
 }

@@ -549,6 +549,8 @@ export interface AppChoiceCard {
   readonly answeredBy?: AppPostAuthor
   /** Seconds since the epoch, when a pending card expires. */
   readonly expiresAt?: number
+  /** The asker's metadata map (since 0.46.17): present only when the card was asked with --meta. Up to 32 keys of a-z, 0-9, _, . and - (64 at most), each a string, number or boolean, at most 4096 bytes as JSON. Not for secrets: whoever can see the card sees it. */
+  readonly meta?: Record<string, string | number | boolean>
   readonly options: ChoiceOption[]
   readonly prompt: string
   /** pending, answered, voided or expired. */

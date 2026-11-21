@@ -508,6 +508,7 @@ export function PinnedSessionBody({
   viewSwitch,
   openTerminal,
   draftId,
+  revealThreadMinPx,
   children,
 }: {
   viewTab: SessionViewTab
@@ -537,6 +538,8 @@ export function PinnedSessionBody({
   /** The message box's draft owner when it isn't `agentName` (a ticket's
    *  discussion, whose agent also has its own chat). */
   draftId?: string
+  /** The drawer on top leaves at least this much for the Thread (px). */
+  revealThreadMinPx?: number
   children: ReactNode
 }): JSX.Element {
   const chrome = useMemo<SessionViewChromeValue>(
@@ -555,8 +558,9 @@ export function PinnedSessionBody({
       projectPath,
       viewSwitch,
       openTerminal,
+      ...(revealThreadMinPx !== undefined ? { revealThreadMinPx } : {}),
     }),
-    [viewTab, splitLeft, splitRight, addr, conversationId, agentName, displayName, terminalRevealed, terminalRevealKey, threadPanel, setThreadPanel, projectPath, viewSwitch, openTerminal],
+    [viewTab, splitLeft, splitRight, addr, conversationId, agentName, displayName, terminalRevealed, terminalRevealKey, threadPanel, setThreadPanel, projectPath, viewSwitch, openTerminal, revealThreadMinPx],
   )
   // The session's columns are drawn here, around the terminal pane
   // (`children`), so a respawn that rebuilds the pane keeps the Thread, its

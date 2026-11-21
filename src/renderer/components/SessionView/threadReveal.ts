@@ -42,13 +42,20 @@ export function revealPlacementNext(width: number, was: RevealPlacement | null):
   return width >= REVEAL_LEFT_MIN_PX ? 'left' : 'top'
 }
 
-/** The terminal's width (left) or height (top) for this pane, in px. */
-export function revealTerminalSizePx(placement: RevealPlacement, paneW: number, paneH: number): number {
+/** The terminal's width (left) or height (top) for this pane, in px.
+ *  `threadPx`: what a top drawer leaves for the Thread and its message box,
+ *  where the pane allows (REVEAL_TOP_THREAD_PX unless the host asks more). */
+export function revealTerminalSizePx(
+  placement: RevealPlacement,
+  paneW: number,
+  paneH: number,
+  threadPx: number = REVEAL_TOP_THREAD_PX,
+): number {
   if (placement === 'left') {
     const raw = paneW * REVEAL_LEFT_FRACTION
     return Math.round(Math.min(REVEAL_LEFT_MAX_SIZE_PX, Math.max(REVEAL_LEFT_MIN_SIZE_PX, raw)))
   }
-  const raw = Math.min(paneH * REVEAL_TOP_FRACTION, paneH - REVEAL_TOP_THREAD_PX)
+  const raw = Math.min(paneH * REVEAL_TOP_FRACTION, paneH - threadPx)
   return Math.round(Math.max(REVEAL_TOP_MIN_SIZE_PX, raw))
 }
 
@@ -87,6 +94,9 @@ export interface TerminalReveal {
   motionKey: string | null
   /** Sliding shut has ended (or there is no slide): hide the column. */
   onClosed: () => void
+  /** A top drawer leaves at least this much for the Thread (px), where the
+   *  pane allows. Absent: REVEAL_TOP_THREAD_PX. */
+  threadMinPx?: number
 }
 
 /** Whether the revealed terminal is laid out: `open`, or sliding shut. Set
@@ -265,7 +275,7 @@ export function useTerminalRevealLayout(
     }
     const rect = container.getBoundingClientRect()
     const place = open ? revealPlacementNext(rect.width, null) : placementRef.current
-    const sizePx = revealTerminalSizePx(place, rect.width, rect.height)
+    const sizePx = revealTerminalSizePx(place, rect.width, rect.height, latest.current?.threadMinPx)
     const anims = slide(terminal, thread, threadFloatsIn(container), place, sizePx)
     m.anims = anims
     if (!open) for (const a of anims) a.reverse()
@@ -280,7 +290,7 @@ export function useTerminalRevealLayout(
     }
   }, [available, open, motionKey, terminalRef, threadRef, containerRef, clearSlides])
 
-  return { placement, sizePx: revealTerminalSizePx(placement, box.w, box.h) }
+  return { placement, sizePx: revealTerminalSizePx(placement, box.w, box.h, reveal?.threadMinPx) }
 }
 
 // ── The chord: which pane Ctrl+` acts on ────────────────────────────────

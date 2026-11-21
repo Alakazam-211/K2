@@ -50,6 +50,12 @@ describe('revealTerminalSizePx', () => {
     expect(revealTerminalSizePx('top', 800, 420)).toBe(180)
     expect(revealTerminalSizePx('top', 800, 300)).toBe(180)
   })
+  it('top: a host may keep more for the Thread (a ticket’s discussion)', () => {
+    // 45% of 640 = 288, but 640 - 460 = 180 keeps the Thread its room.
+    expect(revealTerminalSizePx('top', 460, 640, 460)).toBe(180)
+    expect(revealTerminalSizePx('top', 460, 1000, 460)).toBe(450)
+    expect(revealTerminalSizePx('left', 1200, 800, 460)).toBe(540)
+  })
 })
 
 describe('parseCssDurationMs', () => {

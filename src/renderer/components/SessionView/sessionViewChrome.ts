@@ -39,6 +39,9 @@ export interface SessionViewChromeValue {
   /** Put the agent's terminal on screen (a K2 notice's "Open its
    *  terminal"). Undefined: this chrome can't, and the button isn't drawn. */
   openTerminal?: () => void
+  /** Thread view's drawer on top leaves at least this much for the Thread
+   *  (px). Undefined: the drawer's own default. */
+  revealThreadMinPx?: number
 }
 
 export const SessionViewChromeContext = createContext<SessionViewChromeValue | null>(null)

@@ -197,6 +197,7 @@ export function SessionColumns({
               shown: drawerLaidOut,
               motionKey: chrome.terminalRevealKey ?? null,
               onClosed: state.onRevealClosed,
+              ...(chrome.revealThreadMinPx !== undefined ? { threadMinPx: chrome.revealThreadMinPx } : {}),
             }
           : null
       }

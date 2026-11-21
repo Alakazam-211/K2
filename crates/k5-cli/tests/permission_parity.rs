@@ -1159,17 +1159,14 @@ fn permission_hands_these_to_the_shell() {
 /// `text::FAMILY_FORMS`) is the family's code, as `cmd_permission` runs
 /// it: the probe first (the owner token over TCP for the owner, none for
 /// the owner's `beta`; the passport's probe for an agent), off is the
-/// unknown command and the daily tier, and on, `_permission_cmd` reads
-/// the word as help only first or after `request`; after any other verb
-/// it is that verb's word. Bash bugs, copied until the shell's fix
-/// lands (help never acts): `status`, `pending`, `approve` and `beta
-/// status` ask the daemon, and `cancel`, `beta on` and `approvers`
-/// change something. These rows flip when the fix lands.
+/// unknown command and the daily tier, and on, help wins
+/// (`_permission_cmd`'s `_wants_help`): the usage, exit 0, and nothing
+/// sent but the probe, whatever the verb (a person's verb with a
+/// passport too).
 #[test]
 fn the_help_lines_are_the_family_s() {
     let rig = Rig::new(VERB, "help");
     let h = with_passport;
-    let pending = r#"{"requests":[{"requestId":"pr_1","cardId":"c_1","addr":"k2/acme"}]}"#;
     let mut cases = Vec::new();
     for flag in ["--help", "-h"] {
         // Each line twice, once a flag: the args are &'static.
@@ -1183,126 +1180,86 @@ fn the_help_lines_are_the_family_s() {
         // Each row's name once in the rig.
         let n =
             |name: &str| -> &'static str { Box::leak(format!("{name} ({flag})").into_boxed_str()) };
+        // The usage after the probe: one request.
+        let usage = |name: &str, a: &'static [&'static str], b: &'static [&'static str]| {
+            case(n(name), line(a, b), &[], vec![on()], owner_and_port, 0, 1)
+        };
+        // The owner's `beta`: no probe, the usage, nothing sent.
+        let beta = |name: &str, a: &'static [&'static str], b: &'static [&'static str]| {
+            case(n(name), line(a, b), &[], vec![], owner_and_port, 0, 0)
+        };
         cases.extend([
             // native: permission request --help
-            case(
-                n("request"),
-                line(&["request", "--help"], &["request", "-h"]),
-                &[],
-                vec![on()],
-                owner_and_port,
-                0,
-                1,
+            usage(
+                "request: the usage, the probe only",
+                &["request", "--help"],
+                &["request", "-h"],
             ),
             // native: permission update --help
-            case(
-                n("update"),
-                line(&["update", "--help"], &["update", "-h"]),
-                &[],
-                vec![on()],
-                owner_and_port,
-                2,
-                1,
+            usage(
+                "update: the usage, the probe only",
+                &["update", "--help"],
+                &["update", "-h"],
             ),
             // native: permission status --help
-            case(
-                n("status: the word is an id (a bash bug: help asks)"),
-                line(&["status", "--help"], &["status", "-h"]),
-                &[],
-                vec![on(), ok(r#"{"requests":[]}"#)],
-                owner_and_port,
-                0,
-                2,
+            usage(
+                "status: the usage, the probe only",
+                &["status", "--help"],
+                &["status", "-h"],
             ),
             // native: permission cancel --help
-            case(
-                n("cancel: the word is an id (a bash bug: help acts)"),
-                line(&["cancel", "--help"], &["cancel", "-h"]),
-                &[],
-                vec![on(), ok("{}")],
-                owner_and_port,
-                0,
-                2,
+            usage(
+                "cancel: the usage, the probe only",
+                &["cancel", "--help"],
+                &["cancel", "-h"],
             ),
             // native: permission list --help
-            case(
-                n("list"),
-                line(&["list", "--help"], &["list", "-h"]),
-                &[],
-                vec![on()],
-                owner_and_port,
-                2,
-                1,
+            usage(
+                "list: the usage, the probe only",
+                &["list", "--help"],
+                &["list", "-h"],
             ),
             // native: permission pending --help
-            case(
-                n("pending: the word is ignored (a bash bug: help asks)"),
-                line(&["pending", "--help"], &["pending", "-h"]),
-                &[],
-                vec![on(), ok(pending)],
-                owner_and_port,
-                0,
-                2,
+            usage(
+                "pending: the usage, the probe only",
+                &["pending", "--help"],
+                &["pending", "-h"],
             ),
             // native: permission approve --help
-            case(
-                n("approve: the word is an id (a bash bug: help asks)"),
-                line(&["approve", "--help"], &["approve", "-h"]),
-                &[],
-                vec![on(), ok(pending)],
-                owner_and_port,
-                4,
-                2,
+            usage(
+                "approve: the usage, the probe only",
+                &["approve", "--help"],
+                &["approve", "-h"],
             ),
             // native: permission beta --help
-            case(
-                n("beta: no probe, the usage line"),
-                line(&["beta", "--help"], &["beta", "-h"]),
-                &[],
-                vec![],
-                owner_and_port,
-                2,
-                0,
+            beta(
+                "beta: no probe, the usage",
+                &["beta", "--help"],
+                &["beta", "-h"],
             ),
             // native: permission beta on --help
-            case(
-                n("beta on: no probe, the switch (a bash bug: help acts)"),
-                line(&["beta", "on", "--help"], &["beta", "on", "-h"]),
-                &[],
-                vec![ok("{}")],
-                owner_and_port,
-                0,
-                1,
+            beta(
+                "beta on: no probe, the usage",
+                &["beta", "on", "--help"],
+                &["beta", "on", "-h"],
             ),
             // native: permission beta status --help
-            case(
-                n("beta status: no probe (a bash bug: help asks)"),
-                line(&["beta", "status", "--help"], &["beta", "status", "-h"]),
-                &[],
-                vec![ok(r#"{"settings":{"permissionCards":true}}"#)],
-                owner_and_port,
-                0,
-                1,
+            beta(
+                "beta status: no probe, the usage",
+                &["beta", "status", "--help"],
+                &["beta", "status", "-h"],
             ),
             // native: permission approvers --help
-            case(
-                n("approvers: the word is a login (a bash bug: help acts)"),
-                line(&["approvers", "--help"], &["approvers", "-h"]),
-                &[],
-                vec![on(), ok("{}")],
-                owner_and_port,
-                0,
-                2,
+            usage(
+                "approvers: the usage, the probe only",
+                &["approvers", "--help"],
+                &["approvers", "-h"],
             ),
             // native: permission agent --help
-            case(
-                n("agent"),
-                line(&["agent", "--help"], &["agent", "-h"]),
-                &[],
-                vec![on()],
-                owner_and_port,
-                2,
-                1,
+            usage(
+                "agent: the usage, the probe only",
+                &["agent", "--help"],
+                &["agent", "-h"],
             ),
             // Off: the unknown command and the daily tier.
             case(
@@ -1351,12 +1308,12 @@ fn the_help_lines_are_the_family_s() {
             with(
                 h(&[("K2_HOOK_SOCK", "{sock}")]),
                 case(
-                    n("agent, a person's verb"),
+                    n("agent, a person's verb: the usage, the probe only"),
                     line(&["approvers", "--help"], &["approvers", "-h"]),
                     &[],
                     vec![on()],
                     port_only,
-                    3,
+                    0,
                     1,
                 ),
             ),
@@ -1388,4 +1345,42 @@ fn the_help_lines_are_the_family_s() {
         ]);
     }
     check(&rig, cases);
+}
+
+/// Help later on the line, or as a flag's value, wins too: the usage,
+/// exit 0, and nothing sent but the probe (before the fix, `--why` and
+/// `--area` took `-h` as their value and `agent <ws> on --help` sent the
+/// switch). The front hands these lines to the shell on both sides (no
+/// help form names them); [`the_help_lines_are_the_family_s`] and the
+/// family's unit test cover the binary's own reading.
+#[test]
+fn help_later_on_the_line_is_the_usage() {
+    let rig = Rig::new(VERB, "helplate");
+    let usage = |name: &'static str, args: &'static [&'static str]| {
+        shell(case(name, args, &[], vec![on()], owner_and_port, 0, 1))
+    };
+    check(
+        &rig,
+        vec![
+            usage("update --why -h", &["update", "--why", "-h"]),
+            usage("update <id> --why -h", &["update", "pr_1", "--why", "-h"]),
+            usage("list --area -h", &["list", "--area", "-h"]),
+            usage("list --search --help", &["list", "--search", "--help"]),
+            usage("request --why -h", &["request", "--why", "-h"]),
+            usage("agent <ws> on --help", &["agent", "acme", "on", "--help"]),
+            usage("agent <ws> off -h", &["agent", "acme", "off", "-h"]),
+            usage("deny <id> --reason -h", &["deny", "pr_1", "--reason", "-h"]),
+            usage("status <id> --help", &["status", "pr_1", "--help"]),
+            usage("approvers ada -h", &["approvers", "ada", "-h"]),
+            shell(case(
+                "beta off --help: no probe",
+                &["beta", "off", "--help"],
+                &[],
+                vec![],
+                owner_and_port,
+                0,
+                0,
+            )),
+        ],
+    );
 }

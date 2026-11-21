@@ -131,11 +131,8 @@ macro_rules! family {
 /// whether the family exists first (the owner token over TCP for the
 /// owner, the passport's probe for an agent; `beta` with no probe for the
 /// owner), and off is `Unknown command: permission` and the daily tier.
-/// On, `_permission_cmd` reads `-h` or `--help` as help only first or
-/// after `request`; after any other verb it is that verb's word (bash
-/// bugs, copied until the shell's fix lands: `status`, `pending`,
-/// `approve` and `beta status` ask the daemon, and `cancel`, `beta on`
-/// and `approvers` change something).
+/// On, help wins (`_permission_cmd`'s `_wants_help`): the usage, and
+/// nothing sent but the probe.
 pub static FAMILY_FORMS: &[HelpForm] = &[
     family!("permission" "--help"),
     family!("permission" "-h"),

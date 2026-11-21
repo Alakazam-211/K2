@@ -213,7 +213,14 @@ fn people_only(verb: &str) -> Ask {
 
 /// The words after `permission` as `_permission_cmd` reads them.
 /// `passport`: `SCOPED_TOKEN` is set (a person's verb is refused).
+///
+/// Help wins (`_wants_help`): `-h` or `--help` anywhere before `--` is
+/// the usage, before any verb reads its words. The family's probe in
+/// [`run`] is still sent first.
 pub fn parse(words: &[&str], passport: bool) -> Ask {
+    if wants_help(words) {
+        return Ask::Usage;
+    }
     let sub = words.first().copied().unwrap_or("");
     let rest = words.get(1..).unwrap_or_default();
     match sub {
@@ -396,6 +403,14 @@ pub fn parse(words: &[&str], passport: bool) -> Ask {
             }
         }
     }
+}
+
+/// `_wants_help "$@"`: `-h` or `--help` before the first `--`.
+fn wants_help(words: &[&str]) -> bool {
+    words
+        .iter()
+        .take_while(|w| **w != "--")
+        .any(|w| matches!(*w, "-h" | "--help"))
 }
 
 /// `local id="${1:-}"; [ -n "$id" ] && shift`: the id and the words after

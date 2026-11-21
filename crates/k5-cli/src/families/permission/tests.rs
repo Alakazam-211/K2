@@ -273,3 +273,52 @@ fn the_pending_lookup_is_the_shell_s() {
     );
     assert_eq!(lookup(b"", "a", true, ""), Lookup::NotFound);
 }
+
+/// Help wins (`_wants_help`): `-h` or `--help` anywhere before `--`, on
+/// any verb and as any flag's value, is the usage; nothing is sent. After
+/// `--` it is a word like any other.
+#[test]
+fn help_wins_before_any_verb_reads_its_words() {
+    for passport in [false, true] {
+        for flag in ["-h", "--help"] {
+            for line in [
+                vec![flag],
+                vec!["status", flag],
+                vec!["status", "pr_1", flag],
+                vec!["cancel", flag],
+                vec!["pending", flag],
+                vec!["approve", flag],
+                vec!["deny", "pr_1", "--reason", flag],
+                vec!["update", flag],
+                vec!["update", "--why", flag],
+                vec!["update", "pr_1", "--why", flag],
+                vec!["list", flag],
+                vec!["list", "--area", flag],
+                vec!["list", "--search", flag],
+                vec!["request", "--why", flag],
+                vec!["request", "compute.grant", "--to", flag],
+                vec!["beta", flag],
+                vec!["beta", "on", flag],
+                vec!["beta", "off", flag],
+                vec!["beta", "status", flag],
+                vec!["approvers", flag],
+                vec!["approvers", "ada", flag],
+                vec!["agent", flag],
+                vec!["agent", "acme", "on", flag],
+                vec![flag, "--", "x"],
+                vec!["nope", flag],
+            ] {
+                assert_eq!(parse(&line, passport), Ask::Usage, "{line:?} {passport}");
+            }
+        }
+    }
+    // After `--`, the verb reads it.
+    assert_eq!(
+        parse(&["status", "--", "--help"], false),
+        send("status", false, STATUS, "id=--".into())
+    );
+    assert_eq!(
+        parse(&["request", "compute.grant", "--", "-h"], false),
+        unknown_flag("--")
+    );
+}

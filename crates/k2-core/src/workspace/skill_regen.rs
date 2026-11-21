@@ -116,7 +116,12 @@ mint/read/wait, send under your human's governance). \
 `", cli_name!(), " app` manages guests/roles/tokens for apps on this box (Thread from an app; \
 pass prefix still `k2skn_`; leftover `", cli_name!(), " skin` / `", cli_name!(), " skin-token`). Not Connect. \
 Desktop binary updates are `", cli_name!(), " update --app`. \
-`", cli_name!(), " study` prints bounded pages (license, people lists, errors) — not `--help`.\n");
+`", cli_name!(), " study` prints bounded pages (license, people lists, errors) — not `--help`.\n\
+\n\
+Reminders, follow-ups and schedules: `", cli_name!(), " remind \"…\" --at 15:00` (once; or `--in 45m`) \
+and `", cli_name!(), " heartbeat schedule add` (repeating). Never your harness's own scheduler \
+(cron jobs, /loop, timers): those die with the session and your human can't see them. \
+", product_name!(), "'s survive restarts and show in ", product_name!(), ".\n");
 
 pub fn compose_agents_md_public(project_path: &str) -> String {
     compose_agents_md(project_path)
@@ -432,14 +437,57 @@ pub fn sync_permission_teaching_everywhere() -> usize {
     projects.len()
 }
 
+/// The k2-cli skill's opening table (0.46.17): which command for what the
+/// person asks. Agents reached for their harness's own scheduler because
+/// nothing they read first named K2's reminders.
+const K2_CLI_SKILL_WHEN_TABLE: &str = concat!(
+    "## When the person asks → use\n",
+    "| When | Use |\n",
+    "|---|---|\n",
+    "| \"Remind me\", follow up later, at a time | `",
+    cli_name!(),
+    " remind \"…\" --at 15:00` (or `--in 45m`, `--on 2026-10-30`) |\n",
+    "| Repeat on a schedule (\"every morning\") | `",
+    cli_name!(),
+    " heartbeat schedule add --name <n> --daily --time 09:00 --instructions \"…\"` |\n",
+    "| You need a secret from them | `",
+    cli_name!(),
+    " thread secret <addr> --name NAME` |\n",
+    "| You need a decision from them | `",
+    cli_name!(),
+    " thread ask <addr> \"…\" --option \"…\" --option \"…\"` (a card) |\n",
+    "| Send another agent a file | `",
+    cli_name!(),
+    " msg <handle> --inbox-wake <path>` |\n",
+    "| Tell the person something | `",
+    cli_name!(),
+    " thread <addr> \"…\"` |\n",
+    "\n",
+    "Never your harness's own scheduler (cron jobs, /loop, timers): it dies with\n",
+    "the session and your human can't see it. ",
+    product_name!(),
+    "'s reminders and heartbeats survive\n",
+    "restarts and show in ",
+    product_name!(),
+    ". `",
+    cli_name!(),
+    " study heartbeats`.\n",
+    "\n",
+);
+
 /// The K2 CLI reference, shipped as a LOADABLE skill (`.k2/skills/k2-cli/`)
 /// rather than baked into the always-on entrypoint.
 fn generate_k2_cli_skill() -> String {
-    r#"# K2 CLI
+    let mut body = String::from(
+        r#"# K2 CLI
 
 How to drive the K2 agent system from a workspace via the `k2` CLI.
 
-## Who am I
+"#,
+    );
+    body.push_str(K2_CLI_SKILL_WHEN_TABLE);
+    body.push_str(
+        r#"## Who am I
 `k2 whoami` prints this cell (same fields a Claude/Grok/Pi launch already
 pastes). Facts, not a checklist:
 
@@ -823,8 +871,9 @@ separate product. Four people lists: connections (agents), Connect users, app gu
 To change this box, `k2 feedback ask` with an HTML brief (`k2 study ticket-brief`)
 and `--assign <user>` (a user on this server).
 To talk in this chat, `k2 thread`.
-"#
-    .to_string()
+"#,
+    );
+    body
 }
 
 /// The canonical-agents operator — loaded WITH an AI assistant to set up or
@@ -872,6 +921,16 @@ fn ensure_project_skills(project_path: &str) {
     }
 }
 
+/// The k2-cli skill's `name:` and `description:`. Harnesses pick a skill by
+/// its description, so it carries the words people use for reminders and
+/// schedules (0.46.17): without them agents reach for their own scheduler.
+const K2_CLI_SKILL_FRONTMATTER: &str = concat!(
+    "name: k2-cli\ndescription: ",
+    product_name!(),
+    " CLI reference — msg, inbox, activity, connections, heartbeat, remind. \
+     Use it for remind me, reminder, alarm, follow up later, at <time>, every morning, schedule, cron"
+);
+
 fn ensure_compose_sidecar_skills(dot: &Path) {
     use crate::skills::version::{ensure_skill_up_to_date, SKILL_VERSION_CANONICAL_AGENT};
     let cli = dot.join("skills/k2-cli/SKILL.md");
@@ -880,7 +939,7 @@ fn ensure_compose_sidecar_skills(dot: &Path) {
         "k2-cli",
         SKILL_VERSION_WORKSPACE,
         &generate_k2_cli_skill(),
-        Some(concat!("name: k2-cli\ndescription: ", product_name!(), " CLI reference — msg, inbox, activity, connections, heartbeat")),
+        Some(K2_CLI_SKILL_FRONTMATTER),
     );
 
     let canon_skill = dot.join("skills/k2-canonical-agents/SKILL.md");
@@ -1819,6 +1878,90 @@ mod tests {
         let listed: Vec<&str> = skill[start..end].split(',').map(str::trim).collect();
         assert_eq!(listed, ids, "the k2-cli skill's topics vs cli/k2 _STUDY_TOPIC_IDS");
         assert!(skill.contains("`k2 study live`"), "the skill points at k2 study live");
+    }
+
+    /// The reminder teaching (0.46.17): the always-on Tooling paragraph, the
+    /// k2-cli skill's table near its top and its description's trigger words.
+    /// Returns what is missing; empty means all of it is there.
+    fn reminder_teaching_gaps(tooling: &str, skill: &str, frontmatter: &str) -> Vec<String> {
+        const TOOLING_PARAGRAPH: &str = "\n\nReminders, follow-ups and schedules: `k2 remind \"…\" --at 15:00` \
+            (once; or `--in 45m`) and `k2 heartbeat schedule add` (repeating). Never your harness's own \
+            scheduler (cron jobs, /loop, timers): those die with the session and your human can't see \
+            them. K2's survive restarts and show in K2.\n";
+        const TABLE: &[&str] = &[
+            "## When the person asks → use\n| When | Use |\n|---|---|\n",
+            "| \"Remind me\", follow up later, at a time | `k2 remind \"…\" --at 15:00` (or `--in 45m`, `--on 2026-10-30`) |\n",
+            "| Repeat on a schedule (\"every morning\") | `k2 heartbeat schedule add --name <n> --daily --time 09:00 --instructions \"…\"` |\n",
+            "| You need a secret from them | `k2 thread secret <addr> --name NAME` |\n",
+            "| You need a decision from them | `k2 thread ask <addr> \"…\" --option \"…\" --option \"…\"` (a card) |\n",
+            "| Send another agent a file | `k2 msg <handle> --inbox-wake <path>` |\n",
+            "| Tell the person something | `k2 thread <addr> \"…\"` |\n",
+            "Never your harness's own scheduler (cron jobs, /loop, timers): it dies with\n",
+        ];
+        const TRIGGERS: &[&str] =
+            &["remind me", "reminder", "alarm", "follow up later", "at <time>", "every morning", "schedule", "cron"];
+        let mut gaps = Vec::new();
+        if !tooling.ends_with(TOOLING_PARAGRAPH) {
+            gaps.push(format!("Tooling does not end with its own reminders paragraph: {TOOLING_PARAGRAPH:?}"));
+        }
+        // Near the top: every row before the skill's first usual section.
+        match skill.find("## Who am I") {
+            None => gaps.push("k2-cli skill has no `## Who am I` section to measure the top by".to_string()),
+            Some(top_end) => {
+                for row in TABLE {
+                    if !skill[..top_end].contains(row) {
+                        gaps.push(format!("k2-cli skill top (before `## Who am I`) lacks {row:?}"));
+                    }
+                }
+            }
+        }
+        match frontmatter.lines().find_map(|l| l.strip_prefix("description: ")) {
+            None => gaps.push("k2-cli skill frontmatter has no description".to_string()),
+            Some(description) => {
+                for word in TRIGGERS {
+                    if !description.contains(word) {
+                        gaps.push(format!("k2-cli skill description lacks the trigger {word:?}"));
+                    }
+                }
+            }
+        }
+        gaps
+    }
+
+    /// Agents reached for their harness's scheduler (cron, /loop, timers)
+    /// because the always-on context never named K2's reminders. A regen
+    /// that drops the Tooling paragraph, a table row or a trigger fails here.
+    #[test]
+    fn tooling_and_k2_cli_skill_send_reminders_to_k2() {
+        let skill = generate_k2_cli_skill();
+        let gaps = reminder_teaching_gaps(AGENTS_MD_TOOLING_SECTION, &skill, K2_CLI_SKILL_FRONTMATTER);
+        assert!(gaps.is_empty(), "reminder teaching is missing:\n{}", gaps.join("\n"));
+
+        // The check bites: removing any one piece is reported.
+        let tooling_cut = AGENTS_MD_TOOLING_SECTION.replace("Never your harness's own scheduler", "");
+        assert!(
+            !reminder_teaching_gaps(&tooling_cut, &skill, K2_CLI_SKILL_FRONTMATTER).is_empty(),
+            "a Tooling block without the scheduler line must be reported"
+        );
+        for row in ["| You need a secret from them |", "| Send another agent a file |", "## When the person asks"] {
+            let start = skill.find(row).expect("the row is in the skill");
+            let end = start + skill[start..].find('\n').expect("the row ends");
+            let cut = format!("{}{}", &skill[..start], &skill[end + 1..]);
+            assert!(
+                !reminder_teaching_gaps(AGENTS_MD_TOOLING_SECTION, &cut, K2_CLI_SKILL_FRONTMATTER).is_empty(),
+                "a skill without {row:?} must be reported"
+            );
+        }
+        let moved = skill.replacen("## When the person asks", "## Who am I\n\n## When the person asks", 1);
+        assert!(
+            !reminder_teaching_gaps(AGENTS_MD_TOOLING_SECTION, &moved, K2_CLI_SKILL_FRONTMATTER).is_empty(),
+            "a table below `## Who am I` must be reported"
+        );
+        let fm_cut = K2_CLI_SKILL_FRONTMATTER.replace("follow up later, ", "");
+        assert!(
+            !reminder_teaching_gaps(AGENTS_MD_TOOLING_SECTION, &skill, &fm_cut).is_empty(),
+            "a description without a trigger must be reported"
+        );
     }
 
     fn scratch_project() -> PathBuf {

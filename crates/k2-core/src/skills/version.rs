@@ -356,7 +356,10 @@ pub const SKILL_VERSION_ZEN: u32 = 50;
 /// `--option "…"` (commas inside are fine); `--options` is for short labels.
 /// Bumped to 65 (0.46.17): `--options` splits on `;` only, never a comma;
 /// tickets ask shows the repeatable `--option "..."`.
-pub const SKILL_VERSION_WORKSPACE: u32 = 65;
+/// Bumped to 66 (0.46.17): a "When the person asks → use" table at the top
+/// (reminders, schedules, secrets, decisions, files, telling the person),
+/// and K2's reminders and heartbeats, never the harness's own scheduler.
+pub const SKILL_VERSION_WORKSPACE: u32 = 66;
 
 /// The `k2-permissions` skill (permission cards, Beta; PRD rev 3.1 §11.4,
 /// vs-live C8): its own constant, so the k2-cli skill (`_WORKSPACE`) and

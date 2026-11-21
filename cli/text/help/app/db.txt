@@ -32,6 +32,15 @@ k2 app db — connect an App to a Postgres database on this box
       wait: --wait blocks (default 10m; exit 2 if still waiting), or
       k2 app db status <app-id>. Running connect again doesn't nudge: it is
       the same card.
+  k2 app db connect <app-id> --read-only [--db <name>] [--why "…"] [--assign <login>] [--json]
+      Read another workspace's App database yourself (a verifier, a report),
+      never the App's own wiring: the same card as k2 db request-read --app
+      <app-id> (exit 2: the card is up; nothing changed yet). Once allowed,
+      or when your workspace already reads it, it prints your read-only DSN
+      (no password; k2 db run --db <name> -- <cmd> runs a command with it).
+      A database your workspace owns: it reads and writes it already, and
+      there is no read-only login for it (db_read_own, exit 3); one it may
+      write: read_only_unavailable (exit 3).
   k2 app db status <app-id> [--json]   its databases, last checks, waiting
                                        cards, and the majors this box runs
   k2 app db check <app-id> [--as NAME_URL] [--json]

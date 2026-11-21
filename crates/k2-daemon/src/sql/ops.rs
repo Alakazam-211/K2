@@ -1535,7 +1535,7 @@ pub fn dsn_for_db(
         Err(OpsError::NotFound(_)) => {}
         Err(e) => return Err(e),
     }
-    let missing = || OpsError::NotFound(format!("no database '{}' owned by or granted to this workspace — see 'k2 db list'", spec.trim()));
+    let missing = || OpsError::NotFound(format!("no database '{}' owned by or granted to this workspace — see '{cli} db list' (another workspace's: {cli} db browse, then {cli} db request-read --db <name>)", spec.trim(), cli = k2_core::brand::CLI_NAME));
     let row = find_database(spec, None).map_err(|e| match e {
         OpsError::NotFound(_) => missing(),
         other => other,

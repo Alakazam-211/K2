@@ -16323,6 +16323,15 @@ k2 app db — connect an App to a Postgres database on this box
       wait: --wait blocks (default 10m; exit 2 if still waiting), or
       k2 app db status <app-id>. Running connect again doesn't nudge: it is
       the same card.
+  k2 app db connect <app-id> --read-only [--db <name>] [--why "…"] [--assign <login>] [--json]
+      Read another workspace's App database yourself (a verifier, a report),
+      never the App's own wiring: the same card as k2 db request-read --app
+      <app-id> (exit 2: the card is up; nothing changed yet). Once allowed,
+      or when your workspace already reads it, it prints your read-only DSN
+      (no password; k2 db run --db <name> -- <cmd> runs a command with it).
+      A database your workspace owns: it reads and writes it already, and
+      there is no read-only login for it (db_read_own, exit 3); one it may
+      write: read_only_unavailable (exit 3).
   k2 app db status <app-id> [--json]   its databases, last checks, waiting
                                        cards, and the majors this box runs
   k2 app db check <app-id> [--as NAME_URL] [--json]
@@ -16423,18 +16432,21 @@ cmd_app_db() {
         *) echo "{\"error\":\"usage\",\"hint\":\"k2 app db connect|status|check|disconnect <app-id> (k2 app db --help)\"}" >&2; exit 1 ;;
     esac
     local app="" json_out=0 new=0 db="" major="" cluster="" name="" as="" nomig=0 wait=0 timeout=600 drop=0 reason=""
-    local bad=""
+    local bad="" ro=0 why="" assign=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) json_out=1; shift ;;
             --new) new=1; shift ;;
-            --db|--major|--cluster|--name|--as|--timeout|--reason)
+            --db|--major|--cluster|--name|--as|--timeout|--reason|--why|--assign)
                 if [ $# -lt 2 ] || [ -z "${2:-}" ]; then bad="$1 needs a value"; break; fi
                 case "$1" in
                     --db) db="$2" ;; --major) major="$2" ;; --cluster) cluster="$2" ;; --name) name="$2" ;;
                     --as) as="$2" ;; --reason) reason="$2" ;; --timeout) timeout="$(_compute_secs "$2")" ;;
+                    --why) why="$2" ;; --assign) assign="$2" ;;
                 esac
                 shift 2 ;;
+            # 0.46.17: another workspace's App database, read-only, for you.
+            --read-only) ro=1; shift ;;
             --db=*) db="${1#*=}"; shift ;;
             --major=*) major="${1#*=}"; shift ;;
             --cluster=*) cluster="${1#*=}"; shift ;;
@@ -16513,6 +16525,19 @@ if e:
     sys.exit(1)'
             ;;
         connect)
+            if [ "$ro" = 1 ]; then
+                if [ "$new" = 1 ] || [ -n "$major$cluster$name$as" ] || [ "$nomig" = 1 ] || [ "$wait" = 1 ]; then
+                    echo '{"error":"usage","hint":"--read-only takes the App and, when it uses several databases, --db <name>; not --new, --major, --cluster, --name, --as, --no-migrate-url or --wait (k2 app db --help)"}' >&2; exit 1
+                fi
+                local ro_json=false
+                [ "$json_out" = 1 ] && ro_json=true
+                [ -n "$why" ] || why="$reason"
+                _db_read_post "$ro_json" "$(_compute_json K2_CJ_app="$app" K2_CJ_db="$db" K2_CJ_why="$why" K2_CJ_assign="$assign" K2_CJ_connect_b=1)" 2
+                return $?
+            fi
+            if [ -n "$why$assign" ]; then
+                echo '{"error":"usage","hint":"--why and --assign go with --read-only (an App connect takes --reason) (k2 app db --help)"}' >&2; exit 1
+            fi
             if [ "$new" = 0 ] && [ -z "$db" ]; then
                 echo '{"error":"usage","hint":"say which database: --new or --db <name> (k2 app db --help)"}' >&2; exit 1
             fi
@@ -55419,12 +55444,46 @@ cmd_schema() {
     },
     {
       "name": "db list",
-      "usage": "k2 db list [--json] [--workspace <ws>]",
-      "description": "The databases this workspace owns (active and test) and the ones granted to it, never dropped ones. --json: {databases: [{id, name, status, cap: {used, cap}, …}], cap}; the top-level cap is the workspace's limit (k2 db cap shows and sets it).",
+      "usage": "k2 db list [--all] [--json] [--workspace <ws>]",
+      "description": "The databases this workspace owns (active and test) and the ones granted to it, never dropped ones. --json: {databases: [{id, name, status, cap: {used, cap}, …}], cap}; the top-level cap is the workspace's limit (k2 db cap shows and sets it). --all: every database on the server by name, as k2 db browse.",
       "args": [],
       "flags": [
+        {"name": "--all", "arg": null, "description": "Every database on this server by name, owner and App (k2 db browse); never a DSN."},
         {"name": "--json", "arg": null, "description": "JSON output."},
         {"name": "--workspace", "arg": "ws", "description": "Workspace path, handle, or uuid. Alias --project."}
+      ]
+    },
+    {
+      "name": "db browse",
+      "usage": "k2 db browse [--app <app>] [--json]",
+      "description": "Every active database on this server you could ask to read: its name, id, owner workspace, the Apps that use it, and what your workspace holds on it (owner, write, read or nothing). Never a DSN, a password, a size or any data. --json: {databases: [{id, name, owner, apps, yours}], hint}. Same as k2 db list --all.",
+      "args": [],
+      "flags": [
+        {"name": "--app", "arg": "app", "description": "Only the databases that App uses (app_not_found, exit 4)."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "db request-read",
+      "usage": "k2 db request-read --db <name|id> | --app <app> [--db <name>] [--why \"…\"] [--assign <login>] [--dry-run] [--json]",
+      "description": "An agent asks to READ another workspace's database: a permission card (db.read) on its Thread for an owner or admin. Allow runs k2 db grant <your workspace> --db <it> --level read as that person (read only: no write, no manage, no relation fence); Deny changes nothing; an agent never answers it. Once allowed, k2 db dsn --db <name> is your read-only DSN. A database you already read answers already_done; your own, db_read_own (exit 3). Permission cards off for you: permission_cards_off (exit 3), and the hint says who turns them on or who grants it. Exit 0 (the card is up, or nothing to ask), 2 usage, 3 refused, 4 not found (not_found, app_not_found, app_db_none, app_db_not_its).",
+      "args": [],
+      "flags": [
+        {"name": "--db", "arg": "name|id", "description": "The database, by name or id (k2 db browse). With --app: which of the App's databases."},
+        {"name": "--app", "arg": "app", "description": "The database that App uses (app_db_ambiguous, exit 3, when it uses several: add --db)."},
+        {"name": "--why", "arg": "text", "description": "One line on the card: what you need it for (default: to read the <db> database)."},
+        {"name": "--assign", "arg": "login", "description": "Ask only this person: an owner or admin login, or owner (approver_not_eligible, exit 2, otherwise). Alias --to."},
+        {"name": "--dry-run", "arg": null, "description": "Show the card's words and who it would ask; file nothing."},
+        {"name": "--json", "arg": null, "description": "{id, status: pending|already_pending|already_done|dry_run, action: db.read, text, routedTo, card, addr, db, dbId, owner, next}."}
+      ]
+    },
+    {
+      "name": "db requests",
+      "usage": "k2 db requests [--json]",
+      "description": "Your workspace's db.read asks, newest first: id, state (pending, approved, denied, expired, …), the database, and the answer's message. Check once; never loop (k2 permission status <id> for one).",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "{requests: [{id, action, params: {db}, state, askedAt, answeredBy, message, …}]}."}
       ]
     },
     {
@@ -57166,7 +57225,7 @@ cmd_schema() {
     },
     {
       "name": "app db connect",
-      "usage": "k2 app db connect <app-id> (--new [--major N] [--cluster NAME] [--name DB] | --db <name|id>) [--as NAME_URL] [--no-migrate-url] [--wait [--timeout 10m]] [--reason TEXT] [--json]",
+      "usage": "k2 app db connect <app-id> (--new [--major N] [--cluster NAME] [--name DB] | --db <name|id>) [--as NAME_URL] [--no-migrate-url] [--wait [--timeout 10m]] [--reason TEXT] [--json] | k2 app db connect <app-id> --read-only [--db <name>] [--why TEXT] [--assign <login>] [--json]",
       "description": "Connect an App to a Postgres database on this box, end to end: create one for it (--new; again is the same one) or pick one its workspace owns or was granted (--db); give the App its own login (never the agent's); grant it DATABASE_URL and, on its own workspace's database, DATABASE_MIGRATE_URL (env secrets, never printed); open its database door; re-host it; check it from inside the App (select 1 as the App). --major takes any major K2 runs here (k2 app db status lists them); a major or cluster this box doesn't run is refused (app_db_cluster_missing, exit 3), never installed. An agent missing a switch, or connecting another workspace's database, gets ONE held card naming each switch by its Settings name (exit 2; run its Ask with: line). Exit 0 PASS (or the check skipped: not running), 1 FAIL or usage, 2 held, 3 refused.",
       "args": [{"name": "app-id", "required": true}],
       "flags": [
@@ -57178,6 +57237,9 @@ cmd_schema() {
         {"name": "--as", "arg": "NAME_URL", "description": "The env name (default DATABASE_URL; the migrator's becomes NAME_MIGRATE_URL)."},
         {"name": "--no-migrate-url", "arg": null, "description": "Don't grant DATABASE_MIGRATE_URL."},
         {"name": "--wait", "arg": null, "description": "When held, wait for the owner's answer (--timeout, default 10m), then print the result."},
+        {"name": "--read-only", "arg": null, "description": "Read another workspace's App database yourself: the card k2 db request-read --app files (exit 2 while it waits); once you read it, your read-only DSN (no password). Your own workspace's database: db_read_own (exit 3)."},
+        {"name": "--why", "arg": "TEXT", "description": "With --read-only: the card's one line."},
+        {"name": "--assign", "arg": "login", "description": "With --read-only: ask only this owner or admin login (or owner)."},
         {"name": "--json", "arg": null, "description": "{app, as, kind, db, cluster, major, roles[], secrets[], doorOpen, check: {ok, version, latencyMs, step, error, appOutput[]}, checkedAt, rehost}; held: {status: held, request, switches[]}."}
       ]
     },
@@ -102026,7 +102088,8 @@ AGENT (workspace — identity from token, never body project=)
                                  boxes, the current major on existing ones until
                                  k2 db default-major); another major needs "Allow this agent to
                                  manage Postgres versions". --test follows the live DB
-  list [--json]                  active + test (no dropped tombstones)
+  list [--json]                  active + test (no dropped tombstones); --all: every
+                                 database on the server by name (k2 db browse)
   dsn | creds [--json] [--workspace <ws>]
                                  owned or granted; never logged. Prints NO password
                                  (0.46.11): --reveal prints the full DSN, on purpose
@@ -102057,6 +102120,29 @@ AGENT (workspace — identity from token, never body project=)
   drop --test --yes              test DB only (404 if missing; never the live Skin)
   grant <workspace> --db … --level read|write [--relation schema.name …] [--manage]
   revoke <workspace> --db …
+
+ANOTHER WORKSPACE'S DATABASE (read-only, on a card)
+  browse [--app <app>] [--json]  every database on this server you could ask for:
+                                 its name, id, owner workspace and the Apps that use
+                                 it, and what you hold on it. Never a DSN, a password
+                                 or any data. Same as list --all
+  request-read --db <name|id> | --app <app> [--db <name>] [--why "…"]
+               [--assign <login>] [--dry-run] [--json]
+                                 ask an owner or admin, on a card on your Thread, to
+                                 let your workspace READ that database (Allow is
+                                 k2 db grant <you> --db <it> --level read). --app: the
+                                 database that App uses (--db picks one when it uses
+                                 several). --assign: only that person is asked (an
+                                 owner or admin login, or owner). Deny changes
+                                 nothing. Once allowed, k2 db dsn --db <name> is your
+                                 read-only DSN (k2 db run --db <name> -- <cmd>)
+  requests [--json]              your request-read asks and where each one is
+                                 (pending, approved, denied, …); k2 permission status
+                                 <id> for one
+  Codes: not_found, db_ambiguous (name it by id), db_read_own (yours already),
+  app_not_found, app_db_none, app_db_ambiguous, app_db_not_its,
+  permission_cards_off (your "Let this agent ask for permission" is off: the
+  hint says who turns it on, or who grants it), approver_not_eligible (--assign)
 
 AN APP'S DATABASE (k2 app db --help; k2 study app-databases)
   k2 app db connect <app> --new [--major N] | --db <name>
@@ -102368,6 +102454,141 @@ else:
         print("no password shown; %s" % v["dsnHint"])'
 }
 
+# ── k2 db browse / request-read / requests (0.46.17) ──────────────────
+# Another workspace's database, read-only, on a card. browse (GET
+# /cli/db/browse) names every database on the server: name, id, owner
+# workspace, the Apps that use it and what you hold, never a DSN. request-read
+# (POST /cli/db/request-read) files the db.read permission card; Allow is
+# `k2 db grant <you> --db <it> --level read`. requests lists those asks (GET
+# /cli/permission/status?action=db.read). `k2 app db connect <app>
+# --read-only` posts the same ask with connect: once you read it, the answer
+# is your read-only DSN (no password). Exit: 0 done (or the card is up; 2 for
+# connect --read-only, as connect's held), 2 usage, 3 refused, 4 not found.
+
+# A refused db read call (_CP_STATUS/_CP_BODY): the error line, the exit.
+_db_read_fail() {
+    printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
+raw=sys.stdin.read()
+try: v=json.loads(raw)
+except Exception: v={"error":{"code":"daemon_unreachable","hint":raw[:200] or "no answer from the K2 daemon"}}
+e=v.get("error") if isinstance(v, dict) else None
+if not isinstance(e, dict): e={"code": e or "error", "hint": (v.get("hint") or v.get("message") or "") if isinstance(v, dict) else ""}
+print(json.dumps({"error": {"code": e.get("code"), "hint": e.get("hint", "")}}))' >&2
+    case "$_CP_STATUS" in 400) exit 2 ;; 404) exit 4 ;; *) exit 3 ;; esac
+}
+
+# A value flag's value, or a usage error (help never acts; a flag at the
+# end of the line is never a value).
+_db_read_value() {
+    if [ $# -lt 2 ] || [ -z "${2:-}" ] || [ "${2:0:1}" = "-" ]; then
+        _db_err "usage" "$1 needs a value (k2 db --help)"
+        exit 2
+    fi
+}
+
+_db_browse() {
+    local as_json="$1" app="$2" q=""
+    [ -n "$app" ] && q="app=$(urlencode "$app")"
+    _compute_split "$(_compute_send GET /cli/db/browse "$q")"
+    [ "$_CP_STATUS" = 200 ] || _db_read_fail
+    if [ "$as_json" = true ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
+v=json.load(sys.stdin)
+rows=v.get("databases") or []
+print("%s database(s) on this server" % len(rows))
+for r in rows:
+    print("  %-30s owner %-22s apps %-22s you %s" % (r.get("name"), r.get("owner"), ", ".join(r.get("apps") or []) or "-", r.get("yours") or "-"))
+if v.get("hint"):
+    print(v["hint"])'
+}
+
+# POST /cli/db/request-read <body>; $3: the exit when a card is up.
+_db_read_post() {
+    local as_json="$1" body="$2" held_exit="${3:-0}"
+    _compute_split "$(_compute_send POST /cli/db/request-read "$body")"
+    [ "$_CP_STATUS" = 200 ] || _db_read_fail
+    local st
+    st="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status") or "")')"
+    if [ "$as_json" = true ]; then
+        printf '%s\n' "$_CP_BODY"
+    else
+        printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
+v=json.load(sys.stdin)
+st=v.get("status")
+if st in ("pending", "already_pending"):
+    head = "Card %s raised on your Thread" % v.get("id") if st == "pending" else "Card %s is already waiting on your Thread (nothing new was asked)" % v.get("id")
+    print("%s%s: they answer it there (desktop, phone or web); you get one [permission:%s] turn with the answer." % (head, " (" + v["addr"] + ")" if v.get("addr") else "", v.get("id")))
+    if v.get("text"):
+        print("Card: %s" % v["text"])
+    to=", ".join(x.get("login") for x in v.get("routedTo") or [] if x.get("login"))
+    print("Asks: %s" % (to or v.get("approvers") or "an owner or admin"))
+    if v.get("next"):
+        print("Next: %s" % v["next"])
+elif st == "dry_run":
+    print("Would ask: %s" % v.get("text"))
+    print("Asks: %s" % (", ".join(x.get("login") for x in v.get("routedTo") or [] if x.get("login")) or v.get("approvers")))
+elif st == "read_only":
+    print(v.get("dsn") or "")
+    if v.get("dsnHint"):
+        print("read-only; %s" % v["dsnHint"], file=sys.stderr)
+else:
+    print(v.get("text") or json.dumps(v))'
+    fi
+    case "$st" in pending|already_pending) return "$held_exit" ;; esac
+    return 0
+}
+
+# k2 db request-read --db <name|id> | --app <app> [--db <name>] [--why "…"] [--assign <login>] [--dry-run] [--json]
+_db_request_read() {
+    local as_json=false db="" app="" why="" assign="" dry=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --db|--app|--why|--assign|--to)
+                _db_read_value "$@"
+                case "$1" in --db) db="$2" ;; --app) app="$2" ;; --why) why="$2" ;; *) assign="$2" ;; esac
+                shift 2 ;;
+            --db=*) db="${1#*=}"; shift ;;
+            --app=*) app="${1#*=}"; shift ;;
+            --why=*) why="${1#*=}"; shift ;;
+            --assign=*|--to=*) assign="${1#*=}"; shift ;;
+            --dry-run) dry=1; shift ;;
+            *) _db_err "usage" "unexpected '$1': k2 db request-read --db <name> | --app <app> [--why \"…\"] [--assign <login>]"; exit 2 ;;
+        esac
+    done
+    if [ -z "$db" ] && [ -z "$app" ]; then
+        _db_err "usage" "name the database: --db <name> (k2 db browse lists them), or --app <app> for the one an App uses"
+        exit 2
+    fi
+    _db_read_post "$as_json" "$(_compute_json K2_CJ_db="$db" K2_CJ_app="$app" K2_CJ_why="$why" K2_CJ_assign="$assign" K2_CJ_dryRun_b="$dry")" 0
+}
+
+# k2 db requests [--json]: this agent's db.read asks, newest first.
+_db_requests() {
+    local as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            *) _db_err "usage" "unexpected '$1': k2 db requests [--json]"; exit 2 ;;
+        esac
+    done
+    _compute_split "$(_compute_send GET /cli/permission/status "action=db.read")"
+    if [ "$_CP_STATUS" = 404 ]; then
+        _db_err "permission_cards_off" "no card asks to show: permission cards are off for this agent (k2 db request-read says who turns them on)"
+        exit 3
+    fi
+    [ "$_CP_STATUS" = 200 ] || _db_read_fail
+    if [ "$as_json" = true ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
+rows=json.load(sys.stdin).get("requests") or []
+if not rows:
+    print("no read access asked for yet (k2 db request-read --db <name>)")
+for r in rows:
+    db=(r.get("params") or {}).get("db", "?")
+    tail=r.get("message") or r.get("reason") or ""
+    print("  %-14s %-13s %-30s %s" % (r.get("id"), r.get("state"), db, tail))'
+}
+
 cmd_db() {
     if [ $# -eq 0 ] || _wants_help "$@"; then cmd_help_db; exit 0; fi
     if [ "$1" = "home" ]; then shift; _db_home "$@"; exit $?; fi
@@ -102663,8 +102884,23 @@ else:
             case "$major" in [1-9][0-9]) ;; *) _db_err "usage" "k2 db default-major <major> (e.g. 17)"; exit 2 ;; esac
             D_VERB="default_major" D_JSON="$as_json" D_MAJOR="$major" _db_py ;;
         list)
-            while [ $# -gt 0 ]; do case "$1" in --json) as_json=true; shift ;; *) _db_err "usage" "unexpected '$1'"; exit 2 ;; esac; done
+            local all=false
+            while [ $# -gt 0 ]; do case "$1" in --json) as_json=true; shift ;; --all) all=true; shift ;; *) _db_err "usage" "unexpected '$1'"; exit 2 ;; esac; done
+            if $all; then _db_browse "$as_json" ""; return $?; fi
             D_VERB="list" D_JSON="$as_json" _db_py ;;
+        browse)
+            local b_app=""
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --json) as_json=true; shift ;;
+                    --app) _db_read_value "$@"; b_app="$2"; shift 2 ;;
+                    --app=*) b_app="${1#*=}"; shift ;;
+                    *) _db_err "usage" "unexpected '$1': k2 db browse [--app <app>] [--json]"; exit 2 ;;
+                esac
+            done
+            _db_browse "$as_json" "$b_app" ;;
+        request-read) _db_request_read "$@"; return $? ;;
+        requests) _db_requests "$@" ;;
         dsn|creds)
             # 0.46.11 (field report F1): no password unless --reveal.
             local test=false actor="" vref=false db_sel="" reveal=false ref_as=""
@@ -103866,6 +104102,10 @@ Several secrets for the same agent go on one card: `secret=A,B,C`. The owner or 
     k2 permission request vault.grant-server secret=NAME --why "<what you need it for>"
 
 Add `as=fetch`, `as=file` or `as=env` to ask for one way to get it; without it you get it the way the owner set it up. The owner or an admin allows it, and the `[permission:]` turn says how to use it. An environment variable reaches new sessions only: for `$NAME` in your chat, run `k2 agent refresh`; until then `k2 vault env-file --secret NAME --scope server` works at once.
+
+## Another workspace's database
+
+To read a database another workspace owns (an App's, for a check or a report), its `db` verbs ask on a card for you: `db browse` names every database on the server with its owner and the Apps that use it (never a DSN), and `db request-read --db <name> --why "<what you need it for>"` asks an owner or admin to let your workspace read it (`--app <app>` for the one an App uses, and `app db connect <app> --read-only` is the same card; `--assign <login>` asks only that person). Read only: never write, never manage. `db requests` shows where each ask is. When the `[permission:]` turn says approved, `db dsn --db <name>` is your read-only DSN and `db run --db <name> -- <cmd>` runs a command with it. Denied: nothing changed.
 
 ## Logins on your own App
 

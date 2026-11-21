@@ -663,6 +663,141 @@ else:
         print("no password shown; %s" % v["dsnHint"])'
 }
 
+# ── k2 db browse / request-read / requests (0.46.17) ──────────────────
+# Another workspace's database, read-only, on a card. browse (GET
+# /cli/db/browse) names every database on the server: name, id, owner
+# workspace, the Apps that use it and what you hold, never a DSN. request-read
+# (POST /cli/db/request-read) files the db.read permission card; Allow is
+# `k2 db grant <you> --db <it> --level read`. requests lists those asks (GET
+# /cli/permission/status?action=db.read). `k2 app db connect <app>
+# --read-only` posts the same ask with connect: once you read it, the answer
+# is your read-only DSN (no password). Exit: 0 done (or the card is up; 2 for
+# connect --read-only, as connect's held), 2 usage, 3 refused, 4 not found.
+
+# A refused db read call (_CP_STATUS/_CP_BODY): the error line, the exit.
+_db_read_fail() {
+    printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
+raw=sys.stdin.read()
+try: v=json.loads(raw)
+except Exception: v={"error":{"code":"daemon_unreachable","hint":raw[:200] or "no answer from the K2 daemon"}}
+e=v.get("error") if isinstance(v, dict) else None
+if not isinstance(e, dict): e={"code": e or "error", "hint": (v.get("hint") or v.get("message") or "") if isinstance(v, dict) else ""}
+print(json.dumps({"error": {"code": e.get("code"), "hint": e.get("hint", "")}}))' >&2
+    case "$_CP_STATUS" in 400) exit 2 ;; 404) exit 4 ;; *) exit 3 ;; esac
+}
+
+# A value flag's value, or a usage error (help never acts; a flag at the
+# end of the line is never a value).
+_db_read_value() {
+    if [ $# -lt 2 ] || [ -z "${2:-}" ] || [ "${2:0:1}" = "-" ]; then
+        _db_err "usage" "$1 needs a value (k2 db --help)"
+        exit 2
+    fi
+}
+
+_db_browse() {
+    local as_json="$1" app="$2" q=""
+    [ -n "$app" ] && q="app=$(urlencode "$app")"
+    _compute_split "$(_compute_send GET /cli/db/browse "$q")"
+    [ "$_CP_STATUS" = 200 ] || _db_read_fail
+    if [ "$as_json" = true ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
+v=json.load(sys.stdin)
+rows=v.get("databases") or []
+print("%s database(s) on this server" % len(rows))
+for r in rows:
+    print("  %-30s owner %-22s apps %-22s you %s" % (r.get("name"), r.get("owner"), ", ".join(r.get("apps") or []) or "-", r.get("yours") or "-"))
+if v.get("hint"):
+    print(v["hint"])'
+}
+
+# POST /cli/db/request-read <body>; $3: the exit when a card is up.
+_db_read_post() {
+    local as_json="$1" body="$2" held_exit="${3:-0}"
+    _compute_split "$(_compute_send POST /cli/db/request-read "$body")"
+    [ "$_CP_STATUS" = 200 ] || _db_read_fail
+    local st
+    st="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status") or "")')"
+    if [ "$as_json" = true ]; then
+        printf '%s\n' "$_CP_BODY"
+    else
+        printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
+v=json.load(sys.stdin)
+st=v.get("status")
+if st in ("pending", "already_pending"):
+    head = "Card %s raised on your Thread" % v.get("id") if st == "pending" else "Card %s is already waiting on your Thread (nothing new was asked)" % v.get("id")
+    print("%s%s: they answer it there (desktop, phone or web); you get one [permission:%s] turn with the answer." % (head, " (" + v["addr"] + ")" if v.get("addr") else "", v.get("id")))
+    if v.get("text"):
+        print("Card: %s" % v["text"])
+    to=", ".join(x.get("login") for x in v.get("routedTo") or [] if x.get("login"))
+    print("Asks: %s" % (to or v.get("approvers") or "an owner or admin"))
+    if v.get("next"):
+        print("Next: %s" % v["next"])
+elif st == "dry_run":
+    print("Would ask: %s" % v.get("text"))
+    print("Asks: %s" % (", ".join(x.get("login") for x in v.get("routedTo") or [] if x.get("login")) or v.get("approvers")))
+elif st == "read_only":
+    print(v.get("dsn") or "")
+    if v.get("dsnHint"):
+        print("read-only; %s" % v["dsnHint"], file=sys.stderr)
+else:
+    print(v.get("text") or json.dumps(v))'
+    fi
+    case "$st" in pending|already_pending) return "$held_exit" ;; esac
+    return 0
+}
+
+# k2 db request-read --db <name|id> | --app <app> [--db <name>] [--why "…"] [--assign <login>] [--dry-run] [--json]
+_db_request_read() {
+    local as_json=false db="" app="" why="" assign="" dry=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --db|--app|--why|--assign|--to)
+                _db_read_value "$@"
+                case "$1" in --db) db="$2" ;; --app) app="$2" ;; --why) why="$2" ;; *) assign="$2" ;; esac
+                shift 2 ;;
+            --db=*) db="${1#*=}"; shift ;;
+            --app=*) app="${1#*=}"; shift ;;
+            --why=*) why="${1#*=}"; shift ;;
+            --assign=*|--to=*) assign="${1#*=}"; shift ;;
+            --dry-run) dry=1; shift ;;
+            *) _db_err "usage" "unexpected '$1': k2 db request-read --db <name> | --app <app> [--why \"…\"] [--assign <login>]"; exit 2 ;;
+        esac
+    done
+    if [ -z "$db" ] && [ -z "$app" ]; then
+        _db_err "usage" "name the database: --db <name> (k2 db browse lists them), or --app <app> for the one an App uses"
+        exit 2
+    fi
+    _db_read_post "$as_json" "$(_compute_json K2_CJ_db="$db" K2_CJ_app="$app" K2_CJ_why="$why" K2_CJ_assign="$assign" K2_CJ_dryRun_b="$dry")" 0
+}
+
+# k2 db requests [--json]: this agent's db.read asks, newest first.
+_db_requests() {
+    local as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            *) _db_err "usage" "unexpected '$1': k2 db requests [--json]"; exit 2 ;;
+        esac
+    done
+    _compute_split "$(_compute_send GET /cli/permission/status "action=db.read")"
+    if [ "$_CP_STATUS" = 404 ]; then
+        _db_err "permission_cards_off" "no card asks to show: permission cards are off for this agent (k2 db request-read says who turns them on)"
+        exit 3
+    fi
+    [ "$_CP_STATUS" = 200 ] || _db_read_fail
+    if [ "$as_json" = true ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
+rows=json.load(sys.stdin).get("requests") or []
+if not rows:
+    print("no read access asked for yet (k2 db request-read --db <name>)")
+for r in rows:
+    db=(r.get("params") or {}).get("db", "?")
+    tail=r.get("message") or r.get("reason") or ""
+    print("  %-14s %-13s %-30s %s" % (r.get("id"), r.get("state"), db, tail))'
+}
+
 cmd_db() {
     if [ $# -eq 0 ] || _wants_help "$@"; then cmd_help_db; exit 0; fi
     if [ "$1" = "home" ]; then shift; _db_home "$@"; exit $?; fi
@@ -958,8 +1093,23 @@ else:
             case "$major" in [1-9][0-9]) ;; *) _db_err "usage" "k2 db default-major <major> (e.g. 17)"; exit 2 ;; esac
             D_VERB="default_major" D_JSON="$as_json" D_MAJOR="$major" _db_py ;;
         list)
-            while [ $# -gt 0 ]; do case "$1" in --json) as_json=true; shift ;; *) _db_err "usage" "unexpected '$1'"; exit 2 ;; esac; done
+            local all=false
+            while [ $# -gt 0 ]; do case "$1" in --json) as_json=true; shift ;; --all) all=true; shift ;; *) _db_err "usage" "unexpected '$1'"; exit 2 ;; esac; done
+            if $all; then _db_browse "$as_json" ""; return $?; fi
             D_VERB="list" D_JSON="$as_json" _db_py ;;
+        browse)
+            local b_app=""
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --json) as_json=true; shift ;;
+                    --app) _db_read_value "$@"; b_app="$2"; shift 2 ;;
+                    --app=*) b_app="${1#*=}"; shift ;;
+                    *) _db_err "usage" "unexpected '$1': k2 db browse [--app <app>] [--json]"; exit 2 ;;
+                esac
+            done
+            _db_browse "$as_json" "$b_app" ;;
+        request-read) _db_request_read "$@"; return $? ;;
+        requests) _db_requests "$@" ;;
         dsn|creds)
             # 0.46.11 (field report F1): no password unless --reveal.
             local test=false actor="" vref=false db_sel="" reveal=false ref_as=""

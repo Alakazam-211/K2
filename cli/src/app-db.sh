@@ -93,18 +93,21 @@ cmd_app_db() {
         *) echo "{\"error\":\"usage\",\"hint\":\"k2 app db connect|status|check|disconnect <app-id> (k2 app db --help)\"}" >&2; exit 1 ;;
     esac
     local app="" json_out=0 new=0 db="" major="" cluster="" name="" as="" nomig=0 wait=0 timeout=600 drop=0 reason=""
-    local bad=""
+    local bad="" ro=0 why="" assign=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) json_out=1; shift ;;
             --new) new=1; shift ;;
-            --db|--major|--cluster|--name|--as|--timeout|--reason)
+            --db|--major|--cluster|--name|--as|--timeout|--reason|--why|--assign)
                 if [ $# -lt 2 ] || [ -z "${2:-}" ]; then bad="$1 needs a value"; break; fi
                 case "$1" in
                     --db) db="$2" ;; --major) major="$2" ;; --cluster) cluster="$2" ;; --name) name="$2" ;;
                     --as) as="$2" ;; --reason) reason="$2" ;; --timeout) timeout="$(_compute_secs "$2")" ;;
+                    --why) why="$2" ;; --assign) assign="$2" ;;
                 esac
                 shift 2 ;;
+            # 0.46.17: another workspace's App database, read-only, for you.
+            --read-only) ro=1; shift ;;
             --db=*) db="${1#*=}"; shift ;;
             --major=*) major="${1#*=}"; shift ;;
             --cluster=*) cluster="${1#*=}"; shift ;;
@@ -183,6 +186,19 @@ if e:
     sys.exit(1)'
             ;;
         connect)
+            if [ "$ro" = 1 ]; then
+                if [ "$new" = 1 ] || [ -n "$major$cluster$name$as" ] || [ "$nomig" = 1 ] || [ "$wait" = 1 ]; then
+                    echo '{"error":"usage","hint":"--read-only takes the App and, when it uses several databases, --db <name>; not --new, --major, --cluster, --name, --as, --no-migrate-url or --wait (k2 app db --help)"}' >&2; exit 1
+                fi
+                local ro_json=false
+                [ "$json_out" = 1 ] && ro_json=true
+                [ -n "$why" ] || why="$reason"
+                _db_read_post "$ro_json" "$(_compute_json K2_CJ_app="$app" K2_CJ_db="$db" K2_CJ_why="$why" K2_CJ_assign="$assign" K2_CJ_connect_b=1)" 2
+                return $?
+            fi
+            if [ -n "$why$assign" ]; then
+                echo '{"error":"usage","hint":"--why and --assign go with --read-only (an App connect takes --reason) (k2 app db --help)"}' >&2; exit 1
+            fi
             if [ "$new" = 0 ] && [ -z "$db" ]; then
                 echo '{"error":"usage","hint":"say which database: --new or --db <name> (k2 app db --help)"}' >&2; exit 1
             fi

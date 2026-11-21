@@ -1248,12 +1248,46 @@ exit: 0
     },
     {
       "name": "db list",
-      "usage": "k2 db list [--json] [--workspace <ws>]",
-      "description": "The databases this workspace owns (active and test) and the ones granted to it, never dropped ones. --json: {databases: [{id, name, status, cap: {used, cap}, …}], cap}; the top-level cap is the workspace's limit (k2 db cap shows and sets it).",
+      "usage": "k2 db list [--all] [--json] [--workspace <ws>]",
+      "description": "The databases this workspace owns (active and test) and the ones granted to it, never dropped ones. --json: {databases: [{id, name, status, cap: {used, cap}, …}], cap}; the top-level cap is the workspace's limit (k2 db cap shows and sets it). --all: every database on the server by name, as k2 db browse.",
       "args": [],
       "flags": [
+        {"name": "--all", "arg": null, "description": "Every database on this server by name, owner and App (k2 db browse); never a DSN."},
         {"name": "--json", "arg": null, "description": "JSON output."},
         {"name": "--workspace", "arg": "ws", "description": "Workspace path, handle, or uuid. Alias --project."}
+      ]
+    },
+    {
+      "name": "db browse",
+      "usage": "k2 db browse [--app <app>] [--json]",
+      "description": "Every active database on this server you could ask to read: its name, id, owner workspace, the Apps that use it, and what your workspace holds on it (owner, write, read or nothing). Never a DSN, a password, a size or any data. --json: {databases: [{id, name, owner, apps, yours}], hint}. Same as k2 db list --all.",
+      "args": [],
+      "flags": [
+        {"name": "--app", "arg": "app", "description": "Only the databases that App uses (app_not_found, exit 4)."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "db request-read",
+      "usage": "k2 db request-read --db <name|id> | --app <app> [--db <name>] [--why \"…\"] [--assign <login>] [--dry-run] [--json]",
+      "description": "An agent asks to READ another workspace's database: a permission card (db.read) on its Thread for an owner or admin. Allow runs k2 db grant <your workspace> --db <it> --level read as that person (read only: no write, no manage, no relation fence); Deny changes nothing; an agent never answers it. Once allowed, k2 db dsn --db <name> is your read-only DSN. A database you already read answers already_done; your own, db_read_own (exit 3). Permission cards off for you: permission_cards_off (exit 3), and the hint says who turns them on or who grants it. Exit 0 (the card is up, or nothing to ask), 2 usage, 3 refused, 4 not found (not_found, app_not_found, app_db_none, app_db_not_its).",
+      "args": [],
+      "flags": [
+        {"name": "--db", "arg": "name|id", "description": "The database, by name or id (k2 db browse). With --app: which of the App's databases."},
+        {"name": "--app", "arg": "app", "description": "The database that App uses (app_db_ambiguous, exit 3, when it uses several: add --db)."},
+        {"name": "--why", "arg": "text", "description": "One line on the card: what you need it for (default: to read the <db> database)."},
+        {"name": "--assign", "arg": "login", "description": "Ask only this person: an owner or admin login, or owner (approver_not_eligible, exit 2, otherwise). Alias --to."},
+        {"name": "--dry-run", "arg": null, "description": "Show the card's words and who it would ask; file nothing."},
+        {"name": "--json", "arg": null, "description": "{id, status: pending|already_pending|already_done|dry_run, action: db.read, text, routedTo, card, addr, db, dbId, owner, next}."}
+      ]
+    },
+    {
+      "name": "db requests",
+      "usage": "k2 db requests [--json]",
+      "description": "Your workspace's db.read asks, newest first: id, state (pending, approved, denied, expired, …), the database, and the answer's message. Check once; never loop (k2 permission status <id> for one).",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "{requests: [{id, action, params: {db}, state, askedAt, answeredBy, message, …}]}."}
       ]
     },
     {
@@ -2995,7 +3029,7 @@ exit: 0
     },
     {
       "name": "app db connect",
-      "usage": "k2 app db connect <app-id> (--new [--major N] [--cluster NAME] [--name DB] | --db <name|id>) [--as NAME_URL] [--no-migrate-url] [--wait [--timeout 10m]] [--reason TEXT] [--json]",
+      "usage": "k2 app db connect <app-id> (--new [--major N] [--cluster NAME] [--name DB] | --db <name|id>) [--as NAME_URL] [--no-migrate-url] [--wait [--timeout 10m]] [--reason TEXT] [--json] | k2 app db connect <app-id> --read-only [--db <name>] [--why TEXT] [--assign <login>] [--json]",
       "description": "Connect an App to a Postgres database on this box, end to end: create one for it (--new; again is the same one) or pick one its workspace owns or was granted (--db); give the App its own login (never the agent's); grant it DATABASE_URL and, on its own workspace's database, DATABASE_MIGRATE_URL (env secrets, never printed); open its database door; re-host it; check it from inside the App (select 1 as the App). --major takes any major K2 runs here (k2 app db status lists them); a major or cluster this box doesn't run is refused (app_db_cluster_missing, exit 3), never installed. An agent missing a switch, or connecting another workspace's database, gets ONE held card naming each switch by its Settings name (exit 2; run its Ask with: line). Exit 0 PASS (or the check skipped: not running), 1 FAIL or usage, 2 held, 3 refused.",
       "args": [{"name": "app-id", "required": true}],
       "flags": [
@@ -3007,6 +3041,9 @@ exit: 0
         {"name": "--as", "arg": "NAME_URL", "description": "The env name (default DATABASE_URL; the migrator's becomes NAME_MIGRATE_URL)."},
         {"name": "--no-migrate-url", "arg": null, "description": "Don't grant DATABASE_MIGRATE_URL."},
         {"name": "--wait", "arg": null, "description": "When held, wait for the owner's answer (--timeout, default 10m), then print the result."},
+        {"name": "--read-only", "arg": null, "description": "Read another workspace's App database yourself: the card k2 db request-read --app files (exit 2 while it waits); once you read it, your read-only DSN (no password). Your own workspace's database: db_read_own (exit 3)."},
+        {"name": "--why", "arg": "TEXT", "description": "With --read-only: the card's one line."},
+        {"name": "--assign", "arg": "login", "description": "With --read-only: ask only this owner or admin login (or owner)."},
         {"name": "--json", "arg": null, "description": "{app, as, kind, db, cluster, major, roles[], secrets[], doorOpen, check: {ok, version, latencyMs, step, error, appOutput[]}, checkedAt, rehost}; held: {status: held, request, switches[]}."}
       ]
     },

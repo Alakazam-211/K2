@@ -64,7 +64,8 @@ AGENT (workspace — identity from token, never body project=)
                                  boxes, the current major on existing ones until
                                  k2 db default-major); another major needs "Allow this agent to
                                  manage Postgres versions". --test follows the live DB
-  list [--json]                  active + test (no dropped tombstones)
+  list [--json]                  active + test (no dropped tombstones); --all: every
+                                 database on the server by name (k2 db browse)
   dsn | creds [--json] [--workspace <ws>]
                                  owned or granted; never logged. Prints NO password
                                  (0.46.11): --reveal prints the full DSN, on purpose
@@ -95,6 +96,29 @@ AGENT (workspace — identity from token, never body project=)
   drop --test --yes              test DB only (404 if missing; never the live Skin)
   grant <workspace> --db … --level read|write [--relation schema.name …] [--manage]
   revoke <workspace> --db …
+
+ANOTHER WORKSPACE'S DATABASE (read-only, on a card)
+  browse [--app <app>] [--json]  every database on this server you could ask for:
+                                 its name, id, owner workspace and the Apps that use
+                                 it, and what you hold on it. Never a DSN, a password
+                                 or any data. Same as list --all
+  request-read --db <name|id> | --app <app> [--db <name>] [--why "…"]
+               [--assign <login>] [--dry-run] [--json]
+                                 ask an owner or admin, on a card on your Thread, to
+                                 let your workspace READ that database (Allow is
+                                 k2 db grant <you> --db <it> --level read). --app: the
+                                 database that App uses (--db picks one when it uses
+                                 several). --assign: only that person is asked (an
+                                 owner or admin login, or owner). Deny changes
+                                 nothing. Once allowed, k2 db dsn --db <name> is your
+                                 read-only DSN (k2 db run --db <name> -- <cmd>)
+  requests [--json]              your request-read asks and where each one is
+                                 (pending, approved, denied, …); k2 permission status
+                                 <id> for one
+  Codes: not_found, db_ambiguous (name it by id), db_read_own (yours already),
+  app_not_found, app_db_none, app_db_ambiguous, app_db_not_its,
+  permission_cards_off (your "Let this agent ask for permission" is off: the
+  hint says who turns it on, or who grants it), approver_not_eligible (--assign)
 
 AN APP'S DATABASE (k2 app db --help; k2 study app-databases)
   k2 app db connect <app> --new [--major N] | --db <name>

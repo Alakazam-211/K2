@@ -13,6 +13,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/db/status" => routes::handle_status(params),
         "/cli/db/doctor" => routes::handle_doctor(params),
         "/cli/db/list" => routes::handle_list(params),
+        crate::db_read_routes::BROWSE => crate::db_read_routes::handle_browse(params),
         "/cli/db/dsn" => routes::handle_dsn(params),
         "/cli/store/list" => routes::handle_store_list(params),
         "/cli/store/get" => routes::handle_store_get(params),
@@ -29,6 +30,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/db/restore"
         | "/cli/db/drop"
         | "/cli/db/grant"
+        | crate::db_read_routes::REQUEST_READ
         | "/cli/db/revoke"
         | "/cli/db/bind"
         | "/cli/db/rows/update"
@@ -56,6 +58,7 @@ pub fn dispatch_post(path: &str, body: &[u8]) -> CliResponse {
         "/cli/db/restore" => routes::handle_restore(body),
         "/cli/db/drop" => routes::handle_drop(body),
         "/cli/db/grant" => routes::handle_grant(body),
+        crate::db_read_routes::REQUEST_READ => crate::db_read_routes::handle_request_read_tcp(body),
         "/cli/db/revoke" => routes::handle_revoke(body),
         "/cli/db/bind" => routes::handle_bind(body),
         "/cli/store/create" => routes::handle_store_create(body),

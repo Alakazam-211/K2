@@ -390,7 +390,9 @@ pub const SKILL_VERSION_WORKSPACE: u32 = 65;
 /// v20 = 0.46.17: "Recording in this server's chat" (`voice.recording-start-level`,
 /// `voice.recording-dm`).
 /// v21 = 0.46.17: "Focus groups" (`focus-groups.create`, `.rename`, `.assign`).
-pub const SKILL_VERSION_PERMISSIONS: u32 = 21;
+/// v22 = 0.46.17: "Another workspace's database" (`db.read`: `k2 db browse`,
+/// `k2 db request-read`).
+pub const SKILL_VERSION_PERMISSIONS: u32 = 22;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

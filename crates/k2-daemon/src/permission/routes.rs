@@ -557,6 +557,13 @@ pub(crate) fn raise_held_card(workspace_id: &str, session_id: &str, request_id: 
     (status, serde_json::from_str(&r.body).unwrap_or(Value::Null))
 }
 
+/// The same ask as `POST /cli/permission/request`, for a passport its door
+/// already classified (`k2 db request-read`, 0.46.17,
+/// `db_read_routes`). The caller checks the gate first.
+pub(crate) fn request_for(workspace_id: &str, session_id: &str, body: &Map<String, Value>) -> CliResponse {
+    request(workspace_id, session_id, body)
+}
+
 fn answer_status(code: u16) -> &'static str {
     match code {
         409 => "409 Conflict",
@@ -679,7 +686,14 @@ fn summary(r: &PermissionRequest) -> Value {
 
 fn status(workspace_id: &str, body: &Map<String, Value>) -> CliResponse {
     if str_field(body, "id").is_none() {
-        let recent: Vec<Value> = store::for_workspace(workspace_id, 20).unwrap_or_default().iter().map(summary).collect();
+        // `action=`: one kind only (`k2 db requests` lists its `db.read` asks).
+        let action = str_field(body, "action");
+        let recent: Vec<Value> = store::for_workspace(workspace_id, 20)
+            .unwrap_or_default()
+            .iter()
+            .filter(|r| action.is_none_or(|a| r.action == a))
+            .map(summary)
+            .collect();
         return ok(json!({ "requests": recent }));
     }
     match own(workspace_id, body) {

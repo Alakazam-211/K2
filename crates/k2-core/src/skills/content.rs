@@ -1422,6 +1422,10 @@ Several secrets for the same agent go on one card: `secret=A,B,C`. The owner or 
 
 Add `as=fetch`, `as=file` or `as=env` to ask for one way to get it; without it you get it the way the owner set it up. The owner or an admin allows it, and the `[permission:]` turn says how to use it. An environment variable reaches new sessions only: for `$NAME` in your chat, run `k2 agent refresh`; until then `k2 vault env-file --secret NAME --scope server` works at once.
 
+## Another workspace's database
+
+To read a database another workspace owns (an App's, for a check or a report), its `db` verbs ask on a card for you: `db browse` names every database on the server with its owner and the Apps that use it (never a DSN), and `db request-read --db <name> --why "<what you need it for>"` asks an owner or admin to let your workspace read it (`--app <app>` for the one an App uses, and `app db connect <app> --read-only` is the same card; `--assign <login>` asks only that person). Read only: never write, never manage. `db requests` shows where each ask is. When the `[permission:]` turn says approved, `db dsn --db <name>` is your read-only DSN and `db run --db <name> -- <cmd>` runs a command with it. Denied: nothing changed.
+
 ## Logins on your own App
 
 `k2 app grant add` and `k2 app grant rm` are the owner's. For a login on one of your own Apps (`--kind app`, a person who already exists, a role from `k2 app role list`), the refusal ends with the line to ask with:
@@ -2640,6 +2644,8 @@ mod tests {
             concat!(cli_name!(), " permission request voice.recording-start-level level=<level> --why"),
             concat!(cli_name!(), " permission request voice.recording-dm dm=on --why"),
             "recording_level_needs_owner",
+            // 0.46.17: another workspace's database, read-only.
+            "`db request-read --db <name> --why",
             "ci_preview_off",
             // 0.46.17: focus groups are a person's; each change is a card.
             "k2 permission request focus-groups.assign group=<group> target=<workspace>",

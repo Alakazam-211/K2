@@ -17,7 +17,7 @@
     },
     {
       "name": "app db connect",
-      "usage": "k2 app db connect <app-id> (--new [--major N] [--cluster NAME] [--name DB] | --db <name|id>) [--as NAME_URL] [--no-migrate-url] [--wait [--timeout 10m]] [--reason TEXT] [--json]",
+      "usage": "k2 app db connect <app-id> (--new [--major N] [--cluster NAME] [--name DB] | --db <name|id>) [--as NAME_URL] [--no-migrate-url] [--wait [--timeout 10m]] [--reason TEXT] [--json] | k2 app db connect <app-id> --read-only [--db <name>] [--why TEXT] [--assign <login>] [--json]",
       "description": "Connect an App to a Postgres database on this box, end to end: create one for it (--new; again is the same one) or pick one its workspace owns or was granted (--db); give the App its own login (never the agent's); grant it DATABASE_URL and, on its own workspace's database, DATABASE_MIGRATE_URL (env secrets, never printed); open its database door; re-host it; check it from inside the App (select 1 as the App). --major takes any major K2 runs here (k2 app db status lists them); a major or cluster this box doesn't run is refused (app_db_cluster_missing, exit 3), never installed. An agent missing a switch, or connecting another workspace's database, gets ONE held card naming each switch by its Settings name (exit 2; run its Ask with: line). Exit 0 PASS (or the check skipped: not running), 1 FAIL or usage, 2 held, 3 refused.",
       "args": [{"name": "app-id", "required": true}],
       "flags": [
@@ -29,6 +29,9 @@
         {"name": "--as", "arg": "NAME_URL", "description": "The env name (default DATABASE_URL; the migrator's becomes NAME_MIGRATE_URL)."},
         {"name": "--no-migrate-url", "arg": null, "description": "Don't grant DATABASE_MIGRATE_URL."},
         {"name": "--wait", "arg": null, "description": "When held, wait for the owner's answer (--timeout, default 10m), then print the result."},
+        {"name": "--read-only", "arg": null, "description": "Read another workspace's App database yourself: the card k2 db request-read --app files (exit 2 while it waits); once you read it, your read-only DSN (no password). Your own workspace's database: db_read_own (exit 3)."},
+        {"name": "--why", "arg": "TEXT", "description": "With --read-only: the card's one line."},
+        {"name": "--assign", "arg": "login", "description": "With --read-only: ask only this owner or admin login (or owner)."},
         {"name": "--json", "arg": null, "description": "{app, as, kind, db, cluster, major, roles[], secrets[], doorOpen, check: {ok, version, latencyMs, step, error, appOutput[]}, checkedAt, rehost}; held: {status: held, request, switches[]}."}
       ]
     },

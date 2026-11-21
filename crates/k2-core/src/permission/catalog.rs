@@ -216,6 +216,10 @@ pub enum ParamKind {
     /// or `assistant:<person>` (a username, an id, or `owner`):
     /// `chat.account scope=` (0.46.8). Checked against the box's people.
     ChatScope,
+    /// A database on this server's Postgres, by name or id, usually another
+    /// workspace's: `db.read db=` (0.46.17). Never a DSN or a credential;
+    /// the card names the database, its owner workspace and its id.
+    Database,
 }
 
 /// One value an action takes (`key=value` on the CLI).
@@ -850,6 +854,7 @@ mod tests {
         assert_eq!(serde_json::to_value(ParamKind::OtherSecret).unwrap(), serde_json::json!("other-secret"));
         assert_eq!(serde_json::to_value(ParamKind::SecretFrom).unwrap(), serde_json::json!("secret-from"));
         assert_eq!(serde_json::to_value(ParamKind::Branch).unwrap(), serde_json::json!("branch"));
+        assert_eq!(serde_json::to_value(ParamKind::Database).unwrap(), serde_json::json!("database"));
         let mut s = USE;
         s.params = &[
             ParamSpec { key: "app", kind: ParamKind::App, required: true, list: false, choices: &[] },

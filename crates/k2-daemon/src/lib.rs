@@ -175,6 +175,8 @@ pub mod pg_stale;
 pub mod sew;
 pub mod sql;
 pub mod sql_routes;
+// `k2 db browse` / `k2 db request-read`: another workspace's database, read-only, on a card (0.46.17).
+pub mod db_read_routes;
 pub mod v1_db;
 // DNS K1 — control-plane proxy + principal-bound `/cli/dns/*` routes
 // (local capability envelope + tunnel-token proxy to k2-dev-web).

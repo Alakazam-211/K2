@@ -288,6 +288,8 @@ pub(super) const ROWS: &[Route] = &[
     get("/cli/db-home", Admin),
     post("/cli/db-home/keep", Owner),
     post("/cli/db/bind", Admin),
+    // `k2 db browse` (0.46.17): names, owners and Apps only, never a DSN.
+    get("/cli/db/browse", Member),
     // Named Postgres clusters (0.46.11): reading is any login; the handler's
     // versions_access gate decides every POST (owner or the agent switch).
     both("/cli/db/clusters", Member),
@@ -304,6 +306,8 @@ pub(super) const ROWS: &[Route] = &[
     get("/cli/db/list", Member),
     post("/cli/db/migrate", Member),
     both("/cli/db/query", Member),
+    // `k2 db request-read` (0.46.17): an agent's ask; the handler refuses people.
+    post("/cli/db/request-read", Member),
     post("/cli/db/restore", Member),
     post("/cli/db/revoke", Member),
     both("/cli/db/rows", Member),

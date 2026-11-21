@@ -37,6 +37,7 @@
 //! | `ci_preview.rs` | 0.46.17 | `ci.preview` (+ `-off`): turn on CI on K2 Compute for the server (`ciPreview`, the owner's) |
 //! | `voice_recording.rs` | 0.46.17 | `voice.recording-start-level` (who starts recordings in the voice rooms), `voice.recording-dm` (recording in direct messages) |
 //! | `focus_groups.rs` | 0.46.17 | `focus-groups.create`, `focus-groups.rename`, `focus-groups.assign` (a person creates, renames or fills a focus group for an agent) |
+//! | `db_read.rs` | 0.46.17 | `db.read` (read-only access to another workspace's database: `k2 db grant <ws> --db <name> --level read`) |
 //!
 //! Rules for every `apply` (§6.4, C15): call the Settings route's **entry**
 //! with the answerer as the actor, so the route's own floor check runs
@@ -55,6 +56,7 @@ pub(crate) mod chat_refresh;
 pub(crate) mod ci_preview;
 pub(crate) mod voice_recording;
 pub(crate) mod compute;
+pub(crate) mod db_read;
 pub(crate) mod connections;
 pub(crate) mod docs;
 pub(crate) mod focus_groups;
@@ -174,6 +176,7 @@ pub(crate) fn all() -> Vec<Registered> {
     out.extend(ci_preview::actions());
     out.extend(voice_recording::actions());
     out.extend(focus_groups::actions());
+    out.extend(db_read::actions());
     out
 }
 
@@ -209,6 +212,7 @@ pub(crate) fn not_cardable() -> Vec<&'static NotCardableSpec> {
     out.extend(ci_preview::not_cardable());
     out.extend(voice_recording::not_cardable());
     out.extend(focus_groups::not_cardable());
+    out.extend(db_read::not_cardable());
     out
 }
 

@@ -1150,6 +1150,13 @@ mod unix_impl {
                 let who = crate::sql::pgmove::k2::classify(&who, true);
                 from_cli(crate::sql::named_routes::handle(crate::sql::routes::current_ops(), who, is_post, body, params))
             }
+            // `k2 db request-read` (0.46.17): this cell's passport asks for
+            // read access to another workspace's database, on a card that
+            // goes on the Thread of the session that asked.
+            p if p == crate::db_read_routes::REQUEST_READ => {
+                let who = crate::compute_routes::who_from_cell(this_session_id, principal);
+                from_cli(crate::db_read_routes::handle_request_read(&who, is_post, body))
+            }
             // `k2 db cluster archive <name> on|off` (0.46.17): POST only, the
             // same local-agent rule as `cluster restart`.
             p if p == "/cli/db/clusters/archive" => {

@@ -9,8 +9,8 @@
 # and stderr are a pty that is the session's controlling terminal. A stub
 # daemon logs each request with its body. No real daemon, no real home.
 #
-# native: fed pair-join --token-stdin
-# native: tunnel switch --token-stdin
+# native: fed pair-join
+# native: tunnel switch
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

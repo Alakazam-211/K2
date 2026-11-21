@@ -521,7 +521,7 @@ pub fn join_cgroup(dir: &str) -> Result<(), String> {
 /// process got it). Never returns on success.
 pub fn run_from_args(args: &[std::ffi::OsString]) -> i32 {
     let refuse = |why: String| -> i32 {
-        eprintln!("K5 agent isolation refused to start this terminal: {why}. Nothing ran.");
+        eprintln!("{} agent isolation refused to start this terminal: {why}. Nothing ran.", crate::brand::PRODUCT_NAME);
         EXIT_REFUSED
     };
     let rest: Vec<&std::ffi::OsString> = args.iter().skip(2).collect();
@@ -561,7 +561,7 @@ pub fn run_from_args(args: &[std::ffi::OsString]) -> i32 {
     {
         use std::os::unix::process::CommandExt;
         let e = std::process::Command::new(argv[0]).args(&argv[1..]).exec();
-        eprintln!("K5: {}: {e}", argv[0].to_string_lossy());
+        eprintln!("{}: {}: {e}", crate::brand::PRODUCT_NAME, argv[0].to_string_lossy());
         127
     }
     #[cfg(not(unix))]

@@ -1740,7 +1740,7 @@ fn set_fence(caller: &Caller, ws: &Workspace, on: bool) -> Result<(serde_json::V
         return Err(err(
             "owner_only",
             403,
-            "only the server's owner turns an agent's folder fence off (k2 agent isolation <agent> off from a terminal outside K2); an Admin may turn it on",
+            format!("only the server's owner turns an agent's folder fence off ({} agent isolation <agent> off, from a terminal of their own); an Admin may turn it on", k2_core::brand::CLI_NAME),
         ));
     }
     if on {

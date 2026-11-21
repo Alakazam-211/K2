@@ -1108,7 +1108,7 @@ impl DaemonPtySession {
                 };
                 let (helper, argv, spec) = crate::agent_cgroup::wrap(iso, program, args, &child_env).map_err(|e| {
                     log_debug!("[agents] session={} not started: isolation refused: {e}", cfg.session_id);
-                    io::Error::new(io::ErrorKind::PermissionDenied, format!("K5 agent isolation: {e}"))
+                    io::Error::new(io::ErrorKind::PermissionDenied, format!("{} agent isolation: {e}", crate::brand::PRODUCT_NAME))
                 })?;
                 child_env.insert(crate::agent_fence::ENV_SPEC.to_string(), spec);
                 log_debug!(

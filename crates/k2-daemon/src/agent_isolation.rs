@@ -87,7 +87,7 @@ pub fn audit_refusal(event: &str, passport_ws: &str, sid: &str, detail: &str, in
         format!("refused: {detail} (session {sid})"),
         ingress,
         "-",
-        "k2",
+        "cli",
     ));
     log_debug!("[agents] {event}: {detail} (session {sid}, {ingress})");
 }
@@ -204,9 +204,12 @@ pub async fn forward_to_tcp(stream: &mut tokio::net::UnixStream, head: &str, bod
 /// The refusal for a bound passport on TCP.
 pub fn needs_socket_body() -> String {
     serde_json::json!({
-        "error": "this agent's passport works only on its own session socket, not over TCP (K5 checks which agent's cgroup the caller is in, and a TCP connection doesn't say)",
+        "error": format!(
+            "this agent's passport works only on its own session socket, not over TCP ({} checks which agent's cgroup the caller is in, and a TCP connection doesn't say)",
+            k2_core::brand::PRODUCT_NAME
+        ),
         "code": "passport_needs_socket",
-        "hint": "run k2 from the agent's own terminal (it uses the session socket); a copied passport doesn't work elsewhere",
+        "hint": format!("run {} from the agent's own terminal (it uses the session socket); a copied passport doesn't work elsewhere", k2_core::brand::CLI_NAME),
     })
     .to_string()
 }
@@ -230,6 +233,13 @@ pub fn tcp_refusal(query: &str, bearer: Option<&str>, head: &str, ingress: &str)
 }
 
 // ── whois ─────────────────────────────────────────────────────────────
+
+/// The request's token (`token=`, the dispatcher folds the Bearer into it)
+/// is the owner token.
+pub fn owner_in(params: &std::collections::HashMap<String, String>) -> bool {
+    let owner = k2_core::hook_config::get_token();
+    params.get("token").is_some_and(|t| !owner.is_empty() && ct_eq(t.trim(), owner))
+}
 
 /// `GET /cli/agent-whois?pid=N` (owner only): which agent owns `pid`.
 pub fn handle_whois(params: &std::collections::HashMap<String, String>, is_owner: bool, is_post: bool) -> crate::cli_response::CliResponse {

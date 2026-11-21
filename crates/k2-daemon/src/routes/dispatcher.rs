@@ -1674,20 +1674,7 @@ async fn handle_one_request(
         return DispatchOutcome::Done;
     }
 
-    // Agent Isolation M1: a passport bound to its agent's cgroup works only
-    // on its session socket (a TCP connection names no process to check),
-    // except the socket's own forward. 403 `passport_needs_socket` + audit.
-    {
-        let q = path_and_query.split_once('?').map(|(_, q)| q).unwrap_or("");
-        let ingress_name = format!("{ingress:?}").to_ascii_lowercase();
-        if let Some(body) = crate::agent_isolation::tcp_refusal(q, bearer_token.as_deref(), &req, &ingress_name) {
-            let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
-            super::http::send_response(&mut *stream, "403 Forbidden", "application/json", &body).await;
-            return DispatchOutcome::Done;
-        }
-    }
-
-    // A tab passport's Codex call must come from that tab's conversation.
+    // A tab passport's Codex call must come from that tab's conversation (+ agent_isolation::tcp_refusal).
     if let Some(body) = crate::session_token::tcp_refusal(path_and_query, bearer_token.as_deref(), &req).await {
         let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
         super::http::send_response(&mut *stream, "403 Forbidden", "application/json", &body).await;
@@ -3910,19 +3897,6 @@ async fn handle_one_request(
         // POST recheck looks for git again and does the waiting git steps
         // (any login or agent passport). Probes and git run on a blocking
         // thread.
-        // Agent Isolation M1: which agent owns a process (`k2 agent whois`).
-        // Owner token only; a read (GET), so a POST is 405.
-        crate::agent_isolation::WHOIS_ROUTE => {
-            if is_post {
-                let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
-            } else {
-                let _ = stream.read(&mut buf).await;
-            }
-            let params = super::http::parse_params(&path, &query);
-            let owner = super::http::token_is_owner(&query, state.token.as_str());
-            let r = crate::agent_isolation::handle_whois(&params, owner, is_post);
-            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
-        }
         p @ ("/cli/git-tools" | "/cli/git-tools/install" | "/cli/git-tools/recheck") => {
             let p = p.to_string();
             if p != "/cli/git-tools" && !super::http::require_post(&mut *stream, &mut buf, is_post).await {

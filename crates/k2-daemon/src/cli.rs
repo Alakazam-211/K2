@@ -132,6 +132,10 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> CliResponse {
 }
 
 fn dispatch_route(path: &str, params: &HashMap<String, String>) -> CliResponse {
+    // Agent Isolation M1: `k2 agent whois` (the owner token only; a read).
+    if path == crate::agent_isolation::WHOIS_ROUTE {
+        return crate::agent_isolation::handle_whois(params, crate::agent_isolation::owner_in(params), false);
+    }
     // Token ledger. GET only — not in `post_allowed`. Auth is
     // `owner_role_identity` inside the arm, not the catchall `token_ok`.
     if let Some(resp) = crate::usage_routes::dispatch(path, params) {

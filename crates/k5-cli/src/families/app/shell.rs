@@ -508,7 +508,11 @@ impl Ws {
         let mut done = self.handle(128)?;
         let mut stdin_open = true;
         let sock = self.s.as_raw_fd();
-        let ready = |re: libc::c_short| re & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) != 0;
+        // macOS's poll answers POLLNVAL for a device such as /dev/null on
+        // stdin, where the Python's select() says it can be read (and the
+        // read then ends it): it counts as ready, so the end is seen and sent.
+        let readable = libc::POLLIN | libc::POLLHUP | libc::POLLERR | libc::POLLNVAL;
+        let ready = |re: libc::c_short| re & readable != 0;
         while !done {
             let mut fds = vec![libc::pollfd {
                 fd: sock,

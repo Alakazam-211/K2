@@ -311,7 +311,7 @@ fn complete_with_tokens(
     // "connected" whose every IMAP login then failed was the field report).
     let granted = match tokens.scope.as_deref() {
         Some(s) => oauth::features_granted(plan.provider, s),
-        None if plan.provider == OauthProvider::Gmail => Features { mail: false, calendar: false },
+        None if plan.provider == OauthProvider::Gmail => Features { mail: false, calendar: CalAccess::None },
         None => plan.features,
     };
     if plan.features.mail && !granted.mail {

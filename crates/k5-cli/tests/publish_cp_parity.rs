@@ -30,7 +30,13 @@ fn relayed(status: u16, body: &str) -> Reply {
     ok(leak(format!(r#"{{"status":{status},"body":"{b}"}}"#)))
 }
 
-fn on(name: &'static str, args: &'static [&'static str], replies: Vec<Reply>, code: i32, n: usize) -> Case {
+fn on(
+    name: &'static str,
+    args: &'static [&'static str],
+    replies: Vec<Reply>,
+    code: i32,
+    n: usize,
+) -> Case {
     case(name, args, &[], replies, owner_and_port, code, n)
 }
 
@@ -88,19 +94,37 @@ fn status_and_list_answer_as_the_shell_does() {
     check_all(
         &rig,
         vec![
-            on("status: the connected row", &["status"], vec![relayed(200, SUBS)], 0, 1),
-            on("status --json", &["status", "--json"], vec![relayed(200, SUBS)], 0, 1),
+            on(
+                "status: the connected row",
+                &["status"],
+                vec![relayed(200, SUBS)],
+                0,
+                1,
+            ),
+            on(
+                "status --json",
+                &["status", "--json"],
+                vec![relayed(200, SUBS)],
+                0,
+                1,
+            ),
             on(
                 "status: single",
                 &["status"],
-                vec![relayed(200, r#"{"subdomains":[{"label":"a","current":1,"tier":" FREE "}]}"#)],
+                vec![relayed(
+                    200,
+                    r#"{"subdomains":[{"label":"a","current":1,"tier":" FREE "}]}"#,
+                )],
                 0,
                 1,
             ),
             on(
                 "status: a tier of its own",
                 &["status"],
-                vec![relayed(200, r#"{"subdomains":[{"host":"h","is_current":true,"tier":"gOLD"}]}"#)],
+                vec![relayed(
+                    200,
+                    r#"{"subdomains":[{"host":"h","is_current":true,"tier":"gOLD"}]}"#,
+                )],
                 0,
                 1,
             ),
@@ -108,7 +132,10 @@ fn status_and_list_answer_as_the_shell_does() {
                 "status: this computer's label",
                 &["status", "--json"],
                 &[],
-                vec![relayed(200, r#"{"subdomains":[{"host":"Acme.k2.dev","tier":"single"}]}"#)],
+                vec![relayed(
+                    200,
+                    r#"{"subdomains":[{"host":"Acme.k2.dev","tier":"single"}]}"#,
+                )],
                 subdomain_acme,
                 0,
                 1,
@@ -129,7 +156,13 @@ fn status_and_list_answer_as_the_shell_does() {
                 1,
                 1,
             )),
-            on("status --json: not connected", &["status", "--json"], vec![relayed(200, "[]")], 0, 1),
+            on(
+                "status --json: not connected",
+                &["status", "--json"],
+                vec![relayed(200, "[]")],
+                0,
+                1,
+            ),
             traceback(on(
                 "status: a row that is no dict",
                 &["status"],
@@ -158,11 +191,41 @@ fn status_and_list_answer_as_the_shell_does() {
                 1,
                 1,
             ),
-            on("status: an empty body (no newline left)", &["status"], vec![relayed(204, "")], 1, 1),
-            on("status --json: an empty body", &["status", "--json"], vec![ok(r#"{"status":204,"body":"\n"}"#)], 1, 1),
-            on("status: the daemon's 200 is not JSON", &["status"], vec![ok("nope")], 1, 1),
-            on("status: no body in the 200", &["status"], vec![ok(r#"{"status":200}"#)], 1, 1),
-            on("status: a status that is no number", &["status"], vec![ok(r#"{"status":"x","body":""}"#)], 1, 1),
+            on(
+                "status: an empty body (no newline left)",
+                &["status"],
+                vec![relayed(204, "")],
+                1,
+                1,
+            ),
+            on(
+                "status --json: an empty body",
+                &["status", "--json"],
+                vec![ok(r#"{"status":204,"body":"\n"}"#)],
+                1,
+                1,
+            ),
+            on(
+                "status: the daemon's 200 is not JSON",
+                &["status"],
+                vec![ok("nope")],
+                1,
+                1,
+            ),
+            on(
+                "status: no body in the 200",
+                &["status"],
+                vec![ok(r#"{"status":200}"#)],
+                1,
+                1,
+            ),
+            on(
+                "status: a status that is no number",
+                &["status"],
+                vec![ok(r#"{"status":"x","body":""}"#)],
+                1,
+                1,
+            ),
             on(
                 "status: refused with no code (needs the owner)",
                 &["status"],
@@ -180,7 +243,10 @@ fn status_and_list_answer_as_the_shell_does() {
             on(
                 "status: a code and an error",
                 &["status"],
-                vec![Reply::Answer(500, r#"{"code":"cp_down","error":{"hint":"try later"}}"#.into())],
+                vec![Reply::Answer(
+                    500,
+                    r#"{"code":"cp_down","error":{"hint":"try later"}}"#.into(),
+                )],
                 1,
                 1,
             ),
@@ -191,7 +257,13 @@ fn status_and_list_answer_as_the_shell_does() {
                 1,
                 1,
             ),
-            on("status: nothing to read", &["status"], vec![Reply::Answer(500, "x".into())], 1, 1),
+            on(
+                "status: nothing to read",
+                &["status"],
+                vec![Reply::Answer(500, "x".into())],
+                1,
+                1,
+            ),
             on(
                 "status: no route, no tunnel token",
                 &["status"],
@@ -212,17 +284,43 @@ fn status_and_list_answer_as_the_shell_does() {
             ),
             with(
                 vec![("K2_CONNECT_BASE", "http://x.localhost:9".into())],
-                on("subdomain list: plain http to another machine", &["subdomain", "list"], vec![], 2, 0),
+                on(
+                    "subdomain list: plain http to another machine",
+                    &["subdomain", "list"],
+                    vec![],
+                    2,
+                    0,
+                ),
             ),
             with(
                 vec![("K2_AIRGAP", "1".into())],
                 on("status: air-gap on", &["status"], vec![], 1, 0),
             ),
             on("status: a flag", &["status", "-x"], vec![], 2, 0),
-            on("status: a flag after --json", &["status", "--json", "--long"], vec![], 2, 0),
+            on(
+                "status: a flag after --json",
+                &["status", "--json", "--long"],
+                vec![],
+                2,
+                0,
+            ),
             on("status: two names", &["status", "a", "b"], vec![], 2, 0),
-            on("subdomain alone: the list", &["subdomain"], vec![relayed(200, SUBS)], 0, 1),
-            case("subdomain list", &["subdomain", "list"], &[], vec![relayed(200, SUBS)], subdomain_acme, 0, 1),
+            on(
+                "subdomain alone: the list",
+                &["subdomain"],
+                vec![relayed(200, SUBS)],
+                0,
+                1,
+            ),
+            case(
+                "subdomain list",
+                &["subdomain", "list"],
+                &[],
+                vec![relayed(200, SUBS)],
+                subdomain_acme,
+                0,
+                1,
+            ),
             case(
                 "subdomain list --json",
                 &["subdomain", "list", "--json"],
@@ -232,8 +330,20 @@ fn status_and_list_answer_as_the_shell_does() {
                 0,
                 1,
             ),
-            on("subdomain list: none", &["subdomain", "list"], vec![relayed(200, r#"{"subdomains":[]}"#)], 0, 1),
-            on("subdomain list: not JSON", &["subdomain", "list"], vec![relayed(200, "x")], 0, 1),
+            on(
+                "subdomain list: none",
+                &["subdomain", "list"],
+                vec![relayed(200, r#"{"subdomains":[]}"#)],
+                0,
+                1,
+            ),
+            on(
+                "subdomain list: not JSON",
+                &["subdomain", "list"],
+                vec![relayed(200, "x")],
+                0,
+                1,
+            ),
             traceback(on(
                 "subdomain list: a host that is no string",
                 &["subdomain", "list"],
@@ -262,7 +372,13 @@ fn status_and_list_answer_as_the_shell_does() {
                 1,
                 1,
             ),
-            on("subdomain list: unauthorized", &["subdomain", "list"], vec![relayed(401, "{}")], 1, 1),
+            on(
+                "subdomain list: unauthorized",
+                &["subdomain", "list"],
+                vec![relayed(401, "{}")],
+                1,
+                1,
+            ),
             on(
                 "subdomain list: an error of its own",
                 &["subdomain", "list"],
@@ -270,7 +386,13 @@ fn status_and_list_answer_as_the_shell_does() {
                 1,
                 1,
             ),
-            on("subdomain list: plain text", &["subdomain", "list"], vec![relayed(500, "boom")], 1, 1),
+            on(
+                "subdomain list: plain text",
+                &["subdomain", "list"],
+                vec![relayed(500, "boom")],
+                1,
+                1,
+            ),
             traceback(on(
                 "subdomain list: an error that is no string",
                 &["subdomain", "list"],
@@ -285,9 +407,27 @@ fn status_and_list_answer_as_the_shell_does() {
                 1,
                 1,
             ),
-            on("subdomain list: a flag", &["subdomain", "list", "--all"], vec![], 2, 0),
-            on("subdomain list: a word", &["subdomain", "list", "x"], vec![], 2, 0),
-            on("subdomain: an unknown word", &["subdomain", "nope"], vec![], 1, 0),
+            on(
+                "subdomain list: a flag",
+                &["subdomain", "list", "--all"],
+                vec![],
+                2,
+                0,
+            ),
+            on(
+                "subdomain list: a word",
+                &["subdomain", "list", "x"],
+                vec![],
+                2,
+                0,
+            ),
+            on(
+                "subdomain: an unknown word",
+                &["subdomain", "nope"],
+                vec![],
+                1,
+                0,
+            ),
         ],
     );
 }
@@ -302,56 +442,122 @@ fn create_point_and_rm_answer_as_the_shell_does() {
         vec![
             on(
                 "create",
-                &["subdomain", "create", "staging", "--target", "example.invalid:80"],
-                vec![ok(CHECKED), relayed(201, CREATED), ok(r#"{"success":true,"projectId":"p1"}"#), ok("{}")],
+                &[
+                    "subdomain",
+                    "create",
+                    "staging",
+                    "--target",
+                    "example.invalid:80",
+                ],
+                vec![
+                    ok(CHECKED),
+                    relayed(201, CREATED),
+                    ok(r#"{"success":true,"projectId":"p1"}"#),
+                    ok("{}"),
+                ],
                 0,
                 4,
             ),
             on(
                 "create --transfer, a local target nothing listens on",
-                &["subdomain", "create", "--transfer", "staging", "--json", "--target", "localhost:1"],
-                vec![ok(CHECKED), relayed(201, r#"{"label":"staging","target":null}"#), ok(CHECKED), ok("{}")],
+                &[
+                    "subdomain",
+                    "create",
+                    "--transfer",
+                    "staging",
+                    "--json",
+                    "--target",
+                    "localhost:1",
+                ],
+                vec![
+                    ok(CHECKED),
+                    relayed(201, r#"{"label":"staging","target":null}"#),
+                    ok(CHECKED),
+                    ok("{}"),
+                ],
                 0,
                 4,
             ),
             on(
                 "create: the preflight refuses",
-                &["subdomain", "create", "staging", "--target", "example.invalid:80"],
-                vec![ok(r#"{"error":"owned by another workspace","hint":"ask its owner"}"#)],
+                &[
+                    "subdomain",
+                    "create",
+                    "staging",
+                    "--target",
+                    "example.invalid:80",
+                ],
+                vec![ok(
+                    r#"{"error":"owned by another workspace","hint":"ask its owner"}"#,
+                )],
                 1,
                 1,
             ),
             on(
                 "create: the preflight has no answer",
-                &["subdomain", "create", "staging", "--target", "example.invalid:80"],
+                &[
+                    "subdomain",
+                    "create",
+                    "staging",
+                    "--target",
+                    "example.invalid:80",
+                ],
                 vec![ok("")],
                 1,
                 1,
             ),
             on(
                 "create: the label is taken",
-                &["subdomain", "create", "staging", "--target", "example.invalid:80"],
+                &[
+                    "subdomain",
+                    "create",
+                    "staging",
+                    "--target",
+                    "example.invalid:80",
+                ],
                 vec![ok(CHECKED), relayed(409, r#"{"error":"label_taken"}"#)],
                 1,
                 2,
             ),
             on(
                 "create: the stamp fails",
-                &["subdomain", "create", "staging", "--target", "example.invalid:80"],
-                vec![ok(CHECKED), relayed(201, CREATED), ok(r#"{"error":"busy"}"#)],
+                &[
+                    "subdomain",
+                    "create",
+                    "staging",
+                    "--target",
+                    "example.invalid:80",
+                ],
+                vec![
+                    ok(CHECKED),
+                    relayed(201, CREATED),
+                    ok(r#"{"error":"busy"}"#),
+                ],
                 1,
                 3,
             ),
             traceback(on(
                 "create: the answer is a list",
-                &["subdomain", "create", "staging", "--target", "example.invalid:80"],
+                &[
+                    "subdomain",
+                    "create",
+                    "staging",
+                    "--target",
+                    "example.invalid:80",
+                ],
                 vec![ok(CHECKED), relayed(201, "[1]")],
                 1,
                 2,
             )),
             waited(on(
                 "create: no answer from the proxy (never sent again)",
-                &["subdomain", "create", "staging", "--target", "example.invalid:80"],
+                &[
+                    "subdomain",
+                    "create",
+                    "staging",
+                    "--target",
+                    "example.invalid:80",
+                ],
                 vec![ok(CHECKED), Reply::Close],
                 1,
                 2,
@@ -360,40 +566,113 @@ fn create_point_and_rm_answer_as_the_shell_does() {
                 vec![("K2_AIRGAP", "yes".into())],
                 on(
                     "create: air-gap on, after the preflight",
-                    &["subdomain", "create", "staging", "--target", "example.invalid:80"],
+                    &[
+                        "subdomain",
+                        "create",
+                        "staging",
+                        "--target",
+                        "example.invalid:80",
+                    ],
                     vec![ok(CHECKED)],
                     1,
                     1,
                 ),
             ),
-            on("create: no target", &["subdomain", "create", "staging"], vec![], 1, 0),
-            on("create: --target with nothing after it", &["subdomain", "create", "staging", "--target"], vec![], 1, 0),
-            on("create: a reserved label", &["subdomain", "create", " Skin", "--target", "x:1"], vec![], 1, 0),
-            on("create: meet", &["subdomain", "create", "MEET", "--target", "x:1"], vec![], 1, 0),
+            on(
+                "create: no target",
+                &["subdomain", "create", "staging"],
+                vec![],
+                1,
+                0,
+            ),
+            on(
+                "create: --target with nothing after it",
+                &["subdomain", "create", "staging", "--target"],
+                vec![],
+                1,
+                0,
+            ),
+            on(
+                "create: a reserved label",
+                &["subdomain", "create", " Skin", "--target", "x:1"],
+                vec![],
+                1,
+                0,
+            ),
+            on(
+                "create: meet",
+                &["subdomain", "create", "MEET", "--target", "x:1"],
+                vec![],
+                1,
+                0,
+            ),
             with(
                 vec![("K2_CONNECT_BASE", "ftp://cp.example".into())],
-                on("create: a base that is not https", &["subdomain", "create", "a", "--target", "x:1"], vec![], 2, 0),
+                on(
+                    "create: a base that is not https",
+                    &["subdomain", "create", "a", "--target", "x:1"],
+                    vec![],
+                    2,
+                    0,
+                ),
             ),
             on(
                 "point",
-                &["subdomain", "point", "staging", "--target", "example.invalid:81"],
-                vec![ok(CHECKED), relayed(200, r#"{"label":"staging","target":"example.invalid:81","status":"active"}"#), ok(CHECKED), ok("{}")],
+                &[
+                    "subdomain",
+                    "point",
+                    "staging",
+                    "--target",
+                    "example.invalid:81",
+                ],
+                vec![
+                    ok(CHECKED),
+                    relayed(
+                        200,
+                        r#"{"label":"staging","target":"example.invalid:81","status":"active"}"#,
+                    ),
+                    ok(CHECKED),
+                    ok("{}"),
+                ],
                 0,
                 4,
             ),
             on(
                 "target <label> <endpoint>",
-                &["subdomain", "target", "st ag", "example.invalid:81", "extra"],
+                &[
+                    "subdomain",
+                    "target",
+                    "st ag",
+                    "example.invalid:81",
+                    "extra",
+                ],
                 vec![ok(CHECKED), relayed(200, "{}"), ok(CHECKED), ok("{}")],
                 0,
                 4,
             ),
-            on("point: no endpoint", &["subdomain", "point", "staging"], vec![], 1, 0),
-            on("target: chat", &["subdomain", "target", "chat", "x:1"], vec![], 1, 0),
+            on(
+                "point: no endpoint",
+                &["subdomain", "point", "staging"],
+                vec![],
+                1,
+                0,
+            ),
+            on(
+                "target: chat",
+                &["subdomain", "target", "chat", "x:1"],
+                vec![],
+                1,
+                0,
+            ),
             on(
                 "rm",
                 &["subdomain", "rm", "staging", "extra"],
-                vec![ok(CHECKED), relayed(200, r#"{"removed":"staging.acme.k2.dev"}"#), ok(CHECKED), ok("{}")],
+                vec![
+                    ok(CHECKED),
+                    relayed(200, r#"{"removed":"staging.acme.k2.dev"}"#),
+                    ok(CHECKED),
+                    ok("{}"),
+                ],
                 0,
                 4,
             ),
@@ -476,7 +755,13 @@ fn same_requests(seen: &Arc<Mutex<Vec<String>>>, first: &str) {
         .iter()
         .map(|r| {
             r.split("\r\n")
-                .map(|l| if l.starts_with("User-Agent: ") { "User-Agent: <ua>" } else { l })
+                .map(|l| {
+                    if l.starts_with("User-Agent: ") {
+                        "User-Agent: <ua>"
+                    } else {
+                        l
+                    }
+                })
                 .collect::<Vec<_>>()
                 .join("\r\n")
         })
@@ -497,7 +782,15 @@ fn same_requests(seen: &Arc<Mutex<Vec<String>>>, first: &str) {
 #[test]
 fn the_control_plane_itself_when_no_daemon_makes_the_call() {
     let rig = Rig::new(VERB, "cplane");
-    let rows: [(&'static str, &'static [&'static str], &'static str, &'static str, Vec<Reply>, usize, &str); 4] = [
+    let rows: [(
+        &'static str,
+        &'static [&'static str],
+        &'static str,
+        &'static str,
+        Vec<Reply>,
+        usize,
+        &str,
+    ); 4] = [
         (
             "list: GET",
             &["subdomain", "list"],
@@ -509,19 +802,41 @@ fn the_control_plane_itself_when_no_daemon_makes_the_call() {
         ),
         (
             "create: POST",
-            &["subdomain", "create", "staging", "--target", "example.invalid:80"],
+            &[
+                "subdomain",
+                "create",
+                "staging",
+                "--target",
+                "example.invalid:80",
+            ],
             "201 Created",
             CREATED,
-            vec![ok(CHECKED), Reply::Answer(405, "".into()), ok(CHECKED), ok("{}")],
+            vec![
+                ok(CHECKED),
+                Reply::Answer(405, "".into()),
+                ok(CHECKED),
+                ok("{}"),
+            ],
             4,
             "POST /subdomains HTTP/1.1\r\n",
         ),
         (
             "point: PUT",
-            &["subdomain", "point", "st/ag", "--target", "example.invalid:80"],
+            &[
+                "subdomain",
+                "point",
+                "st/ag",
+                "--target",
+                "example.invalid:80",
+            ],
             "200 OK",
             CREATED,
-            vec![ok(CHECKED), Reply::Answer(404, "".into()), ok(CHECKED), ok("{}")],
+            vec![
+                ok(CHECKED),
+                Reply::Answer(404, "".into()),
+                ok(CHECKED),
+                ok("{}"),
+            ],
             4,
             "PUT /subdomains/st%2Fag HTTP/1.1\r\n",
         ),
@@ -530,7 +845,12 @@ fn the_control_plane_itself_when_no_daemon_makes_the_call() {
             &["subdomain", "rm", "staging"],
             "200 OK",
             r#"{"removed":"staging"}"#,
-            vec![ok(CHECKED), Reply::Answer(404, "".into()), ok(CHECKED), ok("{}")],
+            vec![
+                ok(CHECKED),
+                Reply::Answer(404, "".into()),
+                ok(CHECKED),
+                ok("{}"),
+            ],
             4,
             "DELETE /subdomains/staging HTTP/1.1\r\n",
         ),
@@ -548,12 +868,31 @@ fn the_control_plane_itself_when_no_daemon_makes_the_call() {
     let (port, seen) = control_plane("401 Unauthorized", r#"{"error":"invalid_token"}"#);
     rig.check(&with(
         vec![("K2_CONNECT_BASE", format!("http://127.0.0.1:{port}"))],
-        case("status: the control plane refuses", &["status", "--json"], &[], vec![Reply::Answer(404, "".into())], tunnel_token, 1, 1),
+        case(
+            "status: the control plane refuses",
+            &["status", "--json"],
+            &[],
+            vec![Reply::Answer(404, "".into())],
+            tunnel_token,
+            1,
+            1,
+        ),
     ));
     same_requests(&seen, "GET /subdomains HTTP/1.1\r\n");
     rig.check(&with(
-        vec![("K2_CONNECT_BASE", format!("http://127.0.0.1:{}", dead_port()))],
-        case("status: no control plane either", &["status"], &[], vec![Reply::Answer(404, "".into())], tunnel_token, 1, 1),
+        vec![(
+            "K2_CONNECT_BASE",
+            format!("http://127.0.0.1:{}", dead_port()),
+        )],
+        case(
+            "status: no control plane either",
+            &["status"],
+            &[],
+            vec![Reply::Answer(404, "".into())],
+            tunnel_token,
+            1,
+            1,
+        ),
     ));
 }
 
@@ -564,7 +903,15 @@ fn a_proxy_it_does_not_read_is_the_shell_s() {
     let rig = Rig::new(VERB, "cpshell");
     rig.check(&shell(with(
         vec![("HTTPS_PROXY", "socks5://127.0.0.1:9".into())],
-        case("status, a socks proxy", &["status"], &[], vec![relayed(200, SUBS)], tunnel_token, 0, 1),
+        case(
+            "status, a socks proxy",
+            &["status"],
+            &[],
+            vec![relayed(200, SUBS)],
+            tunnel_token,
+            0,
+            1,
+        ),
     )));
 }
 
@@ -576,50 +923,180 @@ fn app_status_and_client_ip_answer_as_the_shell_does() {
     let mut v = Vec::new();
     for (name, args, code) in [
         ("status <name>: running", &["status", " WEB "][..], 0),
-        ("status <name> --json: running", &["status", "web", "--json"], 0),
+        (
+            "status <name> --json: running",
+            &["status", "web", "--json"],
+            0,
+        ),
         ("status <name>: starting", &["status", "api"], 2),
-        ("status <name> --json: starting", &["status", "--json", "api"], 2),
-        ("status <name>: starting, past its time", &["status", "slow"], 2),
+        (
+            "status <name> --json: starting",
+            &["status", "--json", "api"],
+            2,
+        ),
+        (
+            "status <name>: starting, past its time",
+            &["status", "slow"],
+            2,
+        ),
         ("status <name>: stopped", &["status", "off"], 1),
         ("status <name>: unhealthy", &["status", "sick"], 1),
         ("status <name>: exited", &["status", "dead"], 1),
-        ("status <name> --json: exited", &["status", "dead", "--json"], 1),
+        (
+            "status <name> --json: exited",
+            &["status", "dead", "--json"],
+            1,
+        ),
         ("status <name>: no status", &["status", "gone"], 1),
         ("status <name>: missing", &["status", "nope"], 1),
-        ("status <name> --json: missing", &["status", "nope", "--json"], 1),
+        (
+            "status <name> --json: missing",
+            &["status", "nope", "--json"],
+            1,
+        ),
     ] {
         let args: &'static [&'static str] = Box::leak(args.to_vec().into_boxed_slice());
         v.push(on(name, args, vec![ok(list)], code, 1));
     }
     v.extend([
-        on("status <name>: an error", &["status", "web"], vec![ok(r#"{"error":"not_pro"}"#)], 1, 1),
-        on("status <name>: an error of null", &["status", "web"], vec![ok(r#"{"error":null,"x":"é"}"#)], 1, 1),
-        on("status <name>: not JSON", &["status", "web"], vec![ok("x")], 1, 1),
-        on("status <name>: a list", &["status", "web"], vec![ok("[1]")], 1, 1),
+        on(
+            "status <name>: an error",
+            &["status", "web"],
+            vec![ok(r#"{"error":"not_pro"}"#)],
+            1,
+            1,
+        ),
+        on(
+            "status <name>: an error of null",
+            &["status", "web"],
+            vec![ok(r#"{"error":null,"x":"é"}"#)],
+            1,
+            1,
+        ),
+        on(
+            "status <name>: not JSON",
+            &["status", "web"],
+            vec![ok("x")],
+            1,
+            1,
+        ),
+        on(
+            "status <name>: a list",
+            &["status", "web"],
+            vec![ok("[1]")],
+            1,
+            1,
+        ),
         traceback(on(
             "status <name>: a time that is no number",
             &["status", "web"],
-            vec![ok(r#"{"services":[{"name":"web","status":"starting","startingLeftMs":"soon"}]}"#)],
+            vec![ok(
+                r#"{"services":[{"name":"web","status":"starting","startingLeftMs":"soon"}]}"#,
+            )],
             1,
             1,
         )),
-        traceback(on("status <name>: services is a number", &["status", "web"], vec![ok(r#"{"services":5}"#)], 1, 1)),
-        waited(on("status <name>: no answer", &["status", "web"], vec![Reply::Close], 1, 1)),
-        on("client-ip", &["client-ip"], vec![ok(r#"{"labels":["a","b"]}"#)], 0, 1),
-        on("client-ip: none", &["client-ip"], vec![ok(r#"{"labels":[]}"#)], 0, 1),
-        on("client-ip --json", &["client-ip", "--json"], vec![ok(r#"{"labels":["é"]}"#)], 0, 1),
-        on("client-ip <label> on", &["client-ip", "web", "on"], vec![ok(r#"{"label":"web","clientIp":true,"labels":["web"]}"#)], 0, 1),
-        on("client-ip <label> false", &["client-ip", "web", "false", "--json"], vec![ok(r#"{"label":"web","clientIp":false}"#)], 0, 1),
-        on("client-ip: a state it doesn't know", &["client-ip", "web", "maybe"], vec![], 2, 0),
+        traceback(on(
+            "status <name>: services is a number",
+            &["status", "web"],
+            vec![ok(r#"{"services":5}"#)],
+            1,
+            1,
+        )),
+        waited(on(
+            "status <name>: no answer",
+            &["status", "web"],
+            vec![Reply::Close],
+            1,
+            1,
+        )),
+        on(
+            "client-ip",
+            &["client-ip"],
+            vec![ok(r#"{"labels":["a","b"]}"#)],
+            0,
+            1,
+        ),
+        on(
+            "client-ip: none",
+            &["client-ip"],
+            vec![ok(r#"{"labels":[]}"#)],
+            0,
+            1,
+        ),
+        on(
+            "client-ip --json",
+            &["client-ip", "--json"],
+            vec![ok(r#"{"labels":["é"]}"#)],
+            0,
+            1,
+        ),
+        on(
+            "client-ip <label> on",
+            &["client-ip", "web", "on"],
+            vec![ok(r#"{"label":"web","clientIp":true,"labels":["web"]}"#)],
+            0,
+            1,
+        ),
+        on(
+            "client-ip <label> false",
+            &["client-ip", "web", "false", "--json"],
+            vec![ok(r#"{"label":"web","clientIp":false}"#)],
+            0,
+            1,
+        ),
+        on(
+            "client-ip: a state it doesn't know",
+            &["client-ip", "web", "maybe"],
+            vec![],
+            2,
+            0,
+        ),
         on("client-ip: no state", &["client-ip", "web"], vec![], 2, 0),
         on("client-ip: a flag", &["client-ip", "-x"], vec![], 2, 0),
-        on("client-ip: three words", &["client-ip", "a", "on", "b"], vec![], 2, 0),
-        on("client-ip: an error", &["client-ip"], vec![ok(r#"{"error":{"code":"x"}}"#)], 2, 1),
+        on(
+            "client-ip: three words",
+            &["client-ip", "a", "on", "b"],
+            vec![],
+            2,
+            0,
+        ),
+        on(
+            "client-ip: an error",
+            &["client-ip"],
+            vec![ok(r#"{"error":{"code":"x"}}"#)],
+            2,
+            1,
+        ),
         on("client-ip: a list", &["client-ip"], vec![ok("[1]")], 2, 1),
-        on("client-ip: not JSON", &["client-ip"], vec![ok("  nope ")], 1, 1),
-        on("client-ip: an empty answer", &["client-ip"], vec![ok("")], 1, 1),
-        traceback(on("client-ip: a label and no clientIp", &["client-ip"], vec![ok(r#"{"label":"w"}"#)], 1, 1)),
-        traceback(on("client-ip: a label that is a number", &["client-ip"], vec![ok(r#"{"labels":[1]}"#)], 1, 1)),
+        on(
+            "client-ip: not JSON",
+            &["client-ip"],
+            vec![ok("  nope ")],
+            1,
+            1,
+        ),
+        on(
+            "client-ip: an empty answer",
+            &["client-ip"],
+            vec![ok("")],
+            1,
+            1,
+        ),
+        traceback(on(
+            "client-ip: a label and no clientIp",
+            &["client-ip"],
+            vec![ok(r#"{"label":"w"}"#)],
+            1,
+            1,
+        )),
+        traceback(on(
+            "client-ip: a label that is a number",
+            &["client-ip"],
+            vec![ok(r#"{"labels":[1]}"#)],
+            1,
+            1,
+        )),
     ]);
     check_all(&rig, v);
 }
@@ -633,20 +1110,97 @@ fn secret_and_env_hand_over_to_the_vault_as_the_shell_does() {
     check_all(
         &rig,
         vec![
-            on("secret alone: the page on stderr", &["secret"], vec![], 2, 0),
+            on(
+                "secret alone: the page on stderr",
+                &["secret"],
+                vec![],
+                2,
+                0,
+            ),
             on("secrets help: the page", &["secrets", "help"], vec![], 0, 0),
-            on("secret add", &["secret", "add", "api", "K", "--as", "file", "--env-name", "API_KEY", "--scope", "server"], vec![ok(grant)], 0, 1),
-            on("secret add --json", &["secrets", "add", "api", "K", "--json"], vec![ok(grant)], 0, 1),
-            on("secret add: no name", &["secret", "add", "api"], vec![], 2, 0),
-            on("secret add --system (vault's refusal)", &["secret", "add", "api", "K", "--system"], vec![], 2, 0),
-            on("secret remove", &["secret", "remove", "api", "K", "--scope", "server"], vec![ok(gone)], 0, 1),
-            on("secret rm: --as is vault's refusal", &["secret", "rm", "api", "K", "--as", "file"], vec![], 2, 0),
-            on("secret remove: no service", &["secret", "remove", ""], vec![], 2, 0),
-            on("secret list", &["secret", "list", "api", "extra"], vec![ok(service)], 0, 1),
+            on(
+                "secret add",
+                &[
+                    "secret",
+                    "add",
+                    "api",
+                    "K",
+                    "--as",
+                    "file",
+                    "--env-name",
+                    "API_KEY",
+                    "--scope",
+                    "server",
+                ],
+                vec![ok(grant)],
+                0,
+                1,
+            ),
+            on(
+                "secret add --json",
+                &["secrets", "add", "api", "K", "--json"],
+                vec![ok(grant)],
+                0,
+                1,
+            ),
+            on(
+                "secret add: no name",
+                &["secret", "add", "api"],
+                vec![],
+                2,
+                0,
+            ),
+            on(
+                "secret add --system (vault's refusal)",
+                &["secret", "add", "api", "K", "--system"],
+                vec![],
+                2,
+                0,
+            ),
+            on(
+                "secret remove",
+                &["secret", "remove", "api", "K", "--scope", "server"],
+                vec![ok(gone)],
+                0,
+                1,
+            ),
+            on(
+                "secret rm: --as is vault's refusal",
+                &["secret", "rm", "api", "K", "--as", "file"],
+                vec![],
+                2,
+                0,
+            ),
+            on(
+                "secret remove: no service",
+                &["secret", "remove", ""],
+                vec![],
+                2,
+                0,
+            ),
+            on(
+                "secret list",
+                &["secret", "list", "api", "extra"],
+                vec![ok(service)],
+                0,
+                1,
+            ),
             on("secret ls: no service", &["secret", "ls"], vec![], 2, 0),
-            on("secret: a verb it doesn't know", &["secret", "show", "api"], vec![], 2, 0),
+            on(
+                "secret: a verb it doesn't know",
+                &["secret", "show", "api"],
+                vec![],
+                2,
+                0,
+            ),
             on("env", &["env", "api"], vec![ok(service)], 0, 1),
-            on("env clean --env-file", &["env", "api", "clean", "--env-file", ".env.k2"], vec![ok(r#"{"service":"api","mode":"clean"}"#)], 0, 1),
+            on(
+                "env clean --env-file",
+                &["env", "api", "clean", "--env-file", ".env.k2"],
+                vec![ok(r#"{"service":"api","mode":"clean"}"#)],
+                0,
+                1,
+            ),
             on("env: no service", &["env"], vec![], 2, 0),
         ],
     );
@@ -665,7 +1219,10 @@ fn help_never_acts() {
         &["env", "api", "clean", "--help"],
         &["status", "web", "-h"],
     ];
-    let v = lines.into_iter().map(|a| shell(on("help", a, vec![], 0, 0))).collect();
+    let v = lines
+        .into_iter()
+        .map(|a| shell(on("help", a, vec![], 0, 0)))
+        .collect();
     check_all(&rig, v);
 }
 
@@ -682,7 +1239,14 @@ fn subdomain_writes_act_on_help_bash_bug() {
             4,
         ),
         (
-            &["subdomain", "create", "a", "--target", "example.invalid:1", "-h"],
+            &[
+                "subdomain",
+                "create",
+                "a",
+                "--target",
+                "example.invalid:1",
+                "-h",
+            ],
             vec![ok(CHECKED), relayed(201, "{}"), ok(CHECKED), ok("{}")],
             4,
         ),
@@ -692,7 +1256,11 @@ fn subdomain_writes_act_on_help_bash_bug() {
         rig.prepare(Side::Bash, &c);
         let bash = rig.run(true, &c);
         assert_eq!(bash.code, Some(0), "{args:?}: {bash:?}");
-        assert_eq!(rig.read(Side::Bash, false, c.name).len(), n, "{args:?}: bash sent them");
+        assert_eq!(
+            rig.read(Side::Bash, false, c.name).len(),
+            n,
+            "{args:?}: bash sent them"
+        );
     }
 }
 
@@ -716,7 +1284,11 @@ fn the_lines_say_the_brand_s_name() {
     for (args, answers, code, err) in rows {
         let c = on("brand", args, answers, code, 0);
         let (ran, _) = rig.binary(&c, false);
-        assert_eq!((ran.code, ran.stderr.as_str()), (Some(code), err.as_str()), "{args:?}");
+        assert_eq!(
+            (ran.code, ran.stderr.as_str()),
+            (Some(code), err.as_str()),
+            "{args:?}"
+        );
     }
 }
 
@@ -729,6 +1301,18 @@ fn subdomain_list_large() {
         .collect();
     let body = format!(r#"{{"subdomains":[{}]}}"#, rows.join(","));
     assert!(body.len() > 256 * 1024, "{}", body.len());
-    rig.check(&on("subdomain list, 3000 rows", &["subdomain", "list"], vec![relayed(200, &body)], 0, 1));
-    rig.check(&on("subdomain list --json, 3000 rows", &["subdomain", "list", "--json"], vec![relayed(200, &body)], 0, 1));
+    rig.check(&on(
+        "subdomain list, 3000 rows",
+        &["subdomain", "list"],
+        vec![relayed(200, &body)],
+        0,
+        1,
+    ));
+    rig.check(&on(
+        "subdomain list --json, 3000 rows",
+        &["subdomain", "list", "--json"],
+        vec![relayed(200, &body)],
+        0,
+        1,
+    ));
 }

@@ -486,7 +486,10 @@ mod tests {
                 words: vec!["api".to_string()]
             }
         );
-        assert!(matches!(parse_secret(&["add", "api"]), Act::Lines(_, Exit::Usage)));
+        assert!(matches!(
+            parse_secret(&["add", "api"]),
+            Act::Lines(_, Exit::Usage)
+        ));
         assert!(matches!(parse_env(&[""]), Act::Lines(_, Exit::Usage)));
     }
 

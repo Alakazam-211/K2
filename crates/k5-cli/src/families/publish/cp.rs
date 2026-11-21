@@ -32,13 +32,13 @@ use crate::airgap::State;
 use crate::exit::Exit;
 use crate::families::wiki::publish as wp;
 use crate::families::{get, py_get, py_iter, py_left, py_len, raised, without_nuls, Raise, Shown};
+use crate::out;
 use crate::out::json::Value;
 use crate::out::py;
 use crate::out::pylib::json::loads;
 use crate::transport::encode::quote;
 use crate::transport::remote::{self, Base};
 use crate::transport::wire::Method;
-use crate::out;
 use crate::transport::{Auth, Call, Channel, Client, Error};
 use k2_client::brand::{CLI_NAME as CLI, PRODUCT_NAME as PRODUCT};
 use k2_client::hosts::{DASHBOARD_URL, ZONE_SUFFIX};
@@ -380,7 +380,7 @@ impl Run<'_> {
             }
             Form::Rm { label } => {
                 self.base_check()?;
-                if label.to_ascii_lowercase() != "skin" {
+                if !label.eq_ignore_ascii_case("skin") {
                     self.preflight(label, &["check=1", "release=1"])?;
                 }
                 let path = format!("/subdomains/{}", quote(label));
@@ -1013,10 +1013,7 @@ fn list_value(d: &Value, me: &str) -> Result<Value, Raise> {
             ("plan", plan_value(&tier)),
             ("tier", or_null(&tier)),
             ("status", status),
-            (
-                "flags",
-                Value::Array(flags.into_iter().map(s).collect()),
-            ),
+            ("flags", Value::Array(flags.into_iter().map(s).collect())),
             ("label", label),
         ]));
     }
@@ -1028,7 +1025,9 @@ fn list_text(d: &Value, me: &str) -> Pretty {
     let me = strip(me).to_lowercase();
     let no = |r: Raise| (String::new(), r);
     let subs_v = match d {
-        Value::Object(p) => get(p, "subdomains").cloned().unwrap_or(Value::Array(Vec::new())),
+        Value::Object(p) => get(p, "subdomains")
+            .cloned()
+            .unwrap_or(Value::Array(Vec::new())),
         _ => Value::Array(Vec::new()),
     };
     if !py::truthy(&subs_v) {
@@ -1050,7 +1049,10 @@ fn list_text(d: &Value, me: &str) -> Pretty {
             "" => "-".to_string(),
             t => t.to_string(),
         };
-        let status = match py_get(sv, "effective", 30).map_err(no)?.filter(|v| py::truthy(v)) {
+        let status = match py_get(sv, "effective", 30)
+            .map_err(no)?
+            .filter(|v| py::truthy(v))
+        {
             Some(v) => py::str_of(v),
             None => py_get(sv, "status", 30)
                 .map_err(no)?
@@ -1147,9 +1149,7 @@ fn unstamp(resp: &str, label: &str) -> Result<(), String> {
         return Ok(());
     }
     let err = match &parsed {
-        Ok(Value::Object(p)) => get(p, "error")
-            .filter(|e| py::truthy(e))
-            .map(py::str_of),
+        Ok(Value::Object(p)) => get(p, "error").filter(|e| py::truthy(e)).map(py::str_of),
         _ => None,
     }
     .map_or_else(|| "no response from the daemon".to_string(), held);
@@ -1282,8 +1282,14 @@ mod tests {
             parse_subdomain(&["create", "a", "--target"]),
             Act::Lines(String::new(), Exit::Error)
         );
-        assert_eq!(parse_subdomain(&[]), Act::Connect(Form::List { json: false }));
-        assert_eq!(parse_subdomain(&[""]), Act::Connect(Form::List { json: false }));
+        assert_eq!(
+            parse_subdomain(&[]),
+            Act::Connect(Form::List { json: false })
+        );
+        assert_eq!(
+            parse_subdomain(&[""]),
+            Act::Connect(Form::List { json: false })
+        );
         assert!(matches!(
             parse_status(&["--json", "-x"]),
             Act::Usage { json: true, .. }

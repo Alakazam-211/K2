@@ -594,16 +594,17 @@ fn pieces(ctx: &mut Ctx, app: &str, path: &str, part: &str) -> Result<(String, S
                 return Err(Exit::Refused);
             }
         };
-        match &first {
-            None => first = Some((p.size.clone(), p.mtime.clone())),
-            Some((size, mtime)) if *size != p.size || *mtime != p.mtime => {
+        if let Some((size, mtime)) = first.as_ref() {
+            if *size != p.size || *mtime != p.mtime {
                 out::stderr_line(&format!(
                     "{{\"error\":\"data_changed\",\"hint\":\"{path} changed while it was read (size {size} \u{2192} {}): get it again\"}}",
                     p.size
                 ));
                 return Err(Exit::Refused);
             }
-            Some(_) => {}
+        }
+        if first.is_none() {
+            first = Some((p.size.clone(), p.mtime.clone()));
         }
         if p.eof {
             return Ok(first.unwrap_or_default());

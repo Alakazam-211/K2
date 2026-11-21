@@ -331,7 +331,7 @@ pub(crate) fn close_decided(r: &reqs::AppRequest) -> usize {
             by: Some(by.as_str()),
             via: Some("app-approvals"),
             reason: r.decision_reason.as_deref(),
-            message: Some(&message),
+            message: Some(message.as_str()),
             at: now,
         };
         if let Err(e) = store::decide(q.id.as_str(), &decided) {

@@ -11997,6 +11997,9 @@ Egress (guarded Apps reach only listed hosts, through their own proxy):
   k2 app approvals | approve <id> | deny <id>
                                        Held requests; approve is the owner's,
                                        in person. k2 app egress --help.
+  --assign <login>[,<login>…]          On any command that may be held: its
+                                       permission card goes to those owners or
+                                       admins only (k2 app approvals --help).
 
 Box services (a walled App reaching a service on this box's loopback):
   k2 app box-service <app-id>          Approved / held, where each is in the wall.

@@ -211,6 +211,11 @@ pub(crate) fn held_note(who: &Who, r: &reqs::AppRequest) -> J {
                     let id = c["id"].as_str().unwrap_or(&r.id).to_string();
                     let thread = c["thread"].as_str().unwrap_or("").to_string();
                     let to = logins_of(&c["routedTo"]);
+                    let where_ = format!(
+                        "{} permission card {id} is on {thread}'s Thread: {}. They approve it there, or in {approvals}",
+                        if new { "a" } else { "the" },
+                        sent_to(&to, assigned.is_some(), c["narrowed"] == true),
+                    );
                     json!({
                         "raised": true,
                         "new": new,
@@ -219,11 +224,7 @@ pub(crate) fn held_note(who: &Who, r: &reqs::AppRequest) -> J {
                         "thread": thread,
                         "routedTo": to,
                         "assigned": assigned.is_some(),
-                        "where": format!(
-                            "{} permission card {id} is on {thread}'s Thread: {}. They approve it there, or in {approvals}",
-                            if new { "a" } else { "the" },
-                            sent_to(&to, assigned.is_some(), c["narrowed"] == true),
-                        ),
+                        "where": where_,
                     })
                 }
                 None => {

@@ -706,14 +706,8 @@ mod nofollow {
     /// `openat(d, name, flags)`, or the OS error.
     fn at(d: &OwnedFd, name: &CString, flags: libc::c_int) -> Result<OwnedFd, std::io::Error> {
         // SAFETY: the folder descriptor and C string live through the call.
-        let fd = unsafe {
-            libc::openat(
-                d.as_raw_fd(),
-                name.as_ptr(),
-                flags,
-                0o666 as libc::c_uint,
-            )
-        };
+        let fd =
+            unsafe { libc::openat(d.as_raw_fd(), name.as_ptr(), flags, 0o666 as libc::c_uint) };
         if fd < 0 {
             return Err(std::io::Error::last_os_error());
         }
@@ -733,12 +727,7 @@ mod nofollow {
         libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
 
     /// The artifact's file under `out`, open for its chunk.
-    pub fn open(
-        out: &str,
-        name: &str,
-        parts: &[&str],
-        first: bool,
-    ) -> Result<std::fs::File, Stop> {
+    pub fn open(out: &str, name: &str, parts: &[&str], first: bool) -> Result<std::fs::File, Stop> {
         let mut d = root(out).map_err(|e| Raise::at(l::ROOT, os_error(&e, out)))?;
         let Some((file, folders)) = parts.split_last() else {
             return Err(Raise::at(l::OPEN, "FileNotFoundError: no name").into());
@@ -802,10 +791,7 @@ mod nofollow {
 
     /// The file `parts` under `out`, read from the folders down, each
     /// opened with `O_NOFOLLOW`; the OS error and the name it was on.
-    pub fn read<'a>(
-        out: &'a str,
-        parts: &[&'a str],
-    ) -> Result<Vec<u8>, (std::io::Error, &'a str)> {
+    pub fn read<'a>(out: &'a str, parts: &[&'a str]) -> Result<Vec<u8>, (std::io::Error, &'a str)> {
         let mut d = root(out).map_err(|e| (e, out))?;
         let Some((file, folders)) = parts.split_last() else {
             return Err((std::io::Error::from(std::io::ErrorKind::NotFound), out));
@@ -814,10 +800,14 @@ mod nofollow {
             CString::new(s).map_err(|_| (std::io::Error::from(std::io::ErrorKind::InvalidInput), s))
         };
         for part in folders {
-            d = at(&d, &cs(*part)?, DIR).map_err(|e| (e, *part))?;
+            d = at(&d, &cs(part)?, DIR).map_err(|e| (e, *part))?;
         }
-        let fd = at(&d, &cs(*file)?, libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-            .map_err(|e| (e, *file))?;
+        let fd = at(
+            &d,
+            &cs(file)?,
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+        .map_err(|e| (e, *file))?;
         let mut data = Vec::new();
         std::fs::File::from(fd)
             .read_to_end(&mut data)
@@ -853,10 +843,7 @@ mod nofollow {
             .map_err(|e| Raise::at(l::OPEN, os_error(&e, &path)).into())
     }
 
-    pub fn read<'a>(
-        out: &'a str,
-        parts: &[&'a str],
-    ) -> Result<Vec<u8>, (std::io::Error, &'a str)> {
+    pub fn read<'a>(out: &'a str, parts: &[&'a str]) -> Result<Vec<u8>, (std::io::Error, &'a str)> {
         std::fs::read(super::join(out, parts)).map_err(|e| (e, out))
     }
 }

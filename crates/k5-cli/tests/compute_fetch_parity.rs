@@ -238,7 +238,11 @@ fn linked_file(r: &Rig) {
 fn old_file(r: &Rig) {
     owner_and_port(r);
     std::fs::create_dir_all(r.proj.join("rr")).unwrap();
-    std::fs::write(r.proj.join("rr/b.txt"), "an old file, longer than the new one\n").unwrap();
+    std::fs::write(
+        r.proj.join("rr/b.txt"),
+        "an old file, longer than the new one\n",
+    )
+    .unwrap();
 }
 
 /// The case compared as the rig does, then each side once more with
@@ -274,7 +278,11 @@ fn compute_fetch_follows_no_link() {
                 0,
                 "{who}: nothing through the link"
             );
-            assert_eq!(std::fs::read(r.proj.join("nl/b.txt")).unwrap(), b"hello", "{who}");
+            assert_eq!(
+                std::fs::read(r.proj.join("nl/b.txt")).unwrap(),
+                b"hello",
+                "{who}"
+            );
         },
     );
     check_each_side(
@@ -318,7 +326,11 @@ fn compute_fetch_follows_no_link() {
             3,
         ),
         |r, who| {
-            assert_eq!(std::fs::read(r.proj.join("rr/b.txt")).unwrap(), b"hello", "{who}");
+            assert_eq!(
+                std::fs::read(r.proj.join("rr/b.txt")).unwrap(),
+                b"hello",
+                "{who}"
+            );
         },
     );
 }

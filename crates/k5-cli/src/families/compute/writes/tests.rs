@@ -913,7 +913,7 @@ mod fetch_verb {
 
     #[test]
     fn the_readers_lines() {
-        use fetch::line::{list as l, step as s};
+        use fetch::line::{check as c, list as l, step as s};
         let list = python_after("compute-jobs.sh", "list=\"$(printf");
         assert_eq!(at(&list, l::LOAD), "v = json.load(sys.stdin)");
         assert!(at(&list, l::HAVE).starts_with("have = {a[\"name\"]: a for a in"));
@@ -923,9 +923,18 @@ mod fetch_verb {
         assert_eq!(at(&step, s::PENDING), r#"if v.get("pending"):"#);
         assert!(at(&step, s::MB).contains("MB on the server so far"));
         assert_eq!(at(&step, s::NAME), r#"name = v["name"]"#);
-        assert!(at(&step, s::MAKEDIRS).starts_with("os.makedirs("));
         assert_eq!(at(&step, s::DATA), r#"data = base64.b64decode(v["data"])"#);
+        assert!(at(&step, s::ROOT).starts_with("d = os.open(out, os.O_RDONLY | os.O_DIRECTORY)"));
+        assert_eq!(at(&step, s::MKDIR), "os.mkdir(part, 0o777, dir_fd=d)");
+        assert!(at(&step, s::FOLDER).starts_with("sub = os.open(part, "));
+        assert!(at(&step, s::STAT).starts_with("if stat.S_ISREG(os.stat(parts[-1]"));
+        assert_eq!(at(&step, s::UNLINK), "os.unlink(parts[-1], dir_fd=d)");
+        assert_eq!(at(&step, s::OPEN), "fd = os.open(parts[-1], flags, 0o666, dir_fd=d)");
+        assert_eq!(at(&step, s::WRITE), "f.write(data)");
         assert!(at(&step, s::PRINT).starts_with(r#"print("%d %d %s %s %s""#));
+        let check = python_after("compute-jobs.sh", "entry=\"$(K2_CP_PATH");
+        assert!(at(&check, c::OPEN).starts_with("fd = os.open(parts[-1], os.O_RDONLY | "));
+        assert!(at(&check, c::INT).contains(r#"int(os.environ["K2_CP_BYTES"])"#));
         if k2_client::brand::CLI_NAME == "k2" {
             let text = super::source("compute-jobs.sh");
             let line = format!("    local fusage=\"{}\"", fetch::USAGE);

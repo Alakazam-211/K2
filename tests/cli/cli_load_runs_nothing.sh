@@ -21,8 +21,8 @@
 # HOME is a scratch dir (so the K2 home is too) and the daemon address is
 # 127.0.0.1 on a closed port. Then the help rows run again against a
 # daemon that accepts and never answers, and one whose listen queue is
-# full (a connect that never completes), so the probes' time limits are
-# what keeps help fast.
+# full (a connect that never completes, or on newer macOS is reset), so
+# the probes' time limits are what keeps help fast.
 #
 # Each command must exit as expected, print its page on stdout, print
 # NOTHING on stderr, run no stubbed program and finish under MAX_MS.
@@ -273,57 +273,118 @@ else
     bad "k2 app --help: no 'Usage: k2 app' line on stdout"
 fi
 
-# start_daemon <mode>: a loopback listener that never answers; its port
-# goes in DAEMON_PORT. hang: accepts and holds each connection. full: never accepts, and
-# its listen queue is full, so a new connect never completes (checked here
-# before it counts as ready).
+# The listener behind the never-answering daemon rows, as a file: `serve
+# <mode> <port file>` runs one, `decide <outcome> <completed>` prints what
+# the full mode makes of one connect outcome (checked below on its own).
+#   hang: accepts and holds each connection, never answers.
+#   full: never accepts, and connects until its listen queue is full: a
+#         connect that times out (Linux, older macOS), or that is reset or
+#         refused after at least one got through (newer macOS answers a
+#         full queue that way). Anything else is a loud setup failure.
+LISTENER="$WORK/listener.py"
+cat >"$LISTENER" <<'PYEOF'
+import os, socket, sys, time
+
+
+def full_decision(outcome, completed):
+    """What one connect outcome means while filling the queue: "more" (it
+    got through, keep going), "full", or "not full: <why>"."""
+    if outcome == "completed":
+        return "more"
+    if outcome == "timeout":
+        return "full"
+    if outcome in ("reset", "refused"):
+        if completed > 0:
+            return "full"
+        return "not full: the first connect was %s, so nothing listens there" % outcome
+    return "not full: a connect failed: %s" % outcome
+
+
+def outcome_of(c, port):
+    try:
+        c.connect(("127.0.0.1", port))
+        return "completed"
+    except socket.timeout:
+        return "timeout"
+    except ConnectionResetError:
+        return "reset"
+    except ConnectionRefusedError:
+        return "refused"
+    except OSError as e:
+        return str(e)
+
+
+def serve(mode, pf):
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.bind(("127.0.0.1", 0))
+    port = srv.getsockname()[1]
+    held = []
+    how = "accepts and never answers"
+    if mode == "hang":
+        srv.listen(16)
+    else:
+        # Some systems queue more than the backlog asks: keep going.
+        import resource
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        want = 2048 if hard == resource.RLIM_INFINITY else min(hard, 2048)
+        if soft != resource.RLIM_INFINITY and soft < want:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (want, hard))
+        srv.listen(0)
+        completed, verdict, outcome = 0, "more", ""
+        while completed < 1500 and verdict == "more":
+            c = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            c.settimeout(0.3)
+            held.append(c)
+            outcome = outcome_of(c, port)
+            verdict = full_decision(outcome, completed)
+            if verdict == "more":
+                completed += 1
+        if verdict == "more":
+            verdict = "not full: %d connects all got through" % completed
+        if verdict != "full":
+            print("full listener: %s" % verdict, file=sys.stderr)
+            sys.exit(1)
+        how = "full after %d connects (the next: %s)" % (completed, outcome)
+    with open(pf + ".how", "w") as f:
+        f.write(how)
+    with open(pf + ".tmp", "w") as f:
+        f.write(str(port))
+    os.rename(pf + ".tmp", pf)
+    while True:
+        if mode == "hang":
+            c, _ = srv.accept()
+            held.append(c)
+        else:
+            time.sleep(60)
+
+
+if sys.argv[1] == "decide":
+    print(full_decision(sys.argv[2], int(sys.argv[3])))
+else:
+    serve(sys.argv[2], sys.argv[3])
+PYEOF
+
+echo "The full listener's decision, per connect outcome:"
+for row in "completed 0|more" "timeout 0|full" "timeout 5|full" "reset 3|full" \
+    "refused 3|full" \
+    "reset 0|not full: the first connect was reset, so nothing listens there" \
+    "refused 0|not full: the first connect was refused, so nothing listens there" \
+    "Network is unreachable 2|not full: a connect failed: Network is unreachable"; do
+    args="${row%%|*}" want="${row#*|}"
+    got="$("$REAL_PY" "$LISTENER" decide "${args% *}" "${args##* }")"
+    if [ "$got" = "$want" ]; then
+        ok "decide ${args% *} after ${args##* }: $got"
+    else
+        bad "decide ${args% *} after ${args##* }: got '$got', want '$want'"
+    fi
+done
+
+# start_daemon <mode>: a listener that never answers; its port goes in
+# DAEMON_PORT. A listener that can't be set up fails the test with its
+# reason.
 start_daemon() {
     local mode="$1" pf="$WORK/port.$1" i pid
-    "$REAL_PY" - "$mode" "$pf" <<'PYEOF' &
-import socket, sys, time
-mode, pf = sys.argv[1], sys.argv[2]
-srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-srv.bind(("127.0.0.1", 0))
-port = srv.getsockname()[1]
-held = []
-if mode == "hang":
-    srv.listen(16)
-else:
-    # Connect until one does not complete: the queue is full. Some systems
-    # queue more than the backlog asks, so this keeps going for a while.
-    import resource
-    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-    want = 2048 if hard == resource.RLIM_INFINITY else min(hard, 2048)
-    if soft != resource.RLIM_INFINITY and soft < want:
-        resource.setrlimit(resource.RLIMIT_NOFILE, (want, hard))
-    srv.listen(0)
-    full = False
-    for n in range(1500):
-        c = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        c.settimeout(0.3)
-        held.append(c)
-        try:
-            c.connect(("127.0.0.1", port))
-        except socket.timeout:
-            full = True
-            break
-        except OSError as e:
-            print("full listener: connect %d failed at once: %s" % (n + 1, e), file=sys.stderr)
-            sys.exit(1)
-    if not full:
-        print("full listener: %d connects all completed" % len(held), file=sys.stderr)
-        sys.exit(1)
-with open(pf + ".tmp", "w") as f:
-    f.write(str(port))
-import os
-os.rename(pf + ".tmp", pf)
-while True:
-    if mode == "hang":
-        c, _ = srv.accept()
-        held.append(c)
-    else:
-        time.sleep(60)
-PYEOF
+    "$REAL_PY" "$LISTENER" serve "$mode" "$pf" 2>"$pf.err" &
     pid=$!
     DAEMON_PIDS="$DAEMON_PIDS $pid"
     for i in $(seq 1 400); do
@@ -331,7 +392,11 @@ PYEOF
         kill -0 "$pid" 2>/dev/null || break
         sleep 0.05
     done
-    [ -s "$pf" ] || { echo "FAIL: the $mode listener did not start" >&2; exit 1; }
+    if [ ! -s "$pf" ]; then
+        echo "FAIL: the $mode listener did not start: $(cat "$pf.err")" >&2
+        exit 1
+    fi
+    echo "  the $mode listener: $(cat "$pf.how")"
     DAEMON_PORT="$(cat "$pf")"
 }
 

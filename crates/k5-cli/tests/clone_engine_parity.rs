@@ -309,11 +309,23 @@ impl CRig {
                 got.stderr = traceback_shape(&got.stderr);
             }
             let fields = [
-                ("exit", format!("{:?}", got.code), format!("{:?}", want.code)),
+                (
+                    "exit",
+                    format!("{:?}", got.code),
+                    format!("{:?}", want.code),
+                ),
                 ("stdout", got.stdout.clone(), want.stdout.clone()),
                 ("stderr", got.stderr.clone(), want.stderr.clone()),
-                ("local", got.local.join("\n----\n"), want.local.join("\n----\n")),
-                ("remote", got.remote.join("\n----\n"), want.remote.join("\n----\n")),
+                (
+                    "local",
+                    got.local.join("\n----\n"),
+                    want.local.join("\n----\n"),
+                ),
+                (
+                    "remote",
+                    got.remote.join("\n----\n"),
+                    want.remote.join("\n----\n"),
+                ),
                 ("clone-tmp", got.tmp.join("\n"), want.tmp.join("\n")),
             ];
             for (what, g, w) in fields {

@@ -18,6 +18,8 @@
 #                    known_hosts), split on spaces
 #   K2_ISO_TESTS     how many tests must pass (default: the count of
 #                    #[test] in the test file at <commit>)
+#   K2_ISO_BUILD_NODE  pin the build to one node (a warm cache); default:
+#                    a Linux x86 node K2 picks
 #   K2_BIN           the k2 CLI (default k2)
 set -euo pipefail
 sha="${1:?usage: $0 <commit>}"
@@ -51,9 +53,15 @@ cp cli/k2 scripts/agent-isolation-kernel-tests.sh iso-art/
 for f in agent_isolation_kernel_integration k2-daemon k2-ptyd k2-ptyd-test-agent; do strip --strip-debug "iso-art/$f"; done
 echo "iso-art: built"'
 
-echo "isolation-kernel: building ${sha:0:12} on K2 Compute"
-out="$("$k2" compute run --sha "$sha" --any --os linux --arch x86_64 --tier standard \
-    --needs rust@stable,cmake@3 --mem 32G --stall-timeout off --artifact 'iso-art/*' --detach \
+# The repo's pinned Rust at <commit> (release-gates' rule).
+# shellcheck source=lib/rust-pin.sh
+. "$repo/scripts/lib/rust-pin.sh"
+rust="$(K2_RUST_PIN_REPO="$repo" k2_rust_need "$sha")"
+place=(--any --os linux --arch x86_64)
+[ -n "${K2_ISO_BUILD_NODE:-}" ] && place=("$K2_ISO_BUILD_NODE")
+echo "isolation-kernel: building ${sha:0:12} on K2 Compute ($rust)"
+out="$("$k2" compute run "${place[@]}" --sha "$sha" --tier standard \
+    --needs "$rust,cmake@3" --mem 32G --stall-timeout off --artifact 'iso-art/*' --detach \
     -- bash -c "$build" 2>&1 </dev/null)" || { echo "$out" >&2; echo "isolation-kernel: FAIL: the build job was not accepted" >&2; exit 1; }
 job="$(printf '%s\n' "$out" | sed -n 's/.*k2 compute wait \([0-9a-f]*\).*/\1/p' | head -1)"
 [ -n "$job" ] || { echo "$out" >&2; echo "isolation-kernel: FAIL: no job id" >&2; exit 1; }

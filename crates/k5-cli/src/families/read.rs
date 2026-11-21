@@ -38,9 +38,9 @@
 //!   shell points the call at that host with its own token;
 //! - `--token-stdin` where a flag goes: the shell reads a token from
 //!   stdin (and refuses it beside `--token`);
-//! - a value flag as the last word (the shell stops on `$2: unbound
-//!   variable`, a line with its script's path in it), a word that is not
-//!   UTF-8, and a command line with `-h` or `--help` ([`crate::front`]);
+//! - a value flag as the last word (the shell's `_need_value` line,
+//!   `Error: <flag> takes a value`, exit 2), a word that is not UTF-8,
+//!   and a command line with `-h` or `--help` ([`crate::front`]);
 //! - a `--lines` value with a byte that is not printable ASCII, or a `#`:
 //!   the shell hands it to curl as it is, and curl refuses it or cuts it;
 //! - `HOOK_SOCK` naming a live socket and no passport: the shell tries the
@@ -345,10 +345,10 @@ mod tests {
             r#"    local workspace="${1:-}""#,
             r#"    local lines=50"#,
             r#"    shift || true"#,
-            r#"            --lines) lines="$2"; shift 2 ;;"#,
-            r#"            --agent) agent="$2"; shift 2 ;;"#,
-            r#"            --session) session="$2"; shift 2 ;;"#,
-            r#"            --token) token="$2"; shift 2 ;;"#,
+            r#"            --lines) _need_value "$@"; lines="$2"; shift 2 ;;"#,
+            r#"            --agent) _need_value "$@"; agent="$2"; shift 2 ;;"#,
+            r#"            --session) _need_value "$@"; session="$2"; shift 2 ;;"#,
+            r#"            --token) _need_value "$@"; token="$2"; shift 2 ;;"#,
             r#"            *) shift ;;"#,
             r#"    if [ -z "$workspace" ] && [ -z "$session" ]; then"#,
             r#"    _split_remote_target "$workspace"; workspace="$_BARE_TARGET""#,

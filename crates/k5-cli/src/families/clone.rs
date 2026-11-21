@@ -21,16 +21,24 @@
 //! Still the shell's ([`run`] returns `None`): any `-h` or `--help` (the
 //! front's), a value flag as the last word (`shift 2` out of range), a
 //! word that is not UTF-8, the shell's own settings in the environment,
-//! a port curl won't take, a `python3` the binary can't tell; and for
-//! the engine, `K2_HOST` as an `https://` URL or an IPv6 address, a
-//! remote URL the binary doesn't send to itself ([`net::place`]), and a
-//! remote `https://` server the person's proxy would carry (the shared
-//! CONNECT path is the next step).
+//! a port curl won't take and a `python3` the binary can't tell.
+//!
+//! The engine sends every request itself, as its Python does ([`pyurl`]):
+//! this server's `BASE_URL` (plain http, an IPv6 address, or TLS for
+//! `K2_HOST=https://<name>`), the remote URL as typed (a query, a
+//! fragment, a `%` escape, a port that is not a number), and the
+//! person's proxy for an `https://` server that isn't this computer
+//! (the shared CONNECT path, by curl's rules: K2's ruling R4). Refused
+//! instead, nothing sent (R10): a URL with a byte outside printable
+//! ASCII, a port no socket takes, and a proxy setting the binary doesn't
+//! read.
 
 #[cfg(unix)]
 pub mod engine;
 #[cfg(unix)]
 pub mod net;
+#[cfg(unix)]
+pub mod pyurl;
 pub mod rule;
 #[cfg(unix)]
 pub mod tty;
@@ -271,32 +279,6 @@ pub fn remote_url(host: &str) -> String {
     }
 }
 
-/// Does the binary send to `url` itself? A form [`net::place`] reads, and
-/// for `https://` to another computer, no proxy the person set
-/// (Python's `ProxyHandler` reads `https_proxy`, then `HTTPS_PROXY`).
-fn sends_to(url: &str) -> bool {
-    let Some(pl) = rule::place(url) else {
-        return false;
-    };
-    if !pl.tls || k2_client::proxy_rule::direct(&format!("{url}/")) {
-        return true;
-    }
-    !["https_proxy", "HTTPS_PROXY"]
-        .iter()
-        .any(|n| std::env::var_os(n).is_some_and(|v| !v.is_empty()))
-}
-
-/// The remote URL a verb reaches its engine with (before any stop that
-/// can't be told without a request), for the hand-off check.
-fn remote_of(sub: &Sub, o: &Opts) -> Option<String> {
-    match sub {
-        Sub::To if o.args.len() == 2 => Some(remote_url(&o.args[0])),
-        Sub::From if o.args.len() == 1 => o.args[0].rsplit_once(':').map(|(h, _)| remote_url(h)),
-        Sub::Preview if o.args.len() == 1 && !o.host.is_empty() => Some(remote_url(&o.host)),
-        _ => None,
-    }
-}
-
 /// `k5 clone ...`: `args` is the whole command line after `argv[0]`.
 /// `None`: the shell CLI answers it.
 pub fn run(args: &[OsString]) -> Option<Exit> {
@@ -324,26 +306,9 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     {
         return None;
     }
-    if let Form::Run(sub, o) = &form {
-        if sub.engine() {
-            if !cfg!(unix) {
-                return None;
-            }
-            let h = settings.host.to_ascii_lowercase();
-            if h.starts_with("https://") || settings.host.contains(':') {
-                return None;
-            }
-            if let Some(url) = remote_of(sub, o) {
-                if rule::url_refusal(&url, false).is_none() && !sends_to(&url) {
-                    return None;
-                }
-            }
-            let proxy = ["https_proxy", "HTTPS_PROXY"]
-                .iter()
-                .any(|n| std::env::var_os(n).is_some_and(|v| !v.is_empty()));
-            if *sub == Sub::Approve && proxy {
-                return None;
-            }
+    if let Form::Run(sub, _) = &form {
+        if sub.engine() && !cfg!(unix) {
+            return None;
         }
     }
     Some(run_with(args, form, settings))
@@ -559,6 +524,34 @@ fn clone_remote(
 }
 
 #[cfg(unix)]
+/// `_k2_daemon_base`: `BASE_URL` for `HOST` and `PORT` as the shell
+/// writes it: `https://<name>:PORT` for `HOST=https://<name>` (or
+/// `HTTPS://`, less one trailing `/`), else `http://HOST:PORT`, an IPv6
+/// address as it is.
+fn daemon_base(host: &str, port: &str) -> String {
+    match host
+        .strip_prefix("https://")
+        .or_else(|| host.strip_prefix("HTTPS://"))
+    {
+        Some(rest) => format!("https://{}:{port}", rest.strip_suffix('/').unwrap_or(rest)),
+        None => format!("http://{host}:{port}"),
+    }
+}
+
+#[cfg(unix)]
+/// Before anything is sent to `base`: R10's refusal for a URL the binary
+/// doesn't send to, and the refusal for a proxy setting it doesn't read.
+/// A port Python can't read, or no host, is Python's own failure at the
+/// request, as the shell's engine meets it.
+fn sendable(base: &str) -> Result<(), Stop> {
+    match pyurl::target(&format!("{base}/cli")) {
+        Ok(t) => engine::route_of(&t, base).map(|_| ()),
+        Err(pyurl::Miss::Unsendable) => Err(engine::unsendable(base)),
+        Err(_) => Ok(()),
+    }
+}
+
+#[cfg(unix)]
 /// The engine's options from the command line (`K2C_OPTS`).
 fn eopts(o: &Opts) -> EOpts {
     let list = |v: &[String]| v.iter().map(|x| s(x)).collect();
@@ -648,11 +641,14 @@ fn run_engine(
     let opener = crate::transport::urllib::Opener::from_client(client);
     let eo = eopts(o);
     let tty_on = crate::prompt::stderr_is_tty() && !eo.yes && tty::has_tty();
+    let local_url = daemon_base(&settings.host, settings.port_text.as_deref().unwrap_or(""));
+    if let Err(stop) = sendable(&local_url) {
+        return stopped(stop);
+    }
     let mut e = Engine {
-        local_url: opener.base(),
+        local_url,
         opener,
         remote_url: String::new(),
-        remote: None,
         remote_token: crate::prompt::Secret::default(),
         vsock: engine::vault_sock_path(&settings.home),
         k2_home: settings.home.clone(),
@@ -664,13 +660,8 @@ fn run_engine(
     };
     let with_remote = |e: &mut Engine, host: &str, saved: bool| -> Result<(), Exit> {
         let (url, tok) = clone_remote(host, saved, &explicit, &settings.home)?;
-        e.remote = rule::place(&url);
-        if e.remote.is_none() {
-            return Err(die(
-                "usage",
-                &format!("{url} isn't an address {} sends to itself", cli_name!()),
-                Exit::Usage,
-            ));
+        if let Err(stop) = sendable(&url) {
+            return Err(stopped(stop));
         }
         e.remote_url = url;
         e.remote_token = tok;
@@ -946,17 +937,13 @@ mod tests {
     fn remote_urls() {
         assert_eq!(remote_url("h.example/"), "https://h.example/");
         assert_eq!(remote_url("http://127.0.0.1:9/"), "http://127.0.0.1:9");
-        let o = run_of(parse(&["from", "https://h.example:ws1"])).1;
-        assert_eq!(
-            remote_of(&Sub::From, &o).as_deref(),
-            Some("https://h.example")
-        );
-        let pl = rule::place("http://[::1]:8080/k2").unwrap();
-        assert_eq!(
-            (pl.host.as_str(), pl.port, pl.prefix.as_str()),
-            ("::1", 8080, "/k2")
-        );
-        assert!(rule::place("https://h.example:x").is_none());
-        assert!(rule::place("https://h.example/?q").is_none());
+        #[cfg(unix)]
+        {
+            assert_eq!(daemon_base("127.0.0.1", "04100"), "http://127.0.0.1:04100");
+            assert_eq!(daemon_base("::1", "4100"), "http://::1:4100");
+            assert_eq!(daemon_base("https://box.example/", "443"), "https://box.example:443");
+            assert_eq!(daemon_base("HTTPS://Box", "9"), "https://Box:9");
+            assert_eq!(daemon_base("Https://box", "9"), "http://Https://box:9");
+        }
     }
 }

@@ -8,8 +8,12 @@
 //! No request follows a redirect: the answer's place is refused
 //! ([`redirect_line`]), as the shell's `_K2NoRedirect`.
 
+use super::pyurl::Target;
+use crate::transport::proxy::{self, Proxy};
 use crate::transport::urllib::{self, Answered, Outcome, Raised, Request};
+use crate::transport::wire::Failure;
 use std::io::{self, BufReader, Read, Write};
+use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
 /// How long each wait inside a read or write is, between looks for a stop.
@@ -106,16 +110,122 @@ fn url_error(r: Raised) -> Raised {
     }
 }
 
-/// One urllib request over TCP (TLS for `tls`) to `host:port`: `bytes`
-/// written, the answer read.
-pub fn over_tcp(host: &str, port: u16, tls: bool, bytes: &[u8], timeout: Duration) -> Sent {
-    let tcp = match urllib::connect(host, port, timeout) {
-        Ok(s) => s,
-        Err(r) => return raised(url_error(r)),
+/// The TCP connection urllib opens for `t`: straight there, or through
+/// `via`'s CONNECT tunnel (the shared path, [`proxy::tunnel_answered`]),
+/// each failure raised as Python's `http.client` raises it.
+fn open_tcp(
+    t: &Target,
+    via: Option<&Proxy>,
+    user_agent: &str,
+    timeout: Duration,
+) -> Result<TcpStream, Raised> {
+    let Some(p) = via else {
+        return urllib::connect(&t.host, t.port, timeout).map_err(url_error);
     };
-    let conn = if tls {
+    // curl's CONNECT head names an IPv6 address in brackets.
+    let authority = if t.host.contains(':') {
+        format!("[{}]", t.host)
+    } else {
+        t.host.clone()
+    };
+    let limit = Instant::now() + timeout;
+    let mut refused: Option<Raised> = None;
+    let r = proxy::tunnel_answered(p, &authority, t.port, user_agent, limit, |h, port, _| {
+        urllib::connect(h, port, timeout).map_err(|e| {
+            refused = Some(e);
+            Failure::NotSent(String::new())
+        })
+    });
+    match (r, refused) {
+        (Ok(s), _) => Ok(s),
+        (Err(_), Some(e)) => Err(url_error(e)),
+        (Err((Failure::ConnectTimedOut, _)), None) => Err(url_error(timed_out())),
+        (Err((Failure::Tunnel(why), got)), None) => Err(tunnel_refused(&got).unwrap_or_else(|| {
+            url_error(Raised {
+                class: urllib::Class::OsError("OSError"),
+                kind: urllib::Kind::Other,
+                reason: why,
+            })
+        })),
+        (Err((f, _)), None) => Err(url_error(Raised {
+            class: urllib::Class::OsError("OSError"),
+            kind: urllib::Kind::Other,
+            reason: format!("{f:?}"),
+        })),
+    }
+}
+
+fn timed_out() -> Raised {
+    Raised {
+        class: urllib::Class::TimeoutError,
+        kind: urllib::Kind::Timeout,
+        reason: "timed out".to_string(),
+    }
+}
+
+/// What `http.client`'s `_tunnel` raises for the proxy's answer `got`
+/// when the tunnel didn't open: nothing at all is `RemoteDisconnected`
+/// (a `URLError`); a first line that is not `HTTP/...` and a status
+/// in 100..=999 is `BadStatusLine` (out of urlopen); any other status is
+/// `OSError('Tunnel connection failed: <code> <reason>')` (a `URLError`).
+/// `None`: a 200 head cut short (the binary's own words then).
+fn tunnel_refused(got: &[u8]) -> Option<Raised> {
+    if got.is_empty() {
+        return Some(url_error(Raised {
+            class: urllib::Class::RemoteDisconnected,
+            kind: urllib::Kind::Dropped,
+            reason: "Remote end closed connection without response".to_string(),
+        }));
+    }
+    let end = got.iter().position(|b| *b == b'\n').map_or(got.len(), |i| i + 1);
+    let line: String = got[..end].iter().map(|b| char::from(*b)).collect();
+    let bad = || Raised {
+        class: urllib::Class::BadStatusLine,
+        kind: urllib::Kind::Other,
+        reason: line.clone(),
+    };
+    let mut words = line.split_ascii_whitespace();
+    let version = words.next().unwrap_or("");
+    let status = words.next().unwrap_or("");
+    let code = status.parse::<u32>().ok().filter(|_| version.starts_with("HTTP/"));
+    let Some(code) = code.filter(|c| (100..=999).contains(c)) else {
+        return Some(bad());
+    };
+    if code == 200 {
+        return None;
+    }
+    // `line.split(None, 2)`'s third part, `.strip()`ed.
+    let after = |t: &str| {
+        t.trim_start()
+            .split_once(char::is_whitespace)
+            .map_or("", |(_, rest)| rest)
+            .to_string()
+    };
+    let reason = after(&after(&line));
+    let reason = reason.trim();
+    Some(url_error(Raised {
+        class: urllib::Class::OsError("OSError"),
+        kind: urllib::Kind::Other,
+        reason: format!("Tunnel connection failed: {code} {reason}"),
+    }))
+}
+
+/// One urllib request to `t` (TLS for `https`), through `via` when the
+/// person's proxy carries it: `bytes` written, the answer read.
+pub fn over_tcp(
+    t: &Target,
+    via: Option<&Proxy>,
+    user_agent: &str,
+    bytes: &[u8],
+    timeout: Duration,
+) -> Sent {
+    let tcp = match open_tcp(t, via, user_agent, timeout) {
+        Ok(s) => s,
+        Err(r) => return raised(r),
+    };
+    let conn = if t.tls {
         let limit = Instant::now() + timeout;
-        match crate::transport::tls::connect(tcp, host, limit) {
+        match crate::transport::tls::connect(tcp, &t.host, limit) {
             Ok(s) => {
                 if let Err(e) = crate::transport::tls::stream_timeouts(&s, SLICE) {
                     return raised(url_error(urllib::os_error(&e)));
@@ -179,10 +289,15 @@ pub fn over_unix(path: &std::path::Path, bytes: &[u8], timeout: Duration) -> Res
 /// Wipes a request's body (a password may be in it) once it was sent.
 pub fn wipe(req: &mut Request) {
     if let Some(d) = req.data.as_mut() {
-        for b in d.iter_mut() {
-            // SAFETY: a volatile write into a live buffer.
-            unsafe { std::ptr::write_volatile(b, 0) };
-        }
+        wipe_bytes(d);
+    }
+}
+
+/// Wipes bytes that held a request (its body may hold a password).
+pub fn wipe_bytes(d: &mut [u8]) {
+    for b in d.iter_mut() {
+        // SAFETY: a volatile write into a live buffer.
+        unsafe { std::ptr::write_volatile(b, 0) };
     }
 }
 

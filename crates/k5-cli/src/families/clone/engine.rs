@@ -11,7 +11,8 @@
 //! key with no JSON value holding it, and wiped once sent.
 
 use super::net::{self, Sent};
-use super::rule::{self, Place};
+use super::pyurl::{self, Miss};
+use super::rule;
 use super::tty;
 use crate::families::heartbeat::py::{self as p, dget_v, index, iter};
 use crate::families::{ljust, s};
@@ -93,11 +94,10 @@ pub enum Which {
 }
 
 pub struct Engine {
-    /// `BASE_URL`.
+    /// `BASE_URL`, as the shell's `_k2_daemon_base` writes it.
     pub local_url: String,
     pub opener: Opener,
     pub remote_url: String,
-    pub remote: Option<Place>,
     pub remote_token: Secret,
     pub vsock: PathBuf,
     pub k2_home: PathBuf,
@@ -276,6 +276,34 @@ fn loads_or_error(raw: &[u8]) -> Value {
     }
 }
 
+/// R10's refusal: a URL the binary doesn't send to (nothing sent).
+pub fn unsendable(base: &str) -> Stop {
+    Stop::fail(
+        "usage",
+        format!("{base} isn't an address {} sends to itself", cli_name!()),
+        2,
+    )
+}
+
+/// The person's proxy for a request to `t` (K2's ruling R4: the shared
+/// CONNECT path, curl's rules), or the refusal for a proxy setting the
+/// binary doesn't read (nothing sent).
+pub fn route_of(t: &pyurl::Target, base: &str) -> E<Option<crate::transport::proxy::Proxy>> {
+    use crate::transport::proxy::Route;
+    match crate::transport::remote::python_route(&t.host, t.tls) {
+        Route::Direct => Ok(None),
+        Route::Via(p) => Ok(Some(p)),
+        Route::Shell => Err(Stop::fail(
+            "usage",
+            format!(
+                "{} won't send to {base}: a proxy setting it doesn't read (an http:// proxy only)",
+                cli_name!()
+            ),
+            2,
+        )),
+    }
+}
+
 impl Engine {
     fn json_out(&self) -> bool {
         self.opts.json
@@ -335,16 +363,33 @@ impl Engine {
             .filter(|(_, v)| !matches!(v, Value::Null))
             .map(|(k, v)| (k.to_string(), st(v)))
             .collect();
+        let unreachable = |reason: &str| {
+            Stop::fail(
+                "daemon_unreachable",
+                format!("{name} server {base}: {reason}"),
+                3,
+            )
+        };
+        // `base + route + ("?" + urlencode(q) if q else "")`, read as
+        // urllib reads it.
+        let mut full = format!("{base}{route}");
+        if !q.is_empty() {
+            full.push('?');
+            full.push_str(&urllib::urlencode(&q));
+        }
+        let t = match pyurl::target(&full) {
+            Ok(t) => t,
+            Err(Miss::NoHost) => return Err(unreachable("no host given")),
+            Err(Miss::Raised(e)) => return Err(Stop::Raised(e)),
+            Err(Miss::Unsendable) => return Err(unsendable(&base)),
+        };
+        let via = route_of(&t, &base)?;
         let timeout_d = Duration::from_secs(timeout);
         let token = match w {
             Which::Local => self.opener.token().map(str::to_string).unwrap_or_default(),
             Which::Remote => String::from_utf8_lossy(self.remote_token.expose()).into_owned(),
         };
-        let route_full = match (w, &self.remote) {
-            (Which::Remote, Some(pl)) => format!("{}{route}", pl.prefix),
-            _ => route.to_string(),
-        };
-        let mut req = Request::new(method, route_full, timeout_d).query(q);
+        let mut req = Request::new(method, t.selector.clone(), timeout_d);
         if method == Method::Post {
             req = req.data(data.unwrap_or_else(|| b"{}".to_vec()));
         }
@@ -355,27 +400,23 @@ impl Engine {
         if !token.is_empty() {
             req = req.header("Authorization", format!("Bearer {token}"));
         }
-        let sent = match w {
+        let mut bytes = match w {
             Which::Local => {
-                let bytes = self.opener.encode(&req);
-                net::over_tcp(
-                    &self.opener.host,
-                    self.opener.port,
-                    false,
-                    &bytes,
-                    timeout_d,
-                )
+                let mut op = self.opener.clone();
+                op.netloc = t.host_header.clone();
+                op.encode(&req)
             }
-            Which::Remote => {
-                let pl = self
-                    .remote
-                    .as_ref()
-                    .ok_or_else(|| Stop::fail("usage", "no remote server", 2))?;
-                let bytes = urllib::encode_plain(&pl.netloc, &req);
-                net::over_tcp(&pl.host, pl.port, pl.tls, &bytes, timeout_d)
-            }
+            Which::Remote => urllib::encode_plain(&t.host_header, &req),
         };
+        let sent = net::over_tcp(
+            &t,
+            via.as_ref(),
+            &self.opener.user_agent,
+            &bytes,
+            timeout_d,
+        );
         net::wipe(&mut req);
+        net::wipe_bytes(&mut bytes);
         let a = match sent {
             Sent::Stopped => return Err(tty::take().unwrap_or(Stop::Cancelled)),
             Sent::Done(a) => a,
@@ -383,13 +424,6 @@ impl Engine {
         if w == Which::Local {
             crate::transport::skew::note(&self.version, a.server_version.as_deref());
         }
-        let unreachable = |reason: &str| {
-            Stop::fail(
-                "daemon_unreachable",
-                format!("{name} server {base}: {reason}"),
-                3,
-            )
-        };
         let (status, raw) = match a.outcome {
             Outcome::Answer { status, body } => match body {
                 Ok(b) => (status, b),

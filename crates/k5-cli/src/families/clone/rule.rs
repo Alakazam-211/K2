@@ -159,68 +159,6 @@ pub fn url_refusal(url: &str, password: bool) -> Option<String> {
     ))
 }
 
-/// Where the remote server is: its URL read as urllib reads it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Place {
-    pub tls: bool,
-    /// The host to connect to (an IPv6 address without its brackets).
-    pub host: String,
-    pub port: u16,
-    /// The URL's netloc as written: urllib's `Host` header.
-    pub netloc: String,
-    /// The URL's path, put before each route (`base + route`).
-    pub prefix: String,
-}
-
-/// `url` (`http://` or `https://`, no user part) as urllib sends to it.
-/// `None`: a form the binary doesn't send to itself (a query or fragment,
-/// a port that is not a number, a byte outside printable ASCII).
-pub fn place(url: &str) -> Option<Place> {
-    if !url.bytes().all(|b| (0x21..0x7f).contains(&b)) || url.contains(['?', '#', '%', '\\']) {
-        return None;
-    }
-    let u = urlsplit(url)?;
-    let tls = match u.scheme.as_str() {
-        "https" => true,
-        "http" => false,
-        _ => return None,
-    };
-    if u.netloc.is_empty() || u.netloc.contains('@') {
-        return None;
-    }
-    let (host, port) = if let Some(rest) = u.netloc.strip_prefix('[') {
-        let (h, after) = rest.split_once(']')?;
-        (h.to_string(), after.strip_prefix(':').unwrap_or(after))
-    } else {
-        match u.netloc.split_once(':') {
-            Some((h, p)) => (h.to_string(), p),
-            None => (u.netloc.clone(), ""),
-        }
-    };
-    let port = if port.is_empty() {
-        if tls {
-            443
-        } else {
-            80
-        }
-    } else {
-        if !port.bytes().all(|b| b.is_ascii_digit()) {
-            return None;
-        }
-        port.parse().ok()?
-    };
-    if host.is_empty() {
-        return None;
-    }
-    Some(Place {
-        tls,
-        host,
-        port,
-        netloc: u.netloc,
-        prefix: u.path,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

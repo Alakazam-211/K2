@@ -1,7 +1,7 @@
 //! `k5 daemon status [--json]`, as the shell CLI's `cmd_daemon_status`
 //! answers it (`cli/src/daemon.sh`): what this machine's daemon service
-//! is doing. `k5 daemon` alone ends with 1 and prints nothing, as the
-//! shell's router does (its `shift 2` fails under `set -e`). `start`,
+//! is doing. `k5 daemon` alone is `daemon status`, as the shell's router
+//! takes `status` for a missing or empty word. `start`,
 //! `stop`, `restart`, `survive`, `log`, `uninstall` and the usage for any
 //! other word are [`life`]'s; `install` is [`install`]'s.
 //!
@@ -49,14 +49,24 @@ pub const VERBS: &[Verb] = &[];
 
 /// What the words ask for.
 enum Ask {
-    /// The noun alone.
-    Bare,
     /// `status`, and whether `--json` follows it.
     Status(bool),
     /// A verb of [`life`]'s.
     Life(life::Life),
     /// `install` and the words after it.
     Install(Vec<String>),
+}
+
+/// The router's daemon arm: what the words after the noun ask for, or
+/// `None` when the shell answers ([`life::parse`]'s). `${2:-status}`: no
+/// word, or an empty one, is the status.
+fn ask(words: &[&str]) -> Option<Ask> {
+    Some(match words {
+        [] => Ask::Status(false),
+        ["status" | "", rest @ ..] => Ask::Status(rest.first() == Some(&"--json")),
+        ["install", rest @ ..] => Ask::Install(rest.iter().map(|w| w.to_string()).collect()),
+        [verb, rest @ ..] => Ask::Life(life::parse(verb, rest)?),
+    })
 }
 
 /// `daemon`'s tool in the shell's policy.
@@ -77,12 +87,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
         return None;
     }
-    let ask = match words.as_slice() {
-        [] => Ask::Bare,
-        ["status", rest @ ..] => Ask::Status(rest.first() == Some(&"--json")),
-        ["install", rest @ ..] => Ask::Install(rest.iter().map(|w| w.to_string()).collect()),
-        [verb, rest @ ..] => Ask::Life(life::parse(verb, rest)?),
-    };
+    let ask = ask(&words)?;
     if !python::family_native(python::here()) {
         return None;
     }
@@ -121,9 +126,6 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         return Some(stop);
     }
     match ask {
-        // The router's `shift 2` with the noun alone fails under `set -e`
-        // (a bash bug, copied): exit 1, nothing printed.
-        Ask::Bare => Some(Exit::Error),
         Ask::Status(json) => Some(status(&settings, json, would_refuse).print()),
         Ask::Install(words) => install::run(&settings, &words),
         Ask::Life(v) => {
@@ -294,6 +296,18 @@ fn ptyd_lines(o: &mut String, p: &Option<(String, String)>) {
     }
 }
 
+/// `_daemon_status_json KEY VALUE ...`: one line of JSON, every value a
+/// string written as `_setup_jstr` writes it, so a quote, a backslash or
+/// a newline in a path, a unit or the daemon's answer stays valid JSON.
+/// Plain values give the shell's old `printf '%s'` bytes.
+pub fn json_line(pairs: &[(&str, &str)]) -> String {
+    let body: Vec<String> = pairs
+        .iter()
+        .map(|(k, v)| format!("\"{k}\":{}", crate::families::setup::jstr(v)))
+        .collect();
+    format!("{{{}}}\n", body.join(","))
+}
+
 /// `cmd_daemon_status [--json]`.
 pub fn status(s: &Settings, json: bool, would_refuse: bool) -> Shown {
     let home = &s.home;
@@ -320,11 +334,18 @@ pub fn status(s: &Settings, json: bool, would_refuse: bool) -> Shown {
         let p = ptyd(s, &port, would_refuse);
         if json {
             let (pl, pa) = p.clone().unwrap_or_default();
-            return Shown::out(format!(
-                "{{\"installed\":\"{}\",\"running\":\"{}\",\"pid\":\"{pid}\",\"port\":\"{port}\",\"token\":\"{token}\",\"unit\":\"{unit}\",\"scope\":\"{scope}\",\"log\":\"{log}\",\"ptyd\":\"{pl}\",\"adopted\":\"{pa}\"}}\n",
-                if unit.is_empty() { "no" } else { "yes" },
-                if active == "active" { "yes" } else { "no" },
-            ));
+            return Shown::out(json_line(&[
+                ("installed", if unit.is_empty() { "no" } else { "yes" }),
+                ("running", if active == "active" { "yes" } else { "no" }),
+                ("pid", pid.as_str()),
+                ("port", port.as_str()),
+                ("token", token),
+                ("unit", unit.as_str()),
+                ("scope", scope.as_str()),
+                ("log", &*log),
+                ("ptyd", pl.as_str()),
+                ("adopted", pa.as_str()),
+            ]));
         }
         let mut o = format!("{PRODUCT} Daemon\n");
         if unit.is_empty() {
@@ -384,10 +405,18 @@ pub fn status(s: &Settings, json: bool, would_refuse: bool) -> Shown {
     let plist = plist.to_string_lossy();
     if json {
         let (pl, pa) = p.clone().unwrap_or_default();
-        return Shown::out(format!(
-            "{{\"installed\":\"{installed}\",\"running\":\"{running}\",\"pid\":\"{pid}\",\"port\":\"{port}\",\"token\":\"{}\",\"last_exit_code\":\"{last_exit}\",\"plist\":\"{plist}\",\"log\":\"{log}\",\"ptyd\":\"{pl}\",\"adopted\":\"{pa}\"}}\n",
-            if token { "yes" } else { "no" }
-        ));
+        return Shown::out(json_line(&[
+            ("installed", installed),
+            ("running", running),
+            ("pid", pid.as_str()),
+            ("port", port.as_str()),
+            ("token", if token { "yes" } else { "no" }),
+            ("last_exit_code", last_exit.as_str()),
+            ("plist", &*plist),
+            ("log", &*log),
+            ("ptyd", pl.as_str()),
+            ("adopted", pa.as_str()),
+        ]));
     }
     let mut o = format!("{PRODUCT} Daemon\n  Installed:     {installed}  ({plist})\n");
     o.push_str(&format!(
@@ -438,4 +467,62 @@ fn awk_value(text: &str, key: &str, tidy: impl Fn(&str) -> String) -> String {
         return tidy(field);
     }
     String::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::out::json::Text;
+
+    fn status_of(words: &[&str]) -> Option<bool> {
+        match ask(words) {
+            Some(Ask::Status(json)) => Some(json),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn the_noun_alone_or_an_empty_word_is_the_status() {
+        assert_eq!(status_of(&[]), Some(false));
+        assert_eq!(status_of(&[""]), Some(false));
+        assert_eq!(status_of(&["", "--json"]), Some(true));
+        assert_eq!(status_of(&["status"]), Some(false));
+        assert_eq!(status_of(&["status", "--json"]), Some(true));
+        assert_eq!(status_of(&["status", "x", "--json"]), Some(false));
+        // `--json` alone is no verb: the usage, as the shell's `*)` arm.
+        assert!(matches!(ask(&["--json"]), Some(Ask::Life(life::Life::Usage))));
+    }
+
+    #[test]
+    fn plain_values_give_the_shell_s_old_bytes() {
+        assert_eq!(
+            json_line(&[("installed", "yes"), ("pid", "4242"), ("port", "")]),
+            "{\"installed\":\"yes\",\"pid\":\"4242\",\"port\":\"\"}\n"
+        );
+    }
+
+    #[test]
+    fn odd_values_stay_valid_json_and_read_back_as_given() {
+        let odd = [
+            ("pid", "42\"4\\2"),
+            ("ptyd", "on \"q\" back\\slash\nline two"),
+            ("port", "12\"3\\4"),
+            ("log", "/h/ho\"me\\x/.k2/daemon.stdout.log\t\u{1}"),
+        ];
+        let line = json_line(&odd);
+        assert!(line.ends_with('\n') && !line[..line.len() - 1].contains('\n'));
+        assert_eq!(
+            line,
+            "{\"pid\":\"42\\\"4\\\\2\",\"ptyd\":\"on \\\"q\\\" back\\\\slash\\nline two\",\"port\":\"12\\\"3\\\\4\",\"log\":\"/h/ho\\\"me\\\\x/.k2/daemon.stdout.log\\t\\u0001\"}\n"
+        );
+        let Ok(Value::Object(pairs)) = loads(line.trim_end()) else {
+            panic!("not a JSON object: {line}");
+        };
+        for (k, v) in odd {
+            match crate::families::get(&pairs, k) {
+                Some(Value::Str(got)) => assert_eq!(*got, Text::from(v), "{k}"),
+                other => panic!("{k}: {other:?}"),
+            }
+        }
+    }
 }

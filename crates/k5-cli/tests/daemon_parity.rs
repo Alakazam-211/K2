@@ -146,19 +146,31 @@ fn daemon_status_answers_as_the_shell_does() {
     let ptyd = || ok(r#"{"ptyd":"on\tnow","adopted":3}"#);
     let v = vec![
         // covers: daemon
-        // A bash bug, copied: the router's `shift 2` with the noun alone
-        // fails under `set -e` (cli/src/router.sh, the daemon arm), so
-        // `daemon` alone ends with 1 and prints nothing.
+        // The router takes `status` for a missing word (0.46.17: its
+        // status arm shifts the one word there is).
         with(
             env(&rig, "user-unit"),
             case(
-                "daemon alone: the router's shift 2 ends it",
+                "daemon alone: the status",
                 &[],
                 &[],
-                vec![],
+                vec![ptyd()],
                 files,
-                1,
                 0,
+                1,
+            ),
+        ),
+        // An empty word is `${2:-status}` too, `--json` after it read.
+        with(
+            env(&rig, "user-unit"),
+            case(
+                "an empty word, then --json: the status as JSON",
+                &["", "--json"],
+                &[],
+                vec![ptyd()],
+                files,
+                0,
+                1,
             ),
         ),
         with(
@@ -249,6 +261,75 @@ fn daemon_status_answers_as_the_shell_does() {
     for c in v {
         check_on_own_port(&rig, &c);
     }
+}
+
+/// A PID with a quote and a backslash, on the stand-ins' unit line (the
+/// stand-in's `read` takes `\\` as one backslash).
+fn odd_pid_files(r: &Rig) {
+    files(r);
+    std::fs::write(
+        r.dir.join("odd-unit"),
+        "user k2-daemon.service active 42\"4\\\\2\n",
+    )
+    .unwrap();
+    std::fs::write(
+        r.dir.join("launchd"),
+        "gui/501/dev.k2.daemon = {\n\tpid = 42\"4\\2\n\tlast exit code = 1 \"x\\y\"\n}\n",
+    )
+    .unwrap();
+}
+
+/// A port file with a quote and a backslash: no probe.
+fn odd_port_file(r: &Rig) {
+    files(r);
+    std::fs::write(r.k2home.join("daemon.port"), "12\"3\\4\n").unwrap();
+}
+
+/// `status --json` escapes its values (0.46.17, `_daemon_status_json`):
+/// a quote, a backslash and a newline stay valid JSON, on both sides.
+#[test]
+fn daemon_status_json_escapes_its_values() {
+    let rig = rig("json-escape");
+    let v = vec![
+        // covers: daemon status --json
+        with(
+            env(&rig, "odd-unit"),
+            case(
+                "a PID, an exit code and a ptyd answer with a quote, a backslash and a newline",
+                &["status", "--json"],
+                &[],
+                vec![ok(r#"{"ptyd":"on \"q\" back\\slash\nline two","adopted":2}"#)],
+                odd_pid_files,
+                0,
+                1,
+            ),
+        ),
+        odd_port(&rig),
+    ];
+    for c in v {
+        check_on_own_port(&rig, &c);
+    }
+    // The binary's answer is one line of JSON holding the port as given.
+    let (out, _) = rig.binary(&odd_port(&rig), false);
+    assert_eq!(out.code, Some(0), "{}", out.stderr);
+    let line = out.stdout.strip_suffix('\n').expect("a line");
+    assert!(!line.contains('\n'), "{line}");
+    assert!(line.contains(r#""port":"12\"3\\4""#), "{line}");
+}
+
+fn odd_port(rig: &Rig) -> Case {
+    with(
+        env(rig, "user-unit"),
+        case(
+            "a port file with a quote and a backslash",
+            &["status", "--json"],
+            &[],
+            vec![],
+            odd_port_file,
+            0,
+            0,
+        ),
+    )
 }
 
 #[test]

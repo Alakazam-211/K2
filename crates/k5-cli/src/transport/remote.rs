@@ -85,7 +85,13 @@ pub fn base(host: &str) -> Option<Base> {
 /// environment as curl reads it ([`proxy::decide`]). `None`: the shell's
 /// (a URL [`base`] doesn't read, or a proxy setting the binary doesn't).
 pub fn routed(host: &str) -> Option<Base> {
-    routed_with(host, proxy::from_process_env)
+    routed_with(host, process_env)
+}
+
+/// The process environment, as curl reads it: the one place this module
+/// reads it ([`routed`], [`python_route`]).
+fn process_env(name: &str) -> Lookup {
+    proxy::from_process_env(name)
 }
 
 /// [`routed`] with the variables from `env` (the tests' tables).
@@ -115,12 +121,12 @@ pub fn routed_with(host: &str, env: impl Fn(&str) -> Lookup) -> Option<Base> {
 pub fn python_route(host: &str, https: bool) -> Route {
     let h = host.trim_end_matches('.').to_ascii_lowercase();
     let Ok(v6) = h.parse::<std::net::Ipv6Addr>() else {
-        return proxy::decide(&h, https, proxy::from_process_env);
+        return proxy::decide(&h, https, process_env);
     };
     if !https || v6.is_loopback() {
         return Route::Direct;
     }
-    let env = proxy::from_process_env;
+    let env = process_env;
     let raw = match proxy::proxy_setting(true, &env) {
         Ok(Some(raw)) => raw,
         Ok(None) => return Route::Direct,

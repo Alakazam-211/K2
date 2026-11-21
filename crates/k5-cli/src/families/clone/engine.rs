@@ -408,13 +408,7 @@ impl Engine {
             }
             Which::Remote => urllib::encode_plain(&t.host_header, &req),
         };
-        let sent = net::over_tcp(
-            &t,
-            via.as_ref(),
-            &self.opener.user_agent,
-            &bytes,
-            timeout_d,
-        );
+        let sent = net::over_tcp(&t, via.as_ref(), &self.opener.user_agent, &bytes, timeout_d);
         net::wipe(&mut req);
         net::wipe_bytes(&mut bytes);
         let a = match sent {

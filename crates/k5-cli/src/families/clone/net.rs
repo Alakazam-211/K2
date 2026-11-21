@@ -140,13 +140,15 @@ fn open_tcp(
         (Ok(s), _) => Ok(s),
         (Err(_), Some(e)) => Err(url_error(e)),
         (Err((Failure::ConnectTimedOut, _)), None) => Err(url_error(timed_out())),
-        (Err((Failure::Tunnel(why), got)), None) => Err(tunnel_refused(&got).unwrap_or_else(|| {
-            url_error(Raised {
-                class: urllib::Class::OsError("OSError"),
-                kind: urllib::Kind::Other,
-                reason: why,
-            })
-        })),
+        (Err((Failure::Tunnel(why), got)), None) => {
+            Err(tunnel_refused(&got).unwrap_or_else(|| {
+                url_error(Raised {
+                    class: urllib::Class::OsError("OSError"),
+                    kind: urllib::Kind::Other,
+                    reason: why,
+                })
+            }))
+        }
         (Err((f, _)), None) => Err(url_error(Raised {
             class: urllib::Class::OsError("OSError"),
             kind: urllib::Kind::Other,
@@ -177,7 +179,10 @@ fn tunnel_refused(got: &[u8]) -> Option<Raised> {
             reason: "Remote end closed connection without response".to_string(),
         }));
     }
-    let end = got.iter().position(|b| *b == b'\n').map_or(got.len(), |i| i + 1);
+    let end = got
+        .iter()
+        .position(|b| *b == b'\n')
+        .map_or(got.len(), |i| i + 1);
     let line: String = got[..end].iter().map(|b| char::from(*b)).collect();
     let bad = || Raised {
         class: urllib::Class::BadStatusLine,
@@ -187,7 +192,10 @@ fn tunnel_refused(got: &[u8]) -> Option<Raised> {
     let mut words = line.split_ascii_whitespace();
     let version = words.next().unwrap_or("");
     let status = words.next().unwrap_or("");
-    let code = status.parse::<u32>().ok().filter(|_| version.starts_with("HTTP/"));
+    let code = status
+        .parse::<u32>()
+        .ok()
+        .filter(|_| version.starts_with("HTTP/"));
     let Some(code) = code.filter(|c| (100..=999).contains(c)) else {
         return Some(bad());
     };

@@ -114,7 +114,11 @@ pub fn target(url: &str) -> Result<Target, Miss> {
         Some(i) if i > 0 && url.as_bytes()[i] == b':' => {
             (url[..i].to_ascii_lowercase(), &url[i + 1..])
         }
-        _ => return Err(Miss::Raised(format!("ValueError: unknown url type: '{url}'"))),
+        _ => {
+            return Err(Miss::Raised(format!(
+                "ValueError: unknown url type: '{url}'"
+            )))
+        }
     };
     // `_splithost`: `//([^/#?]*)(.*)`.
     let Some(after) = rest.strip_prefix("//") else {
@@ -193,11 +197,23 @@ mod tests {
     fn as_urllib_reads_it() {
         assert_eq!(
             t("https://h.example/cli/x?a=1"),
-            (true, "h.example", 443, "h.example".into(), "/cli/x?a=1".into())
+            (
+                true,
+                "h.example",
+                443,
+                "h.example".into(),
+                "/cli/x?a=1".into()
+            )
         );
         assert_eq!(
             t("http://127.0.0.1:04100/cli/x"),
-            (false, "127.0.0.1", 4100, "127.0.0.1:04100".into(), "/cli/x".into())
+            (
+                false,
+                "127.0.0.1",
+                4100,
+                "127.0.0.1:04100".into(),
+                "/cli/x".into()
+            )
         );
         // A query in the base: the route rides in it.
         assert_eq!(
@@ -210,7 +226,13 @@ mod tests {
         // `%` escapes: decoded in the host and the Host header only.
         assert_eq!(
             t("https://h%2Eexample:8443/p%41/cli"),
-            (true, "h.example", 8443, "h.example:8443".into(), "/p%41/cli".into())
+            (
+                true,
+                "h.example",
+                8443,
+                "h.example:8443".into(),
+                "/p%41/cli".into()
+            )
         );
         // Ports as `int()` reads them; an empty one is the scheme's.
         assert_eq!(t("https://h.example:+44_3/cli").2, 443);

@@ -250,7 +250,7 @@ fn thread_of(path: Option<&str>, named: Option<&str>) -> Result<String, VaultErr
         return Ok(ws);
     }
     let start = path.map(str::trim).filter(|p| !p.is_empty()).ok_or_else(|| {
-        no(format!("no workspace to put the phone card on: run it from a workspace folder, or set K2_VAULT_CONFIRM_THREAD=<workspace> (any workspace with a Thread)"))
+        no("no workspace to put the phone card on: run it from a workspace folder, or set K2_VAULT_CONFIRM_THREAD=<workspace> (any workspace with a Thread)".to_string())
     })?;
     let mut at = Some(std::path::Path::new(start));
     while let Some(p) = at {

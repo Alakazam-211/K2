@@ -867,7 +867,8 @@ mod tests {
             Some(Err(Stop::need_value("--limit")))
         );
         assert_eq!(p(&["nope"]), Some(Err(Stop::usage(usage::GUEST))));
-        assert_eq!(p(&[]), None);
+        assert_eq!(p(&[]), Some(Ok(Ask::Usage)));
+        assert_eq!(p(&[""]), Some(Ok(Ask::Usage)));
         assert_eq!(p(&["rooms", "a", "-h"]), None);
     }
 

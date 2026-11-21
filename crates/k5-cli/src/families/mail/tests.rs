@@ -3414,10 +3414,20 @@ mod hostmail_words {
         }
     }
 
-    /// `--text -` and a `--days` bash can't read are the shell's.
+    /// A `--days` bash can't read is the shell's. `--text -` is the
+    /// binary's: the verb reads stdin when it runs.
     #[test]
     fn the_shell_answers_what_it_alone_can() {
-        assert_eq!(parse("ooo", &["set", "a", "--text", "-"]), Plan::Shell);
+        for (verb, words) in [
+            ("ooo", &["set", "a", "--text", "-"][..]),
+            ("footer", &["set", "--text", "-"]),
+        ] {
+            let got = format!("{:?}", parse(verb, words));
+            assert!(
+                got.starts_with("Run(") && got.contains(r#"("M_TEXT_STDIN", "1")"#),
+                "{verb} {words:?}: {got}"
+            );
+        }
         assert_eq!(
             parse(
                 "ooo",
@@ -3425,7 +3435,6 @@ mod hostmail_words {
             ),
             Plan::Shell
         );
-        assert_eq!(parse("footer", &["set", "--text", "-"]), Plan::Shell);
         assert_eq!(
             parse("config", &["--relay-port", "99999999999999999999"]),
             Plan::Shell

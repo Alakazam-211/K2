@@ -977,7 +977,15 @@ fn organization_alone_is_the_help_page() {
             0,
             0,
         ),
-        session(case("alone in a session", &[], &[], vec![], port_only, 0, 0)),
+        session(case(
+            "alone in a session",
+            &[],
+            &[],
+            vec![],
+            port_only,
+            0,
+            0,
+        )),
         case(
             "alone: the virtual desktop's guard",
             &[],

@@ -950,7 +950,8 @@ fn compute_wait_failures() {
     let p1 = page(10, &[LOG1, LOG2], "[]");
     let p2 = page(10, &[], "[]");
     let failed = r#"{"id":"abcd1234ffff","short":"abcd1234","state":"done","node":"mini","exitCode":1,"startedAt":1000,"endedAt":1125}"#;
-    let worked = r#"{"id":"bbbb2222cccc","short":"bbbb2222","state":"done","node":"n2","exitCode":0}"#;
+    let worked =
+        r#"{"id":"bbbb2222cccc","short":"bbbb2222","state":"done","node":"n2","exitCode":0}"#;
     let v = vec![
         // native: compute wait --failures
         case(

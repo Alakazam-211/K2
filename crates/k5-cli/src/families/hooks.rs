@@ -886,7 +886,10 @@ mod tests {
             .map(str::to_string)
             .collect();
         assert_eq!(stop(&["emit"]), (page.clone(), Exit::Usage));
-        assert_eq!(stop(&["emit", "-q", "--json", "{}"]), (page.clone(), Exit::Usage));
+        assert_eq!(
+            stop(&["emit", "-q", "--json", "{}"]),
+            (page.clone(), Exit::Usage)
+        );
         let mut unknown = vec!["Error: unknown flag --x".to_string()];
         unknown.extend(page);
         assert_eq!(stop(&["emit", "Stop", "--x"]), (unknown, Exit::Usage));
@@ -904,7 +907,9 @@ mod tests {
         );
         assert_eq!(
             stop(&["emit", "Nope"]).0,
-            [format!("Error: unknown event 'Nope'. One of: {EMIT_EVENTS}")]
+            [format!(
+                "Error: unknown event 'Nope'. One of: {EMIT_EVENTS}"
+            )]
         );
         // An empty value is a value (`[ $# -ge 2 ]`).
         assert_eq!(parse(&["emit", "--json", "", "Stop"]), Some(Ask::Emit));

@@ -393,10 +393,7 @@ fn ooo_get_py(py_: &mut Py) -> R<()> {
 }
 
 fn ooo_set_py(py_: &mut Py) -> R<()> {
-    let mut body = vec![
-        ("address", sv(py_.env("M_ADDRESS"))),
-        ("text", text(py_)),
-    ];
+    let mut body = vec![("address", sv(py_.env("M_ADDRESS"))), ("text", text(py_))];
     if !py_.env("M_DAYS").is_empty() {
         let n = p::py_int(&sv(py_.env("M_DAYS"))).at(line::OOO_SET_DAYS, MODULE)?;
         body.push(("days", Value::Int(n)));

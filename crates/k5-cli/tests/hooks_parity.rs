@@ -640,8 +640,24 @@ fn hooks_emit_stops_as_the_shell_does() {
     let rig = Rig::new("hooks", "emit");
     let v = vec![
         // native: hooks emit
-        case("emit alone: the page", &["emit"], &[], vec![], owner_and_port, 2, 0),
-        case("emit alone, no daemon", &["emit"], &[], vec![], nothing, 2, 0),
+        case(
+            "emit alone: the page",
+            &["emit"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "emit alone, no daemon",
+            &["emit"],
+            &[],
+            vec![],
+            nothing,
+            2,
+            0,
+        ),
         case(
             "emit, an unknown flag",
             &["emit", "Stop", "--x"],
@@ -783,7 +799,15 @@ fn the_lines_say_the_brand_s_name() {
 fn the_emit_session_lines_say_the_brand_s_name() {
     let rig = Rig::new("hooks", "emitbrand");
     let cli = k2_client::brand::CLI_NAME;
-    let c = case("brand", &["emit", "Stop"], &[], vec![], owner_and_port, 3, 0);
+    let c = case(
+        "brand",
+        &["emit", "Stop"],
+        &[],
+        vec![],
+        owner_and_port,
+        3,
+        0,
+    );
     let (out, log) = rig.binary(&c, false);
     assert!(
         out.stderr

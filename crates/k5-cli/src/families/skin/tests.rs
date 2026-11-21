@@ -67,7 +67,10 @@ fn user_chat_and_copy_host_are_the_app_code_s() {
         [USER_ROLE_ERR]
     );
     assert_eq!(ask(&["user", "chat", "bob", "-h"]), Ok(Ask::Shell));
-    assert_eq!(ask(&["grant", "copy-host", "acme", "--help"]), Ok(Ask::Shell));
+    assert_eq!(
+        ask(&["grant", "copy-host", "acme", "--help"]),
+        Ok(Ask::Shell)
+    );
 }
 
 #[test]

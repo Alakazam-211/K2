@@ -892,15 +892,16 @@ fn settings(ctx: &mut Ctx, rest: &[&str]) -> Exit {
     }
 }
 
+/// One `_sf_settings_call`: POST or not, the payload; the body on a 200,
+/// else its end (its lines printed).
+pub type SettingsCall<'a> = dyn FnMut(bool, &str) -> Result<Vec<u8>, Exit> + 'a;
+
 /// `_sf_settings_run`'s calls for `a`, each one `call(post, payload)` on
 /// the settings route (`_sf_settings_call`: an `Err` is its end, its
 /// lines printed): a read; or a write, after a read that tells an older
 /// server apart when the words need a 0.46.17 one (that older server is
 /// its line, exit 1, nothing changed). The last call's body.
-pub fn settings_calls(
-    a: &SettingsAsk,
-    call: &mut dyn FnMut(bool, &str) -> Result<Vec<u8>, Exit>,
-) -> Result<Vec<u8>, Exit> {
+pub fn settings_calls(a: &SettingsAsk, call: &mut SettingsCall<'_>) -> Result<Vec<u8>, Exit> {
     let writes =
         a.enabled.is_some() || a.agents.is_some() || a.agent_diag.is_some() || a.attach.is_some();
     if !writes {

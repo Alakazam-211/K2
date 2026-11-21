@@ -124,13 +124,12 @@ pub fn run(ctx: &mut Ctx, a: &Ask) -> Answer {
 pub fn lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
     let v = py::load(body, 3)?;
     let scope = py::or(py::dget(&v, "scope", 4)?, py::text("no chat"));
-    let state = if py::truthy(&py::dget(&v, "enabled", 5)?)
-        || !py::truthy(&py::dget(&v, "scope", 5)?)
-    {
-        ""
-    } else {
-        "  [switched off by the owner]"
-    };
+    let state =
+        if py::truthy(&py::dget(&v, "enabled", 5)?) || !py::truthy(&py::dget(&v, "scope", 5)?) {
+            ""
+        } else {
+            "  [switched off by the owner]"
+        };
     let managed = py::or(py::dget(&v, "managedBy", 6)?, py::text(""));
     let by = py::word_for(
         &[
@@ -163,7 +162,8 @@ pub fn lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
             max
         ));
     }
-    let has_changed = matches!(&v, Value::Object(pairs) if crate::families::get(pairs, "changed").is_some());
+    let has_changed =
+        matches!(&v, Value::Object(pairs) if crate::families::get(pairs, "changed").is_some());
     if has_changed && !py::truthy(&py::dget(&v, "changed", 10)?) {
         line.push_str("  (unchanged)");
     }

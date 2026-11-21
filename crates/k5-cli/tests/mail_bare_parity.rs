@@ -115,8 +115,9 @@ fn the_unknown_command_line_says_the_brand_s_name() {
     let c = case("brand", &["--json"], &[], vec![], owner_and_port, 2, 0);
     let (out, log) = rig.binary(&c, false);
     assert!(
-        out.stderr
-            .contains(&format!("unknown command '--json' \u{2014} see {cli} mail --help")),
+        out.stderr.contains(&format!(
+            "unknown command '--json' \u{2014} see {cli} mail --help"
+        )),
         "{}",
         out.stderr
     );

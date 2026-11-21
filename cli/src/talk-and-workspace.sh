@@ -2148,22 +2148,53 @@ cmd_api() {
         on|off)
             local val="true"
             [[ "$sub" == "off" ]] && val="false"
-            cli_post_json "/cli/settings/update" "{\"apiEnabled\":${val}}" | python3 -c "
-import json, sys
-raw = sys.stdin.read()
+            local resp saved
+            resp="$(cli_post_json "/cli/settings/update" "{\"apiEnabled\":${val}}")"
+            saved="$(K2_API_RESP="$resp" python3 -c '
+import json, os, sys
+raw = os.environ.get("K2_API_RESP", "")
 try:
     d = json.loads(raw)
 except Exception:
-    print('Error: daemon returned an unparseable response: %r' % raw[:200])
+    print("Error: daemon returned an unparseable response: %r" % raw[:200])
     sys.exit(1)
-if 'error' in d:
-    print('Error: %s' % d['error'])
+if "error" in d:
+    print("Error: %s" % d["error"])
     sys.exit(1)
-on = bool(d.get('apiEnabled'))
-print('Public /v1 API setting: %s (live now — no restart needed)' % ('ON' if on else 'OFF'))
-if not on:
-    print('Note: where the K2_API (or legacy K2_SANDBOX_API) env flag is set, it still forces the surface on; check with: k2 api status')
-"
+print("on" if d.get("apiEnabled") else "off")
+')" || { printf '%s\n' "$saved"; exit 1; }
+            if [[ "$saved" == "off" ]]; then
+                # 0.46.17: the setting is saved; the surface itself is the
+                # daemon's answer (boot-status `api.enabled`, as `k2 api
+                # status` reads it). K2_API or K2_SANDBOX_API in the daemon's
+                # environment keeps it on whatever the setting says.
+                local boot eff _K2_CFG=""
+                _k2_cfg_add url "${BASE_URL}/boot-status"
+                if [ -n "$TOKEN" ]; then
+                    _k2_cfg_add header "Authorization: Bearer ${TOKEN}"
+                fi
+                boot="$(_k2_curl "$_K2_CFG" -s --connect-timeout 5 --max-time 10 2>/dev/null || true)"
+                eff="$(K2_API_BOOT="$boot" python3 -c '
+import json, os
+try:
+    d = json.loads(os.environ.get("K2_API_BOOT", "") or "{}")
+except Exception:
+    d = {}
+api = d.get("api") if isinstance(d, dict) else None
+e = api.get("enabled") if isinstance(api, dict) else None
+print("on" if e is True else ("off" if e is False else "?"))
+')"
+                if [[ "$eff" == "on" ]]; then
+                    echo "The public API is still ON: K2_API or K2_SANDBOX_API is set in the daemon's environment and forces it on. The setting is saved as off; to turn the API off, remove that variable from the daemon's service and restart it." >&2
+                    exit 1
+                fi
+                echo "Public /v1 API setting: OFF (live now — no restart needed)"
+                if [[ "$eff" != "off" ]]; then
+                    echo "Note: where the K2_API (or legacy K2_SANDBOX_API) env flag is set, it still forces the surface on; check with: k2 api status"
+                fi
+            else
+                echo "Public /v1 API setting: ON (live now — no restart needed)"
+            fi
             ;;
         status)
             # Effective state comes from the daemon itself: /boot-status is

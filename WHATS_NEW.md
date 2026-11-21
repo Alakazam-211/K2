@@ -166,6 +166,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **A value flag on `k2 app data put` never takes `-h` or `--help` as its value.** Before, `k2 app data put <app> <path> --to -h` sent the copy with `-h` as the folder. Now `-h` or `--help` anywhere prints the `k2 app data` help on stdout, exits 0 and sends nothing.
 - **A value flag on `k2 app key mint` never takes `-h` or `--help` as its value.** Before, `k2 app key mint <app> --scopes users --label -h` asked for a key labelled `-h`. Now `-h` or `--help` anywhere prints the help on stdout, exits 0 and sends nothing.
 - **`-h` or `--help` anywhere on `k2 app access` prints the page that describes it** (the App cross-over page) on stdout, exits 0 and sends nothing, even right after a flag that takes a value, as in `k2 app access <workspace> --build -h`. Before, it printed the whole `k2 app` page on stderr.
+- **`k2 api off` says so when the API stays on.** If an environment setting forces the API on, it now explains that and exits 1 instead of reporting off.
 
 ### Settings
 - **Changes to the Send feedback settings are recorded.** When the owner or an admin turns "Allow sending feedback to K2", "Agents may send feedback to K2" or "Agents may include K2 details" on or off (Settings → General → Send feedback), Settings → Logs → Access Audit records who changed which one, from what to what. A change that leaves a setting as it was, or a refused attempt, records nothing.

@@ -15,6 +15,7 @@
 #     "'--help' is not a path" (exit 2): they had no help.
 #   - `k2 read --help` asked to read a workspace named --help, and
 #     `--lines`, `--agent`, `--session` and `--token` took the help word.
+#   - `k2 reviews --help` asked for the review list (it reads no words).
 #
 # Each section: every help form, with --help and with -h, prints exactly
 # the page's cli/text/help file and the stub daemon records nothing; the
@@ -194,6 +195,11 @@ page read.txt read scout --agent @H
 page read.txt read --session @H
 page read.txt read scout@remote.example --token @H
 sends '^GET /cli/terminal/read ' read scout
+
+echo "== reviews =="
+page reviews.txt reviews @H
+page reviews.txt reviews --json @H
+sends '^GET /cli/reviews ' reviews
 
 echo ""
 echo "help_acts_10: $pass passed, $fail failed"

@@ -549,7 +549,16 @@ EOF
     return 0
 }
 
+_reviews_usage() {
+    cat <<'EOF'
+%include cli/text/help/reviews.txt
+EOF
+}
+
 cmd_reviews() {
+    # 0.46.17: -h/--help anywhere before a bare -- prints the help and asks
+    # nothing (it asked for the list).
+    if _wants_help "$@"; then _reviews_usage; return 0; fi
     # An answer the reader can't use is an error line and exit 1; the
     # caller's own stdin is never read.
     cli_request "/cli/reviews" | python3 -c "

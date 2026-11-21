@@ -1,0 +1,7 @@
+k2 reviews — the merge reviews waiting in this workspace
+
+  k2 reviews    one line per pending review: the agent, its branch, and how
+                many work items and changed files it has ("No pending
+                reviews." when there are none)
+
+Approve or reject one: k2 review --help.

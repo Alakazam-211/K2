@@ -128,20 +128,15 @@ fn the_gate_bites() {
     );
     std::fs::write(&file, &src).unwrap();
 
-    // A form the list names gains a case: the list is stale.
-    let first = std::fs::read_to_string(dir.join("crates/k5-cli/tests/data/parity_uncovered.tsv"))
-        .unwrap()
-        .lines()
-        .find(|l| !l.starts_with('#'))
-        .expect("an uncovered form")
-        .split('\t')
-        .nth(1)
-        .unwrap()
-        .to_string();
-    std::fs::write(&file, format!("{src}\n// covers: {first}\n")).unwrap();
+    // The list names a form that has a case: the list is stale. (The
+    // list may be empty, the ship bar, so a covered form is put on it.)
+    let list = dir.join("crates/k5-cli/tests/data/parity_uncovered.tsv");
+    let committed = std::fs::read_to_string(&list).unwrap();
+    std::fs::write(&list, format!("{committed}whoami\twhoami --json\n")).unwrap();
     let o = gate(&dir);
     assert!(!o.status.success(), "a stale list passed: {}", text(&o));
     assert!(text(&o).contains("the ceiling is stale"), "{}", text(&o));
+    assert!(text(&o).contains("whoami --json"), "{}", text(&o));
 
     std::fs::remove_dir_all(&dir).unwrap();
 }

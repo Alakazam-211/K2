@@ -138,48 +138,6 @@ agent set --help|agent/set|out|0
 agent set -h|agent/set|out|0
 agent template --help|agent/template|out|0
 agent template -h|agent/template|out|0
-app account-deletion --help|app/account-deletion|out|0
-app account-deletion -h|app/account-deletion|out|0
-app auth --help|app/auth|out|0
-app auth -h|app/auth|out|0
-app catalog --help|app/catalog|out|0
-app catalog -h|app/catalog|out|0
-app chat --help|app/chat|out|0
-app chat -h|app/chat|out|0
-app data --help|app/data|out|0
-app data -h|app/data|out|0
-app db --help|app/db|out|0
-app db -h|app/db|out|0
-app domain --help|app/domain|out|0
-app domain -h|app/domain|out|0
-app egress --help|app/egress|out|0
-app egress -h|app/egress|out|0
-app expose --help|app/expose|out|0
-app expose -h|app/expose|out|0
-app guest rooms --help|app/guest/rooms|out|0
-app guest rooms -h|app/guest/rooms|out|0
-app init --help|app/init|out|0
-app init -h|app/init|out|0
-app links --help|app/links|out|0
-app links -h|app/links|out|0
-app pairing --help|app/pairing|out|0
-app pairing -h|app/pairing|out|0
-app push --help|app/push|out|0
-app push -h|app/push|out|0
-app recording --help|app/recording|out|0
-app recording -h|app/recording|out|0
-app sdk --help|app/sdk|out|0
-app sdk -h|app/sdk|out|0
-app set --help|app/set|out|0
-app set -h|app/set|out|0
-app status --help|app/status|out|0
-app status -h|app/status|out|0
-app uninstall --help|app/uninstall|out|0
-app uninstall -h|app/uninstall|out|0
-app updates --help|app/updates|out|0
-app updates -h|app/updates|out|0
-app validate --help|app/validate|out|0
-app validate -h|app/validate|out|0
 approve --help|approve|out|0
 approve -h|approve|out|0
 board --help|board|out|0

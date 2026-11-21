@@ -135,8 +135,10 @@ class H(BaseHTTPRequestHandler):
             return self.reply({"workspace": "proj", "monitors": [
                 {"name": "main-red", "kind": "fail-streak", "watches": "main failed 3 runs in a row", "to": {"kind": "workspace", "target": "proj"},
                  "cooldownSecs": 21600, "fired": 2, "mutedUntil": None},
+                # Half an hour past 2h: a second ticking before the CLI reads the
+                # clock still shows "muted 2h more".
                 {"name": "flaky", "kind": "new-flaky", "watches": "a test turns flaky in any check", "to": {"kind": "thread", "target": "proj"},
-                 "cooldownSecs": 3600, "fired": 0, "mutedUntil": int(time.time()) + 7200}]})
+                 "cooldownSecs": 3600, "fired": 0, "mutedUntil": int(time.time()) + 7200 + 1800}]})
         if path == "/cli/compute/logs/search":
             return self.reply({"workspace": "proj", "search": q.get("search"), "fold": q.get("fold") == "1", "sinceSecs": 1209600,
                                "scanned": {"jobs": 3, "bytes": 1000, "ms": 4}, "cut": "limit",

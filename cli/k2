@@ -28202,7 +28202,7 @@ cmd_signal() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --inbox) delivery="inbox"; shift ;;
-            --from)  from="$2"; shift 2 ;;
+            --from)  _need_value "$@"; from="$2"; shift 2 ;;
             *) shift ;;
         esac
     done
@@ -43816,8 +43816,8 @@ cmd_migrate() {
             local to="" out="" unfreeze=0 as_json=0
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --to) to="${2:-}"; shift 2 ;;
-                    --out|-o) out="${2:-}"; shift 2 ;;
+                    --to) _need_value "$@"; to="${2:-}"; shift 2 ;;
+                    --out|-o) _need_value "$@"; out="${2:-}"; shift 2 ;;
                     --unfreeze) unfreeze=1; shift ;;
                     --json) as_json=1; shift ;;
                     -h|--help) _migrate_help; return 0 ;;
@@ -49667,21 +49667,21 @@ _clone_parse() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --no-threads) no_threads=1; shift ;;
-            --threads-since|--since-days) since="${2:-}"; shift 2 ;;
-            --copy) copy="${copy}${copy:+,}${2:-}"; shift 2 ;;
-            --blank) blank="${blank}${blank:+,}${2:-}"; shift 2 ;;
-            --skip) skip="${skip}${skip:+,}${2:-}"; shift 2 ;;
+            --threads-since|--since-days) _need_value "$@"; since="${2:-}"; shift 2 ;;
+            --copy) _need_value "$@"; copy="${copy}${copy:+,}${2:-}"; shift 2 ;;
+            --blank) _need_value "$@"; blank="${blank}${blank:+,}${2:-}"; shift 2 ;;
+            --skip) _need_value "$@"; skip="${skip}${skip:+,}${2:-}"; shift 2 ;;
             --own) own=1; shift ;;
             --live-only) live_only=1; shift ;;
             --env-files) env_files=1; shift ;;
-            --dest) dest="${2:-}"; shift 2 ;;
-            --host) _CLONE_HOST="${2:-}"; shift 2 ;;
+            --dest) _need_value "$@"; dest="${2:-}"; shift 2 ;;
+            --host) _need_value "$@"; _CLONE_HOST="${2:-}"; shift 2 ;;
             --token-stdin) token_stdin=1; shift ;;
-            --token) _CLONE_TOKEN="${2:-}"; token_flag="$1"; shift 2 ;;
-            --to) to="${2:-}"; shift 2 ;;
-            --why) why="${2:-}"; shift 2 ;;
-            --reason) reason="${2:-}"; shift 2 ;;
-            --workspace) ws="${2:-}"; shift 2 ;;
+            --token) _need_value "$@"; _CLONE_TOKEN="${2:-}"; token_flag="$1"; shift 2 ;;
+            --to) _need_value "$@"; to="${2:-}"; shift 2 ;;
+            --why) _need_value "$@"; why="${2:-}"; shift 2 ;;
+            --reason) _need_value "$@"; reason="${2:-}"; shift 2 ;;
+            --workspace) _need_value "$@"; ws="${2:-}"; shift 2 ;;
             --yes|-y) yes=1; shift ;;
             --json) json=1; shift ;;
             --mine) mine=1; shift ;;
@@ -109310,7 +109310,7 @@ cmd_zen_garden_put() {
         case "$1" in
             --json) as_json=true; shift ;;
             --from) [ -n "${2:-}" ] || { echo "Error: --from needs a file (or - for stdin)" >&2; exit 2; }; from="$2"; shift 2 ;;
-            --note) note="${2:-}"; shift 2 ;;
+            --note) _need_value "$@"; note="${2:-}"; shift 2 ;;
             -h|--help) cmd_help_zen; exit 0 ;;
             -*) [ "$1" = "-" ] && { from="-"; shift; continue; }; echo "Error: unexpected '$1' (see k2 zen --help)" >&2; exit 2 ;;
             *) [ -z "$garden" ] || { echo "Error: k2 zen garden put <garden> --from <file>|-" >&2; exit 2; }; garden="$1"; shift ;;
@@ -109525,7 +109525,7 @@ cmd_zen_widget_put() {
             --dir) [ -n "${2:-}" ] || { echo "Error: --dir needs a widget folder" >&2; exit 2; }; dir="$2"; shift 2 ;;
             --dir=*) dir="${1#*=}"; shift ;;
             --prune) prune=true; shift ;;
-            --note) note="${2:-}"; shift 2 ;;
+            --note) _need_value "$@"; note="${2:-}"; shift 2 ;;
             -h|--help) _zen_help_widget_put; exit 0 ;;
             -*) echo "Error: unexpected '$1' (k2 zen widget put --help)" >&2; exit 2 ;;
             *) pos+=("$1"); shift ;;

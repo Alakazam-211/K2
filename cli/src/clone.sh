@@ -904,21 +904,21 @@ _clone_parse() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --no-threads) no_threads=1; shift ;;
-            --threads-since|--since-days) since="${2:-}"; shift 2 ;;
-            --copy) copy="${copy}${copy:+,}${2:-}"; shift 2 ;;
-            --blank) blank="${blank}${blank:+,}${2:-}"; shift 2 ;;
-            --skip) skip="${skip}${skip:+,}${2:-}"; shift 2 ;;
+            --threads-since|--since-days) _need_value "$@"; since="${2:-}"; shift 2 ;;
+            --copy) _need_value "$@"; copy="${copy}${copy:+,}${2:-}"; shift 2 ;;
+            --blank) _need_value "$@"; blank="${blank}${blank:+,}${2:-}"; shift 2 ;;
+            --skip) _need_value "$@"; skip="${skip}${skip:+,}${2:-}"; shift 2 ;;
             --own) own=1; shift ;;
             --live-only) live_only=1; shift ;;
             --env-files) env_files=1; shift ;;
-            --dest) dest="${2:-}"; shift 2 ;;
-            --host) _CLONE_HOST="${2:-}"; shift 2 ;;
+            --dest) _need_value "$@"; dest="${2:-}"; shift 2 ;;
+            --host) _need_value "$@"; _CLONE_HOST="${2:-}"; shift 2 ;;
             --token-stdin) token_stdin=1; shift ;;
-            --token) _CLONE_TOKEN="${2:-}"; token_flag="$1"; shift 2 ;;
-            --to) to="${2:-}"; shift 2 ;;
-            --why) why="${2:-}"; shift 2 ;;
-            --reason) reason="${2:-}"; shift 2 ;;
-            --workspace) ws="${2:-}"; shift 2 ;;
+            --token) _need_value "$@"; _CLONE_TOKEN="${2:-}"; token_flag="$1"; shift 2 ;;
+            --to) _need_value "$@"; to="${2:-}"; shift 2 ;;
+            --why) _need_value "$@"; why="${2:-}"; shift 2 ;;
+            --reason) _need_value "$@"; reason="${2:-}"; shift 2 ;;
+            --workspace) _need_value "$@"; ws="${2:-}"; shift 2 ;;
             --yes|-y) yes=1; shift ;;
             --json) json=1; shift ;;
             --mine) mine=1; shift ;;

@@ -170,7 +170,7 @@ cmd_zen_garden_put() {
         case "$1" in
             --json) as_json=true; shift ;;
             --from) [ -n "${2:-}" ] || { echo "Error: --from needs a file (or - for stdin)" >&2; exit 2; }; from="$2"; shift 2 ;;
-            --note) note="${2:-}"; shift 2 ;;
+            --note) _need_value "$@"; note="${2:-}"; shift 2 ;;
             -h|--help) cmd_help_zen; exit 0 ;;
             -*) [ "$1" = "-" ] && { from="-"; shift; continue; }; echo "Error: unexpected '$1' (see k2 zen --help)" >&2; exit 2 ;;
             *) [ -z "$garden" ] || { echo "Error: k2 zen garden put <garden> --from <file>|-" >&2; exit 2; }; garden="$1"; shift ;;

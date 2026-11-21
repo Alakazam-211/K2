@@ -167,8 +167,8 @@ cmd_migrate() {
             local to="" out="" unfreeze=0 as_json=0
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --to) to="${2:-}"; shift 2 ;;
-                    --out|-o) out="${2:-}"; shift 2 ;;
+                    --to) _need_value "$@"; to="${2:-}"; shift 2 ;;
+                    --out|-o) _need_value "$@"; out="${2:-}"; shift 2 ;;
                     --unfreeze) unfreeze=1; shift ;;
                     --json) as_json=1; shift ;;
                     -h|--help) _migrate_help; return 0 ;;

@@ -26,7 +26,7 @@ cmd_signal() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --inbox) delivery="inbox"; shift ;;
-            --from)  from="$2"; shift 2 ;;
+            --from)  _need_value "$@"; from="$2"; shift 2 ;;
             *) shift ;;
         esac
     done

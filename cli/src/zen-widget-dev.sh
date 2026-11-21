@@ -117,7 +117,7 @@ cmd_zen_widget_put() {
             --dir) [ -n "${2:-}" ] || { echo "Error: --dir needs a widget folder" >&2; exit 2; }; dir="$2"; shift 2 ;;
             --dir=*) dir="${1#*=}"; shift ;;
             --prune) prune=true; shift ;;
-            --note) note="${2:-}"; shift 2 ;;
+            --note) _need_value "$@"; note="${2:-}"; shift 2 ;;
             -h|--help) _zen_help_widget_put; exit 0 ;;
             -*) echo "Error: unexpected '$1' (k2 zen widget put --help)" >&2; exit 2 ;;
             *) pos+=("$1"); shift ;;

@@ -314,10 +314,12 @@ else
     bad "remote https --host did not go through the proxy (proxy log: $(tr '\n' ';' <"$WORK/proxy.log"))"
 fi
 # An embedded Python verb to the same remote https host: the shared rule
-# (_K2_PY_PROXY_RULE) keeps the person's proxy for it too.
+# (_K2_PY_PROXY_RULE) keeps the person's proxy for it too. An older
+# Python's http.client (macOS ships 3.9) names HTTP/1.0 on its CONNECT
+# line and a newer one HTTP/1.1, so either counts as the tunnel.
 : >"$WORK/proxy.log"
 "${LIMIT[@]}" owner clone preview some-ws --host "https://k2-remote.example.test" --token tok-remote >"$WORK/out.txt" 2>"$WORK/err.txt" || true
-if grep -qx "CONNECT k2-remote.example.test:443 HTTP/1.1" "$WORK/proxy.log"; then
+if grep -qxE 'CONNECT k2-remote\.example\.test:443 HTTP/1\.[01]' "$WORK/proxy.log"; then
     ok "python: remote https --host asked the proxy for a tunnel"
 else
     bad "python: remote https --host did not go through the proxy (proxy log: $(tr '\n' ';' <"$WORK/proxy.log"); stderr: $(tail -2 "$WORK/err.txt" | tr '\n' ' '))"

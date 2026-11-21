@@ -372,7 +372,7 @@ fn platform() -> Result<String, String> {
 
 /// `_k2_refuse_if_airgap`: its line, then exit 1, when air-gap is on;
 /// `Some(None)` when it is off. `None`: the shell's (no `HOME`).
-fn airgap_refusal() -> Option<Option<Exit>> {
+pub(super) fn airgap_refusal() -> Option<Option<Exit>> {
     let (state, file) = crate::airgap::state(&Env::current())?;
     Some(crate::airgap::refusal(state, &file).map(|mut line| {
         line.push(b'\n');

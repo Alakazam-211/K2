@@ -548,10 +548,22 @@ fn connect_login_with_a_token_answers_as_the_shell_does() {
         ),
         row(
             case(
-                "the daemon closes on the config and the start: live all the same",
+                "no answer to the config: its line, exit 1",
                 &["login", "--token", ACCESS],
                 &env(&[]),
-                vec![Reply::Close, Reply::Close],
+                vec![Reply::Close],
+                ready,
+                1,
+                1,
+            ),
+            vec![ok_json(&one_row()), ok_json("[]")],
+        ),
+        row(
+            case(
+                "no answer to the start: live all the same",
+                &["login", "--token", ACCESS],
+                &env(&[]),
+                vec![ok_json(CONFIG_OK), Reply::Close],
                 ready,
                 0,
                 2,
@@ -655,11 +667,23 @@ fn connect_login_s_words_and_gates_answer_as_the_shell_does() {
         ),
         row(
             case(
-                "air-gap: after the account server's line",
+                "air-gap: before anything else",
                 &["login", "--token", ACCESS],
                 &env(&[("K2_AIRGAP", "1")]),
                 vec![],
                 ready,
+                1,
+                0,
+            ),
+            vec![],
+        ),
+        row(
+            case(
+                "air-gap comes before the guard",
+                &["login", "--token", ACCESS],
+                &env(&[("K2_AIRGAP", "1"), ("K2_NO_OWNER_FALLBACK", "1")]),
+                vec![],
+                port_only_ready,
                 1,
                 0,
             ),

@@ -102,6 +102,13 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     if matches!(ask, Ask::Life(_) | Ask::Install(_)) && odd_port {
         return None;
     }
+    // The policy refuses `daemon install` under air-gap before the guard
+    // and the session's checks.
+    if matches!(ask, Ask::Install(_)) {
+        if let Some(stop) = install::airgap_refusal()? {
+            return Some(stop);
+        }
+    }
     match prelude::gate(&settings) {
         // `install` skips the connection gate (DAEMON_INSTALL_EARLY_BYPASS):
         // it provisions a box with no daemon yet. The guard still stands.

@@ -2450,6 +2450,18 @@ fn daemon_install_refusals_and_dry_runs_answer_as_the_shell_does() {
         ),
         (
             case(
+                "install: air-gap comes before the guard",
+                &["install", "--dry-run"],
+                &[("K2_AIRGAP", "1"), ("K2_NO_OWNER_FALLBACK", "1")],
+                vec![],
+                port_only_install,
+                1,
+                0,
+            ),
+            vec![],
+        ),
+        (
+            case(
                 "install: the guard",
                 &["install", "--dry-run"],
                 &[("K2_NO_OWNER_FALLBACK", "1")],

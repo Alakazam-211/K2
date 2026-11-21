@@ -418,5 +418,8 @@ fn open_url_reads_a_plain_answer_and_names_a_failed_handshake() {
     }
     let got = log.lock().unwrap();
     assert!(String::from_utf8_lossy(&got[0]).starts_with("GET /x HTTP/1.1\r\n"));
-    assert!(!String::from_utf8_lossy(&got[1]).contains("GET /x"));
+    // The handshake's bytes, if the server logged them yet, hold no request.
+    for g in &got[1..] {
+        assert!(!String::from_utf8_lossy(g).contains("GET /x"));
+    }
 }

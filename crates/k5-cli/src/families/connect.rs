@@ -119,6 +119,9 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
                     return Some(Exit::Error);
                 }
             };
+            if let Some(stop) = login::airgap_refusal()? {
+                return Some(stop);
+            }
             if let Some(Gate::VirtualDesktop) = prelude::gate(&settings) {
                 return Some(Gate::VirtualDesktop.stop());
             }

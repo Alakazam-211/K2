@@ -8,7 +8,8 @@
 //! 1. `_connect_db_resolve` ([`super::logout::resolve`]): the account
 //!    server's base URL, and its line on stderr when it is not the
 //!    built-in one.
-//! 2. The words ([`parse`]), then `_k2_refuse_if_airgap`.
+//! 2. The words ([`parse`]). (Air-gap was refused before the router:
+//!    [`airgap_refusal`].)
 //! 3. The access token: `--token-stdin` reads one line
 //!    ([`crate::prompt::read_secret_stdin`]), `--token <jwt>` prints its
 //!    note. With neither: the email (`--email`, else a prompt on stderr
@@ -870,6 +871,19 @@ fn start_reader(raw: &str, label: &str) -> Result<String, String> {
     Ok(format!("\u{2713} live at {url}"))
 }
 
+/// The policy's air-gap refusal for `connect login`, before the guard
+/// and the session's checks (`cli/src/cli-tools-policy.sh`): its line,
+/// then exit 1. `Some(None)` when air-gap is off; `None`: the shell's (no
+/// `HOME`).
+pub fn airgap_refusal() -> Option<Option<Exit>> {
+    let (state, file) = crate::airgap::state(&crate::offline::Env::current())?;
+    Some(crate::airgap::refusal(state, &file).map(|mut line| {
+        line.push(b'\n');
+        let _ = out::write_flushed(&mut std::io::stderr().lock(), &line);
+        Exit::Error
+    }))
+}
+
 /// `cmd_connect login ...` after the router's checks; `words` are the
 /// words after `login`. `None`: the shell answers (see the module's
 /// notes).
@@ -889,11 +903,9 @@ pub fn run(words: &[&str], s: &Settings, would_refuse: bool) -> Option<Exit> {
         return None;
     }
     let parsed = parse(words);
-    let (airgap, airgap_file) = crate::airgap::state(&crate::offline::Env::current())?;
-    let refusal = crate::airgap::refusal(airgap, &airgap_file);
     if let Parsed::Words(w) = &parsed {
         let password = !w.token_stdin && w.token.is_empty();
-        if refusal.is_none() && password && !prompt::getpass_tty_ok() {
+        if password && !prompt::getpass_tty_ok() {
             return None;
         }
     }
@@ -904,17 +916,14 @@ pub fn run(words: &[&str], s: &Settings, would_refuse: bool) -> Option<Exit> {
     for n in &notes {
         out::stderr_line(n);
     }
-    Some(
-        match login(parsed, refusal, s, would_refuse, place, prefix, port) {
-            Ok(e) | Err(e) => e,
-        },
-    )
+    Some(match login(parsed, s, would_refuse, place, prefix, port) {
+        Ok(e) | Err(e) => e,
+    })
 }
 
 /// The steps after the hand-back checks.
 fn login(
     parsed: Parsed,
-    refusal: Option<Vec<u8>>,
     s: &Settings,
     would_refuse: bool,
     place: Place,
@@ -933,11 +942,8 @@ fn login(
             return Err(Exit::Usage);
         }
     };
-    if let Some(mut line) = refusal {
-        line.push(b'\n');
-        let _ = out::write_flushed(&mut std::io::stderr().lock(), &line);
-        return Err(Exit::Error);
-    }
+    // `_k2_refuse_if_airgap` here finds it off: the policy refused
+    // before the router ([`airgap_refusal`]).
     let mut token = w.token.clone();
     if w.token_stdin {
         if w.token_flag {
@@ -1028,8 +1034,10 @@ fn login(
             held(&r.body)
         }
         Err(Error::NoAnswer(n)) => {
+            // The no-answer line ends the command there (exit 1).
             out::stderr_line(&n.to_string());
-            String::new()
+            closing.flush(&mut c1, Exit::Error);
+            return Err(Exit::Error);
         }
         Err(_) => String::new(),
     };

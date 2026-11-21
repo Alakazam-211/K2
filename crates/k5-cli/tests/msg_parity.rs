@@ -770,6 +770,89 @@ fn msg_sends_as_the_shell_does() {
     rig.check(&healed);
 }
 
+/// After a bare `--` the words are the address and the text, as typed
+/// (`cmd_msg`'s `--)` arm, `cmd_msg_v2`'s scans stop there): a text that
+/// starts with a dash or is `--help` is sent; a tray or signal flag after
+/// it is text; a Postal address after it is Postal mail.
+#[test]
+fn msg_after_dashes_as_the_shell_does() {
+    let rig = Rig::new(VERB, "dashes");
+    let v = vec![
+        // covers: msg
+        plain(
+            "after --, a text that starts with a dash",
+            &["--from", "me", "--idempotency-key", KEY, "--", "ws", "-x --json"],
+            vec![ok(ON), ok(SENT)],
+            0,
+            2,
+        ),
+        plain(
+            "after --, the text --help",
+            &["--from", "me", "--idempotency-key", KEY, "--", "ws", "--help"],
+            vec![ok(ON), ok(SENT)],
+            0,
+            2,
+        ),
+        plain(
+            "after --, -h as the address's text, and a dashed address",
+            &["--idempotency-key", KEY, "--from", "me", "--", "-ws", "-h"],
+            vec![ok(ON), ok(SENT)],
+            0,
+            2,
+        ),
+        plain(
+            "after --, a tray flag is text",
+            &["--from", "me", "--idempotency-key", KEY, "ws", "--", "--inbox"],
+            vec![ok(ON), ok(SENT)],
+            0,
+            2,
+        ),
+        plain(
+            "after --, a signal flag is text",
+            &["ws", "--from", "me", "--idempotency-key", KEY, "--", "--signal"],
+            vec![ok(ON), ok(SENT)],
+            0,
+            2,
+        ),
+        plain("-- and no text", &["ws", "--"], vec![], 1, 0),
+        plain("-- alone", &["--"], vec![], 1, 0),
+        plain("an empty word after --", &["--", "", "ws"], vec![], 1, 0),
+        plain("--from takes -- as its value", &["--from", "--", "ws"], vec![], 1, 0),
+        plain("help before --", &["ws", "-h", "--", "x"], vec![], 0, 0),
+        plain(
+            "Postal mail after --, the text --help",
+            &["--no-wake", "--", "a::abc.postal.bot", "--help"],
+            vec![ok(POSTAL_SENT)],
+            0,
+            1,
+        ),
+        plain(
+            "Postal mail, the words after -- are text",
+            &["a::abc.postal.bot", "--json", "--", "-x", "--no-wake"],
+            vec![ok(POSTAL_SENT)],
+            0,
+            1,
+        ),
+        plain(
+            "Postal mail after --, a K2 flag before it",
+            &["--summary", "--", "a::abc.postal.bot", "hi"],
+            vec![],
+            2,
+            0,
+        ),
+        plain(
+            "Postal mail after --, no text",
+            &["--", "a::abc.postal.bot"],
+            vec![],
+            2,
+            0,
+        ),
+    ];
+    for c in &v {
+        rig.check(c);
+    }
+}
+
 /// The binary's run and bash's, with a new send key and the seconds in a
 /// line masked (bash counts whole seconds of `$SECONDS`).
 fn masked(rig: &Rig, c: &Case) {

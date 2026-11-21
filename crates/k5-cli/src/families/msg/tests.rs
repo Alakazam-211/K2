@@ -1365,3 +1365,74 @@ fn signal_database_as_the_shell_finds_it() {
     assert_eq!(workspace_id(&empty, "/w/p"), "/w/p");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// After a bare `--` the words are the address and the text, as typed
+/// (`cmd_msg`'s `--)` arm); every flag scan stops there (`cmd_msg_v2`).
+#[test]
+fn the_words_after_dashes_are_sent_as_typed() {
+    let send = |target: &str, text: &str| match parse(&["--no-wake", "--", target, text]) {
+        Parsed::Send(m) => (m.target, m.text, m.wake),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(send("ws", "--help"), ("ws".into(), "--help".into(), false));
+    assert_eq!(send("-x", "-h"), ("-x".into(), "-h".into(), false));
+    // The last word is the text.
+    match parse(&["ws", "--", "a", "--signal", "--inbox-wake"]) {
+        Parsed::Send(m) => assert_eq!((m.target.as_str(), m.text.as_str()), ("ws", "--inbox-wake")),
+        other => panic!("{other:?}"),
+    }
+    // An empty first word leaves the address to the next one.
+    assert_eq!(parse(&["--", "", "t"]), Parsed::Stop(send::no_text(), Exit::Error));
+    assert_eq!(parse(&["ws", "--"]), Parsed::Stop(send::no_text(), Exit::Error));
+    assert_eq!(parse(&["--"]), Parsed::Stop(send::no_target(), Exit::Error));
+    // Help before `--` is the shell's (the front's page); after it, text.
+    assert_eq!(parse(&["ws", "-h", "--", "t"]), Parsed::Shell);
+    // A second `--` is a word.
+    match parse(&["--", "ws", "--"]) {
+        Parsed::Send(m) => assert_eq!((m.target.as_str(), m.text.as_str()), ("ws", "--")),
+        other => panic!("{other:?}"),
+    }
+    // A tray or signal flag after `--` is text, not a form.
+    match parse(&["ws", "--", "--inbox"]) {
+        Parsed::Send(m) => assert_eq!(m.text, "--inbox"),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Postal mail after a bare `--`: the address first (`cmd_msg_v2` hands
+/// `_postal_send_teach` the flags, `--` and the rest), or after a first
+/// address the words after `--` are the text.
+#[test]
+fn postal_mail_after_dashes() {
+    use super::postal::{self, Mail};
+    let to = "a::abc.postal.bot";
+    let mail = |text: &str, wake: bool, json: bool| {
+        Parsed::Postal(Mail {
+            to: to.into(),
+            text: text.into(),
+            wake,
+            json,
+        })
+    };
+    assert_eq!(parse(&[to, "--", "--help"]), mail("--help", true, false));
+    assert_eq!(
+        parse(&["--json", "--", to, "-x", "--no-wake"]),
+        mail("-x --no-wake", true, true)
+    );
+    assert_eq!(parse(&[to, "--", "", "t"]), mail("t", true, false));
+    assert_eq!(
+        parse(&["--from", "--", to, "t"]),
+        Parsed::Stop(format!("{}\n", postal::k2_only("--from", to)), Exit::Usage)
+    );
+    assert_eq!(
+        parse(&["--", to]),
+        Parsed::Stop(format!("{}\n", postal::usage(to)), Exit::Usage)
+    );
+    // Not an address after `--`: msg's own loop.
+    assert_eq!(parse(&["--", "ws"]), Parsed::Stop(send::no_text(), Exit::Error));
+    // The flags before `--` are Postal mail's.
+    assert_eq!(
+        parse(&["--wake", "--no-wake", "--", to, "-t"]),
+        mail("-t", false, false)
+    );
+}

@@ -9,7 +9,9 @@
 //!    of those is [`BOTH_INBOX`], exit 2.
 //! 2. `cmd_msg`'s loop ([`parse`]): the flags, an unknown one, the
 //!    retired `--agent`, then the address and the text (the first word that
-//!    is not a flag is the address, the last the text).
+//!    is not a flag is the address, the last the text). After a bare `--`
+//!    every word is the address or the text, as typed, and the scans of
+//!    step 1 (and the Postal one) read only the words before it.
 //! 3. `--session <id>`: the one word is the text and the address is the
 //!    workspace (`PROJECT`, else the folder); two words is exit 2.
 //! 4. No address, or no text: two or three lines, exit 1.
@@ -340,50 +342,38 @@ pub fn address(raw: &str) -> Address {
 }
 
 /// The words after `msg`, read as `cmd_msg_v2` and `cmd_msg` read them
-/// (see the module's notes).
+/// (see the module's notes). Every scan for a flag stops at the first
+/// bare `--`: the words after it are the address and the text, as typed.
 pub fn parse(words: &[&str]) -> Parsed {
-    if words.iter().any(|w| matches!(*w, "--help" | "-h")) {
+    if crate::dashdash::wants_help(words) {
         return Parsed::Shell;
     }
-    // `cmd_msg_v2`: a Postal address, the first word that isn't a flag, or
-    // the word right after a bare `--` (the flags before it, then `--` and
-    // the text): Postal mail ([`super::postal::parse`]).
-    let mail = |to: &str, args: Vec<&str>| match super::postal::parse(to, &args) {
-        Ok(m) => Parsed::Postal(m),
-        Err(line) => Parsed::Stop(format!("{line}\n"), Exit::Usage),
-    };
+    // A Postal address: the first word that isn't a flag, or the word
+    // after a bare `--` that comes first.
     for (i, w) in words.iter().enumerate() {
-        if *w == "--" {
-            if let Some(to) = words.get(i + 1).filter(|t| is_postal(t)) {
-                let mut args = words[..i].to_vec();
-                args.push("--");
-                args.extend_from_slice(&words[i + 2..]);
-                return mail(to, args);
-            }
-            break;
+        let at = if *w == "--" {
+            i + 1
+        } else if w.starts_with('-') {
+            continue;
+        } else {
+            i
+        };
+        if words.get(at).is_some_and(|a| is_postal(a)) {
+            return match super::postal::parse(words, at) {
+                Ok(m) => Parsed::Postal(m),
+                Err(line) => Parsed::Stop(format!("{line}\n"), Exit::Usage),
+            };
         }
-        if !w.starts_with('-') {
-            if is_postal(w) {
-                let mut args = words[..i].to_vec();
-                args.extend_from_slice(&words[i + 1..]);
-                return mail(w, args);
-            }
-            break;
-        }
+        break;
     }
-    // The form scans stop at a bare `--`: the words after it are text.
-    let before = &words[..words.iter().position(|w| *w == "--").unwrap_or(words.len())];
-    let has = |f: &str| before.contains(&f);
-    // A tray or signal line with a `--` in it is the shell's.
-    let dashdash = before.len() < words.len();
-    if dashdash
-        && ["--signal", "--inbox", "--inbox-silent", "--inbox-wake"]
-            .iter()
-            .any(|f| has(f))
-    {
-        return Parsed::Shell;
-    }
+    let flags = crate::dashdash::before(words);
+    let has = |f: &str| flags.contains(&f);
+    // A tray or signal line with a bare `--` in it is the shell's.
+    let dashdash = flags.len() < words.len();
     if has("--signal") {
+        if dashdash {
+            return Parsed::Shell;
+        }
         return match super::signal::parse(words) {
             super::signal::Parsed::Shell => Parsed::Shell,
             super::signal::Parsed::Stop(text, exit) => Parsed::Stop(text, exit),
@@ -398,11 +388,24 @@ pub fn parse(words: &[&str]) -> Parsed {
         return Parsed::Stop(format!("{BOTH_INBOX}\n"), Exit::Usage);
     }
     if silent || wake {
+        if dashdash {
+            return Parsed::Shell;
+        }
         return match super::tray::parse(words, wake) {
             super::tray::Parsed::Form(f) => Parsed::Tray(*f),
             super::tray::Parsed::Stop(text, exit) => Parsed::Stop(text, exit),
             super::tray::Parsed::Shell => Parsed::Shell,
         };
+    }
+    parse_live(words)
+}
+
+/// `cmd_msg`'s own words (the live form, and what `talk` hands it): the
+/// flags, then the address and the text; after a bare `--` every word is
+/// the address or the text, as typed.
+pub fn parse_live(words: &[&str]) -> Parsed {
+    if crate::dashdash::wants_help(words) {
+        return Parsed::Shell;
     }
     let mut m = Msg {
         wake: true,
@@ -469,16 +472,15 @@ pub fn parse(words: &[&str]) -> Parsed {
                 i += 1;
             }
             "--agent" => return Parsed::Stop(AGENT_RETIRED.to_string(), Exit::Error),
-            // The rest is the address and the text, as typed.
             "--" => {
                 for w in &words[i + 1..] {
                     if m.target.is_empty() {
-                        m.target = (*w).to_string();
+                        m.target = w.to_string();
                     } else {
-                        m.text = (*w).to_string();
+                        m.text = w.to_string();
                     }
                 }
-                break;
+                i = words.len();
             }
             w if w.starts_with('-') => return Parsed::Stop(unknown_flag(w), Exit::Error),
             w => {
@@ -600,10 +602,10 @@ fn send(client: &mut Client, mut m: Msg) -> Exit {
 /// `cmd_msg <words>` as `talk` calls it after its read (`--via talk`,
 /// `--wake` or `--no-wake`): the summary hint, then the send, on the
 /// caller's client (another server's, after `talk`'s swap) and its EXIT
-/// trap. The words never hold a form the shell answers: `talk` hands a
-/// text that starts with `-` to the shell before anything runs.
+/// trap. The address and the text come after a bare `--`, so a text that
+/// starts with `-` (or is `--help`) is text ([`parse_live`]).
 pub fn deliver_live(client: &mut Client, closing: &mut Closing, words: &[&str]) -> Exit {
-    match parse(words) {
+    match parse_live(words) {
         Parsed::Send(mut m) => {
             if let Some(h) = summary_hint(&m.text, &m.summary) {
                 out::stderr_line(&h);

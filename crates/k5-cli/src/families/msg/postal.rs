@@ -2,10 +2,12 @@
 //! mail, as the shell's `_postal_send_teach` (`cli/src/remote-target.sh`)
 //! sends it and `_postal_print send` (`cli/src/postal.sh`) prints it.
 //!
-//! The address is the first word that doesn't start with `-`; the other
-//! words, in order: `--no-wake`, `--wake`, `--json`; a flag only messages
-//! to agents on this server take is [`k2_only`], exit 2; any other flag is
-//! [`unknown_flag`], exit 2; the rest is the text, joined by spaces. No
+//! The address is the first word that doesn't start with `-`, or the word
+//! after a bare `--` that comes first; the other words, in order:
+//! `--no-wake`, `--wake`, `--json`; a flag only messages to agents on this
+//! server take is [`k2_only`], exit 2; any other flag is [`unknown_flag`],
+//! exit 2; a bare `--` ends the flags; the rest is the text, joined by
+//! spaces. No
 //! text is [`usage`], exit 2. Then `cli_send cli_post_json
 //! /cli/postal/send` on the left of a pipe into the printer: in a session
 //! with a passport and a live cell socket the socket first, then TCP by
@@ -84,45 +86,52 @@ pub fn usage(to: &str) -> String {
     )
 }
 
-/// `_postal_send_teach <to> <args…>`: the words handed with the address,
-/// read as it reads them. A bare `--` makes the rest the text, as typed
-/// (a word there may start with a dash or be `--help`).
-pub fn parse(to: &str, args: &[&str]) -> Result<Mail, String> {
+/// The words around the address (`at` is its place), read as
+/// `_postal_send_teach` reads them: a bare `--` ends the flags, and every
+/// word after it is the text.
+pub fn parse(words: &[&str], at: usize) -> Result<Mail, String> {
+    let to = words[at].to_string();
     let mut m = Mail {
-        to: to.to_string(),
+        to: to.clone(),
         text: String::new(),
         wake: true,
         json: false,
     };
-    let add = |m: &mut Mail, t: &str| {
-        if m.text.is_empty() {
-            m.text = t.to_string();
-        } else {
-            m.text = format!("{} {t}", m.text);
+    // After a bare `--` every word but the address is the text, as typed.
+    let mut dashes = false;
+    for (i, w) in words.iter().enumerate() {
+        if i == at {
+            continue;
         }
-    };
-    let mut i = 0;
-    while i < args.len() {
-        match args[i] {
+        if dashes {
+            join(&mut m.text, w);
+            continue;
+        }
+        match *w {
+            "--" => dashes = true,
             "--no-wake" => m.wake = false,
             "--wake" => {}
             "--json" => m.json = true,
-            "--" => {
-                for t in &args[i + 1..] {
-                    add(&mut m, t);
-                }
-                break;
-            }
-            f if K2_ONLY.contains(&f) => return Err(k2_only(f, to)),
+            f if K2_ONLY.contains(&f) => return Err(k2_only(f, &to)),
             f if f.starts_with('-') => return Err(unknown_flag(f)),
-            t => add(&mut m, t),
+            t => join(&mut m.text, t),
         }
-        i += 1;
     }
     if m.text.is_empty() {
-        return Err(usage(to));
+        return Err(usage(&to));
     }
     Ok(m)
+}
+
+/// `if [ -z "$text" ]; then text="$1"; else text="$text $1"; fi`: an
+/// empty word first is no word.
+pub fn join(text: &mut String, word: &str) {
+    if text.is_empty() {
+        *text = word.to_string();
+    } else {
+        text.push(' ');
+        text.push_str(word);
+    }
 }
 
 /// A Postal address msg's own loop read, after a value flag:

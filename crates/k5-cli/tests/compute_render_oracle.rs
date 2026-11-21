@@ -324,7 +324,7 @@ fn info() {
     render_check("info", &[NODE_FULL, extra, tiers, none, solo], false);
 }
 
-const JOB_ROWS: &str = r#"{"jobs":[{"short":"abcd1234","tier":"ci","node":"linux-1-with-a-long-name","state":"queued","pinned":true,"exitCode":null,"reason":"","createdAt":{now-150},"tag":"a-very-long-tag-name-here","submitter":"agent-a","via":"owner_token","argv":["cargo","nextest","run","--workspace"]},{"short":"efgh5678","tier":"priority","state":"done","exitCode":0,"startedAt":{now-4000},"createdAt":{now-90000},"submittedBy":"owner"},{"short":"ijkl","state":"queued","pinned":false,"tier":"batch"},{"short":"m","state":"failed","exitCode":2,"reason":"tenant_disk_full"}]}"#;
+const JOB_ROWS: &str = r#"{"jobs":[{"short":"abcd1234","tier":"ci","node":"linux-1-with-a-long-name","state":"queued","pinned":true,"exitCode":null,"reason":"","createdAt":{now-150},"tag":"a-very-long-tag-name-here","submitter":"agent-a","via":"owner_token","argv":["cargo","nextest","run","--workspace"]},{"short":"efgh5678","tier":"priority","state":"done","exitCode":0,"startedAt":{now-4000},"createdAt":{now-90000},"submittedBy":"owner"},{"short":"ijkl","state":"queued","pinned":false,"tier":"batch"},{"short":"m","state":"failed","exitCode":2,"reason":"tenant_disk_full"},{"short":"held0001","tier":"standard","node":"linux-1","state":"queued","pinned":false,"reason":"grant_parallel_full","wait":{"reason":"held"},"createdAt":{now-30},"argv":["make"]}]}"#;
 
 #[test]
 fn jobs() {
@@ -354,9 +354,12 @@ fn get() {
         ));
     }
     many.push_str("]}}");
+    // 0.46.17: held on this server, and a pull back in flight.
+    let held = r#"{"short":"a","node":"n","state":"queued","queue":{"where":"server","held":true,"fits":["node-a","node-b"],"line":"held: waiting for a node with a free slot (fits: node-a, node-b)","waitReason":"held","nodeWaitWords":"busy"},"wait":{"reason":"held"}}"#;
+    let pulling = r#"{"short":"a","node":"n","state":"queued","queue":{"onNode":true,"message":"2nd in line","reason":"pull_requested"},"move":{"auto":true,"moving":true,"note":"pulling back"}}"#;
     render_check(
         "get",
-        &[JOB_FULL, on_node, queued, words, ended, &long, &many],
+        &[JOB_FULL, on_node, queued, words, ended, &long, &many, held, pulling],
         false,
     );
     render_check("get", &[&long], true);

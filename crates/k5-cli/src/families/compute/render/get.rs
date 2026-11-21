@@ -30,21 +30,34 @@ pub fn get(cx: &mut Cx, j: &Value, full: bool) -> Result<(), Raise> {
     let g = |cx: &Cx, line: u32, k: &str| cx.at(line, p::get(j, k));
     let i = |cx: &Cx, line: u32, k: &str| cx.at(line, p::idx(j, k));
 
-    let l = ln!("print(\"job %s on %s: %s%s\"");
-    let short = i(cx, l, "short")?;
-    let node = g(cx, l, "node")?;
-    let state = i(cx, l, "state")?;
-    let reason = if p::truthy(&g(cx, l, "reason")?) {
-        let r = i(cx, l, "reason")?;
-        cx.at(l, p::pct(" (%s)", &[r]))?
-    } else {
-        String::new()
+    // 0.46.17: an auto job held on this server, on no node yet.
+    let l = ln!("if j.get(\"state\") == \"queued\" and (j.get(\"queue\") or {}).get(\"held\"):");
+    let held = p::eq_s(&g(cx, l, "state")?, "queued") && {
+        let q = or_dict(g(cx, l, "queue")?);
+        p::truthy(&cx.at(l, p::get(&q, "held"))?)
     };
-    let t = cx.at(
-        l,
-        p::pct("job %s on %s: %s%s", &[short, node, state, s(&reason)]),
-    )?;
-    cx.print(&t);
+    if held {
+        let l = ln!("print(\"job %s: held on this server (auto)\"");
+        let short = i(cx, l, "short")?;
+        let t = cx.at(l, p::pct("job %s: held on this server (auto)", &[short]))?;
+        cx.print(&t);
+    } else {
+        let l = ln!("print(\"job %s on %s: %s%s\"");
+        let short = i(cx, l, "short")?;
+        let node = g(cx, l, "node")?;
+        let state = i(cx, l, "state")?;
+        let reason = if p::truthy(&g(cx, l, "reason")?) {
+            let r = i(cx, l, "reason")?;
+            cx.at(l, p::pct(" (%s)", &[r]))?
+        } else {
+            String::new()
+        };
+        let t = cx.at(
+            l,
+            p::pct("job %s on %s: %s%s", &[short, node, state, s(&reason)]),
+        )?;
+        cx.print(&t);
+    }
 
     let l = ln!("argv = \" \".join(j.get(\"argv\") or [])");
     let argv = p::or(g(cx, l, "argv")?, list());
@@ -427,6 +440,13 @@ fn queue_lines(cx: &mut Cx, j: &Value) -> Result<(), Raise> {
         let q = cx.at(l, p::idx(j, "queue"))?;
         p::truthy(&cx.at(l, p::get(&q, "onNode"))?)
     };
+    let held = !on_node && {
+        let l = ln!("elif j.get(\"queue\") and j[\"queue\"].get(\"held\"):");
+        p::truthy(&g(cx, l, "queue")?) && {
+            let q = cx.at(l, p::idx(j, "queue"))?;
+            p::truthy(&cx.at(l, p::get(&q, "held"))?)
+        }
+    };
     if on_node {
         let q = cx.at(
             ln!("        q = j[\"queue\"]\n        print(\"  %s%s\""),
@@ -442,15 +462,31 @@ fn queue_lines(cx: &mut Cx, j: &Value) -> Result<(), Raise> {
         };
         let t = cx.at(l, p::pct("  %s%s", &[m, s(&class)]))?;
         cx.print(&t);
-        let l = ln!("if q.get(\"reason\") and q[\"reason\"] != \"node_queued\":");
-        if p::truthy(&cx.at(l, p::get(&q, "reason"))?)
-            && !p::eq_s(&cx.at(l, p::idx(&q, "reason"))?, "node_queued")
+        let l = ln!("if q.get(\"reason\") == \"pull_requested\":");
+        let l2 = ln!("elif q.get(\"reason\") and q[\"reason\"] != \"node_queued\":");
+        if p::eq_s(&cx.at(l, p::get(&q, "reason"))?, "pull_requested") {
+            // 0.46.17: the node was asked to give it back.
+            cx.print(concat!(
+                "  waiting for the node to give it back (",
+                cli_name!(),
+                " compute move); it is placed again then"
+            ));
+        } else if p::truthy(&cx.at(l2, p::get(&q, "reason"))?)
+            && !p::eq_s(&cx.at(l2, p::idx(&q, "reason"))?, "node_queued")
         {
             let l = ln!("print(\"  waiting for the node to answer: %s\"");
             let r = cx.at(l, p::idx(&q, "reason"))?;
             let t = cx.at(l, p::pct("  waiting for the node to answer: %s", &[r]))?;
             cx.print(&t);
         }
+    } else if held {
+        // 0.46.17: held on this server; the daemon's words name the
+        // nodes it fits.
+        let l = ln!("print(\"  %s\" % j[\"queue\"][\"line\"])");
+        let q = cx.at(l, p::idx(j, "queue"))?;
+        let line = cx.at(l, p::idx(&q, "line"))?;
+        let t = cx.at(l, p::pct("  %s", &[line]))?;
+        cx.print(&t);
     } else if p::truthy(&g(cx, ln!("    elif j.get(\"queue\"):"), "queue")?) {
         let q = cx.at(
             ln!("        q = j[\"queue\"]\n        at ="),

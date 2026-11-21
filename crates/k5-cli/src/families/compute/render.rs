@@ -1088,8 +1088,21 @@ fn jobs(cx: &mut Cx, v: &Value) -> Result<(), Raise> {
         }
         let l = ln!("state = j[\"state\"]");
         let mut state = cx.at(l, p::idx(&j, "state"))?;
-        let l = ln!("if state == \"queued\" and \"pinned\" in j:");
-        if p::eq_s(&state, "queued") && cx.at(l, p::has(&j, "pinned"))? {
+        let l = ln!("node, reason = j.get(\"node\") or \"?\", j.get(\"reason\") or \"\"");
+        let mut node = p::or(cx.at(l, p::get(&j, "node"))?, s("?"));
+        let mut reason = p::or(cx.at(l, p::get(&j, "reason"))?, s(""));
+        let l = ln!("if state == \"queued\" and (j.get(\"wait\") or {}).get(\"reason\") == \"held\":");
+        let held = p::eq_s(&state, "queued") && {
+            let w = p::or(cx.at(l, p::get(&j, "wait"))?, Value::Object(Vec::new()));
+            p::eq_s(&cx.at(l, p::get(&w, "reason"))?, "held")
+        };
+        let l = ln!("elif state == \"queued\" and \"pinned\" in j:");
+        if held {
+            // 0.46.17: an auto job held on this server, on no node yet.
+            state = s("held (auto)");
+            node = s("-");
+            reason = s("waits for a free slot");
+        } else if p::eq_s(&state, "queued") && cx.at(l, p::has(&j, "pinned"))? {
             let l = ln!("state += \" (pin)\" if j[\"pinned\"] else \" (auto)\"");
             let pinned = cx.at(l, p::idx(&j, "pinned"))?;
             let tail = if p::truthy(&pinned) {
@@ -1103,7 +1116,6 @@ fn jobs(cx: &mut Cx, v: &Value) -> Result<(), Raise> {
         let short = cx.at(l, p::idx(&j, "short"))?;
         let tier = cx.at(l, p::get(&j, "tier"))?;
         let tag = tier_tag(cx, l, &tier)?;
-        let node = p::or(cx.at(l, p::get(&j, "node"))?, s("?"));
         let node = cx.at(l, p::slice(&node, None, Some(12)))?;
         let exit = cx.at(l, p::get(&j, "exitCode"))?;
         let exit = if p::is_none(&exit) {
@@ -1111,7 +1123,6 @@ fn jobs(cx: &mut Cx, v: &Value) -> Result<(), Raise> {
         } else {
             cx.at(l, p::idx(&j, "exitCode"))?
         };
-        let reason = p::or(cx.at(l, p::get(&j, "reason"))?, s(""));
         let when = when_col(cx, l, &j)?;
         let jtag = p::or(cx.at(l, p::get(&j, "tag"))?, s("-"));
         let jtag = cx.at(l, p::slice(&jtag, None, Some(16)))?;

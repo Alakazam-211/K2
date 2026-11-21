@@ -242,17 +242,30 @@ fn one(r: &Value, from: u32) -> Result<String, Raise> {
             note(13)?
         ));
     }
-    let mode = get_in(r, "mode", 14).map_err(inside(14))?;
-    if mode.is_some_and(|m| matches!(m, Value::Str(t) if *t == Text::from("auto"))) {
-        let job = py::str_of(index(r, "job", 15).map_err(inside(15))?);
-        return Ok(format!("job {job}: auto-placed now{tail}. {}", note(15)?));
+    // 0.46.17: it waited in a shared node's own queue; that node is asked
+    // to give it back ("pulling": true).
+    if get_in(r, "pulling", 14)
+        .map_err(inside(14))?
+        .is_some_and(py::truthy)
+    {
+        let s = |k: &str| index(r, k, 17).map(py::str_of).map_err(inside(17));
+        let (job, from_, mode) = (s("job")?, s("from")?, s("mode")?);
+        return Ok(format!(
+            "job {job}: pulling back from {from_} ({mode}){tail}. {}",
+            note(17)?
+        ));
     }
-    let job = py::str_of(index(r, "job", 16).map_err(inside(16))?);
-    let n = get_in(r, "note", 16).map_err(inside(16))?;
+    let mode = get_in(r, "mode", 18).map_err(inside(18))?;
+    if mode.is_some_and(|m| matches!(m, Value::Str(t) if *t == Text::from("auto"))) {
+        let job = py::str_of(index(r, "job", 19).map_err(inside(19))?);
+        return Ok(format!("job {job}: auto-placed now{tail}. {}", note(19)?));
+    }
+    let job = py::str_of(index(r, "job", 20).map_err(inside(20))?);
+    let n = get_in(r, "note", 20).map_err(inside(20))?;
     let text = match n {
         Some(x) if py::truthy(x) => py::str_of(x),
         _ => {
-            let node = get_in(r, "node", 16).map_err(inside(16))?;
+            let node = get_in(r, "node", 20).map_err(inside(20))?;
             format!(
                 "pinned to {}",
                 node.map_or_else(|| "None".into(), py::str_of)
@@ -268,30 +281,30 @@ pub fn reader(body: &[u8]) -> Shown {
     let r = (|| -> Result<(), Raise> {
         let v = load(body, 3)?;
         let none = Value::Array(vec![]);
-        let warnings = or(get_in(&v, "warnings", 18)?, &none).clone();
-        for w in py_iter(&warnings, 18)? {
+        let warnings = or(get_in(&v, "warnings", 22)?, &none).clone();
+        for w in py_iter(&warnings, 22)? {
             err.push_str(&format!(
                 "[{} compute] note: {}\n",
                 cli_name!(),
                 py::str_of(&w)
             ));
         }
-        if contains(&v, "matched", 20)? {
-            let m = or(get_in(&v, "moved", 21)?, &none).clone();
+        if contains(&v, "matched", 24)? {
+            let m = or(get_in(&v, "moved", 25)?, &none).clone();
             let zero = Value::Int("0".into());
-            let n = py_len(&m, 22)?;
-            let matched = get_in(&v, "matched", 22)?.unwrap_or(&zero);
+            let n = py_len(&m, 26)?;
+            let matched = get_in(&v, "matched", 26)?.unwrap_or(&zero);
             out.push_str(&format!(
                 "moved {n} of {} matching queued job(s)\n",
-                py_d(matched, 22)?
+                py_d(matched, 26)?
             ));
-            for r in py_iter(&m, 23)? {
-                out.push_str(&format!("  {}\n", one(&r, 24)?));
+            for r in py_iter(&m, 27)? {
+                out.push_str(&format!("  {}\n", one(&r, 28)?));
             }
-            let skipped = or(get_in(&v, "skipped", 25)?, &none).clone();
-            for s in py_iter(&skipped, 25)? {
+            let skipped = or(get_in(&v, "skipped", 29)?, &none).clone();
+            for s in py_iter(&skipped, 29)? {
                 let g = |k: &str| -> Result<String, Raise> {
-                    Ok(get_in(&s, k, 26)?.map_or_else(|| "None".into(), py::str_of))
+                    Ok(get_in(&s, k, 30)?.map_or_else(|| "None".into(), py::str_of))
                 };
                 out.push_str(&format!(
                     "  skipped {}: {} ({})\n",
@@ -301,7 +314,7 @@ pub fn reader(body: &[u8]) -> Shown {
                 ));
             }
         } else {
-            out.push_str(&one(&v, 28)?);
+            out.push_str(&one(&v, 32)?);
             out.push('\n');
         }
         Ok(())

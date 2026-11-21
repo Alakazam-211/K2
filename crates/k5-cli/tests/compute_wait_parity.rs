@@ -32,6 +32,10 @@ const DONE: &str = r#"{"id":"aaaa1111bbbb","short":"aaaa1111","state":"done","no
 const RUNNING: &str = r#"{"id":"aaaa1111bbbb","short":"aaaa1111","state":"running","node":"mini"}"#;
 const QUEUED: &str = r#"{"id":"aaaa1111bbbb","short":"aaaa1111","state":"queued","node":"mini","queue":{"position":2,"of":3,"reason":"cpu"}}"#;
 const QUEUED_LINE: &str = r#"{"short":"aaaa1111","state":"queued","queue":{"line":"queued 1st on mini","position":1,"waitReason":"slot"},"wait":{"elsewhere":"linux-2 can start it now"}}"#;
+// 0.46.17: held on this server (queue.waitReason "held"), then a pull
+// back from a node's own queue in flight, then on a node.
+const HELD: &str = r#"{"short":"aaaa1111","state":"queued","node":"mini","queue":{"line":"held: waiting for a node with a free slot (fits: mini, linux-2, node-c, node-d, +1 more)","position":1,"reason":"grant_parallel_full","waitReason":"held","held":true,"fits":["mini","linux-2","node-c","node-d","node-e"],"nodeWaitWords":"all slots busy"},"wait":{"reason":"held","words":"held: waiting for a node with a free slot (fits: mini, linux-2, node-c, node-d, +1 more)"}}"#;
+const PULLING: &str = r#"{"short":"aaaa1111","state":"queued","node":"mini","queue":{"onNode":true,"message":"2nd in line on mini","position":2,"reason":"pull_requested"},"move":{"note":"pulling back: mini was asked to give it back (k2 compute move); then it is held on this server for the first node that fits with a free slot"}}"#;
 const B_RUNNING: &str = r#"{"id":"bbbb2222cccc","short":"bbbb2222","state":"running","node":"n2"}"#;
 const STALLED: &str = r#"{"id":"ssss3333dddd","short":"stalled1","state":"timeout","reason":"stalled","node":"linux-1","startedAt":1000,"endedAt":2900,"hint":"stopped by the stall guard: no output and no CPU for its whole --stall-timeout; set it with --stall-timeout (e.g. --stall-timeout 2h, or off for a quiet job), or stall_timeout in .k2/compute.toml"}"#;
 const B_DONE: &str = r#"{"id":"bbbb2222cccc","short":"bbbb2222","state":"done","node":"n2","exitCode":2,"assignedAt":10.5,"endedAt":75}"#;
@@ -69,6 +73,24 @@ fn compute_wait_for_each_job() {
             owner_and_port,
             0,
             6,
+        ),
+        case(
+            "held, a pull back, held again, then done",
+            &["wait", "aaaa1111"],
+            &[],
+            vec![ok(QUEUED), ok(PULLING), ok(HELD), ok(HELD), ok(DONE)],
+            owner_and_port,
+            0,
+            5,
+        ),
+        case(
+            "held, --json",
+            &["wait", "aaaa1111", "--json"],
+            &[],
+            vec![ok(HELD), ok(DONE)],
+            owner_and_port,
+            0,
+            2,
         ),
         case(
             "--quiet",

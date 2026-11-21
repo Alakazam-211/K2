@@ -622,6 +622,10 @@ fn compute_move() {
     let rig = Rig::new(VERB, "move");
     let moved = r#"{"job":"j1","moved":true,"from":"mini","node":"linux-1","mode":"auto","filter":{"os":"linux","avoid":["mini","mac-2"]},"note":"it starts now."}"#;
     let pinned = r#"{"job":"j2","moved":false,"mode":"pinned","node":"linux-2"}"#;
+    // 0.46.17: it waited in a shared node's own queue; that node is asked
+    // to give it back.
+    let pull_auto = r#"{"ok":true,"job":"j4","mode":"auto","from":"node-a","node":"node-a","moved":false,"pulling":true,"filter":{"avoid":["mini"]},"note":"asked node-a to give it back from its queue; then it is held on this server and goes to the first node that fits with a free slot. If it starts there first, it stays there"}"#;
+    let pull_to = r#"{"ok":true,"job":"j5","mode":"pinned","from":"node-a","node":"linux-2","moved":false,"pulling":true,"filter":null,"note":"will ask (when it reconnects) node-a to give it back from its queue; then it is pinned to linux-2. If it starts there first, it stays there"}"#;
     let v = vec![
         // covers: compute move
         case(
@@ -679,6 +683,53 @@ fn compute_move() {
             3,
             1,
         ),
+        case(
+            "a pull back, auto",
+            &["move", "j4", "--auto", "--avoid", "mini"],
+            &[],
+            vec![ok(pull_auto)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "a pull back, then pinned",
+            &["move", "j5", "--to", "linux-2"],
+            &[],
+            vec![ok(pull_to)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "a pull back, --json",
+            &["move", "j4", "--auto", "--json"],
+            &[],
+            vec![ok(pull_auto)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "--all-mine: a pull back among the moved",
+            &["move", "--all-mine", "--auto"],
+            &[],
+            vec![ok(
+                r#"{"matched":2,"moved":[{"job":"j1","moved":true,"from":"a","node":"b","mode":"auto"},{"job":"j4","moved":false,"pulling":true,"from":"node-a","node":"node-a","mode":"auto","note":"asked node-a to give it back"}]}"#,
+            )],
+            owner_and_port,
+            0,
+            1,
+        ),
+        raises(case(
+            "a pull back with no from",
+            &["move", "j4", "--auto"],
+            &[],
+            vec![ok(r#"{"job":"j4","pulling":true,"mode":"auto"}"#)],
+            owner_and_port,
+            1,
+            1,
+        )),
         // covers: compute move --json
         case(
             "--json",

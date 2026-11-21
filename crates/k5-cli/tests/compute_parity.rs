@@ -41,6 +41,14 @@ const EVENTS: &str = r#"{"events":[{"at":1763600000,"kind":"node.pause","actor":
 const STATS: &str = r#"{"text":["job abcd1234: 3 samples","cpu 2.0 of 4"]}"#;
 const USAGE: &str = r#"{"usage":[{"day":"2026-11-19","node":"n1","route":"relay","bytesIn":1234567,"bytesOut":5}],"metered":"relay traffic is metered"}"#;
 
+// 0.46.17's central hold: an auto job held on this server until a node
+// that fits has a free slot (the daemon's words in queue.line), and a pull
+// back from a shared node's own queue in flight (queue.reason).
+const HELD_GET: &str = r#"{"short":"hhhh1111","node":"linux-1","state":"queued","argv":["cargo","test"],"tier":"standard","queue":{"where":"server","position":1,"of":1,"reason":"grant_parallel_full","message":"no node free","waitReason":"held","waitWords":"held: waiting for a node with a free slot (fits: node-a, node-b)","held":true,"fits":["node-a","node-b"],"nodeWaitWords":"all 4 slots busy","line":"held: waiting for a node with a free slot (fits: node-a, node-b)","holdsQueue":true},"wait":{"reason":"held","words":"held: waiting for a node with a free slot (fits: node-a, node-b)"}}"#;
+const HELD_MORE: &str = r#"{"short":"hhhh2222","node":"node-a","state":"queued","argv":["make"],"queue":{"where":"server","position":1,"of":1,"reason":"any_hold","message":"held","waitReason":"held","held":true,"fits":["node-a","node-b","node-c","node-d","node-e","node-f"],"nodeWaitWords":null,"line":"held: waiting for a node with a free slot (fits: node-a, node-b, node-c, node-d, +2 more)"},"wait":{"reason":"held"}}"#;
+const PULLING: &str = r#"{"short":"pppp1111","node":"node-a","state":"queued","argv":["make"],"queue":{"onNode":true,"message":"2nd in line on node-a","reason":"pull_requested"},"move":{"auto":true,"moving":true,"note":"pulling back: node-a was asked to give it back (k2 compute move); then it is held on this server for the first node that fits with a free slot"}}"#;
+const HELD_JOBS: &str = r#"{"jobs":[{"short":"hhhh1111","tier":"standard","node":"linux-1","state":"queued","pinned":false,"reason":"grant_parallel_full","wait":{"reason":"held"},"submitter":"agent-a","argv":["cargo","test"]},{"short":"qqqq2222","node":"node-a","state":"queued","pinned":false,"reason":"pull_requested","wait":{"reason":"pull_requested"},"argv":["make"]},{"short":"rrrr3333","node":"node-b","state":"queued","pinned":true,"argv":["x"]},{"short":"dddd4444","node":"node-c","state":"done","exitCode":0,"wait":{"reason":"held"}}]}"#;
+
 fn big_jobs(n: usize) -> String {
     let rows: Vec<String> = (0..n)
         .map(|i| {
@@ -119,6 +127,22 @@ fn compute_reads_as_the_shell_does() {
         ok_case("get --full", &["get", "abcd1234", "--full"], JOB),
         // covers: compute get --json
         ok_case("get --json: the result", &["get", "abcd1234", "--json"], JOB),
+        ok_case("get: held on this server, two nodes fit", &["get", "hhhh1111"], HELD_GET),
+        ok_case("get: held, the fits list cut with +N more", &["get", "hhhh2222"], HELD_MORE),
+        ok_case("get --json: held, its fields as the daemon sent them", &["get", "hhhh2222", "--json"], HELD_MORE),
+        ok_case("get: a pull back in flight", &["get", "pppp1111"], PULLING),
+        ok_case("get --json: a pull back in flight", &["get", "pppp1111", "--json"], PULLING),
+        ok_case("status <job>: held", &["status", "hhhh1111"], HELD_GET),
+        ok_case("jobs: a held row, a pull, a pin, a done", &["jobs"], HELD_JOBS),
+        ok_case("jobs --json: a held row", &["jobs", "--json"], HELD_JOBS),
+        Case {
+            compare: Compare::Traceback,
+            ..case("get: held with no line", &["get", "a"], &[], vec![ok(r#"{"short":"a","state":"queued","queue":{"held":true}}"#)], owner_and_port, 1, 1)
+        },
+        Case {
+            compare: Compare::Traceback,
+            ..case("jobs: a held row whose wait is a list", &["jobs"], &[], vec![ok(r#"{"jobs":[{"short":"a","state":"queued","wait":[1]}]}"#)], owner_and_port, 1, 1)
+        },
         // covers: compute status
         ok_case("status <job>", &["status", "abcd1234"], JOB),
         usage_case("get alone", &["get"]),
@@ -878,4 +902,26 @@ fn compute_logs() {
     ] {
         rig.check(&c);
     }
+}
+
+/// A pull back's line names the command by the brand's name (in a build
+/// with `K2_BRAND_DIR=brand/xy` it says `xy`), never a typed `k2` or `k5`;
+/// the move note around it is the daemon's own words.
+#[test]
+fn the_pull_line_says_the_brand_s_name() {
+    let rig = Rig::new(VERB, "pullbrand");
+    let cli = k2_client::brand::CLI_NAME;
+    let c = ok_case("brand", &["get", "pppp1111"], PULLING);
+    let (out, log) = rig.binary(&c, false);
+    let want = format!(
+        "  2nd in line on node-a\n  waiting for the node to give it back ({cli} compute move); it is placed again then\n"
+    );
+    assert!(out.stdout.contains(&want), "{}", out.stdout);
+    assert!(
+        out.stdout.starts_with("job pppp1111 on node-a: queued\n"),
+        "{}",
+        out.stdout
+    );
+    assert_eq!(out.code, Some(0));
+    assert_eq!(log.len(), 1, "one GET, nothing else sent: {log:?}");
 }

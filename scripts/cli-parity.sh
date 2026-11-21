@@ -63,8 +63,9 @@
 # what the binary prints with one, and its no-python3 test checks the
 # rows that answer otherwise there. They meet env-answer-large in
 # wiki_parity.rs's wiki_status_with_a_large_answer and
-# mail_writes_parity.rs's a_large_body (and zen_parity.rs's, with the zen
-# lane).)
+# mail_writes_parity.rs's a_large_body, zen_parity.rs's
+# zen_history_with_a_large_answer, agent_parity.rs's
+# a_list_above_the_environment_s_limit and publish_parity.rs's ps_large.)
 # garden_blobs.sh meets expect-100-continue against a real daemon: its
 # one-chunk put of a body over 1 MiB goes through a relay that records each
 # request, and the test checks each side's head by the difference's name.
@@ -175,7 +176,7 @@ EXPECTED_DIFFS=(
     "bash32-pipe-reader|R3.3, K2 ruling at the 0.46.15 rebase|a request on the left of a pipe into a python3 reader that gets no answer (the check: an empty reply, one request over TCP, the owner token on disk): \`inbox\`, \`inbox read a1\`, \`inbox folders\`, \`read acme\`, \`activity\`, \`connect status\` (GETs), \`connections add beta\`, \`connections remove beta\`, \`api on\` and \`api-key revoke k1\` (POSTs), \`api-key list\` and \`agent template list\` (GETs), and \`agent template remove x\` (a POST). Both print the no-answer line (\"Error: K2's server ...\"); the binary then dies of SIGPIPE (141) with nothing on stdout, as bash 5 does. macOS's /bin/bash 3.2 runs the reader on the empty input and exits 1 with its output added: inbox \"No items.\" on stdout, inbox read \"Error: no answer from the K2 daemon (...). Try again: k2 inbox read <id>\" on stderr, inbox folders \"No folders yet. Create one by moving an item:\" and \"  k2 inbox move <id> projects\" on stdout, read an empty line on stderr, activity \"Error: the K2 daemon gave no usable answer: ''\" on stderr, connections add and remove \"Error: daemon returned an unparseable response: ''\" on stderr (0.46.17), api on the same line on stdout, api-key list and revoke \"Error: Expecting value: line 1 column 1 (char 0)\" on stderr, connect status nothing, agent template list and remove \"Error: daemon answered: \" on stderr. The pipe mark (_K2_PIPE_MARK) quiets only the heartbeat readers that set it, not these"
     "bash32-empty-brace|K2 ruling, macOS bash 3.2 until the shell's fix|\`msg ws --signal <kind> --payload ''\` with an empty payload (msg_signal_parity.rs, \"presence, an empty payload and kind, --inbox-silent\"): the payload takes cmd_signal's default, \"\${3:-{\\}}\"; macOS's /bin/bash 3.2 keeps the backslash there, so bash sends the text \"{\\}\" where the binary sends \"\" (bash 4 and later read {}, as the binary does). The rest of the request, the output and the exit are the same. The shell's fix (the default quoted) retires it"
     "feedback-optin-without-python3|K2 ruling at the 0.46.17 feedback opt-in|an agent (a passport over TCP) whose server says agents may not report (\"agents\": false, \"senderKind\": \"agent\"), cards off: with python3 both CLIs leave send-feedback's block out of \`help\` and print the one line for \`study send-feedback\`; with no python3 on PATH bash's probe can't read the answer, so bash prints the full help and the full page, while the binary reads the answer itself and still leaves the block out and prints the one line, as it does with python3. Both send the same requests either way (help: the settings read, then the cards; study: the settings read)"
-    "env-answer-large|K2 ruling, the K5 lanes' large answers|bash hands a daemon answer to Python in an environment variable, so above the kernel's argument limit bash stops with 'Argument list too long' (exit 126) and k5 prints the answer. The cases, each with its own large-answer row: \`wiki status\` with an index above 1 MiB (wiki_parity.rs, wiki_status_with_a_large_answer; on macOS its /bin/bash 3.2 exits 1, and both send the same two requests), \`mail send --body-file\` with a body above 128 KiB (mail_writes_parity.rs, a_large_body; the body rides M_BODY: on Linux bash sends nothing, the binary sends it once; macOS has one limit for the whole environment, where both send it), and \`zen\`'s large answer (zen_parity.rs, with the zen lane)"
+    "env-answer-large|K2 ruling, the K5 lanes' large answers|bash hands a daemon answer to Python in an environment variable, so above the kernel's argument limit bash stops with 'Argument list too long' (exit 126) and k5 prints the answer. The cases, each with its own large-answer row: \`wiki status\` with an index above 1 MiB (wiki_parity.rs, wiki_status_with_a_large_answer; on macOS its /bin/bash 3.2 exits 1, and both send the same two requests), \`mail send --body-file\` with a body above 128 KiB (mail_writes_parity.rs, a_large_body; the body rides M_BODY: on Linux bash sends nothing, the binary sends it once; macOS has one limit for the whole environment, where both send it), \`zen history\` with an answer above 1 MiB (zen_parity.rs, zen_history_with_a_large_answer; macOS's bash fails there too, its wording not checked), \`agent list\` above 1 MiB (agent_parity.rs, a_list_above_the_environment_s_limit; 1 on macOS) and \`publish ps\` (publish_parity.rs, ps_large)"
     "expect-100-continue|K2 ruling, K5 transport|a POST whose body is over 1 MiB (\`store blob put\` of a 1.2 MB file, one 2 MiB chunk, 1.6 MB of JSON): bash's curl adds \"Expect: 100-continue\" to the request's head and waits for the daemon's 100 before the body; the binary never sends it and sends the body at once. Everything else in the two requests is the same (the parity rig's hand-over headers masked), and a body under 1 MiB goes out the same from both. stdout, stderr and the exit code are the same"
     "python-version-error-text|K2 ruling, the macOS range 2 fixes|the binary words a Python error as Python 3.12 does (it has no Python version to copy); the shell's python3 words four of them otherwise, by its version, read from that python3, never guessed: before 3.11 \"string indices must be integers\" has no \", not 'str'\" (macOS's 3.9); before 3.12 a dict sliced raises TypeError (\"unhashable type: 'slice'\") where the binary's raises KeyError (the parity rig's tracebacks, mail forward show's \"events that are a dict\"); before 3.12 datetime.utcfromtimestamp prints no DeprecationWarning, where the binary prints 3.12's one line (\"<string>:<n>: DeprecationWarning: datetime.datetime.utcfromtimestamp() is deprecated ...\", remote-session's times); from 3.13 a JSON trailing comma is \"Illegal trailing comma before end of object\" (or array) at the comma, where the binary says \"Expecting property name enclosed in double quotes\" (or \"Expecting value\") after it (api-key list's \"a trailing comma\"). The rest of the output, the exit and the requests are the same"
     "edge-usage-exit-2|K2 ruling D6|bash's own failure on a command line it can't read, which only bash can print: a value flag as the last word (\`msg ws hi --from\`, also --command, --wake-timeout and --via; \`thread bob --from\`, also --limit and --before-seq, and \`thread unread --kind\`; \`talk ws hi --lines\`, also --from, --command, --agent, --session, --token, --answer, --respond, --answers and --wake-timeout) stops bash on \"<path to cli/k2>: line <n>: \$2: unbound variable\" with exit 1; the binary prints one plain line, \"Error: --from needs a value (try 'k2 msg --help')\", and exits 2. Neither sends anything. Also \`zen data restore w --rev\` (any flag but --json and --dry-run as the last word): bash's loop there never ends (\`shift 2 || true\` shifts nothing), so only the binary runs it: \"Error: --rev needs a value (try 'k2 zen data --help')\", exit 2, nothing sent (crates/k5-cli/tests/zen_parity.rs, the brand rows)"
@@ -410,9 +411,10 @@ s.serve_forever()
 # optin: /cli/product-feedback/settings says agents may not report (to an
 # agent), /cli/permission/enabled says cards are off, anything else
 # {"role":"canonical"}. Mode envbig: /cli/wiki/serve/status answers
-# {"enabled":false}, /cli/wiki/index 60,000 notes (about 1.4 MiB) and
-# /cli/mail/send a queued send (out_9), anything else
-# {"role":"canonical"}. Mode heads: the log holds each
+# {"enabled":false}, /cli/wiki/index 60,000 notes (about 1.4 MiB),
+# /cli/mail/send a queued send (out_9) and /cli/zen/history 12,000
+# files (about 1.2 MiB), anything else {"role":"canonical"}. Mode
+# heads: the log holds each
 # request's whole head (the request line and every header, in order, as
 # sent), then "body <bytes> <sha256>" and an empty line; the stub speaks
 # HTTP/1.1, so it answers "Expect: 100-continue" with a 100 as a daemon
@@ -439,6 +441,7 @@ WIKIBIG = {
 }
 ENVBIG = dict(WIKIBIG)
 ENVBIG["/cli/mail/send"] = b"{\"ok\":true,\"queued\":true,\"id\":\"out_9\"}"
+ENVBIG["/cli/zen/history"] = b"{\"files\":[" + b",".join(b"{\"file\":\"gardens/g%d.toml\",\"snapshots\":[{\"name\":\"snap-%d\",\"at\":\"2026-11-01T10:00:00Z\",\"clean\":true}]}" % (i, i) for i in range(12000)) + b"]}"
 TABLE = {"nul": NUL, "optin": OPTIN, "envbig": ENVBIG}.get(mode, {})
 HELPERS = {"vaultrun": "helper", "vaultrun-dir": "dir-helper"}
 if mode in HELPERS:
@@ -783,6 +786,10 @@ check_exec_child_env() {
 #   it once and prints the queued line, exit 0. On macOS (one limit for
 #   the whole environment) both send it and print the same: what was
 #   checked there held, and the check says the mail case was not proven.
+# - `zen history`, an answer of 12,000 files (about 1.2 MiB): on Linux
+#   bash exits 126 with "Argument list too long" and nothing on stdout
+#   (on macOS only its failing is checked); the binary exits 0, prints
+#   two lines a file and nothing on stderr; both send the same request.
 check_env_answer_large() {
     local d="$WORK/env-large" rc rr want=126 mail_proven=1 problems=()
     local queued="queued for approval (out_9) — track with 'k2 mail outbox out_9'"
@@ -804,6 +811,22 @@ check_env_answer_large() {
     [ ! -s "$d/err" ] || problems+=("wiki status: the binary wrote on stderr: $(head -c 300 "$d/err")")
     [ "$(wc -l <"$d/log.bash" | tr -d ' ')" = 2 ] || problems+=("wiki status: bash sent, want two requests: $(head -c 300 "$d/log.bash")")
     cmp -s "$d/log.bash" "$d/log" || problems+=("wiki status: the requests differ: bash '$(head -c 300 "$d/log.bash")', the binary '$(head -c 300 "$d/log")'")
+    # zen history
+    rc=0; run_side "$d" bash zen history || rc=$?
+    cp "$d/out" "$d/out.bash"; cp "$d/err" "$d/err.bash"; cp "$d/log" "$d/log.bash"
+    rr=0; run_side "$d" binary zen history || rr=$?
+    if [ "$(uname -s)" = Linux ]; then
+        [ "$rc" = 126 ] || problems+=("zen history: bash exited $rc, want 126: $(head -c 300 "$d/err.bash")")
+        grep -q 'Argument list too long' "$d/err.bash" || problems+=("zen history: bash's stderr has no 'Argument list too long': $(head -c 300 "$d/err.bash")")
+        [ ! -s "$d/out.bash" ] || problems+=("zen history: bash printed on stdout: $(head -c 300 "$d/out.bash")")
+    else
+        [ "$rc" != 0 ] || problems+=("zen history: bash exited 0 on an answer above 1 MiB")
+    fi
+    [ "$rr" = 0 ] || problems+=("zen history: the binary exited $rr, want 0: $(head -c 300 "$d/err")")
+    [ "$(wc -l <"$d/out" | tr -d ' ')" = 24000 ] || problems+=("zen history: the binary printed $(wc -l <"$d/out" | tr -d ' ') lines, want 24000: $(head -c 300 "$d/out")")
+    [ ! -s "$d/err" ] || problems+=("zen history: the binary wrote on stderr: $(head -c 300 "$d/err")")
+    [ "$(wc -l <"$d/log.bash" | tr -d ' ')" = 1 ] || problems+=("zen history: bash sent, want one request: $(head -c 300 "$d/log.bash")")
+    cmp -s "$d/log.bash" "$d/log" || problems+=("zen history: the requests differ: bash '$(head -c 300 "$d/log.bash")', the binary '$(head -c 300 "$d/log")'")
     # mail send --body-file
     local mail=(mail send a@x.example --subject S --body-file big.txt)
     rc=0; run_side "$d" bash "${mail[@]}" || rc=$?

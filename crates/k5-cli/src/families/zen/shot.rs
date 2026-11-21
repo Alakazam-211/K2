@@ -25,7 +25,7 @@
 //! report in another (`ZO`). A `--data` fixture whose JSON (blobs and
 //! all) is above what one variable may hold (128 KiB on Linux) stops bash
 //! there ("Argument list too long", exit 126) before any request; the
-//! binary sends it. That is `zen-large-answer`'s cause, on the way out.
+//! binary sends it. That is `env-answer-large`'s cause, on the way out.
 
 use super::call::Zen;
 use super::print::{self, blank, head200, indented, jstr, or, s, Out};

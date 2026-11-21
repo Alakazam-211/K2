@@ -34,7 +34,7 @@
 //! The printers get the answer in an environment variable. An answer
 //! above what one may hold (128 KiB on Linux) stops bash there
 //! ("Argument list too long", exit 126); the binary prints it. That is
-//! the named difference `zen-large-answer` (`scripts/cli-parity.sh`).
+//! the named difference `env-answer-large` (`scripts/cli-parity.sh`).
 
 pub mod call;
 pub mod data;

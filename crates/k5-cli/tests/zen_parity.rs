@@ -944,7 +944,7 @@ fn zen_core_verbs_answer_as_the_shell_does() {
     });
 }
 
-/// `zen-large-answer`: an answer above what an environment variable may
+/// `env-answer-large`: an answer above what an environment variable may
 /// hold. Bash stops at its Python (exit 126, "Argument list too long");
 /// the binary prints it. Both send the same request.
 #[test]

@@ -28130,7 +28130,9 @@ except Exception as e:
 cmd_signal() {
     local target="${1:-}"
     local kind="${2:-msg}"
-    local raw_payload="${3:-{\}}"
+    # The default is quoted inside the expansion: macOS's bash 3.2 keeps
+    # the backslash of `{\}` there and sent the text {\}.
+    local raw_payload="${3:-"{}"}"
     shift 3 2>/dev/null || true
     local delivery="live"
     local from

@@ -7,7 +7,10 @@
 # program text. This test sends signals whose kind, payload, --from and
 # target hold a double quote, three double quotes, a single quote, a
 # backslash and a newline, and checks the body the stub daemon got: one
-# JSON object whose fields are those values, byte for byte.
+# JSON object whose fields are those values, byte for byte. An empty
+# --payload is the empty object on every bash: msg and status send the
+# text "", a custom kind the payload {} (macOS's bash 3.2 sent the text
+# {\} for all three before 0.46.17).
 #
 # How: a python stub daemon on a free loopback port keeps every request
 # body. HOME is a temp dir, no real daemon, no network. Loud: every failure
@@ -145,6 +148,31 @@ assert s["from"]["name"] == E["from"], s["from"]
 assert s["to"]["name"] == E["target"], s["to"]
 assert s["delivery"] == "inbox", s["delivery"]
 '
+
+echo "== an empty payload is the empty object on every bash (3.2 sent the text {\\}) =="
+# send_empty <label> <python assertion on s> <args after msg agent-b>
+send_empty() {
+    local label="$1" asserts="$2"; shift 2
+    : >"$REQ_LOG"
+    set +e
+    OUT="$("$K2" msg agent-b "$@" </dev/null 2>"$WORK/err")"
+    RC=$?
+    set -e
+    [ "$RC" -eq 0 ] && ok "$label: exit 0" || { bad "$label: exit $RC"; cat "$WORK/err" >&2; }
+    check_body "$label" "$asserts"
+}
+send_empty "msg --signal msg --payload ''" \
+    'assert s["kind"] == {"kind": "msg", "data": {"text": ""}}, s["kind"]' \
+    --signal msg --payload ''
+send_empty "msg --signal status --payload ''" \
+    'assert s["kind"] == {"kind": "status", "data": {"text": ""}}, s["kind"]' \
+    --signal status --payload ''
+send_empty "msg --signal ping --payload ''" \
+    'assert s["kind"] == {"kind": "custom", "data": {"kind": "ping", "payload": {}}}, s["kind"]' \
+    --signal ping --payload ''
+send_empty "msg --signal msg ''" \
+    'assert s["kind"] == {"kind": "msg", "data": {"text": ""}}, s["kind"]' \
+    --signal msg ''
 
 echo ""
 echo "signal_values_as_data: $pass passed, $fail failed"

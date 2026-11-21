@@ -5,6 +5,9 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 ## 0.46.17 — Read-only calendar links, live documents that save in groups, and agents that report only with your yes
 
+### Security
+- **Members can use terminal sessions.** A Member login can open and type into terminal sessions on this server, which run as the server's user. Give Member only to people you'd trust with the server.
+
 ### Command line
 - **A card's `--options` splits on `;`, never on a comma.** `k2 thread ask` and `k2 tickets ask` read `--options "No, the clean-up is enough; Yes, rewrite it"` as two choices, commas kept in each. A value with commas and no `;` stays one choice, and the command says so in one line: `--options splits on ';'; this became one option. Use ';' between options, or repeat --option`. The repeatable `--option "…"` (now on `k2 tickets ask` too) is still the easiest way. K2's server reads a card's options the same way, so an older `k2` that sends a comma list gets one choice, not several.
 - **Restart Codex tabs that were open before this update** (close and reopen them) so k2 commands keep working in them; until then they say so and send nothing. A `k2` command from Codex now runs only in a tab K2 opened with Codex's own server, where no other tab's Codex can run it. In any other K2 tab (one from before this update, `codex` typed in a tab's shell, or under a Codex server another tab started) it sends nothing, never the server owner's token, and exits 3 saying to reopen the tab from K2; `k2 help` and `--help` still work there. In your own terminal outside K2, and on a server with session passports off, nothing changes.

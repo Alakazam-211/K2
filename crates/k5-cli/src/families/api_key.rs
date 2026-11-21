@@ -709,6 +709,10 @@ fn create(client: &mut Client, closing: &mut Closing, c: &Create, sock: &Path) -
             out::stderr_line(BOTH_KEYS);
             return Exit::Usage;
         }
+        // Typed or piped: never over plain http to another computer.
+        if !crate::prelude::plain_http::password_transport_ok() {
+            return Exit::Usage;
+        }
         let key = prompt::read_secret_stdin(PROMPT);
         if key.is_empty() {
             out::stderr_line(NO_KEY);

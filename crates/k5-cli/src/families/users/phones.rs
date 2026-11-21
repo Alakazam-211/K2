@@ -154,6 +154,10 @@ pub fn answer(u: &mut Users<'_>, form: Form, decode: Decode) -> Result<Exit, Exi
             let body = user_body(user, None);
             let mut resp = u.held(PAIR_CODE, Call::PostJson(body.as_bytes()))?;
             if contains(&resp, AGAIN) {
+                // Typed or piped: never over plain http to another computer.
+                if !crate::prelude::plain_http::password_transport_ok() {
+                    return Ok(Exit::Usage);
+                }
                 let pw = if prompt::stdin_is_tty() {
                     prompt::ask_hidden(PROMPT)
                 } else {

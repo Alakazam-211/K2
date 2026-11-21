@@ -651,6 +651,10 @@ fn relay(ctx: &mut Ctx, home: &Path, words: &[&str]) -> Exit {
             if !port.is_empty() && !port.bytes().all(|b| b.is_ascii_digit()) {
                 return usage("--port is a number");
             }
+            // Typed or piped: never over plain http to another computer.
+            if !crate::prelude::plain_http::password_transport_ok() {
+                return Exit::Usage;
+            }
             let pw = password();
             if pw.is_empty() {
                 return usage("no password given");

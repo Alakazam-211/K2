@@ -54,21 +54,8 @@ pub fn run() {
         return;
     }
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
-    let first = |names: &[&'static str]| -> Option<String> {
-        env_names::first_nonempty_os(names).map(|(_, v)| v.to_string_lossy().into_owned())
-    };
-    let host = first(env_names::HOST).unwrap_or_else(|| crate::daemon::DEFAULT_HOST.to_string());
-    let plain_ok = first(env_names::PLAIN_HTTP_OK).is_some_and(|v| v == "1");
-    let step = step(&args, &host, plain_ok, || {
-        first(env_names::PORT)
-            .or_else(|| {
-                let home = crate::home::k2_home().ok()?;
-                let text = std::fs::read(home.join("heartbeat.port")).ok()?;
-                let text = String::from_utf8_lossy(&text);
-                Some(text.trim_end_matches('\n').to_string())
-            })
-            .unwrap_or_default()
-    });
+    let plain_ok = setting(env_names::PLAIN_HTTP_OK).is_some_and(|v| v == "1");
+    let step = step(&args, &host(), plain_ok, port);
     let mut err = std::io::stderr().lock();
     match step {
         Step::Quiet => {}
@@ -82,6 +69,51 @@ pub fn run() {
             std::process::exit(Exit::Usage.code());
         }
     }
+}
+
+/// A setting as the shell's `_envn_into` reads it: the first of its names
+/// that is set and not empty.
+fn setting(names: &[&'static str]) -> Option<String> {
+    env_names::first_nonempty_os(names).map(|(_, v)| v.to_string_lossy().into_owned())
+}
+
+/// `HOST`, `127.0.0.1` when unset.
+fn host() -> String {
+    setting(env_names::HOST).unwrap_or_else(|| crate::daemon::DEFAULT_HOST.to_string())
+}
+
+/// `PORT`, else `$(cat heartbeat.port)` in the K2 home, else empty.
+fn port() -> String {
+    setting(env_names::PORT)
+        .or_else(|| {
+            let home = crate::home::k2_home().ok()?;
+            let text = std::fs::read(home.join("heartbeat.port")).ok()?;
+            let text = String::from_utf8_lossy(&text);
+            Some(text.trim_end_matches('\n').to_string())
+        })
+        .unwrap_or_default()
+}
+
+/// `_k2_password_transport_ok`: a password, PIN or key a command sends to
+/// the daemon never goes over plain http to another computer
+/// ([`daemon_is_plain_remote`]), typed or piped. Each such command asks
+/// this before it prompts or reads. False: the refusal's line is on
+/// stderr (after the step's own line, as the shell's prelude printed
+/// that first), nothing was read, and the command ends with exit 2. The
+/// switch and a Tailscale host don't change it. Not for a prompt whose
+/// answer goes only to this computer's vault socket (the vault confirms,
+/// `vault send --stdin`, `confirm-password set`, `restore`).
+pub fn password_transport_ok() -> bool {
+    run();
+    let host = host();
+    if !daemon_is_plain_remote(&host) {
+        return true;
+    }
+    let mut err = std::io::stderr().lock();
+    let line = refusal_line(&format!("http://{host}:{}", port()));
+    let _ = err.write_all(format!("{line}\n").as_bytes());
+    let _ = err.flush();
+    false
 }
 
 /// The step won't run this time: a gate stopped the command first.
@@ -230,12 +262,16 @@ mod tests {
         let p = policy();
         let warn = warning_line("${HOST}").replacen(k2_client::cli_name!(), "${0##*/}", 1);
         assert!(p.contains(&format!("echo \"{warn}\" >&2")), "{warn}");
-        let refuse = refusal_line("${BASE_URL}");
-        assert!(p.contains(&format!("echo \"{refuse}\" >&2")), "{refuse}");
         assert!(p.contains(
             "    _envn_into _k2_plain_ok PLAIN_HTTP_OK\n    if [ \"$_k2_plain_ok\" != 1 ] && ! _k2_host_is_tailnet_literal \"$HOST\"; then\n"
         ));
-        assert!(p.contains("            --password|--password-stdin|--password=*)\n"));
+        assert!(p.contains(
+            "            --password|--password-stdin|--password=*) _k2_password_transport_ok ;;\n"
+        ));
+        assert!(p.contains(&format!(
+            "_k2_password_transport_ok() {{\n    _k2_daemon_is_plain_remote || return 0\n    local base\n    _k2_daemon_base base\n    echo \"{}\" >&2\n    exit 2\n}}\n",
+            refusal_line("${base}")
+        )));
         assert!(p.contains(
             "case \"${1:-}\" in \"\"|study|help|--help|-h|--schema|version|--version) _k2_offline_verb=1 ;; esac\nfor _a in \"$@\"; do case \"$_a\" in -h|--help) _k2_offline_verb=1 ;; esac; done\n"
         ));

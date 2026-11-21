@@ -877,6 +877,10 @@ pub fn pw_value(pw: &Secret) -> Value {
 ///
 /// `$(…)` then drops the NULs and trailing newlines of what it printed.
 pub fn password(stdin: bool, decode: Decode) -> Result<Secret, Exit> {
+    // Typed or piped: never over plain http to another computer.
+    if !crate::prelude::plain_http::password_transport_ok() {
+        return Err(Exit::Usage);
+    }
     if stdin {
         let line = first_line_kept();
         let mut b = line;

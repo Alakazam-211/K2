@@ -467,6 +467,10 @@ impl Drop for Echo {
 
 fn api_key_send(w: &mut Sent, k: &ApiKey) -> Exit {
     let key = if k.from_stdin {
+        // Typed or piped: never over plain http to another computer.
+        if !crate::prelude::plain_http::password_transport_ok() {
+            return Exit::Usage;
+        }
         let key = read_secret("Paste the API key: ");
         if key.is_empty() {
             out::stderr_line("Error: no key on stdin (to clear the key, run without --key-stdin and without a key).");

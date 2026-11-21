@@ -535,6 +535,11 @@ fn verb(ctx: &mut Ctx, sub: &str, rest: &[&str]) -> Result<Exit, Exit> {
             )?;
             let opts = set_opts(&o, sign)?;
             let base = merge(&[&sj, &nj, &opts]);
+            // The value goes to the daemon, typed or piped: never over
+            // plain http to another computer.
+            if !crate::prelude::plain_http::password_transport_ok() {
+                return Err(Exit::Usage);
+            }
             let body = body_with_value(base)?;
             let r = ctx.call(true, "set", body.as_str())?;
             drop(body);
@@ -549,6 +554,9 @@ fn verb(ctx: &mut Ctx, sub: &str, rest: &[&str]) -> Result<Exit, Exit> {
                 o.pos.len() == 1,
                 "value_on_argv: values are read from stdin, never an argument".into(),
             )?;
+            if !crate::prelude::plain_http::password_transport_ok() {
+                return Err(Exit::Usage);
+            }
             let body = body_with_value(merge(&[&sj, &nj]))?;
             let r = ctx.call(true, "rotate", body.as_str())?;
             drop(body);

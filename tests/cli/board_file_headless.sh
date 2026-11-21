@@ -101,10 +101,15 @@ exec /bin/cat > /dev/null
 EOF
 chmod +x "$SB/shim/claude"
 
+# The agent rows use one passport, read once from claude.env. The active
+# reaper closes beta's pinned chat about a minute after boot (nothing marks
+# beta Active here) and revokes that passport with its cell socket, so every
+# agent row after that minute got 403. Hold the reaper off for the run.
 start_daemon() {
     local log="$SB/$1"; shift
     TMPDIR="$SB/tmp" XDG_RUNTIME_DIR="$SB/run" K2_RUNTIME_DIR= \
         HOME="$SB" K2_TEST_AGENT_SHIM_DIR="$SB/shim" K2SO_WATCHDOG_DISABLED=1 \
+        K5_ACTIVE_REAPER_GRACE_MS=86400000 \
         K2_HEARTBEAT_NO_SELF_HEAL=1 K2_SUBSCRIPTION_PROBE=deny "$@" \
         "$DAEMON_BIN" >"$log" 2>&1 &
     DAEMON_PID=$!
@@ -667,6 +672,26 @@ k2_as_owner doc frobnicate px.k5board; want_rc 4 "a verb that's neither the boar
 ok "B0: k2 doc write --base, restore and cat still refuse a .k5board, and its bytes stay"
 rm -f "$B/px.k5board"
 
+# Before the restart below: a restart ends the pinned chat and its cell socket
+# (no k2-ptyd here to hold them), and the last row asks that socket directly.
+echo "== k2 explain <kit id> with Board files off (GET /cli/kit/explain) =="
+owner POST /cli/settings/update '{"boardFilePreview": false}'; want 200 "turn the preview off"
+owner POST /cli/board/file/verb '{"argv": ["explain", "MPC-E160"]}'; want 404 "the board verb, off"; code_is not_enabled "the board verb, off"
+for who in owner agent; do
+    "k2_as_$who" explain MPC-E160; want_rc 0 "k2 explain MPC-E160 as the $who, Board files off"
+    case "$OUT" in "MPC-E160 "*) ok "as the $who: the kit's page" ;; *) fail "as the $who: not the kit's page: $OUT / $ERR" ;; esac
+    "k2_as_$who" explain MPC-E160 --json; want_rc 0 "k2 explain MPC-E160 --json as the $who"
+    jok "$OUT" 'j["id"] == "MPC-E160"' "as the $who, --json: the kit's JSON"
+    "k2_as_$who" explain MPC-E999; want_rc 4 "k2 explain MPC-E999 as the $who: the kit's unknown id row"
+    has "$ERR" "MPC-E160" "as the $who: the unknown id row names its own id"
+done
+agent GET /cli/kit/explain "" "id=MPC-E160"; want 200 "the cell socket serves it to a passport"
+jok "$BODY" 'j["exit"] == 0 and j["stdout"].startswith("MPC-E160 ")' "the cell socket: the kit's page"
+Q2="path=$A/renamed.k5board" owner GET /cli/kit/explain "" "id=MPC-E160"; want 400 "a path field"; code_is bad_request "a path field"
+Q2="file=notes.md" owner GET /cli/kit/explain "" "id=MPC-E160"; want 400 "a file field"; code_is bad_request "a file field"
+owner POST /cli/kit/explain '{"id": "MPC-E160"}'; want 405 "a read: POST is refused"
+owner POST /cli/settings/update '{"boardFilePreview": true}'; want 200 "turn the preview back on"
+
 # Last, because it restarts the daemon: every agent check above uses the first
 # passport, and a restarted pinned chat may not be back in time on a slow node.
 echo "== held edits survive a restart =="
@@ -715,24 +740,6 @@ save "$(pj '{"path": A, "groups": [{"id": "h7", "ops": [{"op": "set", "id": "s-h
 owner POST /cli/fs/rename "$(pj '{"old_path": A, "new_name": "renamed.k5board"}' "$H" "$B")"; want 200 "rename"
 owner GET /cli/board/file/read "" "path=$A/renamed.k5board"; jok "$BODY" 'len(j["held"]) == 1' "a K2 rename takes its held edits along"
 # An agent's conflict isn't kept.
-
-echo "== k2 explain <kit id> with Board files off (GET /cli/kit/explain) =="
-owner POST /cli/settings/update '{"boardFilePreview": false}'; want 200 "turn the preview off"
-owner POST /cli/board/file/verb '{"argv": ["explain", "MPC-E160"]}'; want 404 "the board verb, off"; code_is not_enabled "the board verb, off"
-for who in owner agent; do
-    "k2_as_$who" explain MPC-E160; want_rc 0 "k2 explain MPC-E160 as the $who, Board files off"
-    case "$OUT" in "MPC-E160 "*) ok "as the $who: the kit's page" ;; *) fail "as the $who: not the kit's page: $OUT / $ERR" ;; esac
-    "k2_as_$who" explain MPC-E160 --json; want_rc 0 "k2 explain MPC-E160 --json as the $who"
-    jok "$OUT" 'j["id"] == "MPC-E160"' "as the $who, --json: the kit's JSON"
-    "k2_as_$who" explain MPC-E999; want_rc 4 "k2 explain MPC-E999 as the $who: the kit's unknown id row"
-    has "$ERR" "MPC-E160" "as the $who: the unknown id row names its own id"
-done
-agent GET /cli/kit/explain "" "id=MPC-E160"; want 200 "the cell socket serves it to a passport"
-jok "$BODY" 'j["exit"] == 0 and j["stdout"].startswith("MPC-E160 ")' "the cell socket: the kit's page"
-Q2="path=$A/renamed.k5board" owner GET /cli/kit/explain "" "id=MPC-E160"; want 400 "a path field"; code_is bad_request "a path field"
-Q2="file=notes.md" owner GET /cli/kit/explain "" "id=MPC-E160"; want 400 "a file field"; code_is bad_request "a file field"
-owner POST /cli/kit/explain '{"id": "MPC-E160"}'; want 405 "a read: POST is refused"
-owner POST /cli/settings/update '{"boardFilePreview": true}'; want 200 "turn the preview back on"
 
 echo "== temp files =="
 

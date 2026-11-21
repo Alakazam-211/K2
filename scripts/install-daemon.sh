@@ -228,8 +228,76 @@ sha256_of() {
     fi
 }
 
+# GitHub's own hosts: the only ones a fetch from GitHub follows a redirect
+# to. After a repository move github.com answers the old path with a
+# redirect to the new one, and its release downloads redirect to
+# release-assets.githubusercontent.com (objects.githubusercontent.com for
+# older links); api.github.com moves the same way. Curl can't limit -L to
+# a list of hosts, so github_fetch never uses -L: it follows each hop
+# itself, https only, after checking the host, and refuses a redirect
+# anywhere else before that address is contacted. The same walk as the
+# k2 CLI's _k2_github_curl (cli/src/update.sh); this script stands alone,
+# so it carries its own copy.
+K2_GITHUB_HOSTS="api.github.com github.com objects.githubusercontent.com release-assets.githubusercontent.com"
+# The most redirects one fetch follows.
+K2_GITHUB_MAX_REDIRS=5
+
+# github_url_ok <url>: 0 when <url> is https on one of GitHub's hosts, with
+# no name before an @ and no port.
+github_url_ok() {
+    case "$1" in https://*) ;; *) return 1 ;; esac
+    _ghrest="${1#https://}"
+    _ghhost="${_ghrest%%[/?#]*}"
+    for _ghk in $K2_GITHUB_HOSTS; do
+        [ "$_ghhost" = "$_ghk" ] && return 0
+    done
+    return 1
+}
+
+# github_where <url>: the scheme and host of <url>, printable characters
+# only, for an error line (never the path or the query).
+github_where() {
+    case "$1" in
+        *://*) _ghw="${1#*://}"; _ghw="${1%%://*}://${_ghw%%[/?#]*}" ;;
+        *) _ghw="${1%%[/?#]*}" ;;
+    esac
+    printf '%s' "$_ghw" | LC_ALL=C tr -cd '[:graph:]'
+}
+
+# github_fetch <url> <file>: GET <url> into <file>, following redirects on
+# GitHub's hosts one hop at a time (at most K2_GITHUB_MAX_REDIRS), https
+# only, also when a ~/.curlrc says -L. Sends no token: no config, no
+# Authorization header. Returns 1 when curl fails (curl's own line on
+# stderr). A redirect off GitHub's hosts, to anything but https, or past
+# the cap prints one line and returns 2; nothing is sent to that address.
+github_fetch() {
+    _ghu="$1"; _ghf="$2"; _ghn=0
+    while :; do
+        _ghnext=$(curl --no-location --proto =https -fsS -o "$_ghf" -w '%{redirect_url}' "$_ghu") || return 1
+        [ -n "$_ghnext" ] || return 0
+        _ghn=$((_ghn + 1))
+        if [ "$_ghn" -gt "$K2_GITHUB_MAX_REDIRS" ]; then
+            echo "Error: GitHub redirected more than $K2_GITHUB_MAX_REDIRS times (the last to $(github_where "$_ghnext")); stopped there" >&2
+            return 2
+        fi
+        case "$_ghnext" in
+            https://*) ;;
+            *) echo "Error: GitHub redirected to $(github_where "$_ghnext"), which is not https; nothing was sent there" >&2
+               return 2 ;;
+        esac
+        if ! github_url_ok "$_ghnext"; then
+            echo "Error: GitHub redirected to $(github_where "$_ghnext"), which is not GitHub; nothing was sent there" >&2
+            return 2
+        fi
+        _ghu="$_ghnext"
+    done
+}
+
 fetch() {
-    # fetch <url> <dest-file>  (dest "-" = stdout)
+    # fetch <url> <dest-file>  (dest "-" = stdout). A URL on GitHub's hosts
+    # (the default manifest, the release's assets) goes through
+    # github_fetch; any other is one the person or their manifest named (a
+    # mirror, K2_MANIFEST_URL): fetched as before, with curl -L.
     _u="$1"; _d="$2"
     case "$_u" in
         file://*)
@@ -239,7 +307,17 @@ fetch() {
             ;;
         *)
             command -v curl >/dev/null 2>&1 || die "curl is required to fetch from the network."
-            if [ "$_d" = "-" ]; then
+            if github_url_ok "$_u"; then
+                if [ "$_d" = "-" ]; then
+                    _ft=$(mktemp "${TMPDIR:-/tmp}/k2-install-fetch.XXXXXX") \
+                        || die "Failed to make a temp file to fetch $_u"
+                    github_fetch "$_u" "$_ft" || { rm -f "$_ft"; die "Failed to fetch: $_u"; }
+                    cat "$_ft"
+                    rm -f "$_ft"
+                else
+                    github_fetch "$_u" "$_d" || die "Failed to fetch: $_u"
+                fi
+            elif [ "$_d" = "-" ]; then
                 curl -fsSL "$_u" || die "Failed to fetch: $_u"
             else
                 curl -fsSL "$_u" -o "$_d" || die "Failed to fetch: $_u"

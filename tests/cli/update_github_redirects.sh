@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# `k2 update` / `--app` / `--list` and `k2 daemon install` follow GitHub's
-# own redirects, and only those.
+# `k2 update` / `--app` / `--list`, `k2 daemon install` and the public
+# installer (scripts/install-daemon.sh) follow GitHub's own redirects, and
+# only those.
 #
 # Regression: `k2 update` asked GitHub with `curl -fsS` and no -L. After a
 # repository move api.github.com answers the old path with a 301 to the
 # new one, so the check read the 301's own body and printed
 # "Latest:  unknown". `k2 daemon install` used `curl -fsSL`, which follows
-# a redirect to any host, plain http too. Now each hop is followed by the
-# CLI itself: https only, on GitHub's hosts only (api.github.com,
+# a redirect to any host, plain http too, and so did install-daemon.sh.
+# Now each hop is followed by the CLI (and the installer) itself: https only, on GitHub's hosts only (api.github.com,
 # github.com, objects.githubusercontent.com,
 # release-assets.githubusercontent.com), at most 5 hops. Anything else is
 # refused with one line on stderr, exit 1, and the other address is never
@@ -21,8 +22,11 @@
 # logs each request's Host, path and whether it carried an Authorization
 # header. Each row writes the stub's mode to a file first.
 # Hermetic: env -i, a temp HOME and TMPDIR, no daemon, no network. Loud.
-# Needs python3, openssl and curl.
-# Run with: bash tests/cli/update_github_redirects.sh
+# Needs python3, openssl and curl. The installer runs as a dry run with
+# K2_NO_SERVICE=1 and K2_NO_ROOT_HELPER=1, under sh, with stand-ins for
+# systemctl, launchctl, sudo, runuser and minisign that log any call (none
+# may come). K2_TEST_INSTALLER names another copy of the installer (the
+# bite). Run with: bash tests/cli/update_github_redirects.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -32,6 +36,7 @@ for t in python3 openssl; do
 done
 # The system curl, the one a person's k2 runs.
 REAL_CURL="$(PATH=/usr/bin:/bin command -v curl)" || { echo "FAIL: no curl in /usr/bin or /bin" >&2; exit 1; }
+INSTALLER="${K2_TEST_INSTALLER:-$ROOT/scripts/install-daemon.sh}"
 
 pass=0
 fail=0
@@ -152,7 +157,10 @@ class H(BaseHTTPRequestHandler):
             mode = f.read().strip()
         kind = starts.get(self.path)
         if kind is not None:
-            if mode == "moved":
+            if mode == "moved" and kind == "manifest":
+                # A moved repository's release download, on github.com.
+                self.send(301, b"", "https://%s%s" % (host, self.path.replace("/Alakazam-211/", "/Moved-Org/")))
+            elif mode == "moved":
                 # GitHub's own shape: /repos/<owner>/<repo>/... moves
                 # to /repositories/<id>/... on the same host.
                 self.send(301, b'{"message":"Moved Permanently"}',
@@ -164,6 +172,9 @@ class H(BaseHTTPRequestHandler):
                 self.send(302, b"", mode[3:])
             else:
                 self.send(500, b"bad mode")
+            return
+        if self.path == "/Moved-Org/K2/releases/latest/download/daemon-latest.json":
+            self.answer("manifest")
             return
         if self.path.startswith("/repositories/42/"):
             self.answer(starts[repo + self.path[len("/repositories/42"):]])
@@ -235,6 +246,10 @@ case "\${1:-}" in
 esac
 EOF
 chmod +x "$STUBS/curl" "$STUBS/uname"
+for t in systemctl launchctl sudo runuser minisign; do
+    printf '#!/bin/sh\necho "STANDIN %s $*" >>"%s"\nexit 97\n' "$t" "$WORK/standin.log" >"$STUBS/$t"
+    chmod +x "$STUBS/$t"
+done
 
 # run <mode> <k2 args...>: sets OUT, ERR, RC; clears the logs.
 run() {
@@ -372,6 +387,57 @@ run "to:http://github.com/x" daemon install --dry-run --no-service
 same "daemon install, to http: exit 1" "$RC" 1
 case "$ERR" in "Error: GitHub redirected to http://github.com, which is not https; nothing was sent there"*) ok "daemon install, to http: says so" ;; *) bad "daemon install, to http: stderr"; show "$ERR" ;; esac
 nothing_else "daemon install, to http"
+
+echo "== scripts/install-daemon.sh: the manifest follows GitHub's redirects only =="
+# inst <mode>: the installer's dry run; sets OUT, ERR, RC; clears the logs.
+inst() {
+    printf '%s\n' "$1" >"$WORK/mode"
+    : >"$WORK/gh.log"; : >"$WORK/off.log"; : >"$WORK/curl.log"; : >"$WORK/standin.log"
+    set +e
+    env -i PATH="$STUBS:/usr/bin:/bin" HOME="$H" TMPDIR="$T" K2_TOKEN="$TOKEN" \
+        K2_DRY_RUN=1 K2_NO_SERVICE=1 K2_NO_ROOT_HELPER=1 K2_BIN_DIR="$WORK/bin" \
+        sh "$INSTALLER" </dev/null >"$WORK/out" 2>"$WORK/err"
+    RC=$?
+    set -e
+    OUT="$(cat "$WORK/out")"
+    ERR="$(cat "$WORK/err")"
+    [ ! -s "$WORK/standin.log" ] && ok "installer $1: no systemctl, launchctl, sudo, runuser or minisign" \
+        || { bad "installer $1: a stand-in ran"; show "$(cat "$WORK/standin.log")"; }
+    [ ! -e "$WORK/bin" ] && ok "installer $1: nothing installed" || bad "installer $1: wrote $WORK/bin"
+}
+INST_URL="https://github.com/Alakazam-211/K2/releases/latest/download/daemon-latest.json"
+INST_FAILED="Failed to fetch: $INST_URL"
+inst moved
+same "installer, a moved repository: exit 0" "$RC" 0
+case "$OUT" in *"  manifest ver:   0.46.7"*) ok "installer, a moved repository: the manifest's version" ;; *) bad "installer, a moved repository: no manifest version"; show "$OUT$ERR" ;; esac
+same "installer, a moved repository: the old path, then the new one" "$(cat "$WORK/gh.log")" \
+    "$(printf 'github.com /Alakazam-211/K2/releases/latest/download/daemon-latest.json noauth\ngithub.com /Moved-Org/K2/releases/latest/download/daemon-latest.json noauth')"
+nothing_else "installer, a moved repository"
+inst chain:5
+same "installer, 5 redirects: exit 0" "$RC" 0
+case "$OUT" in *"  manifest ver:   0.46.7"*) ok "installer, 5 redirects: the manifest's version" ;; *) bad "installer, 5 redirects: no manifest version"; show "$OUT$ERR" ;; esac
+gh_count "installer, 5 redirects" 6
+nothing_else "installer, 5 redirects"
+inst chain:6
+same "installer, 6 redirects: exit 1" "$RC" 1
+same "installer, 6 redirects: the lines" "$ERR" \
+    "$(printf 'Error: GitHub redirected more than 5 times (the last to https://objects.githubusercontent.com); stopped there\n%s' "$INST_FAILED")"
+gh_count "installer, 6 redirects" 6
+nothing_else "installer, 6 redirects"
+while IFS='|' read -r to want; do
+    inst "to:$to"
+    same "installer, to $to: exit 1" "$RC" 1
+    same "installer, to $to: the lines" "$ERR" "$(printf '%s\n%s' "$want" "$INST_FAILED")"
+    case "$OUT" in *"DRY RUN"*) bad "installer, to $to: went on to the dry run"; show "$OUT" ;; *) ok "installer, to $to: stopped before the dry run" ;; esac
+    gh_count "installer, to $to" 1
+    nothing_else "installer, to $to"
+done <<'EOF'
+https://evil.example/daemon-latest.json|Error: GitHub redirected to https://evil.example, which is not GitHub; nothing was sent there
+https://github.com.evil.example/x|Error: GitHub redirected to https://github.com.evil.example, which is not GitHub; nothing was sent there
+https://github.com@evil.example/x|Error: GitHub redirected to https://github.com@evil.example, which is not GitHub; nothing was sent there
+http://github.com/x|Error: GitHub redirected to http://github.com, which is not https; nothing was sent there
+http://evil.example/x|Error: GitHub redirected to http://evil.example, which is not https; nothing was sent there
+EOF
 
 echo ""
 echo "update_github_redirects: $pass passed, $fail failed"

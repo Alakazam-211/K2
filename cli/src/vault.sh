@@ -344,15 +344,19 @@ print("(no phone card: %s)" % (e.get("hint") or e.get("code") or "the daemon did
     IFS=$'\t' read -r _VPC_REQ _VPC_LINE < <(printf '%s' "$_SC_BODY" | python3 -c '
 import json, sys
 p = json.load(sys.stdin).get("phone") or {}
-print("%s\tcard %s on %s'"'"'s Thread (%s)" % (p.get("request", ""), p.get("request", ""), p.get("addr", ""), p.get("text", "")))')
+why = (" — " + p["thread"]) if p.get("thread") else ""
+print("%s\tcard %s on %s'"'"'s Thread%s (%s)" % (p.get("request", ""), p.get("request", ""), p.get("addr", ""), why, p.get("text", "")))')
 }
 
 # Ask the daemon for a confirm token over vault.sock (Touch ID sheet on a
-# Mac, else the vault password typed here). 0.46.17: the owner's terminal
-# can also ask the phone (`phoneOffered`), beside this computer's own
-# prompt: both at once, the first answer wins. K2_VAULT_CONFIRM_METHOD=phone:
-# the phone only; =local: never the phone. $4: extra JSON for the phone
-# card (a share's `grant`). Prints the token. Some steps
+# Mac, else the vault password typed here). 0.46.17, the owner's phone
+# (`phoneOffered`), only where this computer's own prompt can't be seen or
+# isn't answered: over SSH the phone card goes up beside the prompt (the
+# first answer wins); otherwise the prompt alone, and the phone card when it
+# gets no answer (nobody at the screen, or it timed out); with no check here
+# at all (`phoneOnly`, a Linux server with no vault password) the phone
+# alone. K2_VAULT_CONFIRM_METHOD=phone: the phone only; =local: never the
+# phone. $4: extra JSON for the phone card (a share's `grant`). Prints the token. Some steps
 # take this computer's own user check instead (the daemon's presence
 # actions: vault-password-set, recovery-setup, backup-export-initial,
 # box-move-export, backup-key-add, owner-login): the Mac's sheet, Windows
@@ -381,15 +385,18 @@ _vault_confirm_token() {
             *) echo "no_confirm_method: K2_VAULT_CONFIRM_METHOD=vault-password, but no vault password is set (k2 vault confirm-password set)" >&2; exit 3 ;;
         esac
     fi
-    local phone_ok want_m maxt=180
+    local phone_ok phone_only want_m maxt=180 over_ssh=""
+    _VPC_REQ=""; _VPC_LINE=""
     phone_ok="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print("1" if json.load(sys.stdin).get("phoneOffered") else "")')"
+    phone_only="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print("1" if json.load(sys.stdin).get("phoneOnly") else "")')"
     want_m="$(_envn VAULT_CONFIRM_METHOD)"
-    if [ "$want_m" = "phone" ]; then
+    { [ -n "${SSH_CONNECTION:-}" ] || [ -n "${SSH_TTY:-}" ]; } && over_ssh=1
+    if [ "$want_m" = "phone" ] || { [ "$phone_only" = "1" ] && [ "$phone_ok" = "1" ] && [ -z "$want_m" ]; }; then
         [ "$phone_ok" = "1" ] || { echo "no_phone_confirm: this step can't be confirmed from a phone here (the owner's own terminal, permission cards on, and not an owner-login change); unset K2_VAULT_CONFIRM_METHOD to confirm at this computer" >&2; exit 3; }
         methods="phone"
     fi
-    # The phone rides along with this computer's own prompt only; a typed
-    # password (the vault password, an owner login's) stays as it was.
+    # The phone goes with this computer's own prompt only; a typed password
+    # (the vault password, an owner login's) stays as it was.
     # K2_VAULT_CONFIRM_METHOD=local (or =vault-password): never the phone.
     [ -n "$want_m" ] && [ "$want_m" != "phone" ] && phone_ok=""
     case " $methods " in
@@ -404,9 +411,12 @@ _vault_confirm_token() {
             local lm="local-auth" where_word="this Mac (Touch ID or your login password)"
             case " $methods " in *" local-auth "*) ;; *) lm="windows-hello"; where_word="this PC (Windows Hello or your Windows password)" ;; esac
             _VPC_REQ=""
-            [ "$phone_ok" = "1" ] && _vault_phone_raise "$action" "$secret_id" "$label" "$phone_extra"
+            # Over SSH the prompt shows on a screen you can't see: the phone
+            # card goes up beside it.
+            [ "$phone_ok" = "1" ] && [ -n "$over_ssh" ] && _vault_phone_raise "$action" "$secret_id" "$label" "$phone_extra"
             if [ -n "$_VPC_REQ" ]; then
                 echo "Approve on ${where_word}, or on your phone: ${_VPC_LINE}. Waiting for your phone… (5 minutes; the first answer wins)" >&2
+                [ "$lm" = "windows-hello" ] && echo "(If you answer on the phone, the Windows Hello prompt on this PC may stay open: dismiss it.)" >&2
                 maxt=330
             else
                 echo "Approve on ${where_word}…" >&2
@@ -449,6 +459,17 @@ print(json.dumps(o))' "$action" "$secret_id" "$label" "$lm" "$_VPC_REQ")"
             ;;
     esac
     _vault_sock_call POST "confirm/finish" "$body" "$maxt"
+    # Nobody answered this computer's own prompt (no one at its screen, or
+    # it timed out): ask the phone instead, once.
+    if [ "$_SC_STATUS" = "409" ] && [ "$phone_ok" = "1" ] && [ -z "$_VPC_REQ" ] && [ "$methods" != "phone" ] \
+        && printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; sys.exit(0 if (json.load(sys.stdin).get("error") or {}).get("code") in ("confirm_unanswered", "vault_presence_required") else 1)'; then
+        echo "Nobody answered on this computer." >&2
+        _vault_phone_raise "$action" "$secret_id" "$label" "$phone_extra"
+        [ -n "$_VPC_REQ" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
+        echo "Approve on your phone: ${_VPC_LINE}. Waiting for your phone… (5 minutes)" >&2
+        body="$(python3 -c 'import json,sys; print(json.dumps({"action": sys.argv[1], "secretId": sys.argv[2] or None, "method": "phone", "label": sys.argv[3], "phoneRequest": sys.argv[4]}))' "$action" "$secret_id" "$label" "$_VPC_REQ")"
+        _vault_sock_call POST "confirm/finish" "$body" 330
+    fi
     body=""
     [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
     printf '%s' "$_SC_BODY" | python3 -c '

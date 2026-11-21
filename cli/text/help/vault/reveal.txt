@@ -2,11 +2,16 @@ k2 vault reveal NAME [--scope <s>]
 
 People only, from your own terminal or SSH login (not a K2 terminal):
 show a value after a confirm (Touch ID or the vault password).
-Away from the computer (SSH, or nobody at its screen)? The confirm also
-goes to your phone as a card on the Thread of the workspace you run it
-in (or K2_VAULT_CONFIRM_THREAD=<workspace>): confirm there with your
-owner login's password. The first answer wins; the card waits 5
-minutes. K2_VAULT_CONFIRM_METHOD=phone asks only the phone, =local never.
+Away from the computer? Over SSH the confirm also goes to your phone, as
+a card; anywhere else it goes there when nobody answers the computer's
+prompt. Confirm it with your owner login's password; the first answer
+wins and the card waits 5 minutes. The card goes on the Thread of the
+workspace you run it in, else this server's own agent's (or
+K2_VAULT_CONFIRM_THREAD=<workspace>); the terminal says which.
+K2_VAULT_CONFIRM_METHOD=phone asks only the phone, =local never.
+Asks at the computer only: making a login an owner or setting an owner
+login's password, a systemd credential or a rollback of one, and
+approving an agent's clone proposal.
 
 Example: k2 vault reveal STRIPE_KEY
 

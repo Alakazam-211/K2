@@ -287,11 +287,15 @@ def _envn(name):
     return ""
 
 
-def phone_card(started, start):
+def phone_card(started, start, fallback=False):
     """0.46.17: also raise the owner's phone card for this confirm (the
     first answer, this Mac's or the phone's, wins), when the daemon offers
-    it. Returns the card's request id, or None (this Mac alone)."""
+    it and this Mac's prompt can't be seen (over SSH), or (`fallback`) when
+    nobody answered it. Returns the card's request id, or None (this Mac
+    alone)."""
     if not started.get("phoneOffered") or _envn("VAULT_CONFIRM_METHOD") == "local":
+        return None
+    if not fallback and not (os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_TTY")):
         return None
     body = dict(start)
     body.update(phone=True, workspacePath=_envn("PROJECT_PATH") or os.getcwd())
@@ -304,8 +308,29 @@ def phone_card(started, start):
         return None
     if not p.get("request"):
         return None
-    say("  or on your phone: card %s on %s's Thread. Waiting for your phone… (5 minutes; the first answer wins)" % (p["request"], p.get("addr", "")))
+    where = (" (%s)" % p["thread"]) if p.get("thread") else ""
+    if fallback:
+        say("Approve on your phone: card %s on %s's Thread%s. Waiting for your phone… (5 minutes)" % (p["request"], p.get("addr", ""), where))
+    else:
+        say("  or on your phone: card %s on %s's Thread%s. Waiting for your phone… (5 minutes; the first answer wins)" % (p["request"], p.get("addr", ""), where))
     return p["request"]
+
+
+def finish_or_phone(started, start, body, wait):
+    """confirm/finish here; when nobody answered this Mac's prompt (no one at
+    its screen, or it timed out), the phone card once instead."""
+    try:
+        return vault_sock("confirm/finish", body, wait)
+    except Fail as e:
+        if e.code not in ("confirm_unanswered", "vault_presence_required") or body.get("phoneRequest") or body.get("proposal"):
+            raise
+        say("Nobody answered on this Mac.")
+        req = phone_card(started, start, fallback=True)
+        if not req:
+            raise
+        b = dict(body)
+        b.update(method="phone", phoneRequest=req)
+        return vault_sock("confirm/finish", b, 330)
 
 
 def read_line(fd, prompt, needs=NEEDS_A_PERSON):
@@ -389,7 +414,7 @@ def confirm(side, action, secret_id, label):
     else:
         raise Fail("no_confirm_method", "set a vault password first: k2 vault confirm-password set (from a terminal outside K2)", 3)
     if local:
-        tok = vault_sock("confirm/finish", body, wait)["token"]
+        tok = finish_or_phone(started, {"action": action, "secretId": secret_id, "label": label}, body, wait)["token"]
     else:
         tok = call(side, "POST", "/cli/vault/confirm/finish", body)["token"]
     body.pop("password", None)
@@ -451,7 +476,7 @@ def carry_confirm_call(side, ask, pv, proposal=None):
             body.update(method="vault-password", password=password("Vault password (%s): " % reason))
         else:
             raise Fail("no_confirm_method", "set a vault password first: k2 vault confirm-password set (from a terminal outside K2)", 3)
-        r = vault_sock("confirm/finish", body, wait)
+        r = finish_or_phone(started, {"action": "clone-carry", "clonePlan": ask}, body, wait)
         body.pop("password", None)
         return r
     https_gate(side, password=True)

@@ -445,3 +445,57 @@ async fn an_expired_card_is_refused() {
     let (s, r) = card_token(&e, &alice_c, &request, "connect-password", "password123");
     assert_eq!((s, code(&r)), (400, "bad_secret_id"), "{r}");
 }
+
+/// Outside any workspace the card goes on this server's own agent's Thread
+/// (Kessel's), and the answer says so; with no such agent there's nowhere to
+/// put it, and the refusal says how to name one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn outside_a_workspace_the_card_goes_to_the_servers_own_agent() {
+    let _db = k2_core::db::scoped_for_test();
+    let _home = crate::test_support::TempHome::new();
+    k2_core::db::init_for_tests();
+    let e = env("vok");
+    let (_, id) = secret(&e, "NOWS");
+    let outside = json!({ "action": "reveal", "secretId": id, "phone": true, "workspacePath": "/" });
+    let (s, r) = call(&e.v, vr::CONFIRM_START, &owner(), outside.clone());
+    assert_eq!((s, code(&r)), (409, "no_thread"), "no server agent yet: {r}");
+    assert!(r["error"]["hint"].as_str().unwrap_or("").contains("K2_VAULT_CONFIRM_THREAD"), "{r}");
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::orchestrator::record_kessel(&conn, &e.ws.id, "Kessel", "owner", k2_core::overlay::now_secs()).expect("seat");
+    }
+    let (s, r) = call(&e.v, vr::CONFIRM_START, &owner(), outside);
+    assert_eq!(s, 200, "{r}");
+    assert_eq!(r["phone"]["addr"], json!(e.ws.handle), "{r}");
+    assert_eq!(r["phone"]["thread"], "this server's own agent", "{r}");
+    // In a workspace folder: that workspace's own Thread, and it says so.
+    let (_, _, r) = raise(&e, json!({ "action": "reveal", "secretId": id }));
+    assert_eq!(r["phone"]["thread"], "the workspace you ran it in", "{r}");
+}
+
+/// A server whose owner token has no check of its own (no prompt, no vault
+/// password) confirms on the phone instead of refusing, once an owner login
+/// exists to answer the card. A Mac keeps its own prompt.
+#[test]
+fn a_server_with_no_check_of_its_own_confirms_on_the_phone() {
+    let _home = crate::test_support::TempHome::new();
+    let _cards = k2_core::test_env::EnvVar::set("K2_PERMISSION_CARDS", "1");
+    let dir = k2_vault::fsutil::TestDir::new("phone-only");
+    let ks: Arc<dyn k2_vault::KeyStore> = Arc::new(k2_vault::keystore::fake::FakeKeyStore::new());
+    let v = Arc::new(
+        LocalVault::open(dir.path().join("vault"), ks, k2_vault::OpenOptions { kdf: k2_vault::confirm::KdfCost::Floor }).expect("open"),
+    );
+    let (s, r) = call(&v, vr::CONFIRM_START, &owner(), json!({ "action": "rekey" }));
+    if cfg!(target_os = "macos") {
+        assert_eq!((s, &r["methods"], &r["phoneOnly"]), (200, &json!(["local-auth"]), &Value::Null), "{r}");
+        return;
+    }
+    assert_eq!((s, code(&r)), (409, "no_confirm_method"), "no owner login to answer a card yet: {r}");
+    login("olive", Role::Owner);
+    let (s, r) = call(&v, vr::CONFIRM_START, &owner(), json!({ "action": "rekey" }));
+    assert_eq!((s, &r["methods"], &r["phoneOnly"], &r["phoneOffered"]), (200, &json!([]), &json!(true), &json!(true)), "{r}");
+    // A login itself still confirms with its own password, never the phone.
+    let (s, r) = call(&v, vr::CONFIRM_START, &as_login("olive", k2_vault::Role::Owner), json!({ "action": "rekey" }));
+    assert_eq!((s, &r["phoneOffered"]), (200, &json!(false)), "{r}");
+}

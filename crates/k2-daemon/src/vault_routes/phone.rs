@@ -76,6 +76,9 @@ pub const CARD_CONFIRM: &str = "vault-owner-confirm";
 pub const WINDOW_SECS: i64 = 300;
 /// The refusal for a finish that isn't the step its card names.
 pub const MISMATCH: &str = "phone_confirm_mismatch";
+/// This computer's own prompt got no answer (no one at its screen, or it
+/// timed out): the owner's terminal falls back to the phone card.
+pub const UNANSWERED: &str = "confirm_unanswered";
 
 /// How often the waiting terminal looks for an answer.
 const TICK: Duration = Duration::from_millis(150);
@@ -160,6 +163,13 @@ pub fn offered(c: &VaultCaller, action: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The owner token has no check of its own here (no vault password, no
+/// prompt): may the phone be its confirm? Only with an owner login to answer
+/// the card (the card takes that login's own password).
+pub fn only_path(c: &VaultCaller, action: &str) -> bool {
+    offered(c, action).is_ok() && !presence::owner_logins().is_empty()
+}
+
 // ── 1. the terminal raises the card ─────────────────────────────────
 
 /// What a confirm for `action` is bound to, its words, and the stamp the
@@ -241,27 +251,37 @@ pub(super) fn grant_detail(secret_id: &str, consumer: &k2_vault::Consumer, d: De
     format!("{secret_id}|{:?}:{}|{}|{}|{}", consumer.kind, consumer.id, d.as_str(), env.unwrap_or(""), file.unwrap_or(""))
 }
 
-/// The workspace whose Thread takes the card: the one named (`thread`), else
-/// the one the terminal is in (its folder or a parent of it).
-fn thread_of(path: Option<&str>, named: Option<&str>) -> Result<String, VaultError> {
+/// The workspace whose Thread takes the card, and why that one: the one
+/// named (`thread`), else the one the terminal is in (its folder or a parent
+/// of it), else the server's own agent's (Kessel's), the Thread this server
+/// keeps for its owner.
+fn thread_of(path: Option<&str>, named: Option<&str>) -> Result<(String, &'static str), VaultError> {
     let no = |m: String| err("no_thread", 409, m);
     if let Some(n) = named.map(str::trim).filter(|n| !n.is_empty()) {
         let ws = crate::vault::workspace_id(n).ok_or_else(|| no(format!("no workspace named {n} (K2_VAULT_CONFIRM_THREAD)")))?;
-        return Ok(ws);
+        return Ok((ws, "the workspace K2_VAULT_CONFIRM_THREAD names"));
     }
-    let start = path.map(str::trim).filter(|p| !p.is_empty()).ok_or_else(|| {
-        no("no workspace to put the phone card on: run it from a workspace folder, or set K2_VAULT_CONFIRM_THREAD=<workspace> (any workspace with a Thread)".to_string())
-    })?;
-    let mut at = Some(std::path::Path::new(start));
-    while let Some(p) = at {
-        if let Some(id) = crate::clone_vault::project_id_for_path(&p.display().to_string()) {
-            return Ok(id);
+    if let Some(start) = path.map(str::trim).filter(|p| !p.is_empty()) {
+        let mut at = Some(std::path::Path::new(start));
+        while let Some(p) = at {
+            if let Some(id) = crate::clone_vault::project_id_for_path(&p.display().to_string()) {
+                return Ok((id, "the workspace you ran it in"));
+            }
+            at = p.parent();
         }
-        at = p.parent();
     }
-    Err(no(format!(
-        "{start} isn't in a workspace, so there's no Thread for the phone card: run it from a workspace folder, or set K2_VAULT_CONFIRM_THREAD=<workspace>"
-    )))
+    let kessel = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::orchestrator::live_kessel(&conn).ok().flatten()
+    };
+    match kessel {
+        Some(k) if crate::overlay_routes::pinned_chat_of(&k.workspace_id).is_some() => Ok((k.workspace_id, "this server's own agent")),
+        _ => Err(no(
+            "you're not in a workspace and this server has no agent of its own with a Thread, so there's nowhere to put the phone card: run it from a workspace folder, or set K2_VAULT_CONFIRM_THREAD=<workspace>"
+                .to_string(),
+        )),
+    }
 }
 
 /// Drop what nobody waits for any more (expired, or taken a while ago).
@@ -280,7 +300,7 @@ pub(super) fn raise(vault: &LocalVault, c: &VaultCaller, action: &str, b: &Confi
     }
     let (secret, reason, _) = step_of(vault, c, action, b)?;
     let (words, values, detail) = describe(vault, c, action, secret.as_deref(), &reason, b.grant.as_ref())?;
-    let ws = thread_of(b.workspace_path.as_deref(), b.thread.as_deref())?;
+    let (ws, thread_why) = thread_of(b.workspace_path.as_deref(), b.thread.as_deref())?;
     sweep();
     let id = format!("vpc_{}", &uuid::Uuid::new_v4().simple().to_string()[..24]);
     let expires_at = now() + WINDOW_SECS;
@@ -314,7 +334,7 @@ pub(super) fn raise(vault: &LocalVault, c: &VaultCaller, action: &str, b: &Confi
                 p.request = request.clone();
             }
             crate::vault::auth_audit("vault-confirm", &stamp, &format!("phone card {request} for {action}"), ingress);
-            Ok(json!({ "phone": { "request": request, "card": card, "addr": addr, "expiresIn": WINDOW_SECS, "text": words } }))
+            Ok(json!({ "phone": { "request": request, "card": card, "addr": addr, "thread": thread_why, "expiresIn": WINDOW_SECS, "text": words } }))
         }
         Err(e) => {
             pending().remove(&id);

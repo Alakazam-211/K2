@@ -2534,7 +2534,17 @@ fn confirm_start(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &str
     if b.phone == Some(true) {
         return phone::raise(vault, c, action, &b, ingress);
     }
-    let mut out = confirm_start_here(vault, c, action, &b)?;
+    let mut out = match confirm_start_here(vault, c, action, &b) {
+        Ok(v) => v,
+        // 0.46.17: a server with no check of its own for the owner token (a
+        // Linux server with no vault password): the owner's phone is its
+        // confirm, answered with an owner login's own password.
+        Err(e) if e.code == "no_confirm_method" && phone::only_path(c, action) => {
+            let (server, login) = confirm_identity(c);
+            json!({ "methods": [], "expiresIn": 60, "confirmText": null, "server": server, "login": login, "phoneOnly": true })
+        }
+        Err(e) => return Err(e),
+    };
     // 0.46.17: whether the owner's terminal may also ask the phone.
     out["phoneOffered"] = json!(phone::offered(c, action).is_ok());
     Ok(out)
@@ -2794,7 +2804,14 @@ fn local_auth(reason: &str) -> Result<(), VaultError> {
     if let Some(f) = test_hooks::local_auth_fake() {
         return f(reason);
     }
-    crate::vault::local_auth::confirm(reason).map_err(|h| err("confirm_failed", 403, h))
+    use crate::vault::local_auth::{ask, Answer};
+    match ask(reason) {
+        Answer::Approved => Ok(()),
+        Answer::Declined(h) => Err(err("confirm_failed", 403, h)),
+        // 0.46.17: nobody could answer here (no one at the screen, or two
+        // minutes passed): the owner's terminal may ask the phone next.
+        Answer::Unavailable(h) => Err(err(phone::UNANSWERED, 409, h)),
+    }
 }
 
 #[cfg(not(target_os = "macos"))]

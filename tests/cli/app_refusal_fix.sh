@@ -27,6 +27,10 @@
 # name sits in the folder; the stub logs every request with its body, and
 # no request may name it.
 #
+# An older daemon has no /cli/kit/explain: with the stub's route gone (its
+# 404 for an unknown route, or a 405), k2 explain prints one line saying to
+# update the server, exit 1, and asks nothing else (K2 ruling: no fallback).
+#
 # Hermetic: HOME is a throwaway dir, every K2_*/K2SO_* var is unset, no
 # real daemon, no ~/.k2, no keychain. Needs the generated refusal block in
 # cli/k2 (cargo run -p k2-core --bin contract-gen).
@@ -57,7 +61,7 @@ cleanup() {
 trap cleanup EXIT
 
 cat > "$SANDBOX/stub.py" <<'PY'
-import json, sys
+import json, os, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlsplit
 
@@ -91,7 +95,12 @@ class H(BaseHTTPRequestHandler):
             # A daemon with Board files off.
             st = 404
             body = json.dumps({"ok": False, "error": {"code": "not_enabled", "hint": "Board files are a preview"}}).encode()
-        if path == "/cli/kit/explain":
+        # The route gone: "404" answers as any unknown route, "405" so.
+        old = open(sys.argv[3]).read().strip() if os.path.exists(sys.argv[3]) else None
+        if path == "/cli/kit/explain" and old == "405":
+            st = 405
+            body = json.dumps({"error": "GET or POST only"}).encode()
+        elif path == "/cli/kit/explain" and old is None:
             q = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
             st, v = KIT[q["id"][0]]
             if q.get("json") == ["1"] and st == 200:
@@ -114,7 +123,7 @@ with open(sys.argv[1], "w") as f:
     f.write(str(srv.server_address[1]))
 srv.serve_forever()
 PY
-python3 -I "$SANDBOX/stub.py" "$SANDBOX/port" "$SANDBOX/requests.jsonl" &
+python3 -I "$SANDBOX/stub.py" "$SANDBOX/port" "$SANDBOX/requests.jsonl" "$SANDBOX/old-daemon" &
 STUB_PID=$!
 for _ in $(seq 1 50); do [ -s "$SANDBOX/port" ] && break; sleep 0.1; done
 [ -s "$SANDBOX/port" ] || { echo "FAIL: the stub daemon did not start" >&2; exit 1; }
@@ -258,6 +267,21 @@ Next: k2 explain lists every id'
 expect_eq "explain mpce-E9: sent as typed" "$(kit_requests)" \
     'GET /cli/kit/explain?id=mpce-E9'
 no_decoy "explain mpce-E9"
+echo "== k2 explain <kit id> on an older daemon (no /cli/kit/explain) =="
+OLD_LINE="This K2 server is older and can't explain kit codes yet; update it (k2 update)."
+for mode in 404 405; do
+    echo "$mode" >"$SANDBOX/old-daemon"
+    for form in "" --json; do
+        : >"$SANDBOX/requests.jsonl"
+        rc="$(rc_of explain MPC-E301 $form)"
+        expect_eq "older daemon ($mode) explain MPC-E301 $form: the one line, exit 1, nothing on stdout" \
+            "$rc|$(cat "$SANDBOX/out")|$(cat "$SANDBOX/err")" "1||$OLD_LINE"
+        expect_eq "older daemon ($mode) $form: one GET of the route, no other ask" "$(kit_requests)" \
+            "GET /cli/kit/explain?id=MPC-E301${form:+&json=1}"
+    done
+done
+rm -f "$SANDBOX/old-daemon"
+
 expect_eq "the decoys are untouched" "$(cat "$SANDBOX/ws/MPC-E301" "$SANDBOX/ws/mpce-E9")" "a decoy, never read
 a decoy, never read"
 

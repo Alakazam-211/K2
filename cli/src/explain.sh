@@ -82,7 +82,9 @@ if row.get("aliases"):
 # 0.46.17 a kit id went to `k2 doc explain <id>`, which took the id as a
 # doc's path: a file of that name here was opened as the doc. Prints the
 # kit's page (or its JSON with JSON=1) and exits with the kit's exit; a
-# refusal by its row (exit the row's); any other error as k2 board prints it.
+# refusal by its row (exit the row's); a 404 or 405 (an older daemon with
+# no such route) one line saying to update it, exit 1; any other error as
+# k2 board prints it.
 _explain_kit() {
     local id="$1" json_out="$2" query
     query="id=$(urlencode "$id")"
@@ -101,6 +103,10 @@ if not isinstance(v, dict):
 if status == "200" and isinstance(v.get("stdout"), str):
     sys.stdout.write(v["stdout"])
     sys.exit(v.get("exit") or 0)
+if status in ("404", "405"):
+    # An older daemon has no /cli/kit/explain (K2 ruling: no fallback).
+    print("This K2 server is older and can'"'"'t explain kit codes yet; update it (k2 update).", file=sys.stderr)
+    sys.exit(1)
 if "id" in v and "exit" in v:
     # A row of the kit (an unknown id is one): its id, name and exit.
     if as_json:

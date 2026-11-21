@@ -731,6 +731,41 @@ fn store_widget_answers_as_the_shell_does() {
                 )),
             ],
         ),
+        // A chunk's len that isn't digits is a plain error, no file left
+        // (the shell's 1cbdc5ab06: digits only reach its arithmetic).
+        case(
+            "blob get, a len that names a variable",
+            &["blob", "get", "k2blob:sha256-cc", "--widget", "w", "--out", "got.bin"],
+            &[],
+            vec![ok(&format!(
+                r#"{{"base64":"{B64}","offset":0,"len":"BASH_VERSINFO","eof":false,"size":22}}"#
+            ))],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "blob get, a len with a subscript",
+            &["blob", "get", "k2blob:sha256-cc", "--widget", "w", "--out", "got.bin"],
+            &[],
+            vec![ok(&format!(
+                r#"{{"base64":"{B64}","offset":0,"len":"x[$(true)]","eof":true,"size":22}}"#
+            ))],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "blob get, a len of 5.0",
+            &["blob", "get", "k2blob:sha256-cc", "--widget", "w", "--out", "got.bin"],
+            &[],
+            vec![ok(&format!(
+                r#"{{"base64":"{B64}","offset":0,"len":5.0,"eof":true,"size":22}}"#
+            ))],
+            owner_and_port,
+            1,
+            1,
+        ),
         case(
             "blob, an unknown verb",
             &["blob", "rm", "--widget", "w"],

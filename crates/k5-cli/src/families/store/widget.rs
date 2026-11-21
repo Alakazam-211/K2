@@ -1451,8 +1451,14 @@ pub fn blob_get_file(gd: &mut Gd, widget: &str, rf: &str, out: &str, px: &str) -
                 return Err(gone(Exit::Error));
             }
         };
-        let n: i128 = len.trim().parse().unwrap_or(0);
-        offset += n;
+        // The chunk's length comes from the daemon: only digits are a
+        // length (the shell checks them before its arithmetic).
+        if len.is_empty() || !len.bytes().all(|b| b.is_ascii_digit()) {
+            tell("Error: the daemon's answer wasn't readable (its len is not a number)\n");
+            return Err(gone(Exit::Error));
+        }
+        let n: i128 = len.parse().unwrap_or(i128::MAX);
+        offset = offset.saturating_add(n);
         if eof {
             drop(f);
             if std::fs::rename(&tmp, out).is_err() {

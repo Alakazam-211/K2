@@ -325,3 +325,91 @@ fn compute_wait_follow() {
         rig.check(&c);
     }
 }
+
+/// A job's signal, times and attempt reach the shell's arithmetic only as
+/// digits (the shell's a1d64ef741): a signal that isn't digits is none
+/// (128), times that aren't digits give no "after", an attempt that isn't
+/// digits is "?". Valid ones print as before.
+#[test]
+fn compute_follow_reads_only_digits() {
+    let rig = Rig::new(VERB, "followdigits");
+    let job = |signal: &str, started: &str, ended: &str| -> &'static str {
+        Box::leak(
+            format!(
+                r#"{{"state":"done","exitCode":null,"signal":{signal},"short":"abcd1234","node":"n1","startedAt":{started},"endedAt":{ended},"generation":1}}"#
+            )
+            .into_boxed_str(),
+        )
+    };
+    let follow = |name: &'static str, reply: Vec<Reply>, code: i32| {
+        let n = reply.len();
+        case(
+            name,
+            &["wait", "abcd1234", "--follow"],
+            &[],
+            reply,
+            owner_and_port,
+            code,
+            n,
+        )
+    };
+    let v = vec![
+        // covers: compute wait --follow
+        follow(
+            "signal 9, a time",
+            vec![logs("", true, job("9", "1000", "1125"), "{}")],
+            137,
+        ),
+        follow(
+            "a signal that names a variable",
+            vec![logs("", true, job(r#""BASH_VERSINFO""#, "1000", "1125"), "{}")],
+            128,
+        ),
+        follow(
+            "a signal with a subscript",
+            vec![logs(
+                "",
+                true,
+                job(r#""BASH_VERSINFO[$(true)]""#, "1000", "1125"),
+                "{}",
+            )],
+            128,
+        ),
+        follow(
+            "a start that names a variable",
+            vec![logs("", true, job("9", r#""HOME""#, "1125"), "{}")],
+            137,
+        ),
+        follow(
+            "an end with a subscript, a negative start",
+            vec![logs("", true, job("9", "-5", r#""x[1]""#), "{}")],
+            137,
+        ),
+        follow(
+            "an end before the start",
+            vec![logs("", true, job("9", "2125", "1125"), "{}")],
+            137,
+        ),
+        follow(
+            "an attempt that names a variable",
+            vec![
+                logs(
+                    "",
+                    true,
+                    r#"{"state":"queued","short":"abcd1234","node":"n2","attempt":"HOME","generation":2,"ctl":{"failedAttempts":[{"reason":"node_lost"}]}}"#,
+                    "{}",
+                ),
+                logs(
+                    "",
+                    true,
+                    &done("0").replace("\"generation\":1", "\"generation\":2"),
+                    "{}",
+                ),
+            ],
+            0,
+        ),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}

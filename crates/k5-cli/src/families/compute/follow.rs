@@ -132,6 +132,12 @@ fn arith(v: &str) -> i64 {
     }
 }
 
+/// `[[ v =~ ^[0-9]+$ ]]`: a value from the daemon (and the node behind
+/// it) reaches the shell's `$(( ))` only when it is digits.
+fn digits(v: &str) -> bool {
+    !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit())
+}
+
 /// The detached line the `INT` trap prints, then exit 130.
 #[cfg(unix)]
 pub mod int_trap {
@@ -261,9 +267,14 @@ fn follow_on(cp: &mut Cp<'_>, f: &Follow, job8: &str) -> Exit {
             } else {
                 &st.lastfail
             };
+            // The attempt before this one: `?` when the attempt isn't digits.
+            let prev = if digits(&st.attempt) {
+                arith(&st.attempt).wrapping_sub(1).to_string()
+            } else {
+                "?".to_string()
+            };
             out::stderr_line(&format!(
-                "[{CLI_NAME} compute] attempt {} hit an infrastructure failure ({lastfail}); retrying as attempt {} on {}",
-                arith(&st.attempt).wrapping_sub(1),
+                "[{CLI_NAME} compute] attempt {prev} hit an infrastructure failure ({lastfail}); retrying as attempt {} on {}",
                 st.attempt,
                 st.node
             ));
@@ -298,7 +309,7 @@ fn end(cp: &mut Cp<'_>, f: &Follow, st: &State) -> Exit {
             return e;
         }
     }
-    let took = if !st.started.is_empty() && !st.ended.is_empty() {
+    let took = if digits(&st.started) && digits(&st.ended) {
         let d = arith(&st.ended).wrapping_sub(arith(&st.started));
         format!(" after {}m{}s", d / 60, d % 60)
     } else {
@@ -312,11 +323,10 @@ fn end(cp: &mut Cp<'_>, f: &Follow, st: &State) -> Exit {
             ));
             return Exit::from_curl((arith(&st.code) & 255) as i32);
         }
-        out::stderr_line(&format!(
-            "[{CLI_NAME} compute] killed by signal {}{took}",
-            st.sig
-        ));
-        return Exit::from_curl((128i64.wrapping_add(arith(&st.sig)) & 255) as i32);
+        // A signal that isn't digits is none: 128, as with no signal.
+        let sig = if digits(&st.sig) { st.sig.as_str() } else { "" };
+        out::stderr_line(&format!("[{CLI_NAME} compute] killed by signal {sig}{took}"));
+        return Exit::from_curl((128i64.wrapping_add(arith(sig)) & 255) as i32);
     }
     let reason = if st.reason.is_empty() {
         String::new()
@@ -511,6 +521,16 @@ mod tests {
         assert_eq!(arith("-3"), -3);
         assert_eq!(arith(""), 0);
         assert_eq!(arith("x"), 0);
+    }
+
+    #[test]
+    fn only_digits_reach_the_arithmetic() {
+        for yes in ["0", "9", "0042"] {
+            assert!(digits(yes), "{yes}");
+        }
+        for no in ["", "-3", "x", "BASH_VERSINFO[$(true)]", " 9", "9 ", "+9", "\u{663}"] {
+            assert!(!digits(no), "{no:?}");
+        }
     }
 
     #[test]

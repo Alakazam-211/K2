@@ -69,7 +69,7 @@ fn setup() -> Env {
     std::env::set_var("K2_COMPUTE", "1");
     // CI on compute is its own preview (0.46.10 ships it dark).
     std::env::set_var("K2_CI", "1");
-    k2_core::compute::retry::set_tuning_for_tests(k2_core::compute::retry::Tuning { tick_millis: 3_600_000, any_hold_secs: 0, retry_base_secs: 0, ..Default::default() });
+    k2_core::compute::retry::set_tuning_for_tests(k2_core::compute::retry::Tuning { tick_millis: 3_600_000, retry_base_secs: 0, ..Default::default() });
     env
 }
 

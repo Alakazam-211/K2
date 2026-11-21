@@ -512,13 +512,23 @@ elif verb == "jobs":
         # 0.46.8: a queued job says pinned (a node named; k2 compute move
         # <id> --auto releases it) or auto.
         state = j["state"]
-        if state == "queued" and "pinned" in j:
+        node, reason = j.get("node") or "?", j.get("reason") or ""
+        if state == "queued" and (j.get("wait") or {}).get("reason") == "held":
+            # 0.46.17: an auto job held on this server until a node that
+            # fits has a free slot; it is on no node yet (get names them).
+            state, node, reason = "held (auto)", "-", "waits for a free slot"
+        elif state == "queued" and "pinned" in j:
             state += " (pin)" if j["pinned"] else " (auto)"
         # 0.46.16: WHEN = started (the real start) and queued.
-        print("%s  %-2s %-12s %-15s exit %-4s %-22s %-34s %-16s %-24s %s" % (j["short"], tier_tag(j.get("tier")), (j.get("node") or "?")[:12], state, "-" if j.get("exitCode") is None else j["exitCode"], j.get("reason") or "", when_col(j), (j.get("tag") or "-")[:16], who[:24], " ".join(j.get("argv") or [])[:60]))
+        print("%s  %-2s %-12s %-15s exit %-4s %-22s %-34s %-16s %-24s %s" % (j["short"], tier_tag(j.get("tier")), node[:12], state, "-" if j.get("exitCode") is None else j["exitCode"], reason, when_col(j), (j.get("tag") or "-")[:16], who[:24], " ".join(j.get("argv") or [])[:60]))
 elif verb == "get":
     j = v
-    print("job %s on %s: %s%s" % (j["short"], j.get("node"), j["state"], (" (%s)" % j["reason"]) if j.get("reason") else ""))
+    if j.get("state") == "queued" and (j.get("queue") or {}).get("held"):
+        # 0.46.17: held on this server, on no node yet (its line names
+        # the nodes it fits).
+        print("job %s: held on this server (auto)" % j["short"])
+    else:
+        print("job %s on %s: %s%s" % (j["short"], j.get("node"), j["state"], (" (%s)" % j["reason"]) if j.get("reason") else ""))
     # 0.46.7: a long command (an inline base64 script) is summarized;
     # --full prints all of it.
     argv = " ".join(j.get("argv") or [])
@@ -597,8 +607,14 @@ elif verb == "get":
         # In the queue of a shared node: its place and ETA (0.46.3).
         q = j["queue"]
         print("  %s%s" % (q["message"], ("  [class %s]" % j["class"]) if j.get("class") else ""))
-        if q.get("reason") and q["reason"] != "node_queued":
+        if q.get("reason") == "pull_requested":
+            print("  waiting for the node to give it back (k2 compute move); it is placed again then")
+        elif q.get("reason") and q["reason"] != "node_queued":
             print("  waiting for the node to answer: %s" % q["reason"])
+    elif j.get("queue") and j["queue"].get("held"):
+        # 0.46.17: held on this server until a node that fits has a free
+        # slot; no node's line to show.
+        print("  %s" % j["queue"]["line"])
     elif j.get("queue"):
         q = j["queue"]
         at = q.get("aheadTiers") or {}

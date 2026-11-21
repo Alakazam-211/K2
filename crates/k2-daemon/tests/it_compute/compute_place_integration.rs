@@ -68,7 +68,6 @@ fn setup() -> Env {
     // is replaceable at once (the move test).
     k2_core::compute::retry::set_tuning_for_tests(k2_core::compute::retry::Tuning {
         tick_millis: 3_600_000,
-        any_hold_secs: 0,
         replace_after_secs: 0,
         ..Default::default()
     });

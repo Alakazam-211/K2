@@ -878,19 +878,30 @@ pub(crate) fn queue_view(who: &Who, j: &store::JobRow, decision: &scheduler::Dec
     };
     let passes = why.code == scheduler::GRANT_PARALLEL_FULL || pshare::blocked::lets_others_pass(&why.code);
     let tail = if passes { "; jobs behind it may start first" } else { "" };
-    let line = if on_shared {
-        format!("waits on this server for {node_name} ({pos} of {}) — {words}{tail}", queued.len())
+    // 0.46.17: an auto job here only because no node that fits has a free
+    // slot is held on this server, whichever node it was first placed on:
+    // it goes to the first of them that frees (`held`, the nodes it fits).
+    let held = crate::compute_hold::is_held(j, &why.code);
+    let fits = if held { crate::compute_hold::fits(j, now) } else { Vec::new() };
+    let (line, node_words, words) = if held {
+        let h = crate::compute_hold::held_words(&fits);
+        (h.clone(), Some(words), h)
+    } else if on_shared {
+        (format!("waits on this server for {node_name} ({pos} of {}) — {words}{tail}", queued.len()), None, words)
     } else {
-        format!("queued on {node_name}: {pos} of {} — {words}{tail}", queued.len())
+        (format!("queued on {node_name}: {pos} of {} — {words}{tail}", queued.len()), None, words)
     };
     Some(serde_json::json!({
-        "where": if on_shared { "server" } else { "node" },
+        "where": if on_shared || held { "server" } else { "node" },
         "position": pos,
         "of": queued.len(),
         "reason": why.code,
         "message": why.message,
-        "waitReason": why.code,
+        "waitReason": if held { crate::compute_hold::HELD } else { why.code.as_str() },
         "waitWords": words,
+        "held": held,
+        "fits": fits,
+        "nodeWaitWords": node_words,
         "holdsQueue": !passes,
         "etaSecs": eta,
         "etaBasis": if eta.is_some() { "estimate" } else { "unknown" },

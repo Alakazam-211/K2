@@ -721,6 +721,30 @@ pub struct JobCtl {
     /// that moves keeps it and an older node sees today's plan.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cpus_burst: Option<u64>,
+    /// `k2 compute move` on a job in a shared node's own queue (0.46.17):
+    /// what to do once the node gives it back (its `reason` is
+    /// `pull_requested` while the answer travels). Controller-only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull: Option<PullAsk>,
+}
+
+/// A pull-back asked by `k2 compute move` (0.46.17).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullAsk {
+    /// `--to NODE`: the node id it is pinned to once it is back; `None` =
+    /// `--auto` (placed again as any auto job: held on this server until a
+    /// node that fits has a free slot).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    /// The asker was the owner or an Admin (who may pin to a node the
+    /// job's workspace isn't granted), checked again once it is back.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub admin: bool,
+    /// Who asked (a login label), for the record.
+    #[serde(default)]
+    pub by: String,
+    pub at: i64,
 }
 
 /// CE-5: an end heard more than this long after the node's own time is

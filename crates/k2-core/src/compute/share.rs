@@ -51,9 +51,15 @@ pub mod pending {
     /// withdraw it, then send it again to the SAME node with the fresh
     /// plan. Never a move: no `--any` move, no V71 count, no health strike.
     pub const RESEND: &str = "withdraw_resend";
+    /// `k2 compute move` (0.46.17) asked the node to give back a job that
+    /// waits in its own queue: back on this server it is placed again
+    /// (`--auto`) or goes to the named node (`--to`, `JobCtl.pull`). The
+    /// node gets the same "give it back if not started" cancel as a
+    /// withdraw (protocol 3), so every shared node answers it.
+    pub const PULL: &str = "pull_requested";
 
     pub fn any(reason: Option<&str>) -> bool {
-        matches!(reason, Some(WITHDRAW) | Some(TIMEOUT) | Some(CANCEL) | Some(RESEND))
+        matches!(reason, Some(WITHDRAW) | Some(TIMEOUT) | Some(CANCEL) | Some(RESEND) | Some(PULL))
     }
 }
 

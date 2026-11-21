@@ -559,22 +559,71 @@ fn a_reconnect_ends_the_pull_and_a_second_fetch_joins_a_running_one() {
     drop(rx);
 }
 
-/// 0.46.17: an auto Priority or CI job waits on this server until a node
-/// can start it (never into a shared node's queue); Standard and Batch
-/// only for the hold (V71); a pinned job, or one that starts now, never.
+/// 0.46.17: the central hold. Every auto job (any tier) waits on this
+/// server until the shared node starts it at once: a slot free node-wide,
+/// counting asks sent since the offer and in this pass, free memory and
+/// CPU for it, and the node's quote (or, once a send made the quote
+/// stale, this server's own count of its share). A Batch job only on an
+/// idle node; nothing on a node its owner drains.
 #[test]
-fn priority_and_ci_hold_on_the_server_until_a_node_can_start_them() {
-    for tier in [Tier::Priority, Tier::Ci] {
-        let r = any_hold(tier, true, 86_400, 60, false).expect("held however long it waited");
-        assert_eq!(r.code, "any_hold", "the mover counts it as only busy");
-        assert!(r.message.contains("waits on this server until a node can start it now"), "{}", r.message);
-        assert!(any_hold(tier, true, 86_400, 60, true).is_none(), "a node starts it now: it goes");
-        assert!(any_hold(tier, false, 86_400, 60, false).is_none(), "pinned: into its node's queue");
+fn an_auto_job_goes_to_a_shared_node_only_when_it_starts_there_now() {
+    use crate::compute_hold::{starts_now, Sent};
+    use crate::compute_place::Pending;
+    use k2_core::compute::proto::share::{Quote, Role, ServerStatus, ShareLimits, ShareView, Trust};
+    let view = |running: u32, queued: u32, max_running: u32| ShareView {
+        role: Role::Tenant,
+        slot: 1,
+        shared: true,
+        servers: 2,
+        owner_label: None,
+        state: ServerStatus::Active,
+        limits: ShareLimits { max_running, ..ShareLimits::new_server(Trust::Own, false) },
+        running,
+        queued,
+        cpu_secs_today: 0,
+        expires_in_secs: None,
+        skew_secs: None,
+        disk_used_bytes: None,
+        quotes: vec![],
+        priority: None,
+    };
+    let node = |running: u32, slots: u32| Offer { running, parallel_max: slots, ..offer_with(&[]) };
+    let gb = 1u64 << 30;
+    let none = Pending::default();
+    let go = |o: &Offer, v: &ShareView, p: &Pending, s: &Sent, t: Tier| starts_now(o, v, p, s, t, Some(1000), Some(gb), Some(gb));
+    // Idle node, an empty share: it starts now.
+    assert!(go(&node(0, 2), &view(0, 0, 2), &none, &Sent::default(), Tier::Normal));
+    // Every slot taken (other servers' jobs count): held.
+    assert!(!go(&node(2, 2), &view(0, 0, 2), &none, &Sent::default(), Tier::Normal));
+    // This server's share runs its most there, or one of ours waits in its queue: held.
+    assert!(!go(&node(1, 4), &view(2, 0, 2), &none, &Sent::default(), Tier::Normal));
+    assert!(!go(&node(1, 4), &view(0, 1, 2), &none, &Sent::default(), Tier::Normal));
+    // One slot left and this pass already sent a job into it: held.
+    let mut one = Sent::default();
+    one.add(Some(1000), Some(gb));
+    assert!(!go(&node(1, 2), &view(0, 0, 4), &none, &one, Tier::Normal));
+    assert!(go(&node(0, 2), &view(0, 0, 4), &none, &one, Tier::Normal), "two slots: the second goes too");
+    // A job sent before this offer (pending) counts the same way.
+    let pend = Pending { jobs: 1, mem_bytes: gb, cpu_millis: 1000, holds: 0 };
+    assert!(!go(&node(1, 2), &view(0, 0, 4), &pend, &Sent::default(), Tier::Normal));
+    // Not enough free memory for its --mem: held.
+    let mut tight = node(0, 2);
+    tight.free.mem_bytes = gb / 2;
+    assert!(!go(&tight, &view(0, 0, 2), &none, &Sent::default(), Tier::Normal));
+    // The node's quote has the last word before any send.
+    let mut quoted = view(0, 0, 2);
+    quoted.quotes = vec![Quote { cpu_millis: 1000, mem_bytes: gb, starts_now: false, eta_secs: Some(600), eta_p90_secs: None, blocked_by: None }];
+    assert!(!go(&node(0, 2), &quoted, &none, &Sent::default(), Tier::Normal), "the node says not now");
+    // Batch: only on an idle node.
+    assert!(!go(&node(1, 4), &view(0, 0, 4), &none, &Sent::default(), Tier::Batch));
+    assert!(go(&node(0, 4), &view(0, 0, 4), &none, &Sent::default(), Tier::Batch));
+    // Priority and CI hold the same way (no tier skips the hold).
+    for t in [Tier::Priority, Tier::Ci] {
+        assert!(!go(&node(2, 2), &view(0, 0, 2), &none, &Sent::default(), t));
+        assert!(go(&node(1, 2), &view(0, 0, 2), &none, &Sent::default(), t));
     }
-    assert!(any_hold(Tier::Ci, true, 0, 0, false).unwrap().message.starts_with("CI: "));
-    for tier in [Tier::Normal, Tier::Batch] {
-        assert_eq!(any_hold(tier, true, 30, 60, false).map(|r| r.message), Some("waiting up to 60s on this server for a node that can start it now".to_string()));
-        assert!(any_hold(tier, true, 60, 60, false).is_none(), "after the hold: into the queue");
-        assert!(any_hold(tier, true, 0, 0, false).is_none(), "no hold");
-    }
+    // A draining node starts nothing, whatever its numbers.
+    let mut draining = node(0, 2);
+    draining.control = frames::Control::Draining;
+    assert!(!go(&draining, &view(0, 0, 2), &none, &Sent::default(), Tier::Normal));
 }

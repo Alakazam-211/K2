@@ -61,7 +61,6 @@ fn setup() -> Env {
     // once; a node offline at all counts as lost.
     k2_core::compute::retry::set_tuning_for_tests(k2_core::compute::retry::Tuning {
         tick_millis: 3_600_000,
-        any_hold_secs: 0,
         retry_base_secs: 0,
         node_lost_secs: 0,
         ..Default::default()

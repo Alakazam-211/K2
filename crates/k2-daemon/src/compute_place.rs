@@ -2175,23 +2175,7 @@ fn leave_reason(j: &JobRow, node: Option<&NodeRow>, decisions: &mut HashMap<Stri
     }
     let d = decisions.entry(node.id.clone()).or_insert_with(|| compute_ws::decision_for(&node.id));
     let (_, why) = d.waiting.get(&j.id)?;
-    let busy = [
-        refusal::PARALLEL_FULL,
-        refusal::EXCLUSIVE_RUNNING,
-        refusal::WAITING_FOR_IDLE,
-        refusal::LOCAL_RESOURCE_LIMIT,
-        scheduler::GRANT_PARALLEL_FULL,
-        "next_in_turn",
-        "behind_older_job",
-        "retry_backoff",
-        // A shared node (protocol 3): still only busy.
-        "any_hold",
-        pshare::codes::TENANT_QUEUE_FULL,
-        pshare::codes::FAIR_SHARE_WAIT,
-        // Secret-env SE26: another workspace's job runs as the same user.
-        k2_core::compute::proto::secret::codes::ISOLATION_WAIT,
-    ];
-    if busy.contains(&why.code.as_str()) {
+    if crate::compute_hold::BUSY.contains(&why.code.as_str()) {
         Some(("node_busy", false))
     } else {
         Some(("node_refused", true))
@@ -2507,11 +2491,13 @@ pub fn sweep(now: i64) {
     // V71: only after the node confirms a withdraw).
     sweep_node_queued(now, awake, &nodes);
 
-    // Queued work: deadlines, then moves.
-    let queued = {
+    // Queued work: deadlines, then moves, held jobs in dispatch order
+    // (CI, Priority, Standard, Batch; oldest first in each: 0.46.17).
+    let mut queued = {
         // A pooled read: the sweep's snapshot never holds the writer's lock.
         k2_core::db::read(store::queued_jobs)
     };
+    crate::compute_hold::dispatch_order(&mut queued);
     let mut decisions: HashMap<String, scheduler::Decision> = HashMap::new();
     let mut changed = false;
     for j in queued {
@@ -2573,6 +2559,12 @@ fn requeue_lost(j: &JobRow, n: &NodeRow, mins: i64, now: i64) {
         }
         Some(pending::TIMEOUT) => {
             fail_queue_timeout(j, &n.name, now);
+            return;
+        }
+        // A pull back (`k2 compute move`, 0.46.17): it is back as asked.
+        Some(pending::PULL) => {
+            crate::compute_move::pulled_back(&n.id, j);
+            compute_ws::notify_change();
             return;
         }
         _ => {}
@@ -2719,12 +2711,16 @@ pub fn move_state_json(j: &JobRow, now: i64) -> Option<serde_json::Value> {
     if !(j.state == "queued" || j.node_queued) {
         return None;
     }
-    if j.ctl.any.is_none() {
+    // `k2 compute move` asked its node for it back (0.46.17).
+    let pulling = j.reason.as_deref() == Some(pending::PULL);
+    if j.ctl.any.is_none() && !pulling {
         return Some(serde_json::json!({"auto": false, "note": "pinned: it waits for the node it was named on (k2 compute move <job> --auto lets K2 move it)"}));
     }
     let wait = share::withdraw_wait(j.withdraws, j.withdrawn_at, now);
-    let moving = j.reason.as_deref() == Some(pending::WITHDRAW);
-    let note = if moving {
+    let moving = pulling || j.reason.as_deref() == Some(pending::WITHDRAW);
+    let note = if pulling {
+        crate::compute_move::pulling_note(j)
+    } else if moving {
         "moving: its node was asked to give it back for a node that can start it now".to_string()
     } else if j.withdraws > 0 && wait > 0 {
         format!("tried to move it {} time(s) in a row; the node it was meant for filled first; next try in {wait}s", j.withdraws)
@@ -2732,7 +2728,7 @@ pub fn move_state_json(j: &JobRow, now: i64) -> Option<serde_json::Value> {
         "K2 moves it when another node can start it now".to_string()
     };
     Some(serde_json::json!({
-        "auto": true,
+        "auto": j.ctl.any.is_some(),
         "bounces": j.withdraws,
         "lastTryAt": j.withdrawn_at,
         "nextTryInSecs": wait,

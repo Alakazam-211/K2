@@ -402,6 +402,9 @@ pub mod compute_rollout_stagger;
 // The Compute Garden's node load tile (`compute.nodes`, catalog v49).
 pub mod compute_garden;
 pub mod compute_local;
+// Auto jobs held on this server until a node that fits has a free slot
+// (0.46.17): the hold, its words, and the dispatch order.
+pub mod compute_hold;
 // "Allow managing compute nodes" (`compute_manage`, 0194).
 pub mod compute_manage;
 // `k2 compute move` and `--avoid` (0.46.8): queued jobs to auto or a node.

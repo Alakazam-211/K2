@@ -196,7 +196,7 @@ pub struct Elsewhere {
 /// granted nodes placement leaves out (offline, too small, …), and the
 /// one-line summary. Empty for a pinned job or one already moving.
 pub fn not_now(j: &JobRow, now: i64) -> Elsewhere {
-    if j.ctl.any.is_none() || j.reason.as_deref() == Some(pending::WITHDRAW) {
+    if j.ctl.any.is_none() || matches!(j.reason.as_deref(), Some(pending::WITHDRAW) | Some(pending::PULL)) {
         return Elsewhere::default();
     }
     let Some(plan) = j.plan() else { return Elsewhere::default() };

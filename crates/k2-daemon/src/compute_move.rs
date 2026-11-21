@@ -17,9 +17,13 @@
 //!   as naming the node at submit (grant, node list, CI, `--exclusive`,
 //!   the share's limits, features, size).
 //! - Only queued jobs, never a started one (`job_started`). A job in a
-//!   shared node's own queue may be released (the sweeper asks the node
-//!   for it back, V46); `--to` and a release that must leave at once are
-//!   refused there (`in_node_queue`).
+//!   shared node's own queue (`node_queued`) is pulled back (0.46.17): the
+//!   node is asked to give it back if it hasn't started it (the protocol-3
+//!   withdraw every shared node answers), and once it is back it is
+//!   placed again (`--auto`: held on this server until a node that fits
+//!   has a free slot) or pinned to the node `--to` named. `--auto` on an
+//!   auto job there pulls it back too, where it used to be `already_auto`.
+//!   A second ask while the node's answer travels is `in_node_queue`.
 //! - Who: the job's own workspace (an agent, a K2 shell tab), or the owner
 //!   and Admin logins for any job: the same as `retier`.
 //!   `--all-mine` / `--workspace-all` pick jobs like `cancel` does.
@@ -34,8 +38,9 @@
 
 use std::collections::BTreeMap;
 
+use k2_core::compute::proto::frames;
 use k2_core::compute::proto::share as pshare;
-use k2_core::compute::share;
+use k2_core::compute::share::{self, pending};
 use k2_core::compute::{self as compute, codes, store};
 
 use crate::compute_place::{self as place, Tier, Want};
@@ -56,8 +61,8 @@ pub const ALREADY_AUTO: &str = "already_auto";
 pub const ALREADY_ON_NODE: &str = "already_on_node";
 /// `move --to N`: that node can't take this job (exit 3).
 pub const NODE_CANT_TAKE: &str = "node_cant_take";
-/// The job waits in a shared node's own queue and the ask needs it back at
-/// once (exit 3).
+/// The job waits in a shared node's own queue and the node still has to
+/// answer an earlier ask about it (a pull, a withdraw, a cancel): exit 3.
 pub const IN_NODE_QUEUE: &str = "in_node_queue";
 /// The release rules its node out and no other node can take it now
 /// (exit 3); nothing changed.
@@ -456,10 +461,14 @@ fn release(who: &Who, j: &store::JobRow, ws: &Ws, ask: &Ask, on_node: bool) -> R
         }
     }
     if was_auto && j.ctl.any.as_ref() == Some(&f) {
+        // In a shared node's own queue (0.46.17): pull it back here.
+        if on_node {
+            return pull(who, j, j.ctl.clone(), None);
+        }
         return Err(no(
             ALREADY_AUTO,
             409,
-            format!("job {short} is already auto-placed: it moves when another node can start it first. --avoid <node> keeps it off a node"),
+            format!("job {short} is already auto-placed: it is held on this server and goes to the first node that fits with a free slot. --avoid <node> keeps it off a node"),
         ));
     }
     let mut ctl = j.ctl.clone();
@@ -478,16 +487,7 @@ fn release(who: &Who, j: &store::JobRow, ws: &Ws, ask: &Ask, on_node: bool) -> R
     let here = node_name(&j.node_id);
     // Its own node is no longer a candidate (avoided, not granted, off the
     // list, another --os): it must leave now, or nothing changes.
-    if !report.cands.iter().any(|c| c.node.id == j.node_id) {
-        if on_node {
-            return Err(no(
-                IN_NODE_QUEUE,
-                409,
-                format!(
-                    "job {short} waits in {here}'s own queue, and this ask rules {here} out; K2 can't take it back from there at once. Cancel it (k2 compute cancel {short}) and run it again without a node, or release it without ruling {here} out"
-                ),
-            ));
-        }
+    if !on_node && !report.cands.iter().any(|c| c.node.id == j.node_id) {
         return match place::try_move(&moved_job, &[], true, "released") {
             Some(to) => {
                 audit_release(who, j, &f, was_auto, Some(&to));
@@ -523,6 +523,12 @@ fn release(who: &Who, j: &store::JobRow, ws: &Ws, ask: &Ask, on_node: bool) -> R
             at: now,
         });
     }
+    // In a shared node's own queue (0.46.17): pull it back here with the
+    // new filter; it is placed again once the node gives it back.
+    if on_node {
+        audit_release(who, j, &f, was_auto, None);
+        return pull(who, j, ctl, None);
+    }
     let written = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -535,11 +541,7 @@ fn release(who: &Who, j: &store::JobRow, ws: &Ws, ask: &Ask, on_node: bool) -> R
     compute_ws::notify_change();
     Ok(serde_json::json!({
         "ok": true, "job": short, "mode": "auto", "from": here, "node": here, "moved": false, "filter": filter_json(&f, &j.workspace_id, who.is_admin()),
-        "note": if on_node {
-            format!("it waits in {here}'s own queue; K2 asks for it back when another node can start it now")
-        } else {
-            format!("it waits on {here} and moves on the next pass (every 5 s) to a node that can start it now")
-        },
+        "note": "held on this server: it goes to the first node that fits with a free slot (K2 looks every 5 s)",
     }))
 }
 
@@ -557,7 +559,8 @@ fn audit_release(who: &Who, j: &store::JobRow, f: &store::AnyFilter, was_auto: b
     );
 }
 
-/// `--to NODE`: rebuild the plan for that node and pin it there.
+/// `--to NODE`: rebuild the plan for that node and pin it there. A job in
+/// a shared node's own queue is pulled back first (0.46.17).
 fn move_to(who: &Who, j: &store::JobRow, ws: &Ws, to: &str, on_node: bool) -> R<serde_json::Value> {
     let short = compute::message::short(&j.id).to_string();
     let n = resolve_node_for(who, Some(to), Some(&ws.id))?;
@@ -565,58 +568,79 @@ fn move_to(who: &Who, j: &store::JobRow, ws: &Ws, to: &str, on_node: bool) -> R<
         return Err(no(codes::NODE_NOT_FOUND, 404, format!("'{}' is waiting for its code to be confirmed", n.name)));
     }
     crate::compute_allow::check_node(ws, &n, "--to")?;
-    let here = node_name(&j.node_id);
     if n.id == j.node_id && j.ctl.any.is_none() {
         return Err(no(ALREADY_ON_NODE, 409, format!("job {short} is already pinned to {}", n.name)));
     }
-    if on_node {
-        return Err(no(
-            IN_NODE_QUEUE,
-            409,
-            format!(
-                "job {short} waits in {here}'s own queue; K2 can't move it to another node at once. Release it instead (k2 compute move {short} --auto: K2 asks for it back when another node can start it), or cancel it and run it again on {}",
-                n.name
-            ),
-        ));
+    let c = target(who.is_admin(), j, ws, &n)?;
+    if on_node && c.node.id != j.node_id {
+        return pull(who, j, j.ctl.clone(), Some((&c.node, who.is_admin())));
     }
+    let here = node_name(&j.node_id);
+    let same = c.node.id == j.node_id;
+    if !pin_on(j, &c, &who.label())? {
+        return Err(no(pshare::codes::JOB_STARTED, 409, format!("job {short} started (or ended) just now; it stays on {here}")));
+    }
+    Ok(serde_json::json!({
+        "ok": true, "job": short, "mode": "pinned", "from": here, "node": c.node.name, "moved": !same,
+        "note": if same { format!("pinned where it waits ({}): it no longer moves", c.node.name) } else { format!("pinned to {}: it waits there and never moves on its own", c.node.name) },
+    }))
+}
+
+/// Node `n` as the one candidate for job `j` pinned there (the same checks
+/// as naming it at submit), or why it can't take the job.
+fn target(admin: bool, j: &store::JobRow, ws: &Ws, n: &store::NodeRow) -> R<place::Cand> {
+    let short = compute::message::short(&j.id).to_string();
     let plan = j.plan().ok_or_else(|| no("internal", 500, "the job's stored plan can't be read"))?;
     let mut w = Want::of_job(j, &plan);
     w.auto = false;
-    w.admin = who.is_admin();
+    w.admin = admin;
     w.filter = store::AnyFilter::default();
-    let now = compute::now();
     // Only `n` is considered, so the skipped count names its one reason.
     let others: Vec<String> = {
         let db = k2_core::db::shared();
         let conn = db.lock();
         store::list_nodes(&conn, false).into_iter().map(|x| x.id).filter(|id| *id != n.id).collect()
     };
-    let report = place::candidates_report(&w, &others, now);
-    let Some(c) = report.cands.into_iter().next() else {
-        let granted = {
-            let db = k2_core::db::shared();
-            let conn = db.lock();
-            store::grant(&conn, &n.id, &ws.id).is_some()
-        };
-        if !granted && !who.is_admin() {
-            return Err(no(
-                codes::NOT_GRANTED,
-                403,
-                format!("'{}' isn't granted to workspace {}: ask your owner (k2 compute grant {} --workspace {})", n.name, ws.handle, n.name, ws.handle),
-            ));
-        }
-        let why: Vec<String> = report.skipped.iter().map(|(k, c)| place::skip_words(k, *c, &w)).collect();
-        return Err(no(
-            NODE_CANT_TAKE,
-            409,
-            format!("'{}' can't take job {short}: {}; it stays on {here} (k2 compute nodes says more)", n.name, if why.is_empty() { "it isn't available".to_string() } else { why.join(", ") }),
-        ));
+    let report = place::candidates_report(&w, &others, compute::now());
+    if let Some(c) = report.cands.into_iter().next() {
+        return Ok(c);
+    }
+    let granted = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::grant(&conn, &n.id, &ws.id).is_some()
     };
+    if !granted && !admin {
+        return Err(no(
+            codes::NOT_GRANTED,
+            403,
+            format!("'{}' isn't granted to workspace {}: ask your owner (k2 compute grant {} --workspace {})", n.name, ws.handle, n.name, ws.handle),
+        ));
+    }
+    let why: Vec<String> = report.skipped.iter().map(|(k, c)| place::skip_words(k, *c, &w)).collect();
+    Err(no(
+        NODE_CANT_TAKE,
+        409,
+        format!(
+            "'{}' can't take job {short}: {}; it stays on {} (k2 compute nodes says more)",
+            n.name,
+            if why.is_empty() { "it isn't available".to_string() } else { why.join(", ") },
+            node_name(&j.node_id)
+        ),
+    ))
+}
+
+/// Pin the queued job `j` to `c`'s node now (its plan rebuilt for it, the
+/// record `moved_to`), and kick that node. False: it started or ended.
+fn pin_on(j: &store::JobRow, c: &place::Cand, by: &str) -> R<bool> {
+    let plan = j.plan().ok_or_else(|| no("internal", 500, "the job's stored plan can't be read"))?;
+    let now = compute::now();
     let mut ctl = j.ctl.clone();
     ctl.any = None;
+    ctl.pull = None;
     let mut rec = place::pinned_record(&c.node.name, now);
     rec.code = "moved_to".into();
-    rec.why = format!("moved here by {} (k2 compute move --to)", who.label());
+    rec.why = format!("moved here by {by} (k2 compute move --to)");
     ctl.placement = Some(rec);
     let same = c.node.id == j.node_id;
     let ok = {
@@ -634,28 +658,136 @@ fn move_to(who: &Who, j: &store::JobRow, ws: &Ws, to: &str, on_node: bool) -> R<
         if ok {
             store::record_event(
                 &conn,
-                &who.label(),
+                by,
                 "job_move",
                 Some(&c.node.id),
                 Some(&j.workspace_id),
                 Some(&j.id),
-                serde_json::json!({"from": j.node_id, "to": c.node.id, "why": "asked", "by": who.label(), "pinned": true}),
+                serde_json::json!({"from": j.node_id, "to": c.node.id, "why": "asked", "by": by, "pinned": true}),
             );
         }
         ok
     };
-    if !ok {
-        return Err(no(pshare::codes::JOB_STARTED, 409, format!("job {short} started (or ended) just now; it stays on {here}")));
+    if ok {
+        if !same {
+            place::note_placed(&c.node.id, now);
+        }
+        compute_ws::kick(&c.node.id);
+        compute_ws::notify_change();
     }
-    if !same {
-        place::note_placed(&c.node.id, now);
+    Ok(ok)
+}
+
+// ── pulling a job back from a shared node's queue (0.46.17) ──────────
+
+/// Ask the node whose own queue holds `j` to give it back (the protocol-3
+/// withdraw: "only if not started"), with `ctl` (the new filter) and the
+/// pin `to` (a node, and whether the asker is the owner or an Admin) to
+/// apply once it is back. A job that starts there first stays where it
+/// runs, as with any cancel that loses the race. A node that is offline
+/// gets the ask when it reconnects.
+fn pull(who: &Who, j: &store::JobRow, mut ctl: store::JobCtl, to: Option<(&store::NodeRow, bool)>) -> R<serde_json::Value> {
+    let short = compute::message::short(&j.id).to_string();
+    let here = node_name(&j.node_id);
+    if pending::any(j.reason.as_deref()) || j.reason.as_deref() == Some("cancel_requested") {
+        return Err(no(
+            IN_NODE_QUEUE,
+            409,
+            format!("job {short} waits for {here} to answer an earlier ask ({}); try again when it has", j.reason.as_deref().unwrap_or("")),
+        ));
     }
-    compute_ws::kick(&c.node.id);
+    let now = compute::now();
+    ctl.pull = Some(store::PullAsk { to: to.map(|(n, _)| n.id.clone()), admin: to.is_some_and(|(_, a)| a), by: who.label(), at: now });
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        if !store::set_waiting_job_ctl(&conn, &j.id, j.generation, &ctl).map_err(|e| no("internal", 500, e))? {
+            return Err(no(pshare::codes::JOB_STARTED, 409, format!("job {short} started (or ended) just now; it stays where it is")));
+        }
+        store::set_job_reason(&conn, &j.id, Some(pending::PULL), None);
+        store::record_event(
+            &conn,
+            &who.label(),
+            "pull_asked",
+            Some(&j.node_id),
+            Some(&j.workspace_id),
+            Some(&j.id),
+            serde_json::json!({"generation": j.generation, "to": to.map(|(n, _)| n.id.clone()), "by": who.label()}),
+        );
+    }
+    let sent = compute_ws::send_cancel_if_not_started(&j.node_id, &j.id, j.generation, frames::CANCEL_WITHDRAW);
     compute_ws::notify_change();
+    let then = match to {
+        Some((n, _)) => format!("then it is pinned to {}", n.name),
+        None => "then it is held on this server and goes to the first node that fits with a free slot".to_string(),
+    };
     Ok(serde_json::json!({
-        "ok": true, "job": short, "mode": "pinned", "from": here, "node": c.node.name, "moved": !same,
-        "note": if same { format!("pinned where it waits ({}): it no longer moves", c.node.name) } else { format!("pinned to {}: it waits there and never moves on its own", c.node.name) },
+        "ok": true, "job": short, "mode": if to.is_some() { "pinned" } else { "auto" }, "from": here,
+        "node": to.map(|(n, _)| n.name.clone()).unwrap_or_else(|| here.clone()), "moved": false, "pulling": true,
+        "filter": ctl.any.as_ref().map(|f| filter_json(f, &j.workspace_id, who.is_admin())),
+        "note": format!(
+            "{} {here} to give it back from its queue; {then}. If it starts there first, it stays there",
+            if sent { "asked" } else { "will ask (when it reconnects)" }
+        ),
     }))
+}
+
+/// `get`'s move note while a pull travels.
+pub(crate) fn pulling_note(j: &store::JobRow) -> String {
+    let here = node_name(&j.node_id);
+    match j.ctl.pull.as_ref().and_then(|p| p.to.as_deref()) {
+        Some(to) => format!("pulling back: {here} was asked to give it back (k2 compute move); then it is pinned to {}", node_name(to)),
+        None => format!("pulling back: {here} was asked to give it back (k2 compute move); then it is held on this server for the first node that fits with a free slot"),
+    }
+}
+
+/// The node gave back a job `k2 compute move` pulled (`reason` was
+/// `pull_requested`): requeued under a new generation with no retry used
+/// and no health strike, then pinned to the node asked, or placed again
+/// (auto: to a node that starts it now, else held on this server).
+pub(crate) fn pulled_back(node_id: &str, job: &store::JobRow) {
+    let ask = job.ctl.pull.clone().unwrap_or_default();
+    let row = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        if store::requeue_new_generation(&conn, &job.id, job.generation, "pulled_back") != Ok(true) {
+            return;
+        }
+        let Some(mut r) = store::job_by_id(&conn, &job.id) else { return };
+        r.ctl.pull = None;
+        let _ = store::set_job_ctl(&conn, &r.id, &r.ctl);
+        store::record_event(
+            &conn,
+            "controller",
+            "pull",
+            Some(node_id),
+            Some(&r.workspace_id),
+            Some(&r.id),
+            serde_json::json!({"generation": job.generation, "newGeneration": job.generation + 1, "to": ask.to, "by": ask.by}),
+        );
+        r
+    };
+    let pinned = ask.to.as_deref().and_then(|to| {
+        let ws = ws_by_id(&row.workspace_id)?;
+        let n = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            store::node_by_id(&conn, to)
+        }?;
+        // The node may have stopped fitting while the answer travelled:
+        // then it waits for the node it was in, as it was.
+        let c = target(ask.admin, &row, &ws, &n).ok()?;
+        pin_on(&row, &c, &ask.by).ok().filter(|ok| *ok)
+    });
+    if pinned.is_some() {
+        return;
+    }
+    if row.ctl.any.is_some() && place::try_move(&row, &[], false, "pulled_back").is_some() {
+        return;
+    }
+    // Held here: the central hold sends it back only when that node can
+    // start it now; the sweeper takes it to any other that can first.
+    compute_ws::kick(node_id);
 }
 
 #[cfg(test)]

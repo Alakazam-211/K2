@@ -44,6 +44,7 @@ use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 
+use crate::compute_hold as hold;
 use crate::routes::dispatcher::Ingress;
 
 pub const ATTACH_PATH: &str = "/cli/compute/attach";
@@ -610,7 +611,7 @@ async fn run_session(
                 let reason = match j.reason.as_deref() {
                     Some("cancel_requested") => "cancelled",
                     Some(pending::CANCEL) if j.node_queued => frames::CANCEL_IF_QUEUED,
-                    Some(pending::WITHDRAW) | Some(pending::TIMEOUT) | Some(pending::RESEND) if j.node_queued => frames::CANCEL_WITHDRAW,
+                    Some(pending::WITHDRAW) | Some(pending::TIMEOUT) | Some(pending::RESEND) | Some(pending::PULL) if j.node_queued => frames::CANCEL_WITHDRAW,
                     _ => return None,
                 };
                 Some(Frame::Cancel(Cancel { job_id: j.id.clone(), generation: j.generation as u32, reason: reason.into() }))
@@ -1208,7 +1209,7 @@ fn apply_observation(
         // here unless someone asked to cancel it: it goes to the move path.
         let user_cancel = asked == Some("cancel_requested") || asked == Some(pending::CANCEL);
         let given_back = matches!(reason, Some(pshare::codes::WITHDRAWN) | Some(pshare::codes::SUPERSEDED))
-            || matches!(asked, Some(pending::WITHDRAW) | Some(pending::TIMEOUT) | Some(pending::RESEND));
+            || matches!(asked, Some(pending::WITHDRAW) | Some(pending::TIMEOUT) | Some(pending::RESEND) | Some(pending::PULL));
         if given_back && !user_cancel {
             drop(conn);
             return given_back_job(node_id, &job);
@@ -1404,6 +1405,13 @@ fn given_back_job(node_id: &str, job: &store::JobRow) {
         );
         drop(conn);
         kick(node_id);
+        notify_change();
+        return;
+    }
+    // `k2 compute move` pulled it back (0.46.17): placed again, or to the
+    // node it names.
+    if job.reason.as_deref() == Some(pending::PULL) {
+        crate::compute_move::pulled_back(node_id, job);
         notify_change();
         return;
     }
@@ -2832,12 +2840,15 @@ fn rotation_order(jobs: Vec<store::JobRow>, turns: &scheduler::Turns) -> Vec<sto
 
 fn shared_pass(conn: &rusqlite::Connection, node_id: &str, offer: &Offer, view: &pshare::ShareView, turns: &scheduler::Turns, pause: Option<&str>) -> SharedPass {
     let now = compute::now();
-    let t = compute::retry::tuning();
     let queued: Vec<store::JobRow> = store::jobs_in_states(conn, node_id, &["queued"])
         .into_iter()
         .filter(|j| j.ctl.not_before.is_none_or(|nb| nb <= now))
         .collect();
     let mut pass = SharedPass { send: Vec::new(), fail: Vec::new(), waiting: BTreeMap::new() };
+    // What was sent (or a mover holds) since the node's last offer, and
+    // what this pass sends: an auto job counts both before it goes.
+    let pend = crate::compute_place::pending_for(node_id, Some(offer.revision), now);
+    let mut sent = hold::Sent::default();
     let ordered = rotation_order(queued, turns);
     // T28: a Batch job for a node without `tiers2` waits here until the
     // node is idle, then goes as Standard; one per pass.
@@ -2859,8 +2870,15 @@ fn shared_pass(conn: &rusqlite::Connection, node_id: &str, offer: &Offer, view: 
             s => Some(frames::Refusal::new(pshare::codes::SERVER_NOT_APPROVED, format!("this server is {} on the node", s.as_str()))),
         }
     };
-    let on_node = store::jobs_in_states(conn, node_id, store::ACTIVE_STATES).len() as u32;
+    let active = store::jobs_in_states(conn, node_id, store::ACTIVE_STATES);
+    let on_node = active.len() as u32;
     let mut room = share::room(view, on_node);
+    // Each workspace's jobs there (running or in its queue), against its
+    // grant's `max_parallel`: an auto job never goes in behind its own.
+    let mut ws_on: HashMap<String, u32> = HashMap::new();
+    for a in &active {
+        *ws_on.entry(a.workspace_id.clone()).or_insert(0) += 1;
+    }
     for (i, j) in ordered.iter().enumerate() {
         let pos = i + 1;
         let wait = |why: frames::Refusal, pass: &mut SharedPass| {
@@ -2920,14 +2938,17 @@ fn shared_pass(conn: &rusqlite::Connection, node_id: &str, offer: &Offer, view: 
             wait(b.clone(), &mut pass);
             continue;
         }
-        // V71: `--any` waits on this server a while for a node that can
-        // start it now (with a slot free node-wide), before it joins a node's
-        // queue; Priority and CI until one can (0.46.17).
-        let since = if j.ctl.queued_at > 0 { j.ctl.queued_at } else { j.created_at };
-        let starts = share::starts_now(view, plan.limits.cpu_millis, plan.limits.mem_bytes) && (offer.parallel_max == 0 || offer.running < offer.parallel_max);
-        if let Some(r) = any_hold(j.tier(), j.ctl.any.is_some(), now - since, t.any_hold_secs, starts) {
-            wait(r, &mut pass);
-            continue;
+        // Central hold (0.46.17): an auto job waits on this server until
+        // the node can start it now (a slot free node-wide, counting what
+        // this pass and earlier sends took), never in the node's queue.
+        if j.ctl.any.is_some() {
+            let cap = store::grant(conn, node_id, &j.workspace_id).map_or(1, |g| crate::compute_place::GrantCaps::of(&g).ws);
+            let starts = ws_on.get(&j.workspace_id).copied().unwrap_or(0) < cap
+                && hold::starts_now(offer, view, &pend, &sent, j.tier(), plan.limits.cpu_millis, plan.limits.mem_bytes, probe.mem_bytes);
+            if let Some(r) = hold::any_hold(true, starts) {
+                wait(r, &mut pass);
+                continue;
+            }
         }
         // T28: Batch to a node without `tiers2` (k2-node 0.46.5 or older)
         // only when the node is idle, one at a time; it goes as Standard.
@@ -2952,30 +2973,11 @@ fn shared_pass(conn: &rusqlite::Connection, node_id: &str, offer: &Offer, view: 
             continue;
         }
         room -= 1;
+        sent.add(plan.limits.cpu_millis, probe.mem_bytes);
+        *ws_on.entry(j.workspace_id.clone()).or_insert(0) += 1;
         pass.send.push(j.id.clone());
     }
     pass
-}
-
-/// Whether an auto job waits on this server instead of going into a
-/// shared node's queue (`any_hold`, which the mover counts as only busy, so
-/// it still moves to a node that can start it now). Standard and Batch:
-/// for `hold_secs` (V71), then into the queue. Priority and CI (0.46.17):
-/// until a node can start them, bounded by their queue timeout, so they
-/// land on the first node that frees instead of queueing behind a node's
-/// limit where they can't overtake. A pinned job never holds here.
-pub fn any_hold(tier: Tier, auto: bool, waited_secs: i64, hold_secs: i64, starts_now: bool) -> Option<frames::Refusal> {
-    if !auto || starts_now {
-        return None;
-    }
-    if matches!(tier, Tier::Priority | Tier::Ci) {
-        let what = if tier == Tier::Ci { "CI" } else { "Priority" };
-        return Some(frames::Refusal::new(
-            "any_hold",
-            format!("{what}: waits on this server until a node can start it now, then goes to the first that can (never into a node's queue)"),
-        ));
-    }
-    (waited_secs < hold_secs).then(|| frames::Refusal::new("any_hold", format!("waiting up to {hold_secs}s on this server for a node that can start it now")))
 }
 
 /// The scheduler's current view of a node (for display): position and

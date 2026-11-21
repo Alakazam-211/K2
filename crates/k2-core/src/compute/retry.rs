@@ -37,9 +37,6 @@ pub struct Tuning {
     pub stall_priority_secs: i64,
     /// The controller's compute ticker period.
     pub tick_millis: u64,
-    /// `--any` (0.46.3, V71): when no node can start the job now, it waits
-    /// on the server this long before it goes into a shared node's queue.
-    pub any_hold_secs: i64,
     /// Owner side: how often a node's server list is mirrored (§11.2).
     pub servers_refresh_secs: i64,
 }
@@ -58,7 +55,6 @@ impl Default for Tuning {
             stall_secs: 1800,
             stall_priority_secs: 7200,
             tick_millis: 5000,
-            any_hold_secs: 60,
             servers_refresh_secs: 300,
         }
     }

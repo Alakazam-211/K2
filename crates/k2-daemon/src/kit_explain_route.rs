@@ -22,6 +22,33 @@ pub const ROUTE: &str = "/cli/kit/explain";
 const FILE_FIELDS: &[&str] = &["path", "file"];
 
 /// `GET /cli/kit/explain?id=<id>[&json=1]`.
+/// The TCP door's arm for [`ROUTE`] (`routes/dispatcher.rs`): a read for
+/// any credential but an App pass or an API key; it answers whether or not
+/// Board files are on (it reads no file). A POST gets 405 and `true`: the
+/// dispatcher ends the connection.
+pub(crate) async fn serve_tcp(
+    stream: &mut tokio::net::TcpStream,
+    buf: &mut [u8],
+    is_post: bool,
+    path: &str,
+    query: &str,
+    bearer: Option<&str>,
+    owner_token: &str,
+) -> bool {
+    use tokio::io::AsyncReadExt;
+    let _ = stream.read(buf).await;
+    if is_post {
+        let r = CliResponse::method_not_allowed();
+        crate::routes::http::send_response(stream, r.status, r.content_type, &r.body).await;
+        return true;
+    }
+    let who = crate::compute_routes::who_from_tcp(query, bearer, owner_token);
+    let params = crate::routes::http::parse_params(path, query);
+    let r = handle(&who, &params);
+    crate::routes::http::send_response(stream, r.status, r.content_type, &r.body).await;
+    false
+}
+
 pub fn handle(who: &Who, params: &HashMap<String, String>) -> CliResponse {
     match who {
         Who::Owner | Who::Login { .. } | Who::Agent { .. } | Who::Shell { .. } => {}

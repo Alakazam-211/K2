@@ -123,8 +123,8 @@ cmd_agent_team() {
             local team="" ws="" kind="" scope="" topo="" as_json=false
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --kind) kind="${2:-}"; shift 2 ;;
-                    --scope) scope="${2:-}"; shift 2 ;;
+                    --kind) _need_value "$@"; kind="${2:-}"; shift 2 ;;
+                    --scope) _need_value "$@"; scope="${2:-}"; shift 2 ;;
                     --mesh) topo="mesh"; shift ;;
                     --json) as_json=true; shift ;;
                     -*) echo "Unknown flag: $1" >&2; exit 2 ;;
@@ -155,7 +155,7 @@ print(json.dumps(b))') || exit 2
             [ "$sub" = "served" ] && { view="served"; shift; }
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --workspace) ws="${2:-}"; shift 2 ;;
+                    --workspace) _need_value "$@"; ws="${2:-}"; shift 2 ;;
                     --json) as_json=true; shift ;;
                     *) echo "Unknown argument: $1 (see k2 agent team --help)" >&2; exit 2 ;;
                 esac
@@ -197,7 +197,7 @@ cmd_agent_instances() {
             local file="" key="" dry=false as_json=false
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --key) key="${2:-}"; shift 2 ;;
+                    --key) _need_value "$@"; key="${2:-}"; shift 2 ;;
                     --dry-run) dry=true; shift ;;
                     --json) as_json=true; shift ;;
                     -*) [ "$1" = "-" ] && { file="-"; shift; continue; }; echo "Unknown flag: $1" >&2; exit 2 ;;
@@ -223,7 +223,7 @@ print(json.dumps(b))') || exit 2
             local key="" as_json=false
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --key) key="${2:-}"; shift 2 ;;
+                    --key) _need_value "$@"; key="${2:-}"; shift 2 ;;
                     --json) as_json=true; shift ;;
                     *) echo "Unknown argument: $1" >&2; exit 2 ;;
                 esac

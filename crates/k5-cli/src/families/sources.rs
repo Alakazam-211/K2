@@ -556,9 +556,13 @@ pub fn ask(sub: &str, words: &[String], now: i64) -> Result<Ask, Stop> {
     }
 }
 
-/// Whether a command line skips the virtual desktop's guard.
+/// Whether a command line skips the virtual desktop's guard: `-h` or
+/// `--help` before any bare `--` (`_k2_offline_verb`).
 fn offline_verb(words: &[&str]) -> bool {
-    words.iter().any(|w| matches!(*w, "-h" | "--help"))
+    words
+        .iter()
+        .take_while(|w| **w != "--")
+        .any(|w| matches!(*w, "-h" | "--help"))
 }
 
 /// `date +%s`.

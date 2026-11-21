@@ -201,7 +201,10 @@ fn the_help_forms() {
     // After `--`, a help flag is the command's.
     let a = ask(&["add", "n", "--every", "1m", "--", "ls", "--help"]);
     assert_eq!(a.argv, Some(vec!["ls".to_string(), "--help".to_string()]));
-    assert!(offline_verb(&["job", "add", "--", "-h"]));
+    // ...and never makes the line a help line (`_k2_offline_verb` stops
+    // at the first bare `--`).
+    assert!(!offline_verb(&["job", "add", "--", "-h"]));
+    assert!(offline_verb(&["job", "add", "-h", "--", "y"]));
     assert!(!offline_verb(&["job", "add", "--", "-hx"]));
 }
 

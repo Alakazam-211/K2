@@ -340,9 +340,12 @@ pub fn request(ask: &Ask) -> Result<Request, String> {
 }
 
 /// Whether a command line skips the virtual desktop's guard: `-h` or
-/// `--help` anywhere in it (`_k2_offline_verb`).
+/// `--help` before any bare `--` (`_k2_offline_verb`).
 fn offline_verb(words: &[&str]) -> bool {
-    words.iter().any(|w| matches!(*w, "-h" | "--help"))
+    words
+        .iter()
+        .take_while(|w| **w != "--")
+        .any(|w| matches!(*w, "-h" | "--help"))
 }
 
 /// `k5 front ...`: `args` is the whole command line after `argv[0]`.

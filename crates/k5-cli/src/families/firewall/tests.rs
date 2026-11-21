@@ -131,7 +131,7 @@ fn the_shell_s_lines() {
     // No prelude row lets `firewall` past the connection gate.
     assert!(!policy.contains("[ \"${1:-}\" = \"firewall\" ]"));
     assert!(policy.contains(
-        "for _a in \"$@\"; do case \"$_a\" in -h|--help) _k2_offline_verb=1 ;; esac; done\n"
+        "for _a in \"$@\"; do [ \"$_a\" = \"--\" ] && break; case \"$_a\" in -h|--help) _k2_offline_verb=1 ;; esac; done\n"
     ));
 }
 
@@ -250,6 +250,7 @@ fn the_help_forms() {
     assert_eq!(ask(&["status", "help"]).args, vec!["help".to_string()]);
     assert!(offline_verb(&["firewall", "x", "-h"]));
     assert!(!offline_verb(&["firewall", "help"]));
+    assert!(!offline_verb(&["firewall", "x", "--", "-h"]));
 }
 
 #[test]

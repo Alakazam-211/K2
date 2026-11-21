@@ -153,8 +153,8 @@ pub fn refusal_line(base_url: &str) -> String {
 
 /// `_k2_offline_verb`: the first word is none, empty, `study`, `help`,
 /// `--help`, `-h`, `--schema`, `version` or `--version`, or a word
-/// anywhere is `-h` or `--help` (after a `--` too, as the shell's loop
-/// reads every word).
+/// before the first bare `--` is `-h` or `--help` (the words after it are
+/// a child command's).
 pub fn offline_verb(args: &[OsString]) -> bool {
     let first = args.first().map_or(OsStr::new(""), OsString::as_os_str);
     let local = [
@@ -167,7 +167,11 @@ pub fn offline_verb(args: &[OsString]) -> bool {
         "version",
         "--version",
     ];
-    local.iter().any(|w| first == *w) || args.iter().any(|a| a == "-h" || a == "--help")
+    local.iter().any(|w| first == *w)
+        || args
+            .iter()
+            .take_while(|a| *a != "--")
+            .any(|a| a == "-h" || a == "--help")
 }
 
 /// `--password`, `--password-stdin` or `--password=...`.
@@ -273,7 +277,7 @@ mod tests {
             refusal_line("${base}")
         )));
         assert!(p.contains(
-            "case \"${1:-}\" in \"\"|study|help|--help|-h|--schema|version|--version) _k2_offline_verb=1 ;; esac\nfor _a in \"$@\"; do case \"$_a\" in -h|--help) _k2_offline_verb=1 ;; esac; done\n"
+            "case \"${1:-}\" in \"\"|study|help|--help|-h|--schema|version|--version) _k2_offline_verb=1 ;; esac\nfor _a in \"$@\"; do [ \"$_a\" = \"--\" ] && break; case \"$_a\" in -h|--help) _k2_offline_verb=1 ;; esac; done\n"
         ));
     }
 
@@ -321,7 +325,7 @@ mod tests {
             assert_eq!(step(&w, loud, false, port), warn(loud), "{loud}");
         }
         // Help and the pages stay local.
-        let locals: [&[&str]; 11] = [
+        let locals: [&[&str]; 10] = [
             &[],
             &[""],
             &["study", "whoami"],
@@ -332,7 +336,6 @@ mod tests {
             &["version"],
             &["--version", "--check"],
             &["users", "add", "bob", "--password-stdin", "-h"],
-            &["whoami", "--", "--help"],
         ];
         for local in locals {
             assert_eq!(
@@ -341,6 +344,11 @@ mod tests {
                 "{local:?}"
             );
         }
+        // A help flag after a bare `--` is a child command's: the line.
+        assert_eq!(
+            step(&words(&["whoami", "--", "--help"]), "10.0.0.5", false, port),
+            warn("10.0.0.5")
+        );
         // A password, the switch or not; never asked for this computer.
         for pw in ["--password", "--password-stdin", "--password=x"] {
             let w = words(&["users", "add", "bob", pw]);

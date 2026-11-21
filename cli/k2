@@ -48477,7 +48477,7 @@ else:
             local label="" target="" transfer=0
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --target) target="${2:-}"; shift 2 ;;
+                    --target) _need_value "$@"; target="${2:-}"; shift 2 ;;
                     --transfer) transfer=1; shift ;;
                     --*) shift ;;
                     # A label never begins with '-' (so -h can't be one).
@@ -48641,7 +48641,7 @@ else:
             local label="" target="" transfer=0
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --target) target="${2:-}"; shift 2 ;;
+                    --target) _need_value "$@"; target="${2:-}"; shift 2 ;;
                     --transfer) transfer=1; shift ;;
                     --*) shift ;;
                     # A label never begins with '-' (so -h can't be one).

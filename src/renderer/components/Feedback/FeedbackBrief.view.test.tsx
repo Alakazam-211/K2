@@ -3,13 +3,15 @@
 // with a brief; a ticket without one renders the body box exactly as before
 // and never asks for a brief; a ticket with one fetches it ONCE, and thread
 // refreshes (revision bumps) neither refetch it nor rebuild the frame.
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { FeedbackCard, cardAssigneeNames } from './FeedbackPage'
 import { usePresenceStore } from '@/stores/presence'
 import { personColor } from '@/components/Presence/PresenceChip'
 import { FeedbackItemView, briefCache } from './FeedbackItemView'
 import type { FeedbackBrief, FeedbackListRow, FeedbackShow } from './feedback-api'
+import { primaryScope } from '@/kessel/server-scope'
+import { TICKET_THREAD_FEATURE } from './ticket-thread-contract'
 
 const api = vi.hoisted(() => ({
   fetchFeedbackShow: vi.fn(),
@@ -204,6 +206,17 @@ describe('FeedbackCard — assignee on the bottom row', () => {
 })
 
 describe('FeedbackItemView — brief', () => {
+  // The `show` refetch on a ticket event is an older server's (without
+  // `ticket-thread-v1`); FeedbackItemView.thread.test covers the Thread store.
+  beforeEach(() => {
+    const scope = primaryScope()
+    const supports = scope.serverSupports.bind(scope)
+    vi.spyOn(scope, 'serverSupports').mockImplementation((f) => f !== TICKET_THREAD_FEATURE && supports(f))
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
   it('without a brief: the body box is unchanged and no brief is fetched', async () => {
     api.fetchFeedbackShow.mockResolvedValue(show(row))
     const { rerender } = render(

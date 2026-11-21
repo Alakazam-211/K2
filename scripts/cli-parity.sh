@@ -185,7 +185,7 @@ EXPECTED_DIFFS=(
     "macos-system-proxy|K2 ruling, K5 shared transport|on macOS the system proxy (System Settings, Network, Proxies; no environment variable) is read by python3's urllib (urllib.request.getproxies_macosx_sysconf, when no proxy variable is set), so a bash Python block that reaches another machine over https may go through it; the binary reads only the proxy variables, as curl does, and never the system setting (it links no SystemConfiguration framework). Every bash request made with curl ignores the system setting too. Linux has no such setting: not proven there"
     "nul-in-answer|K2 ruling at the 0.46.15 rebase|a NUL byte in the daemon's answer to \`feedback list\` or \`feedback show <id>\`: bash's resp=\$(cli_request ...) drops it and, from bash 4.4 on, writes one line on stderr, \"<path to cli/k2>: line <n>: warning: command substitution: ignored null byte in input\"; the binary drops it silently. stdout, the exit code and the requests are the same (bash 3.2 writes no warning, so there the two are exact)"
     "passport-heal-once|K2 ruling, the doc lane's follow-ups|a doc call that sends a whole file or a tool call (_doc_xfer: \`doc cat\`, \`append\`, \`write\`, \`show --version\`, \`export\`) whose passport the daemon's auth gate refuses (403 and exactly {\"error\":\"Invalid or missing auth token\"}, sent before any handler runs, so nothing was done), in a session whose passport was minted again: bash's _doc_xfer never tries the new passport and the command ends on the refusal (exit 3); the binary sends the same call once more with the new passport and answers it (cli_send_json's one heal, which bash's other doc calls already make). An answer a handler gave that holds those words (a document's text, a conflict) is never sent again by either: one request, the same output"
-    "doc-mktemp-wording|K2 ruling, the doc lane's follow-ups|a doc verb that needs a temp folder (_doc_tmp) where TMPDIR can't hold one: the binary words mktemp's line as GNU mktemp does in the C locale (\"mktemp: failed to create directory via template '<TMPDIR>/k2doc.XXXXXX': No such file or directory\"; GNU's in a UTF-8 locale quotes the template with curly quotes); macOS's mktemp words it its own way (\"mktemp: mkdtemp failed on <TMPDIR>/k2doc.XXXXXX: No such file or directory\"). The two lines after it (\"Error: can't make a temp folder\" and the tmp error's JSON), the exit (2) and stdout (nothing) are the same, and neither sends anything"
+    "doc-mktemp-wording|K2 ruling, the doc lane's follow-ups|a doc verb that needs a temp folder (_doc_tmp) where TMPDIR can't hold one: the binary words mktemp's line as GNU mktemp does in the C locale (\"mktemp: failed to create directory via template '<TMPDIR>/k2doc.XXXXXX': No such file or directory\"; GNU's in a UTF-8 locale quotes the template with curly quotes); macOS's mktemp words it its own way (\"mktemp: mkdtemp failed on <TMPDIR>/k2doc.XXXXXX: No such file or directory\"; a newer macOS names the folder it tried, the six X filled in). The two lines after it (\"Error: can't make a temp folder\" and the tmp error's JSON), the exit (2) and stdout (nothing) are the same, and neither sends anything"
 )
 
 # check_version_offline: both CLIs run `--version` with a temp HOME and no
@@ -1228,6 +1228,8 @@ check_doc_mktemp_wording() {
     printf '%s\n' "$STUB_PORT" >"$d/home/.k2/heartbeat.port"
     gnu="mktemp: failed to create directory via template '$d/no-tmp/k2doc.XXXXXX': No such file or directory"
     bsd="mktemp: mkdtemp failed on $d/no-tmp/k2doc.XXXXXX: No such file or directory"
+    # A newer macOS mktemp names the folder it tried: the template's six X filled in.
+    bsd_tried="mktemp: mkdtemp failed on $d/no-tmp/k2doc."
     for side in bash binary; do
         : >"$d/log"
         if [ "$side" = bash ]; then cli=(bash "$ROOT/cli/k2"); else cli=("$WORK/bin/k5"); fi
@@ -1245,14 +1247,14 @@ check_doc_mktemp_wording() {
     [ "$(sed -n 1p "$d/err.binary")" = "$gnu" ] || problems+=("the binary's mktemp line: '$(sed -n 1p "$d/err.binary")', want '$gnu'")
     case "$(sed -n 1p "$d/err.bash")" in
         "$gnu") ;;
-        "$bsd") ;;
+        "$bsd" | "$bsd_tried"??????": No such file or directory") ;;
         *) problems+=("bash's mktemp line is neither GNU's nor macOS's: '$(sed -n 1p "$d/err.bash")'") ;;
     esac
     if [ ${#problems[@]} -gt 0 ]; then
         printf '%s\n' "${problems[@]}"
         return 1
     fi
-    [ "$(sed -n 1p "$d/err.bash")" = "$bsd" ] && return 0
+    [ "$(sed -n 1p "$d/err.bash")" != "$gnu" ] && return 0
     echo "mktemp here is GNU's, which words its line as the binary does: the two are exact here, so the difference itself was not proven on this host (the macOS job proves it)"
     return 3
 }

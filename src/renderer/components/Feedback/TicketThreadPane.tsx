@@ -47,7 +47,6 @@ import { ThreadFloatMerge } from '@/components/SessionView/ThreadFloatMerge'
 import { ThreadChatChip, ThreadChatChips, ThreadChatNote } from '@/components/Thread/ThreadChat'
 import { useChatSessionTurn } from '@/components/Thread/sessionTurn'
 import { workspaceHandle } from '@/lib/home-address'
-import { TILE_FOOT_CLIP } from '@/components/ui'
 import { AgentTab, TicketRailTerminalContext } from './TicketAgentTerminal'
 import {
   postTicketOptionPick,
@@ -66,6 +65,14 @@ export interface TicketPatch {
   /** Set when the post was the ticket's answer. */
   answer?: string
 }
+
+/** The terminal drawer leaves the Thread at least this much (px): about
+ *  three messages, the quick answers and the box at 1280 by 800. */
+export const TICKET_DRAWER_THREAD_PX = 460
+
+/** Room between the newest message and the quick answers (px): it rests
+ *  clear of the band over the box, where Jump to bottom sits. */
+export const TICKET_REST_GAP_PX = 40
 
 export interface TicketThreadPaneProps {
   feedbackId: string
@@ -152,12 +159,16 @@ function TicketThreadBody({
       mapItem: ticketThreadItem,
       turn,
       onPosted,
+      restGapPx: TICKET_REST_GAP_PX,
     }),
     [quick.above, quick.shown, turn, onPosted],
   )
 
   return (
-    <div className={`relative flex-1 min-h-0 flex flex-col ${TILE_FOOT_CLIP}`} data-testid="ticket-thread-pane" data-ticket-thread-addr={addr}>
+    // Not the tile's foot clip (a clip-path): under one, the Thread's frosted
+    // bands lose their fade and end in a hard line. globals.css rounds the
+    // pane's foot with a plain overflow clip instead.
+    <div className="relative flex-1 min-h-0 flex flex-col" data-testid="ticket-thread-pane" data-ticket-thread-pane="" data-ticket-thread-addr={addr}>
       <TicketThreadHeader
         name={agentName}
         addr={agentHandle ?? addr}
@@ -177,6 +188,7 @@ function TicketThreadBody({
           terminalRevealKey={view.terminalRevealKey}
           projectPath={projectPath ?? undefined}
           openTerminal={terminalOn ? openTerminal : undefined}
+          revealThreadMinPx={TICKET_DRAWER_THREAD_PX}
         >
           {terminalOn ? (
             <TicketDrawerTerminal>
@@ -228,6 +240,7 @@ function TicketThreadHeader({
       ref={floatsRef}
       className={THREAD_FLOATS_GRID}
       data-testid="ticket-thread-header"
+      data-ticket-thread-header=""
       data-session-header=""
       data-thread-floats=""
       {...{ [THREAD_FLOATS_GRID_ATTR]: '' }}
@@ -246,7 +259,9 @@ function TicketThreadHeader({
         <ThreadFloatSearch />
       </div>
       <div className={THREAD_FLOAT_CENTRE_CLASS}>
-        <ThreadViewIdentity name={name} addr={addr} />
+        {/* The one-line form: the quick answers, not the header, are what
+            the discussion asks for. */}
+        <ThreadViewIdentity name={name} addr={addr} bar />
       </div>
       <div className={`${THREAD_FLOAT_GROUP_CLASS} justify-end`} />
     </div>

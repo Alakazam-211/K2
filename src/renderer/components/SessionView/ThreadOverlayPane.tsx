@@ -241,8 +241,11 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
   // Thread file links: the room's own server decides which printed paths
   // are files in this Thread's workspace; a click opens them in this room.
   const fileLinkTransport = useMemo(() => scopeFileLinkTransport(roomScope), [roomScope])
-  // A Thread that isn't an agent's chat (a ticket's) may redraw its rows.
-  const mapItem = useThreadComposeExtras()?.mapItem
+  // A Thread that isn't an agent's chat (a ticket's) may redraw its rows,
+  // and keep its newest message further from the box.
+  const composeExtras = useThreadComposeExtras()
+  const mapItem = composeExtras?.mapItem
+  const restGap = composeExtras?.restGapPx ?? 0
   const openFileLink = useCallback<FileLinkOpen>(
     (link, line, col, opts) => openThreadFileLink(room, link, line, col, opts),
     [room],
@@ -606,7 +609,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
         className="relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden"
         // The browser's own scroll anchoring would fight the pin.
         // In Thread view the floating objects sit over this; their height is on the pane.
-        style={{ padding: THREAD_LIST_PADDING, paddingTop: 'calc(14px + var(--thread-float-inset, 0px))', paddingBottom: 8 + listBottom, overflowAnchor: 'none', scrollPaddingTop: 'var(--thread-float-inset, 0px)' }}
+        style={{ padding: THREAD_LIST_PADDING, paddingTop: 'calc(14px + var(--thread-float-inset, 0px))', paddingBottom: 8 + listBottom + restGap, overflowAnchor: 'none', scrollPaddingTop: 'var(--thread-float-inset, 0px)' }}
         onScroll={(e) => {
           const el = e.currentTarget
           if (!listScrollLive(el)) return

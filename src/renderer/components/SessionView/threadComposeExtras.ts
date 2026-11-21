@@ -21,6 +21,10 @@ export interface ThreadComposeExtras {
    *  the agent's (a ticket's replies reach the agent's own session).
    *  Undefined: the Thread's own. */
   turn?: ThreadTurn | null
+  /** Room between the newest message and the box (px), on top of the
+   *  list's own: the newest message rests clear of a taller footer band
+   *  (a ticket's), which Jump to bottom then sits in. */
+  restGapPx?: number
   /** Told the server's whole answer to each post this box makes (a ticket's
    *  carries the ticket's status and whether its agent got the message). */
   onPosted?: (resp: Record<string, unknown>) => void

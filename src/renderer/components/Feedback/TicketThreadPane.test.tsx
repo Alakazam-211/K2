@@ -217,6 +217,8 @@ describe('ticket-thread-v1 on', () => {
     expect(header.querySelector('[aria-label="Switch pinned chat session"]')).toBeNull()
     expect(header.querySelector('[data-testid*="bell"]')).toBeNull()
     expect(within(header).getByTestId('thread-view-name').textContent).toBe('ada')
+    // The one-line identity: the quick answers are what the discussion asks for.
+    expect(within(header).getByTestId('thread-view-identity').hasAttribute('data-compact')).toBe(true)
   })
 
   it('the terminal drawer opens and closes the ticket agent’s terminal', async () => {

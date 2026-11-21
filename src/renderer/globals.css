@@ -3027,6 +3027,34 @@ html[data-style="terminal"] [data-thread-floats-host]:not(:has([data-thread-cent
 }
 html[data-style="glass"] .thread-float-scrim { display: none; }
 
+/* A ticket's discussion (Feedback/TicketThreadPane). Where the look has no
+   frosted band over the Thread (Terminal, and Zen in either look), its
+   floating header sits on a flush band of the page's own colour with a
+   hairline under it, sized to the header: messages pass under it, never
+   show through it. */
+html:not([data-style="glass"]) [data-ticket-thread-pane] > [data-ticket-thread-header],
+[data-zen-root] [data-ticket-thread-pane] > [data-ticket-thread-header] {
+  background: var(--color-bg);
+  border-bottom: 1px solid var(--color-border);
+}
+html:not([data-style="glass"]) [data-ticket-thread-pane] > [data-ticket-thread-header] > .thread-float-scrim,
+[data-zen-root] [data-ticket-thread-pane] > [data-ticket-thread-header] > .thread-float-scrim { display: none; }
+/* Glass: its foot follows the tile's inner curve with a plain overflow clip,
+   not the tile foot's clip-path (TILE_FOOT_CLIP), under which the frosted
+   bands' masks are lost and their fades end in a hard line. */
+html[data-style="glass"] [data-ticket-thread-pane]:not([data-zen-root] *) {
+  overflow: hidden;
+  border-bottom-left-radius: calc(var(--radius-box) - var(--tile-edge-width));
+  border-bottom-right-radius: calc(var(--radius-box) - var(--tile-edge-width));
+}
+/* Its band over the quick answers and the box reaches up over the room the
+   newest message keeps from them (TICKET_REST_GAP_PX, 40px in all), so the
+   newest message rests clear of it and Jump to bottom sits on it. */
+html [data-ticket-thread-pane] [data-k2-thread-zen] .thread-footer-fade.thread-footer-fade { margin-top: -34px; }
+/* Terminal: that band is flush, the page's own colour, with no blur. */
+html:not([data-style="glass"]) [data-ticket-thread-pane] [data-k2-thread-zen] .thread-footer-fade > [class^="thread-footer-blur-"] { display: none; }
+html:not([data-style="glass"]) [data-ticket-thread-pane] [data-k2-thread-zen] .thread-footer-fade > .thread-footer-tint { background: var(--color-bg); }
+
 /* Thread view's search: the field opens as a pill beside the bell. The
    outline follows the pill's shape (the chamfer's band in Terminal through
    `border-color`). Short of room (ThreadFloatSearch measures the row), the

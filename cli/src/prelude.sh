@@ -167,7 +167,8 @@ _envn_into PORT PORT
 # A port setting that isn't a port is refused here, naming the variable it
 # came from (the first set of K5_PORT, K2_PORT, K2SO_PORT).
 if [ -n "$PORT" ] && ! _k2_port_ok "$PORT"; then
-    for _k2_port_name in K5_PORT K2_PORT K2SO_PORT; do
+    for _k2_port_name in K5 K2 K2SO; do
+        _k2_port_name="${_k2_port_name}_PORT"
         [ -z "${!_k2_port_name:-}" ] || break
     done
     _k2_port_refuse "$_k2_port_name" "$PORT"

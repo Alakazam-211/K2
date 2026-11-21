@@ -2089,7 +2089,7 @@ cmd_workspace_set_api_key() {
             echo "Error: give the key on stdin (--key-stdin) or not at all, not both." >&2
             exit 2
         fi
-        _cli_read_secret_stdin "Paste the API key: "
+        _cli_read_secret_stdin "Paste the API key: " password
         key="$_K2_SECRET"
         _K2_SECRET=""
         if [ -z "$key" ]; then
@@ -2381,7 +2381,7 @@ print("Rotate: mint a new one, switch the monitor, then k2 api-key revoke <old i
                     echo "Error: give the LLM key with --key-stdin or --llm-key, not both." >&2
                     exit 2
                 fi
-                _cli_read_secret_stdin "Paste the LLM API key: "
+                _cli_read_secret_stdin "Paste the LLM API key: " password
                 anthropic="$_K2_SECRET"
                 _K2_SECRET=""
                 if [ -z "$anthropic" ]; then

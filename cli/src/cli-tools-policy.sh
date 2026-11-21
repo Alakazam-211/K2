@@ -562,6 +562,20 @@ _k2_daemon_is_plain_remote() {
     case "$h" in \[*) ;; *:*) h="[$h]" ;; esac
     ! _k2_url_is_literal_loopback "http://$h"
 }
+# _k2_password_transport_ok: a password never goes over plain http to
+# another computer (_k2_daemon_is_plain_remote), whether it came from a
+# flag or a prompt. The password-flag check below calls it, and so does
+# each prompt for a password, PIN, API key or secret value right before
+# it asks, so nobody types one that is then refused. Refused: the one
+# line below on stderr and exit 2. K2_PLAIN_HTTP_OK=1 and a tailnet host
+# don't change it.
+_k2_password_transport_ok() {
+    _k2_daemon_is_plain_remote || return 0
+    local base
+    _k2_daemon_base base
+    echo "Error: a password never goes over plain http:// to another computer; use K2_HOST=https://<name> (got: ${base})" >&2
+    exit 2
+}
 # _k2_host_is_tailnet_literal HOST: true when HOST, AS WRITTEN (never
 # resolved), is a Tailscale address: IPv4 in 100.64.0.0/10 as four
 # numbers, IPv6 in fd7a:115c:a1e0::/48, or a name ending in .ts.net.
@@ -1645,10 +1659,7 @@ _k2_daemon_base BASE_URL
 if [ -z "$_k2_offline_verb" ] && _k2_daemon_is_plain_remote; then
     for _a in "$@"; do
         case "$_a" in
-            --password|--password-stdin|--password=*)
-                echo "Error: a password never goes over plain http:// to another computer; use K2_HOST=https://<name> (got: ${BASE_URL})" >&2
-                exit 2
-                ;;
+            --password|--password-stdin|--password=*) _k2_password_transport_ok ;;
         esac
     done
     unset _a
@@ -2039,10 +2050,15 @@ cli_post_json_stdin() {
 
 # Read one secret from stdin into _K2_SECRET: a hidden prompt when stdin
 # is a terminal (`read -rs`), else one line from the pipe. Never echoed.
+# _cli_read_secret_stdin [PROMPT] [password]
 _cli_read_secret_stdin() {
     local prompt="${1:-Paste the key: }"
     _K2_SECRET=""
     if [ -t 0 ]; then
+        # A second argument "password": the value is a password or API key
+        # for the daemon, refused before the prompt over plain http to
+        # another computer (_k2_password_transport_ok).
+        [ "${2:-}" != password ] || _k2_password_transport_ok
         printf '%s' "$prompt" >&2
         IFS= read -rs _K2_SECRET || _K2_SECRET=""
         echo >&2

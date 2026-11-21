@@ -1486,6 +1486,7 @@ cmd_notifications_relay() {
             case "$port" in ""|*[!0-9]*) [ -z "$port" ] || { echo "--port is a number" >&2; exit 2; } ;; esac
             local pw=""
             if [ -t 0 ]; then
+                _k2_password_transport_ok
                 printf 'Relay password (SMTP password or API key): ' >&2
                 IFS= read -rs pw || pw=""
                 echo >&2

@@ -686,6 +686,7 @@ if v.get("note"):
             _llma_key_tool_ok "${pos[0]}"
             local api_key=""
             if [ -t 0 ]; then
+                _k2_password_transport_ok
                 printf 'Paste the API token: ' >&2
                 IFS= read -rs api_key || api_key=""
                 echo >&2

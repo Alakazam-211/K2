@@ -984,6 +984,9 @@ print()' >&2
         confirm-password)
             [ "${pos[0]:-}" = "set" ] || { echo "usage: k2 vault confirm-password set" >&2; exit 2; }
             _vault_person_guard
+            # The new password is typed below, after the confirm: refused
+            # over plain http before either.
+            _k2_password_transport_ok
             local tokj='{}'
             _vault_sock_call GET status
             [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
@@ -1173,6 +1176,7 @@ else:
             rd="$(cd "$from" 2>/dev/null && pwd)" || { echo "usage: $from isn't a folder" >&2; exit 2; }
             [ -f "$rd/vault.db" ] || { echo "usage: no vault.db in $rd" >&2; exit 2; }
             if [ -t 0 ]; then
+                _k2_password_transport_ok
                 if [ "$h" = "recovery" ]; then printf 'Recovery words (24, not shown): ' >&2; else printf 'Backup key (AGE-SECRET-KEY-1…, not shown): ' >&2; fi
                 IFS= read -rs secret_in || secret_in=""
                 echo >&2

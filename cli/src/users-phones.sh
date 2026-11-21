@@ -57,6 +57,7 @@ print(json.dumps(b))
     if printf '%s' "$resp" | grep -q 'type your password again to make a pairing code'; then
         local pw=""
         if [ -t 0 ]; then
+            _k2_password_transport_ok
             printf 'Password for your login: ' >&2
             IFS= read -rs pw || pw=""
             echo >&2

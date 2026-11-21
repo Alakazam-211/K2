@@ -625,6 +625,8 @@ project view --help|project/view|out|0
 project view -h|project/view|out|0
 publish --help|publish|err|0
 publish -h|publish|err|0
+publish secret --help|publish/secret|out|0
+publish secret -h|publish/secret|out|0
 publish status --help|publish/status|out|0
 publish status -h|publish/status|out|0
 publish subdomain list --help|publish/subdomain/list|out|0

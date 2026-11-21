@@ -547,12 +547,12 @@ fn bin() -> PathBuf {
     }
 }
 
-/// `:<port>` (not followed by another digit) as `:<name>`.
 /// `port` + 65536: where a port cut to 16 bits lands back on `port`.
 fn big(port: u16) -> u32 {
     u32::from(port) + 65536
 }
 
+/// `:<port>` (not followed by another digit) as `:<name>`.
 fn mask_port(t: &str, port: u16, name: &str) -> String {
     let needle = format!(":{port}");
     let mut out = String::new();

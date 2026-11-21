@@ -189,7 +189,8 @@ fn py_space(c: char) -> bool {
 /// stripped, cut at its last `#`, the host after `//` up to the first
 /// `/`, `?` or `#`, `%` escapes decoded), then the text after its last
 /// `:` when that comes after its last `]`. Empty: no port, the scheme's
-/// own. The URL always starts with `http://` or `https://` there.
+/// own. The URL always starts with `http://` or `https://` there. A NUL
+/// (a `%00`) is dropped, as the shell's `$(...)` drops it.
 pub fn port_text(url: &str) -> String {
     let url = url.trim_matches(py_space);
     let url = url.rsplit_once('#').map_or(url, |(u, _)| u);
@@ -205,7 +206,7 @@ pub fn port_text(url: &str) -> String {
     let colon = host.rfind(':');
     let bracket = host.rfind(']');
     match colon.filter(|i| bracket.is_none_or(|j| *i > j)) {
-        Some(i) => host[i + 1..].to_string(),
+        Some(i) => host[i + 1..].replace('\0', ""),
         None => String::new(),
     }
 }
@@ -321,6 +322,9 @@ mod tests {
             ("https://h:70000 ", "70000"),
             ("https://h:0443/#a#b", "0443"),
             ("https://h", ""),
+            ("http://127.0.0.1:41%0000", "410000"),
+            ("http://127.0.0.1:4%0001", "4001"),
+            ("http://127.0.0.1:%00", ""),
         ] {
             assert_eq!(port_text(url), want, "{url:?}");
         }

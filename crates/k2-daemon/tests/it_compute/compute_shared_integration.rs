@@ -1440,7 +1440,7 @@ async fn a_draining_node_takes_no_auto_job_and_its_queued_auto_jobs_leave() {
     compute_ws::test_frame("dr-a", state(&queued, 1, JobState::Cancelled, Some("withdrawn"), None));
     let rq = row(&queued);
     assert_eq!((rq.node_id.as_str(), rq.generation), ("dr-b", 2), "moved to B: {rq:?}");
-    let p = rq.ctl.placement.expect("placement");
+    let p = rq.ctl.placement.clone().expect("placement");
     assert_eq!(p.code, "moved_node_draining", "{p:?}");
     assert!(p.why.starts_with("moved from dr-a: "), "{}", p.why);
     assert!(assigns(&a.frames()).is_empty(), "never sent back to A");

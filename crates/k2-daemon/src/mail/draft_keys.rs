@@ -142,14 +142,15 @@ mod tests {
     #[test]
     fn a_running_key_is_busy_until_its_slot_drops() {
         let p = format!("p-{}", uuid::Uuid::new_v4().simple());
-        let first = KeySlot::try_acquire(&p, "key-00000001").expect("first");
+        let take = |p: &str| KeySlot::try_acquire(p, "key-00000001").unwrap_or_else(|r| panic!("{}", r.body));
+        let first = take(&p);
         let busy = KeySlot::try_acquire(&p, "key-00000001").err().expect("second is busy");
         assert_eq!(busy.status, "409 Conflict");
         assert!(busy.body.contains("\"busy\""), "{}", busy.body);
         // Another workspace with the same key is its own.
-        let other = KeySlot::try_acquire(&format!("{p}-b"), "key-00000001").expect("other workspace");
+        let other = take(&format!("{p}-b"));
         drop(first);
         drop(other);
-        let _again = KeySlot::try_acquire(&p, "key-00000001").expect("free after drop");
+        let _again = take(&p);
     }
 }

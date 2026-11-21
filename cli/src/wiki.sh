@@ -1420,7 +1420,31 @@ except Exception:
         # forRemoval: the daemon refuses before releasing anything when the
         # workspace itself can't go (all or nothing).
         _app_post_confirming /cli/app/release "Give this workspace's Apps to ${apps_way#handover:}" K2_CJ_workspace="$target_path" K2_CJ_apps="$apps_way" K2_CJ_dropAccess_b="$drop" K2_CJ_forRemoval_b=1
-        [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+        case "$_CP_STATUS" in
+            200) ;;
+            202)
+                # A handover held for the owner, as `k2 app release` answers
+                # it: the daemon's hint, then the owner at a terminal outside
+                # K2 approves each card here. The workspace keeps its Apps
+                # until then, so the removal waits too (exit 2, held). Once
+                # every card is approved here, the removal goes on.
+                local cards c
+                cards="$(printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+for r in v.get("results", []):
+    if r.get("request"):
+        print(r["request"])')"
+                printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print(v.get("hint",""))'
+                if ! _compute_in_session && [ -t 0 ] && [ "$(_envn NO_APPROVE)" != "1" ]; then
+                    for c in $cards; do _app_approve "$c"; done
+                else
+                    echo "The workspace is not removed: it keeps its Apps until the owner approves the handover. Once they have, run the same command again."
+                    exit 2
+                fi
+                ;;
+            *) _compute_fail "$_CP_STATUS" "$_CP_BODY" ;;
+        esac
     fi
     local resp
     if [ -n "$mode" ]; then

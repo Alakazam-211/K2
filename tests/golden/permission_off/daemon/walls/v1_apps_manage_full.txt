@@ -37,23 +37,21 @@ content-type: application/json
   "applied": [],
   "askedAgo": null,
   "card": {
-    "cardsOff": true,
     "raised": false,
-    "where": "permission cards are off for this agent, so no card went up: the request waits in Settings → App Approvals (k2 app approvals; an owner or admin approves with k2 app approve <W_ID>)"
+    "where": "no permission card went up (this agent has no Thread yet?); the request waits in Settings → App Approvals (k2 app approvals; an owner or admin approves with k2 app approve <W_ID>)"
   },
   "held": {
     "app": "pogapp",
     "askedAgo": null,
     "card": {
-      "cardsOff": true,
       "raised": false,
-      "where": "permission cards are off for this agent, so no card went up: the request waits in Settings → App Approvals (k2 app approvals; an owner or admin approves with k2 app approve <W_ID>)"
+      "where": "no permission card went up (this agent has no Thread yet?); the request waits in Settings → App Approvals (k2 app approvals; an owner or admin approves with k2 app approve <W_ID>)"
     },
     "diff": [
       "memory limit 512 MiB → no limit"
     ],
     "expiresAt": "<expiresAt>",
-    "hint": "held for the owner: they approve it in person (k2 app approve <W_ID> from a terminal outside K2, or Settings → Cores → App Approvals), or deny it. Check with k2 app approvals.",
+    "hint": "held for the owner: an owner or admin approves it in person (its permission card, Settings → Cores → App Approvals, or k2 app approve <W_ID> from a terminal outside K2), or denies it. Check with k2 app approvals <W_ID>.",
     "kind": "config",
     "ok": true,
     "reasons": [
@@ -152,23 +150,21 @@ content-type: application/json
   "applied": [],
   "askedAgo": null,
   "card": {
-    "cardsOff": true,
     "raised": false,
-    "where": "permission cards are off for this agent, so no card went up: the request waits in Settings → App Approvals (k2 app approvals; an owner or admin approves with k2 app approve <W_ID>)"
+    "where": "no permission card went up (this agent has no Thread yet?); the request waits in Settings → App Approvals (k2 app approvals; an owner or admin approves with k2 app approve <W_ID>)"
   },
   "held": {
     "app": "pogapp",
     "askedAgo": null,
     "card": {
-      "cardsOff": true,
       "raised": false,
-      "where": "permission cards are off for this agent, so no card went up: the request waits in Settings → App Approvals (k2 app approvals; an owner or admin approves with k2 app approve <W_ID>)"
+      "where": "no permission card went up (this agent has no Thread yet?); the request waits in Settings → App Approvals (k2 app approvals; an owner or admin approves with k2 app approve <W_ID>)"
     },
     "diff": [
       "memory limit 512 MiB → no limit"
     ],
     "expiresAt": "<expiresAt>",
-    "hint": "held for the owner: they approve it in person (k2 app approve <W_ID> from a terminal outside K2, or Settings → Cores → App Approvals), or deny it. Check with k2 app approvals.",
+    "hint": "held for the owner: an owner or admin approves it in person (its permission card, Settings → Cores → App Approvals, or k2 app approve <W_ID> from a terminal outside K2), or denies it. Check with k2 app approvals <W_ID>.",
     "kind": "config",
     "ok": true,
     "reasons": [

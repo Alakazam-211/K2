@@ -6127,7 +6127,14 @@ cmd_heartbeat_status() {
     local limit="10"
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --limit|-n) _need_value "$@"; limit="$2"; shift 2 ;;
+            # The limit is digits only, and goes in the query URL-encoded
+            # (0.46.17: any word was sent as typed, and a --limit as the
+            # last word stopped on "$2: unbound variable"), as hooks status.
+            --limit|-n)
+                case "${2:-}" in
+                    ''|*[!0123456789]*) echo "Error: $1 needs a number" >&2; exit 2 ;;
+                esac
+                limit="$2"; shift 2 ;;
             *) if [ -z "$name" ]; then name="$1"; fi; shift ;;
         esac
     done
@@ -6153,7 +6160,7 @@ if row.get('waitReason'):
     print(f'Next fire: {row.get(\"nextFireAt\") or \"-\"}   Waiting: {row[\"waitReason\"]}{detail}')
     print()
 " || exit 1
-    cli_send cli_request "/cli/heartbeat/status" "name=$(urlencode "$name")&limit=$limit" | python3 -c "
+    cli_send cli_request "/cli/heartbeat/status" "name=$(urlencode "$name")&limit=$(urlencode "$limit")" | python3 -c "
 import json, sys
 try:
     rows = json.loads(sys.stdin.read())

@@ -326,8 +326,9 @@ impl SchedOs for AppleOs {
     }
 
     // `DspSched` calls the three interval calls only while this thread is a
-    // member of `wg` (Apple's documentation says a call from a non-member
-    // may abort the process), and only from this one thread.
+    // member of `wg` (`<os/workgroup_interval.h>`: a call from a
+    // non-member returns an error, which would count as a refusal), and only
+    // from this one thread.
 
     fn interval_start(&mut self, wg: &Workgroup, deadline: Duration) -> bool {
         let (Some(fns), Some((now, due))) = (interval_fns(), now_and_deadline(deadline)) else {

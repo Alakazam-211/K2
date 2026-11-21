@@ -311,8 +311,8 @@ period, 6 ms of computation, a 9 ms constraint), and on iOS with
 `Backend::OsVoiceProcessing` it joins the audio unit's OS workgroup while the
 unit runs (iOS 14 or later). The capture callback wakes it for each block.
 What the OS granted is in `Stats::dsp_scheduling` (and
-`CaptureStageStats::dsp_scheduling`): `Workgroup`, `OwnWorkgroup`,
-`TimeConstraint`, `Qos` or `None`. On Linux, Android and Windows the thread
+`CaptureStageStats::dsp_scheduling`): `Workgroup`, `TimeConstraint`, `Qos`,
+`None` or `OwnWorkgroup`. On Linux, Android and Windows the thread
 keeps the OS's default scheduling and polls.
 
 That set-up is the default `DspSchedMode::Workgroup`. `EngineConfig::dsp_sched`

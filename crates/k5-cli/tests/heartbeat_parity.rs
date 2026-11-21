@@ -2143,27 +2143,24 @@ fn heartbeat_remind_alone_prints_the_remind_help() {
     }
 }
 
-/// Rows that follow 99123b051 on the 0.46.17 queue ("message text after
-/// -- is sent as typed"), not yet in this line's cli/src: today both
-/// sides take a bare `--` for an unknown flag. When the replay brings
-/// that commit, these rows fail on the shell's side; port `_remind_add`'s
-/// `--` (the rest is the text) and the time scan stopping at `--`, then
-/// turn each row to the new answer.
+/// `heartbeat remind` after a bare `--` (99123b051, "message text after
+/// -- is sent as typed"): the rest is the text, and the time scan stops
+/// at `--`.
 #[test]
-fn follows_99123b051_remind_text_after_dashdash() {
+fn remind_text_after_dashdash() {
     let rig = Rig::new(VERB, "dashdash");
     for c in [
-        // follows 99123b051: the text "call back", sent.
+        // The text "call back", sent.
         case(
             "remind --in 5m -- call back",
             &["remind", "--in", "5m", "--", "call", "back"],
             &[],
-            vec![],
+            vec![ok(r#"{"name":"r1","fires":"in 5m (13:05)","ok":true}"#)],
             owner_and_port,
-            2,
             0,
+            1,
         ),
-        // follows 99123b051: no time before `--`, so "say when", exit 2.
+        // No time before `--`, so "say when", exit 2.
         case(
             "remind call -- --in 5m",
             &["remind", "call", "--", "--in", "5m"],

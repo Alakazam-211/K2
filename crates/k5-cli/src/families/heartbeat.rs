@@ -941,13 +941,14 @@ fn log(args: &[&str]) -> Option<Form> {
 /// `heartbeat remind` with no first word (or an empty one) and no
 /// `--in`, `--at` or `--on`: `cmd_heartbeat_remind` prints
 /// `cmd_help_remind` and returns 0. A `-h` or `--help` is the front's;
-/// `help` is the shell's.
+/// `help` is the shell's. Both scans stop at a bare `--`.
 pub fn remind_alone(rest: &[&str]) -> bool {
     let Some((&"remind", words)) = rest.split_first() else {
         return false;
     };
     let stops = |w: &&str| matches!(*w, "--in" | "--at" | "--on" | "-h" | "--help");
-    words.first().is_none_or(|w| w.is_empty()) && !words.iter().any(stops)
+    words.first().is_none_or(|w| w.is_empty())
+        && !crate::dashdash::before(words).iter().any(stops)
 }
 
 /// `k5 heartbeat ...`: `args` is the whole command line after `argv[0]`.

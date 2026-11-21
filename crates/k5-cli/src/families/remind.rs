@@ -9,9 +9,10 @@
 //! 2. `remind` and `reminders` are the `heartbeat` tool, an `id` tool: in a
 //!    session (`HOOK_SOCK` set) a stale passport and no passport at all
 //!    are refused with exit 3 ([`crate::prelude::id_tool`]).
-//! 3. The form ([`parse`]): `snooze` first; then, when no word is
-//!    `--in`, `--at` or `--on`, the verbs `list`, `show` and `cancel`;
-//!    anything else sets a reminder. Each reads its words as the shell's
+//! 3. The form ([`parse`]): `snooze` first; then, when no word before a
+//!    bare `--` is `--in`, `--at` or `--on`, the verbs `list`, `show` and
+//!    `cancel`; anything else sets a reminder, whose words after a bare
+//!    `--` are its text, as typed. Each reads its words as the shell's
 //!    loop does; a stop is its line (and for `add` and `list`, the usage
 //!    line), exit 2.
 //! 4. One request with `cli_send` (the cell socket first with a passport,
@@ -154,7 +155,10 @@ pub fn parse(words: &[&str], resolve: Resolve) -> Option<Form> {
     if first == "snooze" {
         return snooze(&words[1..], resolve);
     }
-    let has_when = words.iter().any(|w| matches!(*w, "--in" | "--at" | "--on"));
+    // The time scan stops at a bare `--`: the words after it are text.
+    let has_when = crate::dashdash::before(words)
+        .iter()
+        .any(|w| matches!(*w, "--in" | "--at" | "--on"));
     if !has_when {
         match first {
             "" | "-h" | "--help" | "help" => return Some(Form::Help),
@@ -205,16 +209,17 @@ fn add(words: &[&str], resolve: Resolve) -> Option<Form> {
                 continue;
             }
             "--json" => json = true,
+            // The rest is the reminder's text, as typed.
+            "--" => {
+                for w in &words[i + 1..] {
+                    super::msg::postal::join(&mut text, w);
+                }
+                break;
+            }
             w if w.starts_with("--") => {
                 return Some(stop(&[&format!("Error: unknown flag: {w}"), ADD_USAGE]))
             }
-            w => {
-                if text.is_empty() {
-                    text = w.to_string();
-                } else {
-                    text = format!("{text} {w}");
-                }
-            }
+            w => super::msg::postal::join(&mut text, w),
         }
         i += 1;
     }

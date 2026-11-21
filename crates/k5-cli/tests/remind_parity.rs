@@ -344,6 +344,107 @@ fn remind_answers_as_the_shell_does() {
     }
 }
 
+/// After a bare `--` the words are the reminder's text, as typed
+/// (`_remind_add`'s `--)` arm), and the time scan stops there: a text
+/// that starts with a dash or is `--help`, or a verb's name, is text.
+#[test]
+fn remind_after_dashes_as_the_shell_does() {
+    let rig = Rig::new("remind", "dashes");
+    let v = vec![
+        // covers: remind
+        case(
+            "the text --help after --",
+            &["--in", "10m", "--", "--help"],
+            &[],
+            vec![ok(ADDED)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "dashed words after --, joined",
+            &["--in", "10m", "a", "--", "", "-x", "--json", "-h"],
+            &[],
+            vec![ok(ADDED)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "a time after -- is text: no time",
+            &["--", "x", "--in", "10m"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "list after --, with a time: the text",
+            &["--in", "1m", "--", "list"],
+            &[],
+            vec![ok(ADDED)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "list with -- and a time after it: list refuses --",
+            &["list", "--", "--in", "1m"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "an empty first word, then -- and -h: the help page",
+            &["", "--", "-h"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        ),
+        case(
+            "help before --",
+            &["--in", "10m", "-h", "--", "x"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        ),
+    ];
+    for c in &v {
+        rig.check(c);
+    }
+    // covers: heartbeat remind
+    let hb = Rig::new("heartbeat", "rdashes");
+    for c in [
+        case(
+            "heartbeat remind: the text -h after --",
+            &["remind", "--in", "10m", "--", "-h"],
+            &[],
+            vec![ok(ADDED)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "heartbeat remind: help before --",
+            &["remind", "--in", "10m", "-h", "--", "hi"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        ),
+    ] {
+        hb.check(&c);
+    }
+}
+
 #[test]
 fn remind_stops_as_the_shell_does() {
     let rig = Rig::new("remind", "stops");

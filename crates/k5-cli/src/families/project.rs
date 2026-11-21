@@ -49,7 +49,7 @@ use crate::out::{self, py};
 use crate::passport;
 use crate::prelude;
 use crate::python;
-use crate::transport::urllib::{decode, Method, Opener, Outcome, Request};
+use crate::transport::urllib::{decode, Method, Opener, Outcome, Refused, Request};
 use k2_client::{cli_name, product_name};
 use std::ffi::OsString;
 use std::io::Read as _;
@@ -1030,7 +1030,7 @@ impl Py {
         route: &str,
         params: &[(&str, String)],
         body: Option<&Value>,
-    ) -> Option<Value> {
+    ) -> R<Option<Value>> {
         let mut req = Request::new(method, route, TIMEOUT);
         if !params.is_empty() {
             req = req.query(params.iter().map(|(k, v)| (*k, v.clone())));
@@ -1044,7 +1044,16 @@ impl Py {
         if let Some(t) = self.opener.token() {
             req = req.header("Authorization", format!("Bearer {t}"));
         }
-        match self.opener.open(&req) {
+        // `_K2NoRedirect`: a redirect's line, then `SystemExit(3)`.
+        let out = match self.opener.open_ruled(&req) {
+            Ok(out) => out,
+            Err(r) => {
+                self.out.stderr.push_str(&r.line);
+                self.out.stderr.push('\n');
+                return Err(Halt::Exit(Refused::EXIT));
+            }
+        };
+        Ok(match out {
             Outcome::Answer { body: Ok(b), .. } => json::parse(&decode(&b)).ok(),
             Outcome::HttpError { code, body } => {
                 match body.ok().and_then(|b| json::parse(&decode(&b)).ok()) {
@@ -1066,7 +1075,7 @@ impl Py {
                 }
             }
             Outcome::Answer { body: Err(_), .. } | Outcome::Raised(_) => None,
-        }
+        })
     }
 
     fn unreachable(&mut self) -> Halt {
@@ -1088,7 +1097,7 @@ impl Py {
         params: &[(&str, String)],
         body: Option<&Value>,
     ) -> R<Value> {
-        let Some(d) = self.request(method, route, params, body) else {
+        let Some(d) = self.request(method, route, params, body)? else {
             return Err(self.unreachable());
         };
         let err = at_v(&d, "error", line::CALL)?;
@@ -1604,7 +1613,7 @@ impl Py {
     fn msg(&mut self, proj: &str, text: &str, two: bool, from_stdin: bool) -> R<()> {
         let l = line::MSG;
         let show = if !proj.is_empty() {
-            let Some(d) = self.request(Method::Get, SHOW, &[("group", proj.to_string())], None)
+            let Some(d) = self.request(Method::Get, SHOW, &[("group", proj.to_string())], None)?
             else {
                 return Err(self.unreachable());
             };

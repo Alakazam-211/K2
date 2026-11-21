@@ -189,7 +189,12 @@ impl Py {
         if let Some(t) = self.opener.token() {
             req = req.header("Authorization", format!("Bearer {t}"));
         }
-        match self.opener.open(&req) {
+        // `_K2NoRedirect`: a redirect's line, then `SystemExit(3)`.
+        let out = self
+            .opener
+            .open_ruled(&req)
+            .map_err(|r| super::End::Exit(r.write()))?;
+        match out {
             Outcome::Answer {
                 status,
                 body: Ok(b),

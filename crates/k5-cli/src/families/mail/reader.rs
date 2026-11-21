@@ -498,7 +498,12 @@ fn call_inner(
     if let Some(t) = py_.opener.token() {
         req = req.header("Authorization", format!("Bearer {t}"));
     }
-    let d = match py_.opener.open(&req) {
+    // `_K2NoRedirect`: a redirect's line, then `SystemExit(3)`.
+    let out = py_
+        .opener
+        .open_ruled(&req)
+        .map_err(|r| Ex::End(End::Exit(r.write())))?;
+    let d = match out {
         Outcome::Answer { body: Ok(b), .. } => match pyjson::loads(&String::from_utf8_lossy(&b)) {
             Ok(d) => d,
             Err(f) => {

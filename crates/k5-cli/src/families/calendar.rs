@@ -834,7 +834,12 @@ impl Py {
         if let Some(t) = self.opener.token() {
             req = req.header("Authorization", format!("Bearer {t}"));
         }
-        let raw = match self.opener.open_retrying(&req) {
+        // `_K2NoRedirect`: a redirect's line, then `SystemExit(3)`.
+        let out = self
+            .opener
+            .open_retrying_ruled(&req)
+            .map_err(|r| End::Exit(r.write()))?;
+        let raw = match out {
             Outcome::Answer { body: Ok(b), .. } => match json::parse(&urllib::decode(&b)) {
                 Ok(d) => d,
                 Err(_) => return Err(self.unreachable()),

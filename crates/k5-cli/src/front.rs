@@ -12,12 +12,15 @@
 //! row or verb row with `-h` or
 //! `--help` anywhere in it (`setup`: or the word `help`; `vault run`: only
 //! before a bare `--`, the rest being the child's) is a help page
-//! when it is exactly a form the shell only prints a file for
-//! ([`Route::Help`], [`help_route`]), and falls through
+//! when it is exactly a form the shell only prints for
+//! ([`Route::Help`], [`help_route`]: a file's print, or a captured form,
+//! what the shell printed), and falls through
 //! otherwise, so the shell prints its help text (or its error for a flag
 //! before it, or whatever it does with such a word where it reads a
 //! value), with its connection gate in front of it, exactly as it always
-//! has. No copy of the text lives here: a page is the shell's own file.
+//! has. A line with neither that is exactly a captured form (`agent team
+//! help`) is that page too. No copy of the text lives here: a page is the
+//! shell's own file or what `tests/cli/help_native.sh` captured from it.
 //!
 //! A family's bare line (the first word alone, or it and `--json`) that
 //! its bare row sends to the binary ([`route::Verb::bare`]) is the
@@ -68,7 +71,8 @@ pub enum Route {
     Spec(&'static SpecVerb),
     /// A `k2 study` page ([`pages::study`]).
     Study(Study),
-    /// A help form whose page is a file ([`text::HELP_FORMS`]).
+    /// A help form whose page is a file ([`text::HELP_FORMS`]) or what
+    /// the shell printed ([`text::CAPTURED_FORMS`]).
     Help(&'static HelpForm),
     /// `k2`, `k2 help` or `k2 --help`: the daily tier of the help
     /// ([`pages::daily_page`]).
@@ -130,6 +134,9 @@ fn spec_route(table: &'static [SpecVerb], args: &[OsString]) -> Route {
     if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
         return help_route(args).map_or(Route::Fallthrough, Route::Help);
     }
+    if let Some(form) = text::captured_form(&words) {
+        return Route::Help(form);
+    }
     spec::find(table, &words).map_or(Route::Fallthrough, Route::Spec)
 }
 
@@ -180,23 +187,26 @@ fn native(noun: &'static Noun, args: &[OsString]) -> Route {
     let Some(words) = words else {
         return Route::Fallthrough;
     };
+    // A line the front's own code doesn't take: a captured help form's
+    // page, or the shell's.
+    let captured = || text::captured_form(&words).map_or(Route::Fallthrough, Route::Help);
     if noun.names("version") {
         return match words.as_slice() {
             [_] => Route::Version,
             ["--version", "--check"] => Route::VersionCheck,
-            _ => Route::Fallthrough,
+            _ => captured(),
         };
     }
     if noun.names("study") {
         return pages::study(words.get(1..).unwrap_or_default())
-            .map_or(Route::Fallthrough, Route::Study);
+            .map_or_else(captured, Route::Study);
     }
     if noun.names("cli") {
         return match words.get(1..).unwrap_or_default() {
             [] | ["--help" | "-h" | "help"] | ["status", "--help" | "-h"] => Route::CliHelp,
             ["status"] => Route::CliStatus { json: false },
             ["status", "--json"] => Route::CliStatus { json: true },
-            _ => Route::Fallthrough,
+            _ => captured(),
         };
     }
     // A family's help is a page or the shell's, never the family's.
@@ -206,6 +216,11 @@ fn native(noun: &'static Noun, args: &[OsString]) -> Route {
     // `cmd_setup`'s loop reads `help` as `--help`.
     if noun.names("setup") && words.iter().skip(1).any(|w| *w == "help") {
         return help_route(args).map_or(Route::Fallthrough, Route::Help);
+    }
+    // A help line with no `-h` or `--help` in it (`agent team help`) that
+    // the shell only prints for: what it printed.
+    if text::captured_form(&words).is_some() {
+        return captured();
     }
     Route::Family(noun)
 }
@@ -258,6 +273,12 @@ mod tests {
                 .find(|n| n.family == name)
                 .unwrap_or_else(|| panic!("a {name} row")),
         )
+    }
+
+    /// What the front gives a help line it has no file for: its captured
+    /// page ([`text::captured_form`]), or `or`.
+    fn captured_or(line: &[&str], or: Route) -> Route {
+        text::captured_form(line).map_or(or, Route::Help)
     }
 
     #[test]
@@ -489,7 +510,11 @@ mod tests {
             &["respond", "hi", "--help"],
             &["respond", "--", "-h"],
         ] {
-            assert_eq!(native(respond, &args(line)), Route::Fallthrough, "{line:?}");
+            assert_eq!(
+                native(respond, &args(line)),
+                captured_or(line, Route::Fallthrough),
+                "{line:?}"
+            );
         }
     }
 
@@ -590,7 +615,11 @@ mod tests {
                 "{w} --help: {page:?}"
             );
             for line in [&[w, "list", "-h"][..], &[w, "x", "--help"]] {
-                assert_eq!(native(row(w), &args(line)), Route::Fallthrough, "{line:?}");
+                assert_eq!(
+                    native(row(w), &args(line)),
+                    captured_or(line, Route::Fallthrough),
+                    "{line:?}"
+                );
             }
         }
     }
@@ -619,7 +648,11 @@ mod tests {
             &["update", "--cli", "--help"],
             &["update", "--list", "-h"],
         ] {
-            assert_eq!(native(row, &args(line)), Route::Fallthrough, "{line:?}");
+            assert_eq!(
+                native(row, &args(line)),
+                captured_or(line, Route::Fallthrough),
+                "{line:?}"
+            );
         }
     }
 
@@ -652,7 +685,11 @@ mod tests {
             &["setup", "kessel", "--name", "help"],
             &["setup", "kessel", "--name", "-h"],
         ] {
-            assert_eq!(native(row, &args(line)), Route::Fallthrough, "{line:?}");
+            assert_eq!(
+                native(row, &args(line)),
+                captured_or(line, Route::Fallthrough),
+                "{line:?}"
+            );
         }
     }
 
@@ -890,9 +927,24 @@ mod tests {
             &["mail", "send", "x", "--help"][..],
             &["help", "mail", "send"],
             &["chat", "--help", "x"],
-            &["app", "--help"],
+            &["app", "nope", "--help"],
         ] {
             assert_eq!(route(&args(shell)), Route::Fallthrough, "{shell:?}");
+        }
+        // A word after a captured help-word line: the family's line.
+        assert_eq!(
+            route(&args(&["agent", "team", "help", "x"])),
+            family("agent")
+        );
+        // Every captured form is its page.
+        for form in text::CAPTURED_FORMS {
+            let argv: Vec<OsString> = form.argv.iter().map(OsString::from).collect();
+            assert!(
+                matches!(route(&argv), Route::Help(f) if std::ptr::eq(f, form)),
+                "{:?}: {:?}",
+                form.argv,
+                route(&argv)
+            );
         }
         for form in text::HELP_FORMS {
             let argv: Vec<OsString> = form.argv.iter().map(OsString::from).collect();

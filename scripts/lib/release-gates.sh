@@ -25,6 +25,9 @@
 #                   fast Mac lane): --cpus 7 --mem 8G, 6 workers.
 #   typecheck-web   bun run typecheck:web (tsc-rs) on a Linux x86 node.
 #   vite-build-web  bun run vite:build:web on a Linux x86 node.
+#   isolation-kernel  (by name only, k2rg_local) Agent Isolation's
+#                   real-kernel tests: scripts/agent-isolation-kernel-gate.sh
+#                   builds on compute and runs them on K2_ISO_HOST.
 #   ratchet         the checks that need no build, on a Linux x86 node:
 #                   the two Mac test lists match the test files
 #                   (scripts/ci/k2-node-mac-tests.sh check and
@@ -413,6 +416,10 @@ k2rg_local() {
         vite-build-web) bun run vite:build:web ;;
         cargo-linux) "$(git rev-parse --show-toplevel)/scripts/linux-build-gate.sh" ;;
         ratchet) eval "$K2RG_NO_BUILD_CHECKS" ;;
+        # Agent Isolation's real-kernel tests: built on compute, run on the
+        # isolation test box (K2_ISO_HOST). Not in the default list yet:
+        # `k2rg_local isolation-kernel` runs it by name.
+        isolation-kernel) "$(git rev-parse --show-toplevel)/scripts/agent-isolation-kernel-gate.sh" "${K2RG_SHA:-HEAD}" ;;
         *) echo "FATAL: no gate $1" >&2; return 2 ;;
     esac
 }

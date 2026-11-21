@@ -2,10 +2,10 @@ cmd_compute_grant() {
     local node="" workspace="" maxt="" maxd="" maxp="" maxq="" allow_ci="" maxsub="" allow_gpu=""
     while [ $# -gt 0 ]; do
         case "$1" in
-            --workspace) workspace="${2:-}"; shift 2 ;;
+            --workspace) _need_value "$@"; workspace="${2:-}"; shift 2 ;;
             # Per-submitter running cap on this node (0.46.6; 0 = off,
             # absent keeps what the grant had).
-            --submitter-max-running) maxsub="${2:-}"; shift 2
+            --submitter-max-running) _need_value "$@"; maxsub="${2:-}"; shift 2
                 case "$maxsub" in ''|*[!0-9]*) echo "usage: --submitter-max-running N (0 = off)" >&2; exit 2 ;; esac ;;
             # CI permission (0.46.5): owner or an Admin login only; absent
             # keeps what the grant had.
@@ -16,9 +16,9 @@ cmd_compute_grant() {
             --gpu) allow_gpu=1; shift ;;
             --no-gpu) allow_gpu=0; shift ;;
             --max-time) maxt="$(_compute_secs "${2:-}")"; shift 2 ;;
-            --max-disk) maxd="${2:-}"; maxd="${maxd%[Gg]}"; shift 2 ;;
-            --max-parallel) maxp="${2:-}"; shift 2 ;;
-            --max-queued) maxq="${2:-}"; shift 2 ;;
+            --max-disk) _need_value "$@"; maxd="${2:-}"; maxd="${maxd%[Gg]}"; shift 2 ;;
+            --max-parallel) _need_value "$@"; maxp="${2:-}"; shift 2 ;;
+            --max-queued) _need_value "$@"; maxq="${2:-}"; shift 2 ;;
             -*) echo "usage: unknown flag '$1'" >&2; exit 2 ;;
             *) node="$1"; shift ;;
         esac
@@ -239,11 +239,11 @@ cmd_compute_retier() {
     local job="" tier="" why="" as_json=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --tier) tier="${2:-}"; shift 2 ;;
+            --tier) _need_value "$@"; tier="${2:-}"; shift 2 ;;
             --priority|--critical) tier="priority"; shift ;;
             --standard|--normal) tier="normal"; shift ;;
             --batch) tier="batch"; shift ;;
-            --why) why="${2:-}"; shift 2 ;;
+            --why) _need_value "$@"; why="${2:-}"; shift 2 ;;
             --json) as_json=1; shift ;;
             -*) echo "usage: unknown flag '$1' (k2 compute retier <job> --tier standard|priority|batch|ci [--why \"…\"])" >&2; exit 2 ;;
             *) job="$1"; shift ;;
@@ -286,18 +286,18 @@ cmd_compute_move() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --auto) auto=1; shift ;;
-            --to) to="${2:-}"; shift 2
+            --to) _need_value "$@"; to="${2:-}"; shift 2
                 [ -n "$to" ] || { echo "$musage (--to needs a node)" >&2; exit 2; } ;;
-            --avoid) avoids+=("${2:-}"); shift 2
+            --avoid) _need_value "$@"; avoids+=("${2:-}"); shift 2
                 [ -n "${avoids[${#avoids[@]}-1]}" ] || { echo "$musage (--avoid needs a node)" >&2; exit 2; } ;;
-            --os) os="${2:-}"; shift 2 ;;
-            --arch) arch="${2:-}"; shift 2 ;;
-            --label) labels+=("${2:-}"); shift 2 ;;
+            --os) _need_value "$@"; os="${2:-}"; shift 2 ;;
+            --arch) _need_value "$@"; arch="${2:-}"; shift 2 ;;
+            --label) _need_value "$@"; labels+=("${2:-}"); shift 2 ;;
             --all-mine) scope="session"; shift ;;
             --workspace-all) scope="workspace"; shift ;;
-            --tag) mtag="${2:-}"; shift 2 ;;
-            --node) mnode="${2:-}"; shift 2 ;;
-            --workspace) mws="${2:-}"; shift 2 ;;
+            --tag) _need_value "$@"; mtag="${2:-}"; shift 2 ;;
+            --node) _need_value "$@"; mnode="${2:-}"; shift 2 ;;
+            --workspace) _need_value "$@"; mws="${2:-}"; shift 2 ;;
             --json) as_json=1; shift ;;
             -*) echo "$musage (unknown flag '$1')" >&2; exit 2 ;;
             *) jobs+=("$1"); shift ;;

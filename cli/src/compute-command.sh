@@ -56,13 +56,13 @@ cmd_compute() {
             local q="" n=""
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --node) q="$q&node=$(urlencode "${2:-}")"; shift 2 ;;
-                    --state) q="$q&state=$(urlencode "${2:-}")"; shift 2 ;;
-                    --limit) q="$q&limit=$(urlencode "${2:-}")"; shift 2 ;;
-                    --workspace) q="$q&workspace=$(urlencode "${2:-}")"; shift 2 ;;
+                    --node) _need_value "$@"; q="$q&node=$(urlencode "${2:-}")"; shift 2 ;;
+                    --state) _need_value "$@"; q="$q&state=$(urlencode "${2:-}")"; shift 2 ;;
+                    --limit) _need_value "$@"; q="$q&limit=$(urlencode "${2:-}")"; shift 2 ;;
+                    --workspace) _need_value "$@"; q="$q&workspace=$(urlencode "${2:-}")"; shift 2 ;;
                     --mine) q="$q&mine=1"; shift ;;
                     # 0.46.7 (CE-9): the job's own --tag.
-                    --tag) q="$q&tag=$(urlencode "${2:-}")"; shift 2 ;;
+                    --tag) _need_value "$@"; q="$q&tag=$(urlencode "${2:-}")"; shift 2 ;;
                     --tier)
                         case "${2:-}" in
                             ci|priority|normal|batch) q="$q&tier=$(urlencode "${2:-}")" ;;
@@ -99,7 +99,7 @@ cmd_compute() {
             local job="" since="" raw=0
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --since) since="${2:-}"; shift 2 ;;
+                    --since) _need_value "$@"; since="${2:-}"; shift 2 ;;
                     --raw) raw=1; shift ;;
                     *) job="$1"; shift ;;
                 esac
@@ -131,10 +131,10 @@ cmd_compute() {
                     --if-queued) ifq=1; shift ;;
                     --all-mine) scope="session"; shift ;;
                     --workspace-all) scope="workspace"; shift ;;
-                    --tag) ctag="${2:-}"; shift 2 ;;
-                    --state) cstate="${2:-}"; shift 2 ;;
-                    --node) cnode="${2:-}"; shift 2 ;;
-                    --workspace) cws="${2:-}"; shift 2 ;;
+                    --tag) _need_value "$@"; ctag="${2:-}"; shift 2 ;;
+                    --state) _need_value "$@"; cstate="${2:-}"; shift 2 ;;
+                    --node) _need_value "$@"; cnode="${2:-}"; shift 2 ;;
+                    --workspace) _need_value "$@"; cws="${2:-}"; shift 2 ;;
                     --json) shift ;;
                     -*) echo "$cusage (unknown flag '$1')" >&2; exit 2 ;;
                     *)
@@ -228,7 +228,7 @@ else: print(v.get("state", "ok"))'
             local node="" workspace=""
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --workspace) workspace="${2:-}"; shift 2 ;;
+                    --workspace) _need_value "$@"; workspace="${2:-}"; shift 2 ;;
                     *) node="$1"; shift ;;
                 esac
             done
@@ -240,8 +240,8 @@ else: print(v.get("state", "ok"))'
             local q=""
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --node) q="$q&node=$(urlencode "${2:-}")"; shift 2 ;;
-                    --workspace) q="$q&workspace=$(urlencode "${2:-}")"; shift 2 ;;
+                    --node) _need_value "$@"; q="$q&node=$(urlencode "${2:-}")"; shift 2 ;;
+                    --workspace) _need_value "$@"; q="$q&workspace=$(urlencode "${2:-}")"; shift 2 ;;
                     *) shift ;;
                 esac
             done
@@ -285,7 +285,7 @@ print("Compute placement: %s on this server (%s)" % (p, what))'
             shift 2>/dev/null || true
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --workspace) workspace="${2:-}"; shift 2 ;;
+                    --workspace) _need_value "$@"; workspace="${2:-}"; shift 2 ;;
                     --all-machines) all=1; shift ;;
                     *) echo "usage: k2 compute access on|off --workspace WS" >&2; exit 2 ;;
                 esac
@@ -316,7 +316,7 @@ print("Allow compute nodes: %s for %s%s" % ("on" if on else "off", v["workspace"
             shift 2>/dev/null || true
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --workspace) workspace="${2:-}"; shift 2 ;;
+                    --workspace) _need_value "$@"; workspace="${2:-}"; shift 2 ;;
                     *) echo "usage: k2 compute operate on|off --workspace WS" >&2; exit 2 ;;
                 esac
             done
@@ -338,7 +338,7 @@ print("Allow this agent to operate compute nodes: %s for %s%s" % ("on" if v["age
             shift 2>/dev/null || true
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --workspace) workspace="${2:-}"; shift 2 ;;
+                    --workspace) _need_value "$@"; workspace="${2:-}"; shift 2 ;;
                     *) echo "usage: k2 compute manage on|off --workspace WS" >&2; exit 2 ;;
                 esac
             done
@@ -368,12 +368,12 @@ print("Allow managing compute nodes: %s for %s%s" % ("on" if on else "off", v["w
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --audit) audit=1; shift ;;
-                    --limit) limit="${2:-}"; shift 2 ;;
+                    --limit) _need_value "$@"; limit="${2:-}"; shift 2 ;;
                     --follow|-f) efollow=1; shift ;;
                     --mine) emine=1; shift ;;
-                    --tag) etag="${2:-}"; shift 2 ;;
-                    --since) esince="${2:-}"; shift 2 ;;
-                    --max-wait) emax="${2:-}"; shift 2 ;;
+                    --tag) _need_value "$@"; etag="${2:-}"; shift 2 ;;
+                    --since) _need_value "$@"; esince="${2:-}"; shift 2 ;;
+                    --max-wait) _need_value "$@"; emax="${2:-}"; shift 2 ;;
                     --json) shift ;;
                     *) echo "usage: k2 compute events [--follow] [--mine] [--tag T] [--since CURSOR] [--limit N] [--max-wait D] [--json]  |  k2 compute events --audit [--limit N]" >&2; exit 2 ;;
                 esac

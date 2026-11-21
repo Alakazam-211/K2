@@ -7,7 +7,7 @@ cmd_compute_node() {
             local name="" url="" add_json=0
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --url) url="${2:-}"; shift 2 ;;
+                    --url) _need_value "$@"; url="${2:-}"; shift 2 ;;
                     --json) add_json=1; shift ;;
                     *) name="$1"; shift ;;
                 esac
@@ -140,7 +140,7 @@ else:
                     local reason="" pairs=()
                     while [ $# -gt 0 ]; do
                         case "$1" in
-                            --reason) reason="${2:-}"; shift 2 ;;
+                            --reason) _need_value "$@"; reason="${2:-}"; shift 2 ;;
                             *=*) pairs+=("$1"); shift ;;
                             *) echo "usage: k2 compute node policy <node> set key=value... [--reason …]" >&2; exit 2 ;;
                         esac
@@ -197,7 +197,7 @@ print("%s: %s%s. %s" % (v["node"], u.get("state"), (" " + u["version"]) if u.get
                 case "$1" in
                     show|pause|resume|stop) verb="$1"; shift ;;
                     --json) as_json=1; shift ;;
-                    --id) id="${2:-}"; shift 2 ;;
+                    --id) _need_value "$@"; id="${2:-}"; shift 2 ;;
                     *) echo "usage: k2 compute node rollout [show|pause|resume|stop] [--id ID] [--json]" >&2; exit 2 ;;
                 esac
             done
@@ -214,7 +214,7 @@ print("%s: %s%s. %s" % (v["node"], u.get("state"), (" " + u["version"]) if u.get
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --no-restart) restart=0; shift ;;
-                    --reason) reason="${2:-}"; shift 2 ;;
+                    --reason) _need_value "$@"; reason="${2:-}"; shift 2 ;;
                     -*) echo "usage: k2 compute node wall <node> [--no-restart] [--reason \"…\"]" >&2; exit 2 ;;
                     *) node="$1"; shift ;;
                 esac
@@ -232,8 +232,8 @@ print("%s: %s%s. %s" % (v["node"], u.get("state"), (" " + u["version"]) if u.get
             local node="" after="" to="" have_to=0
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --after) after="${2:-}"; shift 2 ;;
-                    --to) to="${2:-}"; have_to=1; shift 2 ;;
+                    --after) _need_value "$@"; after="${2:-}"; shift 2 ;;
+                    --to) _need_value "$@"; to="${2:-}"; have_to=1; shift 2 ;;
                     *) node="$1"; shift ;;
                 esac
             done
@@ -324,8 +324,8 @@ cmd_compute_node_packages() {
             local -a names=()
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --why) why="${2:-}"; shift 2 ;;
-                    --job) job="${2:-}"; shift 2 ;;
+                    --why) _need_value "$@"; why="${2:-}"; shift 2 ;;
+                    --job) _need_value "$@"; job="${2:-}"; shift 2 ;;
                     --json) shift ;;
                     -*) echo "$ask_usage (unknown flag '$1')" >&2; exit 2 ;;
                     *) if [ -z "$nodes" ]; then nodes="$1"; else names+=("$1"); fi; shift ;;
@@ -369,9 +369,9 @@ if v.get("hint"):
             local q=""
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --node) q="$q&node=$(urlencode "${2:-}")"; shift 2 ;;
-                    --state) q="$q&state=$(urlencode "${2:-}")"; shift 2 ;;
-                    --limit) q="$q&limit=$(urlencode "${2:-}")"; shift 2 ;;
+                    --node) _need_value "$@"; q="$q&node=$(urlencode "${2:-}")"; shift 2 ;;
+                    --state) _need_value "$@"; q="$q&state=$(urlencode "${2:-}")"; shift 2 ;;
+                    --limit) _need_value "$@"; q="$q&limit=$(urlencode "${2:-}")"; shift 2 ;;
                     --json) shift ;;
                     *) echo "usage: k2 compute node packages requests [--node N] [--state pending|approved|installed|denied|failed|expired|all] [--limit N] [--json]" >&2; exit 2 ;;
                 esac
@@ -414,7 +414,7 @@ if v.get("canDecide") and any(r.get("state") == "pending" and r.get("origin") !=
             [ "$first" = "approve" ] && dec_usage="usage: k2 compute node packages approve <request> [--add] [--note \"…\"]"
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --note|--why) note="${2:-}"; shift 2 ;;
+                    --note|--why) _need_value "$@"; note="${2:-}"; shift 2 ;;
                     --add) add=1; shift ;;
                     --json) shift ;;
                     -*) echo "$dec_usage (unknown flag '$1')" >&2; exit 2 ;;
@@ -467,7 +467,7 @@ for r in v.get("rows") or []:
             local -a pairs=()
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --reason) reason="${2:-}"; shift 2 ;;
+                    --reason) _need_value "$@"; reason="${2:-}"; shift 2 ;;
                     --json) shift ;;
                     -*) echo "$pol_usage (unknown flag '$1')" >&2; exit 2 ;;
                     *=*) pairs+=("$1"); shift ;;
@@ -592,21 +592,21 @@ cmd_compute_node_servers() {
             local url="" code="" code_stdin=0 trust="own" forv="" reason="" pairs=()
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --url) url="${2:-}"; shift 2 ;;
-                    --code) code="${2:-}"; shift 2 ;;
+                    --url) _need_value "$@"; url="${2:-}"; shift 2 ;;
+                    --code) _need_value "$@"; code="${2:-}"; shift 2 ;;
                     --code-stdin) code_stdin=1; shift ;;
-                    --trust) trust="${2:-}"; shift 2 ;;
-                    --for) forv="${2:-}"; shift 2 ;;
-                    --reason) reason="${2:-}"; shift 2 ;;
-                    --weight) pairs+=("weight=${2:-}"); shift 2 ;;
-                    --max-running) pairs+=("max_running=${2:-}"); shift 2 ;;
-                    --max-queued) pairs+=("max_queued=${2:-}"); shift 2 ;;
-                    --cpu-hours) pairs+=("cpu_hours_day=${2:-}"); shift 2 ;;
+                    --trust) _need_value "$@"; trust="${2:-}"; shift 2 ;;
+                    --for) _need_value "$@"; forv="${2:-}"; shift 2 ;;
+                    --reason) _need_value "$@"; reason="${2:-}"; shift 2 ;;
+                    --weight) _need_value "$@"; pairs+=("weight=${2:-}"); shift 2 ;;
+                    --max-running) _need_value "$@"; pairs+=("max_running=${2:-}"); shift 2 ;;
+                    --max-queued) _need_value "$@"; pairs+=("max_queued=${2:-}"); shift 2 ;;
+                    --cpu-hours) _need_value "$@"; pairs+=("cpu_hours_day=${2:-}"); shift 2 ;;
                     --max-time) local mt; mt="$(_compute_secs "${2:-}")" || exit 2; pairs+=("max_job_secs=$mt"); shift 2 ;;
-                    --cpus) pairs+=("max_cpus=${2:-}"); shift 2 ;;
-                    --mem) local m="${2:-}"; pairs+=("max_mem_gb=${m%[Gg]}"); shift 2 ;;
-                    --disk) local d="${2:-}"; pairs+=("disk_gb=${d%[Gg]}"); shift 2 ;;
-                    --network) pairs+=("network=\"${2:-}\""); shift 2 ;;
+                    --cpus) _need_value "$@"; pairs+=("max_cpus=${2:-}"); shift 2 ;;
+                    --mem) _need_value "$@"; local m="${2:-}"; pairs+=("max_mem_gb=${m%[Gg]}"); shift 2 ;;
+                    --disk) _need_value "$@"; local d="${2:-}"; pairs+=("disk_gb=${d%[Gg]}"); shift 2 ;;
+                    --network) _need_value "$@"; pairs+=("network=\"${2:-}\""); shift 2 ;;
                     --gate) pairs+=("gate=true" "top_class=\"gate\""); shift ;;
                     --exclusive) pairs+=("exclusive=true"); shift ;;
                     --json) shift ;;
@@ -657,16 +657,16 @@ if v.get("warning"): print("note: " + v["warning"], file=sys.stderr)'
             shift
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --reason) reason="${2:-}"; shift 2 ;;
+                    --reason) _need_value "$@"; reason="${2:-}"; shift 2 ;;
                     # Tiers (0.46.5): does this server's --tier priority count
                     # on the node? Its own body key (kept in the node's
                     # queue.toml, never in the share); a 0.46.5 node only.
                     priority=true|priority=yes|priority=1) prio=1; shift ;;
                     priority=false|priority=no|priority=0) prio=0; shift ;;
                     priority=*) echo "usage: priority=true|false" >&2; exit 2 ;;
-                    --weight) pairs+=("weight=${2:-}"); shift 2 ;;
+                    --weight) _need_value "$@"; pairs+=("weight=${2:-}"); shift 2 ;;
                     for=*) forv="${1#for=}"; shift ;;
-                    --for) forv="${2:-}"; shift 2 ;;
+                    --for) _need_value "$@"; forv="${2:-}"; shift 2 ;;
                     max_job_secs=*h|max_job_secs=*m|max_job_secs=*s) local mt; mt="$(_compute_secs "${1#max_job_secs=}")" || exit 2; pairs+=("max_job_secs=$mt"); shift ;;
                     network=*|top_class=*) pairs+=("${1%%=*}=\"${1#*=}\""); shift ;;
                     *=*) pairs+=("$1"); shift ;;
@@ -721,10 +721,10 @@ if v.get("warning"): print("note: " + v["warning"], file=sys.stderr)'
             local usage="usage: k2 compute node servers <node> owner <server> [--old keep|revoke] [--caches move|wipe] [--now] [--reason TEXT]"
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --old) old="${2:-}"; shift 2 ;;
-                    --caches) caches="${2:-}"; shift 2 ;;
+                    --old) _need_value "$@"; old="${2:-}"; shift 2 ;;
+                    --caches) _need_value "$@"; caches="${2:-}"; shift 2 ;;
                     --now) now=1; shift ;;
-                    --reason) reason="${2:-}"; shift 2 ;;
+                    --reason) _need_value "$@"; reason="${2:-}"; shift 2 ;;
                     --json) shift ;;
                     -*) echo "$usage" >&2; exit 2 ;;
                     *) server="$1"; shift ;;
@@ -893,11 +893,11 @@ cmd_compute_node_admin() {
             local node="" verb="" reason="" file="" interp="" timeout="" plan="" pairs=()
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --reason) reason="${2:-}"; shift 2 ;;
-                    --file) file="${2:-}"; shift 2 ;;
-                    --interpreter) interp="${2:-}"; shift 2 ;;
+                    --reason) _need_value "$@"; reason="${2:-}"; shift 2 ;;
+                    --file) _need_value "$@"; file="${2:-}"; shift 2 ;;
+                    --interpreter) _need_value "$@"; interp="${2:-}"; shift 2 ;;
                     --timeout) timeout="$(_compute_secs "${2:-}")"; shift 2 ;;
-                    --plan) plan="${2:-}"; shift 2 ;;
+                    --plan) _need_value "$@"; plan="${2:-}"; shift 2 ;;
                     *=*) pairs+=("$1"); shift ;;
                     *)
                         if [ -z "$node" ]; then node="$1"
@@ -939,9 +939,9 @@ print(json.dumps(a))' "$args_json" "$file" "$interp" "$timeout")" || exit 2
             local q="" as_json=0
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --node) q="$q&node=$(urlencode "${2:-}")"; shift 2 ;;
-                    --state) q="$q&state=$(urlencode "${2:-}")"; shift 2 ;;
-                    --limit) q="$q&limit=$(urlencode "${2:-}")"; shift 2 ;;
+                    --node) _need_value "$@"; q="$q&node=$(urlencode "${2:-}")"; shift 2 ;;
+                    --state) _need_value "$@"; q="$q&state=$(urlencode "${2:-}")"; shift 2 ;;
+                    --limit) _need_value "$@"; q="$q&limit=$(urlencode "${2:-}")"; shift 2 ;;
                     --json) as_json=1; shift ;;
                     *) echo "usage: k2 compute node admin list [--node N] [--state open|pending|all] [--limit N] [--json]" >&2; exit 2 ;;
                 esac
@@ -965,7 +965,7 @@ for r in rows:
             local id="" why=""
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --why) why="${2:-}"; shift 2 ;;
+                    --why) _need_value "$@"; why="${2:-}"; shift 2 ;;
                     *) id="$1"; shift ;;
                 esac
             done

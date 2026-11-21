@@ -11,11 +11,11 @@ cmd_compute_fetch() {
     local -a names=()
     while [ $# -gt 0 ]; do
         case "$1" in
-            --out|-o) out="${2:-}"; shift 2 ;;
+            --out|-o) _need_value "$@"; out="${2:-}"; shift 2 ;;
             --json) as_json=1; shift ;;
             --over-relay) over_relay=1; shift ;;
             # An earlier attempt's files (k2 compute get <job> lists the attempts).
-            --attempt) attempt="${2:-}"; shift 2
+            --attempt) _need_value "$@"; attempt="${2:-}"; shift 2
                 case "$attempt" in ''|0|*[!0-9]*) echo "$fusage  (--attempt N: an attempt number from 1)" >&2; exit 2 ;; esac ;;
             -*) echo "$fusage" >&2; exit 2 ;;
             *) if [ -z "$job" ]; then job="$1"; else names+=("$1"); fi; shift ;;
@@ -172,11 +172,11 @@ cmd_compute_rightsize() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --) shift; have_cmd=1; argv=("$@"); break ;;
-            --check) check="${2:-}"; shift 2 ;;
-            --tag) tag="${2:-}"; shift 2 ;;
-            --days) days="${2:-}"; days="${days%d}"; shift 2
+            --check) _need_value "$@"; check="${2:-}"; shift 2 ;;
+            --tag) _need_value "$@"; tag="${2:-}"; shift 2 ;;
+            --days) _need_value "$@"; days="${2:-}"; days="${days%d}"; shift 2
                 case "$days" in ''|*[!0-9]*) echo "usage: --days is a number of days (1-90)" >&2; exit 2 ;; esac ;;
-            --workspace) ws="${2:-}"; shift 2 ;;
+            --workspace) _need_value "$@"; ws="${2:-}"; shift 2 ;;
             --json) as_json=1; shift ;;
             *) echo "$usage" >&2; exit 2 ;;
         esac
@@ -205,16 +205,16 @@ cmd_compute_logs_search() {
     local usage="usage: k2 compute logs --search 'TEXT' [--check C] [--branch B] [--state failed|passed|done|cancelled|timeout] [--since 7d] [--limit 50] [-i] [--workspace WS] [--json]"
     while [ $# -gt 0 ]; do
         case "$1" in
-            --search) needle="${2:-}"; shift 2 ;;
+            --search) _need_value "$@"; needle="${2:-}"; shift 2 ;;
             --search=*) needle="${1#--search=}"; shift ;;
-            --check) check="${2:-}"; shift 2 ;;
-            --branch) branch="${2:-}"; shift 2 ;;
-            --state) state="${2:-}"; shift 2 ;;
-            --since) since="${2:-}"; shift 2 ;;
-            --limit) limit="${2:-}"; shift 2
+            --check) _need_value "$@"; check="${2:-}"; shift 2 ;;
+            --branch) _need_value "$@"; branch="${2:-}"; shift 2 ;;
+            --state) _need_value "$@"; state="${2:-}"; shift 2 ;;
+            --since) _need_value "$@"; since="${2:-}"; shift 2 ;;
+            --limit) _need_value "$@"; limit="${2:-}"; shift 2
                 case "$limit" in ''|*[!0-9]*) echo "$usage (--limit is a number)" >&2; exit 2 ;; esac ;;
             -i|--ignore-case) fold=1; shift ;;
-            --workspace) ws="${2:-}"; shift 2 ;;
+            --workspace) _need_value "$@"; ws="${2:-}"; shift 2 ;;
             --json) as_json=1; shift ;;
             *) echo "$usage" >&2; exit 2 ;;
         esac
@@ -258,12 +258,12 @@ cmd_compute_logs() {
     local lusage="usage: k2 compute logs <job> [--attempt N] [--tail N] [--failures] [--raw] [--json]"
     while [ $# -gt 0 ]; do
         case "$1" in
-            --tail) tail="${2:-}"; shift 2 ;;
+            --tail) _need_value "$@"; tail="${2:-}"; shift 2 ;;
             --failures) failures=1; shift ;;
             --raw) raw=1; shift ;;
             --no-tests) no_tests=1; shift ;;
             # A retried or moved job: attempt N's log (k2 compute get lists them).
-            --attempt) attempt="${2:-}"; shift 2
+            --attempt) _need_value "$@"; attempt="${2:-}"; shift 2
                 case "$attempt" in ''|0|*[!0-9]*) echo "$lusage  (--attempt N: an attempt number from 1; k2 compute get <job> lists them)" >&2; exit 2 ;; esac ;;
             --json) as_json=1; shift ;;
             -*) echo "$lusage" >&2; exit 2 ;;

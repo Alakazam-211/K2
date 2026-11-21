@@ -68,15 +68,16 @@ print(json.dumps({"set": s}))' "$@")" || exit 2
             local controller="" enroll="" enroll_flag="" code_stdin=0 ticket="" ticket_flag="" ticket_stdin=0 name="" private="" remote_admin=""
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --controller) controller="${2:-}"; shift 2 ;;
+                    --controller) _need_value "$@"; controller="${2:-}"; shift 2 ;;
                     --code-stdin) code_stdin=1; shift ;;
-                    --enroll|--code) enroll="${2:-}"; enroll_flag="$1"; shift 2 ;;
+                    --enroll|--code) _need_value "$@"; enroll="${2:-}"; enroll_flag="$1"; shift 2 ;;
                     --ticket-stdin) ticket_stdin=1; shift ;;
-                    --ticket) ticket="${2:-}"; ticket_flag="$1"; shift 2 ;;
-                    --name) name="${2:-}"; shift 2 ;;
+                    --ticket) _need_value "$@"; ticket="${2:-}"; ticket_flag="$1"; shift 2 ;;
+                    --name) _need_value "$@"; name="${2:-}"; shift 2 ;;
                     --private-home) private=1; shift ;;
                     --no-private-home) private=0; shift ;;
                     --remote-admin)
+                        _need_value "$@"
                         remote_admin="${2:-}"; shift 2
                         case "$remote_admin" in off|policy|full) ;; *) echo "--remote-admin is off, policy or full" >&2; exit 2 ;; esac
                         ;;
@@ -282,12 +283,12 @@ for r in v.get("pending", []):
                     local host="" prov="" site="" reach="" att="" why=""
                     while [ $# -gt 0 ]; do
                         case "$1" in
-                            --host) host="${2:-}"; shift 2 ;;
-                            --provider) prov="${2:-}"; shift 2 ;;
-                            --site) site="${2:-}"; shift 2 ;;
-                            --admin-reach) reach="${2:-}"; shift 2 ;;
-                            --attest) att="${2:-}"; shift 2 ;;
-                            --why|--reason) why="${2:-}"; shift 2 ;;
+                            --host) _need_value "$@"; host="${2:-}"; shift 2 ;;
+                            --provider) _need_value "$@"; prov="${2:-}"; shift 2 ;;
+                            --site) _need_value "$@"; site="${2:-}"; shift 2 ;;
+                            --admin-reach) _need_value "$@"; reach="${2:-}"; shift 2 ;;
+                            --attest) _need_value "$@"; att="${2:-}"; shift 2 ;;
+                            --why|--reason) _need_value "$@"; why="${2:-}"; shift 2 ;;
                             --json) shift ;;
                             *) echo "usage: k2 compute roster set <node> [--host H] [--provider P] [--site S] [--admin-reach a,b] [--attest TEXT]" >&2; exit 2 ;;
                         esac
@@ -301,7 +302,7 @@ for r in v.get("pending", []):
                     local reason=""
                     while [ $# -gt 0 ]; do
                         case "$1" in
-                            --reason) reason="${2:-}"; shift 2 ;;
+                            --reason) _need_value "$@"; reason="${2:-}"; shift 2 ;;
                             --json) shift ;;
                             *) echo "usage: k2 compute roster $sub <node> [--reason compromised|key_lost|other]" >&2; exit 2 ;;
                         esac
@@ -326,8 +327,8 @@ for r in v.get("pending", []):
                 local from="" sets="{}" why=""
                 while [ $# -gt 0 ]; do
                     case "$1" in
-                        --from) from="${2:-}"; shift 2 ;;
-                        --why|--reason) why="${2:-}"; shift 2 ;;
+                        --from) _need_value "$@"; from="${2:-}"; shift 2 ;;
+                        --why|--reason) _need_value "$@"; why="${2:-}"; shift 2 ;;
                         --json) shift ;;
                         *=*)
                             sets="$(printf '%s' "$sets" | K2_LS_KV="$1" python3 -c '
@@ -385,11 +386,11 @@ if not v["offered"] and not v["held"]:
                     local lane="" seat="" secrets="0" why=""
                     while [ $# -gt 0 ]; do
                         case "$1" in
-                            --lane) lane="${2:-}"; shift 2 ;;
-                            --seat) seat="${2:-}"; shift 2 ;;
+                            --lane) _need_value "$@"; lane="${2:-}"; shift 2 ;;
+                            --seat) _need_value "$@"; seat="${2:-}"; shift 2 ;;
                             --secrets) secrets="1"; shift ;;
                             --no-secrets) secrets="0"; shift ;;
-                            --why) why="${2:-}"; shift 2 ;;
+                            --why) _need_value "$@"; why="${2:-}"; shift 2 ;;
                             --json) shift ;;
                             *) echo "usage: k2 compute seats request <owner-host> [--lane L] [--seat ID] [--secrets] [--why TEXT]" >&2; exit 2 ;;
                         esac
@@ -402,7 +403,7 @@ if not v["offered"] and not v["held"]:
                     local nodes=""
                     while [ $# -gt 0 ]; do
                         case "$1" in
-                            --nodes) nodes="${2:-}"; shift 2 ;;
+                            --nodes) _need_value "$@"; nodes="${2:-}"; shift 2 ;;
                             --json) shift ;;
                             *) echo "usage: k2 compute seats offer <request> --nodes a,b,c" >&2; exit 2 ;;
                         esac
@@ -418,7 +419,7 @@ if not v["offered"] and not v["held"]:
                     local why=""
                     while [ $# -gt 0 ]; do
                         case "$1" in
-                            --why) why="${2:-}"; shift 2 ;;
+                            --why) _need_value "$@"; why="${2:-}"; shift 2 ;;
                             --json) shift ;;
                             *) echo "usage: k2 compute seats $sub <seat> [--why TEXT]" >&2; exit 2 ;;
                         esac

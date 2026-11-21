@@ -10,39 +10,39 @@ cmd_compute_run() {
             --) shift; break ;;
             # --avoid NODE (0.46.8, repeatable): K2 never picks that node for
             # this job (submit, moves, retries). Not with a named node.
-            --avoid) avoids+=("${2:-}"); shift 2
+            --avoid) _need_value "$@"; avoids+=("${2:-}"); shift 2
                 [ -n "${avoids[${#avoids[@]}-1]}" ] || { echo "usage: --avoid <node> (a node K2 must not pick; repeatable)" >&2; exit 2; } ;;
             # --only NODE (0.46.9, repeatable): K2 picks only among these
             # nodes. Not with a named node.
-            --only) onlys+=("${2:-}"); shift 2
+            --only) _need_value "$@"; onlys+=("${2:-}"); shift 2
                 [ -n "${onlys[${#onlys[@]}-1]}" ] || { echo "usage: --only <node> (K2 picks only among the nodes you list; repeatable)" >&2; exit 2; } ;;
             # --preset NAME: [presets.NAME] from .k2/compute.toml (0.46.7;
             # the daemon reads the file, flags still win).
-            --preset) preset="${2:-}"; shift 2
+            --preset) _need_value "$@"; preset="${2:-}"; shift 2
                 if ! [[ "$preset" =~ ^[a-z0-9][a-z0-9._-]{0,39}$ ]]; then
                     echo "usage: --preset NAME (a [presets.NAME] in .k2/compute.toml: 1–40 of a-z 0-9 . _ -)" >&2; exit 2
                 fi ;;
             # --now: start at once or fail (exit 3 not_now), nothing queued.
             --now) now=1; shift ;;
             # --tag NAME: your own label for the job (jobs --tag filters).
-            --tag) tag="${2:-}"; shift 2
+            --tag) _need_value "$@"; tag="${2:-}"; shift 2
                 if ! [[ "$tag" =~ ^[A-Za-z0-9._:/-]{1,64}$ ]]; then
                     echo "usage: --tag NAME (1–64 of A-Z a-z 0-9 . _ : / -, e.g. fuzz:p3)" >&2; exit 2
                 fi ;;
             # --same-node-as JOB: run on the node that ran one of your jobs.
-            --same-node-as) same_node="${2:-}"; shift 2
+            --same-node-as) _need_value "$@"; same_node="${2:-}"; shift 2
                 [ -n "$same_node" ] || { echo "usage: --same-node-as <job> (one of this workspace's jobs)" >&2; exit 2; } ;;
             # --repo <folder>: a git repo (or a worktree of one) inside the
             # workspace, shipped instead of the workspace's own (0.46.6).
-            --repo) repo="${2:-}"; shift 2
+            --repo) _need_value "$@"; repo="${2:-}"; shift 2
                 [ -n "$repo" ] || { echo "usage: --repo <folder> (a git repo inside the workspace, e.g. k2-multiplayer-base)" >&2; exit 2; } ;;
             # --with DIR[@SHA]: a sibling repo shipped beside the main one,
             # laid out as in the workspace (0.46.6). Repeatable.
-            --with) withs+=("${2:-}"); shift 2
+            --with) _need_value "$@"; withs+=("${2:-}"); shift 2
                 [ -n "${withs[${#withs[@]}-1]}" ] || { echo "usage: --with DIR[@SHA] (a git repo inside the workspace, or a worktree of one)" >&2; exit 2; } ;;
             # --cache NAME: a folder on the node that outlives the job
             # ($K2_JOB_CACHE), per workspace and name (0.46.6).
-            --cache) cache="${2:-}"; shift 2
+            --cache) _need_value "$@"; cache="${2:-}"; shift 2
                 if ! [[ "$cache" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ ]]; then
                     echo "usage: --cache NAME (1–64 of a-z 0-9 . _ -, starting with a letter or digit)" >&2; exit 2
                 fi ;;
@@ -57,15 +57,15 @@ cmd_compute_run() {
             --gate) gate=1; tier="ci"; shift ;;
             # --priority (0.46.6; --critical kept) needs --why "<reason>".
             --priority|--critical) tier="priority"; shift ;;
-            --why) why="${2:-}"; shift 2 ;;
-            --tier) tier="${2:-}"; shift 2
+            --why) _need_value "$@"; why="${2:-}"; shift 2 ;;
+            --tier) _need_value "$@"; tier="${2:-}"; shift 2
                 case "$tier" in
                     ci|priority|batch) ;;
                     normal|standard) tier="normal" ;;
                     *) echo "usage: --tier standard|priority|batch|ci (k2 study compute: TIERS)" >&2; exit 2 ;;
                 esac
                 [ "$tier" = "ci" ] && gate=1 ;;
-            --supersede) supersede="${2:-}"; shift 2
+            --supersede) _need_value "$@"; supersede="${2:-}"; shift 2
                 if ! printf '%s' "$supersede" | python3 -c '
 import sys
 k = sys.stdin.read()
@@ -73,30 +73,30 @@ ok = 1 <= len(k) <= 120 and k == k.strip() and not any(ord(c) < 32 or ord(c) == 
 sys.exit(0 if ok else 1)'; then
                     echo "usage: --supersede KEY (1–120 characters, no control characters, no leading/trailing space)" >&2; exit 2
                 fi ;;
-            --submitter) submitter="${2:-}"; shift 2
+            --submitter) _need_value "$@"; submitter="${2:-}"; shift 2
                 if ! [[ "$submitter" =~ ^[a-z0-9._-]{1,40}$ ]]; then
                     echo "usage: --submitter NAME (1–40 of a-z 0-9 . _ -)" >&2; exit 2
                 fi ;;
-            --secret) secrets+=("${2:-}"); shift 2 ;;
+            --secret) _need_value "$@"; secrets+=("${2:-}"); shift 2 ;;
             --wait) wait=1; shift ;;
             # --wait --quiet: the old exit-only wait (no log text; 0.46.6).
             --quiet|-q) wait_quiet=1; shift ;;
             --failures) wait_failures=1; shift ;;
-            --max-wait) max_wait="${2:-}"; shift 2 ;;
+            --max-wait) _need_value "$@"; max_wait="${2:-}"; shift 2 ;;
             --any) any=1; shift ;;
-            --os) os="${2:-}"; shift 2 ;;
+            --os) _need_value "$@"; os="${2:-}"; shift 2 ;;
             # --distro ubuntu|ubuntu@24.04|debian (0.46.9): the node's
             # /etc/os-release ID or ID_LIKE, the version on a dot prefix.
             --distro) distro="$(_compute_distro_arg "${2:-}")" || exit 2; shift 2 ;;
-            --arch) arch="${2:-}"; shift 2 ;;
-            --label) labels+=("${2:-}"); shift 2 ;;
+            --arch) _need_value "$@"; arch="${2:-}"; shift 2 ;;
+            --label) _need_value "$@"; labels+=("${2:-}"); shift 2 ;;
             --detach|-d) detach=1; shift ;;
             --dirty) dirty=1; shift ;;
-            --sha) sha="${2:-}"; shift 2 ;;
+            --sha) _need_value "$@"; sha="${2:-}"; shift 2 ;;
             --no-source) nosrc=1; shift ;;
-            --env) envs+=("${2:-}"); shift 2 ;;
-            --needs|--need) needs+=("${2:-}"); shift 2 ;;
-            --cpus) cpus="${2:-}"; cpus_burst=""; shift 2  # N+M (Blacksmith R2): cpus + cpusBurst
+            --env) _need_value "$@"; envs+=("${2:-}"); shift 2 ;;
+            --needs|--need) _need_value "$@"; needs+=("${2:-}"); shift 2 ;;
+            --cpus) _need_value "$@"; cpus="${2:-}"; cpus_burst=""; shift 2  # N+M (Blacksmith R2): cpus + cpusBurst
                 if [[ "$cpus" == *+* ]]; then [[ "$cpus" =~ ^[0-9]+(\.[0-9]+)?\+[0-9]+(\.[0-9]+)?$ ]] || { echo "usage: --cpus N or --cpus N+M (4+8: 4 guaranteed, up to 8 on idle cores)" >&2; exit 2; }; cpus_burst="${cpus#*+}"; cpus="${cpus%%+*}"; fi ;;
             # --mem auto[:8G] (Blacksmith class R1): sized from this
             # command's finished runs; the size after : is the fallback.
@@ -133,12 +133,12 @@ sys.exit(0 if ok else 1)'; then
             # --netns-dummy NAME=ADDR/PREFIX (0.46.14, repeatable, at most 4;
             # Linux nodes): a dummy interface in the job's own network
             # namespace, up before the job starts. Implies --network none.
-            --netns-dummy) netns_dummies+=("${2:-}"); shift 2
+            --netns-dummy) _need_value "$@"; netns_dummies+=("${2:-}"); shift 2
                 [[ "${netns_dummies[${#netns_dummies[@]}-1]}" == ?*=?*/?* ]] || { echo "usage: --netns-dummy NAME=ADDRESS/PREFIX (e.g. dummy0=10.254.254.1/32; private, link-local or test ranges only)" >&2; exit 2; } ;;
             --receipt-v2) receipt_v=2; shift ;;
             --retry-interrupted) retry=1; shift ;;
             --no-retry) retry=0; retries=0; shift ;;
-            --retries) retries="${2:-}"; shift 2
+            --retries) _need_value "$@"; retries="${2:-}"; shift 2
                 case "$retries" in ''|*[!0-9]*) echo "usage: --retries N (0–5)" >&2; exit 2 ;; esac ;;
             --queue-timeout)
                 case "${2:-}" in
@@ -153,12 +153,12 @@ sys.exit(0 if ok else 1)'; then
                 esac
                 shift 2 ;;
             --raw) raw=1; shift ;;
-            --artifact|--artifacts) artifacts+=("${2:-}"); shift 2 ;;
-            --shards) nshards="${2:-}"; shift 2
+            --artifact|--artifacts) _need_value "$@"; artifacts+=("${2:-}"); shift 2 ;;
+            --shards) _need_value "$@"; nshards="${2:-}"; shift 2
                 case "$nshards" in ''|*[!0-9]*) echo "usage: --shards N (2–16)" >&2; exit 2 ;; esac ;;
             --json) as_json=1; shift ;;
             --plan|--dry-run) plan=1; shift ;;
-            --workspace) workspace="${2:-}"; shift 2 ;;
+            --workspace) _need_value "$@"; workspace="${2:-}"; shift 2 ;;
             -*) echo "usage: unknown flag '$1' (k2 compute --help)" >&2; exit 2 ;;
             *)
                 if [ -z "$node" ] && [ "$any" = "0" ]; then node="$1"; shift
@@ -537,9 +537,9 @@ cmd_compute_cache() {
             --lineage)
                 case "${2:-}" in trusted|scratch|release|all) lineage="$2" ;; *) echo "usage: --lineage trusted|scratch|release|all" >&2; exit 2 ;; esac
                 shift 2 ;;
-            --node) node="${2:-}"; shift 2 ;;
-            --workspace) ws="${2:-}"; shift 2 ;;
-            --name) name="${2:-}"; shift 2 ;;
+            --node) _need_value "$@"; node="${2:-}"; shift 2 ;;
+            --workspace) _need_value "$@"; ws="${2:-}"; shift 2 ;;
+            --name) _need_value "$@"; name="${2:-}"; shift 2 ;;
             --all) all=1; shift ;;
             --json) as_json=1; shift ;;
             *) echo "usage: k2 compute cache [list] [--node N] [--workspace WS] [--name NAME] [--lineage trusted|scratch|release|all] [--json] | clear (--workspace WS | --all) [--name NAME] [--node N]" >&2; exit 2 ;;
@@ -707,14 +707,16 @@ cmd_compute_test() {
         case "$1" in
             --) shift; targs=("$@"); break ;;
             --any) any=1; shift ;;
-            --shards) nshards="${2:-}"; shift 2 ;;
-            --partition) partition="${2:-}"; shift 2 ;;
-            --profile) profile="${2:-}"; shift 2 ;;
-            --runner) runner="${2:-}"; shift 2 ;;
+            --shards) _need_value "$@"; nshards="${2:-}"; shift 2 ;;
+            --partition) _need_value "$@"; partition="${2:-}"; shift 2 ;;
+            --profile) _need_value "$@"; profile="${2:-}"; shift 2 ;;
+            --runner) _need_value "$@"; runner="${2:-}"; shift 2 ;;
             --needs|--need)
+                _need_value "$@"
                 case "${2:-}" in *cargo-nextest*) has_nextest_need=1 ;; esac
                 pass+=("$1" "${2:-}"); shift 2 ;;
             --os|--distro|--arch|--label|--env|--secret|--cpus|--mem|--timeout|--sha|--workspace|--artifact|--artifacts|--queue-timeout|--retries|--stall-timeout|--tier|--why|--supersede|--submitter|--repo|--cache|--with|--preset|--tag|--same-node-as|--avoid|--only|--network|--netns-dummy)
+                _need_value "$@"
                 pass+=("$1" "${2:-}"); shift 2 ;;
             --detach|-d|--dirty|--exclusive|--receipt-v2|--raw|--json|--no-retry|--retry-interrupted|--no-source|--gate|--critical|--now|--cache-required|--plan) pass+=("$1"); shift ;;
             --gpu=*) pass+=("$1"); shift ;;
@@ -723,7 +725,7 @@ cmd_compute_test() {
                     ''|-*) pass+=("$1"); shift ;;
                     *) pass+=("$1" "$2"); shift 2 ;;
                 esac ;;
-            --gpu-mem) pass+=("$1" "${2:-}"); shift 2 ;;
+            --gpu-mem) _need_value "$@"; pass+=("$1" "${2:-}"); shift 2 ;;
             -*) echo "usage: unknown flag '$1' (k2 compute test --help)" >&2; exit 2 ;;
             *) if [ -z "$node" ]; then node="$1"; shift; else echo "usage: put nextest's own arguments after --" >&2; exit 2; fi ;;
         esac
@@ -778,15 +780,15 @@ cmd_compute_prewarm() {
     local -a needs=() nodes=() labels=()
     while [ $# -gt 0 ]; do
         case "$1" in
-            --preset) preset="${2:-}"; shift 2 ;;
-            --needs|--need) needs+=("${2:-}"); shift 2 ;;
-            --os) os="${2:-}"; shift 2 ;;
+            --preset) _need_value "$@"; preset="${2:-}"; shift 2 ;;
+            --needs|--need) _need_value "$@"; needs+=("${2:-}"); shift 2 ;;
+            --os) _need_value "$@"; os="${2:-}"; shift 2 ;;
             --distro) distro="$(_compute_distro_arg "${2:-}")" || exit 2; shift 2 ;;
-            --arch) arch="${2:-}"; shift 2 ;;
-            --label) labels+=("${2:-}"); shift 2 ;;
-            --node) nodes+=("${2:-}"); shift 2 ;;
-            --tag) tag="${2:-}"; shift 2 ;;
-            --workspace) workspace="${2:-}"; shift 2 ;;
+            --arch) _need_value "$@"; arch="${2:-}"; shift 2 ;;
+            --label) _need_value "$@"; labels+=("${2:-}"); shift 2 ;;
+            --node) _need_value "$@"; nodes+=("${2:-}"); shift 2 ;;
+            --tag) _need_value "$@"; tag="${2:-}"; shift 2 ;;
+            --workspace) _need_value "$@"; workspace="${2:-}"; shift 2 ;;
             --plan|--dry-run) plan=1; shift ;;
             --wait) wait=1; shift ;;
             --json) as_json=1; shift ;;

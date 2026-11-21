@@ -17,8 +17,13 @@
 #   3. a 500 with an empty body → the same plain error
 #   4. a cell socket that closes with no reply → quiet; the TCP try answers
 #   5. a normal answer is untouched
-# Case 1 waits out the 30 s limit twice. Exit status: 1, or 141 when the CLI
-# ended a reader beside the request (see _k2_end_command in cli/k2).
+# Cases 1 to 3 run three times: as the host is, then with no ps (a stand-in
+# that is refused, as in a sandbox or for a restricted user: the CLI finds
+# the reader with pgrep), then with neither ps nor pgrep and the CLI leading
+# its own process group, as a terminal or an agent's tool starts it (the
+# CLI ends that group). The 30 s limit is waited out four times (case 1 in
+# each run, and 1b). Exit status: 1, or 141 when the CLI ended a reader
+# beside the request (see _k2_end_command in cli/k2).
 # Run with: bash tests/cli/cli_no_answer.sh
 set -euo pipefail
 
@@ -138,13 +143,46 @@ STUB_PORT="$(cat "$WORKDIR/stub.port")"
 echo "owner-no-answer-token" >"$WORKDIR/home/.k2/heartbeat.token"
 chmod 600 "$WORKDIR/home/.k2/heartbeat.token"
 
-# Owner outside K2: TCP only.
+# Stand-ins for the runs without ps or pgrep. Each notes its call in
+# standin.log. nops/pgrep is the host's pgrep, noted.
+REAL_PGREP="$(command -v pgrep)" || { echo "FAIL: pgrep required" >&2; exit 1; }
+mkdir -p "$WORKDIR/nops" "$WORKDIR/nopgrep"
+cat >"$WORKDIR/nops/ps" <<SH
+#!/bin/sh
+echo ps-refused >>"$WORKDIR/standin.log"
+echo "sh: ps: Operation not permitted" >&2
+exit 126
+SH
+cat >"$WORKDIR/nops/pgrep" <<SH
+#!/bin/sh
+echo pgrep >>"$WORKDIR/standin.log"
+exec "$REAL_PGREP" "\$@"
+SH
+cat >"$WORKDIR/nopgrep/pgrep" <<SH
+#!/bin/sh
+echo pgrep-refused >>"$WORKDIR/standin.log"
+echo "sh: pgrep: Operation not permitted" >&2
+exit 126
+SH
+cp "$WORKDIR/nops/ps" "$WORKDIR/nopgrep/ps"
+chmod +x "$WORKDIR/nops/ps" "$WORKDIR/nops/pgrep" "$WORKDIR/nopgrep/ps" "$WORKDIR/nopgrep/pgrep"
+# The CLI as its own process group's leader, with SIGPIPE as a shell
+# leaves it (python ignores it, and exec would pass that on).
+LEAD_PY='import os, signal, sys
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+os.setpgid(0, 0)
+os.execv(sys.argv[1], sys.argv[1:])'
+RUN_PATH="$PATH"
+LEAD=()
+
+# Owner outside K2: TCP only. RUN_PATH and LEAD set the run's PATH and
+# whether the CLI leads its own process group.
 run_tcp() {
     env -u K2SO_HOOK_TOKEN -u K2SO_PORT -u K2_HOST -u K2_CELL -u K2_API_CELL -u K2_SECRETS_DIR \
         -u K2_HOOK_TOKEN -u K2_HOOK_SOCK -u K2SO_HOOK_SOCK -u K2_REMOTE_TOKEN -u K2_AIRGAP \
         -u CODEX_THREAD_ID -u CODEX_HOME -u CODEX_SANDBOX \
-        HOME="$WORKDIR/home" K2_PORT="$STUB_PORT" K2_PROJECT_PATH="$WORKDIR/project" \
-        "$K2" "$@"
+        HOME="$WORKDIR/home" K2_PORT="$STUB_PORT" K2_PROJECT_PATH="$WORKDIR/project" PATH="$RUN_PATH" \
+        ${LEAD[@]+"${LEAD[@]}"} "$K2" "$@"
 }
 # A session in a K2 terminal: passport + cell socket, TCP as the fallback.
 run_cell() {
@@ -167,22 +205,51 @@ run_case() {
     took=$((t1 - t0))
     err="$(cat "$WORKDIR/$name.err")"
 }
-echo "== 1. the daemon hangs past the CLI's limit =="
-echo hang >"$WORKDIR/mode"
-: >"$WORKDIR/requests.log"
-run_case hang run_tcp heartbeat session nightly
-# It reached the daemon, so it is never sent again (newer curl words its
-# -v trace differently; the CLI must not read that as a connect timeout).
-assert_eq "the request reached the daemon exactly once" "$(grep -c . "$WORKDIR/requests.log")" "1"
-assert_failed ""
-assert_eq "nothing on stdout" "$out" ""
-if [[ "$err" =~ "Error: K2's server didn't answer /cli/heartbeat/list within "3[0-9]" s; run k2 daemon status" ]]; then
-    ok "names the route and the wait: $err"
-else
-    bad "plain timeout line missing: $(printf %q "$err")"
-fi
-assert_absent "no JSON parse error" "$err" "Expecting value"
-if [ "$took" -le 40 ]; then ok "ended within the limit (${took} s)"; else bad "took ${took} s"; fi
+# Cases 1 to 3. $1: the run's label, a prefix on each row ("" for the host
+# as it is); $2: a file-name prefix for the captures.
+unanswered_cases() {
+    local v="$1" n="$2"
+    echo "== ${v}1. the daemon hangs past the CLI's limit =="
+    echo hang >"$WORKDIR/mode"
+    : >"$WORKDIR/requests.log"
+    run_case "${n}hang" run_tcp heartbeat session nightly
+    # It reached the daemon, so it is never sent again (newer curl words its
+    # -v trace differently; the CLI must not read that as a connect timeout).
+    assert_eq "${v}the request reached the daemon exactly once" "$(grep -c . "$WORKDIR/requests.log")" "1"
+    assert_failed "$v"
+    assert_eq "${v}nothing on stdout" "$out" ""
+    if [[ "$err" =~ "Error: K2's server didn't answer /cli/heartbeat/list within "3[0-9]" s; run k2 daemon status" ]]; then
+        ok "${v}names the route and the wait: $err"
+    else
+        bad "${v}plain timeout line missing: $(printf %q "$err")"
+    fi
+    assert_absent "${v}no JSON parse error" "$err" "Expecting value"
+    if [ "$took" -le 40 ]; then ok "${v}ended within the limit (${took} s)"; else bad "${v}took ${took} s"; fi
+
+    echo "== ${v}2. the connection closes with no reply =="
+    echo drop >"$WORKDIR/mode"
+    run_case "${n}drop-hb" run_tcp heartbeat session nightly
+    assert_failed "${v}heartbeat session: "
+    assert_contains "${v}heartbeat session: plain line" "$err" "Error: K2's server gave an empty answer to /cli/heartbeat/list after "
+    assert_contains "${v}heartbeat session: next step" "$err" "; run k2 daemon status"
+    assert_absent "${v}heartbeat session: no JSON parse error" "$err" "Expecting value"
+    run_case "${n}drop-inbox" run_tcp inbox
+    assert_failed "${v}inbox: "
+    assert_absent "${v}inbox: never 'No items.' for a request nobody answered" "$out" "No items."
+    assert_contains "${v}inbox: plain line" "$err" "Error: K2's server gave an empty answer to /cli/inbox/list after "
+    # The reader was stopped before it read the empty body: had it run, this
+    # capture would hold its line (it still held the stdout pipe).
+    assert_absent "${v}inbox: no parse error" "$err" "failed to parse"
+
+    echo "== ${v}3. a 500 with an empty body =="
+    echo empty500 >"$WORKDIR/mode"
+    run_case "${n}e500" run_tcp heartbeat session nightly
+    assert_failed "$v"
+    assert_contains "${v}plain line" "$err" "Error: K2's server gave an empty answer to /cli/heartbeat/list after "
+    assert_absent "${v}no JSON parse error" "$err" "Expecting value"
+}
+
+unanswered_cases "" ""
 
 echo "== 1b. a POST the daemon never answers is sent once =="
 echo hang >"$WORKDIR/mode"
@@ -197,27 +264,21 @@ fi
 assert_eq "done: the POST reached the daemon exactly once" "$(grep -c . "$WORKDIR/requests.log")" "1"
 if [ "$took" -le 40 ]; then ok "done: ended within the limit (${took} s)"; else bad "done: took ${took} s"; fi
 
-echo "== 2. the connection closes with no reply =="
-echo drop >"$WORKDIR/mode"
-run_case drop-hb run_tcp heartbeat session nightly
-assert_failed "heartbeat session: "
-assert_contains "heartbeat session: plain line" "$err" "Error: K2's server gave an empty answer to /cli/heartbeat/list after "
-assert_contains "heartbeat session: next step" "$err" "; run k2 daemon status"
-assert_absent "heartbeat session: no JSON parse error" "$err" "Expecting value"
-run_case drop-inbox run_tcp inbox
-assert_failed "inbox: "
-assert_absent "inbox: never 'No items.' for a request nobody answered" "$out" "No items."
-assert_contains "inbox: plain line" "$err" "Error: K2's server gave an empty answer to /cli/inbox/list after "
-# The reader was stopped before it read the empty body: had it run, this
-# capture would hold its line (it still held the stdout pipe).
-assert_absent "inbox: no parse error" "$err" "failed to parse"
+echo "== again with no ps (refused): the CLI finds the reader with pgrep =="
+RUN_PATH="$WORKDIR/nops:$PATH"
+: >"$WORKDIR/standin.log"
+unanswered_cases "no ps: " "nops-"
+assert_contains "no ps: the stand-in ps was refused" "$(cat "$WORKDIR/standin.log")" "ps-refused"
+assert_contains "no ps: pgrep found the reader" "$(cat "$WORKDIR/standin.log")" "pgrep"
 
-echo "== 3. a 500 with an empty body =="
-echo empty500 >"$WORKDIR/mode"
-run_case e500 run_tcp heartbeat session nightly
-assert_failed ""
-assert_contains "plain line" "$err" "Error: K2's server gave an empty answer to /cli/heartbeat/list after "
-assert_absent "no JSON parse error" "$err" "Expecting value"
+echo "== again with neither ps nor pgrep, the CLI leading its own group =="
+RUN_PATH="$WORKDIR/nopgrep:$PATH"
+LEAD=(python3 -c "$LEAD_PY")
+: >"$WORKDIR/standin.log"
+unanswered_cases "no ps or pgrep: " "nopg-"
+assert_contains "no ps or pgrep: the stand-in pgrep was refused" "$(cat "$WORKDIR/standin.log")" "pgrep-refused"
+RUN_PATH="$PATH"
+LEAD=()
 
 echo "== 4. the cell socket closes with no reply; TCP answers =="
 echo ok >"$WORKDIR/mode"

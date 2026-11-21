@@ -2446,8 +2446,61 @@ _cli_migrating() { [ "${_K2_HTTP:-}" = 503 ] && [[ "$1" == *'"state":"migrating"
 #     so nobody is left to print the reader's error or bash's "Terminated"
 #     job report. The exit status is then 141 (SIGPIPE), still non-zero.
 # Any other process of this command (a spinner) ends with the reader.
+# The process table comes from ps; where ps is refused (a sandbox, a
+# restricted user: "Operation not permitted") or missing, from pgrep.
+# With neither, see _k2_end_group.
 # No temp files (here-strings, mktemp): the disk may be full.
 trap 'exit 1' USR1
+
+# _k2_proc_table_pgrep ROOT: "pid ppid" lines for ROOT's descendants, one
+# level at a time with pgrep -P: the part of ps -A's table that
+# _k2_end_command reads. Nothing when pgrep can't run.
+# -a: macOS's pgrep leaves out its own ancestors (this shell among them)
+# unless asked; Linux's prints the command line after the pid. A pgrep
+# with no -a gets the plain form.
+_k2_proc_table_pgrep() {
+    local todo="$1" next p c line kids n=0 IFS=$' \t\n'
+    while [ -n "$todo" ] && [ "$n" -lt 32 ]; do
+        next=""
+        for p in $todo; do
+            kids="$(pgrep -a -P "$p" 2>/dev/null)" || kids="$(pgrep -P "$p" 2>/dev/null)" || continue
+            IFS=$'\n'
+            for line in $kids; do
+                c="${line%% *}"
+                case "$c" in ''|*[!0-9]*) continue ;; esac
+                printf '%s %s\n' "$c" "$p"
+                next="$next $c"
+            done
+            IFS=$' \t\n'
+        done
+        todo="$next"
+        n=$((n + 1))
+    done
+}
+
+# _k2_end_group: no process table at all (ps and pgrep both refused or
+# missing), so the reader can't be found by its pid. Closing its pipe
+# isn't enough: the reader then reads an empty answer and prints its own
+# error. When this command leads its own process group (a terminal or an
+# agent's tool started it), that group is this command line: the main
+# shell gets SIGPIPE, then the group SIGTERM, so the reader ends before
+# it reads and bash prints no "Terminated" report. The status is 141.
+# In a caller's group (a script that ran k2 without job control) nothing
+# is signalled: that group holds the caller too. $1: the probe, ended
+# already; reaped here so bash prints no report of it either.
+_k2_end_group() {
+    local n=0
+    kill -0 -- "-$$" 2>/dev/null || return 0
+    wait "$1" 2>/dev/null || true
+    kill -PIPE "$$" 2>/dev/null || true
+    # The group's SIGTERM once the main shell is gone (at most about a
+    # second), so the main shell's status is SIGPIPE's.
+    while kill -0 "$$" 2>/dev/null && [ "$n" -lt 20 ]; do
+        sleep 0.05
+        n=$((n + 1))
+    done
+    kill -TERM -- "-$$" 2>/dev/null || true
+}
 _k2_end_command() {
     local st="${1:-1}" probe="" table="" plan="" anc="" kids=""
     # The main shell itself: a plain exit.
@@ -2458,6 +2511,7 @@ _k2_end_command() {
     sleep 30 &
     probe=$!
     table="$(ps -A -o pid= -o ppid= 2>/dev/null)" || table=""
+    [ -n "$table" ] || table="$(_k2_proc_table_pgrep "$$")" || table=""
     kill "$probe" 2>/dev/null || true
     if [ -n "$table" ]; then
         # Line 1: the shells between here and the main one (main included).
@@ -2499,6 +2553,8 @@ _k2_end_command() {
         kill -PIPE $anc 2>/dev/null || true
         # shellcheck disable=SC2086
         kill -TERM $kids 2>/dev/null || true
+    elif [ -z "$table" ]; then
+        _k2_end_group "$probe"
     fi
     exit "$st"
 }

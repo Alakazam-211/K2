@@ -12,9 +12,13 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 pass=0
 die() { echo "FAIL: $*" >&2; exit 1; }
 
-fns="$(sed -n '/^urlencode()/,/^}/p; /^_k2_end_command()/,/^}/p' "$K2_CLI")"
+# _k2_end_command and the two helpers it calls when ps can't run.
+fns="$(sed -n '/^urlencode()/,/^}/p; /^_k2_proc_table_pgrep()/,/^}/p; /^_k2_end_group()/,/^}/p; /^_k2_end_command()/,/^}/p' "$K2_CLI")"
 [ "$(printf '%s\n' "$fns" | grep -c '^urlencode()')" = 1 ] || die "urlencode not found once in cli/k2"
 [ "$(printf '%s\n' "$fns" | grep -c '^_k2_end_command()')" = 1 ] || die "_k2_end_command not found once in cli/k2"
+for f in _k2_proc_table_pgrep _k2_end_group; do
+    [ "$(printf '%s\n' "$fns" | grep -c "^$f()")" = 1 ] || die "$f not found once in cli/k2"
+done
 eval "$fns"
 
 want() { # want <case> <value> <encoded>

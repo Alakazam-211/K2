@@ -241,9 +241,9 @@ fn put(z: &mut Zen, words: &[&str]) -> Step {
             _ if w.starts_with("--dir=") => dir = w["--dir=".len()..].into(),
             "--prune" => prune = true,
             "--note" => {
-                // `note="${2:-}"; shift 2`: a failed shift ends the command.
+                // `note="${2:-}"; shift 2` after `_need_value`.
                 if i + 1 >= words.len() {
-                    return Err(Exit::Error);
+                    return Err(crate::out::stop_need_value("--note"));
                 }
                 note = next.into();
                 i += 1;

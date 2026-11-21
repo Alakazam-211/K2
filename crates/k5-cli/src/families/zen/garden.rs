@@ -804,9 +804,9 @@ fn put(z: &mut Zen, words: &[&str]) -> Step {
                 i += 1;
             }
             "--note" => {
-                // `note="${2:-}"; shift 2`: a failed shift ends the command.
+                // `note="${2:-}"; shift 2` after `_need_value`.
                 if i + 1 >= words.len() {
-                    return Err(Exit::Error);
+                    return Err(crate::out::stop_need_value("--note"));
                 }
                 note = words[i + 1].into();
                 i += 1;

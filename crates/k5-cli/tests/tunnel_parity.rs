@@ -824,7 +824,7 @@ fn tunnel_with_a_passport_and_the_gates() {
             &[("K2_AIRGAP", "1")],
             vec![],
             nothing,
-            2,
+            1,
             0,
         ),
         case(

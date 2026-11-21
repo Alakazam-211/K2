@@ -671,6 +671,7 @@ pub fn send(cp: &mut Cp<'_>, a: &Ask, sock: &Path) -> Exit {
                     out::stderr_line(&l);
                     return Exit::Usage;
                 }
+                Some(Err(Words::ShiftFailed(flag))) => return out::stop_need_value(&flag),
                 Some(Err(_)) => return Exit::Error,
                 None => unreachable!("handed to the shell before"),
             };

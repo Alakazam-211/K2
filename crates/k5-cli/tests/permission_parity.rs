@@ -544,12 +544,12 @@ fn the_other_agent_verbs_answer_as_the_shell_does() {
                 1,
             ),
             case(
-                "update: --why last is shift 2's exit 1",
+                "update: --why last",
                 &["update", "pr_1", "--why"],
                 &[],
                 vec![on()],
                 owner_and_port,
-                1,
+                2,
                 1,
             ),
             case(
@@ -645,7 +645,7 @@ fn the_other_agent_verbs_answer_as_the_shell_does() {
                 &[],
                 vec![on()],
                 owner_and_port,
-                1,
+                2,
                 1,
             ),
             case(
@@ -777,7 +777,7 @@ fn the_people_verbs_answer_as_the_shell_does() {
                 &[],
                 vec![on()],
                 owner_and_port,
-                1,
+                2,
                 1,
             ),
             case(

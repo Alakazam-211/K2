@@ -267,13 +267,13 @@ fn write() {
                 3,
             ),
             case(
-                "--agent with nothing after it is the message",
+                "--agent as the last word: the _need_value line",
                 &["write", "acme", "--agent"],
                 &[],
-                vec![ok("{}"), ok(r#"[{"sessionId":"s1"}]"#), ok("{}")],
+                vec![],
                 owner_and_port,
+                2,
                 0,
-                3,
             ),
             case(
                 "no path: the name as it is",

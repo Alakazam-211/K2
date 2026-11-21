@@ -381,7 +381,7 @@ fn skin_user_writes() {
             words(
                 "user rooms --agent as the last word",
                 &["user", "rooms", "bob", "--agent"],
-                1,
+                2,
             ),
             // covers: skin user rooms
             words(
@@ -688,7 +688,7 @@ fn skin_grants_doors_and_hydra() {
             words(
                 "front-door: --url last",
                 &["front-door", "direct", "--url"],
-                1,
+                2,
             ),
             one(
                 "hydra",

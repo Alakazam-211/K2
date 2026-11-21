@@ -173,11 +173,11 @@ fn stop(line: impl Into<String>, exit: Exit) -> Ask {
     }
 }
 
-/// `exit 1` from `shift 2` with one word left: nothing printed.
-fn short_shift() -> Ask {
+/// A value flag as the last word: the shell's `_need_value` line, exit 2.
+fn short_shift(flag: &str) -> Ask {
     Ask::Stop {
-        lines: Vec::new(),
-        exit: Exit::Error,
+        lines: vec![crate::out::need_value(flag)],
+        exit: Exit::Usage,
     }
 }
 
@@ -229,7 +229,7 @@ pub fn parse(words: &[&str], passport: bool) -> Ask {
                 }
                 why = rest.get(i + 1).copied().unwrap_or("").to_string();
                 if i + 2 > rest.len() {
-                    return short_shift();
+                    return short_shift(w);
                 }
                 i += 2;
             }
@@ -277,7 +277,7 @@ pub fn parse(words: &[&str], passport: bool) -> Ask {
                     w => return stop(format!("Error: unexpected argument '{w}'"), Exit::Usage),
                 }
                 if i + 2 > rest.len() {
-                    return short_shift();
+                    return short_shift(w);
                 }
                 i += 2;
             }
@@ -304,7 +304,7 @@ pub fn parse(words: &[&str], passport: bool) -> Ask {
                 }
                 reason = rest.get(i + 1).copied().unwrap_or("").to_string();
                 if i + 2 > rest.len() {
-                    return short_shift();
+                    return short_shift(w);
                 }
                 i += 2;
             }

@@ -433,7 +433,7 @@ fn skin_token_create_answers_as_the_shell_does() {
             &[],
             vec![],
             owner_and_port,
-            1,
+            2,
             0,
         ),
         // covers: skin-token create
@@ -568,7 +568,7 @@ fn skin_token_rooms_revoke_and_usage_answer_as_the_shell_does() {
             &[],
             vec![],
             owner_and_port,
-            1,
+            2,
             0,
         ),
         // covers: skin-token rooms

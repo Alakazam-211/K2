@@ -162,7 +162,11 @@ pub fn parse(words: &[&str]) -> Option<Ask> {
             let target = rest.first().copied().unwrap_or("").to_string();
             let mut more = rest.get(1..).unwrap_or_default();
             let mut agent = String::new();
-            // `shift 2 || true`: with one word left nothing shifts.
+            // `--agent` as the last word: the shell's `_need_value` line
+            // (the shell's).
+            if more == ["--agent"] {
+                return None;
+            }
             if more.first() == Some(&"--agent") && more.len() >= 2 {
                 agent = more[1].to_string();
                 more = &more[2..];
@@ -531,14 +535,7 @@ mod tests {
         assert_eq!(parse(&["nope"]), Some(Ask::Usage));
         assert_eq!(parse(&["spawn", "--title"]), None);
         assert_eq!(parse(&["read", "x", "--lines"]), None);
-        assert_eq!(
-            parse(&["write", "ws", "--agent"]),
-            Some(Ask::Write {
-                target: "ws".into(),
-                agent: String::new(),
-                message: "--agent".into()
-            })
-        );
+        assert_eq!(parse(&["write", "ws", "--agent"]), None);
         assert_eq!(
             parse(&["write", "ws", "--agent", "a", "hi", "there"]),
             Some(Ask::Write {

@@ -160,6 +160,39 @@ pub fn daemon_https(client: &mut Client) {
     }
 }
 
+/// The environment curl reads a proxy for an `https://` URL from.
+pub const HTTPS_PROXY_ENV: [&str; 4] = ["https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"];
+
+/// `BASE_URL` as `_apply_remote_host` sets it for `host`: the URL as
+/// given less one trailing `/`, or `https://<host>`.
+pub fn base_url(host: &str) -> String {
+    if host.starts_with("http://") || host.starts_with("https://") {
+        host.strip_suffix('/').unwrap_or(host).to_string()
+    } else {
+        format!("https://{host}")
+    }
+}
+
+/// Whether the binary sends a token to `host` (its [`base`]) itself, as
+/// the shell's curl would: HTTPS, where curl would use no proxy (a
+/// loopback host, or none of [`HTTPS_PROXY_ENV`] set in `env`); plain
+/// http only to a literal loopback address (`127.x.x.x`), never a name
+/// that would have to be looked up. Anything else is the shell's (it
+/// sends there by its own rules).
+pub fn sends_here(host: &str, b: &Base, env: impl Fn(&str) -> Option<std::ffi::OsString>) -> bool {
+    if !b.tls {
+        return b
+            .host
+            .parse::<std::net::Ipv4Addr>()
+            .is_ok_and(|ip| ip.is_loopback());
+    }
+    let url = format!("{}/", base_url(host));
+    k2_client::proxy_rule::direct(&url)
+        || !HTTPS_PROXY_ENV
+            .iter()
+            .any(|n| env(n).is_some_and(|v| !v.is_empty()))
+}
+
 /// `_apply_remote_host`'s swap, once the token is known.
 pub fn apply(client: &mut Client, base: &Base, token: String) {
     client.host = base.host.clone();
@@ -401,6 +434,27 @@ fn run_quiet(program: &str, args: &[&str]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn where_the_binary_sends_a_token_itself() {
+        let none = |_: &str| None;
+        let proxied = |n: &str| (n == "HTTPS_PROXY").then(|| "http://proxy:3128".into());
+        let here = |h: &str, env: &dyn Fn(&str) -> Option<std::ffi::OsString>| {
+            sends_here(h, &base(h).expect("a host the binary reads"), env)
+        };
+        assert!(here("box.example", &none));
+        assert!(here("https://box.example:8443/", &none));
+        assert!(!here("box.example", &proxied));
+        assert!(here("https://localhost:9", &proxied));
+        assert!(here("https://127.0.0.1:9", &proxied));
+        assert!(here("http://127.0.0.1:9", &proxied));
+        assert!(here("http://127.3.4.5", &none));
+        assert!(!here("http://localhost:9", &none));
+        assert!(!here("http://box.example", &none));
+        assert!(!here("http://10.0.0.1:80", &none));
+        assert_eq!(base_url("box"), "https://box");
+        assert_eq!(base_url("http://x:1/"), "http://x:1");
+    }
 
     #[test]
     fn base_reads_the_url_as_curl_does() {

@@ -296,6 +296,18 @@ fn status_and_list_answer_as_the_shell_does() {
                 vec![("K2_AIRGAP", "1".into())],
                 on("status: air-gap on", &["status"], vec![], 1, 0),
             ),
+            with(
+                vec![("K2_AIRGAP", "1".into())],
+                case(
+                    "subdomain: air-gap on, before the gates (no daemon)",
+                    &["subdomain"],
+                    &[],
+                    vec![],
+                    nothing,
+                    1,
+                    0,
+                ),
+            ),
             on("status: a flag", &["status", "-x"], vec![], 2, 0),
             on(
                 "status: a flag after --json",
@@ -565,7 +577,7 @@ fn create_point_and_rm_answer_as_the_shell_does() {
             with(
                 vec![("K2_AIRGAP", "yes".into())],
                 on(
-                    "create: air-gap on, after the preflight",
+                    "create: air-gap on, before the gates",
                     &[
                         "subdomain",
                         "create",
@@ -573,9 +585,9 @@ fn create_point_and_rm_answer_as_the_shell_does() {
                         "--target",
                         "example.invalid:80",
                     ],
-                    vec![ok(CHECKED)],
+                    vec![],
                     1,
-                    1,
+                    0,
                 ),
             ),
             on(
@@ -777,20 +789,25 @@ fn same_requests(seen: &Arc<Mutex<Vec<String>>>, first: &str) {
     }
 }
 
+/// One direct control-plane row: the name, the words, the control
+/// plane's status line and body, the daemon's answers and how many, and
+/// how the control plane's request starts.
+type CpRow = (
+    &'static str,
+    &'static [&'static str],
+    &'static str,
+    &'static str,
+    Vec<Reply>,
+    usize,
+    &'static str,
+);
+
 /// No daemon route (404 from /cli/connect/proxy): the control plane
 /// itself with `tunnel.json`'s token, for each method.
 #[test]
 fn the_control_plane_itself_when_no_daemon_makes_the_call() {
     let rig = Rig::new(VERB, "cplane");
-    let rows: [(
-        &'static str,
-        &'static [&'static str],
-        &'static str,
-        &'static str,
-        Vec<Reply>,
-        usize,
-        &str,
-    ); 4] = [
+    let rows: [CpRow; 4] = [
         (
             "list: GET",
             &["subdomain", "list"],

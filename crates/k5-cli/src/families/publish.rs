@@ -210,6 +210,18 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     if !python::family_native(python::here()) {
         return None;
     }
+    // The prelude refuses `subdomain` (but `claim` and `unclaim`) under
+    // air-gap before its gates (`cli/src/cli-tools-policy.sh`).
+    if words.first() == Some(&"subdomain")
+        && !matches!(words.get(1), Some(&("claim" | "unclaim")))
+    {
+        let (state, file) = crate::airgap::state(&crate::offline::Env::current())?;
+        if let Some(mut line) = crate::airgap::refusal(state, &file) {
+            line.push(b'\n');
+            let _ = out::write_flushed(&mut std::io::stderr().lock(), &line);
+            return Some(Exit::Error);
+        }
+    }
     let settings = match daemon::current() {
         Ok(s) => s,
         Err(e) => {

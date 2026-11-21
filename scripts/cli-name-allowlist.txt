@@ -666,7 +666,7 @@
 1 value cli/src/explain.sh keeper: wire; the refusal row's who (refusals/mod.rs:54)
 1 value cli/src/firewall.sh keeper: wire; the firewall status's upstream.managedBy (firewall/routes.rs:497)
 1 value cli/src/hostchat-voice.sh keeper: wire; the Sew enable request's identity (--identity, sew/routes.rs:463)
-1 value cli/src/remote-target.sh keeper: wire; a label the Postal plane reserves (its list), never the command
+1 value cli/src/remote-target.sh keeper: wire; Postal plane reserved DNS label, mirrors the plane's list, not the CLI name
 1 value cli/src/schema-head.sh debt: command (1 line); B8
 1 value cli/src/study-app-api.sh keeper: wire; the refusal registry's who, written here by contract-gen from k2-core (refusals/mod.rs:54)
 1 value cli/src/thread.sh keeper: wire; the Thread item's sender when no workspace handle is found (OverlayDoc.from)
@@ -689,7 +689,7 @@
 1 value crates/k2-core/src/hire/template/upgrade.rs keeper: stored; an inbox note's source and from (frontmatter)
 1 value crates/k2-core/src/llm_accounts/wallet.rs keeper: stored; the LLM account's created_by
 1 value crates/k2-core/src/migrations/unification_0_37_0.rs keeper: stored; the stored agent mode (ruling 5)
-1 value crates/k2-core/src/postal/mod.rs keeper: wire; a label the Postal plane reserves (its list), never the command
+1 value crates/k2-core/src/postal/mod.rs keeper: wire; Postal plane reserved DNS label, mirrors the plane's list, not the CLI name
 1 value crates/k2-core/src/product_feedback/scrub.rs keeper: inert; a stop word the feedback scrubber never replaces
 1 value crates/k2-core/src/refusals/mod.rs keeper: wire; a refusal's who, in its JSON
 1 value crates/k2-core/src/suite/mod.rs keeper: wire; the suite catalog's variant and the App release file name
@@ -762,7 +762,7 @@
 1 value src/renderer/components/Settings/sections/AgentSkillsSection.tsx keeper: inert; a search keyword, the product's name for its agent skill
 1 value src/renderer/components/Settings/sections/DomainsSection.tsx keeper: wire; the firewall's managedBy from the daemon
 1 value src/renderer/components/Settings/sections/access-audit-words.ts keeper: stored; the audit log's actor, shown as the product name
-1 value src/renderer/components/Settings/sections/postal-api.ts keeper: wire; a label the Postal plane reserves (its list), never the command
+1 value src/renderer/components/Settings/sections/postal-api.ts keeper: wire; Postal plane reserved DNS label, mirrors the plane's list, not the CLI name
 1 value src/renderer/components/Wiki/WikiGraph.tsx keeper: inert; the wiki page's own view mode
 1 value src/renderer/components/Wiki/WikiGraph3D.tsx keeper: inert; the wiki page's own view mode
 1 value src/renderer/components/Wiki/WikiNoteList.tsx keeper: inert; the wiki page's own view mode

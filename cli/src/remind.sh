@@ -1409,8 +1409,14 @@ cmd_hooks_status() {
     done
     local raw
     raw=$(cli_request "/cli/hooks/status" "limit=$(urlencode "$limit")")
+    # --json prints the answer as it came, and an error answer still fails
+    # with the exit it has without --json: 1, or 3 for a refusal (0.46.17:
+    # it exited 0 whatever the answer was), as hooks install --json does.
     if [ "${as_json:-0}" = "1" ]; then
         echo "$raw"
+        local jrc=0
+        printf '%s' "$raw" | _hooks_answer_error quiet || jrc=$?
+        [ "$jrc" -eq 0 ] || exit "$jrc"
         return 0
     fi
     # An answer with an `error` key is one Error: line on stderr and exit 1

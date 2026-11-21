@@ -1,6 +1,10 @@
 //! `cmd_agent_set` (`cli/src/agent.sh`): the conf, then the plan and the
 //! urllib calls of the block's own (K2's ruling D4): `/cli/workspace/set`,
-//! the display name, the persona, and project memberships.
+//! the display name, the persona, project memberships, and the focus group
+//! (`/cli/focus-groups/list`, then `/cli/focus-groups/assign` with the
+//! project token: the session's passport in a K2 terminal, so a refusal
+//! there is the daemon's `focus_group_needs_person`, exit 3, with its
+//! closing line).
 
 use super::conf::fetch;
 use super::{at, cli, dumps, obj, s};
@@ -27,8 +31,7 @@ pub struct SetArgs {
     pub persona: String,
     pub add: Vec<String>,
     pub remove: Vec<String>,
-    /// `--focus-group <group>|none` (0.46.17): a line with it is the
-    /// shell's still ([`super::run`] hands it back before anything is sent).
+    /// `--focus-group <group>|none` (0.46.17).
     pub focus_group: String,
     pub dry: bool,
     pub json: bool,
@@ -501,11 +504,138 @@ impl Run<'_> {
             }
             self.actions.push(x);
         }
+        self.plan_focus_group()?;
         if a.dry {
             let pending = self.actions.iter().any(|x| status_is(x, "pending"));
             return self.emit(true, pending);
         }
         self.apply(persona_content)
+    }
+
+    /// The focus group's step (0.46.17): matched as `focus-group` matches
+    /// (its id, its name in any case, or the start of one name); `none`,
+    /// `off` or `-` is no group.
+    fn plan_focus_group(&mut self) -> Result<(), Stop> {
+        let arg = super::py_strip(&self.a.focus_group).to_string();
+        if arg.is_empty() {
+            return Ok(());
+        }
+        let (want, label) = if matches!(arg.to_lowercase().as_str(), "none" | "off" | "-") {
+            (Value::Null, s("none"))
+        } else {
+            let listed = self.http_get("/cli/focus-groups/list", Vec::new());
+            let Value::Array(groups) = &listed else {
+                let err = match &listed {
+                    Value::Object(_) => at(&listed, "error").cloned(),
+                    _ => None,
+                };
+                let err = match err {
+                    Some(e @ Value::Object(_)) => match at(&e, "hint").filter(|v| py::truthy(v)) {
+                        Some(h) => Some(h.clone()),
+                        None => at(&e, "code").cloned(),
+                    },
+                    other => other,
+                };
+                let why = match err {
+                    Some(e) if py::truthy(&e) => py::str_of(&e),
+                    _ => "unexpected response".to_string(),
+                };
+                return Err(fail(
+                    &s("daemon_error"),
+                    &format!("cannot list focus groups: {why}"),
+                    Exit::Error,
+                ));
+            };
+            let low = arg.to_lowercase();
+            let name_lower = |g: &Value| -> Result<String, Raise> {
+                match py_get(g, "name", L)?.filter(|v| py::truthy(v)) {
+                    None => Ok(String::new()),
+                    Some(Value::Str(t)) => Ok(py::str_of(&Value::Str(t.clone())).to_lowercase()),
+                    Some(other) => Err(Raise::no_attribute(L, other, "lower")),
+                }
+            };
+            let mut hits = Vec::new();
+            for g in groups {
+                let by_id = py_get(g, "id", L)?.is_some_and(|v| ops::py_eq(v, &s(&arg)));
+                if by_id || name_lower(g)? == low {
+                    hits.push(g.clone());
+                }
+            }
+            if hits.is_empty() {
+                for g in groups {
+                    if name_lower(g)?.starts_with(&low) {
+                        hits.push(g.clone());
+                    }
+                }
+            }
+            if hits.is_empty() {
+                return Err(fail(
+                    &s("not_found"),
+                    &format!(
+                        "no focus group matches '{arg}' (see: {} focus-group list)",
+                        cli()
+                    ),
+                    Exit::NotFound,
+                ));
+            }
+            if hits.len() > 1 {
+                let mut names: Vec<Value> = hits
+                    .iter()
+                    .map(|g| {
+                        match at(g, "name")
+                            .filter(|v| py::truthy(v))
+                            .or_else(|| at(g, "id").filter(|v| py::truthy(v)))
+                        {
+                            Some(v) => v.clone(),
+                            None => s("?"),
+                        }
+                    })
+                    .collect();
+                names.sort_by(|a, b| match (a, b) {
+                    (Value::Str(x), Value::Str(y)) => x.cmp(y),
+                    _ => py::str_of(a).cmp(&py::str_of(b)),
+                });
+                let names: Vec<String> = names.iter().map(py::str_of).collect();
+                return Err(fail(
+                    &s("ambiguous"),
+                    &format!(
+                        "'{arg}' matches more than one focus group: {} (pass the id)",
+                        names.join(", ")
+                    ),
+                    Exit::NotFound,
+                ));
+            }
+            let id = at(&hits[0], "id")
+                .filter(|v| py::truthy(v))
+                .cloned()
+                .unwrap_or(Value::Null);
+            let label = at(&hits[0], "name")
+                .filter(|v| py::truthy(v))
+                .cloned()
+                .unwrap_or_else(|| s(&arg));
+            (id, label)
+        };
+        let mut x = act(vec![
+            ("step", s("set-focus-group")),
+            ("group", label.clone()),
+            ("focusGroupId", want.clone()),
+        ]);
+        let now = at(self.conf, "focusGroupId")
+            .filter(|v| py::truthy(v))
+            .cloned()
+            .unwrap_or(Value::Null);
+        if ops::py_eq(&now, &want) {
+            put(&mut x, "status", s("skipped"));
+            put(
+                &mut x,
+                "reason",
+                s(&format!("already {}", py::str_of(&label))),
+            );
+        } else {
+            put(&mut x, "status", s("pending"));
+        }
+        self.actions.push(x);
+        Ok(())
     }
 
     /// `resolve_project(sel)`.
@@ -878,7 +1008,114 @@ impl Run<'_> {
                 changed = true;
             }
         }
+        // 5. The focus group, last: a refusal (exit 3) leaves the steps
+        // above done.
+        for i in 0..self.actions.len() {
+            let x = &self.actions[i];
+            if !(aget(x, "step").is_some_and(|v| ops::py_eq(v, &s("set-focus-group")))
+                && status_is(x, "pending"))
+            {
+                continue;
+            }
+            let group = aget(x, "focusGroupId").cloned().unwrap_or(Value::Null);
+            let project = at(self.conf, "id").cloned().unwrap_or(Value::Null);
+            let (status, resp) =
+                self.assign(&obj(vec![("projectId", project), ("focusGroupId", group)]));
+            let err = match &resp {
+                Value::Object(_) => at(&resp, "error").cloned().unwrap_or(Value::Null),
+                _ => s("unexpected answer"),
+            };
+            if status >= 300 || status == 0 || py::truthy(&err) {
+                let err = match err {
+                    e @ Value::Object(_) => e,
+                    other => {
+                        let hint = if py::truthy(&other) {
+                            py::str_of(&other)
+                        } else {
+                            format!("HTTP {status}")
+                        };
+                        obj(vec![("code", s("daemon_error")), ("hint", s(&hint))])
+                    }
+                };
+                put(&mut self.actions[i], "status", s("failed"));
+                self.emit(false, changed)?;
+                let code = match at(&err, "code") {
+                    Some(c) if py::truthy(c) => c.clone(),
+                    _ => s("daemon_error"),
+                };
+                let hint = match at(&err, "hint").filter(|v| py::truthy(v)) {
+                    Some(h) => h.clone(),
+                    None => match at(&err, "code").filter(|v| py::truthy(v)) {
+                        Some(c) => c.clone(),
+                        None => s(""),
+                    },
+                };
+                let mut lines = dumps(&obj(vec![(
+                    "error",
+                    obj(vec![("code", code), ("hint", hint)]),
+                )])) + "\n";
+                // The refusal's closing line, as every refused command ends.
+                if let Some(p @ Value::Object(_)) = at(&resp, "permission") {
+                    match at(p, "command") {
+                        Some(c @ Value::Str(_)) if py::truthy(c) => {
+                            lines.push_str(&format!("Ask with: {}\n", py::str_of(c)));
+                        }
+                        _ if at(p, "requestable") == Some(&Value::Bool(false)) => {
+                            if let Some(h @ Value::Str(_)) = at(p, "hint") {
+                                if py::truthy(h) {
+                                    lines.push_str(&format!("{}\n", py::str_of(h)));
+                                }
+                            }
+                            lines.push_str("It can't be requested.\n");
+                        }
+                        _ => {}
+                    }
+                }
+                let exit = match status {
+                    401 | 403 => Exit::Refused,
+                    404 => Exit::NotFound,
+                    _ => Exit::Error,
+                };
+                return Err(Stop::Fail(lines, exit));
+            }
+            put(&mut self.actions[i], "status", s("done"));
+            changed = true;
+        }
         self.emit(true, changed)
+    }
+
+    /// The assign's own urllib call (the block's step 5): its status (0
+    /// when it raised or its answer was no JSON) and the answer read as
+    /// JSON, or the block's error dict.
+    fn assign(&self, body: &Value) -> (u16, Value) {
+        const ROUTE: &str = "/cli/focus-groups/assign";
+        let req = Request::new(Method::Post, ROUTE, TIMEOUT)
+            .data(dumps(body).into_bytes())
+            .header("Content-Type", "application/json");
+        let req = match self.opener.token() {
+            Some(t) => req.header("Authorization", format!("Bearer {t}")),
+            None => req,
+        };
+        let raised = |why: String| (0, obj(vec![("error", s(&format!("{ROUTE}: {why}")))]));
+        match self.opener.open(&req) {
+            Outcome::Answer {
+                status,
+                body: Ok(b),
+            } => match pyjson::loads(&decode(&b)) {
+                Ok(v) => (status, v),
+                Err(f) => raised(f.message),
+            },
+            Outcome::Answer { body: Err(r), .. } | Outcome::Raised(r) => raised(r.text()),
+            Outcome::HttpError { code, body } => {
+                match body.ok().and_then(|b| pyjson::loads(&decode(&b)).ok()) {
+                    Some(v) => (code, v),
+                    None => (
+                        code,
+                        obj(vec![("error", s(&format!("HTTP {code} on {ROUTE}")))]),
+                    ),
+                }
+            }
+        }
     }
 }
 
@@ -931,6 +1168,15 @@ fn action_line(x: &Action) -> Result<String, Raise> {
             } else {
                 format!("name: {} \u{2192} {}", sv("from"), idx("name")?)
             }
+        }
+        "set-focus-group" => {
+            let mut line = format!("focus-group: {}", idx("group")?);
+            if skipped {
+                if let Some(r) = g("reason").filter(|v| py::truthy(v)) {
+                    line.push_str(&format!("  ({})", py::str_of(r)));
+                }
+            }
+            line
         }
         "join-project" | "leave-project" => {
             let mut line = format!("{step}: {}", idx("project")?);

@@ -171,11 +171,7 @@ fn run_words(args: &[OsString], words: &[&str], note: Option<&str>) -> Option<Ex
         "list" => list::parse(rest).map(|json| Form::List { json }),
         "retire" => retire::parse_retire(rest).map(Form::Retire),
         "restart" => retire::parse_restart(rest).map(Form::Restart),
-        // A line with `--focus-group` (0.46.17) is the shell's still.
-        "set" => match set::parse(rest) {
-            Ok(a) if !a.focus_group.is_empty() => return None,
-            r => r.map(Form::Set),
-        },
+        "set" => set::parse(rest).map(Form::Set),
         "hire" => hire::parse(rest)?.map(|a| Form::Hire(Box::new(a))),
         "context" => Ok(Form::Context(context::parse(rest))),
         "template" | "templates" => match template::parse(rest)? {

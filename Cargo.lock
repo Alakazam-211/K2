@@ -5306,7 +5306,7 @@ dependencies = [
 
 [[package]]
 name = "kessel-audio"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "block2",
  "bytes",

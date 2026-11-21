@@ -1,5 +1,57 @@
 # Changelog
 
+## 0.2.5
+
+Additions only: code written against 0.2.4 builds and behaves unchanged
+(the default mode is 0.2.4's set-up).
+
+### Added
+
+- **A scheduling-mode knob for the processing thread:**
+  `EngineConfig::dsp_sched` (`DspSchedConfig`, set with
+  `EngineConfig::with_dsp_sched`), read once as the thread starts. Its
+  `DspSchedMode` (`#[non_exhaustive]`) is one of:
+  - `Workgroup` (the default): 0.2.4's set-up. The QoS class, the
+    time-constraint policy, and on iOS the audio unit's I/O workgroup while
+    the unit runs.
+  - `TimeConstraintOnly`: the QoS class and
+    `thread_policy_set(THREAD_TIME_CONSTRAINT_POLICY)`, and no workgroup.
+  - `None`: a plain thread, as before 0.2.4 (still woken by the capture
+    callback).
+  - `OwnWorkgroup`: the QoS class and the time-constraint policy, then an
+    audio work interval of the thread's own (`AudioWorkIntervalCreate`,
+    macOS 11 and iOS 14 or later, looked up at run time), joined. Each pass
+    with capture audio is one interval: `os_workgroup_interval_start` with a
+    deadline `DspSchedConfig::interval_deadline` (3 ms by default) after it
+    starts, `os_workgroup_interval_update` for each further block of a
+    backlog, `os_workgroup_interval_finish` after the last.
+
+  `DspSchedConfig::time_constraint` (`DspTimeConstraint`: period,
+  computation, constraint) sets the policy's figures; the default is 0.2.4's
+  10 ms / 6 ms / 9 ms. `AudioEngine::start` refuses figures that can't work
+  (`invalid_config`).
+- **Switching modes without a rebuild:** `DspSchedMode` parses from its
+  `as_str()` names (`"workgroup"`, `"time_constraint_only"`, `"none"`,
+  `"own_workgroup"`). `DspSchedConfig::from_env()` reads
+  `KESSEL_AUDIO_DSP_SCHED` and, in whole microseconds,
+  `KESSEL_AUDIO_DSP_INTERVAL_DEADLINE_US`, `KESSEL_AUDIO_DSP_PERIOD_US`,
+  `KESSEL_AUDIO_DSP_COMPUTATION_US` and `KESSEL_AUDIO_DSP_CONSTRAINT_US`;
+  `DspSchedConfig::from_lookup` reads the same keys from an app's own
+  settings. The engine never reads the environment by itself.
+- **Fallbacks:** in `TimeConstraintOnly` and `OwnWorkgroup`, a set-up step
+  the OS refuses (the time-constraint policy; creating, joining or running
+  the work interval) falls back to `Workgroup`, and says why
+  (`DspSchedFallback`, `#[non_exhaustive]`: `TimeConstraintRefused`,
+  `OwnWorkgroupUnavailable`, `OwnWorkgroupJoinRefused`, `IntervalRefused`).
+  Nothing on the processing thread panics.
+- `Stats::dsp_sched` (`DspSchedStats`, `#[non_exhaustive]`):
+  `mode_requested`, `mode_effective`, `fallback_reason`, `time_constraint`
+  (the figures asked for), `interval_deadline` (`OwnWorkgroup`) and
+  `intervals` (work intervals finished). A change of mode is published at
+  once. Off macOS and iOS, `mode_effective` is `DspSchedMode::Unsupported`
+  and nothing is asked of the OS.
+- `DspScheduling::OwnWorkgroup`: the thread joined its own work interval.
+
 ## 0.2.4
 
 ### Changed

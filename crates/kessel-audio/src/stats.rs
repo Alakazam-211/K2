@@ -1,6 +1,6 @@
 //! Statistics.
 
-use crate::sched::DspScheduling;
+use crate::sched::{DspSchedStats, DspScheduling};
 use crate::stage::CaptureStageStats;
 
 /// Receive statistics for one participant, cumulative since it was added.
@@ -92,4 +92,9 @@ pub struct Stats {
     /// How the OS schedules the processing thread (real-time on macOS and
     /// iOS). The same as in [`CaptureStageStats::dsp_scheduling`].
     pub dsp_scheduling: DspScheduling,
+    /// The processing thread's scheduling set-up: the
+    /// [`crate::DspSchedMode`] asked for ([`crate::EngineConfig::dsp_sched`])
+    /// and the one in effect, why they differ, and the figures asked for.
+    /// A change is published at once.
+    pub dsp_sched: DspSchedStats,
 }

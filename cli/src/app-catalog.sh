@@ -102,8 +102,17 @@ print(json.dumps(out))' >&2
 
 # k2 app install --catalog <entry> [...]
 cmd_app_install_catalog() {
+    # -h/--help anywhere before a bare -- prints the catalog help and sends
+    # nothing, even right after a flag that takes a value (0.46.17: `k2 app
+    # install --catalog x --address --help` installed with --help as the
+    # address). A value flag as the last word is a usage error, exit 2.
+    if _wants_help "$@"; then _app_catalog_usage; return 0; fi
     local entry="" address="" id="" variant="" version="" ws="" dry=0 wait=1 rebind=0 json_out=0 domain=""
     while [ $# -gt 0 ]; do
+        case "$1" in
+            --catalog|--address|--id|--variant|--version|--workspace|--domain)
+                [ $# -ge 2 ] || { echo "usage: $1 needs a value (k2 app catalog --help)" >&2; exit 2; } ;;
+        esac
         case "$1" in
             --catalog) entry="${2:-}"; shift 2 ;;
             --catalog=*) entry="${1#--catalog=}"; shift ;;
@@ -119,7 +128,6 @@ cmd_app_install_catalog() {
             --no-wait) wait=0; shift ;;
             --rebind-meet) rebind=1; shift ;;
             --json) json_out=1; shift ;;
-            -h|--help) _app_catalog_usage; return 0 ;;
             -*) echo "Unknown flag: $1 (k2 app catalog --help)" >&2; exit 2 ;;
             *) [ -z "$id" ] || { echo "usage: k2 app install --catalog <entry> [--id ID] [--address LABEL|auto] (k2 app catalog --help)" >&2; exit 2; }; id="$1"; shift ;;
         esac

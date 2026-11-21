@@ -952,6 +952,18 @@ fn daemon_restart_answers_as_the_shell_does() {
         ),
         (
             case(
+                "restart --host <url> --token: --token as the last word",
+                &["restart", "--host", "http://127.0.0.1:9", "--token"],
+                &[],
+                vec![],
+                user_unit,
+                2,
+                0,
+            ),
+            vec![],
+        ),
+        (
+            case(
                 "restart with a word it doesn't take",
                 &["restart", "--wait", "--bogus"],
                 &[],

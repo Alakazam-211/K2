@@ -499,7 +499,7 @@ pub fn run(s: &Settings, client: &mut Client, v: Life) -> Exit {
             Exit::Usage
         }
         Life::RestartNeeds(flag) => {
-            out::stderr_line(&format!("daemon restart: {flag} needs a value"));
+            out::stderr_line(&format!("Error: {flag} takes a value"));
             Exit::Usage
         }
         Life::Survive(sv) => survive(client, sv),

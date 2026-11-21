@@ -10,9 +10,8 @@
 //! as the shell's `_K2NoRedirect`.
 
 use super::pyurl::Target;
-use crate::transport::proxy::{self, Proxy};
+use crate::transport::proxy::Proxy;
 use crate::transport::urllib::{self, Answered, Outcome, Raised, Request};
-use crate::transport::wire::Failure;
 use std::io::{self, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
@@ -112,111 +111,15 @@ fn url_error(r: Raised) -> Raised {
 }
 
 /// The TCP connection urllib opens for `t`: straight there, or through
-/// `via`'s CONNECT tunnel (the shared path, [`proxy::tunnel_answered`]),
-/// each failure raised as Python's `http.client` raises it.
-fn open_tcp(
-    t: &Target,
-    via: Option<&Proxy>,
-    user_agent: &str,
-    timeout: Duration,
-) -> Result<TcpStream, Raised> {
-    let Some(p) = via else {
-        return urllib::connect(&t.host, t.port, timeout).map_err(url_error);
-    };
-    // curl's CONNECT head names an IPv6 address in brackets.
-    let authority = if t.host.contains(':') {
-        format!("[{}]", t.host)
-    } else {
-        t.host.clone()
-    };
-    let limit = Instant::now() + timeout;
-    let mut refused: Option<Raised> = None;
-    let r = proxy::tunnel_answered(p, &authority, t.port, user_agent, limit, |h, port, _| {
-        urllib::connect(h, port, timeout).map_err(|e| {
-            refused = Some(e);
-            Failure::NotSent(String::new())
-        })
-    });
-    match (r, refused) {
-        (Ok(s), _) => Ok(s),
-        (Err(_), Some(e)) => Err(url_error(e)),
-        (Err((Failure::ConnectTimedOut, _)), None) => Err(url_error(timed_out())),
-        (Err((Failure::Tunnel(why), got)), None) => {
-            Err(tunnel_refused(&got).unwrap_or_else(|| {
-                url_error(Raised {
-                    class: urllib::Class::OsError("OSError"),
-                    kind: urllib::Kind::Other,
-                    reason: why,
-                })
-            }))
-        }
-        (Err((f, _)), None) => Err(url_error(Raised {
-            class: urllib::Class::OsError("OSError"),
-            kind: urllib::Kind::Other,
-            reason: format!("{f:?}"),
-        })),
+/// `via`'s CONNECT tunnel as `http.client` opens it, on the shared path
+/// the urllib families' daemon opener uses ([`urllib::tunnel`]: Python
+/// 3.12's CONNECT head, 200 alone opening it, each failure raised as
+/// `http.client` and urllib raise it).
+fn open_tcp(t: &Target, via: Option<&Proxy>, timeout: Duration) -> Result<TcpStream, Raised> {
+    match via {
+        Some(p) => urllib::tunnel(p, &t.host, t.port, timeout),
+        None => urllib::connect(&t.host, t.port, timeout).map_err(url_error),
     }
-}
-
-fn timed_out() -> Raised {
-    Raised {
-        class: urllib::Class::TimeoutError,
-        kind: urllib::Kind::Timeout,
-        reason: "timed out".to_string(),
-    }
-}
-
-/// What `http.client`'s `_tunnel` raises for the proxy's answer `got`
-/// when the tunnel didn't open: nothing at all is `RemoteDisconnected`
-/// (a `URLError`); a first line that is not `HTTP/...` and a status
-/// in 100..=999 is `BadStatusLine` (out of urlopen); any other status is
-/// `OSError('Tunnel connection failed: <code> <reason>')` (a `URLError`).
-/// `None`: a 200 head cut short (the binary's own words then).
-fn tunnel_refused(got: &[u8]) -> Option<Raised> {
-    if got.is_empty() {
-        return Some(url_error(Raised {
-            class: urllib::Class::RemoteDisconnected,
-            kind: urllib::Kind::Dropped,
-            reason: "Remote end closed connection without response".to_string(),
-        }));
-    }
-    let end = got
-        .iter()
-        .position(|b| *b == b'\n')
-        .map_or(got.len(), |i| i + 1);
-    let line: String = got[..end].iter().map(|b| char::from(*b)).collect();
-    let bad = || Raised {
-        class: urllib::Class::BadStatusLine,
-        kind: urllib::Kind::Other,
-        reason: line.clone(),
-    };
-    let mut words = line.split_ascii_whitespace();
-    let version = words.next().unwrap_or("");
-    let status = words.next().unwrap_or("");
-    let code = status
-        .parse::<u32>()
-        .ok()
-        .filter(|_| version.starts_with("HTTP/"));
-    let Some(code) = code.filter(|c| (100..=999).contains(c)) else {
-        return Some(bad());
-    };
-    if code == 200 {
-        return None;
-    }
-    // `line.split(None, 2)`'s third part, `.strip()`ed.
-    let after = |t: &str| {
-        t.trim_start()
-            .split_once(char::is_whitespace)
-            .map_or("", |(_, rest)| rest)
-            .to_string()
-    };
-    let reason = after(&after(&line));
-    let reason = reason.trim();
-    Some(url_error(Raised {
-        class: urllib::Class::OsError("OSError"),
-        kind: urllib::Kind::Other,
-        reason: format!("Tunnel connection failed: {code} {reason}"),
-    }))
 }
 
 /// One urllib request to `t` (TLS for `https`), through `via` when the
@@ -224,11 +127,10 @@ fn tunnel_refused(got: &[u8]) -> Option<Raised> {
 pub fn over_tcp(
     t: &Target,
     via: Option<&Proxy>,
-    user_agent: &str,
     bytes: &[u8],
     timeout: Duration,
 ) -> Sent {
-    let tcp = match open_tcp(t, via, user_agent, timeout) {
+    let tcp = match open_tcp(t, via, timeout) {
         Ok(s) => s,
         Err(r) => return raised(r),
     };

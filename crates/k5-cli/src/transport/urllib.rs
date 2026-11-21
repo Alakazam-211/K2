@@ -946,8 +946,9 @@ fn start(
 /// `host:port` ([`super::proxy::python::connect_head`]: never the token),
 /// and its answer, on the shared CONNECT path
 /// ([`super::proxy::tunnel_head`]), 200 alone opening it. What fails is
-/// raised as `http.client` and urllib raise it ([`tunnel_raised`]).
-fn tunnel(
+/// raised as `http.client` and urllib raise it ([`tunnel_raised`]). The
+/// daemon's opener and clone's engine share it.
+pub(crate) fn tunnel(
     p: &super::proxy::Proxy,
     host: &str,
     port: u16,
@@ -973,6 +974,7 @@ fn tunnel(
         (Ok(s), _) => Ok(s),
         (Err(_), Some(e)) => Err(Raised::url_error(e)),
         (Err((Failure::ConnectTimedOut, _)), None) => Err(Raised::url_error(timed_out())),
+        (Err((Failure::Tunnel(why), got)), None) => Err(tunnel_raised(&got, &why)),
         (Err((f, got)), None) => Err(tunnel_raised(&got, &format!("{f:?}"))),
     }
 }
@@ -985,7 +987,7 @@ fn tunnel(
 /// connection failed: <code> <reason>')` in a `URLError`. A 200 head cut
 /// short (`got` ending before its blank line) is `why`, the binary's own
 /// words, in a `URLError`.
-pub(crate) fn tunnel_raised(got: &[u8], why: &str) -> Raised {
+fn tunnel_raised(got: &[u8], why: &str) -> Raised {
     let code = match read_status(&mut &got[..]) {
         Ok(code) => code,
         Err(r) if r.class == Class::RemoteDisconnected => return Raised::url_error(r),

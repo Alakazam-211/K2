@@ -3912,10 +3912,10 @@ mod tests {
         }
         assert_eq!(found, Vec::<String>::new());
         // And in remote.rs a reader is called only by `process_env` (curl's
-        // reading, the one place for `routed`, a remote base, and
-        // `python_route`, a Python block's urllib to a host it names) and
-        // `python_proxy_env` (the urllib families' https daemon); and
-        // `process_env` only by `routed` and `python_route`.
+        // reading, for `routed`, a remote base) and `python_proxy_env` (the
+        // shell's Python's reading, for the urllib families' https daemon
+        // and `python_route`, clone's urllib to a host it names); and
+        // `process_env` only by `routed`.
         let remote = std::fs::read_to_string(src.join("transport/remote.rs")).unwrap();
         let curl_reader = "process_env";
         let mut callers = Vec::new();
@@ -3938,7 +3938,7 @@ mod tests {
         callers.dedup();
         users.dedup();
         assert_eq!(callers, [curl_reader, "python_proxy_env"], "remote.rs");
-        assert_eq!(users, ["routed", "python_route"], "remote.rs");
+        assert_eq!(users, ["routed"], "remote.rs");
     }
 
     /// No credential ever follows a redirect: a 3xx is the answer, on the

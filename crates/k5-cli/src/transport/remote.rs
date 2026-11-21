@@ -89,7 +89,7 @@ pub fn routed(host: &str) -> Option<Base> {
 }
 
 /// The process environment, as curl reads it: the one place this module
-/// reads it ([`routed`], [`python_route`]).
+/// reads it so ([`routed`]).
 fn process_env(name: &str) -> Lookup {
     proxy::from_process_env(name)
 }
@@ -105,39 +105,21 @@ pub fn routed_with(host: &str, env: impl Fn(&str) -> Lookup) -> Option<Base> {
     Some(b)
 }
 
-/// The person's proxy for a request a Python block's urllib sends to
-/// `host` (clone's engine), by curl's rules (K2's ruling R4: the shared
-/// CONNECT path; urllib's own reading of the variables is the named
-/// difference python-proxy-rule). `host` is the one urllib connects to,
-/// brackets off, in any case. Python's `k2_direct` first: plain http
-/// and this computer never use a proxy; a name is compared in lower case
-/// and less its trailing dots, as `k2_direct` and every curl read it, so
-/// the cases [`proxy::decide`] leaves to the shell for curl's own sake
-/// don't arise. An IPv6 address that is not `::1` takes the proxy unless
-/// `no_proxy` is `*`; any other `no_proxy` with one is [`Route::Shell`].
-/// [`Route::Shell`]: a setting the binary doesn't read (a proxy URL that
-/// is not `http://`, a variable that is not UTF-8, a blank-separated
-/// `no_proxy`).
-pub fn python_route(host: &str, https: bool) -> Route {
-    let h = host.trim_end_matches('.').to_ascii_lowercase();
-    let Ok(v6) = h.parse::<std::net::Ipv6Addr>() else {
-        return proxy::decide(&h, https, process_env);
-    };
-    if !https || v6.is_loopback() {
+/// The person's proxy for a request a Python block's urllib sends to a
+/// host it names (clone's engine), read as the shell's Python reads it
+/// (K2's ruling: one proxy rule for every urllib-style family, which
+/// supersedes R4's curl rules for clone): plain http never uses a proxy;
+/// then `k2_direct` on `host` (the one urllib connects to, brackets off,
+/// in any case) and urllib's reading of the variables and `no_proxy` for
+/// `netloc` (urllib's `req.host`: the URL's host and port as written,
+/// decoded), as [`python_daemon_route`]. [`Route::Shell`]: a setting the
+/// binary doesn't read as Python does (a proxy URL of another scheme, a
+/// variable that is not UTF-8).
+pub fn python_route(host: &str, netloc: &str, https: bool) -> Route {
+    if !https {
         return Route::Direct;
     }
-    let env = process_env;
-    let raw = match proxy::proxy_setting(true, &env) {
-        Ok(Some(raw)) => raw,
-        Ok(None) => return Route::Direct,
-        Err(_) => return Route::Shell,
-    };
-    match proxy::no_proxy_setting(&env) {
-        Ok(None) => {}
-        Ok(Some(list)) if list == "*" => return Route::Direct,
-        _ => return Route::Shell,
-    }
-    proxy::parse_proxy(&raw).map_or(Route::Shell, Route::Via)
+    python_daemon_route(host, netloc, &python_proxy_env())
 }
 
 /// The variables the shell's embedded Python reads its proxy from, as

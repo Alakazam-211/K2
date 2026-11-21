@@ -285,20 +285,28 @@ pub fn unsendable(base: &str) -> Stop {
     )
 }
 
-/// The person's proxy for a request to `t` (K2's ruling R4: the shared
-/// CONNECT path, curl's rules), or the refusal for a proxy setting the
-/// binary doesn't read (nothing sent).
+/// The person's proxy for a request to `t`, read as the shell's Python
+/// reads it (K2's ruling: one proxy rule for every urllib-style family),
+/// or the refusal for a proxy setting the binary doesn't read (nothing
+/// sent).
 pub fn route_of(t: &pyurl::Target, base: &str) -> E<Option<crate::transport::proxy::Proxy>> {
     use crate::transport::proxy::Route;
-    match crate::transport::remote::python_route(&t.host, t.tls) {
+    match crate::transport::remote::python_route(&t.host, &t.host_header, t.tls) {
         Route::Direct => Ok(None),
         Route::Via(p) => Ok(Some(p)),
+        // A proxy URL of another scheme is named (the Steward's line, the
+        // named difference python-proxy-other-scheme).
         Route::Shell => Err(Stop::fail(
             "usage",
-            format!(
-                "{} won't send to {base}: a proxy setting it doesn't read (an http:// proxy only)",
-                cli_name!()
-            ),
+            crate::transport::proxy::python::unsupported_reason(
+                &crate::transport::remote::python_proxy_env(),
+            )
+            .unwrap_or_else(|| {
+                format!(
+                    "{} won't send to {base}: a proxy setting it doesn't read (an http:// proxy only)",
+                    cli_name!()
+                )
+            }),
             2,
         )),
     }
@@ -408,7 +416,7 @@ impl Engine {
             }
             Which::Remote => urllib::encode_plain(&t.host_header, &req),
         };
-        let sent = net::over_tcp(&t, via.as_ref(), &self.opener.user_agent, &bytes, timeout_d);
+        let sent = net::over_tcp(&t, via.as_ref(), &bytes, timeout_d);
         net::wipe(&mut req);
         net::wipe_bytes(&mut bytes);
         let a = match sent {

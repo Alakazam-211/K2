@@ -731,3 +731,18 @@ fn python_other_scheme_line() {
         None
     );
 }
+
+/// `http.client` names an IPv6 target in brackets on the CONNECT line
+/// and bare in `Host` (Python 3.12's `_wrap_ipv6` and `set_tunnel`).
+#[test]
+fn python_connect_head_for_an_ipv6_target() {
+    let p = Proxy {
+        host: "proxy.example".into(),
+        port: 3128,
+        auth: None,
+    };
+    assert_eq!(
+        python::connect_head(&p, "fd00::5", 4100),
+        b"CONNECT [fd00::5]:4100 HTTP/1.1\r\nHost: fd00::5:4100\r\n\r\n"
+    );
+}

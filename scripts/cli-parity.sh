@@ -210,11 +210,10 @@ EXPECTED_DIFFS=(
     "picker-env-size|K2 ruling, K5 lane small6 (connect login)|\`connect login\` with a subdomain list above what one environment variable may hold (128 KiB on Linux; about 1 MiB for the whole environment on macOS): bash's picker gets the list (tunnel tokens taken out) in SUBS_JSON and can't start, \"<path>: line <n>: <python3>: Argument list too long\" on stderr, nothing on stdout, exit 1, after the list request and before anything is asked of the daemon. The binary reads the list itself, picks, claims, binds and starts: \"✓ live at <url>\", exit 0"
     "nul-in-stdin-text|K2 ruling, as nul-in-answer (the K5 lane misc3)|a NUL byte in the text \`hostmail ooo set <addr> --text -\` or \`hostmail footer set --text -\` reads on stdin: bash's text=\$(_hostmail_read_text -) drops it and, from bash 4.4 on, writes one line on stderr, \"<path to cli/k2>: line <n>: warning: command substitution: ignored null byte in input\", so bash sends the text without it; the binary keeps the text as read and sends each NUL in place as JSON's \\u0000, never cutting the text there. stdout and the exit code are the same, and each sends one request"
     "python-proxy-other-scheme|K2 ruling, K5 urllib families through the proxy (the Steward's line)|a daemon at K2_HOST=https://<name> with the person's https_proxy set to a URL of another scheme (socks5://, https://; the check: \`db status\`, socks5:// at a stand-in proxy that answers every CONNECT 407): bash's Python (urllib's ProxyHandler) sends a plain HTTP CONNECT to that host whatever the scheme; the binary sends nothing, prints \"Error: proxy socks5://… is not supported: only http:// proxies are\" as its first stderr line (the scheme only: the URL may hold the proxy's password) and exits non-zero (crates/k5-cli/tests/urllib_proxy_parity.rs, a_proxy_with_another_scheme_is_named)"
-    "python-connect-host|K2 ruling, K5 urllib families through the proxy|the CONNECT head a urllib family sends to the person's http:// proxy for a daemon at K2_HOST=https://<name> (the check: \`db status\` at a stand-in proxy that answers every CONNECT 407): the binary writes Python 3.12's, \"CONNECT <name>:<port> HTTP/1.1\", a Proxy-Authorization line when the proxy URL has a user and a password, then \"Host: <name>:<port>\"; Python 3.11 and older send no Host line. On Python 3.12 and later the two heads are the same byte for byte (proven there); the difference holds on an older python3 only"
+    "python-connect-host|K2 ruling, K5 urllib families and clone through the proxy|the CONNECT head a Python block sends to the person's http:// proxy (the urllib families' daemon at K2_HOST=https://<name>, clone's remote; the check: \`db status\` at a stand-in proxy that answers every CONNECT 407): the binary always writes Python 3.12's, \"CONNECT <host>:<port> HTTP/1.1\", a Proxy-Authorization line when the proxy URL has a user and a password, then \"Host: <host>:<port>\"; Python 3.9 to 3.11 (macOS's python3 is 3.9) write \"CONNECT <host>:<port> HTTP/1.0\", the same Proxy-Authorization line, and no Host line. On Python 3.12 and later the two heads are the same byte for byte. The parity rows check bash's head exactly in its own version's form and compare the rest byte for byte (crates/k5-cli/tests/common/tunnel.rs, bash_heads_as_312; urllib_proxy_parity.rs, plain_http_daemon_parity.rs's preset_list_over_tls_through_the_proxy, clone_engine_parity.rs's proxy rows)"
     "nul-in-answer|K2 ruling at the 0.46.15 rebase|a NUL byte in the daemon's answer to \`feedback list\` or \`feedback show <id>\`: bash's resp=\$(cli_request ...) drops it and, from bash 4.4 on, writes one line on stderr, \"<path to cli/k2>: line <n>: warning: command substitution: ignored null byte in input\"; the binary drops it silently. stdout, the exit code and the requests are the same (bash 3.2 writes no warning, so there the two are exact)"
     "passport-heal-once|K2 ruling, the doc lane's follow-ups|a doc call that sends a whole file or a tool call (_doc_xfer: \`doc cat\`, \`append\`, \`write\`, \`show --version\`, \`export\`) whose passport the daemon's auth gate refuses (403 and exactly {\"error\":\"Invalid or missing auth token\"}, sent before any handler runs, so nothing was done), in a session whose passport was minted again: bash's _doc_xfer never tries the new passport and the command ends on the refusal (exit 3); the binary sends the same call once more with the new passport and answers it (cli_send_json's one heal, which bash's other doc calls already make). An answer a handler gave that holds those words (a document's text, a conflict) is never sent again by either: one request, the same output"
     "doc-mktemp-wording|K2 ruling, the doc lane's follow-ups|a doc verb that needs a temp folder (_doc_tmp) where TMPDIR can't hold one: the binary words mktemp's line as GNU mktemp does in the C locale (\"mktemp: failed to create directory via template '<TMPDIR>/k2doc.XXXXXX': No such file or directory\"; GNU's in a UTF-8 locale quotes the template with curly quotes); macOS's mktemp words it its own way (\"mktemp: mkdtemp failed on <TMPDIR>/k2doc.XXXXXX: No such file or directory\"; a newer macOS names the folder it tried, the six X filled in). The two lines after it (\"Error: can't make a temp folder\" and the tmp error's JSON), the exit (2) and stdout (nothing) are the same, and neither sends anything. The same holds for \`app exec\` with stdin on a pipe (k2-exec-XXXXXX) and \`hostchat open\` (k2-hostchat-open.XXXXXX) where TMPDIR can't hold the folder: on a newer macOS mktemp's line names the folder it tried, which the binary can't know, so the parity rows (Compare::MktempTried) take mktemp's line as the same when only that random name differs: the same folder and stem before it, one or more of [A-Za-z0-9.] in its place, the same reason after it, the same exit, and every other line byte for byte"
-    "python-proxy-rule|K2 ruling R4, the clone engine's port|the person's proxy for a clone request to an https server that isn't this computer (the check: \`clone preview ws1 --host https://cp.example.invalid --token-stdin\` with only ALL_PROXY set): the shell's Python urllib reads https_proxy and HTTPS_PROXY only (never ALL_PROXY), its own no_proxy rule, opens a tunnel only on a 200 and writes its own CONNECT head, so it goes straight there; the binary takes the shared CONNECT path with curl's rules (all_proxy and ALL_PROXY too, curl's no_proxy, any 2xx, curl's head) and sends one CONNECT. Either way the token rides inside the tunnel only, never to the proxy"
     "clone-url-not-printable|K2 ruling R10, the clone engine's port|a clone server URL with a byte outside printable ASCII anywhere in it, a blank too (the remote URL as typed, or this server's address from K2_HOST): the binary sends nothing and prints one usage line on stderr, exit 2, stdout empty: {\"error\": \"usage\", \"hint\": \"<url> isn't an address k2 sends to itself\"} (json.dumps, so the check's é is \\u00e9). The check: \`clone preview ws1 --host 'http://127.0.0.1:<port>/#café' --token-stdin --json\`; the shell's Python tries it: urllib drops the fragment and sends its POST / to <port> (the check's listener answers 403, so bash prints {\"error\": \"error\", \"hint\": \"recorded\"}, exit 3)"
     "clone-url-empty-host|K2 ruling R10, the clone engine's port|a clone server URL with an empty host before a port (the check: \`clone preview ws1 --host https://:<port> --token-stdin --json\`): the binary sends nothing and prints one usage line on stderr, exit 2, stdout empty: {\"error\": \"usage\", \"hint\": \"https://:<port> isn't an address k2 sends to itself\"}. The shell's Python tries the empty name: where the resolver makes it this computer (macOS) it connects to <port> and then raises at the TLS step (a traceback ending \"ValueError: check_hostname requires server_hostname\", exit 1); where the lookup fails, {\"error\": \"daemon_unreachable\", \"hint\": \"remote server https://:<port>: ...\"}, exit 3"
     "clone-url-port-range|K2 ruling R10, the clone engine's port|a clone server URL whose port Python's int() reads but no socket takes, above 65535 or below 0 (the check: \`clone preview ws1 --host http://127.0.0.1:<65536 + port> --token-stdin --json\`): the binary sends nothing and prints one usage line on stderr, exit 2, stdout empty: {\"error\": \"usage\", \"hint\": \"http://127.0.0.1:<n> isn't an address k2 sends to itself\"}. On the shell's side this is a BASH BUG, reported to K2 and the Steward, not a behaviour to keep: clone.sh checks no port range and its Python (urllib, http.client) hands the port to the C library's getaddrinfo as it is; glibc cuts it to 16 bits, so on Linux bash sends its POST and the remote token (Authorization: Bearer) to <n> - 65536, which may be another service (here the check's listener, which answers 403, so bash prints {\"error\": \"error\", \"hint\": \"recorded\"}, exit 3); macOS's resolver refuses the port, {\"error\": \"daemon_unreachable\", \"hint\": \"remote server http://127.0.0.1:<n>: ...\"}, exit 3. The check proves the bug where it happens, so the bash fix flips it"
@@ -1648,71 +1647,6 @@ check_picker_env_size() {
     return 1
 }
 
-# check_python_proxy_rule: with only ALL_PROXY set, bash's clone engine
-# (Python urllib) sends no CONNECT and the binary sends one, never with the
-# token in it.
-check_python_proxy_rule() {
-    local d="$WORK/pyproxy" side tmp pid port problems=()
-    mkdir -p "$d/home/.k2" "$d/ws"
-    printf 'owner-tok-parity\n' >"$d/home/.k2/heartbeat.token"
-    printf '1\n' >"$d/home/.k2/heartbeat.port"
-    : >"$d/heads"
-    python3 -I - "$d" <<'PY' &
-import os, socket, sys
-d = sys.argv[1]
-s = socket.socket()
-s.bind(("127.0.0.1", 0))
-s.listen(8)
-with open(os.path.join(d, "port.tmp"), "w") as f:
-    f.write(str(s.getsockname()[1]))
-os.rename(os.path.join(d, "port.tmp"), os.path.join(d, "port"))
-while True:
-    c, _ = s.accept()
-    c.settimeout(10)
-    head = b""
-    try:
-        while b"\r\n\r\n" not in head:
-            more = c.recv(4096)
-            if not more:
-                break
-            head += more
-    except OSError:
-        pass
-    with open(os.path.join(d, "heads"), "ab") as f:
-        f.write(head.replace(b"\r\n", b" | ") + b"\n")
-    try:
-        c.sendall(b"HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-    except OSError:
-        pass
-    c.close()
-PY
-    pid=$!
-    for _ in $(seq 1 50); do [ -s "$d/port" ] && break; sleep 0.1; done
-    [ -s "$d/port" ] || { kill "$pid" 2>/dev/null; echo "the recording proxy didn't start"; return 1; }
-    port="$(cat "$d/port")"
-    for side in bash binary; do
-        : >"$d/heads"
-        tmp="$(mktemp -d "$d/tmp.XXXXXX")"
-        if [ "$side" = bash ]; then set -- bash "$ROOT/cli/k2"; else set -- "$WORK/bin/k5"; fi
-        (cd "$d/ws" && printf 'tok-pyproxy-parity\n' | exec env -i PATH="$PATH" HOME="$d/home" TMPDIR="$tmp" \
-            ALL_PROXY="http://127.0.0.1:$port" "$@" clone preview ws1 --host https://cp.example.invalid --token-stdin --json) \
-            >"$d/out.$side" 2>"$d/err.$side" || true
-        sleep 0.2
-        cp "$d/heads" "$d/heads.$side"
-    done
-    kill "$pid" 2>/dev/null || true
-    wait "$pid" 2>/dev/null || true
-    [ ! -s "$d/heads.bash" ] || problems+=("bash's Python used ALL_PROXY: $(head -c 300 "$d/heads.bash")")
-    [ "$(wc -l <"$d/heads.binary" | tr -d ' ')" = 1 ] || problems+=("want one CONNECT from the binary, got: $(head -c 300 "$d/heads.binary")")
-    grep -q '^CONNECT cp.example.invalid:443 HTTP/1.1 ' "$d/heads.binary" || problems+=("the binary's is not a CONNECT for cp.example.invalid:443: $(head -c 300 "$d/heads.binary")")
-    ! grep -q 'tok-pyproxy-parity' "$d/heads.bash" "$d/heads.binary" || problems+=("the token reached the proxy")
-    grep -q '"daemon_unreachable"' "$d/err.bash" || problems+=("bash didn't go straight there: $(head -c 300 "$d/err.bash")")
-    grep -q 'Tunnel connection failed: 407' "$d/err.binary" || problems+=("the binary's refused tunnel isn't its line: $(head -c 300 "$d/err.binary")")
-    [ ${#problems[@]} -eq 0 ] && return 0
-    printf '%s\n' "${problems[@]}"
-    return 1
-}
-
 # The clone engine's R10 refusals (clone-url-not-printable,
 # clone-url-empty-host, clone-url-port-range, clone-proxy-unread): each
 # check starts one recording listener, then runs `clone preview ws1 --host
@@ -1966,7 +1900,8 @@ check_python_proxy_other_scheme() {
 # check_python_connect_host: the same stand-in at https_proxy=http://…;
 # each side's one CONNECT head, as the proxy got it. The binary's is
 # Python 3.12's exactly; bash's is that one on python3 3.12 and later
-# (NOT PROVEN here: the same), and that one less its Host line before.
+# (NOT PROVEN here: the same), and on 3.9 to 3.11 HTTP/1.0 with no Host
+# line.
 check_python_connect_host() {
     local d="$WORK/pxhost" side rc problems=() want v
     want='CONNECT cp.example.invalid:4711 HTTP/1.1\r\nHost: cp.example.invalid:4711\r\n\r\n'
@@ -1983,10 +1918,10 @@ check_python_connect_host() {
     v="$(python3 -I -c 'import sys; print(sys.version_info >= (3, 12))')"
     if [ "$v" = True ]; then
         [ "$(cat "$d/log.bash")" = "$want" ] || problems+=("bash's CONNECT on python3 3.12+: $(cat "$d/log.bash")")
-        [ ${#problems[@]} -eq 0 ] && { echo "python3 $(python3 -I -c 'import platform; print(platform.python_version())') sends the binary's head byte for byte; the difference is on python3 3.11 and older"; return 3; }
+        [ ${#problems[@]} -eq 0 ] && { echo "python3 $(python3 -I -c 'import platform; print(platform.python_version())') sends the binary's head byte for byte; the difference is on python3 3.9 to 3.11"; return 3; }
     else
-        [ "$(cat "$d/log.bash")" = 'CONNECT cp.example.invalid:4711 HTTP/1.1\r\n\r\n' ] \
-            || problems+=("bash's CONNECT on an older python3: $(cat "$d/log.bash")")
+        [ "$(cat "$d/log.bash")" = 'CONNECT cp.example.invalid:4711 HTTP/1.0\r\n\r\n' ] \
+            || problems+=("bash's CONNECT on python3 3.9 to 3.11: $(cat "$d/log.bash")")
         [ ${#problems[@]} -eq 0 ] && return 0
     fi
     printf '%s\n' "${problems[@]}"

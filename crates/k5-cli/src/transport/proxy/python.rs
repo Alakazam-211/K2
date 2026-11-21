@@ -277,6 +277,12 @@ pub fn unsupported_line(env: &Env) -> Option<String> {
     ))
 }
 
+/// [`unsupported_line`] less its `Error: `, for a family that words its
+/// own refusals (clone's engine).
+pub fn unsupported_reason(env: &Env) -> Option<String> {
+    unsupported_line(env).map(|l| l.trim_start_matches("Error: ").to_string())
+}
+
 /// The route for an https request to the daemon whose URL's `host:port`
 /// is `netloc` (`k2_direct` already said it is another machine).
 pub fn decide(netloc: &str, env: &Env) -> Route {
@@ -306,13 +312,19 @@ pub fn direct(host: &str) -> bool {
             .is_ok_and(|ip| ip.is_loopback())
 }
 
-/// `http.client`'s CONNECT head for `host:port` through `p`.
+/// `http.client`'s CONNECT head for `host:port` through `p` (`host`
+/// with no brackets): an IPv6 address in brackets on the CONNECT line
+/// (`_wrap_ipv6`) and bare in `Host`, as Python 3.12 writes them.
 pub fn connect_head(p: &Proxy, host: &str, port: u16) -> Vec<u8> {
-    let authority = format!("{host}:{port}");
-    let mut h = format!("CONNECT {authority} HTTP/1.1\r\n");
+    let line_host = if host.contains(':') {
+        format!("[{host}]")
+    } else {
+        host.to_string()
+    };
+    let mut h = format!("CONNECT {line_host}:{port} HTTP/1.1\r\n");
     if let Some(c) = &p.auth {
         h.push_str(&format!("Proxy-Authorization: {}\r\n", c.basic()));
     }
-    h.push_str(&format!("Host: {authority}\r\n\r\n"));
+    h.push_str(&format!("Host: {host}:{port}\r\n\r\n"));
     h.into_bytes()
 }

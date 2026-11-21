@@ -21,9 +21,12 @@
 //! certificate a throwaway CA's, trusted by `SSL_CERT_FILE` on both
 //! sides), the remote's name [`tunnel::HOST`] (never resolves) and this
 //! server's `localhost`; the person's proxy is a recording CONNECT proxy
-//! that tunnels to the front (or refuses). Python's CONNECT head is not
-//! curl's (K2's ruling R4, the named difference python-proxy-rule), so
-//! the heads are counted and read for secrets, not compared. A bite runs
+//! that tunnels to the front (or refuses). Both sides read the proxy as
+//! the shell's Python does and write `http.client`'s CONNECT head (K2's
+//! ruling: one proxy rule for every urllib-style family), so the heads
+//! are compared byte for byte (bash's as Python 3.12 writes them: the
+//! named difference python-connect-host), besides counted and read for
+//! secrets. A bite runs
 //! the rows against a stand-in binary (`CLONE_RIG_BIN`).
 
 #![cfg(unix)]
@@ -410,7 +413,8 @@ impl CRig {
                 .map(|r| self.normalise(side, r, c.name))
                 .collect(),
             tmp,
-            proxy,
+            // Each side's own TLS front's port, masked as in its output.
+            proxy: proxy.iter().map(|h| self.mask(side, h)).collect(),
         }
     }
 
@@ -485,6 +489,13 @@ impl CRig {
                     want.remote.join("\n----\n"),
                 ),
                 ("clone-tmp", got.tmp.join("\n"), want.tmp.join("\n")),
+                // http.client's CONNECT on both sides (K2's ruling: one
+                // proxy rule), bash's as Python 3.12 writes it.
+                (
+                    "CONNECT heads",
+                    got.proxy.join("\n----\n"),
+                    tunnel::bash_heads_as_312(c.name, &want.proxy).join("\n----\n"),
+                ),
             ];
             for (what, g, w) in fields {
                 assert!(
@@ -1195,10 +1206,9 @@ fn the_stops_before_anything_is_sent() {
 
 const PROPOSALS_TLS: &str = r#"{"proposals":[{"id":"cp-79","status":"open","summary":"clone ws1 to a host","proposedBy":"agent:kessel","target":"{tls_remote}","workspacePath":"/w/ws1","options":{}}]}"#;
 
-/// The person's proxy carries a remote `https://` server (K2's ruling R4:
-/// the shared CONNECT path). Python's CONNECT head is not curl's (the
-/// named difference python-proxy-rule): each side's heads are counted and
-/// read for secrets, not compared.
+/// The person's proxy carries a remote `https://` server, read as the
+/// shell's Python reads it, on the shared CONNECT path: each side's heads
+/// are compared byte for byte, counted, and read for secrets.
 #[test]
 fn clone_through_the_persons_proxy() {
     let rig = CRig::new();

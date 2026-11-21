@@ -170,6 +170,7 @@ fn words_raw(spec: &ActionSpec, ctx: &Ctx) -> Words {
         .or_else(|| super::actions::compute::with_computed(spec.id, ctx))
         .or_else(|| super::actions::vault_incoming::with_computed(spec.id, ctx))
         .or_else(|| super::actions::vault_send::with_computed(spec.id, ctx))
+        .or_else(|| super::actions::vault_accept_from::with_computed(spec.id, ctx))
         .or_else(|| super::actions::vault_grant_server::with_computed(spec.id, ctx))
         .or_else(|| super::actions::permission_approvers::with_computed(spec.id, ctx))
         .or_else(|| super::actions::postal::with_computed(spec.id, ctx))

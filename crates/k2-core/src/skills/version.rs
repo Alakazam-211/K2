@@ -392,7 +392,9 @@ pub const SKILL_VERSION_WORKSPACE: u32 = 65;
 /// v21 = 0.46.17: "Focus groups" (`focus-groups.create`, `.rename`, `.assign`).
 /// v22 = 0.46.17: "Another workspace's database" (`db.read`: `k2 db browse`,
 /// `k2 db request-read`).
-pub const SKILL_VERSION_PERMISSIONS: u32 = 22;
+/// v23 = 0.46.17: `--assign` (the same flag as `--to`) and "Agents that
+/// take your secrets without a card" (`vault.accept-from`).
+pub const SKILL_VERSION_PERMISSIONS: u32 = 23;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

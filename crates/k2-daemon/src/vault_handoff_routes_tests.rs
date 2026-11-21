@@ -237,6 +237,45 @@ fn same_server_send_pends_then_lands_with_accept_from_and_rotates_on_resend() {
     });
 }
 
+/// 0.46.17 (field report): on this server, a receiver whose accept-from
+/// list names the sender has said yes to its secrets, so a vault send needs
+/// no connection: it lands under accept-from. Without accept-from the
+/// connection check stands, as before. `k2 vault sent` says where each
+/// delivery stands.
+#[test]
+fn accept_from_is_consent_to_receive_without_a_connection() {
+    with_temp_home(|| {
+        let _db = k2_core::db::scoped_for_test();
+        let v = crate::vault::ensure_test_vault();
+        let (sales, ops, other) = (workspace("sales"), workspace("ops"), workspace("other"));
+        let me = Actor::Agent(AgentActor { workspace_id: sales.id.clone(), session_id: None, shell: false, vault_manage: false });
+        let secret = sentinel();
+        put(&v, &sales, "KEY", &secret, &me);
+
+        // No connection, no accept-from: not_connected, as today.
+        let (st, j, _) = call(&v, SEND, &agent(&sales), json!({ "name": "KEY", "to": ops.name }));
+        assert_eq!((st, code(&j)), (403, "not_connected"));
+        assert!(v.meta(&Selector::user(Scope::workspace(&ops.id), "KEY"), &Actor::Owner).is_err(), "nothing landed");
+
+        // ops accepts from sales (a person): no connection needed now.
+        let (st, _, raw) = call(&v, ACCEPT_FROM, &owner(), json!({ "workspace": ops.id, "sender": sales.name, "action": "add" }));
+        assert_eq!(st, 200, "{raw}");
+        let (st, j, raw) = call(&v, SEND, &agent(&sales), json!({ "name": "KEY", "to": ops.name }));
+        assert_eq!(st, 200, "{raw}");
+        assert_eq!(j["status"], "landed", "{raw}");
+        assert_eq!(value_of(&v, &ops, "KEY"), secret.as_bytes(), "it landed in ops's vault");
+        // Still only to that receiver: another unconnected one is refused.
+        let (st, j, _) = call(&v, SEND, &agent(&sales), json!({ "name": "KEY", "to": other.name }));
+        assert_eq!((st, code(&j)), (403, "not_connected"));
+        // The sender sees each delivery's state.
+        let (_, sent, raw) = call_p(&v, SENT, &agent(&sales), Value::Null, HashMap::new());
+        let items = sent["items"].as_array().expect("items");
+        assert_eq!(items.len(), 1, "{raw}");
+        assert_eq!(items[0]["status"], "landed", "{raw}");
+        assert!(!raw.contains(&secret));
+    });
+}
+
 #[test]
 fn local_gate_and_never_sendable_refusals() {
     with_temp_home(|| {

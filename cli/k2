@@ -104544,7 +104544,7 @@ Run it as printed. The owner or an admin allows it and confirms it's them, and t
 
 ## A secret another agent sent you
 
-When another agent sends you a secret (`k2 vault send NAME --to <you>`) and it waits for a person, K2 puts a card on your Thread itself: the person taps Allow to accept it or Deny to decline it, on the desktop or the phone. Don't run `k2 vault incoming accept` (it's a person's), and don't ask when the card is there (`k2 vault incoming` says where it is). No card for one (it couldn't go up)? `k2 vault incoming` puts it up, or ask:
+When another agent sends you a secret (`k2 vault send NAME --to <you>`) and it waits for a person, K2 puts a card on your Thread itself: the person taps Allow to accept it or Deny to decline it, on the desktop or the phone. Don't run `k2 vault incoming accept` (it's a person's), and don't ask when the card is there (`k2 vault incoming` says where it is). To let agents on this server take one agent's secrets without a person accepting each, ask once for all of them: `k2 permission request vault.accept-from sender=<agent> receivers=<agent>[,<agent>…] --why "<what you need it for>"` (one card names every receiver; an owner or admin allows it; it lets them receive, never send; `--assign <login>` asks one person). No card for one (it couldn't go up)? `k2 vault incoming` puts it up, or ask:
 
     k2 permission request vault.incoming.accept id=<hd_… id> --why "<what you need it for>"
 

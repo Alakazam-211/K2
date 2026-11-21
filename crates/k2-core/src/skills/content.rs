@@ -1381,7 +1381,7 @@ A hold (exit 2) already made a request the approvers can see in Settings. Asking
 - `k2 permission request <action> [key=value ...] --why "<one line, at most 200 characters>"`
 - Lists are comma-separated: `rooms=a,b`. Over 200 characters is an error. No secrets in `--why`.
 - `--dry-run` shows the card and who will see it, and sends nothing.
-- `--to <login>[,<login>…]` asks only those people: each an owner or admin who may answer it (the dry run lists them), or `owner` (this server's own login). Use it when your human says who to ask, or that someone must not be contacted. An unknown name, or one who can't answer it, is refused and nothing is sent. Without `--to`: the owner's list (Settings → Access → Permission Cards → Who agents ask), else everyone who may answer.
+- `--to <login>[,<login>…]` (or `--assign`, the same flag) asks only those people: each an owner or admin who may answer it (the dry run lists them), or `owner` (this server's own login). Use it when your human says who to ask, or that someone must not be contacted. An unknown name, or one who can't answer it, is refused and nothing is sent. Without `--to`: the owner's list (Settings → Access → Permission Cards → Who agents ask), else everyone who may answer.
 - It returns at once with an id. Keep working; don't loop on status.
 
 ## What people see
@@ -1400,7 +1400,7 @@ Run it as printed. The owner or an admin allows it and confirms it's them, and t
 
 ## A secret another agent sent you
 
-When another agent sends you a secret (`k2 vault send NAME --to <you>`) and it waits for a person, K2 puts a card on your Thread itself: the person taps Allow to accept it or Deny to decline it, on the desktop or the phone. Don't run `k2 vault incoming accept` (it's a person's), and don't ask when the card is there (`k2 vault incoming` says where it is). No card for one (it couldn't go up)? `k2 vault incoming` puts it up, or ask:
+When another agent sends you a secret (`k2 vault send NAME --to <you>`) and it waits for a person, K2 puts a card on your Thread itself: the person taps Allow to accept it or Deny to decline it, on the desktop or the phone. Don't run `k2 vault incoming accept` (it's a person's), and don't ask when the card is there (`k2 vault incoming` says where it is). To let agents on this server take one agent's secrets without a person accepting each, ask once for all of them: `k2 permission request vault.accept-from sender=<agent> receivers=<agent>[,<agent>…] --why "<what you need it for>"` (one card names every receiver; an owner or admin allows it; it lets them receive, never send; `--assign <login>` asks one person). No card for one (it couldn't go up)? `k2 vault incoming` puts it up, or ask:
 
     k2 permission request vault.incoming.accept id=<hd_… id> --why "<what you need it for>"
 

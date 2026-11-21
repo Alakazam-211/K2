@@ -829,6 +829,12 @@ print(v.get("honest"), file=sys.stderr)'
                 add|remove)
                     local sender="${pos[1]:-}"
                     [ -n "$sender" ] && [ -n "$workspace" ] || { echo "usage: k2 vault accept-from $verb <sender> --workspace <ws>" >&2; exit 2; }
+                    # 0.46.17: an agent asks a person on one card instead.
+                    if [ "$verb" = add ] && _envn_any HOOK_SOCK HOOK_TOKEN; then
+                        echo "handoff_person_only: a person decides who an agent takes secrets from without a card." >&2
+                        echo "Ask with: k2 permission request vault.accept-from sender=$sender receivers=$workspace --why \"<what you need it for>\" (several receivers: receivers=a,b; one person: --assign <login>)" >&2
+                        exit 3
+                    fi
                     _vault_person_guard
                     _vault_sock_call POST "accept-from" "$(python3 -c 'import json,sys; print(json.dumps({"workspace": sys.argv[1], "sender": sys.argv[2], "action": sys.argv[3]}))' "$workspace" "$sender" "$verb")"
                     [ "$_SC_STATUS" = "200" ] || _vault_handoff_fail "$_SC_STATUS" "$_SC_BODY"

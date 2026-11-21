@@ -399,7 +399,12 @@ fn send_local(vault: &Arc<LocalVault>, c: &VaultCaller, token: &str, prep: Prepa
         return Err(VaultError::bad_request("same_workspace", "that's the workspace the secret is already in").into());
     }
     let target_label = crate::vault::workspace_label(&target_id);
-    if let Some(caller_ws) = c.workspace_id() {
+    // 0.46.17: a receiver whose accept-from list names the sender has said
+    // yes to its secrets: that is consent enough to receive, so a vault
+    // send skips the connection check (only this; `k2 msg` still needs
+    // one). It lands under accept-from.
+    let accepts = vault.accepts_from(&target_id, &local_sender_keys(&sender_ws));
+    if let Some(caller_ws) = c.workspace_id().filter(|_| !accepts) {
         // The local message gate (workspace_relations), same as `k2 msg`.
         if let Err(e) = crate::comms::require_local_peer(caller_ws, &target_id, &target_label) {
             return Err(VaultError::forbidden("not_connected", e.hint().to_string()).into());
@@ -408,7 +413,7 @@ fn send_local(vault: &Arc<LocalVault>, c: &VaultCaller, token: &str, prep: Prepa
     let sender_label = crate::vault::workspace_label(&sender_ws);
     let stamp = c.actor.stamp();
     let replied = reply_matches(vault, &target_id, reply_to.as_deref(), &sender_label, &item.name);
-    let auto = vault.accepts_from(&target_id, &local_sender_keys(&sender_ws)) || replied;
+    let auto = accepts || replied;
     let delivery_id = handoff::new_delivery_id();
     let name = item.name.clone();
     let landed_name = item.landed_name().to_string();

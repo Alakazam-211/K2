@@ -92,6 +92,13 @@ fn review_answers_as_the_shell_does() {
         stop("reject: no word (shift fails)", &["reject"], 1),
         stop("reject: an empty agent", &["reject", ""], 1),
         stop("feedback: no message", &["feedback", "ada"], 1),
+        stop("reject: --reason last", &["reject", "ada", "--reason"], 2),
+        stop("feedback: -m last", &["feedback", "ada", "-m"], 2),
+        stop(
+            "feedback: --message last",
+            &["feedback", "ada", "x", "--message"],
+            2,
+        ),
         waited(case(
             "no answer",
             &["approve", "ada", "b"],

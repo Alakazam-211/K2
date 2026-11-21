@@ -17,8 +17,10 @@
 //! stderr, then `cmd_help`'s daily tier on stdout (asked as the front asks
 //! it, [`crate::pages::daily_tier`]), exit 1.
 //!
-//! The shell answers: `--reason`, `--message` or `-m` as the last word (its
-//! `_need_value` line), `-h` or `--help` anywhere (the front sends those
+//! `--reason`, `--message` or `-m` as the last word is the shell's
+//! `_need_value` line, exit 2, after the gates, nothing sent.
+//!
+//! The shell answers: `-h` or `--help` anywhere (the front sends those
 //! on; the shell prints the usage and sends nothing), a word that is not
 //! UTF-8, a port curl won't take, and a `python3` the binary
 //! can't tell.
@@ -53,6 +55,8 @@ pub enum Ask {
     Send(&'static str, String),
     /// Lines on stderr and exit 1.
     Stop(Vec<&'static str>),
+    /// A value flag as the last word: `_need_value`'s line, exit 2.
+    NeedValue(String),
     /// No verb or one `review` has no arm for: its line, then the daily
     /// tier.
     Unknown(String),
@@ -92,7 +96,10 @@ pub fn parse(words: &[&str]) -> Option<Ask> {
                     _ => matches!(rest[i], "--message" | "-m"),
                 };
                 if flag {
-                    value = rest.get(i + 1)?.to_string();
+                    let Some(v) = rest.get(i + 1) else {
+                        return Some(Ask::NeedValue(rest[i].to_string()));
+                    };
+                    value = v.to_string();
                     i += 2;
                 } else {
                     i += 1;
@@ -158,6 +165,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
             }
             return Some(Exit::Error);
         }
+        Ask::NeedValue(flag) => return Some(out::stop_need_value(&flag)),
         Ask::Send(e, p) => (e, p),
         Ask::Unknown(word) => return unknown(&word, args),
     };
@@ -213,8 +221,14 @@ mod tests {
         assert_eq!(parse(&["merge"]), Some(Ask::Unknown("merge".into())));
         assert_eq!(parse(&[""]), Some(Ask::Unknown(String::new())));
         assert_eq!(parse(&["reject"]), Some(Ask::Stop(vec![])));
-        assert_eq!(parse(&["reject", "a", "--reason"]), None);
-        assert_eq!(parse(&["feedback", "a", "-m"]), None);
+        assert_eq!(
+            parse(&["reject", "a", "--reason"]),
+            Some(Ask::NeedValue("--reason".into()))
+        );
+        assert_eq!(
+            parse(&["feedback", "a", "-m"]),
+            Some(Ask::NeedValue("-m".into()))
+        );
         assert_eq!(
             parse(&["reject", "a b", "x", "--reason", "too big"]),
             Some(Ask::Send(REJECT, "agent=a%20b&reason=too%20big".into()))

@@ -221,6 +221,11 @@ last daemon install --version
 last daemon install --bin-dir
 last daemon install --dry-run --manifest-url
 
+echo "== review =="
+last review reject ada --reason
+last review feedback ada -m
+last review feedback ada x --message
+
 echo "== mail =="
 last mail watch inboxes --add
 last mail watch inboxes --wake

@@ -26731,13 +26731,13 @@ cmd_browser_note() {
     local workspace="" url="" selector="" html_file="" text="" title="" intent="change" json="false" comment=""
     while [ $# -gt 0 ]; do
         case "$1" in
-            --workspace|-w) workspace="${2:-}"; shift 2 ;;
-            --url) url="${2:-}"; shift 2 ;;
-            --selector) selector="${2:-}"; shift 2 ;;
-            --html-file) html_file="${2:-}"; shift 2 ;;
-            --text) text="${2:-}"; shift 2 ;;
-            --title) title="${2:-}"; shift 2 ;;
-            --intent) intent="${2:-}"; shift 2 ;;
+            --workspace|-w) _need_value "$@"; workspace="${2:-}"; shift 2 ;;
+            --url) _need_value "$@"; url="${2:-}"; shift 2 ;;
+            --selector) _need_value "$@"; selector="${2:-}"; shift 2 ;;
+            --html-file) _need_value "$@"; html_file="${2:-}"; shift 2 ;;
+            --text) _need_value "$@"; text="${2:-}"; shift 2 ;;
+            --title) _need_value "$@"; title="${2:-}"; shift 2 ;;
+            --intent) _need_value "$@"; intent="${2:-}"; shift 2 ;;
             --json) json="true"; shift ;;
             -h|--help) cmd_help_browser; return 0 ;;
             --)
@@ -26791,7 +26791,7 @@ cmd_browser_redeliver() {
     local workspace="" item="" json="false"
     while [ $# -gt 0 ]; do
         case "$1" in
-            --workspace|-w) workspace="${2:-}"; shift 2 ;;
+            --workspace|-w) _need_value "$@"; workspace="${2:-}"; shift 2 ;;
             --json) json="true"; shift ;;
             -h|--help) cmd_help_browser; return 0 ;;
             --*) echo "Error: unknown flag '$1'" >&2; exit 2 ;;
@@ -26972,8 +26972,8 @@ cmd_thread_transfer() {
     while [ $# -gt 0 ]; do
         case "$1" in
             export|import|imports) [ -z "$sub" ] && sub="$1" || ws="$1"; shift ;;
-            --to) to="${2:-}"; shift 2 ;;
-            --since-days|--threads-since) since="${2:-}"; shift 2 ;;
+            --to) _need_value "$@"; to="${2:-}"; shift 2 ;;
+            --since-days|--threads-since) _need_value "$@"; since="${2:-}"; shift 2 ;;
             --json) json=1; shift ;;
             -*) echo "usage: k2 thread export <ws> [--since-days N] | import <file> --to <ws> | imports <ws>" >&2; exit 2 ;;
             *) if [ "$sub" = "import" ]; then path="$1"; else ws="$1"; fi; shift ;;
@@ -27140,10 +27140,10 @@ cmd_thread() {
             --idempotency-key)
                 [[ -n "${2:-}" ]] || { echo "Error: --idempotency-key needs the key a 'may have been delivered' line printed" >&2; exit 2; }
                 idem_key="$2"; shift 2 ;;
-            --from) explicit_from="$2"; shift 2 ;;
-            --limit) limit="$2"; shift 2 ;;
+            --from) _need_value "$@"; explicit_from="$2"; shift 2 ;;
+            --limit) _need_value "$@"; limit="$2"; shift 2 ;;
             --all) all="true"; shift ;;
-            --before-seq) before_seq="$2"; shift 2 ;;
+            --before-seq) _need_value "$@"; before_seq="$2"; shift 2 ;;
             --seq)
                 [[ -z "${2:-}" ]] && { echo "Error: --seq needs a message number (the [N] in k2 thread <addr>)" >&2; exit 1; }
                 one_seq="$2"; shift 2 ;;
@@ -27839,7 +27839,7 @@ cmd_thread_unread() {
     shift # "unread"
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --kind) kind="$2"; shift 2 ;;
+            --kind) _need_value "$@"; kind="$2"; shift 2 ;;
             --json) json="true"; shift ;;
             *) echo "Error: unknown argument '$1' (k2 thread unread [--kind thread|project] [--json])" >&2; exit 1 ;;
         esac

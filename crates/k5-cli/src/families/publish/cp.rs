@@ -133,6 +133,10 @@ pub fn parse_subdomain(rest: &[&str]) -> Act {
                     }
                     "--transfer" => transfer = true,
                     f if f.starts_with("--") => {}
+                    // A label never begins with '-' (so -h can't be one).
+                    f if f.starts_with('-') => {
+                        return Act::Lines(format!("Error: unknown flag '{f}'\n"), Exit::Usage)
+                    }
                     a if label.is_empty() => label = a.to_string(),
                     a if !create && target.is_empty() => target = a.to_string(),
                     _ => {}
@@ -180,6 +184,10 @@ pub fn parse_subdomain(rest: &[&str]) -> Act {
         }
         "rm" | "remove" | "delete" => {
             let label = words.first().copied().unwrap_or("");
+            // A label never begins with '-' (so -h can't be one).
+            if label.starts_with('-') {
+                return Act::Lines(format!("Error: unknown flag '{label}'\n"), Exit::Usage);
+            }
             if label.is_empty() {
                 return lines(format!("Usage: {CLI} publish subdomain rm <label>\n"));
             }

@@ -207,6 +207,12 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
         return None;
     }
+    // `_k2_takes_dashdash` has no publish: a bare `--` anywhere is the
+    // prelude's usage error, exit 2, before every gate and nothing sent.
+    if words.contains(&"--") {
+        out::stderr_line(&no_dashdash());
+        return Some(Exit::Usage);
+    }
     if !python::family_native(python::here()) {
         return None;
     }
@@ -1372,7 +1378,15 @@ fn parse_sessions(rest: &[&str], project: &str) -> Act {
     }
 }
 
-/// `subdomain claim|unclaim`: the words after `subdomain`.
+/// The prelude's line for a `--` on a verb that takes none
+/// (`cli/src/cli-tools-policy.sh`, after `_k2_takes_dashdash`).
+pub fn no_dashdash() -> String {
+    format!("usage: publish takes no '--' ({CLI} help publish)")
+}
+
+/// `subdomain claim|unclaim`: the words after `subdomain`. A word
+/// beginning with `-` other than `--transfer` is an unknown flag, exit 2
+/// (a label never begins with one, so `-h` can't be one).
 fn parse_claim(rest: &[&str]) -> Act {
     let action = match rest.first().copied() {
         Some("claim") => "claim",
@@ -1384,7 +1398,7 @@ fn parse_claim(rest: &[&str]) -> Act {
     for w in &rest[1..] {
         match *w {
             "--transfer" => transfer = true,
-            f if f.starts_with("--") => {
+            f if f.starts_with('-') => {
                 return Act::Lines(format!("Error: unknown flag '{f}'\n"), Exit::Usage)
             }
             a => {
@@ -1439,6 +1453,36 @@ mod tests {
         ] {
             assert_ne!(parse(w, "/p", None), Act::Shell, "{w:?}");
         }
+    }
+
+    /// A label never begins with `-`: every subdomain verb refuses one as
+    /// an unknown flag, exit 2 (the shell's f523e1e546 and f267f23585).
+    #[test]
+    fn a_dash_label_is_an_unknown_flag() {
+        for (w, flag) in [
+            (&["subdomain", "claim", "-x"][..], "-x"),
+            (&["subdomain", "claim", "--transfer", "-h"], "-h"),
+            (&["subdomain", "unclaim", "-"], "-"),
+            (&["subdomain", "create", "-x", "--target", "t"], "-x"),
+            (&["subdomain", "create", "a", "--target", "t", "-q"], "-q"),
+            (&["subdomain", "point", "--target", "t", "-x"], "-x"),
+            (&["subdomain", "target", "a", "-x"], "-x"),
+            (&["subdomain", "rm", "-x"], "-x"),
+            (&["subdomain", "remove", "--keep"], "--keep"),
+            (&["subdomain", "delete", "-x"], "-x"),
+        ] {
+            assert_eq!(
+                parse(w, "/p", None),
+                Act::Lines(format!("Error: unknown flag '{flag}'\n"), Exit::Usage),
+                "{w:?}"
+            );
+        }
+        // create and point still skip an unknown long flag, and --target
+        // takes a dash value.
+        assert!(matches!(
+            parse(&["subdomain", "create", "a", "--nope", "--target", "-t"], "/p", None),
+            Act::Connect(cp::Form::Create { .. })
+        ));
     }
 
     #[test]

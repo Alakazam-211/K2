@@ -1275,6 +1275,50 @@ fn subdomain_writes_on_help_never_act() {
     check_all(&rig, v);
 }
 
+/// A label beginning with `-` is an unknown flag, exit 2, nothing sent
+/// (the shell's f523e1e546 and f267f23585: so `-h` can never be a label),
+/// and a bare `--` anywhere on a publish line is the prelude's usage error,
+/// exit 2, nothing sent (7a07949682 and 865243bd9e: publish takes none).
+#[test]
+fn a_dash_label_and_a_bare_dashdash_are_usage_errors() {
+    let rig = Rig::new(VERB, "dash");
+    let lines: [&'static [&'static str]; 17] = [
+        // covers: publish subdomain claim
+        &["subdomain", "claim", "-x"],
+        &["subdomain", "claim", "--transfer", "-x"],
+        &["subdomain", "unclaim", "-x"],
+        // covers: publish subdomain create
+        &["subdomain", "create", "-x", "--target", "x"],
+        &["subdomain", "create", "--target", "x", "-x"],
+        // covers: publish subdomain point
+        &["subdomain", "point", "-x", "--target", "x"],
+        &["subdomain", "point", "--target", "x", "-x"],
+        &["subdomain", "target", "-x", "x"],
+        &["subdomain", "target", "acme", "-x"],
+        // covers: publish subdomain rm
+        &["subdomain", "rm", "-x"],
+        &["subdomain", "remove", "-"],
+        &["subdomain", "delete", "-x"],
+        &["subdomain", "claim", "--", "acme"],
+        &["subdomain", "create", "--", "-x", "--target", "x"],
+        &["subdomain", "create", "staging", "--target", "x", "--"],
+        &["ps", "--"],
+        &["--"],
+    ];
+    let v = lines
+        .into_iter()
+        .map(|a| on("a usage error", a, vec![], 2, 0))
+        .collect();
+    check_all(&rig, v);
+    // The binary's own words for the two rules.
+    let (out, log) = rig.binary(&on("dash", &["subdomain", "rm", "-x"], vec![], 2, 0), false);
+    assert_eq!(out.stderr, "Error: unknown flag '-x'\n");
+    assert!(log.is_empty(), "{log:?}");
+    let (out, _) = rig.binary(&on("dashdash", &["subdomain", "claim", "--", "acme"], vec![], 2, 0), false);
+    let cli = k2_client::brand::CLI_NAME;
+    assert_eq!(out.stderr, format!("usage: publish takes no '--' ({cli} help publish)\n"));
+}
+
 /// The binary's lines name the brand's command and product.
 #[test]
 fn the_lines_say_the_brand_s_name() {

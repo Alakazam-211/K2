@@ -416,14 +416,15 @@ fn preset_list_over_tls_to_an_https_host() {
 }
 
 /// `K2_HOST=https://<a name>` with the person's proxy: the shell's Python
-/// tunnels through it as http.client does; the binary's urllib adapter
-/// doesn't copy that tunnel, so it sends nothing at all (no plain or
-/// direct request in its place, the token nowhere) and fails (the
-/// adapter's `URLError` says why: `urllib::tests::an_https_daemon`).
-/// Bash's side is checked to have tunnelled (its python3 trusting the
-/// throwaway CA as in the row above).
+/// tunnels through it as `http.client` does, and so does the binary's
+/// urllib adapter (K2's ruling: the shared CONNECT path, the settings read
+/// as urllib reads them): the same CONNECT head byte for byte, with no
+/// `Proxy-Authorization` when the proxy URL has no user part, and the
+/// token inside the tunnel alone. The other families and the proxy's own
+/// credential: `urllib_proxy_parity.rs`. The shell's python3 trusts the
+/// throwaway CA as in the row above.
 #[test]
-fn preset_list_over_tls_through_the_proxy_sends_nothing() {
+fn preset_list_over_tls_through_the_proxy() {
     let rig = Rig::new("preset", "httpsproxy");
     let pki = tunnel::Pki::new(&rig.dir.join("pki"));
     let daemon = TlsStub::start(&pki, 200, PRESETS);
@@ -452,16 +453,15 @@ fn preset_list_over_tls_through_the_proxy_sends_nothing() {
         ],
     );
     let [b, r] = tunnel::both(&rig, &c, &proxy, &daemon);
-    assert_eq!(b.out.code, Some(0), "{b:?}");
-    assert!(!b.proxy.is_empty() && b.tls.len() == 1, "{b:?}");
-    // preset's Python reads any failed urlopen as no answer.
-    assert!(r.out.stderr.contains("no response from the "), "{r:?}");
-    assert_ne!(r.out.code, Some(0), "{r:?}");
-    assert!(
-        r.proxy.is_empty() && r.tls.is_empty() && r.tls_errors.is_empty() && r.daemon.is_empty(),
-        "the binary sent: {r:?}"
-    );
-    tunnel::assert_unprinted(c.name, &[r], &[OWNER]);
+    let target = format!("{HOST}:{port}");
+    for run in [&b, &r] {
+        tunnel::assert_tunnel_only_python(c.name, run, &target, None, OWNER);
+    }
+    tunnel::assert_same_python(c.name, &b, &r);
+    no_warning(c.name, &[&b, &r]);
+    assert_eq!(r.out.code, Some(0), "{r:?}");
+    assert!(r.out.stdout.contains("Claude Code"), "{r:?}");
+    tunnel::assert_unprinted(c.name, &[b, r], &[OWNER]);
 }
 
 /// A proxy that refuses the tunnel (407) is final: the binary sends one

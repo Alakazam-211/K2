@@ -28,6 +28,11 @@ use std::time::Duration;
 /// The control plane's (or the remote K2's) name: never resolves.
 pub const HOST: &str = "cp.example.invalid";
 
+/// An address that is not this computer as written but reaches it (Linux
+/// and macOS connect `0.0.0.0` here): a daemon on the network that a side
+/// reaches only by going straight there (`no_proxy`).
+pub const NETWORK: &str = "0.0.0.0";
+
 /// The CA and a certificate for [`HOST`].
 pub struct Pki {
     /// The CA's PEM file, for `SSL_CERT_FILE`.
@@ -43,9 +48,12 @@ pub struct Pki {
 }
 
 impl Pki {
-    /// A CA of its own and a certificate for [`HOST`] and `localhost`.
+    /// A CA of its own and a certificate for [`HOST`], `localhost` (a
+    /// daemon at `K2_HOST=https://localhost`) and the address `0.0.0.0`
+    /// (an IP name: a daemon on the network that reaches this machine,
+    /// [`NETWORK`]).
     pub fn new(dir: &Path) -> Pki {
-        Pki::for_names(dir, &[HOST, "localhost"])
+        Pki::for_names(dir, &[HOST, "localhost", NETWORK])
     }
 
     /// A CA of its own and a certificate for `names` (an IP address is an
@@ -614,4 +622,72 @@ pub fn bash_has(line_start: &str) -> bool {
     let text =
         std::fs::read_to_string(&k2).unwrap_or_else(|e| panic!("read {}: {e}", k2.display()));
     text.contains(line_start)
+}
+
+/// [`assert_same`] for the shell's Python blocks (the urllib families):
+/// the same output, daemon requests and requests in the tunnel, and the
+/// same CONNECT heads byte for byte, as `http.client` writes them (no
+/// `User-Agent` on either side).
+pub fn assert_same_python(name: &str, b: &SideRun, r: &SideRun) {
+    assert_eq!(
+        (b.out.code, &b.out.stdout, &b.out.stderr),
+        (r.out.code, &r.out.stdout, &r.out.stderr),
+        "{name}: bash, then the binary"
+    );
+    assert_eq!(b.daemon, r.daemon, "{name}: the daemon's requests");
+    assert_eq!(b.proxy, r.proxy, "{name}: the CONNECT heads");
+    for h in b.proxy.iter().chain(&r.proxy) {
+        assert!(!h.contains("User-Agent"), "{name}: {h:?}");
+    }
+    let only = |t: &[(String, bool)]| t.iter().map(|(r, _)| r.clone()).collect::<Vec<_>>();
+    assert_eq!(
+        only(&b.tls),
+        only(&r.tls),
+        "{name}: the requests in the tunnel"
+    );
+    assert!(b.tls.iter().all(|(_, native)| !native), "{name}: bash's");
+    assert!(
+        r.tls.iter().all(|(_, native)| *native),
+        "{name}: the binary's own"
+    );
+}
+
+/// [`assert_tunnel_only`] for `http.client`'s CONNECT: each head is
+/// exactly `CONNECT <target> HTTP/1.1`, the proxy's own `basic` line when
+/// given, and `Host: <target>`; the token went to the TLS stub inside the
+/// tunnel only.
+pub fn assert_tunnel_only_python(
+    name: &str,
+    run: &SideRun,
+    target: &str,
+    basic: Option<&str>,
+    token: &str,
+) {
+    assert!(
+        !run.proxy.is_empty(),
+        "{name}: the proxy saw nothing: {run:?}"
+    );
+    let want = match basic {
+        Some(line) => format!("CONNECT {target} HTTP/1.1\r\n{line}\r\nHost: {target}\r\n\r\n"),
+        None => format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n"),
+    };
+    for h in &run.proxy {
+        assert_eq!(h, &want, "{name}: the CONNECT head");
+        assert!(
+            !h.contains(token),
+            "{name}: the token reached the proxy: {h:?}"
+        );
+    }
+    assert!(
+        !run.tls.is_empty(),
+        "{name}: nothing came through the tunnel: {run:?}"
+    );
+    for (r, _) in &run.tls {
+        let with_token: Vec<&str> = r.split("\r\n").filter(|l| l.contains(token)).collect();
+        assert_eq!(
+            with_token,
+            [format!("Authorization: Bearer {token}").as_str()],
+            "{name}: the token in the tunnel: {r:?}"
+        );
+    }
 }

@@ -150,9 +150,10 @@ fn an_empty_post_gets_urllib_s_form_type_and_the_owner_s_source() {
 }
 
 /// `HOST=https://<name>`: TLS to the name, the `Host` header the URL's
-/// netloc with no scheme (a family's own `HOST` text too); through the
-/// person's proxy, or a URL the shared transport doesn't read, nothing is
-/// sent at all, never a plain request in its place.
+/// netloc with no scheme (a family's own `HOST` text too). A URL the
+/// shared transport doesn't read, or a proxy setting the shell's Python
+/// reading doesn't take: nothing is sent at all, never a plain request in
+/// its place.
 #[test]
 fn an_https_daemon() {
     let mut c = Client::new("box.example", 4711, "/p", Auth::Owner("t".into()));
@@ -173,23 +174,28 @@ fn an_https_daemon() {
     plain.netloc = "https://h:1".into();
     assert!(!plain.tls);
     assert_eq!(plain.host_header(), "https://h:1");
-    // Through the person's proxy: nothing sent.
+    // The transport left a URL unsent only for a proxy setting curl's
+    // reading doesn't take: the Python reading is this opener's own.
+    let mut curl_left = Client::new("https://Box.example/", 4711, "/p", Auth::None);
+    curl_left.tls = true;
+    curl_left.unsendable = Some("https://Box.example:4711".into());
+    let o = Opener::from_client(&curl_left);
+    assert_eq!(
+        (o.host.as_str(), o.port, o.unsendable.as_deref()),
+        ("Box.example", 4711, None)
+    );
+    // Nothing sent: a URL the transport doesn't read, and a proxy URL the
+    // binary doesn't read as Python does.
     let act = Act::Write(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
     let (port, log) = server(vec![act]);
-    let mut c = Client::new("127.0.0.1", port, "/p", Auth::Owner("t".into()));
-    c.tls = true;
-    c.via = Some(crate::transport::proxy::Proxy {
-        host: "127.0.0.1".into(),
-        port,
-        auth: None,
-    });
-    let o = Opener::from_client(&c);
-    let want = format!("https://127.0.0.1:{port}");
-    assert_eq!(o.unsendable.as_deref(), Some(want.as_str()));
     let mut unread = Client::new("127.0.0.1", port, "/p", Auth::Owner("t".into()));
     unread.tls = true;
     unread.unsendable = Some("https://[::1]:1".into());
-    for o in [o, Opener::from_client(&unread)] {
+    let mut socks = Opener::from_client(&Client::new("box.example", 1, "/p", Auth::None));
+    socks.tls = true;
+    socks.py_proxy =
+        crate::transport::proxy::python::env([("https_proxy", format!("socks5://127.0.0.1:{port}"))]);
+    for o in [Opener::from_client(&unread), socks] {
         match o.open(&Request::new(Method::Get, "/r", Duration::from_secs(2))) {
             Outcome::Raised(r) => {
                 assert_eq!((r.class, r.kind), (Class::UrlError, Kind::Other), "{r:?}");
@@ -207,6 +213,85 @@ fn an_https_daemon() {
         log.lock().expect("log").is_empty(),
         "a request reached the server"
     );
+}
+
+/// Through the person's proxy as the shell's Python goes: `http.client`'s
+/// CONNECT head (the proxy's own credential, never the token), and a
+/// refusal raised as urllib raises it, once, nothing else sent. A proxy
+/// that answers nothing, or not HTTP, is what `http.client` raises.
+#[test]
+fn an_https_daemon_through_the_proxy() {
+    let proxied = |port: u16| {
+        let mut c = Client::new("box.example", 4711, "/p", Auth::Owner("tok-9".into()));
+        c.tls = true;
+        let mut o = Opener::from_client(&c);
+        o.py_proxy = crate::transport::proxy::python::env([(
+            "https_proxy",
+            format!("http://acme:pw@127.0.0.1:{port}"),
+        )]);
+        o
+    };
+    let req = Request::new(Method::Get, "/r", Duration::from_secs(5));
+    for (answer, want) in [
+        (
+            &b"HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic\r\n\r\n"[..],
+            (
+                Class::UrlError,
+                "<urlopen error Tunnel connection failed: 407 Proxy Authentication Required>",
+            ),
+        ),
+        (
+            &b"HTTP/1.1 201 Created\r\n\r\n"[..],
+            (
+                Class::UrlError,
+                "<urlopen error Tunnel connection failed: 201 Created>",
+            ),
+        ),
+        (
+            &b""[..],
+            (
+                Class::UrlError,
+                "<urlopen error Remote end closed connection without response>",
+            ),
+        ),
+        (
+            &b"garbage\r\n\r\n"[..],
+            (Class::BadStatusLine, "garbage\r\n"),
+        ),
+    ] {
+        let (port, log) = server(vec![Act::Write(answer)]);
+        match proxied(port).open(&req) {
+            Outcome::Raised(r) => assert_eq!((r.class, r.text().as_str()), want, "{r:?}"),
+            other => panic!("{other:?}"),
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        let got = log.lock().expect("log").clone();
+        assert_eq!(
+            got,
+            [b"CONNECT box.example:4711 HTTP/1.1\r\nProxy-Authorization: Basic YWNtZTpwdw==\r\nHost: box.example:4711\r\n\r\n".to_vec()],
+            "the proxy got the CONNECT head alone, once"
+        );
+    }
+    // A proxy nothing listens on: the refused connect, as for the daemon.
+    let dead = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = dead.local_addr().expect("addr").port();
+    drop(dead);
+    match proxied(port).open(&req) {
+        Outcome::Raised(r) => {
+            assert_eq!((r.class, r.kind), (Class::UrlError, Kind::Refused), "{r:?}");
+        }
+        other => panic!("{other:?}"),
+    }
+    // no_proxy names the host: straight there (nothing listens at
+    // box.example, so the connect fails; the proxy gets nothing).
+    let (port, log) = server(vec![]);
+    let mut o = proxied(port);
+    o.py_proxy = crate::transport::proxy::python::env([
+        ("https_proxy", format!("http://127.0.0.1:{port}")),
+        ("no_proxy", "box.example".to_string()),
+    ]);
+    assert!(matches!(o.route(), Ok(None)), "{:?}", o.route());
+    assert!(log.lock().expect("log").is_empty());
 }
 
 #[test]

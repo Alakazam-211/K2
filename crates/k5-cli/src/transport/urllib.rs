@@ -12,9 +12,14 @@
 //! `http://HOST:PORT`, never a proxy (`_K2_PY_PROXY_RULE`: plain http is
 //! direct), or, for `HOST=https://<name>`, TLS to `<name>` on the port
 //! ([`super::tls`], K2's ruling D5), as the shell's Python opens its
-//! `https://` `BASE_URL`. Where that Python would go through the person's
-//! proxy, or the shared transport doesn't read the URL, nothing is sent
-//! ([`Opener::open`]): never a plain or direct request in its place.
+//! `https://` `BASE_URL`: through the person's proxy where that Python
+//! goes through it (K2's ruling: the shared CONNECT path,
+//! [`super::proxy::tunnel_head`], with the settings read and the CONNECT
+//! head written as urllib does, [`super::proxy::python`]), the
+//! certificate checked inside the tunnel, the token only inside it. A URL
+//! or a proxy setting the binary doesn't read as that Python does: nothing
+//! is sent ([`Opener::open`]), never a plain or direct request in its
+//! place.
 //! Written as Python 3's `http.client` writes it for urllib:
 //!
 //! ```text
@@ -379,10 +384,12 @@ pub struct Opener {
     version: String,
     /// `HOST=https://<name>`: TLS to [`Opener::host`].
     tls: bool,
-    /// An `https://` URL the binary won't open as the shell's Python
-    /// would: through the person's proxy, or one the shared transport
-    /// doesn't read ([`super::remote::daemon_https`]). Nothing is sent.
+    /// An `https://` URL the shared transport doesn't read
+    /// ([`super::remote::daemon_https`]). Nothing is sent.
     unsendable: Option<String>,
+    /// The proxy variables as the shell's Python reads them, for an
+    /// `https://` daemon ([`super::remote::python_daemon_route`]).
+    py_proxy: super::proxy::python::Env,
 }
 
 impl Opener {
@@ -409,17 +416,26 @@ impl Opener {
         // `_k5_py_headers` prints a Codex call's conversation headers
         // after its hand-over headers.
         handover.extend(client.conversation.iter().cloned());
-        // The daemon's client over TLS through the person's proxy: the
-        // shell's Python tunnels as http.client does, which the binary
-        // doesn't copy.
-        let unsendable = match (&client.unsendable, client.tls && client.via.is_some()) {
-            (Some(url), _) => Some(url.clone()),
-            (None, true) => Some(format!("https://{}:{}", client.host, client.port)),
-            (None, false) => None,
+        // The daemon's client over TLS: the shell's Python reads the
+        // person's proxy its own way, so the transport's curl reading
+        // (`client.via`) isn't this one's. A URL the transport left unsent
+        // only for a proxy setting curl's reading doesn't take is read
+        // here again; one it doesn't read at all stays unsent.
+        let (host, port, unsendable) = match &client.unsendable {
+            Some(url) => match super::remote::base(url) {
+                Some(b) if client.tls && b.tls => (b.host, b.port, None),
+                _ => (client.host.clone(), client.port, Some(url.clone())),
+            },
+            None => (client.host.clone(), client.port, None),
+        };
+        let py_proxy = if client.tls {
+            super::remote::python_proxy_env()
+        } else {
+            super::proxy::python::Env::default()
         };
         Opener {
-            host: client.host.clone(),
-            port: client.port,
+            host,
+            port,
             netloc: format!("{}:{}", client.host, client.port),
             token,
             handover,
@@ -428,6 +444,7 @@ impl Opener {
             version: client.version.clone(),
             tls: client.tls,
             unsendable,
+            py_proxy,
         }
     }
 
@@ -503,6 +520,27 @@ impl Opener {
         out
     }
 
+    /// The person's proxy for [`Opener::open`], as the shell's Python reads
+    /// it: none for plain http; for `https://`, `k2_direct`, then urllib's
+    /// reading of the variables for the URL's `host:port`
+    /// ([`super::remote::python_daemon_route`]). `Err`: the URL, for one
+    /// the binary doesn't send (a URL or a proxy setting it doesn't read).
+    fn route(&self) -> Result<Option<super::proxy::Proxy>, String> {
+        use super::proxy::Route;
+        if let Some(url) = &self.unsendable {
+            return Err(url.clone());
+        }
+        if !self.tls {
+            return Ok(None);
+        }
+        let netloc = self.host_header();
+        match super::remote::python_daemon_route(&self.host, &netloc, &self.py_proxy) {
+            Route::Direct => Ok(None),
+            Route::Via(p) => Ok(Some(p)),
+            Route::Shell => Err(format!("https://{netloc}")),
+        }
+    }
+
     /// One `urllib.request.urlopen(k5_request(req), timeout=...)`, and the
     /// body read after it. A redirect is the answer (an
     /// [`Outcome::HttpError`]); [`Opener::open_ruled`] refuses it.
@@ -531,15 +569,21 @@ impl Opener {
         req: &Request,
         check: impl FnOnce(&Head) -> Result<(), E>,
     ) -> Result<Outcome, E> {
-        if let Some(url) = &self.unsendable {
-            return Ok(Outcome::Raised(Raised {
-                class: Class::UrlError,
-                kind: Kind::Other,
-                reason: format!("won't send to {url}: a proxy or URL this command doesn't carry"),
-            }));
-        }
+        let via = match self.route() {
+            Ok(via) => via,
+            Err(url) => {
+                return Ok(Outcome::Raised(Raised {
+                    class: Class::UrlError,
+                    kind: Kind::Other,
+                    reason: format!(
+                        "won't send to {url}: a proxy or URL this command doesn't carry"
+                    ),
+                }))
+            }
+        };
         let tls = self.tls.then_some(self.host.as_str());
-        let mut reader = match start(&self.host, self.port, tls, &self.encode(req), req.timeout) {
+        let bytes = self.encode(req);
+        let mut reader = match start(&self.host, self.port, tls, via.as_ref(), &bytes, req.timeout) {
             Ok(r) => r,
             Err(r) => return Ok(Outcome::Raised(r)),
         };
@@ -832,20 +876,25 @@ fn gai_error(e: &io::Error) -> Raised {
     }
 }
 
-/// `sock.sendall(request)` with the socket's timeout.
-/// `urlopen`'s connection: [`connect`], TLS over it to the name `tls`
-/// gives ([`super::tls`]), each send and read on `timeout`, and `bytes`
-/// sent. What fails is a `URLError`, nothing of the request sent past a
-/// failed handshake.
+/// `urlopen`'s connection: [`connect`] (or, through `via`, the proxy's
+/// CONNECT tunnel to `host:port`, [`tunnel`]), TLS over it to the name
+/// `tls` gives ([`super::tls`]), each send and read on `timeout`, and
+/// `bytes` sent. What fails is a `URLError` (or what `http.client`
+/// raises bare), nothing of the request sent past a failed tunnel or
+/// handshake.
 fn start(
     host: &str,
     port: u16,
     tls: Option<&str>,
+    via: Option<&super::proxy::Proxy>,
     bytes: &[u8],
     timeout: Duration,
 ) -> Result<BufReader<super::wire::Conn>, Raised> {
     use super::wire::Conn;
-    let tcp = connect(host, port, timeout).map_err(Raised::url_error)?;
+    let tcp = match via {
+        Some(p) => tunnel(p, host, port, timeout)?,
+        None => connect(host, port, timeout).map_err(Raised::url_error)?,
+    };
     let mut conn = match tls {
         Some(name) => {
             let limit = std::time::Instant::now() + timeout;
@@ -869,6 +918,75 @@ fn start(
         .and_then(|()| conn.flush())
         .map_err(|e| Raised::url_error(os_error(&e)))?;
     Ok(BufReader::with_capacity(8192, conn))
+}
+
+/// `HTTPSConnection.connect()` through the person's proxy `p`: the
+/// proxy's TCP connect ([`connect`]), `http.client`'s CONNECT head for
+/// `host:port` ([`super::proxy::python::connect_head`]: never the token),
+/// and its answer, on the shared CONNECT path
+/// ([`super::proxy::tunnel_head`]), 200 alone opening it. What fails is
+/// raised as `http.client` and urllib raise it ([`tunnel_raised`]).
+fn tunnel(
+    p: &super::proxy::Proxy,
+    host: &str,
+    port: u16,
+    timeout: Duration,
+) -> Result<TcpStream, Raised> {
+    use super::wire::Failure;
+    let head = super::proxy::python::connect_head(p, host, port);
+    let limit = std::time::Instant::now() + timeout;
+    let mut refused: Option<Raised> = None;
+    let r = super::proxy::tunnel_head(
+        p,
+        &head,
+        |code| code == 200,
+        limit,
+        |h, port, _| {
+            connect(h, port, timeout).map_err(|e| {
+                refused = Some(e);
+                Failure::NotSent(String::new())
+            })
+        },
+    );
+    match (r, refused) {
+        (Ok(s), _) => Ok(s),
+        (Err(_), Some(e)) => Err(Raised::url_error(e)),
+        (Err((Failure::ConnectTimedOut, _)), None) => Err(Raised::url_error(timed_out())),
+        (Err((f, got)), None) => Err(tunnel_raised(&got, &format!("{f:?}"))),
+    }
+}
+
+/// What `http.client`'s `_tunnel` raises for the proxy's answer `got`
+/// when the tunnel didn't open, as urlopen hands it on: its status line
+/// read as [`read_status`] reads one (nothing at all is
+/// `RemoteDisconnected` in a `URLError`; a line that is not HTTP is a
+/// bare `BadStatusLine`); any status but 200 is `OSError('Tunnel
+/// connection failed: <code> <reason>')` in a `URLError`. A 200 head cut
+/// short (`got` ending before its blank line) is `why`, the binary's own
+/// words, in a `URLError`.
+pub(crate) fn tunnel_raised(got: &[u8], why: &str) -> Raised {
+    let code = match read_status(&mut &got[..]) {
+        Ok(code) => code,
+        Err(r) if r.class == Class::RemoteDisconnected => return Raised::url_error(r),
+        Err(r) => return r,
+    };
+    let end = got
+        .iter()
+        .position(|b| *b == b'\n')
+        .map_or(got.len(), |i| i + 1);
+    let line = latin1(&got[..end]);
+    let parts = py_split(&line, 2);
+    let space = |c: char| c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c);
+    let reason = parts.get(2).map_or("", |r| r.trim_matches(space));
+    Raised::url_error(Raised {
+        class: Class::OsError("OSError"),
+        kind: Kind::Other,
+        reason: if code == 200 {
+            why.to_string()
+        } else {
+            format!("Tunnel connection failed: {code} {reason}")
+        },
+    })
 }
 
 /// The answer's head as http.client keeps it.
@@ -1297,7 +1415,7 @@ fn tls_raised(f: &super::wire::Failure) -> Raised {
 pub fn open_url(place: &Place, req: &Request) -> Outcome {
     let tls = place.tls.then_some(place.host.as_str());
     let bytes = encode_plain(&place.netloc, req);
-    let mut reader = match start(&place.host, place.port, tls, &bytes, req.timeout) {
+    let mut reader = match start(&place.host, place.port, tls, None, &bytes, req.timeout) {
         Ok(r) => r,
         Err(r) => return Outcome::Raised(r),
     };

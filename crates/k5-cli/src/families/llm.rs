@@ -691,6 +691,10 @@ fn add_key(cx: &mut Cx, l: &Line) -> Done {
     )?;
     let (tool, label) = (l.pos[0].as_str(), l.pos[1].as_str());
     check(key_tool_ok(tool))?;
+    // Typed or piped: never over plain http to another computer.
+    if !crate::prelude::plain_http::password_transport_ok() {
+        return Err(Exit::Usage);
+    }
     let key = if prompt::stdin_is_tty() {
         prompt::ask_hidden("Paste the API token: ")
     } else {

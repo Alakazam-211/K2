@@ -592,6 +592,11 @@ fn visibility(cx: &mut Cx, v: &Vis, project: &str) -> Result<Shown, Exit> {
         }
     }
     if check && code.is_empty() && read::asks_pin(&raw) {
+        // `_publish_read_pin`: typed or piped, never over plain http to
+        // another computer.
+        if !crate::prelude::plain_http::password_transport_ok() {
+            return Err(Exit::Usage);
+        }
         let pin = if prompt::stdin_is_tty() {
             let first = prompt::ask_hidden(&format!("PIN for {label} (6 to 64 characters): "));
             let again = prompt::ask_hidden("The same PIN again: ");

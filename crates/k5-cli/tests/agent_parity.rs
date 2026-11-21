@@ -694,7 +694,9 @@ fn a_list_above_the_environment_s_limit() {
     let (b, r) = (&outs[0], &outs[1]);
     assert_eq!(logs[0].len(), 1, "bash's requests: {:?}", logs[0]);
     assert_eq!(logs[0], logs[1], "the requests");
-    assert_eq!(b.code, Some(126), "bash: {b:?}");
+    // env-answer-large: 126 on Linux; macOS's /bin/bash 3.2 exits 1.
+    let want = if cfg!(target_os = "macos") { 1 } else { 126 };
+    assert_eq!(b.code, Some(want), "bash: {b:?}");
     assert_eq!(b.stdout, "");
     assert!(
         b.stderr.contains("Argument list too long"),

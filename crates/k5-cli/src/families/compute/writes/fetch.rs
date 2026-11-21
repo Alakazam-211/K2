@@ -48,9 +48,17 @@ pub mod line {
         pub const PENDING: u32 = 4;
         pub const MB: u32 = 6;
         pub const NAME: u32 = 9;
-        pub const MAKEDIRS: u32 = 14;
-        pub const DATA: u32 = 15;
-        pub const PRINT: u32 = 18;
+        pub const LINK: u32 = 22;
+        pub const DATA: u32 = 26;
+        pub const ROOT: u32 = 27;
+        pub const MKDIR: u32 = 31;
+        pub const FOLDER: u32 = 34;
+        pub const STAT: u32 = 39;
+        pub const UNLINK: u32 = 40;
+        pub const CREATE: u32 = 43;
+        pub const APPEND: u32 = 45;
+        pub const WRITE: u32 = 49;
+        pub const PRINT: u32 = 50;
     }
 }
 
@@ -404,12 +412,33 @@ pub fn step(body: &[u8], out_dir: &str, first: bool) -> Result<Option<Step>, Sto
         ]))));
     }
     let path = join(out_dir, &parts);
-    let dir = match Path::new(&path).parent() {
-        Some(d) if !d.as_os_str().is_empty() => d.to_path_buf(),
-        _ => Path::new(".").to_path_buf(),
-    };
-    if let Err(e) = std::fs::create_dir_all(&dir) {
-        return Err(Raise::at(l::MAKEDIRS, os_error(&e, &dir.to_string_lossy())).into());
+    // No link inside the folder is followed: one on the way is refused.
+    let mut on = out_dir.to_string();
+    for part in &parts {
+        on = join(&on, std::slice::from_ref(part));
+        match std::fs::symlink_metadata(&on) {
+            Ok(m) if m.file_type().is_symlink() => {
+                return Err(Stop::Line(dumps(&object(vec![
+                    ("error", str_value("artifact_path_unsafe")),
+                    (
+                        "hint",
+                        str_value(&format!(
+                            "{name}: {on} is a link, not followed; nothing written there"
+                        )),
+                    ),
+                ]))));
+            }
+            Ok(_) => {}
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) =>
+            {
+                break
+            }
+            Err(e) => return Err(Raise::at(l::LINK, os_error(&e, &on)).into()),
+        }
     }
     let data = match key(pairs, "data", l::DATA)? {
         Value::Str(t) => {
@@ -426,15 +455,9 @@ pub fn step(body: &[u8], out_dir: &str, first: bool) -> Result<Option<Step>, Sto
             .into())
         }
     };
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .append(!first)
-        .truncate(first)
-        .open(&path);
-    match file.and_then(|mut f| f.write_all(&data)) {
-        Ok(()) => {}
-        Err(e) => return Err(Raise::at(l::DATA + 1, os_error(&e, &path)).into()),
+    let mut file = nofollow::open(out_dir, &parts, first)?;
+    if let Err(e) = file.write_all(&data) {
+        return Err(Raise::at(l::WRITE, os_error(&e, &path)).into());
     }
     let offset = key(pairs, "offset", l::PRINT)?;
     let next = match offset {
@@ -522,8 +545,8 @@ fn os_error(e: &std::io::Error, path: &str) -> String {
 /// The check of one file: its sha256 and size against what the node
 /// reported, then the line it adds to the list.
 fn check(name: &str, s: &Step) -> Result<Got, Stop> {
-    let data =
-        std::fs::read(&s.path).map_err(|e| Stop::Raise(Raise::at(4, os_error(&e, &s.path))))?;
+    let data = nofollow::read(&s.path)
+        .map_err(|e| Stop::Raise(Raise::at(4, os_error(&e, &s.path))))?;
     let h = k2_client::release_sums::sha256_hex(&data);
     let changed = || {
         Stop::Line(dumps(&object(vec![
@@ -540,7 +563,7 @@ fn check(name: &str, s: &Step) -> Result<Got, Stop> {
     if h != s.sha {
         return Err(changed());
     }
-    let want = int_of(&str_value(&s.bytes)).map_err(|e| Stop::Raise(Raise::at(5, e)))?;
+    let want = int_of(&str_value(&s.bytes)).map_err(|e| Stop::Raise(Raise::at(7, e)))?;
     if data.len().to_string() != want {
         return Err(changed());
     }
@@ -646,4 +669,132 @@ fn writable(d: &Path) -> bool {
 #[cfg(not(unix))]
 fn writable(d: &Path) -> bool {
     d.is_dir()
+}
+
+/// The writes of one step, as the shell's reader makes them: the folders
+/// under `--out` opened one at a time from its descriptor with
+/// `O_NOFOLLOW` (each made when missing), the file's first chunk made
+/// fresh (a plain file already there removed, then
+/// `O_CREAT|O_EXCL|O_NOFOLLOW`), the rest appended with `O_NOFOLLOW`.
+#[cfg(unix)]
+mod nofollow {
+    use super::{line::step as l, os_error, Raise};
+    use std::ffi::CString;
+    use std::io::Read;
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::os::unix::fs::OpenOptionsExt;
+
+    fn c(name: &str, line: u32) -> Result<CString, Raise> {
+        CString::new(name).map_err(|_| Raise::at(line, "ValueError: embedded null byte"))
+    }
+
+    fn last(line: u32, name: &str) -> Raise {
+        Raise::at(line, os_error(&std::io::Error::last_os_error(), name))
+    }
+
+    /// The artifact's file under `out`, open for its chunk.
+    pub fn open(out: &str, parts: &[&str], first: bool) -> Result<std::fs::File, Raise> {
+        let root = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY)
+            .open(out)
+            .map_err(|e| Raise::at(l::ROOT, os_error(&e, out)))?;
+        let mut d = OwnedFd::from(root);
+        let Some((name, folders)) = parts.split_last() else {
+            return Err(Raise::at(l::CREATE, "FileNotFoundError: no name"));
+        };
+        for part in folders {
+            let p = c(part, l::MKDIR)?;
+            // SAFETY: a folder descriptor this function owns and a C string
+            // that lives through the call.
+            if unsafe { libc::mkdirat(d.as_raw_fd(), p.as_ptr(), 0o777) } != 0 {
+                let e = std::io::Error::last_os_error();
+                if e.raw_os_error() != Some(libc::EEXIST) {
+                    return Err(Raise::at(l::MKDIR, os_error(&e, part)));
+                }
+            }
+            // SAFETY: as above.
+            let sub = unsafe {
+                libc::openat(
+                    d.as_raw_fd(),
+                    p.as_ptr(),
+                    libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                )
+            };
+            if sub < 0 {
+                return Err(last(l::FOLDER, part));
+            }
+            // SAFETY: `sub` is a descriptor openat just gave us.
+            d = unsafe { OwnedFd::from_raw_fd(sub) };
+        }
+        let n = c(name, l::CREATE)?;
+        let flags = if first {
+            // SAFETY: a zeroed `stat` is a valid value for fstatat to fill.
+            let mut st: libc::stat = unsafe { std::mem::zeroed() };
+            // SAFETY: the folder descriptor and C string live through the call.
+            let rc =
+                unsafe { libc::fstatat(d.as_raw_fd(), n.as_ptr(), &mut st, libc::AT_SYMLINK_NOFOLLOW) };
+            if rc == 0 {
+                // SAFETY: as above.
+                if (st.st_mode & libc::S_IFMT) == libc::S_IFREG
+                    && unsafe { libc::unlinkat(d.as_raw_fd(), n.as_ptr(), 0) } != 0
+                {
+                    return Err(last(l::UNLINK, name));
+                }
+            } else {
+                let e = std::io::Error::last_os_error();
+                if e.raw_os_error() != Some(libc::ENOENT) {
+                    return Err(Raise::at(l::STAT, os_error(&e, name)));
+                }
+            }
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC
+        } else {
+            libc::O_WRONLY | libc::O_APPEND | libc::O_NOFOLLOW | libc::O_CLOEXEC
+        };
+        // SAFETY: as above.
+        let fd = unsafe { libc::openat(d.as_raw_fd(), n.as_ptr(), flags, 0o666 as libc::c_uint) };
+        if fd < 0 {
+            return Err(last(if first { l::CREATE } else { l::APPEND }, name));
+        }
+        // SAFETY: `fd` is a descriptor openat just gave us.
+        Ok(unsafe { std::fs::File::from_raw_fd(fd) })
+    }
+
+    /// The file at `path`, read with `O_NOFOLLOW`.
+    pub fn read(path: &str) -> std::io::Result<Vec<u8>> {
+        let mut f = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(path)?;
+        let mut data = Vec::new();
+        f.read_to_end(&mut data)?;
+        Ok(data)
+    }
+}
+
+/// Elsewhere: the folders made, the file made fresh or appended to.
+#[cfg(not(unix))]
+mod nofollow {
+    use super::{line::step as l, os_error, Raise};
+
+    pub fn open(out: &str, parts: &[&str], first: bool) -> Result<std::fs::File, Raise> {
+        let path = super::join(out, parts);
+        if let Some(dir) = std::path::Path::new(&path).parent() {
+            std::fs::create_dir_all(dir)
+                .map_err(|e| Raise::at(l::MKDIR, os_error(&e, &dir.to_string_lossy())))?;
+        }
+        if first {
+            let _ = std::fs::remove_file(&path);
+        }
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(first)
+            .append(!first)
+            .open(&path)
+            .map_err(|e| Raise::at(if first { l::CREATE } else { l::APPEND }, os_error(&e, &path)))
+    }
+
+    pub fn read(path: &str) -> std::io::Result<Vec<u8>> {
+        std::fs::read(path)
+    }
 }

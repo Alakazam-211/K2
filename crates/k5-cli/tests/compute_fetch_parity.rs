@@ -12,6 +12,10 @@
 //!   error; Python's raise (exit 3).
 //! - The words: no job, a bad attempt, an unknown flag, `--out` last or
 //!   empty.
+//! - No link inside `--out` is followed: a linked folder or a linked
+//!   file on an artifact's way is refused (exit 3, `artifact_path_unsafe`)
+//!   and its target stays as it was; a plain file already there is
+//!   replaced, never appended to.
 
 #![cfg(unix)]
 
@@ -209,6 +213,114 @@ fn compute_fetch_files() {
         3,
         1,
     ));
+}
+
+/// `nl/d` a link to `../nl-else`.
+fn linked_folder(r: &Rig) {
+    owner_and_port(r);
+    for d in ["nl", "nl-else"] {
+        let _ = std::fs::remove_dir_all(r.proj.join(d));
+        std::fs::create_dir_all(r.proj.join(d)).unwrap();
+    }
+    std::os::unix::fs::symlink("../nl-else", r.proj.join("nl/d")).unwrap();
+}
+
+/// `nf/b.txt` a link to `../nf-target.txt`.
+fn linked_file(r: &Rig) {
+    owner_and_port(r);
+    let _ = std::fs::remove_dir_all(r.proj.join("nf"));
+    std::fs::create_dir_all(r.proj.join("nf")).unwrap();
+    std::fs::write(r.proj.join("nf-target.txt"), "keep\n").unwrap();
+    std::os::unix::fs::symlink("../nf-target.txt", r.proj.join("nf/b.txt")).unwrap();
+}
+
+/// `rr/b.txt` an old plain file, longer than the new one.
+fn old_file(r: &Rig) {
+    owner_and_port(r);
+    std::fs::create_dir_all(r.proj.join("rr")).unwrap();
+    std::fs::write(r.proj.join("rr/b.txt"), "an old file, longer than the new one\n").unwrap();
+}
+
+/// The case compared as the rig does, then each side once more with
+/// `after` checked on the project.
+fn check_each_side(rig: &Rig, c: &Case, after: fn(&Rig, &str)) {
+    rig.check(c);
+    for (side, bash) in [(Side::Bash, true), (Side::Rust, false)] {
+        rig.prepare(side, c);
+        let out = rig.run(bash, c);
+        rig.read(side, !bash, c.name);
+        assert_eq!(out.code, Some(c.code), "{} ({side:?}): {out:?}", c.name);
+        after(rig, &format!("{} ({side:?})", c.name));
+    }
+}
+
+#[test]
+fn compute_fetch_follows_no_link() {
+    let rig = Rig::new(VERB, "nofollow");
+    check_each_side(
+        &rig,
+        &case(
+            "a linked folder inside --out",
+            &["fetch", "j1", "--out", "nl"],
+            &[],
+            vec![ok(LIST), hello("b.txt"), hello("d/a.txt")],
+            linked_folder,
+            3,
+            3,
+        ),
+        |r, who| {
+            assert_eq!(
+                std::fs::read_dir(r.proj.join("nl-else")).unwrap().count(),
+                0,
+                "{who}: nothing through the link"
+            );
+            assert_eq!(std::fs::read(r.proj.join("nl/b.txt")).unwrap(), b"hello", "{who}");
+        },
+    );
+    check_each_side(
+        &rig,
+        &case(
+            "a linked artifact file inside --out",
+            &["fetch", "j1", "b.txt", "--out", "nf"],
+            &[],
+            vec![ok(LIST), hello("b.txt")],
+            linked_file,
+            3,
+            2,
+        ),
+        |r, who| {
+            assert_eq!(
+                std::fs::read_to_string(r.proj.join("nf-target.txt")).unwrap(),
+                "keep\n",
+                "{who}: the link's target"
+            );
+            let link = std::fs::read_link(r.proj.join("nf/b.txt")).unwrap();
+            assert_eq!(link, std::path::Path::new("../nf-target.txt"), "{who}");
+        },
+    );
+    check_each_side(
+        &rig,
+        &case(
+            "a plain file already there, in two pieces: replaced",
+            &["fetch", "j1", "b.txt", "--out", "rr"],
+            &[],
+            vec![
+                ok(LIST),
+                ok(&format!(
+                    r#"{{"name":"b.txt","offset":0,"eof":false,"data":"aGVs","sha256":"{HELLO_SHA}","bytes":5}}"#
+                )),
+                ok(&format!(
+                    r#"{{"name":"b.txt","offset":3,"eof":true,"data":"bG8=","sha256":"{HELLO_SHA}","bytes":5}}"#
+                )),
+            ],
+            old_file,
+            0,
+            3,
+        ),
+        |r, who| {
+            assert_eq!(std::fs::read(r.proj.join("rr/b.txt")).unwrap(), b"hello", "{who}");
+        },
+    );
 }
 
 #[test]

@@ -175,8 +175,7 @@ fn daemon_before_kit_route(args: &[OsString], settings: &crate::daemon::Settings
     let Ok(r) = client.get_update_version(super::update::BOOT_STATUS) else {
         return false;
     };
-    super::update::daemon_version(&r.body)
-        .is_some_and(|v| version_before(&v, KIT_ROUTE_SINCE))
+    super::update::daemon_version(&r.body).is_some_and(|v| version_before(&v, KIT_ROUTE_SINCE))
 }
 
 /// `[[ "$v" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+ ]] && _daemon_version_lt

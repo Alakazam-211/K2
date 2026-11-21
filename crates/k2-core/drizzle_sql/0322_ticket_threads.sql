@@ -23,6 +23,12 @@
 --     for rollback.
 DROP TRIGGER IF EXISTS read_retire_replaced_pin;
 --> statement-breakpoint
+-- A second run: this migration's own triggers name the catalog too, and a
+-- rename refuses while a trigger names a table that is gone. Made again below.
+DROP TRIGGER IF EXISTS overlay_conversations_project_deleted;
+--> statement-breakpoint
+DROP TRIGGER IF EXISTS overlay_conversations_ticket_deleted;
+--> statement-breakpoint
 DROP TABLE IF EXISTS overlay_conversations_0322;
 --> statement-breakpoint
 CREATE TABLE overlay_conversations_0322 (

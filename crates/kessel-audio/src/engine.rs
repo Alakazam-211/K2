@@ -7,7 +7,8 @@
 //!   resamples, runs echo cancellation, encodes, runs the jitter buffers,
 //!   decodes and mixes. It never takes a lock it could wait on (snapshots
 //!   are published with `try_lock`) and never blocks. On macOS and iOS it
-//!   runs real-time (see `sched`) and the capture callback wakes it; it
+//!   runs real-time as `EngineConfig::dsp_sched` asks (see `sched`) and
+//!   the capture callback wakes it; it
 //!   also wakes every `processing_poll`, and elsewhere only then;
 //! - **the control thread** (`kessel-audio-ctl`) opens and closes devices,
 //!   watches for hot-plug, turns snapshots into events, and frees memory the
@@ -336,6 +337,7 @@ impl AudioEngine {
         // The processing thread builds the core itself and reports back.
         let (ready_tx, ready_rx) = sync_channel::<Result<(), AudioError>>(1);
         let poll = cfg.processing_poll;
+        let dsp_sched = cfg.dsp_sched;
         let s = shared.clone();
         let dsp = std::thread::Builder::new()
             .name("kessel-audio-dsp".into())
@@ -343,7 +345,7 @@ impl AudioEngine {
                 Ok(core) => {
                     // Real-time before the first block, and before the
                     // device callbacks can wake it.
-                    let sched = crate::sched::promote_current();
+                    let sched = crate::sched::promote_current(dsp_sched);
                     if crate::sched::WAKE_FROM_IO {
                         s.io.set_dsp_waker(std::thread::current());
                     }
@@ -724,7 +726,7 @@ fn dsp_main(
     let mut last_capture: Option<Instant> = None;
     // The scheduling as last published (every snapshot carries it; a change
     // is published at once).
-    let mut published_sched = sched.mode();
+    let mut published_sched = sched.state();
     const BLOCK: Duration = Duration::from_millis(10);
     const MAX_CAPTURE_BLOCKS_PER_PASS: usize = 8;
     const CAPTURE_GAP: Duration = Duration::from_secs(1);
@@ -835,6 +837,9 @@ fn dsp_main(
                 for slot in c.buf[..need].iter_mut() {
                     *slot = c.rx.pop().unwrap_or(0.0);
                 }
+                // In DspSchedMode::OwnWorkgroup, the block runs in a work
+                // interval (started, or its deadline moved on).
+                sched.block_start();
                 if c.rs.process(&c.buf[..need], &mut block).is_err() {
                     break;
                 }
@@ -855,10 +860,15 @@ fn dsp_main(
             }
         }
 
+        // The pass's capture blocks are done: the work interval, if any,
+        // finishes.
+        sched.pass_end();
+
         // A stage bypass or retry is published at once, not with the next
         // levels; so is a scheduling change.
-        let mode = sched.mode();
-        if core.take_levels_due() | core.take_stage_changed() | (published_sched != mode) {
+        let state = sched.state();
+        let mode = state.0;
+        if core.take_levels_due() | core.take_stage_changed() | (published_sched != state) {
             publish = true;
         }
         if publish {
@@ -866,12 +876,13 @@ fn dsp_main(
                 core.fill_levels(&mut s.levels);
                 core.fill_stats(&mut s.stats);
                 s.stats.dsp_scheduling = mode;
+                s.stats.dsp_sched = sched.stats();
                 if let Some(stage) = s.stats.capture_stage.as_mut() {
                     stage.dsp_scheduling = mode;
                 }
                 s.version += 1;
                 publish = false;
-                published_sched = mode;
+                published_sched = state;
             }
         }
         if crate::sched::WAKE_FROM_IO {

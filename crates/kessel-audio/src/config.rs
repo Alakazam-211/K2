@@ -141,6 +141,15 @@ pub struct EngineConfig {
     /// How often the processing thread wakes to move audio. Must be well
     /// under 10 ms.
     pub processing_poll: Duration,
+    /// How the processing thread asks the OS to schedule it (macOS and iOS;
+    /// elsewhere it is reported as [`crate::DspSchedMode::Unsupported`]).
+    /// The default, [`crate::DspSchedMode::Workgroup`], is 0.2.4's
+    /// behaviour. Read once, as the thread starts; what it got is in
+    /// [`crate::Stats::dsp_sched`] and [`crate::Stats::dsp_scheduling`].
+    /// [`crate::DspSchedConfig::from_env`] and
+    /// [`crate::DspSchedConfig::from_lookup`] read one from the environment
+    /// or an app's settings.
+    pub dsp_sched: crate::DspSchedConfig,
     /// The phone backend's starting mode: the OS's voice processing (the
     /// default) or raw capture with no noise suppression. Change it during
     /// a call with [`crate::AudioEngine::set_phone_mode`]. Other backends
@@ -168,6 +177,7 @@ impl Default for EngineConfig {
             speaking_threshold_dbov: -45.0,
             device_poll_interval: Duration::from_secs(1),
             processing_poll: Duration::from_millis(2),
+            dsp_sched: crate::DspSchedConfig::default(),
             #[cfg(any(
                 test,
                 all(feature = "os-voice", any(target_os = "ios", target_os = "android"))
@@ -271,6 +281,12 @@ impl EngineConfig {
         self
     }
 
+    /// Set [`dsp_sched`](Self::dsp_sched).
+    pub fn with_dsp_sched(mut self, sched: crate::DspSchedConfig) -> Self {
+        self.dsp_sched = sched;
+        self
+    }
+
     /// Set [`phone_mode`](Self::phone_mode).
     #[cfg(any(
         test,
@@ -340,6 +356,7 @@ impl EngineConfig {
         if self.processing_poll.is_zero() || self.processing_poll >= Duration::from_millis(10) {
             return bad("processing_poll must be between 0 and 10 ms");
         }
+        self.dsp_sched.validate()?;
         if self.processing.stage_grace > crate::stage::MAX_STAGE_GRACE {
             return bad("processing.stage_grace must be at most 10 s");
         }

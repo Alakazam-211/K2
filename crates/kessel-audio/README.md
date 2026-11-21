@@ -311,9 +311,19 @@ period, 6 ms of computation, a 9 ms constraint), and on iOS with
 `Backend::OsVoiceProcessing` it joins the audio unit's OS workgroup while the
 unit runs (iOS 14 or later). The capture callback wakes it for each block.
 What the OS granted is in `Stats::dsp_scheduling` (and
-`CaptureStageStats::dsp_scheduling`): `Workgroup`, `TimeConstraint`, `Qos`
-or `None`. On Linux, Android and Windows the thread keeps the OS's default
-scheduling and polls.
+`CaptureStageStats::dsp_scheduling`): `Workgroup`, `OwnWorkgroup`,
+`TimeConstraint`, `Qos` or `None`. On Linux, Android and Windows the thread
+keeps the OS's default scheduling and polls.
+
+That set-up is the default `DspSchedMode::Workgroup`. `EngineConfig::dsp_sched`
+picks another: `TimeConstraintOnly` (the policy, no workgroup), `None` (a
+plain thread), or `OwnWorkgroup` (the policy and an audio work interval of the
+thread's own, with a per-block deadline, 3 ms by default). To switch without a
+rebuild, parse a mode from a setting (`"own_workgroup".parse()`), or use
+`DspSchedConfig::from_env()` (`KESSEL_AUDIO_DSP_SCHED`) or
+`DspSchedConfig::from_lookup`. A mode the OS refuses falls back to `Workgroup`;
+`Stats::dsp_sched` has the mode asked for, the mode in effect, why they differ,
+and the figures asked for.
 
 The Opus and echo-cancellation crates allocate small buffers per frame on the
 processing thread. The device callbacks are insulated from that by the rings

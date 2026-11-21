@@ -391,16 +391,16 @@ fn help_never_acts() {
             ..stop("help never acts", args, 0)
         });
     }
-    // `--id` and `--app` take the next word as it comes, so `-h` there is
-    // a value and the write is sent (a bash bug, app-catalog.sh:202-203;
-    // the rows flip when the fix lands).
+    // Right after `--id` or `--app` too: help, nothing sent (the shell's
+    // fix; the write was sent with -h as the value).
     for args in [
         &["catalog", "retry", "cj-3", "--id", "-h"][..],
         &["catalog", "retry", "cj-3", "--app", "--help"],
+        &["catalog", "job", "--app", "-h"],
     ] {
         rig.check(&Case {
             compare: Compare::Shell,
-            ..read("help as a value acts (bash bug)", args, r#"{"ok":true}"#)
+            ..stop("help right after a value flag", args, 0)
         });
     }
 }

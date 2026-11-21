@@ -1392,11 +1392,15 @@ _K2_CURL_TRIES=4
 # isn't on a socket already. Sets _K2_VIA_SOCK. K2_VIA_TCP=1 turns it off
 # (the daemon then refuses a bound passport: for tests of that refusal).
 _k2_via_session_sock() {
-    local cfg="$1" url="$2" a
+    local cfg="$1" url="$2" a mark
     shift 2
     _K2_VIA_SOCK=""
     [ "${K2_VIA_TCP:-0}" = 1 ] && return 1
     [ -n "${SCOPED_TOKEN:-}" ] || return 1
+    # Only a session the daemon placed in its agent's cgroup (it sets the
+    # mark): elsewhere a passport works over TCP as before.
+    _envn_into mark AGENT_CGROUP
+    [ -n "$mark" ] || return 1
     _cli_skip_uds && return 1
     case "$url" in http://127.0.0.1:*|http://localhost:*|http://\[::1\]:*) ;; *) return 1 ;; esac
     case "$cfg" in *"Authorization: Bearer ${SCOPED_TOKEN}"*) ;; *) return 1 ;; esac
@@ -1408,7 +1412,7 @@ _k2_via_session_sock() {
 }
 _k2_curl() {
     local cfg="$1"; shift
-    local try=1 rc once=0 a i hdr_file="" hdr_arg
+    local try=1 rc once=0 a i hdr_file="" hdr_arg via_sock=""
     for a in "$@"; do
         case "$a" in @-|-T) once=1 ;; esac
     done
@@ -1457,12 +1461,24 @@ _k2_curl() {
         # names no process). The socket hands the request to the same TCP
         # route code (X-K2-Via-Tcp), so nothing else changes.
         if _k2_via_session_sock "$cfg" "$url" "$@"; then
-            set -- --unix-socket "$_K2_VIA_SOCK" -H "X-K2-Via-Tcp: 1" "$@"
+            via_sock="$_K2_VIA_SOCK"
+            case "$cfg" in *$'\n') ;; *) cfg="${cfg}"$'\n' ;; esac
+            cfg="${cfg}header = \"X-K2-Via-Tcp: 1\""$'\n'
         fi
     fi
     while :; do
         rc=0
-        if [ -z "$cfg" ]; then
+        if [ -n "$via_sock" ]; then
+            printf '%s' "$cfg" | curl -K - --unix-socket "$via_sock" "$@" || rc=$?
+            # The socket took none of it (gone, refused): loopback TCP, as
+            # before; the daemon answers there itself (passport_needs_socket
+            # when the passport is bound).
+            if [ "$rc" -eq 7 ]; then
+                via_sock=""
+                cfg="${cfg//header = \"X-K2-Via-Tcp: 1\"$'\n'/}"
+                continue
+            fi
+        elif [ -z "$cfg" ]; then
             curl "$@" || rc=$?
         else
             printf '%s' "$cfg" | curl -K - "$@" || rc=$?

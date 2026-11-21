@@ -46,6 +46,9 @@ pub const CGROUP_FS: &str = "/sys/fs/cgroup";
 pub const ENV_SWITCH: &str = "K2_AGENT_CGROUP_IDENTITY";
 /// Per-agent cgroup names: `a-<workspace id>`.
 pub const PREFIX: &str = "a-";
+/// In an identity session's environment: its cgroup's name. The `k2` CLI
+/// sends every passport request over the session socket when it is set.
+pub const ENV_SESSION_MARK: &str = "K2_AGENT_CGROUP";
 
 /// What the claim is, in the words every surface uses.
 pub const CLAIM: &str = "each agent's terminals run in its own cgroup: traceable to the agent, and a passport copied out \
@@ -266,6 +269,10 @@ pub fn wrap(
     if iso.identity {
         let a = availability()?;
         spec.cgroup = Some(ensure_dir(&a, &iso.ws)?.to_string_lossy().into_owned());
+        // Tells the session's `k2` CLI that its passport is bound to this
+        // cgroup, so it sends every passport request over the session socket
+        // (the daemon refuses a bound passport on TCP).
+        spec.set.insert(ENV_SESSION_MARK.into(), cgroup_name(&iso.ws).unwrap_or_default());
     }
     if iso.fence {
         landlock_abi().map_err(|e| format!("the folder fence needs Landlock: {e}"))?;

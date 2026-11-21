@@ -132,7 +132,7 @@ run_all() { # extra env words…
     for v in "${VERBS[@]}"; do
         # shellcheck disable=SC2086
         (cd "$WS" && env -i PATH="/usr/bin:/bin" HOME="$FAKE_HOME" K2_HOME="$FAKE_HOME/.k2" \
-            K2_PROJECT_PATH="$WS" K2_HOOK_SOCK="$SOCK" K2_HOOK_TOKEN="$PASSPORT" "$@" \
+            K2_PROJECT_PATH="$WS" K2_HOOK_SOCK="$SOCK" K2_HOOK_TOKEN="$PASSPORT" K2_AGENT_CGROUP=a-ws1 "$@" \
             "$K2_CLI" $v >/dev/null 2>&1 </dev/null) || true
     done
 }
@@ -169,6 +169,19 @@ echo "== bite: K2_VIA_TCP=1 sends them to TCP again"
 run_all K2_VIA_TCP=1
 n="$(passport_over_tcp 2>/dev/null)"
 if [ "$n" -gt 0 ]; then ok "BITE: $n passport request(s) over TCP with the reroute off"; else bad "BITE: the reroute off still sent nothing over TCP (the check proves nothing)"; fi
+
+echo "== a session without the identity mark (K2_AGENT_CGROUP unset): as before"
+run_all K2_AGENT_CGROUP=
+if [ "$(count uds 1)" = 0 ]; then ok "no request marked X-K2-Via-Tcp without the mark"; else bad "marked requests without the mark"; fi
+n="$(passport_over_tcp 2>/dev/null)"
+if [ "$n" -gt 0 ]; then ok "$n passport request(s) over TCP, as before 0.46.17"; else bad "without the mark nothing went over TCP"; fi
+
+echo "== the socket is gone (connect refused): loopback TCP, as before"
+: >"$LOG_FILE"
+(cd "$WS" && env -i PATH="/usr/bin:/bin" HOME="$FAKE_HOME" K2_HOME="$FAKE_HOME/.k2" K2_PROJECT_PATH="$WS" \
+    K2_HOOK_SOCK="$SOCK_DIR/gone.sock" K2_HOOK_TOKEN="$PASSPORT" K2_AGENT_CGROUP=a-ws1 \
+    "$K2_CLI" workspace list >/dev/null 2>&1 </dev/null) || true
+if [ "$(passport_over_tcp 2>/dev/null)" -gt 0 ]; then ok "a missing socket falls back to TCP (the passport went there)"; else bad "no TCP request when the socket is gone: $(cat "$LOG_FILE")"; fi
 
 echo "== outside a session: the owner's own calls stay on TCP"
 : >"$LOG_FILE"

@@ -699,12 +699,22 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn getpass_reads_a_line_with_the_echo_off() {
-        use std::io::Write as _;
+        use std::io::{Read as _, Write as _};
         use std::os::fd::{AsRawFd, FromRawFd};
         let (master, far) = pty();
         let fd = far.as_raw_fd();
         let before = lflag(fd);
+        // SAFETY: dup hands back new fds this test owns.
         let mut m = unsafe { std::fs::File::from_raw_fd(libc::dup(master.as_raw_fd())) };
+        let mut screen = unsafe { std::fs::File::from_raw_fd(libc::dup(master.as_raw_fd())) };
+        // The terminal's screen side reads what is written to it, as a
+        // terminal window does. On macOS, TCSADRAIN waits until the
+        // prompt has been read from the pty, so with no reader the
+        // echo switch would wait for ever.
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 256];
+            while matches!(screen.read(&mut buf), Ok(n) if n > 0) {}
+        });
         let reader = std::thread::spawn(move || getpass_on(fd, "pw: "));
         std::thread::sleep(std::time::Duration::from_millis(300));
         m.write_all(b"s3cret\n").unwrap();

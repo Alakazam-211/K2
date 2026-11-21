@@ -22,8 +22,11 @@
 //! session checks pass: the tool is `schema`, an open one, whatever
 //! follows.
 //!
-//! A line with `-h` or `--help` in it never gets here: the front sends it
-//! to the shell ([`crate::front`]), which prints the manifest.
+//! Either word with one help flag after it (`--schema --help`) reaches
+//! this family through its help form ([`crate::text::FAMILY_FORMS`]):
+//! the shell's router reads no word after it and prints the manifest. Any
+//! other line with `-h` or `--help` in it never gets here: the front sends
+//! it to the shell ([`crate::front`]).
 
 pub mod join;
 

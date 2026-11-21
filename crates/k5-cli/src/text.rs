@@ -133,6 +133,11 @@ macro_rules! family {
 /// owner), and off is `Unknown command: permission` and the daily tier.
 /// On, help wins (`_permission_cmd`'s `_wants_help`): the usage, and
 /// nothing sent but the probe.
+///
+/// `--schema` and `schema` ([`crate::families::schema`]): the router arm
+/// reads no word after it, so `--schema --help` prints the manifest, the
+/// version line and all (not a captured page: every release moves the
+/// version, and the manifest names other versions too).
 pub static FAMILY_FORMS: &[HelpForm] = &[
     family!("permission" "--help"),
     family!("permission" "-h"),
@@ -160,6 +165,10 @@ pub static FAMILY_FORMS: &[HelpForm] = &[
     family!("permission" "approvers" "-h"),
     family!("permission" "agent" "--help"),
     family!("permission" "agent" "-h"),
+    family!("--schema" "--help"),
+    family!("--schema" "-h"),
+    family!("schema" "--help"),
+    family!("schema" "-h"),
 ];
 
 /// The captured help form that is exactly `argv` ([`CAPTURED_FORMS`],

@@ -9,8 +9,10 @@
 //! tool is an open one: no check runs); no token and no port (the shell
 //! skips the connection gate for both words); the virtual desktop's
 //! guard, which stops `schema` but not `--schema` or a form with a help
-//! flag; and a `CODEX_` setting. A form with a help flag is the shell's
-//! (the front hands it over), compared as such.
+//! flag; and a `CODEX_` setting. Either word with one help flag after it
+//! is the family's own line (`text::FAMILY_FORMS`: the manifest, as the
+//! shell prints it); a form with a help flag and other words is the
+//! shell's (the front hands it over), compared as such.
 
 #![cfg(unix)]
 
@@ -74,14 +76,20 @@ impl Form {
         self.verb == "--schema" || self.help()
     }
 
-    /// A help word is in it: the front hands the line to the shell.
+    /// A help word is in it.
     fn help(&self) -> bool {
         self.args.iter().any(|a| matches!(*a, "-h" | "--help"))
+    }
+
+    /// The front hands the line to the shell: a help word, and the line is
+    /// not one help flag alone (a family form).
+    fn handed(&self) -> bool {
+        self.help() && !matches!(self.args, ["--help" | "-h"])
     }
 }
 
 fn rows(f: &Form) -> Vec<Case> {
-    let compare = if f.help() {
+    let compare = if f.handed() {
         Compare::Shell
     } else {
         Compare::Exact
@@ -157,10 +165,21 @@ fn dash_dash_schema() {
             args: &["json"],
             tag: "json",
         },
+        // native: --schema --help
+        Form {
+            verb: "--schema",
+            args: &["--help"],
+            tag: "help",
+        },
+        Form {
+            verb: "--schema",
+            args: &["-h"],
+            tag: "help-h",
+        },
         Form {
             verb: "--schema",
             args: &["--help", "x"],
-            tag: "help",
+            tag: "help-and-word",
         },
     ]);
 }
@@ -182,6 +201,11 @@ fn the_word_schema() {
             verb: "schema",
             args: &["-h"],
             tag: "help",
+        },
+        Form {
+            verb: "schema",
+            args: &["--help"],
+            tag: "help-long",
         },
     ]);
 }

@@ -995,13 +995,14 @@ fn organization_alone_is_the_help_page() {
             3,
             0,
         ),
+        // The bare help names no tool, so no id tool's refusal: the page.
         case(
             "alone: HOOK_SOCK set and no passport",
             &[],
             &[("K2_HOOK_SOCK", "{sock}")],
             vec![],
             owner_and_port,
-            3,
+            0,
             0,
         ),
     ];

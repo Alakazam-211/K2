@@ -348,7 +348,10 @@ fn hostmail_notices_answer_as_the_shell_does() {
 
 /// `--text -` with bytes that are not plain text. Not UTF-8: Python
 /// holds each bad byte as its surrogate escape and `dumps(body).encode()`
-/// raises, nothing sent (one byte; a run of them, named as a range). A
+/// raises, nothing sent (one byte; a run of them, named as a range; the
+/// traceback compared as the rig compares one, its frames by Python's
+/// version, and the exception's place by the unit tests of
+/// `core::encode_body`). A
 /// NUL: dropped by both, and from bash 4.4 bash warns on stderr naming
 /// its own line, the named difference `nul-in-stdin-text`
 /// (`scripts/cli-parity.sh`).
@@ -356,30 +359,36 @@ fn hostmail_notices_answer_as_the_shell_does() {
 fn text_on_stdin_that_is_not_plain() {
     let rig = Rig::new(VERB, "nstdin");
     let v = vec![
-        Case {
-            stdin: Some(b"Away \xff now.\n"),
-            ..case(
-                "ooo set, stdin not UTF-8: the shell's raise, nothing sent",
-                &["ooo", "set", "sales@acme.example", "--text", "-"],
-                &[],
-                vec![],
-                owner_and_port,
-                1,
-                0,
-            )
-        },
-        Case {
-            stdin: Some(b"\xe2\x82 Sent by Acme \xff\xfe\n"),
-            ..case(
-                "footer set, stdin with a run of bad bytes: the range",
-                &["footer", "set", "--text", "-", "--json"],
-                &[],
-                vec![],
-                owner_and_port,
-                1,
-                0,
-            )
-        },
+        compare(
+            Compare::Traceback,
+            Case {
+                stdin: Some(b"Away \xff now.\n"),
+                ..case(
+                    "ooo set, stdin not UTF-8: the shell's raise, nothing sent",
+                    &["ooo", "set", "sales@acme.example", "--text", "-"],
+                    &[],
+                    vec![],
+                    owner_and_port,
+                    1,
+                    0,
+                )
+            },
+        ),
+        compare(
+            Compare::Traceback,
+            Case {
+                stdin: Some(b"\xe2\x82 Sent by Acme \xff\xfe\n"),
+                ..case(
+                    "footer set, stdin with a run of bad bytes: the range",
+                    &["footer", "set", "--text", "-", "--json"],
+                    &[],
+                    vec![],
+                    owner_and_port,
+                    1,
+                    0,
+                )
+            },
+        ),
         compare(
             Compare::NulInAnswer,
             Case {

@@ -181,6 +181,14 @@ Who may start recordings in the voice rooms is the owner's or an admin's. Your o
 
 Recording in direct messages is the same: `k2 hostchat recording policy set dm_enabled on` (or `off`), with no other key, ends with `k2 permission request voice.recording-dm dm=on --why "..."`. Run it as printed. The owner or an admin allows it once, with a confirm, and it is applied on their side: you run nothing afterwards. `--require-recording` and the other policies have no card: ask your human in your Thread. `k2 study app-recording`.
 
+## Focus groups
+
+Focus groups are this server's sidebar groups of workspaces. `k2 focus-group list` is yours. Creating, renaming and filling them is a person's: `k2 focus-group create|rename|add|remove` and `k2 agent set <ws> --focus-group <name>|none` are refused with `focus_group_needs_person` (exit 3) and end with the line to ask with, for example:
+
+    k2 permission request focus-groups.assign group=<group> target=<workspace> --why "<what you need it for>"
+
+(`focus-groups.create name=<name>`, `focus-groups.rename group=<group> to=<new name>`; `group=none` takes a workspace out of its group.) Run it as printed. The owner or an admin allows it, and the card makes exactly that change, once: don't run the command again. Each further change is its own card.
+
 ## Apps
 
 - App guests never see permission cards. Never tell a guest a switch, agent, server or request id; say an administrator was asked.

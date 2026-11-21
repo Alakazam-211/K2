@@ -1,6 +1,7 @@
 Change one or more of an agent's settings in a single call.
 Uses the same SETTINGS flags as hire (--mode, --enabled, --name, --persona)
-plus project membership (--add-project / --remove-project); set does not
+plus project membership (--add-project / --remove-project) and the focus
+group (--focus-group); set does not
 wire connections or launch sessions. Unknown flags fail (exit 2) and list
 the valid flags.
 
@@ -21,6 +22,11 @@ FLAGS
                           repeatable). Removing the current PoC is refused
                           (poc_successor_required) until `k2 project poc`
                           names a successor.
+  --focus-group <group>   Put the workspace in this focus group (name, the start
+                          of exactly one name, or id; none = in no group).
+                          Already there = reported no-op. A person's: an agent
+                          is refused (exit 3) and asks with the
+                          focus-groups.assign card (k2 focus-group --help)
   --dry-run               Show what would change; change nothing
   --json                  JSON output
 
@@ -28,3 +34,4 @@ EXAMPLES
   k2 agent set scout --mode manager
   k2 agent set scout --enabled false --persona ./scout-v2.md
   k2 agent set scout --add-project "Blue Harbor" --remove-project sandbox
+  k2 agent set scout --focus-group "Client work"

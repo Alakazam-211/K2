@@ -129,6 +129,7 @@ glossary.sh
 activity.sh
 help-helpers.sh
 agent.sh
+focus-group.sh
 agent-context.sh
 help.sh
 msg-inbox.sh

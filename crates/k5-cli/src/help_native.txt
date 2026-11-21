@@ -274,6 +274,8 @@ feedback template --help|feedback/template|out|0
 feedback template -h|feedback/template|out|0
 firewall --help|firewall|out|0
 firewall -h|firewall|out|0
+focus-group --help|focus-group|out|0
+focus-group -h|focus-group|out|0
 front --help|front|out|0
 front -h|front|out|0
 git-tools --help|git-tools|out|0

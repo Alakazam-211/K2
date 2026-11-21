@@ -647,6 +647,10 @@ case "${1:-help}" in
         # Phase 2.1 A10: K2 glossary lookup.
         shift; cmd_glossary "$@"
         ;;
+    focus-group|focus-groups)
+        # 0.46.17: the sidebar's focus groups (BEGIN_CLI_FOCUS_GROUP).
+        shift; cmd_focus_group "$@"
+        ;;
     help-deprecated)
         cmd_help_deprecated
         ;;

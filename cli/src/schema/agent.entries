@@ -159,7 +159,7 @@
     },
     {
       "name": "agent set",
-      "usage": "k2 agent set <name> [--mode <m>] [--enabled <bool>] [--name <new>] [--persona <file.md>] [--add-project <p>]... [--remove-project <p>]... [--dry-run] [--json]",
+      "usage": "k2 agent set <name> [--mode <m>] [--enabled <bool>] [--name <new>] [--persona <file.md>] [--add-project <p>]... [--remove-project <p>]... [--focus-group <group>|none] [--dry-run] [--json]",
       "description": "Change one or more settings in a single call (hire's SETTINGS flags plus project membership; no connection wiring or launching). Unknown flags exit 2 listing the valid ones.",
       "args": [{"name": "name", "required": true}],
       "flags": [
@@ -169,16 +169,24 @@
         {"name": "--persona", "arg": "file.md", "description": "Replace the persona with this file's contents (previous persona backed up automatically)."},
         {"name": "--add-project", "arg": "project", "description": "Add the agent to a project (name or id, repeatable). Already a member = reported no-op; the FIRST member of an empty project becomes its Point of Contact (becamePoc)."},
         {"name": "--remove-project", "arg": "project", "description": "Remove the agent from a project (membership only, repeatable). Removing the current PoC is refused (poc_successor_required, exit 1) until 'k2 project poc' names a successor."},
+        {"name": "--focus-group", "arg": "group", "description": "Put the workspace in this focus group (name, unique start or id; none = no group). Already there = reported no-op. A person's: an agent is refused focus_group_needs_person (exit 3) and asks with the focus-groups.assign card. POST /cli/focus-groups/assign."},
         {"name": "--dry-run", "arg": null, "description": "Show what would change; change nothing."},
         {"name": "--json", "arg": null, "description": "JSON output (ok/changed/actions)."}
       ]
+    },
+    {
+      "name": "focus-group",
+      "usage": "k2 focus-group [list] [--json] | k2 focus-group create <name> | rename <group> <new-name> | add <group> <workspace> | remove <group> <workspace>",
+      "description": "The sidebar's focus groups (Settings → Workspaces / Agents). list is open to agents. create, rename, add and remove are a person's: an agent is refused focus_group_needs_person (exit 3), and with permission cards on the refusal ends with the card to ask with (focus-groups.create name=, focus-groups.rename group= to=, focus-groups.assign group= target=; group=none takes a workspace out). <group> is a name (any case), the start of exactly one name, or an id. add/remove with nothing to change exit 0. Exit 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found or ambiguous. GET /cli/focus-groups/list; POST /cli/focus-groups/create {name}, /update {id, name}, /assign {projectId, focusGroupId}.",
+      "args": [{"name": "verb", "required": false}],
+      "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON (list: {ok, focusGroups:[{id,name,color,tabOrder,createdAt}]})."}]
     },
     {
       "name": "agent list",
       "usage": "k2 agent list [--json]",
       "description": "Fleet view: every agent on this server with name, mode, enabled, live status, path. Scripts use --json, never the table (names and paths can contain spaces).",
       "args": [],
-      "flags": [{"name": "--json", "arg": null, "description": "Machine-readable {ok,agents:[{name,id,handle,mode,enabled,live,sessionId,backend,ptydAdopted,path}]}."}]
+      "flags": [{"name": "--json", "arg": null, "description": "Machine-readable {ok,agents:[{name,id,handle,mode,enabled,live,sessionId,backend,ptydAdopted,path,focusGroup}]}; focusGroup is the group's name, null when in none."}]
     },
     {
       "name": "agent retire",

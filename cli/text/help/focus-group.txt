@@ -1,0 +1,39 @@
+Focus groups: the sidebar's groups of workspaces (Settings → Workspaces / Agents).
+
+USAGE
+  k2 focus-group [list] [--json]           Every focus group: its name and id
+  k2 focus-group create <name>             Make a new, empty group
+  k2 focus-group rename <group> <new-name> Rename a group (its workspaces stay in it)
+  k2 focus-group add <group> <workspace>   Put a workspace in a group (it leaves its old one)
+  k2 focus-group remove <group> <workspace>
+                                           Take a workspace out of its group
+  k2 agent set <workspace> --focus-group <group>|none
+                                           The same as add (none = remove)
+
+  <group>       a group's name (any case), the start of exactly one name, or its id
+  <workspace>   handle, name or path ("." = the current directory)
+  --json        The daemon's JSON
+  --            Everything after it is a name, even one that starts with -
+
+  `k2 workspace list --json` names each workspace's group (focusGroup, null
+  when it is in none).
+
+WHO
+  Anyone may list. Creating, renaming and filling groups is a person's: the
+  owner (the desktop app, or a terminal outside K2), a person signed in to
+  this server, or a person typing in a K2 shell tab. An agent is refused
+  (exit 3, focus_group_needs_person); with permission cards on, the refusal
+  ends with the card to ask with, for example:
+    k2 permission request focus-groups.assign group=<group> target=<workspace> --why "…"
+  (focus-groups.create name=<name>, focus-groups.rename group=<group> to=<new-name>).
+  The owner or an admin taps Allow and K2 makes that one change.
+
+EXAMPLES
+  k2 focus-group
+  k2 focus-group create "Client work"
+  k2 focus-group add "Client work" sales
+  k2 focus-group rename client Clients
+  k2 focus-group remove Clients sales
+
+EXIT CODES
+  0 ok (or nothing to change) · 1 error · 2 bad usage · 3 refused · 4 not found or ambiguous

@@ -133,6 +133,10 @@ _cli_tool_id_for_verb() {
         # daemon sees the session passport, never the owner token, and the
         # agent's "Manage K2 projects" switch applies to its mutations.
         project) echo "project" ;;
+        # 0.46.17: `k2 focus-group` is an `id` tool and locked, so inside a K2
+        # terminal it sends the session passport (an agent lists; its
+        # changes are refused and asked for with a card), never the owner token.
+        focus-group|focus-groups) echo "focus-groups" ;;
         # The Org Chart: an `id` tool, so inside a K2 terminal the daemon
         # sees the session passport (the agent's own org, head and read
         # marker), never the owner token.
@@ -226,7 +230,7 @@ _cli_tool_default_mode() {
         help|schema|whats-new|checkin|activity|read|skills|wiki|tools-policy|study|"") echo "open" ;;
         msg|inbox|respond|awareness|connections|heartbeat|sidecar|project|organization) echo "id" ;;
         mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|skin|remote-session) echo "id" ;;
-        browser-open|settings|llm-accounts|compute|vault|sources|agent-teams|agent-identity|agent-harness|changes|usage|hostchat|jobs|sim|desktop|chat|migrate|docs) echo "id" ;;
+        browser-open|settings|llm-accounts|compute|vault|sources|agent-teams|agent-identity|agent-harness|changes|usage|hostchat|jobs|sim|desktop|chat|migrate|docs|focus-groups) echo "id" ;;
         *) echo "open" ;;
     esac
 }
@@ -234,7 +238,7 @@ _cli_tool_default_mode() {
 # True when the tool is a locked production floor (cannot be set Open).
 _cli_tool_is_locked() {
     case "${1:-}" in
-        mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|skin|remote-session|llm-accounts|compute|vault|sources|agent-teams|agent-identity|agent-harness|changes|usage|hostchat|jobs|sim|desktop|chat|migrate|docs) return 0 ;;
+        mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|skin|remote-session|llm-accounts|compute|vault|sources|agent-teams|agent-identity|agent-harness|changes|usage|hostchat|jobs|sim|desktop|chat|migrate|docs|focus-groups) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -1159,6 +1163,8 @@ _k2_takes_dashdash() {
         postal) return 0 ;;                   # postal.sh cmd_postal
         remind) return 0 ;;                   # remind.sh _remind_add
         chat) return 0 ;;                     # chat.sh cmd_chat
+        # A group name may start with a dash: after `--` every word is a name.
+        focus-group|focus-groups) return 0 ;; # focus-group.sh:177 cmd_focus_group
     esac
     case "${1:-} ${2:-}" in
         "compute run") return 0 ;;            # compute-run.sh cmd_compute_run

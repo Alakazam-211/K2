@@ -8,8 +8,10 @@ FLAGS
   --json                  Machine-readable output, for scripts (names and paths can
                           contain spaces; never parse the table):
                           {"ok":true,"agents":[{"name","id","handle","mode","enabled",
-                           "live","sessionId","backend","ptydAdopted","path"}]}
+                           "live","sessionId","backend","ptydAdopted","path",
+                           "focusGroup"}]}
                           path: absolute; live: true/false; sessionId and backend
                           ("ptyd" or "in-process") are null when not live;
                           ptydAdopted: true when the session survived a daemon
-                          restart (false when not live). Check "ok" first.
+                          restart (false when not live); focusGroup: the
+                          focus group's name, null when in none. Check "ok" first.

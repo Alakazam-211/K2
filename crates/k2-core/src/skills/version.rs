@@ -389,7 +389,8 @@ pub const SKILL_VERSION_WORKSPACE: u32 = 65;
 /// v19 = 0.46.17: "CI on K2 Compute" (`ci.preview`, `ci.preview-off`).
 /// v20 = 0.46.17: "Recording in this server's chat" (`voice.recording-start-level`,
 /// `voice.recording-dm`).
-pub const SKILL_VERSION_PERMISSIONS: u32 = 20;
+/// v21 = 0.46.17: "Focus groups" (`focus-groups.create`, `.rename`, `.assign`).
+pub const SKILL_VERSION_PERMISSIONS: u32 = 21;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

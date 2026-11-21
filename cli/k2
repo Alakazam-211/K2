@@ -639,6 +639,10 @@ _cli_tool_id_for_verb() {
         # daemon sees the session passport, never the owner token, and the
         # agent's "Manage K2 projects" switch applies to its mutations.
         project) echo "project" ;;
+        # 0.46.17: `k2 focus-group` is an `id` tool and locked, so inside a K2
+        # terminal it sends the session passport (an agent lists; its
+        # changes are refused and asked for with a card), never the owner token.
+        focus-group|focus-groups) echo "focus-groups" ;;
         # The Org Chart: an `id` tool, so inside a K2 terminal the daemon
         # sees the session passport (the agent's own org, head and read
         # marker), never the owner token.
@@ -732,7 +736,7 @@ _cli_tool_default_mode() {
         help|schema|whats-new|checkin|activity|read|skills|wiki|tools-policy|study|"") echo "open" ;;
         msg|inbox|respond|awareness|connections|heartbeat|sidecar|project|organization) echo "id" ;;
         mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|skin|remote-session) echo "id" ;;
-        browser-open|settings|llm-accounts|compute|vault|sources|agent-teams|agent-identity|agent-harness|changes|usage|hostchat|jobs|sim|desktop|chat|migrate|docs) echo "id" ;;
+        browser-open|settings|llm-accounts|compute|vault|sources|agent-teams|agent-identity|agent-harness|changes|usage|hostchat|jobs|sim|desktop|chat|migrate|docs|focus-groups) echo "id" ;;
         *) echo "open" ;;
     esac
 }
@@ -740,7 +744,7 @@ _cli_tool_default_mode() {
 # True when the tool is a locked production floor (cannot be set Open).
 _cli_tool_is_locked() {
     case "${1:-}" in
-        mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|skin|remote-session|llm-accounts|compute|vault|sources|agent-teams|agent-identity|agent-harness|changes|usage|hostchat|jobs|sim|desktop|chat|migrate|docs) return 0 ;;
+        mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|skin|remote-session|llm-accounts|compute|vault|sources|agent-teams|agent-identity|agent-harness|changes|usage|hostchat|jobs|sim|desktop|chat|migrate|docs|focus-groups) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -1665,6 +1669,8 @@ _k2_takes_dashdash() {
         postal) return 0 ;;                   # postal.sh cmd_postal
         remind) return 0 ;;                   # remind.sh _remind_add
         chat) return 0 ;;                     # chat.sh cmd_chat
+        # A group name may start with a dash: after `--` every word is a name.
+        focus-group|focus-groups) return 0 ;; # focus-group.sh:177 cmd_focus_group
     esac
     case "${1:-} ${2:-}" in
         "compute run") return 0 ;;            # compute-run.sh cmd_compute_run
@@ -54802,7 +54808,7 @@ cmd_schema() {
     },
     {
       "name": "agent set",
-      "usage": "k2 agent set <name> [--mode <m>] [--enabled <bool>] [--name <new>] [--persona <file.md>] [--add-project <p>]... [--remove-project <p>]... [--dry-run] [--json]",
+      "usage": "k2 agent set <name> [--mode <m>] [--enabled <bool>] [--name <new>] [--persona <file.md>] [--add-project <p>]... [--remove-project <p>]... [--focus-group <group>|none] [--dry-run] [--json]",
       "description": "Change one or more settings in a single call (hire's SETTINGS flags plus project membership; no connection wiring or launching). Unknown flags exit 2 listing the valid ones.",
       "args": [{"name": "name", "required": true}],
       "flags": [
@@ -54812,16 +54818,24 @@ cmd_schema() {
         {"name": "--persona", "arg": "file.md", "description": "Replace the persona with this file's contents (previous persona backed up automatically)."},
         {"name": "--add-project", "arg": "project", "description": "Add the agent to a project (name or id, repeatable). Already a member = reported no-op; the FIRST member of an empty project becomes its Point of Contact (becamePoc)."},
         {"name": "--remove-project", "arg": "project", "description": "Remove the agent from a project (membership only, repeatable). Removing the current PoC is refused (poc_successor_required, exit 1) until 'k2 project poc' names a successor."},
+        {"name": "--focus-group", "arg": "group", "description": "Put the workspace in this focus group (name, unique start or id; none = no group). Already there = reported no-op. A person's: an agent is refused focus_group_needs_person (exit 3) and asks with the focus-groups.assign card. POST /cli/focus-groups/assign."},
         {"name": "--dry-run", "arg": null, "description": "Show what would change; change nothing."},
         {"name": "--json", "arg": null, "description": "JSON output (ok/changed/actions)."}
       ]
+    },
+    {
+      "name": "focus-group",
+      "usage": "k2 focus-group [list] [--json] | k2 focus-group create <name> | rename <group> <new-name> | add <group> <workspace> | remove <group> <workspace>",
+      "description": "The sidebar's focus groups (Settings → Workspaces / Agents). list is open to agents. create, rename, add and remove are a person's: an agent is refused focus_group_needs_person (exit 3), and with permission cards on the refusal ends with the card to ask with (focus-groups.create name=, focus-groups.rename group= to=, focus-groups.assign group= target=; group=none takes a workspace out). <group> is a name (any case), the start of exactly one name, or an id. add/remove with nothing to change exit 0. Exit 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found or ambiguous. GET /cli/focus-groups/list; POST /cli/focus-groups/create {name}, /update {id, name}, /assign {projectId, focusGroupId}.",
+      "args": [{"name": "verb", "required": false}],
+      "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON (list: {ok, focusGroups:[{id,name,color,tabOrder,createdAt}]})."}]
     },
     {
       "name": "agent list",
       "usage": "k2 agent list [--json]",
       "description": "Fleet view: every agent on this server with name, mode, enabled, live status, path. Scripts use --json, never the table (names and paths can contain spaces).",
       "args": [],
-      "flags": [{"name": "--json", "arg": null, "description": "Machine-readable {ok,agents:[{name,id,handle,mode,enabled,live,sessionId,backend,ptydAdopted,path}]}."}]
+      "flags": [{"name": "--json", "arg": null, "description": "Machine-readable {ok,agents:[{name,id,handle,mode,enabled,live,sessionId,backend,ptydAdopted,path,focusGroup}]}; focusGroup is the group's name, null when in none."}]
     },
     {
       "name": "agent retire",
@@ -73916,7 +73930,8 @@ cmd_help_agent_set() {
     cat <<'EOF'
 Change one or more of an agent's settings in a single call.
 Uses the same SETTINGS flags as hire (--mode, --enabled, --name, --persona)
-plus project membership (--add-project / --remove-project); set does not
+plus project membership (--add-project / --remove-project) and the focus
+group (--focus-group); set does not
 wire connections or launch sessions. Unknown flags fail (exit 2) and list
 the valid flags.
 
@@ -73937,6 +73952,11 @@ FLAGS
                           repeatable). Removing the current PoC is refused
                           (poc_successor_required) until `k2 project poc`
                           names a successor.
+  --focus-group <group>   Put the workspace in this focus group (name, the start
+                          of exactly one name, or id; none = in no group).
+                          Already there = reported no-op. A person's: an agent
+                          is refused (exit 3) and asks with the
+                          focus-groups.assign card (k2 focus-group --help)
   --dry-run               Show what would change; change nothing
   --json                  JSON output
 
@@ -73944,6 +73964,7 @@ EXAMPLES
   k2 agent set scout --mode manager
   k2 agent set scout --enabled false --persona ./scout-v2.md
   k2 agent set scout --add-project "Blue Harbor" --remove-project sandbox
+  k2 agent set scout --focus-group "Client work"
 EOF
 }
 
@@ -74225,9 +74246,9 @@ PYEOF
 
 cmd_agent_set() {
     if _wants_help "$@"; then cmd_help_agent_set; exit 0; fi
-    local name="" mode="" enabled="" new_name="" persona="" dry_run=false as_json=false
+    local name="" mode="" enabled="" new_name="" persona="" focus_group="" dry_run=false as_json=false
     local add_projects=() remove_projects=()
-    local valid_flags="--mode --enabled --name --persona --add-project --remove-project --dry-run --json"
+    local valid_flags="--mode --enabled --name --persona --add-project --remove-project --focus-group --dry-run --json"
     while [ $# -gt 0 ]; do
         case "$1" in
             --mode)
@@ -74248,6 +74269,9 @@ cmd_agent_set() {
             --remove-project)
                 [ $# -ge 2 ] || { _agent_err "bad_usage" "--remove-project requires a project name or id (see: k2 project list)"; exit 2; }
                 remove_projects+=("$2"); shift 2 ;;
+            --focus-group)
+                [ $# -ge 2 ] || { _agent_err "bad_usage" "--focus-group requires a group name or id (or none; see: k2 focus-group list)"; exit 2; }
+                focus_group="$2"; shift 2 ;;
             --dry-run) dry_run=true; shift ;;
             --json) as_json=true; shift ;;
             -*)
@@ -74265,9 +74289,9 @@ cmd_agent_set() {
         _agent_err "bad_usage" "missing <name> — usage: k2 agent set <name> [flags] (valid flags: $valid_flags)"
         exit 2
     fi
-    if [ -z "$mode" ] && [ -z "$enabled" ] && [ -z "$new_name" ] && [ -z "$persona" ] \
+    if [ -z "$mode" ] && [ -z "$enabled" ] && [ -z "$new_name" ] && [ -z "$persona" ] && [ -z "$focus_group" ] \
         && [ ${#add_projects[@]} -eq 0 ] && [ ${#remove_projects[@]} -eq 0 ]; then
-        _agent_err "bad_usage" "nothing to set — pass at least one of: --mode --enabled --name --persona --add-project --remove-project"
+        _agent_err "bad_usage" "nothing to set — pass at least one of: --mode --enabled --name --persona --add-project --remove-project --focus-group"
         exit 2
     fi
     case "$mode" in
@@ -74296,7 +74320,7 @@ cmd_agent_set() {
         ${remove_projects[@]+"${remove_projects[@]}"})
     CONF="$conf" MODE="$mode" ENABLED="$enabled" NEW_NAME="$new_name" \
     PERSONA_FILE="$persona" ADD_PROJECTS="$add_projects_json" \
-    REMOVE_PROJECTS="$remove_projects_json" DRY_RUN="$dry_run" AS_JSON="$as_json" \
+    REMOVE_PROJECTS="$remove_projects_json" FOCUS_GROUP="$focus_group" DRY_RUN="$dry_run" AS_JSON="$as_json" \
     APROJTOKEN="$(_k2_project_token)" \
     ABASE="$BASE_URL" ATOKEN="$TOKEN" _K5_PY_HTTP="$_K5_PY_HTTP" _K5_PY_HEADERS="$(_k5_py_headers)" python3 - <<'PYEOF'
 import json, os, re, sys
@@ -74488,6 +74512,38 @@ for p in removes:
             a["note"] = "current PoC — refused until a successor is named"
     actions.append(a)
 
+# The focus group (0.46.17): matched as `k2 agent hire --focus-group` and
+# `k2 focus-group` match (id, name in any case, the start of exactly one
+# name); none (or off, -) = in no group. The assign rides the session
+# passport in a K2 terminal, so an agent is refused (a person's step).
+focus_group_arg = os.environ.get("FOCUS_GROUP", "").strip()
+if focus_group_arg:
+    if focus_group_arg.lower() in ("none", "off", "-"):
+        want_fg, want_fg_label = None, "none"
+    else:
+        groups = http_get("/cli/focus-groups/list", {})
+        if not isinstance(groups, list):
+            err = groups.get("error") if isinstance(groups, dict) else None
+            if isinstance(err, dict):
+                err = err.get("hint") or err.get("code")
+            fail("daemon_error", "cannot list focus groups: %s" % (err or "unexpected response"))
+        low = focus_group_arg.lower()
+        hits = [g for g in groups if g.get("id") == focus_group_arg or (g.get("name") or "").lower() == low]
+        if not hits:
+            hits = [g for g in groups if (g.get("name") or "").lower().startswith(low)]
+        if not hits:
+            fail("not_found", "no focus group matches '%s' (see: k2 focus-group list)" % focus_group_arg, 4)
+        if len(hits) > 1:
+            fail("ambiguous", "'%s' matches more than one focus group: %s (pass the id)" %
+                 (focus_group_arg, ", ".join(sorted((g.get("name") or g.get("id") or "?") for g in hits))), 4)
+        want_fg, want_fg_label = hits[0].get("id") or None, hits[0].get("name") or focus_group_arg
+    a = {"step": "set-focus-group", "group": want_fg_label, "focusGroupId": want_fg}
+    if (conf.get("focusGroupId") or None) == want_fg:
+        a.update(status="skipped", reason="already %s" % want_fg_label)
+    else:
+        a["status"] = "pending"
+    actions.append(a)
+
 def emit(ok, changed, extra_status=None):
     out = {"ok": ok, "changed": changed, "name": conf.get("name"), "path": path,
            "actions": actions}
@@ -74521,6 +74577,10 @@ def emit(ok, changed, extra_status=None):
                 line = "leave-project: %s" % a["project"]
                 if a.get("note"):
                     line += " (%s)" % a["note"]
+                if status == "skipped" and a.get("reason"):
+                    line += "  (%s)" % a["reason"]
+            elif step == "set-focus-group":
+                line = "focus-group: %s" % a["group"]
                 if status == "skipped" and a.get("reason"):
                     line += "  (%s)" % a["reason"]
             else:
@@ -74640,6 +74700,47 @@ for a in actions:
             else:
                 a.pop("becamePoc", None)
         changed = True
+
+# 5. The focus group, last: a refusal (exit 3) leaves the steps above done.
+for a in actions:
+    if a["step"] != "set-focus-group" or a["status"] != "pending":
+        continue
+    req = urllib.request.Request(base + "/cli/focus-groups/assign",
+                                 data=json.dumps({"projectId": conf.get("id"), "focusGroupId": a["focusGroupId"]}).encode(),
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    if proj_token:
+        req.add_header("Authorization", "Bearer " + proj_token)
+    try:
+        with urllib.request.urlopen(k5_request(req), timeout=30) as r:
+            status, resp = r.status, json.loads(r.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as e:
+        status = e.code
+        try:
+            resp = json.loads(e.read().decode("utf-8", "replace"))
+        except Exception:
+            resp = {"error": "HTTP %s on /cli/focus-groups/assign" % e.code}
+    except Exception as e:
+        status, resp = 0, {"error": "/cli/focus-groups/assign: %s" % e}
+    err = resp.get("error") if isinstance(resp, dict) else "unexpected answer"
+    if status >= 300 or status == 0 or err:
+        if not isinstance(err, dict):
+            err = {"code": "daemon_error", "hint": str(err or "HTTP %s" % status)}
+        a["status"] = "failed"
+        emit(False, changed)
+        sys.stderr.write(json.dumps({"error": {"code": err.get("code") or "daemon_error",
+                                               "hint": err.get("hint") or err.get("code") or ""}}) + "\n")
+        # The refusal's closing line, as every refused command ends.
+        p = resp.get("permission") if isinstance(resp, dict) else None
+        if isinstance(p, dict):
+            if isinstance(p.get("command"), str) and p["command"]:
+                sys.stderr.write("Ask with: " + p["command"] + "\n")
+            elif p.get("requestable") is False:
+                if isinstance(p.get("hint"), str) and p["hint"]:
+                    sys.stderr.write(p["hint"] + "\n")
+                sys.stderr.write("It can't be requested.\n")
+        sys.exit(3 if status in (401, 403) else 4 if status == 404 else 1)
+    a["status"] = "done"
+    changed = True
 
 emit(True, changed)
 PYEOF
@@ -75306,11 +75407,13 @@ FLAGS
   --json                  Machine-readable output, for scripts (names and paths can
                           contain spaces; never parse the table):
                           {"ok":true,"agents":[{"name","id","handle","mode","enabled",
-                           "live","sessionId","backend","ptydAdopted","path"}]}
+                           "live","sessionId","backend","ptydAdopted","path",
+                           "focusGroup"}]}
                           path: absolute; live: true/false; sessionId and backend
                           ("ptyd" or "in-process") are null when not live;
                           ptydAdopted: true when the session survived a daemon
-                          restart (false when not live). Check "ok" first.
+                          restart (false when not live); focusGroup: the
+                          focus group's name, null when in none. Check "ok" first.
 EOF
 }
 
@@ -77197,6 +77300,294 @@ if conversation:
 PYEOF
 }
 
+# BEGIN_CLI_FOCUS_GROUP
+# `k2 focus-group list | create | rename | add | remove` (0.46.17): the
+# sidebar's focus groups, on the routes Settings → Workspaces uses:
+#   GET  /cli/focus-groups/list
+#   POST /cli/focus-groups/create {name}
+#   POST /cli/focus-groups/update {id, name}
+#   POST /cli/focus-groups/assign {projectId, focusGroupId}  (null = no group)
+# An `id` tool: inside a K2 terminal it sends the session's passport, never
+# the owner token. The list is open to agents; a change is a person's, and
+# the daemon refuses an agent `focus_group_needs_person` (exit 3), which
+# ends with the permission card to ask with when cards are on.
+# Exit: 0 ok · 1 error · 2 bad usage · 3 refused · 4 not found or ambiguous.
+
+cmd_help_focus_group() {
+    cat <<'EOF'
+Focus groups: the sidebar's groups of workspaces (Settings → Workspaces / Agents).
+
+USAGE
+  k2 focus-group [list] [--json]           Every focus group: its name and id
+  k2 focus-group create <name>             Make a new, empty group
+  k2 focus-group rename <group> <new-name> Rename a group (its workspaces stay in it)
+  k2 focus-group add <group> <workspace>   Put a workspace in a group (it leaves its old one)
+  k2 focus-group remove <group> <workspace>
+                                           Take a workspace out of its group
+  k2 agent set <workspace> --focus-group <group>|none
+                                           The same as add (none = remove)
+
+  <group>       a group's name (any case), the start of exactly one name, or its id
+  <workspace>   handle, name or path ("." = the current directory)
+  --json        The daemon's JSON
+  --            Everything after it is a name, even one that starts with -
+
+  `k2 workspace list --json` names each workspace's group (focusGroup, null
+  when it is in none).
+
+WHO
+  Anyone may list. Creating, renaming and filling groups is a person's: the
+  owner (the desktop app, or a terminal outside K2), a person signed in to
+  this server, or a person typing in a K2 shell tab. An agent is refused
+  (exit 3, focus_group_needs_person); with permission cards on, the refusal
+  ends with the card to ask with, for example:
+    k2 permission request focus-groups.assign group=<group> target=<workspace> --why "…"
+  (focus-groups.create name=<name>, focus-groups.rename group=<group> to=<new-name>).
+  The owner or an admin taps Allow and K2 makes that one change.
+
+EXAMPLES
+  k2 focus-group
+  k2 focus-group create "Client work"
+  k2 focus-group add "Client work" sales
+  k2 focus-group rename client Clients
+  k2 focus-group remove Clients sales
+
+EXIT CODES
+  0 ok (or nothing to change) · 1 error · 2 bad usage · 3 refused · 4 not found or ambiguous
+EOF
+}
+
+_fg_err() {
+    local code="$1" hint="$2"
+    if [ "${_FG_JSON:-false}" = true ]; then
+        CODE="$code" HINT="$hint" python3 -c 'import json,os
+print(json.dumps({"error": {"code": os.environ["CODE"], "hint": os.environ["HINT"]}}))' >&2
+    else
+        echo "Error ($code): $hint" >&2
+    fi
+}
+
+_fg_usage() {
+    _fg_err "usage" "$1 (usage: k2 focus-group list | create <name> | rename <group> <new-name> | add <group> <workspace> | remove <group> <workspace>)"
+    exit 2
+}
+
+# The groups, as the daemon lists them. Over TCP: the cell socket doesn't
+# serve the list, and the daemon admits a passport there (a shared read).
+_fg_list_raw() {
+    _K2_FORCE_TCP=1 cli_send_json GET /cli/focus-groups/list
+}
+
+# Read "<body>\n<status>" on stdin and end the command on an error.
+# Prints the body when it is a good answer.
+_fg_check_answer() {
+    WHAT="$1" FG_JSON="${_FG_JSON:-false}" python3 -c '
+import json, os, sys
+raw = sys.stdin.read()
+body, _, status = raw.rpartition("\n")
+try:
+    status = int(status)
+except ValueError:
+    status = 0
+as_json = os.environ["FG_JSON"] == "true"
+def fail(code, hint, rc):
+    if as_json:
+        print(json.dumps({"error": {"code": code, "hint": hint}}), file=sys.stderr)
+    else:
+        print("Error (%s): %s" % (code, hint), file=sys.stderr)
+    sys.exit(rc)
+if status == 0:
+    fail("daemon_unreachable", "no answer from the K2 daemon (%s)" % os.environ["WHAT"], 1)
+try:
+    d = json.loads(body)
+except Exception:
+    fail("daemon_error", "unparseable answer (HTTP %d): %s" % (status, body[:300]), 1)
+err = d.get("error") if isinstance(d, dict) else None
+if status >= 300 or err:
+    if isinstance(err, dict):
+        code, hint = err.get("code") or "error", err.get("hint") or err.get("message") or ""
+    else:
+        code, hint = "error", str(err or "HTTP %d" % status)
+    if as_json:
+        print(json.dumps(d), file=sys.stderr)
+    else:
+        print("Error (%s): %s" % (code, hint), file=sys.stderr)
+    sys.exit(3 if status in (401, 403) else 4 if status == 404 else 1)
+sys.stdout.write(body)
+'
+}
+
+# _fg_group <selector>: the one group a selector names (its id, its name
+# in any case, or the start of exactly one name), as `{"id","name"}`.
+_fg_group() {
+    local raw
+    raw="$(_fg_list_raw)"
+    printf '%s' "$raw" | _fg_check_answer "/cli/focus-groups/list" >/dev/null || exit $?
+    printf '%s' "$raw" | SEL="$1" FG_JSON="${_FG_JSON:-false}" python3 -c '
+import json, os, sys
+body = sys.stdin.read().rpartition("\n")[0]
+groups = json.loads(body)
+if not isinstance(groups, list):
+    groups = []
+sel = os.environ["SEL"].strip()
+low = sel.lower()
+hits = [g for g in groups if g.get("id") == sel or (g.get("name") or "").lower() == low]
+if not hits:
+    hits = [g for g in groups if (g.get("name") or "").lower().startswith(low)]
+def fail(code, hint):
+    if os.environ["FG_JSON"] == "true":
+        print(json.dumps({"error": {"code": code, "hint": hint}}), file=sys.stderr)
+    else:
+        print("Error (%s): %s" % (code, hint), file=sys.stderr)
+    sys.exit(4)
+if not hits:
+    fail("not_found", "no focus group matches %r (see: k2 focus-group list)" % sel)
+if len(hits) > 1:
+    fail("ambiguous", "%r matches more than one focus group: %s (pass the id)" % (sel, ", ".join(sorted(g.get("name") or g.get("id") or "?" for g in hits))))
+print(json.dumps({"id": hits[0].get("id") or "", "name": hits[0].get("name") or sel}))
+'
+}
+
+# _fg_workspace <workspace>: `{"id","name","focusGroupId"}` from its conf.
+_fg_workspace() {
+    local conf rc=0
+    conf="$(_agent_conf_fetch "$1")" || rc=$?
+    [ "$rc" -eq 0 ] || exit "$rc"
+    printf '%s' "$conf" | python3 -c '
+import json, sys
+d = json.loads(sys.stdin.read())
+print(json.dumps({"id": d.get("id") or "", "name": d.get("name") or d.get("path") or "", "focusGroupId": d.get("focusGroupId")}))
+'
+}
+
+# _fg_send <route> <json body> <done line>: the change, then its line.
+_fg_send() {
+    local route="$1" body="$2" line="$3" raw
+    raw="$(cli_send_json POST "$route" "$body")"
+    printf '%s' "$raw" | _fg_check_answer "$route" >/dev/null || exit $?
+    if [ "${_FG_JSON:-false}" = true ]; then
+        printf '%s' "${raw%$'\n'*}"
+        echo
+    else
+        printf '%s\n' "$line"
+    fi
+}
+
+# _fg_assign <workspace json> <group id or empty> <group label>: put the
+# workspace in that group, or in none. Skipped when it is there already.
+_fg_assign() {
+    local ws="$1" gid="$2" label="$3" plan body line
+    plan="$(printf '%s' "$ws" | GID="$gid" LABEL="$label" python3 -c '
+import json, os, sys
+w = json.loads(sys.stdin.read())
+gid = os.environ["GID"] or None
+label = os.environ["LABEL"]
+same = (w.get("focusGroupId") or None) == gid
+body = json.dumps({"projectId": w["id"], "focusGroupId": gid})
+if gid:
+    line = "%s is in focus group %s%s." % (w["name"], label, " already" if same else " now")
+else:
+    line = "%s is in no focus group%s." % (w["name"], " already" if same else " now")
+print("skip" if same else "send")
+print(body)
+print(line)
+')"
+    body="$(sed -n 2p <<<"$plan")"
+    line="$(sed -n 3p <<<"$plan")"
+    if [ "$(sed -n 1p <<<"$plan")" = skip ]; then
+        if [ "${_FG_JSON:-false}" = true ]; then
+            printf '{"ok":true,"changed":false}\n'
+        else
+            printf '%s\n' "$line"
+        fi
+        return 0
+    fi
+    _fg_send /cli/focus-groups/assign "$body" "$line"
+}
+
+cmd_focus_group() {
+    if _wants_help "$@"; then cmd_help_focus_group; exit 0; fi
+    # The bare noun (or flags only) is the list.
+    local verb="list"
+    case "${1:-}" in ""|-*) ;; *) verb="$1"; shift ;; esac
+    local _FG_JSON=false args=() a ended=false
+    for a in "$@"; do
+        if [ "$ended" = true ]; then args+=("$a"); continue; fi
+        case "$a" in
+            --) ended=true ;;
+            --json) _FG_JSON=true ;;
+            -*) _fg_usage "unknown flag '$a'" ;;
+            *) args+=("$a") ;;
+        esac
+    done
+    local n=${#args[@]}
+    case "$verb" in
+        list|ls)
+            [ "$n" -eq 0 ] || _fg_usage "list takes no arguments"
+            local raw body
+            raw="$(_fg_list_raw)"
+            body="$(printf '%s' "$raw" | _fg_check_answer "/cli/focus-groups/list")" || exit $?
+            printf '%s' "$body" | FG_JSON="$_FG_JSON" python3 -c '
+import json, os, sys
+groups = json.loads(sys.stdin.read())
+if not isinstance(groups, list):
+    groups = []
+if os.environ["FG_JSON"] == "true":
+    print(json.dumps({"ok": True, "focusGroups": groups}))
+    sys.exit(0)
+if not groups:
+    print("No focus groups. Create one: k2 focus-group create <name>")
+    sys.exit(0)
+for g in groups:
+    print("  %-24s %s" % (g.get("name") or "?", g.get("id") or ""))
+'
+            ;;
+        create)
+            [ "$n" -eq 1 ] || _fg_usage "create takes one name"
+            [ -n "${args[0]// /}" ] || _fg_usage "the name is empty"
+            local body
+            body="$(NAME="${args[0]}" python3 -c 'import json,os; print(json.dumps({"name": os.environ["NAME"]}))')"
+            _fg_send /cli/focus-groups/create "$body" "Created focus group ${args[0]}."
+            ;;
+        rename)
+            [ "$n" -eq 2 ] || _fg_usage "rename takes a group and its new name"
+            [ -n "${args[1]// /}" ] || _fg_usage "the new name is empty"
+            local g body
+            g="$(_fg_group "${args[0]}")" || exit $?
+            body="$(printf '%s' "$g" | TO="${args[1]}" python3 -c 'import json,os,sys; g=json.loads(sys.stdin.read()); print(json.dumps({"id": g["id"], "name": os.environ["TO"]}))')"
+            _fg_send /cli/focus-groups/update "$body" "Renamed focus group $(printf '%s' "$g" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["name"])') to ${args[1]}."
+            ;;
+        add)
+            [ "$n" -eq 2 ] || _fg_usage "add takes a group and a workspace"
+            local g ws gid gname
+            g="$(_fg_group "${args[0]}")" || exit $?
+            ws="$(_fg_workspace "${args[1]}")" || exit $?
+            gid="$(printf '%s' "$g" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["id"])')"
+            gname="$(printf '%s' "$g" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["name"])')"
+            _fg_assign "$ws" "$gid" "$gname"
+            ;;
+        remove|rm)
+            [ "$n" -eq 2 ] || _fg_usage "remove takes a group and a workspace"
+            local g ws gid gname now
+            g="$(_fg_group "${args[0]}")" || exit $?
+            ws="$(_fg_workspace "${args[1]}")" || exit $?
+            gid="$(printf '%s' "$g" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["id"])')"
+            gname="$(printf '%s' "$g" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["name"])')"
+            now="$(printf '%s' "$ws" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("focusGroupId") or "")')"
+            if [ "$now" != "$gid" ]; then
+                if [ "$_FG_JSON" = true ]; then
+                    printf '{"ok":true,"changed":false}\n'
+                else
+                    echo "$(printf '%s' "$ws" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["name"])') is not in focus group $gname; nothing changed."
+                fi
+                return 0
+            fi
+            _fg_assign "$ws" "" ""
+            ;;
+        *) _fg_usage "unknown verb '$verb'" ;;
+    esac
+}
+# END_CLI_FOCUS_GROUP
 # ── Context management stack — `k2 agent context …` (prd-context-hamburger-v1) ──
 #
 # Day-2 stack management for always-on AGENTS.md layers. Daemon SSOT via
@@ -78878,7 +79269,10 @@ PROJECTS
 WORKSPACE
   workspace list                        Yellow pages: every workspace + status
   workspace list --running              Only agent-enabled workspaces (live or not; see "live" in --json)
-  workspace list --json                 For scripts: name, id, handle, path, live, sessionId, backend, ptydAdopted
+  workspace list --json                 For scripts: name, id, handle, path, live, sessionId, backend, ptydAdopted,
+                                        focusGroup
+  focus-group [list]                    The sidebar's focus groups (create, rename, add and
+                                        remove are a person's: `k2 focus-group --help`)
   workspace launch [<path>]             Smart cascade: attach|wake|spawn
   workspace profile [<path>]            Read workspace agent's AGENT.md
   workspace update --field <f> --value <v>
@@ -103549,6 +103943,14 @@ Who may start recordings in the voice rooms is the owner's or an admin's. Your o
 
 Recording in direct messages is the same: `k2 hostchat recording policy set dm_enabled on` (or `off`), with no other key, ends with `k2 permission request voice.recording-dm dm=on --why "..."`. Run it as printed. The owner or an admin allows it once, with a confirm, and it is applied on their side: you run nothing afterwards. `--require-recording` and the other policies have no card: ask your human in your Thread. `k2 study app-recording`.
 
+## Focus groups
+
+Focus groups are this server's sidebar groups of workspaces. `k2 focus-group list` is yours. Creating, renaming and filling them is a person's: `k2 focus-group create|rename|add|remove` and `k2 agent set <ws> --focus-group <name>|none` are refused with `focus_group_needs_person` (exit 3) and end with the line to ask with, for example:
+
+    k2 permission request focus-groups.assign group=<group> target=<workspace> --why "<what you need it for>"
+
+(`focus-groups.create name=<name>`, `focus-groups.rename group=<group> to=<new name>`; `group=none` takes a workspace out of its group.) Run it as printed. The owner or an admin allows it, and the card makes exactly that change, once: don't run the command again. Each further change is its own card.
+
 ## Apps
 
 - App guests never see permission cards. Never tell a guest a switch, agent, server or request id; say an administrator was asked.
@@ -116274,6 +116676,10 @@ case "${1:-help}" in
     glossary)
         # Phase 2.1 A10: K2 glossary lookup.
         shift; cmd_glossary "$@"
+        ;;
+    focus-group|focus-groups)
+        # 0.46.17: the sidebar's focus groups (BEGIN_CLI_FOCUS_GROUP).
+        shift; cmd_focus_group "$@"
         ;;
     help-deprecated)
         cmd_help_deprecated

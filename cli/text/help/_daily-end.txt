@@ -36,7 +36,10 @@ PROJECTS
 WORKSPACE
   workspace list                        Yellow pages: every workspace + status
   workspace list --running              Only agent-enabled workspaces (live or not; see "live" in --json)
-  workspace list --json                 For scripts: name, id, handle, path, live, sessionId, backend, ptydAdopted
+  workspace list --json                 For scripts: name, id, handle, path, live, sessionId, backend, ptydAdopted,
+                                        focusGroup
+  focus-group [list]                    The sidebar's focus groups (create, rename, add and
+                                        remove are a person's: `k2 focus-group --help`)
   workspace launch [<path>]             Smart cascade: attach|wake|spawn
   workspace profile [<path>]            Read workspace agent's AGENT.md
   workspace update --field <f> --value <v>

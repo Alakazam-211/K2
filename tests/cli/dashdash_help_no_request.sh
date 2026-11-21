@@ -357,6 +357,8 @@ project msg -- -text
 browser note --url http://acme.test -- -text
 chat send acme/general -- -text
 terminal write 11111111-2222-3333-4444-555555555555 -- -text
+focus-group create -- -x
+focus-groups rename Infra -- -x
 ROWS
 
 echo "== job add: -h/--help after -- is the child's =="
@@ -462,6 +464,24 @@ for args in "job add -h -- true" "ci run --help -- true"; do
     [ -n "$OUT" ] && ok "$label: prints help" || bad "$label: printed nothing"
     sent_nothing "$label"
 done
+
+echo "== focus-group: -h/--help before -- is help; after it, a name =="
+for args in "focus-group create -h -- x" "focus-group add --help -- Infra sales"; do
+    reset
+    # shellcheck disable=SC2086 # word-splitting the case is the point
+    run $args
+    label="k2 $args"
+    [ "$RC" -eq 0 ] && ok "$label: exit 0" || bad "$label: exit $RC (want 0)"
+    [ -n "$OUT" ] && ok "$label: prints help" || bad "$label: printed nothing"
+    sent_nothing "$label"
+done
+reset
+run_bounded focus-group create -- --help
+if grep -q '"name": "--help"' "$WORK/requests.full"; then
+    ok "k2 focus-group create -- --help: creates the group --help"
+else
+    bad "k2 focus-group create -- --help: no create of --help (exit $RC)"; sed 's/^/      > /' "$WORK/requests.full" >&2
+fi
 
 echo ""
 echo "dashdash_help_no_request: $pass passed, $fail failed"

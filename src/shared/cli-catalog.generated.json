@@ -480,8 +480,13 @@
    },
    {
     "name": "agent set",
-    "usage": "k2 agent set <name> [--mode <m>] [--enabled <bool>] [--name <new>] [--persona <file.md>] [--add-project <p>]... [--remove-project <p>]... [--dry-run] [--json]",
+    "usage": "k2 agent set <name> [--mode <m>] [--enabled <bool>] [--name <new>] [--persona <file.md>] [--add-project <p>]... [--remove-project <p>]... [--focus-group <group>|none] [--dry-run] [--json]",
     "description": "Change one or more settings in a single call (hire's SETTINGS flags plus project membership; no connection wiring or launching). Unknown flags exit 2 listing the valid ones."
+   },
+   {
+    "name": "focus-group",
+    "usage": "k2 focus-group [list] [--json] | k2 focus-group create <name> | rename <group> <new-name> | add <group> <workspace> | remove <group> <workspace>",
+    "description": "The sidebar's focus groups (Settings → Workspaces / Agents). list is open to agents. create, rename, add and remove are a person's: an agent is refused focus_group_needs_person (exit 3), and with permission cards on the refusal ends with the card to ask with (focus-groups.create name=, focus-groups.rename group= to=, focus-groups.assign group= target=; group=none takes a workspace out). <group> is a name (any case), the start of exactly one name, or an id. add/remove with nothing to change exit 0. Exit 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found or ambiguous. GET /cli/focus-groups/list; POST /cli/focus-groups/create {name}, /update {id, name}, /assign {projectId, focusGroupId}."
    },
    {
     "name": "agent list",

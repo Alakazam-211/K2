@@ -278,9 +278,9 @@ PYEOF
 
 cmd_agent_set() {
     if _wants_help "$@"; then cmd_help_agent_set; exit 0; fi
-    local name="" mode="" enabled="" new_name="" persona="" dry_run=false as_json=false
+    local name="" mode="" enabled="" new_name="" persona="" focus_group="" dry_run=false as_json=false
     local add_projects=() remove_projects=()
-    local valid_flags="--mode --enabled --name --persona --add-project --remove-project --dry-run --json"
+    local valid_flags="--mode --enabled --name --persona --add-project --remove-project --focus-group --dry-run --json"
     while [ $# -gt 0 ]; do
         case "$1" in
             --mode)
@@ -301,6 +301,9 @@ cmd_agent_set() {
             --remove-project)
                 [ $# -ge 2 ] || { _agent_err "bad_usage" "--remove-project requires a project name or id (see: k2 project list)"; exit 2; }
                 remove_projects+=("$2"); shift 2 ;;
+            --focus-group)
+                [ $# -ge 2 ] || { _agent_err "bad_usage" "--focus-group requires a group name or id (or none; see: k2 focus-group list)"; exit 2; }
+                focus_group="$2"; shift 2 ;;
             --dry-run) dry_run=true; shift ;;
             --json) as_json=true; shift ;;
             -*)
@@ -318,9 +321,9 @@ cmd_agent_set() {
         _agent_err "bad_usage" "missing <name> — usage: k2 agent set <name> [flags] (valid flags: $valid_flags)"
         exit 2
     fi
-    if [ -z "$mode" ] && [ -z "$enabled" ] && [ -z "$new_name" ] && [ -z "$persona" ] \
+    if [ -z "$mode" ] && [ -z "$enabled" ] && [ -z "$new_name" ] && [ -z "$persona" ] && [ -z "$focus_group" ] \
         && [ ${#add_projects[@]} -eq 0 ] && [ ${#remove_projects[@]} -eq 0 ]; then
-        _agent_err "bad_usage" "nothing to set — pass at least one of: --mode --enabled --name --persona --add-project --remove-project"
+        _agent_err "bad_usage" "nothing to set — pass at least one of: --mode --enabled --name --persona --add-project --remove-project --focus-group"
         exit 2
     fi
     case "$mode" in
@@ -349,7 +352,7 @@ cmd_agent_set() {
         ${remove_projects[@]+"${remove_projects[@]}"})
     CONF="$conf" MODE="$mode" ENABLED="$enabled" NEW_NAME="$new_name" \
     PERSONA_FILE="$persona" ADD_PROJECTS="$add_projects_json" \
-    REMOVE_PROJECTS="$remove_projects_json" DRY_RUN="$dry_run" AS_JSON="$as_json" \
+    REMOVE_PROJECTS="$remove_projects_json" FOCUS_GROUP="$focus_group" DRY_RUN="$dry_run" AS_JSON="$as_json" \
     APROJTOKEN="$(_k2_project_token)" \
     ABASE="$BASE_URL" ATOKEN="$TOKEN" _K5_PY_HTTP="$_K5_PY_HTTP" _K5_PY_HEADERS="$(_k5_py_headers)" python3 - <<'PYEOF'
 import json, os, re, sys
@@ -541,6 +544,38 @@ for p in removes:
             a["note"] = "current PoC — refused until a successor is named"
     actions.append(a)
 
+# The focus group (0.46.17): matched as `k2 agent hire --focus-group` and
+# `k2 focus-group` match (id, name in any case, the start of exactly one
+# name); none (or off, -) = in no group. The assign rides the session
+# passport in a K2 terminal, so an agent is refused (a person's step).
+focus_group_arg = os.environ.get("FOCUS_GROUP", "").strip()
+if focus_group_arg:
+    if focus_group_arg.lower() in ("none", "off", "-"):
+        want_fg, want_fg_label = None, "none"
+    else:
+        groups = http_get("/cli/focus-groups/list", {})
+        if not isinstance(groups, list):
+            err = groups.get("error") if isinstance(groups, dict) else None
+            if isinstance(err, dict):
+                err = err.get("hint") or err.get("code")
+            fail("daemon_error", "cannot list focus groups: %s" % (err or "unexpected response"))
+        low = focus_group_arg.lower()
+        hits = [g for g in groups if g.get("id") == focus_group_arg or (g.get("name") or "").lower() == low]
+        if not hits:
+            hits = [g for g in groups if (g.get("name") or "").lower().startswith(low)]
+        if not hits:
+            fail("not_found", "no focus group matches '%s' (see: k2 focus-group list)" % focus_group_arg, 4)
+        if len(hits) > 1:
+            fail("ambiguous", "'%s' matches more than one focus group: %s (pass the id)" %
+                 (focus_group_arg, ", ".join(sorted((g.get("name") or g.get("id") or "?") for g in hits))), 4)
+        want_fg, want_fg_label = hits[0].get("id") or None, hits[0].get("name") or focus_group_arg
+    a = {"step": "set-focus-group", "group": want_fg_label, "focusGroupId": want_fg}
+    if (conf.get("focusGroupId") or None) == want_fg:
+        a.update(status="skipped", reason="already %s" % want_fg_label)
+    else:
+        a["status"] = "pending"
+    actions.append(a)
+
 def emit(ok, changed, extra_status=None):
     out = {"ok": ok, "changed": changed, "name": conf.get("name"), "path": path,
            "actions": actions}
@@ -574,6 +609,10 @@ def emit(ok, changed, extra_status=None):
                 line = "leave-project: %s" % a["project"]
                 if a.get("note"):
                     line += " (%s)" % a["note"]
+                if status == "skipped" and a.get("reason"):
+                    line += "  (%s)" % a["reason"]
+            elif step == "set-focus-group":
+                line = "focus-group: %s" % a["group"]
                 if status == "skipped" and a.get("reason"):
                     line += "  (%s)" % a["reason"]
             else:
@@ -693,6 +732,47 @@ for a in actions:
             else:
                 a.pop("becamePoc", None)
         changed = True
+
+# 5. The focus group, last: a refusal (exit 3) leaves the steps above done.
+for a in actions:
+    if a["step"] != "set-focus-group" or a["status"] != "pending":
+        continue
+    req = urllib.request.Request(base + "/cli/focus-groups/assign",
+                                 data=json.dumps({"projectId": conf.get("id"), "focusGroupId": a["focusGroupId"]}).encode(),
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    if proj_token:
+        req.add_header("Authorization", "Bearer " + proj_token)
+    try:
+        with urllib.request.urlopen(k5_request(req), timeout=30) as r:
+            status, resp = r.status, json.loads(r.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as e:
+        status = e.code
+        try:
+            resp = json.loads(e.read().decode("utf-8", "replace"))
+        except Exception:
+            resp = {"error": "HTTP %s on /cli/focus-groups/assign" % e.code}
+    except Exception as e:
+        status, resp = 0, {"error": "/cli/focus-groups/assign: %s" % e}
+    err = resp.get("error") if isinstance(resp, dict) else "unexpected answer"
+    if status >= 300 or status == 0 or err:
+        if not isinstance(err, dict):
+            err = {"code": "daemon_error", "hint": str(err or "HTTP %s" % status)}
+        a["status"] = "failed"
+        emit(False, changed)
+        sys.stderr.write(json.dumps({"error": {"code": err.get("code") or "daemon_error",
+                                               "hint": err.get("hint") or err.get("code") or ""}}) + "\n")
+        # The refusal's closing line, as every refused command ends.
+        p = resp.get("permission") if isinstance(resp, dict) else None
+        if isinstance(p, dict):
+            if isinstance(p.get("command"), str) and p["command"]:
+                sys.stderr.write("Ask with: " + p["command"] + "\n")
+            elif p.get("requestable") is False:
+                if isinstance(p.get("hint"), str) and p["hint"]:
+                    sys.stderr.write(p["hint"] + "\n")
+                sys.stderr.write("It can't be requested.\n")
+        sys.exit(3 if status in (401, 403) else 4 if status == 404 else 1)
+    a["status"] = "done"
+    changed = True
 
 emit(True, changed)
 PYEOF

@@ -1533,7 +1533,23 @@ Recording in direct messages is the same: `"#,
     r#" study app-recording`.
 
 "#,
-    r#"## Apps
+    r#"## Focus groups
+
+Focus groups are this server's sidebar groups of workspaces. `"#,
+    cli_name!(),
+    r#" focus-group list` is yours. Creating, renaming and filling them is a person's: `"#,
+    cli_name!(),
+    r#" focus-group create|rename|add|remove` and `"#,
+    cli_name!(),
+    r#" agent set <ws> --focus-group <name>|none` are refused with `focus_group_needs_person` (exit 3) and end with the line to ask with, for example:
+
+    "#,
+    cli_name!(),
+    r#" permission request focus-groups.assign group=<group> target=<workspace> --why "<what you need it for>"
+
+(`focus-groups.create name=<name>`, `focus-groups.rename group=<group> to=<new name>`; `group=none` takes a workspace out of its group.) Run it as printed. The owner or an admin allows it, and the card makes exactly that change, once: don't run the command again. Each further change is its own card.
+
+## Apps
 
 - App guests never see permission cards. Never tell a guest a switch, agent, server or request id; say an administrator was asked.
 - Role or room changes for guests are not cards: talk to the agent that manages the role.
@@ -2625,6 +2641,9 @@ mod tests {
             concat!(cli_name!(), " permission request voice.recording-dm dm=on --why"),
             "recording_level_needs_owner",
             "ci_preview_off",
+            // 0.46.17: focus groups are a person's; each change is a card.
+            "k2 permission request focus-groups.assign group=<group> target=<workspace>",
+            "focus_group_needs_person",
         ] {
             assert!(body.contains(must), "the k2-permissions skill must teach: {must}");
         }

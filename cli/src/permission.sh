@@ -272,7 +272,7 @@ _permission_cmd() {
             [ -n "$id" ] && shift
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --why) why="${2:-}"; shift 2 ;;
+                    --why) _need_value "$@"; why="${2:-}"; shift 2 ;;
                     *) echo "Error: unexpected argument '$1'" >&2; exit 2 ;;
                 esac
             done
@@ -292,8 +292,8 @@ _permission_cmd() {
             local q="" area="" search=""
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --area) area="${2:-}"; shift 2 ;;
-                    --search) search="${2:-}"; shift 2 ;;
+                    --area) _need_value "$@"; area="${2:-}"; shift 2 ;;
+                    --search) _need_value "$@"; search="${2:-}"; shift 2 ;;
                     *) echo "Error: unexpected argument '$1'" >&2; exit 2 ;;
                 esac
             done
@@ -311,7 +311,7 @@ _permission_cmd() {
             [ -n "$id" ] && shift
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --reason) reason="${2:-}"; shift 2 ;;
+                    --reason) _need_value "$@"; reason="${2:-}"; shift 2 ;;
                     *) echo "Error: unexpected argument '$1'" >&2; exit 2 ;;
                 esac
             done
@@ -499,10 +499,10 @@ _approve_request() {
     local payload="" to="" wait=0 out="" json=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --payload) payload="${2:-}"; shift 2 ;;
-            --to) to="${2:-}"; shift 2 ;;
+            --payload) _need_value "$@"; payload="${2:-}"; shift 2 ;;
+            --to) _need_value "$@"; to="${2:-}"; shift 2 ;;
             --wait) wait=1; shift ;;
-            --out) out="${2:-}"; shift 2 ;;
+            --out) _need_value "$@"; out="${2:-}"; shift 2 ;;
             --json) json=1; shift ;;
             -h|--help) _approve_usage; return 0 ;;
             *) echo "Error: unexpected argument '$1' (k2 approve --help)" >&2; exit 2 ;;
@@ -557,7 +557,7 @@ _approve_cmd() {
             local id="" out="" json=0
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --out) out="${2:-}"; shift 2 ;;
+                    --out) _need_value "$@"; out="${2:-}"; shift 2 ;;
                     --json) json=1; shift ;;
                     -*) echo "Usage: k2 approve status [<id>] [--out <file>] [--json]" >&2; exit 2 ;;
                     *) id="$1"; shift ;;

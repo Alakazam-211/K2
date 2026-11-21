@@ -17,6 +17,12 @@
 //! on the 5 s tick (`socket_access`), at the `VoiceChat` floor: a removed,
 //! disabled or signed-out login closes with 4003. At most [`MAX_PER_LOGIN`]
 //! open per login (HP-11).
+//!
+//! **Access** (`login_access_live`): when what this socket's own login may do
+//! changes (a share revoked or changed, its role, its chat grant), it gets
+//! `{"type":"access_changed"}` and reads its access again. A Voice & Chat
+//! only phone may hold only this socket. Never another login's, and never
+//! the owner token's (its access doesn't change).
 
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
@@ -24,6 +30,20 @@ use tokio::sync::broadcast::error::RecvError;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::routes::route_policy::Floor;
+use crate::session_events::SessionEvent;
+
+/// This socket's access frame, in its own `type` envelope.
+pub const ACCESS_CHANGED: &str = r#"{"type":"access_changed"}"#;
+
+/// The access frame owed for one session bus event, on a socket held by
+/// `login` (`None`: the owner token): only `access_changed` naming that
+/// very login.
+pub fn access_frame(event: &SessionEvent, login: Option<&str>) -> Option<&'static str> {
+    match event {
+        SessionEvent::AccessChanged { .. } if crate::session_events_ws::login_may_see(event, login) => Some(ACCESS_CHANGED),
+        _ => None,
+    }
+}
 
 /// The most of these sockets one login may hold open.
 pub const MAX_PER_LOGIN: usize = 3;
@@ -83,6 +103,20 @@ async fn serve_ws(ws: tokio_tungstenite::WebSocketStream<&mut TcpStream>, ext: &
     let mut rx = held.events.subscribe();
     let still = |t: &str, o: &str| crate::routes::http::login_still_admitted(t, o, Floor::VoiceChat);
     let mut seen = k2_core::connect_users::auth_generation();
+    // Whose `access_changed` this socket carries: its own login's only. Taken
+    // before the hello, so a change after the client's first read is heard.
+    let mut access_rx = crate::session_events::subscribe();
+    let login = crate::session_events_ws::socket_login(crate::presence::resolve_identity(&token, &owner_token).as_ref());
+    let _access_hold = match login.clone() {
+        Some(l) => match tokio::task::spawn_blocking(move || crate::login_access_live::hold(&l)).await {
+            Ok(held) => held,
+            Err(e) => {
+                k2_core::log_debug!("[home-chat/events] access hold failed: {e}");
+                None
+            }
+        },
+        None => None,
+    };
     let calls = held.state.lock().unwrap_or_else(|p| p.into_inner()).calls_view();
     let hello = serde_json::json!({"type": "hello", "chat": held.status(), "flags": (super::deps().flags)(), "calls": calls});
     if write.send(Message::Text(hello.to_string())).await.is_err() {
@@ -129,6 +163,24 @@ async fn serve_ws(ws: tokio_tungstenite::WebSocketStream<&mut TcpStream>, ext: &
                     Err(RecvError::Closed) => break,
                 }
             }
+            event = access_rx.recv() => {
+                let frame = match event {
+                    Ok(event) => access_frame(&event, login.as_deref()),
+                    // Fell behind the session bus: the access frame may be
+                    // among what was lost, and one more read costs little.
+                    Err(RecvError::Lagged(_)) => login.is_some().then_some(ACCESS_CHANGED),
+                    Err(RecvError::Closed) => break,
+                };
+                let Some(frame) = frame else { continue };
+                if !still(&token, &owner_token) {
+                    let _ = write.send(crate::presence::session_revoked_close_message()).await;
+                    break;
+                }
+                seen = k2_core::connect_users::auth_generation();
+                if write.send(Message::Text(frame.to_string())).await.is_err() {
+                    break;
+                }
+            }
             msg = read.next() => {
                 match msg {
                     Some(Ok(Message::Ping(p))) => {
@@ -156,6 +208,15 @@ async fn serve_ws(ws: tokio_tungstenite::WebSocketStream<&mut TcpStream>, ext: &
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_login_s_own_access_change_is_a_frame() {
+        let ev = SessionEvent::AccessChanged { login: "hcgina".into() };
+        assert_eq!(access_frame(&ev, Some("hcgina")), Some(r#"{"type":"access_changed"}"#));
+        assert_eq!(access_frame(&ev, Some("hcbob")), None, "another login's");
+        assert_eq!(access_frame(&ev, None), None, "the owner token");
+        assert_eq!(access_frame(&SessionEvent::ProjectsChanged {}, Some("hcgina")), None, "nothing else from the session bus");
+    }
 
     #[test]
     fn a_login_holds_at_most_three_sockets() {

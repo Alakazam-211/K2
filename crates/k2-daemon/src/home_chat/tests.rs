@@ -1014,6 +1014,91 @@ async fn a_voice_chat_only_callee_gets_the_ring_on_its_socket_and_may_answer() {
     set_deps(None);
 }
 
+/// `access_changed` frames that arrive within `ms`; every other frame is
+/// skipped. The socket must stay open.
+async fn access_frames(ws: &mut ClientWs, ms: u64, who: &str) -> Vec<String> {
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(ms);
+    let mut out = Vec::new();
+    loop {
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        match tokio::time::timeout(left, ws.next()).await {
+            Err(_) => return out,
+            Ok(Some(Ok(Message::Text(t)))) => {
+                if t.contains("access_changed") {
+                    out.push(t.to_string());
+                }
+            }
+            Ok(Some(Ok(_))) => {}
+            Ok(other) => panic!("{who}: the socket ended: {other:?}"),
+        }
+    }
+}
+
+/// The close code within `ms` (other frames skipped).
+async fn close_code(ws: &mut ClientWs, ms: u64, who: &str) -> Option<u16> {
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(ms);
+    loop {
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        match tokio::time::timeout(left, ws.next()).await {
+            Err(_) => panic!("{who}: the socket stayed open"),
+            Ok(Some(Ok(Message::Close(c)))) => return c.map(|c| u16::from(c.code)),
+            Ok(Some(Ok(_))) => {}
+            Ok(None) | Ok(Some(Err(_))) => return None,
+        }
+    }
+}
+
+/// A Voice & Chat only phone may hold only this socket: a share revoked
+/// reaches it as one `{"type":"access_changed"}` (the hub,
+/// `login_access_live`), another login's socket hears nothing, and a disable
+/// or a removal closes the socket with 4003.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_voice_chat_login_hears_its_own_access_change_and_closes_4003_when_it_ends() {
+    let _g = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _home = k2_core::test_env::TempHome::new();
+    const OWNER: &str = "owner-token-for-the-access-test";
+    let mut people_in = Vec::new();
+    for name in ["hcgina", "hcbob"] {
+        k2_core::connect_users::add_user(name, "a-long-password-3").expect("add_user");
+        k2_core::connect_users::set_role(name, Role::VoiceChat).expect("set_role");
+        let shares = k2_core::connect_users::Shares { agents: vec!["agent-one".into()], ..Default::default() };
+        k2_core::connect_users::set_shares(name, shares).expect("set_shares");
+        let tok = k2_core::connect_users::create_session(name);
+        let c = people::caller(&format!("token={tok}"), None, OWNER).unwrap_or_else(|r| panic!("caller refused: {} {}", r.code, r.hint));
+        people_in.push((c.ext, tok));
+    }
+    let api = Arc::new(FakeApi::default());
+    let gw = fake_gateway(ready_body()).await;
+    set_deps(Some(deps_with(api.clone(), gw.addr.clone(), HomeChatFeatures::default())));
+    let (mut gina, gina_server) = open_events(&people_in[0].0, &people_in[0].1, OWNER).await;
+    let (mut bob, bob_server) = open_events(&people_in[1].0, &people_in[1].1, OWNER).await;
+    next_of(&mut gina, "hello").await;
+    next_of(&mut bob, "hello").await;
+    assert_eq!(access_frames(&mut gina, 1_200, "gina at rest").await, Vec::<String>::new());
+
+    // Gina's share is revoked: one frame on her socket, none on Bob's.
+    k2_core::connect_users::set_shares("hcgina", k2_core::connect_users::Shares::default()).expect("revoke");
+    assert_eq!(access_frames(&mut gina, 3_000, "gina").await, vec![r#"{"type":"access_changed"}"#.to_string()], "one frame, and nothing in it");
+    assert_eq!(access_frames(&mut bob, 1_500, "bob, on gina's change").await, Vec::<String>::new());
+
+    // Bob's own change reaches Bob only.
+    k2_core::connect_users::set_shares("hcbob", k2_core::connect_users::Shares::default()).expect("revoke");
+    assert_eq!(access_frames(&mut bob, 3_000, "bob").await, vec![r#"{"type":"access_changed"}"#.to_string()]);
+    assert_eq!(access_frames(&mut gina, 1_500, "gina, on bob's change").await, Vec::<String>::new());
+
+    // A disabled login and a removed one: 4003, not an access frame.
+    k2_core::connect_users::set_disabled("hcgina", true).expect("disable");
+    assert_eq!(close_code(&mut gina, 7_000, "gina, disabled").await, Some(4003));
+    k2_core::connect_users::remove_user("hcbob").expect("remove");
+    assert_eq!(close_code(&mut bob, 7_000, "bob, removed").await, Some(4003));
+
+    tokio::time::timeout(Duration::from_secs(5), gina_server).await.expect("gina's handler ends").expect("join");
+    tokio::time::timeout(Duration::from_secs(5), bob_server).await.expect("bob's handler ends").expect("join");
+    follower::release_all();
+    super::call_push::reset_for_tests();
+    set_deps(None);
+}
+
 /// prd-home-call-recording-v1 §5 (HR-10): `replies` reads a recording
 /// card's transcript lines through the person's own held session, oldest
 /// first as Sew pages them; a line of another conversation is dropped; the

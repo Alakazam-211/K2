@@ -110,8 +110,8 @@ pub(crate) fn guest_app_for(who: &Who, raw: Option<&str>) -> R<GuestApp> {
     Ok(app)
 }
 
-pub const ROUTES: &[&str] = &["/cli/app/test-guest/add", "/cli/app/test-guest/rm", "/cli/app/test-guests", PASSWORD];
-pub const POST_ROUTES: &[&str] = &["/cli/app/test-guest/add", "/cli/app/test-guest/rm", PASSWORD];
+pub const ROUTES: &[&str] = &["/cli/app/test-guest/add", "/cli/app/test-guest/rm", "/cli/app/test-guests", PASSWORD, super::test_guest_rooms::ROOMS_OK];
+pub const POST_ROUTES: &[&str] = &["/cli/app/test-guest/add", "/cli/app/test-guest/rm", PASSWORD, super::test_guest_rooms::ROOMS_OK];
 
 /// `k2 app user password <name> --test --password-stdin`: set a test
 /// guest's password ([`password`]).
@@ -143,6 +143,7 @@ pub(crate) fn handle(path: &str, who: &Who, body: &[u8], params: &HashMap<String
         "/cli/app/test-guest/add" => add(who, body),
         "/cli/app/test-guest/rm" => rm(who, body),
         PASSWORD => password(who, body),
+        super::test_guest_rooms::ROOMS_OK => super::test_guest_rooms::handle(who, body, params),
         "/cli/app/test-guests" => list(who, params),
         _ => Err(no("not_found", 404, "no such App route")),
     }
@@ -360,6 +361,23 @@ pub(crate) fn add_checked(app: &GuestApp, by: &str, agent: Option<&str>, n: &New
     out["rooms"] = json!(room_handles);
     out["ownerNote"] = json!(owner_note);
     out["tied"] = json!(agent.is_some());
+    // 0.46.17: an agent's test login reaches only its own room; the role's
+    // other rooms open on an owner's card (`super::test_guest_rooms`).
+    if let (Some(ws), Some(role_id)) = (agent, role.as_deref()) {
+        let others: Vec<String> = skin::list_roles()
+            .unwrap_or_default()
+            .into_iter()
+            .find(|r| r.id == role_id)
+            .map(|r| r.room_policy.keys().filter(|k| k.as_str() != ws).map(|k| super::routes::ws_handle(k)).collect())
+            .unwrap_or_default();
+        if !others.is_empty() {
+            out["roomsWait"] = json!({
+                "rooms": others,
+                "why": format!("a test login your agent made signs in only to {}'s own room", super::routes::ws_handle(ws)),
+                "ask": format!("{} app user rooms-ok {} {}", k2_core::brand::CLI_NAME, app.app_id, p.username),
+            });
+        }
+    }
     if n.password.is_none() {
         // Shown once: K2 keeps only its hash.
         out["password"] = json!(password);

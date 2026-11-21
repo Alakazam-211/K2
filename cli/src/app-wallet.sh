@@ -286,6 +286,8 @@ cmd_skin() {
             shift || true
             # 0.46.4: test guests (--test) go through the App runtime.
             case "$action" in
+                # 0.46.17: a test login into its role's rooms, on a card.
+                rooms-ok) _app_test_guest_rooms_ok "$@"; return $? ;;
                 add|remove|rm|password)
                     for _a in "$@"; do
                         if [[ "$_a" == "--test" ]]; then

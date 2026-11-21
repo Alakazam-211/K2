@@ -1024,6 +1024,7 @@ fn the_ceiling_lets_a_tied_guest_through_the_commit_gap_only() {
         reasons: vec![ties::REASON_CREATED.into()],
         set_by: "agent:a".into(),
         set_at: 1,
+        rooms_ok: Vec::new(),
     };
     let mut policy = k2_core::skin::RoomPolicy::new();
     policy.insert("ws-a".into(), vec!["thread:read".into()]);

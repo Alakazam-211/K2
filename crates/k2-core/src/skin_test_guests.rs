@@ -64,9 +64,79 @@ pub(super) fn ensure_schema(conn: &Connection) -> Result<(), String> {
             created_at INTEGER NOT NULL,
             expires_at INTEGER NOT NULL
          );
-         CREATE INDEX IF NOT EXISTS idx_app_test_guests_app ON app_test_guests (app_id);",
+         CREATE INDEX IF NOT EXISTS idx_app_test_guests_app ON app_test_guests (app_id);
+         CREATE TABLE IF NOT EXISTS app_test_guest_rooms (
+            principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
+            app_id TEXT NOT NULL,
+            role_id TEXT NOT NULL,
+            room TEXT NOT NULL,
+            opened_by TEXT NOT NULL,
+            opened_at INTEGER NOT NULL,
+            PRIMARY KEY (principal_id, room)
+         );",
     )
     .map_err(|e| format!("skin.db app_test_guests: {e}"))
+}
+
+// ── rooms an owner opened to an agent's test login (0.46.17) ────────
+//
+// An agent-made test login reaches only its App's own room (`skin::ties`):
+// for a person, the other rooms wait until they choose their own password,
+// and a test login has no person. An owner or admin opens the rooms its role
+// names on the `apps.test-guest-rooms` card, for exactly those rooms and that
+// role. A row counts only while all of it still holds: the login is still a
+// test guest of that App, its App grant still has that role, and the role
+// still names that room. A new role or a new room needs a new card; the
+// test guest's own end (`expires_at`) still applies.
+
+/// The `(app, room)` pairs opened to `principal_id` that still hold.
+pub(crate) fn opened_rooms_conn(conn: &Connection, principal_id: &str) -> Result<Vec<(String, String)>, String> {
+    let mut st = conn
+        .prepare(
+            "SELECT r.app_id, r.room FROM app_test_guest_rooms r
+               JOIN app_test_guests t ON t.principal_id = r.principal_id AND t.app_id = r.app_id
+               JOIN grants g ON g.subject_kind = 'principal' AND g.subject_id = r.principal_id AND g.kind = 'app'
+                            AND g.target_id = r.app_id AND g.enabled != 0 AND g.role_id = r.role_id
+               JOIN roles ro ON ro.id = r.role_id
+              WHERE r.principal_id = ?1
+                AND EXISTS (SELECT 1 FROM json_each(ro.room_policy) j WHERE j.key = r.room)
+              ORDER BY r.room",
+        )
+        .map_err(|e| format!("test guest rooms: {e}"))?;
+    let rows = st.query_map(params![principal_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).map_err(|e| format!("test guest rooms: {e}"))?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|e| format!("test guest rooms: {e}"))
+}
+
+/// [`opened_rooms_conn`] on its own connection.
+pub fn opened_rooms(principal_id: &str) -> Result<Vec<(String, String)>, String> {
+    with_conn(|conn| opened_rooms_conn(conn, principal_id))
+}
+
+/// Open `rooms` of `app` to test login `principal_id` under role `role_id`
+/// (replacing what was opened before), as `by`. The caller checked who may
+/// and that these are the role's rooms now; this refuses a login that is
+/// not a test guest of `app`.
+pub fn open_rooms(principal_id: &str, app: &str, role_id: &str, rooms: &[String], by: &str) -> Result<(), String> {
+    with_conn(|conn| {
+        let tx = super::immediate_tx(conn)?;
+        match get_conn(&tx, principal_id)? {
+            Some(t) if t.app == app => {}
+            _ => return Err("not a test guest of that App".to_string()),
+        }
+        tx.execute("DELETE FROM app_test_guest_rooms WHERE principal_id = ?1", params![principal_id])
+            .map_err(|e| format!("test guest rooms: {e}"))?;
+        let at = now_secs();
+        for room in rooms {
+            tx.execute(
+                "INSERT INTO app_test_guest_rooms (principal_id, app_id, role_id, room, opened_by, opened_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![principal_id, app, role_id, room, by, at],
+            )
+            .map_err(|e| format!("test guest rooms: {e}"))?;
+        }
+        // Live sessions pick it up at their next request: a tied login's
+        // pass is clamped on every use with the rows that hold then.
+        tx.commit().map_err(|e| format!("test guest rooms commit: {e}"))
+    })
 }
 
 fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<TestGuest> {

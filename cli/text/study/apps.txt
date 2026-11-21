@@ -735,6 +735,17 @@ HELD FOR THE OWNER: THE CARD (0.46.17)
   You see only the requests you asked for. You never approve one; you can
   withdraw your own (k2 app deny <w_id>).
 
+A TEST LOGIN'S ROOMS (0.46.17)
+  A login you make signs in only to your own room until its person chooses
+  their own password (signing in elsewhere answers skin_room). A --test login
+  has no person, so to test the other rooms its role names, ask once:
+    k2 app user rooms-ok <app> <test-login> [--assign <login>]
+  It puts a card on your Thread for an owner or admin naming the login, its
+  role and those rooms (exit 2 while it waits). Allow opens exactly those
+  rooms for that login and role, with what the role gives there (never a
+  person-only right), until the test login ends. A new role or room needs a
+  new card. Never for a login that isn't --test.
+
 WALLED APPS AND SERVICES ON THIS BOX
   A walled App (k2 app deploy --engine guarded) reaches K2 through its
   gateway link and the internet through its own proxy, never this box's

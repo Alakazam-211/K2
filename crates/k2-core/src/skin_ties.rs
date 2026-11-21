@@ -249,6 +249,18 @@ pub struct Tie {
     pub reasons: Vec<String>,
     pub set_by: String,
     pub set_at: i64,
+    /// `(app, room)`: rooms past the tie's own an owner or admin opened to
+    /// this test login on the `apps.test-guest-rooms` card, that still hold
+    /// (`test_guests::opened_rooms_conn`). Empty for every other login.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub rooms_ok: Vec<(String, String)>,
+}
+
+impl Tie {
+    /// Did an owner open `room` of `app` to this test login (0.46.17)?
+    pub fn opened(&self, app: &str, room: &str) -> bool {
+        self.rooms_ok.iter().any(|(a, r)| a == app && r == room)
+    }
 }
 
 /// What a write ties a user to.
@@ -269,6 +281,7 @@ fn map_tie(r: &rusqlite::Row<'_>) -> rusqlite::Result<Tie> {
         reasons: serde_json::from_str(&reasons).unwrap_or_default(),
         set_by: r.get(4)?,
         set_at: r.get(5)?,
+        rooms_ok: Vec::new(),
     })
 }
 
@@ -345,9 +358,17 @@ pub fn set(principal_id: &str, w: TieWrite<'_>) -> Result<(), String> {
 }
 
 pub(super) fn get_conn(conn: &Connection, principal_id: &str) -> Result<Option<Tie>, String> {
-    conn.query_row(&format!("{TIE_SELECT} WHERE principal_id = ?1"), params![principal_id], map_tie)
+    let tie = conn
+        .query_row(&format!("{TIE_SELECT} WHERE principal_id = ?1"), params![principal_id], map_tie)
         .optional()
-        .map_err(|e| format!("tie lookup: {e}"))
+        .map_err(|e| format!("tie lookup: {e}"))?;
+    tie.map(|t| with_opened_rooms(conn, t)).transpose()
+}
+
+/// `tie` with the rooms an owner opened to it (a test login's card, 0.46.17).
+pub(super) fn with_opened_rooms(conn: &Connection, mut tie: Tie) -> Result<Tie, String> {
+    tie.rooms_ok = super::test_guests::opened_rooms_conn(conn, &tie.principal_id)?;
+    Ok(tie)
 }
 
 /// The tie on `principal_id`, if any.
@@ -582,9 +603,13 @@ pub const TIED_REACHES_APPROVED_ROOMS: bool = false;
 /// [`TIED_REACHES_APPROVED_ROOMS`] were on. Nothing else limits a role's caps.
 pub const CAPS_ELSEWHERE: &[&str] = &[super::CAP_THREAD_READ, super::CAP_THREAD_POST];
 
-/// Is `room` one `tie` lets through on an App with these approved rooms?
+/// Is `room` one `tie` lets through on an App with these approved rooms? The
+/// tie's own room; a room an owner opened to this test login on its App
+/// (0.46.17, [`Tie::opened`]); never the box login.
 pub fn room_inside(tie: &Tie, app: &str, app_rooms: &[String], room: &str) -> bool {
-    room == tie.workspace_id || (TIED_REACHES_APPROVED_ROOMS && app != HOST_APP_ID && app_rooms.iter().any(|r| r == room))
+    room == tie.workspace_id
+        || (app != HOST_APP_ID && tie.opened(app, room))
+        || (TIED_REACHES_APPROVED_ROOMS && app != HOST_APP_ID && app_rooms.iter().any(|r| r == room))
 }
 
 /// What a tied user may use of `policy` on `app` (§5.2): no tie → the
@@ -602,7 +627,9 @@ pub fn clamp(tie: Option<&Tie>, app: &str, app_workspace: Option<&str>, app_room
         if !room_inside(tie, app, app_rooms, &room) {
             continue;
         }
-        let own = room == tie.workspace_id;
+        // A room an owner opened on the card keeps the role's caps there
+        // (still never a person-only one), as its own room does.
+        let own = room == tie.workspace_id || (app != HOST_APP_ID && tie.opened(app, &room));
         let caps: Vec<String> =
             caps.into_iter().filter(|c| !PERSON_ONLY_CAPS.contains(&c.as_str()) && (own || CAPS_ELSEWHERE.contains(&c.as_str()))).collect();
         out.insert(room, caps);
@@ -741,7 +768,26 @@ mod tests {
             reasons: vec![REASON_CREATED.into()],
             set_by: "agent:sales".into(),
             set_at: 1,
+            rooms_ok: Vec::new(),
         }
+    }
+
+    /// 0.46.17: a room an owner opened to a test login on its App lets
+    /// through, with the role's caps there minus person-only ones; nothing
+    /// else does, on another App or the box login.
+    #[test]
+    fn a_room_opened_on_the_card_lets_through_on_its_app_only() {
+        let mut t = tie("ws", true);
+        t.rooms_ok = vec![("svc-a".to_string(), "sales".to_string())];
+        let mixed = policy(&[("ws", &["thread:read"]), ("sales", &["thread:read", "files:write", "files:download"]), ("ops", &["thread:read"])]);
+        assert_eq!(
+            clamp(Some(&t), "svc-a", Some("ws"), &[], mixed.clone()).unwrap(),
+            policy(&[("ws", &["thread:read"]), ("sales", &["thread:read", "files:write"])]),
+            "sales opens with the role's caps (no person-only ones); ops stays out"
+        );
+        assert!(room_inside(&t, "svc-a", &[], "sales") && !room_inside(&t, "svc-a", &[], "ops"));
+        assert!(!room_inside(&t, "svc-other", &[], "sales"), "another App: not opened");
+        assert!(!room_inside(&t, HOST_APP_ID, &[], "sales"), "never the box login");
     }
 
     fn policy(lines: &[(&str, &[&str])]) -> RoomPolicy {

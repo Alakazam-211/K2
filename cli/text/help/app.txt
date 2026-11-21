@@ -33,6 +33,11 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         7 d), at most 5 per App (k2 app test-guests). The owner, or
                                         the App's own agent with "Let this agent manage its Apps'
                                         users" (else one held request: a card for the owner, exit 2)
+  k2 app user rooms-ok <app-id> <test-login> [--assign <login>] [--reason T]
+                                        A test login your agent made signs in only to your own room.
+                                        This asks an owner or admin on a card to let it into the other
+                                        rooms its role names (exit 2 while it waits); from an owner or
+                                        admin, it opens them now. Only a --test login.
   k2 app user invite <username> --app <app> [--email e] [--role R] [--from <address>] [--json]
                                         Mail a one-time link to set their own password (new people
                                         need --email and are made App-only). The owner, or an agent

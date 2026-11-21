@@ -770,7 +770,69 @@ if v.get("password"):
     print("password (shown once): %s" % v["password"])
 if v.get("tied"):
     print("tied to your workspace: it never counts as a person for person-only cards")
-print(v.get("note", ""))'
+print(v.get("note", ""))
+w = v.get("roomsWait") or {}
+if w.get("rooms"):
+    print("Its role also names %s; %s, until an owner or admin lets it in on a card." % (", ".join(w["rooms"]), w.get("why") or "it signs in only to your own room"))
+    print("Ask with: %s" % w.get("ask"))'
+}
+
+# k2 app user rooms-ok <app> <login> [--assign <login>] [--reason T] [--json]
+# (0.46.17): let a test login your agent made into the rooms its role names.
+# An agent files the apps.test-guest-rooms card (exit 2 while it waits); an
+# owner or admin, from their own terminal, opens them at once.
+_app_test_guest_rooms_ok() {
+    local app="" name="" reason="" json_out=0
+    local usage="usage: k2 app user rooms-ok <app-id> <test-login> [--assign <login>] [--reason TEXT] [--json]"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --reason) _need_value "$@"; reason="${2:-}"; shift 2 ;;
+            --reason=*) reason="${1#--reason=}"; shift ;;
+            --json) json_out=1; shift ;;
+            -h|--help)
+                cat <<'EOF'
+k2 app user rooms-ok <app-id> <test-login> [--assign <login>] [--reason TEXT] [--json]
+
+  A test login your agent made (k2 app user add <app> <login> --test --role R)
+  signs in only to your own room: K2 holds every login an agent made to that
+  until its person chooses their own password, and a test login has no person.
+  This lets it into the other rooms its role names, for testing.
+
+  From an agent: puts a card on your Thread for an owner or admin (the phone
+  shows it too; --assign <login> asks one of them) naming the login, its role
+  and those rooms. Exit 2 while it waits; k2 permission status <id> says where
+  it stands. Allow opens exactly those rooms, with what the role gives there
+  (never a right only a person may have), until the test login ends. A new
+  role or another room needs a new card.
+  From an owner or admin (their own terminal): opens them now, audited.
+
+  Only a --test login. Any other login an agent made keeps the rule: its
+  other rooms open when the person chooses their own password.
+EOF
+                return 0 ;;
+            -*) echo "Unknown flag: $1 ($usage)" >&2; exit 2 ;;
+            *) if [ -z "$app" ]; then app="$1"; elif [ -z "$name" ]; then name="$1"; else echo "$usage" >&2; exit 2; fi; shift ;;
+        esac
+    done
+    { [ -n "$app" ] && [ -n "$name" ]; } || { echo "$usage" >&2; exit 2; }
+    _app_rt_post /cli/app/test-guest/rooms-ok "$(_compute_json K2_CJ_app="$app" K2_CJ_username="$name" K2_CJ_reason="$reason")"
+    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+    if [ "$json_out" = 1 ]; then
+        printf '%s\n' "$_CP_BODY"
+    else
+        printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+st = v.get("status")
+if st == "asked":
+    print("Asked: %s into %s with its role %s." % (v.get("username"), ", ".join(v.get("rooms") or []), v.get("role")))
+    print("  " + ((v.get("card") or {}).get("id") and v.get("where") or ""))
+elif st == "already_open":
+    print("%s already uses %s." % (v.get("username"), ", ".join(v.get("rooms") or [])))
+else:
+    print(v.get("note") or "%s can now use %s." % (v.get("username"), ", ".join(v.get("rooms") or [])))'
+    fi
+    printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; sys.exit(2 if json.load(sys.stdin).get("status") == "asked" else 0)'
 }
 
 cmd_app_test_guests() {

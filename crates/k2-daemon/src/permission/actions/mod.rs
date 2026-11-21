@@ -72,6 +72,7 @@ pub(crate) mod publish;
 pub(crate) mod recording;
 pub(crate) mod sew;
 pub(crate) mod switches;
+pub(crate) mod test_guest_rooms;
 pub(crate) mod vault;
 pub(crate) mod vault_accept_from;
 pub(crate) mod vault_incoming;
@@ -171,6 +172,7 @@ pub(crate) fn all() -> Vec<Registered> {
     out.extend(recording::actions());
     out.extend(vault_send::actions());
     out.extend(vault_accept_from::actions());
+    out.extend(test_guest_rooms::actions());
     out.extend(vault_grant_server::actions());
     out.extend(approve::actions());
     out.extend(permission_approvers::actions());
@@ -208,6 +210,7 @@ pub(crate) fn not_cardable() -> Vec<&'static NotCardableSpec> {
     out.extend(recording::not_cardable());
     out.extend(vault_send::not_cardable());
     out.extend(vault_accept_from::not_cardable());
+    out.extend(test_guest_rooms::not_cardable());
     out.extend(vault_grant_server::not_cardable());
     out.extend(approve::not_cardable());
     out.extend(permission_approvers::not_cardable());

@@ -62,6 +62,10 @@ pub mod move_plan;
 pub mod skin_move;
 /// Test guests of one App, made by a person (0.46.4).
 pub mod test_guests;
+/// An agent's test login into its role's rooms, on an owner's card (0.46.17).
+pub mod test_guest_rooms;
+#[cfg(test)]
+mod test_guest_rooms_tests;
 /// `k2 app user …` by an App's agent on a login of its own App that reaches
 /// another workspace's room: held for an owner or admin (0.46.14).
 pub mod user_hold;

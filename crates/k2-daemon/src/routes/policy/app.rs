@@ -333,6 +333,9 @@ pub(super) const ROWS: &[Route] = &[
     post("/cli/app/test-guest/add", Owner),
     post("/cli/app/test-guest/password", Owner),
     post("/cli/app/test-guest/rm", Owner),
+    // 0.46.17: a test login into its role's rooms: an owner or admin opens
+    // them; an agent passport files the card (handler).
+    post("/cli/app/test-guest/rooms-ok", Admin),
     get("/cli/app/test-guests", Member),
     // purge (deletes the App's data) is owner-only in the handler.
     post("/cli/app/uninstall", Admin),

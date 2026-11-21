@@ -1181,6 +1181,9 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         // Its own test guest's password: with the users switch, or once
         // after the owner approved its held request (the handler).
         "/cli/app/test-guest/password",
+        // 0.46.17: ask an owner, on a card, to let its test login into the
+        // rooms its role names (the handler files the card).
+        "/cli/app/test-guest/rooms-ok",
         "/cli/app/test-guests",
         // 0.46.9: its own Apps' settings, deletion requests and client logs
         // (reads for its own Apps; writes with "manage its Apps' users",

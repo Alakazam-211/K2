@@ -562,6 +562,23 @@ pub(crate) fn raise_held_card(workspace_id: &str, session_id: &str, request_id: 
     (status, serde_json::from_str(&r.body).unwrap_or(Value::Null))
 }
 
+/// [`raise_held_card`] for any action: `params` as the ask sends them, `to`
+/// the agent's `--assign` (0.46.17: `k2 app user rooms-ok` files
+/// `apps.test-guest-rooms` this way, Beta switch or not, as K2's held App
+/// cards go up). Answers `(http status, body)`.
+pub(crate) fn raise_card(workspace_id: &str, session_id: &str, action: &str, params: Value, why: &str, to: Option<&[String]>) -> (u16, Value) {
+    let mut body = Map::new();
+    body.insert("action".into(), json!(action));
+    body.insert("params".into(), params);
+    body.insert("why".into(), json!(why));
+    if let Some(names) = to {
+        body.insert("to".into(), json!(names));
+    }
+    let r = request(workspace_id, session_id, &body);
+    let status = r.status.split_whitespace().next().and_then(|c| c.parse().ok()).unwrap_or(500);
+    (status, serde_json::from_str(&r.body).unwrap_or(Value::Null))
+}
+
 /// The same ask as `POST /cli/permission/request`, for a passport its door
 /// already classified (`k2 db request-read`, 0.46.17,
 /// `db_read_routes`). The caller checks the gate first.

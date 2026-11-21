@@ -394,7 +394,9 @@ pub const SKILL_VERSION_WORKSPACE: u32 = 65;
 /// `k2 db request-read`).
 /// v23 = 0.46.17: `--assign` (the same flag as `--to`) and "Agents that
 /// take your secrets without a card" (`vault.accept-from`).
-pub const SKILL_VERSION_PERMISSIONS: u32 = 23;
+/// v24 = 0.46.17: a test login's rooms (`apps.test-guest-rooms`,
+/// `k2 app user rooms-ok`).
+pub const SKILL_VERSION_PERMISSIONS: u32 = 24;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

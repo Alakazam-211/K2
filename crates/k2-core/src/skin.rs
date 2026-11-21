@@ -7340,6 +7340,8 @@ fn resolve_token_by(key: TokenKey, used: bool) -> Result<Option<SkinPass>, Strin
                             reasons: serde_json::from_str(&r.get::<_, Option<String>>(13)?.unwrap_or_default()).unwrap_or_default(),
                             set_by: r.get::<_, Option<String>>(14)?.unwrap_or_default(),
                             set_at: r.get::<_, Option<i64>>(15)?.unwrap_or(0),
+                            // Filled below, outside this row read.
+                            rooms_ok: Vec::new(),
                         }),
                         _ => None,
                     };
@@ -7381,6 +7383,8 @@ fn resolve_token_by(key: TokenKey, used: bool) -> Result<Option<SkinPass>, Strin
             .map_err(|e| format!("skin token resolve: {e}"))?
             .flatten();
         let Some((mut pass, tie)) = row else { return Ok(None) };
+        // 0.46.17: the rooms an owner opened to a test login on its card.
+        let tie = tie.map(|t| ties::with_opened_rooms(conn, t)).transpose()?;
         if pass.session {
             // 0.46.8 (Rosson 2026-11-02): new access at the next request, no
             // sign-out. A login's rooms and caps are its grant's, now, like

@@ -626,6 +626,10 @@ fn the_changes_help_never_acts() {
         &["data", "put", "-h"],
         &["data", "put", "--help"],
         &["data", "put", "acme", "--json", "-h", "x"],
+        // A value flag never takes -h or --help: help wins.
+        &["data", "put", "acme", "x", "--to", "-h"],
+        &["data", "put", "acme", "--to", "--help", "x"],
+        &["data", "put", "acme", "x", "--disk-override", "-h"],
         &["domain", "-h"],
         &["domain", "--help"],
         &["domain", "rm", "--help", "acme", "shop"],

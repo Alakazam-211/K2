@@ -39,8 +39,8 @@
 //! The shell CLI answers these forms itself ([`run`] returns `None`):
 //!
 //! - `compact` and `archives` (the owner's on-disk view), `help`, and a command line with `-h` or `--help` ([`crate::front`]);
-//! - a value flag as the last word (the shell's `shift 2` fails there and
-//!   `set -e` ends the command), and a word that is not UTF-8;
+//! - a value flag as the last word (the shell's `_need_value` line,
+//!   `Error: <flag> takes a value`, exit 2), and a word that is not UTF-8;
 //! - `HOOK_SOCK` set with a `CODEX_` variable exported, a port that is set
 //!   but is no port curl takes, and a `python3` the binary can't tell, as
 //!   for [`super::inbox`].

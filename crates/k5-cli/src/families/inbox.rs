@@ -43,8 +43,8 @@
 //!
 //! - a command line with `-h` or `--help` (the front sends those on,
 //!   [`crate::front`]), a word that is not UTF-8, and `--folder` (or a
-//!   `compose` value flag) as the last word (the shell stops on `$2:
-//!   unbound variable`, a line with its script's path in it);
+//!   `compose` value flag) as the last word (the shell's `_need_value`
+//!   line, `Error: <flag> takes a value`, exit 2);
 //! - `HOOK_SOCK` set with a `CODEX_` variable exported (the shell looks
 //!   for a shared Codex server first, [`crate::prelude::codex_env`]);
 //! - a port that is set but is no port curl takes (the shell's curl fails
@@ -648,7 +648,7 @@ mod tests {
     fn the_shell_s_lines() {
         let text = source();
         for shell in [
-            r#"            --folder) folder="$2"; shift 2 ;;"#,
+            r#"            --folder) _need_value "$@"; folder="$2"; shift 2 ;;"#,
             r#"            -*) shift ;;"#,
             r#"            *) [[ -z "$folder" ]] && folder="$1"; shift ;;"#,
             r#"    [[ -n "$folder" ]] && params="folder=$(urlencode "$folder")""#,

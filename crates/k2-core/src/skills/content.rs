@@ -1337,7 +1337,8 @@ pub const K2_PERMISSIONS_SKILL_DESCRIPTION: &str =
 /// `.k2/skills/k2-permissions/SKILL.md` only while both switches are on for
 /// the workspace. **The same text is `k2 study permissions`**
 /// (`cli/k2` `_study_page_permissions`); a test keeps the two identical.
-pub const K2_PERMISSIONS_SKILL_BODY: &str = r#"# Permission cards (Beta)
+pub const K2_PERMISSIONS_SKILL_BODY: &str = concat!(
+    r#"# Permission cards (Beta)
 
 Permission cards are on for you: "Let agents ask with permission cards" is on for this server (Settings → Access → Permission Cards; on by default from K2 0.46.11), and a person turned on your own "Let this agent ask for permission" switch in your workspace's settings. When K2 refuses you something a person can allow, ask that person with one command. K2 shows them a card; they press Allow or Deny.
 
@@ -1512,15 +1513,27 @@ CI on compute nodes (`ciPreview`) is a server switch, the owner's. While it's of
 
 Run it as printed; your own `k2 settings set ciPreview true` ends with the same line. Only the owner allows it, for the whole server, and CI checks then go ahead of other compute jobs. When the `[permission:]` turn says approved, run your command again (compute nodes must be on too). To turn it off again: `k2 permission request ci.preview-off --why "..."`. `k2 study ci`.
 
-## Recording in this server's chat
+"#,
+    r#"## Recording in this server's chat
 
-Who may start recordings in the voice rooms is the owner's or an admin's. Your own `k2 voice settings --start-level <level>` is refused with `recording_level_needs_owner` (exit 3) and ends with:
+Who may start recordings in the voice rooms is the owner's or an admin's. Your own `"#,
+    cli_name!(),
+    r#" voice settings --start-level <level>` is refused with `recording_level_needs_owner` (exit 3) and ends with:
 
-    k2 permission request voice.recording-start-level level=<level> --why "<what you need it for>"
+    "#,
+    cli_name!(),
+    r#" permission request voice.recording-start-level level=<level> --why "<what you need it for>"
 
-Recording in direct messages is the same: `k2 hostchat recording policy set dm_enabled on` (or `off`), with no other key, ends with `k2 permission request voice.recording-dm dm=on --why "..."`. Run it as printed. The owner or an admin allows it once, with a confirm, and K2 applies it on their side: you run nothing afterwards. `--require-recording` and the other policies have no card: ask your human in your Thread. `k2 study app-recording`.
+Recording in direct messages is the same: `"#,
+    cli_name!(),
+    r#" hostchat recording policy set dm_enabled on` (or `off`), with no other key, ends with `"#,
+    cli_name!(),
+    r#" permission request voice.recording-dm dm=on --why "..."`. Run it as printed. The owner or an admin allows it once, with a confirm, and it is applied on their side: you run nothing afterwards. `--require-recording` and the other policies have no card: ask your human in your Thread. `"#,
+    cli_name!(),
+    r#" study app-recording`.
 
-## Apps
+"#,
+    r#"## Apps
 
 - App guests never see permission cards. Never tell a guest a switch, agent, server or request id; say an administrator was asked.
 - Role or room changes for guests are not cards: talk to the agent that manages the role.
@@ -1585,7 +1598,8 @@ When your human tells you who agents' cards should go to from now on (or who mus
 - `k2 permission list [--area <area>] [--search <word>]`
 - `k2 permission status [<id>]`
 - `k2 permission cancel <id>`
-"#;
+"#
+);
 
 /// The `k2-permissions` skill body (see [`K2_PERMISSIONS_SKILL_BODY`]).
 pub fn generate_k2_permissions_skill() -> String {
@@ -2607,8 +2621,8 @@ mod tests {
             "k2 permission request ci.preview --why",
             "k2 permission request ci.preview-off",
             // 0.46.17: who starts recordings, and recording in direct messages.
-            "k2 permission request voice.recording-start-level level=<level> --why",
-            "k2 permission request voice.recording-dm dm=on --why",
+            concat!(cli_name!(), " permission request voice.recording-start-level level=<level> --why"),
+            concat!(cli_name!(), " permission request voice.recording-dm dm=on --why"),
             "recording_level_needs_owner",
             "ci_preview_off",
         ] {

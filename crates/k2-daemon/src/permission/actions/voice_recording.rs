@@ -40,7 +40,7 @@ use super::{Answerer, Applied, Check, Ctx, Registered};
 use crate::compute_routes::Who;
 use crate::voice::routes::Caller;
 use k2_core::brand::CLI_NAME;
-use k2_core::cli_name;
+use k2_core::{cli_name, product_name};
 
 pub(crate) const START_ACTION: &str = "voice.recording-start-level";
 pub(crate) const DM_ACTION: &str = "voice.recording-dm";
@@ -105,7 +105,7 @@ pub(crate) static DM: ActionSpec = ActionSpec {
     undo: Undo::None,
     settings: SettingsRef {
         page: "sew",
-        path: concat!(cli_name!(), " hostchat recording policy set dm_enabled on|off (a terminal outside K2)"),
+        path: concat!(cli_name!(), " hostchat recording policy set dm_enabled on|off (a terminal outside ", product_name!(), ")"),
     },
     // `walls::ROWS` matches only a body whose `changes` is exactly
     // `recording.dm_enabled` (true gives dm=on, false dm=off).

@@ -656,7 +656,7 @@ fn recording_settings(c: &Caller, b: &Value) -> CliResponse {
         return no(
             403,
             LEVEL_NEEDS_OWNER,
-            "nothing changed: the owner or an Admin sets who may start recordings in the K5 rooms",
+            "nothing changed: the owner or an Admin sets who may start recordings in the voice rooms",
         );
     }
     if let Err(r) = need_manager(c) {
@@ -728,7 +728,7 @@ fn recording_settings(c: &Caller, b: &Value) -> CliResponse {
 /// Admin (`voice.recording-start-level`'s wall).
 pub const LEVEL_NEEDS_OWNER: &str = "recording_level_needs_owner";
 
-/// The start levels a card may ask for (the K5 Space has no admin level).
+/// The start levels a card may ask for (the rooms' Space has no admin level).
 pub const CARD_LEVELS: [&str; 3] = ["none", "moderator", "member"];
 
 /// A body that changes only the start level, to one of [`CARD_LEVELS`].

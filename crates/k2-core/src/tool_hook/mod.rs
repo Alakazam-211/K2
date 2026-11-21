@@ -1820,7 +1820,7 @@ pub fn admin_space_rewind_for_tests(secs: i64, unstamped: bool) -> Result<(), St
 pub fn admin_space_ready_for_tests(space_id: &str) -> Result<(), String> {
     crate::skin::with_skin_conn(|conn| {
         conn.execute(
-            "INSERT INTO tool_admin_space (id, space_id, name, state, why, updated_at) VALUES (1, ?1, 'K2', ?2, NULL, 0)
+            "INSERT INTO tool_admin_space (id, space_id, name, state, why, updated_at) VALUES (1, ?1, 'Rooms', ?2, NULL, 0)
              ON CONFLICT(id) DO UPDATE SET space_id = excluded.space_id, state = excluded.state, why = NULL",
             rusqlite::params![space_id, admin_space::SPACE_READY],
         )

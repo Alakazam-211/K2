@@ -445,9 +445,31 @@ pub async fn forward_to_tcp(stream: &mut tokio::net::UnixStream, head: &str, bod
         return;
     }
     if upgrade {
-        // A WebSocket (review R6): the daemon's 101 and then the frames,
-        // both ways, until either side closes. The record lives as long.
-        let _ = tokio::io::copy_bidirectional(stream, &mut tcp).await;
+        // A WebSocket (review R6): only after the daemon's 101 do frames
+        // flow both ways (until either side closes; the record lives as
+        // long). Any other answer is an ordinary one: no second request
+        // goes up this connection unrebuilt.
+        use tokio::io::AsyncReadExt;
+        let mut head = Vec::new();
+        let mut b = [0u8; 4096];
+        while !head.windows(4).any(|w| w == b"\r\n\r\n") && head.len() < 16 * 1024 {
+            match tcp.read(&mut b).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => head.extend_from_slice(&b[..n]),
+            }
+        }
+        let switched = head.starts_with(b"HTTP/1.1 101 ") || head.starts_with(b"HTTP/1.0 101 ");
+        if stream.write_all(&head).await.is_err() {
+            drop(record);
+            drop(tcp);
+            return;
+        }
+        if switched {
+            let _ = tokio::io::copy_bidirectional(stream, &mut tcp).await;
+        } else {
+            let _ = tcp.shutdown().await;
+            let _ = tokio::io::copy(&mut tcp, stream).await;
+        }
     } else {
         // Answers stream (watch / tail -f): copy until the daemon closes.
         let _ = tokio::io::copy(&mut tcp, stream).await;

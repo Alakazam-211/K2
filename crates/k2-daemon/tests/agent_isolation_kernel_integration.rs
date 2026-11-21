@@ -707,7 +707,7 @@ cat $CODEX_HOME/x/id_test > /dev/null 2> {ws}/s.err; echo "link_rc $? $(cat {ws}
 ls $CODEX_HOME/everything/ > /dev/null 2> {ws}/s.err; echo "home_rc $? $(cat {ws}/s.err)" >> $R
 touch $CODEX_HOME/sessions/ok 2> {ws}/s.err; echo "own_link_rc $? $(cat {ws}/s.err)" >> $R
 cat $CODEX_HOME/auth.json > /dev/null 2> {ws}/s.err; echo "auth_link_rc $? $(cat {ws}/s.err)" >> $R
-echo 'notify = ["sh"]' >> $CODEX_HOME/config.toml 2> {ws}/s.err; echo "config_link_rc $? $(cat {ws}/s.err)" >> $R
+{{ echo 'notify = ["sh"]' >> $CODEX_HOME/config.toml; }} 2> {ws}/s.err; echo "config_link_rc $? $(cat {ws}/s.err)" >> $R
 echo "slot done" >> $R; exec sleep 3600
 "#,
         ws = a_ws.display(),
@@ -721,8 +721,8 @@ echo "slot done" >> $R; exec sleep 3600
     assert!(denied(&r["link_rc"]), "a planted slot link to ~/.ssh grants nothing: {}", r["link_rc"]);
     assert!(denied(&r["home_rc"]), "a planted slot link to the home grants nothing: {}", r["home_rc"]);
     assert!(r["own_link_rc"].starts_with("0"), "K2's own slot link (Codex sessions) works: {}", r["own_link_rc"]);
-    assert!(denied(&r["auth_link_rc"]), "a same-named link to the default Codex login grants nothing: {}", r["auth_link_rc"]);
-    assert!(denied(&r["config_link_rc"]), "a same-named link to the shared Codex config grants nothing: {}", r["config_link_rc"]);
+    assert!(denied_at(&r["auth_link_rc"], "acct-1/auth.json"), "a same-named link to the default Codex login grants nothing: {}", r["auth_link_rc"]);
+    assert!(denied_at(&r["config_link_rc"], "acct-1/config.toml"), "a same-named link to the shared Codex config grants nothing: {}", r["config_link_rc"]);
     assert_eq!(std::fs::read_to_string(home.join(".codex/config.toml")).unwrap(), "notify = []\n", "the shared config is unchanged");
     // A harness home that is neither its slot nor the tool's own home.
     let body = json!({"agent_name": "tab-bad", "cwd": a_ws.to_string_lossy(), "command": "/bin/sh", "args": ["-c", "exec sleep 60"], "cols": 100, "rows": 30, "env": {"CODEX_HOME": home.join(".ssh").to_string_lossy()}}).to_string();
@@ -758,20 +758,15 @@ fn a_held_forward_is_recognised_by_its_full_address_only() {
     let mut d = Daemon::new("held");
     d.start();
     let (_a_id, a_ws) = d.workspace("A");
-    // A ~9.5 MB file, committed, then one line changed: diff-file?sides=1
-    // answers both sides (~19 MB), far more than the socket buffers hold,
-    // so A's forward stays open while A doesn't read its answer.
-    let line = "x".repeat(94);
-    let big: String = (0..100_000).map(|i| format!("{i:06}{line}\n")).collect();
-    std::fs::write(a_ws.join("big.txt"), &big).unwrap();
-    let git = |args: &[&str]| {
-        let o = Command::new("git").args(["-c", "user.email=t@k2.test", "-c", "user.name=t"]).args(args).current_dir(&a_ws).output().expect("git");
-        assert!(o.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&o.stderr));
-    };
-    git(&["init", "-q"]);
-    git(&["add", "big.txt"]);
-    git(&["commit", "-q", "-m", "big"]);
-    std::fs::write(a_ws.join("big.txt"), big.replacen("000000", "CHANGED", 1)).unwrap();
+    // 30 inbox items with ~900 KB titles: A's `inbox/list` (a passport
+    // route on TCP too) answers ~27 MB, far more than the socket buffers
+    // hold, so A's forward stays open while A doesn't read its answer.
+    let inbox = a_ws.join(".k2/inbox");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let title = "x".repeat(900_000);
+    for i in 0..30 {
+        std::fs::write(inbox.join(format!("big-{i:02}.md")), format!("---\ntitle: {title}\ncreated: 2026-11-21T00:00:{i:02}Z\n---\nbody\n")).unwrap();
+    }
     let script = format!(
         r#"echo $$ > {ws}/pid; env -0 > {ws}/env.tmp && mv {ws}/env.tmp {ws}/env
 python3 - "$K2_HOOK_SOCK" "$K2_HOOK_TOKEN" "{ws}" <<'PY'
@@ -779,8 +774,8 @@ import socket, sys, time
 sock, tok, ws = sys.argv[1:4]
 s = socket.socket(socket.AF_UNIX)
 s.connect(sock)
-s.sendall(("GET /cli/git/diff-file?path=%s&file_path=big.txt&sides=1 HTTP/1.1\r\nHost: k2\r\nAuthorization: Bearer %s\r\nX-K2-Via-Tcp: 1\r\n\r\n" % (ws, tok)).encode())
-first = s.recv(64).decode(errors="replace").split("\r\n")[0]
+s.sendall(("GET /cli/inbox/list?project=%s HTTP/1.1\r\nHost: k2\r\nAuthorization: Bearer %s\r\nX-K2-Via-Tcp: 1\r\n\r\n" % (ws, tok)).encode())
+first = s.recv(400).decode(errors="replace").replace("\r", " ").replace("\n", " ")
 open(ws + "/held.results", "w").write("held " + first + "\n")
 time.sleep(120)
 PY

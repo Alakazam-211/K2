@@ -201,95 +201,68 @@ pub fn name_arg(verb: &str, words: &[String]) -> Result<String, Stop> {
         .ok_or_else(|| Stop::Usage(format!("Error: usage: {CLI} sources {verb} <name>")))
 }
 
-/// A number bash's `$(( ))` reads as decimal: digits, no leading zero
-/// (an octal number goes to the shell), and in range.
-fn decimal(text: &str) -> Option<i64> {
-    if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    if text.len() > 1 && text.starts_with('0') {
-        return None;
-    }
-    if text.len() > 15 {
-        return None;
-    }
-    text.parse().ok()
+/// `^[0-9]+[smhd]?$`, the shell's one duration pattern: the digits and
+/// the seconds in one unit. `None`: not a duration.
+fn duration(v: &str) -> Option<(&str, i64)> {
+    let (num, mult) = match v.as_bytes().last()? {
+        b's' => (&v[..v.len() - 1], 1),
+        b'm' => (&v[..v.len() - 1], 60),
+        b'h' => (&v[..v.len() - 1], 3_600),
+        b'd' => (&v[..v.len() - 1], 86_400),
+        _ => (v, 1),
+    };
+    (!num.is_empty() && num.bytes().all(|b| b.is_ascii_digit())).then_some((num, mult))
 }
 
-/// `_sources_secs "$v" "$flag"` where its arithmetic runs: the seconds,
-/// as text (`*s` and a bare number are the text as typed).
-pub fn secs(v: &str, flag: &str) -> Result<String, Stop> {
-    if v.is_empty()
-        || !v
-            .bytes()
-            .all(|b| b.is_ascii_digit() || b"smhd".contains(&b))
-    {
-        return Err(Stop::Usage(format!(
+/// `$(( 10#<num> * mult ))`: the digits read as decimal, leading zeros
+/// and all. A number where bash's arithmetic might wrap goes to the shell.
+fn seconds(num: &str, mult: i64) -> Result<i64, Stop> {
+    let digits = num.trim_start_matches('0');
+    if digits.len() > 15 {
+        return Err(Stop::Shell);
+    }
+    let n: i64 = if digits.is_empty() {
+        0
+    } else {
+        digits.parse().map_err(|_| Stop::Shell)?
+    };
+    n.checked_mul(mult).ok_or(Stop::Shell)
+}
+
+/// `_sources_secs "$v" "$flag"`: the seconds, or its line (exit 2).
+fn secs_n(v: &str, flag: &str) -> Result<i64, Stop> {
+    let (num, mult) = duration(v).ok_or_else(|| {
+        Stop::Usage(format!(
             "Error: {flag} takes a duration like 30s, 5m, 2h, 1d"
-        )));
-    }
-    let (num, unit) = v.split_at(v.len() - 1);
-    let mult = match unit {
-        "d" => 86_400,
-        "h" => 3_600,
-        "m" => 60,
-        "s" => {
-            return if !num.is_empty() && num.bytes().all(|b| b.is_ascii_digit()) {
-                Ok(num.to_string())
-            } else {
-                Err(Stop::Shell)
-            }
-        }
-        _ => {
-            return if v.bytes().all(|b| b.is_ascii_digit()) {
-                Ok(v.to_string())
-            } else {
-                Err(Stop::Shell)
-            }
-        }
-    };
-    decimal(num)
-        .map(|n| (n * mult).to_string())
-        .ok_or(Stop::Shell)
+        ))
+    })?;
+    seconds(num, mult)
 }
 
-/// `_sources_b2_secs "$v"` where its arithmetic runs: the seconds as
-/// text.
+/// `_sources_secs "$v" "$flag"`: the seconds as text, or its line.
+pub fn secs(v: &str, flag: &str) -> Result<String, Stop> {
+    secs_n(v, flag).map(|n| n.to_string())
+}
+
+/// `_sources_b2_secs "$v"`: the seconds as text, or its line (exit 2).
 pub fn b2_secs(v: &str) -> Result<String, Stop> {
-    let all_digits = |t: &str| !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit());
-    let cut = v.char_indices().last().map_or(0, |(i, _)| i);
-    let (num, unit) = v.split_at(cut);
-    let mult = match unit {
-        "d" => 86_400,
-        "h" => 3_600,
-        "m" => 60,
-        // `echo "${v%s}"`: Python's int() takes digits only.
-        "s" => {
-            return if all_digits(num) {
-                Ok(num.to_string())
-            } else {
-                Err(Stop::Shell)
-            }
-        }
-        _ if all_digits(v) => return Ok(v.to_string()),
-        _ => {
-            return Err(Stop::Usage(format!(
-                "usage: bad duration '{v}' (use 30s, 5m, 2h, 1d)"
-            )))
-        }
-    };
-    decimal(num)
-        .map(|n| (n * mult).to_string())
-        .ok_or(Stop::Shell)
+    let (num, mult) = duration(v).ok_or_else(|| {
+        Stop::Usage(format!(
+            "usage: bad duration '{v}' (use 30s, 5m, 2h, 1d)"
+        ))
+    })?;
+    seconds(num, mult).map(|n| n.to_string())
 }
 
 /// `history`'s `--from` or `--to` as the query takes it: epoch seconds as
-/// typed, or now less a duration.
+/// typed, or now less a duration (`_sources_secs`'s line and exit 2 for
+/// a bad one).
 pub fn history_time(v: &str, flag: &str, now: i64) -> Result<String, Stop> {
     if v.ends_with(['s', 'm', 'h', 'd']) {
-        let n = secs(v, flag).map_err(|_| Stop::Shell)?;
-        return decimal(&n)
-            .map(|n| (now - n).to_string())
+        let n = secs_n(v, flag)?;
+        return now
+            .checked_sub(n)
+            .map(|at| at.to_string())
             .ok_or(Stop::Shell);
     }
     if !v.bytes().all(|b| b.is_ascii_digit()) {

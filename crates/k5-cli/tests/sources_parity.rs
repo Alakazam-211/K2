@@ -162,6 +162,22 @@ fn sources_help_and_words() {
         ),
         ("mute with no --for", &["mute", "web"]),
         ("mute, a bad duration", &["mute", "web", "--for", "5q"]),
+        // Durations are digits, then one unit, before any arithmetic.
+        (
+            "history, a duration with two units",
+            &["history", "web", "health", "--from", "1d5h"],
+        ),
+        (
+            "history, a unit with no digits",
+            &["history", "web", "health", "--to", "h"],
+        ),
+        (
+            "history, a name for digits",
+            &["history", "web", "health", "--from", "now5h"],
+        ),
+        ("mute, a unit alone", &["mute", "web", "--for", "s"]),
+        ("mute, two units", &["mute", "web", "--for", "5ms"]),
+        ("mute, a sign", &["mute", "web", "--for", "+5m"]),
         (
             "mute, an unknown flag",
             &["mute", "web", "--for", "5m", "--x"],
@@ -439,6 +455,25 @@ fn sources_verbs_answer_as_the_shell_does() {
         case(
             "mute",
             &["mute", "web", "--for", "30m", "--reason", "deploy é"],
+            &[],
+            vec![done()],
+            owner_and_port,
+            0,
+            1,
+        ),
+        // A leading zero is decimal, not octal.
+        case(
+            "mute, a leading zero",
+            &["mute", "web", "--for", "010m"],
+            &[],
+            vec![done()],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "mute, an 8 after a zero",
+            &["mute", "web", "--for", "08h"],
             &[],
             vec![done()],
             owner_and_port,
@@ -867,6 +902,35 @@ fn sources_simulate_refresh_and_the_shell() {
             owner_and_port,
             2,
             0,
+        ),
+        case(
+            "simulate, a unit with no digits",
+            &["simulate", "web", "ok", "--for", "xs"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "simulate, two units",
+            &["simulate", "web", "ok", "--for", "1h30m"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "simulate, a leading zero",
+            &["simulate", "web", "crit", "--for", "09m"],
+            &[],
+            vec![ok(
+                r#"{"name":"web","simulated":{"state":"crit","until":1763603600}}"#,
+            )],
+            owner_and_port,
+            0,
+            1,
         ),
         // covers: sources refresh
         case(

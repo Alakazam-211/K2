@@ -34,8 +34,14 @@ fn the_shell_s_lines() {
         r#"    print("Error: daemon returned: %s" % raw[:200])"#,
         r#"            --*) ;;"#,
         r#"    echo "Error: usage: k2 sources $verb <name>" >&2"#,
-        r#"        *[!0-9smhd]*|"") echo "Error: $flag takes a duration like 30s, 5m, 2h, 1d" >&2; exit 2 ;;"#,
-        r#"            *[smhd]) v=$(( now - $(_sources_secs "$v" "--$t") )) ;;"#,
+        r#"    [[ "$v" =~ ^[0-9]+[smhd]?$ ]] || { echo "Error: $flag takes a duration like 30s, 5m, 2h, 1d" >&2; exit 2; }"#,
+        r#"        *d) echo $(( 10#${v%d} * 86400 )) ;;"#,
+        r#"        *h) echo $(( 10#${v%h} * 3600 )) ;;"#,
+        r#"        *m) echo $(( 10#${v%m} * 60 )) ;;"#,
+        r#"        *s) echo $(( 10#${v%s} )) ;;"#,
+        r#"        *) echo $(( 10#$v )) ;;"#,
+        r#"    [[ "$v" =~ ^[0-9]+[smhd]?$ ]] || { echo "usage: bad duration '$v' (use 30s, 5m, 2h, 1d)" >&2; exit 2; }"#,
+        r#"            *[smhd]) local secs; secs="$(_sources_secs "$v" "--$t")" || exit 2; v=$(( now - secs )) ;;"#,
         r#"            *[!0-9]*) echo "Error: --$t takes a duration (6h) or epoch seconds" >&2; exit 2 ;;"#,
         r#"            --from) _need_value "$@"; from="${2:-}"; shift 2 ;;"#,
         r#"            *) if [ -z "$name" ]; then name="$1"; elif [ -z "$field" ]; then field="$1"; fi; shift ;;"#,
@@ -138,13 +144,34 @@ fn the_verbs_words() {
             "Error: --from takes a duration (6h) or epoch seconds".into()
         ))
     );
-    for odd in ["h", "08h", "1d5h", "5xs", "-5h"] {
+    // Digits, then one unit: anything else is _sources_secs' line.
+    for odd in ["h", "1d5h", "5xs", "-5h", "5\nh", "\u{0665}h"] {
         assert_eq!(
             ask("history", &w(&["a", "f", "--from", odd]), 0),
-            Err(Stop::Shell),
-            "{odd}"
+            Err(Stop::Usage(
+                "Error: --from takes a duration like 30s, 5m, 2h, 1d".into()
+            )),
+            "{odd:?}"
         );
     }
+    // A leading zero is decimal (10#), not octal.
+    assert_eq!(
+        ask("history", &w(&["a", "f", "--from", "08h", "--to", "0009s"]), 100_000),
+        Ok(Ask::Get {
+            route: "history",
+            query: "name=a&field=f&from=71200&to=99991".into(),
+            kind: "history"
+        })
+    );
+    // A number bash's arithmetic might wrap goes to the shell.
+    assert_eq!(
+        ask("history", &w(&["a", "f", "--to", "9999999999999999d"]), 0),
+        Err(Stop::Shell)
+    );
+    assert_eq!(
+        ask("history", &w(&["a", "f", "--to", "999999999999999d"]), 0),
+        Err(Stop::Shell)
+    );
     assert_eq!(
         ask("mute", &w(&["a", "--for", "2h", "--reason", "r"]), 0),
         Ok(Ask::Post {
@@ -166,7 +193,22 @@ fn the_verbs_words() {
             "Error: --for takes a duration like 30s, 5m, 2h, 1d".into()
         ))
     );
-    assert_eq!(ask("mute", &w(&["a", "--for", "s"]), 0), Err(Stop::Shell));
+    for odd in ["s", "5ms", "+5m", " 5m", "5m "] {
+        assert_eq!(
+            ask("mute", &w(&["a", "--for", odd]), 0),
+            Err(Stop::Usage(
+                "Error: --for takes a duration like 30s, 5m, 2h, 1d".into()
+            )),
+            "{odd:?}"
+        );
+    }
+    assert_eq!(
+        ask("mute", &w(&["a", "--for", "010m"]), 0).map(|a| match a {
+            Ask::Post { body, .. } => body,
+            other => panic!("{other:?}"),
+        }),
+        Ok(r#"{"name": "a", "forSecs": 600}"#.into())
+    );
     assert_eq!(
         ask("pending", &w(&["x"]), 0),
         Err(Stop::Usage("Error: unknown flag 'x'".into()))
@@ -278,11 +320,15 @@ fn simulate_and_refresh_words() {
             "usage: bad duration '5q' (use 30s, 5m, 2h, 1d)".into()
         ))
     );
-    assert_eq!(
-        ask("simulate", &w(&["web", "ok", "--for", "xs"]), 0),
-        Err(Stop::Shell)
-    );
-    assert!(ask("simulate", &w(&["web", "ok", "--for", "5é"]), 0).is_err());
+    for odd in ["xs", "5é", "1h30m", "0x10"] {
+        assert_eq!(
+            ask("simulate", &w(&["web", "ok", "--for", odd]), 0),
+            Err(Stop::Usage(format!(
+                "usage: bad duration '{odd}' (use 30s, 5m, 2h, 1d)"
+            ))),
+            "{odd}"
+        );
+    }
     assert_eq!(
         ask("refresh", &w(&["--wait", "web"]), 0),
         Ok(Ask::Refresh {

@@ -71,7 +71,12 @@ case "${1:-help}" in
             --help|-h|'') cmd_help_agent; exit 0 ;;
             update) shift 2; cmd_agent_update "$@" ;;
             complete) shift 2; cmd_agent_complete "$@" ;;
-            profile) shift 2; cmd_workspace_profile "$@" ;;
+            # Help wins: -h or --help anywhere prints the agent help and
+            # asks nothing (`workspace profile` has its own help gate).
+            profile)
+                shift 2
+                if _wants_help "$@"; then cmd_help_agent; exit 0; fi
+                cmd_workspace_profile "$@" ;;
             *)
                 _retired_verb_exit "agent ${2:-}"
                 echo "Unknown agent subcommand: ${2:-}" >&2

@@ -206,6 +206,15 @@ page agent.txt agent complete --agent -h --file f.md
 echo "== agent complete: the plain complete still sends =="
 sends 0 '^POST /cli/agent/complete ' agent complete --agent qa --file f.md
 
+echo "== agent profile: help anywhere is the agent page =="
+# native: agent profile --help
+page agent.txt agent profile --help
+page agent.txt agent profile -h
+page agent.txt agent profile /srv/ws --help
+page agent.txt agent profile -h /srv/ws
+echo "== agent profile: the plain read still asks =="
+sends 0 '^GET /cli/workspace/agent-display-name ' agent profile
+
 echo ""
 echo "agent_help_never_acts: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

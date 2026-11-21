@@ -147,11 +147,15 @@ mod tests {
     fn the_skin_family_posts_to_one_app_route() {
         let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src/families");
         let mut hits = Vec::new();
-        for f in ["skin.rs", "skin_token.rs"].iter().map(|f| format!("{dir}/{f}")).chain(
-            std::fs::read_dir(format!("{dir}/skin"))
-                .unwrap()
-                .map(|e| e.unwrap().path().display().to_string()),
-        ) {
+        for f in ["skin.rs", "skin_token.rs"]
+            .iter()
+            .map(|f| format!("{dir}/{f}"))
+            .chain(
+                std::fs::read_dir(format!("{dir}/skin"))
+                    .unwrap()
+                    .map(|e| e.unwrap().path().display().to_string()),
+            )
+        {
             if f.ends_with("tests.rs") {
                 continue;
             }

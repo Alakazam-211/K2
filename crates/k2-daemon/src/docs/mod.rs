@@ -301,8 +301,12 @@ pub fn durability_word(s: &StoreSettings) -> &'static str {
 /// The kit's settings K2 runs with. K2 sets no live size limit per file
 /// type (`keyed_max_entries_by_pack`): every keyed type (a deck) takes the
 /// host-wide `keyed_max_entries` unless its pack recommends a lower one.
-/// Kit v0.20.0's writer settings stay at the kit's defaults: no writers cap
-/// (`writers_max` 0), and person-writer reuse on, which changes nothing
+/// Writers: K2 caps them at 128 per document (`writers_max`; the kit's
+/// default 0 is no cap, which let a misbehaving client mint writers without
+/// end, and some checks grow with them). Past the cap the kit refuses a new
+/// writer's edits with `MPC-E908` writers_doc_cap (the connection reads),
+/// and it sends `WritersNearCap` once per load at 80% (103 writers).
+/// Person-writer reuse stays the kit's default (on), which changes nothing
 /// while K2 sends no device key (`JoinOptions::device`; it sends none).
 /// Kit v0.21.0's hold after the version an app opened is noted
 /// (`opened_hold_ms`, [`opened`]) stays at the kit's 10 s.
@@ -314,8 +318,12 @@ fn kit_config(memory_budget_bytes: u64, store: StoreSettings) -> Config {
     let mut c = Config::default();
     c.memory_budget_bytes = memory_budget_bytes;
     c.store = store;
+    c.writers_max = WRITERS_MAX;
     c
 }
+
+/// The most writers a multiplayer document holds (`Config::writers_max`).
+pub(crate) const WRITERS_MAX: usize = 128;
 
 /// Open the store and start the session manager, its timer and the
 /// watcher. Called on its own thread (the open waits for a handing-off
@@ -978,12 +986,16 @@ mod tests {
     /// Agents count toward the participant cap as persons do; K2 keeps the
     /// kit's cap. A watcher past it takes no writer slot until promoted.
     #[test]
-    fn k2_keeps_the_kits_writer_defaults_with_no_writers_cap() {
+    fn k2_caps_writers_at_128_and_keeps_the_other_writer_defaults() {
         let c = kit_config(256 << 20, StoreSettings::DEFAULT);
-        assert_eq!(c.writers_max, 0, "no writers cap");
+        assert_eq!(c.writers_max, 128, "K2's writers cap per document");
+        assert_ne!(Config::default().writers_max, c.writers_max, "the kit's default (0, no cap) is not K2's");
         assert_eq!(c.participants_max, Config::default().participants_max, "the kit's participant cap");
         assert!(c.reuse_person_writers, "the kit's default; nothing changes without a device key");
-        assert_eq!(k2_mpc_base::session::WRITERS_NOTICE_MAX, 8_192, "the near-cap notice's ceiling with no cap");
+        // With a cap the near-cap notice comes at 80% of it, never against
+        // the kit's no-cap ceiling (WRITERS_NOTICE_MAX), which stays as it is.
+        assert!(c.writers_max < k2_mpc_base::session::WRITERS_NOTICE_MAX, "the cap is the notice's ceiling, not 8,192");
+        assert_eq!(k2_mpc_base::session::WRITERS_NOTICE_MAX, 8_192, "the kit's ceiling with no cap, unused while K2 caps");
     }
 
     /// Kit v0.21.0: after K2 notes the file an app opened, the kit holds its

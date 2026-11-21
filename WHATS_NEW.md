@@ -282,6 +282,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **`k2 doc flush` also puts every change on disk**, and its answer says so (`durable`). `k2 doc status` shows how the server saves (`saves`: grouped or immediate, and whether a restart is needed for the setting).
 - **Agents working on the same file with its own commands no longer turn each other away.** On a drawing, an image or another file with its own commands, two agents' changes now run side by side; a change is planned again when the file moved under it. A lock someone took, or a whole-file write in progress, still waits its turn.
 - **Live documents use less memory.** The document store keeps at most 64 MiB of itself in memory, down from 1 GiB.
+- **A shared document allows up to 128 writers.** A new writer past that is refused, with a warning at 80%.
 
 ### Threads
 - Thread: after you attach a file, the message box is ready to type in, and Return sends the file even with no text.

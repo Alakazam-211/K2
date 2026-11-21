@@ -1793,7 +1793,7 @@ print(json.dumps({
         return 0
     fi
     printf '%s' "$cp_raw" | SELF="$self" _connect_subdomain_render '
-import os
+import os, sys
 self_label = (os.environ.get("SELF") or "").strip().lower()
 subs = d.get("subdomains", []) if isinstance(d, dict) else []
 

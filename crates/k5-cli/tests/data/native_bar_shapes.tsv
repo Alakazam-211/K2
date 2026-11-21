@@ -57,6 +57,14 @@ E	-v --check	-v --check	-	only --version --check is the check
 E	cli <word>	cli x	-	a word the front has no form for
 E	study <topic> <word>	study cli x	-	a second topic
 E	study permissions	study permissions	-	a cards-only topic with no passport
+E	clone preview --host <https> (a proxy set)	clone preview w1 --host https://h.example	HTTPS_PROXY=http://127.0.0.1:9	an https remote the person's proxy would carry (the shared CONNECT path)
+E	clone approve (a proxy set)	clone approve p1	HTTPS_PROXY=http://127.0.0.1:9	approve with an https proxy set
+E	clone preview (K2_HOST=https://<name>)	clone preview w1	K2_HOST=https://localhost	this server over TLS
+E	clone preview (K2_HOST=<IPv6>)	clone preview w1	K2_HOST=::1	this server at an IPv6 address
+E	clone to <url>?<query>	clone to https://h.example/?x=1 w1	-	a query in the remote URL
+E	clone from <url>#<fragment>	clone from https://h.example/#x:w1	-	a fragment in the remote URL
+E	clone preview --host <url with %>	clone preview w1 --host https://h%2Eexample	-	a % escape in the remote URL
+E	clone to <url>:<port that isn't a number>	clone to https://h.example:abc w1	-	a port that is not a number
 P	thread --file ~user/x	thread w1 hello --file ~nobody/k5-bar	-	the shell's Python resolves the path; its error is Python's
 P	app front-door --ui-port x	app front-door direct --ui-port x	-	the shell's Python int() reads the port; its error is Python's
 P	skin front-door --ui-port x	skin front-door direct --ui-port x	-	the shell's Python int() reads the port; its error is Python's

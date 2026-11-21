@@ -912,6 +912,9 @@ describe('frosted glass behind the message box', () => {
     expect(THREAD_CHAMFER_CSS).toContain(
       `${CHAMFER_SCOPE} button[data-chamfer]:focus-visible { outline: none; --ch-edge: var(--zen-focus-ring) !important; --ch-bw: 2px !important; }`,
     )
+    // A quick answer clips outside its box (it truncates): its edge and ring are drawn inside.
+    expect(THREAD_CHAMFER_CSS).toContain('[data-thread-chat-chip][data-chamfer] { --ch-outset: 0px; }')
+    expect(THREAD_CHAMFER_CSS).toContain('[data-thread-chat-chip][data-chamfer]::after { inset: var(--ch-bw, 0px); }')
     // A quick answer's hover lights its edge.
     expect(THREAD_CHAMFER_CSS).toContain('[data-thread-chat-chip=""][data-chamfer]:hover:not(:disabled) { --ch-edge: var(--zen-control-edge')
     // The drawers' cut cells take the cut ring, not the square outline.

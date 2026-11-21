@@ -96,6 +96,10 @@ ${CHAMFER_SCOPE} [data-zen-drawer-dot] { border-radius: 0 !important; }
 ${CHAMFER_SCOPE} [data-sender-avatar] { border-radius: 0 !important; ${allCorners(chamferCutFor(SENDER_PICTURE_PX))} clip-path: ${chamferPolygon('0px')}; }
 ${CHAMFER_SCOPE} button[data-chamfer]:focus-visible { outline: none; --ch-edge: var(--zen-focus-ring) !important; --ch-bw: 2px !important; }
 ${CHAMFER_SCOPE} [data-thread-chat-chip=""][data-chamfer]:hover:not(:disabled) { --ch-edge: var(--zen-control-edge, var(--zen-border)) !important; }
+/* A quick answer truncates its label, so it clips what paints outside its box:
+   its cut edge (and focus ring) is drawn inside it, the fill inset by the edge. */
+${CHAMFER_SCOPE} [data-thread-chat-chip][data-chamfer] { --ch-outset: 0px; }
+${CHAMFER_SCOPE} [data-thread-chat-chip][data-chamfer]::after { inset: var(--ch-bw, 0px); }
 ${CHAMFER_SCOPE} .zen-drawer-tag { border-radius: 0 !important; ${allCorners(chamferCutFor(18))} clip-path: ${chamferPolygon('0px')}; }
 ${CHAMFER_SCOPE} .zen-drawer-tag.zen-drawer-code { ${allCorners(chamferCutFor(16))} }
 `

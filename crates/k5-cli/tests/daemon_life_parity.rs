@@ -198,13 +198,7 @@ exit 0
         logline("launchctl")
     );
     exe(&d.join("launchctl"), &launchctl);
-    for name in [
-        "loginctl",
-        "journalctl",
-        "sudo",
-        "sc",
-        "schtasks",
-    ] {
+    for name in ["loginctl", "journalctl", "sudo", "sc", "schtasks"] {
         exe(
             &d.join(name),
             &format!(
@@ -1635,7 +1629,11 @@ fn publish(r: &Rig, rel: &Release) {
         Some(s) => s.to_string(),
         None => sha256_hex(r, FIX_BIN),
     };
-    let sig2 = if rel.inline_b64 { b64(&sig) } else { sig_url.clone() };
+    let sig2 = if rel.inline_b64 {
+        b64(&sig)
+    } else {
+        sig_url.clone()
+    };
     let manifest = format!(
         "{{\n  \"version\": \"{}\",\n  \"platforms\": {{\n    \"{}\": {{\n      \"url\": \"{asset}\",\n      \"sig\": \"{asset}.sig\",\n      \"sha256\": \"{sha}\",\n      \"sig2\": \"{sig2}\"\n    }}\n  }}\n}}\n",
         rel.version, rel.platform
@@ -2221,7 +2219,11 @@ fn daemon_install_downloads_verifies_and_installs_as_the_shell_does() {
             // native: daemon install
             case(
                 "install --manifest-url file://: every file is copied",
-                &["install", "--manifest-url", "file://{secrets}/daemon-latest.json"],
+                &[
+                    "install",
+                    "--manifest-url",
+                    "file://{secrets}/daemon-latest.json",
+                ],
                 &[],
                 vec![],
                 fx_file_urls,
@@ -2233,7 +2235,11 @@ fn daemon_install_downloads_verifies_and_installs_as_the_shell_does() {
         (
             case(
                 "install --manifest-url file://: the signature isn't there",
-                &["install", "--manifest-url", "file://{secrets}/daemon-latest.json"],
+                &[
+                    "install",
+                    "--manifest-url",
+                    "file://{secrets}/daemon-latest.json",
+                ],
                 &[],
                 vec![],
                 fx_file_sig_missing,
@@ -2271,7 +2277,13 @@ fn daemon_install_refusals_and_dry_runs_answer_as_the_shell_does() {
         (
             case(
                 "install --dry-run --no-service --bin-dir",
-                &["install", "--dry-run", "--no-service", "--bin-dir", "{secrets}/bin"],
+                &[
+                    "install",
+                    "--dry-run",
+                    "--no-service",
+                    "--bin-dir",
+                    "{secrets}/bin",
+                ],
                 &[],
                 vec![],
                 fx_latest,
@@ -2479,7 +2491,15 @@ fn port_only_install(r: &Rig) {
 fn daemon_install_help_never_acts() {
     let r = rig("install-help");
     let rows: Vec<Case> = vec![
-        case("install -h", &["install", "-h"], &[], vec![], fx_user_unit, 0, 0),
+        case(
+            "install -h",
+            &["install", "-h"],
+            &[],
+            vec![],
+            fx_user_unit,
+            0,
+            0,
+        ),
         case(
             "install --dry-run --help",
             &["install", "--dry-run", "--help"],

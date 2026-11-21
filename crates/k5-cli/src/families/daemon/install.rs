@@ -277,7 +277,11 @@ pub fn dirname(p: &str) -> String {
 /// (and the NULs the shell drops), and its exit code (`128 + n` for a
 /// signal, 127 when it can't start).
 fn output(prog: &str, args: &[&str]) -> (Vec<u8>, i32) {
-    match Command::new(prog).args(args).stderr(Stdio::inherit()).output() {
+    match Command::new(prog)
+        .args(args)
+        .stderr(Stdio::inherit())
+        .output()
+    {
         Ok(o) => {
             let mut b: Vec<u8> = o.stdout.into_iter().filter(|c| *c != 0).collect();
             while b.last() == Some(&b'\n') {
@@ -538,11 +542,17 @@ pub fn run(s: &Settings, words: &[String]) -> Option<Exit> {
     }
     let o = match parse(words) {
         Words::Opts(o) => o,
-        Words::Unknown(w) => fail!(Exit::Usage; format!("{CLI} daemon install: unknown argument: {w}")),
+        Words::Unknown(w) => {
+            fail!(Exit::Usage; format!("{CLI} daemon install: unknown argument: {w}"))
+        }
         Words::Dangling => return Some(Exit::Error),
     };
     let home = user_home();
-    let version = o.version.strip_prefix('v').unwrap_or(&o.version).to_string();
+    let version = o
+        .version
+        .strip_prefix('v')
+        .unwrap_or(&o.version)
+        .to_string();
     let bin_dir_given = !o.bin_dir.is_empty();
     let mut bin_dir = if bin_dir_given {
         o.bin_dir.clone()
@@ -579,7 +589,7 @@ pub fn run(s: &Settings, words: &[String]) -> Option<Exit> {
         m
     } else {
         if !on_path("curl") {
-            fail!(Exit::Error; "curl is required to fetch the daemon manifest.".to_string());
+            fail!(Exit::Error; "curl is required to fetch the daemon manifest.");
         }
         let (m, code) = output("curl", &["-fsSL", &manifest_url]);
         if code != 0 {
@@ -652,11 +662,18 @@ pub fn run(s: &Settings, words: &[String]) -> Option<Exit> {
         say!("  manifest ver:   {mver}");
         say!(
             "  requested ver:  {}",
-            if version.is_empty() { "<latest>" } else { &version }
+            if version.is_empty() {
+                "<latest>"
+            } else {
+                &version
+            }
         );
         say!("  binary url:     {url}");
         say!("  sha256:         {sha}");
-        say!("  sig2 (minisign): {}...", sig.split(' ').next().unwrap_or(""));
+        say!(
+            "  sig2 (minisign): {}...",
+            sig.split(' ').next().unwrap_or("")
+        );
         say!("  install path:   {bin_path}");
         say!("  minisign verify: minisign -V -P <{PRODUCT} update key> (file:{asset} version:{mver})");
         if o.no_service {
@@ -678,21 +695,24 @@ pub fn run(s: &Settings, words: &[String]) -> Option<Exit> {
     // The real install. minisign is required: never an unverified binary.
     if !on_path("minisign") {
         fail!(Exit::Error;
-            "minisign is required to verify the daemon binary, but it was not found.".to_string(),
-            "Install it and re-run:".to_string(),
-            "  macOS:  brew install minisign".to_string(),
-            "  Debian: sudo apt-get install minisign".to_string(),
-            "  Other:  https://jedisct1.github.io/minisign/".to_string(),
-            "Refusing to install an unverified binary.".to_string(),
+            "minisign is required to verify the daemon binary, but it was not found.",
+            "Install it and re-run:",
+            "  macOS:  brew install minisign",
+            "  Debian: sudo apt-get install minisign",
+            "  Other:  https://jedisct1.github.io/minisign/",
+            "Refusing to install an unverified binary.",
         );
     }
     let tmp_root = std::env::var_os("TMPDIR")
         .filter(|t| !t.is_empty())
         .map(|t| t.to_string_lossy().into_owned())
         .unwrap_or_else(|| "/tmp".into());
-    let (tmp, code) = output("mktemp", &["-d", &format!("{tmp_root}/k2-daemon-install.XXXXXX")]);
+    let (tmp, code) = output(
+        "mktemp",
+        &["-d", &format!("{tmp_root}/k2-daemon-install.XXXXXX")],
+    );
     if code != 0 {
-        fail!(Exit::Error; "Failed to create temp dir.".to_string());
+        fail!(Exit::Error; "Failed to create temp dir.");
     }
     let tmp = String::from_utf8_lossy(&tmp).into_owned();
     let _scratch = Scratch(PathBuf::from(&tmp));
@@ -751,7 +771,7 @@ pub fn run(s: &Settings, words: &[String]) -> Option<Exit> {
             }
         } else {
             let _ = std::fs::remove_file(&dec);
-            fail!(Exit::Error; "Signature is not a minisig and base64-decode failed.".to_string());
+            fail!(Exit::Error; "Signature is not a minisig and base64-decode failed.");
         }
     }
 
@@ -760,7 +780,7 @@ pub fn run(s: &Settings, words: &[String]) -> Option<Exit> {
         fail!(Exit::Error;
             why,
             format!("MINISIGN VERIFICATION FAILED for {url}"),
-            "Refusing to install. The binary may be corrupt or tampered with.".to_string(),
+            "Refusing to install. The binary may be corrupt or tampered with.",
         );
     }
 
@@ -773,7 +793,7 @@ pub fn run(s: &Settings, words: &[String]) -> Option<Exit> {
             format!("SHA256 MISMATCH for {url}"),
             format!("  expected: {sha}"),
             format!("  got:      {got_sha}"),
-            "Refusing to install.".to_string(),
+            "Refusing to install.",
         );
     }
 
@@ -864,7 +884,10 @@ mod tests {
     fn the_keys_and_the_first_version_are_the_shell_s() {
         let sh = shell();
         let keys = format!("_DAEMON_UPDATE_PUBKEYS=\"{}\"\n", UPDATE_KEYS.join(" "));
-        assert!(sh.contains(&keys), "the update keys moved in daemon-install.sh");
+        assert!(
+            sh.contains(&keys),
+            "the update keys moved in daemon-install.sh"
+        );
         let first = format!("_DAEMON_FIRST_U2_VERSION=\"{FIRST_U2_VERSION}\"\n");
         assert!(sh.contains(&first), "the first U2 version moved");
         assert!(sh.contains(&format!("_DAEMON_DEFAULT_LATEST_URL=\"{DAEMON_FEED_URL}\"")));
@@ -877,13 +900,16 @@ mod tests {
     fn the_unit_and_the_plist_are_the_shell_s() {
         let sh = shell();
         let unit = unit_text("$bin_path").replace("$$MAINPID", "\\$\\$MAINPID");
-        let unit = unit.replace(
-            &format!("Description={PRODUCT} "),
-            "Description=K2 ",
+        let unit = unit.replace(&format!("Description={PRODUCT} "), "Description=K2 ");
+        assert!(
+            sh.contains(&format!("<<EOF\n{unit}EOF\n")),
+            "the unit text moved"
         );
-        assert!(sh.contains(&format!("<<EOF\n{unit}EOF\n")), "the unit text moved");
         let plist = plist_text("${_daemon_label}", "$bin_path", "$HOME");
-        assert!(sh.contains(&format!("<<EOF\n{plist}EOF\n")), "the plist text moved");
+        assert!(
+            sh.contains(&format!("<<EOF\n{plist}EOF\n")),
+            "the plist text moved"
+        );
     }
 
     #[test]
@@ -893,7 +919,14 @@ mod tests {
         }
         assert_eq!(w(&[]), Words::Opts(Opts::default()));
         assert_eq!(
-            w(&["--version", "v1.2.3", "--dry-run", "--bin-dir", "", "--no-service"]),
+            w(&[
+                "--version",
+                "v1.2.3",
+                "--dry-run",
+                "--bin-dir",
+                "",
+                "--no-service"
+            ]),
             Words::Opts(Opts {
                 version: "v1.2.3".into(),
                 dry_run: true,
@@ -902,7 +935,10 @@ mod tests {
             })
         );
         assert_eq!(w(&["--manifest-url"]), Words::Dangling);
-        assert_eq!(w(&["--bogus", "--version"]), Words::Unknown("--bogus".into()));
+        assert_eq!(
+            w(&["--bogus", "--version"]),
+            Words::Unknown("--bogus".into())
+        );
         assert_eq!(w(&["--dry-run", "x"]), Words::Unknown("x".into()));
     }
 
@@ -938,7 +974,10 @@ mod tests {
         assert_eq!(field(twice, "p", "url"), "c");
         assert_eq!(field(br#"{"p":{}}"#, "p", "url"), "");
         // A "version" inside a platform object counts too.
-        assert_eq!(top_version(br#"{"version":"1.0.0","p":{"version":"2.0.0"}}"#), "2.0.0");
+        assert_eq!(
+            top_version(br#"{"version":"1.0.0","p":{"version":"2.0.0"}}"#),
+            "2.0.0"
+        );
     }
 
     #[test]

@@ -563,16 +563,16 @@ fn pick(rows: &[Value], want: &str) -> Result<String, Exit> {
         let line = prompt::read_line(Echo::Shown, AtEof::Keep);
         let line = String::from_utf8_lossy(line.expose()).into_owned();
         let Some(n) = py_int(&line) else {
-            fail!(Exit::Error; "Error: invalid selection.".to_string());
+            fail!(Exit::Error; "Error: invalid selection.");
         };
         if n < 1 || n > norm.len() as i64 {
-            fail!(Exit::Error; "Error: selection out of range.".to_string());
+            fail!(Exit::Error; "Error: selection out of range.");
         }
         norm[(n - 1) as usize]
     };
     let label = get_text(chosen, "label", true, 58).map_err(|r| raise(&r))?;
     if label.is_empty() {
-        fail!(Exit::Error; "Error: selected subdomain is missing label or tunnel_token.".to_string());
+        fail!(Exit::Error; "Error: selected subdomain is missing label or tunnel_token.");
     }
     Ok(label)
 }
@@ -595,7 +595,7 @@ fn tunnel_token(rows: &[Value], label: &str) -> Result<String, Exit> {
             return Ok(tok);
         }
     }
-    fail!(Exit::Error; "Error: selected subdomain is missing label or tunnel_token.".to_string());
+    fail!(Exit::Error; "Error: selected subdomain is missing label or tunnel_token.");
 }
 
 /// `_connect_require_daemon`: the settings with the token it found, and
@@ -926,7 +926,7 @@ fn login(
     let mut token = w.token.clone();
     if w.token_stdin {
         if w.token_flag {
-            fail!(Exit::Usage; "Error: --token-stdin or --token, not both".to_string());
+            fail!(Exit::Usage; "Error: --token-stdin or --token, not both");
         }
         let secret = prompt::read_secret_stdin("Access JWT: ");
         let mut t = secret.expose().to_vec();
@@ -935,7 +935,7 @@ fn login(
         }
         token = String::from_utf8_lossy(&t).into_owned();
         if token.is_empty() {
-            fail!(Exit::Usage; "Error: --token-stdin: no token on stdin".to_string());
+            fail!(Exit::Usage; "Error: --token-stdin: no token on stdin");
         }
     } else if w.token_flag {
         out::stderr_line("note: --token is visible to every account on this computer while the command runs; use --token-stdin");
@@ -962,18 +962,18 @@ fn login(
             email = String::from_utf8_lossy(line.expose()).into_owned();
         }
         if email.is_empty() {
-            fail!(Exit::Usage; "Error: email is required (or pass --token-stdin with an access JWT).".to_string());
+            fail!(Exit::Usage; "Error: email is required (or pass --token-stdin with an access JWT).");
         }
         let pw = match prompt::getpass_tty(&format!("{} password: ", zone())) {
             Some(Getpass::Line(s)) => s,
-            _ => fail!(Exit::Error; "\nError: password prompt cancelled.".to_string()),
+            _ => fail!(Exit::Error; "\nError: password prompt cancelled."),
         };
         let mut pw: Vec<u8> = pw.expose().iter().copied().filter(|b| *b != 0).collect();
         while pw.last() == Some(&b'\n') {
             pw.pop();
         }
         if pw.is_empty() {
-            fail!(Exit::Error; "Error: password must not be empty.".to_string());
+            fail!(Exit::Error; "Error: password must not be empty.");
         }
         let password = String::from_utf8_lossy(&pw).into_owned();
         pw.iter_mut().for_each(|b| *b = 0);

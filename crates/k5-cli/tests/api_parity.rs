@@ -668,8 +668,10 @@ fn api_hands_these_to_the_shell() {
     let v = vec![
         // Help never acts (K2's rule): -h or --help anywhere prints the
         // usage on stdout, exit 0, and sends nothing (cmd_api's
-        // `_wants_help`). The front hands each line to the shell's help.
-        shell(case(
+        // `_wants_help`). The forms in src/help_captured.txt (`api`, `api
+        // on` and `api status` with -h or --help) the binary answers
+        // itself; the front hands the others to the shell's help.
+        case(
             "--help: the usage, nothing sent",
             &["--help"],
             &[],
@@ -677,8 +679,8 @@ fn api_hands_these_to_the_shell() {
             owner_and_port,
             0,
             0,
-        )),
-        shell(case(
+        ),
+        case(
             "on -h: the usage, nothing sent",
             &["on", "-h"],
             &[],
@@ -686,8 +688,8 @@ fn api_hands_these_to_the_shell() {
             owner_and_port,
             0,
             0,
-        )),
-        shell(case(
+        ),
+        case(
             "on --help: the usage, nothing sent",
             &["on", "--help"],
             &[],
@@ -695,7 +697,7 @@ fn api_hands_these_to_the_shell() {
             owner_and_port,
             0,
             0,
-        )),
+        ),
         shell(case(
             "off -h: the usage, nothing sent",
             &["off", "-h"],
@@ -723,7 +725,7 @@ fn api_hands_these_to_the_shell() {
             0,
             0,
         )),
-        shell(case(
+        case(
             "status -h: the usage, nothing sent",
             &["status", "-h"],
             &[],
@@ -731,7 +733,25 @@ fn api_hands_these_to_the_shell() {
             owner_and_port,
             0,
             0,
-        )),
+        ),
+        case(
+            "-h: the usage, nothing sent",
+            &["-h"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        ),
+        case(
+            "status --help: the usage, nothing sent",
+            &["status", "--help"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        ),
         shell(case(
             "a port that is no port",
             &["on"],

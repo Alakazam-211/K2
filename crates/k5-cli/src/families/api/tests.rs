@@ -63,8 +63,12 @@ fn the_shell_s_lines() {
         );
     }
     // The still-ON line comes before the OFF line, which it replaces.
-    let still = f.find(echo(20, STILL_ON, " >&2").as_str()).expect("the still-ON line");
-    let off = f.find(echo(16, &setting_line(false), "").as_str()).expect("the OFF line");
+    let still = f
+        .find(echo(20, STILL_ON, " >&2").as_str())
+        .expect("the still-ON line");
+    let off = f
+        .find(echo(16, &setting_line(false), "").as_str())
+        .expect("the OFF line");
     assert!(still < off);
     // -h or --help anywhere: the usage on stdout, exit 0, nothing sent.
     assert!(f.contains("    if _wants_help \"$@\"; then\n        _api_usage\n        return 0\n"));

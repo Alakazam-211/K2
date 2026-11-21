@@ -334,10 +334,19 @@ pub enum ConfirmAction {
     /// stored values name the App and what it turns on.
     #[serde(rename = "apps-recording")]
     AppsRecording,
+    /// Who may start recordings in the K5 rooms (0.46.17, the card
+    /// `voice.recording-start-level`); bound to the request id.
+    #[serde(rename = "voice-recording-start-level")]
+    VoiceRecordingStartLevel,
+    /// Recording in direct messages on or off (0.46.17, the card
+    /// `voice.recording-dm`); bound to the request id. At the click K2 turns
+    /// it into the policy route's own (`recording-policy`, this install).
+    #[serde(rename = "voice-recording-dm")]
+    VoiceRecordingDm,
 }
 
 impl ConfirmAction {
-    pub const ALL: [ConfirmAction; 10] = [
+    pub const ALL: [ConfirmAction; 12] = [
         ConfirmAction::AppApprove,
         ConfirmAction::NodeAdmin,
         ConfirmAction::VaultMove,
@@ -348,6 +357,8 @@ impl ConfirmAction {
         ConfirmAction::SewSpaceGovernance,
         ConfirmAction::SewRecordingEnable,
         ConfirmAction::AppsRecording,
+        ConfirmAction::VoiceRecordingStartLevel,
+        ConfirmAction::VoiceRecordingDm,
     ];
 
     /// The `CONFIRM_ACTIONS` string (`vaultApi.confirmStart(<this>, …)`).
@@ -363,6 +374,8 @@ impl ConfirmAction {
             ConfirmAction::SewSpaceGovernance => "sew-space-governance",
             ConfirmAction::SewRecordingEnable => "sew-recording-enable",
             ConfirmAction::AppsRecording => "apps-recording",
+            ConfirmAction::VoiceRecordingStartLevel => "voice-recording-start-level",
+            ConfirmAction::VoiceRecordingDm => "voice-recording-dm",
         }
     }
 }
@@ -795,7 +808,9 @@ mod tests {
                 "apps-chat-key",
                 "sew-space-governance",
                 "sew-recording-enable",
-                "apps-recording"
+                "apps-recording",
+                "voice-recording-start-level",
+                "voice-recording-dm"
             ]
         );
         for c in ConfirmAction::ALL {

@@ -21,7 +21,8 @@ export interface ConfirmStepProps {
   scope: ServerScope
   /** `garden-guests`: a Garden widget's guest-rooms change (RS-A15).
    *  `app-approve` / `node-admin` / `vault-move` / `chat-owner-handoff` / `sew-rollback-data-loss` / `vault-share-service` /
-   *  `apps-chat-key` / `sew-space-governance` / `sew-recording-enable` / `apps-recording`: a permission card's
+   *  `apps-chat-key` / `sew-space-governance` / `sew-recording-enable` / `apps-recording` /
+   *  `voice-recording-start-level` / `voice-recording-dm`: a permission card's
    *  confirm action (the same confirm Settings asks, prd-agent-settings-cards-v1 §17.4).
    *  `app-handover`: giving an App to a workspace (Settings → Apps).
    *  `handoff-send`: letting an agent send a person-given secret to another
@@ -41,6 +42,8 @@ export interface ConfirmStepProps {
     | 'sew-space-governance'
     | 'sew-recording-enable'
     | 'apps-recording'
+    | 'voice-recording-start-level'
+    | 'voice-recording-dm'
     | 'handoff-send'
   /** The source id, the batch hash, or the guest-rooms change's id. */
   secretId: string

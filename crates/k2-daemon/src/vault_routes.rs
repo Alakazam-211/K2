@@ -2352,6 +2352,11 @@ const CONFIRM_ACTIONS: &[&str] = &[
     crate::sew::recording_settings::CONFIRM_SPACE,
     crate::sew::recording_settings::CONFIRM_LOCK,
     crate::sew::recording_settings::CONFIRM_POLICY,
+    // 0.46.17: the `voice.recording-start-level` and `voice.recording-dm`
+    // cards, bound to the request; the dm card's Allow turns it into
+    // `recording-policy` for the same person.
+    crate::permission::actions::voice_recording::START_CONFIRM,
+    crate::permission::actions::voice_recording::DM_CONFIRM,
     "kek-rotate",
     "rekey",
     "rollback",
@@ -2612,6 +2617,11 @@ fn confirm_finish(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &st
     } else if let Some(reason) = crate::permission::actions::recording::confirm_reason(action, b.secret_id.as_deref()) {
         // The apps.recording card: the sheet says what changes from the
         // request's stored values.
+        let reason = reason.map_err(|m| err("bad_secret_id", 400, m))?;
+        (b.secret_id.clone(), reason)
+    } else if let Some(reason) = crate::permission::actions::voice_recording::confirm_reason(action, b.secret_id.as_deref()) {
+        // The voice recording cards (0.46.17): the same, for who starts
+        // recordings and recording in direct messages.
         let reason = reason.map_err(|m| err("bad_secret_id", 400, m))?;
         (b.secret_id.clone(), reason)
     } else if let Some(reason) = crate::apps::recording_routes::confirm_reason(action, b.secret_id.as_deref()) {

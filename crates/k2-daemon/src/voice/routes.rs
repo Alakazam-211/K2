@@ -649,6 +649,16 @@ fn recording_view() -> Value {
 /// Space has no admin level) is the owner's or an Admin's. `null` inherits
 /// the org's rule.
 fn recording_settings(c: &Caller, b: &Value) -> CliResponse {
+    // An agent (or anyone below Admin) changing only the start level gets
+    // its own code: the `voice.recording-start-level` card's wall. Requiring
+    // recording stays the owner's and isn't card-able.
+    if !c.manages() && not_a_caller(c).is_none() && level_ask(b).is_some() {
+        return no(
+            403,
+            LEVEL_NEEDS_OWNER,
+            "nothing changed: the owner or an Admin sets who may start recordings in the K5 rooms",
+        );
+    }
     if let Err(r) = need_manager(c) {
         return r;
     }
@@ -712,6 +722,27 @@ fn recording_settings(c: &Caller, b: &Value) -> CliResponse {
         }
         Err(e) => no(503, "voice_unavailable", &e),
     }
+}
+
+/// The refusal of a start-level change by someone who isn't the owner or an
+/// Admin (`voice.recording-start-level`'s wall).
+pub const LEVEL_NEEDS_OWNER: &str = "recording_level_needs_owner";
+
+/// The start levels a card may ask for (the K5 Space has no admin level).
+pub const CARD_LEVELS: [&str; 3] = ["none", "moderator", "member"];
+
+/// A body that changes only the start level, to one of [`CARD_LEVELS`].
+fn level_ask(b: &Value) -> Option<&str> {
+    if b.get("required").is_some() {
+        return None;
+    }
+    b.get("startLevel").and_then(Value::as_str).map(str::trim).filter(|l| CARD_LEVELS.contains(l))
+}
+
+/// `POST /cli/voice/recording/settings` as `c` (the start-level card's
+/// Allow, as the person who clicked).
+pub(crate) fn recording_settings_as(c: &Caller, b: &Value) -> CliResponse {
+    recording_settings(c, b)
 }
 
 /// What `k2 voice status` says about the K5 Space: `state` none | ready |

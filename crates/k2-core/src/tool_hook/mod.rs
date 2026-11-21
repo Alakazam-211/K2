@@ -1815,6 +1815,20 @@ pub fn admin_space_rewind_for_tests(secs: i64, unstamped: bool) -> Result<(), St
     })
 }
 
+/// Tests: the K5 Space is made and ready, with `space_id`.
+#[cfg(any(test, feature = "test-util"))]
+pub fn admin_space_ready_for_tests(space_id: &str) -> Result<(), String> {
+    crate::skin::with_skin_conn(|conn| {
+        conn.execute(
+            "INSERT INTO tool_admin_space (id, space_id, name, state, why, updated_at) VALUES (1, ?1, 'K2', ?2, NULL, 0)
+             ON CONFLICT(id) DO UPDATE SET space_id = excluded.space_id, state = excluded.state, why = NULL",
+            rusqlite::params![space_id, admin_space::SPACE_READY],
+        )
+        .map(|_| ())
+        .map_err(|e| format!("admin space ready: {e}"))
+    })
+}
+
 /// Retry a blocked Admin Space create (after the owner fixed its cause).
 pub fn admin_space_retry() -> Result<bool, String> {
     let n = crate::skin::with_skin_conn(|conn| admin_space::clear_blocked(conn, outbox::now_secs()))?;

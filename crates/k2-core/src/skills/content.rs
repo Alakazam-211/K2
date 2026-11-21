@@ -1512,6 +1512,14 @@ CI on compute nodes (`ciPreview`) is a server switch, the owner's. While it's of
 
 Run it as printed; your own `k2 settings set ciPreview true` ends with the same line. Only the owner allows it, for the whole server, and CI checks then go ahead of other compute jobs. When the `[permission:]` turn says approved, run your command again (compute nodes must be on too). To turn it off again: `k2 permission request ci.preview-off --why "..."`. `k2 study ci`.
 
+## Recording in this server's chat
+
+Who may start recordings in the voice rooms is the owner's or an admin's. Your own `k2 voice settings --start-level <level>` is refused with `recording_level_needs_owner` (exit 3) and ends with:
+
+    k2 permission request voice.recording-start-level level=<level> --why "<what you need it for>"
+
+Recording in direct messages is the same: `k2 hostchat recording policy set dm_enabled on` (or `off`), with no other key, ends with `k2 permission request voice.recording-dm dm=on --why "..."`. Run it as printed. The owner or an admin allows it once, with a confirm, and K2 applies it on their side: you run nothing afterwards. `--require-recording` and the other policies have no card: ask your human in your Thread. `k2 study app-recording`.
+
 ## Apps
 
 - App guests never see permission cards. Never tell a guest a switch, agent, server or request id; say an administrator was asked.
@@ -2598,6 +2606,10 @@ mod tests {
             // 0.46.17: CI on K2 Compute, the owner's card both ways.
             "k2 permission request ci.preview --why",
             "k2 permission request ci.preview-off",
+            // 0.46.17: who starts recordings, and recording in direct messages.
+            "k2 permission request voice.recording-start-level level=<level> --why",
+            "k2 permission request voice.recording-dm dm=on --why",
+            "recording_level_needs_owner",
             "ci_preview_off",
         ] {
             assert!(body.contains(must), "the k2-permissions skill must teach: {must}");

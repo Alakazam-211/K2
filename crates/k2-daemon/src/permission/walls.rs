@@ -170,6 +170,11 @@ const HOME_CLIENT_WHERE: &str = concat!("the server's owner does this, with ", c
 const HOME_APP_WHERE: &str =
     concat!("the owner or an admin turns App-only off, with ", cli_name!(), " hostchat home app from a terminal outside ", product_name!(), " or in a ", product_name!(), " shell tab");
 
+/// The recording policies other than `recording.dm_enabled`: a body that
+/// sets any of them is not the `voice.recording-dm` card's.
+const RECORDING_DM_OTHERS: &[&str] =
+    &["/changes/recording.enabled", "/changes/recording.require_consent_to_join", "/changes/recording.required", "/changes/recording.audio_max_days"];
+
 /// The v1 card-able actions (PRD §5.2): the 17 Agent-tab switches, the 5
 /// held-request actions, `garden.keep-mine` (K2-presented, no wall) and
 /// the `to=off` twins (asked only, no wall), plus Garden access's three
@@ -177,7 +182,7 @@ const HOME_APP_WHERE: &str =
 /// and `garden.delete` (walled; K2 presents them too) and the
 /// `garden.access-off` twin (asked only, no wall). Every [`Target::Ask`]
 /// names one of them, never `garden.keep-mine` or a twin.
-pub(crate) const V1_ACTIONS: [&str; 80] = [
+pub(crate) const V1_ACTIONS: [&str; 82] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -293,6 +298,10 @@ pub(crate) const V1_ACTIONS: [&str; 80] = [
     // 0.46.11 (K-a): install Sew's recorder and turn recording on (an
     // Owner or Admin, in person; the agent never installs it).
     "sew.recording-enable",
+    // 0.46.17: who starts recordings in the voice rooms, and recording in
+    // direct messages (an Owner or Admin, with a confirm).
+    "voice.recording-start-level",
+    "voice.recording-dm",
     // 0.46.11 (prd-org-chart-v1 §7): "Manage the org chart" (Owner).
     "organization.manage",
     // 0.46.11: a person sends a person-given secret to an agent on another
@@ -576,6 +585,32 @@ pub(crate) const ROWS: &[Row] = &[
     // 0.46.11 K-a: an agent's `k2 hostchat recording enable` (Manage Sew
     // or not past the switch): an Owner or Admin installs the recorder.
     row(ask("sew.recording-enable", Floor::Admin), code(403, "person_only"), "/cli/sew/recording/enable", POST),
+    // 0.46.17: an agent's `k2 voice settings --start-level <level>` (its own
+    // code; `--require-recording` stays the owner's, never a card).
+    Row {
+        params: &[("level", &[ParamFrom::Body("/startLevel")])],
+        ..row(
+            ask("voice.recording-start-level", Floor::Admin),
+            code(403, crate::voice::routes::LEVEL_NEEDS_OWNER),
+            crate::voice::routes::RECORDING_SETTINGS,
+            POST,
+        )
+    },
+    // 0.46.17: an agent's `k2 hostchat recording policy set dm_enabled on|off`,
+    // only when `changes` is that one key (any other key in the same body:
+    // no card, the person's own path).
+    Row {
+        body_eq: &[("/changes/recording.dm_enabled", "true")],
+        body_lacks: RECORDING_DM_OTHERS,
+        fixed: &[("dm", "on")],
+        ..row(ask("voice.recording-dm", Floor::Admin), code(403, "person_only"), crate::sew::recording_settings::POLICY, POST)
+    },
+    Row {
+        body_eq: &[("/changes/recording.dm_enabled", "false")],
+        body_lacks: RECORDING_DM_OTHERS,
+        fixed: &[("dm", "off")],
+        ..row(ask("voice.recording-dm", Floor::Admin), code(403, "person_only"), crate::sew::recording_settings::POLICY, POST)
+    },
     // The home client (AG-21): its sessions see every Space each person is
     // in, so no agent sets or clears it, Manage Sew or not: not requestable.
     row(Target::Cannot { r#where: HOME_CLIENT_WHERE }, code(403, "owner_only"), "/cli/sew/home/client", POST),
@@ -1604,6 +1639,10 @@ mod tests {
             (403, "POST", "/cli/sew/app-spaces/governance", vec![], Some(json!({"app":"jobs","spaceId":"5101","governance":"app"})), json!({"ok":false,"error":{"code":"person_only","hint":"x"}}), "sew.space-governance"),
             // 0.46.11 K-a: an agent's recorder install.
             (403, "POST", "/cli/sew/recording/enable", vec![], None, json!({"ok":false,"error":{"code":"person_only","hint":"x"}}), "sew.recording-enable"),
+            // 0.46.17: an agent's start level, and recording in direct messages on and off.
+            (403, "POST", "/cli/voice/recording/settings", vec![], Some(json!({"startLevel":"member"})), json!({"ok":false,"code":"recording_level_needs_owner","hint":"x","error":{"code":"recording_level_needs_owner","hint":"x"}}), "voice.recording-start-level"),
+            (403, "POST", "/cli/sew/recording/policy", vec![], Some(json!({"changes":{"recording.dm_enabled":true}})), json!({"ok":false,"error":{"code":"person_only","hint":"x"}}), "voice.recording-dm"),
+            (403, "POST", "/cli/sew/recording/policy", vec![], Some(json!({"changes":{"recording.dm_enabled":false}})), json!({"ok":false,"error":{"code":"person_only","hint":"x"}}), "voice.recording-dm"),
             // 0.46.6: an agent pausing / resuming another workspace's heartbeat.
             (403, "POST", "/cli/heartbeat/enable", vec![("name", "triage"), ("enabled", "false"), ("workspace", "companion")], None, json!({"error":{"code":"other_workspace","workspace":"companion","heartbeat":"triage","enabled":false}}), "heartbeat.pause-other"),
             (403, "POST", "/cli/heartbeat/enable", vec![("name", "triage"), ("enabled", "true"), ("workspace", "companion")], None, json!({"error":{"code":"other_workspace","workspace":"companion","heartbeat":"triage","enabled":true}}), "heartbeat.resume-other"),
@@ -1671,6 +1710,30 @@ mod tests {
             }
             assert!(asked.contains(&a), "{a}: no captured wall teaches it");
         }
+    }
+
+    /// 0.46.17: an agent's start level and DM recording end with the exact
+    /// Ask-with line for their card, with the value the agent sent.
+    #[test]
+    fn recording_lines_name_their_cards_with_the_value() {
+        let cmd = |path: &str, body: Value, resp: Value| {
+            teach_of(403, "POST", path, &[], Some(body), resp).map(|p| (p["command"].as_str().unwrap_or_default().to_string(), p["approvers"].clone()))
+        };
+        let level = json!({"ok":false,"code":"recording_level_needs_owner","hint":"x","error":{"code":"recording_level_needs_owner","hint":"x"}});
+        for l in ["none", "moderator", "member"] {
+            let (c, who) = cmd("/cli/voice/recording/settings", json!({ "startLevel": l }), level.clone()).expect("a card");
+            assert_eq!(c, format!("k2 permission request voice.recording-start-level level={l} --why \"<what you need it for>\""));
+            assert_eq!(who, json!("owner or admin"));
+        }
+        let person = json!({"ok":false,"error":{"code":"person_only","hint":"x"}});
+        for (b, v) in [(true, "on"), (false, "off")] {
+            let (c, _) = cmd("/cli/sew/recording/policy", json!({"changes": {"recording.dm_enabled": b}}), person.clone()).expect("a card");
+            assert_eq!(c, format!("k2 permission request voice.recording-dm dm={v} --why \"<what you need it for>\""));
+        }
+        // The shared refusal of a K5 room change stays no card of these.
+        let shared = json!({"ok":false,"code":"owner_or_admin_only","hint":"x","error":{"code":"owner_or_admin_only","hint":"x"}});
+        let p = teach_of(403, "POST", "/cli/voice/recording/settings", &[], Some(json!({"required": true})), shared);
+        assert!(p.as_ref().and_then(|p| p["action"].as_str()).is_none_or(|a| a != "voice.recording-start-level"), "{p:?}");
     }
 
     /// 0.46.16 Postal: each agent step's Ask-with line names its card with
@@ -2208,7 +2271,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 80);
+        assert_eq!(V1_ACTIONS.len(), 82);
         // No two rows can claim the same refusal: the longest prefix must
         // decide alone.
         for (i, a) in ROWS.iter().enumerate() {
@@ -2225,6 +2288,35 @@ mod tests {
                 assert!(!same, "two rows claim {:?} on {}", a.matches, a.prefix);
             }
         }
+    }
+
+    /// 0.46.17: `voice.recording-dm` is only `changes` with
+    /// `recording.dm_enabled` alone; any other policy key in the same body
+    /// is no card's (the person's own `k2 hostchat recording policy set`).
+    #[test]
+    fn the_dm_card_is_only_the_dm_key_alone() {
+        let params = HashMap::new();
+        let resp = json!({"ok": false, "error": {"code": "person_only", "hint": "x"}});
+        let at = |body: Value| -> (Option<&'static str>, Vec<(&'static str, &'static str)>) {
+            let req = Refused { status: 403, method: "POST", path: "/cli/sew/recording/policy", params: &params, body: Some(&body), response: &resp, workspace_id: "" };
+            match find_row(&req) {
+                Some(Row { target: Target::Ask { action, .. }, fixed, .. }) => (Some(*action), fixed.to_vec()),
+                _ => (None, Vec::new()),
+            }
+        };
+        assert_eq!(at(json!({"changes": {"recording.dm_enabled": true}})), (Some("voice.recording-dm"), vec![("dm", "on")]));
+        assert_eq!(at(json!({"changes": {"recording.dm_enabled": false}})), (Some("voice.recording-dm"), vec![("dm", "off")]));
+        for (other, v) in [
+            ("recording.enabled", json!(true)),
+            ("recording.require_consent_to_join", json!(false)),
+            ("recording.required", json!("multi_person")),
+            ("recording.audio_max_days", json!(30)),
+        ] {
+            let mut b = json!({"changes": {"recording.dm_enabled": true}});
+            b["changes"][other] = v;
+            assert_ne!(at(b).0, Some("voice.recording-dm"), "{other} beside dm_enabled is no card");
+        }
+        assert_ne!(at(json!({"changes": {"recording.enabled": true}})).0, Some("voice.recording-dm"));
     }
 
     /// The E lanes register each action's spec with its own floor and

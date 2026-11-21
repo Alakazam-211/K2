@@ -35,6 +35,7 @@
 //! | `permission_approvers.rs` | 0.46.17 | `permission.approvers` (who agents' cards ask when the agent names no one) |
 //! | `postal.rs` | 0.46.16 | `postal.invite`, `postal.pair.accept`, `postal.link-p5` (Postal friend requests both ways, and linking p5; K2 presents them) |
 //! | `ci_preview.rs` | 0.46.17 | `ci.preview` (+ `-off`): turn on CI on K2 Compute for the server (`ciPreview`, the owner's) |
+//! | `voice_recording.rs` | 0.46.17 | `voice.recording-start-level` (who starts recordings in the voice rooms), `voice.recording-dm` (recording in direct messages) |
 //!
 //! Rules for every `apply` (§6.4, C15): call the Settings route's **entry**
 //! with the answerer as the actor, so the route's own floor check runs
@@ -51,6 +52,7 @@ pub(crate) mod chat_account;
 pub(crate) mod chat_cards;
 pub(crate) mod chat_refresh;
 pub(crate) mod ci_preview;
+pub(crate) mod voice_recording;
 pub(crate) mod compute;
 pub(crate) mod connections;
 pub(crate) mod docs;
@@ -168,6 +170,7 @@ pub(crate) fn all() -> Vec<Registered> {
     out.extend(permission_approvers::actions());
     out.extend(postal::actions());
     out.extend(ci_preview::actions());
+    out.extend(voice_recording::actions());
     out
 }
 
@@ -201,6 +204,7 @@ pub(crate) fn not_cardable() -> Vec<&'static NotCardableSpec> {
     out.extend(permission_approvers::not_cardable());
     out.extend(postal::not_cardable());
     out.extend(ci_preview::not_cardable());
+    out.extend(voice_recording::not_cardable());
     out
 }
 

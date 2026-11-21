@@ -61,6 +61,13 @@ server can't host, and lets the owner or an Admin change them. Read
                                       doesn't answer in a minute is dropped.
                                       inherit = the server's own rule
                                       (k2 hostchat recording policy)
+                                      An agent's --start-level is refused
+                                      recording_level_needs_owner; it asks on a
+                                      card: k2 permission request
+                                      voice.recording-start-level level=<level>
+                                      --why "…" (the owner or an Admin allows it,
+                                      with a confirm). --require-recording has
+                                      no card.
 
 Call transcripts (after a call; k2 study voice-rooms):
   <room> is 1, room-1, or the room's name, as k2 voice rooms shows it.
@@ -101,7 +108,8 @@ owner_token_cannot_moderate).
 Talks to this server (or the one --host names), like every k2 verb.
 Exit codes: 0 ok, 2 bad usage, 3 refused or unavailable. stderr carries
 {"error": <code>, "hint": …}: voice_rooms_off (preview off: the owner
-runs k2 settings set voiceRoomsPreview true), owner_or_admin_only, moderator_only, agents_not_in_voice,
+runs k2 settings set voiceRoomsPreview true), owner_or_admin_only, recording_level_needs_owner,
+moderator_only, agents_not_in_voice,
 room_closing / room_full / room_not_found, not_in_room, close_from_top,
 voice_unavailable or voice_member_pending (retry in a few seconds).
 consent: recording_not_found, recording_not_active, not_in_voice (join

@@ -288,6 +288,8 @@ type CardConfirmAction =
   | 'sew-space-governance'
   | 'sew-recording-enable'
   | 'apps-recording'
+  | 'voice-recording-start-level'
+  | 'voice-recording-dm'
 
 /** The password-reset card's Allow, by the mode the agent asked for. */
 const REVEAL_ALLOW_LABEL: Record<RevealMode, string> = {
@@ -313,7 +315,9 @@ function confirmActionOf(action: string | undefined): CardConfirmAction | null {
     action === 'apps-chat-key' ||
     action === 'sew-space-governance' ||
     action === 'sew-recording-enable' ||
-    action === 'apps-recording'
+    action === 'apps-recording' ||
+    action === 'voice-recording-start-level' ||
+    action === 'voice-recording-dm'
     ? action
     : null
 }

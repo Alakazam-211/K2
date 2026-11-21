@@ -4634,6 +4634,9 @@ mod tests {
             // 0308 (the k5 CLI's usage counters) came after it: its record
             // goes too (its table is IF NOT EXISTS).
             conn.execute("DELETE FROM _migrations WHERE name = '0308_cli_usage_counts'", []).unwrap();
+            // 0320 (the VoIP token, 0.46.17) came after it: its record goes
+            // too (its column re-add is skipped as a duplicate).
+            conn.execute("DELETE FROM _migrations WHERE name = '0320_push_device_voip'", []).unwrap();
             // 0297 and 0296 (CI monitors, job stats) came before 0299: their records go (IF NOT EXISTS).
             conn.execute("DELETE FROM _migrations WHERE name IN ('0297_ci_monitors', '0296_compute_job_stats')", []).unwrap();
             // 0295 (CI test history) came before 0297: its record goes (IF NOT EXISTS).

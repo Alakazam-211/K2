@@ -16,6 +16,8 @@
         {"name": "--allow-custom", "arg": null, "description": "Allow a free-text answer on the choice card."},
         {"name": "--expires", "arg": "2h|3d|90m|secs", "description": "How long the choice card stays open (default 7 days). Talking never shortens it."},
         {"name": "--no-expiry", "arg": null, "description": "Keep the choice card open until answered, dismissed or withdrawn."},
+        {"name": "--meta", "arg": "key=value", "description": "ask: a metadata tag stored with the card for an App to read back (repeatable; the value is a string). Keys [a-z0-9_.-] (1-64), at most 32 keys and 4096 bytes of JSON. Not for secrets: whoever can see the card sees it."},
+        {"name": "--meta-json", "arg": "'{...}'", "description": "ask: metadata as a JSON object, for number and boolean values (strings too). Merged with --meta; a key in both is refused (exit 2). Same limits; not for secrets."},
         {"name": "--why", "arg": "text", "description": "withdraw/dismiss: one-line reason (at most 200 characters) shown on the closed card and told to the agent."},
         {"name": "--name", "arg": "NAME", "description": "Required for secret. Vault key. Never printed."},
         {"name": "--prompt", "arg": "text", "description": "Optional secret field prompt."},

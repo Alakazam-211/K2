@@ -10,6 +10,11 @@ k2 thread — user-agent overlay (not PTY inject; that is k2 msg)
       --options "a; b; c"  one string, split on ';' only (a comma never splits;
                          commas and no ';' stay one option, with a note)
       [--expires 2h|3d|90m] [--no-expiry]          # open 7 days unless you pick a time frame
+      [--meta key=value]... [--meta-json '{"qty":3,"rush":true}']  # tags an App reads back
+                         --meta values are strings; --meta-json takes numbers and
+                         booleans too (both may be given; a key in both is refused).
+                         Keys [a-z0-9_.-] (1-64), at most 32 keys and 4096 bytes.
+                         NOT for secrets: whoever can see the card sees it.
   k2 thread secret <addr> --name NAME             # secret field; you never see the value
       [--prompt "…"] (≤ 200 chars) [--for api.stripe.com[,…]] [--delivery fetch|proxy|file|env|agent]
       [--scope workspace|server|session] [--kind api_key|password|…] [--ttl 24h]

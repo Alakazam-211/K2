@@ -397,7 +397,7 @@ cmd_thread() {
     for arg in "$@"; do
         if [[ $skip_next -eq 1 ]]; then skip_next=0; continue; fi
         case "$arg" in
-            --from|--options|--option|--name|--prompt|--dest|--timeout|--style|--limit|--before-seq|--seq|--file|--scope|--for|--delivery|--kind|--ttl|--inject-dst|--inject-header|--inject-format|--why|--reason|--idempotency-key)
+            --from|--options|--option|--name|--prompt|--dest|--timeout|--style|--limit|--before-seq|--seq|--file|--scope|--for|--delivery|--kind|--ttl|--inject-dst|--inject-header|--inject-format|--why|--reason|--idempotency-key|--meta|--meta-json)
                 skip_next=1
                 continue
                 ;;
@@ -664,10 +664,64 @@ _k2_options_one_note() {
     return 0
 }
 
+# 0.46.17: a choice card's metadata map (`--meta key=value`, repeatable,
+# values are strings; `--meta-json '{...}'` for numbers and booleans). The
+# daemon enforces the limits (k2-core overlay::card_meta); this checks the
+# same limits first, with the same words, so a bad map sends nothing.
+# Prints the merged map as JSON, keys sorted (nothing for an empty map);
+# any refusal is exit 2. Args: 1 or 0 (--meta-json given), its value, then
+# the --meta pairs.
+_thread_ask_meta() {
+    python3 -c 'import json, math, re, sys
+NOT_AN_OBJECT = "meta must be a JSON object of keys to strings, numbers or booleans"
+def die(msg):
+    sys.stderr.write("Error: %s\n" % msg)
+    sys.exit(2)
+def q(k):
+    return json.dumps(k, ensure_ascii=False)
+def no_constant(name):
+    raise ValueError(name)
+def finite(text):
+    f = float(text)
+    if not math.isfinite(f):
+        raise ValueError(text)
+    return f
+meta = {}
+if sys.argv[1] == "1":
+    try:
+        given = json.loads(sys.argv[2], parse_constant=no_constant, parse_float=finite)
+    except ValueError:
+        die(NOT_AN_OBJECT)
+    if not isinstance(given, dict):
+        die(NOT_AN_OBJECT)
+    meta.update(given)
+for pair in sys.argv[3:]:
+    if "=" not in pair:
+        die("--meta needs key=value")
+    k, v = pair.split("=", 1)
+    if k in meta:
+        die("meta key %s is given twice" % q(k))
+    meta[k] = v
+if len(meta) > 32:
+    die("meta takes at most 32 keys")
+for k in sorted(meta):
+    if not re.match(r"\A[a-z0-9_.-]{1,64}\Z", k):
+        die("meta key %s must match [a-z0-9_.-]{1,64}" % q(k))
+    if not isinstance(meta[k], (str, bool, int, float)):
+        die("meta value for %s must be a string, number or boolean" % q(k))
+out = json.dumps(dict(sorted(meta.items())), separators=(",", ":"), ensure_ascii=False)
+if len(out.encode("utf-8")) > 4096:
+    die("meta takes at most 4096 bytes of JSON")
+if meta:
+    print(out)
+' "$@"
+}
+
 cmd_thread_ask() {
     local target="" prompt="" json="false" explicit_from=""
     local options_csv="" allow_custom="false" expires="" no_expiry="false" idem_key=""
-    local option_list=()
+    local meta_json="" meta_json_given="0" meta_out=""
+    local option_list=() meta_list=()
     while [[ $# -gt 0 ]]; do
         case "$1" in
             ask) shift ;;
@@ -697,6 +751,16 @@ cmd_thread_ask() {
                 [[ $# -ge 2 ]] || { echo "Error: --expires requires a time frame (2h, 3d, 90m)" >&2; exit 1; }
                 expires="$2"; shift 2 ;;
             --no-expiry) no_expiry="true"; shift ;;
+            --meta)
+                [[ $# -ge 2 ]] || { echo "Error: --meta needs key=value" >&2; exit 2; }
+                meta_list+=("$2"); shift 2 ;;
+            --meta-json)
+                [[ $# -ge 2 ]] || { echo "Error: --meta-json needs a JSON object" >&2; exit 2; }
+                if [[ "$meta_json_given" == "1" ]]; then
+                    echo "Error: --meta-json is given twice" >&2
+                    exit 2
+                fi
+                meta_json="$2"; meta_json_given="1"; shift 2 ;;
             --wait|--timeout)
                 echo "Error: thread cards are fire-and-forget; no --wait / --timeout" >&2
                 exit 1 ;;
@@ -738,6 +802,9 @@ cmd_thread_ask() {
         echo "Error: use --expires or --no-expiry, not both" >&2
         exit 1
     fi
+    if [[ "$meta_json_given" == "1" || ${#meta_list[@]} -gt 0 ]]; then
+        meta_out="$(_thread_ask_meta "$meta_json_given" "$meta_json" ${meta_list[@]+"${meta_list[@]}"})" || exit $?
+    fi
     local from option_json=""
     from="$(_thread_sender_from "$explicit_from")"
     # The daemon splits --options on ';'. A value that starts with '[' is a
@@ -752,7 +819,7 @@ cmd_thread_ask() {
     local body
     body=$(ADDR="$target" PROMPT="$prompt" FROM="$from" OPTIONS_CSV="$options_csv" \
         OPTIONS_JSON="$option_json" ALLOW="$allow_custom" EXPIRES="$expires" NO_EXPIRY="$no_expiry" \
-        IDEM_KEY="$_K2_IDEM_KEY" python3 -c 'import json,os
+        IDEM_KEY="$_K2_IDEM_KEY" META="$meta_out" python3 -c 'import json,os
 obj={"addr":os.environ["ADDR"],"prompt":os.environ["PROMPT"],"from":os.environ.get("FROM","k2"),"idempotency_key":os.environ["IDEM_KEY"]}
 csv=os.environ.get("OPTIONS_CSV") or ""
 optj=os.environ.get("OPTIONS_JSON") or ""
@@ -766,6 +833,8 @@ if os.environ.get("EXPIRES"):
     obj["expires"]=os.environ["EXPIRES"]
 if os.environ.get("NO_EXPIRY")=="true":
     obj["no_expiry"]=True
+if os.environ.get("META"):
+    obj["meta"]=json.loads(os.environ["META"])
 print(json.dumps(obj))
 ')
     local response

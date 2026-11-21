@@ -720,6 +720,9 @@ GUEST CARDS
     POST /cli/thread/answer
   Agents create those cards from the PTY:
     k2 thread ask / k2 thread secret
+  A choice card may carry choice.meta, a map of keys to strings, numbers or
+  booleans the agent set (k2 thread ask --meta): present only when the card
+  was asked with --meta. It is not for secrets: whoever can see the card sees it.
   Ask/secret create stay off the official origin (404).
 
 HELD FOR THE OWNER: THE CARD (0.46.17)

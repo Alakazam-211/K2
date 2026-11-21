@@ -330,7 +330,7 @@ pub fn reconcile_all() -> Result<usize, String> {
     Ok(n)
 }
 
-/// Rollback safety for 0.46.17 only (Rosson's keep-the-old-path rule):
+/// Rollback safety for 0.46.17 only (the release's keep-the-old-path rule):
 /// every ticket message written to the Thread is also written to
 /// `feedback_comments` under the same id, so putting 0.46.16 back loses
 /// nothing. The Thread is the source of truth for reads. REMOVE in 0.46.18

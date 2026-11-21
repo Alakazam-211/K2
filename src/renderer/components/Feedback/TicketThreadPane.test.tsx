@@ -204,8 +204,8 @@ describe('the contract seam', () => {
     expect(threadAuthorLabel(shown.doc, jordan)).toEqual({ label: 'jordan', mine: false })
     expect(isOwnThreadPost(moved.doc, jordan)).toBe(false)
     // The owner token's stamp has no name: `from` is still what shows.
-    const owner = ticketThreadItem({ ...moved, doc: { ...moved.doc, author: { kind: 'owner' } as never, imported: stamp('Rosson', { kind: 'owner' }) } })
-    expect(threadAuthorLabel(owner.doc, { principal: 'owner', aliases: [] })).toEqual({ label: 'Rosson', mine: false })
+    const owner = ticketThreadItem({ ...moved, doc: { ...moved.doc, author: { kind: 'owner' } as never, imported: stamp('Alice', { kind: 'owner' }) } })
+    expect(threadAuthorLabel(owner.doc, { principal: 'owner', aliases: [] })).toEqual({ label: 'Alice', mine: false })
     // A message written on the Thread comes back as it is.
     const plain: OverlayThreadItem = { ...moved, doc: { ...moved.doc, imported: undefined } }
     expect(ticketThreadItem(plain)).toBe(plain)

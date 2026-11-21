@@ -254,6 +254,11 @@ fn flags<'a>(rest: &[&'a str], help: &str) -> Result<Flags<'a>, Plan> {
                     "--parts" => return Err(Plan::Line(NEEDS_KM1, Exit::Error)),
                     "-h" | "--help" => return Err(Plan::Help),
                     "-" => f.pos.push(w),
+                    // The rest is plain words (a name, a message), as typed.
+                    "--" => {
+                        f.pos.extend(&rest[i..]);
+                        break;
+                    }
                     w if w.starts_with('-') => {
                         return Err(bad(format!(
                             "unknown flag {w} ({CLI_NAME} {help} --help)"
@@ -987,7 +992,8 @@ pub fn start(
     {
         return None;
     }
-    if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
+    // The shell's help scans stop at a bare `--`.
+    if crate::dashdash::wants_help(words) {
         return None;
     }
     if plan == Plan::Shell || !python::family_native(python::here()) {

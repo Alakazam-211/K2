@@ -708,6 +708,53 @@ fn chat_with_a_passport() {
     }
 }
 
+/// After a bare `--` the rest is plain words (a name, a message), as
+/// typed (`cmd_chat`'s `--)` arm): a message that starts with a dash or
+/// is `--help` is sent; help before `--` sends nothing.
+#[test]
+fn chat_after_dashes_as_the_shell_does() {
+    let rig = Rig::new(VERB, "dashes");
+    let v = vec![
+        // covers: chat send
+        one(
+            "send: the message --help after --",
+            &["send", "acme/general", "--", "--help"],
+            POSTED,
+        ),
+        one(
+            "send: the address and a dashed message after --",
+            &["send", "--no-wake", "--", "acme/general", "-x --json"],
+            POSTED,
+        ),
+        one(
+            "send: a value flag takes -- as its value",
+            &["send", "acme/general", "hi", "--key", "--"],
+            POSTED,
+        ),
+        case(
+            "send: -- and nothing after it",
+            &["send", "--"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "send: help before --",
+            &["send", "acme/general", "-h", "--", "x"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        ),
+    ];
+    for c in &v {
+        rig.check(c);
+    }
+}
+
 #[test]
 fn chat_hands_these_to_the_shell() {
     let rig = Rig::new(VERB, "shell");

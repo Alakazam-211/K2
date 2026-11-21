@@ -249,8 +249,8 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **A wake pointer's title is one line, with no control characters.** The `[inbox:<id>] <title>` line an agent is woken with holds its title on that one line, written the same way, whoever sent the pointer.
 
 ### Voice
-- **Noise removal on phones stays on through busy moments**, such as the start of a call or a camera starting, from Sew 0.11.1.
-- **Sew 0.11.1.** With the chat server K2 installs, Home chat's phone notifications can cover channels you set to All messages, not only @mentions. Sew updates how it stores chat when it starts, so going back to an older Sew afterwards is `k2 hostchat rollback --accept-data-loss`, run by the owner.
+- **Noise removal on phones stays on through busy moments**, such as the start of a call or a camera starting, with Sew 0.11.3.
+- **Sew 0.11.3.** With the chat server K2 installs, Home chat's phone notifications can cover channels you set to All messages, not only @mentions. In a call, Record, Stop and each person's answer to the recording question now reach the recorder. The owner can set how long that question waits for an answer (`sew config set recording.consent_prompt_timeout_ms`). Apps built on Sew's voice plugin can show your own camera straight from the camera, and can choose how the system schedules noise removal from the next call. Sew updates how it stores chat when it starts, so going back to Sew 0.10.6 or older afterwards is `k2 hostchat rollback --accept-data-loss`, run by the owner.
 - **Incoming direct calls can ring with the iPhone's own call screen** (a newer K2 app and an updated relay are needed; older phones keep today's ringing alert).
 
 ## 0.46.16 — Postal (Beta) and phone notifications for Home chat

@@ -74,7 +74,23 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     if let Some(words) = kit_call(args, &p, &env) {
         return kit(args, &words[1], words.len() > 2);
     }
-    Some(show(&page(args, &p, &env)?))
+    let page = page(args, &p, &env)?;
+    if guarded(args, &p, &env) {
+        // The guard exits before the shell's plain-http step.
+        crate::prelude::plain_http::skip();
+    }
+    Some(show(&page))
+}
+
+/// Whether the virtual desktop's guard stops `args` (`_k2_offline_verb`
+/// in `cli/src/cli-tools-policy.sh`): `NO_OWNER_FALLBACK=1`, no token,
+/// and no `-h` or `--help` word.
+fn guarded(args: &[OsString], p: &Prelude, env: &Env) -> bool {
+    let no_owner = env
+        .first(env_names::NO_OWNER_FALLBACK)
+        .is_some_and(|v| v == "1");
+    let help = args.iter().skip(1).any(|w| w == "-h" || w == "--help");
+    no_owner && !p.token && !help
 }
 
 /// The words for a Markdown kit id (`explain <id> [--json]`), past the
@@ -435,11 +451,7 @@ pub fn page(args: &[OsString], p: &Prelude, env: &Env) -> Option<Page> {
         .skip(1)
         .map(|a| a.to_str())
         .collect::<Option<_>>()?;
-    let no_owner = env
-        .first(env_names::NO_OWNER_FALLBACK)
-        .is_some_and(|v| v == "1");
-    let help = words.iter().any(|w| *w == "-h" || *w == "--help");
-    if no_owner && !p.token && !help {
+    if guarded(args, p, env) {
         let text: String = VIRTUAL_DESKTOP.iter().map(|l| format!("{l}\n")).collect();
         return Some(lines(&text, true, Exit::Refused));
     }

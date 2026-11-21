@@ -17,8 +17,10 @@
 //! desktop's guard is not skipped for `schema` (it is not one of the
 //! guard's offline words, `--schema` is), unless a word is `-h` or
 //! `--help`: with `NO_OWNER_FALLBACK=1` and no token, `schema` is the
-//! guard's two lines and exit 3, as the shell's is. The session checks
-//! pass: the tool is `schema`, an open one, whatever follows.
+//! guard's two lines and exit 3, as the shell's is, with no plain-http
+//! line before them (the shell's guard exits before that step). The
+//! session checks pass: the tool is `schema`, an open one, whatever
+//! follows.
 //!
 //! A line with `-h` or `--help` in it never gets here: the front sends it
 //! to the shell ([`crate::front`]), which prints the manifest.
@@ -48,6 +50,10 @@ pub const VERBS: &[crate::route::Verb] = &[];
 /// shell's prelude hands the command to the shell.
 pub fn run(args: &[OsString]) -> Option<Exit> {
     let (env, p) = shell_prelude()?;
+    if guarded(args, &p, &env) {
+        // The guard exits before the shell's plain-http step.
+        crate::prelude::plain_http::skip();
+    }
     Some(show(&page(args, &p, &env, crate::embedded::version())))
 }
 

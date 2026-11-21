@@ -505,7 +505,11 @@ mod tests {
             &["done", "--blocked", "--help"],
             &["done", "--agent", "-h"],
         ] {
-            assert_eq!(native(done, &args(line)), Route::Fallthrough, "{line:?}");
+            assert_eq!(
+                native(done, &args(line)),
+                text::help_form(line).map_or(Route::Fallthrough, Route::Help),
+                "{line:?}"
+            );
         }
     }
 
@@ -567,7 +571,11 @@ mod tests {
             &["inbox", "read", "--help"][..],
             &["inbox", "list", "--folder", "-h"],
         ] {
-            assert_eq!(native(inbox, &args(line)), Route::Fallthrough, "{line:?}");
+            assert_eq!(
+                native(inbox, &args(line)),
+                text::help_form(line).map_or(Route::Fallthrough, Route::Help),
+                "{line:?}"
+            );
         }
     }
 
@@ -592,7 +600,11 @@ mod tests {
             &["read", "-h"],
             &["read", "ws", "--agent", "--help"],
         ] {
-            assert_eq!(native(read, &args(line)), Route::Fallthrough, "{line:?}");
+            assert_eq!(
+                native(read, &args(line)),
+                text::help_form(line).map_or(Route::Fallthrough, Route::Help),
+                "{line:?}"
+            );
         }
     }
 

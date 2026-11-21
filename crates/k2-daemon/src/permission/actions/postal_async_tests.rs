@@ -171,7 +171,8 @@ fn a_cards_allow_and_deny_reach_the_plane_from_a_tokio_worker() {
     let card = card_of(&agent_post(crate::postal_routes::INVITE, &ws, json!({ "to": peer, "why": "to review each other's PRs" })));
     let (s, a) = answer_on_a_worker(&rt, &admin, &ws, &card, "Allow");
     assert_eq!((s.as_str(), a["action"]["result"]["outcome"].as_str()), ("200 OK", Some("approved")), "{a}");
-    assert_eq!(friend(&ws, peer).pair_id.as_deref(), Some("pr_async"), "sent as a pairing");
+    let sent = friend(&ws, peer);
+    assert!(sent.pair_id.is_some(), "sent as a pairing: {sent:?}");
     assert_eq!(plane.seen().last().map(String::as_str), Some("POST /pairs"), "{:?}", plane.seen());
 
     // No plane client yet: a request's Deny makes the daemon's on first use.

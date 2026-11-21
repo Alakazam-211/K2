@@ -78,7 +78,17 @@ const OUTBOUND: &str = r#"{"ok":true,"outbound":{"id":"out_1","status":"approved
 const DRAFTS: &str = r#"{"ok":true,"drafts":[
  {"id":"d1","status":"sent","inbox":"me@globex.example","replyOf":"m1","editedBy":"Ann","stateBy":"Ann","outboundId":"out_9"},
  {"id":"d2","inbox":"me@globex.example","replyOf":"m2","stateBy":"Bob"},
- {"id":"d3","status":"held","inbox":null,"replyOf":"m3"}]}"#;
+ {"id":"d3","status":"held","inbox":null,"replyOf":"m3"},
+ {"id":"d4","status":"waiting","inbox":"me@globex.example","kind":"compose","replyOf":null},
+ {"id":"d5","inbox":"me@globex.example","kind":"reply","replyOf":"m5"},
+ {"id":"d6","kind":["compose"]}]}"#;
+
+/// The agent view of linked inboxes that need a person or are paused.
+const AGENT_RELINK: &str = r#"{"ok":true,"inboxes":[
+ {"address":"a@gmail.example","source":"linked","yourLevel":"draft","yourSendState":"no_send_level","maxLevel":"draft","status":"connected","needsRelink":true,"relinkReason":"credential_refused"},
+ {"address":"b@gmail.example","source":"linked","yourLevel":"read","maxLevel":"draft","status":"connected","needsRelink":true,"relinkReason":"mail_access_not_granted"},
+ {"address":"c@gmail.example","source":"linked","yourLevel":"read","maxLevel":"draft","status":"connected","relinkReason":"throttled"},
+ {"address":"d@acme.example","source":"hosted","yourLevel":"send","yourSendState":"on","maxLevel":"send","status":"active","needsRelink":false}]}"#;
 
 const CAPS: &str = r#"{"ok":true,"inboxes":[
  {"address":"me@globex.example","yourLevel":"draft","capabilities":{"source":"linked",
@@ -202,6 +212,7 @@ fn mail_reads_print_as_the_shell_does() {
             OWNER_INBOXES,
         ),
         ok_case("inboxes, none", &["inboxes"], r#"{"ok":true,"inboxes":[]}"#),
+        ok_case("inboxes, the re-link words", &["inboxes"], AGENT_RELINK),
         // covers: mail inboxes --json
         ok_case("inboxes --json", &["inboxes", "--json"], AGENT_INBOXES),
         // covers: mail domains
@@ -476,6 +487,42 @@ fn mail_reads_read_the_answers_as_the_shell_does() {
             )],
             owner_and_port,
             2,
+            1,
+        ),
+        case(
+            "inbox_throttled, final",
+            &["attachments", "m1"],
+            &[],
+            vec![answer(
+                503,
+                r#"{"ok":false,"error":{"code":"inbox_throttled","hint":"the provider is limiting this account","retry_after_s":300}}"#,
+            )],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "inbox_busy, final",
+            &["messages", "me@globex.example"],
+            &[],
+            vec![answer(
+                429,
+                r#"{"ok":false,"error":{"code":"inbox_busy","hint":"4 sessions open","retry_after_s":5.5}}"#,
+            )],
+            owner_and_port,
+            2,
+            1,
+        ),
+        case(
+            "a failed fetch says whether to retry",
+            &["attachments", "m1"],
+            &[],
+            vec![answer(
+                502,
+                r#"{"ok":false,"error":{"code":"engine","hint":"FETCH failed","retry":"after_relink","retry_after_s":null}}"#,
+            )],
+            owner_and_port,
+            1,
             1,
         ),
         case(

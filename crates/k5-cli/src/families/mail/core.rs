@@ -59,10 +59,17 @@ pub const NEEDS_HUMAN: &[&str] = &[
     "owner_only",
     "agent_send_path_only",
     "capability_missing",
+    "inbox_throttled",
+    "not_your_draft",
 ];
 
 /// `die`'s codes for a mistake in the request: exit 2.
-pub const USAGE_CODES: &[&str] = &["usage", "attachment_secret", "attachment_too_large"];
+pub const USAGE_CODES: &[&str] = &[
+    "usage",
+    "attachment_secret",
+    "attachment_too_large",
+    "inbox_busy",
+];
 
 /// The line of the boot script (`_K2_PY_STDIN_BOOT`) that runs `_mail_py`.
 pub const BOOT_LINE: u32 = 13;
@@ -76,91 +83,91 @@ pub mod line {
     pub const DIE_IN: u32 = 28;
     pub const DIE_CONCAT: u32 = 31;
     pub const DIE_CAP: u32 = 36;
-    pub const REQUEST_FLOAT: u32 = 88;
-    pub const REQUEST_READ: u32 = 107;
-    pub const CALL_REQUEST: u32 = 146;
-    pub const CALL_TIMEOUT: u32 = 149;
-    pub const CALL_DIE_TIMEOUT: u32 = 150;
-    pub const CALL_ERROR: u32 = 151;
-    pub const CALL_DIE_ERROR: u32 = 152;
-    pub const CALL_OK: u32 = 153;
-    pub const FMT_ADDR: u32 = 218;
-    pub const FMT_ADDR_EMAIL: u32 = 219;
-    pub const FMT_ADDRS: u32 = 223;
-    pub const CAP_USED: u32 = 226;
-    pub const CAP_LIMIT: u32 = 227;
-    pub const FULL_ID: u32 = 237;
-    pub const FULL_ADDRESS: u32 = 238;
-    pub const FULL_FROM: u32 = 239;
-    pub const FULL_TO: u32 = 240;
-    pub const FULL_CC_IF: u32 = 241;
-    pub const FULL_CC: u32 = 242;
-    pub const FULL_SUBJECT: u32 = 243;
-    pub const FULL_DATE: u32 = 244;
-    pub const FULL_AUTH: u32 = 245;
-    pub const FULL_ANY: u32 = 246;
-    pub const FULL_AUTH_LINE: u32 = 247;
-    pub const FULL_ATTS: u32 = 249;
-    pub const FULL_FOR: u32 = 252;
-    pub const FULL_ATT: u32 = 253;
-    pub const FULL_FETCH: u32 = 255;
-    pub const FULL_TEXT: u32 = 257;
-    pub const FULL_HTML_IF: u32 = 258;
-    pub const FULL_HTML: u32 = 260;
-    pub const ROW_FIRST: u32 = 300;
-    pub const ROW_BCC_IF: u32 = 303;
-    pub const ROW_BCC: u32 = 304;
-    pub const ROW_POLICY_IF: u32 = 305;
-    pub const ROW_POLICY: u32 = 306;
-    pub const ROW_REPLY_IF: u32 = 307;
-    pub const ROW_REPLY: u32 = 308;
-    pub const ROW_FWD_IF: u32 = 309;
-    pub const ROW_FWD: u32 = 310;
-    pub const ROW_ATT: u32 = 311;
-    pub const ROW_ATT_IF: u32 = 312;
-    pub const ROW_ATT_LINE: u32 = 315;
-    pub const ROW_NOTE_IF: u32 = 316;
-    pub const ROW_NOTE: u32 = 318;
-    pub const FWD_LINE: u32 = 295;
-    pub const FWD_MAILBOX: u32 = 296;
-    pub const FWD_EML: u32 = 297;
-    pub const DETAIL_ID: u32 = 321;
-    pub const DETAIL_STATUS: u32 = 322;
-    pub const DETAIL_FROM: u32 = 323;
-    pub const DETAIL_TO: u32 = 324;
-    pub const DETAIL_CC_IF: u32 = 325;
-    pub const DETAIL_CC: u32 = 326;
-    pub const DETAIL_BCC_IF: u32 = 327;
-    pub const DETAIL_BCC: u32 = 328;
-    pub const DETAIL_POLICY_IF: u32 = 329;
-    pub const DETAIL_POLICY: u32 = 330;
-    pub const DETAIL_REPLY_IF: u32 = 331;
-    pub const DETAIL_REPLY: u32 = 332;
-    pub const DETAIL_FWD_IF: u32 = 333;
-    pub const DETAIL_FWD: u32 = 334;
-    pub const DETAIL_SUBJECT: u32 = 335;
-    pub const DETAIL_ATT: u32 = 336;
-    pub const DETAIL_ATT_IF: u32 = 337;
-    pub const DETAIL_ATT_LINE: u32 = 338;
-    pub const DETAIL_QUEUED: u32 = 339;
-    pub const DETAIL_DECIDED_IF: u32 = 340;
-    pub const DETAIL_BY: u32 = 341;
-    pub const DETAIL_DECIDED: u32 = 342;
-    pub const DETAIL_SENT_IF: u32 = 343;
-    pub const DETAIL_SENT: u32 = 344;
-    pub const DETAIL_NOTE_IF: u32 = 345;
-    pub const DETAIL_NOTE: u32 = 346;
-    pub const DOMAIN_FIRST: u32 = 355;
-    pub const DOMAIN_FOR: u32 = 361;
-    pub const DOMAIN_NOTE: u32 = 371;
-    pub const INBOXES_W: u32 = 423;
-    pub const INBOXES_ST: u32 = 434;
-    pub const INBOXES_ROW: u32 = 437;
-    pub const INBOXES_PRI: u32 = 458;
-    pub const INBOXES_LVL: u32 = 462;
-    pub const INBOXES_GSUM: u32 = 468;
-    pub const INBOXES_OWNER_ROW: u32 = 470;
-    pub const INBOXES_SORTED: u32 = 479;
+    pub const REQUEST_FLOAT: u32 = 97;
+    pub const REQUEST_READ: u32 = 116;
+    pub const CALL_REQUEST: u32 = 155;
+    pub const CALL_TIMEOUT: u32 = 158;
+    pub const CALL_DIE_TIMEOUT: u32 = 159;
+    pub const CALL_ERROR: u32 = 160;
+    pub const CALL_DIE_ERROR: u32 = 161;
+    pub const CALL_OK: u32 = 162;
+    pub const FMT_ADDR: u32 = 227;
+    pub const FMT_ADDR_EMAIL: u32 = 228;
+    pub const FMT_ADDRS: u32 = 232;
+    pub const CAP_USED: u32 = 235;
+    pub const CAP_LIMIT: u32 = 236;
+    pub const FULL_ID: u32 = 246;
+    pub const FULL_ADDRESS: u32 = 247;
+    pub const FULL_FROM: u32 = 248;
+    pub const FULL_TO: u32 = 249;
+    pub const FULL_CC_IF: u32 = 250;
+    pub const FULL_CC: u32 = 251;
+    pub const FULL_SUBJECT: u32 = 252;
+    pub const FULL_DATE: u32 = 253;
+    pub const FULL_AUTH: u32 = 254;
+    pub const FULL_ANY: u32 = 255;
+    pub const FULL_AUTH_LINE: u32 = 256;
+    pub const FULL_ATTS: u32 = 258;
+    pub const FULL_FOR: u32 = 261;
+    pub const FULL_ATT: u32 = 262;
+    pub const FULL_FETCH: u32 = 264;
+    pub const FULL_TEXT: u32 = 266;
+    pub const FULL_HTML_IF: u32 = 267;
+    pub const FULL_HTML: u32 = 269;
+    pub const ROW_FIRST: u32 = 309;
+    pub const ROW_BCC_IF: u32 = 312;
+    pub const ROW_BCC: u32 = 313;
+    pub const ROW_POLICY_IF: u32 = 314;
+    pub const ROW_POLICY: u32 = 315;
+    pub const ROW_REPLY_IF: u32 = 316;
+    pub const ROW_REPLY: u32 = 317;
+    pub const ROW_FWD_IF: u32 = 318;
+    pub const ROW_FWD: u32 = 319;
+    pub const ROW_ATT: u32 = 320;
+    pub const ROW_ATT_IF: u32 = 321;
+    pub const ROW_ATT_LINE: u32 = 324;
+    pub const ROW_NOTE_IF: u32 = 325;
+    pub const ROW_NOTE: u32 = 327;
+    pub const FWD_LINE: u32 = 304;
+    pub const FWD_MAILBOX: u32 = 305;
+    pub const FWD_EML: u32 = 306;
+    pub const DETAIL_ID: u32 = 330;
+    pub const DETAIL_STATUS: u32 = 331;
+    pub const DETAIL_FROM: u32 = 332;
+    pub const DETAIL_TO: u32 = 333;
+    pub const DETAIL_CC_IF: u32 = 334;
+    pub const DETAIL_CC: u32 = 335;
+    pub const DETAIL_BCC_IF: u32 = 336;
+    pub const DETAIL_BCC: u32 = 337;
+    pub const DETAIL_POLICY_IF: u32 = 338;
+    pub const DETAIL_POLICY: u32 = 339;
+    pub const DETAIL_REPLY_IF: u32 = 340;
+    pub const DETAIL_REPLY: u32 = 341;
+    pub const DETAIL_FWD_IF: u32 = 342;
+    pub const DETAIL_FWD: u32 = 343;
+    pub const DETAIL_SUBJECT: u32 = 344;
+    pub const DETAIL_ATT: u32 = 345;
+    pub const DETAIL_ATT_IF: u32 = 346;
+    pub const DETAIL_ATT_LINE: u32 = 347;
+    pub const DETAIL_QUEUED: u32 = 348;
+    pub const DETAIL_DECIDED_IF: u32 = 349;
+    pub const DETAIL_BY: u32 = 350;
+    pub const DETAIL_DECIDED: u32 = 351;
+    pub const DETAIL_SENT_IF: u32 = 352;
+    pub const DETAIL_SENT: u32 = 353;
+    pub const DETAIL_NOTE_IF: u32 = 354;
+    pub const DETAIL_NOTE: u32 = 355;
+    pub const DOMAIN_FIRST: u32 = 364;
+    pub const DOMAIN_FOR: u32 = 370;
+    pub const DOMAIN_NOTE: u32 = 380;
+    pub const INBOXES_W: u32 = 443;
+    pub const INBOXES_ST: u32 = 454;
+    pub const INBOXES_ROW: u32 = 457;
+    pub const INBOXES_PRI: u32 = 478;
+    pub const INBOXES_LVL: u32 = 482;
+    pub const INBOXES_GSUM: u32 = 488;
+    pub const INBOXES_OWNER_ROW: u32 = 490;
+    pub const INBOXES_SORTED: u32 = 499;
 }
 
 /// The verb's `M_*` settings: what `env(k)` reads. A setting not given
@@ -552,6 +559,15 @@ impl Py {
             // `err` is a dict here: `get` worked above.
             if let Ok(Some(v)) = attr_get(&err, k) {
                 if py::truthy(&v) {
+                    out.push((k, v));
+                }
+            }
+        }
+        // `if err.get(k) is not None`: a linked inbox's cool-down and a
+        // failed fetch's retry advice, even when falsy.
+        for k in ["retry_after_s", "retry"] {
+            if let Ok(Some(v)) = attr_get(&err, k) {
+                if !matches!(v, Value::Null) {
                     out.push((k, v));
                 }
             }
@@ -1210,6 +1226,26 @@ pub mod print {
         Ok(p::lookup(&table, &key)?.unwrap_or_else(|| "?".into()))
     }
 
+    /// `inbox_status_word(r)`, `r` a dict: what a linked inbox that
+    /// needs a person, or that its provider pauses, shows; else its
+    /// `status` (`"?"` when it has none).
+    pub fn status_word(r: &Value) -> Value {
+        let why = attr_get(r, "relinkReason").ok().flatten();
+        if why.as_ref().is_some_and(|w| p::eq_str(w, "throttled")) {
+            return p::sv("throttled (wait)");
+        }
+        if why
+            .as_ref()
+            .is_some_and(|w| p::eq_str(w, "mail_access_not_granted"))
+        {
+            return p::sv("mail access not granted");
+        }
+        if p::truthy(attr_get(r, "needsRelink").ok().flatten().as_ref()) {
+            return p::sv("needs re-link");
+        }
+        p::get_or(r, "status", p::sv("?")).unwrap_or_else(|_| p::sv("?"))
+    }
+
     fn is_blocked(st: Option<&Value>) -> bool {
         st.is_some_and(|v| p::eq_str(v, "blocked_off") || p::eq_str(v, "blocked_approval"))
     }
@@ -1260,7 +1296,7 @@ pub mod print {
                 let lvl = at(level_word(lvl.as_ref()), l, "_level_word")?;
                 let send = at(send_word(st.as_ref()), l, "_send_word")?;
                 let max = at(p::get_or(r, "maxLevel", p::sv("?")), l, F)?;
-                let status = at(p::get_or(r, "status", p::sv("?")), l, F)?;
+                let status = status_word(r);
                 py_.print(&format!(
                     "{}{}{}{}{}{}",
                     p::ljust(&py::str_of(&a), w),

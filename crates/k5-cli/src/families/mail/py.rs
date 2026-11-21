@@ -174,6 +174,62 @@ pub fn contains(container: &Value, item: &str) -> Result<bool, String> {
     }
 }
 
+/// `a == b` for two values `json.loads` returned: numbers by value
+/// (`True == 1`, `1 == 1.0`), strings by their code points, lists item by
+/// item and dicts by their keys and values in any order.
+pub fn py_eq(a: &Value, b: &Value) -> bool {
+    fn num(v: &Value) -> Option<f64> {
+        match v {
+            Value::Bool(b) => Some(f64::from(u8::from(*b))),
+            Value::Int(d) => d.parse().ok(),
+            Value::Float(f) => Some(*f),
+            _ => None,
+        }
+    }
+    match (a, b) {
+        (Value::Null, Value::Null) => true,
+        (Value::Int(x), Value::Int(y)) => x == y,
+        (Value::Str(x), Value::Str(y)) => x.code_points() == y.code_points(),
+        (Value::Array(x), Value::Array(y)) => {
+            x.len() == y.len() && x.iter().zip(y).all(|(i, j)| py_eq(i, j))
+        }
+        (Value::Object(x), Value::Object(y)) => {
+            x.len() == y.len()
+                && x.iter().all(|(k, v)| {
+                    y.iter()
+                        .find(|(k2, _)| k2.code_points() == k.code_points())
+                        .is_some_and(|(_, v2)| py_eq(v, v2))
+                })
+        }
+        _ => match (num(a), num(b)) {
+            (Some(x), Some(y)) => x == y,
+            _ => false,
+        },
+    }
+}
+
+/// `item in container`, or the exception's text.
+pub fn py_in(item: &Value, container: &Value) -> Result<bool, String> {
+    match (item, container) {
+        (Value::Str(t), _) => contains(container, &text(t)),
+        (_, Value::Str(_)) => Err(format!(
+            "TypeError: 'in <string>' requires string as left operand, not {}",
+            py::type_name(item)
+        )),
+        (_, Value::Array(items)) => Ok(items.iter().any(|x| py_eq(x, item))),
+        (Value::Array(_) | Value::Object(_), Value::Object(_)) => Err(format!(
+            "TypeError: unhashable type: '{}'",
+            py::type_name(item)
+        )),
+        // A dict's keys are strings: no other value is one of them.
+        (_, Value::Object(_)) => Ok(false),
+        _ => Err(format!(
+            "TypeError: argument of type '{}' is not iterable",
+            py::type_name(container)
+        )),
+    }
+}
+
 /// `v + tail` for a string `tail`, or the exception's text.
 pub fn concat_str(v: &Value, tail: &str) -> Result<String, String> {
     match v {

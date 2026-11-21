@@ -349,7 +349,7 @@ fn the_status_prints_as_the_shell_prints_it() {
          Digest every 90 min; next: 2026-11-20T09:00:00Z\n\
          VIP mail outside the window: hold; session line: on; snippets: off\n\
          Paused until 2026-11-21\n\
-         Stopped: a@x.io refused its login. Reconnect the inbox and it starts again.\n\
+         Stopped: a@x.io refused its sign-in. A person signs in again (Settings → Email Link → Sign in again, or k2 mail link relink a@x.io) and it starts again.\n\
          Last poll problem for b@x.io: auth\n\
          Last 24h: 2 VIP delivered, 0 digested, None failed authentication\n"
     );
@@ -1088,8 +1088,12 @@ fn the_lines_that_raise_are_the_shell_s() {
             "st = r.get(\"status\") or \"?\"",
         ),
         (
+            super::reads::line::DRAFTS_WHAT,
+            "what = \"compose\" if r.get(\"kind\") == \"compose\" else",
+        ),
+        (
             super::reads::line::DRAFTS_LINE,
-            "line = \"%s  %-9s %-34s answers %s\" % (r.get(\"id\"",
+            "line = \"%s  %-9s %-34s %s\" % (r.get(\"id\"",
         ),
         (super::reads::line::DRAFTS_EDITED, "if r.get(\"editedBy\"):"),
         (
@@ -1281,12 +1285,33 @@ fn the_lines_that_raise_are_the_shell_s() {
             "print(\"retired %s — its cap slot is free immedia",
         ),
         (
-            super::writes::line::DRAFT_CALL,
-            "d = call(\"POST\", \"/cli/mail/draft\", body=body)",
+            super::writes::line::DRAFT_REQUEST,
+            "d = request(\"POST\", \"/cli/mail/draft\", body=body, timeout=60)",
         ),
         (
-            super::writes::line::DRAFT_PRINT,
-            "print(d.get(\"hint\") or \"draft saved to '%s' in %",
+            super::writes::line::DRAFT_CODE,
+            "code = ((d or {}).get(\"error\") or {}).get(\"code\")",
+        ),
+        (super::writes::line::DRAFT_ERROR, "if d.get(\"error\"):"),
+        (
+            super::writes::line::DRAFT_DIE,
+            "die(d[\"error\"], permission=d.get(\"permission\"))",
+        ),
+        (
+            super::writes::line::DRAFT_HINT,
+            "hint = d.get(\"hint\") or \"draft saved to '%s' in %s\" %",
+        ),
+        (
+            super::writes::line::DRAFT_ID,
+            "if d.get(\"draftId\") and d[\"draftId\"] not in hint:",
+        ),
+        (
+            super::writes::line::DRAFT_DELETE_CALL,
+            "d = call(\"POST\", \"/cli/mail/draft/delete\", body=",
+        ),
+        (
+            super::writes::line::DRAFT_DELETE_PRINT,
+            "print(d.get(\"hint\") or \"draft %s deleted\" % env(",
         ),
         (
             super::writes::line::MOVE_CALL,
@@ -1408,6 +1433,10 @@ fn the_lines_that_raise_are_the_shell_s() {
             "state = final.get(\"state\")",
         ),
         (
+            super::owner::line::OAUTH_RELINKED,
+            "print(\"re-linked %s (%s)\" % (final.get(\"address\")",
+        ),
+        (
             super::owner::line::OAUTH_UPGRADED,
             "print(\"upgraded %s (%s)\" % (final.get(\"address\")",
         ),
@@ -1510,7 +1539,7 @@ fn the_lines_that_raise_are_the_shell_s() {
         ),
         (
             super::owner::line::LINKS_ROW,
-            "print((\"%-\" + str(w) + \"s%-11s%-22s%s\") % (",
+            "print((\"%-\" + str(w) + \"s%-25s%-22s%s\") % (",
         ),
         (
             super::owner::line::LINKS_GRANTS,

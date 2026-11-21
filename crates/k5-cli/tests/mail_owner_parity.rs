@@ -49,6 +49,16 @@ const LINKED: &str = r#"{"ok":true,"inboxes":[
   "primary":{"workspace":"alpha"},"grants":[{"workspace":"beta","level":"send","sendState":"blocked_off","agentSend":"approval"},{"projectId":"p-2"}]},
  {"address":"bot@acme.example","source":"hosted"}]}"#;
 
+/// Linked rows that need a person, are paused, or are fine; one with no
+/// status (the shell prints a fix line for it too: `"?" != None`).
+const RELINK: &str = r#"{"ok":true,"inboxes":[
+ {"address":"a@gmail.example","source":"linked","status":"connected","needsRelink":true,"relinkReason":"credential_refused","host":"imap.gmail.example","tls":"implicit-tls","primary":{"workspace":"alpha"}},
+ {"address":"b@gmail.example","source":"linked","status":"connected","needsRelink":true,"relinkReason":"mail_access_not_granted","host":"imap.gmail.example","tls":"implicit-tls"},
+ {"address":"c@gmail.example","source":"linked","status":"connected","needsRelink":false,"relinkReason":"throttled","host":"imap.gmail.example","tls":"implicit-tls","grants":[{"workspace":"beta","level":"draft"}]},
+ {"address":"d@globex.example","source":"linked","status":"needs re-link","needsRelink":true},
+ {"address":"e@globex.example","source":"linked","needsRelink":false},
+ {"address":"f@globex.example","source":"linked","status":"connected","needsRelink":null,"relinkReason":null}]}"#;
+
 const OAUTH_CONFIG: &str = r#"{"ok":true,"providers":{"gmail":{"source":"custom","clientId":"g-1","secretSet":true},
  "microsoft":{"clientId":"m-1","configured":false,"tenant":"organizations"}}}"#;
 
@@ -169,6 +179,32 @@ fn mail_owner_verbs_take_the_words_as_the_shell_does() {
                 "--workspace",
                 "w",
             ],
+        ),
+        // native: mail link relink
+        usage_case("link relink, no address", &["link", "relink"]),
+        usage_case(
+            "link relink with features",
+            &["link", "relink", "a@x", "--features", "calendar"],
+        ),
+        usage_case(
+            "link relink with a workspace",
+            &["link", "relink", "a@x", "--workspace", "w"],
+        ),
+        usage_case(
+            "link relink with a host",
+            &["link", "relink", "a@x", "--host", "h"],
+        ),
+        usage_case(
+            "link relink with --pass-stdin",
+            &["link", "relink", "a@x", "--pass-stdin"],
+        ),
+        usage_case(
+            "link relink with --pass-ref",
+            &["link", "relink", "a@x", "--pass-ref", "env:X"],
+        ),
+        usage_case(
+            "link relink, two addresses",
+            &["link", "relink", "a@x", "b@x"],
         ),
         usage_case("link calendars, a word", &["link", "calendars", "maybe"]),
         usage_case(
@@ -333,6 +369,16 @@ fn mail_owner_verbs_answer_as_the_shell_does() {
             r#"{"ok":true,"address":"me@globex.example"}"#,
         ),
         ok_case("link list", &["link", "list"], LINKED),
+        ok_case(
+            "link list, the re-link words and their fix lines",
+            &["link", "list"],
+            RELINK,
+        ),
+        ok_case(
+            "link list --json, the re-link words",
+            &["link", "list", "--json"],
+            RELINK,
+        ),
         // covers: mail link --json
         ok_case("link --json is the list", &["link", "--json"], LINKED),
         ok_case(
@@ -422,6 +468,72 @@ fn mail_owner_verbs_answer_as_the_shell_does() {
             ],
             owner_and_port,
             0,
+            2,
+        ),
+        // native: mail link relink
+        case(
+            "link relink, the device flow, re-linked",
+            &["link", "relink", "me@globex.example"],
+            &[],
+            vec![
+                ok(
+                    r#"{"ok":true,"flow":"device","linkId":"l9","verificationUrl":"https://login.example/device","userCode":"WXYZ"}"#,
+                ),
+                ok(
+                    r#"{"ok":true,"state":"connected","address":"me@globex.example","hint":"not printed"}"#,
+                ),
+            ],
+            owner_and_port,
+            0,
+            2,
+        ),
+        case(
+            "link relink, the browser flow, a provider",
+            &["link", "relink", "me@globex.example", "--provider", "gmail"],
+            &[],
+            vec![
+                ok(r#"{"ok":true,"flow":"browser","linkId":"l10","features":"mail,calendar"}"#),
+                ok(r#"{"ok":true,"state":"connected"}"#),
+            ],
+            owner_and_port,
+            0,
+            2,
+        ),
+        // native: mail link relink --json
+        case(
+            "link relink --json",
+            &["link", "relink", "--json", "me@globex.example"],
+            &[],
+            vec![
+                ok(r#"{"ok":true,"flow":"browser","linkId":"l11"}"#),
+                ok(r#"{"ok":true,"state":"connected","relinked":true}"#),
+            ],
+            owner_and_port,
+            0,
+            2,
+        ),
+        case(
+            "external relink, an agent refused",
+            &["external", "relink", "me@gmail.example"],
+            &[],
+            vec![answer(
+                403,
+                r#"{"ok":false,"error":{"code":"owner_only","hint":"owner surface"}}"#,
+            )],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "link relink, denied",
+            &["link", "relink", "me@globex.example"],
+            &[],
+            vec![
+                ok(r#"{"ok":true,"flow":"device","linkId":"l12"}"#),
+                ok(r#"{"ok":true,"state":"denied","code":"scope_not_granted"}"#),
+            ],
+            owner_and_port,
+            1,
             2,
         ),
         case(
@@ -669,6 +781,9 @@ fn help_never_acts() {
             "w",
         ],
         &["link", "upgrade", "a@x", "--features", "mail", "--help"],
+        &["link", "relink", "a@x", "-h"],
+        &["link", "--help", "relink", "a@x"],
+        &["external", "relink", "a@x", "--json", "--help"],
         &["link", "calendars", "on", "-h"],
         &["link", "remove", "a@x", "--help"],
         &["external", "add", "a@x", "-h"],

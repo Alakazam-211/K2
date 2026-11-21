@@ -20,7 +20,7 @@
 //! long` (exit 126) before anything is sent. The binary sends it: the
 //! named difference `env-answer-large`.
 
-use super::core::{self, run_env, usage, At, Env, Plan, Py, Secs, Within, MODULE, R};
+use super::core::{self, run_env, usage, At, End, Env, Plan, Py, Secs, Within, MODULE, R};
 use super::py::{self as p, attr_get};
 use super::reads::check_timeout;
 use crate::exit::Exit;
@@ -28,6 +28,7 @@ use crate::out::json::Value;
 use crate::out::py;
 use crate::transport::urllib::Method;
 use k2_client::brand::CLI_NAME;
+use std::time::{Duration, Instant};
 
 /// The verbs (second words) this module answers.
 pub const VERBS: &[&str] = &[
@@ -44,34 +45,40 @@ pub const VERBS: &[&str] = &[
 /// The lines of `_mail_py` where these verbs call or raise. `tests`
 /// pins each to its statement.
 pub mod line {
-    pub const OUTCOME_TIMED_OUT: u32 = 385;
-    pub const OUTCOME_DIE: u32 = 387;
-    pub const OUTCOME_QUEUED: u32 = 393;
-    pub const OUTCOME_QUEUED_PRINT: u32 = 396;
-    pub const OUTCOME_HAS: u32 = 399;
-    pub const OUTCOME_DECIDED: u32 = 403;
-    pub const OUTCOME_NOTE: u32 = 404;
-    pub const OUTCOME_NOTE_PRINT: u32 = 405;
-    pub const OUTCOME_TRACK: u32 = 406;
-    pub const OUTCOME_SUBMITTED: u32 = 410;
-    pub const SEND_CALL: u32 = 743;
-    pub const SEND_OUTCOME: u32 = 744;
-    pub const REPLY_CALL: u32 = 769;
-    pub const REPLY_OUTCOME: u32 = 770;
-    pub const FORWARD_CALL: u32 = 792;
-    pub const FORWARD_OUTCOME: u32 = 793;
-    pub const ADDRESS_DELETE_CALL: u32 = 849;
-    pub const ADDRESS_DELETE_PRINT: u32 = 854;
-    pub const DRAFT_CALL: u32 = 1639;
-    pub const DRAFT_PRINT: u32 = 1643;
-    pub const MOVE_CALL: u32 = 1957;
-    pub const MOVE_PRINT: u32 = 1962;
-    pub const FLAG_CALL: u32 = 1970;
-    pub const FLAG_PRINT: u32 = 1979;
-    pub const ARCHIVE_CALL: u32 = 1982;
-    pub const ARCHIVE_PRINT: u32 = 1986;
-    pub const DELETE_CALL: u32 = 1990;
-    pub const DELETE_PRINT: u32 = 1994;
+    pub const OUTCOME_TIMED_OUT: u32 = 394;
+    pub const OUTCOME_DIE: u32 = 396;
+    pub const OUTCOME_QUEUED: u32 = 402;
+    pub const OUTCOME_QUEUED_PRINT: u32 = 405;
+    pub const OUTCOME_HAS: u32 = 408;
+    pub const OUTCOME_DECIDED: u32 = 412;
+    pub const OUTCOME_NOTE: u32 = 413;
+    pub const OUTCOME_NOTE_PRINT: u32 = 414;
+    pub const OUTCOME_TRACK: u32 = 415;
+    pub const OUTCOME_SUBMITTED: u32 = 419;
+    pub const SEND_CALL: u32 = 763;
+    pub const SEND_OUTCOME: u32 = 764;
+    pub const REPLY_CALL: u32 = 789;
+    pub const REPLY_OUTCOME: u32 = 790;
+    pub const FORWARD_CALL: u32 = 812;
+    pub const FORWARD_OUTCOME: u32 = 813;
+    pub const ADDRESS_DELETE_CALL: u32 = 870;
+    pub const ADDRESS_DELETE_PRINT: u32 = 875;
+    pub const DRAFT_REQUEST: u32 = 1672;
+    pub const DRAFT_CODE: u32 = 1673;
+    pub const DRAFT_ERROR: u32 = 1685;
+    pub const DRAFT_DIE: u32 = 1686;
+    pub const DRAFT_HINT: u32 = 1690;
+    pub const DRAFT_ID: u32 = 1692;
+    pub const DRAFT_DELETE_CALL: u32 = 1696;
+    pub const DRAFT_DELETE_PRINT: u32 = 1700;
+    pub const MOVE_CALL: u32 = 2038;
+    pub const MOVE_PRINT: u32 = 2043;
+    pub const FLAG_CALL: u32 = 2051;
+    pub const FLAG_PRINT: u32 = 2060;
+    pub const ARCHIVE_CALL: u32 = 2063;
+    pub const ARCHIVE_PRINT: u32 = 2067;
+    pub const DELETE_CALL: u32 = 2071;
+    pub const DELETE_PRINT: u32 = 2075;
 }
 
 /// A value flag: its word, the `M_*` key it sets, whether a repeat adds a
@@ -519,8 +526,11 @@ fn reply(words: &[&str]) -> Result<Plan, Plan> {
     ))
 }
 
-/// `cmd_mail_draft`.
+/// `cmd_mail_draft`: a reply or compose draft, or `draft delete`.
 fn draft(words: &[&str]) -> Result<Plan, Plan> {
+    if words.first() == Some(&"delete") {
+        return draft_delete(&words[1..]);
+    }
     let reply_to_hint =
         format!("--reply-to requires a message id (from '{CLI_NAME} mail messages')");
     let from_hint = format!("--from requires a linked address (see '{CLI_NAME} mail inboxes')");
@@ -539,9 +549,14 @@ fn draft(words: &[&str]) -> Result<Plan, Plan> {
         add("--bcc", "M_BCC", "--bcc requires an address"),
         set("--from", "M_FROM", &from_hint),
         add("--attach", "M_ATTACH", "--attach requires a file path"),
+        set(
+            "--idempotency-key",
+            "M_KEY",
+            "--idempotency-key requires a key (8-128 of letters, digits, . _ : -)",
+        ),
     ];
     let unknown = |f: &str| {
-        format!("unknown flag '{f}' — usage: {CLI_NAME} mail draft <message-id> (--body <text> | --body-file <f>) [--reply-all] [--cc <addr>] [--bcc <addr>] [--attach <path>]  OR  {CLI_NAME} mail draft --to <addr> --subject <s> (--body <text> | --body-file <f>) [--cc <addr>] [--bcc <addr>] [--attach <path>] [--from <linked>]")
+        format!("unknown flag '{f}' — usage: {CLI_NAME} mail draft <message-id> (--body <text> | --body-file <f>) [--to <addr> | --reply-all] [--cc <addr>] [--bcc <addr>] [--attach <path>]  OR  {CLI_NAME} mail draft --to <addr> --subject <s> (--body <text> | --body-file <f>) [--cc <addr>] [--bcc <addr>] [--attach <path>] [--from <linked>]  OR  {CLI_NAME} mail draft delete <draft-id>")
     };
     let mut r = Read::default();
     let mut i = 0;
@@ -595,9 +610,14 @@ fn draft(words: &[&str]) -> Result<Plan, Plan> {
         i += 1;
     }
     let id = r.get("M_ID").to_string();
-    if !id.is_empty() && (!r.get("M_TO").is_empty() || !r.get("M_SUBJECT").is_empty()) {
+    if !id.is_empty() && !r.get("M_SUBJECT").is_empty() {
         return Err(usage(
-            "pass either a <message-id> (reply draft) or --to/--subject (compose draft), not both",
+            "a reply draft keeps the original's subject (Re: …) — pass either a <message-id> (reply draft) or --to/--subject (compose draft), not both",
+        ));
+    }
+    if !id.is_empty() && !r.get("M_TO").is_empty() && r.env.on("M_REPLY_ALL") {
+        return Err(usage(
+            "--to sets who the reply goes to and --reply-all copies everyone on the original: pick one (add others with --cc)",
         ));
     }
     if id.is_empty() && r.env.on("M_REPLY_ALL") {
@@ -645,8 +665,39 @@ fn draft(words: &[&str]) -> Result<Plan, Plan> {
             "M_FROM",
             "M_ATTACH",
             "M_REPLY_ALL",
+            "M_KEY",
         ],
     ))
+}
+
+/// `cmd_mail_draft_delete`: `draft delete <draft-id> [--json]`.
+fn draft_delete(words: &[&str]) -> Result<Plan, Plan> {
+    let mut id = "";
+    let mut json = false;
+    for w in words {
+        match *w {
+            "--json" => json = true,
+            f if f.starts_with('-') => {
+                return Err(usage(format!(
+                    "unknown flag '{f}' — usage: {CLI_NAME} mail draft delete <draft-id> [--json]"
+                )))
+            }
+            pos => {
+                if !id.is_empty() {
+                    return Err(usage(format!(
+                        "one draft id only — usage: {CLI_NAME} mail draft delete <draft-id> [--json]"
+                    )));
+                }
+                id = pos;
+            }
+        }
+    }
+    if id.is_empty() {
+        return Err(usage(format!(
+            "draft delete requires the draft id (d_…) — '{CLI_NAME} mail drafts' lists yours"
+        )));
+    }
+    Ok(Plan::Run(run_env("draft_delete", json).with("M_ID", id)))
 }
 
 /// The positional words and `--json` of a manage verb (`move`, `archive`,
@@ -800,6 +851,7 @@ pub fn exec(py_: &mut Py, verb: &str) -> Option<R<()>> {
         "reply" => reply_py(py_),
         "forward_message" => forward_py(py_),
         "draft" => draft_py(py_),
+        "draft_delete" => draft_delete_py(py_),
         "move" => move_py(py_),
         "flag" => flag_py(py_),
         "archive" => archive_py(py_),
@@ -1062,7 +1114,60 @@ fn forward_py(py_: &mut Py) -> R<()> {
     send_outcome(py_, &d, waiting, t, line::FORWARD_OUTCOME)
 }
 
-/// `draft`.
+/// How long a draft save is asked again (`time.time() + 150`).
+const DRAFT_WAIT: Duration = Duration::from_secs(150);
+/// Between two asks (`time.sleep(3)`).
+const DRAFT_PAUSE: Duration = Duration::from_secs(3);
+
+/// `"k2d_" + uuid.uuid4().hex`: a fresh idempotency key, 32 hex digits
+/// in a version 4 UUID's shape. The bits come from the standard
+/// library's per-process random hash keys, which it seeds from the
+/// operating system; the key only has to differ between saves.
+pub fn fresh_key() -> String {
+    use std::fmt::Write as _;
+    use std::hash::{BuildHasher, Hasher};
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let mut bytes = [0u8; 16];
+    for (i, chunk) in bytes.chunks_mut(8).enumerate() {
+        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+        h.write_usize(i);
+        h.write_u128(nanos);
+        h.write_u32(std::process::id());
+        chunk.copy_from_slice(&h.finish().to_le_bytes());
+    }
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let mut key = String::from("k2d_");
+    for b in bytes {
+        let _ = write!(key, "{b:02x}");
+    }
+    key
+}
+
+/// `((d or {}).get("error") or {}).get("code")`.
+fn error_code(d: Option<&Value>) -> Result<Option<Value>, String> {
+    let empty = Value::Object(Vec::new());
+    let d = d.filter(|v| py::truthy(v)).unwrap_or(&empty);
+    let e = p::or(attr_get(d, "error")?, Value::Object(Vec::new()));
+    attr_get(&e, "code")
+}
+
+/// The module's frame at `line` on a traceback from `die`.
+fn within_module(end: End, line: u32) -> End {
+    match end {
+        End::Raise(mut t) => {
+            t.frames.insert(0, (line, MODULE));
+            End::Raise(t)
+        }
+        other => other,
+    }
+}
+
+/// `draft`: the save, with its idempotency key, asked again with the same
+/// key on a timeout, a dropped answer (twice at most) or `busy`, for up
+/// to 150 s; then the key to retry with.
 fn draft_py(py_: &mut Py) -> R<()> {
     let mut b = Body::new(py_);
     b.s("body", py_.env("M_BODY"));
@@ -1082,19 +1187,94 @@ fn draft_py(py_: &mut Py) -> R<()> {
             Value::Array(attach.iter().map(|x| p::sv(x)).collect()),
         );
     }
-    let d = py_.post("/cli/mail/draft", &b.value(), line::DRAFT_CALL)?;
+    let key = match py_.env("M_KEY") {
+        "" => fresh_key(),
+        k => k.to_string(),
+    };
+    b.s("idempotencyKey", &key);
+    let body = b.value();
+    let deadline = Instant::now() + DRAFT_WAIT;
+    let mut dropped = 0;
+    let (d, pending) = loop {
+        let d = py_
+            .request(
+                Method::Post,
+                "/cli/mail/draft",
+                &[],
+                Some(&body),
+                Secs::Int(60),
+            )
+            .within(line::DRAFT_REQUEST, MODULE)?;
+        let code = error_code(d.as_ref()).at(line::DRAFT_CODE, MODULE)?;
+        if d.is_none() {
+            dropped += 1;
+        }
+        let pending = code
+            .as_ref()
+            .is_some_and(|c| p::eq_str(c, "timeout") || p::eq_str(c, "busy"));
+        let again = (d.is_none() && dropped <= 2) || pending;
+        if !again || Instant::now() >= deadline {
+            break (d, pending);
+        }
+        std::thread::sleep(DRAFT_PAUSE);
+    };
+    let d = match d {
+        Some(d) if !pending => d,
+        _ => {
+            return Err(py_.die_with(
+                "timeout",
+                &format!(
+                    "the draft save hasn't answered yet and may still land. Run the same command again with --idempotency-key {key}: it answers that draft if it was saved, and saves it once if not"
+                ),
+                Some(Exit::Usage),
+            ))
+        }
+    };
+    if let Some(e) = g(&d, "error", line::DRAFT_ERROR)?.filter(py::truthy) {
+        // `d` is a dict: its `get` worked.
+        let perm = attr_get(&d, "permission").ok().flatten();
+        return Err(within_module(
+            py_.die(&e, None, perm.as_ref()),
+            line::DRAFT_DIE,
+        ));
+    }
     if py_.json {
         py_.print_json(&d);
         return Ok(());
     }
-    let l = line::DRAFT_PRINT;
-    match g(&d, "hint", l)?.filter(py::truthy) {
-        Some(h) => py_.print_v(&h),
+    let l = line::DRAFT_HINT;
+    let hint = match g(&d, "hint", l)?.filter(py::truthy) {
+        Some(h) => h,
         None => {
             let folder = gs(&d, "folder", "?", l)?;
             let address = gs(&d, "address", "?", l)?;
-            py_.print(&format!("draft saved to '{folder}' in {address}"));
+            p::sv(&format!("draft saved to '{folder}' in {address}"))
         }
+    };
+    py_.print_v(&hint);
+    if let Some(id) = g(&d, "draftId", line::DRAFT_ID)?.filter(py::truthy) {
+        if !p::py_in(&id, &hint).at(line::DRAFT_ID, MODULE)? {
+            py_.print(&format!(
+                "draft id: {i} ('{CLI_NAME} mail draft delete {i}' removes it)",
+                i = py::str_of(&id)
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// `draft_delete`: a draft this workspace's agent saved.
+fn draft_delete_py(py_: &mut Py) -> R<()> {
+    let id = py_.env("M_ID").to_string();
+    let body = core::obj(vec![("project", p::sv(&py_.ws)), ("id", p::sv(&id))]);
+    let d = py_.post("/cli/mail/draft/delete", &body, line::DRAFT_DELETE_CALL)?;
+    if py_.json {
+        py_.print_json(&d);
+        return Ok(());
+    }
+    match g(&d, "hint", line::DRAFT_DELETE_PRINT)?.filter(py::truthy) {
+        Some(h) => py_.print_v(&h),
+        None => py_.print(&format!("draft {id} deleted")),
     }
     Ok(())
 }

@@ -203,8 +203,35 @@ fn mail_writes_take_the_words_as_the_shell_does() {
             &["forward-message", "m_1", "--to", "a@x", "--from-name", ""],
         ),
         usage_case(
-            "draft, an id and a recipient",
-            &["draft", "m_1", "--to", "a@x", "--body", "b"],
+            "draft, a recipient and reply-all on a reply",
+            &["draft", "m_1", "--to", "a@x", "--reply-all", "--body", "b"],
+        ),
+        usage_case(
+            "draft, a subject on a reply",
+            &["draft", "m_1", "--subject", "s", "--body", "b"],
+        ),
+        usage_case(
+            "draft, a subject and a recipient on a reply",
+            &["draft", "m_1", "--to", "a@x", "--subject", "s"],
+        ),
+        usage_case(
+            "draft, an idempotency key with no value",
+            &["draft", "m_1", "--body", "b", "--idempotency-key"],
+        ),
+        usage_case(
+            "draft, an unknown flag",
+            &["draft", "m_1", "--body", "b", "--key", "k"],
+        ),
+        // native: mail draft delete
+        usage_case("draft delete, no id", &["draft", "delete"]),
+        usage_case("draft delete, two ids", &["draft", "delete", "d_1", "d_2"]),
+        usage_case(
+            "draft delete, an unknown flag",
+            &["draft", "delete", "d_1", "--force"],
+        ),
+        usage_case(
+            "draft delete, a lone dash",
+            &["draft", "delete", "-", "d_1"],
         ),
         usage_case(
             "draft, reply-all with no id",
@@ -509,13 +536,107 @@ fn mail_writes_send_and_print_as_the_shell_does() {
                 "c@x.example",
                 "--attach",
                 "f.txt",
+                "--idempotency-key",
+                "key-0001",
             ],
             r#"{"ok":true,"folder":"Drafts","address":"me@globex.example"}"#,
         ),
         ok_case(
             "draft, a reply by --reply-to",
-            &["draft", "--reply-to", "m_1", "m_1", "--body", "x"],
+            &[
+                "draft",
+                "--reply-to",
+                "m_1",
+                "m_1",
+                "--body",
+                "x",
+                "--idempotency-key",
+                "key-0002",
+            ],
             r#"{"ok":true,"hint":"saved"}"#,
+        ),
+        ok_case(
+            "draft, a reply to whoever --to names",
+            &[
+                "draft",
+                "m_1",
+                "--to",
+                "boss@x.example",
+                "--to",
+                "b2@x.example,b3@x.example",
+                "--cc",
+                "cy@x.example",
+                "--body",
+                "hi",
+                "--idempotency-key",
+                "key-0003",
+            ],
+            r#"{"ok":true,"address":"me@x.example","folder":"Drafts","id":"m_1","draftId":"d_0001","hint":"draft saved"}"#,
+        ),
+        ok_case(
+            "draft, the hint names the draft id",
+            &[
+                "draft",
+                "m_1",
+                "--body",
+                "hi",
+                "--idempotency-key",
+                "key-0004",
+            ],
+            r#"{"ok":true,"draftId":"d_0002","hint":"draft d_0002 was already saved","replayed":true}"#,
+        ),
+        ok_case(
+            "draft, no hint and a draft id",
+            &[
+                "draft",
+                "m_1",
+                "--body",
+                "hi",
+                "--idempotency-key",
+                "key-0005",
+            ],
+            r#"{"ok":true,"draftId":"d_0003","address":"me@x.example"}"#,
+        ),
+        ok_case(
+            "draft, a hint that is a list",
+            &[
+                "draft",
+                "m_1",
+                "--body",
+                "hi",
+                "--idempotency-key",
+                "key-0006",
+            ],
+            r#"{"ok":true,"draftId":"d_0004","hint":["d_0004"]}"#,
+        ),
+        ok_case(
+            "draft, not ok is printed as it came",
+            &[
+                "draft",
+                "m_1",
+                "--body",
+                "hi",
+                "--idempotency-key",
+                "key-0007",
+            ],
+            r#"{"ok":false,"hint":"saved anyway"}"#,
+        ),
+        // native: mail draft delete
+        ok_case(
+            "draft delete",
+            &["draft", "delete", "d_0001"],
+            r#"{"ok":true,"draftId":"d_0001","draftStatus":"discarded","hint":"draft d_0001 deleted from me@x.example (moved to Trash)"}"#,
+        ),
+        ok_case(
+            "draft delete, no hint",
+            &["draft", "delete", "d_0001"],
+            r#"{"ok":true,"draftId":"d_0001"}"#,
+        ),
+        // native: mail draft delete --json
+        ok_case(
+            "draft delete --json",
+            &["draft", "delete", "--json", "d_0001"],
+            r#"{"ok":true,"draftId":"d_0001","draftStatus":"discarded"}"#,
         ),
         // covers: mail draft --json
         with(ok_case(
@@ -533,6 +654,8 @@ fn mail_writes_send_and_print_as_the_shell_does() {
                 "--bcc",
                 "b@x.example",
                 "--json",
+                "--idempotency-key",
+                "key-0008",
             ],
             r#"{"ok":true,"folder":"Drafts"}"#,
         )),
@@ -712,7 +835,14 @@ fn mail_writes_read_the_answers_as_the_shell_does() {
         ),
         case(
             "migrating, asked again",
-            &["draft", "m_1", "--body", "b"],
+            &[
+                "draft",
+                "m_1",
+                "--body",
+                "b",
+                "--idempotency-key",
+                "key-0009",
+            ],
             &[],
             vec![
                 answer(503, r#"{"state":"migrating"}"#),
@@ -730,6 +860,265 @@ fn mail_writes_read_the_answers_as_the_shell_does() {
             owner_only,
             1,
             0,
+        ),
+        // A draft save is asked again with the same key on busy, a
+        // daemon timeout and a dropped answer (twice at most), and never
+        // on anything else.
+        case(
+            "draft, busy then the saved draft",
+            &[
+                "draft",
+                "--to",
+                "a@x.example",
+                "--subject",
+                "s",
+                "--body",
+                "hi",
+                "--idempotency-key",
+                "key-0010",
+                "--json",
+            ],
+            &[],
+            vec![
+                answer(
+                    409,
+                    r#"{"ok":false,"error":{"code":"busy","hint":"still saving"}}"#,
+                ),
+                ok(
+                    r#"{"ok":true,"draftId":"d_0005","replayed":true,"hint":"draft d_0005 was already saved"}"#,
+                ),
+            ],
+            owner_and_port,
+            0,
+            2,
+        ),
+        case(
+            "draft, the daemon's timeout then the draft",
+            &[
+                "draft",
+                "m_1",
+                "--body",
+                "hi",
+                "--idempotency-key",
+                "key-0011",
+            ],
+            &[],
+            vec![
+                answer(
+                    504,
+                    r#"{"ok":false,"error":{"code":"timeout","hint":"slow"}}"#,
+                ),
+                ok(r#"{"ok":true,"hint":"saved"}"#),
+            ],
+            owner_and_port,
+            0,
+            2,
+        ),
+        case(
+            "draft, dropped twice then saved",
+            &[
+                "draft",
+                "m_1",
+                "--body",
+                "hi",
+                "--idempotency-key",
+                "key-0012",
+            ],
+            &[],
+            vec![
+                Reply::Close,
+                Reply::Close,
+                ok(r#"{"ok":true,"hint":"saved"}"#),
+            ],
+            owner_and_port,
+            0,
+            3,
+        ),
+        case(
+            "draft, dropped three times: the key to ask with",
+            &[
+                "draft",
+                "m_1",
+                "--body",
+                "hi",
+                "--idempotency-key",
+                "key-0013",
+            ],
+            &[],
+            vec![Reply::Close, Reply::Close, Reply::Close],
+            owner_and_port,
+            2,
+            3,
+        ),
+        case(
+            "draft, nothing listening: the key to ask with",
+            &[
+                "draft",
+                "m_1",
+                "--body",
+                "hi",
+                "--idempotency-key",
+                "key-0014",
+            ],
+            &[("K2_PORT", &dead_port())],
+            vec![],
+            owner_only,
+            2,
+            0,
+        ),
+        case(
+            "draft, inbox_busy is final",
+            &[
+                "draft",
+                "m_1",
+                "--body",
+                "hi",
+                "--idempotency-key",
+                "key-0015",
+            ],
+            &[],
+            vec![answer(
+                429,
+                r#"{"ok":false,"error":{"code":"inbox_busy","hint":"4 sessions open","retry_after_s":5},"retry_after_s":5}"#,
+            )],
+            owner_and_port,
+            2,
+            1,
+        ),
+        case(
+            "draft, inbox_throttled is final",
+            &[
+                "draft",
+                "m_1",
+                "--body",
+                "hi",
+                "--idempotency-key",
+                "key-0016",
+            ],
+            &[],
+            vec![answer(
+                503,
+                r#"{"ok":false,"error":{"code":"inbox_throttled","hint":"the provider is limiting this account","retry_after_s":0,"retry":null}}"#,
+            )],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "draft, a refusal with the permission card",
+            &[
+                "draft",
+                "m_1",
+                "--body",
+                "hi",
+                "--idempotency-key",
+                "key-0017",
+            ],
+            &[],
+            vec![answer(403, PERMISSION_ASK)],
+            owner_and_port,
+            3,
+            1,
+        ),
+        compare(
+            Compare::Traceback,
+            case(
+                "draft, an error that is a string",
+                &[
+                    "draft",
+                    "m_1",
+                    "--body",
+                    "hi",
+                    "--idempotency-key",
+                    "key-0018",
+                ],
+                &[],
+                vec![ok(r#"{"error":"boom"}"#)],
+                owner_and_port,
+                1,
+                1,
+            ),
+        ),
+        compare(
+            Compare::Traceback,
+            case(
+                "draft, an answer that is a list",
+                &[
+                    "draft",
+                    "m_1",
+                    "--body",
+                    "hi",
+                    "--idempotency-key",
+                    "key-0019",
+                ],
+                &[],
+                vec![ok("[1]")],
+                owner_and_port,
+                1,
+                1,
+            ),
+        ),
+        compare(
+            Compare::Traceback,
+            case(
+                "draft, an answer that is an empty list",
+                &[
+                    "draft",
+                    "m_1",
+                    "--body",
+                    "hi",
+                    "--idempotency-key",
+                    "key-0020",
+                ],
+                &[],
+                vec![ok("[]")],
+                owner_and_port,
+                1,
+                1,
+            ),
+        ),
+        compare(
+            Compare::Traceback,
+            case(
+                "draft, a draft id that is a number",
+                &[
+                    "draft",
+                    "m_1",
+                    "--body",
+                    "hi",
+                    "--idempotency-key",
+                    "key-0021",
+                ],
+                &[],
+                vec![ok(r#"{"ok":true,"draftId":5,"hint":"saved"}"#)],
+                owner_and_port,
+                1,
+                1,
+            ),
+        ),
+        case(
+            "draft delete, someone else's",
+            &["draft", "delete", "d_0009"],
+            &[],
+            vec![answer(
+                403,
+                r#"{"ok":false,"error":{"code":"not_your_draft","hint":"nothing was touched"}}"#,
+            )],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "draft delete, a failed fetch says whether to retry",
+            &["draft", "delete", "d_0009"],
+            &[],
+            vec![answer(
+                502,
+                r#"{"ok":false,"error":{"code":"engine","hint":"Safe to retry","retry":"safe","retry_after_s":false}}"#,
+            )],
+            owner_and_port,
+            1,
+            1,
         ),
         Case {
             env: with_passport(&[]),
@@ -778,6 +1167,21 @@ fn help_never_acts() {
         &["reply", "m_1", "--body", "b", "--help"],
         &["forward-message", "m_1", "--to", "a@x.example", "-h"],
         &["draft", "m_1", "--body", "b", "--help"],
+        &["draft", "delete", "d_1", "--help"],
+        &["draft", "delete", "-h"],
+        &["draft", "-h", "delete", "d_1"],
+        &[
+            "draft",
+            "--to",
+            "a@x.example",
+            "--subject",
+            "s",
+            "--body",
+            "b",
+            "--idempotency-key",
+            "k-12345678",
+            "-h",
+        ],
         &["move", "m_1", "X", "-h"],
         &["flag", "--help", "m_1", "--read"],
         &["archive", "m_1", "-h"],
@@ -873,4 +1277,195 @@ fn a_large_body() {
             (out.code, &out.stdout, &out.stderr)
         );
     }
+}
+
+/// The key `"k2d_" + uuid.uuid4().hex` in a request body.
+fn key_in(request: &str) -> String {
+    let at = request
+        .find("\"idempotencyKey\"")
+        .unwrap_or_else(|| panic!("no idempotencyKey in {request:?}"));
+    let rest = &request[at + "\"idempotencyKey\"".len()..];
+    let open = rest.find('"').expect("the key's opening quote") + 1;
+    let close = rest[open..].find('"').expect("the key's closing quote");
+    rest[open..open + close].to_string()
+}
+
+/// A key in a version 4 UUID's shape, as `uuid.uuid4().hex` makes it.
+fn assert_fresh_shape(key: &str, side: &str) {
+    let hex = key
+        .strip_prefix("k2d_")
+        .unwrap_or_else(|| panic!("{side}: {key:?} does not start k2d_"));
+    assert_eq!(hex.len(), 32, "{side}: {key:?}");
+    assert!(
+        hex.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+        "{side}: {key:?} is not lower-case hex"
+    );
+    assert_eq!(&hex[12..13], "4", "{side}: {key:?}: the version digit");
+    assert!(
+        matches!(&hex[16..17], "8" | "9" | "a" | "b"),
+        "{side}: {key:?}: the variant digit"
+    );
+}
+
+/// With no `--idempotency-key`, every save carries a fresh key: random per
+/// run, so the rows above set one, and this one checks its shape. Both
+/// sides send the same request but for the key, and print the same.
+#[test]
+fn a_draft_with_no_key_carries_a_fresh_one() {
+    let rig = Rig::new(VERB, "key");
+    let c = case(
+        "draft, a fresh key",
+        &["draft", "m_1", "--to", "boss@x.example", "--body", "hi"],
+        &[],
+        vec![ok(r#"{"ok":true,"draftId":"d_0006","hint":"draft saved"}"#)],
+        owner_and_port,
+        0,
+        1,
+    );
+    rig.prepare(Side::Bash, &c);
+    let bash = rig.run(true, &c);
+    let sent = rig.read(Side::Bash, false, c.name);
+    assert_eq!(sent.len(), 1, "the shell sent one save");
+    let bash_req = normalise(&sent[0], false, rig.noun(), c.name);
+    let (out, log) = rig.binary(&c, false);
+    assert_eq!(log.len(), 1, "the binary sent one save");
+    let (bk, nk) = (key_in(&bash_req), key_in(&log[0]));
+    assert_fresh_shape(&bk, "the shell");
+    assert_fresh_shape(&nk, "the binary");
+    assert_ne!(bk, nk, "each run has its own key");
+    let body = |r: &str, k: &str| {
+        r.split_once("\n\n")
+            .map(|(_, b)| b.replace(k, "<key>"))
+            .expect("a body")
+    };
+    assert_eq!(body(&bash_req, &bk), body(&log[0], &nk), "the same save");
+    assert_eq!(
+        (bash.code, &bash.stdout, &bash.stderr),
+        (out.code, &out.stdout, &out.stderr)
+    );
+    assert_eq!(
+        out.stdout,
+        format!(
+            "draft saved\ndraft id: d_0006 ('{} mail draft delete d_0006' removes it)\n",
+            k2_client::brand::CLI_NAME
+        )
+    );
+    let (_, again) = rig.binary(&c, false);
+    let k2 = key_in(&again[0]);
+    assert_fresh_shape(&k2, "the binary, again");
+    assert_ne!(k2, nk, "a second run has a new key");
+}
+
+/// The lines name the command by the brand's name (in a build with
+/// `K2_BRAND_DIR=brand/xy` they say `xy`), never a typed `k2` or `k5`.
+#[test]
+fn the_lines_say_the_brand_s_name() {
+    let rig = Rig::new(VERB, "brand");
+    let cli = k2_client::brand::CLI_NAME;
+    let usage =
+        |hint: String| format!("{{\"error\":{{\"code\":\"usage\",\"hint\":\"{hint}\"}}}}\n");
+    let rows: Vec<(&'static [&'static str], String)> = vec![
+        (
+            &["draft", "delete"],
+            usage(format!(
+                "draft delete requires the draft id (d_…) — '{cli} mail drafts' lists yours"
+            )),
+        ),
+        (
+            &["draft", "delete", "d_1", "--x"],
+            usage(format!(
+                "unknown flag '--x' — usage: {cli} mail draft delete <draft-id> [--json]"
+            )),
+        ),
+        (
+            &["draft", "m_1", "--nope"],
+            usage(format!("unknown flag '--nope' — usage: {cli} mail draft <message-id> (--body <text> | --body-file <f>) [--to <addr> | --reply-all] [--cc <addr>] [--bcc <addr>] [--attach <path>]  OR  {cli} mail draft --to <addr> --subject <s> (--body <text> | --body-file <f>) [--cc <addr>] [--bcc <addr>] [--attach <path>] [--from <linked>]  OR  {cli} mail draft delete <draft-id>")),
+        ),
+        (
+            &["link", "relink"],
+            usage(format!(
+                "link relink requires the <address> ('{cli} mail link list' marks the ones that need it)"
+            )),
+        ),
+        (
+            &["link", "relink", "a@x", "--features", "mail"],
+            usage(format!(
+                "link relink takes only <address> [--json] (it keeps the link's features; add more with '{cli} mail link upgrade')"
+            )),
+        ),
+    ];
+    for (args, want) in rows {
+        let c = case("brand", args, &[], vec![], owner_and_port, 2, 0);
+        let (out, log) = rig.binary(&c, false);
+        assert_eq!((out.code, out.stderr.as_str()), (Some(2), want.as_str()));
+        assert!(log.is_empty(), "nothing sent");
+    }
+    let c = case(
+        "brand, the draft id line",
+        &[
+            "draft",
+            "m_1",
+            "--body",
+            "b",
+            "--idempotency-key",
+            "key-0022",
+        ],
+        &[],
+        vec![ok(r#"{"ok":true,"draftId":"d_7","hint":"saved"}"#)],
+        owner_and_port,
+        0,
+        1,
+    );
+    let (out, _) = rig.binary(&c, false);
+    assert_eq!(
+        out.stdout,
+        format!("saved\ndraft id: d_7 ('{cli} mail draft delete d_7' removes it)\n")
+    );
+    let c = case(
+        "brand, the key to ask with",
+        &[
+            "draft",
+            "m_1",
+            "--body",
+            "b",
+            "--idempotency-key",
+            "key-0023",
+        ],
+        &[("K2_PORT", &dead_port())],
+        vec![],
+        owner_only,
+        2,
+        0,
+    );
+    let (out, _) = rig.binary(&c, false);
+    assert!(
+        out.stderr.contains("--idempotency-key key-0023"),
+        "{}",
+        out.stderr
+    );
+    assert!(
+        !out.stderr.contains("k2 ") && !out.stderr.contains("k5 "),
+        "{}",
+        out.stderr
+    );
+    let c = case(
+        "brand, the re-link fix line",
+        &["link", "list"],
+        &[],
+        vec![ok(
+            r#"{"ok":true,"inboxes":[{"address":"a@x.example","source":"linked","status":"connected","needsRelink":true}]}"#,
+        )],
+        owner_and_port,
+        0,
+        1,
+    );
+    let (out, _) = rig.binary(&c, false);
+    assert!(
+        out.stdout.ends_with(&format!(
+            "a@x.example: the provider refused the sign-in. A person runs '{cli} mail link relink a@x.example' (same inbox, grants and ids).\n"
+        )),
+        "{}",
+        out.stdout
+    );
 }

@@ -39,85 +39,86 @@ pub const VERBS: &[&str] = &[
 /// The lines of `_mail_py` where these verbs call or raise. `tests`
 /// pins each to its statement.
 pub mod line {
-    pub const DOMAINS_CALL: u32 = 539;
-    pub const DOMAINS_ROWS: u32 = 540;
-    pub const DOMAINS_PENDING: u32 = 541;
-    pub const DOMAINS_NAMES: u32 = 546;
-    pub const DOMAINS_FOR: u32 = 552;
-    pub const DOMAINS_ROW: u32 = 553;
-    pub const MESSAGES_CALL: u32 = 581;
-    pub const MESSAGES_MSGS: u32 = 582;
-    pub const MESSAGES_NEXT: u32 = 583;
-    pub const MESSAGES_ERRORS: u32 = 587;
-    pub const MESSAGES_FOR: u32 = 613;
-    pub const MESSAGES_ATT: u32 = 615;
-    pub const MESSAGES_UNREAD: u32 = 617;
-    pub const MESSAGES_ROW: u32 = 619;
-    pub const MESSAGES_WINDOW: u32 = 628;
-    pub const MESSAGES_NOTE: u32 = 632;
-    pub const READ_CALL: u32 = 642;
-    pub const READ_RAW: u32 = 647;
-    pub const READ_FULL: u32 = 649;
-    pub const ATT_POST: u32 = 666;
-    pub const ATT_GET: u32 = 669;
-    pub const ATT_WROTE: u32 = 673;
-    pub const ATT_ATTS: u32 = 676;
-    pub const ATT_NONE: u32 = 678;
-    pub const ATT_FOR: u32 = 680;
-    pub const ATT_ROW: u32 = 681;
-    pub const ATT_FETCH: u32 = 684;
-    pub const WAIT_CALL: u32 = 696;
-    pub const WAIT_TIMED_OUT: u32 = 697;
-    pub const WAIT_DIE: u32 = 699;
-    pub const WAIT_FULL: u32 = 705;
-    pub const CANCEL_CALL: u32 = 796;
-    pub const CANCEL_PRINT: u32 = 801;
-    pub const OUTBOX_CALL: u32 = 809;
-    pub const OUTBOX_DETAIL: u32 = 813;
-    pub const OUTBOX_ROWS: u32 = 815;
-    pub const OUTBOX_FOR: u32 = 819;
-    pub const OUTBOX_ROW: u32 = 820;
-    pub const DRAFTS_CALL: u32 = 827;
-    pub const DRAFTS_ROWS: u32 = 831;
-    pub const DRAFTS_FOR: u32 = 834;
-    pub const DRAFTS_ST: u32 = 835;
-    pub const DRAFTS_LINE: u32 = 836;
-    pub const DRAFTS_EDITED: u32 = 837;
-    pub const DRAFTS_EDITED_BY: u32 = 838;
-    pub const DRAFTS_STATE: u32 = 839;
-    pub const DRAFTS_STATE_BY: u32 = 840;
-    pub const DRAFTS_OUTBOUND: u32 = 841;
-    pub const DRAFTS_OUTBOUND_ID: u32 = 842;
-    pub const CAPS_REQUEST: u32 = 1789;
-    pub const CAPS_ERR: u32 = 1795;
-    pub const CAPS_HINT: u32 = 1796;
-    pub const CAPS_AGAIN: u32 = 1798;
-    pub const CAPS_IS_ERR: u32 = 1802;
-    pub const CAPS_DIE_ERR: u32 = 1803;
-    pub const CAPS_ROWS: u32 = 1807;
-    pub const CAPS_FOR: u32 = 1810;
-    pub const CAPS_C: u32 = 1811;
-    pub const CAPS_MAIL: u32 = 1812;
-    pub const CAPS_CAL: u32 = 1813;
-    pub const CAPS_ON: u32 = 1814;
-    pub const CAPS_LVL: u32 = 1815;
-    pub const CAPS_FIRST: u32 = 1816;
-    pub const CAPS_SECOND: u32 = 1818;
-    pub const CAPS_ACCT: u32 = 1820;
-    pub const CAPS_ACCT_LINE: u32 = 1822;
-    pub const CAPS_MISSING: u32 = 1826;
-    pub const CAPS_MISSING_LINE: u32 = 1827;
-    pub const INBOXES_CALL: u32 = 1870;
-    pub const INBOXES_ROWS: u32 = 1874;
-    pub const INBOXES_OWNER: u32 = 1877;
-    pub const INBOXES_PRINT: u32 = 1878;
-    pub const FOLDERS_CALL: u32 = 1998;
-    pub const FOLDERS_LIST: u32 = 2003;
-    pub const FOLDERS_FOR: u32 = 2007;
-    pub const FOLDER_CREATE_CALL: u32 = 2011;
-    pub const FOLDER_CREATE_PRINT: u32 = 2016;
-    pub const FOLDER_RENAME_CALL: u32 = 2019;
-    pub const FOLDER_RENAME_PRINT: u32 = 2025;
+    pub const DOMAINS_CALL: u32 = 559;
+    pub const DOMAINS_ROWS: u32 = 560;
+    pub const DOMAINS_PENDING: u32 = 561;
+    pub const DOMAINS_NAMES: u32 = 566;
+    pub const DOMAINS_FOR: u32 = 572;
+    pub const DOMAINS_ROW: u32 = 573;
+    pub const MESSAGES_CALL: u32 = 601;
+    pub const MESSAGES_MSGS: u32 = 602;
+    pub const MESSAGES_NEXT: u32 = 603;
+    pub const MESSAGES_ERRORS: u32 = 607;
+    pub const MESSAGES_FOR: u32 = 633;
+    pub const MESSAGES_ATT: u32 = 635;
+    pub const MESSAGES_UNREAD: u32 = 637;
+    pub const MESSAGES_ROW: u32 = 639;
+    pub const MESSAGES_WINDOW: u32 = 648;
+    pub const MESSAGES_NOTE: u32 = 652;
+    pub const READ_CALL: u32 = 662;
+    pub const READ_RAW: u32 = 667;
+    pub const READ_FULL: u32 = 669;
+    pub const ATT_POST: u32 = 686;
+    pub const ATT_GET: u32 = 689;
+    pub const ATT_WROTE: u32 = 693;
+    pub const ATT_ATTS: u32 = 696;
+    pub const ATT_NONE: u32 = 698;
+    pub const ATT_FOR: u32 = 700;
+    pub const ATT_ROW: u32 = 701;
+    pub const ATT_FETCH: u32 = 704;
+    pub const WAIT_CALL: u32 = 716;
+    pub const WAIT_TIMED_OUT: u32 = 717;
+    pub const WAIT_DIE: u32 = 719;
+    pub const WAIT_FULL: u32 = 725;
+    pub const CANCEL_CALL: u32 = 816;
+    pub const CANCEL_PRINT: u32 = 821;
+    pub const OUTBOX_CALL: u32 = 829;
+    pub const OUTBOX_DETAIL: u32 = 833;
+    pub const OUTBOX_ROWS: u32 = 835;
+    pub const OUTBOX_FOR: u32 = 839;
+    pub const OUTBOX_ROW: u32 = 840;
+    pub const DRAFTS_CALL: u32 = 847;
+    pub const DRAFTS_ROWS: u32 = 851;
+    pub const DRAFTS_FOR: u32 = 854;
+    pub const DRAFTS_ST: u32 = 855;
+    pub const DRAFTS_WHAT: u32 = 856;
+    pub const DRAFTS_LINE: u32 = 857;
+    pub const DRAFTS_EDITED: u32 = 858;
+    pub const DRAFTS_EDITED_BY: u32 = 859;
+    pub const DRAFTS_STATE: u32 = 860;
+    pub const DRAFTS_STATE_BY: u32 = 861;
+    pub const DRAFTS_OUTBOUND: u32 = 862;
+    pub const DRAFTS_OUTBOUND_ID: u32 = 863;
+    pub const CAPS_REQUEST: u32 = 1855;
+    pub const CAPS_ERR: u32 = 1861;
+    pub const CAPS_HINT: u32 = 1862;
+    pub const CAPS_AGAIN: u32 = 1864;
+    pub const CAPS_IS_ERR: u32 = 1868;
+    pub const CAPS_DIE_ERR: u32 = 1869;
+    pub const CAPS_ROWS: u32 = 1873;
+    pub const CAPS_FOR: u32 = 1876;
+    pub const CAPS_C: u32 = 1877;
+    pub const CAPS_MAIL: u32 = 1878;
+    pub const CAPS_CAL: u32 = 1879;
+    pub const CAPS_ON: u32 = 1880;
+    pub const CAPS_LVL: u32 = 1881;
+    pub const CAPS_FIRST: u32 = 1882;
+    pub const CAPS_SECOND: u32 = 1884;
+    pub const CAPS_ACCT: u32 = 1886;
+    pub const CAPS_ACCT_LINE: u32 = 1888;
+    pub const CAPS_MISSING: u32 = 1892;
+    pub const CAPS_MISSING_LINE: u32 = 1893;
+    pub const INBOXES_CALL: u32 = 1936;
+    pub const INBOXES_ROWS: u32 = 1940;
+    pub const INBOXES_OWNER: u32 = 1943;
+    pub const INBOXES_PRINT: u32 = 1944;
+    pub const FOLDERS_CALL: u32 = 2079;
+    pub const FOLDERS_LIST: u32 = 2084;
+    pub const FOLDERS_FOR: u32 = 2088;
+    pub const FOLDER_CREATE_CALL: u32 = 2092;
+    pub const FOLDER_CREATE_PRINT: u32 = 2097;
+    pub const FOLDER_RENAME_CALL: u32 = 2100;
+    pub const FOLDER_RENAME_PRINT: u32 = 2106;
 }
 
 /// The words after `mail <verb>`, as the verb's `cmd_mail_*` reads them.
@@ -1105,21 +1106,26 @@ fn drafts_py(py_: &mut Py) -> R<()> {
     let rows = p::or(g(&d, "drafts", line::DRAFTS_ROWS)?, empty_list());
     if !py::truthy(&rows) {
         py_.print(&format!(
-            "No drafted replies yet — '{CLI_NAME} mail draft <message-id> --body <text>' makes one."
+            "No drafts yet — '{CLI_NAME} mail draft <message-id> --body <text>' makes one."
         ));
     }
     for r in iter(&rows).at(line::DRAFTS_FOR, MODULE)? {
         let st = p::or(g(&r, "status", line::DRAFTS_ST)?, p::sv("?"));
+        let kind = g(&r, "kind", line::DRAFTS_WHAT)?;
+        let what = if kind.as_ref().is_some_and(|k| p::eq_str(k, "compose")) {
+            "compose".to_string()
+        } else {
+            let reply_of = g(&r, "replyOf", line::DRAFTS_WHAT)?.unwrap_or(Value::Null);
+            format!("answers {}", py::str_of(&reply_of))
+        };
         let l = line::DRAFTS_LINE;
         let id = g(&r, "id", l)?.unwrap_or(Value::Null);
         let inbox = g(&r, "inbox", l)?.unwrap_or(Value::Null);
-        let reply_of = g(&r, "replyOf", l)?.unwrap_or(Value::Null);
         let mut text = format!(
-            "{}  {} {} answers {}",
+            "{}  {} {} {what}",
             py::str_of(&id),
             p::ljust(&py::str_of(&st), 9),
-            p::ljust(&py::str_of(&inbox), 34),
-            py::str_of(&reply_of)
+            p::ljust(&py::str_of(&inbox), 34)
         );
         if p::truthy(g(&r, "editedBy", line::DRAFTS_EDITED)?.as_ref()) {
             let by = p::py_index(&r, "editedBy").at(line::DRAFTS_EDITED_BY, MODULE)?;

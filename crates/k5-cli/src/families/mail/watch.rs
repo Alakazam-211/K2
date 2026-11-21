@@ -992,8 +992,9 @@ fn status_lines(d: &Value, json_flag: bool, o: &mut String) -> Result<(), Raise>
             line(
                 o,
                 &format!(
-                    "Stopped: {} refused its login. Reconnect the inbox and it starts again.",
-                    py::str_of(&a)
+                    "Stopped: {a} refused its sign-in. A person signs in again (Settings → Email Link → Sign in again, or {cli} mail link relink {a}) and it starts again.",
+                    a = py::str_of(&a),
+                    cli = k2_client::brand::CLI_NAME
                 ),
             );
         } else if attr_get(i, "lastError")

@@ -29,73 +29,74 @@ pub const VERBS: &[&str] = &["link", "external", "access", "oauth-config", "send
 /// The lines of `_mail_py` where these verbs call or raise. `tests`
 /// pins each to its statement.
 pub mod line {
-    pub const SENDING_SET: u32 = 1477;
-    pub const SENDING_GET: u32 = 1479;
-    pub const SENDING_W: u32 = 1480;
-    pub const SENDING_A: u32 = 1481;
-    pub const SENDING_JSON: u32 = 1483;
-    pub const SENDING_EFF: u32 = 1487;
-    pub const SENDING_SRC: u32 = 1488;
-    pub const EXT_ADD_CALL: u32 = 1664;
-    pub const EXT_ADD_PRINT: u32 = 1668;
-    pub const EXT_ADD_DRAFTS: u32 = 1669;
-    pub const EXT_ADD_DRAFTS_PRINT: u32 = 1670;
-    pub const CAL_POST: u32 = 1681;
-    pub const CAL_GET: u32 = 1683;
-    pub const CAL_STATE: u32 = 1687;
-    pub const CAL_PRINT: u32 = 1688;
-    pub const OAUTH_START: u32 = 1715;
-    pub const OAUTH_FLOW: u32 = 1716;
-    pub const OAUTH_LINK_ID: u32 = 1717;
-    pub const OAUTH_DEVICE: u32 = 1720;
-    pub const OAUTH_BROWSER: u32 = 1725;
-    pub const OAUTH_STATUS: u32 = 1733;
-    pub const OAUTH_ERROR: u32 = 1738;
-    pub const OAUTH_STATE: u32 = 1740;
-    pub const OAUTH_FINAL: u32 = 1749;
-    pub const OAUTH_UPGRADED: u32 = 1754;
-    pub const OAUTH_UPGRADED_HINT: u32 = 1755;
-    pub const OAUTH_CONNECTED: u32 = 1757;
-    pub const OAUTH_CONNECTED_HINT: u32 = 1760;
-    pub const OAUTH_HINT: u32 = 1766;
-    pub const OAUTH_CONSENT: u32 = 1767;
-    pub const OAUTH_CONSENT_ADD: u32 = 1768;
-    pub const OAUTH_DIE: u32 = 1769;
-    pub const EXT_REMOVE_CALL: u32 = 1773;
-    pub const EXT_REMOVE_PRINT: u32 = 1777;
-    pub const EXT_REMOVE_HINT: u32 = 1780;
-    pub const EXT_REMOVE_HINT_PRINT: u32 = 1781;
-    pub const OAUTH_SHOW: u32 = 1835;
-    pub const OAUTH_SET: u32 = 1844;
-    pub const OAUTH_CLEAR: u32 = 1846;
-    pub const OAUTH_PROVS: u32 = 1850;
-    pub const OAUTH_P: u32 = 1852;
-    pub const OAUTH_LINE: u32 = 1857;
-    pub const OAUTH_SECRET: u32 = 1862;
-    pub const OAUTH_TENANT: u32 = 1863;
-    pub const OAUTH_TENANT_LINE: u32 = 1864;
-    pub const LINKS_CALL: u32 = 1890;
-    pub const LINKS_ROWS: u32 = 1891;
-    pub const LINKS_COUNT: u32 = 1893;
-    pub const LINKS_W: u32 = 1897;
-    pub const LINKS_PRI: u32 = 1900;
-    pub const LINKS_ROW: u32 = 1901;
-    pub const LINKS_GRANTS: u32 = 1905;
-    pub const LINKS_ST: u32 = 1906;
-    pub const LINKS_NOTE: u32 = 1909;
-    pub const LINKS_GRANT: u32 = 1912;
-    pub const GRANT_CALL: u32 = 1919;
-    pub const GRANT_PRINT: u32 = 1923;
-    pub const REVOKE_CALL: u32 = 1927;
-    pub const REVOKE_PRINT: u32 = 1932;
-    pub const PRIMARY_CALL: u32 = 1935;
-    pub const PRIMARY_PRINT: u32 = 1940;
-    pub const LEVEL_CALL: u32 = 1947;
-    pub const LEVEL_PRINT: u32 = 1951;
-    pub const MANAGE_CALL: u32 = 2029;
-    pub const MANAGE_WHO: u32 = 2036;
-    pub const MANAGE_CAPS: u32 = 2037;
-    pub const MANAGE_PRINT: u32 = 2039;
+    pub const SENDING_SET: u32 = 1498;
+    pub const SENDING_GET: u32 = 1500;
+    pub const SENDING_W: u32 = 1501;
+    pub const SENDING_A: u32 = 1502;
+    pub const SENDING_JSON: u32 = 1504;
+    pub const SENDING_EFF: u32 = 1508;
+    pub const SENDING_SRC: u32 = 1509;
+    pub const EXT_ADD_CALL: u32 = 1720;
+    pub const EXT_ADD_PRINT: u32 = 1724;
+    pub const EXT_ADD_DRAFTS: u32 = 1725;
+    pub const EXT_ADD_DRAFTS_PRINT: u32 = 1726;
+    pub const CAL_POST: u32 = 1737;
+    pub const CAL_GET: u32 = 1739;
+    pub const CAL_STATE: u32 = 1743;
+    pub const CAL_PRINT: u32 = 1744;
+    pub const OAUTH_START: u32 = 1778;
+    pub const OAUTH_FLOW: u32 = 1779;
+    pub const OAUTH_LINK_ID: u32 = 1780;
+    pub const OAUTH_DEVICE: u32 = 1783;
+    pub const OAUTH_BROWSER: u32 = 1788;
+    pub const OAUTH_STATUS: u32 = 1796;
+    pub const OAUTH_ERROR: u32 = 1801;
+    pub const OAUTH_STATE: u32 = 1803;
+    pub const OAUTH_FINAL: u32 = 1812;
+    pub const OAUTH_RELINKED: u32 = 1817;
+    pub const OAUTH_UPGRADED: u32 = 1820;
+    pub const OAUTH_UPGRADED_HINT: u32 = 1821;
+    pub const OAUTH_CONNECTED: u32 = 1823;
+    pub const OAUTH_CONNECTED_HINT: u32 = 1826;
+    pub const OAUTH_HINT: u32 = 1832;
+    pub const OAUTH_CONSENT: u32 = 1833;
+    pub const OAUTH_CONSENT_ADD: u32 = 1834;
+    pub const OAUTH_DIE: u32 = 1835;
+    pub const EXT_REMOVE_CALL: u32 = 1839;
+    pub const EXT_REMOVE_PRINT: u32 = 1843;
+    pub const EXT_REMOVE_HINT: u32 = 1846;
+    pub const EXT_REMOVE_HINT_PRINT: u32 = 1847;
+    pub const OAUTH_SHOW: u32 = 1901;
+    pub const OAUTH_SET: u32 = 1910;
+    pub const OAUTH_CLEAR: u32 = 1912;
+    pub const OAUTH_PROVS: u32 = 1916;
+    pub const OAUTH_P: u32 = 1918;
+    pub const OAUTH_LINE: u32 = 1923;
+    pub const OAUTH_SECRET: u32 = 1928;
+    pub const OAUTH_TENANT: u32 = 1929;
+    pub const OAUTH_TENANT_LINE: u32 = 1930;
+    pub const LINKS_CALL: u32 = 1956;
+    pub const LINKS_ROWS: u32 = 1957;
+    pub const LINKS_COUNT: u32 = 1959;
+    pub const LINKS_W: u32 = 1963;
+    pub const LINKS_PRI: u32 = 1967;
+    pub const LINKS_ROW: u32 = 1971;
+    pub const LINKS_GRANTS: u32 = 1975;
+    pub const LINKS_ST: u32 = 1976;
+    pub const LINKS_NOTE: u32 = 1979;
+    pub const LINKS_GRANT: u32 = 1982;
+    pub const GRANT_CALL: u32 = 2000;
+    pub const GRANT_PRINT: u32 = 2004;
+    pub const REVOKE_CALL: u32 = 2008;
+    pub const REVOKE_PRINT: u32 = 2013;
+    pub const PRIMARY_CALL: u32 = 2016;
+    pub const PRIMARY_PRINT: u32 = 2021;
+    pub const LEVEL_CALL: u32 = 2028;
+    pub const LEVEL_PRINT: u32 = 2032;
+    pub const MANAGE_CALL: u32 = 2110;
+    pub const MANAGE_WHO: u32 = 2117;
+    pub const MANAGE_CAPS: u32 = 2118;
+    pub const MANAGE_PRINT: u32 = 2120;
 }
 
 /// The words after `mail <verb>`, as the verb's `cmd_mail_*` reads them.
@@ -127,7 +128,7 @@ fn value<'a>(words: &[&'a str], i: usize, hint: &str) -> Result<&'a str, Plan> {
 fn link(words: &[&str]) -> Result<Plan, Plan> {
     let first = words.first().copied().unwrap_or("");
     let (sub, rest) = match first {
-        "add" | "list" | "remove" | "upgrade" | "calendars" => (first, &words[1..]),
+        "add" | "list" | "remove" | "upgrade" | "relink" | "calendars" => (first, &words[1..]),
         "" => return Ok(Plan::Help("mail/link")),
         f if f.starts_with('-') => ("list", words),
         "grant" | "revoke" => {
@@ -137,7 +138,7 @@ fn link(words: &[&str]) -> Result<Plan, Plan> {
         }
         other => {
             return Err(usage(format!(
-                "unknown link command '{other}' — usage: {CLI_NAME} mail link <add|upgrade|calendars|list|remove>"
+                "unknown link command '{other}' — usage: {CLI_NAME} mail link <add|upgrade|relink|calendars|list|remove>"
             )))
         }
     };
@@ -328,6 +329,30 @@ fn link(words: &[&str]) -> Result<Plan, Plan> {
                     .with("M_ADDRESS", address)
                     .with("M_PROVIDER", provider)
                     .with("M_FEATURES", features),
+            ))
+        }
+        "relink" => {
+            if address.is_empty() {
+                return Err(usage(format!(
+                    "link relink requires the <address> ('{CLI_NAME} mail link list' marks the ones that need it)"
+                )));
+            }
+            if !host.is_empty()
+                || pass_stdin
+                || !pass_ref.is_empty()
+                || !workspace.is_empty()
+                || !features.is_empty()
+            {
+                return Err(usage(format!(
+                    "link relink takes only <address> [--json] (it keeps the link's features; add more with '{CLI_NAME} mail link upgrade')"
+                )));
+            }
+            Ok(Plan::Run(
+                run_env("link_oauth_upgrade", json)
+                    .with("M_ADDRESS", address)
+                    .with("M_PROVIDER", provider)
+                    .with("M_FEATURES", "")
+                    .with("M_RELINK", "true"),
             ))
         }
         "calendars" => {
@@ -782,11 +807,15 @@ const OAUTH_POLL: Duration = Duration::from_secs(3);
 fn oauth_py(py_: &mut Py, upgrade: bool) -> R<()> {
     let e = py_.env.clone();
     let mut provider = e.get("M_PROVIDER").to_string();
+    let relink = e.on("M_RELINK");
     let body = if upgrade {
-        let mut b = vec![
-            ("inbox", sv(e.get("M_ADDRESS"))),
-            ("features", sv(e.get("M_FEATURES"))),
-        ];
+        let mut b = vec![("inbox", sv(e.get("M_ADDRESS")))];
+        if relink {
+            b.push(("relink", Value::Bool(true)));
+        }
+        if !e.get("M_FEATURES").is_empty() {
+            b.push(("features", sv(e.get("M_FEATURES"))));
+        }
         if !provider.is_empty() {
             b.push(("provider", sv(&provider)));
         }
@@ -826,7 +855,13 @@ fn oauth_py(py_: &mut Py, upgrade: bool) -> R<()> {
         let who = p::or(g(&d, "address", l)?, sv(addr));
         format!(
             "To {} {addr} ({features}): open {url} and enter the code {code} — sign in as {}\n",
-            if upgrade { "upgrade" } else { "connect" },
+            if relink {
+                "re-link"
+            } else if upgrade {
+                "upgrade"
+            } else {
+                "connect"
+            },
             py::str_of(&who)
         )
     } else {
@@ -887,6 +922,10 @@ fn oauth_py(py_: &mut Py, upgrade: bool) -> R<()> {
     if p::eq_str(&state, "connected") {
         if py_.json {
             py_.print_json(&fin);
+        } else if relink {
+            let a = p::or(g(&fin, "address", line::OAUTH_RELINKED)?, sv(addr));
+            py_.print(&format!("re-linked {} ({provider})", py::str_of(&a)));
+            py_.print("its grants, levels, calendar features and ids are unchanged.");
         } else if upgrade {
             let a = p::or(g(&fin, "address", line::OAUTH_UPGRADED)?, sv(addr));
             py_.print(&format!("upgraded {} ({provider})", py::str_of(&a)));
@@ -1018,9 +1057,10 @@ fn link_list_py(py_: &mut Py) -> R<()> {
     py_.print(&format!(
         "{}{}{}HOST",
         p::ljust("ADDRESS", w),
-        p::ljust("STATUS", 11),
+        p::ljust("STATUS", 25),
         p::ljust("PRIMARY", 22)
     ));
+    let mut notes: Vec<(Value, Option<Value>)> = Vec::new();
     let ws_of = |x: &Value, l: u32| -> R<Value> {
         match g(x, "workspace", l)?.filter(py::truthy) {
             Some(v) => Ok(v),
@@ -1029,9 +1069,16 @@ fn link_list_py(py_: &mut Py) -> R<()> {
     };
     for r in &rows {
         let pri = p::or(g(r, "primary", line::LINKS_PRI)?, Value::Object(Vec::new()));
+        // `r` is a dict: its `get("source")` worked.
+        let word = core::print::status_word(r);
+        let status = attr_get(r, "status").ok().flatten();
+        if !status.as_ref().is_some_and(|x| p::py_eq(&word, x)) {
+            let a = p::get_or(r, "address", sv("")).unwrap_or_else(|_| sv(""));
+            notes.push((a, attr_get(r, "relinkReason").ok().flatten()));
+        }
         let l = line::LINKS_ROW;
         let a = gs(r, "address", "", l)?;
-        let st = gs(r, "status", "?", l)?;
+        let st = py::str_of(&word);
         let who = match g(&pri, "workspace", l)?.filter(py::truthy) {
             Some(v) => v,
             None => p::or(g(&pri, "projectId", l)?, sv("?")),
@@ -1041,7 +1088,7 @@ fn link_list_py(py_: &mut Py) -> R<()> {
         py_.print(&format!(
             "{}{}{}{host} ({tls})",
             p::ljust(&a, w),
-            p::ljust(&st, 11),
+            p::ljust(&st, 25),
             p::ljust(&py::str_of(&who), 22)
         ));
         let grants = p::or(
@@ -1072,6 +1119,18 @@ fn link_list_py(py_: &mut Py) -> R<()> {
                 "    grant: {} {level}{note}",
                 p::ljust(&py::str_of(&ws), 20)
             ));
+        }
+    }
+    for (addr, why) in notes {
+        let a = py::str_of(&addr);
+        py_.print("");
+        let why = why.unwrap_or(Value::Null);
+        if p::eq_str(&why, "throttled") {
+            py_.print(&format!("{a}: the provider is limiting this account (too many connections or failed logins). Wait; linking it again won't help. Run fewer mail calls at once."));
+        } else if p::eq_str(&why, "mail_access_not_granted") {
+            py_.print(&format!("{a}: Google's consent doesn't include the Gmail permission. A person runs '{cli} mail link relink {a}' and ticks the Gmail permission."));
+        } else {
+            py_.print(&format!("{a}: the provider refused the sign-in. A person runs '{cli} mail link relink {a}' (same inbox, grants and ids)."));
         }
     }
     Ok(())

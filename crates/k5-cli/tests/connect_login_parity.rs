@@ -18,12 +18,19 @@
 //! - The account server: a refusal, not there, the claim held by another
 //!   device or failing.
 //! - The daemon: no port or token (its three lines), `daemon.token`, the
-//!   config's refusals, the start's error and an answer that is not JSON,
-//!   no answer.
+//!   config's refusals, the start's error, an answer that is not JSON or
+//!   not an object, no answer (each an error line and exit 1, never the
+//!   live line).
 //! - The words: usage errors, a password on the command line, air-gap,
 //!   the guard and a session with no passport.
-//! - What the shell keeps: a password with no terminal (Python's getpass
-//!   warning names its own file), and `-h`, which never acts.
+//! - A password with no terminal, read from stdin: the named difference
+//!   getpass-no-tty-warning, where Python's getpass warns with its own
+//!   file and line and the binary with one line of its own; every other
+//!   line, the requests and the exit are the same.
+//! - A subdomain list above what one environment variable may hold: the
+//!   named difference picker-env-size (the shell's picker can't start,
+//!   the binary picks).
+//! - What the shell keeps: `-h`, which never acts.
 
 #![cfg(unix)]
 
@@ -115,6 +122,10 @@ struct Row {
     case: Case,
     account: Vec<Reply>,
     native: bool,
+    /// The password is read with no terminal: bash's stderr has Python's
+    /// getpass warning where the binary's has its own line
+    /// ([`no_tty_warning`]).
+    getpass: bool,
 }
 
 fn row(case: Case, account: Vec<Reply>) -> Row {
@@ -122,6 +133,7 @@ fn row(case: Case, account: Vec<Reply>) -> Row {
         case,
         account,
         native: true,
+        getpass: false,
     }
 }
 
@@ -130,7 +142,76 @@ fn shells(case: Case, account: Vec<Reply>) -> Row {
         case,
         account,
         native: false,
+        getpass: false,
     }
+}
+
+/// A row whose password is read from stdin, with no terminal.
+fn no_tty(case: Case, account: Vec<Reply>) -> Row {
+    Row {
+        case,
+        account,
+        native: true,
+        getpass: true,
+    }
+}
+
+/// The binary's line for Python's getpass warning.
+const NO_TTY_LINE: &str = "Warning: Can not control echo on the terminal.";
+
+/// Bash's stderr with Python's getpass warning (`<file>:<line>:
+/// GetPassWarning: Can not control echo on the terminal.`, then the
+/// source line Python shows under it when it has one) put as the
+/// binary's one line. The warning may follow a prompt on its line (the
+/// email's), which stays. It must be there exactly once, and the line
+/// after it Python's own `Warning: Password input may be echoed.`, which
+/// both print.
+fn no_tty_warning(name: &str, stderr: &str) -> String {
+    let lines: Vec<&str> = stderr.split_inclusive('\n').collect();
+    let at: Vec<usize> = (0..lines.len())
+        .filter(|i| {
+            lines[*i].ends_with(": GetPassWarning: Can not control echo on the terminal.\n")
+                && lines[*i].contains(".py:")
+        })
+        .collect();
+    assert_eq!(
+        at.len(),
+        1,
+        "{name}: Python's getpass warning, once: {stderr:?}"
+    );
+    let i = at[0];
+    let mut next = i + 1;
+    if lines.get(next).is_some_and(|l| l.starts_with("  ")) {
+        next += 1;
+    }
+    const SECOND: &str = "Warning: Password input may be echoed.\n";
+    let second = lines.get(next).is_some_and(|l| l.starts_with(SECOND));
+    assert!(
+        second,
+        "{name}: Python's second warning line after the first: {stderr:?}"
+    );
+    let mut out: String = lines[..i].concat();
+    let py = lines[i].find(".py:").expect("the warning names its file");
+    let path_at = lines[i][..py].rfind(' ').map_or(0, |s| s + 1);
+    out.push_str(&lines[i][..path_at]);
+    out.push_str(NO_TTY_LINE);
+    out.push('\n');
+    out.push_str(&lines[next..].concat());
+    out
+}
+
+/// Fails loudly when this process has a terminal to open: the no-terminal
+/// rows read the password from stdin only when there is none (they run
+/// on compute, where tests have no terminal).
+fn no_terminal_here() {
+    assert!(
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/tty")
+            .is_err(),
+        "the no-terminal rows need a process with no controlling terminal"
+    );
 }
 
 fn with_stdin(c: Case, input: &'static [u8]) -> Case {
@@ -221,10 +302,15 @@ fn check(r: &Rig, acct: &Stub, row: &Row) {
             ))
         })
         .collect();
+    let stderr = if row.getpass {
+        no_tty_warning(c.name, &out.stderr)
+    } else {
+        out.stderr
+    };
     let bash: Seen = (
         out.code,
         out.stdout,
-        out.stderr,
+        stderr,
         dlog,
         account_log(acct),
         session(r),
@@ -558,14 +644,51 @@ fn connect_login_with_a_token_answers_as_the_shell_does() {
             ),
             vec![ok_json(&one_row()), ok_json("[]")],
         ),
+        // covers: connect login
         row(
             case(
-                "no answer to the start: live all the same",
+                "no answer to the start: its line, exit 1, never live",
                 &["login", "--token", ACCESS],
                 &env(&[]),
                 vec![ok_json(CONFIG_OK), Reply::Close],
                 ready,
-                0,
+                1,
+                2,
+            ),
+            vec![ok_json(&one_row()), ok_json("[]")],
+        ),
+        row(
+            case(
+                "the start answers an empty body: no answer, exit 1",
+                &["login", "--token", ACCESS],
+                &env(&[]),
+                vec![ok_json(CONFIG_OK), ok_json("")],
+                ready,
+                1,
+                2,
+            ),
+            vec![ok_json(&one_row()), ok_json("[]")],
+        ),
+        row(
+            case(
+                "the start answers a JSON list: exit 1",
+                &["login", "--token", ACCESS],
+                &env(&[]),
+                vec![ok_json(CONFIG_OK), ok_json("[]")],
+                ready,
+                1,
+                2,
+            ),
+            vec![ok_json(&one_row()), ok_json("[]")],
+        ),
+        row(
+            case(
+                "the start answers null: exit 1",
+                &["login", "--token", ACCESS],
+                &env(&[]),
+                vec![ok_json(CONFIG_OK), ok_json("null")],
+                ready,
+                1,
                 2,
             ),
             vec![ok_json(&one_row()), ok_json("[]")],
@@ -714,24 +837,6 @@ fn connect_login_s_words_and_gates_answer_as_the_shell_does() {
             vec![],
         ),
         shells(
-            with_stdin(
-                case(
-                    "a password with no terminal is the shell's",
-                    &["login", "--email", "me@acme.example", "--subdomain", "acme"],
-                    &env(&[]),
-                    vec![],
-                    ready,
-                    1,
-                    0,
-                ),
-                b"hunter2-5353\n",
-            ),
-            vec![Reply::Answer(
-                400,
-                r#"{"error_description":"Invalid login credentials"}"#.into(),
-            )],
-        ),
-        shells(
             case(
                 "-h never acts",
                 &["login", "--token", ACCESS, "-h"],
@@ -749,6 +854,205 @@ fn connect_login_s_words_and_gates_answer_as_the_shell_does() {
     }
     // Help sent nothing to the account server.
     assert!(acct.log().is_empty());
+}
+
+const SIGNED_IN: &str =
+    r#"{"access_token":"jwt-acc-7272","refresh_token":"r","user":{"email":"me@acme.example"}}"#;
+
+fn signed_in() -> Reply {
+    ok_json(SIGNED_IN)
+}
+
+fn refused() -> Reply {
+    Reply::Answer(
+        400,
+        r#"{"error_description":"Invalid login credentials"}"#.into(),
+    )
+}
+
+/// The password with no terminal, read from stdin (the named difference
+/// getpass-no-tty-warning): the same as the shell's but for the warning's
+/// line.
+#[test]
+fn connect_login_with_a_password_and_no_terminal_answers_as_the_shell_does() {
+    no_terminal_here();
+    let r = Rig::new(VERB, "login-no-tty");
+    let acct = account_stub();
+    let url = db(&acct);
+    let env: &[(&'static str, &str)] = &[("K2_CONNECT_DB_URL", url)];
+    let started = started();
+    let words: &'static [&'static str] =
+        &["login", "--email", "me@acme.example", "--subdomain", "acme"];
+    let rows = vec![
+        // covers: connect login
+        no_tty(
+            with_stdin(
+                case(
+                    "no terminal: the password from stdin, refused",
+                    words,
+                    env,
+                    vec![],
+                    ready,
+                    1,
+                    0,
+                ),
+                b"hunter2-5353\n",
+            ),
+            vec![refused()],
+        ),
+        no_tty(
+            with_stdin(
+                case(
+                    "no terminal: signed in, bound, started; a CR before the newline stays",
+                    words,
+                    env,
+                    vec![ok_json(CONFIG_OK), ok_json(&started)],
+                    ready,
+                    0,
+                    2,
+                ),
+                b"hunter2-5353\r\n",
+            ),
+            vec![signed_in(), ok_json(&one_row()), ok_json("[]")],
+        ),
+        no_tty(
+            with_stdin(
+                case(
+                    "no terminal: email, password, then a picker that finds stdin used up",
+                    &["login"],
+                    env,
+                    vec![],
+                    ready,
+                    1,
+                    0,
+                ),
+                b"me@acme.example\nhunter2-5353\n2\n",
+            ),
+            vec![signed_in(), ok_json(&two_rows())],
+        ),
+        no_tty(
+            with_stdin(
+                case(
+                    "no terminal: a password with no newline after it",
+                    words,
+                    env,
+                    vec![],
+                    ready,
+                    1,
+                    0,
+                ),
+                b"hunter2-5353",
+            ),
+            vec![refused()],
+        ),
+        no_tty(
+            with_stdin(
+                case(
+                    "no terminal: a CR in the line stays in the password",
+                    words,
+                    env,
+                    vec![],
+                    ready,
+                    1,
+                    0,
+                ),
+                b"hunter2\r5353\n",
+            ),
+            vec![refused()],
+        ),
+        no_tty(
+            with_stdin(
+                case(
+                    "no terminal: an empty line for the password",
+                    words,
+                    env,
+                    vec![],
+                    ready,
+                    1,
+                    0,
+                ),
+                b"\n",
+            ),
+            vec![],
+        ),
+        no_tty(
+            with_stdin(
+                case(
+                    "no terminal: nothing on stdin, the prompt cancelled",
+                    words,
+                    env,
+                    vec![],
+                    ready,
+                    1,
+                    0,
+                ),
+                b"",
+            ),
+            vec![],
+        ),
+    ];
+    for row in &rows {
+        check(&r, &acct, row);
+    }
+}
+
+/// A subdomain list above what one environment variable may hold (128
+/// KiB on Linux) and above macOS's limit for the whole environment
+/// (about 1 MiB): the named difference picker-env-size. The shell's
+/// picker gets the list in its environment and can't start ("Argument
+/// list too long"): exit 1 after the list, nothing asked of the daemon.
+/// The binary picks, claims, binds and starts.
+#[test]
+fn connect_login_with_a_list_above_the_environment_s_limit_picks() {
+    let r = Rig::new(VERB, "login-env-size");
+    let acct = account_stub();
+    let url = db(&acct);
+    let pad = "x".repeat(220);
+    let rows: Vec<String> = (0..6000)
+        .map(|i| format!(r#"{{"label":"s{i:04}","c":"{pad}","tunnel_token":"t{i:04}"}}"#))
+        .collect();
+    let body = format!("[{}]", rows.join(","));
+    assert!(body.len() > 1024 * 1024 + 256 * 1024);
+    // covers: connect login
+    let c = case(
+        "a list above the environment's limit",
+        &["login", "--token", ACCESS, "--subdomain", "s5999"],
+        &[("K2_CONNECT_DB_URL", url)],
+        vec![ok_json(CONFIG_OK), ok_json(&started())],
+        ready,
+        1,
+        0,
+    );
+    let account = [ok_json(&body), ok_json("[]")];
+    r.prepare(Side::Bash, &c);
+    acct.reset(&account);
+    let b = r.run(true, &c);
+    let bash_daemon = r.read(Side::Bash, false, c.name);
+    let bash_account = account_log(&acct);
+    assert_eq!(b.code, Some(1), "bash: {b:?}");
+    assert!(
+        b.stderr.contains("Argument list too long"),
+        "bash: {}",
+        b.stderr
+    );
+    assert_eq!(b.stdout, "", "bash's stdout");
+    assert!(
+        bash_daemon.is_empty(),
+        "bash asked the daemon: {bash_daemon:?}"
+    );
+    assert_eq!(bash_account.len(), 1, "bash: the list only");
+    acct.reset(&account);
+    let (o, log) = r.binary(&c, false);
+    assert_eq!(o.code, Some(0), "the binary: {o:?}");
+    assert_eq!(
+        o.stdout,
+        format!("\u{2713} live at https://acme.{}\n", zone())
+    );
+    assert!(!o.stderr.contains("Argument list"), "{}", o.stderr);
+    assert_eq!(log.len(), 2, "the binary: the config and the start");
+    let sent = account_log(&acct);
+    assert_eq!(sent.len(), 2, "the binary: the list and the claim");
+    assert_eq!(sent[0], bash_account[0], "the list request");
 }
 
 /// A list well above 256 KiB: 2000 rows, the last one picked.

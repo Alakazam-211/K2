@@ -14,7 +14,8 @@
 //!    ([`crate::prompt::read_secret_stdin`]), `--token <jwt>` prints its
 //!    note. With neither: the email (`--email`, else a prompt on stderr
 //!    and one line of stdin) and the password, by Python's getpass on the
-//!    terminal ([`crate::prompt::getpass_tty`]), then the password grant
+//!    terminal ([`crate::prompt::getpass_tty`]), or from stdin when there
+//!    is no terminal to open ([`getpass_stdin`]), then the password grant
 //!    ([`sign_in`]).
 //! 4. `connect-account.json`, 0600, through a temporary file
 //!    ([`save_account`]); `Signed in as <email>.`.
@@ -26,8 +27,9 @@
 //!    best-effort claim ([`claim`]).
 //! 7. `cli_send cli_post_json /cli/tunnel/config` with the token in the
 //!    body, `cli_send cli_post /cli/tunnel/start`, each answer read as the
-//!    shell's Python reads it, then `✓ live at <url>`; the EXIT trap's
-//!    lines ([`crate::prelude::Closing`]).
+//!    shell's Python reads it, then `✓ live at <url>` only when the start
+//!    answered a JSON object with no error (no answer is an error line,
+//!    exit 1); the EXIT trap's lines ([`crate::prelude::Closing`]).
 //!
 //! The account server is a Python block's `urlopen` in the shell
 //! ([`crate::transport::urllib::open_url`]): http.client's request, no
@@ -39,13 +41,18 @@
 //! Where it differs: a failed TLS handshake's words are the binary's,
 //! where the shell's Python prints OpenSSL's (the named difference
 //! python-tls-error-text); the exit code and the nothing-sent are the
-//! same.
+//! same. A password read with no terminal: Python's getpass warns with
+//! its own file and line, the binary with one line of its own that says
+//! the same (getpass-no-tty-warning). A subdomain list above what one
+//! environment variable may hold: the shell's picker can't start
+//! ("Argument list too long"), the binary picks (picker-env-size).
 //!
 //! Handed to the shell ([`run`] returns `None`) before anything is
 //! printed, read or sent: a base URL the binary doesn't send itself, an
-//! `https://` one the person's proxy would carry, a password the shell's
-//! Python would read with no terminal (its getpass warning names its own
-//! file), and a daemon port that is set but is no port curl takes.
+//! `https://` one the person's proxy would carry, a password Python's
+//! getpass would read some other way than on the terminal or from a
+//! stdin that is no terminal ([`getpass_stdin_ok`]), and a daemon port
+//! that is set but is no port curl takes.
 
 use super::logout::{self, ANON_KEY, ENV_URL};
 use super::{account_email, load, ACCOUNT_FILE, CONFIG, TUNNEL_FILE};
@@ -791,6 +798,89 @@ fn held(body: &[u8]) -> String {
     String::from_utf8_lossy(&b).into_owned()
 }
 
+/// The binary's line where Python's getpass warns, with its own file and
+/// line, that it reads the password with no terminal (`GetPassWarning:
+/// Can not control echo on the terminal.`): the named difference
+/// getpass-no-tty-warning.
+pub const NO_TTY_WARNING: &str = "Warning: Can not control echo on the terminal.";
+
+/// Python's getpass falls back to stdin (`fallback_getpass`): `/dev/tty`
+/// can't be opened and stdin is open but no terminal. Any other way it
+/// reads (a `/dev/tty` whose settings can't be read, a terminal on stdin
+/// with no `/dev/tty`, a closed stdin) is the shell's.
+#[cfg(unix)]
+fn getpass_stdin_ok() -> bool {
+    use std::os::unix::fs::OpenOptionsExt;
+    let tty = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NOCTTY)
+        .open("/dev/tty");
+    // SAFETY: fcntl(F_GETFD) and isatty only read the descriptor's state.
+    let open = unsafe { libc::fcntl(0, libc::F_GETFD) } != -1;
+    tty.is_err() && open && unsafe { libc::isatty(0) } == 0
+}
+
+#[cfg(not(unix))]
+fn getpass_stdin_ok() -> bool {
+    false
+}
+
+/// `getpass.getpass(prompt)` with no terminal (`fallback_getpass`): the
+/// warning ([`NO_TTY_WARNING`], then Python's own second line) and the
+/// prompt on stderr, one line from stdin, then a newline on stderr.
+/// Python's `sys.stdin.readline()` reads stdin in chunks of up to 8 KiB
+/// until one holds a `\n`, and what else came in them is gone with its
+/// process: so is it here. Only `\n` ends the line (Python's stdin on
+/// Unix translates no newlines: a `\r` stays in the password). Nothing at
+/// all before the end of the input is its `EOFError`.
+fn getpass_stdin(prompt_text: &str) -> Getpass {
+    let lines = format!("{NO_TTY_WARNING}\nWarning: Password input may be echoed.\n{prompt_text}");
+    let _ = out::write_flushed(&mut std::io::stderr().lock(), lines.as_bytes());
+    let mut got: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; 8192];
+    let end = loop {
+        if let Some(i) = got.iter().position(|b| *b == b'\n') {
+            break Some(i);
+        }
+        match read_fd0(&mut chunk) {
+            0 => break None,
+            n => got.extend_from_slice(&chunk[..n]),
+        }
+    };
+    if got.is_empty() {
+        return Getpass::Cancelled;
+    }
+    if let Some(i) = end {
+        got.truncate(i);
+    }
+    prompt::prompt("\n");
+    Getpass::Line(prompt::Secret::new(got))
+}
+
+/// One `read(2)` on stdin, retried when a signal stops it: its count, 0
+/// at the end of the input or on an error (Python's read raises then;
+/// the binary takes it as the end).
+#[cfg(unix)]
+fn read_fd0(buf: &mut [u8]) -> usize {
+    loop {
+        // SAFETY: the buffer is valid for its length.
+        let n = unsafe { libc::read(0, buf.as_mut_ptr().cast(), buf.len()) };
+        if n >= 0 {
+            return n as usize;
+        }
+        if std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
+            return 0;
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn read_fd0(buf: &mut [u8]) -> usize {
+    use std::io::Read;
+    std::io::stdin().lock().read(buf).unwrap_or(0)
+}
+
 /// The `/cli/tunnel/config` reader: `Err` with its line.
 fn config_reader(raw: &str) -> Result<(), String> {
     let d = if strip(raw).is_empty() {
@@ -838,34 +928,32 @@ fn repr_text(t: &str) -> String {
 }
 
 /// The `/cli/tunnel/start` reader: its line on stdout, or `Err` with its
-/// line on stderr.
+/// line on stderr. The live line only for a JSON object with no error: no
+/// answer (an empty one), an answer that isn't JSON and one that isn't an
+/// object each end with their line.
 fn start_reader(raw: &str, label: &str) -> Result<String, String> {
     let label = if label.is_empty() { "?" } else { label };
-    let d = if strip(raw).is_empty() {
-        Value::Object(Vec::new())
-    } else {
-        match json::parse(raw) {
-            Ok(v) => v,
-            Err(_) => {
-                return Err(format!(
-                    "Error: tunnel/start returned unparseable response: {}",
-                    repr_text(&first_200(raw))
-                ))
-            }
+    if strip(raw).is_empty() {
+        return Err(format!(
+            "Error starting tunnel: no answer from the {PRODUCT} daemon on {START}; check with: {CLI} connect status"
+        ));
+    }
+    let d = match json::parse(raw) {
+        Ok(v) => v,
+        Err(_) => {
+            return Err(format!(
+                "Error: tunnel/start returned unparseable response: {}",
+                repr_text(&first_200(raw))
+            ))
         }
     };
-    let pairs = match &d {
-        Value::Object(p) => Some(p),
-        _ => None,
+    let Value::Object(pairs) = &d else {
+        return Err(format!("Error: tunnel/start failed: {}", first_200(raw)));
     };
-    if let Some(err) = pairs
-        .and_then(|p| get(p, "error"))
-        .filter(|v| **v != Value::Null)
-    {
+    if let Some(err) = get(pairs, "error").filter(|v| **v != Value::Null) {
         return Err(format!("Error starting tunnel: {}", hint(err)));
     }
-    let url = pairs
-        .and_then(|p| get(p, "public_url"))
+    let url = get(pairs, "public_url")
         .filter(|v| py::truthy(v))
         .map_or_else(|| format!("https://{label}.{INFRA_ZONE}"), py::str_of);
     Ok(format!("\u{2713} live at {url}"))
@@ -901,7 +989,7 @@ pub fn run(words: &[&str], s: &Settings, would_refuse: bool) -> Option<Exit> {
     let parsed = parse(words);
     if let Parsed::Words(w) = &parsed {
         let password = !w.token_stdin && w.token.is_empty();
-        if password && !prompt::getpass_tty_ok() {
+        if password && !prompt::getpass_tty_ok() && !getpass_stdin_ok() {
             return None;
         }
     }
@@ -981,9 +1069,14 @@ fn login(
         if email.is_empty() {
             fail!(Exit::Usage; "Error: email is required (or pass --token-stdin with an access JWT).");
         }
-        let pw = match prompt::getpass_tty(&format!("{} password: ", zone())) {
-            Some(Getpass::Line(s)) => s,
-            _ => fail!(Exit::Error; "\nError: password prompt cancelled."),
+        let asked = format!("{} password: ", zone());
+        let got = match prompt::getpass_tty(&asked) {
+            Some(g) => g,
+            None => getpass_stdin(&asked),
+        };
+        let pw = match got {
+            Getpass::Line(s) => s,
+            Getpass::Cancelled => fail!(Exit::Error; "\nError: password prompt cancelled."),
         };
         let mut pw: Vec<u8> = pw.expose().iter().copied().filter(|b| *b != 0).collect();
         while pw.last() == Some(&b'\n') {
@@ -1157,9 +1250,22 @@ mod tests {
             config_reader("nope"),
             Err("Error: tunnel/config returned unparseable response: 'nope'".into())
         );
+        let no_answer = format!(
+            "Error starting tunnel: no answer from the {PRODUCT} daemon on {START}; check with: {CLI} connect status"
+        );
+        assert_eq!(start_reader("", "acme"), Err(no_answer.clone()));
+        assert_eq!(start_reader(" \n\t", "acme"), Err(no_answer));
         assert_eq!(
-            start_reader("", "acme"),
+            start_reader("{}", "acme"),
             Ok(format!("\u{2713} live at https://acme.{INFRA_ZONE}"))
+        );
+        assert_eq!(
+            start_reader("[]", "acme"),
+            Err("Error: tunnel/start failed: []".into())
+        );
+        assert_eq!(
+            start_reader("null", "acme"),
+            Err("Error: tunnel/start failed: null".into())
         );
         assert_eq!(
             start_reader(r#"{"public_url":"https://x"}"#, "acme"),

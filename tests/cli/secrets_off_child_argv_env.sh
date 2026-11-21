@@ -411,14 +411,14 @@ pw_case_native "users set-password" /cli/users/set-password users set-password a
 pw_case_native "users pair-phone" /cli/auth/device/pair-code users pair-phone
 # k2 connect login asks with getpass, which reads stdin when there is no
 # terminal: setsid drops the controlling terminal so the test can type.
-# (The k5 binary hands that case to the shell: Python's getpass warning
-# with no terminal names its own file, so children run under both.)
+# (The k5 binary reads it there itself, with its own warning line: the
+# named difference getpass-no-tty-warning. So it starts no child.)
 SETSID="$(command -v setsid)" || { echo "FAIL: setsid not found (util-linux)" >&2; exit 1; }
 fresh
 printf '%s\n' "$PASS_SENTINEL" | K2_CONNECT_DB_URL="http://127.0.0.1:$(cat "$W/tcp-port")/" \
     "$SETSID" -w "$K2_CLI" connect login --email a@example.test --subdomain acme >/dev/null 2>&1 || true
 assert_tcp_got "connect login" /auth/v1/token "password" "$PASS_SENTINEL"
-assert_children_seen "connect login"
+assert_children_native "connect login"
 assert_off_children "connect login" "password" "$PASS_SENTINEL"
 
 # sec_case LABEL PATH WHAT VALUE ARGS…: VALUE typed on stdin reaches PATH

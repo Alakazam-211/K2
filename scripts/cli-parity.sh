@@ -192,6 +192,8 @@ EXPECTED_DIFFS=(
     "macos-system-proxy|K2 ruling, K5 shared transport|on macOS the system proxy (System Settings, Network, Proxies; no environment variable) is read by python3's urllib (urllib.request.getproxies_macosx_sysconf, when no proxy variable is set), so a bash Python block that reaches another machine over https may go through it; the binary reads only the proxy variables, as curl does, and never the system setting (it links no SystemConfiguration framework). Every bash request made with curl ignores the system setting too. Linux has no such setting: not proven there"
     "curl-version-proxy-exit|K2 ruling, K5 shared transport|a proxy that refuses the tunnel (407) to a K2 daemon at K2_HOST=https://<name> (the check: \`whoami\`, https_proxy set): the binary sends one CONNECT and stops, as curl 8.5 does (exit 56, never tried again by _k2_curl). A newer curl (8.23 on one node) fails that CONNECT with exit 7, which _k2_curl tries 4 times in all, 1 s apart, so bash sends 4 CONNECTs and prints what its curl 7 means; the binary's one CONNECT, exit and lines are the same on every node. Where bash's curl exits 56 the two are the same: not proven there"
     "python-tls-error-text|K2 ruling, K5 lane small6 (connect login)|a TLS handshake to the Connect account server that fails (\`connect login\`'s account calls, the shell's Python urllib): bash prints OpenSSL's reason inside Python's URLError (\"<urlopen error [SSL: WRONG_VERSION_NUMBER] wrong version number (_ssl.c:1000)>\"), the binary its own words (\"<urlopen error [SSL] TLS handshake: ...>\"). The exit code (1), every line before that one and that no byte of the HTTP request was sent are the same"
+    "getpass-no-tty-warning|K2 ruling, K5 lane small6 (connect login)|\`connect login\`'s password with no terminal (no /dev/tty to open, stdin a pipe), read from stdin: bash's Python getpass warns with its own file and line, \"<path>/getpass.py:<n>: GetPassWarning: Can not control echo on the terminal.\" (and the source line Python shows under it when it has one); the binary prints one line of its own that says the same, \"Warning: Can not control echo on the terminal.\". Both then print Python's \"Warning: Password input may be echoed.\" and the prompt, read the line from stdin and send the same request; every other line and the exit code are the same"
+    "picker-env-size|K2 ruling, K5 lane small6 (connect login)|\`connect login\` with a subdomain list above what one environment variable may hold (128 KiB on Linux; about 1 MiB for the whole environment on macOS): bash's picker gets the list (tunnel tokens taken out) in SUBS_JSON and can't start, \"<path>: line <n>: <python3>: Argument list too long\" on stderr, nothing on stdout, exit 1, after the list request and before anything is asked of the daemon. The binary reads the list itself, picks, claims, binds and starts: \"✓ live at <url>\", exit 0"
     "nul-in-answer|K2 ruling at the 0.46.15 rebase|a NUL byte in the daemon's answer to \`feedback list\` or \`feedback show <id>\`: bash's resp=\$(cli_request ...) drops it and, from bash 4.4 on, writes one line on stderr, \"<path to cli/k2>: line <n>: warning: command substitution: ignored null byte in input\"; the binary drops it silently. stdout, the exit code and the requests are the same (bash 3.2 writes no warning, so there the two are exact)"
     "passport-heal-once|K2 ruling, the doc lane's follow-ups|a doc call that sends a whole file or a tool call (_doc_xfer: \`doc cat\`, \`append\`, \`write\`, \`show --version\`, \`export\`) whose passport the daemon's auth gate refuses (403 and exactly {\"error\":\"Invalid or missing auth token\"}, sent before any handler runs, so nothing was done), in a session whose passport was minted again: bash's _doc_xfer never tries the new passport and the command ends on the refusal (exit 3); the binary sends the same call once more with the new passport and answers it (cli_send_json's one heal, which bash's other doc calls already make). An answer a handler gave that holds those words (a document's text, a conflict) is never sent again by either: one request, the same output"
     "doc-mktemp-wording|K2 ruling, the doc lane's follow-ups|a doc verb that needs a temp folder (_doc_tmp) where TMPDIR can't hold one: the binary words mktemp's line as GNU mktemp does in the C locale (\"mktemp: failed to create directory via template '<TMPDIR>/k2doc.XXXXXX': No such file or directory\"; GNU's in a UTF-8 locale quotes the template with curly quotes); macOS's mktemp words it its own way (\"mktemp: mkdtemp failed on <TMPDIR>/k2doc.XXXXXX: No such file or directory\"; a newer macOS names the folder it tried, the six X filled in). The two lines after it (\"Error: can't make a temp folder\" and the tmp error's JSON), the exit (2) and stdout (nothing) are the same, and neither sends anything. The same holds for \`app exec\` with stdin on a pipe (k2-exec-XXXXXX) and \`hostchat open\` (k2-hostchat-open.XXXXXX) where TMPDIR can't hold the folder: on a newer macOS mktemp's line names the folder it tried, which the binary can't know, so the parity rows (Compare::MktempTried) take mktemp's line as the same when only that random name differs: the same folder and stem before it, one or more of [A-Za-z0-9.] in its place, the same reason after it, the same exit, and every other line byte for byte"
@@ -1407,6 +1409,170 @@ while True:
     [ "$last_b" != "$last_r" ] || problems+=("the two last lines are the same: the difference no longer holds")
     [ "$(grep -c '^no-http$' "$d/tlslog")" = 2 ] || problems+=("want two connections with no HTTP request, got: $(cat "$d/tlslog")")
     ! grep -q '^http-request$' "$d/tlslog" || problems+=("an HTTP request reached the server")
+    [ ${#problems[@]} -eq 0 ] && return 0
+    printf '%s\n' "${problems[@]}"
+    return 1
+}
+
+# no_ctty: runs its words in a new session, so there is no controlling
+# terminal (/dev/tty can't be opened), whatever this shell has; its exit
+# code is theirs.
+no_ctty() {
+    python3 -I -c '
+import os, sys
+pid = os.fork()
+if pid == 0:
+    os.setsid()
+    os.execvp(sys.argv[1], sys.argv[1:])
+_, st = os.waitpid(pid, 0)
+sys.exit(os.waitstatus_to_exitcode(st))
+' "$@"
+}
+
+# connect_stub <dir> <mode>: a stub that is the Connect account server and
+# the daemon in one, on a free loopback port, logging "METHOD PATH" and a
+# body after it, one request a line, to <dir>/log. Mode refuse: the
+# password grant answers 400 "Invalid login credentials". Mode biglist:
+# the subdomain list answers 6000 rows (about 1.6 MB without their
+# tunnel tokens), the claim [], the tunnel config and start their
+# success. Sets STUB_PID and STUB_PORT; returns 1 when it doesn't start.
+connect_stub() {
+    local d="$1" mode="$2"
+    rm -f "$d/port" "$d/port.tmp"
+    : >"$d/log"
+    python3 -I -c '
+import json, os, sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+d, mode = sys.argv[1], sys.argv[2]
+class H(BaseHTTPRequestHandler):
+    def _any(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        body = self.rfile.read(n).decode("utf-8", "replace") if n else ""
+        with open(os.path.join(d, "log"), "a") as f:
+            f.write("%s %s %s\n" % (self.command, self.path, body))
+        path = self.path.split("?")[0]
+        status, out = 200, {"ok": True}
+        if path == "/auth/v1/token":
+            status, out = 400, {"error_description": "Invalid login credentials"}
+        elif path == "/rest/v1/subdomains" and mode == "biglist":
+            pad = "x" * 220
+            out = [{"label": "s%04d" % i, "c": pad, "tunnel_token": "t%04d" % i} for i in range(6000)]
+        elif path == "/rest/v1/rpc/claim_subdomain":
+            out = []
+        elif path == "/cli/tunnel/config":
+            out = {"tokenSet": True, "subdomain": "s5999"}
+        elif path == "/cli/tunnel/start":
+            out = {"running": True, "public_url": "https://s5999.k2.dev"}
+        b = json.dumps(out).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(b)))
+        self.end_headers()
+        self.wfile.write(b)
+    do_GET = do_POST = _any
+    def log_message(self, *a):
+        pass
+s = HTTPServer(("127.0.0.1", 0), H)
+open(os.path.join(d, "port.tmp"), "w").write(str(s.server_port))
+os.rename(os.path.join(d, "port.tmp"), os.path.join(d, "port"))
+s.serve_forever()
+' "$d" "$mode" &
+    STUB_PID=$!
+    for _ in $(seq 1 100); do [ -s "$d/port" ] && break; sleep 0.05; done
+    STUB_PORT="$(cat "$d/port" 2>/dev/null || true)"
+    if [ -z "$STUB_PORT" ]; then
+        kill "$STUB_PID" 2>/dev/null || true
+        return 1
+    fi
+}
+
+# check_getpass_no_tty_warning: both CLIs run `connect login --email
+# me@acme.example --subdomain acme` in a new session (no terminal),
+# "hunter2-5353" on stdin, against a stub whose password grant refuses.
+# Both exit 1 with nothing on stdout and send the same one request (the
+# grant, the password in its body). Bash's stderr has Python's warning
+# once, with getpass.py's file and line (and maybe its source line under
+# it), the binary's its own line once and no GetPassWarning; then
+# "Warning: Password input may be echoed." on both; with bash's warning
+# put as the binary's line, the two are the same.
+check_getpass_no_tty_warning() {
+    local d="$WORK/getpass" side rc tmp problems=()
+    local mine="Warning: Can not control echo on the terminal."
+    mkdir -p "$d/home/.k2" "$d/ws/.k2"
+    connect_stub "$d" refuse || { echo "the stub didn't start"; return 1; }
+    for side in bash binary; do
+        tmp="$(mktemp -d "$d/tmp.XXXXXX")"
+        rm -f "$d/home/.k2/connect-account.json"
+        : >"$d/log"
+        if [ "$side" = binary ]; then set -- "$WORK/bin/k5"; else set -- bash "$ROOT/cli/k2"; fi
+        rc=0
+        (cd "$d/ws" && printf 'hunter2-5353\n' | no_ctty env -i PATH="$PATH" HOME="$d/home" TMPDIR="$tmp" \
+            K2_CONNECT_DB_URL="http://127.0.0.1:$STUB_PORT/" "$@" connect login --email me@acme.example --subdomain acme) \
+            >"$d/out.$side" 2>"$d/err.$side" || rc=$?
+        cp "$d/log" "$d/log.$side"
+        [ "$rc" = 1 ] || problems+=("$side exited $rc, want 1: $(head -c 300 "$d/err.$side")")
+        [ ! -s "$d/out.$side" ] || problems+=("$side printed on stdout: $(head -c 200 "$d/out.$side")")
+    done
+    stop_stub
+    [ "$(grep -c 'getpass\.py:[0-9]*: GetPassWarning: Can not control echo on the terminal\.$' "$d/err.bash")" = 1 ] \
+        || problems+=("bash's stderr has no single getpass warning with its file and line: $(head -c 400 "$d/err.bash")")
+    [ "$(grep -cxF "$mine" "$d/err.binary")" = 1 ] || problems+=("the binary's stderr has no single line '$mine': $(head -c 400 "$d/err.binary")")
+    ! grep -q GetPassWarning "$d/err.binary" || problems+=("the binary printed Python's GetPassWarning")
+    for side in bash binary; do
+        grep -qxF 'Warning: Password input may be echoed.' "$d/err.$side" \
+            || problems+=("$side's stderr has no 'Warning: Password input may be echoed.': $(head -c 400 "$d/err.$side")")
+    done
+    awk -v mine="$mine" '
+        skip && /^  / { skip = 0; next }
+        { skip = 0 }
+        match($0, /[^ ]*getpass\.py:[0-9]+: GetPassWarning: Can not control echo on the terminal\.$/) { print substr($0, 1, RSTART - 1) mine; skip = 1; next }
+        { print }
+    ' "$d/err.bash" >"$d/err.bash.mapped"
+    cmp -s "$d/err.bash.mapped" "$d/err.binary" \
+        || problems+=("the lines differ beyond the warning: bash '$(head -c 400 "$d/err.bash.mapped")', the binary '$(head -c 400 "$d/err.binary")'")
+    [ "$(wc -l <"$d/log.bash" | tr -d ' ')" = 1 ] && grep -q '^POST /auth/v1/token?grant_type=password .*hunter2-5353' "$d/log.bash" \
+        || problems+=("bash's requests, want the password grant: $(head -c 300 "$d/log.bash")")
+    cmp -s "$d/log.bash" "$d/log.binary" \
+        || problems+=("the requests differ: bash '$(head -c 300 "$d/log.bash")', the binary '$(head -c 300 "$d/log.binary")'")
+    [ ${#problems[@]} -eq 0 ] && return 0
+    printf '%s\n' "${problems[@]}"
+    return 1
+}
+
+# check_picker_env_size: the stub's subdomain list is about 1.6 MB
+# (mode biglist), the owner token and port on disk, and both CLIs run
+# `connect login --token-stdin --subdomain s5999`. Bash exits 1 with
+# "Argument list too long" on stderr and nothing on stdout, having sent
+# only the list request; the binary exits 0 with "✓ live at
+# https://s5999.k2.dev" and sends the list, the claim, the tunnel config
+# and the start.
+check_picker_env_size() {
+    local d="$WORK/picker-env" side rc tmp problems=()
+    mkdir -p "$d/home/.k2" "$d/ws/.k2"
+    printf 'owner-tok-parity\n' >"$d/home/.k2/heartbeat.token"
+    connect_stub "$d" biglist || { echo "the stub didn't start"; return 1; }
+    printf '%s\n' "$STUB_PORT" >"$d/home/.k2/heartbeat.port"
+    for side in bash binary; do
+        tmp="$(mktemp -d "$d/tmp.XXXXXX")"
+        rm -f "$d/home/.k2/connect-account.json"
+        : >"$d/log"
+        if [ "$side" = binary ]; then set -- "$WORK/bin/k5"; else set -- bash "$ROOT/cli/k2"; fi
+        rc=0
+        (cd "$d/ws" && printf 'jwt-env-parity\n' | exec env -i PATH="$PATH" HOME="$d/home" TMPDIR="$tmp" \
+            K2_CONNECT_DB_URL="http://127.0.0.1:$STUB_PORT/" "$@" connect login --token-stdin --subdomain s5999) \
+            >"$d/out.$side" 2>"$d/err.$side" || rc=$?
+        echo "$rc" >"$d/rc.$side"
+        awk '{ split($2, p, "?"); printf "%s%s %s", (NR > 1 ? "; " : ""), $1, p[1] } END { print "" }' "$d/log" >"$d/paths.$side"
+    done
+    stop_stub
+    [ "$(cat "$d/rc.bash")" = 1 ] || problems+=("bash exited $(cat "$d/rc.bash"), want 1: $(head -c 300 "$d/err.bash")")
+    grep -q 'Argument list too long' "$d/err.bash" || problems+=("bash's stderr has no 'Argument list too long': $(head -c 300 "$d/err.bash")")
+    [ ! -s "$d/out.bash" ] || problems+=("bash printed on stdout: $(head -c 300 "$d/out.bash")")
+    [ "$(cat "$d/paths.bash")" = "GET /rest/v1/subdomains" ] || problems+=("bash sent, want the list only: $(cat "$d/paths.bash")")
+    [ "$(cat "$d/rc.binary")" = 0 ] || problems+=("the binary exited $(cat "$d/rc.binary"), want 0: $(head -c 300 "$d/err.binary")")
+    [ "$(cat "$d/out.binary")" = "✓ live at https://s5999.k2.dev" ] || problems+=("the binary printed: $(head -c 300 "$d/out.binary")")
+    ! grep -q 'Argument list' "$d/err.binary" || problems+=("the binary's stderr: $(head -c 300 "$d/err.binary")")
+    [ "$(cat "$d/paths.binary")" = "GET /rest/v1/subdomains; POST /rest/v1/rpc/claim_subdomain; POST /cli/tunnel/config; POST /cli/tunnel/start" ] || problems+=("the binary sent, want the list, the claim, the config and the start: $(cat "$d/paths.binary")")
     [ ${#problems[@]} -eq 0 ] && return 0
     printf '%s\n' "${problems[@]}"
     return 1

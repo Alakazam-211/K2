@@ -188,6 +188,15 @@ page agent/instances.txt agent hire-root --json --help
 echo "== agent hire-root: the plain set still sends =="
 sends 0 '^POST /cli/agents/hire-root .*"root": "/srv/x"' agent hire-root set /srv/x
 
+echo "== agent update: help anywhere is the agent page =="
+page agent.txt agent update --help
+page agent.txt agent update -h qa --field f --value v
+page agent.txt agent update qa --field f --value v --help
+page agent.txt agent update qa --field f --value -h
+page agent.txt agent update --name qa --field --help --value v
+echo "== agent update: the plain update still sends =="
+sends 0 '^POST /cli/agent/update ' agent update qa --field f --value v
+
 echo ""
 echo "agent_help_never_acts: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

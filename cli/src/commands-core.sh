@@ -1,6 +1,9 @@
 # ── Commands ─────────────────────────────────────────────────────────
 
 cmd_agent_update() {
+    # Help wins: -h or --help anywhere prints the agent help and updates
+    # nothing (the loop skipped it, and a flag took it as its value).
+    if _wants_help "$@"; then cmd_help_agent; return 0; fi
     local name="" field="" value=""
     local usage='Usage: k2 agent update --name <agent> --field <field> --value "..."'
     while [ $# -gt 0 ]; do

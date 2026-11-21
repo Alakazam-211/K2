@@ -19176,10 +19176,22 @@ cmd_app_key() {
     case "$sub" in
         mint) cmd_app_key_mint "$@" ;;
         revoke|rm)
-            local id="${1:-}"
-            [ -n "$id" ] || { echo "usage: k2 app key revoke <key-id>" >&2; exit 2; }
+            # One <key-id> (never a word that starts with -), --json
+            # anywhere; -h anywhere is the help.
+            local id="" json_out=0 bad=""
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    -h|--help) _app_grace_usage; return 0 ;;
+                    --json) json_out=1 ;;
+                    -*|"") bad=1 ;;
+                    *) if [ -z "$id" ]; then id="$1"; else bad=1; fi ;;
+                esac
+                shift
+            done
+            { [ -n "$bad" ] || [ -z "$id" ]; } && { echo "usage: k2 app key revoke <key-id> [--json]" >&2; exit 2; }
             _app_rt_post /cli/app/key/revoke "$(_compute_json K2_CJ_id="$id")"
-            _app_grace_done 0
+            _app_grace_done "$json_out"
+            if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
             printf '%s' "$_CP_BODY" | python3 -c '
 import json, sys
 v = json.load(sys.stdin)

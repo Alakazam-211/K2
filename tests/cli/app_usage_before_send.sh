@@ -12,6 +12,10 @@
 #     `k2 app` page on stderr (and asked the daemon about permission
 #     cards). The router hands key its words now, and -h prints the
 #     page that describes key (the grace page) on stdout.
+#   - `k2 app key revoke` took the next word as the key id whatever it
+#     was (`k2 app key revoke --json k1` revoked a key named --json) and
+#     never printed JSON. The id can't start with -, one id only, and
+#     --json anywhere prints the answer as JSON.
 #
 # Each refusal row: the exact line on stderr, nothing on stdout, exit 2,
 # and the stub daemon records no request. Each row that should send then
@@ -201,6 +205,52 @@ refused "$U_KEY" app key --json
 page app/grace.txt app key -h
 # native: app key
 page app/grace.txt app key --help
+
+echo "== app key revoke: one <key-id> that isn't a flag, --json anywhere =="
+U_REVOKE="usage: k2 app key revoke <key-id> [--json]"
+# native: app key
+refused "$U_REVOKE" app key revoke
+# native: app key
+refused "$U_REVOKE" app key revoke --json
+# native: app key
+refused "$U_REVOKE" app key rm --json
+# native: app key
+refused "$U_REVOKE" app key revoke -x k1
+# native: app key
+refused "$U_REVOKE" app key revoke k1 --bogus
+# native: app key
+refused "$U_REVOKE" app key revoke k1 k2
+# native: app key
+refused "$U_REVOKE" app key revoke "" k1
+# native: app key
+page app/grace.txt app key revoke -h
+# native: app key
+page app/grace.txt app key revoke k1 -h
+# native: app key
+page app/grace.txt app key rm --help k1
+# native: app key
+page app/grace.txt app key revoke -x --help
+
+# revoked <label> <want stdout> <args...>: one POST of {"id": "k1"},
+# exactly <want stdout>, nothing on stderr, exit 0.
+revoked() {
+    local label="$1" want="$2"; shift 2
+    run "$@"
+    [ "$RC" -eq 0 ] && ok "$label: exit 0" || { bad "$label: exit $RC (want 0)"; show "$ERR"; }
+    [ "$OUT" = "$want" ] && ok "$label: stdout" || { bad "$label: stdout"; show "$OUT"; }
+    [ -z "$ERR" ] && ok "$label: nothing on stderr" || { bad "$label: stderr"; show "$ERR"; }
+    [ "$(cat "$REQ_LOG")" = 'POST /cli/app/key/revoke {"id": "k1"}' ] && ok "$label: one revoke of k1" \
+        || { bad "$label: requests"; sed 's/^/      | /' "$REQ_LOG" >&2; }
+}
+J_REVOKED='{"revoked": true, "id": "k1", "app": {"handle": "shop"}}'
+# native: app key
+revoked "k2 app key revoke k1" "revoked k1 (shop)" app key revoke k1
+# native: app key
+revoked "k2 app key revoke k1 --json" "$J_REVOKED" app key revoke k1 --json
+# native: app key
+revoked "k2 app key revoke --json k1" "$J_REVOKED" app key revoke --json k1
+# native: app key
+revoked "k2 app key rm k1 --json" "$J_REVOKED" app key rm k1 --json
 
 echo ""
 echo "app_usage_before_send: $pass passed, $fail failed"

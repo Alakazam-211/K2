@@ -18,9 +18,10 @@
 //! `src/text.rs`). Fails the build when a row of the list names a page
 //! that is not there. With them the other help forms, what bash printed
 //! for each (`src/help_captured.txt`, written by the same script): the
-//! pages as they are escaped there, and the forms in argv order. Fails
-//! the build on a row it can't read, an escape it doesn't know, a form
-//! twice or a form the first list has.
+//! pages as they are escaped there, and the forms in argv order (a form
+//! the permission cards answer or chat's manage switch decides has two
+//! pages). Fails the build on a row it can't read, an escape it doesn't
+//! know, a form twice or a form the first list has.
 //!
 //! And the manifest `k2 --schema` prints, joined from `cli/src` as the
 //! shell's build joins it (`src/families/schema/join.rs`): writes
@@ -182,7 +183,7 @@ fn text(manifest: &Path, out: &Path) {
         );
         writeln!(
             rs,
-            "    HelpForm {{ argv: &{words:?}, page: {page:?}, stderr: {stderr}, code: {code}, captured: None }},"
+            "    HelpForm {{ argv: &{words:?}, page: {page:?}, stderr: {stderr}, code: {code}, captured: None, variant: None }},"
         )
         .expect("write to a String");
         file_forms.push(words.iter().map(|w| w.to_string()).collect());
@@ -196,15 +197,19 @@ fn text(manifest: &Path, out: &Path) {
 /// `CAPTURED` and `CAPTURED_FORMS` from `src/help_captured.txt`: a page
 /// row is `P`, its number, the exit code, stdout and stderr (escaped as
 /// [`escapes_ok`] reads them), a form row `F`, its words between single
-/// spaces and its page's number. Pages come first, numbered from 0 in
-/// order.
+/// spaces and its page's number. A `C` row is a form whose page goes
+/// through the permission cards filter: its words, the page while cards
+/// are off, then the page while they are on. An `M` row prints chat's
+/// usage: its words, the page while `_CHAT_HELP_MANAGE` is unset, empty or
+/// `1`, then the page while it is anything else. Pages come first,
+/// numbered from 0 in order.
 fn captured(manifest: &Path, file_forms: &[Vec<String>], rs: &mut String) {
     let path = manifest.join("src/help_captured.txt");
     println!("cargo:rerun-if-changed={}", path.display());
     let list =
         std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     let mut pages: Vec<(u8, &str, &str)> = Vec::new();
-    let mut forms: Vec<(Vec<&str>, usize)> = Vec::new();
+    let mut forms: Vec<(Vec<&str>, usize, Option<String>)> = Vec::new();
     for (n, line) in list.lines().enumerate() {
         if line.starts_with('#') || line.is_empty() {
             continue;
@@ -230,26 +235,34 @@ fn captured(manifest: &Path, file_forms: &[Vec<String>], rs: &mut String) {
                 }
                 pages.push((code, out, err));
             }
-            ["F", argv, page] => {
+            [kind @ ("F" | "C" | "M"), argv, page, ref other @ ..] => {
                 let words: Vec<&str> = argv.split(' ').collect();
                 assert!(
                     words.iter().all(|w| !w.is_empty()),
                     "{}: an empty word",
                     at()
                 );
-                let page: usize = page
-                    .parse()
-                    .ok()
-                    .filter(|p| *p < pages.len())
-                    .unwrap_or_else(|| panic!("{}: no page {page:?}", at()));
+                let number = |page: &str| -> usize {
+                    page.parse()
+                        .ok()
+                        .filter(|p| *p < pages.len())
+                        .unwrap_or_else(|| panic!("{}: no page {page:?}", at()))
+                };
+                let page = number(page);
+                let variant = match (kind, other) {
+                    ("F", []) => None,
+                    ("C", [on]) => Some(format!("Variant::CardsOn({})", number(on))),
+                    ("M", [off]) => Some(format!("Variant::NoManage({})", number(off))),
+                    _ => panic!("{}: a {kind} row of {} columns: {line:?}", at(), cols.len()),
+                };
                 assert!(
                     !file_forms.iter().any(|f| *f == words),
                     "{}: {argv:?} is in src/help_native.txt too",
                     at()
                 );
-                forms.push((words, page));
+                forms.push((words, page, variant));
             }
-            _ => panic!("{}: not a P or an F row: {line:?}", at()),
+            _ => panic!("{}: not a P, F, C or M row: {line:?}", at()),
         }
     }
     assert!(!forms.is_empty(), "{}: no forms", path.display());
@@ -272,14 +285,17 @@ fn captured(manifest: &Path, file_forms: &[Vec<String>], rs: &mut String) {
     }
     rs.push_str("];\n");
     rs.push_str("pub static CAPTURED_FORMS: &[HelpForm] = &[\n");
-    for (words, page) in &forms {
+    for (words, page, variant) in &forms {
         let (code, out, err) = pages[*page];
         // The stream a lone page is on; with both, `stderr` is false and
-        // stderr is written first ([`crate::pages::help_page`]).
+        // stderr is written first ([`crate::pages::help_page`]). A form
+        // with two pages: its first page's (the other's code and streams
+        // are its own, `CAPTURED`).
         let stderr = out.is_empty() && !err.is_empty();
+        let variant = variant.as_deref().map_or("None".to_string(), |v| format!("Some({v})"));
         writeln!(
             rs,
-            "    HelpForm {{ argv: &{words:?}, page: \"\", stderr: {stderr}, code: {code}, captured: Some({page}) }},"
+            "    HelpForm {{ argv: &{words:?}, page: \"\", stderr: {stderr}, code: {code}, captured: Some({page}), variant: {variant} }},"
         )
         .expect("write to a String");
     }

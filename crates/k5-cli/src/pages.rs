@@ -40,7 +40,11 @@
 //! [`PERMISSIONS_WITH_PASSPORT`]): on, the binary asks the same way and
 //! prints the shell's page for the answer; off, the shell answers. Where
 //! the shell's answer for `permissions` is its error (cards off), the
-//! binary prints that error itself: the shell would ask again.
+//! binary prints that error itself: the shell would ask again. The same
+//! goes for the captured help forms whose page bash puts through the
+//! cards filter (the help of `app` and `skin`: [`CAPTURED_CARDS`]); a
+//! captured form that prints chat's usage has a page for each value of
+//! `_CHAT_HELP_MANAGE` ([`chat_manage`]).
 //!
 //! With a passport, `send-feedback`'s page is one line while an agent's
 //! server says agents may not report ([`crate::feedback_optin`], its
@@ -50,7 +54,7 @@ use crate::exit::Exit;
 use crate::offline::{Env, Prelude};
 use crate::out::json::{self, Value};
 use crate::python::{self, Python3};
-use crate::text::{self, HelpForm};
+use crate::text::{self, HelpForm, Variant};
 use crate::{cards, feedback_optin, prelude, tools};
 use std::borrow::Cow;
 use std::path::Path;
@@ -128,6 +132,13 @@ pub const APPS_WITH_PASSPORT: bool = true;
 /// for the answer. False: the shell answers it. Without a passport it is
 /// always the shell's error.
 pub const PERMISSIONS_WITH_PASSPORT: bool = true;
+
+/// The captured help forms whose page goes through the permission cards
+/// filter ([`Variant::CardsOn`]: most of `app`'s and `skin`'s): with a
+/// passport the shell asks the daemon whether cards are on. True: the
+/// binary asks the same way ([`cards::ask`]) and prints the page bash
+/// printed for the answer. False: the shell answers them.
+pub const CAPTURED_CARDS: bool = true;
 
 /// The study command line in `rest` (the arguments after `study`), when
 /// the binary may answer it.
@@ -730,27 +741,49 @@ pub fn session_checks(
 /// The help page, or `None` when the shell answers: the connection gate
 /// needs a port and a token for help, and a family's help with
 /// `HOOK_SOCK` set runs the session checks first ([`session_checks`]),
-/// which may stop it with their own lines instead.
+/// which may stop it with their own lines instead. A captured form with
+/// a [`Variant`] prints the page for its switch: the permission cards
+/// answer, asked as the shell asks ([`cards::ask`], [`CAPTURED_CARDS`]),
+/// or chat's manage setting ([`chat_manage`]).
 pub fn help_page(
     form: &'static HelpForm,
     p: &Prelude,
     env: &Env,
-    would_refuse: impl FnOnce() -> bool,
+    would_refuse: impl Fn() -> bool,
 ) -> Option<Page> {
     if !(p.port && p.token) {
         return None;
     }
     if p.hook_sock && !open_tool(form) {
-        if let Some(stop) = session_checks(form.argv, p, env, would_refuse)? {
+        if let Some(stop) = session_checks(form.argv, p, env, &would_refuse)? {
             return Some(stop);
         }
+    }
+    if let Some(n) = form.captured {
+        let n = match form.variant {
+            None => n,
+            Some(Variant::CardsOn(on)) => {
+                if !CAPTURED_CARDS {
+                    return None;
+                }
+                if cards::on(cards::ask(env, p, &would_refuse)?) {
+                    on
+                } else {
+                    n
+                }
+            }
+            Some(Variant::NoManage(other)) if !chat_manage(env) => other,
+            Some(Variant::NoManage(_)) => n,
+        };
+        let c = text::CAPTURED.get(n)?;
+        let exit = Exit::ALL
+            .into_iter()
+            .find(|e| e.code() == i32::from(c.code))?;
+        return Some(captured_page(c, exit));
     }
     let exit = Exit::ALL
         .into_iter()
         .find(|e| e.code() == i32::from(form.code))?;
-    if let Some(n) = form.captured {
-        return Some(captured_page(text::CAPTURED.get(n)?, exit));
-    }
     Some(Page {
         text: text::page(form.page)?.into(),
         stderr: form.stderr,
@@ -980,13 +1013,17 @@ pub fn deprecated_text() -> Option<String> {
     Some(format!("{head}{}{end}", crate::retired::map()))
 }
 
+/// Whether `_chat_usage` prints its manage piece in `env`:
+/// `${_CHAT_HELP_MANAGE:-1}` is `1`.
+pub fn chat_manage(env: &Env) -> bool {
+    env.get(CHAT_MANAGE)
+        .is_none_or(|v| v.is_empty() || v == "1")
+}
+
 /// `_chat_usage` in `env`.
 pub fn chat_text(env: &Env) -> Option<String> {
-    let manage = env
-        .get(CHAT_MANAGE)
-        .is_none_or(|v| v.is_empty() || v == "1");
     let mut out = text::help("chat/_head")?.to_string();
-    if manage {
+    if chat_manage(env) {
         out.push_str(text::help("chat/_manage")?);
     }
     out.push_str(text::help("chat/_end")?);
@@ -1580,7 +1617,9 @@ mod tests {
     /// own, behind the same gate as a file's print.
     #[test]
     fn a_captured_form_prints_what_the_shell_printed() {
-        let none = Env::of(&[]);
+        // A HOME, so a form the cards answer decides finds the shell's
+        // settings: no passport there, so cards are off, nothing asked.
+        let none = Env::of(&[("HOME", "/nonexistent-k5-pages")]);
         let ok = prelude(true, true, false, false);
         for f in text::CAPTURED_FORMS {
             let c = &text::CAPTURED[f.captured.expect("a captured form")];
@@ -1602,6 +1641,69 @@ mod tests {
                 assert_eq!(help_page(f, &no, &none, || false), None, "{:?}", f.argv);
             }
         }
+    }
+
+    /// A captured form with two pages prints the one its switch picks:
+    /// with no passport the cards are off and nothing is asked (the page
+    /// bash printed with cards off); chat's usage has its manage piece
+    /// while `_CHAT_HELP_MANAGE` is unset, empty or `1`.
+    #[test]
+    fn a_captured_form_with_two_pages_prints_the_one_its_switch_picks() {
+        let never = || -> bool { panic!("nothing is asked") };
+        let ok = prelude(true, true, false, false);
+        let shown = |f: &'static HelpForm, env: &Env| {
+            let page = help_page(f, &ok, env, never)
+                .unwrap_or_else(|| panic!("{:?}: no page", f.argv));
+            let lead = page.lead.clone().unwrap_or_default();
+            (page.exit.code(), page.stderr, page.text.to_string(), lead)
+        };
+        let want = |n: usize| {
+            let c = &text::CAPTURED[n];
+            let (out, err) = (text::render(c.out), text::render(c.err));
+            if out.is_empty() && !err.is_empty() {
+                (i32::from(c.code), true, err, String::new())
+            } else {
+                (i32::from(c.code), false, out, err)
+            }
+        };
+        let (mut cards, mut manage) = (0, 0);
+        for f in text::CAPTURED_FORMS {
+            let first = f.captured.expect("a captured form");
+            match f.variant {
+                None => {}
+                Some(Variant::CardsOn(on)) => {
+                    cards += 1;
+                    assert!(on < text::CAPTURED.len(), "{:?}", f.argv);
+                    let owners: [&[(&str, &str)]; 2] = [
+                        &[("HOME", "/nonexistent-k5-pages")],
+                        &[("HOME", "/x"), ("K2_HOOK_SOCK", "/x/no.sock")],
+                    ];
+                    for owner in owners {
+                        let env = Env::of(owner);
+                        assert_eq!(shown(f, &env), want(first), "{:?} {owner:?}", f.argv);
+                    }
+                }
+                Some(Variant::NoManage(other)) => {
+                    manage += 1;
+                    let values = [
+                        (None, first),
+                        (Some(""), first),
+                        (Some("1"), first),
+                        (Some("0"), other),
+                        (Some("yes"), other),
+                    ];
+                    for (v, n) in values {
+                        let env = match v {
+                            None => Env::of(&[("HOME", "/x")]),
+                            Some(v) => Env::of(&[("HOME", "/x"), (CHAT_MANAGE, v)]),
+                        };
+                        assert_eq!(shown(f, &env), want(n), "{:?} {CHAT_MANAGE}={v:?}", f.argv);
+                    }
+                }
+            }
+        }
+        assert!(cards > 100, "only {cards} forms the cards answer decides");
+        assert!(manage > 20, "only {manage} forms that print chat's usage");
     }
 
     /// The router sends the three forms to `cmd_help` with no word, which

@@ -14,14 +14,17 @@
 //! command line of the router that the shell only prints for, the same
 //! in every environment (the same script proves it and writes the list),
 //! with what it printed ([`CAPTURED`]). That text names the command and
-//! the product by the brand ([`render`]).
+//! the product by the brand ([`render`]). A captured form whose page bash
+//! puts through the permission cards filter, or that prints chat's usage,
+//! has a page for each way its switch goes ([`Variant`]).
 
 /// One help command line the binary answers: `argv` exactly (the
 /// arguments after the program's name) prints the page `page` ([`page`]:
 /// a help file, or `study:<key>` for a study file) on stdout, or on
 /// stderr when `stderr`, and exits with `code`. A captured form
 /// (`captured`, its page in [`CAPTURED`]) has no `page`: it prints what
-/// the shell printed.
+/// the shell printed. One with a `variant` has a second page, for the
+/// other way its switch goes; `stderr` and `code` are its first page's.
 #[derive(Debug, PartialEq, Eq)]
 pub struct HelpForm {
     pub argv: &'static [&'static str],
@@ -29,6 +32,22 @@ pub struct HelpForm {
     pub stderr: bool,
     pub code: u8,
     pub captured: Option<usize>,
+    pub variant: Option<Variant>,
+}
+
+/// What picks a captured form's page when one switch does, and the other
+/// page (a [`CAPTURED`] index). `tests/cli/help_native.sh` captures both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Variant {
+    /// The page goes through the permission cards filter (`_perm_lines`):
+    /// `captured` while cards are off for this caller (with no passport
+    /// nothing is asked and they are off), this page while they are on.
+    /// The binary asks as the shell asks ([`crate::cards`]).
+    CardsOn(usize),
+    /// The page is chat's usage (`_chat_usage`): `captured` while
+    /// `_CHAT_HELP_MANAGE` is unset, empty or `1`, this page while it is
+    /// anything else ([`crate::pages::chat_manage`]).
+    NoManage(usize),
 }
 
 /// What the shell printed for a captured help form: the exit code, and
@@ -253,26 +272,41 @@ mod tests {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/help_captured.txt");
         let text = std::fs::read_to_string(&path).unwrap();
         let mut pages = Vec::new();
-        let mut forms: Vec<(Vec<&str>, usize)> = Vec::new();
+        let mut forms: Vec<(Vec<&str>, usize, Option<Variant>)> = Vec::new();
         for line in text
             .lines()
             .filter(|l| !l.is_empty() && !l.starts_with('#'))
         {
             let cols: Vec<&str> = line.split('\t').collect();
+            let n = |s: &str| s.parse::<usize>().unwrap();
             match cols[..] {
                 ["P", _, code, out, err] => pages.push((code.parse::<u8>().unwrap(), out, err)),
-                ["F", argv, page] => forms.push((argv.split(' ').collect(), page.parse().unwrap())),
+                ["F", argv, page] => forms.push((argv.split(' ').collect(), n(page), None)),
+                ["C", argv, off, on] => forms.push((
+                    argv.split(' ').collect(),
+                    n(off),
+                    Some(Variant::CardsOn(n(on))),
+                )),
+                ["M", argv, page, other] => forms.push((
+                    argv.split(' ').collect(),
+                    n(page),
+                    Some(Variant::NoManage(n(other))),
+                )),
                 _ => panic!("{}: {line:?}", path.display()),
             }
         }
         let embedded: Vec<(u8, &str, &str)> =
             CAPTURED.iter().map(|c| (c.code, c.out, c.err)).collect();
         assert_eq!(pages, embedded, "a stale build of {}", path.display());
-        forms.sort();
+        forms.sort_by(|a, b| a.0.cmp(&b.0));
         assert_eq!(forms.len(), CAPTURED_FORMS.len(), "a stale build");
-        for ((argv, page), form) in forms.iter().zip(CAPTURED_FORMS) {
+        for ((argv, page, variant), form) in forms.iter().zip(CAPTURED_FORMS) {
             assert_eq!(form.argv, &argv[..]);
             assert_eq!(form.captured, Some(*page), "{argv:?}");
+            assert_eq!(form.variant, *variant, "{argv:?}");
+            if let Some(Variant::CardsOn(other) | Variant::NoManage(other)) = variant {
+                assert!(*other < pages.len(), "{argv:?}");
+            }
             assert_eq!(form.code, pages[*page].0, "{argv:?}");
             assert_eq!(form.page, "");
             assert!(std::ptr::eq(help_form(argv).unwrap(), form), "{argv:?}");
@@ -286,6 +320,7 @@ mod tests {
         for f in HELP_FORMS {
             assert_eq!(captured_form(f.argv), None, "{:?} is in both lists", f.argv);
             assert_eq!(f.captured, None);
+            assert_eq!(f.variant, None);
         }
         assert_eq!(captured_form(&["agent", "nope", "--help"]), None);
     }

@@ -446,7 +446,11 @@ fn a_session_sends_its_passport_or_nothing() {
         ),
         no_passport("no passport: a usage line first", &["list", "--state"], 2),
         no_passport("no passport: show with no id", &["show"], 2),
-        passport("a passport over TCP: list", &["list"], vec![ok(r#"{"items":[]}"#)]),
+        passport(
+            "a passport over TCP: list",
+            &["list"],
+            vec![ok(r#"{"items":[]}"#)],
+        ),
         passport(
             "a passport over TCP: the opt-in",
             &["settings", "--agents", "cli"],
@@ -457,7 +461,11 @@ fn a_session_sends_its_passport_or_nothing() {
             &["x broke", "--category", "bug", "--diagnostics", "--yes"],
             vec![ok(DIAG), ok(r#"{"id":"pf_1"}"#), ok(SENT)],
         ),
-        passport("a passport over TCP: retry", &["retry", "pf_1"], vec![ok("{}")]),
+        passport(
+            "a passport over TCP: retry",
+            &["retry", "pf_1"],
+            vec![ok("{}")],
+        ),
     ];
     for c in v {
         rig.check(&c);

@@ -2146,9 +2146,9 @@ mod tests {
         assert!(verb(&["msg", "--x"]).is_err());
         // After `--` a word with a dash is the text; a second `--` too.
         assert_eq!(
-            verb(&["msg", "--", "-x", "--json"]).unwrap_err(),
+            verb(&["msg", "--", "-x", "--json", "y"]).unwrap_err(),
             usage(&format!(
-                "too many arguments \u{2014} did you mean: {} project msg \"-x --json\"?",
+                "too many arguments \u{2014} did you mean: {} project msg \"-x --json y\"?",
                 k2_client::brand::CLI_NAME
             ))
         );
@@ -2157,8 +2157,16 @@ mod tests {
             usage("msg requires <text> (or \"-\" to read it from stdin)")
         );
         match verb(&["msg", "--json", "--", "--", "--help"]).unwrap() {
-            (Verb::Msg { project, text, two, .. }, j) => {
-                assert_eq!((project.as_str(), text.as_str(), two, j), ("--", "--help", true, true))
+            (
+                Verb::Msg {
+                    project, text, two, ..
+                },
+                j,
+            ) => {
+                assert_eq!(
+                    (project.as_str(), text.as_str(), two, j),
+                    ("--", "--help", true, true)
+                )
             }
             other => panic!("{other:?}"),
         }

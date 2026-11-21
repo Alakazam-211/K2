@@ -160,13 +160,17 @@ fn surrogateescape() {
 /// first.
 #[test]
 fn the_session_rule_is_the_shell_s() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/send-feedback.sh");
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/send-feedback.sh");
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let rule = format!(
         "_sf_session_token() {{\n    [ -n \"$(_hook_sock)\" ] || return 0\n    _cli_skip_uds && return 0\n    if [ -z \"${{SCOPED_TOKEN:-}}\" ]; then\n        echo \"{}\" >&2\n        exit 3\n    fi\n    TOKEN=\"$SCOPED_TOKEN\"\n}}\n",
         NO_PASSPORT.replace(CLI_NAME, "k2")
     );
-    assert!(text.contains(&rule), "send-feedback.sh no longer has {rule:?}");
+    assert!(
+        text.contains(&rule),
+        "send-feedback.sh no longer has {rule:?}"
+    );
     assert!(text.contains("_sf_call() {\n    _sf_session_token\n    _compute_call \"$@\"\n}\n"));
     // No product-feedback route goes through `_compute_call` itself.
     for line in text.lines() {

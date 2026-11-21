@@ -6,12 +6,14 @@
 # rule reads the owner token from disk. In a session (the K2_HOOK_SOCK
 # marker) the hire sends the passport on every request instead, and only to
 # the routes a passport may use: the hire core (POST /cli/agents/hire, which
-# also takes the name, an exact preset id and catalog context), project
-# membership, connections, the agent's own messages and the App handover.
-# A step only the owner's routes take (--mode other than custom, --enabled,
-# --color, --focus-group, a --context path, --launch with no template,
-# --context with a template, a preset label) is refused before anything is
-# sent, as is a session with no passport. With "Let this agent hire agents"
+# also takes the name, the --agent preset as typed and catalog context),
+# project membership, connections, the agent's own messages and the App
+# handover. The daemon resolves the preset (id, label or command word), so
+# a label goes as typed and a preset it doesn't have is its usage refusal,
+# exit 2. A step only the owner's routes take (--mode other than custom,
+# --enabled, --color, --focus-group, a --context path, --launch with no
+# template, --context with a template) is refused before anything is sent,
+# as is a session with no passport. With "Let this agent hire agents"
 # off, the hire core's refusal ends with its card line. A refusal of the
 # hire itself (here: a folder the agent didn't hire) ends the run cleanly:
 # exit 3, nothing sent after it. Outside a session the owner token is sent
@@ -89,6 +91,9 @@ def hire(who, body):
                      "permission": {"action": "agents.hire", "command": ASK}}
     if who == "agent" and body.get("path") == EXISTING:
         return 403, {"ok": False, "error": {"code": "not_your_hire", "hint": "that folder is a workspace this agent didn't hire"}}
+    if body.get("preset") == "No Such Tool":
+        return 400, {"ok": False, "error": {"code": "usage",
+                     "hint": "preset No Such Tool no longer exists on this server; pick one of: claude (b0a1c2d3-e4f5-6789-abcd-ef0123456001)"}}
     if body.get("dryRun") and not body.get("template"):
         return 200, {"ok": True, "dryRun": True, "hire": "allowed"}
     if body.get("template"):
@@ -335,11 +340,23 @@ for row in "${REFUSALS[@]}"; do
     assert_contains "refused $flags: names the step" "$err" "these steps are a person's: $named. Nothing was sent."
     assert_contains "refused $flags: where a person does it" "$err" "Settings → Workspaces / Agents → the agent"
 done
-run "${SESSION[@]}" -- agent hire "$WORK/refused" --agent Codex
-assert_eq "preset label: exit 3" "$rc" "3"
-assert_eq "preset label: no request" "$(requests)" "0"
-assert_contains "preset label: asks for the exact id" "$err" "--agent takes a preset's exact id, not 'Codex'. Nothing was sent."
-assert_contains "preset label: where the ids are" "$err" "k2 preset list"
+
+echo "== in a session: --agent goes to the hire core as typed =="
+run "${SESSION[@]}" -- agent hire "$WORK/labelled" --agent "Cursor Agent" --json
+assert_eq "preset label: exit 0 ($err)" "$rc" "0"
+owner_never_sent "preset label"
+all_passport "preset label"
+no_owner_routes "preset label"
+assert_eq "preset label: only the hire core asked" "$(field path | sort -u | tr '\n' ' ')" "/cli/agents/hire "
+assert_eq "preset label: the core gets the label as typed" \
+    "$("$PY" -c 'import json,sys; print(json.loads(sys.argv[1]).get("preset"))' "$(body_of /cli/agents/hire)")" "Cursor Agent"
+st="$("$PY" -c 'import json,sys; d=json.loads(sys.argv[1]); print(",".join(a["status"] for a in d["actions"] if a["step"]=="set-default-agent"))' "$out")"
+assert_eq "preset label: step set-default-agent" "$st" "done"
+run "${SESSION[@]}" -- agent hire "$WORK/nosuch" --agent "No Such Tool" --onboard "hi"
+assert_eq "unknown preset: exit 2, the daemon's usage" "$rc" "2"
+owner_never_sent "unknown preset"
+assert_eq "unknown preset: only the hire core asked, nothing after" "$(field path | sort -u | tr '\n' ' ')" "/cli/agents/hire "
+assert_contains "unknown preset: the daemon's list" "$err" "preset No Such Tool no longer exists on this server; pick one of: claude ("
 
 echo "== in a session with no passport: nothing sent =="
 run K2_HOOK_SOCK="$SOCK" -- agent hire "$WORK/nopass" --name Nope

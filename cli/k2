@@ -75515,18 +75515,19 @@ EOF
 # Where a person takes the hire steps a session may not take.
 _AGENT_HIRE_PERSON_LINE="A person does this in Settings → Workspaces / Agents → the agent, or with k2 agent hire from a terminal outside K2."
 
-# _agent_hire_session MODE ENABLED COLOR FOCUS LAUNCH TEMPLATE PRESET [CONTEXT...]
+# _agent_hire_session MODE ENABLED COLOR FOCUS LAUNCH TEMPLATE [CONTEXT...]
 # True in a session (the HOOK_SOCK marker): the hire acts as this agent,
 # with the session's passport only, through the routes a passport may use
 # (the hire core, project membership, connections, msg, the handover). A
 # step only the owner's routes take is refused before anything is sent:
 # --mode other than custom, --enabled, --color, --focus-group, a --context
-# path, --launch with no template, --context with one; --agent takes an
-# exact preset id (the label lookup is the owner's). No passport: refused.
+# path, --launch with no template, --context with one. --agent goes to the
+# hire core as typed: the daemon takes an id, a label or a command word and
+# refuses a preset it doesn't have (usage). No passport: refused.
 # False outside a session and on a remote host: $TOKEN, as before.
 _agent_hire_session() {
-    local mode="$1" enabled="$2" color="$3" focus="$4" launch="$5" template="$6" preset="$7"
-    shift 7
+    local mode="$1" enabled="$2" color="$3" focus="$4" launch="$5" template="$6"
+    shift 6
     [ -n "$(_hook_sock)" ] || return 1
     _cli_skip_uds && return 1
     if [ -z "${SCOPED_TOKEN:-}" ]; then
@@ -75551,11 +75552,6 @@ _agent_hire_session() {
     if [ -n "$refused" ]; then
         echo "Error: in a session, k2 agent hire acts as this agent, and these steps are a person's: $refused. Nothing was sent." >&2
         echo "$_AGENT_HIRE_PERSON_LINE" >&2
-        exit 3
-    fi
-    if [ -n "$preset" ] && ! [[ "$preset" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
-        echo "Error: in a session, --agent takes a preset's exact id, not '$preset'. Nothing was sent." >&2
-        echo "The ids are in k2 preset list (the id column), or a person passes the name from a terminal outside K2." >&2
         exit 3
     fi
     return 0
@@ -75702,7 +75698,7 @@ cmd_agent_hire() {
     # In a session the hire acts as this agent: every request carries the
     # session's passport, never the owner token (_agent_hire_session).
     local in_session=false
-    if _agent_hire_session "$mode" "$enabled" "$color" "$focus_group" "$launch" "$template" "$agent_preset" \
+    if _agent_hire_session "$mode" "$enabled" "$color" "$focus_group" "$launch" "$template" \
         ${contexts[@]+"${contexts[@]}"}; then
         in_session=true
         TOKEN="$SCOPED_TOKEN"
@@ -75944,8 +75940,8 @@ def normalize_color(raw):
 # exists to fix.
 resolved_preset = None
 if agent_preset and in_session:
-    # The label lookup is the owner's route; the shell took only an exact
-    # preset id, which goes to the hire core as it is.
+    # The value goes to the hire core as typed: the daemon resolves an id,
+    # a label or a command word, or refuses one it doesn't have (usage).
     resolved_preset = {"id": agent_preset, "label": agent_preset, "enabled": True}
 elif agent_preset:
     presets = http_get("/cli/presets/list", {})

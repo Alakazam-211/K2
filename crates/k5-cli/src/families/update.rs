@@ -38,13 +38,19 @@
 //!      shell's Python's loop's lines ([`list_lines`]), and exit 1 when
 //!      the Python raised, else 0.
 //!
-//! [`Github::get`] is `_app_update_get`: `mktemp` makes the file curl's
-//! stderr goes to (`${TMPDIR:-/tmp}/k2-update.XXXXXX`; when it fails, its
-//! own words and [`MKTEMP_FAILED`], exit 1); then `curl -fsS
-//! --connect-timeout 10 --max-time 30 -H "Accept: …" <url>`, its stdout
-//! read. The file's first line, less a leading `curl: (N) `, is curl's
-//! message; the file is removed. A curl that fails prints
-//! [`unreachable_line`] and the command exits 1.
+//! [`Github::get`] is `_app_update_get`: `mktemp -d` makes the folder
+//! for curl's stderr and the body (`${TMPDIR:-/tmp}/k2-update.XXXXXX`;
+//! when it fails, its own words and [`MKTEMP_FAILED`], exit 1); then
+//! `_k2_github_curl`: `curl --no-location --proto =https -fsS
+//! --connect-timeout 10 --max-time 30 -H "Accept: …" -o <folder>/body -w
+//! %{redirect_url} <url>`, its stdout read as where a redirect points.
+//! Each redirect is followed here, one curl per hop, only to GitHub's own
+//! hosts ([`GITHUB_HOSTS`]), https only, at most [`MAX_REDIRS`]; any
+//! other is refused before it is contacted ([`refusal`]): `Error:` and
+//! the reason, exit 1. The err file's first line, less a leading
+//! `curl: (N) `, is curl's message; the folder is removed. A curl that
+//! fails prints [`unreachable_line`] and the command exits 1. No call
+//! carries a token: no config, no Authorization header.
 //!
 //! mktemp and curl are the shell's: the ones on `PATH`, run with the
 //! shell's arguments (`argv[0]` their name), this process's environment
@@ -122,7 +128,28 @@ pub const LIST_URL: &str = concat!(
 );
 /// The program both GitHub calls run.
 pub const CURL: &str = "curl";
-/// curl's arguments before the URL (`_app_update_get`).
+/// GitHub's own hosts (`_K2_GITHUB_HOSTS`, `cli/src/update.sh`): the only
+/// ones a GitHub fetch follows a redirect to. api.github.com answers a
+/// moved repository's old path with a 301 to its new one, github.com does
+/// the same for its pages and downloads, and github.com's release
+/// downloads redirect to release-assets.githubusercontent.com
+/// (objects.githubusercontent.com for older links).
+pub const GITHUB_HOSTS: [&str; 4] = [
+    "api.github.com",
+    "github.com",
+    "objects.githubusercontent.com",
+    "release-assets.githubusercontent.com",
+];
+/// The most redirects one fetch follows (`_K2_GITHUB_MAX_REDIRS`).
+pub const MAX_REDIRS: usize = 5;
+/// curl's first arguments on every hop (`_k2_github_curl`): no `-L`, even
+/// from a `~/.curlrc`, and https only.
+pub const CURL_GUARD: [&str; 3] = ["--no-location", "--proto", "=https"];
+/// curl's last arguments before the URL (`_k2_github_curl`): where a
+/// redirect points, on stdout.
+pub const CURL_WRITE_OUT: [&str; 2] = ["-w", "%{redirect_url}"];
+/// curl's arguments after [`CURL_GUARD`] (`_app_update_get`), before
+/// `-o <folder>/body`.
 pub const CURL_ARGS: [&str; 7] = [
     "-fsS",
     "--connect-timeout",
@@ -132,9 +159,11 @@ pub const CURL_ARGS: [&str; 7] = [
     "-H",
     ACCEPT,
 ];
-/// The program that makes the file curl's stderr goes to.
+/// The program that makes the folder for curl's stderr and the body.
 pub const MKTEMP: &str = "mktemp";
-/// That file's name, in `${TMPDIR:-/tmp}`.
+/// mktemp's flag for a folder.
+pub const MKTEMP_DIR: &str = "-d";
+/// That folder's name, in `${TMPDIR:-/tmp}`.
 pub const TEMP_NAME: &str = "k2-update.XXXXXX";
 /// The line when mktemp fails.
 pub const MKTEMP_FAILED: &str = "Error: couldn't make a temp file to ask GitHub";
@@ -437,6 +466,84 @@ pub fn unreachable_line(rc: i32, msg: &[u8]) -> Vec<u8> {
     line
 }
 
+/// `_k2_github_url_ok`: `url` is https on one of [`GITHUB_HOSTS`], with
+/// no name before an `@` and no port.
+pub fn github_url_ok(url: &[u8]) -> bool {
+    let Some(rest) = url.strip_prefix(b"https://") else {
+        return false;
+    };
+    let end = rest
+        .iter()
+        .position(|b| matches!(*b, b'/' | b'?' | b'#'))
+        .unwrap_or(rest.len());
+    let host = &rest[..end];
+    GITHUB_HOSTS.iter().any(|h| h.as_bytes() == host)
+}
+
+/// `_k2_github_where`: `url`'s scheme and host, for an error line, with
+/// only the characters `tr -cd '[:graph:]'` keeps in the C locale.
+pub fn github_where(url: &[u8]) -> String {
+    let cut = |b: &[u8]| -> Vec<u8> {
+        let end = b
+            .iter()
+            .position(|c| matches!(*c, b'/' | b'?' | b'#'))
+            .unwrap_or(b.len());
+        b[..end].to_vec()
+    };
+    let shown = match url.windows(3).position(|w| w == b"://") {
+        Some(i) => {
+            let mut v = url[..i].to_vec();
+            v.extend_from_slice(b"://");
+            v.extend(cut(&url[i + 3..]));
+            v
+        }
+        None => cut(url),
+    };
+    shown
+        .into_iter()
+        .filter(|b| (0x21..=0x7e).contains(b))
+        .map(char::from)
+        .collect()
+}
+
+/// `_k2_github_curl`'s check of the `hops`th redirect, to `next`: the
+/// reason it is refused, or `None` when it is followed.
+pub fn refusal(hops: usize, next: &[u8]) -> Option<String> {
+    let at = github_where(next);
+    if hops > MAX_REDIRS {
+        return Some(format!(
+            "GitHub redirected more than {MAX_REDIRS} times (the last to {at}); stopped there"
+        ));
+    }
+    if !next.starts_with(b"https://") {
+        return Some(format!(
+            "GitHub redirected to {at}, which is not https; nothing was sent there"
+        ));
+    }
+    if !github_url_ok(next) {
+        return Some(format!(
+            "GitHub redirected to {at}, which is not GitHub; nothing was sent there"
+        ));
+    }
+    None
+}
+
+/// How `_k2_github_curl` ended when it did not end with an answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Stopped {
+    /// curl's exit code.
+    Code(i32),
+    /// A refused redirect's reason.
+    Refused(String),
+}
+
+/// `"$tmp<tail>"`: the folder mktemp named, then `tail`.
+fn under(tmp: &Path, tail: &str) -> PathBuf {
+    let mut s = tmp.as_os_str().to_os_string();
+    s.push(tail);
+    PathBuf::from(s)
+}
+
 /// A path from what `$(mktemp …)` kept.
 fn path_of(bytes: Vec<u8>) -> PathBuf {
     #[cfg(unix)]
@@ -490,47 +597,88 @@ impl Github {
         Some(Exit::Error)
     }
 
-    /// `$(mktemp …)`: the file it made, or `None` when it failed.
-    fn temp_file(&self) -> Option<PathBuf> {
+    /// `$(mktemp -d …)`: the folder it made, or `None` when it failed.
+    fn temp_dir(&self) -> Option<PathBuf> {
         let ran = run_program(
             &self.mktemp,
             MKTEMP,
-            &[self.template.as_os_str()],
+            &[OsStr::new(MKTEMP_DIR), self.template.as_os_str()],
             Stdio::inherit(),
         )?;
         (ran.code == 0).then(|| path_of(substituted(&ran.stdout)))
     }
 
+    /// `_k2_github_curl "$1" <CURL_ARGS> -o "$tmp/body" 2>"$tmp/err"`:
+    /// one curl per hop, every hop's stderr into `err` in turn.
+    fn follow(&self, url: &str, body: &Path, err: &File) -> Result<(), Stopped> {
+        let mut url = OsString::from(url);
+        let mut hops = 0;
+        loop {
+            let mut args: Vec<&OsStr> = CURL_GUARD
+                .iter()
+                .chain(CURL_ARGS.iter())
+                .map(|a| OsStr::new(*a))
+                .collect();
+            args.push(OsStr::new("-o"));
+            args.push(body.as_os_str());
+            args.extend(CURL_WRITE_OUT.iter().map(|a| OsStr::new(*a)));
+            args.push(url.as_os_str());
+            let ran = match err.try_clone() {
+                Ok(f) => run_program(&self.curl, CURL, &args, Stdio::from(f)).unwrap_or(Ran {
+                    stdout: Vec::new(),
+                    code: 126,
+                }),
+                Err(_) => Ran {
+                    stdout: Vec::new(),
+                    code: 1,
+                },
+            };
+            if ran.code != 0 {
+                return Err(Stopped::Code(ran.code));
+            }
+            let next = substituted(&ran.stdout);
+            if next.is_empty() {
+                return Ok(());
+            }
+            hops += 1;
+            if let Some(why) = refusal(hops, &next) {
+                return Err(Stopped::Refused(why));
+            }
+            url = path_of(next).into_os_string();
+        }
+    }
+
     /// `_app_update_get <url>`: the body as `$(…)` keeps it, or the exit
     /// once its line is printed.
     pub fn get(&self, url: &str) -> Result<Vec<u8>, Exit> {
-        let Some(errf) = self.temp_file() else {
+        let Some(tmp) = self.temp_dir() else {
             out::stderr_line(MKTEMP_FAILED);
             return Err(Exit::Error);
         };
-        let mut args: Vec<&OsStr> = CURL_ARGS.iter().map(|a| OsStr::new(*a)).collect();
-        args.push(OsStr::new(url));
-        // `2>"$errf"`; a file that can't be opened runs no curl, and the
-        // command's code is 1.
-        let ran = match File::create(&errf) {
-            Ok(f) => run_program(&self.curl, CURL, &args, Stdio::from(f)).unwrap_or(Ran {
-                stdout: Vec::new(),
-                code: 126,
-            }),
-            Err(_) => Ran {
-                stdout: Vec::new(),
-                code: 1,
-            },
+        let (body, errf) = (under(&tmp, "/body"), under(&tmp, "/err"));
+        // `2>"$tmp/err"`; a file that can't be opened runs no curl, and
+        // the code is 1.
+        let followed = match File::create(&errf) {
+            Ok(f) => self.follow(url, &body, &f),
+            Err(_) => Err(Stopped::Code(1)),
         };
+        if let Err(Stopped::Refused(why)) = &followed {
+            let _ = std::fs::remove_dir_all(&tmp);
+            out::stderr_line(&format!("Error: {why}"));
+            return Err(Exit::Error);
+        }
         let msg = std::fs::read(&errf)
             .map(|b| curl_message(&b))
             .unwrap_or_default();
-        let _ = std::fs::remove_file(&errf);
-        if ran.code != 0 {
-            stderr_bytes_line(&unreachable_line(ran.code, &msg));
+        if let Err(Stopped::Code(rc)) = followed {
+            let _ = std::fs::remove_dir_all(&tmp);
+            stderr_bytes_line(&unreachable_line(rc, &msg));
             return Err(Exit::Error);
         }
-        Ok(substituted(&ran.stdout))
+        // curl makes no file for an empty body.
+        let answer = std::fs::read(&body).unwrap_or_default();
+        let _ = std::fs::remove_dir_all(&tmp);
+        Ok(substituted(&answer))
     }
 }
 
@@ -736,14 +884,29 @@ mod tests {
         let (head, tail) = CURL_ARGS.split_at(5);
         for want in [
             format!(
-                "    body=$({CURL} {} \\\n        {} \"{}\" \"$1\" 2>\"$errf\") || rc=$?\n",
+                "    _K2_GITHUB_REFUSED=\"\"\n    _k2_github_curl \"$1\" {} \\\n        {} \"{}\" -o \"$tmp/body\" 2>\"$tmp/err\" || rc=$?\n",
                 head.join(" "),
                 tail[0],
                 tail[1]
             ),
-            format!("    errf=$({MKTEMP} \"${{TMPDIR:-/tmp}}/{TEMP_NAME}\") || {{\n        echo \"{MKTEMP_FAILED}\" >&2\n        return 1\n    }}\n"),
-            "    msg=$(head -n 1 \"$errf\" | sed 's/^curl: ([0-9]*) //')\n    rm -f \"$errf\"\n    if [ \"$rc\" -ne 0 ]; then\n".to_string(),
-            format!("        echo \"{UNREACHABLE_HEAD}$rc${{msg:+: $msg}})\" >&2\n        return 1\n    fi\n    printf '%s' \"$body\"\n"),
+            format!(
+                "        next=$({CURL} {} \"$@\" {} '{}' \"$url\") || rc=$?\n",
+                CURL_GUARD.join(" "),
+                CURL_WRITE_OUT[0],
+                CURL_WRITE_OUT[1]
+            ),
+            format!("_K2_GITHUB_HOSTS=\"{}\"\n", GITHUB_HOSTS.join(" ")),
+            format!("_K2_GITHUB_MAX_REDIRS={MAX_REDIRS}\n"),
+            "        [ \"$rc\" -eq 0 ] || return \"$rc\"\n        [ -n \"$next\" ] || return 0\n        hops=$((hops + 1))\n        if [ \"$hops\" -gt \"$_K2_GITHUB_MAX_REDIRS\" ]; then\n".to_string(),
+            "            _K2_GITHUB_REFUSED=\"GitHub redirected more than $_K2_GITHUB_MAX_REDIRS times (the last to $(_k2_github_where \"$next\")); stopped there\"\n".to_string(),
+            "        case \"$next\" in\n            https://*) ;;\n            *) _K2_GITHUB_REFUSED=\"GitHub redirected to $(_k2_github_where \"$next\"), which is not https; nothing was sent there\"\n".to_string(),
+            "        if ! _k2_github_url_ok \"$next\"; then\n            _K2_GITHUB_REFUSED=\"GitHub redirected to $(_k2_github_where \"$next\"), which is not GitHub; nothing was sent there\"\n".to_string(),
+            "    rest=\"${1#https://}\"\n    host=\"${rest%%[/?#]*}\"\n    for h in $_K2_GITHUB_HOSTS; do\n        [ \"$host\" = \"$h\" ] && return 0\n    done\n".to_string(),
+            "        *://*) scheme=\"${1%%://*}\"; rest=\"${1#*://}\"; rest=\"${scheme}://${rest%%[/?#]*}\" ;;\n        *) rest=\"${1%%[/?#]*}\" ;;\n    esac\n    printf '%s' \"$rest\" | LC_ALL=C tr -cd '[:graph:]'\n".to_string(),
+            "    if [ -n \"$_K2_GITHUB_REFUSED\" ]; then\n        rm -rf \"$tmp\"\n        echo \"Error: $_K2_GITHUB_REFUSED\" >&2\n        return 1\n    fi\n    msg=$(head -n 1 \"$tmp/err\" | sed 's/^curl: ([0-9]*) //')\n".to_string(),
+            format!("    tmp=$({MKTEMP} {MKTEMP_DIR} \"${{TMPDIR:-/tmp}}/{TEMP_NAME}\") || {{\n        echo \"{MKTEMP_FAILED}\" >&2\n        return 1\n    }}\n"),
+            "    if [ \"$rc\" -ne 0 ]; then\n        rm -rf \"$tmp\"\n".to_string(),
+            format!("        echo \"{UNREACHABLE_HEAD}$rc${{msg:+: $msg}})\" >&2\n        return 1\n    fi\n    # curl makes no file for an empty body.\n    if [ -f \"$tmp/body\" ]; then cat \"$tmp/body\"; fi\n    rm -rf \"$tmp\"\n"),
             format!("        releases=$(_app_update_get \"{LIST_URL}\") || exit 1\n        echo \"{LIST_HEAD}\"\n        printf '%s' \"$releases\" | python3 -c \""),
             format!("    echo \"{CHECKING}\"\n    local latest\n    latest=$(_app_update_get \"{LATEST_URL}\") || exit 1\n"),
             "    tag=$(echo \"$latest\" | python3 -c \"import json,sys; print(json.loads(sys.stdin.read()).get('tag_name','unknown'))\" 2>/dev/null)\n".to_string(),
@@ -855,8 +1018,115 @@ mod tests {
         }
     }
 
+    /// A refused redirect names GitHub and where it pointed, never the
+    /// brand's command or product; the list's head names the product.
+    #[test]
+    fn the_redirect_lines_say_github_never_the_brand_s_name() {
+        let cli = k2_client::brand::CLI_NAME;
+        let product = k2_client::brand::PRODUCT_NAME;
+        for (hops, next) in [
+            (MAX_REDIRS + 1, "https://github.com/x"),
+            (1, "http://api.github.com/x"),
+            (1, "https://evil.example/x"),
+        ] {
+            let line = refusal(hops, next.as_bytes()).expect("refused");
+            assert!(line.starts_with("GitHub redirected "), "{line}");
+            for name in [cli, product] {
+                assert!(!line.contains(name), "{line} names {name}");
+            }
+        }
+        assert_eq!(LIST_HEAD, format!("Available {product} releases:"));
+    }
+
+    /// `_k2_github_url_ok`: https on one of GitHub's hosts, exactly.
+    #[test]
+    fn only_github_s_hosts_over_https_are_followed() {
+        for (url, want) in [
+            (
+                "https://api.github.com/repositories/42/releases/latest",
+                true,
+            ),
+            ("https://github.com/o/r/releases/download/v1/x", true),
+            ("https://objects.githubusercontent.com/x?sig=1", true),
+            ("https://release-assets.githubusercontent.com/x?sig=1", true),
+            ("https://github.com", true),
+            ("https://github.com?x", true),
+            ("https://github.com#x", true),
+            ("http://github.com/x", false),
+            ("HTTPS://github.com/x", false),
+            ("https://GitHub.com/x", false),
+            ("https://evil.example/x", false),
+            ("https://github.com.evil.example/x", false),
+            ("https://evil.example/github.com", false),
+            ("https://api.github.com@evil.example/x", false),
+            ("https://name@github.com/x", false),
+            ("https://api.github.com:443/x", false),
+            ("https://api.github.com:8443/x", false),
+            ("https://github.com objects.githubusercontent.com/x", false),
+            ("https://.github.com/x", false),
+            ("https:///x", false),
+            ("https://", false),
+            ("ftp://github.com/x", false),
+            ("", false),
+        ] {
+            assert_eq!(github_url_ok(url.as_bytes()), want, "{url}");
+        }
+    }
+
+    /// `_k2_github_where`: the scheme and host, printable bytes only.
+    #[test]
+    fn the_error_line_names_the_scheme_and_host() {
+        for (url, want) in [
+            ("https://evil.example/a/b?c#d", "https://evil.example"),
+            ("http://api.github.com/x", "http://api.github.com"),
+            (
+                "https://api.github.com@evil.example/x",
+                "https://api.github.com@evil.example",
+            ),
+            (
+                "https://api.github.com:8443/x",
+                "https://api.github.com:8443",
+            ),
+            ("https://h?q=/x", "https://h"),
+            ("a://b://c/d", "a://b:"),
+            ("evil.example/x", "evil.example"),
+            (
+                "https://ev il\u{1b}[31m.example/x",
+                "https://evil[31m.example",
+            ),
+            ("https://\u{e9}.example/", "https://.example"),
+            ("", ""),
+        ] {
+            assert_eq!(github_where(url.as_bytes()), want, "{url:?}");
+        }
+    }
+
+    /// `_k2_github_curl`'s checks, in its order: the cap, https, the host.
+    #[test]
+    fn a_redirect_is_followed_or_refused_as_the_shell_does() {
+        assert_eq!(refusal(1, b"https://api.github.com/repositories/1"), None);
+        assert_eq!(refusal(MAX_REDIRS, b"https://github.com/x"), None);
+        assert_eq!(
+            refusal(MAX_REDIRS + 1, b"https://github.com/x"),
+            Some("GitHub redirected more than 5 times (the last to https://github.com); stopped there".into())
+        );
+        assert_eq!(
+            refusal(MAX_REDIRS + 1, b"http://evil.example/x"),
+            Some("GitHub redirected more than 5 times (the last to http://evil.example); stopped there".into())
+        );
+        assert_eq!(
+            refusal(1, b"http://api.github.com/x"),
+            Some("GitHub redirected to http://api.github.com, which is not https; nothing was sent there".into())
+        );
+        assert_eq!(
+            refusal(2, b"https://evil.example/x"),
+            Some("GitHub redirected to https://evil.example, which is not GitHub; nothing was sent there".into())
+        );
+        assert_eq!(MAX_REDIRS, 5);
+    }
+
     /// `_app_update_get` against a stub curl and the real mktemp: the
-    /// arguments, the body, the code, and no file left.
+    /// arguments of each hop, the body, the code, and no file left.
     #[cfg(unix)]
     #[test]
     fn the_get_runs_mktemp_and_curl_as_the_shell_does() {
@@ -877,39 +1147,76 @@ mod tests {
             settings_file: d.join("settings.json"),
         };
         let left = || std::fs::read_dir(&tmp).unwrap().count();
-        // The stub curl logs its arguments, writes `err` on stderr and
-        // `body` on stdout, and exits `rc`, each read from a file (it is
-        // written once, before it first runs).
+        // The stub curl logs its arguments, one hop a line, with -o's
+        // file as <body> (and that file's name in `opath`); writes `err`
+        // on stderr; then, when `hops` has a line `<url> <next>`, prints
+        // <next> as -w does and exits 0; else writes `body` where -o says
+        // and exits `rc`.
         std::fs::write(
             &curl,
             format!(
-                "#!/bin/sh\nfor a in \"$@\"; do printf '[%s]' \"$a\"; done > '{log}'\ncat '{d}/err' >&2\ncat '{d}/body'\nexit \"$(cat '{d}/rc')\"\n",
-                log = log.display(),
+                r#"#!/bin/sh
+d='{d}'
+prev=""; url=""; out=""
+for a in "$@"; do
+    if [ "$prev" = "-o" ]; then out="$a"; printf '[<body>]'; else printf '[%s]' "$a"; fi
+    prev="$a"; url="$a"
+done >> "$d/argv"
+echo >> "$d/argv"
+echo "$out" > "$d/opath"
+cat "$d/err" >&2
+next=$(while read -r from to; do [ "$from" = "$url" ] && printf '%s' "$to"; done < "$d/hops")
+if [ -n "$next" ]; then printf '%s' "$next"; exit 0; fi
+cat "$d/body" > "$out"
+exit "$(cat "$d/rc")"
+"#,
                 d = d.display()
             ),
         )
         .unwrap();
         std::fs::set_permissions(&curl, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let call = |g: &Github, body: &str, err: &str, rc: i32| {
+        let call = |g: &Github, hops: &[(&str, &str)], body: &str, err: &str, rc: i32| {
+            let _ = std::fs::remove_file(&log);
+            let mut h = String::new();
+            for (from, to) in hops {
+                h.push_str(&format!("{from} {to}\n"));
+            }
+            std::fs::write(d.join("hops"), h).unwrap();
             std::fs::write(d.join("body"), body).unwrap();
             std::fs::write(d.join("err"), err).unwrap();
             std::fs::write(d.join("rc"), rc.to_string()).unwrap();
             g.get(LATEST_URL)
         };
+        let hop = |url: &str| {
+            let mut line = String::new();
+            for a in CURL_GUARD.iter().chain(CURL_ARGS.iter()) {
+                line.push_str(&format!("[{a}]"));
+            }
+            line.push_str("[-o][<body>]");
+            for a in CURL_WRITE_OUT.iter().chain([&url]) {
+                line.push_str(&format!("[{a}]"));
+            }
+            line.push('\n');
+            line
+        };
+        let logged = || std::fs::read_to_string(&log).unwrap();
         let g = github(&tmp);
         assert_eq!(
-            call(&g, "{\"tag_name\":\"v1\"}\n\n", "curl: noise\n", 0),
+            call(&g, &[], "{\"tag_name\":\"v1\"}\n\n", "curl: noise\n", 0),
             Ok(b"{\"tag_name\":\"v1\"}".to_vec())
         );
-        let mut want = String::new();
-        for a in CURL_ARGS.iter().chain([&LATEST_URL]) {
-            want.push_str(&format!("[{a}]"));
-        }
-        assert_eq!(std::fs::read_to_string(&log).unwrap(), want);
+        assert_eq!(logged(), hop(LATEST_URL));
+        let opath = std::fs::read_to_string(d.join("opath")).unwrap();
+        assert!(
+            opath.starts_with(&format!("{}/k2-update.", tmp.display()))
+                && opath.ends_with("/body\n"),
+            "{opath}"
+        );
         assert_eq!(left(), 0, "a temp file left");
         assert_eq!(
             call(
                 &g,
+                &[],
                 "partial",
                 "curl: (22) The requested URL returned error: 404\n",
                 22
@@ -917,13 +1224,49 @@ mod tests {
             Err(Exit::Error)
         );
         assert_eq!(left(), 0, "a temp file left");
-        // mktemp fails: curl never runs.
-        std::fs::remove_file(&log).unwrap();
+        // A moved repository: the 301 to the new path is followed.
+        let moved = "https://api.github.com/repositories/42/releases/latest";
         assert_eq!(
-            call(&github(&d.join("no-such-folder")), "x", "", 0),
+            call(&g, &[(LATEST_URL, moved)], "{\"tag_name\":\"v2\"}", "", 0),
+            Ok(b"{\"tag_name\":\"v2\"}".to_vec())
+        );
+        assert_eq!(logged(), format!("{}{}", hop(LATEST_URL), hop(moved)));
+        assert_eq!(left(), 0, "a temp file left");
+        // Five hops through GitHub's hosts: followed; a sixth: refused.
+        let chain: Vec<String> = (0..7)
+            .map(|i| format!("https://{}/c/{i}", GITHUB_HOSTS[i % 4]))
+            .collect();
+        let mut hops: Vec<(&str, &str)> = vec![(LATEST_URL, chain[0].as_str())];
+        for i in 0..4 {
+            hops.push((chain[i].as_str(), chain[i + 1].as_str()));
+        }
+        assert_eq!(call(&g, &hops, "five", "", 0), Ok(b"five".to_vec()));
+        assert_eq!(logged().lines().count(), 6);
+        hops.push((chain[4].as_str(), chain[5].as_str()));
+        assert_eq!(call(&g, &hops, "six", "", 0), Err(Exit::Error));
+        assert_eq!(
+            logged().lines().count(),
+            6,
+            "the sixth redirect's target was asked"
+        );
+        assert!(!logged().contains(&chain[5]));
+        assert_eq!(left(), 0, "a temp file left");
+        // Off GitHub, or plain http: refused, never asked.
+        for to in ["https://evil.example/x", "http://api.github.com/x"] {
+            assert_eq!(
+                call(&g, &[(LATEST_URL, to)], "x", "", 0),
+                Err(Exit::Error),
+                "{to}"
+            );
+            assert_eq!(logged(), hop(LATEST_URL), "{to}");
+            assert_eq!(left(), 0, "a temp file left");
+        }
+        // mktemp fails: curl never runs.
+        assert_eq!(
+            call(&github(&d.join("no-such-folder")), &[], "x", "", 0),
             Err(Exit::Error)
         );
-        assert!(!log.exists(), "curl ran with no temp file");
+        assert!(!log.exists(), "curl ran with no temp folder");
         let _ = std::fs::remove_dir_all(&d);
     }
 

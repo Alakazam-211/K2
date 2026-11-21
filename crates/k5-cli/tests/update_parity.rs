@@ -3,9 +3,12 @@
 //! code, and the same programs run with the same arguments.
 //!
 //! GitHub is never asked: a stub `curl` first on `PATH`, on every side,
-//! answers `https://api.github.com/…` from the case's `UPDATE_GH_BODY`
-//! and `UPDATE_GH_RC`, writes `UPDATE_GH_ERR` on stderr (noise when it is
-//! not set), and logs its arguments,
+//! answers `https://<one of GitHub's hosts>/…`: a redirect when the
+//! case's `UPDATE_GH_HOPS` has a line `<url> <where>` for it (it prints
+//! <where> as `-w '%{redirect_url}'` does, exit 0), else
+//! `UPDATE_GH_BODY` into the `-o` file and exit `UPDATE_GH_RC`. It writes
+//! `UPDATE_GH_ERR` on stderr (noise when it is not set), and logs its
+//! arguments (the `-o` file as `<body file>`: its folder is random),
 //! its folder and the settings curl reads (proxies, CA files, its config
 //! file's places) to the rig's tool log, which must be the same on every
 //! side. Any other `https://` address is logged as unexpected and
@@ -41,6 +44,7 @@ mod common;
 
 use common::parity::*;
 use common::stub::Reply;
+use k5_cli::families::update;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::time::Duration;
@@ -93,20 +97,35 @@ for a in "$@"; do
 done
 case "$url" in
     "") exec '{real}' "$@" ;;
-    https://api.github.com/*)
+    https://api.github.com/*|https://github.com/*|https://objects.githubusercontent.com/*|https://release-assets.githubusercontent.com/*)
+        out=""
         {{
             printf 'curl'
-            for a in "$@"; do printf ' [%s]' "$a"; done
+            prev=""
+            for a in "$@"; do
+                if [ "$prev" = "-o" ]; then out="$a"; printf ' [<body file>]'; else printf ' [%s]' "$a"; fi
+                prev="$a"
+            done
             printf '\n'
             printf 'pwd=%s\n' "$(pwd)"
             {vars}
         }} >> '{log}'
+        prev=""
+        for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
         if [ "${{UPDATE_GH_ERR+x}}" = x ]; then
             printf '%s' "$UPDATE_GH_ERR" >&2
         else
             printf 'curl: noise on stderr\n' >&2
         fi
-        printf '%s' "${{UPDATE_GH_BODY-}}"
+        to=$(printf '%s\n' "${{UPDATE_GH_HOPS-}}" | while read -r from where; do
+            if [ "$from" = "$url" ]; then printf '%s' "$where"; fi
+        done)
+        if [ -n "$to" ]; then printf '%s' "$to"; exit 0; fi
+        if [ -n "$out" ]; then
+            printf '%s' "${{UPDATE_GH_BODY-}}" > "$out"
+        else
+            printf '%s' "${{UPDATE_GH_BODY-}}"
+        fi
         exit "${{UPDATE_GH_RC:-0}}"
         ;;
     *)
@@ -1119,6 +1138,215 @@ fn update_under_air_gap_answers_as_the_shell_does() {
     assert_native(&rig, &v[0]);
 }
 
+/// `UPDATE_GH_HOPS` for `hops`, and `body` as the last answer.
+fn gh_hops(hops: &[(&str, &str)], body: &str) -> Vec<(&'static str, String)> {
+    let lines: Vec<String> = hops.iter().map(|(f, t)| format!("{f} {t}")).collect();
+    vec![
+        ("UPDATE_GH_HOPS", lines.join("\n")),
+        ("UPDATE_GH_BODY", body.to_string()),
+    ]
+}
+
+/// GitHub's four hosts in turn, `n + 1` URLs.
+fn chain(n: usize) -> Vec<String> {
+    (0..=n)
+        .map(|i| format!("https://{}/c/{i}", update::GITHUB_HOSTS[i % 4]))
+        .collect()
+}
+
+/// The hops from `start` along `urls`.
+fn along<'a>(start: &'a str, urls: &'a [String]) -> Vec<(&'a str, &'a str)> {
+    let mut hops = vec![(start, urls[0].as_str())];
+    for w in urls.windows(2) {
+        hops.push((w[0].as_str(), w[1].as_str()));
+    }
+    hops
+}
+
+/// GitHub's own redirects are followed, one curl per hop; one to any
+/// other host, to plain http, or past the cap is refused before it is
+/// asked, with one line and exit 1, on both sides alike.
+#[test]
+fn update_follows_github_s_redirects_only() {
+    let rig = rig("redirects");
+    let newest = r#"{"tag_name":"v0.46.21"}"#;
+    let list = r#"[{"tag_name":"v0.46.21","published_at":"2026-11-20T00:00:00Z"}]"#;
+    let moved = "https://api.github.com/repositories/42/releases/latest";
+    let moved_list = "https://api.github.com/repositories/42/releases?per_page=10";
+    let five = chain(4);
+    let six = chain(5);
+    // (where, the --app row's name, the --list row's name)
+    let off: [(&str, &'static str, &'static str); 7] = [
+        (
+            "https://evil.example/repos/x/releases/latest",
+            "to evil.example",
+            "to evil.example: --list",
+        ),
+        (
+            "https://github.com.evil.example/x",
+            "to a look-alike host",
+            "to a look-alike host: --list",
+        ),
+        (
+            "https://api.github.com@evil.example/x",
+            "a name before an @",
+            "a name before an @: --list",
+        ),
+        (
+            "https://api.github.com:8443/x",
+            "to another port",
+            "to another port: --list",
+        ),
+        (
+            "http://api.github.com/repos/x/releases/latest",
+            "to http",
+            "to http: --list",
+        ),
+        (
+            "http://evil.example/x",
+            "to http off GitHub",
+            "to http off GitHub: --list",
+        ),
+        ("ftp://github.com/x", "to ftp", "to ftp: --list"),
+    ];
+    // (case, curl calls, a URL no call may name)
+    let mut v: Vec<(Case, usize, Option<&str>)> = vec![
+        (
+            with(
+                gh_hops(&[(update::LATEST_URL, moved)], newest),
+                case(
+                    "a moved repository: --app",
+                    &["--app"],
+                    &[],
+                    vec![],
+                    owner_and_port,
+                    0,
+                    0,
+                ),
+            ),
+            2,
+            None,
+        ),
+        (
+            with(
+                gh_hops(&[(update::LIST_URL, moved_list)], list),
+                case(
+                    "a moved repository: --list",
+                    &["--list"],
+                    &[],
+                    vec![],
+                    owner_and_port,
+                    0,
+                    0,
+                ),
+            ),
+            2,
+            None,
+        ),
+        (
+            with(
+                gh_hops(&along(update::LATEST_URL, &five), newest),
+                case("five redirects", &[], &[], vec![], owner_and_port, 0, 0),
+            ),
+            6,
+            None,
+        ),
+        (
+            with(
+                gh_hops(&along(update::LATEST_URL, &six), newest),
+                case(
+                    "six redirects",
+                    &["--app"],
+                    &[],
+                    vec![],
+                    owner_and_port,
+                    1,
+                    0,
+                ),
+            ),
+            6,
+            Some(six[5].as_str()),
+        ),
+        (
+            with(
+                gh_hops(&along(update::LIST_URL, &six), list),
+                case(
+                    "six redirects: --list",
+                    &["--list"],
+                    &[],
+                    vec![],
+                    owner_and_port,
+                    1,
+                    0,
+                ),
+            ),
+            6,
+            Some(six[5].as_str()),
+        ),
+        (
+            with(
+                {
+                    let mut env = gh_hops(&[(update::LATEST_URL, moved)], "partial");
+                    env.push(("UPDATE_GH_RC", "22".into()));
+                    env.push((
+                        "UPDATE_GH_ERR",
+                        "curl: (22) The requested URL returned error: 404\n".into(),
+                    ));
+                    env
+                },
+                case(
+                    "a redirect, then 404",
+                    &["--app"],
+                    &[],
+                    vec![],
+                    owner_and_port,
+                    1,
+                    0,
+                ),
+            ),
+            2,
+            None,
+        ),
+    ];
+    for (to, app, listed) in off {
+        v.push((
+            with(
+                gh_hops(&[(update::LATEST_URL, to)], newest),
+                case(app, &["--app"], &[], vec![], owner_and_port, 1, 0),
+            ),
+            1,
+            Some(to),
+        ));
+        v.push((
+            with(
+                gh_hops(&[(update::LIST_URL, to)], list),
+                case(listed, &["--list"], &[], vec![], owner_and_port, 1, 0),
+            ),
+            1,
+            Some(to),
+        ));
+    }
+    for (c, calls, never) in &v {
+        rig.check(c);
+        let (out, _) = rig.binary(c, false);
+        let log = rig.take_tool_log();
+        let asked: Vec<&str> = log.lines().filter(|l| l.starts_with("curl ")).collect();
+        assert_eq!(asked.len(), *calls, "{}: {out:?}\n{log}", c.name);
+        assert!(!log.contains("UNEXPECTED"), "{}: {log}", c.name);
+        if let Some(url) = never {
+            assert!(
+                !asked.iter().any(|l| l.contains(url)),
+                "{}: asked {url}\n{log}",
+                c.name
+            );
+            assert_eq!(out.code, Some(1), "{}: {out:?}", c.name);
+            let refused = out.stderr.starts_with("Error: GitHub redirected ");
+            assert!(refused, "{}: {out:?}", c.name);
+            assert_eq!(out.stderr.lines().count(), 1, "{}: {out:?}", c.name);
+        }
+    }
+}
+
 /// The stub curl is the one both sides run: a GitHub call reaches it,
 /// and logs what it was given. Neither side leaves its temp file.
 #[test]
@@ -1135,10 +1363,11 @@ fn the_stub_curl_answers_for_github() {
         assert!(out.stdout.contains("  Latest:  v9\n"), "{out:?}");
         let log = rig.take_tool_log();
         let mut want = String::from("curl");
-        for a in k5_cli::families::update::CURL_ARGS
-            .iter()
-            .chain([&k5_cli::families::update::LATEST_URL])
-        {
+        for a in update::CURL_GUARD.iter().chain(update::CURL_ARGS.iter()) {
+            want.push_str(&format!(" [{a}]"));
+        }
+        want.push_str(" [-o] [<body file>]");
+        for a in update::CURL_WRITE_OUT.iter().chain([&update::LATEST_URL]) {
             want.push_str(&format!(" [{a}]"));
         }
         assert!(log.starts_with(&format!("{want}\n")), "{log}");

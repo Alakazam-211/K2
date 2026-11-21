@@ -25,8 +25,7 @@
 //!
 //! - a command line with `-h` or `--help` (the front sends those on,
 //!   [`crate::front`]);
-//! - `export --since-days` with a value that is not plain digits
-//!   ([`transfer`]);
+//! - `export --since-days` with a digit outside ASCII ([`transfer`]);
 //! - `HOOK_SOCK` set with a `CODEX_` variable exported
 //!   ([`crate::prelude::codex_env`]), a word that is not UTF-8, a port
 //!   curl won't take, and a `python3` the binary can't tell;

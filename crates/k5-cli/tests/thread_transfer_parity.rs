@@ -193,3 +193,65 @@ fn thread_transfer_help_never_acts() {
         });
     }
 }
+
+/// `--since-days` that is not plain digits goes through `_compute_json`'s
+/// Python as bash's does: `int()` (or `float()` with a `.`) of it, and
+/// where that raises, its traceback, then the POST with an empty body.
+#[test]
+fn thread_export_since_days_as_compute_json_reads_it() {
+    let rig = Rig::new(VERB, "since");
+    for c in [
+        // A probe of the native bar: `thread export --since-days x`.
+        traced(plain(
+            "--since-days x",
+            &["export", "ws", "--since-days", "x"],
+            vec![ok(EXPORTED)],
+            0,
+            1,
+        )),
+        traced(plain(
+            "--since-days 1e3",
+            &["export", "ws", "--since-days", "1e3", "--json"],
+            vec![ok(EXPORTED)],
+            0,
+            1,
+        )),
+        traced(plain(
+            "--since-days x.y",
+            &["export", "ws", "--since-days", "x.y"],
+            vec![ok(EXPORTED)],
+            0,
+            1,
+        )),
+        traced(plain(
+            "--since-days x, refused",
+            &["export", "ws", "--since-days", "x"],
+            vec![Reply::Answer(400, r#"{"error":"bad body"}"#.into())],
+            2,
+            1,
+        )),
+        plain(
+            "--since-days 1.5",
+            &["export", "ws", "--since-days", "1.5"],
+            vec![ok(EXPORTED)],
+            0,
+            1,
+        ),
+        plain(
+            "--since-days with spaces and a _",
+            &["export", "ws", "--since-days", " 1_0\t"],
+            vec![ok(EXPORTED)],
+            0,
+            1,
+        ),
+        plain(
+            "--since-days -0",
+            &["export", "ws", "--since-days", "-0"],
+            vec![ok(EXPORTED)],
+            0,
+            1,
+        ),
+    ] {
+        rig.check(&c);
+    }
+}

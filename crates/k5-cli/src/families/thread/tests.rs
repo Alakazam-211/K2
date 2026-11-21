@@ -460,3 +460,34 @@ fn the_markdown_hint_counts() {
         post::NUDGE.replace('`', "\\`")
     )));
 }
+
+#[test]
+fn since_days_is_compute_json_s_number() {
+    use super::transfer::since_days;
+    use crate::out::json::Value;
+    let int = |v: &str| Ok(Some(Value::Int(v.into())));
+    assert_eq!(since_days(""), Ok(None));
+    assert_eq!(since_days("007"), int("7"));
+    assert_eq!(since_days(" 1_0\t"), int("10"));
+    assert_eq!(since_days("-0"), int("0"));
+    assert_eq!(since_days("+3"), int("3"));
+    assert_eq!(since_days("1.5"), Ok(Some(Value::Float(1.5))));
+    assert_eq!(since_days(" 2. "), Ok(Some(Value::Float(2.0))));
+    let raised = |v: &str| since_days(v).unwrap_err().text();
+    assert_eq!(
+        raised("x"),
+        "Traceback (most recent call last):\n  File \"<string>\", line 19, in <module>\nValueError: invalid literal for int() with base 10: 'x'\n"
+    );
+    assert!(raised("1e3").ends_with("int() with base 10: '1e3'\n"));
+    assert!(raised("1__0").ends_with("int() with base 10: '1__0'\n"));
+    assert!(raised("x.y").ends_with("\nValueError: could not convert string to float: 'x.y'\n"));
+    // Digits outside ASCII are Python's to read: the shell's.
+    assert_eq!(
+        super::transfer::parse(&["export", "ws", "--since-days", "\u{663}"]),
+        None
+    );
+    assert!(matches!(
+        super::transfer::parse(&["export", "ws", "--since-days", "x"]),
+        Some(super::transfer::Parsed::Ask(_))
+    ));
+}

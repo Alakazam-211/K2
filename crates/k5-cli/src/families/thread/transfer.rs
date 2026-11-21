@@ -19,14 +19,20 @@
 //!    line and exit.
 //! 4. `--json`: the body; else its Python's line (or table).
 //!
-//! The shell answers itself: a `--since-days` that is not plain digits
-//! (its Python's `int()` takes more, or raises).
+//! `--since-days` goes through `_compute_json`'s Python as bash's does
+//! ([`since_days`]): `int()` (or `float()` with a `.` in it) of the value;
+//! where that raises, its traceback on stderr (Python 3.12's, no source
+//! lines), and the POST goes with an empty body.
+//!
+//! The shell answers itself: a `--since-days` with a digit outside ASCII
+//! (Python reads it).
 
 use crate::exit::Exit;
-use crate::families::compute::writes::{dumps, load, object, print_body, str_value, Cp};
+use crate::families::compute::writes::{dumps, int_of, load, object, print_body, str_value, Cp};
 use crate::families::{py_get, py_iter, py_left, py_len, raised, Raise, Shown};
 use crate::out::json::Value;
 use crate::out::py;
+use crate::out::pylib::ops::float;
 use crate::prelude::Closing;
 use crate::transport::encode::quote;
 use crate::transport::{Auth, Client};
@@ -103,10 +109,35 @@ pub fn parse(words: &[&str]) -> Option<Parsed> {
             }
         }
     }
-    if !a.since.is_empty() && !a.since.bytes().all(|b| b.is_ascii_digit()) {
+    // Python's `int()` and `float()` read digits outside ASCII too.
+    if a.since.chars().any(|c| !c.is_ascii() && c.is_numeric()) {
         return None;
     }
     Some(Parsed::Ask(a))
+}
+
+/// `_compute_json`'s `float(v) if "." in v else int(v)` for
+/// `K2_CJ_sinceDays_n` (an empty value leaves the key out): the number,
+/// or the exception its Python raises at line 19.
+pub fn since_days(v: &str) -> Result<Option<Value>, Raise> {
+    if v.is_empty() {
+        return Ok(None);
+    }
+    if v.contains('.') {
+        return match float(v) {
+            Some(f) => Ok(Some(Value::Float(f))),
+            None => Err(Raise::at(
+                19,
+                format!(
+                    "ValueError: could not convert string to float: {}",
+                    py::repr(&str_value(v))
+                ),
+            )),
+        };
+    }
+    int_of(&str_value(v))
+        .map(|n| Some(Value::Int(n)))
+        .map_err(|e| Raise::at(19, e))
 }
 
 /// `_clone_die clone_agents_propose …`'s line.
@@ -224,14 +255,22 @@ fn verb(cp: &mut Cp<'_>, a: &Ask) -> Exit {
                 return e;
             }
             let mut pairs = vec![("ws", str_value(&a.ws))];
-            if !a.since.is_empty() {
-                let n = a.since.trim_start_matches('0');
-                pairs.push((
-                    "sinceDays",
-                    Value::Int(if n.is_empty() { "0" } else { n }.into()),
-                ));
-            }
-            match cp.call(true, EXPORT, &dumps(&object(pairs)), true) {
+            let body = match since_days(&a.since) {
+                Ok(n) => {
+                    pairs.extend(n.map(|n| ("sinceDays", n)));
+                    dumps(&object(pairs))
+                }
+                // The body's `$(…)` printed the traceback and gave
+                // nothing: the call goes with an empty body.
+                Err(r) => {
+                    let _ = crate::out::write_flushed(
+                        &mut std::io::stderr().lock(),
+                        r.text().as_bytes(),
+                    );
+                    String::new()
+                }
+            };
+            match cp.call(true, EXPORT, &body, true) {
                 Ok(body) if a.json => print_body(&body),
                 Ok(body) => exported(&body).print(),
                 Err(e) => e,

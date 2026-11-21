@@ -1020,7 +1020,7 @@ fn sessions_hands_these_to_the_shell() {
             &[],
             vec![],
             owner_and_port,
-            2,
+            1,
             0,
         )),
         shell(case(
@@ -1029,7 +1029,7 @@ fn sessions_hands_these_to_the_shell() {
             &[],
             vec![],
             owner_and_port,
-            2,
+            1,
             0,
         )),
         shell(case(

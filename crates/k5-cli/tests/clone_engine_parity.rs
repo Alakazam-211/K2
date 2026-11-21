@@ -227,7 +227,10 @@ impl CRig {
     fn mask(&self, side: &Side, text: &str) -> String {
         let mut t = text
             .replace(&side.dir.display().to_string(), "<dir>")
-            .replace(&format!("127.0.0.1:{}", big(side.remote.port)), "<remote+65536>")
+            .replace(
+                &format!("127.0.0.1:{}", big(side.remote.port)),
+                "<remote+65536>",
+            )
             .replace(&format!("127.0.0.1:{}", side.remote.port), "<remote>")
             .replace(&format!("127.0.0.1:{}", side.local.port), "<local>");
         t = t.replace(&format!(":+{}", side.remote_tls.port), ":+<rtls>");
@@ -1239,35 +1242,70 @@ fn the_stops_before_anything_is_sent() {
             code: 2,
             ..case(
                 "preview --host: a bracketed IPv6 address's port",
-                &["preview", "ws1", "--host", "http://[::1]:70000", "--token", "t"],
+                &[
+                    "preview",
+                    "ws1",
+                    "--host",
+                    "http://[::1]:70000",
+                    "--token",
+                    "t",
+                ],
             )
         },
         CCase {
             code: 2,
             ..case(
                 "preview --host: a port in a % escape",
-                &["preview", "ws1", "--host", "https://cp.example.invalid%3A70000", "--token", "t"],
+                &[
+                    "preview",
+                    "ws1",
+                    "--host",
+                    "https://cp.example.invalid%3A70000",
+                    "--token",
+                    "t",
+                ],
             )
         },
         CCase {
             code: 2,
             ..case(
                 "preview --host: a leading zero",
-                &["preview", "ws1", "--host", "https://cp.example.invalid:0443", "--token", "t"],
+                &[
+                    "preview",
+                    "ws1",
+                    "--host",
+                    "https://cp.example.invalid:0443",
+                    "--token",
+                    "t",
+                ],
             )
         },
         CCase {
             code: 2,
             ..case(
                 "preview --host: a sign",
-                &["preview", "ws1", "--host", "https://cp.example.invalid:+443", "--token", "t"],
+                &[
+                    "preview",
+                    "ws1",
+                    "--host",
+                    "https://cp.example.invalid:+443",
+                    "--token",
+                    "t",
+                ],
             )
         },
         CCase {
             code: 2,
             ..case(
                 "preview --host: port 0",
-                &["preview", "ws1", "--host", "https://cp.example.invalid:0", "--token", "t"],
+                &[
+                    "preview",
+                    "ws1",
+                    "--host",
+                    "https://cp.example.invalid:0",
+                    "--token",
+                    "t",
+                ],
             )
         },
         CCase {

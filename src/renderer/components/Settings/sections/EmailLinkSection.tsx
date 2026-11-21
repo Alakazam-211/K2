@@ -55,6 +55,15 @@ import {
 } from '../controls/SettingControls'
 import { InboxAccessPanel } from './InboxAccessPanel'
 import {
+  bindLoopback,
+  ConsentFlowView,
+  CopyButton,
+  OAUTH_MAX_MS,
+  OAUTH_POLL_MS,
+  readFailure,
+  useConsentUpgrade,
+} from './email-link-consent'
+import {
   addLinkedInbox,
   clearOauthClient,
   fetchInboxes,
@@ -101,30 +110,6 @@ const VIEWER_NOTE = 'Not available while you view this server'
 
 // ── Small shared bits ────────────────────────────────────────────────────
 
-/** Copy with a short "Copied" on the button itself. */
-function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }): React.JSX.Element {
-  const [copied, setCopied] = useState(false)
-  return (
-    <Button
-      variant="quiet"
-      className="flex-shrink-0"
-      onClick={() => {
-        void navigator.clipboard
-          .writeText(text)
-          .then(() => {
-            setCopied(true)
-            window.setTimeout(() => setCopied(false), 1200)
-          })
-          .catch(() => {
-            useToastStore.getState().addToast(`${PRODUCT_NAME} couldn’t copy to the clipboard`, 'error')
-          })
-      }}
-    >
-      {copied ? 'Copied' : label}
-    </Button>
-  )
-}
-
 /** How an account was connected, in the words a person uses. */
 function providerName(inbox: Inbox): string {
   switch (inbox.capabilities?.source) {
@@ -155,18 +140,6 @@ function usedBy(inbox: Inbox): string {
   return `Used by ${primary} and ${more} more workspaces`
 }
 
-/** The plain line and the server's reason for a failed read. A reply K2
- *  couldn't read gets its own line; the raw parser text never shows. */
-function readFailure(err: unknown): { line: string; detail: string | null } {
-  if (err instanceof MailReplyError) {
-    return {
-      line: `This server sent an answer ${PRODUCT_NAME} couldn’t read. Try again; if it keeps happening, update ${PRODUCT_NAME} on the server.`,
-      detail: null,
-    }
-  }
-  return { line: `${PRODUCT_NAME} couldn’t reach this server’s email settings. Try again in a moment.`, detail: mailErrorMessage(err) }
-}
-
 /** Why a step failed, in the server's words, or nothing for a reply K2
  *  couldn't read (its own line says so). */
 function serverReason(err: unknown): string | null {
@@ -181,9 +154,6 @@ function serverReason(err: unknown): string | null {
 // (PKCE verifier stays on the daemon; code is relayed via complete).
 // Microsoft: device flow card (enabled once a Microsoft app is configured,
 // MCS2). Tokens never render.
-
-const OAUTH_POLL_MS = 3000
-const OAUTH_MAX_MS = 10 * 60 * 1000 // hard bound if the provider gives none
 
 type OauthProvider = 'gmail' | 'microsoft'
 
@@ -209,16 +179,6 @@ type ConnectFailure = {
   /** The server's own reason, shown quietly. */
   detail: string | null
   adminConsentUrl?: string
-}
-
-/** Binds the desktop's loopback listener for a Google sign-in. Throws a
- *  plain error when this computer can't (the web build, an old app). */
-async function bindLoopback(): Promise<{ captureId: string; redirectUri: string }> {
-  const bind = await invoke<{ captureId?: unknown; redirectUri?: unknown } | null>('oauth_loopback_bind')
-  if (!bind || typeof bind.captureId !== 'string' || typeof bind.redirectUri !== 'string') {
-    throw new Error(`${PRODUCT_NAME} couldn’t open a Google sign-in window on this computer. Use the ${PRODUCT_NAME} desktop app, or update it.`)
-  }
-  return { captureId: bind.captureId, redirectUri: bind.redirectUri }
 }
 
 /** Words for a sign-in that ended without connecting. */
@@ -1257,10 +1217,6 @@ export function needsCalendarConsent(inbox: Pick<Inbox, 'capabilities'>): boolea
   return (c.missing ?? []).some((m) => m.cap.startsWith('calendar.') && m.reason === 'scope_not_granted')
 }
 
-type UpgradeFlow =
-  | { kind: 'device'; linkId: string; userCode: string; verificationUrl: string; deadlineMs: number }
-  | { kind: 'browser'; linkId: string; authorizationUrl: string; deadlineMs: number }
-
 /** The Calendar card for an account signed in for mail only: one row with
  *  Add calendar, then the sign-in it starts, then what went wrong if it
  *  did. Renders nothing for an account that has nothing to add. */
@@ -1276,147 +1232,36 @@ export function AddCalendarAccess({
   onUpgraded: () => void
   pollMs?: number
 }): React.JSX.Element | null {
-  const [busy, setBusy] = useState(false)
-  const [flow, setFlow] = useState<UpgradeFlow | null>(null)
   const [failure, setFailure] = useState<{ text: string; adminConsentUrl?: string } | null>(null)
-  const onUpgradedRef = useRef(onUpgraded)
-  onUpgradedRef.current = onUpgraded
-  // Google: the loopback capture waiting for the consent redirect.
-  const captureRef = useRef<string | null>(null)
   const isGoogle = inbox.capabilities?.source === 'google'
-
-  const cancelCapture = useCallback((): void => {
-    const cap = captureRef.current
-    captureRef.current = null
-    if (cap) void invoke('oauth_loopback_cancel', { captureId: cap }).catch(() => undefined)
-  }, [])
-  useEffect(() => cancelCapture, [cancelCapture])
-
-  const startGoogle = useCallback(async (): Promise<void> => {
-    const bind = await bindLoopback()
-    captureRef.current = bind.captureId
-    try {
-      const res = await linkOauthUpgrade({
-        inbox: inbox.address,
-        // 0.46.16: an added calendar is read-only (agents never write).
-        features: 'calendar-read',
-        clientCapture: true,
-        redirectUri: bind.redirectUri,
-      })
-      if (res.flow !== 'loopback') {
-        throw new Error(`${PRODUCT_NAME} could not start a Google consent page. Try again.`)
-      }
-      if (!res.authorizationUrl || !res.state) {
-        throw new Error(res.hint ?? `${PRODUCT_NAME} could not start a Google consent page. Try again.`)
-      }
-      const { linkId, authorizationUrl } = res
-      const oauthState = res.state
-      setFlow({ kind: 'browser', linkId, authorizationUrl, deadlineMs: Date.now() + OAUTH_MAX_MS })
-      void openUrl(authorizationUrl).catch(() => undefined)
-      // Relay the redirect's code in the background; the status poll
-      // drives the UI.
-      void (async () => {
-        try {
-          const capture = await invoke<{ code?: string | null; state?: string | null; error?: string | null } | null>(
-            'oauth_loopback_wait',
-            { captureId: bind.captureId, expectedState: oauthState, timeoutSecs: 300 },
-          )
-          if (captureRef.current !== bind.captureId) return
-          await linkOauthComplete({
-            linkId,
-            code: capture?.code ?? undefined,
-            state: capture?.state ?? oauthState,
-            error: capture?.error ?? undefined,
-          })
-        } catch (e) {
-          if (captureRef.current !== bind.captureId) return
-          setFailure({ text: mailErrorMessage(e) })
-          setFlow(null)
-        } finally {
-          if (captureRef.current === bind.captureId) captureRef.current = null
-        }
-      })()
-    } catch (e) {
-      cancelCapture()
-      throw e
-    }
-  }, [inbox.address, cancelCapture])
-
-  const start = useCallback(async (): Promise<void> => {
-    setBusy(true)
-    setFailure(null)
-    try {
-      if (isGoogle) {
-        await startGoogle()
-        return
-      }
-      const res = await linkOauthUpgrade({ inbox: inbox.address, features: 'calendar-read' })
-      if (res.flow === 'device') {
-        const bound = Number.isFinite(res.expiresIn) && res.expiresIn > 0 ? res.expiresIn * 1000 : OAUTH_MAX_MS
-        setFlow({
-          kind: 'device',
-          linkId: res.linkId,
-          userCode: res.userCode,
-          verificationUrl: res.verificationUrl,
-          deadlineMs: Date.now() + Math.min(bound, OAUTH_MAX_MS),
-        })
-      } else {
-        setFailure({ text: res.hint ?? `${PRODUCT_NAME} could not start a Microsoft device sign-in. Try again.` })
-      }
-    } catch (e) {
-      setFailure({ text: e instanceof MailReplyError ? readFailure(e).line : mailErrorMessage(e) })
-    } finally {
-      setBusy(false)
-    }
-  }, [inbox.address, isGoogle, startGoogle])
-
-  useEffect(() => {
-    if (!flow) return
-    let cancelled = false
-    const tick = async (): Promise<void> => {
-      if (cancelled) return
-      if (Date.now() > flow.deadlineMs) {
-        setFailure({ text: 'The request expired before it was approved.' })
-        setFlow(null)
-        return
-      }
-      try {
-        const st = await linkOauthStatus(flow.linkId)
-        if (cancelled) return
-        if (st.state === 'connected') {
-          setFlow(null)
-          useToastStore.getState().addToast(`Calendar access added for ${inbox.address}`, 'success')
-          onUpgradedRef.current()
-        } else if (st.state === 'denied' || st.state === 'expired' || st.state === 'error') {
-          const lead =
-            st.state === 'denied'
-              ? 'Access was denied.'
-              : st.state === 'expired'
-                ? 'The request expired before it was approved.'
-                : st.code === 'account_mismatch'
-                  ? 'A different account signed in.'
-                  : st.code === 'admin_consent_required'
-                    ? 'Your Microsoft 365 admin needs to approve calendar access first.'
-                    : st.code === 'scope_not_granted'
-                      ? 'Calendar access was not allowed on the consent page.'
-                      : 'Something went wrong adding calendar access.'
-          setFailure({ text: st.hint ? `${lead} ${st.hint}` : lead, adminConsentUrl: st.adminConsentUrl })
-          setFlow(null)
-          cancelCapture()
-        }
-      } catch (e) {
-        if (cancelled) return
-        setFailure({ text: e instanceof MailReplyError ? readFailure(e).line : mailErrorMessage(e) })
-        setFlow(null)
-      }
-    }
-    const id = window.setInterval(() => void tick(), pollMs)
-    void tick()
-    return () => {
-      cancelled = true
-      window.clearInterval(id)
-    }
-  }, [flow, inbox.address, pollMs, cancelCapture])
+  const { flow, busy, start } = useConsentUpgrade({
+    inbox,
+    // 0.46.16: an added calendar is read-only (agents never write).
+    features: 'calendar-read',
+    pollMs,
+    onConnected: () => {
+      useToastStore.getState().addToast(`Calendar access added for ${inbox.address}`, 'success')
+      onUpgraded()
+    },
+    onEnded: (end) => {
+      if (end.kind === 'failed') return setFailure({ text: end.text })
+      if (end.kind === 'timeout') return setFailure({ text: 'The request expired before it was approved.' })
+      const st = end.status
+      const lead =
+        st.state === 'denied'
+          ? 'Access was denied.'
+          : st.state === 'expired'
+            ? 'The request expired before it was approved.'
+            : st.code === 'account_mismatch'
+              ? 'A different account signed in.'
+              : st.code === 'admin_consent_required'
+                ? 'Your Microsoft 365 admin needs to approve calendar access first.'
+                : st.code === 'scope_not_granted'
+                  ? 'Calendar access was not allowed on the consent page.'
+                  : 'Something went wrong adding calendar access.'
+      setFailure({ text: st.hint ? `${lead} ${st.hint}` : lead, adminConsentUrl: st.adminConsentUrl })
+    },
+  })
 
   if (!needsCalendarConsent(inbox)) return null
   return (
@@ -1441,7 +1286,10 @@ export function AddCalendarAccess({
           data-testid="add-calendar-button"
           className="flex-shrink-0"
           disabled={!canMutate || busy || flow !== null}
-          onClick={() => void start()}
+          onClick={() => {
+            setFailure(null)
+            void start()
+          }}
           title={
             !canMutate
               ? VIEWER_NOTE
@@ -1453,45 +1301,14 @@ export function AddCalendarAccess({
           {busy ? 'Starting…' : 'Add calendar'}
         </Button>
       </SettingRow>
-      {flow?.kind === 'browser' && (
-        <div className="px-4 py-3 space-y-2" data-testid="add-calendar-browser" role="status">
-          <p className={SETTING_ROW_HINT}>
-            Allow calendar access for {inbox.address} on Google’s page. It opened in your browser.
-          </p>
-          <div className="flex items-center justify-between gap-6">
-            <span className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)]">
-              <Spinner />
-              Waiting for approval… this updates by itself.
-            </span>
-            <div className="flex items-center gap-2 flex-shrink-0">
-              <CopyButton text={flow.authorizationUrl} label="Copy page link" />
-              <Button variant="quiet" onClick={() => void openUrl(flow.authorizationUrl)}>
-                Open Google’s page again
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-      {flow?.kind === 'device' && (
-        <div className="px-4 py-3 space-y-2" data-testid="add-calendar-device" role="status">
-          <p className={SETTING_ROW_HINT}>
-            Go to <span className="font-mono">{flow.verificationUrl}</span> and enter this code, signed in as{' '}
-            {inbox.address}:
-          </p>
-          <div className="flex items-center justify-between gap-6">
-            <span className="type-title font-mono tracking-widest text-[var(--color-text-primary)] select-all">{flow.userCode}</span>
-            <div className="flex items-center gap-2 flex-shrink-0">
-              <CopyButton text={flow.userCode} label="Copy code" />
-              <Button variant="quiet" onClick={() => void openUrl(flow.verificationUrl)}>
-                Open sign-in page
-              </Button>
-            </div>
-          </div>
-          <p className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)]">
-            <Spinner />
-            Waiting for approval… this updates by itself.
-          </p>
-        </div>
+      {flow && (
+        <ConsentFlowView
+          flow={flow}
+          address={inbox.address}
+          testIdPrefix="add-calendar"
+          lead={`Allow calendar access for ${inbox.address} on Google’s page. It opened in your browser.`}
+          waiting="Waiting for approval… this updates by itself."
+        />
       )}
     </SettingsGroup>
   )

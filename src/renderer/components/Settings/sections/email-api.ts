@@ -498,6 +498,9 @@ export interface InboxCapabilities {
   mail?: Record<string, boolean>
   calendar?: Record<string, boolean | string>
   missing?: MissingCapability[]
+  /** Google and Microsoft links: what the link was consented for, as the
+   *  daemon stores it (`mail`, `mail,calendar-read`, `calendar`, …). */
+  account?: { features?: string }
 }
 
 /** GET /cli/mail/inboxes — the unified catalog (hosted + linked). Access
@@ -684,15 +687,20 @@ export async function linkOauthStart(args: {
   return parseOauthStart(await daemonCliPost<unknown>(primaryScope(), 'mail/link/oauth/start', args))
 }
 
+/** What an OAuth link is consented for, in the daemon's words. */
+export type LinkFeatures = 'mail' | 'calendar-read' | 'calendar' | 'mail,calendar-read' | 'mail,calendar'
+
 /** POST /cli/mail/link/oauth/start `{inbox, features}` — MCS1's in-place
  *  re-consent of an EXISTING OAuth link for more features (same row,
  *  grants and ids). Microsoft answers a device flow; Google (MCS4) a
  *  client-capture loopback flow when `clientCapture` + `redirectUri` are
  *  passed (Google incremental consent, `include_granted_scopes`). Poll
- *  {@link linkOauthStatus} like a new link. Owner-gated. */
+ *  {@link linkOauthStatus} like a new link. Owner-gated. Passing the
+ *  features the link already has signs in again in place: the daemon
+ *  replaces only the saved tokens (how a refused sign-in is fixed). */
 export async function linkOauthUpgrade(args: {
   inbox: string
-  features: 'calendar-read' | 'calendar' | 'mail' | 'mail,calendar'
+  features: LinkFeatures
   /** Google: the desktop client binds the loopback and relays the code. */
   clientCapture?: boolean
   /** `http://127.0.0.1:<port>/cb` from `oauth_loopback_bind`. */
@@ -907,11 +915,13 @@ function parseCapabilities(v: unknown): InboxCapabilities | undefined {
           : [],
       )
     : []
+  const features = isRecord(v.account) ? str(v.account.features) : null
   return {
     source,
     mail: isRecord(v.mail) ? (v.mail as Record<string, boolean>) : undefined,
     calendar: isRecord(v.calendar) ? (v.calendar as Record<string, boolean | string>) : undefined,
     missing,
+    ...(isRecord(v.account) ? { account: features ? { features } : {} } : {}),
   }
 }
 

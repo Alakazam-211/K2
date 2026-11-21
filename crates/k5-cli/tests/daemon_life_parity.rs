@@ -171,6 +171,7 @@ case "$1" in
     [ "$2" = "$u" ] || exit 1
     if [ -f '{dir}/systemd-exec' ]; then cat '{dir}/systemd-exec'; else echo "ExecStart=/opt/k2/k2-daemon"; fi ;;
   is-active) echo "$st"; [ "$st" = active ] ;;
+  is-enabled) if [ -f '{dir}/disabled' ]; then echo disabled; exit 1; fi; echo enabled ;;
   show)
     case "$3" in
       MainPID) echo "$pid" ;;
@@ -181,7 +182,15 @@ case "$1" in
   stop|restart|start)
     [ "$2" = "$u" ] || exit 1
     echo "stand-in systemctl: $1 $2"
-    if [ -f '{dir}/systemd-fail' ]; then echo "Failed to $1 $2: Access denied" >&2; exit 1; fi ;;
+    if [ -f '{dir}/systemd-fail' ]; then echo "Failed to $1 $2: Access denied" >&2; exit 1; fi
+    case "$1" in
+      stop) [ -f '{dir}/stop-keeps' ] || echo "$s $u inactive 0 $slice $cg" > '{dir}/systemd' ;;
+      start) echo "$s $u active 4242 $slice $cg" > '{dir}/systemd' ;;
+    esac ;;
+  disable)
+    [ "$2" = "$u" ] || exit 1
+    if [ -f '{dir}/disable-fail' ]; then echo "Failed to disable $2: Access denied" >&2; exit 1; fi
+    : > '{dir}/disabled' ;;
   *) exit 1 ;;
 esac
 "#,
@@ -321,6 +330,9 @@ fn base(r: &Rig) {
         "systemd",
         "systemd-exec",
         "systemd-fail",
+        "disabled",
+        "disable-fail",
+        "stop-keeps",
         "uname-s",
         "launchctl-load",
         "launchctl-load.rc",
@@ -357,6 +369,44 @@ fn system_unit_failing(r: &Rig) {
         "system k2-daemon.service active 4242 system.slice /system.slice/k2-daemon.service\n",
     );
     put(r, "systemd-fail", "");
+}
+
+fn user_unit_failing(r: &Rig) {
+    user_unit(r);
+    put(r, "systemd-fail", "");
+}
+
+fn user_unit_stays_up(r: &Rig) {
+    user_unit(r);
+    put(r, "stop-keeps", "");
+}
+
+fn user_unit_disable_fails(r: &Rig) {
+    user_unit(r);
+    put(r, "disable-fail", "");
+}
+
+fn system_unit(r: &Rig) {
+    base(r);
+    put(
+        r,
+        "systemd",
+        "system k2-daemon.service active 4242 system.slice /system.slice/k2-daemon.service\n",
+    );
+}
+
+fn system_unit_stopped(r: &Rig) {
+    base(r);
+    put(
+        r,
+        "systemd",
+        "system k2-daemon.service inactive 0 system.slice /system.slice/k2-daemon.service\n",
+    );
+}
+
+fn system_unit_off(r: &Rig) {
+    system_unit_stopped(r);
+    put(r, "disabled", "");
 }
 
 fn slice_moved(r: &Rig) {
@@ -1135,43 +1185,6 @@ fn daemon_log_uninstall_start_and_usage_answer_as_the_shell_does() {
             1,
             0,
         ),
-        // native: daemon uninstall
-        case(
-            "uninstall --yes on Linux",
-            &["uninstall", "--yes"],
-            &[],
-            vec![],
-            base,
-            0,
-            0,
-        ),
-        with_stdin(
-            case("uninstall: y", &["uninstall"], &[], vec![], base, 0, 0),
-            b"  y \n",
-        ),
-        with_stdin(
-            case("uninstall: no", &["uninstall"], &[], vec![], base, 1, 0),
-            b"n\n",
-        ),
-        case(
-            "uninstall: the input ends",
-            &["uninstall", "x", "--yes"],
-            &[],
-            vec![],
-            base,
-            1,
-            0,
-        ),
-        // native: daemon start
-        case(
-            "start on Linux: no plist",
-            &["start"],
-            &[],
-            vec![],
-            base,
-            1,
-            0,
-        ),
         // native: daemon --json
         case("the usage", &["--json"], &[], vec![], base, 1, 0),
         case(
@@ -1195,6 +1208,255 @@ fn daemon_log_uninstall_start_and_usage_answer_as_the_shell_does() {
     ];
     for c in rows {
         check(&r, &c, &[], true);
+    }
+}
+
+/// Linux: `uninstall` takes the port and token files away only once the
+/// unit `status` finds is down, and `start` starts a user unit.
+#[test]
+fn daemon_uninstall_and_start_on_linux_answer_as_the_shell_does() {
+    let r = rig("unit");
+    let user_down = vec![
+        CAT_USER,
+        "systemctl --user stop k2-daemon.service",
+        "systemctl --user disable k2-daemon.service",
+        "systemctl --user is-active k2-daemon.service",
+    ];
+    let sys_find = vec![CAT_USER, CAT_USER_OLD, CAT_SYSTEM];
+    let mut sys_active = sys_find.clone();
+    sys_active.push("systemctl is-active k2-daemon.service");
+    let mut sys_enabled = sys_active.clone();
+    sys_enabled.push("systemctl is-enabled k2-daemon.service");
+    let user_start = vec![CAT_USER, "systemctl --user start k2-daemon.service"];
+    let rows: Vec<(Case, Vec<&str>)> = vec![
+        (
+            // native: daemon uninstall
+            case(
+                "uninstall --yes: a user unit",
+                &["uninstall", "--yes"],
+                &[],
+                vec![],
+                user_unit,
+                0,
+                0,
+            ),
+            user_down.clone(),
+        ),
+        (
+            with_stdin(
+                case(
+                    "uninstall: a user unit, y",
+                    &["uninstall"],
+                    &[],
+                    vec![],
+                    user_unit,
+                    0,
+                    0,
+                ),
+                b"y\n",
+            ),
+            user_down.clone(),
+        ),
+        (
+            with_stdin(
+                case(
+                    "uninstall: a user unit, n",
+                    &["uninstall"],
+                    &[],
+                    vec![],
+                    user_unit,
+                    1,
+                    0,
+                ),
+                b"n\n",
+            ),
+            vec![CAT_USER],
+        ),
+        (
+            case(
+                "uninstall --yes: a user unit whose stop fails",
+                &["uninstall", "--yes"],
+                &[],
+                vec![],
+                user_unit_failing,
+                1,
+                0,
+            ),
+            vec![CAT_USER, "systemctl --user stop k2-daemon.service"],
+        ),
+        (
+            case(
+                "uninstall --yes: a user unit still running after the stop",
+                &["uninstall", "--yes"],
+                &[],
+                vec![],
+                user_unit_stays_up,
+                1,
+                0,
+            ),
+            user_down.clone(),
+        ),
+        (
+            case(
+                "uninstall --yes: a user unit whose disable fails",
+                &["uninstall", "--yes"],
+                &[],
+                vec![],
+                user_unit_disable_fails,
+                1,
+                0,
+            ),
+            user_down[..3].to_vec(),
+        ),
+        (
+            case(
+                "uninstall --yes: a system unit running",
+                &["uninstall", "--yes"],
+                &[],
+                vec![],
+                system_unit,
+                1,
+                0,
+            ),
+            sys_active.clone(),
+        ),
+        (
+            with_stdin(
+                case(
+                    "uninstall: a system unit running, no prompt first",
+                    &["uninstall"],
+                    &[],
+                    vec![],
+                    system_unit,
+                    1,
+                    0,
+                ),
+                b"y\n",
+            ),
+            sys_active.clone(),
+        ),
+        (
+            case(
+                "uninstall --yes: a system unit stopped but enabled",
+                &["uninstall", "--yes"],
+                &[],
+                vec![],
+                system_unit_stopped,
+                1,
+                0,
+            ),
+            sys_enabled.clone(),
+        ),
+        (
+            case(
+                "uninstall --yes: a system unit stopped and disabled",
+                &["uninstall", "--yes"],
+                &[],
+                vec![],
+                system_unit_off,
+                0,
+                0,
+            ),
+            sys_enabled.clone(),
+        ),
+        (
+            case(
+                "uninstall --yes: no unit",
+                &["uninstall", "--yes"],
+                &[],
+                vec![],
+                base,
+                0,
+                0,
+            ),
+            NO_UNIT.to_vec(),
+        ),
+        (
+            with_stdin(
+                case(
+                    "uninstall: no unit, y",
+                    &["uninstall"],
+                    &[],
+                    vec![],
+                    base,
+                    0,
+                    0,
+                ),
+                b"  y \n",
+            ),
+            NO_UNIT.to_vec(),
+        ),
+        (
+            with_stdin(
+                case(
+                    "uninstall: no unit, no",
+                    &["uninstall"],
+                    &[],
+                    vec![],
+                    base,
+                    1,
+                    0,
+                ),
+                b"n\n",
+            ),
+            NO_UNIT.to_vec(),
+        ),
+        (
+            case(
+                "uninstall: --yes not first, the input ends",
+                &["uninstall", "x", "--yes"],
+                &[],
+                vec![],
+                base,
+                1,
+                0,
+            ),
+            NO_UNIT.to_vec(),
+        ),
+        (
+            // native: daemon start
+            case(
+                "start: a user unit",
+                &["start"],
+                &[],
+                vec![],
+                user_unit,
+                0,
+                0,
+            ),
+            user_start.clone(),
+        ),
+        (
+            case(
+                "start: a user unit whose start fails",
+                &["start"],
+                &[],
+                vec![],
+                user_unit_failing,
+                1,
+                0,
+            ),
+            user_start.clone(),
+        ),
+        (
+            case(
+                "start: a system unit needs root",
+                &["start"],
+                &[],
+                vec![],
+                system_unit_stopped,
+                1,
+                0,
+            ),
+            sys_find.clone(),
+        ),
+        (
+            case("start: no unit", &["start"], &[], vec![], base, 1, 0),
+            NO_UNIT.to_vec(),
+        ),
+    ];
+    for (c, want) in rows {
+        check(&r, &c, &want, true);
     }
 }
 
@@ -1453,25 +1715,44 @@ fn no_service_manager_is_named_by_an_absolute_path() {
     }
 }
 
+/// A brand row: the words, the setup, and what stderr must hold.
+type BrandRow = (&'static [&'static str], fn(&Rig), String);
+
 /// The lines name the command by the brand's name.
 #[test]
 fn daemon_life_lines_say_the_brand_s_name() {
     let r = rig("brand");
     let cli = k2_client::brand::CLI_NAME;
-    let rows: [(&'static [&'static str], String); 4] = [
-        (&["nosuch"], format!("Usage: {cli} daemon <status|")),
+    let rows: [BrandRow; 6] = [
+        (&["nosuch"], base, format!("Usage: {cli} daemon <status|")),
         (
             &["install", "--bogus"],
+            base,
             format!("{cli} daemon install: unknown argument: --bogus"),
         ),
         (
             &["stop", "x"],
+            base,
             format!("\"hint\":\"{cli} daemon stop [--keep-agents]\""),
         ),
-        (&["survive", "x"], format!("Usage: {cli} daemon survive")),
+        (
+            &["survive", "x"],
+            base,
+            format!("Usage: {cli} daemon survive"),
+        ),
+        (
+            &["start"],
+            base,
+            format!("Install it first: {cli} daemon install"),
+        ),
+        (
+            &["uninstall", "--yes"],
+            system_unit,
+            format!("then run {cli} daemon uninstall again."),
+        ),
     ];
-    for (args, want) in rows {
-        let c = side_case(&r, &case("brand", args, &[], vec![], base, 0, 0), true);
+    for (args, setup, want) in rows {
+        let c = side_case(&r, &case("brand", args, &[], vec![], setup, 0, 0), true);
         let (out, _) = r.binary(&c, false);
         let _ = r.take_tool_log();
         assert!(out.stderr.contains(&want), "{args:?}: {}", out.stderr);

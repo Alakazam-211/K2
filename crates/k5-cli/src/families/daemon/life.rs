@@ -476,7 +476,7 @@ pub fn run(s: &Settings, client: &mut Client, v: Life) -> Exit {
             }
             Exit::Error
         }
-        Life::Start => start(),
+        Life::Start => start(s),
         Life::Stop { keep: true } => stop_keeping_agents(s),
         Life::Stop { keep: false } => stop(s, client),
         Life::StopUsage => {
@@ -538,8 +538,35 @@ pub fn usage() -> Vec<String> {
     ]
 }
 
+/// `_daemon_start_linux`: the unit `status` finds. A user unit is
+/// started; a system unit needs root, so only the line to run is printed;
+/// with no unit, there is nothing to start until `install`.
+fn start_linux(s: &Settings) -> Exit {
+    let Some((scope, unit)) = linux_unit(&s.home) else {
+        out::stderr_line(
+            "daemon start: no systemd unit for the daemon (k2-daemon.service, user or system).",
+        );
+        out::stderr_line(&format!("Install it first: {CLI} daemon install"));
+        return Exit::Error;
+    };
+    if scope == "system" {
+        out::stderr_line(&format!(
+            "Starting a system unit needs root: sudo systemctl start {unit}"
+        ));
+        return Exit::Error;
+    }
+    if systemctl_shown("user", &["start", &unit]) {
+        say!("Daemon started ({unit}).");
+        return Exit::Ok;
+    }
+    Exit::Error
+}
+
 /// `cmd_daemon_start`.
-fn start() -> Exit {
+fn start(s: &Settings) -> Exit {
+    if os() == Os::Linux {
+        return start_linux(s);
+    }
     let (_, plist) = launchd();
     if !Path::new(&plist).is_file() {
         out::stderr_line(&format!("Daemon plist not installed at {plist}"));
@@ -756,7 +783,7 @@ fn restart(s: &Settings, client: &mut Client, r: Restart) -> Exit {
         &["kickstart", "-k", &format!("gui/{uid}/{label}")],
     );
     if says_missing(&err, false) {
-        return start();
+        return start(s);
     }
     if !err.is_empty() {
         out::stderr_line(&format!("launchctl kickstart: {err}"));
@@ -1094,10 +1121,51 @@ fn log(s: &Settings, tail: &str, follow: bool) -> Exit {
     }
 }
 
-/// `cmd_daemon_uninstall`.
+/// `_daemon_unit_down`: `systemctl is-active` says inactive or failed.
+fn unit_down(scope: &str, unit: &str) -> bool {
+    matches!(
+        systemctl(scope, &["is-active", unit]).0.as_str(),
+        "inactive" | "failed"
+    )
+}
+
+/// `_daemon_unit_off`: down, and `systemctl is-enabled` says no.
+fn unit_off(scope: &str, unit: &str) -> bool {
+    unit_down(scope, unit) && !systemctl(scope, &["is-enabled", unit]).1
+}
+
+/// `cmd_daemon_uninstall`. On Linux the files go only once the unit
+/// `status` finds is down: a user unit is stopped, disabled and checked
+/// here; a system unit, unless already down and disabled, gets the lines
+/// to run with sudo and nothing is removed.
 fn uninstall(s: &Settings, yes: bool) -> Exit {
+    let found = if os() == Os::Linux {
+        linux_unit(&s.home)
+    } else {
+        None
+    };
+    if let Some((scope, unit)) = &found {
+        if scope == "system" && !unit_off("system", unit) {
+            out::stderr_line(&format!(
+                "The daemon's unit is a system unit ({unit}): stopping and disabling it needs root. Nothing was removed."
+            ));
+            out::stderr_line("Run:");
+            out::stderr_line(&format!("  sudo systemctl stop {unit}"));
+            out::stderr_line(&format!("  sudo systemctl disable {unit}"));
+            out::stderr_line(&format!("then run {CLI} daemon uninstall again."));
+            return Exit::Error;
+        }
+    }
+    let user_unit = found
+        .filter(|(scope, _)| scope == "user")
+        .map(|(_, unit)| unit);
     if !yes {
-        say!("This will remove the {PRODUCT} daemon launch agent and stop the daemon.");
+        match &user_unit {
+            Some(unit) => say!(
+                "This will stop and disable the {PRODUCT} daemon's systemd unit ({unit}) and remove its port and token files."
+            ),
+            None => say!("This will remove the {PRODUCT} daemon launch agent and stop the daemon."),
+        }
         say!("Your workspace data (~/.k2 database + agent files) is preserved.");
         if let Err(e) = out::stdout("Proceed? [y/N] ") {
             return out::after_stdout_error(&e);
@@ -1111,6 +1179,30 @@ fn uninstall(s: &Settings, yes: bool) -> Exit {
         let answer = answer.trim_matches(|c| c == ' ' || c == '\t');
         if !matches!(answer, "y" | "Y" | "yes" | "YES") {
             say!("Cancelled.");
+            return Exit::Error;
+        }
+    }
+    if let Some(unit) = &user_unit {
+        // A stop, not a restart: its agents end (as `stop`).
+        let _ = write_intent(&s.home, "stop-intent");
+        if !systemctl_shown("user", &["stop", unit]) {
+            remove_intent(&s.home, "stop-intent");
+            out::stderr_line(&format!(
+                "daemon uninstall: systemctl --user stop {unit} failed. Nothing was removed."
+            ));
+            return Exit::Error;
+        }
+        if !systemctl_shown("user", &["disable", unit]) {
+            out::stderr_line(&format!(
+                "daemon uninstall: systemctl --user disable {unit} failed. Nothing was removed."
+            ));
+            return Exit::Error;
+        }
+        if !unit_down("user", unit) {
+            remove_intent(&s.home, "stop-intent");
+            out::stderr_line(&format!(
+                "daemon uninstall: {unit} is still running after the stop. Nothing was removed."
+            ));
             return Exit::Error;
         }
     }

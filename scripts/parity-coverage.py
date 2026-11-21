@@ -23,7 +23,11 @@ A tag is plain text, so a reader sees the claim beside the case, grep
 finds every case of a form, and a deleted case takes its tag with it.
 The census names forms by words, not by test names, so neither side
 has to be renamed for the other. A tag that names no census form fails
-the gate, so a typo can't count.
+the gate, so a typo can't count. One kind of line besides: a family's
+noun alone that is a router form but no census form (`mail`: its bare
+line is the help page, with no schema entry). The route table wants a
+`covers:` tag for each bare row's noun, so the gate takes that tag
+too, out of the count.
 
 The ceiling (crates/k5-cli/tests/data/parity_uncovered.tsv) is the list
 of forms with no case. It may only fall: --check fails when a form is
@@ -164,8 +168,9 @@ def parity_files(root):
     return out
 
 
-def tags(root, known, only):
-    """form -> the places that tag it; and the tags that name no form."""
+def tags(root, known, only, bare=frozenset()):
+    """form -> the places that tag it; and the tags that name no form.
+    A tag that names a bare line in `bare` is taken and not counted."""
     covered, bad = {}, []
     for rel, pat in parity_files(root):
         with open(os.path.join(root, rel), encoding="utf-8", errors="replace") as f:
@@ -175,12 +180,37 @@ def tags(root, known, only):
                     continue
                 if m.group(1) in known:
                     covered.setdefault(m.group(1), []).append("%s:%d" % (rel, n))
+                elif m.group(1) in bare:
+                    continue
                 elif m.group(1) in only:
                     bad.append("%s:%d: %r is K5-only (%s): its unit tests cover it, not a parity case"
                                % (rel, n, m.group(1), K5_ONLY))
                 else:
                     bad.append("%s:%d: %r is no census form" % (rel, n, m.group(1)))
     return covered, bad
+
+
+def bare_lines(root, census, words):
+    """The bare lines that are no census form: a router form of one word
+    that a family module's WORDS name (its noun alone), the census doesn't list, such as `mail`,
+    whose bare line is its help page and has no schema entry. The route
+    table's bare rows want a `covers:` tag for the noun alone
+    (crates/k5-cli/src/route.rs, every_bare_row_has_a_parity_case_for_its_bare_line);
+    this lets such a tag stand. It is not in the parity count, and a
+    typo still fails: it must be a router form."""
+    path = os.path.join(root, ROUTER_FORMS)
+    if not os.path.isfile(path):
+        return frozenset()
+    with open(path, encoding="utf-8") as f:
+        rows = [l.rstrip("\n").split("\t") for l in f if l.strip() and not l.startswith("#")]
+    return frozenset(
+        r[0]
+        for r in rows[1:]
+        if " " not in r[0]
+        and not r[0].startswith("-")
+        and r[0] not in census
+        and words.get(r[0], "(front)") != "(front)"
+    )
 
 
 def router_forms(root):
@@ -275,7 +305,8 @@ def main(argv):
     only, bad = k5_only(root, set(census))
     all_forms = [f for f in census if f not in only]
     words = families(root)
-    covered, tag_bad = tags(root, set(all_forms), only)
+    bare = bare_lines(root, set(census), words)
+    covered, tag_bad = tags(root, set(all_forms), only, bare)
     bad += tag_bad
     native, native_bad = native_tags(root)
     bad += native_bad

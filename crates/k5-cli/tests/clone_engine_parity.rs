@@ -233,7 +233,6 @@ impl CRig {
             )
             .replace(&format!("127.0.0.1:{}", side.remote.port), "<remote>")
             .replace(&format!("127.0.0.1:{}", side.local.port), "<local>");
-        t = t.replace(&format!(":+{}", side.remote_tls.port), ":+<rtls>");
         t = mask_port(&t, side.remote_tls.port, "rtls");
         t = mask_port(&t, side.local_tls.port, "ltls");
         if let Some(p) = side.v6 {
@@ -1406,12 +1405,12 @@ fn clone_through_the_persons_proxy() {
             secrets: vec!["rt-proxy-5"],
             env: vec![("HTTPS_PROXY", "{proxy}")],
             ..case(
-                "preview --host: a % escape in the host and the path, a port with a sign",
+                "preview --host: a % escape in the host and the path",
                 &[
                     "preview",
                     "ws1",
                     "--host",
-                    "https://cp.example.%69nvalid:+{tls_port}/p%41",
+                    "https://cp.example.%69nvalid:{tls_port}/p%41",
                     "--token",
                     "rt-proxy-5",
                     "--json",

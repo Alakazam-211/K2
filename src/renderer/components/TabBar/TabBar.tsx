@@ -473,7 +473,8 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
     const defaultId = defaultPresetIdForCwd(room, barCwd, presets)
     // Home M5: open in sandbox takes the owner daemon token on the server
     // (`sandbox/open`), so a Home room on another server never offers it.
-    const canSandbox = scopeMayWrite(room.scope, 'sandbox/open')
+    // And only a server that says it can sandbox offers it (0.46.17).
+    const canSandbox = scopeMayWrite(room.scope, 'sandbox/open') && room.scope.serverSupports('sandbox-microvm-v1')
     // Mobile shows only when the room's server can run a device (M-A13):
     // a box with no lane never shows a dead tab.
     const mobile = room.scope.serverSupports('mobile-sim-v1')

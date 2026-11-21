@@ -90,6 +90,11 @@ export const REPORTED_FEATURES = {
    *  Desktop, Settings has no Remote Desktop page, and a saved Desktop tab
    *  says to update K2 on that computer instead of dialling. */
   'remote-desktop-v1': 'remote-desktop-v1',
+  /** 0.46.17 (`boot_status.rs` `FEATURE_SANDBOX_MICROVM`): this server can
+   *  run a sandboxed session (a microVM cell). Listed only there. Without
+   *  it the + menu never offers "open in sandbox" (Option-click opens the
+   *  preset normally), since the server would refuse it. */
+  'sandbox-microvm-v1': 'sandbox-microvm-v1',
   /** prd-linux-virtual-desktop-v1 LD-16 (0.46.12): a Linux daemon with the
    *  virtual desktop routes (start, stop, setup, list, env). Without it the
    *  Desktop tab shows no Start, Set up or picker, and Settings has no

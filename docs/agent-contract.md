@@ -147,9 +147,17 @@ settles are capped at 60s at consume time, so keep `settle:<ms>` under
 
 ## 5. Responding to API callers: `k2 respond`
 
-When a session is launched through the K2 API (`POST /v1/w/<ws>/host-sessions`
-or a sandbox cell), the caller is a **program** — it cannot see your terminal.
-The response channel is:
+When a session is launched through the K2 API, the caller is a **program** — it
+cannot see your terminal. The API launches two different kinds of session:
+
+- a **host session** (`POST /v1/w/<ws>/host-sessions`): **not sandboxed.** It
+  runs on the server as the same operating-system user as K2, so it can read
+  what that user can read. Its replies say `"sandbox":"none"`.
+- a **sandbox cell** (`POST /v1/sandboxes`, `/v1/w/<ws>/sessions`): a microVM,
+  only on a server that can run one (`GET /v1/ping` says `"sandboxes":"microvm"`).
+  Everywhere else these routes answer 409 and start nothing.
+
+Both use the same response channel:
 
 ```bash
 k2 respond "progress: found the root cause"    # emit as often as you like
@@ -171,7 +179,7 @@ k2 done                                        # arm Grace with no drain line
 
 ### Lifecycle completion: Grace after `--final` or `k2 done`
 
-API host-sessions and sandbox cells are reaped by the work-completion reaper
+API host-sessions (unsandboxed) and sandbox cells are both reaped by the work-completion reaper
 (`sandbox_reaper`). Two CLI paths arm the same post-completion **Grace**
 window (~10s `FINAL_GRACE_SECS`), then full teardown (map unregister + reaper
 keys — same chokepoint as `POST …/kill`):
@@ -201,7 +209,7 @@ spawns.
 
 | Context | `k2 done` meaning |
 |---|---|
-| `/v1` host-session or sandbox cell (`K2_API_CELL=1`) | `POST /cli/session/complete` → arm Grace → reap |
+| `/v1` host-session (unsandboxed) or sandbox cell (`K2_API_CELL=1`) | `POST /cli/session/complete` → arm Grace → reap |
 | Persistent workspace agent (manager, chat, skills) | Legacy checkin / “task complete, stay alive” — **no** teardown |
 
 **Do not** key off `K2_HOOK_SOCK` or a scoped `K2_HOOK_TOKEN`. Workspace agents
@@ -336,7 +344,7 @@ Notes:
 - **Undeclared readiness** on a custom command falls to the default injection
   profile (§4) — safe but slower than a truthful declaration.
 - **Sandbox cells** are host-fixed to headless claude; custom agents run as
-  host sessions, not in cells.
+  host sessions, not in cells, and so run unsandboxed, as K2's user.
 - **HITL auto-answer** fast-paths cover the known dialogs; custom agents fall
   back to the local classifier or manual handling.
 

@@ -134,6 +134,12 @@ function renderBar(groupIndex = 0) {
   )
 }
 
+/** A server that says it can run a sandbox (0.46.17): only there does
+ *  Option offer "open in sandbox". */
+function sandboxServer(): void {
+  noteServerVersion(LOCAL_HOME_HOST, null, ['mobile-sim-v1', 'sandbox-microvm-v1'])
+}
+
 async function openPlus(): Promise<HTMLButtonElement> {
   const add = document.querySelector('[data-tab-add]') as HTMLButtonElement | null
   expect(add).toBeTruthy()
@@ -664,6 +670,7 @@ describe('tab bar plus menu', () => {
   })
 
   it('Option down adds open in sandbox and Beta on enabled presets only, and keyup restores the shortcut', async () => {
+    sandboxServer()
     seedTabs(0, 1)
     llmPresets()
     renderBar(0)
@@ -711,6 +718,7 @@ describe('tab bar plus menu', () => {
   })
 
   it('opening with Option already held starts in that picture, and blur clears only the hint', async () => {
+    sandboxServer()
     seedTabs(0, 1)
     llmPresets()
     renderBar(0)
@@ -725,6 +733,27 @@ describe('tab bar plus menu', () => {
     expect(useContextMenuStore.getState().isOpen).toBe(true)
     expect(screen.queryByText('open in sandbox')).toBeNull()
     expect(useContextMenuStore.getState().items.find((item) => item.id === 'preset:claude')?.shortcut).toBe('⇧⌘T')
+  })
+
+  it('a server that can not sandbox: Option shows no sandbox hint and an Option-click launches normally', async () => {
+    // The default server here lists no sandbox-microvm-v1 (a Mac, any
+    // build without the microVM backend): no "open in sandbox" promise,
+    // and Option-click is the plain launch, never a sandbox/open (0.46.17).
+    seedTabs(0, 1)
+    llmPresets()
+    const launch = vi.fn(async () => {})
+    usePresetsStore.setState({ launchPreset: launch })
+    vi.mocked(daemonCliPost).mockClear()
+    renderBar(0)
+    await openHeld(true)
+    expect(screen.queryByText('open in sandbox')).toBeNull()
+    expect(screen.queryByText('Beta')).toBeNull()
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Codex/ }), { altKey: true })
+      await Promise.resolve()
+    })
+    expect(launch).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(daemonCliPost).mock.calls.some((call) => call[1] === 'sandbox/open')).toBe(false)
   })
 
   it('a preset click without Option calls launchPreset and does not post sandbox/open', async () => {
@@ -744,13 +773,14 @@ describe('tab bar plus menu', () => {
   })
 
   it('Option-click posts sandbox/open and does not call launchPreset; 409 adds no tab', async () => {
+    sandboxServer()
     seedTabs(1, 1)
     llmPresets()
     const launch = vi.fn(async () => {})
     usePresetsStore.setState({ launchPreset: launch })
     vi.mocked(daemonCliPost).mockClear()
     vi.mocked(daemonCliPost).mockRejectedValueOnce(
-      new Error('this daemon cannot sandbox (microVM backend unavailable)'),
+      new Error("this computer can't run a sandboxed session. Run it without Option held, knowing it runs as you."),
     )
     useToastStore.setState({ toasts: [] })
     const beforeRoot = useTabsStore.getState().tabs.length
@@ -770,12 +800,13 @@ describe('tab bar plus menu', () => {
     expect(useTabsStore.getState().extraGroups[0].tabs).toHaveLength(beforeExtra)
     expect(
       useToastStore.getState().toasts.some((toast) =>
-        toast.message.includes('this daemon cannot sandbox (microVM backend unavailable)'),
+        toast.message.includes("this computer can't run a sandboxed session."),
       ),
     ).toBe(true)
   })
 
   it('a 200 places the microvm tab in the clicked group even when hideApiSessions is on', async () => {
+    sandboxServer()
     seedTabs(1, 1)
     llmPresets()
     registerProjectsPathIndex(() => [

@@ -36,6 +36,7 @@ import { clientToCssPx } from '@/stores/context-menu'
 import { cssViewport } from '@/lib/app-zoom'
 import { sessionIdsTargetedByHeartbeats } from '@/lib/heartbeat-delivery'
 import type { ServerScope } from '@/kessel/server-scope'
+import { sandboxChatLabels, type SandboxChat } from './sandboxChatLabels'
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -54,16 +55,6 @@ interface ChatSession {
 
 /** Date buckets inside the General collapsible (not top-level sections). */
 type DateGroup = 'Today' | 'Yesterday' | 'This Week' | 'This Month' | 'Older'
-
-// A sandbox chat = an API-triggered session that ran INSIDE a hardened cell in
-// this workspace. Listed from the daemon's sandbox index; clicking re-launches
-// it in its sandbox (audit-resume) — it surfaces as its orange tab.
-interface SandboxChat {
-  sessionId: string
-  title: string
-  timestamp: number
-  messageCount: number
-}
 
 interface ApiChat {
   sessionId: string
@@ -1368,30 +1359,30 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
         {/* ── Section: Imported Threads (arrived with a clone; daemon list) ── */}
         <ImportedThreadsSection projectPath={projectPath ?? null} />
 
-        {/* ── Section: Sandboxed (API-triggered cell sessions; re-launch in sandbox) ── */}
-        {sandboxSessions.length > 0 && (
+        {/* ── Section: API-triggered cell sessions ("Sandboxed" only when the daemon says so) ── */}
+        {sandboxSessions.length > 0 && (() => { const sbx = sandboxChatLabels(sandboxSessions); return (
           <>
             <button
               className="no-drag w-full flex items-center gap-1.5 px-3 py-1.5 border-y border-white/[0.06] hover:bg-white/[0.03] transition-colors mt-1"
               onClick={() => setShowSandbox((v) => !v)}
             >
               <span className="text-[9px] text-[var(--color-text-muted)] w-2">{showSandbox ? '▼' : '▶'}</span>
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-[#e8843c] font-mono">Sandboxed</span>
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-[#e8843c] font-mono">{sbx.header}</span>
               <span className="text-[9px] text-[var(--color-text-muted)] ml-auto tabular-nums">{sandboxSessions.length}</span>
             </button>
             {showSandbox && sandboxSessions.map((s) => (
               <button
                 key={s.sessionId}
                 onClick={() => handleSandboxClick(s)}
-                disabled={reopening === s.sessionId}
-                title="Re-launch this chat inside its sandbox"
+                disabled={reopening === s.sessionId || s.sandboxed === false || s.reopenable === false}
+                title={s.sandboxed === true ? 'Re-launch this chat inside its sandbox' : sbx.line(s)}
                 className="no-drag w-full flex items-center gap-2 px-3 h-8 hover:bg-white/[0.04] active:bg-white/[0.06] text-left group disabled:opacity-50 transition-colors"
               >
                 <span className="w-1.5 h-1.5 rounded-[var(--radius-badge)] bg-[#e8843c] flex-shrink-0" />
                 <div className="flex-1 min-w-0 flex flex-col justify-center">
                   <span className="text-[11px] text-[var(--color-text-secondary)] font-mono truncate leading-tight">{s.title}</span>
                   <span className="text-[10px] text-[var(--color-text-muted)] font-mono leading-tight truncate">
-                    {reopening === s.sessionId ? 'launching in sandbox…' : 'sandbox · click to re-launch'}
+                    {reopening === s.sessionId ? 'launching in sandbox…' : sbx.line(s)}
                   </span>
                 </div>
                 <DateWithHeartbeat
@@ -1401,7 +1392,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
               </button>
             ))}
           </>
-        )}
+        ) })()}
       </div>
 
       {continueSession && (

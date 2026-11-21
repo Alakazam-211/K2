@@ -172,6 +172,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **`k2 publish status` exits 0 when your K2 Connect account lists no address for this computer.** It printed its two lines ("Not connected …", or "Connected: <address>" with an unknown plan), then a Python error, and exited 1.
 - **`k2 clone` warns about plain http only when it is plain http.** With `K2_HOST` set to an `https://` address it said it was sending this server's owner token over plain http; now it warns only for an `http` address that isn't this computer or a Tailscale address, as before.
 - **The plain-http warning names the command when `k5` runs a command through the shell CLI.** It said `warning: 4 is sending this server's owner token …` there (and `K2 is sending …` from `k2 clone`); it now says `k2`, as it does when you run `k2` yourself.
+- **`k2 terminal spawn --sandbox` refuses where this computer can't sandbox.** Before, it started the session unsandboxed.
 
 ### Settings
 - **Changes to the Send feedback settings are recorded.** When the owner or an admin turns "Allow sending feedback to K2", "Agents may send feedback to K2" or "Agents may include K2 details" on or off (Settings → General → Send feedback), Settings → Logs → Access Audit records who changed which one, from what to what. A change that leaves a setting as it was, or a refused attempt, records nothing.
@@ -188,6 +189,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **An agent's report says what it is about.** It is either a CLI problem, with the command the agent ran, or something else about K2. A report about anything else is refused when you allowed only CLI problems, and every agent report reaches Alakazam Labs tagged with what it is about.
 - **The command line has the same choices.** `k2 send-feedback settings --agents off|cli|all` (`on` still means `cli`) and `--attach` with the parts joined by commas, `none` or `all` set what agents may report and attach, and `k2 setup agent-reports` takes the same two flags; with no flags they show what is set, who answered and when, or "not asked yet". An agent's report takes `--scope cli --command "<the command it ran>"` or `--scope platform`, and `k2 send-feedback list` and `show` print a report's scope. While agents may not report, an agent's `k2 help` doesn't list `k2 send-feedback`, and `k2 study send-feedback` is one line that says it's off and where a person turns it on. A server not yet on this update takes only `--agents on|off` and says so for the rest.
 - **A heartbeat pauses while its LLM is out of usage, and starts again after.** It no longer turns itself off when the login runs out; it waits until the limit resets.
+- **K2 shows "Sandboxed" only when a sandbox is in force.**
 
 ### Language models
 - **Opt-in auto-rotate for LLM subscriptions (off by default).** When it's on for a tool, K2 switches to the next signed-in subscription by itself once the one in use reaches 99% of its limit, skipping any that are at their own limit, failing their usage check, or set for a workspace or chat, and waiting 10 minutes before another automatic switch. Switching accounts automatically at the limit may go against your provider's terms, so it's each person's own decision: an Admin or the Owner turns it on per tool, with their own confirm, in Settings → Language Models → Subs / Tokens or with `k2 llm tokens auto-next <tool> on`. Agents can't turn it on or off.
@@ -217,6 +219,8 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **The off-box backup alarm counts K2 backups (restic).** When this server's own backups copy chat's backups off the box, the alarm no longer says nothing is copied; it warns when the newest copy is over 36 hours old.
 - **Signing out of a connected server sends its token in a request header, not in the address.**
 - **A new Dedicated server starts with the sandbox API families off.** Turn them on by provisioning with `K2_BOOTSTRAP_SANDBOX_API=1`.
+- **An API key reaches only its own sessions.** A key can write only into sessions its own principal opened, never a workspace's main agent terminal, and the session lists show only those.
+- **The server status page shows restart details only to the owner and Admins.**
 
 ### Databases
 - **Turn WAL archiving on or off on a named cluster you already have.** `k2 db cluster archive <name> on|off` sets the same archiving `k2 db cluster create --wal-archive` sets at creation, then restarts that cluster if it is running. Off stops archiving but keeps the spool and every WAL file already in it for your backup to ship. The owner runs it, or an agent with "Let this agent manage Postgres versions" on its own workspace's cluster; it needs the root helper from this release (`k2 root-helper update`).

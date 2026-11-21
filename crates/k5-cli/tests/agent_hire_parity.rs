@@ -84,6 +84,9 @@ fn not_found() -> Reply {
 
 const CORE_OK: &str = r#"{"ok":true,"steps":[{"step":"create-dir","status":"done"},{"step":"write-persona","status":"done"},{"step":"register-workspace","status":"done"}]}"#;
 
+const SET_SKIPPED: &str =
+    r#"{"ok":true,"actions":[{"field":"agent_mode","status":"skipped","reason":"already custom"}]}"#;
+
 const SET_OK: &str = r#"{"ok":true,"actions":[{"field":"agent_mode","status":"done"}]}"#;
 
 const PRESETS: &str = r#"[{"id":"claude","label":"Claude","command":"claude --x","enabled":true},{"id":"codex","label":"Codex","command":"codex","enabled":false}]"#;
@@ -191,6 +194,27 @@ fn hire_a_new_folder() {
         case("the conf, the core, the settings", &["hire", "newbie"], &[], three(), files, 0, 3),
         // covers: agent hire --json
         case("the same as JSON", &["hire", "newbie", "--json"], &[], three(), files, 0, 3),
+        // The shell's block counts no change from the core's own steps
+        // (its `changed` line sits in the context loop): with the mode
+        // already set, the hire that made the workspace says no changes.
+        case(
+            "the core makes it, the mode was set: the shell's changed",
+            &["hire", "newbie"],
+            &[],
+            vec![not_found(), ok(CORE_OK), ok(SET_SKIPPED)],
+            files,
+            0,
+            3,
+        ),
+        case(
+            "the same as JSON: changed as the shell has it",
+            &["hire", "newbie", "--json"],
+            &[],
+            vec![not_found(), ok(CORE_OK), ok(SET_SKIPPED)],
+            files,
+            0,
+            3,
+        ),
         case(
             "the persona file, its line ends as Python reads them",
             &["hire", "newbie", "--persona", "persona.md", "--mode", "k2so", "--enabled", "false"],

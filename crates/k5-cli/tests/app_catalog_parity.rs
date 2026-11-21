@@ -417,31 +417,31 @@ const TAKEN: &str = r#"{"error":{"code":"address_taken","hint":"git is taken","s
 fn install_catalog_answers_as_the_shell_does() {
     let rig = Rig::new(VERB, "catinst");
     let v = vec![
-        // native: app install --catalog
+        // native: app install
         read(
             "dry run: the plan",
             &["install", "--catalog", "forgejo", "--dry-run", "--address", "git", "--variant", "k2"],
             PLAN,
         ),
-        // native: app install --catalog --json
+        // native: app install --json
         read(
             "dry run --json",
             &["install", "--catalog=forgejo", "--dry-run", "--json", "git-1"],
             PLAN,
         ),
-        // native: app install --catalog
+        // native: app install
         read(
             "--no-wait: the job's name",
             &["install", "--catalog", "forgejo", "--no-wait", "--id=git-1", "--version", "9.0.1", "--domain", "acme.example", "--rebind-meet"],
             STARTED,
         ),
-        // native: app install --catalog --json
+        // native: app install --json
         read(
             "--no-wait --json",
             &["install", "--catalog", "forgejo", "--no-wait", "--json", "--workspace", "ws-b"],
             STARTED,
         ),
-        // native: app install --catalog
+        // native: app install
         case(
             "the watch: done at once",
             &["install", "acme", "--catalog", "forgejo"],
@@ -451,7 +451,7 @@ fn install_catalog_answers_as_the_shell_does() {
             0,
             2,
         ),
-        // native: app install --catalog
+        // native: app install
         case(
             "the watch: running, then done; each step once",
             &["install", "--catalog", "forgejo"],
@@ -461,7 +461,7 @@ fn install_catalog_answers_as_the_shell_does() {
             0,
             3,
         ),
-        // native: app install --catalog
+        // native: app install
         case(
             "the watch: failed",
             &["install", "--catalog", "forgejo"],
@@ -471,7 +471,7 @@ fn install_catalog_answers_as_the_shell_does() {
             1,
             2,
         ),
-        // native: app install --catalog --json
+        // native: app install --json
         case(
             "the watch --json: waiting",
             &["install", "--catalog", "forgejo", "--json"],
@@ -481,7 +481,7 @@ fn install_catalog_answers_as_the_shell_does() {
             2,
             2,
         ),
-        // native: app install --catalog
+        // native: app install
         case(
             "the watch: a read refused",
             &["install", "--catalog", "forgejo"],
@@ -494,7 +494,7 @@ fn install_catalog_answers_as_the_shell_does() {
             3,
             2,
         ),
-        // native: app install --catalog
+        // native: app install
         case(
             "an address that is taken",
             &["install", "--catalog", "forgejo", "--address", "git"],
@@ -504,7 +504,7 @@ fn install_catalog_answers_as_the_shell_does() {
             2,
             1,
         ),
-        // native: app install --catalog
+        // native: app install
         case(
             "refused",
             &["install", "--catalog", "forgejo"],
@@ -514,7 +514,7 @@ fn install_catalog_answers_as_the_shell_does() {
             3,
             1,
         ),
-        // native: app install --catalog
+        // native: app install
         case(
             "an error that is a string",
             &["install", "--catalog", "forgejo"],
@@ -524,24 +524,24 @@ fn install_catalog_answers_as_the_shell_does() {
             2,
             1,
         ),
-        // native: app install --catalog
+        // native: app install
         stop("no entry", &["install", "acme", "--catalog="], 2),
-        // native: app install --catalog
+        // native: app install
         stop("an unknown flag", &["install", "--catalog", "x", "--zap"], 2),
-        // native: app install --catalog
+        // native: app install
         stop("a second id", &["install", "--catalog", "x", "a", "b"], 2),
-        // native: app install --catalog
+        // native: app install
         stop("a variant it doesn't know", &["install", "--catalog", "x", "--variant", "y"], 2),
-        // native: app install --catalog
+        // native: app install
         stop("--version last", &["install", "--catalog", "x", "--version"], 1),
-        // native: app install --catalog
+        // native: app install
         traceback(ends(
             "no job in the answer",
             &["install", "--catalog", "forgejo"],
             r#"{"ok":true}"#,
             1,
         )),
-        // native: app install --catalog
+        // native: app install
         traceback(case(
             "a step that is not a string",
             &["install", "--catalog", "forgejo"],
@@ -554,7 +554,7 @@ fn install_catalog_answers_as_the_shell_does() {
             1,
             2,
         )),
-        // native: app install --catalog
+        // native: app install
         traceback(ends(
             "a plan with no address",
             &["install", "--catalog", "forgejo", "--dry-run"],
@@ -565,7 +565,7 @@ fn install_catalog_answers_as_the_shell_does() {
     for c in v {
         rig.check(&c);
     }
-    // native: app install --catalog
+    // native: app install
     rig.check(&Case {
         compare: Compare::Shell,
         ..stop("help never acts", &["install", "--catalog", "x", "--dry-run", "-h"], 0)
@@ -573,7 +573,7 @@ fn install_catalog_answers_as_the_shell_does() {
     // `--address` takes the next word as it comes, so `--help` there is a
     // value and the install is sent (a bash bug, app-catalog.sh:110; the
     // row flips when the fix lands).
-    // native: app install --catalog
+    // native: app install
     rig.check(&Case {
         compare: Compare::Shell,
         ..read(

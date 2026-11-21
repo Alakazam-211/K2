@@ -342,7 +342,7 @@ fn inspect_answers_as_the_shell_does() {
             0,
             1,
         ),
-        // native: app inspect --resources --json
+        // native: app inspect --resources
         case(
             "--resources --json",
             &["inspect", "acme", "--resources", "--json"],

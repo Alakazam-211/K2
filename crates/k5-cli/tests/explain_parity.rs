@@ -337,3 +337,53 @@ fn the_settings() {
         rig.check(&c);
     }
 }
+
+/// What the docs kit's `explain` tool answers for a kit id.
+const KIT: &str = r#"{"stdout":"MPC-E001  a fence was left open\nfix: close it\n","exit":0,"doc":{"path":"/w/MPC-E001"}}"#;
+/// The same as JSON (`--json`: the tool's own page).
+const KIT_JSON: &str = r#"{"result":{"exit":0},"stdout":"{\"id\":\"MPC-E001\",\"fix\":\"close it\"}\n"}"#;
+
+/// A Markdown kit id is `cmd_doc explain <id> [--json]`: one POST of the
+/// docs kit's tool call, then its reader, as the shell's `cmd_explain`
+/// hands it on. Each native row is the binary's own answer.
+#[test]
+fn a_kit_id_is_doc_s_explain() {
+    let rig = Rig::new(VERB, "kit");
+    let one = |name, args, body: &str, code| case(name, args, &[], vec![ok(body)], owner_and_port, code, 1);
+    let native = vec![
+        // native: explain MPC-*
+        one("a kit id", &["MPC-E001"], KIT, 0),
+        one("in lower case", &["mpc-e001"], KIT, 0),
+        one("an MPCE id", &["MPCE-E002"], KIT, 0),
+        one("as JSON", &["MPC-E001", "--json"], KIT_JSON, 0),
+        one("--json first", &["--json", "mpce-1"], KIT_JSON, 0),
+        one("the tool's exit", &["MPC-E404"], r#"{"stdout":"","stderr":"no such kit id\n","exit":4,"doc":{"path":"/w/x"}}"#, 4),
+        case(
+            "the daemon's refusal",
+            &["MPC-E001"],
+            &[],
+            vec![common::stub::Reply::Answer(404, r#"{"error":"no_such_doc","hint":"no doc there"}"#.into())],
+            owner_and_port,
+            4,
+            1,
+        ),
+        with(
+            with_passport(&[("K2_HOOK_SOCK", "{sock}")]),
+            case("an agent on its cell socket", &["MPC-E001"], &[], vec![ok(KIT)], port_only, 0, 1),
+        ),
+    ];
+    for c in native {
+        rig.check(&c);
+        rig.binary(&c, false);
+        assert!(
+            !k5_cli::fallthrough::cache_dir(&rig.k2home).exists(),
+            "{}: the binary handed the line to the shell",
+            c.name
+        );
+    }
+    let guard = with(
+        vec![("K2_NO_OWNER_FALLBACK", "1".to_string())],
+        case("the virtual desktop's guard", &["MPC-E001"], &[], vec![], owner_and_port, 3, 0),
+    );
+    rig.check(&guard);
+}

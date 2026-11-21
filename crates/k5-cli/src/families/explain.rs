@@ -22,9 +22,13 @@
 //! its row by id, then by alias ([`row_text`], or the row as JSON), or the
 //! unknown-id answer, exit 4.
 //!
-//! The shell keeps ([`run`] gives `None`): a Markdown kit id (`MPC-`,
-//! `MPCE-`, any case), which bash hands to `k2 doc explain`, and a word
-//! that is not UTF-8. So does a line with `-h` or `--help` in it: the
+//! A Markdown kit id (`MPC-`, `MPCE-`, any case) is `cmd_doc explain
+//! <id> [--json]`, as bash calls it ([`super::doc::run_called`]): the
+//! docs kit's `explain` tool, with the id where the doc's path goes (bash
+//! reads it as a path in this folder, and so does this). The shell keeps
+//! ([`run`] gives `None`): a word that is not UTF-8, and a kit id where
+//! doc's own run would hand it back (no port curl takes, no token, a
+//! `python3` the binary can't tell). So does a line with `-h` or `--help` in it: the
 //! front prints `explain --help` and `explain -h` as help pages and hands
 //! any other such line to the shell ([`crate::front`]); [`page`] still
 //! reads the words as `cmd_explain` does.
@@ -65,7 +69,38 @@ pub const VERBS: &[crate::route::Verb] = &[];
 /// `k5 explain ...`: the page, or `None` when the shell answers it.
 pub fn run(args: &[OsString]) -> Option<Exit> {
     let (env, p) = shell_prelude()?;
+    if let Some(words) = kit_call(args, &p, &env) {
+        let words: Vec<&str> = words.iter().map(String::as_str).collect();
+        return super::doc::run_called(args, &words);
+    }
     Some(show(&page(args, &p, &env)?))
+}
+
+/// The words `cmd_explain` hands `cmd_doc` for a Markdown kit id
+/// (`explain <id> [--json]`), past the virtual desktop's guard; `None`
+/// for any other line.
+fn kit_call(args: &[OsString], p: &Prelude, env: &Env) -> Option<Vec<String>> {
+    let words: Vec<&str> = args
+        .iter()
+        .skip(1)
+        .map(|a| a.to_str())
+        .collect::<Option<_>>()?;
+    let no_owner = env
+        .first(env_names::NO_OWNER_FALLBACK)
+        .is_some_and(|v| v == "1");
+    if no_owner && !p.token {
+        return None;
+    }
+    match parse(&words) {
+        Ask::Look { id, json } if kit_id(&id) => {
+            let mut w = vec!["explain".to_string(), id];
+            if json {
+                w.push("--json".to_string());
+            }
+            Some(w)
+        }
+        _ => None,
+    }
 }
 
 /// The usage line of a usage error.
@@ -587,6 +622,35 @@ mod tests {
         );
         assert_eq!(wrap("", 76, "", "", true), Vec::<String>::new());
         assert_eq!(wrap("   ", 76, "", "", true), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_kit_id_is_doc_s_explain() {
+        let p = Prelude {
+            port: true,
+            token: true,
+            passport: false,
+            hook_sock: false,
+        };
+        let env = Env::of(&[]);
+        let args = |l: &[&str]| -> Vec<OsString> { l.iter().map(OsString::from).collect() };
+        let w = |l: &[&str]| -> Option<Vec<String>> {
+            Some(l.iter().map(|s| s.to_string()).collect())
+        };
+        assert_eq!(
+            kit_call(&args(&["explain", "mpc-E001"]), &p, &env),
+            w(&["explain", "mpc-E001"])
+        );
+        assert_eq!(
+            kit_call(&args(&["explain", "--json", "MPCE-2"]), &p, &env),
+            w(&["explain", "MPCE-2", "--json"])
+        );
+        assert_eq!(kit_call(&args(&["explain", "mpx-1"]), &p, &env), None);
+        assert_eq!(kit_call(&args(&["explain", "mpc-1", "-h"]), &p, &env), None);
+        assert_eq!(kit_call(&args(&["explain", "mpc-1", "x"]), &p, &env), None);
+        let guarded = Env::of(&[("K2_NO_OWNER_FALLBACK", "1")]);
+        let no_token = Prelude { token: false, ..p };
+        assert_eq!(kit_call(&args(&["explain", "mpc-1"]), &no_token, &guarded), None);
     }
 
     #[test]

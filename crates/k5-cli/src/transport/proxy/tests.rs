@@ -286,12 +286,14 @@ fn loopback_is_the_shells_direct_rule() {
 #[cfg(unix)]
 #[test]
 fn the_shells_direct_url_answers_the_table() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../cli/src/cli-tools-policy.sh");
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/cli-tools-policy.sh");
     let src = std::fs::read_to_string(&path).expect("cli/src/cli-tools-policy.sh");
     let cut = |name: &str| {
         let head = format!("{name}() {{\n");
-        let start = src.find(&head).unwrap_or_else(|| panic!("{name} in {path:?}"));
+        let start = src
+            .find(&head)
+            .unwrap_or_else(|| panic!("{name} in {path:?}"));
         let end = src[start..].find("\n}\n").expect("the function's end") + start + 3;
         src[start..end].to_string()
     };

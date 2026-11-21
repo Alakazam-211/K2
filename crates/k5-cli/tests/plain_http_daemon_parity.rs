@@ -224,6 +224,52 @@ fn users_password_flags_to_a_daemon_on_the_network() {
     }
 }
 
+/// The virtual desktop's guard exits before the shell's plain-http step:
+/// `explain <id>` and `schema` under it print the guard's two lines and
+/// exit 3, with no warning before them. Without the guard both warn
+/// first, as any verb that isn't one of the guard's offline words does.
+#[test]
+fn explain_and_schema_under_the_guard_on_the_network() {
+    let guard: String = k5_cli::prelude::VIRTUAL_DESKTOP
+        .iter()
+        .map(|l| format!("{l}\n"))
+        .collect();
+    for (verb, args, name, unguarded) in [
+        (
+            "explain",
+            &["app_exists"][..],
+            "explain app_exists: the guard, no line",
+            "explain app_exists: no guard, the line first",
+        ),
+        (
+            "schema",
+            &[][..],
+            "schema: the guard, no line",
+            "schema: no guard, the line first",
+        ),
+    ] {
+        let rig = Rig::new(verb, "plainhttpguard");
+        let host = [("K2_HOST", "0.0.0.0"), ("K2_PORT", NOWHERE)];
+        let c = on(
+            case(name, args, &[], vec![], owner_and_port, 3, 0),
+            &[host[0], host[1], ("K2_NO_OWNER_FALLBACK", "1")],
+        );
+        let out = checked(&rig, &c);
+        assert_eq!(
+            (out.code, out.stdout.as_str(), out.stderr.as_str()),
+            (Some(3), "", guard.as_str()),
+            "{name}"
+        );
+        let c = on(
+            case(unguarded, args, &[], vec![], owner_and_port, 0, 0),
+            &host,
+        );
+        let out = checked(&rig, &c);
+        assert_eq!(out.stderr, warning("0.0.0.0"), "{unguarded}");
+        assert!(!out.stdout.is_empty(), "{unguarded}");
+    }
+}
+
 fn tls_case(name: &'static str, pairs: &[(&'static str, &str)]) -> Case {
     on(case(name, &[], &[], vec![], owner_only, 0, 0), pairs)
 }

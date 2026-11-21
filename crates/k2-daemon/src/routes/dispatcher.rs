@@ -9668,7 +9668,7 @@ async fn handle_one_request(
                 return DispatchOutcome::Done;
             }
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
-            let result = dispatch_unit6_post(p, &body_bytes);
+            let result = dispatch_unit6_post(p, &body_bytes, &crate::sandbox_chat_routes::ReopenCaller::of(&query, state.token.as_str()));
             super::http::send_response(&mut *stream, result.status, "application/json", &result.body)
                 .await;
         }
@@ -16367,7 +16367,7 @@ fn handle_ensure_cli(body: &[u8]) -> crate::cli::CliResponse {
 /// per-domain handler. Path matching is exact — unknown paths fall
 /// through to a 404 so the renderer surfaces "route not found"
 /// instead of a silent success.
-fn dispatch_unit6_post(path: &str, body: &[u8]) -> crate::cli::CliResponse {
+fn dispatch_unit6_post(path: &str, body: &[u8], caller: &crate::sandbox_chat_routes::ReopenCaller) -> crate::cli::CliResponse {
     match path {
         // Filesystem
         "/cli/fs/search-tree" => crate::fs_routes::handle_search_tree(body),
@@ -16389,7 +16389,7 @@ fn dispatch_unit6_post(path: &str, body: &[u8]) -> crate::cli::CliResponse {
         "/cli/chat/archive" => crate::chat_routes::handle_archive(body),
         "/cli/chat/restore" => crate::chat_routes::handle_restore(body),
         "/cli/chat/release-names" => crate::chat_routes::handle_release_names(true, body),
-        "/cli/sandbox/reopen" => crate::sandbox_chat_routes::handle_sandbox_reopen(body),
+        "/cli/sandbox/reopen" => crate::sandbox_chat_routes::handle_sandbox_reopen(body, caller),
         "/cli/chat/migrate-ide" => crate::chat_routes::handle_migrate_ide(body),
         // Read-only seed. `is_post` is true on this arm; the handler
         // still rejects a non-POST so a stray call cannot build a seed.
@@ -16868,7 +16868,7 @@ mod tests {
 
     #[test]
     fn dispatch_unit6_post_continue_seed_is_not_a_404() {
-        let resp = dispatch_unit6_post("/cli/chat/continue-seed", b"{}");
+        let resp = dispatch_unit6_post("/cli/chat/continue-seed", b"{}", &crate::sandbox_chat_routes::ReopenCaller::owner());
         assert_ne!(resp.status, "404 Not Found", "{}", resp.body);
         assert!(
             resp.body.contains("error"),
@@ -16879,7 +16879,7 @@ mod tests {
 
     #[test]
     fn dispatch_unit6_post_unknown_path_returns_404() {
-        let resp = dispatch_unit6_post("/cli/does-not-exist", b"{}");
+        let resp = dispatch_unit6_post("/cli/does-not-exist", b"{}", &crate::sandbox_chat_routes::ReopenCaller::owner());
         assert_eq!(resp.status, "404 Not Found");
         assert!(
             resp.body.contains("route not found"),
@@ -16891,7 +16891,7 @@ mod tests {
     #[test]
     fn dispatch_unit6_post_empty_path_returns_404() {
         // A blank path should never match a real route.
-        let resp = dispatch_unit6_post("", b"{}");
+        let resp = dispatch_unit6_post("", b"{}", &crate::sandbox_chat_routes::ReopenCaller::owner());
         assert_eq!(resp.status, "404 Not Found");
     }
 
@@ -16900,7 +16900,7 @@ mod tests {
         // Exact match required — upper/lower-case variants must NOT
         // route to the lowercase handler. Closing this avoids subtle
         // routing collisions if a future handler uses mixed case.
-        let resp = dispatch_unit6_post("/CLI/FS/CREATE", b"{}");
+        let resp = dispatch_unit6_post("/CLI/FS/CREATE", b"{}", &crate::sandbox_chat_routes::ReopenCaller::owner());
         assert_eq!(resp.status, "404 Not Found");
     }
 }

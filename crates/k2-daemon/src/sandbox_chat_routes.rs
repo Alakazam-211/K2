@@ -8,10 +8,12 @@
 //!   (written at spawn by [`write_meta`]) so the daemon can list titles/times
 //!   WITHOUT reading the cell-uid-owned `0700` `.claude` transcript (which it
 //!   can't — no CAP_DAC_READ_SEARCH). Sessions predating meta.json still list
-//!   with a generic title + the dir mtime.
-//! - `POST /cli/sandbox/reopen {project_path, session_id[, prompt]}` — re-launch
-//!   the session in its sandbox. Owner-authed; reuses the V1 address handler
-//!   (`V1Principal::Owner` → live-deliver-or-resume, with K2_RESUME).
+//!   with a generic title + the dir mtime. Each row says whether a sandbox
+//!   was in force (`sandboxed`) and whether this computer can re-launch it.
+//! - `POST /cli/sandbox/reopen {project_path, session_id[, prompt]}` — deliver
+//!   into a live sandbox cell of that workspace (any login of Member and up,
+//!   audited), or re-launch it in its sandbox (owner token only). Anything
+//!   else is 404 `session_not_found` ([`crate::v1_sandboxes::address_session`]).
 //! - `POST /cli/sandbox/open {project_path, preset_id}` — owner token only.
 //!   Starts the clicked enabled preset in the workspace microVM. A body
 //!   `command` or `args` is ignored. Does not require `K2_SANDBOX_API`.
@@ -30,6 +32,14 @@ struct SandboxChat {
     timestamp: u64, // unix ms
     #[serde(rename = "messageCount")]
     message_count: u64,
+    /// The session ran in a sandbox in force: its meta records the microVM
+    /// backend. Unknown (no meta, or none recorded) is `false`; the UI says
+    /// "Sandboxed" only on `true` (0.46.17).
+    sandboxed: bool,
+    /// This computer can re-launch it in its sandbox now ([`can_sandbox`]).
+    ///
+    /// [`can_sandbox`]: crate::v2_spawn::can_sandbox
+    reopenable: bool,
 }
 
 /// Root of the per-workspace sandbox homes (daemon-home only — never a caller
@@ -55,7 +65,9 @@ fn slug_from_project_path(p: &str) -> Option<String> {
 /// Write the daemon-owned per-session `meta.json` at spawn — the audit index the
 /// list reads (the cell-owned `.claude` is unreadable to the daemon). Best-effort:
 /// never fails a spawn. `ws_slug`/`sid` are already re-asserted by the caller.
-pub fn write_meta(ws_slug: &str, sid: &str, title: &str, created_ms: u64) {
+/// `principal` is the opener's `V1Principal::display_id` (who may address
+/// it later, [`meta_principal`]).
+pub fn write_meta(ws_slug: &str, sid: &str, title: &str, created_ms: u64, principal: &str) {
     let dir = sandbox_homes_root().join(ws_slug).join(sid);
     // First-spawn wins: a resume (same id) must NOT overwrite the original title.
     if dir.join("meta.json").exists() {
@@ -64,11 +76,28 @@ pub fn write_meta(ws_slug: &str, sid: &str, title: &str, created_ms: u64) {
     if std::fs::create_dir_all(&dir).is_err() {
         return;
     }
+    // The backend this spawn resolves to: a sandbox request only proceeds
+    // where `can_sandbox()` holds, so anything else is recorded as such.
+    let backend = if crate::v2_spawn::can_sandbox() { "microvm" } else { "passthrough" };
     let meta = serde_json::json!({
         "title": title.chars().take(120).collect::<String>(),
         "created_ms": created_ms,
+        "backend": backend,
+        "principal": principal,
     });
     let _ = std::fs::write(dir.join("meta.json"), meta.to_string());
+}
+
+/// The principal [`write_meta`] recorded for a sandbox session, or `None`
+/// (no meta, an unsafe segment, or a session from before 0.46.17).
+pub fn meta_principal(ws_slug: &str, sid: &str) -> Option<String> {
+    let safe = |seg: &str| !seg.is_empty() && !seg.contains(['/', '\\', '\0']) && !seg.contains("..");
+    if !safe(ws_slug) || !safe(sid) {
+        return None;
+    }
+    let raw = std::fs::read_to_string(sandbox_homes_root().join(ws_slug).join(sid).join("meta.json")).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    v.get("principal").and_then(|p| p.as_str()).filter(|p| !p.is_empty()).map(str::to_string)
 }
 
 fn dir_mtime_ms(p: &Path) -> u64 {
@@ -89,6 +118,7 @@ pub fn handle_sandbox_list(params: &HashMap<String, String>) -> CliResponse {
         return CliResponse::ok_json("[]".to_string());
     };
     let ws_root = sandbox_homes_root().join(&slug);
+    let reopenable = crate::v2_spawn::can_sandbox();
     let mut out: Vec<SandboxChat> = Vec::new();
     if let Ok(rd) = std::fs::read_dir(&ws_root) {
         for entry in rd.flatten() {
@@ -101,10 +131,11 @@ pub fn handle_sandbox_list(params: &HashMap<String, String>) -> CliResponse {
             }
             // Prefer the daemon-owned meta.json; fall back to dir mtime + a
             // generic title for sessions that predate it.
-            let (title, ts) = match std::fs::read_to_string(dir.join("meta.json"))
+            let meta = std::fs::read_to_string(dir.join("meta.json"))
                 .ok()
-                .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-            {
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+            let sandboxed = meta.as_ref().and_then(|m| m.get("backend")).and_then(|b| b.as_str()) == Some("microvm");
+            let (title, ts) = match meta {
                 Some(m) => (
                     m.get("title")
                         .and_then(|t| t.as_str())
@@ -123,6 +154,8 @@ pub fn handle_sandbox_list(params: &HashMap<String, String>) -> CliResponse {
                 title,
                 timestamp: ts,
                 message_count: 0,
+                sandboxed,
+                reopenable,
             });
         }
     }
@@ -130,10 +163,36 @@ pub fn handle_sandbox_list(params: &HashMap<String, String>) -> CliResponse {
     CliResponse::ok_json(serde_json::to_string(&out).unwrap_or_else(|_| "[]".to_string()))
 }
 
+/// Who called `/cli/sandbox/reopen` (the route admits any login of Member
+/// and up): their audit label, and whether it is the owner token.
+pub struct ReopenCaller {
+    pub actor: String,
+    pub is_owner: bool,
+}
+
+impl ReopenCaller {
+    /// From the request's auth query.
+    pub fn of(query: &str, owner_token: &str) -> Self {
+        ReopenCaller {
+            actor: crate::routes::http::actor_label(query, owner_token, None).unwrap_or_else(|| "unknown".to_string()),
+            is_owner: crate::routes::http::token_is_owner(query, owner_token),
+        }
+    }
+
+    /// The owner token.
+    pub fn owner() -> Self {
+        ReopenCaller { actor: "owner-token".to_string(), is_owner: true }
+    }
+}
+
 /// `POST /cli/sandbox/reopen {project_path, session_id[, prompt]}` — re-launch a
-/// sandbox session in its sandbox. Owner-authed; reuses the V1 address handler
-/// (live-deliver-or-resume). The re-spawned cell surfaces as its orange tab.
-pub fn handle_sandbox_reopen(body: &[u8]) -> CliResponse {
+/// sandbox session in its sandbox, or deliver the prompt into it when it is
+/// live (the V1 address handler). Only a sandbox session of that workspace is
+/// addressed; anything else is 404 `session_not_found` (0.46.17). A live
+/// write is open to the route's logins and audited; re-launching one that
+/// isn't running starts a cell, so it needs the owner token, as
+/// `/cli/sandbox/open` does. The re-spawned cell surfaces as its orange tab.
+pub fn handle_sandbox_reopen(body: &[u8], caller: &ReopenCaller) -> CliResponse {
     let v: serde_json::Value = match serde_json::from_slice(body) {
         Ok(v) => v,
         Err(_) => return CliResponse::bad_request("invalid JSON body"),
@@ -147,11 +206,16 @@ pub fn handle_sandbox_reopen(body: &[u8]) -> CliResponse {
     let Some(slug) = slug_from_project_path(project_path) else {
         return CliResponse::bad_request("bad project_path");
     };
-    crate::v1_sandboxes::handle_v1_ws_address(&V1Principal::Owner, &slug, session_id, body)
+    // `Owner` opens the workspace door only (this route has no API keys);
+    // the caller's own reach decides the cold resume.
+    crate::v1_sandboxes::address_session(&V1Principal::Owner, &slug, session_id, body, caller.is_owner, &caller.actor)
 }
 
-const CANNOT_SANDBOX_BODY: &str =
-    r#"{"error":"this daemon cannot sandbox (microVM backend unavailable)"}"#;
+/// The plus menu's Option-click asked for the sandbox: the 409 says how to
+/// open it without one.
+fn cannot_sandbox_body() -> String {
+    crate::v2_spawn::sandbox_unavailable_body("Option held")
+}
 
 struct OpenPlan {
     workspace_path: String,
@@ -258,7 +322,7 @@ pub fn handle_sandbox_open(body: &[u8]) -> CliResponse {
         return CliResponse {
             status: "409 Conflict",
             content_type: "application/json",
-            body: CANNOT_SANDBOX_BODY.to_string(),
+            body: cannot_sandbox_body(),
         };
     }
     crate::v1_sandboxes::spawn_workspace_preset(
@@ -409,7 +473,7 @@ mod tests {
 
         let resp = handle_sandbox_open(&raw);
         assert_eq!(resp.status, "409 Conflict", "{}", resp.body);
-        assert_eq!(resp.body, CANNOT_SANDBOX_BODY);
+        assert_eq!(resp.body, cannot_sandbox_body());
         assert_eq!(rows_for(&handle), 0);
         assert_eq!(rows_for("foldername"), 0);
     }
@@ -470,5 +534,47 @@ mod tests {
         assert!(!block.contains("preset"), "{block}");
         assert!(!block.contains("command"), "{block}");
         assert!(!block.contains("args"), "{block}");
+    }
+
+    /// `GET /cli/sandbox/list` says per session whether a sandbox was in
+    /// force (`sandboxed`, from the backend its meta records; unknown is
+    /// false) and whether this computer can re-launch it (`reopenable`). The
+    /// UI says "Sandboxed" only on `sandboxed: true` (0.46.17).
+    #[test]
+    fn sandbox_list_reports_sandboxed_only_for_a_recorded_microvm() {
+        init();
+        let _home = crate::test_support::TempHome::new();
+        let slug = format!("homes-{}", uuid::Uuid::new_v4().simple());
+        let root = sandbox_homes_root().join(&slug);
+        let mk = |sid: &str, meta: Option<serde_json::Value>| {
+            std::fs::create_dir_all(root.join(sid).join(".claude")).expect("session dir");
+            if let Some(m) = meta {
+                std::fs::write(root.join(sid).join("meta.json"), m.to_string()).expect("meta");
+            }
+        };
+        mk("s-microvm", Some(serde_json::json!({"title": "a", "created_ms": 3, "backend": "microvm"})));
+        mk("s-plain", Some(serde_json::json!({"title": "b", "created_ms": 2, "backend": "passthrough"})));
+        mk("s-old", Some(serde_json::json!({"title": "c", "created_ms": 1})));
+        mk("s-nometa", None);
+        let params = HashMap::from([("project_path".to_string(), format!("/srv/{slug}"))]);
+        let resp = handle_sandbox_list(&params);
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let rows: Vec<serde_json::Value> = serde_json::from_str(&resp.body).expect("json array");
+        let by = |sid: &str| rows.iter().find(|r| r["sessionId"] == sid).unwrap_or_else(|| panic!("{sid} listed")).clone();
+        assert_eq!(by("s-microvm")["sandboxed"], serde_json::json!(true));
+        for sid in ["s-plain", "s-old", "s-nometa"] {
+            assert_eq!(by(sid)["sandboxed"], serde_json::json!(false), "{sid}");
+        }
+        for r in &rows {
+            assert_eq!(r["reopenable"], serde_json::json!(false), "this build can't re-launch: {r}");
+        }
+        // write_meta records the backend the spawn resolves to.
+        write_meta(&slug, "s-new", "title", 9, "key-a");
+        assert_eq!(meta_principal(&slug, "s-new").as_deref(), Some("key-a"));
+        assert_eq!(meta_principal(&slug, "s-microvm"), None, "a meta from before 0.46.17 names no one");
+        assert_eq!(meta_principal("..", "s-new"), None);
+        let m: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(root.join("s-new").join("meta.json")).expect("meta")).expect("json");
+        assert_eq!(m["backend"], serde_json::json!("passthrough"), "this build resolves no sandbox");
     }
 }

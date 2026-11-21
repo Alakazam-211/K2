@@ -142,7 +142,7 @@ fn clamp_dim(hint: Option<u16>, default: u16, min: u16, max: u16) -> u16 {
 /// Keep only URL/path-safe identity chars so the host-minted `agent_name` is
 /// well-formed regardless of the principal id shape (mirrors
 /// `v1_sandboxes::policy::sanitize_id`).
-fn sanitize_id(s: &str) -> String {
+pub(crate) fn sanitize_id(s: &str) -> String {
     let cleaned: String = s
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' })

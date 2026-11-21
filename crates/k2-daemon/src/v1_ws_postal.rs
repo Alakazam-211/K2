@@ -101,7 +101,7 @@ pub(crate) fn handle(principal: &V1Principal, project_path: &str, v: &serde_json
                 "mode": "live",
                 "kind": "postal",
                 "from": address,
-                "result": result,
+                "result": crate::v1_ws_message::public_result(&result),
                 "deliveryId": delivery,
             })
             .to_string(),

@@ -192,7 +192,7 @@ async fn owner_token_409s_and_non_owner_tokens_are_rejected() {
     assert!(
         accepted
             .body
-            .contains("this daemon cannot sandbox (microVM backend unavailable)"),
+            .contains("this computer can't run a sandboxed session. Run it without Option held, knowing it runs as you."),
         "{}",
         accepted.body
     );

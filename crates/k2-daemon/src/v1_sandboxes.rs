@@ -43,6 +43,9 @@ pub(crate) fn require_sandboxes(principal: &V1Principal) -> Result<(), CliRespon
     }
 }
 
+/// What a `/v1` caller can do instead of a sandbox, in the 409 line.
+pub(crate) const API_ASK: &str = "a sandbox (POST /v1/w/<ws>/host-sessions)";
+
 /// Handle `POST /v1/sandboxes`. The caller is ALREADY authenticated to a
 /// [`V1Principal`] by the dispatcher's `/v1/*` gate; this never re-checks creds,
 /// it resolves them into a host-trusted spawn.
@@ -57,8 +60,7 @@ pub(crate) fn handle_v1_sandboxes(principal: &V1Principal, body: &[u8]) -> CliRe
         return CliResponse {
             status: "409 Conflict",
             content_type: "application/json",
-            body: r#"{"error":"this daemon cannot sandbox (microVM backend unavailable)"}"#
-                .to_string(),
+            body: v2_spawn::sandbox_unavailable_body(API_ASK),
         };
     }
 
@@ -429,8 +431,9 @@ pub(crate) fn resolve_authorized_workspace_door(
 /// workspace's CANONICAL (cockpit-owned) session? The workspace API may ONLY
 /// address api-spawned SANDBOX sessions; it must NEVER resolve a caller-supplied
 /// id to a canonical session (that would let an external key drive the owner's
-/// real workspace agent). We treat a match against `workspace_sessions.session_id`
-/// as canonical → the caller gets the uniform 404.
+/// real workspace agent). A match against `workspace_sessions.session_id` (the
+/// conversation id) or its daemon PTY ids (`terminal_id`, `active_terminal_id`,
+/// 0.46.17) is canonical → the caller gets the uniform 404.
 ///
 /// **FAIL-CLOSED on error:** if the lookup itself errors we return `true`
 /// (treat as canonical / off-limits and refuse) rather than risk admitting a
@@ -439,7 +442,8 @@ pub fn session_is_canonical(session_id: &str) -> bool {
     let db = k2_core::db::shared();
     let conn = db.lock();
     match conn.query_row(
-        "SELECT COUNT(*) FROM workspace_sessions WHERE session_id = ?1",
+        "SELECT COUNT(*) FROM workspace_sessions \
+         WHERE session_id = ?1 OR terminal_id = ?1 OR active_terminal_id = ?1",
         rusqlite::params![session_id],
         |r| r.get::<_, i64>(0),
     ) {
@@ -487,12 +491,78 @@ pub(crate) fn handle_v1_ws_new(principal: &V1Principal, ws_raw: &str, body: &[u8
 }
 
 /// `POST /v1/w/<ws>/sessions/<id>` — ADDRESS an existing sandbox session
-/// (message / resume intent; the F3 liveness router decides in slices 2-3).
+/// (message / resume intent). The caller's own principal runs any resume.
 pub(crate) fn handle_v1_ws_address(
     principal: &V1Principal,
     ws_raw: &str,
     sid_raw: &str,
     body: &[u8],
+) -> CliResponse {
+    let actor = format!("v1:{}", principal.display_id());
+    address_session(principal, ws_raw, sid_raw, body, true, &actor)
+}
+
+/// 404 for a session this door won't address: the same answer whether it
+/// doesn't exist, isn't a sandbox cell or belongs to another workspace, so
+/// it never confirms that another session is live.
+pub(crate) fn session_not_found_404() -> CliResponse {
+    CliResponse {
+        status: "404 Not Found",
+        content_type: "application/json",
+        body: r#"{"error":"no such sandbox session in this workspace","code":"session_not_found"}"#.to_string(),
+    }
+}
+
+/// The workspace path a sandbox session was recorded under (the §5 index),
+/// or `None` for an id the index doesn't know (or a DB error: fail closed).
+/// Returns `(workspace_path, workspace_slug)`.
+fn indexed_workspace(session_id: &str) -> Option<(String, String)> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::db::schema::SandboxSession::get(&conn, session_id)
+        .ok()
+        .flatten()
+        .map(|row| (row.workspace_path, row.workspace_slug))
+}
+
+/// The principal that opened a sandbox session: the live owner record, else
+/// the `meta.json` its first spawn wrote. `None`: unknown.
+fn sandbox_session_principal(session_id: &str, ws_slug: Option<&str>) -> Option<String> {
+    crate::sandbox_responses::owner_of(session_id)
+        .or_else(|| ws_slug.and_then(|slug| crate::sandbox_chat_routes::meta_principal(slug, session_id)))
+}
+
+/// May `principal` address a session `owner` opened? The owner token may
+/// address any; an API key only its own principal's (0.46.17: before, any
+/// session in a granted workspace). Unknown owner: the owner token only.
+fn principal_owns(principal: &V1Principal, owner: Option<&str>) -> bool {
+    match principal {
+        V1Principal::Owner => true,
+        V1Principal::Api(p) => owner == Some(p.id.as_str()),
+    }
+}
+
+/// May the door type into this live session? Only a sandbox cell really in
+/// force (`microvm`), under an `api-` cell name, that the index records in
+/// THIS workspace. Never a host shell, an `api-` host session (no sandbox),
+/// a sidecar, a heartbeat or a canonical / pinned chat. Pure (tests).
+fn live_write_allowed(map_key: &str, microvm: bool, indexed_ws: Option<&str>, ws_path: &str) -> bool {
+    microvm
+        && k2_core::workspace_session_handles::is_api_agent_name(map_key)
+        && indexed_ws == Some(ws_path)
+}
+
+/// Address `sid_raw` in workspace `ws_raw` for `principal` (whose grant and
+/// sandbox capability open the door). `cold_allowed`: a session that isn't
+/// live may be resumed (a new cell) by this caller; when false that answers
+/// 403. `actor` names the caller in the audit line of a live write.
+pub(crate) fn address_session(
+    principal: &V1Principal,
+    ws_raw: &str,
+    sid_raw: &str,
+    body: &[u8],
+    cold_allowed: bool,
+    actor: &str,
 ) -> CliResponse {
     if let Err(resp) = require_sandboxes(principal) {
         return resp;
@@ -501,39 +571,71 @@ pub(crate) fn handle_v1_ws_address(
         return uniform_ws_404();
     };
     let Some(sid) = decode_and_validate_segment(sid_raw) else {
-        return uniform_ws_404();
+        return session_not_found_404();
     };
     let ws_path = match resolve_authorized_workspace(principal, &slug) {
         Ok(p) => p,
         Err(resp) => return resp,
     };
-    // CANONICAL OFF-LIMITS — never address a workspace's canonical session.
+    // CANONICAL OFF-LIMITS — by conversation id and by daemon PTY id.
     if session_is_canonical(&sid) {
-        return uniform_ws_404();
+        return session_not_found_404();
     }
+    let Some(parsed) = k2_core::session::SessionId::parse(&sid) else {
+        return session_not_found_404();
+    };
+    let indexed = indexed_workspace(&sid);
+    let indexed_ws = indexed.as_ref().map(|(path, _)| path.as_str());
+    let owned = principal_owns(
+        principal,
+        sandbox_session_principal(&sid, indexed.as_ref().map(|(_, slug)| slug.as_str())).as_deref(),
+    );
 
-    // OP #3 message-live (F3 liveness router): if the addressed session is LIVE
-    // (a running cell registered in v2_session_map), DELIVER the caller's prompt
-    // into its interactive claude PTY (submit with CR) instead of cold-resuming a
-    // duplicate cell. Cold sessions fall through to the resume spawn below.
-    if let Some(parsed) = k2_core::session::SessionId::parse(&sid) {
-        if let Some(live) = crate::v2_session_map::lookup_by_session_id(&parsed) {
-            crate::sandbox_reaper::stamp(&parsed);
-            let prompt = serde_json::from_slice::<serde_json::Value>(body)
-                .ok()
-                .and_then(|v| v.get("prompt").and_then(|x| x.as_str()).map(str::to_string))
-                .unwrap_or_default();
-            if !prompt.is_empty() {
-                let mut bytes = prompt.into_bytes();
-                bytes.push(b'\r');
-                live.write(bytes);
-            }
-            return CliResponse::ok_json(
-                serde_json::json!({ "sessionId": sid, "delivered": true, "live": true }).to_string(),
-            );
+    // Live (F3 liveness router): deliver the prompt into the running cell
+    // instead of cold-resuming a duplicate, but only into a sandbox cell of
+    // this workspace (0.46.17: before, any live session daemon-wide).
+    let live = crate::v2_session_map::snapshot()
+        .into_iter()
+        .find(|(_, s)| s.session_id == parsed);
+    if let Some((key, live)) = live {
+        let microvm = matches!(live.sandbox, k2_core::terminal::SandboxSpec::Microvm);
+        if !owned || !live_write_allowed(&key, microvm, indexed_ws, &ws_path) {
+            return session_not_found_404();
         }
+        crate::sandbox_reaper::stamp(&parsed);
+        let prompt = serde_json::from_slice::<serde_json::Value>(body)
+            .ok()
+            .and_then(|v| v.get("prompt").and_then(|x| x.as_str()).map(str::to_string))
+            .unwrap_or_default();
+        let n = prompt.len();
+        if !prompt.is_empty() {
+            let mut bytes = prompt.into_bytes();
+            bytes.push(b'\r');
+            live.write(bytes);
+        }
+        // Audit: who, where, which session, how many bytes; never the text.
+        log_debug!("[sandbox] live write actor={actor} workspace={slug} session={sid} bytes={n}");
+        return CliResponse::ok_json(
+            serde_json::json!({ "sessionId": sid, "delivered": true, "live": true }).to_string(),
+        );
     }
 
+    // Cold: only a sandbox session this workspace's index knows, that this
+    // caller's principal opened, is resumed, and never at an id any session
+    // (live under another name, legacy map included) holds now.
+    if indexed_ws != Some(ws_path.as_str())
+        || !owned
+        || crate::session_lookup::lookup_by_session_id(&parsed).is_some()
+    {
+        return session_not_found_404();
+    }
+    if !cold_allowed {
+        return CliResponse {
+            status: "403 Forbidden",
+            content_type: "application/json",
+            body: r#"{"error":"only the owner can re-launch a sandboxed chat that isn't running","code":"owner_only"}"#.to_string(),
+        };
+    }
     let req = WorkspaceSessionRequest {
         workspace_slug: slug,
         workspace_path: ws_path,
@@ -563,8 +665,15 @@ pub(crate) fn handle_v1_ws_list(principal: &V1Principal, ws_raw: &str) -> CliRes
         let conn = db.lock();
         k2_core::db::schema::SandboxSession::list_for_workspace(&conn, &slug).unwrap_or_default()
     };
+    // An API key sees only the sessions its own principal opened (0.46.17).
     let sessions: Vec<serde_json::Value> = rows
         .iter()
+        .filter(|r| {
+            principal_owns(
+                principal,
+                sandbox_session_principal(&r.session_id, Some(&r.workspace_slug)).as_deref(),
+            )
+        })
         .map(|r| {
             serde_json::json!({
                 "sessionId": r.session_id,
@@ -709,8 +818,7 @@ fn spawn_for_workspace_inner(
         return CliResponse {
             status: "409 Conflict",
             content_type: "application/json",
-            body: r#"{"error":"this daemon cannot sandbox (microVM backend unavailable)"}"#
-                .to_string(),
+            body: v2_spawn::sandbox_unavailable_body(API_ASK),
         };
     }
 
@@ -942,7 +1050,7 @@ mod tests {
         let resp = handle_v1_sandboxes(&principal, b"{}");
         assert_eq!(resp.status, "409 Conflict", "body={}", resp.body);
         assert!(
-            resp.body.contains("cannot sandbox"),
+            resp.body.contains("this computer can't run a sandboxed session. Run it without a sandbox (POST /v1/w/<ws>/host-sessions), knowing it runs as you."),
             "409 must explain the refusal; body={}",
             resp.body
         );
@@ -1270,9 +1378,10 @@ mod tests {
         assert_eq!(handle_v1_ws_new(&V1Principal::Owner, "v1ws-new", body_ok).status, "409 Conflict");
     }
 
-    /// `handle_v1_ws_address`: the CANONICAL session is off-limits (404), a
-    /// non-canonical sandbox id passes the door (409), and a malformed session
-    /// segment 404s.
+    /// `handle_v1_ws_address`: the CANONICAL session is off-limits (404), an
+    /// id this workspace's sandbox index doesn't know is 404
+    /// `session_not_found`, an indexed one passes to the resume spawn (409
+    /// here: this build can't sandbox), and a malformed segment 404s.
     #[test]
     fn ws_address_refuses_canonical_session() {
         let pid = insert_project("v1ws-addr", "/tmp/k2-v1ws-addr");
@@ -1283,9 +1392,16 @@ mod tests {
             handle_v1_ws_address(&V1Principal::Owner, "v1ws-addr", "v1ws-addr-canon", b"{}").status,
             "404 Not Found",
         );
-        // Non-canonical (sandbox) id → passes door → 409.
+        // Not a sandbox session of this workspace → 404, never the spawn.
+        let unknown = uuid::Uuid::new_v4().to_string();
+        let r = handle_v1_ws_address(&V1Principal::Owner, "v1ws-addr", &unknown, b"{}");
+        assert_eq!(r.status, "404 Not Found", "body={}", r.body);
+        assert!(r.body.contains("session_not_found"), "body={}", r.body);
+        // An indexed sandbox session of this workspace → passes → 409.
+        let indexed = uuid::Uuid::new_v4().to_string();
+        index_session(&indexed, "v1ws-addr", "/tmp/k2-v1ws-addr");
         assert_eq!(
-            handle_v1_ws_address(&V1Principal::Owner, "v1ws-addr", "v1ws-addr-sandbox", b"{}").status,
+            handle_v1_ws_address(&V1Principal::Owner, "v1ws-addr", &indexed, b"{}").status,
             "409 Conflict",
         );
         // Malformed session segment → 404.
@@ -1293,6 +1409,23 @@ mod tests {
             handle_v1_ws_address(&V1Principal::Owner, "v1ws-addr", "a%2fb", b"{}").status,
             "404 Not Found",
         );
+    }
+
+    fn index_session(session_id: &str, slug: &str, ws_path: &str) {
+        let row = k2_core::db::schema::SandboxSession {
+            session_id: session_id.to_string(),
+            workspace_slug: slug.to_string(),
+            workspace_path: ws_path.to_string(),
+            sandbox_home_path: String::new(),
+            jsonl_path: String::new(),
+            layer_path: String::new(),
+            slug: ws_path.replace('/', "-"),
+            created_at: 1,
+            last_active_at: 1,
+        };
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::db::schema::SandboxSession::upsert(&conn, &row).expect("index row");
     }
 
     /// `handle_v1_ws_messages`: canonical is off-limits, and an unowned (but
@@ -1326,5 +1459,253 @@ mod tests {
         // Unauthorized key → 404 (must not learn the ws exists).
         let nogrant = apik("k-list-none", None);
         assert_eq!(handle_v1_ws_list(&nogrant, "v1ws-list").status, "404 Not Found");
+    }
+
+    /// A live plain session that records what reaches its stdin: `sh -c 'cat
+    /// > <log>'` under `agent` in `ws` (no sandbox; this build has none).
+    fn live_recorder(agent: &str, ws: &str, log: &std::path::Path) -> String {
+        let body = serde_json::json!({
+            "agent_name": agent,
+            "cwd": ws,
+            "command": "sh",
+            "args": ["-c", format!("cat > '{}'", log.display())],
+        });
+        let r = v2_spawn::handle_v2_spawn(body.to_string().as_bytes());
+        assert_eq!(r.status, "200 OK", "{agent}: body={}", r.body);
+        serde_json::from_str::<serde_json::Value>(&r.body).expect("json")["sessionId"]
+            .as_str()
+            .expect("sessionId")
+            .to_string()
+    }
+
+    fn registered_ws(home: &crate::test_support::TempHome, tag: &str) -> (String, String) {
+        let (name, ws, _) = registered_ws_id(home, tag);
+        (name, ws)
+    }
+
+    fn registered_ws_id(home: &crate::test_support::TempHome, tag: &str) -> (String, String, String) {
+        let name = format!("v1ws-{tag}-{}", uuid::Uuid::new_v4().simple());
+        let ws = home.path().join(&name);
+        std::fs::create_dir_all(&ws).expect("workspace folder");
+        let ws = dunce::canonicalize(&ws).expect("canonical").to_string_lossy().into_owned();
+        let id = insert_project(&name, &ws);
+        (name, ws, id)
+    }
+
+    /// The sandbox address doors never type into a live session that isn't a
+    /// sandbox cell of the named workspace: a host shell, an `api-` host
+    /// session, a sidecar tab, a session in another workspace. Each answers
+    /// 404 `session_not_found` (the same as an unknown id) and the session's
+    /// stdin gets NOTHING. Covers `/cli/sandbox/reopen` for a Member login and
+    /// the API-key door. Before 0.46.17 each wrote the prompt and answered 200.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn address_doors_never_write_into_a_session_that_is_not_this_workspaces_cell() {
+        assert!(!v2_spawn::can_sandbox(), "test premise: this build cannot sandbox");
+        k2_core::db::init_for_tests();
+        let home = crate::test_support::TempHome::new();
+        let (name_a, ws_a, pid_a) = registered_ws_id(&home, "a");
+        let (name_b, ws_b) = registered_ws(&home, "b");
+        let logs = home.path().join("stdin-logs");
+        std::fs::create_dir_all(&logs).expect("logs");
+        let u = || uuid::Uuid::new_v4().simple().to_string();
+        // (label, map key, workspace it lives in)
+        let targets = [
+            ("host shell in A", format!("agent-a-shell-{}", u()), ws_a.clone()),
+            ("api host session in A", format!("api-owner-{}", uuid::Uuid::new_v4()), ws_a.clone()),
+            ("sidecar tab in A", format!("tab-{}", u()), ws_a.clone()),
+            ("host shell in B", format!("agent-b-shell-{}", u()), ws_b.clone()),
+            // The main agent terminal: the bare project id is its map key.
+            ("main agent terminal in A", pid_a.clone(), ws_a.clone()),
+        ];
+        let member = crate::sandbox_chat_routes::ReopenCaller { actor: "user:alice".to_string(), is_owner: false };
+        let key_a = apik("key-grant-a", Some(&serde_json::json!([name_a]).to_string()));
+        let mut live = Vec::new();
+        for (label, key, ws) in &targets {
+            let log = logs.join(format!("{}.log", key));
+            let sid = live_recorder(key, ws, &log);
+            live.push((label, key.clone(), ws.clone(), sid, log));
+        }
+        // An id learned before this update: the main agent terminal's daemon
+        // id, as `/v1/w/<ws>/message` used to return it (target_session_id),
+        // recorded as the workspace's active terminal.
+        {
+            let (_, _, _, canon_sid, _) = &live[4];
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT OR REPLACE INTO workspace_sessions \
+                     (id, project_id, terminal_id, session_id, harness, owner, status, created_at, active_terminal_id) \
+                 VALUES (?1, ?2, ?3, ?4, 'claude', 'system', 'active', unixepoch(), ?3)",
+                rusqlite::params![uuid::Uuid::new_v4().to_string(), pid_a, canon_sid, uuid::Uuid::new_v4().to_string()],
+            )
+            .expect("main agent session row");
+        }
+        let mut answers = Vec::new();
+        for (label, _key, _ws, sid, _log) in &live {
+            // A Member login through /cli/sandbox/reopen, naming workspace A.
+            let body = serde_json::json!({ "project_path": ws_a, "session_id": sid, "prompt": "hello" }).to_string();
+            answers.push((format!("{label}: reopen as a Member naming A"), crate::sandbox_chat_routes::handle_sandbox_reopen(body.as_bytes(), &member)));
+            // The owner token naming workspace B (the session's own or not).
+            let body_b = serde_json::json!({ "project_path": ws_b, "session_id": sid, "prompt": "hello" }).to_string();
+            answers.push((format!("{label}: reopen as the owner naming B"), crate::sandbox_chat_routes::handle_sandbox_reopen(body_b.as_bytes(), &crate::sandbox_chat_routes::ReopenCaller::owner())));
+            // An API key granted A, on the A door, with and without a prompt
+            // (no prompt is no probe: the same 404).
+            answers.push((format!("{label}: API key granted A on A"), address_session(&key_a, &name_a, sid, br#"{"prompt":"hello"}"#, true, "v1:key-grant-a")));
+            answers.push((format!("{label}: API key granted A on A, no prompt"), handle_v1_ws_address(&key_a, &name_a, sid, b"{}")));
+        }
+        // The API key granted A on B's door: refused at the grant.
+        let (_, _, _, sid_b, _) = &live[3];
+        let on_b = handle_v1_ws_address(&key_a, &name_b, sid_b, br#"{"prompt":"hello"}"#);
+        std::thread::sleep(std::time::Duration::from_millis(700));
+        for (_, key, _, _, _) in &live {
+            if let Some(s) = crate::v2_session_map::unregister(key) {
+                s.kill();
+            }
+        }
+        for (label, r) in &answers {
+            assert_eq!(r.status, "404 Not Found", "{label}: body={}", r.body);
+            assert!(r.body.contains("session_not_found"), "{label}: body={}", r.body);
+            assert!(!r.body.contains("delivered"), "{label}: body={}", r.body);
+        }
+        assert_eq!(on_b.status, "404 Not Found", "API key granted A on B: body={}", on_b.body);
+        for (label, _, _, _, log) in &live {
+            let got = std::fs::read(log).unwrap_or_default();
+            assert!(got.is_empty(), "{label}: its stdin received {} bytes", got.len());
+        }
+    }
+
+    /// The canonical guard also matches the daemon PTY ids of a workspace's
+    /// canonical session (`terminal_id`, `active_terminal_id`), not only
+    /// Claude's conversation id (0.46.17).
+    #[test]
+    fn canonical_guard_matches_the_daemon_pty_ids() {
+        k2_core::db::init_for_tests();
+        let pid = insert_project(&format!("v1ws-canon-pty-{}", uuid::Uuid::new_v4().simple()), "/tmp/k2-v1ws-canon-pty");
+        let (conv, term, active) = (uuid::Uuid::new_v4().to_string(), uuid::Uuid::new_v4().to_string(), uuid::Uuid::new_v4().to_string());
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO workspace_sessions \
+                     (id, project_id, terminal_id, session_id, harness, owner, status, created_at, active_terminal_id) \
+                 VALUES (?1, ?2, ?3, ?4, 'claude', 'system', 'active', unixepoch(), ?5)",
+                rusqlite::params![uuid::Uuid::new_v4().to_string(), pid, term, conv, active],
+            )
+            .expect("insert canonical session");
+        }
+        assert!(session_is_canonical(&conv), "conversation id");
+        assert!(session_is_canonical(&term), "terminal_id");
+        assert!(session_is_canonical(&active), "active_terminal_id");
+        assert!(!session_is_canonical(&uuid::Uuid::new_v4().to_string()), "an unknown id");
+    }
+
+    /// Only a sandbox cell in force, under an `api-` cell name, that the
+    /// index records in this workspace may take a live write. Where a
+    /// sandbox exists, that one still works.
+    #[test]
+    fn live_write_allowed_only_for_this_workspaces_sandbox_cell() {
+        let ws = "/srv/ws-a";
+        assert!(live_write_allowed("api-owner-1", true, Some(ws), ws), "a real cell of this workspace");
+        assert!(!live_write_allowed("api-owner-1", false, Some(ws), ws), "no sandbox in force");
+        assert!(!live_write_allowed("api-owner-1", true, Some("/srv/ws-b"), ws), "another workspace's cell");
+        assert!(!live_write_allowed("api-owner-1", true, None, ws), "not in the index");
+        assert!(!live_write_allowed("tab-1", true, Some(ws), ws), "a sidecar tab");
+        assert!(!live_write_allowed("11111111-2222-3333-4444-555555555555", true, Some(ws), ws), "a canonical key");
+    }
+
+    /// Re-launching a sandboxed chat that isn't running starts a cell, so on
+    /// `/cli/sandbox/reopen` it needs the owner token: a Member login gets
+    /// 403 for this workspace's own indexed session; the owner reaches the
+    /// spawn (409 here: this build can't sandbox).
+    #[test]
+    fn reopen_cold_resume_needs_the_owner() {
+        k2_core::db::init_for_tests();
+        let home = crate::test_support::TempHome::new();
+        let (name, ws) = registered_ws(&home, "cold");
+        let sid = uuid::Uuid::new_v4().to_string();
+        index_session(&sid, &name, &ws);
+        let body = serde_json::json!({ "project_path": ws, "session_id": sid }).to_string();
+        let member = crate::sandbox_chat_routes::ReopenCaller { actor: "user:alice".to_string(), is_owner: false };
+        let r = crate::sandbox_chat_routes::handle_sandbox_reopen(body.as_bytes(), &member);
+        assert_eq!(r.status, "403 Forbidden", "body={}", r.body);
+        let r = crate::sandbox_chat_routes::handle_sandbox_reopen(body.as_bytes(), &crate::sandbox_chat_routes::ReopenCaller::owner());
+        assert_eq!(r.status, "409 Conflict", "body={}", r.body);
+    }
+
+    /// An API key reaches only the sandbox sessions its own principal opened
+    /// (0.46.17): key B gets the same 404 as an unknown id for key A's
+    /// session and for the owner's, at write time, whenever it learned the
+    /// id; key A and the owner token reach the resume (409 here: this build
+    /// can't sandbox). The session list shows each key only its own.
+    #[test]
+    fn a_key_reaches_only_its_own_sandbox_sessions() {
+        k2_core::db::init_for_tests();
+        let home = crate::test_support::TempHome::new();
+        let (name, ws) = registered_ws(&home, "own");
+        let (by_a, by_owner) = (uuid::Uuid::new_v4().to_string(), uuid::Uuid::new_v4().to_string());
+        for (sid, who) in [(&by_a, "key-a"), (&by_owner, "owner")] {
+            index_session(sid, &name, &ws);
+            crate::sandbox_chat_routes::write_meta(&name, sid, "", 1, who);
+        }
+        let (key_a, key_b) = (apik("key-a", Some("*")), apik("key-b", Some("*")));
+        for (label, p, sid, want) in [
+            ("key B on key A's session", &key_b, &by_a, "404 Not Found"),
+            ("key B on the owner's session", &key_b, &by_owner, "404 Not Found"),
+            ("key A on the owner's session", &key_a, &by_owner, "404 Not Found"),
+            ("key A on its own session", &key_a, &by_a, "409 Conflict"),
+            ("the owner token on key A's session", &V1Principal::Owner, &by_a, "409 Conflict"),
+        ] {
+            for body in [&br#"{"prompt":"hello"}"#[..], &b"{}"[..]] {
+                let r = handle_v1_ws_address(p, &name, sid, body);
+                assert_eq!(r.status, want, "{label}: body={}", r.body);
+                if want.starts_with("404") {
+                    assert!(r.body.contains("session_not_found"), "{label}: body={}", r.body);
+                }
+            }
+        }
+        let listed = |p: &V1Principal| -> Vec<String> {
+            let r = handle_v1_ws_list(p, &name);
+            assert_eq!(r.status, "200 OK", "body={}", r.body);
+            let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+            let mut out: Vec<String> = v["sessions"]
+                .as_array()
+                .expect("sessions")
+                .iter()
+                .map(|s| s["sessionId"].as_str().expect("sessionId").to_string())
+                .collect();
+            out.sort();
+            out
+        };
+        assert_eq!(listed(&key_a), vec![by_a.clone()]);
+        assert!(listed(&key_b).is_empty(), "key B opened nothing here");
+        let mut both = vec![by_a.clone(), by_owner.clone()];
+        both.sort();
+        assert_eq!(listed(&V1Principal::Owner), both);
+    }
+
+    /// A resume never runs at an id a live session already holds, even one
+    /// this workspace's index names: the same 404 (a caller can't pick
+    /// another session's id for a new cell).
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_resume_never_takes_a_live_sessions_id() {
+        k2_core::db::init_for_tests();
+        let home = crate::test_support::TempHome::new();
+        let (name, ws) = registered_ws(&home, "taken");
+        let log = home.path().join("taken.log");
+        let agent = format!("agent-a-taken-{}", uuid::Uuid::new_v4().simple());
+        let sid = live_recorder(&agent, &ws, &log);
+        // Even indexed and "opened" by the caller, the id is live elsewhere.
+        index_session(&sid, &name, &ws);
+        crate::sandbox_chat_routes::write_meta(&name, &sid, "", 1, "owner");
+        let r = handle_v1_ws_address(&V1Principal::Owner, &name, &sid, b"{}");
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        if let Some(s) = crate::v2_session_map::unregister(&agent) {
+            s.kill();
+        }
+        assert_eq!(r.status, "404 Not Found", "body={}", r.body);
+        assert!(r.body.contains("session_not_found"), "body={}", r.body);
+        assert!(std::fs::read(&log).unwrap_or_default().is_empty(), "nothing typed into the live session");
     }
 }

@@ -53,9 +53,13 @@ pub enum View {
     /// 0.46.3 default): the public view plus the five fields old phones and
     /// desktops read without a token.
     Compat,
-    /// Loopback, or any valid owner / passport / API or status key /
-    /// Connect-login session: today's body.
+    /// Loopback, the owner token or an Owner / Admin login: today's body.
     Full,
+    /// Any other valid credential (an agent passport, an API or status key,
+    /// a Member login): the full body without the restart details that name
+    /// other sessions (`passportsReminted`, `passportsUnusable`, 0.46.17).
+    /// Its wire name is still `full`.
+    FullNoRestartDetail,
 }
 
 impl View {
@@ -63,7 +67,7 @@ impl View {
         match self {
             View::Public => "public",
             View::Compat => "compat",
-            View::Full => "full",
+            View::Full | View::FullNoRestartDetail => "full",
         }
     }
 }
@@ -119,8 +123,13 @@ pub(crate) fn view_for(
     if ingress == crate::routes::dispatcher::Ingress::Loopback {
         return View::Full;
     }
-    if token.is_some_and(|t| credential_earns_full(t, owner_token)) {
-        return View::Full;
+    if let Some(t) = token.filter(|t| credential_earns_full(t, owner_token)) {
+        let query = format!("token={}", t.trim());
+        return if crate::routes::http::token_is_owner_or_admin(&query, owner_token) {
+            View::Full
+        } else {
+            View::FullNoRestartDetail
+        };
     }
     match public {
         k2_core::app_settings::BootStatusPublic::Compat => View::Compat,
@@ -197,6 +206,10 @@ pub(crate) fn body_for(view: View, settings: &k2_core::app_settings::AppSettings
         // running vs this K2, linger) only when an App engine is installed.
         View::Full => crate::apps::engine_heal::decorate_boot_status(crate::ptyd_status::decorate_boot_status(full_body(settings)))
             .to_string(),
+        View::FullNoRestartDetail => crate::apps::engine_heal::decorate_boot_status(crate::ptyd_status::without_restart_detail(
+            crate::ptyd_status::decorate_boot_status(full_body(settings)),
+        ))
+        .to_string(),
     }
 }
 
@@ -205,7 +218,7 @@ pub(crate) fn body_for(view: View, settings: &k2_core::app_settings::AppSettings
 pub(crate) fn ping_body(view: View) -> &'static str {
     match view {
         View::Public => PING_GHOST,
-        View::Compat | View::Full => crate::BANNER,
+        View::Compat | View::Full | View::FullNoRestartDetail => crate::BANNER,
     }
 }
 
@@ -1123,6 +1136,11 @@ pub const FEATURE_DOCS_LIVE: &str = "docs-live-v1";
 /// while `board_file_preview` is on.
 pub const FEATURE_BOARD_FILE: &str = "board-file-v1";
 
+/// This daemon can run a sandboxed session (a microVM cell): listed only
+/// where [`crate::v2_spawn::can_sandbox`] holds. Clients offer "open in
+/// sandbox" only then (0.46.17); everywhere else a sandbox request is 409.
+pub const FEATURE_SANDBOX_MICROVM: &str = "sandbox-microvm-v1";
+
 /// Per-agent unread and ticket counts (0.46.4, Rosson 2026-10-24):
 /// `presence/summary` `agentActivity` entries carry the caller's `unread`,
 /// `waiting`, `muted` on that agent's Threads and the agent's
@@ -1275,6 +1293,9 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_DOCS_CORES);
     if k2_core::board_preview::enabled() {
         out.push(FEATURE_BOARD_FILE);
+    }
+    if crate::v2_spawn::can_sandbox() {
+        out.push(FEATURE_SANDBOX_MICROVM);
     }
     if crate::docs::live_ready() {
         out.push(FEATURE_DOCS_MD);
@@ -1451,6 +1472,14 @@ mod tests {
         assert_eq!(homes_keys(true, false), vec!["homes-sync-v1"], "switch off: not listed");
         assert!(homes_keys(false, true).is_empty(), "no Home sync tables: neither");
         assert!(homes_keys(false, false).is_empty());
+    }
+
+    /// The sandbox key follows `can_sandbox()`: absent on every build that
+    /// can't run a sandbox, so no client offers one there (0.46.17).
+    #[test]
+    fn sandbox_feature_listed_only_where_a_sandbox_can_run() {
+        assert_eq!(features().contains(&FEATURE_SANDBOX_MICROVM), crate::v2_spawn::can_sandbox());
+        assert_eq!(FEATURE_SANDBOX_MICROVM, "sandbox-microvm-v1");
     }
 
     #[test]
@@ -1653,6 +1682,21 @@ mod tests {
                 assert_eq!(view_for(ing, Some(" owner-token-unit "), OWNER, mode), View::Full, "trimmed");
             }
         }
+        // An agent passport earns the full body without the restart details
+        // that name other sessions (0.46.17); its wire name is still `full`.
+        // (Minting writes the passport store: a temp home.)
+        let _home = crate::test_support::TempHome::new();
+        let pass = crate::session_token::mint_session_token(
+            &k2_core::session::SessionId::new(),
+            "pane",
+            crate::session_token::HookPrincipal { workspace_uuid: "ws".into(), agent_address: "agent-a".into() },
+            crate::session_token::CredMode::ApiKey,
+            crate::session_token::Provider::Anthropic,
+        );
+        for ing in [Ingress::Lan, Ingress::Tunnel, Ingress::App] {
+            assert_eq!(view_for(ing, Some(&pass), OWNER, Compat), View::FullNoRestartDetail, "{ing:?} passport");
+        }
+        assert_eq!(View::FullNoRestartDetail.as_wire(), "full");
         assert!(is_session_shaped(&"0a".repeat(32)));
         assert!(!is_session_shaped(&"0A".repeat(32)), "uppercase is not a session");
         assert!(!is_session_shaped(&"0a".repeat(31)));

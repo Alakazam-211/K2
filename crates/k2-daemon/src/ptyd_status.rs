@@ -54,6 +54,16 @@ fn decorate_passports(
     body
 }
 
+/// The full body for a caller that isn't the owner or an Admin: the restart
+/// details that name other sessions' ids are dropped (0.46.17).
+pub fn without_restart_detail(mut body: serde_json::Value) -> serde_json::Value {
+    if let Some(obj) = body.as_object_mut() {
+        obj.remove("passportsReminted");
+        obj.remove("passportsUnusable");
+    }
+    body
+}
+
 fn decorate_with(
     mut body: serde_json::Value,
     switch: Switch,
@@ -104,6 +114,23 @@ mod tests {
         assert_eq!(out["passportStoreTrouble"], "is not valid");
         assert_eq!(out["passportsReminted"], serde_json::json!(["a"]));
         assert_eq!(out["passportsUnusable"], serde_json::json!(["b"]));
+    }
+
+    /// A caller that isn't the owner or an Admin never sees other sessions'
+    /// ids in the restart details (0.46.17).
+    #[test]
+    fn restart_detail_is_dropped_for_other_callers() {
+        let r = crate::ptyd_adopt::Report {
+            passports_reminted: vec!["a".into()],
+            passports_unusable: vec![("b".into(), "revoked".into())],
+            ..Default::default()
+        };
+        let full = decorate_passports(serde_json::json!({"version": "x"}), Some(&r), Some("is not valid".into()));
+        let out = without_restart_detail(full);
+        assert!(out.get("passportsReminted").is_none(), "{out}");
+        assert!(out.get("passportsUnusable").is_none(), "{out}");
+        assert_eq!(out["version"], "x");
+        assert_eq!(out["passportStoreTrouble"], "is not valid", "names no session: kept");
     }
 
     /// Switch off, but this boot adopted sessions (P68: they keep running):

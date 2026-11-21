@@ -69,6 +69,11 @@ pub enum PolicyError {
     /// provisioned (mkdir/chmod/containment failure). Fail-CLOSED: the route
     /// 5xxs; we NEVER fall back to `$HOME` or a throwaway dir.
     NoPersistentLayer(String),
+    /// The workspace folder is the home folder, holds it, or holds K2's own
+    /// folder, so its read-only mirror would show the cell K2's files (the
+    /// owner token among them). Refused in every build (0.46.17; it was a
+    /// `debug_assert!`, a no-op in release).
+    WorkspaceHoldsHome(String),
 }
 
 impl PolicyError {
@@ -78,6 +83,7 @@ impl PolicyError {
         match self {
             PolicyError::NoEphemeralWorkspace(_) => "503 Service Unavailable",
             PolicyError::NoPersistentLayer(_) => "503 Service Unavailable",
+            PolicyError::WorkspaceHoldsHome(_) => "409 Conflict",
         }
     }
 
@@ -90,6 +96,9 @@ impl PolicyError {
             PolicyError::NoPersistentLayer(e) => {
                 format!("could not provision persistent session layer: {e}")
             }
+            PolicyError::WorkspaceHoldsHome(path) => format!(
+                "this workspace's folder ({path}) is your home folder or holds it, so a sandbox would see this server's private files. Register a folder inside your home instead."
+            ),
         }
     }
 }
@@ -139,11 +148,9 @@ pub(crate) fn resolve_spawn(
     // (= `$HOME`), which would mount the operator's home into the cell.
     let cwd = provision_ephemeral_workspace()?;
     let cwd_str = cwd.to_string_lossy().into_owned();
-    // Risk-3 belt: the ephemeral cwd is NEVER the operator's home.
-    debug_assert!(
-        Some(cwd.as_path()) != k2_core::paths::home_dir().as_deref(),
-        "ephemeral sandbox cwd must NEVER be $HOME",
-    );
+    // Risk-3 belt: the ephemeral cwd never holds the operator's home or
+    // K2's folder (checked in release builds too).
+    refuse_mirror_of_home(&cwd, &incell_home(), &k2_core::paths::k2_home(), false)?;
 
     // (2) Host-minted agent_name — the `api-` prefix + a fresh uuid guarantees
     // it can never collide with a `tab-<id>` ad-hoc tab or a bare-UUID pinned
@@ -420,6 +427,29 @@ fn sandbox_overlays_root() -> PathBuf {
 fn sandbox_homes_root() -> PathBuf {
     k2_core::paths::k2_home()
         .join("sandbox-homes")
+}
+
+/// Refuse a folder K2 would mount into a cell when it is `home`, an ancestor
+/// of `home`, or holds `k2_home`; with `inside_k2_too`, also when it lies
+/// inside `k2_home` (a workspace mirror; the ephemeral cwd lives there by
+/// design). Compares path components (no string prefix), after resolving
+/// symlinks where the path exists.
+fn refuse_mirror_of_home(
+    dir: &std::path::Path,
+    home: &std::path::Path,
+    k2_home: &std::path::Path,
+    inside_k2_too: bool,
+) -> Result<(), PolicyError> {
+    let canon = |p: &std::path::Path| dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let (d, k2) = (canon(dir), canon(k2_home));
+    if d.as_os_str().is_empty()
+        || canon(home).starts_with(&d)
+        || k2.starts_with(&d)
+        || (inside_k2_too && d.starts_with(&k2))
+    {
+        return Err(PolicyError::WorkspaceHoldsHome(dir.display().to_string()));
+    }
+    Ok(())
 }
 
 /// The daemon's real home dir = the in-cell `HOME` for a mirror session (e.g.
@@ -744,10 +774,10 @@ pub(crate) fn resolve_workspace_mirror_with_argv(
     let cwd = ws_path.to_string();
     let home = incell_home();
     let home_str = home.to_string_lossy().into_owned();
-    debug_assert!(
-        cwd != home_str,
-        "workspace-scoped cwd must be a SUBDIR of the in-cell HOME, never == HOME",
-    );
+    // The workspace is mirrored read-only into the cell, so it must never be
+    // or hold HOME or K2's folder, nor lie inside K2's folder: a workspace AT
+    // $HOME (or above it) would mirror ~/.k2. A real refusal in every build.
+    refuse_mirror_of_home(std::path::Path::new(ws_path), &home, &k2_core::paths::k2_home(), true)?;
 
     // (2) The claude project SLUG from the (real) cwd — keys memory + the `.jsonl`.
     let slug = slug_for_cwd(&cwd);
@@ -796,7 +826,7 @@ pub(crate) fn resolve_workspace_mirror_with_argv(
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
-        crate::sandbox_chat_routes::write_meta(ws_slug, &session_id.to_string(), &title, created_ms);
+        crate::sandbox_chat_routes::write_meta(ws_slug, &session_id.to_string(), &title, created_ms, &principal.display_id());
     }
     env.insert("HOME".to_string(), home_str.clone());
     env.insert("K2_SESSION_ID".to_string(), sid.clone());
@@ -1429,5 +1459,63 @@ mod tests {
         );
 
         cleanup_mirror_ws(&ws_slug);
+    }
+
+    /// A workspace mirror never shows the cell the home folder or K2's own
+    /// folder: a workspace AT $HOME, above it, holding K2's folder or inside
+    /// it is refused in every build (409, nothing provisioned). Before
+    /// 0.46.17 only a `debug_assert!` (a no-op in release) caught the AT-$HOME
+    /// case and nothing caught the rest.
+    #[test]
+    fn workspace_mirror_refuses_home_and_k2_folders() {
+        let _home = crate::test_support::TempHome::new();
+        let home = incell_home();
+        let k2 = k2_core::paths::k2_home();
+        std::fs::create_dir_all(k2.join("inner")).expect("k2 inner folder");
+        let parent = home.parent().expect("home has a parent").to_path_buf();
+        for (label, ws) in [
+            ("at home", home.clone()),
+            ("above home", parent),
+            ("the server folder", k2.clone()),
+            ("inside the server folder", k2.join("inner")),
+        ] {
+            let ws_str = ws.to_string_lossy().into_owned();
+            let slug = format!("v1ws-homeguard-{}", uuid::Uuid::new_v4().simple());
+            let got = resolve_workspace_mirror_with_argv(
+                &ws_str,
+                &slug,
+                &SessionId::new(),
+                &V1Principal::Owner,
+                &ApiSandboxRequest::default(),
+                "claude".to_string(),
+                Vec::new(),
+            );
+            match got {
+                Err(e @ PolicyError::WorkspaceHoldsHome(_)) => {
+                    assert_eq!(e.status(), "409 Conflict", "{label}");
+                    assert!(e.message().contains("Register a folder inside your home instead."), "{label}: {}", e.message());
+                }
+                Err(other) => panic!("{label}: wrong refusal: {}", other.message()),
+                Ok(spawn) => panic!("{label}: a workspace at {} was mirrored into a cell (cwd {})", ws_str, spawn.cwd),
+            }
+            assert!(!sandbox_homes_root().join(&slug).exists(), "{label}: nothing provisioned");
+            assert!(!sandbox_overlays_root().join(&slug).exists(), "{label}: nothing provisioned");
+        }
+        // A folder inside home (not K2's) still mirrors.
+        let ok_slug = format!("v1ws-homeguard-ok-{}", uuid::Uuid::new_v4().simple());
+        let ok_ws = home.join(&ok_slug);
+        std::fs::create_dir_all(&ok_ws).expect("workspace folder");
+        let spawn = resolve_workspace_mirror_with_argv(
+            &ok_ws.to_string_lossy(),
+            &ok_slug,
+            &SessionId::new(),
+            &V1Principal::Owner,
+            &ApiSandboxRequest::default(),
+            "claude".to_string(),
+            Vec::new(),
+        )
+        .unwrap_or_else(|e| panic!("a folder inside home must mirror: {}", e.message()));
+        assert_eq!(spawn.sandbox, Some(true));
+        cleanup_mirror_ws(&ok_slug);
     }
 }

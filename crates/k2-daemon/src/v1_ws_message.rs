@@ -190,11 +190,22 @@ pub(crate) fn handle_v1_ws_message(principal: &V1Principal, ws_raw: &str, body: 
         serde_json::json!({
             "delivered": result.success,
             "mode": "live",
-            "result": result,
+            "result": public_result(&result),
             "deliveryId": delivery,
         })
         .to_string(),
     )
+}
+
+/// A delivery result as a `/v1` caller sees it: without
+/// `target_session_id`, the daemon id of the agent's live terminal (0.46.17).
+/// An API key never needs it, and no `/v1` door takes it.
+pub(crate) fn public_result(result: &crate::workspace_msg::MsgResponse) -> serde_json::Value {
+    let mut v = serde_json::to_value(result).unwrap_or_else(|_| serde_json::json!({}));
+    if let Some(o) = v.as_object_mut() {
+        o.remove("target_session_id");
+    }
+    v
 }
 
 #[cfg(test)]
@@ -204,6 +215,18 @@ mod tests {
 
     /// T-S4g (A31): `monitoring` accepts a message, `working` and
     /// `waiting` refuse it with the old word.
+    /// `/v1` delivery answers never carry the agent terminal's daemon id.
+    #[test]
+    fn public_result_drops_the_terminal_id() {
+        let mut r = crate::workspace_msg::MsgResponse::fail(crate::workspace_msg::MsgReason::WorkspaceNotFound);
+        r.success = true;
+        r.target_session_id = Some("11111111-2222-3333-4444-555555555555".to_string());
+        let v = public_result(&r);
+        assert!(v.get("target_session_id").is_none(), "{v}");
+        assert!(!v.to_string().contains("11111111-2222-3333-4444-555555555555"), "{v}");
+        assert_eq!(v["success"], serde_json::json!(true));
+    }
+
     #[test]
     fn busy_is_working_or_waiting_only() {
         use k2_core::activity::Display;

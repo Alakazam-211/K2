@@ -978,7 +978,9 @@ pub(crate) fn handle_v1_host_list(principal: &V1Principal, ws_raw: &str) -> CliR
     // sessionId, not sessionId+agentName.
     let mut by_sid: std::collections::BTreeMap<String, (String, i64)> =
         std::collections::BTreeMap::new();
-    for (sid, agent, last_seen) in rows {
+    // An API key sees only the host sessions its own principal opened; the
+    // owner token sees all (0.46.17).
+    for (sid, agent, last_seen) in rows.into_iter().filter(|(_, agent, _)| host_list_shows(principal, agent)) {
         match by_sid.get(&sid) {
             Some((_, prev)) if *prev >= last_seen => {}
             _ => {
@@ -1005,6 +1007,18 @@ pub(crate) fn handle_v1_host_list(principal: &V1Principal, ws_raw: &str) -> CliR
     CliResponse::ok_json(
         serde_json::json!({ "workspace": slug, "sessions": sessions }).to_string(),
     )
+}
+
+/// Does the host-session list show `agent` (an `api-<principal>-<uuid>`
+/// name) to `principal`? The owner token: every row. An API key: only rows
+/// minted for its own principal.
+fn host_list_shows(principal: &V1Principal, agent: &str) -> bool {
+    match principal {
+        V1Principal::Owner => true,
+        V1Principal::Api(p) => {
+            principal_key_from_api_agent_name(agent).as_deref() == Some(policy::sanitize_id(&p.id).as_str())
+        }
+    }
 }
 
 /// Durable API-origin rows for a workspace path (`from_api` or `api-…` name).
@@ -2262,6 +2276,40 @@ mod tests {
             handle_v1_host_list(&ungranted, "v1host-list").status,
             "404 Not Found",
         );
+    }
+
+    /// An API key's list shows only the host sessions its own principal
+    /// opened, never another key's or the owner's; the owner sees all
+    /// (0.46.17).
+    #[test]
+    fn list_shows_a_key_only_its_own_sessions() {
+        let _home = crate::test_support::TempHome::new();
+        k2_core::db::init_for_tests();
+        let pid = insert_project("v1host-list-own", "/tmp/k2-v1host-list-own");
+        let (mine, theirs, owners) = (
+            "1a1a1a1a-1b1b-2c2c-3d3d-4e4e4e4e4e4e",
+            "2a2a2a2a-1b1b-2c2c-3d3d-4e4e4e4e4e4e",
+            "3a3a3a3a-1b1b-2c2c-3d3d-4e4e4e4e4e4e",
+        );
+        insert_host_tab_session(&pid, mine, &format!("api-key-a-{}", uuid::Uuid::new_v4()));
+        insert_host_tab_session(&pid, theirs, &format!("api-key-b-{}", uuid::Uuid::new_v4()));
+        insert_host_tab_session(&pid, owners, &format!("api-owner-{}", uuid::Uuid::new_v4()));
+        let ids = |p: &V1Principal| -> Vec<String> {
+            let r = handle_v1_host_list(p, "v1host-list-own");
+            assert_eq!(r.status, "200 OK", "body={}", r.body);
+            let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+            let mut out: Vec<String> = v["sessions"]
+                .as_array()
+                .expect("sessions")
+                .iter()
+                .map(|s| s["sessionId"].as_str().expect("sessionId").to_string())
+                .collect();
+            out.sort();
+            out
+        };
+        assert_eq!(ids(&apik("key-a", Some("*"))), vec![mine.to_string()]);
+        assert_eq!(ids(&apik("key-b", Some("*"))), vec![theirs.to_string()]);
+        assert_eq!(ids(&V1Principal::Owner), vec![mine.to_string(), theirs.to_string(), owners.to_string()]);
     }
 
     /// Slice W3 honesty: an api- row with NO stamped session id (a

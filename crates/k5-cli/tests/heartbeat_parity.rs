@@ -9,7 +9,8 @@
 //! - `show`, `status`, `log`, `session` (read and set), `restart`,
 //!   `enable` and `disable`, `remove` (`archive`, `--purge`),
 //!   `unarchive`, `rename`, `use-pinned-session`, `signal fire` and
-//!   `signal wakeup` (`--path-only`, the file there and not), `add` and
+//!   `signal wakeup` (`--path-only`, the file there and not), `wakeup
+//!   --edit` (`EDITOR`, else vi: stand-in editors), `add` and
 //!   `edit` (the spec, `--tz`, the instructions), `remind` and
 //!   `reminders` (the remind family's).
 //! - The stops: usage lines, unknown verbs, the retired verbs, the spec's
@@ -1171,6 +1172,79 @@ fn heartbeat_session_and_wakeup_answer_as_the_shell_does() {
             owner_and_port,
             1,
             0,
+        ),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}
+
+/// `wakeup <name> --edit`: the editor (`EDITOR`, else vi when it is unset
+/// or empty) opens the wakeup file; with no file yet, the note names that
+/// editor first. Stand-in editors first on `PATH` log what they were run
+/// with, and each side's log must be the other's.
+#[test]
+fn wakeup_edit_opens_the_editor_as_the_shell_does() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut rig = Rig::new(VERB, "wedit");
+    let log = rig.dir.join("editor.log");
+    let bin = rig.dir.join("editors");
+    std::fs::create_dir_all(&bin).unwrap();
+    for prog in ["vi", "myedit"] {
+        let file = bin.join(prog);
+        let script = format!(
+            "#!/bin/sh\nprintf '== {prog} [%s]\\n' \"$*\" >> '{}'\n",
+            log.display()
+        );
+        std::fs::write(&file, script).unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    rig.path_first = Some(bin);
+    rig.tool_log = Some(log);
+    let edit: &'static [&'static str] = &["wakeup", "odd", "--edit"];
+    let v = vec![
+        case(
+            "wakeup --edit, no EDITOR, no file yet: vi, named in the note",
+            edit,
+            &[],
+            vec![ok(ROWS)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        with(
+            vec![("EDITOR", String::new())],
+            case(
+                "wakeup --edit, an empty EDITOR, no file yet: vi",
+                edit,
+                &[],
+                vec![ok(ROWS)],
+                owner_and_port,
+                0,
+                1,
+            ),
+        ),
+        with(
+            vec![("EDITOR", "myedit".into())],
+            case(
+                "wakeup --edit, EDITOR set, no file yet: that editor",
+                edit,
+                &[],
+                vec![ok(ROWS)],
+                owner_and_port,
+                0,
+                1,
+            ),
+        ),
+        // Last: its setup leaves the file there.
+        case(
+            "wakeup --edit, no EDITOR, the file: vi, no note",
+            edit,
+            &[],
+            vec![ok(ROWS)],
+            a_wakeup_file,
+            0,
+            1,
         ),
     ];
     for c in v {

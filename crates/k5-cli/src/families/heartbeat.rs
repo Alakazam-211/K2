@@ -24,7 +24,8 @@
 //! `$2: unbound variable` or a `shift 2` out of range, K2's D6 class); a
 //! word bash would expand as a file name in `--days` or `--months`; an
 //! `--instructions-file` holding a NUL or bytes that are not UTF-8;
-//! `wakeup --edit` with no `EDITOR`, or one not on `PATH`; a word that
+//! `wakeup --edit` whose editor (`EDITOR`, else vi) is not on `PATH`,
+//! or an `EDITOR` that is not UTF-8; a word that
 //! is not UTF-8; a port curl won't take; a `python3` the binary can't
 //! tell; and a `--workspace` folder the binary can't resolve as bash's
 //! `cd` would ([`super::workspace::register::path`]).
@@ -851,6 +852,15 @@ fn editor_runs(editor: &str) -> bool {
     })
 }
 
+/// `${EDITOR:-vi}`: `EDITOR`, or vi when it is unset or empty. `None`:
+/// an `EDITOR` that is not UTF-8 (the shell's).
+fn editor() -> Option<String> {
+    match std::env::var_os("EDITOR") {
+        Some(e) if !e.is_empty() => e.into_string().ok(),
+        _ => Some("vi".to_string()),
+    }
+}
+
 /// `cmd_heartbeat_wakeup`.
 fn wakeup(args: &[&str]) -> Option<Form> {
     let (mut name, mut mode) = (String::new(), Wake::Cat);
@@ -875,11 +885,8 @@ fn wakeup(args: &[&str]) -> Option<Form> {
             Exit::Error,
         );
     }
-    if mode == Wake::Edit {
-        let editor = std::env::var("EDITOR").ok()?;
-        if !editor_runs(&editor) {
-            return None;
-        }
+    if mode == Wake::Edit && !editor_runs(&editor()?) {
+        return None;
     }
     Some(Form::Wakeup { name, mode })
 }
@@ -1532,15 +1539,15 @@ impl Hb {
             #[cfg(unix)]
             Wake::Edit => {
                 use std::os::unix::process::CommandExt;
+                // `wakeup` handed any other editor to the shell.
+                let editor = editor().unwrap_or_default();
                 if !file {
-                    let editor = std::env::var("EDITOR").unwrap_or_default();
                     if let Err(e) = out::stdout(&format!(
                         "Note: {abs} does not exist yet; {editor} will create it.\n"
                     )) {
                         return out::after_stdout_error(&e);
                     }
                 }
-                let editor = std::env::var_os("EDITOR").unwrap_or_default();
                 let e = std::process::Command::new(editor).arg(&abs).exec();
                 out::stderr_line(&format!("Error: {e}"));
                 Exit::Curl(127)

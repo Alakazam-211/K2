@@ -2632,7 +2632,10 @@ fn hostchat_owner_sessions_a_person_s_steps() {
         "end --all: the vault refuses the confirm",
         &["owner-sessions", "end", "--all"],
     );
-    refused.daemon = vec![Reply::Answer(403, HELD_OWNER_SESSION.replace("own_a", "all"))];
+    refused.daemon = vec![Reply::Answer(
+        403,
+        HELD_OWNER_SESSION.replace("own_a", "all"),
+    )];
     refused.daemon_requests = 1;
     refused.vault = Some(vec![Reply::Answer(
         403,

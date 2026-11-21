@@ -541,6 +541,8 @@ pub(crate) mod tests {
         assert_eq!(by_ws2.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), vec![other.id.as_str()], "only what ws-2 asked");
         let by_ws1 = list(&c, &Filter { requester: Some("ws-1"), ..Default::default() }, 50).unwrap();
         assert!(by_ws1.iter().all(|r| r.id != other.id) && by_ws1.iter().any(|r| r.id == a.id), "ws-1 never sees ws-2's ask");
+        // Out of the way of the expiry checks below.
+        decide(&c, &other.id, STATUS_WITHDRAWN, "agent:bobs", None, None, 102).unwrap();
         assert_eq!(find(&c, &a.id[..8]).unwrap().unwrap().id, a.id, "a unique prefix finds it");
         assert!(find(&c, "w_").unwrap().is_none(), "too short a prefix");
         let d = decide(&c, &a.id, STATUS_DENIED, "owner", None, Some("no"), 103).unwrap();

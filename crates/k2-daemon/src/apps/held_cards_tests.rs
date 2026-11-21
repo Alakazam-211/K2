@@ -359,7 +359,7 @@ fn the_card_approves_exactly_the_request_it_was_raised_for() {
         let conn = db.lock();
         let n = conn
             .execute(
-                "UPDATE permission_requests SET params = ?2 WHERE held_ref = ?1",
+                "UPDATE permission_requests SET params_json = ?2 WHERE held_ref = ?1",
                 rusqlite::params![id, json!({ "request": other }).to_string()],
             )
             .expect("swap");

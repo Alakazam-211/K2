@@ -146,7 +146,7 @@ fn what_it_takes_is_checked_at_the_ask_and_at_the_click() {
         let conn = db.lock();
         let n = conn
             .execute(
-                "UPDATE permission_requests SET params = ?2 WHERE id = ?1",
+                "UPDATE permission_requests SET params_json = ?2 WHERE id = ?1",
                 rusqlite::params![row(&id).id.as_str(), json!({ "sender": sales.handle, "receivers": other.handle }).to_string()],
             )
             .expect("swap");

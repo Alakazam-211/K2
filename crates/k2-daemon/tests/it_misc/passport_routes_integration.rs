@@ -7,6 +7,11 @@
 //! workspace is refused, or, where the route looks a workspace up, allowed
 //! only for a connected one; the owner token still reaches every handler,
 //! for any workspace. A sample of owner-only routes still refuses it.
+//!
+//! D1b: tickets as the agent (`k2 tickets ask|list|show|comment|resolve|
+//! assign` and the rules read): its own workspace's tickets only, its own
+//! name on what it writes, `canEdit: false` on the rules, and the owner
+//! token unchanged.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -400,7 +405,7 @@ async fn owner_only_routes_still_refuse_a_passport() {
         ("POST", format!("/cli/workspace/set?project={own}&key=api_skip_permissions&value=1")),
         ("POST", format!("/cli/workspace/set-agent-display-name?project={own}&name=Renamed")),
         ("POST", format!("/cli/trust-folders?project={own}")),
-        ("POST", "/cli/feedback/create".to_string()),
+        ("POST", "/cli/feedback/answer".to_string()),
         ("POST", "/cli/context/add".to_string()),
         ("POST", "/cli/agents/hire-root".to_string()),
     ] {
@@ -913,4 +918,206 @@ async fn wiki_reads_stay_in_its_own_workspace() {
     }
     let r = http(e.port, "GET", &format!("/cli/wiki/index?scope=k2&project={own}"), Some(OWNER));
     assert_eq!(r.status, 200, "the owner reads the map: {}", r.raw);
+}
+
+// ── D1b: tickets as the agent ─────────────────────────────────────────
+
+/// A ticket write with the passport (JSON body, Bearer as the CLI sends it).
+fn post_json(e: &Env, path: &str, bearer: &str, body: J) -> Resp {
+    http_body(e.port, "POST", path, Some(bearer), &body.to_string())
+}
+
+fn item(e: &Env, id: &str) -> J {
+    let r = http(e.port, "GET", &format!("/cli/feedback/show?id={id}"), Some(OWNER));
+    assert_eq!(r.status, 200, "owner show {id}: {}", r.raw);
+    r.json("show")
+}
+
+/// `k2 tickets ask|list|show|comment|resolve|assign` from a session: the
+/// passport files in its own workspace under its own name (whatever the
+/// body claims), reads and writes its own tickets, and its comment is
+/// always its own words, never a person's answer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_agent_asks_and_works_its_own_tickets_with_its_passport() {
+    let t = k2_core::test_env::TempHome::new();
+    let (e, _d) = env(&t).await;
+    let pass = e.passport.as_str();
+
+    // ask: no project, and its own project named: both file in its own
+    // workspace; the identity fields in the body are ignored.
+    let mut filed = Vec::new();
+    for project in [None, Some(e.own.as_str())] {
+        let mut body = serde_json::json!({
+            "title": "Ship it?",
+            "kind": "fyi",
+            "agentName": "owner",
+            "sessionId": "forged-session",
+            "assignees": ["owner"],
+        });
+        if let Some(p) = project {
+            body["project"] = serde_json::json!(p);
+        }
+        let r = post_json(&e, "/cli/feedback/create", pass, body);
+        assert_eq!(r.status, 200, "passport ask (project {project:?}): {}", r.raw);
+        let v = r.json("ask");
+        let id = v["id"].as_str().expect("id").to_string();
+        let stored = item(&e, &id);
+        assert_eq!(stored["projectId"], e.own_id.as_str(), "filed in its own workspace: {stored}");
+        let name = stored["agentName"].as_str().expect("agentName");
+        assert!(!name.is_empty() && name != "owner", "asked by the agent, never the body's name: {stored}");
+        assert_ne!(stored["sessionId"], "forged-session", "the session is the passport's: {stored}");
+        assert_eq!(stored["assignees"], serde_json::json!(["owner"]), "{stored}");
+        filed.push((id, name.to_string()));
+    }
+    let (id, name) = filed[0].clone();
+
+    // list and show: its own.
+    let r = http(e.port, "GET", "/cli/feedback/list", Some(pass));
+    assert_eq!(r.status, 200, "{}", r.raw);
+    let listed: Vec<String> = r.json("list")["items"].as_array().expect("items").iter().map(|i| i["id"].as_str().expect("id").to_string()).collect();
+    assert!(listed.contains(&id) && listed.contains(&filed[1].0), "its tickets are listed: {}", r.raw);
+    let r = http(e.port, "GET", &format!("/cli/feedback/show?id={}", &id[..8]), Some(pass));
+    assert_eq!(r.status, 200, "show by prefix: {}", r.raw);
+
+    // comment: a person's author and an option pick in the body change
+    // nothing; stored under the agent's name, the ticket not answered.
+    let r = post_json(&e, "/cli/feedback/comment", pass, serde_json::json!({ "id": &id[..8], "body": "Looking now", "author": "owner", "optionPick": true }));
+    assert_eq!(r.status, 200, "passport comment: {}", r.raw);
+    assert_eq!(r.json("comment")["author"], name.as_str(), "{}", r.raw);
+    let stored = item(&e, &id);
+    assert_eq!(stored["status"], "waiting", "an agent comment never answers: {stored}");
+    assert!(stored["answer"].is_null(), "{stored}");
+
+    // assign: its own ticket.
+    let r = post_json(&e, "/cli/feedback/assign", pass, serde_json::json!({ "id": id, "usernames": [] }));
+    assert_eq!(r.status, 200, "passport assign: {}", r.raw);
+    assert_eq!(item(&e, &id)["assignees"], serde_json::json!([]));
+
+    // resolve: settled with the outcome under its own name, then resolved.
+    let r = post_json(&e, "/cli/feedback/resolve", pass, serde_json::json!({ "id": id, "status": "answered", "answer": "Shipped", "author": "owner" }));
+    assert_eq!(r.status, 200, "passport resolve --answered: {}", r.raw);
+    let stored = item(&e, &id);
+    assert_eq!((stored["status"].as_str(), stored["answer"].as_str()), (Some("answered"), Some("Shipped")), "{stored}");
+    let last = stored["comments"].as_array().expect("comments").last().cloned().expect("a comment");
+    assert_eq!(last["author"], name.as_str(), "settled under the agent's name: {stored}");
+    let r = post_json(&e, "/cli/feedback/resolve", pass, serde_json::json!({ "id": id }));
+    assert_eq!(r.status, 200, "passport resolve: {}", r.raw);
+    assert_eq!(item(&e, &id)["status"], "resolved");
+}
+
+/// Another workspace's ticket answers as an unknown id does, for every
+/// ticket verb, and nothing changes on it. Filing in another workspace,
+/// a person's steps and `answer` are refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_agent_is_refused_on_another_workspaces_ticket() {
+    let t = k2_core::test_env::TempHome::new();
+    let (e, _d) = env(&t).await;
+    let pass = e.passport.as_str();
+    let theirs = ticket(&e.other_id, "Other question");
+    let peers = ticket(&e.peer_id, "Peer question");
+    let before = [item(&e, &theirs), item(&e, &peers)];
+    let unknown = post_json(&e, "/cli/feedback/comment", pass, serde_json::json!({ "id": "ffffffffffff", "body": "x" }));
+    assert_eq!((unknown.status, code(&unknown, "unknown")), (404, "not_found".to_string()), "{}", unknown.raw);
+    for id in [theirs.as_str(), &theirs[..8], peers.as_str()] {
+        for (path, body) in [
+            ("/cli/feedback/comment", serde_json::json!({ "id": id, "body": "mine now" })),
+            ("/cli/feedback/resolve", serde_json::json!({ "id": id })),
+            ("/cli/feedback/resolve", serde_json::json!({ "id": id, "status": "answered", "answer": "done" })),
+            ("/cli/feedback/assign", serde_json::json!({ "id": id, "usernames": ["owner"] })),
+        ] {
+            let r = post_json(&e, path, pass, body);
+            assert_eq!(r.status, unknown.status, "passport {path} {id}: {}", r.raw);
+            assert_eq!(code(&r, path), "not_found", "passport {path} {id}");
+            assert!(!r.raw.contains("question"), "another workspace's ticket leaked: {}", r.raw);
+        }
+        let r = http(e.port, "GET", &format!("/cli/feedback/show?id={id}"), Some(pass));
+        assert_eq!(code(&r, "show"), "not_found", "{}", r.raw);
+    }
+    for (id, was) in [&theirs, &peers].into_iter().zip(before) {
+        let stored = item(&e, id);
+        for key in ["status", "comments", "assignees", "answer", "updatedAt"] {
+            assert_eq!(stored[key], was[key], "{key} unchanged: {stored}");
+        }
+    }
+    let r = http(e.port, "GET", &format!("/cli/feedback/list?project={}", enc(&e.other)), Some(pass));
+    assert_eq!((r.status, code(&r, "list")), (403, "own_workspace_only".to_string()), "{}", r.raw);
+
+    // ask in another workspace (by path, by id, a connected one): refused,
+    // nothing filed there.
+    for project in [e.other.as_str(), e.other_id.as_str(), e.peer.as_str()] {
+        let r = post_json(&e, "/cli/feedback/create", pass, serde_json::json!({ "project": project, "title": "Elsewhere", "kind": "fyi" }));
+        assert_eq!(r.status, 403, "passport ask in {project}: {}", r.raw);
+        assert_eq!(code(&r, "ask"), "own_workspace_only", "{project}");
+    }
+    for ws in [&e.other, &e.peer] {
+        let r = http(e.port, "GET", &format!("/cli/feedback/list?project={}&all=1", enc(ws)), Some(OWNER));
+        assert!(!r.raw.contains("Elsewhere"), "a refused ask filed nothing: {}", r.raw);
+    }
+
+    // Its own ticket: dismiss, plan and reopen are a person's; answer too.
+    let mine = ticket(&e.own_id, "Own question");
+    let was = item(&e, &mine);
+    for status in ["dismissed", "planned", "waiting", "needs_discussion"] {
+        let r = post_json(&e, "/cli/feedback/resolve", pass, serde_json::json!({ "id": mine, "status": status }));
+        assert_eq!((r.status, code(&r, status)), (403, "person_only".to_string()), "{status}: {}", r.raw);
+    }
+    let r = post_json(&e, "/cli/feedback/answer", pass, serde_json::json!({ "id": mine, "answer": "yes" }));
+    assert_eq!((r.status, r.raw.contains("invalid or missing token")), (403, true), "answer: {}", r.raw);
+    let stored = item(&e, &mine);
+    for key in ["status", "comments", "answer", "updatedAt"] {
+        assert_eq!(stored[key], was[key], "{key} unchanged: {stored}");
+    }
+
+    // A bad passport gets the plain refusal it always got.
+    let bad = format!("{}x", e.passport);
+    let r = post_json(&e, "/cli/feedback/comment", &bad, serde_json::json!({ "id": mine, "body": "x" }));
+    assert_eq!((r.status, r.raw.contains("invalid or missing token")), (403, true), "bad passport: {}", r.raw);
+}
+
+/// The ticket rules: the passport reads them (`canEdit: false`) and still
+/// can't change them (`owner_only`); the owner reads and changes them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_agent_reads_the_ticket_rules_and_never_changes_them() {
+    let t = k2_core::test_env::TempHome::new();
+    let (e, _d) = env(&t).await;
+    let r = http(e.port, "GET", "/cli/tickets/settings", Some(e.passport.as_str()));
+    assert_eq!(r.status, 200, "passport read: {}", r.raw);
+    let agents = r.json("settings");
+    assert_eq!(agents["canEdit"], false, "{}", r.raw);
+    let owners = http(e.port, "GET", "/cli/tickets/settings", Some(OWNER)).json("owner settings");
+    assert_eq!(owners["canEdit"], true, "{owners}");
+    for key in ["briefPolicy", "assigneePolicy", "defaultAssignee"] {
+        assert_eq!(agents[key], owners[key], "{key}");
+    }
+    let r = post_json(&e, "/cli/tickets/settings", e.passport.as_str(), serde_json::json!({ "briefPolicy": "off" }));
+    assert_eq!((r.status, code(&r, "settings write")), (403, "owner_only".to_string()), "{}", r.raw);
+    assert_eq!(k2_core::app_settings::load().tickets.brief_policy, owners["briefPolicy"].as_str().expect("briefPolicy"));
+    let r = http(e.port, "GET", "/cli/tickets/settings", Some("not-a-token"));
+    assert_eq!(r.status, 403, "{}", r.raw);
+    let r = post_json(&e, "/cli/tickets/settings", OWNER, serde_json::json!({ "briefPolicy": "off" }));
+    assert_eq!(r.status, 200, "owner write: {}", r.raw);
+    assert_eq!(k2_core::app_settings::load().tickets.brief_policy, "off");
+}
+
+/// The owner token is unchanged: any workspace's ticket, any step, the
+/// body's author as before.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_owner_token_still_works_every_ticket() {
+    let t = k2_core::test_env::TempHome::new();
+    let (e, _d) = env(&t).await;
+    let r = post_json(&e, "/cli/feedback/create", OWNER, serde_json::json!({ "project": e.other, "title": "Owner filed", "kind": "fyi", "agentName": "named-agent" }));
+    assert_eq!(r.status, 200, "owner ask in another workspace: {}", r.raw);
+    let id = r.json("ask")["id"].as_str().expect("id").to_string();
+    assert_eq!(item(&e, &id)["agentName"], "named-agent");
+    let r = post_json(&e, "/cli/feedback/comment", OWNER, serde_json::json!({ "id": id, "body": "an agent's words", "author": "named-agent" }));
+    assert_eq!(r.status, 200, "{}", r.raw);
+    assert_eq!(r.json("comment")["author"], "named-agent");
+    let r = post_json(&e, "/cli/feedback/assign", OWNER, serde_json::json!({ "id": id, "usernames": ["owner"] }));
+    assert_eq!(r.status, 200, "{}", r.raw);
+    let r = post_json(&e, "/cli/feedback/answer", OWNER, serde_json::json!({ "id": id, "answer": "yes" }));
+    assert_eq!(r.status, 200, "owner answer: {}", r.raw);
+    assert_eq!(item(&e, &id)["status"], "answered");
+    let r = post_json(&e, "/cli/feedback/resolve", OWNER, serde_json::json!({ "id": id, "status": "dismissed" }));
+    assert_eq!(r.status, 200, "{}", r.raw);
+    assert_eq!(item(&e, &id)["status"], "dismissed");
 }

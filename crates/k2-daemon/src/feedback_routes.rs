@@ -122,9 +122,8 @@ pub enum CreateDoor {
     App,
     /// Connect-user session: a person. Brief optional.
     Connect,
-    /// The owner token: `k2 tickets ask` from an agent (in-cell agents
-    /// carry the owner token for this verb) or a human at the box
-    /// (Rosson default 1). The brief policy applies.
+    /// The owner token (a human at the box, Rosson default 1) or an agent's
+    /// passport (`passport_routes::ticket_write`). The brief policy applies.
     Owner,
 }
 
@@ -137,7 +136,7 @@ pub fn dispatch_post_as_gated(
 ) -> CliResponse {
     match path {
         "/cli/feedback/create" => handle_create_gated(body, skin.as_ref(), door),
-        "/cli/feedback/comment" => handle_comment_gated(body, session_author, skin.as_ref()),
+        "/cli/feedback/comment" => handle_comment_gated(body, session_author, skin.as_ref(), None),
         "/cli/feedback/answer" => handle_answer_gated(body, session_author, skin.as_ref()),
         "/cli/feedback/resolve" => handle_resolve_gated(body, skin.as_ref()),
         "/cli/feedback/assign" => handle_assign_gated(body, skin.as_ref()),
@@ -367,7 +366,7 @@ mod badge_me_tests {
 // ── Shared response helpers ───────────────────────────────────────────
 
 /// Stable usage-error shape (code `usage` → CLI exit 2).
-fn usage_error(hint: impl std::fmt::Display) -> CliResponse {
+pub(crate) fn usage_error(hint: impl std::fmt::Display) -> CliResponse {
     CliResponse {
         status: "400 Bad Request",
         content_type: "application/json",
@@ -1109,7 +1108,7 @@ pub fn create_body_too_large(declared: Option<usize>) -> CliResponse {
     }
 }
 
-fn handle_create_gated(body: &[u8], skin: Option<&SkinPass>, door: CreateDoor) -> CliResponse {
+pub(crate) fn handle_create_gated(body: &[u8], skin: Option<&SkinPass>, door: CreateDoor) -> CliResponse {
     let b: CreateBody = match serde_json::from_slice(body) {
         Ok(b) => b,
         Err(e) => return usage_error(format!("invalid JSON body: {e}")),
@@ -1445,10 +1444,10 @@ pub fn handle_comment(body: &[u8]) -> CliResponse {
 
 #[cfg(test)]
 pub fn handle_comment_as(body: &[u8], session_author: &str) -> CliResponse {
-    handle_comment_gated(body, session_author, None)
+    handle_comment_gated(body, session_author, None, None)
 }
 
-fn handle_comment_gated(body: &[u8], session_author: &str, skin: Option<&SkinPass>) -> CliResponse {
+pub(crate) fn handle_comment_gated(body: &[u8], session_author: &str, skin: Option<&SkinPass>, agent: Option<&str>) -> CliResponse {
     let b: CommentBody = match serde_json::from_slice(body) {
         Ok(b) => b,
         Err(e) => return usage_error(format!("invalid JSON body: {e}")),
@@ -1476,13 +1475,13 @@ fn handle_comment_gated(body: &[u8], session_author: &str, skin: Option<&SkinPas
             Ok(f) => f,
             Err(e) => return prefix_error_response(&b.id, e),
         };
-        // Body `author` is the agent-CLI path. UI human posts omit it —
-        // use the token identity so a Connect user is stored/injected as
-        // themselves, not `resolve_owner_from()`.
-        let author_given = b.author.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        // Body `author` is the agent-CLI path; an agent's passport (`agent`) is
+        // always its stamped name, never a person. UI human posts omit it: the
+        // token identity, so a Connect user is stored as themselves, not the owner.
+        let author_given = agent.or_else(|| b.author.as_deref().map(str::trim).filter(|s| !s.is_empty()));
         let session = session_author.trim();
         let author = author_given.unwrap_or(if session.is_empty() { "owner" } else { session });
-        let is_human = author_given.is_none() || author == "owner";
+        let is_human = agent.is_none() && (author_given.is_none() || author == "owner");
         // 0.46.0 stamp rule: a human comment is stored as the sender's
         // username (the owner token → the linked username, else `owner`).
         let author = if is_human {
@@ -1798,7 +1797,7 @@ pub fn handle_resolve(body: &[u8]) -> CliResponse {
     handle_resolve_gated(body, None)
 }
 
-fn handle_resolve_gated(body: &[u8], skin: Option<&SkinPass>) -> CliResponse {
+pub(crate) fn handle_resolve_gated(body: &[u8], skin: Option<&SkinPass>) -> CliResponse {
     let b: ResolveBody = match serde_json::from_slice(body) {
         Ok(b) => b,
         Err(e) => return usage_error(format!("invalid JSON body: {e}")),
@@ -1956,7 +1955,7 @@ pub fn handle_assign(body: &[u8]) -> CliResponse {
 /// needs `tickets:post` in the ticket's room; another room's id or an
 /// unknown id is 403 `skin_room` (no 404 oracle). Same names, same
 /// `assignee_unknown` warning as the owner.
-fn handle_assign_gated(body: &[u8], skin: Option<&SkinPass>) -> CliResponse {
+pub(crate) fn handle_assign_gated(body: &[u8], skin: Option<&SkinPass>) -> CliResponse {
     let b: AssignBody = match serde_json::from_slice(body) {
         Ok(b) => b,
         Err(e) => return usage_error(format!("invalid JSON body: {e}")),
@@ -3500,6 +3499,7 @@ mod tests {
             .as_bytes(),
             "bob",
             Some(&pass),
+            None,
         );
         assert_eq!(comment.status, "200 OK", "{}", comment.body);
         let cv: serde_json::Value = serde_json::from_str(&comment.body).expect("json");

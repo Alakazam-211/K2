@@ -23,8 +23,17 @@
 //!   the stamped params (in `cli::dispatch`); after it, [`narrow`] trims a
 //!   list to what the passport may see.
 //!
+//! Tickets (D1b): the same first arm ([`takes`]) admits a live passport on
+//! [`TICKET_WRITES`] (`k2 tickets ask|comment|resolve|assign`, JSON bodies)
+//! and hands the body to [`ticket_write`]: the agent's own workspace and
+//! own tickets only, its identity stamped into the body. `GET
+//! /cli/tickets/settings` answers a passport with `canEdit: false`; the
+//! POST stays the owner's. The tunnel and the owner token miss that arm as
+//! they miss the one for [`ROUTES`].
+//!
 //! The cell socket is unchanged: these routes are not agent verbs
 //! (`session_token::is_agent_verb`), except the profile, which already was.
+//! The CLI sends them over TCP.
 //!
 //! Naming another workspace never retargets a request: it is refused
 //! (`own_workspace_only`), or, where the route names a workspace to look up,
@@ -168,9 +177,21 @@ pub(crate) fn tcp_passport(
     bearer: Option<&str>,
     owner_token: &str,
 ) -> Option<crate::session_token::ValidatedHook> {
+    if !is_route(path) {
+        return None;
+    }
+    local_passport(query, bearer, owner_token)
+}
+
+/// The credential a request presents (Bearer, else `token=`) when it is a
+/// live passport of a session on this computer ([`local_session`]). The
+/// one check every passport arm over TCP makes: [`ROUTES`], the ticket
+/// writes and the ticket rules ([`takes`]). `None` for every other
+/// credential.
+pub(crate) fn local_passport(query: &str, bearer: Option<&str>, owner_token: &str) -> Option<crate::session_token::ValidatedHook> {
     // The owner token and a login keep their arm without a look at the
     // passport store, as `token_or_scoped_hook_auth` does.
-    if !is_route(path) || http::token_ok(query, owner_token) {
+    if http::token_ok(query, owner_token) {
         return None;
     }
     let presented = bearer
@@ -207,10 +228,23 @@ fn local_entry(key: &str, sandboxed: bool, agent_address: &str) -> bool {
         && !agent_address.starts_with("job:")
 }
 
-/// The TCP dispatcher's first arm, for a request [`tcp_passport`] admits
-/// (no route's owner-token arm sees it): stamp the passport and run the
-/// same dispatch the cell socket runs. A passport revoked since the arm was
-/// chosen gets the plain 403.
+/// Whether the TCP dispatcher's first arm takes this request: a live
+/// passport ([`local_passport`]) on one of [`ROUTES`] ([`tcp_passport`]),
+/// on a ticket write (POST, [`TICKET_WRITES`]) or reading the ticket rules
+/// (GET `/cli/tickets/settings`). Every other request keeps its route's arm.
+pub(crate) fn takes(path: &str, is_post: bool, query: &str, bearer: Option<&str>, owner_token: &str) -> bool {
+    let tickets = if is_post { is_ticket_write(path) } else { path == crate::ticket_settings_routes::PATH };
+    if tickets {
+        return local_passport(query, bearer, owner_token).is_some();
+    }
+    tcp_passport(path, query, bearer, owner_token).is_some()
+}
+
+/// The TCP dispatcher's first arm, for a request [`takes`] admits (no
+/// route's owner-token arm sees it): stamp the passport and run the same
+/// dispatch the cell socket runs, or the tickets one ([`serve_tickets`]).
+/// A passport revoked since the arm was chosen gets the plain 403.
+/// `false` when the connection must close (a refused oversized body).
 pub(crate) async fn serve_tcp(
     stream: &mut TcpStream,
     buf: &mut [u8],
@@ -219,12 +253,15 @@ pub(crate) async fn serve_tcp(
     query: &str,
     bearer: Option<&str>,
     owner_token: &str,
-) {
+) -> bool {
+    if !is_route(path) {
+        return serve_tickets(stream, buf, is_post, path, query, bearer, owner_token).await;
+    }
     let mut params = http::read_request_params(stream, buf, is_post, path, query).await;
     let Some(principal) = tcp_passport(path, query, bearer, owner_token).map(|v| v.principal) else {
         let r = CliResponse::forbidden();
         http::send_response(stream, r.status, r.content_type, &r.body).await;
-        return;
+        return true;
     };
     // Identity keys are the server's, never the request's.
     crate::caller_workspace::strip_request_stamps(&mut params);
@@ -240,7 +277,7 @@ pub(crate) async fn serve_tcp(
         .or_else(|| actor_is_the_passport(path, &mut params, &principal));
     if let Some(r) = refused {
         http::send_response(stream, r.status, r.content_type, &r.body).await;
-        return;
+        return true;
     }
     let path = path.to_string();
     let r = crate::rt::blocking(|| {
@@ -251,6 +288,48 @@ pub(crate) async fn serve_tcp(
         r
     });
     http::send_response(stream, r.status, r.content_type, &r.body).await;
+    true
+}
+
+/// D1b, from [`serve_tcp`]: a ticket write ([`ticket_write`], JSON body;
+/// `create` is capped as on the owner's arm, and an oversized body is
+/// refused with 413 and the connection closed), or the ticket rules with
+/// `canEdit: false` (the POST stays the owner's).
+async fn serve_tickets(
+    stream: &mut TcpStream,
+    buf: &mut [u8],
+    is_post: bool,
+    path: &str,
+    query: &str,
+    bearer: Option<&str>,
+    owner_token: &str,
+) -> bool {
+    let body = if !is_post {
+        let _ = http::read_request_params(stream, buf, false, path, query).await;
+        Vec::new()
+    } else if path == "/cli/feedback/create" {
+        match http::read_post_body_capped(stream, buf, k2_core::feedback_brief::MAX_CREATE_BODY_BYTES).await {
+            Ok(b) => b,
+            Err(refused) => {
+                let r = crate::feedback_routes::create_body_too_large(refused.declared);
+                http::refuse_body_too_large(stream, &refused, r.status, r.content_type, &r.body).await;
+                return false;
+            }
+        }
+    } else {
+        http::read_post_body(stream, buf).await
+    };
+    let r = match local_passport(query, bearer, owner_token) {
+        None => CliResponse::forbidden(),
+        Some(_) if !is_post => crate::rt::blocking(|| crate::ticket_settings_routes::handle_get(false)),
+        Some(v) => crate::rt::blocking(|| {
+            crate::caller_workspace::with_request_principal(Some(v.principal.clone()), || {
+                ticket_write(path, &body, &v.session_id, &v.principal)
+            })
+        }),
+    };
+    http::send_response(stream, r.status, r.content_type, &r.body).await;
+    true
 }
 
 /// The refusal code of a merge a person makes for the agent; the
@@ -542,12 +621,9 @@ fn other_workspace(params: &HashMap<String, String>) -> Option<CliResponse> {
 /// ids as candidates). Anything else stays as sent and [`ticket_outside`]
 /// refuses it.
 fn pin_own_ticket(params: &mut HashMap<String, String>, workspace_id: &str) {
-    use k2_core::feedback::{get_item, resolve_id_prefix};
     let id = params.get("id").map(|s| s.trim()).unwrap_or("");
-    if let Ok(full) = resolve_id_prefix(id) {
-        if get_item(&full).is_some_and(|i| i.project_id == workspace_id) {
-            params.insert("id".to_string(), full);
-        }
+    if let Ok(full) = own_ticket(id, workspace_id) {
+        params.insert("id".to_string(), full);
     }
 }
 
@@ -556,13 +632,138 @@ fn pin_own_ticket(params: &mut HashMap<String, String>, workspace_id: &str) {
 /// isn't one of its own, answers exactly as an unknown id does. A missing id
 /// is the handler's.
 fn ticket_outside(params: &HashMap<String, String>, workspace_id: &str) -> Option<CliResponse> {
-    use k2_core::feedback::{get_item, resolve_id_prefix, PrefixError};
     let id = params.get("id").map(String::as_str).unwrap_or("");
     if id.is_empty() {
         return None;
     }
-    let own = resolve_id_prefix(id).ok().and_then(|full| get_item(&full)).is_some_and(|i| i.project_id == workspace_id);
-    (!own).then(|| crate::feedback_routes::prefix_error_response(id, PrefixError::NotFound))
+    own_ticket(id, workspace_id).err()
+}
+
+/// The full id of the ticket `id` (an id or a unique prefix) names, when it
+/// was filed in `workspace_id`. Anything else, another workspace's ticket
+/// included, is the answer an unknown id gets.
+///
+/// A ticket's workspace is its creator: an agent files in its own
+/// workspace only (a passport's `create` is stamped there), and a person's
+/// words on it are delivered to that workspace's agent. The assignees are
+/// people (server user names), never an agent, so no ticket is "assigned
+/// to" a passport by any other field.
+fn own_ticket(id: &str, workspace_id: &str) -> Result<String, CliResponse> {
+    use k2_core::feedback::{get_item, resolve_id_prefix, PrefixError};
+    resolve_id_prefix(id)
+        .ok()
+        .filter(|full| get_item(full).is_some_and(|i| !workspace_id.is_empty() && i.project_id == workspace_id))
+        .ok_or_else(|| crate::feedback_routes::prefix_error_response(id, PrefixError::NotFound))
+}
+
+/// The ticket writes a passport may make over TCP (`k2 tickets ask`,
+/// `comment`, `resolve`, `assign`), as the agent and in its own workspace.
+/// Their bodies are JSON, so [`serve_tcp`] hands them to [`ticket_write`],
+/// not to `cli::dispatch`. `answer` (a person's), the host-wide list, the
+/// badge count and the files door keep refusing a passport.
+pub(crate) const TICKET_WRITES: &[&str] =
+    &["/cli/feedback/assign", "/cli/feedback/comment", "/cli/feedback/create", "/cli/feedback/resolve"];
+
+/// Whether `path` is one of [`TICKET_WRITES`].
+pub fn is_ticket_write(path: &str) -> bool {
+    TICKET_WRITES.contains(&path)
+}
+
+/// A ticket write from a live passport ([`local_passport`]), as that agent:
+/// - `create`: filed in its own workspace (a `project` naming another is
+///   refused, `own_workspace_only`), under its own name and session; the
+///   ticket rules apply as on every agent ticket;
+/// - `comment`: on its own ticket ([`own_ticket`]), always the agent's own
+///   words (never a person's answer or option pick, whatever the body says);
+/// - `resolve`: its own ticket, to `resolved` or `answered` with the agreed
+///   outcome under its own name; dismissing, planning or reopening are a
+///   person's steps (`person_only`);
+/// - `assign`: its own ticket, as a Connect login may on any ticket.
+///
+/// Another workspace's ticket answers as an unknown id does. The body's
+/// identity fields (`agentName`, `author`, `sessionId`, `optionPick`) are
+/// the server's, never the request's.
+pub(crate) fn ticket_write(path: &str, body: &[u8], session_id: &str, principal: &HookPrincipal) -> CliResponse {
+    use crate::feedback_routes::usage_error;
+    if !is_ticket_write(path) {
+        return CliResponse::forbidden();
+    }
+    let mut v = match serde_json::from_slice::<serde_json::Value>(body) {
+        Ok(v @ serde_json::Value::Object(_)) => v,
+        Ok(_) => return usage_error("invalid JSON body: expected an object"),
+        Err(e) => return usage_error(format!("invalid JSON body: {e}")),
+    };
+    // Stamp the passport the way every passport arm does: `project`,
+    // `project_id` and `from` are the server's. The validated session id
+    // names a sidecar by its own handle (`ws/handle`) in `from`.
+    let mut params = HashMap::new();
+    if let Some(claim) = v.get("project").and_then(|p| p.as_str()).map(str::trim).filter(|p| !p.is_empty()) {
+        params.insert("project".to_string(), claim.to_string());
+    }
+    params.insert(crate::caller_workspace::CELL_SESSION_KEY.to_string(), session_id.to_string());
+    crate::caller_workspace::keep_client_project(&mut params);
+    crate::caller_workspace::stamp_principal(&mut params, principal);
+    let ws = params.get("project_id").map(|s| s.trim().to_string()).unwrap_or_default();
+    let agent = params.get("from").cloned().unwrap_or_default();
+    if ws.is_empty() || agent.trim().is_empty() {
+        return own_only("this session's workspace is not known");
+    }
+    if path == "/cli/feedback/create" {
+        if let Some(refused) = other_workspace(&params) {
+            return refused;
+        }
+        let own_path = params.get("project").cloned().unwrap_or_default();
+        v["project"] = serde_json::json!(own_path);
+        v["agentName"] = serde_json::json!(agent);
+        v["sessionId"] = serde_json::json!(session_id);
+    } else {
+        let id = v.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string();
+        if !id.is_empty() {
+            match own_ticket(&id, &ws) {
+                Ok(full) => v["id"] = serde_json::json!(full),
+                Err(not_found) => return not_found,
+            }
+        }
+        if path == "/cli/feedback/resolve" {
+            let status = v.get("status").and_then(|s| s.as_str()).unwrap_or("resolved");
+            if !matches!(status, "resolved" | "answered") {
+                return person_only(&format!(
+                    "an agent resolves its own ticket ({} tickets resolve <id>) or settles it \
+                     (--answered \"<outcome>\"); dismissing, planning or reopening a ticket is a person's step",
+                    k2_core::cli_name!()
+                ));
+            }
+            v["author"] = serde_json::json!(agent);
+        }
+    }
+    dispatch_post_as_agent(path, v.to_string().as_bytes(), &agent)
+}
+
+/// The handler for a ticket write [`ticket_write`] checked and stamped.
+/// `agent` is the stamped name: a comment is always stored as the agent's
+/// own words (no option pick, no answer, no delivery back to itself), and a
+/// create meets the ticket rules as on the owner token's door.
+fn dispatch_post_as_agent(path: &str, body: &[u8], agent: &str) -> CliResponse {
+    use crate::feedback_routes as fb;
+    match path {
+        "/cli/feedback/create" => fb::handle_create_gated(body, None, fb::CreateDoor::Owner),
+        "/cli/feedback/comment" => fb::handle_comment_gated(body, agent, None, Some(agent)),
+        "/cli/feedback/resolve" => fb::handle_resolve_gated(body, None),
+        "/cli/feedback/assign" => fb::handle_assign_gated(body, None),
+        _ => CliResponse::forbidden(),
+    }
+}
+
+fn person_only(hint: &str) -> CliResponse {
+    CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "ok": false,
+            "error": { "code": "person_only", "hint": hint }
+        })
+        .to_string(),
+    }
 }
 
 /// An agent's or a skill's name, as `agents/create` itself requires
@@ -686,6 +887,22 @@ mod tests {
         }
         for bad in ["", ".", "..", "a/b", "a b", "a.b", "../x", "x\0"] {
             assert!(!is_agent_name(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn ticket_writes_are_post_routes_off_the_cell_socket_and_answer_stays_out() {
+        for w in TICKET_WRITES.windows(2) {
+            assert!(w[0] < w[1], "TICKET_WRITES must be sorted and unique: {} then {}", w[0], w[1]);
+        }
+        for p in TICKET_WRITES {
+            let row = crate::routes::route_policy::lookup(p).unwrap_or_else(|| panic!("{p} has no route policy row"));
+            assert!(row.post.is_some(), "{p} is a POST route");
+            assert!(!is_route(p), "{p} is a ticket write, not one of ROUTES");
+            assert!(!crate::session_token::is_agent_verb(p), "{p}: the cell socket is unchanged");
+        }
+        for p in ["/cli/feedback/answer", "/cli/feedback/list-all", "/cli/feedback/waiting-count", "/cli/feedback/attachment", "/cli/tickets/settings"] {
+            assert!(!is_ticket_write(p), "{p} must not be a passport ticket write");
         }
     }
 

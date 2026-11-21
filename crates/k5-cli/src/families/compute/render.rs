@@ -1091,7 +1091,8 @@ fn jobs(cx: &mut Cx, v: &Value) -> Result<(), Raise> {
         let l = ln!("node, reason = j.get(\"node\") or \"?\", j.get(\"reason\") or \"\"");
         let mut node = p::or(cx.at(l, p::get(&j, "node"))?, s("?"));
         let mut reason = p::or(cx.at(l, p::get(&j, "reason"))?, s(""));
-        let l = ln!("if state == \"queued\" and (j.get(\"wait\") or {}).get(\"reason\") == \"held\":");
+        let l =
+            ln!("if state == \"queued\" and (j.get(\"wait\") or {}).get(\"reason\") == \"held\":");
         let held = p::eq_s(&state, "queued") && {
             let w = p::or(cx.at(l, p::get(&j, "wait"))?, Value::Object(Vec::new()));
             p::eq_s(&cx.at(l, p::get(&w, "reason"))?, "held")

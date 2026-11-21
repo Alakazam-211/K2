@@ -359,7 +359,9 @@ fn get() {
     let pulling = r#"{"short":"a","node":"n","state":"queued","queue":{"onNode":true,"message":"2nd in line","reason":"pull_requested"},"move":{"auto":true,"moving":true,"note":"pulling back"}}"#;
     render_check(
         "get",
-        &[JOB_FULL, on_node, queued, words, ended, &long, &many, held, pulling],
+        &[
+            JOB_FULL, on_node, queued, words, ended, &long, &many, held, pulling,
+        ],
         false,
     );
     render_check("get", &[&long], true);

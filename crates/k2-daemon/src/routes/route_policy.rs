@@ -1759,8 +1759,10 @@ mod tests {
         // 4 DM call rows (HP-39), plus a recording card's transcript lines
         // (`home-chat/replies`, prd-home-call-recording-v1 §5), plus Home chat
         // pushes' 4 (notify, notify/set, push-prefs, push-prefs/set) and the
-        // phone's own 3 push device rows (prd-home-chat-pushes-v1 D3, §7).
-        assert_eq!(list.len(), 14 + 3 + 8 + 21 + 4 + 1 + 4 + 3);
+        // phone's own 3 push device rows (prd-home-chat-pushes-v1 D3, §7),
+        // plus the calls ringing for the caller (`home-chat/calls`, 0.46.17:
+        // a PushKit-woken phone answers from CallKit).
+        assert_eq!(list.len(), 14 + 3 + 8 + 21 + 4 + 1 + 4 + 3 + 1);
         for p in VOICE_CHAT_PUBLIC {
             let r = lookup(p).unwrap_or_else(|| panic!("{p} is not a row"));
             assert!(

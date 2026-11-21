@@ -85,8 +85,8 @@
 # usage line on stderr, exit 2:
 #   {"error": "usage", "hint": "<url> isn't an address k2 sends to itself"}
 #     for a byte outside printable ASCII or a blank, an empty host before
-#     a port, or a port above 65535 or below 0 (on Linux the shell's
-#     Python sends to that port cut to 16 bits);
+#     a port, or a port above 65535 or below 0 (a bash bug on Linux: the
+#     shell's Python sends its token to that port cut to 16 bits);
 #   {"error": "usage", "hint": "k2 won't send to <url>: a proxy setting it doesn't read (an http:// proxy only)"}
 #     for a socks or https proxy URL, or a blank-separated no_proxy.
 #
@@ -214,7 +214,7 @@ EXPECTED_DIFFS=(
     "python-proxy-rule|K2 ruling R4, the clone engine's port|the person's proxy for a clone request to an https server that isn't this computer (the check: \`clone preview ws1 --host https://cp.example.invalid --token-stdin\` with only ALL_PROXY set): the shell's Python urllib reads https_proxy and HTTPS_PROXY only (never ALL_PROXY), its own no_proxy rule, opens a tunnel only on a 200 and writes its own CONNECT head, so it goes straight there; the binary takes the shared CONNECT path with curl's rules (all_proxy and ALL_PROXY too, curl's no_proxy, any 2xx, curl's head) and sends one CONNECT. Either way the token rides inside the tunnel only, never to the proxy"
     "clone-url-not-printable|K2 ruling R10, the clone engine's port|a clone server URL with a byte outside printable ASCII anywhere in it, a blank too (the remote URL as typed, or this server's address from K2_HOST): the binary sends nothing and prints one usage line on stderr, exit 2, stdout empty: {\"error\": \"usage\", \"hint\": \"<url> isn't an address k2 sends to itself\"} (json.dumps, so the check's é is \\u00e9). The check: \`clone preview ws1 --host 'http://127.0.0.1:<port>/#café' --token-stdin --json\`; the shell's Python tries it: urllib drops the fragment and sends its POST / to <port> (the check's listener answers 403, so bash prints {\"error\": \"error\", \"hint\": \"recorded\"}, exit 3)"
     "clone-url-empty-host|K2 ruling R10, the clone engine's port|a clone server URL with an empty host before a port (the check: \`clone preview ws1 --host https://:<port> --token-stdin --json\`): the binary sends nothing and prints one usage line on stderr, exit 2, stdout empty: {\"error\": \"usage\", \"hint\": \"https://:<port> isn't an address k2 sends to itself\"}. The shell's Python tries the empty name: where the resolver makes it this computer (macOS) it connects to <port> and then raises at the TLS step (a traceback ending \"ValueError: check_hostname requires server_hostname\", exit 1); where the lookup fails, {\"error\": \"daemon_unreachable\", \"hint\": \"remote server https://:<port>: ...\"}, exit 3"
-    "clone-url-port-range|K2 ruling R10, the clone engine's port|a clone server URL whose port Python's int() reads but no socket takes, above 65535 or below 0 (the check: \`clone preview ws1 --host http://127.0.0.1:<65536 + port> --token-stdin --json\`): the binary sends nothing and prints one usage line on stderr, exit 2, stdout empty: {\"error\": \"usage\", \"hint\": \"http://127.0.0.1:<n> isn't an address k2 sends to itself\"}. The shell's Python hands the port to the resolver as it is: glibc cuts it to 16 bits, so on Linux bash sends its POST, token and all, to <port> (the check's listener answers 403, so bash prints {\"error\": \"error\", \"hint\": \"recorded\"}, exit 3); macOS's resolver refuses it, {\"error\": \"daemon_unreachable\", \"hint\": \"remote server http://127.0.0.1:<n>: ...\"}, exit 3"
+    "clone-url-port-range|K2 ruling R10, the clone engine's port|a clone server URL whose port Python's int() reads but no socket takes, above 65535 or below 0 (the check: \`clone preview ws1 --host http://127.0.0.1:<65536 + port> --token-stdin --json\`): the binary sends nothing and prints one usage line on stderr, exit 2, stdout empty: {\"error\": \"usage\", \"hint\": \"http://127.0.0.1:<n> isn't an address k2 sends to itself\"}. On the shell's side this is a BASH BUG, reported to K2 and the Steward, not a behaviour to keep: clone.sh checks no port range and its Python (urllib, http.client) hands the port to the C library's getaddrinfo as it is; glibc cuts it to 16 bits, so on Linux bash sends its POST and the remote token (Authorization: Bearer) to <n> - 65536, which may be another service (here the check's listener, which answers 403, so bash prints {\"error\": \"error\", \"hint\": \"recorded\"}, exit 3); macOS's resolver refuses the port, {\"error\": \"daemon_unreachable\", \"hint\": \"remote server http://127.0.0.1:<n>: ...\"}, exit 3. The check proves the bug where it happens, so the bash fix flips it"
     "clone-proxy-unread|K2 ruling R10, the clone engine's port|a clone request to an https server that isn't this computer with a proxy setting the binary doesn't read (the checks: \`clone preview ws1 --host https://cp.example.invalid --token-stdin --json\` with https_proxy=socks5://127.0.0.1:<port>; with https_proxy=https://127.0.0.1:<port>; with https_proxy=http://127.0.0.1:<port> and no_proxy='a.example b.example', blank-separated): the binary sends nothing and prints one usage line on stderr, exit 2, stdout empty: {\"error\": \"usage\", \"hint\": \"k2 won't send to https://cp.example.invalid: a proxy setting it doesn't read (an http:// proxy only)\"}. The shell's Python urllib sends one plain CONNECT cp.example.invalid:443 to <port> each time (it uses a socks or an https proxy URL as an http proxy, and its no_proxy splits on commas only), the token never in it; the proxy's 407 is its {\"error\": \"daemon_unreachable\", ...}, exit 3"
 )
 
@@ -1874,9 +1874,9 @@ check_clone_url_empty_host() {
 }
 
 # check_clone_url_port_range: a port above 65535, 65536 past the
-# listener's (where a port cut to 16 bits lands). Bash's Python hands it to
-# the resolver: glibc cuts it and bash reaches the listener, macOS's
-# refuses it; the binary refuses first.
+# listener's (where a port cut to 16 bits lands). Bash's bug: its Python
+# hands the port to getaddrinfo as it is; glibc cuts it and bash sends its
+# token to the listener, macOS's refuses it. The binary refuses first.
 check_clone_url_port_range() {
     local d="$WORK/clone-portrange" port big url side rc problems=()
     clone_refusal_start "$d" || return 1
@@ -1889,7 +1889,8 @@ check_clone_url_port_range() {
     rc="$(cat "$d/rc.port.bash")"
     [ "$rc" = 3 ] || problems+=("bash exited $rc, want 3")
     if [ -s "$d/heads.port.bash" ]; then
-        # The port cut to 16 bits (glibc): bash's POST reached the listener.
+        # Bash's bug: the port cut to 16 bits (glibc), its POST and token
+        # at the listener.
         [ "$(wc -l <"$d/heads.port.bash" | tr -d ' ')" = 1 ] && grep -q '^POST /cli/clone/preview HTTP/1.1 ' "$d/heads.port.bash" \
             || problems+=("bash reached the listener with something else: $(head -c 300 "$d/heads.port.bash")")
         printf '%s\n' '{"error": "error", "hint": "recorded"}' | cmp -s - "$d/err.port.bash" \

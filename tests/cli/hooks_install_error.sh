@@ -16,7 +16,9 @@
 # Kept as before: an answer that is not a JSON object, or not UTF-8,
 # prints as it came (exit 0), a report the reader can't lay out prints
 # the lines it made and then the raw answer (exit 0), and --json prints
-# the answer as it came.
+# the answer as it came. --json with an error answer prints the answer and
+# exits as without --json: 1, or 3 with the Ask-with line on stderr for a
+# refusal (0.46.17: it exited 0).
 #
 # How: a python stub daemon on a free loopback port answers each request
 # with the status and body the row puts in two files, and records every
@@ -152,8 +154,19 @@ for verb in install uninstall; do
     row "not JSON: raw" 0 'nope' "" hooks "$verb"
     reply 200 $'{"error":"x"}\xff'
     row "not UTF-8: raw" 0 $'{"error":"x"}\xff' "" hooks "$verb"
+    reply 200 '{"report":{"action":"install"}}'
+    row "--json prints the answer" 0 '{"report":{"action":"install"}}' "" hooks "$verb" --json
+    reply 200 'nope'
+    row "--json, not JSON: the answer" 0 'nope' "" hooks "$verb" --json
+
+    echo "== $verb --json: an error answer prints as it came and fails =="
     reply 200 '{"error":"serialize: boom"}'
-    row "--json prints the answer" 0 '{"error":"serialize: boom"}' "" hooks "$verb" --json
+    row "--json, an error string" 1 '{"error":"serialize: boom"}' "" hooks "$verb" --json
+    reply 403 '{"error":{"code":"admin_only"}}'
+    row "--json, an error object" 1 '{"error":{"code":"admin_only"}}' "" hooks "$verb" --json
+    reply 403 "$PERM"
+    row "--json, a refusal with a permission object" 3 "$PERM" \
+        'Ask with: k2 permission request --scope x.write --why "..."' hooks "$verb" --json
 done
 
 echo ""

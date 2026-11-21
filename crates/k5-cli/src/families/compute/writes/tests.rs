@@ -45,19 +45,19 @@ fn the_shell_s_lines() {
         ),
         (
             &cmd,
-            r#"                    --tag) ctag="${2:-}"; shift 2 ;;"#,
+            r#"                    --tag) _need_value "$@"; ctag="${2:-}"; shift 2 ;;"#,
         ),
         (
             &cmd,
-            r#"                    --state) cstate="${2:-}"; shift 2 ;;"#,
+            r#"                    --state) _need_value "$@"; cstate="${2:-}"; shift 2 ;;"#,
         ),
         (
             &cmd,
-            r#"                    --node) cnode="${2:-}"; shift 2 ;;"#,
+            r#"                    --node) _need_value "$@"; cnode="${2:-}"; shift 2 ;;"#,
         ),
         (
             &cmd,
-            r#"                    --workspace) cws="${2:-}"; shift 2 ;;"#,
+            r#"                    --workspace) _need_value "$@"; cws="${2:-}"; shift 2 ;;"#,
         ),
         (
             &cmd,
@@ -263,7 +263,10 @@ fn cancel_reads_the_words_as_the_loop_does() {
             &["--all-mine", "--state", ""],
             ask(|a| a.scope = Some("session")),
         ),
-        (&["--all-mine", "--state"], Words::ShiftFailed("--state".into())),
+        (
+            &["--all-mine", "--state"],
+            Words::ShiftFailed("--state".into()),
+        ),
     ];
     for (words, want) in rows {
         assert_eq!(cancel::parse(words), want, "{words:?}");
@@ -1087,7 +1090,10 @@ mod grant_verb {
             w(&["mini", "--max-time"], true),
             Words::Usage("usage: bad duration '' (use 2h, 90m, 1h30m, 300s)".into())
         );
-        assert_eq!(w(&["mini", "--max-queued"], true), Words::ShiftFailed("--max-queued".into()));
+        assert_eq!(
+            w(&["mini", "--max-queued"], true),
+            Words::ShiftFailed("--max-queued".into())
+        );
         assert_eq!(
             w(&["mini", "--submitter-max-running", "-1"], true),
             Words::Usage("usage: --submitter-max-running N (0 = off)".into())

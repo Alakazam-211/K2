@@ -260,7 +260,9 @@ fn roster(rest: &[&str]) -> Words<Ask> {
                 &["--json"],
             ) {
                 Ok(Some(g)) => g,
-                Ok(None) => return Words::ShiftFailed(r.last().map_or_else(String::new, |w| w.to_string())),
+                Ok(None) => {
+                    return Words::ShiftFailed(r.last().map_or_else(String::new, |w| w.to_string()))
+                }
                 Err(_) => return usage(ROSTER_SET_USAGE),
             };
             let v = |names: &[&str]| str_value(last(&got, names));
@@ -340,7 +342,9 @@ fn seats(rest: &[&str]) -> Words<Ask> {
                 &["--secrets", "--no-secrets", "--json"],
             ) {
                 Ok(Some(g)) => g,
-                Ok(None) => return Words::ShiftFailed(r.last().map_or_else(String::new, |w| w.to_string())),
+                Ok(None) => {
+                    return Words::ShiftFailed(r.last().map_or_else(String::new, |w| w.to_string()))
+                }
                 Err(_) => return usage(SEATS_REQUEST_USAGE),
             };
             let secrets = got
@@ -365,7 +369,9 @@ fn seats(rest: &[&str]) -> Words<Ask> {
             let (req, r) = first(r);
             let got = match flags(r, &["--nodes"], &["--json"]) {
                 Ok(Some(g)) => g,
-                Ok(None) => return Words::ShiftFailed(r.last().map_or_else(String::new, |w| w.to_string())),
+                Ok(None) => {
+                    return Words::ShiftFailed(r.last().map_or_else(String::new, |w| w.to_string()))
+                }
                 Err(_) => return usage(SEATS_OFFER_USAGE),
             };
             let nodes = last(&got, &["--nodes"]);
@@ -387,7 +393,9 @@ fn seats(rest: &[&str]) -> Words<Ask> {
             let line = format!("usage: {CLI_NAME} compute seats {sub} <seat> [--why TEXT]");
             let got = match flags(r, &["--why"], &["--json"]) {
                 Ok(Some(g)) => g,
-                Ok(None) => return Words::ShiftFailed(r.last().map_or_else(String::new, |w| w.to_string())),
+                Ok(None) => {
+                    return Words::ShiftFailed(r.last().map_or_else(String::new, |w| w.to_string()))
+                }
                 Err(_) => return usage(line),
             };
             if seat.is_empty() {

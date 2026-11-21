@@ -29,10 +29,13 @@ fn the_words() {
         ]),
         Form::PairStart(Ok(["L".into(), "s".into(), "http://h:1".into()]))
     );
-    // `shift 2` with one word left fails under `set -e`: exit 1, no line.
+    // A value flag as the last word: the shell's `_need_value` line.
     assert_eq!(
         parse(&["pair-start", "--label"]),
-        Form::PairStart(Err((Exit::Error, None)))
+        Form::PairStart(Err((
+            Exit::Usage,
+            Some("Error: --label takes a value".into())
+        )))
     );
     assert_eq!(
         parse(&["pair-start", "--pubkey", "x"]),

@@ -214,13 +214,7 @@ fn request_answers_as_the_shell_does() {
             2,
             0,
         ),
-        req(
-            "--payload last",
-            &["request", "--payload"],
-            vec![],
-            2,
-            0,
-        ),
+        req("--payload last", &["request", "--payload"], vec![], 2, 0),
         req("no --payload", &["request", "--wait"], vec![], 2, 0),
         req(
             "an unexpected word",
@@ -333,11 +327,7 @@ fn status_cancel_and_agents_answer_as_the_shell_does() {
             2,
         ),
         stop("status: an unknown flag", &["status", "--all"], 2),
-        stop(
-            "status --out last",
-            &["status", "ap_1", "--out"],
-            2,
-        ),
+        stop("status --out last", &["status", "ap_1", "--out"], 2),
         case(
             "status: no answer",
             &["status"],

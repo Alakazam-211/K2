@@ -38,9 +38,9 @@ fn at_line(lines: &[String], n: u32) -> String {
 fn the_shell_s_lines() {
     let text = source("app-wallet.sh");
     for shell in [
-        r#"                    --name) name="${2:-}"; shift 2 ;;"#,
-        r#"                    --caps|--cap) caps="${2:-}"; shift 2 ;;"#,
-        r#"                    --agent|--agents) agents+=("${2:-}"); shift 2 ;;"#,
+        r#"                    --name) _need_value "$@"; name="${2:-}"; shift 2 ;;"#,
+        r#"                    --caps|--cap) _need_value "$@"; caps="${2:-}"; shift 2 ;;"#,
+        r#"                    --agent|--agents) _need_value "$@"; agents+=("${2:-}"); shift 2 ;;"#,
         r#"            raw=$(cli_post_json "/cli/skin-tokens" "$body")"#,
         r#"            raw=$(cli_request "/cli/skin-tokens")"#,
         r#"            raw=$(cli_post_json "/cli/skin-tokens/rooms" "$body")"#,
@@ -159,7 +159,10 @@ fn the_words() {
             agents: vec!["a".into(), "b".into()]
         })
     );
-    assert_eq!(words(&["create", "--name"]).unwrap_err(), Stop::shift("--name"));
+    assert_eq!(
+        words(&["create", "--name"]).unwrap_err(),
+        Stop::shift("--name")
+    );
     assert_eq!(
         words(&["create", "--agent", "a"]).unwrap_err().lines,
         vec![USE_NAME, CREATE_USAGE]
@@ -182,7 +185,10 @@ fn the_words() {
             agents: vec![]
         })
     );
-    assert_eq!(words(&["rooms", "--agent"]).unwrap_err(), Stop::shift("--agent"));
+    assert_eq!(
+        words(&["rooms", "--agent"]).unwrap_err(),
+        Stop::shift("--agent")
+    );
     assert_eq!(
         words(&["revoke", ""]).unwrap_err().lines,
         vec![REVOKE_USAGE]

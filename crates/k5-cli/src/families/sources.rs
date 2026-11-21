@@ -339,7 +339,10 @@ pub fn ask(sub: &str, words: &[String], now: i64) -> Result<Ask, Stop> {
                 let a = words[i].as_str();
                 match a {
                     "--from" | "--to" | "--item" => {
-                        let v = words.get(i + 1).ok_or_else(|| Stop::Shift(a.to_string()))?.clone();
+                        let v = words
+                            .get(i + 1)
+                            .ok_or_else(|| Stop::Shift(a.to_string()))?
+                            .clone();
                         match a {
                             "--from" => from = v,
                             "--to" => to = v,
@@ -388,7 +391,10 @@ pub fn ask(sub: &str, words: &[String], now: i64) -> Result<Ask, Stop> {
                 let a = words[i].as_str();
                 match a {
                     "--for" | "--reason" => {
-                        let v = words.get(i + 1).ok_or_else(|| Stop::Shift(a.to_string()))?.clone();
+                        let v = words
+                            .get(i + 1)
+                            .ok_or_else(|| Stop::Shift(a.to_string()))?
+                            .clone();
                         if a == "--for" {
                             for_ = v;
                         } else {
@@ -489,7 +495,10 @@ pub fn ask(sub: &str, words: &[String], now: i64) -> Result<Ask, Stop> {
             while i < words.len() {
                 match words[i].as_str() {
                     "--names" => {
-                        names = words.get(i + 1).ok_or_else(|| Stop::Shift("--names".into()))?.clone();
+                        names = words
+                            .get(i + 1)
+                            .ok_or_else(|| Stop::Shift("--names".into()))?
+                            .clone();
                         i += 1;
                     }
                     "--json" => json = true,

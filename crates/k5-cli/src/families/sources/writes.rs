@@ -127,7 +127,9 @@ pub fn try_(words: &[String]) -> Result<Ask, Stop> {
                 i += 1;
             }
             "--name" => {
-                let v = words.get(i + 1).ok_or_else(|| Stop::Shift("--name".into()))?;
+                let v = words
+                    .get(i + 1)
+                    .ok_or_else(|| Stop::Shift("--name".into()))?;
                 draft.push("--name".into());
                 draft.push(v.clone());
                 name = v.clone();
@@ -173,7 +175,10 @@ pub fn approve(words: &[String]) -> Result<Ask, Stop> {
                 i += 1;
             }
             "--viewers" | "--agent-access" | "--keep" => {
-                let v = words.get(i + 1).ok_or_else(|| Stop::Shift(w.to_string()))?.clone();
+                let v = words
+                    .get(i + 1)
+                    .ok_or_else(|| Stop::Shift(w.to_string()))?
+                    .clone();
                 match w {
                     "--viewers" => a.viewers = v,
                     "--agent-access" => a.access = v,
@@ -287,7 +292,11 @@ pub fn trigger(words: &[String]) -> Result<Option<Ask>, Stop> {
     let mut i = 0;
     while i < rest.len() {
         let a = rest[i].as_str();
-        let value = || rest.get(i + 1).cloned().ok_or_else(|| Stop::Shift(a.to_string()));
+        let value = || {
+            rest.get(i + 1)
+                .cloned()
+                .ok_or_else(|| Stop::Shift(a.to_string()))
+        };
         match a {
             "--json" => t.json = true,
             "--no-note" => t.no_note = true,

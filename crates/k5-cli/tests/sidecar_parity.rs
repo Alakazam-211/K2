@@ -231,8 +231,14 @@ fn sidecar_help_and_words() {
             "a value flag last: new --brief-text last",
             &["new", "a", "--harness", "h", "--brief-text"],
         ),
-        ("a value flag last: new --workspace last", &["new", "--workspace"]),
-        ("a value flag last: list --workspace last", &["list", "--workspace"]),
+        (
+            "a value flag last: new --workspace last",
+            &["new", "--workspace"],
+        ),
+        (
+            "a value flag last: list --workspace last",
+            &["list", "--workspace"],
+        ),
         (
             "a value flag last: stop --workspace last",
             &["stop", "a", "--workspace"],

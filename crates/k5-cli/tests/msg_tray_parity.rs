@@ -650,10 +650,7 @@ fn tray_value_flag_last_is_the_d6_line() {
         let (r, sent) = rig.binary(&c, false);
         assert!(sent.is_empty(), "{flag}: the binary sent {sent:?}");
         assert_eq!((r.code, r.signal), (Some(2), None), "{flag}: {r:?}");
-        assert_eq!(
-            r.stderr,
-            format!("Error: {flag} takes a value\n"),
-        );
+        assert_eq!(r.stderr, format!("Error: {flag} takes a value\n"),);
     }
 }
 

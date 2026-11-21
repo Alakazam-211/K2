@@ -104,9 +104,9 @@ fn the_words() {
     assert_eq!(
         p(&["status", "--host"]),
         Form::Stop {
-            lines: vec![],
+            lines: vec!["Error: --host takes a value".into()],
             page: false,
-            exit: Exit::Error
+            exit: Exit::Usage
         }
     );
     assert_eq!(

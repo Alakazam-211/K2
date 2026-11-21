@@ -101,7 +101,10 @@ fn retier_words() {
         retier::parse(&["--batch"]),
         Words::Usage(retier::USAGE.to_string())
     );
-    assert_eq!(retier::parse(&["abc", "--why"]), Words::ShiftFailed("--why".into()));
+    assert_eq!(
+        retier::parse(&["abc", "--why"]),
+        Words::ShiftFailed("--why".into())
+    );
 }
 
 #[test]

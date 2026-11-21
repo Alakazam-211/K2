@@ -37,7 +37,7 @@ fn the_shell_s_lines() {
         assert_eq!(*shell, format!("    echo \"{}\"", echoed(&k2(ours))));
     }
     for shell in [
-        r#"                    --label)        label="${2:-}"; shift 2 ;;"#,
+        r#"                    --label)        _need_value "$@"; label="${2:-}"; shift 2 ;;"#,
         r#"                    *)              echo "Unknown flag: $1" >&2; exit 1 ;;"#,
         r#"                [ "$1" != "--label" ] && [ "$1" != "--status" ] && other_flags=1"#,
         r#"                _cli_read_secret_stdin "Paste the LLM API key: ""#,
@@ -49,8 +49,8 @@ fn the_shell_s_lines() {
         r#"                hire_confirm="$(_vault_confirm_token hire-key-mint "" "API key that can hire agents")" || exit 3"#,
         r#"        hire-ceiling|app-access)"#,
         r#"                    --hire)         hire=1; shift ;;"#,
-        r#"                    --app-login)    h_apps="${h_apps}${2:-}"$'\n'; shift 2 ;;"#,
-        r#"                    --app-login) c_apps="${c_apps}${2:-}"$'\n'; shift 2 ;;"#,
+        r#"                    --app-login)    _need_value "$@"; h_apps="${h_apps}${2:-}"$'\n'; shift 2 ;;"#,
+        r#"                    --app-login) _need_value "$@"; c_apps="${c_apps}${2:-}"$'\n'; shift 2 ;;"#,
         r#"                    --none)      c_none=1; shift ;;"#,
         r#"                    *)           echo "Unknown flag: $1" >&2; exit 2 ;;"#,
         r#"            if [ -z "$id" ] || [ "${id#-}" != "$id" ]; then"#,

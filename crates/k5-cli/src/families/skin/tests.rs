@@ -63,7 +63,10 @@ fn usage_stops() {
     let s = stop(&["user", "rooms", "bob", "--agent"]);
     assert_eq!(
         (s.exit, s.stderr),
-        (Exit::Usage, vec!["Error: --agent takes a value".to_string()])
+        (
+            Exit::Usage,
+            vec!["Error: --agent takes a value".to_string()]
+        )
     );
     assert_eq!(
         stop(&["user", "rooms", "bob", "--apply-tokens"]).exit,

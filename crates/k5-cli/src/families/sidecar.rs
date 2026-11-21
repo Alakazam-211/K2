@@ -186,7 +186,10 @@ pub fn parse_new(words: &[String]) -> Result<New, Stop> {
                 }
             }
             "--base" | "--harness" | "--brief" | "--brief-text" | "--workspace" | "--model" => {
-                let v = words.get(i + 1).ok_or_else(|| Stop::Shift(a.to_string()))?.clone();
+                let v = words
+                    .get(i + 1)
+                    .ok_or_else(|| Stop::Shift(a.to_string()))?
+                    .clone();
                 match a {
                     "--base" => n.base = v,
                     "--harness" => n.harness = v,
@@ -286,7 +289,10 @@ pub fn name_args(usage: &str, words: &[String]) -> Result<Named, Stop> {
         let a = words[i].as_str();
         match a {
             "--workspace" => {
-                n.workspace = words.get(i + 1).ok_or_else(|| Stop::Shift(a.to_string()))?.clone();
+                n.workspace = words
+                    .get(i + 1)
+                    .ok_or_else(|| Stop::Shift(a.to_string()))?
+                    .clone();
                 i += 1;
             }
             "--json" => n.json = true,
@@ -342,7 +348,10 @@ pub fn parse_simple(verb: &str, words: &[String]) -> Result<Simple, Stop> {
         let a = words[i].as_str();
         match a {
             "--workspace" => {
-                n.workspace = words.get(i + 1).ok_or_else(|| Stop::Shift(a.to_string()))?.clone();
+                n.workspace = words
+                    .get(i + 1)
+                    .ok_or_else(|| Stop::Shift(a.to_string()))?
+                    .clone();
                 i += 1;
             }
             "--json" => n.json = true,
@@ -378,7 +387,10 @@ pub fn parse_access(words: &[String]) -> Result<(String, String), Stop> {
     let mut i = 0;
     while i < rest.len() {
         if rest[i] == "--workspace" {
-            workspace = rest.get(i + 1).ok_or_else(|| Stop::Shift("--workspace".into()))?.clone();
+            workspace = rest
+                .get(i + 1)
+                .ok_or_else(|| Stop::Shift("--workspace".into()))?
+                .clone();
             i += 2;
         } else {
             return Err(Stop::Usage(access_usage()));

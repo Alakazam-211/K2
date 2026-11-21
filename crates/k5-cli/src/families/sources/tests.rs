@@ -37,7 +37,7 @@ fn the_shell_s_lines() {
         r#"        *[!0-9smhd]*|"") echo "Error: $flag takes a duration like 30s, 5m, 2h, 1d" >&2; exit 2 ;;"#,
         r#"            *[smhd]) v=$(( now - $(_sources_secs "$v" "--$t") )) ;;"#,
         r#"            *[!0-9]*) echo "Error: --$t takes a duration (6h) or epoch seconds" >&2; exit 2 ;;"#,
-        r#"            --from) from="${2:-}"; shift 2 ;;"#,
+        r#"            --from) _need_value "$@"; from="${2:-}"; shift 2 ;;"#,
         r#"            *) if [ -z "$name" ]; then name="$1"; elif [ -z "$field" ]; then field="$1"; fi; shift ;;"#,
         r#"    _sources_call GET /cli/sources/export "name=$(urlencode "$name")""#,
         r#"    _sources_print_json "$_SRC_BODY""#,
@@ -128,7 +128,10 @@ fn the_verbs_words() {
             kind: "history"
         })
     );
-    assert_eq!(ask("history", &w(&["a", "--to"]), 0), Err(Stop::Shift("--to".into())));
+    assert_eq!(
+        ask("history", &w(&["a", "--to"]), 0),
+        Err(Stop::Shift("--to".into()))
+    );
     assert_eq!(
         ask("history", &w(&["a", "f", "--from", "5x"]), 0),
         Err(Stop::Usage(

@@ -85,7 +85,7 @@ fn the_lines_say_the_brand_s_name() {
         &["upgrade", "--accept-data-loss"],
         &["act-as"],
         &["config", "--setup-url"],
-        &["enable", "--tarball"],
+        &["enable", "--tarball", ""],
         &["purge", "--confirm-hostname", ""],
     ];
     for &words in lines {
@@ -95,7 +95,7 @@ fn the_lines_say_the_brand_s_name() {
         named(&line);
     }
     for plan in [
-        media::parse(&["install", "--url"]),
+        media::parse(&["install", "--url", ""]),
         users::parse(&["invite", "ann", "--role", ""]),
         admin::owner_sessions(&["list", "x"]),
         admin::owner_sessions(&["end"]),

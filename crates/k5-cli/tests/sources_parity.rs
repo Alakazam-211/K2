@@ -191,7 +191,10 @@ fn sources_help_and_words() {
             "a value flag last: mute --reason last",
             &["mute", "web", "--for", "1m", "--reason"],
         ),
-        ("a value flag last: pending --names last", &["pending", "--names"]),
+        (
+            "a value flag last: pending --names last",
+            &["pending", "--names"],
+        ),
     ] {
         v.push(case(name, args, &[], vec![], owner_and_port, 2, 0));
     }

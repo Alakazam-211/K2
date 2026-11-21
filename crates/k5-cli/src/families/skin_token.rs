@@ -258,7 +258,11 @@ fn parse_rooms(rest: &[&str]) -> Result<Ask, Stop> {
     while i < rest.len() {
         match rest[i] {
             "--agent" | "--agents" => {
-                agents.push(rest.get(i + 1).ok_or_else(|| Stop::shift(rest[i]))?.to_string());
+                agents.push(
+                    rest.get(i + 1)
+                        .ok_or_else(|| Stop::shift(rest[i]))?
+                        .to_string(),
+                );
                 i += 2;
                 continue;
             }

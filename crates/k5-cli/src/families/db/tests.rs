@@ -476,7 +476,10 @@ fn the_compute_verbs_words_are_the_shell_s() {
         hint(&["cluster", "create", "17", "--name", "n", "--port", "5450"]),
         "--port takes a port in 5433-5449"
     );
-    assert_eq!(form(&["cluster", "create", "17", "--name"]), Form::Shift("--name".into()));
+    assert_eq!(
+        form(&["cluster", "create", "17", "--name"]),
+        Form::Shift("--name".into())
+    );
     assert_eq!(
         hint(&["cluster", "create", "17", "--x"]),
         concat!(
@@ -502,7 +505,10 @@ fn the_compute_verbs_words_are_the_shell_s() {
         hint(&["upgrade", "--status"]),
         concat!(cli_name!(), " db upgrade <db> --status")
     );
-    assert_eq!(form(&["upgrade", "d", "--app"]), Form::Shift("--app".into()));
+    assert_eq!(
+        form(&["upgrade", "d", "--app"]),
+        Form::Shift("--app".into())
+    );
     match cp_ask(&["upgrade", "d", "--to=17", "--live", "--no-wait"]) {
         C::Upgrade(u) => assert!(u.live && u.no_wait && u.to == "17" && u.db == "d"),
         other => panic!("{other:?}"),

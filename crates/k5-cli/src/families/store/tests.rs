@@ -49,7 +49,10 @@ fn the_words_come_to_the_shell_s_forms() {
     assert!(a.json && a.name == "--json");
     let a = ask(&["get"], false);
     assert!(a.name.is_empty() && a.doc_id.is_empty());
-    assert_eq!(form(&["query", "c", "--where"]), Form::Shift("--where".into()));
+    assert_eq!(
+        form(&["query", "c", "--where"]),
+        Form::Shift("--where".into())
+    );
     let a = ask(&["query", "c", "--where", "x", "--limit", "5"], false);
     assert_eq!(a.limit, "5");
     // `rm` and `drop` take no flags: extra words are ignored, and the

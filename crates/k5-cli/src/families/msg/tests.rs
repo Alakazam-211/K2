@@ -343,8 +343,8 @@ fn the_words() {
     }
     let staging = source("msg-whoami-done.sh");
     for line in [
-        r#"--from) explicit_from="$2"; shift 2 ;;"#,
-        r#"--command) explicit_command="$2"; shift 2 ;;"#,
+        r#"--from) _need_value "$@"; explicit_from="$2"; shift 2 ;;"#,
+        r#"--command) _need_value "$@"; explicit_command="$2"; shift 2 ;;"#,
         r#"wake_timeout="$2"; shift 2 ;;"#,
         r#"explicit_via="$2"; shift 2 ;;"#,
     ] {

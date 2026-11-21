@@ -1024,11 +1024,7 @@ fn msg_value_flag_last_is_the_d6_line() {
         assert!(sent.is_empty(), "{name}: the binary sent {sent:?}");
         assert_eq!((r.code, r.signal), (Some(2), None), "{name}: {r:?}");
         assert!(r.stdout.is_empty(), "{name}: {r:?}");
-        assert_eq!(
-            r.stderr,
-            format!("Error: {flag} takes a value\n"),
-            "{name}"
-        );
+        assert_eq!(r.stderr, format!("Error: {flag} takes a value\n"), "{name}");
     }
 }
 

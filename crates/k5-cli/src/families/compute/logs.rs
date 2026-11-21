@@ -939,7 +939,10 @@ mod tests {
             "search=a+b&workspace=%2Fw&limit=5&fold=1"
         );
         assert_eq!(parse(&[]), Some(Err(Stop::Usage(LOGS_USAGE.into()))));
-        assert_eq!(parse(&["j", "--tail"]), Some(Err(Stop::Shift("--tail".into()))));
+        assert_eq!(
+            parse(&["j", "--tail"]),
+            Some(Err(Stop::Shift("--tail".into())))
+        );
         assert_eq!(
             parse(&["j", "--attempt", "0"]),
             Some(Err(Stop::Usage(ATTEMPT_USAGE.into())))

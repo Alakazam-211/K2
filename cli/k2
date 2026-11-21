@@ -67224,6 +67224,11 @@ WHICH ONE
   Once, on a date                      k2 remind "renew cert" --on 2026-10-30
   Run a script, no agent               k2 job add ... (k2 study jobs)
 
+NOT YOUR HARNESS'S SCHEDULER
+  Use these, never your harness's own scheduler (cron jobs, /loop, timers).
+  Those die with the session and your human can't see them. K2's reminders
+  and heartbeats survive restarts and show in K2's Heartbeats panel.
+
 HEARTBEATS REPEAT
   Each one is a WAKEUP.md under .k2/heartbeats/<name>/. It fires into your
   pinned chat by default. A missed slot catches up once within 12 hours;
@@ -79914,6 +79919,11 @@ YOUR INBOX
   inbox folders                         List folders this workspace has created
   done [--blocked "reason"]             Mark your task done (or blocked) via /cli/done;
                                         in an API cell (K2_API_CELL=1): complete (grace)
+
+REMINDERS AND SCHEDULES (K2's, never your harness's cron, /loop or timers)
+  remind "text" --at 15:00              Once (or --in 45m, --on 2026-10-30); survives restarts
+                                        (list/show/snooze/cancel: `k2 remind --help`)
+  heartbeat schedule add --name <n> ... Repeating (--daily --time 09:00 ...): `k2 heartbeat --help`
 
 AGENTS
   agent                                 Hire, configure, list, retire this server's agents;

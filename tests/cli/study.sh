@@ -114,6 +114,8 @@ hb_words="$("$K2" study heartbeats)"
 for word in routines "cron jobs" reminder "k2 remind"; do
     assert_contains "study heartbeats names '$word'" "$hb_words" "$word"
 done
+assert_contains "study heartbeats: K2's, not the harness's scheduler" "$hb_words" \
+    "never your harness's own scheduler (cron jobs, /loop, timers)"
 assert_contains "routines is a route to heartbeats" "$("$K2" study routines)" "k2 study heartbeats"
 assert_contains "reminders is a route to heartbeats" "$("$K2" study reminders)" "k2 study heartbeats"
 assert_contains "cron is a route to heartbeats" "$("$K2" study cron)" "k2 study heartbeats"

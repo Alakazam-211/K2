@@ -37,6 +37,11 @@ YOUR INBOX
   done [--blocked "reason"]             Mark your task done (or blocked) via /cli/done;
                                         in an API cell (K2_API_CELL=1): complete (grace)
 
+REMINDERS AND SCHEDULES (K2's, never your harness's cron, /loop or timers)
+  remind "text" --at 15:00              Once (or --in 45m, --on 2026-10-30); survives restarts
+                                        (list/show/snooze/cancel: `k2 remind --help`)
+  heartbeat schedule add --name <n> ... Repeating (--daily --time 09:00 ...): `k2 heartbeat --help`
+
 AGENTS
   agent                                 Hire, configure, list, retire this server's agents;
                                         manage AGENTS.md context layers (hire/conf/get/set/

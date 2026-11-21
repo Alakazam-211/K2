@@ -90,6 +90,11 @@ fn the_lines_that_raise_are_the_shell_s() {
             "print(\"      %s/%s connections",
         ),
         (line::CLUSTERS_WAL, "print(\"      WAL archive:"),
+        (line::CLUSTERS_LSN, "if a.get(\"currentLsn\"):"),
+        (
+            line::CLUSTERS_LSN_PRINT,
+            "print(\"      current WAL position: %s\" % a[\"currentLsn\"])",
+        ),
         (
             line::CLUSTERS_UPGRADES,
             "for u in d.get(\"upgradeAvailable\") or []:",

@@ -23,7 +23,7 @@
 //!   (a spy program checks), and its errors.
 //! - The shell's: `-h` on a verb that changes something.
 //! - The compute verbs (`_compute_send`): `versions-access`, `cluster
-//!   create` and `restart`, `create --cluster`, `upgrade` (its status,
+//!   create`, `restart` and `archive`, `create --cluster`, `upgrade` (its status,
 //!   check, live, no-wait and watch forms), their refusals, answers the
 //!   readers raise on, no answer, the cell socket, and the environment
 //!   settings that hand them to the shell.
@@ -51,12 +51,21 @@ const CLUSTERS_STATUS: &str = r#"{"ok":true,"defaultMajor":17,"defaultMajorPinne
 const CLUSTERS: &str = r#"{"clusters":[
  {"label":"17/main","major":17,"name":"main","port":5432,"unit":"pg@17-main","role":"primary","state":"online",
   "health":{"connections":3,"maxConnections":100,"archiveMode":"on","databases":[{"name":"a","bytes":3145728},{"name":"z","bytes":1572864}],
-   "archiver":{"archivedCount":4,"failedCount":0,"lastArchivedAt":"t1"}}},
+   "archiver":{"archivedCount":4,"failedCount":0,"lastArchivedAt":"t1","currentLsn":"0/1A2B3C4D"}}},
  {"label":"17/feedback","major":17,"name":"feedback","port":5434,"unit":"pg@17-feedback","role":"named","state":"online","walArchive":true,
   "health":{"online":false}},
  {"major":16,"port":5433,"role":"foreign","state":"online","health":{"error":"no access"}},
  {"label":"","major":15,"name":null,"port":5435,"health":{"databases":[]}}],
  "helperView":{"ok":true}}"#;
+
+/// `--health` with no WAL archive: the current WAL position still prints;
+/// a null one, an empty one and no archiver print nothing.
+const CLUSTERS_LSN: &str = r#"{"clusters":[
+ {"label":"17/main","port":5432,"health":{"connections":1,"maxConnections":100,"archiveMode":"off","archiver":{"currentLsn":"0/16B3748"}}},
+ {"label":"17/b","port":5434,"health":{"connections":1,"maxConnections":100,"archiver":{"currentLsn":null}}},
+ {"label":"17/c","port":5435,"health":{"connections":1,"maxConnections":100,"archiver":{"currentLsn":""}}},
+ {"label":"17/d","port":5436,"health":{"connections":1,"maxConnections":100}},
+ {"label":"17/e","port":5437,"health":{"connections":1,"maxConnections":100,"archiver":{"currentLsn":["0/1",2]}}}]}"#;
 
 const CREATE: &str = r#"{"ok":true,"name":"app_db","major":17,"majorNote":"newest","existing":true,"dsn":"postgres://x","migratorDsn":"postgres://m",
  "dsnHint":"k2 db dsn --reveal","kept":{"ref":"vault:db/app","name":"DATABASE_URL"},"cap":{"used":2,"cap":0},
@@ -69,6 +78,10 @@ const DOCTOR: &str = r#"{"ok":true,"baked":true,"unit":"pg","select1":1,"install
 
 const HOME: &str = r#"{"homeDb":{"file":"k2.db","outcome":"kept","reason":"more workspaces","markerAt":"t","held":true,
  "blocked":{"message":"two copies"},"choice":{"keep":"k2.db"}}}"#;
+
+const ARCHIVE_ON: &str = r#"{"ok":true,"cluster":"17/fb é","walArchive":true,"changed":true,"restarted":true,"walSpool":"/var/lib/postgresql/k2-wal/17-fb"}"#;
+
+const ARCHIVE_OFF: &str = r#"{"ok":true,"cluster":"17/fb","walArchive":false,"changed":true,"restarted":true,"walSpool":"/var/lib/postgresql/k2-wal/17-fb","walSpoolKept":true}"#;
 
 fn ok_owner(name: &'static str, args: &'static [&'static str], replies: Vec<Reply>) -> Case {
     let n = replies.len();
@@ -400,6 +413,25 @@ fn db_answers_as_the_shell_does() {
             &["clusters", "--health", "--json"],
             vec![ok(CLUSTERS_STATUS), ok(CLUSTERS)],
         ),
+        ok_owner(
+            "clusters --health, the current WAL position",
+            &["clusters", "--health"],
+            vec![ok(CLUSTERS_STATUS), ok(CLUSTERS_LSN)],
+        ),
+        // `a.get("currentLsn")` on an archiver that is no dict raises,
+        // archive mode on or not.
+        traceback(case(
+            "clusters --health, an archiver that is a list",
+            &["clusters", "--health"],
+            &[],
+            vec![
+                ok(CLUSTERS_STATUS),
+                ok(r#"{"clusters":[{"label":"x","health":{"connections":1,"archiver":[1]}}]}"#),
+            ],
+            owner_and_port,
+            1,
+            2,
+        )),
         ok_owner(
             "clusters, the helper says no",
             &["clusters"],
@@ -1222,6 +1254,176 @@ fn db_compute_verbs_answer_as_the_shell_does() {
             0,
             1,
         ),
+        // `cluster archive`: POST /cli/db/clusters/archive.
+        // covers: db cluster archive
+        case(
+            "cluster archive on, restarted",
+            &["cluster", "archive", "fb é", "on"],
+            &[],
+            vec![ok(ARCHIVE_ON)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        // covers: db cluster archive --json
+        case(
+            "cluster archive --json",
+            &["cluster", "archive", "fb", "off", "--json"],
+            &[],
+            vec![ok(ARCHIVE_OFF)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "cluster archive off, the spool kept",
+            &["cluster", "archive", "fb", "off"],
+            &[],
+            vec![ok(ARCHIVE_OFF)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "cluster archive on, a stopped cluster",
+            &["cluster", "archive", "fb", "on"],
+            &[],
+            vec![ok(
+                r#"{"cluster":"17/fb","walArchive":true,"changed":true,"restarted":false,"walSpool":"/s"}"#,
+            )],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "cluster archive, already in that state",
+            &["cluster", "archive", "fb", "off"],
+            &[],
+            vec![ok(r#"{"cluster":"17/fb","walArchive":false,"changed":false}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "cluster archive, an empty answer",
+            &["cluster", "archive", "fb", "on"],
+            &[],
+            vec![ok("{}")],
+            owner_and_port,
+            0,
+            1,
+        ),
+        traceback(case(
+            "cluster archive, an answer that is a list",
+            &["cluster", "archive", "fb", "on"],
+            &[],
+            vec![ok("[1]")],
+            owner_and_port,
+            1,
+            1,
+        )),
+        case(
+            "cluster archive, no name",
+            &["cluster", "archive"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "cluster archive, a flag for a name",
+            &["cluster", "archive", "--json", "on"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "cluster archive, no state",
+            &["cluster", "archive", "fb"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "cluster archive, a state that is neither",
+            &["cluster", "archive", "fb", "yes"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "cluster archive, a word after the state",
+            &["cluster", "archive", "fb", "on", "now"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "cluster archive, a helper below 18",
+            &["cluster", "archive", "fb", "on"],
+            &[],
+            vec![answer(
+                409,
+                r#"{"error":{"code":"helper_needed","hint":"update the root helper"}}"#,
+            )],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "cluster archive, refused as usage",
+            &["cluster", "archive", "fb", "on"],
+            &[],
+            vec![answer(400, r#"{"error":{"code":"usage","hint":"bad"}}"#)],
+            owner_and_port,
+            2,
+            1,
+        ),
+        case(
+            "cluster archive, not found",
+            &["cluster", "archive", "fb", "on"],
+            &[],
+            vec![answer(404, r#"{"error":{"code":"unknown_cluster","hint":"none"}}"#)],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "cluster archive, the permission note",
+            &["cluster", "archive", "fb", "on"],
+            &[],
+            vec![answer(403, PERMISSION_ASK)],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "cluster archive, closed with nothing",
+            &["cluster", "archive", "fb", "on"],
+            &[],
+            vec![Reply::Close],
+            owner_and_port,
+            3,
+            1,
+        ),
+        cell(case(
+            "cluster archive on the cell socket",
+            &["cluster", "archive", "fb", "on"],
+            &[],
+            vec![ok(ARCHIVE_ON)],
+            nothing,
+            0,
+            1,
+        )),
         case(
             "cluster create, a bad port",
             &["cluster", "create", "17", "--name", "fb", "--port", "5450"],
@@ -1621,6 +1823,24 @@ fn db_compute_verbs_answer_as_the_shell_does() {
         shell(case(
             "cluster restart -h",
             &["cluster", "restart", "fb", "-h"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        )),
+        shell(case(
+            "cluster archive on -h",
+            &["cluster", "archive", "fb", "on", "-h"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        )),
+        shell(case(
+            "cluster archive --help",
+            &["cluster", "archive", "--help", "fb", "off"],
             &[],
             vec![],
             owner_and_port,

@@ -93,44 +93,46 @@ pub mod line {
     pub const CLUSTERS_ARCHIVER: u32 = 313;
     pub const CLUSTERS_CONNECTIONS: u32 = 314;
     pub const CLUSTERS_WAL: u32 = 316;
-    pub const CLUSTERS_UPGRADES: u32 = 317;
-    pub const CLUSTERS_UPGRADE: u32 = 318;
-    pub const DEFAULT_MAJOR: u32 = 320;
-    pub const STATE: u32 = 322;
-    pub const CREATE: u32 = 324;
-    pub const CREATE_KEPT: u32 = 336;
-    pub const CREATE_CAP: u32 = 342;
-    pub const CREATE_APPS: u32 = 343;
-    pub const CREATE_APP: u32 = 344;
-    pub const DSN: u32 = 348;
-    pub const LIST: u32 = 359;
-    pub const LIST_LEN: u32 = 360;
-    pub const LIST_FOR: u32 = 361;
-    pub const LIST_ROW: u32 = 362;
-    pub const MIGRATE: u32 = 364;
-    pub const MIGRATE_APPLIED: u32 = 367;
-    pub const MIGRATE_NOOP: u32 = 368;
-    pub const MIGRATE_NONE: u32 = 371;
-    pub const DUMP: u32 = 373;
-    pub const RESTORE: u32 = 375;
-    pub const DROP: u32 = 377;
-    pub const DROP_APPS: u32 = 378;
-    pub const DROP_APP: u32 = 379;
-    pub const GRANT: u32 = 381;
-    pub const GRANT_APPS: u32 = 384;
-    pub const GRANT_APP: u32 = 385;
-    pub const REVOKE: u32 = 387;
-    pub const REVOKE_APPS: u32 = 388;
-    pub const REVOKE_APP: u32 = 389;
-    pub const BIND: u32 = 391;
-    pub const DOCTOR: u32 = 393;
-    pub const DOCTOR_CLUSTERS: u32 = 399;
-    pub const DOCTOR_CLUSTER: u32 = 401;
-    pub const DOCTOR_RAM: u32 = 403;
-    pub const DOCTOR_GUCS: u32 = 413;
-    pub const DOCTOR_GUC: u32 = 414;
-    pub const DOCTOR_HINT: u32 = 415;
-    pub const OTHER: u32 = 418;
+    pub const CLUSTERS_LSN: u32 = 317;
+    pub const CLUSTERS_LSN_PRINT: u32 = 318;
+    pub const CLUSTERS_UPGRADES: u32 = 319;
+    pub const CLUSTERS_UPGRADE: u32 = 320;
+    pub const DEFAULT_MAJOR: u32 = 322;
+    pub const STATE: u32 = 324;
+    pub const CREATE: u32 = 326;
+    pub const CREATE_KEPT: u32 = 338;
+    pub const CREATE_CAP: u32 = 344;
+    pub const CREATE_APPS: u32 = 345;
+    pub const CREATE_APP: u32 = 346;
+    pub const DSN: u32 = 350;
+    pub const LIST: u32 = 361;
+    pub const LIST_LEN: u32 = 362;
+    pub const LIST_FOR: u32 = 363;
+    pub const LIST_ROW: u32 = 364;
+    pub const MIGRATE: u32 = 366;
+    pub const MIGRATE_APPLIED: u32 = 369;
+    pub const MIGRATE_NOOP: u32 = 370;
+    pub const MIGRATE_NONE: u32 = 373;
+    pub const DUMP: u32 = 375;
+    pub const RESTORE: u32 = 377;
+    pub const DROP: u32 = 379;
+    pub const DROP_APPS: u32 = 380;
+    pub const DROP_APP: u32 = 381;
+    pub const GRANT: u32 = 383;
+    pub const GRANT_APPS: u32 = 386;
+    pub const GRANT_APP: u32 = 387;
+    pub const REVOKE: u32 = 389;
+    pub const REVOKE_APPS: u32 = 390;
+    pub const REVOKE_APP: u32 = 391;
+    pub const BIND: u32 = 393;
+    pub const DOCTOR: u32 = 395;
+    pub const DOCTOR_CLUSTERS: u32 = 401;
+    pub const DOCTOR_CLUSTER: u32 = 403;
+    pub const DOCTOR_RAM: u32 = 405;
+    pub const DOCTOR_GUCS: u32 = 415;
+    pub const DOCTOR_GUC: u32 = 416;
+    pub const DOCTOR_HINT: u32 = 417;
+    pub const OTHER: u32 = 420;
 }
 
 /// The verbs `_db_py` takes (`D_VERB`).
@@ -1315,6 +1317,10 @@ impl Py<'_> {
                             py::str_of(&or(at(&a, "lastFailedAt"), s("-")))
                         );
                         self.print(t);
+                    }
+                    if truthy(g(&a, "currentLsn", line::CLUSTERS_LSN)?) {
+                        let lsn = st(at(&a, "currentLsn"));
+                        self.print(format!("      current WAL position: {lsn}"));
                     }
                 }
             }

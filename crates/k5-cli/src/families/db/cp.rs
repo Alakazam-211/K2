@@ -1,13 +1,14 @@
 //! The `db` verbs that go through the shell's compute library
 //! (`cli/src/compute-lib.sh`, `_compute_send`) rather than `_db_py`:
-//! `versions-access`, `cluster create`, `cluster restart`, `create
-//! --cluster` (`_db_named_post`) and `upgrade`, as `cmd_db` answers them
-//! (`cli/src/db-store.sh`).
+//! `versions-access`, `cluster create`, `cluster restart`, `cluster
+//! archive`, `create --cluster` (`_db_named_post`) and `upgrade`, as
+//! `cmd_db` answers them (`cli/src/db-store.sh`).
 //!
 //! - The requests are [`Client::compute_send`]'s: the cell socket first
 //!   when there is a passport with a live one, then TCP. `versions-access`
 //!   goes over TCP only (`_compute_call … tcp`). The POSTs to
-//!   `/cli/db/clusters` and `/cli/db/upgrade` may take 900 s
+//!   `/cli/db/clusters`, `/cli/db/clusters/archive` and `/cli/db/upgrade`
+//!   may take 900 s
 //!   (`K2_CP_MAX_TIME=900`); every answer's `permission` object is noted
 //!   for the EXIT trap (`_compute_split`).
 //! - The bodies are `_compute_json`'s ([`Body`]): the keys in the order
@@ -72,11 +73,14 @@ const CC_MAJOR: &str = concat!(
 );
 const CC_NAME: &str = concat!(cli_name!(), " db cluster create <major> --name <name>");
 const CR_NAME: &str = concat!(cli_name!(), " db cluster restart <name>");
+const CA_USAGE: &str = concat!(cli_name!(), " db cluster archive <name> on|off");
 const CLUSTER_USAGE: &str = concat!(
     cli_name!(),
     " db cluster create <major> --name <name> [--port <port>] [--wal-archive] | ",
     cli_name!(),
-    " db cluster restart <name>"
+    " db cluster restart <name> | ",
+    cli_name!(),
+    " db cluster archive <name> on|off"
 );
 const CREATE_CLUSTER_USAGE: &str = concat!(
     cli_name!(),
@@ -102,6 +106,8 @@ pub enum What {
     Cluster,
     /// `cluster restart`.
     Restart,
+    /// `cluster archive` (`POST /cli/db/clusters/archive`).
+    Archive,
     /// `create --cluster`.
     CreateDb,
 }
@@ -117,6 +123,8 @@ pub struct Named {
     pub major: String,
     pub port: String,
     pub wal: bool,
+    /// `cluster archive`'s `on` or `off`.
+    pub archive: String,
 }
 
 impl Named {
@@ -130,6 +138,7 @@ impl Named {
             major: String::new(),
             port: String::new(),
             wal: false,
+            archive: String::new(),
         }
     }
 }
@@ -185,7 +194,7 @@ pub fn versions_access(a: &mut Words) -> Result<Form, Form> {
     }
 }
 
-/// `cluster create|restart`: its words after the verb.
+/// `cluster create|restart|archive`: its words after the verb.
 pub fn cluster(a: &mut Words) -> Result<Form, Form> {
     let op = a.at(0);
     a.shift(1);
@@ -241,6 +250,29 @@ pub fn cluster(a: &mut Words) -> Result<Form, Form> {
             }
             if k.name.is_empty() {
                 return Err(usage(CR_NAME));
+            }
+            Ok(cp(Ask::Named(k)))
+        }
+        "archive" => {
+            // The name, then the state, each `"${1:-}"; shift`; then the
+            // loop; then the name's check and the state's.
+            let mut k = Named::new(What::Archive);
+            k.name = a.at(0).to_string();
+            a.shift(1);
+            k.archive = a.at(0).to_string();
+            a.shift(1);
+            while let Some(w) = a.first() {
+                match w {
+                    "--json" => k.json = true,
+                    _ => return Err(usage(format!("unexpected '{w}' — {CA_USAGE}"))),
+                }
+                a.shift(1);
+            }
+            if k.name.is_empty() || k.name.starts_with('-') {
+                return Err(usage(CA_USAGE));
+            }
+            if !matches!(k.archive.as_str(), "on" | "off") {
+                return Err(usage(format!("{CA_USAGE} (got '{}')", k.archive)));
             }
             Ok(cp(Ask::Named(k)))
         }
@@ -529,9 +561,17 @@ fn named_send(cp: &mut Cp, project: &str, k: &Named) -> Result<Exit, Exit> {
             .s("op", "restart")
             .s("project", &ws)
             .s("name", &k.name),
+        What::Archive => Body::default()
+            .s("project", &ws)
+            .s("name", &k.name)
+            .s("archive", &k.archive),
     }
     .text();
-    let (status, answer) = cp.long_post("/cli/db/clusters", &body)?;
+    let path = match k.what {
+        What::Archive => "/cli/db/clusters/archive",
+        _ => "/cli/db/clusters",
+    };
+    let (status, answer) = cp.long_post(path, &body)?;
     if status != "200" {
         let shown = named_fail(&answer);
         let exit = shown.print();
@@ -905,18 +945,48 @@ fn named_show(what: What, body: &[u8]) -> Shown {
             What::Restart => {
                 p.print(format!("restarted {}", st(py_get(&v, "cluster", 11)?)));
             }
+            What::Archive => {
+                // Each `.get` at its line; only line 13's can raise (a `v`
+                // that is no dict).
+                let on = |k: &str, n: u32| -> Result<bool, Raise> {
+                    Ok(py_get(&v, k, n)?.is_some_and(py::truthy))
+                };
+                let wal = on("walArchive", 13)?;
+                let state = if wal { "on" } else { "off" };
+                if !on("changed", 14)? {
+                    let c = st(py_get(&v, "cluster", 15)?);
+                    p.print(format!(
+                        "WAL archiving on {c} is already {state} (nothing changed)"
+                    ));
+                } else {
+                    let c = st(py_get(&v, "cluster", 17)?);
+                    let when = if on("restarted", 17)? {
+                        " (restarted)"
+                    } else {
+                        " (applies when it next starts)"
+                    };
+                    p.print(format!("WAL archiving on {c} is now {state}{when}"));
+                }
+                if on("walArchive", 18)? {
+                    let spool = st(py_get(&v, "walSpool", 19)?);
+                    p.print(format!("spool: {spool} (a backup ships and prunes it)"));
+                } else if on("walSpoolKept", 20)? {
+                    let spool = st(py_get(&v, "walSpool", 21)?);
+                    p.print(format!("spool kept: {spool} (nothing in it was removed)"));
+                }
+            }
             What::CreateDb => {
-                let name = st(py_get(&v, "name", 13)?);
-                let cluster = or(py_get(&v, "cluster", 13)?, s("?"));
+                let name = st(py_get(&v, "name", 23)?);
+                let cluster = or(py_get(&v, "cluster", 23)?, s("?"));
                 p.print(format!("created {name} in {}", py::str_of(&cluster)));
-                if py_get(&v, "existing", 14)?.is_some_and(py::truthy) {
+                if py_get(&v, "existing", 24)?.is_some_and(py::truthy) {
                     p.print("(already there: same --id or name)");
                 }
-                if let Some(d) = py_get(&v, "dsn", 16)?.filter(|x| py::truthy(x)) {
+                if let Some(d) = py_get(&v, "dsn", 26)?.filter(|x| py::truthy(x)) {
                     p.print(format!("dsn: {}", py::str_of(d)));
                 }
-                if py_get(&v, "dsnHint", 18)?.is_some_and(py::truthy) {
-                    let h = index(&v, "dsnHint", 19)?;
+                if py_get(&v, "dsnHint", 28)?.is_some_and(py::truthy) {
+                    let h = index(&v, "dsnHint", 29)?;
                     p.print(format!("no password shown; {}", py::str_of(h)));
                 }
             }
@@ -1209,6 +1279,97 @@ fn poll(body: &[u8], seen: &str, json_out: bool) -> (String, Shown) {
 mod tests {
     use super::*;
 
+    fn source() -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/db-store.sh");
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+    }
+
+    /// `_db_named_post`'s reader: the lines [`named_show`] names are the
+    /// shell's (line 1 is `import json,os,sys`).
+    #[test]
+    fn the_named_reader_s_lines_are_the_shell_s() {
+        let text = source();
+        let body = text
+            .split_once("K2_DN_WHAT=\"$what\" python3 -c 'import json,os,sys\n")
+            .expect("_db_named_post's reader")
+            .1;
+        let lines: Vec<&str> = body.split('\n').collect();
+        let at = |n: usize| lines[n - 2].trim_start();
+        for (n, want) in [
+            (2, "v=json.load(sys.stdin)"),
+            (5, "c=v.get(\"cluster\") or {}"),
+            (11, "print(\"restarted %s\" % v.get(\"cluster\"))"),
+            (12, "elif w == \"archive\":"),
+            (13, "state = \"on\" if v.get(\"walArchive\") else \"off\""),
+            (14, "if not v.get(\"changed\"):"),
+            (15, "print(\"WAL archiving on %s is already %s (nothing changed)\" % (v.get(\"cluster\"), state))"),
+            (17, "print(\"WAL archiving on %s is now %s%s\" % (v.get(\"cluster\"), state, \" (restarted)\" if v.get(\"restarted\") else \" (applies when it next starts)\"))"),
+            (18, "if v.get(\"walArchive\"):"),
+            (19, "print(\"spool: %s (a backup ships and prunes it)\" % v.get(\"walSpool\"))"),
+            (20, "elif v.get(\"walSpoolKept\"):"),
+            (21, "print(\"spool kept: %s (nothing in it was removed)\" % v.get(\"walSpool\"))"),
+            (23, "print(\"created %s in %s\" % (v.get(\"name\"), v.get(\"cluster\") or \"?\"))"),
+            (24, "if v.get(\"existing\"):"),
+            (26, "if v.get(\"dsn\"):"),
+            (28, "if v.get(\"dsnHint\"):"),
+            (29, "print(\"no password shown; %s\" % v[\"dsnHint\"])'"),
+        ] {
+            assert_eq!(at(n), want, "line {n}");
+        }
+    }
+
+    /// `cluster archive`'s words, lines and request, as the shell's arm
+    /// has them.
+    #[test]
+    fn cluster_archive_is_the_shell_s() {
+        let text = source();
+        for shell in [
+            r#"while [ $# -gt 0 ]; do case "$1" in --json) as_json=true; shift ;; *) _db_err "usage" "unexpected '$1' — k2 db cluster archive <name> on|off"; exit 2 ;; esac; done"#,
+            r#"case "$c_name" in ""|-*) _db_err "usage" "k2 db cluster archive <name> on|off"; exit 2 ;; esac"#,
+            r#"case "$c_state" in on|off) ;; *) _db_err "usage" "k2 db cluster archive <name> on|off (got '${c_state}')"; exit 2 ;; esac"#,
+            r#"_db_named_post "$(_compute_json K2_CJ_project="$(_compute_ws "")" K2_CJ_name="$c_name" K2_CJ_archive="$c_state")" "$as_json" archive /cli/db/clusters/archive ;;"#,
+            r#"*) _db_err "usage" "k2 db cluster create <major> --name <name> [--port <port>] [--wal-archive] | k2 db cluster restart <name> | k2 db cluster archive <name> on|off"; exit 2 ;;"#,
+            r#"local body="$1" as_json="$2" what="$3" path="${4:-/cli/db/clusters}""#,
+        ] {
+            assert!(text.contains(shell), "db-store.sh no longer has {shell:?}");
+        }
+        use super::super::{parse, Form};
+        let named = |w: &[&str]| match parse(w).form {
+            Form::Cp(a) => match *a {
+                Ask::Named(k) => k,
+                other => panic!("{w:?}: {other:?}"),
+            },
+            other => panic!("{w:?}: {other:?}"),
+        };
+        let hint = |w: &[&str]| match parse(w).form {
+            Form::Usage(h) => h,
+            other => panic!("{w:?}: {other:?}"),
+        };
+        let k = named(&["cluster", "archive", "fb", "on", "--json"]);
+        assert_eq!(
+            (k.what, k.name.as_str(), k.archive.as_str(), k.json),
+            (What::Archive, "fb", "on", true)
+        );
+        let k = named(&["cluster", "archive", "fb", "off"]);
+        assert_eq!((k.archive.as_str(), k.json), ("off", false));
+        assert_eq!(hint(&["cluster", "archive"]), CA_USAGE);
+        assert_eq!(hint(&["cluster", "archive", "--json"]), CA_USAGE);
+        assert_eq!(hint(&["cluster", "archive", "-x", "on"]), CA_USAGE);
+        assert_eq!(
+            hint(&["cluster", "archive", "fb", "--json"]),
+            format!("{CA_USAGE} (got '--json')")
+        );
+        assert_eq!(
+            hint(&["cluster", "archive", "fb", "yes"]),
+            format!("{CA_USAGE} (got 'yes')")
+        );
+        // The loop's line comes before the name's and the state's.
+        assert_eq!(
+            hint(&["cluster", "archive", "-x", "maybe", "more"]),
+            format!("unexpected 'more' — {CA_USAGE}")
+        );
+    }
+
     /// Every name a line prints is the brand's: an xy build says `xy`
     /// and `XY`, and no line says k2, k5 or K2.
     #[test]
@@ -1226,6 +1387,9 @@ mod tests {
             hint(&["cluster", "create", "17"]),
             hint(&["cluster", "create", "17", "--x"]),
             hint(&["cluster", "restart"]),
+            hint(&["cluster", "archive"]),
+            hint(&["cluster", "archive", "c"]),
+            hint(&["cluster", "archive", "c", "on", "x"]),
             hint(&["create", "--cluster", "c", "--test"]),
             hint(&["upgrade", "--status"]),
             hint(&["run"]),

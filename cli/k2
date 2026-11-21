@@ -8436,19 +8436,19 @@ cmd_talk() {
     local wake_timeout=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --from)      from="$2"; shift 2 ;;
-            --command)   command="$2"; shift 2 ;;
-            --lines)     lines="$2"; shift 2 ;;
-            --agent)     agent="$2"; shift 2 ;;
-            --session)   session="$2"; shift 2 ;;
-            --token)     token="$2"; shift 2 ;;
+            --from)      _need_value "$@"; from="$2"; shift 2 ;;
+            --command)   _need_value "$@"; command="$2"; shift 2 ;;
+            --lines)     _need_value "$@"; lines="$2"; shift 2 ;;
+            --agent)     _need_value "$@"; agent="$2"; shift 2 ;;
+            --session)   _need_value "$@"; session="$2"; shift 2 ;;
+            --token)     _need_value "$@"; token="$2"; shift 2 ;;
             --token-stdin) token_stdin=1; shift ;;
-            --answer)    answer="$2"; shift 2 ;;
-            --respond)   respond="$2"; shift 2 ;;
+            --answer)    _need_value "$@"; answer="$2"; shift 2 ;;
+            --respond)   _need_value "$@"; respond="$2"; shift 2 ;;
             --scout)     scout="true"; shift ;;
-            --answers)   answers="$2"; shift 2 ;;
+            --answers)   _need_value "$@"; answers="$2"; shift 2 ;;
             --no-wake)   wake="false"; shift ;;
-            --wake-timeout) wake_timeout="$2"; shift 2 ;;
+            --wake-timeout) _need_value "$@"; wake_timeout="$2"; shift 2 ;;
             --read-only|--dry-run|--peek) read_only="true"; shift ;;
             --)
                 # The rest is the address and the text, as typed.
@@ -8946,8 +8946,8 @@ cmd_agent_complete() {
     local agent="" file=""
     while [ $# -gt 0 ]; do
         case "$1" in
-            --agent) agent="$2"; shift 2 ;;
-            --file)  file="$2"; shift 2 ;;
+            --agent) _need_value "$@"; agent="$2"; shift 2 ;;
+            --file)  _need_value "$@"; file="$2"; shift 2 ;;
             *) shift ;;
         esac
     done
@@ -10492,38 +10492,38 @@ cmd_api_key() {
             while [[ $# -gt 0 ]]; do
                 [ "$1" != "--label" ] && [ "$1" != "--status" ] && other_flags=1
                 case "$1" in
-                    --label)        label="${2:-}"; shift 2 ;;
+                    --label)        _need_value "$@"; label="${2:-}"; shift 2 ;;
                     # PRD boot-status-ghost §5.1: a read-only STATUS key for a
                     # fleet monitor — full /boot-status only, no doors.
                     --status)       status_key=1; shift ;;
                     --hire)         hire=1; shift ;;
-                    --max-per-day)  h_day="${2:-}"; shift 2 ;;
-                    --max-live)     h_live="${2:-}"; shift 2 ;;
-                    --max-per-team) h_team="${2:-}"; shift 2 ;;
-                    --hire-db)      h_db="${2:-}"; shift 2 ;;
+                    --max-per-day)  _need_value "$@"; h_day="${2:-}"; shift 2 ;;
+                    --max-live)     _need_value "$@"; h_live="${2:-}"; shift 2 ;;
+                    --max-per-team) _need_value "$@"; h_team="${2:-}"; shift 2 ;;
+                    --hire-db)      _need_value "$@"; h_db="${2:-}"; shift 2 ;;
                     --link)         h_link=1; shift ;;
-                    --link-targets) h_targets="${2:-}"; shift 2 ;;
+                    --link-targets) _need_value "$@"; h_targets="${2:-}"; shift 2 ;;
                     --retire)       h_retire=1; shift ;;
-                    --reach)        h_reach="${2:-}"; shift 2 ;;
-                    --folder)       h_folder="${2:-}"; shift 2 ;;
+                    --reach)        _need_value "$@"; h_reach="${2:-}"; shift 2 ;;
+                    --folder)       _need_value "$@"; h_folder="${2:-}"; shift 2 ;;
                     # S5: Apps hired agents may get a login on. APP is a
                     # published service id or <workspace>/<name>; ROOMS a
                     # comma list (self = the hired agent); ROLES the highest
                     # role(s) — a hired agent may get that role or one no
                     # wider, whose rooms are all in ROOMS.
-                    --app-login)    h_apps="${h_apps}${2:-}"$'\n'; shift 2 ;;
+                    --app-login)    _need_value "$@"; h_apps="${h_apps}${2:-}"$'\n'; shift 2 ;;
                     # The LLM credential is read from stdin (hidden prompt on
                     # a terminal, else one line). Never an argument.
                     --key-stdin)    key_stdin=1; shift ;;
                     # Deprecated: the key on argv (readable via `ps`).
-                    --anthropic-key) anthropic="${2:-}"; key_on_argv=1; shift 2 ;;
+                    --anthropic-key) _need_value "$@"; anthropic="${2:-}"; key_on_argv=1; shift 2 ;;
                     # W5: provider-neutral alias for the same credential slot.
-                    --llm-key)      anthropic="${2:-}"; key_on_argv=1; shift 2 ;;
-                    --provider)     provider="${2:-}"; shift 2 ;;
-                    --base-url)     base_url="${2:-}"; shift 2 ;;
-                    --workspaces)   workspaces="${2:-}"; shift 2 ;;
-                    --allow)        allow="${2:-}"; shift 2 ;;
-                    --deny)         deny="${2:-}"; shift 2 ;;
+                    --llm-key)      _need_value "$@"; anthropic="${2:-}"; key_on_argv=1; shift 2 ;;
+                    --provider)     _need_value "$@"; provider="${2:-}"; shift 2 ;;
+                    --base-url)     _need_value "$@"; base_url="${2:-}"; shift 2 ;;
+                    --workspaces)   _need_value "$@"; workspaces="${2:-}"; shift 2 ;;
+                    --allow)        _need_value "$@"; allow="${2:-}"; shift 2 ;;
+                    --deny)         _need_value "$@"; deny="${2:-}"; shift 2 ;;
                     *)              echo "Unknown flag: $1" >&2; exit 1 ;;
                 esac
             done
@@ -10690,7 +10690,7 @@ except Exception as e:
             local c_apps="" c_none=0
             while [[ $# -gt 0 ]]; do
                 case "$1" in
-                    --app-login) c_apps="${c_apps}${2:-}"$'\n'; shift 2 ;;
+                    --app-login) _need_value "$@"; c_apps="${c_apps}${2:-}"$'\n'; shift 2 ;;
                     --none)      c_none=1; shift ;;
                     *)           echo "Unknown flag: $1" >&2; exit 2 ;;
                 esac

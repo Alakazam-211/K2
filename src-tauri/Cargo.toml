@@ -117,7 +117,11 @@ parking_lot = "0.12"
 # kessel-audio 0.2.3, K2's in-tree crate): additive. The plugin tells kessel-audio about a
 # call's busy moments (call start, audio session, route, camera, scene), and noise_removal
 # carries the grace counters and the stage's clock stats (logged by native_voice).
-tauri-plugin-sew-voice = { version = "=0.9.1", optional = true, features = ["video", "dfn3"] }
+# Sew 0.11.3 (0.9.3, with sew-call-client 0.9.3 and the other Sew crates 0.11.3; needs
+# kessel-audio 0.2.5, K2's in-tree crate): additive. VoiceControl::set_dsp_sched (from the
+# next call), the capture_stage_dsp_* fields and the native self-view sink; K2 calls none
+# of them yet, so native_voice is unchanged.
+tauri-plugin-sew-voice = { version = "=0.9.3", optional = true, features = ["video", "dfn3"] }
 zeroize = { version = "1", optional = true }
 
 # 0.46.4: removed direct deps no src-tauri source used (they came over

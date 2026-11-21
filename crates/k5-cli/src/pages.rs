@@ -746,13 +746,17 @@ pub fn session_checks(
 /// answer, asked as the shell asks ([`cards::ask`], [`CAPTURED_CARDS`]),
 /// or chat's manage setting ([`chat_manage`]). A `zen` form runs the
 /// router arm's Garden changes hint first, after the session checks, as
-/// the shell's router does ([`Variant::GardenHint`]).
+/// the shell's router does ([`Variant::GardenHint`]). A line its family
+/// answers ([`Variant::Family`]) is the family's, gates and all.
 pub fn help_page(
     form: &'static HelpForm,
     p: &Prelude,
     env: &Env,
     would_refuse: impl Fn() -> bool,
 ) -> Option<Page> {
+    if form.variant == Some(Variant::Family) {
+        return family_page(form);
+    }
     if !(p.port && p.token) {
         return None;
     }
@@ -790,6 +794,7 @@ pub fn help_page(
                 }
                 n
             }
+            Some(Variant::Family) => return family_page(form),
         };
         let c = text::CAPTURED.get(n)?;
         let exit = Exit::ALL
@@ -803,6 +808,26 @@ pub fn help_page(
     Some(Page {
         text: text::page(form.page)?.into(),
         stderr: form.stderr,
+        exit,
+        lead: None,
+    })
+}
+
+/// A [`Variant::Family`] form: its family's code runs the line, exactly
+/// as it runs any other line of the family (its gates, its probes, its
+/// output and exit), and the page is empty with the family's exit.
+/// `None` where the family hands it to the shell, before anything is
+/// printed or sent.
+fn family_page(form: &HelpForm) -> Option<Page> {
+    let args: Vec<std::ffi::OsString> = form.argv.iter().map(Into::into).collect();
+    let found = crate::route::find(crate::route::TABLE, &args);
+    let noun = found
+        .noun
+        .filter(|_| found.owner == crate::route::Owner::Native)?;
+    let exit = (noun.run)(&args)?;
+    Some(Page {
+        text: "".into(),
+        stderr: false,
         exit,
         lead: None,
     })
@@ -1686,6 +1711,7 @@ mod tests {
             let first = f.captured.expect("a captured form");
             match f.variant {
                 None => {}
+                Some(Variant::Family) => panic!("{:?}: a family form in the list", f.argv),
                 Some(Variant::GardenHint) => {
                     // No project path: the hint does nothing.
                     hint += 1;

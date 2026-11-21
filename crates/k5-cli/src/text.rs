@@ -54,6 +54,11 @@ pub enum Variant {
     /// workspace, a line on stderr and a marker in its `.k2`. The page is
     /// `captured` either way.
     GardenHint,
+    /// A line the shell's verb reads as any other (no help page: `-h` or
+    /// `--help` is a word it takes, or ignores), which the family's own
+    /// code answers as the shell does ([`FAMILY_FORMS`],
+    /// [`crate::pages::help_page`]). No page of its own.
+    Family,
 }
 
 /// What the shell printed for a captured help form: the exit code, and
@@ -94,13 +99,71 @@ pub fn page(key: &str) -> Option<&'static str> {
 }
 
 /// The help form that is exactly `argv`, if the binary answers it: a
-/// file's print ([`HELP_FORMS`]), or a captured form ([`captured_form`]).
+/// file's print ([`HELP_FORMS`]), a captured form ([`captured_form`]), or
+/// a line its family answers ([`FAMILY_FORMS`]).
 pub fn help_form(argv: &[&str]) -> Option<&'static HelpForm> {
     HELP_FORMS
         .iter()
         .find(|f| f.argv == argv)
         .or_else(|| captured_form(argv))
+        .or_else(|| FAMILY_FORMS.iter().find(|f| f.argv == argv))
 }
+
+/// A [`Variant::Family`] form.
+macro_rules! family {
+    ($($word:literal)+) => {
+        HelpForm {
+            argv: &[$($word),+],
+            page: "",
+            stderr: false,
+            code: 0,
+            captured: None,
+            variant: Some(Variant::Family),
+        }
+    };
+}
+
+/// The help lines whose family answers them ([`Variant::Family`]): the
+/// front sends a line with `-h` or `--help` to a page, never to the
+/// family, so these reach the family's code through their page.
+///
+/// `permission` ([`crate::families::permission`]): `cmd_permission` asks
+/// whether the family exists first (the owner token over TCP for the
+/// owner, the passport's probe for an agent; `beta` with no probe for the
+/// owner), and off is `Unknown command: permission` and the daily tier.
+/// On, `_permission_cmd` reads `-h` or `--help` as help only first or
+/// after `request`; after any other verb it is that verb's word (bash
+/// bugs, copied until the shell's fix lands: `status`, `pending`,
+/// `approve` and `beta status` ask the daemon, and `cancel`, `beta on`
+/// and `approvers` change something).
+pub static FAMILY_FORMS: &[HelpForm] = &[
+    family!("permission" "--help"),
+    family!("permission" "-h"),
+    family!("permission" "request" "--help"),
+    family!("permission" "request" "-h"),
+    family!("permission" "update" "--help"),
+    family!("permission" "update" "-h"),
+    family!("permission" "status" "--help"),
+    family!("permission" "status" "-h"),
+    family!("permission" "cancel" "--help"),
+    family!("permission" "cancel" "-h"),
+    family!("permission" "list" "--help"),
+    family!("permission" "list" "-h"),
+    family!("permission" "pending" "--help"),
+    family!("permission" "pending" "-h"),
+    family!("permission" "approve" "--help"),
+    family!("permission" "approve" "-h"),
+    family!("permission" "beta" "--help"),
+    family!("permission" "beta" "-h"),
+    family!("permission" "beta" "on" "--help"),
+    family!("permission" "beta" "on" "-h"),
+    family!("permission" "beta" "status" "--help"),
+    family!("permission" "beta" "status" "-h"),
+    family!("permission" "approvers" "--help"),
+    family!("permission" "approvers" "-h"),
+    family!("permission" "agent" "--help"),
+    family!("permission" "agent" "-h"),
+];
 
 /// The captured help form that is exactly `argv` ([`CAPTURED_FORMS`],
 /// in argv order).
@@ -334,6 +397,27 @@ mod tests {
             assert_eq!(f.variant, None);
         }
         assert_eq!(captured_form(&["agent", "nope", "--help"]), None);
+    }
+
+    /// Each family form is once, in neither other list, and its line is
+    /// a `Native` family's.
+    #[test]
+    fn the_family_forms_are_native_families_lines() {
+        for (i, f) in FAMILY_FORMS.iter().enumerate() {
+            assert_eq!(f.variant, Some(Variant::Family), "{:?}", f.argv);
+            assert!(!HELP_FORMS.iter().any(|h| h.argv == f.argv), "{:?}", f.argv);
+            assert_eq!(captured_form(f.argv), None, "{:?}", f.argv);
+            assert!(std::ptr::eq(help_form(f.argv).unwrap(), f), "{:?}", f.argv);
+            assert!(
+                !FAMILY_FORMS[..i].iter().any(|g| g.argv == f.argv),
+                "{:?} twice",
+                f.argv
+            );
+            let args: Vec<std::ffi::OsString> = f.argv.iter().map(Into::into).collect();
+            let found = crate::route::find(crate::route::TABLE, &args);
+            assert_eq!(found.owner, crate::route::Owner::Native, "{:?}", f.argv);
+            assert!(f.argv.iter().any(|w| *w == "-h" || *w == "--help"));
+        }
     }
 
     #[test]

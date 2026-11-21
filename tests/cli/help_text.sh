@@ -360,7 +360,7 @@ if [ "$NEW" != "$CLI_BASH_SOURCE" ]; then
         native -- $argv
     done < "$LIST"
     [ "$rows" -gt 300 ] || bad "only $rows rows in $LIST"
-    for cmd in "permission --help" "chat --help x" "mail send x --help" "help mail send" "zen --help" \
+    for cmd in "done --help" "chat --help x" "mail send x --help" "help mail send" "read --help" \
         "wiki nope" "mail --help x" "help nope x"; do
         # shellcheck disable=SC2086
         handed -- $cmd

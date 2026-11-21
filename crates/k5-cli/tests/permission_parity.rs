@@ -89,17 +89,11 @@ fn the_family_exists_only_when_the_probe_says_so() {
         vec![
             case("on: the usage", &[], &[], vec![on()], owner_and_port, 0, 1),
             case("help", &["help"], &[], vec![on()], owner_and_port, 0, 1),
-            // The front hands a line with -h or --help to the shell.
-            shell(case(
-                "--help",
-                &["--help"],
-                &[],
-                vec![on()],
-                owner_and_port,
-                0,
-                1,
-            )),
-            shell(case("-h", &["-h"], &[], vec![on()], owner_and_port, 0, 1)),
+            // A help line is the family's too (its help form,
+            // text::FAMILY_FORMS): the probe, then the usage.
+            // native: permission --help
+            case("--help", &["--help"], &[], vec![on()], owner_and_port, 0, 1),
+            case("-h", &["-h"], &[], vec![on()], owner_and_port, 0, 1),
             case(
                 "an unknown verb: the usage on stderr",
                 &["nope", "x"],
@@ -503,7 +497,8 @@ fn request_s_words_as_the_shell_reads_them() {
             one("--dry-run=1 is a flag", &["request", "x", "--dry-run=1"], 2),
             one("two actions", &["request", "x", "y", "--why", "w"], 2),
             shell(one("--help after words", &["request", "x", "--help"], 0)),
-            shell(one("-h first", &["request", "-h"], 0)),
+            // A help form: the family's (text::FAMILY_FORMS).
+            one("-h first", &["request", "-h"], 0),
         ],
     );
 }
@@ -1158,4 +1153,139 @@ fn permission_hands_these_to_the_shell() {
             0,
         )
     });
+}
+
+/// Every `-h` and `--help` line of the family (its help forms,
+/// `text::FAMILY_FORMS`) is the family's code, as `cmd_permission` runs
+/// it: the probe first (the owner token over TCP for the owner, none for
+/// the owner's `beta`; the passport's probe for an agent), off is the
+/// unknown command and the daily tier, and on, `_permission_cmd` reads
+/// the word as help only first or after `request`; after any other verb
+/// it is that verb's word. Bash bugs, copied until the shell's fix
+/// lands (help never acts): `status`, `pending`, `approve` and `beta
+/// status` ask the daemon, and `cancel`, `beta on` and `approvers`
+/// change something. These rows flip when the fix lands.
+#[test]
+fn the_help_lines_are_the_family_s() {
+    let rig = Rig::new(VERB, "help");
+    let h = with_passport;
+    let pending = r#"{"requests":[{"requestId":"pr_1","cardId":"c_1","addr":"k2/acme"}]}"#;
+    let mut cases = Vec::new();
+    for flag in ["--help", "-h"] {
+        // Each line twice, once a flag: the args are &'static.
+        let line = |a: &'static [&'static str], b: &'static [&'static str]| {
+            if flag == "--help" {
+                a
+            } else {
+                b
+            }
+        };
+        // Each row's name once in the rig.
+        let n = |name: &str| -> &'static str { Box::leak(format!("{name} ({flag})").into_boxed_str()) };
+        cases.extend([
+            // native: permission request --help
+            case(n("request"), line(&["request", "--help"], &["request", "-h"]), &[], vec![on()], owner_and_port, 0, 1),
+            // native: permission update --help
+            case(n("update"), line(&["update", "--help"], &["update", "-h"]), &[], vec![on()], owner_and_port, 2, 1),
+            // native: permission status --help
+            case(n("status: the word is an id (a bash bug: help asks)"),
+                line(&["status", "--help"], &["status", "-h"]),
+                &[],
+                vec![on(), ok(r#"{"requests":[]}"#)],
+                owner_and_port,
+                0,
+                2,
+            ),
+            // native: permission cancel --help
+            case(n("cancel: the word is an id (a bash bug: help acts)"),
+                line(&["cancel", "--help"], &["cancel", "-h"]),
+                &[],
+                vec![on(), ok("{}")],
+                owner_and_port,
+                0,
+                2,
+            ),
+            // native: permission list --help
+            case(n("list"), line(&["list", "--help"], &["list", "-h"]), &[], vec![on()], owner_and_port, 2, 1),
+            // native: permission pending --help
+            case(n("pending: the word is ignored (a bash bug: help asks)"),
+                line(&["pending", "--help"], &["pending", "-h"]),
+                &[],
+                vec![on(), ok(pending)],
+                owner_and_port,
+                0,
+                2,
+            ),
+            // native: permission approve --help
+            case(n("approve: the word is an id (a bash bug: help asks)"),
+                line(&["approve", "--help"], &["approve", "-h"]),
+                &[],
+                vec![on(), ok(pending)],
+                owner_and_port,
+                4,
+                2,
+            ),
+            // native: permission beta --help
+            case(n("beta: no probe, the usage line"), line(&["beta", "--help"], &["beta", "-h"]), &[], vec![], owner_and_port, 2, 0),
+            // native: permission beta on --help
+            case(n("beta on: no probe, the switch (a bash bug: help acts)"),
+                line(&["beta", "on", "--help"], &["beta", "on", "-h"]),
+                &[],
+                vec![ok("{}")],
+                owner_and_port,
+                0,
+                1,
+            ),
+            // native: permission beta status --help
+            case(n("beta status: no probe (a bash bug: help asks)"),
+                line(&["beta", "status", "--help"], &["beta", "status", "-h"]),
+                &[],
+                vec![ok(r#"{"settings":{"permissionCards":true}}"#)],
+                owner_and_port,
+                0,
+                1,
+            ),
+            // native: permission approvers --help
+            case(n("approvers: the word is a login (a bash bug: help acts)"),
+                line(&["approvers", "--help"], &["approvers", "-h"]),
+                &[],
+                vec![on(), ok("{}")],
+                owner_and_port,
+                0,
+                2,
+            ),
+            // native: permission agent --help
+            case(n("agent"), line(&["agent", "--help"], &["agent", "-h"]), &[], vec![on()], owner_and_port, 2, 1),
+            // Off: the unknown command and the daily tier.
+            case(n("off"), line(&["status", "--help"], &["status", "-h"]), &[], vec![ok(OFF)], owner_and_port, 1, 1),
+            case(n("off, the usage line"), line(&["--help"], &["-h"]), &[], vec![ok(OFF)], owner_and_port, 1, 1),
+            // No daemon: off.
+            case(n("no daemon"), line(&["--help"], &["-h"]), &[], vec![Reply::Close], owner_and_port, 1, 1),
+            // An agent: the passport's probe on the cell socket; on, the
+            // usage, or a person's verb refused; off, the daily tier asks
+            // about reports too.
+            with(
+                h(&[("K2_HOOK_SOCK", "{sock}")]),
+                case(n("agent, on"), line(&["--help"], &["-h"]), &[], vec![on()], port_only, 0, 1),
+            ),
+            with(
+                h(&[("K2_HOOK_SOCK", "{sock}")]),
+                case(n("agent, a person's verb"), line(&["approvers", "--help"], &["approvers", "-h"]), &[], vec![on()], port_only, 3, 1),
+            ),
+            with(
+                h(&[("K2_HOOK_SOCK", "{sock}")]),
+                case(n("agent, off"),
+                    line(&["request", "--help"], &["request", "-h"]),
+                    &[],
+                    vec![ok(OFF), ok(r#"{"agents":true,"senderKind":"agent"}"#)],
+                    port_only,
+                    1,
+                    2,
+                ),
+            ),
+            // An agent over TCP.
+            with(h(&[]), case(n("agent over TCP, on"), line(&["--help"], &["-h"]), &[], vec![on()], port_only, 0, 1)),
+        ]);
+    }
+    check(&rig, cases);
 }

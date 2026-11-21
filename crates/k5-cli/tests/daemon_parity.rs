@@ -291,7 +291,7 @@ fn odd_port_file(r: &Rig) {
 fn daemon_status_json_escapes_its_values() {
     let rig = rig("json-escape");
     let v = vec![
-        // covers: daemon status --json
+        // covers: daemon
         with(
             env(&rig, "odd-unit"),
             case(

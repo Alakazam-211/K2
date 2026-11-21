@@ -1287,15 +1287,12 @@ fn a_dash_label_and_a_bare_dashdash_are_usage_errors() {
         &["subdomain", "claim", "-x"],
         &["subdomain", "claim", "--transfer", "-x"],
         &["subdomain", "unclaim", "-x"],
-        // covers: publish subdomain create
         &["subdomain", "create", "-x", "--target", "x"],
         &["subdomain", "create", "--target", "x", "-x"],
-        // covers: publish subdomain point
         &["subdomain", "point", "-x", "--target", "x"],
         &["subdomain", "point", "--target", "x", "-x"],
         &["subdomain", "target", "-x", "x"],
         &["subdomain", "target", "acme", "-x"],
-        // covers: publish subdomain rm
         &["subdomain", "rm", "-x"],
         &["subdomain", "remove", "-"],
         &["subdomain", "delete", "-x"],

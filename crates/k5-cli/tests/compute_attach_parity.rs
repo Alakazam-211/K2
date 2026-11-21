@@ -354,7 +354,7 @@ fn compute_follow_reads_only_digits() {
         )
     };
     let v = vec![
-        // covers: compute wait --follow
+        // native: compute wait --follow
         follow(
             "signal 9, a time",
             vec![logs("", true, job("9", "1000", "1125"), "{}")],

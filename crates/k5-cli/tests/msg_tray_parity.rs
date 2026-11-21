@@ -11,7 +11,7 @@
 //! - No files: compose, silent and wake (the inbox pointer's live send,
 //!   the merged line), gated, to another server.
 //! - The words: wire form, an unknown flag, no title, a missing file, a
-//!   value flag as the last word (D6).
+//!   value flag as the last word (the shell's `_need_value` line).
 //! - Help never acts.
 
 #![cfg(unix)]
@@ -623,37 +623,36 @@ fn tray_bundle_by_contents() {
     }
 }
 
-/// A value flag as the last word of a tray form: bash's unbound-variable
-/// line and exit 1; the binary's D6 line and exit 2 (`edge-usage-exit-2`).
+/// A value flag as the last word: bash's `_need_value` and the binary
+/// print the same line, "Error: <flag> takes a value", and exit 2.
+/// Neither sends anything.
 #[test]
 fn tray_value_flag_last_is_the_d6_line() {
     let rig = Rig::new(VERB, "trayd6");
-    let cli = k2_client::brand::CLI_NAME;
     for (args, flag) in [
         (&["ws", "--inbox-silent", "--title"][..], "--title"),
         (&["ws", "--inbox-wake", "note.md", "--path"], "--path"),
         (&["ws", "--inbox-wake", "--body"], "--body"),
     ] {
-        let c = plain("a value flag last", args, vec![], 1, 0);
+        let c = plain("a value flag last", args, vec![], 2, 0);
         rig.prepare(Side::Bash, &c);
         let b = rig.run(true, &c);
-        if edge_usage_exit_2_proven() {
-            assert_eq!(b.code, Some(1), "{flag}: bash: {b:?}");
-            assert!(
-                b.stderr.ends_with(": $2: unbound variable\n"),
-                "{flag}: bash: {b:?}"
-            );
-            assert!(
-                rig.read(Side::Bash, false, flag).is_empty(),
-                "{flag}: bash sent"
-            );
-        }
+        assert_eq!(b.code, Some(2), "{flag}: bash: {b:?}");
+        assert_eq!(
+            b.stderr,
+            format!("Error: {flag} takes a value\n"),
+            "{flag}: bash: {b:?}"
+        );
+        assert!(
+            rig.read(Side::Bash, false, flag).is_empty(),
+            "{flag}: bash sent"
+        );
         let (r, sent) = rig.binary(&c, false);
         assert!(sent.is_empty(), "{flag}: the binary sent {sent:?}");
         assert_eq!((r.code, r.signal), (Some(2), None), "{flag}: {r:?}");
         assert_eq!(
             r.stderr,
-            format!("Error: {flag} needs a value (try '{cli} msg --help')\n"),
+            format!("Error: {flag} takes a value\n"),
         );
     }
 }

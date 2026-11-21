@@ -104,7 +104,7 @@ pub fn parse(words: &[&str]) -> Words<Ask> {
                     a.out = v;
                 }
                 if i + 2 > words.len() {
-                    return Words::ShiftFailed;
+                    return Words::ShiftFailed(words[i].to_string());
                 }
                 if w == "--attempt"
                     && (a.attempt.is_empty()

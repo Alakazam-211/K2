@@ -28,8 +28,7 @@
 //!    with `--json` (not `--seq`), else [`shown`]'s lines.
 //!
 //! A value flag (`--from`, `--limit`, `--before-seq`) as the last word is
-//! [`needs_value`]'s line and exit 2, where bash stops on its own `$2:
-//! unbound variable` (K2's D6).
+//! [`needs_value`]'s line and exit 2, the shell's own (`_need_value`).
 //!
 //! The shell answers a `--file` the binary can't resolve as Python's
 //! `os.path` would: a `~user` path, `~` with no `HOME`, a line break in
@@ -97,10 +96,10 @@ pub fn unknown_flag(word: &str) -> String {
     format!("Error: unknown flag '{word}' (try '{CLI_NAME} thread --help')\n")
 }
 
-/// A value flag as the last word: one line, exit 2 (K2's D6; bash stops
-/// on `$2: unbound variable`, exit 1).
+/// A value flag as the last word: the shell's `_need_value` line
+/// ([`crate::out::need_value`]), exit 2.
 pub fn needs_value(flag: &str) -> String {
-    format!("Error: {flag} needs a value (try '{CLI_NAME} thread --help')\n")
+    format!("{}\n", crate::out::need_value(flag))
 }
 
 /// The idempotency key's line.

@@ -1028,7 +1028,7 @@ mod tests {
             stop("expose", &["a", "--local", "--transfer"]).line,
             usage::EXPOSE_TRANSFER
         );
-        assert_eq!(stop("park", &["--reason"]), Stop::silent(Exit::Error));
+        assert_eq!(stop("park", &["--reason"]), Stop::need_value("--reason"));
         assert_eq!(
             stop("release", &["ws", "--apps", "park", "--drop-access"]).line,
             usage::RELEASE_DROP

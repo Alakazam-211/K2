@@ -76,7 +76,7 @@ pub fn parse(rest: &[&str]) -> Option<Result<Logs, Stop>> {
         match *w {
             "--tail" | "--attempt" => {
                 let Some(v) = rest.get(i + 1) else {
-                    return Some(Err(Stop::Shift));
+                    return Some(Err(Stop::Shift(w.to_string())));
                 };
                 if *w == "--tail" {
                     a.tail = v.to_string();
@@ -199,7 +199,8 @@ fn steps(client: &mut Client, closing: &mut Closing, a: &Logs) -> Result<(), Exi
                     out::stderr_line(&line);
                     return Err(Exit::Usage);
                 }
-                Some(Err(Stop::Shift)) | None => return Err(Exit::Error),
+                Some(Err(Stop::Shift(flag))) => return Err(out::stop_need_value(&flag)),
+                None => return Err(Exit::Error),
             };
             // A subshell: its EXIT trap notes are its own.
             let mut lost = Closing::default();
@@ -930,7 +931,7 @@ mod tests {
         );
         assert_eq!(
             parse_search(&["--search", "ab", "--limit"]),
-            Err(Stop::Shift)
+            Err(Stop::Shift("--limit".into()))
         );
         let a = parse_search(&["--search=a b", "-i", "--limit", "5"]).unwrap();
         assert_eq!(
@@ -938,7 +939,7 @@ mod tests {
             "search=a+b&workspace=%2Fw&limit=5&fold=1"
         );
         assert_eq!(parse(&[]), Some(Err(Stop::Usage(LOGS_USAGE.into()))));
-        assert_eq!(parse(&["j", "--tail"]), Some(Err(Stop::Shift)));
+        assert_eq!(parse(&["j", "--tail"]), Some(Err(Stop::Shift("--tail".into()))));
         assert_eq!(
             parse(&["j", "--attempt", "0"]),
             Some(Err(Stop::Usage(ATTEMPT_USAGE.into())))
@@ -1010,7 +1011,7 @@ pub fn parse_search(rest: &[&str]) -> Result<Search, Stop> {
             "--search" | "--check" | "--branch" | "--state" | "--since" | "--limit"
             | "--workspace" => {
                 let Some(v) = rest.get(i + 1) else {
-                    return Err(Stop::Shift);
+                    return Err(Stop::Shift(w.to_string()));
                 };
                 let v = v.to_string();
                 match *w {

@@ -20,7 +20,7 @@
 //! dies of SIGPIPE ([`super::end_in_pipe`]). The shell answers: `-h` or
 //! `--help` anywhere (the front sends those on; the shell prints the
 //! usage and sends nothing), `create`'s `--template`, `--from` or `--role` as the last word
-//! (`$2: unbound variable`), a word that is not UTF-8, a port curl won't
+//! (the shell's `_need_value` line), a word that is not UTF-8, a port curl won't
 //! take, and a `python3` the binary can't tell.
 
 use super::{curl_port, ljust, pipefail, py_iter, Shown};

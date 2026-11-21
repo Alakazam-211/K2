@@ -169,12 +169,12 @@ fn stop(line: impl Into<String>) -> Form {
     }
 }
 
-/// `shift 2` with one word left: the command ends with 1, no line.
-fn silent() -> Form {
+/// A value flag as the last word: the shell's `_need_value` line, exit 2.
+fn silent(flag: &str) -> Form {
     Form::Stop {
-        lines: Vec::new(),
+        lines: vec![crate::out::need_value(flag)],
         page: false,
-        exit: Exit::Error,
+        exit: Exit::Usage,
     }
 }
 
@@ -227,7 +227,7 @@ pub fn parse(words: &[&str]) -> (Form, Target) {
         };
         if let Some(slot) = slot {
             let Some(v) = value else {
-                return (silent(), t);
+                return (silent(w), t);
             };
             *slot = v;
             i += 2;

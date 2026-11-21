@@ -37,8 +37,8 @@
 //! not UTF-8, `-h` or `--help` anywhere (the front's: `spawn` and `read`
 //! print their usage and send nothing; `write` still takes them as the
 //! message and sends it, a bash bug), a value-taking word with nothing
-//! after it (`spawn --title`, `read <id> --lines`: the shell stops on
-//! `$2: unbound variable`), `HOOK_SOCK` set with a `CODEX_` variable
+//! after it (`spawn --title`, `read <id> --lines`: the shell's
+//! `_need_value` line), `HOOK_SOCK` set with a `CODEX_` variable
 //! exported, a port curl won't take, a `python3` the binary can't tell.
 //!
 //! `resolve_write_session_id` hands `--agent`'s value to its Python in

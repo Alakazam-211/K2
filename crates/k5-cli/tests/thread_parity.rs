@@ -11,7 +11,7 @@
 //! - The sender lookup when `--from` names none.
 //! - `ask`, `secret`, `withdraw`, `dismiss`, `delete`, `read-all` and
 //!   `unread`: their words, bodies, lines and exits.
-//! - Every usage stop, the D6 line for a value flag last, and help that
+//! - Every usage stop, the shell's line for a value flag last, and help that
 //!   never acts.
 //!
 //! Every write names its key (`--idempotency-key`) so the requests match
@@ -621,13 +621,12 @@ fn thread_stops_before_it_sends() {
     }
 }
 
-/// A value flag as the last word: bash stops on `$2: unbound variable`
-/// (exit 1); the binary prints one line and exits 2 (K2's D6, the named
-/// difference `edge-usage-exit-2`). Neither sends anything.
+/// A value flag as the last word: bash's `_need_value` and the binary
+/// print the same line, "Error: <flag> takes a value", and exit 2.
+/// Neither sends anything.
 #[test]
 fn thread_value_flag_last_is_the_d6_line() {
     let rig = Rig::new(VERB, "d6");
-    let cli = k2_client::brand::CLI_NAME;
     for (args, flag) in [
         (&["bob", "--from"][..], "--from"),
         (&["bob", "--limit"], "--limit"),
@@ -636,26 +635,25 @@ fn thread_value_flag_last_is_the_d6_line() {
     ] {
         let words = leak(args.iter().map(|s| s.to_string()).collect());
         let name: &'static str = Box::leak(format!("{flag} last").into_boxed_str());
-        let c = plain(name, words, vec![], 1, 0);
+        let c = plain(name, words, vec![], 2, 0);
         rig.prepare(Side::Bash, &c);
         let b = rig.run(true, &c);
-        if edge_usage_exit_2_proven() {
-            assert_eq!(b.code, Some(1), "{name}: bash's exit: {b:?}");
-            assert!(
-                b.stderr.ends_with(": $2: unbound variable\n"),
-                "{name}: bash's stderr: {b:?}"
-            );
-            assert!(
-                rig.read(Side::Bash, false, name).is_empty(),
-                "{name}: bash sent"
-            );
-        }
+        assert_eq!(b.code, Some(2), "{name}: bash's exit: {b:?}");
+        assert_eq!(
+            b.stderr,
+            format!("Error: {flag} takes a value\n"),
+            "{name}: bash's stderr: {b:?}"
+        );
+        assert!(
+            rig.read(Side::Bash, false, name).is_empty(),
+            "{name}: bash sent"
+        );
         let (r, sent) = rig.binary(&c, false);
         assert!(sent.is_empty(), "{name}: the binary sent {sent:?}");
         assert_eq!((r.code, r.signal), (Some(2), None), "{name}: {r:?}");
         assert_eq!(
             r.stderr,
-            format!("Error: {flag} needs a value (try '{cli} thread --help')\n"),
+            format!("Error: {flag} takes a value\n"),
             "{name}"
         );
     }

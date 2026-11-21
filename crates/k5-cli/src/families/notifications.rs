@@ -14,8 +14,8 @@
 //!    printed by the shell's Python, its tracebacks too.
 //! 3. The EXIT trap's lines ([`cp::close`]).
 //!
-//! A flag that takes a value and comes last ends the command with 1 and
-//! no line (`shift 2` fails under `set -e`). `relay add` reads the
+//! A flag that takes a value and comes last is the shell's `_need_value`
+//! line, exit 2. `relay add` reads the
 //! password from the terminal without echo, else the first line of stdin;
 //! it goes only into the request body. `-h` and `--help` are the front's.
 
@@ -66,9 +66,6 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     };
     Some(cp::close(r.ctx, exit))
 }
-
-/// `shift 2` with one word left: exit 1, no line.
-const SHIFT: Exit = Exit::Error;
 
 /// What a reader printed, or how it ended.
 fn shown(r: Result<Shown, Exit>) -> Exit {
@@ -345,9 +342,15 @@ impl<'a> Flags<'a> {
         w
     }
 
-    /// `x="${2:-}"; shift 2`: the value, or the end (`shift 2` fails).
+    /// `x="${2:-}"; shift 2`: the value, or `_need_value`'s line (exit 2)
+    /// after the flag just read.
     fn value(&mut self) -> Result<&'a str, Exit> {
-        let v = self.words.get(self.i).copied().ok_or(SHIFT)?;
+        let flag = self.i.checked_sub(1).map_or("", |j| self.words[j]);
+        let v = self
+            .words
+            .get(self.i)
+            .copied()
+            .ok_or_else(|| out::stop_need_value(flag))?;
         self.i += 1;
         Ok(v)
     }

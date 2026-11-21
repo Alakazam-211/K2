@@ -114,8 +114,8 @@ fn loop_words(write: Write, words: &[&str]) -> Result<Ask, Stop> {
             _ => false,
         };
         if value_flag {
-            // `x="${2:-}"; shift 2`: with one word left, set -e ends it.
-            let v = rest.get(1).ok_or_else(|| Stop::silent(Exit::Error))?;
+            // `x="${2:-}"; shift 2`: with no word left, `_need_value`'s line.
+            let v = rest.get(1).ok_or_else(|| Stop::need_value(w))?;
             match w {
                 "--reason" => reason = v.to_string(),
                 "--app-port" => app_port = v.to_string(),
@@ -405,7 +405,7 @@ mod tests {
         );
         assert_eq!(
             parse("egress", &["mode", "acme", "broad", "--tail"]),
-            Some(Err(Stop::silent(Exit::Error)))
+            Some(Err(Stop::need_value("--tail")))
         );
         assert_eq!(parse("egress", &["add"]), Some(Ok(Ask::Page("app/egress"))));
         assert_eq!(parse("egress", &["acme"]), None);

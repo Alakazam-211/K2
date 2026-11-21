@@ -80,9 +80,12 @@ pub fn parse(words: &[&str]) -> Plan {
         match slot {
             None => i += 1,
             Some(slot) => {
-                let Some(v) = rest.get(i + 1).filter(|v| !v.is_empty()) else {
-                    return super::needs_value(w);
+                let Some(v) = rest.get(i + 1) else {
+                    return super::takes_value(w);
                 };
+                if v.is_empty() {
+                    return super::needs_value(w);
+                }
                 *slot = v.to_string();
                 i += 2;
             }

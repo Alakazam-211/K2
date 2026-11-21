@@ -181,7 +181,7 @@ pub fn parse(words: &[&str]) -> Option<Words<Ask>> {
     macro_rules! shift2 {
         () => {{
             if i + 2 > n {
-                return Some(Words::ShiftFailed);
+                return Some(Words::ShiftFailed(words[i].to_string()));
             }
             i += 2;
         }};

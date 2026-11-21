@@ -115,7 +115,7 @@ fn auth(words: &[&str]) -> Result<Ask, Stop> {
                 origins.push_str(rest.get(1).copied().unwrap_or(""));
                 origins.push('\n');
                 if rest.len() < 2 {
-                    return Err(Stop::silent(Exit::Error));
+                    return Err(Stop::need_value(w));
                 }
                 rest = &rest[2..];
                 continue;
@@ -262,7 +262,7 @@ fn login(words: &[&str]) -> Option<Result<Ask, Stop>> {
             }
         }
         if rest.len() < 2 {
-            return Some(Err(Stop::silent(Exit::Error)));
+            return Some(Err(Stop::need_value(w)));
         }
         rest = &rest[2..];
     }
@@ -528,7 +528,7 @@ mod tests {
         );
         assert_eq!(
             auth(&["origins", "a", "--origin"]),
-            Err(Stop::silent(Exit::Error))
+            Err(Stop::need_value("--origin"))
         );
     }
 
@@ -562,7 +562,7 @@ mod tests {
         );
         assert_eq!(
             login(&["acme", "--reset-ttl"]),
-            Some(Err(Stop::silent(Exit::Error)))
+            Some(Err(Stop::need_value("--reset-ttl")))
         );
         assert_eq!(login(&[]), Some(Err(Stop::usage(usage::SETTINGS))));
     }

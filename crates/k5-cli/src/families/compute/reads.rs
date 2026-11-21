@@ -212,9 +212,9 @@ pub enum Ask {
 pub enum Stop {
     /// The usage line, exit 2.
     Usage(String),
-    /// `shift 2` with one word left: `set -e` ends the command with 1,
-    /// nothing printed.
-    Shift,
+    /// A value flag as the last word (the flag): the shell's
+    /// `_need_value` line ([`crate::out::need_value`]), exit 2.
+    Shift(String),
 }
 
 /// The words after `compute` (`words`). `None`: the shell's (see the
@@ -277,7 +277,7 @@ pub fn parse(words: &[&str]) -> Option<Result<Ask, Stop>> {
                 match *w {
                     "--node" | "--workspace" => {
                         let Some(v) = rest.get(i + 1) else {
-                            return Some(Err(Stop::Shift));
+                            return Some(Err(Stop::Shift(w.to_string())));
                         };
                         q.push_str(&format!("&{}={}", &w[2..], quote(v)));
                         i += 2;
@@ -311,7 +311,7 @@ pub fn parse(words: &[&str]) -> Option<Result<Ask, Stop>> {
                     "--json" => {}
                     "--limit" | "--tag" | "--since" | "--max-wait" => {
                         let Some(v) = rest.get(i + 1) else {
-                            return Some(Err(Stop::Shift));
+                            return Some(Err(Stop::Shift(w.to_string())));
                         };
                         let v = v.to_string();
                         match *w {
@@ -407,7 +407,7 @@ pub fn parse(words: &[&str]) -> Option<Result<Ask, Stop>> {
                     }
                     "--check" | "--tag" | "--days" | "--workspace" => {
                         let Some(v) = rest.get(i + 1) else {
-                            return Some(Err(Stop::Shift));
+                            return Some(Err(Stop::Shift(w.to_string())));
                         };
                         match *w {
                             "--check" => check = v.to_string(),
@@ -472,7 +472,7 @@ fn jobs_query(rest: &[&str]) -> Result<String, Stop> {
         match *w {
             "--node" | "--state" | "--limit" | "--workspace" | "--tag" => {
                 let Some(v) = rest.get(i + 1) else {
-                    return Err(Stop::Shift);
+                    return Err(Stop::Shift(w.to_string()));
                 };
                 q.push_str(&format!("&{}={}", &w[2..], quote(v)));
                 i += 2;
@@ -606,7 +606,7 @@ fn run_with(
             out::stderr_line(&line);
             return Exit::Usage;
         }
-        Err(Stop::Shift) => return Exit::Error,
+        Err(Stop::Shift(flag)) => return out::stop_need_value(&flag),
     };
     settings.port = settings.port_text.as_deref().and_then(curl_port);
     let project = settings.project.clone();

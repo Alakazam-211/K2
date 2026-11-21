@@ -82,7 +82,7 @@ impl<T> Words<T> {
                 out::stderr_line(&line);
                 Err(Exit::Usage)
             }
-            Words::ShiftFailed => Err(Exit::Error),
+            Words::ShiftFailed(flag) => Err(out::stop_need_value(&flag)),
         }
     }
 }
@@ -93,9 +93,9 @@ pub enum Words<T> {
     Ask(T),
     /// `echo "<line>" >&2; exit 2`.
     Usage(String),
-    /// A `shift 2` with one word left: under `set -e` the command ends
-    /// there with 1, saying nothing.
-    ShiftFailed,
+    /// A value flag as the last word (the flag): the shell's
+    /// `_need_value` line ([`crate::out::need_value`]), exit 2.
+    ShiftFailed(String),
 }
 
 /// A verb this module answers, with its words read.

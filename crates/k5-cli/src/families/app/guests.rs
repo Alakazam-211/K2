@@ -119,11 +119,11 @@ fn help(words: &[&str]) -> bool {
     words.iter().any(|w| matches!(*w, "-h" | "--help"))
 }
 
-/// `"${2:-}"; shift 2`: the value, or the failed `shift 2` (exit 1).
+/// `"${2:-}"; shift 2`: the value, or `_need_value`'s line (exit 2).
 fn value<'a>(rest: &[&'a str]) -> Result<&'a str, Stop> {
     rest.get(1)
         .copied()
-        .ok_or_else(|| Stop::silent(Exit::Error))
+        .ok_or_else(|| Stop::need_value(rest[0]))
 }
 
 /// `int(v)` on what the word holds is the shell's own: plain digits only.
@@ -312,7 +312,7 @@ fn kind(words: &[&str]) -> Result<Ask, Stop> {
             None => add_room(&mut k.rooms_csv, v),
         }
         if rest.len() < 2 {
-            return Err(Stop::silent(Exit::Error));
+            return Err(Stop::need_value(w));
         }
         rest = &rest[2..];
     }
@@ -854,7 +854,7 @@ mod tests {
         );
         assert_eq!(
             p(&["list", "--limit"]),
-            Some(Err(Stop::silent(Exit::Error)))
+            Some(Err(Stop::need_value("--limit")))
         );
         assert_eq!(p(&["nope"]), Some(Err(Stop::usage(usage::GUEST))));
         assert_eq!(p(&[]), None);
@@ -878,7 +878,7 @@ mod tests {
         assert_eq!(rooms_json(" a, ,b "), r#"["a", "b"]"#);
         assert_eq!(
             parse_grant(&["acme", "--kind"]),
-            Some(Err(Stop::silent(Exit::Error)))
+            Some(Err(Stop::need_value("--kind")))
         );
         assert_eq!(
             parse_grant(&["acme", "--kind", "guests-chat", "--max", "x"]),

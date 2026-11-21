@@ -3,12 +3,8 @@ use super::*;
 #[test]
 fn a_restore_flag_with_no_value_is_one_line() {
     assert_eq!(
-        needs_value("--rev"),
-        concat!(
-            "--rev needs a value (try '",
-            cli_name!(),
-            " zen data --help')"
-        )
+        format!("Error: {}", needs_value("--rev")),
+        crate::out::need_value("--rev")
     );
 }
 

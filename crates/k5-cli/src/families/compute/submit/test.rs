@@ -145,7 +145,7 @@ pub fn parse(words: &[&str]) -> Option<Words<run::Ask>> {
         }
         // `shift 2`.
         if i + 2 > n {
-            return Some(Words::ShiftFailed);
+            return Some(Words::ShiftFailed(words[i].to_string()));
         }
         i += 2;
     }

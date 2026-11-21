@@ -193,8 +193,14 @@ impl Stop {
         }
     }
 
-    /// Nothing said: `set -e` ended the command (a `shift 2` with one word
-    /// left).
+    /// A value flag as the last word: the shell's `_need_value` line
+    /// ([`crate::out::need_value`]), exit 2.
+    pub fn need_value(flag: &str) -> Stop {
+        Stop::usage(crate::out::need_value(flag))
+    }
+
+    /// Nothing said: `set -e` ended the command (a `shift` past the end,
+    /// such as `shift 3` with fewer words left).
     pub fn silent(exit: Exit) -> Stop {
         Stop {
             line: String::new(),

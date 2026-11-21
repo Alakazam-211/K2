@@ -35,7 +35,7 @@
 //! it doesn't expect, this prints a Python 3.12 traceback.
 //!
 //! Still the shell's: a value flag as the last word (`--subdomain`,
-//! `--token`: the shell stops on `$2: unbound variable`, K2's D6 class), a
+//! `--token`: the shell's `_need_value` line), a
 //! word that is not UTF-8, a command line with `-h` or `--help` that is
 //! not a help page ([`crate::front`]), a port that is set but is no port
 //! curl takes, and a `python3` the binary can't tell. `switch

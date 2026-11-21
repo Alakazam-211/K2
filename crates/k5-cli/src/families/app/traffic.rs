@@ -53,10 +53,10 @@ fn audit(words: &[&str]) -> Result<Ask, Stop> {
             _ => None,
         };
         if let Some(slot) = slot {
-            // `x="${2:-}"; shift 2`: with one word left, set -e ends it.
+            // `x="${2:-}"; shift 2`: with no word left, `_need_value`'s line.
             *slot = rest
                 .get(1)
-                .ok_or_else(|| Stop::silent(Exit::Error))?
+                .ok_or_else(|| Stop::need_value(w))?
                 .to_string();
             rest = &rest[2..];
             continue;
@@ -228,7 +228,7 @@ mod tests {
         assert_eq!(parse(&[]), Some(Err(Stop::usage(USAGE))));
         assert_eq!(
             parse(&["a", "--since"]),
-            Some(Err(Stop::silent(Exit::Error)))
+            Some(Err(Stop::need_value("--since")))
         );
         assert_eq!(parse(&["a", "-h"]), None);
     }

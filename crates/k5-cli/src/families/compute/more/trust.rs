@@ -171,7 +171,7 @@ fn usage<T>(line: impl Into<String>) -> Words<T> {
 
 /// Reads `rest` as the shell's `while [ $# -gt 0 ]` loops do: `flags`
 /// take a value (`shift 2`), `bare` take none; anything else is
-/// `Err(word)`. A value flag last: `Ok(None)` (`shift 2` fails).
+/// `Err(word)`. A value flag last: `Ok(None)` (`_need_value`'s line).
 #[allow(clippy::type_complexity)]
 fn flags<'a>(
     rest: &[&'a str],
@@ -260,7 +260,7 @@ fn roster(rest: &[&str]) -> Words<Ask> {
                 &["--json"],
             ) {
                 Ok(Some(g)) => g,
-                Ok(None) => return Words::ShiftFailed,
+                Ok(None) => return Words::ShiftFailed(r.last().map_or_else(String::new, |w| w.to_string())),
                 Err(_) => return usage(ROSTER_SET_USAGE),
             };
             let v = |names: &[&str]| str_value(last(&got, names));
@@ -287,7 +287,7 @@ fn roster(rest: &[&str]) -> Words<Ask> {
             }
             let got = match flags(r, &["--reason"], &["--json"]) {
                 Ok(Some(g)) => g,
-                Ok(None) => return Words::ShiftFailed,
+                Ok(None) => return Words::ShiftFailed(r.last().map_or_else(String::new, |w| w.to_string())),
                 Err(_) => {
                     return usage(format!(
                     "usage: {CLI_NAME} compute roster {sub} <node> [--reason compromised|key_lost|other]"
@@ -340,7 +340,7 @@ fn seats(rest: &[&str]) -> Words<Ask> {
                 &["--secrets", "--no-secrets", "--json"],
             ) {
                 Ok(Some(g)) => g,
-                Ok(None) => return Words::ShiftFailed,
+                Ok(None) => return Words::ShiftFailed(r.last().map_or_else(String::new, |w| w.to_string())),
                 Err(_) => return usage(SEATS_REQUEST_USAGE),
             };
             let secrets = got
@@ -365,7 +365,7 @@ fn seats(rest: &[&str]) -> Words<Ask> {
             let (req, r) = first(r);
             let got = match flags(r, &["--nodes"], &["--json"]) {
                 Ok(Some(g)) => g,
-                Ok(None) => return Words::ShiftFailed,
+                Ok(None) => return Words::ShiftFailed(r.last().map_or_else(String::new, |w| w.to_string())),
                 Err(_) => return usage(SEATS_OFFER_USAGE),
             };
             let nodes = last(&got, &["--nodes"]);
@@ -387,7 +387,7 @@ fn seats(rest: &[&str]) -> Words<Ask> {
             let line = format!("usage: {CLI_NAME} compute seats {sub} <seat> [--why TEXT]");
             let got = match flags(r, &["--why"], &["--json"]) {
                 Ok(Some(g)) => g,
-                Ok(None) => return Words::ShiftFailed,
+                Ok(None) => return Words::ShiftFailed(r.last().map_or_else(String::new, |w| w.to_string())),
                 Err(_) => return usage(line),
             };
             if seat.is_empty() {

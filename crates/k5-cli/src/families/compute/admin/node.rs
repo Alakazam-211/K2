@@ -269,7 +269,7 @@ fn add(rest: &[&str]) -> Option<Words<Ask>> {
             "--url" => {
                 url = rest.get(i + 1).copied().unwrap_or("");
                 if i + 2 > rest.len() {
-                    return Some(Words::ShiftFailed);
+                    return Some(Words::ShiftFailed(rest[i].to_string()));
                 }
                 i += 2;
             }
@@ -340,7 +340,7 @@ fn alerts(rest: &[&str]) -> Option<Words<Ask>> {
                     have_to = true;
                 }
                 if i + 2 > rest.len() {
-                    return Some(Words::ShiftFailed);
+                    return Some(Words::ShiftFailed(rest[i].to_string()));
                 }
                 i += 2;
             }

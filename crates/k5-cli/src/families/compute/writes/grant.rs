@@ -54,7 +54,7 @@ pub fn parse(words: &[&str], in_session: bool) -> Words<Ask> {
     while i < words.len() {
         let w = words[i];
         let v = words.get(i + 1).copied().unwrap_or("").to_string();
-        // `shift 2` with one word left: `set -e` ends the command.
+        // No word after a value flag: `_need_value`'s line.
         let short = i + 2 > words.len();
         match w {
             "--workspace" | "--max-disk" | "--max-parallel" | "--max-queued" => {
@@ -67,7 +67,7 @@ pub fn parse(words: &[&str], in_session: bool) -> Words<Ask> {
                     _ => a.max_queued = v,
                 }
                 if short {
-                    return Words::ShiftFailed;
+                    return Words::ShiftFailed(words[i].to_string());
                 }
                 i += 2;
                 continue;
@@ -75,7 +75,7 @@ pub fn parse(words: &[&str], in_session: bool) -> Words<Ask> {
             "--submitter-max-running" => {
                 a.max_sub = v;
                 if short {
-                    return Words::ShiftFailed;
+                    return Words::ShiftFailed(words[i].to_string());
                 }
                 if a.max_sub.is_empty() || !a.max_sub.bytes().all(|b| b.is_ascii_digit()) {
                     return Words::Usage("usage: --submitter-max-running N (0 = off)".into());
@@ -92,7 +92,7 @@ pub fn parse(words: &[&str], in_session: bool) -> Words<Ask> {
                 };
                 a.max_time = s;
                 if short {
-                    return Words::ShiftFailed;
+                    return Words::ShiftFailed(words[i].to_string());
                 }
                 i += 2;
                 continue;

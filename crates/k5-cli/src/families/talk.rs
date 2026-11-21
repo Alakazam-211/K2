@@ -11,7 +11,7 @@
 //!    ([`super::msg::client_for`]).
 //! 2. The words ([`parse`]). An unknown flag is one line, exit 1. No
 //!    workspace is [`usage`], exit 1. A value flag as the last word is
-//!    one line, exit 2 (K2's D6; bash stops on `$2: unbound variable`).
+//!    the shell's `_need_value` line, exit 2.
 //! 3. `--token-stdin`: beside `--token`, one line, exit 2; else the token
 //!    is read from stdin ([`crate::prompt::read_secret_stdin`], a hidden
 //!    `Token: ` prompt on a terminal); none is one line, exit 2.
@@ -144,16 +144,10 @@ pub fn unknown_flag(word: &str) -> String {
     )
 }
 
-/// A value flag as the last word (K2's D6, `edge-usage-exit-2`).
+/// A value flag as the last word: the shell's `_need_value` line
+/// ([`crate::out::need_value`]).
 pub fn needs_value(flag: &str) -> String {
-    format!(
-        concat!(
-            "Error: {} needs a value (try '",
-            cli_name!(),
-            " talk --help')"
-        ),
-        flag
-    )
+    crate::out::need_value(flag)
 }
 
 pub const BOTH_TOKENS: &str = concat!(cli_name!(), " talk: --token-stdin or --token, not both");

@@ -232,7 +232,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
             out::stderr_line(&err_line("usage", &hint));
             Exit::Usage
         }
-        Form::Shift => Exit::Error,
+        Form::Shift(flag) => out::stop_need_value(&flag),
         Form::Shell => unreachable!("Garden data is answered above"),
         Form::Home { .. } | Form::Cap { .. } | Form::Cp(_) | Form::Run(_) => {
             unreachable!("store has no such form")

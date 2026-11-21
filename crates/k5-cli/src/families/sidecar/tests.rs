@@ -158,8 +158,8 @@ fn new_s_words() {
     // Words after `--` are dropped.
     let n = parse_new(&w(&["a", "--harness", "h", "--", "--bogus", "x"])).unwrap();
     assert_eq!(n.name, "a");
-    assert_eq!(parse_new(&w(&["a", "--harness"])), Err(Stop::Shift));
-    assert_eq!(parse_new(&w(&["a", "--brief-text"])), Err(Stop::Shift));
+    assert_eq!(parse_new(&w(&["a", "--harness"])), Err(Stop::Shift("--harness".into())));
+    assert_eq!(parse_new(&w(&["a", "--brief-text"])), Err(Stop::Shift("--brief-text".into())));
     assert_eq!(parse_new(&w(&["a"])), Err(Stop::Usage(new_usage())));
     assert_eq!(
         parse_new(&w(&["--harness", "h"])),
@@ -223,7 +223,7 @@ fn new_s_body() {
 
 #[test]
 fn the_other_verbs_words() {
-    assert_eq!(parse_simple("list", &w(&["--workspace"])), Err(Stop::Shift));
+    assert_eq!(parse_simple("list", &w(&["--workspace"])), Err(Stop::Shift("--workspace".into())));
     assert_eq!(
         parse_simple("list", &w(&["x"])),
         Err(Stop::Usage(list_usage()))
@@ -245,7 +245,7 @@ fn the_other_verbs_words() {
         parse_access(&w(&["on", "--json"])),
         Err(Stop::Usage(access_usage()))
     );
-    assert_eq!(parse_access(&w(&["on", "--workspace"])), Err(Stop::Shift));
+    assert_eq!(parse_access(&w(&["on", "--workspace"])), Err(Stop::Shift("--workspace".into())));
     assert_eq!(
         parse_access(&w(&["status", "--workspace", "x"])),
         Ok(("status".into(), "x".into()))

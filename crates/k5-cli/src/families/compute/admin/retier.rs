@@ -53,7 +53,7 @@ pub fn parse(words: &[&str]) -> Words<Ask> {
                     a.why = next();
                 }
                 if i + 2 > words.len() {
-                    return Words::ShiftFailed;
+                    return Words::ShiftFailed(words[i].to_string());
                 }
                 i += 2;
                 continue;

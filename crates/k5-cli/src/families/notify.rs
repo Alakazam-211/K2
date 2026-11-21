@@ -125,7 +125,7 @@ fn email(ctx: &mut super::app::call::Ctx, words: &[&str]) -> Exit {
             ));
         }
         let Some(v) = words.get(i + 1) else {
-            return Exit::Error;
+            return crate::out::stop_need_value(w);
         };
         match w {
             "--subject" => subject = v,

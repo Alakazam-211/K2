@@ -7,7 +7,7 @@
 //!   with no passport. Help never acts: each verb that changes something
 //!   with `-h` or `--help` first, in the middle or last sends nothing.
 //! - The words: each verb's usage lines, an unknown verb or flag, and
-//!   a value flag as the last word (the rows named `bash D6:`, below).
+//!   a value flag as the last word (the rows named `a value flag last:`).
 //! - Every verb, with `--json` and without: the bodies and queries
 //!   (unicode, a brief from a file and from stdin), many rows (an answer
 //!   above 256 KiB), the readers' odd answers (not JSON, a field of
@@ -19,11 +19,10 @@
 //!   cell socket (a GET goes on to TCP after no answer there, a POST only
 //!   after "not served"), no answer and no daemon.
 //!
-//! The rows named `bash D6:` are a bash bug, copied until bash is fixed:
-//! a value flag as the last word is `shift 2` failing under `set -e`
-//! (`sidecar.sh:302-307`, `:381`, `:397`, `:430`, `:467`, `:591`), so
-//! bash ends with 1 and says nothing. They flip to K2's D6 ruling (one
-//! `usage:` line, exit 2) when bash is fixed.
+//! The rows named `a value flag last:` were a bash bug the binary copied
+//! (a `shift 2` failing under `set -e`: exit 1, nothing said). Bash's
+//! `_need_value` fixed it: both print "Error: <flag> takes a value" and
+//! exit 2.
 
 #![cfg(unix)]
 
@@ -221,37 +220,37 @@ fn sidecar_help_and_words() {
     ] {
         v.push(case(name, args, &[], vec![], brief_file, 2, 0));
     }
-    // bash D6: a value flag as the last word; flips to a usage line,
-    // exit 2.
+    // A value flag as the last word: the shell's `_need_value` line,
+    // "Error: <flag> takes a value", exit 2, on both.
     for (name, args) in [
         (
-            "bash D6: new --harness last",
+            "a value flag last: new --harness last",
             &["new", "a", "--harness"][..],
         ),
         (
-            "bash D6: new --brief-text last",
+            "a value flag last: new --brief-text last",
             &["new", "a", "--harness", "h", "--brief-text"],
         ),
-        ("bash D6: new --workspace last", &["new", "--workspace"]),
-        ("bash D6: list --workspace last", &["list", "--workspace"]),
+        ("a value flag last: new --workspace last", &["new", "--workspace"]),
+        ("a value flag last: list --workspace last", &["list", "--workspace"]),
         (
-            "bash D6: stop --workspace last",
+            "a value flag last: stop --workspace last",
             &["stop", "a", "--workspace"],
         ),
         (
-            "bash D6: archive --workspace last",
+            "a value flag last: archive --workspace last",
             &["archive", "--workspace"],
         ),
         (
-            "bash D6: access on --workspace last",
+            "a value flag last: access on --workspace last",
             &["access", "on", "--workspace"],
         ),
         (
-            "bash D6: land --workspace last",
+            "a value flag last: land --workspace last",
             &["land", "a", "--workspace"],
         ),
     ] {
-        v.push(case(name, args, &[], vec![], owner_and_port, 1, 0));
+        v.push(case(name, args, &[], vec![], owner_and_port, 2, 0));
     }
     v.push(case(
         "a usage error with no daemon set up: the gate first",

@@ -17,7 +17,7 @@
 //!    ([`crate::prelude::id_tool`]), the help too.
 //! 3. The words ([`parse`]): the help, a `usage:` line (exit 2), or the
 //!    step to send. A value flag with no word after it is the shell's
-//!    failed `shift 2` under `set -e`: exit 1 and nothing printed.
+//!    `_need_value` line, exit 2.
 //! 4. `_migrate_send` ([`send`]): inside a K2 terminal, or with no vault
 //!    socket, `_sidecar_send` (the cell socket with the passport, else
 //!    TCP); else the vault socket, the person's channel
@@ -169,9 +169,9 @@ pub enum Parsed {
     ApproveHelp,
     /// A `usage:` line, exit 2.
     Usage(&'static str),
-    /// A value flag last on the line: the shell's `shift 2` fails under
-    /// `set -e`, exit 1, nothing printed.
-    ShiftFails,
+    /// A value flag last on the line (the flag): the shell's
+    /// `_need_value` line, exit 2.
+    ShiftFails(String),
     /// A request.
     Call(Call),
 }
@@ -238,7 +238,7 @@ pub fn parse(words: &[&str], pwd: &dyn Fn() -> String) -> Parsed {
                 match rest[i] {
                     "--to" | "--out" | "-o" => {
                         let Some(v) = rest.get(i + 1) else {
-                            return Parsed::ShiftFails;
+                            return Parsed::ShiftFails(rest[i].to_string());
                         };
                         if rest[i] == "--to" {
                             to = v;
@@ -397,7 +397,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
             out::stderr_line(line);
             return Some(Exit::Usage);
         }
-        Parsed::ShiftFails => return Some(Exit::Error),
+        Parsed::ShiftFails(flag) => return Some(out::stop_need_value(&flag)),
         Parsed::Call(call) => call,
     };
     let mut settings = settings;
@@ -879,7 +879,10 @@ mod tests {
             Parsed::Usage(APPROVE_FLAG)
         );
         assert_eq!(parse(&["approve"], &pwd), Parsed::Usage(APPROVE_USAGE));
-        assert_eq!(parse(&["export-secrets", "--to"], &pwd), Parsed::ShiftFails);
+        assert_eq!(
+            parse(&["export-secrets", "--to"], &pwd),
+            Parsed::ShiftFails("--to".into())
+        );
         assert_eq!(parse(&["nope"], &pwd), Parsed::Usage(USAGE));
         let Parsed::Call(c) = parse(&["export-secrets", "--to", "age1x", "-o", "m.k2mv"], &pwd)
         else {

@@ -121,7 +121,7 @@ fn unknown_flag(w: &str) -> Stop {
 fn value<'a>(rest: &[&'a str]) -> Result<&'a str, Stop> {
     rest.get(1)
         .copied()
-        .ok_or_else(|| Stop::silent(Exit::Error))
+        .ok_or_else(|| Stop::need_value(rest[0]))
 }
 
 fn history(words: &[&str]) -> Result<Ask, Stop> {

@@ -8,7 +8,7 @@
 //! 1. The target is the first word, whatever it is; the rest less the
 //!    `--inbox*` flags are read by [`parse`]. Federation's wire form is
 //!    three lines, exit 2. An unknown flag is one line, exit 2; a value
-//!    flag as the last word is the D6 line, exit 2.
+//!    flag as the last word is the shell's `_need_value` line, exit 2.
 //! 2. The files: `--path`, else every word that is a file here, else the
 //!    first word when it looks like a path. Words that are not delivered
 //!    files join `--body` as the sender's brief.

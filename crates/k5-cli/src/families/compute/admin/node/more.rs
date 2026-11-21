@@ -100,7 +100,7 @@ fn call(
 /// fails with it last.
 fn value<'a>(rest: &[&'a str], i: usize) -> Result<&'a str, Words<Ask>> {
     if i + 2 > rest.len() {
-        return Err(Words::ShiftFailed);
+        return Err(Words::ShiftFailed(rest[i].to_string()));
     }
     Ok(rest[i + 1])
 }
@@ -163,7 +163,7 @@ pub fn update(sub: &str, rest: &[&str]) -> Option<Words<Ask>> {
                     return usage("usage: --batch N (a number of nodes; 0 = all at once)");
                 }
                 if i + 2 > rest.len() {
-                    return Some(Words::ShiftFailed);
+                    return Some(Words::ShiftFailed(rest[i].to_string()));
                 }
                 batch = Some(b);
                 i += 1;
@@ -475,7 +475,7 @@ fn propose(rest: &[&str]) -> Option<Words<Ask>> {
                     Err(stop) => return Some(stop),
                 }
                 if i + 2 > rest.len() {
-                    return Some(Words::ShiftFailed);
+                    return Some(Words::ShiftFailed(rest[i].to_string()));
                 }
                 i += 2;
             }

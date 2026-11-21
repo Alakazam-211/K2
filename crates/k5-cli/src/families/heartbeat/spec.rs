@@ -13,7 +13,7 @@ pub enum Spec {
     Made { json: String, freq: String },
     /// The lines on stderr, and the exit.
     Stop(Vec<String>, Exit),
-    /// A form only the shell answers (`$2: unbound variable`, a word bash
+    /// A form only the shell answers (a value flag last, a word bash
     /// would expand as a file name, a number bash's test can't read).
     Shell,
 }

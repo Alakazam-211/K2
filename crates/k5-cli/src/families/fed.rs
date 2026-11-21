@@ -160,10 +160,12 @@ impl Form {
     }
 }
 
-/// The value after a flag: `${2:-}`, and `shift 2` failing under `set -e`
-/// when it is the last word (exit 1, nothing printed).
+/// The value after a flag: `${2:-}`, or the shell's `_need_value` line
+/// (exit 2) when it is the last word.
 fn value<'a>(rest: &[&'a str], i: usize) -> Result<&'a str, (Exit, Option<String>)> {
-    rest.get(i + 1).copied().ok_or((Exit::Error, None))
+    rest.get(i + 1)
+        .copied()
+        .ok_or_else(|| (Exit::Usage, Some(out::need_value(rest[i]))))
 }
 
 /// `pair-start`'s and `pair-request`'s flags into `fields` (label,

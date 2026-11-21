@@ -17,8 +17,8 @@
 //! stderr, then `cmd_help`'s daily tier on stdout (asked as the front asks
 //! it, [`crate::pages::daily_tier`]), exit 1.
 //!
-//! The shell answers: `--reason`, `--message` or `-m` as the last word (`$2:
-//! unbound variable`), `-h` or `--help` anywhere (the front sends those
+//! The shell answers: `--reason`, `--message` or `-m` as the last word (its
+//! `_need_value` line), `-h` or `--help` anywhere (the front sends those
 //! on; the shell prints the usage and sends nothing), a word that is not
 //! UTF-8, a port curl won't take, and a `python3` the binary
 //! can't tell.

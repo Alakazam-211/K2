@@ -112,10 +112,10 @@ fn list(words: &[&str]) -> Result<Ask, Stop> {
     while let Some(w) = rest.first().copied() {
         match w {
             "--app" => {
-                // `app="${2:-}"; shift 2`: with one word left, set -e ends it.
+                // `app="${2:-}"; shift 2`: with no word left, `_need_value`'s line.
                 app = rest
                     .get(1)
-                    .ok_or_else(|| Stop::silent(Exit::Error))?
+                    .ok_or_else(|| Stop::need_value(w))?
                     .to_string();
                 rest = &rest[2..];
                 continue;
@@ -177,7 +177,7 @@ fn deny(words: &[&str]) -> Result<Ask, Stop> {
             "--reason" => {
                 reason = rest
                     .get(1)
-                    .ok_or_else(|| Stop::silent(Exit::Error))?
+                    .ok_or_else(|| Stop::need_value(w))?
                     .to_string();
                 rest = &rest[2..];
                 continue;
@@ -481,7 +481,7 @@ mod tests {
         ));
         assert_eq!(
             parse("approvals", &["--app"]),
-            Some(Err(Stop::silent(Exit::Error)))
+            Some(Err(Stop::need_value("--app")))
         );
         assert_eq!(
             parse("approvals", &["revoke", "--app", "acme"]),

@@ -9,8 +9,7 @@
 //!    is; then `--signal`, `--payload` and `--from` each take the next
 //!    word, any tray flag makes the delivery `inbox`, and every other word
 //!    is skipped. A value flag as the last word is [`needs_value`]'s line
-//!    and exit 2, where bash stops with its own `$2: unbound variable`
-//!    (K2's D6, the named difference `edge-usage-exit-2`). The sender is
+//!    and exit 2, the shell's own (`_need_value`). The sender is
 //!    `--from`'s value, else `*_AGENT_NAME`, else `cli`.
 //! 2. An empty target is [`usage`]'s three lines, exit 1. An empty kind
 //!    is `msg`, an empty payload `{}`.
@@ -81,7 +80,7 @@ pub enum Parsed {
     Send(Signal),
 }
 
-/// A value flag as the last word (K2's D6).
+/// A value flag as the last word (the shell's `_need_value` line).
 pub fn needs_value(flag: &str) -> String {
     super::send::needs_value(flag)
 }

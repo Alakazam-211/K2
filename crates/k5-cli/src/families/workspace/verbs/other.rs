@@ -150,17 +150,9 @@ fn remove(words: &[&str], here: &Here) -> Top {
         let w = words[i];
         match w {
             "--mode" | "--apps" => {
-                // `--mode` last: `mode="$2"` stops on `$2: unbound
-                // variable`, a line with the script's path in it (the
-                // shell's). `--apps` last: `apps_way="${2:-}"; shift 2`,
-                // whose `shift 2` fails, so `set -e` ends the command with
-                // 1 and no line.
+                // As the last word: the shell's `_need_value` line.
                 let Some(v) = words.get(i + 1) else {
-                    return if w == "--mode" {
-                        Top::Shell
-                    } else {
-                        stop(&[], Exit::Error)
-                    };
+                    return stop(&[crate::out::need_value(w).as_str()], Exit::Usage);
                 };
                 if w == "--mode" {
                     mode = (*v).to_string();

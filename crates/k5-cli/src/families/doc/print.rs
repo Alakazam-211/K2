@@ -12,10 +12,13 @@ use crate::out::pylib::ops;
 use crate::out::pylib::path as pypath;
 use k2_client::brand::{CLI_NAME, PRODUCT_NAME};
 
-/// `x="${2:-}"; shift 2`: the value, or `set -e` ending the command
-/// (exit 1, nothing printed) when there is none.
+/// `x="${2:-}"; shift 2`: the value, or the shell's `_need_value` line
+/// (exit 2) when there is none.
 pub fn v2(words: &[String], i: usize) -> Result<String, Exit> {
-    words.get(i + 1).cloned().ok_or(Exit::Error)
+    words
+        .get(i + 1)
+        .cloned()
+        .ok_or_else(|| crate::out::stop_need_value(&words[i]))
 }
 
 /// `--flag=value`'s value.

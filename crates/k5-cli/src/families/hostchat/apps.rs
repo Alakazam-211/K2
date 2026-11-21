@@ -279,9 +279,9 @@ pub fn home(words: &[&str]) -> Plan {
         match w {
             "--json" => json = true,
             "--hidden" => {
-                // `shift 2` with one word left fails: `set -e` ends it, 1.
+                // No word left: the shell's `_need_value` line.
                 let Some(v) = rest.get(i + 1).copied() else {
-                    return Plan::Silent(Exit::Error);
+                    return super::takes_value("--hidden");
                 };
                 hidden = v;
                 i += 1;

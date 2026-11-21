@@ -78,7 +78,7 @@ pub fn parse(words: &[&str]) -> Option<Words<Ask>> {
             other => return Some(Words::Usage(USAGE.replacen("%s", other, 1))),
         }
         if i + 2 > n {
-            return Some(Words::ShiftFailed);
+            return Some(Words::ShiftFailed(words[i].to_string()));
         }
         i += 2;
     }
@@ -168,7 +168,7 @@ pub fn send(cp: &mut Cp<'_>, a: &Ask) -> Exit {
                 out::stderr_line(&line);
                 Exit::Usage
             }
-            Some(Words::ShiftFailed) => Exit::Error,
+            Some(Words::ShiftFailed(flag)) => out::stop_need_value(&flag),
             // A job id `--follow` or `--failures` from the daemon.
             None => {
                 out::stderr_line(wait::USAGE);

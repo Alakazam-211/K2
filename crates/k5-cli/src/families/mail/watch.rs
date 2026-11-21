@@ -37,8 +37,7 @@
 //! command line with `-h` or `--help` (the front sends those on,
 //! [`crate::front`]); a word that is not UTF-8; a value flag (`--add`,
 //! `--remove`, `--wake`, `--days`, `--tz`, `--for`, `--limit`) as the last
-//! word (the shell stops on `$2: unbound variable`, a line with its
-//! script's path in it: the plan's D6); a workspace path with `*`, `?` or
+//! word (the shell's `_need_value` line); a workspace path with `*`, `?` or
 //! `[` in it where the shell expands it unquoted (a file name pattern);
 //! a `--limit` that curl would not put in a URL as it is (a space, a
 //! control byte or `#`); a `digest --every` value that is not ASCII
@@ -431,7 +430,7 @@ pub fn unquoted(project: &str) -> Option<Vec<String>> {
 }
 
 /// The value after a value flag, or `None` when it is the last word (the
-/// shell's `$2: unbound variable`).
+/// shell's `_need_value` line).
 fn value<'a>(rest: &[&'a str], i: usize) -> Option<&'a str> {
     rest.get(i + 1).copied()
 }

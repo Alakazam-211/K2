@@ -73,12 +73,12 @@ fn stop(line: String, help: bool) -> Ask {
     }
 }
 
-/// `shift 2` with one word left, under `set -e`: exit 1, nothing said.
-fn short_shift() -> Ask {
+/// A value flag as the last word: the shell's `_need_value` line, exit 2.
+fn short_shift(flag: &str) -> Ask {
     Ask::Stop {
-        lines: Vec::new(),
+        lines: vec![crate::out::need_value(flag)],
         help: false,
-        exit: Exit::Error,
+        exit: Exit::Usage,
     }
 }
 
@@ -116,7 +116,7 @@ pub fn parse_note(
         };
         if let Some(slot) = slot {
             let Some(v) = words.get(i + 1) else {
-                return short_shift();
+                return short_shift(w);
             };
             *slot = *v;
             i += 2;
@@ -210,7 +210,7 @@ pub fn parse_redeliver(words: &[&str], project: &str) -> Ask {
         match w {
             "--workspace" | "-w" => {
                 let Some(v) = words.get(i + 1) else {
-                    return short_shift();
+                    return short_shift(w);
                 };
                 workspace = *v;
                 i += 2;
@@ -497,7 +497,7 @@ mod tests {
     fn the_stops() {
         assert_eq!(note(&[]), Ask::Help);
         assert_eq!(note(&["note", "--url", "u", "x", "--help"]), Ask::Help);
-        assert_eq!(note(&["note", "--url"]), short_shift());
+        assert_eq!(note(&["note", "--url"]), short_shift("--url"));
         assert_eq!(
             note(&["zap"]),
             stop("Error: unknown browser subcommand 'zap'".into(), true)

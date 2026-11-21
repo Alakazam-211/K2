@@ -186,11 +186,11 @@ fn unknown_flag(w: &str) -> Stop {
     Stop::usage(format!("Unknown flag: {w}"))
 }
 
-/// `x="${2:-}"; shift 2`: with one word left, set -e ends the command.
+/// `x="${2:-}"; shift 2`: with no word left, `_need_value`'s line.
 fn value<'a>(rest: &[&'a str]) -> Result<&'a str, Stop> {
     rest.get(1)
         .copied()
-        .ok_or_else(|| Stop::silent(Exit::Error))
+        .ok_or_else(|| Stop::need_value(rest[0]))
 }
 
 fn post(kind: Kind, app: &str, body: String, json: bool) -> Ask {
@@ -1419,7 +1419,7 @@ mod tests {
         assert_eq!(stop(&["off", "a", "--ios", "x"], "links").exit, Exit::Usage);
         assert_eq!(
             stop(&["set", "a", "--ios"], "links"),
-            Stop::silent(Exit::Error)
+            Stop::need_value("--ios")
         );
         assert_eq!(
             stop(&["send", "a", "--to", "u", "--ttl", "x"], "push").line,

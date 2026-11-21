@@ -22,15 +22,13 @@ use k2_client::cli_name;
 #[cfg(test)]
 mod tests;
 
-/// A `restore` flag that takes a value, as the last word: bash's
-/// `shift 2 || true` shifts nothing there and its loop never ends (a bash
-/// bug, reported). The binary says what is missing and exits 2 (K2's D6,
-/// `edge-usage-exit-2`); nothing is sent.
+/// A `restore` flag that takes a value, as the last word: the shell's
+/// body builder names it (`_gd_restore_body`: "Error: --rev takes a
+/// value", exit 2), the line every value flag gives
+/// ([`crate::out::need_value`] without its `Error: `, which [`usage`]
+/// adds); nothing is sent.
 pub fn needs_value(flag: &str) -> String {
-    format!(
-        concat!("{} needs a value (try '", cli_name!(), " zen data --help')"),
-        flag
-    )
+    format!("{flag} takes a value")
 }
 
 /// `cmd_zen_data`: `words` are the words after `zen data`.
@@ -726,8 +724,7 @@ fn restore(gd: &mut Gd, words: &[String]) -> R<()> {
                 i += 1;
                 continue;
             }
-            // `pass+=("${2-}"); shift 2 || true`: with no value after it,
-            // bash loops for ever ([`needs_value`]).
+            // A flag with no word after it: [`needs_value`].
             let Some(value) = words.get(i + 1) else {
                 return Err(usage(&needs_value(a)));
             };

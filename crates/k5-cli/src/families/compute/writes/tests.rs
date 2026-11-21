@@ -227,7 +227,7 @@ fn cancel_reads_the_words_as_the_loop_does() {
         (&[], usage("")),
         (&["j1", "--bogus"], usage("unknown flag '--bogus'")),
         (&["-"], usage("unknown flag '-'")),
-        (&["j1", "--tag"], Words::ShiftFailed),
+        (&["j1", "--tag"], Words::ShiftFailed("--tag".into())),
         (&["--node", "--bogus"], usage("")),
         (&["--bogus", "--tag"], usage("unknown flag '--bogus'")),
         (&["--all-mine"], ask(|a| a.scope = Some("session"))),
@@ -263,7 +263,7 @@ fn cancel_reads_the_words_as_the_loop_does() {
             &["--all-mine", "--state", ""],
             ask(|a| a.scope = Some("session")),
         ),
-        (&["--all-mine", "--state"], Words::ShiftFailed),
+        (&["--all-mine", "--state"], Words::ShiftFailed("--state".into())),
     ];
     for (words, want) in rows {
         assert_eq!(cancel::parse(words), want, "{words:?}");
@@ -978,8 +978,8 @@ mod fetch_verb {
             ),
             (&[], usage()),
             (&["j", "--out", ""], usage()),
-            (&["j", "--out"], Words::ShiftFailed),
-            (&["j", "--attempt"], Words::ShiftFailed),
+            (&["j", "--out"], Words::ShiftFailed("--out".into())),
+            (&["j", "--attempt"], Words::ShiftFailed("--attempt".into())),
             (
                 &["j", "--attempt", "0"],
                 Words::Usage(format!(
@@ -1087,7 +1087,7 @@ mod grant_verb {
             w(&["mini", "--max-time"], true),
             Words::Usage("usage: bad duration '' (use 2h, 90m, 1h30m, 300s)".into())
         );
-        assert_eq!(w(&["mini", "--max-queued"], true), Words::ShiftFailed);
+        assert_eq!(w(&["mini", "--max-queued"], true), Words::ShiftFailed("--max-queued".into()));
         assert_eq!(
             w(&["mini", "--submitter-max-running", "-1"], true),
             Words::Usage("usage: --submitter-max-running N (0 = off)".into())

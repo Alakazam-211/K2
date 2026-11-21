@@ -26,7 +26,8 @@
 //! (app-space, home, pass-keys, meet). `deliveries` and `agents` ride
 //! [`super::chat`], as the shell's do.
 //!
-//! A value flag with no value or an empty one is one plain line, exit 2
+//! A value flag as the last word is the shell's `_need_value` line, exit 2
+//! ([`takes_value`]). One with an empty value is one plain line, exit 2
 //! ([`needs_value`], K2's D6: the shell stops on `${2:?…}` with a line
 //! naming its own path).
 //!
@@ -127,8 +128,13 @@ fn bad(hint: impl AsRef<str>) -> Plan {
     Plan::Bad(usage(hint.as_ref()))
 }
 
-/// A value flag as the last word or with an empty value, in `cmd_hostchat`,
-/// `_hostchat_media` or `_hostchat_users`. The shell stops there on its own
+/// A value flag as the last word, in `cmd_hostchat`, `_hostchat_media` or
+/// `_hostchat_users`: the shell's `_need_value` line, exit 2.
+pub fn takes_value(flag: &str) -> Plan {
+    Plan::Bad(crate::out::need_value(flag))
+}
+
+/// A value flag with an empty value there. The shell stops on its own
 /// `"${2:?<flag> <what>}"` line (the script's path and line in it, exit 1);
 /// the binary says what is missing and exits 2, K2's D6 ruling for the
 /// class (`scripts/cli-parity.sh`'s named difference `edge-usage-exit-2`).
@@ -265,9 +271,12 @@ pub fn parse(words: &[&str]) -> Plan {
         match slot {
             None => i += 1,
             Some(slot) => {
-                let Some(v) = rest.get(i + 1).filter(|v| !v.is_empty()) else {
-                    return needs_value(w);
+                let Some(v) = rest.get(i + 1) else {
+                    return takes_value(w);
                 };
+                if v.is_empty() {
+                    return needs_value(w);
+                }
                 *slot = v.to_string();
                 i += 2;
             }

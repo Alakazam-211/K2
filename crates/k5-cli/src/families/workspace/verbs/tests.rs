@@ -135,8 +135,12 @@ fn named_verbs_stop_as_the_shell_does() {
 
 #[test]
 fn remove_with_a_flag_and_no_value() {
-    assert_eq!(stop_of(&["remove", "x", "--apps"]), (vec![], Exit::Error));
-    assert_eq!(parse(&["remove", "x", "--mode"], &here()), None);
+    for flag in ["--apps", "--mode"] {
+        assert_eq!(
+            stop_of(&["remove", "x", flag]),
+            (vec![format!("Error: {flag} takes a value")], Exit::Usage)
+        );
+    }
     assert_eq!(stop_of(&["remove"]).0.len(), 20);
 }
 

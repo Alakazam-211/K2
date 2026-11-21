@@ -126,7 +126,7 @@ fn revoke(words: &[&str]) -> Words<Ask> {
         if words[i] == "--workspace" {
             workspace = words.get(i + 1).copied().unwrap_or("").to_string();
             if i + 2 > words.len() {
-                return Words::ShiftFailed;
+                return Words::ShiftFailed(words[i].to_string());
             }
             i += 2;
         } else {
@@ -152,7 +152,7 @@ fn toggle(toggle: Toggle, words: &[&str]) -> Words<Ask> {
             "--workspace" => {
                 workspace = rest.get(i + 1).copied().unwrap_or("").to_string();
                 if i + 2 > rest.len() {
-                    return Words::ShiftFailed;
+                    return Words::ShiftFailed(rest[i].to_string());
                 }
                 i += 2;
             }

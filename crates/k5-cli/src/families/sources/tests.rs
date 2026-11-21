@@ -128,7 +128,7 @@ fn the_verbs_words() {
             kind: "history"
         })
     );
-    assert_eq!(ask("history", &w(&["a", "--to"]), 0), Err(Stop::Shift));
+    assert_eq!(ask("history", &w(&["a", "--to"]), 0), Err(Stop::Shift("--to".into())));
     assert_eq!(
         ask("history", &w(&["a", "f", "--from", "5x"]), 0),
         Err(Stop::Usage(

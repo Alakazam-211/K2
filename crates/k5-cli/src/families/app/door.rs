@@ -173,12 +173,12 @@ fn unknown_flag(w: &str) -> Stop {
     Stop::usage(format!("Unknown flag: {w}"))
 }
 
-/// `x="${2:-}"; shift 2`: the value, or `set -e` ending the command (exit
-/// 1, nothing said) when it is the last word.
+/// `x="${2:-}"; shift 2`: the value, or `_need_value`'s line (exit 2)
+/// when it is the last word.
 fn value<'a>(rest: &[&'a str]) -> Result<&'a str, Stop> {
     rest.get(1)
         .copied()
-        .ok_or_else(|| Stop::silent(Exit::Error))
+        .ok_or_else(|| Stop::need_value(rest[0]))
 }
 
 /// A loop of `--json`, one `--<flag> <value>` (none when `flag` is

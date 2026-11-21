@@ -42,14 +42,14 @@ fn the_words_come_to_the_shell_s_forms() {
     );
     let a = ask(&["put", "c", "--json"], false);
     assert!(a.json && a.doc_json.is_empty());
-    assert_eq!(form(&["put", "c", "--id"]), Form::Shift);
+    assert_eq!(form(&["put", "c", "--id"]), Form::Shift("--id".into()));
     // `get` with one word: `shift 2` fails, and the loop reads the word.
     assert_eq!(form(&["get", "c"]), Form::Usage("unexpected 'c'".into()));
     let a = ask(&["get", "--json"], false);
     assert!(a.json && a.name == "--json");
     let a = ask(&["get"], false);
     assert!(a.name.is_empty() && a.doc_id.is_empty());
-    assert_eq!(form(&["query", "c", "--where"]), Form::Shift);
+    assert_eq!(form(&["query", "c", "--where"]), Form::Shift("--where".into()));
     let a = ask(&["query", "c", "--where", "x", "--limit", "5"], false);
     assert_eq!(a.limit, "5");
     // `rm` and `drop` take no flags: extra words are ignored, and the

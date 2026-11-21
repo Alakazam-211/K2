@@ -9,18 +9,17 @@
 //!   acts: each verb that changes something with `-h` or `--help` sends
 //!   nothing.
 //! - The words: a missing name, an unknown flag, durations, and a value
-//!   flag as the last word (the rows named `bash D6:`, below).
+//!   flag as the last word (the rows named `a value flag last:`).
 //! - Every verb, with `--json` and without; many rows (above 256 KiB);
 //!   the renderer's odd answers.
 //! - Refusals: the codes that need a person (3, with or without the
 //!   daemon's hint), not found (4), `--json` on a refusal, no body, not
 //!   JSON; no answer; the cell socket.
 //!
-//! The rows named `bash D6:` are a bash bug, copied until bash is fixed:
-//! a value flag as the last word is `shift 2` failing under `set -e`
-//! (`sources.sh:661-663`, `:788-789`, `:974`), so bash ends with 1 and
-//! says nothing. They flip to K2's D6 ruling (one `usage:` line, exit 2)
-//! when bash is fixed.
+//! The rows named `a value flag last:` were a bash bug the binary copied
+//! (a `shift 2` failing under `set -e`: exit 1, nothing said). Bash's
+//! `_need_value` fixed it: both print "Error: <flag> takes a value" and
+//! exit 2.
 
 #![cfg(unix)]
 
@@ -181,20 +180,20 @@ fn sources_help_and_words() {
     ] {
         v.push(case(name, args, &[], vec![], owner_and_port, 2, 0));
     }
-    // bash D6: a value flag as the last word; flips to a usage line,
-    // exit 2.
+    // A value flag as the last word: the shell's `_need_value` line,
+    // "Error: <flag> takes a value", exit 2, on both.
     for (name, args) in [
         (
-            "bash D6: history --from last",
+            "a value flag last: history --from last",
             &["history", "web", "health", "--from"][..],
         ),
         (
-            "bash D6: mute --reason last",
+            "a value flag last: mute --reason last",
             &["mute", "web", "--for", "1m", "--reason"],
         ),
-        ("bash D6: pending --names last", &["pending", "--names"]),
+        ("a value flag last: pending --names last", &["pending", "--names"]),
     ] {
-        v.push(case(name, args, &[], vec![], owner_and_port, 1, 0));
+        v.push(case(name, args, &[], vec![], owner_and_port, 2, 0));
     }
     v.push(case(
         "the guard",

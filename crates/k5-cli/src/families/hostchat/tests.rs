@@ -161,8 +161,9 @@ fn recording_policy_lines_say_the_brand_s_name() {
     );
 }
 
-/// A value flag with no value, or an empty one: one plain line, exit 2
-/// (K2's D6), where the shell stops on its own `${2:?…}` line.
+/// A value flag as the last word: the shell's `_need_value` line. One
+/// with an empty value: one plain line, exit 2 (K2's D6), where the shell
+/// stops on its own `${2:?…}` line.
 #[test]
 fn a_value_flag_with_no_value_is_the_d6_line() {
     let want = |flag: &str| {
@@ -170,19 +171,20 @@ fn a_value_flag_with_no_value_is_the_d6_line() {
             "Error: {flag} needs a value (try '{CLI_NAME} hostchat --help')"
         ))
     };
-    assert_eq!(parse(&["enable", "--voice-url"]), want("--voice-url"));
+    let last = |flag: &str| Plan::Bad(format!("Error: {flag} takes a value"));
+    assert_eq!(parse(&["enable", "--voice-url"]), last("--voice-url"));
     assert_eq!(parse(&["upgrade", "--tarball", ""]), want("--tarball"));
     // The first flag that has none, in the shell's order.
     assert_eq!(
         parse(&["status", "--public-url", "", "--bogus"]),
         want("--public-url")
     );
-    assert_eq!(media::parse(&["probe", "--udp"]), want("--udp"));
+    assert_eq!(media::parse(&["probe", "--udp"]), last("--udp"));
     assert_eq!(
         media::parse(&["install", "--voice-url", ""]),
         want("--voice-url")
     );
-    assert_eq!(users::parse(&["invite", "ann", "--email"]), want("--email"));
+    assert_eq!(users::parse(&["invite", "ann", "--email"]), last("--email"));
 }
 
 /// `owner-sessions` (follows 5b6759be0d): the words as the 0.46.17

@@ -11,8 +11,8 @@
 //! 3. The router's teaching line on stderr ([`TEACH`]), on every form.
 //! 4. The words ([`parse`]): each verb's own loop, as `cmd_skin` has it.
 //!    Usage lines go to stderr. A value flag the shell reads with
-//!    `"${2:-}"; shift 2` as the last word stops on the failed `shift 2`
-//!    under `set -e`: exit 1 with nothing printed.
+//!    `"${2:-}"; shift 2` as the last word is the shell's `_need_value`
+//!    line, exit 2.
 //! 5. The request over TCP (the shell calls `cli_request` and
 //!    `cli_post_json` directly), held in `$(…)`; the body is what the
 //!    shell's Python (or `_compute_json`) builds. No answer is the
@@ -191,9 +191,9 @@ impl Stop {
         }
     }
 
-    /// A failed `shift 2` under `set -e`.
-    fn shift() -> Stop {
-        Stop::err(&[], Exit::Error)
+    /// A value flag as the last word: the shell's `_need_value` line.
+    fn shift(flag: &str) -> Stop {
+        Stop::line(crate::out::need_value(flag), Exit::Usage)
     }
 
     fn unknown_flag(w: &str, exit: Exit) -> Stop {
@@ -238,9 +238,15 @@ impl<'a> Words<'a> {
         v.to_string()
     }
 
-    /// `x="${2:-}"; shift 2`: a failed shift ends the command.
+    /// `x="${2:-}"; shift 2`: the value, or `_need_value`'s line after the
+    /// flag just taken.
     fn hard(&mut self) -> Result<String, Stop> {
-        let v = self.w.get(self.i).copied().ok_or_else(Stop::shift)?;
+        let flag = self.i.checked_sub(1).map_or("", |j| self.w[j]);
+        let v = self
+            .w
+            .get(self.i)
+            .copied()
+            .ok_or_else(|| Stop::shift(flag))?;
         self.i += 1;
         Ok(v.to_string())
     }

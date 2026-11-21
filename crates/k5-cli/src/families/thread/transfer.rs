@@ -79,7 +79,7 @@ pub fn parse(words: &[&str]) -> Option<Parsed> {
             }
             "--to" | "--since-days" | "--threads-since" => {
                 let Some(v) = words.get(i + 1) else {
-                    return Some(Parsed::Stop(String::new(), Exit::Error));
+                    return Some(Parsed::Stop(crate::out::need_value(w), Exit::Usage));
                 };
                 if *w == "--to" {
                     a.to = (*v).to_string();

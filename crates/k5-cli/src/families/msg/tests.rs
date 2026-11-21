@@ -330,8 +330,7 @@ fn the_words() {
     // The shell's own call, word for word.
     let call = r#"_vault_handoff send "$secret_name" --to "$target" --note "$text" --via msg"#;
     assert!(source("msg-whoami-done.sh").contains(call));
-    // A value flag as the last word: one line and exit 2 (K2's D6), where
-    // the shell stops on its own `$2: unbound variable`.
+    // A value flag as the last word: the shell's `_need_value` line, exit 2.
     for flag in ["--from", "--command", "--wake-timeout", "--via"] {
         assert_eq!(
             stops(&["ws", "t", flag]),
@@ -339,7 +338,7 @@ fn the_words() {
         );
         assert_eq!(
             send::needs_value(flag),
-            format!("Error: {flag} needs a value (try '{CLI_NAME} msg --help')\n")
+            format!("Error: {flag} takes a value\n")
         );
     }
     let staging = source("msg-whoami-done.sh");
@@ -992,7 +991,6 @@ fn the_lines_name_the_brand() {
         verify::parse(&["a", "b"], &mut NoStdin).unwrap_err().0,
         stop(&["ws", "hi", "--agent", "x"]),
         stop(&["ws"]),
-        send::needs_value("--from"),
     ];
     for line in &lines {
         let named = line.contains(&format!("{cli} ")) || line.contains(product);

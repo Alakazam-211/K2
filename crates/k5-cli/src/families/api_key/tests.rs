@@ -133,7 +133,10 @@ fn the_words() {
     );
     assert_eq!(
         parse(&["hire-ceiling", "k1", "--app-login"]),
-        Some(Ask::Stop(vec![], Exit::Error))
+        Some(Ask::Stop(
+            vec!["Error: --app-login takes a value".into()],
+            Exit::Usage
+        ))
     );
     assert_eq!(
         parse(&["app-access", "k1", "--none"]),
@@ -144,7 +147,10 @@ fn the_words() {
     );
     assert_eq!(
         parse(&["create", "--label"]),
-        Some(Ask::Stop(vec![], Exit::Error))
+        Some(Ask::Stop(
+            vec!["Error: --label takes a value".into()],
+            Exit::Usage
+        ))
     );
     assert_eq!(
         parse(&["revoke"]),

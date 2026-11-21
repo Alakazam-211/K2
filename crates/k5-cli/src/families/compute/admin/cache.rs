@@ -84,7 +84,7 @@ pub fn parse(words: &[&str], in_session: bool) -> Words<Ask> {
                     _ => a.name = v,
                 }
                 if i + 2 > words.len() {
-                    return Words::ShiftFailed;
+                    return Words::ShiftFailed(words[i].to_string());
                 }
                 i += 2;
             }

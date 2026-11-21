@@ -14,9 +14,7 @@
 //!    or require-passport lines, exit 3, the help too.
 //! 3. The verb's words ([`parse_new`], [`name_args`] and the rest): each
 //!    problem is one `usage:` line, exit 2. A value flag as the last word
-//!    is the shell's `shift 2` failing under `set -e`: exit 1, nothing
-//!    said ([`Stop::Shift`], K2's D6 class; a bash bug, copied until bash
-//!    is fixed).
+//!    is the shell's `_need_value` line, exit 2 ([`Stop::Shift`]).
 //! 4. `_sidecar_send` ([`crate::confirm::sidecar_call`]): the cell socket
 //!    with the passport when there is a live one, else TCP. A POST that
 //!    went out on the socket is never sent again.
@@ -73,8 +71,9 @@ pub const TOOL: &str = "sidecar";
 pub enum Stop {
     /// One `usage:` line, exit 2.
     Usage(String),
-    /// `shift 2` with one word left: exit 1, nothing said.
-    Shift,
+    /// A value flag as the last word: the shell's `_need_value` line
+    /// ([`crate::out::need_value`]), exit 2.
+    Shift(String),
 }
 
 /// A flag the verb doesn't have.
@@ -187,7 +186,7 @@ pub fn parse_new(words: &[String]) -> Result<New, Stop> {
                 }
             }
             "--base" | "--harness" | "--brief" | "--brief-text" | "--workspace" | "--model" => {
-                let v = words.get(i + 1).ok_or(Stop::Shift)?.clone();
+                let v = words.get(i + 1).ok_or_else(|| Stop::Shift(a.to_string()))?.clone();
                 match a {
                     "--base" => n.base = v,
                     "--harness" => n.harness = v,
@@ -287,7 +286,7 @@ pub fn name_args(usage: &str, words: &[String]) -> Result<Named, Stop> {
         let a = words[i].as_str();
         match a {
             "--workspace" => {
-                n.workspace = words.get(i + 1).ok_or(Stop::Shift)?.clone();
+                n.workspace = words.get(i + 1).ok_or_else(|| Stop::Shift(a.to_string()))?.clone();
                 i += 1;
             }
             "--json" => n.json = true,
@@ -343,7 +342,7 @@ pub fn parse_simple(verb: &str, words: &[String]) -> Result<Simple, Stop> {
         let a = words[i].as_str();
         match a {
             "--workspace" => {
-                n.workspace = words.get(i + 1).ok_or(Stop::Shift)?.clone();
+                n.workspace = words.get(i + 1).ok_or_else(|| Stop::Shift(a.to_string()))?.clone();
                 i += 1;
             }
             "--json" => n.json = true,
@@ -379,7 +378,7 @@ pub fn parse_access(words: &[String]) -> Result<(String, String), Stop> {
     let mut i = 0;
     while i < rest.len() {
         if rest[i] == "--workspace" {
-            workspace = rest.get(i + 1).ok_or(Stop::Shift)?.clone();
+            workspace = rest.get(i + 1).ok_or_else(|| Stop::Shift("--workspace".into()))?.clone();
             i += 2;
         } else {
             return Err(Stop::Usage(access_usage()));
@@ -547,7 +546,7 @@ fn stopped(s: Stop) -> Exit {
             out::stderr_line(&line);
             Exit::Usage
         }
-        Stop::Shift => Exit::Error,
+        Stop::Shift(flag) => out::stop_need_value(&flag),
     }
 }
 

@@ -114,11 +114,11 @@ fn page(page: &'static str) -> Option<Result<Ask, Stop>> {
     Some(Ok(Ask::Page { page, usage: false }))
 }
 
-/// `x="${2:-}"; shift 2`: with one word left, set -e ends the command.
+/// `x="${2:-}"; shift 2`: with no word left, `_need_value`'s line.
 fn value<'a>(rest: &[&'a str]) -> Result<&'a str, Stop> {
     rest.get(1)
         .copied()
-        .ok_or_else(|| Stop::silent(Exit::Error))
+        .ok_or_else(|| Stop::need_value(rest[0]))
 }
 
 /// `cmd_app_egress`' loop, for `show` (`log` false) or `log`.
@@ -660,7 +660,7 @@ mod tests {
         );
         assert_eq!(
             parse("egress", &["acme", "--tail"]),
-            Some(Err(Stop::silent(Exit::Error)))
+            Some(Err(Stop::need_value("--tail")))
         );
         assert_eq!(parse("egress", &["add", "a", "h"]), None);
         assert_eq!(

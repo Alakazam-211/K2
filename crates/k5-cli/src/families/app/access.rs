@@ -106,12 +106,11 @@ fn unknown_flag(w: &str) -> Stop {
     Stop::usage(format!("Unknown flag: {w}"))
 }
 
-/// `shift 2` with one word left: `set -e` ends the command, exit 1, with
-/// nothing said.
+/// `x="${2:-}"; shift 2`: with no word left, `_need_value`'s line.
 fn value<'a>(rest: &[&'a str]) -> Result<&'a str, Stop> {
     rest.get(1)
         .copied()
-        .ok_or_else(|| Stop::silent(Exit::Error))
+        .ok_or_else(|| Stop::need_value(rest[0]))
 }
 
 fn people(words: &[&str]) -> Result<Ask, Stop> {

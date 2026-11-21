@@ -250,7 +250,7 @@ fn the_words_come_to_the_shell_s_forms() {
         )
     );
     assert_eq!(hint(&["status", "--x"]), "unexpected '--x'");
-    assert_eq!(form(&["create", "--id"]), Form::Shift);
+    assert_eq!(form(&["create", "--id"]), Form::Shift("--id".into()));
     assert_eq!(
         hint(&["create", "--cluster", "c", "--bad"]),
         "unexpected '--bad'"
@@ -294,7 +294,7 @@ fn the_words_come_to_the_shell_s_forms() {
         Form::Usage(concat!(cli_name!(), " db default-major <major> (e.g. 17)").into())
     );
     assert_eq!(hint(&["dsn", "--as"]), "--as needs a name");
-    assert_eq!(form(&["dsn", "--actor"]), Form::Shift);
+    assert_eq!(form(&["dsn", "--actor"]), Form::Shift("--actor".into()));
     assert_eq!(
         hint(&["dsn", "--db", "-x"]),
         concat!(
@@ -476,7 +476,7 @@ fn the_compute_verbs_words_are_the_shell_s() {
         hint(&["cluster", "create", "17", "--name", "n", "--port", "5450"]),
         "--port takes a port in 5433-5449"
     );
-    assert_eq!(form(&["cluster", "create", "17", "--name"]), Form::Shift);
+    assert_eq!(form(&["cluster", "create", "17", "--name"]), Form::Shift("--name".into()));
     assert_eq!(
         hint(&["cluster", "create", "17", "--x"]),
         concat!(
@@ -502,7 +502,7 @@ fn the_compute_verbs_words_are_the_shell_s() {
         hint(&["upgrade", "--status"]),
         concat!(cli_name!(), " db upgrade <db> --status")
     );
-    assert_eq!(form(&["upgrade", "d", "--app"]), Form::Shift);
+    assert_eq!(form(&["upgrade", "d", "--app"]), Form::Shift("--app".into()));
     match cp_ask(&["upgrade", "d", "--to=17", "--live", "--no-wait"]) {
         C::Upgrade(u) => assert!(u.live && u.no_wait && u.to == "17" && u.db == "d"),
         other => panic!("{other:?}"),

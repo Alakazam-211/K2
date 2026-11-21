@@ -5,9 +5,8 @@
 //! After the gates ([`super`]), in the shell's order:
 //!
 //! 1. The verb's loop ([`parse`]): each mistake is one `usage:` line, exit
-//!    2. A value flag as the last word is the shell's `shift 2` failing
-//!    under `set -e`: exit 1, nothing said (K2's D6 class, as
-//!    [`super::super::sidecar`] copies it).
+//!    2. A value flag as the last word is the shell's `_need_value` line,
+//!    exit 2.
 //! 2. The brief (`open`, `new`): `--brief <file>` read whole, `--brief -`
 //!    all of stdin, or `--brief-text`; both is a `usage:` line. A missing
 //!    file is a `usage:` line, a brief that is not UTF-8 is
@@ -121,9 +120,9 @@ fn usage(line: String) -> Plan {
     Plan::Stop(line, Exit::Usage)
 }
 
-/// `shift 2` with one word left: exit 1, nothing said.
-fn shift() -> Plan {
-    Plan::Stop(String::new(), Exit::Error)
+/// A value flag as the last word: the shell's `_need_value` line, exit 2.
+fn shift(flag: &str) -> Plan {
+    Plan::Stop(crate::out::need_value(flag), Exit::Usage)
 }
 
 /// The words after `sessions`, when they are a verb this module does.
@@ -141,7 +140,7 @@ pub fn parse(words: &[&str]) -> Option<Plan> {
             Some(match sidecar::parse_simple("stop", &owned) {
                 Ok(n) => Plan::Do(Write::Stop(n)),
                 Err(sidecar::Stop::Usage(line)) => usage(line),
-                Err(sidecar::Stop::Shift) => shift(),
+                Err(sidecar::Stop::Shift(flag)) => shift(&flag),
             })
         }
         "main" if rest.contains(&"set") => main_set(rest),
@@ -195,7 +194,7 @@ fn open(words: &[&str]) -> Plan {
         };
         if let Some(slot) = slot {
             let Some(v) = words.get(i + 1) else {
-                return shift();
+                return shift(a);
             };
             *slot = v.to_string();
             i += 2;
@@ -255,7 +254,7 @@ fn new(words: &[&str]) -> Plan {
         };
         if let Some(slot) = slot {
             let Some(v) = words.get(i + 1) else {
-                return shift();
+                return shift(a);
             };
             *slot = v.to_string();
             i += 2;
@@ -319,7 +318,7 @@ fn main_set(words: &[&str]) -> Option<Plan> {
         match a {
             "--workspace" => {
                 let Some(v) = words.get(i + 1) else {
-                    return Some(shift());
+                    return Some(shift(a));
                 };
                 workspace = v.to_string();
                 i += 2;

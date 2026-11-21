@@ -1661,7 +1661,7 @@ mod tests {
         );
         assert_eq!(
             stop("box", &["prepare", "--runtime"]),
-            Stop::silent(Exit::Error)
+            Stop::need_value("--runtime")
         );
         assert!(stop("box", &["zap"]).line.ends_with("podman uninstall)"));
         assert_eq!(parse_doctor(&["--store"]), None);

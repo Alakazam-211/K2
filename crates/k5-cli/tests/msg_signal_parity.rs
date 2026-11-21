@@ -13,7 +13,7 @@
 //!   project's path.
 //! - The answer as it came and a newline; a refusal's closing line; the
 //!   cell socket in a session (its answer's trailing newlines dropped).
-//! - The stops: an empty target, a value flag last (K2's D6), a payload
+//! - The stops: an empty target, a value flag last (`_need_value`), a payload
 //!   the shell's Python raises on.
 //!
 //! Each body has a new UUID and the time to the microsecond, so
@@ -443,14 +443,12 @@ fn msg_signal_stops_before_sending() {
     }
 }
 
-/// A value flag as the last word: bash stops on its own `$2: unbound
-/// variable` line and exits 1; the binary prints one plain usage line and
-/// exits 2 (K2's D6, the named difference `edge-usage-exit-2`). Neither
-/// sends anything.
+/// A value flag as the last word: bash's `_need_value` and the binary
+/// print the same line, "Error: <flag> takes a value", and exit 2.
+/// Neither sends anything.
 #[test]
 fn msg_signal_value_flag_last_is_the_d6_line() {
     let rig = Rig::new(VERB, "signal-d6");
-    let cli = k2_client::brand::CLI_NAME;
     for (name, args, flag) in [
         ("--signal last", &["ws", "--signal"][..], "--signal"),
         (
@@ -460,29 +458,27 @@ fn msg_signal_value_flag_last_is_the_d6_line() {
         ),
         ("--from last", &["ws", "--signal", "k", "--from"], "--from"),
     ] {
-        let c = plain(name, args, vec![], 1, 0);
+        let c = plain(name, args, vec![], 2, 0);
         rig.prepare(Side::Bash, &c);
         let b = rig.run(true, &c);
-        if edge_usage_exit_2_proven() {
-            assert_eq!(b.code, Some(1), "{name}: bash's exit: {b:?}");
-            assert!(b.stdout.is_empty(), "{name}: bash's stdout: {b:?}");
-            assert_eq!(b.stderr.lines().count(), 1, "{name}: bash's stderr: {b:?}");
-            assert!(
-                b.stderr.ends_with(": $2: unbound variable\n"),
-                "{name}: bash's stderr: {b:?}"
-            );
-            assert!(
-                rig.read(Side::Bash, false, name).is_empty(),
-                "{name}: bash sent"
-            );
-        }
+        assert_eq!(b.code, Some(2), "{name}: bash's exit: {b:?}");
+        assert!(b.stdout.is_empty(), "{name}: bash's stdout: {b:?}");
+        assert_eq!(
+            b.stderr,
+            format!("Error: {flag} takes a value\n"),
+            "{name}: bash's stderr: {b:?}"
+        );
+        assert!(
+            rig.read(Side::Bash, false, name).is_empty(),
+            "{name}: bash sent"
+        );
         let (r, sent) = rig.binary(&c, false);
         assert!(sent.is_empty(), "{name}: the binary sent {sent:?}");
         assert_eq!((r.code, r.signal), (Some(2), None), "{name}: {r:?}");
         assert!(r.stdout.is_empty(), "{name}: {r:?}");
         assert_eq!(
             r.stderr,
-            format!("Error: {flag} needs a value (try '{cli} msg --help')\n"),
+            format!("Error: {flag} takes a value\n"),
             "{name}"
         );
     }

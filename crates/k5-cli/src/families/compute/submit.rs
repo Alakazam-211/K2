@@ -131,7 +131,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
             out::stderr_line(&line);
             return Some(Exit::Usage);
         }
-        Words::ShiftFailed => return Some(Exit::Error),
+        Words::ShiftFailed(flag) => return Some(out::stop_need_value(&flag)),
     };
     // `run` hands a port curl won't take to the shell.
     settings.port = settings.port_text.as_deref().and_then(curl_port);
@@ -163,7 +163,7 @@ fn map<T>(w: Words<T>, f: impl FnOnce(T) -> Ask) -> Words<Ask> {
     match w {
         Words::Ask(a) => Words::Ask(f(a)),
         Words::Usage(l) => Words::Usage(l),
-        Words::ShiftFailed => Words::ShiftFailed,
+        Words::ShiftFailed(f) => Words::ShiftFailed(f),
     }
 }
 

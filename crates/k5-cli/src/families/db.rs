@@ -84,8 +84,9 @@ pub enum Form {
     Run(Box<run::Run>),
     /// `_db_err "usage" <hint>`, exit 2.
     Usage(String),
-    /// A failed `shift 2` under `set -e`: exit 1, nothing printed.
-    Shift,
+    /// A value flag as the last word (the flag): the shell's
+    /// `_need_value` line, exit 2.
+    Shift(String),
     /// The shell's.
     Shell,
 }
@@ -137,13 +138,13 @@ impl<'a> Words<'a> {
         self.w.is_empty()
     }
 
-    /// `v="${2:-}"; shift 2` under `set -e`: the value, or the run ends.
+    /// `v="${2:-}"; shift 2` after `_need_value`: the value, or its line.
     pub fn value(&mut self) -> Result<&'a str, Form> {
-        let v = self.at(1);
+        let (flag, v) = (self.at(0), self.at(1));
         if self.shift(2) {
             Ok(v)
         } else {
-            Err(Form::Shift)
+            Err(Form::Shift(flag.to_string()))
         }
     }
 }
@@ -847,7 +848,7 @@ fn run_with(args: &[OsString], line: Line, settings: Settings) -> Exit {
             out::stderr_line(&err_line("usage", &hint));
             Exit::Usage
         }
-        Form::Shift => Exit::Error,
+        Form::Shift(flag) => out::stop_need_value(&flag),
         Form::Shell => unreachable!("handed to the shell in run"),
         Form::Home { keep, json } => home::home(&mut client, &mut closing, &keep, json),
         Form::Cap { val, json } => home::cap(&mut client, &mut closing, &project, &val, json),

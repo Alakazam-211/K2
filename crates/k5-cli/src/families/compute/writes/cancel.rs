@@ -13,8 +13,7 @@
 //!
 //! `--json` anywhere prints the answer as it came. The words are read as
 //! the shell's loop reads them ([`parse`]); a flag that takes a value and
-//! comes last ends the command with 1 and nothing said (`shift 2` under
-//! `set -e`).
+//! comes last is the shell's `_need_value` line, exit 2.
 
 use super::{
     body_of, divmod, dumps, head, int_of, is_str, load, object, or_str, print_body, stopped,
@@ -105,7 +104,7 @@ pub fn parse(words: &[&str]) -> Words<Ask> {
                     _ => a.workspace = v,
                 }
                 if i + 2 > words.len() {
-                    return Words::ShiftFailed;
+                    return Words::ShiftFailed(words[i].to_string());
                 }
                 i += 2;
                 continue;

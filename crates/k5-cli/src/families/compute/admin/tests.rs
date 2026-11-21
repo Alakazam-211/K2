@@ -41,7 +41,7 @@ fn revoke_words() {
     );
     assert_eq!(
         switch::parse("revoke", &["mini", "--workspace"]),
-        Words::ShiftFailed
+        Words::ShiftFailed("--workspace".into())
     );
 }
 
@@ -68,11 +68,11 @@ fn toggle_words() {
     );
     assert_eq!(
         switch::parse("manage", &["off", "--workspace"]),
-        Words::ShiftFailed
+        Words::ShiftFailed("--workspace".into())
     );
     assert_eq!(
         switch::parse("manage", &["maybe", "--workspace"]),
-        Words::ShiftFailed
+        Words::ShiftFailed("--workspace".into())
     );
     assert_eq!(
         switch::parse("manage", &["--workspace", "acme"]),
@@ -101,7 +101,7 @@ fn retier_words() {
         retier::parse(&["--batch"]),
         Words::Usage(retier::USAGE.to_string())
     );
-    assert_eq!(retier::parse(&["abc", "--why"]), Words::ShiftFailed);
+    assert_eq!(retier::parse(&["abc", "--why"]), Words::ShiftFailed("--why".into()));
 }
 
 #[test]

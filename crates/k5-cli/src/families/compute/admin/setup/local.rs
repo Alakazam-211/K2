@@ -129,7 +129,7 @@ pub fn parse(words: &[&str]) -> Words<Ask> {
         "enable" => match enable(rest) {
             Words::Ask(e) => Ask::Enable(e),
             Words::Usage(l) => return Words::Usage(l),
-            Words::ShiftFailed => return Words::ShiftFailed,
+            Words::ShiftFailed(f) => return Words::ShiftFailed(f),
         },
         "remote-admin" if matches!(first, "off" | "policy" | "full") => {
             Ask::RemoteAdmin(first.to_string())
@@ -165,7 +165,7 @@ fn enable(words: &[&str]) -> Words<Enable> {
                     }
                 }
                 if short {
-                    return Words::ShiftFailed;
+                    return Words::ShiftFailed(words[i].to_string());
                 }
                 if w == "--remote-admin"
                     && !matches!(e.remote_admin.as_str(), "off" | "policy" | "full")
@@ -667,7 +667,7 @@ mod tests {
             parse(&["enable", "--remote-admin", "some"]),
             Words::Usage(LEVEL_LINE.into())
         );
-        assert_eq!(parse(&["enable", "--remote-admin"]), Words::ShiftFailed);
+        assert_eq!(parse(&["enable", "--remote-admin"]), Words::ShiftFailed("--remote-admin".into()));
         assert_eq!(parse(&["enable", "--x"]), Words::Usage(ENABLE_USAGE.into()));
         assert_eq!(
             parse(&["remote-admin"]),

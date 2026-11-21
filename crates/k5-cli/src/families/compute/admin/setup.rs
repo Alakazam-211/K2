@@ -68,7 +68,7 @@ fn map<T>(w: Words<T>, f: impl FnOnce(T) -> Ask) -> Words<Ask> {
     match w {
         Words::Ask(a) => Words::Ask(f(a)),
         Words::Usage(l) => Words::Usage(l),
-        Words::ShiftFailed => Words::ShiftFailed,
+        Words::ShiftFailed(f) => Words::ShiftFailed(f),
     }
 }
 

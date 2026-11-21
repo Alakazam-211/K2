@@ -84,7 +84,7 @@ pub fn parse_init(words: &[&str]) -> Option<Result<Ask, Stop>> {
         if let Some(slot) = slot {
             *slot = rest.get(1).copied().unwrap_or("").to_string();
             if rest.len() < 2 {
-                return Some(Err(Stop::silent(Exit::Error)));
+                return Some(Err(Stop::need_value(w)));
             }
             rest = &rest[2..];
             continue;
@@ -397,7 +397,7 @@ mod tests {
         );
         assert_eq!(
             parse_init(&["--template"]),
-            Some(Err(Stop::silent(Exit::Error)))
+            Some(Err(Stop::need_value("--template")))
         );
         assert_eq!(parse_init(&["--template", "tauri", "-h"]), None);
     }

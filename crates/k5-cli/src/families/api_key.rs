@@ -340,9 +340,9 @@ fn parse_create(rest: &[&str]) -> Option<Ask> {
             "--label" | "--max-per-day" | "--max-live" | "--max-per-team" | "--hire-db"
             | "--link-targets" | "--reach" | "--folder" | "--app-login" | "--anthropic-key"
             | "--llm-key" | "--provider" | "--base-url" | "--workspaces" | "--allow" | "--deny" => {
-                // `x="${2:-}"; shift 2`: no value, and `shift 2` fails.
+                // `x="${2:-}"; shift 2`: no value is `_need_value`'s line.
                 let Some(v) = value else {
-                    return Some(Ask::Stop(Vec::new(), Exit::Error));
+                    return Some(Ask::Stop(vec![out::need_value(flag)], Exit::Usage));
                 };
                 match flag {
                     "--label" => c.label = v,
@@ -397,9 +397,9 @@ fn parse_ceiling(rest: &[&str]) -> Ask {
     while i < rest.len() {
         match rest[i] {
             "--app-login" => {
-                // `${2:-}; shift 2`: no value, and `shift 2` fails.
+                // `${2:-}; shift 2`: no value is `_need_value`'s line.
                 let Some(v) = rest.get(i + 1) else {
-                    return Ask::Stop(Vec::new(), Exit::Error);
+                    return Ask::Stop(vec![out::need_value("--app-login")], Exit::Usage);
                 };
                 c.apps.push_str(v);
                 c.apps.push('\n');

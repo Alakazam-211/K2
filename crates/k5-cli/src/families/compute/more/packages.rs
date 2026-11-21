@@ -132,7 +132,7 @@ pub fn parse(words: &[&str]) -> Option<Words<Ask>> {
                 match rest[i] {
                     f @ ("--why" | "--job") => {
                         if i + 2 > rest.len() {
-                            return Some(Words::ShiftFailed);
+                            return Some(Words::ShiftFailed(rest[i].to_string()));
                         }
                         if f == "--why" {
                             why = rest[i + 1];
@@ -172,7 +172,7 @@ pub fn parse(words: &[&str]) -> Option<Words<Ask>> {
                 match rest[i] {
                     f @ ("--node" | "--state" | "--limit") => {
                         if i + 2 > rest.len() {
-                            return Some(Words::ShiftFailed);
+                            return Some(Words::ShiftFailed(rest[i].to_string()));
                         }
                         q.push_str(&format!("&{}={}", &f[2..], quote(rest[i + 1])));
                         i += 2;
@@ -200,7 +200,7 @@ pub fn parse(words: &[&str]) -> Option<Words<Ask>> {
                 match rest[i] {
                     "--note" | "--why" => {
                         if i + 2 > rest.len() {
-                            return Some(Words::ShiftFailed);
+                            return Some(Words::ShiftFailed(rest[i].to_string()));
                         }
                         note = rest[i + 1];
                         i += 2;
@@ -255,7 +255,7 @@ fn policy(rest: &[&str], json: bool) -> Option<Words<Ask>> {
         match rest[i] {
             "--reason" => {
                 if i + 2 > rest.len() {
-                    return Some(Words::ShiftFailed);
+                    return Some(Words::ShiftFailed(rest[i].to_string()));
                 }
                 reason = rest[i + 1];
                 i += 2;

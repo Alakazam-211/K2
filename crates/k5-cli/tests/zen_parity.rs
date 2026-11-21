@@ -1027,17 +1027,18 @@ fn zen_lines_say_the_brand_s_name() {
             &["path", "--x"],
             format!("Error: unexpected '--x' (see {cli} zen --help)\n"),
         ),
-        // K2's D6 (`edge-usage-exit-2`): a restore flag with no value
-        // after it. Bash's loop never ends there (`shift 2 || true`), so
+        // A restore flag with no value after it: the shell's line
+        // ("Error: --rev takes a value", exit 2). Bash's loop here never
+        // ends until the shell's restore fix lands on this branch, so
         // only the binary runs.
         // native: zen data restore
         (
             &["data", "restore", "w", "--rev"],
-            format!("Error: --rev needs a value (try '{cli} zen data --help')\n"),
+            "Error: --rev takes a value\n".to_string(),
         ),
         (
             &["data", "restore", "--prefix", "a/", "--at"],
-            format!("Error: --at needs a value (try '{cli} zen data --help')\n"),
+            "Error: --at takes a value\n".to_string(),
         ),
     ] {
         let c = case("brand", args, &[], vec![], owner_and_port, 2, 0);

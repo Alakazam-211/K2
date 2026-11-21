@@ -43,7 +43,7 @@ pub fn parse(words: &[&str]) -> Option<Words<Ask>> {
             "--since" => {
                 since = words.get(i + 1).copied().unwrap_or("").to_string();
                 if i + 2 > words.len() {
-                    return Some(Words::ShiftFailed);
+                    return Some(Words::ShiftFailed(words[i].to_string()));
                 }
                 i += 2;
                 continue;
@@ -96,7 +96,7 @@ mod tests {
     #[test]
     fn the_words() {
         assert_eq!(parse(&[]), Some(Words::Usage(USAGE.into())));
-        assert_eq!(parse(&["j", "--since"]), Some(Words::ShiftFailed));
+        assert_eq!(parse(&["j", "--since"]), Some(Words::ShiftFailed("--since".into())));
         assert_eq!(parse(&["j", "--since", "a b"]), None);
         assert_eq!(
             parse(&["--raw", "j1", "--since", "12"]),

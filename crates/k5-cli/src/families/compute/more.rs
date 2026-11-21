@@ -169,7 +169,7 @@ fn ready<T>(w: Words<T>) -> Result<T, Exit> {
             out::stderr_line(&line);
             Err(Exit::Usage)
         }
-        Words::ShiftFailed => Err(Exit::Error),
+        Words::ShiftFailed(flag) => Err(out::stop_need_value(&flag)),
     }
 }
 

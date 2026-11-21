@@ -143,7 +143,7 @@ fn unknown_flag(w: &str) -> Stop {
 }
 
 /// The words: `values` are the flags that take one (`x="${2:-}"; shift
-/// 2`, set -e ending the command when it is the last word), `switches`
+/// 2`, `_need_value`'s line when it is the last word), `switches`
 /// the ones that don't; any other `-` word is `bad(w)`; a second plain
 /// word is `two`. The values in order of `values`, the switches seen, and
 /// the App.
@@ -170,7 +170,7 @@ fn words(
         if let Some(i) = values.iter().position(|f| *f == w) {
             out.values[i] = rest.get(1).copied().unwrap_or("").to_string();
             if rest.len() < 2 {
-                return Err(Stop::silent(Exit::Error));
+                return Err(Stop::need_value(w));
             }
             rest = &rest[2..];
             continue;
@@ -407,7 +407,7 @@ fn push(ws: &[&str]) -> Result<Ask, Stop> {
         };
         if took {
             if rest.len() < 2 {
-                return Err(Stop::silent(Exit::Error));
+                return Err(Stop::need_value(w));
             }
             rest = &rest[2..];
             continue;
@@ -972,7 +972,7 @@ mod tests {
         );
         assert_eq!(
             parse(&["key", "acme", "--set"]),
-            Some(Err(Stop::silent(Exit::Error)))
+            Some(Err(Stop::need_value("--set")))
         );
         assert_eq!(
             parse(&["key", "acme", "--set", ""]),

@@ -35,7 +35,7 @@ fn the_roster_words() {
     );
     assert_eq!(
         trust::parse("roster", &["set", "mini", "--host"]),
-        Words::ShiftFailed
+        Words::ShiftFailed("--host".into())
     );
     assert_eq!(
         trust::parse("roster", &["set", "--host", "h"]),

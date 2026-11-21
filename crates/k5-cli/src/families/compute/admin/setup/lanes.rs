@@ -78,7 +78,7 @@ pub fn parse(words: &[&str]) -> Words<Ask> {
                     why = v;
                 }
                 if i + 2 > words.len() {
-                    return Words::ShiftFailed;
+                    return Words::ShiftFailed(words[i].to_string());
                 }
                 i += 2;
                 continue;
@@ -217,7 +217,7 @@ mod tests {
             r#"{"name": "ci", "from": "ci-standard", "set": {"cpus": 8, "isolation": ["vm", "net"], "name": "x=y", "profiles": ["a"], "big": Infinity}}"#
         );
         assert_eq!(parse(&["set"]), Words::Usage(SET_USAGE.into()));
-        assert_eq!(parse(&["set", "ci", "--from"]), Words::ShiftFailed);
+        assert_eq!(parse(&["set", "ci", "--from"]), Words::ShiftFailed("--from".into()));
         assert_eq!(
             parse(&["set", "ci", "nope"]),
             Words::Usage(SET_USAGE.into())

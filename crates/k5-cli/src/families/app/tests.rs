@@ -282,7 +282,7 @@ fn list_and_deployment_words() {
     assert_eq!((l.workspace.as_str(), l.boxed, l.json), ("w", true, true));
     assert_eq!(
         reads::parse_list(&["--workspace"]).unwrap().unwrap_err(),
-        Stop::silent(Exit::Error)
+        Stop::need_value("--workspace")
     );
     assert_eq!(
         reads::parse_list(&["x"]).unwrap().unwrap_err(),
@@ -489,7 +489,7 @@ fn group_one_words() {
     );
     assert_eq!(
         a("profile", &["settings", "acme", "--names"]).unwrap_err(),
-        Stop::silent(Exit::Error)
+        Stop::need_value("--names")
     );
     assert_eq!(
         a(

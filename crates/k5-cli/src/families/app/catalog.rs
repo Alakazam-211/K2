@@ -216,8 +216,8 @@ fn loop_words(sub: &str, words: &[&str]) -> Result<Ask, Stop> {
         match w {
             "--json" => json = true,
             "--id" | "--app" => {
-                // `x="${2:-}"; shift 2`: with one word left, set -e ends it.
-                let v = rest.get(1).ok_or_else(|| Stop::silent(Exit::Error))?;
+                // `x="${2:-}"; shift 2`: with no word left, `_need_value`'s line.
+                let v = rest.get(1).ok_or_else(|| Stop::need_value(w))?;
                 if w == "--app" {
                     app = v.to_string();
                 } else {
@@ -1062,7 +1062,7 @@ mod tests {
                 json: false
             }))
         );
-        assert_eq!(p(&["job", "--id"]), Some(Err(Stop::silent(Exit::Error))));
+        assert_eq!(p(&["job", "--id"]), Some(Err(Stop::need_value("--id"))));
         assert!(matches!(p(&["zap"]), Some(Err(s)) if s.line.ends_with("app catalog --help)")));
         assert!(
             matches!(p(&["list", "--x"]), Some(Err(s)) if s.line.starts_with("Unknown flag: --x"))

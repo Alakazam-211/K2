@@ -11,9 +11,12 @@ fn the_words_are_the_shells() {
     );
     assert_eq!(
         parse(&["request", "--payload"]),
-        Ask::Stop(vec![], Exit::Error)
+        Ask::Stop(vec!["Error: --payload takes a value".into()], Exit::Usage)
     );
-    assert_eq!(parse(&["status", "--out"]), Ask::Stop(vec![], Exit::Error));
+    assert_eq!(
+        parse(&["status", "--out"]),
+        Ask::Stop(vec!["Error: --out takes a value".into()], Exit::Usage)
+    );
     assert!(
         matches!(parse(&["request"]), Ask::Stop(l, Exit::Usage) if l[0].starts_with("Usage: "))
     );

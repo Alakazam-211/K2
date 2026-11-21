@@ -159,7 +159,7 @@ fn the_words() {
             agents: vec!["a".into(), "b".into()]
         })
     );
-    assert_eq!(words(&["create", "--name"]).unwrap_err(), Stop::shift());
+    assert_eq!(words(&["create", "--name"]).unwrap_err(), Stop::shift("--name"));
     assert_eq!(
         words(&["create", "--agent", "a"]).unwrap_err().lines,
         vec![USE_NAME, CREATE_USAGE]
@@ -182,7 +182,7 @@ fn the_words() {
             agents: vec![]
         })
     );
-    assert_eq!(words(&["rooms", "--agent"]).unwrap_err(), Stop::shift());
+    assert_eq!(words(&["rooms", "--agent"]).unwrap_err(), Stop::shift("--agent"));
     assert_eq!(
         words(&["revoke", ""]).unwrap_err().lines,
         vec![REVOKE_USAGE]

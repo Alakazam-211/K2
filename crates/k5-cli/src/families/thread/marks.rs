@@ -6,7 +6,8 @@
 //!
 //! Each drops the command line's first word, whatever it is (the shell's
 //! `shift # "read-all"`), before it reads the rest. `unread --kind` as the
-//! last word is [`super::post::needs_value`]'s line and exit 2 (K2's D6).
+//! last word is [`super::post::needs_value`]'s line and exit 2 (the
+//! shell's `_need_value`).
 
 use super::super::msg::py::eq;
 use super::super::msg::send::echo;

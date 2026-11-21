@@ -20,8 +20,8 @@
 //!
 //! The shell answers these forms itself ([`run`] returns `None`): any
 //! `-h` or `--help` (the front sends those to a page or the shell);
-//! the `wake` cases [`wake`] names; a value flag as the last word (the shell stops on
-//! `$2: unbound variable` or a `shift 2` out of range, K2's D6 class); a
+//! the `wake` cases [`wake`] names; a value flag as the last word (the shell's
+//! `_need_value` line); a
 //! word bash would expand as a file name in `--days` or `--months`; an
 //! `--instructions-file` holding a NUL or bytes that are not UTF-8;
 //! `wakeup --edit` whose editor (`EDITOR`, else vi) is not on `PATH`,

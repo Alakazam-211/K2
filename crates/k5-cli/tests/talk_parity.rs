@@ -496,14 +496,12 @@ fn talk_delivers_through_msg() {
     }
 }
 
-/// A value flag as the last word: bash stops on its own `$2: unbound
-/// variable` line and exits 1; the binary prints one plain line and exits
-/// 2 (K2's D6, `scripts/cli-parity.sh`'s named difference
-/// `edge-usage-exit-2`). Neither sends anything.
+/// A value flag as the last word: bash's `_need_value` and the binary
+/// print the same line, "Error: <flag> takes a value", and exit 2.
+/// Neither sends anything.
 #[test]
 fn talk_value_flag_last_is_the_d6_line() {
     let rig = Rig::new(VERB, "d6");
-    let cli = k2_client::brand::CLI_NAME;
     for flag in [
         "--from",
         "--command",
@@ -517,30 +515,28 @@ fn talk_value_flag_last_is_the_d6_line() {
         "--wake-timeout",
     ] {
         let args: &'static [&'static str] = Box::leak(vec!["ws", "hi", flag].into_boxed_slice());
-        let c = plain(leak(format!("{flag} last")), args, vec![], 1, 0);
+        let c = plain(leak(format!("{flag} last")), args, vec![], 2, 0);
         let name = c.name;
         rig.prepare(Side::Bash, &c);
         let b = rig.run(true, &c);
-        if edge_usage_exit_2_proven() {
-            assert_eq!(b.code, Some(1), "{name}: bash's exit: {b:?}");
-            assert!(b.stdout.is_empty(), "{name}: bash's stdout: {b:?}");
-            assert_eq!(b.stderr.lines().count(), 1, "{name}: bash's stderr: {b:?}");
-            assert!(
-                b.stderr.ends_with(": $2: unbound variable\n"),
-                "{name}: bash's stderr: {b:?}"
-            );
-            assert!(
-                rig.read(Side::Bash, false, name).is_empty(),
-                "{name}: bash sent"
-            );
-        }
+        assert_eq!(b.code, Some(2), "{name}: bash's exit: {b:?}");
+        assert!(b.stdout.is_empty(), "{name}: bash's stdout: {b:?}");
+        assert_eq!(
+            b.stderr,
+            format!("Error: {flag} takes a value\n"),
+            "{name}: bash's stderr: {b:?}"
+        );
+        assert!(
+            rig.read(Side::Bash, false, name).is_empty(),
+            "{name}: bash sent"
+        );
         let (r, sent) = rig.binary(&c, false);
         assert!(sent.is_empty(), "{name}: the binary sent {sent:?}");
         assert_eq!((r.code, r.signal), (Some(2), None), "{name}: {r:?}");
         assert!(r.stdout.is_empty(), "{name}: {r:?}");
         assert_eq!(
             r.stderr,
-            format!("Error: {flag} needs a value (try '{cli} talk --help')\n"),
+            format!("Error: {flag} takes a value\n"),
             "{name}"
         );
     }

@@ -42,7 +42,7 @@ fn run_words() {
         usage(run::parse(&["--bogus", "--", "x"])),
         format!("usage: unknown flag '--bogus' ({CLI_NAME} compute --help)")
     );
-    assert!(matches!(run::parse(&["--os"]), Some(Words::ShiftFailed)));
+    assert!(matches!(run::parse(&["--os"]), Some(Words::ShiftFailed("--os".into()))));
     assert_eq!(
         usage(run::parse(&["--timeout", "1x", "--", "x"])),
         "usage: bad duration '1x' (use 2h, 90m, 1h30m, 300s)"
@@ -195,7 +195,7 @@ fn prewarm_words_and_body() {
     );
     assert!(matches!(
         prewarm::parse(&["--tag"]),
-        Some(Words::ShiftFailed)
+        Some(Words::ShiftFailed(_))
     ));
 }
 

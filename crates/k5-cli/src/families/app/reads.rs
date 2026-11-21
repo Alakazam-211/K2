@@ -250,10 +250,9 @@ pub fn parse_list(words: &[&str]) -> Option<Result<List, Stop>> {
     while let Some(w) = rest.first().copied() {
         match w {
             "--workspace" => {
-                // `shift 2` with one word left fails, and `set -e` ends
-                // the command there with nothing said.
+                // No word left: `_need_value`'s line.
                 if rest.len() < 2 {
-                    return Some(Err(Stop::silent(Exit::Error)));
+                    return Some(Err(Stop::need_value(w)));
                 }
                 l.workspace = rest[1].to_string();
                 rest = &rest[2..];

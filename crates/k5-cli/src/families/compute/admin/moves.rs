@@ -78,7 +78,7 @@ pub fn parse(words: &[&str]) -> Words<Ask> {
                 _ => a.workspace = v,
             }
             if short {
-                return Words::ShiftFailed;
+                return Words::ShiftFailed(words[i].to_string());
             }
             if w == "--to" && a.to.is_empty() {
                 return usage("--to needs a node");

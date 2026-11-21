@@ -5,7 +5,7 @@
 //!
 //! Each reads its words as the shell's loop does (a usage mistake is its
 //! line and exit 2 before anything is sent; a flag's value missing is
-//! `shift 2` failing under `set -e`: exit 1, nothing said), sends one
+//! `_need_value`'s line, exit 2), sends one
 //! request (`_app_rt_post` or `_compute_call`), and prints the answer as
 //! the shell's Python does, step by step: a step that raises ends the
 //! command with its traceback and exit 1.
@@ -133,12 +133,12 @@ pub const VERBS: &[&str] = &[
     "build", "install", "deploy", "rollback", "stop", "start", "restart", "link", "seal", "config",
 ];
 
-/// `x="${2:-}"; shift 2` at `i`: the value and the next index, or `set
-/// -e` ending the command (no value: `shift 2` fails).
+/// `x="${2:-}"; shift 2` at `i`: the value and the next index, or
+/// `_need_value`'s line (no value).
 pub fn value<'a>(words: &[&'a str], i: usize) -> Result<(&'a str, usize), Stop> {
     match words.get(i + 1) {
         Some(v) => Ok((v, i + 2)),
-        None => Err(Stop::silent(Exit::Error)),
+        None => Err(Stop::need_value(words[i])),
     }
 }
 
@@ -1316,7 +1316,7 @@ mod tests {
     #[test]
     fn the_words_as_the_shell_reads_them() {
         assert_eq!(stop("build", &[]).line, usage::BUILD);
-        assert_eq!(stop("build", &["--manifest"]), Stop::silent(Exit::Error));
+        assert_eq!(stop("build", &["--manifest"]), Stop::need_value("--manifest"));
         assert_eq!(stop("build", &["--x"]).line, "Unknown flag: --x");
         assert_eq!(parse("build", &["a", "-h"]), None);
         assert!(catalog_install(&["a", "--catalog=x"]));

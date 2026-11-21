@@ -50,8 +50,8 @@
 //! (`agent::host`, `agent@host`) goes over federation ([`super::remote`]).
 //!
 //! A value flag (`--from`, `--command`, `--wake-timeout`, `--via`) as the
-//! last word is [`needs_value`]'s line and exit 2, where bash stops with
-//! its own `$2: unbound variable` (K2's D6).
+//! last word is [`needs_value`]'s line and exit 2, the shell's own
+//! (`_need_value`).
 
 use super::super::{end_in_pipe, without_nuls};
 use super::py::s;
@@ -195,20 +195,10 @@ pub fn unknown_flag(word: &str) -> String {
     )
 }
 
-/// A value flag as the last word. The shell stops there on its own
-/// `$2: unbound variable` line (the script's path and line in it, exit
-/// 1); the binary says what is missing and exits 2, K2's D6 ruling for
-/// the class (`scripts/cli-parity.sh`'s named difference
-/// `edge-usage-exit-2`).
+/// A value flag as the last word: the shell's `_need_value` line
+/// ([`crate::out::need_value`]), exit 2.
 pub fn needs_value(flag: &str) -> String {
-    format!(
-        concat!(
-            "Error: {} needs a value (try '",
-            cli_name!(),
-            " msg --help')\n"
-        ),
-        flag
-    )
+    format!("{}\n", crate::out::need_value(flag))
 }
 
 /// The wire-form lines.

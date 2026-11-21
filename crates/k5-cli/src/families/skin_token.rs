@@ -10,8 +10,8 @@
 //!    (exit 3, [`crate::prelude::id_tool`]).
 //! 3. The router's teaching line on stderr ([`TEACH`]), on every form.
 //! 4. The words ([`parse`]). Usage lines go to stderr. A value flag
-//!    (`--name`, `--caps`, `--agent`) as the last word stops on its
-//!    failed `shift 2` under `set -e`: exit 1 with nothing printed.
+//!    (`--name`, `--caps`, `--agent`) as the last word is the shell's
+//!    `_need_value` line, exit 2.
 //! 5. One request over TCP (the shell calls `cli_request` and
 //!    `cli_post_json` directly, never the cell socket), held in `$(…)`:
 //!    `GET /cli/skin-tokens`, or a JSON `POST` to `/cli/skin-tokens`,
@@ -176,9 +176,12 @@ impl Stop {
         }
     }
 
-    /// A failed `shift 2` under `set -e`.
-    fn shift() -> Stop {
-        Stop::new(&[], Exit::Error)
+    /// A value flag as the last word: the shell's `_need_value` line.
+    fn shift(flag: &str) -> Stop {
+        Stop {
+            lines: vec![crate::out::need_value(flag)],
+            exit: Exit::Usage,
+        }
     }
 
     fn print(&self) -> Exit {
@@ -220,7 +223,7 @@ fn parse_create(rest: &[&str]) -> Result<Ask, Stop> {
         let value = || {
             rest.get(i + 1)
                 .map(|v| v.to_string())
-                .ok_or_else(Stop::shift)
+                .ok_or_else(|| Stop::shift(rest[i]))
         };
         match rest[i] {
             "--name" => name = value()?,
@@ -255,7 +258,7 @@ fn parse_rooms(rest: &[&str]) -> Result<Ask, Stop> {
     while i < rest.len() {
         match rest[i] {
             "--agent" | "--agents" => {
-                agents.push(rest.get(i + 1).ok_or_else(Stop::shift)?.to_string());
+                agents.push(rest.get(i + 1).ok_or_else(|| Stop::shift(rest[i]))?.to_string());
                 i += 2;
                 continue;
             }

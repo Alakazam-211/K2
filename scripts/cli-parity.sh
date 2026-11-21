@@ -186,7 +186,7 @@ EXPECTED_DIFFS=(
     "env-answer-large|K2 ruling, the K5 lanes' large answers|bash hands a daemon answer to Python in an environment variable, so above the kernel's argument limit bash stops with 'Argument list too long' (exit 126) and k5 prints the answer. The cases, each with its own large-answer row: \`wiki status\` with an index above 1 MiB (wiki_parity.rs, wiki_status_with_a_large_answer; on macOS its /bin/bash 3.2 exits 1, and both send the same two requests), \`mail send --body-file\` with a body above 128 KiB (mail_writes_parity.rs, a_large_body; the body rides M_BODY: on Linux bash sends nothing, the binary sends it once; macOS has one limit for the whole environment, where both send it), \`zen history\` with an answer above 1 MiB (zen_parity.rs, zen_history_with_a_large_answer; macOS's bash fails there too, its wording not checked), \`agent list\` above 1 MiB (agent_parity.rs, a_list_above_the_environment_s_limit; 1 on macOS) and \`publish ps\` (publish_parity.rs, ps_large)"
     "expect-100-continue|K2 ruling, K5 transport|a POST whose body is over 1 MiB (\`store blob put\` of a 1.2 MB file, one 2 MiB chunk, 1.6 MB of JSON): bash's curl adds \"Expect: 100-continue\" to the request's head and waits for the daemon's 100 before the body; the binary never sends it and sends the body at once. Everything else in the two requests is the same (the parity rig's hand-over headers masked), and a body under 1 MiB goes out the same from both. stdout, stderr and the exit code are the same"
     "python-version-error-text|K2 ruling, the macOS range 2 fixes|the binary words a Python error as Python 3.12 does (it has no Python version to copy); the shell's python3 words four of them otherwise, by its version, read from that python3, never guessed: before 3.11 \"string indices must be integers\" has no \", not 'str'\" (macOS's 3.9); before 3.12 a dict sliced raises TypeError (\"unhashable type: 'slice'\") where the binary's raises KeyError (the parity rig's tracebacks, mail forward show's \"events that are a dict\"); before 3.12 datetime.utcfromtimestamp prints no DeprecationWarning, where the binary prints 3.12's one line (\"<string>:<n>: DeprecationWarning: datetime.datetime.utcfromtimestamp() is deprecated ...\", remote-session's times); from 3.13 a JSON trailing comma is \"Illegal trailing comma before end of object\" (or array) at the comma, where the binary says \"Expecting property name enclosed in double quotes\" (or \"Expecting value\") after it (api-key list's \"a trailing comma\"). The rest of the output, the exit and the requests are the same"
-    "edge-usage-exit-2|K2 ruling D6|bash's own failure on a command line it can't read, which only bash can print: a value flag as the last word (\`msg ws hi --from\`, also --command, --wake-timeout and --via; \`thread bob --from\`, also --limit and --before-seq, and \`thread unread --kind\`; \`talk ws hi --lines\`, also --from, --command, --agent, --session, --token, --answer, --respond, --answers and --wake-timeout) stops bash on \"<path to cli/k2>: line <n>: \$2: unbound variable\" with exit 1; the binary prints one plain line, \"Error: --from needs a value (try 'k2 msg --help')\", and exits 2. Also hostchat's value flags, last or with an empty value (\`hostchat enable --tarball\`, also --recovery-key-file, --identity, --voice-url, --media-tarball, --node-ip, --accept-binary, --confirm-hostname and --public-url; \`hostchat media install --url\`, also --voice-url, --public-url, --node-ip, --tarball, --media-tarball, --udp, --tcp and --turn-tls; \`hostchat users invite ann --role\`, also --display-name and --email): bash stops on its own \"<path to cli/k2>: line <n>: 2: --tarball FILE\" with exit 1, and the binary prints \"Error: --tarball needs a value (try 'k2 hostchat --help')\" and exits 2 (hostchat_parity.rs). Neither sends anything. Also \`zen data restore w --rev\` (any flag but --json and --dry-run as the last word): bash's loop there never ends (\`shift 2 || true\` shifts nothing), so only the binary runs it: \"Error: --rev needs a value (try 'k2 zen data --help')\", exit 2, nothing sent (crates/k5-cli/tests/zen_parity.rs, the brand rows)"
+    "edge-usage-exit-2|K2 ruling D6|bash's own failure on a value it can't read, which only bash can print: hostchat's value flags with an empty value (\`hostchat enable --tarball ''\`, also --recovery-key-file, --identity, --voice-url, --media-tarball, --node-ip, --accept-binary, --confirm-hostname and --public-url; \`hostchat media install --url ''\`, also --voice-url, --public-url, --node-ip, --tarball, --media-tarball, --udp, --tcp and --turn-tls; \`hostchat users invite ann --role ''\`, also --display-name and --email): bash stops on its own \"<path to cli/k2>: line <n>: 2: --tarball FILE\" (its \${2:?...}) with exit 1, and the binary prints \"Error: --tarball needs a value (try 'k2 hostchat --help')\" and exits 2 (hostchat_parity.rs). Neither sends anything. A value flag as the LAST word is no longer a difference: bash's _need_value and the binary both print \"Error: <flag> takes a value\" and exit 2. Also \`zen data restore w --rev\` (any flag but --json and --dry-run as the last word): until the shell's restore fix reaches this branch, bash's loop there never ends (\`shift 2 || true\` shifts nothing), so only the binary runs it: \"Error: --rev takes a value\", exit 2, nothing sent (crates/k5-cli/tests/zen_parity.rs, the brand rows)"
     "exec-child-env|K2 ruling 1b, vault run (db run's ruling 2a child the same)|the program a command runs in its place (vault run's helper, db run's command, named in families::vault::run and families::db::run): bash's child also gets bash's own environment changes, SHLVL and _K2_PY_PROXY_RULE (the shell CLI's Python proxy rule), and _ (the program's path) where bash's exec sets it, none of which the binary's child gets; and an exec that fails (a folder the daemon named) exits 126 on both, worded \"<path to cli/k2>: line <n>: <helper>: Is a directory\" by bash (\"is a directory\" by macOS bash 3.2) and \"exec: <helper>: Permission denied (os error 13)\" by the binary. The request each sends is the same"
     "curl-config-files|K2 and the Steward, K5 shared transport|the binary never reads curl's config files (~/.curlrc, CURL_HOME): one can carry options that change where the token goes. Bash's curl reads ~/.curlrc on every call it makes, so a header that file adds (the check: header = \"X-From-Curlrc: acme\") is on bash's request to the daemon and not on the binary's. The rest of the request, stdout, stderr and the exit code are the same (\`feedback list\`). The binary does read CURL_CA_BUNDLE and SSL_CERT_FILE, as curl does"
     "macos-system-proxy|K2 ruling, K5 shared transport|on macOS the system proxy (System Settings, Network, Proxies; no environment variable) is read by python3's urllib (urllib.request.getproxies_macosx_sysconf, when no proxy variable is set), so a bash Python block that reaches another machine over https may go through it; the binary reads only the proxy variables, as curl does, and never the system setting (it links no SystemConfiguration framework). Every bash request made with curl ignores the system setting too. Linux has no such setting: not proven there"
@@ -224,48 +224,34 @@ check_version_offline() {
     return 1
 }
 
-# check_edge_usage_exit_2: a value flag as the last word, with a port and
-# an owner token on disk but nothing listening (neither side may ask).
-# Bash stops on its own unbound-variable line and exits 1; the binary
-# prints its one line and exits 2. That holds from bash 4 on (Linux).
-# macOS's /bin/bash 3.2 reads on and exits 0: there only the binary's
-# side is checked, bash's answers are listed, and the check says the
-# difference itself was not proven here (returns 3).
+# check_edge_usage_exit_2: a hostchat value flag with an empty value, with
+# a port and an owner token on disk but nothing listening (neither side
+# may ask). Bash stops on its own ${2:?...} line and exits 1; the binary
+# prints its one line and exits 2.
 check_edge_usage_exit_2() {
-    local d="$WORK/d6" flag rc out err problems=() seen=() major
-    major="$(bash -c 'echo "${BASH_VERSINFO[0]}"')"
+    local d="$WORK/d6" rc out err problems=() args sub flag hint
     mkdir -p "$d/home/.k2" "$d/ws"
     printf 'owner-tok-parity\n' >"$d/home/.k2/heartbeat.token"
     printf '1\n' >"$d/home/.k2/heartbeat.port"
     out="$d/out" err="$d/err"
-    local verb verb_flag
-    for verb_flag in msg:--from msg:--command msg:--wake-timeout msg:--via \
-        talk:--from talk:--command talk:--lines talk:--agent talk:--session talk:--token \
-        talk:--answer talk:--respond talk:--answers talk:--wake-timeout; do
-        verb="${verb_flag%%:*}" flag="${verb_flag#*:}"
-        rc=0; (cd "$d/ws" && env -i PATH="$PATH" HOME="$d/home" bash "$ROOT/cli/k2" "$verb" ws hi "$flag") >"$out" 2>"$err" </dev/null || rc=$?
-        if [ "$major" -ge 4 ]; then
-            [ "$rc" = 1 ] || problems+=("bash $verb ws hi $flag exited $rc, want 1")
-            [ ! -s "$out" ] || problems+=("bash $verb ws hi $flag printed on stdout: $(head -c 200 "$out")")
-            [ "$(wc -l <"$err" | tr -d ' ')" = 1 ] && grep -q '^.*: line [0-9]*: \$2: unbound variable$' "$err" \
-                || problems+=("bash $verb ws hi $flag wrote: $(head -c 300 "$err")")
-        else
-            seen+=("bash $verb ws hi $flag: exit $rc, stderr $(head -c 120 "$err" | tr '\n' ' ')")
-        fi
-        rc=0; (cd "$d/ws" && env -i PATH="$PATH" HOME="$d/home" "$WORK/bin/k2" "$verb" ws hi "$flag") >"$out" 2>"$err" </dev/null || rc=$?
-        [ "$rc" = 2 ] || problems+=("the binary's $verb ws hi $flag exited $rc, want 2")
-        [ ! -s "$out" ] || problems+=("the binary's $verb ws hi $flag printed on stdout: $(head -c 200 "$out")")
-        [ "$(cat "$err")" = "Error: $flag needs a value (try 'k2 $verb --help')" ] \
-            || problems+=("the binary's $verb ws hi $flag wrote: $(head -c 300 "$err")")
+    for args in "enable|--tarball|--tarball FILE" "media install|--url|--url wss://HOST"; do
+        IFS='|' read -r sub flag hint <<<"$args"
+        # shellcheck disable=SC2086 # sub is one or two plain words
+        rc=0; (cd "$d/ws" && env -i PATH="$PATH" HOME="$d/home" bash "$ROOT/cli/k2" hostchat $sub "$flag" "") >"$out" 2>"$err" </dev/null || rc=$?
+        [ "$rc" = 1 ] || problems+=("bash hostchat $sub $flag '' exited $rc, want 1")
+        [ ! -s "$out" ] || problems+=("bash hostchat $sub $flag '' printed on stdout: $(head -c 200 "$out")")
+        [ "$(wc -l <"$err" | tr -d ' ')" = 1 ] && grep -q "^.*: line [0-9]*: 2: $hint\$" "$err" \
+            || problems+=("bash hostchat $sub $flag '' wrote: $(head -c 300 "$err")")
+        # shellcheck disable=SC2086
+        rc=0; (cd "$d/ws" && env -i PATH="$PATH" HOME="$d/home" "$WORK/bin/k2" hostchat $sub "$flag" "") >"$out" 2>"$err" </dev/null || rc=$?
+        [ "$rc" = 2 ] || problems+=("the binary's hostchat $sub $flag '' exited $rc, want 2")
+        [ ! -s "$out" ] || problems+=("the binary's hostchat $sub $flag '' printed on stdout: $(head -c 200 "$out")")
+        [ "$(cat "$err")" = "Error: $flag needs a value (try 'k2 hostchat --help')" ] \
+            || problems+=("the binary's hostchat $sub $flag '' wrote: $(head -c 300 "$err")")
     done
-    if [ ${#problems[@]} -gt 0 ]; then
-        printf '%s\n' "${problems[@]}"
-        return 1
-    fi
-    [ "$major" -ge 4 ] && return 0
-    echo "bash here is $major.x, which reads a value flag as the last word on (the difference holds from bash 4, on Linux, where it is proven); the binary's side held on all ${#seen[@]}; bash answered:"
-    printf '%s\n' "${seen[@]}"
-    return 3
+    [ ${#problems[@]} -eq 0 ] && return 0
+    printf '%s\n' "${problems[@]}"
+    return 1
 }
 
 # path_without_python3 <dir>: prints this PATH with no python3 on it, each

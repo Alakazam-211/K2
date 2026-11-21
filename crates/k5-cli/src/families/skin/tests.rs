@@ -59,9 +59,12 @@ fn usage_stops() {
     let stop = |w: &[&str]| ask(w).expect_err("a stop");
     assert_eq!(stop(&["user", "x", "--role", "r"]).exit, Exit::Usage);
     assert_eq!(stop(&["user", "show", "bob"]).exit, Exit::Error);
-    // `--agent` as the last word: the failed `shift 2`, nothing said.
+    // `--agent` as the last word: the shell's `_need_value` line.
     let s = stop(&["user", "rooms", "bob", "--agent"]);
-    assert_eq!((s.exit, s.stderr.len()), (Exit::Error, 0));
+    assert_eq!(
+        (s.exit, s.stderr),
+        (Exit::Usage, vec!["Error: --agent takes a value".to_string()])
+    );
     assert_eq!(
         stop(&["user", "rooms", "bob", "--apply-tokens"]).exit,
         Exit::Usage

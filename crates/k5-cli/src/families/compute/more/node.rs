@@ -152,7 +152,7 @@ pub fn parse(words: &[&str]) -> Option<Words<Ask>> {
         "packages" | "pkg" => Some(match super::packages::parse(rest)? {
             Words::Ask(a) => Words::Ask(Ask::Packages(a)),
             Words::Usage(l) => Words::Usage(l),
-            Words::ShiftFailed => Words::ShiftFailed,
+            Words::ShiftFailed(f) => Words::ShiftFailed(f),
         }),
         _ => None,
     }
@@ -214,7 +214,7 @@ fn servers(words: &[&str]) -> Option<Words<Ask>> {
             Some(match an::more::admin(&w)? {
                 Words::Ask(a) => Words::Ask(Ask::Deny(a)),
                 Words::Usage(l) => Words::Usage(l),
-                Words::ShiftFailed => Words::ShiftFailed,
+                Words::ShiftFailed(f) => Words::ShiftFailed(f),
             })
         }
         "limits" => limits(node, rest, json),
@@ -287,11 +287,7 @@ fn value<'a>(rest: &[&'a str], i: usize) -> Option<(&'a str, usize)> {
 /// `$(_compute_secs "$v")` in an assignment: the seconds, the usage line
 /// (exit 2), or `None` for the shell's.
 fn secs(v: &str) -> Option<Result<i64, Words<Ask>>> {
-    match an::secs(v)? {
-        Ok(n) => Some(Ok(n)),
-        Err(Words::Usage(l)) => Some(Err(Words::Usage(l))),
-        Err(_) => Some(Err(Words::ShiftFailed)),
-    }
+    an::secs(v)
 }
 
 /// The `--for` value as `for_n`: `""`, `0`, days times 86400, or
@@ -359,7 +355,7 @@ fn limits(node: &str, rest: &[&str], json: bool) -> Option<Words<Ask>> {
         match w {
             "--reason" | "--weight" | "--for" => {
                 let Some((v, next)) = value(rest, i) else {
-                    return Some(Words::ShiftFailed);
+                    return Some(Words::ShiftFailed(rest[i].to_string()));
                 };
                 match w {
                     "--reason" => reason = v,
@@ -433,7 +429,7 @@ fn owner(node: &str, rest: &[&str]) -> Option<Words<Ask>> {
         match rest[i] {
             f @ ("--old" | "--caches" | "--reason") => {
                 let Some((v, next)) = value(rest, i) else {
-                    return Some(Words::ShiftFailed);
+                    return Some(Words::ShiftFailed(rest[i].to_string()));
                 };
                 match f {
                     "--old" => old = v,
@@ -502,7 +498,7 @@ fn add_body(node: &str, rest: &[String]) -> Option<Result<String, Words<Ask>>> {
             | "--max-running" | "--max-queued" | "--cpu-hours" | "--max-time" | "--cpus"
             | "--mem" | "--disk" | "--network" => {
                 if i + 2 > rest.len() {
-                    return Some(Err(Words::ShiftFailed));
+                    return Some(Err(Words::ShiftFailed(rest[i].to_string())));
                 }
                 let v = rest[i + 1].as_str();
                 match w {

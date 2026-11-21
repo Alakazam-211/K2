@@ -104,7 +104,7 @@ fn the_words() {
     assert_eq!(usage(&["jobs", "--tier", "x"]), TIER_USAGE);
     assert_eq!(usage(&["jobs", "--tier"]), TIER_USAGE);
     assert_eq!(usage(&["jobs", "x"]), JOBS_USAGE);
-    assert_eq!(parse(&["jobs", "--node"]), Some(Err(Stop::Shift)));
+    assert_eq!(parse(&["jobs", "--node"]), Some(Err(Stop::Shift("--node".into()))));
     assert_eq!(
         ok(&["list", "--mine", "--state", "done", "--json"]),
         Ask::Jobs {
@@ -134,7 +134,7 @@ fn the_words() {
             json: true
         }
     );
-    assert_eq!(parse(&["grants", "--node"]), Some(Err(Stop::Shift)));
+    assert_eq!(parse(&["grants", "--node"]), Some(Err(Stop::Shift("--node".into()))));
     assert_eq!(usage(&["receipt"]), RECEIPT_USAGE);
     assert_eq!(usage(&["receipt", "--out"]), PROVENANCE_OUT_USAGE);
     assert_eq!(
@@ -177,7 +177,7 @@ fn the_words() {
     assert_eq!(parse(&["events", "--max-wait", "1d"]), None);
     assert_eq!(
         parse(&["events", "--audit", "--limit"]),
-        Some(Err(Stop::Shift))
+        Some(Err(Stop::Shift("--limit".into())))
     );
     assert_eq!(usage(&["events", "x"]), EVENTS_USAGE);
     assert_eq!(usage(&["stats", "abc"]), STATS_USAGE);

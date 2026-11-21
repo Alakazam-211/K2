@@ -20,8 +20,8 @@
 //!    printed as the shell's Python prints them, its tracebacks too.
 //! 3. The EXIT trap's lines ([`cp::close`]).
 //!
-//! A flag that takes a value and comes last ends the command with 1 and
-//! no line (`shift 2` fails under `set -e`), as the shell's does. `-h` and
+//! A flag that takes a value and comes last is the shell's `_need_value`
+//! line, exit 2. `-h` and
 //! `--help` anywhere are the front's: the shell prints the usage and
 //! changes nothing (`verify`, `show` and `key-id` hand theirs to
 //! `k2-approve`).
@@ -100,8 +100,8 @@ pub fn parse(words: &[&str]) -> Ask {
         Some((s, r)) => (*s, r),
         None => ("", &[][..]),
     };
-    // `shift 2` with one word left fails: exit 1, no line.
-    let shift_fails = Ask::Stop(vec![], Exit::Error);
+    // A value flag as the last word: the shell's `_need_value` line.
+    let shift_fails = |flag: &str| Ask::Stop(vec![crate::out::need_value(flag)], Exit::Usage);
     match sub {
         "" | "help" => Ask::Help,
         "verify" | "show" | "key-id" => {
@@ -115,7 +115,7 @@ pub fn parse(words: &[&str]) -> Ask {
                 match rest[i] {
                     "--payload" | "--to" | "--out" => {
                         let Some(v) = rest.get(i + 1) else {
-                            return shift_fails;
+                            return shift_fails(rest[i]);
                         };
                         let slot = match rest[i] {
                             "--payload" => &mut payload,
@@ -167,7 +167,7 @@ pub fn parse(words: &[&str]) -> Ask {
                 match rest[i] {
                     "--out" => {
                         let Some(v) = rest.get(i + 1) else {
-                            return shift_fails;
+                            return shift_fails(rest[i]);
                         };
                         out = (*v).to_string();
                         i += 2;

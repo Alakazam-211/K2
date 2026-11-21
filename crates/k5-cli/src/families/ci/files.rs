@@ -375,7 +375,7 @@ fn fetch_quiet(cp: &mut Cp<'_>, job: &str, dir: &str) -> bool {
             out::stderr_line(&line);
             false
         }
-        Words::ShiftFailed => false,
+        Words::ShiftFailed(_) => false,
     }
 }
 
@@ -835,7 +835,7 @@ fn job_log(cp: &mut Cp<'_>, job: &str, failures: bool) {
             let _ = logs::run(cp.client, &mut cp.closing, &l);
         }
         Some(Err(Stop::Usage(line))) => out::stderr_line(&line),
-        Some(Err(Stop::Shift)) => {}
+        Some(Err(Stop::Shift(flag))) => out::stderr_line(&out::need_value(&flag)),
         None => match logs::parse_search(&words) {
             Ok(a) => {
                 let w = if a.ws.is_empty() {
@@ -853,7 +853,7 @@ fn job_log(cp: &mut Cp<'_>, job: &str, failures: bool) {
                 }
             }
             Err(Stop::Usage(line)) => out::stderr_line(&line),
-            Err(Stop::Shift) => {}
+            Err(Stop::Shift(flag)) => out::stderr_line(&out::need_value(&flag)),
         },
     }
 }

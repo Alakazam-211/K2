@@ -27,7 +27,7 @@
 //! line, exit 1 (`reviews`: the line, then SIGPIPE). The shell answers:
 //! `-h` or `--help` (the front sends those on; the shell prints the usage
 //! and sends nothing), `commit`'s `-m` as the last
-//! word (`$2: unbound variable`), a word that is not UTF-8, a port curl
+//! word (its `_need_value` line), a word that is not UTF-8, a port curl
 //! won't take, and a `python3` the binary can't tell.
 
 use super::{curl_port, ljust, pipefail, py_iter, raised, without_nuls, Raise, Shown};

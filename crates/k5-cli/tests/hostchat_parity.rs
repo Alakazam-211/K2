@@ -780,11 +780,12 @@ fn hostchat_hands_these_to_the_shell() {
     )));
 }
 
-/// A value flag as the last word, or with an empty value: bash stops on
-/// its own `${2:?…}` line (`<path to cli/k2>: line <n>: 2: <flag> <what>`)
-/// and exits 1; the binary prints one plain line and exits 2 (K2's D6,
-/// `scripts/cli-parity.sh`'s named difference `edge-usage-exit-2`).
-/// Neither sends anything.
+/// A value flag as the last word: both print the shell's `_need_value`
+/// line, "Error: <flag> takes a value", and exit 2. With an empty value:
+/// bash stops on its own `${2:?…}` line (`<path to cli/k2>: line <n>: 2:
+/// <flag> <what>`) and exits 1; the binary prints one plain line and
+/// exits 2 (K2's D6, `scripts/cli-parity.sh`'s named difference
+/// `edge-usage-exit-2`). Neither sends anything.
 #[test]
 fn hostchat_value_flag_with_no_value_is_the_d6_line() {
     let rig = Rig::new(VERB, "d6");
@@ -891,30 +892,38 @@ fn hostchat_value_flag_with_no_value_is_the_d6_line() {
             0,
         );
         let name = c.name;
+        // The flag as the last word: both print the shell's _need_value
+        // line and exit 2. An empty value: bash's own `${2:?…}` line and
+        // exit 1, the binary's D6 line and exit 2.
+        let last = args.last() == Some(&flag);
         rig.prepare(Side::Bash, &c);
         let b = rig.run(true, &c);
-        if edge_usage_exit_2_proven() {
+        assert!(b.stdout.is_empty(), "{name}: bash's stdout: {b:?}");
+        if last {
+            assert_eq!(b.code, Some(2), "{name}: bash's exit: {b:?}");
+            assert_eq!(b.stderr, format!("Error: {flag} takes a value\n"), "{name}");
+        } else {
             assert_eq!(b.code, Some(1), "{name}: bash's exit: {b:?}");
-            assert!(b.stdout.is_empty(), "{name}: bash's stdout: {b:?}");
             assert_eq!(b.stderr.lines().count(), 1, "{name}: bash's stderr: {b:?}");
             assert!(
                 b.stderr.ends_with(&format!(": 2: {hint}\n")),
                 "{name}: bash's stderr: {b:?}"
             );
-            assert!(
-                rig.read(Side::Bash, false, name).is_empty(),
-                "{name}: bash sent"
-            );
         }
+        assert!(
+            rig.read(Side::Bash, false, name).is_empty(),
+            "{name}: bash sent"
+        );
         let (r, sent) = rig.binary(&c, false);
         assert!(sent.is_empty(), "{name}: the binary sent {sent:?}");
         assert_eq!((r.code, r.signal), (Some(2), None), "{name}: {r:?}");
         assert!(r.stdout.is_empty(), "{name}: {r:?}");
-        assert_eq!(
-            r.stderr,
-            format!("Error: {flag} needs a value (try '{cli} hostchat --help')\n"),
-            "{name}"
-        );
+        let want = if last {
+            format!("Error: {flag} takes a value\n")
+        } else {
+            format!("Error: {flag} needs a value (try '{cli} hostchat --help')\n")
+        };
+        assert_eq!(r.stderr, want, "{name}");
     }
 }
 

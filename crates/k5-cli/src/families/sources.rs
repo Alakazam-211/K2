@@ -13,9 +13,7 @@
 //! 2. `sources` is an `id` tool: with `HOOK_SOCK` set, the stale-passport
 //!    or require-passport lines, exit 3, the help too.
 //! 3. The verb's words: each problem is one line, exit 2. A value flag as
-//!    the last word is the shell's `shift 2` failing under `set -e`: exit
-//!    1, nothing said (K2's D6 class; a bash bug, copied until bash is
-//!    fixed).
+//!    the last word is the shell's `_need_value` line, exit 2.
 //! 4. `_compute_send` ([`super::board::send`]): the cell socket with the
 //!    passport when there is a live one, else TCP; `access` goes on TCP.
 //! 5. Not 200: `_sources_fail` ([`fail`]): the refusal (`--json`: the
@@ -128,8 +126,9 @@ pub fn help_page(sub: &str) -> String {
 pub enum Stop {
     /// One line on stderr, exit 2.
     Usage(String),
-    /// `shift 2` with one word left: exit 1, nothing said.
-    Shift,
+    /// A value flag as the last word: the shell's `_need_value` line
+    /// ([`crate::out::need_value`]), exit 2.
+    Shift(String),
     /// Bash's own error (its arithmetic): the shell CLI answers.
     Shell,
     /// The shell's Python raised before any request: its traceback on
@@ -340,7 +339,7 @@ pub fn ask(sub: &str, words: &[String], now: i64) -> Result<Ask, Stop> {
                 let a = words[i].as_str();
                 match a {
                     "--from" | "--to" | "--item" => {
-                        let v = words.get(i + 1).ok_or(Stop::Shift)?.clone();
+                        let v = words.get(i + 1).ok_or_else(|| Stop::Shift(a.to_string()))?.clone();
                         match a {
                             "--from" => from = v,
                             "--to" => to = v,
@@ -389,7 +388,7 @@ pub fn ask(sub: &str, words: &[String], now: i64) -> Result<Ask, Stop> {
                 let a = words[i].as_str();
                 match a {
                     "--for" | "--reason" => {
-                        let v = words.get(i + 1).ok_or(Stop::Shift)?.clone();
+                        let v = words.get(i + 1).ok_or_else(|| Stop::Shift(a.to_string()))?.clone();
                         if a == "--for" {
                             for_ = v;
                         } else {
@@ -490,7 +489,7 @@ pub fn ask(sub: &str, words: &[String], now: i64) -> Result<Ask, Stop> {
             while i < words.len() {
                 match words[i].as_str() {
                     "--names" => {
-                        names = words.get(i + 1).ok_or(Stop::Shift)?.clone();
+                        names = words.get(i + 1).ok_or_else(|| Stop::Shift("--names".into()))?.clone();
                         i += 1;
                     }
                     "--json" => json = true,
@@ -641,6 +640,7 @@ fn run_with(
             out::stderr_line(&line);
             return Exit::Usage;
         }
+        (_, Some(Err(Stop::Shift(flag)))) => return out::stop_need_value(&flag),
         (_, Some(Err(Stop::Raised(text, exit)))) => {
             let _ = out::write_flushed(&mut std::io::stderr().lock(), text.as_bytes());
             return exit;

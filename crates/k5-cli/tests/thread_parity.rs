@@ -860,6 +860,83 @@ fn thread_stops_before_it_sends() {
 /// A value flag as the last word: bash's `_need_value` and the binary
 /// print the same line, "Error: <flag> takes a value", and exit 2.
 /// Neither sends anything.
+/// After a bare `--` the words are the address and the text (or the
+/// prompt), as typed (`cmd_thread`'s and `cmd_thread_ask`'s `--)` arms);
+/// the verb scan and the help scan stop there.
+#[test]
+fn thread_after_dashes_as_the_shell_does() {
+    let rig = Rig::new(VERB, "dashes");
+    const CARD: &str = r#"{"ok":true,"id":"c1","seq":9}"#;
+    for c in [
+        // covers: thread
+        plain(
+            "a write: the text --help after --",
+            &["--from", "me", "--idempotency-key", KEY, "--", "bob", "--help"],
+            vec![ok(ON), ok(POSTED)],
+            0,
+            2,
+        ),
+        plain(
+            "a write: a text that starts with a dash",
+            &["bob", "--from", "me", "--idempotency-key", KEY, "--", "-x --json"],
+            vec![ok(ON), ok(POSTED)],
+            0,
+            2,
+        ),
+        plain(
+            "a verb after -- is the address",
+            &["--from", "me", "--idempotency-key", KEY, "--", "ask", "-h"],
+            vec![ok(ON), ok(POSTED)],
+            0,
+            2,
+        ),
+        plain("-- alone: no address", &["--"], vec![], 1, 0),
+        plain(
+            "ask: the prompt --help after --",
+            &[
+                "ask",
+                "--option",
+                "yes",
+                "--option",
+                "no",
+                "--from",
+                "me",
+                "--idempotency-key",
+                KEY,
+                "--",
+                "bob",
+                "--help",
+            ],
+            vec![ok(ON), ok(CARD)],
+            0,
+            2,
+        ),
+        plain(
+            "ask: a word after the prompt is one too many",
+            &["ask", "--option", "yes", "bob", "--", "why", "-x"],
+            vec![],
+            1,
+            0,
+        ),
+        plain(
+            "ask: -- with no prompt",
+            &["ask", "--option", "yes", "--", "bob"],
+            vec![],
+            1,
+            0,
+        ),
+        plain(
+            "ask: help before --",
+            &["ask", "bob", "-h", "--", "why"],
+            vec![],
+            0,
+            0,
+        ),
+    ] {
+        rig.check(&c);
+    }
+}
+
 #[test]
 fn thread_value_flag_last_is_the_d6_line() {
     let rig = Rig::new(VERB, "d6");

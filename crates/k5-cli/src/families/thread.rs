@@ -87,7 +87,7 @@ pub const VALUE_FLAGS: &[&str] = &[
 ];
 
 /// `cmd_thread`'s `first_pos`: the first word that is not a `--` flag or
-/// a value flag's value (empty for none).
+/// a value flag's value, before a bare `--` (empty for none).
 pub fn first_word<'a>(words: &[&'a str]) -> &'a str {
     let mut skip = false;
     for w in words {
@@ -98,6 +98,9 @@ pub fn first_word<'a>(words: &[&'a str]) -> &'a str {
         if VALUE_FLAGS.contains(w) {
             skip = true;
             continue;
+        }
+        if *w == "--" {
+            break;
         }
         if w.starts_with("--") {
             continue;
@@ -127,7 +130,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .skip(1)
         .map(|a| a.to_str())
         .collect::<Option<_>>()?;
-    if words.iter().any(|w| matches!(*w, "--help" | "-h")) {
+    if crate::dashdash::wants_help(&words) {
         return None;
     }
     if !python::family_native(python::here()) {

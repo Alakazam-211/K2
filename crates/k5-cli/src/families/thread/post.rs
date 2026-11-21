@@ -178,6 +178,17 @@ pub fn parse(words: &[&str]) -> Option<Parsed> {
                 }
                 _ => return stop(FILE_NEEDS.into(), Exit::Error),
             },
+            // The rest is the address and the text, as typed.
+            "--" => {
+                for w in &words[i + 1..] {
+                    if l.target.is_empty() {
+                        l.target = w.to_string();
+                    } else {
+                        l.text = w.to_string();
+                    }
+                }
+                i = words.len();
+            }
             w if w.starts_with('-') => return stop(unknown_flag(w), Exit::Error),
             w => {
                 if l.target.is_empty() {

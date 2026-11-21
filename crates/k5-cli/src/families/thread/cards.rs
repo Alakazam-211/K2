@@ -252,6 +252,19 @@ fn parse_ask(words: &[&str]) -> Result<Ask, (String, Exit)> {
             }
             "--wait" | "--timeout" => return err(FIRE_AND_FORGET),
             "--style" => return err("Error: no --style in v1\n"),
+            // The rest is the address and the prompt, as typed.
+            "--" => {
+                for w in &words[i + 1..] {
+                    if a.target.is_empty() {
+                        a.target = w.to_string();
+                    } else if a.prompt.is_empty() {
+                        a.prompt = w.to_string();
+                    } else {
+                        return err(&extra(w));
+                    }
+                }
+                break;
+            }
             w if w.starts_with('-') => return err(&unknown(w)),
             w => {
                 if a.target.is_empty() {

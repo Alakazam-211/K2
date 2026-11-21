@@ -1,7 +1,8 @@
 //! `k5 connect status`: this device's K2 Connect pairing, as the shell
 //! CLI's `cmd_connect_status` prints it (`cli/src/connect-account.sh`).
 //! It reads two files and asks the local daemon; it never talks to the
-//! Connect control plane or the account service.
+//! Connect control plane or the account service. `login` and `logout` are
+//! [`login`]'s and [`logout`]'s.
 //!
 //! What runs, in the shell's order:
 //!
@@ -61,7 +62,8 @@ use std::path::Path;
 
 /// The router arm's words: this family's row of [`crate::route::TABLE`].
 pub const WORDS: &[&str] = &["connect"];
-/// The binary's but for `login`, which [`run`] hands to the shell.
+/// Every verb is the binary's (`login`, `status`, `logout` and the
+/// other arms).
 pub const OWNER: crate::route::Owner = crate::route::Owner::Native;
 /// No verb rows: every form is [`OWNER`]'s.
 pub const VERBS: &[crate::route::Verb] = &[];
@@ -106,7 +108,28 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .collect::<Option<_>>()?;
     match words.first().copied().unwrap_or("") {
         "status" => {}
-        "login" => return None,
+        "login" => {
+            if !python::family_native(python::here()) {
+                return None;
+            }
+            let settings = match daemon::current() {
+                Ok(s) => s,
+                Err(e) => {
+                    out::stderr_line(&format!("Error: {e}"));
+                    return Some(Exit::Error);
+                }
+            };
+            if let Some(Gate::VirtualDesktop) = prelude::gate(&settings) {
+                return Some(Gate::VirtualDesktop.stop());
+            }
+            let would_refuse = passport::current(args).would_refuse();
+            if let Some(stop) =
+                prelude::id_tool(&settings, hook_sock.as_deref(), would_refuse, TOOL)
+            {
+                return Some(stop);
+            }
+            return login::run(&words[1..], &settings, would_refuse);
+        }
         "logout" => {
             if !python::family_native(python::here()) {
                 return None;
@@ -536,4 +559,5 @@ fn run_with(
 #[cfg(test)]
 mod tests;
 
+pub mod login;
 pub mod logout;

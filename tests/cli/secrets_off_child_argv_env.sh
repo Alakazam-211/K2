@@ -411,6 +411,8 @@ pw_case_native "users set-password" /cli/users/set-password users set-password a
 pw_case_native "users pair-phone" /cli/auth/device/pair-code users pair-phone
 # k2 connect login asks with getpass, which reads stdin when there is no
 # terminal: setsid drops the controlling terminal so the test can type.
+# (The k5 binary hands that case to the shell: Python's getpass warning
+# with no terminal names its own file, so children run under both.)
 SETSID="$(command -v setsid)" || { echo "FAIL: setsid not found (util-linux)" >&2; exit 1; }
 fresh
 printf '%s\n' "$PASS_SENTINEL" | K2_CONNECT_DB_URL="http://127.0.0.1:$(cat "$W/tcp-port")/" \
@@ -470,7 +472,7 @@ fresh
 K2_CONNECT_DB_URL="http://127.0.0.1:$(cat "$W/tcp-port")/" \
     k2run connect login --token test-access --subdomain acme </dev/null >/dev/null 2>&1 || true
 assert_tcp_got "connect login tunnel" /cli/tunnel/config "tunnel token" "$TUNNEL_SENTINEL"
-assert_children_seen "connect login tunnel"
+assert_children_native "connect login tunnel"
 assert_off_children "connect login tunnel" "tunnel token" "$TUNNEL_SENTINEL"
 
 # 19. k2 tunnel switch <sub> --token-stdin: the tunnel token reaches the

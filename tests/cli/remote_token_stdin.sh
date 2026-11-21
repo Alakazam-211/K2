@@ -175,6 +175,8 @@ NOTE="note: --token is visible to every account on this computer while the comma
 
 # token_case LABEL PATH ARGS...: the stdin form, then the --token form, of
 # one command (ARGS without either), then both together and an empty stdin.
+# TOKEN_CASE_NATIVE=native: the k5 binary answers the command itself, so
+# under it no python3 or curl child may run (assert_off_children native).
 token_case() {
     local label="$1" path="$2"; shift 2
     fresh
@@ -182,7 +184,7 @@ token_case() {
     expect_eq "$label --token-stdin: exit 0" "$RC" "0"
     case "$ERR" in *"$NOTE"*) bad "$label --token-stdin: the note was printed" ;; *) ok "$label --token-stdin: no note" ;; esac
     assert_sent "$label --token-stdin" "$path"
-    assert_off_children "$label --token-stdin"
+    assert_off_children "$label --token-stdin" "${TOKEN_CASE_NATIVE:-}"
     fresh
     run_k2 "" "$@" --token "$TOKEN"
     expect_eq "$label --token: exit 0" "$RC" "0"
@@ -211,7 +213,7 @@ case "$OUT" in *"[--host <server> [--token-stdin]]"*) ok "doc cores help: --toke
 # 3. k2 connect login --subdomain acme: the k2.dev access JWT (the account
 #    server is the stub too).
 export K2_CONNECT_DB_URL="$REMOTE/"
-token_case "connect login" /rest/v1/subdomains connect login --subdomain acme
+TOKEN_CASE_NATIVE=native token_case "connect login" /rest/v1/subdomains connect login --subdomain acme
 run_k2 "$TOKEN"$'\n' connect login --subdomain acme --token-stdin
 expect_eq "connect login --token-stdin: the result line" "$OUT" "✓ live at https://acme.k2.dev"
 assert_sent "connect login --token-stdin (the claim)" /rest/v1/rpc/claim_subdomain

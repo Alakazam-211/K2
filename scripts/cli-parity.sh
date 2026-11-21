@@ -191,6 +191,7 @@ EXPECTED_DIFFS=(
     "curl-config-files|K2 and the Steward, K5 shared transport|the binary never reads curl's config files (~/.curlrc, CURL_HOME): one can carry options that change where the token goes. Bash's curl reads ~/.curlrc on every call it makes, so a header that file adds (the check: header = \"X-From-Curlrc: acme\") is on bash's request to the daemon and not on the binary's. The rest of the request, stdout, stderr and the exit code are the same (\`feedback list\`). The binary does read CURL_CA_BUNDLE and SSL_CERT_FILE, as curl does"
     "macos-system-proxy|K2 ruling, K5 shared transport|on macOS the system proxy (System Settings, Network, Proxies; no environment variable) is read by python3's urllib (urllib.request.getproxies_macosx_sysconf, when no proxy variable is set), so a bash Python block that reaches another machine over https may go through it; the binary reads only the proxy variables, as curl does, and never the system setting (it links no SystemConfiguration framework). Every bash request made with curl ignores the system setting too. Linux has no such setting: not proven there"
     "curl-version-proxy-exit|K2 ruling, K5 shared transport|a proxy that refuses the tunnel (407) to a K2 daemon at K2_HOST=https://<name> (the check: \`whoami\`, https_proxy set): the binary sends one CONNECT and stops, as curl 8.5 does (exit 56, never tried again by _k2_curl). A newer curl (8.23 on one node) fails that CONNECT with exit 7, which _k2_curl tries 4 times in all, 1 s apart, so bash sends 4 CONNECTs and prints what its curl 7 means; the binary's one CONNECT, exit and lines are the same on every node. Where bash's curl exits 56 the two are the same: not proven there"
+    "python-tls-error-text|K2 ruling, K5 lane small6 (connect login)|a TLS handshake to the Connect account server that fails (\`connect login\`'s account calls, the shell's Python urllib): bash prints OpenSSL's reason inside Python's URLError (\"<urlopen error [SSL: WRONG_VERSION_NUMBER] wrong version number (_ssl.c:1000)>\"), the binary its own words (\"<urlopen error [SSL] TLS handshake: ...>\"). The exit code (1), every line before that one and that no byte of the HTTP request was sent are the same"
     "nul-in-answer|K2 ruling at the 0.46.15 rebase|a NUL byte in the daemon's answer to \`feedback list\` or \`feedback show <id>\`: bash's resp=\$(cli_request ...) drops it and, from bash 4.4 on, writes one line on stderr, \"<path to cli/k2>: line <n>: warning: command substitution: ignored null byte in input\"; the binary drops it silently. stdout, the exit code and the requests are the same (bash 3.2 writes no warning, so there the two are exact)"
     "passport-heal-once|K2 ruling, the doc lane's follow-ups|a doc call that sends a whole file or a tool call (_doc_xfer: \`doc cat\`, \`append\`, \`write\`, \`show --version\`, \`export\`) whose passport the daemon's auth gate refuses (403 and exactly {\"error\":\"Invalid or missing auth token\"}, sent before any handler runs, so nothing was done), in a session whose passport was minted again: bash's _doc_xfer never tries the new passport and the command ends on the refusal (exit 3); the binary sends the same call once more with the new passport and answers it (cli_send_json's one heal, which bash's other doc calls already make). An answer a handler gave that holds those words (a document's text, a conflict) is never sent again by either: one request, the same output"
     "doc-mktemp-wording|K2 ruling, the doc lane's follow-ups|a doc verb that needs a temp folder (_doc_tmp) where TMPDIR can't hold one: the binary words mktemp's line as GNU mktemp does in the C locale (\"mktemp: failed to create directory via template '<TMPDIR>/k2doc.XXXXXX': No such file or directory\"; GNU's in a UTF-8 locale quotes the template with curly quotes); macOS's mktemp words it its own way (\"mktemp: mkdtemp failed on <TMPDIR>/k2doc.XXXXXX: No such file or directory\"; a newer macOS names the folder it tried, the six X filled in). The two lines after it (\"Error: can't make a temp folder\" and the tmp error's JSON), the exit (2) and stdout (nothing) are the same, and neither sends anything. The same holds for \`app exec\` with stdin on a pipe (k2-exec-XXXXXX) and \`hostchat open\` (k2-hostchat-open.XXXXXX) where TMPDIR can't hold the folder: on a newer macOS mktemp's line names the folder it tried, which the binary can't know, so the parity rows (Compare::MktempTried) take mktemp's line as the same when only that random name differs: the same folder and stem before it, one or more of [A-Za-z0-9.] in its place, the same reason after it, the same exit, and every other line byte for byte"
@@ -1357,6 +1358,72 @@ check_doc_mktemp_wording() {
     [ "$(sed -n 1p "$d/err.bash")" != "$gnu" ] && return 0
     echo "mktemp here is GNU's, which words its line as the binary does: the two are exact here, so the difference itself was not proven on this host (the macOS job proves it)"
     return 3
+}
+
+# check_python_tls_error_text: an account server at https:// that speaks
+# no TLS (it answers any bytes with a plain HTTP 400 and logs whether an
+# HTTP request reached it); both CLIs run `connect login --token-stdin
+# --subdomain acme`, the token on stdin. Both exit 1 with nothing on
+# stdout and the same lines on stderr up to the last; that line starts
+# "Error: could not list subdomains: <urlopen error " on both, then
+# OpenSSL's "[SSL" on bash and the binary's "[SSL] "; the server saw no
+# HTTP request from either.
+check_python_tls_error_text() {
+    local d="$WORK/tls" side rc tmp pid n problems=() last_b last_r
+    local prefix="Error: could not list subdomains: <urlopen error "
+    mkdir -p "$d/home/.k2" "$d/ws/.k2"
+    printf 'owner-tok-parity\n' >"$d/home/.k2/heartbeat.token"
+    : >"$d/tlslog"
+    python3 -I -c '
+import os, socket, sys
+d = sys.argv[1]
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+s.listen(8)
+open(os.path.join(d, "tlsport.tmp"), "w").write(str(s.getsockname()[1]))
+os.rename(os.path.join(d, "tlsport.tmp"), os.path.join(d, "tlsport"))
+while True:
+    c, _ = s.accept()
+    c.settimeout(5)
+    try:
+        data = c.recv(65536)
+    except Exception:
+        data = b""
+    with open(os.path.join(d, "tlslog"), "a") as f:
+        f.write("http-request\n" if b"HTTP/1." in data else "no-http\n")
+    try:
+        c.sendall(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
+    except Exception:
+        pass
+    c.close()
+' "$d" &
+    pid=$!
+    for n in $(seq 1 50); do [ -s "$d/tlsport" ] && break; sleep 0.1; done
+    [ -s "$d/tlsport" ] || { kill "$pid" 2>/dev/null; echo "the TLS stand-in didn't start"; return 1; }
+    for side in bash binary; do
+        tmp="$(mktemp -d "$d/tmp.XXXXXX")"
+        rm -f "$d/home/.k2/connect-account.json"
+        if [ "$side" = binary ]; then set -- "$WORK/bin/k5"; else set -- bash "$ROOT/cli/k2"; fi
+        rc=0
+        (cd "$d/ws" && printf 'jwt-tls-parity\n' | exec env -i PATH="$PATH" HOME="$d/home" TMPDIR="$tmp" \
+            K2_CONNECT_DB_URL="https://127.0.0.1:$(cat "$d/tlsport")/" "$@" connect login --token-stdin --subdomain acme) \
+            >"$d/out.$side" 2>"$d/err.$side" || rc=$?
+        [ "$rc" = 1 ] || problems+=("$side exited $rc, want 1: $(head -c 300 "$d/err.$side")")
+        [ ! -s "$d/out.$side" ] || problems+=("$side printed on stdout: $(head -c 200 "$d/out.$side")")
+    done
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    last_b="$(tail -n 1 "$d/err.bash")" last_r="$(tail -n 1 "$d/err.binary")"
+    cmp -s <(sed '$d' "$d/err.bash") <(sed '$d' "$d/err.binary") \
+        || problems+=("the lines before the last differ: bash '$(head -c 300 "$d/err.bash")', the binary '$(head -c 300 "$d/err.binary")'")
+    case "$last_b" in "$prefix[SSL"*) ;; *) problems+=("bash's last line is not OpenSSL's: $last_b") ;; esac
+    case "$last_r" in "$prefix[SSL] "*) ;; *) problems+=("the binary's last line is not its own TLS line: $last_r") ;; esac
+    [ "$last_b" != "$last_r" ] || problems+=("the two last lines are the same: the difference no longer holds")
+    [ "$(grep -c '^no-http$' "$d/tlslog")" = 2 ] || problems+=("want two connections with no HTTP request, got: $(cat "$d/tlslog")")
+    ! grep -q '^http-request$' "$d/tlslog" || problems+=("an HTTP request reached the server")
+    [ ${#problems[@]} -eq 0 ] && return 0
+    printf '%s\n' "${problems[@]}"
+    return 1
 }
 
 for entry in "${EXPECTED_DIFFS[@]}"; do

@@ -26,17 +26,11 @@ cmd_explain() {
             *) [ -z "$id" ] || { echo "usage: k2 explain [<id>] [--json]" >&2; exit 2; }; id="$1"; shift ;;
         esac
     done
-    # The Markdown kit's ids (MPC-Ennn, MPCE-Ennn) are the kit's registry:
-    # `k2 doc explain`, once Markdown tier 0 is on this K2 (kit-HOST-ERRORS).
+    # The Markdown kit's ids (MPC-Ennn, MPCE-Ennn) are the kit's registry,
+    # which the daemon holds: the kit's own explain (_explain_kit), never
+    # a doc path.
     case "$(printf '%s' "$id" | tr '[:lower:]' '[:upper:]')" in
-        MPC-*|MPCE-*)
-            if declare -F cmd_doc >/dev/null 2>&1; then
-                if [ "$json_out" = 1 ]; then cmd_doc explain "$id" --json; else cmd_doc explain "$id"; fi
-                return $?
-            fi
-            echo "k2 explain: $id is a Markdown kit id; this K2 has no k2 doc yet (it arrives with Markdown files)" >&2
-            exit 4
-            ;;
+        MPC-*|MPCE-*) _explain_kit "$id" "$json_out"; return $? ;;
     esac
     _k2_refusals_json | K2_EX_ID="$id" K2_EX_JSON="$json_out" python3 -c '
 import json, os, sys, textwrap
@@ -80,6 +74,56 @@ if row.get("askable"):
 if row.get("aliases"):
     print("also sent as: " + ", ".join(row["aliases"]))
 '
+}
+
+# _explain_kit ID JSON: the docs kit's `explain` for one of its ids, on the
+# route that answers the kit's own pages with no file
+# (/cli/board/file/verb: its explain and capabilities read no file, so no
+# path is sent). Before 0.46.17 a kit id went to `k2 doc explain <id>`,
+# which took the id as a doc's path: a file of that name here was opened
+# as the doc. Prints the kit's page (or its JSON with JSON=1) and exits
+# with the kit's exit; a refusal by its row (exit the row's); any other
+# error as k2 board prints it.
+_explain_kit() {
+    local id="$1" json_out="$2" body
+    _setup_jstr "$id"
+    if [ "$json_out" = 1 ]; then
+        body="{\"argv\":[\"explain\",${_SETUP_J}],\"json\":true}"
+    else
+        body="{\"argv\":[\"explain\",${_SETUP_J}],\"json\":false}"
+    fi
+    _compute_split "$(_compute_send POST /cli/board/file/verb "$body")"
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+status, as_json = sys.argv[1], sys.argv[2] == "1"
+raw = sys.stdin.read()
+try:
+    v = json.loads(raw) if raw.strip() else {}
+except ValueError:
+    v = {}
+if not isinstance(v, dict):
+    v = {}
+if status == "200" and isinstance(v.get("stdout"), str):
+    sys.stdout.write(v["stdout"])
+    sys.exit(v.get("exit") or 0)
+if "id" in v and "exit" in v:
+    # A row of the kit (an unknown id is one): its id, name and exit.
+    if as_json:
+        print(raw.strip())
+    else:
+        print("Error [%s] %s: %s" % (v.get("code"), v.get("id"), v.get("message")), file=sys.stderr)
+        if v.get("next"):
+            print("Next: %s" % v["next"], file=sys.stderr)
+    sys.exit(v["exit"] if isinstance(v.get("exit"), int) else 1)
+err = v.get("error") if isinstance(v.get("error"), dict) else {}
+code = err.get("code") or ("daemon_unreachable" if status == "000" else "error")
+hint = err.get("hint") or ("no answer from the K2 daemon" if status == "000" else "the daemon refused (HTTP %s)" % status)
+if as_json:
+    print(raw.strip() or json.dumps({"error": {"code": code, "hint": hint}}))
+else:
+    print("Error [%s]: %s" % (code, hint), file=sys.stderr)
+sys.exit(3 if code in ("not_enabled", "forbidden", "not_connected", "sandboxed_agent", "core_off") else 1)
+' "$_CP_STATUS" "$json_out"
 }
 
 # `k2 capabilities [--json] [--node <n>]` (TC-17).

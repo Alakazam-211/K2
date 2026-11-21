@@ -15,8 +15,15 @@
 # carry neither key.
 #
 # k2 explain: a live id, a retired id, an alias, an unknown id (exit 4),
-# --json, the list by area, a Markdown kit id (handed to k2 doc explain), and
-# `k2 study app-errors`.
+# --json, the list by area, a Markdown kit id, and `k2 study app-errors`.
+#
+# A Markdown kit id (MPC-*, MPCE-*) is the kit's explain, on the route that
+# answers the kit's pages with no file:
+#   POST /cli/board/file/verb {"argv": ["explain", <id>], "json": <bool>}
+# with no path. Regression (0.46.17): it went to `k2 doc explain <id>`, which
+# took the id as a doc's path, so a file named like the id in this folder
+# was opened as the doc. A decoy file of that name sits in the folder; the
+# stub logs every request with its body, and no request may name it.
 #
 # Hermetic: HOME is a throwaway dir, every K2_*/K2SO_* var is unset, no
 # real daemon, no ~/.k2, no keychain. Needs the generated refusal block in
@@ -58,14 +65,31 @@ ANSWERS = {
     "/cli/compute/nodes": (403, "owner_only", "only the server's owner may do this"),
 }
 
+# The kit's answers on the board route's meta verb, by argv.
+KIT = {
+    ("explain", "MPC-E301"): (200, {"exit": 0, "stdout": "MPC-E301 the kit's page\nwhat to do next\n"}),
+    ("explain", "mpce-E9"): (422, {"id": "MPC-E110", "code": "unknown_id", "message": "no error id mpce-E9",
+                                    "next": "k2 explain lists every id", "exit": 4}),
+}
+
 class H(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     def log_message(self, *a):
         pass
     def do_GET(self):
         path = self.path.split("?", 1)[0]
+        n = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(n).decode() if n else ""
+        with open(sys.argv[2], "a") as f:
+            f.write(json.dumps({"method": self.command, "target": self.path, "body": raw}) + "\n")
         st, code, hint = ANSWERS.get(path, (404, "not_found", "no such route"))
         body = json.dumps({"error": {"code": code, "hint": hint}}).encode()
+        if path == "/cli/board/file/verb":
+            req = json.loads(raw)
+            st, v = KIT[tuple(req["argv"])]
+            if req.get("json") and st == 200:
+                v = {"exit": 0, "stdout": json.dumps({"id": req["argv"][1], "json": True}) + "\n"}
+            body = json.dumps(v).encode()
         if path == "/cli/app/suspend":
             st = 403
             body = json.dumps({"error": "role_required", "required": "admin", "role": "member",
@@ -83,7 +107,7 @@ with open(sys.argv[1], "w") as f:
     f.write(str(srv.server_address[1]))
 srv.serve_forever()
 PY
-python3 -I "$SANDBOX/stub.py" "$SANDBOX/port" &
+python3 -I "$SANDBOX/stub.py" "$SANDBOX/port" "$SANDBOX/requests.jsonl" &
 STUB_PID=$!
 for _ in $(seq 1 50); do [ -s "$SANDBOX/port" ] && break; sleep 0.1; done
 [ -s "$SANDBOX/port" ] || { echo "FAIL: the stub daemon did not start" >&2; exit 1; }
@@ -173,15 +197,62 @@ rc="$(ex)"
 expect_eq "explain list: exit 0" "$rc" "0"
 expect_has "explain list: by area" "$(cat "$SANDBOX/out")" "deploy (validate, build, deploy, rollback):"
 expect_has "explain list: retired marked" "$(cat "$SANDBOX/out")" "static_not_on_runtime (retired)"
-# A Markdown kit id goes to `k2 doc explain` now that this K2 has k2 doc
-# (0.46.7 multiplayer): it reads the kit's registry from the daemon, so
-# with none here it is daemon_unreachable, never the old "no k2 doc yet".
+# A Markdown kit id: the daemon holds the kit's registry, so with none
+# here it is daemon_unreachable, never the old "no k2 doc yet".
 rc="$(ex MPC-E301)"
-expect_eq "explain kit id: handed to k2 doc explain (no daemon here)" "$rc" "1"
+expect_eq "explain kit id: asks the daemon (none here)" "$rc" "1"
 expect_has "explain kit id: asked the daemon" "$(cat "$SANDBOX/err")" "daemon_unreachable"
 if grep -q "no k2 doc yet" "$SANDBOX/err"; then bad "explain kit id: still says no k2 doc yet"; else ok "explain kit id: k2 doc is here"; fi
 rc="$(ex a b)"
 expect_eq "explain two ids: usage exit 2" "$rc" "2"
+
+echo "== k2 explain <kit id>: the kit's explain, never a doc path =="
+# A decoy file named like each id, here where the command runs.
+printf 'a decoy, never read\n' >"$SANDBOX/ws/MPC-E301"
+printf 'a decoy, never read\n' >"$SANDBOX/ws/mpce-E9"
+# kit_requests: each request as "<method> <target> <body>".
+kit_requests() {
+    python3 -c '
+import json, sys
+for l in open(sys.argv[1]):
+    r = json.loads(l)
+    print(r["method"], r["target"], r["body"])
+' "$SANDBOX/requests.jsonl"
+}
+no_decoy() { # no_decoy <label>: no request names the decoy or a path
+    local reqs; reqs="$(kit_requests)"
+    if grep -qF -e decoy -e "$SANDBOX/ws" -e '"path"' -e /cli/docs/ <<<"$reqs"; then
+        bad "$1: a request names the decoy, a path or a docs route: $reqs"
+    else
+        ok "$1: no request names the decoy, a path or a docs route"
+    fi
+}
+: >"$SANDBOX/requests.jsonl"
+rc="$(rc_of explain MPC-E301)"
+expect_eq "explain MPC-E301: exit 0, the kit's page on stdout" "$rc:$(cat "$SANDBOX/out")" "0:MPC-E301 the kit's page
+what to do next"
+expect_eq "explain MPC-E301: nothing on stderr" "$(cat "$SANDBOX/err")" ""
+expect_eq "explain MPC-E301: one request, the kit's explain with no path" "$(kit_requests)" \
+    'POST /cli/board/file/verb {"argv":["explain","MPC-E301"],"json":false}'
+no_decoy "explain MPC-E301"
+
+: >"$SANDBOX/requests.jsonl"
+rc="$(rc_of explain MPC-E301 --json)"
+expect_eq "explain MPC-E301 --json: exit 0, the kit's JSON" "$rc:$(cat "$SANDBOX/out")" '0:{"id": "MPC-E301", "json": true}'
+expect_eq "explain MPC-E301 --json: json true, no path" "$(kit_requests)" \
+    'POST /cli/board/file/verb {"argv":["explain","MPC-E301"],"json":true}'
+no_decoy "explain MPC-E301 --json"
+
+: >"$SANDBOX/requests.jsonl"
+rc="$(rc_of explain mpce-E9)"
+expect_eq "explain mpce-E9 (unknown): the kit's row, its exit" "$rc" "4"
+expect_eq "explain mpce-E9: the row on stderr" "$(cat "$SANDBOX/err")" 'Error [unknown_id] MPC-E110: no error id mpce-E9
+Next: k2 explain lists every id'
+expect_eq "explain mpce-E9: sent as typed" "$(kit_requests)" \
+    'POST /cli/board/file/verb {"argv":["explain","mpce-E9"],"json":false}'
+no_decoy "explain mpce-E9"
+expect_eq "the decoys are untouched" "$(cat "$SANDBOX/ws/MPC-E301" "$SANDBOX/ws/mpce-E9")" "a decoy, never read
+a decoy, never read"
 
 rc=0; K2_PORT=1 "$K2" study app-errors >"$SANDBOX/out" 2>&1 </dev/null || rc=$?
 expect_eq "study app-errors: exit 0" "$rc" "0"

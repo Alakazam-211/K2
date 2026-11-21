@@ -814,7 +814,7 @@ pub struct Client {
     /// it is not the default ([`Client::own_curl_bare`]).
     own_connect: Option<Duration>,
     /// The cell socket of the call under way that has no passport to
-    /// send ([`Client::post_form_uds_bare`]).
+    /// send ([`Client::post_form_uds_bare`], [`Client::send_bare`]).
     bare_sock: Option<PathBuf>,
 }
 
@@ -1411,6 +1411,50 @@ impl Client {
         r
     }
 
+    /// `cli_send` in a session with no passport (0.46.17): when `sock` is a
+    /// live socket, the route one it serves and no remote host forces TCP,
+    /// the call goes on the cell socket first with no `Authorization` line
+    /// at all (the fixed `cli_request_uds`, `cli_post_json_uds` and
+    /// `cli_post_form_uds`). Its answer when it has one, as
+    /// [`Client::send`] reads it. "Not served on cell socket" goes on to TCP
+    /// with this client's own credential (`_k2_sock_fallback_token` keeps
+    /// `$TOKEN` then); any other failure goes on as [`Client::send`]'s does,
+    /// where the owner token from disk is never sent
+    /// ([`Error::NoOwnerInSession`]). With a passport, or no live socket,
+    /// it is [`Client::send`].
+    pub fn send_bare(&mut self, sock: &Path, endpoint: &str, call: Call<'_>) -> Result<Response, Error> {
+        if self.passport().is_some() || self.force_tcp || !is_socket(sock) || !uds_eligible(endpoint) {
+            return self.send(endpoint, call);
+        }
+        let t0 = Instant::now();
+        self.bare_sock = Some(sock.to_path_buf());
+        let r = self.call_from(Channel::Uds, endpoint, call, t0);
+        self.bare_sock = None;
+        match r {
+            Ok(r) if contains(&r.body, NOT_SERVED) => {
+                return self
+                    .call_from(Channel::Tcp, endpoint, call, t0)
+                    .map_err(|f| f.error)
+            }
+            Ok(r) if r.body.iter().any(|b| !matches!(b, b'\n' | 0)) => return Ok(r),
+            Ok(_) if call.is_post() => return Err(maybe_applied(endpoint, t0)),
+            Ok(_) => {}
+            Err(f)
+                if call.is_post()
+                    && !matches!(
+                        f.error.curl_code(),
+                        wire::curl::COULDNT_CONNECT | LOCAL_TRANSPORT_DENIED
+                    ) =>
+            {
+                return Err(maybe_applied(endpoint, t0))
+            }
+            Err(_) => {}
+        }
+        self.no_owner_in_session(endpoint)?;
+        self.call_from(Channel::Tcp, endpoint, call, t0)
+            .map_err(|f| f.error)
+    }
+
     /// `_cli_use_passport_project`'s request: `/cli/whoami` with the
     /// passport, on the cell socket when there is a live one, then over
     /// TCP (the passport as Bearer) when that failed or its answer, as
@@ -1908,7 +1952,8 @@ impl Client {
                 };
                 (target, header)
             }
-            // No passport: no credential line ([`Client::post_form_uds_bare`]).
+            // No passport: no credential line ([`Client::post_form_uds_bare`],
+            // [`Client::send_bare`]).
             Channel::Uds if self.bare_sock.is_some() && self.passport().is_none() => {
                 let sock = self.bare_sock.as_deref().unwrap_or(Path::new(""));
                 (uds_target(sock, endpoint)?, "localhost".to_string())

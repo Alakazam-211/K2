@@ -166,9 +166,10 @@
 //!   on TCP inside a K2 terminal (`_cli_apply_auth_for_verb`, COMPAT-58),
 //!   and `cli_send`'s TCP arm then uses it; here [`client::Auth`] holds
 //!   either a passport or the owner token, never both.
-//! - No empty Bearer: `cli_send` tries the cell socket whenever
-//!   `K2_HOOK_SOCK` is a socket, with `Bearer ` and nothing after it when
-//!   there is no passport. Here only a passport has a cell socket.
+//! - No passport, a live cell socket: since 0.46.17 the shell's `_uds`
+//!   arms send no `Authorization` line there (never an empty Bearer). A
+//!   family that sends that line natively says so ([`Client::send_bare`],
+//!   [`Client::post_form_uds_bare`]); the others still hand it to the shell.
 //! - A healed passport stays healed for the client. The shell's `_uds`
 //!   arms heal inside `$(…)`, so `cli_send`'s TCP try after one starts
 //!   from the old passport again.

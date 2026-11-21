@@ -17,6 +17,11 @@
 //! 4. One `cli_send cli_request /cli/terminal/read <query>` on the left of
 //!    a pipe into the shell's Python ([`super::request_piped`]): the cell
 //!    socket first when there is a passport with a live socket, then TCP.
+//!    `HOOK_SOCK` naming a live socket and no passport (0.46.17): the cell
+//!    socket first with no `Authorization` line, as the fixed
+//!    `cli_request_uds` sends it ([`Client::send_bare`]), then TCP, where
+//!    the owner token from disk is never sent (the no-owner line, then
+//!    death by SIGPIPE, as for no answer).
 //!    The query is `session=<escaped>&lines=<N>` with a session, else
 //!    `workspace=<escaped>&lines=<N>[&agent=<escaped>]`; `N` (50 when not
 //!    given) goes as it is, not escaped.
@@ -54,9 +59,6 @@
 //!   and a command line with `-h` or `--help` ([`crate::front`]);
 //! - a `--lines` value with a byte that is not printable ASCII, or a `#`:
 //!   the shell hands it to curl as it is, and curl refuses it or cuts it;
-//! - `HOOK_SOCK` naming a live socket and no passport: the shell tries the
-//!   cell socket with an empty Bearer (the binary has no cell socket
-//!   without a passport);
 //! - a port that is set but is no port curl takes, and a `python3` the
 //!   binary can't tell, as for [`super::inbox`].
 //!
@@ -66,7 +68,7 @@
 //! without source lines. Bytes that are not UTF-8, and half of a
 //! surrogate pair, are as [`super::inbox`] says.
 
-use super::{curl_port, get, pipefail, request_piped, traceback, Shown};
+use super::{curl_port, get, pipefail, request_piped, traceback, Piped, Shown};
 use crate::daemon::{self, Settings};
 use crate::exit::Exit;
 use crate::out::json::{self, Options, Text, Value};
@@ -75,9 +77,10 @@ use crate::passport;
 use crate::prelude::{self, Closing};
 use crate::python;
 use crate::transport::encode::quote;
-use crate::transport::{remote, Auth};
+use crate::transport::{remote, Call, Client, Error};
 use k2_client::cli_name;
 use std::ffi::OsString;
+use std::path::Path;
 
 /// The router arm's words: this family's row of [`crate::route::TABLE`].
 pub const WORDS: &[&str] = &["read"];
@@ -249,10 +252,6 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     if prelude::gate(&settings).is_none() {
         // A port curl won't take is the shell's.
         settings.port_text.as_deref().and_then(curl_port)?;
-        let passport = matches!(settings.auth, Auth::Passport { .. });
-        if target.is_none() && !passport && super::live_socket(super::hook_sock().as_deref()) {
-            return None;
-        }
     }
     let token = token(&words);
     Some(run_with(args, &ask, &bare, token, target, settings))
@@ -317,10 +316,43 @@ fn run_with(
     }
     let mut closing = Closing::default();
     let q = query(ask, workspace);
-    let piped = request_piped(&mut client, &mut closing, ENDPOINT, &[q.as_str()]);
+    let bare = match (&target, client.passport(), super::hook_sock()) {
+        (None, None, Some(sock)) if super::live_socket(Some(&sock)) => Some(sock),
+        _ => None,
+    };
+    let piped = match bare {
+        Some(sock) => request_piped_bare(&mut client, &mut closing, &sock, &q),
+        None => request_piped(&mut client, &mut closing, ENDPOINT, &[q.as_str()]),
+    };
     let exit = pipefail(piped.exit, reader(&piped.body).print());
     closing.flush(&mut client, exit);
     exit
+}
+
+/// [`request_piped`] in a session with no passport: the cell socket first
+/// with no `Authorization` line ([`Client::send_bare`]). In the shell both
+/// a request with no answer and a TCP fallback that would send the owner
+/// token from disk end the command from the pipe's left side
+/// (`_k2_end_command 1`): the line, then death by SIGPIPE.
+fn request_piped_bare(client: &mut Client, closing: &mut Closing, sock: &Path, q: &str) -> Piped {
+    let passport = client.passport().is_some();
+    match client.send_bare(sock, ENDPOINT, Call::Request(&[q])) {
+        Ok(r) => {
+            closing.answer(&r, passport);
+            Piped {
+                body: super::piped_body(&r),
+                exit: Exit::Ok,
+            }
+        }
+        Err(e @ (Error::NoAnswer(_) | Error::NoOwnerInSession { .. })) => {
+            out::stderr_line(&e.to_string());
+            super::end_in_pipe()
+        }
+        Err(e) => Piped {
+            body: Vec::new(),
+            exit: Exit::from_curl(e.curl_code()),
+        },
+    }
 }
 
 /// The codes that are a refusal (exit 3).

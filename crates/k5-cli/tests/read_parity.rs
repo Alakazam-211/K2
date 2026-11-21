@@ -20,10 +20,13 @@
 //!   the line, then death by SIGPIPE (141); a reset, not HTTP, an empty
 //!   200, TMPDIR unusable and no daemon: the reader on an empty input
 //!   (an empty line on stderr, exit 1).
+//! - `HOOK_SOCK` naming a live socket and no passport (0.46.17): the cell
+//!   socket with no `Authorization` line and never the owner token; "not
+//!   served" goes on to TCP with the owner token, no answer to the no-owner
+//!   line.
 //! - What the binary hands to the shell: a workspace on another server, a
-//!   `--lines` with a space or a `#`, `HOOK_SOCK` naming a live socket and
-//!   no passport, `--help` (the shell prints the read help and sends
-//!   nothing, since 0.46.17), a port that is no port.
+//!   `--lines` with a space or a `#`, `--help` (which the shell reads as
+//!   the workspace `--help`), a port that is no port.
 
 #![cfg(unix)]
 
@@ -723,6 +726,107 @@ fn read_over_the_cell_socket() {
     }
 }
 
+/// `HOOK_SOCK` naming a live socket and no passport (0.46.17): the shell's
+/// `cli_request_uds` sends no `Authorization` line there (never an empty
+/// Bearer), and the binary sends the same. The owner token from disk goes
+/// only to TCP after the socket's own "not served"; after any other
+/// failure the session's no-owner line ends the command.
+#[test]
+fn read_on_the_cell_socket_with_no_passport() {
+    let rig = Rig::new(VERB, "bare");
+    let sock = &[("K2_HOOK_SOCK", "{sock}")];
+    let not_served = || Reply::Answer(404, r#"{"error":"route not served on cell socket"}"#.into());
+    let v = vec![
+        // covers: read
+        case(
+            "a live socket and no passport: no Authorization line",
+            &["acme", "--lines", "3"],
+            sock,
+            vec![ok(LINES)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "a live socket and no passport: a session",
+            &["acme", "--session", "s1"],
+            sock,
+            vec![ok(LINES)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "not served on the socket: TCP with the owner token",
+            &["acme"],
+            sock,
+            vec![not_served(), ok(LINES)],
+            owner_and_port,
+            0,
+            2,
+        ),
+        in_pipe(case(
+            "no answer on the socket: the no-owner line, nothing over TCP",
+            &["acme"],
+            sock,
+            vec![Reply::Close],
+            owner_and_port,
+            141,
+            1,
+        )),
+    ];
+    for c in v {
+        rig.check(&c);
+        let (_, sent) = rig.binary(&c, false);
+        assert!(
+            !k5_cli::fallthrough::cache_dir(&rig.k2home).exists(),
+            "{}: the binary handed the line to the shell",
+            c.name
+        );
+        assert!(
+            sent[0].starts_with("[uds]\nGET /cli/terminal/read?"),
+            "{}: {}",
+            c.name,
+            sent[0]
+        );
+        assert!(
+            !sent[0].to_ascii_lowercase().contains("authorization:") && !sent[0].contains(OWNER),
+            "{}: the socket got a credential: {}",
+            c.name,
+            sent[0]
+        );
+        if sent.len() > 1 {
+            assert!(sent[1].contains(&format!("Bearer {OWNER}")), "{}: {}", c.name, sent[1]);
+        }
+    }
+}
+
+/// The no-owner line names the product by the brand (in a build with
+/// `K2_BRAND_DIR=brand/xy` it says `XY`): on the cell socket with no
+/// passport, after the socket failed.
+#[test]
+fn read_lines_say_the_brand_s_name() {
+    let product = k2_client::brand::PRODUCT_NAME;
+    let rig = Rig::new(VERB, "brand");
+    let c = case(
+        "no answer on the socket, no passport",
+        &["acme"],
+        &[("K2_HOOK_SOCK", "{sock}")],
+        vec![Reply::Close],
+        owner_and_port,
+        141,
+        1,
+    );
+    let (out, log) = rig.binary(&c, false);
+    assert!(
+        out.stderr.contains(&format!("Error: in a session, {product} doesn't act as the owner")),
+        "{}",
+        out.stderr
+    );
+    assert_eq!(log.len(), 1, "{log:?}");
+    assert!(!log[0].contains(OWNER), "{}", log[0]);
+}
+
 #[test]
 fn read_with_no_answer() {
     let rig = Rig::new(VERB, "none");
@@ -893,17 +997,7 @@ fn read_hands_these_to_the_shell() {
             0,
             1,
         )),
-        shell(case(
-            "HOOK_SOCK a live socket and no passport: an empty Bearer",
-            &["acme"],
-            &[("K2_HOOK_SOCK", "{sock}")],
-            vec![ok(LINES)],
-            owner_and_port,
-            0,
-            1,
-        )),
-        // Help never acts (0.46.17): the shell prints the read help and
-        // reads nothing, even as a flag's value.
+        // The shell has no help for read: it reads the workspace `--help`.
         shell(case(
             "--help prints the read help",
             &["--help"],

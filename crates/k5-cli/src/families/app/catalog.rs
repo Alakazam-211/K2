@@ -135,10 +135,18 @@ pub fn parse_install(words: &[&str]) -> Result<Ask, Stop> {
     };
     let mut i = 0;
     while let Some(w) = words.get(i).copied() {
+        // The loop's first check, `[ $# -ge 2 ] || { echo "usage: $1 needs a
+        // value (… app catalog --help)"; exit 2; }`, comes before the arm's
+        // `_need_value`, so a value flag as the last word is that line.
         let mut take = |slot: &mut String| -> Result<(), Stop> {
-            let (v, n) = super::deploy::value(words, i)?;
-            *slot = v.to_string();
-            i = n;
+            let Some(v) = words.get(i + 1) else {
+                return Err(Stop::usage(format!(
+                    "usage: {w} needs a value{}",
+                    usage::FLAG_TAIL
+                )));
+            };
+            *slot = (*v).to_string();
+            i += 2;
             Ok(())
         };
         match w {
@@ -1071,6 +1079,15 @@ mod tests {
                 usage::FLAG_TAIL
             ))))
         );
+        for flag in ["--catalog", "--version", "--domain"] {
+            assert_eq!(
+                parse_install(&["--catalog", "x", flag]),
+                Err(Stop::usage(format!(
+                    "usage: {flag} needs a value{}",
+                    usage::FLAG_TAIL
+                )))
+            );
+        }
         assert!(matches!(p(&["zap"]), Some(Err(s)) if s.line.ends_with("app catalog --help)")));
         assert!(
             matches!(p(&["list", "--x"]), Some(Err(s)) if s.line.starts_with("Unknown flag: --x"))

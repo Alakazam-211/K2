@@ -1779,10 +1779,7 @@ fn daemon_help_lines_never_act() {
         // goes to the shell.
         let mut line = vec![std::ffi::OsString::from(VERB)];
         line.extend(c.args.iter().map(std::ffi::OsString::from));
-        let page = matches!(
-            k5_cli::front::route(&line),
-            k5_cli::front::Route::Help(_)
-        );
+        let page = matches!(k5_cli::front::route(&line), k5_cli::front::Route::Help(_));
         check(&r, &c, &[], page);
     }
 }

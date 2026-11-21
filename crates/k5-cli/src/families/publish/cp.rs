@@ -1293,7 +1293,7 @@ mod tests {
         );
         assert_eq!(
             parse_subdomain(&["create", "a", "--target"]),
-            Act::Lines(String::new(), Exit::Error)
+            Act::Lines("Error: --target takes a value\n".into(), Exit::Usage)
         );
         assert_eq!(
             parse_subdomain(&[]),

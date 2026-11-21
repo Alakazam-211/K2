@@ -126,10 +126,13 @@ fn shift(flag: &str) -> Plan {
 }
 
 /// The words after `sessions`, when they are a verb this module does.
-/// `None`: not one of them (the module's caller reads them).
+/// `None`: not one of them (the module's caller reads them). A help flag
+/// after `open`, `new`, `stop` or `main` is the shell's usage; `live`
+/// reads it as the workspace (a bash bug: help asks), as `cmd_sessions`
+/// does (`sessions live --help`, [`crate::text::FAMILY_FORMS`]).
 pub fn parse(words: &[&str]) -> Option<Plan> {
     let (sub, rest) = words.split_first()?;
-    if rest.iter().any(|w| matches!(*w, "--help" | "-h")) {
+    if *sub != "live" && rest.iter().any(|w| matches!(*w, "--help" | "-h")) {
         return None;
     }
     match *sub {

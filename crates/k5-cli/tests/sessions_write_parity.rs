@@ -555,3 +555,44 @@ fn sessions_write_help_never_acts() {
         });
     }
 }
+
+/// `sessions live --help` and `-h` (`text::FAMILY_FORMS`): `live` is not
+/// one of the verbs `cmd_sessions` checks for help, so it reads the flag
+/// as the workspace and asks to resolve it (a bash bug: help asks; these
+/// rows flip when the shell's fix lands). A help line a gate stops is
+/// the shell's.
+#[test]
+fn sessions_live_help_lines_are_the_family_s() {
+    let rig = Rig::new(VERB, "livehelp");
+    for c in [
+        // native: sessions live --help
+        row(
+            "live --help: the workspace --help, resolved",
+            &["live", "--help"],
+            vec![ok(r#"{"path":"/w/acme"}"#), ok("[]")],
+            0,
+            2,
+        ),
+        row(
+            "live -h: the workspace -h, none resolved",
+            &["live", "-h"],
+            vec![ok("{}"), ok("[]")],
+            0,
+            2,
+        ),
+        Case {
+            compare: Compare::Shell,
+            ..case(
+                "live --help, the virtual desktop's switch: the shell's gate",
+                &["live", "--help"],
+                &[("K2_NO_OWNER_FALLBACK", "1")],
+                vec![],
+                owner_and_port,
+                1,
+                0,
+            )
+        },
+    ] {
+        rig.check(&c);
+    }
+}

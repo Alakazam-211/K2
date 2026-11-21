@@ -38,9 +38,12 @@
 //!
 //! The shell CLI answers these forms itself ([`run`] returns `None`):
 //!
-//! - `help`, and a command line with `-h` or `--help` ([`crate::front`]);
-//!   `compact` and `archives` (the owner's on-disk view, [`disk`]) where
-//!   [`disk`] says;
+//! - `help`, and a command line with `-h` or `--help` ([`crate::front`]),
+//!   but `sessions live --help` and `-h`: `live` reads the flag as the
+//!   workspace (a bash bug: help asks), as this does
+//!   ([`crate::text::FAMILY_FORMS`]) where no gate stops the line
+//!   ([`prelude::help_line_gated`]); `compact` and `archives` (the
+//!   owner's on-disk view, [`disk`]) where [`disk`] says;
 //! - a value flag as the last word (the shell's `_need_value` line,
 //!   `Error: <flag> takes a value`, exit 2), and a word that is not UTF-8;
 //! - `HOOK_SOCK` set with a `CODEX_` variable exported, a port that is set
@@ -441,6 +444,9 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
             return Some(Exit::Error);
         }
     };
+    if prelude::help_line_gated(args, &settings) {
+        return None;
+    }
     if prelude::gate(&settings).is_none()
         && settings.port_text.as_deref().and_then(curl_port).is_none()
     {

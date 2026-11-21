@@ -144,7 +144,11 @@ macro_rules! family {
 /// hands a help line a gate stops to the shell,
 /// [`crate::prelude::help_line_gated`]): `reviews` (it reads no word: it
 /// asks) and `trust-folders` (it sends) ([`crate::families::commit`]),
-/// `glossary` (the term) and `read` (the workspace).
+/// `glossary` (the term) and `read` (the workspace); `setup skip` (the
+/// step's name: it sends) and `sessions live` (the workspace).
+///
+/// `done --help` and `done -h` ([`crate::families::done`]): the help is
+/// the loop's, after the gates (`_done_usage`).
 pub static FAMILY_FORMS: &[HelpForm] = &[
     family!("permission" "--help"),
     family!("permission" "-h"),
@@ -184,6 +188,12 @@ pub static FAMILY_FORMS: &[HelpForm] = &[
     family!("glossary" "-h"),
     family!("read" "--help"),
     family!("read" "-h"),
+    family!("setup" "skip" "--help"),
+    family!("setup" "skip" "-h"),
+    family!("sessions" "live" "--help"),
+    family!("sessions" "live" "-h"),
+    family!("done" "--help"),
+    family!("done" "-h"),
 ];
 
 /// The captured help form that is exactly `argv` ([`CAPTURED_FORMS`],

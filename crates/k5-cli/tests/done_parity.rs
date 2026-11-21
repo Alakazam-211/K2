@@ -18,8 +18,10 @@
 //!   with no body; each with TMPDIR unusable too (`_cli_curl`'s 76); no
 //!   daemon (7). `done` posts once over TCP and never resends: it has no
 //!   cell-socket arm.
-//! - What the binary hands to the shell: -h and --help (as a flag and as
-//!   --blocked's value), a session the API started.
+//! - `done --help` and `done -h`: the family's own lines (`text::FAMILY_FORMS`),
+//!   the usage after the gates, nothing sent.
+//! - What the binary hands to the shell: -h and --help after other words
+//!   (as a flag and as --blocked's value), a help line a gate stops.
 //! - The agent escaped as the shell escapes it since 0.46.17 (`#`, `&`,
 //!   `=`, a space, `+`, `%`, control bytes, UTF-8): each row runs against
 //!   bash on the rig, and the binary's request bytes are also checked
@@ -687,12 +689,21 @@ fn done_hands_these_to_the_shell() {
     };
     let v = vec![
         shell(named(
-            "--help",
+            "--help, the virtual desktop's switch: the shell's gate",
+            &["--help"],
+            &[("K2_NO_OWNER_FALLBACK", "1")],
+            vec![],
+            owner_and_port,
+            1,
+            0,
+        )),
+        shell(named(
+            "--help, no port: the shell's gate",
             &["--help"],
             &[],
             vec![],
-            owner_and_port,
-            0,
+            owner_only,
+            1,
             0,
         )),
         shell(named(
@@ -1039,5 +1050,57 @@ fn done_in_a_session_the_api_started() {
                 sent[0]
             );
         }
+    }
+}
+
+/// `done --help` and `done -h` (`text::FAMILY_FORMS`): the gates, then
+/// the loop reads the flag and prints `_done_usage`, exit 0; nothing is
+/// sent, with an agent's name or none, an owner's or an agent's.
+#[test]
+fn the_help_lines_are_the_family_s() {
+    let rig = Rig::new(VERB, "help");
+    let v = vec![
+        // native: done --help
+        named("--help", &["--help"], &[], vec![], owner_and_port, 0, 0),
+        named("-h", &["-h"], &[], vec![], owner_and_port, 0, 0),
+        case(
+            "--help with no agent's name",
+            &["--help"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        ),
+        passport_case(
+            &[],
+            case(
+                "--help, an agent over TCP",
+                &["--help"],
+                &[],
+                vec![],
+                nothing,
+                0,
+                0,
+            ),
+        ),
+        Case {
+            compare: Compare::Shell,
+            ..passport_case(
+                &[("K2_API_CELL", "1")],
+                case(
+                    "--help in a session the API started: its own usage, the shell's",
+                    &["--help"],
+                    &[],
+                    vec![],
+                    port_only,
+                    0,
+                    0,
+                ),
+            )
+        },
+    ];
+    for c in v {
+        rig.check(&c);
     }
 }

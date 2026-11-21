@@ -46,9 +46,17 @@
 //! [`crate::transport::Client::post_form_bearer`]), else the line that
 //! there is no such session, exit 1.
 //!
+//! `done --help` and `done -h` outside an API session reach [`run`]
+//! through their help forms ([`crate::text::FAMILY_FORMS`]): after the
+//! gates, the loop reads the flag and prints `cli/text/help/done.txt`
+//! (`_done_usage`), exit 0.
+//!
 //! The shell CLI answers these forms itself ([`run`] returns `None`), so
-//! there is one copy of each: a command line with `-h` or `--help` (the
-//! front sends those on, [`crate::front`]); a word or an agent setting
+//! there is one copy of each: any other command line with `-h` or
+//! `--help` (the front sends those on, [`crate::front`]), a help line a
+//! gate stops (its gates read the help words,
+//! [`prelude::help_line_gated`]) and an API session's help (its own
+//! usage); a word or an agent setting
 //! that is not UTF-8; and in an API session, `HOOK_SOCK` with a `CODEX_`
 //! variable exported (the shell looks for a shared Codex server first).
 //! Once escaped, no byte of the agent is
@@ -173,11 +181,9 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .skip(1)
         .map(|a| a.to_str())
         .collect::<Option<_>>()?;
-    let read = match flags(&words, &agent) {
-        Err(Stop::Help) => return None,
-        other => other,
-    };
+    let read = flags(&words, &agent);
     Some(match daemon::current() {
+        Ok(settings) if prelude::help_line_gated(args, &settings) => return None,
         Ok(settings) => run_with(args, read, settings),
         Err(e) => {
             out::stderr_line(&format!("Error: {e}"));
@@ -196,8 +202,14 @@ fn run_with(args: &[OsString], read: Result<Mark, Stop>, mut settings: Settings)
             out::stderr_line(&line);
             return exit;
         }
-        // `run` hands help to the shell before this.
-        Err(Stop::Help) => return Exit::Usage,
+        // `_done_usage`.
+        Err(Stop::Help) => {
+            let page = crate::text::help("done").expect("the done help page is embedded");
+            return match out::stdout(page) {
+                Ok(()) => Exit::Ok,
+                Err(e) => out::after_stdout_error(&e),
+            };
+        }
     };
     // The gate passed, so there is a port text and a token. curl refuses a
     // port that is no port (3), and `_cli_curl` reads that as any failure.

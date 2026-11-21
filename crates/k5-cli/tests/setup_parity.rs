@@ -1929,3 +1929,50 @@ fn a_write_with_a_daemon_that_never_answers() {
     );
     rig.check(&c);
 }
+
+/// `setup skip --help` and `setup skip -h` (`text::FAMILY_FORMS`): the
+/// loop reads the flag as the step's name and sends the skip, as the
+/// shell's does (a bash bug: help acts; these rows flip when the shell's
+/// fix lands). A help line a gate stops is the shell's: the shell skips
+/// its connection gate for it.
+#[test]
+fn the_skip_help_lines_are_the_family_s() {
+    let rig = Rig::new(VERB, "help");
+    let shell = |c: Case| Case {
+        compare: Compare::Shell,
+        ..c
+    };
+    let v = vec![
+        // native: setup skip --help
+        case(
+            "skip --help skips the step --help",
+            &["skip", "--help"],
+            &[],
+            vec![text(LIST)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "skip -h skips the step -h",
+            &["skip", "-h"],
+            &[],
+            vec![text(LIST)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        shell(case(
+            "skip --help, no port: the shell skips its gate",
+            &["skip", "--help"],
+            &[],
+            vec![],
+            owner_only,
+            1,
+            0,
+        )),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}

@@ -9,17 +9,36 @@
 //! binary answers itself. Each is one in which the shell CLI only prints
 //! one of these files; `tests/cli/help_native.sh` proves that from the
 //! shell's own trace and writes the list.
+//!
+//! [`CAPTURED_FORMS`] is `src/help_captured.txt`: every other help
+//! command line of the router that the shell only prints for, the same
+//! in every environment (the same script proves it and writes the list),
+//! with what it printed ([`CAPTURED`]). That text names the command and
+//! the product by the brand ([`render`]).
 
 /// One help command line the binary answers: `argv` exactly (the
 /// arguments after the program's name) prints the page `page` ([`page`]:
 /// a help file, or `study:<key>` for a study file) on stdout, or on
-/// stderr when `stderr`, and exits with `code`.
+/// stderr when `stderr`, and exits with `code`. A captured form
+/// (`captured`, its page in [`CAPTURED`]) has no `page`: it prints what
+/// the shell printed.
 #[derive(Debug, PartialEq, Eq)]
 pub struct HelpForm {
     pub argv: &'static [&'static str],
     pub page: &'static str,
     pub stderr: bool,
     pub code: u8,
+    pub captured: Option<usize>,
+}
+
+/// What the shell printed for a captured help form: the exit code, and
+/// stdout and stderr as `src/help_captured.txt` holds them ([`render`]
+/// gives the text).
+#[derive(Debug, PartialEq, Eq)]
+pub struct Captured {
+    pub code: u8,
+    pub out: &'static str,
+    pub err: &'static str,
 }
 
 include!(concat!(env!("OUT_DIR"), "/text.rs"));
@@ -49,9 +68,48 @@ pub fn page(key: &str) -> Option<&'static str> {
     }
 }
 
-/// The help form that is exactly `argv`, if the binary answers it.
+/// The help form that is exactly `argv`, if the binary answers it: a
+/// file's print ([`HELP_FORMS`]), or a captured form ([`captured_form`]).
 pub fn help_form(argv: &[&str]) -> Option<&'static HelpForm> {
-    HELP_FORMS.iter().find(|f| f.argv == argv)
+    HELP_FORMS
+        .iter()
+        .find(|f| f.argv == argv)
+        .or_else(|| captured_form(argv))
+}
+
+/// The captured help form that is exactly `argv` ([`CAPTURED_FORMS`],
+/// in argv order).
+pub fn captured_form(argv: &[&str]) -> Option<&'static HelpForm> {
+    CAPTURED_FORMS
+        .binary_search_by(|f| f.argv.cmp(argv))
+        .ok()
+        .map(|i| &CAPTURED_FORMS[i])
+}
+
+/// A captured text as it prints: `\\`, `\n` and `\t` are a backslash,
+/// a newline and a tab, `\c` the command's name
+/// ([`k2_client::brand::CLI_NAME`]) and `\p` the product's
+/// ([`k2_client::brand::PRODUCT_NAME`]); in the default build those are
+/// `k2` and `K2`, as the shell printed them. `build.rs` lets no other
+/// escape in.
+pub fn render(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + text.len() / 8);
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('t') => out.push('\t'),
+            Some('c') => out.push_str(k2_client::brand::CLI_NAME),
+            Some('p') => out.push_str(k2_client::brand::PRODUCT_NAME),
+            Some(other) => out.push(other),
+            None => out.push('\\'),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -186,5 +244,61 @@ mod tests {
         assert_eq!(page("mail"), help("mail"));
         assert_eq!(page("study:nope"), None);
         assert_eq!(help_form(&[]), None);
+    }
+
+    /// The captured forms are `src/help_captured.txt` as it is on disk
+    /// now: each form once, in argv order, with its page's code and text.
+    #[test]
+    fn the_captured_forms_are_the_list_on_disk() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/help_captured.txt");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let mut pages = Vec::new();
+        let mut forms: Vec<(Vec<&str>, usize)> = Vec::new();
+        for line in text
+            .lines()
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        {
+            let cols: Vec<&str> = line.split('\t').collect();
+            match cols[..] {
+                ["P", _, code, out, err] => pages.push((code.parse::<u8>().unwrap(), out, err)),
+                ["F", argv, page] => forms.push((argv.split(' ').collect(), page.parse().unwrap())),
+                _ => panic!("{}: {line:?}", path.display()),
+            }
+        }
+        let embedded: Vec<(u8, &str, &str)> =
+            CAPTURED.iter().map(|c| (c.code, c.out, c.err)).collect();
+        assert_eq!(pages, embedded, "a stale build of {}", path.display());
+        forms.sort();
+        assert_eq!(forms.len(), CAPTURED_FORMS.len(), "a stale build");
+        for ((argv, page), form) in forms.iter().zip(CAPTURED_FORMS) {
+            assert_eq!(form.argv, &argv[..]);
+            assert_eq!(form.captured, Some(*page), "{argv:?}");
+            assert_eq!(form.code, pages[*page].0, "{argv:?}");
+            assert_eq!(form.page, "");
+            assert!(std::ptr::eq(help_form(argv).unwrap(), form), "{argv:?}");
+            assert_eq!(help_form(argv), captured_form(argv));
+        }
+        assert!(
+            CAPTURED_FORMS.len() > 1000,
+            "only {} forms",
+            CAPTURED_FORMS.len()
+        );
+        for f in HELP_FORMS {
+            assert_eq!(captured_form(f.argv), None, "{:?} is in both lists", f.argv);
+            assert_eq!(f.captured, None);
+        }
+        assert_eq!(captured_form(&["agent", "nope", "--help"]), None);
+    }
+
+    #[test]
+    fn render_reads_the_escapes() {
+        let cli = k2_client::brand::CLI_NAME;
+        let product = k2_client::brand::PRODUCT_NAME;
+        assert_eq!(
+            render("Usage: \\c agent\\n\\tx \\\\n \\p's"),
+            format!("Usage: {cli} agent\n\tx \\n {product}'s")
+        );
+        assert_eq!(render(""), "");
+        assert_eq!(render("plain \u{2014} text"), "plain \u{2014} text");
     }
 }

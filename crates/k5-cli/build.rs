@@ -16,7 +16,11 @@
 //! `tests/cli/help_native.sh`; a page there is a help file's key, or
 //! `study:<key>` for a study file). Writes `$OUT_DIR/text.rs` (read by
 //! `src/text.rs`). Fails the build when a row of the list names a page
-//! that is not there.
+//! that is not there. With them the other help forms, what bash printed
+//! for each (`src/help_captured.txt`, written by the same script): the
+//! pages as they are escaped there, and the forms in argv order. Fails
+//! the build on a row it can't read, an escape it doesn't know, a form
+//! twice or a form the first list has.
 //!
 //! And the manifest `k2 --schema` prints, joined from `cli/src` as the
 //! shell's build joins it (`src/families/schema/join.rs`): writes
@@ -138,6 +142,7 @@ fn text(manifest: &Path, out: &Path) {
 
     let list = std::fs::read_to_string(&native)
         .unwrap_or_else(|e| panic!("read {}: {e}", native.display()));
+    let mut file_forms: Vec<Vec<String>> = Vec::new();
     rs.push_str("pub static HELP_FORMS: &[HelpForm] = &[\n");
     for (n, line) in list.lines().enumerate() {
         if line.starts_with('#') || line.is_empty() {
@@ -177,13 +182,126 @@ fn text(manifest: &Path, out: &Path) {
         );
         writeln!(
             rs,
-            "    HelpForm {{ argv: &{words:?}, page: {page:?}, stderr: {stderr}, code: {code} }},"
+            "    HelpForm {{ argv: &{words:?}, page: {page:?}, stderr: {stderr}, code: {code}, captured: None }},"
+        )
+        .expect("write to a String");
+        file_forms.push(words.iter().map(|w| w.to_string()).collect());
+    }
+    rs.push_str("];\n");
+    captured(manifest, &file_forms, &mut rs);
+    let rs_path = out.join("text.rs");
+    std::fs::write(&rs_path, rs).unwrap_or_else(|e| panic!("write {}: {e}", rs_path.display()));
+}
+
+/// `CAPTURED` and `CAPTURED_FORMS` from `src/help_captured.txt`: a page
+/// row is `P`, its number, the exit code, stdout and stderr (escaped as
+/// [`escapes_ok`] reads them), a form row `F`, its words between single
+/// spaces and its page's number. Pages come first, numbered from 0 in
+/// order.
+fn captured(manifest: &Path, file_forms: &[Vec<String>], rs: &mut String) {
+    let path = manifest.join("src/help_captured.txt");
+    println!("cargo:rerun-if-changed={}", path.display());
+    let list =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let mut pages: Vec<(u8, &str, &str)> = Vec::new();
+    let mut forms: Vec<(Vec<&str>, usize)> = Vec::new();
+    for (n, line) in list.lines().enumerate() {
+        if line.starts_with('#') || line.is_empty() {
+            continue;
+        }
+        let at = || format!("{}:{}", path.display(), n + 1);
+        let cols: Vec<&str> = line.split('\t').collect();
+        match cols[..] {
+            ["P", no, code, out, err] => {
+                assert!(forms.is_empty(), "{}: a page after the forms", at());
+                assert_eq!(
+                    no,
+                    pages.len().to_string(),
+                    "{}: pages are numbered in order",
+                    at()
+                );
+                let Ok(code) = code.parse::<u8>() else {
+                    panic!("{}: the exit code is not a number: {code:?}", at())
+                };
+                for text in [out, err] {
+                    if let Err(e) = escapes_ok(text) {
+                        panic!("{}: {e}", at());
+                    }
+                }
+                pages.push((code, out, err));
+            }
+            ["F", argv, page] => {
+                let words: Vec<&str> = argv.split(' ').collect();
+                assert!(
+                    words.iter().all(|w| !w.is_empty()),
+                    "{}: an empty word",
+                    at()
+                );
+                let page: usize = page
+                    .parse()
+                    .ok()
+                    .filter(|p| *p < pages.len())
+                    .unwrap_or_else(|| panic!("{}: no page {page:?}", at()));
+                assert!(
+                    !file_forms.iter().any(|f| *f == words),
+                    "{}: {argv:?} is in src/help_native.txt too",
+                    at()
+                );
+                forms.push((words, page));
+            }
+            _ => panic!("{}: not a P or an F row: {line:?}", at()),
+        }
+    }
+    assert!(!forms.is_empty(), "{}: no forms", path.display());
+    forms.sort();
+    for w in forms.windows(2) {
+        assert!(
+            w[0].0 != w[1].0,
+            "{}: {:?} is there twice",
+            path.display(),
+            w[0].0
+        );
+    }
+    rs.push_str("pub static CAPTURED: &[Captured] = &[\n");
+    for (code, out, err) in &pages {
+        writeln!(
+            rs,
+            "    Captured {{ code: {code}, out: {out:?}, err: {err:?} }},"
         )
         .expect("write to a String");
     }
     rs.push_str("];\n");
-    let rs_path = out.join("text.rs");
-    std::fs::write(&rs_path, rs).unwrap_or_else(|e| panic!("write {}: {e}", rs_path.display()));
+    rs.push_str("pub static CAPTURED_FORMS: &[HelpForm] = &[\n");
+    for (words, page) in &forms {
+        let (code, out, err) = pages[*page];
+        // The stream a lone page is on; with both, `stderr` is false and
+        // stderr is written first ([`crate::pages::help_page`]).
+        let stderr = out.is_empty() && !err.is_empty();
+        writeln!(
+            rs,
+            "    HelpForm {{ argv: &{words:?}, page: \"\", stderr: {stderr}, code: {code}, captured: Some({page}) }},"
+        )
+        .expect("write to a String");
+    }
+    rs.push_str("];\n");
+}
+
+/// Whether `text` uses only the escapes `src/help_captured.txt` has:
+/// `\\`, `\n`, `\t`, `\c` (the command's name) and `\p` (the
+/// product's), and no tab or newline of its own.
+fn escapes_ok(text: &str) -> Result<(), String> {
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => match chars.next() {
+                Some('\\' | 'n' | 't' | 'c' | 'p') => {}
+                other => return Err(format!("an escape it doesn't know: \\{other:?}")),
+            },
+            '\t' | '\n' | '\r' => return Err(format!("a raw {c:?} in a text")),
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 /// Every `.txt` file under `dir`, keyed by its path below `dir` with `/`

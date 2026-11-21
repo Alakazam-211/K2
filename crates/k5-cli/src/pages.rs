@@ -481,12 +481,35 @@ pub fn help_page(
     let exit = Exit::ALL
         .into_iter()
         .find(|e| e.code() == i32::from(form.code))?;
+    if let Some(n) = form.captured {
+        return Some(captured_page(text::CAPTURED.get(n)?, exit));
+    }
     Some(Page {
         text: text::page(form.page)?.into(),
         stderr: form.stderr,
         exit,
         lead: None,
     })
+}
+
+/// A captured form's page: what the shell printed ([`text::render`]),
+/// stdout and stderr each on its own stream, stderr first.
+fn captured_page(c: &text::Captured, exit: Exit) -> Page {
+    let (out, err) = (text::render(c.out), text::render(c.err));
+    if out.is_empty() && !err.is_empty() {
+        return Page {
+            text: err.into(),
+            stderr: true,
+            exit,
+            lead: None,
+        };
+    }
+    Page {
+        text: out.into(),
+        stderr: false,
+        exit,
+        lead: (!err.is_empty()).then_some(err),
+    }
 }
 
 /// The command lines that print the daily tier of `k2 help`
@@ -1224,6 +1247,34 @@ mod tests {
                 Exit::ALL.iter().any(|e| e.code() == i32::from(f.code)),
                 "{f:?}"
             );
+        }
+    }
+
+    /// A captured form prints what the shell printed, each stream on its
+    /// own, behind the same gate as a file's print.
+    #[test]
+    fn a_captured_form_prints_what_the_shell_printed() {
+        let none = Env::of(&[]);
+        let ok = prelude(true, true, false, false);
+        for f in text::CAPTURED_FORMS {
+            let c = &text::CAPTURED[f.captured.expect("a captured form")];
+            let page = help_page(f, &ok, &none, || false)
+                .unwrap_or_else(|| panic!("{:?}: no page", f.argv));
+            let (out, err) = (text::render(c.out), text::render(c.err));
+            let (got_out, got_err) = if page.stderr {
+                (String::new(), page.text.to_string())
+            } else {
+                (page.text.to_string(), page.lead.clone().unwrap_or_default())
+            };
+            assert_eq!((got_out, got_err), (out, err), "{:?}", f.argv);
+            assert_eq!(page.exit.code(), i32::from(c.code), "{:?}", f.argv);
+            assert_eq!(page.stderr, f.stderr, "{:?}", f.argv);
+            for no in [
+                prelude(false, true, false, false),
+                prelude(true, false, false, false),
+            ] {
+                assert_eq!(help_page(f, &no, &none, || false), None, "{:?}", f.argv);
+            }
         }
     }
 

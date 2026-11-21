@@ -36,10 +36,19 @@
 //! (`_cli_read_secret_stdin "Token: "`: no echo at a terminal), refuses it
 //! beside `--token` and an empty one (exit 2), and leaves it unused.
 //!
+//! A workspace on another server (`ws@host`, `ws::host.example`): after
+//! the token is read, the host's token ([`remote::token_for_host`]: the
+//! `--token` or `--token-stdin` one, else `*_REMOTE_TOKEN`, else the K2
+//! home's files; none is `_apply_remote_host`'s two lines, exit 1), and
+//! the call goes to `https://<host>` (or the URL as given) over TCP with
+//! it ([`remote::apply`], TLS by [`crate::transport::tls`]).
+//!
 //! The shell CLI answers these forms itself ([`run`] returns `None`):
 //!
-//! - a workspace on another server (`ws@host`, `ws::host.example`): the
-//!   shell points the call at that host with its own token;
+//! - a host the binary doesn't send a token to itself ([`remote::base`],
+//!   [`remote::sends_here`]: a path after the host, a user part, IPv6;
+//!   HTTPS where curl would use a proxy; plain http to anything but a
+//!   literal loopback address);
 //! - a value flag as the last word (the shell's `_need_value` line,
 //!   `Error: <flag> takes a value`, exit 2), a word that is not UTF-8,
 //!   and a command line with `-h` or `--help` ([`crate::front`]);
@@ -66,7 +75,7 @@ use crate::passport;
 use crate::prelude::{self, Closing};
 use crate::python;
 use crate::transport::encode::quote;
-use crate::transport::Auth;
+use crate::transport::{remote, Auth};
 use k2_client::cli_name;
 use std::ffi::OsString;
 
@@ -218,9 +227,18 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .collect::<Option<_>>()?;
     let ask = parse(&words)?;
     let (bare, host) = split_remote(&ask.workspace);
-    if !host.is_empty() || !sendable_lines(&ask.lines) || !python::family_native(python::here()) {
+    if !sendable_lines(&ask.lines) || !python::family_native(python::here()) {
         return None;
     }
+    let target = if host.is_empty() {
+        None
+    } else {
+        let b = remote::base(&host)?;
+        if !remote::sends_here(&host, &b, |n| std::env::var_os(n)) {
+            return None;
+        }
+        Some((b, host))
+    };
     let settings = match daemon::current() {
         Ok(s) => s,
         Err(e) => {
@@ -232,19 +250,20 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         // A port curl won't take is the shell's.
         settings.port_text.as_deref().and_then(curl_port)?;
         let passport = matches!(settings.auth, Auth::Passport { .. });
-        if !passport && super::live_socket(super::hook_sock().as_deref()) {
+        if target.is_none() && !passport && super::live_socket(super::hook_sock().as_deref()) {
             return None;
         }
     }
     let token = token(&words);
-    Some(run_with(args, &ask, &bare, token, settings))
+    Some(run_with(args, &ask, &bare, token, target, settings))
 }
 
 fn run_with(
     args: &[OsString],
     ask: &Ask,
     workspace: &str,
-    (token, token_stdin): (String, bool),
+    (mut token, token_stdin): (String, bool),
+    target: Option<(remote::Base, String)>,
     mut settings: Settings,
 ) -> Exit {
     if let Some(gate) = prelude::gate(&settings) {
@@ -256,19 +275,34 @@ fn run_with(
         }
         return Exit::Error;
     }
-    // `_cli_read_secret_stdin "Token: "`: a token is read and checked,
-    // then left unused here (`_apply_remote_host` with no host is a
-    // no-op; a remote host is the shell's).
+    // `_cli_read_secret_stdin "Token: "`: a token is read and checked;
+    // with no host it is left unused (`_apply_remote_host` with no host
+    // is a no-op).
     if token_stdin {
         if !token.is_empty() {
             out::stderr_line(TOKEN_BOTH);
             return Exit::Usage;
         }
-        if crate::prompt::read_secret_stdin("Token: ").is_empty() {
+        let secret = crate::prompt::read_secret_stdin("Token: ");
+        if secret.is_empty() {
             out::stderr_line(TOKEN_NONE);
             return Exit::Usage;
         }
+        token = String::from_utf8_lossy(secret.expose()).into_owned();
     }
+    let home = settings.home.clone();
+    let host_token = match &target {
+        Some((_, host)) => match remote::token_for_host(host, &token, &home) {
+            Some(t) => Some(t),
+            None => {
+                for line in remote::no_token_lines(host, &home) {
+                    out::stderr_line(&line);
+                }
+                return Exit::Error;
+            }
+        },
+        None => None,
+    };
     // `run` hands a port curl won't take to the shell.
     settings.port = settings.port_text.as_deref().and_then(curl_port);
     let mut client = match settings.client(passport::current(args).would_refuse()) {
@@ -278,6 +312,9 @@ fn run_with(
             return Exit::Error;
         }
     };
+    if let (Some((b, _)), Some(t)) = (&target, host_token) {
+        remote::apply(&mut client, b, t);
+    }
     let mut closing = Closing::default();
     let q = query(ask, workspace);
     let piped = request_piped(&mut client, &mut closing, ENDPOINT, &[q.as_str()]);

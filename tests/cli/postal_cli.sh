@@ -293,7 +293,7 @@ echo "== the label rule (the Postal plane's) =="
 # live label. The reserved names are the plane's list.
 l63="$(printf 'a%.0s' $(seq 1 63))"
 l64="${l63}a"
-# covers: postal send
+# native: postal send
 for l in z3 a "$l63" k2n-lab acme-box; do
     run postal send "ops::$l.postal.bot" "hi"
     assert_eq "label ${l:0:12} (${#l} chars): sent, exit 0" "$rc" "0"
@@ -305,7 +305,7 @@ before="$(nreq)"
 for l in "$l64" -a a- a.b a--b 123 7 turn-x \
     www api app admin dashboard account billing k2 k2c connect mail smtp ns1 ns2 status help support blog docs \
     k2-relay-probe cert relay edge frps db db-staging supabase dl postal postalbot frp acme probe; do
-    # covers: postal send
+    # native: postal send
     run postal send "ops::$l.postal.bot" "hi"
     assert_eq "label ${l:0:12} (${#l} chars): refused, exit 2" "$rc" "2"
     assert_contains "label ${l:0:12}: says why" "$out" "isn't a Postal address"

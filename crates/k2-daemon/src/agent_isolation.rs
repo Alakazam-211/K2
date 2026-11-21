@@ -183,7 +183,11 @@ pub async fn forward_to_tcp(stream: &mut tokio::net::UnixStream, head: &str, bod
         Ok(t) => t,
         Err(e) => {
             let b = serde_json::json!({ "error": format!("the session socket couldn't reach the daemon's own port: {e}") }).to_string();
-            let resp = format!("HTTP/1.1 502 Bad Gateway\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{b}", b.len());
+            let resp = format!(
+                "HTTP/1.1 502 Bad Gateway\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{b}",
+                k2_core::frame_policy::CONNECT_HEADER_LINES,
+                b.len()
+            );
             let _ = stream.write_all(resp.as_bytes()).await;
             let _ = stream.shutdown().await;
             return;

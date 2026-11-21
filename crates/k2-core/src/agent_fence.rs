@@ -533,7 +533,6 @@ pub fn run_from_args(args: &[std::ffi::OsString]) -> i32 {
         return refuse("usage: --agent-exec -- <program> [args…]".into());
     }
     let Some(raw) = std::env::var_os(ENV_SPEC) else { return refuse(format!("{ENV_SPEC} is missing")) };
-    std::env::remove_var(ENV_SPEC);
     let spec: ExecSpec = match serde_json::from_slice(raw.as_encoded_bytes()) {
         Ok(s) => s,
         Err(e) => return refuse(format!("{ENV_SPEC}: {e}")),
@@ -551,16 +550,20 @@ pub fn run_from_args(args: &[std::ffi::OsString]) -> i32 {
             return refuse(format!("its folder fence: {e}"));
         }
     }
-    for k in &spec.unset {
-        std::env::remove_var(k);
-    }
-    for (k, v) in &spec.set {
-        std::env::set_var(k, v);
-    }
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
-        let e = std::process::Command::new(argv[0]).args(&argv[1..]).exec();
+        // The program's environment: this one minus the plan and the
+        // fence's drops, plus its settings (this process's own stays put).
+        let mut c = crate::bg_proc::command(argv[0]);
+        c.args(&argv[1..]).env_remove(ENV_SPEC);
+        for k in &spec.unset {
+            c.env_remove(k);
+        }
+        for (k, v) in &spec.set {
+            c.env(k, v);
+        }
+        let e = c.exec();
         eprintln!("{}: {}: {e}", crate::brand::PRODUCT_NAME, argv[0].to_string_lossy());
         127
     }

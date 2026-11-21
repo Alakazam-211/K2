@@ -71,6 +71,9 @@
 //! acts as agent @<handle> …" (`a2_apps_approve`, `a3_app_role_caps`,
 //! `dropped_app_remote_pass_rotate`, `dropped_apps_exception`,
 //! `dropped_app_room_names`). Still no `permission` object.
+//! One `/boot-status` key was added on purpose (0.46.17, Agent Isolation M1):
+//! `agentIsolation` (the per-agent cgroup identity and the Landlock ABI;
+//! nothing about permission cards), so `boot_status.txt` lists it.
 //!
 //! No vault, keychain, real `~/.k2` or running daemon is touched: `$HOME` is
 //! a short temp dir under /tmp (Unix socket paths are length-capped).

@@ -201,7 +201,7 @@ pub fn pg_ident_for_project(project_id: &str) -> String {
 fn pg_quote_ident(s: &str) -> String {
     format!("\"{}\"", s.replace('"', "\"\""))
 }
-fn pg_quote_literal(s: &str) -> String {
+pub(crate) fn pg_quote_literal(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }
 
@@ -399,7 +399,7 @@ pub(crate) fn privilege_sync_sql(db_name: &str, extra_grants: &[SyncGrant]) -> S
              EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I REVOKE ALL ON SEQUENCES FROM %I', {mig_lit}, sch, {role_lit});\n"
         ));
     }
-    let mut after = String::new();
+    let fence = crate::sql_k2_tables::fence_sql(&format!("{db_name}_agent")); let mut after = String::new();
     for (grant, write) in &listed {
         let role_lit = pg_quote_literal(&grant.role);
         let mut schemas: Vec<&str> = Vec::new();
@@ -453,7 +453,7 @@ pub(crate) fn privilege_sync_sql(db_name: &str, extra_grants: &[SyncGrant]) -> S
            END LOOP;\n\
          {after}\
          END\n\
-         $k2priv$;"
+         $k2priv$;\n{fence}"
     )
 }
 
@@ -1369,7 +1369,7 @@ fn create_database_inner(
          );\n\
          ALTER TABLE public._k2_migrations OWNER TO {migrator};\n\
          ALTER TABLE public._k2_store OWNER TO {migrator};\n\
-         GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public._k2_migrations, public._k2_store TO {agent};\n\
+         GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public._k2_store TO {agent}; GRANT SELECT ON TABLE public._k2_migrations TO {agent};\n\
          {helpers}\n\
          ALTER SCHEMA k2 OWNER TO {migrator};\n\
          {fn_owner}\n\
@@ -1720,7 +1720,7 @@ fn grant_agent_k2_tables(ops: &dyn SystemOps, db: &str) -> Result<(), OpsError> 
     let agent = pg_quote_ident(&agent_role_for_db(db));
     let sql = format!(
         "GRANT USAGE ON SCHEMA public TO {agent};\n\
-         GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public._k2_migrations, public._k2_store TO {agent};"
+         {}", crate::sql_k2_tables::fence_sql(&agent_role_for_db(db))
     );
     su_psql(ops, &cluster_of(db)?, db, &["-v", "ON_ERROR_STOP=1"], Some(sql.as_bytes()))?;
     Ok(())

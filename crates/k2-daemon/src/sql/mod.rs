@@ -312,7 +312,7 @@ mod tests {
         let helper = ops.pg.lock().unwrap().helper_sql.join("\n");
         assert!(
             helper.contains(
-                "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public._k2_migrations, public._k2_store TO"
+                "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public._k2_store TO"
             ),
             "explicit GRANT on _k2_store missing from helper_sql: {helper}"
         );
@@ -367,7 +367,7 @@ mod tests {
         assert!(
             helper.contains("GRANT USAGE ON SCHEMA public TO")
                 && helper.contains(
-                    "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public._k2_migrations, public._k2_store TO"
+                    "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public._k2_store TO"
                 ),
             "ensure GRANT via helper missing: {helper}"
         );
@@ -3811,7 +3811,7 @@ mod tests {
             ("revoke", "$k2revoke$"),
             ("k2 helpers", "CREATE OR REPLACE FUNCTION k2.skin_uid()"),
             ("helper owner", "ALTER FUNCTION k2.skin_uid() OWNER TO"),
-            ("agent table grant", "ON TABLE public._k2_migrations, public._k2_store TO"),
+            ("agent table grant", "ON TABLE public._k2_store TO"),
         ] {
             assert!(
                 tenant.iter().any(|(_, sql)| sql.contains(needle)),

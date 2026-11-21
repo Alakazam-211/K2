@@ -99,7 +99,7 @@ pub(crate) fn with_computed(action: &str, ctx: &Ctx) -> Option<Ctx> {
     out.params.insert(
         "effect".into(),
         json!(format!(
-            "{ws} gets its own read-only login on {name}: it can read every table there, and can't add, change or delete rows or change \
+            "{ws} gets its own read-only login on {name}: it can read every table there (never the _k2_* tables the server keeps for itself), and can't add, change or delete rows or change \
              the tables. Nothing else of {owner_ws}'s opens to it. It lasts until someone revokes it: Settings → Database → Database \
              access, or {CLI_NAME} db revoke {ws} --db {name}."
         )),

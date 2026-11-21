@@ -239,6 +239,32 @@ fn real_pg_read_grant_reads_and_never_writes() {
     let cols = srv.su("rdr_main", "select count(*) from information_schema.columns where table_name = 'notes'");
     check("nor the table", cols == "2", &cols, &mut fails);
 
+    // K2's own tables are never the grantee's: not the documents, not the history.
+    for tbl in ["_k2_store", "_k2_migrations"] {
+        let r = srv.as_role(&t.user, &t.password, "rdr_main", &format!("select count(*) from public.{tbl}"));
+        check(&format!("the reader can't SELECT {tbl}"), denied(&r), format!("{r:?}"), &mut fails);
+    }
+    // The owner's own agent role keeps what K2 uses (its documents; the
+    // history to read) and can't write the migration history.
+    let own = crate::sql::routes::with_test_ops(srv, || crate::sql::ops::dsn_for_db(srv, &secrets, &owner_id, 10, "rdr_main"));
+    let a = own.as_ref().ok().and_then(|d| d["dsn"].as_str()).and_then(crate::apps::db_probe::parse_url).expect("the owner's agent dsn");
+    check("the owner's login is the database's agent role", a.user == "rdr_main_agent", &a.user, &mut fails);
+    for (what, sql) in [
+        ("INSERT", "insert into public._k2_migrations (version) values ('9999_forged')"),
+        ("UPDATE", "update public._k2_migrations set checksum = 'forged'"),
+        ("DELETE", "delete from public._k2_migrations"),
+        ("TRUNCATE", "truncate public._k2_migrations"),
+    ] {
+        let r = srv.as_role(&a.user, &a.password, "rdr_main", sql);
+        check(&format!("the agent role can't {what} _k2_migrations"), denied(&r), format!("{r:?}"), &mut fails);
+    }
+    let hist = srv.as_role(&a.user, &a.password, "rdr_main", "select count(*) from public._k2_migrations");
+    check("it still reads the history (SELECT)", hist.as_deref() == Ok("1"), format!("{hist:?}"), &mut fails);
+    let doc = srv.as_role(&a.user, &a.password, "rdr_main", "insert into public._k2_store (collection, id, doc) values ('c', 'i', '{}') returning id");
+    check("and writes its documents in _k2_store, as before", doc.as_deref() == Ok("i"), format!("{doc:?}"), &mut fails);
+    let hist_rows = srv.su("rdr_main", "select count(*) from public._k2_migrations");
+    check("the history is unchanged", hist_rows == "1", &hist_rows, &mut fails);
+
     // Exactly the database the card named.
     let other = srv.as_role(&t.user, &t.password, "rdr_other", "select body from notes");
     check("the owner's other database stays closed", denied(&other), format!("{other:?}"), &mut fails);

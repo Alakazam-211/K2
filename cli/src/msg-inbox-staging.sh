@@ -643,12 +643,12 @@ _cmd_msg_inbox_form_inner() {
             --idempotency-key)
                 [[ -n "${2:-}" ]] || { echo "usage: --idempotency-key <key>  (the key a 'may have been delivered' line printed)" >&2; exit 2; }
                 idem_key="$2"; shift 2 ;;
-            --summary)  summary="$2"; shift 2 ;;
-            --title)    title="$2"; shift 2 ;;
-            --body)     body="$2"; shift 2 ;;
-            --priority) priority="$2"; shift 2 ;;
-            --from)     from="$2"; shift 2 ;;
-            --path)     path="$2"; shift 2 ;;
+            --summary)  _need_value "$@"; summary="$2"; shift 2 ;;
+            --title)    _need_value "$@"; title="$2"; shift 2 ;;
+            --body)     _need_value "$@"; body="$2"; shift 2 ;;
+            --priority) _need_value "$@"; priority="$2"; shift 2 ;;
+            --from)     _need_value "$@"; from="$2"; shift 2 ;;
+            --path)     _need_value "$@"; path="$2"; shift 2 ;;
             -*)
                 echo "Error: unknown flag '$1' (try 'k2 msg --help')" >&2
                 exit 2 ;;
@@ -993,9 +993,9 @@ cmd_msg_signal_form() {
     local kind="msg" payload="{}" from="${K5_AGENT_NAME:-${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-cli}}}" delivery="live"
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --signal)  kind="$2"; shift 2 ;;
-            --payload) payload="$2"; shift 2 ;;
-            --from)    from="$2"; shift 2 ;;
+            --signal)  _need_value "$@"; kind="$2"; shift 2 ;;
+            --payload) _need_value "$@"; payload="$2"; shift 2 ;;
+            --from)    _need_value "$@"; from="$2"; shift 2 ;;
             --inbox|--inbox-silent|--inbox-wake) delivery="inbox"; shift ;;
             *) shift ;;
         esac

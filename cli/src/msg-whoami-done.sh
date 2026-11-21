@@ -182,15 +182,17 @@ cmd_msg() {
                 # handoff-v1 §4.2): a vault handoff whose note is the text.
                 [[ -n "${2:-}" ]] || { echo "usage: --secret NAME (a secret in your vault)" >&2; exit 2; }
                 secret_name="$2"; shift 2 ;;
-            --from) explicit_from="$2"; shift 2 ;;
-            --command) explicit_command="$2"; shift 2 ;;
+            --from) _need_value "$@"; explicit_from="$2"; shift 2 ;;
+            --command) _need_value "$@"; explicit_command="$2"; shift 2 ;;
             --wake)
                 wake="true"; shift ;;
             --no-wake)
                 wake="false"; shift ;;
             --wake-timeout)
+                _need_value "$@"
                 wake_timeout="$2"; shift 2 ;;
             --via)
+                _need_value "$@"
                 # Internal: `k2 talk` stamps via=talk so chatter does not
                 # vanish into msg. Not a documented agent flag.
                 explicit_via="$2"; shift 2 ;;

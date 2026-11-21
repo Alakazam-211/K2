@@ -182,7 +182,7 @@ const RECORDING_DM_OTHERS: &[&str] =
 /// and `garden.delete` (walled; K2 presents them too) and the
 /// `garden.access-off` twin (asked only, no wall). Every [`Target::Ask`]
 /// names one of them, never `garden.keep-mine` or a twin.
-pub(crate) const V1_ACTIONS: [&str; 82] = [
+pub(crate) const V1_ACTIONS: [&str; 85] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -334,6 +334,11 @@ pub(crate) const V1_ACTIONS: [&str; 82] = [
     "git.review-approve",
     "git.commit-merge",
     "git.commit",
+    // 0.46.17 (Rosson): a person creates or renames a focus group, or puts
+    // a workspace in one, for an agent.
+    "focus-groups.create",
+    "focus-groups.rename",
+    "focus-groups.assign",
 ];
 
 /// `git.land`: the sidecar and its branch tip the refusal names.
@@ -644,6 +649,22 @@ pub(crate) const ROWS: &[Row] = &[
     Row {
         params: &[("message", &[ParamFrom::Query("message")])],
         ..row(ask("git.commit-merge", Floor::Admin), code(403, "merge_needs_person"), "/cli/commit-merge", POST)
+    },
+    // 0.46.17 (Rosson): changing focus groups is a person's; the refusal
+    // names the group and the workspace. A colour or order change carries
+    // no `to`, so it teaches nothing (it can't be requested).
+    Row {
+        params: &[("name", &[ParamFrom::Response("/error/name")])],
+        ..row(ask("focus-groups.create", Floor::Admin), code(403, "focus_group_needs_person"), "/cli/focus-groups/create", POST)
+    },
+    Row {
+        needs: Some("/error/to"),
+        params: &[("group", &[ParamFrom::Response("/error/group")]), ("to", &[ParamFrom::Response("/error/to")])],
+        ..row(ask("focus-groups.rename", Floor::Admin), code(403, "focus_group_needs_person"), "/cli/focus-groups/update", POST)
+    },
+    Row {
+        params: &[("target", &[ParamFrom::Response("/error/target")]), ("group", &[ParamFrom::Response("/error/group")])],
+        ..row(ask("focus-groups.assign", Floor::Admin), code(403, "focus_group_needs_person"), "/cli/focus-groups/assign", POST)
     },
     // D1 (0.46.17): an agent's plain commit starts a person's agent preset.
     Row {
@@ -1652,6 +1673,10 @@ mod tests {
             // D1 (0.46.17): an agent approving its own review branch, and its commit --merge.
             (403, "POST", "/cli/review/approve", vec![("agent", "scout"), ("branch", "agent/scout/fix")], None, json!({"error":{"code":"merge_needs_person","hint":"x","agent":"scout","branch":"agent/scout/fix"}}), "git.review-approve"),
             (403, "POST", "/cli/commit-merge", vec![("message", "wip")], None, json!({"error":{"code":"merge_needs_person","hint":"x"}}), "git.commit-merge"),
+            // 0.46.17: an agent's focus-group changes.
+            (403, "POST", "/cli/focus-groups/create", vec![], Some(json!({"name":"Client work"})), json!({"error":{"code":"focus_group_needs_person","hint":"x","name":"Client work"}}), "focus-groups.create"),
+            (403, "POST", "/cli/focus-groups/update", vec![], Some(json!({"id":"g1","name":"Ops"})), json!({"error":{"code":"focus_group_needs_person","hint":"x","group":"Infra","to":"Ops"}}), "focus-groups.rename"),
+            (403, "POST", "/cli/focus-groups/assign", vec![], Some(json!({"projectId":"w","focusGroupId":null})), json!({"error":{"code":"focus_group_needs_person","hint":"x","target":"sales","group":"none"}}), "focus-groups.assign"),
             (403, "POST", "/cli/commit", vec![("message", "wip")], None, json!({"error":{"code":"commit_needs_person","hint":"x"}}), "git.commit"),
             // 0.46.6: an agent's own reset (the owner's route) and a password
             // it may not set (a box login).
@@ -2271,7 +2296,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 82);
+        assert_eq!(V1_ACTIONS.len(), 85);
         // No two rows can claim the same refusal: the longest prefix must
         // decide alone.
         for (i, a) in ROWS.iter().enumerate() {

@@ -130,6 +130,61 @@ impl TlsStub {
     }
 }
 
+/// An `https://` front for a plain stub ([`super::stub::Stub`]): each
+/// connection's TLS ends here (the certificate is [`Pki`]'s), its one
+/// request goes on to `127.0.0.1:<upstream>` as it came, and the answer
+/// comes back inside the TLS. A connection whose handshake or request
+/// never completes reaches the upstream not at all, so the stub's log
+/// holds only what a client sent after it trusted the certificate.
+pub struct TlsFront {
+    pub port: u16,
+}
+
+impl TlsFront {
+    pub fn start(pki: &Pki, upstream: u16) -> TlsFront {
+        let cfg = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(vec![pki.leaf.clone()], pki.key.clone_key())
+        .unwrap();
+        let cfg = Arc::new(cfg);
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for tcp in l.incoming() {
+                let Ok(tcp) = tcp else { continue };
+                let cfg = Arc::clone(&cfg);
+                std::thread::spawn(move || front_one(cfg, tcp, upstream));
+            }
+        });
+        TlsFront { port }
+    }
+}
+
+fn front_one(cfg: Arc<rustls::ServerConfig>, tcp: TcpStream, upstream: u16) {
+    tcp.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+    let conn = rustls::ServerConnection::new(cfg).unwrap();
+    let mut s = rustls::StreamOwned::new(conn, tcp);
+    let (got, _why) = read_request(&mut s);
+    if got.is_empty() {
+        return;
+    }
+    let Ok(mut up) = TcpStream::connect(("127.0.0.1", upstream)) else {
+        return;
+    };
+    if up.write_all(&got).is_err() {
+        return;
+    }
+    let mut answer = Vec::new();
+    let _ = up.read_to_end(&mut answer);
+    let _ = s.write_all(&answer);
+    s.conn.send_close_notify();
+    let _ = s.flush();
+}
+
 fn serve_tls(
     cfg: Arc<rustls::ServerConfig>,
     tcp: TcpStream,

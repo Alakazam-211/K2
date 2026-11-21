@@ -8,7 +8,9 @@
 # holding a double quote, three double quotes, a single quote, three single
 # quotes, a backslash and a newline; the stub lists another agent and a
 # near-miss name first, and the write must go to the session of the agent
-# named exactly that.
+# named exactly that. `--agent` with no word after it is a usage error,
+# "Error: --agent takes a value", exit 2, nothing sent (before 0.46.17 it
+# was sent as the message).
 #
 # How: a python stub daemon on a free loopback port answers the routes and
 # keeps every request. HOME is a temp dir, no real daemon, no network.
@@ -141,6 +143,22 @@ else
     bad "terminal write --agent: $(cat "$WORK/perr")"; cat "$REQ_LOG" >&2
 fi
 
+echo "== --agent with no value is a usage error, nothing sent =="
+for form in "acme --agent" "s-1 --agent"; do
+    : >"$REQ_LOG"
+    # shellcheck disable=SC2086
+    run terminal write $form
+    [ "$RC" -eq 2 ] && ok "terminal write $form: exit 2" || bad "terminal write $form: exit $RC (want 2)"
+    [ "$ERR" = "Error: --agent takes a value" ] && ok "terminal write $form: says --agent takes a value" \
+        || { bad "terminal write $form: stderr"; printf '%s\n' "$ERR" | sed 's/^/      | /' >&2; }
+    [ -z "$OUT" ] && ok "terminal write $form: nothing on stdout" \
+        || { bad "terminal write $form: stdout"; printf '%s\n' "$OUT" | sed 's/^/      | /' >&2; }
+    if [ -s "$REQ_LOG" ]; then
+        bad "terminal write $form: sent a request:"; sed 's/^/      | /' "$REQ_LOG" >&2
+    else
+        ok "terminal write $form: sent nothing"
+    fi
+done
 
 echo ""
 echo "terminal_write_agent_as_data: $pass passed, $fail failed"

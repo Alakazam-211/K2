@@ -729,8 +729,11 @@ cmd_terminal_write() {
     # so message text after it is untouched (and the historical
     # `terminal write <id> "text"` form keeps `message="$*"` exactly).
     local agent=""
+    # With no word after it, --agent is a usage error (0.46.17: the shift
+    # failed quietly and `--agent` was sent as the message).
     if [ "${1:-}" = "--agent" ]; then
-        agent="${2:-}"; shift 2 || true
+        [ $# -ge 2 ] || { echo "Error: --agent takes a value" >&2; exit 2; }
+        agent="$2"; shift 2
     fi
     [ "${1:-}" != "--" ] || shift
     local message="$*"

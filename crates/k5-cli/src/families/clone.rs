@@ -941,7 +941,10 @@ mod tests {
         {
             assert_eq!(daemon_base("127.0.0.1", "04100"), "http://127.0.0.1:04100");
             assert_eq!(daemon_base("::1", "4100"), "http://::1:4100");
-            assert_eq!(daemon_base("https://box.example/", "443"), "https://box.example:443");
+            assert_eq!(
+                daemon_base("https://box.example/", "443"),
+                "https://box.example:443"
+            );
             assert_eq!(daemon_base("HTTPS://Box", "9"), "https://Box:9");
             assert_eq!(daemon_base("Https://box", "9"), "http://Https://box:9");
         }

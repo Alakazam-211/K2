@@ -1369,10 +1369,7 @@ fn clone_this_server_at_an_ipv6_address() {
         env: vec![("K2_HOST", host)],
         ..case(name, &["preview", "ws1"])
     };
-    for c in &[
-        row("K2_HOST=::1", "::1"),
-        row("K2_HOST=[::1]", "[::1]"),
-    ] {
+    for c in &[row("K2_HOST=::1", "::1"), row("K2_HOST=[::1]", "[::1]")] {
         rig.check(c);
     }
 }
@@ -1429,14 +1426,28 @@ fn clone_remote_urls_as_python_reads_them() {
             cmp: Cmp::Traceback,
             ..case(
                 "to: a port that isn't a number",
-                &["to", "https://cp.example.invalid:abc", "ws1", "--token", "t6", "--json"],
+                &[
+                    "to",
+                    "https://cp.example.invalid:abc",
+                    "ws1",
+                    "--token",
+                    "t6",
+                    "--json",
+                ],
             )
         },
         CCase {
             code: 3,
             ..case(
                 "preview --host: an empty port is 443 (the name doesn't resolve)",
-                &["preview", "ws1", "--host", "https://cp.example.invalid:", "--token", "t9"],
+                &[
+                    "preview",
+                    "ws1",
+                    "--host",
+                    "https://cp.example.invalid:",
+                    "--token",
+                    "t9",
+                ],
             )
         },
     ];

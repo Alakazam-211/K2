@@ -1342,6 +1342,9 @@ fn hostchat_open_through_a_private_page() {
         "TMPDIR",
         rig.path().join("no-such-tmp").display().to_string(),
     ));
+    no_tmp.compare = VCompare::MktempTried {
+        stem: "k2-hostchat-open.",
+    };
     v.push(no_tmp);
     for c in &v {
         rig.check(c);

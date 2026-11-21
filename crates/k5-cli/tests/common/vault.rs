@@ -22,7 +22,7 @@
 
 #![cfg(unix)]
 
-use super::parity::{cli_k2, normalise, Out, BIN, OWNER};
+use super::parity::{cli_k2, mktemp_tried_same, normalise, Out, BIN, OWNER};
 use super::stub::{Reply, Stub};
 use std::ffi::OsString;
 use std::io::Write;
@@ -44,6 +44,9 @@ pub enum VCompare {
     /// The shell's Python raises: stderr matches up to the traceback and
     /// its last line's exception name (see [`super::parity::Compare::Traceback`]).
     Traceback,
+    /// mktemp's line may name a different folder on each side (see
+    /// [`super::parity::Compare::MktempTried`]).
+    MktempTried { stem: &'static str },
 }
 
 pub struct VCase {
@@ -355,6 +358,16 @@ impl VRig {
                     "{}: {side}: stderr",
                     c.name
                 ),
+                VCompare::MktempTried { stem } => {
+                    let r = (rust.out.code, rust.out.stderr.as_str());
+                    assert!(
+                        mktemp_tried_same(stem, r, (bash.out.code, bash.out.stderr.as_str())),
+                        "{}: {side}: stderr (mktemp's folder apart)\nrust: {:?}\nbash: {:?}",
+                        c.name,
+                        rust.out.stderr,
+                        bash.out.stderr
+                    )
+                }
             }
             assert_eq!(rust.out.code, bash.out.code, "{}: {side}: exit", c.name);
             assert_eq!(

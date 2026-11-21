@@ -217,6 +217,13 @@ pub enum Compare {
     /// random characters after `k2-update.` masked ([`mask_temp_names`]).
     /// macOS's mktemp names the file in its error; GNU's doesn't.
     MktempName,
+    /// mktemp couldn't make a folder (TMPDIR isn't there): everything as
+    /// [`Compare::Exact`] but stderr, where mktemp's own line may name a
+    /// different folder on each side, by [`mktemp_tried_same`] with this
+    /// stem. A newer macOS mktemp names the folder it tried, its random
+    /// name filled in; the binary prints the template. That is
+    /// `scripts/cli-parity.sh`'s named difference `doc-mktemp-wording`.
+    MktempTried { stem: &'static str },
 }
 
 /// `scripts/cli-parity.sh`'s named difference `bash32-empty-array`, for
@@ -267,6 +274,44 @@ pub fn mask_temp_names(text: &str) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// mktemp's line where it couldn't make a folder from a template whose
+/// name starts `stem`, on macOS: `mktemp: mkdtemp failed on
+/// <dir>/<stem><name>: <why>`, as everything up to and with `stem`, and
+/// `: <why>`. `None` for any other line, and where `<name>` isn't one or
+/// more of `[A-Za-z0-9.]` (the template's `XXXXXX`, or the random name a
+/// newer macOS fills in).
+fn mktemp_tried_line<'a>(line: &'a str, stem: &str) -> Option<(&'a str, &'a str)> {
+    let rest = line.strip_prefix("mktemp: mkdtemp failed on ")?;
+    let at = rest.find(&format!("/{stem}"))? + 1 + stem.len();
+    let tail = &rest[at..];
+    let end = tail.find(": ")?;
+    let random = |b: u8| b.is_ascii_alphanumeric() || b == b'.';
+    if end == 0 || !tail[..end].bytes().all(random) {
+        return None;
+    }
+    Some((&line[..line.len() - tail.len()], &tail[end..]))
+}
+
+/// `scripts/cli-parity.sh`'s named difference `doc-mktemp-wording` for a
+/// folder mktemp couldn't make: the two runs hold the same meaning when
+/// their exit codes are the same and their stderr is the same line for
+/// line, but for mktemp's line, which may name a different folder on each
+/// side ([`mktemp_tried_line`]): the same fixed prefix (the folder and
+/// `stem`), the same reason, and only the random name apart.
+pub fn mktemp_tried_same(
+    stem: &str,
+    rust: (Option<i32>, &str),
+    bash: (Option<i32>, &str),
+) -> bool {
+    let lines = |t: &str| t.split('\n').count();
+    rust.0 == bash.0
+        && lines(rust.1) == lines(bash.1)
+        && rust.1.split('\n').zip(bash.1.split('\n')).all(|(r, b)| {
+            let tried = (mktemp_tried_line(r, stem), mktemp_tried_line(b, stem));
+            r == b || matches!(tried, (Some(x), Some(y)) if x == y)
+        })
 }
 
 /// What a case's run with no `python3` on `PATH` must do.
@@ -768,6 +813,14 @@ impl Rig {
                 mask_temp_names(&with.stderr),
                 "{name}: stderr with no python3 (mktemp's name masked)"
             );
+        } else if let Compare::MktempTried { stem } = c.compare {
+            let without = (out.code, out.stderr.as_str());
+            assert!(
+                mktemp_tried_same(stem, without, (with.code, with.stderr.as_str())),
+                "{name}: stderr with no python3 (mktemp's folder apart)\nwithout: {:?}\nwith: {:?}",
+                out.stderr,
+                with.stderr
+            );
         } else {
             assert_eq!(out.stderr, with.stderr, "{name}: stderr with no python3");
         }
@@ -982,6 +1035,14 @@ impl Rig {
                 mask_temp_names(&r.stderr),
                 mask_temp_names(&b.stderr),
                 "{name}: stderr (mktemp's name masked)"
+            );
+        } else if let Compare::MktempTried { stem } = c.compare {
+            let rust = (r.code, r.stderr.as_str());
+            assert!(
+                mktemp_tried_same(stem, rust, (b.code, b.stderr.as_str())),
+                "{name}: stderr (mktemp's folder apart)\nrust: {:?}\nbash: {:?}",
+                r.stderr,
+                b.stderr
             );
         } else {
             assert_eq!(

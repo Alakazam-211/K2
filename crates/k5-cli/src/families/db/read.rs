@@ -213,10 +213,9 @@ pub fn run(cp: &mut Cp, ask: &Ask) -> Result<Exit, Exit> {
             Ok(browse_show(&body).print())
         }
         Ask::RequestRead(r) => {
-            let max = crate::families::compute::writes::post_max_time(std::env::var_os(
-                "K2_CP_MAX_TIME",
-            ))
-            .flatten();
+            let max =
+                crate::families::compute::writes::post_max_time(std::env::var_os("K2_CP_MAX_TIME"))
+                    .flatten();
             let before = std::mem::replace(&mut cp.client.compute_post_max_time, max);
             let sent = cp.send(true, REQUEST_READ, &request_body(r), false);
             cp.client.compute_post_max_time = before;
@@ -262,10 +261,7 @@ pub fn fail(status: &str, body: &[u8]) -> Exit {
             let hint = if dict {
                 let h = at(&v, "hint");
                 let m = at(&v, "message");
-                truthy_or(
-                    h.as_ref().filter(|x| py::truthy(x)).or(m.as_ref()),
-                    s(""),
-                )
+                truthy_or(h.as_ref().filter(|x| py::truthy(x)).or(m.as_ref()), s(""))
             } else {
                 s("")
             };
@@ -375,7 +371,11 @@ fn browse_show(body: &[u8]) -> Shown {
             let owner = s_of(py_get(&r, "owner", 6)?);
             let apps = truthy_or(py_get(&r, "apps", 6)?, Value::Array(Vec::new()));
             let apps = join(&apps, ", ", 6)?;
-            let apps = if apps.is_empty() { "-".to_string() } else { apps };
+            let apps = if apps.is_empty() {
+                "-".to_string()
+            } else {
+                apps
+            };
             let yours = py::str_of(&truthy_or(py_get(&r, "yours", 6)?, s("-")));
             p.print(format!(
                 "  {} owner {} apps {} you {yours}",
@@ -553,7 +553,14 @@ mod tests {
             ..Request::default()
         };
         assert_eq!(
-            parse(&["request-read", "--db=d", "--why", "w", "--to=ada", "--dry-run"]),
+            parse(&[
+                "request-read",
+                "--db=d",
+                "--why",
+                "w",
+                "--to=ada",
+                "--dry-run"
+            ]),
             form(Ask::RequestRead(r.clone()))
         );
         assert_eq!(
@@ -602,7 +609,9 @@ mod tests {
             up.stdout,
             "Card pr_1 raised on your Thread (reader): they answer it there (desktop, phone or web); you get one [permission:pr_1] turn with the answer.\nCard: Let it read.\nAsks: ada\nNext: wait\n"
         );
-        let ro = post_show(br#"{"status":"read_only","dsn":"postgres://r@h/d","dsnHint":"no password"}"#);
+        let ro = post_show(
+            br#"{"status":"read_only","dsn":"postgres://r@h/d","dsnHint":"no password"}"#,
+        );
         assert_eq!(ro.stdout, "postgres://r@h/d\n");
         assert_eq!(ro.stderr, "read-only; no password\n");
         let bad = post_show(br#"{"status":"pending","addr":7}"#);
@@ -614,7 +623,14 @@ mod tests {
 
     #[test]
     fn the_lines_name_the_brand() {
-        for line in [BROWSE_USAGE, REQUEST_USAGE, REQUESTS_USAGE, NAME_IT, CARDS_OFF, NONE_ASKED] {
+        for line in [
+            BROWSE_USAGE,
+            REQUEST_USAGE,
+            REQUESTS_USAGE,
+            NAME_IT,
+            CARDS_OFF,
+            NONE_ASKED,
+        ] {
             assert!(line.contains(&format!("{} db ", cli_name!())), "{line}");
         }
     }

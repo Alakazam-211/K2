@@ -394,9 +394,8 @@ pub fn shells(
 ) -> bool {
     let posts = matches!(ask, Ask::Read(super::read::Ask::RequestRead(_)));
     vars.into_iter().any(|(name, value)| {
-        let odd_max = || {
-            crate::families::compute::writes::post_max_time(Some(value.clone())).is_none()
-        };
+        let odd_max =
+            || crate::families::compute::writes::post_max_time(Some(value.clone())).is_none();
         let name = name.to_string_lossy();
         !value.is_empty()
             && (matches!(name.as_ref(), "_K2_REFUSAL_AREA" | "_K2_NOANSWER_SOFT")

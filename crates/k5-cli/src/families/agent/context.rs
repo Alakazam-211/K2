@@ -1264,7 +1264,10 @@ mod tests {
             r#"{"pinned":[{"label":"Role (persona)"},{"id":"","label":"Empty"},{"id":null},{"id":0,"label":"Zero"},{"id":"pinned:tooling","label":"Tooling footer"}],"layers":[{"id":"L1","path":"docs/a.md"},{"id":"L2","label":"Role (persona)"}]}"#,
         )
         .unwrap();
-        assert_eq!(resolve_layer(&d, "docs/a.md").unwrap().as_deref(), Some("L1"));
+        assert_eq!(
+            resolve_layer(&d, "docs/a.md").unwrap().as_deref(),
+            Some("L1")
+        );
         assert_eq!(
             resolve_layer(&d, "role (persona)").unwrap().as_deref(),
             Some("L2")

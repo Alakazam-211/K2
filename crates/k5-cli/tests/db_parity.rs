@@ -2042,7 +2042,9 @@ fn db_reads_another_workspace_s_database() {
             "browse, an App that is no word",
             &["browse"],
             &[],
-            vec![ok(r#"{"databases":[{"name":"a","apps":["x"]},{"name":"b","apps":[1]}]}"#)],
+            vec![ok(
+                r#"{"databases":[{"name":"a","apps":["x"]},{"name":"b","apps":[1]}]}"#,
+            )],
             owner_and_port,
             1,
             1,
@@ -2056,7 +2058,15 @@ fn db_reads_another_workspace_s_database() {
             1,
             1,
         )),
-        case("browse --app with no value", &["browse", "--app"], &[], vec![], owner_and_port, 2, 0),
+        case(
+            "browse --app with no value",
+            &["browse", "--app"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
         case(
             "browse --app then a flag",
             &["browse", "--app", "--json"],
@@ -2066,7 +2076,15 @@ fn db_reads_another_workspace_s_database() {
             2,
             0,
         ),
-        case("browse, a stray word", &["browse", "x"], &[], vec![], owner_and_port, 2, 0),
+        case(
+            "browse, a stray word",
+            &["browse", "x"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
         case(
             "list --all, a stray flag",
             &["list", "--all", "--frob"],
@@ -2115,7 +2133,9 @@ fn db_reads_another_workspace_s_database() {
         ok_owner(
             "request-read, already read",
             &["request-read", "--db=ws_o_jobs"],
-            vec![ok(r#"{"status":"already_done","text":"you already read ws_o_jobs"}"#)],
+            vec![ok(
+                r#"{"status":"already_done","text":"you already read ws_o_jobs"}"#,
+            )],
         ),
         ok_owner(
             "request-read, an answer with no text",
@@ -2221,7 +2241,9 @@ fn db_reads_another_workspace_s_database() {
             "request-read, a login that is a number",
             &["request-read", "--db", "x"],
             &[],
-            vec![ok(r#"{"id":"p","status":"pending","routedTo":[{"login":"a"},{"login":2}]}"#)],
+            vec![ok(
+                r#"{"id":"p","status":"pending","routedTo":[{"login":"a"},{"login":2}]}"#,
+            )],
             owner_and_port,
             1,
             1,
@@ -2283,7 +2305,15 @@ fn db_reads_another_workspace_s_database() {
             0,
             1,
         )),
-        case("request-read alone", &["request-read"], &[], vec![], owner_and_port, 2, 0),
+        case(
+            "request-read alone",
+            &["request-read"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
         case(
             "request-read --db with no value",
             &["request-read", "--db"],
@@ -2333,7 +2363,11 @@ fn db_reads_another_workspace_s_database() {
         // covers: db requests
         ok_owner("requests", &["requests"], vec![ok(REQUESTS)]),
         // covers: db requests --json
-        ok_owner("requests --json", &["requests", "--json"], vec![ok(REQUESTS)]),
+        ok_owner(
+            "requests --json",
+            &["requests", "--json"],
+            vec![ok(REQUESTS)],
+        ),
         ok_owner(
             "requests, none asked",
             &["requests"],
@@ -2375,7 +2409,15 @@ fn db_reads_another_workspace_s_database() {
             1,
             1,
         )),
-        case("requests, a stray word", &["requests", "extra"], &[], vec![], owner_and_port, 2, 0),
+        case(
+            "requests, a stray word",
+            &["requests", "extra"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
         // Help never acts.
         shell(case(
             "request-read --help",

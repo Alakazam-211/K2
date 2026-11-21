@@ -1260,6 +1260,20 @@ fn clone_through_the_persons_proxy() {
                 &["preview", "ws1", "--host", "{tls_remote}", "--token", "rt-proxy-3"],
             )
         }),
+        CCase {
+            proxy_heads: 1,
+            secrets: vec!["rt-proxy-6"],
+            code: 3,
+            cmp: Cmp::TlsError,
+            env: vec![
+                ("HTTPS_PROXY", "{proxy}"),
+                ("SSL_CERT_FILE", "{other_ca}"),
+            ],
+            ..case(
+                "preview --host https: through the proxy, a certificate no CA here signed: the tunnel opens, nothing sent in it",
+                &["preview", "ws1", "--host", "{tls_remote}", "--token", "rt-proxy-6"],
+            )
+        },
         tls(CCase {
             code: 3,
             env: vec![

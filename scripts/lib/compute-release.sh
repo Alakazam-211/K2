@@ -61,17 +61,18 @@
 #                                        daemon-binaries.yml builds aarch64
 #                                        after the tag (the fallback).
 #   K2_COMPUTE_ARM_NODE      k2n10-vin   L2: the aarch64 set. "none" = github.
-#   K2_COMPUTE_ARM_VERIFY_NODE k2n12-vin V2: the aarch64 set again on another
+#   K2_COMPUTE_ARM_VERIFY_NODE a release node  V2: the aarch64 set again on another
 #                                        node; daemon, root helper, k2-node and
 #                                        engine must equal L2's byte for byte.
 #                                        Never L2's node. Not optional: the
 #                                        signing user signs an aarch64 daemon
 #                                        from compute only with V2.
-#   K2_COMPUTE_RELEASE_NODES "k2n7-vin,k2n8-vin,k2n9-vin,k2n10-vin,k2n12-vin"
+#   K2_COMPUTE_RELEASE_NODES the list in k2cr_release_nodes
 #                                        (+ the ARM nodes): a receipt from any
 #                                        other node fails. Debian-based Ryzens
 #                                        only: k2-arch is Arch (no apt sys:
-#                                        packages) and k2n11 is not ours for releases.
+#                                        packages); a node that isn't ours for
+#                                        releases stays off the list.
 #   K2_COMPUTE_RUST          the pin     rust@<this>. Default: rust-toolchain.toml
 #                                        AT THE RELEASE COMMIT (scripts/lib/
 #                                        rust-pin.sh); an explicit rust@ need
@@ -91,8 +92,9 @@
 #                                        at least 20G (job 96d5148c, 11-03)
 #   K2_COMPUTE_WORKSPACE     (unset)     --workspace for k2 compute run: the
 #                                        release checkout's own handle (per
-#                                        server; on z3mbpZ it isn't plain
-#                                        pod-leader, another workspace). Read
+#                                        server; on the build Mac it may not be
+#                                        the name you expect, and that name
+#                                        may be another workspace). Read
 #                                        it from k2 workspace list --json (the
 #                                        row whose path is the checkout);
 #                                        submit refuses a handle whose folder
@@ -294,8 +296,9 @@ k2cr_check_dual_nodes() {
 }
 
 # 0 = K2_COMPUTE_WORKSPACE is unset, or it names the workspace whose folder
-# is this checkout. A handle is per server (on z3mbpZ the release checkout
-# isn't `pod-leader`; that is another workspace), so a wrong one would run
+# is this checkout. A handle is per server (on the build Mac the release
+# checkout's may not be the name you expect, and that name may be another
+# workspace), so a wrong one would run
 # the jobs under another workspace's grants and secrets.
 k2cr_check_workspace() {
     local ws="${K2_COMPUTE_WORKSPACE:-}" list top got

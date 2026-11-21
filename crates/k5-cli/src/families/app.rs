@@ -1,8 +1,7 @@
 //! `k5 app <verb> …`, the App family, as the shell CLI's `cmd_app`
 //! (`cli/src/app-wallet.sh`) answers it, one verb group at a time. The
 //! route table sends a verb here when its group is native; every other
-//! verb stays the shell's. `app` alone (and `app --json`) is skin's page,
-//! as `cmd_app` hands it to `cmd_skin` (its bare row).
+//! verb stays the shell's.
 //!
 //! Native so far:
 //! - [`wallet`]: `app wallet settings|people|remove|personal-agent|personal-agents`.
@@ -47,6 +46,9 @@
 //! - [`shell`]: `app shell`, the interactive terminal over a WebSocket.
 //! - [`approve`]: the held requests, `app approvals [revoke]`, `app deny`
 //!   and `app approve`.
+//! - `app` alone (and `app --json`): `cmd_skin ""` prints the App page
+//!   through the permission cards' filter (`_skin_usage`, `_perm_lines`)
+//!   on stderr, exit 1 ([`bare`]).
 //! - The verbs `cmd_app` hands to `cmd_skin` (`user`, `role`, `grant`'s
 //!   list words, `front-door`, `hydra`: the [`super::skin`] family) and
 //!   to `cmd_skin_token` (`token`: the [`super::skin_token`] family).
@@ -295,8 +297,7 @@ pub const SKIN_GRANT: &[&str] = &[
 
 /// The router arm's words: this family's row of [`crate::route::TABLE`].
 pub const WORDS: &[&str] = &["app"];
-/// The shell's but for [`VERBS`]: every other verb is the shell's (`app`
-/// alone is skin's page, by its bare row).
+/// The shell's but for [`VERBS`]: every other verb is the shell's.
 pub const OWNER: crate::route::Owner = crate::route::Owner::Bash;
 /// One verb row per native group of `cmd_app`; each can turn back alone.
 pub const VERBS: &[crate::route::Verb] = &[
@@ -576,7 +577,7 @@ pub const VERBS: &[crate::route::Verb] = &[
         words: &["token", "tokens"],
         owner: crate::route::Owner::Native,
     },
-    // `app` alone and `app --json`: skin's page ([`super::skin::run_app`]).
+    // `app` alone and `app --json` ([`bare`]).
     crate::route::Verb::bare(crate::route::Owner::Native),
 ];
 
@@ -659,10 +660,9 @@ fn doctor(rest: &[&str]) -> Option<Result<Ask, Stop>> {
 
 /// `k5 app …`. `None`: the shell's (see the module's notes).
 pub fn run(args: &[OsString]) -> Option<Exit> {
-    // `app` alone (or with `--json`): `cmd_app` hands it to `cmd_skin`,
-    // which prints the family's page (the bare row below).
+    // `app` alone (or with `--json`): the bare row ([`bare`]).
     if crate::route::is_bare(args) {
-        return super::skin::run_app(args);
+        return bare(args);
     }
     match args.get(1).and_then(|a| a.to_str()) {
         Some("token" | "tokens") => return super::skin_token::run_app(args),
@@ -701,6 +701,43 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         curl_port(settings.port_text.as_deref()?)?;
     }
     Some(run_with(args, &words, ask, hook_sock.as_deref(), settings))
+}
+
+/// `app` alone, or `app --json`: `cmd_app` hands the word to `cmd_skin`,
+/// whose `_skin_usage` prints the App page on stderr through
+/// `_perm_lines` (a line tagged ` #if-cards` only while permission cards
+/// are on for this caller, ` #if-no-cards` only while off), then exit 1.
+/// Whether cards are on is the shell's probe ([`crate::cards`]): asked
+/// only with a passport. After the same settings and gates as every verb.
+/// `None` (before anything is printed): the shell's, where the binary
+/// can't be sure to ask or read the probe as the shell does.
+fn bare(args: &[OsString]) -> Option<Exit> {
+    let hook_sock = super::hook_sock();
+    if hook_sock.is_some() && prelude::codex_env(std::env::vars_os().map(|(name, _)| name)) {
+        return None;
+    }
+    let page = crate::text::help("app")?;
+    let (env, p) = super::help::shell_prelude()?;
+    let would_refuse = passport::current(args).would_refuse();
+    let cards = crate::cards::ask(&env, &p, || would_refuse)?;
+    let settings = match daemon::current() {
+        Ok(s) => s,
+        Err(e) => {
+            out::stderr_line(&format!("Error: {e}"));
+            return Some(Exit::Error);
+        }
+    };
+    if let Some(gate) = prelude::gate(&settings) {
+        return Some(gate.stop());
+    }
+    // A port curl won't take is the shell's.
+    curl_port(settings.port_text.as_deref()?)?;
+    if let Some(stop) = prelude::id_tool(&settings, hook_sock.as_deref(), would_refuse, TOOL) {
+        return Some(stop);
+    }
+    let text = crate::cards::perm_lines(page, crate::cards::on(cards));
+    let _ = out::write_flushed(&mut std::io::stderr().lock(), text.as_bytes());
+    Some(Exit::Error)
 }
 
 fn run_with(

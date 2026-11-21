@@ -13,7 +13,10 @@ cli_request_uds() {
     local params=""
     for param in "$@"; do params="${params}${params:+&}${param}"; done
     local _K2_CFG="" out rc=0 try=1 t0="${_K2_REQ_T0:-$SECONDS}"
-    _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
+    # 0.46.17: no passport, no Authorization line (never an empty Bearer).
+    if [ -n "${SCOPED_TOKEN:-}" ]; then
+        _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
+    fi
     if [ -n "$params" ]; then
         _k2_cfg_add data-raw "$params"
     fi
@@ -71,7 +74,10 @@ cli_post_json_uds() {
     local body="${2:-}"
     if [ -z "$body" ]; then body="$(cat)"; fi
     local _K2_CFG="" out rc=0 t0="${_K2_REQ_T0:-$SECONDS}"
-    _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
+    # 0.46.17: no passport, no Authorization line (never an empty Bearer).
+    if [ -n "${SCOPED_TOKEN:-}" ]; then
+        _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
+    fi
     _k2_cfg_add data-raw "$body"
     # 0.46.6: the permission note, and the healed passport, as cli_post_json.
     out="$(r=0; _k2_curl "$_K2_CFG" -s -X POST --unix-socket "$(_hook_sock)" "http://localhost${endpoint}" \

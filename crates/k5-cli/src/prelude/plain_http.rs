@@ -11,7 +11,7 @@
 //! warning: <name> is sending this server's owner token to <host> over plain http, unencrypted. That's fine on a private network such as a tailnet; elsewhere use https.
 //! ```
 //!
-//! `<name>` is the command's own name (`${0##*/}` in the shell, the
+//! `<name>` is the command's own name (`${_K2_CLI_NAME}` in the shell, the
 //! brand's CLI name here). No line for a loopback literal, a Tailscale
 //! literal (100.64.0.0/10, fd7a:115c:a1e0::/48, a name ending in
 //! `.ts.net`, all as written, never looked up), `K2_HOST=https://<name>`,
@@ -264,7 +264,7 @@ mod tests {
     #[test]
     fn the_lines_are_the_shell_s() {
         let p = policy();
-        let warn = warning_line("${HOST}").replacen(k2_client::cli_name!(), "${0##*/}", 1);
+        let warn = warning_line("${HOST}").replacen(k2_client::cli_name!(), "${_K2_CLI_NAME}", 1);
         assert!(p.contains(&format!("echo \"{warn}\" >&2")), "{warn}");
         assert!(p.contains(
             "    _envn_into _k2_plain_ok PLAIN_HTTP_OK\n    if [ \"$_k2_plain_ok\" != 1 ] && ! _k2_host_is_tailnet_literal \"$HOST\"; then\n"

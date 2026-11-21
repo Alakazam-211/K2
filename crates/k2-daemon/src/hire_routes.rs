@@ -951,7 +951,11 @@ fn cli_converge(who: &Who, body: &[u8]) -> CliResponse {
     if extra.get("dryRun").and_then(|v| v.as_bool()) == Some(true) {
         return ok(serde_json::json!({ "ok": true, "dryRun": true, "hire": "allowed" }));
     }
-    match converge::converge(&req, &caller, &passport_authority(who)) {
+    let auth = match passport_authority(who) {
+        Ok(a) => a,
+        Err(e) => return hire_error_response(&e),
+    };
+    match converge::converge(&req, &caller, &auth) {
         Ok(out) => {
             if out.changed || out.created {
                 crate::v1_hire::emit_hire_watches();
@@ -979,14 +983,15 @@ fn cli_converge(who: &Who, body: &[u8]) -> CliResponse {
 }
 
 /// What a caller may do on the hire core. A passport (an agent's, or a
-/// shell tab's) only ever creates: it never renames, re-tools or adds
-/// context to a workspace that is already there (403 `owner_only`).
+/// shell tab's) only ever creates, inside the hire root: it never renames,
+/// re-tools or adds context to a workspace that is already there (403
+/// `owner_only`), and never makes one elsewhere (403 `outside_hire_root`).
 /// The owner token and logins converge any path, as before.
-fn passport_authority(who: &Who) -> ConvergeAuthority {
+fn passport_authority(who: &Who) -> Result<ConvergeAuthority, HireError> {
     if who.passport().is_some() {
         ConvergeAuthority::create_only()
     } else {
-        ConvergeAuthority::unrestricted()
+        Ok(ConvergeAuthority::unrestricted())
     }
 }
 
@@ -1166,7 +1171,11 @@ fn cli_template_hire(
     if has(&req.persona) || has(&req.persona_raw) {
         return err(400, "usage", "template and persona are mutually exclusive — pass one or the other");
     }
-    match k2_core::hire::template::apply_with(&areq, caller, &passport_authority(who)) {
+    let auth = match passport_authority(who) {
+        Ok(a) => a,
+        Err(e) => return hire_error_response(&e),
+    };
+    match k2_core::hire::template::apply_with(&areq, caller, &auth) {
         Ok(out) => {
             if !out.dry_run && (out.changed || out.created) {
                 crate::v1_hire::emit_hire_watches();

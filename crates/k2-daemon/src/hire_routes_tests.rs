@@ -1293,3 +1293,33 @@ fn preset_hire_refuses_a_preset_that_does_not_exist() {
         assert_eq!(saved.as_deref(), Some(preset), "saved as given");
     }
 }
+
+/// K2's ruling: an agent hires only inside the hire root. Outside it the
+/// hire is refused (403 `outside_hire_root`, saying where agents may hire)
+/// with nothing made, the template door and its dry run too; inside it
+/// works; the owner still hires anywhere.
+#[test]
+fn passport_hire_stays_inside_the_hire_root() {
+    let home = k2_core::test_env::TempHome::new();
+    let root = ensure_test_root();
+    let (_, agent) = hiring_agent("hr");
+    let outside = home.path().join(uniq("outside")).to_string_lossy().into_owned();
+    for body in [
+        json!({ "path": outside, "name": "Out" }),
+        json!({ "template": "writer", "path": outside, "name": "Out", "launch": false }),
+        json!({ "template": "writer", "path": outside, "name": "Out", "dryRun": true }),
+    ] {
+        let (st, v) = hire_as(&agent, &body);
+        assert_eq!((st, v["error"]["code"].as_str()), (403, Some("outside_hire_root")), "{body}: {v}");
+        let hint = v["error"]["hint"].as_str().expect("hint");
+        assert!(hint.contains(&format!("An agent hires only inside the hire root {}", root.display())), "{hint}");
+        assert!(!Path::new(&outside).exists() && !registered(&outside), "{body}: nothing made");
+    }
+    // The hire root itself is not a new workspace's folder.
+    assert_refused(&agent, json!({ "path": root.to_string_lossy() }), 403, "owner_only");
+    let inside = root.join(uniq("inside")).to_string_lossy().into_owned();
+    let (st, v) = hire_as(&agent, &json!({ "path": inside, "name": "In" }));
+    assert_eq!((st, v["created"].as_bool()), (200, Some(true)), "{v}");
+    let (st, v) = hire_as(&Who::Owner, &json!({ "path": outside, "name": "Owner Out" }));
+    assert_eq!((st, v["created"].as_bool()), (200, Some(true)), "the owner hires anywhere: {v}");
+}

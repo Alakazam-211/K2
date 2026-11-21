@@ -741,6 +741,9 @@ pub fn apply_with(req: &ApplyRequest, caller: &HireCaller, auth: &ConvergeAuthor
         Some(p) => converge::expand_hire_path(p)?,
         None => default_path(req, &tpl, auth)?,
     };
+    if auth.create_only {
+        converge::check_new_workspace_root(&path, auth)?;
+    }
     check_lock(&path, &tpl)?;
     steps::check_preset(req.tool.as_deref())?;
     let name = req.name.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);

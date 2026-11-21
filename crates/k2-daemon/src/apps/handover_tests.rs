@@ -1483,7 +1483,8 @@ fn hire_take_app_offers_the_app_to_the_new_agent_only_after_the_hire() {
     let (st, v) = hire(&agent(&f.a), json!({ "path": bad.to_string_lossy(), "takeApp": f.app }));
     assert!(st >= 400, "the hire fails: {st} {v}");
     assert_eq!(handovers_of(&f.app), 0, "a failed hire files nothing");
-    let dir = f._home.path().join("hired-t61");
+    // An agent hires inside the hire root only.
+    let dir = k2_core::hire::root::hire_root().expect("hire root").join(format!("hired-t61-{}", std::process::id()));
     let (st, v) = hire(&agent(&f.a), json!({ "path": dir.to_string_lossy(), "takeApp": f.app, "brief": "# notes for you" }));
     assert_eq!(st, 200, "{v}");
     let new_ws = v["id"].as_str().unwrap().to_string();

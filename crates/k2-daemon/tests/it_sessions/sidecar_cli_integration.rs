@@ -1601,7 +1601,9 @@ async fn hiring_and_sidecars_are_two_switches() {
     let d = futures_block(test_harness::start(OWNER));
     let ws = seed_ws(&env, &unique("sp"));
     let main = live_session_passport(&ws, &ws.id, "claude", &["--dangerously-skip-permissions"]);
-    let hire = |dir: &str| serde_json::json!({ "path": env.home.join(dir).to_string_lossy(), "name": dir });
+    // An agent hires inside the hire root only.
+    let agents = k2_core::hire::root::hire_root().expect("hire root");
+    let hire = |dir: &str| serde_json::json!({ "path": agents.join(dir).to_string_lossy(), "name": dir });
     let set = |toggle: &str, value: bool| {
         let r = post(
             d.port,
@@ -1622,14 +1624,14 @@ async fn hiring_and_sidecars_are_two_switches() {
         .as_str()
         .expect("hint")
         .contains("Let this agent hire agents"));
-    assert!(!env.home.join("hire-a").exists(), "nothing hired");
+    assert!(!agents.join("hire-a").exists(), "nothing hired");
 
     // Hiring only: the hire goes through; sidecars are refused.
     set("agents_manage", false);
     set("agents_hire", true);
     let r = post(d.port, "/cli/agents/hire", &main, &hire("hire-b"));
     assert_eq!(r.status, 200, "{}", r.body);
-    assert!(env.home.join("hire-b").is_dir(), "hired");
+    assert!(agents.join("hire-b").is_dir(), "hired");
     let r = new_sidecar(d.port, &main, &ws, "second", "claude", None);
     assert_eq!((r.status, error_code(&r).as_str()), (403, "gated"), "{}", r.body);
     assert!(json(&r.body)["error"]["hint"]
@@ -1646,7 +1648,7 @@ async fn hiring_and_sidecars_are_two_switches() {
     let side = mint(&helper.session_id, &ws.id, &format!("tab-{helper_pg}"));
     let r = post(d.port, "/cli/agents/hire", &side, &hire("hire-c"));
     assert_eq!((r.status, error_code(&r).as_str()), (403, "main_only"), "{}", r.body);
-    assert!(!env.home.join("hire-c").exists(), "a sidecar hires nothing");
+    assert!(!agents.join("hire-c").exists(), "a sidecar hires nothing");
     let r = new_sidecar(d.port, &side, &ws, "nested", "claude", None);
     assert_eq!((r.status, error_code(&r).as_str()), (403, "forbidden"), "{}", r.body);
 

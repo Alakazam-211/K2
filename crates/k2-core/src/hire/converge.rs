@@ -88,10 +88,10 @@ impl ConvergeAuthority {
         Self { new_workspace_root: None, may_create: true, max_db: None, create_refusal: None, create_only: false }
     }
 
-    /// An agent passport's hire: creates a new workspace, never converges
-    /// one that is already there.
-    pub fn create_only() -> Self {
-        Self { create_only: true, ..Self::unrestricted() }
+    /// An agent passport's hire: creates a new workspace inside the hire
+    /// root, never converges one that is already there.
+    pub fn create_only() -> Result<Self, HireError> {
+        Ok(Self { create_only: true, new_workspace_root: Some(super::root::hire_root()?), ..Self::unrestricted() })
     }
 }
 
@@ -314,6 +314,31 @@ pub fn claim_new_folder(path: &str) -> Result<(), HireError> {
     }
 }
 
+/// A new workspace must sit inside `auth.new_workspace_root` when the
+/// caller has one (an API key: the hire root or its sub-folder; an agent
+/// passport: the hire root). `outside_hire_root`, before any write.
+pub fn check_new_workspace_root(path: &str, auth: &ConvergeAuthority) -> Result<(), HireError> {
+    let Some(root) = auth.new_workspace_root.as_ref() else {
+        return Ok(());
+    };
+    if super::root::is_under(Path::new(path), root) {
+        return Ok(());
+    }
+    let hint = if auth.create_only {
+        format!(
+            "{path} is outside the hire root. An agent hires only inside the hire root {}: pick a new folder there (or leave the folder out with a template). A person hires anywhere, or sets the root: `{} agent hire-root set <dir>`.",
+            root.display(),
+            crate::brand::CLI_NAME
+        )
+    } else {
+        format!(
+            "a new workspace made with an API key must be inside the hire root {} (the owner sets it: k2 agent hire-root set <dir>)",
+            root.display()
+        )
+    };
+    Err(HireError::new(403, "outside_hire_root", hint))
+}
+
 /// The authority checks that need only the request (before any write).
 pub fn check_db_access(
     caller: &HireCaller,
@@ -412,18 +437,7 @@ pub fn converge(
                 auth.create_refusal.clone().unwrap_or_else(|| "this caller can't create a new workspace".into()),
             ));
         }
-        if let Some(root) = auth.new_workspace_root.as_ref() {
-            if !super::root::is_under(Path::new(&path), root) {
-                return Err(HireError::new(
-                    403,
-                    "outside_hire_root",
-                    format!(
-                        "a new workspace made with an API key must be inside the hire root {} (the owner sets it: k2 agent hire-root set <dir>)",
-                        root.display()
-                    ),
-                ));
-            }
-        }
+        check_new_workspace_root(&path, auth)?;
     }
 
     let no_wiki = req.no_wiki.unwrap_or(false);

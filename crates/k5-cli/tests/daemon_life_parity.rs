@@ -2027,7 +2027,7 @@ fn daemon_install_downloads_verifies_and_installs_as_the_shell_does() {
             cat_then(vec![latest.clone()], good.clone()),
         ),
         (
-            // native: daemon install --version
+            // native: daemon install
             case(
                 "install --version v0.46.9: signed with the backup key",
                 &["install", "--version", "v0.46.9"],
@@ -2128,7 +2128,7 @@ fn daemon_install_downloads_verifies_and_installs_as_the_shell_does() {
             ),
         ),
         (
-            // native: daemon install --no-service
+            // native: daemon install
             case(
                 "install --no-service: no unit looked for or written",
                 &["install", "--no-service"],
@@ -2145,7 +2145,7 @@ fn daemon_install_downloads_verifies_and_installs_as_the_shell_does() {
             },
         ),
         (
-            // native: daemon install --bin-dir
+            // native: daemon install
             case(
                 "install --bin-dir: a user unit's binary is updated in place and restarted",
                 &["install", "--bin-dir", "{secrets}/bin"],
@@ -2218,7 +2218,7 @@ fn daemon_install_downloads_verifies_and_installs_as_the_shell_does() {
             },
         ),
         (
-            // native: daemon install --manifest-url
+            // native: daemon install
             case(
                 "install --manifest-url file://: every file is copied",
                 &["install", "--manifest-url", "file://{secrets}/daemon-latest.json"],
@@ -2256,7 +2256,7 @@ fn daemon_install_refusals_and_dry_runs_answer_as_the_shell_does() {
     with_units.extend(s(NO_UNIT));
     let rows: Vec<(Case, Vec<String>)> = vec![
         (
-            // native: daemon install --dry-run
+            // native: daemon install
             case(
                 "install --dry-run",
                 &["install", "--dry-run"],

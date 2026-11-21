@@ -930,7 +930,7 @@ fn done_in_a_session_the_api_started() {
         )
     };
     let v = vec![
-        // native: done (API lifecycle session)
+        // native: done
         cell("on the cell socket", &[], vec![ok(OK)], 0, 1),
         cell(
             "a reason",

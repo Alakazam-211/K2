@@ -354,7 +354,7 @@ fn a_kit_id_is_doc_s_explain() {
         case(name, args, &[], vec![ok(body)], owner_and_port, code, 1)
     };
     let native = vec![
-        // native: explain MPC-*
+        // native: explain
         one("a kit id", &["MPC-E001"], KIT, 0),
         one("in lower case", &["mpc-e001"], KIT, 0),
         one("an MPCE id", &["MPCE-E002"], KIT, 0),

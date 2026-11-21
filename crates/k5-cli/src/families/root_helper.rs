@@ -11,10 +11,15 @@
 //! exit 1; else its Python's lines ([`render`]). `install-command` prints
 //! the daemon's `installCommand`.
 //!
+//! `--from` as the last word stops the shell's `shift 2` (out of range,
+//! under `set -e`): exit 1 after the gates, nothing printed or sent, and
+//! so here. (The shell's `_need_value` (q17) makes it "Error: --from
+//! takes a value", exit 2; the binary follows when that reaches this
+//! line.)
+//!
 //! The shell answers these itself ([`run`] returns `None`): any `-h` or
-//! `--help` (the front's), `--from` as the last word (`shift 2` out of
-//! range), a `--from` folder the binary can't resolve as bash's `cd`
-//! would, a word that is not UTF-8, a port curl won't take, and a
+//! `--help` (the front's), a `--from` folder the binary can't resolve as
+//! bash's `cd` would, a word that is not UTF-8, a port curl won't take, and a
 //! `python3` the binary can't tell.
 
 use super::heartbeat::py::{dget_or, dget_v, has, hashable, iter, or, Py, R};
@@ -49,6 +54,9 @@ pub enum Form {
     Help,
     /// A line on stderr, exit 2.
     Usage(String),
+    /// `--from` as the last word: the shell's `shift 2` out of range under
+    /// `set -e`, exit 1 with nothing printed.
+    ShiftFailed,
     Status {
         json: bool,
         events: bool,
@@ -82,7 +90,10 @@ pub fn parse(words: &[&str], resolve: &dyn Fn(&str) -> Option<String>) -> Option
             "--json" => json = true,
             "--events" => events = true,
             "--from" => {
-                from = rest.get(i + 1)?.to_string();
+                let Some(v) = rest.get(i + 1) else {
+                    return Some(Form::ShiftFailed);
+                };
+                from = v.to_string();
                 i += 1;
             }
             "--version" => {
@@ -184,6 +195,7 @@ fn run_with(args: &[OsString], form: Form, mut settings: Settings) -> Exit {
             out::stderr_line(line);
             return Exit::Usage;
         }
+        Form::ShiftFailed => return Exit::Error,
         _ => {}
     }
     settings.port = settings.port_text.as_deref().and_then(curl_port);
@@ -243,7 +255,7 @@ fn run_with(args: &[OsString], form: Form, mut settings: Settings) -> Exit {
             Ok(a) => install_command(a),
             Err(e) => e,
         },
-        Form::Help | Form::Usage(_) => Exit::Ok,
+        Form::Help | Form::Usage(_) | Form::ShiftFailed => Exit::Ok,
     };
     closing.flush(&mut client, exit);
     exit
@@ -636,7 +648,21 @@ mod tests {
             })
         );
         assert_eq!(parse(&["help"], &same), Some(Form::Help));
-        assert_eq!(parse(&["update", "--from"], &same), None);
+        assert_eq!(
+            parse(&["update", "--from"], &same),
+            Some(Form::ShiftFailed)
+        );
+        assert_eq!(
+            parse(&["status", "--json", "--from"], &same),
+            Some(Form::ShiftFailed)
+        );
+        assert_eq!(
+            parse(&["update", "--x", "--from"], &same),
+            Some(Form::Usage(format!(
+                "usage: unknown argument '--x' ({} root-helper --help)",
+                cli_name!()
+            )))
+        );
         assert_eq!(
             parse(
                 &["update", "--version", "1.2.3", "--match-installed"],

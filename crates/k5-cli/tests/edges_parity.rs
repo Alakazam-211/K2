@@ -121,3 +121,35 @@ fn inbox_value_flag_last_in_a_session_without_a_passport() {
         )
     });
 }
+
+#[test]
+fn root_helper_from_last_is_bash_s_silent_exit_1() {
+    let rig = Rig::new("root-helper", "shift");
+    for (name, args) in [
+        ("update --from (the last word)", &["update", "--from"][..]),
+        ("update --json --from", &["update", "--json", "--from"]),
+        ("status --from", &["status", "--from"]),
+    ] {
+        rig.check(&case(name, args, &[], vec![], owner_and_port, 1, 0));
+    }
+    // An unknown word before it stops first.
+    rig.check(&case(
+        "update --x --from",
+        &["update", "--x", "--from"],
+        &[],
+        vec![],
+        owner_and_port,
+        2,
+        0,
+    ));
+    // No port and no token: the gate speaks first.
+    rig.check(&case(
+        "update --from, no daemon",
+        &["update", "--from"],
+        &[],
+        vec![],
+        nothing,
+        1,
+        0,
+    ));
+}

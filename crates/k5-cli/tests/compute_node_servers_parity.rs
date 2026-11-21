@@ -274,6 +274,35 @@ fn compute_node_servers() {
             &["node", "servers", "mini", "limits", "g", "--for", "soon"],
             2,
         ),
+        // Days take digits only (0f25406366): anything else is the usage
+        // line, exit 2, before anything is sent; a leading 0 is decimal.
+        words(
+            "limits, days that are not digits",
+            &["node", "servers", "mini", "limits", "g", "for=1.5d"],
+            2,
+        ),
+        words(
+            "limits, --for days that name a variable",
+            &["node", "servers", "mini", "limits", "g", "--for", "HOMEd"],
+            2,
+        ),
+        one(
+            "limits, days with a leading 0",
+            &["node", "servers", "mini", "limits", "g", "for=010d"],
+            r#"{"node":"m"}"#,
+            0,
+        ),
+        case(
+            "add, days that are not digits",
+            &[
+                "node", "servers", "mini", "add", "--url", "u", "--code", "C.FP", "--for", "x1d",
+            ],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
         words(
             "limits, an unknown word",
             &["node", "servers", "mini", "limits", "g", "frob"],

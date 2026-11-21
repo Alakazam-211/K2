@@ -296,16 +296,17 @@ fn secs(v: &str) -> Option<Result<i64, Words<Ask>>> {
 }
 
 /// The `--for` value as `for_n`: `""`, `0`, days times 86400, or
-/// `_compute_secs`. `None`: the shell's (days that are not plain digits,
-/// or past its arithmetic).
-fn for_secs(v: &str) -> Option<Result<String, Words<Ask>>> {
+/// `_compute_secs`. Days that are not plain digits are `bad`'s usage line
+/// (exit 2), before anything is sent (0f25406366). `None`: the shell's
+/// (days past its arithmetic).
+fn for_secs(v: &str, bad: fn(&str) -> String) -> Option<Result<String, Words<Ask>>> {
     Some(Ok(match v {
         "" => String::new(),
         "none" | "never" | "0" => "0".to_string(),
         d if d.ends_with('d') => {
             let n = &d[..d.len() - 1];
             if n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) {
-                return None;
+                return Some(Err(Words::Usage(bad(v))));
             }
             let n: i64 = n.parse().ok()?;
             n.checked_mul(86400)?.to_string()
@@ -315,6 +316,16 @@ fn for_secs(v: &str) -> Option<Result<String, Words<Ask>>> {
             Err(stop) => return Some(Err(stop)),
         },
     }))
+}
+
+/// `limits`' line for days that are not plain digits.
+fn limits_bad_for(v: &str) -> String {
+    format!("usage: {CLI_NAME} compute node servers <node> limits <server> [for=7d|12h|none] key=value… (bad for '{v}')")
+}
+
+/// `add`'s line for days that are not plain digits.
+fn add_bad_for(v: &str) -> String {
+    format!("usage: {CLI_NAME} compute node servers <node> add --url URL --code-stdin [--for 7d|12h|none] (bad --for '{v}')")
 }
 
 /// `_compute_kv_json key=value…`: the object, or its usage line (the
@@ -396,7 +407,7 @@ fn limits(node: &str, rest: &[&str], json: bool) -> Option<Words<Ask>> {
         }
         i += 1;
     }
-    let for_n = match for_secs(forv)? {
+    let for_n = match for_secs(forv, limits_bad_for)? {
         Ok(n) => n,
         Err(stop) => return Some(stop),
     };
@@ -571,7 +582,7 @@ fn add_body(node: &str, rest: &[String]) -> Option<Result<String, Words<Ask>>> {
     if url.is_empty() || no_code {
         return Some(Err(Words::Usage(ADD_USAGE.into())));
     }
-    let for_n = match for_secs(&forv)? {
+    let for_n = match for_secs(&forv, add_bad_for)? {
         Ok(n) => n,
         Err(stop) => return Some(Err(stop)),
     };
@@ -623,7 +634,7 @@ pub fn add_handed(rest: &[String]) -> bool {
                 | "--network"
         ) {
             let v = rest.get(i + 1).map_or("", String::as_str);
-            if w == "--for" && for_secs(v).is_none() {
+            if w == "--for" && for_secs(v, add_bad_for).is_none() {
                 return true;
             }
             if w == "--max-time" && secs(v).is_none() {

@@ -1351,6 +1351,14 @@ for r in rows:
 "
 }
 
+# The hooks help: on stdout for -h/--help, on stderr with exit 1 for no
+# verb or an unknown one.
+_hooks_usage() {
+    cat <<'EOF'
+%include cli/text/help/hooks.txt
+EOF
+}
+
 cmd_hooks_status() {
     local limit="20"
     while [[ $# -gt 0 ]]; do

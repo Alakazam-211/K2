@@ -1,0 +1,4 @@
+Usage: k2 hooks status [--limit N] [--json]
+       k2 hooks install [--json]     re-run the daemon's hook installer now
+       k2 hooks uninstall [--json]   remove K2's entries from the agent CLI configs
+       k2 hooks emit <event> [--json '<obj>']  report a custom program's lifecycle (k2 study hooks)

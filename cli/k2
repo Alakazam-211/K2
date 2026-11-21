@@ -2114,6 +2114,10 @@ fi
 # `k2 hooks emit` (GL45) checks its own session passport and transport
 # (cell socket first), and must not need the owner token's PORT/TOKEN pair.
 [ "${1:-}" = "hooks" ] && [ "${2:-}" = "emit" ] && _skip_conn_gate=1
+# `k2 hooks <verb> --help` only prints help (no daemon needed).
+if [ "${1:-}" = "hooks" ]; then
+    for _a in "${@:2}"; do [ "$_a" = "--" ] && break; case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done
+fi
 # `k2 checkin` is retired: its stub prints pointers and never calls the daemon.
 [ "${1:-}" = "checkin" ] && _skip_conn_gate=1
 # Signed approvals: verify, show and key-id run k2-approve locally (no daemon).
@@ -6170,6 +6174,17 @@ for r in rows:
     reason = r.get('reason') or ''
     print(f'{fired:<22} {agent:<20} {decision:<22} {inbox:<8} {reason}')
 "
+}
+
+# The hooks help: on stdout for -h/--help, on stderr with exit 1 for no
+# verb or an unknown one.
+_hooks_usage() {
+    cat <<'EOF'
+Usage: k2 hooks status [--limit N] [--json]
+       k2 hooks install [--json]     re-run the daemon's hook installer now
+       k2 hooks uninstall [--json]   remove K2's entries from the agent CLI configs
+       k2 hooks emit <event> [--json '<obj>']  report a custom program's lifecycle (k2 study hooks)
+EOF
 }
 
 cmd_hooks_status() {
@@ -115633,18 +115648,19 @@ case "${1:-help}" in
         esac
         ;;
     hooks)
+        # 0.46.17: -h/--help anywhere before a bare -- prints the hooks help
+        # on stdout and sends nothing (`k2 hooks install -h` ran the
+        # installer). emit keeps its own page.
+        case "${2:-}" in
+            emit) ;;
+            *) if _wants_help "${@:2}"; then _hooks_usage; exit 0; fi ;;
+        esac
         case "${2:-}" in
             status)    shift 2; cmd_hooks_status "$@" ;;
             install)   shift 2; cmd_hooks_install 0 "$@" ;;
             uninstall) shift 2; cmd_hooks_install 1 "$@" ;;
             emit)      shift 2; cmd_hooks_emit "$@" ;;
-            *)
-                echo "Usage: k2 hooks status [--limit N] [--json]" >&2
-                echo "       k2 hooks install [--json]     re-run the daemon's hook installer now" >&2
-                echo "       k2 hooks uninstall [--json]   remove K2's entries from the agent CLI configs" >&2
-                echo "       k2 hooks emit <event> [--json '<obj>']  report a custom program's lifecycle (k2 study hooks)" >&2
-                exit 1
-                ;;
+            *)         _hooks_usage >&2; exit 1 ;;
         esac
         ;;
     daemon)

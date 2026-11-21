@@ -483,18 +483,19 @@ case "${1:-help}" in
         esac
         ;;
     hooks)
+        # 0.46.17: -h/--help anywhere before a bare -- prints the hooks help
+        # on stdout and sends nothing (`k2 hooks install -h` ran the
+        # installer). emit keeps its own page.
+        case "${2:-}" in
+            emit) ;;
+            *) if _wants_help "${@:2}"; then _hooks_usage; exit 0; fi ;;
+        esac
         case "${2:-}" in
             status)    shift 2; cmd_hooks_status "$@" ;;
             install)   shift 2; cmd_hooks_install 0 "$@" ;;
             uninstall) shift 2; cmd_hooks_install 1 "$@" ;;
             emit)      shift 2; cmd_hooks_emit "$@" ;;
-            *)
-                echo "Usage: k2 hooks status [--limit N] [--json]" >&2
-                echo "       k2 hooks install [--json]     re-run the daemon's hook installer now" >&2
-                echo "       k2 hooks uninstall [--json]   remove K2's entries from the agent CLI configs" >&2
-                echo "       k2 hooks emit <event> [--json '<obj>']  report a custom program's lifecycle (k2 study hooks)" >&2
-                exit 1
-                ;;
+            *)         _hooks_usage >&2; exit 1 ;;
         esac
         ;;
     daemon)

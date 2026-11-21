@@ -335,6 +335,8 @@ help workspace|workspace|out|0
 help zen|zen|out|0
 help-advanced|_advanced|out|0
 help-internal|_internal|out|0
+hooks --help|hooks|out|0
+hooks -h|hooks|out|0
 hooks emit --help|hooks/emit|out|0
 hooks emit -h|hooks/emit|out|0
 hostchat --help|hostchat|out|0

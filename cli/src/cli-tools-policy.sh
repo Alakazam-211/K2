@@ -1608,6 +1608,10 @@ fi
 # `k2 hooks emit` (GL45) checks its own session passport and transport
 # (cell socket first), and must not need the owner token's PORT/TOKEN pair.
 [ "${1:-}" = "hooks" ] && [ "${2:-}" = "emit" ] && _skip_conn_gate=1
+# `k2 hooks <verb> --help` only prints help (no daemon needed).
+if [ "${1:-}" = "hooks" ]; then
+    for _a in "${@:2}"; do [ "$_a" = "--" ] && break; case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done
+fi
 # `k2 checkin` is retired: its stub prints pointers and never calls the daemon.
 [ "${1:-}" = "checkin" ] && _skip_conn_gate=1
 # Signed approvals: verify, show and key-id run k2-approve locally (no daemon).

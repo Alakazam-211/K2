@@ -660,9 +660,9 @@ cmd_sources_history() {
     local name="" field="" from="" to="" item=""
     while [ $# -gt 0 ]; do
         case "$1" in
-            --from) from="${2:-}"; shift 2 ;;
-            --to) to="${2:-}"; shift 2 ;;
-            --item) item="${2:-}"; shift 2 ;;
+            --from) _need_value "$@"; from="${2:-}"; shift 2 ;;
+            --to) _need_value "$@"; to="${2:-}"; shift 2 ;;
+            --item) _need_value "$@"; item="${2:-}"; shift 2 ;;
             --json) shift ;;
             --*) echo "Error: unknown flag $1" >&2; exit 2 ;;
             *) if [ -z "$name" ]; then name="$1"; elif [ -z "$field" ]; then field="$1"; fi; shift ;;
@@ -787,8 +787,8 @@ cmd_sources_mute() {
     local name="" for_="" reason=""
     while [ $# -gt 0 ]; do
         case "$1" in
-            --for) for_="${2:-}"; shift 2 ;;
-            --reason) reason="${2:-}"; shift 2 ;;
+            --for) _need_value "$@"; for_="${2:-}"; shift 2 ;;
+            --reason) _need_value "$@"; reason="${2:-}"; shift 2 ;;
             --json) shift ;;
             --*) echo "Error: unknown flag $1" >&2; exit 2 ;;
             *) name="$1"; shift ;;
@@ -884,6 +884,7 @@ cmd_sources_try() {
             --json) _SRC_JSON=1; shift ;;
             --tree-depth) [ -n "${2:-}" ] || { echo "usage: --tree-depth N" >&2; exit 2; }; depth="$2"; shift 2 ;;
             --name)
+                _need_value "$@"
                 # `--name X` alone tries the saved source X; with other flags
                 # it names the draft.
                 draft_args+=("$1" "${2:-}"); name="${2:-}"; shift 2 ;;
@@ -973,7 +974,7 @@ cmd_sources_pending() {
     _SRC_JSON=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --names) names="${2:-}"; shift 2 ;;
+            --names) _need_value "$@"; names="${2:-}"; shift 2 ;;
             --json) _SRC_JSON=1; shift ;;
             *) echo "Error: unknown flag '$1'" >&2; exit 2 ;;
         esac
@@ -1070,9 +1071,9 @@ cmd_sources_approve() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --secret) [ -n "${2:-}" ] || { echo "usage: --secret NAME" >&2; exit 2; }; secret="$2"; shift 2 ;;
-            --viewers) viewers="${2:-}"; shift 2 ;;
-            --agent-access) access="${2:-}"; shift 2 ;;
-            --keep) keep="${2:-}"; shift 2 ;;
+            --viewers) _need_value "$@"; viewers="${2:-}"; shift 2 ;;
+            --agent-access) _need_value "$@"; access="${2:-}"; shift 2 ;;
+            --keep) _need_value "$@"; keep="${2:-}"; shift 2 ;;
             --use-anyway) use_anyway=1; shift ;;
             --json) _SRC_JSON=1; shift ;;
             -*) echo "Error: unknown flag '$1'" >&2; exit 2 ;;
@@ -1358,14 +1359,14 @@ EOF
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) _SRC_JSON=1; shift ;;
-            --source) source="${2:-}"; shift 2 ;;
+            --source) _need_value "$@"; source="${2:-}"; shift 2 ;;
             --on) on="$(_sources_b2_on "${2:-}")" || exit 2; shift 2 ;;
-            --agent) agent="${2:-}"; shift 2 ;;
-            --note) note="${2:-}"; shift 2 ;;
+            --agent) _need_value "$@"; agent="${2:-}"; shift 2 ;;
+            --note) _need_value "$@"; note="${2:-}"; shift 2 ;;
             --no-note) no_note=1; shift ;;
             --cooldown) cooldown="$(_sources_b2_secs "${2:-}")" || exit 2; shift 2 ;;
-            --daily-cap) cap="${2:-}"; shift 2 ;;
-            --limit) limit="${2:-}"; shift 2 ;;
+            --daily-cap) _need_value "$@"; cap="${2:-}"; shift 2 ;;
+            --limit) _need_value "$@"; limit="${2:-}"; shift 2 ;;
             *) echo "Error: unknown flag '$1' (k2 sources trigger --help)" >&2; exit 2 ;;
         esac
     done

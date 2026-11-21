@@ -187,6 +187,15 @@ pub fn parse_login(words: &[&str]) -> Option<Result<Ask, Stop>> {
     login(&words[1..])
 }
 
+/// `app invite-settings <app> [flags]`: `cmd_app` sends it to
+/// `cmd_app_invite_settings` as it sends `app login settings`.
+pub fn parse_invite_settings(words: &[&str]) -> Option<Result<Ask, Stop>> {
+    if help(words) {
+        return None;
+    }
+    login(words)
+}
+
 /// `_read_body_file <path>`, as `$(…)` holds it: `Some(Err)` for its
 /// line, `None` where the shell's `cat` would fail or the text is not
 /// what the binary can hand on as the shell does.

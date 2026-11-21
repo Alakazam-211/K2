@@ -46,6 +46,12 @@
 //! - [`shell`]: `app shell`, the interactive terminal over a WebSocket.
 //! - [`approve`]: the held requests, `app approvals [revoke]`, `app deny`
 //!   and `app approve`.
+//! - [`grace_set`]: `app warnings`, `app clean-mode`, `app key|keys`, `app
+//!   label`, `app test-guests`, `app move-plan` and the pages `app
+//!   surfaces|door|grace`; [`door_set`]: `app requests`, `app quota` and
+//!   `app token rotate`; [`grants`]: `app grants <app>`;
+//!   [`agent_access`]: `app access`; [`sign_in`] also answers `app
+//!   invite-settings`.
 //! - `app` alone (and `app --json`): `cmd_skin ""` prints the App page
 //!   through the permission cards' filter (`_skin_usage`, `_perm_lines`)
 //!   on stderr, exit 1 ([`bare`]).
@@ -86,6 +92,7 @@ use std::ffi::OsString;
 use std::path::Path;
 
 pub mod access;
+pub mod agent_access;
 pub mod approve;
 pub mod boxes;
 pub mod call;
@@ -94,8 +101,11 @@ pub mod chat;
 pub mod db_set;
 pub mod deploy;
 pub mod door;
+pub mod door_set;
 pub mod exec;
 pub mod grace;
+pub mod grace_set;
+pub mod grants;
 pub mod guests;
 pub mod history;
 pub mod init;
@@ -152,6 +162,10 @@ pub enum Ask {
     Boxes(boxes::Ask),
     Exec(exec::Ask),
     Shell(shell::Ask),
+    GraceSet(grace_set::Ask),
+    DoorSet(door_set::Ask),
+    Grants(grants::Ask),
+    AgentAccess(agent_access::Ask),
 }
 
 /// Where a verb's loop stopped before anything was sent: its line on
@@ -253,6 +267,23 @@ pub const TAKES: &[&str] = &[
     "sessions",
     "exec",
     "shell",
+    "warnings",
+    "clean-mode",
+    "key",
+    "keys",
+    "label",
+    "test-guests",
+    "test-guest",
+    "move-plan",
+    "surfaces",
+    "door",
+    "grace",
+    "crossover",
+    "requests",
+    "quota",
+    "quotas",
+    "access",
+    "invite-settings",
 ];
 
 /// The verbs `cmd_app` hands to `cmd_skin` and `cmd_skin_token` (their
@@ -579,6 +610,62 @@ pub const VERBS: &[crate::route::Verb] = &[
     },
     // `app` alone and `app --json` ([`bare`]).
     crate::route::Verb::bare(crate::route::Owner::Native),
+    crate::route::Verb {
+        words: &["warnings"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["clean-mode"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["key"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["keys"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["label"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["test-guests", "test-guest"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["move-plan"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["surfaces"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["door"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["grace", "crossover"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["requests"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["quota", "quotas"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["access"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["invite-settings"],
+        owner: crate::route::Owner::Native,
+    },
 ];
 
 /// The words after `app`, read by the group the verb names. `None`: the
@@ -636,7 +723,17 @@ pub fn parse(words: &[&str]) -> Option<Result<Ask, Stop>> {
         }
         v if deploy::VERBS.contains(&v) => Some(deploy::parse(v, rest)?.map(Ask::Change)),
         v if owner::VERBS.contains(&v) => Some(owner::parse(v, rest)?.map(Ask::Owner)),
+        "grants" if !SKIN_GRANT.contains(rest.first().unwrap_or(&"")) => {
+            Some(grants::parse(rest)?.map(Ask::Grants))
+        }
         "grant" | "grants" => Some(guests::parse_grant(rest)?.map(Ask::Guests)),
+        "token" | "tokens" if rest.first() == Some(&"rotate") => {
+            Some(door_set::parse_rotate(&rest[1..])?.map(Ask::DoorSet))
+        }
+        "access" => Some(agent_access::parse(rest)?.map(Ask::AgentAccess)),
+        "invite-settings" => Some(sign_in::parse_invite_settings(rest)?.map(Ask::SignIn)),
+        v if grace_set::VERBS.contains(&v) => Some(grace_set::parse(v, rest)?.map(Ask::GraceSet)),
+        v if door_set::VERBS.contains(&v) => Some(door_set::parse(v, rest)?.map(Ask::DoorSet)),
         v if approve::VERBS.contains(&v) => Some(approve::parse(v, rest)?.map(Ask::Approve)),
         v if access::VERBS.contains(&v) => Some(access::parse(v, rest)?.map(Ask::Access)),
         v if door::VERBS.contains(&v) => Some(door::parse(v, rest)?.map(Ask::Door)),
@@ -665,15 +762,15 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         return bare(args);
     }
     match args.get(1).and_then(|a| a.to_str()) {
-        Some("token" | "tokens") => return super::skin_token::run_app(args),
-        Some(v @ ("grant" | "grants")) => {
+        // `token rotate` is `cmd_app_token_rotate` ([`door_set`]).
+        Some("token" | "tokens") if args.get(2).and_then(|a| a.to_str()) != Some("rotate") => {
+            return super::skin_token::run_app(args)
+        }
+        Some("grant" | "grants") => {
+            // `grants <app>` is `cmd_app_grants` ([`grants`]), `grant <app>
+            // --kind …` `cmd_app_grant_kind` ([`guests`]).
             let third = args.get(2).map_or(Some(""), |a| a.to_str())?;
-            if !SKIN_GRANT.contains(&third) {
-                // `grants <app>` is `cmd_app_grants`: the shell's.
-                if v == "grants" {
-                    return None;
-                }
-            } else if !matches!(third, "copy-host" | "copyhost") {
+            if SKIN_GRANT.contains(&third) && !matches!(third, "copy-host" | "copyhost") {
                 return super::skin::run_app(args);
             }
         }
@@ -803,6 +900,10 @@ fn run_with(
         Ask::Boxes(b) => boxes::run(&mut ctx, b),
         Ask::Exec(e) => exec::run(&mut ctx, e),
         Ask::Shell(sh) => shell::run(&mut ctx, sh),
+        Ask::GraceSet(g) => grace_set::run(&mut ctx, g),
+        Ask::DoorSet(d) => door_set::run(&mut ctx, d),
+        Ask::Grants(g) => grants::run(&mut ctx, g),
+        Ask::AgentAccess(a) => agent_access::run(&mut ctx, a),
     };
     let exit = match shown {
         Ok(s) => s.print(),

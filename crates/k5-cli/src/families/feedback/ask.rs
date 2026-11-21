@@ -874,16 +874,21 @@ fn die(o: &mut PyOut, err: &Value, from: u32) -> Result<Exit, Raise> {
     let code = get(pairs, "code")
         .filter(|v| py::truthy(v))
         .map_or_else(String::new, str_of);
-    Ok(if matches!(code.as_str(), "person_only" | "own_workspace_only" | "not_this_agent") {
-        // Refused: not this agent's to do.
-        Exit::Refused
-    } else if code == "not_found" || code == "ambiguous_id" {
-        Exit::NotFound
-    } else if code == "usage" || code.starts_with("brief_") || code.starts_with("assignee_") {
-        Exit::Usage
-    } else {
-        Exit::Error
-    })
+    Ok(
+        if matches!(
+            code.as_str(),
+            "person_only" | "own_workspace_only" | "not_this_agent"
+        ) {
+            // Refused: not this agent's to do.
+            Exit::Refused
+        } else if code == "not_found" || code == "ambiguous_id" {
+            Exit::NotFound
+        } else if code == "usage" || code.starts_with("brief_") || code.starts_with("assignee_") {
+            Exit::Usage
+        } else {
+            Exit::Error
+        },
+    )
 }
 
 /// `v[:8]`, written as `%s` writes it.

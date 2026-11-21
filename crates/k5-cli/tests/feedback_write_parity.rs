@@ -1413,7 +1413,15 @@ fn the_credential_in_a_session() {
     let mut v = vec![
         with(
             sock.clone(),
-            case("ask: the passport", &["ask", "t"], &[], vec![ok(CREATED)], files, 0, 1),
+            case(
+                "ask: the passport",
+                &["ask", "t"],
+                &[],
+                vec![ok(CREATED)],
+                files,
+                0,
+                1,
+            ),
         ),
         with(
             named.clone(),
@@ -1465,7 +1473,15 @@ fn the_credential_in_a_session() {
         ),
         with(
             sock.clone(),
-            case("settings read: the passport", &["settings"], &[], vec![ok(read)], files, 0, 1),
+            case(
+                "settings read: the passport",
+                &["settings"],
+                &[],
+                vec![ok(read)],
+                files,
+                0,
+                1,
+            ),
         ),
         with(
             sock.clone(),
@@ -1584,7 +1600,15 @@ fn the_credential_in_a_session() {
     // `template` sends nothing, so it is no tickets request.
     v.push(with(
         no_passport,
-        case("no passport: template still prints", &["template"], &[], vec![], files, 0, 0),
+        case(
+            "no passport: template still prints",
+            &["template"],
+            &[],
+            vec![],
+            files,
+            0,
+            0,
+        ),
     ));
     check(&rig, v);
 }

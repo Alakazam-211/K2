@@ -592,10 +592,18 @@ pub fn apply(h: &mut Hire) -> R<()> {
         let a = &mut h.actions[i];
         if hello_by_daemon {
             act::set(a, "status", s("done"));
-            act::set(a, "reason", s(&format!("started by {} with its hello", product())));
+            act::set(
+                a,
+                "reason",
+                s(&format!("started by {} with its hello", product())),
+            );
         } else {
             act::set(a, "status", s("skipped"));
-            act::set(a, "reason", s(&format!("its hello went before: {} msg wakes it", cli())));
+            act::set(
+                a,
+                "reason",
+                s(&format!("its hello went before: {} msg wakes it", cli())),
+            );
         }
     } else if let Some(i) = pending_at(h, h.one("launch")) {
         let resp = h.post_query(

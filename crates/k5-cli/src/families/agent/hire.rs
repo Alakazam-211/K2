@@ -901,8 +901,20 @@ mod tests {
     #[test]
     fn a_session_refuses_a_person_s_steps_in_the_shell_s_order() {
         let a = words(&[
-            "d", "--mode", "k2so", "--launch", "--context", "~x", "--context", "wiki",
-            "--focus-group", "f", "--enabled", "true", "--color", "red",
+            "d",
+            "--mode",
+            "k2so",
+            "--launch",
+            "--context",
+            "~x",
+            "--context",
+            "wiki",
+            "--focus-group",
+            "f",
+            "--enabled",
+            "true",
+            "--color",
+            "red",
         ])
         .unwrap();
         let lines = session_stop(&a, true).expect("refused");
@@ -913,9 +925,28 @@ mod tests {
                 cli()
             )
         );
-        let t = words(&["--template", "t", "--launch", "--mode", "custom", "--context", "wiki"]).unwrap();
-        assert!(session_stop(&t, true).expect("refused")[0].contains(": --context wiki (with --template)."));
-        let ok = words(&["d", "--mode", "custom", "--context", "wiki", "--onboard", "hi"]).unwrap();
+        let t = words(&[
+            "--template",
+            "t",
+            "--launch",
+            "--mode",
+            "custom",
+            "--context",
+            "wiki",
+        ])
+        .unwrap();
+        assert!(session_stop(&t, true).expect("refused")[0]
+            .contains(": --context wiki (with --template)."));
+        let ok = words(&[
+            "d",
+            "--mode",
+            "custom",
+            "--context",
+            "wiki",
+            "--onboard",
+            "hi",
+        ])
+        .unwrap();
         assert_eq!(session_stop(&ok, true), None);
         assert!(session_stop(&ok, false).expect("no passport")[0].contains("has no passport"));
     }
@@ -926,8 +957,18 @@ mod tests {
             words(&["d", "--db-access", "write", "--brief", "nope"]).unwrap_err(),
             "--brief goes with --take-app"
         );
-        assert!(parse(&["d", "--db-access", "write", "--brief", "nope"], true).expect("native").unwrap().self_grant);
-        assert!(!parse(&["d", "--db-access", "off"], true).expect("native").unwrap().self_grant);
+        assert!(
+            parse(&["d", "--db-access", "write", "--brief", "nope"], true)
+                .expect("native")
+                .unwrap()
+                .self_grant
+        );
+        assert!(
+            !parse(&["d", "--db-access", "off"], true)
+                .expect("native")
+                .unwrap()
+                .self_grant
+        );
     }
 
     #[test]

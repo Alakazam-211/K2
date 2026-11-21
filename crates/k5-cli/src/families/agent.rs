@@ -244,10 +244,10 @@ fn run_words(args: &[OsString], words: &[&str], note: Option<&str>) -> Option<Ex
         "set" => set::parse(rest).map(Form::Set),
         "hire" => {
             // `_cli_caller_is_agent_passport`: a cell socket and a passport.
-            let token = k2_client::env_names::first_nonempty_os_in(
-                k2_client::env_names::HOOK_TOKEN,
-                |n| std::env::var_os(n),
-            );
+            let token =
+                k2_client::env_names::first_nonempty_os_in(k2_client::env_names::HOOK_TOKEN, |n| {
+                    std::env::var_os(n)
+                });
             let agent_passport = hook_sock.is_some() && token.is_some();
             hire::parse(rest, agent_passport)?.map(|a| Form::Hire(Box::new(a)))
         }

@@ -556,6 +556,11 @@ fn handle_draft_with(body: &[u8], ops: &dyn ImapOps) -> CliResponse {
                     // Graph picks the locked recipient itself; the draft's
                     // recipients are planned here from the source (always:
                     // a reply to our own sent message must not go back to us).
+                    // An attachment over Graph's inline limit is refused first,
+                    // before any call.
+                    if let Err(graph::GraphSendError::TooLarge(h)) = graph::check_inline_attachments(&atts, 0) {
+                        return error_response("400 Bad Request", "attachment_too_large", &h);
+                    }
                     let parties = match graph_reply_parties(&backend, &inbox, email_id, ask, &b.id) {
                         Ok(p) => p,
                         Err(resp) => return resp,

@@ -24,9 +24,9 @@
 //!
 //! A Markdown kit id (`MPC-`, `MPCE-`, any case) is the kit's own
 //! explain, as the shell's `_explain_kit` asks it ([`kit`]): one
-//! `_compute_send POST /cli/board/file/verb {"argv": ["explain", <id>],
-//! "json": <bool>}`, the route that answers the kit's pages with no file,
-//! and no path in it, so no file is read. Before 0.46.17 both sides sent
+//! `_compute_send GET /cli/kit/explain "id=<id>[&json=1]"`, the daemon's
+//! read for the kit's explain, which answers with Board files on or off
+//! and takes no path, so no file is read. Before 0.46.17 both sides sent
 //! it to `cmd_doc explain`, which took the id as a doc's path. The shell
 //! keeps ([`run`] gives `None`): a word that is not UTF-8, and a kit id
 //! with no port curl takes, no token, or `HOOK_SOCK` with a `CODEX_`
@@ -103,8 +103,8 @@ fn kit_call(args: &[OsString], p: &Prelude, env: &Env) -> Option<Vec<String>> {
     }
 }
 
-/// The route that answers the kit's own pages with no file.
-pub const KIT_ROUTE: &str = "/cli/board/file/verb";
+/// The daemon's read for the kit's explain: no file, no preview.
+pub const KIT_ROUTE: &str = "/cli/kit/explain";
 
 /// `_explain_kit <id> <json>`: the kit's explain for `id` on [`KIT_ROUTE`],
 /// then the shell's reader ([`kit_answer`]) and the EXIT trap. `None`:
@@ -130,7 +130,7 @@ fn kit(args: &[OsString], id: &str, as_json: bool) -> Option<Exit> {
     };
     let words: Vec<&str> = args.iter().skip(1).filter_map(|a| a.to_str()).collect();
     let mut ctx = super::app::call::Ctx::new(client, super::app::call::args_json(&words));
-    let exit = match ctx.send(true, KIT_ROUTE, &kit_body(id, as_json), false) {
+    let exit = match ctx.send(false, KIT_ROUTE, &kit_query(id, as_json), false) {
         Ok(split) => kit_answer(&split.status, &split.body, as_json).print(),
         Err(exit) => exit,
     };
@@ -143,12 +143,14 @@ fn kit(args: &[OsString], id: &str, as_json: bool) -> Option<Exit> {
     Some(exit)
 }
 
-/// The request's body, as `_explain_kit` builds it (`_setup_jstr`).
-pub fn kit_body(id: &str, as_json: bool) -> String {
-    format!(
-        "{{\"argv\":[\"explain\",{}],\"json\":{as_json}}}",
-        super::setup::jstr(id)
-    )
+/// The request's query, as `_explain_kit` builds it (`urlencode`).
+pub fn kit_query(id: &str, as_json: bool) -> String {
+    let q = format!("id={}", crate::transport::encode::quote(id));
+    if as_json {
+        q + "&json=1"
+    } else {
+        q
+    }
 }
 
 /// `sys.exit(x)`: an int its low byte (`True` 1), `None`, `False` and a
@@ -796,14 +798,8 @@ mod tests {
 
     #[test]
     fn the_kit_s_request_and_answers() {
-        assert_eq!(
-            kit_body("MPC-E301", false),
-            r#"{"argv":["explain","MPC-E301"],"json":false}"#
-        );
-        assert_eq!(
-            kit_body("mpc-\"\\x", true),
-            r#"{"argv":["explain","mpc-\"\\x"],"json":true}"#
-        );
+        assert_eq!(kit_query("MPC-E301", false), "id=MPC-E301");
+        assert_eq!(kit_query("mpc-\"\\x &", true), "id=mpc-%22%5Cx%20%26&json=1");
         let a = kit_answer("200", br#"{"exit": 0, "stdout": "page\n"}"#, false);
         assert_eq!(
             (a.stdout.as_str(), a.stderr.as_str(), a.exit),
@@ -865,9 +861,9 @@ mod tests {
         let sh = std::fs::read_to_string(&p).expect("explain.sh");
         for line in [
             r#"        MPC-*|MPCE-*) _explain_kit "$id" "$json_out"; return $? ;;"#,
-            r#"        body="{\"argv\":[\"explain\",${_SETUP_J}],\"json\":true}""#,
-            r#"        body="{\"argv\":[\"explain\",${_SETUP_J}],\"json\":false}""#,
-            r#"    _compute_split "$(_compute_send POST /cli/board/file/verb "$body")""#,
+            r#"    query="id=$(urlencode "$id")""#,
+            r#"    [ "$json_out" = 1 ] && query="${query}&json=1""#,
+            r#"    _compute_split "$(_compute_send GET /cli/kit/explain "$query")""#,
             r#"        print("Error [%s] %s: %s" % (v.get("code"), v.get("id"), v.get("message")), file=sys.stderr)"#,
             r#"hint = err.get("hint") or ("no answer from the K2 daemon" if status == "000" else "the daemon refused (HTTP %s)" % status)"#,
             r#"sys.exit(3 if code in ("not_enabled", "forbidden", "not_connected", "sandboxed_agent", "core_off") else 1)"#,

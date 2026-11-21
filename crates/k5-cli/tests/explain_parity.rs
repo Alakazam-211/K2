@@ -14,10 +14,11 @@
 //!   over TCP, `HOOK_SOCK` with no passport, no token and no port (the
 //!   gate is skipped), the virtual desktop's guard (a help word lets it
 //!   by), a `CODEX_` setting.
-//! - A Markdown kit id: the kit's explain on the board route's meta verb,
-//!   one POST with no path, beside a decoy file of the id's name; the
-//!   kit's page (and one above 256 KiB), its JSON, its row, the route
-//!   refused, an answer that is not JSON.
+//! - A Markdown kit id: the kit's explain on the daemon's own read,
+//!   `GET /cli/kit/explain?id=<id>[&json=1]` (it answers with Board files
+//!   off), one GET with no path, beside a decoy file of the id's name; the
+//!   kit's page (and one above 256 KiB), its JSON, its row, a refusal, an
+//!   older daemon without the route, an answer that is not JSON.
 
 #![cfg(unix)]
 
@@ -342,10 +343,9 @@ fn the_settings() {
     }
 }
 
-/// What the kit's explain answers for a kit id, on the board route's
-/// meta verb (`{exit, stdout}`).
+/// What the kit's explain answers for a kit id (`{exit, stdout}`).
 const KIT: &str = r#"{"exit":0,"stdout":"MPC-E001  a fence was left open\nfix: close it\n"}"#;
-/// The same as JSON (`json: true`: the kit's JSON page).
+/// The same as JSON (`json=1`: the kit's JSON page).
 const KIT_JSON: &str = r#"{"exit":0,"stdout":"{\"id\":\"MPC-E001\",\"fix\":\"close it\"}\n"}"#;
 /// The kit's row for an id it doesn't know.
 const KIT_ROW: &str = r#"{"id":"MPC-E110","code":"unknown_id","message":"no error id MPC-E404","next":"explain lists every id","exit":4,"on":{"path":""}}"#;
@@ -376,11 +376,12 @@ fn big_page() -> &'static str {
     Box::leak(body.into_boxed_str())
 }
 
-/// A Markdown kit id is the kit's own explain (0.46.17): one POST of
-/// `{"argv": ["explain", <id>], "json": <bool>}` to the board route's meta
-/// verb, no path in it, then `_explain_kit`'s reader. Before 0.46.17 it was
-/// `cmd_doc explain <id>`, which took the id as a doc's path: each row
-/// runs beside a decoy file of the id's name, and no request names it.
+/// A Markdown kit id is the kit's own explain (0.46.17): one
+/// `GET /cli/kit/explain?id=<id>[&json=1]`, no path in it, then
+/// `_explain_kit`'s reader. Before 0.46.17 it was `cmd_doc explain <id>`,
+/// which took the id as a doc's path: each row runs beside a decoy file of
+/// the id's name, and no request names it. The route answers with Board
+/// files off; it was the board route's meta verb, which doesn't.
 #[test]
 fn a_kit_id_is_the_kit_s_explain() {
     let rig = Rig::new(VERB, "kit");
@@ -421,19 +422,34 @@ fn a_kit_id_is_the_kit_s_explain() {
             4,
         ),
         answer(
-            "board files off",
+            "a refusal (exit 3)",
             &["MPC-E001"],
-            404,
-            r#"{"error":{"code":"not_enabled","hint":"Board files are a preview"}}"#,
+            403,
+            r#"{"error":{"code":"forbidden","hint":"not for this caller"}}"#,
             3,
         ),
         answer(
-            "board files off, as JSON",
+            "a refusal, as JSON",
             &["MPC-E001", "--json"],
-            404,
-            r#"{"error":{"code":"not_enabled","hint":"Board files are a preview"}}"#,
+            403,
+            r#"{"error":{"code":"forbidden","hint":"not for this caller"}}"#,
             3,
         ),
+        answer(
+            "an older daemon without the route",
+            &["MPC-E001"],
+            404,
+            r#"{"error":"not found"}"#,
+            1,
+        ),
+        answer(
+            "an older daemon without the route, as JSON",
+            &["MPC-E001", "--json"],
+            404,
+            r#"{"error":"not found"}"#,
+            1,
+        ),
+        one("an id curl must escape", &["MPC-E 1&x=%"], KIT, 0),
         answer("an answer that is not JSON", &["MPC-E001"], 500, "oops", 1),
         answer(
             "an empty answer, as JSON",
@@ -465,25 +481,23 @@ fn a_kit_id_is_the_kit_s_explain() {
         );
         assert_eq!(sent.len(), 1, "{}: {sent:?}", c.name);
         let (head, body) = sent[0].split_once("\n\n").unwrap();
+        let line = head
+            .lines()
+            .find(|l| l.starts_with("GET ") || l.starts_with("POST "))
+            .unwrap_or_else(|| panic!("{}: no request line: {head}", c.name));
+        let (target, _) = line["GET ".len()..]
+            .rsplit_once(' ')
+            .unwrap_or_else(|| panic!("{}: {line}", c.name));
+        let query = target
+            .strip_prefix("/cli/kit/explain?")
+            .unwrap_or_else(|| panic!("{}: one GET of the kit's explain: {line}", c.name));
+        let keys: Vec<_> = query.split('&').map(|kv| kv.split('=').next().unwrap()).collect();
+        let want: &[&str] = if c.args.contains(&"--json") { &["id", "json"] } else { &["id"] };
+        assert_eq!(keys, want, "{}: no path or file is sent: {line}", c.name);
+        assert_eq!(body, "", "{}: a GET has no body", c.name);
         assert!(
-            head.contains("\nPOST /cli/board/file/verb HTTP/1.1\n"),
+            !head.contains("decoy") && !head.contains(&*rig.proj.to_string_lossy()),
             "{}: {head}",
-            c.name
-        );
-        let v = json::parse(body).unwrap_or_else(|e| panic!("{}: {body:?}: {e:?}", c.name));
-        let Value::Object(pairs) = &v else {
-            panic!("{}: {body}", c.name)
-        };
-        let keys: Vec<_> = pairs.iter().map(|(k, _)| k.as_str().unwrap()).collect();
-        assert_eq!(
-            keys,
-            ["argv", "json"],
-            "{}: no path is sent: {body}",
-            c.name
-        );
-        assert!(
-            !body.contains("decoy") && !body.contains(&*rig.proj.to_string_lossy()),
-            "{}: {body}",
             c.name
         );
     }
@@ -500,4 +514,29 @@ fn a_kit_id_is_the_kit_s_explain() {
         ),
     );
     rig.check(&guard);
+}
+
+/// The lines name the brand (in a build with `K2_BRAND_DIR=brand/xy` they
+/// say `xy`): the usage of a usage error, and a kit id's error line.
+#[test]
+fn explain_lines_say_the_brand_s_name() {
+    let cli = k2_client::brand::CLI_NAME;
+    let rig = Rig::new(VERB, "brand");
+    let c = case("two ids", &["a", "b"], &[], vec![], owner_and_port, 2, 0);
+    let (out, log) = rig.binary(&c, false);
+    assert_eq!(out.stderr, format!("usage: {cli} explain [<id>] [--json]\n"));
+    assert!(log.is_empty(), "{log:?}");
+    let c = case(
+        "a kit id's row",
+        &["MPC-E404"],
+        &[],
+        vec![common::stub::Reply::Answer(422, KIT_ROW.into())],
+        decoys,
+        4,
+        1,
+    );
+    let (out, log) = rig.binary(&c, false);
+    assert_eq!(out.code, Some(4), "{out:?}");
+    assert!(!out.stderr.contains("k5 ") && !out.stderr.contains("k2 "), "{}", out.stderr);
+    assert_eq!(log.len(), 1, "{log:?}");
 }

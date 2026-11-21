@@ -15,9 +15,10 @@
 #      runs, so an answer can only have come over the socket; the job's
 #      record says the agent submitted it, not the owner token.
 #   3. A TCP-only Open verb from the session (k2 feedback list, which
-#      sends cli_request over TCP) still answers as before. This row
-#      documents today's behaviour: it sends the owner token from disk,
-#      which a later change to the TCP-only senders will end.
+#      sends cli_request over TCP): since 0.46.17 it sends the session's
+#      passport, never the owner token from disk, in bash and in the k5
+#      binary alike, and the daemon's passport arm answers the agent's own
+#      tickets.
 #
 #   cargo build -p k2-daemon -p k2-node && bash tests/cli/socket_first_no_owner_headless.sh
 #
@@ -229,23 +230,12 @@ else
     bad "compute run --detach printed no job id"; show
 fi
 
-echo "== 3. a TCP-only Open verb from the session (today's behaviour; a later change to the TCP-only senders ends it) =="
+echo "== 3. a TCP-only Open verb from the session: the session's passport =="
 agent "$SOCK" "$DPORT" feedback list
-if [ "$CLI_UNDER_TEST" != "$CLI_BASH_SOURCE" ]; then
-    # The k5 binary answers feedback list itself and never holds the owner
-    # token beside a passport (scripts/cli-parity.sh's named difference
-    # owner-token-with-passport, PRD 13.9 #4): it sends the session's
-    # passport over TCP, which the daemon refuses there, so the agent gets
-    # the refusal rather than the owner's answer.
-    if [ "$RC" = 1 ]; then ok "feedback list (the k5 binary): exit 1"; else bad "feedback list (the k5 binary): exit $RC"; show; fi
-    case "$ERR" in
-        '{"error": {"code": "error", "hint": "Invalid or missing auth token"}}') ok "feedback list (the k5 binary): the daemon's refusal of the passport" ;;
-        *) bad "feedback list (the k5 binary): stderr $(printf %q "$ERR")" ;;
-    esac
-else
-    if [ "$RC" = 0 ]; then ok "feedback list: answers as before (exit 0)"; else bad "feedback list: exit $RC"; show; fi
-    case "$ERR" in "") ok "feedback list: nothing on stderr" ;; *) bad "feedback list: stderr $(printf %q "$ERR")" ;; esac
-fi
+# Both CLIs send the session's passport over TCP (0.46.17's tickets rule),
+# and the daemon answers the agent's own tickets list with it.
+if [ "$RC" = 0 ]; then ok "feedback list: the passport's answer (exit 0)"; else bad "feedback list: exit $RC"; show; fi
+case "$ERR" in "") ok "feedback list: nothing on stderr" ;; *) bad "feedback list: stderr $(printf %q "$ERR")" ;; esac
 
 echo
 echo "socket_first_no_owner_headless: $pass passed, $fail failed"

@@ -4,6 +4,9 @@
 //! person's terminal and through the daemon from a K2 terminal (or with
 //! no vault socket), its printer, its flag checks and refusals, the
 //! handoff exit codes, and the confirm a person gives to send a secret.
+//! 0.46.17: an agent's `accept-from add` is refused with the one card to
+//! ask for (`vault.accept-from`, its "Ask with:" line), nothing sent; a
+//! person's has no such line; an agent's `remove` is the person guard's.
 
 #![cfg(unix)]
 
@@ -803,4 +806,62 @@ fn the_json_forms() {
     ] {
         rig.check(&c);
     }
+}
+
+/// 0.46.17: an agent asks a person on one card (`vault.accept-from`).
+#[test]
+fn accept_from_add_asks_on_one_card() {
+    let rig = VRig::new();
+    let in_terminal = |name: &'static str, args: &[&'static str], env: (&'static str, String)| {
+        let mut c = refused(name, args, 3);
+        c.env = vec![env];
+        c
+    };
+    for c in [
+        in_terminal(
+            "accept-from add in a K2 terminal: the Ask with: line",
+            &["accept-from", "add", "bob::h", "--workspace", "proj"],
+            ("K2_HOOK_TOKEN", PASSPORT.to_string()),
+        ),
+        in_terminal(
+            "accept-from add, several receivers, a sender with a space",
+            &["accept-from", "add", "bo b", "--workspace", "c,d é", "--json"],
+            ("K5_HOOK_TOKEN", PASSPORT.to_string()),
+        ),
+        in_terminal(
+            "accept-from remove in a K2 terminal: the person guard",
+            &["accept-from", "remove", "bob", "--workspace", "proj"],
+            ("K2_HOOK_TOKEN", PASSPORT.to_string()),
+        ),
+        person(
+            "accept-from add from a person: no Ask line",
+            &["accept-from", "add", "bob::h", "--workspace", "proj"],
+            vec![ok(r#"{"entries":[{"sender":"bob::h"}]}"#)],
+            0,
+        ),
+    ] {
+        rig.check(&c);
+    }
+    let mut c = refused(
+        "accept-from add in a K2 terminal, no workspace: usage first",
+        &["accept-from", "add", "bob"],
+        2,
+    );
+    c.env = vec![("K2_HOOK_TOKEN", PASSPORT.to_string())];
+    rig.check(&c);
+}
+
+/// The Ask with: line names the brand's command.
+#[test]
+fn the_accept_from_ask_line_says_the_brand_s_name() {
+    let rig = VRig::new();
+    let cli = k2_client::brand::CLI_NAME;
+    let mut c = refused("brand", &["accept-from", "add", "bob", "--workspace", "p"], 3);
+    c.env = vec![("K2_HOOK_TOKEN", PASSPORT.to_string())];
+    let ran = rig.run(false, false, &c);
+    assert_eq!(
+        ran.out.stderr,
+        format!("handoff_person_only: a person decides who an agent takes secrets from without a card.\nAsk with: {cli} permission request vault.accept-from sender=bob receivers=p --why \"<what you need it for>\" (several receivers: receivers=a,b; one person: --assign <login>)\n")
+    );
+    assert_eq!(ran.out.code, Some(3));
 }

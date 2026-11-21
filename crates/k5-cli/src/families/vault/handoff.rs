@@ -39,6 +39,18 @@ const VALUE_FLAGS: &[&str] = &[
     "--delivery",
 ];
 
+/// An agent's `vault accept-from add <sender> --workspace <ws>`: the
+/// refusal, and the card to ask for (exit 3).
+fn accept_from_ask(sender: &str, workspace: &str) -> [String; 2] {
+    [
+        "handoff_person_only: a person decides who an agent takes secrets from without a card."
+            .to_string(),
+        format!(
+            "Ask with: {CLI} permission request vault.accept-from sender={sender} receivers={workspace} --why \"<what you need it for>\" (several receivers: receivers=a,b; one person: --assign <login>)"
+        ),
+    ]
+}
+
 fn usage(line: String) -> Exit {
     out::stderr_line(&line);
     Exit::Usage
@@ -485,6 +497,13 @@ fn verb(ctx: &mut Ctx, sub: &str, rest: &[&str]) -> Result<Exit, Exit> {
                         return Err(usage(format!(
                             "usage: {CLI} vault accept-from {verb} <sender> --workspace <ws>"
                         )));
+                    }
+                    // 0.46.17: an agent asks a person on one card instead.
+                    if verb == "add" && confirm::in_k2_terminal() {
+                        for line in accept_from_ask(&sender, &h.workspace) {
+                            out::stderr_line(&line);
+                        }
+                        return Err(Exit::Refused);
                     }
                     ctx.person_guard()?;
                     let b = vec![
@@ -978,6 +997,16 @@ fn deliveries(v: &Value, l: &mut Lines, incoming: bool) -> R<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_agent_s_accept_from_add_asks_on_one_card() {
+        let [first, ask] = accept_from_ask("a b", "c,d");
+        assert!(first.starts_with("handoff_person_only: "));
+        assert_eq!(
+            ask,
+            format!("Ask with: {CLI} permission request vault.accept-from sender=a b receivers=c,d --why \"<what you need it for>\" (several receivers: receivers=a,b; one person: --assign <login>)")
+        );
+    }
 
     #[test]
     fn the_ttl_as_python_reads_it() {

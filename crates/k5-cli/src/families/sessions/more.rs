@@ -231,7 +231,7 @@ mod tests {
         for shell in [
             r#"[[ -z "$session_id" ]] && { echo "Usage: k2 sessions set-label <session-id> <label> [--no-lock]" >&2; exit 1; }"#,
             r#"--no-lock) lock="false"; shift ;;"#,
-            r#"local label="${label_parts[*]}""#,
+            r#"local label="${label_parts[*]:-}""#,
             r#"local params="id=$(urlencode "$session_id")&label=$(urlencode "$label")&lock=$lock""#,
             r#"cli_request_post "/cli/sessions/label" "$params" \"#,
             r#"print("Set label to: %s (locked=%s)" % (d.get("label",""), d.get("locked","?")))"#,

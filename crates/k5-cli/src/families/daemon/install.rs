@@ -890,6 +890,16 @@ mod tests {
         );
         let first = format!("_DAEMON_FIRST_U2_VERSION=\"{FIRST_U2_VERSION}\"\n");
         assert!(sh.contains(&first), "the first U2 version moved");
+        // The shell builds its release URLs from prelude.sh's repo.
+        let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/prelude.sh");
+        let prelude =
+            std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("read {}: {e}", p.display()));
+        let repo = k2_client::brand::RELEASE_REPO;
+        assert!(
+            prelude.contains(&format!("\n_K2_RELEASE_REPO=\"{repo}\"\n")),
+            "prelude.sh's release repo is not {repo}"
+        );
+        let sh = sh.replace("${_K2_RELEASE_REPO}", repo);
         assert!(sh.contains(&format!("_DAEMON_DEFAULT_LATEST_URL=\"{DAEMON_FEED_URL}\"")));
         assert!(sh.contains(&format!(
             "_DAEMON_VERSION_URL_TMPL=\"{RELEASE_DOWNLOAD_BASE}/v%s/daemon-latest.json\""

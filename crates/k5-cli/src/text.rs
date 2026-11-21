@@ -154,7 +154,9 @@ macro_rules! family {
 /// they send), `relay rm` (the relay: it sends); `notify email mute` (the
 /// workspace: it sends, [`crate::families::notify`]); `approve verify`
 /// (the words go to `k2-approve`, which answers its own help,
-/// [`crate::families::approve`]).
+/// [`crate::families::approve`]); `hostchat media`, `people` and
+/// `approvals` (the flag is the sub-command: the unknown-command line or
+/// the usage, [`crate::families::hostchat`]).
 ///
 /// `done --help` and `done -h` ([`crate::families::done`]): the help is
 /// the loop's, after the gates (`_done_usage`).
@@ -223,6 +225,12 @@ pub static FAMILY_FORMS: &[HelpForm] = &[
     family!("notify" "email" "mute" "-h"),
     family!("approve" "verify" "--help"),
     family!("approve" "verify" "-h"),
+    family!("hostchat" "media" "--help"),
+    family!("hostchat" "media" "-h"),
+    family!("hostchat" "people" "--help"),
+    family!("hostchat" "people" "-h"),
+    family!("hostchat" "approvals" "--help"),
+    family!("hostchat" "approvals" "-h"),
 ];
 
 /// The captured help form that is exactly `argv` ([`CAPTURED_FORMS`],

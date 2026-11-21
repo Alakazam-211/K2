@@ -2969,3 +2969,50 @@ fn hostchat_apps_a_person_s_steps() {
     none.code = 3;
     rig.check(&none);
 }
+
+/// `media`, `people` and `approvals` with one help flag after them
+/// (`text::FAMILY_FORMS`): the flag is the sub-command, as the shell's
+/// parsers read it: the unknown-command line or the usage, exit 2,
+/// nothing sent. A help line a gate stops is the shell's (it skips its
+/// connection gate for a help line).
+#[test]
+fn hostchat_help_as_a_sub_command() {
+    let rig = Rig::new(VERB, "helpsub");
+    for c in [
+        // native: hostchat media --help
+        bad("media --help: an unknown media command", &["media", "--help"]),
+        bad("media -h: an unknown media command", &["media", "-h"]),
+        // native: hostchat people --help
+        bad("people --help: the usage", &["people", "--help"]),
+        bad("people -h: the usage", &["people", "-h"]),
+        // native: hostchat approvals --help
+        bad("approvals --help: the usage", &["approvals", "--help"]),
+        bad("approvals -h: the usage", &["approvals", "-h"]),
+        with(
+            with_passport(&[]),
+            case(
+                "people --help, an agent over TCP",
+                &["people", "--help"],
+                &[],
+                vec![],
+                nothing,
+                2,
+                0,
+            ),
+        ),
+        Case {
+            compare: Compare::Shell,
+            ..case(
+                "media --help, no port: the shell skips its gate",
+                &["media", "--help"],
+                &[],
+                vec![],
+                owner_only,
+                2,
+                0,
+            )
+        },
+    ] {
+        rig.check(&c);
+    }
+}

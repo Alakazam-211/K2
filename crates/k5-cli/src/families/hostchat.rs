@@ -31,8 +31,15 @@
 //! ([`needs_value`], K2's D6: the shell stops on `${2:?…}` with a line
 //! naming its own path).
 //!
+//! `media`, `people` and `approvals` with one help flag after them read
+//! it as their sub-command, as the shell's do (its unknown-command line,
+//! or `people`'s and `approvals`' usage): help forms whose page is this
+//! code ([`crate::text::FAMILY_FORMS`]); a help line a gate stops is the
+//! shell's ([`prelude::help_line_gated`]: the shell skips its connection
+//! gate for a help line).
+//!
 //! Handed to the shell, before anything is printed or sent: a word that
-//! is not UTF-8, `-h` or `--help` anywhere (help never acts), `open`
+//! is not UTF-8, `-h` or `--help` anywhere else (help never acts), `open`
 //! without `--print` where there are no unix modes for its private page,
 //! and a variable `_compute_send`, `_compute_fail` or `_compute_json`
 //! reads from the environment.
@@ -335,7 +342,11 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .skip(1)
         .map(|a| a.to_str())
         .collect::<Option<_>>()?;
-    if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
+    let help_as_sub = matches!(
+        words.as_slice(),
+        ["media" | "people" | "approvals", "-h" | "--help"]
+    );
+    if !help_as_sub && words.iter().any(|w| matches!(*w, "-h" | "--help")) {
         return None;
     }
     let skip = gate_skipped(&words);
@@ -373,6 +384,9 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
             return Some(Exit::Error);
         }
     };
+    if prelude::help_line_gated(args, &settings) {
+        return None;
+    }
     if !skip
         && prelude::gate(&settings).is_none()
         && settings.port_text.as_deref().and_then(curl_port).is_none()

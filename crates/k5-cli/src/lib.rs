@@ -24,6 +24,8 @@
 //!   ([`transport::skew`]).
 //! - [`daemon`]: where the daemon is and the credential the binary's own
 //!   requests use, by the shell CLI's settings.
+//! - [`dashdash`]: a bare `--` as the shell reads it: which verbs take
+//!   one, the refusal for the others, and the help scans that stop at it.
 //! - [`called_as`]: the name the command was called by (k2 or k5), and the
 //!   variables the front hands the shell when a verb falls through.
 //! - [`home`]: the K2 home and a workspace's private folder, by k2-client's
@@ -78,6 +80,7 @@ pub mod check;
 pub mod cli_status;
 pub mod confirm;
 pub mod daemon;
+pub mod dashdash;
 pub mod embedded;
 pub mod exit;
 pub mod fallthrough;

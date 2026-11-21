@@ -8,6 +8,7 @@
 pub mod approval;
 pub mod attachments;
 pub mod card_echo;
+pub mod card_meta;
 pub mod catalog;
 pub mod doc;
 pub mod doc_meta;
@@ -620,7 +621,8 @@ pub fn post_choice(
 }
 
 /// [`post_choice`] stamped with who asked (`thread/ask`, 0.46.13): the
-/// caller's credential, never the body. K2's own cards keep none.
+/// caller's credential, never the body. K2's own cards keep none. `meta`:
+/// the asker's map (0.46.17), already checked ([`card_meta::check`]).
 #[allow(clippy::too_many_arguments)]
 pub fn post_choice_by(
     conn: &Connection,
@@ -633,8 +635,9 @@ pub fn post_choice_by(
     allow_custom: bool,
     expires_at: Option<i64>,
     author: Option<PostAuthor>,
+    meta: Option<card_meta::CardMeta>,
 ) -> Result<(OverlayItem, Vec<OverlayLink>), String> {
-    post_choice_inner(conn, conversation_id, project_id, from, to, prompt, options, allow_custom, expires_at, None, author)
+    post_choice_inner(conn, conversation_id, project_id, from, to, prompt, options, allow_custom, expires_at, None, author, meta)
 }
 
 /// [`post_choice`] with an action (0.46.3, agents present settings cards):
@@ -653,7 +656,7 @@ pub fn post_choice_with_action(
     expires_at: Option<i64>,
     action: Option<CardAction>,
 ) -> Result<(OverlayItem, Vec<OverlayLink>), String> {
-    post_choice_inner(conn, conversation_id, project_id, from, to, prompt, options, allow_custom, expires_at, action, None)
+    post_choice_inner(conn, conversation_id, project_id, from, to, prompt, options, allow_custom, expires_at, action, None, None)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -669,6 +672,7 @@ fn post_choice_inner(
     expires_at: Option<i64>,
     action: Option<CardAction>,
     author: Option<PostAuthor>,
+    meta: Option<card_meta::CardMeta>,
 ) -> Result<(OverlayItem, Vec<OverlayLink>), String> {
     let prompt = prompt.trim();
     if prompt.is_empty() {
@@ -700,6 +704,7 @@ fn post_choice_inner(
     if let Some(c) = doc.choice.as_mut() {
         c.expires_at = expires_at;
         c.action = action;
+        c.meta = meta;
     }
     doc.author = author;
     store::commit_write(&doc, Some((conversation_id, seq)), &[], None)?;

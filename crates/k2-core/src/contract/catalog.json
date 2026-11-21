@@ -13107,6 +13107,17 @@
                         "expiresAt": {
                           "type": "integer",
                           "description": "Seconds since the epoch, when a pending card expires."
+                        },
+                        "meta": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": [
+                              "string",
+                              "number",
+                              "boolean"
+                            ]
+                          },
+                          "description": "The asker's metadata map (since 0.46.17): present only when the card was asked with --meta. Up to 32 keys of a-z, 0-9, _, . and - (64 at most), each a string, number or boolean, at most 4096 bytes as JSON. Not for secrets: whoever can see the card sees it."
                         }
                       },
                       "required": [
@@ -13442,6 +13453,17 @@
                         "expiresAt": {
                           "type": "integer",
                           "description": "Seconds since the epoch, when a pending card expires."
+                        },
+                        "meta": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": [
+                              "string",
+                              "number",
+                              "boolean"
+                            ]
+                          },
+                          "description": "The asker's metadata map (since 0.46.17): present only when the card was asked with --meta. Up to 32 keys of a-z, 0-9, _, . and - (64 at most), each a string, number or boolean, at most 4096 bytes as JSON. Not for secrets: whoever can see the card sees it."
                         }
                       },
                       "required": [
@@ -14732,6 +14754,17 @@
                   "expiresAt": {
                     "type": "integer",
                     "description": "Seconds since the epoch, when a pending card expires."
+                  },
+                  "meta": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    },
+                    "description": "The asker's metadata map (since 0.46.17): present only when the card was asked with --meta. Up to 32 keys of a-z, 0-9, _, . and - (64 at most), each a string, number or boolean, at most 4096 bytes as JSON. Not for secrets: whoever can see the card sees it."
                   }
                 },
                 "required": [
@@ -15300,6 +15333,17 @@
                   "expiresAt": {
                     "type": "integer",
                     "description": "Seconds since the epoch, when a pending card expires."
+                  },
+                  "meta": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    },
+                    "description": "The asker's metadata map (since 0.46.17): present only when the card was asked with --meta. Up to 32 keys of a-z, 0-9, _, . and - (64 at most), each a string, number or boolean, at most 4096 bytes as JSON. Not for secrets: whoever can see the card sees it."
                   }
                 },
                 "required": [
@@ -16043,6 +16087,17 @@
                               "expiresAt": {
                                 "type": "integer",
                                 "description": "Seconds since the epoch, when a pending card expires."
+                              },
+                              "meta": {
+                                "type": "object",
+                                "additionalProperties": {
+                                  "type": [
+                                    "string",
+                                    "number",
+                                    "boolean"
+                                  ]
+                                },
+                                "description": "The asker's metadata map (since 0.46.17): present only when the card was asked with --meta. Up to 32 keys of a-z, 0-9, _, . and - (64 at most), each a string, number or boolean, at most 4096 bytes as JSON. Not for secrets: whoever can see the card sees it."
                               }
                             },
                             "required": [
@@ -16366,6 +16421,17 @@
                               "expiresAt": {
                                 "type": "integer",
                                 "description": "Seconds since the epoch, when a pending card expires."
+                              },
+                              "meta": {
+                                "type": "object",
+                                "additionalProperties": {
+                                  "type": [
+                                    "string",
+                                    "number",
+                                    "boolean"
+                                  ]
+                                },
+                                "description": "The asker's metadata map (since 0.46.17): present only when the card was asked with --meta. Up to 32 keys of a-z, 0-9, _, . and - (64 at most), each a string, number or boolean, at most 4096 bytes as JSON. Not for secrets: whoever can see the card sees it."
                               }
                             },
                             "required": [

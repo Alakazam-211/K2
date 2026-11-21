@@ -425,6 +425,12 @@ fn clean_for_export(mut doc: OverlayDoc) -> OverlayDoc {
         if let Some(a) = c.answer.as_deref() {
             c.answer = Some(crate::redaction::redact(a));
         }
+        // The asker's metadata map (0.46.17): its strings too.
+        for v in c.meta.iter_mut().flat_map(|m| m.values_mut()) {
+            if let serde_json::Value::String(text) = v {
+                *text = crate::redaction::redact(text);
+            }
+        }
     }
     if let Some(s) = doc.secret.as_mut() {
         s.prompt = crate::redaction::redact_opt(s.prompt.as_deref());

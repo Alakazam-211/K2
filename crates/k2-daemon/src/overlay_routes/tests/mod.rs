@@ -4317,3 +4317,7 @@ mod out_of_usage_notice;
 // system row on its agent's Thread, with Turn it back on.
 #[path = "heartbeat_turned_off_notice_tests.rs"]
 mod heartbeat_turned_off_notice;
+
+// 0.46.17: a choice card's metadata map (k2 thread ask --meta).
+#[path = "card_meta_tests.rs"]
+mod card_meta;

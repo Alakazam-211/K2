@@ -147,7 +147,7 @@ fn only_k2s_delivery_notice_resends() {
     let c = dbh.lock();
     let refuse = |r: Result<(OverlayItem, Vec<OverlayLink>), String>| assert_eq!(r.expect_err("refused"), SYSTEM_AUTHOR_REFUSED);
     refuse(post_thread_with_origin(&c, &conv, &project_id, "k2", "s", "x", "thread", None, Some(PostAuthor::system())));
-    refuse(post_choice_by(&c, &conv, &project_id, "k2", "s", "Ship?", vec!["Go".into()], false, None, Some(PostAuthor::system())));
+    refuse(post_choice_by(&c, &conv, &project_id, "k2", "s", "Ship?", vec!["Go".into()], false, None, Some(PostAuthor::system()), None));
     refuse(post_secret_by(&c, &conv, &project_id, "k2", "s", "API_KEY", None, SecretProposal::default(), None, Some(PostAuthor::system())));
     refuse(post_thread_design(
         &c,

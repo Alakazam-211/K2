@@ -46,6 +46,13 @@ pub struct ChoiceBody {
     /// The one-line reason given with a dismiss or withdraw.
     #[serde(default, rename = "closeReason", skip_serializing_if = "Option::is_none")]
     pub close_reason: Option<String>,
+    /// The asker's metadata map (`k2 thread ask --meta`, 0.46.17): keys to
+    /// strings, numbers or booleans, within [`super::card_meta`]'s limits,
+    /// for an App to read back. Shown to whoever can see the card, so never
+    /// a secret. None on every card asked without one and on older cards,
+    /// so their bytes are unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<super::card_meta::CardMeta>,
 }
 
 /// [`ChoiceBody::closed_as`] / [`SecretBody::closed_as`]: a person the card
@@ -1025,6 +1032,7 @@ impl OverlayDoc {
                 action: None,
                 closed_as: None,
                 close_reason: None,
+                meta: None,
             }),
             secret: None,
             widget: None,

@@ -188,7 +188,15 @@ pub fn parse(words: &[&str]) -> Option<Ask> {
         }),
         Some(&"folders") => Some(Ask::Folders),
         Some(&"compose") => compose(&words[1..]),
-        Some(&"respond") => Some(two(RESPOND, "id", "text", &words[1..], RESPOND_USAGE)),
+        Some(&"respond") => {
+            // The first bare `--` is dropped: the words after it are the id
+            // and the text, as typed.
+            let mut rest: Vec<&str> = words[1..].to_vec();
+            if let Some(at) = rest.iter().position(|w| *w == "--") {
+                rest.remove(at);
+            }
+            Some(two(RESPOND, "id", "text", &rest, RESPOND_USAGE))
+        }
         Some(&"move") => Some(two(MOVE, "id", "folder", &words[1..], MOVE_USAGE)),
         Some(&"archive") => Some(one(ARCHIVE, &words[1..], ARCHIVE_USAGE)),
         Some(&"delete") => Some(one(DELETE, &words[1..], DELETE_USAGE)),
@@ -848,6 +856,23 @@ mod tests {
                 usage: RESPOND_USAGE,
             })
         );
+        // The first bare `--` is dropped; a second one is a word.
+        let respond = |words: &[&str], pairs: Option<Vec<String>>| {
+            assert_eq!(
+                parse(words),
+                Some(Ask::Write {
+                    route: RESPOND,
+                    pairs,
+                    usage: RESPOND_USAGE,
+                }),
+                "{words:?}"
+            )
+        };
+        let both = |id: &str, text: &str| Some(vec![format!("id={id}"), format!("text={text}")]);
+        respond(&["respond", "i1", "--", "--help"], both("i1", "--help"));
+        respond(&["respond", "--", "-x", "--", "y"], both("-x", "--"));
+        respond(&["respond", "i1", "--"], None);
+        respond(&["respond", "--", "i1", "-h", "z"], both("i1", "-h"));
         assert_eq!(
             parse(&["delete"]),
             Some(Ask::Write {

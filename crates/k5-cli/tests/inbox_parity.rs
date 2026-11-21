@@ -1435,6 +1435,35 @@ fn inbox_writes_as_the_shell_does() {
             1,
             0,
         ),
+        // After the first bare `--` the words are the id and the text, as
+        // typed (`cmd_inbox_respond`).
+        case(
+            "respond: the text --help after --",
+            &["respond", "a1", "--", "--help"],
+            &[],
+            vec![ok(DONE)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "respond: a dashed id, and a second -- is the text",
+            &["respond", "--", "-a1", "--", "more"],
+            &[],
+            vec![ok(DONE)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "respond: -- and no text",
+            &["respond", "a1", "--"],
+            &[],
+            vec![],
+            owner_and_port,
+            1,
+            0,
+        ),
         // native: inbox move
         case(
             "move",
@@ -1611,17 +1640,31 @@ fn inbox_writes_as_the_shell_does() {
 
 /// The writes with `-h` or `--help` anywhere. A bash bug: `cmd_inbox`
 /// takes `-h` or `--help` only as the verb, and each write's own function
-/// skips it (`compose`) or reads it as a word (`respond`, `move`,
-/// `archive`, `delete`), so bash SENDS the write (cli/src/inbox.sh,
+/// skips it (`compose`) or reads it as a word (`move`, `archive`,
+/// `delete`), so bash SENDS the write (cli/src/inbox.sh,
 /// cmd_inbox_compose to cmd_inbox_delete). The front hands these lines to
 /// the shell, so the binary does the same. Each row says so; it flips to
-/// "the help, nothing sent" when the shell's fix lands.
+/// "the help, nothing sent" when the shell's fix lands. `respond` flipped
+/// (99123b0514): its help before a bare `--` sends nothing.
 #[test]
 fn inbox_help_acts_bash_bug() {
     let rig = Rig::new(VERB, "whelp");
+    for line in [
+        &["respond", "a1", "x", "--help"][..],
+        &["respond", "-h", "--", "a1", "x"],
+    ] {
+        rig.check(&case(
+            "respond: the help, nothing sent",
+            line,
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        ));
+    }
     const LINES: &[&[&str]] = &[
         &["compose", "--title", "x", "-h"],
-        &["respond", "a1", "x", "--help"],
         &["move", "--help", "a1", "f"],
         &["archive", "a1", "-h"],
         &["delete", "-h", "a1"],

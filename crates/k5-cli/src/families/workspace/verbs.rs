@@ -197,6 +197,17 @@ pub fn run(args: &[OsString], words: &[&str]) -> Option<Exit> {
     {
         return None;
     }
+    // `remove --apps` at a terminal outside a session: a handover held for
+    // the owner is approved right there (`_app_approve` per card, then the
+    // removal), which the shell answers. Decided before anything is sent.
+    if matches!(&ask, Ask::Other(o) if o.releases())
+        && here.stdin_tty
+        && !matches!(settings.auth, Auth::Passport { .. })
+        && k2_client::env_names::first_set(k2_client::env_names::NO_APPROVE)
+            .is_none_or(|(_, v)| v != "1")
+    {
+        return None;
+    }
     Some(run_with(args, ask, settings))
 }
 

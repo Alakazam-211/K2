@@ -50,6 +50,35 @@ fn the_shell_keeps_identity_help_and_apps() {
 }
 
 #[test]
+fn remove_apps_releases_first_and_reads_json_on_the_line() {
+    let Some(Ask::Other(o)) = parse(
+        &["remove", "x", "--mode", "--json", "--apps", "park"],
+        &here(),
+    ) else {
+        panic!("remove --apps is answered here");
+    };
+    assert!(o.releases());
+    assert!(matches!(
+        o,
+        other::Ask::Remove(other::Remove {
+            args_json: true,
+            ..
+        })
+    ));
+    let Some(Ask::Other(o)) = parse(&["remove", "x"], &here()) else {
+        panic!("remove is answered here");
+    };
+    assert!(!o.releases());
+    assert!(matches!(
+        o,
+        other::Ask::Remove(other::Remove {
+            args_json: false,
+            ..
+        })
+    ));
+}
+
+#[test]
 fn switch_words_stop_before_anything_is_sent() {
     let (l, e) = stop_of(&["api-skip-permissions", "set", "ws", "maybe"]);
     assert_eq!(l, ["Error: expected on|off|1|0, got: maybe"]);

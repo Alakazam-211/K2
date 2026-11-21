@@ -27,7 +27,9 @@
 //!   (2 for `design-tab` and `mobile-tab`), after the gate.
 //! - `set-agent-identity`: the note, then `agent identity`'s answer.
 //! - `remove --apps <way>`: the Apps' release before the removal, its
-//!   refusals, a confirm with no vault socket, a session's passport.
+//!   refusals (with the App registry's fix: line), a release held for the
+//!   owner (202: the hint, the workspace stays, exit 2), a confirm with no
+//!   vault socket, a session's passport.
 //! - What the binary hands to the shell: the help forms.
 
 #![cfg(unix)]
@@ -1383,6 +1385,9 @@ const RELEASED: &str =
 const REMOVED: &str = r#"{"ok":true,"removed":"/srv/ws1"}"#;
 const POC: &str =
     r#"{"error":{"code":"poc_of_projects","hint":"ws1 is the Point of Contact for: A."}}"#;
+const HELD: &str = r#"{"ok":true,"status":"held","workspace":"ws1","way":"handover:ws2","results":[{"app":"acme","ok":true,"status":"held","request":"r_1","handover":"h_1"}],"hint":"1 handover card(s) wait for the owner's approval; the workspace keeps its Apps until then"}"#;
+const OWNER_ONLY: &str =
+    r#"{"error":{"code":"owner_only","hint":"only the owner may release this workspace's Apps"}}"#;
 const CONFIRM: &str =
     r#"{"error":{"code":"vault_confirm_required","action":"app-release","secretId":"s1"}}"#;
 
@@ -1457,10 +1462,65 @@ fn remove_with_apps_releases_them_first() {
             answer(404, r#"{"error":{"code":"not_found"}}"#),
             3,
         ),
+        // A 202 is held for the owner, as `k2 app release` takes it: the
+        // hint, the workspace stays, exit 2, no removal sent.
         release(
-            "the release held (202): the shell takes only 200",
+            "the release held (202): no hint, the workspace stays",
             handover,
             answer(202, r#"{"status":"held","results":[{"request":"r1"}]}"#),
+            2,
+        ),
+        release(
+            "the release held (202): the hint, the workspace stays",
+            handover,
+            answer(202, HELD),
+            2,
+        ),
+        release(
+            "the release held (202): a result with no card, a hint of null",
+            handover,
+            answer(
+                202,
+                r#"{"status":"held","results":[{"app":"acme"},{"request":""}],"hint":null}"#,
+            ),
+            2,
+        ),
+        traceback(release(
+            "the release held (202): not JSON",
+            handover,
+            answer(202, "held"),
+            1,
+        )),
+        traceback(release(
+            "the release held (202): a list, not an object",
+            handover,
+            answer(202, r#"[{"request":"r1"}]"#),
+            1,
+        )),
+        traceback(release(
+            "the release held (202): results not a list",
+            handover,
+            answer(202, r#"{"results":5}"#),
+            1,
+        )),
+        traceback(release(
+            "the release held (202): a result that is no object",
+            handover,
+            answer(202, r#"{"results":["r1"]}"#),
+            1,
+        )),
+        // `_K2_REFUSAL_AREA=app`: a code in the App refusal registry gets
+        // its next, explain and fix: line, as `k2 app release`'s do.
+        release(
+            "the release refused, a registry code: the fix line",
+            uninstall,
+            answer(403, OWNER_ONLY),
+            3,
+        ),
+        release(
+            "the release refused, a registry code, --json on the line: no fix line",
+            &["remove", "ws1", "--mode", "--json", "--apps", "uninstall"],
+            answer(403, OWNER_ONLY),
             3,
         ),
         release("the release: not JSON", park, answer(500, "oops"), 3),
@@ -1554,4 +1614,40 @@ fn workspace_verb_lines_say_the_brand_s_name() {
         assert_eq!(out.code, Some(code), "{args:?}");
         assert!(log.is_empty(), "{args:?}");
     }
+    // `remove --apps`: a release refusal's registry line names the brand's
+    // `explain`; a held release's lines name no command.
+    let c = case(
+        "brand: the release refused",
+        &["remove", "ws1", "--apps", "uninstall"],
+        &[],
+        vec![ok(RESOLVED), answer(403, OWNER_ONLY)],
+        owner_and_port,
+        3,
+        2,
+    );
+    let (out, log) = rig.binary(&c, false);
+    let fix = "Ask the owner. The refusal names where they do it.";
+    assert_eq!(
+        out.stderr,
+        format!(
+            "{{\"error\": \"owner_only\", \"hint\": \"only the owner may release this workspace's Apps\", \"next\": \"{fix}\", \"explain\": \"{cli} explain owner_only\"}}\nfix: {fix}\n"
+        )
+    );
+    assert_eq!((out.code, log.len()), (Some(3), 2));
+    let c = case(
+        "brand: the release held",
+        &["remove", "ws1", "--apps", "handover:ws2"],
+        &[],
+        vec![ok(RESOLVED), answer(202, HELD)],
+        owner_and_port,
+        2,
+        2,
+    );
+    let (out, log) = rig.binary(&c, false);
+    assert_eq!(
+        out.stdout,
+        "1 handover card(s) wait for the owner's approval; the workspace keeps its Apps until then\n\
+         The workspace is not removed: it keeps its Apps until the owner approves the handover. Once they have, run the same command again.\n"
+    );
+    assert_eq!((out.stderr.as_str(), out.code, log.len()), ("", Some(2), 2));
 }

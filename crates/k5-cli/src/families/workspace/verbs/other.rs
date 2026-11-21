@@ -21,11 +21,15 @@
 //!
 //! The shell answers `remove … --mode` as the last word, `remove --apps
 //! <way>` in a session with no passport (its release tries the cell
-//! socket), and a path the binary can't resolve as bash's `cd` would.
+//! socket), `remove --apps <way>` at a terminal outside a session with
+//! `NO_APPROVE` not `1` (a held handover is approved right there:
+//! `_app_approve`), and a path the binary can't resolve as bash's `cd`
+//! would.
 
 use super::{stop, Ask as Top, Here, Sent};
 use crate::exit::Exit;
 use crate::families::app::call::{self, Cj};
+use crate::families::app::py as apy;
 use crate::families::workspace::register::{self, Verb as RegisterVerb};
 use crate::families::{inbox, pipefail, Shown};
 use crate::out::json::{self, Value};
@@ -57,6 +61,11 @@ impl Ask {
             _ => false,
         }
     }
+
+    /// `remove --apps <way>`: the Apps' release comes first.
+    pub fn releases(&self) -> bool {
+        matches!(self, Ask::Remove(r) if !r.apps.is_empty())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,6 +83,9 @@ pub struct Remove {
     /// `--drop-access` without `--apps uninstall`: its line, after the
     /// lookup.
     pub drop_misused: bool,
+    /// `--json` is a word of the line (`_K2_ARGS_JSON`): a refusal's
+    /// `fix:` line is left out.
+    pub args_json: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -183,6 +195,7 @@ fn remove(words: &[&str], here: &Here) -> Top {
         drop_misused: drop_access && apps != "uninstall",
         apps,
         drop_access,
+        args_json: call::args_json(words),
     }))
 }
 
@@ -420,13 +433,13 @@ pub const RELEASE: &str = "/cli/app/release";
 
 /// `_app_post_confirming /cli/app/release "Give this workspace's Apps to
 /// ${apps_way#handover:}" K2_CJ_workspace=<path> K2_CJ_apps=<way>
-/// K2_CJ_dropAccess_b=<0|1> K2_CJ_forRemoval_b=1`, then `[ "$_CP_STATUS"
-/// = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"`: the POST
-/// (`_compute_send`), and once more with a confirm token when the daemon
-/// answers 403 `vault_confirm_required` with an action and a secret id.
-/// Any status but 200 is `_compute_fail`'s line with no refusal registry
-/// (this is no App command), exit 2 for a 400 or 413, else 3. A 202 too:
-/// the shell takes only 200 here.
+/// K2_CJ_dropAccess_b=<0|1> K2_CJ_forRemoval_b=1`, then the status as
+/// `k2 app release` takes it: the POST (`_compute_send`), and once more
+/// with a confirm token when the daemon answers 403
+/// `vault_confirm_required` with an action and a secret id. A 200 goes on
+/// to the removal; a 202 (a handover held for the owner) is [`held`];
+/// any other status is `_compute_fail`'s line with the App refusal
+/// registry (`_K2_REFUSAL_AREA=app`), exit 2 for a 400 or 413, else 3.
 fn release(w: &mut Sent, path: &str, rm: &Remove) -> Result<(), Exit> {
     let drop = if rm.drop_access { "1" } else { "0" };
     let body = |tok: &str| {
@@ -462,6 +475,9 @@ fn release(w: &mut Sent, path: &str, rm: &Remove) -> Result<(), Exit> {
     if s.ok() {
         return Ok(());
     }
+    if s.status == "202" {
+        return Err(held(&s.body).print());
+    }
     // A body that is not UTF-8 makes `_compute_fail`'s Python fail (its
     // stderr thrown away): the no-answer line.
     let readable: &[u8] = if std::str::from_utf8(&s.body).is_ok() {
@@ -469,8 +485,38 @@ fn release(w: &mut Sent, path: &str, rm: &Remove) -> Result<(), Exit> {
     } else {
         b""
     };
-    out::stderr_line(&crate::spec::run::fail_line(&s.status, readable));
+    out::stderr_line(&call::fail_line(&s.status, readable, rm.args_json));
     Err(call::fail_exit(&s.status))
+}
+
+/// The line after a held release's hint: the workspace stays.
+pub const NOT_REMOVED: &str =
+    "The workspace is not removed: it keeps its Apps until the owner approves the handover. Once they have, run the same command again.";
+
+/// A release held for the owner (202), away from a terminal outside a
+/// session ([`super::run`] hands that one to the shell):
+/// the cards' reader in `cards="$(…)"` (a raise is its traceback and exit
+/// 1, set -e; its lines are only for the approvals the shell does), then
+/// the hint's `print(v.get("hint",""))`, then [`NOT_REMOVED`], exit 2.
+fn held(body: &[u8]) -> Shown {
+    let mut o = apy::Out::default();
+    let r = held_lines(body, &mut o);
+    o.done(r)
+}
+
+/// [`held`]'s two readers, line for line.
+fn held_lines(body: &[u8], o: &mut apy::Out) -> Result<Exit, crate::families::Raise> {
+    let v = apy::load(body, 3)?;
+    let results = apy::dget_or(&v, "results", apy::empty_list(), 4)?;
+    for r in apy::iter(&results, 4)? {
+        if apy::truthy(&apy::dget(&r, "request", 5)?) {
+            apy::idx(&r, "request", 6)?;
+        }
+    }
+    let v = apy::load(body, 1)?;
+    o.line(&apy::s(&apy::dget_or(&v, "hint", apy::text(""), 1)?));
+    o.line(NOT_REMOVED);
+    Ok(Exit::Usage)
 }
 
 /// `raw="$(_compute_send POST <RELEASE> <body>)"; _compute_split "$raw"`,

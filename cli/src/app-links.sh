@@ -18,10 +18,10 @@ cmd_app_links() {
 '
     while [ $# -gt 0 ]; do
         case "$1" in
-            --ios) [ "$sub" = set ] || { echo "--ios goes with k2 app links set" >&2; exit 2; }; ios="$ios${2:-}$nl"; shift 2 ;;
-            --android) [ "$sub" = set ] || { echo "--android goes with k2 app links set" >&2; exit 2; }; android="$android${2:-}$nl"; shift 2 ;;
-            --path) [ "$sub" = set ] || { echo "--path goes with k2 app links set" >&2; exit 2; }; paths="$paths${2:-}$nl"; shift 2 ;;
-            --drop) [ "$sub" = set ] || { echo "--drop goes with k2 app links set" >&2; exit 2; }; drops="$drops${2:-}$nl"; shift 2 ;;
+            --ios) [ "$sub" = set ] || { echo "--ios goes with k2 app links set" >&2; exit 2; }; _need_value "$@"; ios="$ios${2:-}$nl"; shift 2 ;;
+            --android) [ "$sub" = set ] || { echo "--android goes with k2 app links set" >&2; exit 2; }; _need_value "$@"; android="$android${2:-}$nl"; shift 2 ;;
+            --path) [ "$sub" = set ] || { echo "--path goes with k2 app links set" >&2; exit 2; }; _need_value "$@"; paths="$paths${2:-}$nl"; shift 2 ;;
+            --drop) [ "$sub" = set ] || { echo "--drop goes with k2 app links set" >&2; exit 2; }; _need_value "$@"; drops="$drops${2:-}$nl"; shift 2 ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_links_usage; return 0 ;;
             -*) echo "Unknown flag: $1 (k2 app links --help)" >&2; exit 2 ;;

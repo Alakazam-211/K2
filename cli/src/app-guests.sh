@@ -15,8 +15,8 @@ cmd_app_guest_reads() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) json_out=1; shift ;;
-            --limit) limit="${2:-}"; shift 2 ;;
-            --cursor) cursor="${2:-}"; shift 2 ;;
+            --limit) _need_value "$@"; limit="${2:-}"; shift 2 ;;
+            --cursor) _need_value "$@"; cursor="${2:-}"; shift 2 ;;
             -h|--help) _app_guest_rooms_usage; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
             *) app="$1"; shift ;;
@@ -118,13 +118,13 @@ cmd_app_grant_kind() {
     local app="" kind="" revoke=0 json_out=0 rooms_csv="" max="" caps="" max_level="" uploads=""
     while [ $# -gt 0 ]; do
         case "$1" in
-            --max) max="${2:-}"; shift 2 ;;
-            --caps) caps="${2:-}"; shift 2 ;;
-            --max-level) max_level="${2:-}"; shift 2 ;;
-            --uploads) uploads="${2:-}"; shift 2 ;;
-            --kind) kind="${2:-}"; shift 2 ;;
+            --max) _need_value "$@"; max="${2:-}"; shift 2 ;;
+            --caps) _need_value "$@"; caps="${2:-}"; shift 2 ;;
+            --max-level) _need_value "$@"; max_level="${2:-}"; shift 2 ;;
+            --uploads) _need_value "$@"; uploads="${2:-}"; shift 2 ;;
+            --kind) _need_value "$@"; kind="${2:-}"; shift 2 ;;
             --kind=*) kind="${1#--kind=}"; shift ;;
-            --room|--agent) rooms_csv="${rooms_csv:+$rooms_csv,}${2:-}"; shift 2 ;;
+            --room|--agent) _need_value "$@"; rooms_csv="${rooms_csv:+$rooms_csv,}${2:-}"; shift 2 ;;
             --room=*) rooms_csv="${rooms_csv:+$rooms_csv,}${1#--room=}"; shift ;;
             --revoke) revoke=1; shift ;;
             --json) json_out=1; shift ;;

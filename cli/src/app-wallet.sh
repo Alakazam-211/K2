@@ -552,7 +552,7 @@ if d.get("passwordMustChange"):
                     local username="" scope="" app="" json_out=0
                     while [[ $# -gt 0 ]]; do
                         case "$1" in
-                            --app) app="${2:-}"; shift 2 ;;
+                            --app) _need_value "$@"; app="${2:-}"; shift 2 ;;
                             --json) json_out=1; shift ;;
                             --help|-h) echo "Usage: k2 app user chat <username> [member|guest|none] [--app <app>] [--json]" >&2; exit 0 ;;
                             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
@@ -759,7 +759,7 @@ print("Skin user removed." if d.get("success") else "No matching skin user.")'
                     local username="" agents=() app=""
                     while [[ $# -gt 0 ]]; do
                         case "$1" in
-                            --agent|--agents) agents+=("${2:-}"); shift 2 ;;
+                            --agent|--agents) _need_value "$@"; agents+=("${2:-}"); shift 2 ;;
                             --apply-tokens|--applyTokens) echo "--apply-tokens is gone: signed-in people get a rooms change at their next request, so there is nothing to apply. Run it without the flag." >&2; exit 2 ;;
                             --app) app="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
                             --app=*) app="${1#--app=}"; shift ;;
@@ -848,8 +848,8 @@ print("Skin user %s unassigned." % d.get("username",""))'
                     local name="" caps="" agents=() app=""
                     while [[ $# -gt 0 ]]; do
                         case "$1" in
-                            --caps|--cap) caps="${2:-}"; shift 2 ;;
-                            --agent|--agents) agents+=("${2:-}"); shift 2 ;;
+                            --caps|--cap) _need_value "$@"; caps="${2:-}"; shift 2 ;;
+                            --agent|--agents) _need_value "$@"; agents+=("${2:-}"); shift 2 ;;
                             --app) app="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
                             --app=*) app="${1#--app=}"; shift ;;
                             --help|-h) echo "Usage: k2 app role create <name> [--agent sales] [--app <app>]" >&2; exit 0 ;;
@@ -926,7 +926,7 @@ for r in roles:
                     local role="" handle="" caps="" clear=0
                     while [[ $# -gt 0 ]]; do
                         case "$1" in
-                            --caps|--cap) caps="${2:-}"; shift 2 ;;
+                            --caps|--cap) _need_value "$@"; caps="${2:-}"; shift 2 ;;
                             --clear) clear=1; shift ;;
                             --help|-h) echo "Usage: k2 app role room <role> <handle> [--caps thread:read,thread:post,files:read] | --clear" >&2; exit 0 ;;
                             -*) echo "Unknown flag: $1" >&2; exit 1 ;;
@@ -985,14 +985,14 @@ for a in access:
                     local role="" handle="" read="" write="" upload="" drop="" download="" nodownload=0 clear=0 hide="" unhide="" nohide=0
                     while [[ $# -gt 0 ]]; do
                         case "$1" in
-                            --hide) hide="${hide:+$hide,}${2:-}"; shift 2 ;;
-                            --unhide) unhide="${unhide:+$unhide,}${2:-}"; shift 2 ;;
+                            --hide) _need_value "$@"; hide="${hide:+$hide,}${2:-}"; shift 2 ;;
+                            --unhide) _need_value "$@"; unhide="${unhide:+$unhide,}${2:-}"; shift 2 ;;
                             --no-hide) nohide=1; shift ;;
-                            --read) read="${2:-}"; shift 2 ;;
-                            --write) write="${2:-}"; shift 2 ;;
-                            --upload) drop="${2:-}"; shift 2 ;;
-                            --upload-dir) upload="${2:-}"; shift 2 ;;
-                            --download) download="${2:-}"; shift 2 ;;
+                            --read) _need_value "$@"; read="${2:-}"; shift 2 ;;
+                            --write) _need_value "$@"; write="${2:-}"; shift 2 ;;
+                            --upload) _need_value "$@"; drop="${2:-}"; shift 2 ;;
+                            --upload-dir) _need_value "$@"; upload="${2:-}"; shift 2 ;;
+                            --download) _need_value "$@"; download="${2:-}"; shift 2 ;;
                             --no-download) nodownload=1; shift ;;
                             --clear) clear=1; shift ;;
                             --help|-h) echo "Usage: k2 app role paths <role> <room> [--read a/,b/] [--write c/] [--upload d/] [--upload-dir c/in] [--download e/,f.pdf | --no-download] [--hide .k2,.env] [--unhide .env | --no-hide] | --clear" >&2; exit 0 ;;
@@ -1085,8 +1085,8 @@ for a in d.get("roomAccess") or d.get("room_access") or []:
                     local name="" caps="" clear=0 agents=()
                     while [[ $# -gt 0 ]]; do
                         case "$1" in
-                            --caps|--cap) caps="${2:-}"; shift 2 ;;
-                            --agent|--agents) agents+=("${2:-}"); shift 2 ;;
+                            --caps|--cap) _need_value "$@"; caps="${2:-}"; shift 2 ;;
+                            --agent|--agents) _need_value "$@"; agents+=("${2:-}"); shift 2 ;;
                             --clear) clear=1; shift ;;
                             --help|-h) echo "Usage: k2 app role update <name> [--agent … | --clear]" >&2; exit 0 ;;
                             -*) echo "Unknown flag: $1" >&2; exit 1 ;;
@@ -1162,10 +1162,10 @@ print("Make one: k2 app roles add --from <id> --app <app> [--name <name>] [--age
                     local from="" app="" name="" agents=()
                     while [[ $# -gt 0 ]]; do
                         case "$1" in
-                            --from|--template) from="${2:-}"; shift 2 ;;
-                            --app) app="${2:-}"; shift 2 ;;
-                            --name) name="${2:-}"; shift 2 ;;
-                            --agent|--agents|--room) agents+=("${2:-}"); shift 2 ;;
+                            --from|--template) _need_value "$@"; from="${2:-}"; shift 2 ;;
+                            --app) _need_value "$@"; app="${2:-}"; shift 2 ;;
+                            --name) _need_value "$@"; name="${2:-}"; shift 2 ;;
+                            --agent|--agents|--room) _need_value "$@"; agents+=("${2:-}"); shift 2 ;;
                             --help|-h) echo "Usage: k2 app roles add --from <template> --app <app> [--name <name>] [--agent <room> …]   (k2 app roles suggest lists the templates)"; exit 0 ;;
                             *) echo "Unknown argument: $1 (k2 app roles add --from <template> --app <app>)" >&2; exit 2 ;;
                         esac
@@ -1500,9 +1500,9 @@ for u in d.get("skippedOtherWorkspaceAgent") or []:
             while [[ $# -gt 0 ]]; do
                 case "$1" in
                     --json) json_out=1; shift ;;
-                    --url) url="${2:-}"; shift 2 ;;
-                    --hint) hint="${2:-}"; shift 2 ;;
-                    --ui-port|--uiPort) ui_port="${2:-}"; shift 2 ;;
+                    --url) _need_value "$@"; url="${2:-}"; shift 2 ;;
+                    --hint) _need_value "$@"; hint="${2:-}"; shift 2 ;;
+                    --ui-port|--uiPort) _need_value "$@"; ui_port="${2:-}"; shift 2 ;;
                     connect|direct)
                         if [ -n "$mode" ]; then
                             echo "Usage: k2 app front-door [connect|direct] [--json]" >&2
@@ -1677,9 +1677,9 @@ cmd_skin_token() {
             local name="" caps="" agents=()
             while [[ $# -gt 0 ]]; do
                 case "$1" in
-                    --name) name="${2:-}"; shift 2 ;;
-                    --caps|--cap) caps="${2:-}"; shift 2 ;;
-                    --agent|--agents) agents+=("${2:-}"); shift 2 ;;
+                    --name) _need_value "$@"; name="${2:-}"; shift 2 ;;
+                    --caps|--cap) _need_value "$@"; caps="${2:-}"; shift 2 ;;
+                    --agent|--agents) _need_value "$@"; agents+=("${2:-}"); shift 2 ;;
                     --user|--username)
                         echo "Error: use --name (platform label), not --user/--username" >&2
                         echo "Usage: k2 app token create --name <label> --agent sales [--caps thread:read,thread:post,files:read,files:write]" >&2
@@ -1743,7 +1743,7 @@ for t in tokens:
             local id="" clear=0 agents=()
             while [[ $# -gt 0 ]]; do
                 case "$1" in
-                    --agent|--agents) agents+=("${2:-}"); shift 2 ;;
+                    --agent|--agents) _need_value "$@"; agents+=("${2:-}"); shift 2 ;;
                     --clear) clear=1; shift ;;
                     --help|-h) echo "Usage: k2 app token rooms <id> --agent sales  |  --clear" >&2; exit 0 ;;
                     -*) echo "Unknown flag: $1" >&2; exit 1 ;;

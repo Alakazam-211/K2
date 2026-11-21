@@ -20,8 +20,8 @@ cmd_app_box_service() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) json_out=1; shift ;;
-            --reason) reason="${2:-}"; shift 2 ;;
-            --app-port) app_port="${2:-}"; shift 2 ;;
+            --reason) _need_value "$@"; reason="${2:-}"; shift 2 ;;
+            --app-port) _need_value "$@"; app_port="${2:-}"; shift 2 ;;
             -h|--help) _app_box_service_usage; return 0 ;;
             -*) echo "Unknown flag: $1 (k2 app box-service --help)" >&2; exit 2 ;;
             *) if [ -z "$app" ]; then app="$1"; else rest+=("$1"); fi; shift ;;

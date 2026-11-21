@@ -12,7 +12,7 @@ cmd_app_suspend() {
     local app="" reason="" json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --reason) reason="${2:-}"; shift 2 ;;
+            --reason) _need_value "$@"; reason="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_door_usage; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
@@ -68,10 +68,10 @@ cmd_app_audit() {
         case "$1" in
             --oldest-first) oldest=1; shift ;;
             --newest-first) oldest=0; shift ;;
-            --since) since="${2:-}"; shift 2 ;;
-            --verb) verb="${2:-}"; shift 2 ;;
+            --since) _need_value "$@"; since="${2:-}"; shift 2 ;;
+            --verb) _need_value "$@"; verb="${2:-}"; shift 2 ;;
             --denied) denied=1; shift ;;
-            --limit) limit="${2:-}"; shift 2 ;;
+            --limit) _need_value "$@"; limit="${2:-}"; shift 2 ;;
             --verify) verify=1; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_door_usage; return 0 ;;
@@ -118,12 +118,12 @@ cmd_app_requests() {
     local app="" since="" until="" status="" path="" method="" limit="" json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --since) since="${2:-}"; shift 2 ;;
-            --until) until="${2:-}"; shift 2 ;;
-            --status) status="${2:-}"; shift 2 ;;
-            --path) path="${2:-}"; shift 2 ;;
-            --method) method="${2:-}"; shift 2 ;;
-            --limit) limit="${2:-}"; shift 2 ;;
+            --since) _need_value "$@"; since="${2:-}"; shift 2 ;;
+            --until) _need_value "$@"; until="${2:-}"; shift 2 ;;
+            --status) _need_value "$@"; status="${2:-}"; shift 2 ;;
+            --path) _need_value "$@"; path="${2:-}"; shift 2 ;;
+            --method) _need_value "$@"; method="${2:-}"; shift 2 ;;
+            --limit) _need_value "$@"; limit="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_door_usage; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
@@ -185,14 +185,14 @@ cmd_app_quota() {
     local app="" json_out=0 reset=0 reason="" rps="" burst="" sockets="" body="" upload="" subs="" any=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --rps) rps="${2:-}"; any=1; shift 2 ;;
-            --burst) burst="${2:-}"; any=1; shift 2 ;;
-            --sockets) sockets="${2:-}"; any=1; shift 2 ;;
-            --body) body="${2:-}"; any=1; shift 2 ;;
-            --upload) upload="${2:-}"; any=1; shift 2 ;;
-            --subscriptions) subs="${2:-}"; any=1; shift 2 ;;
+            --rps) _need_value "$@"; rps="${2:-}"; any=1; shift 2 ;;
+            --burst) _need_value "$@"; burst="${2:-}"; any=1; shift 2 ;;
+            --sockets) _need_value "$@"; sockets="${2:-}"; any=1; shift 2 ;;
+            --body) _need_value "$@"; body="${2:-}"; any=1; shift 2 ;;
+            --upload) _need_value "$@"; upload="${2:-}"; any=1; shift 2 ;;
+            --subscriptions) _need_value "$@"; subs="${2:-}"; any=1; shift 2 ;;
             --reset) reset=1; any=1; shift ;;
-            --reason) reason="${2:-}"; shift 2 ;;
+            --reason) _need_value "$@"; reason="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_door_usage; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;

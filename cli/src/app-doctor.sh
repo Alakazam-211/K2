@@ -79,7 +79,7 @@ cmd_app_engine() {
             local from="" json_out=0
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --from) from="${2:-}"; shift 2 ;;
+                    --from) _need_value "$@"; from="${2:-}"; shift 2 ;;
                     --json) json_out=1; shift ;;
                     -h|--help) _app_rt_usage; return 0 ;;
                     *) echo "Unknown argument: $1" >&2; exit 2 ;;
@@ -189,9 +189,9 @@ for a, s in sorted((v.get("apps") or {}).items()):
             local app="" policy="" window="" nooverlap=""
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --policy) policy="${2:-}"; shift 2 ;;
-                    --window) window="${2:-}"; shift 2 ;;
-                    --when-no-overlap) nooverlap="${2:-}"; shift 2 ;;
+                    --policy) _need_value "$@"; policy="${2:-}"; shift 2 ;;
+                    --window) _need_value "$@"; window="${2:-}"; shift 2 ;;
+                    --when-no-overlap) _need_value "$@"; nooverlap="${2:-}"; shift 2 ;;
                     --json) json_out=1; shift ;;
                     -h|--help) _app_rt_usage; return 0 ;;
                     -*) echo "Unknown argument: $1" >&2; exit 2 ;;
@@ -413,14 +413,14 @@ print("Automatic prep: %s" % ("on" if ap.get("enabled") else "off (appsAutoPrepa
             local runtime="" json_out=0 cores="" mem="" tasks="" install_podman="" dry_run="" podman_from=""
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --runtime) runtime="${2:-}"; shift 2 ;;
+                    --runtime) _need_value "$@"; runtime="${2:-}"; shift 2 ;;
                     --youki) runtime="youki"; shift ;;
-                    --cores-mem-min) cores="${2:-}"; shift 2 ;;
-                    --apps-mem-max) mem="${2:-}"; shift 2 ;;
-                    --apps-tasks-max) tasks="${2:-}"; shift 2 ;;
+                    --cores-mem-min) _need_value "$@"; cores="${2:-}"; shift 2 ;;
+                    --apps-mem-max) _need_value "$@"; mem="${2:-}"; shift 2 ;;
+                    --apps-tasks-max) _need_value "$@"; tasks="${2:-}"; shift 2 ;;
                     --install-podman|--yes|-y) install_podman=1; shift ;;
                     --dry-run) dry_run=1; shift ;;
-                    --podman-from) podman_from="${2:-}"; shift 2 ;;
+                    --podman-from) _need_value "$@"; podman_from="${2:-}"; shift 2 ;;
                     --json) json_out=1; shift ;;
                     -h|--help) _app_rt_usage; return 0 ;;
                     *) echo "Unknown argument: $1" >&2; exit 2 ;;
@@ -609,10 +609,10 @@ cmd_app_build() {
     local folder="" types=0 json_out=0 dov="" manifest=""
     while [ $# -gt 0 ]; do
         case "$1" in
-            --manifest) manifest="${2:-}"; shift 2 ;;
+            --manifest) _need_value "$@"; manifest="${2:-}"; shift 2 ;;
             --manifest=*) manifest="${1#--manifest=}"; shift ;;
             --types) types=1; shift ;;
-            --disk-override) dov="${2:-}"; shift 2 ;;
+            --disk-override) _need_value "$@"; dov="${2:-}"; shift 2 ;;
             --disk-override=*) dov="${1#--disk-override=}"; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_rt_usage; return 0 ;;
@@ -699,15 +699,15 @@ cmd_app_install() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --transfer) transfer=1; shift ;;
-            --disk-override) dov="${2:-}"; shift 2 ;;
+            --disk-override) _need_value "$@"; dov="${2:-}"; shift 2 ;;
             --disk-override=*) dov="${1#--disk-override=}"; shift ;;
-            --workspace) ws="${2:-}"; shift 2 ;;
+            --workspace) _need_value "$@"; ws="${2:-}"; shift 2 ;;
             --tunnel) tunnel=1; shift ;;
-            --memory) memory="${2:-}"; shift 2 ;;
-            --engine) engine="${2:-}"; shift 2 ;;
-            --seed) seed="${2:-}"; shift 2 ;;
-            --folder) folder="$(_app_rt_abs "${2:-}")"; shift 2 ;;
-            --pg-major) pgmajor="${2:-}"; shift 2 ;;
+            --memory) _need_value "$@"; memory="${2:-}"; shift 2 ;;
+            --engine) _need_value "$@"; engine="${2:-}"; shift 2 ;;
+            --seed) _need_value "$@"; seed="${2:-}"; shift 2 ;;
+            --folder) _need_value "$@"; folder="$(_app_rt_abs "${2:-}")"; shift 2 ;;
+            --pg-major) _need_value "$@"; pgmajor="${2:-}"; shift 2 ;;
             --pg-major=*) pgmajor="${1#--pg-major=}"; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_rt_usage; return 0 ;;
@@ -759,13 +759,13 @@ cmd_app_deploy() {
     local app="" target="" reason="" wait=150 types=0 json_out=0 engine="" dov="" manifest=""
     while [ $# -gt 0 ]; do
         case "$1" in
-            --disk-override) dov="${2:-}"; shift 2 ;;
+            --disk-override) _need_value "$@"; dov="${2:-}"; shift 2 ;;
             --disk-override=*) dov="${1#--disk-override=}"; shift ;;
-            --manifest) manifest="${2:-}"; shift 2 ;;
+            --manifest) _need_value "$@"; manifest="${2:-}"; shift 2 ;;
             --manifest=*) manifest="${1#--manifest=}"; shift ;;
-            --engine) engine="${2:-}"; shift 2 ;;
+            --engine) _need_value "$@"; engine="${2:-}"; shift 2 ;;
             --engine=*) engine="${1#--engine=}"; shift ;;
-            --reason) reason="${2:-}"; shift 2 ;;
+            --reason) _need_value "$@"; reason="${2:-}"; shift 2 ;;
             --no-wait) wait=0; shift ;;
             --types) types=1; shift ;;
             --json) json_out=1; shift ;;
@@ -840,7 +840,7 @@ cmd_app_rollback() {
     local app="" to="" wait=150 json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --to) to="${2:-}"; shift 2 ;;
+            --to) _need_value "$@"; to="${2:-}"; shift 2 ;;
             --no-wait) wait=0; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_rt_usage; return 0 ;;
@@ -1027,10 +1027,10 @@ cmd_app_config() {
     local io_r="" io_w="" io_ri="" io_wi=""
     while [ $# -gt 0 ]; do
         case "$1" in
-            --memory) kv+=("K2_CJ_memory=${2:-}"); shift 2 ;;
-            --cpu-weight) kv+=("K2_CJ_cpuWeight=${2:-}"); shift 2 ;;
-            --tasks) kv+=("K2_CJ_tasks=${2:-}"); shift 2 ;;
-            --disk) kv+=("K2_CJ_disk=${2:-}"); shift 2 ;;
+            --memory) _need_value "$@"; kv+=("K2_CJ_memory=${2:-}"); shift 2 ;;
+            --cpu-weight) _need_value "$@"; kv+=("K2_CJ_cpuWeight=${2:-}"); shift 2 ;;
+            --tasks) _need_value "$@"; kv+=("K2_CJ_tasks=${2:-}"); shift 2 ;;
+            --disk) _need_value "$@"; kv+=("K2_CJ_disk=${2:-}"); shift 2 ;;
             --egress)
                 case "${2:-}" in
                     add) egress_add="${egress_add:+$egress_add,}${3:-}" ;;
@@ -1038,7 +1038,7 @@ cmd_app_config() {
                     *) echo "usage: --egress add|rm HOST:PORT" >&2; exit 2 ;;
                 esac
                 shift 3 ;;
-            --egress-mode) kv+=("K2_CJ_egressMode=${2:-}"); shift 2 ;;
+            --egress-mode) _need_value "$@"; kv+=("K2_CJ_egressMode=${2:-}"); shift 2 ;;
             --port)
                 case "${2:-}" in
                     add) port_add="${port_add:+$port_add,}${3:-}" ;;
@@ -1046,18 +1046,18 @@ cmd_app_config() {
                     *) echo "usage: --port add|rm PORT[/tcp|udp]" >&2; exit 2 ;;
                 esac
                 shift 3 ;;
-            --recycle-every) kv+=("K2_CJ_recycleEvery=${2:-}"); shift 2 ;;
-            --recycle-at) kv+=("K2_CJ_recycleAt=${2:-}"); shift 2 ;;
-            --isolation) kv+=("K2_CJ_isolation=${2:-}"); shift 2 ;;
-            --path) kv+=("K2_CJ_path=${2:-}"); shift 2 ;;
-            --risk) kv+=("K2_CJ_risk=${2:-}"); shift 2 ;;
-            --db-private) kv+=("K2_CJ_dbPrivate=${2:-}"); shift 2 ;;
-            --db-raw) kv+=("K2_CJ_dbRaw=${2:-}"); shift 2 ;;
+            --recycle-every) _need_value "$@"; kv+=("K2_CJ_recycleEvery=${2:-}"); shift 2 ;;
+            --recycle-at) _need_value "$@"; kv+=("K2_CJ_recycleAt=${2:-}"); shift 2 ;;
+            --isolation) _need_value "$@"; kv+=("K2_CJ_isolation=${2:-}"); shift 2 ;;
+            --path) _need_value "$@"; kv+=("K2_CJ_path=${2:-}"); shift 2 ;;
+            --risk) _need_value "$@"; kv+=("K2_CJ_risk=${2:-}"); shift 2 ;;
+            --db-private) _need_value "$@"; kv+=("K2_CJ_dbPrivate=${2:-}"); shift 2 ;;
+            --db-raw) _need_value "$@"; kv+=("K2_CJ_dbRaw=${2:-}"); shift 2 ;;
             --io) kv+=("K2_CJ_io=${2:-}"); case "${2:-}" in default|none) ;; *) echo "--io is default or none" >&2; exit 2 ;; esac; shift 2 ;;
-            --io-read) io_r="${2:-}"; shift 2 ;;
-            --io-write) io_w="${2:-}"; shift 2 ;;
-            --io-read-iops) io_ri="${2:-}"; shift 2 ;;
-            --io-write-iops) io_wi="${2:-}"; shift 2 ;;
+            --io-read) _need_value "$@"; io_r="${2:-}"; shift 2 ;;
+            --io-write) _need_value "$@"; io_w="${2:-}"; shift 2 ;;
+            --io-read-iops) _need_value "$@"; io_ri="${2:-}"; shift 2 ;;
+            --io-write-iops) _need_value "$@"; io_wi="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_rt_usage; return 0 ;;
             -*) echo "Unknown flag: $1 (k2 app --help)" >&2; exit 2 ;;
@@ -1103,7 +1103,7 @@ cmd_app_list() {
     local ws="" json_out=0 box=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --workspace) ws="${2:-}"; shift 2 ;;
+            --workspace) _need_value "$@"; ws="${2:-}"; shift 2 ;;
             --box) box=1; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_rt_usage; return 0 ;;
@@ -1229,8 +1229,8 @@ cmd_app_history() {
     local app="" widget="" limit="" json_out=0 users=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --widget) widget="${2:-}"; shift 2 ;;
-            --limit) limit="${2:-}"; shift 2 ;;
+            --widget) _need_value "$@"; widget="${2:-}"; shift 2 ;;
+            --limit) _need_value "$@"; limit="${2:-}"; shift 2 ;;
             --users) users=1; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_rt_usage; return 0 ;;
@@ -1295,14 +1295,14 @@ cmd_app_logs() {
     local app="" dep="" tail=200 follow=0 client=0 cuser="" ckind="" csince="" climit="" json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --deployment) dep="${2:-}"; shift 2 ;;
-            --tail) tail="${2:-}"; shift 2 ;;
+            --deployment) _need_value "$@"; dep="${2:-}"; shift 2 ;;
+            --tail) _need_value "$@"; tail="${2:-}"; shift 2 ;;
             --follow|-f) follow=1; shift ;;
             --client) client=1; shift ;;
-            --user) cuser="${2:-}"; shift 2 ;;
-            --kind) ckind="${2:-}"; shift 2 ;;
-            --since) csince="${2:-}"; shift 2 ;;
-            --limit) climit="${2:-}"; shift 2 ;;
+            --user) _need_value "$@"; cuser="${2:-}"; shift 2 ;;
+            --kind) _need_value "$@"; ckind="${2:-}"; shift 2 ;;
+            --since) _need_value "$@"; csince="${2:-}"; shift 2 ;;
+            --limit) _need_value "$@"; climit="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_rt_usage; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
@@ -1380,8 +1380,9 @@ cmd_app_errors() {
     local app="" since=3600 kind="" json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --since) since="${2:-}"; shift 2 ;;
+            --since) _need_value "$@"; since="${2:-}"; shift 2 ;;
             --kind)
+                _need_value "$@"
                 kind="${2:-}"; shift 2
                 case "$kind" in
                     crash|health|build|deploy) ;;
@@ -1588,14 +1589,14 @@ cmd_app_handover() {
     local app="" to="" brief_file="" db="" coll="" reset_shared="" copy_source="" reason="" dry=0 json_out=0 detail=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --to) to="${2:-}"; shift 2 ;;
+            --to) _need_value "$@"; to="${2:-}"; shift 2 ;;
             --detail) detail=1; shift ;;
-            --brief) brief_file="${2:-}"; shift 2 ;;
-            --db) db="${2:-}"; shift 2 ;;
-            --collisions) coll="${2:-}"; shift 2 ;;
+            --brief) _need_value "$@"; brief_file="${2:-}"; shift 2 ;;
+            --db) _need_value "$@"; db="${2:-}"; shift 2 ;;
+            --collisions) _need_value "$@"; coll="${2:-}"; shift 2 ;;
             --reset-shared) reset_shared=1; shift ;;
             --copy-source) copy_source=1; shift ;;
-            --reason) reason="${2:-}"; shift 2 ;;
+            --reason) _need_value "$@"; reason="${2:-}"; shift 2 ;;
             --dry-run) dry=1; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_handover_usage; return 0 ;;
@@ -1714,8 +1715,8 @@ cmd_app_ownership() {
     local app="" to="" reason="" json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --to) to="${2:-}"; shift 2 ;;
-            --reason) reason="${2:-}"; shift 2 ;;
+            --to) _need_value "$@"; to="${2:-}"; shift 2 ;;
+            --reason) _need_value "$@"; reason="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_rt_usage; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
@@ -1745,7 +1746,7 @@ cmd_app_release() {
     local ws="" apps="" drop=0 json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --apps) apps="${2:-}"; shift 2 ;;
+            --apps) _need_value "$@"; apps="${2:-}"; shift 2 ;;
             --drop-access) drop=1; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_rt_usage; return 0 ;;
@@ -2100,8 +2101,8 @@ cmd_app_exception() {
     local app="" mode="" reason="" json_out=0 devices=()
     while [ $# -gt 0 ]; do
         case "$1" in
-            --device) devices+=("${2:-}"); shift 2 ;;
-            --reason) reason="${2:-}"; shift 2 ;;
+            --device) _need_value "$@"; devices+=("${2:-}"); shift 2 ;;
+            --reason) _need_value "$@"; reason="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_rt_usage; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;

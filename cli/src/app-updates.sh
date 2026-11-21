@@ -46,8 +46,8 @@ _app_updates_ls() {
     local app="" ch="" rel="" json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --channel) ch="${2:-}"; shift 2 ;;
-            --release) rel="${2:-}"; shift 2 ;;
+            --channel) _need_value "$@"; ch="${2:-}"; shift 2 ;;
+            --release) _need_value "$@"; rel="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_updates_usage; return 0 ;;
             -*) echo "Unknown flag: $1 (k2 app updates --help)" >&2; exit 2 ;;
@@ -88,8 +88,8 @@ _app_updates_key() {
     local app="" key="" key_file="" json_out=0 setting=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --set) key="${2:-}"; setting=1; shift 2 ;;
-            --set-file) key_file="${2:-}"; setting=1; shift 2 ;;
+            --set) _need_value "$@"; key="${2:-}"; setting=1; shift 2 ;;
+            --set-file) _need_value "$@"; key_file="${2:-}"; setting=1; shift 2 ;;
             --show) shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_updates_usage; return 0 ;;
@@ -139,7 +139,7 @@ _app_updates_token() {
     local app="" file="" from_stdin=0 json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --file) file="${2:-}"; shift 2 ;;
+            --file) _need_value "$@"; file="${2:-}"; shift 2 ;;
             --stdin) from_stdin=1; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_updates_usage; return 0 ;;
@@ -194,12 +194,12 @@ _app_updates_push() {
     local usage="usage: k2 app updates push <app> --channel <name> --version <semver> --artifact <platform>=<file> [--artifact …] [--sig <platform>=<file.sig>] [--notes-file <file>] [--drop-platform <platform>] [--evidence <ci release run>] [--no-wait] [--json]"
     while [ $# -gt 0 ]; do
         case "$1" in
-            --channel) ch="${2:-}"; shift 2 ;;
-            --version) ver="${2:-}"; shift 2 ;;
-            --artifact) arts+=("${2:-}"); shift 2 ;;
-            --sig) sigs+=("${2:-}"); shift 2 ;;
-            --notes-file) notes_file="${2:-}"; shift 2 ;;
-            --drop-platform) drops+=("${2:-}"); shift 2 ;;
+            --channel) _need_value "$@"; ch="${2:-}"; shift 2 ;;
+            --version) _need_value "$@"; ver="${2:-}"; shift 2 ;;
+            --artifact) _need_value "$@"; arts+=("${2:-}"); shift 2 ;;
+            --sig) _need_value "$@"; sigs+=("${2:-}"); shift 2 ;;
+            --notes-file) _need_value "$@"; notes_file="${2:-}"; shift 2 ;;
+            --drop-platform) _need_value "$@"; drops+=("${2:-}"); shift 2 ;;
             --evidence) evidence="${2:-}"; [ -n "$evidence" ] || { echo "$usage" >&2; exit 2; }; shift 2 ;;
             --no-wait) no_wait=1; shift ;;
             --json) json_out=1; shift ;;
@@ -285,9 +285,9 @@ _app_updates_promote() {
     local app="" from="" to="" ver="" drop=0 json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --from) from="${2:-}"; shift 2 ;;
-            --to) to="${2:-}"; shift 2 ;;
-            --version) ver="${2:-}"; shift 2 ;;
+            --from) _need_value "$@"; from="${2:-}"; shift 2 ;;
+            --to) _need_value "$@"; to="${2:-}"; shift 2 ;;
+            --version) _need_value "$@"; ver="${2:-}"; shift 2 ;;
             --drop-platform) drop=1; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_updates_usage; return 0 ;;
@@ -314,8 +314,8 @@ _app_updates_rollback() {
     local app="" ch="" to="" json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --channel) ch="${2:-}"; shift 2 ;;
-            --to) to="${2:-}"; shift 2 ;;
+            --channel) _need_value "$@"; ch="${2:-}"; shift 2 ;;
+            --to) _need_value "$@"; to="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_updates_usage; return 0 ;;
             -*) echo "Unknown flag: $1 (k2 app updates --help)" >&2; exit 2 ;;
@@ -339,7 +339,7 @@ _app_updates_pull() {
     local app="" ver="" json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --version) ver="${2:-}"; shift 2 ;;
+            --version) _need_value "$@"; ver="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_updates_usage; return 0 ;;
             -*) echo "Unknown flag: $1 (k2 app updates --help)" >&2; exit 2 ;;
@@ -367,7 +367,7 @@ _app_updates_stats() {
     local app="" days="30" json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --days) days="${2:-}"; shift 2 ;;
+            --days) _need_value "$@"; days="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_updates_usage; return 0 ;;
             -*) echo "Unknown flag: $1 (k2 app updates --help)" >&2; exit 2 ;;
@@ -596,8 +596,8 @@ _app_data_put() {
     local app="" from="" to="" json_out=0 dov=""
     while [ $# -gt 0 ]; do
         case "$1" in
-            --to) to="${2:-}"; shift 2 ;;
-            --disk-override) dov="${2:-}"; shift 2 ;;
+            --to) _need_value "$@"; to="${2:-}"; shift 2 ;;
+            --disk-override) _need_value "$@"; dov="${2:-}"; shift 2 ;;
             --disk-override=*) dov="${1#--disk-override=}"; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_grace_usage; return 0 ;;
@@ -683,13 +683,13 @@ _app_test_guest() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --test) shift ;;
-            --role) role="${2:-}"; shift 2 ;;
+            --role) _need_value "$@"; role="${2:-}"; shift 2 ;;
             --role=*) role="${1#--role=}"; shift ;;
-            --room) rooms_csv="${rooms_csv:+$rooms_csv,}${2:-}"; shift 2 ;;
+            --room) _need_value "$@"; rooms_csv="${rooms_csv:+$rooms_csv,}${2:-}"; shift 2 ;;
             --room=*) rooms_csv="${rooms_csv:+$rooms_csv,}${1#--room=}"; shift ;;
-            --expires) expires="${2:-}"; shift 2 ;;
+            --expires) _need_value "$@"; expires="${2:-}"; shift 2 ;;
             --expires=*) expires="${1#--expires=}"; shift ;;
-            --app) app="${2:-}"; shift 2 ;;
+            --app) _need_value "$@"; app="${2:-}"; shift 2 ;;
             --password-stdin) pw_stdin=1; shift ;;
             --json) json_out=1; shift ;;
             -h|--help)
@@ -799,9 +799,9 @@ cmd_app_move_plan() {
     local svc="" app="" request=0 reason="" json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --app) app="${2:-}"; shift 2 ;;
+            --app) _need_value "$@"; app="${2:-}"; shift 2 ;;
             --request) request=1; shift ;;
-            --reason) reason="${2:-}"; shift 2 ;;
+            --reason) _need_value "$@"; reason="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
             -h|--help)
                 cat <<'EOF'
@@ -1170,10 +1170,10 @@ cmd_app_key_mint() {
     local app="" scopes="" rooms="" roles="" label="" show=0 json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --scopes|--scope) scopes="${2:-}"; shift 2 ;;
-            --rooms|--room) rooms="${2:-}"; shift 2 ;;
-            --roles|--role) roles="${2:-}"; shift 2 ;;
-            --label) label="${2:-}"; shift 2 ;;
+            --scopes|--scope) _need_value "$@"; scopes="${2:-}"; shift 2 ;;
+            --rooms|--room) _need_value "$@"; rooms="${2:-}"; shift 2 ;;
+            --roles|--role) _need_value "$@"; roles="${2:-}"; shift 2 ;;
+            --label) _need_value "$@"; label="${2:-}"; shift 2 ;;
             --show) show=1; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_grace_usage; return 0 ;;

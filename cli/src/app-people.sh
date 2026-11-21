@@ -88,15 +88,15 @@ cmd_app_invite_settings() {
     _read_body_file() { [ -f "$1" ] || { echo "no such file: $1" >&2; exit 2; }; cat "$1"; }
     while [ $# -gt 0 ]; do
         case "$1" in
-            --invite-ttl) invite_ttl="${2:-}"; shift 2 ;;
-            --reset-ttl) reset_ttl="${2:-}"; shift 2 ;;
-            --set-password-url) url="${2:-}"; shift 2 ;;
-            --invite-subject) isub="${2:-}"; shift 2 ;;
+            --invite-ttl) _need_value "$@"; invite_ttl="${2:-}"; shift 2 ;;
+            --reset-ttl) _need_value "$@"; reset_ttl="${2:-}"; shift 2 ;;
+            --set-password-url) _need_value "$@"; url="${2:-}"; shift 2 ;;
+            --invite-subject) _need_value "$@"; isub="${2:-}"; shift 2 ;;
             --invite-body-file) ibody="$(_read_body_file "${2:-}")"; shift 2 ;;
-            --reset-subject) rsub="${2:-}"; shift 2 ;;
+            --reset-subject) _need_value "$@"; rsub="${2:-}"; shift 2 ;;
             --reset-body-file) rbody="$(_read_body_file "${2:-}")"; shift 2 ;;
-            --max-devices) max_devices="${2:-}"; shift 2 ;;
-            --default) defaults="$defaults ${2:-}"; shift 2 ;;
+            --max-devices) _need_value "$@"; max_devices="${2:-}"; shift 2 ;;
+            --default) _need_value "$@"; defaults="$defaults ${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
             -h|--help)
                 cat <<'EOF'
@@ -168,8 +168,8 @@ cmd_app_profile_settings() {
     local app="" names="" image="" json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --names) names="${2:-}"; shift 2 ;;
-            --image|--picture) image="${2:-}"; shift 2 ;;
+            --names) _need_value "$@"; names="${2:-}"; shift 2 ;;
+            --image|--picture) _need_value "$@"; image="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
             -h|--help)
                 cat <<'EOF'
@@ -215,11 +215,11 @@ cmd_app_set() {
     local app="" mode="" grace="" logs="" json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --account-deletion) mode="${2:-}"; shift 2 ;;
+            --account-deletion) _need_value "$@"; mode="${2:-}"; shift 2 ;;
             --account-deletion=*) mode="${1#*=}"; shift ;;
-            --deletion-grace) grace="${2:-}"; shift 2 ;;
+            --deletion-grace) _need_value "$@"; grace="${2:-}"; shift 2 ;;
             --deletion-grace=*) grace="${1#*=}"; shift ;;
-            --client-logs-days) logs="${2:-}"; shift 2 ;;
+            --client-logs-days) _need_value "$@"; logs="${2:-}"; shift 2 ;;
             --client-logs-days=*) logs="${1#*=}"; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_set_usage; return 0 ;;

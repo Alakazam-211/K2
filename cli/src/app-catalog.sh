@@ -114,16 +114,16 @@ cmd_app_install_catalog() {
                 [ $# -ge 2 ] || { echo "usage: $1 needs a value (k2 app catalog --help)" >&2; exit 2; } ;;
         esac
         case "$1" in
-            --catalog) entry="${2:-}"; shift 2 ;;
+            --catalog) _need_value "$@"; entry="${2:-}"; shift 2 ;;
             --catalog=*) entry="${1#--catalog=}"; shift ;;
-            --address) address="${2:-}"; shift 2 ;;
+            --address) _need_value "$@"; address="${2:-}"; shift 2 ;;
             --address=*) address="${1#--address=}"; shift ;;
-            --id) id="${2:-}"; shift 2 ;;
+            --id) _need_value "$@"; id="${2:-}"; shift 2 ;;
             --id=*) id="${1#--id=}"; shift ;;
-            --variant) variant="${2:-}"; shift 2 ;;
-            --version) version="${2:-}"; shift 2 ;;
-            --workspace) ws="${2:-}"; shift 2 ;;
-            --domain) domain="${2:-}"; shift 2 ;;
+            --variant) _need_value "$@"; variant="${2:-}"; shift 2 ;;
+            --version) _need_value "$@"; version="${2:-}"; shift 2 ;;
+            --workspace) _need_value "$@"; ws="${2:-}"; shift 2 ;;
+            --domain) _need_value "$@"; domain="${2:-}"; shift 2 ;;
             --dry-run) dry=1; shift ;;
             --no-wait) wait=0; shift ;;
             --rebind-meet) rebind=1; shift ;;
@@ -207,8 +207,8 @@ cmd_app_catalog() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) json_out=1; shift ;;
-            --id) id="${2:-}"; shift 2 ;;
-            --app) app="${2:-}"; shift 2 ;;
+            --id) _need_value "$@"; id="${2:-}"; shift 2 ;;
+            --app) _need_value "$@"; app="${2:-}"; shift 2 ;;
             -h|--help) _app_catalog_usage; return 0 ;;
             -*) echo "Unknown flag: $1 (k2 app catalog --help)" >&2; exit 2 ;;
             *) args+=("$1"); shift ;;

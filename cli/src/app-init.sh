@@ -9,11 +9,11 @@ cmd_app_init() {
     local template="" folder="" name="" app="" voice="" dry=0 json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --template) template="${2:-}"; shift 2 ;;
+            --template) _need_value "$@"; template="${2:-}"; shift 2 ;;
             --template=*) template="${1#--template=}"; shift ;;
-            --name) name="${2:-}"; shift 2 ;;
+            --name) _need_value "$@"; name="${2:-}"; shift 2 ;;
             --name=*) name="${1#--name=}"; shift ;;
-            --app) app="${2:-}"; shift 2 ;;
+            --app) _need_value "$@"; app="${2:-}"; shift 2 ;;
             --app=*) app="${1#--app=}"; shift ;;
             --voice) voice=1; shift ;;
             --dry-run) dry=1; shift ;;

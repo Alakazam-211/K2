@@ -195,7 +195,7 @@ cmd_app_members() {
     local room="" app="" json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --app) app="${2:-}"; shift 2 ;;
+            --app) _need_value "$@"; app="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_surfaces_usage; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
@@ -352,7 +352,7 @@ cmd_app_usage() {
     local app="" hours="" json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --hours) hours="${2:-}"; shift 2 ;;
+            --hours) _need_value "$@"; hours="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_surfaces_usage; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
@@ -381,9 +381,9 @@ cmd_app_token_rotate() {
     local app="" ttl="" keep=0 caps="" json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --ttl) ttl="${2:-}"; shift 2 ;;
+            --ttl) _need_value "$@"; ttl="${2:-}"; shift 2 ;;
             --keep-old) keep=1; shift ;;
-            --caps) caps="${2:-}"; shift 2 ;;
+            --caps) _need_value "$@"; caps="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_door_usage; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;

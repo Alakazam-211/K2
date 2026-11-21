@@ -20,7 +20,7 @@ cmd_app_auth() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) json_out=1; shift ;;
-            --origin) [ "$sub" = origins ] || { echo "--origin goes with k2 app auth origins" >&2; exit 2; }; origins="$origins${2:-}$nl"; shift 2 ;;
+            --origin) [ "$sub" = origins ] || { echo "--origin goes with k2 app auth origins" >&2; exit 2; }; _need_value "$@"; origins="$origins${2:-}$nl"; shift 2 ;;
             --clear) [ "$sub" = origins ] || { echo "--clear goes with k2 app auth origins" >&2; exit 2; }; clear=1; shift ;;
             -h|--help) _app_auth_usage; return 0 ;;
             -*) echo "Unknown flag: $1 (k2 app auth --help)" >&2; exit 2 ;;
@@ -171,13 +171,13 @@ cmd_app_pairing_setup() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --desktop-only) desktop=1; shift ;;
-            --ios) ios="$ios${2:-}$nl"; shift 2 ;;
-            --android) android="$android${2:-}$nl"; shift 2 ;;
-            --host) hosts="$hosts${2:-}$nl"; shift 2 ;;
-            --native-origin) origins="$origins${2:-}$nl"; shift 2 ;;
-            --link-path) paths="$paths${2:-}$nl"; shift 2 ;;
-            --app-store) appstore="${2:-}"; shift 2 ;;
-            --play-store) playstore="${2:-}"; shift 2 ;;
+            --ios) _need_value "$@"; ios="$ios${2:-}$nl"; shift 2 ;;
+            --android) _need_value "$@"; android="$android${2:-}$nl"; shift 2 ;;
+            --host) _need_value "$@"; hosts="$hosts${2:-}$nl"; shift 2 ;;
+            --native-origin) _need_value "$@"; origins="$origins${2:-}$nl"; shift 2 ;;
+            --link-path) _need_value "$@"; paths="$paths${2:-}$nl"; shift 2 ;;
+            --app-store) _need_value "$@"; appstore="${2:-}"; shift 2 ;;
+            --play-store) _need_value "$@"; playstore="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_pairing_usage; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
@@ -429,11 +429,11 @@ cmd_app_push_setup() {
     local app="" p8="" kid="" team="" bundle="" sa="" json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --apns-key) p8="${2:-}"; shift 2 ;;
-            --key-id) kid="${2:-}"; shift 2 ;;
-            --team-id) team="${2:-}"; shift 2 ;;
-            --bundle-id) bundle="${2:-}"; shift 2 ;;
-            --fcm-service-account|--fcm) sa="${2:-}"; shift 2 ;;
+            --apns-key) _need_value "$@"; p8="${2:-}"; shift 2 ;;
+            --key-id) _need_value "$@"; kid="${2:-}"; shift 2 ;;
+            --team-id) _need_value "$@"; team="${2:-}"; shift 2 ;;
+            --bundle-id) _need_value "$@"; bundle="${2:-}"; shift 2 ;;
+            --fcm-service-account|--fcm) _need_value "$@"; sa="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_push_usage; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
@@ -543,11 +543,11 @@ cmd_app_push_set() {
     local app="" replies="" chat="" previews="" maxd="" register="" json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --agent-replies) replies="${2:-}"; shift 2 ;;
-            --chat) chat="${2:-}"; shift 2 ;;
-            --previews) previews="${2:-}"; shift 2 ;;
-            --max-devices) maxd="${2:-}"; shift 2 ;;
-            --register) register="${2:-}"; shift 2 ;;
+            --agent-replies) _need_value "$@"; replies="${2:-}"; shift 2 ;;
+            --chat) _need_value "$@"; chat="${2:-}"; shift 2 ;;
+            --previews) _need_value "$@"; previews="${2:-}"; shift 2 ;;
+            --max-devices) _need_value "$@"; maxd="${2:-}"; shift 2 ;;
+            --register) _need_value "$@"; register="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
             *) app="$1"; shift ;;
@@ -573,19 +573,19 @@ cmd_app_push_send() {
     local tos=() datas=()
     while [ $# -gt 0 ]; do
         case "$1" in
-            --to) tos+=("${2:-}"); shift 2 ;;
-            --room) room="${2:-}"; shift 2 ;;
-            --title) title="${2:-}"; shift 2 ;;
-            --body) text="${2:-}"; shift 2 ;;
-            --data) datas+=("${2:-}"); shift 2 ;;
-            --topic) topic="${2:-}"; shift 2 ;;
-            --collapse-id) collapse="${2:-}"; shift 2 ;;
-            --thread-id) thread="${2:-}"; shift 2 ;;
-            --sound) sound="${2:-}"; shift 2 ;;
-            --badge) badge="${2:-}"; shift 2 ;;
-            --priority) prio="${2:-}"; shift 2 ;;
-            --ttl) ttl="${2:-}"; shift 2 ;;
-            --android-channel) chan="${2:-}"; shift 2 ;;
+            --to) _need_value "$@"; tos+=("${2:-}"); shift 2 ;;
+            --room) _need_value "$@"; room="${2:-}"; shift 2 ;;
+            --title) _need_value "$@"; title="${2:-}"; shift 2 ;;
+            --body) _need_value "$@"; text="${2:-}"; shift 2 ;;
+            --data) _need_value "$@"; datas+=("${2:-}"); shift 2 ;;
+            --topic) _need_value "$@"; topic="${2:-}"; shift 2 ;;
+            --collapse-id) _need_value "$@"; collapse="${2:-}"; shift 2 ;;
+            --thread-id) _need_value "$@"; thread="${2:-}"; shift 2 ;;
+            --sound) _need_value "$@"; sound="${2:-}"; shift 2 ;;
+            --badge) _need_value "$@"; badge="${2:-}"; shift 2 ;;
+            --priority) _need_value "$@"; prio="${2:-}"; shift 2 ;;
+            --ttl) _need_value "$@"; ttl="${2:-}"; shift 2 ;;
+            --android-channel) _need_value "$@"; chan="${2:-}"; shift 2 ;;
             --silent) silent=1; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_push_usage; return 0 ;;
@@ -696,7 +696,7 @@ cmd_app_push_devices() {
     local app="" guest="" json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --guest|--user) guest="${2:-}"; shift 2 ;;
+            --guest|--user) _need_value "$@"; guest="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
             *) app="$1"; shift ;;
@@ -808,8 +808,8 @@ cmd_app_email_on() {
     local app="" sender="" scope="" json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --sender|--from) sender="${2:-}"; shift 2 ;;
-            --scope) scope="${2:-}"; shift 2 ;;
+            --sender|--from) _need_value "$@"; sender="${2:-}"; shift 2 ;;
+            --scope) _need_value "$@"; scope="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_email_usage; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
@@ -849,17 +849,17 @@ cmd_app_email_send() {
     local tos=() ccs=() bccs=() rts=() hdrs=() tags=()
     while [ $# -gt 0 ]; do
         case "$1" in
-            --to) tos+=("${2:-}"); shift 2 ;;
-            --cc) ccs+=("${2:-}"); shift 2 ;;
-            --bcc) bccs+=("${2:-}"); shift 2 ;;
-            --reply-to) rts+=("${2:-}"); shift 2 ;;
-            --header) hdrs+=("${2:-}"); shift 2 ;;
-            --tag) tags+=("${2:-}"); shift 2 ;;
-            --subject) subject="${2:-}"; shift 2 ;;
-            --text) text="${2:-}"; shift 2 ;;
-            --text-file) text_file="${2:-}"; shift 2 ;;
-            --html-file) html_file="${2:-}"; shift 2 ;;
-            --idempotency-key) key="${2:-}"; shift 2 ;;
+            --to) _need_value "$@"; tos+=("${2:-}"); shift 2 ;;
+            --cc) _need_value "$@"; ccs+=("${2:-}"); shift 2 ;;
+            --bcc) _need_value "$@"; bccs+=("${2:-}"); shift 2 ;;
+            --reply-to) _need_value "$@"; rts+=("${2:-}"); shift 2 ;;
+            --header) _need_value "$@"; hdrs+=("${2:-}"); shift 2 ;;
+            --tag) _need_value "$@"; tags+=("${2:-}"); shift 2 ;;
+            --subject) _need_value "$@"; subject="${2:-}"; shift 2 ;;
+            --text) _need_value "$@"; text="${2:-}"; shift 2 ;;
+            --text-file) _need_value "$@"; text_file="${2:-}"; shift 2 ;;
+            --html-file) _need_value "$@"; html_file="${2:-}"; shift 2 ;;
+            --idempotency-key) _need_value "$@"; key="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_email_usage; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
@@ -927,9 +927,9 @@ cmd_app_email_log() {
     local app="" limit="" status="" tag="" json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --limit) limit="${2:-}"; shift 2 ;;
-            --status) status="${2:-}"; shift 2 ;;
-            --tag) tag="${2:-}"; shift 2 ;;
+            --limit) _need_value "$@"; limit="${2:-}"; shift 2 ;;
+            --status) _need_value "$@"; status="${2:-}"; shift 2 ;;
+            --tag) _need_value "$@"; tag="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_email_usage; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
@@ -998,7 +998,7 @@ cmd_notifications_agent() {
     local ws="" sender="" json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --sender) sender="${2:-}"; shift 2 ;;
+            --sender) _need_value "$@"; sender="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
             *) [ -z "$ws" ] || { echo "one workspace at a time" >&2; exit 2; }; ws="$1"; shift ;;
@@ -1075,9 +1075,9 @@ cmd_notify_email() {
     local subject="" text="" text_file="" have_text=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --subject) subject="${2:-}"; shift 2 ;;
-            --text) text="${2:-}"; have_text=1; shift 2 ;;
-            --text-file) text_file="${2:-}"; shift 2 ;;
+            --subject) _need_value "$@"; subject="${2:-}"; shift 2 ;;
+            --text) _need_value "$@"; text="${2:-}"; have_text=1; shift 2 ;;
+            --text-file) _need_value "$@"; text_file="${2:-}"; shift 2 ;;
             *) echo "Unknown argument: $1 (k2 notify --help)" >&2; exit 2 ;;
         esac
     done
@@ -1146,8 +1146,8 @@ print("log kept %s days; owner address %s" % (st.get("logRetentionDays"), st.get
             local app="" limit="" json_out=0
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --app) app="${2:-}"; shift 2 ;;
-                    --limit) limit="${2:-}"; shift 2 ;;
+                    --app) _need_value "$@"; app="${2:-}"; shift 2 ;;
+                    --limit) _need_value "$@"; limit="${2:-}"; shift 2 ;;
                     --json) json_out=1; shift ;;
                     *) echo "Unknown flag: $1" >&2; exit 2 ;;
                 esac
@@ -1163,8 +1163,8 @@ print("log kept %s days; owner address %s" % (st.get("logRetentionDays"), st.get
             local days="" owner="" set_owner=0
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --retention-days) days="${2:-}"; shift 2 ;;
-                    --owner-email) owner="${2:-}"; set_owner=1; shift 2 ;;
+                    --retention-days) _need_value "$@"; days="${2:-}"; shift 2 ;;
+                    --owner-email) _need_value "$@"; owner="${2:-}"; set_owner=1; shift 2 ;;
                     *) echo "Unknown flag: $1" >&2; exit 2 ;;
                 esac
             done
@@ -1262,11 +1262,11 @@ cmd_notifications_sender() {
             local rts=()
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --name) name="${2:-}"; shift 2 ;;
+                    --name) _need_value "$@"; name="${2:-}"; shift 2 ;;
                     --lock-name) lock=1; shift ;;
-                    --reply-to) rts+=("${2:-}"); shift 2 ;;
-                    --relay) relay="${2:-}"; shift 2 ;;
-                    --via) via="${2:-}"; shift 2 ;;
+                    --reply-to) _need_value "$@"; rts+=("${2:-}"); shift 2 ;;
+                    --relay) _need_value "$@"; relay="${2:-}"; shift 2 ;;
+                    --via) _need_value "$@"; via="${2:-}"; shift 2 ;;
                     -*) echo "Unknown flag: $1" >&2; exit 2 ;;
                     *) addr="$1"; shift ;;
                 esac
@@ -1325,10 +1325,10 @@ for s in rows:
             local rts=()
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --name) name="${2:-}"; shift 2 ;;
+                    --name) _need_value "$@"; name="${2:-}"; shift 2 ;;
                     --lock-name) lockflag=1; shift ;;
                     --unlock-name) lockflag=0; shift ;;
-                    --reply-to) rts+=("${2:-}"); shift 2 ;;
+                    --reply-to) _need_value "$@"; rts+=("${2:-}"); shift 2 ;;
                     -*) echo "Unknown flag: $1" >&2; exit 2 ;;
                     *) who="$1"; shift ;;
                 esac
@@ -1368,9 +1368,9 @@ cmd_notifications_suppressions() {
     local usage="usage: k2 notifications email suppressions [list] [<address>] [--limit N] [--json] | add <address> [--sender S] | rm <address> [--sender S|--all]"
     while [ $# -gt 0 ]; do
         case "$1" in
-            --sender) sender="${2:-}"; shift 2 ;;
+            --sender) _need_value "$@"; sender="${2:-}"; shift 2 ;;
             --all) all=1; shift ;;
-            --limit) limit="${2:-}"; shift 2 ;;
+            --limit) _need_value "$@"; limit="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
             *)
@@ -1474,11 +1474,11 @@ cmd_notifications_relay() {
             local host="" port="" tls="" user="" dom=""
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --host) host="${2:-}"; shift 2 ;;
-                    --port) port="${2:-}"; shift 2 ;;
-                    --tls) tls="${2:-}"; shift 2 ;;
-                    --username) user="${2:-}"; shift 2 ;;
-                    --from-domain) dom="${2:-}"; shift 2 ;;
+                    --host) _need_value "$@"; host="${2:-}"; shift 2 ;;
+                    --port) _need_value "$@"; port="${2:-}"; shift 2 ;;
+                    --tls) _need_value "$@"; tls="${2:-}"; shift 2 ;;
+                    --username) _need_value "$@"; user="${2:-}"; shift 2 ;;
+                    --from-domain) _need_value "$@"; dom="${2:-}"; shift 2 ;;
                     *) echo "Unknown flag: $1" >&2; exit 2 ;;
                 esac
             done
@@ -1528,7 +1528,7 @@ for r in rows:
             local relay="" from=""
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --from) from="${2:-}"; shift 2 ;;
+                    --from) _need_value "$@"; from="${2:-}"; shift 2 ;;
                     -*) echo "Unknown flag: $1" >&2; exit 2 ;;
                     *) relay="$1"; shift ;;
                 esac
@@ -1553,7 +1553,7 @@ cmd_app_approvals() {
     local app="" all=0 json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --app) app="${2:-}"; shift 2 ;;
+            --app) _need_value "$@"; app="${2:-}"; shift 2 ;;
             --all) all=1; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_grace_usage; return 0 ;;
@@ -1668,7 +1668,7 @@ cmd_app_deny() {
     local id="" reason="" json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --reason) reason="${2:-}"; shift 2 ;;
+            --reason) _need_value "$@"; reason="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
             -h|--help) echo "usage: k2 app deny <request-id> [--reason TEXT]   (an owner/admin denies; the requester withdraws its own)" >&2; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
@@ -1699,11 +1699,11 @@ cmd_app_access() {
     local _usage="usage: k2 app access <workspace> [--build on|off] [--manage on|off] [--users on|off] [--core db|files|thread|mail|sew=on|off[,…]]… [--json]"
     while [ $# -gt 0 ]; do
         case "$1" in
-            --build) build="${2:-}"; shift 2 ;;
-            --users) users="${2:-}"; shift 2 ;;
-            --manage) manage="${2:-}"; shift 2 ;;
-            --open) open="${2:-}"; shift 2 ;;
-            --core|--cores) cores="${cores:+$cores,}${2:-}"; shift 2 ;;
+            --build) _need_value "$@"; build="${2:-}"; shift 2 ;;
+            --users) _need_value "$@"; users="${2:-}"; shift 2 ;;
+            --manage) _need_value "$@"; manage="${2:-}"; shift 2 ;;
+            --open) _need_value "$@"; open="${2:-}"; shift 2 ;;
+            --core|--cores) _need_value "$@"; cores="${cores:+$cores,}${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_grace_usage; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;

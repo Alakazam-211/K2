@@ -255,8 +255,8 @@ cmd_app_resources_trends() {
     local json_out=0 app="" window=""
     while [ $# -gt 0 ]; do
         case "$1" in
-            --app) app="${2:-}"; shift 2 ;;
-            --window) window="${2:-}"; shift 2 ;;
+            --app) _need_value "$@"; app="${2:-}"; shift 2 ;;
+            --window) _need_value "$@"; window="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_resources_usage; return 0 ;;
             *) echo "usage: k2 app resources trends [--app A] [--window 1h|6h|24h|7d|30d] [--json]" >&2; exit 2 ;;
@@ -343,8 +343,8 @@ cmd_app_resources() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) json_out=1; shift ;;
-            --app) app="${2:-}"; shift 2 ;;
-            --owner) owner="${2:-}"; shift 2 ;;
+            --app) _need_value "$@"; app="${2:-}"; shift 2 ;;
+            --owner) _need_value "$@"; owner="${2:-}"; shift 2 ;;
             --rescan) rescan=1; shift ;;
             --wait) wait=1; shift ;;
             -h|--help) _app_resources_usage; return 0 ;;
@@ -396,13 +396,13 @@ cmd_app_resources_settings() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) json_out=1; shift ;;
-            --mode) mode="${2:-}"; changed=1; shift 2 ;;
-            --warn) warn="${2:-}"; changed=1; shift 2 ;;
-            --warn-free) warn_free="${2:-}"; changed=1; shift 2 ;;
-            --refuse) refuse="${2:-}"; changed=1; shift 2 ;;
-            --reserve) reserve="${2:-}"; changed=1; shift 2 ;;
-            --critical) critical="${2:-}"; changed=1; shift 2 ;;
-            --critical-free) critical_free="${2:-}"; changed=1; shift 2 ;;
+            --mode) _need_value "$@"; mode="${2:-}"; changed=1; shift 2 ;;
+            --warn) _need_value "$@"; warn="${2:-}"; changed=1; shift 2 ;;
+            --warn-free) _need_value "$@"; warn_free="${2:-}"; changed=1; shift 2 ;;
+            --refuse) _need_value "$@"; refuse="${2:-}"; changed=1; shift 2 ;;
+            --reserve) _need_value "$@"; reserve="${2:-}"; changed=1; shift 2 ;;
+            --critical) _need_value "$@"; critical="${2:-}"; changed=1; shift 2 ;;
+            --critical-free) _need_value "$@"; critical_free="${2:-}"; changed=1; shift 2 ;;
             -h|--help) _app_resources_usage; return 0 ;;
             *) echo "Unknown argument: $1 (k2 app resources --help)" >&2; exit 2 ;;
         esac

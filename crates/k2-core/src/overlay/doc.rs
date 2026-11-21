@@ -1309,6 +1309,7 @@ impl OverlayDoc {
             deleted: true,
             deleted_at: Some(at),
             deleted_by: Some(by),
+            ticket: self.ticket.clone(),
         }
     }
 }

@@ -121,6 +121,21 @@ pub fn literal_loopback(host: &str) -> bool {
     h == "localhost" || h.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
 }
 
+/// `_k2_refuse_plain_http URL`, for a URL as the person typed it: `None`
+/// for `https` (any case) or a host that is this computer as written
+/// ([`crate::prelude::plain_http::url_is_literal_loopback`]); else the
+/// refusal's line, exit 2, before the token is looked up. No scheme is
+/// plain http (curl guesses it).
+pub fn refuse_plain_http(url: &str) -> Option<String> {
+    let scheme = url.split_once("://").map_or("", |(s, _)| s);
+    if scheme.eq_ignore_ascii_case("https")
+        || crate::prelude::plain_http::url_is_literal_loopback(url)
+    {
+        return None;
+    }
+    Some(plain_http_line(url))
+}
+
 /// The plain-http refusal's line ([`plain_http_refusal`]).
 pub fn plain_http_line(url: &str) -> String {
     format!("Error: plain http:// only to this computer; use https:// (got: {url})")

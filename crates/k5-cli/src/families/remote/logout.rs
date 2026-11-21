@@ -133,10 +133,10 @@ pub fn parse(words: &[&str]) -> Form {
     }
 }
 
-/// `_remote_url_is_loopback`: `_k2_direct_url "https://${1#*://}"`.
+/// `_k2_url_is_literal_loopback`: this computer as written, never
+/// resolved (`x.localhost` is not), the transport's shared rule.
 pub fn loopback(url: &str) -> bool {
-    let rest = url.split_once("://").map_or(url, |(_, r)| r);
-    direct_url(&format!("https://{rest}"))
+    crate::prelude::plain_http::url_is_literal_loopback(url)
 }
 
 /// `_k2_direct_url URL` (`cli/src/cli-tools-policy.sh`), as the shell's

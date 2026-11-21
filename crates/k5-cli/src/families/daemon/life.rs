@@ -810,6 +810,12 @@ fn restart(s: &Settings, client: &mut Client, r: Restart) -> Exit {
 
 /// `cmd_daemon_restart --host <url>`.
 fn restart_remote(s: &Settings, client: &mut Client, r: &Restart, mut token: String) -> Exit {
+    // The owner token goes over plain http only to this computer, before
+    // the token file is read.
+    if let Some(line) = remote::refuse_plain_http(&r.host) {
+        out::stderr_line(&line);
+        return Exit::Usage;
+    }
     let token_file = s.home.join("daemon.token");
     if token.is_empty() && super::token_present(&s.home) {
         token = token_in(&token_file);

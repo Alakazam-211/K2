@@ -7,11 +7,13 @@
 //     assignee part opens the reassign picker (users on this box).
 //   - Below it, scrolling: the short summary (`--body`), the HTML brief
 //     (it takes the stage) with its compact links list. No action bar and
-//     no comments/history section: the conversation lives in the rail's
-//     Thread tab.
-//   - The right-hand chat rail (TicketAgentRail): the pre-redesign Thread |
-//     Agent tabs — the ticket thread with the quick answers above its text
-//     area and Send, and the asking session's terminal.
+//     no comments/history section: the conversation lives in the rail.
+//   - The right-hand chat rail (TicketAgentRail): on a server with
+//     `ticket-thread-v1`, the agent chat's Thread pane on the ticket's own
+//     conversation, the ticket agent's terminal as its drawer; on an older
+//     server the Thread | Agent tabs — the ticket thread with the quick
+//     answers above its text area and Send, and the asking session's
+//     terminal.
 //
 // Status model (daemon-first, feedback_routes.rs): a quick-answer pick
 // posts `optionPick: true` → the ticket is answered. Free text → the ticket

@@ -61,6 +61,7 @@ vi.mock('@/hooks/useElementWidth', () => ({
 import { TicketBoard, ticketMiddleState } from './TicketBoard'
 import { briefCache, DISCUSSION_TAB_GUTTER } from './FeedbackItemView'
 import { writeTicketOpenOn } from '@/lib/ticket-open-pref'
+import { primaryScope } from '@/kessel/server-scope'
 
 const NOW = 1_759_241_200
 
@@ -106,14 +107,26 @@ const third = makeRow({ id: 'cccccccc-0000-4000-8000-00000000000c', title: 'Thir
 const closed = makeRow({ id: 'dddddddd-0000-4000-8000-00000000000d', title: 'Closed ticket', status: 'resolved' })
 const planned = makeRow({ id: 'eeeeeeee-0000-4000-8000-00000000000e', title: 'Planned ticket', status: 'planned' })
 
+// The board's discussion here is the column of a server without
+// `ticket-thread-v1` (its Thread | Agent tabs and its own box);
+// TicketThreadPane.test covers the Thread pane.
+let ticketThreadOff: { mockRestore: () => void } | null = null
+
 beforeEach(() => {
   localStorage.clear()
   measured.width = 0
+  {
+    const scope = primaryScope()
+    const supports = scope.serverSupports.bind(scope)
+    ticketThreadOff = vi.spyOn(scope, 'serverSupports').mockImplementation((f) => f !== 'ticket-thread-v1' && supports(f))
+  }
   writeTicketOpenOn('all')
 })
 
 afterEach(() => {
   cleanup()
+  ticketThreadOff?.mockRestore()
+  ticketThreadOff = null
   api.fetchFeedbackShow.mockReset()
   api.fetchFeedbackBrief.mockReset()
   briefCache.clear()

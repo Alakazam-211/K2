@@ -77,6 +77,7 @@ import { FeedbackItemView, briefCache } from './FeedbackItemView'
 import { readTicketBoardChrome, writeTicketBoardChrome } from '@/lib/ticket-board-chrome'
 import { useToastStore } from '@/stores/toast'
 import { writeTicketOpenOn } from '@/lib/ticket-open-pref'
+import { primaryScope } from '@/kessel/server-scope'
 
 const NOW = 1_759_241_200
 
@@ -119,15 +120,27 @@ function show(r: FeedbackListRow): FeedbackShow {
 const mine = makeRow({ id: 'aaaaaaaa-0000-4000-8000-00000000000a', title: 'Mine ticket', assignees: ['owner'] })
 const julies = makeRow({ id: 'bbbbbbbb-0000-4000-8000-00000000000b', title: 'Julie ticket', assignees: ['julie'] })
 
+// The board's discussion here is the column of a server without
+// `ticket-thread-v1` (its Thread | Agent tabs and its own box);
+// TicketThreadPane.test covers the Thread pane.
+let ticketThreadOff: { mockRestore: () => void } | null = null
+
 beforeEach(() => {
   localStorage.clear()
   cli.liveSessions = []
+  {
+    const scope = primaryScope()
+    const supports = scope.serverSupports.bind(scope)
+    ticketThreadOff = vi.spyOn(scope, 'serverSupports').mockImplementation((f) => f !== 'ticket-thread-v1' && supports(f))
+  }
   seen.terminal.length = 0
   useToastStore.setState({ toasts: [] })
 })
 
 afterEach(() => {
   cleanup()
+  ticketThreadOff?.mockRestore()
+  ticketThreadOff = null
   api.fetchFeedbackShow.mockReset()
   api.fetchFeedbackBrief.mockReset()
   api.commentFeedback.mockClear()

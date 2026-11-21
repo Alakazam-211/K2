@@ -106,6 +106,7 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'components/Settings/sections/MailReaderLogSection.tsx',
   // Tickets live on the window's own server: the chat rail and "me".
   'components/Feedback/TicketAgentRail.tsx',
+  'components/Feedback/TicketAgentTerminal.tsx',
   'components/Feedback/feedback-api.ts',
   'components/Feedback/useTicketMe.ts',
   'components/FileViewerPane/CodeEditor.tsx',

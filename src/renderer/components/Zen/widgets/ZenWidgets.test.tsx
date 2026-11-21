@@ -1491,7 +1491,7 @@ describe('the Tickets view (Garden 1)', () => {
     h.tickets = [TICKET]
   })
 
-  async function openTicket(): Promise<HTMLElement> {
+  async function openTicket(ready = 'ticket-rail-thread'): Promise<HTMLElement> {
     await openRailView('tickets')
     await waitFor(() => expect(document.querySelector('[data-testid="ticket-scope-all"]')).not.toBeNull())
     await act(async () => {
@@ -1501,8 +1501,15 @@ describe('the Tickets view (Garden 1)', () => {
     await act(async () => {
       fireEvent.click(document.querySelector('[data-testid="ticket-card"]') as HTMLElement)
     })
-    await waitFor(() => expect(document.querySelector('[data-testid="ticket-rail-thread"]')).not.toBeNull())
+    await waitFor(() => expect(document.querySelector(`[data-testid="${ready}"]`)).not.toBeNull())
     return document.querySelector('[data-testid="ticket-agent-rail"]') as HTMLElement
+  }
+
+  /** A server without `ticket-thread-v1`: the ticket's own list and box. */
+  function ticketThreadOff(): void {
+    const scope = primaryScope()
+    const supports = scope.serverSupports.bind(scope)
+    vi.spyOn(scope, 'serverSupports').mockImplementation((f) => f !== 'ticket-thread-v1' && supports(f))
   }
 
   it('the Tickets page’s list + item in liquid glass panels, with no box around them', async () => {
@@ -1523,6 +1530,7 @@ describe('the Tickets view (Garden 1)', () => {
   })
 
   it('an open ticket shows the chat only: no terminal tab or toggle; the HTML brief frame stays', async () => {
+    ticketThreadOff()
     await mountZen()
     const rail = await openTicket()
     expect(rail.querySelector('[role="tablist"]')).toBeNull()
@@ -1535,6 +1543,20 @@ describe('the Tickets view (Garden 1)', () => {
     expect(useZenWindowStore.getState().on).toBe(true)
     expect(usePageViewStore.getState().page).toBe('home')
     expectEveryButtonPointer()
+    vi.mocked(primaryScope().serverSupports).mockRestore()
+  })
+
+  it('ticket-thread-v1: an open ticket is the Thread pane, with no terminal drawer', async () => {
+    await mountZen()
+    const rail = await openTicket('ticket-thread-pane')
+    expect(rail.querySelector('[role="tablist"]')).toBeNull()
+    expect(document.querySelector('[data-testid="ticket-rail-tab-agent"]')).toBeNull()
+    expect(rail.querySelector('[data-testid="ticket-thread-header"]')).not.toBeNull()
+    expect(rail.querySelector('[data-testid="thread-terminal-toggle"]')).toBeNull()
+    expect(document.querySelector('[data-testid="ticket-agent-terminal"]')).toBeNull()
+    expect(rail.querySelector('[data-compose-destination="thread"]')).not.toBeNull()
+    await waitFor(() => expect(document.querySelector('[data-testid="brief-frame"]')).not.toBeNull())
+    expect(useZenWindowStore.getState().on).toBe(true)
   })
 })
 

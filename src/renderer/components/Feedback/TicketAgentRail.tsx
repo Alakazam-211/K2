@@ -22,6 +22,12 @@
 // Status, reassign and the rail's open/closed toggle live in the ticket
 // header (FeedbackItemView); the rail has no action bar.
 //
+// On a server that keeps ticket discussions on the Thread store
+// (`ticket-thread-v1`, ticket-thread-contract.ts) the two tabs go: the rail
+// draws the agent chat's Thread pane on the ticket's own conversation, with
+// the ticket's agent terminal as its terminal drawer (TicketThreadPane).
+// The tabs below are an older server's.
+//
 // Zen's Tickets view (Rosson 2026-10-04) shows the chat only: it provides
 // `TicketRailTerminalContext` = false, so the rail draws no tabs and no
 // Agent terminal, just the Thread.
@@ -33,17 +39,8 @@
 // ride the next message, an option pick included. Without the feature:
 // chips only and no "+".
 
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { PrimaryRoom } from '@/components/Room/PrimaryRoom'
-import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
-import { TerminalPane } from '@/kessel-term/TerminalPane'
-import { PageLiveContext } from '@/contexts/TabVisibilityContext'
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { formatRelativeTime } from '@/lib/format-relative-time'
-import { activateProject } from '@/stores/projects'
-import {
-  activateOnLiveSessionAttach,
-  wakeCanonicalMemberSession,
-} from '@/components/Projects/wake-member-session'
 import { SelectableRegion, clearStuckBodyUserSelect } from '@/components/common/SelectableText'
 import {
   ThreadChatBubble,
@@ -89,15 +86,19 @@ import { Button, Segmented, Surface, TILE_FOOT_CLIP } from '@/components/ui'
 import { StatusMark } from './badges'
 import { useToastStore } from '@/stores/toast'
 import { PROJECT_BAR_ROW_HEIGHT } from '@/components/Projects/project-bar-height'
+import { AgentTab, TicketRailTerminalContext } from './TicketAgentTerminal'
+import { TicketThreadPane } from './TicketThreadPane'
+import { ticketThreadOn } from './ticket-thread-contract'
 import {
   TICKET_ATTACHMENTS_FEATURE,
-  askingSessionWakeAction,
   commentFeedback,
   resolveFeedback,
   type FeedbackSessionKind,
   type FeedbackShow,
   type QuickAnswerOption,
 } from './feedback-api'
+
+export { TicketRailTerminalContext }
 
 export type RailTab = 'thread' | 'agent'
 
@@ -108,138 +109,6 @@ export type RailTab = 'thread' | 'agent'
  *  project id (A36). An unlinked ticket (no workspace) has none. */
 export function ticketChatTarget(projectId: string, projectPath: string | null): ChatSessionTarget | null {
   return projectPath && projectId ? { agentName: projectId } : null
-}
-
-/** May the rail offer the asking session's terminal (the Agent tab)?
- *  True in the app; Zen's Tickets view sets false (chat only). */
-export const TicketRailTerminalContext = createContext(true)
-
-interface LiveSessionRow {
-  sessionId: string
-  agentName: string
-  command: string | null
-  args: string[]
-  cwd: string
-  isV2: boolean
-}
-
-export type TermPhase =
-  | { kind: 'checking' }
-  | { kind: 'none' }
-  | { kind: 'live'; agentName: string; cwd: string; sessionId?: string }
-  | { kind: 'dormant'; wakeable: boolean }
-  | { kind: 'waking' }
-  | { kind: 'error'; message: string }
-
-/** Every live daemon session (path=/ prefix-matches every absolute cwd —
- *  sandbox cells live under ~/.k2/sandbox-sessions/, outside any
- *  registered workspace, so a workspace-scoped list would miss them). */
-async function fetchLiveSessions(): Promise<LiveSessionRow[]> {
-  const rows = await daemonCliGet<LiveSessionRow[]>(primaryScope(), 'sessions/list-for-workspace', { path: '/' })
-  return Array.isArray(rows) ? rows : []
-}
-
-/** Find (and wake on demand) the asking session. */
-function useAskingSession(args: {
-  sessionId: string | null
-  sessionKind: FeedbackSessionKind
-  canonicalSessionId: string | null | undefined
-  projectId: string
-  projectPath: string | null
-}): { phase: TermPhase; wake: () => Promise<void>; retry: () => void } {
-  const { sessionId, sessionKind, canonicalSessionId, projectId, projectPath } = args
-  const [phase, setPhase] = useState<TermPhase>(sessionId ? { kind: 'checking' } : { kind: 'none' })
-
-  const resolve = useCallback(async (): Promise<TermPhase> => {
-    if (!sessionId) return { kind: 'none' }
-    try {
-      const live = await fetchLiveSessions()
-      const match = live.find((r) => r.sessionId === sessionId)
-      const action = askingSessionWakeAction({
-        sessionId,
-        sessionKind,
-        canonicalSessionId,
-        liveById: Boolean(match),
-      })
-      if (action === 'attach-live' && match) {
-        return { kind: 'live', agentName: match.agentName, cwd: match.cwd, sessionId: match.sessionId }
-      }
-      if (action === 'ensure-pinned-chat' && projectPath) {
-        const lookup = await daemonCliGet<{ sessionAlive: boolean; sessionId: string | null }>(
-          primaryScope(),
-          'sessions/lookup-by-agent',
-          { agent: projectId },
-        )
-        if (lookup.sessionAlive) {
-          return { kind: 'live', agentName: projectId, cwd: projectPath, sessionId: lookup.sessionId ?? undefined }
-        }
-      }
-      if (action === 'checking') return { kind: 'checking' }
-      const wakeable = projectPath !== null && (action === 'ensure-pinned-chat' || action === 'sandbox/reopen')
-      return { kind: 'dormant', wakeable }
-    } catch (e) {
-      return { kind: 'error', message: e instanceof Error ? e.message : String(e) }
-    }
-  }, [sessionId, sessionKind, canonicalSessionId, projectId, projectPath])
-
-  useEffect(() => {
-    let cancelled = false
-    if (!sessionId) {
-      setPhase({ kind: 'none' })
-      return
-    }
-    setPhase({ kind: 'checking' })
-    void resolve().then((p) => {
-      if (!cancelled) setPhase(p)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [sessionId, resolve])
-
-  // Client watching ⇒ Active so active_reaper spares the chat.
-  useEffect(() => {
-    if (phase.kind !== 'live') return
-    activateOnLiveSessionAttach(projectId, activateProject)
-  }, [phase.kind, projectId])
-
-  const wake = useCallback(async (): Promise<void> => {
-    if (!projectPath || !sessionId) return
-    const action = askingSessionWakeAction({ sessionId, sessionKind, canonicalSessionId, liveById: false })
-    if (action !== 'ensure-pinned-chat' && action !== 'sandbox/reopen') return
-    setPhase({ kind: 'waking' })
-    try {
-      if (action === 'ensure-pinned-chat') {
-        await wakeCanonicalMemberSession(projectId, projectPath, {
-          activateProject,
-          ensurePinnedChat: (project) => daemonCliPost(primaryScope(), 'workspace/ensure-pinned-chat', { project }),
-        })
-        setPhase({ kind: 'live', agentName: projectId, cwd: projectPath })
-        return
-      }
-      activateOnLiveSessionAttach(projectId, activateProject)
-      await daemonCliPost(primaryScope(), 'sandbox/reopen', { project_path: projectPath, session_id: sessionId })
-      for (let attempt = 0; attempt < 10; attempt++) {
-        const live = await fetchLiveSessions()
-        const match = live.find((r) => r.sessionId === sessionId)
-        if (match) {
-          setPhase({ kind: 'live', agentName: match.agentName, cwd: match.cwd, sessionId: match.sessionId })
-          return
-        }
-        await new Promise((r) => setTimeout(r, 500))
-      }
-      setPhase({ kind: 'error', message: 'Session woke but never registered — try again.' })
-    } catch (e) {
-      setPhase({ kind: 'error', message: e instanceof Error ? e.message : String(e) })
-    }
-  }, [projectPath, sessionId, sessionKind, canonicalSessionId, projectId])
-
-  const retry = useCallback(() => {
-    setPhase({ kind: 'checking' })
-    void resolve().then(setPhase)
-  }, [resolve])
-
-  return { phase, wake, retry }
 }
 
 export function TicketAgentRail({
@@ -288,6 +157,9 @@ export function TicketAgentRail({
   const [chosen, setTab] = useState<RailTab>('thread')
   const terminal = useContext(TicketRailTerminalContext)
   const tab: RailTab = terminal ? chosen : 'thread'
+  // The ticket's discussion on the Thread store: one pane, no tabs.
+  const onThread = ticketThreadOn(primaryScope())
+  const showTabs = terminal && !onThread
 
   return (
     // The discussion: its own tile, as the Projects page's chat (a floating
@@ -307,7 +179,7 @@ export function TicketAgentRail({
       // A file's details ("2 KB · CSV") at the app's hint size, never below.
       style={{ width, '--thread-file-meta-size': 'var(--type-sm)' } as React.CSSProperties}
     >
-      {(terminal || onHide) && (
+      {(showTabs || onHide) && (
         // Its top row, level with the report's header and the list's.
         <div
           className="flex items-center gap-1 px-3 border-b border-[var(--color-border)] flex-shrink-0"
@@ -316,7 +188,7 @@ export function TicketAgentRail({
         >
           {/* Thread or the asking agent's terminal: the app's small
               segmented control. */}
-          {terminal && (
+          {showTabs && (
             <Segmented<RailTab>
               aria-label="Show the thread or the agent"
               value={tab}
@@ -338,7 +210,24 @@ export function TicketAgentRail({
       {/* Where the conversation ends: the ticket's status, and Resolve. */}
       {item && <DiscussionStatus item={item} onChanged={onChanged} />}
 
-      {tab === 'thread' ? (
+      {onThread ? (
+        error && !item ? (
+          <DiscussionLoadError error={error} />
+        ) : (
+          <TicketThreadPane
+            feedbackId={feedbackId}
+            item={item}
+            options={options}
+            optionsLive={optionsLive}
+            onChanged={onChanged}
+            projectId={projectId}
+            projectPath={projectPath}
+            sessionId={sessionId}
+            sessionKind={sessionKind}
+            canonicalSessionId={canonicalSessionId}
+          />
+        )
+      ) : tab === 'thread' ? (
         // 0.46.3: paths in the ticket's messages that are files in its
         // workspace are links, like the main Thread (none when unlinked).
         <WorkspaceFileLinks workspace={projectPath} scope={primaryScope()}>
@@ -365,6 +254,15 @@ export function TicketAgentRail({
         />
       )}
     </Surface>
+  )
+}
+
+function DiscussionLoadError({ error }: { error: string }): React.JSX.Element {
+  return (
+    <div role="alert" className="flex-1 px-4 py-3 flex flex-col gap-1">
+      <p className="type-row text-[var(--color-status-error-text)]">Couldn’t load the discussion.</p>
+      <p className="type-hint text-[var(--color-text-muted)] selectable-copy">{error}</p>
+    </div>
   )
 }
 
@@ -617,14 +515,7 @@ export function ThreadTab({
   const stashDrawer = useStashDrawerPresence()
   const stashCount = useStashItems().length
 
-  if (error) {
-    return (
-      <div role="alert" className="flex-1 px-4 py-3 flex flex-col gap-1">
-        <p className="type-row text-[var(--color-status-error-text)]">Couldn’t load the discussion.</p>
-        <p className="type-hint text-[var(--color-text-muted)] selectable-copy">{error}</p>
-      </div>
-    )
-  }
+  if (error) return <DiscussionLoadError error={error} />
   if (!item) {
     return <div className="flex-1 flex items-center justify-center type-row text-[var(--color-text-muted)]">Loading the discussion…</div>
   }
@@ -858,103 +749,5 @@ export function ThreadTab({
         }
       />
     </ThreadChatScope>
-  )
-}
-
-// ── Agent tab (the asking session's terminal, in place) ──────────────────
-
-function AgentTab({
-  feedbackId,
-  projectId,
-  projectPath,
-  sessionId,
-  sessionKind,
-  canonicalSessionId,
-}: {
-  feedbackId: string
-  projectId: string
-  projectPath: string | null
-  sessionId: string | null
-  sessionKind: FeedbackSessionKind
-  canonicalSessionId: string | null | undefined
-}): React.JSX.Element {
-  // Pinned-chat tickets (canonical / D6) attach to the workspace agent even
-  // without a stamped session id; anything else needs the asking session.
-  const effectiveSessionId = sessionId ?? canonicalSessionId ?? null
-  const { phase, wake, retry } = useAskingSession({
-    sessionId: effectiveSessionId,
-    sessionKind: sessionId ? sessionKind : 'canonical',
-    canonicalSessionId,
-    projectId,
-    projectPath,
-  })
-
-  if (phase.kind === 'none') {
-    return (
-      <EmptyTermState
-        title="No session attached"
-        detail="This ticket was filed outside a known session, so there is no terminal to show."
-      />
-    )
-  }
-  if (phase.kind === 'checking') return <EmptyTermState title="Looking for the agent…" />
-  if (phase.kind === 'waking') return <EmptyTermState title="Waking the agent…" />
-  if (phase.kind === 'error') {
-    return (
-      <div className="flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center">
-        <p className="type-row text-[var(--color-status-error-text)] max-w-[48ch]">{phase.message}</p>
-        <Button variant="quiet" onClick={retry}>
-          Retry
-        </Button>
-      </div>
-    )
-  }
-  if (phase.kind === 'dormant') {
-    return (
-      <div
-        data-testid="ticket-agent-dormant"
-        className="flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center"
-      >
-        <p className="type-name text-[var(--color-text-primary)]">The agent is asleep</p>
-        <p className="type-hint text-[var(--color-text-muted)] max-w-[44ch]">
-          {phase.wakeable ? 'Wake it to see its terminal here.' : 'Its session isn’t running right now.'}
-        </p>
-        {phase.wakeable && (
-          <Button variant="accent" onClick={() => void wake()}>
-            Wake the agent
-          </Button>
-        )}
-      </div>
-    )
-  }
-
-  // Live — attach in place. attachAgentName keys the idempotent v2/spawn
-  // to the EXISTING daemon session (reused:true), so this never mints a
-  // duplicate PTY.
-  return (
-    <PageLiveContext.Provider value={true}>
-      <div className={`flex-1 min-h-0 ${TILE_FOOT_CLIP}`} data-testid="ticket-agent-terminal">
-        <PrimaryRoom>
-          <TerminalPane
-            terminalId={`feedback-term:${feedbackId}`}
-            cwd={phase.cwd}
-            attachAgentName={phase.agentName}
-            sessionId={phase.sessionId}
-          />
-        </PrimaryRoom>
-      </div>
-    </PageLiveContext.Provider>
-  )
-}
-
-function EmptyTermState({ title, detail }: { title: string; detail?: string }): React.JSX.Element {
-  return (
-    <div
-      data-testid="ticket-agent-empty"
-      className="flex-1 flex flex-col items-center justify-center gap-2 px-6 text-center"
-    >
-      <p className="type-row text-[var(--color-text-secondary)]">{title}</p>
-      {detail && <p className="type-hint text-[var(--color-text-muted)] max-w-[44ch]">{detail}</p>}
-    </div>
   )
 }

@@ -36,6 +36,7 @@ import { TicketAgentRail, TicketRailTerminalContext, ticketChatTarget } from './
 import type { FeedbackShow, QuickAnswerOption } from './feedback-api'
 import { ThreadChatZenContext } from '@/components/Thread/ThreadChat'
 import { primaryScope } from '@/kessel/server-scope'
+import { TICKET_THREAD_FEATURE } from './ticket-thread-contract'
 import { __resetActivityForTests, __seedActivityForTests, type ActivityRow } from '@/stores/activity'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -131,6 +132,11 @@ function rail(opts: { projectPath?: string | null; zen?: boolean; item?: Feedbac
 beforeEach(() => {
   localStorage.clear()
   __resetActivityForTests()
+  // These are the column of a server without `ticket-thread-v1` (the
+  // ticket's own list and box); TicketThreadPane.test covers the Thread pane.
+  const scope = primaryScope()
+  const supports = scope.serverSupports.bind(scope)
+  vi.spyOn(scope, 'serverSupports').mockImplementation((f) => f !== TICKET_THREAD_FEATURE && supports(f))
   cli.post.mockReset()
   cli.post.mockImplementation(async (path: string) =>
     path === 'feedback/comment' ? { ok: true, delivered: true, deliveryReason: null } : {},
@@ -139,6 +145,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  vi.restoreAllMocks()
   document.documentElement.removeAttribute('data-style')
   document.documentElement.removeAttribute('data-scheme')
 })

@@ -14,8 +14,10 @@
 #   a token goes to an https server, or over plain http only to a loopback
 #   address as written (127.0.0.0/8, ::1, localhost); a refused host gets
 #   no request and no name lookup; a password never goes over plain http;
-#   this computer's confirm goes through the vault socket only (none: no
-#   prompt, no TCP); a password is read from a real terminal only, with
+#   a remote password goes to an https server only, its certificate
+#   checked against what the person trusts (an untrusted one gets no
+#   request and no prompt); this computer's confirm goes through the
+#   vault socket only (none: no prompt, no TCP); a password is read from a real terminal only, with
 #   echo off (no controlling terminal: confirm_needs_a_person, never stdin);
 #   Ctrl-C stops with 130 and the cancelled line, echo back on; clone-tmp
 #   is a folder of ours at 0700 (a link there is refused); the download's
@@ -71,7 +73,7 @@ expect_has() { if <<<"$2" grep -Fq -- "$3"; then ok "$1"; else bad "$1 (missing 
 expect_not() { if <<<"$2" grep -Fq -- "$3"; then bad "$1 (found $(printf %q "$3"))"; else ok "$1"; fi; }
 
 # ── The stubs ────────────────────────────────────────────────────────
-# stub.py NAME tcp PORTFILE | NAME unix SOCKPATH. Answers from a table of
+# stub.py NAME tcp|tls PORTFILE | NAME unix SOCKPATH. Answers from a table of
 # defaults; $W/scn-NAME.json (read on every request) overrides a route
 # ({"routes": {path: {"status": n, "body": {...}, "location": url}}}) and
 # sets the knobs:
@@ -178,8 +180,14 @@ class H(http.server.BaseHTTPRequestHandler):
     def address_string(self):
         return "stub"
 
-if kind == "tcp":
+if kind in ("tcp", "tls"):
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    if kind == "tls":
+        # https: the leaf certificate for localhost the script made.
+        import ssl
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(os.path.join(W, "tls", "leaf.pem"), os.path.join(W, "tls", "leaf.key"))
+        srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
     with open(addr + ".tmp", "w") as f:
         f.write(str(srv.server_address[1]))
     os.rename(addr + ".tmp", addr)
@@ -461,6 +469,44 @@ expect_has "pull with a password confirm over http: the refusal line" "$ERR" "$(
 expect_not "no password prompt on the terminal" "$TTY" "Your password on"
 expect_not "the remote got no password confirm" "$(paths remote)" "/cli/clone/vault/confirm"
 expect_not "the remote packed nothing" "$(paths remote)" "/cli/clone/pack"
+
+echo "== a remote password goes over https, the certificate checked =="
+# A throwaway CA and a leaf for localhost (openssl), and a remote stub
+# behind TLS with it. Both CLIs trust the CA through SSL_CERT_FILE.
+mkdir -p "$W/tls"
+if openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj "/CN=Acme throwaway clone CA" \
+        -keyout "$W/tls/ca.key" -out "$W/tls/ca.pem" >"$W/tls/log" 2>&1 \
+    && openssl req -newkey rsa:2048 -nodes -subj "/CN=localhost" \
+        -keyout "$W/tls/leaf.key" -out "$W/tls/leaf.csr" >>"$W/tls/log" 2>&1 \
+    && printf 'subjectAltName=DNS:localhost\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n' >"$W/tls/leaf.ext" \
+    && openssl x509 -req -in "$W/tls/leaf.csr" -CA "$W/tls/ca.pem" -CAkey "$W/tls/ca.key" -CAcreateserial \
+        -days 2 -extfile "$W/tls/leaf.ext" -out "$W/tls/leaf.pem" >>"$W/tls/log" 2>&1; then
+    "$PY" "$W/stub.py" rtls tls "$W/port-rtls" & PIDS+=("$!")
+    for _ in $(seq 1 100); do [ -s "$W/port-rtls" ] && break; sleep 0.1; done
+fi
+if [ -s "$W/port-rtls" ]; then
+    PT="$(cat "$W/port-rtls")"
+    fresh
+    save_token "https://localhost:$PT" "$REMOTE_TOKEN"
+    SSL_CERT_FILE="$W/tls/ca.pem" k2pty ctty '[["Your password on ", "pw-CLONESEC-https\n"]]' clone from "https://localhost:$PT:ws1" --copy API_KEY --json
+    expect_eq "https pull with a remote password confirm: ok" "$RC" "0"
+    expect_has "the prompt names the remote" "$TTY" "<<Your password on >>https://localhost:$PT (copy secrets in a clone): "
+    expect_has "the remote got the typed password inside TLS" "$(body rtls /cli/clone/vault/confirm)" "pw-CLONESEC-https"
+    expect_has "the remote got its own token" "$(auth rtls /cli/clone/vault/confirm)" "Bearer $REMOTE_TOKEN"
+    expect_not "the password was not echoed" "$TTY" "pw-CLONESEC-https"
+    expect_eq "echo is on again after" "$ECHO" "on"
+    expect_eq "the password went to the remote only" "$(body local /cli/clone/vault/confirm)$(body vault /cli/vault/confirm/finish)" ""
+    expect_has "the remote packed after the confirm" "$(paths rtls)" "POST /cli/clone/pack"
+    fresh
+    save_token "https://localhost:$PT" "$REMOTE_TOKEN"
+    k2pty ctty '[]' clone from "https://localhost:$PT:ws1" --copy API_KEY --json
+    expect_eq "a certificate no trusted CA signed: exit 3" "$RC" "3"
+    expect_has "a certificate no trusted CA signed: daemon_unreachable" "$ERR" '"error": "daemon_unreachable"'
+    expect_not "a certificate no trusted CA signed: no password asked" "$TTY" "Your password on"
+    expect_eq "a certificate no trusted CA signed: the remote got nothing" "$(paths rtls)" ""
+else
+    bad "the https remote stub never came up (openssl: $(tail -3 "$W/tls/log" 2>/dev/null | tr '\n' ' '))"
+fi
 
 echo "== this computer's confirm goes through the vault socket only =="
 fresh

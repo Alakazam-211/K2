@@ -197,6 +197,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ### Voice
 - **Noise removal on phones stays on through busy moments**, such as the start of a call or a camera starting, from Sew 0.11.1.
 - **Sew 0.11.1.** With the chat server K2 installs, Home chat's phone notifications can cover channels you set to All messages, not only @mentions. Sew updates how it stores chat when it starts, so going back to an older Sew afterwards is `k2 hostchat rollback --accept-data-loss`, run by the owner.
+- **Incoming direct calls can ring with the iPhone's own call screen** (a newer K2 app and an updated relay are needed; older phones keep today's ringing alert).
 
 ## 0.46.16 — Postal (Beta) and phone notifications for Home chat
 

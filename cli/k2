@@ -4523,10 +4523,10 @@ cmd_terminal_spawn() {
     local agent="" command="" title="" wait="" cwd="" sandbox=""
     while [ $# -gt 0 ]; do
         case "$1" in
-            --title) title="$2"; shift 2 ;;
-            --command) command="$2"; shift 2 ;;
-            --agent) agent="$2"; shift 2 ;;
-            --cwd) cwd="$2"; shift 2 ;;
+            --title) _need_value "$@"; title="$2"; shift 2 ;;
+            --command) _need_value "$@"; command="$2"; shift 2 ;;
+            --agent) _need_value "$@"; agent="$2"; shift 2 ;;
+            --cwd) _need_value "$@"; cwd="$2"; shift 2 ;;
             --wait) wait="1"; shift ;;
             # Sandbox P1 (accept-and-mark): request/decline a sandbox. In P1
             # this resolves to the host-direct "passthrough" backend (no real
@@ -4561,7 +4561,7 @@ cmd_commit() {
     local message=""
     while [ $# -gt 0 ]; do
         case "$1" in
-            -m|--message) message="$2"; shift 2 ;;
+            -m|--message) _need_value "$@"; message="$2"; shift 2 ;;
             *) shift ;;
         esac
     done
@@ -4575,7 +4575,7 @@ cmd_commit_merge() {
     local message=""
     while [ $# -gt 0 ]; do
         case "$1" in
-            -m|--message) message="$2"; shift 2 ;;
+            -m|--message) _need_value "$@"; message="$2"; shift 2 ;;
             *) shift ;;
         esac
     done
@@ -6985,9 +6985,9 @@ cmd_daemon_restart() {
             # k2-ptyd P57: a restart keeps agent sessions running; with
             # --sessions they are ended and start fresh.
             --sessions) end_agents=1; shift ;;
-            --host)  host="${2:-}";  shift 2 ;;
+            --host)  _need_value "$@"; host="${2:-}";  shift 2 ;;
             --host=*) host="${1#--host=}"; shift ;;
-            --token) token="${2:-}"; shift 2 ;;
+            --token) _need_value "$@"; token="${2:-}"; shift 2 ;;
             --token=*) token="${1#--token=}"; shift ;;
             --token-stdin) token_stdin=1; shift ;;
             --wait) wait=1; shift ;;
@@ -7181,7 +7181,7 @@ cmd_daemon_log() {
     local follow=0
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --tail|-n) tail_n="$2"; shift 2 ;;
+            --tail|-n) _need_value "$@"; tail_n="$2"; shift 2 ;;
             --follow|-f) follow=1; shift ;;
             *) shift ;;
         esac
@@ -7414,9 +7414,9 @@ cmd_daemon_install() {
     fi
     while [ $# -gt 0 ]; do
         case "$1" in
-            --version)      version="${2:-}"; shift 2 ;;
-            --bin-dir)      bin_dir="${2:-}"; shift 2 ;;
-            --manifest-url) manifest_url="${2:-}"; shift 2 ;;
+            --version)      _need_value "$@"; version="${2:-}"; shift 2 ;;
+            --bin-dir)      _need_value "$@"; bin_dir="${2:-}"; shift 2 ;;
+            --manifest-url) _need_value "$@"; manifest_url="${2:-}"; shift 2 ;;
             --no-service)   no_service=1; shift ;;
             --dry-run)      dry_run=1; shift ;;
             -h|--help)
@@ -7855,7 +7855,7 @@ cmd_review_reject() {
     shift 2>/dev/null
     while [ $# -gt 0 ]; do
         case "$1" in
-            --reason) reason="$2"; shift 2 ;;
+            --reason) _need_value "$@"; reason="$2"; shift 2 ;;
             *) shift ;;
         esac
     done
@@ -7873,7 +7873,7 @@ cmd_review_feedback() {
     shift 2>/dev/null
     while [ $# -gt 0 ]; do
         case "$1" in
-            --message|-m) feedback="$2"; shift 2 ;;
+            --message|-m) _need_value "$@"; feedback="$2"; shift 2 ;;
             *) shift ;;
         esac
     done
@@ -7995,7 +7995,7 @@ cmd_terminal_read() {
     shift || true
     while [ $# -gt 0 ]; do
         case "$1" in
-            --lines) lines="$2"; shift 2 ;;
+            --lines) _need_value "$@"; lines="$2"; shift 2 ;;
             *) shift ;;
         esac
     done
@@ -8027,10 +8027,10 @@ cmd_read() {
     shift || true
     while [ $# -gt 0 ]; do
         case "$1" in
-            --lines) lines="$2"; shift 2 ;;
-            --agent) agent="$2"; shift 2 ;;
-            --session) session="$2"; shift 2 ;;
-            --token) token="$2"; shift 2 ;;
+            --lines) _need_value "$@"; lines="$2"; shift 2 ;;
+            --agent) _need_value "$@"; agent="$2"; shift 2 ;;
+            --session) _need_value "$@"; session="$2"; shift 2 ;;
+            --token) _need_value "$@"; token="$2"; shift 2 ;;
             --token-stdin) token_stdin=1; shift ;;
             *) shift ;;
         esac

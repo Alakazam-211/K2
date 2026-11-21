@@ -51,10 +51,10 @@ cmd_terminal_spawn() {
     local agent="" command="" title="" wait="" cwd="" sandbox=""
     while [ $# -gt 0 ]; do
         case "$1" in
-            --title) title="$2"; shift 2 ;;
-            --command) command="$2"; shift 2 ;;
-            --agent) agent="$2"; shift 2 ;;
-            --cwd) cwd="$2"; shift 2 ;;
+            --title) _need_value "$@"; title="$2"; shift 2 ;;
+            --command) _need_value "$@"; command="$2"; shift 2 ;;
+            --agent) _need_value "$@"; agent="$2"; shift 2 ;;
+            --cwd) _need_value "$@"; cwd="$2"; shift 2 ;;
             --wait) wait="1"; shift ;;
             # Sandbox P1 (accept-and-mark): request/decline a sandbox. In P1
             # this resolves to the host-direct "passthrough" backend (no real
@@ -89,7 +89,7 @@ cmd_commit() {
     local message=""
     while [ $# -gt 0 ]; do
         case "$1" in
-            -m|--message) message="$2"; shift 2 ;;
+            -m|--message) _need_value "$@"; message="$2"; shift 2 ;;
             *) shift ;;
         esac
     done
@@ -103,7 +103,7 @@ cmd_commit_merge() {
     local message=""
     while [ $# -gt 0 ]; do
         case "$1" in
-            -m|--message) message="$2"; shift 2 ;;
+            -m|--message) _need_value "$@"; message="$2"; shift 2 ;;
             *) shift ;;
         esac
     done

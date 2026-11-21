@@ -194,9 +194,9 @@ cmd_daemon_install() {
     fi
     while [ $# -gt 0 ]; do
         case "$1" in
-            --version)      version="${2:-}"; shift 2 ;;
-            --bin-dir)      bin_dir="${2:-}"; shift 2 ;;
-            --manifest-url) manifest_url="${2:-}"; shift 2 ;;
+            --version)      _need_value "$@"; version="${2:-}"; shift 2 ;;
+            --bin-dir)      _need_value "$@"; bin_dir="${2:-}"; shift 2 ;;
+            --manifest-url) _need_value "$@"; manifest_url="${2:-}"; shift 2 ;;
             --no-service)   no_service=1; shift ;;
             --dry-run)      dry_run=1; shift ;;
             -h|--help)
@@ -635,7 +635,7 @@ cmd_review_reject() {
     shift 2>/dev/null
     while [ $# -gt 0 ]; do
         case "$1" in
-            --reason) reason="$2"; shift 2 ;;
+            --reason) _need_value "$@"; reason="$2"; shift 2 ;;
             *) shift ;;
         esac
     done
@@ -653,7 +653,7 @@ cmd_review_feedback() {
     shift 2>/dev/null
     while [ $# -gt 0 ]; do
         case "$1" in
-            --message|-m) feedback="$2"; shift 2 ;;
+            --message|-m) _need_value "$@"; feedback="$2"; shift 2 ;;
             *) shift ;;
         esac
     done
@@ -775,7 +775,7 @@ cmd_terminal_read() {
     shift || true
     while [ $# -gt 0 ]; do
         case "$1" in
-            --lines) lines="$2"; shift 2 ;;
+            --lines) _need_value "$@"; lines="$2"; shift 2 ;;
             *) shift ;;
         esac
     done
@@ -807,10 +807,10 @@ cmd_read() {
     shift || true
     while [ $# -gt 0 ]; do
         case "$1" in
-            --lines) lines="$2"; shift 2 ;;
-            --agent) agent="$2"; shift 2 ;;
-            --session) session="$2"; shift 2 ;;
-            --token) token="$2"; shift 2 ;;
+            --lines) _need_value "$@"; lines="$2"; shift 2 ;;
+            --agent) _need_value "$@"; agent="$2"; shift 2 ;;
+            --session) _need_value "$@"; session="$2"; shift 2 ;;
+            --token) _need_value "$@"; token="$2"; shift 2 ;;
             --token-stdin) token_stdin=1; shift ;;
             *) shift ;;
         esac

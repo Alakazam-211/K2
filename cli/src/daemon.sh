@@ -431,9 +431,9 @@ cmd_daemon_restart() {
             # k2-ptyd P57: a restart keeps agent sessions running; with
             # --sessions they are ended and start fresh.
             --sessions) end_agents=1; shift ;;
-            --host)  host="${2:-}";  shift 2 ;;
+            --host)  _need_value "$@"; host="${2:-}";  shift 2 ;;
             --host=*) host="${1#--host=}"; shift ;;
-            --token) token="${2:-}"; shift 2 ;;
+            --token) _need_value "$@"; token="${2:-}"; shift 2 ;;
             --token=*) token="${1#--token=}"; shift ;;
             --token-stdin) token_stdin=1; shift ;;
             --wait) wait=1; shift ;;
@@ -627,7 +627,7 @@ cmd_daemon_log() {
     local follow=0
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --tail|-n) tail_n="$2"; shift 2 ;;
+            --tail|-n) _need_value "$@"; tail_n="$2"; shift 2 ;;
             --follow|-f) follow=1; shift ;;
             *) shift ;;
         esac

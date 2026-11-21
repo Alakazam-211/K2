@@ -2008,6 +2008,56 @@ fn write_meta(txn: &redb::WriteTransaction, doc: &OverlayDoc) -> Result<(), Stri
     put_meta(&mut meta, doc)
 }
 
+/// ticket-thread-v1: every conversation key starting with `prefix` that
+/// still has Thread pointers (the daily ticket sweep looks for discussions
+/// whose ticket and catalog row are gone). One range walk; each key once.
+pub fn thread_conversations_with_prefix(prefix: &str) -> Result<Vec<String>, String> {
+    let db = db()?;
+    let txn = db.begin_read().map_err(|e| format!("overlay redb read: {e}"))?;
+    let table = match txn.open_table(THREAD) {
+        Ok(t) => t,
+        Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
+        Err(e) => return Err(format!("overlay open thread: {e}")),
+    };
+    let mut end = prefix.to_string();
+    end.push(char::MAX);
+    let mut out: Vec<String> = Vec::new();
+    for entry in table.range(prefix..end.as_str()).map_err(|e| format!("overlay thread range: {e}"))? {
+        let (k, _) = entry.map_err(|e| format!("overlay thread iter: {e}"))?;
+        if let Some((conv, _)) = k.value().rsplit_once('/') {
+            if out.last().map(String::as_str) != Some(conv) {
+                out.push(conv.to_string());
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// ticket-thread-v1: remove a conversation's Thread whole, in one write:
+/// its pointers, the docs they point at (a ticket's docs are pointed at
+/// from its own Thread only), their `doc_meta` rows and its
+/// `thread_changes`. Returns how many pointers went. Callers hold the
+/// overlay write lock.
+pub fn purge_thread(conversation_id: &str) -> Result<usize, String> {
+    let db = db()?;
+    let txn = db.begin_write().map_err(|e| format!("overlay redb write: {e}"))?;
+    let n = {
+        let mut thread = txn.open_table(THREAD).map_err(|e| format!("overlay open thread: {e}"))?;
+        let pointers = conv_pointers(&thread, "thread", conversation_id)?;
+        let mut docs = txn.open_table(DOCS).map_err(|e| format!("overlay open docs: {e}"))?;
+        let mut meta = txn.open_table(DOC_META).map_err(|e| format!("overlay open doc_meta: {e}"))?;
+        for (seq, id) in &pointers {
+            thread.remove(conv_key(conversation_id, *seq).as_str()).map_err(|e| format!("overlay remove thread: {e}"))?;
+            docs.remove(id.as_str()).map_err(|e| format!("overlay remove docs: {e}"))?;
+            meta.remove(id.as_str()).map_err(|e| format!("overlay remove doc_meta: {e}"))?;
+        }
+        pointers.len()
+    };
+    drop_changes(&txn, conversation_id)?;
+    txn.commit().map_err(|e| format!("overlay redb commit: {e}"))?;
+    Ok(n)
+}
+
 fn put_meta(meta: &mut redb::Table<&str, &str>, doc: &OverlayDoc) -> Result<(), String> {
     meta.insert(doc.id.as_str(), DocMeta::of(doc).encode().as_str())
         .map_err(|e| format!("overlay insert doc_meta: {e}"))?;

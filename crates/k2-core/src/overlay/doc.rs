@@ -617,6 +617,11 @@ pub struct OverlayDoc {
     /// Who deleted it, from the credential. Set with `deleted`.
     #[serde(default, rename = "deletedBy", skip_serializing_if = "Option::is_none")]
     pub deleted_by: Option<PostAuthor>,
+    /// ticket-thread-v1 (0.46.17): the ticket id on every message of a
+    /// ticket's discussion (`ticket:<id>`), for search and links. None on
+    /// every other doc.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ticket: Option<String>,
 }
 
 /// [`SystemNotice::kind`]: something K2 says (a job was added, a reminder fired).
@@ -993,6 +998,7 @@ impl OverlayDoc {
             deleted: false,
             deleted_at: None,
             deleted_by: None,
+            ticket: None,
             changes: None,
             notice: None,
             approval: None,
@@ -1050,6 +1056,7 @@ impl OverlayDoc {
             deleted: false,
             deleted_at: None,
             deleted_by: None,
+            ticket: None,
             changes: None,
             notice: None,
             approval: None,
@@ -1109,6 +1116,7 @@ impl OverlayDoc {
             deleted: false,
             deleted_at: None,
             deleted_by: None,
+            ticket: None,
             changes: None,
             notice: None,
             approval: None,
@@ -1150,6 +1158,7 @@ impl OverlayDoc {
             deleted: false,
             deleted_at: None,
             deleted_by: None,
+            ticket: None,
             changes: None,
             notice: None,
             approval: None,
@@ -1213,6 +1222,7 @@ impl OverlayDoc {
             deleted: false,
             deleted_at: None,
             deleted_by: None,
+            ticket: None,
             changes: None,
             notice: None,
             approval: None,

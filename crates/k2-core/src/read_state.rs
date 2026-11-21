@@ -389,6 +389,7 @@ pub fn project_exists(conn: &Connection, project_id: &str) -> Result<bool, ReadE
 /// pinned Chat, each sidecar's, and the Threads of earlier chats that no
 /// address reaches any more (a re-pinned Chat keeps its old conversation,
 /// and an agent row's badge sums them all, [`thread_sums_by_project`]).
+/// A ticket's discussion (kind `ticket`) is not one of them.
 /// Forward only, one savepoint (all or none). Waiting cards stay waiting:
 /// reading never answers a card. Returns the conversations that moved, each
 /// with its new cursor. `NotFound` for a workspace this server doesn't have.
@@ -403,7 +404,7 @@ pub fn ack_project_threads(conn: &Connection, person: &str, project_id: &str) ->
             "SELECT c.conversation_id, c.last_thread_seq, COALESCE(r.last_read_seq, 0) \
              FROM overlay_conversations c LEFT JOIN read_cursors r \
              ON r.person = ?1 AND r.kind = 'thread' AND r.conv_id = c.conversation_id \
-             WHERE c.project_id = ?2 ORDER BY c.conversation_id",
+             WHERE c.project_id = ?2 AND c.kind <> 'ticket' ORDER BY c.conversation_id",
         )
         .map_err(store_err)?;
     let behind: Vec<(String, i64)> = stmt
@@ -639,13 +640,16 @@ pub fn summary_seen(conn: &Connection, person: &Person, now: i64) -> Result<Summ
     let mut out = Summary::default();
 
     // Threads: one catalog pass. A conversation with no catalog row (a
-    // removed workspace's, a collected `gb:` one) is not counted.
+    // removed workspace's, a collected `gb:` one) is not counted, and a
+    // ticket's discussion (kind `ticket`, ticket-thread-v1) never is: the
+    // Tickets badge counts tickets (waiting ones), not their messages.
     let mut stmt = conn
         .prepare(
             "SELECT c.conversation_id, c.project_id, c.last_thread_seq, COALESCE(r.last_read_seq, 0), \
              COALESCE(r.muted, 0), r.muted_until \
              FROM overlay_conversations c LEFT JOIN read_cursors r \
-             ON r.person = ?1 AND r.kind = 'thread' AND r.conv_id = c.conversation_id",
+             ON r.person = ?1 AND r.kind = 'thread' AND r.conv_id = c.conversation_id \
+             WHERE c.kind <> 'ticket'",
         )
         .map_err(store_err)?;
     type Row = (String, String, i64, Cursor);

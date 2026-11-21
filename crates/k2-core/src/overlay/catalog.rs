@@ -15,15 +15,28 @@ pub fn ensure_conversation(
     if project_id.is_empty() {
         return Err("overlay: project_id required".to_string());
     }
+    // ticket-thread-v1: a `ticket:<id>` key is a ticket's discussion, and
+    // its row says so (kind + ticket id), whichever writer makes it.
+    let (kind, ticket_id) = match super::ticket::ticket_of(conversation_id) {
+        Some(t) => (KIND_TICKET, Some(t)),
+        None => (KIND_THREAD, None),
+    };
     conn.execute(
-        "INSERT INTO overlay_conversations (conversation_id, project_id, last_thread_seq, last_chatter_seq) \
-         VALUES (?1, ?2, 0, 0) \
+        "INSERT INTO overlay_conversations (conversation_id, project_id, last_thread_seq, last_chatter_seq, kind, ticket_id) \
+         VALUES (?1, ?2, 0, 0, ?3, ?4) \
          ON CONFLICT(conversation_id) DO UPDATE SET project_id = excluded.project_id",
-        params![conversation_id, project_id],
+        params![conversation_id, project_id, kind, ticket_id],
     )
     .map_err(|e| format!("overlay catalog ensure: {e}"))?;
     Ok(())
 }
+
+/// `overlay_conversations.kind` of an agent's Thread (every key but a ticket's).
+pub const KIND_THREAD: &str = "thread";
+/// `overlay_conversations.kind` of a ticket's discussion (`ticket:<id>`):
+/// it lives as long as its ticket, and the cross-conversation walkers
+/// (unread summary, badges, mark all read, clone export) leave it out.
+pub const KIND_TICKET: &str = "ticket";
 
 pub fn next_thread_seq(
     conn: &Connection,

@@ -16,6 +16,7 @@ pub mod options;
 pub mod store;
 pub mod summary;
 pub mod thumbs;
+pub mod ticket;
 pub mod transfer;
 pub mod vault;
 

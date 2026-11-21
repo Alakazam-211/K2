@@ -282,6 +282,9 @@ pub mod federation;
 // Feedback F1 (prd-agent-feedback-notifications) — durable agent→human
 // asks (`k2 feedback ask`) + per-item comment threads.
 pub mod feedback;
+// Ticket discussions on the Thread store (ticket-thread-v1, 0.46.17): reads,
+// the backfill of old comment rows, the daily orphan sweep.
+pub mod feedback_thread;
 // The setup checklist (prd-setup-checklist-v1): rows, hide/skip/finish.
 pub mod first_run;
 // What `k2 setup` prints (`?format=text`), so the CLI needs no python3.

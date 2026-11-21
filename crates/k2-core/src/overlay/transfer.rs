@@ -325,7 +325,9 @@ pub fn export_project_threads(
 
     let mut keys: Vec<String> = {
         let mut stmt = conn
-            .prepare("SELECT conversation_id FROM overlay_conversations WHERE project_id = ?1 ORDER BY conversation_id")
+            // ticket-thread-v1: a ticket's discussion travels with its ticket
+            // row, and a clone carries no tickets, so it carries none of them.
+            .prepare("SELECT conversation_id FROM overlay_conversations WHERE project_id = ?1 AND kind <> 'ticket' ORDER BY conversation_id")
             .map_err(|e| format!("export catalog: {e}"))?;
         let rows = stmt
             .query_map(params![project_id], |r| r.get::<_, String>(0))
@@ -925,6 +927,7 @@ impl Rewrite<'_> {
             deleted: false,
             deleted_at: None,
             deleted_by: None,
+            ticket: None,
             changes: None,
             notice: None,
             approval: None,

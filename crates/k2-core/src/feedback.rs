@@ -34,6 +34,17 @@
 //! anything here is called, so this layer only stores what it is given.
 //! A column that doesn't parse reads as no attachments, never as a failed
 //! read (TA29).
+//!
+//! Thread store (0.46.17, ticket-thread-v1, migration 0322): a ticket's
+//! messages are the Thread conversation `ticket:<id>`
+//! ([`crate::overlay::ticket`]). Every read and write here goes through it
+//! behind the same shapes ([`FeedbackComment`] is a Thread doc: its id, its
+//! `from`, its body, its time, its files). A ticket filed before 0.46.17
+//! reads its old `feedback_comments` rows until the background backfill
+//! ([`crate::feedback_thread`]) moves it, or until its next message moves it
+//! first. `feedback_comments` is read-only from 0.46.17 (kept one release
+//! for rollback). The list's counts live on the row (`comment_count`,
+//! `file_count`), bumped with each message.
 
 use rusqlite::params;
 
@@ -203,7 +214,8 @@ pub fn create_with_brief_and_files(
     brief: Option<crate::feedback_brief::CleanBrief>,
     seed_attachments: &[ThreadAttachment],
 ) -> Result<FeedbackItem, String> {
-    let seed_files = attachments_column(seed_attachments)?;
+    // Checked like the old column (at most MAX_PER_MESSAGE files).
+    attachments_column(seed_attachments)?;
     let title = new.title.trim().to_string();
     if title.is_empty() {
         return Err("title must not be empty".to_string());
@@ -249,8 +261,8 @@ pub fn create_with_brief_and_files(
     tx.execute(
         "INSERT INTO feedback (id, project_id, session_id, session_kind, agent_name, \
          kind, title, body, options_json, priority, status, answer, \
-         created_at, updated_at, answered_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'waiting', NULL, ?11, ?11, NULL)",
+         created_at, updated_at, answered_at, comment_count, file_count, comments_in_thread) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'waiting', NULL, ?11, ?11, NULL, 1, ?12, 1)",
         params![
             id,
             new.project_id,
@@ -263,27 +275,30 @@ pub fn create_with_brief_and_files(
             options_json,
             priority,
             now,
+            seed_attachments.len() as i64,
         ],
     )
     .map_err(|e| format!("feedback insert failed: {e}"))?;
-    tx.execute(
-        "INSERT INTO feedback_comments (id, feedback_id, author, body, created_at, attachments_json) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![
-            uuid::Uuid::new_v4().to_string(),
-            id,
-            new.agent_name.trim(),
-            crate::redaction::redact(&seed),
-            now,
-            seed_files
-        ],
-    )
-    .map_err(|e| format!("feedback seed comment insert failed: {e}"))?;
     if let Some(brief) = &brief {
         crate::feedback_brief::insert_with(&tx, &id, brief, now)?;
     }
+    // The seed message goes last: the Thread write commits on its own, so
+    // nothing after it may fail but the transaction's commit.
+    let seed_msg = crate::overlay::ticket::TicketMessage {
+        ticket_id: &id,
+        project_id: &new.project_id,
+        from: new.agent_name.trim(),
+        author: None,
+        body: &seed,
+        attachments: seed_attachments.to_vec(),
+    };
+    let (seed_item, seed_links) = match crate::overlay::ticket::post(&tx, &seed_msg, None)? {
+        crate::overlay::ThreadPost::Posted(item, links) => (item, links),
+        crate::overlay::ThreadPost::Duplicate(_) => return Err("feedback seed: a keyless post found a client key".to_string()),
+    };
     tx.commit().map_err(|e| format!("feedback commit failed: {e}"))?;
     drop(conn);
+    crate::feedback_thread::notify_posted(&seed_item, &seed_links);
     get_item(&id).ok_or_else(|| "feedback row vanished after insert".to_string())
 }
 
@@ -301,10 +316,9 @@ pub enum ListFilter {
 const ITEM_SELECT: &str = "SELECT f.id, f.project_id, f.session_id, f.session_kind, \
     f.agent_name, f.kind, f.title, f.body, f.options_json, f.priority, f.status, \
     f.answer, f.created_at, f.updated_at, f.answered_at, \
-    (SELECT COUNT(*) FROM feedback_comments c WHERE c.feedback_id = f.id), \
+    f.comment_count, \
     (SELECT b.bytes FROM feedback_briefs b WHERE b.feedback_id = f.id), \
-    (SELECT COALESCE(SUM(CASE WHEN json_valid(c.attachments_json) THEN json_array_length(c.attachments_json) ELSE 0 END), 0) \
-    FROM feedback_comments c WHERE c.feedback_id = f.id AND c.attachments_json IS NOT NULL) \
+    f.file_count \
     FROM feedback f";
 
 fn row_to_item(row: &rusqlite::Row) -> rusqlite::Result<FeedbackItem> {
@@ -656,10 +670,9 @@ pub fn list_host_with(
         "SELECT f.id, f.project_id, f.session_id, f.session_kind, \
          f.agent_name, f.kind, f.title, f.body, f.options_json, f.priority, f.status, \
          f.answer, f.created_at, f.updated_at, f.answered_at, \
-         (SELECT COUNT(*) FROM feedback_comments c WHERE c.feedback_id = f.id), \
+         f.comment_count, \
          (SELECT b.bytes FROM feedback_briefs b WHERE b.feedback_id = f.id), \
-         (SELECT COALESCE(SUM(CASE WHEN json_valid(c.attachments_json) THEN json_array_length(c.attachments_json) ELSE 0 END), 0) \
-          FROM feedback_comments c WHERE c.feedback_id = f.id AND c.attachments_json IS NOT NULL), \
+         f.file_count, \
          p.name, p.path, \
          (p.id IS NOT NULL AND p.id NOT IN ({sentinels})) \
          FROM feedback f LEFT JOIN projects p ON p.id = f.project_id\
@@ -713,6 +726,15 @@ pub fn get_item(id: &str) -> Option<FeedbackItem> {
 /// Fetch one item + its full thread (chronological) by FULL id.
 pub fn get_with_comments(id: &str) -> Option<(FeedbackItem, Vec<FeedbackComment>)> {
     let item = get_item(id)?;
+    if crate::feedback_thread::in_thread(id) {
+        return match crate::feedback_thread::read_comments(id) {
+            Ok(comments) => Some((item, comments)),
+            Err(e) => {
+                crate::log_debug!("[feedback] {id}: Thread read failed: {e}");
+                None
+            }
+        };
+    }
     let db = crate::db::shared();
     let conn = db.lock();
     let mut stmt = conn
@@ -748,6 +770,9 @@ pub fn get_with_comments(id: &str) -> Option<(FeedbackItem, Vec<FeedbackComment>
 /// when it belongs to ticket `feedback_id` (FULL id). Its files are read
 /// leniently (TA29).
 pub fn get_comment(feedback_id: &str, comment_id: &str) -> Option<FeedbackComment> {
+    if crate::feedback_thread::in_thread(feedback_id) {
+        return crate::feedback_thread::read_comment(feedback_id, comment_id);
+    }
     let db = crate::db::shared();
     let conn = db.lock();
     conn.query_row(
@@ -817,14 +842,58 @@ pub fn add_comment(id: &str, author: &str, body: &str) -> Result<FeedbackComment
 }
 
 /// [`add_comment`] with files (0.46.6, TK2/TK5): the files ride the same
-/// INSERT as their row. The text may be empty only when files ride it.
+/// message. The text may be empty only when files ride it. `author` is the
+/// stored name; no credential stamp (K2's own notes, the agent CLI path).
 pub fn add_comment_with_files(
     id: &str,
     author: &str,
     body: &str,
     attachments: &[ThreadAttachment],
 ) -> Result<FeedbackComment, String> {
-    let author = author.trim();
+    match add_comment_by(id, &CommentBy::named(author), body, attachments, None)? {
+        CommentWrite::Stored(c, _) => Ok(c),
+        CommentWrite::Duplicate(_) => Err("comment: a keyless post found a client key".to_string()),
+    }
+}
+
+/// Who wrote a ticket message: the stored name (`show.comments[].author`)
+/// and, when the route knows it from the credential, the Thread author
+/// stamp (a person, an App guest, an agent).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommentBy {
+    pub name: String,
+    pub author: Option<crate::overlay::PostAuthor>,
+}
+
+impl CommentBy {
+    /// A name with no credential stamp.
+    pub fn named(name: &str) -> Self {
+        Self { name: name.trim().to_string(), author: None }
+    }
+}
+
+/// What [`add_comment_by`] did.
+#[derive(Debug, Clone)]
+pub enum CommentWrite {
+    /// Stored as Thread item `seq` of `ticket:<id>`.
+    Stored(FeedbackComment, i64),
+    /// The send-once key was kept already: nothing was stored.
+    Duplicate(crate::overlay::ClientIdHit),
+}
+
+/// Append a message to a ticket (FULL id): the next item of its Thread
+/// conversation `ticket:<id>`, body redacted, the row's `updated_at`,
+/// `comment_count` and `file_count` bumped. A ticket still on its old rows
+/// moves to the Thread first. With `client` (a Thread post's send-once
+/// key), a key already kept stores nothing. Comments do NOT change status.
+pub fn add_comment_by(
+    id: &str,
+    by: &CommentBy,
+    body: &str,
+    attachments: &[ThreadAttachment],
+    client: Option<&crate::overlay::ClientMsgKey>,
+) -> Result<CommentWrite, String> {
+    let author = by.name.trim();
     let body_t = body.trim();
     if author.is_empty() {
         return Err("author must not be empty".to_string());
@@ -832,36 +901,45 @@ pub fn add_comment_with_files(
     if body_t.is_empty() && attachments.is_empty() {
         return Err("comment body must not be empty".to_string());
     }
-    let files = attachments_column(attachments)?;
-    let now = now_secs();
-    let comment_id = uuid::Uuid::new_v4().to_string();
+    attachments_column(attachments)?;
     let db = crate::db::shared();
     let conn = db.lock();
-    // FK enforcement would catch a missing parent, but check explicitly
-    // so callers get a clean not-found instead of a constraint error.
-    let updated = conn
-        .execute(
-            "UPDATE feedback SET updated_at = ?2 WHERE id = ?1",
-            params![id, now],
-        )
-        .map_err(|e| format!("feedback touch failed: {e}"))?;
-    if updated == 0 {
+    let Some((project_id, moved)) = crate::feedback_thread::ticket_row(&conn, id)? else {
         return Err(format!("no feedback item with id {id}"));
+    };
+    if !moved {
+        crate::feedback_thread::move_ticket_with(&conn, id)?;
     }
-    conn.execute(
-        "INSERT INTO feedback_comments (id, feedback_id, author, body, created_at, attachments_json) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![comment_id, id, author, crate::redaction::redact(body_t), now, files],
-    )
-    .map_err(|e| format!("comment insert failed: {e}"))?;
-    Ok(FeedbackComment {
-        id: comment_id,
-        feedback_id: id.to_string(),
-        author: author.to_string(),
-        body: body_t.to_string(),
-        created_at: now,
+    let msg = crate::overlay::ticket::TicketMessage {
+        ticket_id: id,
+        project_id: &project_id,
+        from: author,
+        author: by.author.clone(),
+        body: body_t,
         attachments: attachments.to_vec(),
-    })
+    };
+    let (item, links) = match crate::overlay::ticket::post(&conn, &msg, client)? {
+        crate::overlay::ThreadPost::Posted(item, links) => (item, links),
+        crate::overlay::ThreadPost::Duplicate(hit) => return Ok(CommentWrite::Duplicate(hit)),
+    };
+    conn.execute(
+        "UPDATE feedback SET updated_at = ?2, comment_count = comment_count + 1, file_count = file_count + ?3 WHERE id = ?1",
+        params![id, item.doc.created_at, attachments.len() as i64],
+    )
+    .map_err(|e| format!("feedback touch failed: {e}"))?;
+    drop(conn);
+    crate::feedback_thread::notify_posted(&item, &links);
+    Ok(CommentWrite::Stored(
+        FeedbackComment {
+            id: item.id.clone(),
+            feedback_id: id.to_string(),
+            author: author.to_string(),
+            body: body_t.to_string(),
+            created_at: item.doc.created_at,
+            attachments: attachments.to_vec(),
+        },
+        item.seq,
+    ))
 }
 
 /// Accept an answer: append it to the thread as a comment (in the
@@ -893,11 +971,25 @@ pub fn set_answer_with_files(
     answer: &str,
     attachments: &[ThreadAttachment],
 ) -> Result<(FeedbackItem, FeedbackComment), String> {
+    set_answer_by(id, &CommentBy::named(author), answer, attachments)
+}
+
+/// [`set_answer_with_files`] with the credential's author stamp on the
+/// answer's message.
+pub fn set_answer_by(
+    id: &str,
+    by: &CommentBy,
+    answer: &str,
+    attachments: &[ThreadAttachment],
+) -> Result<(FeedbackItem, FeedbackComment), String> {
     let answer_t = answer.trim();
     if answer_t.is_empty() {
         return Err("answer must not be empty".to_string());
     }
-    let comment = add_comment_with_files(id, author, answer_t, attachments)?;
+    let comment = match add_comment_by(id, by, answer_t, attachments, None)? {
+        CommentWrite::Stored(c, _) => c,
+        CommentWrite::Duplicate(_) => return Err("answer: a keyless post found a client key".to_string()),
+    };
     let now = now_secs();
     let db = crate::db::shared();
     let conn = db.lock();
@@ -1074,29 +1166,49 @@ mod tests {
         let db = crate::db::shared();
         let conn = db.lock();
         let tickets: i64 = conn.query_row("SELECT COUNT(*) FROM feedback WHERE project_id = ?1", params![p], |r| r.get(0)).unwrap();
-        let files: i64 = conn
+        // 0.46.17: the seed (and its files) is the Thread write after the
+        // brief, so a failed brief leaves no ticket conversation either.
+        let threads: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM feedback_comments c JOIN feedback f ON f.id = c.feedback_id WHERE f.project_id = ?1",
+                "SELECT COUNT(*) FROM overlay_conversations WHERE kind = 'ticket' AND project_id = ?1",
                 params![p],
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!((tickets, files), (0, 0));
+        assert_eq!((tickets, threads), (0, 0));
     }
 
     /// TA29: a column that doesn't parse drops the files, never the ticket;
     /// old rows (NULL) read as none.
     #[test]
     fn unreadable_files_never_hide_the_ticket() {
+        // A ticket from before 0.46.17 (its rows in feedback_comments, not
+        // yet moved to its Thread): one row with no files, one corrupt.
         let p = pid("filescorrupt");
-        let item = ask(&p, "old");
-        let c = add_comment_with_files(&item.id, "rosson", "see", &[file("a.md")]).unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let (c1, c2) = (uuid::Uuid::new_v4().to_string(), uuid::Uuid::new_v4().to_string());
         {
             let db = crate::db::shared();
             let conn = db.lock();
-            conn.execute("UPDATE feedback_comments SET attachments_json = '{not json' WHERE id = ?1", params![c.id]).unwrap();
+            conn.execute(
+                "INSERT INTO feedback (id, project_id, agent_name, kind, title, priority, status, created_at, updated_at) \
+                 VALUES (?1, ?2, 'agent-a', 'question', 'old', 3, 'waiting', 1, 1)",
+                params![id, p],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO feedback_comments (id, feedback_id, author, body, created_at) VALUES (?1, ?2, 'agent-a', 'old', 1)",
+                params![c1, id],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO feedback_comments (id, feedback_id, author, body, created_at, attachments_json) \
+                 VALUES (?1, ?2, 'alice', 'see', 2, '{not json')",
+                params![c2, id],
+            )
+            .unwrap();
         }
-        let (item, comments) = get_with_comments(&item.id).expect("the ticket still reads");
+        let (item, comments) = get_with_comments(&id).expect("the ticket still reads");
         assert_eq!(comments.len(), 2);
         assert!(comments.iter().all(|c| c.attachments.is_empty()), "NULL and corrupt both read as none");
         assert_eq!(item.file_count, 0, "a corrupt column counts nothing");

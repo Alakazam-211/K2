@@ -563,6 +563,42 @@ fn compute_an_exported_404_exit_changes_nothing() {
     }
 }
 
+/// A verb `cmd_compute` has no arm for: the `*)` arm's usage line, exit
+/// 2, after the gates and the `id` tool's lines; nothing sent.
+#[test]
+fn compute_unknown_verbs() {
+    let rig = Rig::new(VERB, "unknown");
+    let v = vec![
+        // native: compute packages
+        usage_case("packages", &["packages"]),
+        // native: compute pkg
+        usage_case("pkg, words after it", &["pkg", "list", "--json"]),
+        usage_case("--json", &["--json"]),
+        usage_case("a word with a quote", &["it's"]),
+        case(
+            "no daemon: the connection gate",
+            &["packages"],
+            &[],
+            vec![],
+            nothing,
+            1,
+            0,
+        ),
+        case(
+            "HOOK_SOCK set and no passport",
+            &["packages"],
+            &[("K2_HOOK_SOCK", "{sock}")],
+            vec![],
+            owner_and_port,
+            3,
+            0,
+        ),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}
+
 /// What the binary hands to the shell, before it prints or sends
 /// anything: both sides are the shell's.
 #[test]

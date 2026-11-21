@@ -146,6 +146,9 @@ pub enum Ask {
     Approve(String),
     /// `take-owner <node>`.
     TakeOwner(String),
+    /// `admin` with no word: `_compute_usage`, the help page; nothing
+    /// sent.
+    Usage,
 }
 
 /// A POST over TCP.
@@ -380,6 +383,7 @@ pub fn send(cp: &mut Cp<'_>, a: &Ask, sock: &Path) -> Exit {
         Ask::Call(c) => c,
         Ask::Approve(id) => return flows::approve(cp, sock, id),
         Ask::TakeOwner(node) => return flows::take_owner(cp, sock, node),
+        Ask::Usage => return super::setup::usage(),
     };
     let answer = match cp.call(c.post, &c.path, &c.body, c.tcp) {
         Ok(b) => b,

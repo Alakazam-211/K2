@@ -14,6 +14,9 @@
 //!   remote-admin|disable] …` (`cmd_compute_local`).
 //! - [`attach`]: `attach <job> [--since SEQ] [--raw]`, which follows the
 //!   job to its end ([`super::super::follow`]).
+//! - A verb no arm of `cmd_compute` names (`packages`, `--json`, …): the
+//!   `*)` arm's usage line, exit 2 ([`unknown`]), after the gates and the
+//!   `id` tool's lines.
 //!
 //! [`super::run`] drives them as it drives the other admin verbs.
 
@@ -42,12 +45,21 @@ pub enum Ask {
     Attach(attach::Ask),
 }
 
-/// Whether `words` (from the verb on) is one of this module's forms.
+/// Whether `words` (from the verb on) is one of this module's forms: a
+/// verb no arm of `cmd_compute` names is one too ([`unknown`]).
 pub fn answers(words: &[&str]) -> bool {
     match words.first() {
         None | Some(&"") | Some(&"help") => true,
-        Some(w) => ANSWERS.contains(w),
+        Some(w) => ANSWERS.contains(w) || !super::super::answers(w),
     }
+}
+
+/// `cmd_compute`'s `*)` arm: a verb it has no arm for, exit 2.
+pub fn unknown(verb: &str) -> String {
+    format!(
+        "usage: unknown compute verb '{verb}' ({} compute --help)",
+        k2_client::brand::CLI_NAME
+    )
 }
 
 /// The words from the verb on. `None`: the shell answers the line.
@@ -60,6 +72,7 @@ pub fn parse(words: &[&str]) -> Option<Words<Ask>> {
         "lanes" => map(lanes::parse(rest), Ask::Lanes),
         "local" => map(local::parse(rest), Ask::Local),
         "attach" => map(attach::parse(rest)?, Ask::Attach),
+        w if !super::super::answers(w) => Words::Usage(unknown(w)),
         _ => return None,
     })
 }

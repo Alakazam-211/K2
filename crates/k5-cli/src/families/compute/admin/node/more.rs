@@ -365,7 +365,9 @@ pub fn admin(rest: &[&str]) -> Option<Words<Ask>> {
     let sub = rest.first().copied().unwrap_or("");
     let (sub, rest) = match sub {
         "propose" | "list" | "ls" | "approve" | "deny" | "withdraw" => (sub, &rest[1..]),
-        "" | "help" | "--help" | "-h" => return None,
+        // `_compute_usage`, after the gates (`help` is the front's page).
+        "" => return Some(Words::Ask(Ask::Usage)),
+        "help" | "--help" | "-h" => return None,
         _ => ("propose", rest),
     };
     let first = rest.first().copied().unwrap_or("");

@@ -667,6 +667,26 @@ const REQUESTS: &str = r#"{"requests":[{"id":"0f3c2a10-1111-2222-3333-4444555566
 fn compute_node_admin() {
     let rig = Rig::new(VERB, "nodeadmin");
     let v = vec![
+        // native: compute node admin
+        words("admin alone: the help page", &["node", "admin"], 0),
+        case(
+            "admin alone, no daemon: the connection gate",
+            &["node", "admin"],
+            &[],
+            vec![],
+            nothing,
+            1,
+            0,
+        ),
+        case(
+            "admin alone: HOOK_SOCK set and no passport",
+            &["node", "admin"],
+            &[("K2_HOOK_SOCK", "{sock}")],
+            vec![],
+            owner_and_port,
+            3,
+            0,
+        ),
         // covers: compute node admin list
         one("requests", &["node", "admin", "list"], REQUESTS, 0),
         one(

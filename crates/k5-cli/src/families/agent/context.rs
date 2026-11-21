@@ -30,8 +30,8 @@ mod line {
     pub const HTTP_ERR: u32 = 77;
     pub const HTTP_EXIT: u32 = 30;
     pub const WARN: u32 = 8;
-    pub const RESOLVE_PINNED: u32 = 27;
-    pub const RESOLVE_LAYERS: u32 = 37;
+    pub const RESOLVE_PINNED: u32 = 28;
+    pub const RESOLVE_LAYERS: u32 = 38;
     pub const LIST_PINNED: u32 = 18;
     pub const LIST_LAYERS: u32 = 36;
     pub const CATALOG: u32 = 15;
@@ -712,20 +712,18 @@ fn resolve_layer(d: &Value, token: &str) -> Result<Option<String>, Raise> {
         let pid = dget(&p, "id", l)?
             .filter(|v| py::truthy(v))
             .map_or_else(String::new, py::str_of);
-        if pid == token || pid.is_empty() {
-            return Ok(Some(if pid.is_empty() {
-                token.to_string()
-            } else {
-                pid
-            }));
+        // `if not pid: continue`: a pinned row with no id never matches
+        // (bash's `pid == sys_map.get(token, "")` was `"" == ""` for every
+        // token outside the system names).
+        if pid.is_empty() {
+            continue;
+        }
+        if pid == token {
+            return Ok(Some(pid));
         }
         let lab = py_strip(&text_or_empty(dget(&p, "label", l)?, "strip", l)?).to_lowercase();
         if !lab.is_empty() && lab == lower {
-            return Ok(Some(if pid.is_empty() {
-                token.to_string()
-            } else {
-                pid
-            }));
+            return Ok(Some(pid));
         }
     }
     let l = line::RESOLVE_LAYERS;
@@ -1256,6 +1254,28 @@ mod tests {
             Some("pinned:agent")
         );
         assert_eq!(resolve_layer(&d, "nope").unwrap(), None);
+    }
+
+    /// A pinned row with no id (missing, empty, null or 0) never matches:
+    /// the token goes on to the layers' id, path and label, or nothing.
+    #[test]
+    fn a_pinned_row_with_no_id_never_matches() {
+        let d = parse(
+            r#"{"pinned":[{"label":"Role (persona)"},{"id":"","label":"Empty"},{"id":null},{"id":0,"label":"Zero"},{"id":"pinned:tooling","label":"Tooling footer"}],"layers":[{"id":"L1","path":"docs/a.md"},{"id":"L2","label":"Role (persona)"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(resolve_layer(&d, "docs/a.md").unwrap().as_deref(), Some("L1"));
+        assert_eq!(
+            resolve_layer(&d, "role (persona)").unwrap().as_deref(),
+            Some("L2")
+        );
+        assert_eq!(
+            resolve_layer(&d, "tooling footer").unwrap().as_deref(),
+            Some("pinned:tooling")
+        );
+        assert_eq!(resolve_layer(&d, "docs/nope.md").unwrap(), None);
+        assert_eq!(resolve_layer(&d, "Empty").unwrap(), None);
+        assert_eq!(resolve_layer(&d, "zero").unwrap(), None);
     }
 
     #[test]

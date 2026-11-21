@@ -1757,6 +1757,122 @@ fn context_writes() {
     check(&rig, v);
 }
 
+/// Pinned rows with no id (missing, empty, null or 0), as
+/// tests/cli/agent_context_pinned_empty_id.sh's stub answers them.
+const LAYERS_NO_ID: &str = r#"{"pinned":[{"label":"Role (persona)","path":".k2/agent/ROLE.md","enabled":true},{"id":"","label":"Empty"},{"id":null,"label":"Null"},{"id":0,"label":"Zero"},{"id":"pinned:tooling","label":"Tooling footer","enabled":true}],"layers":[{"id":"L1","path":"docs/a.md","label":"Doc A","enabled":true},{"id":"L2","label":"Role (persona)","path":"notes/role.md"}]}"#;
+
+/// q17's fix: a pinned row with no id never matches the typed token, so
+/// remove, on, off and move resolve the layer's real id, and a token
+/// nothing matches is not found (exit 4) with no write sent: each row's
+/// request count is the stub's whole log, so a write would fail it.
+#[test]
+fn context_pinned_row_with_no_id() {
+    let rig = Rig::new(VERB, "ctxnoid");
+    let done = r#"{"ok":true}"#;
+    let v = vec![
+        case(
+            "remove a path past a pinned row with no id",
+            &["context", "remove", "docs/a.md"],
+            &[],
+            vec![ok(LAYERS_NO_ID), ok(done)],
+            owner_and_port,
+            0,
+            2,
+        ),
+        case(
+            "off a path past a pinned row with no id",
+            &["context", "off", "docs/a.md"],
+            &[],
+            vec![ok(LAYERS_NO_ID), ok(done)],
+            owner_and_port,
+            0,
+            2,
+        ),
+        case(
+            "on a path past a pinned row with no id, --json",
+            &["context", "on", "docs/a.md", "--json"],
+            &[],
+            vec![ok(LAYERS_NO_ID), ok(done)],
+            owner_and_port,
+            0,
+            2,
+        ),
+        case(
+            "move a path past a pinned row with no id",
+            &["context", "move", "docs/a.md", "top"],
+            &[],
+            vec![ok(LAYERS_NO_ID), ok(done)],
+            owner_and_port,
+            0,
+            2,
+        ),
+        case(
+            "the label of a pinned row with an id",
+            &["context", "off", "Tooling footer"],
+            &[],
+            vec![ok(LAYERS_NO_ID), ok(done)],
+            owner_and_port,
+            0,
+            2,
+        ),
+        case(
+            "the label of a pinned row with no id: the layer's",
+            &["context", "remove", "role (persona)"],
+            &[],
+            vec![ok(LAYERS_NO_ID), ok(done)],
+            owner_and_port,
+            0,
+            2,
+        ),
+        case(
+            "remove, nothing matches: exit 4, no write",
+            &["context", "remove", "docs/nope.md"],
+            &[],
+            vec![ok(LAYERS_NO_ID)],
+            owner_and_port,
+            4,
+            1,
+        ),
+        case(
+            "remove --json, nothing matches: exit 4, no write",
+            &["context", "remove", "docs/nope.md", "--json"],
+            &[],
+            vec![ok(LAYERS_NO_ID)],
+            owner_and_port,
+            4,
+            1,
+        ),
+        case(
+            "on, the label of a pinned row with an empty id: exit 4, no write",
+            &["context", "on", "Empty"],
+            &[],
+            vec![ok(LAYERS_NO_ID)],
+            owner_and_port,
+            4,
+            1,
+        ),
+        case(
+            "off, the label of a pinned row with id 0: exit 4, no write",
+            &["context", "off", "zero"],
+            &[],
+            vec![ok(LAYERS_NO_ID)],
+            owner_and_port,
+            4,
+            1,
+        ),
+        case(
+            "move, nothing matches: exit 4, no write",
+            &["context", "move", "nope", "up"],
+            &[],
+            vec![ok(LAYERS_NO_ID)],
+            owner_and_port,
+            4,
+            1,
+        ),
+    ];
+    check(&rig, v);
+}
+
 /// No answer on the left of the pipe into the template readers: the line,
 /// then SIGPIPE. macOS's bash 3.2 runs the reader on the empty input
 /// (`bash32-pipe-reader`).

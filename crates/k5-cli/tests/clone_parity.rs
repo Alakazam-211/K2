@@ -1,8 +1,8 @@
 //! `k5-cli clone` against the shell CLI's `cli/k2 clone`, on the parity
 //! rig ([`common::parity`]): the same requests, stdout, stderr and exit
-//! code for the proposal verbs the binary answers (`proposals`,
-//! `propose`, `withdraw`, `deny`) and the help; the engine's verbs
-//! (`preview`, `to`, `from`, `here`, `approve`) are the shell's.
+//! code for the proposal verbs (`proposals`, `propose`, `withdraw`,
+//! `deny`) and the help. The engine's verbs (`preview`, `to`, `from`,
+//! `here`, `approve`) are `tests/clone_engine_parity.rs`'s.
 //!
 //! - Each verb's answer, `--json`, the daemon's refusals (`_compute_fail`
 //!   lines and exits), Python's raise on an odd answer.
@@ -324,6 +324,29 @@ fn clone_lines_say_the_brand_s_name() {
     );
     assert_eq!(out.code, Some(2));
     assert!(log.is_empty());
+    let c = case(
+        "brand: an engine verb",
+        &["to", "http://h.example", "w", "--token", "t"],
+        &[],
+        vec![],
+        owner_and_port,
+        3,
+        0,
+    );
+    let (out, log) = rig.binary(&c, false);
+    let product = k2_client::brand::PRODUCT_NAME;
+    assert_eq!(
+        out.stderr,
+        format!("note: --token is visible to every account on this computer while the command runs; use --token-stdin\nrefused: h.example isn't https, so {product} won't send your token or password there; use https://h.example\n")
+    );
+    assert_eq!(out.code, Some(3));
+    assert!(log.is_empty());
+    let c = case("brand: here", &["here"], &[], vec![], owner_and_port, 2, 0);
+    let (out, _) = rig.binary(&c, false);
+    assert_eq!(
+        out.stderr,
+        format!("{{\"error\": \"usage\", \"hint\": \"usage: {cli} clone here <ws> [--dest DIR]\"}}\n")
+    );
 }
 
 /// Help never acts.
@@ -338,6 +361,12 @@ fn clone_help_never_acts() {
         shell("propose -h", &["propose", "--to", "here", "-h"]),
         shell("deny --help", &["deny", "cp-1", "--help"]),
         shell("withdraw -h", &["withdraw", "-h", "cp-1"]),
+        shell("to -h", &["to", "https://h.example", "ws1", "-h"]),
+        shell("from --help", &["from", "h.example:ws1", "--help"]),
+        shell("here -h", &["here", "ws1", "-h"]),
+        shell("approve --help", &["approve", "cp-1", "--help"]),
+        shell("preview -h", &["preview", "ws1", "-h"]),
+        shell("a bare workspace -h", &["ws1", "--dest", "/d", "-h"]),
     ] {
         rig.check(&c);
     }

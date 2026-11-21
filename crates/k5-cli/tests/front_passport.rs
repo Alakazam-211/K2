@@ -197,6 +197,9 @@ const CANDIDATES: &[(&[&str], &str)] = &[
     (&["publish", "ps", "--json"], "/cli/publish/list"),
     (&["release", "--agent", "ada"], "/cli/release"),
     (&["reserve", "--agent", "ada", "src"], "/cli/reserve"),
+    // Stays the shell's by K2's ruling (send-feedback's internals): one GET
+    // through _setup_send, which carries the hand-over headers.
+    (&["setup", "agent-reports", "--json"], "/cli/product-feedback/settings"),
 ];
 
 /// The first candidate the route table still gives the shell; it fails

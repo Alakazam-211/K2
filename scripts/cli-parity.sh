@@ -308,8 +308,11 @@ check_native_without_python3() {
     got="$(run_in "$nopath" bash "$ROOT/cli/k2" study errors --json 2>/dev/null)" || true
     [ "$got" != "$want" ] || problems+=("bash printed the JSON page with no python3: the difference is gone")
     local fam="" try seen=()
-    for try in daemon desktop hooks ci app-update release reserve migrate llm publish; do
-        rc=0; got="$(run_in "$nopath" "$WORK/bin/k5" "$try" 2>"$d/err")" || rc=$?
+    # The last, `setup agent-reports --json`, stays the shell's by K2's ruling
+    # (send-feedback's internals); the error line names its noun.
+    for try in daemon desktop hooks ci app-update release reserve migrate llm publish "setup agent-reports --json"; do
+        # shellcheck disable=SC2086
+        rc=0; got="$(run_in "$nopath" "$WORK/bin/k5" $try 2>"$d/err")" || rc=$?
         if [ "$rc" = 69 ]; then fam="$try"; break; fi
         seen+=("$try: exit $rc")
         rm -rf "$d/home/.k2/run/cli"
@@ -318,7 +321,7 @@ check_native_without_python3() {
         problems+=("no family in the list is handed to the shell any more (${seen[*]}): name one the binary still hands over")
     else
         [ -z "$got" ] || problems+=("the binary's $fam with no python3 printed on stdout: $(printf '%s' "$got" | head -c 200)")
-        [ "$(wc -l <"$d/err" | tr -d ' ')" = 1 ] && grep -q "^k5 $fam: this command is not built into k5 yet and needs Python 3\\. " "$d/err" \
+        [ "$(wc -l <"$d/err" | tr -d ' ')" = 1 ] && grep -q "^k5 ${fam%% *}: this command is not built into k5 yet and needs Python 3\\. " "$d/err" \
             || problems+=("the binary's $fam with no python3 wrote: $(head -c 300 "$d/err")")
         [ ! -e "$d/home/.k2/run/cli" ] || problems+=("the binary's $fam with no python3 wrote the shell CLI out")
     fi

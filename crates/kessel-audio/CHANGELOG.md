@@ -51,6 +51,7 @@ Additions only: code written against 0.2.4 builds and behaves unchanged
   once. Off macOS and iOS, `mode_effective` is `DspSchedMode::Unsupported`
   and nothing is asked of the OS.
 - `DspScheduling::OwnWorkgroup`: the thread joined its own work interval.
+  Added after the 0.2.4 variants, so their discriminants are unchanged.
 
 ## 0.2.4
 

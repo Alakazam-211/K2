@@ -73,11 +73,6 @@ pub enum DspScheduling {
     /// while its audio unit runs; the thread is back on
     /// [`DspScheduling::TimeConstraint`] when the unit closes.
     Workgroup,
-    /// Joined the thread's own audio work interval
-    /// ([`DspSchedMode::OwnWorkgroup`]), on top of
-    /// [`DspScheduling::TimeConstraint`]: each pass with capture audio is an
-    /// interval with its own deadline.
-    OwnWorkgroup,
     /// Mach's real-time time-constraint policy
     /// (`THREAD_TIME_CONSTRAINT_POLICY`), asked for after the QoS class and
     /// replacing it, with [`DspSchedConfig::time_constraint`] (by default a
@@ -91,18 +86,24 @@ pub enum DspScheduling {
     /// [`DspSchedMode::None`], or where the OS refused everything.
     #[default]
     None,
+    /// Joined the thread's own audio work interval
+    /// ([`DspSchedMode::OwnWorkgroup`]), on top of
+    /// [`DspScheduling::TimeConstraint`]: each pass with capture audio is an
+    /// interval with its own deadline. New in 0.2.5, and last, so the 0.2.4
+    /// variants keep their discriminants.
+    OwnWorkgroup,
 }
 
 impl DspScheduling {
-    /// A short name for logs: `"workgroup"`, `"own_workgroup"`,
-    /// `"time_constraint"`, `"qos"` or `"none"`.
+    /// A short name for logs: `"workgroup"`, `"time_constraint"`,
+    /// `"qos"`, `"none"` or `"own_workgroup"`.
     pub const fn as_str(self) -> &'static str {
         match self {
             DspScheduling::Workgroup => "workgroup",
-            DspScheduling::OwnWorkgroup => "own_workgroup",
             DspScheduling::TimeConstraint => "time_constraint",
             DspScheduling::Qos => "qos",
             DspScheduling::None => "none",
+            DspScheduling::OwnWorkgroup => "own_workgroup",
         }
     }
 }
@@ -424,14 +425,14 @@ pub enum DspSchedFallback {
     /// so the fallback joins none either: the thread is on the QoS class
     /// ([`DspScheduling::Qos`]) or nothing.
     TimeConstraintRefused,
-    /// [`DspSchedMode::OwnWorkgroup`]: the system has no audio work
+    /// In [`DspSchedMode::OwnWorkgroup`], the system has no audio work
     /// intervals (`AudioWorkIntervalCreate` or the interval calls are
     /// missing: before macOS 11 or iOS 14), or creating one failed.
     OwnWorkgroupUnavailable,
-    /// [`DspSchedMode::OwnWorkgroup`]: `os_workgroup_join` refused the
+    /// In [`DspSchedMode::OwnWorkgroup`], `os_workgroup_join` refused the
     /// thread's own work interval.
     OwnWorkgroupJoinRefused,
-    /// [`DspSchedMode::OwnWorkgroup`]: `os_workgroup_interval_start`,
+    /// In [`DspSchedMode::OwnWorkgroup`], `os_workgroup_interval_start`,
     /// `_update` or `_finish` refused an interval during the call. The
     /// thread left its own work interval.
     IntervalRefused,

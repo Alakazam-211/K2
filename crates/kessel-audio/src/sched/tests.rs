@@ -655,10 +655,10 @@ fn scheduling_has_log_names_and_defaults_to_none() {
     assert_eq!(DspScheduling::default(), DspScheduling::None);
     let names: Vec<&str> = [
         DspScheduling::Workgroup,
-        DspScheduling::OwnWorkgroup,
         DspScheduling::TimeConstraint,
         DspScheduling::Qos,
         DspScheduling::None,
+        DspScheduling::OwnWorkgroup,
     ]
     .iter()
     .map(|m| m.as_str())
@@ -667,12 +667,22 @@ fn scheduling_has_log_names_and_defaults_to_none() {
         names,
         [
             "workgroup",
-            "own_workgroup",
             "time_constraint",
             "qos",
-            "none"
+            "none",
+            "own_workgroup"
         ]
     );
+}
+
+#[test]
+fn the_0_2_4_variants_keep_their_discriminants() {
+    // Callers may cast with `as`; new variants go last.
+    assert_eq!(DspScheduling::Workgroup as u8, 0);
+    assert_eq!(DspScheduling::TimeConstraint as u8, 1);
+    assert_eq!(DspScheduling::Qos as u8, 2);
+    assert_eq!(DspScheduling::None as u8, 3);
+    assert_eq!(DspScheduling::OwnWorkgroup as u8, 4);
 }
 
 const MODES: [DspSchedMode; 4] = [

@@ -722,6 +722,21 @@ GUEST CARDS
     k2 thread ask / k2 thread secret
   Ask/secret create stay off the official origin (404).
 
+HELD FOR THE OWNER: THE CARD (0.46.17)
+  A k2 app command that needs an owner step answers exit 2, "held for the
+  owner: w_…", and K2 puts a permission card for exactly that request on
+  your Thread (the owner's phone shows it too). An owner or admin approves
+  or denies it there, in Settings → App Approvals, or with k2 app approve
+  from a terminal outside K2; one answer closes the others.
+  Who gets it: every owner and admin, unless you name them with
+  --assign <login>[,<login>…] on the command (k2 app db connect app1 --new
+  --assign ada). A name that isn't an owner or admin login here is refused
+  before anything runs (unknown_approver, approver_not_eligible).
+  Where it stands: k2 app approvals <w_id> (or --state all): pending,
+  approved, denied, withdrawn, expired or failed, and the card's state.
+  You see only the requests you asked for. You never approve one; you can
+  withdraw your own (k2 app deny <w_id>).
+
 WALLED APPS AND SERVICES ON THIS BOX
   A walled App (k2 app deploy --engine guarded) reaches K2 through its
   gateway link and the internet through its own proxy, never this box's

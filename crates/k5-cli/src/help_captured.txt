@@ -1184,8 +1184,6 @@ F	heartbeat wake --help	91
 F	heartbeat wake -h	91
 F	heartbeat wakeup --help	91
 F	heartbeat wakeup -h	91
-F	hooks --help	93
-F	hooks -h	93
 F	hostchat act-as --help	94
 F	hostchat act-as -h	94
 F	hostchat adopt --help	95

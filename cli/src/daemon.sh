@@ -700,7 +700,9 @@ cmd_daemon_log() {
     local follow=0
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --tail|-n) _need_value "$@"; tail_n="$2"; shift 2 ;;
+            # No word after it is a usage error, exit 2, and nothing runs
+            # (0.46.17: it stopped on "$2: unbound variable").
+            --tail|-n) [ $# -ge 2 ] || { echo "Error: $1 takes a number" >&2; exit 2; }; tail_n="$2"; shift 2 ;;
             --follow|-f) follow=1; shift ;;
             *) shift ;;
         esac

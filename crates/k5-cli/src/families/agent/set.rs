@@ -16,7 +16,7 @@ use std::time::Duration;
 
 const TIMEOUT: Duration = Duration::from_secs(30);
 const VALID: &str =
-    "--mode --enabled --name --persona --add-project --remove-project --dry-run --json";
+    "--mode --enabled --name --persona --add-project --remove-project --focus-group --dry-run --json";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SetArgs {
@@ -27,6 +27,9 @@ pub struct SetArgs {
     pub persona: String,
     pub add: Vec<String>,
     pub remove: Vec<String>,
+    /// `--focus-group <group>|none` (0.46.17): a line with it is the
+    /// shell's still ([`super::run`] hands it back before anything is sent).
+    pub focus_group: String,
     pub dry: bool,
     pub json: bool,
 }
@@ -42,6 +45,7 @@ pub fn parse(rest: &[&str]) -> Result<SetArgs, String> {
         persona: String::new(),
         add: Vec::new(),
         remove: Vec::new(),
+        focus_group: String::new(),
         dry: false,
         json: false,
     };
@@ -63,6 +67,11 @@ pub fn parse(rest: &[&str]) -> Result<SetArgs, String> {
             "--remove-project" => a.remove.push(need(format!(
                 "--remove-project requires a project name or id (see: {cli} project list)"
             ))?),
+            "--focus-group" => {
+                a.focus_group = need(format!(
+                "--focus-group requires a group name or id (or none; see: {cli} focus-group list)"
+            ))?
+            }
             "--dry-run" => a.dry = true,
             "--json" => a.json = true,
             _ if w.starts_with('-') => {
@@ -77,7 +86,13 @@ pub fn parse(rest: &[&str]) -> Result<SetArgs, String> {
         }
         if matches!(
             w,
-            "--mode" | "--enabled" | "--name" | "--persona" | "--add-project" | "--remove-project"
+            "--mode"
+                | "--enabled"
+                | "--name"
+                | "--persona"
+                | "--add-project"
+                | "--remove-project"
+                | "--focus-group"
         ) {
             i += 1;
         }
@@ -92,10 +107,11 @@ pub fn parse(rest: &[&str]) -> Result<SetArgs, String> {
         && a.enabled.is_empty()
         && a.new_name.is_empty()
         && a.persona.is_empty()
+        && a.focus_group.is_empty()
         && a.add.is_empty()
         && a.remove.is_empty()
     {
-        return Err("nothing to set \u{2014} pass at least one of: --mode --enabled --name --persona --add-project --remove-project".into());
+        return Err("nothing to set \u{2014} pass at least one of: --mode --enabled --name --persona --add-project --remove-project --focus-group".into());
     }
     if !matches!(
         a.mode.as_str(),

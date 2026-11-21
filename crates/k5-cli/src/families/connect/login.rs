@@ -101,7 +101,10 @@ pub struct Words {
 pub enum Parsed {
     Words(Words),
     /// Lines on stderr, the usage after them when `usage`, then exit 2.
-    Stop { lines: Vec<String>, usage: bool },
+    Stop {
+        lines: Vec<String>,
+        usage: bool,
+    },
 }
 
 /// `cmd_connect_login`'s loop (`-h` and `--help` never get here: the
@@ -228,7 +231,12 @@ fn strip(s: &str) -> &str {
 
 /// `(r.get(key) or "")`, then `.strip()` when `stripped`: the text, or
 /// the `AttributeError` at `line` for a value that is not a string.
-fn get_text(pairs: &[(Text, Value)], key: &str, stripped: bool, line: u32) -> Result<String, Raise> {
+fn get_text(
+    pairs: &[(Text, Value)],
+    key: &str,
+    stripped: bool,
+    line: u32,
+) -> Result<String, Raise> {
     match get(pairs, key).filter(|v| py::truthy(v)) {
         None => Ok(String::new()),
         Some(v @ Value::Str(_)) => {
@@ -323,7 +331,9 @@ fn sign_in(acc: &Account, email: &str, password: &str) -> Result<[String; 3], Ex
         .data(dumps(&body).into_bytes());
     let (status, raw) = match got(urllib::open_url(&acc.place, &req), 16) {
         Got::Answer { status, raw } => (status, raw),
-        Got::Failed(e) => fail!(Exit::Error; format!("Error: could not reach {} account service: {e}", zone())),
+        Got::Failed(e) => {
+            fail!(Exit::Error; format!("Error: could not reach {} account service: {e}", zone()))
+        }
         Got::Raised(r) => return Err(raise(&r)),
     };
     let d = loads_or(&raw, Value::Object(Vec::new()));
@@ -583,9 +593,8 @@ fn tunnel_token(rows: &[Value], label: &str) -> Result<String, Exit> {
         let Value::Object(pairs) = r else {
             continue;
         };
-        let this = get_text(pairs, "label", true, 6).map_err(|e| {
-            raise(&Raise::inside(5, 6, "<genexpr>", e.exception))
-        })?;
+        let this = get_text(pairs, "label", true, 6)
+            .map_err(|e| raise(&Raise::inside(5, 6, "<genexpr>", e.exception)))?;
         if this == label {
             let tok = get_text(pairs, "tunnel_token", true, 5)
                 .map_err(|e| raise(&Raise::inside(5, 5, "<genexpr>", e.exception)))?;
@@ -716,7 +725,11 @@ fn claim(acc: &Account, access: &str, label: &str, did: &str, dlbl: &str) -> Res
         (Text::from("p_device_id"), text(did)),
         (
             Text::from("p_device_label"),
-            if dlbl.is_empty() { Value::Null } else { text(dlbl) },
+            if dlbl.is_empty() {
+                Value::Null
+            } else {
+                text(dlbl)
+            },
         ),
     ]);
     let req = acc
@@ -891,9 +904,11 @@ pub fn run(words: &[&str], s: &Settings, would_refuse: bool) -> Option<Exit> {
     for n in &notes {
         out::stderr_line(n);
     }
-    Some(match login(parsed, refusal, s, would_refuse, place, prefix, port) {
-        Ok(e) | Err(e) => e,
-    })
+    Some(
+        match login(parsed, refusal, s, would_refuse, place, prefix, port) {
+            Ok(e) | Err(e) => e,
+        },
+    )
 }
 
 /// The steps after the hand-back checks.
@@ -1073,17 +1088,29 @@ mod tests {
             lines: vec![l.into()],
             usage,
         };
-        assert_eq!(parse(&["--email"]), stop("Error: --email needs a value", false));
-        assert_eq!(parse(&["--token"]), stop("Error: --token needs a value", false));
+        assert_eq!(
+            parse(&["--email"]),
+            stop("Error: --email needs a value", false)
+        );
+        assert_eq!(
+            parse(&["--token"]),
+            stop("Error: --token needs a value", false)
+        );
         assert_eq!(parse(&["-x"]), stop("Error: unknown flag '-x'", true));
         assert_eq!(parse(&["x"]), stop("Error: unexpected argument 'x'", true));
-        assert!(matches!(parse(&["--pass", "x"]), Parsed::Stop { usage: false, .. }));
+        assert!(matches!(
+            parse(&["--pass", "x"]),
+            Parsed::Stop { usage: false, .. }
+        ));
     }
 
     #[test]
     fn the_account_server_s_place() {
         let (p, prefix) = place("http://127.0.0.1:9/base").unwrap();
-        assert_eq!((p.netloc.as_str(), p.tls, prefix.as_str()), ("127.0.0.1:9", false, "/base"));
+        assert_eq!(
+            (p.netloc.as_str(), p.tls, prefix.as_str()),
+            ("127.0.0.1:9", false, "/base")
+        );
         let (p, prefix) = place(logout::DEFAULT_URL).unwrap();
         assert_eq!((p.port, p.tls, prefix.as_str()), (443, true, ""));
         assert!(place("http://[::1]:9").is_none());
@@ -1102,7 +1129,10 @@ mod tests {
     #[test]
     fn the_readers_print_what_the_python_prints() {
         assert_eq!(config_reader(""), Ok(()));
-        assert_eq!(config_reader(r#"{"subdomain":"acme","tokenSet":true}"#), Ok(()));
+        assert_eq!(
+            config_reader(r#"{"subdomain":"acme","tokenSet":true}"#),
+            Ok(())
+        );
         assert_eq!(
             config_reader(r#"{"tokenSet":false}"#),
             Err("Error: tunnel/config did not accept the token.".into())
@@ -1115,7 +1145,10 @@ mod tests {
             config_reader(r#"{"error":{"code":"x"}}"#),
             Err("Error binding tunnel config: None".into())
         );
-        assert_eq!(config_reader("[1]"), Err("Error: tunnel/config failed: [1]".into()));
+        assert_eq!(
+            config_reader("[1]"),
+            Err("Error: tunnel/config failed: [1]".into())
+        );
         assert_eq!(
             config_reader("nope"),
             Err("Error: tunnel/config returned unparseable response: 'nope'".into())
@@ -1189,7 +1222,10 @@ mod tests {
             "HTTP/1.1 200 OK\r\nContent-Length: 80\r\n\r\n{\"access_token\":\"acc\",\"refresh_token\":null,\"user\":{\"email\":\"them@acme.example\"}}",
         );
         let got = sign_in(&account(port), "me@acme.example", "pw\u{e9}").unwrap();
-        assert_eq!(got, ["acc".to_string(), String::new(), "them@acme.example".into()]);
+        assert_eq!(
+            got,
+            ["acc".to_string(), String::new(), "them@acme.example".into()]
+        );
         let body = r#"{"email": "me@acme.example", "password": "pw\u00e9"}"#;
         assert_eq!(
             String::from_utf8(h.join().unwrap()).unwrap(),
@@ -1201,7 +1237,10 @@ mod tests {
         let (port, h) = one_answer(
             "HTTP/1.1 400 Bad Request\r\nContent-Length: 49\r\n\r\n{\"error_description\":\"Invalid login credentials\"}",
         );
-        assert_eq!(sign_in(&account(port), "me@acme.example", "x"), Err(Exit::Error));
+        assert_eq!(
+            sign_in(&account(port), "me@acme.example", "x"),
+            Err(Exit::Error)
+        );
         h.join().unwrap();
     }
 

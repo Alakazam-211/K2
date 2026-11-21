@@ -54,7 +54,10 @@ fn two_rows() -> String {
 }
 
 fn started() -> String {
-    format!(r#"{{"running":true,"public_url":"https://acme.{}"}}"#, zone())
+    format!(
+        r#"{{"running":true,"public_url":"https://acme.{}"}}"#,
+        zone()
+    )
 }
 
 fn put(r: &Rig, name: &str, body: Option<&str>) {
@@ -165,7 +168,12 @@ fn mask_uuids(s: &str) -> String {
                 j += 1;
             }
         }
-        assert_eq!(b[i + 14], b'4', "a UUID that is not version 4: {}", &s[i..j]);
+        assert_eq!(
+            b[i + 14],
+            b'4',
+            "a UUID that is not version 4: {}",
+            &s[i..j]
+        );
         out.push_str("{uuid}");
         i = j;
     }
@@ -207,10 +215,10 @@ fn check(r: &Rig, acct: &Stub, row: &Row) {
         .read(Side::Bash, false, c.name)
         .iter()
         .map(|l| {
-            mask_uuids(
-                &normalise(l, false, VERB, c.name)
-                    .replace(&format!("127.0.0.1:{bash_port}"), &format!("127.0.0.1:{PORT}")),
-            )
+            mask_uuids(&normalise(l, false, VERB, c.name).replace(
+                &format!("127.0.0.1:{bash_port}"),
+                &format!("127.0.0.1:{PORT}"),
+            ))
         })
         .collect();
     let bash: Seen = (
@@ -223,7 +231,12 @@ fn check(r: &Rig, acct: &Stub, row: &Row) {
     );
     println!("-- bash: {bash:?}");
     assert_eq!(bash.0, Some(c.code), "{}: bash's exit", c.name);
-    assert_eq!(bash.3.len(), c.requests, "{}: bash's daemon requests", c.name);
+    assert_eq!(
+        bash.3.len(),
+        c.requests,
+        "{}: bash's daemon requests",
+        c.name
+    );
     let sides: &[bool] = if row.native { &[false, true] } else { &[false] };
     for nopy in sides {
         acct.reset(&row.account);
@@ -238,12 +251,17 @@ fn check(r: &Rig, acct: &Stub, row: &Row) {
             account_log(acct),
             session(r),
         );
-        assert_eq!(got, bash, "{}: the binary (no python3: {nopy}) against bash", c.name);
+        assert_eq!(
+            got, bash,
+            "{}: the binary (no python3: {nopy}) against bash",
+            c.name
+        );
     }
 }
 
-fn db(acct: &Stub) -> String {
-    format!("http://127.0.0.1:{}/", acct.port)
+/// The account server's URL, for the life of the test process.
+fn db(acct: &Stub) -> &'static str {
+    Box::leak(format!("http://127.0.0.1:{}/", acct.port).into_boxed_str())
 }
 
 fn account_stub() -> Stub {
@@ -266,8 +284,8 @@ fn connect_login_with_a_token_answers_as_the_shell_does() {
     let r = Rig::new(VERB, "login");
     let acct = account_stub();
     let url = db(&acct);
-    let env = |extra: &[(&'static str, &str)]| {
-        let mut v = vec![("K2_CONNECT_DB_URL", url.as_str())];
+    let env = |extra: &[(&'static str, &'static str)]| {
+        let mut v: Vec<(&'static str, &'static str)> = vec![("K2_CONNECT_DB_URL", url)];
         v.extend_from_slice(extra);
         v
     };
@@ -314,7 +332,10 @@ fn connect_login_with_a_token_answers_as_the_shell_does() {
                 ),
                 b"jwt-acc-7272\n 2 \n",
             ),
-            vec![ok_json(&two_rows()), ok_json(r#"{"claimed":false,"holder":"dev-5151"}"#)],
+            vec![
+                ok_json(&two_rows()),
+                ok_json(r#"{"claimed":false,"holder":"dev-5151"}"#),
+            ],
         ),
         row(
             with_stdin(
@@ -398,7 +419,10 @@ fn connect_login_with_a_token_answers_as_the_shell_does() {
             case(
                 "the account server is not there",
                 &["login", "--token", ACCESS],
-                &[("K2_CONNECT_DB_URL", format!("http://127.0.0.1:{}/", dead_port()).as_str())],
+                &[(
+                    "K2_CONNECT_DB_URL",
+                    format!("http://127.0.0.1:{}/", dead_port()).as_str(),
+                )],
                 vec![],
                 ready,
                 1,
@@ -462,7 +486,9 @@ fn connect_login_with_a_token_answers_as_the_shell_does() {
                 "the config's error",
                 &["login", "--token", ACCESS],
                 &env(&[]),
-                vec![ok_json(r#"{"error":{"code":"locked","hint":"the vault is locked"}}"#)],
+                vec![ok_json(
+                    r#"{"error":{"code":"locked","hint":"the vault is locked"}}"#,
+                )],
                 ready,
                 1,
                 1,
@@ -498,7 +524,10 @@ fn connect_login_with_a_token_answers_as_the_shell_does() {
                 "the start's error",
                 &["login", "--token", ACCESS],
                 &env(&[]),
-                vec![ok_json(CONFIG_OK), ok_json(r#"{"error":"frpc is not installed"}"#)],
+                vec![
+                    ok_json(CONFIG_OK),
+                    ok_json(r#"{"error":"frpc is not installed"}"#),
+                ],
                 ready,
                 1,
                 2,
@@ -540,26 +569,58 @@ fn connect_login_s_words_and_gates_answer_as_the_shell_does() {
     let r = Rig::new(VERB, "login-words");
     let acct = account_stub();
     let url = db(&acct);
-    let env = |extra: &[(&'static str, &str)]| {
-        let mut v = vec![("K2_CONNECT_DB_URL", url.as_str())];
+    let env = |extra: &[(&'static str, &'static str)]| {
+        let mut v: Vec<(&'static str, &'static str)> = vec![("K2_CONNECT_DB_URL", url)];
         v.extend_from_slice(extra);
         v
     };
     let rows = vec![
         row(
-            case("--password", &["login", "--password", "x"], &env(&[]), vec![], ready, 2, 0),
+            case(
+                "--password",
+                &["login", "--password", "x"],
+                &env(&[]),
+                vec![],
+                ready,
+                2,
+                0,
+            ),
             vec![],
         ),
         row(
-            case("--email with no value", &["login", "--email"], &env(&[]), vec![], ready, 2, 0),
+            case(
+                "--email with no value",
+                &["login", "--email"],
+                &env(&[]),
+                vec![],
+                ready,
+                2,
+                0,
+            ),
             vec![],
         ),
         row(
-            case("an unknown flag: the usage", &["login", "-x"], &env(&[]), vec![], ready, 2, 0),
+            case(
+                "an unknown flag: the usage",
+                &["login", "-x"],
+                &env(&[]),
+                vec![],
+                ready,
+                2,
+                0,
+            ),
             vec![],
         ),
         row(
-            case("a stray word: the usage", &["login", "acme"], &env(&[]), vec![], ready, 2, 0),
+            case(
+                "a stray word: the usage",
+                &["login", "acme"],
+                &env(&[]),
+                vec![],
+                ready,
+                2,
+                0,
+            ),
             vec![],
         ),
         row(
@@ -641,10 +702,21 @@ fn connect_login_s_words_and_gates_answer_as_the_shell_does() {
                 ),
                 b"hunter2-5353\n",
             ),
-            vec![Reply::Answer(400, r#"{"error_description":"Invalid login credentials"}"#.into())],
+            vec![Reply::Answer(
+                400,
+                r#"{"error_description":"Invalid login credentials"}"#.into(),
+            )],
         ),
         shells(
-            case("-h never acts", &["login", "--token", ACCESS, "-h"], &env(&[]), vec![], ready, 0, 0),
+            case(
+                "-h never acts",
+                &["login", "--token", ACCESS, "-h"],
+                &env(&[]),
+                vec![],
+                ready,
+                0,
+                0,
+            ),
             vec![],
         ),
     ];
@@ -663,14 +735,16 @@ fn connect_login_with_a_large_list_answers_as_the_shell_does() {
     let url = db(&acct);
     let pad = "x".repeat(120);
     let rows: Vec<String> = (0..2000)
-        .map(|i| format!(r#"{{"label":"s{i:04}","status":"active","tunnel_token":"t{i:04}{pad}"}}"#))
+        .map(|i| {
+            format!(r#"{{"label":"s{i:04}","status":"active","tunnel_token":"t{i:04}{pad}"}}"#)
+        })
         .collect();
     let body = format!("[{}]", rows.join(","));
     assert!(body.len() > 256 * 1024);
     let c = case(
         "a large list",
         &["login", "--token", ACCESS, "--subdomain", "s1999"],
-        &[("K2_CONNECT_DB_URL", url.as_str())],
+        &[("K2_CONNECT_DB_URL", url)],
         vec![ok_json(CONFIG_OK), ok_json("{}")],
         ready,
         0,
@@ -690,7 +764,7 @@ fn connect_login_keeps_the_secrets_off_argv() {
         case(
             "secrets",
             &["login", "--token-stdin"],
-            &[("K2_CONNECT_DB_URL", url.as_str())],
+            &[("K2_CONNECT_DB_URL", url)],
             vec![ok_json(CONFIG_OK), ok_json("{}")],
             ready,
             0,
@@ -704,9 +778,14 @@ fn connect_login_keeps_the_secrets_off_argv() {
     acct.reset(&[ok_json(&one_row()), ok_json("[]")]);
     let (out, log) = r.binary(&c, false);
     assert_eq!(out.code, Some(0), "{out:?}");
-    assert!(log.iter().any(|l| l.contains(TUNNEL)), "the tunnel token reached the daemon");
+    assert!(
+        log.iter().any(|l| l.contains(TUNNEL)),
+        "the tunnel token reached the daemon"
+    );
     let sent = account_log(&acct);
-    assert!(sent.iter().all(|l| l.contains(&format!("Authorization: Bearer {ACCESS}\r\n"))));
+    assert!(sent
+        .iter()
+        .all(|l| l.contains(&format!("Authorization: Bearer {ACCESS}\r\n"))));
     let saved = std::fs::read_to_string(r.k2home.join("connect-account.json")).unwrap();
     assert_eq!(
         saved,
@@ -724,7 +803,7 @@ fn connect_login_lines_say_the_brand_s_name() {
     let c = case(
         "brand",
         &["login", "--token", ACCESS],
-        &[("K2_CONNECT_DB_URL", url.as_str())],
+        &[("K2_CONNECT_DB_URL", url)],
         vec![],
         no_daemon,
         1,
@@ -734,8 +813,9 @@ fn connect_login_lines_say_the_brand_s_name() {
     let (out, _) = r.binary(&c, false);
     assert_eq!(out.code, Some(1));
     assert!(
-        out.stderr
-            .contains(&format!("Start it first, then re-run: {cli} connect login\n")),
+        out.stderr.contains(&format!(
+            "Start it first, then re-run: {cli} connect login\n"
+        )),
         "{}",
         out.stderr
     );

@@ -965,7 +965,10 @@ pub fn encode_plain(netloc: &str, req: &Request) -> Vec<u8> {
 fn tls_raised(f: &super::wire::Failure) -> Raised {
     use super::wire::Failure;
     let (kind, reason) = match f {
-        Failure::ConnectTimedOut => (Kind::Timeout, "_ssl.c: The handshake operation timed out".to_string()),
+        Failure::ConnectTimedOut => (
+            Kind::Timeout,
+            "_ssl.c: The handshake operation timed out".to_string(),
+        ),
         Failure::Broken { why, .. } => (Kind::Other, format!("[SSL] {why}")),
         other => (Kind::Other, format!("[SSL] {other:?}")),
     };

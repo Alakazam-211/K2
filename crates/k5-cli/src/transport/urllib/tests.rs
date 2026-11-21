@@ -374,8 +374,12 @@ fn a_request_with_its_own_headers_is_http_client_s() {
         String::from_utf8(encode_plain("db.example", &req)).unwrap(),
         "POST /base/auth/v1/token?grant_type=password HTTP/1.1\r\nAccept-Encoding: identity\r\nContent-Length: 2\r\nHost: db.example\r\nApikey: k\r\nUser-Agent: k2-cli/1.2.3\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}"
     );
-    let get = Request::new(Method::Get, "/rest/v1/x?select=a,b", Duration::from_secs(30))
-        .header("Authorization", "Bearer t");
+    let get = Request::new(
+        Method::Get,
+        "/rest/v1/x?select=a,b",
+        Duration::from_secs(30),
+    )
+    .header("Authorization", "Bearer t");
     assert_eq!(
         String::from_utf8(encode_plain("127.0.0.1:9", &get)).unwrap(),
         "GET /rest/v1/x?select=a,b HTTP/1.1\r\nAccept-Encoding: identity\r\nHost: 127.0.0.1:9\r\nAuthorization: Bearer t\r\nConnection: close\r\n\r\n"

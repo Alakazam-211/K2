@@ -213,6 +213,7 @@ pub static TABLE: &[Noun] = &[
     native(&["activity"]),
     native(&["inbox"]),
     bash(&["glossary"]),
+    bash(&["focus-group", "focus-groups"]),
     bash(&["help-deprecated"]),
     bash(&["help-internal"]),
     native(&["sessions"]),

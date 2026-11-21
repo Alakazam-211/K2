@@ -66,6 +66,7 @@ pub fn tool_id(verb: &str, sub: &str) -> &'static str {
         "migrate" => "migrate",
         "job" | "jobs" => "jobs",
         "project" => "project",
+        "focus-group" | "focus-groups" => "focus-groups",
         "organization" => match sub {
             "" | "help" | "--help" | "-h" => "",
             _ => "organization",
@@ -133,6 +134,7 @@ pub const ID_TOOLS: &[&str] = &[
     "chat",
     "migrate",
     "docs",
+    "focus-groups",
 ];
 
 /// `_cli_tool_default_mode TOOL` is `id`.

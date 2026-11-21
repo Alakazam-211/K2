@@ -933,22 +933,18 @@ fn job_help_never_acts() {
             v.push(case(name, args, &[], vec![], owner_and_port, 0, 0));
         }
     }
-    // The front hands every line with -h or --help to the shell (S0's
-    // front.rs): both sides' requests are the shell's.
-    v.push(Case {
-        compare: Compare::Shell,
-        ..case(
-            "a help flag after -- is the command's: the job is added",
-            &["add", "n", "--every", "1m", "--", "ls", "-h"],
-            &[],
-            vec![ok(
-                r#"{"job":{"name":"n","schedule":"every 1m","command":"ls -h"}}"#,
-            )],
-            owner_and_port,
-            0,
-            1,
-        )
-    });
+    // The front's help scan stops at `--` too, so the family adds it.
+    v.push(case(
+        "a help flag after -- is the command's: the job is added",
+        &["add", "n", "--every", "1m", "--", "ls", "-h"],
+        &[],
+        vec![ok(
+            r#"{"job":{"name":"n","schedule":"every 1m","command":"ls -h"}}"#,
+        )],
+        owner_and_port,
+        0,
+        1,
+    ));
     for c in v {
         rig.check(&c);
     }

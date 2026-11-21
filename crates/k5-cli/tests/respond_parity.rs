@@ -72,6 +72,20 @@ fn respond_answers_as_the_shell_does() {
                 1,
             ),
         ),
+        // After a bare `--` a help word is the text: the front's help
+        // scan stops there, so the family sends it.
+        with(
+            c(&[]),
+            case(
+                "-- then --help: the text",
+                &["--", "--help"],
+                &[],
+                vec![ok(OK)],
+                port_only,
+                0,
+                1,
+            ),
+        ),
         with(
             c(&[]),
             case(
@@ -794,18 +808,6 @@ fn respond_hands_these_to_the_shell() {
             case(
                 "--help after text is text",
                 &["hi", "--help"],
-                &[],
-                vec![ok(OK)],
-                port_only,
-                0,
-                1,
-            ),
-        )),
-        shell(with(
-            c(&[]),
-            case(
-                "-- then --help",
-                &["--", "--help"],
                 &[],
                 vec![ok(OK)],
                 port_only,

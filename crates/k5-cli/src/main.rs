@@ -185,6 +185,12 @@ fn main() {
             let argv = words(&args)?;
             pages::unknown_page(&argv, p, env, || passport::current(&args).would_refuse())
         }),
+        Route::NoDashdash => {
+            if let Some(line) = front::no_dashdash_line(&args) {
+                out::stderr_line(&line);
+            }
+            Exit::Usage
+        }
         Route::Fallthrough => shell(who, &args),
     };
     trace::finish("command");

@@ -10,10 +10,15 @@
 //! form the front's code does not take falls through, as does everything
 //! else, byte for byte ([`crate::fallthrough`]).
 //!
+//! A bare `--` its verb doesn't take ([`crate::dashdash::takes`]) is the
+//! shell's refusal before anything else ([`Route::NoDashdash`]): one line,
+//! exit 2, nothing sent.
+//!
 //! A family's help never reaches the family: a command line of a `Native`
 //! row or verb row with `-h` or
-//! `--help` anywhere in it (`setup`: or the word `help`; `vault run`: only
-//! before a bare `--`, the rest being the child's) is a help page
+//! `--help` before the first bare `--` (`setup`: or the word `help`; the
+//! words after `--` are the command's, as `_wants_help` reads them) is a
+//! help page
 //! when it is exactly a form the shell only prints for
 //! ([`Route::Help`], [`help_route`]: a file's print, or a captured form,
 //! what the shell printed), and falls through
@@ -48,6 +53,7 @@
 //! when the shell's environment lets it ([`crate::pages`]), and hands them
 //! over otherwise.
 
+use crate::dashdash::{self, Stray};
 use crate::pages::{self, Composed, Study};
 use crate::route::{self, Noun, Owner};
 use crate::spec::{self, SpecVerb};
@@ -92,12 +98,21 @@ pub enum Route {
     Composed(Composed),
     /// A first word the router has no arm for ([`pages::unknown_page`]).
     Unknown,
+    /// A bare `--` the line's verb doesn't take: the shell's line
+    /// ([`dashdash::stray`]) on stderr, exit 2, nothing sent.
+    NoDashdash,
     /// Anything else: the shell CLI runs it.
     Fallthrough,
 }
 
 /// The route for the arguments after `argv[0]`.
 pub fn route(args: &[OsString]) -> Route {
+    // The shell refuses a stray `--` before it does anything else.
+    match dashdash::stray(args) {
+        Stray::No => {}
+        Stray::Refused(_) => return Route::NoDashdash,
+        Stray::Shell => return Route::Fallthrough,
+    }
     let found = route::find(route::TABLE, args);
     // A page the front puts together stays the front's (below), even when
     // a bare row sends its line to the family.
@@ -267,21 +282,22 @@ fn native(noun: &'static Noun, args: &[OsString]) -> Route {
     Route::Family(noun)
 }
 
-/// The words of a line the front reads for `-h` and `--help`. Words after
-/// a bare `--` belong to a child command and are never help flags, where
-/// the shell reads them so: `vault run` (`cmd_vault` hands `run` its words
-/// before its help scan, and `_vault_run` stops at `--`). Every other verb
-/// is scanned whole, as the shell's `_wants_help "$@"` scans it, `--` and
-/// all (a bash bug where the verb takes a command after `--`, as `compute
-/// run` and `job` do; copied until the shell's fix lands).
+/// The words of a line the front reads for `-h` and `--help`: those before
+/// the first bare `--`. The words after it belong to the command (a child
+/// command, a message's text) and are never help flags, as the shell's
+/// `_wants_help "$@"` reads them (75dfa4fc07). Only a verb that takes a
+/// `--` gets this far with one ([`dashdash::takes`]).
 fn help_words<'a>(words: &'a [&'a str]) -> impl Iterator<Item = &'a &'a str> + 'a {
-    let stops_at_dashes = matches!(words, ["vault", "run", ..]);
-    let end = if stops_at_dashes {
-        words.iter().position(|w| *w == "--").unwrap_or(words.len())
-    } else {
-        words.len()
-    };
-    words[..end].iter()
+    dashdash::before(words).iter()
+}
+
+/// The line [`Route::NoDashdash`] prints: the shell's refusal of a stray
+/// `--`, without its newline. `None` when `args` has none.
+pub fn no_dashdash_line(args: &[OsString]) -> Option<String> {
+    match dashdash::stray(args) {
+        Stray::Refused(line) => Some(line),
+        Stray::No | Stray::Shell => None,
+    }
 }
 
 /// The help form `args` is, when the shell only prints a file for it
@@ -475,11 +491,11 @@ mod tests {
         assert_eq!(route(&args(&["Whoami"])), Route::Unknown);
     }
 
-    /// Words after a bare `--` are a child command's, never help flags,
-    /// where the shell reads them so (`vault run`); other verbs are
-    /// scanned whole, as the shell's `_wants_help` does.
+    /// Words after a bare `--` are the command's, never help flags, for
+    /// every verb that takes a `--`, as the shell's `_wants_help` reads
+    /// them; a verb that takes none refuses the `--` first.
     #[test]
-    fn help_stops_at_dashes_for_vault_run() {
+    fn help_stops_at_dashes() {
         assert_eq!(
             route(&args(&[
                 "vault", "run", "--secret", "A", "--", "grep", "--help"
@@ -500,15 +516,69 @@ mod tests {
             route(&args(&["vault", "run", "-h", "--", "grep"])),
             family("vault")
         );
-        // Other verbs: the shell's scan reads past `--`.
-        assert_ne!(
-            route(&args(&["vault", "fetch", "--", "--help"])),
-            family("vault")
+        // Every verb that takes a `--`: the words after it are its own.
+        for (line, name) in [
+            (&["compute", "run", "--", "grep", "--help"][..], "compute"),
+            (&["msg", "acme", "--", "--help"], "msg"),
+            (&["msg", "--", "-h"], "msg"),
+            (&["thread", "ask", "acme", "--", "-h"], "thread"),
+            (
+                &["postal", "send", "a::b.postal.bot", "--", "--help"],
+                "postal",
+            ),
+            (&["remind", "--in", "1m", "--", "--help"], "remind"),
+            (
+                &["heartbeat", "remind", "--in", "1m", "--", "-h"],
+                "heartbeat",
+            ),
+            (&["inbox", "respond", "i1", "--", "--help"], "inbox"),
+            (&["browser", "note", "--url", "u", "--", "-h"], "browser"),
+            (&["job", "add", "--", "echo", "--help"], "job"),
+        ] {
+            assert_eq!(route(&args(line)), family(name), "{line:?}");
+        }
+        // Before the `--`, still help, for every verb.
+        for line in [
+            &["msg", "acme", "--help", "--", "hi"][..],
+            &["compute", "run", "-h", "--", "ls"],
+            &["terminal", "write", "x", "-h", "--", "hi"],
+        ] {
+            assert_eq!(
+                route(&args(line)),
+                help_route(&args(line)).map_or(Route::Fallthrough, Route::Help),
+                "{line:?}"
+            );
+        }
+        // A verb that takes none: the refusal, before any help.
+        for line in [
+            &["vault", "fetch", "--", "--help"][..],
+            &["vault", "list", "--help", "--"],
+            &["msg", "verify", "--", "x"],
+            // `publish` answers its own `--` the same way; the front's line
+            // comes first now.
+            &["publish", "ps", "--"],
+            &["app", "push", "send", "acme", "--to", "--"],
+            &["whoami", "--"],
+            &["--", "ls"],
+            &["--version", "--"],
+            &["cli", "status", "--"],
+            &["study", "--"],
+            &["help", "--"],
+            &["--"],
+        ] {
+            assert_eq!(route(&args(line)), Route::NoDashdash, "{line:?}");
+        }
+        assert_eq!(
+            no_dashdash_line(&args(&["whoami", "--"])).as_deref(),
+            Some(dashdash::refusal("whoami").as_str())
         );
-        assert_ne!(
-            route(&args(&["compute", "run", "--", "grep", "--help"])),
-            family("compute")
-        );
+        assert_eq!(no_dashdash_line(&args(&["msg", "a", "--", "b"])), None);
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            let odd = vec![OsString::from_vec(vec![b'x', 0xff]), OsString::from("--")];
+            assert_eq!(route(&odd), Route::Fallthrough);
+        }
     }
 
     /// `done`'s front code: any `-h` or `--help` word goes to the shell,
@@ -543,8 +613,8 @@ mod tests {
         }
     }
 
-    /// `respond`'s front code, likewise: `respond -- --help` sends the
-    /// word `--help` in the shell, and goes there.
+    /// `respond`'s front code, likewise: a help word after a bare `--` is
+    /// the text (`respond -- -h` sends `-h`), and goes to the family.
     #[test]
     fn the_respond_forms() {
         let respond = route::TABLE
@@ -556,6 +626,7 @@ mod tests {
             &["respond", "hi"],
             &["respond", "--final", "x"],
             &["respond", "help"],
+            &["respond", "--", "-h"],
         ] {
             assert_eq!(native(respond, &args(line)), family("respond"), "{line:?}");
         }
@@ -563,7 +634,7 @@ mod tests {
             &["respond", "--help"][..],
             &["respond", "-h"],
             &["respond", "hi", "--help"],
-            &["respond", "--", "-h"],
+            &["respond", "-h", "--", "x"],
         ] {
             assert_eq!(
                 native(respond, &args(line)),

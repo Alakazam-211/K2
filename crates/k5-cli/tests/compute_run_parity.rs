@@ -1032,6 +1032,23 @@ fn compute_submit_help_never_acts() {
             ..case("help", args, &[], vec![], owner_and_port, 0, 0)
         });
     }
+    // After a bare `--` a help word is the command's: submitted. The
+    // front's scan and the family's stop at `--`, as `_wants_help` does.
+    for (name, args, reply) in [
+        (
+            "run -- make --help: submitted",
+            &["run", "--detach", "--", "make", "--help"][..],
+            SUBMIT,
+        ),
+        (
+            "test -- --help: submitted",
+            &["test", "--detach", "--", "--help"][..],
+            PLAIN,
+        ),
+    ] {
+        let c = case(name, args, &[], vec![ok(reply)], owner_and_port, 0, 1);
+        submitted(&rig, &c);
+    }
 }
 
 /// What the binary hands to the shell: `--failures` (the failing tests'

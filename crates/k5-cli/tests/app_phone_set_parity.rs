@@ -814,11 +814,13 @@ fn no_daemon() {
 fn bash_bugs_copied() {
     let rig = Rig::new(VERB, "psbugs");
     let v = vec![
-        // app-auth.sh:605: `args.index("--")` finds a `--to --` value
-        // first, so the later recipient reads as --data (and fails its
-        // key=value check, exit 2). Flips when the fix lands.
+        // `app push send` takes no bare `--` (it is not in
+        // `_k2_takes_dashdash`, 7a07949682): a `--to --` value is the
+        // shell's refusal, "usage: app takes no '--'", exit 2, before
+        // anything runs. The front gives the same line first. (It used to
+        // reach app-auth.sh:605's `args.index("--")`, a bash bug.)
         stop(
-            "push send: --to -- moves the split (bash bug)",
+            "push send: --to -- is a stray --, refused",
             &[
                 "push", "send", "acme", "--to", "--", "--to", "b", "--data", "k=v",
             ],

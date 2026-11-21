@@ -511,6 +511,26 @@ fn talk_after_dashes_sends_the_text_as_typed() {
         4,
     );
     masked(&rig, &c);
+    // A help word after `--` is the text: the front's help scan stops at
+    // `--`, so the family sends it.
+    for c in [
+        plain(
+            "the text --help",
+            &["--from", "me", "--no-wake", "--", "ws", "--help"],
+            vec![ok(SCREEN), ok(CLEAR), ok(ON), ok(SENT)],
+            0,
+            4,
+        ),
+        plain(
+            "the text -h, a flag-looking word before it",
+            &["--from", "me", "--", "ws", "--read-only", "-h"],
+            vec![ok(SCREEN), ok(CLEAR), ok(ON), ok(SENT)],
+            0,
+            4,
+        ),
+    ] {
+        masked(&rig, &c);
+    }
     for c in [
         plain("-- alone", &["--"], vec![], 1, 0),
         plain("help before --", &["ws", "-h", "--", "hi"], vec![], 0, 0),

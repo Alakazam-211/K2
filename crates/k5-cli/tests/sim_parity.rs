@@ -822,6 +822,17 @@ fn help_never_acts() {
             0,
         ));
     }
+    // After a bare `--` a help word is the text: the front's help scan
+    // stops there, so the family types it.
+    rig.check(&case(
+        "type -- --help: the text",
+        &["type", "--", "--help"],
+        &[],
+        vec![ok(LINE)],
+        owner_and_port,
+        0,
+        1,
+    ));
 }
 
 /// None in time (curl 28): `wait --timeout 0s` gives the call 30 s.

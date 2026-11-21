@@ -2628,9 +2628,9 @@ fn db_run_answers_as_the_shell_does() {
             1,
         )),
         // A -h after the bare -- is the command's (the shell's help scans
-        // stop at it): the DSN is asked and the command runs. The front
-        // still hands the line to the shell (a help word on the line).
-        shell(case(
+        // stop at it): the DSN is asked and the command runs. The front's
+        // scan stops there too, so the family runs it.
+        case(
             "run -- dbkid -h: the command's -h",
             &["run", "--", "dbkid", "-h"],
             &[],
@@ -2638,7 +2638,7 @@ fn db_run_answers_as_the_shell_does() {
             owner_and_port,
             0,
             1,
-        )),
+        ),
     ];
     for c in &cases {
         rig.check(c);

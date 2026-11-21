@@ -16,7 +16,8 @@
 //! with what it printed ([`CAPTURED`]). That text names the command and
 //! the product by the brand ([`render`]). A captured form whose page bash
 //! puts through the permission cards filter, or that prints chat's usage,
-//! has a page for each way its switch goes ([`Variant`]).
+//! has a page for each way its switch goes ([`Variant`]); a `zen` form
+//! runs the router arm's Garden changes hint first ([`Variant::GardenHint`]).
 
 /// One help command line the binary answers: `argv` exactly (the
 /// arguments after the program's name) prints the page `page` ([`page`]:
@@ -48,6 +49,11 @@ pub enum Variant {
     /// `_CHAT_HELP_MANAGE` is unset, empty or `1`, this page while it is
     /// anything else ([`crate::pages::chat_manage`]).
     NoManage(usize),
+    /// A `zen` form: the router arm runs `_zen_garden_changes_hint` before
+    /// the page ([`crate::families::zen::changes_hint_in`]): once per
+    /// workspace, a line on stderr and a marker in its `.k2`. The page is
+    /// `captured` either way.
+    GardenHint,
 }
 
 /// What the shell printed for a captured help form: the exit code, and
@@ -291,6 +297,11 @@ mod tests {
                     argv.split(' ').collect(),
                     n(page),
                     Some(Variant::NoManage(n(other))),
+                )),
+                ["Z", argv, page] => forms.push((
+                    argv.split(' ').collect(),
+                    n(page),
+                    Some(Variant::GardenHint),
                 )),
                 _ => panic!("{}: {line:?}", path.display()),
             }

@@ -50,6 +50,7 @@ pub mod widget;
 use super::curl_port;
 use crate::daemon;
 use crate::exit::Exit;
+use crate::offline::Env;
 use crate::out;
 use crate::passport;
 use crate::prelude::{self, Gate};
@@ -240,7 +241,7 @@ pub const NO_TEMP_FILE: &str = "Error: can't make a temp file";
 
 /// `_ws_dot_dir ROOT`: `.k2` when it is a folder, else `.k2so` when that
 /// is one (or a `.k2` file is in the way), else `.k2`.
-fn dot_dir(root: &str) -> PathBuf {
+fn dot_dir(root: &Path) -> PathBuf {
     crate::home::workspace_dot_dir(root)
 }
 
@@ -248,50 +249,63 @@ fn dot_dir(root: &str) -> PathBuf {
 /// Gardens' access lists, with a marker in that workspace's own `.k2`.
 /// Never with `--json`; best effort.
 pub fn changes_hint(words: &[&str]) {
+    let _ = changes_hint_in(&Env::current(), words);
+}
+
+/// [`changes_hint`] in `env`. The router arm runs it before every `zen`
+/// line, its help too ([`crate::pages::help_page`]). `Err` only where the
+/// line could not be written to stderr: the shell's `echo` fails there,
+/// the function with it, and `set -e` ends the run with 1.
+///
+/// The shell's steps: the workspace is the first of `K5_PROJECT_PATH`,
+/// `K2_PROJECT_PATH` and `K2SO_PROJECT_PATH` that is set and not empty,
+/// and not `$HOME`; its dot folder (`_ws_dot_dir`) must be a folder and
+/// not the K2 home (`$HOME/.k2`, else `$HOME/.k2so`, compared by real
+/// path); the marker `.garden-changes-hint` must not exist (`[ ! -e ]`,
+/// through a link). Then `0.46.3` and a newline go to the marker, and only
+/// when that write worked, the line goes to stderr.
+pub fn changes_hint_in(env: &Env, words: &[&str]) -> std::io::Result<()> {
     if words
         .iter()
         .any(|w| *w == "--json" || w.starts_with("--json="))
     {
-        return;
+        return Ok(());
     }
-    let var = |n: &str| std::env::var(n).ok().filter(|v| !v.is_empty());
-    let Some(root) = var("K5_PROJECT_PATH")
-        .or_else(|| var("K2_PROJECT_PATH"))
-        .or_else(|| var("K2SO_PROJECT_PATH"))
-    else {
-        return;
+    let Some(root) = env.first(&["K5_PROJECT_PATH", "K2_PROJECT_PATH", "K2SO_PROJECT_PATH"]) else {
+        return Ok(());
     };
-    if std::env::var("HOME").ok().as_deref() == Some(root.as_str()) {
-        return;
+    if env.get("HOME") == Some(root) {
+        return Ok(());
     }
-    let dot = dot_dir(&root);
+    let dot = dot_dir(Path::new(root));
     if !dot.is_dir() {
-        return;
+        return Ok(());
     }
-    // The prelude's `K2_HOME`: `$HOME/.k2`, else `$HOME/.k2so`.
-    if let Some(h) = std::env::var_os("HOME").map(PathBuf::from) {
-        let k2 = k2_client::paths::k2_home_in(&h);
-        let home = if k2.is_dir() { k2 } else { h.join(".k2so") };
+    if let Some(home) = crate::offline::shell_k2_home(env) {
         if home.is_dir() {
             let same = match (std::fs::canonicalize(&dot), std::fs::canonicalize(&home)) {
                 (Ok(a), Ok(b)) => a == b,
                 _ => false,
             };
             if same {
-                return;
+                return Ok(());
             }
         }
     }
     let marker = dot.join(".garden-changes-hint");
     if marker.exists() {
-        return;
+        return Ok(());
     }
     if std::fs::write(&marker, "0.46.3\n").is_err() {
-        return;
+        return Ok(());
     }
-    out::stderr_line(concat!(
-        "Gardens changed in 0.46.3: see `",
-        cli_name!(),
-        " study garden-changes` (update before 0.47.0)"
-    ));
+    out::write_flushed(
+        &mut std::io::stderr().lock(),
+        concat!(
+            "Gardens changed in 0.46.3: see `",
+            cli_name!(),
+            " study garden-changes` (update before 0.47.0)\n"
+        )
+        .as_bytes(),
+    )
 }

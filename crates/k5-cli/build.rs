@@ -201,8 +201,9 @@ fn text(manifest: &Path, out: &Path) {
 /// through the permission cards filter: its words, the page while cards
 /// are off, then the page while they are on. An `M` row prints chat's
 /// usage: its words, the page while `_CHAT_HELP_MANAGE` is unset, empty or
-/// `1`, then the page while it is anything else. Pages come first,
-/// numbered from 0 in order.
+/// `1`, then the page while it is anything else. A `Z` row is a `zen`
+/// form: the router arm's Garden changes hint runs first, then its page.
+/// Pages come first, numbered from 0 in order.
 fn captured(manifest: &Path, file_forms: &[Vec<String>], rs: &mut String) {
     let path = manifest.join("src/help_captured.txt");
     println!("cargo:rerun-if-changed={}", path.display());
@@ -235,7 +236,7 @@ fn captured(manifest: &Path, file_forms: &[Vec<String>], rs: &mut String) {
                 }
                 pages.push((code, out, err));
             }
-            [kind @ ("F" | "C" | "M"), argv, page, ref other @ ..] => {
+            [kind @ ("F" | "C" | "M" | "Z"), argv, page, ref other @ ..] => {
                 let words: Vec<&str> = argv.split(' ').collect();
                 assert!(
                     words.iter().all(|w| !w.is_empty()),
@@ -253,6 +254,7 @@ fn captured(manifest: &Path, file_forms: &[Vec<String>], rs: &mut String) {
                     ("F", []) => None,
                     ("C", [on]) => Some(format!("Variant::CardsOn({})", number(on))),
                     ("M", [off]) => Some(format!("Variant::NoManage({})", number(off))),
+                    ("Z", []) => Some("Variant::GardenHint".to_string()),
                     _ => panic!("{}: a {kind} row of {} columns: {line:?}", at(), cols.len()),
                 };
                 assert!(
@@ -262,7 +264,7 @@ fn captured(manifest: &Path, file_forms: &[Vec<String>], rs: &mut String) {
                 );
                 forms.push((words, page, variant));
             }
-            _ => panic!("{}: not a P, F, C or M row: {line:?}", at()),
+            _ => panic!("{}: not a P, F, C, M or Z row: {line:?}", at()),
         }
     }
     assert!(!forms.is_empty(), "{}: no forms", path.display());

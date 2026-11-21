@@ -17,7 +17,10 @@
 //! agent whose daemon says on, asking once each time with the run's own
 //! passport. Every other form asks nothing. A form that prints chat's
 //! usage (an `M` row) prints its other page while `_CHAT_HELP_MANAGE` is
-//! set to anything but empty or `1`.
+//! set to anything but empty or `1`. A `zen` form (a `Z` row) runs the
+//! router arm's Garden changes hint first: with a workspace as the project
+//! path, the first run prints its line on stderr and writes the marker,
+//! the second doesn't ([`a_zen_form_runs_the_garden_hint_first`]).
 //!
 //! The text names the command and the product by the brand: in a build
 //! with `K2_BRAND_DIR=brand/xy` every captured page says `xy` and `XY`
@@ -67,6 +70,8 @@ struct Form {
     argv: Vec<String>,
     page: Page,
     second: Option<(Switch, Page)>,
+    /// A `Z` row: the Garden changes hint runs before the page.
+    hint: bool,
 }
 
 impl Form {
@@ -99,22 +104,25 @@ fn forms() -> Vec<Form> {
                 });
                 continue;
             }
-            ["F", argv, p] => Form {
+            ["F" | "Z", argv, p] => Form {
                 argv: words(argv),
                 page: page(p),
                 second: None,
+                hint: cols[0] == "Z",
             },
             ["C", argv, off, on] => Form {
                 argv: words(argv),
                 page: page(off),
                 second: Some((Switch::Cards, page(on))),
+                hint: false,
             },
             ["M", argv, p, other] => Form {
                 argv: words(argv),
                 page: page(p),
                 second: Some((Switch::Manage, page(other))),
+                hint: false,
             },
-            _ => panic!("{}: not a P, F, C or M row: {line:?}", path.display()),
+            _ => panic!("{}: not a P, F, C, M or Z row: {line:?}", path.display()),
         };
         out.push(form);
     }
@@ -660,4 +668,94 @@ fn the_card_pages_say_the_brand_s_name() {
             says_the_brand(&f.argv, &page.out, &got.stdout);
         }
     }
+}
+
+/// The Garden changes hint's line (`_zen_garden_changes_hint`), the
+/// command named by the brand.
+fn hint_line() -> String {
+    format!(
+        "Gardens changed in 0.46.3: see `{} study garden-changes` (update before 0.47.0)\n",
+        k2_client::brand::CLI_NAME
+    )
+}
+
+/// Where a first run in a fresh workspace differs from the hint's line on
+/// stderr, then `page`, with the marker written: if it does.
+fn first_run_differs(argv: &[String], page: &Page, got: &Out, marker: &Path) -> Option<String> {
+    let with_line = Page {
+        err: format!("{}{}", hint_line().replace('\n', "\\n"), page.err),
+        ..page.clone()
+    };
+    if let Some(d) = differs(argv, &with_line, got) {
+        return Some(d);
+    }
+    match std::fs::read_to_string(marker) {
+        Ok(t) if t == "0.46.3\n" => None,
+        other => Some(format!("{argv:?}: the marker is {other:?}")),
+    }
+}
+
+/// A `zen` form, as the owner with a workspace as its project path: the
+/// first run prints the hint's line, then the page, and writes the marker;
+/// the second prints the page alone and leaves the marker. `K5_PROJECT_PATH`
+/// comes before `K2_PROJECT_PATH`; the home as the project path, a project
+/// path with no `.k2` folder, or none at all: the page alone, nothing
+/// written. Nothing asked. The bite: a run with no hint fails the first
+/// run's check.
+#[test]
+fn a_zen_form_runs_the_garden_hint_first() {
+    let forms: Vec<Form> = forms().into_iter().filter(|f| f.hint).collect();
+    assert!(forms.len() > 100, "only {} zen forms", forms.len());
+    let rig = Rig::new("hint");
+    let marker_in = |ws: &Path| ws.join(".k2/.garden-changes-hint");
+    let fresh = |name: &str| {
+        let ws = rig.dir.join(name);
+        let _ = std::fs::remove_dir_all(&ws);
+        std::fs::create_dir_all(ws.join(".k2")).unwrap();
+        ws
+    };
+    let mut bad = Vec::new();
+    for (i, f) in forms.iter().enumerate() {
+        assert!(f.argv[0] == "zen", "{:?} is a Z row", f.argv);
+        let ws = fresh(&format!("ws{i}"));
+        let path = ws.to_str().unwrap();
+        let (got, asked) = rig.run(&f.argv, Who::Owner, &[("K2_PROJECT_PATH", path)]);
+        assert!(asked.is_empty());
+        bad.extend(first_run_differs(&f.argv, &f.page, &got, &marker_in(&ws)));
+        // The bite: the page alone is not a first run.
+        let (alone, _) = rig.run(&f.argv, Who::Owner, &[]);
+        assert!(
+            first_run_differs(&f.argv, &f.page, &alone, &rig.dir.join("none")).is_some(),
+            "{:?}: the bite passed",
+            f.argv
+        );
+        bad.extend(differs(&f.argv, &f.page, &alone));
+        std::fs::write(marker_in(&ws), "kept\n").unwrap();
+        let (second, _) = rig.run(&f.argv, Who::Owner, &[("K2_PROJECT_PATH", path)]);
+        bad.extend(differs(&f.argv, &f.page, &second));
+        assert_eq!(std::fs::read_to_string(marker_in(&ws)).unwrap(), "kept\n");
+    }
+    let f = &forms[0];
+    // K5_PROJECT_PATH first.
+    let (k5, k2) = (fresh("k5ws"), fresh("k2ws"));
+    let (got, _) = rig.run(
+        &f.argv,
+        Who::Owner,
+        &[
+            ("K5_PROJECT_PATH", k5.to_str().unwrap()),
+            ("K2_PROJECT_PATH", k2.to_str().unwrap()),
+        ],
+    );
+    bad.extend(first_run_differs(&f.argv, &f.page, &got, &marker_in(&k5)));
+    assert!(!marker_in(&k2).exists());
+    // The home, a folder with no .k2, an empty path: no hint.
+    let bare = rig.dir.join("bare");
+    std::fs::create_dir_all(&bare).unwrap();
+    for p in [rig.home.to_str().unwrap(), bare.to_str().unwrap(), ""] {
+        let (got, _) = rig.run(&f.argv, Who::Owner, &[("K2_PROJECT_PATH", p)]);
+        bad.extend(differs(&f.argv, &f.page, &got));
+    }
+    assert!(!rig.home.join(".k2/.garden-changes-hint").exists());
+    assert!(!bare.join(".k2").exists());
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
 }

@@ -219,6 +219,12 @@ def make_env(kind, base):
         ws = os.path.join(base, "ws")
         for d in ("ws/.k2", "ws/sub", "tmp", "sec"):
             os.makedirs(os.path.join(base, d), exist_ok=True)
+        # The zen hint's marker, so a zen form prints no hint line here: its
+        # call is left out of the trace (hint_split), and its first run,
+        # second run and no project path are rows of their own
+        # (tests/cli/help_captured.sh, help_captured_parity.rs).
+        with open(os.path.join(base, "ws/.k2/.garden-changes-hint"), "w") as f:
+            f.write("0.46.3\n")
         cwd = os.path.join(ws, "sub")
         env.update({
             "LANG": "en_US.UTF-8", "TMPDIR": os.path.join(base, "tmp"),
@@ -921,6 +927,10 @@ if os.environ.get("HELP_NATIVE_WHY"):
 #     and asked once a run where a stub answers (a C row);
 #   - chat's usage (_chat_usage), with _CHAT_HELP_MANAGE unset and set
 #     to 0, that one read allowed (an M row).
+# A zen form runs the router arm's _zen_garden_changes_hint first: its call
+# is left out of the trace (only its own functions' lines inside, called
+# once from the arm's line), with its marker already in each workspace so
+# it prints nothing; the rest is proved as above (a Z row).
 # The binary prints what was captured (crates/k5-cli/src/help_captured.txt,
 # embedded by build.rs), behind the same gate as a file's print: a port and
 # a token, and with K2_HOOK_SOCK set the session checks (pages.rs,
@@ -1332,6 +1342,41 @@ def manage_capture(argv, first_page):
             return None, "with %s=%r, the untraced run is not the page for that value" % (CHAT_MANAGE, val)
     return page, None
 
+# The zen router arm runs _zen_garden_changes_hint before every zen line,
+# its help too: it reads the project path from the environment, tests the
+# workspace's dot folder and, once per workspace, writes a marker and prints
+# one line. A form that calls it is captured with the call left out of the
+# trace (only lines of the hint's own functions inside it), called once,
+# from the arm's line, in every environment; the rest passes as an F row's
+# does. A Z row: the binary runs the hint (crates/k5-cli/src/families/zen.rs,
+# changes_hint_in), then prints the page.
+HINT = "_zen_garden_changes_hint"
+hint_funcs, hint_lines = closure(HINT)
+hint_calls = {i + 1 for i, l in enumerate(k2_lines) if l.strip() == HINT + ' "${@:2}"'}
+if len(hint_calls) != 1:
+    sys.exit("FAIL: %s is called on %d lines, this test knows one" % (HINT, len(hint_calls)))
+if hint_lines & (probe_lines | feedback_lines):
+    sys.exit("FAIL: a line of %s is a line of a probe's functions" % HINT)
+
+def hint_split(steps):
+    """The steps outside the hint's calls, and the number of calls."""
+    outside, calls, inside = [], 0, False
+    for l in steps:
+        m = STEP.match(l)
+        if inside:
+            if not m or int(m.group(2)) in hint_lines:
+                continue
+            inside = False
+        if m and int(m.group(2)) in hint_lines:
+            return None, "a step on a line of the zen hint outside its call: %r" % l
+        outside.append(l)
+        if m and m.group(3).split(" ", 1)[0] == HINT:
+            if int(m.group(2)) not in hint_calls:
+                return None, "the zen hint called off the router arm's line: %r" % l
+            calls += 1
+            inside = True
+    return (outside, calls), None
+
 def capture(argv):
     """(argv, the row's kind and pages, why not)."""
     first, outs, wins = {}, [], []
@@ -1350,6 +1395,17 @@ def capture(argv):
     if any(STEP.match(l) and STEP.match(l).group(3) == CARDS_PROBE for w in wins for l in w):
         pages, why = cards_capture(argv, first)
         return argv, (("C", pages[0], pages[1]) if pages else None), why
+    hint = any(STEP.match(l) and STEP.match(l).group(3).split(" ", 1)[0] == HINT for w in wins for l in w)
+    if hint:
+        split = []
+        for kind, w in zip(kinds, wins):
+            got, why = hint_split(w)
+            if why:
+                return argv, None, "%s (in %s)" % (why, kind)
+            if got[1] != 1:
+                return argv, None, "the zen hint called %d times: in %s" % (got[1], kind)
+            split.append(got[0])
+        wins = split
     if any(o != outs[0] for o in outs):
         return argv, None, "the output differs between the environments: %s" % groups(kinds, outs)
     if any(w != wins[0] for w in wins):
@@ -1364,9 +1420,11 @@ def capture(argv):
     if why:
         return argv, None, why
     if manage:
+        if hint:
+            return argv, None, "the zen hint and chat's usage both"
         other, why = manage_capture(argv, page)
         return argv, (("M", page, other) if other else None), why
-    return argv, ("F", page), None
+    return argv, (("Z" if hint else "F"), page), None
 
 CLI_WORD = re.compile(r"(?<![A-Za-z0-9_./~|<:-])k2(?= )")
 PRODUCT_WORD = re.compile(r"(?<![A-Za-z0-9_./~|<:-])K2(?![A-Za-z0-9_/~|<-])(?![.:][A-Za-z0-9_/])")
@@ -1413,6 +1471,7 @@ if bad_asks:
              % "; ".join(bad_asks[:20]))
 n_cards = sum(1 for g in captured.values() if g[0] == "C")
 n_manage = sum(1 for g in captured.values() if g[0] == "M")
+n_hint = sum(1 for g in captured.values() if g[0] == "Z")
 print("help_native: %d other help forms asked the stub daemon; %d captured by the cards answer asked "
       "once a run, the probe, and no other captured form asked" % (len(asked), n_cards))
 pages_, page_no, form_rows = [], {}, []
@@ -1435,11 +1494,14 @@ CHEAD = """# The other help forms the k5 binary answers itself: what bash printe
 # C<tab><argv><tab><page while permission cards are off><tab><page while on>:
 #   a page through the cards filter; the binary asks as bash asks.
 # M<tab><argv><tab><page><tab><page while _CHAT_HELP_MANAGE is set, not empty, not 1>
+# Z<tab><argv><tab><page>: a zen form; the binary runs the Garden changes hint
+#   first, as the router arm does.
 """
 ctext = CHEAD + "".join("P\t%d\t%d\t%s\t%s\n" % (i, k[0], k[1], k[2]) for i, k in enumerate(pages_)) \
     + "".join(r + "\n" for r in form_rows)
-print("help_native: %d other help forms tried, %d captured (%d by the cards answer, %d by %s; %d pages), "
-      "%d stay bash" % (len(ccands), len(captured), n_cards, n_manage, CHAT_MANAGE, len(pages_), len(ckept)))
+print("help_native: %d other help forms tried, %d captured (%d by the cards answer, %d by %s, %d after the "
+      "zen hint; %d pages), %d stay bash" % (len(ccands), len(captured), n_cards, n_manage, CHAT_MANAGE, n_hint,
+                                             len(pages_), len(ckept)))
 creasons = {}
 for why in ckept.values():
     key = re.sub(r": .*", "", why)

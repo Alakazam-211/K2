@@ -22,7 +22,11 @@
 #     asks it once, the probe (GET /cli/permission/enabled), with its own
 #     passport;
 #     one that prints chat's usage (an M row) with
-#     _CHAT_HELP_MANAGE=0 in the owner's terminal, and =yes in an agent's.
+#     _CHAT_HELP_MANAGE=0 in the owner's terminal, and =yes in an agent's;
+#   - a zen form (a Z row: the Garden changes hint, then the page) as the
+#     owner with no project path, and every tenth with a workspace as its
+#     project path (the hint's first run prints its line and writes the
+#     marker, the second prints none) and with the home as it (no hint).
 # (crates/k5-cli/tests/help_captured_parity.rs runs the binary on every
 # form in both terminals against the list; help_native.sh proves the list
 # is bash's.) With no port and no token the binary hands a form to bash
@@ -198,18 +202,75 @@ cards() {
     fi
 }
 
+# zen_hint <args...>: a Z row (a zen form: the router arm's Garden changes
+# hint, then the page) in an owner's terminal whose project path is a
+# workspace with a .k2 folder, each side in a workspace of its own. The
+# first run prints the hint line on stderr and writes the marker
+# (0.46.3); the second prints no line and leaves the marker as it is. Both
+# sides the same each time, the markers the same bytes.
+HINT_LINE='Gardens changed in 0.46.3: see `k2 study garden-changes` (update before 0.47.0)'
+zen_hint() {
+    local side round
+    for side in bash bin; do
+        rm -rf "$SANDBOX/ws-$side"
+        mkdir -p "$SANDBOX/ws-$side/.k2"
+    done
+    for round in first second; do
+        run "$CLI_BASH_SOURCE" "$SANDBOX/out/bash" "K2_PROJECT_PATH=$SANDBOX/ws-bash" -- "$@"
+        run "$NEW" "$SANDBOX/out/bin" "K2_PROJECT_PATH=$SANDBOX/ws-bin" "$BROKEN" -- "$@"
+        if ! { cmp -s "$SANDBOX/out/bash" "$SANDBOX/out/bin" && cmp -s "$SANDBOX/out/bash.err" "$SANDBOX/out/bin.err" \
+            && cmp -s "$SANDBOX/out/bash.code" "$SANDBOX/out/bin.code"; }; then
+            bad "k2 $* (the zen hint, $round run): the binary's own answer differs from bash"
+            diff "$SANDBOX/out/bash.err" "$SANDBOX/out/bin.err" | head -6 >&2 || true
+            continue
+        fi
+        if [ "$round" = first ] && [ "$(head -n 1 "$SANDBOX/out/bin.err")" != "$HINT_LINE" ]; then
+            bad "k2 $* (the zen hint, first run): no hint line first on stderr"
+            continue
+        fi
+        if [ "$round" = second ] && grep -qF 'Gardens changed' "$SANDBOX/out/bin.err"; then
+            bad "k2 $* (the zen hint, second run): the hint line again"
+            continue
+        fi
+        if [ "$(cat "$SANDBOX/ws-bin/.k2/.garden-changes-hint" 2>&1)" != 0.46.3 ] \
+            || ! cmp -s "$SANDBOX/ws-bash/.k2/.garden-changes-hint" "$SANDBOX/ws-bin/.k2/.garden-changes-hint"; then
+            bad "k2 $* (the zen hint, $round run): the markers differ or are not 0.46.3"
+            continue
+        fi
+        ok
+    done
+}
+
 AGENT=("K2_PORT=1" "K2_HOOK_TOKEN=sessT.notreal1" "K2_HOOK_SOCK=$SANDBOX/live.sock")
 SOCK="K2_HOOK_SOCK=$SANDBOX/no.sock"
 EMPTY="HOME=$SANDBOX/empty-home"
 n=0
 nc=0
 nm=0
+nz=0
 ran_pairs=0
 seen_pairs=" "
 while IFS=$'\t' read -r kind argv p1 p2; do
-    case "$kind" in F|C|M) ;; *) continue ;; esac
+    case "$kind" in F|C|M|Z) ;; *) continue ;; esac
     n=$((n + 1))
-    if [ "$kind" = F ]; then
+    if [ "$kind" = Z ]; then
+        # A zen form: the page with no project path (no hint), and every
+        # tenth with the hint's first and second run, and with the project
+        # path the home itself (no hint, no marker).
+        nz=$((nz + 1))
+        # shellcheck disable=SC2086
+        native -- $argv
+        if [ $(((nz - 1) % 10)) = 0 ]; then
+            # shellcheck disable=SC2086
+            zen_hint $argv
+            # shellcheck disable=SC2086
+            native "K2_PROJECT_PATH=$SANDBOX/home" -- $argv
+            if [ -e "$SANDBOX/home/.k2/.garden-changes-hint" ]; then
+                bad "k2 $argv: a hint marker in the home"
+                rm -f "$SANDBOX/home/.k2/.garden-changes-hint"
+            fi
+        fi
+    elif [ "$kind" = F ]; then
         # shellcheck disable=SC2086  # argv is words
         native -- $argv
         if [ $((n % 5)) = 0 ]; then
@@ -254,10 +315,11 @@ done < "$LIST"
 [ "$nc" -gt 100 ] || bad "only $nc forms the cards answer decides in $LIST"
 [ "$nm" -gt 20 ] || bad "only $nm forms that print chat's usage in $LIST"
 [ "$ran_pairs" -gt 30 ] || bad "only $ran_pairs forms with two pages run"
+[ "$nz" -gt 100 ] || bad "only $nz zen forms (the Garden changes hint) in $LIST"
 for cmd in "agent team help x" "app nope --help" "zen nope --help" "agent team --help x"; do
     # shellcheck disable=SC2086
     handed -- $cmd
 done
 
-echo "help_captured: $pass passed, $fail failed ($n forms: $nc the cards answer decides, $nm print chat's usage; $ran_pairs of those run each way)"
+echo "help_captured: $pass passed, $fail failed ($n forms: $nc the cards answer decides, $nm print chat's usage; $ran_pairs of those run each way; $nz zen forms after the hint)"
 [ "$fail" = 0 ]

@@ -744,7 +744,9 @@ pub fn session_checks(
 /// which may stop it with their own lines instead. A captured form with
 /// a [`Variant`] prints the page for its switch: the permission cards
 /// answer, asked as the shell asks ([`cards::ask`], [`CAPTURED_CARDS`]),
-/// or chat's manage setting ([`chat_manage`]).
+/// or chat's manage setting ([`chat_manage`]). A `zen` form runs the
+/// router arm's Garden changes hint first, after the session checks, as
+/// the shell's router does ([`Variant::GardenHint`]).
 pub fn help_page(
     form: &'static HelpForm,
     p: &Prelude,
@@ -774,6 +776,20 @@ pub fn help_page(
             }
             Some(Variant::NoManage(other)) if !chat_manage(env) => other,
             Some(Variant::NoManage(_)) => n,
+            Some(Variant::GardenHint) => {
+                let words = form.argv.get(1..).unwrap_or_default();
+                if crate::families::zen::changes_hint_in(env, words).is_err() {
+                    // The shell's `echo` failed under `set -e`: exit 1,
+                    // nothing more.
+                    return Some(Page {
+                        text: "".into(),
+                        stderr: false,
+                        exit: Exit::Error,
+                        lead: None,
+                    });
+                }
+                n
+            }
         };
         let c = text::CAPTURED.get(n)?;
         let exit = Exit::ALL
@@ -1665,11 +1681,18 @@ mod tests {
                 (i32::from(c.code), false, out, err)
             }
         };
-        let (mut cards, mut manage) = (0, 0);
+        let (mut cards, mut manage, mut hint) = (0, 0, 0);
         for f in text::CAPTURED_FORMS {
             let first = f.captured.expect("a captured form");
             match f.variant {
                 None => {}
+                Some(Variant::GardenHint) => {
+                    // No project path: the hint does nothing.
+                    hint += 1;
+                    assert_eq!(f.argv[0], "zen", "{:?}", f.argv);
+                    let env = Env::of(&[("HOME", "/x")]);
+                    assert_eq!(shown(f, &env), want(first), "{:?}", f.argv);
+                }
                 Some(Variant::CardsOn(on)) => {
                     cards += 1;
                     assert!(on < text::CAPTURED.len(), "{:?}", f.argv);
@@ -1703,6 +1726,45 @@ mod tests {
         }
         assert!(cards > 100, "only {cards} forms the cards answer decides");
         assert!(manage > 20, "only {manage} forms that print chat's usage");
+        assert!(hint > 100, "only {hint} zen forms");
+    }
+
+    /// A `zen` form runs the router arm's Garden changes hint before its
+    /// page: once per workspace, the marker written; never in the home,
+    /// nor in a workspace with no `.k2` folder.
+    #[test]
+    fn a_zen_form_runs_the_garden_hint() {
+        let f = text::CAPTURED_FORMS
+            .iter()
+            .find(|f| f.variant == Some(Variant::GardenHint))
+            .expect("a zen form");
+        let dir = std::env::temp_dir().join(format!("k5-pages-hint-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (ws, home, bare) = (dir.join("ws"), dir.join("home"), dir.join("bare"));
+        for d in [ws.join(".k2"), home.join(".k2"), bare.clone()] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let ok = prelude(true, true, false, false);
+        let marker = ws.join(".k2/.garden-changes-hint");
+        let s = |p: &Path| p.to_str().unwrap().to_string();
+        let env = Env::of(&[("HOME", &s(&home)), ("K2_PROJECT_PATH", &s(&ws))]);
+        let page = help_page(f, &ok, &env, || false).expect("a page");
+        assert_eq!(std::fs::read_to_string(&marker).unwrap(), "0.46.3\n");
+        std::fs::write(&marker, "kept\n").unwrap();
+        assert_eq!(help_page(f, &ok, &env, || false), Some(page));
+        assert_eq!(std::fs::read_to_string(&marker).unwrap(), "kept\n");
+        for root in [&home, &bare] {
+            let env = Env::of(&[("HOME", &s(&home)), ("K2_PROJECT_PATH", &s(root))]);
+            help_page(f, &ok, &env, || false).expect("a page");
+        }
+        assert!(!home.join(".k2/.garden-changes-hint").exists());
+        assert!(!bare.join(".k2").exists());
+        // The gate first: no port, no hint.
+        std::fs::remove_file(&marker).unwrap();
+        let no = prelude(false, true, false, false);
+        assert_eq!(help_page(f, &no, &env, || false), None);
+        assert!(!marker.exists());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// The router sends the three forms to `cmd_help` with no word, which

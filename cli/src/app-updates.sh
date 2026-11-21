@@ -593,6 +593,8 @@ print("moved %s to %s in App %s%s" % (v.get("from"), v.get("to"), v.get("app"), 
 # k2 app data put <app-id> <path> [--to <dir>] [--json] (0.46.3): copy a file
 # or folder of the App's workspace into its data folder.
 _app_data_put() {
+    # Help wins: -h or --help anywhere, even as a value flag's word.
+    if _wants_help "$@"; then _app_data_usage; return 0; fi
     local app="" from="" to="" json_out=0 dov=""
     while [ $# -gt 0 ]; do
         case "$1" in

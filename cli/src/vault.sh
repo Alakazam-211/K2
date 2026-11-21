@@ -417,12 +417,12 @@ _vault_fetch() {
                 [ -n "${2:-}" ] || { echo "usage: --json @file | --json 'text'" >&2; exit 2; }
                 if [ "${2#@}" != "$2" ]; then body_file="${2#@}"; else body_inline="$2"; fi
                 ctype="application/json"; shift 2 ;;
-            --max-bytes) max_bytes="${2:-}"; shift 2 ;;
-            --timeout) timeout="${2:-}"; shift 2 ;;
+            --max-bytes) _need_value "$@"; max_bytes="${2:-}"; shift 2 ;;
+            --timeout) _need_value "$@"; timeout="${2:-}"; shift 2 ;;
             --include-headers|-i) include=1; shift ;;
             -o|--output) [ -n "${2:-}" ] || { echo "usage: -o file" >&2; exit 2; }; out="$2"; shift 2 ;;
-            --dst) dst="${2:-}"; shift 2 ;;
-            --fmt) fmt="${2:-}"; shift 2 ;;
+            --dst) _need_value "$@"; dst="${2:-}"; shift 2 ;;
+            --fmt) _need_value "$@"; fmt="${2:-}"; shift 2 ;;
             --json-out) as_json=1; shift ;;
             --help|-h)
                 cat <<'EOF'

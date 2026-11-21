@@ -151,19 +151,19 @@ fn the_words_are_read_as_the_shell_reads_them() {
             ..
         }
     ));
-    // `shift 2` with one word left is exit 1 with nothing printed.
+    // A value flag as the last word: the shell's `_need_value` line.
     assert_eq!(
         usage(&["update", "id", "--why"]),
         Ask::Stop {
-            lines: vec![],
-            exit: Exit::Error
+            lines: vec!["Error: --why takes a value".into()],
+            exit: Exit::Usage
         }
     );
     assert_eq!(
         usage(&["list", "--area"]),
         Ask::Stop {
-            lines: vec![],
-            exit: Exit::Error
+            lines: vec!["Error: --area takes a value".into()],
+            exit: Exit::Usage
         }
     );
     // An empty first word is no action; the next one is.

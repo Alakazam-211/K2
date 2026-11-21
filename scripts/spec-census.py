@@ -182,7 +182,11 @@ def arm_in(file, base, body, word):
         found.append((base + 1 + k, code))
     if not found:
         return None
-    busy = [f for f in found if any(re.search(r"\b(cmd_\w+|_\w+)\b", l) for l in f[1])]
+    # `_need_value` (the value-flag check every option loop calls) is no
+    # call that makes an arm the one that acts.
+    busy = [
+        f for f in found if any(re.search(r"\b(cmd_\w+|_(?!need_value\b)\w+)\b", l) for l in f[1])
+    ]
     line, code = (busy or found)[-1]
     return (file, line, code)
 

@@ -21,9 +21,7 @@
 //! Each reader prints what the shell's Python prints for `<status>\n<body>`
 //! as `$(…)` holds it; where that Python raises, a Python 3.12 traceback
 //! (no source lines) and exit 1. `status` (text) with no row for this
-//! computer prints its two lines and then raises `NameError` (its snippet
-//! calls `sys.exit` where `sys` is not imported): a shell bug the binary
-//! copies.
+//! computer prints its two lines and exits 0.
 
 use super::local::{py_int, strip};
 use super::read::{compact, err_line, obj, s};
@@ -941,11 +939,8 @@ fn status_text(d: &Value, me: &str) -> Pretty {
         } else {
             format!("Connected: {me}{ZONE_SUFFIX}\n  Plan: unknown (subdomain not found in your account list)\n")
         };
-        // The snippet's `sys.exit(0)`: `sys` is not in its globals.
-        return Err((
-            printed,
-            Raise::inside(1, 33, "<module>", "NameError: name 'sys' is not defined"),
-        ));
+        // The snippet's `sys.exit(0)`: its two lines, exit 0.
+        return Ok(printed);
     };
     let host = host_of(&row, 35).map_err(no)?;
     let tier = tier_of(&row, 36).map_err(no)?;
@@ -1244,6 +1239,24 @@ mod tests {
         assert_eq!(
             base_refusal("cp.example").as_deref(),
             Some("Error: K2_CONNECT_BASE must start with https:// (got: cp.example)")
+        );
+    }
+
+    #[test]
+    fn status_with_no_row_prints_its_two_lines_and_exits_0() {
+        let none = render("200\n{\"subdomains\":[]}", |d| status_text(d, " ACME "));
+        assert_eq!(
+            none,
+            Shown::out(format!(
+                "Connected: acme{ZONE_SUFFIX}\n  Plan: unknown (subdomain not found in your account list)\n"
+            ))
+        );
+        let off = render("200\n{}", |d| status_text(d, ""));
+        assert_eq!(
+            off,
+            Shown::out(format!(
+                "Not connected to a {PRODUCT} Connect subdomain.\n  Choose an address in Settings \u{2192} Network \u{2192} Tunnel (or run {CLI} tunnel start).\n"
+            ))
         );
     }
 

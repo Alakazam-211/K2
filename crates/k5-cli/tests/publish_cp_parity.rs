@@ -140,22 +140,22 @@ fn status_and_list_answer_as_the_shell_does() {
                 0,
                 1,
             ),
-            traceback(case(
-                "status: no row for this computer (the snippet's sys.exit raises)",
+            case(
+                "status: no row for this computer (two lines, exit 0)",
                 &["status"],
                 &[],
                 vec![relayed(200, r#"{"subdomains":[]}"#)],
                 subdomain_acme,
+                0,
                 1,
-                1,
-            )),
-            traceback(on(
-                "status: not connected (the snippet's sys.exit raises)",
+            ),
+            on(
+                "status: not connected (two lines, exit 0)",
                 &["status"],
                 vec![relayed(200, r#"{}"#)],
+                0,
                 1,
-                1,
-            )),
+            ),
             on(
                 "status --json: not connected",
                 &["status", "--json"],

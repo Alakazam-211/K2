@@ -131,6 +131,16 @@ fn str_repr(t: &Text) -> String {
     out
 }
 
+/// Python's `c.isprintable()` for one character: printable ASCII, or
+/// [`printable`] past it.
+pub fn isprintable(c: char) -> bool {
+    let cp = u32::from(c);
+    if cp < 0x80 {
+        return (0x20..0x7f).contains(&cp);
+    }
+    printable(cp)
+}
+
 /// Python's `str.isprintable()` for one code point past ASCII: not a
 /// separator (but the space), a format character, a surrogate, private
 /// use or a noncharacter. Unassigned code points count as printable here.

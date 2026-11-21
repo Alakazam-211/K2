@@ -69,7 +69,8 @@ if dg:
 print("VIP mail outside the window: " + ("deliver" if d["vipOutsideWindow"] else "hold") + "; session line: " + ("on" if d["vipSessionLine"] else "off") + "; snippets: " + ("on" if d["snippets"] else "off"))
 if d.get("pausedUntil"): print("Paused until " + d["pausedUntil"])
 for i in ibx:
-    if i.get("needsRelink"): print("Stopped: %s refused its login. Reconnect the inbox and it starts again." % i["address"])
+    if i.get("needsRelink") and i.get("source") == "linked": print("Stopped: %s refused its sign-in. The owner signs it in again in place (Reconnect in Settings → Email Link, or k2 mail link upgrade %s --features <what it has now>); notices start again after." % (i["address"], i["address"]))
+    elif i.get("needsRelink"): print("Stopped: %s refused its login. Reconnect the inbox and it starts again." % i["address"])
     elif i.get("lastError"): print("Last poll problem for %s: %s" % (i["address"], i["lastError"]))
 c = d.get("last24h") or {}
 print("Last 24h: %s VIP delivered, %s digested, %s failed authentication" % (c.get("vipDelivered", 0), c.get("digested", 0), c.get("failedAuth", 0)))

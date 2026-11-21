@@ -109,7 +109,9 @@ export function MailWatchPanel({ projectPath }: { projectPath: string }): React.
             key={inbox.address}
             label={inbox.address}
             description={
-              inbox.needsRelink
+              inbox.needsRelink && inbox.source === 'linked'
+                ? 'Its sign-in was refused. Sign in again under Email Link and notices start again.'
+                : inbox.needsRelink
                 ? 'Its login was refused. Reconnect the inbox and notices start again.'
                 : inbox.personMailbox
                   ? "A person's mailbox: only a person can choose this."

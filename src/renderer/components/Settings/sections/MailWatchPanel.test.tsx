@@ -91,6 +91,15 @@ describe('MailWatchPanel (an agent\'s Mail tab)', () => {
     render(<MailWatchPanel projectPath="/w/sales" />)
     await screen.findByText(/Its login was refused/)
   })
+
+  it('sends a refused linked inbox to Email Link to sign in again', async () => {
+    fetchMailWatch.mockResolvedValue({
+      ...base,
+      inboxes: [{ ...base.inboxes[1], wake: 'vip', needsRelink: true }],
+    })
+    render(<MailWatchPanel projectPath="/w/sales" />)
+    await screen.findByText('Its sign-in was refused. Sign in again under Email Link and notices start again.')
+  })
 })
 
 function inbox(): Inbox {

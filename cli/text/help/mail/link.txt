@@ -39,6 +39,16 @@ for calendars on linked inboxes (default on; hosted calendars keep
 Removing a Google link revokes K2's access at Google; Microsoft has no
 per-token revoke, so remove tells you where to remove the consent.
 
+When Google or Microsoft refuses a link's saved sign-in (`k2 mail watch`
+says Stopped; Settings → Email Link says Can't connect), sign in again in
+place (owner): `k2 mail link upgrade <address> --features <f>`, where <f>
+is what the link has now (usually mail, or mail,calendar-read; `k2 mail
+capabilities <address> --json` shows it as account.features), or
+Reconnect in Settings → Email Link. The
+inbox keeps its id, its workspace access and its calendar setting; only
+the saved sign-in is replaced. Don't remove it and link it again: that
+takes it away from every workspace.
+
 Microsoft needs an OAuth app: K2's built-in one, or your own set with
 `k2 mail oauth-config set --provider microsoft --client-id <id>
 [--tenant <t>]`. A tenant that requires admin consent fails with

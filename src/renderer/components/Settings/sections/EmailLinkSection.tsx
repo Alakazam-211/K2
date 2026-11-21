@@ -55,6 +55,16 @@ import {
 } from '../controls/SettingControls'
 import { InboxAccessPanel } from './InboxAccessPanel'
 import {
+  fetchRelink,
+  providerWord,
+  ReconnectNotice,
+  reconnectFeatures,
+  refusalOf,
+  type AfterReconnect,
+  type Refusal,
+  type Relink,
+} from './EmailLinkReconnect'
+import {
   bindLoopback,
   ConsentFlowView,
   CopyButton,
@@ -1323,6 +1333,11 @@ function AccountDetail({
   onRemoved,
   onChanged,
   patchInbox,
+  refusal,
+  signInNow,
+  onSignInStarted,
+  onReconnected,
+  pollMs,
 }: {
   inbox: Inbox
   canMutate: boolean
@@ -1332,6 +1347,13 @@ function AccountDetail({
   onChanged: () => void
   /** Optimistically patch this inbox's row in the parent list. */
   patchInbox: (address: string, patch: (i: Inbox) => Inbox) => void
+  /** Why the account can't connect, or null. */
+  refusal: Refusal
+  /** The list's Sign in again: start signing in as the page opens. */
+  signInNow: boolean
+  onSignInStarted: () => void
+  onReconnected: (address: string) => Promise<AfterReconnect>
+  pollMs?: number
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -1375,18 +1397,32 @@ function AccountDetail({
         </div>
       </header>
 
+      <ReconnectNotice
+        inbox={inbox}
+        refusal={refusal}
+        canMutate={canMutate}
+        autoStart={signInNow}
+        onAutoStarted={onSignInStarted}
+        onReconnected={onReconnected}
+        pollMs={pollMs}
+      />
+
       <SettingsGroup title="Account" card>
         <SettingRow
           label="Status"
           hint={
-            inbox.status === 'error'
-              ? `${PRODUCT_NAME} couldn’t sign in to this account the last time it checked, so agents can’t use it. If its password changed, disconnect it and connect it again.`
-              : inbox.status === 'connected' || inbox.status === 'running'
-                ? `${PRODUCT_NAME} signs in to this account normally.`
-                : `${PRODUCT_NAME} hasn’t checked this account yet.`
+            refusal && oauth
+              ? `${refusal === 'refused' ? `${providerWord(inbox)} refused the saved sign-in` : `${PRODUCT_NAME} couldn’t sign in to this account the last time it checked`}, so agents can’t use it. Reconnect above to sign in again.`
+              : refusal === 'refused'
+                ? 'The mail server refused the saved app password, so agents can’t use this account. Make a new app password, then disconnect this account and connect it again with the new one.'
+                : refusal === 'error'
+                  ? `${PRODUCT_NAME} couldn’t sign in to this account the last time it checked, so agents can’t use it. If its password changed, disconnect it and connect it again.`
+                  : inbox.status === 'connected' || inbox.status === 'running'
+                    ? `${PRODUCT_NAME} signs in to this account normally.`
+                    : `${PRODUCT_NAME} hasn’t checked this account yet.`
           }
         >
-          <StatusTag status={inbox.status} />
+          <StatusTag status={refusal ? 'error' : inbox.status} />
         </SettingRow>
         <SettingRow
           label="Signed in with"
@@ -1570,30 +1606,64 @@ export function LinkedCalendarPanel({
 type ListState = { kind: 'loading' } | { kind: 'error'; err: unknown } | { kind: 'ready'; rows: Inbox[] }
 type Notice = { kind: 'connected'; address: string; workspace: string } | { kind: 'disconnected'; address: string }
 
-function AccountRow({ inbox, onOpen }: { inbox: Inbox; onOpen: () => void }): React.JSX.Element {
+function AccountRow({
+  inbox,
+  refusal,
+  canMutate,
+  onOpen,
+  onSignIn,
+}: {
+  inbox: Inbox
+  refusal: Refusal
+  canMutate: boolean
+  onOpen: () => void
+  /** Set for an account that can sign in again from here. */
+  onSignIn: (() => void) | null
+}): React.JSX.Element {
   return (
+    // The whole row opens the account; the keyboard reaches it through the
+    // Manage target, and Sign in again is its own button beside it.
     <div
-      role="button"
-      tabIndex={0}
-      data-k2-focus=""
-      data-testid={`account-row-${inbox.address}`}
-      aria-label={`Manage ${inbox.address}`}
+      data-testid={`account-item-${inbox.address}`}
       onClick={onOpen}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault()
-          onOpen()
-        }
-      }}
-      className={`relative flex items-center gap-4 px-4 py-3 no-drag cursor-pointer outline-none ${SETTING_LIST_ROW_HOVER}`}
+      className={`relative flex items-center gap-4 px-4 py-3 no-drag cursor-pointer ${SETTING_LIST_ROW_HOVER}`}
     >
-      <div className="flex-1 min-w-0">
-        <div className="type-name text-[var(--color-text-primary)] truncate">{inbox.address}</div>
-        <div className="type-hint text-[var(--color-text-secondary)] mt-0.5 truncate">
-          {providerName(inbox)} · {usedBy(inbox)}
+      <div
+        role="button"
+        tabIndex={0}
+        data-k2-focus=""
+        data-testid={`account-row-${inbox.address}`}
+        aria-label={`Manage ${inbox.address}`}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            onOpen()
+          }
+        }}
+        className="flex-1 min-w-0 flex items-center gap-4 outline-none"
+      >
+        <div className="flex-1 min-w-0">
+          <div className="type-name text-[var(--color-text-primary)] truncate">{inbox.address}</div>
+          <div className="type-hint text-[var(--color-text-secondary)] mt-0.5 truncate">
+            {providerName(inbox)} · {usedBy(inbox)}
+          </div>
         </div>
+        <StatusTag status={refusal ? 'error' : inbox.status} />
       </div>
-      <StatusTag status={inbox.status} />
+      {onSignIn && (
+        <Button
+          className="flex-shrink-0"
+          aria-label={`Sign in again to ${inbox.address}`}
+          disabled={!canMutate}
+          title={canMutate ? `Sign in to ${providerWord(inbox)} again` : VIEWER_NOTE}
+          onClick={(e) => {
+            e.stopPropagation()
+            onSignIn()
+          }}
+        >
+          Sign in again
+        </Button>
+      )}
       <svg className="w-3 h-3 flex-shrink-0 text-[var(--color-text-secondary)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
         <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
       </svg>
@@ -1601,7 +1671,7 @@ function AccountRow({ inbox, onOpen }: { inbox: Inbox; onOpen: () => void }): Re
   )
 }
 
-export function EmailLinkSection(): React.JSX.Element {
+export function EmailLinkSection({ pollMs }: { pollMs?: number } = {}): React.JSX.Element {
   const viewerReadOnly = useWindowModeStore((s) => s.resolved && s.mode === 'viewer')
   const canMutate = !viewerReadOnly
 
@@ -1610,6 +1680,14 @@ export function EmailLinkSection(): React.JSX.Element {
   const reload = useCallback(() => setRevision((r) => r + 1), [])
   const [openAddress, setOpenAddress] = useState<string | null>(null)
   const [notice, setNotice] = useState<Notice | null>(null)
+  /** Inboxes the mail watcher saw refused, and, for each one signed in
+   *  again here, the watcher's last check from before (see refusalOf). */
+  const [relink, setRelink] = useState<Relink>(() => new Map())
+  const [reconnected, setReconnected] = useState<Relink>(() => new Map())
+  const relinkRef = useRef(relink)
+  relinkRef.current = relink
+  /** The account whose page opened from Sign in again. */
+  const [signInFor, setSignInFor] = useState<string | null>(null)
   /** Google's sign-in page fills the page while it is up. */
   const [gmailActive, setGmailActive] = useState(false)
 
@@ -1625,7 +1703,12 @@ export function EmailLinkSection(): React.JSX.Element {
     setList((l) => (l.kind === 'ready' ? l : { kind: 'loading' }))
     fetchInboxes()
       .then((r) => {
-        if (!cancelled) setList({ kind: 'ready', rows: r.filter((i) => i.source === 'linked') })
+        if (cancelled) return
+        const linked = r.filter((i) => i.source === 'linked')
+        setList({ kind: 'ready', rows: linked })
+        void fetchRelink(linked).then((m) => {
+          if (!cancelled) setRelink(m)
+        })
       })
       .catch((err) => {
         if (!cancelled) setList({ kind: 'error', err })
@@ -1682,6 +1765,22 @@ export function EmailLinkSection(): React.JSX.Element {
 
   const failure = list.kind === 'error' ? readFailure(list.err) : null
 
+  // After a sign-in went through: read the accounts and the watcher again,
+  // and say whether the old refusal is gone, still waiting on the
+  // watcher's next check, or back.
+  const onReconnected = useCallback(async (address: string): Promise<AfterReconnect> => {
+    const before = relinkRef.current.get(address)
+    const hadRefusal = relinkRef.current.has(address)
+    if (hadRefusal) setReconnected((m) => new Map(m).set(address, before ?? null))
+    const linked = (await fetchInboxes()).filter((i) => i.source === 'linked')
+    setList({ kind: 'ready', rows: linked })
+    const next = await fetchRelink(linked)
+    setRelink(next)
+    if (!next.has(address)) return 'clear'
+    return hadRefusal && next.get(address) === (before ?? null) ? 'waiting' : 'refused'
+  }, [])
+  const refusal = useCallback((i: Inbox): Refusal => refusalOf(i, relink, reconnected), [relink, reconnected])
+
   // A confirmation lands at the top of the list, often above where the
   // person is (the Connect card); bring it into view.
   const noticeRef = useRef<HTMLDivElement>(null)
@@ -1702,6 +1801,11 @@ export function EmailLinkSection(): React.JSX.Element {
             inbox={shown}
             canMutate={canMutate}
             patchInbox={patchInbox}
+            refusal={refusal(shown)}
+            signInNow={signInFor === shown.address}
+            onSignInStarted={() => setSignInFor(null)}
+            onReconnected={onReconnected}
+            pollMs={pollMs}
             onChanged={reload}
             onBack={() => setOpenAddress(null)}
             onRemoved={(address) => {
@@ -1782,10 +1886,21 @@ export function EmailLinkSection(): React.JSX.Element {
                   <AccountRow
                     key={i.address}
                     inbox={i}
+                    refusal={refusal(i)}
+                    canMutate={canMutate}
                     onOpen={() => {
                       setNotice(null)
                       setOpenAddress(i.address)
                     }}
+                    onSignIn={
+                      refusal(i) && reconnectFeatures(i)
+                        ? () => {
+                            setNotice(null)
+                            setSignInFor(i.address)
+                            setOpenAddress(i.address)
+                          }
+                        : null
+                    }
                   />
                 ))}
               </SettingsGroup>

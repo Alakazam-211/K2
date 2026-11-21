@@ -179,7 +179,7 @@ pub(crate) fn present(ws: &str, params: Map<String, Value>, why: String, expires
     };
     store::set_card(req.id.as_str(), &conversation_id, &card_id, None, expires_at)?;
     if let Ok(Some(stored)) = store::get(req.id.as_str()) {
-        answer::audit(k2_core::permission::audit_event::REQUEST, "k2", "daemon", &stored);
+        answer::audit(k2_core::permission::audit_event::REQUEST, k2_core::brand::CLI_NAME, "daemon", &stored);
     }
     Ok((req.display_id().to_string(), card_id, addr))
 }

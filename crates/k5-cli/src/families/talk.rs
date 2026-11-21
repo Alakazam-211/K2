@@ -9,7 +9,8 @@
 //! 1. The settings, the gates and the `id` tool's passport check
 //!    (`_cli_tool_id_for_verb`: `msg|talk|thread`), as for `msg`
 //!    ([`super::msg::client_for`]).
-//! 2. The words ([`parse`]). An unknown flag is one line, exit 1. No
+//! 2. The words ([`parse`]); after a bare `--` every word is the workspace
+//!    or the text, as typed. An unknown flag is one line, exit 1. No
 //!    workspace is [`usage`], exit 1. A value flag as the last word is
 //!    the shell's `_need_value` line, exit 2.
 //! 3. `--token-stdin`: beside `--token`, one line, exit 2; else the token
@@ -33,7 +34,7 @@
 //!    prompt holds the message and scouts the form; else the message goes
 //!    by `--session`'s raw write, or by `msg`'s send
 //!    ([`super::msg::send::deliver_live`]) with `--via talk` and
-//!    `--wake` (or `--no-wake`).
+//!    `--wake` (or `--no-wake`), then `--`, the workspace and the text.
 //! 7. The EXIT trap's lines ([`crate::prelude::Closing`]).
 //!
 //! Requests: the session pick (`resolve_write_session_id`) is two
@@ -48,7 +49,6 @@
 //! - a command line with `-h` or `--help` (the front sends those on);
 //! - a word that is not UTF-8; `HOOK_SOCK` with a `CODEX_` variable, as
 //!   for `msg`; a live cell socket with no passport, as for `read`;
-//! - a text that starts with `-` (`msg`'s loop would read it as a flag);
 //! - a workspace that still holds an `@` once the host is split off
 //!   (`k2 read` splits it again and looks up a second host's token);
 //! - a host the binary doesn't send to itself ([`remote::base`]), or a
@@ -220,6 +220,17 @@ pub fn parse(words: &[&str]) -> Parsed {
             "--scout" => a.scout = true,
             "--no-wake" => a.wake = false,
             "--read-only" | "--dry-run" | "--peek" => a.read_only = true,
+            // The rest is the address and the text, as typed.
+            "--" => {
+                for w in &words[i + 1..] {
+                    if a.target.is_empty() {
+                        a.target = w.to_string();
+                    } else {
+                        a.text = w.to_string();
+                    }
+                }
+                break;
+            }
             w if w.starts_with('-') => return Parsed::Stop(unknown_flag(w), Exit::Error),
             w => {
                 if a.target.is_empty() {
@@ -299,7 +310,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     let mut base = None;
     if let Parsed::Ask(a) = &parsed {
         let (bare, host) = read::split_remote(&a.target);
-        if a.text.starts_with('-') || bare.contains('@') || !read::sendable_lines(&a.lines) {
+        if bare.contains('@') || !read::sendable_lines(&a.lines) {
             return None;
         }
         if !host.is_empty() {
@@ -508,7 +519,9 @@ fn steps(client: &mut Client, closing: &mut Closing, a: &Ask, t: &Tuning) -> Res
         std::thread::sleep(Duration::from_millis(700));
         return terminal_read(client, closing, &sid, &a.lines);
     }
-    let mut words: Vec<&str> = vec![a.target.as_str(), a.text.as_str()];
+    // The address and the text go after `--`: a text that starts with a
+    // dash (or is --help) is text, never a flag of msg's.
+    let mut words: Vec<&str> = Vec::new();
     if !a.from.is_empty() {
         words.extend(["--from", a.from.as_str()]);
     }
@@ -524,6 +537,7 @@ fn steps(client: &mut Client, closing: &mut Closing, a: &Ask, t: &Tuning) -> Res
     } else {
         words.push("--no-wake");
     }
+    words.extend(["--", a.target.as_str(), a.text.as_str()]);
     match super::msg::send::deliver_live(client, closing, &words) {
         Exit::Ok => Ok(()),
         e => Err(e),

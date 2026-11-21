@@ -496,6 +496,53 @@ fn talk_delivers_through_msg() {
     }
 }
 
+/// After a bare `--` the words are the workspace and the text, as typed
+/// (`cmd_talk`'s `--)` arm), and `talk` hands msg the text after its own
+/// `--`: a text that starts with a dash or is `--help` is sent.
+#[test]
+fn talk_after_dashes_sends_the_text_as_typed() {
+    let rig = Rig::new(VERB, "dashes");
+    for c in [
+        // covers: talk
+        plain(
+            "a text that starts with a dash",
+            &["--from", "me", "ws", "--", "-x --json"],
+            vec![ok(SCREEN), ok(CLEAR), ok(ON), ok(SENT)],
+            0,
+            4,
+        ),
+        plain(
+            "the text --help",
+            &["--from", "me", "--no-wake", "--", "ws", "--help"],
+            vec![ok(SCREEN), ok(CLEAR), ok(ON), ok(SENT)],
+            0,
+            4,
+        ),
+        plain(
+            "the text -h, a flag-looking word before it",
+            &["--from", "me", "--", "ws", "--read-only", "-h"],
+            vec![ok(SCREEN), ok(CLEAR), ok(ON), ok(SENT)],
+            0,
+            4,
+        ),
+    ] {
+        masked(&rig, &c);
+    }
+    for c in [
+        plain("-- alone", &["--"], vec![], 1, 0),
+        plain("help before --", &["ws", "-h", "--", "hi"], vec![], 0, 0),
+        plain(
+            "--read-only, then --help as the text",
+            &["ws", "--read-only", "--", "--help"],
+            vec![ok(SCREEN)],
+            0,
+            1,
+        ),
+    ] {
+        rig.check(&c);
+    }
+}
+
 /// A value flag as the last word: bash's `_need_value` and the binary
 /// print the same line, "Error: <flag> takes a value", and exit 2.
 /// Neither sends anything.

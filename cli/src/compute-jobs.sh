@@ -50,7 +50,7 @@ for n in (want or sorted(have)):
             _compute_call GET /cli/compute/jobs/artifact "job=$jq&name=$(urlencode "$name")&offset=$offset&max=4194304&wait=20&over_relay=$over_relay$aq"
             local step
             step="$(printf '%s' "$_CP_BODY" | K2_CP_OUT="$out" K2_CP_FIRST="$first" python3 -c '
-import base64, json, os, sys
+import base64, json, os, stat, sys
 v = json.load(sys.stdin)
 if v.get("pending"):
     # Still on its way from the node: ask again.
@@ -61,10 +61,42 @@ name = v["name"]
 parts = name.split("/")
 if name.startswith("/") or any(p in ("", ".", "..") for p in parts):
     sys.stderr.write(json.dumps({"error": "artifact_name_unsafe", "hint": name}) + "\n"); sys.exit(3)
-path = os.path.join(os.environ["K2_CP_OUT"], *parts)
-os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+out = os.environ["K2_CP_OUT"]
+path = os.path.join(out, *parts)
+# No link inside the folder is followed: one on the way is refused, and
+# the file is written from the folders opened one at a time with
+# O_NOFOLLOW (its first chunk made fresh with O_EXCL, the rest appended).
+p = out
+for part in parts:
+    p = os.path.join(p, part)
+    try:
+        if stat.S_ISLNK(os.lstat(p).st_mode):
+            sys.stderr.write(json.dumps({"error": "artifact_path_unsafe", "hint": "%s: %s is a link, not followed; nothing written there" % (name, p)}) + "\n"); sys.exit(3)
+    except (FileNotFoundError, NotADirectoryError):
+        break
 data = base64.b64decode(v["data"])
-with open(path, "wb" if os.environ.get("K2_CP_FIRST") == "1" else "ab") as f:
+d = os.open(out, os.O_RDONLY | os.O_DIRECTORY)
+try:
+    for part in parts[:-1]:
+        try:
+            os.mkdir(part, 0o777, dir_fd=d)
+        except FileExistsError:
+            pass
+        sub = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=d)
+        os.close(d)
+        d = sub
+    if os.environ.get("K2_CP_FIRST") == "1":
+        try:
+            if stat.S_ISREG(os.stat(parts[-1], dir_fd=d, follow_symlinks=False).st_mode):
+                os.unlink(parts[-1], dir_fd=d)
+        except FileNotFoundError:
+            pass
+        fd = os.open(parts[-1], os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o666, dir_fd=d)
+    else:
+        fd = os.open(parts[-1], os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW, dir_fd=d)
+finally:
+    os.close(d)
+with os.fdopen(fd, "wb") as f:
     f.write(data)
 print("%d %d %s %s %s" % (v["offset"] + len(data), 1 if v["eof"] else 0, v["sha256"], v["bytes"], path))')" || exit 3
             [ "$step" = "pending" ] && continue
@@ -75,8 +107,10 @@ print("%d %d %s %s %s" % (v["offset"] + len(data), 1 if v["eof"] else 0, v["sha2
         entry="$(K2_CP_PATH="$path" K2_CP_SHA="$sha" K2_CP_BYTES="$bytes" K2_CP_NAME="$name" python3 -c '
 import hashlib, json, os, sys
 p = os.environ["K2_CP_PATH"]
-h = hashlib.sha256(open(p, "rb").read()).hexdigest()
-if h != os.environ["K2_CP_SHA"] or os.path.getsize(p) != int(os.environ["K2_CP_BYTES"]):
+with os.fdopen(os.open(p, os.O_RDONLY | os.O_NOFOLLOW), "rb") as f:
+    data = f.read()
+h = hashlib.sha256(data).hexdigest()
+if h != os.environ["K2_CP_SHA"] or len(data) != int(os.environ["K2_CP_BYTES"]):
     sys.stderr.write(json.dumps({"error": "artifact_changed", "hint": "%s does not match the sha256 the node reported; fetch it again" % p}) + "\n")
     sys.exit(3)
 print(json.dumps({"name": os.environ["K2_CP_NAME"], "path": p, "bytes": int(os.environ["K2_CP_BYTES"]), "sha256": h}))')" || exit 3

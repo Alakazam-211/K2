@@ -34,6 +34,8 @@ FROM A TEMPLATE, IN THREE STEPS (k2 study agent-templates)
 
 ARGUMENTS
   <dir>                   Directory for the agent's workspace (created if missing).
+                          From an agent's session: a new folder inside the
+                          hire root (see WHO MAY).
                           Optional with --template: then <hire root>/<handle>,
                           or <hire root>/<template id> with no --name.
                           --dry-run prints the folder.
@@ -87,13 +89,16 @@ FLAGS
                           --template (passing both = exit 2).
   --mode <mode>           Agent mode: off | custom | manager | k2   (default: custom).
                           "off" also sets --enabled false.
-  --agent <preset>        Which AGENT PROGRAM this workspace launches — an agent
-                          preset id, label, or command token (see `k2 preset list`).
-                          Sets the workspace's default agent during hire. Left
-                          out: the template's suggested tool if it names one
-                          (K2's built-ins don't), else this server's default
-                          tool, else Claude. So to hire a Codex agent, pass
-                          --agent codex.
+  --agent <preset>        Which AGENT PROGRAM this workspace launches: a
+                          preset's id, its label (in full, any case: "Cursor
+                          Agent") or its command word (codex); see
+                          `k2 preset list`. A preset this server doesn't have
+                          is refused (usage, exit 2) with the server's
+                          presets, and nothing is written. Sets the workspace's default agent during
+                          hire. Left out: the template's suggested tool if it
+                          names one (K2's built-ins don't), else this server's
+                          default tool, else Claude. So to hire a Codex agent,
+                          pass --agent codex.
   --enabled <bool>        true | false (default: true). false pauses the agent
                           without changing its configured mode.
   --connect <name>        Wire a connection to another agent (repeatable): a
@@ -154,12 +159,13 @@ EXIT CODES (the same for k2 agent hire and k2 agent template)
   0  ok
   1  refused for what it is: id_reserved, id_taken, secret_found,
      too_large; or the daemon failed
-  2  bad usage: a wrong flag, param, answer or id (usage, bad_id,
-     bad_template, no_charter)
+  2  bad usage: a wrong flag, param, answer, id or --agent preset
+     (usage, bad_id, bad_template, no_charter)
   3  not allowed here: template_conflict, folder_exists, system_template,
-     own_workspace_only, not_author, role_required, owner_only
+     own_workspace_only, not_author, role_required, owner_only,
+     outside_hire_root
   4  not found: unknown_template, no_template, no_workspace, no_note,
-     no_folder, not_found (an unknown --agent preset or --connect)
+     no_folder, not_found (an unknown --connect)
   folder_exists: <hire root>/<handle> is taken; pick another --name, or
   pass that folder as <dir>. Every code and its fix: k2 study agent-templates.
 
@@ -174,6 +180,11 @@ WHO MAY
   sidecars is a separate switch, "Let this agent manage its sidecars"
   (k2 sidecar). The owner or an admin turns hiring on:
   k2 agent access set <ws> agents_hire on.
+  From an agent's session, <dir> must be a new folder inside the hire root
+  (k2 agent hire-root). An existing folder or workspace is refused
+  (owner_only, exit 3), so a re-run of the same hire is too, and so is a
+  folder elsewhere (outside_hire_root, exit 3). A person does those: a
+  person hires anywhere, from a terminal outside K2.
 
 EXAMPLES
   k2 agent hire --template writer --name "Max" --agent codex --dry-run

@@ -40,8 +40,10 @@ WHAT A TEMPLATE IS
   --name <name>      optional; the display name. Left out, it is the
                      folder's name: the template id with no <dir>
                      (<hire root>/writer), else the <dir> folder's name.
-  --agent <preset>   the tool it runs: an id, label or command word from
-                     k2 preset list (codex, claude, ...). Left out: the
+  --agent <preset>   the tool it runs: an id, label (in full, any case)
+                     or command word from k2 preset list (codex,
+                     claude, ...). One this server doesn't have is usage
+                     (exit 2), with the server's presets. Left out: the
                      template's suggested tool if it names one (K2's
                      built-ins don't), else this server's default tool,
                      else Claude.
@@ -58,6 +60,9 @@ WHAT A TEMPLATE IS
   folder holds something else (another agent or other files). One
   template per agent. The hire prints the folder; tell your person who
   you hired and why.
+  From an agent's session a hire only makes a new folder inside the hire
+  root: an existing one is owner_only (a re-run too), one elsewhere is
+  outside_hire_root. A person hires anywhere.
 
 3. PERMISSIONS: SUGGESTED, NOT GRANTED
   A hire never gets more than the hirer may give. Today a hire turns no
@@ -129,13 +134,15 @@ EXIT CODES (the same for k2 agent hire and k2 agent template)
   2  bad usage: a wrong flag, param, answer or id (usage, bad_id,
      bad_template, no_charter)
   3  not allowed here: template_conflict, folder_exists, system_template,
-     own_workspace_only, not_author, role_required, owner_only
+     own_workspace_only, not_author, role_required, owner_only,
+     outside_hire_root
   4  not found: unknown_template, no_template, no_workspace, no_note,
      no_folder, not_found
 
 ERRORS (code (exit): what to do)
   unknown_template (4)    no such id: k2 agent template list --all
-  usage (2)               a param or answer the template doesn't take; the
+  usage (2)               a param or answer the template doesn't take, or
+                          an --agent preset this server doesn't have; the
                           message lists the valid ones
   template_conflict (3)   that folder was made from another template; one
                           per agent: pick another folder or --name
@@ -143,8 +150,11 @@ ERRORS (code (exit): what to do)
                           or pass that folder as <dir>
   system_template (3)     an API key can't hire kessel or chief-of-staff;
                           people and agents may, by id
-  owner_only (3)          that step needs this server's owner (such as
-                          --db-access read or write for yourself)
+  owner_only (3)          a step only this server's owner takes (such as
+                          --db-access read or write for yourself), or an
+                          agent hiring into a folder that already exists
+  outside_hire_root (3)   an agent hiring outside the hire root
+                          (k2 agent hire-root); a person hires anywhere
   bad_id (2)              ids are a-z, 0-9 and -, at most 40 characters
   id_reserved (1)         a K2 id or old id: pick another id
   id_taken (1)            another author saved that id: pick another id
@@ -160,6 +170,5 @@ ERRORS (code (exit): what to do)
   role_required (3)       a Member person: saving needs Owner or Admin
   no_workspace (4)        no such folder or handle registered on this server
   no_folder (4)           add: that path is not a folder
-  not_found (4)           hire: an unknown --agent preset (k2 preset list)
-                          or --connect peer
+  not_found (4)           hire: an unknown --connect peer
   no_template (4)         upgrade/diff: that agent wasn't made from one

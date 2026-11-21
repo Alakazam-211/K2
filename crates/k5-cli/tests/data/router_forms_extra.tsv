@@ -19,3 +19,4 @@ zen sync undo	zen sync g1 undo	cli/src/garden-access.sh:cmd_zen_sync	the verb fo
 zen sync keep-previous	zen sync g1 keep-previous	cli/src/garden-access.sh:cmd_zen_sync	the verb follows the garden name (pos[1])
 zen sync preview	zen sync g1 preview	cli/src/garden-access.sh:cmd_zen_sync	the verb follows the garden name (pos[1])
 doc replace-section	doc replace-section notes.md	cli/src/doc.sh:cmd_doc	a verb of the doc's own pack: the `*)` arm hands any word to the daemon's tools
+help remote	-	cli/src/wiki.sh:cmd_help	the router reaches cmd_help after a shift inside an if, which the parser does not follow (help has a verb row for remote)

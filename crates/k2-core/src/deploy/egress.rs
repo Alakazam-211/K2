@@ -515,7 +515,7 @@ pub fn find_request(conn: &Connection, token: &str) -> rusqlite::Result<Option<W
 /// Requests, newest first. `app` / `status` filter; `workspace` keeps
 /// only requests on Apps that workspace owns.
 pub fn list_requests(conn: &Connection, app: Option<&str>, status: Option<&str>, workspace: Option<&str>, limit: i64) -> rusqlite::Result<Vec<Widening>> {
-    reqs::list(conn, &reqs::Filter { app_id: app, service_id: None, workspace, status }, limit)
+    reqs::list(conn, &reqs::Filter { app_id: app, service_id: None, workspace, status, requester: None }, limit)
 }
 
 /// The pending `egress` request on an App, if any (new hosts join it).

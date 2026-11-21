@@ -77,7 +77,9 @@ pub const WINDOW_SECS: i64 = 300;
 /// The refusal for a finish that isn't the step its card names.
 pub const MISMATCH: &str = "phone_confirm_mismatch";
 /// This computer's own prompt got no answer (no one at its screen, or it
-/// timed out): the owner's terminal falls back to the phone card.
+/// timed out): the owner's terminal falls back to the phone card. Only the
+/// macOS confirm (`local_auth`, Touch ID or the password) reports it.
+#[cfg(target_os = "macos")]
 pub const UNANSWERED: &str = "confirm_unanswered";
 
 /// How often the waiting terminal looks for an answer.

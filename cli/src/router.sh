@@ -163,6 +163,10 @@ case "${1:-help}" in
         # human governance; owners run the server/domains/approvals.
         # Family is `mail`, deliberately NOT `inbox` (that's K2's
         # internal work queue). See `k2 mail --help`.
+        # 0.46.17: `mail create --help` prints the page of the verb it moved
+        # to (hostmail create), as `hostmail create --help` does, instead of
+        # the moved error below.
+        if [ "${2:-}" = create ] && _wants_help "${@:3}"; then cmd_help_mail_create; exit 0; fi
         case "${2:-}" in
             # S11: the unified discovery verb (hosted + linked, with your
             # access level). `addresses`/`list` are aliases.

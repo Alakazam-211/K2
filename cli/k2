@@ -2214,6 +2214,10 @@ fi
 case "${1:-}" in
     onboarding|reserve|release|read|reviews|trust-folders|glossary|sessions|notifications|notify)
         for _a in "${@:2}"; do [ "$_a" = "--" ] && break; case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
+    mail)
+        if [ "${2:-}" = create ]; then
+            for _a in "${@:3}"; do [ "$_a" = "--" ] && break; case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done
+        fi ;;
 esac
 # `k2 checkin` is retired: its stub prints pointers and never calls the daemon.
 [ "${1:-}" = "checkin" ] && _skip_conn_gate=1
@@ -117690,6 +117694,10 @@ case "${1:-help}" in
         # human governance; owners run the server/domains/approvals.
         # Family is `mail`, deliberately NOT `inbox` (that's K2's
         # internal work queue). See `k2 mail --help`.
+        # 0.46.17: `mail create --help` prints the page of the verb it moved
+        # to (hostmail create), as `hostmail create --help` does, instead of
+        # the moved error below.
+        if [ "${2:-}" = create ] && _wants_help "${@:3}"; then cmd_help_mail_create; exit 0; fi
         case "${2:-}" in
             # S11: the unified discovery verb (hosted + linked, with your
             # access level). `addresses`/`list` are aliases.

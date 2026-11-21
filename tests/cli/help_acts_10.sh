@@ -31,6 +31,8 @@
 #     test mail, `relay rm --help` removed a relay named --help.
 #   - `k2 notify email mute --help` muted a workspace named --help (and
 #     unmute unmuted it); --subject and --text took the help word.
+#   - `k2 mail create --help` printed the moved error through python3
+#     (exit 2): no page, and not a print the k5 binary could take.
 #
 # Each section: every help form, with --help and with -h, prints exactly
 # the page's cli/text/help file and the stub daemon records nothing; the
@@ -282,6 +284,22 @@ page notify.txt notify email off @H
 page notify.txt notify email owner --subject @H --text hi
 page notify.txt notify email owner --subject hi --text @H
 sends '^POST /cli/notify/email/mute .*"muted": true' notify email mute myws
+
+echo "== mail create (moved to hostmail create) =="
+page hostmail/create.txt mail create @H
+page hostmail/create.txt mail create bot @H
+page hostmail/create.txt mail create bot --domain @H
+# The same page `k2 hostmail create --help` prints (that one asks for a
+# connection to K2 first).
+page_once "$HOME_ON" hostmail/create.txt hostmail create --help
+# The other moved verbs keep the moved error: exit 2, nothing sent.
+run "$HOME_ON" mail status --help
+[ "$RC" -eq 2 ] && ok || bad "k2 mail status --help: exit $RC (want 2)"
+grep -q "moved to 'k2 hostmail status'" "$WORK/err" && ok || { bad "k2 mail status --help: stderr"; show "$WORK/err"; }
+[ ! -s "$REQ_LOG" ] && ok || { bad "k2 mail status --help: sent a request"; show "$REQ_LOG"; }
+run "$HOME_ON" mail create bot
+[ "$RC" -eq 2 ] && ok || bad "k2 mail create bot: exit $RC (want 2)"
+grep -q "moved to 'k2 hostmail create'" "$WORK/err" && ok || { bad "k2 mail create bot: stderr"; show "$WORK/err"; }
 
 echo ""
 echo "help_acts_10: $pass passed, $fail failed"

@@ -1649,6 +1649,10 @@ fi
 case "${1:-}" in
     onboarding|reserve|release|read|reviews|trust-folders|glossary|sessions|notifications|notify)
         for _a in "${@:2}"; do [ "$_a" = "--" ] && break; case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
+    mail)
+        if [ "${2:-}" = create ]; then
+            for _a in "${@:3}"; do [ "$_a" = "--" ] && break; case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done
+        fi ;;
 esac
 # `k2 checkin` is retired: its stub prints pointers and never calls the daemon.
 [ "${1:-}" = "checkin" ] && _skip_conn_gate=1

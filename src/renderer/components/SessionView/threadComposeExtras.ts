@@ -21,6 +21,9 @@ export interface ThreadComposeExtras {
    *  the agent's (a ticket's replies reach the agent's own session).
    *  Undefined: the Thread's own. */
   turn?: ThreadTurn | null
+  /** The band over the Thread's top (Glass): the heavier step, which dims
+   *  more of what scrolls under a taller header. Absent: the usual band. */
+  headerBlur?: 'heavy'
   /** Room between the newest message and the box (px), on top of the
    *  list's own: the newest message rests clear of a taller footer band
    *  (a ticket's), which Jump to bottom then sits in. */

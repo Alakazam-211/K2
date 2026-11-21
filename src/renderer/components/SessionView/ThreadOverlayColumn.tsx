@@ -105,7 +105,9 @@ export function ThreadOverlayColumn({
   const editorFontSize = useSettingsStore((s) => s.editor.fontSize) || 13
   // A ticket's replies reach the agent's own session: its strip, not the
   // Thread's (threadComposeExtras).
-  const turnOverride = useThreadComposeExtras()?.turn
+  const composeExtras = useThreadComposeExtras()
+  const turnOverride = composeExtras?.turn
+  const headerBlur = composeExtras?.headerBlur
   const drawerTurn = turnOverride !== undefined ? turnOverride : turn
   const drawer = useMemo<ThreadComposeDrawer>(() => ({ turn: drawerTurn, onStop }), [drawerTurn, onStop])
   const reducedMotion = useReducedMotion()
@@ -226,7 +228,7 @@ export function ThreadOverlayColumn({
         className="absolute inset-0 overflow-hidden flex flex-col"
         data-testid="agent-session-thread-list-slot"
       >
-        <ProgressiveHeaderBlur />
+        <ProgressiveHeaderBlur variant={headerBlur} />
         <SelectableRegion className="h-full min-h-0 flex flex-col overflow-hidden">
           <ThreadOverlayPane
             addr={addr}

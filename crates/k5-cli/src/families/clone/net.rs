@@ -5,8 +5,9 @@
 //! the socket's own timeout is cut into short waits, so Ctrl-C or SIGTERM
 //! stops a request at once, as Python's signal handlers do.
 //!
-//! No request follows a redirect: the answer's place is refused
-//! ([`redirect_line`]), as the shell's `_K2NoRedirect`.
+//! No request follows a redirect: the answer's place is refused with the
+//! shared rule's line ([`crate::transport::urllib::redirect_refusal`]),
+//! as the shell's `_K2NoRedirect`.
 
 use super::pyurl::Target;
 use crate::transport::proxy::{self, Proxy};
@@ -307,61 +308,4 @@ pub fn wipe_bytes(d: &mut [u8]) {
         // SAFETY: a volatile write into a live buffer.
         unsafe { std::ptr::write_volatile(b, 0) };
     }
-}
-
-/// The refusal `_K2NoRedirect` writes for a redirect from `url` to
-/// `location` (`code`): both places by their netloc less any user part
-/// (the new one joined to the old URL first), what isn't printable as `?`.
-pub fn redirect_line(url: &str, code: u16, location: &str) -> String {
-    let after_at = |s: &str| s.rsplit_once('@').map_or(s, |(_, h)| h).to_string();
-    let here = super::rule::urlsplit(url)
-        .map(|u| after_at(&u.netloc))
-        .unwrap_or_default();
-    let joined = join(url, location);
-    let there = super::rule::urlsplit(&joined)
-        .map(|u| after_at(&u.netloc))
-        .filter(|s| !s.is_empty())
-        .unwrap_or(joined);
-    let there: String = there
-        .chars()
-        .map(|c| {
-            if crate::out::py::isprintable(c) {
-                c
-            } else {
-                '?'
-            }
-        })
-        .collect();
-    let p = k2_client::product_name!();
-    format!(
-        "refused: {here} answered {code}, sending {p} to {there}; {p} does not follow a redirect with your token or password, so nothing was sent there"
-    )
-}
-
-/// `urljoin(base, url)` for the netloc only: an absolute URL or a
-/// `//netloc` one names its own; anything else stays on the base's.
-fn join(base: &str, url: &str) -> String {
-    if url.starts_with("//") {
-        let scheme = super::rule::urlsplit(base)
-            .map(|u| u.scheme)
-            .unwrap_or_default();
-        return format!("{scheme}:{url}");
-    }
-    match super::rule::urlsplit(url) {
-        Some(u) if !u.scheme.is_empty() && !u.netloc.is_empty() => url.to_string(),
-        _ => base.to_string(),
-    }
-}
-
-/// Is `code` one urllib's redirect handler takes, and is its new place
-/// one it would go to? (`http`, `https`, `ftp` or none.)
-pub fn redirects(code: u16, location: Option<&str>) -> Option<String> {
-    if !matches!(code, 301 | 302 | 303 | 307 | 308) {
-        return None;
-    }
-    let loc = location?;
-    let scheme = super::rule::urlsplit(loc)
-        .map(|u| u.scheme)
-        .unwrap_or_default();
-    matches!(scheme.as_str(), "http" | "https" | "ftp" | "").then(|| loc.to_string())
 }

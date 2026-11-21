@@ -1171,10 +1171,11 @@ fn read_head(r: &mut impl BufRead) -> Result<Head, Raised> {
 }
 
 /// One answer read after a request ([`read_answer`]): what urlopen came
-/// to, and the answer's `Location` header (a redirect's new place).
+/// to, and a redirect's new place as urllib's handler reads it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Answered {
     pub outcome: Outcome,
+    /// The `Location` header, else the `URI` one.
     pub location: Option<String>,
     /// The daemon's version header, for [`skew::note`].
     pub server_version: Option<String>,
@@ -1209,7 +1210,7 @@ pub fn read_answer(r: &mut impl BufRead) -> Answered {
     };
     Answered {
         outcome,
-        location: head.location,
+        location: head.location.or(head.uri),
         server_version: head.server_version,
     }
 }

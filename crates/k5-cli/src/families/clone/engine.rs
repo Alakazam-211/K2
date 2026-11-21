@@ -425,13 +425,9 @@ impl Engine {
                 Err(r) => return Err(Stop::Raised(r.traceback_line())),
             },
             Outcome::HttpError { code, body } => {
-                if let Some(loc) = net::redirects(code, a.location.as_deref()) {
-                    let url = format!("{base}{route}");
-                    return Err(Stop::fail(
-                        "redirect_refused",
-                        net::redirect_line(&url, code, &loc),
-                        3,
-                    ));
+                let url = format!("{base}{route}");
+                if let Some(r) = urllib::redirect_refusal(&url, code, a.location.as_deref()) {
+                    return Err(Stop::fail("redirect_refused", r.line, 3));
                 }
                 match body {
                     Ok(b) => (code, b),

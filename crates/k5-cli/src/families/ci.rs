@@ -415,10 +415,10 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
             return Some(Exit::Error);
         }
     };
-    // The guard, unless `-h` or `--help` is anywhere; then the
+    // The guard, unless `-h` or `--help` comes before any `--`; then the
     // connection gate, unless the prelude reads the line as the help.
     let skip_gate = gate_skipped(&words);
-    let offline = words.iter().any(|w| matches!(*w, "-h" | "--help"));
+    let offline = crate::dashdash::wants_help(&words);
     let gate = prelude::gate(&settings);
     let sends = !matches!(parsed, Parsed::Help | Parsed::Usage(_));
     // A line that still sends with the gate skipped (`signer remove <fp>

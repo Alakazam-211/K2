@@ -770,8 +770,9 @@ fn leak(args: &[&str]) -> &'static [&'static str] {
     Box::leak(v.into_boxed_slice())
 }
 
-/// Help anywhere on the line prints the help page and sends nothing, for
-/// every verb (each that changes something too).
+/// Help anywhere before a bare `--` prints the help page and sends
+/// nothing, for every verb (each that changes something too). After `--`
+/// it is the text (`type -- --help` types it).
 #[test]
 fn help_never_acts() {
     let rig = Rig::new(VERB, "help");
@@ -784,7 +785,7 @@ fn help_never_acts() {
         &["terminate", "com.acme", "--help"],
         &["tap", "e5", "-h"],
         &["tap", "--at", "-h"],
-        &["type", "--", "--help"],
+        &["type", "-h", "--", "x"],
         &["swipe", "up", "--help"],
         &["key", "enter", "-h"],
         &["button", "home", "--help"],

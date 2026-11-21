@@ -467,4 +467,8 @@ fn help_words() {
         assert!(wants_help(w), "{w:?}");
     }
     assert!(!wants_help(&["tap", "help"]));
+    // After a bare `--` the words are the text (`_wants_help`).
+    assert!(!wants_help(&["type", "--", "--help"]));
+    assert!(!wants_help(&["type", "--into", "e3", "--", "-h"]));
+    assert!(wants_help(&["type", "-h", "--", "x"]));
 }

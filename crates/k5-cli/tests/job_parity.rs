@@ -183,13 +183,15 @@ fn job_help_and_words() {
         3,
         0,
     ));
+    // After `--` a help word is the command's: the guard stops the line
+    // (`_k2_offline_verb` stops at `--`, 75dfa4fc07).
     v.push(case(
-        "-h after -- passes the guard, not the gate",
+        "-h after -- is the command's: the guard",
         &["add", "n", "--every", "1m", "--", "ls", "-h"],
         &[("K2_NO_OWNER_FALLBACK", "1")],
         vec![],
         port_only,
-        1,
+        3,
         0,
     ));
     v.push(case(

@@ -1013,17 +1013,16 @@ fn compute_prewarm() {
     }
 }
 
-/// Help never acts: -h or --help anywhere on run, test or prewarm prints
-/// help and sends nothing (the front hands it to the shell's help).
+/// Help never acts: -h or --help before any bare `--` on run, test or
+/// prewarm prints help and sends nothing (the front hands it to the
+/// shell's help). After `--` it is the command's (75dfa4fc07).
 #[test]
 fn compute_submit_help_never_acts() {
     let rig = Rig::new(VERB, "submithelp");
     const HELP: &[&[&str]] = &[
         &["run", "mini", "--detach", "-h", "--", "x"],
         &["run", "--help"],
-        &["run", "--", "make", "--help"],
         &["test", "--shards", "2", "-h"],
-        &["test", "--", "--help"],
         &["prewarm", "--wait", "--help"],
         &["prewarm", "-h"],
     ];
@@ -1031,6 +1030,26 @@ fn compute_submit_help_never_acts() {
         rig.check(&Case {
             compare: Compare::Shell,
             ..case("help", args, &[], vec![], owner_and_port, 0, 0)
+        });
+    }
+    // After a bare `--` a help word is the command's: submitted. The
+    // family hands a line with a help word anywhere to the shell, so
+    // both sides are the shell's.
+    for (name, args, reply) in [
+        (
+            "run -- make --help: submitted",
+            &["run", "--detach", "--", "make", "--help"][..],
+            SUBMIT,
+        ),
+        (
+            "test -- --help: submitted",
+            &["test", "--detach", "--", "--help"][..],
+            PLAIN,
+        ),
+    ] {
+        rig.check(&Case {
+            compare: Compare::Shell,
+            ..case(name, args, &[], vec![ok(reply)], owner_and_port, 0, 1)
         });
     }
 }

@@ -286,33 +286,43 @@ fn what_runs_nothing() {
 /// A run line with `-h` or `--help` anywhere is the front's: a page, or
 /// the shell (the binary hands it on), the `-h` before `--` or after it.
 /// On both sides it sends nothing and runs nothing, with an owner or with
-/// none (the shell skips its connection gate for these).
+/// none. The shell skips its connection gate for a help word before `--`
+/// only (75dfa4fc07): after it the word is the command's, so with no
+/// owner the gate stops the line (exit 1).
 #[test]
 fn help_runs_nothing() {
     let rig = VRig::new();
     let (_, log) = helper(rig.path());
-    for (name, args, code) in [
-        ("-h", &["run", "-h"][..], 0),
+    for (name, args, code, no_owner) in [
+        ("-h", &["run", "-h"][..], 0, 0),
         (
             "--help after a name",
             &["run", "--secret", "A", "--help", "--", "ls"][..],
+            0,
             0,
         ),
         (
             "-h as the last word before --",
             &["run", "A", "-h", "--", "ls"][..],
             0,
+            0,
         ),
-        ("an unknown flag, then -h", &["run", "--bogus", "-h"][..], 2),
+        (
+            "an unknown flag, then -h",
+            &["run", "--bogus", "-h"][..],
+            2,
+            2,
+        ),
         (
             "no secret, and the command's --help",
             &["run", "--", "ls", "--help"][..],
             2,
+            1,
         ),
     ] {
         for owner in [true, false] {
             let mut c = refused(name, args, &log);
-            c.code = code;
+            c.code = if owner { code } else { no_owner };
             c.owner_on_disk = owner;
             c.handed = true;
             rig.check(&c);

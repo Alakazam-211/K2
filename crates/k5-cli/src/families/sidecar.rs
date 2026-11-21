@@ -141,9 +141,7 @@ pub enum Parsed {
 /// `cmd_sidecar`'s first look: the help, else the verb.
 pub fn parse(words: &[&str]) -> Parsed {
     let sub = words.first().copied().unwrap_or("");
-    if matches!(sub, "" | "help" | "--help" | "-h")
-        || words[1..].iter().any(|w| matches!(*w, "-h" | "--help"))
-    {
+    if matches!(sub, "" | "help" | "--help" | "-h") || crate::dashdash::wants_help(&words[1..]) {
         return Parsed::Help;
     }
     Parsed::Verb(

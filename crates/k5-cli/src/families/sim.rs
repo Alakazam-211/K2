@@ -5,11 +5,12 @@
 //!
 //! 1. The settings, a re-minted passport taken at once, and the two gates
 //!    ([`crate::prelude`]). `sim` alone, `help`, `-h` or `--help` second,
-//!    or `-h` or `--help` anywhere skip the connection gate; the virtual
-//!    desktop's guard stops all but a line with `-h` or `--help` in it.
+//!    or `-h` or `--help` before any bare `--` skip the connection gate;
+//!    the virtual desktop's guard stops all but a line with `-h` or
+//!    `--help` before any `--` in it.
 //! 2. `sim` is an `id` tool: with `HOOK_SOCK` set, the stale-passport or
 //!    require-passport lines, exit 3.
-//! 3. `-h` or `--help` anywhere, no verb or `help`: the help page on
+//! 3. `-h` or `--help` before any `--`, no verb or `help`: the help page on
 //!    stdout. An unknown verb: its line and the help page on stderr,
 //!    exit 2.
 //! 4. `_sim_common`: `--json` and `--workspace` come out of the words
@@ -1615,10 +1616,10 @@ fn help_page() -> &'static str {
 }
 
 /// The words after `sim` that `cmd_sim` reads as help: `-h` or `--help`
-/// anywhere, no verb, an empty one or `help`.
+/// before the first bare `--` (`_wants_help`), no verb, an empty one or
+/// `help`.
 pub fn wants_help(words: &[&str]) -> bool {
-    words.iter().any(|w| matches!(*w, "-h" | "--help"))
-        || matches!(words.first(), None | Some(&("" | "help")))
+    crate::dashdash::wants_help(words) || matches!(words.first(), None | Some(&("" | "help")))
 }
 
 /// `k5 sim …`: `args` is the whole command line after `argv[0]`. `None`:
@@ -1683,7 +1684,8 @@ fn run_with(
     hook_sock: Option<&Path>,
     mut settings: Settings,
 ) -> Exit {
-    let offline = words.iter().any(|w| matches!(*w, "-h" | "--help"));
+    // `_k2_offline_verb` and the gate's skip: a help word before `--`.
+    let offline = crate::dashdash::wants_help(words);
     let skip = matches!(words.first(), None | Some(&("" | "help" | "--help" | "-h"))) || offline;
     let no_token = settings.auth == Auth::None;
     if settings.no_owner_fallback && no_token && !offline {

@@ -839,10 +839,15 @@ cmd_publish() {
 cmd_publish_run() {
     if _wants_help "$@"; then _publish_usage; exit 0; fi
     local name="" cmd="" port="" cwd="" no_tunnel=0 as_json=false skin=0 skin_root="" transfer=0 probe_timeout="" dov=""
-    local dev=0 dev_idle="" dev_mem="" dev_cpus=""
+    local dev=0 dev_idle="" dev_mem="" dev_cpus="" assign=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --dev) dev=1; shift ;;
+            # 0.46.17: who a held run's permission card goes to.
+            --assign)
+                [ $# -ge 2 ] && [ -n "$2" ] || { as_json="$as_json" _publish_err "usage" "--assign takes logins, comma-separated (--assign ada): who gets the card if the run is held"; exit 2; }
+                assign="$2"; shift 2 ;;
+            --assign=*) assign="${1#--assign=}"; shift ;;
             --idle)
                 [ $# -ge 2 ] || { as_json="$as_json" _publish_err "usage" "--idle needs a duration from 5m to 24h, or off"; exit 2; }
                 dev_idle="$2"; shift 2 ;;
@@ -982,13 +987,15 @@ cmd_publish_run() {
     body=$(P_NAME="$name" P_CMD="$cmd" P_PORT="$port" P_CWD="$cwd" \
            P_PROJECT="$PROJECT" P_NO_TUNNEL="$no_tunnel" P_TRANSFER="$transfer" \
            P_SKIN="$skin" P_SKIN_ROOT="$skin_root" P_PROBE_TIMEOUT="$probe_timeout" P_DISK_OVERRIDE="$dov" \
-           P_DEV="$dev" P_DEV_IDLE="$dev_idle" P_DEV_MEM="$dev_mem" P_DEV_CPUS="$dev_cpus" python3 -c '
+           P_DEV="$dev" P_DEV_IDLE="$dev_idle" P_DEV_MEM="$dev_mem" P_DEV_CPUS="$dev_cpus" P_ASSIGN="$assign" python3 -c '
 import json, os
 b = {
     "name": os.environ["P_NAME"],
     "port": int(os.environ["P_PORT"]),
     "project": os.environ["P_PROJECT"],
 }
+if (os.environ.get("P_ASSIGN") or "").strip():
+    b["assign"] = os.environ["P_ASSIGN"].strip()
 if os.environ.get("P_DEV") == "1":
     b["dev"] = True
     for k, e in (("idle", "P_DEV_IDLE"), ("mem", "P_DEV_MEM"), ("cpus", "P_DEV_CPUS")):

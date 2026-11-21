@@ -533,7 +533,7 @@ fn approved_request_for(ws: &str, username: &str) -> R<Option<String>> {
     let rows = {
         let h = k2_core::db::shared();
         let conn = h.lock();
-        let f = k2_core::app_grace::requests::Filter { app_id: None, service_id: None, workspace: Some(ws), status: Some(k2_core::app_grace::requests::STATUS_APPROVED) };
+        let f = k2_core::app_grace::requests::Filter { app_id: None, service_id: None, workspace: Some(ws), status: Some(k2_core::app_grace::requests::STATUS_APPROVED), requester: None };
         k2_core::app_grace::requests::list(&conn, &f, 200).map_err(store_err_db)?
     };
     Ok(rows

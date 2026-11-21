@@ -1803,6 +1803,7 @@ for x in r:
 # again: _cli_send_unanswered says so and ends the command with 1.
 _app_rt_post_file() {
     local path="$1" file="$2" sock out="" _K2_CFG="" rc=0 t0="$SECONDS"
+    path="$(_compute_assign_path POST "$path")"
     sock="$(_hook_sock)"
     if [ -n "$sock" ] && [ -S "$sock" ] && ! _cli_skip_uds && [ -n "${SCOPED_TOKEN:-}" ]; then
         _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"

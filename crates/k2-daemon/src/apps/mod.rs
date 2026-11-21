@@ -12,8 +12,11 @@ pub mod catalog_routes;
 // An agent's App grants (the App-user switch, copy-host and label
 // transfers) and their held requests (0.46.4).
 pub mod agent_grants;
-// K2 presents those held requests as Thread cards (0.46.4).
+// K2 presents those held requests as Thread cards (0.46.4); every agent's
+// hold, with --assign and one answer for every door (0.46.17).
 pub mod held_cards;
+#[cfg(test)]
+mod held_cards_tests;
 /// Automatic App box prep through the owner's root helper (0.46.3).
 pub mod auto_prepare;
 /// `k2 app data put`: a workspace's files into an App's data folder.

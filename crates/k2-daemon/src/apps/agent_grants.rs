@@ -180,7 +180,7 @@ pub const MAX_PENDING_PER_KIND: usize = 5;
 fn pending_of(ws: &str, route: &str) -> R<usize> {
     let h = k2_core::db::shared();
     let conn = h.lock();
-    let f = reqs::Filter { app_id: None, service_id: None, workspace: None, status: Some(reqs::STATUS_PENDING) };
+    let f = reqs::Filter { app_id: None, service_id: None, workspace: None, status: Some(reqs::STATUS_PENDING), requester: None };
     let rows = reqs::list(&conn, &f, 1000).map_err(|e| no("db_error", 500, e.to_string()))?;
     Ok(rows
         .iter()

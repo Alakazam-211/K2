@@ -358,6 +358,7 @@ fn show(who: &Who, params: &HashMap<String, String>) -> R<J> {
                     service_id: None,
                     workspace: None,
                     status: Some(k2_core::app_grace::requests::STATUS_PENDING),
+                    requester: None,
                 },
                 50,
             )?,

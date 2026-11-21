@@ -447,15 +447,23 @@ pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String
     // earlier request, and raises the permission card when cards are on
     // (0.46.4, `approvals::enrich_held`).
     let caller = who.clone();
-    // An agent passport is the label caller for everything below, so the
-    // hostname step (`attach_hostname`) knows it's an agent's call
-    // (security review D); other callers keep the fail-closed default.
-    let resp = if matches!(who, Who::Agent { .. }) {
-        crate::label_owner::with_caller(crate::label_owner::Caller::Agent, || handle_inner(path, who, body, params))
-    } else {
-        handle_inner(path, who, body, params)
+    // 0.46.17: `--assign <login>` names who a held request's card goes to;
+    // checked before anything runs.
+    let assign = match super::held_cards::assign_param(params) {
+        Ok(a) => a,
+        Err(e) => return respond(Err(e)),
     };
-    super::approvals::enrich_held(&caller, resp)
+    super::held_cards::with_assign(assign, || {
+        // An agent passport is the label caller for everything below, so the
+        // hostname step (`attach_hostname`) knows it's an agent's call
+        // (security review D); other callers keep the fail-closed default.
+        let resp = if matches!(who, Who::Agent { .. }) {
+            crate::label_owner::with_caller(crate::label_owner::Caller::Agent, || handle_inner(path, who, body, params))
+        } else {
+            handle_inner(path, who, body, params)
+        };
+        super::approvals::enrich_held(&caller, resp)
+    })
 }
 
 fn handle_inner(path: &str, who: Who, body: &[u8], params: &HashMap<String, String>) -> CliResponse {

@@ -163,8 +163,13 @@ pub fn dispatch_post_as(path: &str, params: &HashMap<String, String>, who: crate
     CALLER.with(|c| *c.borrow_mut() = Some(who.clone()));
     // 0.46.6 (client papercut 12): a held `k2 publish run` (a `publish_run`
     // request) says where the owner sees it and raises the agent's
-    // `apps.approve` card, as every `/cli/app/*` hold does.
-    crate::apps::approvals::enrich_held(&who, dispatch_post(path, params))
+    // `apps.approve` card, as every `/cli/app/*` hold does; `--assign
+    // <login>` (0.46.17) names who it goes to, checked before it runs.
+    let assign = match crate::apps::held_cards::assign_param(params) {
+        Ok(a) => a,
+        Err(e) => return crate::apps::routes::respond(Err(e)),
+    };
+    crate::apps::held_cards::with_assign(assign, || crate::apps::approvals::enrich_held(&who, dispatch_post(path, params)))
 }
 
 /// The classified caller of this POST. Nothing classified: refused by the

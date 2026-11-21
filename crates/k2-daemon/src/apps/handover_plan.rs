@@ -466,7 +466,7 @@ pub(crate) fn compute(app: &AppRow, to: &Ws, options: &Options, brief: Option<&s
             store::list_apps(&conn, Some(&room_from)).map_err(db_err)?.into_iter().filter(|a| a.app_id != app.app_id).collect()
         };
         let domains = k2_core::domains::hostnames_for_app(&conn, &app.app_id).map_err(db_err)?;
-        let f = reqs::Filter { app_id: Some(&app.app_id), service_id: None, workspace: None, status: Some(reqs::STATUS_PENDING) };
+        let f = reqs::Filter { app_id: Some(&app.app_id), service_id: None, workspace: None, status: Some(reqs::STATUS_PENDING), requester: None };
         let requests: Vec<J> = reqs::list(&conn, &f, 200)
             .map_err(db_err)?
             .into_iter()

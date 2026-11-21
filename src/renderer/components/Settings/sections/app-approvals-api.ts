@@ -58,6 +58,32 @@ export interface AppRequest {
   result: unknown
   /** Egress kinds: the hosts asked for, for display. */
   hosts?: string[]
+  /** 0.46.17: its permission card, when one went up (`null`: none). */
+  card?: AppRequestCard | null
+}
+
+/** The `apps.approve` permission card of a held request (0.46.17). */
+export interface AppRequestCard {
+  /** The request id the card shows (the held request's own w_… id). */
+  id: string
+  /** pending, approved, denied, expired, cancelled, … */
+  state: string
+  card: string | null
+  /** The Thread it is on (a workspace handle). */
+  thread: string | null
+  /** Who it asks: `[{login, role}]` (`owner` = the owner token's person). */
+  routedTo: { login: string; role: string }[]
+  /** It asks named people (the agent's --assign or the owner's default). */
+  narrowed: boolean
+}
+
+/** "Card on <thread>'s Thread, sent to ada" for a held request's row. */
+export function cardLine(c: AppRequestCard | null | undefined): string | null {
+  if (!c || c.state !== 'pending') return null
+  const names = c.routedTo.map((x) => (x.login === 'owner' ? 'the owner' : x.login))
+  const where = c.thread ? `${c.thread}'s Thread` : 'the agent’s Thread'
+  if (!c.narrowed) return `Card on ${where}, for every owner and admin`
+  return `Card on ${where}, sent to ${names.length > 0 ? names.join(', ') : 'the owner'}`
 }
 
 export interface OwnerConfirmStatus {

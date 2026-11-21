@@ -97,6 +97,13 @@ pub(crate) fn view(ws: &Ws, card: &str) -> Value {
     d["choice"]["action"]["view"].clone()
 }
 
+/// The card's own status: `pending` while it takes an answer, then
+/// `answered`, `voided` or `expired`.
+pub(crate) fn card_status(ws: &Ws, card: &str) -> String {
+    let d = serde_json::to_value(k2_core::overlay::get_thread_doc(&ws.conv, card).expect("doc read").expect("card doc")).expect("doc json");
+    d["choice"]["status"].as_str().unwrap_or_else(|| panic!("no choice status: {d}")).to_string()
+}
+
 pub(crate) fn card_of(v: &Value) -> String {
     v["card"].as_str().unwrap_or_else(|| panic!("no card in {v}")).to_string()
 }
@@ -206,7 +213,7 @@ fn route_floor_reads_the_policy_table() {
 
 // ── apps.approve ────────────────────────────────────────────────────
 
-fn quiet_apps() {
+pub(crate) fn quiet_apps() {
     crate::apps::alerts::set_sink(Some(Box::new(|_: &str, _: &str| {})));
     // The same applier door_tests registers for this kind.
     fn ok(r: &app_reqs::AppRequest, by: &str) -> crate::apps::routes::R<Value> {
@@ -217,7 +224,7 @@ fn quiet_apps() {
 
 /// A held App request filed by `ws`'s agent. `db_raw` has a test applier;
 /// `overcommit` has none, so approving it fails to apply.
-fn app_request(ws: &Ws, kind: &'static str) -> String {
+pub(crate) fn app_request(ws: &Ws, kind: &'static str) -> String {
     let db = k2_core::db::shared();
     let conn = db.lock();
     let by = format!("agent:{}", ws.handle);
@@ -245,13 +252,13 @@ fn app_request(ws: &Ws, kind: &'static str) -> String {
     .id
 }
 
-fn app_status(id: &str) -> app_reqs::AppRequest {
+pub(crate) fn app_status(id: &str) -> app_reqs::AppRequest {
     let db = k2_core::db::shared();
     let conn = db.lock();
     app_reqs::get(&conn, id).expect("db").expect("the App request")
 }
 
-fn app_token(id: &str, stamp: &str) -> String {
+pub(crate) fn app_token(id: &str, stamp: &str) -> String {
     crate::apps::egress_routes::test_seams::vault_handle().confirm.mint(crate::apps::approvals::CONFIRM_ACTION, Some(id), stamp, "local-auth")
 }
 
@@ -441,10 +448,11 @@ fn a_hold_k2_carded_names_its_card_for_an_agent_with_cards_off() {
     assert_eq!(c["card"], card.as_str(), "the route's card stays: {out}");
     assert_eq!(c["raised"], true, "{out}");
     let where_ = c["where"].as_str().unwrap_or_else(|| panic!("says where: {out}"));
-    assert!(where_.contains(&format!("permission card {id}")) && where_.contains("an owner or admin approves it there"), "{where_}");
+    assert!(where_.contains(&format!("permission card {id}")) && where_.contains("They approve it there"), "{where_}");
     assert!(!out.to_string().contains("no card went up"), "never 'no card went up' when one is up: {out}");
 
-    // A hold K2 doesn't card: where it waits, cards off.
+    // 0.46.17: every other hold of an agent gets K2's card too, cards off
+    // (`apps::held_cards_tests` has the rest).
     let plain = app_status(&app_request(&ws, app_reqs::KIND_DB_RAW));
     let resp = crate::cli_response::CliResponse {
         status: "202 Accepted",
@@ -452,8 +460,9 @@ fn a_hold_k2_carded_names_its_card_for_an_agent_with_cards_off() {
         body: crate::apps::approvals::held_answer(&plain).to_string(),
     };
     let out: Value = serde_json::from_str(&crate::apps::approvals::enrich_held(&a, resp).body).expect("json");
-    assert_eq!((out["card"]["raised"].as_bool(), out["card"]["cardsOff"].as_bool()), (Some(false), Some(true)), "{out}");
-    assert!(out["card"]["where"].as_str().expect("where").contains("no card went up"), "{out}");
+    assert_eq!((out["card"]["raised"].as_bool(), out["card"]["new"].as_bool()), (Some(true), Some(true)), "{out}");
+    assert!(out["card"]["card"].as_str().is_some_and(|c| !c.is_empty()), "{out}");
+    assert!(!out.to_string().contains("no card went up"), "{out}");
 }
 
 /// 0.46.13: an `apps.approve` card raised before the floor moved was stored
@@ -528,8 +537,8 @@ fn apps_approve_follows_the_app_request_as_settings_decides_it() {
     let mine = app_request(&ws, app_reqs::KIND_DB_RAW);
     assert!(ask_refused(&ws, "apps.approve", json!({ "request": &mine[..6] })).contains("no held App request"));
 
-    // Approved in Settings while the card waits → "Already on"; Close
-    // applies nothing.
+    // Approved in Settings while the card waits (0.46.17): the card closes
+    // as approved, by who approved it there; a click after applies nothing.
     let v = ask_ok(&ws, "apps.approve", json!({ "request": mine }));
     crate::apps::approvals::handle(
         "/cli/app/approve",
@@ -538,23 +547,40 @@ fn apps_approve_follows_the_app_request_as_settings_decides_it() {
         &HashMap::new(),
     )
     .expect("approved in Settings");
+    let r = row(&mine);
+    assert_eq!((r.state, r.answered_by.as_deref(), r.answered_via.as_deref()), (RequestState::Approved, Some("owner"), Some("app-approvals")));
+    assert_ne!(card_status(&ws, &card_of(&v)), "pending", "the card is closed");
     let (s, a) = answer_as("owner", &ws, &card_of(&v), json!({ "answer": "Close" }));
-    assert_eq!(s, "200 OK", "{a}");
-    assert_eq!(row(&mine).state, RequestState::AlreadyDone);
-    assert!(last_turn(&ws).starts_with(&format!("[permission:{mine}] already on:")), "{}", last_turn(&ws));
+    assert_eq!(s, "409 Conflict", "{a}");
     // Asking about a request that is already approved: nothing is stored.
     let (s, v) = ask(&ws, "apps.approve", json!({ "request": mine }));
     assert_eq!((s.as_str(), &v["status"]), ("200 OK", &json!("already_done")), "{v}");
 
-    // Denied in Settings while the card waits → stale at the click.
+    // Denied in Settings while the card waits: the card closes as denied,
+    // with the reason; a click after applies nothing.
     let denied = app_request(&ws, app_reqs::KIND_DB_RAW);
     let v = ask_ok(&ws, "apps.approve", json!({ "request": denied }));
     crate::apps::approvals::handle("/cli/app/deny", &Who::Owner, json!({ "request": denied, "reason": "not now" }).to_string().as_bytes(), &HashMap::new())
         .expect("denied in Settings");
+    let r = row(&denied);
+    assert_eq!((r.state, r.reason.as_deref()), (RequestState::Denied, Some("not now")));
     let (s, a) = answer_as("owner", &ws, &card_of(&v), json!({ "answer": "Allow", "confirmToken": app_token(&denied, "owner") }));
+    assert_eq!(s, "409 Conflict", "{a}");
+    assert_eq!(app_status(&denied).status, app_reqs::STATUS_DENIED);
+
+    // Withdrawn behind the card some other way (the request no longer
+    // waits, its card not closed): stale at the click.
+    let gone = app_request(&ws, app_reqs::KIND_DB_RAW);
+    let v = ask_ok(&ws, "apps.approve", json!({ "request": gone }));
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        app_reqs::decide(&conn, &gone, app_reqs::STATUS_DENIED, "owner", None, None, now()).expect("decided under the card");
+    }
+    let (s, a) = answer_as("owner", &ws, &card_of(&v), json!({ "answer": "Allow", "confirmToken": app_token(&gone, "owner") }));
     assert_eq!(s, "200 OK", "{a}");
-    assert_eq!(row(&denied).state, RequestState::Stale);
-    assert_eq!(last_turn(&ws), format!("[permission:{denied}] stale: App request {denied} was denied meanwhile. Nothing was applied."));
+    assert_eq!(row(&gone).state, RequestState::Stale);
+    assert_eq!(last_turn(&ws), format!("[permission:{gone}] stale: App request {gone} was denied meanwhile. Nothing was applied."));
 
     // Approved, but the App side fails to apply it → failed, said plainly.
     let broken = app_request(&ws, app_reqs::KIND_OVERCOMMIT);

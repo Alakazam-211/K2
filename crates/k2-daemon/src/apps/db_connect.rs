@@ -752,10 +752,10 @@ fn hold(who: &Who, app: &AppRow, ask: &Ask, plan: &Plan, needs: &[Switch], reaso
     let mut out = super::approvals::held_answer(&r);
     out["switches"] = json!(needs);
     out["hint"] = json!(format!(
-        "one card for everything connecting needs: the owner approves it once (k2 app approve {} from a terminal outside K2, or \
-         Settings → App Approvals); then K2 turns those switches on, connects {} and checks it. Wait for it: \
-         k2 app db connect {} … --wait, or k2 app db status {}",
-        r.id, app.app_id, app.app_id, app.app_id
+        "one card for everything connecting needs: an owner or admin approves it once (its permission card, Settings → App \
+         Approvals, or {cli} app approve {} from a terminal outside K2); then K2 turns those switches on, connects {} and checks \
+         it. Wait for it: {cli} app db connect {} … --wait, or {cli} app db status {}",
+        r.id, app.app_id, app.app_id, app.app_id, cli = k2_core::brand::CLI_NAME
     ));
     Ok(out)
 }

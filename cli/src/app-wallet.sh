@@ -103,9 +103,37 @@ for r in rows:
     esac
 }
 
+# 0.46.17: `--assign <login>[,<login>…]` anywhere before `--` on a k2 app
+# command: if the command is held for the owner, its permission card goes
+# to those people (owner or admin logins on this server, or owner). Taken
+# out of the arguments here; _compute_send adds it to the POST (?assign=)
+# and the daemon refuses a name that can't approve before anything runs.
+_app_take_assign() {
+    _K2_ASSIGN=""
+    _APP_ARGS=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --) _APP_ARGS+=("$@"); return 0 ;;
+            --assign)
+                if [ $# -lt 2 ] || [ -z "$2" ]; then
+                    echo '{"error":"usage","hint":"--assign takes logins, comma-separated (--assign ada or --assign ada,owner): who gets the card if this is held"}' >&2
+                    exit 2
+                fi
+                _K2_ASSIGN="$2"; shift 2 ;;
+            --assign=*)
+                _K2_ASSIGN="${1#--assign=}"
+                [ -n "$_K2_ASSIGN" ] || { echo '{"error":"usage","hint":"--assign takes logins, comma-separated (--assign ada)"}' >&2; exit 2; }
+                shift ;;
+            *) _APP_ARGS+=("$1"); shift ;;
+        esac
+    done
+}
+
 cmd_app() {
     # TC-19: App refusals carry the registry's fix (`_compute_fail`).
     _K2_REFUSAL_AREA=app
+    _app_take_assign "$@"
+    set -- ${_APP_ARGS[@]+"${_APP_ARGS[@]}"}
     case "${1:-}" in
         init) shift; cmd_app_init "$@" ;;
         validate) shift; cmd_app_validate "$@" ;;

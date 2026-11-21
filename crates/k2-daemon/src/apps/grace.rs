@@ -87,7 +87,12 @@ pub fn too_large() -> CliResponse {
 
 pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String>) -> CliResponse {
     let caller = who.clone();
-    super::approvals::enrich_held(&caller, handle_inner(path, who, body, params))
+    // 0.46.17: `--assign <login>`: who a held request's card goes to.
+    let assign = match super::held_cards::assign_param(params) {
+        Ok(a) => a,
+        Err(e) => return super::routes::respond(Err(e)),
+    };
+    super::held_cards::with_assign(assign, || super::approvals::enrich_held(&caller, handle_inner(path, who, body, params)))
 }
 
 fn handle_inner(path: &str, who: Who, body: &[u8], params: &HashMap<String, String>) -> CliResponse {

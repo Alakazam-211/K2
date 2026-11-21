@@ -546,12 +546,17 @@ fn request(workspace_id: &str, session_id: &str, body: &Map<String, Value>) -> C
 /// turned cards on stayed silent). The same path as `k2 permission request
 /// apps.approve request=<id>`: one card per request (an open one is found,
 /// `already_pending`), the ask limits, the agent's pinned Thread. The
-/// caller checks the gate. Answers `(http status, body)`.
-pub(crate) fn raise_held_card(workspace_id: &str, session_id: &str, request_id: &str, why: &str) -> (u16, Value) {
+/// caller checks the gate. `to`: who it asks, the agent's `--assign`
+/// (0.46.17; the ask's `--to`), already checked. Answers `(http status,
+/// body)`.
+pub(crate) fn raise_held_card(workspace_id: &str, session_id: &str, request_id: &str, why: &str, to: Option<&[String]>) -> (u16, Value) {
     let mut body = Map::new();
     body.insert("action".into(), json!("apps.approve"));
     body.insert("params".into(), json!({ "request": request_id }));
     body.insert("why".into(), json!(why));
+    if let Some(names) = to {
+        body.insert("to".into(), json!(names));
+    }
     let r = request(workspace_id, session_id, &body);
     let status = r.status.split_whitespace().next().and_then(|c| c.parse().ok()).unwrap_or(500);
     (status, serde_json::from_str(&r.body).unwrap_or(Value::Null))

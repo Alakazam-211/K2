@@ -34,6 +34,7 @@ import {
   APP_APPROVE_CONFIRM_ACTION,
   approveAppRequest,
   capsAfter,
+  cardLine,
   denyAppRequest,
   diffLines,
   expiryText,
@@ -523,6 +524,11 @@ function RequestCard({
             asked by {r.requestedBy}
             {r.workspaceHandle ? ` for ${r.workspaceHandle}` : ''} · {formatRelativeTime(r.requestedAt, now)} · {daysLeft(r.expiresAt, now)}
           </p>
+          {cardLine(r.card) ? (
+            <p className={SETTING_ROW_HINT} data-testid="app-request-card">
+              {cardLine(r.card)}
+            </p>
+          ) : null}
           {r.reasons.length > 0 ? (
             <p className={SETTING_SERVER_REASON} data-testid="app-request-reasons">
               Held because: {r.reasons.join('; ')}

@@ -536,7 +536,7 @@ fn password_once_for(ws: &str, pid: &str) -> R<Option<String>> {
     let rows = {
         let h = k2_core::db::shared();
         let conn = h.lock();
-        let f = reqs::Filter { app_id: None, service_id: None, workspace: None, status: Some(reqs::STATUS_APPROVED) };
+        let f = reqs::Filter { app_id: None, service_id: None, workspace: None, status: Some(reqs::STATUS_APPROVED), requester: None };
         reqs::list(&conn, &f, 1000).map_err(store_err)?
     };
     let now = k2_core::deploy::now();

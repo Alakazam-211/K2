@@ -138,9 +138,9 @@ pub(crate) fn held_answer(r: &reqs::AppRequest) -> J {
         "reasons": r.reasons,
         "expiresAt": r.expires_at,
         "hint": format!(
-            "held for the owner: they approve it in person (k2 app approve {} from a terminal outside K2, or Settings → Cores → App \
-             Approvals), or deny it. Check with k2 app approvals.",
-            r.id
+            "held for the owner: an owner or admin approves it in person (its permission card, Settings → Cores → App Approvals, or \
+             {CLI_NAME} app approve {} from a terminal outside K2), or denies it. Check with {CLI_NAME} app approvals {}.",
+            r.id, r.id
         ),
     })
 }
@@ -170,78 +170,103 @@ fn ago(secs: i64) -> String {
 pub(crate) fn held_note(who: &Who, r: &reqs::AppRequest) -> J {
     let age = deploy::now() - r.requested_at;
     let reused = age > REUSE_AFTER_SECS;
-    let approvals = format!("Settings → App Approvals (k2 app approvals; an owner or admin approves with k2 app approve {})", r.id);
+    let approvals = format!(
+        "Settings → App Approvals ({CLI_NAME} app approvals; an owner or admin approves with {CLI_NAME} app approve {})",
+        r.id
+    );
     let card = match who {
-        Who::Agent { project_id, session_id } if k2_core::permission::gate::enabled_for(project_id) => {
-            let why: String = r
-                .reason
-                .as_deref()
-                .filter(|w| !w.trim().is_empty())
-                .unwrap_or(r.summary.as_str())
-                .chars()
-                .map(|c| if c.is_control() { ' ' } else { c })
-                .take(k2_core::permission::request::limits::WHY_MAX_CHARS)
-                .collect();
-            let (status, v) = crate::permission::routes::raise_held_card(project_id, session_id, &r.id, why.trim());
-            let st = v.get("status").and_then(J::as_str).unwrap_or("");
-            let id = v.get("id").and_then(J::as_str).unwrap_or("");
-            let thread = v.get("addr").and_then(J::as_str).unwrap_or("");
-            if status == 200 && (st == "pending" || st == "already_pending") {
-                let new = st == "pending";
-                let to: Vec<String> = v
-                    .get("routedTo")
-                    .and_then(J::as_array)
-                    .map(|a| a.iter().filter_map(|x| x.get("login").and_then(J::as_str).map(str::to_string)).collect())
-                    .unwrap_or_default();
-                json!({
-                    "raised": true,
-                    "new": new,
-                    "id": id,
-                    "thread": thread,
-                    "routedTo": to,
-                    "where": format!(
-                        "{} permission card {id} is on {thread}'s Thread{}: an owner or admin approves it there, or in {approvals}",
-                        if new { "a" } else { "the" },
-                        if to.is_empty() { String::new() } else { format!(" for {}", to.join(", ")) },
-                    ),
-                })
+        Who::Agent { project_id, session_id } => {
+            let assigned = super::held_cards::assigned();
+            // Cards on for this agent: its own Beta ask is the card (the ask
+            // limits, its session's Thread). Off (0.46.17): K2 puts up its
+            // own card for every held request, as it does for the grants an
+            // agent can't apply itself.
+            let (raised, new, failed) = if k2_core::permission::gate::enabled_for(project_id) {
+                let why: String = r
+                    .reason
+                    .as_deref()
+                    .filter(|w| !w.trim().is_empty())
+                    .unwrap_or(r.summary.as_str())
+                    .chars()
+                    .map(|c| if c.is_control() { ' ' } else { c })
+                    .take(k2_core::permission::request::limits::WHY_MAX_CHARS)
+                    .collect();
+                let (status, v) = crate::permission::routes::raise_held_card(project_id, session_id, &r.id, why.trim(), assigned.as_deref());
+                let st = v.get("status").and_then(J::as_str).unwrap_or("");
+                if status == 200 && (st == "pending" || st == "already_pending") {
+                    (true, st == "pending", None)
+                } else {
+                    let e = &v["error"];
+                    let code = e.get("code").and_then(J::as_str).unwrap_or(st).to_string();
+                    (false, false, Some(json!({ "code": code, "hint": e.get("hint").and_then(J::as_str).unwrap_or("") })))
+                }
+            } else if open_card_for(r).is_some() {
+                (true, false, None)
             } else {
-                // The card couldn't go up (no Thread yet, the ask limit…):
-                // the request still waits in App Approvals; the agent may ask.
-                let e = &v["error"];
-                json!({
-                    "raised": false,
-                    "error": { "code": e.get("code").and_then(J::as_str).unwrap_or(st), "hint": e.get("hint").and_then(J::as_str).unwrap_or("") },
-                    "ask": format!("{CLI_NAME} permission request apps.approve request={} --why \"<what you need it for>\"", r.id),
-                    "where": format!("no permission card went up; the request waits in {approvals}"),
-                })
+                let p = super::held_cards::present_for(r);
+                (p["card"].is_string(), p["card"].is_string() && p["waiting"] != true, None)
+            };
+            match super::held_cards::card_json(&r.id).filter(|_| raised) {
+                Some(c) => {
+                    let id = c["id"].as_str().unwrap_or(&r.id).to_string();
+                    let thread = c["thread"].as_str().unwrap_or("").to_string();
+                    let to = logins_of(&c["routedTo"]);
+                    json!({
+                        "raised": true,
+                        "new": new,
+                        "id": id,
+                        "card": c["card"],
+                        "thread": thread,
+                        "routedTo": to,
+                        "assigned": assigned.is_some(),
+                        "where": format!(
+                            "{} permission card {id} is on {thread}'s Thread: {}. They approve it there, or in {approvals}",
+                            if new { "a" } else { "the" },
+                            sent_to(&to, assigned.is_some(), c["narrowed"] == true),
+                        ),
+                    })
+                }
+                None => {
+                    // The card couldn't go up (no Thread yet, the ask limit…):
+                    // the request still waits in App Approvals.
+                    let mut out = json!({
+                        "raised": false,
+                        "where": format!("no permission card went up (this agent has no Thread yet?); the request waits in {approvals}"),
+                    });
+                    if let Some(e) = failed {
+                        out["where"] = json!(format!("no permission card went up ({}); the request waits in {approvals}", e["code"].as_str().unwrap_or("refused")));
+                        out["error"] = e;
+                        out["ask"] = json!(format!("{CLI_NAME} permission request apps.approve request={} --why \"<what you need it for>\"", r.id));
+                    }
+                    out
+                }
             }
         }
-        // Cards off for this agent, but K2 may have put up its own card
-        // for this request (`held_cards::present_for`, the App grants an
-        // agent can't apply itself): name that card, never "no card".
-        Who::Agent { .. } => match open_card_for(r) {
-            Some(open) => {
-                let id = open.display_id().to_string();
-                let thread = open.addr.clone().unwrap_or_default();
-                json!({
-                    "raised": true,
-                    "new": false,
-                    "id": id,
-                    "card": open.card_id,
-                    "thread": thread,
-                    "where": format!("K2 put permission card {id} on {thread}'s Thread: an owner or admin approves it there, or in {approvals}"),
-                })
-            }
-            None => json!({
-                "raised": false,
-                "cardsOff": true,
-                "where": format!("permission cards are off for this agent, so no card went up: the request waits in {approvals}"),
-            }),
-        },
         _ => json!({ "raised": false, "where": format!("it waits in {approvals}") }),
     };
     json!({ "reused": reused, "askedAgo": if reused { Some(ago(age)) } else { None }, "requestedAt": r.requested_at, "card": card })
+}
+
+/// The logins of a `routedTo` list (`[{login, role}]`).
+fn logins_of(routed: &J) -> Vec<String> {
+    routed
+        .as_array()
+        .map(|a| a.iter().filter_map(|x| x.get("login").and_then(J::as_str).map(str::to_string)).collect())
+        .unwrap_or_default()
+}
+
+/// Who a held request's card went to, in the agent's words (0.46.17): the
+/// people it named, the owner's default, or everyone who may approve and
+/// how to name one.
+fn sent_to(to: &[String], assigned: bool, narrowed: bool) -> String {
+    let names = if to.is_empty() { "the owner".to_string() } else { to.iter().map(|n| if n == "owner" { "the owner" } else { n.as_str() }).collect::<Vec<_>>().join(", ") };
+    if assigned {
+        format!("sent to {names}, as you asked (--assign)")
+    } else if narrowed {
+        format!("sent to {names} (the owner's default for cards); pass --assign <login> to send it to someone else")
+    } else {
+        format!("sent to every owner and admin ({names}); pass --assign <login> to send it to one")
+    }
 }
 
 /// The open `apps.approve` permission request (K2's own card, or the
@@ -378,6 +403,7 @@ fn expire_and_tell() -> R<()> {
         let mut closed = r.clone();
         closed.status = reqs::STATUS_EXPIRED.to_string();
         super::handover::request_closed(&closed);
+        super::held_cards::close_decided(&closed);
         notify_requester(r, &format!("[k2 apps] request {} expired after 7 days without an answer: {}", r.id, r.summary));
         egress_changed(r);
     }
@@ -435,15 +461,37 @@ fn approvals(who: &Who, params: &HashMap<String, String>) -> R<J> {
         }
     };
     expire_and_tell()?;
-    let f = reqs::Filter { app_id: app_id.as_deref(), service_id: service_id.as_deref(), workspace: own_ws(who), status: state };
-    let rows = db(|c| reqs::list(c, &f, 200))?;
+    // A passport (an agent, or a K2 shell tab) sees only the requests its
+    // own workspace asked for, in every state, never another's (0.46.17;
+    // before, the requests on its workspace's Apps, whoever asked).
+    let rows = match params.get("request").map(|t| t.trim()).filter(|t| !t.is_empty()) {
+        Some(t) => {
+            let r = db(|c| reqs::find(c, t))?.filter(|r| own_ws(who).is_none_or(|ws| r.requester_workspace.as_deref() == Some(ws)));
+            let r = r.ok_or_else(|| no(codes::REQUEST_NOT_FOUND, 404, format!("no App request '{t}' of yours ({CLI_NAME} app approvals --all)")))?;
+            vec![r]
+        }
+        None => {
+            let f = reqs::Filter { app_id: app_id.as_deref(), service_id: service_id.as_deref(), workspace: None, status: state, requester: own_ws(who) };
+            db(|c| reqs::list(c, &f, 200))?
+        }
+    };
     // The badge count for the caller's own view (the owner: the whole box).
     let pending = if state == Some(reqs::STATUS_PENDING) {
         rows.len()
     } else {
         rows.iter().filter(|r| r.status == reqs::STATUS_PENDING).count()
     };
-    Ok(json!({ "ok": true, "requests": rows.iter().map(|r| request_json_for(who, r)).collect::<Vec<_>>(), "pendingCount": pending,
+    // Each with its permission card, when one went up: its state and who it
+    // asks (the agent sees where its own request stands).
+    let listed: Vec<J> = rows
+        .iter()
+        .map(|r| {
+            let mut v = request_json_for(who, r);
+            v["card"] = super::held_cards::card_json(&r.id).unwrap_or(J::Null);
+            v
+        })
+        .collect();
+    Ok(json!({ "ok": true, "requests": listed, "pendingCount": pending,
         "ownerConfirm": confirm_status_for(who), "canApprove": approver_stamp(who).is_some() }))
 }
 
@@ -524,6 +572,9 @@ pub(crate) fn apply_as(r: &reqs::AppRequest, by: &str, via: &str) -> R<J> {
     };
     db(|c| reqs::set_result(c, &decided.id, status, &result))?;
     let done = db(|c| reqs::get(c, &decided.id))?.unwrap_or(decided);
+    // Approved here (Settings, the CLI) or on one card: every other open
+    // card for it closes (0.46.17).
+    super::held_cards::close_decided(&done);
     app_audit(
         &done,
         if own { "widening_self_applied" } else { "widening_approved" },
@@ -653,6 +704,7 @@ fn deny(who: &Who, body: &[u8]) -> R<J> {
     let d = db(|c| Ok(reqs::decide(c, &r.id, status, &by, None, reason.as_deref(), deploy::now())))?.map_err(decide_err)?;
     changed(Some(&d.id));
     super::handover::request_closed(&d);
+    super::held_cards::close_decided(&d);
     let event = if status == reqs::STATUS_DENIED { "widening_denied" } else { "widening_withdrawn" };
     app_audit(&d, event, &by, json!({ "request": d.id, "kind": d.kind, "reason": reason }));
     k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new("app-deny", &by, format!("{status} {}", d.id), "cli", "-", "apps"));

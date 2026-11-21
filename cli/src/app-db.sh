@@ -82,6 +82,9 @@ for l in (v.get("diff") or {}).get("lines") or []:
         print("  " + l)
 if v.get("reused"):
     print("  this is your earlier card %s, still waiting; nothing new was filed" % r.get("id"))
+c = v.get("card") if isinstance(v.get("card"), dict) else {}
+if c.get("where"):
+    print("  owner: %s" % c["where"])
 print("  " + (v.get("hint") or ""))'
 }
 

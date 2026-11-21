@@ -15,6 +15,20 @@ _compute_in_k2_tree() {
     return 1
 }
 
+# 0.46.17: a k2 app POST carries the command's --assign (_app_take_assign)
+# as ?assign=, so a held request's card goes to those people. Other paths
+# and GETs are unchanged.
+_compute_assign_path() {
+    local method="$1" path="$2" sep="?"
+    if [ "$method" != "POST" ] || [ -z "${_K2_ASSIGN:-}" ]; then printf '%s' "$path"; return 0; fi
+    case "$path" in
+        /cli/app/*) ;;
+        *) printf '%s' "$path"; return 0 ;;
+    esac
+    case "$path" in *\?*) sep="&" ;; esac
+    printf '%s%sassign=%s' "$path" "$sep" "$(urlencode "$_K2_ASSIGN")"
+}
+
 # _compute_send METHOD PATH [payload] [tcp] → `<body>\n<status>` on stdout.
 # GET payload = urlencoded query; POST payload = JSON body.
 #
@@ -27,6 +41,7 @@ _compute_in_k2_tree() {
 _compute_send() {
     local method="$1" path="$2" payload="${3:-}" force_tcp="${4:-}"
     local sock out="" _K2_CFG="" rc=0 t0="$SECONDS"
+    path="$(_compute_assign_path "$method" "$path")"
     if [ "$method" = "POST" ] && [ "$path" = "/cli/compute/run" ] && [ -z "${_CP_OWNER_WARNED:-}" ] && ! _compute_in_session && _compute_in_k2_tree; then
         _CP_OWNER_WARNED=1
         echo "[k2 compute] no passport in this shell: this job is submitted as the owner (its jobs show via: owner_token). Keep K2_* set in agent shells." >&2

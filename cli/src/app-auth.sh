@@ -1550,26 +1550,35 @@ cmd_app_approvals() {
         _app_approvals_revoke "$@"
         return
     fi
-    local app="" all=0 json_out=0
+    local app="" all=0 json_out=0 state="" id=""
+    local usage="k2 app approvals [<request-id>] [--app A] [--state pending|approved|denied|withdrawn|expired|failed|all] [--all] [--json]"
     while [ $# -gt 0 ]; do
         case "$1" in
             --app) _need_value "$@"; app="${2:-}"; shift 2 ;;
             --all) all=1; shift ;;
+            --state) [ $# -ge 2 ] || { echo "usage: $usage" >&2; exit 2; }; state="$2"; shift 2 ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_grace_usage; return 0 ;;
-            *) echo "Unknown argument: $1 (k2 app approvals [--app A] [--all])" >&2; exit 2 ;;
+            -*) echo "Unknown argument: $1 (usage: $usage)" >&2; exit 2 ;;
+            *) [ -z "$id" ] || { echo "usage: $usage" >&2; exit 2; }; id="$1"; shift ;;
         esac
     done
-    local q="state=pending"
+    case "$state" in
+        ""|pending|approved|denied|withdrawn|expired|failed|all) ;;
+        *) echo "usage: --state is pending, approved, denied, withdrawn, expired, failed or all, not '$state'" >&2; exit 2 ;;
+    esac
+    local q="state=${state:-pending}"
     [ "$all" = 1 ] && q="state=all"
     [ -n "$app" ] && q="${q}&app=$(urlencode "$app")"
+    [ -n "$id" ] && q="${q}&request=$(urlencode "$id")"
     _compute_call GET /cli/app/approvals "$q"
     if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
-    printf '%s' "$_CP_BODY" | python3 -c '
-import json, sys
-rs = json.load(sys.stdin).get("requests") or []
+    printf '%s' "$_CP_BODY" | K2_AP_AGENT="$(if _compute_in_session; then echo 1; fi)" python3 -c '
+import json, os, sys
+v = json.load(sys.stdin)
+rs = v.get("requests") or []
 if not rs:
-    print("No held App requests."); sys.exit(0)
+    print("No held App requests (--state all lists every state)."); sys.exit(0)
 for r in rs:
     print("%s  %-9s %-11s %s (%s) by %s" % (r["id"], r["status"], r["kind"], r["appLabel"], r.get("workspaceHandle"), r["requestedBy"]))
     print("    %s" % r["summary"])
@@ -1578,7 +1587,15 @@ for r in rs:
     for why in r.get("reasons") or []:
         print("    held: %s" % why)
     if r.get("decidedBy"):
-        print("    %s by %s%s" % (r["status"], r["decidedBy"], (" via " + r["confirmVia"]) if r.get("confirmVia") else ""))'
+        print("    %s by %s%s" % (r["status"], r["decidedBy"], (" via " + r["confirmVia"]) if r.get("confirmVia") else ""))
+    c = r.get("card") if isinstance(r.get("card"), dict) else None
+    if c:
+        to = ", ".join(x.get("login", "") for x in (c.get("routedTo") or []) if isinstance(x, dict)) or "every owner and admin"
+        print("    card %s: %s, on the Thread of %s, sent to %s" % (c.get("id"), c.get("state"), c.get("thread") or "?", to))
+    elif r["status"] == "pending":
+        print("    no permission card (it waits in Settings → App Approvals)")
+if os.environ.get("K2_AP_AGENT") == "1" and not v.get("canApprove"):
+    print("These are your own requests. An owner or admin answers them; you can withdraw one: k2 app deny <request-id>.")'
 }
 
 # Owner confirm bound to the request, then approve. Never for an agent:

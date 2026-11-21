@@ -259,9 +259,12 @@ pub fn find(conn: &Connection, token: &str) -> rusqlite::Result<Option<AppReques
 pub struct Filter<'a> {
     pub app_id: Option<&'a str>,
     pub service_id: Option<&'a str>,
-    /// The App's workspace (a passport's own).
+    /// The App's workspace.
     pub workspace: Option<&'a str>,
     pub status: Option<&'a str>,
+    /// The workspace that asked (`requester_workspace`): a passport sees
+    /// only the requests its own workspace filed (0.46.17).
+    pub requester: Option<&'a str>,
 }
 
 /// Requests, newest first.
@@ -269,9 +272,10 @@ pub fn list(conn: &Connection, f: &Filter<'_>, limit: i64) -> rusqlite::Result<V
     let mut st = conn.prepare(&format!(
         "SELECT {COLS} FROM app_widenings WHERE (?1 IS NULL OR app_id = ?1) AND (?2 IS NULL OR service_id = ?2) \
          AND (?3 IS NULL OR workspace_id = ?3) AND (?4 IS NULL OR status = ?4) \
+         AND (?6 IS NULL OR requester_workspace = ?6) \
          ORDER BY requested_at DESC, id DESC LIMIT ?5"
     ))?;
-    let rows = st.query_map(params![f.app_id, f.service_id, f.workspace, f.status, limit.clamp(1, 1000)], row)?;
+    let rows = st.query_map(params![f.app_id, f.service_id, f.workspace, f.status, limit.clamp(1, 1000), f.requester], row)?;
     rows.collect()
 }
 
@@ -528,6 +532,15 @@ pub(crate) mod tests {
         assert_eq!(list(&c, &mine, 50).unwrap().len(), 1);
         let theirs = Filter { workspace: Some("ws-2"), ..Default::default() };
         assert!(list(&c, &theirs, 50).unwrap().is_empty(), "another workspace sees nothing");
+        // 0.46.17: by who asked. ws-2's agent asking on ws-1's App is ws-2's
+        // own request, never ws-1's.
+        let mut asked = new(KIND_CONFIG, "jobs", &serde_json::json!({"x": 1}), "agent:bobs");
+        asked.requester_workspace = Some("ws-2");
+        let other = create(&c, &asked, 102).unwrap();
+        let by_ws2 = list(&c, &Filter { requester: Some("ws-2"), ..Default::default() }, 50).unwrap();
+        assert_eq!(by_ws2.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), vec![other.id.as_str()], "only what ws-2 asked");
+        let by_ws1 = list(&c, &Filter { requester: Some("ws-1"), ..Default::default() }, 50).unwrap();
+        assert!(by_ws1.iter().all(|r| r.id != other.id) && by_ws1.iter().any(|r| r.id == a.id), "ws-1 never sees ws-2's ask");
         assert_eq!(find(&c, &a.id[..8]).unwrap().unwrap().id, a.id, "a unique prefix finds it");
         assert!(find(&c, "w_").unwrap().is_none(), "too short a prefix");
         let d = decide(&c, &a.id, STATUS_DENIED, "owner", None, Some("no"), 103).unwrap();

@@ -44,6 +44,12 @@ run
   here on purpose; recorded in the access audit log.
   --cmd and --skin are mutually exclusive. --cwd is for --cmd only.
 
+  --assign <login>[,<login>…]  if the run is held for the owner, its permission
+                   card goes to those people only (owner or admin logins on
+                   this server, or owner; anyone else is refused before it
+                   runs). Without it: every owner and admin. Check where it
+                   stands: k2 app approvals <request-id>.
+
   --probe-timeout <dur>  how long the service may take to open --port
                    (default 15s, at most 15m): 90s, 10m, 1m30s, 1500ms.
                    Saved on the service: start, restarts and boot use it.

@@ -2,14 +2,13 @@
 //! #9–#11), headless: the real dispatcher in process on a temp `$HOME`.
 //!
 //! - an agent's held `k2 app install` (no "Build and run Apps": S42)
-//!   answers `card` (cards off: where it waits, App Approvals) and
-//!   `reused: false`;
+//!   answers `card` (0.46.17: K2's own card even with cards off, and who
+//!   it went to) and `reused: false`;
 //! - asked again later, it is the same request: `reused: true` with its
 //!   age, nothing new filed;
-//! - permission cards turned on after the first hold: the repeat raises
-//!   the `apps.approve` card for that same request (`card.raised`, a new
-//!   card), and the next repeat finds it (`new: false`, the same card); no
-//!   "Ask with" teaching object rides an answer whose card is up;
+//! - permission cards turned on after the first hold: the repeat finds
+//!   that same card (`new: false`), never a second one; no "Ask with"
+//!   teaching object rides an answer whose card is up;
 //! - the owner's `/cli/app/approvals` lists it with `pendingCount`, and
 //!   every filing pushes `app_approvals_changed {pending}` (the badge).
 
@@ -47,8 +46,11 @@ async fn held_app_requests_say_where_the_owner_sees_them() {
     assert_eq!(v["status"], "held", "{v}");
     let id = v["request"]["id"].as_str().expect("request id").to_string();
     assert_eq!(v["reused"], false, "{v}");
-    assert_eq!((v["card"]["raised"].as_bool(), v["card"]["cardsOff"].as_bool()), (Some(false), Some(true)), "{v}");
-    assert!(v["card"]["where"].as_str().unwrap().contains("App Approvals"), "{v}");
+    // 0.46.17: K2 puts up its own card for it, permission cards on or off.
+    assert_eq!((v["card"]["raised"].as_bool(), v["card"]["new"].as_bool()), (Some(true), Some(true)), "{v}");
+    let first_card = v["card"]["id"].as_str().expect("card id").to_string();
+    let where_ = v["card"]["where"].as_str().unwrap();
+    assert!(where_.contains("App Approvals") && where_.contains("pass --assign <login>"), "{v}");
     assert!(v.get("permission").is_none(), "cards off: no teaching object: {v}");
 
     // The push: the badge count.
@@ -101,8 +103,10 @@ async fn held_app_requests_say_where_the_owner_sees_them() {
     k2_core::permission::gate::set_server_switch(false);
     assert_eq!(r.status, 202, "{}", r.body);
     assert_eq!(raised["request"]["id"], id.as_str(), "{raised}");
-    assert_eq!((raised["card"]["raised"].as_bool(), raised["card"]["new"].as_bool()), (Some(true), Some(true)), "{raised}");
+    // The card K2 put up with cards off is the one (no second card).
+    assert_eq!((raised["card"]["raised"].as_bool(), raised["card"]["new"].as_bool()), (Some(true), Some(false)), "{raised}");
     let card = raised["card"]["id"].as_str().expect("card id").to_string();
+    assert_eq!(card, first_card, "{raised}");
     assert!(raised["card"]["thread"].as_str().is_some_and(|t| !t.is_empty()), "{raised}");
     assert!(raised.get("permission").is_none(), "the card is up: no Ask-with object: {raised}");
     assert_eq!(r2.status, 202, "{}", r2.body);

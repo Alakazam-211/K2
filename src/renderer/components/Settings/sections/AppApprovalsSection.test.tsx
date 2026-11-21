@@ -29,7 +29,7 @@ vi.mock('@/lib/host-pool-instance', () => ({
 }))
 
 import type { AppRequest } from './app-approvals-api'
-import { diffLines, expiryText } from './app-approvals-api'
+import { cardLine, diffLines, expiryText } from './app-approvals-api'
 import { AppApprovalsSection, APP_APPROVALS_MANIFEST } from './AppApprovalsSection'
 
 const now = (): number => Math.floor(Date.now() / 1000)
@@ -415,6 +415,25 @@ describe('app approvals plain words', () => {
     expect(diffLines({ diff: { egress: { add: ['api.stripe.com'] } } })).toEqual(['+ host api.stripe.com'])
     expect(diffLines({ diff: { egress: { add: ['x'] } }, hosts: ['api.stripe.com:443'] })).toEqual(['+ host api.stripe.com:443'])
     expect(diffLines({ diff: { egressMode: 'broad' } })).toEqual(['Egress mode → broad'])
+  })
+
+  // 0.46.17: a held request's permission card, and who it was sent to.
+  it('cardLine says where the card is and who it asks, while it waits', () => {
+    const c = { id: 'w_dep1', state: 'pending', card: 'c1', thread: 'sales', routedTo: [{ login: 'ada', role: 'admin' }], narrowed: true }
+    expect(cardLine(c)).toBe("Card on sales's Thread, sent to ada")
+    expect(cardLine({ ...c, routedTo: [{ login: 'owner', role: 'owner' }] })).toBe("Card on sales's Thread, sent to the owner")
+    expect(cardLine({ ...c, narrowed: false, routedTo: [{ login: 'ada', role: 'admin' }, { login: 'bo', role: 'owner' }] })).toBe(
+      "Card on sales's Thread, for every owner and admin",
+    )
+    expect(cardLine({ ...c, state: 'approved' })).toBeNull()
+    expect(cardLine(null)).toBeNull()
+    expect(cardLine(undefined)).toBeNull()
+  })
+
+  it('a row shows its card line', async () => {
+    serve([req({ card: { id: 'w_dep1', state: 'pending', card: 'c1', thread: 'sales', routedTo: [{ login: 'ada', role: 'admin' }], narrowed: true } })])
+    render(<AppApprovalsSection />)
+    expect((await screen.findByTestId('app-request-card')).textContent).toBe("Card on sales's Thread, sent to ada")
   })
 
   it('expiryText counts down and says expired', () => {

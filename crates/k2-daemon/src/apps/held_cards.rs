@@ -7,12 +7,28 @@
 //! fresh confirm (the owner's, or an Admin's own login password since
 //! 0.46.13), so a card is never wider than Settings.
 //!
-//! Which requests: the App grants an agent can't apply itself
-//! (`super::agent_grants`): copy-host, the guests-rooms grant, a test
-//! guest without "Let this agent manage its Apps' users", and a label transfer. The
-//! other held kinds keep today's flow (Settings → App Approvals; the Beta's
-//! `k2 permission request apps.approve …`). Every held kind could take
-//! the same card: call [`present_for`] where it is filed.
+//! Which requests: every agent's held App request (0.46.17, the owner's
+//! standing rule: a person who must change something gets a one-tap card).
+//! The App grants an agent can't apply itself (`super::agent_grants`) raise
+//! it where they are filed; every other hold raises it at the one chokepoint
+//! for held answers (`approvals::enrich_held`), Beta switch on or off. With
+//! an agent's permission cards on, the Beta's own ask
+//! (`k2 permission request apps.approve …`) is the card instead.
+//!
+//! **Who it goes to** (0.46.17). The agent may name the people: `--assign
+//! <login>[,<login>…]` on the command that was held (`?assign=` on the
+//! route, [`assign_param`]): each must be an owner or admin login on this
+//! server, or `owner`, else the command is refused before anything runs
+//! (`unknown_approver`, `approver_not_eligible`, `bad_approvers`). Without
+//! it, the owner's default (`permissionApprovers`) or every owner and admin.
+//! It narrows who is asked, never who may answer
+//! (`crate::permission::approvers`).
+//!
+//! **One answer closes every door** (0.46.17). Deny on the card denies the
+//! held request through `/cli/app/deny`, as the person ([`on_denied`]). A
+//! request decided in Settings, on the CLI, by expiry or withdrawn by its
+//! agent closes its open cards ([`close_decided`]), so no card stays
+//! answerable for a request that no longer waits.
 //!
 //! **"Allow, and let it manage its Apps' users from now on"**
 //! (`label::ALWAYS`). A card whose request "Let this agent manage its
@@ -23,12 +39,16 @@
 //! ([`SWITCH_COVERS`]). A plain Allow gives a usable test guest: the agent
 //! sets its password once (`test_guests::password`).
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+
 use k2_core::app_grace::requests as reqs;
 use k2_core::permission::request::{params_hash, PermissionRequest, RequestId, RequestState};
 use serde_json::{json, Map, Value as J};
 
+use super::routes::{no, Refusal};
 use crate::permission::actions::{Answerer, Applied, Ctx};
-use crate::permission::{answer, limits, present, store};
+use crate::permission::{answer, approvers, limits, present, store};
 
 /// What "Let this agent manage its Apps' users" covers, in one line: the
 /// card says it next to the option that turns it on, the switch's own
@@ -45,18 +65,22 @@ pub(crate) const ACTION: &str = "apps.approve";
 /// The session K2's own App cards carry (never batched with an agent's
 /// own Beta asks).
 pub(crate) const K2_SESSION: &str = "k2:apps";
+/// The permission audit's actor for what the daemon itself does, and the
+/// decider of a held request decided by no one (stored, read back by us).
+const DAEMON_ACTOR: &str = "k2";
 
-/// Present `r`'s card on the requesting agent's pinned Thread. Returns
-/// the answer's `card` value: `{card, request, addr}`, `{card, waiting}`
-/// when one waits already, or `{card: null}` (no Thread: Settings → App
-/// Approvals still lists it).
+/// Present `r`'s card on the requesting agent's pinned Thread, for the
+/// call's `--assign` ([`assigned`]) when it named people. Returns the
+/// answer's `card` value: `{card, request, addr, routedTo}`, the same with
+/// `waiting` when one waits already, or `{card: null}` (no Thread: Settings
+/// → App Approvals still lists it).
 pub(crate) fn present_for(r: &reqs::AppRequest) -> J {
     let Some(ws) = r.requester_workspace.as_deref() else { return json!({ "card": null }) };
     let mut params = Map::new();
     params.insert("request".to_string(), J::String(r.id.clone()));
     let hash = params_hash(&params);
     if let Ok(Some(open)) = store::open_same(ws, ACTION, &hash) {
-        return json!({ "card": open.card_id, "request": open.display_id(), "waiting": true });
+        return json!({ "card": open.card_id, "request": open.display_id(), "waiting": true, "addr": open.addr, "routedTo": routed_to(&open) });
     }
     let Some(reg) = present::find_action(ACTION) else {
         k2_core::log_debug!("[app-cards] {ACTION} is not registered");
@@ -111,8 +135,16 @@ pub(crate) fn present_for(r: &reqs::AppRequest) -> J {
         k2_core::log_debug!("[app-cards] request for {}: {e}", r.id);
         return json!({ "card": null });
     }
-    // Who it asks: the owner's default (0.46.16), else everyone at the floor.
-    let audience = crate::permission::approvers::audience_for_new(&req);
+    // Who it asks: the agent's --assign (0.46.17), else the owner's default
+    // (0.46.16), else everyone at the floor.
+    if let Some(names) = assigned() {
+        if let Err(e) = approvers::set(req.id.as_str(), &names) {
+            k2_core::log_debug!("[app-cards] assign for {}: {e}", r.id);
+            let _ = store::cas_open_to(req.id.as_str(), RequestState::Failed);
+            return json!({ "card": null, "where": "Settings → App Approvals" });
+        }
+    }
+    let audience = approvers::audience_for_new(&req);
     let (prompt, options) = present::prompt_and_options(std::slice::from_ref(&req), false);
     let opts: Vec<&str> = options.iter().map(String::as_str).collect();
     let card_action = present::card_action(std::slice::from_ref(&req), false, present::single_dedupe(&req));
@@ -154,9 +186,166 @@ pub(crate) fn present_for(r: &reqs::AppRequest) -> J {
         k2_core::log_debug!("[app-cards] set card {card_id}: {e}");
     }
     if let Ok(Some(stored)) = store::get(req.id.as_str()) {
-        answer::audit(k2_core::permission::audit_event::REQUEST, "k2", "daemon", &stored);
+        answer::audit(k2_core::permission::audit_event::REQUEST, DAEMON_ACTOR, "daemon", &stored);
     }
-    json!({ "card": card_id, "request": r.id, "addr": addr })
+    let routed = store::get(req.id.as_str()).ok().flatten().map(|q| routed_to(&q)).unwrap_or(J::Null);
+    json!({ "card": card_id, "request": r.id, "addr": addr, "routedTo": routed })
+}
+
+// ── who the card asks (0.46.17) ─────────────────────────────────────
+
+thread_local! {
+    /// The `--assign` of the call being served (set by [`with_assign`]).
+    static ASSIGN: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
+}
+
+/// The query key the CLI sends `--assign` as.
+pub(crate) const ASSIGN_PARAM: &str = "assign";
+
+/// `?assign=<login>[,<login>…]` on a call that may be held, checked before
+/// the call runs: each name an owner or admin login on this server (one
+/// who may answer `apps.approve`), or `owner`. Absent or blank: `None`.
+pub(crate) fn assign_param(params: &HashMap<String, String>) -> Result<Option<Vec<String>>, Refusal> {
+    let Some(raw) = params.get(ASSIGN_PARAM) else { return Ok(None) };
+    let floor = present::find_action(ACTION).map(|r| r.spec.floor).unwrap_or(k2_core::permission::catalog::Floor::Admin);
+    let refused = |r: approvers::Refused| no(r.code, 400, assign_words(&r.message));
+    match approvers::parse(Some(&J::String(raw.clone()))).map_err(refused)? {
+        None => Ok(None),
+        Some(names) => approvers::check_named(&names, floor).map(Some).map_err(refused),
+    }
+}
+
+/// The approvers module's words, for `--assign` (they speak of `--to`).
+fn assign_words(m: &str) -> String {
+    m.replace("--to ada,owner", "--assign ada,owner")
+        .replace("--to takes", "--assign takes")
+        .replace("--to names", "--assign names")
+        .replace(" (a dry run lists who may answer: --dry-run)", &format!(" (the logins: {} connections list --users)", k2_core::brand::CLI_NAME))
+}
+
+/// Run `f` with `names` as the call's `--assign` (put back after, even on
+/// a panic), so the card a hold raises inside it goes to them.
+pub(crate) fn with_assign<T>(names: Option<Vec<String>>, f: impl FnOnce() -> T) -> T {
+    struct Restore(Option<Vec<String>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let prior = self.0.take();
+            ASSIGN.with(|a| *a.borrow_mut() = prior);
+        }
+    }
+    let prior = ASSIGN.with(|a| a.replace(names));
+    let _restore = Restore(prior);
+    f()
+}
+
+/// The `--assign` of the call being served, if any.
+pub(crate) fn assigned() -> Option<Vec<String>> {
+    ASSIGN.with(|a| a.borrow().clone())
+}
+
+/// `routedTo` of one `apps.approve` request: who it asks.
+fn routed_to(req: &PermissionRequest) -> J {
+    approvers::routed_json(present::floor_of(&req.floor), approvers::of(req.id.as_str()).as_deref())
+}
+
+/// The newest `apps.approve` request for held request `id` (the card, open
+/// or answered), as `k2 app approvals` shows it: `{id, state, card,
+/// thread, routedTo, narrowed}` (`narrowed`: it asks named people, the
+/// agent's `--assign` or the owner's default, not every owner and admin).
+pub(crate) fn card_json(id: &str) -> Option<J> {
+    let q = store::get_by_display_id(id).ok().flatten().filter(|q| q.action == ACTION)?;
+    Some(json!({
+        "id": q.display_id(),
+        "state": q.state.as_str(),
+        "card": q.card_id,
+        "thread": q.addr,
+        "routedTo": routed_to(&q),
+        "narrowed": approvers::of(q.id.as_str()).is_some(),
+    }))
+}
+
+// ── one answer closes every door (0.46.17) ──────────────────────────
+
+/// The card's Deny denies the held request itself, through `/cli/app/deny`
+/// as the person (the route's own checks: an owner or admin denies). A
+/// request decided meanwhile is left as it is.
+pub(crate) fn on_denied(req: &PermissionRequest, who: &Answerer, why: Option<&str>) {
+    if req.action != ACTION {
+        return;
+    }
+    let Some(id) = req.params.get("request").and_then(J::as_str) else { return };
+    let mut body = json!({ "request": id });
+    if let Some(w) = why.filter(|w| !w.trim().is_empty()) {
+        body["reason"] = json!(w);
+    }
+    let caller = crate::permission::actions::held::who_of(who);
+    if let Err(e) = super::approvals::handle("/cli/app/deny", &caller, body.to_string().as_bytes(), &HashMap::new()) {
+        k2_core::log_debug!("[app-cards] deny of {id} from its card: {} {}", e.code, e.hint);
+    }
+}
+
+/// Held request `r` was decided outside its card (Settings, the CLI, its
+/// seven days ran out, its agent withdrew it): each open `apps.approve`
+/// request for it closes as `r` did, and its card is redrawn. A request a
+/// click is applying is never touched (the compare-and-set). Returns how
+/// many closed.
+pub(crate) fn close_decided(r: &reqs::AppRequest) -> usize {
+    let Some(ws) = r.requester_workspace.as_deref() else { return 0 };
+    let open: Vec<PermissionRequest> = match store::open(Some(ws)) {
+        Ok(o) => o.into_iter().filter(|q| q.action == ACTION && q.params.get("request").and_then(J::as_str) == Some(r.id.as_str())).collect(),
+        Err(e) => {
+            k2_core::log_debug!("[app-cards] open cards of {}: {e}", r.id);
+            return 0;
+        }
+    };
+    if open.is_empty() {
+        return 0;
+    }
+    // `decided_by` as `routes::actor` writes it: `owner`, `owner:<login>`
+    // or `user:<login>`; the card names the person.
+    let by = match r.decided_by.as_deref() {
+        Some(d) => d.strip_prefix("owner:").or_else(|| d.strip_prefix("user:")).unwrap_or(d).to_string(),
+        None => DAEMON_ACTOR.to_string(),
+    };
+    let (state, message) = match r.status.as_str() {
+        reqs::STATUS_APPROVED => (RequestState::Approved, format!("Approved in App Approvals by {by}. It applies now.")),
+        reqs::STATUS_FAILED => (RequestState::Failed, format!("Approved in App Approvals by {by}, but applying it failed.")),
+        reqs::STATUS_DENIED => (RequestState::Denied, format!("Denied in App Approvals by {by}.")),
+        reqs::STATUS_WITHDRAWN => (RequestState::Cancelled, "Withdrawn by the agent.".to_string()),
+        reqs::STATUS_EXPIRED => (RequestState::Expired, "Expired unanswered (7 days).".to_string()),
+        _ => return 0,
+    };
+    let now = k2_core::overlay::now_secs();
+    let mut closed = 0;
+    for q in &open {
+        match store::cas_open_to(q.id.as_str(), state) {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(e) => {
+                k2_core::log_debug!("[app-cards] close {}: {e}", q.id);
+                continue;
+            }
+        }
+        let decided = store::Decided {
+            state,
+            by: Some(by.as_str()),
+            via: Some("app-approvals"),
+            reason: r.decision_reason.as_deref(),
+            message: Some(&message),
+            at: now,
+        };
+        if let Err(e) = store::decide(q.id.as_str(), &decided) {
+            k2_core::log_debug!("[app-cards] close {}: {e}", q.id);
+        }
+        if let (Some(c), Some(k)) = (q.conversation_id.as_deref(), q.card_id.as_deref()) {
+            present::refresh_card(c, k, if state == RequestState::Expired { present::CardClose::Expire } else { present::CardClose::Void });
+        }
+        if let Ok(Some(done)) = store::get(q.id.as_str()) {
+            answer::audit(k2_core::permission::audit_event::ANSWER, DAEMON_ACTOR, "daemon", &done);
+        }
+        closed += 1;
+    }
+    closed
 }
 
 /// Cards raised before 0.46.13 were stored for the owner alone (floor

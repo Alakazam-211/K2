@@ -50,9 +50,21 @@ Move a legacy --cmd service to an App yourself (walkthrough: k2 study app-move):
                                        From an agent: held for the owner.
   k2 app keys [<app>] [--json]         App keys (never the key itself).
   k2 app key revoke <key-id>           Stops it at once.
-  k2 app approvals [--app A] [--all] [--json]
+  k2 app approvals [<request-id>] [--app A] [--state S|--all] [--json]
                                        Held requests (an agent's widening, key
-                                       mint, clean mode off, new --cmd service).
+                                       mint, clean mode off, new --cmd service)
+                                       and their permission cards. S: pending
+                                       (the default), approved, denied,
+                                       withdrawn, expired, failed or all. An
+                                       agent sees only the requests it asked
+                                       for, and never approves one.
+  --assign <login>[,<login>…]          On any k2 app command an agent runs: if
+                                       it is held, its permission card goes to
+                                       those people only (owner or admin logins
+                                       on this server, or owner; anyone else is
+                                       refused before anything runs). Without
+                                       it the card goes to every owner and admin
+                                       (or the owner's default for cards).
   k2 app approvals revoke <request-id> | --app <name>
                                        Owner: an approved k2 publish run stops
                                        covering identical re-runs (they ask

@@ -14117,6 +14117,7 @@ for x in r:
 # again: _cli_send_unanswered says so and ends the command with 1.
 _app_rt_post_file() {
     local path="$1" file="$2" sock out="" _K2_CFG="" rc=0 t0="$SECONDS"
+    path="$(_compute_assign_path POST "$path")"
     sock="$(_hook_sock)"
     if [ -n "$sock" ] && [ -S "$sock" ] && ! _cli_skip_uds && [ -n "${SCOPED_TOKEN:-}" ]; then
         _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
@@ -16658,6 +16659,9 @@ for l in (v.get("diff") or {}).get("lines") or []:
         print("  " + l)
 if v.get("reused"):
     print("  this is your earlier card %s, still waiting; nothing new was filed" % r.get("id"))
+c = v.get("card") if isinstance(v.get("card"), dict) else {}
+if c.get("where"):
+    print("  owner: %s" % c["where"])
 print("  " + (v.get("hint") or ""))'
 }
 
@@ -17218,9 +17222,21 @@ Move a legacy --cmd service to an App yourself (walkthrough: k2 study app-move):
                                        From an agent: held for the owner.
   k2 app keys [<app>] [--json]         App keys (never the key itself).
   k2 app key revoke <key-id>           Stops it at once.
-  k2 app approvals [--app A] [--all] [--json]
+  k2 app approvals [<request-id>] [--app A] [--state S|--all] [--json]
                                        Held requests (an agent's widening, key
-                                       mint, clean mode off, new --cmd service).
+                                       mint, clean mode off, new --cmd service)
+                                       and their permission cards. S: pending
+                                       (the default), approved, denied,
+                                       withdrawn, expired, failed or all. An
+                                       agent sees only the requests it asked
+                                       for, and never approves one.
+  --assign <login>[,<login>…]          On any k2 app command an agent runs: if
+                                       it is held, its permission card goes to
+                                       those people only (owner or admin logins
+                                       on this server, or owner; anyone else is
+                                       refused before anything runs). Without
+                                       it the card goes to every owner and admin
+                                       (or the owner's default for cards).
   k2 app approvals revoke <request-id> | --app <name>
                                        Owner: an approved k2 publish run stops
                                        covering identical re-runs (they ask
@@ -21676,26 +21692,35 @@ cmd_app_approvals() {
         _app_approvals_revoke "$@"
         return
     fi
-    local app="" all=0 json_out=0
+    local app="" all=0 json_out=0 state="" id=""
+    local usage="k2 app approvals [<request-id>] [--app A] [--state pending|approved|denied|withdrawn|expired|failed|all] [--all] [--json]"
     while [ $# -gt 0 ]; do
         case "$1" in
             --app) _need_value "$@"; app="${2:-}"; shift 2 ;;
             --all) all=1; shift ;;
+            --state) [ $# -ge 2 ] || { echo "usage: $usage" >&2; exit 2; }; state="$2"; shift 2 ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_grace_usage; return 0 ;;
-            *) echo "Unknown argument: $1 (k2 app approvals [--app A] [--all])" >&2; exit 2 ;;
+            -*) echo "Unknown argument: $1 (usage: $usage)" >&2; exit 2 ;;
+            *) [ -z "$id" ] || { echo "usage: $usage" >&2; exit 2; }; id="$1"; shift ;;
         esac
     done
-    local q="state=pending"
+    case "$state" in
+        ""|pending|approved|denied|withdrawn|expired|failed|all) ;;
+        *) echo "usage: --state is pending, approved, denied, withdrawn, expired, failed or all, not '$state'" >&2; exit 2 ;;
+    esac
+    local q="state=${state:-pending}"
     [ "$all" = 1 ] && q="state=all"
     [ -n "$app" ] && q="${q}&app=$(urlencode "$app")"
+    [ -n "$id" ] && q="${q}&request=$(urlencode "$id")"
     _compute_call GET /cli/app/approvals "$q"
     if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
-    printf '%s' "$_CP_BODY" | python3 -c '
-import json, sys
-rs = json.load(sys.stdin).get("requests") or []
+    printf '%s' "$_CP_BODY" | K2_AP_AGENT="$(if _compute_in_session; then echo 1; fi)" python3 -c '
+import json, os, sys
+v = json.load(sys.stdin)
+rs = v.get("requests") or []
 if not rs:
-    print("No held App requests."); sys.exit(0)
+    print("No held App requests (--state all lists every state)."); sys.exit(0)
 for r in rs:
     print("%s  %-9s %-11s %s (%s) by %s" % (r["id"], r["status"], r["kind"], r["appLabel"], r.get("workspaceHandle"), r["requestedBy"]))
     print("    %s" % r["summary"])
@@ -21704,7 +21729,15 @@ for r in rs:
     for why in r.get("reasons") or []:
         print("    held: %s" % why)
     if r.get("decidedBy"):
-        print("    %s by %s%s" % (r["status"], r["decidedBy"], (" via " + r["confirmVia"]) if r.get("confirmVia") else ""))'
+        print("    %s by %s%s" % (r["status"], r["decidedBy"], (" via " + r["confirmVia"]) if r.get("confirmVia") else ""))
+    c = r.get("card") if isinstance(r.get("card"), dict) else None
+    if c:
+        to = ", ".join(x.get("login", "") for x in (c.get("routedTo") or []) if isinstance(x, dict)) or "every owner and admin"
+        print("    card %s: %s, on the Thread of %s, sent to %s" % (c.get("id"), c.get("state"), c.get("thread") or "?", to))
+    elif r["status"] == "pending":
+        print("    no permission card (it waits in Settings → App Approvals)")
+if os.environ.get("K2_AP_AGENT") == "1" and not v.get("canApprove"):
+    print("These are your own requests. An owner or admin answers them; you can withdraw one: k2 app deny <request-id>.")'
 }
 
 # Owner confirm bound to the request, then approve. Never for an agent:
@@ -23555,9 +23588,37 @@ for r in rows:
     esac
 }
 
+# 0.46.17: `--assign <login>[,<login>…]` anywhere before `--` on a k2 app
+# command: if the command is held for the owner, its permission card goes
+# to those people (owner or admin logins on this server, or owner). Taken
+# out of the arguments here; _compute_send adds it to the POST (?assign=)
+# and the daemon refuses a name that can't approve before anything runs.
+_app_take_assign() {
+    _K2_ASSIGN=""
+    _APP_ARGS=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --) _APP_ARGS+=("$@"); return 0 ;;
+            --assign)
+                if [ $# -lt 2 ] || [ -z "$2" ]; then
+                    echo '{"error":"usage","hint":"--assign takes logins, comma-separated (--assign ada or --assign ada,owner): who gets the card if this is held"}' >&2
+                    exit 2
+                fi
+                _K2_ASSIGN="$2"; shift 2 ;;
+            --assign=*)
+                _K2_ASSIGN="${1#--assign=}"
+                [ -n "$_K2_ASSIGN" ] || { echo '{"error":"usage","hint":"--assign takes logins, comma-separated (--assign ada)"}' >&2; exit 2; }
+                shift ;;
+            *) _APP_ARGS+=("$1"); shift ;;
+        esac
+    done
+}
+
 cmd_app() {
     # TC-19: App refusals carry the registry's fix (`_compute_fail`).
     _K2_REFUSAL_AREA=app
+    _app_take_assign "$@"
+    set -- ${_APP_ARGS[@]+"${_APP_ARGS[@]}"}
     case "${1:-}" in
         init) shift; cmd_app_init "$@" ;;
         validate) shift; cmd_app_validate "$@" ;;
@@ -32561,6 +32622,20 @@ _compute_in_k2_tree() {
     return 1
 }
 
+# 0.46.17: a k2 app POST carries the command's --assign (_app_take_assign)
+# as ?assign=, so a held request's card goes to those people. Other paths
+# and GETs are unchanged.
+_compute_assign_path() {
+    local method="$1" path="$2" sep="?"
+    if [ "$method" != "POST" ] || [ -z "${_K2_ASSIGN:-}" ]; then printf '%s' "$path"; return 0; fi
+    case "$path" in
+        /cli/app/*) ;;
+        *) printf '%s' "$path"; return 0 ;;
+    esac
+    case "$path" in *\?*) sep="&" ;; esac
+    printf '%s%sassign=%s' "$path" "$sep" "$(urlencode "$_K2_ASSIGN")"
+}
+
 # _compute_send METHOD PATH [payload] [tcp] → `<body>\n<status>` on stdout.
 # GET payload = urlencoded query; POST payload = JSON body.
 #
@@ -32573,6 +32648,7 @@ _compute_in_k2_tree() {
 _compute_send() {
     local method="$1" path="$2" payload="${3:-}" force_tcp="${4:-}"
     local sock out="" _K2_CFG="" rc=0 t0="$SECONDS"
+    path="$(_compute_assign_path "$method" "$path")"
     if [ "$method" = "POST" ] && [ "$path" = "/cli/compute/run" ] && [ -z "${_CP_OWNER_WARNED:-}" ] && ! _compute_in_session && _compute_in_k2_tree; then
         _CP_OWNER_WARNED=1
         echo "[k2 compute] no passport in this shell: this job is submitted as the owner (its jobs show via: owner_token). Keep K2_* set in agent shells." >&2
@@ -46865,6 +46941,12 @@ run
   here on purpose; recorded in the access audit log.
   --cmd and --skin are mutually exclusive. --cwd is for --cmd only.
 
+  --assign <login>[,<login>…]  if the run is held for the owner, its permission
+                   card goes to those people only (owner or admin logins on
+                   this server, or owner; anyone else is refused before it
+                   runs). Without it: every owner and admin. Check where it
+                   stands: k2 app approvals <request-id>.
+
   --probe-timeout <dur>  how long the service may take to open --port
                    (default 15s, at most 15m): 90s, 10m, 1m30s, 1500ms.
                    Saved on the service: start, restarts and boot use it.
@@ -47483,10 +47565,15 @@ cmd_publish() {
 cmd_publish_run() {
     if _wants_help "$@"; then _publish_usage; exit 0; fi
     local name="" cmd="" port="" cwd="" no_tunnel=0 as_json=false skin=0 skin_root="" transfer=0 probe_timeout="" dov=""
-    local dev=0 dev_idle="" dev_mem="" dev_cpus=""
+    local dev=0 dev_idle="" dev_mem="" dev_cpus="" assign=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --dev) dev=1; shift ;;
+            # 0.46.17: who a held run's permission card goes to.
+            --assign)
+                [ $# -ge 2 ] && [ -n "$2" ] || { as_json="$as_json" _publish_err "usage" "--assign takes logins, comma-separated (--assign ada): who gets the card if the run is held"; exit 2; }
+                assign="$2"; shift 2 ;;
+            --assign=*) assign="${1#--assign=}"; shift ;;
             --idle)
                 [ $# -ge 2 ] || { as_json="$as_json" _publish_err "usage" "--idle needs a duration from 5m to 24h, or off"; exit 2; }
                 dev_idle="$2"; shift 2 ;;
@@ -47626,13 +47713,15 @@ cmd_publish_run() {
     body=$(P_NAME="$name" P_CMD="$cmd" P_PORT="$port" P_CWD="$cwd" \
            P_PROJECT="$PROJECT" P_NO_TUNNEL="$no_tunnel" P_TRANSFER="$transfer" \
            P_SKIN="$skin" P_SKIN_ROOT="$skin_root" P_PROBE_TIMEOUT="$probe_timeout" P_DISK_OVERRIDE="$dov" \
-           P_DEV="$dev" P_DEV_IDLE="$dev_idle" P_DEV_MEM="$dev_mem" P_DEV_CPUS="$dev_cpus" python3 -c '
+           P_DEV="$dev" P_DEV_IDLE="$dev_idle" P_DEV_MEM="$dev_mem" P_DEV_CPUS="$dev_cpus" P_ASSIGN="$assign" python3 -c '
 import json, os
 b = {
     "name": os.environ["P_NAME"],
     "port": int(os.environ["P_PORT"]),
     "project": os.environ["P_PROJECT"],
 }
+if (os.environ.get("P_ASSIGN") or "").strip():
+    b["assign"] = os.environ["P_ASSIGN"].strip()
 if os.environ.get("P_DEV") == "1":
     b["dev"] = True
     for k, e in (("idle", "P_DEV_IDLE"), ("mem", "P_DEV_MEM"), ("cpus", "P_DEV_CPUS")):
@@ -70892,6 +70981,21 @@ GUEST CARDS
   Agents create those cards from the PTY:
     k2 thread ask / k2 thread secret
   Ask/secret create stay off the official origin (404).
+
+HELD FOR THE OWNER: THE CARD (0.46.17)
+  A k2 app command that needs an owner step answers exit 2, "held for the
+  owner: w_…", and K2 puts a permission card for exactly that request on
+  your Thread (the owner's phone shows it too). An owner or admin approves
+  or denies it there, in Settings → App Approvals, or with k2 app approve
+  from a terminal outside K2; one answer closes the others.
+  Who gets it: every owner and admin, unless you name them with
+  --assign <login>[,<login>…] on the command (k2 app db connect app1 --new
+  --assign ada). A name that isn't an owner or admin login here is refused
+  before anything runs (unknown_approver, approver_not_eligible).
+  Where it stands: k2 app approvals <w_id> (or --state all): pending,
+  approved, denied, withdrawn, expired or failed, and the card's state.
+  You see only the requests you asked for. You never approve one; you can
+  withdraw your own (k2 app deny <w_id>).
 
 WALLED APPS AND SERVICES ON THIS BOX
   A walled App (k2 app deploy --engine guarded) reaches K2 through its

@@ -8,7 +8,7 @@
 //!   dropped, days, until), unset and show (on with its text, off);
 //!   footer set, unset (with and without a domain) and show.
 //! - `--text -`: the text on stdin, read past the gates; none; twice;
-//!   not UTF-8 (the shell's raise); a NUL (`nul-in-stdin-text`).
+//!   not UTF-8 (the shell's raise); a NUL, sent in place (`nul-in-stdin-text`).
 //! - A refusal, an answer the Python raises on, and no answer.
 //! - Help never acts.
 
@@ -351,10 +351,7 @@ fn hostmail_notices_answer_as_the_shell_does() {
 /// raises, nothing sent (one byte; a run of them, named as a range; the
 /// traceback compared as the rig compares one, its frames by Python's
 /// version, and the exception's place by the unit tests of
-/// `core::encode_body`). A
-/// NUL: dropped by both, and from bash 4.4 bash warns on stderr naming
-/// its own line, the named difference `nul-in-stdin-text`
-/// (`scripts/cli-parity.sh`).
+/// `core::encode_body`). A NUL is [`a_nul_on_stdin_is_sent_in_place`].
 #[test]
 fn text_on_stdin_that_is_not_plain() {
     let rig = Rig::new(VERB, "nstdin");
@@ -389,21 +386,34 @@ fn text_on_stdin_that_is_not_plain() {
                 )
             },
         ),
-        compare(
-            Compare::NulInAnswer,
-            Case {
-                stdin: Some(b"Away \x00from\x00 Acme.\n\x00\n"),
-                ..ok_case(
-                    "ooo set, a NUL on stdin: dropped",
-                    &["ooo", "set", "sales@acme.example", "--text", "-"],
-                    r#"{"ok":true,"address":"sales@acme.example"}"#,
-                )
-            },
-        ),
     ];
     for c in &v {
         rig.check(c);
     }
+}
+
+/// A NUL on stdin (K2's ruling, the named difference `nul-in-stdin-text`;
+/// `scripts/cli-parity.sh` checks bash's side): the binary sends the text
+/// as read, each NUL as JSON's `\u0000`, never cut at it; only the
+/// trailing newlines go. One request, the shell's answer printed, exit 0.
+#[test]
+fn a_nul_on_stdin_is_sent_in_place() {
+    let rig = Rig::new(VERB, "nnul");
+    let c = Case {
+        stdin: Some(b"Away \x00from\x00 Acme.\n\x00end\n\n"),
+        ..ok_case(
+            "ooo set, a NUL on stdin: sent in place",
+            &["ooo", "set", "sales@acme.example", "--text", "-"],
+            r#"{"ok":true,"address":"sales@acme.example"}"#,
+        )
+    };
+    let (out, log) = rig.binary(&c, false);
+    assert_eq!(out.code, Some(0), "{out:?}");
+    assert_eq!(log.len(), 1, "one request:\n{log:#?}");
+    let want =
+        r#"{"address":"sales@acme.example","text":"Away \u0000from\u0000 Acme.\n\u0000end"}"#;
+    assert!(log[0].contains(want), "the NULs in place:\n{}", log[0]);
+    assert!(!out.stderr.contains("null byte"), "{}", out.stderr);
 }
 
 /// The verbs that change something, with `-h` or `--help` anywhere: the

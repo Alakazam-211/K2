@@ -13,9 +13,10 @@
 //! Text on stdin that is not UTF-8 is held as Python's environment holds
 //! it (each bad byte its surrogate escape), so the request's
 //! `dumps(body).encode()` raises as the shell's does, nothing sent. Where
-//! this differs from the shell: text on stdin with a NUL (bash drops it
-//! and, from bash 4.4, warns on stderr naming its own line; this drops it
-//! quietly: `scripts/cli-parity.sh`'s named difference
+//! this differs from the shell (K2's ruling): text on stdin with a NUL.
+//! Bash's `$(…)` drops it and, from bash 4.4, warns on stderr naming its
+//! own line; this keeps the text as read, the NUL sent as JSON's
+//! `\u0000`, never cut there (`scripts/cli-parity.sh`'s named difference
 //! `nul-in-stdin-text`). Once stdin is read the line can't be handed on.
 
 use super::words::{scan, wants_help, Spec};
@@ -102,16 +103,26 @@ impl Texts {
 }
 
 /// `env("M_TEXT")`: the text; where it was `--text -`, stdin read now
-/// (`$(cat)`: NULs and trailing newlines dropped), as Python reads those
-/// bytes from its environment: UTF-8, a byte that isn't kept as its
-/// surrogate escape, which `dumps(body).encode()` then refuses
-/// ([`core::encode_body`]).
+/// ([`stdin_text`]), as Python reads those bytes from its environment:
+/// UTF-8, a byte that isn't kept as its surrogate escape, which
+/// `dumps(body).encode()` then refuses ([`core::encode_body`]).
 fn text(py_: &mut Py) -> Value {
     if py_.env(STDIN) == "1" {
-        let all = crate::prompt::read_all_stdin();
-        return crate::confirm::text_of_bytes(all.expose());
+        let mut all = Vec::new();
+        // A stdin that can't be read gives what was read before it.
+        let _ = std::io::Read::read_to_end(&mut std::io::stdin().lock(), &mut all);
+        return crate::confirm::text_of_bytes(&stdin_text(all));
     }
     sv(py_.env("M_TEXT"))
+}
+
+/// `$(cat)`'s trailing newlines dropped. A NUL stays where it was (K2's
+/// ruling; bash drops it: the named difference `nul-in-stdin-text`).
+fn stdin_text(mut all: Vec<u8>) -> Vec<u8> {
+    while all.last() == Some(&b'\n') {
+        all.pop();
+    }
+    all
 }
 
 /// `text="$(_hostmail_read_text "$raw")"`: the text, the usage line, or
@@ -465,4 +476,24 @@ fn footer_change_py(py_: &mut Py, set: bool) -> R<()> {
         py_.print(if set { "footer set" } else { "footer unset" });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// K2's ruling: a NUL on stdin stays in the text, sent as `\u0000`;
+    /// only `$(cat)`'s trailing newlines go.
+    #[test]
+    fn a_nul_on_stdin_stays_in_place() {
+        let read = stdin_text(b"Away \0from\0 Acme.\n\0end\n\n".to_vec());
+        assert_eq!(read, b"Away \0from\0 Acme.\n\0end");
+        let body = core::obj(vec![
+            ("address", sv("a@x")),
+            ("text", crate::confirm::text_of_bytes(&read)),
+        ]);
+        let want = br#"{"address":"a@x","text":"Away \u0000from\u0000 Acme.\n\u0000end"}"#;
+        assert_eq!(core::encode_body(&body), Ok(want.to_vec()));
+        assert_eq!(stdin_text(b"\n\n".to_vec()), b"");
+    }
 }

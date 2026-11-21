@@ -46,7 +46,10 @@
 # no-answer cases of inbox_parity.rs, read_parity.rs, activity_parity.rs,
 # connections_write_parity.rs, connect_parity.rs, arms_parity.rs (reviews),
 # remind_parity.rs, review_skills_whats_new_parity.rs (skills list),
-# workspace_verbs_parity.rs and wiki_parity.rs, through the rig's
+# workspace_verbs_parity.rs, wiki_parity.rs, api_parity.rs,
+# api_key_parity.rs, agent_parity.rs, glossary_parity.rs,
+# heartbeat_parity.rs (list), msg_parity.rs (the sender lookup),
+# postal_parity.rs, talk_parity.rs and tunnel_parity.rs, through the rig's
 # Compare::Bash32PipeReader on macOS. They meet python-version-error-text
 # wherever the shell's Python words an error otherwise than 3.12: the rig
 # takes it for every row (common/parity.rs, as_this_python, and

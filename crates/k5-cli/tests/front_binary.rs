@@ -177,6 +177,19 @@ fn version_prints_what_the_shell_prints() {
     );
 }
 
+/// A known family's line the front hands to the shell, read from the
+/// route table: the first family the shell answers whole (no verb or bare
+/// row of its own, not the front's), with a verb after it. It fails
+/// loudly when every family has a row of the binary's.
+fn shell_family_line() -> Vec<OsString> {
+    use k5_cli::route::{Owner, FRONT, TABLE};
+    let noun = TABLE
+        .iter()
+        .find(|n| n.owner == Owner::Bash && n.verbs.is_empty() && n.family != FRONT)
+        .expect("a family the shell answers whole: none is left, so pick another line");
+    args(&[noun.words[0], "status"])
+}
+
 /// A line the front hands to the shell, which needs no daemon: an
 /// unknown verb with a word after it that is not UTF-8 (the binary
 /// answers only UTF-8 lines). bash prints `Unknown command` and its help,
@@ -372,7 +385,7 @@ fn a_verb_that_falls_through_without_python3_says_so_and_runs_nothing() {
     let rig = Rig::new("no-python3");
     let path = common::path_without_python3(&rig.dir);
     for (name, case) in [
-        ("k5", args(&["ci", "status"])),
+        ("k5", shell_family_line()),
         ("k2", args(&["compute", "list"])),
         ("k5", unknown()),
     ] {

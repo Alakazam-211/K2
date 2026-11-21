@@ -803,14 +803,45 @@ mod tests {
         }
     }
 
-    /// The table today: the rows with a bare row of their own.
+    /// Every row with a bare row of its own has a parity case for its bare
+    /// line: a `// covers: <noun>` tag in `tests/*_parity.rs`, or a
+    /// `# covers: <noun>` tag in a `tests/cli` script (the tags
+    /// `scripts/parity-coverage.py` reads).
     #[test]
-    fn the_bare_rows_are_today_s() {
-        let rows: Vec<&str> = TABLE
+    fn every_bare_row_has_a_parity_case_for_its_bare_line() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut tags = BTreeSet::new();
+        for (dir, suffix, tag) in [
+            (root.join("tests"), "_parity.rs", "// covers: "),
+            (root.join("../../tests/cli"), ".sh", "# covers: "),
+        ] {
+            let entries = std::fs::read_dir(&dir)
+                .unwrap_or_else(|e| panic!("read {}: {e}", dir.display()));
+            for entry in entries {
+                let path = entry.unwrap().path();
+                let name = path.file_name().unwrap().to_string_lossy().into_owned();
+                if !name.ends_with(suffix) || name.starts_with('_') {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&path)
+                    .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+                for line in text.lines() {
+                    if let Some(form) = line.trim().strip_prefix(tag) {
+                        tags.insert(form.trim().to_string());
+                    }
+                }
+            }
+        }
+        let bare: Vec<&str> = TABLE
             .iter()
             .filter(|n| n.bare_row().is_some())
             .map(|n| n.words[0])
             .collect();
-        assert_eq!(rows, ["hostmail", "chat"]);
+        assert!(!bare.is_empty(), "no row has a bare row");
+        let missing: Vec<&&str> = bare.iter().filter(|w| !tags.contains(**w)).collect();
+        assert!(
+            missing.is_empty(),
+            "bare rows with no parity case for the noun alone: {missing:?}"
+        );
     }
 }

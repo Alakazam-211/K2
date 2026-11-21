@@ -1615,15 +1615,23 @@ fn heartbeat_with_no_answer() {
         ..c
     };
     let v = vec![
-        waited(case(
-            "an empty reply to the list",
-            &["list"],
-            &[],
-            vec![Reply::Close],
-            owner_and_port,
-            141,
-            1,
-        )),
+        // bash32-pipe-reader: on macOS's /bin/bash 3.2 the list's reader
+        // runs on the empty input and the command exits 1.
+        Case {
+            compare: Compare::Bash32PipeReader {
+                stdout: "",
+                stderr: "Error: Expecting value: line 1 column 1 (char 0)\n",
+            },
+            ..case(
+                "an empty reply to the list",
+                &["list"],
+                &[],
+                vec![Reply::Close],
+                owner_and_port,
+                141,
+                1,
+            )
+        },
         waited(case(
             "an empty reply to a fire",
             &["fire", "x"],

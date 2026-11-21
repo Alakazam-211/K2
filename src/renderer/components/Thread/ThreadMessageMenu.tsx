@@ -22,6 +22,7 @@ import { useContextMenuStore, type ContextMenuItemDef } from '@/stores/context-m
 import { useToastStore } from '@/stores/toast'
 import { daemonCliPost } from '@/lib/daemon-cli'
 import { daemonErrorText } from '@/lib/daemon-error'
+import { httpCodeOf } from '@/lib/daemon-http-error'
 import { useFittedLine } from './replyFit'
 import {
   threadReplyComposerOpen,
@@ -71,13 +72,21 @@ export const DELETE_MESSAGE_CONFIRM = {
 
 /** Confirm, then delete. The bubble turns into the "Message deleted" line
  *  when the daemon's frame (or the answer) comes back. */
+/** A delete the server refused because the message is history
+ *  (`409 imported_read_only`). */
+export const IMPORTED_READ_ONLY_TEXT = 'This message is from before the update and can’t be deleted.'
+
 export async function deleteThreadMessage(del: ThreadMessageDelete): Promise<boolean> {
   if (!(await useConfirmDialogStore.getState().confirm(DELETE_MESSAGE_CONFIRM))) return false
   try {
     await daemonCliPost(del.scope, 'thread/message/delete', { addr: del.addr, id: del.id })
     return true
   } catch (err) {
-    useToastStore.getState().addToast(`Couldn't delete the message: ${daemonErrorText(err) || String(err)}`, 'error')
+    const text =
+      httpCodeOf(err) === 'imported_read_only'
+        ? IMPORTED_READ_ONLY_TEXT
+        : `Couldn't delete the message: ${daemonErrorText(err) || String(err)}`
+    useToastStore.getState().addToast(text, 'error')
     return false
   }
 }

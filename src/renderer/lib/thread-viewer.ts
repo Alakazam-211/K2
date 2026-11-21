@@ -145,9 +145,13 @@ export function isViewerAuthor(author: ThreadAuthor, viewer: ThreadViewer | null
  *  the field, or an older server) keeps the old rule: every `via=compose`
  *  post reads as yours, since nothing on it says who sent it. */
 export function isOwnThreadPost(
-  doc: { via?: string | null; author?: unknown; mine?: unknown },
+  doc: { via?: string | null; author?: unknown; mine?: unknown; imported?: unknown },
   viewer: ThreadViewer | null,
 ): boolean {
+  // A message moved in from another store (a ticket's comments from before
+  // they lived on the Thread) is history: its author is a reading of a
+  // name, never a checked login, so it is never the viewer's.
+  if (doc.imported != null) return false
   if (isSystemThreadAuthor(doc.author)) return false
   if (typeof doc.mine === 'boolean') return doc.mine
   const author = parseThreadAuthor(doc.author)

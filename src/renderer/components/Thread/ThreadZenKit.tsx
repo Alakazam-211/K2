@@ -706,7 +706,10 @@ export const ThreadBubble = memo(function ThreadBubble({
   const fromLabel = mine ? item.doc.from?.trim() || 'you' : author.split(' · via ')[0]
   const replyAddr = source?.addr ?? ''
   // Delete message: your own post, where its server has the feature.
-  const canDelete = mine && kind === 'text' && !!source && !!replyAddr && source.scope.serverSupports('thread-message-delete-v1')
+  // A message moved in from another store is history (`imported`): the
+  // server refuses to delete it, so the menu doesn't offer it.
+  const canDelete =
+    mine && kind === 'text' && item.doc.imported == null && !!source && !!replyAddr && source.scope.serverSupports('thread-message-delete-v1')
   const menuArgs = useMemo<ThreadMessageMenuArgs>(
     () => ({
       scope: source?.scope ?? null,

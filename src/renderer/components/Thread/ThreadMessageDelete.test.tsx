@@ -28,7 +28,7 @@ import { fakeScope } from '@/test-utils/fake-scope'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useContextMenuStore } from '@/stores/context-menu'
 import { ThreadAttachmentSourceProvider } from './ThreadImageObjects'
-import { DELETE_MESSAGE_CONFIRM, deleteThreadMessage, threadMessageMenuItems } from './ThreadMessageMenu'
+import { DELETE_MESSAGE_CONFIRM, IMPORTED_READ_ONLY_TEXT, deleteThreadMessage, threadMessageMenuItems } from './ThreadMessageMenu'
 import { ThreadBubble } from './ThreadZenKit'
 
 const SECRET = 'my ledger password is hunter2'
@@ -122,6 +122,15 @@ describe('Delete message in the menu', () => {
     expect(menuLabels()).not.toContain('Delete message')
   })
 
+  it('is never on a message moved in from before the update (history): Reply, Copy and Save to stash stay', () => {
+    const moved = post('m5', { imported: { cloneId: 'ticket-backfill', sourceDocId: 'c-1', importedAt: 1_762_700_000, from: 'ada' } })
+    draw(moved, true)
+    fireEvent.contextMenu(document.querySelector('[data-zen-bubble]') as HTMLElement)
+    expect(menuLabels()).not.toContain('Delete message')
+    expect(menuLabels()).toContain('Copy text')
+    expect(menuLabels()).toContain('Save to stash')
+  })
+
   it('has no row without a delete target', () => {
     const base = { scope: null, text: 'x', agent: null, agentName: null, reply: null }
     expect(threadMessageMenuItems(base, null).some((i) => i.id === 'delete')).toBe(false)
@@ -144,6 +153,17 @@ describe('deleting', () => {
     await expect(done).resolves.toBe(true)
     expect(h.daemonCliPost).toHaveBeenCalledTimes(1)
     expect(h.daemonCliPost).toHaveBeenCalledWith(scope, 'thread/message/delete', { addr: 'ledger', id: 'x1' })
+  })
+
+  it('a refusal because the message is history says so in plain words', async () => {
+    const { useToastStore } = await import('@/stores/toast')
+    useToastStore.setState({ toasts: [] })
+    h.daemonCliPost.mockRejectedValueOnce(Object.assign(new Error('imported_read_only'), { code: 'imported_read_only', status: 409 }))
+    const done = deleteThreadMessage({ scope: scopeWith(['thread-message-delete-v1']), addr: 'ticket:t-1', id: 'x3' })
+    act(() => useConfirmDialogStore.getState().onResolve?.(true))
+    await expect(done).resolves.toBe(false)
+    expect(useToastStore.getState().toasts.map((t) => t.message)).toContain(IMPORTED_READ_ONLY_TEXT)
+    expect(IMPORTED_READ_ONLY_TEXT).toBe('This message is from before the update and can’t be deleted.')
   })
 
   it('sends nothing on Cancel', async () => {

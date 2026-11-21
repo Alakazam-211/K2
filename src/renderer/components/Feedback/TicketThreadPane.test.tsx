@@ -67,6 +67,7 @@ import {
 import { threadSender } from '@/components/Thread/threadSenders'
 import { threadAuthorLabel } from '@/components/SessionView/ThreadOverlayPane'
 import type { OverlayThreadItem } from '@/components/SessionView/overlayThread'
+import { isOwnThreadPost } from '@/lib/thread-viewer'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -179,18 +180,32 @@ describe('the contract seam', () => {
     expect(ticketPostOutcome({ ok: true })).toBeNull()
   })
 
-  it('a message moved in from the old store names its author as text only', () => {
-    expect(ticketImportedAuthor({ imported: 'jordan' })).toBe('jordan')
-    expect(ticketImportedAuthor({ imported: { author: 'jordan' } })).toBe('jordan')
+  it('a message moved in from the old store names its author as text only, never as You', () => {
+    const stamp = (from: string, author?: unknown) => ({ cloneId: 'ticket-backfill', sourceDocId: 'c-1', importedAt: NOW, from, ...(author ? { author } : {}) })
+    expect(ticketImportedAuthor({ imported: stamp('jordan') })).toBe('jordan')
+    // One reader: `imported.from`, plain text. Nothing else is read.
+    expect(ticketImportedAuthor({ imported: 'jordan' })).toBeNull()
+    expect(ticketImportedAuthor({ imported: { author: 'jordan' } })).toBeNull()
     expect(ticketImportedAuthor({})).toBeNull()
     const moved: OverlayThreadItem = {
       collection: 'thread', seq: 1, id: 'c-1',
-      doc: { id: 'c-1', kind: 'text', from: 'owner', body: 'Looks close.', created_at: NOW, via: 'ticket', author: { kind: 'owner', login: 'owner' }, mine: true, imported: { author: 'jordan' } },
+      doc: {
+        id: 'c-1', kind: 'text', from: 'jordan', body: 'Looks close.', created_at: NOW, via: 'ticket',
+        author: { kind: 'user', login: 'jordan', name: 'jordan' }, mine: true,
+        imported: stamp('jordan', { kind: 'user', login: 'jordan', name: 'jordan' }),
+      },
     }
     const shown = ticketThreadItem(moved)
     // A name, not a person (no roster lookup) and not an agent (no picture).
     expect(threadSender(shown.doc)).toEqual({ key: 'name:jordan', kind: 'name', label: 'jordan', id: '' })
-    expect(threadAuthorLabel(shown.doc, { kind: 'owner', login: 'owner' } as never)).toEqual({ label: 'jordan', mine: false })
+    // Never "You", even when the name is the viewer's own login and the
+    // stamp's author reads as theirs.
+    const jordan = { principal: 'jordan', aliases: [] }
+    expect(threadAuthorLabel(shown.doc, jordan)).toEqual({ label: 'jordan', mine: false })
+    expect(isOwnThreadPost(moved.doc, jordan)).toBe(false)
+    // The owner token's stamp has no name: `from` is still what shows.
+    const owner = ticketThreadItem({ ...moved, doc: { ...moved.doc, author: { kind: 'owner' } as never, imported: stamp('Rosson', { kind: 'owner' }) } })
+    expect(threadAuthorLabel(owner.doc, { principal: 'owner', aliases: [] })).toEqual({ label: 'Rosson', mine: false })
     // A message written on the Thread comes back as it is.
     const plain: OverlayThreadItem = { ...moved, doc: { ...moved.doc, imported: undefined } }
     expect(ticketThreadItem(plain)).toBe(plain)
@@ -272,6 +287,23 @@ describe('ticket-thread-v1 on', () => {
     await waitFor(() => expect(onTicketPatch).toHaveBeenCalledWith({ status: 'answered', answer: 'SQLite' }))
     expect(onChanged).not.toHaveBeenCalled()
     expect(screen.getByText('Saved. The agent did not receive it (the agent is asleep).')).toBeTruthy()
+  })
+
+  it('the box’s own reply moves the header at once (the post’s answer says the ticket’s status)', async () => {
+    const onTicketPatch = vi.fn()
+    const onChanged = vi.fn()
+    ticketAnswer = { status: 'needs_discussion', answered: false, delivered: true, deliveryReason: null }
+    rail({ onTicketPatch, onChanged })
+    const box = within(screen.getByTestId('stub-thread-column')).getByRole('textbox')
+    fireEvent.change(box, { target: { value: 'Bold the per-seat line, please.' } })
+    await act(async () => {
+      fireEvent.keyDown(box, { key: 'Enter' })
+    })
+    await waitFor(() => expect(onTicketPatch).toHaveBeenCalledWith({ status: 'needs_discussion' }))
+    const post = cli.post.mock.calls.find((c) => c[0] === 'thread/post')![1] as { addr: string; text: string; optionPick?: boolean }
+    expect(post).toMatchObject({ addr: `ticket:${TICKET}`, text: 'Bold the per-seat line, please.', via: 'compose' })
+    expect(post.optionPick).toBeUndefined()
+    expect(onChanged).not.toHaveBeenCalled()
   })
 
   it('a closed ticket says a reply reopens it, and takes no pick', () => {

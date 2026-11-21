@@ -13,8 +13,9 @@
 //     with that id;
 //   - every message doc carries `ticket`, `via: 'ticket'` and
 //     `to: 'ticket:<id>'`; a message moved in from the ticket's older store
-//     carries an `imported` stamp naming its original author
-//     (ticketImportedAuthor);
+//     carries `imported.from`, its original author as plain text
+//     (ticketImportedAuthor). It is shown as that text only, never as
+//     "You", and can't be deleted (`409 imported_read_only`);
 //   - a reply is a normal Thread post (`POST /cli/thread/post` with
 //     `addr: 'ticket:<id>'`, `via: 'compose'`, a `clientMsgId`). The daemon
 //     applies the ticket's rules: free text moves the ticket to
@@ -65,20 +66,14 @@ export function ticketDraftId(ticketId: string): string {
   return `${TICKET_PREFIX}${ticketId}`
 }
 
-/** A message moved in from the ticket's older store: its original author's
- *  name, as sent (`imported: "<name>"` or `imported: {author: "<name>"}`).
- *  Null for a message written on the Thread. */
+/** A message moved in from the ticket's older store: its original author,
+ *  `imported.from` (always plain text). Null for a message written on the
+ *  Thread. */
 export function ticketImportedAuthor(doc: { imported?: unknown }): string | null {
   const raw = doc.imported
-  if (typeof raw === 'string') return raw.trim() || null
-  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-    const o = raw as Record<string, unknown>
-    for (const key of ['author', 'from', 'name']) {
-      const v = o[key]
-      if (typeof v === 'string' && v.trim()) return v.trim()
-    }
-  }
-  return null
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const from = (raw as Record<string, unknown>).from
+  return typeof from === 'string' && from.trim() ? from.trim() : null
 }
 
 /** A ticket's row as the pane draws it: a moved-in message names its

@@ -87,6 +87,13 @@ describe('parseThreadAuthor', () => {
 })
 
 describe('isOwnThreadPost', () => {
+  it('a message moved in from another store is never the viewer’s, whatever its stamps say', () => {
+    const viewer = { principal: 'alice', aliases: [] }
+    const moved = { via: 'compose', author: { kind: 'user', login: 'alice' }, mine: true, imported: { from: 'alice' } }
+    expect(isOwnThreadPost(moved, viewer)).toBe(false)
+    expect(isOwnThreadPost({ ...moved, imported: undefined }, viewer)).toBe(true)
+  })
+
   const owner = { principal: 'owner', aliases: ['rosson'] }
   const alice = { principal: 'alice', aliases: [] }
   const doc = (author?: unknown, via = 'compose') => ({ via, author })

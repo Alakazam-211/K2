@@ -1991,7 +1991,10 @@ cli_request_post_uds() {
     for param in "$@"; do params="${params}${params:+&}${param}"; done
     local _K2_CFG="" out rc=0 try=1 t0="${_K2_REQ_T0:-$SECONDS}" sep='?'
     [[ "$endpoint" == *'?'* ]] && sep='&'
-    _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
+    # 0.46.17: no passport, no Authorization line (never an empty Bearer).
+    if [ -n "${SCOPED_TOKEN:-}" ]; then
+        _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
+    fi
     while :; do
         rc=0
         out="$(r=0; _cli_curl --k2-cfg "$_K2_CFG" -sS -v -X POST -w "$_K2_WSTATUS" --unix-socket "$(_hook_sock)" "http://localhost${endpoint}${params:+${sep}${params}}" \

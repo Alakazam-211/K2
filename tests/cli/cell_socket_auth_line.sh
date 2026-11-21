@@ -8,6 +8,12 @@
 #     the owner token on disk never sent. Regression (0.46.17): it sent an
 #     empty `Authorization: Bearer`.
 #     with a passport: `Authorization: Bearer <passport>`, once.
+#   cli_request_post_uds (k2 workspace launch <folder>, POST
+#   /cli/workspace/ensure-canonical-session through the socket-first sender):
+#     no passport: one POST on the socket with no Authorization line, and
+#     the owner token on disk never sent. Regression (0.46.17): an empty
+#     `Authorization: Bearer`.
+#     with a passport: `Authorization: Bearer <passport>`, once.
 #   cli_post_json_uds (k2 msg <ws> --signal, POST /cli/awareness/publish):
 #     with a passport: `Authorization: Bearer <passport>`, once.
 #     no passport: msg is a passport tool, so it stops with exit 3 before
@@ -184,6 +190,27 @@ if [ "$RC" = 0 ] && [ "$OUT" = "hello from acme" ] && [ -z "$TCP" ] &&
     ok "read, with a passport: the Bearer line, once, on the GET"
 else
     bad "read, with a passport: rc=$RC out=[$OUT] tcp=[$TCP] head=[$h] socket=[$HEADS] stderr=[$ERR]"
+fi
+
+echo "== cli_request_post_uds: k2 workspace launch on the cell socket =="
+WS="$WORKDIR/acme-ws"; mkdir -p "$WS"
+run "${NOPASS[@]}" -- workspace launch "$WS"
+h="$(head_of 'POST /cli/workspace/ensure-canonical-session ')"
+if [ "$RC" = 0 ] && [ -z "$TCP" ] && [ -n "$h" ] &&
+    [ "$(grep -c '^POST /cli/workspace/ensure-canonical-session ' <<<"$HEADS")" = 1 ] &&
+    ! grep -qi '^authorization:' <<<"$HEADS" && ! grep -q 'owner-secret-token' <<<"$HEADS"; then
+    ok "workspace launch, no passport: one POST on the socket, no Authorization line, the owner token never sent"
+else
+    bad "workspace launch, no passport: rc=$RC out=[$OUT] tcp=[$TCP] socket=[$HEADS] stderr=[$ERR]"
+fi
+
+run "${PASS[@]}" -- workspace launch "$WS"
+h="$(head_of 'POST /cli/workspace/ensure-canonical-session ')"
+if [ "$RC" = 0 ] && [ -z "$TCP" ] && [ "$(grep -ci '^authorization:' <<<"$h")" = 1 ] &&
+    grep -qx 'Authorization: Bearer pp-acme.s3cret' <<<"$h" && ! grep -q 'owner-secret-token' <<<"$HEADS"; then
+    ok "workspace launch, with a passport: the Bearer line, once, on the POST"
+else
+    bad "workspace launch, with a passport: rc=$RC out=[$OUT] tcp=[$TCP] head=[$h] socket=[$HEADS] stderr=[$ERR]"
 fi
 
 echo "== cli_post_json_uds: k2 msg --signal on the cell socket =="

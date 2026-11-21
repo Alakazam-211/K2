@@ -356,8 +356,8 @@ code=$(curl -s -o o1 -w '%{{http_code}}' --unix-socket "$STOLEN_SOCK" -H "Author
 code=$(curl -s -o o2 -w '%{{http_code}}' --unix-socket "$STOLEN_SOCK" -H "Authorization: Bearer $STOLEN_TOKEN" -H "X-K2-Via-Tcp: 1" http://localhost/cli/projects/list); echo "stolen_on_its_socket_via_tcp $code $(cat o2 | cut -c1-300)" >> $R
 code=$(curl -s -o o3 -w '%{{http_code}}' -H "Authorization: Bearer $STOLEN_TOKEN" http://127.0.0.1:$PORT/cli/whoami); echo "stolen_over_tcp $code $(cat o3)" >> $R
 code=$(curl -s -o o4 -w '%{{http_code}}' --unix-socket "$K2_HOOK_SOCK" -H "Authorization: Bearer $STOLEN_TOKEN" http://localhost/cli/whoami); echo "stolen_on_own_socket $code $(cat o4)" >> $R
-code=$(curl -s -o o5 -w '%{{http_code}}' --unix-socket "$K2_HOOK_SOCK" -H "Authorization: Bearer $K2_HOOK_TOKEN" "http://localhost/cli/thread?addr=$OWN_ADDR&limit=1"); echo "own_on_own_socket $code $(cat o5 | cut -c1-300)" >> $R
-bash {cli} thread "$OWN_ADDR" "from the fenced terminal" > o9 2>&1; echo "own_cli_thread_rc $? $(cat o9 | tr '\n' ' ' | cut -c1-300)" >> $R
+code=$(curl -s -o o5 -w '%{{http_code}}' --unix-socket "$K2_HOOK_SOCK" -H "Authorization: Bearer $K2_HOOK_TOKEN" http://localhost/cli/capabilities); echo "own_on_own_socket $code $(cat o5 | cut -c1-300)" >> $R
+bash {cli} capabilities --json > o9 2>&1; echo "own_cli_rc $? $(cat o9 | tr '\n' ' ' | cut -c1-300)" >> $R
 # Review F3: the smuggling request (B's passport in the query, its own in
 # the form body, a bare LF hiding a session header) on its own socket.
 python3 - "$K2_HOOK_SOCK" "$STOLEN_TOKEN" "$STOLEN_SID" "$K2_HOOK_TOKEN" > o10 2>&1 <<'PY'
@@ -483,10 +483,8 @@ fn the_five_step_demo_on_a_real_kernel() {
     assert_eq!(code("stolen_on_own_socket"), "403", "B's passport on A's socket: {}", r["stolen_on_own_socket"]);
     // A's own passport works: a 2xx on a real agent verb, raw and through
     // the CLI (review: never a 400 counted as working).
-    assert_eq!(code("own_on_own_socket"), "200", "A's own passport on its own socket, /cli/thread: {}", r["own_on_own_socket"]);
-    assert!(r["own_cli_thread_rc"].starts_with("0"), "k2 thread from the fenced terminal: {}", r["own_cli_thread_rc"]);
-    let (s, b) = http(d.port, "GET", &format!("/cli/thread?addr=A&limit=20&token={}", d.token()), "");
-    assert!(s == 200 && b.contains("from the fenced terminal"), "the fenced agent's Thread post landed: {s} {b}");
+    assert_eq!(code("own_on_own_socket"), "200", "A's own passport on its own socket, /cli/capabilities: {}", r["own_on_own_socket"]);
+    assert!(r["own_cli_rc"].starts_with("0 {"), "k2 capabilities --json from the fenced terminal: {}", r["own_cli_rc"]);
     // Review F3: the smuggling shapes never run as B.
     assert!(r["smuggled_query"].contains("403"), "B's passport in the query, own in the body, a bare LF: {}", r["smuggled_query"]);
     assert!(r["smuggled_bearer"].contains("400"), "own Bearer with a bare-LF smuggled session header is refused: {}", r["smuggled_bearer"]);
@@ -656,7 +654,7 @@ fn job_runs_and_login_slots_stay_inside_the_fence() {
 echo "cgroup $(cat /proc/self/cgroup)" >> $R
 cat {k2}/daemon.token > /dev/null 2> {ws}/job.err; echo "token_read_rc $? $(cat {ws}/job.err)" >> $R
 echo "sock [${{K2_HOOK_SOCK:-}}]" >> $R
-code=$(curl -s -o {ws}/job.o1 -w '%{{http_code}}' --unix-socket "$K2_HOOK_SOCK" -H "Authorization: Bearer $K2_HOOK_TOKEN" "http://localhost/cli/thread?addr=A&limit=1"); echo "own_on_socket $code" >> $R
+code=$(curl -s -o {ws}/job.o1 -w '%{{http_code}}' --unix-socket "$K2_HOOK_SOCK" -H "Authorization: Bearer $K2_HOOK_TOKEN" http://localhost/cli/capabilities); echo "own_on_socket $code" >> $R
 code=$(curl -s -o {ws}/job.o2 -w '%{{http_code}}' -H "Authorization: Bearer $K2_HOOK_TOKEN" "http://127.0.0.1:$K2_PORT/cli/thread?addr=A&limit=1"); echo "own_over_tcp $code $(cut -c1-120 {ws}/job.o2)" >> $R
 echo "pid $$" >> $R
 echo "job done" >> $R

@@ -47,11 +47,8 @@ pub mod usage {
         " app label take|return <app-id> <label> [--json]"
     );
     pub const LABEL_VERB: &str = concat!("usage: ", cli_name!(), " app label ");
-    pub const TEST_GUESTS: &str = concat!(
-        "usage: ",
-        cli_name!(),
-        " app test-guests <app-id> [--json]"
-    );
+    pub const TEST_GUESTS: &str =
+        concat!("usage: ", cli_name!(), " app test-guests <app-id> [--json]");
     pub const MOVE_PLAN: &str = concat!(
         "usage: ",
         cli_name!(),
@@ -194,7 +191,7 @@ pub fn walk(
     let mut out = Words::default();
     let mut rest = words;
     while let Some(w) = rest.first().copied() {
-        if let Some(names) = values.iter().find(|n| n.iter().any(|x| *x == w)) {
+        if let Some(names) = values.iter().find(|n| n.contains(&w)) {
             let Some(v) = rest.get(1) else {
                 return Err(Stop::silent(Exit::Error));
             };
@@ -457,7 +454,11 @@ pub fn run(ctx: &mut Ctx, ask: &Ask) -> Answer {
             }
         }
         Ask::TestGuests { app, json } => {
-            let body = ctx.call(false, "/cli/app/test-guests", &format!("app={}", quote(app)))?;
+            let body = ctx.call(
+                false,
+                "/cli/app/test-guests",
+                &format!("app={}", quote(app)),
+            )?;
             Ok(printed(&body, *json, test_guests_lines))
         }
         Ask::MovePlan {
@@ -718,7 +719,11 @@ fn mint_lines(body: &[u8], o: &mut Out) -> Result<(), Raise> {
     let v = py::load(body, 3)?;
     let id = py::dget(&v, "id", 4)?;
     let handle = py::dget(&py::idx(&v, "app", 4)?, "handle", 4)?;
-    let scopes = py::join(",", &py::or(py::dget(&v, "scopes", 4)?, py::empty_list()), 4)?;
+    let scopes = py::join(
+        ",",
+        &py::or(py::dget(&v, "scopes", 4)?, py::empty_list()),
+        4,
+    )?;
     o.line(&format!(
         "App key {} for {}: scopes {scopes}",
         py::s(&id),
@@ -760,9 +765,17 @@ fn keys_lines(body: &[u8], o: &mut Out) -> Result<(), Raise> {
         let id = py::idx(&k, "id", 8)?;
         let state = py::idx(&k, "state", 8)?;
         let label = py::head(&py::or(py::dget(&k, "label", 8)?, py::text("-")), 24, 8)?;
-        let scopes = py::join(",", &py::or(py::dget(&k, "scopes", 8)?, py::empty_list()), 8)?;
+        let scopes = py::join(
+            ",",
+            &py::or(py::dget(&k, "scopes", 8)?, py::empty_list()),
+            8,
+        )?;
         let rooms = py::join(",", &py::or(py::dget(&k, "rooms", 8)?, py::empty_list()), 8)?;
-        let rooms = if rooms.is_empty() { "-".to_string() } else { rooms };
+        let rooms = if rooms.is_empty() {
+            "-".to_string()
+        } else {
+            rooms
+        };
         o.line(&format!(
             "{}  {} {} scopes={scopes} rooms={rooms}",
             py::s(&id),
@@ -973,7 +986,10 @@ fn move_plan_lines(body: &[u8], o: &mut Out) -> Result<(), Raise> {
             py::s(&id),
             py::s(&hint)
         ));
-    } else if py_eq(&py::dget(&v, "status", 20)?, &py::text("nothing_to_request")) {
+    } else if py_eq(
+        &py::dget(&v, "status", 20)?,
+        &py::text("nothing_to_request"),
+    ) {
         o.line(&py::s(&py::dget(&v, "note", 21)?));
     } else if py::truthy(&py::dget(&p, "request", 22)?) {
         let todo = py::join(", ", &py::idx(&p, "ownerStepsTodo", 23)?, 23)?;

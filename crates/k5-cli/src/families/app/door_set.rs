@@ -75,10 +75,7 @@ const DROPPED_TAIL: &str = concat!(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ask {
     /// The query is built (`app=…&since=…`).
-    Requests {
-        query: String,
-        json: bool,
-    },
+    Requests { query: String, json: bool },
     /// `set`: the POST's body when a flag asks for a change.
     Quota {
         app: String,
@@ -213,11 +210,7 @@ fn quota(words: &[&str]) -> Result<Ask, Stop> {
 }
 
 fn rotate(words: &[&str]) -> Result<Ask, Stop> {
-    let w = walk(
-        words,
-        &[&["--ttl"], &["--caps"]],
-        &["--keep-old", "--json"],
-    )?;
+    let w = walk(words, &[&["--ttl"], &["--caps"]], &["--keep-old", "--json"])?;
     let app = w.last();
     if app.is_empty() {
         return Err(Stop::usage(usage::ROTATE));
@@ -226,8 +219,7 @@ fn rotate(words: &[&str]) -> Result<Ask, Stop> {
     let caps_j = if caps.is_empty() {
         String::new()
     } else {
-        json::to_string(&Value::Array(split_strip(&caps)), &Options::default())
-            .unwrap_or_default()
+        json::to_string(&Value::Array(split_strip(&caps)), &Options::default()).unwrap_or_default()
     };
     let body = Cj::new()
         .s("app", &app)
@@ -520,7 +512,11 @@ fn rotate_lines(body: &[u8], o: &mut Out) -> Result<(), Raise> {
     } else {
         caps
     };
-    let rooms = py::join(", ", &py::or(py::dget(&v, "rooms", 6)?, py::empty_list()), 6)?;
+    let rooms = py::join(
+        ", ",
+        &py::or(py::dget(&v, "rooms", 6)?, py::empty_list()),
+        6,
+    )?;
     let expires = py::local_minutes(&py::idx(&v, "expiresAt", 7)?, 7)?;
     let revoked = py::dget(&v, "revoked", 7)?;
     o.stderr.push_str(&format!(
@@ -531,9 +527,8 @@ fn rotate_lines(body: &[u8], o: &mut Out) -> Result<(), Raise> {
     ));
     if py::truthy(&py::dget(&v, "withheld", 8)?) {
         let w = py::join(", ", &py::idx(&v, "withheld", 9)?, 9)?;
-        o.stderr.push_str(&format!(
-            "  withheld until the owner approves them: {w}\n"
-        ));
+        o.stderr
+            .push_str(&format!("  withheld until the owner approves them: {w}\n"));
     }
     let note = py::dget_or(&v, "note", py::text(""), 10)?;
     o.stderr.push_str(&format!("  {}\n", py::s(&note)));

@@ -126,14 +126,18 @@ fn the_cross_over_reads_answer_as_the_shell_does() {
             one(
                 "test-guests",
                 &["test-guests", "acme"],
-                ok(r#"{"app":"acme","max":5,"testGuests":[{"username":"t1","expiresAt":1700000000,"createdBy":"agent é"},{"username":"t2","expired":true}]}"#),
+                ok(
+                    r#"{"app":"acme","max":5,"testGuests":[{"username":"t1","expiresAt":1700000000,"createdBy":"agent é"},{"username":"t2","expired":true}]}"#,
+                ),
                 0,
             ),
             // native: app test-guest
             one(
                 "test-guest: one",
                 &["test-guest", "acme"],
-                ok(r#"{"app":"acme","testGuests":[{"username":"t1","expired":true,"createdBy":"o"}]}"#),
+                ok(
+                    r#"{"app":"acme","testGuests":[{"username":"t1","expired":true,"createdBy":"o"}]}"#,
+                ),
                 0,
             ),
             // native: app test-guests --json
@@ -158,11 +162,18 @@ fn the_cross_over_reads_answer_as_the_shell_does() {
             one(
                 "move-plan --app, done",
                 &["move-plan", "site", "--app", "acme é"],
-                ok(r#"{"service":{"workspaceHandle":"ws","name":"site","port":1},"app":{"id":"acme","installed":true},"steps":[],"done":true}"#),
+                ok(
+                    r#"{"service":{"workspaceHandle":"ws","name":"site","port":1},"app":{"id":"acme","installed":true},"steps":[],"done":true}"#,
+                ),
                 0,
             ),
             // native: app move-plan --json
-            one("move-plan --json", &["move-plan", "site", "--json"], ok(PLAN), 0),
+            one(
+                "move-plan --json",
+                &["move-plan", "site", "--json"],
+                ok(PLAN),
+                0,
+            ),
             // native: app move-plan
             stop("move-plan: no service", &["move-plan", "--request"], 2),
             // native: app move-plan
@@ -171,7 +182,9 @@ fn the_cross_over_reads_answer_as_the_shell_does() {
             traceback(one(
                 "move-plan: no steps",
                 &["move-plan", "site"],
-                ok(r#"{"service":{"workspaceHandle":"ws","name":"s","port":1},"app":{"id":"a","installed":true}}"#),
+                ok(
+                    r#"{"service":{"workspaceHandle":"ws","name":"s","port":1},"app":{"id":"a","installed":true}}"#,
+                ),
                 1,
             )),
             // native: app requests
@@ -187,11 +200,20 @@ fn the_cross_over_reads_answer_as_the_shell_does() {
                 0,
             ),
             // native: app requests --json
-            one("requests --json", &["requests", "--json", "acme"], ok(REQUESTS), 0),
+            one(
+                "requests --json",
+                &["requests", "--json", "acme"],
+                ok(REQUESTS),
+                0,
+            ),
             // native: app requests
             stop("requests: no App", &["requests"], 2),
             // native: app requests
-            stop("requests: --since last", &["requests", "acme", "--since"], 1),
+            stop(
+                "requests: --since last",
+                &["requests", "acme", "--since"],
+                1,
+            ),
             // native: app requests
             traceback(one(
                 "requests: a size that is a word",
@@ -213,7 +235,11 @@ fn the_cross_over_reads_answer_as_the_shell_does() {
             // native: app quota
             stop("quota: no App", &["quota", "--reset"], 2),
             // native: app quota
-            stop("quota: a number that isn't", &["quota", "acme", "--burst", "1.5"], 2),
+            stop(
+                "quota: a number that isn't",
+                &["quota", "acme", "--burst", "1.5"],
+                2,
+            ),
             // native: app grants
             one("grants", &["grants", "acme"], ok(GRANTS), 0),
             // native: app grants
@@ -224,7 +250,12 @@ fn the_cross_over_reads_answer_as_the_shell_does() {
                 0,
             ),
             // native: app grants --json
-            one("grants --json", &["grants", "--json", "acme"], ok(GRANTS), 0),
+            one(
+                "grants --json",
+                &["grants", "--json", "acme"],
+                ok(GRANTS),
+                0,
+            ),
             // native: app grants
             stop("grants: an unknown flag", &["grants", "acme", "--zap"], 2),
             // native: app grants
@@ -243,7 +274,12 @@ fn the_cross_over_reads_answer_as_the_shell_does() {
             // native: app crossover
             stop("crossover: the page", &["crossover"], 0),
             // native: app keys
-            one("a refusal with its fix line", &["keys", "acme"], refused(), 3),
+            one(
+                "a refusal with its fix line",
+                &["keys", "acme"],
+                refused(),
+                3,
+            ),
             // native: app quota
             case(
                 "quota: no daemon",
@@ -565,7 +601,12 @@ fn access_answers_as_the_shell_does() {
             // native: app access
             one("access: the read", &["access", "ws"], ok(LIST), 0),
             // native: app access --json
-            one("access --json: the read", &["access", "ws", "--json"], ok(LIST), 0),
+            one(
+                "access --json: the read",
+                &["access", "ws", "--json"],
+                ok(LIST),
+                0,
+            ),
             // native: app access --json
             traceback(one(
                 "access --json: an answer that is a list",
@@ -574,9 +615,17 @@ fn access_answers_as_the_shell_does() {
                 1,
             )),
             // native: app access
-            three("access: both on", &["access", "ws", "--build", "on", "--manage", "on"], 0),
+            three(
+                "access: both on",
+                &["access", "ws", "--build", "on", "--manage", "on"],
+                0,
+            ),
             // native: app access
-            three("access: both off, switch 2 first", &["access", "ws", "--manage", "off", "--build", "off"], 0),
+            three(
+                "access: both off, switch 2 first",
+                &["access", "ws", "--manage", "off", "--build", "off"],
+                0,
+            ),
             // native: app access
             case(
                 "access: --manage alone, its note",
@@ -590,7 +639,16 @@ fn access_answers_as_the_shell_does() {
             // native: app access
             case(
                 "access: --users and the cores, the read again refused",
-                &["access", "ws", "--users", "off", "--core", "db=on", "--cores", " files = off,mail=on,"],
+                &[
+                    "access",
+                    "ws",
+                    "--users",
+                    "off",
+                    "--core",
+                    "db=on",
+                    "--cores",
+                    " files =off,mail=on,",
+                ],
                 &[],
                 vec![ok(SET), ok(SET), refused()],
                 owner_and_port,
@@ -618,15 +676,32 @@ fn access_answers_as_the_shell_does() {
                 1,
             ),
             // native: app access
-            one("access: refused", &["access", "ws", "--build", "on"], refused(), 3),
+            one(
+                "access: refused",
+                &["access", "ws", "--build", "on"],
+                refused(),
+                3,
+            ),
             // native: app access
             stop("access: no workspace", &["access", "--build", "on"], 2),
             // native: app access
-            stop("access: a core that isn't on or off", &["access", "ws", "--core", "db=yes"], 2),
+            stop(
+                "access: a core that isn't on or off",
+                &["access", "ws", "--core", "db=yes"],
+                2,
+            ),
             // native: app access
-            stop("access: --open is retired", &["access", "ws", "--open", "on"], 2),
+            stop(
+                "access: --open is retired",
+                &["access", "ws", "--open", "on"],
+                2,
+            ),
             // native: app access
-            stop("access: --build maybe", &["access", "ws", "--build", "maybe"], 2),
+            stop(
+                "access: --build maybe",
+                &["access", "ws", "--build", "maybe"],
+                2,
+            ),
             // native: app access
             stop("access: --core last", &["access", "ws", "--core"], 1),
             // native: app invite-settings

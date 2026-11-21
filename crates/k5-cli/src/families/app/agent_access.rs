@@ -36,7 +36,8 @@ pub mod usage {
         cli_name!(),
         " app access <workspace> [--build on|off] [--manage on|off] [--users on|off] [--core db|files|thread|mail|sew=on|off[,\u{2026}]]\u{2026} [--json]"
     );
-    pub const CORE: &str = "usage: --core <core>=on|off[,<core>=on|off\u{2026}] (cores: db, files, thread, mail, sew)";
+    pub const CORE: &str =
+        "usage: --core <core>=on|off[,<core>=on|off\u{2026}] (cores: db, files, thread, mail, sew)";
     pub const USERS: &str = "usage: --users on|off";
 }
 
@@ -117,9 +118,19 @@ fn access(words: &[&str]) -> Result<Ask, Stop> {
     } else {
         cores_json(&cores).ok_or_else(|| Stop::usage(usage::CORE))?
     };
-    let (build, manage, users, open) = (w.v("--build"), w.v("--manage"), w.v("--users"), w.v("--open"));
+    let (build, manage, users, open) = (
+        w.v("--build"),
+        w.v("--manage"),
+        w.v("--users"),
+        w.v("--open"),
+    );
     let json = w.has("--json");
-    if build.is_empty() && manage.is_empty() && users.is_empty() && cores.is_empty() && open.is_empty() {
+    if build.is_empty()
+        && manage.is_empty()
+        && users.is_empty()
+        && cores.is_empty()
+        && open.is_empty()
+    {
         return Ok(Ask::Show { ws, json });
     }
     if !open.is_empty() {

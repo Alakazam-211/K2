@@ -794,8 +794,10 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     }
     match args.get(1).and_then(|a| a.to_str()) {
         // `token rotate` is `cmd_app_token_rotate` ([`door_set`]).
-        Some("token" | "tokens") if args.get(2).and_then(|a| a.to_str()) != Some("rotate") => {
-            return super::skin_token::run_app(args)
+        Some("token" | "tokens") => {
+            if args.get(2).and_then(|a| a.to_str()) != Some("rotate") {
+                return super::skin_token::run_app(args);
+            }
         }
         Some("grant" | "grants") => {
             // `grants <app>` is `cmd_app_grants` ([`grants`]), `grant <app>

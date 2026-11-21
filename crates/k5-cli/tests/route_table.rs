@@ -634,8 +634,11 @@ fn app_verbs_are_its_arms(noun: &k5_cli::route::Noun) {
             .unwrap_or_else(|| panic!("cmd_app has no arm{head}"));
         let arm = &body[at + 1..];
         let arm = &arm[..arm.find(";;").expect("the arm's end")];
+        // `surfaces`, `door` and `grace|crossover` print a page of their
+        // own (`_app_<name>_usage`).
+        let page = arm.contains("; _app_") && arm.trim_end().ends_with("_usage");
         assert!(
-            arm.contains("cmd_app_"),
+            arm.contains("cmd_app_") || page,
             "cmd_app's {:?} arm does not call a function of its own: {arm}",
             verb.words
         );

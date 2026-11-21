@@ -51,7 +51,11 @@ pub fn parse(words: &[&str]) -> Option<Result<Ask, Stop>> {
 
 /// Runs it: what it printed, or the exit it ended with.
 pub fn run(ctx: &mut Ctx, ask: &Ask) -> Answer {
-    let body = ctx.call(false, "/cli/app/grants", &format!("app={}", quote(&ask.app)))?;
+    let body = ctx.call(
+        false,
+        "/cli/app/grants",
+        &format!("app={}", quote(&ask.app)),
+    )?;
     if ask.json {
         return Ok(raw(&body));
     }
@@ -81,7 +85,11 @@ fn lines(body: &[u8], o: &mut Out) -> Result<(), Raise> {
             } else {
                 "(off) "
             };
-            let caps = py::join(" ", &py::or(py::dget(&g, "caps", 10)?, py::empty_list()), 10)?;
+            let caps = py::join(
+                " ",
+                &py::or(py::dget(&g, "caps", 10)?, py::empty_list()),
+                10,
+            )?;
             let level = py::dget(&g, "maxLevel", 10)?;
             let members = py::dget(&g, "maxMembers", 10)?;
             let uploads = if py::truthy(&py::dget(&g, "uploads", 10)?) {
@@ -95,10 +103,7 @@ fn lines(body: &[u8], o: &mut Out) -> Result<(), Raise> {
                 py::s(&members)
             )
         } else if py_eq(&py::idx(&g, "kind", 11)?, &py::text("guests-chat")) {
-            format!(
-                "up to {} people",
-                py::s(&py::dget(&g, "maxMembers", 12)?)
-            )
+            format!("up to {} people", py::s(&py::dget(&g, "maxMembers", 12)?))
         } else {
             let out = py::or(py::dget(&g, "handsOut", 14)?, py::empty_list());
             format!("hands out {}", py::join(", ", &out, 14)?)

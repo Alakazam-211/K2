@@ -905,6 +905,22 @@ describe('frosted glass behind the message box', () => {
     expect(FOOTER_TINT_STOPS_OPAQUE.at(-1)).toEqual([6, 95])
   })
 
+  it('keyboard focus in the message box turns its own edge the focus colour, in every look', () => {
+    const css = src('../globals.css')
+    const start = css.indexOf('[data-k2-thread-zen] [data-zen-compose] [data-zen-compose-box]:focus-within')
+    expect(start).toBeGreaterThan(-1)
+    const rule = css.slice(start, css.indexOf('}', start) + 1)
+    // Every look, and dark Glass's soft-edge rule too (that one is heavier).
+    expect(rule).toContain(
+      'html[data-style="glass"]:not([data-scheme="light"]) [data-k2-thread-zen] [data-zen-compose] [data-zen-compose-box]:focus-within:not([data-zen-root] *)',
+    )
+    // The edge the border and the cut layers read; no second ring.
+    expect(rule).toContain('--zen-compose-edge: var(--zen-focus-ring);')
+    expect(rule).not.toMatch(/outline|box-shadow/)
+    // Garden widgets keep their own look.
+    expect(rule.split(',').every((sel) => sel.includes(':not([data-zen-root] *)'))).toBe(true)
+  })
+
   it("Glass's bottom band tints with the page's own colour, never black, in every palette", () => {
     const css = src('../globals.css')
     // Glass's own (a ticket's discussion keeps a flush band in Terminal).

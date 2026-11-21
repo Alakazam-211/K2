@@ -1330,6 +1330,11 @@ _cli_codex_tab_gate() {
 # cmd_daemon_install (which is defined before the router runs).
 _skip_conn_gate=0
 [ "${1:-}" = "daemon" ] && [ "${2:-}" = "install" ] && _skip_conn_gate=1
+# `k2 daemon <verb> -h` (help anywhere before a bare --) only prints help:
+# the router answers it, so it needs no connection either.
+if [ "${1:-}" = "daemon" ]; then
+    for _a in "${@:2}"; do [ "$_a" = "--" ] && break; case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done
+fi
 # Which `k2 update` form the words ask for (cmd_update_v2 dispatches on the
 # same answer): help when -h/--help is anywhere before a bare `--`; else
 # list for a --list anywhere; else the last of --app and --cli (app when

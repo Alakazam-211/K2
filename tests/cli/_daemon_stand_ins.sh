@@ -35,6 +35,7 @@
 #   ds_unit user active enabled set the unit (scope, state, enabled)
 #   ds_run <words...>           runs `k2 daemon <words...>`; OUT ERR RC
 #   DS_STDIN=<text> ds_run ...  the same with that text on stdin
+#   DS_NOCONN=1 ds_run ...      the same with no port or token given
 #   ds_calls                    the service calls the row made, one a line
 #   ok / bad / eq               the counters
 
@@ -243,9 +244,13 @@ ds_mac() {
 ds_run() {
     ds_guard
     printf '%s' "${DS_STDIN:-}" >"$DS_WORK/stdin"
+    local conn=(K2_PORT="$DS_PORT" K2_HOOK_TOKEN="owner-tok-4242")
+    # DS_NOCONN=1: no port or token in the environment (and, when the row
+    # took the files away, none on disk): no connection to K2 at all.
+    [ "${DS_NOCONN:-0}" = 1 ] && conn=()
     set +e
-    OUT="$(env -i HOME="$DS_HOME" PATH="$DS_PATH" TMPDIR="$DS_WORK/tmp" LC_ALL=C \
-        K2_PORT="$DS_PORT" K2_HOOK_TOKEN="owner-tok-4242" \
+    # ${conn[@]+...}: an empty array under set -u on bash 3.2.
+    OUT="$(env -i HOME="$DS_HOME" PATH="$DS_PATH" TMPDIR="$DS_WORK/tmp" LC_ALL=C ${conn[@]+"${conn[@]}"} \
         "$K2" daemon "$@" <"$DS_WORK/stdin" 2>"$DS_WORK/err")"
     RC=$?
     set -e

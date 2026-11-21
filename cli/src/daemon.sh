@@ -189,6 +189,47 @@ _daemon_status_json() {
     printf '{%s}\n' "$out"
 }
 
+# The daemon row's usage: on stderr for a word it has no arm for (exit 1),
+# on stdout for -h or --help (exit 0).
+_daemon_usage() {
+    echo "Usage: k2 daemon <status|start|stop|restart|survive|log|install|uninstall>"
+    echo ""
+    echo "  survive [on|off|status]"
+    echo "    On by default: agents keep running through K2 updates, restarts and crashes"
+    echo "    (the daemon's terminal.ptyd setting; same as Settings → General → Server)."
+    echo ""
+    echo "  install [--version <x.y.z>] [--bin-dir <dir>] [--manifest-url <url>]"
+    echo "          [--no-service] [--dry-run]"
+    echo "    Install the STANDALONE (headless, no-GUI) daemon binary from a"
+    echo "    signed GitHub release. Minisign-verifies the binary against the"
+    echo "    embedded updater pubkey, installs to ~/.local/bin by default, and"
+    echo "    writes a systemd (Linux) / launchd (macOS) supervisor unit so a"
+    echo "    crash respawns it. --dry-run prints the plan without downloading."
+    echo ""
+    echo "  stop"
+    echo "    Quit the daemon. This ENDS its agent sessions. macOS: launchctl unload;"
+    echo "    Linux: systemctl [--user] stop <unit>; Windows: POST /cli/daemon/stop."
+    echo "  stop --keep-agents"
+    echo "    Linux under systemd: a maintenance stop. The daemon stops, its agents keep"
+    echo "    running and the next k2 daemon start takes them back (as a restart does)."
+    echo "    Until then their k2 commands fail. A system unit: run the sudo systemctl"
+    echo "    stop it prints within 2 minutes."
+    echo ""
+    echo "  restart [--sessions] [--host <base-url>] [--token-stdin | --token <token>] [--wait]"
+    echo "    Default: restart the LOCAL daemon (macOS launchctl kickstart, Linux"
+    echo "    systemctl restart). Agent sessions hosted by k2-ptyd keep running."
+    echo "    --sessions: end the agent sessions too (they start fresh)."
+    echo "    --host:  restart a REMOTE daemon with no GUI by POSTing"
+    echo "             <base-url>/cli/daemon/restart (e.g. --host https://<sub>.k2.dev)."
+    echo "             Authorizes with the owner token OR an Owner/Admin connect-user"
+    echo "             session token; the token defaults to ~/.k2/daemon.token."
+    echo "    --token-stdin: read the token from stdin. A token on the command line"
+    echo "             (--token <token>) is visible to other users on this machine."
+    echo "    --wait:  after the restart is accepted, poll <base>/boot-status every"
+    echo "             ~2s up to ~60s until phase=ready, then print the version it"
+    echo "             came back on. Timeout → message + non-zero exit."
+}
+
 cmd_daemon_status() {
     local as_json=0
     [ "${1:-}" = "--json" ] && as_json=1
@@ -458,9 +499,10 @@ cmd_daemon_restart() {
             # k2-ptyd P57: a restart keeps agent sessions running; with
             # --sessions they are ended and start fresh.
             --sessions) end_agents=1; shift ;;
-            --host)  _need_value "$@"; host="${2:-}";  shift 2 ;;
+            # A value flag with no word after it is a usage error (exit 2).
+            --host)  [ $# -ge 2 ] || { echo "daemon restart: --host needs a value" >&2; exit 2; }; host="$2"; shift 2 ;;
             --host=*) host="${1#--host=}"; shift ;;
-            --token) _need_value "$@"; token="${2:-}"; shift 2 ;;
+            --token) [ $# -ge 2 ] || { echo "daemon restart: --token needs a value" >&2; exit 2; }; token="$2"; shift 2 ;;
             --token=*) token="${1#--token=}"; shift ;;
             --token-stdin) token_stdin=1; shift ;;
             --wait) wait=1; shift ;;
@@ -588,6 +630,13 @@ cmd_daemon_restart() {
 # keep running through daemon updates, restarts and crashes; quitting the
 # daemon still ends them. The switch is the daemon's own `terminal.ptyd`
 # setting (Settings → General → Server shows the same toggle).
+_daemon_survive_help() {
+    echo "Usage: k2 daemon survive [on|off|status]"
+    echo "  On by default: agents keep running through K2 updates, restarts and"
+    echo "  crashes (macOS and Linux). Quitting the daemon still ends them."
+    echo "  'off' makes new sessions stop with the daemon again."
+}
+
 cmd_daemon_survive() {
     local sub="${1:-status}" resp
     case "$sub" in
@@ -637,10 +686,7 @@ if "ptyd" in b:
 '
             ;;
         -h|--help|help)
-            echo "Usage: k2 daemon survive [on|off|status]"
-            echo "  On by default: agents keep running through K2 updates, restarts and"
-            echo "  crashes (macOS and Linux). Quitting the daemon still ends them."
-            echo "  'off' makes new sessions stop with the daemon again."
+            _daemon_survive_help
             ;;
         *)
             echo "Usage: k2 daemon survive [on|off|status]" >&2
@@ -692,8 +738,10 @@ _daemon_unit_off() {
 # is removed. Removing the port and token files under a running daemon
 # leaves it running with no way for k2 to reach it.
 cmd_daemon_uninstall() {
-    local force=0 su="" scope="" unit=""
-    [ "${1:-}" = "--yes" ] || [ "${1:-}" = "-y" ] && force=1
+    local force=0 su="" scope="" unit="" a
+    for a in "$@"; do
+        case "$a" in --yes|-y) force=1 ;; esac
+    done
     if [ "$(_daemon_os)" = "linux" ]; then
         su=$(_daemon_linux_unit) || su=""
         if [ -n "$su" ]; then

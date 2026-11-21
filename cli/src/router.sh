@@ -499,6 +499,13 @@ case "${1:-help}" in
         esac
         ;;
     daemon)
+        # -h or --help anywhere before a bare -- prints help and does
+        # nothing: no service call, no request, no prompt. survive prints
+        # its own help; install keeps its own.
+        if [ "${2:-}" != "install" ] && _wants_help "${@:2}"; then
+            if [ "${2:-}" = "survive" ]; then _daemon_survive_help; else _daemon_usage; fi
+            exit 0
+        fi
         # A bare `k2 daemon` is `k2 daemon status` (the default below), as a
         # bare `k2 daemon survive` is its status. It has one word to shift.
         case "${2:-status}" in
@@ -511,42 +518,7 @@ case "${1:-help}" in
             install)   shift 2; cmd_daemon_install "$@" ;;
             uninstall) shift 2; cmd_daemon_uninstall "$@" ;;
             *)
-                echo "Usage: k2 daemon <status|start|stop|restart|survive|log|install|uninstall>" >&2
-                echo "" >&2
-                echo "  survive [on|off|status]" >&2
-                echo "    On by default: agents keep running through K2 updates, restarts and crashes" >&2
-                echo "    (the daemon's terminal.ptyd setting; same as Settings → General → Server)." >&2
-                echo "" >&2
-                echo "  install [--version <x.y.z>] [--bin-dir <dir>] [--manifest-url <url>]" >&2
-                echo "          [--no-service] [--dry-run]" >&2
-                echo "    Install the STANDALONE (headless, no-GUI) daemon binary from a" >&2
-                echo "    signed GitHub release. Minisign-verifies the binary against the" >&2
-                echo "    embedded updater pubkey, installs to ~/.local/bin by default, and" >&2
-                echo "    writes a systemd (Linux) / launchd (macOS) supervisor unit so a" >&2
-                echo "    crash respawns it. --dry-run prints the plan without downloading." >&2
-                echo "" >&2
-                echo "  stop" >&2
-                echo "    Quit the daemon. This ENDS its agent sessions. macOS: launchctl unload;" >&2
-                echo "    Linux: systemctl [--user] stop <unit>; Windows: POST /cli/daemon/stop." >&2
-                echo "  stop --keep-agents" >&2
-                echo "    Linux under systemd: a maintenance stop. The daemon stops, its agents keep" >&2
-                echo "    running and the next k2 daemon start takes them back (as a restart does)." >&2
-                echo "    Until then their k2 commands fail. A system unit: run the sudo systemctl" >&2
-                echo "    stop it prints within 2 minutes." >&2
-                echo "" >&2
-                echo "  restart [--sessions] [--host <base-url>] [--token-stdin | --token <token>] [--wait]" >&2
-                echo "    Default: restart the LOCAL daemon (macOS launchctl kickstart, Linux" >&2
-                echo "    systemctl restart). Agent sessions hosted by k2-ptyd keep running." >&2
-                echo "    --sessions: end the agent sessions too (they start fresh)." >&2
-                echo "    --host:  restart a REMOTE daemon with no GUI by POSTing" >&2
-                echo "             <base-url>/cli/daemon/restart (e.g. --host https://<sub>.k2.dev)." >&2
-                echo "             Authorizes with the owner token OR an Owner/Admin connect-user" >&2
-                echo "             session token; the token defaults to ~/.k2/daemon.token." >&2
-                echo "    --token-stdin: read the token from stdin. A token on the command line" >&2
-                echo "             (--token <token>) is visible to other users on this machine." >&2
-                echo "    --wait:  after the restart is accepted, poll <base>/boot-status every" >&2
-                echo "             ~2s up to ~60s until phase=ready, then print the version it" >&2
-                echo "             came back on. Timeout → message + non-zero exit." >&2
+                _daemon_usage >&2
                 exit 1
                 ;;
         esac

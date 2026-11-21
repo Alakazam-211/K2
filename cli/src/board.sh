@@ -614,7 +614,7 @@ cmd_store() {
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --json) if [ -n "${2:-}" ] && [ "${2:0:1}" != "-" ]; then doc_json="$2"; shift 2; else as_json=true; shift; fi ;;
-                    --id) doc_id="${2:-}"; shift 2 ;;
+                    --id) _need_value "$@"; doc_id="${2:-}"; shift 2 ;;
                     *) _db_err "usage" "unexpected '$1'"; exit 2 ;;
                 esac
             done
@@ -628,8 +628,8 @@ cmd_store() {
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --json) as_json=true; shift ;;
-                    --limit) limit="${2:-}"; shift 2 ;;
-                    --where) shift 2 ;;
+                    --limit) _need_value "$@"; limit="${2:-}"; shift 2 ;;
+                    --where) _need_value "$@"; shift 2 ;;
                     *) _db_err "usage" "unexpected '$1'"; exit 2 ;;
                 esac
             done

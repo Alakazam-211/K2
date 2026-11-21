@@ -724,13 +724,13 @@ print("Let this agent manage Postgres versions: %s for %s%s" % ("on" if on else 
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --json) as_json=true; shift ;;
-                    --id) client_id="${2:-}"; shift 2 ;;
-                    --name) name="${2:-}"; shift 2 ;;
-                    --db-access|--access) access="${2:-}"; shift 2 ;;
+                    --id) _need_value "$@"; client_id="${2:-}"; shift 2 ;;
+                    --name) _need_value "$@"; name="${2:-}"; shift 2 ;;
+                    --db-access|--access) _need_value "$@"; access="${2:-}"; shift 2 ;;
                     --test) test=true; shift ;;
-                    --major) major="${2:-}"; shift 2 ;;
+                    --major) _need_value "$@"; major="${2:-}"; shift 2 ;;
                     --major=*) major="${1#*=}"; shift ;;
-                    --cluster) cluster="${2:-}"; shift 2 ;;
+                    --cluster) _need_value "$@"; cluster="${2:-}"; shift 2 ;;
                     --cluster=*) cluster="${1#*=}"; shift ;;
                     *) _db_err "usage" "unexpected '$1'"; exit 2 ;;
                 esac
@@ -769,10 +769,10 @@ print("Let this agent manage Postgres versions: %s for %s%s" % ("on" if on else 
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --json) as_json=true; shift ;;
-                    --app) u_app="${2:-}"; shift 2 ;;
+                    --app) _need_value "$@"; u_app="${2:-}"; shift 2 ;;
                     --all) u_all=true; shift ;;
                     --all-workspace-dbs) u_allws=true; shift ;;
-                    --to) u_to="${2:-}"; shift 2 ;;
+                    --to) _need_value "$@"; u_to="${2:-}"; shift 2 ;;
                     --to=*) u_to="${1#*=}"; shift ;;
                     --check) u_check=true; shift ;;
                     --rollback) u_rb=true; shift ;;
@@ -786,7 +786,7 @@ print("Let this agent manage Postgres versions: %s for %s%s" % ("on" if on else 
                     --live) u_live=true; shift ;;
                     --switch) u_switch=true; shift ;;
                     --abort) u_abort=true; shift ;;
-                    --prepare-live) u_prep="${2:-}"; shift 2 ;;
+                    --prepare-live) _need_value "$@"; u_prep="${2:-}"; shift 2 ;;
                     --prepare-live=*) u_prep="${1#*=}"; shift ;;
                     --replica-identity-full) u_rif=true; shift ;;
                     --status) u_status=true; shift ;;
@@ -925,9 +925,9 @@ else:
                     while [ $# -gt 0 ]; do
                         case "$1" in
                             --json) as_json=true; shift ;;
-                            --name) c_name="${2:-}"; shift 2 ;;
+                            --name) _need_value "$@"; c_name="${2:-}"; shift 2 ;;
                             --name=*) c_name="${1#*=}"; shift ;;
-                            --port) c_port="${2:-}"; shift 2 ;;
+                            --port) _need_value "$@"; c_port="${2:-}"; shift 2 ;;
                             --port=*) c_port="${1#*=}"; shift ;;
                             --wal-archive) c_wal=1; shift ;;
                             *) _db_err "usage" "unexpected '$1' — k2 db cluster create <major> --name <name> [--port <port>] [--wal-archive]"; exit 2 ;;
@@ -971,7 +971,7 @@ else:
                     --reveal) reveal=true; shift ;;
                     --as) ref_as="${2:-}"; shift 2 || { _db_err "usage" "--as needs a name"; exit 2; } ;;
                     --as=*) ref_as="${1#*=}"; shift ;;
-                    --actor) actor="${2:-}"; shift 2 ;;
+                    --actor) _need_value "$@"; actor="${2:-}"; shift 2 ;;
                     --db) _db_need_db_value "$@"; db_sel="$2"; shift 2 ;;
                     --db=*) db_sel="${1#*=}"; shift ;;
                     *) _db_err "usage" "unexpected '$1'"; exit 2 ;;
@@ -995,10 +995,10 @@ else:
                 case "$1" in
                     --) shift; break ;;
                     --test) test=true; shift ;;
-                    --actor) actor="${2:-}"; shift 2 ;;
+                    --actor) _need_value "$@"; actor="${2:-}"; shift 2 ;;
                     --db) _db_need_db_value "$@"; db_sel="$2"; shift 2 ;;
                     --db=*) db_sel="${1#*=}"; shift ;;
-                    --as) env_as="${2:-}"; shift 2 ;;
+                    --as) _need_value "$@"; env_as="${2:-}"; shift 2 ;;
                     *) _db_err "usage" "k2 db run [--db <name>] [--test [--actor migrator]] [--as NAME] -- <command…> (unexpected '$1')"; exit 2 ;;
                 esac
             done
@@ -1017,7 +1017,7 @@ else:
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --json) as_json=true; shift ;;
-                    --dir) dir="${2:-}"; shift 2 ;;
+                    --dir) _need_value "$@"; dir="${2:-}"; shift 2 ;;
                     --db) _db_need_db_value "$@"; db_sel="$2"; shift 2 ;;
                     --db=*) db_sel="${1#*=}"; shift ;;
                     *) _db_err "usage" "unexpected '$1'"; exit 2 ;;
@@ -1029,7 +1029,7 @@ else:
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --json) as_json=true; shift ;;
-                    --out) out="${2:-}"; shift 2 ;;
+                    --out) _need_value "$@"; out="${2:-}"; shift 2 ;;
                     --db) _db_need_db_value "$@"; db_sel="$2"; shift 2 ;;
                     --db=*) db_sel="${1#*=}"; shift ;;
                     *) _db_err "usage" "unexpected '$1'"; exit 2 ;;
@@ -1085,8 +1085,8 @@ else:
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --json) as_json=true; shift ;;
-                    --db) db_spec="${2:-}"; shift 2 ;;
-                    --level) level="${2:-}"; shift 2 ;;
+                    --db) _need_value "$@"; db_spec="${2:-}"; shift 2 ;;
+                    --level) _need_value "$@"; level="${2:-}"; shift 2 ;;
                     --manage) manage=true; shift ;;
                     --relation)
                         if [ $# -lt 2 ] || [ -z "${2:-}" ] || [ "${2:0:1}" = "-" ]; then
@@ -1121,7 +1121,7 @@ else:
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --json) as_json=true; shift ;;
-                    --db) db_spec="${2:-}"; shift 2 ;;
+                    --db) _need_value "$@"; db_spec="${2:-}"; shift 2 ;;
                     -*) _db_err "usage" "unexpected '$1'"; exit 2 ;;
                     *)
                         if [ -z "$grantee" ]; then grantee="$1"; shift
@@ -1136,8 +1136,8 @@ else:
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --json) as_json=true; shift ;;
-                    --role) role="${2:-}"; shift 2 ;;
-                    --db) db_spec="${2:-}"; shift 2 ;;
+                    --role) _need_value "$@"; role="${2:-}"; shift 2 ;;
+                    --db) _need_value "$@"; db_spec="${2:-}"; shift 2 ;;
                     *) _db_err "usage" "unexpected '$1'"; exit 2 ;;
                 esac
             done

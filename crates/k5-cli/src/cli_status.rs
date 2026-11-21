@@ -31,7 +31,7 @@
 use crate::out::json::{self, Options, Text, Value};
 use crate::route::{Noun, Owner};
 use crate::transport::{Auth, Call, Client, Error, Response};
-use k2_client::brand::PRODUCT_NAME;
+use k2_client::brand::{CLI_NAME, PRODUCT_NAME};
 use std::collections::BTreeMap;
 
 /// The owner's read of the counts.
@@ -315,6 +315,15 @@ impl Status {
 
 fn obj(pairs: Vec<(&str, Value)>) -> Value {
     Value::Object(pairs.into_iter().map(|(k, v)| (Text::from(k), v)).collect())
+}
+
+/// The line the shell CLI's `cli)` arm prints for any `cli` line
+/// (cli/src/router.sh), without its newline: the command's name on both
+/// sides. The front prints it for `cli` with a word it has no form for
+/// ([`crate::front::Route::CliWord`]), on stderr, exit 2.
+pub fn shell_line() -> String {
+    let n = CLI_NAME;
+    format!("{n} cli status is answered by the `{n}` binary: run {n} cli status")
 }
 
 /// `k5 cli --help`.

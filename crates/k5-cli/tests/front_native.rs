@@ -614,7 +614,7 @@ fn inside_a_session_with_no_passport_the_call_is_counted() {
 }
 
 #[test]
-fn cli_help_is_answered_here_and_other_forms_reach_the_shell_s_pointer() {
+fn cli_help_and_the_shell_s_line_for_other_words_are_answered_here() {
     let rig = Rig::new("st-help");
     for args in [
         &["cli"][..],

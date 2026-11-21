@@ -4,7 +4,8 @@
 //! The route table ([`crate::route`]) says who answers. Its `Native` rows
 //! are the version (with any words after it; exactly `--version --check`
 //! is the binary's check), `cli`
-//! (`cli status [--json]` and its help), `study`, and the families in
+//! (`cli status [--json]`, its help, and the shell's one line for any
+//! other word), `study`, and the families in
 //! [`crate::families`], each run by its row's code ([`Route::Family`]). A
 //! form the front's code does not take falls through, as does everything
 //! else, byte for byte ([`crate::fallthrough`]).
@@ -67,6 +68,10 @@ pub enum Route {
     /// `cli` alone, `cli --help`, `cli -h`, `cli help`, and `cli status`
     /// with `--help` or `-h`.
     CliHelp,
+    /// `cli` with any other words: the line the shell's `cli)` arm prints
+    /// ([`crate::cli_status::shell_line`]), on stderr, exit 2, nothing
+    /// sent.
+    CliWord,
     /// A family's command line: a `Native` row, or a `Native` verb row,
     /// with no `-h` or `--help` in it (`setup`: nor the word `help`). The
     /// row's [`Noun::run`] answers it, and may still hand it to the shell.
@@ -242,7 +247,7 @@ fn native(noun: &'static Noun, args: &[OsString]) -> Route {
             [] | ["--help" | "-h" | "help"] | ["status", "--help" | "-h"] => Route::CliHelp,
             ["status"] => Route::CliStatus { json: false },
             ["status", "--json"] => Route::CliStatus { json: true },
-            _ => captured(),
+            _ => Route::CliWord,
         };
     }
     // A family's help is a page or the shell's, never the family's.
@@ -423,7 +428,7 @@ mod tests {
         ] {
             assert_eq!(route(&args(help)), Route::CliHelp, "{help:?}");
         }
-        // Any other form is the shell's: its `cli` arm points here.
+        // Any other form is the shell's line, which the front prints.
         for other in [
             &["cli", "status", "--json", "x"][..],
             &["cli", "--json", "status"],
@@ -431,8 +436,10 @@ mod tests {
             &["cli", "usage"],
             &["cli", ""],
             &["cli", "Status"],
+            &["cli", "x", "--help"],
+            &["cli", "x", "-h"],
         ] {
-            assert_eq!(route(&args(other)), Route::Fallthrough, "{other:?}");
+            assert_eq!(route(&args(other)), Route::CliWord, "{other:?}");
         }
     }
 

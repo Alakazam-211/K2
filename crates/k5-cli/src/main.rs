@@ -1,5 +1,5 @@
 //! `k5-cli`: the k5 command line's front. It answers `--version`,
-//! `--version --check`, `cli status`, the families in
+//! `--version --check`, `cli status` (and `cli` with any other word), the families in
 //! [`k5_cli::families`], the spec verbs ([`k5_cli::spec`]), and the study
 //! and help pages it can print as the shell does ([`k5_cli::pages`]) itself, and hands every other verb to
 //! the shell CLI it carries ([`k5_cli::fallthrough`]). Before a verb
@@ -159,6 +159,10 @@ fn main() {
         Route::VersionCheck => version_check(&args),
         Route::CliStatus { json } => cli_status(&args, json),
         Route::CliHelp => print(cli_status::HELP, Exit::Ok),
+        Route::CliWord => {
+            out::stderr_line(&cli_status::shell_line());
+            Exit::Usage
+        }
         // A family's code (its row's `run`, in its module): a form it
         // hands back goes to the shell before anything is printed or sent.
         Route::Family(noun) => (noun.run)(&args).unwrap_or_else(|| shell(who, &args)),

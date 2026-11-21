@@ -9181,6 +9181,9 @@ except Exception as e:
 cmd_agent_complete() {
     # Sub-agent completion: moves active work to done for human review
     # (Workspace States / auto-merge-by-source retired).
+    # Help wins: -h or --help anywhere prints the agent help and completes
+    # nothing (the loop skipped it, and a flag took it as its value).
+    if _wants_help "$@"; then cmd_help_agent; return 0; fi
     local agent="" file=""
     while [ $# -gt 0 ]; do
         case "$1" in

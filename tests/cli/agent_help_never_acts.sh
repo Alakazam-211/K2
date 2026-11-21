@@ -197,6 +197,15 @@ page agent.txt agent update --name qa --field --help --value v
 echo "== agent update: the plain update still sends =="
 sends 0 '^POST /cli/agent/update ' agent update qa --field f --value v
 
+echo "== agent complete: help anywhere is the agent page =="
+page agent.txt agent complete -h
+page agent.txt agent complete --help
+page agent.txt agent complete --agent qa --file f.md -h
+page agent.txt agent complete --agent qa --file --help
+page agent.txt agent complete --agent -h --file f.md
+echo "== agent complete: the plain complete still sends =="
+sends 0 '^POST /cli/agent/complete ' agent complete --agent qa --file f.md
+
 echo ""
 echo "agent_help_never_acts: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

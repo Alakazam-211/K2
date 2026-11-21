@@ -2720,7 +2720,10 @@ cli_post_form_uds() {
     local body=""
     for param in "$@"; do body="${body}${body:+&}${param}"; done
     local _K2_CFG="" out rc=0 t0="${_K2_REQ_T0:-$SECONDS}"
-    _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
+    # 0.46.17: no passport, no Authorization line (never an empty Bearer).
+    if [ -n "${SCOPED_TOKEN:-}" ]; then
+        _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
+    fi
     _k2_cfg_add data-raw "$body"
     out="$(r=0; _k2_curl "$_K2_CFG" -s -X POST --unix-socket "$(_hook_sock)" "http://localhost${endpoint}" \
         --connect-timeout 5 --max-time "${_K2_POST_MAX_TIME:-30}" \

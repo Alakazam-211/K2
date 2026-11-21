@@ -10,6 +10,10 @@
 # started (K2_API_CELL=1) done completes the session: --reason still goes
 # out, an unknown flag exits 2 and sends nothing.
 #
+# On the session's cell socket with no passport, done sends no
+# Authorization header at all. Regression (0.46.17): it sent an empty
+# `Authorization: Bearer `. The stub's socket logs each request's raw head.
+#
 # Hermetic: temp HOME, a stub daemon on loopback that logs each request's
 # path and form, no real ~/.k2. Loud.
 set -euo pipefail
@@ -24,10 +28,13 @@ source "$SCRIPT_DIR/_hermetic_cli.sh"
 hermetic_cli_env
 
 WORKDIR="$(mktemp -d -t k2-done-flags-XXXXXX)"
+# Short: a Unix socket path must stay under ~104 bytes.
+SOCKDIR="$(mktemp -d /tmp/k2dn-XXXXXX)"
+SOCK="$SOCKDIR/cell.sock"
 STUB_PID=""
 cleanup() {
     [ -n "$STUB_PID" ] && kill "$STUB_PID" 2>/dev/null || true
-    rm -rf "$WORKDIR"
+    rm -rf "$WORKDIR" "$SOCKDIR"
     hermetic_cli_cleanup
 }
 trap cleanup EXIT
@@ -37,13 +44,51 @@ fail=0
 ok()  { echo "  PASS: $1"; pass=$((pass + 1)); }
 bad() { echo "  FAIL: $1" >&2; fail=$((fail + 1)); }
 
-python3 - "$WORKDIR" <<'PY' &
-import json, os, sys
+python3 - "$WORKDIR" "$SOCK" <<'PY' &
+import json, os, socket, sys, threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
-root = sys.argv[1]
+root, sock_path = sys.argv[1], sys.argv[2]
 log = os.path.join(root, "requests.jsonl")
+uds_log = os.path.join(root, "uds.jsonl")
+
+# The cell socket: each request's raw head and body, then a 200.
+def serve_uds(conn):
+    try:
+        data = b""
+        while b"\r\n\r\n" not in data:
+            chunk = conn.recv(65536)
+            if not chunk:
+                return
+            data += chunk
+        head, _, rest = data.partition(b"\r\n\r\n")
+        n = 0
+        for line in head.split(b"\r\n")[1:]:
+            k, _, v = line.partition(b":")
+            if k.strip().lower() == b"content-length":
+                n = int(v.strip())
+        while len(rest) < n:
+            chunk = conn.recv(65536)
+            if not chunk:
+                break
+            rest += chunk
+        with open(uds_log, "a") as f:
+            f.write(json.dumps({"head": head.decode(), "body": rest.decode()}) + "\n")
+        body = b'{"success": true}'
+        conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n" % len(body) + body)
+    finally:
+        conn.close()
+
+def uds_loop():
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.bind(sock_path)
+    s.listen(8)
+    while True:
+        c, _ = s.accept()
+        threading.Thread(target=serve_uds, args=(c,), daemon=True).start()
+
+threading.Thread(target=uds_loop, daemon=True).start()
 
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a):
@@ -77,7 +122,7 @@ for _ in $(seq 1 100); do
     [ -s "$WORKDIR/stub.port" ] && break
     sleep 0.05
 done
-[ -s "$WORKDIR/stub.port" ] || { echo "FAIL: stub daemon never bound" >&2; exit 1; }
+[ -s "$WORKDIR/stub.port" ] && [ -S "$SOCK" ] || { echo "FAIL: stub daemon never bound" >&2; exit 1; }
 export K2_PORT="$(cat "$WORKDIR/stub.port")"
 export K2_AGENT_NAME=tester
 
@@ -88,6 +133,7 @@ run() {
     while [ "$1" != "--" ]; do envs+=("$1"); shift; done
     shift
     : > "$WORKDIR/requests.jsonl"
+    : > "$WORKDIR/uds.jsonl"
     RC=0
     env ${envs[@]+"${envs[@]}"} "$K2_CLI" "$@" >"$WORKDIR/out" 2>"$WORKDIR/err" || RC=$?
     OUT="$(cat "$WORKDIR/out")"
@@ -151,6 +197,38 @@ sends "API cell: done" '/cli/session/complete {}' "${CELL[@]}" -- done
 sends "API cell: done --reason" '/cli/session/complete {"reason": "no answer needed"}' "${CELL[@]}" -- done --reason "no answer needed"
 refused "API cell: done --bogus" "${CELL[@]}" -- done --bogus
 refused "API cell: done -x" "${CELL[@]}" -- done -x
+
+echo "== on the cell socket with no passport: no Authorization header =="
+# The owner token on disk passes the connection gate; it is never sent on
+# the session's socket, and with no passport nothing stands in for it.
+mkdir -p "$HOME/.k2"
+printf 'owner-secret-token\n' > "$HOME/.k2/heartbeat.token"
+NOPASS=(-u K2_HOOK_TOKEN K2_API_CELL=1 K2_HOOK_SOCK="$SOCK")
+for form in "" "--reason|no passport here"; do
+    args=(done)
+    label="API cell, no passport: done"
+    if [ -n "$form" ]; then args+=("${form%%|*}" "${form#*|}"); label="$label --reason"; fi
+    run "${NOPASS[@]}" -- "${args[@]}"
+    heads="$(python3 -c '
+import json, sys
+for l in open(sys.argv[1]):
+    if l.strip():
+        r = json.loads(l)
+        print(r["head"].replace("\r\n", "\n"))
+        print("body=" + r["body"])
+        print("--")
+' "$WORKDIR/uds.jsonl")"
+    want_body="body="
+    [ -n "$form" ] && want_body="body=reason=no%20passport%20here"
+    if [ "$RC" = 0 ] && [ -z "$REQS" ] && [ "$(grep -c '^POST /cli/session/complete HTTP/1.1$' <<<"$heads")" = 1 ] &&
+        ! grep -qi '^authorization:' <<<"$heads" && ! grep -q 'owner-secret-token' <<<"$heads" &&
+        grep -qx "$want_body" <<<"$heads"; then
+        ok "$label: one POST on the socket, no Authorization header, the owner token never sent"
+    else
+        bad "$label: rc=$RC tcp=[$REQS] socket=[$heads] stderr=[$ERR]"
+    fi
+done
+rm -f "$HOME/.k2/heartbeat.token"
 
 echo ""
 echo "Results: $pass passed, $fail failed"

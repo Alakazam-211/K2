@@ -25,6 +25,10 @@
 #     named --help; `set-label <id> --help` set the label to --help;
 #     `compact --help` looked for a session named --help; `archives
 #     --help` listed the archives instead.
+#   - `k2 notifications email status --help` asked for the status, `sender
+#     resume --help` resumed a sender named --help, `system-sender set
+#     --help` set it, `clear --help` cleared it, `test --help` sent the
+#     test mail, `relay rm --help` removed a relay named --help.
 #
 # Each section: every help form, with --help and with -h, prints exactly
 # the page's cli/text/help file and the stub daemon records nothing; the
@@ -247,6 +251,25 @@ page sessions.txt sessions set-label @H
 page sessions.txt sessions set-label sess-1 @H
 page sessions.txt sessions set-label sess-1 new label @H
 sends '^POST /cli/sessions/label ' sessions set-label sess-1 new label
+
+echo "== notifications =="
+page notifications.txt notifications @H email
+page notifications.txt notifications email status @H
+page notifications.txt notifications email status --json @H
+page notifications.txt notifications email sender resume @H
+page notifications.txt notifications email sender resume s1 @H
+page notifications.txt notifications email system-sender show @H
+page notifications.txt notifications email system-sender set @H
+page notifications.txt notifications email system-sender set s1 @H
+page notifications.txt notifications email system-sender clear @H
+page notifications.txt notifications email system-sender test @H
+page notifications.txt notifications email relay list @H
+page notifications.txt notifications email relay rm @H
+page notifications.txt notifications email relay rm r1 @H
+page notifications.txt notifications email relay test r1 --from @H
+page notifications.txt notifications email settings --owner-email @H
+sends '^POST /cli/notifications/email/relay/rm ' notifications email relay rm r1
+sends '^POST /cli/notifications/email/system-sender/clear ' notifications email system-sender clear
 
 echo ""
 echo "help_acts_10: $pass passed, $fail failed"

@@ -984,6 +984,11 @@ EOF
 }
 
 cmd_notifications() {
+    # 0.46.17: -h/--help anywhere before a bare -- prints the help and sends
+    # nothing (`email sender resume --help` resumed a sender named --help,
+    # `email relay rm --help` removed a relay of that name, and `email
+    # system-sender set|clear|test --help` acted).
+    if _wants_help "$@"; then _notifications_usage; return 0; fi
     case "${1:-}" in
         email) shift; cmd_notifications_email "$@" ;;
         ""|-h|--help|help) _notifications_usage ;;

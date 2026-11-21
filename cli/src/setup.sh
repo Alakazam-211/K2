@@ -11,6 +11,10 @@ EOF
 }
 
 cmd_setup() {
+    # 0.46.17: -h/--help anywhere before a bare -- prints the help and sends
+    # nothing (`setup skip --help` skipped a step named --help, and a flag
+    # that takes a value took the help word).
+    if _wants_help "$@"; then _setup_usage; return 0; fi
     local sub="" as_json=0 row="" kessel_tool="" kessel_name="" kessel_handle="" kessel_about="" have_about=0 kessel_group=""
     while [ $# -gt 0 ]; do
         case "$1" in

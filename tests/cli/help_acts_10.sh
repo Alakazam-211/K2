@@ -18,6 +18,9 @@
 #   - `k2 reviews --help` asked for the review list (it reads no words).
 #   - `k2 trust-folders --help` sent the trust POST (it reads no words).
 #   - `k2 glossary --help` looked up a term named --help.
+#   - `k2 setup skip --help` skipped a step named --help, and `--name`,
+#     `--tool`, `--about`, `--handle`, `--focus-group` and `--attach` took
+#     the help word.
 #
 # Each section: every help form, with --help and with -h, prints exactly
 # the page's cli/text/help file and the stub daemon records nothing; the
@@ -213,6 +216,18 @@ page glossary.txt glossary @H
 page glossary.txt glossary inbox @H
 sends '^GET /cli/glossary/get ' glossary inbox
 sends '^GET /cli/glossary/list ' glossary
+
+echo "== setup =="
+page setup.txt setup @H
+page setup.txt setup skip @H
+page setup.txt setup skip dev_tools @H
+page setup.txt setup hide @H
+page setup.txt setup kessel --name @H
+page setup.txt setup kessel --tool claude --handle @H
+page setup.txt setup chief-of-staff --name Ada --about @H --tool claude
+page setup.txt setup chief-of-staff --focus-group @H
+page setup.txt setup agent-reports --attach @H
+sends '^POST /cli/first-run/skip \{"row": "dev_tools"\}' setup skip dev_tools
 
 echo ""
 echo "help_acts_10: $pass passed, $fail failed"

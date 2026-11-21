@@ -184,6 +184,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **`k2 reviews --help` prints a help page and asks nothing.** Before, `k2 reviews` read no words, so `--help` or `-h` asked K2 for the review list. The page says what the list shows and points to `k2 review --help`; it needs no connection to K2.
 - **`k2 trust-folders --help` prints a help page and changes nothing.** Before, `k2 trust-folders` read no words, so `--help` or `-h` told the coding tools again to trust every workspace folder. It needs no connection to K2.
 - **`k2 glossary --help` prints a help page and asks nothing.** Before, it asked K2 for the definition of a term named `--help`. It needs no connection to K2.
+- **`-h` or `--help` anywhere on `k2 setup` prints the setup help and changes nothing.** Before, `k2 setup skip --help` skipped a setup step named `--help`, and a flag that takes a value (`--name`, `--tool`, `--about`, `--handle`, `--focus-group`, `--attach`) took the help word as its value: `k2 setup kessel --name -h` asked K2 to set up Kessel named `-h`.
 
 ### Settings
 - **Changes to the Send feedback settings are recorded.** When the owner or an admin turns "Allow sending feedback to K2", "Agents may send feedback to K2" or "Agents may include K2 details" on or off (Settings → General → Send feedback), Settings → Logs → Access Audit records who changed which one, from what to what. A change that leaves a setting as it was, or a refused attempt, records nothing.

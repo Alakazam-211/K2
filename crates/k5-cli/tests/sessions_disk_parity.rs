@@ -189,12 +189,22 @@ fn sessions_compact_as_the_shell_does() {
         row("the connection gate", &["compact", "s1"], nothing, 1),
         // On Linux too: before 0.46.17 GNU's stat stopped the shell here.
         row("the segments", &["compact", "s1"], rotated, 0),
-        row("an id with a quote and a backslash", &["compact", ODD], rotated_odd, 0),
+        row(
+            "an id with a quote and a backslash",
+            &["compact", ODD],
+            rotated_odd,
+            0,
+        ),
     ] {
         answered_here(&rig, &c);
     }
     // The line itself, from the binary alone: the id parses back.
-    let c = row("the escaped id, read back", &["compact", ODD], rotated_odd, 0);
+    let c = row(
+        "the escaped id, read back",
+        &["compact", ODD],
+        rotated_odd,
+        0,
+    );
     let (out, sent) = rig.binary(&c, false);
     assert!(sent.is_empty(), "compact sent a request: {sent:?}");
     assert_eq!(out.code, Some(0), "{out:?}");

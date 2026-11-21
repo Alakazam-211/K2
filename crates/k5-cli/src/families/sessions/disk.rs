@@ -320,7 +320,11 @@ pub fn compact(project: &str, id: &str) -> Option<Exit> {
     };
     let segs = rotated(&dir)?;
     // `wc -c <FILE`, or 0 when it can't be read.
-    let size = |p: &Path| std::fs::File::open(p).and_then(|f| f.metadata()).map_or(0, |m| m.len());
+    let size = |p: &Path| {
+        std::fs::File::open(p)
+            .and_then(|f| f.metadata())
+            .map_or(0, |m| m.len())
+    };
     let (mut count, mut before, mut after) = (0u64, 0u64, 0u64);
     for seg in &segs {
         before += size(seg);

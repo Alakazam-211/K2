@@ -405,10 +405,21 @@ fn a_kit_id_is_the_kit_s_explain() {
         one("as JSON", &["MPC-E001", "--json"], KIT_JSON, 0),
         one("--json first", &["--json", "mpce-1"], KIT_JSON, 0),
         one("a quote and a backslash in the id", &["MPC-\"x\\y"], KIT, 0),
-        one("the kit's exit", &["MPC-E001"], r#"{"exit":5,"stdout":"held\n"}"#, 5),
+        one(
+            "the kit's exit",
+            &["MPC-E001"],
+            r#"{"exit":5,"stdout":"held\n"}"#,
+            5,
+        ),
         one("a page above 256 KiB", &["MPC-E001"], big_page(), 0),
         answer("the kit's row", &["MPC-E404"], 422, KIT_ROW, 4),
-        answer("the kit's row as JSON", &["MPC-E404", "--json"], 422, KIT_ROW, 4),
+        answer(
+            "the kit's row as JSON",
+            &["MPC-E404", "--json"],
+            422,
+            KIT_ROW,
+            4,
+        ),
         answer(
             "board files off",
             &["MPC-E001"],
@@ -424,7 +435,13 @@ fn a_kit_id_is_the_kit_s_explain() {
             3,
         ),
         answer("an answer that is not JSON", &["MPC-E001"], 500, "oops", 1),
-        answer("an empty answer, as JSON", &["MPC-E001", "--json"], 502, "", 1),
+        answer(
+            "an empty answer, as JSON",
+            &["MPC-E001", "--json"],
+            502,
+            "",
+            1,
+        ),
         with(
             with_passport(&[("K2_HOOK_SOCK", "{sock}")]),
             case(
@@ -458,7 +475,12 @@ fn a_kit_id_is_the_kit_s_explain() {
             panic!("{}: {body}", c.name)
         };
         let keys: Vec<_> = pairs.iter().map(|(k, _)| k.as_str().unwrap()).collect();
-        assert_eq!(keys, ["argv", "json"], "{}: no path is sent: {body}", c.name);
+        assert_eq!(
+            keys,
+            ["argv", "json"],
+            "{}: no path is sent: {body}",
+            c.name
+        );
         assert!(
             !body.contains("decoy") && !body.contains(&*rig.proj.to_string_lossy()),
             "{}: {body}",

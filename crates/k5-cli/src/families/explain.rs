@@ -257,10 +257,20 @@ pub fn kit_answer(status: &str, body: &[u8], as_json: bool) -> super::Shown {
     } else {
         stderr = format!("Error [{}]: {}\n", py::str_of(&code), py::str_of(&hint));
     }
-    let refused = ["not_enabled", "forbidden", "not_connected", "sandboxed_agent", "core_off"]
-        .iter()
-        .any(|c| matches!(&code, Value::Str(t) if t.as_str() == Some(*c)));
-    shown(stdout, stderr, if refused { Exit::Refused } else { Exit::Error })
+    let refused = [
+        "not_enabled",
+        "forbidden",
+        "not_connected",
+        "sandboxed_agent",
+        "core_off",
+    ]
+    .iter()
+    .any(|c| matches!(&code, Value::Str(t) if t.as_str() == Some(*c)));
+    shown(
+        stdout,
+        stderr,
+        if refused { Exit::Refused } else { Exit::Error },
+    )
 }
 
 /// The usage line of a usage error.
@@ -795,12 +805,18 @@ mod tests {
             r#"{"argv":["explain","mpc-\"\\x"],"json":true}"#
         );
         let a = kit_answer("200", br#"{"exit": 0, "stdout": "page\n"}"#, false);
-        assert_eq!((a.stdout.as_str(), a.stderr.as_str(), a.exit), ("page\n", "", Exit::Ok));
+        assert_eq!(
+            (a.stdout.as_str(), a.stderr.as_str(), a.exit),
+            ("page\n", "", Exit::Ok)
+        );
         let row = br#"{"id": "MPC-E110", "code": "unknown_id", "message": "no error id x", "next": "list them", "exit": 4}"#;
         let a = kit_answer("422", row, false);
         assert_eq!(
             (a.stderr.as_str(), a.exit),
-            ("Error [unknown_id] MPC-E110: no error id x\nNext: list them\n", Exit::NotFound)
+            (
+                "Error [unknown_id] MPC-E110: no error id x\nNext: list them\n",
+                Exit::NotFound
+            )
         );
         let a = kit_answer("422", row, true);
         assert_eq!(a.stdout, format!("{}\n", String::from_utf8_lossy(row)));
@@ -808,7 +824,10 @@ mod tests {
         assert_eq!(
             (a.stderr, a.exit),
             (
-                format!("Error [daemon_unreachable]: no answer from the {} daemon\n", k2_client::brand::PRODUCT_NAME),
+                format!(
+                    "Error [daemon_unreachable]: no answer from the {} daemon\n",
+                    k2_client::brand::PRODUCT_NAME
+                ),
                 Exit::Error
             )
         );
@@ -824,12 +843,18 @@ mod tests {
         let a = kit_answer("404", off, false);
         assert_eq!(
             (a.stderr.as_str(), a.exit),
-            ("Error [not_enabled]: Board files are a preview\n", Exit::Refused)
+            (
+                "Error [not_enabled]: Board files are a preview\n",
+                Exit::Refused
+            )
         );
         let a = kit_answer("500", b"not json", false);
         assert_eq!(
             (a.stderr.as_str(), a.exit),
-            ("Error [error]: the daemon refused (HTTP 500)\n", Exit::Error)
+            (
+                "Error [error]: the daemon refused (HTTP 500)\n",
+                Exit::Error
+            )
         );
     }
 

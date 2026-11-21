@@ -6,10 +6,12 @@
 //! (`cli/src/agent-context.sh`), `template` (`cli/src/agent-template.sh`;
 //! its help forms stay the shell's), `identity` (an `id` tool: the
 //! session rules of [`crate::prelude::id_tool`]), `access`, and `harness`
-//! and `refresh` (the `id` tool `agent-harness`), and `hire` ([`hire`];
-//! a session with a passport is the shell's still). Every other
-//! verb, and the family alone, is still the shell's: [`run`] hands it
-//! back before anything is printed or sent.
+//! and `refresh` (the `id` tool `agent-harness`), `hire` ([`hire`];
+//! a session with a passport is the shell's still), `team`,
+//! `instances` and `hire-root` ([`teams`]; `team` and `instances` are the
+//! `id` tool `agent-teams`), `profile` (`workspace profile`'s own code,
+//! [`super::workspace`]), and the family alone, `update`, `complete`
+//! and any other word ([`plane`]).
 //!
 //! What runs, in the shell's order:
 //!
@@ -43,7 +45,10 @@
 //!
 //! # Where this differs from the shell (named differences)
 //!
-//! - `owner-token-with-passport` (above).
+//! - `owner-token-with-passport` (above): also `hire-root` and
+//!   `complete`, open verbs. The `id` tool `agent-teams` and the verbs
+//!   that send the session's passport (`update`, `profile`) send what the
+//!   shell sends.
 //! - An answer above what one environment variable may hold (128 KiB on
 //!   Linux): the shell hands `/cli/agent/list`'s answer (and the conf) to
 //!   its Python in `RESP` (`CONF`), so it stops there with `Argument list
@@ -57,11 +62,13 @@ mod harness;
 mod hire;
 mod identity;
 mod list;
+mod plane;
 mod retire;
 mod set;
+mod teams;
 mod template;
 
-use super::curl_port;
+use super::{curl_port, live_socket};
 use super::feedback::write::traceback_stdin;
 use super::{Raise, Shown};
 use crate::daemon::{self, Settings};
@@ -94,9 +101,21 @@ pub const RETIRE: &str = "/cli/agent/retire";
 /// `cmd_agent_restart`'s route.
 pub const ENSURE_PINNED_CHAT: &str = "/cli/workspace/ensure-pinned-chat";
 
+/// `team` and `instances`: the `id` tool of `_cli_tool_id_for_verb`.
+pub const TEAMS_TOOL: &str = "agent-teams";
+
 /// A native verb and its words.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Form {
+    /// The family alone: the help page.
+    Bare,
+    /// The router's `*)` arm.
+    Unknown(String),
+    Teams(teams::Ask),
+    Complete(String, String),
+    Update(plane::Update),
+    /// Lines on stderr (maybe none) and the exit.
+    Halt(Vec<String>, Exit),
     Conf(conf::ConfArgs),
     Get(conf::GetArgs),
     List {
@@ -139,25 +158,72 @@ pub fn identity_alias(args: &[OsString], words: &[&str], note: &str) -> Option<E
     run_words(args, &all, Some(note))
 }
 
+/// The `id` tool a word names (`_cli_tool_id_for_verb agent <word>`).
+fn tool_named(word: &str) -> Option<&'static str> {
+    match word {
+        "identity" => Some(identity::IDENTITY_TOOL),
+        "harness" | "refresh" => Some(harness::TOOL),
+        "team" | "teams" | "instances" | "instance" => Some(TEAMS_TOOL),
+        _ => None,
+    }
+}
+
+/// `_cli_tool_id_for_args agent <words>`: the verb's tool, or past any
+/// leading flags the first word's (after a `--`, the word after it).
+fn tool_of(words: &[&str]) -> Option<&'static str> {
+    let mut it = words.iter();
+    while let Some(w) = it.next() {
+        match *w {
+            "-h" | "--help" => return None,
+            "--" => return it.next().and_then(|w| tool_named(w)),
+            w if w.starts_with('-') => {}
+            w => return tool_named(w),
+        }
+    }
+    None
+}
+
 fn run_words(args: &[OsString], words: &[&str], note: Option<&str>) -> Option<Exit> {
-    let (verb, rest) = words.split_first()?;
-    if rest.iter().any(|w| matches!(*w, "-h" | "--help")) {
+    let (verb, rest): (&str, &[&str]) = match words.split_first() {
+        Some((v, r)) => (*v, r),
+        None => ("", &[]),
+    };
+    if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
         return None;
+    }
+    // `agent template` alone only prints its page: the shell skips the
+    // gate for it.
+    if matches!(verb, "template" | "templates") && rest.first().is_none_or(|w| w.is_empty()) {
+        return Some(Shown::out(plane::template_page()).print());
+    }
+    // `agent profile` is `cmd_workspace_profile`, with the same policy.
+    if verb == "profile" {
+        let mut all: Vec<OsString> = vec!["workspace".into(), "profile".into()];
+        all.extend(rest.iter().map(OsString::from));
+        return super::workspace::run(&all);
     }
     let hook_sock = super::hook_sock();
     // The `id` tools: the shell looks for a shared Codex server first.
-    let tool = match *verb {
-        "identity" => Some(identity::IDENTITY_TOOL),
-        "harness" | "refresh" => Some(harness::TOOL),
-        _ => None,
-    };
+    let tool = tool_of(words);
     if tool.is_some()
         && hook_sock.is_some()
         && prelude::codex_env(std::env::vars_os().map(|(name, _)| name))
     {
         return None;
     }
-    let form = match *verb {
+    let form = match verb {
+        "" => Ok(Form::Bare),
+        "team" | "teams" => teams_form(teams::parse_team(rest)?),
+        "instances" | "instance" => teams_form(teams::parse_instances(rest)?),
+        "hire-root" => teams_form(teams::parse_root(rest)),
+        "complete" => {
+            let (agent, file) = plane::parse_complete(rest)?;
+            Ok(Form::Complete(agent, file))
+        }
+        "update" => match plane::parse_update(rest) {
+            Ok(u) => Ok(Form::Update(u)),
+            Err(lines) => Ok(Form::Halt(lines, Exit::Usage)),
+        },
         "identity" => {
             let pwd = daemon::logical_cwd(std::env::var_os("PWD")).ok()?;
             match identity::parse_identity(rest, pwd.to_str()?)? {
@@ -166,7 +232,7 @@ fn run_words(args: &[OsString], words: &[&str], note: Option<&str>) -> Option<Ex
             }
         }
         "access" => Ok(Form::Access(identity::parse_access(rest))),
-        "harness" | "refresh" => match harness::parse(*verb == "harness", rest) {
+        "harness" | "refresh" => match harness::parse(verb == "harness", rest) {
             Ok(a) => Ok(Form::Harness(a)),
             Err((line, exit)) => Ok(Form::Stop(line, exit)),
         },
@@ -182,8 +248,14 @@ fn run_words(args: &[OsString], words: &[&str], note: Option<&str>) -> Option<Ex
             Ok((v, json)) => Ok(Form::Template(v, json)),
             Err(line) => Ok(Form::TemplateUsage(line)),
         },
-        _ => return None,
+        _ => Ok(Form::Unknown(verb.to_string())),
     };
+    // A recipe the binary can't tell how `python3` would decode.
+    if matches!(form, Ok(Form::Teams(teams::Ask::Hire { .. })))
+        && super::doc::py::decode_here().is_none()
+    {
+        return None;
+    }
     if !python::family_native(python::here()) {
         return None;
     }
@@ -203,9 +275,18 @@ fn run_words(args: &[OsString], words: &[&str], note: Option<&str>) -> Option<Ex
     // A hire in a session with a passport: the shell sends the owner
     // token from disk to the new workspace's routes, which the binary
     // never sends (PRD 13.9 #4) and the passport can't do yet (D1).
-    if *verb == "hire"
+    if verb == "hire"
         && settings.session
         && matches!(settings.auth, crate::transport::Auth::Passport { .. })
+    {
+        return None;
+    }
+    // `update` in a session with no passport and a live cell socket: the
+    // shell tries the socket with an empty Bearer first.
+    if verb == "update"
+        && settings.session
+        && !matches!(settings.auth, crate::transport::Auth::Passport { .. })
+        && live_socket(hook_sock.as_deref())
     {
         return None;
     }
@@ -234,6 +315,28 @@ fn run_form(args: &[OsString], form: Result<Form, String>, mut settings: Setting
         }
     };
     settings.port = settings.port_text.as_deref().and_then(curl_port);
+    let form = match form {
+        Form::Bare => return Shown::out(plane::page()).print(),
+        Form::Unknown(word) => return plane::unknown(&word),
+        Form::Halt(lines, exit) => {
+            for l in lines {
+                out::stderr_line(&l);
+            }
+            return exit;
+        }
+        Form::Update(u) => {
+            let would_refuse = passport::current(args).would_refuse();
+            let base_url = format!(
+                "http://{}:{}",
+                settings.host,
+                settings.port_text.as_deref().unwrap_or_default()
+            );
+            let session = settings.session;
+            let make = || settings.client(would_refuse).map_err(|e| e.to_string());
+            return plane::update(make, base_url, session, &u);
+        }
+        other => other,
+    };
     let project = settings.project.clone();
     // `_cli_caller_is_agent_passport`: a cell socket set and a passport.
     let scoped = matches!(settings.auth, crate::transport::Auth::Passport { .. });
@@ -285,6 +388,11 @@ fn run_form(args: &[OsString], form: Result<Form, String>, mut settings: Setting
         },
         Form::Set(a) => set::set(&mut client, &mut closing, &a),
         Form::Hire(a) => hire::hire(&mut client, &mut closing, &a),
+        Form::Teams(a) => teams::run(&mut client, &mut closing, &a),
+        Form::Complete(agent, file) => plane::complete(&mut client, &mut closing, &agent, &file),
+        Form::Bare | Form::Unknown(_) | Form::Halt(..) | Form::Update(_) => {
+            unreachable!("answered above")
+        }
         Form::Stop(line, exit) => {
             out::stderr_line(&line);
             exit
@@ -292,6 +400,14 @@ fn run_form(args: &[OsString], form: Result<Form, String>, mut settings: Setting
     };
     closing.flush(&mut client, exit);
     exit
+}
+
+/// A `team`, `instances` or `hire-root` parse as a form.
+fn teams_form(p: teams::Parsed) -> Result<Form, String> {
+    Ok(match p {
+        teams::Parsed::Ask(a) => Form::Teams(a),
+        teams::Parsed::Stop(lines, exit) => Form::Halt(lines, exit),
+    })
 }
 
 /// The command's name, as every hint prints it.
@@ -417,6 +533,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_tool_past_leading_flags() {
+        assert_eq!(tool_of(&["team"]), Some(TEAMS_TOOL));
+        assert_eq!(tool_of(&["--json", "-x", "instances"]), Some(TEAMS_TOOL));
+        assert_eq!(tool_of(&["--", "harness"]), Some(harness::TOOL));
+        assert_eq!(tool_of(&["--", "-x", "team"]), None);
+        assert_eq!(tool_of(&["nope", "team"]), None);
+        assert_eq!(tool_of(&["-x", "--help", "team"]), None);
+        assert_eq!(tool_of(&["hire-root"]), None);
+    }
+
+    #[test]
     fn strip_is_pythons() {
         assert_eq!(py_strip(" \u{1f}claude\u{3000}\t"), "claude");
         assert_eq!(py_strip("\u{200b}x"), "\u{200b}x");
@@ -433,14 +560,13 @@ mod tests {
     #[test]
     fn the_verbs_left_to_the_shell() {
         for words in [
-            &["agent"][..],
-            &["agent", ""],
-            &["agent", "team"],
-            &["agent", "template"],
-            &["agent", "templates", "help"],
+            &["agent", "templates", "help"][..],
+            &["agent", "team", "help"],
+            &["agent", "instances", "help"],
+            &["agent", "complete", "--file", "f", "--agent"],
             &["agent", "conf", "--help"],
             &["agent", "list", "-h"],
-            &["agent", "nope"],
+            &["agent", "nope", "-h"],
         ] {
             let args: Vec<OsString> = words.iter().map(OsString::from).collect();
             assert_eq!(run(&args), None, "{words:?}");

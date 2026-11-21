@@ -6049,7 +6049,7 @@ except Exception as e:
             ;;
         edit)
             if [ ! -f "$abs_path" ]; then
-                echo "Note: $abs_path does not exist yet; $EDITOR will create it."
+                echo "Note: $abs_path does not exist yet; ${EDITOR:-vi} will create it."
             fi
             exec "${EDITOR:-vi}" "$abs_path"
             ;;

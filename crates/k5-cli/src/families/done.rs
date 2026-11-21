@@ -30,12 +30,27 @@
 //! 56 a reset, 75 a failure that is this machine's, and so on). A port
 //! that is no port is curl's 3 (or 75 when `TMPDIR` can't be used).
 //!
+//! In a session the API started (`API_CELL` 1, true, yes, YES or True)
+//! the router sends `done` to `cmd_session_complete`
+//! (`cli/src/session-complete.sh`), the API lifecycle's own path
+//! ([`api`]): after the same gates, `--reason <text>` (any next word,
+//! else `k2 done: '--reason' needs text.`, exit 2), `--` and the first
+//! other word end the flags, any other word starting with `-` is its own
+//! unknown-flag line (exit 2). Then `reason=<escaped>` (nothing for no
+//! reason) as a form POST to `/cli/session/complete`, with the session's
+//! passport as Bearer, never the owner token: on the cell socket when
+//! `HOOK_SOCK` is one (`cli_post_form_uds`, as `respond`'s), else over
+//! TCP when the passport has a `.` in it (`_k2_curl` with the passport,
+//! [`crate::transport::Client::post_form_bearer`]), else the line that
+//! there is no such session, exit 1.
+//!
 //! The shell CLI answers these forms itself ([`run`] returns `None`), so
-//! there is one copy of each: a session the API started (`API_CELL` 1,
-//! true, yes, YES or True: the router sends `done` to
-//! `cmd_session_complete` there); a command line with `-h` or `--help`
-//! (the front sends those on, [`crate::front`]); and a word or an agent
-//! setting that is not UTF-8. Once escaped, no byte of the agent is
+//! there is one copy of each: a command line with `-h` or `--help` (the
+//! front sends those on, [`crate::front`]); a word or an agent setting
+//! that is not UTF-8; and in an API session, `HOOK_SOCK` with a `CODEX_`
+//! variable exported (the shell looks for a shared Codex server first)
+//! and a cell socket with no passport (the shell sends an empty
+//! Bearer). Once escaped, no byte of the agent is
 //! special to the transport, so no agent is handed on for its bytes.
 
 use super::{curl_port, without_nuls};
@@ -146,7 +161,7 @@ pub fn api_lifecycle(lookup: impl Fn(&str) -> Option<OsString>) -> bool {
 pub fn run(args: &[OsString]) -> Option<Exit> {
     let env = |name: &str| std::env::var_os(name);
     if api_lifecycle(env) {
-        return None;
+        return api::run(args);
     }
     let agent = match env_names::first_nonempty_os_in(env_names::AGENT_NAME, env) {
         Some((_, v)) => v.into_string().ok()?,
@@ -219,6 +234,227 @@ fn run_with(args: &[OsString], read: Result<Mark, Stop>, mut settings: Settings)
     };
     closing.flush(&mut client, exit);
     exit
+}
+
+/// `cmd_session_complete`: `done` in a session the API started.
+pub mod api {
+    use super::super::{curl_port, without_nuls};
+    use crate::daemon::{self, Settings};
+    use crate::exit::Exit;
+    use crate::out;
+    use crate::passport;
+    use crate::prelude::{self, Closing};
+    use crate::transport::client::is_socket;
+    use crate::transport::encode::quote;
+    use crate::transport::wire::curl;
+    use crate::transport::{Auth, Call, Channel, Error};
+    use k2_client::{cli_name, env_names};
+    use std::ffi::OsString;
+    use std::path::Path;
+
+    /// The route.
+    pub const ENDPOINT: &str = "/cli/session/complete";
+
+    /// `--reason` with nothing after it.
+    pub const REASON_NEEDS_TEXT: &str = concat!(cli_name!(), " done: '--reason' needs text.");
+
+    /// Neither a cell socket nor a passport to send over TCP.
+    pub const NO_SESSION: &str = concat!(
+        "Error: '",
+        cli_name!(),
+        " done' (session complete) needs an API-launched session (per-cell socket or scoped session token)."
+    );
+
+    /// The line for a flag this path doesn't take.
+    pub fn unknown_flag(word: &str) -> String {
+        let c = cli_name!();
+        format!("{c} done: unknown flag '{word}'. Here {c} done takes --reason <text> ({c} done --help).")
+    }
+
+    /// The words, as `cmd_session_complete`'s loop reads them: the form
+    /// (empty for no reason), or a line for stderr and exit 2. `None`:
+    /// `-h` or `--help` where the loop reads a flag (the shell's).
+    pub fn form(words: &[&str]) -> Option<Result<String, String>> {
+        let mut reason = "";
+        let mut i = 0;
+        while i < words.len() {
+            match words[i] {
+                "--reason" => match words.get(i + 1) {
+                    Some(r) => {
+                        reason = r;
+                        i += 2;
+                    }
+                    None => return Some(Err(REASON_NEEDS_TEXT.to_string())),
+                },
+                "--help" | "-h" => return None,
+                "--" => break,
+                w if w.starts_with('-') => return Some(Err(unknown_flag(w))),
+                _ => break,
+            }
+        }
+        Some(Ok(if reason.is_empty() {
+            String::new()
+        } else {
+            format!("reason={}", quote(reason))
+        }))
+    }
+
+    /// `done` in an API session. `None`: the shell's (see the module's
+    /// notes).
+    pub fn run(args: &[OsString]) -> Option<Exit> {
+        let hook_sock =
+            env_names::first_nonempty_os_in(env_names::HOOK_SOCK, |n| std::env::var_os(n))
+                .map(|(_, v)| v);
+        if hook_sock.is_some() && prelude::codex_env(std::env::vars_os().map(|(n, _)| n)) {
+            return None;
+        }
+        let words: Vec<&str> = args
+            .iter()
+            .skip(1)
+            .map(|a| a.to_str())
+            .collect::<Option<_>>()?;
+        let form = form(&words)?;
+        let settings = match daemon::current() {
+            Ok(s) => s,
+            Err(e) => {
+                out::stderr_line(&format!("Error: {e}"));
+                return Some(Exit::Error);
+            }
+        };
+        let passport = match &settings.auth {
+            Auth::Passport { passport, .. } => Some(passport.as_str().to_string()),
+            Auth::Owner(_) | Auth::None => None,
+        };
+        let sock = hook_sock.as_deref().map(Path::new).filter(|s| is_socket(s));
+        if sock.is_some() && passport.is_none() && prelude::gate(&settings).is_none() {
+            return None;
+        }
+        Some(run_with(args, form, sock.is_some(), passport, settings))
+    }
+
+    fn run_with(
+        args: &[OsString],
+        form: Result<String, String>,
+        on_socket: bool,
+        passport: Option<String>,
+        mut settings: Settings,
+    ) -> Exit {
+        if let Some(gate) = prelude::gate(&settings) {
+            return gate.stop();
+        }
+        let form = match form {
+            Ok(f) => f,
+            Err(line) => {
+                out::stderr_line(&line);
+                return Exit::Usage;
+            }
+        };
+        let pairs: Vec<&str> = if form.is_empty() { vec![] } else { vec![form.as_str()] };
+        let would_refuse = passport::current(args).would_refuse();
+        let port = settings.port_text.as_deref().and_then(curl_port);
+        if on_socket {
+            // The cell socket doesn't need the port: a port that is no
+            // port is only the closing probe's, which then can't connect.
+            settings.port = Some(port.unwrap_or(0));
+            return cell_socket(settings, would_refuse, &pairs);
+        }
+        if !passport.is_some_and(|p| p.contains('.')) {
+            out::stderr_line(NO_SESSION);
+            return Exit::Error;
+        }
+        let Some(port) = port else {
+            return Exit::from_curl(curl::URL_MALFORMAT);
+        };
+        settings.port = Some(port);
+        let mut client = match settings.client(would_refuse) {
+            Ok(c) => c,
+            Err(e) => {
+                out::stderr_line(&format!("Error: {e}"));
+                return Exit::Error;
+            }
+        };
+        match client.post_form_bearer(ENDPOINT, &pairs) {
+            Ok(r) => match out::write_flushed(&mut std::io::stdout().lock(), &r.body) {
+                Ok(()) => Exit::Ok,
+                Err(e) => out::after_stdout_error(&e),
+            },
+            Err(e) => Exit::from_curl(e.curl_code()),
+        }
+    }
+
+    /// `cli_post_form_uds /cli/session/complete [<form>]`, then the EXIT
+    /// trap.
+    fn cell_socket(settings: Settings, would_refuse: bool, form: &[&str]) -> Exit {
+        let mut client = match settings.client(would_refuse) {
+            Ok(c) => c,
+            Err(e) => {
+                out::stderr_line(&format!("Error: {e}"));
+                return Exit::Error;
+            }
+        };
+        let mut closing = Closing::default();
+        let exit = match client.call(Channel::Uds, ENDPOINT, Call::PostForm(form)) {
+            Ok(r) => {
+                closing.answer(&r, true);
+                match out::write_flushed(&mut std::io::stdout().lock(), &without_nuls(&r.body)) {
+                    Ok(()) => Exit::Ok,
+                    Err(e) => out::after_stdout_error(&e),
+                }
+            }
+            Err(Error::NoAnswer(n)) => {
+                out::stderr_line(&n.to_string());
+                Exit::Error
+            }
+            Err(e) => Exit::from_curl(e.curl_code()),
+        };
+        closing.flush(&mut client, exit);
+        exit
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn the_words() {
+            assert_eq!(form(&[]), Some(Ok(String::new())));
+            assert_eq!(
+                form(&["--reason", "all done & dusted"]),
+                Some(Ok("reason=all%20done%20%26%20dusted".into()))
+            );
+            assert_eq!(form(&["--reason", ""]), Some(Ok(String::new())));
+            assert_eq!(form(&["--reason"]), Some(Err(REASON_NEEDS_TEXT.into())));
+            assert_eq!(form(&["--", "--reason"]), Some(Ok(String::new())));
+            assert_eq!(form(&["x", "--bogus"]), Some(Ok(String::new())));
+            assert_eq!(form(&["--bogus"]), Some(Err(unknown_flag("--bogus"))));
+            assert_eq!(form(&["--reason", "a", "-h"]), None);
+            assert_eq!(form(&["--reason", "-h"]), Some(Ok("reason=-h".into())));
+        }
+
+        #[test]
+        fn the_shell_s_lines() {
+            let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../cli/src/session-complete.sh");
+            let sh = std::fs::read_to_string(&p).expect("session-complete.sh");
+            let c = k2_client::brand::CLI_NAME;
+            let as_k2 = |l: &str| l.replace(&format!("{c} done"), "k2 done");
+            for line in [
+                format!("echo \"{}\" >&2; exit 2; }};", as_k2(REASON_NEEDS_TEXT)),
+                format!("echo \"{}\" >&2", as_k2(NO_SESSION)),
+                r#"-*) echo "k2 done: unknown flag '$1'. Here k2 done takes --reason <text> (k2 done --help)." >&2; exit 2 ;;"#.to_string(),
+                r#"form="reason=$(urlencode "$reason")""#.to_string(),
+                r#"cli_post_form_uds "/cli/session/complete" "$form""#.to_string(),
+                r#"if [[ "$SCOPED_TOKEN" == *.* ]] && [ -n "$PORT" ]; then"#.to_string(),
+                r#"_k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}""#.to_string(),
+            ] {
+                assert!(sh.contains(&line), "cmd_session_complete no longer has {line:?}");
+            }
+            assert_eq!(
+                unknown_flag("-x").replace(c, "k2"),
+                "k2 done: unknown flag '-x'. Here k2 done takes --reason <text> (k2 done --help)."
+            );
+        }
+    }
 }
 
 #[cfg(test)]

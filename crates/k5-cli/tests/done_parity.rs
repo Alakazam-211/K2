@@ -685,7 +685,7 @@ fn done_hands_these_to_the_shell() {
         compare: Compare::Shell,
         ..c
     };
-    let mut v = vec![
+    let v = vec![
         shell(named(
             "--help",
             &["--help"],
@@ -723,25 +723,6 @@ fn done_hands_these_to_the_shell() {
             0,
         )),
     ];
-    let api: [(&'static str, &'static [&'static str], i32, usize); 3] = [
-        ("a session the API started", &[], 0, 1),
-        (
-            "a session the API started: --reason",
-            &["--reason", "no answer needed"],
-            0,
-            1,
-        ),
-        ("a session the API started: --bogus", &["--bogus"], 2, 0),
-    ];
-    for (name, args, code, requests) in api {
-        let replies = if requests == 1 { vec![ok(OK)] } else { vec![] };
-        let mut c = passport_case(
-            &[("K2_API_CELL", "1")],
-            case(name, args, &[], replies, port_only, code, requests),
-        );
-        c.compare = Compare::Shell;
-        v.push(c);
-    }
     for c in v {
         rig.check(&c);
     }
@@ -922,5 +903,86 @@ fn done_escapes_the_agent() {
     for (c, want) in &rows {
         rig.check(c);
         binary_sends(&rig, c, want);
+    }
+}
+
+/// `done` in a session the API started (`K2_API_CELL`): the router's
+/// `cmd_session_complete`, with the session's passport on the cell socket
+/// or over TCP, never the owner token. Each row is the binary's own.
+#[test]
+fn done_in_a_session_the_api_started() {
+    let rig = Rig::new(VERB, "api");
+    let api = |extra: &[(&'static str, &str)]| {
+        let mut e = vec![("K2_API_CELL", "1")];
+        e.extend_from_slice(extra);
+        e
+    };
+    let cell = |name, args, replies: Vec<common::stub::Reply>, code, n| {
+        passport_case(
+            &api(&[("K2_HOOK_SOCK", "{sock}")]),
+            case(name, args, &[], replies, port_only, code, n),
+        )
+    };
+    let tcp = |name, args, replies: Vec<common::stub::Reply>, code, n| {
+        passport_case(&api(&[]), case(name, args, &[], replies, port_only, code, n))
+    };
+    let v = vec![
+        // native: done (API lifecycle session)
+        cell("on the cell socket", &[], vec![ok(OK)], 0, 1),
+        cell(
+            "a reason",
+            &["--reason", "no answer needed & more"],
+            vec![ok(OK)],
+            0,
+            1,
+        ),
+        cell("an empty reason", &["--reason", ""], vec![ok(OK)], 0, 1),
+        cell("a word ends the flags", &["x", "--bogus"], vec![ok(OK)], 0, 1),
+        cell("-- ends the flags", &["--", "--reason"], vec![ok(OK)], 0, 1),
+        cell("--reason with nothing after", &["--reason"], vec![], 2, 0),
+        cell("an unknown flag", &["--bogus"], vec![], 2, 0),
+        cell(
+            "the daemon's refusal",
+            &[],
+            vec![common::stub::Reply::Answer(403, PERMISSION_ASK.into())],
+            0,
+            1,
+        ),
+        tcp("over TCP", &[], vec![ok(OK)], 0, 1),
+        tcp("over TCP: a reason", &["--reason", "é/x"], vec![ok(OK)], 0, 1),
+        tcp(
+            "over TCP: the daemon's error",
+            &[],
+            vec![common::stub::Reply::Answer(404, r#"{"error":"no session"}"#.into())],
+            0,
+            1,
+        ),
+        case(
+            "no passport and no socket",
+            &[],
+            &[("K2_API_CELL", "true")],
+            vec![],
+            owner_and_port,
+            1,
+            0,
+        ),
+        case(
+            "the connection gate",
+            &[],
+            &[("K2_API_CELL", "yes")],
+            vec![],
+            nothing,
+            1,
+            0,
+        ),
+    ];
+    for c in v {
+        rig.check(&c);
+        rig.binary(&c, false);
+        assert!(
+            !k5_cli::fallthrough::cache_dir(&rig.k2home).exists(),
+            "{}: the binary handed the line to the shell",
+            c.name
+        );
     }
 }

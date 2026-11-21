@@ -1471,31 +1471,55 @@ cmd_hooks_install() {
         echo "$raw"
         return 0
     fi
+    # An answer with an `error` key is one Error: line on stderr and exit 1,
+    # or exit 3 for a refusal with a `permission` object (the EXIT trap then
+    # adds its Ask-with line), as hooks emit's and heartbeat log's errors
+    # are (0.46.17: the line went to /dev/null, and the raw answer printed
+    # with exit 0). An answer that is not a JSON object prints as it came,
+    # and a report the reader can't lay out prints its lines, then raw.
+    local rc=0
     echo "$raw" | python3 -c "
 import json, sys
-data = json.loads(sys.stdin.read())
-if 'error' in data:
-    print(f\"Error: {data['error']}\", file=sys.stderr)
-    sys.exit(1)
-if data.get('skipped'):
-    print(f\"Hooks not changed: {data['skipped']}.\")
+raw = sys.stdin.buffer.read()
+def as_it_came():
+    sys.stdout.flush()
+    sys.stdout.buffer.write(raw)
+try:
+    data = json.loads(raw.decode('utf-8'))
+except ValueError:
+    data = None
+if not isinstance(data, dict):
+    as_it_came()
     sys.exit(0)
-r = data.get('report') or {}
-action = r.get('action', '?')
-s = r.get('script') or {}
-print(f\"Hook {action}: notify.sh {s.get('state','?')} ({s.get('path','?')})\")
-if action == 'install':
-    print(f\"Claude {r.get('claudeVersion') or 'version unknown'}: {r.get('claudeEventSet','?')} event set\")
-if not data.get('agentHooksSetting', True) and action == 'remove':
-    print('The agentHooks setting is off, so K2 hooks were removed.')
-for c in r.get('clis', []):
-    note = ''
-    if c.get('state') == 'config_unreadable':
-        note = '  (did not parse; left untouched)'
-    elif c.get('error'):
-        note = f\"  ({c['error']})\"
-    print(f\"  {c.get('cli','?'):<8} {c.get('state','?'):<18} {c.get('path','?')}{note}\")
-" 2>/dev/null || echo "$raw"
+if 'error' in data:
+    err = data['error']
+    if isinstance(err, dict):
+        err = err.get('hint') or err.get('code')
+    print(f'Error: {err}', file=sys.stderr)
+    sys.exit(3 if isinstance(data.get('permission'), dict) else 1)
+try:
+    if data.get('skipped'):
+        print(f\"Hooks not changed: {data['skipped']}.\")
+        sys.exit(0)
+    r = data.get('report') or {}
+    action = r.get('action', '?')
+    s = r.get('script') or {}
+    print(f\"Hook {action}: notify.sh {s.get('state','?')} ({s.get('path','?')})\")
+    if action == 'install':
+        print(f\"Claude {r.get('claudeVersion') or 'version unknown'}: {r.get('claudeEventSet','?')} event set\")
+    if not data.get('agentHooksSetting', True) and action == 'remove':
+        print('The agentHooks setting is off, so K2 hooks were removed.')
+    for c in r.get('clis', []):
+        note = ''
+        if c.get('state') == 'config_unreadable':
+            note = '  (did not parse; left untouched)'
+        elif c.get('error'):
+            note = f\"  ({c['error']})\"
+        print(f\"  {c.get('cli','?'):<8} {c.get('state','?'):<18} {c.get('path','?')}{note}\")
+except Exception:
+    as_it_came()
+" || rc=$?
+    [ "$rc" -eq 0 ] || exit "$rc"
 }
 
 # `k2 hooks emit` (GL45, prd-gardens-local-services-v1 Appendix A/B): the

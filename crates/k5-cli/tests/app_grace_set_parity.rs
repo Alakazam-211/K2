@@ -237,9 +237,17 @@ fn the_cross_over_reads_answer_as_the_shell_does() {
             // native: app quota
             stop("quota: --rps last", &["quota", "acme", "--rps"], 2),
             // native: app token rotate
-            stop("token rotate: --ttl last", &["token", "rotate", "acme", "--ttl"], 2),
+            stop(
+                "token rotate: --ttl last",
+                &["token", "rotate", "acme", "--ttl"],
+                2,
+            ),
             // native: app key mint
-            stop("key mint: --scope last", &["key", "mint", "acme", "--scope"], 2),
+            stop(
+                "key mint: --scope last",
+                &["key", "mint", "acme", "--scope"],
+                2,
+            ),
             // native: app quota
             stop(
                 "quota: a number that isn't",

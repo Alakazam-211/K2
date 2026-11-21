@@ -58,8 +58,11 @@ fn user_chat_and_copy_host_are_the_app_code_s() {
     ));
     let stop = |w: &[&str]| ask(w).expect_err("a stop");
     assert_eq!(stop(&["user", "chat"]).exit, Exit::Usage);
-    assert_eq!(stop(&["user", "chat", "bob", "--app"]).exit, Exit::Error);
-    assert!(stop(&["user", "chat", "bob", "--app"]).stderr.is_empty());
+    assert_eq!(stop(&["user", "chat", "bob", "--app"]).exit, Exit::Usage);
+    assert_eq!(
+        stop(&["user", "chat", "bob", "--app"]).stderr,
+        ["Error: --app takes a value"]
+    );
     assert_eq!(stop(&["grant", "copy-host"]).exit, Exit::Error);
     // `--role` with no `--app` is the user arm's own stop, first.
     assert_eq!(

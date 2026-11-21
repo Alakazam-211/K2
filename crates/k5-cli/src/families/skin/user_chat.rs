@@ -212,10 +212,7 @@ mod tests {
         assert_eq!(stop(&["bob", "admin"]), usage(SCOPE));
         assert_eq!(stop(&["bob", "guest", "x"]), usage("Unexpected: x"));
         assert_eq!(stop(&["bob", "-q"]), usage("Unknown flag: -q"));
-        assert_eq!(
-            stop(&["bob", "--app"]),
-            usage("Error: --app takes a value")
-        );
+        assert_eq!(stop(&["bob", "--app"]), usage("Error: --app takes a value"));
         assert_eq!(parse(&["bob", "-h"]), None);
     }
 

@@ -487,9 +487,17 @@ fn resources_answer_as_the_shell_does() {
             // native: app resources
             stop("resources: --app last", &["resources", "--app"], 2),
             // native: app resources trends
-            stop("resources trends: --window last", &["resources", "trends", "--window"], 2),
+            stop(
+                "resources trends: --window last",
+                &["resources", "trends", "--window"],
+                2,
+            ),
             // native: app resources settings
-            stop("resources settings: --mode last", &["resources", "settings", "--mode"], 2),
+            stop(
+                "resources settings: --mode last",
+                &["resources", "settings", "--mode"],
+                2,
+            ),
             // native: app resources settings
             one(
                 "resources settings: the read",

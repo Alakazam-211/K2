@@ -259,8 +259,9 @@ os.chmod(os.path.join(sandbox, "stub-cell", "curl"), 0o755)
 AGENTS_OFF = {"Coff", "Toff"}
 hits = {"C": 0, "Con": 0, "Coff": 0}
 hits_lock = threading.Lock()
-# Every request's path and headers, as one string each: the captured
-# forms run with a passport of their own, so a request names its form.
+# Every request: the environment whose stub took it, and its path and
+# headers as one string. The captured forms run with a passport of their
+# own, so a request names its form.
 requests_seen = []
 cards_sock = {}
 class UnixServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
@@ -274,7 +275,7 @@ def handler(kind, on):
         def do_GET(self):
             with hits_lock:
                 hits[self.kind_] += 1
-                requests_seen.append(self.path + "\n" + str(self.headers))
+                requests_seen.append((self.kind_, self.path + "\n" + str(self.headers)))
             route = self.path.split("?", 1)[0]
             if route == "/cli/permission/enabled":
                 status, body = 200, json.dumps({"enabled": self.on_}).encode()
@@ -911,6 +912,15 @@ if os.environ.get("HELP_NATIVE_WHY"):
 #      CLI's version (K2_CLI_VERSION: every release would move the list).
 # The traced run (BASH_XTRACEFD, so the trace has its own file) gives the
 # output; the untraced run in A must give the same.
+# Two kinds of form have a page for each way one switch goes, each page
+# proved as above within its own environments (cards_capture and
+# manage_capture, below, say exactly how):
+#   - a page through the permission cards filter (_perm_lines: the help of
+#     app and skin), off in A, B, C and T, on in Con and Ton, the probe's
+#     call left out of the trace (only its own functions' lines inside)
+#     and asked once a run where a stub answers (a C row);
+#   - chat's usage (_chat_usage), with _CHAT_HELP_MANAGE unset and set
+#     to 0, that one read allowed (an M row).
 # The binary prints what was captured (crates/k5-cli/src/help_captured.txt,
 # embedded by build.rs), behind the same gate as a file's print: a port and
 # a token, and with K2_HOOK_SOCK set the session checks (pages.rs,
@@ -997,8 +1007,12 @@ def env_reads(line):
 TEST_ONE = ("-n", "-z")
 TEST_TWO = ("=", "==", "!=", "-gt", "-ge", "-lt", "-le", "-eq", "-ne")
 WRITE_WORDS = {"echo", "printf", "set"}
-def judge_captured(steps):
-    """Rules 2 and 3 for a trace window; None when it passes."""
+def judge_captured(steps, allow_env=None, read_ok=frozenset()):
+    """Rules 2 and 3 for a trace window; None when it passes. `allow_env`
+    names a variable only the environment sets and the lines that may read
+    it (a variant's own switch); `read_ok`, the lines where `read -r line`
+    may run (the cards filter's loop, reading its pipe)."""
+    allow_env = allow_env or {}
     prev_ok = False
     for l in steps:
         m = STEP.match(l)
@@ -1014,7 +1028,7 @@ def judge_captured(steps):
         src = k2_lines[n - 1] if 0 < n <= len(k2_lines) else ""
         if "K2_CLI_VERSION" in src:
             return "prints the CLI's version, which every release moves: line %d" % n
-        reads = env_reads(src)
+        reads = {r for r in env_reads(src) if n not in allow_env.get(r, ())}
         if reads:
             return "reads %s from the environment: line %d: %r" % (" ".join(sorted(reads)), n, src.strip())
         word = body.split(" ", 1)[0]
@@ -1038,6 +1052,8 @@ def judge_captured(steps):
                     if reads:
                         return "reads %s from the environment: line %d: %r" % (" ".join(sorted(reads)), j, body_line.strip())
         elif word in OK_WORDS:
+            pass
+        elif word == "read" and n in read_ok and rest == "-r line":
             pass
         elif word in WRITE_WORDS or re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", word):
             pass
@@ -1063,15 +1079,28 @@ def form_passport(argv):
     so a request the stub sees names the form."""
     return "sessQ.form%d" % ccand_no[tuple(argv)]
 
-def run_traced(argv, kind):
-    """(code, stdout, stderr, trace stderr) of one traced run."""
+# How many runs each form made in each environment with its passport:
+# the stub must have seen one probe per run for a form the cards answer
+# decides, and none for any other captured form.
+runs_by, runs_lock = {}, threading.Lock()
+def count_run(argv, kind, env):
+    if "K2_HOOK_TOKEN" in env:
+        with runs_lock:
+            key = (tuple(argv), kind)
+            runs_by[key] = runs_by.get(key, 0) + 1
+
+def run_traced(argv, kind, extra=None):
+    """(code, stdout, stderr, trace stderr) of one traced run, with
+    `extra` settings on top of the environment's."""
     env, cwd = envs[kind]
     env = dict(env)
+    env.update(extra or {})
     env["PS4"] = "+${LINENO}: "
     if "K2_HOOK_TOKEN" in env:
         env["K2_HOOK_TOKEN"] = form_passport(argv)
     if not XTRACEFD:
-        code, out, err = run_plain(argv, kind)
+        code, out, err = run_plain(argv, kind, extra)
+        count_run(argv, kind, env)
         t = subprocess.run([bash_bin, "-x", script] + argv, env=env, cwd=cwd, stdin=subprocess.DEVNULL,
                            capture_output=True, timeout=60)
         tcode, tout, terr = t.returncode, t.stdout, t.stderr
@@ -1081,6 +1110,7 @@ def run_traced(argv, kind):
     import tempfile
     with tempfile.TemporaryFile(dir=sandbox) as tf:
         env["BASH_XTRACEFD"] = str(tf.fileno())
+        count_run(argv, kind, env)
         p = subprocess.run([bash_bin, "-x", script] + argv, env=env, cwd=cwd, stdin=subprocess.DEVNULL,
                            capture_output=True, timeout=60, pass_fds=(tf.fileno(),))
         tf.seek(0)
@@ -1095,18 +1125,218 @@ def utf8_text(b):
         return None
     return s
 
-def run_plain(argv, kind):
+def run_plain(argv, kind, extra=None):
     env, cwd = envs[kind]
     env = dict(env)
+    env.update(extra or {})
     if "K2_HOOK_TOKEN" in env:
         env["K2_HOOK_TOKEN"] = form_passport(argv)
+    count_run(argv, kind, env)
     p = subprocess.run([bash_bin, script] + argv, env=env, cwd=cwd, stdin=subprocess.DEVNULL,
                        capture_output=True, timeout=60)
     return p.returncode, p.stdout, p.stderr
 
-def capture(argv):
+def groups(kinds, values):
+    """`A=B=C | Con`: the environments with the same value, together."""
+    seen = []
+    for k, v in zip(kinds, values):
+        for g in seen:
+            if g[1] == v:
+                g[0].append(k)
+                break
+        else:
+            seen.append(([k], v))
+    return " | ".join("=".join(g[0]) for g in seen)
+
+def first_difference(kinds, wins):
+    """Where the first window that differs from the first one parts from it."""
+    for k, w in zip(kinds[1:], wins[1:]):
+        if w != wins[0]:
+            i = next((i for i, (a, b) in enumerate(zip(wins[0], w)) if a != b), min(len(w), len(wins[0])))
+            a = wins[0][i] if i < len(wins[0]) else "(the end)"
+            b = w[i] if i < len(w) else "(the end)"
+            return "%s; step %d, %s %r, %s %r" % (groups(kinds, [tuple(x) for x in wins]), i, kinds[0], a[:160],
+                                                   k, b[:160])
+    return ""
+
+def page_of(code, out, err):
+    """The page (code, stdout, stderr as text), or why it can't be one."""
+    if code not in EXIT_CODES:
+        return None, "exit %d, a code the binary has no Exit for" % code
+    o, e = utf8_text(out), utf8_text(err)
+    if o is None or e is None:
+        return None, "not UTF-8 text with newlines and tabs only"
+    return (code, o, e), None
+
+# The forms whose page goes through the permission cards filter
+# (_perm_lines): each is captured twice, the page while cards are off and
+# the page while they are on. Off: A (the owner, so no probe), B (a
+# passport; the probe's curl is a stub that fails), C (the cell socket
+# says off) and T (TCP says off). On: Con (the cell socket) and Ton (TCP).
+# Within each, the output and the trace outside the probe's call are the
+# same in all, the probe is called once and the stub sees one request per
+# run where it answers (C, Con, T, Ton: GET /cli/permission/enabled with
+# the form's passport), and the steps pass rules 2 and 3 with the
+# filter's own `read -r line` allowed. The probe is
+# _permission_cli_enabled, the one the binary's crates/k5-cli/src/cards.rs
+# is proved against: inside its call only steps on lines of its own
+# functions. The pipeline's two sides run at once (`cat <<'EOF' |
+# _perm_lines`), so the cat's step is put back before the filter's call
+# wherever bash wrote it.
+CARDS_OFF_KINDS = ("A", "B", "C", "T")
+CARDS_ON_KINDS = ("Con", "Ton")
+CARDS_ASK_KINDS = ("C", "Con", "T", "Ton")
+PERM_FILTER = "_perm_lines"
+perm_def = body_ranges(PERM_FILTER)
+if len(perm_def) != 1:
+    sys.exit("FAIL: %s is defined %d times" % (PERM_FILTER, len(perm_def)))
+perm_body = set(range(perm_def[0][0], perm_def[0][1] + 1))
+if perm_body & probe_lines:
+    sys.exit("FAIL: a line of %s is a line of the cards probe's functions" % PERM_FILTER)
+perm_read = {n for n in perm_body if k2_lines[n - 1].strip() == 'while IFS= read -r line || [ -n "$line" ]; do'}
+if len(perm_read) != 1:
+    sys.exit("FAIL: %d read loops in %s, this test knows one" % (len(perm_read), PERM_FILTER))
+perm_calls = [n for n in perm_body if k2_lines[n - 1].strip() == "if %s; then on=1; fi" % CARDS_PROBE]
+if len(perm_calls) != 1:
+    sys.exit("FAIL: %s asks the probe on %d lines, this test knows one" % (PERM_FILTER, len(perm_calls)))
+PIPE = re.compile(r"^\s*cat <<'EOF' \| %s( >&2)?$" % PERM_FILTER)
+pipe_lines = {i + 1 for i, l in enumerate(k2_lines) if PIPE.match(l)}
+if len(pipe_lines) < 2:
+    sys.exit("FAIL: only %d pages through %s" % (len(pipe_lines), PERM_FILTER))
+
+def cards_split(steps):
+    """The steps outside the cards probe's calls, each pipeline's cat put
+    back before its filter, and the number of calls."""
+    cats, rest = {}, []
+    for l in steps:
+        m = STEP.match(l)
+        if m and int(m.group(2)) in pipe_lines and m.group(3) == "cat":
+            cats.setdefault(int(m.group(2)), []).append(l)
+        else:
+            rest.append(l)
+    outside, calls, in_probe = [], 0, False
+    for l in rest:
+        m = STEP.match(l)
+        if in_probe:
+            if not m or int(m.group(2)) in probe_lines:
+                continue
+            in_probe = False
+        if m and int(m.group(2)) in probe_lines:
+            return None, "a step on a line of the cards probe outside its call: %r" % l
+        outside.append(l)
+        if m and m.group(3) == CARDS_PROBE:
+            if int(m.group(2)) not in perm_calls:
+                return None, "the cards probe called outside the filter: %r" % l
+            calls += 1
+            in_probe = True
+    out = []
+    for l in outside:
+        m = STEP.match(l)
+        if m and int(m.group(2)) in pipe_lines and m.group(3) == PERM_FILTER:
+            got = cats.get(int(m.group(2)))
+            if not got:
+                return None, "the filter's pipeline with no cat: %r" % l
+            out.append(got.pop(0))
+        out.append(l)
+    if any(cats.values()):
+        return None, "a cat of the filter's pipeline with no filter after it"
+    return (out, calls), None
+
+def cards_capture(argv, first):
+    """The two pages of a form through the cards filter, or why not."""
+    got = dict(first)
+    for kind in ("T", "Ton"):
+        r = run_traced(argv, kind)
+        if r is None:
+            return None, "the traced run differs from the untraced run"
+        code, out, err, trace = r
+        w, why = window(trace, kind)
+        if w is None:
+            return None, why
+        got[kind] = (code, out, err, w)
+    pages = []
+    for on, kinds in ((False, CARDS_OFF_KINDS), (True, CARDS_ON_KINDS)):
+        state = "on" if on else "off"
+        outs, wins = [], []
+        for kind in kinds:
+            code, out, err, w = got[kind]
+            split, why = cards_split(w)
+            if why:
+                return None, "with cards, %s (in %s)" % (why, kind)
+            outside, calls = split
+            if calls != 1:
+                return None, "with cards, the probe called %d times: in %s" % (calls, kind)
+            outs.append((code, out, err))
+            wins.append(outside)
+        if any(o != outs[0] for o in outs):
+            return None, "with cards %s, the output differs between the environments: %s" % (state, groups(kinds, outs))
+        if any(w != wins[0] for w in wins):
+            return None, "with cards %s, the trace differs between the environments: %s" % (
+                state, first_difference(kinds, wins))
+        why = judge_captured(wins[0], read_ok=perm_read)
+        if why:
+            return None, "with cards %s, %s" % (state, why)
+        if XTRACEFD and run_plain(argv, kinds[0]) != outs[0]:
+            return None, "with cards %s, the traced run differs from the untraced run" % state
+        page, why = page_of(*outs[0])
+        if why:
+            return None, "with cards %s, %s" % (state, why)
+        pages.append(page)
+    return pages, None
+
+# The forms that print chat's usage (_chat_usage): its manage piece only
+# while _CHAT_HELP_MANAGE is unset, empty or 1. Each is captured twice,
+# unset and set to 0, the same in A, B, C and Con each way, with that one
+# read allowed on _chat_usage's lines; untraced in A, empty and 1 print
+# the first page and `yes` the second.
+CHAT_MANAGE = "_CHAT_HELP_MANAGE"
+chat_def = body_ranges("_chat_usage")
+if len(chat_def) != 1:
+    sys.exit("FAIL: _chat_usage is defined %d times" % len(chat_def))
+chat_body = set(range(chat_def[0][0], chat_def[0][1] + 1))
+if sum(1 for n in chat_body if CHAT_MANAGE in k2_lines[n - 1]) != 1:
+    sys.exit("FAIL: _chat_usage reads %s on other than one line" % CHAT_MANAGE)
+if sum(l.count(CHAT_MANAGE) for l in k2_lines) != 1:
+    sys.exit("FAIL: the script reads %s outside _chat_usage" % CHAT_MANAGE)
+MANAGE_ALLOW = {CHAT_MANAGE: chat_body}
+
+def manage_capture(argv, first_page):
+    """The two pages of a form that prints chat's usage, or why not."""
     outs, wins = [], []
-    for kind in ("A", "B", "C", "Con"):
+    kinds = ("A", "B", "C", "Con")
+    for kind in kinds:
+        r = run_traced(argv, kind, {CHAT_MANAGE: "0"})
+        if r is None:
+            return None, "the traced run differs from the untraced run"
+        code, out, err, trace = r
+        w, why = window(trace, kind)
+        if w is None:
+            return None, why
+        outs.append((code, out, err))
+        wins.append(w)
+    if any(o != outs[0] for o in outs):
+        return None, "with %s=0, the output differs between the environments: %s" % (CHAT_MANAGE, groups(kinds, outs))
+    if any(w != wins[0] for w in wins):
+        return None, "with %s=0, the trace differs between the environments: %s" % (
+            CHAT_MANAGE, first_difference(kinds, wins))
+    why = judge_captured(wins[0], allow_env=MANAGE_ALLOW)
+    if why:
+        return None, "with %s=0, %s" % (CHAT_MANAGE, why)
+    page, why = page_of(*outs[0])
+    if why:
+        return None, "with %s=0, %s" % (CHAT_MANAGE, why)
+    for val, want in (("0", outs[0]), ("", first_page), ("1", first_page), ("yes", outs[0])):
+        o = run_plain(argv, "A", {CHAT_MANAGE: val})
+        w = want if val in ("0", "yes") else (want[0], want[1].encode("utf-8"), want[2].encode("utf-8"))
+        if o != w:
+            return None, "with %s=%r, the untraced run is not the page for that value" % (CHAT_MANAGE, val)
+    return page, None
+
+def capture(argv):
+    """(argv, the row's kind and pages, why not)."""
+    first, outs, wins = {}, [], []
+    kinds = ("A", "B", "C", "Con")
+    for kind in kinds:
         r = run_traced(argv, kind)
         if r is None:
             return argv, None, "the traced run differs from the untraced run"
@@ -1114,24 +1344,29 @@ def capture(argv):
         w, why = window(trace, kind)
         if w is None:
             return argv, None, why
+        first[kind] = (code, out, err, w)
         outs.append((code, out, err))
         wins.append(w)
+    if any(STEP.match(l) and STEP.match(l).group(3) == CARDS_PROBE for w in wins for l in w):
+        pages, why = cards_capture(argv, first)
+        return argv, (("C", pages[0], pages[1]) if pages else None), why
     if any(o != outs[0] for o in outs):
-        return argv, None, "the output differs between the environments"
+        return argv, None, "the output differs between the environments: %s" % groups(kinds, outs)
     if any(w != wins[0] for w in wins):
-        return argv, None, "the trace differs between the environments"
+        return argv, None, "the trace differs between the environments: %s" % first_difference(kinds, wins)
     if XTRACEFD and run_plain(argv, "A") != outs[0]:
         return argv, None, "the traced run differs from the untraced run"
     why = judge_captured(wins[0])
+    manage = bool(why) and judge_captured(wins[0], allow_env=MANAGE_ALLOW) is None
+    if why and not manage:
+        return argv, None, why
+    page, why = page_of(*outs[0])
     if why:
         return argv, None, why
-    code, out, err = outs[0]
-    if code not in EXIT_CODES:
-        return argv, None, "exit %d, a code the binary has no Exit for" % code
-    o, e = utf8_text(out), utf8_text(err)
-    if o is None or e is None:
-        return argv, None, "not UTF-8 text with newlines and tabs only"
-    return argv, (code, o, e), None
+    if manage:
+        other, why = manage_capture(argv, page)
+        return argv, (("M", page, other) if other else None), why
+    return argv, ("F", page), None
 
 CLI_WORD = re.compile(r"(?<![A-Za-z0-9_./~|<:-])k2(?= )")
 PRODUCT_WORD = re.compile(r"(?<![A-Za-z0-9_./~|<:-])K2(?![A-Za-z0-9_/~|<-])(?![.:][A-Za-z0-9_/])")
@@ -1154,34 +1389,57 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=int(os.environ.get("HELP_
         else:
             ckept[" ".join(argv)] = why
 # A form that asked is never captured (its curl is a step that is not
-# plain); this proves it: no request names a captured form's passport.
-asked = set()
-for r in requests_seen[seen_before:]:
-    for m in re.finditer(r"sessQ\.form([0-9]+)\b", r):
-        asked.add(tuple(ccands[int(m.group(1))]))
-if asked & set(captured):
-    sys.exit("FAIL: captured forms asked the stub daemon: %s"
-             % "; ".join(" ".join(a) for a in sorted(asked & set(captured))))
-print("help_native: %d other help forms asked the stub daemon (none captured)" % len(asked))
+# plain) but where the cards answer decides its page; this proves it from
+# the stub's side: no request names another captured form's passport, and
+# each run of a cards form where a stub answers sent it exactly one
+# request, the probe's.
+asked = {}
+for kind, r in requests_seen[seen_before:]:
+    route = r.split("\n", 1)[0].split("?", 1)[0]
+    for no in {int(m.group(1)) for m in re.finditer(r"sessQ\.form([0-9]+)\b", r)}:
+        asked.setdefault(tuple(ccands[no]), {}).setdefault(kind, []).append(route)
+bad_asks = []
+for argv, got in sorted(captured.items()):
+    seen = asked.get(argv, {})
+    if got[0] != "C":
+        if seen:
+            bad_asks.append("%s asked %r" % (" ".join(argv), seen))
+        continue
+    want = {k: ["/cli/permission/enabled"] * runs_by.get((argv, k), 0) for k in CARDS_ASK_KINDS}
+    if seen != want or not all(want.values()):
+        bad_asks.append("%s asked %r, want %r" % (" ".join(argv), seen, want))
+if bad_asks:
+    sys.exit("FAIL: captured forms asked the stub daemon other than the cards probe once a run: %s"
+             % "; ".join(bad_asks[:20]))
+n_cards = sum(1 for g in captured.values() if g[0] == "C")
+n_manage = sum(1 for g in captured.values() if g[0] == "M")
+print("help_native: %d other help forms asked the stub daemon; %d captured by the cards answer asked "
+      "once a run, the probe, and no other captured form asked" % (len(asked), n_cards))
 pages_, page_no, form_rows = [], {}, []
-for argv in sorted(captured):
-    code, o, e = captured[argv]
+def page_number(page):
+    code, o, e = page
     key = (code, escaped(o), escaped(e))
     if key not in page_no:
         page_no[key] = len(pages_)
         pages_.append(key)
-    form_rows.append("F\t%s\t%d" % (" ".join(argv), page_no[key]))
+    return page_no[key]
+for argv in sorted(captured):
+    got = captured[argv]
+    form_rows.append("\t".join([got[0], " ".join(argv)] + ["%d" % page_number(p) for p in got[1:]]))
 CHEAD = """# The other help forms the k5 binary answers itself: what bash printed for
 # each, proved the same in every environment from bash's own trace. Written
 # by tests/cli/help_native.sh --write; do not edit by hand.
 # P<tab><page><tab><exit code><tab><stdout><tab><stderr>: the text with
 #   \\\\, \\n and \\t escaped, \\c for the command's name and \\p for the product's.
 # F<tab><argv, words between single spaces><tab><page>
+# C<tab><argv><tab><page while permission cards are off><tab><page while on>:
+#   a page through the cards filter; the binary asks as bash asks.
+# M<tab><argv><tab><page><tab><page while _CHAT_HELP_MANAGE is set, not empty, not 1>
 """
 ctext = CHEAD + "".join("P\t%d\t%d\t%s\t%s\n" % (i, k[0], k[1], k[2]) for i, k in enumerate(pages_)) \
     + "".join(r + "\n" for r in form_rows)
-print("help_native: %d other help forms tried, %d captured (%d pages), %d stay bash"
-      % (len(ccands), len(captured), len(pages_), len(ckept)))
+print("help_native: %d other help forms tried, %d captured (%d by the cards answer, %d by %s; %d pages), "
+      "%d stay bash" % (len(ccands), len(captured), n_cards, n_manage, CHAT_MANAGE, len(pages_), len(ckept)))
 creasons = {}
 for why in ckept.values():
     key = re.sub(r": .*", "", why)

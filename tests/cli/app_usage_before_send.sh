@@ -20,6 +20,8 @@
 #     stderr, from the router, and cmd_app_label read -h first as a
 #     verb (a usage error). The router hands label its words now, and
 #     -h prints the grace page on stdout.
+#   - `k2 app data put -h` printed the grace page; it prints the data
+#     page, as every other `k2 app data` verb does.
 #
 # Each refusal row: the exact line on stderr, nothing on stdout, exit 2,
 # and the stub daemon records no request. Each row that should send then
@@ -273,6 +275,16 @@ page app/grace.txt app label return shop www -h
 refused "usage: k2 app label take|return <app-id> <label> [--json]" app label
 # native: app label
 refused "usage: k2 app label take|return <app-id> <label> [--json]" app label give shop www
+
+echo "== app data put: -h or --help is the data page, nothing sent =="
+# native: app data put
+page app/data.txt app data put -h
+# native: app data put
+page app/data.txt app data put --help
+# native: app data put
+page app/data.txt app data put shop notes.txt -h
+# native: app data put
+page app/data.txt app data put shop --json --help notes.txt
 
 echo ""
 echo "app_usage_before_send: $pass passed, $fail failed"

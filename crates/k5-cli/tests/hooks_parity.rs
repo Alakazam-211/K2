@@ -5,16 +5,19 @@
 //!
 //! - No verb or an unknown one: the usage lines, exit 1, nothing sent;
 //!   the gate first.
-//! - `status`: the limit (default, `--limit`, `-n`), `--json` (echoed,
-//!   echo's own options too), the reader's lines for a bare answer, a full
-//!   one, each section's odd shapes, and where the reader raises: what it
-//!   printed, then the raw answer, exit 0. One answer above 256 KiB.
+//! - `status`: the limit (default, `--limit`, `-n`), a missing limit or
+//!   one that is not digits only (`Error: <flag> needs a number`, exit 2,
+//!   nothing sent), `--json` (echoed, echo's own options too), the
+//!   reader's lines for a bare answer, a full one, each section's odd
+//!   shapes, and where the reader raises: what it printed, then the raw
+//!   answer, exit 0. One answer above 256 KiB.
 //! - `install` and `uninstall`: the body, the reader's lines (a report,
-//!   skipped, the `error` key whose line the shell throws away), `--json`.
+//!   skipped, an `error` key: its `Error:` line, exit 1, or 3 with a
+//!   `permission` object), `--json`.
 //! - No answer: a reset.
-//! - Help: the shell's (`hooks status -h` and `hooks install -h` reach the
-//!   verb, which skips the word and sends: a bash bug, reported, whose rows
-//!   flip when the fix lands).
+//! - Help: `-h` or `--help` anywhere prints the hooks page and sends
+//!   nothing (`hooks -h` and `hooks --help` the binary's own page, the
+//!   rest the shell's).
 //!
 //! The times are far in the future, so `ago` is `0s ago` on both sides.
 //! Each native row is the binary's own answer ([`answered_here`]).
@@ -63,6 +66,18 @@ fn large() -> String {
     body
 }
 
+/// A 200 whose body is not UTF-8.
+fn not_utf8() -> Vec<u8> {
+    let body: &[u8] = b"{\"error\":\"x\"}\xff";
+    let mut r = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    r.extend_from_slice(body);
+    r
+}
+
 #[test]
 fn hooks_with_no_verb() {
     let rig = Rig::new("hooks", "usage");
@@ -109,11 +124,7 @@ fn hooks_status_as_the_shell_does() {
             &["status", "-n", "5", "--limit", "7"],
             "{}",
         ),
-        one(
-            "--json read as --limit's value",
-            &["status", "--limit", "--json"],
-            "{}",
-        ),
+        one("-n 007", &["status", "-n", "007"], "{}"),
         one("other words are skipped", &["status", "x", "y"], "{}"),
         one("--json", &["status", "--json"], FULL),
         one(
@@ -245,6 +256,40 @@ fn hooks_status_as_the_shell_does() {
     }
 }
 
+/// A limit that is missing or not digits only: the usage error after the
+/// gate, nothing sent.
+#[test]
+fn hooks_status_limit_is_digits() {
+    let rig = Rig::new("hooks", "limit");
+    let no = |name, args| case(name, args, &[], vec![], owner_and_port, 2, 0);
+    for c in [
+        // native: hooks status
+        no("--limit as the last word", &["status", "--limit"]),
+        no("-n as the last word", &["status", "-n"]),
+        no("--limit after --json", &["status", "--json", "--limit"]),
+        no("--limit 5x", &["status", "--limit", "5x"]),
+        no("--limit -3", &["status", "--limit", "-3"]),
+        no("--limit empty", &["status", "--limit", ""]),
+        no("--limit with a space", &["status", "--limit", "5 6"]),
+        no("--limit with a query", &["status", "--limit", "5&x=1"]),
+        no("--limit --json", &["status", "--limit", "--json"]),
+        no("-n 1.5", &["status", "-n", "1.5"]),
+        no("a bad second limit", &["status", "--limit", "5", "--limit", "x"]),
+        no("a bad -n then --limit", &["status", "-n", "x", "--limit"]),
+        case(
+            "the gate first",
+            &["status", "--limit", "x"],
+            &[],
+            vec![],
+            owner_only,
+            1,
+            0,
+        ),
+    ] {
+        answered_here(&rig, &c);
+    }
+}
+
 #[test]
 fn hooks_install_as_the_shell_does() {
     for (verb, tag) in [("install", "install"), ("uninstall", "uninstall")] {
@@ -279,11 +324,73 @@ fn hooks_install_as_the_shell_does() {
             ),
             one("skipped", args, r#"{"skipped":"agentHooks off"}"#),
             one("an empty object", args, "{}"),
-            one(
-                "an error key: its line thrown away, then raw",
+            case(
+                "an error key: its Error line, exit 1",
                 args,
-                r#"{"error":"denied"}"#,
+                &[],
+                vec![ok(r#"{"error":"denied"}"#)],
+                owner_and_port,
+                1,
+                1,
             ),
+            case(
+                "an error object: its hint",
+                args,
+                &[],
+                vec![ok(r#"{"error":{"code":"c","hint":"the hint"}}"#)],
+                owner_and_port,
+                1,
+                1,
+            ),
+            case(
+                "an error object: its code",
+                args,
+                &[],
+                vec![ok(r#"{"error":{"code":"admin_only","hint":""}}"#)],
+                owner_and_port,
+                1,
+                1,
+            ),
+            case(
+                "an error null",
+                args,
+                &[],
+                vec![ok(r#"{"error":null,"skipped":"x"}"#)],
+                owner_and_port,
+                1,
+                1,
+            ),
+            case(
+                "an error with a lone surrogate",
+                args,
+                &[],
+                vec![ok(r#"{"error":"bad \ud800 name"}"#)],
+                owner_and_port,
+                1,
+                1,
+            ),
+            case(
+                "a 500 with an error",
+                args,
+                &[],
+                vec![Reply::Answer(
+                    500,
+                    r#"{"error":"installer worker: task panicked"}"#.into(),
+                )],
+                owner_and_port,
+                1,
+                1,
+            ),
+            case(
+                "not UTF-8: raw",
+                args,
+                &[],
+                vec![Reply::Raw(not_utf8())],
+                owner_and_port,
+                0,
+                1,
+            ),
+            one("a skipped value that can't be printed: raw", args, r#"{"skipped":"\ud800"}"#),
             one("a string with error in it: raw", args, r#""an error here""#),
             one("a list: raw", args, r#"["x"]"#),
             one("a number: raw", args, "5"),
@@ -300,12 +407,12 @@ fn hooks_install_as_the_shell_does() {
             ),
             one("--json", json, r#"{"report":{"action":"install"}}"#),
             case(
-                "an error status: the reader's lines",
+                "a refusal: the Error line, Ask with, exit 3",
                 args,
                 &[],
                 vec![Reply::Answer(403, PERMISSION_ASK.into())],
                 owner_and_port,
-                0,
+                3,
                 1,
             ),
             case(
@@ -324,42 +431,64 @@ fn hooks_install_as_the_shell_does() {
     }
 }
 
-/// Help is the shell's. `hooks install -h` and `hooks status -h` reach
-/// the verb, which skips `-h` and sends (a bash bug in
-/// `cli/src/remind.sh`'s `cmd_hooks_install` and `cmd_hooks_status`
-/// loops, reported). These rows flip to "nothing sent" when the fix
-/// lands.
+/// Help never acts: `-h` or `--help` anywhere prints the hooks page on
+/// stdout, exit 0, and sends nothing (`hooks -h` and `hooks --help` are
+/// the binary's own page; the front hands the rest to the shell). emit
+/// keeps its own page. After a bare `--` it is the router's usage error.
 #[test]
-fn help_is_the_shell_s() {
+fn help_never_acts() {
     let rig = Rig::new("hooks", "help");
     for c in [
-        case("-h alone", &["-h"], &[], vec![], owner_and_port, 1, 0),
+        case("-h alone", &["-h"], &[], vec![], owner_and_port, 0, 0),
+        case("--help alone", &["--help"], &[], vec![], owner_and_port, 0, 0),
         case(
-            "--help after a verb",
+            "--help after an unknown verb",
             &["nope", "--help"],
             &[],
             vec![],
             owner_and_port,
-            1,
+            0,
+            0,
+        ),
+        case("install -h", &["install", "-h"], &[], vec![], owner_and_port, 0, 0),
+        case(
+            "install --json --help",
+            &["install", "--json", "--help"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        ),
+        case("uninstall -h", &["uninstall", "-h"], &[], vec![], owner_and_port, 0, 0),
+        case("status -h", &["status", "-h"], &[], vec![], owner_and_port, 0, 0),
+        case(
+            "status --limit -h",
+            &["status", "--limit", "-h"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        ),
+        case("emit -h: its own page", &["emit", "-h"], &[], vec![], owner_and_port, 0, 0),
+        case(
+            "status -- -h: hooks takes no --",
+            &["status", "--", "-h"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
             0,
         ),
         case(
-            "install -h sends (bash bug)",
-            &["install", "-h"],
+            "install --help with no daemon",
+            &["install", "--help"],
             &[],
-            vec![ok("{}")],
-            owner_and_port,
+            vec![],
+            nothing,
             0,
-            1,
-        ),
-        case(
-            "status -h sends (bash bug)",
-            &["status", "-h"],
-            &[],
-            vec![ok("{}")],
-            owner_and_port,
             0,
-            1,
         ),
     ] {
         rig.check(&Case {

@@ -7,18 +7,24 @@
 //!
 //! 1. The settings ([`crate::daemon`]) and the two gates
 //!    ([`crate::prelude`]). `hooks` is an open tool.
-//! 2. No verb, or one with no arm: the four usage lines on stderr, exit 1.
-//! 3. `status [--limit|-n N] [--json]`: one `cli_request /cli/hooks/status
-//!    limit=<N>` over TCP (20 by default; the shell puts the number in the
-//!    query as it is). `install` and `uninstall` `[--json]`: one
+//! 2. No verb, or one with no arm: the four usage lines
+//!    (`cli/text/help/hooks.txt`) on stderr, exit 1.
+//! 3. `status [--limit|-n N] [--json]`: a `--limit` or `-n` with no word
+//!    after it, or one that is not digits only, is `Error: <flag> needs a
+//!    number` on stderr, exit 2, nothing sent. Otherwise one `cli_request
+//!    /cli/hooks/status limit=<N>` over TCP (20 by default; digits, so its
+//!    `urlencode` is the number). `install` and `uninstall` `[--json]`: one
 //!    `cli_post_json /cli/hooks/install` over TCP with `{}` or
 //!    `{"remove":true}`. Other words are skipped.
 //! 4. The answer as the shell holds it in `raw=$(…)`: NULs and trailing
 //!    newlines dropped. `--json` echoes it. Otherwise the shell's Python
-//!    renders it ([`status_text`], [`install_text`]) with its stderr thrown
-//!    away; where that Python raises (or `install` exits 1 on an `error`
-//!    key, whose line goes to the same null), what it printed before is
-//!    followed by `raw` and a newline (`|| echo "$raw"`), exit 0.
+//!    renders it. `status` ([`status_text`]) has its stderr thrown away;
+//!    where that Python raises, what it printed before is followed by
+//!    `raw` and a newline (`|| echo "$raw"`), exit 0. `install`
+//!    ([`install_out`]): an answer that is not a JSON object prints as it
+//!    came; one with an `error` key is `Error: <the error>` on stderr and
+//!    exit 1, or 3 with a `permission` object; a report it can't lay out
+//!    ([`install_text`]) is its lines, then the answer as it came, exit 0.
 //! 5. The EXIT trap's lines ([`crate::prelude::Closing`]).
 //!
 //! A request with no answer is the transport's line and exit 1; any other
@@ -26,10 +32,9 @@
 //! printed.
 //!
 //! The shell answers ([`run`] returns `None`): `hooks emit` (whole), `-h`
-//! or `--help` (the front sends those on), `--limit` or `-n` as the last
-//! word (`$2: unbound variable`) or with a value the URL would carry
-//! otherwise than as it is, a word that is not UTF-8, a port curl won't
-//! take, and a `python3` the binary can't tell.
+//! or `--help` (the front sends those on: the hooks page, or emit's), a
+//! word that is not UTF-8, a port curl won't take, and a `python3` the
+//! binary can't tell.
 
 use super::{curl_port, without_nuls};
 use crate::daemon::{self, Settings};
@@ -85,8 +90,11 @@ pub const USAGE: [&str; 4] = [
 pub enum Ask {
     /// No verb or one with no arm.
     Usage,
-    /// `status`: the limit as typed, and `--json`.
+    /// `status`: the limit (digits), and `--json`.
     Status { limit: String, json: bool },
+    /// `status` with a `--limit` or `-n` (the flag as typed) that has no
+    /// word after it, or one that is not digits only.
+    NeedsNumber(String),
     /// `install` (false) or `uninstall` (true), and `--json`.
     Install { remove: bool, json: bool },
 }
@@ -100,38 +108,26 @@ pub fn parse(words: &[&str]) -> Option<Ask> {
     let json = rest.contains(&"--json");
     match verb {
         "status" => {
+            // The shell's loop, left to right: the first bad limit stops it.
             let mut limit = "20".to_string();
+            let mut json = false;
             let mut i = 0;
             while i < rest.len() {
-                if matches!(rest[i], "--limit" | "-n") {
-                    limit = rest.get(i + 1)?.to_string();
-                    i += 2;
-                } else {
-                    i += 1;
-                }
-            }
-            let plain = limit
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~'));
-            if !plain {
-                return None;
-            }
-            // `--json` read as `--limit`'s value is no flag.
-            let json = {
-                let mut j = false;
-                let mut i = 0;
-                while i < rest.len() {
-                    match rest[i] {
-                        "--limit" | "-n" => i += 2,
-                        "--json" => {
-                            j = true;
-                            i += 1
+                match rest[i] {
+                    flag @ ("--limit" | "-n") => match rest.get(i + 1) {
+                        Some(v) if !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()) => {
+                            limit = (*v).to_string();
+                            i += 2;
                         }
-                        _ => i += 1,
+                        _ => return Some(Ask::NeedsNumber(flag.to_string())),
+                    },
+                    "--json" => {
+                        json = true;
+                        i += 1;
                     }
+                    _ => i += 1,
                 }
-                j
-            };
+            }
             Some(Ask::Status { limit, json })
         }
         "install" => Some(Ask::Install {
@@ -175,6 +171,10 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         }
         return Some(Exit::Error);
     }
+    if let Ask::NeedsNumber(flag) = &ask {
+        out::stderr_line(&format!("Error: {flag} needs a number"));
+        return Some(Exit::Usage);
+    }
     let mut settings = settings;
     settings.port = Some(settings.port_text.as_deref().and_then(curl_port)?);
     Some(send(args, ask, settings))
@@ -201,7 +201,7 @@ fn send(args: &[OsString], ask: Ask, settings: Settings) -> Exit {
             let body: &[u8] = if *remove { b"{\"remove\":true}" } else { b"{}" };
             (INSTALL, Call::PostJson(body), *json, false)
         }
-        Ask::Usage => unreachable!("answered before"),
+        Ask::Usage | Ask::NeedsNumber(_) => unreachable!("answered before"),
     };
     let exit = match client.call(Channel::Tcp, endpoint, call) {
         Ok(r) => {
@@ -210,13 +210,21 @@ fn send(args: &[OsString], ask: Ask, settings: Settings) -> Exit {
             while raw.last() == Some(&b'\n') {
                 raw.pop();
             }
-            let text = if json {
-                echo(&raw)
+            let (text, error) = if json {
+                (echo(&raw), None)
+            } else if status {
+                (rendered(&raw), None)
             } else {
-                rendered(&raw, status)
+                install_out(&raw)
             };
             match out::write_flushed(&mut std::io::stdout().lock(), &text) {
-                Ok(()) => Exit::Ok,
+                Ok(()) => match error {
+                    Some((line, exit)) => {
+                        out::stderr_line(&line);
+                        exit
+                    }
+                    None => Exit::Ok,
+                },
                 Err(e) => out::after_stdout_error(&e),
             }
         }
@@ -245,19 +253,14 @@ pub fn echo(raw: &[u8]) -> Vec<u8> {
     out
 }
 
-/// `echo "$raw" | python3 -c "…" 2>/dev/null || echo "$raw"`: the
-/// Python's lines, or what it printed before it stopped, then the raw
+/// `status`' `echo "$raw" | python3 -c "…" 2>/dev/null || echo "$raw"`:
+/// the Python's lines, or what it printed before it stopped, then the raw
 /// answer.
-pub fn rendered(raw: &[u8], status: bool) -> Vec<u8> {
+pub fn rendered(raw: &[u8]) -> Vec<u8> {
     let mut printed = String::new();
     let ok = std::str::from_utf8(raw).ok().and_then(|text| {
         let data = loads(&format!("{text}\n")).ok()?;
-        let r = if status {
-            status_text(&data, now(), &mut printed)
-        } else {
-            install_text(&data, &mut printed)
-        };
-        r.ok()
+        status_text(&data, now(), &mut printed).ok()
     });
     let mut out = printed.into_bytes();
     if ok.is_none() {
@@ -569,23 +572,46 @@ pub fn status_text(data: &Value, now: f64, out: &mut String) -> R<()> {
     Ok(())
 }
 
-/// `'error' in data`.
-fn has_error(data: &Value) -> R<bool> {
-    Ok(match data {
-        Value::Object(pairs) => super::get(pairs, "error").is_some(),
-        Value::Array(items) => items.iter().any(|v| py_eq(v, &s("error"))),
-        Value::Str(t) => py::str_of(&Value::Str(t.clone())).contains("error"),
-        _ => return Err(Stopped),
-    })
+/// `cmd_hooks_install`' Python on `raw` (`echo "$raw"` is its input):
+/// what it prints on stdout, and its `Error:` line with the exit code
+/// when the answer has an `error` key. An answer that is not UTF-8, not
+/// JSON or not an object prints as it came (`as_it_came`); so does the
+/// rest of one whose report it can't lay out, after the lines it made.
+pub fn install_out(raw: &[u8]) -> (Vec<u8>, Option<(String, Exit)>) {
+    let input = echo(raw);
+    let data = std::str::from_utf8(&input)
+        .ok()
+        .and_then(|text| loads(text).ok());
+    let Some(data @ Value::Object(pairs)) = &data else {
+        return (input, None);
+    };
+    if let Some(err) = super::get(pairs, "error") {
+        // `err.get('hint') or err.get('code')` for an object; `f'{err}'`,
+        // on stderr, where a lone surrogate is written `\udXXX`.
+        let err = match err {
+            Value::Object(e) => super::get(e, "hint")
+                .filter(|h| py::truthy(h))
+                .or_else(|| super::get(e, "code"))
+                .cloned()
+                .unwrap_or(Value::Null),
+            other => other.clone(),
+        };
+        let refused = matches!(super::get(pairs, "permission"), Some(Value::Object(_)));
+        let exit = if refused { Exit::Refused } else { Exit::Error };
+        return (Vec::new(), Some((format!("Error: {}", py::str_of(&err)), exit)));
+    }
+    let mut printed = String::new();
+    let ok = install_text(data, &mut printed).is_ok();
+    let mut out = printed.into_bytes();
+    if !ok {
+        out.extend(input);
+    }
+    (out, None)
 }
 
-/// `cmd_hooks_install`' Python: its lines onto `out`, until it raises or
-/// exits 1.
+/// `cmd_hooks_install`' Python inside its `try`, for an object with no
+/// `error` key: its lines onto `out`, until it raises.
 pub fn install_text(data: &Value, out: &mut String) -> R<()> {
-    if has_error(data)? {
-        // Its line goes to stderr, which the shell throws away; exit 1.
-        return Err(Stopped);
-    }
     if let Some(skipped) = get(data, "skipped")?.filter(|v| py::truthy(v)) {
         line(out, &format!("Hooks not changed: {}.", str_of(skipped)?));
         return Ok(());
@@ -662,21 +688,27 @@ mod tests {
             r#"install)   shift 2; cmd_hooks_install 0 "$@" ;;"#,
             r#"uninstall) shift 2; cmd_hooks_install 1 "$@" ;;"#,
             r#"emit)      shift 2; cmd_hooks_emit "$@" ;;"#,
-            r#"--limit|-n) limit="$2"; shift 2 ;;"#,
-            r#"raw=$(cli_request "/cli/hooks/status" "limit=$limit")"#,
+            r#"*)         _hooks_usage >&2; exit 1 ;;"#,
+            r#"--limit|-n)"#,
+            r#"''|*[!0123456789]*) echo "Error: $1 needs a number" >&2; exit 2 ;;"#,
+            r#"raw=$(cli_request "/cli/hooks/status" "limit=$(urlencode "$limit")")"#,
             r#"[ "$remove" = "1" ] && body='{"remove":true}'"#,
             r#"raw=$(cli_post_json "/cli/hooks/install" "$body")"#,
             r#"" 2>/dev/null || echo "$raw""#,
+            "        err = err.get('hint') or err.get('code')",
+            "    sys.exit(3 if isinstance(data.get('permission'), dict) else 1)",
+            r#"" || rc=$?"#,
         ] {
             assert!(text.contains(shell), "the shell no longer has {shell:?}");
         }
-        for l in USAGE {
-            let l = l.replace(cli_name!(), "k2").replace(product_name!(), "K2");
-            assert!(
-                text.contains(&format!("echo \"{l}\" >&2")),
-                "the usage line {l:?} moved"
-            );
-        }
+        let page = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../cli/text/help/hooks.txt");
+        let page = std::fs::read_to_string(&page).unwrap_or_else(|e| panic!("read hooks.txt: {e}"));
+        let lines: Vec<String> = USAGE
+            .iter()
+            .map(|l| l.replace(cli_name!(), "k2").replace(product_name!(), "K2"))
+            .collect();
+        assert_eq!(page.lines().collect::<Vec<_>>(), lines, "the usage lines moved");
     }
 
     #[test]
@@ -693,19 +725,68 @@ mod tests {
         );
         assert_eq!(
             parse(&["status", "--limit", "--json"]),
+            Some(Ask::NeedsNumber("--limit".into()))
+        );
+        assert_eq!(
+            parse(&["status", "--limit"]),
+            Some(Ask::NeedsNumber("--limit".into()))
+        );
+        assert_eq!(
+            parse(&["status", "-n", "5", "--limit", "a b"]),
+            Some(Ask::NeedsNumber("--limit".into()))
+        );
+        assert_eq!(
+            parse(&["status", "-n", "", "--limit"]),
+            Some(Ask::NeedsNumber("-n".into()))
+        );
+        assert_eq!(
+            parse(&["status", "--json", "-n", "007"]),
             Some(Ask::Status {
-                limit: "--json".into(),
-                json: false
+                limit: "007".into(),
+                json: true
             })
         );
-        assert_eq!(parse(&["status", "--limit"]), None);
-        assert_eq!(parse(&["status", "--limit", "a b"]), None);
         assert_eq!(
             parse(&["uninstall", "x", "--json"]),
             Some(Ask::Install {
                 remove: true,
                 json: true
             })
+        );
+    }
+
+    #[test]
+    fn install_s_reader() {
+        let err = |raw: &str| install_out(raw.as_bytes()).1;
+        assert_eq!(
+            err(r#"{"error":"boom"}"#),
+            Some(("Error: boom".into(), Exit::Error))
+        );
+        assert_eq!(
+            err(r#"{"error":{"code":"c","hint":""}}"#),
+            Some(("Error: c".into(), Exit::Error))
+        );
+        assert_eq!(
+            err(r#"{"error":{"hint":"h"},"permission":{}}"#),
+            Some(("Error: h".into(), Exit::Refused))
+        );
+        assert_eq!(
+            err(r#"{"error":{},"permission":[]}"#),
+            Some(("Error: None".into(), Exit::Error))
+        );
+        assert_eq!(
+            err(r#"{"error":"a \ud800"}"#),
+            Some(("Error: a \\ud800".into(), Exit::Error))
+        );
+        assert_eq!(install_out(br#""an error""#), (b"\"an error\"\n".to_vec(), None));
+        assert_eq!(install_out(b"-n"), (Vec::new(), None));
+        assert_eq!(install_out(b"x\xff"), (b"x\xff\n".to_vec(), None));
+        assert_eq!(
+            install_out(br#"{"report":{"clis":[{"cli":null}]}}"#),
+            (
+                b"Hook ?: notify.sh ? (?)\n{\"report\":{\"clis\":[{\"cli\":null}]}}\n".to_vec(),
+                None
+            )
         );
     }
 

@@ -528,7 +528,8 @@ export function ThreadChatNote({ children, error = false, testId }: { children: 
 }
 
 /** A soft pill above the box (a ticket's quick answer). `on`: the accent
- *  fill (the answer the ticket took). */
+ *  Button's fill, as your bubble's, deep enough for its label at 4.5:1
+ *  (the answer the ticket took). */
 export function ThreadChatChip({
   children,
   on = false,
@@ -544,7 +545,8 @@ export function ThreadChatChip({
   onClick: () => void
   testId?: string
 }): JSX.Element {
-  const fill = on ? 'var(--zen-accent)' : 'var(--zen-surface-raised)'
+  const fill = on ? 'var(--zen-accent-fill, var(--zen-accent))' : 'var(--zen-surface-raised)'
+  const edge = on ? fill : 'var(--zen-border)'
   return (
     <button
       type="button"
@@ -562,10 +564,10 @@ export function ThreadChatChip({
         padding: '4px 12px',
         borderRadius: 999,
         fontSize: '0.85em',
-        border: `1px solid ${on ? 'var(--zen-accent)' : 'var(--zen-border)'}`,
+        border: `1px solid ${edge}`,
         background: fill,
         color: on ? 'var(--zen-accent-text)' : 'var(--zen-text)',
-        ...chamferVars({ cut: chamferCutFor(26), fill, edge: on ? 'var(--zen-accent)' : 'var(--zen-border)', border: 1 }),
+        ...chamferVars({ cut: chamferCutFor(26), fill, edge, border: 1 }),
       }}
     >
       {children}

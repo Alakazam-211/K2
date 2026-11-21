@@ -276,6 +276,14 @@ describe('ticket-thread-v1 on', () => {
     expect(cli.post.mock.calls.map((c) => c[0])).not.toContain('feedback/comment')
   })
 
+  it('the chosen answer wears the accent Button’s fill, deep enough for its label', () => {
+    rail({ item: { ...ITEM, answer: 'Postgres' } })
+    const chosen = screen.getAllByTestId('ticket-quick-answer').find((c) => c.textContent === 'Postgres')!
+    expect(chosen.getAttribute('aria-pressed')).toBe('true')
+    expect(chosen.style.background).toBe('var(--zen-accent-fill, var(--zen-accent))')
+    expect(chosen.style.getPropertyValue('--ch-fill')).toBe('var(--zen-accent-fill, var(--zen-accent))')
+  })
+
   it('a pick’s answer moves the header at once, and says when the agent didn’t get it', async () => {
     const onTicketPatch = vi.fn()
     const onChanged = vi.fn()

@@ -11,6 +11,9 @@ pass=0; fail=0
 # bite <name> <file> <python replace: old> <new> <nextest filter>
 bite() {
     local name="$1" file="$2" old="$3" new="$4" filter="$5"
+    # BITES=<words>: only the bites whose name holds them (a job each fits
+    # well under the 2 h job limit).
+    case "$name" in *"${BITES:-}"*) ;; *) return ;; esac
     cp "$file" "/tmp/bite.bak"
     if ! python3 - "$file" "$old" "$new" <<'PY'
 import sys

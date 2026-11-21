@@ -124,6 +124,8 @@ pub const MAIL_HTTP_TIMEOUT: &[&str] = &["K5_MAIL_HTTP_TIMEOUT", "K2_MAIL_HTTP_T
 pub const HOSTMAIL_UPGRADE_POLL: &[&str] = &["K5_HOSTMAIL_UPGRADE_POLL", "K2_HOSTMAIL_UPGRADE_POLL", "K2SO_HOSTMAIL_UPGRADE_POLL"];
 pub const HOSTMAIL_UPGRADE_LOST_SECS: &[&str] =
     &["K5_HOSTMAIL_UPGRADE_LOST_SECS", "K2_HOSTMAIL_UPGRADE_LOST_SECS", "K2SO_HOSTMAIL_UPGRADE_LOST_SECS"];
+/// `1`: no warning for a plain http:// --host (`_k2_plain_http_warn`, `k2 clone`).
+pub const PLAIN_HTTP_OK: &[&str] = &["K5_PLAIN_HTTP_OK", "K2_PLAIN_HTTP_OK", "K2SO_PLAIN_HTTP_OK"];
 
 /// The command line's section of the registry.
 pub const CLI: &[&[&str]] = &[
@@ -158,6 +160,7 @@ pub const CLI: &[&[&str]] = &[
     MAIL_HTTP_TIMEOUT,
     HOSTMAIL_UPGRADE_POLL,
     HOSTMAIL_UPGRADE_LOST_SECS,
+    PLAIN_HTTP_OK,
 ];
 
 /// Every entry of the registry.
@@ -209,6 +212,7 @@ pub const ALL: &[&[&str]] = &[
     MAIL_HTTP_TIMEOUT,
     HOSTMAIL_UPGRADE_POLL,
     HOSTMAIL_UPGRADE_LOST_SECS,
+    PLAIN_HTTP_OK,
 ];
 
 /// The prefixes a name can have, newest first.

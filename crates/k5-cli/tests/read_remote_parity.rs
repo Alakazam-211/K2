@@ -31,14 +31,20 @@ fn answered_here(rig: &Rig, c: &Case) {
 #[test]
 fn read_on_another_server_as_the_shell_does() {
     let rig = Rig::new("read", "remote");
-    let one = |name, args, body: Reply, code| case(name, args, &[], vec![body], owner_and_port, code, 1);
+    let one =
+        |name, args, body: Reply, code| case(name, args, &[], vec![body], owner_and_port, code, 1);
     for c in [
         // native: read <ws>@<host>
         Case {
             stdin: Some(b"remote-tok-1\n"),
             ..one(
                 "the token from stdin",
-                &["ws@http://127.0.0.1:{port}", "--token-stdin", "--lines", "5"],
+                &[
+                    "ws@http://127.0.0.1:{port}",
+                    "--token-stdin",
+                    "--lines",
+                    "5",
+                ],
                 ok(LINES),
                 0,
             )
@@ -54,14 +60,23 @@ fn read_on_another_server_as_the_shell_does() {
         },
         one(
             "the token as --token",
-            &["ws@http://127.0.0.1:{port}", "--token", "remote-tok-3", "--session", "s 1"],
+            &[
+                "ws@http://127.0.0.1:{port}",
+                "--token",
+                "remote-tok-3",
+                "--session",
+                "s 1",
+            ],
             ok(LINES),
             0,
         ),
         one(
             "the other server's refusal",
             &["ws@http://127.0.0.1:{port}", "--token", "remote-tok-3"],
-            Reply::Answer(403, r#"{"error":{"code":"not_connected","hint":"pair first"}}"#.into()),
+            Reply::Answer(
+                403,
+                r#"{"error":{"code":"not_connected","hint":"pair first"}}"#.into(),
+            ),
             3,
         ),
         case(
@@ -77,7 +92,12 @@ fn read_on_another_server_as_the_shell_does() {
             stdin: Some(b"t\n"),
             ..case(
                 "--token-stdin and --token",
-                &["ws@http://127.0.0.1:{port}", "--token-stdin", "--token", "x"],
+                &[
+                    "ws@http://127.0.0.1:{port}",
+                    "--token-stdin",
+                    "--token",
+                    "x",
+                ],
                 &[],
                 vec![],
                 owner_and_port,

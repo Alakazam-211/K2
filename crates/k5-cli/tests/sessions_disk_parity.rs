@@ -63,7 +63,12 @@ fn some(r: &Rig) {
     file(&b, "archive.002.ndjson", 2_400_000, 1_699_000_000);
     file(&b, "notes.txt", 99, 1_800_000_000);
     file(&d.join("sess-a"), "archive.ndjson", 10, 1_600_000_000);
-    file(&d.join("caf\u{e9}-1"), "archive.ndjson", 1024 * 1152, 1_650_000_000);
+    file(
+        &d.join("caf\u{e9}-1"),
+        "archive.ndjson",
+        1024 * 1152,
+        1_650_000_000,
+    );
     std::fs::create_dir_all(d.join("empty")).unwrap();
     std::fs::write(d.join("stray"), "x").unwrap();
 }
@@ -118,7 +123,12 @@ fn sessions_archives_as_the_shell_does() {
         row("no folders", &["archives"], no_folders, 0),
         row("no folders, JSON", &["archives", "--json"], no_folders, 0),
         row("no sessions folder", &["archives"], no_sessions, 0),
-        row("no sessions folder, JSON", &["archives", "--json"], no_sessions, 0),
+        row(
+            "no sessions folder, JSON",
+            &["archives", "--json"],
+            no_sessions,
+            0,
+        ),
         row("a large list", &["archives", "--json"], many, 0),
         row("the connection gate", &["archives"], nothing, 1),
         case(
@@ -161,8 +171,7 @@ fn bsd_stat() -> bool {
         .args(["-f", "%z", "/dev/null"])
         .output()
         .expect("stat runs");
-    out.status.success()
-        && String::from_utf8_lossy(&out.stdout).trim_end_matches('\n') == "0"
+    out.status.success() && String::from_utf8_lossy(&out.stdout).trim_end_matches('\n') == "0"
 }
 
 #[test]

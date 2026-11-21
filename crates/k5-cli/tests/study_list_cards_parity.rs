@@ -50,7 +50,15 @@ fn the_list_as_json_without_a_passport() {
         // native: study --json
         case("the list", &["--json"], &[], vec![], owner_and_port, 0, 0),
         case("list", &["list", "--json"], &[], vec![], nothing, 0, 0),
-        case("an empty topic", &["", "--json"], &[], vec![], nothing, 0, 0),
+        case(
+            "an empty topic",
+            &["", "--json"],
+            &[],
+            vec![],
+            nothing,
+            0,
+            0,
+        ),
         case(
             "the virtual desktop's guard",
             &["--json"],

@@ -924,7 +924,10 @@ fn done_in_a_session_the_api_started() {
         )
     };
     let tcp = |name, args, replies: Vec<common::stub::Reply>, code, n| {
-        passport_case(&api(&[]), case(name, args, &[], replies, port_only, code, n))
+        passport_case(
+            &api(&[]),
+            case(name, args, &[], replies, port_only, code, n),
+        )
     };
     let v = vec![
         // native: done (API lifecycle session)
@@ -937,7 +940,13 @@ fn done_in_a_session_the_api_started() {
             1,
         ),
         cell("an empty reason", &["--reason", ""], vec![ok(OK)], 0, 1),
-        cell("a word ends the flags", &["x", "--bogus"], vec![ok(OK)], 0, 1),
+        cell(
+            "a word ends the flags",
+            &["x", "--bogus"],
+            vec![ok(OK)],
+            0,
+            1,
+        ),
         cell("-- ends the flags", &["--", "--reason"], vec![ok(OK)], 0, 1),
         cell("--reason with nothing after", &["--reason"], vec![], 2, 0),
         cell("an unknown flag", &["--bogus"], vec![], 2, 0),
@@ -949,11 +958,20 @@ fn done_in_a_session_the_api_started() {
             1,
         ),
         tcp("over TCP", &[], vec![ok(OK)], 0, 1),
-        tcp("over TCP: a reason", &["--reason", "é/x"], vec![ok(OK)], 0, 1),
+        tcp(
+            "over TCP: a reason",
+            &["--reason", "é/x"],
+            vec![ok(OK)],
+            0,
+            1,
+        ),
         tcp(
             "over TCP: the daemon's error",
             &[],
-            vec![common::stub::Reply::Answer(404, r#"{"error":"no session"}"#.into())],
+            vec![common::stub::Reply::Answer(
+                404,
+                r#"{"error":"no session"}"#.into(),
+            )],
             0,
             1,
         ),

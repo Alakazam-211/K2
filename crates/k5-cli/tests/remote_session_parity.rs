@@ -634,53 +634,131 @@ fn answered_here(rig: &Rig, c: &Case) {
 fn remote_session_on_another_server() {
     let rig = Rig::new(VERB, "host");
     const H: &str = "http://127.0.0.1:{port}";
-    let one = |name, args, body: &str| case(name, args, &[], vec![reply(body)], owner_and_port, 0, 1);
+    let one =
+        |name, args, body: &str| case(name, args, &[], vec![reply(body)], owner_and_port, 0, 1);
     let remote = |c: Case| with(vec![("K2_REMOTE_TOKEN", "remote-tok-9".to_string())], c);
     for c in [
         // native: remote-session status --host
-        remote(one("status", &["status", "--host", H], r#"{"ok":true,"enabled":true,"activeGrants":1,"activeSessions":[]}"#)),
-        remote(one("status --json", &["status", "--json", "--host", "http://127.0.0.1:{port}/"], r#"{"ok":true,"enabled":false}"#)),
+        remote(one(
+            "status",
+            &["status", "--host", H],
+            r#"{"ok":true,"enabled":true,"activeGrants":1,"activeSessions":[]}"#,
+        )),
+        remote(one(
+            "status --json",
+            &["status", "--json", "--host", "http://127.0.0.1:{port}/"],
+            r#"{"ok":true,"enabled":false}"#,
+        )),
         // native: remote-session enable --host
-        remote(one("enable", &["enable", "--host", H], r#"{"ok":true,"enabled":true}"#)),
-        remote(one("disable", &["disable", "--host", H], r#"{"ok":true,"enabled":false}"#)),
+        remote(one(
+            "enable",
+            &["enable", "--host", H],
+            r#"{"ok":true,"enabled":true}"#,
+        )),
+        remote(one(
+            "disable",
+            &["disable", "--host", H],
+            r#"{"ok":true,"enabled":false}"#,
+        )),
         // native: remote-session grant --host
         one(
             "grant, the token as --token",
-            &["grant", "--ttl", "30m", "--label", "ci", "--host", H, "--token", "remote-tok-1"],
+            &[
+                "grant",
+                "--ttl",
+                "30m",
+                "--label",
+                "ci",
+                "--host",
+                H,
+                "--token",
+                "remote-tok-1",
+            ],
             r#"{"ok":true,"token":"k2rs_abc","grant":{"id":"g1","expiresAt":1763600000,"label":"ci"}}"#,
         ),
         // native: remote-session grants --host
-        remote(one("grants --json", &["grants", "--json", "--host", H], r#"{"ok":true,"grants":[]}"#)),
+        remote(one(
+            "grants --json",
+            &["grants", "--json", "--host", H],
+            r#"{"ok":true,"grants":[]}"#,
+        )),
         // native: remote-session revoke --host
-        remote(one("revoke", &["revoke", "g1", "--host", H], r#"{"ok":true,"grant":{"id":"g1"},"killedSessions":0}"#)),
+        remote(one(
+            "revoke",
+            &["revoke", "g1", "--host", H],
+            r#"{"ok":true,"grant":{"id":"g1"},"killedSessions":0}"#,
+        )),
         // native: remote-session shell --host
-        remote(one("shell", &["shell", "--cwd", "/tmp", "--host", H], r#"{"ok":true,"sessionId":"s9","grantId":"g1","ready":true}"#)),
+        remote(one(
+            "shell",
+            &["shell", "--cwd", "/tmp", "--host", H],
+            r#"{"ok":true,"sessionId":"s9","grantId":"g1","ready":true}"#,
+        )),
         // native: remote-session write --host
         stdin(
             b"remote-tok-2\n",
-            one("write, the token on stdin", &["write", "s9", "ls -la", "--host", H, "--token-stdin"], r#"{"ok":true}"#),
+            one(
+                "write, the token on stdin",
+                &["write", "s9", "ls -la", "--host", H, "--token-stdin"],
+                r#"{"ok":true}"#,
+            ),
         ),
         // native: remote-session read --host
-        remote(one("read", &["read", "s9", "--lines", "20", "--host", H], r#"{"lines":["a","b"]}"#)),
+        remote(one(
+            "read",
+            &["read", "s9", "--lines", "20", "--host", H],
+            r#"{"lines":["a","b"]}"#,
+        )),
         remote(case(
             "the other server's refusal",
             &["status", "--host", H],
             &[],
-            vec![Reply::Answer(403, r#"{"error":{"code":"REMOTE_SESSIONS_DISABLED","hint":"off"}}"#.into())],
+            vec![Reply::Answer(
+                403,
+                r#"{"error":{"code":"REMOTE_SESSIONS_DISABLED","hint":"off"}}"#.into(),
+            )],
             owner_and_port,
             3,
             1,
         )),
-        case("no token for the host", &["status", "--host", H], &[], vec![], owner_and_port, 1, 0),
-        case("the connection gate first", &["status", "--host", H], &[], vec![], nothing, 1, 0),
+        case(
+            "no token for the host",
+            &["status", "--host", H],
+            &[],
+            vec![],
+            owner_and_port,
+            1,
+            0,
+        ),
+        case(
+            "the connection gate first",
+            &["status", "--host", H],
+            &[],
+            vec![],
+            nothing,
+            1,
+            0,
+        ),
     ] {
         answered_here(&rig, &c);
     }
     for c in [
-        remote(shell(one("plain http to a name", &["status", "--host", "http://localhost:{port}"], r#"{"ok":true}"#))),
+        remote(shell(one(
+            "plain http to a name",
+            &["status", "--host", "http://localhost:{port}"],
+            r#"{"ok":true}"#,
+        ))),
         with(
             with_passport(&[("K2_REMOTE_TOKEN", "remote-tok-9")]),
-            shell(case("with a session passport", &["status", "--host", H], &[], vec![reply(r#"{"ok":true}"#)], port_only, 0, 1)),
+            shell(case(
+                "with a session passport",
+                &["status", "--host", H],
+                &[],
+                vec![reply(r#"{"ok":true}"#)],
+                port_only,
+                0,
+                1,
+            )),
         ),
     ] {
         rig.check(&c);

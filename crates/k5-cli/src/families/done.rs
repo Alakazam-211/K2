@@ -349,7 +349,11 @@ pub mod api {
                 return Exit::Usage;
             }
         };
-        let pairs: Vec<&str> = if form.is_empty() { vec![] } else { vec![form.as_str()] };
+        let pairs: Vec<&str> = if form.is_empty() {
+            vec![]
+        } else {
+            vec![form.as_str()]
+        };
         let would_refuse = passport::current(args).would_refuse();
         let port = settings.port_text.as_deref().and_then(curl_port);
         if on_socket {

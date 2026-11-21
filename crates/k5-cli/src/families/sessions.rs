@@ -455,14 +455,9 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
 /// `sessions archives` and `sessions compact` ([`disk`]): `None` for any
 /// other line; `Some(None)` hands it to the shell.
 #[cfg(unix)]
-fn disk_line(
-    args: &[OsString],
-    words: &[&str],
-    hook_sock: Option<&Path>,
-) -> Option<Option<Exit>> {
+fn disk_line(args: &[OsString], words: &[&str], hook_sock: Option<&Path>) -> Option<Option<Exit>> {
     let d = disk::parse(words)?;
-    if words.iter().any(|w| matches!(*w, "-h" | "--help"))
-        || !python::family_native(python::here())
+    if words.iter().any(|w| matches!(*w, "-h" | "--help")) || !python::family_native(python::here())
     {
         return Some(None);
     }

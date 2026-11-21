@@ -634,9 +634,8 @@ mod tests {
         };
         let env = Env::of(&[]);
         let args = |l: &[&str]| -> Vec<OsString> { l.iter().map(OsString::from).collect() };
-        let w = |l: &[&str]| -> Option<Vec<String>> {
-            Some(l.iter().map(|s| s.to_string()).collect())
-        };
+        let w =
+            |l: &[&str]| -> Option<Vec<String>> { Some(l.iter().map(|s| s.to_string()).collect()) };
         assert_eq!(
             kit_call(&args(&["explain", "mpc-E001"]), &p, &env),
             w(&["explain", "mpc-E001"])
@@ -650,7 +649,10 @@ mod tests {
         assert_eq!(kit_call(&args(&["explain", "mpc-1", "x"]), &p, &env), None);
         let guarded = Env::of(&[("K2_NO_OWNER_FALLBACK", "1")]);
         let no_token = Prelude { token: false, ..p };
-        assert_eq!(kit_call(&args(&["explain", "mpc-1"]), &no_token, &guarded), None);
+        assert_eq!(
+            kit_call(&args(&["explain", "mpc-1"]), &no_token, &guarded),
+            None
+        );
     }
 
     #[test]

@@ -144,8 +144,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
 /// line with no port curl takes or no token, which only the shell's
 /// gate-less call reads).
 pub(crate) fn run_called(args: &[OsString], words: &[&str]) -> Option<Exit> {
-    if handed_back(words) || !python::family_native(python::here()) || py::decode_here().is_none()
-    {
+    if handed_back(words) || !python::family_native(python::here()) || py::decode_here().is_none() {
         return None;
     }
     let mut settings = daemon::current().ok()?;

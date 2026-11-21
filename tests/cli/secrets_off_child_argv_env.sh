@@ -527,7 +527,7 @@ assert_off_children "talk --token-stdin" "remote token" "$REMOTE_SENTINEL"
 # 25-26. k2 remote-session --token-stdin: an owner token for a remote host
 #        (status --host) and a grant token on this daemon (write) reach the
 #        route and no child's argv or environment, nor k2's own argv.
-sec_case "remote-session status --token-stdin" /cli/remote-session/status "owner token" "$REMOTE_SENTINEL" remote-session status --host "http://127.0.0.1:$(cat "$W/tcp-port")" --token-stdin
+SEC_CASE_CHILDREN=assert_children_native sec_case "remote-session status --token-stdin" /cli/remote-session/status "owner token" "$REMOTE_SENTINEL" remote-session status --host "http://127.0.0.1:$(cat "$W/tcp-port")" --token-stdin
 SEC_CASE_CHILDREN=assert_children_native sec_case "remote-session write --token-stdin" /cli/terminal/write "grant token" "$REMOTE_SENTINEL" remote-session write sess-1 "ls" --token-stdin
 
 # 27. k2 compute node servers <node> add --code -: the pairing code reaches

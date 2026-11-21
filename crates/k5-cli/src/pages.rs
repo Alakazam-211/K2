@@ -252,33 +252,88 @@ pub const STUDY_TITLES: &[(&str, &str)] = &[
     ("context", "Always-on context"),
     ("db", "Workspace database"),
     ("mail", "Agent email"),
-    ("connect-boundary", concat!(k2_client::product_name!(), " vs Connect")),
+    (
+        "connect-boundary",
+        concat!(k2_client::product_name!(), " vs Connect"),
+    ),
     ("apps", "Apps"),
     ("app-deploys", "Deploying Apps"),
     ("app-move", "Moving your --cmd service to an App"),
     ("app-api", "The App API: server SDK and gateway routes"),
-    ("app-errors", "App refusals: every id, its fix and who fixes it"),
-    ("live", "Live surfaces: what an App or a Garden widget can show live"),
+    (
+        "app-errors",
+        "App refusals: every id, its fix and who fixes it",
+    ),
+    (
+        "live",
+        "Live surfaces: what an App or a Garden widget can show live",
+    ),
     ("app-heartbeats", "Heartbeats in an app"),
     ("app-tickets", "Tickets in an app"),
-    ("app-identity", "An agent's name, color, picture and handle in an app"),
-    ("app-surfaces", "Room members, and an App's own self and usage"),
-    ("app-resources", "Disk and memory, the disk guard, clean and trends"),
-    ("app-runtime", concat!(k2_client::product_name!(), " updates and your App: the re-host")),
+    (
+        "app-identity",
+        "An agent's name, color, picture and handle in an app",
+    ),
+    (
+        "app-surfaces",
+        "Room members, and an App's own self and usage",
+    ),
+    (
+        "app-resources",
+        "Disk and memory, the disk guard, clean and trends",
+    ),
+    (
+        "app-runtime",
+        concat!(
+            k2_client::product_name!(),
+            " updates and your App: the re-host"
+        ),
+    ),
     ("app-handover", "Handing an App to another agent"),
     ("app-push", "Notifications to a custom App's own phone app"),
     ("app-pairing", "Pairing a custom App's own phone app by QR"),
-    ("auth-pages", concat!("Your own sign-in pages: passwords straight to ", k2_client::product_name!())),
-    ("app-profile", "A person's own profile, picture and sessions in an App"),
-    ("app-account-deletion", "A person deletes their own App account: store rules, modes, what stays"),
-    ("app-transfers", "Big files that survive the app in the background"),
-    ("app-transfers-http", "Resumable uploads over plain HTTP: every field, refusal and curl"),
+    (
+        "auth-pages",
+        concat!(
+            "Your own sign-in pages: passwords straight to ",
+            k2_client::product_name!()
+        ),
+    ),
+    (
+        "app-profile",
+        "A person's own profile, picture and sessions in an App",
+    ),
+    (
+        "app-account-deletion",
+        "A person deletes their own App account: store rules, modes, what stays",
+    ),
+    (
+        "app-transfers",
+        "Big files that survive the app in the background",
+    ),
+    (
+        "app-transfers-http",
+        "Resumable uploads over plain HTTP: every field, refusal and curl",
+    ),
     ("app-chat", "Chat, voice and calls in your App"),
-    ("app-recording", "Recording in an App's calls: consent, required, server reads, the lock"),
-    ("chat-voice", "Voice rooms and channels in your App: the setup"),
+    (
+        "app-recording",
+        "Recording in an App's calls: consent, required, server reads, the lock",
+    ),
+    (
+        "chat-voice",
+        "Voice rooms and channels in your App: the setup",
+    ),
     ("chat-voice-rooms", "Rooms and channels in your App Space"),
     ("voice-rooms", "Voice rooms on this server (preview)"),
-    ("tauri", concat!("The ", k2_client::product_name!(), " side of a Tauri app, end to end")),
+    (
+        "tauri",
+        concat!(
+            "The ",
+            k2_client::product_name!(),
+            " side of a Tauri app, end to end"
+        ),
+    ),
     ("tauri-voice", "Calls inside a Tauri app's window"),
     ("skins", "Apps"),
     ("feedback-loop", "Changing this box"),
@@ -289,45 +344,126 @@ pub const STUDY_TITLES: &[(&str, &str)] = &[
     ("llm-tokens", "LLM tokens"),
     ("llm-accounts", "LLM tokens"),
     ("publish-framing", "Who may frame your App"),
-    ("publish-visibility", "Private, PIN or public: who may open your site"),
+    (
+        "publish-visibility",
+        "Private, PIN or public: who may open your site",
+    ),
     ("publish-dev", "Host a dev server with hot reload"),
     ("compute", "Compute nodes"),
     ("compute-shared", "Shared compute nodes"),
-    ("ci", concat!("CI on ", k2_client::product_name!(), " Compute")),
-    ("ci-release", concat!("Signed release builds on ", k2_client::product_name!(), " Compute")),
+    (
+        "ci",
+        concat!("CI on ", k2_client::product_name!(), " Compute"),
+    ),
+    (
+        "ci-release",
+        concat!(
+            "Signed release builds on ",
+            k2_client::product_name!(),
+            " Compute"
+        ),
+    ),
     ("ci-stats", "CI stats, monitors and the [ci] run message"),
-    ("provenance", "Build statements: what a node signs about a build, and how to check one"),
+    (
+        "provenance",
+        "Build statements: what a node signs about a build, and how to check one",
+    ),
     ("vault", "Secrets (the vault)"),
     ("notifications", "Thread posts and phone pushes"),
     ("data-sources", "Data sources and triggers"),
-    ("projects", concat!(k2_client::product_name!(), " projects and who may change them")),
+    (
+        "projects",
+        concat!(
+            k2_client::product_name!(),
+            " projects and who may change them"
+        ),
+    ),
     ("hooks", "Custom agents: Thread and lifecycle hooks"),
     ("agent-hire", "Hiring agents through the v1 API"),
     ("garden-data", "Garden data: a widget's keyspace and grants"),
     ("garden-access", "Garden access: who may edit a Garden"),
     ("garden-changes", "What changed for Gardens in 0.46.3"),
     ("changes", "Git changes: review, stage, discard, commit"),
-    ("docs", "Live docs: edit Markdown, code and text with people and agents"),
+    (
+        "docs",
+        "Live docs: edit Markdown, code and text with people and agents",
+    ),
     ("sim", "The mobile device: tree first, act, read the diff"),
     ("design", "Design notes: what a Design tab sends you"),
     ("db-upgrade", "Moving a database to a newer Postgres"),
-    ("app-databases", "An App's database: what reaches what, and connecting one"),
+    (
+        "app-databases",
+        "An App's database: what reaches what, and connecting one",
+    ),
     ("jobs", "Scheduled jobs the daemon runs"),
-    ("heartbeats", "Heartbeats and one-time reminders (routines, cron)"),
-    ("mail-watch", "Hear that mail arrived: VIPs, the digest, what's safe"),
-    ("mail-reader", "The mail reader: people open inboxes; agents can't; every access logged"),
+    (
+        "heartbeats",
+        "Heartbeats and one-time reminders (routines, cron)",
+    ),
+    (
+        "mail-watch",
+        "Hear that mail arrived: VIPs, the digest, what's safe",
+    ),
+    (
+        "mail-reader",
+        "The mail reader: people open inboxes; agents can't; every access logged",
+    ),
     ("folder-trust", "Who may start AI tools in a folder"),
-    ("email-notifications", "One-way email from senders no agent can read"),
+    (
+        "email-notifications",
+        "One-way email from senders no agent can read",
+    ),
     ("box-move", "Moving a box: the vault and the tunnel token"),
-    ("board", concat!("The Board Garden: ", k2_client::cli_name!(), " board, grants, the rules")),
-    ("chat-refresh", concat!("Refreshing your own chat: ", k2_client::cli_name!(), " agent refresh, the note, what carries on")),
-    ("desktop", "Remote desktop: this computer's screen in a Desktop tab (people only)"),
-    ("send-feedback", concat!("Telling ", k2_client::product_name!(), "'s makers about ", k2_client::product_name!(), ": ", k2_client::cli_name!(), " send-feedback, what is sent, agents' limits")),
-    ("organization", "The Org Chart: orgs, heads and the daily bulletin"),
-    ("agent-templates", "Agent templates: hire a type, save your own, upgrade"),
+    (
+        "board",
+        concat!(
+            "The Board Garden: ",
+            k2_client::cli_name!(),
+            " board, grants, the rules"
+        ),
+    ),
+    (
+        "chat-refresh",
+        concat!(
+            "Refreshing your own chat: ",
+            k2_client::cli_name!(),
+            " agent refresh, the note, what carries on"
+        ),
+    ),
+    (
+        "desktop",
+        "Remote desktop: this computer's screen in a Desktop tab (people only)",
+    ),
+    (
+        "send-feedback",
+        concat!(
+            "Telling ",
+            k2_client::product_name!(),
+            "'s makers about ",
+            k2_client::product_name!(),
+            ": ",
+            k2_client::cli_name!(),
+            " send-feedback, what is sent, agents' limits"
+        ),
+    ),
+    (
+        "organization",
+        "The Org Chart: orgs, heads and the daily bulletin",
+    ),
+    (
+        "agent-templates",
+        "Agent templates: hire a type, save your own, upgrade",
+    ),
     ("suite-apps", "One-click suite Apps (Hearth, Meet)"),
     ("postal", "Postal: friends on other machines (Beta)"),
-    ("permissions", concat!("Permission cards: ask a person to allow what ", k2_client::product_name!(), " refused you")),
+    (
+        "permissions",
+        concat!(
+            "Permission cards: ask a person to allow what ",
+            k2_client::product_name!(),
+            " refused you"
+        ),
+    ),
 ];
 
 /// `study --json` (and `study list --json`): every topic of
@@ -987,13 +1123,21 @@ mod tests {
             }
         }
         let all = catalog_json(true);
-        assert!(all.starts_with("{\"topics\":[{\"id\":\"what\",\"title\":\"What "), "{all}");
+        assert!(
+            all.starts_with("{\"topics\":[{\"id\":\"what\",\"title\":\"What "),
+            "{all}"
+        );
         assert!(all.ends_with(&format!(
             "{{\"id\":\"permissions\",\"title\":\"Permission cards: ask a person to allow what {product} refused you\"}}]}}\n"
         )), "{all}");
         let off = catalog_json(false);
         assert!(!off.contains("\"permissions\""), "{off}");
-        assert!(off.ends_with("\"id\":\"postal\",\"title\":\"Postal: friends on other machines (Beta)\"}]}\n"), "{off}");
+        assert!(
+            off.ends_with(
+                "\"id\":\"postal\",\"title\":\"Postal: friends on other machines (Beta)\"}]}\n"
+            ),
+            "{off}"
+        );
     }
 
     #[test]
@@ -1027,7 +1171,7 @@ mod tests {
         // The shell's: errors (an unknown flag, a second topic, before any
         // --help), unknown topics and the bash pages.
         for shell in [
-            &["--bogus", "--help"],
+            &["--bogus", "--help"][..],
             &["--"],
             &["errors", "db"],
             &["errors", "db", "--help"],

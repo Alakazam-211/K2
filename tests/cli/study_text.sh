@@ -229,8 +229,8 @@ if [ "$NEW" != "$CLI_BASH_SOURCE" ]; then
         native "$id"
         native "$id" --json
     done
-    handed --json
-    handed list --json
+    native --json
+    native list --json
     handed nope
     handed "$CARDS_ONLY"
     handed --bogus

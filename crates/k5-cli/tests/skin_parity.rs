@@ -1144,11 +1144,27 @@ fn skin_usage_as_the_shell_prints_it() {
         ),
         with(
             cell(),
-            case("cards on, asked on the cell socket", &[], &[], vec![ok(common::cards::ON)], port_only, 1, 1),
+            case(
+                "cards on, asked on the cell socket",
+                &[],
+                &[],
+                vec![ok(common::cards::ON)],
+                port_only,
+                1,
+                1,
+            ),
         ),
         with(
             cell(),
-            case("cards off", &["nope"], &[], vec![ok(common::cards::OFF)], port_only, 1, 1),
+            case(
+                "cards off",
+                &["nope"],
+                &[],
+                vec![ok(common::cards::OFF)],
+                port_only,
+                1,
+                1,
+            ),
         ),
     ] {
         rig.check(&c);

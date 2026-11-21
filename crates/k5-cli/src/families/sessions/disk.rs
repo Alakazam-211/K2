@@ -45,7 +45,11 @@ use std::process::{Command, Stdio};
 /// `compact`'s usage lines, exit 1.
 pub const COMPACT_USAGE: [&str; 2] = [
     concat!("Usage: ", cli_name!(), " sessions compact <session-id>"),
-    concat!("(use '", cli_name!(), " sessions list' to find session ids)"),
+    concat!(
+        "(use '",
+        cli_name!(),
+        " sessions list' to find session ids)"
+    ),
 ];
 
 /// No `gzip` on `PATH`.
@@ -54,7 +58,9 @@ pub const NO_GZIP: &str = "gzip not found in PATH \u{2014} cannot compact";
 /// What the words ask for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Disk {
-    Archives { json: bool },
+    Archives {
+        json: bool,
+    },
     /// The id (empty: the usage).
     Compact(String),
 }
@@ -190,7 +196,10 @@ pub fn json_of(rows: &[Row]) -> String {
         .iter()
         .map(|r| {
             Value::Object(vec![
-                (Text::from("session_id"), Value::Str(Text::from(r.id.as_str()))),
+                (
+                    Text::from("session_id"),
+                    Value::Str(Text::from(r.id.as_str())),
+                ),
                 (Text::from("total_bytes"), Value::Int(r.total.to_string())),
                 (Text::from("segments"), Value::Int(r.segments.to_string())),
                 (Text::from("active_bytes"), Value::Int(r.active.to_string())),
@@ -411,7 +420,10 @@ mod tests {
     #[test]
     fn the_disk_lines_say_the_brand_s_name() {
         let c = k2_client::brand::CLI_NAME;
-        assert_eq!(COMPACT_USAGE[0], format!("Usage: {c} sessions compact <session-id>"));
+        assert_eq!(
+            COMPACT_USAGE[0],
+            format!("Usage: {c} sessions compact <session-id>")
+        );
         assert_eq!(
             COMPACT_USAGE[1],
             format!("(use '{c} sessions list' to find session ids)")

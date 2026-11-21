@@ -618,7 +618,16 @@ fn spawn_child(
         if let Some(spec) = spec_env {
             c.env(k2_core::agent_fence::ENV_SPEC, spec);
         }
-        spawn_prepared(c, project_id, name, enrich)
+        let (mut child, pgid, slot) = spawn_prepared(c, project_id, name, enrich)?;
+        // M1b: the root helper moves the waiting exec helper into the
+        // agent's root-owned cgroup, or the service stops here.
+        if let Some(iso) = iso.as_ref() {
+            if let Err(e) = k2_core::agent_cgroup::place_spawned(iso, child.id()) {
+                let _ = child.wait();
+                return Err(e.to_string());
+            }
+        }
+        Ok((child, pgid, slot))
     }
     #[cfg(windows)]
     {

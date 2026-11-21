@@ -697,10 +697,9 @@ fn agent_identity_check(v: Option<&J>) -> Option<Check> {
                 "agentIdentity",
                 "ok",
                 format!(
-                    "agent cgroup identity on under {} ({n} agent cgroup(s)): labelled by agent, a fenced agent can't change its label, and a copied terminal or job passport alone \
-                     no longer works (App exec and microVM cell passports aren't bound); an unfenced agent can still move into another \
-                     agent's cgroup or read the owner token. {landlock}",
-                    id["agentsCgroup"].as_str().unwrap_or("?")
+                    "agent cgroup identity on under {} ({n} agent cgroup(s)), placed by the root helper: {}. {landlock}",
+                    id["agentsCgroup"].as_str().unwrap_or("?"),
+                    id["claim"].as_str().unwrap_or("?")
                 ),
                 None,
             )
@@ -710,6 +709,17 @@ fn agent_identity_check(v: Option<&J>) -> Option<Check> {
             "warn",
             format!("agent cgroup identity is OFF by the emergency switch ({}): passports are accepted from any process. {landlock}", id["switch"].as_str().unwrap_or("?")),
             Some("remove K2_AGENT_CGROUP_IDENTITY=0 from the daemon's environment once the box is fixed, then restart the daemon"),
+        ),
+        _ if id["traceable"].as_bool() == Some(true) => c(
+            "agentIdentity",
+            "ok",
+            format!(
+                "agent cgroup identity unavailable ({}); sessions are placed by the daemon in cgroups the server user owns under {}: {}. {landlock}",
+                id["why"].as_str().unwrap_or("?"),
+                id["agentsCgroup"].as_str().unwrap_or("?"),
+                id["claim"].as_str().unwrap_or("?")
+            ),
+            None,
         ),
         _ => c(
             "agentIdentity",

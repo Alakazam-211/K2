@@ -1850,6 +1850,7 @@ mod unix_impl {
                 cred_mode: crate::session_token::CredMode::default(),
                 provider: crate::session_token::Provider::default(),
                 agent_cgroup: None,
+                agent_root_placed: false,
             }
         }
 

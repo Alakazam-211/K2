@@ -1231,6 +1231,12 @@ impl DaemonPtySession {
         if let Some(pid) = child_pid.and_then(|p| u32::try_from(p).ok()).filter(|_| !self_placed) {
             crate::agents_leaf::join(pid);
         }
+        // M1b: the root helper moves the waiting exec helper into the
+        // agent's root-owned cgroup (or the session doesn't start).
+        if let Some(iso) = cfg.isolation.as_ref().filter(|i| i.root_placed) {
+            let pid = child_pid.and_then(|p| u32::try_from(p).ok()).ok_or_else(|| io::Error::other("agent isolation: the spawn reported no pid to place"))?;
+            crate::agent_cgroup::place_spawned(iso, pid)?;
+        }
 
         let pty_ms = __t_pty.elapsed().as_secs_f64() * 1000.0;
         log_debug!(
@@ -1455,6 +1461,12 @@ impl DaemonPtySession {
         let self_placed = cfg.isolation.as_ref().is_some_and(|i| i.identity);
         if let (false, Ok(p)) = (self_placed, u32::try_from(pid)) {
             crate::agents_leaf::join(p);
+        }
+        // M1b: the root helper places the waiting exec helper (ptyd is its
+        // parent; the helper checks the process, never the parent).
+        if let Some(iso) = cfg.isolation.as_ref().filter(|i| i.root_placed) {
+            let p = u32::try_from(pid).map_err(|_| io::Error::other("agent isolation: no pid to place"))?;
+            crate::agent_cgroup::place_spawned(iso, p)?;
         }
         // The vault binds this session's agent socket record to this ptyd
         // instance and process.

@@ -48,6 +48,11 @@ pub struct ExecSpec {
     /// The agent cgroup's directory (`/sys/fs/cgroup/<unit>/agents/a-<ws>`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cgroup: Option<String>,
+    /// M1b: the root helper moves this process into the agent's root-owned
+    /// cgroup (this directory) once the spawn reports its pid; the helper
+    /// waits for it (bounded), and runs nothing until then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait_cgroup: Option<String>,
     /// The folder fence, when the agent's owner turned it on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fence: Option<FenceView>,
@@ -583,6 +588,35 @@ pub fn join_cgroup(dir: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// How long the helper waits for the root helper to place it (M1b).
+pub const WAIT_PLACED_SECS: u64 = 30;
+
+/// M1b: wait until the kernel says this process is in `dir` (the root
+/// helper moved it there), and that the cgroup is root's.
+pub fn wait_placed(dir: &str, within: std::time::Duration) -> Result<(), String> {
+    let want = dir.strip_prefix(crate::agent_cgroup::CGROUP_FS).unwrap_or(dir).trim_end_matches('/').to_string();
+    let t = std::time::Instant::now();
+    loop {
+        let me = std::fs::read_to_string("/proc/self/cgroup").map_err(|e| format!("/proc/self/cgroup: {e}"))?;
+        let now = crate::agents_leaf::parse_self_cgroup(&me).ok_or("no cgroup v2 path in /proc/self/cgroup")?;
+        if now.trim_end_matches('/') == want {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                let owner = std::fs::symlink_metadata(dir).map_err(|e| format!("{dir}: {e}"))?.uid();
+                if owner != 0 {
+                    return Err(format!("{dir} is not root's (uid {owner})"));
+                }
+            }
+            return Ok(());
+        }
+        if t.elapsed() >= within {
+            return Err(format!("the root helper didn't place it in {dir} within {}s (still in {now})", within.as_secs()));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
 /// The helper: `k2-daemon --agent-exec -- <program> [args…]` (argv as the
 /// process got it). Never returns on success.
 pub fn run_from_args(args: &[std::ffi::OsString]) -> i32 {
@@ -608,6 +642,11 @@ pub fn run_from_args(args: &[std::ffi::OsString]) -> i32 {
     }
     if let Some(dir) = spec.cgroup.as_deref() {
         if let Err(e) = join_cgroup(dir) {
+            return refuse(format!("its agent cgroup: {e}"));
+        }
+    }
+    if let Some(dir) = spec.wait_cgroup.as_deref() {
+        if let Err(e) = wait_placed(dir, std::time::Duration::from_secs(WAIT_PLACED_SECS)) {
             return refuse(format!("its agent cgroup: {e}"));
         }
     }
@@ -803,7 +842,7 @@ mod tests {
 
     #[test]
     fn the_fence_env_drops_the_owners_agents_and_sets_tmpdir() {
-        let mut spec = ExecSpec { v: 1, cgroup: None, fence: None, unset: vec![], set: BTreeMap::new() };
+        let mut spec = ExecSpec { v: 1, cgroup: None, wait_cgroup: None, fence: None, unset: vec![], set: BTreeMap::new() };
         fence_env(&mut spec, Path::new("/home/k2/.k2/agents/a/tmp"));
         assert!(spec.unset.iter().any(|k| k == "SSH_AUTH_SOCK"));
         assert_eq!(spec.set["TMPDIR"], "/home/k2/.k2/agents/a/tmp");
@@ -812,7 +851,7 @@ mod tests {
 
     #[test]
     fn the_spec_round_trips() {
-        let spec = ExecSpec { v: 1, cgroup: Some("/sys/fs/cgroup/x/agents/a-1".into()), fence: None, unset: vec![], set: BTreeMap::new() };
+        let spec = ExecSpec { v: 1, cgroup: Some("/sys/fs/cgroup/x/agents/a-1".into()), wait_cgroup: None, fence: None, unset: vec![], set: BTreeMap::new() };
         let j = serde_json::to_string(&spec).unwrap();
         assert_eq!(serde_json::from_str::<ExecSpec>(&j).unwrap(), spec);
         assert!(!j.contains("fence") && !j.contains("unset"), "no fence keys when off: {j}");

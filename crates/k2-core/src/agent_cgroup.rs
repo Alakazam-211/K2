@@ -59,6 +59,22 @@ pub const CLAIM: &str = "labelled by agent: each agent's terminals, job runs and
      microVM cell passports aren't bound and work as before). An unfenced agent (same user) can still move itself into \
      another agent's cgroup, or read the owner token on disk; the folder fence closes both for one agent";
 
+/// The claim with the root helper placing sessions (M1b).
+pub const CLAIM_ROOT: &str = "labelled by agent: each agent's terminals, job runs and published services run in its own \
+     root-owned cgroup, placed by the root helper, and no agent (fenced or not) can take another agent's label. A copied \
+     terminal or job passport alone no longer works (App exec and microVM cell passports aren't bound and work as before). \
+     An unfenced agent can still drop its own label (its passport then stops working) or read the owner token on disk; \
+     the folder fence closes both for one agent";
+
+/// The claim that holds on this box now.
+pub fn claim() -> &'static str {
+    if root_placement() {
+        CLAIM_ROOT
+    } else {
+        CLAIM
+    }
+}
+
 /// `true` when the switch says off (`0`, `false`, `off`, `no`).
 pub fn switch_off_from(v: Option<&str>) -> bool {
     matches!(v.map(|s| s.trim().to_ascii_lowercase()).as_deref(), Some("0" | "false" | "off" | "no"))
@@ -81,8 +97,9 @@ pub fn cgroup_name(ws: &str) -> Option<String> {
 /// Who a process is, by its cgroup.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PeerAgent {
-    /// In `agents/a-<ws>` (or below it).
-    Agent { ws: String, cgroup: String },
+    /// In `agents/a-<ws>` (or below it). `root_owned`: the cgroup is root's
+    /// (the root helper made it; M1b), not the K2 user's.
+    Agent { ws: String, cgroup: String, root_owned: bool },
     /// In the daemon unit's agents' leaf itself (a session from before
     /// this release, or one placed without identity).
     Leaf { cgroup: String },
@@ -102,7 +119,8 @@ impl PeerAgent {
     /// One line for audit rows and refusals.
     pub fn describe(&self) -> String {
         match self {
-            PeerAgent::Agent { ws, cgroup } => format!("agent {ws} (cgroup {cgroup})"),
+            PeerAgent::Agent { ws, cgroup, root_owned: true } => format!("agent {ws} (cgroup {cgroup})"),
+            PeerAgent::Agent { ws, cgroup, root_owned: false } => format!("agent {ws} (cgroup {cgroup}, the server user's, not root's)"),
             PeerAgent::Leaf { cgroup } => format!("no agent cgroup (the shared agents' leaf {cgroup})"),
             PeerAgent::Outside { cgroup } => format!("no agent cgroup ({cgroup})"),
             PeerAgent::Unknown { why } => format!("an unknown cgroup ({why})"),
@@ -126,7 +144,7 @@ pub fn classify(agents_rel: &str, path: &str) -> PeerAgent {
         Some(r) => {
             let first = r.split('/').next().unwrap_or("");
             match first.strip_prefix(PREFIX).filter(|ws| valid_ws(ws)) {
-                Some(ws) => PeerAgent::Agent { ws: ws.to_string(), cgroup: format!("{leaf}/{first}") },
+                Some(ws) => PeerAgent::Agent { ws: ws.to_string(), cgroup: format!("{leaf}/{first}"), root_owned: false },
                 None => PeerAgent::Outside { cgroup: p.to_string() },
             }
         }
@@ -140,16 +158,102 @@ pub enum Decision {
     Refuse { detail: String },
 }
 
-/// `bound`: the agent (workspace id) the passport's session is bound to,
-/// `None` for a session placed without identity (accepted as before).
-/// `peer`: who the connecting process is, by its cgroup.
-pub fn decide(bound: Option<&str>, peer: &PeerAgent) -> Decision {
-    let Some(want) = bound else { return Decision::Allow };
+/// [`classify`] plus who owns the agent cgroup (a `stat`, M1b).
+pub fn with_owner(peer: PeerAgent) -> PeerAgent {
     match peer {
-        PeerAgent::Agent { ws, .. } if ws == want => Decision::Allow,
+        PeerAgent::Agent { ws, cgroup, .. } => {
+            #[cfg(unix)]
+            let root_owned = {
+                use std::os::unix::fs::MetadataExt;
+                std::fs::symlink_metadata(Path::new(CGROUP_FS).join(cgroup.trim_start_matches('/'))).is_ok_and(|m| m.uid() == 0)
+            };
+            #[cfg(not(unix))]
+            let root_owned = false;
+            PeerAgent::Agent { ws, cgroup, root_owned }
+        }
+        other => other,
+    }
+}
+
+/// How a session was bound: its agent, and whether the root helper placed
+/// it (then only a root-owned cgroup of that name is the agent: one the K2
+/// user made, after removing the empty root one, is not).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Bound<'a> {
+    pub ws: &'a str,
+    pub root_placed: bool,
+}
+
+/// `bound`: the agent the passport's session is bound to, `None` for a
+/// session placed without identity (accepted as before). `peer`: who the
+/// connecting process is, by its cgroup (with [`with_owner`]).
+pub fn decide(bound: Option<Bound>, peer: &PeerAgent) -> Decision {
+    let Some(b) = bound else { return Decision::Allow };
+    match peer {
+        PeerAgent::Agent { ws, root_owned, .. } if ws == b.ws && (*root_owned || !b.root_placed) => Decision::Allow,
         other => Decision::Refuse {
-            detail: format!("the passport of agent {want} was presented from {}", other.describe()),
+            detail: format!("the passport of agent {} was presented from {}", b.ws, other.describe()),
         },
+    }
+}
+
+// ── who places sessions: the root helper (M1b) or the daemon itself ───
+
+/// Puts `pid` (an exec helper waiting to run agent `ws`) into the agent's
+/// root-owned cgroup: the daemon registers the root helper's `agents place`
+/// at boot when the helper serves it. `Ok(cgroup path)`.
+pub type Placer = Box<dyn Fn(&str, u32) -> Result<String, String> + Send + Sync>;
+
+static PLACER: OnceLock<Placer> = OnceLock::new();
+static NO_PLACER_WHY: OnceLock<String> = OnceLock::new();
+
+/// Boot: the root helper places agent sessions (root-owned cgroups).
+pub fn set_placer(p: Placer) {
+    let _ = PLACER.set(p);
+}
+
+/// Boot: why the root helper doesn't (shown in `/boot-status`).
+pub fn set_no_placer(why: String) {
+    let _ = NO_PLACER_WHY.set(why);
+}
+
+/// The root helper places sessions here (identity on).
+pub fn root_placement() -> bool {
+    PLACER.get().is_some()
+}
+
+/// Place `pid` for `ws` through the root helper.
+pub fn place(ws: &str, pid: u32) -> Result<String, String> {
+    match PLACER.get() {
+        Some(p) => p(ws, pid),
+        None => Err("no root helper places agent sessions on this box".into()),
+    }
+}
+
+/// M1b, right after a spawn: a session the root helper places is moved
+/// (its exec helper, `pid`, waits for it) into the agent's root-owned
+/// cgroup. On a refusal the process is killed (it never runs unplaced; the
+/// helper would refuse on its own once its wait ends). Nothing for a
+/// session the daemon placed.
+pub fn place_spawned(iso: &SessionIsolation, pid: u32) -> std::io::Result<()> {
+    if !(iso.identity && iso.root_placed) {
+        return Ok(());
+    }
+    match place(&iso.ws, pid) {
+        Ok(cg) => {
+            crate::log_debug!("[agents] pid {pid} placed in {cg} by the root helper (agent {})", iso.ws);
+            Ok(())
+        }
+        Err(e) => {
+            #[cfg(unix)]
+            // SAFETY: the process this spawn just started, still waiting in
+            // the exec helper.
+            unsafe {
+                libc::kill(pid as i32, libc::SIGKILL);
+            }
+            crate::log_debug!("[agents] pid {pid} not started: the root helper didn't place it (agent {}): {e}", iso.ws);
+            Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, format!("{} agent isolation: the root helper didn't place the session: {e}", crate::brand::PRODUCT_NAME)))
+        }
     }
 }
 
@@ -232,6 +336,10 @@ pub struct SessionIsolation {
     pub ws: String,
     /// The session runs in `agents/a-<ws>` and its passport is bound to it.
     pub identity: bool,
+    /// The root helper places it (a root-owned cgroup, M1b); `false`: the
+    /// daemon does (a K2-user-owned one: traceable, but an unfenced agent
+    /// can move into it).
+    pub root_placed: bool,
     /// The owner turned this agent's folder fence on.
     pub fence: bool,
     /// The agent's workspace folder (the fence opens it).
@@ -250,6 +358,7 @@ pub fn intent(ws: &str, passthrough: bool, fence_on: bool, workspace: Option<&Pa
     (identity || fence_on).then(|| SessionIsolation {
         ws: ws.trim().to_string(),
         identity,
+        root_placed: identity && root_placement(),
         fence: fence_on,
         workspace: workspace.map(Path::to_path_buf),
     })
@@ -269,10 +378,17 @@ pub fn wrap(
 ) -> Result<(String, Vec<String>, String), String> {
     use crate::agent_fence::{default_view, fence_env, landlock_abi, ExecSpec, ViewInputs, ARG};
     let helper = exec_helper().ok_or("the daemon has no exec helper for isolated sessions")?;
-    let mut spec = ExecSpec { v: 1, cgroup: None, fence: None, unset: Vec::new(), set: Default::default() };
+    let mut spec = ExecSpec { v: 1, cgroup: None, wait_cgroup: None, fence: None, unset: Vec::new(), set: Default::default() };
     if iso.identity {
         let a = availability()?;
-        spec.cgroup = Some(ensure_dir(&a, &iso.ws)?.to_string_lossy().into_owned());
+        let name = cgroup_name(&iso.ws).ok_or_else(|| format!("workspace id {:?} can't name a cgroup", iso.ws))?;
+        if iso.root_placed {
+            // The root helper makes the cgroup and moves the helper in once
+            // the spawn reports its pid ([`place`]); the helper waits for it.
+            spec.wait_cgroup = Some(a.agents_dir.join(&name).to_string_lossy().into_owned());
+        } else {
+            spec.cgroup = Some(ensure_dir(&a, &iso.ws)?.to_string_lossy().into_owned());
+        }
         // Tells the session's `k2` CLI that its passport is bound to this
         // cgroup, so it sends every passport request over the session socket
         // (the daemon refuses a bound passport on TCP).
@@ -340,7 +456,7 @@ pub fn peer_of_socket(fd: std::os::fd::RawFd, a: &Avail) -> (PeerAgent, Option<u
             return (PeerAgent::Unknown { why: "the calling process exited while it was checked".into() }, Some(pid), Pinned::Pidfd);
         }
         return match path {
-            Ok(p) => (classify(&a.agents_rel, &p), Some(pid), Pinned::Pidfd),
+            Ok(p) => (with_owner(classify(&a.agents_rel, &p)), Some(pid), Pinned::Pidfd),
             Err(e) => (PeerAgent::Unknown { why: e }, Some(pid), Pinned::Pidfd),
         };
     }
@@ -353,7 +469,7 @@ pub fn peer_of_socket(fd: std::os::fd::RawFd, a: &Avail) -> (PeerAgent, Option<u
     }
     let pid = cred.pid as u32;
     match cgroup_of_pid(pid) {
-        Ok(p) => (classify(&a.agents_rel, &p), Some(pid), Pinned::Pid),
+        Ok(p) => (with_owner(classify(&a.agents_rel, &p)), Some(pid), Pinned::Pid),
         Err(e) => (PeerAgent::Unknown { why: e }, Some(pid), Pinned::Pid),
     }
 }
@@ -364,7 +480,7 @@ pub fn whois(pid: u32) -> serde_json::Value {
     let a = availability();
     let cg = cgroup_of_pid(pid);
     let peer = match (&a, &cg) {
-        (Ok(a), Ok(p)) => classify(&a.agents_rel, p),
+        (Ok(a), Ok(p)) => with_owner(classify(&a.agents_rel, p)),
         (_, Err(e)) => PeerAgent::Unknown { why: e.clone() },
         (Err(_), Ok(p)) => PeerAgent::Outside { cgroup: p.clone() },
     };
@@ -373,8 +489,9 @@ pub fn whois(pid: u32) -> serde_json::Value {
         "cgroup": cg.as_ref().ok(),
         "workspaceId": peer.ws(),
         "who": peer.describe(),
-        "identity": match &a { Ok(_) => "on".to_string(), Err(e) => format!("unavailable: {e}") },
-        "claim": CLAIM,
+        "rootOwned": matches!(peer, PeerAgent::Agent { root_owned: true, .. }),
+        "identity": status_json()["identity"],
+        "claim": claim(),
     })
 }
 
@@ -416,10 +533,20 @@ pub fn boot_scan(a: &Avail) -> (usize, usize) {
 pub fn status_json() -> serde_json::Value {
     let landlock = crate::agent_fence::landlock_abi();
     let mut v = match availability() {
-        Ok(a) => serde_json::json!({
+        Ok(a) if root_placement() => serde_json::json!({
             "identity": "on",
+            "placement": "root helper (root-owned agent cgroups)",
             "agentsCgroup": a.agents_rel,
-            "claim": CLAIM,
+            "claim": claim(),
+        }),
+        // M1 without the helper: traceable, never claimed as identity.
+        Ok(a) => serde_json::json!({
+            "identity": "unavailable",
+            "why": NO_PLACER_WHY.get().cloned().unwrap_or_else(|| "the root helper doesn't place agent sessions here".into()),
+            "traceable": true,
+            "placement": "the daemon (agent cgroups the server user owns)",
+            "agentsCgroup": a.agents_rel,
+            "claim": claim(),
         }),
         Err(why) => serde_json::json!({
             "identity": if switch_off() { "off" } else { "unavailable" },
@@ -477,7 +604,7 @@ mod tests {
 
     #[test]
     fn a_cgroup_path_names_its_agent() {
-        assert_eq!(classify(LEAF, &format!("{LEAF}/a-ws1")), PeerAgent::Agent { ws: "ws1".into(), cgroup: format!("{LEAF}/a-ws1") });
+        assert_eq!(classify(LEAF, &format!("{LEAF}/a-ws1")), PeerAgent::Agent { ws: "ws1".into(), cgroup: format!("{LEAF}/a-ws1"), root_owned: false });
         assert_eq!(classify(LEAF, &format!("{LEAF}/a-ws1/sub/deeper")).ws(), Some("ws1"), "below its cgroup is still the agent");
         assert_eq!(classify(LEAF, LEAF), PeerAgent::Leaf { cgroup: LEAF.into() });
         assert!(matches!(classify(LEAF, "/k2cores.slice/k2-daemon.service/daemon"), PeerAgent::Outside { .. }));
@@ -493,17 +620,36 @@ mod tests {
     fn a_bound_passport_is_accepted_only_from_its_agents_cgroup() {
         let a = classify(LEAF, &format!("{LEAF}/a-A"));
         let b = classify(LEAF, &format!("{LEAF}/a-B"));
-        assert_eq!(decide(Some("A"), &a), Decision::Allow);
-        let Decision::Refuse { detail } = decide(Some("B"), &a) else { panic!("B's passport from A's cgroup must be refused") };
+        let user = |ws| Some(Bound { ws, root_placed: false });
+        assert_eq!(decide(user("A"), &a), Decision::Allow);
+        let Decision::Refuse { detail } = decide(user("B"), &a) else { panic!("B's passport from A's cgroup must be refused") };
         assert!(detail.contains("agent B") && detail.contains("agent A"), "{detail}");
         for peer in [
             classify(LEAF, LEAF),
             classify(LEAF, "/user.slice/user-1000.slice/session-3.scope"),
             PeerAgent::Unknown { why: "gone".into() },
         ] {
-            assert!(matches!(decide(Some("A"), &peer), Decision::Refuse { .. }), "{peer:?}");
+            assert!(matches!(decide(user("A"), &peer), Decision::Refuse { .. }), "{peer:?}");
         }
         assert_eq!(decide(None, &b), Decision::Allow, "a session placed without identity: as before");
         assert_eq!(decide(None, &PeerAgent::Unknown { why: "x".into() }), Decision::Allow);
+    }
+
+    /// M1b: a session the root helper placed counts only from a root-owned
+    /// cgroup of its name; one the K2 user made again (after removing the
+    /// empty root one) is not the agent. A self-placed session (no helper
+    /// then) keeps M1's rule.
+    #[test]
+    fn a_root_placed_session_counts_only_from_a_root_owned_cgroup() {
+        let root_a = PeerAgent::Agent { ws: "A".into(), cgroup: format!("{LEAF}/a-A"), root_owned: true };
+        let user_a = PeerAgent::Agent { ws: "A".into(), cgroup: format!("{LEAF}/a-A"), root_owned: false };
+        let placed = Some(Bound { ws: "A", root_placed: true });
+        assert_eq!(decide(placed, &root_a), Decision::Allow);
+        let Decision::Refuse { detail } = decide(placed, &user_a) else { panic!("a K2-user cgroup named a-A is not agent A's") };
+        assert!(detail.contains("not root's"), "{detail}");
+        let selfp = Some(Bound { ws: "A", root_placed: false });
+        assert_eq!(decide(selfp, &user_a), Decision::Allow, "placed before the helper: M1's rule");
+        assert_eq!(decide(selfp, &root_a), Decision::Allow);
+        assert!(matches!(decide(Some(Bound { ws: "B", root_placed: true }), &root_a), Decision::Refuse { .. }));
     }
 }

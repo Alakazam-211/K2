@@ -67,7 +67,7 @@ pub fn for_spawn(sid: &SessionId, ws: &str, cwd: &str, passthrough: bool, minted
     let (path, fence) = workspace_and_fence(ws);
     let workspace = path.unwrap_or_else(|| PathBuf::from(cwd));
     let iso = agent_cgroup::intent(ws, passthrough, fence, Some(Path::new(&workspace)))?;
-    if iso.identity && minted && !crate::session_token::bind_agent_cgroup(sid, &iso.ws) {
+    if iso.identity && minted && !crate::session_token::bind_agent_cgroup(sid, &iso.ws, iso.root_placed) {
         log_debug!("[agents] session={sid}: no passport record to bind to agent {}", iso.ws);
     }
     Some(iso)
@@ -99,7 +99,7 @@ pub fn for_job(run_sid: &str, ws: &str, root: &Path, env: &mut std::collections:
         let _g = rt.enter();
         crate::cell_server::serve_cell_at(run_sid.to_string(), sock.clone(), listener, None);
         env.insert("K2_HOOK_SOCK".into(), sock.to_string_lossy().into_owned());
-        if !crate::session_token::bind_agent_cgroup_sid(run_sid, ws) {
+        if !crate::session_token::bind_agent_cgroup_sid(run_sid, ws, iso.root_placed) {
             return Err("the job's passport is gone".into());
         }
     }
@@ -110,9 +110,11 @@ pub fn for_job(run_sid: &str, ws: &str, root: &Path, env: &mut std::collections:
 /// lost) when the session's process is in its own agent's cgroup now.
 pub fn bind_from_live_cgroup(sid: &SessionId, pid: u32, ws: Option<&str>) {
     let (Some(ws), Ok(a)) = (ws.map(str::trim).filter(|w| !w.is_empty()), agent_cgroup::availability()) else { return };
-    match agent_cgroup::cgroup_of_pid(pid).map(|p| agent_cgroup::classify(&a.agents_rel, &p)) {
+    match agent_cgroup::cgroup_of_pid(pid).map(|p| agent_cgroup::with_owner(agent_cgroup::classify(&a.agents_rel, &p))) {
         Ok(peer) if peer.ws() == Some(ws) => {
-            if crate::session_token::bind_agent_cgroup(sid, ws) {
+            // M1b: a root-owned cgroup means the root helper placed it.
+            let root_owned = matches!(peer, PeerAgent::Agent { root_owned: true, .. });
+            if crate::session_token::bind_agent_cgroup(sid, ws, root_owned) {
                 log_debug!("[agents] session={sid}: the re-minted passport is bound to agent {ws} (its live cgroup)");
             }
         }
@@ -127,6 +129,53 @@ pub fn for_service(ws: &str, cwd: &Path) -> Option<SessionIsolation> {
     let (path, fence) = workspace_and_fence(ws.trim());
     let workspace = path.unwrap_or_else(|| cwd.to_path_buf());
     agent_cgroup::intent(ws, true, fence, Some(&workspace))
+}
+
+/// M1b, at boot: the root helper places agent sessions in root-owned
+/// cgroups when it serves `agents place` (protocol 18 and
+/// `namespaces.agentcg`). Otherwise the reason, shown in `/boot-status`:
+/// the daemon places them itself (traceable only, identity unavailable).
+pub fn register_root_placement() {
+    if agent_cgroup::switch_off() {
+        agent_cgroup::set_no_placer(format!("the emergency off-switch ({}=0)", agent_cgroup::ENV_SWITCH));
+        return;
+    }
+    if let Err(why) = agent_cgroup::availability() {
+        agent_cgroup::set_no_placer(why);
+        return;
+    }
+    let st = crate::root_helper::state();
+    if !agentcg_ok(&st) {
+        let why = crate::root_helper::helper_needed(
+            "placing agent sessions in root-owned cgroups (agent identity)",
+            k2_root_proto::version::AGENTCG_MIN_PROTOCOL,
+            &st,
+        );
+        log_debug!("[agents] identity unavailable: {why}");
+        agent_cgroup::set_no_placer(why);
+        return;
+    }
+    // The helper must take this daemon for the box's registered one (its
+    // unit's main process, a system unit, the agents' leaf delegated).
+    if let Err(e) = crate::root_helper::call(&["agents".to_string(), "check".to_string()], None) {
+        let why = format!("the root helper won't place this daemon's sessions: {e}");
+        log_debug!("[agents] identity unavailable: {why}");
+        agent_cgroup::set_no_placer(why);
+        return;
+    }
+    agent_cgroup::set_placer(Box::new(|ws: &str, pid: u32| {
+        let argv = vec!["agents".to_string(), "place".to_string(), ws.to_string(), pid.to_string()];
+        let out = crate::root_helper::call(&argv, None)?;
+        let v: serde_json::Value = serde_json::from_slice(&out).map_err(|e| format!("agents place: not JSON: {e}"))?;
+        v["cgroup"].as_str().map(str::to_string).ok_or_else(|| format!("agents place: no cgroup in {v}"))
+    }));
+    log_debug!("[agents] identity on: the root helper places agent sessions in root-owned cgroups");
+}
+
+/// Pure: protocol >= 18 and `namespaces.agentcg == true`.
+pub fn agentcg_ok(st: &crate::root_helper::RootHelperState) -> bool {
+    let ns = st.version_json.as_ref().and_then(|v| v.pointer("/namespaces/agentcg")).and_then(serde_json::Value::as_bool) == Some(true);
+    st.usable(k2_root_proto::version::AGENTCG_MIN_PROTOCOL) && ns
 }
 
 /// A job run's session socket.
@@ -201,7 +250,7 @@ pub fn check_socket_peer(fd: std::os::fd::RawFd, v: &crate::session_token::Valid
         let _ = (fd, &a);
         (PeerAgent::Unknown { why: "no cgroups here".into() }, None::<u32>)
     };
-    match agent_cgroup::decide(Some(bound), &peer) {
+    match agent_cgroup::decide(Some(agent_cgroup::Bound { ws: bound, root_placed: v.agent_root_placed }), &peer) {
         Decision::Allow => None,
         Decision::Refuse { detail } => {
             let detail = match pid {

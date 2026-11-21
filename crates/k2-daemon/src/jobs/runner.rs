@@ -304,11 +304,14 @@ fn spawn(job: &Job, live: &Arc<Live>, log_path: &Path) -> Result<Started, (JobEr
     // Agent Isolation (review F1): the run starts through the exec helper,
     // in the agent's cgroup and under its fence, like its terminals.
     #[cfg(unix)]
+    let mut placed: Option<k2_core::agent_cgroup::SessionIsolation> = None;
+    #[cfg(unix)]
     let (prog, args) = match crate::agent_isolation::for_job(&live.session_id, &job.workspace_id, &root, &mut env) {
         Ok(None) => (prog, args),
         Ok(Some(iso)) => match k2_core::agent_cgroup::wrap(&iso, prog, args, &env) {
             Ok((helper, argv, spec)) => {
                 env.insert(k2_core::agent_fence::ENV_SPEC.into(), spec);
+                placed = Some(iso);
                 (helper, argv)
             }
             Err(e) => {
@@ -345,6 +348,17 @@ fn spawn(job: &Job, live: &Arc<Live>, log_path: &Path) -> Result<Started, (JobEr
             return Err((JobError::new("spawn_failed", 409, format!("couldn't start {}: {e}", job.argv[0])), Some(mat)));
         }
     };
+    // M1b: the root helper moves the waiting exec helper into the agent's
+    // root-owned cgroup, or the run stops here (killed before it ran).
+    #[cfg(unix)]
+    if let Some(iso) = placed.as_ref() {
+        if let Err(e) = k2_core::agent_cgroup::place_spawned(iso, child.id()) {
+            let _ = child.wait();
+            crate::session_token::revoke_job_passport(&live.session_id);
+            let _ = std::fs::remove_file(crate::agent_isolation::job_socket(&live.session_id));
+            return Err((JobError::new("isolation_refused", 409, e.to_string()), Some(mat)));
+        }
+    }
     let redactor = crate::vault::redactor();
     let mut readers = vec![];
     for pipe in [child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>), child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>)]

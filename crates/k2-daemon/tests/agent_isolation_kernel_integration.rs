@@ -38,7 +38,7 @@ fn input(env: &str) -> Option<PathBuf> {
     static INPUTS: std::sync::OnceLock<HashMap<&'static str, PathBuf>> = std::sync::OnceLock::new();
     INPUTS
         .get_or_init(|| {
-            ["K2_ISO_DAEMON_BIN", "K2_PTYD_BIN", "K2_PTYD_TEST_AGENT", "K2_ISO_CLI", "K2_ISO_TOOLCHAIN_HOME"]
+            ["K2_ISO_DAEMON_BIN", "K2_PTYD_BIN", "K2_PTYD_TEST_AGENT", "K2_ISO_CLI", "K2_ISO_TOOLCHAIN_HOME", "K2_ISO_PERSIST_HOME", "K2_ISO_EXPECT"]
                 .into_iter()
                 .filter_map(|k| std::env::var_os(k).filter(|v| !v.is_empty()).map(|v| (k, PathBuf::from(v))))
                 .collect()
@@ -137,6 +137,9 @@ struct Daemon {
     port: u16,
     pids: Vec<i32>,
     env: Vec<(String, String)>,
+    /// M1b: the box's registered daemon (the persistent test unit), not
+    /// one this test started: never killed, nor its ptyd.
+    external: bool,
 }
 
 impl Drop for Daemon {
@@ -154,7 +157,7 @@ impl Drop for Daemon {
         }
         // KillMode=process (as on the fleet): ptyd and the sessions outlive
         // the test's own exit unless killed here.
-        let ptyd = std::fs::read_to_string(self.k2.join("run/ptyd/lock")).ok().and_then(|s| s.trim().parse::<i32>().ok());
+        let ptyd = std::fs::read_to_string(self.k2.join("run/ptyd/lock")).ok().and_then(|s| s.trim().parse::<i32>().ok()).filter(|_| !self.external);
         for p in self.pids.iter().copied().chain(ptyd) {
             // SAFETY: sessions and the ptyd this test started.
             unsafe { libc::kill(p, libc::SIGKILL) };
@@ -185,7 +188,16 @@ impl Daemon {
         // The CLI where installs keep it (~/.k2/bin, which a fence reads).
         std::fs::create_dir_all(k2.join("bin")).unwrap();
         std::fs::copy(cli(), k2.join("bin/k2")).unwrap_or_else(|e| panic!("copy {} into ~/.k2/bin: {e}", cli().display()));
-        Daemon { home, k2, child: None, boots: 0, port: 0, pids: Vec::new(), env: Vec::new() }
+        Daemon { home, k2, child: None, boots: 0, port: 0, pids: Vec::new(), env: Vec::new(), external: false }
+    }
+
+    /// M1b: the persistent test unit's daemon (`K2_ISO_PERSIST_HOME` is its
+    /// HOME): the root helper's registered daemon on this box.
+    fn external() -> Daemon {
+        let home = input("K2_ISO_PERSIST_HOME").expect("K2_ISO_PERSIST_HOME: the persistent unit's HOME (scripts/agent-isolation-m1b-kernel-tests.sh)");
+        let k2 = k2_core::paths::k2_home_in(&home);
+        let port = std::fs::read_to_string(k2.join("daemon.port")).expect("the persistent daemon's port").trim().parse().expect("port");
+        Daemon { home, k2, child: None, boots: 0, port, pids: Vec::new(), env: Vec::new(), external: true }
     }
 
     fn start(&mut self) {
@@ -417,7 +429,13 @@ fn the_five_step_demo_on_a_real_kernel() {
     d.start();
     let bs = d.boot_status();
     println!("agentIsolation: {}", bs["agentIsolation"]);
-    assert_eq!(bs["agentIsolation"]["identity"], "on", "identity on in a delegated, guarded unit: {}", bs["agentIsolation"]);
+    // M1b: a test daemon is not the box's registered daemon, so the root
+    // helper doesn't place its sessions: the daemon does (K2-user-owned
+    // cgroups), which is "traceable", never claimed as identity. The
+    // checks below are the same either way (the root-placed run is
+    // root_owned_agent_cgroups_refuse_a_sibling, on the persistent unit).
+    assert_eq!(bs["agentIsolation"]["identity"], "unavailable", "{}", bs["agentIsolation"]);
+    assert_eq!(bs["agentIsolation"]["traceable"], true, "the daemon places the sessions: {}", bs["agentIsolation"]);
     let agents_dir = unit.join("agents");
     let (a_id, a_ws) = d.workspace("A");
     let (b_id, b_ws) = d.workspace("B");
@@ -899,4 +917,102 @@ fn http_at(host: &str, port: u16, method: &str, path: &str, body: &str) -> (u16,
     let Ok(mut s) = TcpStream::connect((host, port)) else { return (0, String::new()) };
     s.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
     exchange(&mut s, &format!("{method} {path} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\n"), body)
+}
+
+
+/// M1b: with the root helper placing sessions (the persistent unit is the
+/// box's registered daemon), an agent's cgroup is root's: an UNFENCED agent
+/// can't write its pid into a sibling's `cgroup.procs`, so a copied
+/// passport stays refused. Run twice by
+/// scripts/agent-isolation-m1b-kernel-tests.sh: `K2_ISO_EXPECT=root` (the
+/// helper on) and, as the bite, `K2_ISO_EXPECT=user` (the helper moved
+/// away, the daemon restarted): then the cgroups are the K2 user's and the
+/// same write works, and the copied passport with it.
+#[test]
+#[ignore = "needs the persistent test unit and the root helper: scripts/agent-isolation-m1b-kernel-tests.sh"]
+fn root_owned_agent_cgroups_refuse_a_sibling() {
+    let expect_root = match std::env::var("K2_ISO_EXPECT").as_deref() {
+        Ok("root") => true,
+        Ok("user") => false,
+        other => panic!("K2_ISO_EXPECT must be root or user, got {other:?}"),
+    };
+    let mut d = Daemon::external();
+    let bs = d.boot_status();
+    let iso = &bs["agentIsolation"];
+    println!("agentIsolation: {iso}");
+    if expect_root {
+        assert_eq!(iso["identity"], "on", "the root helper places sessions: {iso}");
+        assert!(iso["placement"].as_str().unwrap_or("").contains("root helper"), "{iso}");
+    } else {
+        assert_eq!(iso["identity"], "unavailable", "{iso}");
+        assert_eq!(iso["traceable"], true, "{iso}");
+    }
+    let agents = Path::new("/sys/fs/cgroup").join(iso["agentsCgroup"].as_str().expect("agentsCgroup").trim_start_matches('/'));
+    let tag = std::process::id();
+    let (a_id, a_ws) = d.workspace(&format!("A{tag}"));
+    let (b_id, b_ws) = d.workspace(&format!("B{tag}"));
+    d.spawn("tab-b", &b_ws, &idle_script(&b_ws));
+    let b_env = env_dump(&b_ws.join("env"));
+    let b_pid: i32 = wait_for("B's pid", Duration::from_secs(30), || std::fs::read_to_string(b_ws.join("pid")).ok()?.trim().parse().ok());
+    d.pids.push(b_pid);
+    let b_cg = agents.join(format!("a-{b_id}"));
+    assert!(cgroup_of(b_pid).ends_with(&format!("/agents/a-{b_id}")), "B runs in its own cgroup: {}", cgroup_of(b_pid));
+    use std::os::unix::fs::MetadataExt;
+    let owner = std::fs::metadata(&b_cg).unwrap().uid();
+    let procs_owner = std::fs::metadata(b_cg.join("cgroup.procs")).unwrap().uid();
+    println!("{}: owner uid {owner}, cgroup.procs uid {procs_owner}", b_cg.display());
+    if expect_root {
+        assert_eq!((owner, procs_owner), (0, 0), "B's cgroup is root's");
+    } else {
+        assert_ne!(owner, 0, "without the helper B's cgroup is the K2 user's");
+    }
+    // A, unfenced: B's passport copied (B's env, readable to the same user),
+    // then the forging write into B's cgroup.procs, then the copied passport
+    // on B's socket, then A dropping its own label.
+    std::fs::write(a_ws.join("stolen"), format!("STOLEN_TOKEN='{}'\nSTOLEN_SOCK='{}'\n", b_env["K2_HOOK_TOKEN"], b_env["K2_HOOK_SOCK"])).unwrap();
+    let script = format!(
+        r#"R={a}/results; : > $R; echo $$ > {a}/pid; . {a}/stolen
+echo "cgroup_before $(cat /proc/self/cgroup)" >> $R
+{{ echo $$ > {bcg}/cgroup.procs; }} 2> {a}/e1; echo "forge_rc $? $(cat {a}/e1)" >> $R
+echo "cgroup_after_forge $(cat /proc/self/cgroup)" >> $R
+code=$(curl -s -o {a}/o1 -w '%{{http_code}}' --unix-socket "$STOLEN_SOCK" -H "Authorization: Bearer $STOLEN_TOKEN" http://localhost/cli/capabilities); echo "stolen_on_b_socket $code $(cut -c1-200 {a}/o1)" >> $R
+{{ echo $$ > {agents}/cgroup.procs; }} 2> {a}/e2; echo "drop_rc $? $(cat {a}/e2)" >> $R
+echo "cgroup_dropped $(cat /proc/self/cgroup)" >> $R
+code=$(curl -s -o {a}/o2 -w '%{{http_code}}' --unix-socket "$K2_HOOK_SOCK" -H "Authorization: Bearer $K2_HOOK_TOKEN" http://localhost/cli/capabilities); echo "own_after_drop $code $(cut -c1-200 {a}/o2)" >> $R
+echo "done" >> $R; exec sleep 3600
+"#,
+        a = a_ws.display(),
+        bcg = b_cg.display(),
+        agents = agents.display()
+    );
+    d.spawn("tab-a", &a_ws, &script);
+    let a_pid: i32 = wait_for("A's pid", Duration::from_secs(30), || std::fs::read_to_string(a_ws.join("pid")).ok()?.trim().parse().ok());
+    d.pids.push(a_pid);
+    let r = results(&a_ws.join("results"), "done");
+    assert!(r["cgroup_before"].ends_with(&format!("/agents/a-{a_id}")), "A starts in its own cgroup: {}", r["cgroup_before"]);
+    if expect_root {
+        assert!(denied_at(&r["forge_rc"], "cgroup.procs"), "an unfenced agent can't write into a sibling's root-owned cgroup: {}", r["forge_rc"]);
+        assert!(r["cgroup_after_forge"].ends_with(&format!("/agents/a-{a_id}")), "A is still A: {}", r["cgroup_after_forge"]);
+        assert!(r["stolen_on_b_socket"].starts_with("403") && r["stolen_on_b_socket"].contains("passport_wrong_cgroup"), "B's copied passport from A: {}", r["stolen_on_b_socket"]);
+    } else {
+        // The bite: the same write works on a K2-user-owned cgroup, and the
+        // copied passport with it (the M1 limit the helper closes).
+        assert!(r["forge_rc"].starts_with("0"), "BITE: without the helper the forging write works: {}", r["forge_rc"]);
+        assert!(r["cgroup_after_forge"].ends_with(&format!("/agents/a-{b_id}")), "BITE: A now wears B's label: {}", r["cgroup_after_forge"]);
+        assert!(r["stolen_on_b_socket"].starts_with("200"), "BITE: B's copied passport works from A once A is in B's cgroup: {}", r["stolen_on_b_socket"]);
+    }
+    // Either way an unfenced agent can drop its own label, and its own
+    // passport stops working (the claim says so).
+    assert!(r["drop_rc"].starts_with("0"), "an unfenced agent can move itself to the shared leaf: {}", r["drop_rc"]);
+    assert!(r["own_after_drop"].starts_with("403") && r["own_after_drop"].contains("passport_wrong_cgroup"), "its passport stops working outside its label: {}", r["own_after_drop"]);
+    // whois says who owns the agent's cgroup.
+    let (s, b) = http(d.port, "GET", &format!("/cli/agent-whois?pid={b_pid}&token={}", d.token()), "");
+    let w: Value = serde_json::from_str(&b).unwrap_or_else(|e| panic!("whois {s}: {e}: {b}"));
+    println!("whois B: {w}");
+    assert_eq!(w["workspaceId"], json!(b_id), "{w}");
+    assert_eq!(w["rootOwned"], json!(expect_root), "{w}");
+    let audit = d.audit();
+    if expect_root {
+        assert!(audit.lines().any(|l| l.contains("agent.passport_wrong_cgroup") && l.contains(&format!("agent:{b_id}"))), "an audit row: B's passport from A");
+    }
 }

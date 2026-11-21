@@ -930,6 +930,16 @@ pub enum Verb {
     /// on an Owner's yes. Never a package name from argv; the install is
     /// simulated first and refused if it would remove anything.
     DesktopPackagesInstall,
+    // agents (protocol 18, 0.46.17 Agent Isolation M1b; see `crate::agent_cgroup`)
+    /// `agents place <workspace id> <pid>` (daemon): make the agent's
+    /// cgroup `<unit>/agents/a-<id>` root-owned and move `pid` (a process of
+    /// the daemon's user, in its unit, waiting in the exec helper) into it.
+    AgentsPlace { ws: crate::agent_cgroup::AgentWs, pid: u32 },
+    /// `agents check` (daemon, read-only): whether `agents place` would
+    /// accept this caller (its registered system unit, the agents' leaf
+    /// delegated to it). The daemon asks once at boot before it lets the
+    /// helper place its sessions.
+    AgentsCheck,
     // front (protocol 8, 0.46.1 front443; see `crate::templates::front_socket_unit`)
     /// `front status` (open, read-only): whether the fixed
     /// `k2-front-443.socket` unit and each system daemon's `k2-front.conf`
@@ -1522,6 +1532,11 @@ impl Verb {
             ["apps", "podman", "install"] => Verb::AppsPodmanInstall,
             ["apps", "podman", "uninstall"] => Verb::AppsPodmanUninstall,
             ["desktop", "packages", "install"] => Verb::DesktopPackagesInstall,
+            ["agents", "check"] => Verb::AgentsCheck,
+            ["agents", "place", ws, pid] => Verb::AgentsPlace {
+                ws: crate::agent_cgroup::AgentWs::parse(ws).ok_or(REFUSED)?,
+                pid: crate::agent_cgroup::pid_ok(pid).ok_or(REFUSED)?,
+            },
             ["front", "status"] => Verb::FrontStatus,
             ["front", "install"] => Verb::FrontInstall,
             ["front", "remove"] => Verb::FrontRemove,
@@ -1797,6 +1812,8 @@ impl Verb {
             Verb::AppsPodmanInstall => s(&["apps", "podman", "install"]),
             Verb::AppsPodmanUninstall => s(&["apps", "podman", "uninstall"]),
             Verb::DesktopPackagesInstall => s(&["desktop", "packages", "install"]),
+            Verb::AgentsPlace { ws, pid } => s(&["agents", "place", ws.as_str(), &pid.to_string()]),
+            Verb::AgentsCheck => s(&["agents", "check"]),
             Verb::FrontStatus => s(&["front", "status"]),
             Verb::FrontInstall => s(&["front", "install"]),
             Verb::FrontRemove => s(&["front", "remove"]),
@@ -1959,6 +1976,9 @@ impl Verb {
             // Owner's yes, which the daemon checks (PRD §2.6), so only the
             // daemon may ask.
             Verb::DesktopPackagesInstall => Daemon,
+            // Moves a process between cgroups as root: only the daemon, for
+            // the sessions it spawns.
+            Verb::AgentsPlace { .. } | Verb::AgentsCheck => Daemon,
             Verb::FrontStatus | Verb::FrontHttpStatus => Open,
             // Moves who owns the box's :443 onto the daemon's own unit (and
             // back): only the daemon itself may ask.
@@ -2111,6 +2131,7 @@ impl Verb {
             "front" => "front",
             "creds" => "creds",
             "desktop" => "desktop",
+            "agents" => "agents",
             _ => "keep",
         }
     }
@@ -2326,6 +2347,8 @@ pub fn catalog() -> Vec<Verb> {
         Verb::AppsPodmanInstall,
         Verb::AppsPodmanUninstall,
         Verb::DesktopPackagesInstall,
+        Verb::AgentsPlace { ws: crate::agent_cgroup::AgentWs::parse("ws-1").expect("ws"), pid: 4242 },
+        Verb::AgentsCheck,
     ];
     v.extend(SewVerb::catalog().into_iter().map(Verb::Sew));
     v.extend([Verb::FrontStatus, Verb::FrontInstall, Verb::FrontRemove]);

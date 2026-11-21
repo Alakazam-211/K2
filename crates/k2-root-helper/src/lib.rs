@@ -18,6 +18,7 @@
 // Server-only feature (Linux boxes); not shipped on personal Windows machines.
 #![cfg(unix)]
 
+pub mod agents;
 pub mod apps;
 pub mod caller;
 pub mod core;
@@ -270,6 +271,8 @@ fn dispatch(
         Verb::AppsPodmanUninstall => Some(podman::uninstall(ctx)?),
 
         Verb::DesktopPackagesInstall => Some(desktop::packages_install(ctx)?),
+        Verb::AgentsPlace { ws, pid } => Some(agents::place(ctx, who, ws, *pid)?),
+        Verb::AgentsCheck => Some(agents::check(ctx, who)?),
 
         Verb::FrontStatus => Some(front::status(ctx)?),
         Verb::FrontInstall => Some(front::install(ctx, who)?),

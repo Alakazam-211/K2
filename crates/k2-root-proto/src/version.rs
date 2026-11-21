@@ -159,7 +159,11 @@
 //!   spool; the record follows; a running cluster restarts). Under
 //!   `namespaces.pgarchive`, [`PGARCHIVE_MIN_PROTOCOL`]; a 17 helper
 //!   refuses the argv, so the daemon asks for the update before it sends
-//!   it. Another 0.46.17 lane that needs a helper change joins 18 here with
+//!   it. Also Agent Isolation M1b (`crate::agent_cgroup`): `agents check` and `agents place <workspace
+//!   id> <pid>`, the agent's cgroup made root-owned and the exec helper's
+//!   process moved into it, under `namespaces.agentcg`,
+//!   [`AGENTCG_MIN_PROTOCOL`]; a 17 helper refuses the argv, so the daemon
+//!   runs the agents traceable only (identity unavailable). Another 0.46.17 lane that needs a helper change joins 18 here with
 //!   its own namespace flag; never 19 before 18 ships.
 //! - 19 = the first release after 0.46.17, one bump (this is the ONE place
 //!   to add to it; another lane joins 19 here with its own namespace flag):
@@ -239,6 +243,10 @@ pub const PGARCHIVE_MIN_PROTOCOL: u32 = 18;
 /// (protocol 19, lane E). Gated on this AND `namespaces.pgrestore == true`:
 /// an 18 helper refuses the argv.
 pub const PGRESTORE_MIN_PROTOCOL: u32 = 19;
+/// `agents place <workspace id> <pid>` (0.46.17, Agent Isolation M1b): root-owned
+/// per-agent cgroups. Gated on this AND `namespaces.agentcg == true`: below it
+/// the daemon reports agent identity unavailable (sessions traceable only).
+pub const AGENTCG_MIN_PROTOCOL: u32 = 18;
 /// Sew's recorder install (`engine sew recording …`, 0.46.11 K-a). Gated on
 /// this AND `namespaces.sewrecording == true`: a 14 helper refuses the argv.
 pub const SEW_RECORDING_MIN_PROTOCOL: u32 = 15;

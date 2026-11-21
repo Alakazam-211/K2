@@ -16,7 +16,8 @@
 //!   or empty, both limits, one twice.
 //! - `--follow` and `--failures` are compute_attach_parity.rs's and
 //!   compute_parity.rs's rows.
-//! - What the binary hands to the shell: no temp folder (Linux; macOS's mktemp falls back, so it is native
+//! - What the binary hands to the shell: `--follow` with `--failures`,
+//!   no temp folder (Linux; macOS's mktemp falls back, so it is native
 //!   there), help. A duration that is none goes to the shell too;
 //!   bash's own arithmetic error names the script's path there, so it has
 //!   no row until D6's named difference.
@@ -496,6 +497,24 @@ fn compute_wait_hands_these_to_the_shell() {
             vec![],
             owner_and_port,
             0,
+            0,
+        )),
+        // `--follow` with `--failures` stays the shell's (the follow's
+        // failures go to stderr): past its limit, still_running and 124.
+        shell(case(
+            "--follow with --failures",
+            &[
+                "wait",
+                "aaaa1111",
+                "--follow",
+                "--failures",
+                "--timeout",
+                "0",
+            ],
+            &[],
+            vec![],
+            owner_and_port,
+            124,
             0,
         )),
     ];

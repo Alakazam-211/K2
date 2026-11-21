@@ -940,9 +940,6 @@ fn compute_logs() {
     }
 }
 
-/// A pull back's line names the command by the brand's name (in a build
-/// with `K2_BRAND_DIR=brand/xy` it says `xy`), never a typed `k2` or `k5`;
-/// the move note around it is the daemon's own words.
 /// `compute wait --failures`: after the end, each failed job's
 /// `── failures in …` line and its `compute logs <id> --failures --tail
 /// 60` (a subshell: its exit is not the wait's); a job that worked has
@@ -1017,6 +1014,9 @@ fn compute_wait_failures() {
     }
 }
 
+/// A pull back's line names the command by the brand's name (in a build
+/// with `K2_BRAND_DIR=brand/xy` it says `xy`), never a typed `k2` or `k5`;
+/// the move note around it is the daemon's own words.
 #[test]
 fn the_pull_line_says_the_brand_s_name() {
     let rig = Rig::new(VERB, "pullbrand");

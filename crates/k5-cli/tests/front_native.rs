@@ -615,7 +615,7 @@ fn cli_help_is_answered_here_and_other_forms_reach_the_shell_s_pointer() {
             "{args:?}"
         );
     }
-    let pointer = "k5 cli status is answered by the k5 binary: run k5 cli status\n";
+    let pointer = "k2 cli status is answered by the k2 CLI binary: run k2 cli status\n";
     for args in [&["cli", "status", "--bogus"][..], &["cli", "usage"]] {
         let out = rig.run(
             args,

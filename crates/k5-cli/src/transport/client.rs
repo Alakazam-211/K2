@@ -808,6 +808,9 @@ pub struct Client {
     /// The `--connect-timeout` of the [`Kind::Own`] call under way, when
     /// it is not the default ([`Client::own_curl_bare`]).
     own_connect: Option<Duration>,
+    /// The cell socket of the call under way that has no passport to
+    /// send ([`Client::post_form_uds_bare`]).
+    bare_sock: Option<PathBuf>,
 }
 
 /// How [`Client::own_curl`] sends: `_k2_curl` with the caller's config
@@ -864,6 +867,7 @@ impl Client {
             own_once: false,
             own_bare: false,
             own_connect: None,
+            bare_sock: None,
         }
     }
 
@@ -1385,6 +1389,23 @@ impl Client {
         r
     }
 
+    /// `cli_post_form_uds <endpoint> <pairs>` with no passport (0.46.17):
+    /// the same form POST on the cell socket at `sock`, with no
+    /// `Authorization` line at all (never an empty Bearer). Everything
+    /// else is [`Call::PostForm`]'s on [`Channel::Uds`]; with no passport
+    /// there is nothing to heal.
+    pub fn post_form_uds_bare(
+        &mut self,
+        sock: &Path,
+        endpoint: &str,
+        pairs: &[&str],
+    ) -> Result<Response, Error> {
+        self.bare_sock = Some(sock.to_path_buf());
+        let r = self.call(Channel::Uds, endpoint, Call::PostForm(pairs));
+        self.bare_sock = None;
+        r
+    }
+
     /// `_cli_use_passport_project`'s request: `/cli/whoami` with the
     /// passport, on the cell socket when there is a live one, then over
     /// TCP (the passport as Bearer) when that failed or its answer, as
@@ -1881,6 +1902,11 @@ impl Client {
                     Target::Tcp { host, port }
                 };
                 (target, header)
+            }
+            // No passport: no credential line ([`Client::post_form_uds_bare`]).
+            Channel::Uds if self.bare_sock.is_some() && self.passport().is_none() => {
+                let sock = self.bare_sock.as_deref().unwrap_or(Path::new(""));
+                (uds_target(sock, endpoint)?, "localhost".to_string())
             }
             Channel::Uds => {
                 let no = || Error::NoCellSocket {

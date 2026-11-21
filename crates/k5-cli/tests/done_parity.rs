@@ -975,6 +975,25 @@ fn done_in_a_session_the_api_started() {
             0,
             1,
         ),
+        // covers: done
+        case(
+            "on the cell socket with no passport",
+            &[],
+            &[("K2_API_CELL", "1"), ("K2_HOOK_SOCK", "{sock}")],
+            vec![ok(OK)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "on the cell socket with no passport: a reason",
+            &["--reason", "no passport here"],
+            &[("K2_API_CELL", "1"), ("K2_HOOK_SOCK", "{sock}")],
+            vec![ok(OK)],
+            owner_and_port,
+            0,
+            1,
+        ),
         case(
             "no passport and no socket",
             &[],
@@ -996,11 +1015,29 @@ fn done_in_a_session_the_api_started() {
     ];
     for c in v {
         rig.check(&c);
-        rig.binary(&c, false);
+        let (out, sent) = rig.binary(&c, false);
         assert!(
             !k5_cli::fallthrough::cache_dir(&rig.k2home).exists(),
             "{}: the binary handed the line to the shell",
             c.name
         );
+        // 0.46.17: no passport on the cell socket is no Authorization
+        // line at all (never an empty Bearer), and never the owner token.
+        if c.name.contains("with no passport") {
+            assert_eq!((out.code, sent.len()), (Some(0), 1), "{}: {out:?}", c.name);
+            assert!(
+                sent[0].starts_with("[uds]\nPOST /cli/session/complete HTTP/1.1\n"),
+                "{}: {}",
+                c.name,
+                sent[0]
+            );
+            assert!(
+                !sent[0].to_ascii_lowercase().contains("authorization:")
+                    && !sent[0].contains(OWNER),
+                "{}: {}",
+                c.name,
+                sent[0]
+            );
+        }
     }
 }

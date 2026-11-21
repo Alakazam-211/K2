@@ -39,7 +39,9 @@
 //! unknown-flag line (exit 2). Then `reason=<escaped>` (nothing for no
 //! reason) as a form POST to `/cli/session/complete`, with the session's
 //! passport as Bearer, never the owner token: on the cell socket when
-//! `HOOK_SOCK` is one (`cli_post_form_uds`, as `respond`'s), else over
+//! `HOOK_SOCK` is one (`cli_post_form_uds`, as `respond`'s; with no
+//! passport there, no `Authorization` line at all, since 0.46.17:
+//! [`crate::transport::Client::post_form_uds_bare`]), else over
 //! TCP when the passport has a `.` in it (`_k2_curl` with the passport,
 //! [`crate::transport::Client::post_form_bearer`]), else the line that
 //! there is no such session, exit 1.
@@ -48,9 +50,8 @@
 //! there is one copy of each: a command line with `-h` or `--help` (the
 //! front sends those on, [`crate::front`]); a word or an agent setting
 //! that is not UTF-8; and in an API session, `HOOK_SOCK` with a `CODEX_`
-//! variable exported (the shell looks for a shared Codex server first)
-//! and a cell socket with no passport (the shell sends an empty
-//! Bearer). Once escaped, no byte of the agent is
+//! variable exported (the shell looks for a shared Codex server first).
+//! Once escaped, no byte of the agent is
 //! special to the transport, so no agent is handed on for its bytes.
 
 use super::{curl_port, without_nuls};
@@ -325,17 +326,18 @@ pub mod api {
             Auth::Passport { passport, .. } => Some(passport.as_str().to_string()),
             Auth::Owner(_) | Auth::None => None,
         };
-        let sock = hook_sock.as_deref().map(Path::new).filter(|s| is_socket(s));
-        if sock.is_some() && passport.is_none() && prelude::gate(&settings).is_none() {
-            return None;
-        }
-        Some(run_with(args, form, sock.is_some(), passport, settings))
+        let sock = hook_sock
+            .as_deref()
+            .map(Path::new)
+            .filter(|s| is_socket(s))
+            .map(Path::to_path_buf);
+        Some(run_with(args, form, sock, passport, settings))
     }
 
     fn run_with(
         args: &[OsString],
         form: Result<String, String>,
-        on_socket: bool,
+        on_socket: Option<std::path::PathBuf>,
         passport: Option<String>,
         mut settings: Settings,
     ) -> Exit {
@@ -356,11 +358,12 @@ pub mod api {
         };
         let would_refuse = passport::current(args).would_refuse();
         let port = settings.port_text.as_deref().and_then(curl_port);
-        if on_socket {
+        if let Some(sock) = on_socket {
             // The cell socket doesn't need the port: a port that is no
             // port is only the closing probe's, which then can't connect.
             settings.port = Some(port.unwrap_or(0));
-            return cell_socket(settings, would_refuse, &pairs);
+            let bare = passport.is_none().then_some(sock.as_path());
+            return cell_socket(settings, would_refuse, &pairs, bare);
         }
         if !passport.is_some_and(|p| p.contains('.')) {
             out::stderr_line(NO_SESSION);
@@ -387,8 +390,14 @@ pub mod api {
     }
 
     /// `cli_post_form_uds /cli/session/complete [<form>]`, then the EXIT
-    /// trap.
-    fn cell_socket(settings: Settings, would_refuse: bool, form: &[&str]) -> Exit {
+    /// trap. `bare`: the socket, when there is no passport to send there
+    /// (no `Authorization` line).
+    fn cell_socket(
+        settings: Settings,
+        would_refuse: bool,
+        form: &[&str],
+        bare: Option<&Path>,
+    ) -> Exit {
         let mut client = match settings.client(would_refuse) {
             Ok(c) => c,
             Err(e) => {
@@ -397,9 +406,13 @@ pub mod api {
             }
         };
         let mut closing = Closing::default();
-        let exit = match client.call(Channel::Uds, ENDPOINT, Call::PostForm(form)) {
+        let sent = match bare {
+            Some(sock) => client.post_form_uds_bare(sock, ENDPOINT, form),
+            None => client.call(Channel::Uds, ENDPOINT, Call::PostForm(form)),
+        };
+        let exit = match sent {
             Ok(r) => {
-                closing.answer(&r, true);
+                closing.answer(&r, bare.is_none());
                 match out::write_flushed(&mut std::io::stdout().lock(), &without_nuls(&r.body)) {
                     Ok(()) => Exit::Ok,
                     Err(e) => out::after_stdout_error(&e),
@@ -448,6 +461,7 @@ pub mod api {
                 r#"-*) echo "k2 done: unknown flag '$1'. Here k2 done takes --reason <text> (k2 done --help)." >&2; exit 2 ;;"#.to_string(),
                 r#"form="reason=$(urlencode "$reason")""#.to_string(),
                 r#"cli_post_form_uds "/cli/session/complete" "$form""#.to_string(),
+                r#"cli_post_form_uds "/cli/session/complete""#.to_string(),
                 r#"if [[ "$SCOPED_TOKEN" == *.* ]] && [ -n "$PORT" ]; then"#.to_string(),
                 r#"_k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}""#.to_string(),
             ] {

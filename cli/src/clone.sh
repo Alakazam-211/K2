@@ -123,6 +123,24 @@ sys.exit(0 if clone_local_warns(sys.argv[1]) else 1)' "${HOST:-127.0.0.1}" || re
     _K2_PLAIN_HTTP_WARNED=1
 }
 
+# _clone_port_gate URL: refuse (exit 2, the usage line on stderr) a remote
+# URL whose port isn't a number from 1 to 65535 (_k2_port_ok), before
+# anything is looked up or sent. The port is read as the engine's urllib
+# and http.client read it: the host part, %-escapes decoded, then the text
+# after its last ":" when that comes after any "]" (so [::1]:8080 too).
+# No port at all is the scheme's own.
+_clone_port_gate() {
+    local port
+    port="$(python3 -c '
+import sys, urllib.request
+host = urllib.request.Request(sys.argv[1]).host
+i, j = host.rfind(":"), host.rfind("]")
+sys.stdout.write((host[i + 1:] if i > j else "") + "x")' "$1")" || exit $?
+    port="${port%x}"
+    [ -z "$port" ] || _k2_port_ok "$port" \
+        || _clone_die usage "the server's port must be a number from 1 to 65535 (got: $1)" 2
+}
+
 # _clone_https_gate URL: refuse (exit 3, the line on stderr) a remote URL a
 # token may not go to, before anything is looked up or sent.
 _clone_https_gate() {
@@ -1042,8 +1060,11 @@ _clone_remote() {
         http://*|https://*) url="${host%/}" ;;
         *) url="https://${host}" ;;
     esac
-    # Before the token is even looked up: https, or a loopback address.
+    # Before the token is even looked up: https, or a loopback address
+    # (this one first: its line never shows a name before an @), then a
+    # port from 1 to 65535.
     _clone_https_gate "$url" || exit $?
+    _clone_port_gate "$url"
     if [ "$saved" = saved ]; then
         # A host an agent proposed: only the token saved for that host.
         tok="$(_remote_saved_token_for_host "$host")"

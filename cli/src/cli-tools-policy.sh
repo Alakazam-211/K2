@@ -806,14 +806,17 @@ _k2_curl() {
 
 # P49: when $PORT is a loopback port the daemon no longer publishes, move
 # PORT/BASE_URL to the one in ~/.k2/daemon.port. Sets _K2_PORT_FROM to the
-# old port (empty when nothing moved).
+# old port (empty when nothing moved). A daemon.port that isn't a port is
+# not followed: _k2_port_ok's rule (cli/src/prelude.sh), spelled out here
+# because tests load this block without the prelude.
 _k2_follow_port_move() {
     _K2_PORT_FROM=""
     case "${HOST:-127.0.0.1}" in 127.0.0.1|localhost|::1) ;; *) return 0 ;; esac
     local f="${K2_HOME:-$HOME/.k2}/daemon.port" p
     [ -f "$f" ] || return 0
     p="$(tr -d '[:space:]' < "$f" 2>/dev/null)" || return 0
-    case "$p" in ''|*[!0-9]*) return 0 ;; esac
+    case "$p" in ''|0*|*[!0123456789]*) return 0 ;; esac
+    [ "${#p}" -le 5 ] && [ "$p" -le 65535 ] || return 0
     [ -n "${PORT:-}" ] && [ "$p" != "$PORT" ] || return 0
     _K2_PORT_FROM="$PORT"
     PORT="$p"

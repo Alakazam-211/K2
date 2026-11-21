@@ -14,8 +14,11 @@
 //! the held answer ([`super::grace`]) where the shell has it, `--json`
 //! as it came, else the shell's Python line for line.
 //!
-//! The shell answers these itself (`None`): `-h` or `--help` anywhere,
-//! `guest` with no word, and a `--max` that is not plain digits
+//! `guest` with no word (or an empty one) is the guest rooms page, exit 0,
+//! after the gates.
+//!
+//! The shell answers these itself (`None`): `-h` or `--help` anywhere, and
+//! a `--max` that is not plain digits
 //! (`_compute_json`'s `int()` raises there and the shell posts an empty
 //! body; a bash bug, reported).
 
@@ -99,6 +102,9 @@ pub enum Ask {
     Kind(Kind),
     /// `grant copy-host <app> [--dry-run]`.
     CopyHost { app: String, dry: bool, json: bool },
+    /// `guest` with no word (or an empty one): `_app_guest_rooms_usage`,
+    /// the page on stdout, exit 0; nothing sent.
+    Usage,
 }
 
 /// `cmd_app_grant_kind`'s words.
@@ -136,9 +142,10 @@ pub fn parse_guest(words: &[&str]) -> Option<Result<Ask, Stop>> {
     if help(words) {
         return None;
     }
-    let what = *words.first()?;
-    let rest = &words[1..];
+    let what = words.first().copied().unwrap_or("");
+    let rest = words.get(1..).unwrap_or_default();
     Some(match what {
+        "" => Ok(Ask::Usage),
         "rooms" => rooms(rest),
         "ceiling" | "list" => reads(what, rest),
         _ => Err(Stop::usage(usage::GUEST)),
@@ -343,6 +350,9 @@ fn rooms_json(csv: &str) -> String {
 /// Runs it: what it printed, or the exit it ended with.
 pub fn run(ctx: &mut Ctx, ask: &Ask) -> Answer {
     match ask {
+        Ask::Usage => Ok(crate::families::Shown::out(
+            crate::text::help("app/guest/rooms").expect("the guest rooms page is embedded"),
+        )),
         Ask::Ceiling { app, json } => {
             let body = ctx.call(
                 false,

@@ -5,6 +5,7 @@
 //! `cli/src/talk-and-workspace.sh`), on the parity rig
 //! ([`common::parity`]): the same requests, stdout, stderr and exit code.
 //!
+//! - `guest` alone (the rooms page), an empty or unknown word.
 //! - `guest rooms|ceiling|list`: each read and `--json`, a set (rooms,
 //!   `-`, `--json` before the rooms), the usage lines, a value flag given
 //!   last, a list above 256 KiB, a refusal, Python raising part way.
@@ -122,6 +123,28 @@ fn guest_reads_and_sets() {
                 ok(ROOMS),
                 0,
             ),
+            // native: app guest
+            words("guest alone: the rooms page", &["guest"], 0),
+            words("guest, an empty word", &["guest", ""], 0),
+            case(
+                "guest alone: HOOK_SOCK set and no passport",
+                &["guest"],
+                &[("K2_HOOK_SOCK", "{sock}")],
+                vec![],
+                owner_and_port,
+                3,
+                0,
+            ),
+            case(
+                "guest alone, no daemon: the connection gate",
+                &["guest"],
+                &[],
+                vec![],
+                nothing,
+                1,
+                0,
+            ),
+            words("guest, an unknown word", &["guest", "nope"], 2),
             // covers: app guest rooms
             words("guest rooms: no user", &["guest", "rooms", "acme"], 2),
             // covers: app guest rooms

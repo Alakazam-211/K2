@@ -75,6 +75,10 @@ export function chamferPolygon(less: string): string {
 /** Where chamfers apply: the desktop Thread box under K2's square Style. */
 export const CHAMFER_SCOPE = `html[data-style="terminal"] [${THREAD_ZEN_SCOPE_ATTR}]`
 
+/** A message's sender picture (threadSenders' SENDER_AVATAR_PX): cut as
+ *  every Terminal avatar is, an octagon. */
+const SENDER_PICTURE_PX = 24
+
 const allCorners = (px: number): string => `--ch-tl: ${px}px; --ch-tr: ${px}px; --ch-br: ${px}px; --ch-bl: ${px}px;`
 
 export const THREAD_CHAMFER_CSS = `
@@ -89,6 +93,9 @@ ${CHAMFER_SCOPE} [data-testid="thread-choice-chip"][data-chamfer]:hover:not(:dis
 ${CHAMFER_SCOPE} [data-card-primary][data-chamfer]:hover:not(:disabled) { --ch-fill: var(--thread-card-accent-fill-hover, var(--thread-card-accent-fill, var(--thread-card-accent, var(--color-accent)))) !important; --ch-edge: var(--ch-fill) !important; }
 ${CHAMFER_SCOPE} [data-card-field][data-chamfer]:focus-within { --ch-edge: var(--thread-card-accent, var(--color-accent)) !important; }
 ${CHAMFER_SCOPE} [data-zen-drawer-dot] { border-radius: 0 !important; }
+${CHAMFER_SCOPE} [data-sender-avatar] { border-radius: 0 !important; ${allCorners(chamferCutFor(SENDER_PICTURE_PX))} clip-path: ${chamferPolygon('0px')}; }
+${CHAMFER_SCOPE} button[data-chamfer]:focus-visible { outline: none; --ch-edge: var(--zen-focus-ring) !important; --ch-bw: 2px !important; }
+${CHAMFER_SCOPE} [data-thread-chat-chip=""][data-chamfer]:hover:not(:disabled) { --ch-edge: var(--zen-control-edge, var(--zen-border)) !important; }
 ${CHAMFER_SCOPE} .zen-drawer-tag { border-radius: 0 !important; ${allCorners(chamferCutFor(18))} clip-path: ${chamferPolygon('0px')}; }
 ${CHAMFER_SCOPE} .zen-drawer-tag.zen-drawer-code { ${allCorners(chamferCutFor(16))} }
 `

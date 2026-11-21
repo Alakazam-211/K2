@@ -223,6 +223,7 @@ ${SCOPE} [data-zen-message]:hover [data-zen-message-more], ${SCOPE} [data-zen-me
 ${SCOPE} [data-thread-hover-status] { opacity: 0; pointer-events: none; transition: opacity 120ms ease; }
 ${SCOPE} [data-zen-message]:hover [data-thread-hover-status], ${SCOPE} [data-thread-hover-status]:focus-within { opacity: 1; pointer-events: auto; }
 [${THREAD_ZEN_SCOPE_ATTR}] [data-zen-compose] [data-zen-soft-button]:hover:not(:disabled) { background: var(--zen-surface); }
+[${THREAD_ZEN_SCOPE_ATTR}] [data-thread-chat-chip=""]:hover:not(:disabled) { border-color: var(--zen-control-edge, var(--zen-border)); }
 [${THREAD_ZEN_SCOPE_ATTR}] [data-zen-bubble="agent"] *::selection,
 [${THREAD_ZEN_SCOPE_ATTR}] [data-zen-bubble="agent"]::selection { background: color-mix(in srgb, var(--zen-accent) 30%, transparent); color: var(--zen-bubble-agent-text); }
 [${THREAD_ZEN_SCOPE_ATTR}] [data-zen-bubble="me"] *::selection,

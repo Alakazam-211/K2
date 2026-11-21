@@ -905,6 +905,22 @@ describe('frosted glass behind the message box', () => {
     expect(FOOTER_TINT_STOPS_OPAQUE.at(-1)).toEqual([6, 95])
   })
 
+  it('Terminal: sender pictures are cut, and a cut button’s focus ring follows its cut', () => {
+    // An octagon, as every Terminal avatar (the frame clips the picture).
+    expect(THREAD_CHAMFER_CSS).toMatch(/\[data-k2-thread-zen\] \[data-sender-avatar\] \{ border-radius: 0 !important; --ch-tl: \d+(\.\d+)?px;[^}]*clip-path: polygon\(/)
+    // The ring is the cut edge in the focus colour, 2px; no square or round outline.
+    expect(THREAD_CHAMFER_CSS).toContain(
+      `${CHAMFER_SCOPE} button[data-chamfer]:focus-visible { outline: none; --ch-edge: var(--zen-focus-ring) !important; --ch-bw: 2px !important; }`,
+    )
+    // A quick answer's hover lights its edge.
+    expect(THREAD_CHAMFER_CSS).toContain('[data-thread-chat-chip=""][data-chamfer]:hover:not(:disabled) { --ch-edge: var(--zen-control-edge')
+    // The drawers' cut cells take the cut ring, not the square outline.
+    const css = src('../globals.css')
+    expect(css).toContain(
+      'html[data-style="terminal"] [data-k2-float="capsule"] > [data-page-tab][data-k2-chamfer]:focus-visible:not([data-zen-root] *) { outline: none; }',
+    )
+  })
+
   it('keyboard focus in the message box turns its own edge the focus colour, in every look', () => {
     const css = src('../globals.css')
     const start = css.indexOf('[data-k2-thread-zen] [data-zen-compose] [data-zen-compose-box]:focus-within')
@@ -927,8 +943,9 @@ describe('frosted glass behind the message box', () => {
     const rules = css
       .split('\n')
       .filter((l) => l.includes('.thread-footer-fade > .thread-footer-tint') && l.startsWith('html[data-style="glass"]'))
-    // The blur band and its no-blur fallback: one rule each, for every palette.
-    expect(rules).toHaveLength(2)
+    // The blur band and its no-blur fallback: one rule each, for every
+    // palette; and a ticket's discussion's heavier one.
+    expect(rules).toHaveLength(3)
     expect(rules.some((l) => l.includes('[data-palette='))).toBe(false)
     const bodies = rules.map((l) => (l.includes('{ background') ? l : css.slice(css.indexOf(l) + l.length).split('}')[0]))
     for (const body of bodies) {

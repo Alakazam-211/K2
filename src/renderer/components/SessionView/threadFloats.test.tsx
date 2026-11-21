@@ -74,6 +74,8 @@ describe('the header', () => {
     expect(h.className).not.toContain('border-b')
     expect(screen.getByTestId('session-view-button').getAttribute('data-k2-float')).toBe('pill')
     expect(screen.getByTestId('thread-drawer-selector').getAttribute('data-k2-float')).toBe('capsule')
+    // Terminal cuts each drawer cell, so its focus ring follows the cut.
+    expect(screen.getByTestId('thread-terminal-toggle').getAttribute('data-k2-chamfer')).toBe('control')
     expect(screen.getByRole('button', { name: 'Refresh session' }).getAttribute('data-k2-float')).toBe('round')
     expect(screen.getByTestId('thread-float-scrim')).not.toBeNull()
     // Still finds its pane the way the reveal chord and the identity do.

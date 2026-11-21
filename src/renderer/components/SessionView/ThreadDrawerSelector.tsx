@@ -238,6 +238,9 @@ export function ThreadDrawerSelector(props: ThreadDrawerSelectorProps): JSX.Elem
           onMouseDown={!switching && s.kind === 'terminal' ? (e) => e.preventDefault() : undefined}
           {...(switching ? { role: 'radio', 'aria-checked': s.on } : {})}
           data-thread-drawer-segment={s.kind}
+          // Terminal cuts each drawer cell, so its focus ring follows the
+          // cut like every cut button's (globals.css); Glass ignores it.
+          {...(switching ? {} : { 'data-k2-chamfer': 'control' })}
           data-thread-panel-toggle={switching || s.kind === 'terminal' ? undefined : s.kind}
           data-testid={
             switching

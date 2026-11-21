@@ -2783,6 +2783,9 @@ html:is([data-style="glass"], [data-style="glass-classic"]) button[data-k2-float
 [data-k2-float="capsule"] { padding: 0 1px; gap: 2px; }
 [data-k2-float="capsule"] > [data-page-tab] { width: 24px; padding: 0; }
 [data-k2-float="capsule"] > [data-page-tab]:focus-visible { outline: 2px solid var(--color-accent-text); outline-offset: -2px; }
+/* Terminal: a drawer cell is cut (ThreadDrawerSelector), and the cut buttons'
+   ring follows it, so no square outline inside it. */
+html[data-style="terminal"] [data-k2-float="capsule"] > [data-page-tab][data-k2-chamfer]:focus-visible:not([data-zen-root] *) { outline: none; }
 /* The same capsule in an agent tile's bar (`switch` mode, Projects): the
    view picker. Its cells are the float's 24px; Terminal boxes them in a
    hairline so the four read as one control. Glass draws the page tabs'
@@ -3048,9 +3051,14 @@ html:not([data-style="glass"]) [data-ticket-thread-pane] > [data-ticket-thread-h
 html:not([data-style="glass"]) [data-ticket-thread-pane] > [data-ticket-thread-header] > .thread-float-scrim,
 [data-zen-root] [data-ticket-thread-pane] > [data-ticket-thread-header] > .thread-float-scrim { display: none; }
 /* Its band over the quick answers and the box reaches up over the room the
-   newest message keeps from them (TICKET_REST_GAP_PX, 40px in all), so the
-   newest message rests clear of it and Jump to bottom sits on it. */
-html [data-ticket-thread-pane] [data-k2-thread-zen] .thread-footer-fade.thread-footer-fade { margin-top: -34px; }
+   newest message keeps from them (TICKET_REST_GAP_PX and the list's 8px,
+   56px in all), so the newest message rests clear of it and Jump to bottom
+   sits on it. */
+html [data-ticket-thread-pane] [data-k2-thread-zen] .thread-footer-fade.thread-footer-fade { margin-top: -50px; }
+/* Glass: the band dims what scrolls under it as the no-blur fallback's
+   heavier ramp does (data-frost="tile"), fading in over its top 16px, so
+   bubble text never reads through Jump to bottom or the quick answers. */
+html[data-style="glass"] [data-ticket-thread-pane] [data-k2-thread-zen] .thread-footer-fade > .thread-footer-tint:not([data-zen-root] *) { background: linear-gradient(to bottom, transparent 0, color-mix(in srgb, var(--color-bg) 88%, transparent) 16px, color-mix(in srgb, var(--color-bg) 96%, transparent) 100%); }
 /* Terminal: that band is flush, the page's own colour, with no blur. */
 html:not([data-style="glass"]) [data-ticket-thread-pane] [data-k2-thread-zen] .thread-footer-fade > [class^="thread-footer-blur-"] { display: none; }
 html:not([data-style="glass"]) [data-ticket-thread-pane] [data-k2-thread-zen] .thread-footer-fade > .thread-footer-tint { background: var(--color-bg); }

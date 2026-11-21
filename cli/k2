@@ -18377,7 +18377,7 @@ _app_data_get() {
     local tmp="-"
     if [ "$to" != "-" ]; then
         tmp="$(dirname "$to")/.$(basename "$to").k2-part-$$"
-        : > "$tmp" || { echo "{\"error\":\"local_write\",\"hint\":\"can't write $to\"}" >&2; exit 3; }
+        : > "$tmp" || { _compute_json K2_CJ_error=local_write K2_CJ_hint="can't write $to" >&2; exit 3; }
         # A refusal mid-way exits: drop the part file, keep the router's
         # permission-note flush.
         _K2_DG_TMP="$tmp"
@@ -18406,7 +18406,7 @@ print("%d %d %d %d" % (v["size"], v["mtime"], 1 if v["eof"] else 0, v["offset"] 
         if [ -z "$size" ]; then
             size="$s"; mtime="$m"
         elif [ "$s" != "$size" ] || [ "$m" != "$mtime" ]; then
-            echo "{\"error\":\"data_changed\",\"hint\":\"$path changed while it was read (size $size → $s): get it again\"}" >&2
+            _compute_json K2_CJ_error=data_changed K2_CJ_hint="$path changed while it was read (size $size → $s): get it again" >&2
             exit 3
         fi
         [ "$eof" = 1 ] && break

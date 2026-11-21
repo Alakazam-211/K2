@@ -50092,6 +50092,8 @@ for line in d.get("doctor") or []:
                 return 2
             fi
             local password
+            # Refused here, not in the $(...) below, so it exits 2.
+            _k2_password_transport_ok
             password="$(_users_read_password "$password_stdin")" || return 1
             local body resp
             # 0.46.8: temporary unless --keep-password (sent either way, so
@@ -50385,6 +50387,8 @@ print("%s (Voice & Chat only)\n  agents:  %s\n  gardens: %s\n  sources: %s" % (u
                 return 2
             fi
             local password
+            # Refused here, not in the $(...) below, so it exits 2.
+            _k2_password_transport_ok
             password="$(_users_read_password "$password_stdin")" || return 1
             local body resp
             # The password reaches python on stdin, never argv or the environment.

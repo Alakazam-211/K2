@@ -33,6 +33,7 @@
 #   connect.sh        publish visibility ... pin (PIN)
 #   llm.sh            llm tokens add-key (API token)
 #   users-phones.sh   users pair-phone (login password)
+#   clone.sh          users add, users set-password (a login's password)
 #   talk-and-workspace.sh  workspace api-key --key-stdin, api-key create
 #                     --key-stdin (LLM API keys)
 #
@@ -459,6 +460,24 @@ run "${PLAIN[@]}" -- users pair-phone
 refused "login password" 2 "$P" "daemon POST /cli/auth/device/pair-code"
 run -- users pair-phone
 prompted "login password, loopback" "$P" "daemon /cli/auth/device/pair-code"
+
+echo "== clone.sh: a login's password (users add, users set-password) =="
+# getpass: with no terminal to open it reads the pty on stdin.
+P='Password: '
+TYPED_LINES=2
+run "${PLAIN[@]}" -- users add bob
+refused "users add password" 2 "$P" ""
+# getpass flushes what was typed before it asks: type at each prompt.
+GP="[[\"Password: \", \"$SECRET\\n\"], [\"Confirm password: \", \"$SECRET\\n\"]]"
+STEPS="$GP"; run -- users add bob; STEPS=-
+prompted "users add password, loopback" "$P" "daemon /cli/users/add"
+STEPS="$GP"; run "${HTTPS[@]}" -- users add bob; STEPS=-
+prompted "users add password, https" "$P"
+run "${PLAIN[@]}" -- users set-password bob
+refused "users set-password password" 2 "$P" ""
+STEPS="$GP"; run -- users set-password bob; STEPS=-
+prompted "users set-password password, loopback" "$P" "daemon /cli/users/set-password"
+TYPED_LINES=1
 
 echo "== talk-and-workspace.sh: LLM API keys (workspace api-key, api-key create) =="
 P='Paste the API key: '

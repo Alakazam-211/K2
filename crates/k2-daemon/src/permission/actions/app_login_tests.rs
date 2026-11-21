@@ -268,3 +268,39 @@ fn op_role_moves_its_apps_login_in_place_and_keeps_the_session() {
     let (s, e) = ask(&ws, ACTION, json!({ "op": "role", "user": dana, "app": app_name }));
     assert!(s.starts_with("400") && e.to_string().contains("name the role"), "{s}: {e}");
 }
+
+/// 0.46.17 (field case): `k2 permission request app.login-grant … --assign
+/// <login>` (the ask's `to`, as on every card) asks only that person. The
+/// card's floor is the owner's, so an Admin login can't be named, and
+/// nothing is asked when one is.
+#[test]
+fn assign_sends_the_login_card_to_one_owner_only() {
+    let _db = k2_core::db::scoped_for_test();
+    let _home = crate::test_support::TempHome::new();
+    k2_core::db::init_for_tests();
+    let ws = seed("ala");
+    let app_name = format!("jobs{}", uniq());
+    app_of(&ws, &app_name);
+    let dana = person(&app_of(&seed("alao"), &format!("elsewhere{}", uniq())), "dana");
+    let viewer = role(&ws, None);
+    let olga = login("alao", Role::Owner);
+    let ada = login("alaa", Role::Admin);
+    let ask_to = |to: &str| {
+        let body = json!({ "action": ACTION, "params": add(&dana, &app_name, &viewer), "why": "Dana runs the jobs board", "to": to });
+        let r = crate::permission::routes::handle_gated(
+            crate::permission::routes::REQUEST,
+            &super::super::held::tests::agent(&ws),
+            true,
+            body.to_string().as_bytes(),
+            &HashMap::new(),
+        );
+        (r.status.to_string(), serde_json::from_str::<Value>(&r.body).expect("json"))
+    };
+    let (s, e) = ask_to(&ada);
+    assert_eq!((s.as_str(), e["error"]["code"].as_str()), ("400 Bad Request", Some("approver_not_eligible")), "{e}");
+    assert!(crate::permission::store::open(Some(&ws.id)).expect("open").is_empty(), "nothing asked");
+    let (s, v) = ask_to(&olga);
+    assert_eq!((s.as_str(), v["status"].as_str()), ("200 OK", Some("pending")), "{v}");
+    let q = row(&id_of(&v));
+    assert_eq!(crate::permission::approvers::of(q.id.as_str()), Some(vec![olga.clone()]), "only olga is asked");
+}

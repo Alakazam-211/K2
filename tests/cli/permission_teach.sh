@@ -382,6 +382,11 @@ run agent permission request compute.use --why "x" --assign=ada,owner
 grep -q '"to": "ada,owner"}$' "$LOG" && ok || bad "permission request --assign=: $(cat "$LOG")"
 run agent permission request compute.use --why "x" --assign
 [ "$RC" = 2 ] && ok || bad "permission request --assign with no value: exit $RC, want 2"
+# The field case: a login on the agent's own App, to one owner.
+: >"$LOG"
+run agent permission request app.login-grant op=add user=dana app=jobs role=viewer --why "Dana runs the jobs board" --assign olga
+[ "$RC" = 0 ] && ok || bad "app.login-grant --assign: exit $RC ($ERR)"
+grep -q '"action": "app.login-grant".*"to": "olga"}$' "$LOG" && ok || bad "app.login-grant --assign rides as to: $(cat "$LOG")"
 # The owner's default, from a terminal outside K2: a settings write.
 run person permission approvers ada,owner
 grep -q '^POST /cli/settings/update {"permissionApprovers": \["ada", "owner"\]}$' "$LOG" && ok || bad "permission approvers: wrong request: $(cat "$LOG")"

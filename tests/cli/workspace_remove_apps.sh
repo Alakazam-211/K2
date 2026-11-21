@@ -8,7 +8,9 @@
 #                      daemon's hint, then a line that the workspace is not
 #                      removed until the owner approves (exit 2); no removal
 #                      is sent
-#   uninstall        → 403 owner_only: the refusal line (exit 3); no removal
+#   uninstall        → 403 owner_only: the refusal line with the App
+#                      registry's next, explain and fix: line, as k2 app
+#                      release prints it (exit 3); no removal
 #
 # Before the fix a 202 printed {"error": "error", "hint": "None"} and
 # exited 3.
@@ -130,8 +132,9 @@ POST /cli/app/release'
 echo "== A refusal: nothing removed =="
 rc="$(rc_of workspace remove acme --apps uninstall)"
 expect_eq "refusal: exit 3" "$rc" "3"
-expect_eq "refusal: the refusal line" "$(sed -n 1p "$SANDBOX/err")" \
-'{"error": "owner_only", "hint": "only the owner may release this workspace'"'"'s Apps"}'
+expect_eq "refusal: the refusal line with the registry's next and explain, then its fix: line, as k2 app release" "$(cat "$SANDBOX/err")" \
+'{"error": "owner_only", "hint": "only the owner may release this workspace'"'"'s Apps", "next": "Ask the owner. The refusal names where they do it.", "explain": "k2 explain owner_only"}
+fix: Ask the owner. The refusal names where they do it.'
 expect_eq "refusal: no removal is sent" "$(cat "$SANDBOX/requests.log")" \
 'GET /cli/workspace/resolve
 POST /cli/app/release'

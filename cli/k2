@@ -53338,7 +53338,8 @@ for r in v.get("results", []):
                     exit 2
                 fi
                 ;;
-            *) _compute_fail "$_CP_STATUS" "$_CP_BODY" ;;
+            # An App refusal carries the registry's fix, as k2 app release's do.
+            *) _K2_REFUSAL_AREA=app; _compute_fail "$_CP_STATUS" "$_CP_BODY" ;;
         esac
     fi
     local resp

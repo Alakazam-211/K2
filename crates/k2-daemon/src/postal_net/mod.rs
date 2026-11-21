@@ -363,3 +363,7 @@ pub fn owner_linked() -> Option<bool> {
 #[cfg(test)]
 #[path = "wake_tests.rs"]
 mod wake_tests;
+
+#[cfg(test)]
+#[path = "short_label_tests.rs"]
+mod short_label_tests;

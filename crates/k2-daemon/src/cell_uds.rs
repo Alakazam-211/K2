@@ -24,7 +24,7 @@
 //! unix-only; a non-unix stub keeps the daemon compiling.
 
 #[cfg(unix)]
-pub use unix_impl::{bind_cell_socket, cell_socket_path};
+pub use unix_impl::{bind_cell_socket, cell_socket_path, cells_dir};
 #[cfg(unix)]
 pub use unix_impl::{bind_cell_socket_for, take_held_cell_listener};
 

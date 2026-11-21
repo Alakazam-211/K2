@@ -87,9 +87,6 @@ pub enum Plan {
     Admin(admin::Admin),
     /// `app-space`, `home`, `pass-keys` and `meet`.
     Apps(apps::Apps),
-    /// Nothing printed, this exit (the shell's `set -e` on a failed
-    /// `shift 2`).
-    Silent(Exit),
 }
 
 /// The flags and words of `cmd_hostchat`'s own verbs.
@@ -408,7 +405,6 @@ fn run_with(
     let m = match plan {
         Plan::Help => return page("hostchat"),
         Plan::Text(key) => return page(key),
-        Plan::Silent(exit) => return exit,
         Plan::Bad(line) => {
             out::stderr_line(&line);
             return Exit::Usage;

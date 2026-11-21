@@ -807,6 +807,11 @@ case "${1:-help}" in
             catalog)
                 shift; cmd_app "$@"
                 ;;
+            # 0.46.17: `k2 app key` owns its --help (the page that
+            # describes it, on stdout; the whole family on stderr before).
+            key)
+                shift; cmd_app "$@"
+                ;;
             # RS-A15: `k2 app grant <app> --kind …` owns its --help too.
             grant)
                 case "${3:-}" in

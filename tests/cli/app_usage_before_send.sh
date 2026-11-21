@@ -6,6 +6,12 @@
 #   - `k2 app access <ws> --build on --users maybe` turned "Build and run
 #     Apps" on, then stopped on --users with a usage error: --users was
 #     checked only after the first switch was sent.
+#   - `k2 app key` with no sub-verb or an unknown one printed the whole
+#     grace page on stderr; it is key's one usage line now. `-h` on
+#     `k2 app key` never reached it: the router printed the whole
+#     `k2 app` page on stderr (and asked the daemon about permission
+#     cards). The router hands key its words now, and -h prints the
+#     page that describes key (the grace page) on stdout.
 #
 # Each refusal row: the exact line on stderr, nothing on stdout, exit 2,
 # and the stub daemon records no request. Each row that should send then
@@ -182,6 +188,19 @@ sent_line "the users switch" 2 '^POST /cli/agent-access/set .*"toggle": "app_use
 sent_line "the read back" 3 '^GET /cli/app/list '
 [ "$(wc -l <"$REQ_LOG" | tr -d ' ')" = 3 ] && ok "three requests in all" \
     || { bad "not three requests"; sed 's/^/      | /' "$REQ_LOG" >&2; }
+
+echo "== app key: no sub-verb or an unknown one is key's usage; -h is the help =="
+U_KEY="usage: k2 app key mint|revoke|list … (k2 app key --help)"
+# native: app key
+refused "$U_KEY" app key
+# native: app key
+refused "$U_KEY" app key frobnicate
+# native: app key
+refused "$U_KEY" app key --json
+# native: app key
+page app/grace.txt app key -h
+# native: app key
+page app/grace.txt app key --help
 
 echo ""
 echo "app_usage_before_send: $pass passed, $fail failed"

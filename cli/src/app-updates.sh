@@ -1162,7 +1162,8 @@ v = json.load(sys.stdin)
 print("%s %s (%s)" % ("revoked" if v.get("revoked") else "already revoked:", v.get("id"), v["app"].get("handle")))'
             ;;
         list|ls) cmd_app_keys "$@" ;;
-        *) _app_grace_usage >&2; exit 2 ;;
+        -h|--help) _app_grace_usage ;;
+        *) echo "usage: k2 app key mint|revoke|list … (k2 app key --help)" >&2; exit 2 ;;
     esac
 }
 

@@ -50,7 +50,7 @@ const LINKED: &str = r#"{"ok":true,"inboxes":[
  {"address":"bot@acme.example","source":"hosted"}]}"#;
 
 /// Linked rows that need a person, are paused, or are fine; one with no
-/// status (the shell prints a fix line for it too: `"?" != None`).
+/// status, which shows "?" and gets no fix line.
 const RELINK: &str = r#"{"ok":true,"inboxes":[
  {"address":"a@gmail.example","source":"linked","status":"connected","needsRelink":true,"relinkReason":"credential_refused","host":"imap.gmail.example","tls":"implicit-tls","primary":{"workspace":"alpha"}},
  {"address":"b@gmail.example","source":"linked","status":"connected","needsRelink":true,"relinkReason":"mail_access_not_granted","host":"imap.gmail.example","tls":"implicit-tls"},

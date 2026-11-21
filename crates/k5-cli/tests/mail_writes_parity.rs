@@ -1148,7 +1148,8 @@ fn mail_writes_read_the_answers_as_the_shell_does() {
 }
 
 /// Every write with `-h` or `--help` anywhere: the help, and nothing sent
-/// (the front hands a help flag to the shell).
+/// (the front prints a help form of src/help_native.txt itself, as
+/// `draft delete --help`, and hands any other help line to the shell).
 #[test]
 fn help_never_acts() {
     let rig = Rig::new(VERB, "help");
@@ -1168,6 +1169,7 @@ fn help_never_acts() {
         &["forward-message", "m_1", "--to", "a@x.example", "-h"],
         &["draft", "m_1", "--body", "b", "--help"],
         &["draft", "delete", "d_1", "--help"],
+        &["draft", "delete", "--help"],
         &["draft", "delete", "-h"],
         &["draft", "-h", "delete", "d_1"],
         &[

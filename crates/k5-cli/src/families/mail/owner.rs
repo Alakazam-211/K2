@@ -910,11 +910,10 @@ fn oauth_py(py_: &mut Py, upgrade: bool) -> R<()> {
         std::thread::sleep(OAUTH_POLL);
     }
     let Some(fin) = fin else {
+        let again = timeout_again(relink, upgrade, addr, e.get("M_FEATURES"), &provider);
         return Err(py_.die_with(
             "timeout",
-            &format!(
-                "the link did not complete in time — run '{CLI_NAME} mail link add --provider {provider}' again"
-            ),
+            &format!("the link did not complete in time — run '{again}' again"),
             Some(Exit::Usage),
         ));
     };
@@ -1012,6 +1011,24 @@ fn external_remove_py(py_: &mut Py) -> R<()> {
     Ok(())
 }
 
+/// The command a link that ran out of time says to run again: its own
+/// verb, as the shell's `again` names it (relink, upgrade, or add).
+pub(super) fn timeout_again(
+    relink: bool,
+    upgrade: bool,
+    address: &str,
+    features: &str,
+    provider: &str,
+) -> String {
+    if relink {
+        format!("{CLI_NAME} mail link relink {address}")
+    } else if upgrade {
+        format!("{CLI_NAME} mail link upgrade {address} --features {features}")
+    } else {
+        format!("{CLI_NAME} mail link add --provider {provider}")
+    }
+}
+
 /// `link_list`: the linked rows of the owner's catalog.
 fn link_list_py(py_: &mut Py) -> R<()> {
     let d = py_.get("/cli/mail/inboxes", &[], line::LINKS_CALL)?;
@@ -1071,8 +1088,10 @@ fn link_list_py(py_: &mut Py) -> R<()> {
         let pri = p::or(g(r, "primary", line::LINKS_PRI)?, Value::Object(Vec::new()));
         // `r` is a dict: its `get("source")` worked.
         let word = core::print::status_word(r);
-        let status = attr_get(r, "status").ok().flatten();
-        if !status.as_ref().is_some_and(|x| p::py_eq(&word, x)) {
+        // `st != r.get("status", "?")`: a row with no status shows "?",
+        // which is no fix to name.
+        let status = p::get_or(r, "status", sv("?")).unwrap_or_else(|_| sv("?"));
+        if !p::py_eq(&word, &status) {
             let a = p::get_or(r, "address", sv("")).unwrap_or_else(|_| sv(""));
             notes.push((a, attr_get(r, "relinkReason").ok().flatten()));
         }

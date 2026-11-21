@@ -3388,3 +3388,38 @@ mod hostmail_words {
         );
     }
 }
+
+/// A link, relink or upgrade that runs out of time names its own verb to
+/// run again, as the shell's `again` line does: relink for a relink,
+/// upgrade with the features for an upgrade, add for a new link.
+#[test]
+fn a_link_that_runs_out_of_time_names_its_own_verb() {
+    use super::owner::timeout_again;
+    assert_eq!(
+        timeout_again(true, true, "me@x.example", "", "gmail"),
+        format!("{CLI_NAME} mail link relink me@x.example")
+    );
+    assert_eq!(
+        timeout_again(false, true, "me@x.example", "calendar-read", "microsoft"),
+        format!("{CLI_NAME} mail link upgrade me@x.example --features calendar-read")
+    );
+    assert_eq!(
+        timeout_again(false, false, "me@x.example", "mail", "gmail"),
+        format!("{CLI_NAME} mail link add --provider gmail")
+    );
+    let src = shell("mail.sh");
+    let again = src
+        .lines()
+        .find(|l| {
+            l.trim_start()
+                .starts_with(r#"again = ("k2 mail link relink"#)
+        })
+        .expect("the link wait's again line");
+    for part in [
+        r#""k2 mail link relink %s" % env("M_ADDRESS") if relink"#,
+        r#""k2 mail link upgrade %s --features %s" % (env("M_ADDRESS"), env("M_FEATURES")) if upgrade"#,
+        r#"else "k2 mail link add --provider %s" % provider"#,
+    ] {
+        assert!(again.contains(part), "{part:?} not in {again:?}");
+    }
+}

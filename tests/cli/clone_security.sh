@@ -681,50 +681,115 @@ echo "== a Tailscale address as written may take the token over plain http =="
 # keeps the same rule in Rust; the rows above and below drive it).
 eval "$(awk "/^_CLONE_URL_RULE='/,/^'\$/" "$CLI_BASH_SOURCE")"
 [ -n "${_CLONE_URL_RULE:-}" ] || { bad "no _CLONE_URL_RULE in $CLI_BASH_SOURCE"; }
-# connecting PID HOST: PID has a TCP connection to HOST open or opening
-# (the k5 binary starts no python3 for the audit hook to see; the test
-# unsets K5_*, so the binary is told by $K2 not being the shell's source).
-connecting() {
-    local hex
-    if [ -r /proc/net/tcp ]; then
-        hex="$("$PY" -c '
-import ipaddress, socket, struct, sys
-a = ipaddress.ip_address(sys.argv[1])
-if a.version == 4:
-    print("%08X" % struct.unpack("<I", a.packed)[0])
-else:
-    print("".join("%08X" % struct.unpack("<I", a.packed[i:i + 4])[0] for i in range(0, 16, 4)))' "$2")"
-        grep -qi " [0-9A-F]*:[0-9A-F]* $hex:" /proc/net/tcp /proc/net/tcp6 2>/dev/null
+# Where the CLI under test really connects. On Linux an LD_PRELOAD hook
+# logs every connect() it and its children make (the k5 binary and the
+# shell's python3 alike), with the address and port, whether the connect
+# then works or not. Elsewhere: the k5 binary's open sockets (lsof, by
+# its pid) and the shell's python3 audit hook. Either way a row passes
+# only on a connect to the exact address and port; a line on stderr
+# naming the host proves nothing.
+CONNLOG="$W/connect.log"
+HOOK=""
+if [ "$(uname -s)" = Linux ]; then
+    cat >"$W/connlog.c" <<'CEOF'
+#define _GNU_SOURCE
+#include <arpa/inet.h>
+#include <dlfcn.h>
+#include <netinet/in.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/socket.h>
+#include <unistd.h>
+int connect(int fd, const struct sockaddr *sa, socklen_t len) {
+    static int (*real)(int, const struct sockaddr *, socklen_t);
+    if (!real)
+        real = (int (*)(int, const struct sockaddr *, socklen_t))dlsym(RTLD_NEXT, "connect");
+    const char *path = getenv("K2T_CONNECT_LOG");
+    if (path && sa) {
+        char host[INET6_ADDRSTRLEN] = "";
+        unsigned port = 0;
+        if (sa->sa_family == AF_INET) {
+            const struct sockaddr_in *a = (const void *)sa;
+            inet_ntop(AF_INET, &a->sin_addr, host, sizeof host);
+            port = ntohs(a->sin_port);
+        } else if (sa->sa_family == AF_INET6) {
+            const struct sockaddr_in6 *a = (const void *)sa;
+            inet_ntop(AF_INET6, &a->sin6_addr, host, sizeof host);
+            port = ntohs(a->sin6_port);
+        }
+        if (host[0]) {
+            FILE *f = fopen(path, "a");
+            if (f) {
+                fprintf(f, "%d %s %u\n", (int)getpid(), host, port);
+                fclose(f);
+            }
+        }
+    }
+    return real(fd, sa, len);
+}
+CEOF
+    if cc -shared -fPIC -O1 -o "$W/connlog.so" "$W/connlog.c" -ldl 2>"$W/cc.err"; then
+        HOOK=ld
     else
-        lsof -nP -a -p "$1" -i 2>/dev/null | grep -Fq -- "->$2:" || lsof -nP -a -p "$1" -i 2>/dev/null | grep -Fq -- "->[$2]:"
+        bad "the connect log: cc could not build the hook: $(head -3 "$W/cc.err" | tr '\n' ' ')"
     fi
+fi
+# "${HOOKED[@]}" CMD…: CMD with the connect log on (Linux), as one
+# process (env execs it), so $! is the command's own pid.
+HOOKED=(env)
+[ "$HOOK" != ld ] || HOOKED=(env LD_PRELOAD="$W/connlog.so" K2T_CONNECT_LOG="$CONNLOG")
+# connected ADDR PORT [PID]: a connect to exactly ADDR:PORT happened (the
+# connect log), or is open or opening from PID (lsof; the shell's python3:
+# its audit hook's exact (addr, port)).
+connected() {
+    if [ "$HOOK" = ld ]; then
+        awk -v a="$1" -v p="$2" '$2 == a && $3 == p { f = 1 } END { exit !f }' "$CONNLOG"
+    elif [ "$K2" = "$CLI_BASH_SOURCE" ]; then
+        grep -Fq "(('$1', $2" "$W/audit.log"
+    else
+        lsof -nP -a -p "$3" -i 2>/dev/null | grep -Fq -- "->$1:$2" || lsof -nP -a -p "$3" -i 2>/dev/null | grep -Fq -- "->[$1]:$2"
+    fi
+}
+# elsewhere ADDR PORT: the connects logged to any other address or port.
+elsewhere() {
+    [ "$HOOK" = ld ] || return 0
+    awk -v a="$1" -v p="$2" '!($2 == a && $3 == p)' "$CONNLOG"
 }
 rule() { "$PY" -c "$_CLONE_URL_RULE
 import sys
 print(clone_url_refusal(sys.argv[1], sys.argv[2] == \"password\") or \"ok\")" "$1" "$2"; }
+echo "== the connect check is strict: a connect to another address fails it =="
+if [ "$HOOK" = ld ]; then
+    : >"$CONNLOG"
+    "${HOOKED[@]}" "$PY" -c 'import socket, sys
+s = socket.create_connection(("127.0.0.1", int(sys.argv[1])))
+s.close()
+print("{\"error\": \"daemon_unreachable\", \"hint\": \"remote server http://100.64.0.1:9: [Errno 111] Connection refused\"}", file=sys.stderr)' "$PO" 2>"$W/err"
+    if connected 100.64.0.1 9; then bad "a connect to 127.0.0.1 passed as one to 100.64.0.1:9"; else ok "a connect to another address (and a line naming the host) fails the check"; fi
+    if connected 127.0.0.1 "$PO"; then ok "the check sees the connect that was made"; else bad "the check missed a connect to 127.0.0.1:$PO: $(cat "$CONNLOG")"; fi
+    if connected 100.64.0.1 "$PO"; then bad "the check took another port"; else ok "a connect to another port fails the check"; fi
+    expect_eq "the other address shows as elsewhere" "$(elsewhere 100.64.0.1 9 | awk '{ print $2, $3 }')" "127.0.0.1 $PO"
+fi
 for h in 100.64.0.1 "[fd7a:115c:a1e0::1]"; do
+    addr="${h//[\[\]]/}"
     fresh
+    : >"$CONNLOG"
     save_token "http://$h:9" "$REMOTE_TOKEN"
-    bg clone preview ws1 --host "http://$h:9" --json
+    "${HOOKED[@]}" "$PY" -c 'import os, signal, sys; signal.signal(signal.SIGINT, signal.SIG_DFL); os.execv(sys.argv[1], sys.argv[1:])' \
+        "$K2" clone preview ws1 --host "http://$h:9" --json </dev/null >"$W/out" 2>"$W/err" &
+    BG=$!
     seen=""
     for _ in $(seq 1 150); do
-        if [ "$K2" != "$CLI_BASH_SOURCE" ]; then
-            connecting "$BG" "${h//[\[\]]/}" && { seen="${h//[\[\]]/}"; break; }
-        else
-            grep -Fq "${h//[\[\]]/}" "$W/audit.log" && { seen="$(cat "$W/audit.log")"; break; }
-        fi
+        connected "$addr" 9 "$BG" && { seen=yes; break; }
         kill -0 "$BG" 2>/dev/null || break; sleep 0.1
     done
+    # A connect that failed at once is logged before the engine exits.
+    [ -n "$seen" ] || ! connected "$addr" 9 "$BG" || seen=yes
     pkill -P "$BG" 2>/dev/null || true
     kill "$BG" 2>/dev/null || true
     bg_wait
-    # The binary's connect can fail at once (no route to the address): its
-    # daemon_unreachable line for that host says it tried, as Python's
-    # audit hook does for the shell's engine.
-    if [ -z "$seen" ] && [ "$K2" != "$CLI_BASH_SOURCE" ]; then
-        case "$ERR" in *daemon_unreachable*"remote server http://$h:9:"*) seen="${h//[\[\]]/}" ;; esac
-    fi
-    expect_has "http://$h: allowed, so the engine connects there" "$seen" "${h//[\[\]]/}"
+    expect_eq "http://$h: allowed, so the engine connects to $addr:9" "$seen" "yes"
+    expect_eq "http://$h: and to nothing else" "$(elsewhere "$addr" 9)" ""
     expect_not "http://$h: not refused" "$ERR" "refused:"
     expect_not "http://$h: no warning" "$ERR" "warning:"
     expect_eq "http://$h: a password still refused" "$(rule "http://$h:9" password)" "$(refused_line "$h:9")"

@@ -3888,14 +3888,21 @@ mod tests {
             src.join("transport/remote.rs"),
             src.join("transport/client.rs"),
         ];
-        let reader = ["from_", "process_env"].concat();
+        // curl's reading, and the shell's Python's (the urllib families'
+        // https daemon, K2's ruling).
+        let readers = [
+            ["from_", "process_env"].concat(),
+            ["python_", "environ"].concat(),
+        ];
         let vars = PROXY_VARS.map(|v| format!("\"{v}\""));
         let mut found = Vec::new();
         for f in &files {
             let text = std::fs::read_to_string(f).unwrap();
             let rel = f.strip_prefix(&src).unwrap().display().to_string();
-            if text.contains(&reader) && !allowed[..3].contains(f) {
-                found.push(format!("{rel}: names the proxy reader"));
+            for reader in &readers {
+                if text.contains(reader.as_str()) && !allowed[..3].contains(f) {
+                    found.push(format!("{rel}: names the proxy reader {reader}"));
+                }
             }
             for v in &vars {
                 if text.contains(v.as_str()) && !allowed.contains(f) {
@@ -3904,9 +3911,31 @@ mod tests {
             }
         }
         assert_eq!(found, Vec::<String>::new());
-        // And in remote.rs the reader is called once, by `routed`.
+        // And in remote.rs a reader is called only by `routed` (curl's
+        // reading for a remote base), `python_route` (a Python block's
+        // urllib to a host it names) and `python_proxy_env` (the urllib
+        // families' https daemon).
         let remote = std::fs::read_to_string(src.join("transport/remote.rs")).unwrap();
-        assert_eq!(remote.matches(&reader).count(), 1, "remote.rs");
+        let mut callers = Vec::new();
+        let mut within = String::new();
+        for line in remote.lines() {
+            if let Some(rest) = line.strip_prefix("pub fn ") {
+                within = rest.split('(').next().unwrap_or("").to_string();
+            }
+            let code = line.trim_start();
+            if code.starts_with("//") {
+                continue;
+            }
+            if readers.iter().any(|r| code.contains(r.as_str())) {
+                callers.push(within.clone());
+            }
+        }
+        callers.dedup();
+        assert_eq!(
+            callers,
+            ["routed", "python_route", "python_proxy_env"],
+            "remote.rs"
+        );
     }
 
     /// No credential ever follows a redirect: a 3xx is the answer, on the

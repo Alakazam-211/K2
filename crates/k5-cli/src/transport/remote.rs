@@ -140,6 +140,28 @@ pub fn python_route(host: &str, https: bool) -> Route {
     proxy::parse_proxy(&raw).map_or(Route::Shell, Route::Via)
 }
 
+/// The variables the shell's embedded Python reads its proxy from, as
+/// urllib reads them ([`proxy::python::env`]), for
+/// [`python_daemon_route`]: read once per opener
+/// ([`super::urllib::Opener::from_client`]).
+pub fn python_proxy_env() -> proxy::python::Env {
+    proxy::python_environ()
+}
+
+/// The route of a request the shell's Python blocks send to the daemon at
+/// `K2_HOST=https://<host>` (K2's ruling: bash's Python tunnels through
+/// the person's proxy, and the binary does too, reading the settings as
+/// that Python reads them): `k2_direct` first (this computer never uses
+/// a proxy), then urllib's `getproxies_environment` and
+/// `proxy_bypass_environment` ([`proxy::python`]) for `netloc`, the
+/// URL's `host:port` as urllib's `req.host` has it.
+pub fn python_daemon_route(host: &str, netloc: &str, env: &proxy::python::Env) -> Route {
+    if proxy::python::direct(host) {
+        return Route::Direct;
+    }
+    proxy::python::decide(netloc, env)
+}
+
 /// K2's shared transport rule: a request with a token to a host that is
 /// not this computer goes over https only, proxied or not (the rule `k2
 /// remote logout` has). The line, exit 2, for a plain `http://` `url`

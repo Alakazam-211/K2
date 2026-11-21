@@ -503,6 +503,24 @@ pub fn tunnel_answered(
     limit: Instant,
     connect: impl FnOnce(&str, u16, Instant) -> Result<TcpStream, Failure>,
 ) -> Result<TcpStream, (Failure, Vec<u8>)> {
+    let head = connect_head(p, host, port, user_agent);
+    tunnel_head(p, &head, |code| (200..300).contains(&code), limit, connect)
+}
+
+/// The one CONNECT exchange every client shares: the proxy's TCP
+/// connect, `head` (the whole CONNECT request, as that client writes
+/// it), and the answer's head read byte by byte (nothing of the target's
+/// TLS is read). `opens` says which status opens the tunnel: curl takes
+/// any 2xx ([`tunnel_answered`]), Python's `http.client` only 200. When
+/// it fails, the bytes of the proxy's answer read before it did (none
+/// for a connect that failed). Before `limit`.
+pub fn tunnel_head(
+    p: &Proxy,
+    head: &[u8],
+    opens: impl Fn(u16) -> bool,
+    limit: Instant,
+    connect: impl FnOnce(&str, u16, Instant) -> Result<TcpStream, Failure>,
+) -> Result<TcpStream, (Failure, Vec<u8>)> {
     let mut s = match connect(&p.host, p.port, limit) {
         Err(Failure::Broken { curl: c, why }) if c == curl::COULDNT_RESOLVE_HOST => {
             return Err((
@@ -522,8 +540,7 @@ pub fn tunnel_answered(
             .map_err(|e| tunnel_failed(format!("proxy: set a timeout: {e}")))
     };
     timeouts(&s).map_err(|f| (f, Vec::new()))?;
-    let head = connect_head(p, host, port, user_agent);
-    if let Err(e) = s.write_all(&head).and_then(|()| s.flush()) {
+    if let Err(e) = s.write_all(head).and_then(|()| s.flush()) {
         let f = if is_timeout(&e) {
             Failure::ConnectTimedOut
         } else {
@@ -553,7 +570,7 @@ pub fn tunnel_answered(
         }
     }
     match status(&got) {
-        Some(code) if (200..300).contains(&code) => Ok(s),
+        Some(code) if opens(code) => Ok(s),
         Some(code) => Err((
             tunnel_failed(format!("CONNECT tunnel failed, response {code}")),
             got,
@@ -584,6 +601,17 @@ fn status(head: &[u8]) -> Option<u16> {
         return None;
     }
     code.parse().ok()
+}
+
+pub mod python;
+
+/// The process environment as Python's `os.environ` lists it, read as
+/// the shell's embedded Python reads its proxy ([`python::env`]). Only
+/// [`super::remote`] calls it: the daemon's paths never read a proxy.
+pub(in crate::transport) fn python_environ() -> python::Env {
+    python::env(
+        std::env::vars_os().map(|(n, v)| (n.into_encoded_bytes(), v.into_encoded_bytes())),
+    )
 }
 
 #[cfg(test)]

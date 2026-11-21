@@ -462,3 +462,231 @@ fn a_proxy_that_never_answers_is_a_connect_timeout() {
     assert!(matches!(f, Failure::ConnectTimedOut), "{f:?}");
     held.join().unwrap();
 }
+
+/// The shell's Python reads the variables as urllib's
+/// `getproxies_environment` does (K2's ruling for the urllib families):
+/// any spelling ending in `_proxy`, the lower-case one winning and an
+/// empty lower-case one taking the key away; `all_proxy` never serves an
+/// https request.
+#[test]
+fn python_reads_the_variables_as_urllib_does() {
+    use python::Env;
+    let ok = |v: &str| Some(Ok(v.to_string()));
+    let rows: &[(&[(&str, &str)], Env)] = &[
+        (&[], Env::default()),
+        (
+            &[("HTTPS_PROXY", "http://b:2"), ("ALL_PROXY", "http://c:3")],
+            Env {
+                https: ok("http://b:2"),
+                no: None,
+                any: true,
+            },
+        ),
+        (
+            &[("all_proxy", "http://c:3")],
+            Env {
+                https: None,
+                no: None,
+                any: true,
+            },
+        ),
+        (
+            &[("https_proxy", "http://a:1"), ("HTTPS_PROXY", "http://b:2")],
+            Env {
+                https: ok("http://a:1"),
+                no: None,
+                any: true,
+            },
+        ),
+        (
+            &[
+                ("Https_Proxy", "http://a:1"),
+                ("HTTPS_PROXY", "http://b:2"),
+                ("https_proxy", ""),
+                ("NO_PROXY", "x"),
+            ],
+            Env {
+                https: None,
+                no: ok("x"),
+                any: true,
+            },
+        ),
+        (
+            &[("HTTPS_proxy", "http://a:1"), ("https_PROXY", "http://b:2")],
+            Env {
+                https: ok("http://a:1"),
+                no: None,
+                any: true,
+            },
+        ),
+        (
+            &[("HTTPS_PROXY", ""), ("no_proxy", "a"), ("NO_PROXY", "b")],
+            Env {
+                https: None,
+                no: ok("a"),
+                any: true,
+            },
+        ),
+        (&[("PROXY", "x"), ("_proxyx", "y")], Env::default()),
+    ];
+    for (vars, want) in rows {
+        assert_eq!(&python::env(vars.iter().copied()), want, "{vars:?}");
+    }
+    let bad = python::env([(&b"https_proxy"[..], &b"http://\xff:1"[..])]);
+    assert_eq!(bad.https, Some(Err(NotText)));
+    assert_eq!(python::decide("h:1", &bad), Route::Shell);
+    let other = python::env([(&b"x\xff_proxy"[..], &b"v"[..])]);
+    assert_eq!((other.https, other.any), (None, true));
+}
+
+/// `proxy_bypass_environment`: the answers python3 gives for each row.
+#[test]
+fn python_no_proxy_matches_as_urllib_does() {
+    for (host, no, want) in [
+        ("box.example:4100", "*", true),
+        ("box.example:4100", "box.example", true),
+        ("box.example:4100", ".example", true),
+        ("box.example:4100", "example", true),
+        ("box.example:4100", "ample", false),
+        ("box.example:4100", " Box.Example , other", true),
+        ("box.example:4100", "box.example:4100", true),
+        ("box.example:4100", "box.example:4200", false),
+        ("Box.Example:4100", "..box.example", true),
+        ("10.1.2.3:4100", "10.1.2.3", true),
+        ("10.1.2.3:4100", "10.1.0.0/16", false),
+        ("10.1.2.3:4100", "2.3", true),
+        ("box.example:4100", "", false),
+        ("box.example:4100", ",,", false),
+        ("box.example:4100", "*,other", false),
+        ("box.example:4100", "x.box.example", false),
+        ("box.example:04100", "box.example:4100", false),
+        ("box.example.:4100", ".", true),
+    ] {
+        assert_eq!(python::bypass(host, no), want, "{host:?} {no:?}");
+    }
+}
+
+/// `_parse_proxy` and `HTTPSConnection`'s host and port, as python3 reads
+/// each row; the user and password only when both are there.
+#[test]
+fn python_proxy_urls() {
+    let auth = |u: &str, p: &str| {
+        Some(Credentials {
+            user: u.as_bytes().to_vec(),
+            pass: p.as_bytes().to_vec(),
+        })
+    };
+    let px = |host: &str, port: u16, auth: Option<Credentials>| {
+        Some(Proxy {
+            host: host.into(),
+            port,
+            auth,
+        })
+    };
+    for (raw, want) in [
+        ("http://proxy.example:3128", px("proxy.example", 3128, None)),
+        ("http://proxy.example", px("proxy.example", 443, None)),
+        ("proxy.example:8080", px("proxy.example", 8080, None)),
+        ("proxy.example", px("proxy.example", 443, None)),
+        (
+            "http://u:p@proxy.example:3128/",
+            px("proxy.example", 3128, auth("u", "p")),
+        ),
+        ("http://u@proxy.example:3128", px("proxy.example", 3128, None)),
+        ("http://:p@proxy.example:3128", px("proxy.example", 3128, None)),
+        (
+            "http://u%40x:p%3Ab@proxy.example:3128",
+            px("proxy.example", 3128, auth("u@x", "p:b")),
+        ),
+        (
+            "u:p@proxy.example:3128",
+            px("proxy.example", 3128, auth("u", "p")),
+        ),
+        ("http://[::1]:3128", px("::1", 3128, None)),
+        ("http://proxy.example:/", px("proxy.example", 443, None)),
+        ("HTTP://proxy.example:3128", px("proxy.example", 3128, None)),
+        (
+            "http://a@b@proxy.example:3128/x",
+            px("proxy.example", 3128, None),
+        ),
+        (
+            "http://proxy.example:3128/path?q",
+            px("proxy.example", 3128, None),
+        ),
+        // What the binary leaves unsent.
+        ("https://proxy.example:3128", None),
+        ("socks5://proxy.example:1080", None),
+        ("http:/proxy.example", None),
+        ("http://proxy.example:99999", None),
+        ("http://proxy.example:x", None),
+        ("http://pro xy:1", None),
+        ("http://", None),
+    ] {
+        assert_eq!(python::parse(raw), want, "{raw:?}");
+    }
+}
+
+/// `k2_direct` first, then urllib's reading; `http.client`'s CONNECT head
+/// carries the proxy's own credential and never anything else.
+#[test]
+fn python_route_and_connect_head() {
+    for (host, direct) in [
+        ("localhost", true),
+        ("LOCALHOST.", true),
+        ("a.localhost", true),
+        ("127.0.0.9", true),
+        ("127.example", false),
+        ("box.example", false),
+    ] {
+        assert_eq!(python::direct(host), direct, "{host}");
+    }
+    let env = python::env([
+        ("https_proxy", "http://u:p@proxy.example:3128"),
+        ("no_proxy", "skip.example"),
+    ]);
+    assert_eq!(
+        python::decide("skip.example:4100", &env),
+        Route::Direct
+    );
+    let Route::Via(p) = python::decide("box.example:4100", &env) else {
+        panic!("no proxy")
+    };
+    assert_eq!(
+        String::from_utf8(python::connect_head(&p, "box.example", 4100)).unwrap(),
+        "CONNECT box.example:4100 HTTP/1.1\r\nProxy-Authorization: Basic dTpw\r\nHost: box.example:4100\r\n\r\n"
+    );
+    let bare = Proxy {
+        host: "proxy.example".into(),
+        port: 443,
+        auth: None,
+    };
+    assert_eq!(
+        python::connect_head(&bare, "box.example", 4100),
+        b"CONNECT box.example:4100 HTTP/1.1\r\nHost: box.example:4100\r\n\r\n"
+    );
+    assert_eq!(
+        python::decide("box.example:4100", &python::env([("https_proxy", "socks5://s:1")])),
+        Route::Shell
+    );
+}
+
+/// The shared exchange with Python's rule: 200 alone opens it; a 2xx
+/// that curl would take is a failed tunnel, with the answer handed back.
+#[test]
+fn a_tunnel_head_opens_on_the_callers_rule() {
+    let p = |port| Proxy {
+        host: "127.0.0.1".into(),
+        port,
+        auth: None,
+    };
+    let (port, sent) = fake_proxy(b"HTTP/1.1 201 Created\r\n\r\n");
+    let head = b"CONNECT box.example:1 HTTP/1.1\r\nHost: box.example:1\r\n\r\n";
+    match tunnel_head(&p(port), head, |c| c == 200, soon(), plain_tcp) {
+        Err((Failure::Tunnel(_), got)) => assert_eq!(got, b"HTTP/1.1 201 Created\r\n\r\n"),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(sent.join().unwrap(), head);
+    let (port, sent) = fake_proxy(b"HTTP/1.1 200 OK\r\n\r\n");
+    assert!(tunnel_head(&p(port), head, |c| c == 200, soon(), plain_tcp).is_ok());
+    assert_eq!(sent.join().unwrap(), head);
+}

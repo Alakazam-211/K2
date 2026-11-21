@@ -31,6 +31,8 @@
 #      and a marker from another tab each exit 3 with nothing sent, open
 #      and id verbs alike.
 #      The owner token is never sent and the headers are never in argv.
+#      `k2 permission request` (its cards probe and the ask) carries the
+#      headers on the cell socket and over TCP.
 #   7. K2_CODEX_PASSPORT_BIND=0 restores today's behaviour (no headers).
 #   8. Unconfirmed: help, schema, version and explain run; `<verb> --help`
 #      and `-h` print `k2 help <verb>` and send nothing; explain with a
@@ -192,6 +194,9 @@ class H(BaseHTTPRequestHandler):
         if parsed.path == "/cli/whoami" and os.path.exists(os.path.join(work, "reject")):
             data = json.dumps({"error": "Invalid or missing auth token"}).encode()
             self.send_response(403)
+        elif parsed.path == "/cli/permission/enabled":
+            data = json.dumps({"enabled": True}).encode()
+            self.send_response(200)
         else:
             data = json.dumps({"ok": True, "delivered": True, "role": "agent"}).encode()
             self.send_response(200)
@@ -495,6 +500,21 @@ run_codex K2_HOOK_SOCK="$GONE_SOCK" K2_CODEX_TAB_ISOLATED="$MARK" K2_CODEX_PASSP
 off_auth="$(auths)"
 assert_eq "confirmed tab, TCP: today's credential (as with the switch off)" "$on_auth" "$off_auth"
 [ -n "$on_auth" ] || { echo "  FAIL: confirmed tab, TCP: no credential was sent" >&2; fail=$((fail + 1)); }
+
+# A confirmed tab asks for a permission card: the cards probe and the ask
+# both carry the headers, on the cell socket and over TCP.
+for door in sock tcp; do
+    if [ "$door" = sock ]; then door_sock="$LIVE_SOCK"; else door_sock="$GONE_SOCK"; fi
+    run_codex K2_HOOK_SOCK="$door_sock" K2_CODEX_TAB_ISOLATED="$MARK" -- \
+        permission request connections.add to=acme --why "Talk to the peer"
+    assert_eq "permission request, $door: exit 0" "$rc" "0"
+    assert_absent "permission request, $door: no refusal" "$(cat "$WORK/err")" "reopen it from K2"
+    assert_contains "permission request, $door: the cards probe was sent" "$(requests)" '"path": "/cli/permission/enabled"'
+    assert_contains "permission request, $door: the ask was sent" "$(requests)" '"path": "/cli/permission/request"'
+    assert_contains "permission request, $door: over the $door door" "$(requests)" "\"via\": \"$door\""
+    assert_absent "permission request, $door: owner token never sent" "$(requests)" "$OWNER"
+    assert_headers_on "permission request, $door"
+done
 
 # No K2 session marks (a terminal outside K2, under a shared server):
 # today's behaviour, under both passport settings, as with the switch off.

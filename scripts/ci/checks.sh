@@ -108,6 +108,7 @@ part_web() {
     step "the typed-back recovery words stay off every child's argv and environment (stub vault)"; bash tests/cli/vault_recovery_words_off_argv.sh
     step "k2 hostchat open keeps the owner link off every child's argv and environment (stub daemon and vault)"; bash tests/cli/hostchat_open_link_off_argv.sh
     step "k2 ci signer add takes the pairing code on stdin (stub daemon and vault)"; bash tests/cli/ci_signer_code_stdin.sh
+    step "a value flag as the last word is a usage error on the most-used verbs (stub daemon)"; bash tests/cli/need_value.sh
     step "k2 compute local enable takes the enroll code and ticket on stdin (stub daemon)"; bash tests/cli/compute_local_enable_stdin.sh
     step "remote tokens have a stdin form and stay off every child's argv and environment (stub server)"; bash tests/cli/remote_token_stdin.sh
     step "k2 connect login says live only when the tunnel started (stub server)"; bash tests/cli/connect_login_live.sh

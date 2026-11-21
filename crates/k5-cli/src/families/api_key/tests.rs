@@ -40,7 +40,7 @@ fn the_shell_s_lines() {
         r#"                    --label)        _need_value "$@"; label="${2:-}"; shift 2 ;;"#,
         r#"                    *)              echo "Unknown flag: $1" >&2; exit 1 ;;"#,
         r#"                [ "$1" != "--label" ] && [ "$1" != "--status" ] && other_flags=1"#,
-        r#"                _cli_read_secret_stdin "Paste the LLM API key: ""#,
+        r#"                _cli_read_secret_stdin "Paste the LLM API key: " password"#,
         r#"                | cli_post_json_stdin "/cli/api-keys/create" \"#,
         r#"            cli_request "/cli/api-keys/list" \"#,
         r#"            cli_post_json "/cli/api-keys/revoke" "$body" \"#,

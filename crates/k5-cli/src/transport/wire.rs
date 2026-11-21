@@ -713,7 +713,13 @@ mod tests {
     /// never a lookup; a name that only looks like it is not.
     #[test]
     fn localhost_names_are_this_computer() {
-        for h in ["localhost", "LocalHost", "x.localhost", "a.b.localhost.", "localhost."] {
+        for h in [
+            "localhost",
+            "LocalHost",
+            "x.localhost",
+            "a.b.localhost.",
+            "localhost.",
+        ] {
             let a = localhost_addrs(h, 9).unwrap_or_else(|| panic!("{h}"));
             assert_eq!(
                 a,
@@ -724,7 +730,13 @@ mod tests {
                 "{h}"
             );
         }
-        for h in ["localhost.example", "xlocalhost", "127.0.0.1", "box.example", ""] {
+        for h in [
+            "localhost.example",
+            "xlocalhost",
+            "127.0.0.1",
+            "box.example",
+            "",
+        ] {
             assert_eq!(localhost_addrs(h, 9), None, "{h}");
         }
         // x.localhost reaches a listener on 127.0.0.1.

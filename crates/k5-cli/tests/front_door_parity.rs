@@ -152,7 +152,7 @@ fn cli_with_another_word_is_the_shell_s_line_answered_here() {
 #[test]
 fn cli_word_line_says_the_brand_s_name() {
     let n = k2_client::brand::CLI_NAME;
-    let want = format!("{n} cli status is answered by the `{n}` binary: run {n} cli status\n");
+    let want = format!("{n} cli status is answered by the {n} CLI binary: run {n} cli status\n");
     let rig = Rig::new("cli", "brand");
     let c = case("brand", &["x"], &[], vec![], owner_and_port, 2, 0);
     let (out, log) = rig.binary(&c, false);

@@ -323,7 +323,7 @@ fn obj(pairs: Vec<(&str, Value)>) -> Value {
 /// ([`crate::front::Route::CliWord`]), on stderr, exit 2.
 pub fn shell_line() -> String {
     let n = CLI_NAME;
-    format!("{n} cli status is answered by the `{n}` binary: run {n} cli status")
+    format!("{n} cli status is answered by the {n} CLI binary: run {n} cli status")
 }
 
 /// `k5 cli --help`.

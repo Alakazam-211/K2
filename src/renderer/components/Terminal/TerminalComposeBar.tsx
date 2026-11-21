@@ -1770,7 +1770,8 @@ export function TerminalComposeBar({
         onDragOver={handleDragOver}
         onDrop={handleDrop}
       >
-        {extras?.above ? <div style={{ marginBottom: 6 }}>{extras.above}</div> : null}
+        {/* The fade behind the bar reaches over it (FOOTER_FADE_TARGETS). */}
+        {extras?.above ? <div data-thread-compose-above="" style={{ marginBottom: 6 }}>{extras.above}</div> : null}
         {addrError ? <div style={{ marginBottom: 6 }}>{addrError}</div> : null}
         {modelError ? <div style={{ marginBottom: 6 }}>{modelError}</div> : null}
         {waitingNote ? <div style={{ marginBottom: 6 }}>{waitingNote}</div> : null}

@@ -290,6 +290,22 @@ _k2_refuse_if_airgap() {
     esac
 }
 
+# A flag that takes a value, as the last word, is a usage error. Call it
+# first in the flag's case arm, with the loop's words:
+#   --to) _need_value "$@"; to="$2"; shift 2 ;;
+# $1 is the flag as typed. With no word after it, this prints
+# "Error: <flag> takes a value" and exits 2, before anything is sent
+# (a plain `shift 2` there fails, and set -e ends the command on exit 1
+# with nothing said). A word after the flag is its value, whatever it
+# looks like: one that starts with - is still taken, as before.
+_need_value() {
+    if [ $# -ge 2 ]; then
+        return 0
+    fi
+    echo "Error: ${1:-} takes a value" >&2
+    exit 2
+}
+
 # Workspace dot-dir for a project root, by the daemon's rule
 # (k2_core::workspace_dir::workspace_dot_dir): .k2/ when it is a folder,
 # else .k2so/ when that is a folder (an older workspace keeps its name),

@@ -1,5 +1,6 @@
 //! Python 3.12's `posixpath`: `normpath`, `realpath` (not strict),
-//! `abspath`, `relpath`, `split` and `join`, on `/` paths, as text.
+//! `abspath`, `relpath`, `split`, `join` and `expanduser`, on `/` paths,
+//! as text.
 
 use std::path::Path;
 
@@ -167,6 +168,85 @@ pub fn exists(p: &str) -> bool {
     Path::new(p).exists()
 }
 
+/// `os.path.expanduser(p)`, `home` being `os.environ.get("HOME")`: `~`
+/// and `~/...` take `HOME` (with none, the password database's folder
+/// for this user), `~name/...` that user's folder; a name the database
+/// has no entry for leaves `p` as it is, and so does no entry for this
+/// user. `None`: the binary can't tell what Python would give (a folder
+/// that is not UTF-8, or no password database here).
+pub fn expanduser(p: &str, home: Option<&str>) -> Option<String> {
+    let Some(rest) = p.strip_prefix('~') else {
+        return Some(p.to_string());
+    };
+    let (name, tail) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
+    let userhome = match (name, home) {
+        ("", Some(h)) => Some(h.to_string()),
+        ("", None) => passwd_home(None)?,
+        (name, _) => passwd_home(Some(name))?,
+    };
+    let Some(userhome) = userhome else {
+        return Some(p.to_string());
+    };
+    let joined = format!("{}{tail}", userhome.trim_end_matches('/'));
+    Some(if joined.is_empty() { "/".into() } else { joined })
+}
+
+/// The home folder in the password database for `name` (this user's
+/// with `None`), as Python's `pwd` reads it: `Some(None)` for no entry
+/// (Python's `KeyError`); `None` for a folder that is not UTF-8, a
+/// lookup out of memory, or no database here.
+#[cfg(unix)]
+fn passwd_home(name: Option<&str>) -> Option<Option<String>> {
+    use std::ffi::{CStr, CString};
+    let name = match name {
+        Some(n) => Some(CString::new(n).ok()?),
+        None => None,
+    };
+    let mut buf = vec![0u8; 4096];
+    loop {
+        // SAFETY: a plain C struct, all zeroes, filled in by the call.
+        let mut entry: libc::passwd = unsafe { std::mem::zeroed() };
+        let mut found: *mut libc::passwd = std::ptr::null_mut();
+        // SAFETY: the buffer, the entry and the result pointer live
+        // through the call, and the length is the buffer's.
+        let rc = unsafe {
+            match &name {
+                Some(n) => libc::getpwnam_r(
+                    n.as_ptr(),
+                    &mut entry,
+                    buf.as_mut_ptr().cast(),
+                    buf.len(),
+                    &mut found,
+                ),
+                None => libc::getpwuid_r(
+                    libc::getuid(),
+                    &mut entry,
+                    buf.as_mut_ptr().cast(),
+                    buf.len(),
+                    &mut found,
+                ),
+            }
+        };
+        if rc == libc::ERANGE && buf.len() < 1 << 20 {
+            buf.resize(buf.len() * 2, 0);
+            continue;
+        }
+        if found.is_null() {
+            return (rc != libc::ENOMEM).then_some(None);
+        }
+        // SAFETY: the entry the call filled in points into `buf`, which
+        // is still here.
+        let dir = unsafe { CStr::from_ptr(entry.pw_dir) };
+        return dir.to_str().ok().map(|d| Some(d.to_string()));
+    }
+}
+
+/// No password database to read here: the binary can't tell.
+#[cfg(not(unix))]
+fn passwd_home(_name: Option<&str>) -> Option<Option<String>> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -193,5 +273,21 @@ mod tests {
         assert_eq!(relpath("/a", "/a/b"), "..");
         assert_eq!(relpath("/a", "/a"), ".");
         assert_eq!(realpath("/no/such/../thing"), "/no/thing");
+    }
+
+    #[test]
+    fn expanduser_as_python_reads_it() {
+        let home = Some("/home/ada/");
+        assert_eq!(expanduser("a/~b", home).as_deref(), Some("a/~b"));
+        assert_eq!(expanduser("~", home).as_deref(), Some("/home/ada"));
+        assert_eq!(expanduser("~/x/y", home).as_deref(), Some("/home/ada/x/y"));
+        assert_eq!(expanduser("~/x", Some("")).as_deref(), Some("/x"));
+        assert_eq!(expanduser("~", Some("/")).as_deref(), Some("/"));
+        // A name the password database has no entry for: as it is.
+        let none = "~k5-no-such-user-7171/x";
+        assert_eq!(expanduser(none, home).as_deref(), Some(none));
+        // root's folder, whatever this machine has.
+        let root = expanduser("~root/x", home).expect("root's entry");
+        assert!(root.ends_with("/x") && root.starts_with('/'), "{root}");
     }
 }

@@ -264,6 +264,7 @@ async fn an_agent_asks_the_owner_to_turn_postal_on() {
     let vw = view(&ws, &card);
     assert_eq!(vw["setting"], "Postal (Beta)", "{vw}");
     assert!(vw["consequences"].as_str().unwrap().contains("still waits on a person's card"), "{vw}");
+    assert!(vw["consequences"].as_str().unwrap().ends_with(" Agents on this server aren't isolated from each other yet."), "the same-user limit, plainly: {vw}");
     below_floor(answer_as(&login("pea", Role::Admin), &ws, &card, json!({ "answer": "Allow" })), "owner");
     assert!(!k2_core::postal::enabled());
     let (s, a) = answer_as("owner", &ws, &card, json!({ "answer": "Allow" }));

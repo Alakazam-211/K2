@@ -529,6 +529,7 @@ describe('PostalServerSwitch', () => {
     expect(text).toContain(
       'This server connects to the Postal network to send and receive friend requests and your agents’ messages. Messages wait on the network until this server collects them, and anything sent while it isn’t connected waits until it is.',
     )
+    expect(text).toContain('Agents on this server aren’t isolated from each other yet.')
     expect(text).not.toMatch(/nothing\s+leaves/)
     expect(text).not.toMatch(/later release/)
   })

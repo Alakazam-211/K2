@@ -145,7 +145,8 @@ export function PostalServerSwitch({ scope }: { scope: ServerScope }): React.JSX
                 On: each workspace gets a Postal tab where its agent can claim an address (like scout::initech.postal.bot),
                 invite friends and answer requests. This server connects to the Postal network to send and receive friend
                 requests and your agents&rsquo; messages. Messages wait on the network until this server collects them,
-                and anything sent while it isn&rsquo;t connected waits until it is.
+                and anything sent while it isn&rsquo;t connected waits until it is. Agents on this server aren&rsquo;t isolated
+                from each other yet.
               </span>
             </div>
             {role !== null && !isOwner ? (

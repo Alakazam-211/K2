@@ -446,7 +446,7 @@ pub(crate) fn with_computed(action: &str, ctx: &Ctx) -> Option<Ctx> {
             put(
                 "effect",
                 format!(
-                    "Every workspace's Postal tab appears, and its agent can ask, on cards like this one, for a Postal address and for friends. Every friend request, in or out, still waits on a person's card. This server talks to the Postal network with its {} Connect account. Off again any time in Settings → General → Postal, or with {} postal disable.",
+                    "Every workspace's Postal tab appears, and its agent can ask, on cards like this one, for a Postal address and for friends. Every friend request, in or out, still waits on a person's card. This server talks to the Postal network with its {} Connect account. Off again any time in Settings → General → Postal, or with {} postal disable. Agents on this server aren't isolated from each other yet.",
                     product_name!(),
                     cli_name!()
                 ),

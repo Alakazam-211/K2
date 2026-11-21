@@ -152,9 +152,12 @@ impl Drop for Daemon {
             let _ = c.kill();
             let _ = c.wait();
         }
-        for p in &self.pids {
-            // SAFETY: sessions this test started.
-            unsafe { libc::kill(*p, libc::SIGKILL) };
+        // KillMode=process (as on the fleet): ptyd and the sessions outlive
+        // the test's own exit unless killed here.
+        let ptyd = std::fs::read_to_string(self.k2.join("run/ptyd/lock")).ok().and_then(|s| s.trim().parse::<i32>().ok());
+        for p in self.pids.iter().copied().chain(ptyd) {
+            // SAFETY: sessions and the ptyd this test started.
+            unsafe { libc::kill(p, libc::SIGKILL) };
         }
     }
 }

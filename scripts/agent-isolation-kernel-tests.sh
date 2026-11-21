@@ -30,7 +30,7 @@ echo "LSMs: $(cat /sys/kernel/security/lsm)"
 args=(--ignored --test-threads=1 --nocapture)
 [ -n "$filter" ] && args=("$filter" "${args[@]}")
 exec sudo systemd-run --uid="$(id -u)" --gid="$(id -g)" \
-    -p Delegate=yes -p DelegateSubgroup=daemon \
+    -p Delegate=yes -p DelegateSubgroup=daemon -p KillMode=process \
     --wait --pipe --collect --quiet \
     --setenv=HOME="$HOME" --setenv=USER="$(id -un)" --setenv=PATH="$path" \
     --setenv=K2_ISO_DAEMON_BIN="$dir/k2-daemon" \

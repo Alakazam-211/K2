@@ -348,7 +348,11 @@ fn the_refusals() {
     let r = refusal("000", b"", false);
     assert_eq!(r.exit, Exit::Error);
     assert!(r.stderr.starts_with("Error: no answer from the "));
-    assert!(r.stderr.ends_with("\"code\": \"daemon_unreachable\", \"hint\": \"no answer from the K2 daemon\", \"status\": 0}}\n"));
+    assert!(r.stderr.ends_with(concat!(
+        "\"code\": \"daemon_unreachable\", \"hint\": \"no answer from the ",
+        k2_client::product_name!(),
+        " daemon\", \"status\": 0}}\n"
+    )));
     let r = refusal("502", b"  <html>bad</html>\n", false);
     assert_eq!(r.stderr.lines().next(), Some("Error: <html>bad</html>"));
     assert_eq!(r.exit, Exit::Error);

@@ -241,7 +241,9 @@ fn answer(mut conn: UnixStream, on: bool, log: &Mutex<Vec<(String, String)>>) {
 enum Who {
     Owner,
     /// An agent whose daemon says cards are on, or off.
-    Agent { on: bool },
+    Agent {
+        on: bool,
+    },
 }
 
 /// One run of a form: who, the settings on top, the page it must print
@@ -331,9 +333,7 @@ impl Rig {
         for (k, v) in extra {
             cmd.env(k, v);
         }
-        let o = cmd
-            .output()
-            .unwrap_or_else(|e| panic!("run {argv:?}: {e}"));
+        let o = cmd.output().unwrap_or_else(|e| panic!("run {argv:?}: {e}"));
         let out = Out {
             code: o.status.code(),
             stdout: String::from_utf8_lossy(&o.stdout).into_owned(),
@@ -349,7 +349,11 @@ impl Rig {
             who,
             extra: extra.to_vec(),
             page: page.clone(),
-            asked: if probe { vec![PROBE.to_string()] } else { vec![] },
+            asked: if probe {
+                vec![PROBE.to_string()]
+            } else {
+                vec![]
+            },
         };
         let first = &form.page;
         let (off, on) = (Who::Agent { on: false }, Who::Agent { on: true });
@@ -477,8 +481,14 @@ fn a_changed_page_fails_the_check() {
     assert_eq!(asked_on, vec![PROBE.to_string()]);
     assert_eq!(differs(&c.argv, &c.page, &got_off), None);
     assert_eq!(differs(&c.argv, on, &got_on), None);
-    assert!(differs(&c.argv, on, &got_off).is_some(), "cards off printed the on page");
-    assert!(differs(&c.argv, &c.page, &got_on).is_some(), "cards on printed the off page");
+    assert!(
+        differs(&c.argv, on, &got_off).is_some(),
+        "cards off printed the on page"
+    );
+    assert!(
+        differs(&c.argv, &c.page, &got_on).is_some(),
+        "cards on printed the off page"
+    );
     for (page, got) in [(&c.page, &got_off), (on, &got_on)] {
         let wrong = without_a_card_line(page, &c.page, on);
         assert!(differs(&c.argv, &wrong, got).is_some(), "{wrong:?}");
@@ -501,21 +511,31 @@ fn without_a_card_line(page: &Page, off: &Page, on: &Page) -> Page {
         .chain(b.iter().filter(|l| !a.contains(l)))
         .collect();
     let mut wrong = page.clone();
+    let mut cut = false;
     for text in [&mut wrong.out, &mut wrong.err] {
         let rendered = render(text);
-        if let Some(line) = only_one.iter().find(|l| rendered.lines().any(|r| r == l.as_str())) {
-            // The escaped text holds the line escaped: drop it from the
-            // rendered text and keep that as the page (no escapes left
-            // but the brand's, which render again as they are).
-            let kept: String = rendered
-                .split_inclusive('\n')
-                .filter(|r| r.trim_end_matches('\n') != line.as_str())
-                .collect();
-            *text = kept.replace('\\', "\\\\").replace('\n', "\\n").replace('\t', "\\t");
-            return wrong;
-        }
+        let Some(line) = only_one
+            .iter()
+            .find(|l| rendered.lines().any(|r| r == l.as_str()))
+        else {
+            continue;
+        };
+        // The escaped text holds the line escaped: drop it from the
+        // rendered text and keep that as the page (no escapes left but
+        // the brand's, which render again as they are).
+        let kept: String = rendered
+            .split_inclusive('\n')
+            .filter(|r| r.trim_end_matches('\n') != line.as_str())
+            .collect();
+        *text = kept
+            .replace('\\', "\\\\")
+            .replace('\n', "\\n")
+            .replace('\t', "\\t");
+        cut = true;
+        break;
     }
-    panic!("no line in only one variant in {page:?}");
+    assert!(cut, "no line in only one variant in {page:?}");
+    wrong
 }
 
 /// How often `word` is a word of its own in `text`, as the list's script
@@ -626,9 +646,16 @@ fn the_card_pages_say_the_brand_s_name() {
         let Some((_, on)) = &f.second else {
             unreachable!()
         };
-        for (page, who) in [(&f.page, Who::Agent { on: false }), (on, Who::Agent { on: true })] {
+        for (page, who) in [
+            (&f.page, Who::Agent { on: false }),
+            (on, Who::Agent { on: true }),
+        ] {
             let (got, _) = rig.run(&f.argv, who, &[]);
-            assert!(marks(&page.err, 'c') + marks(&page.out, 'c') > 0, "{:?}", f.argv);
+            assert!(
+                marks(&page.err, 'c') + marks(&page.out, 'c') > 0,
+                "{:?}",
+                f.argv
+            );
             says_the_brand(&f.argv, &page.err, &got.stderr);
             says_the_brand(&f.argv, &page.out, &got.stdout);
         }

@@ -1652,8 +1652,8 @@ mod tests {
         let never = || -> bool { panic!("nothing is asked") };
         let ok = prelude(true, true, false, false);
         let shown = |f: &'static HelpForm, env: &Env| {
-            let page = help_page(f, &ok, env, never)
-                .unwrap_or_else(|| panic!("{:?}: no page", f.argv));
+            let page =
+                help_page(f, &ok, env, never).unwrap_or_else(|| panic!("{:?}: no page", f.argv));
             let lead = page.lead.clone().unwrap_or_default();
             (page.exit.code(), page.stderr, page.text.to_string(), lead)
         };

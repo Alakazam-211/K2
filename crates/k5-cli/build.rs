@@ -292,7 +292,9 @@ fn captured(manifest: &Path, file_forms: &[Vec<String>], rs: &mut String) {
         // with two pages: its first page's (the other's code and streams
         // are its own, `CAPTURED`).
         let stderr = out.is_empty() && !err.is_empty();
-        let variant = variant.as_deref().map_or("None".to_string(), |v| format!("Some({v})"));
+        let variant = variant
+            .as_deref()
+            .map_or("None".to_string(), |v| format!("Some({v})"));
         writeln!(
             rs,
             "    HelpForm {{ argv: &{words:?}, page: \"\", stderr: {stderr}, code: {code}, captured: Some({page}), variant: {variant} }},"

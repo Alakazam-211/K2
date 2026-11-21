@@ -8,19 +8,20 @@
 # hand-over to bash is broken (K5_HOME_OVERRIDE set to a relative path,
 # which bash never reads and the binary refuses before it runs bash), so a
 # pass is the binary's own answer:
-#   - every form, in the owner's terminal (a port and an owner token on
+#   - every form with one page, in the owner's terminal (a port and an owner token on
 #     disk);
 #   - every fifth form in an agent's terminal (a passport, K2_PORT and
 #     K2_HOOK_SOCK a live socket);
 #   - every tenth form with K2_HOOK_SOCK set and no passport: an id tool's
 #     help is refused (exit 3), an open one's printed, by both;
-#   - every form the permission cards answer decides (a C row: its page
-#     goes through the cards filter) in an agent's terminal whose daemon
-#     says cards are on, and one whose daemon says off: a stub daemon on
+#   - a form with two pages (the first of each pair of pages and every
+#     tenth after it): one the permission cards answer decides (a C row:
+#     its page goes through the cards filter) in an agent's terminal whose
+#     daemon says cards are on, and one whose daemon says off: a stub daemon on
 #     two sockets, curl real for a request to a Unix socket; each side
 #     asks it once, the probe (GET /cli/permission/enabled), with its own
 #     passport;
-#   - every form that prints chat's usage (an M row) with
+#     one that prints chat's usage (an M row) with
 #     _CHAT_HELP_MANAGE=0 in the owner's terminal, and =yes in an agent's.
 # (crates/k5-cli/tests/help_captured_parity.rs runs the binary on every
 # form in both terminals against the list; help_native.sh proves the list
@@ -203,26 +204,42 @@ EMPTY="HOME=$SANDBOX/empty-home"
 n=0
 nc=0
 nm=0
-while IFS=$'\t' read -r kind argv _; do
+ran_pairs=0
+seen_pairs=" "
+while IFS=$'\t' read -r kind argv p1 p2; do
     case "$kind" in F|C|M) ;; *) continue ;; esac
     n=$((n + 1))
-    # shellcheck disable=SC2086  # argv is words
-    native -- $argv
-    if [ "$kind" = C ]; then
-        nc=$((nc + 1))
+    if [ "$kind" = F ]; then
+        # shellcheck disable=SC2086  # argv is words
+        native -- $argv
+        if [ $((n % 5)) = 0 ]; then
+            # shellcheck disable=SC2086
+            native "${AGENT[@]}" -- $argv
+        fi
+    else
+        # A form with two pages: the first form of each pair of pages and
+        # every tenth after it, each way its switch goes.
+        [ "$kind" = C ] && nc=$((nc + 1))
+        [ "$kind" = M ] && nm=$((nm + 1))
+        pair="$kind:$p1:$p2"
+        case "$seen_pairs" in
+            *" $pair "*) [ $(((nc + nm) % 10)) = 0 ] || continue ;;
+            *) seen_pairs="$seen_pairs$pair " ;;
+        esac
+        ran_pairs=$((ran_pairs + 1))
         # shellcheck disable=SC2086
-        cards on $argv
-        # shellcheck disable=SC2086
-        cards off $argv
-    elif [ "$kind" = M ]; then
-        nm=$((nm + 1))
-        # shellcheck disable=SC2086
-        native "_CHAT_HELP_MANAGE=0" -- $argv
-        # shellcheck disable=SC2086
-        native "${AGENT[@]}" "_CHAT_HELP_MANAGE=yes" -- $argv
-    elif [ $((n % 5)) = 0 ]; then
-        # shellcheck disable=SC2086
-        native "${AGENT[@]}" -- $argv
+        native -- $argv
+        if [ "$kind" = C ]; then
+            # shellcheck disable=SC2086
+            cards on $argv
+            # shellcheck disable=SC2086
+            cards off $argv
+        else
+            # shellcheck disable=SC2086
+            native "_CHAT_HELP_MANAGE=0" -- $argv
+            # shellcheck disable=SC2086
+            native "${AGENT[@]}" "_CHAT_HELP_MANAGE=yes" -- $argv
+        fi
     fi
     if [ $((n % 10)) = 0 ]; then
         # shellcheck disable=SC2086
@@ -236,10 +253,11 @@ done < "$LIST"
 [ "$n" -gt 1000 ] || bad "only $n forms in $LIST"
 [ "$nc" -gt 100 ] || bad "only $nc forms the cards answer decides in $LIST"
 [ "$nm" -gt 20 ] || bad "only $nm forms that print chat's usage in $LIST"
+[ "$ran_pairs" -gt 30 ] || bad "only $ran_pairs forms with two pages run"
 for cmd in "agent team help x" "app nope --help" "zen nope --help" "agent team --help x"; do
     # shellcheck disable=SC2086
     handed -- $cmd
 done
 
-echo "help_captured: $pass passed, $fail failed ($n forms: $nc the cards answer decides, $nm print chat's usage)"
+echo "help_captured: $pass passed, $fail failed ($n forms: $nc the cards answer decides, $nm print chat's usage; $ran_pairs of those run each way)"
 [ "$fail" = 0 ]

@@ -139,6 +139,11 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
       },
       { noun: 'project', blurb: 'Named group of workspaces + one shared chat.', example: 'k2 project msg launch "done"' },
       {
+        noun: 'focus-group',
+        blurb: "The sidebar's focus groups of workspaces; an agent asks on a card to change one.",
+        example: `${CLI_NAME} focus-group list`,
+      },
+      {
         noun: 'organization',
         blurb: "The Org Chart: orgs, heads and the daily bulletin; reach a department's head.",
         example: 'k2 organization bulletin',

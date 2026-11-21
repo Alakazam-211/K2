@@ -161,9 +161,14 @@ describe('the rail lists the CLI tools and the pages', () => {
     expect(within(vault).getAllByTestId('help-verb').map((v) => v.getAttribute('data-verb'))).toContain('k2 vault send')
     expect(within(vault).queryByText(/secrets for agents, without showing them the value/)).toBeNull()
     expect(within(vault).queryByText('k2 help vault')).toBeNull()
-    // hooks's --help is not captured (it does not print without a daemon): point at k2 help.
+    // hooks's --help prints without a daemon now, so its card shows the captured --help.
     const hooks = screen.getByTestId('help-noun-k2:hooks')
-    expect(within(hooks).getByText('k2 help hooks')).toBeTruthy()
+    expect(within(hooks).queryByText('k2 help hooks')).toBeNull()
+    fireEvent.click(within(hooks).getByRole('button', { expanded: false }))
+    expect(within(hooks).getByText(/k2 hooks status/)).toBeTruthy()
+    // onboarding's --help is not captured (it does not print without a daemon): point at k2 help.
+    const onboarding = screen.getByTestId('help-noun-k2:onboarding')
+    expect(within(onboarding).getByText('k2 help onboarding')).toBeTruthy()
   })
 
   it('k2 study lists the pages and opens one', () => {

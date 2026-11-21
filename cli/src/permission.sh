@@ -264,6 +264,9 @@ print(json.dumps(out))
 }
 
 _permission_cmd() {
+    # Help wins: -h or --help anywhere before `--` prints the usage and
+    # sends nothing (`permission beta on --help` turned the switch on).
+    if _wants_help "$@"; then _permission_usage; return 0; fi
     local sub="${1:-}"
     [ $# -gt 0 ] && shift
     case "$sub" in

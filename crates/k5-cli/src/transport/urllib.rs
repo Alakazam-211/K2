@@ -583,7 +583,14 @@ impl Opener {
         };
         let tls = self.tls.then_some(self.host.as_str());
         let bytes = self.encode(req);
-        let mut reader = match start(&self.host, self.port, tls, via.as_ref(), &bytes, req.timeout) {
+        let mut reader = match start(
+            &self.host,
+            self.port,
+            tls,
+            via.as_ref(),
+            &bytes,
+            req.timeout,
+        ) {
             Ok(r) => r,
             Err(r) => return Ok(Outcome::Raised(r)),
         };

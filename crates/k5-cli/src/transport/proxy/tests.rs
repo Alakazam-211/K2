@@ -592,8 +592,14 @@ fn python_proxy_urls() {
             "http://u:p@proxy.example:3128/",
             px("proxy.example", 3128, auth("u", "p")),
         ),
-        ("http://u@proxy.example:3128", px("proxy.example", 3128, None)),
-        ("http://:p@proxy.example:3128", px("proxy.example", 3128, None)),
+        (
+            "http://u@proxy.example:3128",
+            px("proxy.example", 3128, None),
+        ),
+        (
+            "http://:p@proxy.example:3128",
+            px("proxy.example", 3128, None),
+        ),
         (
             "http://u%40x:p%3Ab@proxy.example:3128",
             px("proxy.example", 3128, auth("u@x", "p:b")),
@@ -644,10 +650,7 @@ fn python_route_and_connect_head() {
         ("https_proxy", "http://u:p@proxy.example:3128"),
         ("no_proxy", "skip.example"),
     ]);
-    assert_eq!(
-        python::decide("skip.example:4100", &env),
-        Route::Direct
-    );
+    assert_eq!(python::decide("skip.example:4100", &env), Route::Direct);
     let Route::Via(p) = python::decide("box.example:4100", &env) else {
         panic!("no proxy")
     };
@@ -665,7 +668,10 @@ fn python_route_and_connect_head() {
         b"CONNECT box.example:4100 HTTP/1.1\r\nHost: box.example:4100\r\n\r\n"
     );
     assert_eq!(
-        python::decide("box.example:4100", &python::env([("https_proxy", "socks5://s:1")])),
+        python::decide(
+            "box.example:4100",
+            &python::env([("https_proxy", "socks5://s:1")])
+        ),
         Route::Shell
     );
 }

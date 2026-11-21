@@ -100,7 +100,11 @@ pub fn env<N: AsRef<[u8]>, V: AsRef<[u8]>>(vars: impl IntoIterator<Item = (N, V)
             keys.push((key.as_str(), text));
         }
     }
-    let get = |k: &str| keys.iter().find(|(have, _)| *have == k).map(|(_, v)| (*v).clone());
+    let get = |k: &str| {
+        keys.iter()
+            .find(|(have, _)| *have == k)
+            .map(|(_, v)| (*v).clone())
+    };
     Env {
         https: get("https"),
         no: get("no"),
@@ -267,7 +271,8 @@ pub fn direct(host: &str) -> bool {
     let h = h.trim_end_matches('.');
     h == "localhost"
         || h.ends_with(".localhost")
-        || h.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
+        || h.parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
 }
 
 /// `http.client`'s CONNECT head for `host:port` through `p`.

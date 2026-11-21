@@ -38,7 +38,8 @@ const STATUS: &str = r#"{"ok":true,"supported":true,"state":"running","installed
 const COLLECTIONS: &str = r#"{"ok":true,"collections":["a","é"]}"#;
 const CALENDARS: &str = r#"{"ok":true,"address":"a@x.example","calendars":[{"id":"c1","name":"Work","isDefault":true,"rights":{"read":true,"write":true}}]}"#;
 const CREATED: &str = r#"{"ok":true,"id":"pg_1","name":"Acme","memberCount":"2"}"#;
-const WORKSPACES: &str = r#"[{"name":"acme","agentMode":"agent","path":"/srv/acme","agentEnabled":true}]"#;
+const WORKSPACES: &str =
+    r#"[{"name":"acme","agentMode":"agent","path":"/srv/acme","agentEnabled":true}]"#;
 
 /// The proxy's own credential, in the proxy URL.
 const PROXY_USER: &str = "acme-proxy";
@@ -188,7 +189,11 @@ fn db_no_proxy_as_urllib_reads_it() {
         ),
         ("no_proxy=*", "*".to_string(), false),
         ("no_proxy=.0.0", ".0.0".to_string(), false),
-        ("no_proxy=<host>:<another port>", format!("{NETWORK}:1"), true),
+        (
+            "no_proxy=<host>:<another port>",
+            format!("{NETWORK}:1"),
+            true,
+        ),
         ("no_proxy=<other>", "other.example".to_string(), true),
     ];
     for (name, list, proxied) in rows {
@@ -292,7 +297,12 @@ fn a_proxy_nothing_listens_on() {
 #[test]
 fn a_certificate_nothing_trusts_stops_the_request() {
     let w = World::new("db", "badcert", STATUS, ProxyMode::Tunnel);
-    let mut c = w.case("an untrusted certificate", &["status"], HOST, &[proxy_env(&w)]);
+    let mut c = w.case(
+        "an untrusted certificate",
+        &["status"],
+        HOST,
+        &[proxy_env(&w)],
+    );
     // The system's roots alone: the throwaway CA is not among them.
     c.env.retain(|(k, _)| *k != "SSL_CERT_FILE");
     let [b, r] = w.both(&c);

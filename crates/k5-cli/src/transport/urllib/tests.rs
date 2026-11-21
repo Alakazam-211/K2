@@ -193,8 +193,10 @@ fn an_https_daemon() {
     unread.unsendable = Some("https://[::1]:1".into());
     let mut socks = Opener::from_client(&Client::new("box.example", 1, "/p", Auth::None));
     socks.tls = true;
-    socks.py_proxy =
-        crate::transport::proxy::python::env([("https_proxy", format!("socks5://127.0.0.1:{port}"))]);
+    socks.py_proxy = crate::transport::proxy::python::env([(
+        "https_proxy",
+        format!("socks5://127.0.0.1:{port}"),
+    )]);
     for o in [Opener::from_client(&unread), socks] {
         match o.open(&Request::new(Method::Get, "/r", Duration::from_secs(2))) {
             Outcome::Raised(r) => {

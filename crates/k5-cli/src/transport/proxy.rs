@@ -609,9 +609,7 @@ pub mod python;
 /// the shell's embedded Python reads its proxy ([`python::env`]). Only
 /// [`super::remote`] calls it: the daemon's paths never read a proxy.
 pub(in crate::transport) fn python_environ() -> python::Env {
-    python::env(
-        std::env::vars_os().map(|(n, v)| (n.into_encoded_bytes(), v.into_encoded_bytes())),
-    )
+    python::env(std::env::vars_os().map(|(n, v)| (n.into_encoded_bytes(), v.into_encoded_bytes())))
 }
 
 #[cfg(test)]

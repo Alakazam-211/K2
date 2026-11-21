@@ -26,7 +26,7 @@ fn the_shell_s_lines() {
     for shell in [
         r#"        help|--help|-h) _sessions_usage; return 0 ;;"#,
         r#"        ""|-*) cmd_sessions_roster "$@"; return ;;"#,
-        r#"        list|ls|past|show|open|new|stop|main)"#,
+        r#"        list|ls|past|show|open|new|stop|main|archives|live|compact|set-label)"#,
         r#"        main)      cmd_sessions_main "$@" ;;"#,
         r#"        list|ls)   cmd_sessions_roster "$@" ;;"#,
         r#"        past)      cmd_sessions_roster --past "$@" ;;"#,

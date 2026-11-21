@@ -21,6 +21,10 @@
 #   - `k2 setup skip --help` skipped a step named --help, and `--name`,
 #     `--tool`, `--about`, `--handle`, `--focus-group` and `--attach` took
 #     the help word.
+#   - `k2 sessions live --help` asked for the live sessions of a workspace
+#     named --help; `set-label <id> --help` set the label to --help;
+#     `compact --help` looked for a session named --help; `archives
+#     --help` listed the archives instead.
 #
 # Each section: every help form, with --help and with -h, prints exactly
 # the page's cli/text/help file and the stub daemon records nothing; the
@@ -228,6 +232,21 @@ page setup.txt setup chief-of-staff --name Ada --about @H --tool claude
 page setup.txt setup chief-of-staff --focus-group @H
 page setup.txt setup agent-reports --attach @H
 sends '^POST /cli/first-run/skip \{"row": "dev_tools"\}' setup skip dev_tools
+
+echo "== sessions =="
+page sessions.txt sessions @H
+page sessions.txt sessions past @H
+page sessions.txt sessions live @H
+page sessions.txt sessions live myws @H
+page sessions.txt sessions live myws --json @H
+page sessions.txt sessions archives @H
+page sessions.txt sessions archives --json @H
+page sessions.txt sessions compact @H
+page sessions.txt sessions compact sess-1 @H
+page sessions.txt sessions set-label @H
+page sessions.txt sessions set-label sess-1 @H
+page sessions.txt sessions set-label sess-1 new label @H
+sends '^POST /cli/sessions/label ' sessions set-label sess-1 new label
 
 echo ""
 echo "help_acts_10: $pass passed, $fail failed"

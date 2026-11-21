@@ -406,8 +406,11 @@ cmd_sessions() {
         ""|-*) cmd_sessions_roster "$@"; return ;;
     esac
     shift
+    # 0.46.17: archives, live, compact and set-label too (`live --help`
+    # asked for a workspace named --help, `compact --help` looked for its
+    # archive, `archives --help` listed the archives).
     case "$sub" in
-        list|ls|past|show|open|new|stop|main)
+        list|ls|past|show|open|new|stop|main|archives|live|compact|set-label)
             if _wants_help "$@"; then
                 _sessions_usage
                 return 0

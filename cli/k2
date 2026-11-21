@@ -28378,7 +28378,9 @@ cmd_sessions_compact() {
     fi
 
     local saved=$((compacted_bytes_before - compacted_bytes_after))
-    echo "{\"sessionId\":\"$session_id\",\"compacted\":$count,\"bytesBefore\":$compacted_bytes_before,\"bytesAfter\":$compacted_bytes_after,\"bytesSaved\":$saved}"
+    # The id as a JSON string: a quote or backslash in it stays valid JSON.
+    _setup_jstr "$session_id"
+    echo "{\"sessionId\":${_SETUP_J},\"compacted\":$count,\"bytesBefore\":$compacted_bytes_before,\"bytesAfter\":$compacted_bytes_after,\"bytesSaved\":$saved}"
 }
 
 # Sessions subcommand dispatcher — handles `k2 sessions spawn`,

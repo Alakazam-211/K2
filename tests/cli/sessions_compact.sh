@@ -11,7 +11,8 @@
 #
 # Each case checks the files left behind, the JSON line's counts against
 # the sizes on disk, and that the active segment and other names are left
-# alone. No daemon: compact reads only the workspace's folders.
+# alone. The line's session id is a JSON string: a quote or a backslash in
+# the id is escaped. No daemon: compact reads only the workspace's folders.
 #
 # Hermetic: throwaway HOME, a dead port and a dummy token, no real ~/.k2.
 set -euo pipefail
@@ -109,6 +110,14 @@ if [ "$RC" = 0 ] && [ -z "$OUT" ] &&
 else
     bad "compact s1 again: rc=$RC stdout=[$OUT] stderr=[$ERR]"
 fi
+
+echo "== an id with a quote and a backslash is a JSON string =="
+# Before 0.46.17 the line printed the id as it is: {"sessionId":"we"ird\id",...
+# is not JSON. Python's json reads the line back to the same id.
+ODD='we"ird\id'
+seed "$ODD"
+run sessions compact "$ODD"
+check_compacted "$ODD" "compact $ODD: the id escaped, the line parses back to it"
 
 echo
 echo "sessions_compact: $pass passed, $fail failed"

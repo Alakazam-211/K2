@@ -24,6 +24,11 @@ export interface ThreadComposeExtras {
   /** The band over the Thread's top (Glass): the heavier step, which dims
    *  more of what scrolls under a taller header. Absent: the usual band. */
   headerBlur?: 'heavy'
+  /** The message box and what stands on it sit below the list, on the
+   *  pane's own background, instead of floating over its foot: no message
+   *  ever passes under them (a ticket's three quick answers make a tall
+   *  foot). Jump to bottom floats at the list's own foot. */
+  footInFlow?: boolean
   /** Room between the newest message and the box (px), on top of the
    *  list's own: the newest message rests clear of a taller footer band
    *  (a ticket's), which Jump to bottom then sits in. */

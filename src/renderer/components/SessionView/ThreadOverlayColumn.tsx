@@ -108,6 +108,7 @@ export function ThreadOverlayColumn({
   const composeExtras = useThreadComposeExtras()
   const turnOverride = composeExtras?.turn
   const headerBlur = composeExtras?.headerBlur
+  const footInFlow = composeExtras?.footInFlow === true
   const drawerTurn = turnOverride !== undefined ? turnOverride : turn
   const drawer = useMemo<ThreadComposeDrawer>(() => ({ turn: drawerTurn, onStop }), [drawerTurn, onStop])
   const reducedMotion = useReducedMotion()
@@ -142,7 +143,8 @@ export function ThreadOverlayColumn({
     }
     const measure = (): void => {
       const slot = el.getBoundingClientRect()
-      if (root) writeThreadDock(root, measureThreadDock(el))
+      // A foot below the list: the pill rides the list's own foot.
+      if (root) writeThreadDock(root, footInFlow ? null : measureThreadDock(el))
       setBottom(Math.ceil(slot.height))
       // Everything that can sit on the box is in the bar's flow, so its
       // coming and going (and the drawer growing) resizes the slot: this
@@ -165,7 +167,7 @@ export function ThreadOverlayColumn({
       ro.disconnect()
       mo?.disconnect()
     }
-  }, [hasCompose])
+  }, [hasCompose, footInFlow])
 
   // Place the group: the column, the bar and the picture-and-name, each
   // by its layout size (a transform doesn't change it), so lifting the bar
@@ -227,6 +229,8 @@ export function ThreadOverlayColumn({
       <div
         className="absolute inset-0 overflow-hidden flex flex-col"
         data-testid="agent-session-thread-list-slot"
+        // A foot below the list: the list ends where the foot starts.
+        style={footInFlow && composeShown ? { bottom } : undefined}
       >
         <ProgressiveHeaderBlur variant={headerBlur} />
         <SelectableRegion className="h-full min-h-0 flex flex-col overflow-hidden">
@@ -237,7 +241,7 @@ export function ThreadOverlayColumn({
             agentName={agentName}
             onStop={onStop}
             onTurn={composeShown ? setTurn : undefined}
-            bottomInset={composeShown ? bottom : 0}
+            bottomInset={composeShown && !footInFlow ? bottom : 0}
             textCapPx={textCapPx}
             onFill={centreEmpty ? onFill : undefined}
             emptyLine={!centred}
@@ -261,12 +265,13 @@ export function ThreadOverlayColumn({
           className="absolute left-0 right-0 bottom-0"
           data-testid="agent-session-thread-compose-slot"
           data-thread-compose-slot=""
+          data-thread-foot-in-flow={footInFlow ? '' : undefined}
           style={lift > 0 ? { transform: `translateY(${-lift}px)` } : undefined}
           onMouseDown={(e) => {
             focusThreadComposeSlotTextarea(e.currentTarget, e.target)
           }}
         >
-          {composeShown ? <ThreadFooterFade top={fadeTop} /> : null}
+          {composeShown && !footInFlow ? <ThreadFooterFade top={fadeTop} /> : null}
           <div
             ref={boxRef}
             className="relative"

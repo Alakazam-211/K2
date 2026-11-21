@@ -119,6 +119,30 @@ describe('ThreadOverlayColumn', () => {
     expect(seen.at(-1)).toBe(turn)
   })
 
+  it('a host can put the foot below the list (a ticket): the list ends above it, with no band over it', () => {
+    const orig = Element.prototype.getBoundingClientRect
+    Element.prototype.getBoundingClientRect = function getBoundingClientRect() {
+      const node = this as HTMLElement
+      if (node.getAttribute?.('data-testid') === 'agent-session-thread-compose-slot' || node.closest?.('[data-testid="agent-session-thread-compose-slot"]')) {
+        return new DOMRect(0, 0, 100, 120)
+      }
+      return orig.call(this)
+    }
+    renderInRoom(
+      overlayRoom,
+      <ThreadComposeExtrasContext.Provider value={{ footInFlow: true }}>
+        <ThreadOverlayColumn addr="ticket:t-1" conversationId="ticket:t-1" active composeBar={<div data-testid="fake-compose">compose</div>} />
+      </ThreadComposeExtrasContext.Provider>,
+    )
+    // The list stops where the foot starts, and pads by its own 8px only.
+    expect(screen.getByTestId('agent-session-thread-list-slot').style.bottom).toBe('120px')
+    expect(screen.getByTestId('thread-overlay-list').style.paddingBottom).toBe('8px')
+    const slot = screen.getByTestId('agent-session-thread-compose-slot')
+    expect(slot.hasAttribute('data-thread-foot-in-flow')).toBe(true)
+    expect(slot.querySelector('[data-thread-footer-fade]')).toBeNull()
+    Element.prototype.getBoundingClientRect = orig
+  })
+
   it('is an image compose-drop surface for the thread column', () => {
     renderInRoom(overlayRoom, <ThreadOverlayColumn addr="sales" conversationId="c" active composeBar={null} />)
     const root = screen.getByTestId('agent-session-thread')

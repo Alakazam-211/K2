@@ -18,23 +18,23 @@ pub const VERBS: &[&str] = &["bans", "allowlist"];
 /// The lines of `_mail_py` where these verbs call or raise. `tests` pins
 /// each to its statement.
 pub mod line {
-    pub const LIST_CALL: u32 = 2780;
-    pub const LIST_BITS: u32 = 2789;
-    pub const LIST_COUNT: u32 = 2790;
-    pub const LIST_AUTH: u32 = 2791;
-    pub const CLEAR_CALL: u32 = 2812;
-    pub const CLEAR_JOIN: u32 = 2818;
-    pub const CLEAR_WARN: u32 = 2820;
-    pub const MIGRATE_INT: u32 = 2826;
-    pub const MIGRATE_CALL: u32 = 2827;
-    pub const RESTORE_CALL: u32 = 2840;
-    pub const STATUS_CALL: u32 = 2848;
-    pub const ALLOW_LIST_CALL: u32 = 2857;
-    pub const ALLOW_LIST_FOR: u32 = 2864;
-    pub const ALLOW_LIST_ROW: u32 = 2866;
-    pub const ALLOW_ADD_CALL: u32 = 2877;
-    pub const ALLOW_REMOVE_CALL: u32 = 2888;
-    pub const ALLOW_REMOVE_JOIN: u32 = 2894;
+    pub const LIST_CALL: u32 = 2861;
+    pub const LIST_BITS: u32 = 2870;
+    pub const LIST_COUNT: u32 = 2871;
+    pub const LIST_AUTH: u32 = 2872;
+    pub const CLEAR_CALL: u32 = 2893;
+    pub const CLEAR_JOIN: u32 = 2899;
+    pub const CLEAR_WARN: u32 = 2901;
+    pub const MIGRATE_INT: u32 = 2907;
+    pub const MIGRATE_CALL: u32 = 2908;
+    pub const RESTORE_CALL: u32 = 2921;
+    pub const STATUS_CALL: u32 = 2929;
+    pub const ALLOW_LIST_CALL: u32 = 2938;
+    pub const ALLOW_LIST_FOR: u32 = 2945;
+    pub const ALLOW_LIST_ROW: u32 = 2947;
+    pub const ALLOW_ADD_CALL: u32 = 2958;
+    pub const ALLOW_REMOVE_CALL: u32 = 2969;
+    pub const ALLOW_REMOVE_JOIN: u32 = 2975;
 }
 
 /// The words after `hostmail <verb>`.

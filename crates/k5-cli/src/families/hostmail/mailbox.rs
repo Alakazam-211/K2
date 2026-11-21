@@ -17,33 +17,33 @@ pub const VERBS: &[&str] = &["quota", "catchall", "alias"];
 /// The lines of `_mail_py` where these verbs call or raise. `tests` pins
 /// each to its statement.
 pub mod line {
-    pub const QUOTA_GET_CALL: u32 = 1124;
-    pub const QUOTA_GET_Q: u32 = 1128;
-    pub const QUOTA_GET_ADDR: u32 = 1130;
-    pub const QUOTA_GET_DISK: u32 = 1131;
-    pub const QUOTA_GET_MSGS: u32 = 1132;
-    pub const QUOTA_SET_BYTES: u32 = 1137;
-    pub const QUOTA_SET_GB: u32 = 1139;
-    pub const QUOTA_SET_MSGS_INT: u32 = 1141;
-    pub const QUOTA_SET_CALL: u32 = 1142;
-    pub const QUOTA_SET_Q: u32 = 1146;
-    pub const QUOTA_SET_ADDR: u32 = 1148;
-    pub const QUOTA_SET_DISK: u32 = 1149;
-    pub const QUOTA_SET_MSGS: u32 = 1150;
-    pub const CATCHALL_GET_CALL: u32 = 1153;
-    pub const CATCHALL_GET_ADDR: u32 = 1157;
-    pub const CATCHALL_GET_DOMAIN: u32 = 1158;
-    pub const CATCHALL_SET_CALL: u32 = 1163;
-    pub const CATCHALL_SET_ADDR: u32 = 1167;
-    pub const CATCHALL_SET_DOMAIN: u32 = 1168;
-    pub const ALIAS_LIST_CALL: u32 = 1172;
-    pub const ALIAS_LIST_ROWS: u32 = 1176;
-    pub const ALIAS_LIST_NONE: u32 = 1178;
-    pub const ALIAS_LIST_PRINT: u32 = 1180;
-    pub const ALIAS_ADD_CALL: u32 = 1184;
-    pub const ALIAS_ADD_PRINT: u32 = 1188;
-    pub const ALIAS_REMOVE_CALL: u32 = 1192;
-    pub const ALIAS_REMOVE_PRINT: u32 = 1196;
+    pub const QUOTA_GET_CALL: u32 = 1145;
+    pub const QUOTA_GET_Q: u32 = 1149;
+    pub const QUOTA_GET_ADDR: u32 = 1151;
+    pub const QUOTA_GET_DISK: u32 = 1152;
+    pub const QUOTA_GET_MSGS: u32 = 1153;
+    pub const QUOTA_SET_BYTES: u32 = 1158;
+    pub const QUOTA_SET_GB: u32 = 1160;
+    pub const QUOTA_SET_MSGS_INT: u32 = 1162;
+    pub const QUOTA_SET_CALL: u32 = 1163;
+    pub const QUOTA_SET_Q: u32 = 1167;
+    pub const QUOTA_SET_ADDR: u32 = 1169;
+    pub const QUOTA_SET_DISK: u32 = 1170;
+    pub const QUOTA_SET_MSGS: u32 = 1171;
+    pub const CATCHALL_GET_CALL: u32 = 1174;
+    pub const CATCHALL_GET_ADDR: u32 = 1178;
+    pub const CATCHALL_GET_DOMAIN: u32 = 1179;
+    pub const CATCHALL_SET_CALL: u32 = 1184;
+    pub const CATCHALL_SET_ADDR: u32 = 1188;
+    pub const CATCHALL_SET_DOMAIN: u32 = 1189;
+    pub const ALIAS_LIST_CALL: u32 = 1193;
+    pub const ALIAS_LIST_ROWS: u32 = 1197;
+    pub const ALIAS_LIST_NONE: u32 = 1199;
+    pub const ALIAS_LIST_PRINT: u32 = 1201;
+    pub const ALIAS_ADD_CALL: u32 = 1205;
+    pub const ALIAS_ADD_PRINT: u32 = 1209;
+    pub const ALIAS_REMOVE_CALL: u32 = 1213;
+    pub const ALIAS_REMOVE_PRINT: u32 = 1217;
 }
 
 /// The words after `hostmail <verb>`.

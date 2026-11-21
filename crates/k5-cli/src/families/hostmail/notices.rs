@@ -24,24 +24,24 @@ pub const VERBS: &[&str] = &["ooo", "footer"];
 /// The lines of `_mail_py` where these verbs call or raise. `tests` pins
 /// each to its statement.
 pub mod line {
-    pub const OOO_GET_CALL: u32 = 2502;
-    pub const OOO_GET_ON: u32 = 2506;
-    pub const OOO_GET_UNTIL: u32 = 2507;
-    pub const OOO_GET_ADDR: u32 = 2509;
-    pub const OOO_GET_DAYS: u32 = 2510;
-    pub const OOO_GET_TEXT: u32 = 2512;
-    pub const OOO_GET_OFF: u32 = 2515;
-    pub const OOO_SET_DAYS: u32 = 2520;
-    pub const OOO_SET_CALL: u32 = 2523;
-    pub const OOO_SET_ADDR: u32 = 2528;
-    pub const OOO_SET_DAYS_PRINT: u32 = 2529;
-    pub const OOO_SET_UNTIL: u32 = 2530;
-    pub const OOO_UNSET_CALL: u32 = 2533;
-    pub const OOO_UNSET_PRINT: u32 = 2537;
-    pub const FOOTER_GET_CALL: u32 = 2540;
-    pub const FOOTER_GET_ON: u32 = 2544;
-    pub const FOOTER_SET_CALL: u32 = 2554;
-    pub const FOOTER_UNSET_CALL: u32 = 2564;
+    pub const OOO_GET_CALL: u32 = 2583;
+    pub const OOO_GET_ON: u32 = 2587;
+    pub const OOO_GET_UNTIL: u32 = 2588;
+    pub const OOO_GET_ADDR: u32 = 2590;
+    pub const OOO_GET_DAYS: u32 = 2591;
+    pub const OOO_GET_TEXT: u32 = 2593;
+    pub const OOO_GET_OFF: u32 = 2596;
+    pub const OOO_SET_DAYS: u32 = 2601;
+    pub const OOO_SET_CALL: u32 = 2604;
+    pub const OOO_SET_ADDR: u32 = 2609;
+    pub const OOO_SET_DAYS_PRINT: u32 = 2610;
+    pub const OOO_SET_UNTIL: u32 = 2611;
+    pub const OOO_UNSET_CALL: u32 = 2614;
+    pub const OOO_UNSET_PRINT: u32 = 2618;
+    pub const FOOTER_GET_CALL: u32 = 2621;
+    pub const FOOTER_GET_ON: u32 = 2625;
+    pub const FOOTER_SET_CALL: u32 = 2635;
+    pub const FOOTER_UNSET_CALL: u32 = 2645;
 }
 
 /// The words after `hostmail <verb>`.

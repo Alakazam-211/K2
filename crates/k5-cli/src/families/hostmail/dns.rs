@@ -25,34 +25,34 @@ pub const VERBS: &[&str] = &["dkim", "dmarc", "ptr", "profile"];
 /// The lines of `_mail_py` where these verbs call or raise. `tests` pins
 /// each to its statement.
 pub mod line {
-    pub const DKIM_SHOW_CALL: u32 = 2671;
-    pub const DKIM_SHOW_FOR: u32 = 2676;
-    pub const DKIM_SHOW_ROW: u32 = 2678;
-    pub const DKIM_SHOW_EXPECTED: u32 = 2682;
-    pub const DKIM_SHOW_NAME: u32 = 2683;
-    pub const DKIM_ROTATE_CALL: u32 = 2687;
-    pub const DKIM_ROTATE_FOR: u32 = 2694;
-    pub const DKIM_ROTATE_ROW: u32 = 2695;
-    pub const DKIM_RETIRE_CALL: u32 = 2700;
-    pub const DMARC_SHOW_CALL: u32 = 2710;
-    pub const DMARC_SHOW_REC: u32 = 2716;
-    pub const DMARC_SHOW_MATCH: u32 = 2717;
-    pub const DMARC_REPORT_CALL: u32 = 2726;
-    pub const PTR_SHOW_CALL: u32 = 2737;
-    pub const PTR_SHOW_A: u32 = 2745;
-    pub const PTR_SHOW_RELAY: u32 = 2749;
-    pub const PTR_SHOW_UNRESOLVED: u32 = 2751;
-    pub const PTR_SET_CALL: u32 = 2754;
-    pub const PTR_SET_SOURCE: u32 = 2763;
-    pub const PTR_SET_WARNING: u32 = 2771;
-    pub const PTR_SET_DC: u32 = 2774;
-    pub const PTR_SET_DC_WARNING: u32 = 2776;
-    pub const PROFILE_CALL: u32 = 3241;
-    pub const PROFILE_WRITE: u32 = 3252;
-    pub const PROFILE_INCLUDES: u32 = 3267;
-    pub const PROFILE_NOTES: u32 = 3270;
-    pub const PROFILE_STDOUT: u32 = 3275;
-    pub const PROFILE_STDERR_NOTES: u32 = 3278;
+    pub const DKIM_SHOW_CALL: u32 = 2752;
+    pub const DKIM_SHOW_FOR: u32 = 2757;
+    pub const DKIM_SHOW_ROW: u32 = 2759;
+    pub const DKIM_SHOW_EXPECTED: u32 = 2763;
+    pub const DKIM_SHOW_NAME: u32 = 2764;
+    pub const DKIM_ROTATE_CALL: u32 = 2768;
+    pub const DKIM_ROTATE_FOR: u32 = 2775;
+    pub const DKIM_ROTATE_ROW: u32 = 2776;
+    pub const DKIM_RETIRE_CALL: u32 = 2781;
+    pub const DMARC_SHOW_CALL: u32 = 2791;
+    pub const DMARC_SHOW_REC: u32 = 2797;
+    pub const DMARC_SHOW_MATCH: u32 = 2798;
+    pub const DMARC_REPORT_CALL: u32 = 2807;
+    pub const PTR_SHOW_CALL: u32 = 2818;
+    pub const PTR_SHOW_A: u32 = 2826;
+    pub const PTR_SHOW_RELAY: u32 = 2830;
+    pub const PTR_SHOW_UNRESOLVED: u32 = 2832;
+    pub const PTR_SET_CALL: u32 = 2835;
+    pub const PTR_SET_SOURCE: u32 = 2844;
+    pub const PTR_SET_WARNING: u32 = 2852;
+    pub const PTR_SET_DC: u32 = 2855;
+    pub const PTR_SET_DC_WARNING: u32 = 2857;
+    pub const PROFILE_CALL: u32 = 3322;
+    pub const PROFILE_WRITE: u32 = 3333;
+    pub const PROFILE_INCLUDES: u32 = 3348;
+    pub const PROFILE_NOTES: u32 = 3351;
+    pub const PROFILE_STDOUT: u32 = 3356;
+    pub const PROFILE_STDERR_NOTES: u32 = 3359;
 }
 
 /// The words after `hostmail <verb>`.

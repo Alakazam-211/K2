@@ -6,7 +6,10 @@
 //!
 //! The binary is copied into a folder with a stand-in runner beside it
 //! (where an install keeps `k2-widget-shot.mjs`), and the shell is told
-//! that folder in `K5_CLI_SCRIPT_DIR`, as the front tells it. A stand-in
+//! that folder in `K5_CLI_SCRIPT_DIR`, as the front tells it: links
+//! resolved, as the front resolves them (on macOS the temp folder's
+//! `/var` is `/private/var`), so the runner's path is the same on both
+//! sides ([`script_dir`]). A stand-in
 //! `node` first on `PATH` logs its words (the page's temp file by its
 //! name's shape and folder), the page's mode and bytes, and whether the
 //! front's variables reached it; then prints `SHOT_OUT`, says `SHOT_ERR`
@@ -147,6 +150,16 @@ const PAGE: &str =
 const SHOT: &str = r#"{"ok":true,"png":"out.png","scheme":"dark","width":800,"height":600,"ms":412,"ready":true,"errors":[],"refusals":[]}"#;
 const SHOT_SAD: &str = r#"{"ok":false,"png":"out.png","scheme":"light","width":1,"height":2.5,"ms":9,"ready":false,"errors":["TypeError: x is undefined",{"at":"a.js"}],"refusals":["store.get","agent.send"]}"#;
 
+/// The folder the front hands the shell in `K5_CLI_SCRIPT_DIR` for the
+/// binary in `inst`: the binary's own folder, links resolved.
+fn script_dir(rig: &Rig) -> String {
+    let inst = rig.dir.join("inst");
+    std::fs::canonicalize(&inst)
+        .unwrap_or_else(|e| panic!("resolve {}: {e}", inst.display()))
+        .to_string_lossy()
+        .into_owned()
+}
+
 fn with(env: Vec<(&'static str, String)>, c: Case) -> Case {
     let mut c = c;
     c.env.extend(env);
@@ -156,7 +169,7 @@ fn with(env: Vec<(&'static str, String)>, c: Case) -> Case {
 #[test]
 fn zen_widget_shot_answers_as_the_shell_does() {
     let rig = shot_rig();
-    let inst = rig.dir.join("inst").to_string_lossy().into_owned();
+    let inst = script_dir(&rig);
     let proj = rig.proj.to_string_lossy().into_owned();
     let folder = leak(format!("{proj}/staged-w"));
     let data = leak(format!("{proj}/fixture/data.json"));
@@ -543,7 +556,7 @@ fn path_without_node(scratch: &std::path::Path) -> String {
 #[test]
 fn zen_widget_shot_with_no_node() {
     let rig = shot_rig();
-    let inst = rig.dir.join("inst").to_string_lossy().into_owned();
+    let inst = script_dir(&rig);
     let folder = leak(format!("{}/staged-w", rig.proj.display()));
     let path = path_without_node(&rig.dir);
     let c = with(

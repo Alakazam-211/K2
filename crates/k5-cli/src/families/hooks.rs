@@ -36,10 +36,16 @@
 //! failure ends with the code the shell's call returns, with nothing
 //! printed.
 //!
-//! The shell answers ([`run`] returns `None`): `hooks emit` (whole), `-h`
-//! or `--help` (the front sends those on: the hooks page, or emit's), a
-//! word that is not UTF-8, a port curl won't take, and a `python3` the
-//! binary can't tell.
+//! `hooks emit` ([`emit`]): past the virtual desktop's guard (the shell
+//! skips its connection gate for it), its words' stops (exit 2, the emit
+//! page on stderr where the shell prints it) and, outside a session (no
+//! passport or no pane), its two lines, exit 3.
+//!
+//! The shell answers ([`run`] returns `None`): `hooks emit` with an event
+//! it knows from a session (the report: its JSON from Python, then the
+//! cell socket and TCP with the hook headers), `-h` or `--help` (the front
+//! sends those on: the hooks page, or emit's), a word that is not UTF-8, a
+//! port curl won't take, and a `python3` the binary can't tell.
 
 use super::{curl_port, without_nuls};
 use crate::daemon::{self, Settings};
@@ -102,6 +108,94 @@ pub enum Ask {
     NeedsNumber(String),
     /// `install` (false) or `uninstall` (true), and `--json`.
     Install { remove: bool, json: bool },
+    /// `emit` that stops before it reports ([`emit`]): these lines on
+    /// stderr (the emit page's lines among them) and this exit.
+    EmitStop { lines: Vec<String>, exit: Exit },
+    /// `emit` with an event it knows: reported only from a session (a
+    /// passport and a pane), the shell's send.
+    Emit,
+}
+
+/// `_HOOKS_EMIT_EVENTS`.
+pub const EMIT_EVENTS: &str =
+    "SessionStart UserPromptSubmit PreToolUse PostToolUse Notification Stop SessionEnd";
+
+/// `cmd_hooks_emit` with no passport or no pane (exit 3).
+pub const EMIT_NO_SESSION: [&str; 2] = [
+    concat!(
+        "Error: ",
+        cli_name!(),
+        " hooks emit runs inside a ",
+        product_name!(),
+        " session (no session passport: K2_HOOK_TOKEN / K2_PANE_ID unset)."
+    ),
+    concat!(
+        "It reports for the program in this PTY; it never uses the owner token. See ",
+        cli_name!(),
+        " study hooks."
+    ),
+];
+
+/// `cmd_hooks_emit`'s loop and its checks before the session's: the
+/// words' stop, or [`Ask::Emit`]. `None`: the help (the front's).
+pub fn emit(words: &[&str]) -> Option<Ask> {
+    let page = || -> Vec<String> {
+        crate::text::help("hooks/emit")
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_string)
+            .collect()
+    };
+    let stop = |lines: Vec<String>| {
+        Some(Ask::EmitStop {
+            lines,
+            exit: Exit::Usage,
+        })
+    };
+    let mut event: Option<&str> = None;
+    let mut i = 0;
+    while i < words.len() {
+        let w = words[i];
+        match w {
+            "-h" | "--help" => return None,
+            "--json" | "--session-id" => {
+                if i + 1 >= words.len() {
+                    let what = if w == "--json" {
+                        "Error: --json needs an object"
+                    } else {
+                        "Error: --session-id needs a value"
+                    };
+                    return stop(vec![what.to_string()]);
+                }
+                i += 2;
+                continue;
+            }
+            "--quiet" | "-q" => {}
+            _ if w.starts_with('-') => {
+                let mut lines = vec![format!("Error: unknown flag {w}")];
+                lines.extend(page());
+                return stop(lines);
+            }
+            _ => {
+                if let Some(e) = event {
+                    return stop(vec![format!(
+                        "Error: one event per call (got '{e}' and '{w}')"
+                    )]);
+                }
+                event = Some(w);
+            }
+        }
+        i += 1;
+    }
+    let Some(event) = event else {
+        return stop(page());
+    };
+    if !EMIT_EVENTS.split(' ').any(|e| e == event) {
+        return stop(vec![format!(
+            "Error: unknown event '{event}'. One of: {EMIT_EVENTS}"
+        )]);
+    }
+    Some(Ask::Emit)
 }
 
 /// The words after `hooks`. `None`: the shell's.
@@ -140,7 +234,7 @@ pub fn parse(words: &[&str]) -> Option<Ask> {
             json,
         }),
         "uninstall" => Some(Ask::Install { remove: true, json }),
-        "emit" => None,
+        "emit" => emit(rest),
         _ => Some(Ask::Usage),
     }
 }
@@ -156,7 +250,19 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
         return None;
     }
-    let ask = parse(&words)?;
+    let mut ask = parse(&words)?;
+    // `emit` from a session (a passport and a pane) reports: the shell's.
+    // From anywhere else it is refused before Python and curl run.
+    if ask == Ask::Emit {
+        let set = |names| k2_client::env_names::first_nonempty_os(names).is_some();
+        if set(k2_client::env_names::HOOK_TOKEN) && set(k2_client::env_names::PANE_ID) {
+            return None;
+        }
+        ask = Ask::EmitStop {
+            lines: EMIT_NO_SESSION.iter().map(|l| l.to_string()).collect(),
+            exit: Exit::Refused,
+        };
+    }
     if !python::family_native(python::here()) {
         return None;
     }
@@ -167,6 +273,18 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
             return Some(Exit::Error);
         }
     };
+    if let Ask::EmitStop { lines, exit } = &ask {
+        // The shell skips its connection gate for `hooks emit`, not the
+        // virtual desktop's guard.
+        if let Some(gate) = prelude::gate(&settings).filter(|g| *g != prelude::Gate::CannotConnect)
+        {
+            return Some(gate.stop());
+        }
+        for l in lines {
+            out::stderr_line(l);
+        }
+        return Some(*exit);
+    }
     if let Some(gate) = prelude::gate(&settings) {
         return Some(gate.stop());
     }
@@ -206,7 +324,9 @@ fn send(args: &[OsString], ask: Ask, settings: Settings) -> Exit {
             let body: &[u8] = if *remove { b"{\"remove\":true}" } else { b"{}" };
             (INSTALL, Call::PostJson(body), *json, false)
         }
-        Ask::Usage | Ask::NeedsNumber(_) => unreachable!("answered before"),
+        Ask::Usage | Ask::NeedsNumber(_) | Ask::EmitStop { .. } | Ask::Emit => {
+            unreachable!("answered before")
+        }
     };
     let exit = match client.call(Channel::Tcp, endpoint, call) {
         Ok(r) => {
@@ -754,7 +874,44 @@ mod tests {
     fn the_words() {
         assert_eq!(parse(&[]), Some(Ask::Usage));
         assert_eq!(parse(&["nope"]), Some(Ask::Usage));
-        assert_eq!(parse(&["emit", "Stop"]), None);
+        assert_eq!(parse(&["emit", "Stop"]), Some(Ask::Emit));
+        assert_eq!(parse(&["emit", "Stop", "-h"]), None);
+        let stop = |w: &[&str]| match parse(w) {
+            Some(Ask::EmitStop { lines, exit }) => (lines, exit),
+            other => panic!("{w:?}: {other:?}"),
+        };
+        let page: Vec<String> = crate::text::help("hooks/emit")
+            .expect("the emit page")
+            .lines()
+            .map(str::to_string)
+            .collect();
+        assert_eq!(stop(&["emit"]), (page.clone(), Exit::Usage));
+        assert_eq!(stop(&["emit", "-q", "--json", "{}"]), (page.clone(), Exit::Usage));
+        let mut unknown = vec!["Error: unknown flag --x".to_string()];
+        unknown.extend(page);
+        assert_eq!(stop(&["emit", "Stop", "--x"]), (unknown, Exit::Usage));
+        assert_eq!(
+            stop(&["emit", "Stop", "--json"]).0,
+            ["Error: --json needs an object"]
+        );
+        assert_eq!(
+            stop(&["emit", "--session-id"]).0,
+            ["Error: --session-id needs a value"]
+        );
+        assert_eq!(
+            stop(&["emit", "Stop", "End"]).0,
+            ["Error: one event per call (got 'Stop' and 'End')"]
+        );
+        assert_eq!(
+            stop(&["emit", "Nope"]).0,
+            [format!("Error: unknown event 'Nope'. One of: {EMIT_EVENTS}")]
+        );
+        // An empty value is a value (`[ $# -ge 2 ]`).
+        assert_eq!(parse(&["emit", "--json", "", "Stop"]), Some(Ask::Emit));
+        let src = include_str!("../../../../cli/src/remind.sh");
+        assert!(src.contains(&format!("_HOOKS_EMIT_EVENTS=\"{EMIT_EVENTS}\"")));
+        assert!(src.contains("echo \"Error: k2 hooks emit runs inside a K2 session (no session passport: K2_HOOK_TOKEN / K2_PANE_ID unset).\" >&2"));
+        assert!(src.contains("echo \"It reports for the program in this PTY; it never uses the owner token. See k2 study hooks.\" >&2"));
         assert_eq!(
             parse(&["status", "-n", "5", "--json"]),
             Some(Ask::Status {

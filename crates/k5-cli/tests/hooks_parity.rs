@@ -630,6 +630,120 @@ fn help_never_acts() {
     }
 }
 
+/// `hooks emit` before it reports: the words' stops (the emit page on
+/// stderr where the shell prints it), exit 2; outside a session (no
+/// passport, or no pane) its two lines, exit 3; with no daemon too (the
+/// shell skips its connection gate), past the virtual desktop's guard.
+/// With a passport and a pane it reports, which is the shell's.
+#[test]
+fn hooks_emit_stops_as_the_shell_does() {
+    let rig = Rig::new("hooks", "emit");
+    let v = vec![
+        // native: hooks emit
+        case("emit alone: the page", &["emit"], &[], vec![], owner_and_port, 2, 0),
+        case("emit alone, no daemon", &["emit"], &[], vec![], nothing, 2, 0),
+        case(
+            "emit, an unknown flag",
+            &["emit", "Stop", "--x"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "emit, two events",
+            &["emit", "Stop", "SessionEnd"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "emit, an unknown event",
+            &["emit", "Stopped"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "emit --json last",
+            &["emit", "Stop", "--json"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "emit --session-id last",
+            &["emit", "--session-id"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "emit, the owner: no session",
+            &["emit", "Stop", "-q"],
+            &[],
+            vec![],
+            owner_and_port,
+            3,
+            0,
+        ),
+        Case {
+            env: with_passport(&[]),
+            ..case(
+                "emit, a passport and no pane",
+                &["emit", "Stop", "--json", "{}"],
+                &[],
+                vec![],
+                port_only,
+                3,
+                0,
+            )
+        },
+        case(
+            "emit, a pane and no passport",
+            &["emit", "Notification"],
+            &[("K2_PANE_ID", "p7")],
+            vec![],
+            nothing,
+            3,
+            0,
+        ),
+        case(
+            "emit: the virtual desktop's guard",
+            &["emit", "Stop"],
+            &[("K2_NO_OWNER_FALLBACK", "1")],
+            vec![],
+            owner_and_port,
+            3,
+            0,
+        ),
+        Case {
+            env: with_passport(&[("K2_PANE_ID", "")]),
+            ..case(
+                "emit, an empty pane",
+                &["emit", "Stop"],
+                &[],
+                vec![],
+                port_only,
+                3,
+                0,
+            )
+        },
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}
+
 /// The usage names the command by the brand's name (in a build with
 /// `K2_BRAND_DIR=brand/xy` it says `xy`).
 #[test]
@@ -647,4 +761,26 @@ fn the_lines_say_the_brand_s_name() {
     assert!(out.stderr.contains(&format!("({cli} study hooks)\n")));
     assert_eq!(out.code, Some(1));
     assert!(log.is_empty());
+}
+
+/// `hooks emit` outside a session names the command by the brand's name.
+#[test]
+fn the_emit_session_lines_say_the_brand_s_name() {
+    let rig = Rig::new("hooks", "emitbrand");
+    let cli = k2_client::brand::CLI_NAME;
+    let c = case("brand", &["emit", "Stop"], &[], vec![], owner_and_port, 3, 0);
+    let (out, log) = rig.binary(&c, false);
+    assert!(
+        out.stderr
+            .starts_with(&format!("Error: {cli} hooks emit runs inside a ")),
+        "{}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.ends_with(&format!("See {cli} study hooks.\n")),
+        "{}",
+        out.stderr
+    );
+    assert_eq!(out.code, Some(3));
+    assert!(log.is_empty(), "nothing sent: {log:?}");
 }

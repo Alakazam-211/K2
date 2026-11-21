@@ -59,7 +59,7 @@ use std::time::{Duration, Instant};
 
 use k2_core::brand::CLI_NAME;
 use k2_core::permission::request::RequestState;
-use k2_vault::{Actor, Delivery, HumanProof, LocalVault, Role, Selector, VaultError};
+use k2_vault::{Actor, Delivery, HumanProof, LocalVault, Role, SecretStore, Selector, VaultError};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 

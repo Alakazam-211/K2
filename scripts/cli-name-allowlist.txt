@@ -666,6 +666,7 @@
 1 value cli/src/explain.sh keeper: wire; the refusal row's who (refusals/mod.rs:54)
 1 value cli/src/firewall.sh keeper: wire; the firewall status's upstream.managedBy (firewall/routes.rs:497)
 1 value cli/src/hostchat-voice.sh keeper: wire; the Sew enable request's identity (--identity, sew/routes.rs:463)
+1 value cli/src/prelude.sh debt: command (1 line); B4
 1 value cli/src/remote-target.sh keeper: wire; Postal plane reserved DNS label, mirrors the plane's list, not the CLI name
 1 value cli/src/schema-head.sh debt: command (1 line); B8
 1 value cli/src/study-app-api.sh keeper: wire; the refusal registry's who, written here by contract-gen from k2-core (refusals/mod.rs:54)

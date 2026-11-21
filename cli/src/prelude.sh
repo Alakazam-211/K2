@@ -24,6 +24,11 @@ set -euo pipefail
 # line carries the command's own name. An alias's notice or tombstone is
 # the Rust front's job, from the brand file, so this script does not read
 # $0's name or K5_CLI_CALLED_AS.
+#
+# The command's own name, for a line that names it from code rather than
+# as typed text. Never $0's name: the Rust front runs this script as
+# /dev/fd/N. The brand flip rewrites this one word with the rest.
+_K2_CLI_NAME=k2
 
 # What the Rust front sets when it hands a command to this script. Empty
 # counts as unset.

@@ -1701,8 +1701,8 @@ if [ -z "$_k2_offline_verb" ] && _k2_daemon_is_plain_remote; then
     unset _a
     _envn_into _k2_plain_ok PLAIN_HTTP_OK
     if [ "$_k2_plain_ok" != 1 ] && ! _k2_host_is_tailnet_literal "$HOST"; then
-        # The command's own name (white-label), not a typed one.
-        echo "warning: ${0##*/} is sending this server's owner token to ${HOST} over plain http, unencrypted. That's fine on a private network such as a tailnet; elsewhere use https." >&2
+        # The command's own name (_K2_CLI_NAME), never $0's.
+        echo "warning: ${_K2_CLI_NAME} is sending this server's owner token to ${HOST} over plain http, unencrypted. That's fine on a private network such as a tailnet; elsewhere use https." >&2
         # Said once: a command's own copy of this warning (clone's) skips it.
         _K2_PLAIN_HTTP_WARNED=1
     fi

@@ -109,7 +109,7 @@ def clone_url_refusal(url, password=False):
 # command, before its first request. K2_PLAIN_HTTP_OK=1 silences it. An
 # https:// K2_HOST is not plain http (_k2_daemon_base): no warning.
 _clone_local_plain_http_warn() {
-    local ok="" me
+    local ok=""
     [ -z "${_K2_PLAIN_HTTP_WARNED:-}" ] || return 0
     case "${HOST:-}" in https://*|HTTPS://*) return 0 ;; esac
     _envn_into ok PLAIN_HTTP_OK
@@ -118,9 +118,8 @@ _clone_local_plain_http_warn() {
 import os, sys
 exec(os.environ.pop("_CLONE_URL_RULE"))
 sys.exit(0 if clone_local_warns(sys.argv[1]) else 1)' "${HOST:-127.0.0.1}" || return 0
-    # The command's own name (white-label).
-    me="${0##*/}"; case "$0" in /dev/fd/*) me=K2 ;; esac
-    echo "warning: ${me} is sending this server's owner token to ${HOST} over plain http, unencrypted. That's fine on a private network such as a tailnet; elsewhere use https." >&2
+    # The command's own name (_K2_CLI_NAME), never $0's.
+    echo "warning: ${_K2_CLI_NAME} is sending this server's owner token to ${HOST} over plain http, unencrypted. That's fine on a private network such as a tailnet; elsewhere use https." >&2
     _K2_PLAIN_HTTP_WARNED=1
 }
 

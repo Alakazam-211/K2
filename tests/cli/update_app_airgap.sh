@@ -48,6 +48,12 @@ mkdir -p "$STUBS" "$H/.k2"
 cat >"$STUBS/curl" <<'EOF'
 #!/bin/sh
 printf 'curl %s\n' "$*" >>"$STUB_LOG"
+# The body goes where -o says (k2 update follows each redirect itself).
+prev=""
+for a in "$@"; do
+    if [ "$prev" = "-o" ]; then exec >"$a"; fi
+    prev="$a"
+done
 for a in "$@"; do
     case "$a" in
         https://api.github.com/repos/Alakazam-211/K2/releases/latest)

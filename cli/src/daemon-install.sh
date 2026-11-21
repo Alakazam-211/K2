@@ -23,6 +23,20 @@ _DAEMON_FIRST_U2_VERSION="0.46.6"
 _DAEMON_DEFAULT_LATEST_URL="https://github.com/${_K2_RELEASE_REPO}/releases/latest/download/daemon-latest.json"
 _DAEMON_VERSION_URL_TMPL="https://github.com/${_K2_RELEASE_REPO}/releases/download/v%s/daemon-latest.json"
 
+# `_daemon_fetch <url> <file>`: download <url> into <file>. A URL on one
+# of GitHub's hosts (the release's manifest, binary and signature) follows
+# only GitHub's own redirects, https only, at most _K2_GITHUB_MAX_REDIRS
+# (_k2_github_get, cli/src/update.sh). Any other URL is one the person or
+# their manifest named (a mirror, --manifest-url): fetched as before, with
+# curl -L.
+_daemon_fetch() {
+    if _k2_github_url_ok "$1"; then
+        _k2_github_get "$1" "$2"
+    else
+        curl -fsSL "$1" -o "$2"
+    fi
+}
+
 # Map uname → manifest artifact key (e.g. "macos-aarch64"). Echoes the
 # key on stdout; on an unknown platform prints an error and returns 1.
 _daemon_platform_key() {
@@ -255,10 +269,17 @@ cmd_daemon_install() {
                 echo "curl is required to fetch the daemon manifest." >&2
                 return 1
             fi
-            manifest=$(curl -fsSL "$resolved_manifest_url") || {
+            local mfile
+            mfile=$(mktemp "${TMPDIR:-/tmp}/k2-daemon-manifest.XXXXXX") || {
+                echo "Failed to create temp file." >&2; return 1
+            }
+            if ! _daemon_fetch "$resolved_manifest_url" "$mfile"; then
+                rm -f "$mfile"
                 echo "Failed to fetch daemon manifest: $resolved_manifest_url" >&2
                 return 1
-            }
+            fi
+            manifest=$(cat "$mfile")
+            rm -f "$mfile"
             ;;
     esac
 
@@ -375,13 +396,13 @@ cmd_daemon_install() {
     echo "Downloading daemon binary ($platform, manifest ver ${mver:-?})..."
     case "$url" in
         file://*) cp "${url#file://}" "$dl_bin" ;;
-        *) curl -fsSL "$url" -o "$dl_bin" ;;
+        *) _daemon_fetch "$url" "$dl_bin" ;;
     esac || { echo "Failed to download binary: $url" >&2; return 1; }
 
     # `sig2` is a URL to the .sig2 asset (raw minisig text); a local
     # manifest may inline it. Base64-wrapped text is accepted too.
     case "$sig" in
-        http://*|https://*) curl -fsSL "$sig" -o "$dl_sig" \
+        http://*|https://*) _daemon_fetch "$sig" "$dl_sig" \
             || { echo "Failed to download signature: $sig" >&2; return 1; } ;;
         file://*) cp "${sig#file://}" "$dl_sig" ;;
         *) printf '%s\n' "$sig" > "$dl_sig" ;;

@@ -20,26 +20,124 @@ Usage: k2 update [--app|--cli [--check]|--list]
 EOF
 }
 
-# `_app_update_get <url>`: GET a GitHub API URL, the body on stdout. When
-# GitHub can't be reached (no network, refused, timed out, an HTTP error)
-# it prints one line on stderr, with curl's exit code and message, and
-# returns 1. Before, under set -e the failed curl stopped the command with
-# curl's code and no word.
+# GitHub's own hosts: the only ones a GitHub fetch follows a redirect to.
+# api.github.com answers a moved repository's old path with a 301 to its
+# new one (on api.github.com), github.com does the same for its pages and
+# downloads, and github.com's release downloads redirect to
+# release-assets.githubusercontent.com (objects.githubusercontent.com for
+# older links). Curl can't limit -L to a list of hosts, so the fetch never
+# uses -L: it follows each hop itself, https only, after checking the host,
+# and refuses a redirect anywhere else before that address is contacted.
+_K2_GITHUB_HOSTS="api.github.com github.com objects.githubusercontent.com release-assets.githubusercontent.com"
+# The most redirects one fetch follows.
+_K2_GITHUB_MAX_REDIRS=5
+# Why _k2_github_curl refused a redirect; empty when it didn't.
+_K2_GITHUB_REFUSED=""
+
+# `_k2_github_url_ok <url>`: 0 when <url> is https on one of GitHub's hosts,
+# with no name before an @ and no port.
+_k2_github_url_ok() {
+    local rest host h
+    case "$1" in https://*) ;; *) return 1 ;; esac
+    rest="${1#https://}"
+    host="${rest%%[/?#]*}"
+    for h in $_K2_GITHUB_HOSTS; do
+        [ "$host" = "$h" ] && return 0
+    done
+    return 1
+}
+
+# `_k2_github_where <url>`: the scheme and host of <url>, printable
+# characters only, for an error line (never the path or the query).
+_k2_github_where() {
+    local scheme rest
+    case "$1" in
+        *://*) scheme="${1%%://*}"; rest="${1#*://}"; rest="${scheme}://${rest%%[/?#]*}" ;;
+        *) rest="${1%%[/?#]*}" ;;
+    esac
+    printf '%s' "$rest" | LC_ALL=C tr -cd '[:graph:]'
+}
+
+# `_k2_github_curl <url> <curl args...>`: curl <url> with <args>, which
+# send the body to a file (-o), following redirects on GitHub's hosts one
+# hop at a time (at most _K2_GITHUB_MAX_REDIRS). https only, also when a
+# ~/.curlrc says -L. Sends no token: these calls carry no -K config and no
+# Authorization header. Returns curl's exit code when curl fails. A
+# redirect off GitHub's hosts, to anything but https, or past the cap sets
+# _K2_GITHUB_REFUSED to the one-line reason and returns 1, and nothing is
+# sent to that address. Runs in the caller's shell, so the caller reads
+# _K2_GITHUB_REFUSED after it.
+_k2_github_curl() {
+    local url="$1" hops=0 next rc
+    shift
+    _K2_GITHUB_REFUSED=""
+    while :; do
+        rc=0
+        next=$(curl --no-location --proto =https "$@" -w '%{redirect_url}' "$url") || rc=$?
+        [ "$rc" -eq 0 ] || return "$rc"
+        [ -n "$next" ] || return 0
+        hops=$((hops + 1))
+        if [ "$hops" -gt "$_K2_GITHUB_MAX_REDIRS" ]; then
+            _K2_GITHUB_REFUSED="GitHub redirected more than $_K2_GITHUB_MAX_REDIRS times (the last to $(_k2_github_where "$next")); stopped there"
+            return 1
+        fi
+        case "$next" in
+            https://*) ;;
+            *) _K2_GITHUB_REFUSED="GitHub redirected to $(_k2_github_where "$next"), which is not https; nothing was sent there"
+               return 1 ;;
+        esac
+        if ! _k2_github_url_ok "$next"; then
+            _K2_GITHUB_REFUSED="GitHub redirected to $(_k2_github_where "$next"), which is not GitHub; nothing was sent there"
+            return 1
+        fi
+        url="$next"
+    done
+}
+
+# `_k2_github_get <url> <file>`: GET <url> into <file> through
+# _k2_github_curl: curl's own error on stderr (-sS), or a refused
+# redirect's one line. Returns non-zero on either.
+_k2_github_get() {
+    local rc=0
+    _K2_GITHUB_REFUSED=""
+    _k2_github_curl "$1" -fsS -o "$2" || rc=$?
+    if [ -n "$_K2_GITHUB_REFUSED" ]; then
+        echo "Error: $_K2_GITHUB_REFUSED" >&2
+        return 1
+    fi
+    return "$rc"
+}
+
+# `_app_update_get <url>`: GET a GitHub API URL, the body on stdout. It
+# follows GitHub's own redirects (a moved repository answers its old path
+# with a 301) and refuses any other with one line on stderr and returns 1
+# (_k2_github_curl). When GitHub can't be reached (no network, refused,
+# timed out, an HTTP error) it prints one line on stderr, with curl's exit
+# code and message, and returns 1. Before, under set -e the failed curl
+# stopped the command with curl's code and no word.
 _app_update_get() {
-    local errf body rc=0 msg
-    errf=$(mktemp "${TMPDIR:-/tmp}/k2-update.XXXXXX") || {
+    local tmp rc=0 msg
+    tmp=$(mktemp -d "${TMPDIR:-/tmp}/k2-update.XXXXXX") || {
         echo "Error: couldn't make a temp file to ask GitHub" >&2
         return 1
     }
-    body=$(curl -fsS --connect-timeout 10 --max-time 30 \
-        -H "Accept: application/vnd.github.v3+json" "$1" 2>"$errf") || rc=$?
-    msg=$(head -n 1 "$errf" | sed 's/^curl: ([0-9]*) //')
-    rm -f "$errf"
+    _K2_GITHUB_REFUSED=""
+    _k2_github_curl "$1" -fsS --connect-timeout 10 --max-time 30 \
+        -H "Accept: application/vnd.github.v3+json" -o "$tmp/body" 2>"$tmp/err" || rc=$?
+    if [ -n "$_K2_GITHUB_REFUSED" ]; then
+        rm -rf "$tmp"
+        echo "Error: $_K2_GITHUB_REFUSED" >&2
+        return 1
+    fi
+    msg=$(head -n 1 "$tmp/err" | sed 's/^curl: ([0-9]*) //')
     if [ "$rc" -ne 0 ]; then
+        rm -rf "$tmp"
         echo "Error: couldn't reach GitHub (curl exit $rc${msg:+: $msg})" >&2
         return 1
     fi
-    printf '%s' "$body"
+    # curl makes no file for an empty body.
+    if [ -f "$tmp/body" ]; then cat "$tmp/body"; fi
+    rm -rf "$tmp"
 }
 
 # `k2 update` / `--app`: this k2's version and the latest release's tag,

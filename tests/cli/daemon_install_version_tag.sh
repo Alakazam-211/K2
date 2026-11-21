@@ -59,9 +59,15 @@ EOF
 cat >"$STUBS/curl" <<EOF
 #!/bin/sh
 printf 'curl %s\n' "\$*" >>"\$STUB_LOG"
+# The body goes where -o says (a GitHub fetch follows each redirect itself).
+out=""; prev=""
+for a in "\$@"; do
+    [ "\$prev" = "-o" ] && out="\$a"
+    prev="\$a"
+done
 for a in "\$@"; do
     if [ "\$a" = "$WANT_URL" ]; then
-        cat "$WORK/manifest.json"
+        if [ -n "\$out" ]; then cat "$WORK/manifest.json" >"\$out"; else cat "$WORK/manifest.json"; fi
         exit 0
     fi
 done
@@ -84,8 +90,11 @@ for v in 0.46.7 v0.46.7; do
     echo "== --version $v =="
     run --version "$v"
     [ "$RC" -eq 0 ] && ok "$v: exit 0" || bad "$v: exit $RC (want 0)"
-    if [ "$(cat "$LOG")" = "curl -fsSL $WANT_URL" ]; then
-        ok "$v: asked for exactly $WANT_URL"
+    # One request, for that URL, following no redirect on curl's own
+    # (tests/cli/update_github_redirects.sh covers the redirects).
+    n="$(grep -c . "$LOG" || true)"
+    if [ "$n" = 1 ] && grep -q " $WANT_URL\$" "$LOG" && grep -q -- ' --no-location --proto =https ' "$LOG"; then
+        ok "$v: asked for exactly $WANT_URL, https only, no curl -L"
     else
         bad "$v: the requests were not exactly $WANT_URL"; sed 's/^/      | /' "$LOG" >&2
     fi

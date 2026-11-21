@@ -232,6 +232,9 @@ python3 "$TOOL" list "$REAL" | awk -F'\t' '
 pass=$((pass + 1))
 run 0 "same heads ($n arms, same order)." same-heads "$REAL" "$REAL"
 # Every block arm's body can be read back and ends where the next arm starts.
-python3 "$TOOL" body 1 "$REAL" | grep -q "send_pair_page" || { echo "FAIL: arm 1 of the real match is not the pair page" >&2; exit 1; }; pass=$((pass + 1))
+# Arm 1 is D1's passport arm (an agent's scoped passport on agent routes,
+# ahead of every other arm); the pair page comes right after it.
+python3 "$TOOL" body 1 "$REAL" | grep -q "passport_routes::serve_tcp" || { echo "FAIL: arm 1 of the real match is not the passport arm" >&2; exit 1; }; pass=$((pass + 1))
+python3 "$TOOL" body 2 "$REAL" | grep -q "send_pair_page" || { echo "FAIL: arm 2 of the real match is not the pair page" >&2; exit 1; }; pass=$((pass + 1))
 
 echo "dispatcher-arms tests: $pass passed"

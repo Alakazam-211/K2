@@ -6,6 +6,7 @@ features:
   tickets-list-all
   tickets-badge-me
   ticket-attachments-v1
+  ticket-thread-v1
   zen-v1
   zen-gardens-v1
   zen-chrome-v1

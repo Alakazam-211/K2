@@ -517,6 +517,14 @@ fn on_conversation_moved(mv: &k2_core::overlay::ConversationMove) {
 /// and by the test harness.
 pub fn install_move_listener() {
     k2_core::overlay::set_move_listener(on_conversation_moved);
+    // ticket-thread-v1: every stored ticket message, whichever door wrote
+    // it (the ticket routes, a Thread post, K2's own notices), goes out on
+    // the overlay bus like any Thread post.
+    k2_core::feedback_thread::set_post_listener(on_ticket_posted);
+}
+
+fn on_ticket_posted(item: &k2_core::overlay::OverlayItem, links: &[k2_core::overlay::OverlayLink]) {
+    emit_links(links, &item.doc);
 }
 
 /// A guest subscriber's room (thread-attachments-v1): its pass and the
@@ -700,6 +708,11 @@ pub(crate) fn skin_overlay_gate(
     pass: &SkinPass,
     conversation: &str,
 ) -> Result<String, crate::cli_response::CliResponse> {
+    // ticket-thread-v1: a ticket's Thread on the ticket's rights
+    // (`tickets:read` in its room), never a room's pinned Chat.
+    if let Some(r) = crate::overlay_routes::ticket_addr::socket_gate(conversation, Some(pass), None) {
+        return r;
+    }
     let db = k2_core::db::shared();
     let conn = db.lock();
     let Ok(Some(project_id)) =
@@ -800,6 +813,23 @@ pub async fn serve_overlay_events_connection(
                 refuse_upgrade(stream, &resp).await;
                 return;
             }
+        }
+    }
+
+    // ticket-thread-v1: a login watches a ticket's Thread only when it may
+    // see the ticket (a Member never sees K2's own notices).
+    if skin_pass.is_none() {
+        if let Some(Err(r)) = crate::overlay_routes::ticket_addr::socket_gate(&conversation, None, viewer_login.as_deref()) {
+            let resp = format!(
+                "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n{}Connection: close\r\n\r\n{}",
+                r.status,
+                r.content_type,
+                r.body.len(),
+                k2_core::frame_policy::CONNECT_HEADER_LINES,
+                r.body
+            );
+            refuse_upgrade(stream, &resp).await;
+            return;
         }
     }
 

@@ -279,6 +279,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 ### Threads
 - Thread: after you attach a file, the message box is ready to type in, and Return sends the file even with no text.
+- **A ticket's discussion is now kept as a Thread.** Its messages work as before everywhere (the Tickets page, the phone, Apps and `k2 tickets`), keep their files, and stay after the ticket's workspace is removed. Tickets from earlier releases move over in the background after the update.
 
 ### Agent messages
 - **An inbox item's title is always one line.** A line break or other control character in a title is written escaped, whether it comes from `k2 msg --inbox-wake`, `--inbox-silent` or `k2 inbox compose`; accents and other letters stay as typed.

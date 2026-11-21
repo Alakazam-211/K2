@@ -990,6 +990,18 @@ pub fn set_answer_by(
         CommentWrite::Stored(c, _) => c,
         CommentWrite::Duplicate(_) => return Err("answer: a keyless post found a client key".to_string()),
     };
+    let item = record_answer(id, answer_t)?;
+    Ok((item, comment))
+}
+
+/// The answer half of [`set_answer_by`], for a door that stored the
+/// message itself (a Thread post's option pick, with its send-once key):
+/// `answer` + `answered_at` on the row, status `answered`.
+pub fn record_answer(id: &str, answer: &str) -> Result<FeedbackItem, String> {
+    let answer_t = answer.trim();
+    if answer_t.is_empty() {
+        return Err("answer must not be empty".to_string());
+    }
     let now = now_secs();
     let db = crate::db::shared();
     let conn = db.lock();
@@ -1004,8 +1016,7 @@ pub fn set_answer_by(
         return Err(format!("no feedback item with id {id}"));
     }
     drop(conn);
-    let item = get_item(id).ok_or_else(|| "feedback row vanished after answer".to_string())?;
-    Ok((item, comment))
+    get_item(id).ok_or_else(|| "feedback row vanished after answer".to_string())
 }
 
 /// Set an item's status (validated against [`STATUSES`]). Used by

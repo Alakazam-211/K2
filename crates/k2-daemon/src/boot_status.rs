@@ -1219,6 +1219,10 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_TICKETS_LIST_ALL);
     out.push(FEATURE_TICKETS_BADGE_ME);
     out.push(FEATURE_TICKET_ATTACHMENTS);
+    // ticket-thread-v1 (0.46.17): a ticket's discussion is the Thread
+    // conversation `ticket:<id>` (the Thread routes take that address on
+    // the ticket's rights); the ticket routes keep their shapes.
+    out.push(k2_core::feedback_thread::FEATURE);
     out.push(FEATURE_ZEN_V1);
     out.push(FEATURE_ZEN_GARDENS);
     out.push(FEATURE_ZEN_CHROME);
@@ -1509,6 +1513,7 @@ mod tests {
                 "tickets-list-all",
                 "tickets-badge-me",
                 "ticket-attachments-v1",
+                "ticket-thread-v1",
                 "zen-v1",
                 "zen-gardens-v1",
                 "zen-chrome-v1",

@@ -735,7 +735,7 @@ pub(crate) fn close_notice(id: &str, author: &str, note: &str) -> Result<feedbac
     Ok(item)
 }
 
-fn project_name_path(project_id: &str) -> (Option<String>, Option<String>) {
+pub(crate) fn project_name_path(project_id: &str) -> (Option<String>, Option<String>) {
     let db = k2_core::db::shared();
     let conn = db.lock();
     conn.query_row(
@@ -772,7 +772,7 @@ fn canonical_session_id(project_id: &str) -> Option<String> {
 /// bumps list comment counts; it must never drive the desktop
 /// notification (frozen contract: only NEW items notify, via
 /// `FeedbackCreated`).
-fn emit_commented(feedback_id: &str, author: &str) {
+pub(crate) fn emit_commented(feedback_id: &str, author: &str) {
     let path = feedback::get_item(feedback_id).and_then(|i| project_name_path(&i.project_id).1);
     k2_core::agent_hooks::emit(
         k2_core::agent_hooks::HookEvent::FeedbackCommented,
@@ -819,7 +819,7 @@ pub(crate) fn resolve_change(status: &str) -> &'static str {
 /// Emit the per-ticket live event after a stored mutation. Ids and
 /// metadata only (no title, body, names or brief). Best-effort: no
 /// subscriber is not an error.
-fn emit_ticket_changed(item: &feedback::FeedbackItem, change: &str, via: Option<&str>) {
+pub(crate) fn emit_ticket_changed(item: &feedback::FeedbackItem, change: &str, via: Option<&str>) {
     let _ = crate::session_events::emit(crate::session_events::SessionEvent::TicketChanged {
         project_id: item.project_id.clone(),
         id: item.id.clone(),
@@ -1004,7 +1004,7 @@ fn deliver_to_asker(
 /// Deliver a just-stored comment or answer: an App guest's as a guest's
 /// (`[guest …]`, its later lines quoted; K2's own `Attached:` lines stay plain),
 /// anyone else's as `from`.
-fn deliver_ticket_words(
+pub(crate) fn deliver_ticket_words(
     item: &feedback::FeedbackItem,
     skin: Option<&SkinPass>,
     from: &str,
@@ -1382,38 +1382,6 @@ fn resolve_create_project(
     Ok((project_id, path))
 }
 
-/// `POST /cli/feedback/comment` body. `author` defaults to `owner`
-/// (the renderer's thread panel posts author-less); agents pass their
-/// own name via the CLI — that's how human and agent comments are told
-/// apart (see [`handle_comment`]).
-#[derive(Debug, serde::Deserialize, Default)]
-#[serde(default, rename_all = "camelCase")]
-struct CommentBody {
-    id: String,
-    body: String,
-    author: Option<String>,
-    /// The person picked one of the ticket's options (a structured
-    /// `--options` button or a brief `k2-options` item). An option pick
-    /// ANSWERS the ticket; free text (false / absent) opens a discussion.
-    /// Ignored on agent-authored comments.
-    option_pick: bool,
-    /// Files on this message (0.46.6, TK4/TK5). With files, `body` may be
-    /// empty (not on an option pick, which needs the option's text).
-    attachments: Option<serde_json::Value>,
-}
-
-/// The status a HUMAN comment moves a ticket to. An option pick is the
-/// answer (`answered`); free text means the person wants to talk it over
-/// (`needs_discussion`). The agent settles a discussion later with
-/// `k2 tickets resolve <id> --answered "<outcome>"` or plain `resolve`.
-pub(crate) fn human_comment_status(option_pick: bool) -> &'static str {
-    if option_pick {
-        "answered"
-    } else {
-        "needs_discussion"
-    }
-}
-
 /// Handler for `POST /cli/feedback/comment`.
 ///
 /// It's just a comment thread — but HUMAN comments land in the
@@ -1448,191 +1416,9 @@ pub fn handle_comment_as(body: &[u8], session_author: &str) -> CliResponse {
 }
 
 pub(crate) fn handle_comment_gated(body: &[u8], session_author: &str, skin: Option<&SkinPass>, agent: Option<&str>) -> CliResponse {
-    let b: CommentBody = match serde_json::from_slice(body) {
-        Ok(b) => b,
-        Err(e) => return usage_error(format!("invalid JSON body: {e}")),
-    };
-    if b.id.is_empty() {
-        return usage_error("missing 'id' (a feedback id or unique prefix)");
-    }
-    let attach_reqs = match crate::ticket_attachments::parse_field(b.attachments.as_ref()) {
-        Ok(r) => r,
-        Err(e) => return e,
-    };
-    // TK5: files may stand in for the text, except on an option pick.
-    if b.body.trim().is_empty() && (attach_reqs.is_empty() || b.option_pick) {
-        return usage_error("comment requires non-empty <text>");
-    }
-    let (full_id, author, is_human) = if let Some(pass) = skin {
-        let item = match skin_load_item(pass, &b.id, crate::skin_routes::TICKETS_POST) {
-            Ok(item) => item,
-            Err(e) => return e,
-        };
-        // Skin: session_author = pass.username. Never body `author`, never "owner".
-        (item.id, pass.username.clone(), true)
-    } else {
-        let full_id = match feedback::resolve_id_prefix(&b.id) {
-            Ok(f) => f,
-            Err(e) => return prefix_error_response(&b.id, e),
-        };
-        // Body `author` is the agent-CLI path; an agent's passport (`agent`) is
-        // always its stamped name, never a person. UI human posts omit it: the
-        // token identity, so a Connect user is stored as themselves, not the owner.
-        let author_given = agent.or_else(|| b.author.as_deref().map(str::trim).filter(|s| !s.is_empty()));
-        let session = session_author.trim();
-        let author = author_given.unwrap_or(if session.is_empty() { "owner" } else { session });
-        let is_human = agent.is_none() && (author_given.is_none() || author == "owner");
-        // 0.46.0 stamp rule: a human comment is stored as the sender's
-        // username (the owner token → the linked username, else `owner`).
-        let author = if is_human {
-            k2_core::person_name::sender_identity_now(k2_core::person_name::Sender::from_session_author(author))
-        } else {
-            author.to_string()
-        };
-        (full_id, author, is_human)
-    };
-    let author = author.as_str();
-
-    // Files: checked and snapshotted against the TICKET's workspace (not
-    // the caller's) before anything is stored (TK3/TK4).
-    let Some(ticket) = feedback::get_item(&full_id) else {
-        return prefix_error_response(&b.id, PrefixError::NotFound);
-    };
-    let who = match skin {
-        Some(p) => format!("guest:{}", p.username.trim()),
-        None => author.to_string(),
-    };
-    let (files, files_root) =
-        match crate::ticket_attachments::check_and_snapshot(&full_id, &ticket.project_id, skin, &attach_reqs, &who) {
-            Ok(pair) => pair,
-            Err(e) => return e,
-        };
-    let files_view = |atts: &[k2_core::overlay::attachments::ThreadAttachment]| {
-        serde_json::Value::Array(crate::ticket_attachments::views(&ticket.project_id, atts, skin, true))
-    };
-
-    // Agent comment — store only, current shape (no delivery fields).
-    if !is_human {
-        return match feedback::add_comment_with_files(&full_id, author, &b.body, &files) {
-            Ok(c) => {
-                crate::ticket_attachments::audit_post(&full_id, &c.id, &who, &c.attachments);
-                emit_commented(&full_id, &c.author);
-                // Push assignees (or all devices if unassigned) on thread
-                // activity — not just create.
-                if let Some(item) = feedback::get_item(&full_id) {
-                    emit_ticket_changed(&item, CHANGE_COMMENTED, Some(VIA_AGENT));
-                    crate::push_routes::notify_feedback_commented(&full_id, &item.assignees);
-                }
-                CliResponse::ok_json(
-                    serde_json::json!({
-                        "ok": true,
-                        "id": full_id,
-                        "commentId": c.id,
-                        "author": c.author,
-                        "attachments": files_view(&c.attachments),
-                    })
-                    .to_string(),
-                )
-            }
-            Err(e) => usage_error(e),
-        };
-    }
-
-    // Human comment. An OPTION PICK is the answer (status answered,
-    // --wait prints it). FREE TEXT opens a discussion: the comment is
-    // stored and the ticket moves to needs_discussion until the agent
-    // settles it (`k2 tickets resolve <id> [--answered "<outcome>"]`).
-    let Some(before) = feedback::get_item(&full_id) else {
-        return prefix_error_response(&b.id, PrefixError::NotFound);
-    };
-    let answers = b.option_pick;
-    let target_status = human_comment_status(b.option_pick);
-
-    let (item, comment) = if answers {
-        match feedback::set_answer_with_files(&full_id, author, &b.body, &files) {
-            Ok(pair) => pair,
-            Err(e) => return usage_error(e),
-        }
-    } else {
-        let c = match feedback::add_comment_with_files(&full_id, author, &b.body, &files) {
-            Ok(c) => c,
-            Err(e) => return usage_error(e),
-        };
-        let item = if before.status == target_status {
-            match feedback::get_item(&full_id) {
-                Some(item) => item,
-                None => return usage_error("feedback row vanished after comment"),
-            }
-        } else {
-            match feedback::set_status(&full_id, target_status) {
-                Ok(item) => item,
-                Err(e) => return usage_error(e),
-            }
-        };
-        (item, c)
-    };
-    let status_changed = !answers && before.status != item.status;
-
-    // FeedbackAnswered BEFORE the injection so `ask --wait` pollers
-    // unblock even if delivery is slow (a wake can take seconds).
-    let (_, path) = project_name_path(&item.project_id);
-    if answers {
-        k2_core::agent_hooks::emit(
-            k2_core::agent_hooks::HookEvent::FeedbackAnswered,
-            serde_json::json!({
-                "id": item.id,
-                "projectPath": path,
-            }),
-        );
-    }
-    // Free text moved the ticket to needs_discussion: every window's
-    // list + waiting-count badge refresh on the status bus.
-    if status_changed {
-        k2_core::agent_hooks::emit(
-            k2_core::agent_hooks::HookEvent::FeedbackStatusChanged,
-            serde_json::json!({
-                "id": item.id,
-                "projectPath": path,
-                "status": item.status,
-            }),
-        );
-    }
-    // feedback:commented rides every stored comment (see
-    // [`emit_commented`]) — also before the injection, so an open
-    // thread panel refreshes without waiting on a slow wake.
-    emit_commented(&item.id, &comment.author);
-    // One app frame for this reply: an option pick is the answer; free
-    // text is a comment whose `status` says needs_discussion.
-    if answers {
-        emit_ticket_changed(&item, CHANGE_ANSWERED, Some(VIA_OPTION_PICK));
-    } else {
-        emit_ticket_changed(&item, CHANGE_COMMENTED, Some(VIA_FREE_TEXT));
-    }
-    crate::push_routes::notify_feedback_commented(&item.id, &item.assignees);
-
-    crate::ticket_attachments::audit_post(&item.id, &comment.id, &who, &comment.attachments);
-
-    // Shared F3 delivery: the stored author IS the stamp (0.46.0 rule,
-    // resolved above). Matches project-group/msg framing. Files reach the
-    // agent as `Attached: <abs path>` lines, never stored (TK6).
-    let (delivered, delivery_reason, delivered_session) =
-        deliver_ticket_words(&item, skin, author, &comment.body, files_root.as_deref(), &comment.attachments);
-
-    CliResponse::ok_json(
-        serde_json::json!({
-            "ok": true,
-            "id": item.id,
-            "commentId": comment.id,
-            "author": comment.author,
-            "answered": answers,
-            "status": item.status,
-            "delivered": delivered,
-            "deliveryReason": delivery_reason,
-            "deliveredSessionId": delivered_session,
-            "attachments": files_view(&comment.attachments),
-        })
-        .to_string(),
-    )
+    // 0.46.17 (ticket-thread-v1): one core for this route and a Thread post
+    // to `ticket:<id>`, so the rules above hold on both (`ticket_comment`).
+    crate::ticket_comment::handle(body, session_author, skin, agent)
 }
 
 /// `POST /cli/feedback/answer` body. Stores (thread comment +

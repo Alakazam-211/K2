@@ -233,14 +233,15 @@ fn a_failed_brief_insert_leaves_no_ticket() {
         .query_row("SELECT COUNT(*) FROM feedback WHERE project_id = ?1", [&pid], |r| r.get(0))
         .expect("count tickets");
     assert_eq!(tickets, 0, "the ticket row rolled back with the brief");
+    // 0.46.17: the seed is the ticket's Thread (`ticket:<id>`), written
+    // after the brief: a failed brief leaves no ticket conversation.
     let comments: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM feedback_comments c JOIN feedback f ON f.id = c.feedback_id \
-             WHERE f.project_id = ?1",
+            "SELECT COUNT(*) FROM overlay_conversations WHERE kind = 'ticket' AND project_id = ?1",
             [&pid],
             |r| r.get(0),
         )
-        .expect("count comments");
+        .expect("count ticket conversations");
     assert_eq!(comments, 0);
 }
 

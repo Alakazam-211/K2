@@ -274,6 +274,9 @@ pub mod thread_push;
 pub mod stale_hint;
 pub mod thread_attachments;
 pub mod ticket_attachments;
+// ticket-thread-v1 (0.46.17): one message on a ticket, from the ticket
+// route or a Thread post to `ticket:<id>`, under every ticket rule.
+pub(crate) mod ticket_comment;
 pub mod guest_paths;
 // `viewing` frames from the overlay WS: who looks at which Thread (S4).
 pub mod thread_viewers;

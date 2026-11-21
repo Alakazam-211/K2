@@ -27,6 +27,9 @@ mod ask_once;
 mod closed_cards;
 mod secret_delivery;
 mod card_meta;
+mod attachment_door;
+pub(crate) mod ticket_addr;
+use attachment_door::{handle_attachment_token, handle_get_attachment};
 use closed_cards::expired_or_not_pending;
 use system_notice::{post_not_taken_notice, post_system_line, refuse_system_notice_param};
 pub(crate) use system_notice::FEATURE_THREAD_SYSTEM_NOTICE;
@@ -192,6 +195,7 @@ fn require_skin_cap_in_resolved(
     let Some(pass) = request_skin() else {
         return Ok(());
     };
+    let cap = ticket_addr::cap_for(resolved, cap);
     if !pass.has_cap_in_room(&resolved.project_id, cap) {
         return Err(crate::skin_routes::missing_cap_response(cap));
     }
@@ -225,6 +229,9 @@ fn resolve_skin_thread_addr(addr: &str, pass: &SkinPass) -> Result<ResolvedOverl
     }
     if crate::grokbots_routes::is_gb_addr(addr) {
         return Err(gb_refused());
+    }
+    if let Some(r) = ticket_addr::resolve_for_pass(addr, pass) {
+        return r;
     }
     if k2_core::workspace_session_handles::split_workspace_handle(addr).is_some() {
         return Err(skin_room_denied());
@@ -570,6 +577,9 @@ fn resolve_addr(addr: &str) -> Result<ResolvedOverlay, CliResponse> {
     // card, Chatter, `thread/latest`) is refused: no wake, no inject.
     if crate::grokbots_routes::is_gb_addr(addr) {
         return Err(gb_refused());
+    }
+    if let Some(r) = ticket_addr::resolve(addr) {
+        return r;
     }
     // `vc:<agent>:<login>`: a Voice & Chat only login's own conversation
     // with an agent shared with it (security review H1).
@@ -1750,6 +1760,9 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
         Ok(r) => r,
         Err(e) => return e,
     };
+    if ticket_addr::is_ticket(&resolved) {
+        return ticket_addr::post(params, session_author, &resolved, client_msg_id, received_at);
+    }
     if let Some(r) = refuse_if_imported(&resolved, None) {
         return r;
     }
@@ -5385,53 +5398,6 @@ pub(crate) fn design_redeliver(
     })
 }
 
-/// `GET /cli/thread/attachment` (thread-attachments-v1): the Thread's own
-/// read gate (an App guest: its room's pinned Chat and `thread:read`),
-/// then `thread_attachments::handle_get` adds the viewer's file rights.
-/// Agent passports are refused: an agent reads its workspace's files from
-/// disk.
-fn handle_get_attachment(params: &HashMap<String, String>) -> CliResponse {
-    attachment_door(params, false)
-}
-
-/// `POST /cli/thread/attachment/token` (0.46.9): the attachment door's own
-/// read gate, then a download token (`thread_attachments::handle_token`).
-fn handle_attachment_token(params: &HashMap<String, String>) -> CliResponse {
-    attachment_door(params, true)
-}
-
-fn attachment_door(params: &HashMap<String, String>, token: bool) -> CliResponse {
-    let addr = opt_param(params, "addr")
-        .filter(|s| !s.trim().is_empty())
-        .or_else(|| opt_param(params, "conversationId"))
-        .unwrap_or_default();
-    if addr.trim().is_empty() {
-        return usage("missing addr (or conversationId)");
-    }
-    if crate::caller_workspace::principal_from_params(params).is_some() {
-        return forbidden("an agent reads attached files from disk; this door is for people");
-    }
-    let resolved = match resolve_thread_addr(&addr) {
-        Ok(r) => r,
-        Err(e) => return e,
-    };
-    // This route's refusals all carry a code (`cap_not_granted`, and the
-    // resolver's own `skin_room`), so a phone never string-matches.
-    if require_skin_cap_in_resolved(&resolved, k2_core::skin::CAP_THREAD_READ).is_err() {
-        return crate::thread_attachments::cap_refused(k2_core::skin::CAP_THREAD_READ);
-    }
-    let pass = request_skin();
-    let thread = crate::thread_attachments::ResolvedThread {
-        conversation_id: resolved.conversation_id.clone(),
-        project_id: resolved.project_id.clone(),
-    };
-    if token {
-        crate::thread_attachments::handle_token(params, &thread, pass.as_ref())
-    } else {
-        crate::thread_attachments::handle_get(params, &thread, pass.as_ref())
-    }
-}
-
 pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliResponse> {
     let resp = match path {
         "/cli/thread" => handle_get_thread(params),
@@ -5525,7 +5491,11 @@ pub fn dispatch_post_as(
             captured_bound,
         );
     }
-    match path {
+    if let Some(r) = ticket_addr::refuse_card_route(path, &params) {
+        return r;
+    }
+    let login = (!stamped && request_skin().is_none()).then(|| session_author.to_string());
+    ticket_addr::with_post_login(login, || match path {
         "/cli/thread/post" => handle_post(&params, session_author),
         "/cli/thread/ask" => ask_once::handle(path, &params, stamped, session_author),
         "/cli/thread/secret" => handle_secret(&params, session_author),
@@ -5538,7 +5508,7 @@ pub fn dispatch_post_as(
             handle_permission_card_route(path, &params, session_author)
         }
         _ => CliResponse::not_found(),
-    }
+    })
 }
 
 fn json_type_name(v: &serde_json::Value) -> &'static str {

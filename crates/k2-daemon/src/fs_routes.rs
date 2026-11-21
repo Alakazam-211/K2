@@ -249,7 +249,13 @@ pub fn handle_resolve_links(body: &[u8]) -> CliResponse {
     if token.is_empty() {
         return CliResponse::bad_request("missing 'workspace'");
     }
-    let Some(root) = crate::workspace_msg::resolve_workspace_allowing_handle(token) else {
+    // ticket-thread-v1: `ticket:<id>` names the ticket's workspace.
+    let ticket_root = match crate::overlay_routes::ticket_addr::workspace_of(token, None) {
+        Some(Ok((_, root))) => Some(root),
+        Some(Err(r)) => return r,
+        None => None,
+    };
+    let Some(root) = ticket_root.or_else(|| crate::workspace_msg::resolve_workspace_allowing_handle(token)) else {
         return CliResponse {
             status: "404 Not Found",
             content_type: "application/json",
@@ -282,9 +288,18 @@ pub fn handle_resolve_links_guest(body: &[u8], pass: &SkinPass) -> CliResponse {
         Ok(v) => v,
         Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
     };
-    let ws = match resolve_skin_workspace(pass, &parsed.workspace) {
-        Ok(w) => w,
-        Err(r) => return r,
+    // ticket-thread-v1: `ticket:<id>` names the ticket's room (with
+    // tickets:read there); files:read there still decides every link.
+    let ws = match crate::overlay_routes::ticket_addr::workspace_of(&parsed.workspace, Some(pass)) {
+        Some(Ok((project_id, _))) => match lookup_project(&project_id) {
+            Some((path, handle)) => SkinWorkspace { project_id, path, handle },
+            None => return crate::skin_routes::skin_room_response(),
+        },
+        Some(Err(r)) => return r,
+        None => match resolve_skin_workspace(pass, &parsed.workspace) {
+            Ok(w) => w,
+            Err(r) => return r,
+        },
     };
     if !pass.has_cap_in_room(&ws.project_id, crate::skin_routes::FILES_READ) {
         return crate::thread_attachments::cap_refused(crate::skin_routes::FILES_READ);

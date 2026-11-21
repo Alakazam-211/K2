@@ -81,11 +81,9 @@ async fn door(port: u16, token: &str, id: &str, comment: &str, n: usize, extra: 
     get(port, "/cli/feedback/attachment", token, &format!("id={}&commentId={}&n={n}&{extra}", enc(id), enc(comment))).await
 }
 
+/// The ticket's stored messages (0.46.17: its Thread, `ticket:<id>`).
 fn comment_count(id: &str) -> i64 {
-    let db = k2_core::db::shared();
-    let conn = db.lock();
-    conn.query_row("SELECT COUNT(*) FROM feedback_comments WHERE feedback_id = ?1", rusqlite::params![id], |r| r.get(0))
-        .unwrap()
+    k2_core::overlay::ticket::read_messages(id).expect("ticket Thread read").len() as i64
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -321,19 +319,36 @@ async fn ticket_files_store_show_open_and_refuse() {
     let r = door(port, OWNER, &id, &heic_comment, 0, "mode=thumb").await;
     assert_eq!((r.status, code_of(&r).as_str()), (415, "no_thumbnail"), "{}", r.body);
 
-    // ── old and corrupt rows ──────────────────────────────────────────
+    // ── old and corrupt rows (a ticket from before 0.46.17, its messages
+    // still in feedback_comments until the backfill moves it) ─────────
+    let old_id = uuid::Uuid::new_v4().to_string();
+    let old_comment = uuid::Uuid::new_v4().to_string();
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
         conn.execute(
-            "UPDATE feedback_comments SET attachments_json = '[{\"kind\":3' WHERE id = ?1",
-            rusqlite::params![agent_comment],
+            "INSERT INTO feedback (id, project_id, agent_name, kind, title, priority, status, created_at, updated_at) \
+             VALUES (?1, ?2, 'scout', 'question', 'old', 3, 'waiting', 1, 1)",
+            rusqlite::params![old_id, ws.id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO feedback_comments (id, feedback_id, author, body, created_at, attachments_json) \
+             VALUES (?1, ?2, 'scout', 'old files', 1, '[{\"kind\":3')",
+            rusqlite::params![old_comment, old_id],
         )
         .unwrap();
     }
-    let shown = show(port, OWNER, &id).await;
-    let row = shown["comments"].as_array().unwrap().iter().find(|c| c["id"] == agent_comment.as_str()).cloned().unwrap();
+    let shown = show(port, OWNER, &old_id).await;
+    let row = shown["comments"].as_array().unwrap().iter().find(|c| c["id"] == old_comment.as_str()).cloned().unwrap();
     assert!(row.get("attachments").is_none(), "corrupt JSON drops the files: {row}");
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::feedback_thread::move_ticket_with(&conn, &old_id).expect("the backfill moves it");
+    }
+    let moved = show(port, OWNER, &old_id).await;
+    assert_eq!(moved["comments"], shown["comments"], "the same comments after the move");
     let r = get(port, "/cli/feedback/list", OWNER, &format!("project={}&all=1", enc(&ws.path.to_string_lossy()))).await;
     assert_eq!(r.status, 200, "the list still reads: {}", r.body);
 

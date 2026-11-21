@@ -201,6 +201,8 @@ fn after_delete(
     }
     let from = card_actor_from(params, resolved, session_author);
     crate::thread_attachments::audit("thread.message.delete", &from, format!("to={} id={} seq={}", resolved.addr, d.doc.id, d.seq));
+    // ticket-thread-v1: a ticket's message leaves its counts and views.
+    super::ticket_addr::after_delete(resolved, before, &from);
     tell_the_agent(resolved, &from, before);
 }
 

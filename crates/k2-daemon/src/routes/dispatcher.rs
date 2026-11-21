@@ -2923,7 +2923,7 @@ async fn handle_one_request(
                 match super::http::extract_token(&query).and_then(crate::apps::gateway::resolve_pass)
                 {
                     Some(pass)
-                        if pass.dispatcher_admits_cap(crate::skin_routes::THREAD_READ) =>
+                        if pass.dispatcher_admits_any(&[crate::skin_routes::THREAD_READ, crate::skin_routes::TICKETS_READ]) =>
                     {
                         Some(pass)
                     }
@@ -9843,7 +9843,7 @@ async fn handle_one_request(
                     }
                     Some(pass)
                         if skin_thread_write
-                            && pass.dispatcher_admits_cap(crate::skin_routes::THREAD_POST) =>
+                            && pass.dispatcher_admits_any(&[crate::skin_routes::THREAD_POST, crate::skin_routes::TICKETS_POST]) =>
                     {
                         let name = pass.username.clone();
                         bound_skin = Some(pass);
@@ -15463,7 +15463,7 @@ async fn handle_one_request(
                 match super::http::extract_token(&query).and_then(crate::apps::gateway::resolve_pass)
                 {
                     Some(pass)
-                        if pass.dispatcher_admits_cap(crate::skin_routes::THREAD_READ) =>
+                        if pass.dispatcher_admits_any(&[crate::skin_routes::THREAD_READ, crate::skin_routes::TICKETS_READ]) =>
                     {
                         bound_skin = Some(pass);
                         (true, None)

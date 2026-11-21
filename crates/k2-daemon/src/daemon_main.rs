@@ -1758,6 +1758,11 @@ async fn async_main() {
     // written before this build (one background thread, after `ready`;
     // counts are exact before it finishes, only slower).
     k2_core::overlay::spawn_doc_meta_backfill();
+    // ticket-thread-v1 (0.46.17): tickets filed before this build move
+    // their messages into their Thread (`ticket:<id>`), resumable, one
+    // background thread; then the daily sweep of ticket conversations whose
+    // ticket is gone. Old tickets read their old rows meanwhile.
+    k2_core::feedback_thread::spawn_backfill_and_sweep();
     // P44: adopted sessions' cell sockets accept only from here on.
     crate::ptyd_adopt::serve_adopted_cells();
 

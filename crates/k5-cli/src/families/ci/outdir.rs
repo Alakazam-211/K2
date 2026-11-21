@@ -96,7 +96,11 @@ fn names(v: &Value, verb: &str) -> Vec<(&'static str, Text, String)> {
             if let Value::Str(body) = member(one, "body") {
                 let sum = crate::families::fed::pubkey::sha256(text(&body).as_bytes());
                 let hex: String = sum.iter().map(|x| format!("{x:02x}")).collect();
-                got.push(("path", Text::from(""), format!("trust/statements/{hex}.json")));
+                got.push((
+                    "path",
+                    Text::from(""),
+                    format!("trust/statements/{hex}.json"),
+                ));
             }
         }
     }
@@ -329,7 +333,12 @@ mod at {
         let mut st: libc::stat = unsafe { std::mem::zeroed() };
         // SAFETY: the folder descriptor and C string live through the call.
         let rc = unsafe {
-            libc::fstatat(d.as_raw_fd(), c.as_ptr(), &mut st, libc::AT_SYMLINK_NOFOLLOW)
+            libc::fstatat(
+                d.as_raw_fd(),
+                c.as_ptr(),
+                &mut st,
+                libc::AT_SYMLINK_NOFOLLOW,
+            )
         };
         if rc == 0 {
             if (st.st_mode & libc::S_IFMT) == libc::S_IFREG {

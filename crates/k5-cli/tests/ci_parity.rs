@@ -1029,7 +1029,8 @@ fn check_refused(rig: &Rig, c: &Case, dir: &str) {
         rig.read(side, !bash, c.name);
         assert_eq!(out.code, Some(3), "{} ({side:?}): {out:?}", c.name);
         assert!(
-            out.stderr.starts_with("{\"error\": \"ci_name_unsafe\", \"hint\": "),
+            out.stderr
+                .starts_with("{\"error\": \"ci_name_unsafe\", \"hint\": "),
             "{} ({side:?}): {out:?}",
             c.name
         );
@@ -1108,7 +1109,9 @@ fn ci_names_from_the_answer_are_checked_before_any_write() {
                 "provenance: a statement label with a .. part",
                 &["provenance", "r1", "--out", "na3"],
                 &[],
-                vec![ok(&format!(r#"{{"short":"r1","statements":{{"../x":{line}}}}}"#))],
+                vec![ok(&format!(
+                    r#"{{"short":"r1","statements":{{"../x":{line}}}}}"#
+                ))],
                 owner_and_port,
                 3,
                 1,
@@ -1134,7 +1137,9 @@ fn ci_names_from_the_answer_are_checked_before_any_write() {
                 "evidence: a receipt label ..",
                 &["evidence", "r9", "--out", "na5", "--no-files"],
                 &[],
-                vec![ok(r#"{"short":"r9","file":"e.json","bundle":{"receipts":{"..":{"job":"j1"}}}}"#)],
+                vec![ok(
+                    r#"{"short":"r9","file":"e.json","bundle":{"receipts":{"..":{"job":"j1"}}}}"#,
+                )],
                 owner_and_port,
                 3,
                 1,
@@ -1146,7 +1151,9 @@ fn ci_names_from_the_answer_are_checked_before_any_write() {
                 "provenance: a label with a newline",
                 &["provenance", "r1", "--out", "na6"],
                 &[],
-                vec![ok(&format!(r#"{{"short":"r1","statements":{{"a\nb":{line}}}}}"#))],
+                vec![ok(&format!(
+                    r#"{{"short":"r1","statements":{{"a\nb":{line}}}}}"#
+                ))],
                 owner_and_port,
                 3,
                 1,
@@ -1158,7 +1165,9 @@ fn ci_names_from_the_answer_are_checked_before_any_write() {
                 "provenance: a node key with a NUL",
                 &["provenance", "r1", "--out", "na7"],
                 &[],
-                vec![ok(r#"{"short":"r1","trust":{"nodeKeys":{"a\u0000b":{"pem":"P"}}}}"#)],
+                vec![ok(
+                    r#"{"short":"r1","trust":{"nodeKeys":{"a\u0000b":{"pem":"P"}}}}"#,
+                )],
                 owner_and_port,
                 3,
                 1,
@@ -1184,7 +1193,9 @@ fn ci_names_from_the_answer_are_checked_before_any_write() {
                 "provenance: a linked folder inside --out",
                 &["provenance", "r1", "--out", "nl1"],
                 &[],
-                vec![ok(r#"{"short":"r1","trust":{"nodeKeys":{"fp1":{"pem":"P"}}}}"#)],
+                vec![ok(
+                    r#"{"short":"r1","trust":{"nodeKeys":{"fp1":{"pem":"P"}}}}"#,
+                )],
                 linked_folder,
                 3,
                 1,
@@ -1213,7 +1224,9 @@ fn ci_names_from_the_answer_are_checked_before_any_write() {
         "the linked file's target"
     );
     assert_eq!(
-        std::fs::read_dir(rig.proj.join("elsewhere")).unwrap().count(),
+        std::fs::read_dir(rig.proj.join("elsewhere"))
+            .unwrap()
+            .count(),
         0,
         "nothing in the linked folder's target"
     );

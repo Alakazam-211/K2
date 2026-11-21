@@ -155,10 +155,17 @@ async fn a_ticket_thread_post_keeps_every_ticket_rule() {
     let s = show(port, OWNER, &id).await;
     assert_eq!((s["status"].clone(), s["answer"].clone()), (json!("answered"), json!("Yes")), "{s}");
 
-    // Free text reopens a resolved ticket.
+    let pick_keys: Vec<String> = r.json()["ticket"].as_object().expect("ticket on an option pick").keys().cloned().collect();
+
+    // Free text reopens a resolved ticket, and its answer carries the same
+    // `ticket` object as an option pick's.
     owner_ok(port, "/cli/feedback/resolve", json!({ "id": id })).await;
     let r = post(port, "/cli/thread/post", OWNER, json!({ "addr": addr, "text": "One more thing" })).await;
-    assert_eq!(r.json()["ticket"]["status"], "needs_discussion", "{}", r.body);
+    let t = r.json()["ticket"].clone();
+    assert_eq!((t["id"].clone(), t["status"].clone(), t["answered"].clone()), (json!(id), json!("needs_discussion"), json!(false)), "{}", r.body);
+    assert_eq!(t["delivered"].is_boolean(), true, "a person's free text is delivered: {t}");
+    let text_keys: Vec<String> = t.as_object().expect("ticket on free text").keys().cloned().collect();
+    assert_eq!(text_keys, pick_keys, "free text and an option pick answer the same ticket keys");
 
     // An agent's own post: stored only, no status move, no delivery.
     let agent = passport(&ws);
@@ -355,6 +362,58 @@ async fn a_ticket_thread_streams_on_the_tickets_rights() {
     let notice_conv = format!("ticket:{}", notice.id);
     assert!(tokio_tungstenite::connect_async(&overlay_url(port, &notice_conv, &member_tok)).await.is_err(), "a Member never watches a notice");
     assert!(tokio_tungstenite::connect_async(&overlay_url(port, &conv, &member_tok)).await.is_ok(), "a Member watches an ordinary ticket");
+}
+
+/// Set a ticket's `updated_at` back to 0, so the next change must move it
+/// (changes inside one second would otherwise look like none).
+fn rewind_updated(id: &str) {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.execute("UPDATE feedback SET updated_at = 0 WHERE id = ?1", rusqlite::params![id]).unwrap();
+}
+
+async fn list_updated(port: u16, ws: &Ws, id: &str) -> i64 {
+    let r = get(port, "/cli/feedback/list", OWNER, &format!("project={}&all=1", enc(&ws.path.to_string_lossy()))).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let v = r.json();
+    let row = v["items"].as_array().unwrap().iter().find(|i| i["id"] == id).cloned().unwrap_or_else(|| panic!("ticket in the list: {v}"));
+    row["updatedAt"].as_i64().unwrap_or_else(|| panic!("updatedAt on the row: {row}"))
+}
+
+/// Bite: the list row's `updatedAt` moves on EVERY ticket change (a Thread
+/// post, a ticket comment, a file, an option pick, a status change, a
+/// resolve, an assign, a delete), so a header updates without a refetch.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn every_ticket_change_moves_updated_at() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let tag = &uuid::Uuid::new_v4().to_string()[..6];
+    let ws = seed_ws(&env, &format!("ttu{tag}"));
+    write(&ws.path, "f.md", b"f\n");
+    let id = create(port, &ws, "Moves?").await;
+    let addr = format!("ticket:{id}");
+
+    let mut deleted_id = String::new();
+    for step in ["thread post", "ticket comment", "file", "option pick", "status", "resolve", "assign", "delete"] {
+        rewind_updated(&id);
+        assert_eq!(list_updated(port, &ws, &id).await, 0, "{step}: rewound");
+        let r = match step {
+            "thread post" => post(port, "/cli/thread/post", OWNER, json!({ "addr": addr, "text": "words", "via": "compose" })).await,
+            "ticket comment" => post(port, "/cli/feedback/comment", OWNER, json!({ "id": id, "body": "agent words", "author": "agent-a" })).await,
+            "file" => post(port, "/cli/thread/post", OWNER, json!({ "addr": addr, "text": "", "attachments": [{ "path": "f.md" }] })).await,
+            "option pick" => post(port, "/cli/thread/post", OWNER, json!({ "addr": addr, "text": "Yes", "optionPick": true })).await,
+            "status" => post(port, "/cli/feedback/resolve", OWNER, json!({ "id": id, "status": "planned" })).await,
+            "resolve" => post(port, "/cli/feedback/resolve", OWNER, json!({ "id": id })).await,
+            "assign" => post(port, "/cli/feedback/assign", OWNER, json!({ "id": id, "usernames": ["owner"] })).await,
+            _ => post(port, "/cli/thread/message/delete", OWNER, json!({ "addr": addr, "id": deleted_id })).await,
+        };
+        assert_eq!(r.status, 200, "{step}: {}", r.body);
+        if step == "thread post" {
+            deleted_id = r.json()["id"].as_str().unwrap().to_string();
+        }
+        assert!(list_updated(port, &ws, &id).await > 0, "{step} moves updatedAt");
+    }
 }
 
 fn rollback_copy(comment_id: &str) -> Option<String> {

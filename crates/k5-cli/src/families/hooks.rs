@@ -17,9 +17,9 @@
 //!    `cli_post_json /cli/hooks/install` over TCP with `{}` or
 //!    `{"remove":true}`. Other words are skipped.
 //! 4. The answer as the shell holds it in `raw=$(…)`: NULs and trailing
-//!    newlines dropped. `--json` echoes it; for `install` and `uninstall`
-//!    an answer with an `error` key then exits 1, or 3 with a `permission`
-//!    object (`_hooks_answer_error quiet`, [`answer_error`]). Otherwise
+//!    newlines dropped. `--json` echoes it; an answer with an `error` key
+//!    then exits 1, or 3 with a `permission` object (`_hooks_answer_error
+//!    quiet`, [`answer_error`]). Otherwise
 //!    the shell's Python renders it. `status` first: an `error` key is
 //!    `Error: <the error>` on stderr and exit 1, or 3
 //!    (`_hooks_answer_error say`); else its reader ([`status_text`]) has
@@ -215,10 +215,8 @@ fn send(args: &[OsString], ask: Ask, settings: Settings) -> Exit {
             while raw.last() == Some(&b'\n') {
                 raw.pop();
             }
-            // An error line that is empty prints nothing (install --json).
-            let (text, error) = if json && status {
-                (echo(&raw), None)
-            } else if json {
+            // An error line that is empty prints nothing (--json).
+            let (text, error) = if json {
                 let quiet = answer_error(&raw).map(|(_, exit)| (String::new(), exit));
                 (echo(&raw), quiet)
             } else if status {
@@ -732,6 +730,7 @@ mod tests {
             r#"" || rc=$?"#,
             r#"printf '%s' "$raw" | _hooks_answer_error say || erc=$?"#,
             r#"printf '%s' "$raw" | _hooks_answer_error quiet || jrc=$?"#,
+            r#"it exited 0 whatever the answer was), as hooks install --json does."#,
             r#"if not isinstance(data, dict) or "error" not in data:"#,
             r#"    err = err.get("hint") or err.get("code")"#,
         ] {

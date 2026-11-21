@@ -11,7 +11,8 @@
 //!   reader's lines for a bare answer, a full one, each section's odd
 //!   shapes, and where the reader raises: what it printed, then the raw
 //!   answer, exit 0; an `error` key: its `Error:` line, exit 1, or 3 with
-//!   a `permission` object. One answer above 256 KiB.
+//!   a `permission` object (with `--json`: the answer as it came, and the
+//!   same exit). One answer above 256 KiB.
 //! - `install` and `uninstall`: the body, the reader's lines (a report,
 //!   skipped, an `error` key: its `Error:` line, exit 1, or 3 with a
 //!   `permission` object), `--json` (as it came; an `error` key exits 1,
@@ -266,10 +267,23 @@ fn hooks_status_as_the_shell_does() {
             3,
             1,
         ),
-        one(
-            "--json: an error answer as it came",
+        case(
+            "--json: an error answer as it came, exit 1",
             &["status", "--json"],
-            r#"{"error":"boom"}"#,
+            &[],
+            vec![ok(r#"{"error":"boom"}"#)],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "--json: a refusal as it came, Ask with, exit 3",
+            &["status", "--limit", "5", "--json"],
+            &[],
+            vec![Reply::Answer(403, PERMISSION_ASK.into())],
+            owner_and_port,
+            3,
+            1,
         ),
         case(
             "a reset",

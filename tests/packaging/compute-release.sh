@@ -114,6 +114,11 @@ cat > "$tmp/bin/k2" <<'STUB'
 set -euo pipefail
 echo "k2 $*" >> "$STUB_CALLS"
 S="$STUB_DIR"
+if [ "${1:-} ${2:-} ${3:-}" = "workspace list --json" ]; then
+    [ "${STUB_WS_FAIL:-0}" = 1 ] && { echo "stub k2: daemon down" >&2; exit 1; }
+    if [ -n "${STUB_WS_FILE:-}" ]; then cat "$STUB_WS_FILE"; else echo '{"ok": true, "workspaces": []}'; fi
+    exit 0
+fi
 [ "$1" = "compute" ] || { echo "stub k2: only compute" >&2; exit 2; }
 shift
 verb="$1"; shift
@@ -426,9 +431,9 @@ run_arm() {
 export K2_COMPUTE_ARM=compute
 out="$(run_arm arm)"
 [ "$out" = "0 1 1 1" ] && pass "five jobs submitted, x86_64 and aarch64 both verified" || fail "arm happy path" "$out $(cat "$tmp/arm.submit" "$tmp/arm.collect")"
-[ "$(cut -f1,3,5 "$tmp/arm/jobs.tsv" | tr '\t\n' ': ')" = "L1:k2n7-vin:x86_64 L3:k2n8-vin:x86_64 V1:k2n9-vin:x86_64 L2:k2n10-vin:aarch64 V2:k2n11-vin:aarch64 " ] \
-    && pass "L2 on k2n10-vin, V2 on k2n11-vin (the defaults)" || fail "arm jobs.tsv" "$(cat "$tmp/arm/jobs.tsv")"
-for lab_node in k2n10-vin k2n11-vin; do
+[ "$(cut -f1,3,5 "$tmp/arm/jobs.tsv" | tr '\t\n' ': ')" = "L1:k2n7-vin:x86_64 L3:k2n8-vin:x86_64 V1:k2n9-vin:x86_64 L2:k2n10-vin:aarch64 V2:k2n12-vin:aarch64 " ] \
+    && pass "L2 on k2n10-vin, V2 on k2n12-vin (the defaults)" || fail "arm jobs.tsv" "$(cat "$tmp/arm/jobs.tsv")"
+for lab_node in k2n10-vin k2n12-vin; do
     line="$(grep -m1 "k2 compute run $lab_node " "$tmp/calls-arm" || true)"
     for want in "--needs cmake@3,sys:pkg-config,sys:zlib1g-dev " "--exclusive --why " \
         "--secret K2_GMAIL_CLIENT_ID=BUILD_GMAIL_CLIENT_ID" "--env BUILD_COMMIT=$COMMIT_ARM" "--cpus 8 " "--mem 32G " "-- bash scripts/ci/build-linux-bins.sh aarch64"; do
@@ -439,7 +444,7 @@ for lab_node in k2n10-vin k2n11-vin; do
     [[ "$line" != *"zig@"* ]] && [[ "$line" != *"cargo-zigbuild@"* ]] \
         && pass "$lab_node: zig and cargo-zigbuild don't come from --needs (the build fetches them hash-pinned)" || fail "$lab_node unpinned tools" "$line"
 done
-grep -q 'L2 on k2n10-vin and V2 on k2n11-vin: two nodes' "$tmp/arm.collect" && grep -q 'identical in both builds: .*k2-daemon-linux-aarch64' "$tmp/arm.collect" \
+grep -q 'L2 on k2n10-vin and V2 on k2n12-vin: two nodes' "$tmp/arm.collect" && grep -q 'identical in both builds: .*k2-daemon-linux-aarch64' "$tmp/arm.collect" \
     && pass "collect: V2 came from another node key and matches L2's daemon, root helper, node and engine" || fail "arm dual" "$(cat "$tmp/arm.collect")"
 python3 - "$tmp/arm-dist" "$tmp/arm/staged.txt" <<'PYS' && pass "staged: both arches' binaries + .sha256, and the x86_64 packages" || fail "arm staged set" "$(ls "$tmp/arm-dist")"
 import os, sys
@@ -452,7 +457,7 @@ PYS
 # V2 builds other bytes: the stub's 5th run (V2) gets a salted daemon.
 cat > "$tmp/salt-v2.sh" <<'SALT'
 k2cr_k2() {
-    if [ "${1:-} ${2:-} ${3:-}" = "compute run k2n11-vin" ]; then GEN_DAEMON_SALT=other "${K2_BIN:-k2}" "$@"; else "${K2_BIN:-k2}" "$@"; fi
+    if [ "${1:-} ${2:-} ${3:-}" = "compute run k2n12-vin" ]; then GEN_DAEMON_SALT=other "${K2_BIN:-k2}" "$@"; else "${K2_BIN:-k2}" "$@"; fi
 }
 SALT
 out="$(run_arm arm-v2diff "source '$tmp/salt-v2.sh'")"
@@ -555,7 +560,7 @@ export K2_COMPUTE_NODE=k2n10-vin
 rc="$(run_case one-node)"
 [ "$rc" = 0 ] && [ "$(grep -c 'k2 compute run k2n10-vin ' "$tmp/calls-one-node")" = 2 ] \
     && pass "K2_COMPUTE_NODE moves L1 and L3 together (k2n10-vin is a release node)" || fail "K2_COMPUTE_NODE" "rc=$rc $(cat "$tmp/calls-one-node")"
-export K2_COMPUTE_X86_NODE=k2n9-vin K2_COMPUTE_VERIFY_NODE=k2n11-vin
+export K2_COMPUTE_X86_NODE=k2n9-vin K2_COMPUTE_VERIFY_NODE=k2n12-vin
 rc="$(run_case split-node)"
 grep -q 'k2 compute run k2n9-vin .*build-linux-bins.sh' "$tmp/calls-split-node" && grep -q 'k2 compute run k2n10-vin .*build-linux-app.sh' "$tmp/calls-split-node" \
     && pass "K2_COMPUTE_X86_NODE beats K2_COMPUTE_NODE for L1 only" || fail "per-job node" "$(cat "$tmp/calls-split-node")"
@@ -609,11 +614,38 @@ unset K2_COMPUTE_QUEUE_TIMEOUT K2_COMPUTE_CPUS
 for gone in k2n4-vin k2n5-vin k2n6-hil; do
     export K2_COMPUTE_X86_NODE="$gone"; check_tamper "t-gone-$gone" "$gone (gone) is not a release node" "not a release node"
 done
-# k2-arch is Arch (pacman, no apt sys: packages) and k2n12 is the fuzz node.
-for notrel in k2-arch k2n12-vin; do
+# k2-arch is Arch (pacman, no apt sys: packages) and k2n11 is not ours for releases.
+for notrel in k2-arch k2n11-vin; do
     export K2_COMPUTE_X86_NODE="$notrel"; check_tamper "t-notrel-$notrel" "$notrel is not a release node" "not a release node"
 done
 unset K2_COMPUTE_X86_NODE
+
+echo "K2_COMPUTE_WORKSPACE must be this checkout's own workspace (a handle is per server):"
+ws_file="$tmp/workspaces.json"
+python3 -c 'import json,sys; json.dump({"ok": True, "workspaces": [{"handle": "rel-a", "path": sys.argv[1]}, {"handle": "rel-b", "path": sys.argv[2]}]}, open(sys.argv[3], "w"))' \
+    "$repo" "$tmp/elsewhere" "$ws_file"
+export STUB_WS_FILE="$ws_file"
+rc="$(run_case ws-unset)"
+[ "$rc" = 0 ] && ! grep -q 'k2 workspace list' "$tmp/calls-ws-unset" && ! grep -q -- '--workspace' "$tmp/calls-ws-unset" \
+    && pass "unset: no workspace lookup and no --workspace" || fail "ws unset" "rc=$rc $(cat "$tmp/calls-ws-unset")"
+export K2_COMPUTE_WORKSPACE=rel-a
+rc="$(run_case ws-own)"
+[ "$rc" = 0 ] && [ "$(grep -c -- '--workspace rel-a ' "$tmp/calls-ws-own")" = "$(grep -c 'k2 compute run' "$tmp/calls-ws-own")" ] \
+    && [ "$(grep -c 'k2 compute run' "$tmp/calls-ws-own")" -ge 3 ] \
+    && pass "the checkout's own handle: every job goes with --workspace rel-a" || fail "ws own" "rc=$rc $(cat "$tmp/ws-own.submit" "$tmp/calls-ws-own")"
+export K2_COMPUTE_WORKSPACE=rel-b
+rc="$(run_case ws-other)"
+grep -q "K2_COMPUTE_WORKSPACE=rel-b is the workspace at $tmp/elsewhere, not this checkout" "$tmp/ws-other.submit" && ! grep -q 'k2 compute run' "$tmp/calls-ws-other" \
+    && pass "another folder's handle: refused before anything is submitted" || fail "ws other" "$(cat "$tmp/ws-other.submit" "$tmp/calls-ws-other")"
+export K2_COMPUTE_WORKSPACE=pod-leader
+rc="$(run_case ws-none)"
+grep -q 'K2_COMPUTE_WORKSPACE=pod-leader: no workspace has that handle on this server' "$tmp/ws-none.submit" && ! grep -q 'k2 compute run' "$tmp/calls-ws-none" \
+    && pass "a handle this server doesn't have: refused" || fail "ws none" "$(cat "$tmp/ws-none.submit" "$tmp/calls-ws-none")"
+export K2_COMPUTE_WORKSPACE=rel-a STUB_WS_FAIL=1
+rc="$(run_case ws-down)"
+grep -q "can't read the workspace list" "$tmp/ws-down.submit" && ! grep -q 'k2 compute run' "$tmp/calls-ws-down" \
+    && pass "the workspace list can't be read: refused, not skipped" || fail "ws down" "$(cat "$tmp/ws-down.submit" "$tmp/calls-ws-down")"
+unset K2_COMPUTE_WORKSPACE STUB_WS_FAIL STUB_WS_FILE
 
 echo "--shadow-only <sha> (dry run: submit, fetch, verify; nothing else):"
 repo2="$tmp/repo2"

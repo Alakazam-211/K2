@@ -257,7 +257,7 @@ otherwise it takes the GitHub path. The
 full rule list is in `docs/ci-on-k2-compute.md` ("Signing").
 
 Default nodes: L1 k2n7-vin, V1 k2n9-vin, L3 k2n8-vin, L2 k2n10-vin, V2
-k2n11-vin (`scripts/lib/compute-release.sh`). Every node below is pinned and
+k2n12-vin (`scripts/lib/compute-release.sh`). Every node below is pinned and
 granted; one that isn't makes release.sh fall back to GitHub for its arch,
 with a banner (never silently).
 
@@ -279,8 +279,14 @@ the value (nothing is shown), then press Enter. The values are in the
 checkout's `.env` (`K2_GMAIL_CLIENT_ID=…`, `K2_GMAIL_CLIENT_SECRET=…`): open
 it in an editor, don't `cat` it.
 
+`WS` is the release checkout's own workspace handle. It is per server, so
+don't assume it: on z3mbpZ it is `pod-leader-4`, and plain `pod-leader`
+there is a different workspace. The first line below reads it from the
+workspace whose folder is this checkout; check that it prints the handle you
+expect (and not `WS=`) before you paste the rest.
+
 ```
-WS=pod-leader
+WS="$(k2 workspace list --json | python3 -c 'import json,os,sys; t=os.path.realpath(sys.argv[1]); print(next((w["handle"] for w in json.load(sys.stdin)["workspaces"] if os.path.realpath(w.get("path") or "") == t), ""))' "$(git rev-parse --show-toplevel)")"; echo "WS=$WS"
 printf 'Gmail client id: '; read -rs V; echo; printf %s "$V" | k2 vault set K2_GMAIL_CLIENT_ID --scope "ws:$WS" --kind generic --delivery env; unset V
 printf 'Gmail client secret: '; read -rs V; echo; printf %s "$V" | k2 vault set K2_GMAIL_CLIENT_SECRET --scope "ws:$WS" --kind generic --delivery env; unset V
 ```
@@ -289,8 +295,8 @@ Then share both with each release node, as the env names the build reads
 (each grant asks for Touch ID or the vault password):
 
 ```
-WS=pod-leader
-for N in k2n7-vin k2n9-vin k2n10-vin k2n11-vin; do
+# WS as set above (this checkout's own handle; echo "$WS" to check)
+for N in k2n7-vin k2n9-vin k2n10-vin k2n12-vin; do
   k2 vault grant K2_GMAIL_CLIENT_ID --scope "ws:$WS" --to "compute:$WS/$N" --as env --env-name BUILD_GMAIL_CLIENT_ID
   k2 vault grant K2_GMAIL_CLIENT_SECRET --scope "ws:$WS" --to "compute:$WS/$N" --as env --env-name BUILD_GMAIL_CLIENT_SECRET
 done
@@ -301,7 +307,7 @@ done
 isn't left on the clipboard.
 
 **3. On each release node, at its own console** (k2n7-vin = L1,
-k2n9-vin = V1, k2n10-vin = L2, k2n11-vin = V2; k2n8-vin too if it may stand
+k2n9-vin = V1, k2n10-vin = L2, k2n12-vin = V2; k2n8-vin too if it may stand
 in): its keyboard and screen,
 or ssh from a machine that is **not** z3mbpZ. Never copy these numbers from
 `k2 compute nodes` or anything else on z3mbpZ: the pins guard against
@@ -327,14 +333,14 @@ Check:
   (`z3thon.k2.dev`) is a tenant on the Ryzens, whose owner server is
   rosson.k2.dev, and its share there has `exclusive: false` (11-07). On
   rosson.k2.dev, from a terminal outside K2:
-  `for N in k2n7-vin k2n8-vin k2n9-vin k2n10-vin k2n11-vin; do k2 compute node servers "$N" limits z3thon.k2.dev exclusive=true; done`
+  `for N in k2n7-vin k2n8-vin k2n9-vin k2n10-vin k2n12-vin; do k2 compute node servers "$N" limits z3thon.k2.dev exclusive=true; done`
   Each is a widening, so it is held: approve each with
   `k2 compute node admin approve <id>` (Touch ID or the vault password;
   `k2 compute node admin list` lists the ids), or Settings → Compute →
   Approvals. An agent may file these but never approve them. On z3mbpZ,
-  pod-leader's grants need `--ci` (they already do if `--tier ci` jobs
-  run); only z3mbpZ's owner sets that:
-  `k2 compute grant <node> --workspace pod-leader --ci`.
+  the release checkout's workspace (`$WS` from step 2) needs grants with
+  `--ci` (they already do if `--tier ci` jobs run); only z3mbpZ's owner
+  sets that: `k2 compute grant <node> --workspace "$WS" --ci`.
 
 **4. The controller pin** (back at z3mbpZ). Root reads this Mac's K2 key and
 refuses a fingerprint that isn't its own:
@@ -348,7 +354,7 @@ nothing is tagged, signed or published):
 
 ```
 SHA="$(git rev-parse HEAD)"; A="$HOME/k2-release-audit/shadow-$(printf %s "$SHA" | cut -c1-12)/compute"
-K2_COMPUTE_WORKSPACE=pod-leader bash scripts/lib/compute-release.sh --shadow-only "$SHA"
+K2_COMPUTE_WORKSPACE="${WS:?set WS as in step 2}" bash scripts/lib/compute-release.sh --shadow-only "$SHA"
 python3 -c 'import json,sys; [print(l, "missing:", [k for k in ("body", "plan", "node_public_key_pem") if k not in json.load(open(sys.argv[1] + "/" + l + "/receipt.json"))] or "none") for l in ("L1", "V1", "L2", "V2")]' "$A"
 ```
 
@@ -366,11 +372,11 @@ mkdir -p ~/k2-pins
 python3 -c 'import json,sys; sys.stdout.write(json.load(open(sys.argv[1]))["node_public_key_pem"])' "$A/L1/receipt.json" > ~/k2-pins/k2n7-vin.pem
 python3 -c 'import json,sys; sys.stdout.write(json.load(open(sys.argv[1]))["node_public_key_pem"])' "$A/V1/receipt.json" > ~/k2-pins/k2n9-vin.pem
 python3 -c 'import json,sys; sys.stdout.write(json.load(open(sys.argv[1]))["node_public_key_pem"])' "$A/L2/receipt.json" > ~/k2-pins/k2n10-vin.pem
-python3 -c 'import json,sys; sys.stdout.write(json.load(open(sys.argv[1]))["node_public_key_pem"])' "$A/V2/receipt.json" > ~/k2-pins/k2n11-vin.pem
+python3 -c 'import json,sys; sys.stdout.write(json.load(open(sys.argv[1]))["node_public_key_pem"])' "$A/V2/receipt.json" > ~/k2-pins/k2n12-vin.pem
 sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-node k2n7-vin "$HOME/k2-pins/k2n7-vin.pem" <k2n7-vin's node_fp from step 3>
 sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-node k2n9-vin "$HOME/k2-pins/k2n9-vin.pem" <k2n9-vin's node_fp from step 3>
 sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-node k2n10-vin "$HOME/k2-pins/k2n10-vin.pem" <k2n10-vin's node_fp from step 3>
-sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-node k2n11-vin "$HOME/k2-pins/k2n11-vin.pem" <k2n11-vin's node_fp from step 3>
+sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-node k2n12-vin "$HOME/k2-pins/k2n12-vin.pem" <k2n12-vin's node_fp from step 3>
 ```
 
 **7. Check the pins:**
@@ -380,7 +386,7 @@ sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-node k2n11-vin "$HOME/k2
 ```
 
 It lists the controller from step 4 and k2n7-vin, k2n9-vin, k2n10-vin and
-k2n11-vin with the fingerprints you wrote down.
+k2n12-vin with the fingerprints you wrote down.
 
 **8. A dry signing pass** (this commit's signer, with throwaway keys in a
 temp dir, as you; no sudo; needs `minisign` 0.11+ from Homebrew). It must
@@ -399,7 +405,7 @@ python3 scripts/ci/compute_release.py evidence-bundle --state "$A" --git . --arc
 (cd / && sudo -n -u _k2sign /usr/local/libexec/k2sign/k2sign compute-rehearse) < /tmp/k2-rehearse.json
 ```
 
-It must print `rehearsal passed: L1 on k2n7-vin; V1 on k2n9-vin; L2 on k2n10-vin; V2 on k2n11-vin …`.
+It must print `rehearsal passed: L1 on k2n7-vin; V1 on k2n9-vin; L2 on k2n10-vin; V2 on k2n12-vin …`.
 Then the same with V1's receipt tampered (one byte of its signed body),
 which must be refused (exit 3, `V1: the receipt's signature does not
 verify with node k2n9-vin's pinned key`):

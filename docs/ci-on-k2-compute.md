@@ -243,7 +243,7 @@ Rust). L is a Linux build, V the verify build:
 | L3 | k2n8-vin | `scripts/ci/build-linux-app.sh`: deb, rpm and AppImage. The app links the native voice stack (on by default since 0.46.9), so the job asks for `sys:libasound2-dev` and `--mem 24G` (a release link needs at least 20G) |
 | V1 | k2n9-vin | the same as L1, a second time on another node (never L1's: submit refuses it in every mode) |
 | L2 | k2n10-vin | `scripts/ci/build-linux-bins.sh aarch64`: the aarch64 set, cross-compiled on the x86_64 node with zig (`cargo zigbuild`, glibc 2.28 floor). zig (its release tarball) and cargo-zigbuild (its crates.io source, built `--locked`) are fetched by the build and refused unless their sha256 is the one `scripts/ci/cross-pins.sh` pins; `build-info.json` records both hashes. No `rust@` need, so the node installs `rust-toolchain.toml`'s channel and its `aarch64-unknown-linux-gnu` target (a job can't add a target itself) |
-| V2 | k2n11-vin | the same as L2 on another node; must equal L2 byte for byte (never L2's node) |
+| V2 | k2n12-vin | the same as L2 on another node; must equal L2 byte for byte (never L2's node) |
 
 `K2_COMPUTE_X86_NODE`, `K2_COMPUTE_APP_NODE` and `K2_COMPUTE_VERIFY_NODE`
 change the nodes (`K2_COMPUTE_NODE` moves L1 and L3 together; never onto
@@ -271,7 +271,7 @@ they never land on k2-arch.
 - it ended done, with exit 0;
 - the controller verified its receipt;
 - it ran on a release node (`K2_COMPUTE_RELEASE_NODES`, default
-  k2n7-vin to k2n11-vin: the Debian Ryzens; not k2-arch, not k2n12);
+  k2n7-vin to k2n10-vin and k2n12-vin: Debian Ryzens; not k2-arch, not k2n11);
 - the receipt's commit and tree are C's, with nothing uncommitted;
 - argv and `argv_sha256` match the command that was sent;
 - every fetched byte matches the signed receipt and `build-info.json`;
@@ -289,7 +289,7 @@ boxes, and the daemon is the file the signing user signs from compute
 
 **Running a compute release.** Before the first one:
 - the release checkout's workspace on z3mbpZ (`pod-leader`) needs grants
-  with `--ci` on k2n7-vin to k2n11-vin (`--ci` also allows
+  with `--ci` on k2n7-vin to k2n10-vin and k2n12-vin (`--ci` also allows
   `--exclusive`; on a node z3mbpZ shares, its share needs `exclusive`);
 - each release node has `kernel.yama.ptrace_scope >= 1`;
 - the OAuth vault grants below exist (L1, V1, L2 and V2's nodes);
@@ -468,11 +468,11 @@ or GUI shell on z3mbpZ. Nothing here needs a GitHub runner.
    (release.sh Step 0.4 also does this).
 2. Grant the release workspace the Linux nodes, with CI (owner):
    `for n in k2n7-vin k2n8-vin k2n9-vin k2n10-vin; do k2 compute grant $n --workspace pod-leader --ci --max-time 2h --max-parallel 3 --max-queued 20 --max-disk 200G; done`
-   Don't grant it k2-arch or k2n12-vin. `k2 compute nodes` (from the
+   Don't grant it k2-arch or k2n11-vin. `k2 compute nodes` (from the
    release checkout) must list them.
 
 3. Node packages (K2 Web, on every CI and release node, k2n7-vin to
-   k2n11-vin): the `sys:` packages the jobs ask for must be approved, or
+   k2n10-vin, and k2n12-vin for V2): the `sys:` packages the jobs ask for must be approved, or
    a job fails at once with `package_not_approved`. CI and the gate:
    `pkg-config zlib1g-dev libssl-dev libasound2-dev` plus, for the gate
    and L3, `libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev

@@ -61,17 +61,17 @@
 #                                        daemon-binaries.yml builds aarch64
 #                                        after the tag (the fallback).
 #   K2_COMPUTE_ARM_NODE      k2n10-vin   L2: the aarch64 set. "none" = github.
-#   K2_COMPUTE_ARM_VERIFY_NODE k2n11-vin V2: the aarch64 set again on another
+#   K2_COMPUTE_ARM_VERIFY_NODE k2n12-vin V2: the aarch64 set again on another
 #                                        node; daemon, root helper, k2-node and
 #                                        engine must equal L2's byte for byte.
 #                                        Never L2's node. Not optional: the
 #                                        signing user signs an aarch64 daemon
 #                                        from compute only with V2.
-#   K2_COMPUTE_RELEASE_NODES "k2n7-vin,k2n8-vin,k2n9-vin,k2n10-vin,k2n11-vin"
+#   K2_COMPUTE_RELEASE_NODES "k2n7-vin,k2n8-vin,k2n9-vin,k2n10-vin,k2n12-vin"
 #                                        (+ the ARM nodes): a receipt from any
 #                                        other node fails. Debian-based Ryzens
 #                                        only: k2-arch is Arch (no apt sys:
-#                                        packages) and k2n12 is the fuzz node.
+#                                        packages) and k2n11 is not ours for releases.
 #   K2_COMPUTE_RUST          the pin     rust@<this>. Default: rust-toolchain.toml
 #                                        AT THE RELEASE COMMIT (scripts/lib/
 #                                        rust-pin.sh); an explicit rust@ need
@@ -89,8 +89,14 @@
 #                                        voice stack (native-voice, on by default
 #                                        since 0.46.9); its release link needs
 #                                        at least 20G (job 96d5148c, 11-03)
-#   K2_COMPUTE_WORKSPACE     (unset)     --workspace for k2 compute run (z3mbpZ's
-#                                        release checkout: pod-leader)
+#   K2_COMPUTE_WORKSPACE     (unset)     --workspace for k2 compute run: the
+#                                        release checkout's own handle (per
+#                                        server; on z3mbpZ it isn't plain
+#                                        pod-leader, another workspace). Read
+#                                        it from k2 workspace list --json (the
+#                                        row whose path is the checkout);
+#                                        submit refuses a handle whose folder
+#                                        isn't this checkout.
 #   K2_COMPUTE_CPUS          8           --cpus per job (z3mbpZ's share allows 8;
 #                                        the node's own default is 4 on the
 #                                        Ryzens, which roughly doubles a build).
@@ -160,7 +166,7 @@ k2cr_init() {
 }
 
 k2cr_release_nodes() {
-    local n="${K2_COMPUTE_RELEASE_NODES:-k2n7-vin,k2n8-vin,k2n9-vin,k2n10-vin,k2n11-vin}" a
+    local n="${K2_COMPUTE_RELEASE_NODES:-k2n7-vin,k2n8-vin,k2n9-vin,k2n10-vin,k2n12-vin}" a
     for a in "$(k2cr_arm_node)" "$(k2cr_arm_verify_node)"; do
         [ -n "$a" ] && case ",$n," in *",$a,"*) ;; *) n="$n,$a" ;; esac
     done
@@ -176,7 +182,7 @@ k2cr_arm_on() {
 k2cr_arm_node() { k2cr_arm_on && printf '%s' "${K2_COMPUTE_ARM_NODE-k2n10-vin}"; return 0; }
 k2cr_arm_verify_node() {
     k2cr_arm_on || return 0
-    local v="${K2_COMPUTE_ARM_VERIFY_NODE-k2n11-vin}"
+    local v="${K2_COMPUTE_ARM_VERIFY_NODE-k2n12-vin}"
     [ "$v" = none ] && v=""
     printf '%s' "$v"
 }
@@ -287,6 +293,33 @@ k2cr_check_dual_nodes() {
     k2cr_check_arm_nodes
 }
 
+# 0 = K2_COMPUTE_WORKSPACE is unset, or it names the workspace whose folder
+# is this checkout. A handle is per server (on z3mbpZ the release checkout
+# isn't `pod-leader`; that is another workspace), so a wrong one would run
+# the jobs under another workspace's grants and secrets.
+k2cr_check_workspace() {
+    local ws="${K2_COMPUTE_WORKSPACE:-}" list top got
+    [ -n "$ws" ] || return 0
+    top="$(git rev-parse --show-toplevel 2>/dev/null)" \
+        || { echo "  ✗ K2_COMPUTE_WORKSPACE=$ws: not in a git checkout. Nothing was submitted." >&2; return 1; }
+    list="$(k2cr_k2 workspace list --json 2>/dev/null)" \
+        || { echo "  ✗ K2_COMPUTE_WORKSPACE=$ws: can't read the workspace list (k2 workspace list --json). Nothing was submitted." >&2; return 1; }
+    got="$(printf '%s' "$list" | python3 -c 'import json,os,sys
+ws, top = sys.argv[1], os.path.realpath(sys.argv[2])
+rows = [w for w in json.load(sys.stdin).get("workspaces") or [] if w.get("handle") == ws]
+if not rows: print("none")
+elif any(os.path.realpath(w.get("path") or "") == top for w in rows): print("ok")
+else: print("path " + (rows[0].get("path") or "?"))' "$ws" "$top")" \
+        || { echo "  ✗ K2_COMPUTE_WORKSPACE=$ws: the workspace list isn't JSON. Nothing was submitted." >&2; return 1; }
+    case "$got" in
+        ok) return 0 ;;
+        none) echo "  ✗ K2_COMPUTE_WORKSPACE=$ws: no workspace has that handle on this server. Nothing was submitted." >&2 ;;
+        *) echo "  ✗ K2_COMPUTE_WORKSPACE=$ws is the workspace at ${got#path }, not this checkout ($top). Nothing was submitted." >&2 ;;
+    esac
+    echo "    Use this checkout's own handle: k2 workspace list --json, the row whose path is $top." >&2
+    return 1
+}
+
 # 0 = aarch64 is off, or L2 and V2 are on two nodes.
 k2cr_check_arm_nodes() {
     k2cr_arm_on || return 0
@@ -335,6 +368,7 @@ k2cr_submit_release_set() {
     echo "  Rust for every job: $rust" | tee -a "$K2CR_STATE/summary.txt"
     # Before anything is submitted, in every mode (shadow too).
     k2cr_check_dual_nodes || return 1
+    k2cr_check_workspace || return 1
     local bins_needs="$rust,cmake@3,sys:pkg-config,sys:zlib1g-dev"
     local app_needs="$rust,cmake@3,bun@1.2,sys:pkg-config,sys:libwebkit2gtk-4.1-dev,sys:libgtk-3-dev,sys:libayatana-appindicator3-dev,sys:librsvg2-dev,sys:patchelf,sys:libxdo-dev,sys:file,sys:xdg-utils,sys:libssl-dev,sys:libasound2-dev"
     k2cr_submit L1 "$(k2cr_x86_node)" linux-bins x86_64 "$bins_needs" -- bash scripts/ci/build-linux-bins.sh x86_64 || rc=1

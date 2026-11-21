@@ -76,7 +76,7 @@ k2cr_verify_node() { printf '%s' "${STUB_VERIFY-k2n9-vin}"; }
 k2cr_x86_node() { printf '%s' "${STUB_X86-k2n7-vin}"; }
 k2cr_arm_on() { [ "${K2_COMPUTE_ARM:-compute}" = compute ] && [ -n "${STUB_ARM-k2n10-vin}" ]; }
 k2cr_arm_node() { k2cr_arm_on && printf '%s' "${STUB_ARM-k2n10-vin}"; return 0; }
-k2cr_arm_verify_node() { k2cr_arm_on && printf '%s' "${STUB_ARMV-k2n11-vin}"; return 0; }
+k2cr_arm_verify_node() { k2cr_arm_on && printf '%s' "${STUB_ARMV-k2n12-vin}"; return 0; }
 k2cr_check_arm_nodes() { echo "arm-nodes" >> "$STUB_CALLS"; [ "$(k2cr_arm_node)" != "$(k2cr_arm_verify_node)" ] || { echo "  ✗ L2 and V2 are both on $(k2cr_arm_node)" >&2; return 1; }; }
 k2cr_init() { echo "k2cr_init $*" >> "$STUB_CALLS"; K2CR_TREE="${STUB_TREE:-t1}"; K2CR_STATE="$3"; mkdir -p "$3"; : > "$3/jobs.tsv"; echo "L1	j" > "$3/jobs.tsv"; }
 k2cr_submit_release_set() { echo "submit arm=${K2_COMPUTE_ARM:-}" >> "$STUB_CALLS"; K2CR_ARM_SUBMIT_OK="${STUB_ARM_SUBMIT_OK:-1}"; k2cr_arm_on || K2CR_ARM_SUBMIT_OK=""; [ "${STUB_SUBMIT_FAIL:-0}" = 0 ]; }
@@ -120,7 +120,7 @@ has() { grep -q -- "$2" "$tmp/out-$1"; }
 mkdir -p "$tmp/scripts/ci" && cp "$ROOT/scripts/ci/cross-pins.sh" "$tmp/scripts/ci/cross-pins.sh"
 ZIGP="$(sed -n 's/^K2_CROSS_ZIG_SHA256_X86_64="\(.*\)"$/\1/p' "$ROOT/scripts/ci/cross-pins.sh")"
 ZBP="$(sed -n 's/^K2_CROSS_ZIGBUILD_CRATE_SHA256="\(.*\)"$/\1/p' "$ROOT/scripts/ci/cross-pins.sh")"
-NODES4='[{"name": "k2n7-vin", "fp": "aa"}, {"name": "k2n9-vin", "fp": "bb"}, {"name": "k2n10-vin", "fp": "cc"}, {"name": "k2n11-vin", "fp": "dd"}]'
+NODES4='[{"name": "k2n7-vin", "fp": "aa"}, {"name": "k2n9-vin", "fp": "bb"}, {"name": "k2n10-vin", "fp": "cc"}, {"name": "k2n12-vin", "fp": "dd"}]'
 PINS_ALL='{"controller": "c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7", "nodes": '"$NODES4"', "aarch64_cross": {"zig_tarball_sha256": "'"$ZIGP"'", "cargo_zigbuild_crate_sha256": "'"$ZBP"'"}}'
 # A signer from before the cross-toolchain check (no aarch64_cross), and one
 # that pins another zig.
@@ -166,7 +166,7 @@ rc="$(STUB_VAR=compute-all K2_LINUX_BUILDS=shadow run pf-var-sh 'k2_linux_builds
 echo "pre-flight under the signing user (K2_SIGNER=k2sign, S3b): every release node and the controller pinned:"
 rc="$(STUB_SIGNER=k2sign STUB_PINS="$PINS_ALL" run pf-k2sign 'k2_linux_builds_preflight; mode')"
 [ "$rc" = 0 ] && has pf-k2sign "MODE compute compute" && has pf-k2sign "Signing user: compute builds from L1 k2n7-vin and V1 k2n9-vin" \
-    && has pf-k2sign "Signing user: compute builds from L2 k2n10-vin and V2 k2n11-vin" \
+    && has pf-k2sign "Signing user: compute builds from L2 k2n10-vin and V2 k2n12-vin" \
     && pass "compute under k2sign: passes once the signer pinned all four nodes and the controller" || fail "k2sign pre-flight" "rc=$rc $(cat "$tmp/out-pf-k2sign")"
 rc="$(STUB_SIGNER=k2sign STUB_PINS="$PINS_OLD" run pf-k2sign-old-cross 'k2_linux_builds_preflight; mode')"
 [ "$rc" = 0 ] && has pf-k2sign-old-cross "MODE compute github" && has pf-k2sign-old-cross "Linux aarch64 FALL BACK TO GITHUB" \

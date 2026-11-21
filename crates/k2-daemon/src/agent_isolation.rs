@@ -458,7 +458,8 @@ pub async fn forward_to_tcp(stream: &mut tokio::net::UnixStream, head: &str, bod
                 Ok(n) => head.extend_from_slice(&b[..n]),
             }
         }
-        let switched = head.starts_with(b"HTTP/1.1 101 ") || head.starts_with(b"HTTP/1.0 101 ");
+        // The status line's code is 101 (`HTTP/1.x 101 …`).
+        let switched = head.starts_with(b"HTTP/1.") && head.get(8..13) == Some(&b" 101 "[..]);
         if stream.write_all(&head).await.is_err() {
             drop(record);
             drop(tcp);

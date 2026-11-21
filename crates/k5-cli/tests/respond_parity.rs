@@ -814,7 +814,12 @@ fn respond_hands_these_to_the_shell() {
             ),
         )),
         shell(with(
-            c(&[("CODEX_THREAD_ID", "t1")]),
+            // The marker of a tab K2 started (the passport's session): the
+            // shell's Codex tab gate lets the call through.
+            c(&[
+                ("CODEX_THREAD_ID", "t1"),
+                ("K2_CODEX_TAB_ISOLATED", "sessA"),
+            ]),
             case(
                 "a CODEX_ variable with HOOK_SOCK",
                 &["x"],

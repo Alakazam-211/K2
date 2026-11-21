@@ -186,6 +186,58 @@ pub fn default_view(i: &ViewInputs) -> Result<FenceView, String> {
     // The harness logins this session runs on: exactly its own slot when
     // pinned (`~/.k2/llm-accounts/<tool>/<id>/`), else the tool's own home.
     let slots = i.k2_home.join("llm-accounts");
+    harness_rules(i, &slots, &mut v)?;
+    // No rule may cover the home folder or ~/.k2 as a whole (a home under
+    // /tmp, or under /var, would sit inside a system rule): such a rule is
+    // replaced by its contents minus the path down to them.
+    let avoid: Vec<PathBuf> = [i.home, i.k2_home].iter().map(|p| canon(p)).collect();
+    v.ro = carve_all(&v.ro, &avoid);
+    v.rw = carve_all(&v.rw, &avoid);
+    Ok(v)
+}
+
+fn canon(p: &Path) -> PathBuf {
+    std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
+}
+
+fn carve_all(rules: &[String], avoid: &[PathBuf]) -> Vec<String> {
+    let mut out = Vec::new();
+    for r in rules {
+        let p = canon(Path::new(r));
+        if avoid.iter().any(|a| a.starts_with(&p)) {
+            out.extend(carve(&p, avoid).iter().map(|c| s(c)));
+        } else {
+            out.push(r.clone());
+        }
+    }
+    out
+}
+
+/// `entry`'s contents, minus every path in `avoid` and the folders on the
+/// way down to them (recursively): what a rule on `entry` may open without
+/// opening an avoided path.
+pub fn carve(entry: &Path, avoid: &[PathBuf]) -> Vec<PathBuf> {
+    let Ok(rd) = std::fs::read_dir(entry) else { return Vec::new() };
+    let mut out = Vec::new();
+    let mut kids: Vec<PathBuf> = rd.flatten().map(|e| e.path()).collect();
+    kids.sort();
+    for k in kids {
+        let kc = canon(&k);
+        if avoid.iter().any(|a| *a == kc) {
+            continue;
+        }
+        if avoid.iter().any(|a| a.starts_with(&kc)) {
+            out.extend(carve(&kc, avoid));
+        } else {
+            out.push(k);
+        }
+    }
+    out
+}
+
+/// The harness logins this session runs on: exactly its own slot when
+/// pinned (`~/.k2/llm-accounts/<tool>/<id>/`), else the tool's own home.
+fn harness_rules(i: &ViewInputs, slots: &Path, v: &mut FenceView) -> Result<(), String> {
     for (var, default_dir, default_file) in HARNESS_HOMES {
         match i.env.get(*var).map(String::as_str).filter(|v| !v.trim().is_empty()) {
             Some(dir) => {
@@ -218,7 +270,7 @@ pub fn default_view(i: &ViewInputs) -> Result<FenceView, String> {
             }
         }
     }
-    Ok(v)
+    Ok(())
 }
 
 /// The symlinks directly inside a login slot and where they point. A Codex
@@ -584,6 +636,34 @@ mod tests {
             assert!(default_view(&inputs(home, &k2, Path::new(ws), &tmp, &env)).is_err(), "{ws}");
         }
         assert!(default_view(&inputs(home, &k2, Path::new("relative/ws"), &tmp, &env)).is_err());
+    }
+
+    /// A home under a system rule (/tmp here; /var/lib/k2 on some boxes):
+    /// the system rule is carved so it never covers the home or ~/.k2.
+    #[test]
+    fn a_rule_never_covers_the_home_or_k2_home() {
+        let root = std::env::temp_dir().join(format!("k2-carve-{}", uuid::Uuid::new_v4().simple()));
+        let home = root.join("homes/k2");
+        let k2 = home.join(".k2");
+        for d in [k2.clone(), home.join("ws/A"), root.join("other/x"), root.join("homes/someone")] {
+            std::fs::create_dir_all(&d).unwrap();
+        }
+        let avoid = vec![canon(&home), canon(&k2)];
+        let got: Vec<PathBuf> = carve(&canon(&root), &avoid);
+        let r = canon(&root);
+        assert_eq!(got, vec![r.join("homes/someone"), r.join("other")], "siblings stay, the home and the path down to it don't");
+        let env = BTreeMap::new();
+        let v = FenceView { ro: vec![s(&root)], ..FenceView::default() };
+        let carved = carve_all(&v.ro, &avoid);
+        assert!(!carved.iter().any(|p| Path::new(p) == r || canon(Path::new(p)) == canon(&home)), "{carved:?}");
+        let tmp = root.join("tmp-a");
+        let view = default_view(&inputs(&home, &k2, &home.join("ws/A"), &tmp, &env)).unwrap();
+        for p in view.ro.iter().chain(&view.rw) {
+            let c = canon(Path::new(p));
+            assert!(!canon(&k2).starts_with(&c), "a rule covers ~/.k2: {p}");
+            assert!(!canon(&home).starts_with(&c), "a rule covers the home: {p}");
+        }
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

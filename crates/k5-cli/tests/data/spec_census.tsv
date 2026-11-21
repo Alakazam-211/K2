@@ -6,8 +6,8 @@
 # out:confirm                    37 entries    58 forms
 # out:file                      101 entries   176 forms
 # out:many-requests              46 entries    70 forms
-# out:no-request                114 entries   178 forms
-# out:open-tool                 100 entries   156 forms
+# out:no-request                113 entries   177 forms
+# out:open-tool                 101 entries   157 forms
 # out:poll                        7 entries    12 forms
 # out:python-client             144 entries   282 forms
 # out:secret                    152 entries   210 forms
@@ -712,7 +712,7 @@ fed peers	1	cli/src/federation.sh:cmd_fed:peers	send,request	python	out:open-too
 fed pubkey	2	cli/src/federation.sh:cmd_fed:pubkey	none	json,python	out:no-request	-
 fed send	1	cli/src/federation.sh:cmd_fed:send	curl	json,python	out:open-tool	-
 fed outbox	1	cli/src/federation.sh:cmd_fed:outbox	curl	python	out:open-tool	-
-fed pair-start	1	cli/src/federation.sh:cmd_fed:pair-start	none	json,python	out:no-request	-
+fed pair-start	1	cli/src/federation.sh:cmd_fed:pair-start	curl	json,python	out:open-tool	-
 fed pair-join	1	cli/src/federation.sh:cmd_fed:pair-join	curl	json,python	out:open-tool	-
 fed pair-finish	1	cli/src/federation.sh:cmd_fed:pair-finish	curl	json,python	out:open-tool	-
 fed pair-verify	1	cli/src/federation.sh:cmd_fed:pair-verify	curl	json,python	out:open-tool	-

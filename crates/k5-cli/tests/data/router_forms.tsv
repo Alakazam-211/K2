@@ -630,11 +630,11 @@ hooks status	-	-	cli/src/router.sh:	-	-	parsed
 hooks install	-	-	cli/src/router.sh:	-	-	parsed
 hooks uninstall	-	-	cli/src/router.sh:	-	-	parsed
 daemon	-	-	cli/src/router.sh:	daemon	-	parsed
+daemon survive	-	-	cli/src/router.sh:	-	-	parsed
 daemon status	-	-	cli/src/router.sh:	-	-	parsed
 daemon start	-	-	cli/src/router.sh:	-	-	parsed
 daemon stop	-	-	cli/src/router.sh:	-	-	parsed
 daemon restart	-	-	cli/src/router.sh:	-	-	parsed
-daemon survive	-	-	cli/src/router.sh:	-	-	parsed
 daemon survive on	-	-	cli/src/daemon.sh:cmd_daemon_survive	-	-	parsed
 daemon survive off	-	daemon survive on	cli/src/daemon.sh:cmd_daemon_survive	-	-	parsed
 daemon survive status	-	-	cli/src/daemon.sh:cmd_daemon_survive	-	-	parsed

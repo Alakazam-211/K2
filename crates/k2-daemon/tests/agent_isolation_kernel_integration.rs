@@ -547,9 +547,12 @@ fn the_bites_each_guarantee_fails_without_its_mechanism() {
     assert!(r["sibling_read_rc"].starts_with("0"), "BITE fence off: A reads B's README: {}", r["sibling_read_rc"]);
     assert!(r["token_read_rc"].starts_with("0"), "BITE fence off: A reads the owner token: {}", r["token_read_rc"]);
     // Known gap until M1b: unfenced, A moved itself into B's cgroup.
-    assert!(r["cgroup_move_rc"].starts_with("0"), "unfenced, the cgroup move works (M1b closes it): {}", r["cgroup_move_rc"]);
-    assert!(r["cgroup_after"].ends_with(&format!("/agents/a-{b_id}")), "{}", r["cgroup_after"]);
-    println!("KNOWN GAP (M1b): an unfenced agent moved into another agent's cgroup: {}", r["cgroup_after"]);
+    assert!(r["cgroup_move_rc"].starts_with("0"), "unfenced, the move into B's cgroup works (M1b closes it): {}", r["cgroup_move_rc"]);
+    // …and then out of it into the shared leaf (the script's next step).
+    assert!(r["cgroup_leaf_move_rc"].starts_with("0"), "{}", r["cgroup_leaf_move_rc"]);
+    assert!(r["cgroup_after"].ends_with("/agents"), "{}", r["cgroup_after"]);
+    println!("fence off, sudo -n (this box's sudoers decide): {}", r["sudo_rc"]);
+    println!("KNOWN GAP (M1b): an unfenced agent moved into another agent's cgroup (rc {})", r["cgroup_move_rc"]);
     let _ = a_id;
 
     // Identity OFF: the emergency switch. B's passport from the test's own

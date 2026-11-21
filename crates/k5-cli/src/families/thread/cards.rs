@@ -54,6 +54,13 @@ pub struct Ask {
     pub expires: String,
     pub no_expiry: bool,
     pub idem_key: String,
+    /// `--meta` values, in order.
+    pub meta_pairs: Vec<String>,
+    /// `--meta-json`'s value, when given.
+    pub meta_json: Option<String>,
+    /// The merged map ([`super::meta::merge`]): its compact JSON, keys
+    /// sorted; `None` for none.
+    pub meta: Option<String>,
 }
 
 /// `secret`'s words.
@@ -144,7 +151,22 @@ const FIRE_AND_FORGET: &str = "Error: thread cards are fire-and-forget; no --wai
 /// The verb's words (`verb`: the word [`super::first_word`] found).
 pub fn parse(verb: &str, words: &[&str]) -> Option<Parsed> {
     match verb {
-        "ask" => Some(parse_ask(words).map(Card::Ask)),
+        "ask" => {
+            let mut a = match parse_ask(words) {
+                Ok(a) => a,
+                Err(stop) => return Some(Err(stop)),
+            };
+            if a.meta_json.is_none() && a.meta_pairs.is_empty() {
+                return Some(Ok(Card::Ask(a)));
+            }
+            match super::meta::merge(a.meta_json.as_deref(), &a.meta_pairs)? {
+                Ok(m) => {
+                    a.meta = m;
+                    Some(Ok(Card::Ask(a)))
+                }
+                Err(words) => Some(Err((format!("Error: {words}\n"), Exit::Usage))),
+            }
+        }
         "secret" => Some(parse_secret(words).map(Card::Secret)),
         "delete" => parse_delete(words).map(|p| p.map(Card::Delete)),
         _ => Some(parse_void(words).map(Card::Void)),
@@ -208,6 +230,26 @@ fn parse_ask(words: &[&str]) -> Result<Ask, (String, Exit)> {
                 i += 1;
             }
             "--no-expiry" => a.no_expiry = true,
+            "--meta" => {
+                let Some(v) = next else {
+                    return Err((format!("Error: {}\n", super::meta::NEEDS_PAIR), Exit::Usage));
+                };
+                a.meta_pairs.push(v.to_string());
+                i += 1;
+            }
+            "--meta-json" => {
+                let Some(v) = next else {
+                    return Err((
+                        format!("Error: {}\n", super::meta::NEEDS_OBJECT),
+                        Exit::Usage,
+                    ));
+                };
+                if a.meta_json.is_some() {
+                    return Err((format!("Error: {}\n", super::meta::JSON_TWICE), Exit::Usage));
+                }
+                a.meta_json = Some(v.to_string());
+                i += 1;
+            }
             "--wait" | "--timeout" => return err(FIRE_AND_FORGET),
             "--style" => return err("Error: no --style in v1\n"),
             w if w.starts_with('-') => return err(&unknown(w)),
@@ -495,6 +537,10 @@ pub fn ask_body(a: &Ask, from: &str, key: &str) -> String {
     }
     if a.no_expiry {
         o.push(kv("no_expiry", Value::Bool(true)));
+    }
+    // `json.loads(os.environ["META"])`: the merged map, keys sorted.
+    if let Some(m) = a.meta.as_deref().and_then(|m| loads(m.as_bytes())) {
+        o.push(kv("meta", m));
     }
     dumps(&Value::Object(o))
 }

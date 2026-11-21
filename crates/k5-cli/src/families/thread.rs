@@ -38,6 +38,7 @@ use std::ffi::OsString;
 
 pub mod cards;
 pub mod marks;
+pub mod meta;
 pub mod post;
 pub mod py;
 pub mod transfer;
@@ -81,6 +82,8 @@ pub const VALUE_FLAGS: &[&str] = &[
     "--why",
     "--reason",
     "--idempotency-key",
+    "--meta",
+    "--meta-json",
 ];
 
 /// `cmd_thread`'s `first_pos`: the first word that is not a `--` flag or

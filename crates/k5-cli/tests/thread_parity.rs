@@ -354,6 +354,108 @@ fn thread_ask_options_split_on_semicolons() {
     }
 }
 
+/// `ask --meta key=value` and `--meta-json` (0.46.17): the merged map,
+/// keys sorted, at the end of the body; `--json` passes the answer's map
+/// through; an empty map sends the body it always did; at the limits it is
+/// sent. Every refusal is in [`thread_stops_before_it_sends`].
+#[test]
+fn thread_ask_meta_as_the_shell_does() {
+    const CARD: &str = r#"{"ok":true,"id":"c1","seq":9,"meta":{"order":"A-17","qty":3}}"#;
+    let rig = Rig::new(VERB, "meta");
+    let ask = |name: &'static str, extra: Vec<String>| {
+        let words: Vec<String> = ["ask", "bob", "Ship?", "--option", "Go"]
+            .iter()
+            .map(|w| w.to_string())
+            .chain(extra)
+            .chain(
+                ["--from", "me", "--idempotency-key", KEY]
+                    .iter()
+                    .map(|w| w.to_string()),
+            )
+            .collect();
+        plain(name, leak(words), vec![ok(ON), ok(CARD)], 0, 2)
+    };
+    let v = |w: &[&str]| -> Vec<String> { w.iter().map(|x| x.to_string()).collect() };
+    let keys32 = format!(
+        "{{{}}}",
+        (0..32)
+            .map(|i| format!("\"k{i}\": {i}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    for c in [
+        ask(
+            "--meta strings",
+            v(&["--meta", "order=A-17", "--meta", "note=a=b c"]),
+        ),
+        ask(
+            "--meta-json numbers and booleans",
+            v(&[
+                "--meta-json",
+                r#"{"rush": true, "qty": 3, "w": 1.5, "big": 1e16, "who": "ad\u00e9"}"#,
+            ]),
+        ),
+        ask(
+            "both, merged and sorted",
+            v(&["--meta-json", r#"{"qty": 3}"#, "--meta", "order=A-17"]),
+        ),
+        ask(
+            "--json passes meta through",
+            v(&["--meta", "order=A-17", "--json"]),
+        ),
+        ask("an empty map", v(&["--meta-json", "{}"])),
+        ask("32 keys", vec!["--meta-json".to_string(), keys32]),
+        ask(
+            "a 64-byte key",
+            vec!["--meta".to_string(), format!("{}=x", "k".repeat(64))],
+        ),
+        ask(
+            "4096 bytes",
+            vec!["--meta".to_string(), format!("k={}", "v".repeat(4088))],
+        ),
+        ask(
+            "a key repeated inside --meta-json",
+            v(&["--meta-json", r#"{"a": 1, "b": 2, "a": 3}"#]),
+        ),
+    ] {
+        rig.check(&c);
+    }
+    // The refusals that need long words: exit 2, nothing sent. A lone
+    // surrogate is the shell's own (Python fails on it, exit 1).
+    let keys33 = format!(
+        "{{{}}}",
+        (0..33)
+            .map(|i| format!("\"k{i}\": {i}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    for (name, extra, code) in [
+        ("33 keys", vec!["--meta-json".to_string(), keys33], 2),
+        (
+            "a 65-byte key",
+            vec!["--meta".to_string(), format!("{}=x", "k".repeat(65))],
+            2,
+        ),
+        (
+            "4097 bytes",
+            vec!["--meta".to_string(), format!("k={}", "v".repeat(4089))],
+            2,
+        ),
+        (
+            "a lone surrogate",
+            v(&["--meta-json", r#"{"k": "\ud83d"}"#]),
+            1,
+        ),
+    ] {
+        let words: Vec<String> = ["ask", "bob", "Ship?", "--option", "Go"]
+            .iter()
+            .map(|w| w.to_string())
+            .chain(extra)
+            .collect();
+        rig.check(&plain(name, leak(words), vec![], code, 0));
+    }
+}
+
 #[test]
 fn thread_cards_as_the_shell_does() {
     let rig = Rig::new(VERB, "cards");
@@ -587,6 +689,140 @@ fn thread_stops_before_it_sends() {
             1,
         ),
         ("ask --from last", &["ask", "bob", "p", "--from"], 1),
+        (
+            "ask --meta last",
+            &["ask", "bob", "p", "--option", "a", "--meta"],
+            2,
+        ),
+        (
+            "ask --meta-json last",
+            &["ask", "bob", "p", "--option", "a", "--meta-json"],
+            2,
+        ),
+        (
+            "ask --meta-json twice",
+            &[
+                "ask",
+                "bob",
+                "p",
+                "--option",
+                "a",
+                "--meta-json",
+                "{}",
+                "--meta-json",
+                "{}",
+            ],
+            2,
+        ),
+        (
+            "ask --meta, no '='",
+            &["ask", "bob", "p", "--option", "a", "--meta", "order"],
+            2,
+        ),
+        (
+            "ask, a key in both",
+            &[
+                "ask",
+                "bob",
+                "p",
+                "--option",
+                "a",
+                "--meta-json",
+                r#"{"order": "B"}"#,
+                "--meta",
+                "order=A",
+            ],
+            2,
+        ),
+        (
+            "ask, a --meta key twice",
+            &[
+                "ask", "bob", "p", "--option", "a", "--meta", "a=1", "--meta", "a=2",
+            ],
+            2,
+        ),
+        (
+            "ask --meta-json, not JSON",
+            &["ask", "bob", "p", "--option", "a", "--meta-json", "order=A"],
+            2,
+        ),
+        (
+            "ask --meta-json, a list",
+            &["ask", "bob", "p", "--option", "a", "--meta-json", "[1, 2]"],
+            2,
+        ),
+        (
+            "ask --meta-json, NaN",
+            &[
+                "ask",
+                "bob",
+                "p",
+                "--option",
+                "a",
+                "--meta-json",
+                r#"{"n": NaN}"#,
+            ],
+            2,
+        ),
+        (
+            "ask --meta-json, out of range",
+            &[
+                "ask",
+                "bob",
+                "p",
+                "--option",
+                "a",
+                "--meta-json",
+                r#"{"n": -1e400}"#,
+            ],
+            2,
+        ),
+        (
+            "ask --meta-json, a null value",
+            &[
+                "ask",
+                "bob",
+                "p",
+                "--option",
+                "a",
+                "--meta-json",
+                r#"{"k": null}"#,
+            ],
+            2,
+        ),
+        (
+            "ask --meta-json, an object value",
+            &[
+                "ask",
+                "bob",
+                "p",
+                "--option",
+                "a",
+                "--meta-json",
+                r#"{"k": {"a": [1]}}"#,
+            ],
+            2,
+        ),
+        (
+            "ask --meta, an upper-case key",
+            &["ask", "bob", "p", "--option", "a", "--meta", "Order=A"],
+            2,
+        ),
+        (
+            "ask --meta, a key outside ASCII",
+            &["ask", "bob", "p", "--option", "a", "--meta", "ordré=A"],
+            2,
+        ),
+        (
+            "ask --meta, an empty key",
+            &["ask", "bob", "p", "--option", "a", "--meta", "=A"],
+            2,
+        ),
+        (
+            "ask --meta, a usage stop first",
+            &["ask", "bob", "p", "--meta", "Order=A"],
+            1,
+        ),
         ("secret, no name", &["secret", "bob"], 1),
         (
             "secret --dest",
@@ -664,6 +900,19 @@ fn thread_help_never_acts() {
         &["bob", "hi", "--help"][..],
         &["bob", "-h", "hi"],
         &["ask", "bob", "p", "--option", "a", "-h"],
+        &[
+            "ask", "bob", "p", "--option", "a", "--meta", "k=v", "--help",
+        ],
+        &[
+            "ask",
+            "-h",
+            "bob",
+            "p",
+            "--option",
+            "a",
+            "--meta-json",
+            "{}",
+        ],
         &["secret", "bob", "--name", "A", "--help"],
         &["secret", "-h"],
         &["withdraw", "bob", "c1", "--help"],

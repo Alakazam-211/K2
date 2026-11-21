@@ -495,3 +495,62 @@ fn since_days_is_compute_json_s_number() {
         Some(super::transfer::Parsed::Ask(_))
     ));
 }
+
+/// `--meta` and `--meta-json` (0.46.17): merged, keys sorted, at the end
+/// of the body; each stop is `_thread_ask_meta`'s line, exit 2, and a line
+/// with no map sends the body it always did.
+#[test]
+fn ask_s_meta_body_and_stops() {
+    let ask = |w: &[&str]| match cards::parse("ask", w) {
+        Some(Ok(Card::Ask(a))) => a,
+        other => panic!("{w:?}: {other:?}"),
+    };
+    let base = ["ask", "bob", "Pick?", "--option", "a"];
+    let with = |extra: &[&'static str]| -> Vec<&'static str> {
+        base.iter().chain(extra).copied().collect()
+    };
+    let a = ask(&with(&[
+        "--meta-json",
+        r#"{"qty": 3, "rush": true}"#,
+        "--meta",
+        "order=A-17",
+    ]));
+    assert_eq!(
+        cards::ask_body(&a, "me", "k1"),
+        r#"{"addr": "bob", "prompt": "Pick?", "from": "me", "idempotency_key": "k1", "option": ["a"], "meta": {"order": "A-17", "qty": 3, "rush": true}}"#
+    );
+    let plain = r#"{"addr": "bob", "prompt": "Pick?", "from": "me", "idempotency_key": "k1", "option": ["a"]}"#;
+    assert_eq!(cards::ask_body(&ask(&with(&[])), "me", "k1"), plain);
+    assert_eq!(
+        cards::ask_body(&ask(&with(&["--meta-json", "{}"])), "me", "k1"),
+        plain
+    );
+    let stop = |w: &[&str]| match cards::parse("ask", w) {
+        Some(Err(s)) => s,
+        other => panic!("{w:?}: {other:?}"),
+    };
+    for (extra, line) in [
+        (&["--meta"][..], "Error: --meta needs key=value\n"),
+        (&["--meta-json"], "Error: --meta-json needs a JSON object\n"),
+        (
+            &["--meta-json", "{}", "--meta-json", "{}"],
+            "Error: --meta-json is given twice\n",
+        ),
+        (
+            &["--meta", "a=1", "--meta", "a=2"],
+            "Error: meta key \"a\" is given twice\n",
+        ),
+        (
+            &["--meta", "A=1"],
+            "Error: meta key \"A\" must match [a-z0-9_.-]{1,64}\n",
+        ),
+    ] {
+        assert_eq!(
+            stop(&with(extra)),
+            (line.to_string(), Exit::Usage),
+            "{extra:?}"
+        );
+    }
+    // A usage stop before the map still wins (bash checks the map last).
+    assert_eq!(stop(&["ask", "bob", "p", "--meta", "A=1"]).1, Exit::Error);
+}

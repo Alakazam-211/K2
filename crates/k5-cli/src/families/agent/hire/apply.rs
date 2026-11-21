@@ -625,7 +625,8 @@ pub fn apply(h: &mut Hire) -> R<()> {
             act::set(&mut h.actions[i], "status", s("not-run"));
             act::set(&mut h.actions[i], "reason", s("launch failed"));
         } else {
-            let resp = h.post_query("/cli/workspace/msg", msg_params(&path, &s(&a.onboard)), 180)?;
+            let resp =
+                h.post_query("/cli/workspace/msg", msg_params(&path, &s(&a.onboard)), 180)?;
             let e = pget(&resp, "error", &[(1216, "<module>")])?.cloned();
             match e {
                 Some(v @ Value::Str(_)) if py::truthy(&v) => step_failed_on(

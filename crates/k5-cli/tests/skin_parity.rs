@@ -1117,3 +1117,46 @@ fn skin_password_on_stdin() {
         rig.check(&c);
     }
 }
+
+/// `skin` alone, an empty verb or one `cmd_skin` has no arm for: the
+/// teaching line, then `_skin_usage` (the App family's page through
+/// `_perm_lines`, the cards asked with a passport), exit 1. Each row is
+/// the binary's own answer.
+#[test]
+fn skin_usage_as_the_shell_prints_it() {
+    let rig = Rig::new(VERB, "usage");
+    let cell = || with_passport(&[("K2_HOOK_SOCK", "{sock}")]);
+    for c in [
+        // native: skin
+        words("skin alone", &[], 1),
+        words("an empty verb", &[""], 1),
+        words("an unknown verb", &["nope", "x"], 1),
+        words("--json is no verb", &["--json"], 1),
+        case("the connection gate", &[], &[], vec![], nothing, 1, 0),
+        case(
+            "a session with no passport: the locked tool",
+            &[],
+            &[("K2_HOOK_SOCK", "{sock}")],
+            vec![],
+            owner_and_port,
+            3,
+            0,
+        ),
+        with(
+            cell(),
+            case("cards on, asked on the cell socket", &[], &[], vec![ok(common::cards::ON)], port_only, 1, 1),
+        ),
+        with(
+            cell(),
+            case("cards off", &["nope"], &[], vec![ok(common::cards::OFF)], port_only, 1, 1),
+        ),
+    ] {
+        rig.check(&c);
+        rig.binary(&c, false);
+        assert!(
+            !k5_cli::fallthrough::cache_dir(&rig.k2home).exists(),
+            "{}: the binary handed the line to the shell",
+            c.name
+        );
+    }
+}

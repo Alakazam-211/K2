@@ -45,7 +45,7 @@ pub const VERBS: &[crate::route::Verb] = &[];
 
 const PRODUCT: &str = product_name!();
 /// The settings route (`setup agent-reports` asks it too).
-pub const SETTINGS: &str = "/cli/product-feedback/settings";
+pub(crate) const SETTINGS: &str = "/cli/product-feedback/settings";
 const LIST_USAGE: &str = concat!(
     "usage: ",
     cli_name!(),

@@ -723,7 +723,7 @@ fn remote_session_on_another_server() {
         )),
         case(
             "no token for the host",
-            &["status", "--host", H],
+            &["status", "--host", "http://127.0.0.1:9"],
             &[],
             vec![],
             owner_and_port,

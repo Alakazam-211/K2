@@ -81,7 +81,7 @@ fn read_on_another_server_as_the_shell_does() {
         ),
         case(
             "no token for the host",
-            &["ws@http://127.0.0.1:{port}"],
+            &["ws@http://127.0.0.1:9"],
             &[],
             vec![],
             owner_and_port,

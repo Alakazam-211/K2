@@ -499,7 +499,7 @@ assert_off_children "fed pair-join --token-stdin" "pairing token" "$FED_TOKEN"
 # 22. k2 read <ws>@<host> --token-stdin: the remote server's token reaches
 #     that server's terminal read and no child's argv or environment, nor
 #     k2's own argv.
-sec_case "read --token-stdin" /cli/terminal/read "remote token" "$REMOTE_SENTINEL" read "ws1@http://127.0.0.1:$(cat "$W/tcp-port")" --token-stdin
+SEC_CASE_CHILDREN=assert_children_native sec_case "read --token-stdin" /cli/terminal/read "remote token" "$REMOTE_SENTINEL" read "ws1@http://127.0.0.1:$(cat "$W/tcp-port")" --token-stdin
 
 # 23. k2 daemon restart --host <url> --token-stdin: the token reaches that
 #     daemon's restart route and no child's argv or environment, nor k2's

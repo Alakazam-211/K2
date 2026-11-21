@@ -92,6 +92,9 @@ pub struct Ctx {
     /// registry's fix. Off where the shell reaches the same code from
     /// `skin` (`cmd_skin`), which leaves it empty.
     pub app_refusals: bool,
+    /// `_K2_ASSIGN`: the command's `--assign` ([`super::assign`]), empty
+    /// when it has none. Every POST to `/cli/app/…` carries it.
+    pub assign: String,
 }
 
 impl Ctx {
@@ -103,6 +106,7 @@ impl Ctx {
             vault_sock: std::path::PathBuf::new(),
             project: String::new(),
             app_refusals: true,
+            assign: String::new(),
         }
     }
 
@@ -131,6 +135,7 @@ impl Ctx {
 
     /// `_compute_send <GET|POST> <path> <payload> [tcp]`, then
     /// `_compute_split`. `Err` when the command ended (its line printed).
+    /// The path is `_compute_assign_path`'s first ([`super::assign::path`]).
     pub fn send(
         &mut self,
         post: bool,
@@ -138,7 +143,8 @@ impl Ctx {
         payload: &str,
         tcp: bool,
     ) -> Result<Split, Exit> {
-        let result = self.client.compute_send(post, path, payload, tcp);
+        let path = super::assign::path(post, path, &self.assign);
+        let result = self.client.compute_send(post, &path, payload, tcp);
         let refused = self.client.refused_before_answer();
         let raw = match &result {
             Err(e @ (Error::MaybeApplied { .. } | Error::NoOwnerInSession { .. })) => {

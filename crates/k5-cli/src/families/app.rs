@@ -69,8 +69,11 @@
 //!    stale passport and no passport at all are refused first
 //!    ([`prelude::id_tool`]), and the session's passport is the
 //!    credential.
-//! 2. The group's own loop over the words: a usage mistake is its line on
-//!    stderr and exit 2, before anything is sent.
+//! 2. `_app_take_assign` ([`assign`]): `--assign <login>[,<login>…]`
+//!    before a bare `--` is taken out of the words for every verb (the
+//!    ones handed to `cmd_skin` too), and rides each POST to `/cli/app/…`
+//!    as `?assign=`. Then the group's own loop over the words: a usage
+//!    mistake is its line on stderr and exit 2, before anything is sent.
 //! 3. The group's requests ([`call`]): `_compute_call` and its refusal
 //!    line, with the App refusal registry's `fix:` line.
 //! 4. The printer: the answer as it came with `--json`, else the shell's
@@ -96,6 +99,7 @@ use std::path::Path;
 pub mod access;
 pub mod agent_access;
 pub mod approve;
+pub mod assign;
 pub mod box_use;
 pub mod boxes;
 pub mod call;
@@ -798,6 +802,18 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     if crate::route::is_bare(args) {
         return bare(args);
     }
+    // `_app_take_assign`, first in `cmd_app`: `--assign` before `--` is
+    // the requests' ([`assign`]), never the verb's. Its usage line comes
+    // after the settings and gates, as a verb's own usage line does.
+    let all: Vec<&str> = args.iter().map(|a| a.to_str()).collect::<Option<_>>()?;
+    let (assign, kept) = match assign::take(all.get(1..).unwrap_or_default()) {
+        Ok(t) => (t.assign, t.words),
+        Err(stop) => return run_ask(args, &all, Err(stop), String::new()),
+    };
+    let kept_args: Vec<OsString> = std::iter::once(args[0].clone())
+        .chain(kept.iter().map(|w| OsString::from(*w)))
+        .collect();
+    let args = &kept_args[..];
     match args.get(1).and_then(|a| a.to_str()) {
         // `token rotate` is `cmd_app_token_rotate` ([`door_set`]).
         Some("token" | "tokens") => {
@@ -813,15 +829,33 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
                 return super::skin::run_app(args);
             }
         }
+        // `user chat` POSTs to `/cli/app/guest/chat` through `cmd_skin`,
+        // where the shell adds `?assign=`; the skin family builds its own
+        // requests, so with `--assign` that line is the shell's.
+        Some("user" | "users") if !assign.is_empty() && kept.get(1) == Some(&"chat") => {
+            return None
+        }
         Some(v) if SKIN_VERBS.contains(&v) => return super::skin::run_app(args),
         _ => {}
     }
+    let ask = parse(&kept)?;
+    run_ask(args, &all, ask, assign)
+}
+
+/// The verb's ask (or where its loop or the pre-scan stopped), after the
+/// shell's hand-overs and the settings and gates. `all`: every word of
+/// the command as typed (`_K2_ARGS_JSON` reads them all, `--assign`'s
+/// value too); `assign`: what [`assign::take`] took.
+fn run_ask(
+    args: &[OsString],
+    all: &[&str],
+    ask: Result<Ask, Stop>,
+    assign: String,
+) -> Option<Exit> {
     let hook_sock = super::hook_sock();
     if hook_sock.is_some() && prelude::codex_env(std::env::vars_os().map(|(name, _)| name)) {
         return None;
     }
-    let words: Vec<&str> = args.iter().map(|a| a.to_str()).collect::<Option<_>>()?;
-    let ask = parse(words.get(1..).unwrap_or_default())?;
     if !python::family_native(python::here()) {
         return None;
     }
@@ -836,7 +870,14 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         // A port curl won't take is the shell's.
         curl_port(settings.port_text.as_deref()?)?;
     }
-    Some(run_with(args, &words, ask, hook_sock.as_deref(), settings))
+    Some(run_with(
+        args,
+        all,
+        ask,
+        hook_sock.as_deref(),
+        settings,
+        assign,
+    ))
 }
 
 /// `app` alone, or `app --json`: `cmd_app` hands the word to `cmd_skin`,
@@ -882,6 +923,7 @@ fn run_with(
     ask: Result<Ask, Stop>,
     hook_sock: Option<&Path>,
     mut settings: Settings,
+    assign: String,
 ) -> Exit {
     if let Some(gate) = prelude::gate(&settings) {
         return gate.stop();
@@ -910,6 +952,7 @@ fn run_with(
     let mut ctx = Ctx::new(client, call::args_json(words));
     ctx.vault_sock = crate::confirm::sock_path(&settings.home);
     ctx.project = settings.project.clone();
+    ctx.assign = assign;
     let shown = match &ask {
         Ask::Wallet(a) => wallet::run(&mut ctx, a),
         Ask::List(l) => reads::list(&mut ctx, l),

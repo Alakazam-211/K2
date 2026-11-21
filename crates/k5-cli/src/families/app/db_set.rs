@@ -682,8 +682,13 @@ pub fn held_lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
             py::s(&py::dget(&r, "id", 14)?)
         ));
     }
-    let hint = py::or(py::dget(&v, "hint", 15)?, py::text(""));
-    o.line(&py::concat("  ", &hint, 15)?);
+    // 0.46.17: where the permission card is and who it went to.
+    let card = py::dget(&v, "card", 15)?;
+    if matches!(card, Value::Object(_)) && py::truthy(&py::dget(&card, "where", 16)?) {
+        o.line(&format!("  owner: {}", py::s(&py::idx(&card, "where", 17)?)));
+    }
+    let hint = py::or(py::dget(&v, "hint", 18)?, py::text(""));
+    o.line(&py::concat("  ", &hint, 18)?);
     Ok(Exit::Ok)
 }
 

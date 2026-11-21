@@ -5,6 +5,8 @@
 //! - No stdin, `--no-stdin`, a pipe on stdin (bytes that aren't UTF-8 too);
 //!   `--timeout` plain and as a duration; `--json`; the command's exit,
 //!   124 at its timeout, 1 for one out of range; a refusal; the words.
+//! - 0.46.17: `--assign` before `--` rides the POST (`_app_rt_post_file`'s
+//!   `?assign=`); after `--` it is the command's own word.
 //! - An answer above 256 KiB; help never acts.
 
 #![cfg(unix)]
@@ -309,5 +311,25 @@ fn exec_help_never_acts() {
             compare: Compare::Shell,
             ..case("help never acts", args, &[], vec![], owner_and_port, 0, 0)
         });
+    }
+}
+
+/// 0.46.17: `--assign` before `--` is the request's, after it the
+/// command's.
+#[test]
+fn exec_assign_answers_as_the_shell_does() {
+    let rig = Rig::new(VERB, "execassign");
+    let ran = r#"{"framed":"--- untrusted ---\nok\n--- end ---","exitCode":0}"#;
+    for (name, args) in [
+        (
+            "--assign before --, and the command's after it",
+            &["exec", "acme", "--assign", "ada", "--", "echo", "--assign", "x"][..],
+        ),
+        (
+            "--assign only after --: the command's",
+            &["exec", "acme", "--", "echo", "--assign", "ada"],
+        ),
+    ] {
+        rig.check(&case(name, args, &[], vec![ok(ran)], owner_and_port, 0, 1));
     }
 }

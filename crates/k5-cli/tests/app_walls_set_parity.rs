@@ -13,6 +13,11 @@
 //!   `--json`; `--wait` until approved, failed (1), a card that ended
 //!   (3) or the time ran out (2); a 400 (1), a 409 (3); usage (1).
 //! - `db check` and `db disconnect` (an error in the answer is exit 1).
+//! - 0.46.17: a held connect names where its card is (`owner: …`, only
+//!   for a card that is a dict with a `where`); `--assign` on `db
+//!   connect` and `egress add` rides the POST as `?assign=` (one login, a
+//!   comma list, `--assign=`), never as a host; a bare `--assign` sends
+//!   nothing; before the verb it is the shell's.
 //! - Help never acts; no daemon. stdin is not a terminal here, so a held
 //!   request is never approved on the spot.
 
@@ -838,5 +843,85 @@ fn no_daemon() {
             3,
             0,
         ));
+    }
+}
+
+const DB_HELD_CARD: &str = r#"{"ok":true,"status":"held","request":{"id":"w_abc123","summary":"connect app1 é"},"switches":[],"diff":{"lines":["connect App app1"]},"hint":"one card for everything connecting needs","card":{"raised":true,"new":true,"id":"w_abc123","where":"a permission card w_abc123 is on a's Thread: sent to ada, as you asked (--assign). They approve it there, or in Settings → App Approvals"}}"#;
+
+/// 0.46.17: the held answer's card, and `--assign` on the POST.
+#[test]
+fn held_cards_and_assign_answer_as_the_shell_does() {
+    let rig = Rig::new(VERB, "dbcards");
+    let egress_held = r#"{"status":"held","request":{"id":"w_eg1","summary":"egress api.example.com for app1"},"hint":"held for the owner","card":{"raised":true,"where":"a permission card w_eg1 is on a's Thread: sent to every owner and admin (ada, bo); pass --assign <login> to send it to one."}}"#;
+    let v = vec![
+        one(
+            "db connect --assign: held, where the card is",
+            &["db", "connect", "app1", "--new", "--assign", "ada"],
+            202,
+            DB_HELD_CARD,
+            2,
+        ),
+        one(
+            "db connect: held, a card with no where",
+            &["db", "connect", "app1", "--new"],
+            202,
+            r#"{"request":{"id":"w1"},"card":{"raised":false},"hint":"h"}"#,
+            2,
+        ),
+        one(
+            "db connect: held, a card that isn't a dict",
+            &["db", "connect", "app1", "--new"],
+            202,
+            r#"{"request":{"id":"w1"},"card":["where"],"hint":"h"}"#,
+            2,
+        ),
+        one(
+            "db connect --assign=bo --json: held",
+            &["db", "connect", "--assign=bo", "app1", "--new", "--json"],
+            202,
+            DB_HELD_CARD,
+            2,
+        ),
+        one(
+            "egress add --assign a comma list: not a host",
+            &[
+                "egress",
+                "add",
+                "app1",
+                "api.example.com",
+                "--assign",
+                "ada,owner",
+            ],
+            202,
+            egress_held,
+            2,
+        ),
+        one(
+            "egress add, no --assign: the hint says how",
+            &["egress", "add", "app1", "api.example.com"],
+            202,
+            egress_held,
+            2,
+        ),
+        stop(
+            "egress add: a bare --assign sends nothing",
+            &["egress", "add", "app1", "api.example.com", "--assign"],
+            2,
+        ),
+        shell(one(
+            "--assign before egress: the shell's",
+            &["--assign", "ada,owner", "egress", "add", "app1", "api.example.com"],
+            202,
+            egress_held,
+            2,
+        )),
+        shell(stop(
+            "help never acts: db connect --assign ada --help",
+            &["db", "connect", "app1", "--new", "--assign", "ada", "--help"],
+            0,
+        )),
+    ];
+    for c in v {
+        rig.check(&c);
     }
 }

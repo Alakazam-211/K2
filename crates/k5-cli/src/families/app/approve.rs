@@ -1,5 +1,7 @@
 //! The held App requests, as the shell CLI answers them
-//! (`cli/src/app-auth.sh`): `app approvals [--app A] [--all]` (the list),
+//! (`cli/src/app-auth.sh`): `app approvals [<request-id>] [--app A]
+//! [--state S|--all]` (the list, each request's permission card, and an
+//! agent's line under its own requests),
 //! `app approvals revoke <id> | --app <name>`, `app deny <id> [--reason
 //! T]` and `app approve <id>`.
 //!
@@ -46,6 +48,13 @@ const OWNER_ONLY: &str = concat!(
     ". An agent can never approve.\"}"
 );
 
+/// The agent's last line under its own requests.
+const OWN_REQUESTS: &str = concat!(
+    "These are your own requests. An owner or admin answers them; you can withdraw one: ",
+    cli_name!(),
+    " app deny <request-id>."
+);
+
 /// `…matches '<id>' (k2 app approvals)"}`.
 const NOT_FOUND_TAIL: &str = concat!("' (", cli_name!(), " app approvals)\"}");
 
@@ -59,8 +68,14 @@ pub mod usage {
         product_name!(),
         ")"
     );
-    pub const APPROVALS_TAIL: &str =
-        concat!(" (", cli_name!(), " app approvals [--app A] [--all])");
+    /// `cmd_app_approvals`' `$usage`.
+    pub const APPROVALS: &str = concat!(
+        cli_name!(),
+        " app approvals [<request-id>] [--app A] [--state pending|approved|denied|withdrawn|expired|failed|all] [--all] [--json]"
+    );
+    /// A `--state` no state.
+    pub const STATE: &str =
+        "usage: --state is pending, approved, denied, withdrawn, expired, failed or all, not '";
     pub const REVOKE: &str = concat!(
         "usage: ",
         cli_name!(),
@@ -105,9 +120,11 @@ pub fn parse(verb: &str, words: &[&str]) -> Option<Result<Ask, Stop>> {
     })
 }
 
-/// `cmd_app_approvals`' loop.
+/// `cmd_app_approvals`' loop and checks.
 fn list(words: &[&str]) -> Result<Ask, Stop> {
     let (mut app, mut all, mut json) = (String::new(), false, false);
+    let (mut state, mut id) = (String::new(), String::new());
+    let whole = || Stop::usage(format!("usage: {}", usage::APPROVALS));
     let mut rest = words;
     while let Some(w) = rest.first().copied() {
         match w {
@@ -117,20 +134,43 @@ fn list(words: &[&str]) -> Result<Ask, Stop> {
                 rest = &rest[2..];
                 continue;
             }
+            "--state" => {
+                state = rest.get(1).ok_or_else(whole)?.to_string();
+                rest = &rest[2..];
+                continue;
+            }
             "--all" => all = true,
             "--json" => json = true,
-            _ => {
+            _ if w.starts_with('-') => {
                 return Err(Stop::usage(format!(
-                    "Unknown argument: {w}{}",
-                    usage::APPROVALS_TAIL
+                    "Unknown argument: {w} (usage: {})",
+                    usage::APPROVALS
                 )))
             }
+            // `[ -z "$id" ]`: an empty id is no id yet.
+            _ if id.is_empty() => id = w.to_string(),
+            _ => return Err(whole()),
         }
         rest = &rest[1..];
     }
-    let mut query = if all { "state=all" } else { "state=pending" }.to_string();
+    if !matches!(
+        state.as_str(),
+        "" | "pending" | "approved" | "denied" | "withdrawn" | "expired" | "failed" | "all"
+    ) {
+        return Err(Stop::usage(format!("{}{state}'", usage::STATE)));
+    }
+    let mut query = if all {
+        "state=all".to_string()
+    } else if state.is_empty() {
+        "state=pending".to_string()
+    } else {
+        format!("state={state}")
+    };
     if !app.is_empty() {
         query.push_str(&format!("&app={}", quote(&app)));
+    }
+    if !id.is_empty() {
+        query.push_str(&format!("&request={}", quote(&id)));
     }
     Ok(Ask::List { query, json })
 }
@@ -195,7 +235,14 @@ pub fn run(ctx: &mut Ctx, ask: &Ask) -> Answer {
     match ask {
         Ask::List { query, json } => {
             let body = ctx.call(false, "/cli/app/approvals", query)?;
-            Ok(answer(&body, *json, list_lines))
+            if *json {
+                return Ok(super::wallet::raw(&body));
+            }
+            // `K2_AP_AGENT="$(if _compute_in_session; then echo 1; fi)"`.
+            let agent = ctx.in_session();
+            let mut o = Out::default();
+            let r = list_lines(&body, agent, &mut o);
+            Ok(o.done(r))
         }
         Ask::Revoke { body, json } => {
             let body = ctx.call(true, "/cli/app/approvals/revoke", body)?;
@@ -209,21 +256,22 @@ pub fn run(ctx: &mut Ctx, ask: &Ask) -> Answer {
     }
 }
 
-/// `cmd_app_approvals`' Python.
-fn list_lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
+/// `cmd_app_approvals`' Python; `agent` is its `K2_AP_AGENT` (`1` in a
+/// session).
+fn list_lines(body: &[u8], agent: bool, o: &mut Out) -> Result<Exit, Raise> {
     let v = py::load(body, 3)?;
-    let rs = py::or(py::dget(&v, "requests", 3)?, py::empty_list());
+    let rs = py::or(py::dget(&v, "requests", 4)?, py::empty_list());
     if !py::truthy(&rs) {
-        o.line("No held App requests.");
+        o.line("No held App requests (--state all lists every state).");
         return Ok(Exit::Ok);
     }
-    for r in py::iter(&rs, 6)? {
-        let id = py::idx(&r, "id", 7)?;
-        let status = py::idx(&r, "status", 7)?;
-        let kind = py::idx(&r, "kind", 7)?;
-        let label = py::idx(&r, "appLabel", 7)?;
-        let ws = py::dget(&r, "workspaceHandle", 7)?;
-        let by = py::idx(&r, "requestedBy", 7)?;
+    for r in py::iter(&rs, 7)? {
+        let id = py::idx(&r, "id", 8)?;
+        let status = py::idx(&r, "status", 8)?;
+        let kind = py::idx(&r, "kind", 8)?;
+        let label = py::idx(&r, "appLabel", 8)?;
+        let ws = py::dget(&r, "workspaceHandle", 8)?;
+        let by = py::idx(&r, "requestedBy", 8)?;
         o.line(&format!(
             "{}  {} {} {} ({}) by {}",
             py::s(&id),
@@ -233,24 +281,55 @@ fn list_lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
             py::s(&ws),
             py::s(&by)
         ));
-        o.line(&format!("    {}", py::s(&py::idx(&r, "summary", 8)?)));
-        if py::truthy(&py::dget(&r, "reason", 9)?) {
-            o.line(&format!("    why: {}", py::s(&py::idx(&r, "reason", 10)?)));
+        o.line(&format!("    {}", py::s(&py::idx(&r, "summary", 9)?)));
+        if py::truthy(&py::dget(&r, "reason", 10)?) {
+            o.line(&format!("    why: {}", py::s(&py::idx(&r, "reason", 11)?)));
         }
-        let reasons = py::or(py::dget(&r, "reasons", 11)?, py::empty_list());
-        for why in py::iter(&reasons, 11)? {
+        let reasons = py::or(py::dget(&r, "reasons", 12)?, py::empty_list());
+        for why in py::iter(&reasons, 12)? {
             o.line(&format!("    held: {}", py::s(&why)));
         }
-        if py::truthy(&py::dget(&r, "decidedBy", 13)?) {
-            let status = py::idx(&r, "status", 14)?;
-            let by = py::idx(&r, "decidedBy", 14)?;
-            let via = if py::truthy(&py::dget(&r, "confirmVia", 14)?) {
-                py::concat(" via ", &py::idx(&r, "confirmVia", 14)?, 14)?
+        if py::truthy(&py::dget(&r, "decidedBy", 14)?) {
+            let status = py::idx(&r, "status", 15)?;
+            let by = py::idx(&r, "decidedBy", 15)?;
+            let via = if py::truthy(&py::dget(&r, "confirmVia", 15)?) {
+                py::concat(" via ", &py::idx(&r, "confirmVia", 15)?, 15)?
             } else {
                 String::new()
             };
             o.line(&format!("    {} by {}{via}", py::s(&status), py::s(&by)));
         }
+        // `c = r.get("card") if isinstance(r.get("card"), dict) else None`
+        let card = py::dget(&r, "card", 16)?;
+        let c = matches!(card, Value::Object(_)).then_some(card);
+        if let Some(c) = c.filter(py::truthy) {
+            let routed = py::or(py::dget(&c, "routedTo", 18)?, py::empty_list());
+            let mut logins = Vec::new();
+            for x in py::iter(&routed, 18)? {
+                if matches!(x, Value::Object(_)) {
+                    logins.push(py::dget_or(&x, "login", py::text(""), 18)?);
+                }
+            }
+            let joined = py::join(", ", &Value::Array(logins), 18)?;
+            let to = if joined.is_empty() {
+                "every owner and admin".to_string()
+            } else {
+                joined
+            };
+            let thread = py::or(py::dget(&c, "thread", 19)?, py::text("?"));
+            o.line(&format!(
+                "    card {}: {}, on the Thread of {}, sent to {to}",
+                py::s(&py::dget(&c, "id", 19)?),
+                py::s(&py::dget(&c, "state", 19)?),
+                py::s(&thread)
+            ));
+        } else if matches!(py::idx(&r, "status", 20)?, Value::Str(t) if t.as_str() == Some("pending"))
+        {
+            o.line("    no permission card (it waits in Settings \u{2192} App Approvals)");
+        }
+    }
+    if agent && !py::truthy(&py::dget(&v, "canApprove", 22)?) {
+        o.line(OWN_REQUESTS);
     }
     Ok(Exit::Ok)
 }
@@ -470,9 +549,38 @@ mod tests {
             }))
         );
         assert!(matches!(
-            parse("approvals", &["x"]),
-            Some(Err(s)) if s.line.starts_with("Unknown argument: x (")
+            parse("approvals", &["-x"]),
+            Some(Err(s)) if s.line.starts_with("Unknown argument: -x (usage: ")
         ));
+        // 0.46.17: one request by its id, a state, and their usage lines.
+        assert_eq!(
+            parse("approvals", &["w a", "--state", "denied", "--app", "b"]),
+            Some(Ok(Ask::List {
+                query: "state=denied&app=b&request=w%20a".into(),
+                json: false
+            }))
+        );
+        assert_eq!(
+            parse("approvals", &["--state", "", "", "w"]),
+            Some(Ok(Ask::List {
+                query: "state=pending&request=w".into(),
+                json: false
+            }))
+        );
+        assert_eq!(
+            parse("approvals", &["--state", "denied", "--all"]),
+            Some(Ok(Ask::List {
+                query: "state=all".into(),
+                json: false
+            }))
+        );
+        let whole = Stop::usage(format!("usage: {}", usage::APPROVALS));
+        assert_eq!(parse("approvals", &["a", "b"]), Some(Err(whole.clone())));
+        assert_eq!(parse("approvals", &["--state"]), Some(Err(whole)));
+        assert_eq!(
+            parse("approvals", &["--state", "nope", "--all"]),
+            Some(Err(Stop::usage(format!("{}nope'", usage::STATE))))
+        );
         assert_eq!(
             parse("approvals", &["--app"]),
             Some(Err(Stop::need_value("--app")))
@@ -518,5 +626,41 @@ mod tests {
     fn the_lines_name_the_brand() {
         assert!(OWNER_ONLY.contains(concat!(cli_name!(), " app approve <id>")));
         assert!(NOT_FOUND_TAIL.contains(concat!(cli_name!(), " app approvals")));
+        assert!(usage::APPROVALS.starts_with(concat!(cli_name!(), " app approvals [")));
+        assert!(OWN_REQUESTS.ends_with(concat!(cli_name!(), " app deny <request-id>.")));
+    }
+
+    #[test]
+    fn each_request_says_where_its_card_is() {
+        let body = br#"{"canApprove":false,"requests":[{"id":"w1","status":"pending","kind":"manage","appLabel":"a","requestedBy":"agent:a","summary":"s","card":{"id":"w1","state":"pending","thread":"a","routedTo":[{"login":"ada"},"x",{"login":"bo"}]}},{"id":"w2","status":"pending","kind":"k","appLabel":"b","requestedBy":"r","summary":"t","card":{}},{"id":"w3","status":"denied","kind":"k","appLabel":"c","requestedBy":"r","summary":"u","card":null},{"id":"w4","status":"pending","kind":"k","appLabel":"d","requestedBy":"r","summary":"v","card":{"routedTo":[]}}]}"#;
+        let mut o = Out::default();
+        assert_eq!(list_lines(body, true, &mut o).unwrap(), Exit::Ok);
+        let want = [
+            "w1  pending   manage      a (None) by agent:a",
+            "    s",
+            "    card w1: pending, on the Thread of a, sent to ada, bo",
+            "w2  pending   k           b (None) by r",
+            "    t",
+            "    no permission card (it waits in Settings \u{2192} App Approvals)",
+            "w3  denied    k           c (None) by r",
+            "    u",
+            "w4  pending   k           d (None) by r",
+            "    v",
+            "    card None: None, on the Thread of ?, sent to every owner and admin",
+            OWN_REQUESTS,
+        ];
+        assert_eq!(o.stdout, want.join("\n") + "\n");
+        // The owner (or canApprove) gets no last line.
+        let mut o = Out::default();
+        list_lines(body, false, &mut o).unwrap();
+        assert!(!o.stdout.contains(OWN_REQUESTS));
+        // A login that isn't a string: join's TypeError, at line 18.
+        let mut o = Out::default();
+        let r = list_lines(
+            br#"{"requests":[{"id":"w","status":"p","kind":"k","appLabel":"a","requestedBy":"r","summary":"s","card":{"routedTo":[{"login":7}]}}]}"#,
+            false,
+            &mut o,
+        );
+        assert!(r.is_err());
     }
 }

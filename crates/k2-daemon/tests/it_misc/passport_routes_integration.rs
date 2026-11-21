@@ -1068,10 +1068,57 @@ async fn an_agent_is_refused_on_another_workspaces_ticket() {
         assert_eq!(stored[key], was[key], "{key} unchanged: {stored}");
     }
 
+    // Through the tunnel the passport misses the arm, as on every D1 route:
+    // its own ticket and the rules meet their routes' own refusal.
+    let r = http_body(e.tunnel_port, "POST", "/cli/feedback/comment", Some(pass), &serde_json::json!({ "id": mine, "body": "x" }).to_string());
+    assert_eq!(r.status, 403, "comment through the tunnel: {}", r.raw);
+    let r = http(e.tunnel_port, "GET", "/cli/tickets/settings", Some(pass));
+    assert_eq!(r.status, 403, "rules through the tunnel: {}", r.raw);
+    assert_eq!(item(&e, &mine)["comments"], was["comments"], "nothing came in through the tunnel");
+
     // A bad passport gets the plain refusal it always got.
     let bad = format!("{}x", e.passport);
     let r = post_json(&e, "/cli/feedback/comment", &bad, serde_json::json!({ "id": mine, "body": "x" }));
     assert_eq!((r.status, r.raw.contains("invalid or missing token")), (403, true), "bad passport: {}", r.raw);
+}
+
+/// The tickets arm takes only a passport of a live, local session, as the
+/// D1 routes do: an API cell's, a `k2 job` run's and one whose session
+/// isn't live meet the routes' own refusal, and nothing is written.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_ticket_write_needs_a_live_local_passport() {
+    let t = k2_core::test_env::TempHome::new();
+    let (e, _d) = env(&t).await;
+    let own = Path::new(&e.own);
+    let (api, _api_live) = live_passport(own, &e.own_id, &format!("api-d1bkey-{}", uuid::Uuid::new_v4()), "d1b-api");
+    let mint = |address: &str| {
+        session_token::mint_session_token(
+            &SessionId::new(),
+            "pane-not-live",
+            HookPrincipal { workspace_uuid: e.own_id.clone(), agent_address: address.to_string() },
+            session_token::CredMode::ApiKey,
+            session_token::Provider::Anthropic,
+        )
+    };
+    let job = mint("job:nightly");
+    let gone = mint("d1-agent");
+    let mine = ticket(&e.own_id, "Own question");
+    let was = item(&e, &mine);
+    for (label, p) in [("an API cell", &api), ("a k2 job run", &job), ("no live session", &gone)] {
+        assert!(session_token::validate_hook(p).is_some(), "{label}: the passport itself is valid");
+        let r = post_json(&e, "/cli/feedback/comment", p, serde_json::json!({ "id": mine, "body": "x" }));
+        assert_eq!(r.status, 403, "{label}, comment: {}", r.raw);
+        let r = post_json(&e, "/cli/feedback/create", p, serde_json::json!({ "title": "Not live", "kind": "fyi" }));
+        assert_eq!(r.status, 403, "{label}, ask: {}", r.raw);
+        let r = http(e.port, "GET", "/cli/tickets/settings", Some(p.as_str()));
+        assert_eq!(r.status, 403, "{label}, rules: {}", r.raw);
+    }
+    assert_eq!(item(&e, &mine)["comments"], was["comments"], "no refused passport commented");
+    let r = http(e.port, "GET", &format!("/cli/feedback/list?project={}&all=1", enc(&e.own)), Some(OWNER));
+    assert_eq!(r.status, 200, "{}", r.raw);
+    assert!(!r.raw.contains("Not live"), "no refused passport filed a ticket: {}", r.raw);
+    let r = http(e.port, "GET", "/cli/tickets/settings", Some(e.passport.as_str()));
+    assert_eq!(r.status, 200, "the live passport reads the rules: {}", r.raw);
 }
 
 /// The ticket rules: the passport reads them (`canEdit: false`) and still

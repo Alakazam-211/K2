@@ -609,8 +609,18 @@ fn the_help_lines_are_the_family_s() {
     let relays = r#"{"relays":[{"id":"r1","host":"h","port":25,"tls":"implicit","username":"u","fromDomain":"d","lastTestOk":false}]}"#;
     let v = vec![
         // native: notifications email status --help
-        run("email status --help asks", &["email", "status", "--help"], vec![ok(STATUS)], 0),
-        run("email status -h asks", &["email", "status", "-h"], vec![ok(STATUS)], 0),
+        run(
+            "email status --help asks",
+            &["email", "status", "--help"],
+            vec![ok(STATUS)],
+            0,
+        ),
+        run(
+            "email status -h asks",
+            &["email", "status", "-h"],
+            vec![ok(STATUS)],
+            0,
+        ),
         // native: notifications email sender resume --help
         run(
             "sender resume --help resumes the sender --help",

@@ -601,7 +601,11 @@ mod tests {
         let owner = settings(Some("1"), Auth::Owner("o".into()), false);
         let guarded = settings(Some("1"), Auth::None, true);
         let no_port = settings(None, Auth::Owner("o".into()), false);
-        for help in [&["read", "--help"][..], &["inbox", "list", "-h"], &["x", "-h", "y"]] {
+        for help in [
+            &["read", "--help"][..],
+            &["inbox", "list", "-h"],
+            &["x", "-h", "y"],
+        ] {
             assert!(!help_line_gated(&line(help), &owner), "{help:?}");
             assert!(help_line_gated(&line(help), &guarded), "{help:?}");
             assert!(help_line_gated(&line(help), &no_port), "{help:?}");

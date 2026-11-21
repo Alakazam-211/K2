@@ -2980,7 +2980,10 @@ fn hostchat_help_as_a_sub_command() {
     let rig = Rig::new(VERB, "helpsub");
     for c in [
         // native: hostchat media --help
-        bad("media --help: an unknown media command", &["media", "--help"]),
+        bad(
+            "media --help: an unknown media command",
+            &["media", "--help"],
+        ),
         bad("media -h: an unknown media command", &["media", "-h"]),
         // native: hostchat people --help
         bad("people --help: the usage", &["people", "--help"]),

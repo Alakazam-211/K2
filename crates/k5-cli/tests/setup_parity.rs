@@ -21,8 +21,10 @@
 //! - The prelude: the gates (before the words), a port that is no port,
 //!   `chief-of-staff`'s locked tool in a K2 terminal with no passport.
 //! - Every usage mistake, sending nothing.
+//! - `agent-reports` (send-feedback's settings): reads, writes, refusals,
+//!   an older server, no answer.
 //! - What the binary hands to the shell: `help` as a word, a host that is
-//!   not plain, and `agent-reports` (send-feedback's settings).
+//!   not plain.
 
 #![cfg(unix)]
 
@@ -988,19 +990,15 @@ const FEEDBACK_SETTINGS: &str = r#"{"enabled":true,"agents":true,"agentPlatform"
 /// The same after `--agents all --attach computer,log-tail`.
 const FEEDBACK_ALL: &str = r#"{"enabled":true,"agents":true,"agentPlatform":true,"agentAttach":["computer","log-tail"],"agentDiagnostics":false,"agentScopes":["cli","platform"],"agentsAsked":true,"agentsAskedAt":1763538000000,"agentsAskedBy":"owner","attachParts":[{"id":"computer","label":"Computer size and free space"},{"id":"log-tail","label":"The last lines of the log"}],"canSend":true,"endpoint":"https://feedback.example.test","pending":2,"senderKind":"person","ok":true}"#;
 
-/// `setup agent-reports` (send-feedback's settings, 0.46.17) is on the
-/// binary's hand-off list ([`k5_cli::families::setup::SHELL_VERBS`]):
-/// both sides are the shell's, byte for byte, for each of its forms. With
-/// no python3 the binary hands nothing over: the missing-Python line,
-/// exit 69, nothing sent (the rig's third run). After another verb it is
-/// the binary's usage.
+/// `setup agent-reports` (send-feedback's settings, 0.46.17): the
+/// binary's, byte for byte, for each of its forms: the read, a write
+/// after the version read, `--json` (after the verb and before it), the
+/// usage lines, refusals (403: exit 3; 400 and 413: exit 2), an answer
+/// with no error fields, an older server, no answer, an agent's passport,
+/// the gate. After another verb it is the binary's usage.
 #[test]
-fn setup_agent_reports_goes_to_the_shell() {
+fn setup_agent_reports_as_the_shell_does() {
     let rig = Rig::new(VERB, "agent-reports");
-    let shell = |c: Case| Case {
-        compare: Compare::Shell,
-        ..c
-    };
     let people_only = || {
         refusal(
             403,
@@ -1009,7 +1007,7 @@ fn setup_agent_reports_goes_to_the_shell() {
     };
     let v = vec![
         // covers: setup agent-reports
-        shell(case(
+        case(
             "agent-reports: the read",
             &["agent-reports"],
             &[],
@@ -1017,8 +1015,8 @@ fn setup_agent_reports_goes_to_the_shell() {
             owner_and_port,
             0,
             1,
-        )),
-        shell(case(
+        ),
+        case(
             "agent-reports --agents all --attach: the version read, then the write",
             &[
                 "agent-reports",
@@ -1032,9 +1030,9 @@ fn setup_agent_reports_goes_to_the_shell() {
             owner_and_port,
             0,
             2,
-        )),
+        ),
         // covers: setup agent-reports --json
-        shell(case(
+        case(
             "agent-reports --json",
             &["agent-reports", "--json"],
             &[],
@@ -1042,8 +1040,8 @@ fn setup_agent_reports_goes_to_the_shell() {
             owner_and_port,
             0,
             1,
-        )),
-        shell(case(
+        ),
+        case(
             "--json before agent-reports",
             &["--json", "agent-reports", "--agents", "off"],
             &[],
@@ -1051,8 +1049,8 @@ fn setup_agent_reports_goes_to_the_shell() {
             owner_and_port,
             0,
             1,
-        )),
-        shell(case(
+        ),
+        case(
             "agent-reports: a usage error, nothing sent",
             &["agent-reports", "--enabled", "off"],
             &[],
@@ -1060,8 +1058,8 @@ fn setup_agent_reports_goes_to_the_shell() {
             owner_and_port,
             2,
             0,
-        )),
-        shell(case(
+        ),
+        case(
             "agent-reports --agents maybe: a usage error",
             &["agent-reports", "--agents", "maybe"],
             &[],
@@ -1069,8 +1067,8 @@ fn setup_agent_reports_goes_to_the_shell() {
             owner_and_port,
             2,
             0,
-        )),
-        shell(case(
+        ),
+        case(
             "agent-reports refused (403): exit 3",
             &["agent-reports", "--agents", "off"],
             &[],
@@ -1078,8 +1076,8 @@ fn setup_agent_reports_goes_to_the_shell() {
             owner_and_port,
             3,
             1,
-        )),
-        shell(case(
+        ),
+        case(
             "agent-reports, a bad part (400): exit 2",
             &["agent-reports", "--attach", "nope"],
             &[],
@@ -1093,8 +1091,8 @@ fn setup_agent_reports_goes_to_the_shell() {
             owner_and_port,
             2,
             2,
-        )),
-        shell(agent(
+        ),
+        agent(
             &[],
             case(
                 "an agent's agent-reports: refused, exit 3",
@@ -1105,7 +1103,127 @@ fn setup_agent_reports_goes_to_the_shell() {
                 3,
                 2,
             ),
-        )),
+        ),
+        case(
+            "agent-reports --agents off: the write alone",
+            &["agent-reports", "--agents", "off", "--json"],
+            &[],
+            vec![text(FEEDBACK_ALL)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "agent-reports --agents on, an older server: the write it takes",
+            &["agent-reports", "--agents", "on"],
+            &[],
+            vec![
+                text(r#"{"enabled":true,"agents":false}"#),
+                text(r#"{"enabled":true,"agents":true}"#),
+            ],
+            owner_and_port,
+            0,
+            2,
+        ),
+        case(
+            "agent-reports --attach, an older server: its line, nothing changed",
+            &["agent-reports", "--attach", "computer"],
+            &[],
+            vec![text(r#"{"enabled":true,"agents":false}"#)],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "agent-reports --agent-diagnostics: the usage",
+            &["agent-reports", "--agent-diagnostics", "on"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "agent-reports, a word it doesn't take: the usage",
+            &["agent-reports", "now"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "agent-reports --attach with no parts",
+            &["agent-reports", "--attach", " "],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "agent-reports --agents, no value",
+            &["agent-reports", "--agents"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "agent-reports: a refusal with an error object and a card",
+            &["agent-reports", "--agents", "off"],
+            &[],
+            vec![refusal(403, PERMISSION_ASK)],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "agent-reports: 413, exit 2",
+            &["agent-reports", "--agents", "off"],
+            &[],
+            vec![refusal(413, r#"{"error":"too_large"}"#)],
+            owner_and_port,
+            2,
+            1,
+        ),
+        case(
+            "agent-reports: a 500 with no error fields",
+            &["agent-reports"],
+            &[],
+            vec![refusal(500, "the server broke \"here\"\twith a tab")],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "agent-reports: an empty 200",
+            &["agent-reports"],
+            &[],
+            vec![text("")],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "agent-reports: no answer",
+            &["agent-reports"],
+            &[],
+            vec![Reply::Close],
+            owner_and_port,
+            1,
+            1,
+        ),
+        case(
+            "agent-reports, no daemon: the gate",
+            &["agent-reports"],
+            &[],
+            vec![],
+            nothing,
+            1,
+            0,
+        ),
         case(
             "agent-reports after a verb: the usage",
             &["hide", "agent-reports"],

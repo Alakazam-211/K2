@@ -308,27 +308,34 @@ fn the_words_as_cmd_setup_reads_them() {
     assert!(usage_text().starts_with("k2 setup [--json]"));
 }
 
-/// `agent-reports` goes to the shell where the loop reaches it with no
-/// verb before it, whatever comes after; after a verb it is the usage.
+/// `agent-reports` hands every word after it to `_sf_settings_run setup`
+/// where the loop reaches it with no verb before it (`--json` first when
+/// it came before the verb); after a verb it is the usage.
 #[test]
-fn the_shell_s_verbs() {
-    assert_eq!(SHELL_VERBS, ["agent-reports"]);
-    for words in [
-        &["agent-reports"][..],
-        &[
-            "agent-reports",
-            "--agents",
-            "all",
-            "--attach",
-            "computer,log-tail",
-        ],
-        &["--json", "agent-reports"],
-        &["agent-reports", "--json"],
-        &["agent-reports", "--bogus"],
-        &["agent-reports", "hide"],
-        &["--json", "--json", "agent-reports", "x"],
+fn agent_reports_takes_the_words_after_it() {
+    let reports = |w: &[&str]| -> Result<Line, Stop> {
+        Err(Stop::Reports(w.iter().map(|s| s.to_string()).collect()))
+    };
+    for (words, want) in [
+        (&["agent-reports"][..], &[][..]),
+        (
+            &[
+                "agent-reports",
+                "--agents",
+                "all",
+                "--attach",
+                "computer,log-tail",
+            ],
+            &["--agents", "all", "--attach", "computer,log-tail"],
+        ),
+        (&["--json", "agent-reports"], &["--json"]),
+        (&["agent-reports", "--json"], &["--json"]),
+        (&["agent-reports", "--bogus"], &["--bogus"]),
+        (&["agent-reports", "hide"], &["hide"]),
+        (&["--json", "--json", "agent-reports", "x"], &["--json", "x"]),
+        (&["agent-reports", "-h"], &["-h"]),
     ] {
-        assert_eq!(parse(words), Err(Stop::Shell), "{words:?}");
+        assert_eq!(parse(words), reports(want), "{words:?}");
     }
     for words in [
         &["hide", "agent-reports"][..],
@@ -353,7 +360,6 @@ fn the_shell_s_verbs() {
         parse(&["kessel", "--name", "agent-reports"]).map(|l| l.body),
         Ok(r#"{"name": "agent-reports"}"#.to_string())
     );
-    assert_eq!(parse(&["agent-reports", "-h"]), Err(Stop::Shell));
     assert_eq!(parse(&["-h", "agent-reports"]), Err(Stop::Help));
     let text = source();
     assert!(text.contains(
@@ -362,8 +368,7 @@ fn the_shell_s_verbs() {
 }
 
 /// The words of `cmd_setup`'s loop (`cli/src/setup.sh`), as its arms
-/// name them: a new one fails here until the binary parses it or hands
-/// it to the shell ([`SHELL_VERBS`]).
+/// name them: a new one fails here until the binary parses it.
 #[test]
 fn each_word_of_cmd_setup_is_parsed_or_handed_on() {
     let text = source();
@@ -414,15 +419,7 @@ fn each_word_of_cmd_setup_is_parsed_or_handed_on() {
             usage_text()
         )));
         let got = parse(&[w.as_str()]);
-        assert_ne!(got, unknown, "{w}: neither parsed nor handed on");
-        assert_eq!(
-            got == Err(Stop::Shell),
-            SHELL_VERBS.contains(&w.as_str()),
-            "{w}: {got:?}"
-        );
-    }
-    for w in SHELL_VERBS {
-        assert!(words.iter().any(|a| a == w), "{w} is no word of cmd_setup");
+        assert_ne!(got, unknown, "{w}: not parsed");
     }
 }
 

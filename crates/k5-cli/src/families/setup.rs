@@ -43,11 +43,13 @@
 //! 6. The EXIT trap's lines ([`crate::prelude::Closing`]), from the body
 //!    `_permission_note` was handed.
 //!
+//! `agent-reports` where the loop reaches it with no verb before it is
+//! send-feedback's settings ([`agent_reports`]), every word after it
+//! theirs.
+//!
 //! The shell CLI answers these forms itself ([`run`] returns `None`): a
 //! command line with `-h`, `--help` or `help` anywhere in it (the front
-//! sends those on, [`crate::front`]); a verb on the hand-off list
-//! ([`SHELL_VERBS`]: `agent-reports`) where the loop reaches it; a word
-//! that is not UTF-8; a host
+//! sends those on, [`crate::front`]); a word that is not UTF-8; a host
 //! setting that is not a plain host name or IPv4 address (bash hands curl
 //! the URL as written); a `python3` the binary can't tell
 //! ([`crate::families`], Without Python); and each form whose switch is
@@ -73,6 +75,8 @@
 //! - `TMPDIR` unusable and an answer with a bulletin, a refused passport
 //!   or a `permission` object: bash can't write its note file and prints
 //!   its own error naming the script's process id.
+
+pub mod agent_reports;
 
 use super::{curl_port, get, py_get, py_iter, py_len, raised, Raise, Shown};
 use crate::daemon::{self, Settings};
@@ -104,14 +108,6 @@ pub const READ_NATIVE: bool = true;
 /// The writes (`hide`, `show`, `skip`, `kessel`, `chief-of-staff`,
 /// `dismiss-offer`) are the binary's. Off, the shell answers them.
 pub const WRITE_NATIVE: bool = true;
-
-/// The verbs of `cmd_setup` the shell answers (K2's ruling at 0.46.17):
-/// where the loop reaches one with no verb before it, the command goes to
-/// the shell, words after it and all (after another verb it is the
-/// usage, exit 2, as for any second verb). `agent-reports` is
-/// send-feedback's settings (`_sf_settings_run setup`). A test reads
-/// `cmd_setup`'s arms: each word is parsed here or on this list.
-pub const SHELL_VERBS: &[&str] = &["agent-reports"];
 
 /// The tool `setup chief-of-staff` rides (`_cli_tool_id_for_verb`).
 pub const TOOL: &str = "agent-harness";
@@ -219,8 +215,10 @@ pub struct Line {
 pub enum Stop {
     /// `-h`, `--help` or `help` where the loop reads a word: the shell's.
     Help,
-    /// A verb of [`SHELL_VERBS`] where the loop reads a word: the shell's.
-    Shell,
+    /// `agent-reports` where the loop reads a word with no verb before
+    /// it: no list is sent; these words go to `_sf_settings_run setup`
+    /// ([`agent_reports`]), `--json` first when it came before the verb.
+    Reports(Vec<String>),
     /// What goes on stderr; exit 2.
     Usage(String),
 }
@@ -289,11 +287,16 @@ pub fn parse(words: &[&str]) -> Result<Line, Stop> {
                 }
                 i += 2;
             }
-            w if SHELL_VERBS.contains(&w) => {
+            "agent-reports" => {
                 if sub.is_some() {
                     return Err(usage_err());
                 }
-                return Err(Stop::Shell);
+                let mut rest: Vec<String> = Vec::new();
+                if json {
+                    rest.push("--json".into());
+                }
+                rest.extend(words[i + 1..].iter().map(|w| (*w).to_string()));
+                return Err(Stop::Reports(rest));
             }
             "skip" => {
                 if sub.is_some() {
@@ -385,9 +388,6 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         return None;
     }
     let read = parse(&words);
-    if matches!(read, Err(Stop::Shell)) {
-        return None;
-    }
     let native = match &read {
         Ok(line) if line.sub.post() => WRITE_NATIVE,
         _ => READ_NATIVE,
@@ -478,8 +478,9 @@ fn run_with(
             let _ = out::write_flushed(&mut std::io::stderr().lock(), text.as_bytes());
             return Exit::Usage;
         }
-        // `run` hands these to the shell before this.
-        Err(Stop::Help | Stop::Shell) => return Exit::Usage,
+        Err(Stop::Reports(words)) => return agent_reports::run(args, &words, settings),
+        // `run` hands the help to the shell before this.
+        Err(Stop::Help) => return Exit::Usage,
     };
     // A port curl won't take: curl sends nothing, and `_setup_render`
     // reads no status.

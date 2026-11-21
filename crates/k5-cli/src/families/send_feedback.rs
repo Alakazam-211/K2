@@ -44,7 +44,8 @@ pub const OWNER: crate::route::Owner = crate::route::Owner::Native;
 pub const VERBS: &[crate::route::Verb] = &[];
 
 const PRODUCT: &str = product_name!();
-const SETTINGS: &str = "/cli/product-feedback/settings";
+/// The settings route (`setup agent-reports` asks it too).
+pub const SETTINGS: &str = "/cli/product-feedback/settings";
 const LIST_USAGE: &str = concat!(
     "usage: ",
     cli_name!(),
@@ -800,12 +801,27 @@ fn onoff(word: &str, flag: &str) -> Result<bool, String> {
 
 /// `_sf_settings_run settings`'s loop and checks.
 pub fn parse_settings(words: &[&str]) -> Result<SettingsAsk, String> {
+    parse_settings_as(words, SETTINGS_USAGE, true)
+}
+
+/// `_sf_settings_run <who>`'s loop and checks: `usage` is the who's usage
+/// line, and `setup` (`setup agent-reports`, `settings` false) takes
+/// neither `--enabled` nor `--agent-diagnostics` (its usage line, before
+/// the value is read).
+pub fn parse_settings_as(
+    words: &[&str],
+    usage: &str,
+    settings: bool,
+) -> Result<SettingsAsk, String> {
     let mut a = SettingsAsk::default();
     let mut i = 0;
     while i < words.len() {
         let next = words.get(i + 1).copied();
         match words[i] {
             flag @ ("--enabled" | "--agent-diagnostics") => {
+                if !settings {
+                    return Err(usage.into());
+                }
                 let v = next.ok_or_else(|| format!("usage: {flag} on|off"))?;
                 let on = onoff(v, flag)?;
                 if flag == "--enabled" {
@@ -844,7 +860,7 @@ pub fn parse_settings(words: &[&str]) -> Result<SettingsAsk, String> {
                 a.json = true;
                 i += 1;
             }
-            _ => return Err(SETTINGS_USAGE.into()),
+            _ => return Err(usage.into()),
         }
     }
     if a.attach.is_some() && a.agent_diag.is_some() {
@@ -860,51 +876,9 @@ fn settings(ctx: &mut Ctx, rest: &[&str]) -> Exit {
         Ok(a) => a,
         Err(line) => return usage(&line),
     };
-    let writes =
-        a.enabled.is_some() || a.agents.is_some() || a.agent_diag.is_some() || a.attach.is_some();
-    let body = if writes {
-        let mut new = true;
-        if a.attach.is_some() || matches!(a.agents, Some("on" | "cli" | "all")) {
-            let got = match cp::call(ctx, false, SETTINGS, "") {
-                Ok(b) => b,
-                Err(e) => return e,
-            };
-            new = contains(&got, b"\"agentsAsked\"") || contains(&got, b"\"attachParts\"");
-        }
-        if !new && (a.attach.is_some() || matches!(a.agents, Some("cli" | "all"))) {
-            out::stderr_line(&format!(
-                concat!(
-                    "This server's {} is older: --agents cli|all and --attach need its update (",
-                    cli_name!(),
-                    " update). Nothing was changed."
-                ),
-                PRODUCT
-            ));
-            return Exit::Error;
-        }
-        let mut parts: Vec<String> = Vec::new();
-        if let Some(on) = a.enabled {
-            parts.push(format!("\"enabled\": {on}"));
-        }
-        match a.agents {
-            Some("off") => parts.push("\"agents\": false".into()),
-            Some("on") if !new => parts.push("\"agents\": true".into()),
-            Some("on" | "cli") => parts.push("\"agents\": true, \"agentPlatform\": false".into()),
-            Some("all") => parts.push("\"agents\": true, \"agentPlatform\": true".into()),
-            _ => {}
-        }
-        if let Some(at) = &a.attach {
-            parts.push(format!("\"agentAttach\": {}", super::setup::jstr(at)));
-        }
-        if let Some(on) = a.agent_diag {
-            parts.push(format!("\"agentDiagnostics\": {on}"));
-        }
-        let payload = format!("{{{}}}", parts.join(", "));
-        cp::call(ctx, true, SETTINGS, &payload)
-    } else {
-        cp::call(ctx, false, SETTINGS, "")
-    };
-    let body = match body {
+    let body = match settings_calls(&a, &mut |post, payload| {
+        cp::call(ctx, post, SETTINGS, payload)
+    }) {
         Ok(b) => b,
         Err(e) => return e,
     };
@@ -916,6 +890,57 @@ fn settings(ctx: &mut Ctx, rest: &[&str]) -> Exit {
         Ok(()) => Exit::Ok,
         Err(e) => out::after_stdout_error(&e),
     }
+}
+
+/// `_sf_settings_run`'s calls for `a`, each one `call(post, payload)` on
+/// the settings route (`_sf_settings_call`: an `Err` is its end, its
+/// lines printed): a read; or a write, after a read that tells an older
+/// server apart when the words need a 0.46.17 one (that older server is
+/// its line, exit 1, nothing changed). The last call's body.
+pub fn settings_calls(
+    a: &SettingsAsk,
+    call: &mut dyn FnMut(bool, &str) -> Result<Vec<u8>, Exit>,
+) -> Result<Vec<u8>, Exit> {
+    let writes =
+        a.enabled.is_some() || a.agents.is_some() || a.agent_diag.is_some() || a.attach.is_some();
+    if !writes {
+        return call(false, "");
+    }
+    let mut new = true;
+    if a.attach.is_some() || matches!(a.agents, Some("on" | "cli" | "all")) {
+        let got = call(false, "")?;
+        new = contains(&got, b"\"agentsAsked\"") || contains(&got, b"\"attachParts\"");
+    }
+    if !new && (a.attach.is_some() || matches!(a.agents, Some("cli" | "all"))) {
+        out::stderr_line(&format!(
+            concat!(
+                "This server's {} is older: --agents cli|all and --attach need its update (",
+                cli_name!(),
+                " update). Nothing was changed."
+            ),
+            PRODUCT
+        ));
+        return Err(Exit::Error);
+    }
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(on) = a.enabled {
+        parts.push(format!("\"enabled\": {on}"));
+    }
+    match a.agents {
+        Some("off") => parts.push("\"agents\": false".into()),
+        Some("on") if !new => parts.push("\"agents\": true".into()),
+        Some("on" | "cli") => parts.push("\"agents\": true, \"agentPlatform\": false".into()),
+        Some("all") => parts.push("\"agents\": true, \"agentPlatform\": true".into()),
+        _ => {}
+    }
+    if let Some(at) = &a.attach {
+        parts.push(format!("\"agentAttach\": {}", super::setup::jstr(at)));
+    }
+    if let Some(on) = a.agent_diag {
+        parts.push(format!("\"agentDiagnostics\": {on}"));
+    }
+    let payload = format!("{{{}}}", parts.join(", "));
+    call(true, &payload)
 }
 
 fn contains(hay: &[u8], needle: &[u8]) -> bool {

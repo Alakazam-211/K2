@@ -197,12 +197,10 @@ const CANDIDATES: &[(&[&str], &str)] = &[
     (&["publish", "ps", "--json"], "/cli/publish/list"),
     (&["release", "--agent", "ada"], "/cli/release"),
     (&["reserve", "--agent", "ada", "src"], "/cli/reserve"),
-    // Stays the shell's by K2's ruling (send-feedback's internals): one GET
-    // through _setup_send, which carries the hand-over headers.
-    (
-        &["setup", "agent-reports", "--json"],
-        "/cli/product-feedback/settings",
-    ),
+    // `setup agent-reports` is native now; the agent hire reads are still
+    // the shell's: one GET each through cli_request.
+    (&["agent", "team", "--json"], "/cli/agent-teams/links"),
+    (&["agent", "hire-root", "--json"], "/cli/agents/hire-root"),
 ];
 
 /// The hand-off's line when there is no `python3`
@@ -213,7 +211,7 @@ const NO_PYTHON: &str = "is not built into k5 yet and needs Python 3";
 /// `python3` on `PATH` (an empty folder), every hand-off stops on its one
 /// line and exit 69 before bash starts, as the native bar probes it. The
 /// route table alone can't say: a native family may still hand a verb
-/// back at run time (`setup agent-reports`, its `SHELL_VERBS`).
+/// back at run time.
 fn falls_through(line: &[&str]) -> bool {
     let dir = std::env::temp_dir().join(format!("k5-front-passport-probe-{}", std::process::id()));
     let (bin, home) = (dir.join("bin"), dir.join("home"));

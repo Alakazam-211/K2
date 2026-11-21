@@ -103,6 +103,9 @@ pub const APPROVE_BIN: &[&str] = &["K5_APPROVE_BIN", "K2_APPROVE_BIN", "K2SO_APP
 pub const NODE_ENROLL_CODE: &[&str] = &["K5_NODE_ENROLL_CODE", "K2_NODE_ENROLL_CODE", "K2SO_NODE_ENROLL_CODE"];
 /// How the vault asks to confirm (`vault-password`).
 pub const VAULT_CONFIRM_METHOD: &[&str] = &["K5_VAULT_CONFIRM_METHOD", "K2_VAULT_CONFIRM_METHOD", "K2SO_VAULT_CONFIRM_METHOD"];
+/// The workspace whose Thread gets a vault confirm's phone card when the
+/// terminal isn't in one (`vault.owner-confirm`).
+pub const VAULT_CONFIRM_THREAD: &[&str] = &["K5_VAULT_CONFIRM_THREAD", "K2_VAULT_CONFIRM_THREAD", "K2SO_VAULT_CONFIRM_THREAD"];
 /// The poll interval of `ci` waits, in seconds.
 pub const CI_WAIT_SECS: &[&str] = &["K5_CI_WAIT_SECS", "K2_CI_WAIT_SECS", "K2SO_CI_WAIT_SECS"];
 /// The poll interval of `llm` waits, in seconds.
@@ -149,6 +152,7 @@ pub const CLI: &[&[&str]] = &[
     APPROVE_BIN,
     NODE_ENROLL_CODE,
     VAULT_CONFIRM_METHOD,
+    VAULT_CONFIRM_THREAD,
     CI_WAIT_SECS,
     LLMA_POLL_SECS,
     TEST_FEEDBACK_DETECT,
@@ -201,6 +205,7 @@ pub const ALL: &[&[&str]] = &[
     APPROVE_BIN,
     NODE_ENROLL_CODE,
     VAULT_CONFIRM_METHOD,
+    VAULT_CONFIRM_THREAD,
     CI_WAIT_SECS,
     LLMA_POLL_SECS,
     TEST_FEEDBACK_DETECT,

@@ -370,7 +370,12 @@ hanging() {
     local i
     for i in $(seq 1 300); do [ -f "$W/hanging" ] && break; sleep 0.1; done
     [ -f "$W/hanging" ] || { bad "the download never reached the second range"; return 1; }
-    ENGINE="$(pgrep -P "$BG" -f K2_STDIN_SECRETS || true)"
+    if [ -n "${K5_CLI_UNDER_TEST:-}" ]; then
+        # The k5 binary is its own engine: no python3 child.
+        ENGINE="$BG"
+    else
+        ENGINE="$(pgrep -P "$BG" -f K2_STDIN_SECRETS || true)"
+    fi
     [ "$(printf '%s\n' "$ENGINE" | wc -l | tr -d ' ')" = 1 ] && [ -n "$ENGINE" ] || { bad "not exactly one clone engine under $BG: '$ENGINE'"; ps -o pid,ppid,args -e >&2; return 1; }
 }
 refused_line() { printf "refused: %s isn't https, so K2 won't send your token or password there; use https://%s" "$1" "$1"; }
@@ -672,9 +677,27 @@ expect_eq "an @ in the path, after the host: allowed" "$RC" "0"
 expect_has "an @ in the path, after the host: the remote got the request" "$(paths remote)" "POST /a@b/cli/clone/preview"
 
 echo "== a Tailscale address as written may take the token over plain http =="
-# The engine's own rule, read from the CLI under test.
-eval "$(awk "/^_CLONE_URL_RULE='/,/^'\$/" "$K2")"
-[ -n "${_CLONE_URL_RULE:-}" ] || { bad "no _CLONE_URL_RULE in $K2"; }
+# The engine's own rule, read from the shell CLI's source (the k5 binary
+# keeps the same rule in Rust; the rows above and below drive it).
+eval "$(awk "/^_CLONE_URL_RULE='/,/^'\$/" "$CLI_BASH_SOURCE")"
+[ -n "${_CLONE_URL_RULE:-}" ] || { bad "no _CLONE_URL_RULE in $CLI_BASH_SOURCE"; }
+# connecting PID HOST: PID has a TCP connection to HOST open or opening
+# (the k5 binary starts no python3 for the audit hook to see).
+connecting() {
+    local hex
+    if [ -r /proc/net/tcp ]; then
+        hex="$("$PY" -c '
+import ipaddress, socket, struct, sys
+a = ipaddress.ip_address(sys.argv[1])
+if a.version == 4:
+    print("%08X" % struct.unpack("<I", a.packed)[0])
+else:
+    print("".join("%08X" % struct.unpack("<I", a.packed[i:i + 4])[0] for i in range(0, 16, 4)))' "$2")"
+        grep -qi " [0-9A-F]*:[0-9A-F]* $hex:" /proc/net/tcp /proc/net/tcp6 2>/dev/null
+    else
+        lsof -nP -a -p "$1" -i 2>/dev/null | grep -Fq -- "->$2:" || lsof -nP -a -p "$1" -i 2>/dev/null | grep -Fq -- "->[$2]:"
+    fi
+}
 rule() { "$PY" -c "$_CLONE_URL_RULE
 import sys
 print(clone_url_refusal(sys.argv[1], sys.argv[2] == \"password\") or \"ok\")" "$1" "$2"; }
@@ -682,11 +705,19 @@ for h in 100.64.0.1 "[fd7a:115c:a1e0::1]"; do
     fresh
     save_token "http://$h:9" "$REMOTE_TOKEN"
     bg clone preview ws1 --host "http://$h:9" --json
-    for _ in $(seq 1 150); do grep -Fq "${h//[\[\]]/}" "$W/audit.log" && break; kill -0 "$BG" 2>/dev/null || break; sleep 0.1; done
+    seen=""
+    for _ in $(seq 1 150); do
+        if [ -n "${K5_CLI_UNDER_TEST:-}" ]; then
+            connecting "$BG" "${h//[\[\]]/}" && { seen="${h//[\[\]]/}"; break; }
+        else
+            grep -Fq "${h//[\[\]]/}" "$W/audit.log" && { seen="$(cat "$W/audit.log")"; break; }
+        fi
+        kill -0 "$BG" 2>/dev/null || break; sleep 0.1
+    done
     pkill -P "$BG" 2>/dev/null || true
     kill "$BG" 2>/dev/null || true
     bg_wait
-    expect_has "http://$h: allowed, so the engine connects there" "$(cat "$W/audit.log")" "${h//[\[\]]/}"
+    expect_has "http://$h: allowed, so the engine connects there" "$seen" "${h//[\[\]]/}"
     expect_not "http://$h: not refused" "$ERR" "refused:"
     expect_not "http://$h: no warning" "$ERR" "warning:"
     expect_eq "http://$h: a password still refused" "$(rule "http://$h:9" password)" "$(refused_line "$h:9")"

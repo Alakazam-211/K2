@@ -25,9 +25,11 @@
 //!
 //! The shell CLI answers these forms itself ([`run`] returns `None`): a
 //! port that is set but is no port curl takes, and a `python3` the binary
-//! can't tell ([`crate::families`]). A line with `-h` or `--help` in it
-//! never gets here: the front sends it to the shell ([`crate::front`]),
-//! which reads the word as a term.
+//! can't tell ([`crate::families`]). `glossary --help` and `glossary -h`
+//! reach [`run`] through their help forms ([`crate::text::FAMILY_FORMS`]):
+//! the word is the term (a bash bug: help asks). Any other line with `-h`
+//! or `--help` in it never gets here: the front sends it to the shell
+//! ([`crate::front`]), which reads the word as a term.
 
 use super::{curl_port, pipefail, py_get, py_iter, py_left, request_piped_tcp, Raise, Shown};
 use crate::daemon::{self, Settings};

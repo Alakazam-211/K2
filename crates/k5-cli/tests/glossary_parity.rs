@@ -208,7 +208,9 @@ fn one_term() {
             0,
             1,
         ),
-        shell(case(
+        // The family's own help lines (a bash bug: help asks).
+        // native: glossary --help
+        case(
             "--help is a term",
             &["--help"],
             &[],
@@ -216,7 +218,25 @@ fn one_term() {
             owner_and_port,
             0,
             1,
-        )),
+        ),
+        case(
+            "-h alone is a term",
+            &["-h"],
+            &[],
+            vec![ok(TERM)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "--help: the virtual desktop's guard lets it by, the connection gate",
+            &["--help"],
+            &[("K2_NO_OWNER_FALLBACK", "1")],
+            vec![],
+            owner_and_port,
+            1,
+            0,
+        ),
         shell(case(
             "-h is a term",
             &["-h", "x"],

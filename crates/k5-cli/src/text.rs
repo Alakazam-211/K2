@@ -138,6 +138,13 @@ macro_rules! family {
 /// reads no word after it, so `--schema --help` prints the manifest, the
 /// version line and all (not a captured page: every release moves the
 /// version, and the manifest names other versions too).
+///
+/// Verbs that read the help flag as a word, so the shell asks the daemon
+/// or acts (bash bugs, copied until the shell's fix lands; each family
+/// hands a help line a gate stops to the shell,
+/// [`crate::prelude::help_line_gated`]): `reviews` (it reads no word: it
+/// asks) and `trust-folders` (it sends) ([`crate::families::commit`]),
+/// `glossary` (the term) and `read` (the workspace).
 pub static FAMILY_FORMS: &[HelpForm] = &[
     family!("permission" "--help"),
     family!("permission" "-h"),
@@ -169,6 +176,14 @@ pub static FAMILY_FORMS: &[HelpForm] = &[
     family!("--schema" "-h"),
     family!("schema" "--help"),
     family!("schema" "-h"),
+    family!("reviews" "--help"),
+    family!("reviews" "-h"),
+    family!("trust-folders" "--help"),
+    family!("trust-folders" "-h"),
+    family!("glossary" "--help"),
+    family!("glossary" "-h"),
+    family!("read" "--help"),
+    family!("read" "-h"),
 ];
 
 /// The captured help form that is exactly `argv` ([`CAPTURED_FORMS`],

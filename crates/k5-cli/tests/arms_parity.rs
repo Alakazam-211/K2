@@ -220,3 +220,55 @@ fn reviews() {
         rig.check(&c);
     }
 }
+
+/// `reviews` and `trust-folders` read no word, so their help lines
+/// (`text::FAMILY_FORMS`) ask and send as the shell's do (bash bugs: help
+/// asks, and `trust-folders --help` sends; these rows flip when the
+/// shell's fix lands). A help line a gate stops is the shell's.
+#[test]
+fn the_help_lines_of_reviews_and_trust_folders() {
+    let rig = Rig::new("reviews", "help");
+    for c in [
+        // native: reviews --help
+        one("reviews --help asks", &["--help"], "[]", 0),
+        one(
+            "reviews -h asks",
+            &["-h"],
+            r#"[{"agentName":"a","branch":"b"}]"#,
+            0,
+        ),
+        shell(case(
+            "reviews --help, the virtual desktop's switch: the shell's gate",
+            &["--help"],
+            &[("K2_NO_OWNER_FALLBACK", "1")],
+            vec![],
+            owner_and_port,
+            1,
+            0,
+        )),
+    ] {
+        rig.check(&c);
+    }
+    let rig = Rig::new("trust-folders", "help");
+    for c in [
+        // native: trust-folders --help
+        one(
+            "trust-folders --help sends",
+            &["--help"],
+            "{\"folders\":[]}\n",
+            0,
+        ),
+        one("trust-folders -h sends", &["-h"], "{\"folders\":[]}\n", 0),
+        shell(case(
+            "trust-folders --help, no port: the shell's gate",
+            &["--help"],
+            &[],
+            vec![],
+            owner_only,
+            1,
+            0,
+        )),
+    ] {
+        rig.check(&c);
+    }
+}

@@ -1004,14 +1004,22 @@ fn read_hands_these_to_the_shell() {
             0,
             1,
         )),
-        // The shell has no help for read: it reads the workspace `--help`.
         shell(case(
-            "--help prints the read help",
+            "--help, the virtual desktop's switch: the shell's connection gate",
+            &["--help"],
+            &[("K2_NO_OWNER_FALLBACK", "1")],
+            vec![],
+            owner_and_port,
+            1,
+            0,
+        )),
+        shell(case(
+            "--help, no port: the shell's gate",
             &["--help"],
             &[],
             vec![],
-            owner_and_port,
-            0,
+            owner_only,
+            1,
             0,
         )),
         shell(case(
@@ -1032,6 +1040,41 @@ fn read_hands_these_to_the_shell() {
             2,
             0,
         )),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}
+
+/// The family's own help lines (`text::FAMILY_FORMS`): the shell has no
+/// help for `read`, it reads the workspace `--help` (a bash bug: help
+/// asks; these rows flip when the shell's fix lands). A help line a gate
+/// stops is the shell's (above).
+#[test]
+fn the_help_lines_are_the_family_s() {
+    let rig = Rig::new(VERB, "help");
+    let v = vec![
+        // The shell has no help for read: it reads the workspace `--help`
+        // (a bash bug: help asks). The family's own help lines.
+        // native: read --help
+        case(
+            "--help reads the workspace --help",
+            &["--help"],
+            &[],
+            vec![ok(LINES)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "-h reads the workspace -h",
+            &["-h"],
+            &[],
+            vec![ok(LINES)],
+            owner_and_port,
+            0,
+            1,
+        ),
     ];
     for c in v {
         rig.check(&c);

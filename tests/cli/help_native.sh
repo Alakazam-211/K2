@@ -1213,6 +1213,15 @@ PIPE = re.compile(r"^\s*cat <<'EOF' \| %s( >&2)?$" % PERM_FILTER)
 pipe_lines = {i + 1 for i, l in enumerate(k2_lines) if PIPE.match(l)}
 if len(pipe_lines) < 2:
     sys.exit("FAIL: only %d pages through %s" % (len(pipe_lines), PERM_FILTER))
+# bash 5.2 numbers the filter's step (the pipeline's last element) by its
+# heredoc's EOF line; bash 5.3 by the pipeline's own line. Each EOF line,
+# with the pipe it ends, so the step reads the same on both.
+pipe_end = {}
+for pl in pipe_lines:
+    ends = [j + 1 for j in range(pl, len(k2_lines)) if k2_lines[j] == "EOF"]
+    if not ends:
+        sys.exit("FAIL: the page piped through %s at line %d has no EOF line" % (PERM_FILTER, pl))
+    pipe_end[ends[0]] = pl
 
 def cards_split(steps):
     """The steps outside the cards probe's calls, each pipeline's cat put
@@ -1242,6 +1251,9 @@ def cards_split(steps):
     out = []
     for l in outside:
         m = STEP.match(l)
+        if m and m.group(3) == PERM_FILTER and int(m.group(2)) in pipe_end:
+            l = "%s%d: %s" % (m.group(1), pipe_end[int(m.group(2))], m.group(3))
+            m = STEP.match(l)
         if m and int(m.group(2)) in pipe_lines and m.group(3) == PERM_FILTER:
             got = cats.get(int(m.group(2)))
             if not got:

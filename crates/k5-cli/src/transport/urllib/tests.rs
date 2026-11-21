@@ -542,7 +542,11 @@ fn redirect_refusal_is_the_rule_s() {
     );
     // A user part is never shown, on either side.
     assert_eq!(
-        redirect_refusal("http://u@127.0.0.1:4100", 302, Some("http://user:pw@h.example/")),
+        redirect_refusal(
+            "http://u@127.0.0.1:4100",
+            302,
+            Some("http://user:pw@h.example/")
+        ),
         Some(refused(here, 302, "h.example"))
     );
     // Quoted as ISO-8859-1 bytes: a space and a byte past ASCII as %XX

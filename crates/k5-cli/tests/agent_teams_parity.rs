@@ -16,12 +16,9 @@
 //!   on both sides. `hire-root` and `complete` are open verbs: a session
 //!   with a passport is the named difference `owner-token-with-passport`.
 //!   `update` and `profile` send the session's passport, on both sides.
-//! - Help never acts: a changing verb with `--help` prints its page and
-//!   sends nothing, but where the shell takes the help word as a value
-//!   or skips it (`team unlink`, `hire-root set`, `update`, `complete`,
-//!   and the reads `instances show` and `profile`): there both sides are
-//!   the shell's, which sends the request (bash bugs, reported; these
-//!   rows flip when the shell's fix lands).
+//! - Help never acts: `-h` or `--help` anywhere prints a page and sends
+//!   nothing. A captured form is the front's page; help with other words
+//!   is the shell's, which prints the same page.
 
 #![cfg(unix)]
 
@@ -224,17 +221,33 @@ fn the_words() {
 fn help_never_acts() {
     let rig = Rig::new(VERB, "help");
     let mut v = Vec::new();
-    // The front's captured pages: what the shell printed, nothing sent.
-    for (args, code) in [
-        (&["team", "link", "--help"][..], 2),
-        (&["team", "served", "-h"], 2),
-        (&["instances", "retire", "--help"], 2),
-        (&["instances", "hire", "-h"], 2),
-        (&["hire-root", "--help"], 2),
-        (&["update", "--help"], 2),
-        (&["complete", "-h"], 1),
-        (&["team", "help"], 0),
-        (&["instances", "help"], 0),
+    // The front's captured pages: what the shell printed (the hire verbs'
+    // help, or the agent page for update, complete and profile), exit 0,
+    // nothing sent. The first four were bash bugs where help acted (team
+    // unlink and hire-root set sent, instances show and profile asked);
+    // the fixed shell prints the page.
+    // native: agent team unlink --help
+    // native: agent instances show --help
+    // native: agent hire-root set --help
+    // native: agent profile --help
+    for args in [
+        &["team", "unlink", "--help"][..],
+        &["team", "unlink", "-h"],
+        &["instances", "show", "--help"],
+        &["instances", "show", "-h"],
+        &["hire-root", "set", "--help"],
+        &["hire-root", "set", "-h"],
+        &["profile", "--help"],
+        &["profile", "-h"],
+        &["team", "link", "--help"],
+        &["team", "served", "-h"],
+        &["instances", "retire", "--help"],
+        &["instances", "hire", "-h"],
+        &["hire-root", "--help"],
+        &["update", "--help"],
+        &["complete", "-h"],
+        &["team", "help"],
+        &["instances", "help"],
     ] {
         v.push(case(
             "a page, nothing sent",
@@ -242,80 +255,30 @@ fn help_never_acts() {
             &[],
             vec![],
             owner_and_port,
-            code,
+            0,
             0,
         ));
     }
-    // Help with other words: the shell's error, nothing sent.
+    // Help with other words: not a captured form, so the front hands the
+    // line to the shell, which prints the page and sends nothing. Before
+    // the shell's fix, the last five sent their request (or asked).
     for args in [
         &["team", "link", "t", "w", "--help"][..],
         &["instances", "retire", "i1", "--help"],
+        &["team", "unlink", "l1", "--help"],
+        &["hire-root", "set", "/srv/x", "--help"],
+        &["update", "qa", "--field", "f", "--value", "v", "--help"],
+        &["complete", "--agent", "qa", "--file", "f.md", "-h"],
+        &["profile", "/srv/ws", "--help"],
     ] {
         v.push(shell(case(
-            "help with words: the shell's error, nothing sent",
+            "help with words: the shell's page, nothing sent",
             leak(args),
             &[],
             vec![],
             owner_and_port,
-            2,
             0,
-        )));
-    }
-    // Bash bugs (help acts): the shell takes the help word as a value, or
-    // skips it, and sends the request. Both sides are the shell's until
-    // its fix lands; then these rows flip to a page with nothing sent.
-    for (name, args, answer, code) in [
-        (
-            "team unlink --help: the shell unlinks --help",
-            &["team", "unlink", "--help"][..],
-            r#"{"ok":true,"changed":false,"link":"--help"}"#,
             0,
-        ),
-        (
-            "hire-root set --help: the shell sets the root to --help",
-            &["hire-root", "set", "--help"],
-            r#"{"ok":true,"root":"--help"}"#,
-            0,
-        ),
-        (
-            "hire-root set <dir> --help: the shell sets it",
-            &["hire-root", "set", "/srv/x", "--help"],
-            r#"{"ok":true,"root":"/srv/x"}"#,
-            0,
-        ),
-        (
-            "update with --help: the shell updates",
-            &["update", "qa", "--field", "f", "--value", "v", "--help"],
-            r#"{"success":true}"#,
-            0,
-        ),
-        (
-            "complete with -h: the shell completes",
-            &["complete", "--agent", "qa", "--file", "f.md", "-h"],
-            r#"{"ok":true}"#,
-            0,
-        ),
-        (
-            "instances show --help: the shell asks for it",
-            &["instances", "show", "--help"],
-            r#"{"error":{"code":"not_found","hint":"no hire --help"}}"#,
-            4,
-        ),
-        (
-            "profile --help: the shell asks for it",
-            &["profile", "--help"],
-            r#"{"display_name":"x"}"#,
-            0,
-        ),
-    ] {
-        v.push(shell(case(
-            name,
-            leak(args),
-            &[],
-            vec![ok(answer)],
-            owner_and_port,
-            code,
-            1,
         )));
     }
     check(&rig, v);

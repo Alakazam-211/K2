@@ -348,11 +348,15 @@ async fn a_sidecars_held_publish_run_gets_its_card_on_the_sidecar_and_allow_runs
 
 /// A real passport file per spawned harness: the shim writes the
 /// `K2_HOOK_TOKEN` K2 put in its env to `<dir>/<cell>-<sidecar name>.token`
-/// (the canonical cell's name is empty), then becomes `cat`.
+/// (the canonical cell's name is empty), then becomes `cat`. Asked for its
+/// version, it answers as a Codex release K2 checked (the daemon reads a
+/// Codex tab's version before it lets a call through).
 fn token_shim(dir: &std::path::Path) -> k2_core::test_env::AgentShim {
     std::fs::create_dir_all(dir).expect("token dir");
+    let (a, b, c) = k2_core::terminal::codex_version::SUPPORTED[0].last;
     k2_core::test_env::AgentShim::with_body(&format!(
         "if [ \"$1\" = \"--help\" ]; then printf '      --no-daemon\\n'; exit 0; fi\n\
+         if [ \"$1\" = \"--version\" ]; then echo 'codex-cli {a}.{b}.{c}'; exit 0; fi\n\
          if [ \"$1\" = \"create-chat\" ]; then /usr/bin/uuidgen | /usr/bin/tr 'A-Z' 'a-z'; exit 0; fi\n\
          f=\"{dir}/$K2_CELL-$K2_SIDECAR_NAME\"\n\
          printf '%s' \"$K2_HOOK_TOKEN\" > \"$f.tmp\"\n\
@@ -360,6 +364,24 @@ fn token_shim(dir: &std::path::Path) -> k2_core::test_env::AgentShim {
          exec cat",
         dir = dir.display()
     ))
+}
+
+/// What a real Codex writes when its conversation starts: the rollout log
+/// `~/.codex/sessions/<day>/rollout-<id>.jsonl`, whose header names the
+/// conversation `id` and the folder `cwd`. K2 learns a Codex sidecar's
+/// conversation from it.
+fn codex_starts_conversation(home: &std::path::Path, id: &str, cwd: &std::path::Path) {
+    let now = chrono::Utc::now();
+    let dir = home.join(".codex").join("sessions").join(now.format("%Y/%m/%d").to_string());
+    std::fs::create_dir_all(&dir).expect("codex day dir");
+    let ts = now.to_rfc3339();
+    let header = json!({
+        "timestamp": ts,
+        "type": "session_meta",
+        "payload": {"id": id, "timestamp": ts, "cwd": cwd.to_string_lossy(), "originator": "codex_cli_rs"}
+    });
+    std::fs::write(dir.join(format!("rollout-{}-{id}.jsonl", now.format("%Y-%m-%dT%H-%M-%S"))), format!("{header}\n"))
+        .expect("rollout log");
 }
 
 async fn wait_token(dir: &std::path::Path, file: &str) -> String {
@@ -376,12 +398,15 @@ async fn wait_token(dir: &std::path::Path, file: &str) -> String {
 /// A user's report (0.46.10): a sidecar's `k2 permission request` card went
 /// to the workspace's main Thread. Here everything is real: the sidecars
 /// come from `k2 sidecar new` (claude, and codex, whose conversation id K2
-/// learns later), the main agent from a real spawn, and each asks with the
-/// passport K2 put in its own env. Each card lands on the Thread of the
-/// session that asked, and nowhere else. Before the fix, the main agent's
-/// open card for the same change answered the sidecar's ask
-/// (`already_pending` with the main card): the person found nothing on the
-/// sidecar's Thread and the answer went to the main session.
+/// learns from Codex's own log once it starts), the main agent from a real
+/// spawn, and each asks with the passport K2 put in its own env. The codex
+/// sidecar asks as the `k2` CLI does from a Codex tool call, naming its
+/// conversation (`X-K2-Conversation`): without it K2 refuses a Codex tab's
+/// passport. Each card lands on the Thread of the session that asked, and
+/// nowhere else. Before the fix, the main agent's open card for the same
+/// change answered the sidecar's ask (`already_pending` with the main
+/// card): the person found nothing on the sidecar's Thread and the answer
+/// went to the main session.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_k2_sidecar_new_sidecars_ask_lands_on_its_own_thread_and_the_mains_on_main() {
     let env = setup(&[]);
@@ -420,8 +445,15 @@ async fn a_k2_sidecar_new_sidecars_ask_lands_on_its_own_thread_and_the_mains_on_
 
     let peer2 = seed_ws(&env, "askerpeer2");
     // Ask for `connections.add to=<to>`; the answer, which must be a 200.
-    let ask = |passport: String, to: String| async move {
-        let r = post(port, "/cli/permission/request", &passport, json!({"action": "connections.add", "params": {"to": to}, "why": "Talk to the peer"})).await;
+    // `codex`: the asking tab's Codex conversation, sent as the CLI sends
+    // it from a Codex tool call (a top-level conversation's thread is its
+    // root).
+    let ask_body = |to: &str| json!({"action": "connections.add", "params": {"to": to}, "why": "Talk to the peer"});
+    let ask = |passport: String, to: String, codex: Option<String>| async move {
+        let r = match codex {
+            Some(c) => post_as_codex(port, "/cli/permission/request", &passport, ask_body(to.as_str()), &c, &c).await,
+            None => post(port, "/cli/permission/request", &passport, ask_body(to.as_str())).await,
+        };
         assert_eq!(r.status, 200, "{}", r.body);
         r.json()
     };
@@ -449,7 +481,7 @@ async fn a_k2_sidecar_new_sidecars_ask_lands_on_its_own_thread_and_the_mains_on_
     })
     .expect("spawn the main agent");
     let main_passport = wait_token(&tokens, "canonical-.token").await;
-    let m = ask(main_passport, peer.handle.clone()).await;
+    let m = ask(main_passport, peer.handle.clone(), None).await;
     assert_eq!((m["status"].as_str(), m["addr"].as_str()), (Some("pending"), Some(ws.handle.as_str())), "{m}");
     let main_card = m["card"].as_str().expect("card").to_string();
     assert_eq!(row(m["id"].as_str().expect("id")).0.as_deref(), Some(main.as_str()));
@@ -466,10 +498,22 @@ async fn a_k2_sidecar_new_sidecars_ask_lands_on_its_own_thread_and_the_mains_on_
         let side = format!("{}/{name}", ws.handle);
         assert_eq!(v["address"], side.as_str(), "{v}");
         let passport = wait_token(&tokens, &format!("sidecar-{name}.token")).await;
+        // Codex starts its conversation and K2 adopts it for the sidecar.
+        let codex = (harness == "codex").then(|| uuid::Uuid::new_v4().to_string());
+        if let Some(c) = &codex {
+            codex_starts_conversation(env.path(), c, &ws.path);
+            wait_until(&format!("{side} to adopt its Codex conversation"), 30, || {
+                k2_daemon::overlay_routes::conversation_for_addr(&side).as_deref() == Some(c.as_str())
+            })
+            .await;
+            // Without its conversation, the same ask is refused.
+            let r = post(port, "/cli/permission/request", &passport, ask_body(to.as_str())).await;
+            assert_eq!((r.status, r.json()["error"].as_str()), (403, Some("conversation_missing")), "{}", r.body);
+        }
         let thread = k2_daemon::overlay_routes::conversation_for_addr(&side).unwrap_or_else(|| panic!("{side} has a Thread"));
         assert_ne!(thread, main, "{side}'s Thread is its own");
 
-        let a = ask(passport.clone(), to.clone()).await;
+        let a = ask(passport.clone(), to.clone(), codex.clone()).await;
         assert_eq!(a["status"], "pending", "{harness}: a card of its own, not another Thread's: {a}");
         assert_eq!(a["addr"], side.as_str(), "{harness}: the card names the sidecar's Thread: {a}");
         let card = a["card"].as_str().expect("card").to_string();
@@ -481,7 +525,7 @@ async fn a_k2_sidecar_new_sidecars_ask_lands_on_its_own_thread_and_the_mains_on_
         assert!(k2_core::overlay::get_thread_doc(&main, &card).expect("read").is_none(), "{harness}: and not on the main Thread");
 
         // Asked again from the same Thread: the same card, nothing new.
-        let again = ask(passport, to).await;
+        let again = ask(passport, to, codex).await;
         assert_eq!(
             (again["status"].as_str(), again["card"].as_str(), again["addr"].as_str()),
             (Some("already_pending"), Some(card.as_str()), Some(side.as_str())),

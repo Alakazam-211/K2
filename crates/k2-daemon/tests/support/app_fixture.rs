@@ -141,15 +141,21 @@ impl Resp {
 }
 
 pub fn req_blocking(port: u16, method: &str, pq: &str, body: Option<String>) -> Resp {
+    req_blocking_with(port, method, pq, body, &[])
+}
+
+/// [`req_blocking`] with extra request headers, each a `(name, value)`.
+pub fn req_blocking_with(port: u16, method: &str, pq: &str, body: Option<String>, headers: &[(String, String)]) -> Resp {
     let mut s = TcpStream::connect(("127.0.0.1", port)).expect("connect");
     s.set_read_timeout(Some(Duration::from_secs(120))).unwrap();
+    let extra: String = headers.iter().map(|(k, v)| format!("{k}: {v}\r\n")).collect();
     let raw = match body {
         Some(b) => format!(
-            "{method} {pq} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{b}",
+            "{method} {pq} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n{extra}Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{b}",
             b.len()
         ),
-        None if method == "POST" => format!("{method} {pq} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"),
-        None => format!("{method} {pq} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"),
+        None if method == "POST" => format!("{method} {pq} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n{extra}Content-Length: 0\r\n\r\n"),
+        None => format!("{method} {pq} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n{extra}\r\n"),
     };
     s.write_all(raw.as_bytes()).unwrap();
     let mut out = Vec::new();
@@ -184,6 +190,20 @@ pub fn enc(s: &str) -> String {
 pub async fn post(port: u16, path: &str, token: &str, body: Value) -> Resp {
     let pq = format!("{path}?token={}", enc(token));
     tokio::task::spawn_blocking(move || req_blocking(port, "POST", &pq, Some(body.to_string()))).await.unwrap()
+}
+
+/// A POST the way the `k2` CLI sends it from a Codex tool call: the
+/// credential as `Authorization: Bearer` and the conversation headers
+/// (`X-K2-Conversation`, `X-K2-Thread`) the CLI adds from Codex's
+/// `CODEX_SESSION_ID` and `CODEX_THREAD_ID`.
+pub async fn post_as_codex(port: u16, path: &str, token: &str, body: Value, conversation: &str, thread: &str) -> Resp {
+    let headers = vec![
+        ("Authorization".to_string(), format!("Bearer {token}")),
+        ("X-K2-Conversation".to_string(), conversation.to_string()),
+        ("X-K2-Thread".to_string(), thread.to_string()),
+    ];
+    let path = path.to_string();
+    tokio::task::spawn_blocking(move || req_blocking_with(port, "POST", &path, Some(body.to_string()), &headers)).await.unwrap()
 }
 
 pub async fn get(port: u16, path: &str, token: &str, query: &str) -> Resp {

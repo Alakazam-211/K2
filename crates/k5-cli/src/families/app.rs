@@ -51,7 +51,9 @@
 //!   surfaces|door|grace`; [`door_set`]: `app requests`, `app quota` and
 //!   `app token rotate`; [`grants`]: `app grants <app>`;
 //!   [`agent_access`]: `app access`; [`sign_in`] also answers `app
-//!   invite-settings`.
+//!   invite-settings`; [`domains`]: `app domain` (every sub-verb) and
+//!   `app domains`; [`data`]: `app data put|ls|get|rm|mv`; [`box_use`]:
+//!   `app resources` (the view, `settings`, `clean` and `trends`).
 //! - `app` alone (and `app --json`): `cmd_skin ""` prints the App page
 //!   through the permission cards' filter (`_skin_usage`, `_perm_lines`)
 //!   on stderr, exit 1 ([`bare`]).
@@ -94,14 +96,17 @@ use std::path::Path;
 pub mod access;
 pub mod agent_access;
 pub mod approve;
+pub mod box_use;
 pub mod boxes;
 pub mod call;
 pub mod catalog;
 pub mod chat;
+pub mod data;
 pub mod db_set;
 pub mod deploy;
 pub mod door;
 pub mod door_set;
+pub mod domains;
 pub mod exec;
 pub mod grace;
 pub mod grace_set;
@@ -166,6 +171,9 @@ pub enum Ask {
     DoorSet(door_set::Ask),
     Grants(grants::Ask),
     AgentAccess(agent_access::Ask),
+    Domains(domains::Ask),
+    Data(data::Ask),
+    BoxUse(box_use::Ask),
 }
 
 /// Where a verb's loop stopped before anything was sent: its line on
@@ -284,6 +292,10 @@ pub const TAKES: &[&str] = &[
     "quotas",
     "access",
     "invite-settings",
+    "domain",
+    "domains",
+    "data",
+    "resources",
 ];
 
 /// The verbs `cmd_app` hands to `cmd_skin` and `cmd_skin_token` (their
@@ -666,6 +678,22 @@ pub const VERBS: &[crate::route::Verb] = &[
         words: &["invite-settings"],
         owner: crate::route::Owner::Native,
     },
+    crate::route::Verb {
+        words: &["domain"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["domains"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["data"],
+        owner: crate::route::Owner::Native,
+    },
+    crate::route::Verb {
+        words: &["resources"],
+        owner: crate::route::Owner::Native,
+    },
 ];
 
 /// The words after `app`, read by the group the verb names. `None`: the
@@ -734,6 +762,9 @@ pub fn parse(words: &[&str]) -> Option<Result<Ask, Stop>> {
         "invite-settings" => Some(sign_in::parse_invite_settings(rest)?.map(Ask::SignIn)),
         v if grace_set::VERBS.contains(&v) => Some(grace_set::parse(v, rest)?.map(Ask::GraceSet)),
         v if door_set::VERBS.contains(&v) => Some(door_set::parse(v, rest)?.map(Ask::DoorSet)),
+        v if domains::VERBS.contains(&v) => Some(domains::parse(v, rest)?.map(Ask::Domains)),
+        "data" => Some(data::parse(rest)?.map(Ask::Data)),
+        "resources" => Some(box_use::parse(rest)?.map(Ask::BoxUse)),
         v if approve::VERBS.contains(&v) => Some(approve::parse(v, rest)?.map(Ask::Approve)),
         v if access::VERBS.contains(&v) => Some(access::parse(v, rest)?.map(Ask::Access)),
         v if door::VERBS.contains(&v) => Some(door::parse(v, rest)?.map(Ask::Door)),
@@ -904,6 +935,9 @@ fn run_with(
         Ask::DoorSet(d) => door_set::run(&mut ctx, d),
         Ask::Grants(g) => grants::run(&mut ctx, g),
         Ask::AgentAccess(a) => agent_access::run(&mut ctx, a),
+        Ask::Domains(d) => domains::run(&mut ctx, d),
+        Ask::Data(d) => data::run(&mut ctx, d),
+        Ask::BoxUse(b) => box_use::run(&mut ctx, b),
     };
     let exit = match shown {
         Ok(s) => s.print(),

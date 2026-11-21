@@ -50,7 +50,7 @@ fn dict_at(x: &Value, key: &str, line: u32) -> Result<Value, Raise> {
 }
 
 /// `float(b)`.
-fn float(b: &Value, line: u32) -> Result<f64, Raise> {
+pub(super) fn float(b: &Value, line: u32) -> Result<f64, Raise> {
     match b {
         Value::Float(f) => Ok(*f),
         Value::Bool(x) => Ok(f64::from(u8::from(*x))),
@@ -84,7 +84,7 @@ fn float(b: &Value, line: u32) -> Result<f64, Raise> {
 }
 
 /// `gb(b)`: decimal units, one place below ten of the unit.
-fn gb(b: &Value, line: u32) -> Result<String, Raise> {
+pub(super) fn gb(b: &Value, line: u32) -> Result<String, Raise> {
     if *b == Value::Null {
         return Ok("\u{2014}".to_string());
     }

@@ -18,6 +18,9 @@
 #                    known_hosts), split on spaces
 #   K2_ISO_TESTS     how many tests must pass (default: the count of
 #                    #[test] in the test file at <commit>)
+#   K2_ISO_M1B       1 (default): also the M1b run on the box's persistent
+#                    unit (agent-isolation-m1b-kernel-tests.sh; the box set
+#                    up with --setup once); 0 skips it
 #   K2_ISO_BUILD_NODE  pin the build to one node (a warm cache); default:
 #                    a Linux x86 node K2 picks
 #   K2_BIN           the k2 CLI (default k2)
@@ -29,7 +32,7 @@ repo="$(git rev-parse --show-toplevel)"
 sha="$(git -C "$repo" rev-parse --verify "$sha^{commit}")"
 read -r -a ssh_opts <<< "${K2_ISO_SSH_OPTS:-}"
 ssh_opts+=(-o BatchMode=yes)
-want="${K2_ISO_TESTS:-$(git -C "$repo" show "$sha:crates/k2-daemon/tests/agent_isolation_kernel_integration.rs" | grep -c '^#\[test\]')}"
+want="${K2_ISO_TESTS:-$(git -C "$repo" show "$sha:crates/k2-daemon/tests/agent_isolation_kernel_integration.rs" | grep -c 'needs a delegated cgroup v2 system unit')}"
 [ "$want" -gt 0 ] || { echo "isolation-kernel: FAIL: no tests in the file at ${sha:0:12}" >&2; exit 1; }
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/k2-iso-gate.XXXXXX")"
@@ -49,7 +52,7 @@ for l in sys.stdin:
 [ -x "$bin" ] || { echo "no test binary"; exit 1; }
 cp "$bin" iso-art/agent_isolation_kernel_integration
 cp "$T/debug/k2-daemon" "$T/debug/k2-ptyd" "$T/debug/k2-ptyd-test-agent" iso-art/
-cp cli/k2 scripts/agent-isolation-kernel-tests.sh iso-art/
+cp cli/k2 scripts/agent-isolation-kernel-tests.sh scripts/agent-isolation-m1b-kernel-tests.sh iso-art/
 for f in agent_isolation_kernel_integration k2-daemon k2-ptyd k2-ptyd-test-agent; do strip --strip-debug "iso-art/$f"; done
 echo "iso-art: built"'
 
@@ -78,6 +81,14 @@ ssh "${ssh_opts[@]}" "$host" "chmod +x ~/$remote/*"
 set +e
 ssh "${ssh_opts[@]}" "$host" "cd ~/$remote && bash agent-isolation-kernel-tests.sh ~/$remote" 2>&1 | tee "$work/run.log"
 rc="${PIPESTATUS[0]}"
+# M1b: the root-owned cgroups on the box's persistent test unit, with the
+# root helper and (the bite) without it. The box must have been set up
+# (agent-isolation-m1b-kernel-tests.sh --setup); K2_ISO_M1B=0 skips it.
+rc_m1b=0
+if [ "$rc" -eq 0 ] && [ "${K2_ISO_M1B:-1}" = 1 ]; then
+    ssh "${ssh_opts[@]}" "$host" "cd ~/$remote && bash agent-isolation-m1b-kernel-tests.sh ~/$remote" 2>&1 | tee "$work/m1b.log"
+    rc_m1b="${PIPESTATUS[0]}"
+fi
 set -e
 ssh "${ssh_opts[@]}" "$host" "rm -rf ~/$remote" || true
 if [ "$rc" -ne 0 ]; then
@@ -87,5 +98,11 @@ fi
 if ! grep -Eq "^test result: ok\. $want passed; 0 failed; 0 ignored" "$work/run.log"; then
     echo "isolation-kernel: FAIL: expected $want tests to pass (build job $job): $(grep '^test result' "$work/run.log")" >&2
     exit 1
+fi
+if [ "${K2_ISO_M1B:-1}" = 1 ]; then
+    if [ "$rc_m1b" -ne 0 ] || ! grep -q '^m1b root-owned: ok$' "$work/m1b.log" || ! grep -q '^m1b bite (helper off): ok$' "$work/m1b.log"; then
+        echo "isolation-kernel: FAIL: the M1b run (root-owned cgroups and its bite) exited $rc_m1b (build job $job)" >&2
+        exit 1
+    fi
 fi
 echo "isolation-kernel: ok."

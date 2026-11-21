@@ -3,7 +3,8 @@
 //! the shared transport).
 //!
 //! - [`Pki`]: a throwaway CA, written as PEM for `SSL_CERT_FILE` (both
-//!   sides trust it that way), and a server certificate signed by it.
+//!   sides trust it that way), and a server certificate signed by it, for
+//!   [`HOST`] and `localhost`.
 //! - [`TlsStub`]: an `https://` server on loopback: each connection is
 //!   one request, logged whole, and one fixed answer.
 //! - [`ProxyStub`]: an HTTP proxy on loopback that records every
@@ -56,7 +57,9 @@ impl Pki {
         let ca_key = KeyPair::generate().unwrap();
         let ca = ca_params.self_signed(&ca_key).unwrap();
         let leaf_key = KeyPair::generate().unwrap();
-        let mut leaf_params = CertificateParams::new(vec![HOST.to_string()]).unwrap();
+        // `localhost` too: a daemon at `K2_HOST=https://localhost`.
+        let mut leaf_params =
+            CertificateParams::new(vec![HOST.to_string(), "localhost".to_string()]).unwrap();
         leaf_params
             .distinguished_name
             .push(DnType::CommonName, HOST);

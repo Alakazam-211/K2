@@ -17,7 +17,9 @@
 //!   families whose shell side is a `python3` block (K2's ruling D4).
 //! - [`remote`], [`tls`] and [`proxy`]: another K2 server, over https
 //!   only, through the person's proxy when one is set. The daemon's own
-//!   targets (loopback TCP, the cell socket) never read a proxy setting.
+//!   targets (loopback TCP, the cell socket) never read a proxy setting,
+//!   but for `K2_HOST=https://<name>`: the daemon behind K2's TLS or K2
+//!   Connect, reached as another server is ([`remote::daemon_https`]).
 //!
 //! The daemon's host (`K2_HOST`) on another computer over plain http is
 //! the prelude's business, not a request's: one warning line per run, or

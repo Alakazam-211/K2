@@ -126,6 +126,40 @@ pub fn plain_http_line(url: &str) -> String {
     format!("Error: plain http:// only to this computer; use https:// (got: {url})")
 }
 
+/// `K2_HOST=https://<name>` (or `HTTPS://`): a daemon behind K2's TLS or
+/// K2 Connect. The shell's `_k2_daemon_base` makes `BASE_URL`
+/// `https://<name>:<PORT>` (one trailing `/` of the name dropped), and
+/// `_k2_curl` sends it over TLS, through the person's proxy when the name
+/// isn't this computer (`_k2_direct_url`). [`routed`] reads it as it reads
+/// a remote host's URL; the credential and the cell socket stay the
+/// daemon's, and a refused connect follows no port file
+/// (`_k2_follow_port_move` is for a loopback `HOST` only). A URL or a
+/// proxy setting [`routed`] doesn't read: nothing goes over TCP
+/// ([`Client::unsendable`]), never a plain or direct request in its
+/// place. Any other host: unchanged.
+pub fn daemon_https(client: &mut Client) {
+    let Some(rest) = client
+        .host
+        .strip_prefix("https://")
+        .or_else(|| client.host.strip_prefix("HTTPS://"))
+    else {
+        return;
+    };
+    let rest = rest.strip_suffix('/').unwrap_or(rest);
+    let url = format!("https://{rest}:{}", client.port);
+    client.tls = true;
+    client.port_file = None;
+    match routed(&url) {
+        Some(b) => {
+            client.host = b.host;
+            client.port = b.port;
+            client.via = b.via;
+            client.host_header = Some(b.host_header);
+        }
+        None => client.unsendable = Some(url),
+    }
+}
+
 /// `_apply_remote_host`'s swap, once the token is known.
 pub fn apply(client: &mut Client, base: &Base, token: String) {
     client.host = base.host.clone();
@@ -429,6 +463,50 @@ mod tests {
         assert_eq!(plain_http_refusal(&b, "x"), None);
         for ok in ["http://127.0.0.1:9", "http://localhost:9"] {
             assert_eq!(plain_http_refusal(&base(ok).unwrap(), ok), None, "{ok}");
+        }
+    }
+
+    /// `K2_HOST=https://<name>`: TLS to `<name>` on the daemon's port, as
+    /// `_k2_daemon_base` writes the URL; a URL `routed` can't read sends
+    /// nothing over TCP; any other host is left as it is.
+    #[test]
+    fn an_https_daemon_host() {
+        let client = |host: &str, port: u16| {
+            let mut c = Client::new(host, port, "/p", Auth::Owner("t".into()));
+            c.port_file = Some(PathBuf::from("/nonexistent/daemon.port"));
+            daemon_https(&mut c);
+            c
+        };
+        for (host, port, name, header) in [
+            ("https://box.example", 4711, "box.example", "box.example:4711"),
+            ("https://box.example/", 4711, "box.example", "box.example:4711"),
+            ("HTTPS://localhost", 443, "localhost", "localhost"),
+        ] {
+            let c = client(host, port);
+            assert!(c.tls, "{host}");
+            assert_eq!(
+                (c.host.as_str(), c.port, c.host_header.as_deref()),
+                (name, port, Some(header)),
+                "{host}"
+            );
+            assert_eq!(c.port_file, None, "{host}");
+            assert_eq!(c.unsendable, None, "{host}");
+            assert!(!c.force_tcp, "the cell socket stays the daemon's: {host}");
+        }
+        for host in ["https://[fd00::1]", "https://box.example:8443", "https://box/x"] {
+            let c = client(host, 4711);
+            assert!(c.tls, "{host}");
+            assert_eq!(
+                c.unsendable.as_deref(),
+                Some(format!("{host}:4711").as_str()),
+                "{host}"
+            );
+        }
+        for host in ["127.0.0.1", "10.0.0.5", "Https://box.example", "http://box"] {
+            let c = client(host, 4711);
+            assert!(!c.tls, "{host}");
+            assert_eq!((c.host.as_str(), c.unsendable.as_deref()), (host, None));
+            assert!(c.port_file.is_some(), "{host}");
         }
     }
 

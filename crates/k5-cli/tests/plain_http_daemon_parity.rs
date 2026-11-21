@@ -8,6 +8,9 @@
 //!   `K2_PLAIN_HTTP_OK=1` (any of its names).
 //! - A password flag there is refused, exit 2, nothing sent, the switch or
 //!   not, a Tailscale host too.
+//! - `K2_HOST=https://<name>` reaches the daemon over TLS, through the
+//!   person's proxy for a name that isn't this computer (its user and
+//!   password are allowed: K2's ruling), with no warning.
 //!
 //! The stub daemon listens on 127.0.0.1; `K2_HOST=0.0.0.0` reaches it
 //! (Linux and macOS connect 0.0.0.0 to this machine) and is no loopback
@@ -19,6 +22,7 @@
 mod common;
 
 use common::parity::*;
+use common::tunnel::{self, ProxyMode, ProxyStub, SideRun, TlsStub, HOST};
 
 const WHOAMI: &str = r#"{"workspace":"sales","role":"primary","address":"sales","primary":"sales","session":"s1","path":"/w/sales","siblings":{"live":1,"others":[]}}"#;
 const SERVE: &str = r#"{"enabled":true,"port":4711,"url":"http://127.0.0.1:4711","publishedLabel":"","generatedAt":"2026-11-20T10:00:00Z"}"#;
@@ -213,4 +217,92 @@ fn users_password_flags_to_a_daemon_on_the_network() {
             "{name}"
         );
     }
+}
+
+fn tls_case(name: &'static str, pairs: &[(&'static str, &str)]) -> Case {
+    on(case(name, &[], &[], vec![], owner_only, 0, 0), pairs)
+}
+
+fn no_warning(name: &str, runs: &[&SideRun]) {
+    for run in runs {
+        assert!(!run.out.stderr.contains("plain http"), "{name}: {run:?}");
+        assert!(run.daemon.is_empty(), "{name}: the plain daemon: {run:?}");
+    }
+}
+
+/// `K2_HOST=https://localhost`: TLS straight to it (loopback never uses
+/// a proxy, and a proxy is set), no warning.
+#[test]
+fn whoami_over_tls_to_an_https_host() {
+    let rig = Rig::new("whoami", "httpshost");
+    let pki = tunnel::Pki::new(&rig.dir.join("pki"));
+    let daemon = TlsStub::start(&pki, 200, WHOAMI);
+    let proxy = ProxyStub::start(ProxyMode::Tunnel);
+    let port = daemon.port.to_string();
+    let ca = pki.ca_file.to_string_lossy().into_owned();
+    let px = proxy.url(None);
+    let c = tls_case(
+        "whoami: K2_HOST=https://localhost",
+        &[
+            ("K2_HOST", "https://localhost"),
+            ("K2_PORT", port.as_str()),
+            ("SSL_CERT_FILE", ca.as_str()),
+            ("https_proxy", px.as_str()),
+        ],
+    );
+    let [b, r] = tunnel::both(&rig, &c, &proxy, &daemon);
+    tunnel::assert_same(c.name, &b, &r);
+    no_warning(c.name, &[&b, &r]);
+    for run in [&b, &r] {
+        assert!(run.proxy.is_empty(), "loopback never via a proxy: {run:?}");
+        assert_eq!(run.tls.len(), 1, "{run:?}");
+        assert!(
+            run.tls[0]
+                .0
+                .contains(&format!("\r\nHost: localhost:{port}\r\n")),
+            "{run:?}"
+        );
+        assert!(
+            run.tls[0]
+                .0
+                .contains(&format!("\r\nAuthorization: Bearer {OWNER}\r\n")),
+            "{run:?}"
+        );
+    }
+    assert_eq!(r.out.code, Some(0), "{r:?}");
+    assert!(r.out.stdout.contains("sales"), "{r:?}");
+}
+
+/// `K2_HOST=https://<a name>`: through the person's proxy, Basic in the
+/// CONNECT (a proxy's user and password are allowed, with no refusal and
+/// no warning), the owner token only inside the tunnel.
+#[test]
+fn whoami_over_tls_through_the_proxy() {
+    let rig = Rig::new("whoami", "httpsproxy");
+    let pki = tunnel::Pki::new(&rig.dir.join("pki"));
+    let daemon = TlsStub::start(&pki, 200, WHOAMI);
+    let proxy = ProxyStub::start(ProxyMode::Tunnel);
+    let port = daemon.port.to_string();
+    let target = format!("{HOST}:{port}");
+    let ca = pki.ca_file.to_string_lossy().into_owned();
+    let px = proxy.url(Some(("acme-proxy", "pr0xy-s3cret")));
+    let k2_host = format!("https://{HOST}/");
+    let c = tls_case(
+        "whoami: K2_HOST=https://<name>/ through https_proxy",
+        &[
+            ("K2_HOST", k2_host.as_str()),
+            ("K2_PORT", port.as_str()),
+            ("SSL_CERT_FILE", ca.as_str()),
+            ("https_proxy", px.as_str()),
+        ],
+    );
+    let [b, r] = tunnel::both(&rig, &c, &proxy, &daemon);
+    let basic = tunnel::basic_line("acme-proxy", "pr0xy-s3cret");
+    for run in [&r, &b] {
+        tunnel::assert_tunnel_only(c.name, run, &target, Some(&basic), OWNER);
+    }
+    tunnel::assert_same(c.name, &b, &r);
+    no_warning(c.name, &[&b, &r]);
+    assert_eq!(r.out.code, Some(0), "{r:?}");
+    tunnel::assert_unprinted(c.name, &[b, r], &["pr0xy-s3cret", OWNER]);
 }

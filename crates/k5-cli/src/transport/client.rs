@@ -761,6 +761,10 @@ pub struct Client {
     /// ([`super::proxy`]). Only [`super::remote::apply`] sets it; it is
     /// used only with [`Client::tls`], and a new client has none.
     pub(in crate::transport) via: Option<super::proxy::Proxy>,
+    /// `K2_HOST=https://<name>` with a name or a proxy setting the binary
+    /// doesn't read as curl does ([`super::remote::daemon_https`]): the
+    /// URL the shell would send to. Nothing goes over TCP then.
+    pub(in crate::transport) unsendable: Option<String>,
     /// The `Host` header curl writes for the `BASE_URL`, when it is not
     /// `<HOST>:<PORT>` (a remote URL with the scheme's own port leaves the
     /// port out).
@@ -843,6 +847,7 @@ impl Client {
             force_tcp: false,
             tls: false,
             via: None,
+            unsendable: None,
             host_header: None,
             post_max_time: None,
             send_max_time: None,
@@ -1807,6 +1812,16 @@ impl Client {
                     });
                 };
                 (uds_target(sock, endpoint)?, "localhost".to_string())
+            }
+            Channel::Tcp if self.unsendable.is_some() => {
+                return Err(Error::Broken {
+                    endpoint: endpoint.to_string(),
+                    why: format!(
+                        "won't send to {}: a host or proxy setting this program doesn't read",
+                        self.unsendable.as_deref().unwrap_or_default()
+                    ),
+                    curl: wire::curl::URL_MALFORMAT,
+                });
             }
             Channel::Tcp => {
                 // The credential is the first header, an `Authorization:

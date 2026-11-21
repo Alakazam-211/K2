@@ -426,6 +426,8 @@ impl Settings {
             .clone()
             .map(|d| Box::new(SecretsDir(d)) as Box<dyn crate::transport::Healer>);
         c.use_healed_passport();
+        // `HOST=https://<name>`: over TLS (`_k2_daemon_base`).
+        crate::transport::remote::daemon_https(&mut c);
         c
     }
 }

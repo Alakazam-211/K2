@@ -169,9 +169,12 @@ pub fn target(base: &str) -> Option<(Target, String, String)> {
         None => host.to_string(),
     };
     let t = if tls {
+        // No proxy yet: the transport's proxy path (remote::routed) came
+        // after this verb went native; following it is the lane's.
         Target::Tls {
             host: host.to_string(),
             port: port_n,
+            via: None,
         }
     } else {
         Target::Tcp {

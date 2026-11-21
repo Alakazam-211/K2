@@ -815,8 +815,8 @@ mod tests {
             (root.join("tests"), "_parity.rs", "// covers: "),
             (root.join("../../tests/cli"), ".sh", "# covers: "),
         ] {
-            let entries = std::fs::read_dir(&dir)
-                .unwrap_or_else(|e| panic!("read {}: {e}", dir.display()));
+            let entries =
+                std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("read {}: {e}", dir.display()));
             for entry in entries {
                 let path = entry.unwrap().path();
                 let name = path.file_name().unwrap().to_string_lossy().into_owned();

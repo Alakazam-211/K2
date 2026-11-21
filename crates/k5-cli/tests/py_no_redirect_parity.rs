@@ -9,6 +9,11 @@
 //! - `calendar` (`_cal_py`'s `call`, with its tries, and `link`'s
 //!   `call_or_owner`), `project` (`_project_py`), `mail` (`_mail_py`'s
 //!   `call`, with its tries, and the reader's own `call`).
+//! - `agent`: `retire` and `restart` (their POST after the conf), `set`
+//!   (its `call` after the conf), `context` (`_context_http`) and `hire`
+//!   (its `http_get`); `db` (`_db_py`), `preset` (`_preset_py`), `feedback
+//!   ask` (its `request`) and `heartbeat wake` (its `request`, whose
+//!   `except SystemExit: raise` passes the exit on).
 //! - Each code urllib's handler takes (301, 302, 303, 307, 308), to http
 //!   and https, relative, with a user part, with bytes past ASCII (quoted
 //!   in the line as the handler quotes them).
@@ -57,6 +62,24 @@ struct Row {
 fn refusal(name: &'static str, args: &'static [&'static str], reply: Reply, stderr: String) -> Row {
     Row {
         case: case(name, args, &[], vec![reply], owner_and_port, 3, 1),
+        stderr: Some(stderr),
+    }
+}
+
+/// A refusal after `before`, the answers the family reads first (over
+/// curl, or urllib that isn't redirected).
+fn refusal_after(
+    name: &'static str,
+    args: &'static [&'static str],
+    before: Vec<Reply>,
+    reply: Reply,
+    stderr: String,
+) -> Row {
+    let n = before.len() + 1;
+    let mut replies = before;
+    replies.push(reply);
+    Row {
+        case: case(name, args, &[], replies, owner_and_port, 3, n),
         stderr: Some(stderr),
     }
 }
@@ -249,6 +272,141 @@ fn mail_follows_no_redirect() {
             &["domains"],
             Reply::Answer(302, MOVED.to_string()),
             1,
+        ),
+    ];
+    check(&rig, &l, rows);
+}
+
+/// `agent conf`'s answer for `qa` (agent_parity.rs's `CONF`).
+const CONF: &str = r#"{"ok":true,"name":"qa","path":"/srv/qa","mode":"agent","enabled":true,"personaPath":null,"connections":[],"projects":[],"live":{"active":true,"sessionId":"sess-0123456789","uptimeSec":3725},"charterProblems":[]}"#;
+
+#[test]
+fn agent_follows_no_redirect() {
+    let rig = Rig::new("agent", "noredir");
+    let (l, tp) = there();
+    let at = format!("127.0.0.1:{tp}");
+    let conf = || vec![ok(CONF)];
+    let rows = vec![
+        refusal_after(
+            "retire, 302 to http",
+            &["retire", "qa"],
+            conf(),
+            redirect(302, &format!("http://{at}/elsewhere")),
+            refused(302, &at),
+        ),
+        refusal_after(
+            "restart, 307 to https",
+            &["restart", "qa"],
+            conf(),
+            redirect(307, &format!("https://{at}/other-host")),
+            refused(307, &at),
+        ),
+        refusal_after(
+            "set, 302 relative",
+            &["set", "qa", "--mode", "manager"],
+            conf(),
+            redirect(302, "/moved"),
+            refused(302, "127.0.0.1:{port}"),
+        ),
+        refusal(
+            "context list, 308 to http",
+            &["context", "list"],
+            redirect(308, &format!("http://{at}/x")),
+            refused(308, &at),
+        ),
+        refusal(
+            "hire, 301 to https",
+            &["hire", "newbie"],
+            redirect(301, &format!("https://u:pw@{at}/y")),
+            refused(301, &at),
+        ),
+    ];
+    check(&rig, &l, rows);
+}
+
+#[test]
+fn db_follows_no_redirect() {
+    let rig = Rig::new("db", "noredir");
+    let (l, tp) = there();
+    let at = format!("127.0.0.1:{tp}");
+    let rows = vec![
+        refusal(
+            "status, 302 to http",
+            &["status"],
+            redirect(302, &format!("http://{at}/elsewhere")),
+            refused(302, &at),
+        ),
+        refusal(
+            "status --json, 307 to https",
+            &["status", "--json"],
+            redirect(307, &format!("https://{at}/other-host")),
+            refused(307, &at),
+        ),
+    ];
+    check(&rig, &l, rows);
+}
+
+#[test]
+fn preset_follows_no_redirect() {
+    let rig = Rig::new("preset", "noredir");
+    let (l, tp) = there();
+    let at = format!("127.0.0.1:{tp}");
+    let rows = vec![
+        refusal(
+            "list, 302 to http",
+            &["list"],
+            redirect(302, &format!("http://{at}/elsewhere")),
+            refused(302, &at),
+        ),
+        refusal(
+            "list --json, 303 to https",
+            &["list", "--json"],
+            redirect(303, &format!("https://{at}/other-host")),
+            refused(303, &at),
+        ),
+    ];
+    check(&rig, &l, rows);
+}
+
+#[test]
+fn feedback_ask_follows_no_redirect() {
+    let rig = Rig::new("feedback", "noredir");
+    let (l, tp) = there();
+    let at = format!("127.0.0.1:{tp}");
+    let rows = vec![
+        refusal(
+            "ask, 302 to http",
+            &["ask", "Ship it?"],
+            redirect(302, &format!("http://{at}/elsewhere")),
+            refused(302, &at),
+        ),
+        refusal(
+            "ask --json, 308 to https",
+            &["ask", "Ship it?", "--json"],
+            redirect(308, &format!("https://{at}/other-host")),
+            refused(308, &at),
+        ),
+    ];
+    check(&rig, &l, rows);
+}
+
+#[test]
+fn heartbeat_wake_follows_no_redirect() {
+    let rig = Rig::new("heartbeat", "noredir");
+    let (l, tp) = there();
+    let at = format!("127.0.0.1:{tp}");
+    let rows = vec![
+        refusal(
+            "wake, 302 to http",
+            &["wake"],
+            redirect(302, &format!("http://{at}/elsewhere")),
+            refused(302, &at),
+        ),
+        refusal(
+            "wake, 307 to https",
+            &["wake"],
+            redirect(307, &format!("https://{at}/other-host")),
+            refused(307, &at),
         ),
     ];
     check(&rig, &l, rows);

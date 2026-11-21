@@ -14,7 +14,7 @@ use crate::out::json::{Text, Value};
 use crate::out::py;
 use crate::out::pylib::{json as pyjson, ops};
 use crate::prelude::Closing;
-use crate::transport::urllib::{decode, Method, Opener, Outcome, Request};
+use crate::transport::urllib::{decode, Method, Opener, Outcome, Refused, Request};
 use crate::transport::Client;
 use std::time::Duration;
 
@@ -186,6 +186,11 @@ impl From<Raise> for Stop {
     }
 }
 
+/// `_K2NoRedirect`: the rule's line, then `SystemExit(3)`.
+fn refused(r: Refused) -> Stop {
+    Stop::Fail(format!("{}\n", r.line), Refused::EXIT)
+}
+
 fn fail(code: &Value, hint: &str, exit: Exit) -> Stop {
     let line = dumps(&obj(vec![(
         "error",
@@ -242,12 +247,14 @@ const L: u32 = 120;
 
 impl Run<'_> {
     /// One urllib call: the answer read as JSON, or the block's error dict.
-    fn call(&self, req: Request, route: &str) -> Value {
+    /// A redirect is `_K2NoRedirect`'s refusal, out of the block.
+    fn call(&self, req: Request, route: &str) -> Result<Value, Stop> {
         let req = match self.opener.token() {
             Some(t) => req.header("Authorization", format!("Bearer {t}")),
             None => req,
         };
-        match self.opener.open(&req) {
+        let out = self.opener.open_ruled(&req).map_err(refused)?;
+        Ok(match out {
             Outcome::Answer { body: Ok(b), .. } => match pyjson::loads(&decode(&b)) {
                 Ok(v) => v,
                 Err(f) => obj(vec![("error", s(&format!("{route}: {}", f.message)))]),
@@ -261,24 +268,24 @@ impl Run<'_> {
                     None => obj(vec![("error", s(&format!("HTTP {code} on {route}")))]),
                 }
             }
-        }
+        })
     }
 
-    fn http_get(&self, route: &str, params: Vec<(String, String)>) -> Value {
+    fn http_get(&self, route: &str, params: Vec<(String, String)>) -> Result<Value, Stop> {
         self.call(
             Request::new(Method::Get, route, TIMEOUT).query(params),
             route,
         )
     }
 
-    fn post_query(&self, route: &str, params: Vec<(String, String)>) -> Value {
+    fn post_query(&self, route: &str, params: Vec<(String, String)>) -> Result<Value, Stop> {
         let req = Request::new(Method::Post, route, TIMEOUT)
             .query(params)
             .data(Vec::new());
         self.call(req, route)
     }
 
-    fn post_json(&self, route: &str, body: &Value) -> Value {
+    fn post_json(&self, route: &str, body: &Value) -> Result<Value, Stop> {
         let req = Request::new(Method::Post, route, TIMEOUT)
             .data(dumps(body).into_bytes())
             .header("Content-Type", "application/json");
@@ -523,7 +530,7 @@ impl Run<'_> {
         let (want, label) = if matches!(arg.to_lowercase().as_str(), "none" | "off" | "-") {
             (Value::Null, s("none"))
         } else {
-            let listed = self.http_get("/cli/focus-groups/list", Vec::new());
+            let listed = self.http_get("/cli/focus-groups/list", Vec::new())?;
             let Value::Array(groups) = &listed else {
                 let err = match &listed {
                     Value::Object(_) => at(&listed, "error").cloned(),
@@ -643,7 +650,7 @@ impl Run<'_> {
         let d = self.http_get(
             "/cli/project-group/show",
             vec![("group".to_string(), sel.to_string())],
-        );
+        )?;
         let err = py_get(&d, "error", L)?.cloned().unwrap_or(Value::Null);
         if py::truthy(&err) {
             let err = match err {
@@ -776,7 +783,7 @@ impl Run<'_> {
                     ("project", self.path.clone()),
                     ("fields", obj(fields)),
                 ]),
-            );
+            )?;
             let err = py_get(&resp, "error", L)?.cloned().unwrap_or(Value::Null);
             if py::truthy(&err) || !at(&resp, "ok").is_some_and(py::truthy) {
                 self.fail_steps(&["set-mode", "set-enabled"]);
@@ -849,7 +856,7 @@ impl Run<'_> {
                     ("project_path".to_string(), py::str_of(&self.path)),
                     ("name".to_string(), name),
                 ],
-            );
+            )?;
             let err = py_get(&resp, "error", L)?;
             if err.is_some_and(py::truthy) || !at(&resp, "success").is_some_and(py::truthy) {
                 let why = match at(&resp, "error") {
@@ -900,7 +907,7 @@ impl Run<'_> {
                         ("name".to_string(), agent_name.clone()),
                         ("role".to_string(), String::new()),
                     ],
-                );
+                )?;
                 if py_get(&resp, "error", L)?.is_some_and(py::truthy) {
                     let why = py::str_of(at(&resp, "error").unwrap_or(&Value::Null));
                     put(&mut self.actions[i], "status", s("failed"));
@@ -920,7 +927,7 @@ impl Run<'_> {
                     ("agent_name", s(&agent_name)),
                     ("content", content),
                 ]),
-            );
+            )?;
             let err = py_get(&resp, "error", L)?;
             if err.is_some_and(py::truthy) || !at(&resp, "success").is_some_and(py::truthy) {
                 let why = match at(&resp, "error") {
@@ -957,7 +964,7 @@ impl Run<'_> {
             let resp = self.post_json(
                 route,
                 &obj(vec![("group", group), ("workspace", self.path.clone())]),
-            );
+            )?;
             let err = py_get(&resp, "error", L)?.cloned().unwrap_or(Value::Null);
             if py::truthy(&err) || !at(&resp, "ok").is_some_and(py::truthy) {
                 let err = match err {
@@ -1020,7 +1027,7 @@ impl Run<'_> {
             let group = aget(x, "focusGroupId").cloned().unwrap_or(Value::Null);
             let project = at(self.conf, "id").cloned().unwrap_or(Value::Null);
             let (status, resp) =
-                self.assign(&obj(vec![("projectId", project), ("focusGroupId", group)]));
+                self.assign(&obj(vec![("projectId", project), ("focusGroupId", group)]))?;
             let err = match &resp {
                 Value::Object(_) => at(&resp, "error").cloned().unwrap_or(Value::Null),
                 _ => s("unexpected answer"),
@@ -1087,7 +1094,7 @@ impl Run<'_> {
     /// The assign's own urllib call (the block's step 5): its status (0
     /// when it raised or its answer was no JSON) and the answer read as
     /// JSON, or the block's error dict.
-    fn assign(&self, body: &Value) -> (u16, Value) {
+    fn assign(&self, body: &Value) -> Result<(u16, Value), Stop> {
         const ROUTE: &str = "/cli/focus-groups/assign";
         let req = Request::new(Method::Post, ROUTE, TIMEOUT)
             .data(dumps(body).into_bytes())
@@ -1097,7 +1104,8 @@ impl Run<'_> {
             None => req,
         };
         let raised = |why: String| (0, obj(vec![("error", s(&format!("{ROUTE}: {why}")))]));
-        match self.opener.open(&req) {
+        let out = self.opener.open_ruled(&req).map_err(refused)?;
+        Ok(match out {
             Outcome::Answer {
                 status,
                 body: Ok(b),
@@ -1115,7 +1123,7 @@ impl Run<'_> {
                     ),
                 }
             }
-        }
+        })
     }
 }
 

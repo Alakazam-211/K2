@@ -422,6 +422,8 @@ fn push_json(out: &mut String, t: &str) {
 pub(super) enum Stop {
     Exit(Exit),
     Raise(Raise),
+    /// `_K2NoRedirect` refused a redirect: its line, then `SystemExit(3)`.
+    Refused(String),
 }
 
 impl From<Raise> for Stop {
@@ -675,6 +677,11 @@ pub fn hire(client: &mut Client, _closing: &mut Closing, a: &HireArgs) -> Exit {
             h.stderr
                 .push_str(&crate::families::feedback::write::traceback_stdin(&r));
             Exit::Error
+        }
+        Err(Stop::Refused(line)) => {
+            h.stderr.push_str(&line);
+            h.stderr.push('\n');
+            crate::transport::urllib::Refused::EXIT
         }
     };
     Shown {

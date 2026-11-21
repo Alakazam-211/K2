@@ -98,7 +98,7 @@ pub fn apply(h: &mut Hire) -> R<()> {
                 act::set(&mut body, "onboard", s(&a.onboard));
             }
         }
-        let resp = h.post_json("/cli/agents/hire", &body);
+        let resp = h.post_json("/cli/agents/hire", &body)?;
         let err = pget(&resp, "error", &[(882, "<module>")])?.cloned();
         if err.as_ref().is_some_and(py::truthy) || !ptrue(&resp, "ok", &[(883, "<module>")])? {
             h.note_permission(&resp);
@@ -241,7 +241,7 @@ pub fn apply(h: &mut Hire) -> R<()> {
         let resp = h.post_json(
             "/cli/workspace/set",
             &obj(vec![("project", s(&path)), ("fields", obj(fields))]),
-        );
+        )?;
         let bad = ptrue(&resp, "error", &[(954, "<module>")])?
             || !ptrue(&resp, "ok", &[(954, "<module>")])?;
         if bad {
@@ -311,7 +311,7 @@ pub fn apply(h: &mut Hire) -> R<()> {
             "/cli/workspace/set-agent-display-name",
             vec![("project_path", path.clone()), ("name", name)],
             super::http::DEFAULT,
-        );
+        )?;
         let bad = ptrue(&resp, "error", &[(989, "<module>")])?
             || !ptrue(&resp, "success", &[(989, "<module>")])?;
         if bad {
@@ -338,7 +338,7 @@ pub fn apply(h: &mut Hire) -> R<()> {
         Value::Null
     };
     if need_id && !py::truthy(&workspace_id) {
-        let conf2 = h.get(super::super::CONF, vec![("q", path.clone())]);
+        let conf2 = h.get(super::super::CONF, vec![("q", path.clone())])?;
         if ptrue(&conf2, "ok", &[(1003, "<module>")])?
             && ptrue(&conf2, "id", &[(1003, "<module>")])?
         {
@@ -347,7 +347,7 @@ pub fn apply(h: &mut Hire) -> R<()> {
         }
     }
     if need_id && !py::truthy(&workspace_id) {
-        let listing = h.get("/cli/projects/list", vec![]);
+        let listing = h.get("/cli/projects/list", vec![])?;
         if let Value::Array(rows) = &listing {
             for p in rows {
                 if matches!(p, Value::Object(_))
@@ -379,7 +379,7 @@ pub fn apply(h: &mut Hire) -> R<()> {
         let resp = h.post_json(
             "/cli/projects/update",
             &obj(vec![("id", workspace_id.clone()), ("color", color)]),
-        );
+        )?;
         if ptrue(&resp, "error", &[(1021, "<module>")])? {
             let hint = hint_of(&resp, 1023)?;
             step_failed_on(
@@ -403,7 +403,7 @@ pub fn apply(h: &mut Hire) -> R<()> {
                 ("projectId", workspace_id.clone()),
                 ("focusGroupId", group),
             ]),
-        );
+        )?;
         if ptrue(&resp, "error", &[(1033, "<module>")])? {
             let hint = hint_of(&resp, 1035)?;
             step_failed_on(
@@ -434,7 +434,7 @@ pub fn apply(h: &mut Hire) -> R<()> {
                 ("target", py::str_of(&target)),
             ],
             super::http::DEFAULT,
-        );
+        )?;
         let err = pget(&resp, "error", &[(1053, "<module>")])?.cloned();
         if let Some(err) = err.filter(py::truthy) {
             let (code, hint) = match &err {
@@ -478,7 +478,7 @@ pub fn apply(h: &mut Hire) -> R<()> {
         let resp = h.post_json(
             "/cli/project-group/add-member",
             &obj(vec![("group", group), ("workspace", s(&path))]),
-        );
+        )?;
         let err = pget(&resp, "error", &[(1077, "<module>")])?.cloned();
         if err.as_ref().is_some_and(py::truthy) || !act::get(&resp, "ok").is_some_and(py::truthy) {
             let hint = hint_of(&resp, 1079)?;
@@ -523,7 +523,7 @@ pub fn apply(h: &mut Hire) -> R<()> {
             "/cli/workspace/ensure-canonical-session",
             vec![("project", path.clone())],
             120,
-        );
+        )?;
         let bad = ptrue(&resp, "error", &[(1159, "<module>")])?
             || !ptrue(&resp, "success", &[(1159, "<module>")])?;
         if bad {
@@ -579,7 +579,7 @@ pub fn apply(h: &mut Hire) -> R<()> {
                 "/cli/workspace/msg",
                 msg_params(&path, &template_hello),
                 180,
-            );
+            )?;
             let e = pget(&resp, "error", &[(1191, "<module>")])?.cloned();
             let str_err = matches!(&e, Some(v @ Value::Str(_)) if py::truthy(v));
             if str_err || !act::get(&resp, "success").is_some_and(py::truthy) {
@@ -625,7 +625,7 @@ pub fn apply(h: &mut Hire) -> R<()> {
             act::set(&mut h.actions[i], "status", s("not-run"));
             act::set(&mut h.actions[i], "reason", s("launch failed"));
         } else {
-            let resp = h.post_query("/cli/workspace/msg", msg_params(&path, &s(&a.onboard)), 180);
+            let resp = h.post_query("/cli/workspace/msg", msg_params(&path, &s(&a.onboard)), 180)?;
             let e = pget(&resp, "error", &[(1216, "<module>")])?.cloned();
             match e {
                 Some(v @ Value::Str(_)) if py::truthy(&v) => step_failed_on(
@@ -657,7 +657,7 @@ pub fn apply(h: &mut Hire) -> R<()> {
         if let Some(b) = a.brief.as_ref().filter(|b| !b.code_points().is_empty()) {
             act::set(&mut body, "brief", Value::Str(b.clone()));
         }
-        let resp = h.post_json("/cli/app/handover", &body);
+        let resp = h.post_json("/cli/app/handover", &body)?;
         match pget(&resp, "error", &[(1233, "<module>")])?.cloned() {
             Some(e @ Value::Object(_)) => {
                 act::set(
@@ -725,7 +725,7 @@ fn seed_context(h: &mut Hire, i: usize, path: &str) -> R<()> {
     } else {
         act::set(&mut body, "path", or(act::get(&a, "path"), context.clone()));
     }
-    let resp = h.post_json("/cli/context/add", &body);
+    let resp = h.post_json("/cli/context/add", &body)?;
     let err = pget(&resp, "error", &[(1106, "<module>")])?.cloned();
     let ctx = py::str_of(&context);
     if let Some(err) = err.filter(py::truthy) {

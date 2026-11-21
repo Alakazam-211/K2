@@ -9,7 +9,7 @@ use crate::out::json::Value;
 use crate::out::py;
 use crate::out::pylib::{json as pyjson, ops};
 use crate::prelude::Closing;
-use crate::transport::urllib::{decode, Method, Opener, Outcome, Request};
+use crate::transport::urllib::{decode, Method, Opener, Outcome, Refused, Request};
 use crate::transport::Client;
 use std::time::Duration;
 
@@ -171,15 +171,21 @@ fn label_of(conf: &Value, path: &Value, line: u32) -> Result<Value, Raise> {
     }
 }
 
-/// The POST both blocks make: JSON, then the token as Bearer.
-fn post(opener: &Opener, route: &str, body: &Value) -> Outcome {
+/// The POST both blocks make: JSON, then the token as Bearer. A redirect
+/// is `_K2NoRedirect`'s refusal.
+fn post(opener: &Opener, route: &str, body: &Value) -> Result<Outcome, Refused> {
     let mut req = Request::new(Method::Post, route, TIMEOUT)
         .data(dumps(body).into_bytes())
         .header("Content-Type", "application/json");
     if let Some(t) = opener.token() {
         req = req.header("Authorization", format!("Bearer {t}"));
     }
-    opener.open(&req)
+    opener.open_ruled(&req)
+}
+
+/// `_K2NoRedirect`: the rule's line, then `SystemExit(3)`.
+fn refused(r: Refused) -> Shown {
+    Shown::err(format!("{}\n", r.line), Refused::EXIT)
 }
 
 /// The `daemon_unreachable` line both blocks print for anything urlopen
@@ -224,7 +230,11 @@ fn retire_block(opener: &Opener, conf: &Value, a: &RetireArgs) -> Shown {
         ("dryRun", Value::Bool(a.dry_run)),
         ("archiveTo", s(&archive_to)),
     ]);
-    let d = match post(opener, super::RETIRE, &body) {
+    let out = match post(opener, super::RETIRE, &body) {
+        Ok(out) => out,
+        Err(r) => return refused(r),
+    };
+    let d = match out {
         Outcome::Answer { body: Ok(b), .. } => match pyjson::loads(&decode(&b)) {
             Ok(d) => d,
             Err(f) => return no_response(&f.message),
@@ -457,7 +467,11 @@ fn restart_block(opener: &Opener, conf: &Value, a: &RestartArgs) -> Shown {
     if !harness.is_empty() {
         body.push(("harness", s(&harness)));
     }
-    let d = match post(opener, super::ENSURE_PINNED_CHAT, &obj(body)) {
+    let out = match post(opener, super::ENSURE_PINNED_CHAT, &obj(body)) {
+        Ok(out) => out,
+        Err(r) => return refused(r),
+    };
+    let d = match out {
         Outcome::Answer { body: Ok(b), .. } => match pyjson::loads(&decode(&b)) {
             Ok(d) => d,
             Err(f) => return no_response(&f.message),

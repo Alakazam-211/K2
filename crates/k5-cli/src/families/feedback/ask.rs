@@ -36,7 +36,7 @@ use crate::families::thread::cards::{option_lines, options_one_note};
 use crate::families::{get, py_iter, py_space, Raise, Shown};
 use crate::out::json::{self, Text, Value};
 use crate::out::py;
-use crate::transport::urllib::{decode, Method, Opener, Outcome, Request};
+use crate::transport::urllib::{decode, Method, Opener, Outcome, Refused, Request};
 use k2_client::cli_name;
 use std::io::Read as _;
 use std::path::PathBuf;
@@ -475,7 +475,11 @@ impl Ctx {
             }
         }
         let body = dumps(&obj(payload));
-        let Some(d) = self.request(Method::Post, CREATE, None, Some(body.into_bytes())) else {
+        let d = match self.request(Method::Post, CREATE, None, Some(body.into_bytes())) {
+            Ok(d) => d,
+            Err(r) => return Ok(refused(o, r)),
+        };
+        let Some(d) = d else {
             return die_with(
                 o,
                 "daemon_unreachable",
@@ -582,7 +586,10 @@ impl Ctx {
             (!timeout.is_empty()).then(|| now() + timeout.parse::<f64>().unwrap_or(f64::INFINITY));
         let id = str_of(fid);
         loop {
-            let d = self.request(Method::Get, SHOW, Some(&id), None);
+            let d = match self.request(Method::Get, SHOW, Some(&id), None) {
+                Ok(d) => d,
+                Err(r) => return Ok(refused(o, r)),
+            };
             if let Some(d @ Value::Object(_)) = &d {
                 if at(d, "ok").is_some_and(py::truthy) {
                     if let Some(exit) = self.settled(d, fid, as_json, o)? {
@@ -725,7 +732,7 @@ impl Ctx {
         route: &str,
         id: Option<&str>,
         data: Option<Vec<u8>>,
-    ) -> Option<Value> {
+    ) -> Result<Option<Value>, Refused> {
         let mut req = Request::new(method, route, TIMEOUT);
         if let Some(id) = id {
             req = req.query([("id", id)]);
@@ -736,7 +743,7 @@ impl Ctx {
         if let Some(t) = self.opener.token() {
             req = req.header("Authorization", format!("Bearer {t}"));
         }
-        match self.opener.open(&req) {
+        Ok(match self.opener.open_ruled(&req)? {
             Outcome::Answer { body: Ok(b), .. } => json::parse(&decode(&b)).ok(),
             Outcome::HttpError { code, body } => {
                 let parsed = body.ok().and_then(|b| json::parse(&decode(&b)).ok());
@@ -751,8 +758,15 @@ impl Ctx {
                 }))
             }
             Outcome::Answer { body: Err(_), .. } | Outcome::Raised(_) => None,
-        }
+        })
     }
+}
+
+/// `_K2NoRedirect`: the rule's line, then `SystemExit(3)`.
+fn refused(o: &mut PyOut, r: Refused) -> Exit {
+    o.stderr.push_str(&r.line);
+    o.stderr.push('\n');
+    Refused::EXIT
 }
 
 /// Prints `line` on stderr; `exit`.

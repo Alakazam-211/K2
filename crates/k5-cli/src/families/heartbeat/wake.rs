@@ -22,7 +22,7 @@
 use crate::exit::Exit;
 use crate::out::json::{self, Options, Value};
 use crate::out::{self, py};
-use crate::transport::urllib::{Class, Kind, Method, Opener, Outcome, Raised, Request};
+use crate::transport::urllib::{Class, Kind, Method, Opener, Outcome, Raised, Refused, Request};
 use crate::transport::{Auth, Client};
 use k2_client::{cli_name, env_names, product_name};
 use std::path::Path;
@@ -380,7 +380,18 @@ impl Wake {
                 _ => Err(raised_stop(r)),
             }
         };
-        let got = match self.opener.open(&req) {
+        // `_K2NoRedirect`: the rule's line, then `SystemExit(3)` (the
+        // block's `except SystemExit: raise` passes it on).
+        let out = match self.opener.open_ruled(&req) {
+            Ok(out) => out,
+            Err(r) => {
+                return Err(Miss::End(End {
+                    stderr: format!("{}\n", r.line),
+                    exit: Refused::EXIT,
+                }))
+            }
+        };
+        let got = match out {
             Outcome::Answer { status, body } => match body {
                 Ok(b) => Ok((status, b)),
                 Err(r) => Err(why(&r)),

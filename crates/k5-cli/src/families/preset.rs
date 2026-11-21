@@ -37,7 +37,7 @@ use crate::out::{self, py};
 use crate::passport;
 use crate::prelude;
 use crate::python;
-use crate::transport::urllib::{decode, Method, Opener, Outcome, Request};
+use crate::transport::urllib::{decode, Method, Opener, Outcome, Refused, Request};
 use k2_client::{cli_name, product_name};
 use std::ffi::OsString;
 use std::time::Duration;
@@ -443,13 +443,15 @@ impl Block {
         })
     }
 
-    /// `request(method, route, body=body)`: `None` for any exception.
+    /// `request(method, route, body=body)`: `None` for any exception. A
+    /// redirect is `_K2NoRedirect`'s refusal: its line, then
+    /// `SystemExit(3)`.
     fn request(
         &mut self,
         method: Method,
         route: &str,
         body: Option<&Value>,
-    ) -> (Option<u16>, Option<Value>) {
+    ) -> R<(Option<u16>, Option<Value>)> {
         let mut req = Request::new(method, route, TIMEOUT);
         if let Some(b) = body {
             req = req
@@ -459,7 +461,14 @@ impl Block {
         if let Some(t) = self.opener.token() {
             req = req.header("Authorization", format!("Bearer {t}"));
         }
-        match self.opener.open(&req) {
+        let out = match self.opener.open_ruled(&req) {
+            Ok(out) => out,
+            Err(r) => {
+                self.p.err(r.line);
+                return Err(Halt::Exit(Refused::EXIT));
+            }
+        };
+        Ok(match out {
             Outcome::Answer {
                 status,
                 body: Ok(b),
@@ -472,12 +481,12 @@ impl Block {
                 (Some(code), Some(v))
             }
             _ => (None, None),
-        }
+        })
     }
 
     /// `call(method, route, body=body)`.
     fn call(&mut self, method: Method, route: &str, body: Option<&Value>) -> R<Value> {
-        let (status, d) = self.request(method, route, body);
+        let (status, d) = self.request(method, route, body)?;
         let Some(d) = d else {
             let hint = s(&format!(
                 "no response from the {} daemon (is it running?)",

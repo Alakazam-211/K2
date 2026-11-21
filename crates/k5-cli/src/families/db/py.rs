@@ -607,7 +607,15 @@ impl<'a> Py<'a> {
                 &[(from, "<module>"), (line::REQUEST_DIE, "request")],
             )
         };
-        match self.opener.open(&req) {
+        // `_K2NoRedirect`: the rule's line, then `SystemExit(3)`.
+        let out = match self.opener.open_ruled(&req) {
+            Ok(out) => out,
+            Err(r) => {
+                self.eprint(r.line);
+                return Err(Stop::Exit(urllib::Refused::EXIT));
+            }
+        };
+        match out {
             Outcome::Answer {
                 status,
                 body: Ok(b),

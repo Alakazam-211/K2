@@ -11,7 +11,7 @@ use crate::out::{self, py};
 use crate::prelude::Closing;
 use crate::transport::client::{Call, Channel, Error};
 use crate::transport::encode::quote;
-use crate::transport::urllib::{decode, Method, Opener, Outcome, Request};
+use crate::transport::urllib::{decode, Method, Opener, Outcome, Refused, Request};
 use crate::transport::Client;
 use std::time::Duration;
 
@@ -478,7 +478,12 @@ impl Ctx<'_> {
                 .data(data.as_bytes().to_vec())
                 .header("Content-Type", "application/json");
         }
-        let (status, raw) = match self.opener.open(&r) {
+        // `_K2NoRedirect`: the rule's line, then `SystemExit(3)`.
+        let out = match self.opener.open_ruled(&r) {
+            Ok(out) => out,
+            Err(e) => return Err(Shown::err(format!("{}\n", e.line), Refused::EXIT)),
+        };
+        let (status, raw) = match out {
             Outcome::Answer {
                 status,
                 body: Ok(b),

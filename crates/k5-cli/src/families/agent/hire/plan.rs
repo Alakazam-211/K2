@@ -185,7 +185,7 @@ pub fn plan(h: &mut Hire) -> R<()> {
         let probe = h.post_json(
             "/cli/agents/hire",
             &h.template_body(vec![("dryRun", Value::Bool(true))]),
-        );
+        )?;
         let err = ptrue(&probe, "error", &[(140, "<module>")])?;
         if err || !ptrue(&probe, "path", &[(140, "<module>")])? {
             h.note_permission(&probe);
@@ -208,7 +208,7 @@ pub fn plan(h: &mut Hire) -> R<()> {
 
     // 181: --agent against the preset roster.
     if !a.agent_preset.is_empty() {
-        let presets = h.get("/cli/presets/list", vec![]);
+        let presets = h.get("/cli/presets/list", vec![])?;
         let Value::Array(list) = &presets else {
             let err = match &presets {
                 Value::Object(_) => act::get(&presets, "error").cloned(),
@@ -298,7 +298,7 @@ pub fn plan(h: &mut Hire) -> R<()> {
     // 213: --project selectors.
     let mut resolved_projects: Vec<(Value, Value, bool)> = Vec::new();
     for sel in &a.projects {
-        let d = h.get("/cli/project-group/show", vec![("group", sel.clone())]);
+        let d = h.get("/cli/project-group/show", vec![("group", sel.clone())])?;
         let err = pget(&d, "error", &[(215, "<module>")])?.cloned();
         if let Some(err) = err.filter(py::truthy) {
             let err = match err {
@@ -376,7 +376,7 @@ pub fn plan(h: &mut Hire) -> R<()> {
         if matches!(low.as_str(), "none" | "off" | "-") {
             wanted_focus = Some((s(""), s("none")));
         } else {
-            let groups = h.get("/cli/focus-groups/list", vec![]);
+            let groups = h.get("/cli/focus-groups/list", vec![])?;
             let Value::Array(list) = &groups else {
                 let err = match &groups {
                     Value::Object(_) => act::get(&groups, "error").cloned(),
@@ -452,7 +452,7 @@ pub fn plan(h: &mut Hire) -> R<()> {
     }
 
     // 273: the conf (what makes hire idempotent).
-    let conf = h.get(super::super::CONF, vec![("q", path.clone())]);
+    let conf = h.get(super::super::CONF, vec![("q", path.clone())])?;
     let probe_err = pget(&conf, "error", &[(274, "<module>")])?.cloned();
     if let Some(e) = probe_err.filter(py::truthy) {
         let not_found = matches!(&e, Value::Object(_))
@@ -542,7 +542,7 @@ pub fn plan(h: &mut Hire) -> R<()> {
         }
         let l = or(act::get(&conf, "live"), obj(vec![]));
         live = ptrue(&l, "active", &[(329, "<module>")])?;
-        let layers = h.get("/cli/context/layers", vec![("project", path.clone())]);
+        let layers = h.get("/cli/context/layers", vec![("project", path.clone())])?;
         let has_layers =
             ptrue(&layers, "ok", &[(332, "<module>")])? || act::get(&layers, "layers").is_some();
         if has_layers {
@@ -716,7 +716,7 @@ pub fn plan(h: &mut Hire) -> R<()> {
         let r = h.get(
             "/cli/connections",
             vec![("action", "resolve".to_string()), ("target", peer.clone())],
-        );
+        )?;
         let is_dict = matches!(r, Value::Object(_));
         let rerr = if is_dict {
             act::get(&r, "error").cloned()
@@ -1012,7 +1012,7 @@ pub fn dry_run(h: &mut Hire) -> R<()> {
                 act::get(p, "id").cloned().unwrap_or(Value::Null),
             );
         }
-        let resp = h.post_json("/cli/agents/hire", &pb);
+        let resp = h.post_json("/cli/agents/hire", &pb)?;
         let bad = ptrue(&resp, "error", &[(787, "<module>")])?
             || !ptrue(&resp, "ok", &[(787, "<module>")])?;
         if bad {
@@ -1040,7 +1040,7 @@ pub fn dry_run(h: &mut Hire) -> R<()> {
             let resp = h.post_json(
                 "/cli/agents/hire",
                 &obj(vec![("dryRun", Value::Bool(true))]),
-            );
+            )?;
             let gerr = match &resp {
                 Value::Object(_) => act::get(&resp, "error").cloned(),
                 _ => None,

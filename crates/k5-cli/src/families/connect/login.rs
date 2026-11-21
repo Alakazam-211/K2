@@ -184,7 +184,7 @@ pub fn place(base: &str) -> Option<(Place, String)> {
             netloc,
             tls: false,
         },
-        Target::Tls { host, port } => Place {
+        Target::Tls { host, port, .. } => Place {
             host,
             port,
             netloc,

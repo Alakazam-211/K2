@@ -4,11 +4,18 @@
 # Which help forms the k5 binary may answer itself: the ones where the bash
 # CLI does nothing but print one cli/text/help file. The list is
 # crates/k5-cli/src/help_native.txt; the binary embeds it (build.rs).
+# Then every other help form of the router whose output bash only prints,
+# the same everywhere: crates/k5-cli/src/help_captured.txt, what bash
+# printed for each (the captured forms, at the end of this script).
 #
-#   bash tests/cli/help_native.sh           derive the list from bash, and fail
-#                                           unless it is the committed one
-#   bash tests/cli/help_native.sh --write   derive it and write it
+#   bash tests/cli/help_native.sh           derive both lists from bash, and
+#                                           fail unless they are the committed ones
+#   bash tests/cli/help_native.sh --write   derive them and write them
 # HELP_NATIVE_WHY=1 also prints each form bash keeps, with the reason.
+# HELP_NATIVE_DUMP=<file> writes the captured forms and the kept ones'
+# reasons there as JSON. HELP_NATIVE_CAPTURED=<file> reads (or writes) the
+# captured list there instead (the bite: a list with one page changed must
+# fail). HELP_NATIVE_JOBS sets how many forms run at once (4).
 #
 # The forms tried:
 #   <words> --help and <words> -h   for each help/<words>.txt that is not in
@@ -252,6 +259,9 @@ os.chmod(os.path.join(sandbox, "stub-cell", "curl"), 0o755)
 AGENTS_OFF = {"Coff", "Toff"}
 hits = {"C": 0, "Con": 0, "Coff": 0}
 hits_lock = threading.Lock()
+# Every request's path and headers, as one string each: the captured
+# forms run with a passport of their own, so a request names its form.
+requests_seen = []
 cards_sock = {}
 class UnixServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
     daemon_threads = True
@@ -264,6 +274,7 @@ def handler(kind, on):
         def do_GET(self):
             with hits_lock:
                 hits[self.kind_] += 1
+                requests_seen.append(self.path + "\n" + str(self.headers))
             route = self.path.split("?", 1)[0]
             if route == "/cli/permission/enabled":
                 status, body = 200, json.dumps({"enabled": self.on_}).encode()
@@ -846,11 +857,12 @@ print("help_native: the deprecated tier (%d forms: _deprecated, the %d rows' pri
       "verbs (alone and with a word after: the row's line, exit 1) in their environments; nothing asked"
       % (7, len(retired), 7, n_retired))
 
-rows, kept = [], {}
+rows, kept, file_forms = [], {}, set()
 with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
     for argv, row, why in pool.map(classify, cands):
         if row:
             rows.append("%s|%s|%s|%d" % (" ".join(argv), row[0], row[1], row[2]))
+            file_forms.add(tuple(argv))
         else:
             kept[" ".join(argv)] = why
 
@@ -870,15 +882,337 @@ for k in sorted(reasons):
 if os.environ.get("HELP_NATIVE_WHY"):
     for a in sorted(kept):
         print("  bash: %s: %s" % (a, kept[a]))
+
+# ---- The captured forms ------------------------------------------------
+# Every other help form of the router (crates/k5-cli/tests/data/
+# router_forms.tsv, scripts/router-forms.py): each form with help, --help
+# or -h among its words, and each form that is not an alias with --help and
+# with -h after it (the native bar's H class, crates/k5-cli/tests/
+# native_bar.rs, and its -h twin). Leaving out the forms above (a file's
+# print), the pages the binary puts together (pages.rs, Composed: chat's
+# usage, help/--help/-h with a word), the top level help words, and `cli`
+# and `study`, whose pages the front words itself.
+#
+# A form is captured when, run as bash in A, B, C and Con:
+#   1. stdout, stderr and the exit code are the same in all four, the
+#      exit code is one the binary has (crates/k5-cli/src/exit.rs), and
+#      both streams are UTF-8 with no control byte but newline and tab;
+#   2. the trace from the router's case to the EXIT trap is the same in
+#      all four, and each step in it, at any depth (a command
+#      substitution's too), is one of: case, shift, local, for, return,
+#      exit, true, :, break, continue, set, a variable assignment, a call
+#      of a function the script defines, echo, printf, cat with no
+#      arguments (a heredoc), and a `[` or `[[` that compares two words or
+#      asks whether one is empty (-n, -z); never another program, a file
+#      test, read, eval or source;
+#   3. no line of the script those steps run reads a variable the script
+#      never assigns (one only the environment can set), but the shell's
+#      own (the arguments, $?, $#, LINENO, FUNCNAME and the like), nor the
+#      CLI's version (K2_CLI_VERSION: every release would move the list).
+# The traced run (BASH_XTRACEFD, so the trace has its own file) gives the
+# output; the untraced run in A must give the same.
+# The binary prints what was captured (crates/k5-cli/src/help_captured.txt,
+# embedded by build.rs), behind the same gate as a file's print: a port and
+# a token, and with K2_HOOK_SOCK set the session checks (pages.rs,
+# help_page). Its text names the command and the product by the brand:
+# `k2` before a space is the command's name (\c), and `K2` the product's
+# (\p) where nothing a name goes on with is after it (a `.` or `:` only
+# when no letter, digit, `_` or `/` follows), each where no letter, digit,
+# `_`, `.`, `/`, `~`, `|`, `<`, `:` or `-` is before it; everything else
+# (`~/.k2`, `K2_HOME`, `k2.dev`, `--managed-by k2|owner`) is kept as bash
+# printed it.
+CAPTURED = os.environ.get("HELP_NATIVE_CAPTURED") or os.path.join(root, "crates/k5-cli/src/help_captured.txt")
+FORMS_TSV = os.path.join(root, "crates/k5-cli/tests/data/router_forms.tsv")
+EXIT_CODES = {0, 1, 2, 3, 4, 5, 6, 7, 8, 26, 69, 127, 130}
+xtracefd = subprocess.run([bash_bin, "-c", 'echo "${BASH_VERSINFO[0]}${BASH_VERSINFO[1]}"'],
+                          capture_output=True).stdout.decode().strip()
+XTRACEFD = xtracefd.isdigit() and int(xtracefd) >= 41
+if XTRACEFD:
+    # bash takes BASH_XTRACEFD from the environment: the trace goes there.
+    import tempfile
+    with tempfile.TemporaryFile(dir=sandbox) as tf:
+        p = subprocess.run([bash_bin, "-x", "-c", "true"], env={"PATH": "/usr/bin:/bin", "PS4": "+T ",
+                           "BASH_XTRACEFD": str(tf.fileno())}, capture_output=True, pass_fds=(tf.fileno(),))
+        tf.seek(0)
+        XTRACEFD = tf.read() == b"+T true\n" and p.stderr == b""
+print("help_native: the captured forms' trace goes %s" % ("to its own file (BASH_XTRACEFD)" if XTRACEFD
+                                                          else "with stderr (two runs each)"))
+
+form_lines = [l for l in open(FORMS_TSV, encoding="utf-8").read().split("\n") if l and not l.startswith("#")]
+if form_lines[0].split("\t") != ["form", "argv", "alias_of", "anchor", "entry", "json", "source"]:
+    sys.exit("FAIL: %s: not the header this test reads" % FORMS_TSV)
+HELP_WORDS = {"help", "--help", "-h"}
+def composed_form(argv):
+    """pages.rs, composed(): the pages the binary puts together."""
+    if argv in (["-h"], [""], ["help-deprecated"], ["chat"]):
+        return True
+    if len(argv) == 2 and argv[0] == "chat" and argv[1] in HELP_WORDS:
+        return True
+    return len(argv) == 2 and argv[0] in HELP_FIRST
+# The front's own pages: `cli` (crates/k5-cli/src/cli_status.rs) and
+# `study` (pages.rs) are the binary's, worded for it.
+FRONT_OWN = ("cli", "study")
+ccands, cseen = [], set()
+for l in form_lines[1:]:
+    c = l.split("\t")
+    if len(c) != 7:
+        sys.exit("FAIL: %s: a row of %d columns: %r" % (FORMS_TSV, len(c), l))
+    form, argv_col, alias = c[0], c[1], c[2]
+    argv = (form if argv_col == "-" else argv_col).split(" ")
+    if any(not w or "\t" in w or "|" in w for w in argv):
+        sys.exit("FAIL: %s: a word this list can't hold: %r" % (FORMS_TSV, l))
+    if any(w in HELP_WORDS for w in form.split(" ")):
+        tries = [argv]
+    elif alias == "-":
+        tries = [argv + ["--help"], argv + ["-h"]]
+    else:
+        tries = []
+    for t in tries:
+        key = tuple(t)
+        if key in cseen or key in file_forms or composed_form(t) or t[0] in HELP_FIRST or t[0].startswith("help-") \
+                or t[0] in FRONT_OWN:
+            continue
+        cseen.add(key)
+        ccands.append(t)
+if len(ccands) < 1000:
+    sys.exit("FAIL: only %d help forms from %s" % (len(ccands), FORMS_TSV))
+ccand_no = {tuple(a): i for i, a in enumerate(ccands)}
+
+# The variables the script assigns somewhere (any other is the environment's).
+script_text = open(script, encoding="utf-8", errors="replace").read()
+assigned = set(re.findall(r"(?:^|[\s;&|(`{])(?:local |export |declare(?: -[a-zA-Z]+)? |readonly )?([A-Za-z_][A-Za-z0-9_]*)\+?=", script_text, re.M))
+assigned |= set(re.findall(r"\b(?:for|read(?: -[a-zA-Z]+)*|local|declare(?: -[a-zA-Z]+)?)\s+([A-Za-z_][A-Za-z0-9_]*)", script_text))
+assigned |= set(re.findall(r"printf -v ([A-Za-z_][A-Za-z0-9_]*)", script_text))
+SHELL_OWN = {"LINENO", "FUNCNAME", "BASH_SOURCE", "BASH_LINENO", "BASH_VERSINFO", "BASH_VERSION", "BASHPID",
+             "PIPESTATUS", "IFS", "OPTIND", "OPTARG", "BASH_REMATCH"}
+def env_reads(line):
+    """Variables a source line reads that only the environment can set."""
+    out = set()
+    for m in re.finditer(r"\$\{?#?!?([A-Za-z_][A-Za-z0-9_]*)", line):
+        name = m.group(1)
+        if name not in assigned and name not in SHELL_OWN:
+            out.add(name)
+    return out
+
+TEST_ONE = ("-n", "-z")
+TEST_TWO = ("=", "==", "!=", "-gt", "-ge", "-lt", "-le", "-eq", "-ne")
+WRITE_WORDS = {"echo", "printf", "set"}
+def judge_captured(steps):
+    """Rules 2 and 3 for a trace window; None when it passes."""
+    prev_ok = False
+    for l in steps:
+        m = STEP.match(l)
+        if not m:
+            # The next line of a step that spans lines (a word with a
+            # newline in it: an echo's text, a local's value), after a step
+            # that passed. bash writes a word with a newline as it is or
+            # quoted on one line, by its version.
+            if prev_ok:
+                continue
+            return "a line that is not a step: %r" % l
+        n, body = int(m.group(2)), m.group(3)
+        src = k2_lines[n - 1] if 0 < n <= len(k2_lines) else ""
+        if "K2_CLI_VERSION" in src:
+            return "prints the CLI's version, which every release moves: line %d" % n
+        reads = env_reads(src)
+        if reads:
+            return "reads %s from the environment: line %d: %r" % (" ".join(sorted(reads)), n, src.strip())
+        word = body.split(" ", 1)[0]
+        rest = body[len(word):].strip()
+        prev_ok = True
+        if word == "cat":
+            if rest:
+                return "cat with arguments: %r" % l
+            # An unquoted heredoc's body expands variables too.
+            hm = re.search(r"<<(-?)\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2", src)
+            if not hm:
+                return "a cat with no heredoc on its line %d: %r" % (n, src.strip())
+            if not hm.group(2):
+                j = n
+                while j < len(k2_lines):
+                    body_line = k2_lines[j]
+                    j += 1
+                    if (body_line.lstrip("\t") if hm.group(1) else body_line) == hm.group(3):
+                        break
+                    reads = env_reads(body_line)
+                    if reads:
+                        return "reads %s from the environment: line %d: %r" % (" ".join(sorted(reads)), j, body_line.strip())
+        elif word in OK_WORDS:
+            pass
+        elif word in WRITE_WORDS or re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", word):
+            pass
+        elif word in ("'['", "[", "[["):
+            try:
+                toks = shlex.split(body)
+            except ValueError:
+                return "a test this check can't read: %r" % l
+            if toks[-1] not in ("]", "]]"):
+                return "a test this check can't read: %r" % l
+            inner = toks[1:-1]
+            ok = (len(inner) == 3 and inner[1] in TEST_TWO) or (len(inner) == 2 and inner[0] in TEST_ONE)
+            if not ok:
+                return "a test that is not two words compared or one asked about: %r" % l
+        elif word in functions:
+            pass
+        else:
+            return "a step that is not plain: %r" % l
+    return None
+
+def form_passport(argv):
+    """The passport a captured form runs with in B, C and Con: its own,
+    so a request the stub sees names the form."""
+    return "sessQ.form%d" % ccand_no[tuple(argv)]
+
+def run_traced(argv, kind):
+    """(code, stdout, stderr, trace stderr) of one traced run."""
+    env, cwd = envs[kind]
+    env = dict(env)
+    env["PS4"] = "+${LINENO}: "
+    if "K2_HOOK_TOKEN" in env:
+        env["K2_HOOK_TOKEN"] = form_passport(argv)
+    if not XTRACEFD:
+        code, out, err = run_plain(argv, kind)
+        t = subprocess.run([bash_bin, "-x", script] + argv, env=env, cwd=cwd, stdin=subprocess.DEVNULL,
+                           capture_output=True, timeout=60)
+        tcode, tout, terr = t.returncode, t.stdout, t.stderr
+        if (tcode, tout) != (code, out) or (err and err not in terr):
+            return None
+        return code, out, err, (terr.replace(err, b"", 1) if err else terr)
+    import tempfile
+    with tempfile.TemporaryFile(dir=sandbox) as tf:
+        env["BASH_XTRACEFD"] = str(tf.fileno())
+        p = subprocess.run([bash_bin, "-x", script] + argv, env=env, cwd=cwd, stdin=subprocess.DEVNULL,
+                           capture_output=True, timeout=60, pass_fds=(tf.fileno(),))
+        tf.seek(0)
+        return p.returncode, p.stdout, p.stderr, tf.read()
+
+def utf8_text(b):
+    try:
+        s = b.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    if any(ord(ch) < 32 and ch not in "\n\t" for ch in s) or "\x7f" in s:
+        return None
+    return s
+
+def run_plain(argv, kind):
+    env, cwd = envs[kind]
+    env = dict(env)
+    if "K2_HOOK_TOKEN" in env:
+        env["K2_HOOK_TOKEN"] = form_passport(argv)
+    p = subprocess.run([bash_bin, script] + argv, env=env, cwd=cwd, stdin=subprocess.DEVNULL,
+                       capture_output=True, timeout=60)
+    return p.returncode, p.stdout, p.stderr
+
+def capture(argv):
+    outs, wins = [], []
+    for kind in ("A", "B", "C", "Con"):
+        r = run_traced(argv, kind)
+        if r is None:
+            return argv, None, "the traced run differs from the untraced run"
+        code, out, err, trace = r
+        w, why = window(trace, kind)
+        if w is None:
+            return argv, None, why
+        outs.append((code, out, err))
+        wins.append(w)
+    if any(o != outs[0] for o in outs):
+        return argv, None, "the output differs between the environments"
+    if any(w != wins[0] for w in wins):
+        return argv, None, "the trace differs between the environments"
+    if XTRACEFD and run_plain(argv, "A") != outs[0]:
+        return argv, None, "the traced run differs from the untraced run"
+    why = judge_captured(wins[0])
+    if why:
+        return argv, None, why
+    code, out, err = outs[0]
+    if code not in EXIT_CODES:
+        return argv, None, "exit %d, a code the binary has no Exit for" % code
+    o, e = utf8_text(out), utf8_text(err)
+    if o is None or e is None:
+        return argv, None, "not UTF-8 text with newlines and tabs only"
+    return argv, (code, o, e), None
+
+CLI_WORD = re.compile(r"(?<![A-Za-z0-9_./~|<:-])k2(?= )")
+PRODUCT_WORD = re.compile(r"(?<![A-Za-z0-9_./~|<:-])K2(?![A-Za-z0-9_/~|<-])(?![.:][A-Za-z0-9_/])")
+def escaped(s):
+    """The text as the list holds it: \\ \\n \\t escaped, \\c for the
+    command's name and \\p for the product's."""
+    if "\x01" in s or "\x02" in s:
+        sys.exit("FAIL: a help text with a byte this list uses: %r" % s[:80])
+    s = CLI_WORD.sub("\x01", s)
+    s = PRODUCT_WORD.sub("\x02", s)
+    s = s.replace("\\", "\\\\").replace("\n", "\\n").replace("\t", "\\t")
+    return s.replace("\x01", "\\c").replace("\x02", "\\p")
+
+seen_before = len(requests_seen)
+captured, ckept = {}, {}
+with concurrent.futures.ThreadPoolExecutor(max_workers=int(os.environ.get("HELP_NATIVE_JOBS", "4"))) as pool:
+    for argv, got, why in pool.map(capture, ccands):
+        if got:
+            captured[tuple(argv)] = got
+        else:
+            ckept[" ".join(argv)] = why
+# A form that asked is never captured (its curl is a step that is not
+# plain); this proves it: no request names a captured form's passport.
+asked = set()
+for r in requests_seen[seen_before:]:
+    for m in re.finditer(r"sessQ\.form([0-9]+)\b", r):
+        asked.add(tuple(ccands[int(m.group(1))]))
+if asked & set(captured):
+    sys.exit("FAIL: captured forms asked the stub daemon: %s"
+             % "; ".join(" ".join(a) for a in sorted(asked & set(captured))))
+print("help_native: %d other help forms asked the stub daemon (none captured)" % len(asked))
+pages_, page_no, form_rows = [], {}, []
+for argv in sorted(captured):
+    code, o, e = captured[argv]
+    key = (code, escaped(o), escaped(e))
+    if key not in page_no:
+        page_no[key] = len(pages_)
+        pages_.append(key)
+    form_rows.append("F\t%s\t%d" % (" ".join(argv), page_no[key]))
+CHEAD = """# The other help forms the k5 binary answers itself: what bash printed for
+# each, proved the same in every environment from bash's own trace. Written
+# by tests/cli/help_native.sh --write; do not edit by hand.
+# P<tab><page><tab><exit code><tab><stdout><tab><stderr>: the text with
+#   \\\\, \\n and \\t escaped, \\c for the command's name and \\p for the product's.
+# F<tab><argv, words between single spaces><tab><page>
+"""
+ctext = CHEAD + "".join("P\t%d\t%d\t%s\t%s\n" % (i, k[0], k[1], k[2]) for i, k in enumerate(pages_)) \
+    + "".join(r + "\n" for r in form_rows)
+print("help_native: %d other help forms tried, %d captured (%d pages), %d stay bash"
+      % (len(ccands), len(captured), len(pages_), len(ckept)))
+creasons = {}
+for why in ckept.values():
+    key = re.sub(r": .*", "", why)
+    creasons[key] = creasons.get(key, 0) + 1
+for k in sorted(creasons):
+    print("  bash: %d x %s" % (creasons[k], k))
+if os.environ.get("HELP_NATIVE_WHY"):
+    for a in sorted(ckept):
+        print("  bash: %s: %s" % (a, ckept[a]))
+dump = os.environ.get("HELP_NATIVE_DUMP")
+if dump:
+    with open(dump, "w") as f:
+        json.dump({"kept": ckept, "captured": sorted(" ".join(a) for a in captured)}, f, indent=0, sort_keys=True)
+
 if write == "1":
     with open(list_path, "w") as f:
         f.write(text)
-    print("help_native: wrote %s" % list_path)
+    with open(CAPTURED, "w") as f:
+        f.write(ctext)
+    print("help_native: wrote %s and %s" % (list_path, CAPTURED))
     sys.exit(0)
-have = open(list_path).read() if os.path.exists(list_path) else ""
-if have != text:
-    import difflib
-    sys.stderr.write("".join(difflib.unified_diff(have.splitlines(True), text.splitlines(True), "committed", "derived")))
-    sys.exit("FAIL: %s is not what bash proves (run tests/cli/help_native.sh --write)" % list_path)
-print("help_native: PASS: the committed list is what bash proves")
+bad = False
+import difflib
+for path, want in ((list_path, text), (CAPTURED, ctext)):
+    have = open(path).read() if os.path.exists(path) else ""
+    if have != want:
+        sys.stderr.write("".join(list(difflib.unified_diff(have.splitlines(True), want.splitlines(True),
+                                                           "committed", "derived"))[:200]))
+        print("FAIL: %s is not what bash proves (run tests/cli/help_native.sh --write)" % path)
+        bad = True
+if bad:
+    sys.exit(1)
+print("help_native: PASS: the committed lists are what bash proves")
 PY

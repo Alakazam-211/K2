@@ -21,7 +21,13 @@ USAGE
                                 role is member. owner/admin are set right
                                 after the account is made; member and
                                 voice_chat are made at that role. A
-                                member is a trusted operator.
+                                member is a trusted operator: they can
+                                open and use terminal sessions, which run
+                                as this server's user, so give member
+                                (or above) only to people you'd trust
+                                with the server. A later update is
+                                planned to let you give people access
+                                without terminal access.
                                 voice_chat ("Voice & Chat only") can only
                                 join this server's voice rooms, plus what
                                 you share with it: --share-agent (their

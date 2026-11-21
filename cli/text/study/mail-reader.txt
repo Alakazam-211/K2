@@ -5,7 +5,8 @@ WHO OPENS WHAT
   hosted and linked. Anyone else opens only their own mailbox: a hosted
   mailbox that is theirs, or a linked inbox they linked themselves. Asking for
   any other inbox answers "not found" (exit 1), the same as an address that
-  doesn't exist. Agents are refused on every reader command (exit 3,
+  doesn't exist. (A Member can still use terminal sessions, which run as
+  this server's user.) Agents are refused on every reader command (exit 3,
   owner_only).
 
 IF YOU ARE AN AGENT

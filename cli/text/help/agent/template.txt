@@ -34,9 +34,11 @@ COMMANDS
                   workspace you are in, from any subfolder (in a K2
                   terminal, your own; elsewhere, the nearest folder with a
                   .k2 above where you stand). People
-                  need Owner or Admin (a Member gets role_required). An
-                  agent may save its own workspace only (another one is
-                  own_workspace_only); role_required never applies to it.
+                  need Owner or Admin (a Member gets role_required, but
+                  can still use terminal sessions, which run as this
+                  server's user). An agent may save its own workspace
+                  only (another one is own_workspace_only);
+                  role_required never applies to it.
                   It takes the ROLE.md charter with its "Your notes" part,
                   its context layers, the skills it made, its heartbeats,
                   its tool, and the permission switches now on (as

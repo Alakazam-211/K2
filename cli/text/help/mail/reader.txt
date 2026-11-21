@@ -2,10 +2,11 @@ k2 mail reader — open this server's inboxes as a person (Owner, Admin, or your
 
 For people, not agents (an agent gets exit 3 and uses the rest of k2 mail).
 The Owner and Admins open every inbox here: agents' and people's, hosted and
-linked. A Member login opens only their own mailbox; any other inbox answers
-"not found" (exit 1), as if it didn't exist. Opening a message never marks it
-read. Every access is logged with who, when and which message (never its
-content), and the mailbox's person isn't notified.
+linked. A Member login opens only their own mailbox here (a Member can still
+use terminal sessions, which run as this server's user); any other inbox
+answers "not found" (exit 1), as if it didn't exist. Opening a message never
+marks it read. Every access is logged with who, when and which message (never
+its content), and the mailbox's person isn't notified.
 
 USAGE
   k2 mail reader <command> [args] [flags]

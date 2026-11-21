@@ -17,7 +17,8 @@ CONNECT ONE (Postgres on this box)
   Then: k2 app db status <app> · check <app> · disconnect <app>.
 
 WHO MAY
-  The owner and Admins connect at once. A Member never does.
+  The owner and Admins connect at once. A Member never does (a Member can
+  still use terminal sessions, which run as this server's user).
   An agent (in a K2 tab) connects at once only when every switch it needs
   is on and the database is its own workspace's. The switches, by their
   Settings names (Settings → Workspaces / Agents → <agent> → Permissions):

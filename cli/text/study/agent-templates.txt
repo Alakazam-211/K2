@@ -76,10 +76,10 @@ WHAT A TEMPLATE IS
   k2 agent template save . --id my-writer --wiki "Voice and style"
   <ws> is a folder or handle; "." is the workspace you are in, from any
   subfolder (in a K2 terminal, your own; elsewhere, the nearest folder
-  with a .k2 above where you stand). Who: people need Owner or
-  Admin (a Member gets role_required). An agent may save its own
-  workspace only (another one is own_workspace_only); role_required
-  never applies to it.
+  with a .k2 above where you stand). Who: people need Owner or Admin (a
+  Member gets role_required, but can still use terminal sessions, which
+  run as this server's user). An agent may save its own workspace only
+  (another one is own_workspace_only); role_required never applies to it.
   Taken: the ROLE.md charter with its "Your notes" part (no
   frontmatter), stacked catalog ids, your own context layers, skills you
   made (not K2's), heartbeats (name, schedule, WAKEUP text), the tool, and

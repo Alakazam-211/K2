@@ -14595,10 +14595,10 @@ WHAT A TEMPLATE IS
   k2 agent template save . --id my-writer --wiki "Voice and style"
   <ws> is a folder or handle; "." is the workspace you are in, from any
   subfolder (in a K2 terminal, your own; elsewhere, the nearest folder
-  with a .k2 above where you stand). Who: people need Owner or
-  Admin (a Member gets role_required). An agent may save its own
-  workspace only (another one is own_workspace_only); role_required
-  never applies to it.
+  with a .k2 above where you stand). Who: people need Owner or Admin (a
+  Member gets role_required, but can still use terminal sessions, which
+  run as this server's user). An agent may save its own workspace only
+  (another one is own_workspace_only); role_required never applies to it.
   Taken: the ROLE.md charter with its "Your notes" part (no
   frontmatter), stacked catalog ids, your own context layers, skills you
   made (not K2's), heartbeats (name, schedule, WAKEUP text), the tool, and
@@ -31319,7 +31319,8 @@ On a Linux server with no screen (a virtual desktop K2 starts; never on a Mac):
 terminal or a K2 shell tab here. The owner at this computer can run every
 verb above; they just never watch from here. You watch from another device, over K2 Connect or the LAN, signed in
 with a login: Owner and Admin logins watch and drive; a Member login only
-with a grant, and only to watch; Voice & Chat only never. No one at the
+with a grant, and only to watch (a Member can still use terminal sessions,
+which run as this server's user); Voice & Chat only never. No one at the
 screen has to click Allow. It stays on until an Owner turns it off. Also:
 Settings → Remote Desktop, and + → Desktop (Beta) in a tab strip. More:
 k2 study desktop.
@@ -42392,7 +42393,8 @@ Example: k2 vault reveal STRIPE_KEY
 K2's own secrets are never shown, except Sew's launch key (the key Sew's
 chat and voice data is sealed with), which the server's owner may see:
   k2 vault reveal sew-launch-key --scope engine:sew
-Admins, Members and agents are refused.
+Admins, Members and agents are refused (Admins and Members can still use
+terminal sessions, which run as this server's user).
 EOF
             ;;
         recovery) cat <<'EOF'
@@ -50502,7 +50504,13 @@ USAGE
                                 role is member. owner/admin are set right
                                 after the account is made; member and
                                 voice_chat are made at that role. A
-                                member is a trusted operator.
+                                member is a trusted operator: they can
+                                open and use terminal sessions, which run
+                                as this server's user, so give member
+                                (or above) only to people you'd trust
+                                with the server. A later update is
+                                planned to let you give people access
+                                without terminal access.
                                 voice_chat ("Voice & Chat only") can only
                                 join this server's voice rooms, plus what
                                 you share with it: --share-agent (their
@@ -66993,7 +67001,8 @@ WHO OPENS WHAT
   hosted and linked. Anyone else opens only their own mailbox: a hosted
   mailbox that is theirs, or a linked inbox they linked themselves. Asking for
   any other inbox answers "not found" (exit 1), the same as an address that
-  doesn't exist. Agents are refused on every reader command (exit 3,
+  doesn't exist. (A Member can still use terminal sessions, which run as
+  this server's user.) Agents are refused on every reader command (exit 3,
   owner_only).
 
 IF YOU ARE AN AGENT
@@ -68224,7 +68233,8 @@ CONNECT ONE (Postgres on this box)
   Then: k2 app db status <app> · check <app> · disconnect <app>.
 
 WHO MAY
-  The owner and Admins connect at once. A Member never does.
+  The owner and Admins connect at once. A Member never does (a Member can
+  still use terminal sessions, which run as this server's user).
   An agent (in a K2 tab) connects at once only when every switch it needs
   is on and the database is its own workspace's. The switches, by their
   Settings names (Settings → Workspaces / Agents → <agent> → Permissions):
@@ -96769,10 +96779,11 @@ k2 mail reader — open this server's inboxes as a person (Owner, Admin, or your
 
 For people, not agents (an agent gets exit 3 and uses the rest of k2 mail).
 The Owner and Admins open every inbox here: agents' and people's, hosted and
-linked. A Member login opens only their own mailbox; any other inbox answers
-"not found" (exit 1), as if it didn't exist. Opening a message never marks it
-read. Every access is logged with who, when and which message (never its
-content), and the mailbox's person isn't notified.
+linked. A Member login opens only their own mailbox here (a Member can still
+use terminal sessions, which run as this server's user); any other inbox
+answers "not found" (exit 1), as if it didn't exist. Opening a message never
+marks it read. Every access is logged with who, when and which message (never
+its content), and the mailbox's person isn't notified.
 
 USAGE
   k2 mail reader <command> [args] [flags]
@@ -111428,9 +111439,11 @@ COMMANDS
                   workspace you are in, from any subfolder (in a K2
                   terminal, your own; elsewhere, the nearest folder with a
                   .k2 above where you stand). People
-                  need Owner or Admin (a Member gets role_required). An
-                  agent may save its own workspace only (another one is
-                  own_workspace_only); role_required never applies to it.
+                  need Owner or Admin (a Member gets role_required, but
+                  can still use terminal sessions, which run as this
+                  server's user). An agent may save its own workspace
+                  only (another one is own_workspace_only);
+                  role_required never applies to it.
                   It takes the ROLE.md charter with its "Your notes" part,
                   its context layers, the skills it made, its heartbeats,
                   its tool, and the permission switches now on (as

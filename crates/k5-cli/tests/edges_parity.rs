@@ -4,7 +4,10 @@
 //!
 //! - A value flag as the last word: the shell's `_need_value` line
 //!   (`Error: <flag> takes a value`, exit 2) on both sides, the binary's
-//!   from [`k5_cli::out::need_value`], nothing sent by either.
+//!   from [`k5_cli::out::need_value`], nothing sent by either
+//!   (`root-helper update --from` too, after the gates).
+//! - `study permissions` with no passport: cards are off without asking,
+//!   so the topic is unknown: the refusal and the usage, exit 2.
 
 #![cfg(unix)]
 
@@ -123,14 +126,14 @@ fn inbox_value_flag_last_in_a_session_without_a_passport() {
 }
 
 #[test]
-fn root_helper_from_last_is_bash_s_silent_exit_1() {
+fn root_helper_from_last_is_the_need_value_line() {
     let rig = Rig::new("root-helper", "shift");
     for (name, args) in [
         ("update --from (the last word)", &["update", "--from"][..]),
         ("update --json --from", &["update", "--json", "--from"]),
         ("status --from", &["status", "--from"]),
     ] {
-        rig.check(&case(name, args, &[], vec![], owner_and_port, 1, 0));
+        rig.check(&case(name, args, &[], vec![], owner_and_port, 2, 0));
     }
     // An unknown word before it stops first.
     rig.check(&case(

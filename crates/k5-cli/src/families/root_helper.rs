@@ -11,11 +11,9 @@
 //! exit 1; else its Python's lines ([`render`]). `install-command` prints
 //! the daemon's `installCommand`.
 //!
-//! `--from` as the last word stops the shell's `shift 2` (out of range,
-//! under `set -e`): exit 1 after the gates, nothing printed or sent, and
-//! so here. (The shell's `_need_value` (q17) makes it "Error: --from
-//! takes a value", exit 2; the binary follows when that reaches this
-//! line.)
+//! `--from` as the last word is the shell's `_need_value` line after the
+//! gates, `Error: --from takes a value`, exit 2, nothing sent, and so
+//! here ([`out::stop_need_value`]).
 //!
 //! The shell answers these itself ([`run`] returns `None`): any `-h` or
 //! `--help` (the front's), a `--from` folder the binary can't resolve as
@@ -54,9 +52,8 @@ pub enum Form {
     Help,
     /// A line on stderr, exit 2.
     Usage(String),
-    /// `--from` as the last word: the shell's `shift 2` out of range under
-    /// `set -e`, exit 1 with nothing printed.
-    ShiftFailed,
+    /// `--from` as the last word: the shell's `_need_value` line, exit 2.
+    FromLast,
     Status {
         json: bool,
         events: bool,
@@ -91,7 +88,7 @@ pub fn parse(words: &[&str], resolve: &dyn Fn(&str) -> Option<String>) -> Option
             "--events" => events = true,
             "--from" => {
                 let Some(v) = rest.get(i + 1) else {
-                    return Some(Form::ShiftFailed);
+                    return Some(Form::FromLast);
                 };
                 from = v.to_string();
                 i += 1;
@@ -195,7 +192,7 @@ fn run_with(args: &[OsString], form: Form, mut settings: Settings) -> Exit {
             out::stderr_line(line);
             return Exit::Usage;
         }
-        Form::ShiftFailed => return Exit::Error,
+        Form::FromLast => return out::stop_need_value("--from"),
         _ => {}
     }
     settings.port = settings.port_text.as_deref().and_then(curl_port);
@@ -255,7 +252,7 @@ fn run_with(args: &[OsString], form: Form, mut settings: Settings) -> Exit {
             Ok(a) => install_command(a),
             Err(e) => e,
         },
-        Form::Help | Form::Usage(_) | Form::ShiftFailed => Exit::Ok,
+        Form::Help | Form::Usage(_) | Form::FromLast => Exit::Ok,
     };
     closing.flush(&mut client, exit);
     exit
@@ -648,10 +645,10 @@ mod tests {
             })
         );
         assert_eq!(parse(&["help"], &same), Some(Form::Help));
-        assert_eq!(parse(&["update", "--from"], &same), Some(Form::ShiftFailed));
+        assert_eq!(parse(&["update", "--from"], &same), Some(Form::FromLast));
         assert_eq!(
             parse(&["status", "--json", "--from"], &same),
-            Some(Form::ShiftFailed)
+            Some(Form::FromLast)
         );
         assert_eq!(
             parse(&["update", "--x", "--from"], &same),

@@ -53,22 +53,6 @@ pub fn stop_need_value(flag: &str) -> Exit {
     Exit::Usage
 }
 
-/// A flag that takes a value, as the last word: the line the shell's
-/// `_need_value` prints, without its newline. The command stops there
-/// with [`Exit::Usage`] and sends nothing. Where the shell has no
-/// `_need_value` call yet, bash stops on its own `$2: unbound variable`
-/// line (exit 1) instead: K2's D6 ruling, the named difference
-/// `edge-usage-exit-2` (`scripts/cli-parity.sh`).
-pub fn need_value(flag: &str) -> String {
-    format!("Error: {flag} takes a value")
-}
-
-/// [`need_value`]'s line on stderr; the exit is [`Exit::Usage`].
-pub fn stop_need_value(flag: &str) -> Exit {
-    stderr_line(&need_value(flag));
-    Exit::Usage
-}
-
 /// The exit after a write to stdout failed.
 ///
 /// A broken pipe ends the process by SIGPIPE, with nothing on stderr. The

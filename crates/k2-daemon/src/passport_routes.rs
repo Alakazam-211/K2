@@ -277,7 +277,7 @@ fn needs_person(path: &str, params: &HashMap<String, String>, principal: &HookPr
     let error = match path {
         "/cli/commit" => serde_json::json!({
             "code": COMMIT_NEEDS_PERSON,
-            "hint": "k2 commit starts a person's agent preset to make the commit; a person allows it",
+            "hint": concat!(k2_core::cli_name!(), " commit starts a person's agent preset to make the commit; a person allows it"),
         }),
         "/cli/commit-merge" => serde_json::json!({
             "code": MERGE_NEEDS_PERSON,

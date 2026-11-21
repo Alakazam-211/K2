@@ -368,6 +368,75 @@ fn browser_answers_as_the_shell_does() {
     });
 }
 
+/// After a bare `--` the one word left is the note's text, as typed
+/// (`cmd_browser_note`'s `--)` arm): a text that starts with a dash or is
+/// `--help` is sent; two words, or a text already given, is one line and
+/// exit 2; help before `--` sends nothing.
+#[test]
+fn browser_note_after_dashes() {
+    let rig = Rig::new(VERB, "dashes");
+    let v = vec![
+        // covers: browser note
+        case(
+            "the text --help after --",
+            &["note", "--url", "u", "--", "--help"],
+            &[],
+            vec![ok(SENT)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "a dashed text after --",
+            &["note", "--url", "u", "--json", "--", "-x --y"],
+            &[],
+            vec![ok(SENT)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "two words after --",
+            &["note", "--url", "u", "--", "a", "-b"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "a text before and after --",
+            &["note", "a", "--url", "u", "--", "b"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "-- and no text",
+            &["note", "--url", "u", "--"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
+        ),
+        case(
+            "help before --",
+            &["note", "--url", "u", "-h", "--", "x"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        ),
+    ];
+    for c in &v {
+        rig.check(c);
+    }
+}
+
 fn compare_waited(c: Case) -> Case {
     Case {
         compare: Compare::Waited,

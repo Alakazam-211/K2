@@ -90,7 +90,8 @@ fn dumps(v: &Value) -> String {
     json::to_string(v, &Options::default()).expect("a body from words always prints")
 }
 
-/// `cmd_browser_note`'s words. `project`: `$PROJECT`; `readable`:
+/// `cmd_browser_note`'s words: after a bare `--` the one word left is the
+/// note's text, as typed. `project`: `$PROJECT`; `readable`:
 /// `[ -r "$f" ]`; `html`: what Python reads of the file.
 pub fn parse_note(
     words: &[&str],
@@ -125,6 +126,17 @@ pub fn parse_note(
         match w {
             "--json" => as_json = true,
             "-h" | "--help" => return Ask::Help,
+            // The rest is the note text, as typed: one word at most.
+            "--" => {
+                let rest = &words[i + 1..];
+                if rest.len() > 1 || !comment.is_empty() {
+                    return stop("Error: one note text only (quote it)".into(), false);
+                }
+                if let Some(t) = rest.first() {
+                    comment = *t;
+                }
+                break;
+            }
             _ if w.starts_with("--") => {
                 return stop(format!("Error: unknown flag '{w}'"), true);
             }
@@ -402,7 +414,8 @@ fn run_with(
     hook_sock: Option<&Path>,
     mut settings: Settings,
 ) -> Exit {
-    let offline = words.iter().any(|w| matches!(*w, "-h" | "--help"));
+    // The shell's help scans stop at a bare `--`.
+    let offline = crate::dashdash::wants_help(words);
     match prelude::gate(&settings) {
         Some(Gate::VirtualDesktop) if offline => return Gate::CannotConnect.stop(),
         Some(gate) => return gate.stop(),
@@ -491,6 +504,22 @@ mod tests {
                 json: false
             }
         );
+    }
+
+    #[test]
+    fn the_text_after_dashes() {
+        let one = || stop("Error: one note text only (quote it)".into(), false);
+        assert_eq!(note(&["note", "--url", "u", "--", "a", "b"]), one());
+        assert_eq!(note(&["note", "x", "--url", "u", "--"]), one());
+        assert_eq!(note(&["note", "x", "--", "y"]), one());
+        assert_eq!(
+            note(&["note", "--url", "u", "--"]),
+            stop("Error: --url and the note text are required".into(), true)
+        );
+        match note(&["note", "--url", "u", "--", "--help"]) {
+            Ask::Send { body, .. } => assert!(body.contains(r#""comment": "--help""#), "{body}"),
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

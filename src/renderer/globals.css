@@ -3053,26 +3053,27 @@ html:not([data-style="glass"]) [data-ticket-thread-pane] > [data-ticket-thread-h
    top of the list the first message sits clear of it (14px). */
 html:not([data-style="glass"]) [data-ticket-thread-pane] > [data-ticket-thread-header] > .thread-float-scrim,
 [data-zen-root] [data-ticket-thread-pane] > [data-ticket-thread-header] > .thread-float-scrim { inset: calc(100% + 1px) 0 auto 0; height: 12px; }
-/* Its band over the quick answers and the box reaches up over the room the
-   newest message keeps from them (TICKET_REST_GAP_PX and the list's 8px,
-   56px in all), so the newest message rests clear of it and Jump to bottom
-   sits on it. */
-html [data-ticket-thread-pane] [data-k2-thread-zen] .thread-footer-fade.thread-footer-fade { margin-top: -50px; }
-/* Glass: the band is the frost material (the phone's GlassComposer): one
-   full blur and the frost tint behind the quick answers, Jump to bottom and
-   the box, fading in over its top 16px. What scrolls under reads as frosted
-   glass, not as a layer of its own. */
-html[data-style="glass"] [data-ticket-thread-pane] [data-k2-thread-zen] .thread-footer-fade > :is(.thread-footer-blur-1, .thread-footer-blur-2, .thread-footer-blur-3):not([data-zen-root] *) { display: none; }
-html[data-style="glass"] [data-ticket-thread-pane] [data-k2-thread-zen] .thread-footer-fade > .thread-footer-blur-4:not([data-zen-root] *) {
-  -webkit-backdrop-filter: blur(var(--material-blur)) saturate(var(--material-saturate));
-  backdrop-filter: blur(var(--material-blur)) saturate(var(--material-saturate));
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 16px);
-  mask-image: linear-gradient(to bottom, transparent 0, #000 16px);
+/* At the top of the list, the first message sits below the band and its
+   12px fade, then the usual 14px (ThreadOverlayPane's top padding). */
+html:not([data-style="glass"]) [data-ticket-thread-pane],
+[data-zen-root] [data-ticket-thread-pane] { --thread-list-top-extra: 12px; }
+/* Its quick answers and box sit below the thread (footInFlow), on the pane's
+   own background: Terminal draws a hairline between them, as under the
+   header; Glass leaves the space. The list's foot fades out over 48px, so
+   Jump to bottom never sits on legible text, and the newest message rests
+   just above the fade (TICKET_REST_GAP_PX and the list's 8px). */
+[data-ticket-thread-pane] [data-thread-foot-in-flow] { background: var(--color-bg); }
+html:not([data-style="glass"]) [data-ticket-thread-pane] [data-thread-foot-in-flow],
+[data-zen-root] [data-ticket-thread-pane] [data-thread-foot-in-flow] { border-top: 1px solid var(--color-border); }
+[data-ticket-thread-pane] [data-testid="thread-overlay-list-frame"]::after {
+  content: '';
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 48px;
+  pointer-events: none;
+  z-index: 2;
+  background: linear-gradient(to top, var(--color-bg), color-mix(in srgb, var(--color-bg) 0%, transparent));
 }
-html[data-style="glass"]:not([data-frost="tile"]) [data-ticket-thread-pane] [data-k2-thread-zen] .thread-footer-fade > .thread-footer-tint:not([data-zen-root] *) { background: linear-gradient(to bottom, transparent 0, var(--material-tint) 16px); }
-/* Terminal: that band is flush, the page's own colour, with no blur. */
-html:not([data-style="glass"]) [data-ticket-thread-pane] [data-k2-thread-zen] .thread-footer-fade > [class^="thread-footer-blur-"] { display: none; }
-html:not([data-style="glass"]) [data-ticket-thread-pane] [data-k2-thread-zen] .thread-footer-fade > .thread-footer-tint { background: var(--color-bg); }
 
 /* Thread view's search: the field opens as a pill beside the bell. The
    outline follows the pill's shape (the chamfer's band in Terminal through

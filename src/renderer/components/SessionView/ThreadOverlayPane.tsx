@@ -609,7 +609,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
         className="relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden"
         // The browser's own scroll anchoring would fight the pin.
         // In Thread view the floating objects sit over this; their height is on the pane.
-        style={{ padding: THREAD_LIST_PADDING, paddingTop: 'calc(14px + var(--thread-float-inset, 0px))', paddingBottom: 8 + listBottom + restGap, overflowAnchor: 'none', scrollPaddingTop: 'var(--thread-float-inset, 0px)' }}
+        style={{ padding: THREAD_LIST_PADDING, paddingTop: 'calc(14px + var(--thread-float-inset, 0px) + var(--thread-list-top-extra, 0px))', paddingBottom: 8 + listBottom + restGap, overflowAnchor: 'none', scrollPaddingTop: 'var(--thread-float-inset, 0px)' }}
         onScroll={(e) => {
           const el = e.currentTarget
           if (!listScrollLive(el)) return

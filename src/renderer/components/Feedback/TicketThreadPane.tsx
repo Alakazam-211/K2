@@ -72,10 +72,10 @@ export interface TicketPatch {
 export const TICKET_DRAWER_THREAD_PX = 500
 export const TICKET_DRAWER_MIN_PX = 140
 
-/** Room between the newest message and the quick answers (px): it rests
- *  clear of the band over the box, where Jump to bottom sits (globals.css
- *  reaches the band 56px over the quick answers: this, the list's own 8px). */
-export const TICKET_REST_GAP_PX = 48
+/** Room between the newest message and the list's foot (px): the newest
+ *  message rests clear of the foot's fade (globals.css, 48px with the list's
+ *  own 8px), where Jump to bottom sits. */
+export const TICKET_REST_GAP_PX = 40
 
 export interface TicketThreadPaneProps {
   feedbackId: string
@@ -163,6 +163,8 @@ function TicketThreadBody({
       turn,
       onPosted,
       restGapPx: TICKET_REST_GAP_PX,
+      // The quick answers and the box sit below the thread, never over it.
+      footInFlow: true,
       // Glass: the agent chat's heavier header band, so a blue bubble or a
       // picture scrolled under the header reads as dimmed, not a smear.
       headerBlur: 'heavy',

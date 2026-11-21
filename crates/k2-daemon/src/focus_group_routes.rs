@@ -56,6 +56,41 @@ pub fn handle_as(path: &str, body: &[u8], caller: &Caller) -> CliResponse {
 }
 
 /// Today's answer to a request with no credential these routes take.
+/// The TCP door's arm for a focus-group change (`routes/dispatcher.rs`):
+/// the owner token or a login as before; a passport is classified, so a
+/// person in a shell tab changes them and an agent gets
+/// `focus_group_needs_person` (taught as a permission card). A wrong or
+/// unknown credential gets [`invalid_token`] and `true`: the dispatcher
+/// ends the connection. A passport never comes in through the tunnel.
+pub(crate) async fn serve_tcp(
+    stream: &mut tokio::net::TcpStream,
+    buf: &mut [u8],
+    path: &str,
+    query: &str,
+    bearer: Option<&str>,
+    owner_token: &str,
+    tunnel: bool,
+) -> bool {
+    use tokio::io::AsyncReadExt;
+    let caller = if crate::routes::http::token_ok(query, owner_token) {
+        Caller::Owner
+    } else if tunnel {
+        Caller::Invalid
+    } else {
+        crate::sidecar_routes::caller_from_tcp(path, query, bearer, owner_token)
+    };
+    if matches!(caller, Caller::WrongCredential | Caller::Invalid) {
+        let _ = stream.read(buf).await;
+        let r = invalid_token();
+        crate::routes::http::send_response(stream, r.status, r.content_type, &r.body).await;
+        return true;
+    }
+    let body_bytes = crate::routes::http::read_post_body(stream, buf).await;
+    let result = handle_as(path, &body_bytes, &caller);
+    crate::routes::http::send_response(stream, result.status, result.content_type, &result.body).await;
+    false
+}
+
 pub fn invalid_token() -> CliResponse {
     CliResponse {
         status: "403 Forbidden",

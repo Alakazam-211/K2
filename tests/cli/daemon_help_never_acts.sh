@@ -14,7 +14,7 @@
 #     needs no connection to K2.
 #   - uninstall took --yes or -y only as its first word. Now anywhere.
 #   - `restart --host` or `--token` as the last word exited 1 with no
-#     message. Now: "daemon restart: --host needs a value", exit 2,
+#     message. Now: "Error: --host takes a value", exit 2,
 #     nothing sent.
 #
 # The daemon usage expected is what `k2 daemon <a word it has no arm for>`
@@ -152,9 +152,9 @@ last_flag() {
         ok "daemon $*: sent nothing"
     fi
 }
-last_flag "daemon restart: --host needs a value" restart --host
-last_flag "daemon restart: --token needs a value" restart --wait --token
-last_flag "daemon restart: --token needs a value" restart --host "http://127.0.0.1:$DS_PORT" --token
+last_flag "Error: --host takes a value" restart --host
+last_flag "Error: --token takes a value" restart --wait --token
+last_flag "Error: --token takes a value" restart --host "http://127.0.0.1:$DS_PORT" --token
 
 echo "== the plain forms still act =="
 ds_reset

@@ -7137,10 +7137,11 @@ cmd_daemon_restart() {
             # k2-ptyd P57: a restart keeps agent sessions running; with
             # --sessions they are ended and start fresh.
             --sessions) end_agents=1; shift ;;
-            # A value flag with no word after it is a usage error (exit 2).
-            --host)  [ $# -ge 2 ] || { echo "daemon restart: --host needs a value" >&2; exit 2; }; host="$2"; shift 2 ;;
+            # A value flag with no word after it is a usage error (exit 2),
+            # in the house line "Error: <flag> takes a value".
+            --host)  [ $# -ge 2 ] || { echo "Error: --host takes a value" >&2; exit 2; }; host="$2"; shift 2 ;;
             --host=*) host="${1#--host=}"; shift ;;
-            --token) [ $# -ge 2 ] || { echo "daemon restart: --token needs a value" >&2; exit 2; }; token="$2"; shift 2 ;;
+            --token) [ $# -ge 2 ] || { echo "Error: --token takes a value" >&2; exit 2; }; token="$2"; shift 2 ;;
             --token=*) token="${1#--token=}"; shift ;;
             --token-stdin) token_stdin=1; shift ;;
             --wait) wait=1; shift ;;

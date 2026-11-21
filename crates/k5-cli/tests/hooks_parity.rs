@@ -738,6 +738,21 @@ fn hooks_emit_stops_as_the_shell_does() {
                 0,
             )
         },
+        // From a session (a passport and a pane) the report is the
+        // shell's: here its Python refuses the --json before any send.
+        Case {
+            env: with_passport(&[("K2_PANE_ID", "p7")]),
+            compare: Compare::Shell,
+            ..case(
+                "emit from a session: the shell's",
+                &["emit", "Stop", "--json", "nope"],
+                &[],
+                vec![],
+                port_only,
+                2,
+                0,
+            )
+        },
     ];
     for c in v {
         rig.check(&c);

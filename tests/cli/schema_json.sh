@@ -91,7 +91,7 @@ text = "\n".join(strings(doc))
 # Literal bytes that the unquoted heredoc used to mangle.
 for pin in ("`k2 agent context catalog`",   # backticks, not executed
             "APPEND \\Draft",                # \\ in source -> one backslash
-            "\\, = literal comma",
+            "split on ';' only; a comma never splits",  # --options wording
             "safe for $(...) capture",       # $ stays literal
             "$K2_REMOTE_TOKEN"):
     if pin not in text:

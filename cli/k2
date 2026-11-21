@@ -113424,7 +113424,7 @@ _doc_node_claim() {
         case "$1" in
             --ttl|--ttl=*)
                 local ttl
-                if [ "$1" = --ttl ]; then ttl="${2:-}"; shift 2; else ttl="${1#*=}"; shift; fi
+                if [ "$1" = --ttl ]; then _need_value "$@"; ttl="${2:-}"; shift 2; else ttl="${1#*=}"; shift; fi
                 ttl="$(python3 -c '
 import re, sys
 m = re.fullmatch(r"(\d+)(ms|s|m)?", sys.argv[1].strip())
@@ -113591,12 +113591,12 @@ _doc_owner_purge() {
     local -a rest=()
     while [ $# -gt 0 ]; do
         case "$1" in
-            --thread) thread="${2:-}"; shift 2 ;;
-            --n) n="${2:-}"; shift 2 ;;
-            --text) text="${2:-}"; shift 2 ;;
+            --thread) _need_value "$@"; thread="${2:-}"; shift 2 ;;
+            --n) _need_value "$@"; n="${2:-}"; shift 2 ;;
+            --text) _need_value "$@"; text="${2:-}"; shift 2 ;;
             --all) all=1; shift ;;
-            --participant) who="${2:-}"; shift 2 ;;
-            --pseudonym) pseudo="${2:-}"; shift 2 ;;
+            --participant) _need_value "$@"; who="${2:-}"; shift 2 ;;
+            --pseudonym) _need_value "$@"; pseudo="${2:-}"; shift 2 ;;
             *) rest+=("$1"); shift ;;
         esac
     done
@@ -113815,9 +113815,9 @@ _doc_history() {
     local -a rest=()
     while [ $# -gt 0 ]; do
         case "$1" in
-            --version) ver="${2:-}"; shift 2 ;;
+            --version) _need_value "$@"; ver="${2:-}"; shift 2 ;;
             --version=*) ver="${1#*=}"; shift ;;
-            --name) name="${2:-}"; shift 2 ;;
+            --name) _need_value "$@"; name="${2:-}"; shift 2 ;;
             --name=*) name="${1#*=}"; shift ;;
             --partial) partial=@true; shift ;;
             --out|-o) [ "$verb" = show ] || _doc_die usage "--out is for k2 doc show"; out="${2:-}"; [ -n "$out" ] || _doc_die usage "--out needs a file"; shift 2 ;;
@@ -113930,10 +113930,10 @@ _doc_history_diff() {
     local -a rest=()
     while [ $# -gt 0 ]; do
         case "$1" in
-            --version) from="${2:-}"; shift 2 ;;
+            --version) _need_value "$@"; from="${2:-}"; shift 2 ;;
             --version=*) from="${1#*=}"; shift ;;
-            --to) to="${2:-}"; shift 2 ;;
-            -U) ctx="${2:-}"; shift 2 ;;
+            --to) _need_value "$@"; to="${2:-}"; shift 2 ;;
+            -U) _need_value "$@"; ctx="${2:-}"; shift 2 ;;
             -u) shift ;;
             *) rest+=("$1"); shift ;;
         esac
@@ -114426,7 +114426,7 @@ cmd_doc() {
             local -a rest=()
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --region) has_reg=1; reg="${2:-}"; shift 2 ;;
+                    --region) _need_value "$@"; has_reg=1; reg="${2:-}"; shift 2 ;;
                     --region=*) has_reg=1; reg="${1#*=}"; shift ;;
                     *) rest+=("$1"); shift ;;
                 esac
@@ -114447,7 +114447,7 @@ cmd_doc() {
             local -a rest=()
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --ttl) ttl="${2:-}"; shift 2 ;;
+                    --ttl) _need_value "$@"; ttl="${2:-}"; shift 2 ;;
                     --ttl=*) ttl="${1#*=}"; shift ;;
                     --renew) action="renew"; shift ;;
                     --release) action="release"; shift ;;
@@ -114505,15 +114505,15 @@ sys.exit(int(v.get("exit", 0)))
             local -a rest=()
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --lines) lines="${2:-}"; shift 2 ;;
+                    --lines) _need_value "$@"; lines="${2:-}"; shift 2 ;;
                     --lines=*) lines="${1#*=}"; shift ;;
-                    --ttl) ttl="${2:-}"; shift 2 ;;
+                    --ttl) _need_value "$@"; ttl="${2:-}"; shift 2 ;;
                     --ttl=*) ttl="${1#*=}"; shift ;;
-                    --note) note="${2:-}"; shift 2 ;;
+                    --note) _need_value "$@"; note="${2:-}"; shift 2 ;;
                     --note=*) note="${1#*=}"; shift ;;
                     --hold) hold=@true; shift ;;
                     --no-hold) hold=@false; shift ;;
-                    --id) id="${2:-}"; shift 2 ;;
+                    --id) _need_value "$@"; id="${2:-}"; shift 2 ;;
                     --id=*) id="${1#*=}"; shift ;;
                     --renew) action="renew"; shift ;;
                     --release) action="release"; shift ;;
@@ -114562,7 +114562,7 @@ print("%s lines %s-%s of %s as %s for %ds%s%s" % ("claimed" if a == "take" else 
             local -a rest=()
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    -n) n="${2:-}"; shift 2 ;;
+                    -n) _need_value "$@"; n="${2:-}"; shift 2 ;;
                     *) rest+=("$1"); shift ;;
                 esac
             done
@@ -114627,8 +114627,8 @@ sys.stdout.write(v.get("rendered") or "No activity.\n")
             local -a rest=()
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --at) at="${2:-}"; shift 2 ;;
-                    --to|--select) to="${2:-}"; shift 2 ;;
+                    --at) _need_value "$@"; at="${2:-}"; shift 2 ;;
+                    --to|--select) _need_value "$@"; to="${2:-}"; shift 2 ;;
                     *) rest+=("$1"); shift ;;
                 esac
             done
@@ -114646,9 +114646,9 @@ sys.stdout.write(v.get("rendered") or "No activity.\n")
             local -a rest=()
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --base) base="${2:-}"; shift 2 ;;
+                    --base) _need_value "$@"; base="${2:-}"; shift 2 ;;
                     --base=*) base="${1#*=}"; shift ;;
-                    --file) _DOC_FILE="${2:-}"; shift 2 ;;
+                    --file) _need_value "$@"; _DOC_FILE="${2:-}"; shift 2 ;;
                     *) rest+=("$1"); shift ;;
                 esac
             done
@@ -114692,11 +114692,11 @@ if a:
             local -a rest=()
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --steps) steps="${2:-}"; shift 2 ;;
+                    --steps) _need_value "$@"; steps="${2:-}"; shift 2 ;;
                     --steps=*) steps="${1#*=}"; shift ;;
                     --partial) mode="partial"; shift ;;
                     --drop) mode="drop"; shift ;;
-                    --for) for_p="${2:-}"; shift 2 ;;
+                    --for) _need_value "$@"; for_p="${2:-}"; shift 2 ;;
                     --for=*) for_p="${1#*=}"; shift ;;
                     *) rest+=("$1"); shift ;;
                 esac
@@ -114711,11 +114711,11 @@ if a:
             local -a rest=()
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --by) by="${2:-}"; shift 2 ;;
-                    --since) since="${2:-}"; shift 2 ;;
-                    -n) n="${2:-}"; shift 2 ;;
+                    --by) _need_value "$@"; by="${2:-}"; shift 2 ;;
+                    --since) _need_value "$@"; since="${2:-}"; shift 2 ;;
+                    -n) _need_value "$@"; n="${2:-}"; shift 2 ;;
                     --pending) pend=@true; shift ;;
-                    --for|--on-behalf-of) for_p="${2:-}"; shift 2 ;;
+                    --for|--on-behalf-of) _need_value "$@"; for_p="${2:-}"; shift 2 ;;
                     *) rest+=("$1"); shift ;;
                 esac
             done
@@ -114873,7 +114873,7 @@ if v.get("hint"):
             local -a rest=()
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --with) with="${2:-}"; shift 2 ;;
+                    --with) _need_value "$@"; with="${2:-}"; shift 2 ;;
                     --with=*) with="${1#*=}"; shift ;;
                     --write) write=@true; shift ;;
                     --history) history=@true; shift ;;
@@ -114904,7 +114904,7 @@ print("%s %s (%s) · %s" % (what, s.get("path") or ".", "folder" if s.get("folde
             local -a rest=()
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    --with) with="${2:-}"; shift 2 ;;
+                    --with) _need_value "$@"; with="${2:-}"; shift 2 ;;
                     *) rest+=("$1"); shift ;;
                 esac
             done
@@ -114924,7 +114924,7 @@ for s in rows:
             local -a rest=()
             while [ $# -gt 0 ]; do
                 case "$1" in
-                    -L) range="${2:-}"; shift 2 ;;
+                    -L) _need_value "$@"; range="${2:-}"; shift 2 ;;
                     -L*) range="${1#-L}"; shift ;;
                     --porcelain|--line-porcelain) form="porcelain"; shift ;;
                     *) rest+=("$1"); shift ;;

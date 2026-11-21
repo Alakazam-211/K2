@@ -1029,6 +1029,23 @@ async fn the_feed_closes_when_the_login_ends() {
     assert_eq!(next_close(&mut ws).await, kit_feed::CLOSE_LOGIN_ENDED);
 }
 
+/// A native client's bare upgrade (K2 Companion): only `Authorization: Bearer`,
+/// `Upgrade`, `Connection`, `Sec-WebSocket-Key` and `Sec-WebSocket-Version`.
+/// No Host, Origin, cookie or subprotocol: the feed still opens, READY first.
+#[tokio::test]
+async fn a_bare_five_header_upgrade_opens_the_feed() {
+    let (addr, _fake) = fake_sew().await;
+    let kit = box_ctx();
+    let r = format!(
+        "GET /_k2/voice/sew/feed HTTP/1.1\r\nAuthorization: Bearer login:alice-bare\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {WS_KEY}\r\nSec-WebSocket-Version: 13\r\n\r\n"
+    );
+    for absent in ["host:", "origin:", "cookie:", "sec-websocket-protocol:"] {
+        assert!(!r.to_ascii_lowercase().contains(absent), "the request carries no {absent}");
+    }
+    let (mut ws, _t) = open_feed_raw(&addr, &kit, &r).await.unwrap_or_else(|e| panic!("the bare upgrade is refused: {e}"));
+    assert_eq!(next_json(&mut ws).await["t"], "ready", "READY first");
+}
+
 #[tokio::test]
 async fn feed_refusals_are_http_answers() {
     let (addr, fake) = fake_sew().await;

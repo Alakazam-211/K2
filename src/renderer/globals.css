@@ -3048,17 +3048,28 @@ html:not([data-style="glass"]) [data-ticket-thread-pane] > [data-ticket-thread-h
   background: var(--color-bg);
   border-bottom: 1px solid var(--color-border);
 }
+/* Under the hairline, the band fades out over 12px (the scrim's own ramp), so
+   a message passing under it fades as it does under Glass's band; at the
+   top of the list the first message sits clear of it (14px). */
 html:not([data-style="glass"]) [data-ticket-thread-pane] > [data-ticket-thread-header] > .thread-float-scrim,
-[data-zen-root] [data-ticket-thread-pane] > [data-ticket-thread-header] > .thread-float-scrim { display: none; }
+[data-zen-root] [data-ticket-thread-pane] > [data-ticket-thread-header] > .thread-float-scrim { inset: calc(100% + 1px) 0 auto 0; height: 12px; }
 /* Its band over the quick answers and the box reaches up over the room the
    newest message keeps from them (TICKET_REST_GAP_PX and the list's 8px,
    56px in all), so the newest message rests clear of it and Jump to bottom
    sits on it. */
 html [data-ticket-thread-pane] [data-k2-thread-zen] .thread-footer-fade.thread-footer-fade { margin-top: -50px; }
-/* Glass: the band dims what scrolls under it as the no-blur fallback's
-   heavier ramp does (data-frost="tile"), fading in over its top 16px, so
-   bubble text never reads through Jump to bottom or the quick answers. */
-html[data-style="glass"] [data-ticket-thread-pane] [data-k2-thread-zen] .thread-footer-fade > .thread-footer-tint:not([data-zen-root] *) { background: linear-gradient(to bottom, transparent 0, color-mix(in srgb, var(--color-bg) 88%, transparent) 16px, color-mix(in srgb, var(--color-bg) 96%, transparent) 100%); }
+/* Glass: the band is the frost material (the phone's GlassComposer): one
+   full blur and the frost tint behind the quick answers, Jump to bottom and
+   the box, fading in over its top 16px. What scrolls under reads as frosted
+   glass, not as a layer of its own. */
+html[data-style="glass"] [data-ticket-thread-pane] [data-k2-thread-zen] .thread-footer-fade > :is(.thread-footer-blur-1, .thread-footer-blur-2, .thread-footer-blur-3):not([data-zen-root] *) { display: none; }
+html[data-style="glass"] [data-ticket-thread-pane] [data-k2-thread-zen] .thread-footer-fade > .thread-footer-blur-4:not([data-zen-root] *) {
+  -webkit-backdrop-filter: blur(var(--material-blur)) saturate(var(--material-saturate));
+  backdrop-filter: blur(var(--material-blur)) saturate(var(--material-saturate));
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 16px);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 16px);
+}
+html[data-style="glass"]:not([data-frost="tile"]) [data-ticket-thread-pane] [data-k2-thread-zen] .thread-footer-fade > .thread-footer-tint:not([data-zen-root] *) { background: linear-gradient(to bottom, transparent 0, var(--material-tint) 16px); }
 /* Terminal: that band is flush, the page's own colour, with no blur. */
 html:not([data-style="glass"]) [data-ticket-thread-pane] [data-k2-thread-zen] .thread-footer-fade > [class^="thread-footer-blur-"] { display: none; }
 html:not([data-style="glass"]) [data-ticket-thread-pane] [data-k2-thread-zen] .thread-footer-fade > .thread-footer-tint { background: var(--color-bg); }

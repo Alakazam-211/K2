@@ -945,10 +945,22 @@ describe('frosted glass behind the message box', () => {
     // Glass's own (a ticket's discussion keeps a flush band in Terminal).
     const rules = css
       .split('\n')
-      .filter((l) => l.includes('.thread-footer-fade > .thread-footer-tint') && l.startsWith('html[data-style="glass"]'))
-    // The blur band and its no-blur fallback: one rule each, for every
-    // palette; and a ticket's discussion's heavier one.
-    expect(rules).toHaveLength(3)
+      .filter(
+        (l) =>
+          l.includes('.thread-footer-fade > .thread-footer-tint') &&
+          l.startsWith('html[data-style="glass"]') &&
+          !l.includes('[data-ticket-thread-pane]'),
+      )
+    // The blur band and its no-blur fallback: one rule each, for every palette.
+    expect(rules).toHaveLength(2)
+    // A ticket's header in Terminal: a 12px fade under its hairline, clear of
+    // the first message at the top of the list (14px).
+    expect(css).toContain('> [data-ticket-thread-header] > .thread-float-scrim { inset: calc(100% + 1px) 0 auto 0; height: 12px; }')
+    // A ticket's discussion: the frost material, faded in at its top.
+    expect(css).toContain(
+      '[data-ticket-thread-pane] [data-k2-thread-zen] .thread-footer-fade > .thread-footer-tint:not([data-zen-root] *) { background: linear-gradient(to bottom, transparent 0, var(--material-tint) 16px); }',
+    )
+    expect(css).toContain('backdrop-filter: blur(var(--material-blur)) saturate(var(--material-saturate));')
     expect(rules.some((l) => l.includes('[data-palette='))).toBe(false)
     const bodies = rules.map((l) => (l.includes('{ background') ? l : css.slice(css.indexOf(l) + l.length).split('}')[0]))
     for (const body of bodies) {

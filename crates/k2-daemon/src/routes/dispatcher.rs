@@ -7421,6 +7421,33 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
                 .await;
         }
+        // Focus-group changes (create, update, assign): the owner token or a
+        // login as before; a passport is classified, so a person in a shell
+        // tab changes them and an agent gets `focus_group_needs_person`
+        // (taught as a permission card). `crate::focus_group_routes`.
+        p if is_post && post_allowed && crate::focus_group_routes::is_change(p) => {
+            let caller = if super::http::token_ok(&query, state.token.as_str()) {
+                crate::sidecar_routes::Caller::Owner
+            } else if ingress == Ingress::Tunnel {
+                // A passport never comes in through the tunnel.
+                crate::sidecar_routes::Caller::Invalid
+            } else {
+                crate::sidecar_routes::caller_from_tcp(p, &query, bearer_token.as_deref(), state.token.as_str())
+            };
+            if matches!(
+                caller,
+                crate::sidecar_routes::Caller::WrongCredential | crate::sidecar_routes::Caller::Invalid
+            ) {
+                let _ = stream.read(&mut buf).await;
+                let r = crate::focus_group_routes::invalid_token();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let result = crate::focus_group_routes::handle_as(p, &body_bytes, &caller);
+            super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
+                .await;
+        }
         // Phase 2 Unit 4 — POST routes for DB-writing domains. JSON-
         // bodied writes; per-route allowlist + same implicit gate
         // pattern as Unit 6. Dispatch is `dispatch_unit4_post`.

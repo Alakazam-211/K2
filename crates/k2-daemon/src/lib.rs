@@ -16,6 +16,8 @@ pub mod active_reaper;
 pub mod session_reaper;
 // `k2 agent harness`: move a workspace's pinned chat to another harness (0.46.6).
 pub mod agent_harness;
+// Who may change focus groups: a person, or an agent's permission card (0.46.17).
+pub mod focus_group_routes;
 pub mod chat_refresh;
 pub mod agents_routes;
 pub mod agent_name_repair_migrate;

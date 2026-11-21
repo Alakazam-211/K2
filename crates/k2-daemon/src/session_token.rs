@@ -1412,6 +1412,15 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         // (workspace_profile_route, `own_workspace_only`).
         "/cli/workspace/agent-display-name",
         "/cli/agent/harness",
+        // `k2 focus-group create|rename|add|remove` and `k2 agent set
+        // --focus-group` (0.46.17): the TCP arm classifies the passport. A
+        // shell tab is a person and changes groups; an agent passport gets
+        // `focus_group_needs_person` (a permission card when cards are on).
+        // The cell socket answers them "not served", so the CLI sends them
+        // over TCP with the same passport (`focus_group_routes`).
+        "/cli/focus-groups/create",
+        "/cli/focus-groups/update",
+        "/cli/focus-groups/assign",
         // `k2 agent refresh` (0.46.8): the handler takes its own main session
         // with the workspace's switch on; else a permission card or a refusal.
         "/cli/agent/refresh",

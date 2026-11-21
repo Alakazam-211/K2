@@ -1088,7 +1088,7 @@ pub fn handle_agent_conf(q: &str) -> CliResponse {
 /// The fleet view backing `k2 agent list`: one entry per registered
 /// workspace (workspace == agent), shaped
 /// `{ok, agents: [{name, id, handle, mode, enabled, live, sessionId,
-/// backend, ptydAdopted, path}]}` and sorted by
+/// backend, ptydAdopted, path, focusGroup}]}` and sorted by
 /// name (case-insensitive) for stable rendering. `mode` is
 /// display-normalized (stored `k2so`/`agent` → `k2`) and `live` uses
 /// the SAME canonical-session source as `handle_agent_conf`'s `live`
@@ -1097,12 +1097,14 @@ pub fn handle_agent_list() -> CliResponse {
     // Snapshot the projects table, then do the per-row display-name
     // (AGENT.md read) + live lookups WITHOUT holding the DB lock —
     // `agent_display_name` takes its own locks.
-    let rows: Vec<(String, String, String, bool, String)> = {
+    // 0.46.17: each row names its focus group (`focusGroup`, null when in
+    // none), for `k2 workspace list --json`.
+    let rows: Vec<(String, String, String, bool, String, Option<String>)> = {
         let db = k2_core::db::shared();
         let conn = db.lock();
         let mut stmt = match conn.prepare(
-            "SELECT id, path, COALESCE(agent_mode, 'off'), COALESCE(agent_enabled, 0), COALESCE(handle, '') \
-             FROM projects",
+            "SELECT p.id, p.path, COALESCE(p.agent_mode, 'off'), COALESCE(p.agent_enabled, 0), COALESCE(p.handle, ''), g.name \
+             FROM projects p LEFT JOIN focus_groups g ON g.id = p.focus_group_id",
         ) {
             Ok(s) => s,
             Err(e) => return CliResponse::bad_request(format!("projects query failed: {e}")),
@@ -1114,6 +1116,7 @@ pub fn handle_agent_list() -> CliResponse {
                 r.get::<_, String>(2)?,
                 r.get::<_, i64>(3)? == 1,
                 r.get::<_, String>(4)?,
+                r.get::<_, Option<String>>(5)?,
             ))
         });
         match mapped {
@@ -1127,8 +1130,8 @@ pub fn handle_agent_list() -> CliResponse {
         // The audit sentinels (`_orphan`, `_broadcast`) are internal
         // activity-feed FK rows, not agents — same filter as
         // `projects_list()`.
-        .filter(|(id, _, _, _, _)| !k2_core::db::AUDIT_SENTINEL_IDS.contains(&id.as_str()))
-        .map(|(id, path, mode_raw, enabled, handle)| {
+        .filter(|(id, _, _, _, _, _)| !k2_core::db::AUDIT_SENTINEL_IDS.contains(&id.as_str()))
+        .map(|(id, path, mode_raw, enabled, handle, focus_group)| {
             let name = k2_core::workspace::display::agent_display_name(&path);
             let session = crate::session_lookup::lookup_any(
                 &crate::canonical_session::canonical_key_for(&id),
@@ -1148,6 +1151,7 @@ pub fn handle_agent_list() -> CliResponse {
                 "backend": session.as_ref().map(|s| s.0.backend_name()),
                 "ptydAdopted": session.as_ref().map(|s| s.0.is_ptyd_adopted()).unwrap_or(false),
                 "path": path,
+                "focusGroup": focus_group,
             })
         })
         .collect();

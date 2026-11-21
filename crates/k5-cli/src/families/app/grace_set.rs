@@ -35,7 +35,15 @@ pub mod usage {
         cli_name!(),
         " app clean-mode <app> on|off [--restart]"
     );
-    pub const KEY_REVOKE: &str = concat!("usage: ", cli_name!(), " app key revoke <key-id>");
+    pub const KEY: &str = concat!(
+        "usage: ",
+        cli_name!(),
+        " app key mint|revoke|list \u{2026} (",
+        cli_name!(),
+        " app key --help)"
+    );
+    pub const KEY_REVOKE: &str =
+        concat!("usage: ", cli_name!(), " app key revoke <key-id> [--json]");
     pub const KEY_MINT: &str = concat!(
         "usage: ",
         cli_name!(),
@@ -85,6 +93,7 @@ pub enum Ask {
     },
     KeyRevoke {
         id: String,
+        json: bool,
     },
     KeyMint {
         app: String,
@@ -261,26 +270,33 @@ fn clean_mode(words: &[&str]) -> Result<Ask, Stop> {
     })
 }
 
-/// `_app_grace_usage >&2; exit 2`.
-fn grace_page_stop() -> Stop {
-    let page = crate::text::help(GRACE_PAGE).unwrap_or_default();
-    Stop::usage(page.strip_suffix('\n').unwrap_or(page))
-}
-
 fn key(words: &[&str]) -> Result<Ask, Stop> {
     let sub = words.first().copied().unwrap_or("");
     let rest = words.get(1..).unwrap_or_default();
     match sub {
         "mint" => key_mint(rest),
         "revoke" | "rm" => {
-            let id = rest.first().copied().unwrap_or("");
-            if id.is_empty() {
+            // One id that isn't empty and doesn't start with -, --json
+            // anywhere (a help word is the shell's, above).
+            let (mut id, mut json, mut bad) = ("", false, false);
+            for w in rest {
+                match *w {
+                    "--json" => json = true,
+                    _ if w.is_empty() || w.starts_with('-') => bad = true,
+                    _ if id.is_empty() => id = *w,
+                    _ => bad = true,
+                }
+            }
+            if bad || id.is_empty() {
                 return Err(Stop::usage(usage::KEY_REVOKE));
             }
-            Ok(Ask::KeyRevoke { id: id.to_string() })
+            Ok(Ask::KeyRevoke {
+                id: id.to_string(),
+                json,
+            })
         }
         "list" | "ls" => keys(rest),
-        _ => Err(grace_page_stop()),
+        _ => Err(Stop::usage(usage::KEY)),
     }
 }
 
@@ -424,10 +440,10 @@ pub fn run(ctx: &mut Ctx, ask: &Ask) -> Answer {
                 Err(a) => a,
             }
         }
-        Ask::KeyRevoke { id } => {
+        Ask::KeyRevoke { id, json } => {
             let b = Cj::new().s("id", id).body();
-            match post_done(ctx, "/cli/app/key/revoke", &b, false) {
-                Ok(body) => Ok(printed(&body, false, revoke_lines)),
+            match post_done(ctx, "/cli/app/key/revoke", &b, *json) {
+                Ok(body) => Ok(printed(&body, *json, revoke_lines)),
                 Err(a) => a,
             }
         }
@@ -1018,11 +1034,30 @@ mod tests {
             parsed("key", &["mint", "a", "--scope", "users", "--label"]),
             Err(Stop::silent(Exit::Error))
         );
+        for w in [&[][..], &["frobnicate"], &["--json"]] {
+            assert_eq!(parsed("key", w), Err(Stop::usage(usage::KEY)), "{w:?}");
+        }
+        for w in [
+            &["revoke"][..],
+            &["revoke", "--json"],
+            &["rm", "-x", "k1"],
+            &["revoke", "k1", "k2"],
+            &["revoke", "", "k1"],
+        ] {
+            assert_eq!(
+                parsed("key", w),
+                Err(Stop::usage(usage::KEY_REVOKE)),
+                "{w:?}"
+            );
+        }
         assert_eq!(
-            parsed("key", &[]).unwrap_err().exit,
-            Exit::Usage,
-            "the page on stderr"
+            parsed("key", &["revoke", "--json", "k1"]),
+            Ok(Ask::KeyRevoke {
+                id: "k1".into(),
+                json: true
+            })
         );
+        assert!(parse("key", &["revoke", "k1", "-h"]).is_none());
         assert_eq!(
             parsed("clean-mode", &["off", "a", "--restart"]),
             Ok(Ask::CleanMode {

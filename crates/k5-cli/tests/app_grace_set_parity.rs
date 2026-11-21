@@ -13,8 +13,8 @@
 //!   id, and in a session (no confirm); `token rotate` never in a
 //!   session.
 //! - `access`: the read, `--json` (its `access` as `json.dumps` writes
-//!   it), each switch in the shell's order, `--users` checked after the
-//!   switches went, the cores, `--open`, the read again failing.
+//!   it), each switch in the shell's order, every value checked before
+//!   the first switch goes, the cores, `--open`, the read again failing.
 //! - A large list (`keys`); no daemon; help never acts; the brand's name
 //!   in the lines.
 
@@ -348,8 +348,29 @@ fn the_cross_over_changes_answer_as_the_shell_does() {
             ),
             // native: app key rm
             one(
-                "key rm, already, a --json word",
+                "key rm --json: the answer as it came",
                 &["key", "rm", "k1", "--json"],
+                ok(r#"{"id":"k1","app":{"handle":"acme-h"}}"#),
+                0,
+            ),
+            // native: app key revoke
+            one(
+                "key revoke: --json before the id",
+                &["key", "revoke", "--json", "k1"],
+                ok(r#"{"revoked":true,"id":"k1","app":{"handle":"acme-h"}}"#),
+                0,
+            ),
+            // native: app key revoke
+            one(
+                "key revoke --json: held",
+                &["key", "revoke", "k1", "--json"],
+                Reply::Answer(202, HELD.into()),
+                2,
+            ),
+            // native: app key rm
+            one(
+                "key rm: already",
+                &["key", "rm", "k1"],
                 ok(r#"{"id":"k1","app":{"handle":"acme-h"}}"#),
                 0,
             ),
@@ -362,10 +383,22 @@ fn the_cross_over_changes_answer_as_the_shell_does() {
             ),
             // native: app key revoke
             stop("key revoke: no id", &["key", "revoke"], 2),
+            // native: app key revoke
+            stop("key revoke: --json is no id", &["key", "revoke", "--json"], 2),
+            // native: app key rm
+            stop("key rm: a flag is no id", &["key", "rm", "-x", "k1"], 2),
+            // native: app key revoke
+            stop("key revoke: a flag after the id", &["key", "revoke", "k1", "--bogus"], 2),
+            // native: app key revoke
+            stop("key revoke: two ids", &["key", "revoke", "k1", "k2"], 2),
+            // native: app key revoke
+            stop("key revoke: an empty id", &["key", "revoke", "", "k1"], 2),
             // native: app key
-            stop("key: the page on stderr", &["key"], 2),
+            stop("key: its usage line", &["key"], 2),
             // native: app key
             stop("key: a word it doesn't take", &["key", "make"], 2),
+            // native: app key
+            stop("key: --json alone", &["key", "--json"], 2),
             // native: app key mint
             one(
                 "key mint --show",
@@ -666,14 +699,40 @@ fn access_answers_as_the_shell_does() {
                 2,
             ),
             // native: app access
-            case(
-                "access: --users checked after the switches went",
+            stop(
+                "access: --users maybe stops before any switch goes",
                 &["access", "ws", "--build", "on", "--users", "maybe"],
-                &[],
-                vec![ok(SET)],
-                owner_and_port,
                 2,
-                1,
+            ),
+            // native: app access
+            stop(
+                "access: --users maybe alone",
+                &["access", "ws", "--users", "maybe"],
+                2,
+            ),
+            // native: app access
+            stop(
+                "access: --users maybe after switch 2 first",
+                &["access", "ws", "--build", "off", "--users", "maybe"],
+                2,
+            ),
+            // native: app access
+            stop(
+                "access: --users maybe, no --manage note",
+                &["access", "ws", "--manage", "on", "--users", "maybe"],
+                2,
+            ),
+            // native: app access
+            stop(
+                "access: --users maybe with good cores",
+                &["access", "ws", "--users", "ON", "--core", "db=on"],
+                2,
+            ),
+            // native: app access
+            stop(
+                "access: --build checked before --users",
+                &["access", "ws", "--users", "on", "--build", "1"],
+                2,
             ),
             // native: app access
             one(
@@ -751,6 +810,14 @@ fn the_changes_help_never_acts() {
         &["clean-mode", "acme", "on", "-h"][..],
         &["key", "mint", "acme", "--scopes", "u", "--help"],
         &["key", "revoke", "k1", "-h"],
+        &["key", "revoke", "--json", "--help"],
+        &["key", "rm", "-x", "-h"],
+        &["key", "-h"],
+        &["key", "--help"],
+        &["label", "-h"],
+        &["label", "--help", "take", "acme", "site"],
+        &["label", "return", "acme", "site", "-h"],
+        &["access", "ws", "--build", "on", "--users", "maybe", "-h"],
         &["label", "take", "acme", "site", "--help"],
         &["move-plan", "site", "--request", "-h"],
         &["quota", "acme", "--rps", "5", "--help"],
@@ -791,6 +858,16 @@ fn the_lines_say_the_brand_s_name() {
         (
             &["token", "rotate"],
             format!("usage: {cli} app token rotate <app-id> [--ttl 30d] [--keep-old] [--caps a,b]\n"),
+            2,
+        ),
+        (
+            &["key"],
+            format!("usage: {cli} app key mint|revoke|list \u{2026} ({cli} app key --help)\n"),
+            2,
+        ),
+        (
+            &["key", "revoke", "--json"],
+            format!("usage: {cli} app key revoke <key-id> [--json]\n"),
             2,
         ),
         (

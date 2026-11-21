@@ -10,7 +10,7 @@
 //!   in the shell's order (switch 1 first when turning on, switch 2 first
 //!   when turning off; then `--users`; then every core in one call), then
 //!   the read again (`_compute_send`): its lines when it is a 200, else
-//!   what changed. `--users` is checked only after the switches went.
+//!   what changed. Every value is checked before the first switch goes.
 //!
 //! The credential is the shell's: the session's passport in a session,
 //! the owner token outside one ([`Ctx::call`]); who may change what is
@@ -38,7 +38,6 @@ pub mod usage {
     );
     pub const CORE: &str =
         "usage: --core <core>=on|off[,<core>=on|off\u{2026}] (cores: db, files, thread, mail, sew)";
-    pub const USERS: &str = "usage: --users on|off";
 }
 
 /// `--open`'s two lines (exit 2).
@@ -136,7 +135,9 @@ fn access(words: &[&str]) -> Result<Ask, Stop> {
     if !open.is_empty() {
         return Err(Stop::usage(OPEN_RETIRED));
     }
-    for (t, v) in [("build", &build), ("manage", &manage)] {
+    // Every value before the first switch goes (`for t in build manage
+    // users`).
+    for (t, v) in [("build", &build), ("manage", &manage), ("users", &users)] {
         if !v.is_empty() && !matches!(v.as_str(), "on" | "off") {
             return Err(Stop::usage(format!("usage: --{t} on|off")));
         }
@@ -208,9 +209,6 @@ pub fn run(ctx: &mut Ctx, ask: &Ask) -> Answer {
                 last = set(ctx, ws, toggle, Some(v == "on"), "")?;
             }
             if !users.is_empty() {
-                if !matches!(users.as_str(), "on" | "off") {
-                    return Ok(Shown::err(format!("{}\n", usage::USERS), Exit::Usage));
-                }
                 last = set(ctx, ws, "app_users", Some(users == "on"), "")?;
             }
             if !cores.is_empty() {
@@ -361,15 +359,12 @@ mod tests {
             }))
         );
         assert_eq!(
-            parse(&["w", "--users", "maybe"]),
-            Some(Ok(Ask::Set {
-                ws: "w".into(),
-                build: String::new(),
-                manage: String::new(),
-                users: "maybe".into(),
-                cores: String::new(),
-                json: false
-            }))
+            parse(&["w", "--build", "on", "--users", "maybe"]),
+            Some(Err(Stop::usage("usage: --users on|off")))
+        );
+        assert_eq!(
+            parse(&["w", "--build", "maybe", "--users", "maybe"]),
+            Some(Err(Stop::usage("usage: --build on|off")))
         );
     }
 }

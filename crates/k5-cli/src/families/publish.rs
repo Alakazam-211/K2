@@ -320,7 +320,13 @@ fn run_with(
     // The shell skips its connection gate for `secret` alone or `secret
     // help` (`_skip_conn_gate`): only the page, no daemon needed. The
     // virtual-desktop guard comes first and still holds.
-    let secret_page = matches!(act, Act::Page { key: SECRET_PAGE, .. });
+    let secret_page = matches!(
+        act,
+        Act::Page {
+            key: SECRET_PAGE,
+            ..
+        }
+    );
     match prelude::gate(&settings) {
         Some(prelude::Gate::CannotConnect) if secret_page => {}
         Some(gate) => return gate.stop(),

@@ -488,14 +488,32 @@ pub fn tunnel(
     limit: Instant,
     connect: impl FnOnce(&str, u16, Instant) -> Result<TcpStream, Failure>,
 ) -> Result<TcpStream, Failure> {
+    tunnel_answered(p, host, port, user_agent, limit, connect).map_err(|(f, _)| f)
+}
+
+/// [`tunnel`], and when it fails, the bytes of the proxy's answer read
+/// before it did (none for a connect that failed), for a caller that
+/// words the failure as another client would (clone's engine, as
+/// Python's `http.client` does).
+pub fn tunnel_answered(
+    p: &Proxy,
+    host: &str,
+    port: u16,
+    user_agent: &str,
+    limit: Instant,
+    connect: impl FnOnce(&str, u16, Instant) -> Result<TcpStream, Failure>,
+) -> Result<TcpStream, (Failure, Vec<u8>)> {
     let mut s = match connect(&p.host, p.port, limit) {
         Err(Failure::Broken { curl: c, why }) if c == curl::COULDNT_RESOLVE_HOST => {
-            return Err(Failure::Broken {
-                curl: COULDNT_RESOLVE_PROXY,
-                why,
-            })
+            return Err((
+                Failure::Broken {
+                    curl: COULDNT_RESOLVE_PROXY,
+                    why,
+                },
+                Vec::new(),
+            ))
         }
-        r => r?,
+        r => r.map_err(|f| (f, Vec::new()))?,
     };
     let timeouts = |s: &TcpStream| -> Result<(), Failure> {
         let d = remaining(limit).ok_or(Failure::ConnectTimedOut)?;
@@ -503,39 +521,44 @@ pub fn tunnel(
             .and_then(|()| s.set_write_timeout(Some(d)))
             .map_err(|e| tunnel_failed(format!("proxy: set a timeout: {e}")))
     };
-    timeouts(&s)?;
+    timeouts(&s).map_err(|f| (f, Vec::new()))?;
     let head = connect_head(p, host, port, user_agent);
     if let Err(e) = s.write_all(&head).and_then(|()| s.flush()) {
-        return Err(if is_timeout(&e) {
+        let f = if is_timeout(&e) {
             Failure::ConnectTimedOut
         } else {
             tunnel_failed(format!("proxy: send CONNECT: {e}"))
-        });
+        };
+        return Err((f, Vec::new()));
     }
     let mut got = Vec::new();
     let mut byte = [0u8; 1];
     while !got.ends_with(b"\r\n\r\n") && !got.ends_with(b"\n\n") {
         if got.len() >= MAX_HEAD {
-            return Err(tunnel_failed("proxy: CONNECT answer too large"));
+            return Err((tunnel_failed("proxy: CONNECT answer too large"), got));
         }
-        timeouts(&s)?;
+        if let Err(f) = timeouts(&s) {
+            return Err((f, got));
+        }
         match s.read(&mut byte) {
-            Ok(0) => return Err(tunnel_failed("proxy: CONNECT aborted")),
+            Ok(0) => return Err((tunnel_failed("proxy: CONNECT aborted"), got)),
             Ok(_) => got.push(byte[0]),
-            Err(e) if is_timeout(&e) => return Err(Failure::ConnectTimedOut),
+            Err(e) if is_timeout(&e) => return Err((Failure::ConnectTimedOut, got)),
             Err(e) => {
-                return Err(tunnel_failed(format!(
-                    "proxy: read the CONNECT answer: {e}"
-                )))
+                return Err((
+                    tunnel_failed(format!("proxy: read the CONNECT answer: {e}")),
+                    got,
+                ))
             }
         }
     }
     match status(&got) {
         Some(code) if (200..300).contains(&code) => Ok(s),
-        Some(code) => Err(tunnel_failed(format!(
-            "CONNECT tunnel failed, response {code}"
-        ))),
-        None => Err(tunnel_failed("proxy: the CONNECT answer is not HTTP")),
+        Some(code) => Err((
+            tunnel_failed(format!("CONNECT tunnel failed, response {code}")),
+            got,
+        )),
+        None => Err((tunnel_failed("proxy: the CONNECT answer is not HTTP"), got)),
     }
 }
 

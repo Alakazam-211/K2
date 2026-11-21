@@ -99,6 +99,41 @@ pub fn routed_with(host: &str, env: impl Fn(&str) -> Lookup) -> Option<Base> {
     Some(b)
 }
 
+/// The person's proxy for a request a Python block's urllib sends to
+/// `host` (clone's engine), by curl's rules (K2's ruling R4: the shared
+/// CONNECT path; urllib's own reading of the variables is the named
+/// difference python-proxy-rule). `host` is the one urllib connects to,
+/// brackets off, in any case. Python's `k2_direct` first: plain http
+/// and this computer never use a proxy; a name is compared in lower case
+/// and less its trailing dots, as `k2_direct` and every curl read it, so
+/// the cases [`proxy::decide`] leaves to the shell for curl's own sake
+/// don't arise. An IPv6 address that is not `::1` takes the proxy unless
+/// `no_proxy` is `*`; any other `no_proxy` with one is [`Route::Shell`].
+/// [`Route::Shell`]: a setting the binary doesn't read (a proxy URL that
+/// is not `http://`, a variable that is not UTF-8, a blank-separated
+/// `no_proxy`).
+pub fn python_route(host: &str, https: bool) -> Route {
+    let h = host.trim_end_matches('.').to_ascii_lowercase();
+    let Ok(v6) = h.parse::<std::net::Ipv6Addr>() else {
+        return proxy::decide(&h, https, proxy::from_process_env);
+    };
+    if !https || v6.is_loopback() {
+        return Route::Direct;
+    }
+    let env = proxy::from_process_env;
+    let raw = match proxy::proxy_setting(true, &env) {
+        Ok(Some(raw)) => raw,
+        Ok(None) => return Route::Direct,
+        Err(_) => return Route::Shell,
+    };
+    match proxy::no_proxy_setting(&env) {
+        Ok(None) => {}
+        Ok(Some(list)) if list == "*" => return Route::Direct,
+        _ => return Route::Shell,
+    }
+    proxy::parse_proxy(&raw).map_or(Route::Shell, Route::Via)
+}
+
 /// K2's shared transport rule: a request with a token to a host that is
 /// not this computer goes over https only, proxied or not (the rule `k2
 /// remote logout` has). The line, exit 2, for a plain `http://` `url`

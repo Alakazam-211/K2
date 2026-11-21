@@ -166,3 +166,39 @@ fn the_lines_say_the_brand_s_name() {
         assert!(log.is_empty(), "{args:?}");
     }
 }
+
+/// `notify email mute --help` and `-h` (`text::FAMILY_FORMS`): `mute`
+/// reads the flag as the workspace and mutes it, as the shell's does (a
+/// bash bug: help acts; these rows flip when the shell's fix lands). A
+/// help line a gate stops is the shell's.
+#[test]
+fn the_mute_help_lines_are_the_family_s() {
+    let rig = Rig::new("notify", "help");
+    let v = vec![
+        // native: notify email mute --help
+        run(
+            "email mute --help mutes the workspace --help",
+            &["email", "mute", "--help"],
+            vec![ok(r#"{"muted":true,"workspace":"--help"}"#)],
+            0,
+        ),
+        run(
+            "email mute -h mutes the workspace -h",
+            &["email", "mute", "-h"],
+            vec![ok(r#"{"muted":true,"workspace":"-h"}"#)],
+            0,
+        ),
+        shell(case(
+            "email mute --help, the virtual desktop's switch: the shell's gate",
+            &["email", "mute", "--help"],
+            &[("K2_NO_OWNER_FALLBACK", "1")],
+            vec![],
+            owner_and_port,
+            1,
+            0,
+        )),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}

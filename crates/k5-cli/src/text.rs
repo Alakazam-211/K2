@@ -147,6 +147,15 @@ macro_rules! family {
 /// `glossary` (the term) and `read` (the workspace); `setup skip` (the
 /// step's name: it sends) and `sessions live` (the workspace).
 ///
+/// `notifications email` verbs ([`crate::families::notifications`]):
+/// `status` (it reads no word: it asks), `sender resume` (the sender: it
+/// sends), `system-sender show` and `relay list` (no word read: they ask),
+/// `system-sender set` (the sender), `clear` and `test` (no word read:
+/// they send), `relay rm` (the relay: it sends); `notify email mute` (the
+/// workspace: it sends, [`crate::families::notify`]); `approve verify`
+/// (the words go to `k2-approve`, which answers its own help,
+/// [`crate::families::approve`]).
+///
 /// `done --help` and `done -h` ([`crate::families::done`]): the help is
 /// the loop's, after the gates (`_done_usage`).
 pub static FAMILY_FORMS: &[HelpForm] = &[
@@ -194,6 +203,26 @@ pub static FAMILY_FORMS: &[HelpForm] = &[
     family!("sessions" "live" "-h"),
     family!("done" "--help"),
     family!("done" "-h"),
+    family!("notifications" "email" "status" "--help"),
+    family!("notifications" "email" "status" "-h"),
+    family!("notifications" "email" "sender" "resume" "--help"),
+    family!("notifications" "email" "sender" "resume" "-h"),
+    family!("notifications" "email" "system-sender" "show" "--help"),
+    family!("notifications" "email" "system-sender" "show" "-h"),
+    family!("notifications" "email" "system-sender" "set" "--help"),
+    family!("notifications" "email" "system-sender" "set" "-h"),
+    family!("notifications" "email" "system-sender" "clear" "--help"),
+    family!("notifications" "email" "system-sender" "clear" "-h"),
+    family!("notifications" "email" "system-sender" "test" "--help"),
+    family!("notifications" "email" "system-sender" "test" "-h"),
+    family!("notifications" "email" "relay" "list" "--help"),
+    family!("notifications" "email" "relay" "list" "-h"),
+    family!("notifications" "email" "relay" "rm" "--help"),
+    family!("notifications" "email" "relay" "rm" "-h"),
+    family!("notify" "email" "mute" "--help"),
+    family!("notify" "email" "mute" "-h"),
+    family!("approve" "verify" "--help"),
+    family!("approve" "verify" "-h"),
 ];
 
 /// The captured help form that is exactly `argv` ([`CAPTURED_FORMS`],

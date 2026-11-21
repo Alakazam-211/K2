@@ -34,8 +34,10 @@ pub enum Opened {
     Ready(Box<Ctx>, std::path::PathBuf),
     /// A gate stopped it (its lines printed), or the settings failed.
     Stop(Exit),
-    /// The shell's: a `python3` the binary can't tell, or a port curl
-    /// won't take.
+    /// The shell's: a `python3` the binary can't tell, a port curl
+    /// won't take, or a help line a gate stops
+    /// ([`prelude::help_line_gated`]: a family's help form,
+    /// [`crate::text::FAMILY_FORMS`]).
     Shell,
 }
 
@@ -55,6 +57,9 @@ pub fn open(args: &[OsString], local: bool) -> Opened {
             return Opened::Stop(Exit::Error);
         }
     };
+    if prelude::help_line_gated(args, &settings) {
+        return Opened::Shell;
+    }
     match prelude::gate(&settings) {
         Some(Gate::VirtualDesktop) => return Opened::Stop(Gate::VirtualDesktop.stop()),
         Some(Gate::CannotConnect) if !local => {

@@ -12,7 +12,10 @@
 //!
 //! A flag that takes a value and comes last ends the command with 1 and
 //! no line, as the shell's `shift 2` does. `-h` and `--help` are the
-//! front's.
+//! front's, but `email mute --help` and `-h` mute the workspace `--help`
+//! as the shell's do (a bash bug: help acts): help forms whose page is
+//! this code ([`crate::text::FAMILY_FORMS`]); a help line a gate stops is
+//! the shell's.
 
 use super::app::py as p;
 use super::approve::cp::{self, env_text, one_line, page, start, stdout_line, usage};

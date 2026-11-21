@@ -24,7 +24,9 @@
 //! line, exit 2. `-h` and
 //! `--help` anywhere are the front's: the shell prints the usage and
 //! changes nothing (`verify`, `show` and `key-id` hand theirs to
-//! `k2-approve`).
+//! `k2-approve`: `approve verify --help` and `-h` are help forms whose
+//! page is this code, [`crate::text::FAMILY_FORMS`], `k2-approve`'s own
+//! help; a help line a gate stops is the shell's).
 
 pub mod cp;
 

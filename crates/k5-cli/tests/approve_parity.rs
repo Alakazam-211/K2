@@ -424,3 +424,49 @@ fn the_lines_say_the_brand_s_name() {
         assert!(log.is_empty(), "{args:?}");
     }
 }
+
+fn approve_bin_and_owner(rig: &Rig) {
+    approve_bin(rig);
+    owner_and_port(rig);
+}
+
+/// `approve verify --help` and `-h` (`text::FAMILY_FORMS`): the words go
+/// to `k2-approve`, which answers its own help, as the shell's do. A help
+/// line a gate stops is the shell's.
+#[test]
+fn the_verify_help_lines_are_the_family_s() {
+    let rig = Rig::new("approve", "help");
+    let v = vec![
+        // native: approve verify --help
+        case(
+            "verify --help: k2-approve runs in its place",
+            &["verify", "--help"],
+            &[("K2_APPROVE_BIN", "{secrets}/k2-approve")],
+            vec![],
+            approve_bin_and_owner,
+            4,
+            0,
+        ),
+        case(
+            "verify -h: k2-approve runs in its place",
+            &["verify", "-h"],
+            &[("K2_APPROVE_BIN", "{secrets}/k2-approve")],
+            vec![],
+            approve_bin_and_owner,
+            4,
+            0,
+        ),
+        shell(case(
+            "verify --help, no port: the shell's (it skips its gate)",
+            &["verify", "--help"],
+            &[("K2_APPROVE_BIN", "{secrets}/k2-approve")],
+            vec![],
+            approve_bin,
+            4,
+            0,
+        )),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}

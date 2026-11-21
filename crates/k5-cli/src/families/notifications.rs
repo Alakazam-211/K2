@@ -17,7 +17,12 @@
 //! A flag that takes a value and comes last is the shell's `_need_value`
 //! line, exit 2. `relay add` reads the
 //! password from the terminal without echo, else the first line of stdin;
-//! it goes only into the request body. `-h` and `--help` are the front's.
+//! it goes only into the request body. `-h` and `--help` are the front's,
+//! but where the shell's verb reads the flag as a word or reads no word
+//! (`email status`, `sender resume`, `system-sender show|set|clear|test`,
+//! `relay list|rm`: bash bugs, help asks or acts), those lines are help
+//! forms whose page is this code ([`crate::text::FAMILY_FORMS`]); a help
+//! line a gate stops is the shell's ([`crate::prelude::help_line_gated`]).
 
 use super::app::call::{Cj, Ctx};
 use super::app::py::{self as p, Out};

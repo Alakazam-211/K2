@@ -422,6 +422,9 @@ impl Opener {
     /// and urllib sends that URL's netloc.
     fn host_header(&self) -> String {
         let n = self.netloc.as_str();
+        if !self.tls {
+            return n.to_string();
+        }
         let Some(rest) = n
             .strip_prefix("https://")
             .or_else(|| n.strip_prefix("HTTPS://"))

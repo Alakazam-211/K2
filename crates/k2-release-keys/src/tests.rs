@@ -234,7 +234,12 @@ fn shell_list(text: &str, var: &str) -> Vec<String> {
 
 #[test]
 fn key_copies_are_equal_and_u1_is_in_no_verifier() {
-    let ours: Vec<String> = UPDATER_KEYS.iter().map(|k| k.public_key_b64.to_string()).collect();
+    // The keys this build compiled are its brand file's, whatever the brand.
+    let (id, brand) = crate::brand_keys::brand_keys(&crate::brand_keys::tests::this_brand()).expect("this build's brand file");
+    let compiled: Vec<(String, String, String)> =
+        UPDATER_KEYS.iter().map(|k| (k.role.to_string(), k.key_id.to_string(), k.public_key_b64.to_string())).collect();
+    let in_file: Vec<(String, String, String)> = brand.into_iter().map(|k| (k.role, k.key_id, k.pubkey)).collect();
+    assert_eq!(compiled, in_file, "brand {id}: UPDATER_KEYS");
     for k in UPDATER_KEYS {
         assert_eq!(key_id_of(k.public_key_b64).as_deref(), Some(k.key_id), "key id of {}", k.public_key_b64);
         assert_ne!(k.public_key_b64, LEGACY_UPDATER_KEY_B64, "U1 must never be a trusted update key");
@@ -242,6 +247,12 @@ fn key_copies_are_equal_and_u1_is_in_no_verifier() {
     if !UPDATER_KEYS.is_empty() {
         assert_eq!(UPDATER_KEYS[0].role, "primary");
     }
+    // The copies below are the k2 brand's (cli/k2, the installer script,
+    // tauri.conf.json): they hold brand/k2's keys, which are the ceremony's.
+    let (_, k2) = crate::brand_keys::brand_keys(&repo_file("brand/k2/brand.toml")).expect("brand/k2");
+    let (ceremony, _) = crate::brand_keys::own_keys(&repo_file("crates/k2-release-keys/src/lib.rs")).expect("the ceremony's block");
+    assert_eq!(k2, ceremony, "brand/k2's [update] is the ceremony's list");
+    let ours: Vec<String> = k2.iter().map(|k| k.pubkey.clone()).collect();
     let cli = repo_file("cli/k2");
     let inst = repo_file("scripts/install-daemon.sh");
     assert_eq!(shell_list(&cli, "_DAEMON_UPDATE_PUBKEYS"), ours, "cli/k2 _DAEMON_UPDATE_PUBKEYS");
@@ -252,8 +263,8 @@ fn key_copies_are_equal_and_u1_is_in_no_verifier() {
     assert_eq!(shell_list(&inst, "K2_FIRST_U2_VERSION"), [FIRST_U2_SIGNED_VERSION], "scripts/install-daemon.sh K2_FIRST_U2_VERSION");
     let conf: serde_json::Value = serde_json::from_str(&repo_file("src-tauri/tauri.conf.json")).expect("tauri.conf.json");
     let pk = conf["plugins"]["updater"]["pubkey"].as_str().expect("plugins.updater.pubkey");
-    let want = match UPDATER_KEYS.first() {
-        Some(primary) => tauri_pubkey(primary.public_key_b64).expect("primary"),
+    let want = match k2.first() {
+        Some(primary) => tauri_pubkey(&primary.pubkey).expect("primary"),
         // Before the ceremony lands the plugin keeps U1 (nothing verifies with it).
         None => tauri_pubkey(LEGACY_UPDATER_KEY_B64).expect("U1"),
     };

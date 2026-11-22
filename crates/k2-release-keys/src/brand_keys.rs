@@ -216,7 +216,7 @@ pub fn render(id: &str, from: &str, keys: &[Key]) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::path::Path;
 
@@ -252,18 +252,10 @@ mod tests {
         )
     }
 
-    /// The brand this test build was made for: K2_BRAND_DIR, else brand/k2
-    /// (the job that builds a brand sets it for the build and the run).
-    fn this_brand() -> String {
-        let dir = std::env::var("K2_BRAND_DIR")
-            .ok()
-            .filter(|d| !d.is_empty())
-            .unwrap_or_else(|| "brand/k2".into());
-        let p = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .join(dir)
-            .join("brand.toml");
-        std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("read {}: {e}", p.display()))
+    /// The brand file this build compiled its keys from (build.rs names it).
+    pub(crate) fn this_brand() -> String {
+        let p = env!("K2_UPDATE_KEYS_BRAND_FILE");
+        std::fs::read_to_string(p).unwrap_or_else(|e| panic!("read {p}: {e}"))
     }
 
     #[test]

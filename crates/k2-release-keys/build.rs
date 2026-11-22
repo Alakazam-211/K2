@@ -37,6 +37,11 @@ fn main() {
     };
     let file = dir.join("brand.toml");
     println!("cargo:rerun-if-changed={}", file.display());
+    // The tests read the very file this build compiled its keys from.
+    println!(
+        "cargo:rustc-env=K2_UPDATE_KEYS_BRAND_FILE={}",
+        file.display()
+    );
     let shown = file
         .strip_prefix(root)
         .unwrap_or(&file)

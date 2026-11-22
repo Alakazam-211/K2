@@ -131,6 +131,11 @@ pub trait SystemOps: Send + Sync {
     fn helper_pgarchive(&self) -> Result<(), String> {
         pgarchive_gate()
     }
+    /// Does the root helper do point-in-time restore of a named cluster
+    /// (protocol 19, `namespaces.pgrestore`)? `Err` = `helper_needed: …`.
+    fn helper_pgrestore(&self) -> Result<(), String> {
+        pgrestore_gate()
+    }
 }
 
 /// Production implementation.
@@ -228,6 +233,11 @@ impl SystemOps for RealSystemOps {
         // a 17 helper sees it.
         if needs_pgarchive(args) {
             pgarchive_gate()?;
+        }
+        // Point-in-time restore (protocol 19): refused here before an 18
+        // helper sees it.
+        if needs_pgrestore(args) {
+            pgrestore_gate()?;
         }
         if crate::root_helper::state().usable(crate::root_helper::PG_MIN_PROTOCOL) {
             let argv = crate::root_helper::pg_argv(args)?;
@@ -337,6 +347,35 @@ pub fn needs_pgnamed(args: &[&str]) -> bool {
 /// (`wal-archive <M>-<name> on|off`, protocol 18).
 pub fn needs_pgarchive(args: &[&str]) -> bool {
     args.first().copied() == Some("wal-archive")
+}
+
+/// Helper argv for point-in-time restore (protocol 19): `basebackup`,
+/// `backups`, `restore-to`, `drop-drill`.
+pub fn needs_pgrestore(args: &[&str]) -> bool {
+    matches!(args.first().copied(), Some("basebackup" | "backups" | "restore-to" | "drop-drill"))
+}
+
+/// `Ok` when the root helper does point-in-time restore (protocol ≥ 19 and
+/// `namespaces.pgrestore`), else the `helper_needed: …` message. The flag
+/// decides, never the number alone: 19 is shared by three lanes.
+pub fn pgrestore_gate() -> Result<(), String> {
+    use k2_root_proto::version::PGRESTORE_MIN_PROTOCOL;
+    let st = crate::root_helper::state();
+    if pgrestore_ok(&st) {
+        Ok(())
+    } else {
+        Err(crate::root_helper::helper_needed(
+            "point-in-time restore of a named Postgres cluster",
+            PGRESTORE_MIN_PROTOCOL,
+            &st,
+        ))
+    }
+}
+
+/// Pure: protocol ≥ 19 and `namespaces.pgrestore == true`.
+pub fn pgrestore_ok(st: &crate::root_helper::RootHelperState) -> bool {
+    let ns = st.version_json.as_ref().and_then(|v| v.pointer("/namespaces/pgrestore")).and_then(serde_json::Value::as_bool) == Some(true);
+    st.usable(k2_root_proto::version::PGRESTORE_MIN_PROTOCOL) && ns
 }
 
 /// `Ok` when the root helper speaks `pg wal-archive` (protocol ≥ 18 and
@@ -1465,6 +1504,13 @@ impl SystemOps for FakeSystemOps {
             Err("helper_needed: a named Postgres cluster needs k2-root-helper protocol 15 (this box: protocol 14). Run `k2 root-helper update`.".into())
         }
     }
+    fn helper_pgrestore(&self) -> Result<(), String> {
+        if self.query_answers.contains_key("helper pgrestore") {
+            Ok(())
+        } else {
+            Err(concat!("helper_needed: point-in-time restore of a named Postgres cluster needs k2-root-helper protocol 19 (this box: protocol 18). Run `", k2_core::cli_name!(), " root-helper update`.").into())
+        }
+    }
     fn helper_pgarchive(&self) -> Result<(), String> {
         if self.query_answers.contains_key("helper pgarchive") {
             Ok(())
@@ -1485,13 +1531,19 @@ impl SystemOps for FakeSystemOps {
         if needs_pgarchive(args) {
             self.helper_pgarchive()?;
         }
+        if needs_pgrestore(args) {
+            self.helper_pgrestore()?;
+        }
         if args.first().copied() == Some("psql") && !helper_psql_argv_ok(&args[1..]) {
             return Err(format!("k2-pg-helper would refuse psql argv: {joined}"));
         }
         // The `pgmajor` verbs answer only what a test set up
         // (`query_answers["helper <argv>"]`); otherwise the box's helper is
         // too old, like a protocol-8 helper on the fleet.
-        if matches!(args.first().copied(), Some("clusters" | "ensure-cluster" | "add-major" | "wal-archive")) {
+        if matches!(
+            args.first().copied(),
+            Some("clusters" | "ensure-cluster" | "add-major" | "wal-archive" | "basebackup" | "backups" | "restore-to" | "drop-drill")
+        ) {
             return match self.query_answers.get(&format!("helper {joined}")) {
                 Some(a) => {
                     self.record(format!("helper {joined} stdin=0"));
@@ -1530,6 +1582,20 @@ impl SystemOps for FakeSystemOps {
         let sql = stdin
             .map(|b| String::from_utf8_lossy(b).to_string())
             .unwrap_or_default();
+        // Point-in-time restore tests: `psql --cluster <M>-<name>` answers
+        // by `query_answers["psql <M>-<name> <db>|<needle>"]` when the SQL
+        // holds the needle (the drill's queries).
+        if let Some(i) = args.iter().position(|a| *a == "--cluster") {
+            let (wire, db) = (args.get(i + 1).copied().unwrap_or(""), args.windows(2).find(|w| w[0] == "-d").map(|w| w[1]).unwrap_or(""));
+            let prefix = format!("psql {wire} {db}|");
+            let mut hits: Vec<(&String, &String)> =
+                self.query_answers.iter().filter(|(k, _)| k.strip_prefix(&prefix).is_some_and(|n| sql.contains(n))).collect();
+            hits.sort();
+            if let Some((_, a)) = hits.first() {
+                self.record(format!("psql {wire} {db} {}", sql.lines().next().unwrap_or("")));
+                return Ok((*a).clone());
+            }
+        }
         // A cluster's health query (`k2 db clusters --health`): the answer a
         // test set up, as a running Postgres would give it.
         if sql == crate::sql::cluster::HEALTH_SQL {

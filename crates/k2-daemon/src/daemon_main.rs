@@ -2089,6 +2089,10 @@ async fn async_main() {
     // daemon's own scheduler loop runs due jobs, headless or not.
     crate::jobs::boot();
     let _jobs_handle = crate::jobs::spawn_loop();
+    // App cron and the daily base backups of archiving named clusters
+    // (prd-app-supabase-compat-v1 §11): headless, like the jobs loop.
+    crate::apps::cron::spawn_loop();
+    crate::sql::pitr::spawn_loop();
 
     // `k2 ci` (0.46.10, C6a): the CI watch/reap loop, headless (it idles
     // while compute is off).

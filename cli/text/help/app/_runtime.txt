@@ -240,6 +240,14 @@ Database (a box Postgres database for an App, its own login, checked live):
   k2 app db status|check|disconnect <app-id>
                                        k2 app db --help; k2 study app-databases.
 
+Cron (the daemon calls the App's own route on a schedule, headless):
+  k2 app cron add <app-id> "<cron>" --path /api/cron/x [--method GET|POST]
+                                       Each call: Authorization: Bearer
+                                       $CRON_SECRET (a vault secret the App
+                                       gets as env). Overlaps skipped.
+  k2 app cron list|logs|run-now|rm <app-id> [<cron-id>]
+                                       k2 app cron --help; k2 study app-cron.
+
 Egress (guarded Apps reach only listed hosts, through their own proxy):
   k2 app egress <app-id>               Mode, hosts, pending requests, proxy.
   k2 app egress add <app-id> <host[:port]>... [--reason TEXT]

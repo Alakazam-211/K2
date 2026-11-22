@@ -45,6 +45,56 @@
       ]
     },
     {
+      "name": "app cron add",
+      "usage": "k2 app cron add <app-id> \"<min hour day month weekday>\" --path /api/cron/x [--method GET|POST] [--missed skip|once] [--timeout 5m] [--json]",
+      "description": "The daemon calls the App's own route on this 5-field schedule (box time), headless, on the App's port on this box, with Authorization: Bearer $CRON_SECRET: the secret the App already gets under that name, else one K2 makes in the vault and grants (a running App is re-hosted to get it). Never printed. A slot while a run is still going is skipped; a slot missed while the daemon was down is skipped or, with --missed once, run once if under 12 h old. Three failures in a row tell the App's workspace. Agents need Build and run Apps.",
+      "args": [{"name": "app-id", "required": true}, {"name": "schedule", "required": true}],
+      "flags": [
+        {"name": "--path", "arg": "path", "description": "The App's route, starting with / (required)."},
+        {"name": "--method", "arg": "GET|POST", "description": "Default GET."},
+        {"name": "--missed", "arg": "skip|once", "description": "A slot missed while the daemon was down (default skip)."},
+        {"name": "--timeout", "arg": "duration", "description": "30s, 5m or 1h; default 5m, at most 1h."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "app cron list",
+      "usage": "k2 app cron list <app-id> [--json]",
+      "description": "The App's crons: id, schedule, method, path, next slot, running, failures in a row, the last run.",
+      "args": [{"name": "app-id", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "app cron run-now",
+      "usage": "k2 app cron run-now <app-id> <cron-id> [--json]",
+      "description": "Call the App's route once now, with the same header. Exit 1 when the call fails; refused while a run of it is still going (cron_running, exit 3).",
+      "args": [{"name": "app-id", "required": true}, {"name": "cron-id", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "app cron logs",
+      "usage": "k2 app cron logs <app-id> [<cron-id>] [--limit N] [--json]",
+      "description": "Every run and skip, newest first: ok, failed, timeout, not_running, skipped_overlap, skipped_missed, interrupted; trigger (schedule, catch_up, run_now), HTTP status, time, a short detail.",
+      "args": [{"name": "app-id", "required": true}, {"name": "cron-id", "required": false}],
+      "flags": [
+        {"name": "--limit", "arg": "N", "description": "Runs per cron, 1-500 (default 20)."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "app cron rm",
+      "usage": "k2 app cron rm <app-id> <cron-id> [--json]",
+      "description": "Remove a cron. CRON_SECRET stays granted to the App.",
+      "args": [{"name": "app-id", "required": true}, {"name": "cron-id", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
       "name": "app db check",
       "usage": "k2 app db check <app-id> [--as NAME_URL] [--json]",
       "description": "The live check again, no card needed: log in as the App's own login from inside the App (the daemon for a process App) and run select 1 and version(). FAIL names the step (no_url, no_door, door_refused, auth_failed, db_missing, app_not_running, rehost_failed, exec_failed) and shows the App's last output lines. Exit 0 PASS, 1 FAIL.",

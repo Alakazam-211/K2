@@ -101,6 +101,7 @@ pub mod egress_proxy;
 /// proxy listener, checked against its databases, spliced to the cluster.
 // 0.46.11 (prd-app-database-integrations-v1 S2): k2 app db connect,
 // status, check and disconnect, and the live check they run.
+pub mod cron;
 pub mod db_connect;
 /// The Supabase-compatible data layer, one App at a time: identity (lane
 /// A) and the /rest/v1, /auth/v1 doors and their pool (lane C).

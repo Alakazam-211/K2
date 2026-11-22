@@ -95,6 +95,13 @@ pub(super) const ROWS: &[Route] = &[
     post("/cli/app/compat/sync-users", Admin),
     // S13: narrowing applies now, widening fields are held.
     post("/cli/app/config", Admin),
+    // App cron (prd-app-supabase-compat-v1 §11.2): list and logs read;
+    // add, rm and run-now change or run the App's schedule (no Member).
+    get("/cli/app/cron", Member),
+    post("/cli/app/cron/add", Admin),
+    get("/cli/app/cron/logs", Member),
+    post("/cli/app/cron/rm", Admin),
+    post("/cli/app/cron/run-now", Admin),
     // 0.46.4: read back, list, remove and rename inside an App's data
     // folder (handler: as data put; no Member reads App data).
     get("/cli/app/data/get", Admin),

@@ -9,6 +9,10 @@
 //! - `POST {op: "restart", name, project}`: `k2 db cluster restart <n>`.
 //! - `POST {op: "create-db", cluster, name?, id?, major?, project}`:
 //!   `k2 db create --cluster <n>`.
+//! - Point-in-time restore (prd-app-supabase-compat-v1 §11.1; root helper
+//!   protocol 19, [`crate::sql::pitr`]), POST with `op`:
+//!   `basebackup {name}`, `backups {name}`, `restore {name, to, as}`,
+//!   `restore-drill {name, to?}`, `drop-drill {name}`.
 //! - `POST /cli/db/clusters/archive {name, archive: "on"|"off", project}`
 //!   (0.46.17, POST only): `k2 db cluster archive <n> on|off`, WAL
 //!   archiving on an existing named cluster ([`handle_archive`]).
@@ -60,6 +64,11 @@ struct Body {
     wal_archive: bool,
     cluster: Option<String>,
     id: Option<String>,
+    /// Point-in-time restore: the moment (`restore`, `restore-drill`).
+    to: Option<String>,
+    /// `restore`: the new cluster's name.
+    #[serde(rename = "as")]
+    as_name: Option<String>,
 }
 
 /// The workspace the caller acts for: an agent's own, or (the owner) the
@@ -217,7 +226,12 @@ pub fn handle(ops: &dyn SystemOps, who: Who, is_post: bool, body: &[u8], params:
                 Err(e) => err(e.status(), e.code(), e.hint()),
             }
         }
-        other => err("400 Bad Request", "usage", format!("unknown op {other:?} (create, restart, create-db)")),
+        "basebackup" | "backups" | "restore" | "restore-drill" | "drop-drill" => pitr_op(ops, &who, &b, &project),
+        other => err(
+            "400 Bad Request",
+            "usage",
+            format!("unknown op {other:?} (create, restart, create-db, basebackup, backups, restore, restore-drill, drop-drill)"),
+        ),
     }
 }
 
@@ -284,6 +298,83 @@ pub fn handle_archive(ops: &dyn SystemOps, who: Who, is_post: bool, body: &[u8])
         }
         Err(e) => ensure_err(e),
     }
+}
+
+/// The point-in-time restore ops: the same gate as `cluster restart` and
+/// `archive` (the owner for any workspace's cluster, or a local agent with
+/// the Postgres versions switch for its own); `restore` makes a cluster,
+/// so it is gated like `create`. Only a named cluster K2 made.
+fn pitr_op(ops: &dyn SystemOps, who: &Who, b: &Body, project: &str) -> CliResponse {
+    use crate::sql::pitr;
+    let usage = |m: &str| err("400 Bad Request", "usage", m.to_string());
+    let Some(spec) = b.name.as_deref().map(str::trim).filter(|s| !s.is_empty()) else {
+        return usage(concat!(k2_core::cli_name!(), " db cluster basebackup|backups|restore|restore-drill|drop-drill <name>"));
+    };
+    let owner = matches!(who, Who::Owner);
+    if b.op == "drop-drill" {
+        // A drill isn't recorded as K2's; a failed restore may not be. The
+        // owner drops any; an agent only one recorded for its workspace.
+        let major = match cluster::for_name(spec) {
+            Some(c) => {
+                if let Err(r) = gate(who, VersionsAct::NamedClusterArchive, c.owner_project.as_deref().unwrap_or(project)) {
+                    return r;
+                }
+                if !owner && c.owner_project.as_deref() != Some(project) {
+                    return err("403 Forbidden", "cluster_not_yours", format!("{} is another workspace's", c.label()));
+                }
+                c.major
+            }
+            None if owner => match b.major {
+                Some(m) => m,
+                None => return usage(concat!(k2_core::cli_name!(), " db cluster drop-drill <name> --major <M> (no record of that name here)")),
+            },
+            None => return err("403 Forbidden", versions_access::OWNER_ONLY, "only the owner removes a drill with no record here"),
+        };
+        return match pitr::drop_drill(ops, major, spec) {
+            Ok(v) => CliResponse::ok_json(json!({"ok": true, "dropped": v}).to_string()),
+            Err(e) => ensure_err(e),
+        };
+    }
+    let c = match cluster::named_target(spec, (!owner).then_some(project)) {
+        Ok(c) => c,
+        Err(e) => return ensure_err(e),
+    };
+    let act = if b.op == "restore" { VersionsAct::NamedClusterCreate } else { VersionsAct::NamedClusterArchive };
+    if let Err(r) = gate(who, act, c.owner_project.as_deref().unwrap_or(project)) {
+        return r;
+    }
+    let to = match b.to.as_deref().map(|t| pitr::parse_time(t, now_secs())) {
+        None => None,
+        Some(Ok(t)) => Some(t),
+        Some(Err(m)) => return usage(&m),
+    };
+    let res = match b.op.as_str() {
+        "basebackup" => pitr::basebackup(ops, &c),
+        "backups" => pitr::backups(ops, &c),
+        "restore" => {
+            let (Some(t), Some(as_name)) = (to, b.as_name.as_deref().map(str::trim).filter(|s| !s.is_empty())) else {
+                return usage(concat!(k2_core::cli_name!(), " db cluster restore <name> --to <time> --as <new-name>"));
+            };
+            pitr::restore(ops, &c, as_name, t)
+        }
+        _ => pitr::drill(ops, &c, to),
+    };
+    match res {
+        Ok(v) => {
+            if b.op != "backups" {
+                audit(who, &format!("cluster-{}", b.op), &c);
+            }
+            CliResponse::ok_json(v.to_string())
+        }
+        Err(e) => ensure_err(e),
+    }
+}
+
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 fn cluster_answer(c: &Cluster) -> Value {

@@ -60,6 +60,10 @@ NAMED CLUSTERS (the owner, or the Postgres-versions switch)
   k2 db cluster create 17 --name <n> [--wal-archive]   its own cluster
   k2 db cluster archive <n> on|off   WAL archive later (one restart);
                                      off keeps the spool and its WAL
+  k2 db cluster backups <n>          base backups, WAL, restorable window
+  k2 db cluster restore <n> --to -15m --as <n>_old   a new cluster at
+                                     that moment, never in place
+  k2 db cluster restore-drill <n>    prove a restore works (monthly)
   k2 db clusters --health --json     archiver: archivedCount,
     lastArchivedAt, failedCount, lastFailedAt, currentLsn (text LSN,
     0/1A2B3C4D); all null when the cluster isn't running.

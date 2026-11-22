@@ -698,6 +698,60 @@ if w == "cluster":
     print("next: k2 db create --cluster %s --name <db>" % (c.get("name")))
 elif w == "restart":
     print("restarted %s" % v.get("cluster"))
+elif w == "pitr-basebackup":
+    b = v.get("backup") or {}
+    print("base backup %s of %s: %s (WAL %s..%s)" % (b.get("stamp"), v.get("cluster"), b.get("dir"), b.get("startWal"), b.get("endWal")))
+    if b.get("pruned"):
+        print("removed (older than the newest %s): %s" % (b.get("kept"), ", ".join(b["pruned"])))
+elif w == "pitr-backups":
+    o = v.get("onBox") or {}
+    r = v.get("recorded") or {}
+    wal = o.get("wal") or {}
+    print("%s  WAL archive %s" % (v.get("cluster"), "on" if o.get("walArchive") else "off"))
+    for b in o.get("baseBackups") or []:
+        if b.get("complete"):
+            print("  base %s  ended %s  %s bytes" % (b.get("stamp"), b.get("endedAt"), b.get("bytes")))
+        else:
+            print("  base %s  unfinished (removed at the next backup)" % b.get("stamp"))
+    if not o.get("baseBackups"):
+        print("  no base backups yet")
+    print("  WAL      %s files, %s..%s, newest archived %s" % (wal.get("count"), wal.get("first"), wal.get("last"), wal.get("newestAt")))
+    if wal.get("gap"):
+        print("  GAP      segment %s is missing: a restore cannot pass it" % wal["gap"])
+    if o.get("restorableFrom"):
+        print("restorable from %s to %s (UTC)" % (o.get("restorableFrom"), o.get("restorableTo")))
+    else:
+        print("not restorable yet (a base backup and the WAL after it are needed)")
+    print("last base backup: %s%s" % (r.get("lastBasebackupAt") or "never", "" if r.get("lastBasebackupOk") in (None, True) else " (FAILED: %s)" % r.get("lastBasebackupNote")))
+    print("last drill: %s%s" % (r.get("lastDrillAt") or "never", "" if r.get("lastDrillOk") in (None, True) else " (FAILED)"))
+    if r.get("drillWarning"):
+        print("warning: %s" % r["drillWarning"])
+elif w == "pitr-restore":
+    print("restored %s to %s UTC as %s (port %s), from base backup %s" % (v.get("restoredFrom"), v.get("target"), v.get("cluster"), v.get("port"), v.get("baseBackup")))
+    print("next: %s" % v.get("next"))
+elif w == "pitr-drill":
+    print("drill of %s to %s UTC: %s" % (v.get("cluster"), v.get("target"), "PASS" if v.get("ok") else "FAIL"))
+    m = v.get("markers")
+    if m is not None:
+        print("  markers  before the moment: %s, after it: %s" % ("present" if m.get("before") else "MISSING", "PRESENT" if m.get("after") else "absent"))
+    for d in v.get("databases") or []:
+        line = "  %s  %s tables, %s rows" % (d.get("database"), d.get("tables"), d.get("rows"))
+        if "rowsMatch" in d:
+            line += ", rows match the moment" if d["rowsMatch"] else ", ROWS DIFFER"
+        print(line)
+        for x in d.get("diffs") or []:
+            print("    %s: %s at the moment, %s restored" % (x.get("table"), x.get("atTheMoment"), x.get("restored")))
+    for d in v.get("missingDatabases") or []:
+        print("  MISSING database %s" % d)
+    print("  storage  %s" % v.get("storageCheck"))
+    print("  drill cluster %s %s" % (v.get("drillCluster"), "removed" if v.get("dropped") else "NOT removed"))
+    if v.get("hint"):
+        print("hint: %s" % v["hint"])
+    if not v.get("ok"):
+        sys.exit(1)
+elif w == "pitr-drop":
+    d = v.get("dropped") or {}
+    print("removed %s/%s (restored from %s)" % (d.get("major"), d.get("name"), d.get("from")) if d.get("dropped") else "nothing to remove")
 elif w == "archive":
     state = "on" if v.get("walArchive") else "off"
     if not v.get("changed"):
@@ -1140,7 +1194,48 @@ else:
                     case "$c_name" in ""|-*) _db_err "usage" "k2 db cluster archive <name> on|off"; exit 2 ;; esac
                     case "$c_state" in on|off) ;; *) _db_err "usage" "k2 db cluster archive <name> on|off (got '${c_state}')"; exit 2 ;; esac
                     _db_named_post "$(_compute_json K2_CJ_project="$(_compute_ws "")" K2_CJ_name="$c_name" K2_CJ_archive="$c_state")" "$as_json" archive /cli/db/clusters/archive ;;
-                *) _db_err "usage" "k2 db cluster create <major> --name <name> [--port <port>] [--wal-archive] | k2 db cluster restart <name> | k2 db cluster archive <name> on|off"; exit 2 ;;
+                # Point-in-time restore (prd-app-supabase-compat-v1 §11.1;
+                # root helper protocol 19): POST /cli/db/clusters {op}.
+                basebackup|backups)
+                    c_name="${1:-}"; shift 2>/dev/null || true
+                    while [ $# -gt 0 ]; do case "$1" in --json) as_json=true; shift ;; *) _db_err "usage" "unexpected '$1' — k2 db cluster $c_op <name>"; exit 2 ;; esac; done
+                    case "$c_name" in ""|-*) _db_err "usage" "k2 db cluster $c_op <name>"; exit 2 ;; esac
+                    _db_named_post "$(_compute_json K2_CJ_op="$c_op" K2_CJ_project="$(_compute_ws "")" K2_CJ_name="$c_name")" "$as_json" "pitr-$c_op" ;;
+                restore|restore-drill)
+                    c_name="${1:-}"; shift 2>/dev/null || true
+                    local c_to="" c_as=""
+                    while [ $# -gt 0 ]; do
+                        case "$1" in
+                            --json) as_json=true; shift ;;
+                            --to) _need_value "$@"; c_to="${2:-}"; shift 2 ;;
+                            --to=*) c_to="${1#*=}"; shift ;;
+                            --as) _need_value "$@"; c_as="${2:-}"; shift 2 ;;
+                            --as=*) c_as="${1#*=}"; shift ;;
+                            *) _db_err "usage" "unexpected '$1' — k2 db cluster restore <name> --to <time> --as <new-name> | k2 db cluster restore-drill <name> [--to <time>]"; exit 2 ;;
+                        esac
+                    done
+                    case "$c_name" in ""|-*) _db_err "usage" "k2 db cluster $c_op <name>"; exit 2 ;; esac
+                    if [ "$c_op" = restore ]; then
+                        [ -n "$c_to" ] && [ -n "$c_as" ] || { _db_err "usage" "k2 db cluster restore <name> --to <time> --as <new-name> (a new cluster beside the old one; never in place)"; exit 2; }
+                        _db_named_post "$(_compute_json K2_CJ_op=restore K2_CJ_project="$(_compute_ws "")" K2_CJ_name="$c_name" K2_CJ_to="$c_to" K2_CJ_as="$c_as")" "$as_json" pitr-restore
+                    else
+                        [ -z "$c_as" ] || { _db_err "usage" "restore-drill takes no --as (the drill cluster is <name>_drill, removed after)"; exit 2; }
+                        _db_named_post "$(_compute_json K2_CJ_op=restore-drill K2_CJ_project="$(_compute_ws "")" K2_CJ_name="$c_name" K2_CJ_to="$c_to")" "$as_json" pitr-drill
+                    fi ;;
+                drop-drill)
+                    c_name="${1:-}"; shift 2>/dev/null || true
+                    while [ $# -gt 0 ]; do
+                        case "$1" in
+                            --json) as_json=true; shift ;;
+                            --major) _need_value "$@"; c_major="${2:-}"; shift 2 ;;
+                            --major=*) c_major="${1#*=}"; shift ;;
+                            *) _db_err "usage" "unexpected '$1' — k2 db cluster drop-drill <name> [--major <M>]"; exit 2 ;;
+                        esac
+                    done
+                    case "$c_name" in ""|-*) _db_err "usage" "k2 db cluster drop-drill <name> [--major <M>]"; exit 2 ;; esac
+                    if [ -n "$c_major" ]; then case "$c_major" in [1-9][0-9]) ;; *) _db_err "usage" "--major takes a Postgres major (e.g. 17)"; exit 2 ;; esac; fi
+                    _db_named_post "$(_compute_json K2_CJ_op=drop-drill K2_CJ_project="$(_compute_ws "")" K2_CJ_name="$c_name" K2_CJ_major_n="$c_major")" "$as_json" pitr-drop ;;
+                *) _db_err "usage" "k2 db cluster create <major> --name <name> [--port <port>] [--wal-archive] | k2 db cluster restart <name> | k2 db cluster archive <name> on|off | k2 db cluster basebackup|backups <name> | k2 db cluster restore <name> --to <time> --as <new> | k2 db cluster restore-drill <name> [--to <time>] | k2 db cluster drop-drill <name>"; exit 2 ;;
             esac ;;
         default-major)
             local major="${1:-}"; shift || true

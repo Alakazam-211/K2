@@ -784,8 +784,9 @@ case "${1:-help}" in
             init|links|push|pairing|login|doctor|set|account-deletion|account-deletions|auth|recording|recordings)
                 shift; cmd_app "$@"
                 ;;
-            # 0.46.11: `k2 app db` (connect an App to a database) owns its --help.
-            db|database)
+            # 0.46.11: `k2 app db` (connect an App to a database) owns its --help;
+            # so does `k2 app cron` (the daemon calls the App on a schedule).
+            db|database|cron)
                 shift; cmd_app "$@"
                 ;;
             # The Supabase-compatible layer (lane A): `k2 app compat` and

@@ -265,6 +265,7 @@ cmd_app() {
         # The Supabase-compatible data layer (prd-app-supabase-compat-v1, lane A).
         compat) shift; cmd_app_compat "$@" ;;
         identity) shift; cmd_app_identity "$@" ;;
+        cron) shift; cmd_app_cron "$@" ;;
         box-service|box-services) shift; cmd_app_box_service "$@" ;;
         token|tokens)
             shift || true

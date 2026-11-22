@@ -53,6 +53,55 @@
       ]
     },
     {
+      "name": "db cluster basebackup",
+      "usage": "k2 db cluster basebackup <name> [--json]",
+      "description": "A base backup of an archiving, running named cluster K2 made, now, through the root helper (protocol 19): pg_basebackup as postgres into /var/lib/postgresql/k2-wal/<major>-<name>.base/<stamp> beside the WAL spool (where a backup ships from). The newest 7 stay. The daemon also takes one a day of every archiving named cluster, headless. The owner, or an agent with \"Let this agent manage Postgres versions\" for its own workspace's cluster (exit 3 otherwise).",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "db cluster backups",
+      "usage": "k2 db cluster backups <name> [--json]",
+      "description": "What a restore can use: the base backups on the box, the WAL spool (count, first, last, newest archived, a missing segment named), the window a restore can reach (restorableFrom, restorableTo, UTC), and K2's record of the last base backup and the last restore drill, with a warning when no good drill is newer than 30 days. Same rule as basebackup.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "{ok, cluster, onBox:{baseBackups, wal, restorableFrom, restorableTo}, recorded:{lastBasebackupAt, lastDrillAt, lastDrillOk, drillWarning}}."}
+      ]
+    },
+    {
+      "name": "db cluster restore",
+      "usage": "k2 db cluster restore <name> --to <time> --as <new-name> [--json]",
+      "description": "Restore a named cluster to a moment as a NEW cluster beside the old one (never in place), through the root helper (protocol 19): the newest base backup that ended by then, its WAL replayed from the spool to the moment, then promoted; K2 records it in this workspace. Refused before anything is made on a missing WAL segment, a moment later than the newest WAL in the spool, or no base backup by then; Postgres stopping before the moment fails loudly and leaves the cluster stopped (drop-drill removes it). The old cluster is unchanged. Owner, or an agent with the Postgres versions switch for its own cluster.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--to", "arg": "time", "description": "The moment: 2026-11-22T10:15:00Z, 2026-11-22 10:15 (UTC), 2026-11-22T12:15:00+02:00, or -15m / -2h / -1d (required)."},
+        {"name": "--as", "arg": "new-name", "description": "The new cluster's name: 2-24 of a-z, 0-9 and _, never one in use (required)."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "db cluster restore-drill",
+      "usage": "k2 db cluster restore-drill <name> [--to <time>] [--json]",
+      "description": "Prove a restore works: restore into the throwaway cluster <name>_drill, check it, remove it, record the result (k2 db cluster backups shows it; it warns after 30 days without a good one). Without --to: two marker rows in the source's postgres database around a moment, every table's row count at that moment, a restore to it; PASS needs the first marker present, the second absent and every count equal. With --to: a restore to that moment and the counts found. Takes a base backup first if there is none. Exit 1 on FAIL. Same rule as basebackup.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--to", "arg": "time", "description": "A moment in the past instead of now (same forms as restore)."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "db cluster drop-drill",
+      "usage": "k2 db cluster drop-drill <name> [--major <M>] [--json]",
+      "description": "Remove a cluster restore made as a drill, or one whose restore failed, through the root helper (protocol 19); the helper refuses any other cluster (not_drill). --major when K2 has no record of the name. Owner, or an agent for its own workspace's recorded cluster.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--major", "arg": "M", "description": "The Postgres major, when K2 has no record of the cluster."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
       "name": "db cluster restart",
       "usage": "k2 db cluster restart <name> [--json]",
       "description": "Restart one named cluster K2 made (a minor update, a drill), nothing else: its databases' connections drop and come back. The owner, or an agent with \"Let this agent manage Postgres versions\" for its own workspace's cluster.",

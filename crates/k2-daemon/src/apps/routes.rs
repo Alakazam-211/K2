@@ -124,6 +124,8 @@ pub fn is_route(p: &str) -> bool {
         // Supabase-compatible layer (lane A): k2 app compat|identity|user meta.
         || super::compat::routes::ROUTES.contains(&p)
         || super::user_import::ROUTES.contains(&p)
+        // App cron: k2 app cron add|list|rm|run-now|logs (cron.rs).
+        || super::cron::ROUTES.contains(&p)
         // 0.46.9: the suite App catalog and the one-click install.
         || super::catalog_routes::ROUTES.contains(&p)
         // 0.46.16: "Get this server ready for Apps" and the live sessions read.
@@ -166,6 +168,8 @@ pub fn is_post_route(p: &str) -> bool {
         || super::db_connect::POST_ROUTES.contains(&p)
         || super::compat::routes::POST_ROUTES.contains(&p)
         || super::user_import::ROUTES.contains(&p)
+        // App cron: k2 app cron add|rm|run-now (cron.rs).
+        || super::cron::POST_ROUTES.contains(&p)
         // 0.46.9: k2 app install --catalog, k2 app catalog retry.
         || super::catalog_routes::POST_ROUTES.contains(&p)
         || super::ready_offer::POST_ROUTES.contains(&p)
@@ -566,6 +570,8 @@ fn handle_inner(path: &str, who: Who, body: &[u8], params: &HashMap<String, Stri
         super::user_import::IMPORT => return super::user_import::handle(&who, body),
         // Supabase-compat lane D: buckets, ls, import, verify, the signing key.
         p if super::compat::storage_routes::ROUTES.contains(&p) => super::compat::storage_routes::handle(p, &who, body, params),
+        // App cron: the daemon calls the App's route on a schedule (cron.rs).
+        p if super::cron::ROUTES.contains(&p) => super::cron::handle(p, &who, body, params),
         // 0.46.9: the suite App catalog and the one-click install job
         // (catalog_routes.rs, catalog_job.rs).
         p if super::catalog_routes::ROUTES.contains(&p) => super::catalog_routes::handle(p, &who, body, params),

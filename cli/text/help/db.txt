@@ -19,6 +19,20 @@ OWNER (engine — server-side owner/admin gate; agents exit 3)
                                  protocol 18), then a restart if it runs. off removes the
                                  archive setting only: the spool and the WAL already in it
                                  stay for the backup to ship and prune. Same rule
+  cluster basebackup <name>      a base backup of an archiving named cluster now, beside
+                                 its WAL spool (the daemon takes one a day; the newest 7
+                                 stay). Root helper protocol 19. Same rule
+  cluster backups <name>         base backups, the WAL spool, the window a restore can
+                                 reach, the last backup and drill (warns after 30 days)
+  cluster restore <name> --to <time> --as <new>
+                                 a NEW cluster beside the old one, replayed to that moment
+                                 (never in place). Times: 2026-11-22T10:15:00Z, 2026-11-22
+                                 10:15 (UTC), +02:00 offsets, -15m / -2h / -1d. Refused on a
+                                 WAL gap or a time after the newest WAL
+  cluster restore-drill <name> [--to <time>]
+                                 restore into <name>_drill, check it (markers around the
+                                 moment and every table's rows), remove it, record it
+  cluster drop-drill <name>      remove a drill or a failed restore (only those)
   default-major <M> [--json]     owner: the major new databases go on (new boxes: 17;
                                  existing boxes keep their current major until set)
   enable [--json]                catalog + start unit if baked (--bake --with-db)

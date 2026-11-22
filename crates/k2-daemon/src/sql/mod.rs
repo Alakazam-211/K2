@@ -13,6 +13,7 @@ pub mod ops;
 pub mod compat_ops;
 pub mod paths;
 pub mod pgmove;
+pub mod pitr;
 pub mod query;
 pub mod routes;
 pub mod secrets;

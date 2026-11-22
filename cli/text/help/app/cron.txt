@@ -1,0 +1,28 @@
+k2 app cron — the daemon calls an App's own route on a schedule
+
+  k2 app cron add <app-id> "<min hour day month weekday>" --path /api/cron/x
+        [--method GET|POST] [--missed skip|once] [--timeout 5m] [--json]
+      Box time (like k2 job --cron). Each call goes to the App's own port on
+      this box (not its public URL) with Authorization: Bearer $CRON_SECRET.
+      CRON_SECRET is the secret the App already gets under that name, else
+      one K2 makes in the vault and grants to the App (a running App is
+      re-hosted so it sees it). Never printed. The App checks the header.
+      --missed  a slot missed while the daemon was down: skip (default) or
+                once (one catch-up run, if the slot is under 12 h old)
+      --timeout how long one call may take (default 5m, at most 1h)
+  k2 app cron list <app-id> [--json]
+      Each cron: id, schedule, method, path, next slot, last run, failures
+      in a row.
+  k2 app cron run-now <app-id> <cron-id> [--json]
+      One call now (exit 1 when it fails). Refused while a run of it is still
+      going (cron_running, exit 3).
+  k2 app cron logs <app-id> [<cron-id>] [--limit N] [--json]
+      Every run and skip: ok, failed, timeout, not_running, skipped_overlap,
+      skipped_missed, interrupted; HTTP status, time, a short detail.
+  k2 app cron rm <app-id> <cron-id>
+      CRON_SECRET stays granted to the App.
+
+  Runs headless: no K2 window needs to be open. While a run is still going,
+  the next slot is skipped (skipped_overlap). Three failures in a row tell
+  the App's workspace once. Agents need "Build and run Apps" for add, rm
+  and run-now. More: k2 study app-cron

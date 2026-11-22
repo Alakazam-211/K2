@@ -21,6 +21,7 @@ app-catalog.sh
 app-db.sh
 app-compat.sh
 app-storage.sh
+app-cron.sh
 app-box.sh
 app-grace.sh
 app-sdk.sh

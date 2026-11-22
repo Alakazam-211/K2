@@ -833,7 +833,7 @@ fn mail_reader_help_never_acts() {
 }
 
 /// The owner verbs that moved to `hostmail`: the moved-verb line, exit
-/// 2, nothing sent, whatever follows.
+/// 2, nothing sent, whatever follows (but `create`'s help).
 #[test]
 fn mail_retired_verbs_say_where_they_went() {
     let rig = Rig::new(VERB, "retired");
@@ -882,6 +882,30 @@ fn mail_retired_verbs_say_where_they_went() {
         usage_case("allowlist", &["allowlist", "add", "x"]),
         // native: mail audit-sieve
         usage_case("audit-sieve", &["audit-sieve"]),
+        // Since 0.46.17 `create`'s help is `hostmail create`'s page, not
+        // the moved line.
+        // native: mail create --help
+        case(
+            "create --help: hostmail create's help",
+            &["create", "--help"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        ),
+        compare(
+            Compare::Shell,
+            case(
+                "create, a name, then -h: the help",
+                &["create", "bot", "-h"],
+                &[],
+                vec![],
+                owner_and_port,
+                0,
+                0,
+            ),
+        ),
         case(
             "a retired verb in a session with no passport",
             &["create", "bot"],

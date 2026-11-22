@@ -182,7 +182,11 @@ fn the_mute_help_lines_print_the_help() {
             &["email", "mute", "acme", "-h"],
             0,
         )),
-        shell(stop("email unmute --help", &["email", "unmute", "--help"], 0)),
+        shell(stop(
+            "email unmute --help",
+            &["email", "unmute", "--help"],
+            0,
+        )),
         case(
             "email mute --help, the virtual desktop's switch: the help",
             &["email", "mute", "--help"],

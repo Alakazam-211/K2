@@ -561,11 +561,7 @@ fn notifications_answer_as_the_shell_does() {
         ),
         run("no answer", &["email"], vec![Reply::Close], 3),
         // Help never acts (0.46.17): bash prints the help, no request.
-        shell(stop(
-            "-h: the help",
-            &["email", "relay", "add", "-h"],
-            0,
-        )),
+        shell(stop("-h: the help", &["email", "relay", "add", "-h"], 0)),
     ];
     for c in v {
         rig.check(&c);

@@ -106,8 +106,7 @@ import {
 import { isNewUntitledFile, saveNewUntitledFile, untitledNamesInUse } from '@/lib/untitled-file'
 import { leaveWrite } from '@/lib/editor/save-model/write'
 import { PRODUCT_NAME } from '@/lib/brand'
-export { getFileCategory, getDefaultViewMode } from './fileCategory'
-export type { FileCategory, ViewMode } from './fileCategory'
+export { getFileCategory, getDefaultViewMode, type FileCategory, type ViewMode } from './fileCategory'
 
 /** True if the current document selection overlaps `container` and
  *  has non-empty text. Used to suppress the markdown-preview

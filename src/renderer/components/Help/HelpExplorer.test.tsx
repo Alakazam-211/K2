@@ -166,9 +166,14 @@ describe('the rail lists the CLI tools and the pages', () => {
     expect(within(hooks).queryByText('k2 help hooks')).toBeNull()
     fireEvent.click(within(hooks).getByRole('button', { expanded: false }))
     expect(within(hooks).getByText(/k2 hooks status/)).toBeTruthy()
-    // onboarding's --help is not captured (it does not print without a daemon): point at k2 help.
+    // onboarding's --help prints without a daemon now too.
     const onboarding = screen.getByTestId('help-noun-k2:onboarding')
-    expect(within(onboarding).getByText('k2 help onboarding')).toBeTruthy()
+    expect(within(onboarding).queryByText('k2 help onboarding')).toBeNull()
+    fireEvent.click(within(onboarding).getByRole('button', { expanded: false }))
+    expect(within(onboarding).getByText(/k2 onboarding scan/)).toBeTruthy()
+    // commit's --help is not captured (it does not print without a daemon): point at k2 help.
+    const commit = screen.getByTestId('help-noun-k2:commit')
+    expect(within(commit).getByText('k2 help commit')).toBeTruthy()
   })
 
   it('k2 study lists the pages and opens one', () => {

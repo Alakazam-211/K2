@@ -192,6 +192,16 @@ mod tests {
     /// only by `k2 vault run` (which runs in a terminal's session, not under
     /// the daemon). And no `process_group(0)` (it would make the session
     /// impossible: a group leader can't `setsid`).
+    ///
+    /// Every spawn path of the daemon and k2-core is one of:
+    /// - `bg_proc::command` / `tokio_command` (own session, tested above;
+    ///   `no_raw_command_new_outside_bg_proc` keeps every `Command::new`
+    ///   here);
+    /// - a terminal's pty (the pty makes its child a session leader);
+    /// - the separate `k2-vmm-worker` binary's own fork/exec (the worker
+    ///   is a sandboxed terminal's program, started on that terminal's pty,
+    ///   so already outside the daemon's session).
+    /// A raw `fork` / `exec*` / `posix_spawn` anywhere else fails here.
     #[test]
     fn no_daemon_spawn_keeps_the_daemons_session() {
         let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
@@ -200,23 +210,29 @@ mod tests {
             rs_files(&crates.join(r), &mut files);
         }
         assert!(files.len() > 300, "the scan found the sources ({} files)", files.len());
-        let (mut keeping, mut groups) = (Vec::new(), Vec::new());
+        let (mut keeping, mut groups, mut raw) = (Vec::new(), Vec::new(), Vec::new());
+        let raw_spawns = [concat!("libc::", "fork("), concat!("libc::", "vfork("), concat!("libc::", "execv"), concat!("libc::", "execl"), concat!("posix", "_spawn"), concat!("nix::unistd::", "fork")];
         for f in &files {
             if is_test_file(f) || f.ends_with("bg_proc.rs") {
                 continue;
             }
             let src = std::fs::read_to_string(f).unwrap();
+            let rel = f.display().to_string().replace('\\', "/");
             for (n, line) in non_test_lines(f, &src) {
                 let code = line.split("//").next().unwrap_or("");
-                let at = format!("{}:{n}", f.display()).replace('\\', "/");
+                let at = format!("{rel}:{n}");
                 if code.contains(concat!("command_keeping", "_session(")) {
                     keeping.push(at.clone());
                 }
                 if code.contains(concat!(".process", "_group(")) {
-                    groups.push(at);
+                    groups.push(at.clone());
+                }
+                if raw_spawns.iter().any(|r| code.contains(r)) && !rel.contains("k2-daemon/src/bin/k2-vmm-worker.rs") {
+                    raw.push(at);
                 }
             }
         }
+        assert!(raw.is_empty(), "a raw fork/exec outside bg_proc (it would keep the daemon's session): {raw:?}");
         assert_eq!(keeping.len(), 1, "spawns that keep the daemon's session: {keeping:?}");
         assert!(keeping[0].contains("k2-daemon/src/vault/run.rs:"), "{keeping:?}");
         assert!(groups.iter().all(|g| g.contains("k2-daemon/src/vault/run.rs:")), "process_group outside k2 vault run: {groups:?}");

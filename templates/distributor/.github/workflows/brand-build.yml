@@ -12,9 +12,10 @@
 #          shipped/<K5 tag>. Runs only the driver and your hooks. Put it
 #          behind the protected environment "release".
 #
-# Before you use it: pin every action to a full commit sha (the ones K5
-# pins are pinned already), and give the "release" environment required
-# reviewers if you want a person to approve each release.
+# Every action is pinned to a full commit sha, its version in a comment.
+# Move a pin only to the sha of the action's own release tag. Give the
+# "release" environment required reviewers if a person should approve
+# each release.
 name: brand-build
 
 on:
@@ -137,7 +138,7 @@ jobs:
           fetch-depth: 0
 
       - name: Get the build's output
-        uses: actions/download-artifact@v4 # pin to a full commit sha
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: brand-build
           path: out

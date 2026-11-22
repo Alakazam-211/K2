@@ -47,6 +47,20 @@ the package indexes. Run it on your brand before you settle on the names:
 The pipeline runs it again on every build, against the tag it builds: a
 name that was free can start to collide later.
 
+**Ask us to check and reserve your names before your first build.** Each
+distributor's brand file lives in its own private repo, so the public lint
+can't see another distributor's names. We keep a private list of the
+brands we have reserved (command, product and id) and check new names
+against it (`brand.sh lint <folder> --registry <our list>`). Send us your
+command, product name and brand id; we check them, reserve them, and tell
+you they are yours. Two distributors can then never ship the same command
+or product name.
+
+If two brands' programs ever meet on one machine anyway (one brand's
+command run in a session of another brand's server), the CLI prints a
+warning line naming both. That warning is the safety net on one machine;
+the reservation is what keeps it from happening.
+
 ## How a build starts
 
 **In step with K5.** Every K5 release is a tag in K5's public repo

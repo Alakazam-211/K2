@@ -55,6 +55,12 @@ else
 fi
 ok
 
+# Every action is pinned to a full commit sha, with its version beside it.
+unpinned="$(grep -E '^[[:space:]]*-?[[:space:]]*uses:' "$WF" | grep -vE 'uses: [A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[0-9a-f]{40} # v[0-9]+(\.[0-9]+)*$' || true)"
+[ -z "$unpinned" ] || die "an action not pinned to a commit sha with its version: $unpinned"
+[ "$(grep -cE 'uses:' "$WF")" -ge 5 ] || die "the workflow's actions were not all seen"
+ok
+
 # Signing and feed secrets live only in the ship job, and every secret the
 # workflow names is in the README's table.
 build_part="$(sed -n '/^  build:/,/^  ship:/p' "$WF")"

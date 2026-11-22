@@ -190,18 +190,22 @@ impl Drop for Rig {
 
 /// Lines that each make one request to the daemon when the shell answers
 /// them, with that request's path. The counted tests use the first one
-/// the front still hands to the shell ([`shell_line`]), so a lane that
-/// makes one native moves the pick on by itself.
-const CANDIDATES: &[(&[&str], &str)] = &[
-    (&["heartbeat", "list", "--json"], "/cli/heartbeat/list"),
-    (&["publish", "ps", "--json"], "/cli/publish/list"),
-    (&["release", "--agent", "ada"], "/cli/release"),
-    (&["reserve", "--agent", "ada", "src"], "/cli/reserve"),
-    // `setup agent-reports` is native now; the agent hire reads are still
-    // the shell's: one GET each through cli_request.
-    (&["agent", "team", "--json"], "/cli/agent-teams/links"),
-    (&["agent", "hire-root", "--json"], "/cli/agents/hire-root"),
-];
+/// the binary still hands to the shell ([`shell_line`]); it fails loudly
+/// when none is left.
+///
+/// No census form falls through any more (the native bar's ceiling holds
+/// help forms only), so this is a RUN-TIME hand-off: `msg` is native, but
+/// its send parser gives a `--signal` line with a bare `--` in it back to
+/// the shell (`families::msg::send`, `Parsed::Shell`). The shell sends
+/// that signal once: `cmd_msg_v2` sees `--signal` before the `--`,
+/// `cmd_msg_signal_form` skips the words it doesn't know, and `cmd_signal`
+/// makes its one `cli_send` POST to `/cli/awareness/publish`. If a lane
+/// makes that line native, these tests fail here: name another line the
+/// binary hands back at run time that makes exactly one request.
+const CANDIDATES: &[(&[&str], &str)] = &[(
+    &["msg", "acme", "--signal", "presence", "--", "hi"],
+    "/cli/awareness/publish",
+)];
 
 /// The hand-off's line when there is no `python3`
 /// ([`k5_cli::fallthrough::FrontError::NoPython`]).

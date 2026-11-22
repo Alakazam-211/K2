@@ -84,6 +84,10 @@ pub struct State {
     pub failed: usize,
     pub bytes_copied: u64,
     pub errors: Vec<String>,
+    /// The disk guard stopped the run (status `stopped_disk_low`); a rerun
+    /// once there is room carries on where it stopped.
+    #[serde(default)]
+    pub disk_low: bool,
 }
 
 /// One ledger line: an object copied and checked.
@@ -309,9 +313,22 @@ async fn fetch(c: &reqwest::Client, src: &Source, o: &SrcObject, part: &PathBuf)
             .await
             .map_err(|e| StorageError::internal(format!("partial file: {e}")))?;
         let mut cut = false;
+        let mut wrote = 0u64;
         loop {
             match resp.chunk().await {
-                Ok(Some(b)) => f.write_all(&b).await.map_err(|e| StorageError::internal(format!("partial file: {e}")))?,
+                Ok(Some(b)) => {
+                    f.write_all(&b).await.map_err(|e| StorageError::internal(format!("partial file: {e}")))?;
+                    let before = wrote;
+                    wrote += b.len() as u64;
+                    // An object bigger than its listing said, or a disk
+                    // filling from elsewhere: ask the guard again as it grows.
+                    if before / SPACE_EVERY != wrote / SPACE_EVERY {
+                        if let Err(fd) = k2_core::disk_guard::reserve_ok(part, 0) {
+                            f.flush().await.map_err(|e| StorageError::internal(format!("partial file: {e}")))?;
+                            return Err(disk_low(&k2_core::disk_guard::upload_refusal_text(&fd)));
+                        }
+                    }
+                }
                 Ok(None) => break,
                 Err(e) => {
                     last = format!("transfer cut: {e}");
@@ -330,6 +347,17 @@ async fn fetch(c: &reqwest::Client, src: &Source, o: &SrcObject, part: &PathBuf)
     Err(StorageError::unavailable(format!("{}/{}: {last}", o.bucket, o.name)))
 }
 
+/// How often a download asks the disk guard again.
+const SPACE_EVERY: u64 = 16 << 20;
+
+/// The import's disk-guard refusal: it stops the run (the partial file
+/// stays, so a rerun resumes).
+pub const DISK_LOW: &str = "InsufficientStorage";
+
+fn disk_low(why: &str) -> StorageError {
+    StorageError::new(507, DISK_LOW, "insufficient_storage", format!("the import stopped: {why}")).with_http(400)
+}
+
 /// The partial file for one object (named from a hash of its path).
 fn part_path(app_id: &str, o: &SrcObject) -> PathBuf {
     use sha2::{Digest, Sha256};
@@ -342,6 +370,11 @@ async fn copy_one(c: &reqwest::Client, src: &Source, ctx: &Ctx, o: &SrcObject) -
     let part = part_path(&ctx.app_id, o);
     if let Some(d) = part.parent() {
         tokio::fs::create_dir_all(d).await.map_err(|e| StorageError::internal(format!("import folder: {e}")))?;
+    }
+    // The disk guard's line for bulk writes (as a deploy): the refuse
+    // line or the reserve, whichever this object would cross first.
+    if let k2_core::disk_guard::Verdict::Refuse(f) = k2_core::disk_guard::check(&[part.clone()], o.size().unwrap_or(0)) {
+        return Err(disk_low(&f.sentence("import")));
     }
     fetch(c, src, o, &part).await?;
     let p2 = part.clone();
@@ -418,6 +451,7 @@ pub async fn run(ctx: Ctx, src: Source, opts: Opts) -> SResult<State> {
     let mut s = state.lock().unwrap_or_else(|e| e.into_inner()).clone();
     s.finished_at = Some(k2_core::deploy::now());
     match r {
+        Ok(()) if s.disk_low => s.status = "stopped_disk_low".into(),
         Ok(()) => s.status = if s.failed == 0 { "done".into() } else { "done_with_failures".into() },
         Err(e) => {
             s.status = "failed".into();
@@ -445,6 +479,14 @@ async fn run_inner(ctx: &Ctx, src: &Source, opts: &Opts, state: &Arc<Mutex<State
         objects.extend(src_objects(&c, src, id).await?);
     }
     let ledger = read_ledger(&ctx.app_id);
+    // What the App's database names now: a ledger line counts only while
+    // its row still names those bytes (a database restored to an earlier
+    // moment may not).
+    let rows: std::collections::HashSet<(String, String, String, String)> = ops::all_objects(ctx)
+        .await?
+        .into_iter()
+        .filter_map(|(b, n, id, v, _)| v.map(|v| (b, n, id, v)))
+        .collect();
     {
         let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
         s.buckets = buckets.len();
@@ -460,13 +502,21 @@ async fn run_inner(ctx: &Ctx, src: &Source, opts: &Opts, state: &Arc<Mutex<State
             .map_err(|e| StorageError::internal(format!("import ledger: {e}")))?,
     ));
     let n = opts.concurrency.clamp(1, 32);
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
     futures_util::stream::iter(objects)
         .for_each_concurrent(n, |o| {
-            let (c, ledger_file, state) = (c.clone(), ledger_file.clone(), state.clone());
+            let (c, ledger_file, state, stop) = (c.clone(), ledger_file.clone(), state.clone(), stop.clone());
             let prev = ledger.get(&(o.bucket.clone(), o.name.clone())).cloned();
             async move {
+                if stop.load(std::sync::atomic::Ordering::SeqCst) {
+                    return;
+                }
                 let same = prev.as_ref().is_some_and(|d| {
-                    d.src_etag == o.etag() && d.src_updated_at == o.updated_at && o.size().is_none_or(|s| s == d.size) && ctx.bytes.has(&d.id, &d.version)
+                    d.src_etag == o.etag()
+                        && d.src_updated_at == o.updated_at
+                        && o.size().is_none_or(|s| s == d.size)
+                        && ctx.bytes.has(&d.id, &d.version)
+                        && rows.contains(&(d.bucket.clone(), d.name.clone(), d.id.clone(), d.version.clone()))
                 });
                 if same {
                     state.lock().unwrap_or_else(|e| e.into_inner()).skipped += 1;
@@ -489,6 +539,14 @@ async fn run_inner(ctx: &Ctx, src: &Source, opts: &Opts, state: &Arc<Mutex<State
                             }
                         }
                         let _ = std::fs::remove_file(part_path(&ctx.app_id, &o));
+                    }
+                    Err(e) if e.code == DISK_LOW => {
+                        // The disk guard: stop every copy, say so once.
+                        if !stop.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                            let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+                            s.disk_low = true;
+                            push_err(&mut s, e.message);
+                        }
                     }
                     Err(e) => {
                         // A copy that failed its check starts clean next time.
@@ -526,6 +584,10 @@ pub struct Verify {
     pub bad: Vec<String>,
     /// Objects at the source not in the App (when a source was given).
     pub missing: Vec<String>,
+    /// Bytes on disk no row names (`<id>/<version>`): after the database is
+    /// restored to an earlier moment, or a write that never committed.
+    /// Named, never removed by verify.
+    pub orphans: Vec<String>,
 }
 
 /// Re-hash every imported object's bytes against the ledger, check every
@@ -535,6 +597,11 @@ pub async fn verify(ctx: &Ctx, src: Option<&Source>) -> SResult<Verify> {
     let rows = ops::all_objects(ctx).await?;
     let mut v = Verify::default();
     let mut here = std::collections::HashSet::new();
+    let named: std::collections::HashSet<(String, String)> =
+        rows.iter().filter_map(|(_, _, id, version, _)| version.clone().map(|v| (id.clone(), v))).collect();
+    let bytes = ctx.bytes.clone();
+    let on_disk = tokio::task::spawn_blocking(move || bytes.all_bytes()).await.map_err(|e| StorageError::internal(format!("walk worker: {e}")))?;
+    v.orphans = on_disk.into_iter().filter(|k| !named.contains(k)).map(|(i, ver)| format!("{i}/{ver}")).collect();
     for (bucket, name, id, version, _size) in rows {
         here.insert((bucket.clone(), name.clone()));
         v.checked += 1;

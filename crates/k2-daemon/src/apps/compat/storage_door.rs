@@ -1001,6 +1001,9 @@ async fn upload_body<R: AsyncRead + Unpin>(
     ops::must_key(name)?;
     let ct = req.h("content-type").unwrap_or("").to_string();
     let limit = b.limit();
+    // The disk guard first, on the declared size (a multipart body's is an
+    // upper bound); `stage` asks again as the bytes arrive.
+    ctx.bytes.space_ok(req.content_length().unwrap_or(0))?;
     let mut raw = Body::new(body, req);
     if ct.to_ascii_lowercase().starts_with("multipart/form-data") {
         let bnd = boundary(&ct).ok_or_else(|| StorageError::invalid_request("multipart body without a boundary"))?;

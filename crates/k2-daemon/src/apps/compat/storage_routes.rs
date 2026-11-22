@@ -246,6 +246,7 @@ fn verify(who: &Who, body: &[u8]) -> R<J> {
         _ => return Err(no("bad_request", 400, "--from and --key-secret go together")),
     };
     let r = block(async move { storage_import::verify(&ctx, src.as_ref()).await }).map_err(refuse)?;
+    // Orphan bytes are named but don't make it unclean: no row reaches them.
     let clean = r.bad.is_empty() && r.missing.is_empty();
     Ok(json!({ "app": row.app_id, "clean": clean, "verify": r }))
 }

@@ -76,7 +76,25 @@ PUBLIC BUCKETS
 LIMITS
   Per bucket: a file size limit (50 MiB unless set, at most 5 GiB) and an
   optional list of types (image/* style). Uploads stream to disk; nothing is
-  held in memory.
+  held in memory. The disk guard holds as for every K2 upload: an upload
+  that would cross the box's reserve is refused (statusCode 507,
+  InsufficientStorage, in Supabase's shape), checked again as the bytes
+  arrive. The import stops at the refuse line (status stopped_disk_low)
+  and carries on when run again.
+
+WHERE THE BYTES LIVE (backups and restore)
+  ~/.k2/apps/<app-id>/storage/objects/<id[0..2]>/<id>/<version>
+  The rows (storage.buckets, storage.objects) are in the App's database;
+  the bytes are files named by the object's id and the version of its last
+  write, never by its name. A row's version names its file. The folder is
+  the daemon's, outside the App's wall: the App's own code can't reach the
+  bytes except through the door.
+  Also under storage/: tmp/ (uploads in flight) and import/ (the import's
+  ledger and partial downloads); neither needs a backup.
+  Back up and restore the bytes with the database, to the same moment.
+  After a restore k2 app storage verify names every row whose bytes are
+  missing, and every file no row names (kept, never deleted by verify); a
+  storage import run again copies the missing ones back.
 
 MOVING FROM SUPABASE
   1. k2 db import supabase <dump> --db <db>   the rows, with the storage

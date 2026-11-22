@@ -27,6 +27,9 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 
 use super::storage_err::{SResult, StorageError};
 
+/// How often a streaming write asks the disk guard again.
+const SPACE_EVERY: u64 = 16 << 20;
+
 /// One App's byte store.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ByteStore {
@@ -94,6 +97,7 @@ impl ByteStore {
     pub async fn stage<R: AsyncRead + Unpin>(&self, body: &mut R, limit: u64) -> SResult<Staged> {
         let dir = self.tmp_dir();
         tokio::fs::create_dir_all(&dir).await.map_err(|e| StorageError::internal(format!("storage folder: {e}")))?;
+        self.space_ok(0)?;
         let path = dir.join(format!("{}.part", uuid::Uuid::new_v4()));
         let mut staged = Staged { path: path.clone(), size: 0, md5_hex: String::new(), sha256_hex: String::new(), placed: false };
         let mut f = tokio::fs::File::create(&path).await.map_err(|e| StorageError::internal(format!("storage temp file: {e}")))?;
@@ -104,9 +108,15 @@ impl ByteStore {
             if n == 0 {
                 break;
             }
+            let before = staged.size;
             staged.size += n as u64;
             if staged.size > limit {
                 return Err(StorageError::too_large(limit));
+            }
+            // The disk guard again every SPACE_EVERY bytes: a long upload
+            // whose size wasn't declared stops at the reserve too.
+            if before / SPACE_EVERY != staged.size / SPACE_EVERY {
+                self.space_ok(0)?;
             }
             md5.update(&buf[..n]);
             sha.update(&buf[..n]);
@@ -117,6 +127,36 @@ impl ByteStore {
         staged.md5_hex = hex(&md5.finalize());
         staged.sha256_hex = hex(&sha.finalize());
         Ok(staged)
+    }
+
+    /// The disk guard's upload rule (`disk_guard::reserve_ok`, PRD C6, as
+    /// every K2 upload): refused when writing `need` more bytes would leave
+    /// less than the box's reserve. Mode `warn` or `off` never refuses.
+    pub fn space_ok(&self, need: u64) -> SResult<()> {
+        k2_core::disk_guard::reserve_ok(&self.root, need).map_err(|_| StorageError::no_space())
+    }
+
+    /// Every `(id, version)` that has bytes on disk (verify's orphan
+    /// check: bytes no row names, as after a database restore to an
+    /// earlier moment).
+    pub fn all_bytes(&self) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        let Ok(shards) = std::fs::read_dir(self.root.join("objects")) else { return out };
+        for shard in shards.flatten() {
+            let Ok(ids) = std::fs::read_dir(shard.path()) else { continue };
+            for id in ids.flatten() {
+                let Ok(versions) = std::fs::read_dir(id.path()) else { continue };
+                for v in versions.flatten() {
+                    if let (Some(i), Some(ver)) = (id.file_name().to_str(), v.file_name().to_str()) {
+                        if self.object_path(i, ver).is_some() {
+                            out.push((i.to_string(), ver.to_string()));
+                        }
+                    }
+                }
+            }
+        }
+        out.sort();
+        out
     }
 
     /// Move staged bytes to `(id, version)`.
@@ -232,6 +272,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_full_disk_stops_an_upload_at_the_reserve() {
+        use k2_core::disk_guard::{fake, Mode, RawStat};
+        let (_d, s) = store();
+        std::fs::create_dir_all(&s.root).expect("root");
+        // 100 GiB with nothing free: under any reserve.
+        let _disk = fake::install(&s.root, "9:77", "/", RawStat::sized(100 << 30, 0), Some(Mode::On));
+        let mut body: &[u8] = b"bytes";
+        let e = s.stage(&mut body, 100).await.expect_err("a full disk");
+        assert_eq!(e.code, "InsufficientStorage");
+        assert_eq!(e.body()["statusCode"], "507");
+        let left: Vec<_> = std::fs::read_dir(s.tmp_dir()).expect("tmp").collect();
+        assert!(left.is_empty(), "nothing is left behind: {left:?}");
+        assert_eq!(s.space_ok(1).expect_err("declared size").code, "InsufficientStorage");
+        // Mode warn never refuses an upload.
+        _disk.set_mode(Some(Mode::Warn));
+        let mut body: &[u8] = b"bytes";
+        s.stage(&mut body, 100).await.expect("mode warn");
+    }
+
+    #[tokio::test]
     async fn place_copy_remove() {
         const V1: &str = "0b7d4d0e-9a2c-4b8f-8e7d-9a106f1c4a52";
         let (_d, s) = store();
@@ -245,8 +305,10 @@ mod tests {
         let c = s.stage_copy(id, V1).expect("copy");
         assert_eq!(c.size, 5);
         assert_eq!(std::fs::read(&c.path).expect("read copy"), b"bytes");
+        assert_eq!(s.all_bytes(), vec![(id.to_string(), V1.to_string())]);
         s.remove(id, V1);
         assert!(!s.has(id, V1));
+        assert!(s.all_bytes().is_empty());
         assert!(!p.parent().expect("dir").exists(), "the empty object folder goes too");
         assert_eq!(s.stage_copy(id, V1).expect_err("gone").code, "NoSuchKey");
     }

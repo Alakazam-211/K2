@@ -166,12 +166,12 @@
     {
       "name": "app storage verify",
       "usage": "k2 app storage verify <app-id> [--from <url> --key-secret <name>] [--json]",
-      "description": "Re-hash every object's bytes against what the import recorded and check every row has its bytes; with --from, also list objects at the source that aren't here. Exit 0 clean, 1 not. POST /cli/app/storage/verify.",
+      "description": "Re-hash every object's bytes against what the import recorded and check every row has its bytes; list bytes no row names (orphans, kept: after a database restore to an earlier moment); with --from, also list objects at the source that aren't here. Exit 0 clean, 1 not (orphans alone stay clean). POST /cli/app/storage/verify.",
       "args": [{"name": "app-id", "required": true}],
       "flags": [
         {"name": "--from", "arg": "URL", "description": "The source project, to list what is missing here."},
         {"name": "--key-secret", "arg": "NAME", "description": "With --from: its service-role key's vault secret."},
-        {"name": "--json", "arg": null, "description": "{app, clean, verify:{checked, ok, bad[], missing[]}}."}
+        {"name": "--json", "arg": null, "description": "{app, clean, verify:{checked, ok, bad[], missing[], orphans[]}}."}
       ]
     },
     {

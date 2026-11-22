@@ -32,8 +32,10 @@ k2 app storage: an App's Supabase-compatible file storage (/storage/v1 on the Ap
   k2 app storage import-status <app-id> [--json]
   k2 app storage verify <app-id> [--from <url> --key-secret <name>] [--json]
       Re-hash every object's bytes against what the import recorded, check
-      every row has its bytes, and (with --from) that nothing at the source
-      is missing here. Exit 1 when anything is off.
+      every row has its bytes, list bytes no row names (after a database
+      restore to an earlier moment), and (with --from) that nothing at the
+      source is missing here. Exit 1 when a row lacks its bytes or a hash
+      is off.
   k2 app storage key rotate <app-id> --yes [--json]
       A new signing key: every signed URL handed out before stops at once.
 
@@ -117,6 +119,8 @@ elif "verify" in v:
         print("  bad: %s" % b)
     for m in r.get("missing") or []:
         print("  missing here: %s" % m)
+    for o in r.get("orphans") or []:
+        print("  bytes no row names (kept): %s" % o)
 else:
     for k in ("warning", "note"):
         if v.get(k):

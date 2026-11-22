@@ -107,6 +107,13 @@ impl StorageError {
     pub fn internal(msg: impl Into<String>) -> Self {
         Self::new(500, "InternalError", "internal", msg)
     }
+    /// The disk guard said no: the write would cross the box's reserve.
+    /// Supabase has no full-store answer of its own; this is its shape
+    /// (HTTP 400, the status in the body), with WebDAV's 507. The message
+    /// names nobody and no numbers (the disk guard's rule for App guests).
+    pub fn no_space() -> Self {
+        Self::new(507, "InsufficientStorage", "insufficient_storage", k2_core::disk_guard::GUEST_NO_SPACE).with_http(400)
+    }
     /// The door isn't on for this App, or its database can't be reached.
     pub fn unavailable(msg: impl Into<String>) -> Self {
         Self::new(503, "DatabaseError", "unavailable", msg)
@@ -161,6 +168,15 @@ mod tests {
             e.body(),
             json!({"statusCode": "409", "code": "KeyAlreadyExists", "error": "Duplicate", "message": "The resource already exists"})
         );
+    }
+
+    #[test]
+    fn a_full_store_is_supabases_shape() {
+        let e = StorageError::no_space();
+        assert_eq!(e.http_status(), 400);
+        assert_eq!(e.body()["statusCode"], "507");
+        assert_eq!(e.body()["code"], "InsufficientStorage");
+        assert!(!e.message.chars().any(|c| c.is_ascii_digit()), "no numbers for a guest: {}", e.message);
     }
 
     #[test]

@@ -462,6 +462,18 @@ async fn real_pg_storage_door() {
     let (st, _, body) = call(app, req("GET", "/render/image/authenticated/photos/x.png", Some("test-a"), &[], b"")).await;
     assert_eq!((st, j(&body)["error"].clone()), (400, json!("k2_unsupported")));
 
+    // ── the disk guard: an upload stops at the reserve ──
+    {
+        use k2_core::disk_guard::{fake, Mode, RawStat};
+        let root = super::storage_bytes::ByteStore::for_app(app).root;
+        let disk = fake::install(&root, "9:79", "/", RawStat::sized(100 << 30, 0), Some(Mode::On));
+        let (st, _, body) = call(app, req("POST", &format!("/object/photos/{ORG1}/full.jpg"), Some("test-a"), &[("Content-Type", "image/jpeg")], b"no room")).await;
+        assert_eq!((st, j(&body)["statusCode"].clone(), j(&body)["code"].clone()), (400, json!("507"), json!("InsufficientStorage")), "a full store");
+        drop(disk);
+        let (st, _, body) = call(app, req("POST", &format!("/object/photos/{ORG1}/full.jpg"), Some("test-a"), &[("Content-Type", "image/jpeg")], b"room now")).await;
+        assert_eq!(st, 200, "with room again: {}", String::from_utf8_lossy(&body));
+    }
+
     // ── a JWT-shaped token whose claims K2 didn't write ──
     {
         use base64::Engine as _;
@@ -768,6 +780,34 @@ async fn real_pg_storage_import() {
     std::fs::write(ctx.bytes.object_path(&id, version.as_deref().unwrap()).unwrap(), b"tampered").expect("tamper");
     let v = imp::verify(&ctx, None).await.expect("verify");
     assert_eq!(v.bad, vec![format!("{b}/{n}: bytes don't match the copy's hash")]);
+
+    // A database restored to an earlier moment: a row whose bytes are gone,
+    // and bytes no row names. verify names both; a rerun repairs them.
+    let rows = super::storage_ops::all_objects(&ctx).await.expect("rows");
+    let gone = rows.iter().find(|r| r.1 == "org0/sub2/p1.jpg").cloned().expect("row");
+    std::fs::remove_file(ctx.bytes.object_path(&gone.2, gone.3.as_deref().unwrap()).unwrap()).expect("remove bytes");
+    let unnamed = rows.iter().find(|r| r.1 == "org0/sub3/p0.jpg").cloned().expect("row");
+    srv.su("st_import", "DELETE FROM storage.objects WHERE name = 'org0/sub3/p0.jpg'").await;
+    let v = imp::verify(&ctx, Some(&src)).await.expect("verify");
+    assert!(v.bad.contains(&format!("{}/{}: bytes missing", gone.0, gone.1)), "{v:?}");
+    assert_eq!(v.orphans, vec![format!("{}/{}", unnamed.2, unnamed.3.as_deref().unwrap())], "{v:?}");
+    assert_eq!(v.missing, vec![format!("photos/{}", unnamed.1)], "{v:?}");
+
+    // The disk guard: the import stops at the line and says so; with room
+    // again a rerun carries on.
+    {
+        use k2_core::disk_guard::{fake, Mode, RawStat};
+        let disk = fake::install(&ctx.bytes.root, "9:80", "/", RawStat::sized(100 << 30, 0), Some(Mode::On));
+        let s4 = imp::run(ctx.clone(), src.clone(), Opts { buckets: vec![], concurrency: 2 }).await.expect("a run");
+        assert_eq!((s4.status.as_str(), s4.disk_low, s4.copied), ("stopped_disk_low", true, 0), "{s4:?}");
+        assert!(s4.errors.iter().any(|e| e.contains("import stopped")), "{:?}", s4.errors);
+        drop(disk);
+    }
+    let s5 = imp::run(ctx.clone(), src.clone(), Opts { buckets: vec![], concurrency: 2 }).await.expect("after the room is back");
+    assert_eq!((s5.status.as_str(), s5.copied), ("done", 2), "the missing bytes and the missing row come back: {s5:?}");
+    let v = imp::verify(&ctx, Some(&src)).await.expect("verify");
+    assert!(v.missing.is_empty(), "{v:?}");
+    assert!(!v.bad.iter().any(|b| b.contains("bytes missing")), "{v:?}");
 
     // A wrong key is refused by the source, loudly.
     let bad = imp::run(ctx.clone(), Source { base, key: "wrong".into() }, Opts { buckets: vec![], concurrency: 2 }).await.expect("a run");

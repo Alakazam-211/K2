@@ -63,6 +63,13 @@ lacks "brand.ts" --list
 lacks "it.rs" --list
 lacks "old_tests.rs" --list
 lacks "tests_more.rs" --list
+# A `#[cfg(test)] mod name;` only declares a test file: the code after it
+# still counts, for the product's names and the command's. A later inline
+# test module still ends the count.
+printf '#[cfg(test)]\nmod decl_tests;\nfn d() -> &str { "Restart K2, then k2 msg <addr>" }\n#[cfg(test)]\nmod tests {\n    fn t() { let h = "K2"; }\n}\n' > "$T/crates/a/src/decl.rs"
+run 0 "K2 crates/a/src/decl.rs:3: fn d()" --list
+lacks "decl.rs:6" --list
+rm "$T/crates/a/src/decl.rs"
 
 # One more K2 line in a listed file fails and names the file and both counts.
 cp "$T/crates/a/src/old.rs" "$T/keep.rs"

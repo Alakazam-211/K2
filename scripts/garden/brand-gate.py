@@ -95,8 +95,9 @@ runs both.
 What is counted: a code line, the zone gate's way. Rust under crates/ and
 src-tauri/src/: not a `//` line, not after a `//` (for the command's kinds,
 the flip's own reading of strings and comments), not from the file's first
-`#[cfg(test)]` (or `#[cfg(all(test, …))]`) mod on, and test files (tests.rs,
-*_test.rs, *_tests.rs, test_*.rs, tests_*.rs). Renderer under src/: .ts and
+`#[cfg(test)]` (or `#[cfg(all(test, …))]`) inline `mod name {` on (a
+`mod name;` only declares a test file: the code after it counts), and test
+files (tests.rs, *_test.rs, *_tests.rs, test_*.rs, tests_*.rs). Renderer under src/: .ts and
 .tsx, not a comment line.
 Test files are not counted (they pin what the names are), nor the brand and
 hosts modules, nor anything under crates/k2-brand/.
@@ -363,6 +364,12 @@ def ts_cli_kinds(lines, code, known, out):
         out[kind] = [(i + 1, lines[i].strip()) for i in rows]
 
 
+def inline_test_mod(line):
+    """`mod name {` with its body here. A `mod name;` only declares a test
+    file (left out by its name or folder); the code after it still counts."""
+    return bool(TEST_MOD.match(line)) and not line.rstrip().endswith(";")
+
+
 def counted_lines(path, area, known):
     """{kind: [(line number, text)]} for one file, read once."""
     with open(path, encoding="utf-8", errors="replace") as f:
@@ -372,7 +379,7 @@ def counted_lines(path, area, known):
     end = len(lines)
     for i, line in enumerate(lines):
         s = line.strip()
-        if area["rust"] and TEST_CFG.match(s) and i + 1 < len(lines) and TEST_MOD.match(lines[i + 1]):
+        if area["rust"] and TEST_CFG.match(s) and i + 1 < len(lines) and inline_test_mod(lines[i + 1]):
             end = i
             break
         if not s or s.startswith(area["comment"]):

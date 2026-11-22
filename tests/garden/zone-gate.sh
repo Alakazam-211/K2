@@ -56,6 +56,12 @@ lacks "hosts.rs" --list
 lacks "it.rs" --list
 lacks "old_tests.rs" --list
 lacks "built.rs" --list
+# A `#[cfg(test)] mod name;` only declares a test file: the code after it
+# still counts. A later inline test module still ends the count.
+printf '#[cfg(test)]\nmod decl_tests;\nfn d() -> &str { "acme.k2.dev" }\n#[cfg(test)]\nmod tests {\n    fn t() { let h = "b.k2.dev"; }\n}\n' > "$T/crates/a/src/decl.rs"
+run 0 "crates/a/src/decl.rs:3: fn d()" --list
+lacks "decl.rs:6" --list
+rm "$T/crates/a/src/decl.rs"
 
 # One more line in a listed file fails and names the file and both counts.
 cat "$T/crates/a/src/old.rs" > "$T/keep.rs"

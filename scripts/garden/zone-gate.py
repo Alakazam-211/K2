@@ -23,7 +23,8 @@ What is counted: a line under crates/ or src-tauri/src/ in a .rs file that
 has `k2.dev` outside a `//` comment. Not counted: the hosts and brand modules,
 test files (a path part named tests, benches, fuzz or fixtures, or a file
 named *_tests.rs, *_test.rs, tests.rs or test_*.rs), and everything from a
-file's first `#[cfg(test)] mod` on. Tests keep the literal on purpose: they
+file's first inline `#[cfg(test)] mod name {` on. A `#[cfg(test)] mod name;`
+only declares a test file, so the code after it is still counted. Tests keep the literal on purpose: they
 pin what the zone is.
 
 The renderer area (--area renderer) is the same idea for src/: .ts and
@@ -69,6 +70,12 @@ AREA_RULES = {
 }
 
 
+def inline_test_mod(line):
+    """`mod name {` with its body here. A `mod name;` only declares a test
+    file (left out by its name or folder); the code after it still counts."""
+    return bool(TEST_MOD.match(line)) and not line.rstrip().endswith(";")
+
+
 def counted_lines(path, rules):
     """(line number, text) for each counted line of one file."""
     with open(path, encoding="utf-8", errors="replace") as f:
@@ -76,7 +83,7 @@ def counted_lines(path, rules):
     out = []
     for i, line in enumerate(lines):
         s = line.strip()
-        if rules["cut_at_test_mod"] and s.startswith("#[cfg(test)]") and i + 1 < len(lines) and TEST_MOD.match(lines[i + 1]):
+        if rules["cut_at_test_mod"] and s.startswith("#[cfg(test)]") and i + 1 < len(lines) and inline_test_mod(lines[i + 1]):
             break
         if "k2.dev" not in line or s.startswith(rules["comment"]):
             continue

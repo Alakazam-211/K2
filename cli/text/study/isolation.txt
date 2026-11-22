@@ -28,7 +28,9 @@ LABELLED BY AGENT (on wherever the server can have it)
   another agent's session run its commands (through that agent's files,
   the owner token on disk, or ptrace where the kernel allows it), it can
   move any agent's processes out of their cgroup (that drops their label
-  and their passport stops working), and it can call as the owner.
+  and their passport stops working), and it can call as the owner. A
+  fenced agent can't do any of this, but fencing an agent does not
+  protect it from an unfenced one.
 
   Where it's unavailable (macOS, a user-unit install, a box prepared before
   0.46.16, a container) passports work as before; /boot-status

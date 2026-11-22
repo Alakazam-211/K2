@@ -57,7 +57,8 @@ pub const ENV_SESSION_MARK: &str = "K2_AGENT_CGROUP";
 pub const CLAIM: &str = "labelled by agent: each agent's terminals, job runs and published services run in its own cgroup, \
      and a fenced agent can't change its label. A copied terminal or job passport alone no longer works (App exec and \
      microVM cell passports aren't bound and work as before). An unfenced agent (same user) can still move itself into \
-     another agent's cgroup, or read the owner token on disk; the folder fence closes both for one agent";
+     another agent's cgroup, or read the owner token on disk. A fenced agent can't do either. Fencing an agent does not \
+     protect it from an unfenced one";
 
 /// The claim with the root helper placing sessions (M1b).
 pub const CLAIM_ROOT: &str = "labelled by agent: each agent's terminals, job runs and published services run in its own \
@@ -65,7 +66,8 @@ pub const CLAIM_ROOT: &str = "labelled by agent: each agent's terminals, job run
      terminal or job passport alone no longer works (App exec and microVM cell passports aren't bound and work as before). \
      An unfenced agent is still the same user as every other agent: it can make another agent's session run its commands \
      (through that agent's files, the owner token on disk, or ptrace where the kernel allows it), and it can move any \
-     agent's processes out of their cgroup, which drops that label. The folder fence closes these for the agent it fences";
+     agent's processes out of their cgroup, which drops that label. A fenced agent can't do any of this. Fencing an agent does not \
+     protect it from an unfenced one";
 
 /// The claim that holds on this box now.
 pub fn claim() -> &'static str {
@@ -696,6 +698,29 @@ mod tests {
         assert!(!held_by(&root.join("a-linkedprocs"), 4242, me), "a linked cgroup.procs is refused");
         assert!(!held_by(&root.join("missing"), 4242, me));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// On a real kernel (review N2): a cgroup owned as expected that does
+    /// not hold the pid is refused. This test's own cgroup holds it; its
+    /// parent (owned by whoever owns it, root on a stock unit) does not,
+    /// because cgroup v2 keeps processes in leaves. An owner check alone
+    /// (the old path stat) would take the parent.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_real_cgroup_that_does_not_hold_the_pid_is_refused() {
+        use std::os::unix::fs::MetadataExt;
+        let line = std::fs::read_to_string("/proc/self/cgroup").expect("read /proc/self/cgroup");
+        let rel = line.lines().find_map(|l| l.strip_prefix("0::")).expect("a cgroup v2 line in /proc/self/cgroup").trim().to_string();
+        let own = Path::new(CGROUP_FS).join(rel.trim_start_matches('/'));
+        assert!(own.join("cgroup.procs").is_file(), "cgroup v2 mounted at {CGROUP_FS} with this process's cgroup {}", own.display());
+        let pid = std::process::id();
+        let own_uid = std::fs::metadata(&own).expect("stat own cgroup").uid();
+        assert!(held_by(&own, pid, own_uid), "its own cgroup ({}, uid {own_uid}) holds it", own.display());
+        let parent = own.parent().expect("a parent cgroup");
+        assert!(parent.join("cgroup.procs").is_file() && parent != own, "a parent cgroup: {}", parent.display());
+        let parent_uid = std::fs::metadata(parent).expect("stat parent cgroup").uid();
+        eprintln!("parent cgroup {} owned by uid {parent_uid}", parent.display());
+        assert!(!held_by(parent, pid, parent_uid), "the parent ({}, uid {parent_uid}) does not hold it", parent.display());
     }
 
     #[test]

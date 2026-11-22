@@ -160,7 +160,7 @@
 //!   `namespaces.pgarchive`, [`PGARCHIVE_MIN_PROTOCOL`]; a 17 helper
 //!   refuses the argv, so the daemon asks for the update before it sends
 //!   it. Also Agent Isolation M1b (`crate::agent_cgroup`): `agents check` and `agents place <workspace
-//!   id> <pid>`, the agent's cgroup made root-owned and the exec helper's
+//!   id> <pid> <start time>`, the agent's cgroup made root-owned and the exec helper's
 //!   process moved into it, under `namespaces.agentcg`,
 //!   [`AGENTCG_MIN_PROTOCOL`]; a 17 helper refuses the argv, so the daemon
 //!   runs the agents traceable only (identity unavailable). Another 0.46.17 lane that needs a helper change joins 18 here with
@@ -243,7 +243,7 @@ pub const PGARCHIVE_MIN_PROTOCOL: u32 = 18;
 /// (protocol 19, lane E). Gated on this AND `namespaces.pgrestore == true`:
 /// an 18 helper refuses the argv.
 pub const PGRESTORE_MIN_PROTOCOL: u32 = 19;
-/// `agents place <workspace id> <pid>` (0.46.17, Agent Isolation M1b): root-owned
+/// `agents place <workspace id> <pid> <start time>` (0.46.17, Agent Isolation M1b): root-owned
 /// per-agent cgroups. Gated on this AND `namespaces.agentcg == true`: below it
 /// the daemon reports agent identity unavailable (sessions traceable only).
 pub const AGENTCG_MIN_PROTOCOL: u32 = 18;

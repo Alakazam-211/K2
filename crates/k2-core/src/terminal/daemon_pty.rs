@@ -1469,7 +1469,15 @@ impl DaemonPtySession {
             let p = u32::try_from(pid).map_err(|_| io::Error::other("agent isolation: no pid to place"))?;
             // ptyd is the parent: the start time it read at spawn, so a pid
             // reused after the helper died isn't placed (review B5). An
-            // older ptyd sends none; the daemon reads it now.
+            // older ptyd sends none; the daemon reads it now, and says so
+            // (that read can be late: the B5 window stays open until that
+            // ptyd restarts).
+            if ptyd_start.is_none() && iso.identity {
+                log_debug!(
+                    "[agents] pid {p}: k2-ptyd sent no start time (it started before this daemon version), \
+                     so the daemon reads it now; restart k2-ptyd to close that gap"
+                );
+            }
             crate::agent_cgroup::place_spawned(iso, p, ptyd_start)?;
         }
         // The vault binds this session's agent socket record to this ptyd

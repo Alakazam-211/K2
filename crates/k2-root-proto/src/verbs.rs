@@ -931,9 +931,11 @@ pub enum Verb {
     /// simulated first and refused if it would remove anything.
     DesktopPackagesInstall,
     // agents (protocol 18, 0.46.17 Agent Isolation M1b; see `crate::agent_cgroup`)
-    /// `agents place <workspace id> <pid>` (daemon): make the agent's
+    /// `agents place <workspace id> <pid> <start time>` (daemon): make the agent's
     /// cgroup `<unit>/agents/a-<id>` root-owned and move `pid` (a process of
-    /// the daemon's user, in its unit, waiting in the exec helper) into it.
+    /// the daemon's user, in its unit, waiting in the exec helper) into it,
+    /// only while `pid` is still the process that started at `start` (field
+    /// 22 of `/proc/<pid>/stat`, read by its parent at spawn).
     AgentsPlace { ws: crate::agent_cgroup::AgentWs, pid: u32, start: u64 },
     /// `agents check` (daemon, read-only): whether `agents place` would
     /// accept this caller (its registered system unit, the agents' leaf

@@ -2489,6 +2489,10 @@ mod creds_tests;
 #[path = "desktop_tests.rs"]
 mod desktop_tests;
 
+// The `agents` namespace (protocol 18, Agent Isolation M1b), same fakes.
+#[path = "agents_tests.rs"]
+mod agents_tests;
+
 // `helper cli-refresh` and the brand's retired aliases, same fakes.
 #[path = "cli_alias_tests.rs"]
 mod cli_alias_tests;

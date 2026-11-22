@@ -1,0 +1,62 @@
+$ k2 study isolation
+exit: 0
+--- stdout
+Agent isolation (Linux servers)
+
+LABELLED BY AGENT (on wherever the server can have it)
+  Every terminal, `k2 job` run and published service of an agent runs in
+  that agent's own cgroup, agents/a-<workspace id>/ inside the daemon's
+  unit. K5 does this with the standard Linux kernel; no custom kernel.
+  - Labelled: each process an agent starts carries its agent's label
+    (systemd-cgls, ps -o pid,cgroup,cmd, k2 agent whois <pid>). A fenced
+    agent can't change its label.
+  - A copied terminal or job passport alone no longer works: the daemon
+    accepts it only on that session's own socket, only from a process in
+    that agent's cgroup (else 403 passport_wrong_cgroup, with an audit row),
+    and never over loopback TCP (403 passport_needs_socket), whether it
+    comes as a Bearer, ?token=, a session cookie or a form body. `k2` in an
+    agent's terminal or job sends its passport over the session socket by
+    itself. Not bound, so these still work as before when copied: App exec
+    passports, microVM cells, and terminals started before 0.46.17.
+
+  Who places the sessions decides the rest. With the root helper (protocol
+  18; /boot-status agentIsolation says "identity": "on") each agent's cgroup
+  is root's: an agent can't move itself into another agent's cgroup.
+  Without it ("identity": "unavailable", "traceable": true) the daemon
+  places them in cgroups the server's user owns, so an agent without the
+  fence can move a process into another agent's cgroup.
+
+  What it doesn't do, for an agent without the fence: that agent runs as
+  the server's user, the same user as every other agent. It can make
+  another agent's session run its commands (through that agent's files,
+  the owner token on disk, or ptrace where the kernel allows it), it can
+  move any agent's processes out of their cgroup (that drops their label
+  and their passport stops working), and it can call as the owner. A
+  fenced agent can't do any of this, but fencing an agent does not
+  protect it from an unfenced one.
+
+  Where it's unavailable (macOS, a user-unit install, a box prepared before
+  0.46.16, a container) passports work as before; /boot-status
+  (agentIsolation) and k2 app doctor (agentIdentity) say so and why.
+  Emergency off-switch for a broken box: K2_AGENT_CGROUP_IDENTITY=0 in the
+  daemon's environment (logged at boot, shown in the doctor).
+
+THE FOLDER FENCE (per agent, off by default, the owner's switch; experimental)
+  k2 agent isolation <workspace> fence. The agent's next terminals, job runs
+  and services open only their workspace, their own temp folder, their own
+  harness login and the build caches, and read the system and the
+  toolchains (Landlock). Not a sibling's folder, not ~/.k2 (owner token,
+  vault), not ~/.ssh; no sudo; no way out of their cgroup. A terminal that
+  can't be fenced doesn't start (it says why); never silently unfenced. An
+  agent can't turn its own fence off.
+
+  Not yet a boundary: Unix sockets (a user bus, an ssh-agent, a container
+  socket) and, on kernels before 6.12, signals to other processes aren't
+  blocked; the next milestone closes them.
+
+  Inside a fence, something refused reads "Permission denied". Builds in the
+  workspace, git in the workspace, and the shared caches (cargo, npm, bun,
+  pip, uv) work. Installing software (brew, apt, cargo install, npm -g) and
+  ssh with your keys don't: ask your person.
+--- stderr
+--- requests

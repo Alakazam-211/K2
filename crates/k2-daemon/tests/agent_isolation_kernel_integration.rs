@@ -1015,4 +1015,23 @@ echo "done" >> $R; exec sleep 3600
     if expect_root {
         assert!(audit.lines().any(|l| l.contains("agent.passport_wrong_cgroup") && l.contains(&format!("agent:{b_id}"))), "an audit row: B's passport from A");
     }
+    // A job run of B's is placed like its terminals (root's cgroup with the
+    // helper, the K2 user's without). The job is removed after.
+    let token = d.token();
+    let job = format!("m1b{tag}");
+    let script = format!(
+        "R={b}/job.results; : > $R; echo \"cgroup $(cat /proc/self/cgroup)\" >> $R; echo \"job done\" >> $R",
+        b = b_ws.display()
+    );
+    let (s, body) = http(d.port, "POST", &format!("/cli/jobs/add?token={token}"), &json!({"workspace": b_id, "name": job, "every": "24h", "argv": ["sh", "-c", script]}).to_string());
+    assert_eq!(s, 200, "jobs/add: {body}");
+    let (s, body) = http(d.port, "POST", &format!("/cli/jobs/run?token={token}"), &json!({"workspace": b_id, "name": job}).to_string());
+    assert_eq!(s, 200, "jobs/run: {body}");
+    let jr = results(&b_ws.join("job.results"), "job done");
+    let (s, body) = http(d.port, "POST", &format!("/cli/jobs/remove?token={token}"), &json!({"workspace": b_id, "name": job}).to_string());
+    assert_eq!(s, 200, "jobs/remove: {body}");
+    println!("B's job run: {}", jr["cgroup"]);
+    assert!(jr["cgroup"].ends_with(&format!("/agents/a-{b_id}")), "B's job runs in B's cgroup: {}", jr["cgroup"]);
+    let owner = std::fs::metadata(&b_cg).unwrap().uid();
+    assert_eq!(owner == 0, expect_root, "B's cgroup (where its job ran) is root's exactly when the helper places: uid {owner}");
 }

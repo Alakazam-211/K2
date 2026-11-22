@@ -797,6 +797,15 @@ pub async fn browser_set_page_layers(
     r
 }
 
+/// `label` is a K2 window's own UI webview: a webview of that label that
+/// lives in the window of the same label. A browser page's label
+/// (`browser-…`) never is. (Not `get_webview_window`: with child webviews
+/// attached, a window may no longer report itself as a webview window.)
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn is_k2_window(app: &AppHandle, label: &str) -> bool {
+    app.get_webview(label).is_some_and(|w| w.window().label() == label)
+}
+
 async fn set_page_layers(app: AppHandle, layers: PageLayers, options: Option<UnderlayOptions>) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
@@ -806,7 +815,7 @@ async fn set_page_layers(app: AppHandle, layers: PageLayers, options: Option<Und
             _ => "main".to_string(),
         };
         // Only a K2 window's own UI webview, never a browser page's label.
-        if app.get_webview_window(&parent).is_none() {
+        if !is_k2_window(&app, &parent) {
             return Err(format!("underlay: {parent:?} is not one of the app's own windows"));
         }
         let gen_at_start = queue(&app).0.lock().unwrap().label_gen(&parent);
@@ -832,7 +841,7 @@ async fn set_page_layers(app: AppHandle, layers: PageLayers, options: Option<Und
         }
         // The awaits above can outlive the window: a set for a window that
         // closed meanwhile must not bring its queue entries back.
-        if app.get_webview_window(&parent).is_none() || queue(&app).0.lock().unwrap().label_gen(&parent) != gen_at_start {
+        if !is_k2_window(&app, &parent) || queue(&app).0.lock().unwrap().label_gen(&parent) != gen_at_start {
             say!(debug, "[browser-underlay] {parent:?} closed while its set was on the way; dropped");
             return Ok(());
         }

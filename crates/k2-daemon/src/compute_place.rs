@@ -2784,9 +2784,10 @@ pub fn move_state_json(j: &JobRow, now: i64) -> Option<serde_json::Value> {
     } else if moving {
         match store::NodeAsk::of(j) {
             Some(a) => format!(
-                "moving: its node was asked to give it back {} ago, for a node that can start it now; K2 takes it back itself at {}",
+                "moving: its node was asked to give it back {} ago, for a node that can start it now; {k2} takes it back itself at {}",
                 compute::message::duration(now - a.at),
-                k2_core::compute::attempts::ask_settle_words()
+                k2_core::compute::attempts::ask_settle_words(),
+                k2 = k2_core::brand::PRODUCT_NAME
             ),
             None => "moving: its node was asked to give it back for a node that can start it now".to_string(),
         }

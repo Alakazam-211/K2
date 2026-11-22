@@ -1583,8 +1583,9 @@ pub fn settle_unanswered(node_id: &str, j: &store::JobRow, ask: &store::NodeAsk,
     };
     if ask.marker == pending::CANCEL {
         let detail = format!(
-            "{name} hasn't answered the cancel in {}; k2 compute cancel {short} --force stops it",
-            k2_core::compute::attempts::ask_settle_words()
+            "{name} hasn't answered the cancel in {}; {cli} compute cancel {short} --force stops it",
+            k2_core::compute::attempts::ask_settle_words(),
+            cli = k2_core::brand::CLI_NAME
         );
         if j.detail.as_deref() != Some(detail.as_str()) {
             let db = k2_core::db::shared();

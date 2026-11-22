@@ -204,24 +204,24 @@ moved_logs() { # <attempt record as JSON>
     pyjson 'import json, sys
 rec = json.loads(sys.argv[1])
 moved = {"chunks": [], "end": True, "cursor": 1, "generation": 1, "attempts": [rec, {"attempt": 1, "generation": 2, "current": True}],
-         "job": {"state": "queued", "short": "job00001", "node": "k2n10-vin", "attempt": 1, "generation": 2}}
+         "job": {"state": "queued", "short": "job00001", "node": "node-c-vin", "attempt": 1, "generation": 2}}
 done = {"chunks": [], "end": True, "cursor": 1, "generation": 2,
-        "job": {"state": "done", "short": "job00001", "node": "k2n10-vin", "exitCode": 0, "generation": 2}}
+        "job": {"state": "done", "short": "job00001", "node": "node-c-vin", "exitCode": 0, "generation": 2}}
 print(json.dumps([moved, done]))' "$1" > "$SANDBOX/logs.json"
 }
-moved_logs '{"attempt": 1, "generation": 1, "current": false, "state": "assigned", "reason": "withdrawn", "nextCode": "withdrawn", "moved": "k2n9-vin gave it back from its queue before it started for k2n10-vin"}'
+moved_logs '{"attempt": 1, "generation": 1, "current": false, "state": "assigned", "reason": "withdrawn", "nextCode": "withdrawn", "moved": "node-b-vin gave it back from its queue before it started for node-c-vin"}'
 run_k2 "a move" compute wait job00001 --follow
 expect_eq "a move: the job's exit" "$RC" "0"
-expect_has "a move: says it moved" "$ERR" "[k2 compute] moved: k2n9-vin gave it back from its queue before it started for k2n10-vin; now on k2n10-vin (not a failure, no retry used)"
+expect_has "a move: says it moved" "$ERR" "[k2 compute] moved: node-b-vin gave it back from its queue before it started for node-c-vin; now on node-c-vin (not a failure, no retry used)"
 expect_lacks "a move: never an infrastructure failure" "$ERR" "infrastructure failure"
-moved_logs '{"attempt": 1, "generation": 1, "current": false, "state": "assigned", "reason": "withdraw_unanswered", "asked": "withdraw_requested", "nextCode": "withdraw_unanswered", "moved": "k2n7-vin didn'"'"'t answer a request to give it back within 3 min; K2 took it back (k2n7-vin is told not to run it)"}'
+moved_logs '{"attempt": 1, "generation": 1, "current": false, "state": "assigned", "reason": "withdraw_unanswered", "asked": "withdraw_requested", "nextCode": "withdraw_unanswered", "moved": "node-a-vin didn'"'"'t answer a request to give it back within 3 min; K2 took it back (node-a-vin is told not to run it)"}'
 run_k2 "an unanswered withdraw" compute wait job00001 --follow
-expect_has "an unanswered withdraw: says it moved" "$ERR" "[k2 compute] moved: k2n7-vin didn't answer a request to give it back within 3 min; K2 took it back (k2n7-vin is told not to run it); now on k2n10-vin (not a failure, no retry used)"
+expect_has "an unanswered withdraw: says it moved" "$ERR" "[k2 compute] moved: node-a-vin didn't answer a request to give it back within 3 min; K2 took it back (node-a-vin is told not to run it); now on node-c-vin (not a failure, no retry used)"
 expect_lacks "an unanswered withdraw: never an infrastructure failure" "$ERR" "infrastructure failure"
 # A daemon from before the words: the attempt number stayed, so a move.
-moved_logs '{"attempt": 1, "generation": 1, "current": false, "state": "assigned", "reason": "withdraw_requested", "next": "taken back from k2n9-vin'"'"'s queue before it started, to move it to k2n10-vin (no retry used)"}'
+moved_logs '{"attempt": 1, "generation": 1, "current": false, "state": "assigned", "reason": "withdraw_requested", "next": "taken back from node-b-vin'"'"'s queue before it started, to move it to node-c-vin (no retry used)"}'
 run_k2 "a move, older daemon" compute wait job00001 --follow
-expect_has "a move, older daemon: says it moved" "$ERR" "[k2 compute] moved: taken back from k2n9-vin's queue before it started"
+expect_has "a move, older daemon: says it moved" "$ERR" "[k2 compute] moved: taken back from node-b-vin's queue before it started"
 expect_lacks "a move, older daemon: never an infrastructure failure" "$ERR" "infrastructure failure"
 # A real retry with its record: the record's own end, not "?".
 pyjson 'import json

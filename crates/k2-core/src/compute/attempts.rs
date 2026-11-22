@@ -204,10 +204,11 @@ pub fn next_words(next: &str, node: &str, then: Option<&str>) -> String {
         next::WITHDRAWN => format!("taken back from {node}'s queue before it started, to move it{} (no retry used)", then.map(|t| format!(" to {t}")).unwrap_or_default()),
         next::NODE_LOST => format!("{node} went offline before it started it; placed again{elsewhere} (no retry used)"),
         next::NOT_ON_NODE => format!("{node} no longer had it in its queue; placed again{elsewhere} (no retry used)"),
-        next::PULLED_BACK => format!("taken back from {node}'s queue as asked (k2 compute move); placed again{elsewhere} (no retry used)"),
+        next::PULLED_BACK => format!("taken back from {node}'s queue as asked ({cli} compute move); placed again{elsewhere} (no retry used)", cli = crate::brand::CLI_NAME),
         next::WITHDRAW_UNANSWERED => format!(
-            "{node} didn't answer a request to give it back within {}; K2 took it back ({node} is told not to run it) and placed it again{elsewhere} (no retry used)",
-            ask_settle_words()
+            "{node} didn't answer a request to give it back within {}; {k2} took it back ({node} is told not to run it) and placed it again{elsewhere} (no retry used)",
+            ask_settle_words(),
+            k2 = crate::brand::PRODUCT_NAME
         ),
         other => format!("placed again{elsewhere} ({other})"),
     }
@@ -222,8 +223,8 @@ pub fn move_words(next: &str, node: &str, then: Option<&str>) -> Option<String> 
         next::RESENT => format!("{node} gave it back from its queue to take the grant's new caps"),
         next::NODE_LOST => format!("{node} went offline before it started it"),
         next::NOT_ON_NODE => format!("{node} no longer had it in its queue"),
-        next::PULLED_BACK => format!("taken back from {node}'s queue as asked (k2 compute move)"),
-        next::WITHDRAW_UNANSWERED => format!("{node} didn't answer a request to give it back within {}; K2 took it back ({node} is told not to run it)", ask_settle_words()),
+        next::PULLED_BACK => format!("taken back from {node}'s queue as asked ({cli} compute move)", cli = crate::brand::CLI_NAME),
+        next::WITHDRAW_UNANSWERED => format!("{node} didn't answer a request to give it back within {}; {k2} took it back ({node} is told not to run it)", ask_settle_words(), k2 = crate::brand::PRODUCT_NAME),
         _ => return None,
     })
 }
@@ -456,15 +457,15 @@ mod tests {
 
     #[test]
     fn an_unanswered_withdraw_is_said_plainly_and_is_a_move() {
-        let n = next_words(next::WITHDRAW_UNANSWERED, "k2n7", Some("k2n9"));
+        let n = next_words(next::WITHDRAW_UNANSWERED, "node-a", Some("node-b"));
         assert_eq!(
             n,
-            "k2n7 didn't answer a request to give it back within 3 min; K2 took it back (k2n7 is told not to run it) and placed it again on k2n9 (no retry used)"
+            "node-a didn't answer a request to give it back within 3 min; K2 took it back (node-a is told not to run it) and placed it again on node-b (no retry used)"
         );
-        assert_eq!(end_words("assigned", Some(next::WITHDRAW_UNANSWERED), false, "k2n7"), "k2n7 didn't answer a request to give it back within 3 min");
-        let m = move_words(next::WITHDRAW_UNANSWERED, "k2n7", Some("k2n9")).expect("a move");
-        assert!(m.starts_with("k2n7 didn't answer") && !m.contains("infrastructure"), "{m}");
-        assert_eq!(move_words(next::WITHDRAWN, "k2n9-vin", Some("k2n10-vin")).as_deref(), Some("k2n9-vin gave it back from its queue before it started for k2n10-vin"));
+        assert_eq!(end_words("assigned", Some(next::WITHDRAW_UNANSWERED), false, "node-a"), "node-a didn't answer a request to give it back within 3 min");
+        let m = move_words(next::WITHDRAW_UNANSWERED, "node-a", Some("node-b")).expect("a move");
+        assert!(m.starts_with("node-a didn't answer") && !m.contains("infrastructure"), "{m}");
+        assert_eq!(move_words(next::WITHDRAWN, "node-b-vin", Some("node-c-vin")).as_deref(), Some("node-b-vin gave it back from its queue before it started for node-c-vin"));
         for moved in [next::WITHDRAWN, next::NODE_LOST, next::NOT_ON_NODE, next::RESENT, next::PULLED_BACK] {
             assert!(move_words(moved, "a", None).is_some(), "{moved} is a move");
         }

@@ -395,8 +395,12 @@ mod tests {
 
   #[test]
   fn snap_out_grows_to_device_pixels() {
-    let s = sq(10.3, 10.3, 5.2, 5.2).snap_out(2.0);
+    // 10.3..15.6 at 2 px per point: out to 10.0..16.0.
+    let s = sq(10.3, 10.3, 5.3, 5.3).snap_out(2.0);
     assert_eq!((s.x, s.y), (10.0, 10.0));
     assert_eq!((s.x + s.w, s.y + s.h), (16.0, 16.0));
+    // Already on the grid: unchanged.
+    let s = sq(10.0, 10.0, 5.5, 5.5).snap_out(2.0);
+    assert_eq!((s.x, s.y, s.w, s.h), (10.0, 10.0, 5.5, 5.5));
   }
 }

@@ -2,14 +2,13 @@
 # Lane D's tests on a Linux compute node (never the M5): the storage unit
 # tests, then the real-Postgres door and import tests (REALPG_STORAGE=1).
 #
-#   k2 compute run --sha <c> --stall-timeout off --mem 28G --cache k2-supa-d \
+#   k2 compute run --sha <c> --stall-timeout off --mem 28G \
 #     --needs rust@1.99.1,cmake@3,cargo-nextest \
 #     -- bash scripts/test/storage-realpg.sh
 #
 # Fails when any test fails or when no real-Postgres test ran.
 set -uo pipefail
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}"
-if [ -n "${K2_JOB_CACHE:-}" ]; then export CARGO_TARGET_DIR="$K2_JOB_CACHE/target"; fi
 B="${REALPG_BIN:-$(bash "$(dirname "$0")/pg-binaries.sh")}"
 [ -x "$B/initdb" ] || { echo "storage-realpg: no Postgres binaries" >&2; exit 1; }
 LOG="$(mktemp -d)"

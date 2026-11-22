@@ -5,7 +5,7 @@
 # oracle only: never shipped, never run on a box. Runs on a Linux compute node
 # as an ordinary user, never on the M5:
 #
-#   k2 compute run --sha <c> --stall-timeout off --mem 28G --cache k2-supa-d \
+#   k2 compute run --sha <c> --stall-timeout off --mem 28G \
 #     --needs rust@1.99.1,cmake@3,cargo-nextest,node@26 \
 #     -- bash scripts/test/storage-oracle.sh
 #

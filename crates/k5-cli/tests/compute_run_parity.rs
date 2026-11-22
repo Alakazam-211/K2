@@ -1171,7 +1171,9 @@ fn the_submit_lines_say_the_brand_s_name() {
 fn compute_run_follows_a_move() {
     let rig = Rig::new(VERB, "runmove");
     let moved = || {
-        ok(r#"{"chunks":[],"end":true,"cursor":1,"generation":1,"attempts":[{"attempt":1,"generation":1,"current":false,"reason":"withdrawn","moved":"node-a gave it back from its queue before it started for node-b"},{"attempt":1,"generation":2,"current":true}],"job":{"state":"queued","short":"abcd1234","node":"node-b","attempt":1,"generation":2}}"#)
+        ok(
+            r#"{"chunks":[],"end":true,"cursor":1,"generation":1,"attempts":[{"attempt":1,"generation":1,"current":false,"reason":"withdrawn","moved":"node-a gave it back from its queue before it started for node-b"},{"attempt":1,"generation":2,"current":true}],"job":{"state":"queued","short":"abcd1234","node":"node-b","attempt":1,"generation":2}}"#,
+        )
     };
     let after = || {
         ok(&format!(
@@ -1201,6 +1203,6 @@ fn compute_run_follows_a_move() {
         ),
     ];
     for c in v {
-        rig.check(&c);
+        submitted(&rig, &c);
     }
 }

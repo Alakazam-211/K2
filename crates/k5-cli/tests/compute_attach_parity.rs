@@ -433,7 +433,9 @@ fn compute_follow_a_move() {
         ))
     };
     let after = || {
-        ok(r#"{"chunks":[],"end":true,"cursor":1,"generation":2,"job":{"state":"done","short":"abcd1234","node":"node-b","exitCode":0,"generation":2}}"#)
+        ok(
+            r#"{"chunks":[],"end":true,"cursor":1,"generation":2,"job":{"state":"done","short":"abcd1234","node":"node-b","exitCode":0,"generation":2}}"#,
+        )
     };
     let follow = |name: &'static str, rec: &str, attempt: &str| {
         case(
@@ -534,7 +536,9 @@ fn compute_follow_a_move() {
             &["wait", "abcd1234", "--follow"],
             &[],
             vec![
-                ok(r#"{"chunks":[],"end":true,"cursor":1,"generation":1,"attempts":{"generation":1},"job":{"state":"queued","short":"abcd1234","node":"node-b","attempt":2,"generation":2,"ctl":{"failedAttempts":[{"reason":"node_lost"}]}}}"#),
+                ok(
+                    r#"{"chunks":[],"end":true,"cursor":1,"generation":1,"attempts":{"generation":1},"job":{"state":"queued","short":"abcd1234","node":"node-b","attempt":2,"generation":2,"ctl":{"failedAttempts":[{"reason":"node_lost"}]}}}"#,
+                ),
                 after(),
             ],
             owner_and_port,
@@ -572,8 +576,12 @@ fn the_move_line_says_the_brand_s_name() {
         &["wait", "abcd1234", "--follow"],
         &[],
         vec![
-            ok(r#"{"chunks":[],"end":true,"cursor":1,"generation":1,"attempts":[{"attempt":1,"generation":1,"moved":"node-a gave it back"}],"job":{"state":"queued","short":"abcd1234","node":"node-b","attempt":1,"generation":2}}"#),
-            ok(r#"{"chunks":[],"end":true,"cursor":1,"generation":2,"job":{"state":"done","short":"abcd1234","node":"node-b","exitCode":0,"generation":2}}"#),
+            ok(
+                r#"{"chunks":[],"end":true,"cursor":1,"generation":1,"attempts":[{"attempt":1,"generation":1,"moved":"node-a gave it back"}],"job":{"state":"queued","short":"abcd1234","node":"node-b","attempt":1,"generation":2}}"#,
+            ),
+            ok(
+                r#"{"chunks":[],"end":true,"cursor":1,"generation":2,"job":{"state":"done","short":"abcd1234","node":"node-b","exitCode":0,"generation":2}}"#,
+            ),
         ],
         owner_and_port,
         0,

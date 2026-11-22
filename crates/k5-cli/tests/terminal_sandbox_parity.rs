@@ -30,7 +30,15 @@ fn a_refused_sandbox_passes_through_unchanged() {
         ),
         case(
             "--sandbox --wait with a title, refused",
-            &["spawn", "--title", "t", "--command", "ls", "--wait", "--sandbox"],
+            &[
+                "spawn",
+                "--title",
+                "t",
+                "--command",
+                "ls",
+                "--wait",
+                "--sandbox",
+            ],
             &[],
             vec![Reply::Answer(409, REFUSAL.to_string())],
             owner_and_port,

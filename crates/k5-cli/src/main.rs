@@ -17,7 +17,9 @@ use k5_cli::exit::Exit;
 use k5_cli::front::{self, Route};
 use k5_cli::offline::{self, Env, Prelude};
 use k5_cli::pages::{self, Page};
-use k5_cli::{check, cli_status, daemon, embedded, fallthrough, out, passport, port, spec, trace};
+use k5_cli::{
+    check, cli_status, codex_gate, daemon, embedded, fallthrough, out, passport, port, spec, trace,
+};
 use std::ffi::OsString;
 
 /// Writes `text` to stdout; the exit after it.
@@ -152,6 +154,15 @@ fn main() {
         port::Check::Shell => std::process::exit(shell(who, &args).code()),
     }
     trace::mark("port");
+    // The shell's Codex tab gate (`_cli_codex_tab_gate`), before the front
+    // routes, prints or sends anything: a Codex call K2 can't confirm runs
+    // only the help words. A stray `--` is refused first (the route).
+    match codex_gate::check(&args) {
+        codex_gate::Verdict::Go => {}
+        codex_gate::Verdict::Stop(exit) => std::process::exit(exit.code()),
+        codex_gate::Verdict::Shell => std::process::exit(shell(who, &args).code()),
+    }
+    trace::mark("codex gate");
     let route = front::route(&args);
     trace::mark("route");
     let exit = match route {

@@ -81,23 +81,23 @@ describe('the renderer module', () => {
     for (const id of readdirSync(join(ROOT, 'brand'), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name)) {
       const file = join(ROOT, 'brand', id, 'brand.toml')
       const out = run(['renderer', '--print', '--brand', `brand/${id}`])
-      expect(out, id).toContain(`export const BRAND_ID = '${id}'`)
-      expect(out, id).toContain(`export const PRODUCT_NAME = '${field(file, 'names', 'product')}'`)
-      expect(out, id).toContain(`export const CLI_NAME = '${field(file, 'cli', 'name')}'`)
+      expect(out, id).toContain(`export const BRAND_ID: string = '${id}'`)
+      expect(out, id).toContain(`export const PRODUCT_NAME: string = '${field(file, 'names', 'product')}'`)
+      expect(out, id).toContain(`export const CLI_NAME: string = '${field(file, 'cli', 'name')}'`)
     }
   })
 
   it('K2_BRAND_DIR picks the brand, as it does for cargo', () => {
     const dir = brandFolder('env', GOOD)
     const out = run(['renderer', '--print'], { K2_BRAND_DIR: dir })
-    expect(out).toContain("export const PRODUCT_NAME = 'Acme Desk'")
-    expect(out).toContain("export const CLI_NAME = 'ab'")
+    expect(out).toContain("export const PRODUCT_NAME: string = 'Acme Desk'")
+    expect(out).toContain("export const CLI_NAME: string = 'ab'")
     expect(out).toContain("export const CLI_ALIASES: readonly string[] = ['cd']")
   })
 
   it('a product name with a quote is written as a string', () => {
     const dir = brandFolder('quote', GOOD.replace('"Acme Desk"', '"Acme\'s Desk"'))
-    expect(run(['renderer', '--print', '--brand', dir])).toContain("export const PRODUCT_NAME = 'Acme\\'s Desk'")
+    expect(run(['renderer', '--print', '--brand', dir])).toContain("export const PRODUCT_NAME: string = 'Acme\\'s Desk'")
   })
 })
 
@@ -160,7 +160,7 @@ describe('a brand file the build can\'t use stops it, naming the field', () => {
 
   it('a packaging build refuses a brand with no [package]; the renderer does not need one', () => {
     const dir = brandFolder('no-package', GOOD.replace(/\[package\][\s\S]*$/, ''))
-    expect(run(['renderer', '--print', '--brand', dir])).toContain("export const CLI_NAME = 'ab'")
+    expect(run(['renderer', '--print', '--brand', dir])).toContain("export const CLI_NAME: string = 'ab'")
     expect(refused(['tauri', '--brand', dir])).toContain('[package] is missing')
     expect(refused(['shell', '--brand', dir])).toContain('[package] is missing')
   })

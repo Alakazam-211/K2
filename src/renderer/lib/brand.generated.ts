@@ -2,14 +2,17 @@
 // change the brand file and run `node scripts/brand-values.mjs renderer`.
 // lib/brand.ts re-exports these; import them from there.
 
+// Typed as string, not as the literal, so code type-checks the same for
+// every brand.
+
 /** The brand this build was made for. */
-export const BRAND_ID = 'k2'
+export const BRAND_ID: string = 'k2'
 
 /** The product's name, as people read it: prose and screens. */
-export const PRODUCT_NAME = 'K2'
+export const PRODUCT_NAME: string = 'K2'
 
 /** The command people and agents type: anything typed or copied. */
-export const CLI_NAME = 'k2'
+export const CLI_NAME: string = 'k2'
 
 /** Other names the command answers to. */
 export const CLI_ALIASES: readonly string[] = ['k2so']

@@ -298,7 +298,7 @@ fn a_failed_start_is_not_a_retry_storm() {
     // claim, the send loop, a request arriving.
     on_start(&net());
     for why in [Why::Start, Why::Invite { person: false }, Why::Claim { person: false }, Why::Request] {
-        let e = ready(&net(), why, "agent:scout").expect_err("no token, and it waits");
+        let e = ready(&net(), why, "agent:alice").expect_err("no token, and it waits");
         assert_eq!(e.code(), "internal", "{why:?}");
     }
     assert_eq!(b.stub.calls().len(), 1, "no plane call while it waits: {:?}", b.stub.calls());

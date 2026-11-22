@@ -794,6 +794,24 @@ mod tests {
         );
     }
 
+    /// Under a partner's brand the refusal names that brand's command and
+    /// product, never K2's (the setting's own name stays).
+    #[test]
+    fn the_refusal_names_the_brand_s_name() {
+        let t = String::from_utf8(refusal(OsStr::new("whoami"), Some(Anc::Broken)))
+            .expect("UTF-8");
+        assert!(t.ends_with(&format!(
+            "Help still works here: {} help whoami\n",
+            cli_name!()
+        )));
+        if cli_name!() != "k2" {
+            assert!(!t.contains("k2 "), "{t}");
+        }
+        if product_name!() != "K2" {
+            assert!(!t.replace("K2_CODEX_NO_DAEMON", "").contains("K2"), "{t}");
+        }
+    }
+
     #[test]
     fn the_chain_and_the_shared_server() {
         let rows = "    1     0 /sbin/launchd\n  200     1 codex app-server daemon pid-update-loop\n  300   200 codex app-server --listen unix://\n  400   300 /bin/zsh -lc k2\n  500   400 /bin/bash k2";

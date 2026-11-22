@@ -177,17 +177,23 @@ fn version_prints_what_the_shell_prints() {
     );
 }
 
-/// A known family's line the front hands to the shell, read from the
-/// route table: the first family the shell answers whole (no verb or bare
-/// row of its own, not the front's), with a verb after it. It fails
-/// loudly when every family has a row of the binary's.
+/// A known family's line the front hands to the shell: the first form of
+/// the native bar's ceiling (`tests/data/native_bar_ceiling.tsv`, the
+/// probes k5 still hands to bash) that the front routes to the shell, so a
+/// lane that makes one native moves the pick on by itself. It fails loudly
+/// when the ceiling holds none.
 fn shell_family_line() -> Vec<OsString> {
-    use k5_cli::route::{Owner, FRONT, TABLE};
-    let noun = TABLE
-        .iter()
-        .find(|n| n.owner == Owner::Bash && n.verbs.is_empty() && n.family != FRONT)
-        .expect("a family the shell answers whole: none is left, so pick another line");
-    args(&[noun.words[0], "status"])
+    let file = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/data/native_bar_ceiling.tsv"
+    );
+    let text = std::fs::read_to_string(file).expect("read the native bar's ceiling");
+    text.lines()
+        .filter(|l| !l.starts_with('#') && !l.starts_with("class\t"))
+        .filter_map(|l| l.split('\t').nth(2))
+        .map(|form| form.split(' ').map(OsString::from).collect::<Vec<_>>())
+        .find(|line| k5_cli::front::route(line) == k5_cli::front::Route::Fallthrough)
+        .expect("no form of the native bar's ceiling falls through: pick another line")
 }
 
 /// A line the front hands to the shell, which needs no daemon: an

@@ -631,14 +631,14 @@ fn install_catalog_answers_as_the_shell_does() {
             0,
         )
     });
-    // `--address` takes the next word as it comes, so `--help` there is a
-    // value and the install is sent (a bash bug, app-catalog.sh:110; the
-    // row flips when the fix lands).
+    // A help word where `--address` wants its value is help: the shell's
+    // fix (-h or --help anywhere on app catalog prints help and sends
+    // nothing) holds here too, so nothing is sent.
     // native: app install
     rig.check(&Case {
         compare: Compare::Shell,
-        ..read(
-            "help as a value acts (bash bug)",
+        ..stop(
+            "help as a value is help: nothing sent",
             &[
                 "install",
                 "--catalog",
@@ -647,7 +647,7 @@ fn install_catalog_answers_as_the_shell_does() {
                 "--address",
                 "--help",
             ],
-            STARTED,
+            0,
         )
     });
 }

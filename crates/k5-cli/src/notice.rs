@@ -1,16 +1,30 @@
-//! The notice that tells a caller of `k2` to type `k5` from now on.
+//! What a call by one of the brand's aliases does before the command
+//! runs: the notice, or the tombstone. Both are built from the brand
+//! table's two names ([`crate::called_as::Names`]), never spelled here.
 //!
-//! It is off: nothing calls it yet, and `src/main.rs` never prints it. It
-//! goes on only once the decision to retire the `k2` name is made. Then, called as `k2`,
-//! the front prints [`TEXT`] once on stderr before it answers. When it
-//! hands the call to the shell CLI it sets `K5_CLI_NOTICE_DONE=1`
-//! ([`crate::called_as::NOTICE_DONE_VAR`]); the shell reads that into
-//! `_K5_NOTICE_DONE` (`cli/src/prelude.sh`) and never prints a second one.
+//! - An alias in mode `notice`: the command runs, after one line on
+//!   stderr ([`text`]): `note: <alias> is now <name> (the same command).
+//!   Type <name> from now on.`
+//! - An alias in mode `tombstone`: nothing runs. One line on stderr
+//!   ([`tombstone_text`]), `<alias> is now <name>. Run <name> instead.`,
+//!   and exit 127 ([`Exit::Tombstone`]). It never repeats the arguments:
+//!   they may hold a secret.
+//! - An alias in mode `silent`, or the command's own name: nothing.
+//!
+//! `src/main.rs` asks [`on_call`] right after it reads the name it was
+//! called by. The default brand has no alias in either mode, so nothing
+//! shows there; turning one on is a change to a brand file, not to code.
+//!
+//! The notice shows once. When the front hands the call to the shell CLI
+//! it sets `K5_CLI_NOTICE_DONE=1` ([`crate::called_as::NOTICE_DONE_VAR`]);
+//! the shell reads that into `_K5_NOTICE_DONE` (`cli/src/prelude.sh`) and
+//! never prints a second one.
 //!
 //! It is not shown when stdout and stderr are the same pipe or file and
-//! stdout is not a terminal: `out=$(k2 ... 2>&1)` would get the notice in
+//! stdout is not a terminal: `out=$(xy ... 2>&1)` would get the notice in
 //! the answer it reads. Two streams count as the same when their device
-//! and inode are ([`merged`]).
+//! and inode are ([`merged`]). The tombstone always shows: nothing else
+//! does.
 //!
 //! On Windows that check can't tell: the file ids that would (volume
 //! serial and file index) are not stable in Rust's std there, and this
@@ -21,10 +35,70 @@
 //! rule and is tested everywhere with a stand-in for the console check.
 
 use crate::called_as::CalledAs;
-use k2_client::brand::AliasMode;
+use crate::exit::Exit;
+use k2_client::brand::{AliasMode, CLI_NAME};
 
-/// The notice, one line, on stderr. It never repeats the arguments.
-pub const TEXT: &str = "note: k2 is now k5 (the same command). Type k5 from now on.";
+/// The notice for a call by `alias` of the command called `name`: one
+/// line, for stderr.
+pub fn text(alias: &str, name: &str) -> String {
+    format!("note: {alias} is now {name} (the same command). Type {name} from now on.")
+}
+
+/// The tombstone's line for a call by `alias` of the command called
+/// `name`, for stderr. It takes no arguments, so it can't repeat them.
+pub fn tombstone_text(alias: &str, name: &str) -> String {
+    format!("{alias} is now {name}. Run {name} instead.")
+}
+
+/// What a call does before the command runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Before {
+    /// Nothing: the command runs.
+    Run,
+    /// This notice on stderr when it is due ([`should_show`]), then the
+    /// command runs.
+    Notice(String),
+    /// This line on stderr, then exit 127; nothing runs.
+    Tombstone(String),
+}
+
+/// What a call by `who` does before the command called `name` runs.
+pub fn before(who: CalledAs, name: &str) -> Before {
+    match who {
+        CalledAs::Alias {
+            name: alias,
+            mode: AliasMode::Notice,
+        } => Before::Notice(text(alias, name)),
+        CalledAs::Alias {
+            name: alias,
+            mode: AliasMode::Tombstone,
+        } => Before::Tombstone(tombstone_text(alias, name)),
+        CalledAs::Alias {
+            mode: AliasMode::Silent,
+            ..
+        }
+        | CalledAs::Primary => Before::Run,
+    }
+}
+
+/// [`before`] for this process, the compiled command's name: the notice
+/// printed when due and `None` (the command runs), or the tombstone's
+/// line printed and the exit to end with.
+pub fn on_call(who: CalledAs) -> Option<Exit> {
+    match before(who, CLI_NAME) {
+        Before::Run => None,
+        Before::Notice(line) => {
+            if should_show(who, streams(), stderr_is_console) {
+                crate::out::stderr_line(&line);
+            }
+            None
+        }
+        Before::Tombstone(line) => {
+            crate::out::stderr_line(&line);
+            Some(Exit::Tombstone)
+        }
+    }
+}
 
 /// What the merged check says about stdout and stderr.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,13 +133,6 @@ pub fn should_show(
         Streams::Merged => false,
         Streams::Apart => true,
         Streams::Unknown => stderr_is_console(),
-    }
-}
-
-/// Prints the notice when it is due. Nothing calls this yet.
-pub fn show_if_due(called_as: CalledAs) {
-    if should_show(called_as, streams(), stderr_is_console) {
-        crate::out::stderr_line(TEXT);
     }
 }
 
@@ -133,13 +200,105 @@ pub fn merged(stdout: std::os::fd::BorrowedFd<'_>, stderr: std::os::fd::Borrowed
 mod tests {
     use super::*;
 
+    use crate::called_as::{called_as, Names, Os};
+    use std::ffi::OsStr;
+
+    /// The command after the rename: the old name in mode notice, the old
+    /// shim's name silent.
+    const K5: Names = Names {
+        name: "k5",
+        aliases: &[("k2", AliasMode::Notice), ("k2so", AliasMode::Silent)],
+    };
+
+    /// The release after that: the old name in mode tombstone.
+    const K5_TOMBSTONE: Names = Names {
+        name: "k5",
+        aliases: &[("k2", AliasMode::Tombstone)],
+    };
+
+    /// A brand with no aliases.
+    const XY: Names = Names {
+        name: "xy",
+        aliases: &[],
+    };
+
+    /// What a call by `argv0` does before the command of `names` runs.
+    fn before_for(names: &Names, argv0: &str) -> Before {
+        let who = called_as(OsStr::new(argv0), |_| None, Os::Unix, names);
+        before(who, names.name)
+    }
+
+    /// With the names k2 and k5 the notice is the ruled line, byte for
+    /// byte, and the tombstone is K2's ruled line.
     #[test]
-    fn the_text_is_the_ruled_line() {
+    fn the_lines_are_the_ruled_text() {
         assert_eq!(
-            TEXT,
+            text("k2", "k5"),
             "note: k2 is now k5 (the same command). Type k5 from now on."
         );
-        assert!(!TEXT.contains('\n'));
+        assert_eq!(tombstone_text("k2", "k5"), "k2 is now k5. Run k5 instead.");
+        for line in [text("k2", "k5"), tombstone_text("k2", "k5")] {
+            assert!(!line.contains('\n'), "{line:?}");
+        }
+    }
+
+    /// Each mode of the table does what it says; the command's own name
+    /// and a name the table does not know do nothing.
+    #[test]
+    fn each_mode_from_the_table() {
+        let notice = Before::Notice(text("k2", "k5"));
+        assert_eq!(before_for(&K5, "k2"), notice);
+        assert_eq!(before_for(&K5, "/usr/local/bin/k2"), notice);
+        assert_eq!(before_for(&K5, "k2so"), Before::Run);
+        assert_eq!(before_for(&K5, "k5"), Before::Run);
+        assert_eq!(before_for(&K5, "some-copy"), Before::Run);
+        let tomb = Before::Tombstone(tombstone_text("k2", "k5"));
+        assert_eq!(before_for(&K5_TOMBSTONE, "k2"), tomb);
+        assert_eq!(before_for(&K5_TOMBSTONE, "k5"), Before::Run);
+        for argv0 in ["xy", "k2", "k5", "k2so"] {
+            assert_eq!(before_for(&XY, argv0), Before::Run, "{argv0}");
+        }
+        // The names are the table's, not ours.
+        let other = Names {
+            name: "xy",
+            aliases: &[("xyold", AliasMode::Notice), ("xy1", AliasMode::Tombstone)],
+        };
+        assert_eq!(
+            before_for(&other, "xyold"),
+            Before::Notice(
+                "note: xyold is now xy (the same command). Type xy from now on.".to_string()
+            )
+        );
+        assert_eq!(
+            before_for(&other, "xy1"),
+            Before::Tombstone("xy1 is now xy. Run xy instead.".to_string())
+        );
+    }
+
+    /// The compiled brand turns neither on: no alias in mode notice or
+    /// tombstone, so whatever the name, nothing prints and the command
+    /// runs. This fails on purpose at the switch, when the brand file
+    /// gives an alias one of those modes.
+    #[test]
+    fn the_compiled_brand_shows_neither() {
+        let names = Names::COMPILED;
+        for (alias, mode) in names.aliases {
+            assert_eq!(*mode, AliasMode::Silent, "alias {alias}");
+        }
+        let mut argv0s = vec![names.name, "some-copy", ""];
+        argv0s.extend(names.aliases.iter().map(|(alias, _)| *alias));
+        for argv0 in &argv0s {
+            assert_eq!(before_for(&names, argv0), Before::Run, "{argv0:?}");
+            for value in &argv0s {
+                let who = called_as(
+                    OsStr::new(argv0),
+                    |_| Some(value.to_string()),
+                    Os::Unix,
+                    &names,
+                );
+                assert_eq!(on_call(who), None, "{argv0:?}, variable {value:?}");
+            }
+        }
     }
 
     fn never_asked() -> bool {

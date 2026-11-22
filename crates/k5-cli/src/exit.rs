@@ -60,10 +60,11 @@ pub enum Exit {
     /// keeps running (`compute-lib.sh`, `compute-run.sh`), an LLM login is
     /// cancelled (`llm.sh`). 128 plus SIGINT, as shells report it.
     Interrupted,
-    /// 127: reserved for the `k2` name once it stops working, when
-    /// calling the command `k2` only says to use `k5`. Nothing exits with
-    /// it yet. It is what a shell gives for a command it can't find.
-    K2Retired,
+    /// 127: called by an alias in mode `tombstone` (the brand file's), the
+    /// command runs nothing and only says which name to use
+    /// ([`crate::notice`]). It is what a shell gives for a command it can't
+    /// find. No alias of the default brand has that mode.
+    Tombstone,
     /// 69: macOS or Linux, a command the binary hands to the shell CLI,
     /// and no Python 3 for the shell to run
     /// ([`crate::fallthrough::FrontError::NoPython`]); its one line says
@@ -103,7 +104,7 @@ impl Exit {
         Exit::CurlReadError,
         Exit::NoPython,
         Exit::WaitTimedOut,
-        Exit::K2Retired,
+        Exit::Tombstone,
         Exit::Interrupted,
         Exit::NoGitBash,
     ];
@@ -123,7 +124,7 @@ impl Exit {
             Exit::CurlReadError => 26,
             Exit::NoPython => 69,
             Exit::WaitTimedOut => 124,
-            Exit::K2Retired => 127,
+            Exit::Tombstone => 127,
             Exit::Interrupted => 130,
             Exit::NoGitBash => 9009,
             Exit::Curl(code) => code,
@@ -174,7 +175,7 @@ mod tests {
                 (Exit::CurlReadError, 26),
                 (Exit::NoPython, 69),
                 (Exit::WaitTimedOut, 124),
-                (Exit::K2Retired, 127),
+                (Exit::Tombstone, 127),
                 (Exit::Interrupted, 130),
                 (Exit::NoGitBash, 9009),
             ]

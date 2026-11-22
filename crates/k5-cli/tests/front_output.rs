@@ -1,6 +1,6 @@
 //! Where the built `k5-cli` writes, against `bash cli/k2`: a broken pipe
-//! on stdout ends both by SIGPIPE, and the notice for callers of `k2` is
-//! not printed (it is off until the switch).
+//! on stdout ends both by SIGPIPE, and no notice is printed under these
+//! names (the default brand turns none on until the switch).
 //!
 //! Every run gets an empty environment but `PATH`, a temporary `HOME` and
 //! a dead port with a dummy token, as tests/front_binary.rs does.
@@ -129,7 +129,7 @@ fn a_broken_pipe_on_version_ends_by_sigpipe_as_bash_does() {
     }
 }
 
-/// The notice is off: called as `k2`, nothing on stderr for `--version`,
+/// No notice: called as `k2` or `k5`, nothing on stderr for `--version`,
 /// and no notice when a verb falls through.
 #[test]
 fn the_notice_is_not_printed_today() {
@@ -156,10 +156,6 @@ fn the_notice_is_not_printed_today() {
         assert_eq!(out.status.code(), Some(1), "{name}: {out:?}");
         let said = String::from_utf8_lossy(&out.stderr);
         assert!(!said.is_empty(), "{name} nosuchverb said nothing on stderr");
-        assert!(
-            !said.contains(k5_cli::notice::TEXT),
-            "{name} nosuchverb: {said}"
-        );
-        assert!(!said.contains("k2 is now k5"), "{name} nosuchverb: {said}");
+        assert!(!said.contains(" is now "), "{name} nosuchverb: {said}");
     }
 }

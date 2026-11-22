@@ -25,8 +25,8 @@ const PASSED_ON: &[(i32, &str)] = &[
 ];
 
 /// The front's own codes, which the shell script never uses: 69 no
-/// Python 3 for a hand-off (`k2 study errors` names it), 127 reserved for
-/// the `k2` name's end, 9009 no Git Bash on Windows.
+/// Python 3 for a hand-off (`k2 study errors` names it), 127 a call by an
+/// alias in mode tombstone, 9009 no Git Bash on Windows.
 const FRONT_ONLY: &[i32] = &[69, 127, 9009];
 
 /// The literal `exit <number>` codes in one line of shell, where a command

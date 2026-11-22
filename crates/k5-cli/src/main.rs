@@ -7,10 +7,11 @@
 //! it only counts. The binary's own requests carry its verdict too.
 //!
 //! The result goes to stdout and the front's own errors to stderr
-//! ([`k5_cli::out`]); the exit codes are [`k5_cli::exit::Exit`]'s. The
-//! notice for callers of `k2` ([`k5_cli::notice`]) is off: nothing here
-//! prints it. With `K5_CLI_TRACE_TIMING` set, each phase's time goes to
-//! stderr ([`k5_cli::trace`]).
+//! ([`k5_cli::out`]); the exit codes are [`k5_cli::exit::Exit`]'s. Called
+//! by an alias the brand file retires, the front first shows the notice
+//! or the tombstone ([`k5_cli::notice`]); the default brand has none. With
+//! `K5_CLI_TRACE_TIMING` set, each phase's time goes to stderr
+//! ([`k5_cli::trace`]).
 
 use k5_cli::called_as::CalledAs;
 use k5_cli::exit::Exit;
@@ -18,7 +19,8 @@ use k5_cli::front::{self, Route};
 use k5_cli::offline::{self, Env, Prelude};
 use k5_cli::pages::{self, Page};
 use k5_cli::{
-    check, cli_status, codex_gate, daemon, embedded, fallthrough, out, passport, port, spec, trace,
+    check, cli_status, codex_gate, daemon, embedded, fallthrough, notice, out, passport, port, spec,
+    trace,
 };
 use std::ffi::OsString;
 
@@ -140,6 +142,11 @@ fn main() {
     let args: Vec<OsString> = argv.collect();
     let who = CalledAs::current(&argv0);
     trace::mark("called_as");
+    // An alias the brand file retires: a tombstone ends the call here, a
+    // notice prints its line when due, then the command runs.
+    if let Some(exit) = notice::on_call(who) {
+        std::process::exit(exit.code());
+    }
     // The shell's prelude checks the port before anything else runs: a
     // setting or saved port that isn't one stops every command, a native
     // verb's too.

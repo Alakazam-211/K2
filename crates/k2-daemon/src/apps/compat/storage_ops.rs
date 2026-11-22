@@ -337,10 +337,12 @@ pub async fn bucket_empty(ctx: &Ctx, caller: &Caller, id: &str) -> SResult<Value
         .await
         .map_err(pgerr)?;
     tx.commit().await.map_err(pgerr)?;
+    after_commit_hook()?;
+    let now = k2_core::deploy::now();
     for r in &rows {
         let (oid, v): (String, Option<String>) = (r.get(0), r.get(1));
         if let Some(v) = v {
-            ctx.bytes.remove(&oid, &v);
+            ctx.bytes.retire(&oid, &v, now);
         }
     }
     Ok(json!({ "message": "Successfully emptied" }))
@@ -507,18 +509,49 @@ pub async fn complete_upload(
         )
         .await
     };
-    let committed = match wrote {
-        Ok(_) => tx.commit().await.map_err(pgerr),
-        Err(e) => Err(pgerr(e)),
-    };
-    if let Err(e) = committed {
-        ctx.bytes.remove(&id, &version);
-        return Err(e);
-    }
-    if let Some(old) = old_version.filter(|o| *o != version) {
-        ctx.bytes.remove(&id, &old);
-    }
+    after_write(ctx, tx, wrote, &id, &version, old_version.as_deref()).await?;
     Ok(json!({ "Id": id, "Key": format!("{bucket}/{name}"), "version": version }))
+}
+
+/// The end of a write whose new bytes are already placed under
+/// `(id, version)`: commit, then retire the version the row named before.
+/// - The statement failed: nothing committed, the new bytes go at once.
+/// - The commit failed: its outcome is unknown (a dropped connection may
+///   have committed), so the new bytes stay: at worst an orphan `verify`
+///   names, never a row without its bytes.
+/// - Committed: the old version is retired, never deleted here.
+async fn after_write(
+    ctx: &Ctx,
+    tx: tokio_postgres::Transaction<'_>,
+    wrote: Result<u64, tokio_postgres::Error>,
+    id: &str,
+    version: &str,
+    old_version: Option<&str>,
+) -> SResult<()> {
+    if let Err(e) = wrote {
+        drop(tx);
+        ctx.bytes.remove_now(id, version);
+        return Err(pgerr(e));
+    }
+    tx.commit().await.map_err(pgerr)?;
+    after_commit_hook()?;
+    if let Some(old) = old_version.filter(|o| *o != version) {
+        ctx.bytes.retire(id, old, k2_core::deploy::now());
+    }
+    Ok(())
+}
+
+/// Tests: fail right after a commit, before any bytes are retired (the
+/// daemon dying between the two).
+#[cfg(test)]
+pub static FAIL_AFTER_COMMIT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn after_commit_hook() -> SResult<()> {
+    #[cfg(test)]
+    if FAIL_AFTER_COMMIT.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err(StorageError::internal("test: the daemon stopped between the commit and the retire"));
+    }
+    Ok(())
 }
 
 /// Remove `names` from `bucket` as the caller: the rows it could delete,
@@ -537,12 +570,14 @@ pub async fn remove(ctx: &Ctx, caller: &Caller, bucket: &str, names: &[String]) 
         .await
         .map_err(pgerr)?;
     tx.commit().await.map_err(pgerr)?;
+    after_commit_hook()?;
     let mut out = Vec::with_capacity(rows.len());
+    let now = k2_core::deploy::now();
     for r in &rows {
         out.push(parse(&r.get::<_, String>(0))?);
         let (oid, v): (String, Option<String>) = (r.get(1), r.get(2));
         if let Some(v) = v {
-            ctx.bytes.remove(&oid, &v);
+            ctx.bytes.retire(&oid, &v, now);
         }
     }
     Ok(Value::Array(out))
@@ -731,17 +766,7 @@ pub async fn put_imported(ctx: &Ctx, staged: &mut Staged, o: &Imported) -> SResu
         )
         .await
     };
-    let committed = match wrote {
-        Ok(_) => tx.commit().await.map_err(pgerr),
-        Err(e) => Err(pgerr(e)),
-    };
-    if let Err(e) = committed {
-        ctx.bytes.remove(&id, &version);
-        return Err(e);
-    }
-    if let Some(old) = old_version.filter(|v| *v != version) {
-        ctx.bytes.remove(&id, &old);
-    }
+    after_write(ctx, tx, wrote, &id, &version, old_version.as_deref()).await?;
     Ok((id, version))
 }
 

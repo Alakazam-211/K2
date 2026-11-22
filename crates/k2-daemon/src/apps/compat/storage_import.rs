@@ -590,6 +590,9 @@ pub struct Verify {
     /// restored to an earlier moment, or a write that never committed.
     /// Named, never removed by verify.
     pub orphans: Vec<String>,
+    /// Bytes a row stopped naming, kept until the retire grace ends
+    /// (`<id>/<version>`); not orphans.
+    pub retired: Vec<String>,
 }
 
 /// Re-hash every imported object's bytes against the ledger, check every
@@ -603,7 +606,14 @@ pub async fn verify(ctx: &Ctx, src: Option<&Source>) -> SResult<Verify> {
         rows.iter().filter_map(|(_, _, id, version, _)| version.clone().map(|v| (id.clone(), v))).collect();
     let bytes = ctx.bytes.clone();
     let on_disk = tokio::task::spawn_blocking(move || bytes.all_bytes()).await.map_err(|e| StorageError::internal(format!("walk worker: {e}")))?;
-    v.orphans = on_disk.into_iter().filter(|k| !named.contains(k)).map(|(i, ver)| format!("{i}/{ver}")).collect();
+    let retired: std::collections::HashSet<(String, String)> = ctx.bytes.retired().into_iter().map(|(_, i, v)| (i, v)).collect();
+    for (i, ver) in on_disk.into_iter().filter(|k| !named.contains(k)) {
+        if retired.contains(&(i.clone(), ver.clone())) {
+            v.retired.push(format!("{i}/{ver}"));
+        } else {
+            v.orphans.push(format!("{i}/{ver}"));
+        }
+    }
     for (bucket, name, id, version, _size) in rows {
         here.insert((bucket.clone(), name.clone()));
         v.checked += 1;

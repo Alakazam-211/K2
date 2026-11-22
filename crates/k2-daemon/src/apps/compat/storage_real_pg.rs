@@ -287,7 +287,9 @@ async fn real_pg_storage_door() {
     let versions: Vec<_> = std::fs::read_dir(super::storage_bytes::ByteStore::for_app(app).object_path(&id, "00").expect("path").parent().expect("dir"))
         .expect("object folder")
         .collect();
-    assert_eq!(versions.len(), 1, "the replaced version's bytes are gone");
+    assert_eq!(versions.len(), 2, "the replaced version's bytes are retired, not deleted (a backup's walk still finds them)");
+    let store = super::storage_bytes::ByteStore::for_app(app);
+    assert_eq!(store.retired().len(), 1, "the upsert retired the first upload's version: {:?}", store.retired());
 
     // ── policies: B is in another org ──
     let (st, _, body) = call(app, req("GET", &path, Some("test-b"), &[], b"")).await;
@@ -441,7 +443,12 @@ async fn real_pg_storage_door() {
     let gone = j(&body);
     assert_eq!(gone.as_array().map(Vec::len), Some(1), "{gone}");
     assert_eq!(gone[0]["name"], key);
-    assert!(!super::storage_bytes::ByteStore::for_app(app).has(&id, gone[0]["version"].as_str().expect("version")), "the bytes go with the row");
+    let removed_v = gone[0]["version"].as_str().expect("version").to_string();
+    let store = super::storage_bytes::ByteStore::for_app(app);
+    assert!(store.has(&id, &removed_v), "removed bytes stay until the retire grace ends");
+    assert!(store.retired().iter().any(|(_, i, v)| *i == id && *v == removed_v), "and are listed to go");
+    assert_eq!(store.sweep(k2_core::deploy::now() + super::storage_bytes::RETIRE_GRACE_SECS, super::storage_bytes::RETIRE_GRACE_SECS) >= 1, true);
+    assert!(!store.has(&id, &removed_v), "the sweep deletes them after the grace");
     let (st, _, body) = call(app, req("DELETE", &p3, Some("test-a"), &[], b"")).await;
     assert_eq!((st, j(&body)), (200, json!({"message": "Successfully deleted"})));
     let (st, _, body) = call(app, req("DELETE", &p3, Some("test-a"), &[], b"")).await;
@@ -472,6 +479,38 @@ async fn real_pg_storage_door() {
         drop(disk);
         let (st, _, body) = call(app, req("POST", &format!("/object/photos/{ORG1}/full.jpg"), Some("test-a"), &[("Content-Type", "image/jpeg")], b"room now")).await;
         assert_eq!(st, 200, "with room again: {}", String::from_utf8_lossy(&body));
+    }
+
+    // ── the daemon stops between a commit and the retire ──
+    // Orphans, never a row without its bytes.
+    {
+        use std::sync::atomic::Ordering;
+        let store = super::storage_bytes::ByteStore::for_app(app);
+        let path = format!("/object/photos/{ORG2}/s/crash.jpg");
+        let (st, _, body) = call(app, req("POST", &path, Some("test-b"), &[("Content-Type", "image/jpeg")], b"v-one")).await;
+        assert_eq!(st, 200, "{}", String::from_utf8_lossy(&body));
+        let crash_id = j(&body)["Id"].as_str().expect("Id").to_string();
+        let v_one = j(&body)["version"].as_str().expect("version").to_string();
+        super::storage_ops::FAIL_AFTER_COMMIT.store(true, Ordering::SeqCst);
+        let (st, _, _) = call(app, req("POST", &path, Some("test-b"), &[("Content-Type", "image/jpeg"), ("x-upsert", "true")], b"v-two")).await;
+        assert_eq!(st, 500, "the injected stop answers as a failure");
+        let (st, _, _) = call(app, req("DELETE", "/object/photos", Some("test-b"), &[], json!({"prefixes": [format!("{ORG2}/s/b.jpg")]}).to_string().as_bytes())).await;
+        assert_eq!(st, 500);
+        super::storage_ops::FAIL_AFTER_COMMIT.store(false, Ordering::SeqCst);
+        // The upsert committed: the row names the new bytes, and they're there.
+        let (st, _, body) = call(app, req("GET", &path, Some("test-b"), &[], b"")).await;
+        assert_eq!((st, body.as_slice()), (200, b"v-two".as_slice()), "the row's bytes are there");
+        assert!(store.has(&crash_id, &v_one), "the old version stays (an orphan), never deleted before or without the commit");
+        assert!(!store.retired().iter().any(|(_, i, v)| *i == crash_id && *v == v_one), "nothing was retired: the stop came first");
+        // The remove committed: the row is gone; its bytes stay as an orphan.
+        let (st, _, _) = call(app, req("GET", &format!("/object/photos/{ORG2}/s/b.jpg"), Some("test-b"), &[], b"")).await;
+        assert_eq!(st, 400, "the row is gone");
+        let cfg = test_seams::config(app).flatten().expect("config");
+        let ctx = super::storage_ops::Ctx { app_id: app.into(), target: super::storage_bind::authenticator_target(&cfg).expect("target"), bytes: store.clone() };
+        let v = super::storage_import::verify(&ctx, None).await.expect("verify");
+        assert!(v.bad.is_empty(), "no row lacks its bytes: {v:?}");
+        assert!(v.orphans.contains(&format!("{crash_id}/{v_one}")), "{v:?}");
+        assert_eq!(v.orphans.len(), 2, "the upsert's old version and the removed object's bytes: {v:?}");
     }
 
     // ── a JWT-shaped token whose claims K2 didn't write ──

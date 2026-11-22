@@ -119,6 +119,8 @@ elif "verify" in v:
         print("  bad: %s" % b)
     for m in r.get("missing") or []:
         print("  missing here: %s" % m)
+    for o in r.get("retired") or []:
+        print("  retired, deleted after the grace: %s" % o)
     for o in r.get("orphans") or []:
         print("  bytes no row names (kept): %s" % o)
 else:

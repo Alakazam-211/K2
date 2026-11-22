@@ -17,6 +17,22 @@
 //!
 //! Uploads stream into `tmp/` while their MD5 (Supabase's ETag) and
 //! SHA-256 are taken, then one rename places them.
+//!
+//! **The order backups rely on** (a dump of the database first, the files
+//! a few minutes later):
+//! - every `<id>/<version>` file is write-once: written in `tmp/`, fsync'd,
+//!   renamed into place (and the folder fsync'd) **before** the row that
+//!   names it commits; nothing ever rewrites one;
+//! - bytes a committed row stopped naming (an upsert's old version, a
+//!   removed object) are **retired**, not deleted: listed in
+//!   `retired.log` and deleted by [`ByteStore::sweep`] only after
+//!   [`RETIRE_GRACE_SECS`], so a dump taken before the change still finds
+//!   every file it names when the walk comes later;
+//! - bytes no committed row ever named (the statement before the commit
+//!   failed) go at once;
+//! - a commit whose outcome is unknown (the connection dropped) leaves the
+//!   new bytes where they are: an orphan `verify` names, never a row
+//!   without its bytes.
 
 use std::path::{Path, PathBuf};
 
@@ -29,6 +45,11 @@ use super::storage_err::{SResult, StorageError};
 
 /// How often a streaming write asks the disk guard again.
 const SPACE_EVERY: u64 = 16 << 20;
+/// How long retired bytes stay before the sweep deletes them: longer than
+/// any backup run's gap between its database dump and its file walk.
+pub const RETIRE_GRACE_SECS: i64 = 48 * 3600;
+/// The sweep runs at most this often per store (on the next retire).
+const SWEEP_EVERY_SECS: i64 = 3600;
 
 /// One App's byte store.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -167,6 +188,12 @@ impl ByteStore {
         }
         std::fs::rename(&staged.path, &dest).map_err(|e| StorageError::internal(format!("storage place: {e}")))?;
         staged.placed = true;
+        // The rename is durable before the row that names it commits.
+        if let Some(p) = dest.parent() {
+            std::fs::File::open(p)
+                .and_then(|d| d.sync_all())
+                .map_err(|e| StorageError::internal(format!("storage folder sync: {e}")))?;
+        }
         Ok(dest)
     }
 
@@ -182,15 +209,21 @@ impl ByteStore {
             _ => StorageError::internal(format!("storage read: {e}")),
         })?;
         std::fs::copy(&src, &staged_path).map_err(|e| StorageError::internal(format!("storage copy: {e}")))?;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&staged_path)
+            .and_then(|f| f.sync_all())
+            .map_err(|e| StorageError::internal(format!("storage sync: {e}")))?;
         staged.size = size;
         staged.md5_hex = md5_hex;
         staged.sha256_hex = sha256_hex;
         Ok(staged)
     }
 
-    /// Remove one version's bytes (gone already is fine), then the
-    /// object's folder when it is empty.
-    pub fn remove(&self, id: &str, version: &str) {
+    /// Delete one version's bytes now (gone already is fine), then the
+    /// object's folder when it is empty. Only for bytes no committed row
+    /// ever named; everything else is [`ByteStore::retire`]d.
+    pub fn remove_now(&self, id: &str, version: &str) {
         if let Some(p) = self.object_path(id, version) {
             let _ = std::fs::remove_file(&p);
             if let Some(dir) = p.parent() {
@@ -199,10 +232,88 @@ impl ByteStore {
         }
     }
 
+    fn retired_log(&self) -> PathBuf {
+        self.root.join("retired.log")
+    }
+
+    /// Bytes a committed row stopped naming: kept for
+    /// [`RETIRE_GRACE_SECS`], then [`ByteStore::sweep`] deletes them.
+    /// Runs a due sweep (at most hourly) after recording.
+    pub fn retire(&self, id: &str, version: &str, now: i64) {
+        if self.object_path(id, version).is_none() {
+            return;
+        }
+        {
+            let _g = log_lock().lock().unwrap_or_else(|e| e.into_inner());
+            let line = format!("{now} {id} {version}\n");
+            let wrote = std::fs::create_dir_all(&self.root).and_then(|_| {
+                use std::io::Write;
+                let mut f = std::fs::OpenOptions::new().create(true).append(true).open(self.retired_log())?;
+                f.write_all(line.as_bytes())?;
+                f.sync_all()
+            });
+            if let Err(e) = wrote {
+                // Not recorded: the bytes stay (an orphan verify names), never
+                // a delete the log can't account for.
+                k2_core::log_debug!("[storage] retire {id}/{version}: {e}");
+                return;
+            }
+        }
+        if self.sweep_due(now) {
+            self.sweep(now, RETIRE_GRACE_SECS);
+        }
+    }
+
+    fn sweep_due(&self, now: i64) -> bool {
+        static LAST: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<PathBuf, i64>>> = std::sync::OnceLock::new();
+        let mut g = LAST.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+        let last = g.get(&self.root).copied().unwrap_or(0);
+        if now - last < SWEEP_EVERY_SECS {
+            return false;
+        }
+        g.insert(self.root.clone(), now);
+        true
+    }
+
+    /// Retired `(retired at, id, version)` still waiting.
+    pub fn retired(&self) -> Vec<(i64, String, String)> {
+        let raw = std::fs::read_to_string(self.retired_log()).unwrap_or_default();
+        raw.lines()
+            .filter_map(|l| {
+                let mut p = l.split_whitespace();
+                let at = p.next()?.parse().ok()?;
+                Some((at, p.next()?.to_string(), p.next()?.to_string()))
+            })
+            .collect()
+    }
+
+    /// Delete retired bytes older than `grace` seconds; the rest stay
+    /// listed. Returns how many were deleted.
+    pub fn sweep(&self, now: i64, grace: i64) -> usize {
+        let _g = log_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let all = self.retired();
+        let (due, keep): (Vec<_>, Vec<_>) = all.into_iter().partition(|(at, _, _)| at + grace <= now);
+        for (_, id, v) in &due {
+            self.remove_now(id, v);
+        }
+        let body: String = keep.iter().map(|(at, id, v)| format!("{at} {id} {v}\n")).collect();
+        if let Err(e) = k2_core::fs_atomic::atomic_write_str(&self.retired_log(), &body) {
+            k2_core::log_debug!("[storage] retired.log: {e}");
+        }
+        due.len()
+    }
+
     /// Does `(id, version)` have its bytes?
     pub fn has(&self, id: &str, version: &str) -> bool {
         self.object_path(id, version).is_some_and(|p| p.is_file())
     }
+}
+
+/// One lock for every store's `retired.log` (appends and the sweep's
+/// rewrite never interleave).
+fn log_lock() -> &'static std::sync::Mutex<()> {
+    static L: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    &L
 }
 
 /// `(size, md5 hex, sha256 hex)` of a file.
@@ -272,6 +383,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn retired_bytes_stay_until_the_grace_ends() {
+        let (_d, s) = store();
+        let id = "6f1c4a52-0b7d-4d0e-9a2c-3b8f1e7d9a10";
+        let v = "0b7d4d0e-9a2c-4b8f-8e7d-9a106f1c4a52";
+        let mut body: &[u8] = b"old bytes";
+        let mut st = s.stage(&mut body, 100).await.expect("stage");
+        s.place(&mut st, id, v).expect("place");
+        const NOW: i64 = 1_800_000_000;
+        s.retire(id, v, NOW);
+        assert!(s.has(id, v), "retired bytes are still there for a backup's walk");
+        assert_eq!(s.retired(), vec![(NOW, id.to_string(), v.to_string())]);
+        assert_eq!(s.sweep(NOW + RETIRE_GRACE_SECS - 1, RETIRE_GRACE_SECS), 0, "not before the grace ends");
+        assert!(s.has(id, v));
+        assert_eq!(s.sweep(NOW + RETIRE_GRACE_SECS, RETIRE_GRACE_SECS), 1);
+        assert!(!s.has(id, v), "deleted once the grace is over");
+        assert!(s.retired().is_empty(), "and no longer listed");
+    }
+
+    #[tokio::test]
     async fn a_full_disk_stops_an_upload_at_the_reserve() {
         use k2_core::disk_guard::{fake, Mode, RawStat};
         let (_d, s) = store();
@@ -306,7 +436,7 @@ mod tests {
         assert_eq!(c.size, 5);
         assert_eq!(std::fs::read(&c.path).expect("read copy"), b"bytes");
         assert_eq!(s.all_bytes(), vec![(id.to_string(), V1.to_string())]);
-        s.remove(id, V1);
+        s.remove_now(id, V1);
         assert!(!s.has(id, V1));
         assert!(s.all_bytes().is_empty());
         assert!(!p.parent().expect("dir").exists(), "the empty object folder goes too");

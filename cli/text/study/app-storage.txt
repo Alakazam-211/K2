@@ -91,6 +91,13 @@ WHERE THE BYTES LIVE (backups and restore)
   bytes except through the door.
   Also under storage/: tmp/ (uploads in flight) and import/ (the import's
   ledger and partial downloads); neither needs a backup.
+  Every file is written once: in tmp/, synced, renamed into place before
+  its row commits, never rewritten. Bytes a row stops naming (an upsert's
+  old version, a removed object) are retired, not deleted: listed in
+  storage/retired.log and deleted 48 hours later, so a backup that dumps
+  the database first and walks the files after finds every file the dump
+  names. A stop between a commit and the retire leaves an orphan, never a
+  row without its bytes.
   Back up and restore the bytes with the database, to the same moment.
   After a restore k2 app storage verify names every row whose bytes are
   missing, and every file no row names (kept, never deleted by verify); a

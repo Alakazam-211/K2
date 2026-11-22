@@ -91,11 +91,7 @@ impl Drop for Server {
 pub fn lane_a_fixture(db: &str) -> String {
     format!(
         r#"
-DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN CREATE ROLE anon NOLOGIN NOINHERIT; END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN CREATE ROLE authenticated NOLOGIN NOINHERIT; END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN CREATE ROLE service_role NOLOGIN NOINHERIT BYPASSRLS; END IF;
-END $$;
+DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN CREATE ROLE anon NOLOGIN NOINHERIT; END IF; IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN CREATE ROLE authenticated NOLOGIN NOINHERIT; END IF; IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN CREATE ROLE service_role NOLOGIN NOINHERIT BYPASSRLS; END IF; END $$;
 CREATE ROLE {db}_migrator LOGIN;
 CREATE ROLE {db}_authenticator LOGIN NOINHERIT;
 GRANT anon, authenticated, service_role TO {db}_authenticator;
@@ -231,7 +227,11 @@ fn j(b: &[u8]) -> Value {
 
 /// A fresh database with storage on, for `app_id`.
 pub async fn storage_app(srv: &Server, app_id: &str, db: &str, anon: bool) -> DoorConfig {
-    srv.su("postgres", &lane_a_fixture(db)).await;
+    // One statement at a time: CREATE DATABASE can't run in the implicit
+    // transaction a multi-statement query is.
+    for stmt in lane_a_fixture(db).split(";\n").map(str::trim).filter(|x| !x.is_empty()) {
+        srv.su("postgres", stmt).await;
+    }
     test_seams::set_targets(db, srv.target(&format!("{db}_authenticator"), db), srv.target(&format!("{db}_migrator"), db));
     let mut mig = super::storage_pg::connect(&srv.target(&format!("{db}_migrator"), db)).await.expect("migrator");
     mig.client().batch_execute(AUTH_SQL).await.expect("auth fixture");

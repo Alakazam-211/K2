@@ -1922,7 +1922,7 @@ _app_rt_post_file() {
 # most, exit 2 past it); a terminal, /dev/null or --no-stdin sends none.
 cmd_app_exec() {
     local app="" timeout="" json_out=0 no_stdin=0
-    if _app_says_help "$@"; then set -- --help; fi
+    if _app_cmd_says_help "$@"; then _app_rt_usage; return 0; fi
     while [ $# -gt 0 ]; do
         case "$1" in
             --timeout) timeout="$(_compute_secs "${2:-}")"; shift 2 ;;
@@ -1995,7 +1995,7 @@ print(124 if v.get("timedOut") else (c if isinstance(c, int) and 0 <= c <= 255 e
 # too (echo ls | k2 app shell jobs).
 cmd_app_shell() {
     local app=""
-    if _app_says_help "$@"; then set -- --help; fi
+    if _app_cmd_says_help "$@"; then _app_rt_usage; return 0; fi
     while [ $# -gt 0 ]; do
         case "$1" in
             -h|--help) _app_rt_usage; return 0 ;;

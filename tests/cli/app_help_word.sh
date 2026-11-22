@@ -11,6 +11,8 @@
 # Help rows: `<line with help>` and the same line with -h in its place
 # both exit 0, print the same thing, send nothing, and print the page on
 # stdout with nothing on stderr.
+# exec and shell: everything after the App is the command, so a help word
+# there goes out with it; help only before the App or right after it.
 # Name rows: `<line> -- help` gets past the `--` gate and sends `help` as
 # the name (a query value, a JSON string or a path segment).
 #
@@ -497,6 +499,32 @@ app doctor -- help
 local app build -- help
 local app sdk status -- help
 ROWS
+
+echo "== app exec and shell: everything after the App is the command =="
+# Help only before the App or as the first word after it (K2, 0.46.17).
+while IFS= read -r row; do
+    [ -n "$row" ] && help_row "$row"
+done <<'ROWS'
+app exec help
+app exec --json help
+app shell help
+ROWS
+# exec_sends <argv json> <args...>: the command goes out as typed.
+exec_sends() {
+    local want="$1"; shift
+    local label="k2 $*"
+    run 0 "$@"
+    if grep -Fq "\"argv\": $want" <<<"$SENT"; then
+        ok "$label: sends the command $want (exit $RC)"
+    else
+        bad "$label: did not send the command $want (exit $RC)"; show "$SENT"; show "$OUT"; show "$ERR"
+    fi
+}
+exec_sends '["ls", "-h"]' app exec shop ls -h
+exec_sends '["ls", "help"]' app exec shop ls help
+exec_sends '["ls", "--help"]' app exec shop ls --help
+exec_sends '["ls", "-h"]' app exec shop -- ls -h
+exec_sends '["help"]' app exec shop -- help
 
 echo ""
 echo "app_help_word: $pass passed, $fail failed"

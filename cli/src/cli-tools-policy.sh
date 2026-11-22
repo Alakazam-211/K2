@@ -1700,12 +1700,35 @@ _k2_refuse_owner_fallback() {
     exit 3
 }
 
+# _app_cmd_says_help <words after `app exec` or `app shell`>: -h, --help
+# or the word help before the App, or as the first word after it (after
+# the verb's own flags). Everything after that is the command's own, so
+# `k2 app exec <app> ls -h` runs `ls -h` (K2, 0.46.17).
+_app_cmd_says_help() {
+    local app=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --) return 1 ;;
+            -h|--help|help) return 0 ;;
+            --timeout) [ $# -gt 1 ] && shift ;;
+            -*) ;;
+            *) [ -z "$app" ] || return 1; app="$1" ;;
+        esac
+        shift
+    done
+    return 1
+}
+
 # The virtual-desktop guard (LD-10): with no passport, only the pages that
 # never reach the daemon run; everything else (k2 daemon … too, which reads
 # the owner token itself) is refused, saying why.
 _k2_offline_verb=""
 case "${1:-}" in ""|study|help|--help|-h|--schema|version|--version) _k2_offline_verb=1 ;; esac
-for _a in "$@"; do [ "$_a" = "--" ] && break; case "$_a" in -h|--help) _k2_offline_verb=1 ;; esac; done
+case "${1:-} ${2:-}" in
+    # Everything after the App is the command's own (_app_cmd_says_help).
+    "app exec"|"app shell") if _app_cmd_says_help "${@:3}"; then _k2_offline_verb=1; fi ;;
+    *) for _a in "$@"; do [ "$_a" = "--" ] && break; case "$_a" in -h|--help) _k2_offline_verb=1 ;; esac; done ;;
+esac
 if [ -n "$_k2_no_owner_fallback" ] && [ -z "$TOKEN" ] && [ -z "$_k2_offline_verb" ]; then
     _k2_refuse_owner_fallback
 fi

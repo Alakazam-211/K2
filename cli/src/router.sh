@@ -802,15 +802,27 @@ case "${1:-help}" in
             grant)
                 case "${3:-}" in
                     ""|list|add|create|rm|remove|delete|revoke|set|update|role|hooks|hook|copy-host|copyhost|-h|--help)
-                        if _app_says_help "${@:2}"; then _app_family_usage; _app_rt_usage; exit 0; fi
+                        if _wants_help "${@:2}" || { [ "${3:-}" != -- ] && _app_says_help "${@:4}"; }; then _app_family_usage; _app_rt_usage; exit 0; fi
                         ;;
                 esac
                 shift; cmd_app "$@"
                 ;;
+            # Everything after the App is the command's own (K2, 0.46.17):
+            # help only before the App or as the first word after it.
+            exec|shell)
+                if _app_cmd_says_help "${@:3}"; then
+                    _app_family_usage
+                    _app_rt_usage
+                    exit 0
+                fi
+                shift; cmd_app "$@"
+                ;;
             *)
                 # Help on stdout, exit 0, as every other help page. The word
-                # help before a bare -- is help too, never a name (0.46.17).
-                if _app_says_help "${@:2}"; then
+                # help before a bare -- is help too, never a name (0.46.17),
+                # except right after the verb: `k2 app email help` is the
+                # verb's own page.
+                if _wants_help "${@:2}" || { [ "${3:-}" != -- ] && _app_says_help "${@:4}"; }; then
                     _app_family_usage
                     _app_rt_usage
                     exit 0

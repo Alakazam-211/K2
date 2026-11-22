@@ -269,8 +269,12 @@ Debug it (guarded Apps; agents need "Build and run Apps"):
                                        A pipe or file on stdin reaches the
                                        command (64 MiB at most); a terminal
                                        or --no-stdin sends none.
+                                       Everything after the app name is the
+                                       command (exec <app> ls -h runs ls -h).
   k2 app shell <app-id> [-- <command…>] A terminal in the container (/bin/sh).
                                        Hung up after 15 idle minutes. Audited.
+                                       Everything after the app name is the
+                                       command.
 
 Leave the container (owner only, Linux):
   k2 app exception <app-id> on [--device dri-render128]... [--reason TEXT]

@@ -2265,12 +2265,35 @@ _k2_refuse_owner_fallback() {
     exit 3
 }
 
+# _app_cmd_says_help <words after `app exec` or `app shell`>: -h, --help
+# or the word help before the App, or as the first word after it (after
+# the verb's own flags). Everything after that is the command's own, so
+# `k2 app exec <app> ls -h` runs `ls -h` (K2, 0.46.17).
+_app_cmd_says_help() {
+    local app=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --) return 1 ;;
+            -h|--help|help) return 0 ;;
+            --timeout) [ $# -gt 1 ] && shift ;;
+            -*) ;;
+            *) [ -z "$app" ] || return 1; app="$1" ;;
+        esac
+        shift
+    done
+    return 1
+}
+
 # The virtual-desktop guard (LD-10): with no passport, only the pages that
 # never reach the daemon run; everything else (k2 daemon … too, which reads
 # the owner token itself) is refused, saying why.
 _k2_offline_verb=""
 case "${1:-}" in ""|study|help|--help|-h|--schema|version|--version) _k2_offline_verb=1 ;; esac
-for _a in "$@"; do [ "$_a" = "--" ] && break; case "$_a" in -h|--help) _k2_offline_verb=1 ;; esac; done
+case "${1:-} ${2:-}" in
+    # Everything after the App is the command's own (_app_cmd_says_help).
+    "app exec"|"app shell") if _app_cmd_says_help "${@:3}"; then _k2_offline_verb=1; fi ;;
+    *) for _a in "$@"; do [ "$_a" = "--" ] && break; case "$_a" in -h|--help) _k2_offline_verb=1 ;; esac; done ;;
+esac
 if [ -n "$_k2_no_owner_fallback" ] && [ -z "$TOKEN" ] && [ -z "$_k2_offline_verb" ]; then
     _k2_refuse_owner_fallback
 fi
@@ -12293,8 +12316,12 @@ Debug it (guarded Apps; agents need "Build and run Apps"):
                                        A pipe or file on stdin reaches the
                                        command (64 MiB at most); a terminal
                                        or --no-stdin sends none.
+                                       Everything after the app name is the
+                                       command (exec <app> ls -h runs ls -h).
   k2 app shell <app-id> [-- <command…>] A terminal in the container (/bin/sh).
                                        Hung up after 15 idle minutes. Audited.
+                                       Everything after the app name is the
+                                       command.
 
 Leave the container (owner only, Linux):
   k2 app exception <app-id> on [--device dri-render128]... [--reason TEXT]
@@ -14515,7 +14542,7 @@ _app_rt_post_file() {
 # most, exit 2 past it); a terminal, /dev/null or --no-stdin sends none.
 cmd_app_exec() {
     local app="" timeout="" json_out=0 no_stdin=0
-    if _app_says_help "$@"; then set -- --help; fi
+    if _app_cmd_says_help "$@"; then _app_rt_usage; return 0; fi
     while [ $# -gt 0 ]; do
         case "$1" in
             --timeout) timeout="$(_compute_secs "${2:-}")"; shift 2 ;;
@@ -14588,7 +14615,7 @@ print(124 if v.get("timedOut") else (c if isinstance(c, int) and 0 <= c <= 255 e
 # too (echo ls | k2 app shell jobs).
 cmd_app_shell() {
     local app=""
-    if _app_says_help "$@"; then set -- --help; fi
+    if _app_cmd_says_help "$@"; then _app_rt_usage; return 0; fi
     while [ $# -gt 0 ]; do
         case "$1" in
             -h|--help) _app_rt_usage; return 0 ;;
@@ -118774,15 +118801,27 @@ case "${1:-help}" in
             grant)
                 case "${3:-}" in
                     ""|list|add|create|rm|remove|delete|revoke|set|update|role|hooks|hook|copy-host|copyhost|-h|--help)
-                        if _app_says_help "${@:2}"; then _app_family_usage; _app_rt_usage; exit 0; fi
+                        if _wants_help "${@:2}" || { [ "${3:-}" != -- ] && _app_says_help "${@:4}"; }; then _app_family_usage; _app_rt_usage; exit 0; fi
                         ;;
                 esac
                 shift; cmd_app "$@"
                 ;;
+            # Everything after the App is the command's own (K2, 0.46.17):
+            # help only before the App or as the first word after it.
+            exec|shell)
+                if _app_cmd_says_help "${@:3}"; then
+                    _app_family_usage
+                    _app_rt_usage
+                    exit 0
+                fi
+                shift; cmd_app "$@"
+                ;;
             *)
                 # Help on stdout, exit 0, as every other help page. The word
-                # help before a bare -- is help too, never a name (0.46.17).
-                if _app_says_help "${@:2}"; then
+                # help before a bare -- is help too, never a name (0.46.17),
+                # except right after the verb: `k2 app email help` is the
+                # verb's own page.
+                if _wants_help "${@:2}" || { [ "${3:-}" != -- ] && _app_says_help "${@:4}"; }; then
                     _app_family_usage
                     _app_rt_usage
                     exit 0

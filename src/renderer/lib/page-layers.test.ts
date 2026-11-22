@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { claimBrowserOverlay, resetBrowserOverlaysForTest, type OverlayClaim } from './browser-overlay'
 import {
   buildPageLayers,
+  toWindowPx,
   cornerRadius,
   freezesInUnderlay,
   PageLayersSync,
@@ -107,6 +108,63 @@ describe('buildPageLayers', () => {
   })
 })
 
+describe('app zoom: everything is sent in window px (the UI view points)', () => {
+  it('at 125 %, a claim at CSS (100,100,200,50) with radius 16 is sent as (125,125,250,62.5) with radius 20', () => {
+    const set: PageLayers = {
+      parentWindow: 'main',
+      epoch: 'e1',
+      generation: 1,
+      dpr: 2,
+      viewport: [1250, 1000],
+      layers: [{ windowId: 'a', z: 1, rect: { x: 0, y: 40, width: 400, height: 600, radius: [0, 0, 16, 16] }, minus: [{ x: 10, y: 10, width: 20, height: 20, chamfer: 4 }], mode: 'live' }],
+      claims: [{ id: 1, kind: 'menu', x: 100, y: 100, width: 200, height: 50, radius: 16 }],
+    }
+    const out = toWindowPx(set, 1.25)
+    expect(out.claims).toEqual([{ id: 1, kind: 'menu', x: 125, y: 125, width: 250, height: 62.5, radius: 20 }])
+    expect(out.layers[0].rect).toEqual({ x: 0, y: 50, width: 500, height: 750, radius: [0, 0, 20, 20] })
+    expect(out.layers[0].minus).toEqual([{ x: 12.5, y: 12.5, width: 25, height: 25, chamfer: 5 }])
+    expect(toWindowPx(set, 1)).toBe(set)
+  })
+
+  it('an engine that measures in CSS px: rects are scaled up to window px', () => {
+    const set = buildPageLayers({
+      parentWindow: 'main',
+      epoch: 'e1',
+      generation: 1,
+      dpr: 2,
+      viewport: [1250, 1000],
+      zoom: 1.25,
+      measuredScale: 1,
+      pages: [{ windowId: 'a', order: 1, rect: { x: 0, y: 40, width: 400, height: 600, radius: 16 }, mode: 'live', element: null }],
+      claims: [claim(1, 'menu', { x: 100, y: 100, width: 200, height: 50 }), claim(2, 'modal', 'fullscreen')],
+    })
+    expect(set.viewport).toEqual([1250, 1000])
+    expect(set.layers[0].rect).toEqual({ x: 0, y: 50, width: 500, height: 750, radius: 20 })
+    expect(set.claims).toEqual([
+      { id: 1, kind: 'menu', x: 125, y: 125, width: 250, height: 62.5 },
+      { id: 2, kind: 'modal', x: 0, y: 0, width: 1250, height: 1000 },
+    ])
+  })
+
+  it("K2's engines (getBoundingClientRect already in window px): rects pass through, corners scale", () => {
+    const set = buildPageLayers({
+      parentWindow: 'main',
+      epoch: 'e1',
+      generation: 1,
+      dpr: 2,
+      viewport: [1250, 1000],
+      zoom: 1.25,
+      pages: [{ windowId: 'a', order: 1, rect: { x: 0, y: 50, width: 500, height: 750, radius: 16 }, mode: 'live', element: null }],
+      claims: [claim(1, 'menu', { x: 125, y: 125, width: 250, height: 62.5 }), claim(2, 'modal', 'fullscreen')],
+    })
+    expect(set.layers[0].rect).toEqual({ x: 0, y: 50, width: 500, height: 750, radius: 20 })
+    expect(set.claims).toEqual([
+      { id: 1, kind: 'menu', x: 125, y: 125, width: 250, height: 62.5 },
+      { id: 2, kind: 'modal', x: 0, y: 0, width: 1250, height: 1000 },
+    ])
+  })
+})
+
 describe('face rules in underlay', () => {
   it('only dialogs, drags and motion freeze a page', () => {
     expect(freezesInUnderlay(claim(1, 'menu', 'fullscreen'))).toBe(false)
@@ -125,7 +183,7 @@ describe('face rules in underlay', () => {
 })
 
 describe('PageLayersSync', () => {
-  function harness(opts: { active?: boolean; failWith?: string } = {}) {
+  function harness(opts: { active?: boolean; failWith?: string; zoom?: number } = {}) {
     const sent: PageLayers[] = []
     const frames: Array<() => void> = []
     const tasks: Array<() => void> = []
@@ -140,6 +198,8 @@ describe('PageLayersSync', () => {
       fail,
       options: () => ({ hoverPrivateWebkitFallback: false, pageFirstClick: false }),
       viewport: () => VIEW,
+      zoom: () => opts.zoom ?? 1,
+      measuredScale: () => opts.zoom ?? 1,
       dpr: () => 2,
       raf: (fn) => frames.push(fn),
       microtask: (fn) => tasks.push(fn),
@@ -207,6 +267,19 @@ describe('PageLayersSync', () => {
     h.sync.now()
     await h.run(h.tasks)
     expect(h.sent).toHaveLength(n)
+  })
+
+  it('at 125 % the pane\'s measured rect goes out as measured and its CSS radius scaled', async () => {
+    const h = harness({ zoom: 1.25 })
+    h.sync.register({
+      windowId: 'a',
+      element: () => null,
+      measure: () => ({ x: 500, y: 50, width: 500, height: 950, radius: 16 }),
+      mode: () => 'live',
+    })
+    await h.run(h.frames)
+    expect(h.sent[0].layers[0].rect).toEqual({ x: 500, y: 50, width: 500, height: 950, radius: 20 })
+    expect(h.sent[0].viewport).toEqual(VIEW)
   })
 
   it('nothing is sent while the underlay is off', async () => {

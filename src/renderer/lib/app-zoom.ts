@@ -53,6 +53,22 @@ export function cssViewport(): { width: number; height: number } {
   return { width: window.innerWidth / z, height: window.innerHeight / z }
 }
 
+/**
+ * getBoundingClientRect px per CSS px, measured on <html>: the zoom where
+ * the engine reports window px (WebKit, Chromium), 1 where it would report
+ * CSS px. With nothing laid out (tests, a hidden page) it is the app zoom.
+ */
+export function measuredScale(): number {
+  if (typeof document === 'undefined') return appZoom()
+  const root = document.documentElement
+  const css = root.offsetWidth
+  const measured = root.getBoundingClientRect().width
+  if (!(css > 0) || !(measured > 0)) return appZoom()
+  const r = measured / css
+  // Only a ratio that looks like a zoom (not a scrollbar's few px).
+  return Math.abs(r - 1) < 0.02 ? 1 : r
+}
+
 /** Puts zoom `z` on the page: <html> zoom, `--k2-app-zoom` (which also
  *  drives `--k2-vw` / `--k2-vh` and the terminals' inverse zoom) and the
  *  `k2-app-zoomed` class. `window.__k2Zoom` is the caller's. */

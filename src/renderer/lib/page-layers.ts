@@ -17,6 +17,7 @@
  * Not daemon state: per-window view state for native views in this window.
  */
 import { invoke } from '@tauri-apps/api/core'
+import { appZoom, measuredScale } from './app-zoom'
 import {
   overlayClaims,
   subscribeOverlayClaims,
@@ -26,7 +27,8 @@ import {
 
 export type Corners = number | [number, number, number, number]
 
-/** Window CSS px from the top-left of the K2 window's content area. */
+/** In a sent set: window px from the top-left of the K2 window's content
+ *  area (the UI view's points: what K2 compares and places natively). */
 export interface PageShape {
   x: number
   y: number
@@ -111,7 +113,66 @@ export function freezesInUnderlay(claim: OverlayClaim): boolean {
   return claim.kind === 'modal' || claim.kind === 'drag' || claim.kind === 'motion'
 }
 
-export function buildPageLayers(input: {
+/**
+ * The set K2 is sent, in window px (the UI view's points) throughout:
+ * rects, minus, claims and every corner value.
+ *
+ * In: pages' rects and claims' areas as measured (getBoundingClientRect,
+ * `measuredScale` px per CSS px), corner values in CSS px (from styles),
+ * the viewport in window px. Under the app zoom (CSS `zoom` on <html>)
+ * those differ, so everything is brought to CSS px first and scaled to
+ * window px once, at the end (`toWindowPx`).
+ */
+export function buildPageLayers(
+  input: Parameters<typeof buildCssSet>[0] & {
+    /** CSS px to window px: the app zoom. Default 1. */
+    zoom?: number
+    /** Measured px per CSS px. Default: the zoom (WebKit and Chromium
+     *  report getBoundingClientRect in window px under a CSS zoom). */
+    measuredScale?: number
+  },
+): PageLayers {
+  const ok = (v: number | undefined): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0
+  const zoom = ok(input.zoom) ? input.zoom : 1
+  const measured = ok(input.measuredScale) ? input.measuredScale : zoom
+  const css = (r: OverlayRect): OverlayRect =>
+    measured === 1 ? r : { x: r.x / measured, y: r.y / measured, width: r.width / measured, height: r.height / measured }
+  const set = buildCssSet({
+    ...input,
+    viewport: [input.viewport[0] / zoom, input.viewport[1] / zoom],
+    pages: input.pages.map((p) => (p.rect ? { ...p, rect: { ...p.rect, ...css(p.rect) } } : p)),
+    claims: input.claims.map((c) => (c.area === 'fullscreen' ? c : { ...c, area: css(c.area) })),
+  })
+  return { ...toWindowPx(set, zoom), viewport: input.viewport }
+}
+
+function scaleCorners(c: Corners | undefined, z: number): Corners | undefined {
+  if (c === undefined) return undefined
+  return typeof c === 'number' ? c * z : (c.map((v) => v * z) as [number, number, number, number])
+}
+
+function scaleShape<T extends PageShape>(s: T, z: number): T {
+  const out: T = { ...s, x: s.x * z, y: s.y * z, width: s.width * z, height: s.height * z }
+  const radius = scaleCorners(s.radius, z)
+  const chamfer = scaleCorners(s.chamfer, z)
+  if (radius !== undefined) out.radius = radius
+  if (chamfer !== undefined) out.chamfer = chamfer
+  return out
+}
+
+/** A set in CSS px to window px: every rect, minus, claim and corner value
+ *  times the zoom (the viewport is the caller's). The one conversion. */
+export function toWindowPx(set: PageLayers, zoom: number): PageLayers {
+  if (zoom === 1) return set
+  return {
+    ...set,
+    layers: set.layers.map((l) => ({ ...l, rect: scaleShape(l.rect, zoom), minus: l.minus.map((m) => scaleShape(m, zoom)) })),
+    claims: set.claims.map((c) => scaleShape(c, zoom)),
+  }
+}
+
+/** The set in CSS px (corners as styled, rects as laid out). */
+function buildCssSet(input: {
   parentWindow: string
   epoch: string
   generation: number
@@ -201,6 +262,10 @@ export interface PageLayersDeps {
   active: () => boolean
   options: () => UnderlayOptions
   viewport: () => [number, number]
+  /** The app zoom (CSS px to window px). */
+  zoom: () => number
+  /** getBoundingClientRect px per CSS px. */
+  measuredScale: () => number
   dpr: () => number
   raf: (fn: () => void) => void
   microtask: (fn: () => void) => void
@@ -212,7 +277,11 @@ const defaultDeps: PageLayersDeps = {
   fail: () => {},
   active: () => false,
   options: () => ({ hoverPrivateWebkitFallback: false, pageFirstClick: false }),
+  // Window px on purpose: K2 compares it with the UI view's bounds in points
+  // (the viewport guard in browser_page_layers.rs).
   viewport: () => [typeof window === 'undefined' ? 0 : window.innerWidth, typeof window === 'undefined' ? 0 : window.innerHeight],
+  zoom: () => appZoom(),
+  measuredScale: () => measuredScale(),
   dpr: () => (typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1),
   raf: (fn) => (typeof requestAnimationFrame === 'function' ? requestAnimationFrame(() => fn()) : setTimeout(fn, 16)),
   microtask: (fn) => queueMicrotask(fn),
@@ -297,6 +366,8 @@ export class PageLayersSync {
       epoch: this.epochId,
       generation: this.generation + 1,
       dpr: this.deps.dpr(),
+      zoom: this.deps.zoom(),
+      measuredScale: this.deps.measuredScale(),
       viewport: this.deps.viewport(),
       pages,
       claims: overlayClaims(),

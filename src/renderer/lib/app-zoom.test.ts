@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { appZoom, clientRectToCss, cssViewport, clientToCssPx } from './app-zoom'
+import { appZoom, clientRectToCss, cssViewport, clientToCssPx, measuredScale } from './app-zoom'
 
 const W = 1400
 const H = 900
@@ -33,6 +33,14 @@ describe('appZoom', () => {
       window.__k2Zoom = bad
       expect(appZoom()).toBe(1)
     }
+  })
+})
+
+describe('measuredScale', () => {
+  it('is the app zoom when nothing is laid out (jsdom)', () => {
+    expect(measuredScale()).toBe(1)
+    window.__k2Zoom = 1.25
+    expect(measuredScale()).toBe(1.25)
   })
 })
 
@@ -107,6 +115,7 @@ describe('the renderer sizes and places from the zoom-aware window', () => {
     ['components/Settings/controls/SettingControls.tsx', 'the clip rect is converted with the trigger rect'],
     ['lib/zen/zen-controls.ts', 'on-screen checks next to elementFromPoint, all window px'],
     ['shims/tauri-window.ts', 'the web stand-in for the native window size'],
+    ['lib/page-layers.ts', "the browser underlay's viewport: K2 compares it with the UI view's bounds in points (browser_page_layers.rs viewport guard)"],
   ])
 
   it('innerWidth/innerHeight only where window px are meant', () => {

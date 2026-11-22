@@ -30,7 +30,6 @@
 2 crates/k2-daemon/src/apps/process_engine.rs
 2 crates/k2-daemon/src/apps/relay_claims.rs
 2 crates/k2-daemon/src/federation_routes.rs
-2 crates/k2-daemon/src/firewall/mod.rs
 2 crates/k2-daemon/src/publish_runtime.rs
 2 crates/k2-daemon/src/sew/supervisor.rs
 2 crates/k2-daemon/src/sew/voice_tunnel.rs

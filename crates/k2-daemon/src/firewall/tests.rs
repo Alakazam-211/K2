@@ -207,6 +207,28 @@ fn the_contract_shape_is_stable() {
     assert_eq!(v["public"][0]["allowFrom"][0], "any");
 }
 
+/// The box line is built under the primary zone, byte for byte as before,
+/// and under a partner's zone when one is passed; the label parse strips
+/// only the zone it is given.
+#[test]
+fn the_box_name_follows_the_zone() {
+    let s = serde_json::json!({"view": {"hash": "h1", "version": 1, "daemon": "0.46.16",
+        "box": {"label": "acme", "publicIps": ["203.0.113.7"]}}});
+    let k2 = status_text(&s);
+    assert_eq!(k2, status_text_in(&s, ".k2.dev"));
+    assert!(k2.starts_with("firewall view  h1 (v1, 0.46.16)\nbox            acme.k2.dev  (203.0.113.7)\npublic ports\n"), "{k2}");
+    let partner = status_text_in(&s, ".globex.example");
+    assert!(partner.contains("\nbox            acme.globex.example  (203.0.113.7)\n"), "{partner}");
+    assert_eq!(partner.replace("acme.globex.example", "acme.k2.dev"), k2);
+
+    assert_eq!(label_in_zone("acme.k2.dev", k2_core::hosts::ZONE_SUFFIX).as_deref(), Some("acme"));
+    assert_eq!(label_in_zone("acme", k2_core::hosts::ZONE_SUFFIX).as_deref(), Some("acme"));
+    assert_eq!(label_in_zone("acme.globex.example", ".globex.example").as_deref(), Some("acme"));
+    assert_eq!(label_in_zone("acme.k2.dev", ".globex.example").as_deref(), Some("acme.k2.dev"));
+    assert_eq!(label_in_zone(".globex.example", ".globex.example"), None);
+    assert_eq!(label_in_zone("", k2_core::hosts::ZONE_SUFFIX), None);
+}
+
 // ── routes ───────────────────────────────────────────────────────────
 
 struct Env {

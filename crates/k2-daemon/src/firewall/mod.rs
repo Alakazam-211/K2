@@ -230,12 +230,18 @@ fn os_name() -> &'static str {
     }
 }
 
-/// The box's K2 label (`<sub>` of `<sub>.k2.dev`).
+/// The box's label: `<sub>` of its name under the primary zone.
 fn box_label() -> Option<String> {
     let primary = k2_core::tunnel::subdomains::current().primary.trim().to_ascii_lowercase();
     let label = if primary.is_empty() { k2_core::tunnel::config::load().ok()?.subdomain.trim().to_ascii_lowercase() } else { primary };
-    let label = label.strip_suffix(".k2.dev").map(str::to_string).unwrap_or(label);
-    (!label.is_empty()).then_some(label)
+    label_in_zone(&label, k2_core::hosts::ZONE_SUFFIX)
+}
+
+/// `name` without the zone's suffix (`.<zone>`, with its dot) when it ends
+/// in it, else `name` as it is; `None` when nothing is left.
+fn label_in_zone(name: &str, zone_suffix: &str) -> Option<String> {
+    let label = name.strip_suffix(zone_suffix).unwrap_or(name);
+    (!label.is_empty()).then(|| label.to_string())
 }
 
 /// Gather the inputs from the daemon's live state. Blocking. `Err` only
@@ -314,11 +320,16 @@ pub fn status_json(daemon_port: u16) -> Result<Value, String> {
 
 /// The text `k2 firewall` prints (`?format=text`).
 pub fn status_text(s: &Value) -> String {
+    status_text_in(s, k2_core::hosts::ZONE_SUFFIX)
+}
+
+/// [`status_text`] with the box's name built under `zone_suffix`.
+fn status_text_in(s: &Value, zone_suffix: &str) -> String {
     let v = &s["view"];
     let mut out = String::new();
     out.push_str(&format!("firewall view  {} (v{}, {})\n", v["hash"].as_str().unwrap_or("?"), v["version"], v["daemon"].as_str().unwrap_or("?")));
     if let Some(l) = v["box"]["label"].as_str() {
-        out.push_str(&format!("box            {l}.k2.dev"));
+        out.push_str(&format!("box            {l}{zone_suffix}"));
         if let Some(ips) = v["box"]["publicIps"].as_array().filter(|a| !a.is_empty()) {
             out.push_str(&format!("  ({})", ips.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", ")));
         }

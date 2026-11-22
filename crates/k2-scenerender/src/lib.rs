@@ -44,6 +44,8 @@ pub mod render;
 pub mod sandbox;
 pub mod scene;
 pub mod sha256;
+#[cfg(unix)]
+pub mod spawn;
 pub mod srgb;
 pub mod testgen;
 pub mod trig;

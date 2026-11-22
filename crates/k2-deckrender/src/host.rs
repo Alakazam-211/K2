@@ -2,9 +2,9 @@
 //! response, and say how it ended as a [`Failure`] with its [`FailureCode`].
 //! Nothing in the daemon calls this yet (the preview cache is K2's next step).
 //!
-//! **Spawn:** `posix_spawn` (std's, with no pre-exec hook: about 1 ms
-//! whatever the host's size, where fork + a hook cost 36–54 ms from a ~1 GB
-//! daemon), an empty environment (no `K2_*`, no token, no `HOME`: nothing
+//! **Spawn:** `posix_spawn` in a session of its own (`POSIX_SPAWN_SETSID`,
+//! [`crate::spawn`]: about 1 ms whatever the host's size, where fork + a hook
+//! cost 36–54 ms from a ~1 GB daemon; std's `Command` on Windows), an empty environment (no `K2_*`, no token, no `HOME`: nothing
 //! inherited; macOS itself adds `__CF_USER_TEXT_ENCODING`), a fresh private temp folder as its cwd (removed afterwards,
 //! whatever happened), stdin/stdout/stderr piped. The limits go on argv
 //! ([`SelfLimits`]): the worker puts them on itself, and closes every fd past
@@ -182,9 +182,12 @@ fn run(bin: &Path, cwd: &Path, header: &Header, input: &[u8], limits: &Limits) -
     let mut cmd = Command::new(&bin);
     cmd.env_clear().current_dir(cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     configure(&mut cmd, limits);
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| Failure::new(FailureCode::RendererError, format!("could not start {}: {e}", bin.display())))?;
+    // Unix: posix_spawn in the worker's own session (never the daemon's).
+    #[cfg(unix)]
+    let spawned = crate::spawn::spawn(&cmd);
+    #[cfg(not(unix))]
+    let spawned = cmd.spawn();
+    let mut child = spawned.map_err(|e| Failure::new(FailureCode::RendererError, format!("could not start {}: {e}", bin.display())))?;
     // Windows: the worker's Job Object, before a byte of its input is written.
     #[cfg(windows)]
     let job = match k2_winsec::job::WorkerJob::contain(&child, job_limits(limits)) {
@@ -436,9 +439,9 @@ pub fn resident(_pid: u32) -> Option<u64> {
 }
 
 /// The worker's argv: the limits it puts on itself before it reads its input
-/// ([`SelfLimits`]). No pre-exec hook, so std starts it with `posix_spawn`
-/// (glibc 2.29+ and macOS, with an absolute path and a cwd), never by forking
-/// the host.
+/// ([`SelfLimits`]). No pre-exec hook: [`crate::spawn`] starts it with
+/// `posix_spawn` and `POSIX_SPAWN_SETSID` (glibc 2.29+ and macOS, with an
+/// absolute path and a cwd), never by forking the host.
 fn configure(cmd: &mut Command, limits: &Limits) {
     let cpu_secs = cpu_secs(limits);
     let memory = limits.memory_bytes;

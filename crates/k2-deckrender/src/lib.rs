@@ -19,6 +19,8 @@ pub mod fonts;
 #[cfg(test)]
 mod font_path;
 pub mod host;
+#[cfg(unix)]
+pub mod spawn;
 pub mod proto;
 pub mod sandbox;
 pub mod worker;

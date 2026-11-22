@@ -1,9 +1,9 @@
 //! The host side: start one `k2-scenerender` per request, bound it, read its
 //! response, and say how it ended as a [`Failure`] with its [`FailureCode`].
 //!
-//! **Spawn:** `posix_spawn`. The host sets no pre-exec hook, so std starts
-//! the worker with `posix_spawn` (no fork: the cost doesn't grow with the
-//! daemon's size), with an empty environment (nothing inherited; macOS itself
+//! **Spawn:** `posix_spawn` in a session of its own (`POSIX_SPAWN_SETSID`,
+//! [`crate::spawn`]; no fork, so the cost doesn't grow with the daemon's
+//! size; std's `Command` on Windows), with an empty environment (nothing inherited; macOS itself
 //! adds `__CF_USER_TEXT_ENCODING`), a fresh private (0700) temp folder as its
 //! cwd (removed afterwards, whatever happened) and stdin/stdout/stderr piped.
 //! The limits travel on argv ([`crate::sandbox::Args`], from [`Limits`]
@@ -267,7 +267,6 @@ pub fn render_with(bin: &Path, req: &SceneRequest<'_>, limits: &Limits, hostile:
 
 fn run(bin: &Path, cwd: &Path, request: &Request, input: &[u8], limits: &Limits) -> Result<Rendered, Failure> {
     let args = limits.args(std::process::id()).to_args();
-    // No pre_exec, no uid/gid/groups/pgroup: std spawns with posix_spawn.
     let mut cmd = Command::new(bin);
     cmd.args(&args).env_clear().current_dir(cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(windows)]
@@ -276,7 +275,12 @@ fn run(bin: &Path, cwd: &Path, request: &Request, input: &[u8], limits: &Limits)
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
-    let mut child = cmd.spawn().map_err(|e| Failure::new(FailureCode::RendererError, format!("could not start {}: {e}", bin.display())))?;
+    // Unix: posix_spawn in the worker's own session (never the daemon's).
+    #[cfg(unix)]
+    let spawned = crate::spawn::spawn(&cmd);
+    #[cfg(not(unix))]
+    let spawned = cmd.spawn();
+    let mut child = spawned.map_err(|e| Failure::new(FailureCode::RendererError, format!("could not start {}: {e}", bin.display())))?;
     // Windows: the worker's Job Object (the unix caps' numbers), before a
     // byte of its input is written.
     #[cfg(windows)]

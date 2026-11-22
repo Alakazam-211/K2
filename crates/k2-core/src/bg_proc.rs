@@ -237,6 +237,38 @@ mod tests {
             }
         }
         assert!(raw.is_empty(), "a raw fork/exec outside bg_proc (it would keep the daemon's session): {raw:?}");
+        // The preview renderers (linked by the daemon, outside bg_proc): on
+        // Unix every worker spawn goes through the crate's `spawn` module,
+        // `posix_spawn` with `POSIX_SPAWN_SETSID` (the fast path, its own
+        // session), and the module is the same file in both crates. Their
+        // `main.rs` is the worker itself (its self-test child is not a daemon
+        // spawn).
+        let spawn_mods: Vec<String> = ["k2-scenerender/src/spawn.rs", "k2-deckrender/src/spawn.rs"]
+            .iter()
+            .map(|p| std::fs::read_to_string(crates.join(p)).unwrap_or_else(|e| panic!("{p}: {e}")))
+            .collect();
+        assert_eq!(spawn_mods[0], spawn_mods[1], "the renderers' spawn.rs copies differ");
+        assert!(spawn_mods[0].contains("let mut flags = POSIX_SPAWN_SETSID |"), "the renderers' spawn asks for its own session");
+        let mut renderer_files = Vec::new();
+        for r in ["k2-scenerender/src", "k2-deckrender/src"] {
+            rs_files(&crates.join(r), &mut renderer_files);
+        }
+        let mut unsessioned = Vec::new();
+        for f in &renderer_files {
+            let rel = f.display().to_string().replace('\\', "/");
+            if is_test_file(f) || rel.ends_with("/main.rs") || rel.ends_with("/spawn.rs") {
+                continue;
+            }
+            let src = std::fs::read_to_string(f).unwrap();
+            let prod = src.find("\n#[cfg(test)]\nmod tests {").map_or(src.as_str(), |i| &src[..i]);
+            let code: Vec<&str> = prod.lines().map(|l| l.split("//").next().unwrap_or("")).collect();
+            let spawns = code.iter().filter(|l| l.contains(concat!("Command", "::new("))).count();
+            let sessioned = code.iter().filter(|l| l.contains("crate::spawn::spawn(&cmd)")).count();
+            if spawns > sessioned || code.iter().any(|l| l.contains("pre_exec")) {
+                unsessioned.push(format!("{rel}: {spawns} spawn(s), {sessioned} through crate::spawn"));
+            }
+        }
+        assert!(renderer_files.len() >= 4 && unsessioned.is_empty(), "renderer worker spawns outside their own session: {unsessioned:?}");
         assert_eq!(keeping.len(), 1, "spawns that keep the daemon's session: {keeping:?}");
         assert!(keeping[0].contains("k2-daemon/src/vault/run.rs:"), "{keeping:?}");
         assert!(groups.iter().all(|g| g.contains("k2-daemon/src/vault/run.rs:")), "process_group outside k2 vault run: {groups:?}");

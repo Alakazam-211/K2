@@ -990,7 +990,10 @@ pub fn print_answer(verb: &str, status: u16, raw: &[u8], json_out: bool, now: i6
 
 /// What `_permission_print`'s Python prints (its exit is not used).
 fn printer(verb: &str, status: u16, raw: &str, now: i64) -> Shown {
-    let v = json::parse(raw).ok();
+    // `_k2_hint_fill` first: a hint template takes this binary's names.
+    let v = json::parse(raw)
+        .ok()
+        .map(crate::transport::permission::hints_filled);
     let dict = matches!(v, Some(Value::Object(_)));
     let mut stdout = String::new();
     let mut stderr = String::new();

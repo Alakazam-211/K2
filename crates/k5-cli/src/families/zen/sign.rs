@@ -198,9 +198,11 @@ pub fn print(verb: &str, as_json: bool, raw: &[u8]) -> Shown {
                 "Since it was signed, this widget",
                 "changed since it was signed: it",
             );
+            // This binary's name before the daemon's askTail (C5).
+            let ask = crate::transport::permission::ask_of(r);
             o.o(format!(
                 "Note: {w} {changes}. Ask the person to look: {}",
-                s(g(r, "ask"))
+                s(Some(&ask))
             ));
         }
     }

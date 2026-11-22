@@ -310,7 +310,8 @@ fn fail_python(body: &[u8], args_json: bool, app: bool) -> String {
     let Ok(raw) = std::str::from_utf8(body) else {
         return String::new();
     };
-    let v = match json::parse(raw) {
+    // `_k2_hint_fill` first: a hint template takes this binary's names.
+    let v = match json::parse(raw).map(crate::transport::permission::hints_filled) {
         Ok(v) => v,
         Err(_) => {
             let head: String = raw.chars().take(200).collect();

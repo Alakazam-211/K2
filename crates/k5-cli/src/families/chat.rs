@@ -1206,7 +1206,8 @@ pub fn fail_line(status: &str, body: &[u8]) -> (String, Exit) {
 /// it is: no newline translation).
 fn fail_python(raw: &str) -> String {
     let pair = |k: &str, v: Value| (Text::from(k), v);
-    let out = match json::parse(raw) {
+    // `_k2_hint_fill` first: a hint template takes this binary's names.
+    let out = match json::parse(raw).map(crate::transport::permission::hints_filled) {
         Err(_) => Value::Object(vec![
             pair("error", super::s("daemon_error")),
             pair("hint", super::s(&raw.chars().take(200).collect::<String>())),

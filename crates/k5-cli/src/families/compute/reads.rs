@@ -893,7 +893,8 @@ pub fn fail_line(status: &str, body: &[u8]) -> String {
     let mut line = String::new();
     if !body.is_empty() {
         let raw = String::from_utf8_lossy(body);
-        line = match json::parse(&raw) {
+        // `_k2_hint_fill` first: a hint template takes this binary's names.
+        line = match json::parse(&raw).map(crate::transport::permission::hints_filled) {
             Err(_) => format!(
                 "daemon_error: {}",
                 raw.chars().take(200).collect::<String>()

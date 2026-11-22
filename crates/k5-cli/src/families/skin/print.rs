@@ -179,7 +179,8 @@ fn waiting(d: &Value, line: u32, o: &mut Out) -> Result<(), Raise> {
         let rooms = join(", ", &g(w, "rooms"), line + 2)?;
         o.line(format!(
             "Waiting: everything else works now, but they can't use room {rooms} until they choose their own password, because you set this login up: first sign-in with a temporary password, an invite ({}), or your App's forgot-password flow.",
-            st(&g(w, "ask"))
+            // This binary's name before the daemon's askTail (C5).
+            st(&crate::transport::permission::ask_of(w))
         ));
     }
     Ok(())

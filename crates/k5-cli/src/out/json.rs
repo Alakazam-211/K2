@@ -70,6 +70,40 @@ impl Text {
         }
     }
 
+    /// `self.replace("{cli}", cli).replace("{product}", product)`, as
+    /// Python replaces in a `str` (a daemon's text template, white-label
+    /// C5): a lone surrogate stays one.
+    pub fn names_filled(&self, cli: &str, product: &str) -> Text {
+        match &self.0 {
+            Repr::Utf8(s) => Text(Repr::Utf8(k2_client::brand::fill_names_with(
+                s, cli, product,
+            ))),
+            Repr::Loose(points) => {
+                fn replace(points: &[u32], from: &str, to: &str) -> Vec<u32> {
+                    let from: Vec<u32> = from.chars().map(u32::from).collect();
+                    let mut out = Vec::with_capacity(points.len());
+                    let mut i = 0;
+                    while i < points.len() {
+                        if points[i..].starts_with(&from) {
+                            out.extend(to.chars().map(u32::from));
+                            i += from.len();
+                        } else {
+                            out.push(points[i]);
+                            i += 1;
+                        }
+                    }
+                    out
+                }
+                let cli_done = replace(points, k2_client::brand::CLI_SLOT, cli);
+                Text(Repr::Loose(replace(
+                    &cli_done,
+                    k2_client::brand::PRODUCT_SLOT,
+                    product,
+                )))
+            }
+        }
+    }
+
     /// `prefix + self`, as Python joins two `str`: a lone surrogate stays
     /// one.
     pub fn prefixed(&self, prefix: &str) -> Text {

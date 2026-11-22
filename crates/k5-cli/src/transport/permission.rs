@@ -33,7 +33,7 @@
 //! caller's.
 
 use crate::out::json::{self, Value};
-use k2_client::brand::CLI_NAME;
+use k2_client::brand::{CLI_NAME, PRODUCT_NAME};
 use std::borrow::Cow;
 use std::io::{self, Write};
 
@@ -73,6 +73,73 @@ pub fn named_pairs(pairs: &[(json::Text, Value)]) -> Cow<'_, [(json::Text, Value
         None => out.push((json::Text::from("command"), command)),
     }
     Cow::Owned(out)
+}
+
+/// `k2_hint_fill` (the shell's `_K2_PY_HINT_FILL`, run on a body by
+/// `_k2_hint_fill`): every object in `v`, nested ones too, that holds a
+/// non-empty string `hintTemplate` (a daemon's hint with `{cli}` and
+/// `{product}` where the names go, white-label C5) gets `hint` set to it
+/// with this binary's names; a `hint` already there keeps its place, a new
+/// one goes last. Anything else is as sent, so an older daemon's hint
+/// prints. Every printer of a daemon's hint that the shell runs through
+/// the rule reads the answer through this.
+pub fn hints_filled(v: Value) -> Value {
+    match v {
+        Value::Object(pairs) => {
+            let template = match pairs
+                .iter()
+                .find(|(k, _)| k.as_str() == Some("hintTemplate"))
+            {
+                Some((_, Value::Str(t))) if !t.code_points().is_empty() => {
+                    Some(t.names_filled(CLI_NAME, PRODUCT_NAME))
+                }
+                _ => None,
+            };
+            let mut out: Vec<(json::Text, Value)> = pairs
+                .into_iter()
+                .map(|(k, x)| (k, hints_filled(x)))
+                .collect();
+            if let Some(hint) = template {
+                match out.iter_mut().find(|(k, _)| k.as_str() == Some("hint")) {
+                    Some((_, x)) => *x = Value::Str(hint),
+                    None => out.push((json::Text::from("hint"), Value::Str(hint))),
+                }
+            }
+            Value::Object(out)
+        }
+        Value::Array(items) => Value::Array(items.into_iter().map(hints_filled).collect()),
+        other => other,
+    }
+}
+
+/// An ask as every printer of one reads it: `"k2 <tail>"` (this binary's
+/// own name, a space and the tail) for a non-empty string `askTail`, else
+/// the daemon's `ask` as sent (an older daemon), white-label C5. The
+/// shell's rule: `("k2 <tail>".replace("<tail>", x["askTail"]) if
+/// isinstance(x.get("askTail"), str) and x["askTail"] else x.get("ask"))`.
+pub fn ask_named(pairs: &[(json::Text, Value)]) -> Option<Value> {
+    let tail = pairs
+        .iter()
+        .find(|(k, _)| k.as_str() == Some("askTail"))
+        .map(|(_, v)| v);
+    match tail {
+        Some(Value::Str(t)) if !t.code_points().is_empty() => {
+            Some(Value::Str(t.prefixed(&format!("{CLI_NAME} "))))
+        }
+        _ => pairs
+            .iter()
+            .find(|(k, _)| k.as_str() == Some("ask"))
+            .map(|(_, v)| v.clone()),
+    }
+}
+
+/// [`ask_named`] on an object, `Null` where it has none (`x.get("ask")`);
+/// anything but an object is `Null`.
+pub fn ask_of(x: &Value) -> Value {
+    match x {
+        Value::Object(pairs) => ask_named(pairs).unwrap_or(Value::Null),
+        _ => Value::Null,
+    }
 }
 
 /// The note: one or two lines, the last being the closing line.
@@ -224,6 +291,68 @@ mod tests {
             lines(r#"{"permission":{"command":"zz a","tail":"a \ud83d"}}"#),
             None
         );
+    }
+
+    /// A hint template takes this binary's names, wherever the object sits;
+    /// a server whose command is `zz` and whose product is Globex Desk never
+    /// shows through. No usable template: the hint as sent.
+    #[test]
+    fn a_hint_template_takes_this_binary_s_names() {
+        let dump = |v: &Value| json::to_string(v, &json::Options::default()).unwrap();
+        let v = json::parse(
+            r#"{"error":{"code":"forbidden","hint":"run zz compute allow-nodes from outside Globex Desk","hintTemplate":"run {cli} compute allow-nodes from outside {product}","nodes":"n1"},"rows":[{"error":{"code":"x","hintTemplate":"{cli} x"}}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            dump(&hints_filled(v)),
+            format!(
+                r#"{{"error": {{"code": "forbidden", "hint": "run {CLI_NAME} compute allow-nodes from outside {PRODUCT_NAME}", "hintTemplate": "run {{cli}} compute allow-nodes from outside {{product}}", "nodes": "n1"}}, "rows": [{{"error": {{"code": "x", "hintTemplate": "{{cli}} x", "hint": "{CLI_NAME} x"}}}}]}}"#
+            )
+        );
+        for t in [r#""""#, "7", "null"] {
+            let raw = format!(r#"{{"error":{{"hint":"zz a","hintTemplate":{t}}}}}"#);
+            let v = json::parse(&raw).unwrap();
+            assert_eq!(hints_filled(v.clone()), v, "{raw}");
+        }
+        // A lone surrogate stays one.
+        let v = json::parse(r#"{"hintTemplate":"{cli} \ud83d"}"#).unwrap();
+        let Value::Object(p) = hints_filled(v) else {
+            panic!("an object")
+        };
+        let hint = p
+            .iter()
+            .find(|(k, _)| k.as_str() == Some("hint"))
+            .map(|(_, v)| v.clone());
+        let Some(Value::Str(h)) = hint else {
+            panic!("a hint")
+        };
+        let mut want: Vec<u32> = format!("{CLI_NAME} ").chars().map(u32::from).collect();
+        want.push(0xd83d);
+        assert_eq!(h.code_points(), want);
+    }
+
+    /// An ask is this binary's name before a non-empty string askTail, else
+    /// the daemon's ask as sent, else nothing.
+    #[test]
+    fn an_ask_takes_this_binary_s_name_before_its_tail() {
+        let ask = |raw: &str| ask_of(&json::parse(raw).unwrap());
+        let str_ = |t: &str| Value::Str(json::Text::from(t));
+        assert_eq!(
+            ask(
+                r#"{"ask":"zz app user invite wes --app shop","askTail":"app user invite wes --app shop"}"#
+            ),
+            str_(&format!("{CLI_NAME} app user invite wes --app shop"))
+        );
+        for raw in [
+            r#"{"ask":"zz a"}"#,
+            r#"{"ask":"zz a","askTail":""}"#,
+            r#"{"ask":"zz a","askTail":7}"#,
+            r#"{"ask":"zz a","askTail":null}"#,
+        ] {
+            assert_eq!(ask(raw), str_("zz a"), "{raw}");
+        }
+        assert_eq!(ask(r#"{"rooms":["ops"]}"#), Value::Null);
+        assert_eq!(ask(r#"["ask"]"#), Value::Null);
     }
 
     #[test]

@@ -395,7 +395,8 @@ pub fn fail(status: &str, body: &[u8]) -> Exit {
 pub fn fail_line(status: &str, body: &[u8]) -> String {
     if !body.is_empty() {
         let raw = String::from_utf8_lossy(body);
-        let line = match json::parse(&raw) {
+        // `_k2_hint_fill` first: a hint template takes this binary's names.
+        let line = match json::parse(&raw).map(crate::transport::permission::hints_filled) {
             Err(_) => format!(
                 "daemon_error: {}",
                 raw.chars().take(200).collect::<String>()

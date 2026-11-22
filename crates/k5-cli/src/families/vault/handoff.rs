@@ -933,7 +933,8 @@ fn deliveries(v: &Value, l: &mut Lines, incoming: bool) -> R<i32> {
                 let a = if t(&a) { s(&a) } else { "the agent".into() };
                 extra = format!("  (waiting for a person: the card on the Thread of {a})");
             } else {
-                let ask = get(&d, "ask")?;
+                // This binary's name before the daemon's askTail (C5).
+                let ask = crate::transport::permission::ask_of(&d);
                 let ask = if t(&ask) {
                     s(&ask)
                 } else {

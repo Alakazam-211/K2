@@ -74,11 +74,14 @@ impl Hire<'_> {
     /// `http_post_json(route, body)`: the token is the same whichever the
     /// block names (`tok=core_token`, `tok=proj_token`): the owner's (or
     /// the token set) outside a session, the session's passport in one.
+    /// Its answer goes through `k2_hint_fill`: a hint template takes this
+    /// binary's names (white-label C5).
     pub fn post_json(&self, route: &str, body: &Value) -> R<Value> {
         let req = Request::new(Method::Post, route, Duration::from_secs(DEFAULT))
             .data(dumps(body).into_bytes())
             .header("Content-Type", "application/json");
         self.call_as(self.auth(req), route, self.in_session)
+            .map(crate::transport::permission::hints_filled)
     }
 }
 

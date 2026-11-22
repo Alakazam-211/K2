@@ -161,7 +161,8 @@ pub fn fail_line(status: &str, body: &[u8]) -> (String, Exit) {
 /// `_compute_fail`'s Python on `raw`, as `line="$(…)"` holds what it
 /// printed (trailing newlines gone).
 fn fail_python(raw: &str) -> String {
-    let mut text = match json::parse(raw) {
+    // `_k2_hint_fill` first: a hint template takes this binary's names.
+    let mut text = match json::parse(raw).map(crate::transport::permission::hints_filled) {
         Err(_) => format!(
             "daemon_error: {}",
             raw.chars().take(200).collect::<String>()

@@ -404,6 +404,27 @@ fn request_answers_as_the_shell_does() {
                 1,
                 2,
             ),
+            // White-label C5: a hint template takes each side's own names
+            // (the server's are zz and Globex Desk); none usable, the hint
+            // as sent.
+            case(
+                "400, a hint with its template",
+                &["request", "x", "--why", "w"],
+                &[],
+                vec![on(), Reply::Answer(400, r#"{"ok":false,"error":{"code":"bad_params","hint":"ask first: zz permission request y, outside Globex Desk","hintTemplate":"ask first: {cli} permission request y, outside {product}"}}"#.into())],
+                owner_and_port,
+                2,
+                2,
+            ),
+            case(
+                "400, a hint whose template is not a string",
+                &["request", "x", "--why", "w"],
+                &[],
+                vec![on(), Reply::Answer(400, r#"{"ok":false,"error":{"code":"bad_params","hint":"ask first: zz permission request y","hintTemplate":7}}"#.into())],
+                owner_and_port,
+                2,
+                2,
+            ),
             case(
                 "302",
                 &["request", "x", "--why", "w"],

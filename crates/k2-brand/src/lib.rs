@@ -7,9 +7,11 @@
 //! `k2_client::brand` re-exports them; code uses that module, not this
 //! crate. No dependencies at run time.
 //!
-//! It also writes the tokens an install builds from the command's name:
-//! the PATH block's marker lines, the fish file's name, the system-wide
-//! path, and the same for each name the brand is retiring ([`RETIRED`]).
+//! It also writes the tokens an install writes: the PATH block's marker
+//! lines (from the product's name, with the command-form markers of
+//! earlier builds in [`PATH_BLOCK_EARLIER`]), the fish file's name and
+//! the system-wide path (from the command's name), and the same for each
+//! name the brand is retiring ([`RETIRED`]).
 //! They are made in the build script and nowhere else. The install code
 //! (`k2_client::cli_install`) and the root helper's paths
 //! (`k2_root_proto::paths`) read them from here.
@@ -92,13 +94,29 @@ mod tests {
         assert!(!BRAND_ID.is_empty());
     }
 
-    /// The compiled install tokens are the generator's, for this brand's
-    /// name (any brand: these tests also run under `K2_BRAND_DIR`).
+    /// The compiled install tokens are the generator's: the PATH markers
+    /// from the product's name, the earlier form from the command's, the
+    /// files and paths from the command's (any brand: these tests also run
+    /// under `K2_BRAND_DIR`).
     #[test]
-    fn the_install_tokens_are_built_from_the_name() {
+    fn the_install_tokens_are_built_from_the_names() {
+        let (begin, end) = brand_file::path_markers(PRODUCT_NAME);
+        assert_eq!(
+            (PATH_BLOCK_BEGIN, PATH_BLOCK_END),
+            (begin.as_str(), end.as_str())
+        );
+        let earlier: Vec<(String, String)> = PATH_BLOCK_EARLIER
+            .iter()
+            .map(|(b, e)| (b.to_string(), e.to_string()))
+            .collect();
+        assert_eq!(earlier, brand_file::earlier_markers(PRODUCT_NAME, CLI_NAME));
+        for (b, _) in PATH_BLOCK_EARLIER {
+            assert_ne!(
+                *b, PATH_BLOCK_BEGIN,
+                "an earlier form is not the current one"
+            );
+        }
         let own = brand_file::install_tokens(CLI_NAME);
-        assert_eq!(PATH_BLOCK_BEGIN, own.block_begin);
-        assert_eq!(PATH_BLOCK_END, own.block_end);
         assert_eq!(FISH_CONF, own.fish_conf);
         assert_eq!(SYSTEM_CLI_PATH, brand_file::system_cli_path(CLI_NAME));
         assert!(PATH_BLOCK_BEGIN.starts_with("# >>> ") && PATH_BLOCK_END.starts_with("# <<< "));

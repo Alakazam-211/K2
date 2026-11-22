@@ -7,10 +7,18 @@
 //! What it reads today: `id`, `schema`, `[names] product` and the `[cli]`
 //! table. Other tables are left for later steps.
 //!
-//! The tokens an install builds from a command's name (the PATH block's
-//! two marker lines, the fish file's name, the system-wide path) are made
-//! here, by [`install_tokens`] and [`system_cli_path`], and nowhere else:
-//! other crates take them as generated constants.
+//! The tokens an install writes (the PATH block's two marker lines, the
+//! fish file's name, the system-wide path) are made here, by
+//! [`path_markers`], [`install_tokens`] and [`system_cli_path`], and nowhere
+//! else: other crates take them as generated constants.
+//!
+//! The product's name and the command's name are two values a brand sets
+//! apart; neither is made from the other. The PATH block's markers carry
+//! the product's name (`# >>> <product> CLI >>>`, K2's ruling); the file
+//! names and paths carry the command's. Builds before that ruling wrote the
+//! markers with the command in upper case; when that form differs from
+//! the product's, it is listed as an earlier form ([`earlier_markers`]),
+//! so an install or an undo still finds and replaces such a block.
 
 use std::path::Path;
 
@@ -87,8 +95,10 @@ pub fn is_command_name(s: &str) -> bool {
 /// The folder the command is installed in system-wide.
 pub const SYSTEM_BIN: &str = "/usr/local/bin";
 
-/// What an install of one command name writes: its PATH block's first and
-/// last lines, and its fish startup file's name.
+/// What an install by one command name wrote before the PATH markers
+/// carried the product's name: its PATH block's first and last lines, and
+/// its fish startup file's name. A retired alias's old install, and this
+/// command's own earlier form, are found by these.
 #[derive(Debug, PartialEq, Eq)]
 pub struct InstallTokens {
     pub block_begin: String,
@@ -96,9 +106,35 @@ pub struct InstallTokens {
     pub fish_conf: String,
 }
 
-/// The install tokens of `name`: `# >>> <NAME> CLI >>>`,
-/// `# <<< <NAME> CLI <<<` (the name in upper case) and `<name>-cli.fish`.
-/// A name is ASCII (`is_command_name`), so upper case is one byte each.
+/// The PATH block's first and last lines for the product called
+/// `product`: `# >>> <product> CLI >>>` and `# <<< <product> CLI <<<`,
+/// the product's name as the brand file spells it.
+pub fn path_markers(product: &str) -> (String, String) {
+    (
+        format!("# >>> {product} CLI >>>"),
+        format!("# <<< {product} CLI <<<"),
+    )
+}
+
+/// The earlier marker pairs of a brand with product `product` and command
+/// `name`: the command-form pair ([`install_tokens`]) when it is not the
+/// product-form pair, else none. For K2 and K5 the two forms are the same
+/// text, so there is none.
+pub fn earlier_markers(product: &str, name: &str) -> Vec<(String, String)> {
+    let old = install_tokens(name);
+    let (begin, end) = path_markers(product);
+    if (old.block_begin.as_str(), old.block_end.as_str()) == (begin.as_str(), end.as_str()) {
+        Vec::new()
+    } else {
+        vec![(old.block_begin, old.block_end)]
+    }
+}
+
+/// The install tokens a build by the command `name` wrote before the
+/// markers carried the product's name: `# >>> <NAME> CLI >>>`,
+/// `# <<< <NAME> CLI <<<` (the name in upper case) and `<name>-cli.fish`
+/// (the fish file's name is still this). A name is ASCII
+/// (`is_command_name`), so upper case is one byte each.
 pub fn install_tokens(name: &str) -> InstallTokens {
     let upper = name.to_ascii_uppercase();
     InstallTokens {
@@ -131,6 +167,11 @@ fn parse(text: &str) -> Result<Brand, String> {
     }
     let id = text_field(&doc, "id", "id")?;
     let product = text_field(table(&doc, "names")?, "product", "names.product")?;
+    if product.chars().any(char::is_control) {
+        return Err(format!(
+            "names.product {product:?} must be one line with no control characters (it is in the PATH block's marker lines)"
+        ));
+    }
     let cli = table(&doc, "cli")?;
     if let Some(key) = cli.keys().find(|k| !CLI_KEYS.contains(&k.as_str())) {
         return Err(format!(
@@ -208,6 +249,11 @@ fn text_field(t: &toml::Table, key: &str, field: &str) -> Result<String, String>
 pub fn render(b: &Brand) -> String {
     let names: Vec<String> = b.aliases.iter().map(|a| format!("{:?}", a.name)).collect();
     let own = install_tokens(&b.cli_name);
+    let (begin, end) = path_markers(&b.product);
+    let earlier: Vec<String> = earlier_markers(&b.product, &b.cli_name)
+        .iter()
+        .map(|(begin, end)| format!("({begin:?}, {end:?})"))
+        .collect();
     let retired: Vec<String> = b
         .aliases
         .iter()
@@ -259,11 +305,17 @@ pub const CLI_ALIASES: &[&str] = &[{names}];
 /// The same names, in the same order, each with what it does.
 pub const CLI_ALIAS_MODES: &[(&str, AliasMode)] = &[{modes}];
 
-/// First line of the PATH block an install writes into a shell startup file.
+/// First line of the PATH block an install writes into a shell startup
+/// file: the product's name.
 pub const PATH_BLOCK_BEGIN: &str = {begin:?};
 
 /// Last line of the PATH block.
 pub const PATH_BLOCK_END: &str = {end:?};
+
+/// Earlier forms of this build's own PATH block markers (begin, end): the
+/// command in upper case, when that is not the product's form. An install
+/// replaces such a block in place, and the undo removes it.
+pub const PATH_BLOCK_EARLIER: &[(&str, &str)] = &[{earlier}];
 
 /// The fish startup file an install owns (the whole file is its block).
 pub const FISH_CONF: &str = {fish:?};
@@ -280,8 +332,9 @@ pub const RETIRED: &[RetiredName] = &[{retired}];
         id = b.id,
         names = names.join(", "),
         modes = modes.join(", "),
-        begin = own.block_begin,
-        end = own.block_end,
+        begin = begin,
+        end = end,
+        earlier = earlier.join(", "),
         fish = own.fish_conf,
         system = system_cli_path(&b.cli_name),
         retired = retired.join(", "),
@@ -388,11 +441,17 @@ pub const CLI_ALIASES: &[&str] = &["abc", "ab1", "ab2"];
 /// The same names, in the same order, each with what it does.
 pub const CLI_ALIAS_MODES: &[(&str, AliasMode)] = &[("abc", AliasMode::Notice), ("ab1", AliasMode::Silent), ("ab2", AliasMode::Tombstone)];
 
-/// First line of the PATH block an install writes into a shell startup file.
+/// First line of the PATH block an install writes into a shell startup
+/// file: the product's name.
 pub const PATH_BLOCK_BEGIN: &str = "# >>> AB CLI >>>";
 
 /// Last line of the PATH block.
 pub const PATH_BLOCK_END: &str = "# <<< AB CLI <<<";
+
+/// Earlier forms of this build's own PATH block markers (begin, end): the
+/// command in upper case, when that is not the product's form. An install
+/// replaces such a block in place, and the undo removes it.
+pub const PATH_BLOCK_EARLIER: &[(&str, &str)] = &[];
 
 /// The fish startup file an install owns (the whole file is its block).
 pub const FISH_CONF: &str = "ab-cli.fish";
@@ -442,6 +501,8 @@ pub const RETIRED: &[RetiredName] = &[RetiredName { name: "abc", block_begin: "#
             "pub const SYSTEM_CLI_PATH: &str = \"/usr/local/bin/k2\";\n",
             // Its one alias is silent: nothing to take over.
             "pub const RETIRED: &[RetiredName] = &[];\n",
+            // The product's form and the command's form are one text.
+            "pub const PATH_BLOCK_EARLIER: &[(&str, &str)] = &[];\n",
         ] {
             assert!(out.contains(line), "{line:?} in:\n{out}");
         }
@@ -485,19 +546,99 @@ pub const RETIRED: &[RetiredName] = &[RetiredName { name: "abc", block_begin: "#
         assert!(out.contains(want), "a tombstone alias is retired too:\n{out}");
     }
 
+    /// With a product and a command that are unrelated words, the PATH
+    /// markers carry the product, the files and paths the command, and the
+    /// command's upper-case form is listed as an earlier marker. A retired
+    /// alias keeps the form its old install wrote.
+    #[test]
+    fn the_markers_carry_the_product_and_the_old_form_is_earlier() {
+        let text =
+            "id = \"gd\"\nschema = 1\n[names]\nproduct = \"Globex Desk\"\n[cli]\nname = \"gd\"\n\
+            aliases = [{ name = \"gdold\", mode = \"notice\" }]\n";
+        let t = TempBrand::new("apart", Some(text));
+        let out = render(&load(&t.file()).expect("loads"));
+        for line in [
+            "pub const PATH_BLOCK_BEGIN: &str = \"# >>> Globex Desk CLI >>>\";\n",
+            "pub const PATH_BLOCK_END: &str = \"# <<< Globex Desk CLI <<<\";\n",
+            "pub const PATH_BLOCK_EARLIER: &[(&str, &str)] = &[(\"# >>> GD CLI >>>\", \"# <<< GD CLI <<<\")];\n",
+            "pub const FISH_CONF: &str = \"gd-cli.fish\";\n",
+            "pub const SYSTEM_CLI_PATH: &str = \"/usr/local/bin/gd\";\n",
+            "block_begin: \"# >>> GDOLD CLI >>>\", block_end: \"# <<< GDOLD CLI <<<\"",
+        ] {
+            assert!(out.contains(line), "{line:?} in:\n{out}");
+        }
+    }
+
+    /// The forms, one by one: the product's markers as spelled; an earlier
+    /// form only when the command's upper case is other text.
+    #[test]
+    fn markers_and_earlier_forms() {
+        assert_eq!(
+            path_markers("Globex Desk"),
+            (
+                "# >>> Globex Desk CLI >>>".to_string(),
+                "# <<< Globex Desk CLI <<<".to_string()
+            )
+        );
+        assert_eq!(
+            earlier_markers("Globex Desk", "gd"),
+            vec![(
+                "# >>> GD CLI >>>".to_string(),
+                "# <<< GD CLI <<<".to_string()
+            )]
+        );
+        for (product, name) in [("K2", "k2"), ("K5", "k5"), ("XY", "xy")] {
+            assert_eq!(earlier_markers(product, name), Vec::new(), "{product}");
+            assert_eq!(
+                path_markers(product).0,
+                install_tokens(name).block_begin,
+                "{product}"
+            );
+        }
+        // Case matters: a product spelled other than the upper-case
+        // command is another marker.
+        assert_eq!(earlier_markers("Xy", "xy").len(), 1);
+    }
+
+    /// The k5 brand's markers are the text a K5 install writes today.
+    #[test]
+    fn the_k5_brand_keeps_its_markers() {
+        let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../brand/k5/brand.toml");
+        let out = render(&load(&file).expect("the k5 brand file loads"));
+        for line in [
+            "pub const PATH_BLOCK_BEGIN: &str = \"# >>> K5 CLI >>>\";\n",
+            "pub const PATH_BLOCK_END: &str = \"# <<< K5 CLI <<<\";\n",
+            "pub const PATH_BLOCK_EARLIER: &[(&str, &str)] = &[];\n",
+        ] {
+            assert!(out.contains(line), "{line:?} in:\n{out}");
+        }
+    }
+
+    /// The product is in the marker lines, so it must be one line.
+    #[test]
+    fn a_product_with_a_control_character_is_refused() {
+        for (tag, product) in [("nl", "A\\nB"), ("tab", "A\\tB")] {
+            refused(
+                &format!("product-{tag}"),
+                &good_with(r#"product = "AB""#, &format!("product = \"{product}\"")),
+                "must be one line with no control characters",
+            );
+        }
+    }
+
     #[test]
     fn strings_are_written_escaped_for_rust() {
         let t = TempBrand::new(
             "escape",
             Some(&good_with(
                 r#"product = "AB""#,
-                r#"product = "A \"B\" \\ C\n""#,
+                r#"product = "A \"B\" \\ C""#,
             )),
         );
         let out = render(&load(&t.file()).expect("loads"));
         assert!(
             out.contains(
-                r#"        "A \"B\" \\ C\n"
+                r#"        "A \"B\" \\ C"
 "#
             ),
             "{out}"

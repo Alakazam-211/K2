@@ -146,12 +146,18 @@ pub const CLAMP_MARGIN: f64 = 64.0;
 pub const STALE_LIMIT: u32 = 8;
 /// This many 5 s main-thread timeouts in a row and the window falls back.
 pub const TIMEOUT_LIMIT: u32 = 3;
+/// This many sets in a row at a viewport other than the UI view's size is
+/// more than a resize frame: logged once.
+pub const VIEWPORT_MISS_LIMIT: u32 = 30;
 
 /// Cut a set down to the caps. True when anything was dropped.
 pub fn cap_counts(set: &mut PageLayers) -> bool {
     let mut cut = false;
     if set.layers.len() > MAX_LAYERS {
-        set.layers.truncate(MAX_LAYERS);
+        // Keep the FRONT ones (highest z): those are what a person sees.
+        set.layers.sort_by(|a, b| a.z.partial_cmp(&b.z).unwrap_or(std::cmp::Ordering::Equal));
+        let extra = set.layers.len() - MAX_LAYERS;
+        set.layers.drain(..extra);
         cut = true;
     }
     if set.claims.len() > MAX_CLAIMS {
@@ -212,6 +218,11 @@ pub struct Queue {
     /// Main-thread timeouts in a row, per window.
     timeouts: HashMap<String, u32>,
     pending: HashMap<String, (PageLayers, UnderlayOptions)>,
+    /// Bumped each time a window label closes: work begun for the old
+    /// window (an in-flight set, a webview cache) sees a different number
+    /// and drops itself, so a closed window is never revived and a reused
+    /// label starts clean.
+    label_gen: HashMap<String, u64>,
     scheduled: HashSet<String>,
     /// UI views (by window label) and pages (by registry key) already kept
     /// on the main thread.
@@ -283,6 +294,11 @@ impl Queue {
         self.scheduled.remove(parent);
     }
 
+    /// The label's generation (see `label_gen`).
+    pub fn label_gen(&self, label: &str) -> u64 {
+        self.label_gen.get(label).copied().unwrap_or(0)
+    }
+
     /// Is the window in underlay (a live epoch, not cleared)?
     pub fn underlay(&self, parent: &str) -> bool {
         self.epoch.contains_key(parent)
@@ -302,11 +318,19 @@ impl Queue {
     /// The K2 window closed: drop everything about it (a reused label then
     /// starts clean).
     pub fn forget_window(&mut self, parent: &str) {
+        *self.label_gen.entry(parent.to_string()).or_insert(0) += 1;
+        // Late sets of the closed window's epoch stay refused.
+        match self.epoch.remove(parent) {
+            Some(ep) => {
+                self.cleared.insert(parent.to_string(), ep);
+            }
+            None => {
+                self.cleared.remove(parent);
+            }
+        }
         self.last_gen.remove(parent);
         self.stale.remove(parent);
         self.timeouts.remove(parent);
-        self.epoch.remove(parent);
-        self.cleared.remove(parent);
         self.pending.remove(parent);
         self.scheduled.remove(parent);
         let prefix = format!("{parent}\0");
@@ -378,6 +402,9 @@ pub mod mac {
         static SIZED: RefCell<HashMap<usize, Instant>> = RefCell::new(HashMap::new());
         /// The hover route last installed (None = not yet).
         static HOVER: RefCell<Option<bool>> = const { RefCell::new(None) };
+        /// Sets in a row measured at a viewport other than the UI view's
+        /// size, per window, and whether that was logged.
+        static VIEWPORT_MISS: RefCell<HashMap<String, (u32, bool)>> = RefCell::new(HashMap::new());
     }
 
     /// One frame at 60 Hz, a little under so a steady 60 fps stream passes.
@@ -406,24 +433,53 @@ pub mod mac {
         }
     }
 
+    /// The window label a key belongs to (`label\0item`, or the label).
+    fn label_of(key: &str) -> &str {
+        key.split('\0').next().unwrap_or(key)
+    }
+
+    /// Keep `v` under `key` unless its window closed since `gen` was read
+    /// (then it would leak: the close already cleaned up).
+    fn keep_if_open(app: &AppHandle, key: &str, gen: u64, keep: impl FnOnce()) -> bool {
+        let open = super::queue(app).0.lock().unwrap().label_gen(label_of(key)) == gen;
+        if open {
+            keep();
+        }
+        open
+    }
+
     pub async fn cache_ui(app: &AppHandle, parent: &str) -> Result<(), String> {
         let ui = app
             .get_webview(parent)
             .ok_or_else(|| format!("underlay: no UI webview for window {parent:?}"))?;
+        let gen = super::queue(app).0.lock().unwrap().label_gen(parent);
         let label = parent.to_string();
-        cache(&ui, move |v| UIS.with(|m| {
-            m.borrow_mut().insert(label, v);
-        }))
+        let app2 = app.clone();
+        cache(&ui, move |v| {
+            let k = label.clone();
+            keep_if_open(&app2, &label, gen, move || UIS.with(|m| {
+                m.borrow_mut().insert(k, v);
+            }));
+        })
         .await
     }
 
     pub async fn cache_page(view: &Webview, key: &str) -> Result<(), String> {
+        let app = view.app_handle().clone();
+        let gen = super::queue(&app).0.lock().unwrap().label_gen(label_of(key));
         let k = key.to_string();
-        cache(view, move |v| PAGES.with(|m| {
-            m.borrow_mut().insert(k, v);
-        }))
+        let app2 = app.clone();
+        cache(view, move |v| {
+            let kk = k.clone();
+            keep_if_open(&app2, &k, gen, move || PAGES.with(|m| {
+                m.borrow_mut().insert(kk, v);
+            }));
+        })
         .await?;
-        super::queue(view.app_handle()).0.lock().unwrap().known.insert(key.to_string());
+        let mut q = super::queue(&app).0.lock().unwrap();
+        if q.label_gen(label_of(key)) == gen {
+            q.known.insert(key.to_string());
+        }
         Ok(())
     }
 
@@ -527,6 +583,7 @@ pub mod mac {
         let ub = ui.bounds();
         let (uw, uh) = (ub.size.width, ub.size.height);
         let stale = viewport_stale(set.viewport, (uw, uh));
+        note_viewport(parent, stale, set.viewport, (uw, uh));
         let now = Instant::now();
         let mut held = false;
         transaction(true);
@@ -568,6 +625,28 @@ pub mod mac {
         })();
         transaction(false);
         result.map(|()| held)
+    }
+
+    /// A viewport that keeps disagreeing with the UI view (not one resize
+    /// frame) means the renderer and K2 measure in different units: logged
+    /// once per window until it agrees again.
+    fn note_viewport(parent: &str, stale: bool, viewport: Option<[f64; 2]>, ui: (f64, f64)) {
+        VIEWPORT_MISS.with(|m| {
+            let mut m = m.borrow_mut();
+            if !stale {
+                m.remove(parent);
+                return;
+            }
+            let e = m.entry(parent.to_string()).or_insert((0, false));
+            e.0 += 1;
+            if e.0 >= super::VIEWPORT_MISS_LIMIT && !e.1 {
+                e.1 = true;
+                log::warn!(
+                    "[browser-underlay] {parent:?}: {} sets in a row measured at a viewport of {viewport:?}, but the UI view is {ui:?}: pages keep their frames until they agree",
+                    e.0
+                );
+            }
+        });
     }
 
     /// Frame a page at `rect` (UI px) in its superview. Returns true when
@@ -686,6 +765,7 @@ pub async fn browser_set_page_layers(
         if app.get_webview_window(&parent).is_none() {
             return Err(format!("underlay: {parent:?} is not one of the app's own windows"));
         }
+        let gen_at_start = queue(&app).0.lock().unwrap().label_gen(&parent);
         if cap_counts(&mut layers) {
             log::warn!(
                 "[browser-underlay] {parent:?}: a set over the caps ({MAX_LAYERS} layers, {MAX_CLAIMS} claims, {MAX_MINUS} minus) was cut down"
@@ -706,6 +786,12 @@ pub async fn browser_set_page_layers(
                     log::warn!("[browser-underlay] {key:?}: {e}");
                 }
             }
+        }
+        // The awaits above can outlive the window: a set for a window that
+        // closed meanwhile must not bring its queue entries back.
+        if app.get_webview_window(&parent).is_none() || queue(&app).0.lock().unwrap().label_gen(&parent) != gen_at_start {
+            log::debug!("[browser-underlay] {parent:?} closed while its set was on the way; dropped");
+            return Ok(());
         }
         let offer = queue(&app).0.lock().unwrap().offer(&parent, layers, options.unwrap_or_default());
         match offer {
@@ -904,13 +990,58 @@ mod tests {
         q.known.insert("window-2\0tab".into());
         q.known.insert("main\0tab".into());
         q.offer("window-2", set_in("x", 9), o);
+        let gen = q.label_gen("window-2");
         q.forget_window("window-2");
         assert!(!q.known.contains("window-2"));
         assert!(!q.known.contains("window-2\0tab"));
         assert!(q.known.contains("main\0tab"), "other windows keep theirs");
         assert!(!q.underlay("window-2"));
         assert!(q.take("window-2").is_none(), "nothing pending");
-        assert_eq!(q.offer("window-2", set_in("x", 1), o), Offer::Schedule, "same label, same epoch: clean");
+        assert_ne!(q.label_gen("window-2"), gen, "work begun for the old window can tell");
+        assert_eq!(q.label_gen("main"), 0, "other labels untouched");
+        // A set from the closed window, still in flight: not revived.
+        assert_eq!(q.offer("window-2", set_in("x", 10), o), Offer::Refused);
+        assert!(!q.underlay("window-2"));
+        // A new window under the same label (a new renderer, a new epoch).
+        assert_eq!(q.offer("window-2", set_in("y", 1), o), Offer::Schedule, "the reused label starts clean");
+    }
+
+    #[test]
+    fn caps_keep_the_front_layers() {
+        let mut s = set(1);
+        let base = s.layers[0].clone();
+        s.layers = (0..40)
+            .map(|i| WireLayer { window_id: format!("p{i}"), z: f64::from(i), ..base.clone() })
+            .collect();
+        assert!(cap_counts(&mut s));
+        assert_eq!(s.layers.len(), MAX_LAYERS);
+        assert_eq!(s.layers.first().map(|l| l.window_id.as_str()), Some("p8"));
+        assert_eq!(s.layers.last().map(|l| l.window_id.as_str()), Some("p39"), "the frontmost stays");
+    }
+
+    /// The real CoreGraphics path code the mask uses (macOS 13+).
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mask_paths_handle_a_page_over_the_whole_ui_and_cut_in_z_order() {
+        use wry::underlay::{visible_bounds, Shape};
+        let sq = |x: f64, y: f64, w: f64, h: f64| Shape::new(x, y, w, h, [0.0; 4], [0.0; 4]).unwrap();
+        // CoreGraphics' boolean operations may move an edge by a hair.
+        let near = |got: Result<Option<(f64, f64, f64, f64)>, String>, want: (f64, f64, f64, f64)| {
+            let g = got.expect("path operations").expect("something shows");
+            let d = [g.0 - want.0, g.1 - want.1, g.2 - want.2, g.3 - want.3];
+            assert!(d.iter().all(|v| v.abs() < 0.01), "bounds {g:?}, want {want:?}");
+        };
+        // A square page over the whole UI view: nothing of the UI shows,
+        // and that is not a failure (CoreGraphics returns NULL here).
+        assert_eq!(visible_bounds(800.0, 600.0, &[(sq(0.0, 0.0, 800.0, 600.0), vec![])], &[]), Ok(None));
+        // ... and a menu over it shows exactly the menu.
+        near(visible_bounds(800.0, 600.0, &[(sq(0.0, 0.0, 800.0, 600.0), vec![])], &[sq(10.0, 20.0, 100.0, 50.0)]), (10.0, 20.0, 100.0, 50.0));
+        // A page's own minus shows only inside that page: a nested dialog
+        // that pokes out past the page adds nothing outside it.
+        near(visible_bounds(800.0, 600.0, &[(sq(0.0, 0.0, 800.0, 600.0), vec![sq(700.0, 500.0, 300.0, 300.0)])], &[]), (700.0, 500.0, 100.0, 100.0));
+        // Overlapping pages: the union stays open (no box between them).
+        let vis = visible_bounds(800.0, 600.0, &[(sq(0.0, 0.0, 400.0, 600.0), vec![]), (sq(300.0, 0.0, 500.0, 300.0), vec![])], &[]);
+        near(vis, (400.0, 300.0, 400.0, 300.0)); // only the lower right stays UI
     }
 
     #[test]

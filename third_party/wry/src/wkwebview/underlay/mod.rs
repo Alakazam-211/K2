@@ -100,6 +100,10 @@ thread_local! {
   static MERGE_LOGGED: Cell<bool> = const { Cell::new(false) };
   /// Set while a mask is being rebuilt (AppKit re-entering setFrameSize:).
   static REBUILDING: Cell<bool> = const { Cell::new(false) };
+  /// Windows whose mask waits for the next commit (frames moved).
+  static DIRTY: RefCell<HashSet<usize>> = RefCell::new(HashSet::new());
+  /// The before-commit run-loop observer is installed.
+  static OBSERVER: Cell<bool> = const { Cell::new(false) };
   /// Bumped whenever the registered views change (the private hover route
   /// rescans its observer map only then).
   static REG_GEN: Cell<u64> = const { Cell::new(0) };
@@ -689,6 +693,8 @@ extern "C" {
   fn CGPathAddArcToPoint(path: *mut c_void, m: *const c_void, x1: f64, y1: f64, x2: f64, y2: f64, r: f64);
   fn CGPathCloseSubpath(path: *mut c_void);
   fn CGPathRelease(path: *mut c_void);
+  fn CGPathIsEmpty(path: *const c_void) -> bool;
+  fn CGPathGetBoundingBox(path: *const c_void) -> CGRect;
 }
 
 /// Append `s` (top-left coords) as one closed subpath; `fy` maps to layer y.
@@ -809,6 +815,8 @@ fn rebuild_mask(key: usize) -> Result<(), String> {
   if REBUILDING.with(|r| r.replace(true)) {
     return Ok(());
   }
+  // A direct rebuild (a new set) also settles any pending one.
+  DIRTY.with(|d| d.borrow_mut().remove(&key));
   let r = rebuild_mask_inner(key);
   REBUILDING.with(|r| r.set(false));
   r
@@ -829,33 +837,83 @@ unsafe fn exact_visible(ops: PathOps, local: CGRect, pages: &[MaskPage], snap: &
       CGPathRelease(vis);
       return None;
     }
+    // CoreGraphics returns NULL for an empty result too (a square page
+    // over the whole UI view): that is an empty path, not a failure.
     let next = (ops.subtract)(vis, hp, false);
     CGPathRelease(vis);
-    if next.is_null() {
+    vis = if next.is_null() { CGPathCreateMutable() } else { next };
+    if vis.is_null() {
       CGPathRelease(hp);
       return None;
     }
-    vis = next;
     if !pg.minus.is_empty() {
       let mp = shapes_path(&snap(&pg.minus), fy);
       let mi = if mp.is_null() { std::ptr::null_mut() } else { (ops.intersect)(mp, hp, false) };
       if !mp.is_null() {
         CGPathRelease(mp);
       }
+      // NULL here is an empty intersection: nothing to add back.
       if !mi.is_null() {
-        let next = (ops.union)(vis, mi, false);
-        CGPathRelease(mi);
-        CGPathRelease(vis);
-        if next.is_null() {
-          CGPathRelease(hp);
-          return None;
+        if CGPathIsEmpty(vis) {
+          CGPathRelease(vis);
+          vis = mi;
+        } else {
+          let next = (ops.union)(vis, mi, false);
+          if next.is_null() {
+            // Both empty, or a failure: keep what is there plus nothing.
+            CGPathRelease(mi);
+          } else {
+            CGPathRelease(mi);
+            CGPathRelease(vis);
+            vis = next;
+          }
         }
-        vis = next;
       }
     }
     CGPathRelease(hp);
   }
   Some(vis)
+}
+
+/// The mask's visible area for a UI view of `w` x `h` (top-left UI px, not
+/// flipped): pages back to front as (hole, minus), then claims. Ok(None)
+/// when nothing of the UI view shows; Err when the path operations are
+/// missing or fail. For tests: the same path code the mask uses.
+pub fn visible_bounds(w: f64, h: f64, pages: &[(Shape, Vec<Shape>)], claims: &[Shape]) -> Result<Option<(f64, f64, f64, f64)>, String> {
+  let ops = path_ops().ok_or("no CoreGraphics path operations on this macOS")?;
+  let local = CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(w, h));
+  let pages: Vec<MaskPage> = pages.iter().map(|(hole, minus)| MaskPage { hole: *hole, minus: minus.clone() }).collect();
+  let same = |v: &[Shape]| v.to_vec();
+  let fy = |y: f64| y;
+  unsafe {
+    let vis = exact_visible(ops, local, &pages, &same, &fy).ok_or("a mask path operation failed")?;
+    let cp = shapes_path(claims, &fy);
+    let all = if CGPathIsEmpty(cp) {
+      if !cp.is_null() {
+        CGPathRelease(cp);
+      }
+      vis
+    } else if CGPathIsEmpty(vis) {
+      CGPathRelease(vis);
+      cp
+    } else {
+      let u = (ops.union)(vis, cp, false);
+      CGPathRelease(vis);
+      CGPathRelease(cp);
+      if u.is_null() {
+        return Err("a mask path operation failed".into());
+      }
+      u
+    };
+    let out = if CGPathIsEmpty(all) {
+      None
+    } else {
+      let b = CGPathGetBoundingBox(all);
+      Some((b.origin.x, b.origin.y, b.size.width, b.size.height))
+    };
+    CGPathRelease(all);
+    Ok(out)
+  }
 }
 
 fn rebuild_mask_inner(key: usize) -> Result<(), String> {
@@ -1008,6 +1066,11 @@ fn remove_mask(ui: &NSView) {
 /// `setFrameSize:` / `setFrameOrigin:` / `setHidden:` on any WryWebView: if
 /// it's the UI view or a page of an underlay window, rebuild that window's
 /// mask in this same pass.
+///
+/// A `setFrame:` is a size and an origin change, and a live resize moves
+/// every page: so the window is only marked here, and its mask is rebuilt
+/// once, just before Core Animation commits this run-loop pass (the same
+/// frame).
 pub(crate) fn frame_changed(view: &NSView) {
   let Some(key) = window_key(view) else { return };
   let me = ptr(view);
@@ -1018,9 +1081,70 @@ pub(crate) fn frame_changed(view: &NSView) {
       .unwrap_or(false)
   });
   if hit {
+    DIRTY.with(|d| d.borrow_mut().insert(key));
+    ensure_commit_observer();
+  }
+}
+
+#[repr(C)]
+struct CFRunLoopObserverContext {
+  version: isize,
+  info: *mut c_void,
+  retain: *const c_void,
+  release: *const c_void,
+  copy_description: *const c_void,
+}
+
+#[link(name = "CoreFoundation", kind = "framework")]
+extern "C" {
+  fn CFRunLoopGetMain() -> *mut c_void;
+  fn CFRunLoopObserverCreate(
+    allocator: *const c_void,
+    activities: usize,
+    repeats: bool,
+    order: isize,
+    callout: extern "C" fn(*mut c_void, usize, *mut c_void),
+    context: *mut CFRunLoopObserverContext,
+  ) -> *mut c_void;
+  fn CFRunLoopAddObserver(rl: *mut c_void, observer: *mut c_void, mode: *const c_void);
+  static kCFRunLoopCommonModes: *const c_void;
+}
+
+/// kCFRunLoopBeforeWaiting.
+const BEFORE_WAITING: usize = 1 << 5;
+/// Core Animation commits at order 2000000; run just before it.
+const BEFORE_CA_COMMIT: isize = 1_999_000;
+
+extern "C" fn rebuild_dirty(_observer: *mut c_void, _activity: usize, _info: *mut c_void) {
+  let keys: Vec<usize> = DIRTY.with(|d| d.borrow_mut().drain().collect());
+  for key in keys {
     if let Err(e) = rebuild_mask(key) {
       eprintln!("wry underlay: mask after a resize: {e}");
     }
+  }
+}
+
+fn ensure_commit_observer() {
+  if OBSERVER.with(|o| o.replace(true)) {
+    return;
+  }
+  unsafe {
+    let mut ctx = CFRunLoopObserverContext {
+      version: 0,
+      info: std::ptr::null_mut(),
+      retain: std::ptr::null(),
+      release: std::ptr::null(),
+      copy_description: std::ptr::null(),
+    };
+    let obs = CFRunLoopObserverCreate(std::ptr::null(), BEFORE_WAITING, true, BEFORE_CA_COMMIT, rebuild_dirty, &mut ctx);
+    if obs.is_null() {
+      OBSERVER.with(|o| o.set(false));
+      // No observer: rebuild now, as before.
+      rebuild_dirty(std::ptr::null_mut(), 0, std::ptr::null_mut());
+      return;
+    }
+    // Kept for the life of the process (one per app).
+    CFRunLoopAddObserver(CFRunLoopGetMain(), obs, kCFRunLoopCommonModes);
   }
 }
 

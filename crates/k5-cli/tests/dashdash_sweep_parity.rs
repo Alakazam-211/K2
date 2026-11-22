@@ -12,8 +12,9 @@
 //!
 //! How: one scratch machine per side (home, K2 home with the owner token
 //! and its own stub daemon's port, a project), stdin closed, stand-ins
-//! first on `PATH` for programs that act on the machine. The stub answers
-//! every request with a plain 200. The scratch folder and the stub's port
+//! first on `PATH` for programs that act on the machine, and
+//! `K2_APPROVE_BIN` a k2-approve stand-in that prints its words. The
+//! stub answers every request with a plain 200. The scratch folder and the stub's port
 //! are written `<dir>` and `<port>` before the two sides are compared; a
 //! request is its request line and its body. A side still running at
 //! [`DEADLINE`] is killed and counts as hung (both hung is the same).
@@ -126,6 +127,8 @@ struct Machine {
     proj: PathBuf,
     tmp: PathBuf,
     path: String,
+    /// `K2_APPROVE_BIN`: the k2-approve stand-in.
+    approve: PathBuf,
     stub: Stub,
 }
 
@@ -144,6 +147,20 @@ fn machine(tag: &str) -> Machine {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
     }
+    // `approve verify`, `show` and `key-id` run the k2-approve program,
+    // which each CLI looks for in its own place (beside cli/k2, beside the
+    // binary, on PATH): both get this stand-in, so the line doesn't depend
+    // on what a host has built.
+    let approve = tools.join("k2-approve-stand-in");
+    fs::write(
+        &approve,
+        "#!/bin/sh\necho \"k2-approve stand-in: $*\" >&2\nexit 2\n",
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&approve, fs::Permissions::from_mode(0o755)).unwrap();
+    }
     let path = format!(
         "{}:{}",
         tools.display(),
@@ -160,6 +177,7 @@ fn machine(tag: &str) -> Machine {
         proj,
         tmp,
         path,
+        approve,
         stub,
     }
 }
@@ -223,6 +241,7 @@ impl Machine {
             .env("PATH", &self.path)
             .env("HOME", &self.home)
             .env("TMPDIR", &self.tmp)
+            .env("K2_APPROVE_BIN", &self.approve)
             .current_dir(&self.proj)
             .args(argv)
             .process_group(0)

@@ -86,8 +86,9 @@ struct Mask {
 thread_local! {
   /// Registered windows, keyed by NSWindow pointer.
   static WINS: RefCell<HashMap<usize, Win>> = RefCell::new(HashMap::new());
-  /// Windows whose new child webviews are inserted below the UI view.
-  static BELOW: RefCell<HashSet<usize>> = RefCell::new(HashSet::new());
+  /// Windows whose new child webviews are inserted below the UI view: the
+  /// window's UI view, by NSWindow pointer.
+  static BELOW: RefCell<HashMap<usize, Retained<NSView>>> = RefCell::new(HashMap::new());
   /// Tracking areas lifted off a view while it isn't the pointer's owner.
   static GATED: RefCell<HashMap<usize, Vec<Retained<NSTrackingArea>>>> = RefCell::new(HashMap::new());
   static MASKS: RefCell<HashMap<usize, Mask>> = RefCell::new(HashMap::new());
@@ -97,6 +98,8 @@ thread_local! {
   static IN_GATE: Cell<bool> = const { Cell::new(false) };
   /// Logged once: overlapping holes were merged.
   static MERGE_LOGGED: Cell<bool> = const { Cell::new(false) };
+  /// Set while a mask is being rebuilt (AppKit re-entering setFrameSize:).
+  static REBUILDING: Cell<bool> = const { Cell::new(false) };
 }
 
 /// First click on a page in an inactive window: off (Design, matching
@@ -228,7 +231,7 @@ pub fn set_children_below(ui: &NSView, on: bool) {
     BELOW.with(|b| {
       let mut b = b.borrow_mut();
       if on {
-        b.insert(key);
+        b.insert(key, ui.retain());
       } else {
         b.remove(&key);
       }
@@ -465,23 +468,10 @@ pub(crate) fn page_first_mouse(view: &NSView) -> Option<bool> {
 /// in underlay.
 pub(crate) fn insert_below_target(parent: &NSView) -> Option<Retained<NSView>> {
   let key = window_key(parent)?;
-  if !BELOW.with(|b| b.borrow().contains(&key)) {
-    return None;
-  }
-  let cls = AnyClass::get(c"WryWebView")?;
-  let subs = parent.subviews();
-  for i in (0..subs.count()).rev() {
-    let v = subs.objectAtIndex(i);
-    let is_wry: bool = unsafe { msg_send![&*v, isKindOfClass: cls] };
-    if !is_wry {
-      continue;
-    }
-    let is_ui = WINS.with(|w| w.borrow().get(&key).map(|win| ptr(&*win.ui) == ptr(&*v)).unwrap_or(false));
-    if is_ui {
-      return Some(v);
-    }
-  }
-  None
+  let ui = BELOW.with(|b| b.borrow().get(&key).cloned())?;
+  // Only when the UI view is really a child of this parent.
+  let sv = unsafe { ui.superview() }?;
+  (ptr(&*sv) == ptr(parent)).then_some(ui)
 }
 
 // ---------------------------------------------------------------------------
@@ -709,6 +699,15 @@ fn with_no_animation(f: impl FnOnce()) {
 /// Rebuild the window's UI mask from the pages' real frames (so it follows
 /// a resize in the same layout pass). No live page: no mask.
 fn rebuild_mask(key: usize) -> Result<(), String> {
+  if REBUILDING.with(|r| r.replace(true)) {
+    return Ok(());
+  }
+  let r = rebuild_mask_inner(key);
+  REBUILDING.with(|r| r.set(false));
+  r
+}
+
+fn rebuild_mask_inner(key: usize) -> Result<(), String> {
   struct Geo {
     ui: Retained<NSView>,
     holes: Vec<Shape>,

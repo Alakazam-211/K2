@@ -1,0 +1,52 @@
+# An example brand file for a made-up distributor: Globex Studio, command gy.
+# Copy this folder into your own repo as brand/ and change the values.
+#
+# The K5 build reads this file when K2_BRAND_DIR names its folder (the
+# pipeline sets it; you never edit K5's own brand/ folder). It knows the
+# fields below and nothing else yet: a key it does not know inside [cli]
+# stops the build, so add only what K5's release notes say a brand file
+# may hold.
+#
+# Before you ship, `bash scripts/brand.sh lint <this folder> --live` must
+# pass on the K5 tag you build (the pipeline runs it on every build).
+
+# The brand's id: lowercase letters and digits, a letter first, 2 to 12
+# long. Programs read it, people never type it. It is stamped into every
+# binary of the build (the brand mark, checked before signing), and a
+# coming K5 release also writes it into each server's data folder, so a
+# server made by your build is never started by another brand's daemon.
+# Pick it once: changing it later strands your users' servers.
+id = "globex"
+
+# The brand file's format. 1 is the only one K5 reads today. K5's release
+# notes say when a new one comes and what changes.
+schema = 1
+
+[names]
+# The product's name: what people read in prose, windows, menus and
+# messages. 1 to 40 characters. It may not contain K2, K5 or Kessel, may
+# not be another brand's product (in any case), and may not appear whole
+# in K5's own text. It is never made from the command, nor the command
+# from it: a build that prints one where the other belongs fails the
+# output judges.
+product = "Globex Studio"
+
+[cli]
+# The command people and agents type, and the CLI's file name. Lowercase
+# letters and digits, a letter first, 2 to 12 long. The policy refuses a
+# system command, a shell builtin, a PowerShell or cmd.exe name, a
+# developer tool or a common shell alias, our names and their look-alikes,
+# a name another brand holds, and a name that is a word in K5's own text.
+# `--live` also asks the build host's shells and the package indexes.
+# Every help page, study page, permission card, skill and `Ask with:` line
+# of your build says this name; nothing reads it at run time.
+name = "gy"
+
+# Other names this build answers to. An alias may only be one of your own
+# former command names (never k2, k5 or another brand's), each with a mode:
+#   silent     runs, says nothing;
+#   notice     runs, and prints one line naming your current command;
+#   tombstone  runs nothing, prints the command to type now, exits 127.
+# A new brand has none. To rename your command later, put the old name
+# here as "notice", then "tombstone" a release or two after.
+aliases = []

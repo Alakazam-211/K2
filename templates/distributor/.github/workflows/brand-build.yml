@@ -1,0 +1,165 @@
+# The reference pipeline for a distributor's repo: build your brand of K5
+# from each K5 release tag, judge it, sign it with your identity and
+# publish it to your feed. Every step is pipeline/driver.sh; this file only
+# says when and where it runs, and which job gets which secret.
+#
+# Three jobs, so K5's build code never runs where your signing key is:
+#   pick   which K5 tag to build (hourly, or the tag you name by hand)
+#   build  steps 1 to 7: the gates, the build, the judges (no signing key;
+#          a real build gets your mail sign-in clients, which the daemon
+#          carries in its bytes anyway)
+#   ship   steps 8 to 10: sign and publish (SECRETS), then push the tag
+#          shipped/<K5 tag>. Runs only the driver and your hooks. Put it
+#          behind the protected environment "release".
+#
+# Before you use it: pin every action to a full commit sha (the ones K5
+# pins are pinned already), and give the "release" environment required
+# reviewers if you want a person to approve each release.
+name: brand-build
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "K5 release tag to build (empty: the newest one not held)"
+        required: false
+        default: ""
+      dry_run:
+        description: "Dry run: every step up to signing, nothing signed or published"
+        type: boolean
+        required: false
+        default: true
+
+concurrency:
+  group: brand-build
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  pick:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.pick.outputs.tag }}
+      sha: ${{ steps.pick.outputs.sha }}
+      dry_run: ${{ steps.pick.outputs.dry_run }}
+    steps:
+      - name: Checkout your repo (with its shipped/ tags)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: Pick the K5 tag
+        id: pick
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_TAG:-}" ]; then
+            tag="$INPUT_TAG" sha="" dry="${INPUT_DRY_RUN:-true}"
+          else
+            line="$(bash pipeline/driver.sh pick)"
+            tag="${line%% *}" sha="${line#* }" dry=false
+            [ -n "$line" ] || sha=""
+          fi
+          {
+            echo "tag=$tag"
+            echo "sha=$sha"
+            echo "dry_run=$dry"
+          } >> "$GITHUB_OUTPUT"
+          echo "tag: ${tag:-(none)}, dry run: $dry"
+
+  build:
+    needs: pick
+    if: needs.pick.outputs.tag != ''
+    # K5's release build wants about 8 cores and 16 GB: use a large runner.
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - name: Checkout your repo
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      # The Rust version comes from the K5 tag's rust-toolchain.toml: the
+      # driver installs it with the runner's rustup.
+      - name: Build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential cmake clang pkg-config libssl-dev
+
+      - name: Dry run (no secrets)
+        if: needs.pick.outputs.dry_run == 'true'
+        env:
+          TAG: ${{ needs.pick.outputs.tag }}
+        run: bash pipeline/driver.sh dry-run "$TAG" --out out
+
+      # SECRETS: your own mail sign-in clients (Google, Microsoft). The
+      # daemon is built with them; without the Google pair a real build is
+      # refused.
+      - name: Build
+        if: needs.pick.outputs.dry_run != 'true'
+        env:
+          TAG: ${{ needs.pick.outputs.tag }}
+          SHA: ${{ needs.pick.outputs.sha }}
+          K2_GMAIL_CLIENT_ID: ${{ secrets.MAIL_GMAIL_CLIENT_ID }}
+          K2_GMAIL_CLIENT_SECRET: ${{ secrets.MAIL_GMAIL_CLIENT_SECRET }}
+          K2_MICROSOFT_CLIENT_ID: ${{ secrets.MAIL_MICROSOFT_CLIENT_ID }}
+        run: |
+          set -euo pipefail
+          pin=()
+          if [ -n "$SHA" ]; then pin=(--sha "$SHA"); fi
+          bash pipeline/driver.sh build "$TAG" "${pin[@]}" --out out
+
+      - name: Keep the output for the ship job
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: brand-build
+          path: out/
+          if-no-files-found: error
+          retention-days: 14
+
+  ship:
+    needs: [pick, build]
+    if: needs.pick.outputs.dry_run != 'true'
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout your repo
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: Get the build's output
+        uses: actions/download-artifact@v4 # pin to a full commit sha
+        with:
+          name: brand-build
+          path: out
+
+      - name: Signing tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends minisign
+
+      # SECRETS: your update key (signing) and your feed's upload access.
+      - name: Sign and publish
+        env:
+          TAG: ${{ needs.pick.outputs.tag }}
+          UPDATE_MINISIGN_KEY: ${{ secrets.UPDATE_MINISIGN_KEY }}
+          UPDATE_MINISIGN_PASSWORD: ${{ secrets.UPDATE_MINISIGN_PASSWORD }}
+          FEED_UPLOAD_URL: ${{ secrets.FEED_UPLOAD_URL }}
+          FEED_UPLOAD_TOKEN: ${{ secrets.FEED_UPLOAD_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config user.name "brand pipeline"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          bash pipeline/driver.sh ship --out out
+          if git rev-parse -q --verify "refs/tags/shipped/$TAG" >/dev/null; then
+            git push origin "refs/tags/shipped/$TAG"
+          fi

@@ -1,0 +1,11 @@
+# K5 release tags you hold back: the pipeline never picks one listed here.
+# One tag per line, then anything after a `#` as your reason. A line that
+# says only `all` holds every new tag (a freeze): nothing new is built
+# until you take that line out.
+#
+# To ship a held tag later, take its line out: the next run picks the
+# newest tag that is newer than your last shipped one and not held. A
+# dry run (`driver.sh dry-run <tag>`) still runs on a held tag, so you can
+# test what you hold.
+#
+# v0.47.3  # waiting for our own QA of the new sign-in screen

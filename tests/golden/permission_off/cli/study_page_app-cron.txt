@@ -1,0 +1,49 @@
+$ k2 study app-cron
+exit: 0
+--- stdout
+k2 study app-cron — scheduled calls to an App's own routes
+
+WHAT IT IS
+  The daemon calls a route of your App on a 5-field cron schedule (box
+  time). It runs headless on the box, with no window open. It replaces a
+  k2 job that curls the App: a job is a process outside the App's wall
+  that only reaches the public URL; cron calls the App's own port.
+
+ADD ONE
+  k2 app cron add <app> "*/15 * * * *" --path /api/cron/sync
+  k2 app cron add <app> "0 4 * * *" --path /api/cron/bill --method POST --missed once
+  Each call sends:
+    Authorization: Bearer <CRON_SECRET>
+    User-Agent: k2-cron/1
+    X-K2-Cron: <cron-id>
+  The App reads CRON_SECRET from its env and refuses a call without it
+  (the same check a Vercel cron route already does):
+    if (req.headers.authorization !== `Bearer ${process.env.CRON_SECRET}`) return 401
+  The first add grants the App the CRON_SECRET it already has under that
+  name, else makes one in the vault (app-cron.<app>.CRON_SECRET). A running
+  App is re-hosted so it gets the new env. The value is never printed.
+
+RULES
+  Overlap   while a run is still going, the next slot is skipped and
+            logged skipped_overlap. run-now is refused (cron_running).
+  Missed    the daemon was down at the slot: --missed skip (default) logs
+            skipped_missed; --missed once runs one catch-up if the slot is
+            under 12 h old. Older slots are always skipped.
+  Timeout   --timeout 5m by default, at most 1h: logged timeout.
+  Stopped   the App isn't running: logged not_running, not counted as a
+            failure.
+  Failing   any answer other than 2xx is failed (the first 300 bytes of
+            the answer are kept as the detail). Three failures in a row
+            tell the App's workspace once. An ok run resets the count.
+
+LOOK
+  k2 app cron list <app>          schedule, next slot, last run, failures
+  k2 app cron logs <app> [<id>]   every run and skip, newest first
+  k2 app cron run-now <app> <id>  one call now; exit 1 when it fails
+  k2 app cron rm <app> <id>       CRON_SECRET stays with the App
+
+WHO
+  The owner and Admins. An agent needs "Build and run Apps" for add, rm
+  and run-now; list and logs are reads (Members too).
+--- stderr
+--- requests

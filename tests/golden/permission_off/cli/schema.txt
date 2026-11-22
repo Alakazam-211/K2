@@ -1134,6 +1134,55 @@ exit: 0
       ]
     },
     {
+      "name": "db cluster basebackup",
+      "usage": "k2 db cluster basebackup <name> [--json]",
+      "description": "A base backup of an archiving, running named cluster K2 made, now, through the root helper (protocol 19): pg_basebackup as postgres into /var/lib/postgresql/k2-wal/<major>-<name>.base/<stamp> beside the WAL spool (where a backup ships from). The newest 7 stay. The daemon also takes one a day of every archiving named cluster, headless. The owner, or an agent with \"Let this agent manage Postgres versions\" for its own workspace's cluster (exit 3 otherwise).",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "db cluster backups",
+      "usage": "k2 db cluster backups <name> [--json]",
+      "description": "What a restore can use: the base backups on the box, the WAL spool (count, first, last, newest archived, a missing segment named), the window a restore can reach (restorableFrom, restorableTo, UTC), and K2's record of the last base backup and the last restore drill, with a warning when no good drill is newer than 30 days. Same rule as basebackup.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "{ok, cluster, onBox:{baseBackups, wal, restorableFrom, restorableTo}, recorded:{lastBasebackupAt, lastDrillAt, lastDrillOk, drillWarning}}."}
+      ]
+    },
+    {
+      "name": "db cluster restore",
+      "usage": "k2 db cluster restore <name> --to <time> --as <new-name> [--json]",
+      "description": "Restore a named cluster to a moment as a NEW cluster beside the old one (never in place), through the root helper (protocol 19): the newest base backup that ended by then, its WAL replayed from the spool to the moment, then promoted; K2 records it in this workspace. Refused before anything is made on a missing WAL segment, a moment later than the newest WAL in the spool, or no base backup by then; Postgres stopping before the moment fails loudly and leaves the cluster stopped (drop-drill removes it). The old cluster is unchanged. Owner, or an agent with the Postgres versions switch for its own cluster.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--to", "arg": "time", "description": "The moment: 2026-11-22T10:15:00Z, 2026-11-22 10:15 (UTC), 2026-11-22T12:15:00+02:00, or -15m / -2h / -1d (required)."},
+        {"name": "--as", "arg": "new-name", "description": "The new cluster's name: 2-24 of a-z, 0-9 and _, never one in use (required)."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "db cluster restore-drill",
+      "usage": "k2 db cluster restore-drill <name> [--to <time>] [--json]",
+      "description": "Prove a restore works: restore into the throwaway cluster <name>_drill, check it, remove it, record the result (k2 db cluster backups shows it; it warns after 30 days without a good one). Without --to: two marker rows in the source's postgres database around a moment, every table's row count at that moment, a restore to it; PASS needs the first marker present, the second absent and every count equal. With --to: a restore to that moment and the counts found. Takes a base backup first if there is none. Exit 1 on FAIL. Same rule as basebackup.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--to", "arg": "time", "description": "A moment in the past instead of now (same forms as restore)."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "db cluster drop-drill",
+      "usage": "k2 db cluster drop-drill <name> [--major <M>] [--json]",
+      "description": "Remove a cluster restore made as a drill, or one whose restore failed, through the root helper (protocol 19); the helper refuses any other cluster (not_drill). --major when K2 has no record of the name. Owner, or an agent for its own workspace's recorded cluster.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--major", "arg": "M", "description": "The Postgres major, when K2 has no record of the cluster."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
       "name": "db cluster restart",
       "usage": "k2 db cluster restart <name> [--json]",
       "description": "Restart one named cluster K2 made (a minor update, a drill), nothing else: its databases' connections drop and come back. The owner, or an agent with \"Let this agent manage Postgres versions\" for its own workspace's cluster.",
@@ -3067,6 +3116,56 @@ exit: 0
       "args": [{"name": "app-id", "required": true}],
       "flags": [
         {"name": "--json", "arg": null, "description": "{app, kind, running, postgres, majors, connections[], pending[]}."}
+      ]
+    },
+    {
+      "name": "app cron add",
+      "usage": "k2 app cron add <app-id> \"<min hour day month weekday>\" --path /api/cron/x [--method GET|POST] [--missed skip|once] [--timeout 5m] [--json]",
+      "description": "The daemon calls the App's own route on this 5-field schedule (box time), headless, on the App's port on this box, with Authorization: Bearer $CRON_SECRET: the secret the App already gets under that name, else one K2 makes in the vault and grants (a running App is re-hosted to get it). Never printed. A slot while a run is still going is skipped; a slot missed while the daemon was down is skipped or, with --missed once, run once if under 12 h old. Three failures in a row tell the App's workspace. Agents need Build and run Apps.",
+      "args": [{"name": "app-id", "required": true}, {"name": "schedule", "required": true}],
+      "flags": [
+        {"name": "--path", "arg": "path", "description": "The App's route, starting with / (required)."},
+        {"name": "--method", "arg": "GET|POST", "description": "Default GET."},
+        {"name": "--missed", "arg": "skip|once", "description": "A slot missed while the daemon was down (default skip)."},
+        {"name": "--timeout", "arg": "duration", "description": "30s, 5m or 1h; default 5m, at most 1h."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "app cron list",
+      "usage": "k2 app cron list <app-id> [--json]",
+      "description": "The App's crons: id, schedule, method, path, next slot, running, failures in a row, the last run.",
+      "args": [{"name": "app-id", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "app cron run-now",
+      "usage": "k2 app cron run-now <app-id> <cron-id> [--json]",
+      "description": "Call the App's route once now, with the same header. Exit 1 when the call fails; refused while a run of it is still going (cron_running, exit 3).",
+      "args": [{"name": "app-id", "required": true}, {"name": "cron-id", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "app cron logs",
+      "usage": "k2 app cron logs <app-id> [<cron-id>] [--limit N] [--json]",
+      "description": "Every run and skip, newest first: ok, failed, timeout, not_running, skipped_overlap, skipped_missed, interrupted; trigger (schedule, catch_up, run_now), HTTP status, time, a short detail.",
+      "args": [{"name": "app-id", "required": true}, {"name": "cron-id", "required": false}],
+      "flags": [
+        {"name": "--limit", "arg": "N", "description": "Runs per cron, 1-500 (default 20)."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "app cron rm",
+      "usage": "k2 app cron rm <app-id> <cron-id> [--json]",
+      "description": "Remove a cron. CRON_SECRET stays granted to the App.",
+      "args": [{"name": "app-id", "required": true}, {"name": "cron-id", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON output."}
       ]
     },
     {

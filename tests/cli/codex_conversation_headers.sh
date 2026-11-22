@@ -221,7 +221,7 @@ check "permission request, socket" sock both all
 run "${CODEX_ENV[@]}" K2_HOOK_SOCK="$SOCK" -- permission status pr_1
 check "permission status (GET), socket" sock both all
 # msg and thread ask about send-once over TCP, then send on the socket.
-run "${CODEX_ENV[@]}" K2_HOOK_SOCK="$SOCK" -- msg cortana hello --from me
+run "${CODEX_ENV[@]}" K2_HOOK_SOCK="$SOCK" -- msg alice hello --from me
 check "msg, socket" sock both
 run "${CODEX_ENV[@]}" K2_HOOK_SOCK="$SOCK" -- thread bob hi --from me
 check "thread write, socket" sock both
@@ -233,7 +233,7 @@ run "${CODEX_ENV[@]}" -- permission request x.write --why w
 check "permission request, TCP" tcp both all
 run "${CODEX_ENV[@]}" -- permission status pr_1
 check "permission status (GET), TCP" tcp both all
-run "${CODEX_ENV[@]}" -- msg cortana hello --from me
+run "${CODEX_ENV[@]}" -- msg alice hello --from me
 check "msg, TCP" tcp both all
 run "${CODEX_ENV[@]}" -- thread bob hi --from me
 check "thread write, TCP" tcp both all
@@ -247,7 +247,7 @@ run -- thread bob --from me
 check "no CODEX_ setting, TCP" tcp none all
 run "${CODEX_ENV[@]}" K2_CODEX_PASSPORT_BIND=0 K2_HOOK_SOCK="$SOCK" -- permission request x.write --why w
 check "K2_CODEX_PASSPORT_BIND=0, socket" sock none all
-run "${CODEX_ENV[@]}" K2_CODEX_PASSPORT_BIND=0 -- msg cortana hello --from me
+run "${CODEX_ENV[@]}" K2_CODEX_PASSPORT_BIND=0 -- msg alice hello --from me
 check "K2_CODEX_PASSPORT_BIND=0, TCP" tcp none all
 
 echo "== an id the shell won't send =="

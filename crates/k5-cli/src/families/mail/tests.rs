@@ -139,11 +139,11 @@ fn the_posts_and_their_words() {
     );
     assert_eq!(post(&["off"]).1[1], "on=false");
     assert_eq!(
-        post(&["inboxes", "--add", "a@x.io", "--remove", "b@x.io"]).1,
+        post(&["inboxes", "--add", "a@x.example", "--remove", "b@x.example"]).1,
         vec![
             "project=/w/proj".to_string(),
-            r#"add=[{"address": "a@x.io", "wake": "vip"}]"#.into(),
-            r#"remove=["b@x.io"]"#.into(),
+            r#"add=[{"address": "a@x.example", "wake": "vip"}]"#.into(),
+            r#"remove=["b@x.example"]"#.into(),
         ]
     );
     assert_eq!(
@@ -332,7 +332,7 @@ fn read(reply: &str, printer: Printer, json: bool) -> (String, String, Exit) {
     (s.stdout, s.stderr, s.exit)
 }
 
-const STATUS: &str = r#"{"enabled":true,"inboxes":[{"address":"a@x.io","wake":"vip","needsRelink":true},{"address":"l@x.io","wake":"vip","source":"linked","needsRelink":true,"lastError":"x"},{"address":"m@x.io","wake":"vip","source":"Linked","needsRelink":true},{"address":"b@x.io","wake":"all","source":"linked","lastError":"auth"},{"address":"c@x.io"}],"vips":["boss@x.io","@x.io"],"digest":{"start":"09:00","end":"17:00","days":["mon","tue"],"tz":"A/B","everySeconds":5400,"nextFireAt":"2026-11-20T09:00:00Z"},"vipOutsideWindow":false,"vipSessionLine":true,"snippets":false,"pausedUntil":"2026-11-21","last24h":{"vipDelivered":2,"failedAuth":null}}"#;
+const STATUS: &str = r#"{"enabled":true,"inboxes":[{"address":"a@x.example","wake":"vip","needsRelink":true},{"address":"l@x.example","wake":"vip","source":"linked","needsRelink":true,"lastError":"x"},{"address":"m@x.example","wake":"vip","source":"Linked","needsRelink":true},{"address":"b@x.example","wake":"all","source":"linked","lastError":"auth"},{"address":"c@x.example"}],"vips":["boss@x.example","@x.example"],"digest":{"start":"09:00","end":"17:00","days":["mon","tue"],"tz":"A/B","everySeconds":5400,"nextFireAt":"2026-11-20T09:00:00Z"},"vipOutsideWindow":false,"vipSessionLine":true,"snippets":false,"pausedUntil":"2026-11-21","last24h":{"vipDelivered":2,"failedAuth":null}}"#;
 
 #[test]
 fn the_status_prints_as_the_shell_prints_it() {
@@ -345,17 +345,17 @@ fn the_status_prints_as_the_shell_prints_it() {
         out,
         format!(
             "Mail notices: on\n\
-             Inboxes chosen: a@x.io (vip), l@x.io (vip), m@x.io (vip), b@x.io (all)\n\
-             Can also choose: c@x.io\n\
-             VIPs: boss@x.io, @x.io\n\
+             Inboxes chosen: a@x.example (vip), l@x.example (vip), m@x.example (vip), b@x.example (all)\n\
+             Can also choose: c@x.example\n\
+             VIPs: boss@x.example, @x.example\n\
              Check window: 09:00-17:00 mon,tue (A/B)\n\
              Digest every 90 min; next: 2026-11-20T09:00:00Z\n\
              VIP mail outside the window: hold; session line: on; snippets: off\n\
              Paused until 2026-11-21\n\
-             Stopped: a@x.io refused its login. Reconnect the inbox and it starts again.\n\
-             Stopped: l@x.io refused its sign-in. A person signs it in again in place, in a browser (Settings → Email Link → Sign in again, or the owner runs {CLI_NAME} mail link relink l@x.io). Notices start again after the next check. Do not remove and link it again ({CLI_NAME} mail link --help).\n\
-             Stopped: m@x.io refused its login. Reconnect the inbox and it starts again.\n\
-             Last poll problem for b@x.io: auth\n\
+             Stopped: a@x.example refused its login. Reconnect the inbox and it starts again.\n\
+             Stopped: l@x.example refused its sign-in. A person signs it in again in place, in a browser (Settings → Email Link → Sign in again, or the owner runs {CLI_NAME} mail link relink l@x.example). Notices start again after the next check. Do not remove and link it again ({CLI_NAME} mail link --help).\n\
+             Stopped: m@x.example refused its login. Reconnect the inbox and it starts again.\n\
+             Last poll problem for b@x.example: auth\n\
              Last 24h: 2 VIP delivered, 0 digested, None failed authentication\n"
         )
     );

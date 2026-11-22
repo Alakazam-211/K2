@@ -1233,10 +1233,10 @@ mod tests {
 
     #[test]
     fn addresses() {
-        assert!(is_postal_address("Scout::Initech.postal.bot"));
+        assert!(is_postal_address("Alice::Initech.postal.bot"));
         assert!(is_postal_address("a::abc.postal.bot"));
         assert!(is_postal_address("a::z3.postal.bot"));
-        assert!(!is_postal_address("Scout::Acme.postal.bot"), "reserved");
+        assert!(!is_postal_address("Alice::Acme.postal.bot"), "reserved");
         assert!(!is_postal_address("_a::initech.postal.bot"));
         assert!(!is_postal_address("a::-initech.postal.bot"));
         assert!(!is_postal_address("a:initech.postal.bot"));

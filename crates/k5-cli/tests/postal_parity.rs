@@ -23,7 +23,7 @@ use common::parity::*;
 use common::stub::Reply;
 
 const VERB: &str = "postal";
-const ADDR: &str = "scout::initech.postal.bot";
+const ADDR: &str = "alice::initech.postal.bot";
 const ASKED: &str = r#"{"ok":true,"asked":true,"card":"c-1","request":"pr_7","waiting":true,"hint":"a person answers it"}"#;
 
 fn check(rig: &Rig, cases: Vec<Case>) {
@@ -143,7 +143,7 @@ fn usage_help_and_words() {
 #[test]
 fn words_after_dashes() {
     let rig = Rig::new(VERB, "dashes");
-    let held = r#"{"ok":true,"status":"held","to":"scout::initech.postal.bot","badge":"b1","deliveryId":"p_abc"}"#;
+    let held = r#"{"ok":true,"status":"held","to":"alice::initech.postal.bot","badge":"b1","deliveryId":"p_abc"}"#;
     let v = vec![
         case(
             "send: the text --help after --",
@@ -226,8 +226,8 @@ fn words_after_dashes() {
 #[test]
 fn each_view() {
     let rig = Rig::new(VERB, "views");
-    let status = r#"{"ok":true,"handle":{"address":"scout::initech.postal.bot","status":"local"},"counts":{"accepted":2,"pendingIn":1,"pendingOut":0},"ownerLinked":false,"plane":{"note":"Postal network: connected."}}"#;
-    let friends = r#"{"ok":true,"handle":{"address":"scout::initech.postal.bot"},"friends":[{"peer":"a::b.postal.bot","status":"accepted","updatedAt":1700000000,"ownerName":"Ada"},{"peer":"c::d.postal.bot","status":"pending_in","id":"pr_1","updatedAt":0,"codeWaiting":true},{"peer":"e::f.postal.bot","status":"pending_out","id":"pr_2","decidedBy":"owner","updatedAt":1700000060.5},{"peer":"g::h.postal.bot","status":"rekey_pending","id":"pr_3"},{"peer":"i::j.postal.bot","status":"blocked"},{"peer":"k::l.postal.bot","status":"revoked"},{"peer":"m","status":"odd"}]}"#;
+    let status = r#"{"ok":true,"handle":{"address":"alice::initech.postal.bot","status":"local"},"counts":{"accepted":2,"pendingIn":1,"pendingOut":0},"ownerLinked":false,"plane":{"note":"Postal network: connected."}}"#;
+    let friends = r#"{"ok":true,"handle":{"address":"alice::initech.postal.bot"},"friends":[{"peer":"a::b.postal.bot","status":"accepted","updatedAt":1700000000,"ownerName":"Ada"},{"peer":"c::d.postal.bot","status":"pending_in","id":"pr_1","updatedAt":0,"codeWaiting":true},{"peer":"e::f.postal.bot","status":"pending_out","id":"pr_2","decidedBy":"owner","updatedAt":1700000060.5},{"peer":"g::h.postal.bot","status":"rekey_pending","id":"pr_3"},{"peer":"i::j.postal.bot","status":"blocked"},{"peer":"k::l.postal.bot","status":"revoked"},{"peer":"m","status":"odd"}]}"#;
     check(
         &rig,
         vec![
@@ -423,7 +423,7 @@ fn each_view() {
                 &["send", ADDR, "hello", "there", "--no-wake"],
                 &[],
                 vec![ok(
-                    r#"{"ok":true,"status":"held","to":"scout::initech.postal.bot","badge":"b1","deliveryId":"p_abc"}"#,
+                    r#"{"ok":true,"status":"held","to":"alice::initech.postal.bot","badge":"b1","deliveryId":"p_abc"}"#,
                 )],
                 owner_and_port,
                 0,
@@ -431,7 +431,7 @@ fn each_view() {
             ),
             case(
                 "send: queued",
-                &["send", "Scout::Initech.postal.bot", "hi"],
+                &["send", "Alice::Initech.postal.bot", "hi"],
                 &[],
                 vec![ok(r#"{"ok":true,"status":"queued","to":"x"}"#)],
                 owner_and_port,
@@ -551,7 +551,7 @@ fn a_friends_list_above_256_kib() {
         })
         .collect();
     let body = format!(
-        r#"{{"ok":true,"handle":{{"address":"scout::initech.postal.bot"}},"friends":[{}]}}"#,
+        r#"{{"ok":true,"handle":{{"address":"alice::initech.postal.bot"}},"friends":[{}]}}"#,
         rows.join(",")
     );
     assert!(

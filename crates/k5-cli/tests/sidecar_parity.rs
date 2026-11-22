@@ -60,8 +60,8 @@ fn stdin(bytes: &'static [u8], c: Case) -> Case {
 
 fn list() -> String {
     r#"{"workspace":"acme é","live":1,"cap":4,"agentsCanManage":true,"sidecars":[
-        {"address":"acme/scout","name":"scout with a very long name indeed","harness":"claude","state":"live","createdBy":"agent acme/main","lastSeenAt":1763600000,
-         "taskState":"working","worktree":{"branch":"sc/scout","ahead":3,"dirty":true}},
+        {"address":"acme/alice","name":"alice with a very long name indeed","harness":"claude","state":"live","createdBy":"agent acme/main","lastSeenAt":1763600000,
+         "taskState":"working","worktree":{"branch":"sc/alice","ahead":3,"dirty":true}},
         {"address":"acme/n日本","name":null,"harness":null,"state":"asleep","lastSeenAt":0},
         {"address":"acme/f","name":"f","harness":"codex","state":"asleep","lastSeenAt":1763600000.7,"worktree":{"branch":null}}],
         "worktrees":{"open":1,"cap":2}}"#
@@ -91,7 +91,7 @@ fn many(n: usize) -> String {
 
 fn review(blocked: &str) -> String {
     format!(
-        r#"{{"address":"acme/scout","branch":"sc/scout","dir":"/w/scout","taskState":"done","onto":"main","ontoHead":"aaaaaaaaaaaa1111",
+        r#"{{"address":"acme/alice","branch":"sc/alice","dir":"/w/alice","taskState":"done","onto":"main","ontoHead":"aaaaaaaaaaaa1111",
             "tip":"bbbbbbbbbbbb2222","commits":[{{"sha":"bbbbbbbbbbbb2222","subject":"fix é"}},{{"sha":"cccccccccccc","subject":"merge","merge":true}}],
             "files":[{{"status":"M","path":"src/a.rs"}}],"dirty":["notes.md"],"mainDirty":["x","y"],"mainBranch":"dev","blocked":{blocked}}}"#
     )
@@ -293,14 +293,14 @@ fn sidecar_help_and_words() {
 #[test]
 fn sidecar_verbs_answer_as_the_shell_does() {
     let rig = Rig::new(VERB, "verbs");
-    let opened = r#"{"address":"acme/scout","harness":"claude","resumed":false,"brief":{"path":"/w/.k2/brief.md","bytes":20},"worktree":{"dir":"/w/scout","branch":"sc/scout","base":"main","baseSha":"0123456789abcdef"}}"#;
+    let opened = r#"{"address":"acme/alice","harness":"claude","resumed":false,"brief":{"path":"/w/.k2/brief.md","bytes":20},"worktree":{"dir":"/w/alice","branch":"sc/alice","base":"main","baseSha":"0123456789abcdef"}}"#;
     let v = vec![
         // covers: sidecar new
         case(
             "new, every flag",
             &[
                 "new",
-                "scout é",
+                "alice é",
                 "--harness",
                 "claude",
                 "--model",
@@ -321,10 +321,10 @@ fn sidecar_verbs_answer_as_the_shell_does() {
         ),
         case(
             "new --worktree <name>, resumed",
-            &["new", "--worktree", "scout", "--harness", "claude"],
+            &["new", "--worktree", "alice", "--harness", "claude"],
             &[],
             vec![ok(
-                r#"{"address":"acme/scout","harness":"claude","resumed":true}"#,
+                r#"{"address":"acme/alice","harness":"claude","resumed":true}"#,
             )],
             owner_and_port,
             0,
@@ -434,9 +434,9 @@ fn sidecar_verbs_answer_as_the_shell_does() {
         // covers: sidecar stop
         case(
             "stop",
-            &["stop", "scout", "--force"],
+            &["stop", "alice", "--force"],
             &[],
-            vec![ok(r#"{"address":"acme/scout","stopped":true}"#)],
+            vec![ok(r#"{"address":"acme/alice","stopped":true}"#)],
             owner_and_port,
             0,
             1,
@@ -444,18 +444,18 @@ fn sidecar_verbs_answer_as_the_shell_does() {
         // covers: sidecar stop --json
         case(
             "stop --json, already asleep",
-            &["stop", "scout", "--json", "--workspace", "w"],
+            &["stop", "alice", "--json", "--workspace", "w"],
             &[],
-            vec![ok(r#"{"address":"acme/scout","stopped":false}"#)],
+            vec![ok(r#"{"address":"acme/alice","stopped":false}"#)],
             owner_and_port,
             0,
             1,
         ),
         case(
             "stop, already asleep",
-            &["stop", "scout"],
+            &["stop", "alice"],
             &[],
-            vec![ok(r#"{"address":"acme/scout","stopped":false}"#)],
+            vec![ok(r#"{"address":"acme/alice","stopped":false}"#)],
             owner_and_port,
             0,
             1,
@@ -463,9 +463,9 @@ fn sidecar_verbs_answer_as_the_shell_does() {
         // covers: sidecar archive
         case(
             "archive one",
-            &["archive", "scout"],
+            &["archive", "alice"],
             &[],
-            vec![ok(r#"{"address":"acme/scout"}"#)],
+            vec![ok(r#"{"address":"acme/alice"}"#)],
             owner_and_port,
             0,
             1,
@@ -530,10 +530,10 @@ fn sidecar_verbs_answer_as_the_shell_does() {
         ),
         case(
             "interrupt",
-            &["interrupt", "scout"],
+            &["interrupt", "alice"],
             &[],
             vec![ok(
-                r#"{"address":"acme/scout","interrupted":true,"key":"Escape"}"#,
+                r#"{"address":"acme/alice","interrupted":true,"key":"Escape"}"#,
             )],
             owner_and_port,
             0,
@@ -541,16 +541,16 @@ fn sidecar_verbs_answer_as_the_shell_does() {
         ),
         case(
             "interrupt, asleep",
-            &["interrupt", "scout", "--json"],
+            &["interrupt", "alice", "--json"],
             &[],
-            vec![ok(r#"{"address":"acme/scout"}"#)],
+            vec![ok(r#"{"address":"acme/alice"}"#)],
             owner_and_port,
             0,
             1,
         ),
         case(
             "review",
-            &["review", "scout", "--workspace", "acme é"],
+            &["review", "alice", "--workspace", "acme é"],
             &[],
             vec![ok(&review(r#""main_has_uncommitted_changes""#))],
             owner_and_port,
@@ -559,7 +559,7 @@ fn sidecar_verbs_answer_as_the_shell_does() {
         ),
         case(
             "review, ready",
-            &["review", "scout"],
+            &["review", "alice"],
             &[],
             vec![ok(&review("null"))],
             owner_and_port,
@@ -568,7 +568,7 @@ fn sidecar_verbs_answer_as_the_shell_does() {
         ),
         case(
             "review, retired",
-            &["review", "scout"],
+            &["review", "alice"],
             &[],
             vec![ok(r#"{"address":"a","retiredAt":5,"retiredHow":"landed"}"#)],
             owner_and_port,
@@ -577,7 +577,7 @@ fn sidecar_verbs_answer_as_the_shell_does() {
         ),
         case(
             "review, a reason it doesn't know",
-            &["review", "scout"],
+            &["review", "alice"],
             &[],
             vec![ok(&review(r#""odd""#))],
             owner_and_port,
@@ -629,11 +629,11 @@ fn sidecar_verbs_answer_as_the_shell_does() {
 #[test]
 fn sidecar_land_and_retire() {
     let rig = Rig::new(VERB, "land");
-    let landed = r#"{"address":"acme/scout","count":1,"onto":"main","from":"aaaaaaaaaaaaaaa","to":"bbbbbbbbbbbbbbbbb","retired":{"branchDeleted":true}}"#;
+    let landed = r#"{"address":"acme/alice","count":1,"onto":"main","from":"aaaaaaaaaaaaaaa","to":"bbbbbbbbbbbbbbbbb","retired":{"branchDeleted":true}}"#;
     let v = vec![
         case(
             "land --yes: the review, then the land",
-            &["land", "scout", "--yes"],
+            &["land", "alice", "--yes"],
             &[],
             vec![ok(&review("null")), ok(landed)],
             owner_and_port,
@@ -642,7 +642,7 @@ fn sidecar_land_and_retire() {
         ),
         case(
             "land -y --keep --json: the review on stderr",
-            &["land", "scout", "-y", "--keep", "--json"],
+            &["land", "alice", "-y", "--keep", "--json"],
             &[],
             vec![ok(&review("null")), ok(landed)],
             owner_and_port,
@@ -651,7 +651,7 @@ fn sidecar_land_and_retire() {
         ),
         case(
             "land --yes, not retired",
-            &["land", "scout", "--yes"],
+            &["land", "alice", "--yes"],
             &[],
             vec![
                 ok(r#"{"address":"a","onto":"main"}"#),
@@ -665,7 +665,7 @@ fn sidecar_land_and_retire() {
         ),
         case(
             "land with no terminal to ask on",
-            &["land", "scout"],
+            &["land", "alice"],
             &[],
             vec![ok(&review("null"))],
             owner_and_port,
@@ -674,7 +674,7 @@ fn sidecar_land_and_retire() {
         ),
         case(
             "land, nothing to land",
-            &["land", "scout", "--yes"],
+            &["land", "alice", "--yes"],
             &[],
             vec![ok(&review(r#""already_landed""#))],
             owner_and_port,
@@ -683,7 +683,7 @@ fn sidecar_land_and_retire() {
         ),
         case(
             "land, a refused review",
-            &["land", "scout", "--yes"],
+            &["land", "alice", "--yes"],
             &[],
             vec![Reply::Answer(
                 404,
@@ -695,21 +695,21 @@ fn sidecar_land_and_retire() {
         ),
         case(
             "retire",
-            &["retire", "scout", "--keep-branch"],
+            &["retire", "alice", "--keep-branch"],
             &[],
-            vec![ok(r#"{"address":"acme/scout","how":"landed"}"#)],
+            vec![ok(r#"{"address":"acme/alice","how":"landed"}"#)],
             owner_and_port,
             0,
             1,
         ),
         case(
             "retire --discard --yes: the review on stderr",
-            &["retire", "scout", "--discard", "--yes"],
+            &["retire", "alice", "--discard", "--yes"],
             &[],
             vec![
                 ok(&review("null")),
                 ok(
-                    r#"{"address":"acme/scout","how":"discarded","branchDeleted":true,"discardedCommits":[{"sha":"aaaaaaaaaaaaaa"},{"sha":"bbbbbbbbbbbbbbbbb"}]}"#,
+                    r#"{"address":"acme/alice","how":"discarded","branchDeleted":true,"discardedCommits":[{"sha":"aaaaaaaaaaaaaa"},{"sha":"bbbbbbbbbbbbbbbbb"}]}"#,
                 ),
             ],
             owner_and_port,
@@ -718,7 +718,7 @@ fn sidecar_land_and_retire() {
         ),
         case(
             "retire --discard with no terminal to ask on",
-            &["retire", "scout", "--discard"],
+            &["retire", "alice", "--discard"],
             &[],
             vec![ok(&review("null"))],
             owner_and_port,

@@ -325,13 +325,13 @@ fn the_dies() {
 fn the_refusals() {
     let r = refusal(
         "409",
-        br#"{"error":"held","code":"sim_held","message":"rosson is using it"}"#,
+        br#"{"error":"held","code":"sim_held","message":"alice is using it"}"#,
         false,
     );
     assert_eq!(r.exit, Exit::Usage);
     assert_eq!(
         r.stderr,
-        format!("Error: rosson is using it\nRun `{n} sim wait`, then `{n} sim tree` before acting again.\n{{\"error\": {{\"code\": \"sim_held\", \"hint\": \"rosson is using it\", \"status\": 409}}}}\n", n = cli_name!())
+        format!("Error: alice is using it\nRun `{n} sim wait`, then `{n} sim tree` before acting again.\n{{\"error\": {{\"code\": \"sim_held\", \"hint\": \"alice is using it\", \"status\": 409}}}}\n", n = cli_name!())
     );
     let r = refusal(
         "403",

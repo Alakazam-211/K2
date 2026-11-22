@@ -39,8 +39,8 @@ use common::stub::Reply;
 
 const VERB: &str = "mail";
 
-const STATUS: &str = r#"{"ok":true,"enabled":true,"inboxes":[{"address":"a@x.io","wake":"vip","needsRelink":true},{"address":"l@x.io","wake":"vip","source":"linked","needsRelink":true},{"address":"n@x.io","wake":"all","source":"linked","needsRelink":false,"lastError":"e"},{"address":"o@x.io","wake":"all","source":["linked"],"needsRelink":1},{"address":"b@x.io","wake":"all","lastError":"auth é"},{"address":"c@x.io"}],"vips":["boss@x.io","@x.io"],"digest":{"start":"09:00","end":"17:00","days":["mon","tue"],"tz":"Europe/Paris","everySeconds":5400,"nextFireAt":"2026-11-20T09:00:00Z"},"vipOutsideWindow":false,"vipSessionLine":true,"snippets":false,"pausedUntil":"2026-11-21T10:00:00Z","last24h":{"vipDelivered":2,"digested":5}}"#;
-const LOG: &str = r#"{"ok":true,"log":[{"receivedAt":"2026-11-19T10:00:00Z","class":"vip","state":"delivered","from":"boss@x.io","inbox":"a@x.io"},{"receivedAt":"2026-11-19T11:00:00Z","class":"digest","state":"held","from":"n@y.io","inbox":"b@x.io","reason":"outside window"}]}"#;
+const STATUS: &str = r#"{"ok":true,"enabled":true,"inboxes":[{"address":"a@x.example","wake":"vip","needsRelink":true},{"address":"l@x.example","wake":"vip","source":"linked","needsRelink":true},{"address":"n@x.example","wake":"all","source":"linked","needsRelink":false,"lastError":"e"},{"address":"o@x.example","wake":"all","source":["linked"],"needsRelink":1},{"address":"b@x.example","wake":"all","lastError":"auth é"},{"address":"c@x.example"}],"vips":["boss@x.example","@x.example"],"digest":{"start":"09:00","end":"17:00","days":["mon","tue"],"tz":"Europe/Paris","everySeconds":5400,"nextFireAt":"2026-11-20T09:00:00Z"},"vipOutsideWindow":false,"vipSessionLine":true,"snippets":false,"pausedUntil":"2026-11-21T10:00:00Z","last24h":{"vipDelivered":2,"digested":5}}"#;
+const LOG: &str = r#"{"ok":true,"log":[{"receivedAt":"2026-11-19T10:00:00Z","class":"vip","state":"delivered","from":"boss@x.example","inbox":"a@x.example"},{"receivedAt":"2026-11-19T11:00:00Z","class":"digest","state":"held","from":"n@y.example","inbox":"b@x.example","reason":"outside window"}]}"#;
 
 fn compare(compare: Compare, c: Case) -> Case {
     Case { compare, ..c }
@@ -138,7 +138,14 @@ fn mail_watch_answers_as_the_shell_does() {
         case(
             "inboxes add and remove",
             &[
-                "watch", "inboxes", "--add", "é@x.io", "--wake", "all", "--remove", "c@x.io",
+                "watch",
+                "inboxes",
+                "--add",
+                "é@x.example",
+                "--wake",
+                "all",
+                "--remove",
+                "c@x.example",
             ],
             &[],
             vec![ok(STATUS)],
@@ -148,7 +155,7 @@ fn mail_watch_answers_as_the_shell_does() {
         ),
         case(
             "inboxes add, vip by default",
-            &["watch", "inboxes", "--add", "d@x.io"],
+            &["watch", "inboxes", "--add", "d@x.example"],
             &[],
             vec![ok(STATUS)],
             owner_and_port,
@@ -157,7 +164,7 @@ fn mail_watch_answers_as_the_shell_does() {
         ),
         case(
             "inboxes, a bad wake",
-            &["watch", "inboxes", "--add", "d@x.io", "--wake", "some"],
+            &["watch", "inboxes", "--add", "d@x.example", "--wake", "some"],
             &[],
             vec![],
             owner_and_port,
@@ -193,16 +200,16 @@ fn mail_watch_answers_as_the_shell_does() {
         ),
         case(
             "vip add",
-            &["watch", "vip", "add", "a@x.io", "@y.io"],
+            &["watch", "vip", "add", "a@x.example", "@y.example"],
             &[],
-            vec![ok(r#"{"vips":["a@x.io","@y.io"]}"#)],
+            vec![ok(r#"{"vips":["a@x.example","@y.example"]}"#)],
             owner_and_port,
             0,
             1,
         ),
         case(
             "vip rm",
-            &["watch", "vip", "rm", "a@x.io"],
+            &["watch", "vip", "rm", "a@x.example"],
             &[],
             vec![ok(r#"{"vips":[]}"#)],
             owner_and_port,
@@ -740,10 +747,10 @@ fn help_never_acts() {
     const LINES: &[&[&str]] = &[
         &["watch", "on", "-h"],
         &["watch", "--help", "off"],
-        &["watch", "inboxes", "--add", "a@x.io", "--help"],
+        &["watch", "inboxes", "--add", "a@x.example", "--help"],
         &["watch", "inboxes", "--remove", "-h"],
-        &["watch", "vip", "add", "-h", "a@x.io"],
-        &["watch", "vip", "rm", "a@x.io", "--help"],
+        &["watch", "vip", "add", "-h", "a@x.example"],
+        &["watch", "vip", "rm", "a@x.example", "--help"],
         &["watch", "window", "09:00-17:00", "--tz", "--help"],
         &["watch", "window", "off", "-h"],
         &["watch", "digest", "--every", "-h"],

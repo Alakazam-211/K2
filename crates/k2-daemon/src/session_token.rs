@@ -1257,6 +1257,9 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/app/db/connect",
         "/cli/app/db/disconnect",
         "/cli/app/db/status",
+        // k2 app user import (prd-app-supabase-compat-v1 S2): with "manage
+        // its Apps' users", its own Apps only (the handler).
+        "/cli/app/user/import",
         // Box services (0.46.0): read, request (applies at once with switch
         // 2, else held for the owner), revoke (narrowing, at once).
         "/cli/app/box-service",

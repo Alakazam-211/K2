@@ -101,6 +101,8 @@ pub mod egress_proxy;
 pub mod db_connect;
 /// The Supabase-compatible data layer, one App at a time (lane A: identity).
 pub mod compat;
+// prd-app-supabase-compat-v1 S2: k2 app user import (given ids, bcrypt).
+pub mod user_import;
 pub mod db_door;
 pub mod db_probe;
 pub mod egress_routes;

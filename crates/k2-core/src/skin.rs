@@ -164,6 +164,9 @@ pub mod app_pairing;
 /// passwords, forgot throttles, reset mail budgets (app-user-profile P0).
 #[path = "skin_guard.rs"]
 pub mod guard;
+/// App users brought from another store: given ids, bcrypt at sign-in (S2).
+#[path = "skin_import.rs"]
+pub mod import;
 /// App user profile: per-App profile settings, names and picture, the
 /// session list (prd-app-user-profile-v1, 0.46.5).
 #[path = "skin_profile.rs"]
@@ -922,7 +925,7 @@ fn hash_password(password: &str) -> Result<String, String> {
 fn verify_hash(password: &str, hash: &str) -> bool {
     let parsed = match PasswordHash::new(hash) {
         Ok(h) => h,
-        Err(_) => return false,
+        Err(_) => return import::verify_legacy(password, hash),
     };
     let _slot = guard::hash_slot();
     Argon2::default()
@@ -4203,7 +4206,7 @@ pub fn check_and_record_login_hashed(username: &str, password: &str) -> (SkinLog
     let Some(principal) = principal else {
         return (SkinLoginOutcome::BadCreds, None);
     };
-    let hash = principal.password_hash.clone();
+    let hash = import::upgrade_after_login(&principal.username, principal.password_hash.clone(), password);
     match with_conn(|conn| principal_by_username(conn, &principal.username)) {
         Ok(Some(p)) if principal.must_change => (SkinLoginOutcome::MustChange(attach_principal_handles(p)), hash),
         Ok(Some(p)) => (SkinLoginOutcome::Ok(attach_principal_handles(p)), hash),

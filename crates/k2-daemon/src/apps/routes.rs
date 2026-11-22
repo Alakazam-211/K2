@@ -123,6 +123,7 @@ pub fn is_route(p: &str) -> bool {
         || super::db_connect::ROUTES.contains(&p)
         // Supabase-compatible layer (lane A): k2 app compat|identity|user meta.
         || super::compat::routes::ROUTES.contains(&p)
+        || super::user_import::ROUTES.contains(&p)
         // 0.46.9: the suite App catalog and the one-click install.
         || super::catalog_routes::ROUTES.contains(&p)
         // 0.46.16: "Get this server ready for Apps" and the live sessions read.
@@ -162,6 +163,7 @@ pub fn is_post_route(p: &str) -> bool {
         // 0.46.11: k2 app db connect|check|disconnect (db_connect.rs).
         || super::db_connect::POST_ROUTES.contains(&p)
         || super::compat::routes::POST_ROUTES.contains(&p)
+        || super::user_import::ROUTES.contains(&p)
         // 0.46.9: k2 app install --catalog, k2 app catalog retry.
         || super::catalog_routes::POST_ROUTES.contains(&p)
         || super::ready_offer::POST_ROUTES.contains(&p)
@@ -252,6 +254,8 @@ pub fn too_large() -> CliResponse {
 pub fn max_body(path: &str) -> usize {
     if path == "/cli/app/exec" {
         super::exec::EXEC_MAX_BODY
+    } else if path == super::user_import::IMPORT {
+        super::user_import::MAX_BODY
     } else {
         MAX_BODY
     }
@@ -556,6 +560,7 @@ fn handle_inner(path: &str, who: Who, body: &[u8], params: &HashMap<String, Stri
         p if super::db_connect::ROUTES.contains(&p) => super::db_connect::handle(p, &who, body, params),
         // The Supabase-compatible layer (compat/routes.rs).
         p if super::compat::routes::ROUTES.contains(&p) => super::compat::routes::handle(p, &who, body, params),
+        super::user_import::IMPORT => return super::user_import::handle(&who, body),
         // 0.46.9: the suite App catalog and the one-click install job
         // (catalog_routes.rs, catalog_job.rs).
         p if super::catalog_routes::ROUTES.contains(&p) => super::catalog_routes::handle(p, &who, body, params),

@@ -251,6 +251,9 @@ libc = "0.2"
 # argon2 + subtle: password hashes and constant-time compares
 # (connect_users, skin, federation).
 argon2 = "0.5"
+# Imported App users' bcrypt hashes (Supabase's), checked at sign-in and
+# then rehashed to Argon2 (skin_import.rs, prd-app-supabase-compat-v1 S2).
+bcrypt = "0.17"
 base64 = "0.22"
 subtle = "2.6"
 # K2 Connect #4 — persisted-session store hashes the session token with

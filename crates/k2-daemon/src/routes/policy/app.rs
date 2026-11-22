@@ -368,6 +368,8 @@ pub(super) const ROWS: &[Route] = &[
     post("/cli/app/updates/token/set", Admin),
     // Room-scope R16: an App's quotas and per-call counts from its audit.
     get("/cli/app/usage", Member),
+    // prd-app-supabase-compat-v1 S2: the owner or the App's agent (handler).
+    post("/cli/app/user/import", Admin),
     post("/cli/app/user/meta", Admin),
     post("/cli/app/validate", Admin),
     // App users' personal wallets (0.46.3), the owner's side: existence,

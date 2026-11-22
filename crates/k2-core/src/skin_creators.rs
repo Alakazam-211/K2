@@ -117,13 +117,17 @@ mod tie_tests {
 /// The start of the refusal when an agent or App key picks a reserved name.
 pub const NAME_RESERVED: &str = "login_name_reserved";
 
+/// The fixed words in [`name_reserved`] (with the box's logins and the
+/// owner's stamp name).
+pub const RESERVED_WORDS: &[&str] = &["owner", "root", "admin", "administrator", "system", "k2"];
+
 /// May a login an agent or App key makes not take this name? `owner` and the
 /// like, any K2 Connect login on this box (disabled ones too), and the name the
 /// owner stamps under. A guest's name shows up in Threads and in other agents'
 /// terminals: it must never read as a person who signs in to the box itself.
 pub fn name_reserved(username: &str) -> Result<bool, String> {
     let u = username.trim().to_ascii_lowercase();
-    if matches!(u.as_str(), "owner" | "root" | "admin" | "administrator" | "system" | "k2") {
+    if RESERVED_WORDS.contains(&u.as_str()) {
         return Ok(true);
     }
     if crate::connect_users::list_users()?.iter().any(|c| c.username.eq_ignore_ascii_case(&u)) {

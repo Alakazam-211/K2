@@ -10,3 +10,14 @@ product = "K2"
 [cli]
 name = "k2"
 aliases = [{ name = "k2so", mode = "silent" }]
+
+# Packaging values, for the builds that are not cargo (scripts/brand-values.mjs).
+# The app's shown name is [names] product; the CLI's file and link names are
+# [cli]. bundle_id: the macOS bundle id and Tauri identifier. update_feed: the
+# updater's manifest URL. desktop_id: the Linux .desktop file's and icon's
+# name. gui_binary: the Linux GUI program's name on PATH.
+[package]
+bundle_id = "dev.k2.app"
+update_feed = "https://github.com/Alakazam-211/K2/releases/latest/download/latest.json"
+desktop_id = "k2"
+gui_binary = "k2-gui"

@@ -1,36 +1,36 @@
 /**
  * The product's names, one definition each, for the renderer.
  *
- * The same values as `crates/k2-client/src/brand.rs` (`k2_core::brand`)
- * and the default brand file, `brand/k2/brand.toml` (the command's name,
- * its aliases and the product's name); `brand.test.ts` reads both and
- * fails when they drift. Copy that
- * names the product, the command, the site or the release repo uses these
- * instead of spelling the name out; `scripts/brand-gate.sh` keeps new
- * literals out of the rest of the renderer.
+ * The product's name, the command's name and its aliases come from the
+ * brand file (`brand/<id>/brand.toml`, `brand/k2` unless `K2_BRAND_DIR`
+ * names another) through `brand.generated.ts`, which
+ * `scripts/brand-values.mjs` writes when building; Rust reads the same file
+ * through crates/k2-brand. Two names, never made from each other: the
+ * product's for prose and screens, the command's for anything typed or
+ * copied. Nothing here asks a server for either: a build shows the names
+ * it was built with.
  *
- * A daemon reports its own `productName`, `cliName` and `hostedZones` in
- * the full `/boot-status` body. `noteReportedBrand` keeps what the window's
- * own server said, and `productName()` / `cliName()` / `hostedZones()`
- * answer with that, or with the constants here when the daemon is older
- * and did not say.
+ * The rest are the same values as `crates/k2-client/src/brand.rs`
+ * (`k2_core::brand`); `brand.test.ts` reads both and fails when they drift.
+ * Copy that names the product, the command, the site or the release repo
+ * uses these instead of spelling the name out; `scripts/brand-gate.sh`
+ * keeps new literals out of the rest of the renderer.
+ *
+ * A daemon reports its `hostedZones` in the full `/boot-status` body.
+ * `noteReportedBrand` keeps what the window's own server said, and
+ * `hostedZones()` answers with that, or with the constant here when the
+ * daemon is older and did not say.
  */
 import { ZONE } from './hosts'
+import { PRODUCT_NAME } from './brand.generated'
 
-/** The product's name, as people read it. */
-export const PRODUCT_NAME = 'K2'
+export { BRAND_ID, CLI_ALIASES, CLI_NAME, PRODUCT_NAME } from './brand.generated'
 
 /** The company that makes it. */
 export const COMPANY_NAME = 'Alakazam Labs'
 
 /** The product with its maker. */
 export const PRODUCT_LOCKUP = `${PRODUCT_NAME} by ${COMPANY_NAME}`
-
-/** The command people and agents type. */
-export const CLI_NAME = 'k2'
-
-/** Other names the command answers to (the pre-0.40 shim). */
-export const CLI_ALIASES: readonly string[] = ['k2so']
 
 /** The public website. */
 export const PUBLIC_SITE = 'https://k2.dev'
@@ -74,36 +74,23 @@ export function releaseTagUrl(version: string): string {
 }
 
 interface ReportedBrand {
-  productName?: string
-  cliName?: string
   hostedZones?: readonly string[]
 }
 
 let reported: ReportedBrand = {}
 
-/** Keep the names a full `/boot-status` body carries. A body without them
- *  (an older daemon, or a stranger's partial view) changes nothing, and a
- *  field of the wrong shape is ignored. */
-export function noteReportedBrand(body: { productName?: unknown; cliName?: unknown; hostedZones?: unknown } | null | undefined): void {
+/** Keep the hosted zones a full `/boot-status` body carries. A body without
+ *  them (an older daemon, or a stranger's partial view) changes nothing, and
+ *  a field of the wrong shape is ignored. The body's `productName` and
+ *  `cliName` are not read: the renderer shows the names it was built with. */
+export function noteReportedBrand(body: { hostedZones?: unknown } | null | undefined): void {
   if (!body) return
   const next: ReportedBrand = { ...reported }
-  if (typeof body.productName === 'string' && body.productName) next.productName = body.productName
-  if (typeof body.cliName === 'string' && body.cliName) next.cliName = body.cliName
   const zones = body.hostedZones
   if (Array.isArray(zones) && zones.length > 0 && zones.every((z) => typeof z === 'string' && z)) {
     next.hostedZones = [...zones] as string[]
   }
   reported = next
-}
-
-/** The product's name as the server reported it, else {@link PRODUCT_NAME}. */
-export function productName(): string {
-  return reported.productName ?? PRODUCT_NAME
-}
-
-/** The command's name as the server reported it, else {@link CLI_NAME}. */
-export function cliName(): string {
-  return reported.cliName ?? CLI_NAME
 }
 
 /** The zones the server reported, else {@link HOSTED_ZONES}. */

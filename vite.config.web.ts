@@ -10,6 +10,9 @@ import tailwindcss from '@tailwindcss/vite'
 import { resolve, dirname } from 'path'
 import { readFileSync } from 'fs'
 import { fileURLToPath } from 'url'
+// The brand's names for the renderer (src/renderer/lib/brand.generated.ts),
+// written from the brand file before the build.
+import { viteBrandValues } from './scripts/brand-values.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -21,7 +24,7 @@ const version: string = pkg.version || 'dev'
 const shim = (name: string) => resolve(__dirname, `src/renderer/shims/${name}`)
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [viteBrandValues(), react(), tailwindcss()],
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src/renderer'),

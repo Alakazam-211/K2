@@ -3,6 +3,9 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { resolve, join, normalize, sep } from 'path'
 import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'fs'
+// The brand's names for the renderer (src/renderer/lib/brand.generated.ts),
+// written from the brand file before the build.
+import { viteBrandValues } from './scripts/brand-values.mjs'
 
 /**
  * The Zen widget standard library (prd-zen-user-widgets-v2 UWB12): files
@@ -53,7 +56,7 @@ function zenLibDesktopCopy(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [react(), tailwindcss(), zenLibDesktopCopy()],
+  plugins: [viteBrandValues(), react(), tailwindcss(), zenLibDesktopCopy()],
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src/renderer'),

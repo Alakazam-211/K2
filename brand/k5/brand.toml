@@ -12,3 +12,13 @@ aliases = [
     { name = "k2", mode = "notice" },
     { name = "k2so", mode = "silent" },
 ]
+
+# Packaging values (scripts/brand-values.mjs). Kept as the k2 brand's for
+# now: the rename is in place, so the bundle id and the update feed carry
+# over (installs update, and what macOS keeps per app id stays). K2 rules
+# before any of these changes.
+[package]
+bundle_id = "dev.k2.app"
+update_feed = "https://github.com/Alakazam-211/K2/releases/latest/download/latest.json"
+desktop_id = "k2"
+gui_binary = "k2-gui"

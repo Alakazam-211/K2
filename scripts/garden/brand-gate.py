@@ -16,7 +16,9 @@ renderer code.
 
 The product's names live in one module each: crates/k2-client/src/brand.rs
 (`k2_core::brand`, with `product_name!()` / `cli_name!()` for `concat!`) and
-src/renderer/lib/brand.ts, both fed by the crates/k2-brand leaf crate. This
+src/renderer/lib/brand.ts, both fed from the brand file (Rust by the
+crates/k2-brand leaf crate, the renderer by scripts/brand-values.mjs, which
+writes src/renderer/lib/brand.generated.ts). This
 gate counts the code lines outside them that still spell a name out, per file
 and kind, and holds each to its row in an allowlist. Two rules, as the zone
 gate:
@@ -122,6 +124,7 @@ MODULES = {
     "crates/k2-client/src/brand.rs",
     "crates/k2-client/src/hosts.rs",
     "src/renderer/lib/brand.ts",
+    "src/renderer/lib/brand.generated.ts",
     "src/renderer/lib/hosts.ts",
 }
 MODULE_DIRS = ("crates/k2-brand/",)

@@ -16,11 +16,9 @@ import {
   RELEASE_REPO_URL,
   RELEASES_URL_PREFIX,
   SUPPORT_EMAIL,
-  cliName,
   hostedZones,
   isReleaseUrl,
   noteReportedBrand,
-  productName,
   releaseTagUrl,
   resetReportedBrandForTests,
 } from './brand'
@@ -152,27 +150,28 @@ describe('the renderer brand module', () => {
     expect(releaseTagUrl('v0.46.14')).toBe(`https://github.com/${RELEASE_REPO}/releases/tag/v0.46.14`)
   })
 
-  it('answers with the constants until a server says otherwise', () => {
-    expect(productName()).toBe(PRODUCT_NAME)
-    expect(cliName()).toBe(CLI_NAME)
+  it('answers with the zones constant until a server says otherwise', () => {
     expect(hostedZones()).toEqual(HOSTED_ZONES)
   })
 
-  it('keeps what a full /boot-status body reports', () => {
-    noteReportedBrand({ productName: 'P', cliName: 'p', hostedZones: ['a.example', 'b.example'] })
-    expect(productName()).toBe('P')
-    expect(cliName()).toBe('p')
+  it('keeps the zones a full /boot-status body reports', () => {
+    noteReportedBrand({ hostedZones: ['a.example', 'b.example'] })
     expect(hostedZones()).toEqual(['a.example', 'b.example'])
   })
 
   it('an older body, or a field of the wrong shape, changes nothing', () => {
-    noteReportedBrand({ productName: 'P', cliName: 'p', hostedZones: ['a.example'] })
+    noteReportedBrand({ hostedZones: ['a.example'] })
     noteReportedBrand({})
     noteReportedBrand(null)
-    noteReportedBrand({ productName: '', cliName: 7, hostedZones: [] })
+    noteReportedBrand({ hostedZones: [] })
     noteReportedBrand({ hostedZones: ['ok.example', 3] })
-    expect(productName()).toBe('P')
-    expect(cliName()).toBe('p')
     expect(hostedZones()).toEqual(['a.example'])
+  })
+
+  it('the names are the build\'s: nothing asks a server for them', async () => {
+    const exported = Object.keys(await import('./brand'))
+    expect(exported).not.toContain('productName')
+    expect(exported).not.toContain('cliName')
+    expect(exported).toEqual(expect.arrayContaining(['BRAND_ID', 'PRODUCT_NAME', 'CLI_NAME', 'CLI_ALIASES']))
   })
 })

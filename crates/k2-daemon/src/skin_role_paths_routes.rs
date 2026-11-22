@@ -1,6 +1,6 @@
 //! `POST /cli/skin/roles/paths` (`k2 app role paths`): one room line's
 //! folders, download entries and hidden paths on a role. Split out of
-//! `skin_routes.rs` (0.46.16, the size ratchet) when the hide list came.
+//! `skin_routes.rs` (0.46.17, the size ratchet) when the hide list came.
 
 use crate::cli_response::CliResponse;
 use crate::skin_routes::{actor_is_agent, app_users_off_response, json_body, person_only_refused, str_field};
@@ -38,7 +38,7 @@ fn folder_list(v: &serde_json::Value, key: &str) -> Result<Vec<String>, CliRespo
 ///   the line's read/write/upload folders (so it can't unwall a line);
 /// - `clear: true` still clears everything (narrowing).
 ///
-/// `hide` (0.46.16) is the line's hidden paths (names or room-relative
+/// `hide` (0.46.17) is the line's hidden paths (names or room-relative
 /// paths its logins never see or read, even inside a permitted folder;
 /// `skin::paths::hides`): `hide: [..]` replaces the list (`[]` empties it),
 /// `hideAdd` / `hideRemove` add or take off entries. Like `download`, an
@@ -167,7 +167,7 @@ pub fn handle_roles_paths(body: &[u8], actor: &str) -> CliResponse {
 }
 
 /// The hide-list edit a `POST /cli/skin/roles/paths` body asks for
-/// (0.46.16): a full replacement (`hide`), or entries to add and take off.
+/// (0.46.17): a full replacement (`hide`), or entries to add and take off.
 struct HideEdit {
     replace: Option<Vec<String>>,
     add: Vec<String>,

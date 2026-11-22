@@ -25328,7 +25328,7 @@ for a in access:
                     body=$(K2_SKIN_ROLE="$role" K2_SKIN_HANDLE="$handle" K2_SKIN_READ="$read" K2_SKIN_WRITE="$write" K2_SKIN_DROP="$drop" K2_SKIN_UPLOAD="$upload" K2_SKIN_DOWNLOAD="$download" K2_SKIN_NODOWNLOAD="$nodownload" K2_SKIN_CLEAR="$clear" K2_SKIN_HIDE="$hide" K2_SKIN_UNHIDE="$unhide" K2_SKIN_NOHIDE="$nohide" python3 -c '
 import json,os
 b={"name": os.environ["K2_SKIN_ROLE"], "handle": os.environ["K2_SKIN_HANDLE"]}
-# Hidden paths (0.46.16): --hide adds, --unhide takes off, --no-hide empties;
+# Hidden paths (0.46.17): --hide adds, --unhide takes off, --no-hide empties;
 # omitted = kept, and --clear keeps them.
 split=lambda env: [s.strip() for s in os.environ.get(env,"").split(",") if s.strip()]
 if os.environ.get("K2_SKIN_NOHIDE","0") == "1":
@@ -27329,7 +27329,7 @@ sys.exit(1 if content == "mismatch" else 0)
 }
 # ── k2 postal (Beta, prd-postal-in-k2-v1 S0, S3, S4, S5) ─────────────
 # Postal lets an agent here be friends with agents on other machines
-# (addresses like scout::initech.postal.bot), one agent with one agent,
+# (addresses like alice::initech.postal.bot), one agent with one agent,
 # behind the owner's Postal switch (off by default). The server talks to
 # the Postal network with its K2 Connect account. Every step an agent
 # takes to befriend another is a card for its person (exit 2, "Asked: …"):
@@ -27698,7 +27698,7 @@ k2 study postal — friends on other machines (Postal, Beta, 0.46.16)
 
 WHAT IT IS
   Postal pairs one agent with one agent across machines and platforms:
-  addresses look like scout::initech.postal.bot. A server's owner pairs
+  addresses look like alice::initech.postal.bot. A server's owner pairs
   whole servers with federation (agent::host.k2.dev); Postal is per agent.
   One address per workspace; sidecars and subagents share it.
 
@@ -27731,7 +27731,7 @@ REQUESTS TO YOU
   (no card).
 
 SENDING
-  k2 msg scout::initech.postal.bot "text" [--no-wake] [--json]
+  k2 msg alice::initech.postal.bot "text" [--no-wake] [--json]
   goes from this workspace's own address, to a friend only (else
   postal_not_friends, exit 3). A text that holds the value of a secret in
   this server's vault is refused (postal_secret_in_text): send secrets
@@ -27743,7 +27743,7 @@ SENDING
 
 WHERE MAIL LANDS
   By default in your terminal, waking you, as
-    [postal scout::initech.postal.bot · p_3f9a0c41d27be6058a1c]
+    [postal alice::initech.postal.bot · p_3f9a0c41d27be6058a1c]
     > their first line
     > every other line
   K2 writes the label line; every line of their words is quoted, so no
@@ -72026,7 +72026,7 @@ FOLDERS PER ROOM LINE (path scope, 0.46.1)
     1 MiB or binary files are checked by name only, not by content.
   - GET /cli/fs/stat?workspace=<room>&path=… (files.stat): kind, size,
     modifiedAt, ext, mime under the same rules.
-  - Hidden paths (0.46.16): --hide .k2,.env,secrets/ = never seen or read by
+  - Hidden paths (0.46.17): --hide .k2,.env,secrets/ = never seen or read by
     this line's logins, even inside a --read or --write folder. Left out of
     read-dir (show_hidden too) and fs/events; read-file, read-binary,
     read-range, stat, downloads and attachments answer like a missing file;

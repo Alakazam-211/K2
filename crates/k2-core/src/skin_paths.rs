@@ -84,7 +84,7 @@ pub struct RoomPathScope {
     /// [`Self::is_scoped`]. An older K2 refuses this key too (fails closed).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub download: Vec<String>,
-    /// Hidden paths (0.46.16): names or room-relative paths a login of this
+    /// Hidden paths (0.46.17): names or room-relative paths a login of this
     /// line never sees or reads, even inside a permitted folder (see
     /// [`hides`] for the pattern rules). Absent from listings and events,
     /// and every guest file door answers them like a missing file. Not part
@@ -287,7 +287,7 @@ pub fn allows_rel(scope: &RoomPathScope, rel: &str, need: PathNeed) -> Result<bo
     Ok(allows(scope, &rel_segments(rel)?, need))
 }
 
-// ── Hidden paths (0.46.16) ────────────────────────────────────────────
+// ── Hidden paths (0.46.17) ────────────────────────────────────────────
 //
 // A room line's `hide` list: what its logins never see, even inside a
 // permitted folder. Rosson's ruling: guest file reads stay the App agent's
@@ -451,7 +451,7 @@ pub fn normalize_scope(scope: &RoomPathScope) -> Result<RoomPathScope, String> {
     if let Some(f) = download.iter().find(|f| folder_in_agent_config(f)) {
         return Err(format!("download entry {f:?} is the agent's .k2 folder or inside it; it can never be downloaded"));
     }
-    // Hidden paths (0.46.16): checked and deduped like folders.
+    // Hidden paths (0.46.17): checked and deduped like folders.
     if scope.hide.len() > MAX_HIDE_PER_LIST {
         return Err(format!("at most {MAX_HIDE_PER_LIST} hidden paths per room"));
     }

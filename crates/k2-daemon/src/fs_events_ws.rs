@@ -75,7 +75,7 @@ pub fn subscriber_frame_scoped(
                 return None;
             }
             let mut rel = map_changed_paths(root, paths);
-            // 0.46.16: hidden paths never show either (`has_walls`).
+            // 0.46.17: hidden paths never show either (`has_walls`).
             if let Some(scope) = scope.filter(|s| s.has_walls()) {
                 rel.retain(|p| {
                     k2_core::skin::paths::allows_rel(scope, p, k2_core::skin::paths::PathNeed::Read)
@@ -451,7 +451,7 @@ mod tests {
         assert!(subscriber_frame_scoped("p", "/tmp/docs", "docs", &ev(&["top.txt"]), Some(&open)).is_some());
     }
 
-    /// 0.46.16: a line's hidden paths never reach its frames, on a
+    /// 0.46.17: a line's hidden paths never reach its frames, on a
     /// whole-room line and inside a permitted folder alike.
     #[test]
     fn hidden_paths_never_reach_a_frame() {

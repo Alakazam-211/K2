@@ -754,7 +754,7 @@ fn handle_skin_read_dir(params: &HashMap<String, String>, pass: &SkinPass) -> Cl
         Ok(p) => p,
         Err(e) => return e,
     };
-    // 0.46.16: a hidden folder (the line's `hide` list) is the 404 of a
+    // 0.46.17: a hidden folder (the line's `hide` list) is the 404 of a
     // folder that isn't there, before anything else is looked at.
     let scope = match room_scope(pass, &resolved, PathNeed::List) {
         Ok(s) => s,
@@ -799,7 +799,7 @@ fn handle_skin_read_dir(params: &HashMap<String, String>, pass: &SkinPass) -> Cl
         Ok(mut entries) => {
             let root = dunce::canonicalize(&Path::new(&resolved.path))
                 .unwrap_or_else(|_| PathBuf::from(&resolved.path));
-            // 0.46.16: a link whose target is hidden is left out too (its
+            // 0.46.17: a link whose target is hidden is left out too (its
             // name alone isn't, so the landed path is asked).
             if !scope.hide.is_empty() {
                 entries.retain(|e| !hidden_landed(&scope, &resolved, Path::new(&e.path)));
@@ -1048,7 +1048,7 @@ fn scope_refused(need: PathNeed) -> CliResponse {
     })
 }
 
-/// A hidden path's refusal (0.46.16): a read or a listing answers exactly
+/// A hidden path's refusal (0.46.17): a read or a listing answers exactly
 /// like a path that isn't there (the jail's 400; `read-dir` answers its own
 /// 404 itself), so a guest never learns whether it exists. A write, upload,
 /// copy, move or rename into one is the plain missing-cap 403 (decided on
@@ -1074,7 +1074,7 @@ fn hidden_landed(scope: &RoomPathScope, resolved: &SkinWorkspace, abs: &Path) ->
 }
 
 /// A copy, move or rename source that holds a rooted hidden path below it
-/// (0.46.16): carrying it elsewhere would bring the hidden path out from
+/// (0.46.17): carrying it elsewhere would bring the hidden path out from
 /// under its pattern. Checked on the path as sent and where it lands.
 fn source_holds_hidden(scope: &RoomPathScope, resolved: &SkinWorkspace, rel: &str, abs: &Path) -> bool {
     if scope.hide.is_empty() {
@@ -2639,7 +2639,7 @@ fn handle_skin_copy_or_move(body: &[u8], pass: &SkinPass, is_move: bool) -> CliR
     for rel in &sources {
         match jail_rel_path(&resolved.path, rel, false) {
             Ok(p) => {
-                // 0.46.16: never carry a hidden path out from under its
+                // 0.46.17: never carry a hidden path out from under its
                 // pattern (a folder that holds one stays where it is).
                 if source_holds_hidden(&scope, &resolved, rel, &p) {
                     return scope_refused(source_need);
@@ -2787,7 +2787,7 @@ fn handle_skin_rename(body: &[u8], pass: &SkinPass) -> CliResponse {
         Ok(p) => p,
         Err(e) => return CliResponse::bad_request(e),
     };
-    // 0.46.16: renaming a folder that holds a rooted hidden path would
+    // 0.46.17: renaming a folder that holds a rooted hidden path would
     // bring it out from under its pattern.
     if source_holds_hidden(&scope, &resolved, &rel, &jailed) {
         return scope_refused(PathNeed::Write);

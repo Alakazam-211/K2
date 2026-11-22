@@ -5445,7 +5445,7 @@ async fn skin_login_email_and_locked_reply() {
     });
 }
 
-/// 0.46.16: a role line's hidden paths through the `--skin` gateway (the
+/// 0.46.17: a role line's hidden paths through the `--skin` gateway (the
 /// cookie door): a hidden `.k2` is absent from read-dir (show_hidden too),
 /// read-file, read-binary, read-range and stat answer it exactly like a
 /// path that isn't there, fs/events never names it, and unhide restores.

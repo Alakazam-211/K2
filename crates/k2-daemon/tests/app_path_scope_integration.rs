@@ -630,7 +630,7 @@ async fn cli_role_paths_round_trip() {
     let root = guest_get(port, "/cli/fs/read-dir", &pass, &docs, ".").await;
     assert!(names(&root).contains(&"top.txt".to_string()), "{}", root.body);
 
-    // 0.46.16: --hide adds, --unhide takes off, --no-hide empties; --clear keeps them.
+    // 0.46.17: --hide adds, --unhide takes off, --no-hide empties; --clear keeps them.
     let out = ok_out(run(s(&["app", "role", "paths", &role, &h, "--hide", ".k2,top.txt", "--hide", ".env"])).await, "paths --hide");
     assert!(out.contains("hidden: .k2, top.txt, .env"), "{out}");
     assert!(out.contains("folders: whole room"), "hiding walls nothing: {out}");
@@ -675,7 +675,7 @@ fn seed_hidden(docs: &Ws) {
     k2_core::test_env::symlink(docs.path.join(".k2"), docs.path.join("app/k2link")).unwrap();
 }
 
-/// 0.46.16 (Rosson's ruling): a role line's HIDE list. Through K2's own
+/// 0.46.17: a role line's HIDE list. Through K2's own
 /// port with an App guest pass: a hidden `.k2` is absent from listings
 /// (show_hidden too) and every read door answers it byte for byte like a
 /// path that isn't there (read-file, read-binary, read-range, stat,

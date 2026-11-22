@@ -303,7 +303,7 @@ fn copy_role(conn: &Connection, id: &str, to: &str, to_name: &str, dry_run: bool
                     // `rooms`) and the folder permit list (`room_paths`,
                     // `k2 app role paths`), so a guest never reaches more on
                     // the App than on the site.
-                    // TODO(feat/app-role-hide-and-fixes, 0.46.16): copy the
+                    // TODO(feat/app-role-hide-and-fixes, 0.46.17): copy the
                     // role's hide list here too once that branch lands (and
                     // add it to the reuse comparison above).
                     conn.execute(

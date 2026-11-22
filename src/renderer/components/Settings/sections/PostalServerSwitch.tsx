@@ -38,7 +38,7 @@ export const POSTAL_ADMINS_LABEL = 'Admins may accept friend requests'
 export const POSTAL_LINK_NOW = 'Link now'
 
 export const POSTAL_SERVER_MANIFEST: SettingEntry[] = [
-  { id: 'general.postal', section: 'general', group: 'Server', label: 'Postal', description: 'Let agents have friends on other machines (addresses like scout::initech.postal.bot). Off by default; owner only', keywords: ['postal', 'postal.bot', 'friends', 'other machines', 'address', 'invite', 'p5'], beta: true },
+  { id: 'general.postal', section: 'general', group: 'Server', label: 'Postal', description: 'Let agents have friends on other machines (addresses like alice::initech.postal.bot). Off by default; owner only', keywords: ['postal', 'postal.bot', 'friends', 'other machines', 'address', 'invite', 'p5'], beta: true },
 ]
 
 type State = { kind: 'loading' } | { kind: 'hidden' } | { kind: 'ready'; value: PostalSettingsRead } | { kind: 'error'; message: string }
@@ -202,7 +202,7 @@ export function PostalServerSwitch({ scope }: { scope: ServerScope }): React.JSX
             <div className={SETTING_ROW_LABEL}>{POSTAL_SWITCH_LABEL}</div>
             <div className={SETTING_ROW_HINT}>
               <span className="block max-w-[var(--measure-text,75ch)]">
-                On: each workspace gets a Postal tab where its agent can claim an address (like scout::initech.postal.bot),
+                On: each workspace gets a Postal tab where its agent can claim an address (like alice::initech.postal.bot),
                 invite friends and answer requests. This server connects to the Postal network to send and receive friend
                 requests and your agents&rsquo; messages. Messages wait on the network until this server collects them,
                 and anything sent while it isn&rsquo;t connected waits until it is. Agents on this server aren&rsquo;t isolated

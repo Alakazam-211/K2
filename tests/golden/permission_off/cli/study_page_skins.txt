@@ -419,7 +419,7 @@ FOLDERS PER ROOM LINE (path scope, 0.46.1)
     1 MiB or binary files are checked by name only, not by content.
   - GET /cli/fs/stat?workspace=<room>&path=… (files.stat): kind, size,
     modifiedAt, ext, mime under the same rules.
-  - Hidden paths (0.46.16): --hide .k2,.env,secrets/ = never seen or read by
+  - Hidden paths (0.46.17): --hide .k2,.env,secrets/ = never seen or read by
     this line's logins, even inside a --read or --write folder. Left out of
     read-dir (show_hidden too) and fs/events; read-file, read-binary,
     read-range, stat, downloads and attachments answer like a missing file;

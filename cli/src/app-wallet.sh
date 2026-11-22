@@ -1073,7 +1073,7 @@ for a in access:
                     body=$(K2_SKIN_ROLE="$role" K2_SKIN_HANDLE="$handle" K2_SKIN_READ="$read" K2_SKIN_WRITE="$write" K2_SKIN_DROP="$drop" K2_SKIN_UPLOAD="$upload" K2_SKIN_DOWNLOAD="$download" K2_SKIN_NODOWNLOAD="$nodownload" K2_SKIN_CLEAR="$clear" K2_SKIN_HIDE="$hide" K2_SKIN_UNHIDE="$unhide" K2_SKIN_NOHIDE="$nohide" python3 -c '
 import json,os
 b={"name": os.environ["K2_SKIN_ROLE"], "handle": os.environ["K2_SKIN_HANDLE"]}
-# Hidden paths (0.46.16): --hide adds, --unhide takes off, --no-hide empties;
+# Hidden paths (0.46.17): --hide adds, --unhide takes off, --no-hide empties;
 # omitted = kept, and --clear keeps them.
 split=lambda env: [s.strip() for s in os.environ.get(env,"").split(",") if s.strip()]
 if os.environ.get("K2_SKIN_NOHIDE","0") == "1":

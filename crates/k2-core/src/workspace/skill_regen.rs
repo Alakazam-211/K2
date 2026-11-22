@@ -481,6 +481,19 @@ const K2_CLI_SKILL_WHEN_TABLE: &str = concat!(
     "\n",
 );
 
+/// The k2-cli skill's licence sentence. The software every brand builds is
+/// K2, which is MIT-licensed; a product with another name says it is built
+/// on K2. K2 itself keeps today's line.
+pub(crate) fn licence_line(product: &str) -> String {
+    /// The software every brand builds: a fact, the same in every brand.
+    const UPSTREAM: &str = "K2";
+    if product == UPSTREAM {
+        format!("{UPSTREAM} is MIT-licensed open source")
+    } else {
+        format!("{product} is built on {UPSTREAM}, which is MIT-licensed open source")
+    }
+}
+
 /// The K2 CLI reference, shipped as a LOADABLE skill (`.k2/skills/k2-cli/`)
 /// rather than baked into the always-on entrypoint.
 fn generate_k2_cli_skill() -> String {
@@ -870,7 +883,11 @@ problem); a refused App command's id → `"#, cli_name!(), r#" explain <id>` (th
 it; no daemon); what this server can do → `"#, cli_name!(), r#" capabilities`.
 Guests/roles/tokens: `"#, cli_name!(), r#" app` (leftover `"#, cli_name!(), r#" skin` / `"#, cli_name!(), r#" skin-token`). Pass prefix `k2skn_`.
 
-"#, product_name!(), r#" is MIT-licensed open source (from 0.46.10). Connect is a
+"#),
+    );
+    body.push_str(&licence_line(PRODUCT_NAME));
+    body.push_str(concat!(
+        r#" (from 0.46.10). Connect is a
 separate product. Four people lists: connections (agents), Connect users, app guests
 (leftover: skin guests), `"#, cli_name!(), r#" connections list --users` humans. Never `"#, cli_name!(), r#" msg` usernames.
 
@@ -3295,6 +3312,23 @@ mod tests {
         recompose_agents_md(path);
         assert_eq!(fs::read_to_string(&cwd).expect("read"), "# Mine\n");
         fs::remove_dir_all(&proj).ok();
+    }
+
+    /// The licence line: K2 keeps today's words, another product says it is
+    /// built on K2; the k2-cli skill carries this build's.
+    #[test]
+    fn the_licence_line_follows_the_product() {
+        assert_eq!(licence_line("K2"), "K2 is MIT-licensed open source");
+        assert_eq!(
+            licence_line("Globex Desk"),
+            "Globex Desk is built on K2, which is MIT-licensed open source"
+        );
+        let skill = generate_k2_cli_skill();
+        let line = format!(
+            "{} (from 0.46.10). Connect is a\n",
+            licence_line(PRODUCT_NAME)
+        );
+        assert!(skill.contains(&line), "{skill}");
     }
 
     #[test]

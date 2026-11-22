@@ -30,6 +30,8 @@ static HOOKS: Mutex<Vec<(Sel, Imp)>> = Mutex::new(Vec::new());
 thread_local! {
   /// observer pointer -> (window key, view pointer)
   static OWNERS: RefCell<Vec<(usize, usize, usize)>> = const { RefCell::new(Vec::new()) };
+  /// The registry generation OWNERS was built at (rescan only after a change).
+  static OWNERS_GEN: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
 }
 
 type EvFn = unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject);
@@ -86,9 +88,16 @@ pub(super) fn install() -> Result<String, String> {
   }
 }
 
-/// Which registered view an observer belongs to (rescans on a miss).
+/// Which registered view an observer belongs to. The map is rebuilt only
+/// when the registered views changed (or WebKit added an area since: one
+/// rescan per registry generation on a miss).
 fn owner_of(obs: usize) -> Option<(usize, usize)> {
   let find = || OWNERS.with(|o| o.borrow().iter().find(|t| t.0 == obs).map(|t| (t.1, t.2)));
+  let gen = super::reg_gen();
+  if OWNERS_GEN.with(|g| g.get()) == Some(gen) {
+    return find();
+  }
+  OWNERS_GEN.with(|g| g.set(Some(gen)));
   find().or_else(|| {
     let mut map = Vec::new();
     for (key, v) in super::all_views() {
@@ -110,7 +119,8 @@ unsafe extern "C-unwind" fn obs_imp(this: *mut AnyObject, cmd: Sel, event: *mut 
   let Some(orig) = orig else { return };
   let orig: EvFn = unsafe { std::mem::transmute::<Imp, EvFn>(orig) };
   let in_fwd = super::IN_FWD.with(|c| c.get());
-  if !event.is_null() && !in_fwd && (cmd == sel!(mouseMoved:) || cmd == sel!(mouseEntered:)) {
+  // Switched off at run time: the swap stays in, but passes everything on.
+  if super::hover_private() && !event.is_null() && !in_fwd && (cmd == sel!(mouseMoved:) || cmd == sel!(mouseEntered:)) {
     if let Some((key, view)) = owner_of(this as usize) {
       if super::drops_hover_for(view, key) {
         return;

@@ -232,6 +232,14 @@ define_class!(
       underlay::frame_changed(self.as_view());
     }
 
+    // A page moving (a split divider, Tauri's deferred bounds) moves its
+    // hole in the same pass.
+    #[unsafe(method(setFrameOrigin:))]
+    fn set_frame_origin(&self, origin: NSPoint) {
+      unsafe { objc2::msg_send![super(self), setFrameOrigin: origin] }
+      underlay::frame_changed(self.as_view());
+    }
+
     // A page hiding (K2's freeze-frame) closes its hole in the same pass.
     #[unsafe(method(setHidden:))]
     fn set_hidden(&self, hidden: bool) {

@@ -6,7 +6,7 @@
 //! and the per-gesture latch. No AppKit here, so K2's src-tauri tests
 //! include this file by path and run it on any host.
 //!
-//! Coordinates are top-left, in points. "Page px" are the UI webview's own
+//! Coordinates are top-left, in points. "UI px" are the UI webview's own
 //! coordinates (K2's window CSS px from the content area's top-left).
 
 /// A rect with per-corner radii, or a chamfered rect (45° cuts).
@@ -142,23 +142,23 @@ pub fn disjoint_holes(mut holes: Vec<Shape>) -> (Vec<Shape>, bool) {
 
 /// One page as the owner rule sees it at one point.
 #[derive(Clone, Debug)]
-pub struct PageAt<Id> {
+pub struct PageAt<'a, Id> {
   pub id: Id,
   /// The point in the page view's own top-left coordinates, and the view's
   /// bounds size. `None` when the view is hidden or not in the window.
   pub local: Option<(f64, f64, f64, f64)>,
   /// The page's corners (only the radii/chamfers are read).
   pub corners: Shape,
-  /// K2 things drawn above this page, in page px.
-  pub minus: Vec<Shape>,
+  /// K2 things drawn above this page, in UI px.
+  pub minus: &'a [Shape],
   pub live: bool,
 }
 
 /// Who owns a point: the frontmost page (front first in `pages`) whose real
 /// frame and corner shape contain it, unless a claim, that page's `minus`
 /// or `still` gives the point to K2 (`None`). `(ux, uy)` is the point in
-/// page px.
-pub fn owner<Id: Copy>(pages: &[PageAt<Id>], claims: &[Shape], ux: f64, uy: f64) -> Option<Id> {
+/// UI px.
+pub fn owner<Id: Copy>(pages: &[PageAt<'_, Id>], claims: &[Shape], ux: f64, uy: f64) -> Option<Id> {
   if claims.iter().any(|c| c.contains(ux, uy)) {
     return None;
   }
@@ -298,8 +298,8 @@ mod tests {
     assert!(Shape::new(f64::NAN, 0.0, 10.0, 10.0, [0.0; 4], [0.0; 4]).is_none());
   }
 
-  fn page(id: u8, x: f64, y: f64, w: f64, h: f64, ux: f64, uy: f64, live: bool, minus: Vec<Shape>) -> PageAt<u8> {
-    // Point in the view's own coordinates = page px minus the view origin.
+  fn page(id: u8, x: f64, y: f64, w: f64, h: f64, ux: f64, uy: f64, live: bool, minus: &[Shape]) -> PageAt<'_, u8> {
+    // Point in the view's own coordinates = UI px minus the view origin.
     PageAt { id, local: Some((ux - x, uy - y, w, h)), corners: Shape::new(x, y, w, h, [16.0; 4], [0.0; 4]).unwrap(), minus, live }
   }
 
@@ -307,7 +307,7 @@ mod tests {
   fn owner_is_the_frontmost_page_unless_k2_claims_the_point() {
     // B (front) overlaps A (back) on x 150..200.
     let at = |ux: f64, uy: f64| {
-      vec![page(2, 150.0, 0.0, 200.0, 200.0, ux, uy, true, vec![]), page(1, 0.0, 0.0, 200.0, 200.0, ux, uy, true, vec![])]
+      vec![page(2, 150.0, 0.0, 200.0, 200.0, ux, uy, true, &[]), page(1, 0.0, 0.0, 200.0, 200.0, ux, uy, true, &[])]
     };
     assert_eq!(owner(&at(50.0, 100.0), &[], 50.0, 100.0), Some(1));
     assert_eq!(owner(&at(175.0, 100.0), &[], 175.0, 100.0), Some(2), "B is in front");
@@ -319,21 +319,22 @@ mod tests {
   #[test]
   fn minus_and_still_give_the_point_to_k2() {
     let chat = sq(20.0, 20.0, 40.0, 40.0);
-    let p = vec![page(1, 0.0, 0.0, 200.0, 200.0, 30.0, 30.0, true, vec![chat])];
+    let minus = [chat];
+    let p = vec![page(1, 0.0, 0.0, 200.0, 200.0, 30.0, 30.0, true, &minus)];
     assert_eq!(owner(&p, &[], 30.0, 30.0), None);
-    let p = vec![page(1, 0.0, 0.0, 200.0, 200.0, 100.0, 100.0, false, vec![])];
+    let p = vec![page(1, 0.0, 0.0, 200.0, 200.0, 100.0, 100.0, false, &[])];
     assert_eq!(owner(&p, &[], 100.0, 100.0), None, "still keeps input with K2");
   }
 
   #[test]
   fn a_rounded_page_corner_falls_through_to_the_page_below() {
-    let p = vec![page(2, 100.0, 100.0, 100.0, 100.0, 101.0, 101.0, true, vec![]), page(1, 0.0, 0.0, 300.0, 300.0, 101.0, 101.0, true, vec![])];
+    let p = vec![page(2, 100.0, 100.0, 100.0, 100.0, 101.0, 101.0, true, &[]), page(1, 0.0, 0.0, 300.0, 300.0, 101.0, 101.0, true, &[])];
     assert_eq!(owner(&p, &[], 101.0, 101.0), Some(1));
   }
 
   #[test]
   fn a_hidden_view_passes_nothing_through() {
-    let mut p = vec![page(1, 0.0, 0.0, 200.0, 200.0, 50.0, 50.0, true, vec![])];
+    let mut p = vec![page(1, 0.0, 0.0, 200.0, 200.0, 50.0, 50.0, true, &[])];
     p[0].local = None;
     assert_eq!(owner(&p, &[], 50.0, 50.0), None);
   }
@@ -342,7 +343,7 @@ mod tests {
   fn the_real_frame_wins_over_the_page_rect() {
     // The set said x=0, but the view now sits at x=100 (mid-move): routing
     // follows the view.
-    let mut p = vec![page(1, 0.0, 0.0, 200.0, 200.0, 50.0, 50.0, true, vec![])];
+    let mut p = vec![page(1, 0.0, 0.0, 200.0, 200.0, 50.0, 50.0, true, &[])];
     p[0].local = Some((50.0 - 100.0, 50.0, 200.0, 200.0));
     assert_eq!(owner(&p, &[], 50.0, 50.0), None);
   }

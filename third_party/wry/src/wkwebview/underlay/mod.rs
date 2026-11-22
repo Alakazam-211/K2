@@ -52,7 +52,7 @@ pub struct PageSpec {
   /// Its corner radii / chamfers (position and size are read from the
   /// view's real frame).
   pub corners: Shape,
-  /// K2 things drawn above this page, in page px.
+  /// K2 things drawn above this page, in UI px.
   pub minus: Vec<Shape>,
   /// `live` (input and pixels are the page's) or `still` (K2 keeps both).
   pub live: bool,
@@ -64,7 +64,7 @@ pub struct WindowSpec {
   pub ui: Retained<NSView>,
   /// Front to back.
   pub pages: Vec<PageSpec>,
-  /// K2 things that own input over pages (menus, the dock, toasts), page px.
+  /// K2 things that own input over pages (menus, the dock, toasts), UI px.
   pub claims: Vec<Shape>,
 }
 
@@ -100,6 +100,21 @@ thread_local! {
   static MERGE_LOGGED: Cell<bool> = const { Cell::new(false) };
   /// Set while a mask is being rebuilt (AppKit re-entering setFrameSize:).
   static REBUILDING: Cell<bool> = const { Cell::new(false) };
+  /// Bumped whenever the registered views change (the private hover route
+  /// rescans its observer map only then).
+  static REG_GEN: Cell<u64> = const { Cell::new(0) };
+}
+
+fn bump() {
+  REG_GEN.with(|g| g.set(g.get().wrapping_add(1)));
+}
+
+pub(crate) fn reg_gen() -> u64 {
+  REG_GEN.with(|g| g.get())
+}
+
+pub(crate) fn hover_private() -> bool {
+  HOVER_PRIVATE.load(Ordering::Relaxed)
 }
 
 /// First click on a page in an inactive window: off (Design, matching
@@ -152,9 +167,14 @@ pub fn set_window(spec: WindowSpec) -> Result<(), String> {
     let still_here: HashSet<usize> = spec.pages.iter().map(|p| ptr(&*p.view)).collect();
     let dropped: Vec<Retained<NSView>> =
       old_pages.into_iter().map(|p| p.view).filter(|v| !still_here.contains(&ptr(&**v))).collect();
+    // The hovered page left the set: the pointer is K2's again (its hover
+    // and cursor must not stay dead until the next move).
+    let ui_p = ptr(&*spec.ui);
+    let hover = hover.map(|o| if o == ui_p || still_here.contains(&o) { o } else { ui_p });
     w.insert(key, Win { ui: spec.ui, pages: spec.pages, claims: spec.claims, latch, hover_owner: hover });
     (hover, dropped)
   });
+  bump();
   // A page that left the set gets its pointer tracking back.
   for v in &dropped {
     ungate(v);
@@ -183,6 +203,35 @@ pub fn clear_window(ui: &NSView) {
   }
   ungate(ui);
   remove_mask(ui);
+  bump();
+}
+
+/// The UI view's K2 window closed: drop everything kept for it, found by the
+/// view (its window may already be gone), so the view and its WebContent
+/// process can go. Main thread.
+pub fn drop_ui(ui: &NSView) {
+  if MainThreadMarker::new().is_none() {
+    return;
+  }
+  let up = ptr(ui);
+  let wins: Vec<Win> = WINS.with(|w| {
+    let mut w = w.borrow_mut();
+    let keys: Vec<usize> = w.iter().filter(|(_, win)| ptr(&*win.ui) == up).map(|(k, _)| *k).collect();
+    keys.into_iter().filter_map(|k| w.remove(&k)).collect()
+  });
+  BELOW.with(|b| b.borrow_mut().retain(|_, v| ptr(&**v) != up));
+  GATED.with(|g| {
+    let mut g = g.borrow_mut();
+    g.remove(&up);
+    for win in &wins {
+      for p in &win.pages {
+        g.remove(&ptr(&*p.view));
+      }
+    }
+  });
+  MASKS.with(|m| m.borrow_mut().remove(&up));
+  drop(wins);
+  bump();
 }
 
 /// A page view is about to close: give it its tracking areas back and stop
@@ -202,7 +251,7 @@ pub fn forget_view(view: &NSView) {
       if win.pages.len() != before {
         keys.push(*k);
         if win.hover_owner == Some(p) {
-          win.hover_owner = None;
+          win.hover_owner = Some(ptr(&*win.ui));
         }
         if win.latch.scroll == Some(p) {
           win.latch.scroll = None;
@@ -216,8 +265,13 @@ pub fn forget_view(view: &NSView) {
     }
     keys
   });
+  bump();
   for k in keys {
     let _ = rebuild_mask(k);
+    // Whoever owns the pointer now gets its tracking back.
+    if let Some(o) = WINS.with(|w| w.borrow().get(&k).and_then(|win| win.hover_owner)) {
+      apply_gates(k, o);
+    }
   }
 }
 
@@ -334,7 +388,7 @@ fn owner_in(win: &Win, key: usize, wp: NSPoint) -> Option<usize> {
       } else {
         None
       };
-      PageAt { id: ptr(&*p.view), local, corners: p.corners, minus: p.minus.clone(), live: p.live }
+      PageAt { id: ptr(&*p.view), local, corners: p.corners, minus: &p.minus, live: p.live }
     })
     .collect();
   logic::owner(&pages, &win.claims, ux, uy)
@@ -676,8 +730,7 @@ unsafe fn add_shape(p: *mut c_void, s: &Shape, fy: &dyn Fn(f64) -> f64) {
 
 fn new_layer(class: &std::ffi::CStr) -> Option<Retained<AnyObject>> {
   let cls = AnyClass::get(class)?;
-  let l: Retained<AnyObject> = unsafe { msg_send![cls, new] };
-  Some(l)
+  unsafe { msg_send![cls, new] }
 }
 
 fn with_no_animation(f: impl FnOnce()) {
@@ -696,8 +749,62 @@ fn with_no_animation(f: impl FnOnce()) {
   }
 }
 
+/// CoreGraphics' path boolean operations (macOS 13+), looked up at run time
+/// because K2 still runs on macOS 11. Each returns a +1 path or NULL.
+type PathOp = unsafe extern "C" fn(*const c_void, *const c_void, bool) -> *mut c_void;
+#[derive(Clone, Copy)]
+struct PathOps {
+  subtract: PathOp,
+  union: PathOp,
+  intersect: PathOp,
+}
+
+extern "C" {
+  fn dlsym(handle: *mut c_void, symbol: *const std::ffi::c_char) -> *mut c_void;
+}
+
+fn path_ops() -> Option<PathOps> {
+  static OPS: std::sync::OnceLock<Option<(usize, usize, usize)>> = std::sync::OnceLock::new();
+  let found = *OPS.get_or_init(|| {
+    // RTLD_DEFAULT on Apple platforms.
+    let any = -2isize as *mut c_void;
+    let get = |name: &std::ffi::CStr| unsafe { dlsym(any, name.as_ptr()) } as usize;
+    let (s, u, i) = (
+      get(c"CGPathCreateCopyBySubtractingPath"),
+      get(c"CGPathCreateCopyByUnioningPath"),
+      get(c"CGPathCreateCopyByIntersectingPath"),
+    );
+    (s != 0 && u != 0 && i != 0).then_some((s, u, i))
+  });
+  found.map(|(s, u, i)| unsafe {
+    PathOps {
+      subtract: std::mem::transmute::<usize, PathOp>(s),
+      union: std::mem::transmute::<usize, PathOp>(u),
+      intersect: std::mem::transmute::<usize, PathOp>(i),
+    }
+  })
+}
+
+/// A new path holding `shapes` (one subpath each, same winding, so a
+/// non-zero fill is their union).
+unsafe fn shapes_path(shapes: &[Shape], fy: &dyn Fn(f64) -> f64) -> *mut c_void {
+  let p = CGPathCreateMutable();
+  if !p.is_null() {
+    for s in shapes {
+      add_shape(p, s, fy);
+    }
+  }
+  p
+}
+
+/// One shown page, back to front, in UI px.
+struct MaskPage {
+  hole: Shape,
+  minus: Vec<Shape>,
+}
+
 /// Rebuild the window's UI mask from the pages' real frames (so it follows
-/// a resize in the same layout pass). No live page: no mask.
+/// a resize or a move in the same layout pass). No shown page: no mask.
 fn rebuild_mask(key: usize) -> Result<(), String> {
   if REBUILDING.with(|r| r.replace(true)) {
     return Ok(());
@@ -707,11 +814,55 @@ fn rebuild_mask(key: usize) -> Result<(), String> {
   r
 }
 
+/// The exact visible area, in z order: visible = bounds; for each page back
+/// to front, visible -= its hole, visible += (its minus ∩ its hole); then
+/// visible += claims. One non-zero path (+1), or None if an operation failed.
+unsafe fn exact_visible(ops: PathOps, local: CGRect, pages: &[MaskPage], snap: &dyn Fn(&[Shape]) -> Vec<Shape>, fy: &dyn Fn(f64) -> f64) -> Option<*mut c_void> {
+  let mut vis = CGPathCreateMutable();
+  if vis.is_null() {
+    return None;
+  }
+  CGPathAddRect(vis, std::ptr::null(), local);
+  for pg in pages {
+    let hp = shapes_path(std::slice::from_ref(&pg.hole), fy);
+    if hp.is_null() {
+      CGPathRelease(vis);
+      return None;
+    }
+    let next = (ops.subtract)(vis, hp, false);
+    CGPathRelease(vis);
+    if next.is_null() {
+      CGPathRelease(hp);
+      return None;
+    }
+    vis = next;
+    if !pg.minus.is_empty() {
+      let mp = shapes_path(&snap(&pg.minus), fy);
+      let mi = if mp.is_null() { std::ptr::null_mut() } else { (ops.intersect)(mp, hp, false) };
+      if !mp.is_null() {
+        CGPathRelease(mp);
+      }
+      if !mi.is_null() {
+        let next = (ops.union)(vis, mi, false);
+        CGPathRelease(mi);
+        CGPathRelease(vis);
+        if next.is_null() {
+          CGPathRelease(hp);
+          return None;
+        }
+        vis = next;
+      }
+    }
+    CGPathRelease(hp);
+  }
+  Some(vis)
+}
+
 fn rebuild_mask_inner(key: usize) -> Result<(), String> {
   struct Geo {
     ui: Retained<NSView>,
-    holes: Vec<Shape>,
-    keep: Vec<Shape>,
+    pages: Vec<MaskPage>,
+    claims: Vec<Shape>,
   }
   let geo = WINS.with(|w| {
     let w = w.borrow();
@@ -719,12 +870,11 @@ fn rebuild_mask_inner(key: usize) -> Result<(), String> {
     let ui = win.ui.clone();
     let ub = ui.bounds();
     let flipped = ui.isFlipped();
-    let mut holes = Vec::new();
-    let mut keep = win.claims.clone();
+    let mut pages = Vec::new();
     // A shown page keeps its hole in either mode: `still` only moves input
     // to K2. The hole closes when the view hides (K2's freeze-frame then
-    // shows), in the same pass, through `setHidden:`.
-    for p in &win.pages {
+    // shows), in the same pass, through `setHidden:`. Back to front.
+    for p in win.pages.iter().rev() {
       if !shown_in(&p.view, key) {
         continue;
       }
@@ -732,24 +882,19 @@ fn rebuild_mask_inner(key: usize) -> Result<(), String> {
       let r = ui.convertRect_fromView(p.view.frame(), Some(&sv));
       let top = if flipped { r.origin.y - ub.origin.y } else { ub.size.height - (r.origin.y - ub.origin.y) - r.size.height };
       let corners = p.corners.local(r.size.width, r.size.height);
-      if let Some(s) = Shape::new(r.origin.x - ub.origin.x, top, r.size.width, r.size.height, corners.r, corners.ch.unwrap_or([0.0; 4])) {
-        holes.push(s);
+      if let Some(hole) = Shape::new(r.origin.x - ub.origin.x, top, r.size.width, r.size.height, corners.r, corners.ch.unwrap_or([0.0; 4])) {
+        pages.push(MaskPage { hole, minus: p.minus.clone() });
       }
-      keep.extend(p.minus.iter().copied());
     }
-    Some(Geo { ui, holes, keep })
+    Some(Geo { ui, pages, claims: win.claims.clone() })
   });
   let Some(geo) = geo else { return Ok(()) };
-  if geo.holes.is_empty() {
+  if geo.pages.is_empty() {
     remove_mask(&geo.ui);
     return Ok(());
   }
   let layer = layer_of(&geo.ui).ok_or("underlay: the UI view has no layer to mask")?;
   let scale = geo.ui.window().map(|w| w.backingScaleFactor()).unwrap_or(2.0);
-  let (holes, merged) = logic::disjoint_holes(geo.holes);
-  if merged && !MERGE_LOGGED.with(|c| c.replace(true)) {
-    eprintln!("wry underlay: overlapping pages; their mask holes were merged into one box");
-  }
   let b = geo.ui.bounds();
   let (w, h) = (b.size.width, b.size.height);
   let flip = !geo.ui.isFlipped();
@@ -761,13 +906,56 @@ fn rebuild_mask_inner(key: usize) -> Result<(), String> {
       return Err("underlay: CALayer / CAShapeLayer missing".into());
     };
     unsafe {
-      let _: () = msg_send![&*hl, setFillRule: ns_string!("even-odd")];
       let _: () = msg_send![&*c, addSublayer: &*hl];
       let _: () = msg_send![&*c, addSublayer: &*cl];
     }
     MASKS.with(|m| m.borrow_mut().insert(up, Mask { container: c, holes: hl, claims: cl }));
   }
-  let frame = CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(w, h));
+  // The mask layer sits in the UI layer's bounds space.
+  let frame = CGRect::new(CGPoint::new(b.origin.x, b.origin.y), CGSize::new(w, h));
+  let local = CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(w, h));
+  let snap = |v: &[Shape]| v.iter().map(|s| s.snap_out(scale)).collect::<Vec<_>>();
+  // (main path, its fill rule is even-odd, the claims path), all +1.
+  let (main, even_odd, claims) = unsafe {
+    match path_ops() {
+      Some(ops) => {
+        let vis = exact_visible(ops, local, &geo.pages, &snap, &fy).ok_or("underlay: a mask path operation failed")?;
+        (vis, false, shapes_path(&snap(&geo.claims), &fy))
+      }
+      // macOS 11-12 (no path operations): bounds + holes, even-odd
+      // (overlapping holes merged into one box), and every page's minus
+      // with the claims.
+      None => {
+        let (holes, merged) = logic::disjoint_holes(geo.pages.iter().map(|p| p.hole).collect());
+        if merged && !MERGE_LOGGED.with(|c| c.replace(true)) {
+          eprintln!("wry underlay: overlapping pages on a macOS without path operations; their holes were merged");
+        }
+        let hp = CGPathCreateMutable();
+        if !hp.is_null() {
+          CGPathAddRect(hp, std::ptr::null(), local);
+          for s in &holes {
+            add_shape(hp, s, &fy);
+          }
+        }
+        let mut keep = geo.claims.clone();
+        for p in &geo.pages {
+          keep.extend(p.minus.iter().copied());
+        }
+        (hp, true, shapes_path(&snap(&keep), &fy))
+      }
+    }
+  };
+  if main.is_null() || claims.is_null() {
+    unsafe {
+      if !main.is_null() {
+        CGPathRelease(main);
+      }
+      if !claims.is_null() {
+        CGPathRelease(claims);
+      }
+    }
+    return Err("underlay: CGPathCreateMutable failed".into());
+  }
   let mut ok = true;
   with_no_animation(|| {
     MASKS.with(|m| {
@@ -777,26 +965,13 @@ fn rebuild_mask_inner(key: usize) -> Result<(), String> {
         return;
       };
       unsafe {
-        let hp = CGPathCreateMutable();
-        let kp = CGPathCreateMutable();
-        if hp.is_null() || kp.is_null() {
-          ok = false;
-          return;
-        }
-        CGPathAddRect(hp, std::ptr::null(), frame);
-        for s in &holes {
-          add_shape(hp, s, &fy);
-        }
-        for s in &geo.keep {
-          add_shape(kp, &s.snap_out(scale), &fy);
-        }
+        let rule = if even_odd { ns_string!("even-odd") } else { ns_string!("non-zero") };
+        let _: () = msg_send![&*mask.holes, setFillRule: rule];
         let _: () = msg_send![&*mask.container, setFrame: frame];
-        let _: () = msg_send![&*mask.holes, setFrame: frame];
-        let _: () = msg_send![&*mask.claims, setFrame: frame];
-        let _: () = msg_send![&*mask.holes, setPath: hp as *const c_void];
-        let _: () = msg_send![&*mask.claims, setPath: kp as *const c_void];
-        CGPathRelease(hp);
-        CGPathRelease(kp);
+        let _: () = msg_send![&*mask.holes, setFrame: local];
+        let _: () = msg_send![&*mask.claims, setFrame: local];
+        let _: () = msg_send![&*mask.holes, setPath: main as *const c_void];
+        let _: () = msg_send![&*mask.claims, setPath: claims as *const c_void];
         let cur: *mut AnyObject = msg_send![&*layer, mask];
         if cur != Retained::as_ptr(&mask.container) as *mut AnyObject {
           let _: () = msg_send![&*layer, setMask: &*mask.container];
@@ -806,6 +981,10 @@ fn rebuild_mask_inner(key: usize) -> Result<(), String> {
       }
     })
   });
+  unsafe {
+    CGPathRelease(main);
+    CGPathRelease(claims);
+  }
   if ok {
     Ok(())
   } else {
@@ -826,9 +1005,9 @@ fn remove_mask(ui: &NSView) {
   }
 }
 
-/// `setFrameSize:` / `setHidden:` on any WryWebView: if it's the UI view or
-/// a page of an underlay window, rebuild that window's mask in this same
-/// pass.
+/// `setFrameSize:` / `setFrameOrigin:` / `setHidden:` on any WryWebView: if
+/// it's the UI view or a page of an underlay window, rebuild that window's
+/// mask in this same pass.
 pub(crate) fn frame_changed(view: &NSView) {
   let Some(key) = window_key(view) else { return };
   let me = ptr(view);

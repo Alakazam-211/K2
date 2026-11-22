@@ -166,6 +166,9 @@ fn main() {
         codex_gate::Verdict::Shell => std::process::exit(shell(&args).code()),
     }
     trace::mark("codex gate");
+    // A terminal of another brand's server: one line on stderr, then the
+    // command runs (help and study too, which never ask the daemon).
+    k5_cli::brand_check::session();
     let route = front::route(&args);
     trace::mark("route");
     let exit = match route {

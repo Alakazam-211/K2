@@ -59,7 +59,8 @@ pub struct Request {
     /// query parameter.
     pub if_none_match: Option<String>,
     /// A `/cli/*` request on this machine: its answer says the daemon's
-    /// version (`X-K5-Server-Version`, R1 slice 10). Never off the machine,
+    /// version (`X-K5-Server-Version`, R1 slice 10) and its brand
+    /// (`X-K5-Server-Brand`, `X-K5-Server-Cli`). Never off the machine,
     /// where a ghost `/boot-status` hides the version from strangers.
     pub server_version: bool,
     /// Query keys sent more than once, in first-seen order (raw, as the
@@ -210,7 +211,7 @@ pub fn shape(req: &Request, status: &str, ct: &str, body: &str) -> Shaped {
     let ok = status.starts_with("200");
     let mut headers = String::new();
     if req.server_version {
-        headers.push_str(crate::cli_usage::SERVER_VERSION_HEADER);
+        headers.push_str(crate::cli_usage::server_headers());
     }
     let tag = match (ok && json, req.etag, req.icon_etag) {
         (true, true, _) => Some((etag_of(body), false)),
@@ -522,6 +523,39 @@ mod tests {
         let once = Request::from_head(false, "GET", "/cli/projects/list?token=t&icons=rev&iconsx=1&flag", &head(&[]));
         assert!(once.repeated.is_empty(), "{:?}", once.repeated);
         assert!(Request::from_head(false, "GET", "/cli/projects/list", &head(&[])).repeated.is_empty());
+    }
+
+    /// The brand rides beside the version on a `/cli/*` answer on this
+    /// machine, and like it is never on an answer that leaves the machine
+    /// (the LAN, the tunnel, a proxy, an App's link), nor on any other
+    /// route.
+    #[test]
+    fn the_brand_is_never_sent_off_the_machine() {
+        let brand = format!(
+            "X-K5-Server-Brand: {}\r\nX-K5-Server-Cli: {}\r\n",
+            k2_core::brand::BRAND_ID,
+            k2_core::brand::CLI_NAME
+        );
+        let cli = Request::from_head(false, "GET", "/cli/inbox/list?token=t", &head(&[])).server_version(true);
+        for (status, ct) in [("200 OK", "application/json"), ("403 Forbidden", "application/json"), ("200 OK", "text/plain")] {
+            let s = shape(&cli, status, ct, "{}");
+            assert!(s.headers.contains(&brand), "{status} {ct}: {:?}", s.headers);
+            assert_eq!(s.headers.matches("X-K5-Server-Brand").count(), 1);
+            assert_eq!(s.headers.matches("X-K5-Server-Cli").count(), 1);
+        }
+        let remote = Request::from_head(true, "GET", "/cli/inbox/list", &head(&["Accept-Encoding: gzip"])).server_version(true);
+        let app_link = Request::from_head(false, "GET", "/cli/inbox/list", &head(&[])).server_version(false);
+        let not_cli = Request::from_head(false, "GET", "/boot-status", &head(&[])).server_version(true);
+        for r in [remote, app_link, not_cli, Request::default()] {
+            for body in ["{}".to_string(), big_json()] {
+                let s = shape(&r, "200 OK", "application/json", &body);
+                assert!(!s.headers.contains("X-K5-Server-Brand"), "{r:?}: {:?}", s.headers);
+                assert!(!s.headers.contains("X-K5-Server-Cli"), "{r:?}: {:?}", s.headers);
+            }
+        }
+        // The cell socket writes the same lines (cell_server.rs), and the
+        // version line is first.
+        assert_eq!(crate::cli_usage::server_headers(), format!("{}{brand}", crate::cli_usage::SERVER_VERSION_HEADER));
     }
 
     #[test]

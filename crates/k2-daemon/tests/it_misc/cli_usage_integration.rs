@@ -8,6 +8,7 @@
 //!   passport (either door), a Member login and no token are refused.
 //! - `/boot-status` carries `cliUsage` in the full view only.
 //! - A `/cli/*` answer names the daemon's version (`X-K5-Server-Version`)
+//!   and its brand (`X-K5-Server-Brand`, `X-K5-Server-Cli`)
 //!   on loopback and the cell socket, never through the tunnel.
 // The cell door is the per-cell Unix socket (cell_server::serve_cell).
 #![cfg(unix)]
@@ -199,6 +200,8 @@ async fn counts_at_both_doors_after_auth_and_the_owner_reads_them() {
     // ── TCP, the owner token ─────────────────────────────────────────
     let r = tcp(port, &here, Some(OWNER), &all).await;
     assert_eq!(r.header("X-K5-Server-Version").as_deref(), Some(VERSION), "TCP /cli answer: {}", r.head);
+    assert_eq!(r.header("X-K5-Server-Brand").as_deref(), Some(k2_core::brand::BRAND_ID), "TCP /cli answer: {}", r.head);
+    assert_eq!(r.header("X-K5-Server-Cli").as_deref(), Some(k2_core::brand::CLI_NAME), "TCP /cli answer: {}", r.head);
     // A workspace that doesn't resolve counts as `other`.
     tcp(port, &format!("{VERB}?project=no-such-workspace"), Some(OWNER), &["X-K5-Would-Refuse: 1"]).await;
     // Only the exact values count.
@@ -220,6 +223,8 @@ async fn counts_at_both_doors_after_auth_and_the_owner_reads_them() {
     let r = cell(&sock, VERB, &passport, &["X-K5-Cli-Via: fallthrough", "X-K5-Cli-Noun: heartbeat", "X-K5-Owner-Source: disk"]).await;
     assert_ne!(r.status, 403, "the passport is authorized for {VERB}: {}", r.body);
     assert_eq!(r.header("X-K5-Server-Version").as_deref(), Some(VERSION), "cell /cli answer: {}", r.head);
+    assert_eq!(r.header("X-K5-Server-Brand").as_deref(), Some(k2_core::brand::BRAND_ID), "cell /cli answer: {}", r.head);
+    assert_eq!(r.header("X-K5-Server-Cli").as_deref(), Some(k2_core::brand::CLI_NAME), "cell /cli answer: {}", r.head);
 
     // In table order (kind, then key: a workspace id may sort either side of `other`).
     let mut want = vec![
@@ -240,6 +245,7 @@ async fn counts_at_both_doors_after_auth_and_the_owner_reads_them() {
     assert_eq!(full.json()["view"], "full");
     assert_eq!(full.json()["cliUsage"], usage);
     assert_eq!(full.header("X-K5-Server-Version"), None, "not a /cli/* answer");
+    assert_eq!(full.header("X-K5-Server-Brand"), None, "not a /cli/* answer");
 
     // ── GET /cli/cli-usage: the owner's, after a flush ────────────────
     let r = tcp(port, "/cli/cli-usage", Some(&passport), &[]).await;
@@ -272,9 +278,13 @@ async fn counts_at_both_doors_after_auth_and_the_owner_reads_them() {
     assert_eq!(public.json()["view"], "public");
     assert!(public.json().get("cliUsage").is_none(), "public has no cliUsage: {}", public.body);
 
-    // ── the version header stays on this machine ──────────────────────
+    // ── the version and brand headers stay on this machine ────────────
     let r = tcp(d.tunnel_port, &here, Some(OWNER), &[]).await;
     assert_eq!(r.header("X-K5-Server-Version"), None, "through the tunnel: {}", r.head);
+    assert_eq!(r.header("X-K5-Server-Brand"), None, "through the tunnel: {}", r.head);
+    assert_eq!(r.header("X-K5-Server-Cli"), None, "through the tunnel: {}", r.head);
     let r = tcp(port, &here, Some(OWNER), &["X-Forwarded-For: 203.0.113.7"]).await;
     assert_eq!(r.header("X-K5-Server-Version"), None, "through a local proxy: {}", r.head);
+    assert_eq!(r.header("X-K5-Server-Brand"), None, "through a local proxy: {}", r.head);
+    assert_eq!(r.header("X-K5-Server-Cli"), None, "through a local proxy: {}", r.head);
 }

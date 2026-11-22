@@ -7,7 +7,8 @@
 # 1. cargo check of the workspace's crates (rust-check's list, and the k5
 #    binary) with K2_BRAND_DIR=brand/xy, every target, -D warnings.
 # 2. cargo build of the k5 binary for xy: its pages and its --schema are
-#    rewritten to the command xy when building (crates/k5-cli/build.rs).
+#    rewritten to the command xy when building (crates/k5-cli/build.rs),
+#    and it carries the xy brand mark (scripts/brand/check-brand-mark.py).
 # 3. What that binary prints for every help and study form
 #    (scripts/brand/collect-outputs.sh), read by the three output judges
 #    (scripts/brand/output-judges.py).
@@ -36,6 +37,8 @@ cargo check --locked -p k2-core -p k2-client -p k2-daemon -p k2-node-proto -p k2
 step "cargo build of the k5 binary, K2_BRAND_DIR=brand/xy"
 cargo build --locked -p k5-cli --bin k5-cli
 BIN="$XY_TARGET/debug/k5-cli"
+step "the xy binary carries the xy brand mark, and only it"
+python3 scripts/brand/check-brand-mark.py --brand xy "$BIN"
 
 W="$(mktemp -d)"
 trap 'rm -rf "$W"' EXIT

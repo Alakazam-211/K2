@@ -22,6 +22,9 @@ path = "src/main.rs"
 test-keys = []
 
 [dependencies]
+# The brand mark (k2_brand::mark::keep at the top of main): static data a
+# release reads; nothing here reads it. No dependencies of its own.
+k2-brand = { path = "../k2-brand" }
 k2-root-proto = { path = "../k2-root-proto" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

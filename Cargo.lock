@@ -4649,6 +4649,7 @@ dependencies = [
 name = "k2-app-engine"
 version = "0.1.0"
 dependencies = [
+ "k2-brand",
  "k2-root-proto",
  "libc",
  "serde",
@@ -5090,6 +5091,7 @@ version = "0.1.0"
 dependencies = [
  "flate2",
  "futures-util",
+ "k2-brand",
  "k2-node-proto",
  "k2-redact",
  "k2-root-proto",
@@ -5132,6 +5134,7 @@ version = "0.2.0"
 dependencies = [
  "getrandom 0.2.17",
  "hmac 0.12.1",
+ "k2-brand",
  "libc",
  "serde",
  "serde_json",

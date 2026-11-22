@@ -449,8 +449,9 @@ mod unix_impl {
             write_response(&mut stream, "400 Bad Request", "application/json", &body, "").await;
             return;
         }
-        // R1 slice 10: a /cli/* answer names the daemon's version.
-        let k5_version = if path.starts_with("/cli/") { crate::cli_usage::SERVER_VERSION_HEADER } else { "" };
+        // R1 slice 10: a /cli/* answer names the daemon's version, and its
+        // brand (the cell socket is always this machine).
+        let k5_version = if path.starts_with("/cli/") { crate::cli_usage::server_headers() } else { "" };
 
         // A caller that has already hung up is not waiting for this answer:
         // its request sat in the listener's queue (a cell socket ptyd held

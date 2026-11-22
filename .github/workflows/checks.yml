@@ -187,6 +187,9 @@ jobs:
       - name: Ceiling-zero gate on scratch repos
         run: bash tests/garden/ceiling-zero-gate.sh
 
+      - name: Release brand-mark check on made-up binaries
+        run: bash tests/garden/brand-mark.sh
+
       - name: private-docs gate (cloud-business docs stay in the private repo)
         run: bash scripts/private-docs-gate.sh
 

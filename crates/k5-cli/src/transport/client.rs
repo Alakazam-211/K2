@@ -1446,7 +1446,7 @@ impl Client {
                     // Every answer, a retried one too: the compare is on
                     // what came back, never a request of its own.
                     if let Ok(a) = &r {
-                        skew::note(&self.version, a.server_version.as_deref());
+                        super::brand_headers::note_answer(&self.version, a, &target);
                     }
                     return r;
                 }

@@ -36,6 +36,9 @@ path = "examples/testsign.rs"
 required-features = ["test-keys"]
 
 [dependencies]
+# The brand mark (k2_brand::mark::keep at the top of main): static data a
+# release reads; nothing here reads it. No dependencies of its own.
+k2-brand = { path = "../k2-brand" }
 k2-node-proto = { path = "../k2-node-proto" }
 # The vault's exact-value redactor (compute secret-env SE23/SE24b): a secret
 # job's output is redacted before it reaches the journal.

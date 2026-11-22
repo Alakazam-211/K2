@@ -16,6 +16,8 @@
 
 #[cfg(unix)]
 fn main() {
+    // The brand mark: static data a release reads (scripts/brand/check-brand-mark.py).
+    k2_brand::mark::keep();
     use k2_ptyd::launch;
     use k2_ptyd::paths::Paths;
     use k2_ptyd::server::{self, orphan_from_env, Config, EXITED_TTL, IDLE_DEFAULT};

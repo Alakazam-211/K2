@@ -200,6 +200,7 @@
 //!   TCP (curl exit 28, 52 or 56 after the request went out, or an empty
 //!   answer).
 
+pub mod brand_headers;
 pub mod client;
 pub mod encode;
 pub mod permission;

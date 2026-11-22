@@ -75,6 +75,7 @@
 //!   retired verb gets and the deprecated tier of the help.
 
 pub mod airgap;
+pub mod brand_check;
 pub mod called_as;
 pub mod cards;
 pub mod check;

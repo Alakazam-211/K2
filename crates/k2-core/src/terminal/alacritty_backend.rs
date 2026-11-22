@@ -434,6 +434,8 @@ impl TerminalManager {
         pty_options.env.insert("TERM_PROGRAM".to_string(), "K2".to_string());
         pty_options.env.insert("COLORTERM".to_string(), "truecolor".to_string());
         pty_options.env.insert("PROMPT_EOL_MARK".to_string(), String::new());
+        // The session's brand, as on the v2 path (daemon_pty.rs).
+        pty_options.env.extend(crate::brand::session::session_env());
         // Locale: same defaulting as the v2 path (daemon_pty.rs) — a
         // launchd/systemd daemon has no LANG/LC_*, and locale-less
         // children MacRoman-mangle UTF-8 through `pbcopy`.

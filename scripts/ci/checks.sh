@@ -84,6 +84,7 @@ part_web() {
     step "brand gate on broken trees";             bash tests/garden/brand-gate.sh
     step "brand output judges on small corpora";   bash tests/garden/brand-output-judges.sh
     step "ceiling-zero gate on scratch repos";     bash tests/garden/ceiling-zero-gate.sh
+    step "release brand-mark check on made-up binaries"; bash tests/garden/brand-mark.sh
     step "private-docs gate";                      bash scripts/private-docs-gate.sh
     step "typecheck:web";                          bun run typecheck:web
     step "vitest";                                 bunx vitest run --reporter=dot

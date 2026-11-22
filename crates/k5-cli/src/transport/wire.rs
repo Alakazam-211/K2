@@ -365,12 +365,21 @@ pub struct Answer {
     /// came ([`SERVER_VERSION_HEADER`]). What it may hold is checked where
     /// it is used ([`super::skew`]).
     pub server_version: Option<String>,
+    /// The first `X-K5-Server-Brand` and `X-K5-Server-Cli` of the last
+    /// head, trimmed, when it has both: the daemon's brand id and command
+    /// (`k2_client::brand::session`). What they may hold is checked where
+    /// they are used ([`crate::brand_check`]).
+    pub server_brand: Option<(String, String)>,
 }
 
 /// The header a daemon on this machine puts on every `/cli/*` answer:
 /// its version, the one `/boot-status` reports (slice 10a). A LAN, tunnel
 /// or proxied answer has none, nor does an older daemon.
 pub const SERVER_VERSION_HEADER: &str = "X-K5-Server-Version";
+
+/// The daemon's brand id and command beside its version, on the same
+/// answers ([`k2_client::brand::session`]).
+pub use k2_client::brand::session::{SERVER_BRAND_HEADER, SERVER_CLI_HEADER};
 
 fn remaining(deadline: Instant) -> Option<Duration> {
     deadline
@@ -603,6 +612,7 @@ pub fn read_answer(conn: &mut Conn, deadline: Instant) -> Result<Answer, Failure
         let mut length: Option<usize> = None;
         let mut chunked = false;
         let mut server_version: Option<String> = None;
+        let (mut brand, mut cli): (Option<String>, Option<String>) = (None, None);
         loop {
             let line = r.line()?;
             if line.is_empty() {
@@ -629,6 +639,10 @@ pub fn read_answer(conn: &mut Conn, deadline: Instant) -> Result<Answer, Failure
                 chunked = true;
             } else if name.eq_ignore_ascii_case(SERVER_VERSION_HEADER) && server_version.is_none() {
                 server_version = Some(value.to_string());
+            } else if name.eq_ignore_ascii_case(SERVER_BRAND_HEADER) && brand.is_none() {
+                brand = Some(value.to_string());
+            } else if name.eq_ignore_ascii_case(SERVER_CLI_HEADER) && cli.is_none() {
+                cli = Some(value.to_string());
             }
         }
         if (100..200).contains(&status) {
@@ -664,6 +678,7 @@ pub fn read_answer(conn: &mut Conn, deadline: Instant) -> Result<Answer, Failure
             status,
             body,
             server_version,
+            server_brand: brand.zip(cli),
         });
     }
 }
@@ -870,7 +885,8 @@ mod tests {
             Answer {
                 status: 200,
                 body: b"hello".to_vec(),
-                server_version: None
+                server_version: None,
+                server_brand: None
             }
         );
         let a = one(b"HTTP/1.1 403 Forbidden\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n2;x=1\r\nde\r\n0\r\nT: 1\r\n\r\n", Duration::from_secs(5)).unwrap();
@@ -879,7 +895,8 @@ mod tests {
             Answer {
                 status: 403,
                 body: b"abcde".to_vec(),
-                server_version: None
+                server_version: None,
+                server_brand: None
             }
         );
         let a = one(
@@ -892,7 +909,8 @@ mod tests {
             Answer {
                 status: 503,
                 body: b"{\"state\":\"migrating\"}".to_vec(),
-                server_version: None
+                server_version: None,
+                server_brand: None
             }
         );
         let a = one(
@@ -905,7 +923,8 @@ mod tests {
             Answer {
                 status: 201,
                 body: Vec::new(),
-                server_version: None
+                server_version: None,
+                server_brand: None
             }
         );
     }
@@ -920,7 +939,8 @@ mod tests {
             Answer {
                 status: 200,
                 body: b"{}".to_vec(),
-                server_version: Some("0.46.16".into())
+                server_version: Some("0.46.16".into()),
+                server_brand: None
             }
         );
         let a = one(b"HTTP/1.1 100 Continue\r\nX-K5-Server-Version: 1.0.0\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n", Duration::from_secs(5)).unwrap();
@@ -931,6 +951,22 @@ mod tests {
         )
         .unwrap();
         assert_eq!(a.server_version, None, "another header's name");
+    }
+
+    /// The brand headers of the last head, the first of each, by any case
+    /// of their names; only both together count.
+    #[test]
+    fn the_server_brand_is_read_from_the_last_head() {
+        let a = one(b"HTTP/1.1 200 OK\r\nx-k5-server-brand: zz \r\nX-K5-Server-Cli: zq\r\nX-K5-Server-Brand: yy\r\nContent-Length: 2\r\n\r\n{}", Duration::from_secs(5)).unwrap();
+        assert_eq!(a.server_brand, Some(("zz".into(), "zq".into())));
+        let a = one(
+            b"HTTP/1.1 200 OK\r\nX-K5-Server-Brand: zz\r\nContent-Length: 0\r\n\r\n",
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        assert_eq!(a.server_brand, None, "the id alone");
+        let a = one(b"HTTP/1.1 100 Continue\r\nX-K5-Server-Brand: zz\r\nX-K5-Server-Cli: zq\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n", Duration::from_secs(5)).unwrap();
+        assert_eq!(a.server_brand, None, "a 1xx head's");
     }
 
     #[test]
@@ -1030,7 +1066,8 @@ mod tests {
             Answer {
                 status: 200,
                 body: b"hello".to_vec(),
-                server_version: None
+                server_version: None,
+                server_brand: None
             }
         );
 
@@ -1055,7 +1092,8 @@ mod tests {
             Answer {
                 status: 200,
                 body: b"hello".to_vec(),
-                server_version: None
+                server_version: None,
+                server_brand: None
             }
         );
     }

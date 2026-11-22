@@ -58,6 +58,9 @@ pub struct RetiredName {
 
 include!(concat!(env!("OUT_DIR"), "/brand.rs"));
 
+/// The brand mark a binary carries (static data; a release reads it).
+pub mod mark;
+
 #[cfg(test)]
 mod brand_file;
 

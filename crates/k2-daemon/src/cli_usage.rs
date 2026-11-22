@@ -38,6 +38,16 @@ pub const FLUSH_EVERY: Duration = Duration::from_secs(60);
 /// daemon's version, the one `/boot-status` reports.
 pub const SERVER_VERSION_HEADER: &str = concat!("X-K5-Server-Version: ", env!("CARGO_PKG_VERSION"), "\r\n");
 
+/// Every header line a `/cli/*` answer to this machine carries: the
+/// version ([`SERVER_VERSION_HEADER`]), then this daemon's brand id and
+/// command (`k2_core::brand::session::server_header_lines`), so a command
+/// line of another brand on this machine says so. Never on an answer that
+/// leaves the machine (`response_wire::Request::server_version`).
+pub fn server_headers() -> &'static str {
+    static LINES: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    LINES.get_or_init(|| format!("{SERVER_VERSION_HEADER}{}", k2_core::brand::session::server_header_lines()))
+}
+
 /// What one request's `X-K5-*` headers claim.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Claims {

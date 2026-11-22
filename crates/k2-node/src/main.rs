@@ -1,6 +1,8 @@
 //! k2-node: the compute node runtime (prd-k2-compute-nodes-v1 §8).
 
 fn main() -> std::process::ExitCode {
+    // The brand mark: static data a release reads (scripts/brand/check-brand-mark.py).
+    k2_brand::mark::keep();
     #[cfg(unix)]
     {
         imp::main()

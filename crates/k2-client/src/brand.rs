@@ -24,6 +24,11 @@
 //! be built with `concat!` (`concat!("run ", cli_name!(), " app list")`)
 //! and still be one `&'static str`. Each const is defined from its macro.
 
+/// The brand mark every binary carries, the session's brand in a
+/// terminal's environment, and the brand headers of a local answer
+/// ([`session::marked_brand_id`], [`session::mismatch`]).
+pub mod session;
+
 // From the brand file: the command's name and the product's name as
 // literals for `concat!` (`cli_name!()`, `product_name!()`, at this
 // crate's root), as consts, the command's aliases with their modes, and the

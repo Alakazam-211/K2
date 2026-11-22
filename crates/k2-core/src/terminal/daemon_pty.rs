@@ -1027,6 +1027,12 @@ impl DaemonPtySession {
             .entry("CLAUDE_CODE_FORCE_SYNC_OUTPUT".to_string())
             .or_insert_with(|| "1".to_string());
 
+        // The session's brand (its id and command): a command line of
+        // another brand run here says so, even for help, which never asks
+        // the daemon (k2_client::brand::session). Set by the spawner: a
+        // caller's value is overwritten.
+        child_env.extend(crate::brand::session::session_env());
+
         // Locale: launchd/systemd hand the daemon NO LANG/LC_*, so
         // children land in the C locale — under which `pbcopy`
         // MacRoman-mangles UTF-8 (TUI copy-on-select puts `‚îå‚îÄ`

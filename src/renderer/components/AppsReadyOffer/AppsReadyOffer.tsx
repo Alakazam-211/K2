@@ -1,5 +1,5 @@
-// "Get this server ready for Apps" (0.46.16, Rosson: K2 Apps should be ready
-// on every server). On a server someone installed or upgraded themselves, the
+// "Get this server ready for Apps" (0.46.16: K2 Apps should be ready on
+// every server). On a server someone installed or upgraded themselves, the
 // daemon offers its owner one card when the box isn't ready for Apps and
 // something happened (an upgrade, a paid plan starting, the owner opening
 // the Apps page). One click runs the same setup as `k2 app box prepare`

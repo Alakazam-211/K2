@@ -594,12 +594,12 @@ fn sys_needs_prefer_a_node_that_installs_packages() {
 #[test]
 fn the_placement_record_says_where_and_why() {
     let w = want(24);
-    let cands = [warm(cand("k2n10-vin", 46, 110, 1, 8), "c1"), cand("k2n2-m1", 10, 16, 1, 2)];
+    let cands = [warm(cand("node-a", 46, 110, 1, 8), "c1"), cand("node-b", 10, 16, 1, 2)];
     let skipped = BTreeMap::from([(skip::OFFLINE, 1u32), (skip::TOO_SMALL, 1u32)]);
     let ex = Explain { policy: V2, cands: &cands, skipped: &skipped, project_key: Some("pk"), commit: Some("c1") };
     let (c, t) = choose_by(V2, &cands, &w, &[], Some("pk"), Some("c1")).unwrap();
     let rec = placement_record(c, t, &w, &ex, 42);
-    assert_eq!((rec.mode.as_str(), rec.policy.as_str(), rec.node.as_str(), rec.code.as_str()), ("auto", "v2", "k2n10-vin", "starts_now_warm"));
+    assert_eq!((rec.mode.as_str(), rec.policy.as_str(), rec.node.as_str(), rec.code.as_str()), ("auto", "v2", "node-a", "starts_now_warm"));
     assert_eq!(rec.why, "starts now · warm slot (this commit) · 46/110 GB, 7/8 CPUs free");
     assert_eq!(rec.fits, "2 nodes fit, 2 skipped (1 offline, 1 too small for --mem 24G)");
     assert_eq!((rec.starts_now, rec.considered, rec.at), (Some(true), 2, 42));
@@ -618,7 +618,7 @@ fn the_placement_record_says_where_and_why() {
     let rec = placement_record(&q[0], Tier::Offline, &want(2), &ex, 1);
     assert_eq!(rec.code, "queued_offline_only");
     // A pinned job's record.
-    let p = pinned_record("k2n2-m1", 5);
+    let p = pinned_record("node-b", 5);
     assert_eq!((p.mode.as_str(), p.code.as_str(), p.starts_now), ("pinned", "pinned", None));
     assert_eq!(mem_words(3 * GB / 2), "1.5G");
 }
@@ -1224,7 +1224,7 @@ fn the_mover_never_picks_a_node_that_cant_give_the_needs() {
 /// The move line names both nodes and why.
 #[test]
 fn a_move_says_where_from_and_why() {
-    assert_eq!(moved_why("k2n7", "k2n12", Tier::Now, "starts now · idle · 56/56 GB"), "moved from k2n7: k2n12 can start it now · idle · 56/56 GB");
+    assert_eq!(moved_why("node-c", "node-d", Tier::Now, "starts now · idle · 56/56 GB"), "moved from node-c: node-d can start it now · idle · 56/56 GB");
     assert_eq!(moved_why("a", "b", Tier::Busy, "no node free now"), "moved from a: no node free now");
 }
 

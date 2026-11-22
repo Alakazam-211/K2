@@ -337,7 +337,7 @@ pub(crate) const V1_ACTIONS: [&str; 86] = [
     "git.review-approve",
     "git.commit-merge",
     "git.commit",
-    // 0.46.17 (Rosson): a person creates or renames a focus group, or puts
+    // 0.46.17: a person creates or renames a focus group, or puts
     // a workspace in one, for an agent.
     "focus-groups.create",
     "focus-groups.rename",
@@ -653,7 +653,7 @@ pub(crate) const ROWS: &[Row] = &[
         params: &[("message", &[ParamFrom::Query("message")])],
         ..row(ask("git.commit-merge", Floor::Admin), code(403, "merge_needs_person"), "/cli/commit-merge", POST)
     },
-    // 0.46.17 (Rosson): changing focus groups is a person's; the refusal
+    // 0.46.17: changing focus groups is a person's; the refusal
     // names the group and the workspace. A colour or order change carries
     // no `to`, so it teaches nothing (it can't be requested).
     Row {
@@ -2646,37 +2646,37 @@ mod tests {
             })
             .expect("a passport's refusal always carries a permission object")
         };
-        let want = "k2 permission request compute.grant max-time=4h node=k2n15 --why \"<what you need it for>\"";
+        let want = "k2 permission request compute.grant max-time=4h node=node-a --why \"<what you need it for>\"";
         for body in [
-            json!({"node":"k2n15","maxJobSecs":14400}),
-            json!({"node":"k2n15","workspace":"","maxJobSecs":14400}),
-            json!({"node":"k2n15","workspace":me.handle,"maxJobSecs":14400}),
-            json!({"node":"k2n15","workspace":me.id,"maxJobSecs":14400}),
+            json!({"node":"node-a","maxJobSecs":14400}),
+            json!({"node":"node-a","workspace":"","maxJobSecs":14400}),
+            json!({"node":"node-a","workspace":me.handle,"maxJobSecs":14400}),
+            json!({"node":"node-a","workspace":me.id,"maxJobSecs":14400}),
             // The per-submitter cap isn't the card's; it's left off the line.
-            json!({"node":"k2n15","workspace":me.handle,"maxJobSecs":14400,"submitterMaxRunning":2}),
+            json!({"node":"node-a","workspace":me.handle,"maxJobSecs":14400,"submitterMaxRunning":2}),
         ] {
             let p = teach_as(body.clone());
             assert_eq!(action_of(&p), "compute.grant", "{body}: {p}");
-            assert_eq!(p["params"], json!({"node":"k2n15","max-time":"4h"}), "{body}: the workspace is never a value: {p}");
+            assert_eq!(p["params"], json!({"node":"node-a","max-time":"4h"}), "{body}: the workspace is never a value: {p}");
             assert_eq!(p["approvers"], "owner or admin", "{body}: {p}");
             assert_eq!(p["command"], want, "{body}: {p}");
         }
-        let p = teach_as(json!({"node":"k2n15","maxJobSecs":5400,"maxParallel":2,"maxQueued":20,"maxDiskGb":120}));
+        let p = teach_as(json!({"node":"node-a","maxJobSecs":5400,"maxParallel":2,"maxQueued":20,"maxDiskGb":120}));
         assert_eq!(
             p["command"],
-            "k2 permission request compute.grant max-disk=120 max-parallel=2 max-queued=20 max-time=1h30m node=k2n15 --why \"<what you need it for>\"",
+            "k2 permission request compute.grant max-disk=120 max-parallel=2 max-queued=20 max-time=1h30m node=node-a --why \"<what you need it for>\"",
             "{p}"
         );
         // No limit typed: the card itself says to name one.
-        let p = teach_as(json!({"node":"k2n15"}));
-        assert_eq!(p["command"], "k2 permission request compute.grant node=k2n15 --why \"<what you need it for>\"", "{p}");
+        let p = teach_as(json!({"node":"node-a"}));
+        assert_eq!(p["command"], "k2 permission request compute.grant node=node-a --why \"<what you need it for>\"", "{p}");
         for body in [
-            json!({"node":"k2n15","workspace":other.handle,"maxJobSecs":14400}),
-            json!({"node":"k2n15","workspace":other.id,"maxJobSecs":14400}),
-            json!({"node":"k2n15","maxJobSecs":14400,"allowCi":true}),
-            json!({"node":"k2n15","maxJobSecs":14400,"allowCi":false}),
-            json!({"node":"k2n15","workspace":me.handle,"maxJobSecs":14400,"allowGpu":true}),
-            json!({"node":"k2n15","maxJobSecs":14400,"allowGpu":false}),
+            json!({"node":"node-a","workspace":other.handle,"maxJobSecs":14400}),
+            json!({"node":"node-a","workspace":other.id,"maxJobSecs":14400}),
+            json!({"node":"node-a","maxJobSecs":14400,"allowCi":true}),
+            json!({"node":"node-a","maxJobSecs":14400,"allowCi":false}),
+            json!({"node":"node-a","workspace":me.handle,"maxJobSecs":14400,"allowGpu":true}),
+            json!({"node":"node-a","maxJobSecs":14400,"allowGpu":false}),
         ] {
             let p = teach_as(body.clone());
             assert_eq!(action_of(&p), "compute.use", "{body}: never compute.grant: {p}");

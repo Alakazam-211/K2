@@ -54,8 +54,7 @@
 //!
 //!   Everything else under `.k2/` is the workspace's own files and opens
 //!   live like any other: agents' work pages and notes, the wiki, PRDs,
-//!   heartbeat prompts, tools (Rosson 2026-11-18: people open and edit
-//!   them often);
+//!   heartbeat prompts, tools (people open and edit them often);
 //! - files K2 generates and rewrites (AGENTS.md, its own skills, rosters,
 //!   the harness mirrors), `generated`. An edit there would be overwritten
 //!   by the next recompose.
@@ -1010,7 +1009,7 @@ mod tests {
         assert_eq!(deny(".k2/heartbeats.json", &cfg, &cfg).expect_err("k2 config").code, "protected");
         let att = w(".k2/wiki/assets/map.png", &[1, 2, 3]);
         assert_eq!(deny(".k2/wiki/assets/map.png", &att, &att), Ok(()));
-        // Rosson's ruling (11-18): protected is the vault and what holds
+        // The rule: protected is the vault and what holds
         // secrets, a trust root or the daemon's own state, never an agent's work
         // page, notes or the wiki.
         for (rel, body) in [(".k2/agent/work/x.html", &b"<!doctype html><p>slice 3 landed</p>\n"[..]), (".k2/wiki/x.md", &b"# x\n"[..]), (".k2/notes/plan.txt", &b"plan\n"[..]), (".k2/agent/tools/job.sh", &b"#!/bin/sh\n"[..])] {

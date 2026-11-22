@@ -374,27 +374,27 @@ mod tests {
         let mut used = home.store();
         let fp = "ab".repeat(32);
         let now = 1_800_000_000;
-        let good = mint(&k, FIRST_KID, "rosson", &fp, "mini-1", now + 600, "nonce-good-1");
-        let t = verify_with_store(&keys, &mut used, &good, "rosson", &fp, "mini-1", now).unwrap();
+        let good = mint(&k, FIRST_KID, "alice", &fp, "mini-1", now + 600, "nonce-good-1");
+        let t = verify_with_store(&keys, &mut used, &good, "alice", &fp, "mini-1", now).unwrap();
         assert_eq!(t.node_name, "mini-1");
-        assert_eq!(verify_with_store(&keys, &mut used, &good, "rosson", &fp, "mini-1", now), Err(TicketRefusal::Replayed));
-        let full_host = mint(&k, FIRST_KID, "rosson", &fp, "mini-1", now + 600, "nonce-host");
-        assert!(verify_with_store(&keys, &mut used, &full_host, "rosson.k2.dev", &fp, "mini-1", now).is_ok(), "bare sub vs full host");
+        assert_eq!(verify_with_store(&keys, &mut used, &good, "alice", &fp, "mini-1", now), Err(TicketRefusal::Replayed));
+        let full_host = mint(&k, FIRST_KID, "alice", &fp, "mini-1", now + 600, "nonce-host");
+        assert!(verify_with_store(&keys, &mut used, &full_host, "alice.k2.dev", &fp, "mini-1", now).is_ok(), "bare sub vs full host");
 
         let cases = [
-            (mint(&other, FIRST_KID, "rosson", &fp, "mini-1", now + 600, "n1"), TicketRefusal::BadSignature),
-            (mint(&k, "k2-edge-app-2026-09", "rosson", &fp, "mini-1", now + 600, "n2"), TicketRefusal::UnknownKid),
-            (mint(&k, FIRST_KID, "rosson", &fp, "mini-1", now - 1, "n3"), TicketRefusal::Expired),
-            (mint(&k, FIRST_KID, "rosson", &fp, "mini-1", now + 3600, "n4"), TicketRefusal::TooLong),
+            (mint(&other, FIRST_KID, "alice", &fp, "mini-1", now + 600, "n1"), TicketRefusal::BadSignature),
+            (mint(&k, "k2-edge-app-2026-09", "alice", &fp, "mini-1", now + 600, "n2"), TicketRefusal::UnknownKid),
+            (mint(&k, FIRST_KID, "alice", &fp, "mini-1", now - 1, "n3"), TicketRefusal::Expired),
+            (mint(&k, FIRST_KID, "alice", &fp, "mini-1", now + 3600, "n4"), TicketRefusal::TooLong),
             (mint(&k, FIRST_KID, "akzm", &fp, "mini-1", now + 600, "n5"), TicketRefusal::WrongController),
-            (mint(&k, FIRST_KID, "rosson", &"cd".repeat(32), "mini-1", now + 600, "n6"), TicketRefusal::WrongNode),
-            (mint(&k, FIRST_KID, "rosson", &fp, "mini-2", now + 600, "n7"), TicketRefusal::WrongNode),
+            (mint(&k, FIRST_KID, "alice", &"cd".repeat(32), "mini-1", now + 600, "n6"), TicketRefusal::WrongNode),
+            (mint(&k, FIRST_KID, "alice", &fp, "mini-2", now + 600, "n7"), TicketRefusal::WrongNode),
         ];
         for (tk, want) in cases {
-            assert_eq!(verify_with_store(&keys, &mut used, &tk, "rosson", &fp, "mini-1", now), Err(want));
+            assert_eq!(verify_with_store(&keys, &mut used, &tk, "alice", &fp, "mini-1", now), Err(want));
         }
-        assert!(matches!(verify_with_store(&keys, &mut used, "garbage", "rosson", &fp, "mini-1", now), Err(TicketRefusal::Malformed(_))));
-        assert_eq!(verify_with_store(&HashMap::new(), &mut used, &good, "rosson", &fp, "mini-1", now), Err(TicketRefusal::Unsupported));
+        assert!(matches!(verify_with_store(&keys, &mut used, "garbage", "alice", &fp, "mini-1", now), Err(TicketRefusal::Malformed(_))));
+        assert_eq!(verify_with_store(&HashMap::new(), &mut used, &good, "alice", &fp, "mini-1", now), Err(TicketRefusal::Unsupported));
         assert_eq!(TicketRefusal::Unsupported.code(), "ticket_unsupported");
         assert_eq!(TicketRefusal::Expired.code(), "ticket_invalid");
         assert_eq!(TicketRefusal::StoreUnavailable.code(), "ticket_invalid");
@@ -407,9 +407,9 @@ mod tests {
         let keys = one_key(&k);
         let fp = "ab".repeat(32);
         let now = 1_800_000_000;
-        let tk = mint(&k, FIRST_KID, "rosson", &fp, "mini-1", now + 600, "nonce-restart");
-        verify_with_store(&keys, first, &tk, "rosson", &fp, "mini-1", now).expect("first use");
-        verify_with_store(&keys, after_restart, &tk, "rosson", &fp, "mini-1", now + 60)
+        let tk = mint(&k, FIRST_KID, "alice", &fp, "mini-1", now + 600, "nonce-restart");
+        verify_with_store(&keys, first, &tk, "alice", &fp, "mini-1", now).expect("first use");
+        verify_with_store(&keys, after_restart, &tk, "alice", &fp, "mini-1", now + 60)
     }
 
     #[test]
@@ -458,18 +458,18 @@ mod tests {
         let keys = one_key(&k);
         let fp = "ab".repeat(32);
         let now = 1_800_000_000;
-        let tk = mint(&k, FIRST_KID, "rosson", &fp, "mini-1", now + 600, "nonce-closed");
+        let tk = mint(&k, FIRST_KID, "alice", &fp, "mini-1", now + 600, "nonce-closed");
         let home = Home::new();
         // Not JSON, then not a file at all.
         std::fs::write(home.used_file(), "not json").unwrap();
-        assert_eq!(verify_with_store(&keys, &mut home.store(), &tk, "rosson", &fp, "mini-1", now), Err(TicketRefusal::StoreUnavailable));
+        assert_eq!(verify_with_store(&keys, &mut home.store(), &tk, "alice", &fp, "mini-1", now), Err(TicketRefusal::StoreUnavailable));
         std::fs::remove_file(home.used_file()).unwrap();
         std::fs::create_dir(home.used_file()).unwrap();
-        assert_eq!(verify_with_store(&keys, &mut home.store(), &tk, "rosson", &fp, "mini-1", now), Err(TicketRefusal::StoreUnavailable));
+        assert_eq!(verify_with_store(&keys, &mut home.store(), &tk, "alice", &fp, "mini-1", now), Err(TicketRefusal::StoreUnavailable));
         // Once the file is good again the same ticket is taken: the refusals
         // didn't count as uses.
         std::fs::remove_dir(home.used_file()).unwrap();
-        assert!(verify_with_store(&keys, &mut home.store(), &tk, "rosson", &fp, "mini-1", now).is_ok());
+        assert!(verify_with_store(&keys, &mut home.store(), &tk, "alice", &fp, "mini-1", now).is_ok());
     }
 
     #[test]
@@ -503,7 +503,7 @@ mod tests {
     /// seed 32×0x07, these fields → this exact public key and signature.
     #[test]
     fn reference_vector_for_the_control_plane_spec() {
-        let (pubk, tk) = mint_with_seed(&[7u8; 32], FIRST_KID, "rosson", &"ab".repeat(32), "mini-1", 1_800_000_600, "AAAAAAAAAAAAAAAAAAAAAA").unwrap();
+        let (pubk, tk) = mint_with_seed(&[7u8; 32], FIRST_KID, "alice", &"ab".repeat(32), "mini-1", 1_800_000_600, "AAAAAAAAAAAAAAAAAAAAAA").unwrap();
         let t = Ticket::decode(&tk).unwrap();
         assert_eq!(pubk, "6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=");
         // Cross-checked with Python `cryptography` (Ed25519, same message).
@@ -511,7 +511,7 @@ mod tests {
         let mut keys = HashMap::new();
         keys.insert(FIRST_KID.to_string(), decode_pub(&pubk).unwrap());
         let home = Home::new();
-        assert!(verify_with_store(&keys, &mut home.store(), &tk, "rosson", &"ab".repeat(32), "mini-1", 1_800_000_000).is_ok());
+        assert!(verify_with_store(&keys, &mut home.store(), &tk, "alice", &"ab".repeat(32), "mini-1", 1_800_000_000).is_ok());
     }
 
     #[test]

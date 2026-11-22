@@ -1,5 +1,5 @@
 // The right-click menu on an agent: "Workspace Settings" is always the first
-// item, with a separator under it (Rosson 2026-11-18). One builder for the
+// item, with a separator under it. One builder for the
 // agent menus (Agents nav, Home nav and its rail) so a new item can't push
 // it down. Callers pass the rest of the menu; any settings item or leading
 // separator in it is dropped here, so the head stays one item and one line.

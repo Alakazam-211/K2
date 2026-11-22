@@ -1,4 +1,4 @@
-//! Out of usage, daemon side (0.46.17, Rosson): when an agent's LLM login
+//! Out of usage, daemon side (0.46.17): when an agent's LLM login
 //! runs out (a subscription limit, an API key's credit), K2 posts one
 //! system line on that agent's Thread and sends `llm_out_of_usage` on the
 //! session bus, so people see it instead of an agent that went quiet.

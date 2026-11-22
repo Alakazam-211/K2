@@ -116,7 +116,7 @@ struct SubdomainsResponse {
 /// behind an `Arc`), looked up O(1) per connection.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SubdomainMap {
-    /// The user's primary subdomain label (e.g. `rosson`). Hosts of the
+    /// The user's primary subdomain label (e.g. `alice`). Hosts of the
     /// form `<sub>.k2.dev` route to the daemon. Empty when unknown (then we
     /// fail safe: only EXACT nested-label matches proxy; everything else →
     /// daemon).
@@ -966,46 +966,46 @@ mod tests {
     #[test]
     fn nested_label_only_for_configured_targets() {
         let map = SubdomainMap::from_rows(
-            "rosson",
-            vec![row("rosson", None, true), row("jim", Some("127.0.0.1:40000"), false)],
+            "alice",
+            vec![row("alice", None, true), row("jim", Some("127.0.0.1:40000"), false)],
         );
-        assert_eq!(map.nested_label("JIM.rosson.k2.dev:443").as_deref(), Some("jim"));
-        assert_eq!(map.nested_label("rosson.k2.dev"), None, "primary is never an App");
-        assert_eq!(map.nested_label("nope.rosson.k2.dev"), None, "unknown label");
+        assert_eq!(map.nested_label("JIM.alice.k2.dev:443").as_deref(), Some("jim"));
+        assert_eq!(map.nested_label("alice.k2.dev"), None, "primary is never an App");
+        assert_eq!(map.nested_label("nope.alice.k2.dev"), None, "unknown label");
         assert_eq!(map.nested_label("jim.other.k2.dev"), None);
     }
 
     #[test]
     fn primary_host_routes_to_daemon() {
         let map = SubdomainMap::from_rows(
-            "rosson",
+            "alice",
             vec![
-                row("rosson", None, true),
+                row("alice", None, true),
                 row("staging", Some("localhost:3000"), false),
             ],
         );
-        assert_eq!(map.route_for_host("rosson.k2.dev"), Route::Daemon);
+        assert_eq!(map.route_for_host("alice.k2.dev"), Route::Daemon);
         // Case + trailing dot + port are all normalised.
         assert_eq!(map.route_for_host("ROSSON.k2.dev:443"), Route::Daemon);
-        assert_eq!(map.route_for_host("rosson.k2.dev."), Route::Daemon);
+        assert_eq!(map.route_for_host("alice.k2.dev."), Route::Daemon);
     }
 
     #[test]
     fn configured_nested_label_routes_to_its_port() {
         let map = SubdomainMap::from_rows(
-            "rosson",
+            "alice",
             vec![
-                row("rosson", None, true),
+                row("alice", None, true),
                 row("staging", Some("localhost:3000"), false),
                 row("preview", Some("127.0.0.1:8080"), false),
             ],
         );
         assert_eq!(
-            map.route_for_host("staging.rosson.k2.dev"),
+            map.route_for_host("staging.alice.k2.dev"),
             Route::Internal("localhost:3000".to_string())
         );
         assert_eq!(
-            map.route_for_host("preview.rosson.k2.dev"),
+            map.route_for_host("preview.alice.k2.dev"),
             Route::Internal("127.0.0.1:8080".to_string())
         );
     }
@@ -1013,16 +1013,16 @@ mod tests {
     #[test]
     fn unknown_nested_label_is_rejected() {
         let map = SubdomainMap::from_rows(
-            "rosson",
+            "alice",
             vec![
-                row("rosson", None, true),
+                row("alice", None, true),
                 row("staging", Some("localhost:3000"), false),
             ],
         );
         // A nested label with no configured target → rejected, NOT daemon
         // (an unprovisioned nested host is not the primary tunnel).
         assert_eq!(
-            map.route_for_host("ghost.rosson.k2.dev"),
+            map.route_for_host("ghost.alice.k2.dev"),
             Route::UnknownNested
         );
     }
@@ -1030,25 +1030,25 @@ mod tests {
     #[test]
     fn primary_row_and_targetless_rows_excluded_from_targets() {
         let map = SubdomainMap::from_rows(
-            "rosson",
+            "alice",
             vec![
-                row("rosson", Some("daemon"), true), // primary, even if it has a target
+                row("alice", Some("daemon"), true), // primary, even if it has a target
                 row("nolist", None, false),          // no target → excluded
                 row("staging", Some("localhost:3000"), false),
             ],
         );
         assert_eq!(map.targets.len(), 1, "only the one targeted nested row");
         assert!(map.targets.contains_key("staging"));
-        assert!(!map.targets.contains_key("rosson"));
+        assert!(!map.targets.contains_key("alice"));
         assert!(!map.targets.contains_key("nolist"));
         // A targetless nested host falls through to UnknownNested (it IS a
         // nested host, just unprovisioned).
-        assert_eq!(map.route_for_host("nolist.rosson.k2.dev"), Route::UnknownNested);
+        assert_eq!(map.route_for_host("nolist.alice.k2.dev"), Route::UnknownNested);
     }
 
     #[test]
     fn empty_or_foreign_host_routes_to_daemon_fail_safe() {
-        let map = SubdomainMap::from_rows("rosson", vec![row("staging", Some("localhost:3000"), false)]);
+        let map = SubdomainMap::from_rows("alice", vec![row("staging", Some("localhost:3000"), false)]);
         assert_eq!(map.route_for_host(""), Route::Daemon);
         assert_eq!(map.route_for_host("   "), Route::Daemon);
         // A host outside the user's subdomain space → daemon (never strand
@@ -1063,16 +1063,16 @@ mod tests {
         // only an EXACT host match in `targets` proxies; everything else is
         // daemon (we can't classify nesting without the primary).
         let mut targets = HashMap::new();
-        targets.insert("staging.rosson.k2.dev".to_string(), "localhost:3000".to_string());
+        targets.insert("staging.alice.k2.dev".to_string(), "localhost:3000".to_string());
         let map = SubdomainMap {
             primary: String::new(),
             targets,
         };
         assert_eq!(
-            map.route_for_host("staging.rosson.k2.dev"),
+            map.route_for_host("staging.alice.k2.dev"),
             Route::Internal("localhost:3000".to_string())
         );
-        assert_eq!(map.route_for_host("rosson.k2.dev"), Route::Daemon);
+        assert_eq!(map.route_for_host("alice.k2.dev"), Route::Daemon);
     }
 
     #[test]
@@ -1081,7 +1081,7 @@ mod tests {
             "Rosson",
             vec![row("STAGING", Some("localhost:3000"), false)],
         );
-        assert_eq!(map.primary, "rosson");
+        assert_eq!(map.primary, "alice");
         // Lookup is case-insensitive because both store + query lowercase.
         assert_eq!(
             map.route_for_host("Staging.Rosson.K2.dev"),
@@ -1092,17 +1092,17 @@ mod tests {
     #[test]
     fn parse_control_plane_response_shape() {
         let body = r#"{"subdomains":[
-            {"label":"rosson","host":"rosson.k2.dev","target":"daemon","status":"active","primary":true,"effective":"live"},
-            {"label":"staging","host":"staging.rosson.k2.dev","target":"localhost:3000","status":"active","primary":false,"effective":"live"}
+            {"label":"alice","host":"alice.k2.dev","target":"daemon","status":"active","primary":true,"effective":"live"},
+            {"label":"staging","host":"staging.alice.k2.dev","target":"localhost:3000","status":"active","primary":false,"effective":"live"}
         ]}"#;
         let parsed: SubdomainsResponse = serde_json::from_str(body).expect("parse");
-        let map = SubdomainMap::from_rows("rosson", parsed.subdomains);
+        let map = SubdomainMap::from_rows("alice", parsed.subdomains);
         assert_eq!(map.targets.len(), 1);
         assert_eq!(
-            map.route_for_host("staging.rosson.k2.dev"),
+            map.route_for_host("staging.alice.k2.dev"),
             Route::Internal("localhost:3000".to_string())
         );
-        assert_eq!(map.route_for_host("rosson.k2.dev"), Route::Daemon);
+        assert_eq!(map.route_for_host("alice.k2.dev"), Route::Daemon);
     }
 
     #[test]
@@ -1120,7 +1120,7 @@ mod tests {
 
     #[test]
     fn fetch_map_empty_token_is_error() {
-        let err = fetch_map("rosson", "  ").expect_err("empty token must error");
+        let err = fetch_map("alice", "  ").expect_err("empty token must error");
         assert!(err.contains("no tunnel bearer token"), "got: {err}");
     }
 
@@ -1151,7 +1151,7 @@ mod tests {
         let _g = crate::themes::HOME_LOCK.lock();
         let cp = crate::test_env::EnvVar::set(CONTROL_PLANE_BASE_ENV, format!("http://127.0.0.1:{port}"));
 
-        let map = fetch_map("rosson", "tok_abc").expect("fetch must succeed");
+        let map = fetch_map("alice", "tok_abc").expect("fetch must succeed");
 
         drop(cp);
 
@@ -1163,7 +1163,7 @@ mod tests {
             "must send bearer token:\n{req}"
         );
         assert_eq!(
-            map.route_for_host("staging.rosson.k2.dev"),
+            map.route_for_host("staging.alice.k2.dev"),
             Route::Internal("localhost:3000".to_string())
         );
     }
@@ -1190,7 +1190,7 @@ mod tests {
 
         let _g = crate::themes::HOME_LOCK.lock();
         let cp = crate::test_env::EnvVar::set(CONTROL_PLANE_BASE_ENV, format!("http://127.0.0.1:{port}"));
-        let err = fetch_map("rosson", "tok").expect_err("403 must be an error");
+        let err = fetch_map("alice", "tok").expect_err("403 must be an error");
         drop(cp);
         assert!(
             err.contains("pro_required") || err.contains("HTTP 403"),
@@ -1207,7 +1207,7 @@ mod tests {
         // on HOME_LOCK so the change-detection asserts can't race a parallel
         // store, and each resets the cache to default before returning.
         let _g = crate::themes::HOME_LOCK.lock();
-        let map = SubdomainMap::from_rows("rosson", vec![row("staging", Some("localhost:3000"), false)]);
+        let map = SubdomainMap::from_rows("alice", vec![row("staging", Some("localhost:3000"), false)]);
         // Landing a DIFFERENT map reports changed (→ store() broadcasts)…
         assert!(
             swap_and_changed(map.clone()),
@@ -1220,11 +1220,11 @@ mod tests {
             "re-storing an identical map must NOT report a change"
         );
         let loaded = current();
-        assert_eq!(loaded.route_for_host("staging.rosson.k2.dev"), Route::Internal("localhost:3000".to_string()));
+        assert_eq!(loaded.route_for_host("staging.alice.k2.dev"), Route::Internal("localhost:3000".to_string()));
         // Reset to empty so we don't bleed into other tests in this binary
         // (the reset itself is a change — the map goes sentinel → empty).
         assert!(swap_and_changed(SubdomainMap::default()));
-        assert_eq!(current().route_for_host("staging.rosson.k2.dev"), Route::Daemon);
+        assert_eq!(current().route_for_host("staging.alice.k2.dev"), Route::Daemon);
     }
 
     /// `refresh_once` = fetch + store + report: the first landing of a map
@@ -1267,14 +1267,14 @@ mod tests {
         clear_expected_primary_for_test();
         let _ = swap_and_changed(SubdomainMap::default());
 
-        let first = refresh_once("rosson", "tok_refresh");
-        let second = refresh_once("rosson", "tok_refresh");
+        let first = refresh_once("alice", "tok_refresh");
+        let second = refresh_once("alice", "tok_refresh");
         let persisted: SubdomainMap = serde_json::from_slice(
             &std::fs::read(crate::paths::k2_home_in(home.path()).join("tunnel-routes.json"))
                 .expect("refresh must persist the landed map"),
         )
         .expect("persisted map parses");
-        assert_eq!(persisted.primary, "rosson");
+        assert_eq!(persisted.primary, "alice");
         assert_eq!(
             persisted.targets.get("refr").map(String::as_str),
             Some("localhost:4100")
@@ -1285,7 +1285,7 @@ mod tests {
         assert_eq!(first.expect("first refresh must succeed"), (1, true), "empty → 1 target is a change");
         assert_eq!(second.expect("second refresh must succeed"), (1, false), "identical re-fetch must be unchanged");
         assert_eq!(
-            current().route_for_host("refr.rosson.k2.dev"),
+            current().route_for_host("refr.alice.k2.dev"),
             Route::Internal("localhost:4100".to_string())
         );
         // Reset so we don't bleed into other tests in this binary.
@@ -1300,11 +1300,11 @@ mod tests {
         let parse = |body: &str| serde_json::from_str::<SubdomainsResponse>(body).unwrap().subdomains;
         let real = parse(
             r#"{"subdomains":[
-                {"label":"jim","host":"jim.rosson.k2.dev","target":"localhost:3000","status":"active","cert_status":"issued","tier":"pro","primary":false,"effective":"active"},
-                {"label":"rosson","host":"rosson.k2.dev","target":null,"status":"active","cert_status":"issued","tier":"pro","primary":true,"effective":"active"}
+                {"label":"jim","host":"jim.alice.k2.dev","target":"localhost:3000","status":"active","cert_status":"issued","tier":"pro","primary":false,"effective":"active"},
+                {"label":"alice","host":"alice.k2.dev","target":null,"status":"active","cert_status":"issued","tier":"pro","primary":true,"effective":"active"}
             ]}"#,
         );
-        assert_eq!(confirmed_of(&real).as_deref(), Some("rosson"));
+        assert_eq!(confirmed_of(&real).as_deref(), Some("alice"));
         // A row marked as the token's counts when no row is primary.
         let marked = parse(r#"{"subdomains":[{"label":"other"},{"label":"Box-1","connected":true}]}"#);
         assert_eq!(confirmed_of(&marked).as_deref(), Some("box-1"));
@@ -1326,7 +1326,7 @@ mod tests {
                 let mut buf = [0u8; 4096];
                 let _ = sock.read(&mut buf);
                 let body = r#"{"subdomains":[
-                    {"label":"rosson","primary":true,"connected":true,"tier":"pro"},
+                    {"label":"alice","primary":true,"connected":true,"tier":"pro"},
                     {"label":"staging","target":"localhost:3000","primary":false,"tier":"pro"}
                 ]}"#;
                 let resp = format!(
@@ -1339,12 +1339,12 @@ mod tests {
 
         let _g = crate::themes::HOME_LOCK.lock();
         let cp = crate::test_env::EnvVar::set(CONTROL_PLANE_BASE_ENV, format!("http://127.0.0.1:{port}"));
-        let acct = fetch_account("rosson", "tok");
+        let acct = fetch_account("alice", "tok");
         drop(cp);
         let acct = acct.expect("fetch_account");
         assert_eq!(acct.tier.as_deref(), Some("pro"));
         assert_eq!(
-            acct.map.route_for_host("staging.rosson.k2.dev"),
+            acct.map.route_for_host("staging.alice.k2.dev"),
             Route::Internal("localhost:3000".to_string())
         );
     }
@@ -1374,7 +1374,7 @@ mod tests {
                 let n = sock.read(&mut buf).unwrap_or(0);
                 let req = String::from_utf8_lossy(&buf[..n]).into_owned();
                 let _ = tx.send(req);
-                let body = r#"{"label":"web","host":"web.rosson.k2.dev"}"#;
+                let body = r#"{"label":"web","host":"web.alice.k2.dev"}"#;
                 let resp = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
@@ -1470,29 +1470,29 @@ mod tests {
         let _home = crate::test_env::TempHome::new();
         clear_expected_primary_for_test();
         let _ = swap_and_changed(SubdomainMap::default());
-        assert_eq!(load_persisted("rosson"), None, "no file → nothing loaded");
+        assert_eq!(load_persisted("alice"), None, "no file → nothing loaded");
 
         let mut targets = HashMap::new();
         targets.insert("app".to_string(), "localhost:4321".to_string());
         persist(&SubdomainMap {
-            primary: "rosson".into(),
+            primary: "alice".into(),
             targets,
         });
         assert_eq!(load_persisted("other"), None, "another primary is ignored");
         assert_eq!(
-            current().route_for_host("app.rosson.k2.dev"),
+            current().route_for_host("app.alice.k2.dev"),
             Route::Daemon,
             "nothing loaded yet: no primary known → daemon"
         );
         assert_eq!(load_persisted("Rosson"), Some(1));
         assert_eq!(
-            current().route_for_host("app.rosson.k2.dev"),
+            current().route_for_host("app.alice.k2.dev"),
             Route::Internal("localhost:4321".to_string())
         );
 
         std::fs::write(persisted_path(), b"{not json").expect("corrupt");
         let _ = swap_and_changed(SubdomainMap::default());
-        assert_eq!(load_persisted("rosson"), None, "unreadable file is ignored");
+        assert_eq!(load_persisted("alice"), None, "unreadable file is ignored");
         let _ = swap_and_changed(SubdomainMap::default());
     }
 
@@ -1523,16 +1523,16 @@ mod tests {
         set_tier_hook(record_hook);
         add_tier_listener(record_listener);
         let t0 = 1_800_000_000;
-        note_tier_at("rosson", Some("free".into()), t0);
-        note_tier_at("rosson", Some("free".into()), t0 + 60);
-        note_tier_at("rosson", Some("single".into()), t0 + 120);
+        note_tier_at("alice", Some("free".into()), t0);
+        note_tier_at("alice", Some("free".into()), t0 + 60);
+        note_tier_at("alice", Some("single".into()), t0 + 120);
         assert_eq!(
             *LISTENER_SEEN.lock().unwrap(),
             vec![(Some("free".to_string()), None), (Some("single".to_string()), Some("free".to_string()))]
         );
         assert_eq!(HOOK_SEEN.lock().unwrap().len(), 2, "the hook still fires");
         clear_tier_for_test();
-        note_tier_at("rosson", Some("pro".into()), t0 + 180);
+        note_tier_at("alice", Some("pro".into()), t0 + 180);
         assert_eq!(LISTENER_SEEN.lock().unwrap().len(), 2, "cleared: no listener");
     }
 
@@ -1549,44 +1549,44 @@ mod tests {
         HOOK_SEEN.lock().unwrap().clear();
         set_tier_hook(record_hook);
         let t0 = 1_800_000_000;
-        assert_eq!(tier_view_at("rosson", t0), TierView::Unknown, "nothing read yet");
-        assert!(!tier_view_at("rosson", t0).is_pro(), "unknown is not Pro");
+        assert_eq!(tier_view_at("alice", t0), TierView::Unknown, "nothing read yet");
+        assert!(!tier_view_at("alice", t0).is_pro(), "unknown is not Pro");
 
         note_tier_at("Rosson", Some("pro".into()), t0);
-        let v = tier_view_at("rosson", t0 + 10);
+        let v = tier_view_at("alice", t0 + 10);
         assert!(matches!(v, TierView::Fresh(_)) && v.is_pro(), "{v:?}");
         assert_eq!(v.state(), "fresh");
         assert_eq!(v.reading().map(|r| r.fetched_at), Some(t0));
-        let stale = tier_view_at("rosson", t0 + TIER_FRESH.as_secs() as i64);
+        let stale = tier_view_at("alice", t0 + TIER_FRESH.as_secs() as i64);
         assert_eq!(stale.state(), "stale");
         assert!(stale.is_pro(), "a stale Pro reading is still Pro (a control-plane blip closes nothing)");
-        let old = tier_view_at("rosson", t0 + TIER_GRACE.as_secs() as i64);
+        let old = tier_view_at("alice", t0 + TIER_GRACE.as_secs() as i64);
         assert_eq!(old, TierView::Unknown, "past the grace: unknown");
         assert!(!old.is_pro());
         assert_eq!(tier_view_at("other", t0 + 10), TierView::Unknown, "another subdomain");
 
         // The same tier again: no hook. A change: the hook, with the old tier.
-        note_tier_at("rosson", Some("pro".into()), t0 + 60);
-        note_tier_at("rosson", Some("free".into()), t0 + 120);
-        assert!(!tier_view_at("rosson", t0 + 130).is_pro(), "downgrade seen on the next reading");
-        note_tier_at("rosson", None, t0 + 180);
-        assert_eq!(tier_view_at("rosson", t0 + 190).reading().and_then(|r| r.tier.clone()), None);
+        note_tier_at("alice", Some("pro".into()), t0 + 60);
+        note_tier_at("alice", Some("free".into()), t0 + 120);
+        assert!(!tier_view_at("alice", t0 + 130).is_pro(), "downgrade seen on the next reading");
+        note_tier_at("alice", None, t0 + 180);
+        assert_eq!(tier_view_at("alice", t0 + 190).reading().and_then(|r| r.tier.clone()), None);
         assert_eq!(
             *HOOK_SEEN.lock().unwrap(),
             vec![
-                ("rosson".to_string(), Some("pro".to_string()), None),
-                ("rosson".to_string(), Some("free".to_string()), Some("pro".to_string())),
-                ("rosson".to_string(), None, Some("free".to_string())),
+                ("alice".to_string(), Some("pro".to_string()), None),
+                ("alice".to_string(), Some("free".to_string()), Some("pro".to_string())),
+                ("alice".to_string(), None, Some("free".to_string())),
             ]
         );
 
         // A tunnel identity change forgets it; a late reading for the old
         // name is dropped.
-        note_tier_at("rosson", Some("pro".into()), t0 + 200);
+        note_tier_at("alice", Some("pro".into()), t0 + 200);
         reset_for_primary("newname");
-        assert_eq!(cached_tier("rosson"), None);
-        note_tier_at("rosson", Some("pro".into()), t0 + 210);
-        assert_eq!(cached_tier("rosson"), None, "a reading for the old name is dropped");
+        assert_eq!(cached_tier("alice"), None);
+        note_tier_at("alice", Some("pro".into()), t0 + 210);
+        assert_eq!(cached_tier("alice"), None, "a reading for the old name is dropped");
         note_tier_at("newname", Some("single".into()), t0 + 220);
         assert_eq!(cached_tier("newname").and_then(|r| r.tier), Some("single".to_string()));
 
@@ -1606,8 +1606,8 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         std::thread::spawn(move || {
             for body in [
-                r#"{"subdomains":[{"label":"rosson","primary":true,"tier":"pro","connected":true}]}"#,
-                r#"{"subdomains":[{"label":"rosson","primary":true,"tier":"free","connected":true}]}"#,
+                r#"{"subdomains":[{"label":"alice","primary":true,"tier":"pro","connected":true}]}"#,
+                r#"{"subdomains":[{"label":"alice","primary":true,"tier":"free","connected":true}]}"#,
             ] {
                 let Ok((mut sock, _)) = listener.accept() else { return };
                 let mut buf = [0u8; 4096];
@@ -1625,13 +1625,13 @@ mod tests {
         let cp = crate::test_env::EnvVar::set(CONTROL_PLANE_BASE_ENV, format!("http://127.0.0.1:{port}"));
         clear_expected_primary_for_test();
         clear_tier_for_test();
-        let a = fetch_account("rosson", "tok_tier").expect("first fetch");
+        let a = fetch_account("alice", "tok_tier").expect("first fetch");
         assert_eq!(a.tier.as_deref(), Some("pro"));
-        let v = tier_view("rosson");
+        let v = tier_view("alice");
         assert!(matches!(v, TierView::Fresh(_)) && v.is_pro(), "{v:?}");
-        let r = refresh_tier("rosson", "tok_tier").expect("second fetch");
+        let r = refresh_tier("alice", "tok_tier").expect("second fetch");
         assert_eq!(r.tier.as_deref(), Some("free"));
-        assert!(!tier_view("rosson").is_pro(), "the downgrade is cached at once");
+        assert!(!tier_view("alice").is_pro(), "the downgrade is cached at once");
         drop(cp);
         clear_tier_for_test();
     }

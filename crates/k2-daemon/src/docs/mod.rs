@@ -119,7 +119,7 @@ const RECHECK_EVERY_TICKS: u64 = 8;
 /// Orphan-share sweep (about a minute; the first runs on the first tick).
 const SWEEP_EVERY_TICKS: u64 = 240;
 
-/// Grouped commits (kit v0.23.0, Rosson's decision for 0.46.17): one wait
+/// Grouped commits (kit v0.23.0, for 0.46.17): one wait
 /// for the disk per group of at most 32 changes or 100 ms. The owner's
 /// "Save every change immediately" ([`save_immediately`]) turns it off.
 pub const COMMIT_GROUP_CHANGES: u32 = 32;
@@ -1101,7 +1101,7 @@ mod tests {
         }
     }
 
-    /// Kit v0.23.0, Rosson's decision: K2 opens the store with grouped
+    /// Kit v0.23.0: K2 opens the store with grouped
     /// saves (32 changes or 100 ms per wait for the disk) and the kit's
     /// cache; the owner's "Save every change immediately" opens it with every
     /// change waiting for the disk.

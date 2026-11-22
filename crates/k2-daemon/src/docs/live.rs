@@ -1746,10 +1746,10 @@ mod tests {
         assert_eq!(declined_log_line(&Closed::new(CloseReason::Idle)), None);
     }
 
-    /// The file Rosson opened: a plain 10 KB HTML page in ANOTHER
+    /// The file the owner opened: a plain 10 KB HTML page in ANOTHER
     /// workspace's `.k2/agent/work/`. The owner's absolute path resolves to
-    /// that workspace, and an agent's work page there opens live (Rosson
-    /// 11-18: `protected` is the vault and what holds secrets or K2's own
+    /// that workspace, and an agent's work page there opens live
+    /// (`protected` is the vault and what holds secrets or K2's own
     /// state, never a work page). The vault beside it stays `protected`, in
     /// words naming it, never a size or text reason. Outside every
     /// workspace is its own code.
@@ -1816,7 +1816,7 @@ mod tests {
         }
     }
 
-    /// Rosson's tab, again (11-18): an agent's ~10 KB HTML progress page in
+    /// The same tab, again: an agent's ~10 KB HTML progress page in
     /// its OWN workspace's `.k2/agent/work/`, opened from that workspace.
     /// The page is what such pages hold: tables, code, long hex ids, a word
     /// like "secret" in prose. Before the 11-18 ruling the socket closed it

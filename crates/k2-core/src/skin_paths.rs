@@ -290,7 +290,7 @@ pub fn allows_rel(scope: &RoomPathScope, rel: &str, need: PathNeed) -> Result<bo
 // ── Hidden paths (0.46.17) ────────────────────────────────────────────
 //
 // A room line's `hide` list: what its logins never see, even inside a
-// permitted folder. Rosson's ruling: guest file reads stay the App agent's
+// permitted folder. The rule: guest file reads stay the App agent's
 // choice; the agent can now say "never this" beside "only these".
 //
 // Pattern rules (a small piece of gitignore):

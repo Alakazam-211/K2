@@ -1,4 +1,4 @@
-//! Out of usage (0.46.17, Rosson): an agent's LLM login ran out (a
+//! Out of usage (0.46.17): an agent's LLM login ran out (a
 //! subscription limit, or an API key's credit), and K2 says so on the
 //! agent's Thread as its own system line, instead of the agent going quiet.
 //!

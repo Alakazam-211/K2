@@ -1,4 +1,4 @@
-//! Auto-rotate ("auto Next") for LLM subscriptions (Rosson 2026-11-17).
+//! Auto-rotate ("auto Next") for LLM subscriptions.
 //!
 //! The wallet's Next moves a tool's server default to its next signed-in
 //! subscription. Auto-rotate presses that same Next by itself as soon as
@@ -8,8 +8,8 @@
 //!
 //! **Opt-in, per person, in person.** Switching accounts at a limit may
 //! conflict with the provider's terms, so it is the person's own decision
-//! (Rosson: "each user should decide to toggle token rotation on on their
-//! own"): off by default (no row), one row per tool naming the person who
+//! (each person decides whether to turn token rotation on for their own
+//! logins): off by default (no row), one row per tool naming the person who
 //! turned it on (their wallet key: `owner-token` or `login:<name>`). Only
 //! a person who may press Next (Admin and above) turns it on, with a vault
 //! confirm (Touch ID or a password), so an agent's passport, and an agent

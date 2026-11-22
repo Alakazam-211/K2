@@ -1,5 +1,5 @@
-//! "Get this server ready for Apps" (0.46.16, Rosson: K2 Apps should be
-//! ready on every server). Servers we host are prepared by the stock
+//! "Get this server ready for Apps" (0.46.16: K2 Apps should be ready on
+//! every server). Servers we host are prepared by the stock
 //! provisioner; a server someone installed or upgraded themselves gets a
 //! one-click owner card instead. The daemon owns all of it: when to offer
 //! the card, who sees it, the run and the restart it may need. The app only

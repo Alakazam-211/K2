@@ -1,17 +1,15 @@
 #!/usr/bin/env bash
-# In a session, a socket-first sender's TCP fallback never carries the
-# owner token from disk (0.46.17).
+# In a session, a socket-first sender's TCP fallback sends the session's
+# passport, or nothing (0.46.17).
 #
 # The socket-first senders try the session's cell socket with the
 # passport, then go on over loopback TCP: cli_send, cli_send_json,
 # _compute_send, _sidecar_send, _doc_xfer, _app_rt_post_file and the
 # k2-open shim. In a session (a passport, or the session socket marker
 # K2_HOOK_SOCK), when the socket failed (the connect fails, curl 7, or its
-# file is missing), the TCP request carries the passport, never the owner
-# token k2 found on disk. With no passport: one line, exit 1, nothing
-# sent. Outside a session, and whenever the socket works, nothing changes;
-# a route the socket answers "not served on cell socket" goes on over TCP
-# with $TOKEN, as before. The TCP-only senders are not part of this rule.
+# file is missing), the TCP request sends the session's passport. With no
+# passport: one line, exit 1, nothing sent. Outside a session, and
+# whenever the socket works, nothing changes.
 #
 # k2 send-feedback is stricter (_sf_session_token): in a session every one
 # of its requests carries the passport, also when the socket says it

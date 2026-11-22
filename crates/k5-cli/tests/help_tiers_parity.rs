@@ -13,7 +13,9 @@
 //! token, no port: the binary hands those to the shell); the virtual
 //! desktop's guard, which stops a tier word with no token, and the
 //! connection gate where it lets `help` or a help flag by;
-//! and a `CODEX_` setting.
+//! and a `CODEX_` setting, in a Codex tab K2 started and with no tab
+//! marker (the shell's Codex tab gate: exit 3 but for help's words and a
+//! help flag).
 
 #![cfg(unix)]
 
@@ -21,7 +23,17 @@ mod common;
 
 use common::parity::{
     case, nothing, owner_and_port, owner_only, port_only, with_passport, Case, Compare, Rig,
+    PASSPORT,
 };
+
+/// The passport's session: what a Codex tab K2 started has in
+/// `K2_CODEX_TAB_ISOLATED`.
+fn session() -> &'static str {
+    PASSPORT
+        .split_once('.')
+        .expect("a passport is session.secret")
+        .0
+}
 
 fn with(env: Vec<(&'static str, String)>, c: Case) -> Case {
     Case { env, ..c }
@@ -103,9 +115,30 @@ fn rows(f: &Form) -> Vec<Case> {
             with_passport(&[("K2_NO_OWNER_FALLBACK", "1")]),
             row("the virtual desktop's switch with a passport", nothing, 0),
         ),
+        // A passport inside a Codex tab K2 started: the tab marker names the
+        // passport's session, so the shell's Codex tab gate lets it by.
+        with(
+            with_passport(&[
+                ("K2_HOOK_SOCK", "{sock}"),
+                ("CODEX_THREAD_ID", "t1"),
+                ("K2_CODEX_TAB_ISOLATED", session()),
+            ]),
+            row(
+                "a CODEX_ setting in a tab K2 started: an open tool",
+                nothing,
+                0,
+            ),
+        ),
+        // No tab marker: the shell's Codex tab gate (_cli_codex_tab_gate)
+        // lets help's words and a help flag by and refuses the rest, exit 3,
+        // nothing sent.
         with(
             with_passport(&[("K2_HOOK_SOCK", "{sock}"), ("CODEX_THREAD_ID", "t1")]),
-            row("a CODEX_ setting: an open tool", nothing, 0),
+            row(
+                "a CODEX_ setting and no tab marker: the Codex tab gate",
+                nothing,
+                if f.offline() { 0 } else { 3 },
+            ),
         ),
     ]
 }

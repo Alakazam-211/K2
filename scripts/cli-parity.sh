@@ -337,11 +337,10 @@ check_native_without_python3() {
     got="$(run_in "$nopath" bash "$ROOT/cli/k2" study errors --json 2>/dev/null)" || true
     [ "$got" != "$want" ] || problems+=("bash printed the JSON page with no python3: the difference is gone")
     local fam="" try seen=()
-    # `agent team --json` and `mail` alone are native now too; the last,
-    # `mail create --help`, is still the shell's (an H row of
-    # crates/k5-cli/tests/data/native_bar_ceiling.tsv); the error line
-    # names its noun.
-    for try in daemon desktop hooks ci app-update release reserve migrate llm publish "agent team --json" mail "mail create --help"; do
+    # `agent team --json`, `mail` alone and `mail create --help` are native
+    # now too; the last, `mail create x --help` (a help word on a line that
+    # is no help form), is still the shell's; the error line names its noun.
+    for try in daemon desktop hooks ci app-update release reserve migrate llm publish "agent team --json" mail "mail create --help" "mail create x --help"; do
         # shellcheck disable=SC2086
         rc=0; got="$(run_in "$nopath" "$WORK/bin/k5" $try 2>"$d/err")" || rc=$?
         if [ "$rc" = 69 ]; then fam="$try"; break; fi

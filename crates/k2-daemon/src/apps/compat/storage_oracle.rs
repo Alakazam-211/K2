@@ -256,6 +256,11 @@ async fn oracle_storage_diff() {
         // storage-api closes after the answer like K2 does.
         let pos = raw.windows(4).position(|w| w == b"\r\n\r\n").expect("head") + 2;
         let _ = raw.splice(pos..pos, b"Connection: close\r\n".iter().copied());
+        // storage-api serves at its root; Supabase's gateway strips
+        // `/storage/v1` in front of it.
+        let line_end = raw.windows(2).position(|w| w == b"\r\n").expect("request line");
+        let line = String::from_utf8_lossy(&raw[..line_end]).replacen(" /storage/v1/", " /", 1);
+        let _ = raw.splice(..line_end, line.into_bytes());
         let (os, oh2, ob) = oracle(&base, raw).await;
         let (kj, oj) = (norm(&body_of(&kb)), norm(&body_of(&ob)));
         let mut what = Vec::new();

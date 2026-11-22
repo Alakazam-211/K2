@@ -2,6 +2,8 @@
 
 use serde_json::{json, Value as J};
 
+use crate::cli_name;
+
 /// `k2/web.manifest.json`: a static App for a web build (TC-1), deployed
 /// with `k2 app deploy <id> dist --manifest k2/web.manifest.json`.
 pub fn web_manifest(app_id: &str, base: &str) -> String {
@@ -98,7 +100,7 @@ pub fn k2_voice_rs(host: &str) -> String {
     K2_VOICE_RS.replace("{{HOST}}", host).replace("WEBVIEW2_ARGS_LINE", WEBVIEW2_VOICE_ARGS)
 }
 
-const K2_VOICE_RS: &str = r#"//! Calls in this shell's webview. `k2 app init --template tauri --voice` wrote
+const K2_VOICE_RS: &str = concat!(r#"//! Calls in this shell's webview. `"#, cli_name!(), r#" app init --template tauri --voice` wrote
 //! this file; it is yours to change.
 //!
 //! Your page runs Sew's browser voice kit (WebRTC, an AudioWorklet and
@@ -187,7 +189,7 @@ mod tests {
         assert_eq!(decide(Some(&port), PermissionKind::Microphone, origins), PermissionResponse::Deny, "the port counts");
     }
 }
-"#;
+"#);
 
 /// `--voice`: the macOS hardened runtime's entitlements.
 pub fn voice_entitlements() -> Vec<(String, String)> {

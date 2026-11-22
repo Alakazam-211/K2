@@ -24,6 +24,8 @@ use std::sync::Mutex;
 
 use serde::Serialize;
 
+use crate::brand::CLI_NAME;
+
 use super::super::recipe;
 use super::super::HireError;
 use super::format::{self, Expect, Origin, Template};
@@ -575,7 +577,7 @@ fn gather(inp: &SaveInput) -> R<(BTreeMap<String, String>, Vec<Skipped>, Manifes
         crate::wiki::validate_note_id(&id).map_err(|_| TemplateError::new(400, "usage", format!("'{raw}' isn't a wiki note id")))?;
         let rel = format!(".k2/wiki/{id}");
         let Some(text) = read_text(&Path::new(ws).join(&rel)) else {
-            return Err(TemplateError::new(404, "no_note", format!("no wiki note {rel} in this workspace (see: k2 wiki list)")));
+            return Err(TemplateError::new(404, "no_note", format!("no wiki note {rel} in this workspace (see: {CLI_NAME} wiki list)")));
         };
         check_secret(&rel, &text)?;
         if !taken.iter().any(|t| t.rel == format!("wiki/{id}")) {
@@ -626,7 +628,7 @@ pub fn save(inp: &SaveInput) -> R<SaveOutcome> {
     let (mut files, skipped, mut manifest) = gather(inp)?;
     manifest.version = version;
     let toml_text = format!(
-        "# Saved by K2 from an agent's setup (k2 agent template save).\n{}",
+        "# Saved by K2 from an agent's setup ({CLI_NAME} agent template save).\n{}",
         toml::to_string(&manifest).map_err(|e| internal(format!("template.toml: {e}")))?
     );
     check_secret("template.toml", &toml_text)?;
@@ -726,7 +728,7 @@ pub fn remove(id: &str, version: Option<u32>, only_author: Option<&str>) -> R<se
     let _guard = LIBRARY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let have = versions_of(id);
     if have.is_empty() {
-        return Err(TemplateError::new(404, "unknown_template", format!("no saved template '{id}' (see: k2 agent template list)")));
+        return Err(TemplateError::new(404, "unknown_template", format!("no saved template '{id}' (see: {CLI_NAME} agent template list)")));
     }
     let doomed: Vec<(u32, PathBuf)> = match version {
         Some(v) => match have.iter().find(|(n, _)| *n == v) {

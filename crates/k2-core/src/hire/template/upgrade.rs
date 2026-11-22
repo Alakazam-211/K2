@@ -24,6 +24,8 @@ use std::path::Path;
 
 use serde::Serialize;
 
+use crate::brand::CLI_NAME;
+
 use super::super::HireCaller;
 use super::apply::{charter, fill_note, role_body, AnswerPlan};
 use super::format::{sha256_text, FileKind, Origin, Template};
@@ -575,7 +577,7 @@ fn version_steps(pass: &mut Pass<'_>, t: &Template) -> R<()> {
                 "heartbeat",
                 &hb.name,
                 "report",
-                Some(format!("in v{} ({}); not added, since heartbeats cost tokens: add it with k2 heartbeat if you want it", t.meta.version, hb.frequency)),
+                Some(format!("in v{} ({}); not added, since heartbeats cost tokens: add it with {CLI_NAME} heartbeat if you want it", t.meta.version, hb.frequency)),
             ));
         }
     }

@@ -56,6 +56,9 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use serde_json::{json, Value as J};
 
+use crate::brand::CLI_NAME;
+use crate::cli_name;
+
 /// The templates `k2 app init` knows.
 pub const TEMPLATES: &[&str] = &["tauri", "static", "node-api"];
 
@@ -204,7 +207,7 @@ pub fn plan_with(folder: &Path, template: &str, o: &Options) -> Result<Plan, Tem
         let mut p = Plan { template: template.to_string(), folder: folder.display().to_string(), name: e.app_id.clone(), files: Vec::new(), next: Vec::new(), notes: Vec::new() };
         if e.host.is_none() {
             p.notes.push(format!(
-                "{} has no public host yet, so the files say <your-app-host>; give it one (k2 app domain add {} <label>), then put it in (k2 app updates list {} --json prints the URLs)",
+                "{} has no public host yet, so the files say <your-app-host>; give it one ({CLI_NAME} app domain add {} <label>), then put it in ({CLI_NAME} app updates list {} --json prints the URLs)",
                 e.app_id, e.app_id, e.app_id
             ));
         }
@@ -227,7 +230,7 @@ pub fn plan_with(folder: &Path, template: &str, o: &Options) -> Result<Plan, Tem
     let mut p = Plan { template: template.to_string(), folder: folder.display().to_string(), name: base.clone(), files: Vec::new(), next: Vec::new(), notes: Vec::new() };
     if host.is_none() {
         p.notes.push(format!(
-            "this box has no K2 Connect name yet, so the files say <your-app-host> where {app_id}'s host goes; put it in once the App has one (k2 app list shows its URL)"
+            "this box has no K2 Connect name yet, so the files say <your-app-host> where {app_id}'s host goes; put it in once the App has one ({CLI_NAME} app list shows its URL)"
         ));
     }
     let host_s = host.clone().unwrap_or_else(|| "<your-app-host>".into());
@@ -237,9 +240,9 @@ pub fn plan_with(folder: &Path, template: &str, o: &Options) -> Result<Plan, Tem
             new_file(folder, "k2/web.manifest.json", &text::web_manifest(&app_id, &base), &mut p);
             p.next = vec![
                 "build the site (its output folder, like dist/)".into(),
-                format!("k2 app install {app_id} --tunnel   (once: the App and its public URL)"),
-                format!("k2 app deploy {app_id} dist --manifest k2/web.manifest.json"),
-                format!("k2 app list   (its URL: https://{host_s}/)"),
+                format!("{CLI_NAME} app install {app_id} --tunnel   (once: the App and its public URL)"),
+                format!("{CLI_NAME} app deploy {app_id} dist --manifest k2/web.manifest.json"),
+                format!("{CLI_NAME} app list   (its URL: https://{host_s}/)"),
             ];
         }
         _ => {
@@ -251,16 +254,16 @@ pub fn plan_with(folder: &Path, template: &str, o: &Options) -> Result<Plan, Tem
             // install without it), and only where the box has a name.
             p.next = vec![
                 "cd k2/api && npm install".into(),
-                "k2 app sdk add k2/api".into(),
-                format!("k2 app install {app_id}   (once: the App and its port)"),
-                format!("k2 app deploy {app_id} k2/api"),
+                concat!(cli_name!(), " app sdk add k2/api").into(),
+                format!("{CLI_NAME} app install {app_id}   (once: the App and its port)"),
+                format!("{CLI_NAME} app deploy {app_id} k2/api"),
             ];
             if let Some(h) = host.as_deref() {
                 p.next.push(format!(
-                    "k2 app expose {app_id} --tunnel   (when phones or browsers call it: https://{h}/; needs a Connect Pro plan)"
+                    "{CLI_NAME} app expose {app_id} --tunnel   (when phones or browsers call it: https://{h}/; needs a Connect Pro plan)"
                 ));
             }
-            p.next.push(format!("k2 app status {app_id}"));
+            p.next.push(format!("{CLI_NAME} app status {app_id}"));
         }
     }
     Ok(p)
@@ -274,7 +277,7 @@ fn new_file(folder: &Path, rel: &str, content: &str, p: &mut Plan) {
         let note = if same {
             "already there, the same as the template".to_string()
         } else {
-            format!("already there and different: left as it is (k2 app init --template {} --dry-run shows the template's version)", p.template)
+            format!("already there and different: left as it is ({CLI_NAME} app init --template {} --dry-run shows the template's version)", p.template)
         };
         p.files.push(FilePlan { path: rel.to_string(), action: Action::Skipped, note, content: String::new(), before: None });
     } else {
@@ -435,8 +438,8 @@ fn plan_tauri(folder: &Path, t: &Tauri, p: &mut Plan) -> Result<(), TemplateErro
     plan_ci(folder, &project, t.ci, p);
     let token_step = |dl: Option<&str>| {
         format!(
-            "ask K2 Web (the team that runs k2.dev, through your K2 contact) for this App's download-host token ({}), then k2 app updates token {app_id} --file <file>   (never on the command line)",
-            dl.unwrap_or("k2 app updates token <app> names the id it is for")
+            "ask K2 Web (the team that runs k2.dev, through your K2 contact) for this App's download-host token ({}), then {CLI_NAME} app updates token {app_id} --file <file>   (never on the command line)",
+            dl.unwrap_or(concat!(cli_name!(), " app updates token <app> names the id it is for"))
         )
     };
     p.next = match t.existing {
@@ -444,22 +447,22 @@ fn plan_tauri(folder: &Path, t: &Tauri, p: &mut Plan) -> Result<(), TemplateErro
             format!("point the shell's window at the live site: app.windows[0].url = \"https://{host}/\" in src-tauri/tauri.conf.json"),
             "npx tauri signer generate -w ~/.tauri/myapp.key   (on your own Mac; keep the key there, or in the K2 vault)".into(),
             "put the printed public key in src-tauri/tauri.conf.json plugins.updater.pubkey".into(),
-            format!("k2 app updates key {app_id} --set \"$(cat ~/.tauri/myapp.key.pub)\""),
+            format!("{CLI_NAME} app updates key {app_id} --set \"$(cat ~/.tauri/myapp.key.pub)\""),
             token_step(e.dl_id.as_deref()),
-            format!("k2 app updates push {app_id} --channel beta --version <x.y.z> --artifact <platform>=<file>"),
-            format!("k2 app updates promote {app_id} --from beta --to stable"),
-            format!("k2 app status {app_id}"),
+            format!("{CLI_NAME} app updates push {app_id} --channel beta --version <x.y.z> --artifact <platform>=<file>"),
+            format!("{CLI_NAME} app updates promote {app_id} --from beta --to stable"),
+            format!("{CLI_NAME} app status {app_id}"),
         ],
         None => vec![
             "npx tauri signer generate -w ~/.tauri/myapp.key   (on your own Mac; keep the key there, or in the K2 vault)".into(),
             "put the printed public key in src-tauri/tauri.conf.json plugins.updater.pubkey".into(),
-            format!("k2 app install {app_id} --tunnel   (once: the App and its public URL)"),
-            format!("k2 app updates key {app_id} --set \"$(cat ~/.tauri/myapp.key.pub)\""),
+            format!("{CLI_NAME} app install {app_id} --tunnel   (once: the App and its public URL)"),
+            format!("{CLI_NAME} app updates key {app_id} --set \"$(cat ~/.tauri/myapp.key.pub)\""),
             token_step(None),
-            format!("npm run build && k2 app deploy {app_id} dist --manifest k2/web.manifest.json"),
-            format!("k2 app updates push {app_id} --channel beta --version <x.y.z> --artifact <platform>=<file>"),
-            format!("k2 app updates promote {app_id} --from beta --to stable"),
-            format!("k2 app status {app_id}"),
+            format!("npm run build && {CLI_NAME} app deploy {app_id} dist --manifest k2/web.manifest.json"),
+            format!("{CLI_NAME} app updates push {app_id} --channel beta --version <x.y.z> --artifact <platform>=<file>"),
+            format!("{CLI_NAME} app updates promote {app_id} --from beta --to stable"),
+            format!("{CLI_NAME} app status {app_id}"),
         ],
     };
     if t.voice {
@@ -489,7 +492,7 @@ fn plan_ci(folder: &Path, project: &str, facts: Option<&ci::CiFacts>, p: &mut Pl
             p.files.push(FilePlan {
                 path: ".k2/ci.toml".into(),
                 action: Action::Snippet,
-                note: "already there without [release]: K2 doesn't edit it; add this section (k2 study ci-release)".into(),
+                note: concat!("already there without [release]: K2 doesn't edit it; add this section (", cli_name!(), " study ci-release)").into(),
                 content: section,
                 before: None,
             });
@@ -499,7 +502,7 @@ fn plan_ci(folder: &Path, project: &str, facts: Option<&ci::CiFacts>, p: &mut Pl
     new_file(folder, ".k2/signer.toml", &ci::signer_toml(project, &bin, f), p);
     if f.owner.is_none() {
         p.notes.push(format!(
-            ".k2/ci.toml names no seat yet (owner = \"{}\"): put your node owner's host there once this server holds a seat (k2 compute seats), or k2 ci release refuses ci_no_seat",
+            ".k2/ci.toml names no seat yet (owner = \"{}\"): put your node owner's host there once this server holds a seat ({CLI_NAME} compute seats), or {CLI_NAME} ci release refuses ci_no_seat",
             ci::PLACEHOLDER_OWNER
         ));
     }
@@ -520,7 +523,7 @@ const CARGO_STEP: &str =
 
 /// Last: the store checklist.
 const DOCTOR_STEP: &str =
-    "k2 app doctor --store   (before you submit to the App Store or Play: the privacy manifest, usage strings, export answer, Tauri and wry; k2/README.md, Store review)";
+    concat!(cli_name!(), " app doctor --store   (before you submit to the App Store or Play: the privacy manifest, usage strings, export answer, Tauri and wry; k2/README.md, Store review)");
 
 /// The runtime fixes every Tauri App needs: `k2_http.rs`, and the Cargo
 /// lines a manifest lacks (printed: K2 never edits a Cargo.toml). True when
@@ -530,7 +533,7 @@ fn plan_runtime(folder: &Path, p: &mut Plan) -> bool {
     let crate_rel = "src-tauri/Cargo.toml";
     let Ok(crate_toml) = std::fs::read_to_string(folder.join(crate_rel)) else {
         p.notes.push(format!(
-            "no {crate_rel}: when it exists, it needs tauri {} or newer and K2's patched wry (k2/README.md, Runtime fixes; k2 app doctor --store checks)",
+            "no {crate_rel}: when it exists, it needs tauri {} or newer and K2's patched wry (k2/README.md, Runtime fixes; {CLI_NAME} app doctor --store checks)",
             store::TAURI_FLOOR_STR
         ));
         return false;
@@ -736,7 +739,7 @@ pub fn apply(folder: &Path, plan: &Plan) -> Result<Applied, TemplateError> {
             Action::Edit => {
                 let now = std::fs::read_to_string(&path).map_err(|e| err(codes::IO, format!("{}: {e}", f.path)))?;
                 if Some(&now) != f.before.as_ref() {
-                    return Err(err(codes::CHANGED_UNDER_US, format!("{} changed while K2 planned the edit: run k2 app init again", f.path)));
+                    return Err(err(codes::CHANGED_UNDER_US, format!("{} changed while K2 planned the edit: run {CLI_NAME} app init again", f.path)));
                 }
                 std::fs::write(&path, &f.content).map_err(|e| err(codes::IO, format!("{}: {e}", f.path)))?;
                 a.edited.push(f.path.clone());

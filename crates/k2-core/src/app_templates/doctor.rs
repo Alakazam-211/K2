@@ -15,6 +15,8 @@ use serde::Serialize;
 
 use super::store;
 use super::{codes, err, TemplateError};
+use crate::brand::CLI_NAME;
+use crate::cli_name;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -170,7 +172,7 @@ pub fn check(folder: &Path, voice: Option<bool>) -> Result<Report, TemplateError
     // ── iOS ──
     let apple = folder.join("src-tauri/gen/apple");
     if info_ios.is_none() && !apple.is_dir() {
-        c.notes.push("iOS skipped: no src-tauri/Info.ios.plist and no src-tauri/gen/apple (k2 app init --template tauri writes the first; npx tauri ios init the second)".into());
+        c.notes.push(concat!("iOS skipped: no src-tauri/Info.ios.plist and no src-tauri/gen/apple (", cli_name!(), " app init --template tauri writes the first; npx tauri ios init the second)").into());
     } else {
         check_ios(folder, &apple, info_ios.as_deref(), voice, &mut c);
     }
@@ -266,7 +268,7 @@ fn check_ios(folder: &Path, apple: &Path, info_ios: Option<&str>, voice: bool, c
             platform: "ios",
             path: "src-tauri/PrivacyInfo.xcprivacy".into(),
             problem: "no privacy manifest: App Store Connect rejects an upload whose app uses APIs that need a reason (every Rust app reads file metadata) without one".into(),
-            fix: "k2 app init --template tauri writes src-tauri/PrivacyInfo.xcprivacy (it never overwrites a file); then add it to the iOS target (k2/README.md, Store review)".into(),
+            fix: concat!(cli_name!(), " app init --template tauri writes src-tauri/PrivacyInfo.xcprivacy (it never overwrites a file); then add it to the iOS target (k2/README.md, Store review)").into(),
         }),
         Some(m) => {
             let t = std::fs::read_to_string(m).unwrap_or_default();
@@ -284,7 +286,7 @@ fn check_ios(folder: &Path, apple: &Path, info_ios: Option<&str>, voice: bool, c
                         platform: "ios",
                         path: rel(m),
                         problem: format!("the privacy manifest doesn't declare {what}"),
-                        fix: format!("add a dict to NSPrivacyAccessedAPITypes: NSPrivacyAccessedAPIType {cat}, reasons [{reason}] (k2 app init --template tauri --dry-run shows the whole file)"),
+                        fix: format!("add a dict to NSPrivacyAccessedAPITypes: NSPrivacyAccessedAPIType {cat}, reasons [{reason}] ({CLI_NAME} app init --template tauri --dry-run shows the whole file)"),
                     });
                 }
             }
@@ -342,7 +344,7 @@ fn check_ios(folder: &Path, apple: &Path, info_ios: Option<&str>, voice: bool, c
             platform: "ios",
             path: ios_path.clone(),
             problem: "no UIApplicationSceneManifest: an app built with the iOS 27 SDK must use the scene lifecycle, or it won't launch".into(),
-            fix: "add UIApplicationSceneManifest to src-tauri/Info.ios.plist (k2 app init --template tauri --dry-run prints it), with Tauri 2.12.5 or newer".into(),
+            fix: concat!("add UIApplicationSceneManifest to src-tauri/Info.ios.plist (", cli_name!(), " app init --template tauri --dry-run prints it), with Tauri 2.12.5 or newer").into(),
         });
     }
     let export: Option<bool> = texts.iter().find_map(|(_, t)| plist_bool(t, "ITSAppUsesNonExemptEncryption").or_else(|| yaml_bool(t, "ITSAppUsesNonExemptEncryption")));
@@ -410,7 +412,7 @@ fn check_macos(folder: &Path, conf: Option<&str>, info_mac: Option<&str>, c: &mu
                 platform: "macos",
                 path: "src-tauri/Info.plist".into(),
                 problem: format!("no {key}: without it WKWebView has no navigator.mediaDevices, so no call"),
-                fix: format!("add {key} to src-tauri/Info.plist (k2 app init --template tauri --voice prints the keys it lacks)"),
+                fix: format!("add {key} to src-tauri/Info.plist ({CLI_NAME} app init --template tauri --voice prints the keys it lacks)"),
             });
         }
     }
@@ -433,7 +435,7 @@ fn check_macos(folder: &Path, conf: Option<&str>, info_mac: Option<&str>, c: &mu
             platform: "macos",
             path: ent_rel,
             problem: "no com.apple.security.device.audio-input entitlement: a signed, notarised build can't open the microphone".into(),
-            fix: "add com.apple.security.device.audio-input and .camera, and name the file in bundle.macOS.entitlements (k2 app init --template tauri --voice)".into(),
+            fix: concat!("add com.apple.security.device.audio-input and .camera, and name the file in bundle.macOS.entitlements (", cli_name!(), " app init --template tauri --voice)").into(),
         });
     }
 }

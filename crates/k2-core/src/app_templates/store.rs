@@ -16,6 +16,8 @@
 //! - **One HTTP client** (`src-tauri/src/k2_http.rs`): Tauri's HTTP plugin
 //!   builds a new client per request, so every call pays a new handshake.
 
+use crate::cli_name;
+
 /// The Tauri release the template asks for.
 pub const TAURI_FLOOR: (u32, u32, u32) = (2, 12, 5);
 pub const TAURI_FLOOR_STR: &str = "2.12.5";
@@ -136,13 +138,13 @@ const BOOT_TIME: &str = r#"    <!-- Calls: the native call plugin's audio (cpal)
     </dict>
 "#;
 
-const PRIVACY_MANIFEST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+const PRIVACY_MANIFEST: &str = concat!(r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <!-- Apple's privacy manifest. k2 app init --template tauri wrote it; it is
+  <!-- Apple's privacy manifest. "#, cli_name!(), r#" app init --template tauri wrote it; it is
        yours to change. Add it to the iOS target (k2/README.md, Store review).
-       k2 app doctor --store checks it. -->
+       "#, cli_name!(), r#" app doctor --store checks it. -->
   <key>NSPrivacyTracking</key>
   <false/>
   <key>NSPrivacyTrackingDomains</key>
@@ -222,7 +224,7 @@ const PRIVACY_MANIFEST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 {{BOOT_TIME}}  </array>
 </dict>
 </plist>
-"#;
+"#);
 
 /// Android manifest lines: notifications for every App; the mic, camera and
 /// their foreground-service types for calls.
@@ -242,7 +244,7 @@ pub fn android_permissions(voice: bool) -> Vec<String> {
 }
 
 /// `src-tauri/src/k2_http.rs`: the app's one HTTP client.
-pub const K2_HTTP_RS: &str = r#"//! One HTTP client for this app's Rust code. `k2 app init --template tauri`
+pub const K2_HTTP_RS: &str = concat!(r#"//! One HTTP client for this app's Rust code. `"#, cli_name!(), r#" app init --template tauri`
 //! wrote this file; it is yours to change.
 //!
 //! Each reqwest client keeps its own pool of connections. A client built per
@@ -287,7 +289,7 @@ mod tests {
         assert!(std::ptr::eq(super::client(), super::client()));
     }
 }
-"#;
+"#);
 
 /// `k2/README.md`'s runtime and store sections (every Tauri App).
 pub fn store_readme(voice: bool) -> String {

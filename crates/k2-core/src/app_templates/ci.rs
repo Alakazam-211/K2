@@ -23,6 +23,9 @@
 
 use std::fmt::Write as _;
 
+use crate::brand::CLI_NAME;
+use crate::cli_name;
+
 /// The Rust toolchain the template pins (ci.toml `needs` and the signer
 /// policy's: the same string, so the plan matches the policy).
 pub const RUST_NEED: &str = "rust@1.99.1";
@@ -81,13 +84,13 @@ pub fn ci_toml(project: &str, f: &CiFacts) -> String {
     let needs = toml_list(&linux_needs());
     let owner = f.owner.as_deref().unwrap_or(PLACEHOLDER_OWNER);
     let lane = f.lane.as_deref().unwrap_or("ci-standard");
-    let owner_note = if f.owner.is_some() { "this server's seat" } else { "PUT YOUR SEAT'S OWNER HERE (k2 compute seats)" };
+    let owner_note = if f.owner.is_some() { "this server's seat" } else { concat!("PUT YOUR SEAT'S OWNER HERE (", cli_name!(), " compute seats)") };
     format!(
-        r#"# K2 CI and release builds for this Tauri app (k2 app init --template
-# tauri; k2 study ci). Commit this file: K2 reads it at each commit.
+        r#"# K2 CI and release builds for this Tauri app ({CLI_NAME} app init --template
+# tauri; {CLI_NAME} study ci). Commit this file: K2 reads it at each commit.
 version = 1
 
-# Each push you check (k2 ci run; k2 ci watch on): the Linux bundle builds.
+# Each push you check ({CLI_NAME} ci run; {CLI_NAME} ci watch on): the Linux bundle builds.
 [checks.tauri-linux]
 argv = ["bash", "k2/ci/build-linux.sh"]
 needs = {needs}
@@ -95,7 +98,7 @@ os = "linux"
 mem_gb = {MEM_GB}
 timeout_secs = {TIMEOUT_SECS}
 
-# k2 ci release <version>: built twice, on two nodes of your seat on
+# {CLI_NAME} ci release <version>: built twice, on two nodes of your seat on
 # different hosts (L1, V1); the signer signs only when both match.
 [release]
 project = "{project}"
@@ -132,8 +135,8 @@ pub fn signer_toml(project: &str, bin: &str, f: &CiFacts) -> String {
 #   sudo /usr/local/libexec/k2-signer/k2-signer-admin policy-approve {project} < .k2/signer.toml
 # then again with the sha256 it prints. Check the three fingerprints below
 # against what YOUR screens say: controllers = this K2 server
-# (k2 ci signers prints controllerFp), owners = your seat owner's roster
-# key (k2 compute owners, and the owner's own screen). All zeros = not
+# ({CLI_NAME} ci signers prints controllerFp), owners = your seat owner's roster
+# key ({CLI_NAME} compute owners, and the owner's own screen). All zeros = not
 # filled in: such a policy refuses every bundle.
 version = 1
 project = "{project}"
@@ -167,7 +170,7 @@ walls = ["job_user"]
 # Both nodes must make these byte for byte. The .AppImage is rebuilt with
 # the commit's time too, but it carries the build machine's own libraries,
 # so it matches only when both nodes run the same distro release and
-# packages: add it here once your seat's nodes do (k2 ci evidence prints
+# packages: add it here once your seat's nodes do ({CLI_NAME} ci evidence prints
 # what matched).
 dual = ["{b}", "{deb}"]
 independent = ["host"]
@@ -183,7 +186,7 @@ check = "artifact"
 # The updater key: k2-signer-admin generate-key {project} updater prints
 # its public line (RW…); put it here, in src-tauri/tauri.conf.json
 # plugins.updater.pubkey (the base64 of the .pub file), and in
-# k2 app updates key <app> --set.
+# {CLI_NAME} app updates key <app> --set.
 [keys.updater]
 kind = "minisign"
 public = "RW-PUT-THE-UPDATER-PUBLIC-KEY-HERE"
@@ -196,8 +199,8 @@ public = "RW-PUT-THE-UPDATER-PUBLIC-KEY-HERE"
 pub fn build_linux_sh() -> String {
     format!(
         r#"#!/usr/bin/env bash
-# The Linux release build of this Tauri app (k2 app init --template tauri).
-# K2 Compute runs it for k2 ci release / k2 ci run; it runs by hand too
+# The Linux release build of this Tauri app ({CLI_NAME} app init --template tauri).
+# K2 Compute runs it for {CLI_NAME} ci release / {CLI_NAME} ci run; it runs by hand too
 # (Linux, Rust, Node and Tauri's system packages installed).
 #
 # Two nodes must make the same bytes (the signer compares them), so:
@@ -353,7 +356,7 @@ echo "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH"
 pub fn build_macos_sh() -> String {
     format!(
         r#"#!/usr/bin/env bash
-# An UNSIGNED macOS build of this Tauri app (k2 app init --template tauri):
+# An UNSIGNED macOS build of this Tauri app ({CLI_NAME} app init --template tauri):
 # a compile check on a Mac compute node. Release builds for macOS are
 # signed and notarized on your own Mac (Developer ID stays there), so this
 # makes no updater archive. Writes {OUT_DIR}/<bin> and {OUT_DIR}/<bin>.app.zip.
@@ -398,27 +401,27 @@ This box never builds the app: K2 Compute does, on your seat's nodes, and
 your own signer signs. Files: `.k2/ci.toml` (what runs), `k2/ci/build-linux.sh`
 (the build, reproducible), `.k2/signer.toml` (the signer policy's start).
 
-Once (a person): a seat on your node owner's lane (`k2 compute seats
+Once (a person): a seat on your node owner's lane (`{CLI_NAME} compute seats
 request <owner-host>`), each seat node granted to this workspace with
-`--ci`, the signer installed and paired (`k2 ci signer add`), the owner's
+`--ci`, the signer installed and paired (`{CLI_NAME} ci signer add`), the owner's
 roster key trusted at the signer, `.k2/signer.toml` checked and approved
 there (`k2-signer-admin policy-approve {project}`), and the updater key
 made there (`k2-signer-admin generate-key {project} updater`): its public
 line goes in `.k2/signer.toml`, `src-tauri/tauri.conf.json` and
-`k2 app updates key {app_id} --set`.
+`{CLI_NAME} app updates key {app_id} --set`.
 
 Each release:
-1. `k2 ci release 1.2.0 --plan`, then `k2 ci release 1.2.0 --wait`
+1. `{CLI_NAME} ci release 1.2.0 --plan`, then `{CLI_NAME} ci release 1.2.0 --wait`
    (L1 and V1: the same build on two hosts).
-2. `k2 ci evidence <run> --out rel/` (the bundle and the files).
+2. `{CLI_NAME} ci evidence <run> --out rel/` (the bundle and the files).
 3. At the signing machine (each verb as `sudo -n -u _k2sign
    /usr/local/libexec/k2-signer/k2-signer …`): `rehearse {project}` and
    `evidence {project} 1.2.0`, both with the evidence file on stdin, then
    `challenge {project} 1.2.0 <commit> <bin>.AppImage`, `approve` (Touch ID),
    and `sign {project} updater <bin>.AppImage 1.2.0 b64 < <bin>.AppImage > <bin>.AppImage.sig`
    (the `.sig` form Tauri reads).
-4. `k2 app updates push {app_id} --channel beta --version 1.2.0 --artifact linux-x86_64=rel/L1/k2/out/<bin>.AppImage --sig linux-x86_64=<bin>.AppImage.sig --evidence <run>`,
-   then `k2 app updates promote {app_id} --from beta --to stable`.
+4. `{CLI_NAME} app updates push {app_id} --channel beta --version 1.2.0 --artifact linux-x86_64=rel/L1/k2/out/<bin>.AppImage --sig linux-x86_64=<bin>.AppImage.sig --evidence <run>`,
+   then `{CLI_NAME} app updates promote {app_id} --from beta --to stable`.
 
 `rel/` must be inside this repo (a push reads files there only): add it to
 `.gitignore`.

@@ -705,10 +705,13 @@ fn reconcile_live_locked(
     note_live_verdict(tool, matches!(v, identity::Verdict::Mismatch(..)));
     match v {
         identity::Verdict::Match => {
-            // When the live sign-in reaches its time limit (the warnings).
-            let ends = store::parse_meta(tool, &live).sign_in_ends_at;
-            if ends != owner.sign_in_ends_at {
-                update_meta(conn, &owner.id, &MetaUpdate { sign_in_ends_at: Some(ends), ..Default::default() })?;
+            // When the live sign-in reaches its time limit (the warnings),
+            // and when its access token expires: the CLIs renew it in the
+            // live store, so the row follows it here (the list reads an
+            // expired access token from it; field report 2026-11-16).
+            let m = store::parse_meta(tool, &live);
+            if m.sign_in_ends_at != owner.sign_in_ends_at || m.expires_at != owner.expires_at {
+                update_meta(conn, &owner.id, &MetaUpdate { sign_in_ends_at: Some(m.sign_in_ends_at), expires_at: Some(m.expires_at), ..Default::default() })?;
             }
             // Signed in again in a terminal (`/login`) after it had ended: the
             // token is signed in again.
@@ -2524,6 +2527,16 @@ pub fn refresh_error_is_permanent(e: &str) -> bool {
 
 /// Refresh every idle slot that is due. Never the active login, never
 /// under air-gap.
+/// The server default is never refreshed here, with or without a session
+/// on it (field report 2026-11-16 asked for it): K2 can't know that no CLI
+/// holds the tool's live store (sessions on Server default aren't tracked
+/// per login, and a person's own terminal, SSH or cron reads the same
+/// file), and a refresh rotates the refresh token under any that does,
+/// which signs it out (the 2026-11-17 report). An expired access token
+/// there isn't an outage: the next CLI run renews it with the refresh
+/// token, and Claude's sign-in ends at its fixed time limit whether or not
+/// it is refreshed (the warnings tell the owners first). The list says
+/// so ([`super::access`]).
 /// Refresh ownership: the CLI refreshes the login in the live store and
 /// any pinned slot a running session uses (`in_use`); K2 refreshes every
 /// other subscription slot. API keys never refresh.
@@ -2559,11 +2572,23 @@ pub fn keep_warm_with(
         for tool in Tool::SUBSCRIPTION {
             let owner = live_owner(conn, tool)?;
             for e in list_for(conn, tool)? {
+                // The server default: its CLIs renew it (LT-A10), so an
+                // expired access token there is said, never refreshed.
+                if owner.as_deref() == Some(e.id.as_str()) {
+                    if e.state == state::SIGNED_IN && e.expires_at.is_some_and(|x| x <= now_secs) {
+                        crate::log_debug!(
+                            "[llm-accounts] keep-warm {}/{}: skipped (the server default: its access token expired at {}; its CLI renews it the next time it runs)",
+                            tool.as_str(),
+                            e.id,
+                            store::utc_words(e.expires_at.unwrap_or_default())
+                        );
+                    }
+                    continue;
+                }
                 // A token marked "sign in again" holds a refresh token the
                 // vendor refused twice: the wallet stops sending it until a new
                 // sign-in (or a read-back) puts it back to signed in.
-                if owner.as_deref() == Some(e.id.as_str())
-                    || e.state == state::SIGNING_IN
+                if e.state == state::SIGNING_IN
                     || e.state == state::NEEDS_LOGIN
                     || e.is_api_key()
                     || in_use(&e.id)

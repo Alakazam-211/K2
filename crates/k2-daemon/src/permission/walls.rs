@@ -182,7 +182,7 @@ const RECORDING_DM_OTHERS: &[&str] =
 /// and `garden.delete` (walled; K2 presents them too) and the
 /// `garden.access-off` twin (asked only, no wall). Every [`Target::Ask`]
 /// names one of them, never `garden.keep-mine` or a twin.
-pub(crate) const V1_ACTIONS: [&str; 85] = [
+pub(crate) const V1_ACTIONS: [&str; 86] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -329,6 +329,9 @@ pub(crate) const V1_ACTIONS: [&str; 85] = [
     // 0.46.17: turn on CI on K2 Compute for the server (`ciPreview`, the
     // owner's). Its `ci.preview-off` twin is asked only.
     "ci.preview",
+    // 0.46.17 (field report 2026-11-16): a person rechecks the server's
+    // LLM tokens for an agent (`k2 llm tokens refresh` is people only).
+    "llm.tokens-refresh",
     // D1 (0.46.17): a person approves an agent's own review branch, and
     // makes its commit --merge and its plain commit.
     "git.review-approve",
@@ -1084,6 +1087,13 @@ pub(crate) const ROWS: &[Row] = &[
         fixed: &[("mode", "approval")],
         ..row(ask("mail.send-mode", Floor::Admin), code(403, "gated"), "/cli/mail/", ANY)
     },
+    // 0.46.17: `k2 llm tokens refresh` by an agent (people only): a person
+    // rechecks the token it named, or every token.
+    Row {
+        params: &[("token", &[ParamFrom::Body("/id")])],
+        optional: &["token"],
+        ..row(ask("llm.tokens-refresh", Floor::Admin), code(403, "owner_only"), "/cli/llm/accounts/refresh", POST)
+    },
     // 0.46.8: `k2 mail sending <ws> off` by an agent (no "manage hosted
     // mail", or its own workspace with it): any workspace on the server,
     // its own too. Turning off only tightens; a person allows it.
@@ -1700,6 +1710,8 @@ mod tests {
             // and `k2 mail sending <ws> off` by an agent without mail-manage.
             (403, "POST", "/cli/sew/chat/manage/space/create", vec![], Some(json!({"slug":"jobs","app":"jobs"})), json!({"ok":false,"error":{"code":"chat_account_needed","hint":"x","details":{"workspace":"alpha"}}}), "chat.account"),
             (403, "POST", "/cli/mail/config/set", vec![], Some(json!({"workspace":"sales","agentSend":"off"})), json!({"ok":false,"error":{"code":"owner_only","hint":"x","workspace":{"name":"alpha","path":"/a","id":"w"}}}), "mail.stop-sending"),
+            // 0.46.17: an agent's `k2 llm tokens refresh`.
+            (403, "POST", "/cli/llm/accounts/refresh", vec![], Some(json!({"id":"acc_0123"})), json!({"ok":false,"error":{"code":"owner_only","hint":"x"}}), "llm.tokens-refresh"),
             // 0.46.13: `k2 approve request` without the permission.
             (403, "POST", "/cli/approve/request", vec![], Some(json!({"payload_b64":"AA=="})), json!({"ok":false,"error":{"code":"approve_request_off","hint":"x"}}), "approve.request"),
             // 0.46.17: CI on K2 Compute off (any CI verb), and the agent's
@@ -2296,7 +2308,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 85);
+        assert_eq!(V1_ACTIONS.len(), 86);
         // No two rows can claim the same refusal: the longest prefix must
         // decide alone.
         for (i, a) in ROWS.iter().enumerate() {
@@ -2440,6 +2452,24 @@ mod tests {
         .expect("taught");
         assert_eq!(p["command"], "k2 permission request mail.stop-sending target=/Users/x/sales --why \"<what you need it for>\"", "{p}");
         assert_eq!(p["approvers"], "owner or admin", "{p}");
+    }
+
+    /// 0.46.17 (field report 2026-11-16): an agent's `k2 llm tokens refresh`
+    /// is people only; its refusal ends with the recheck card's line, for the
+    /// token it named or for every token, never "It can't be requested". The
+    /// other token changes (switch, sign-in, remove) stay a person's.
+    #[test]
+    fn an_agents_token_refresh_teaches_the_recheck_card() {
+        let refused = json!({"ok":false,"error":{"code":"owner_only","hint":"x"}});
+        let p = teach_of(403, "POST", "/cli/llm/accounts/refresh", &[], Some(json!({"id":"acc_0123"})), refused.clone()).expect("taught");
+        assert_eq!(p["command"], "k2 permission request llm.tokens-refresh token=acc_0123 --why \"<what you need it for>\"", "{p}");
+        assert_eq!(p["approvers"], "owner or admin", "{p}");
+        let p = teach_of(403, "POST", "/cli/llm/accounts/refresh", &[], Some(json!({})), refused.clone()).expect("taught");
+        assert_eq!(p["command"], "k2 permission request llm.tokens-refresh --why \"<what you need it for>\"", "{p}");
+        for path in ["/cli/llm/accounts/switch", "/cli/llm/accounts/login", "/cli/llm/accounts/remove"] {
+            let p = teach_of(403, "POST", path, &[], Some(json!({"id":"acc_0123"})), refused.clone()).expect("a refusal");
+            assert_eq!(p["requestable"], false, "{path}: {p}");
+        }
     }
 
     /// 0.46.9 (Rosson 2026-11-05): a held compute node request (`held:

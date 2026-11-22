@@ -24,6 +24,7 @@
 //! Nothing in this module returns a token to a caller outside it: the
 //! public shapes ([`Entry`], [`store::CredMeta`]) carry metadata only.
 
+pub mod access;
 pub mod auto_next;
 pub mod identity;
 pub mod out_of_usage;

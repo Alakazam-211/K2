@@ -167,6 +167,9 @@ FOR = {"address": "builder/2", "workspaceId": "proj-1", "sessionKey": "tab-p2", 
        "nextStart": {"accountId": "acc_key", "source": "pinned"}}
 state = {"polls": 0, "input": None}
 
+EXPIRED_NOTE = ("Its access token expired on 2026-11-16 11:02 UTC. Its sign-in is still good: "
+                "Claude renews it by itself the next time it runs on this token. Nothing to do.")
+
 def acct(i, label, active, st="signed_in", tool="claude"):
     return {"id": i, "tool": tool, "label": label, "active": active, "state": st, "detail": None,
             "email": "person@example.test", "org": None, "plan": "max", "expiresAt": None,
@@ -174,7 +177,11 @@ def acct(i, label, active, st="signed_in", tool="claude"):
             "usage": {"harness": tool, "plan": "max", "windows": [{"label": "Session", "used": 0.42, "resetsAt": "2026-10-07T12:00:00Z"},
                                                                {"label": "Weekly", "used": 0.1, "resetsAt": "2026-10-10T12:00:00Z"}],
                       "checkedAt": "2026-10-07T10:00:00Z", "status": ""} if active else None,
-            "usageCheckedAt": None}
+            "usageCheckedAt": None,
+            # The server default's access token expired on a good sign-in
+            # (field report 2026-11-16); the others are fine.
+            "access": "expired" if active else "fine",
+            "accessNote": EXPIRED_NOTE if active else None}
 
 LIST = {"tools": [
     {"tool": "claude", "display": "Claude", "supported": True, "activeId": "acc_work", "loginMethod": "temp_home",
@@ -352,6 +359,9 @@ assert_contains "list: unsupported tool" "$out" "Cursor Agent: no tokens yet"
 assert_contains "list: used by" "$out" "used by: workspace builder (in use)"
 assert_contains "list: api token marker" "$out" "API token · billed per token"
 assert_contains "list: star legend" "$out" "* = the server default token."
+assert_contains "list: an expired access token has its own state" "$out" "* work                 access_expired max"
+assert_contains "list: and says who renews it" "$out" "      Its access token expired on 2026-11-16 11:02 UTC. Its sign-in is still good: Claude renews it by itself the next time it runs on this token. Nothing to do."
+assert_contains "list: a fine token stays signed_in" "$out" "  personal             signed_in    max"
 assert_contains "list: every session note" "$out" "Changing the server default token affects every chat that uses Server default on this server."
 assert_absent "list: no wallet word" "$out" "wallet"
 assert_eq "list is a GET" "$(last method)" "GET"
@@ -382,6 +392,7 @@ assert_absent "list --tool filters" "$out" "Claude:"
 out="$(owner llm tokens status claude work)"
 assert_contains "status: label + server default" "$out" "claude work (server default)"
 assert_contains "status: state" "$out" "signed_in"
+assert_contains "status: access" "$out" "  access   expired — Its access token expired on 2026-11-16 11:02 UTC."
 assert_eq "status sends id" "$(tail -n 1 "$WORK/reqs.jsonl" | python3 -c 'import json,sys; print(json.load(sys.stdin)["query"]["id"])')" "work"
 set +e
 owner llm tokens status claude missing >/dev/null 2>"$WORK/err"; rc=$?

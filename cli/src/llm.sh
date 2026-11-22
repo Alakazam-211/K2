@@ -178,14 +178,19 @@ for t in v.get("tools", []):
         print("  auto-rotate: on (Next by itself at 99%%)%s" % (("; last: %s" % auto["lastLine"]) if auto.get("lastLine") else ""))
     for a in accts:
         mark = "*" if a.get("active") else " "
+        # Signed in, but the access token expired: renewed on next use
+        # (accessNote says by whom). Never a token value.
+        st = "access_expired" if a.get("access") == "expired" else (a.get("state") or "-")
         if a.get("kind") == "api_key":
-            line = "  %s %-20s %-12s %s" % (mark, (a.get("label") or "-")[:20], a.get("state") or "-",
+            line = "  %s %-20s %-12s %s" % (mark, (a.get("label") or "-")[:20], st,
                                             "API token · billed per token")
         else:
-            line = "  %s %-20s %-12s %-8s %s" % (mark, (a.get("label") or "-")[:20], a.get("state") or "-",
+            line = "  %s %-20s %-12s %-8s %s" % (mark, (a.get("label") or "-")[:20], st,
                                                  (a.get("plan") or "-")[:8],
                                                  usage_summary(a.get("usage"), a.get("usageCheckedAt")))
         print(line.rstrip())
+        if a.get("access") == "expired" and a.get("accessNote"):
+            print("      %s" % a["accessNote"])
         pins = a.get("pinnedTo") or []
         if pins:
             print("      used by: %s%s" % (", ".join("%s %s" % ("chat" if p.get("scopeKind") == "session" else p.get("scopeKind"), p.get("label") or p.get("scopeId")) for p in pins),
@@ -367,6 +372,8 @@ print("%s %s%s" % (a.get("tool"), a.get("label"), " (server default)" if a.get("
 for k in ("state", "detail", "plan", "email", "org"):
     if a.get(k):
         print("  %-8s %s" % (k, a[k]))
+if a.get("access"):
+    print("  %-8s %s%s" % ("access", a["access"], (" — %s" % a["accessNote"]) if a.get("accessNote") else ""))
 if a.get("signInEndsAt"):
     import time
     when = time.strftime("%Y-%m-%d %H:%M %Z", time.localtime(int(a["signInEndsAt"])))
@@ -479,7 +486,10 @@ else:
 import json, sys
 rows = json.load(sys.stdin).get("accounts") or []
 for a in rows:
-    print("%s %-7s %-20s %s" % ("*" if a.get("active") else " ", a.get("tool"), (a.get("label") or "-")[:20], a.get("state") or "-"))
+    st = "access_expired" if a.get("access") == "expired" else (a.get("state") or "-")
+    print("%s %-7s %-20s %s" % ("*" if a.get("active") else " ", a.get("tool"), (a.get("label") or "-")[:20], st))
+    if a.get("access") == "expired" and a.get("accessNote"):
+        print("    %s" % a["accessNote"])
 '
             ;;
         storage)

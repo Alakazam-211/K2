@@ -20,6 +20,7 @@
 use std::collections::HashMap;
 
 use k2_core::llm_accounts::{self as wallet_core, state, wallet, Entry, Tool, WalletError};
+use k2_core::{cli_name, product_name};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -710,8 +711,19 @@ fn plan_for(e: &Entry) -> Option<String> {
     e.plan.as_deref().map(|p| crate::usage_store::normalize_plan(&e.tool, p))
 }
 
+/// How the token's access token stands now ([`wallet_core::access`]): a CLI
+/// holds it when it is the tool's live login (the server default) or a
+/// running session's pinned token, and then the CLI renews it, not K2.
+fn access_json(e: &Entry, in_use: bool) -> (Value, Value) {
+    let live = e.tool().is_some_and(|t| with_conn(|conn| wallet_core::live_owner(conn, t)).ok().flatten().as_deref() == Some(e.id.as_str()));
+    let v = wallet_core::access::access_of(e, chrono::Utc::now().timestamp(), live || in_use);
+    (json!(v.access.map(|a| a.as_str())), json!(v.note))
+}
+
 fn account_json(e: &Entry, active: bool, human: bool) -> Value {
     let api = e.is_api_key();
+    let in_use = !api && rt::slot_in_use(&e.id);
+    let (access, access_note) = access_json(e, in_use);
     json!({
         "id": e.id,
         "tool": e.tool,
@@ -719,10 +731,15 @@ fn account_json(e: &Entry, active: bool, human: bool) -> Value {
         "kind": e.kind,
         "billedPerToken": api,
         "pinnedTo": pinned_to(e),
-        "inUse": !api && rt::slot_in_use(&e.id),
+        "inUse": in_use,
         "active": active,
         "state": e.state,
         "detail": e.detail,
+        // `fine`, `expired` (signed in; the access token expired and is
+        // renewed on next use: `accessNote` says when and by whom) or
+        // `signed_out`; null for API tokens. Never a token value.
+        "access": access,
+        "accessNote": access_note,
         // Its live sign-in ended but its own saved one is good: one click
         // ("Apply saved sign-in", a switch to it) puts that back.
         "canApply": !api && e.state == state::NEEDS_LOGIN && can_apply(e),
@@ -963,6 +980,20 @@ fn opt_tool(v: &Option<String>) -> Result<Option<Tool>, CliResponse> {
     }
 }
 
+/// An agent's `refresh` (field report 2026-11-16): still a person's, but
+/// not a dead end. With permission cards on the refusal ends with the
+/// `llm.tokens-refresh` card's Ask-with line (a person rechecks it in one
+/// click); and most of the time nothing is needed at all.
+pub const REFRESH_AGENT_HINT: &str = concat!(
+    "Agents and ",
+    product_name!(),
+    " terminals can't recheck tokens; a person can, in one click on a card (with permission cards on, run the Ask with: line below), or on Settings → Language Models → Subs / Tokens. ",
+    "You may not need it: a token whose access token expired (",
+    cli_name!(),
+    " llm tokens list says access_expired) is still signed in and renews itself the next time its CLI runs, and the server default is never refreshed from here (its CLIs renew it). ",
+    "A token that says needs_login needs a person to sign it in again."
+);
+
 // ── Entry ───────────────────────────────────────────────────────────
 
 /// Route a wallet request. Blocking (DB, file IO, PTY spawn): call from
@@ -983,6 +1014,9 @@ pub fn handle(
     };
     if is_post_route(path) && !human {
         audit("llm_accounts.refused", "passport", path, ingress);
+        if path == REFRESH {
+            return refuse(403, "owner_only", REFRESH_AGENT_HINT);
+        }
         return refuse(
             403,
             "owner_only",

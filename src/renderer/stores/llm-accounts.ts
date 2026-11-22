@@ -58,6 +58,11 @@ export interface LlmAccount {
    *  whether that is within the warning window. Additive (0.46.15). */
   signInEndsAt?: number | null
   signInEndsSoon?: boolean
+  /** How its access token stands now: `fine`, `expired` (still signed in;
+   *  renewed on next use, `accessNote` says when and by whom) or
+   *  `signed_out`; null for API tokens. Additive (0.46.17). */
+  access?: 'fine' | 'expired' | 'signed_out' | null
+  accessNote?: string | null
   email?: string | null
   org?: string | null
   plan: string | null

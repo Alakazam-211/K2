@@ -39,6 +39,7 @@
 //! | `focus_groups.rs` | 0.46.17 | `focus-groups.create`, `focus-groups.rename`, `focus-groups.assign` (a person creates, renames or fills a focus group for an agent) |
 //! | `vault_owner_confirm.rs` | 0.46.17 | `vault.owner-confirm` (the owner answers their own terminal's vault confirm from the phone; K2 presents it) |
 //! | `db_read.rs` | 0.46.17 | `db.read` (read-only access to another workspace's database: `k2 db grant <ws> --db <name> --level read`) |
+//! | `llm_refresh.rs` | 0.46.17 | `llm.tokens-refresh` (a person rechecks the server's LLM tokens, as `k2 llm tokens refresh`) |
 //!
 //! Rules for every `apply` (§6.4, C15): call the Settings route's **entry**
 //! with the answerer as the actor, so the route's own floor check runs
@@ -65,6 +66,7 @@ pub(crate) mod gardens;
 pub(crate) mod harness;
 pub(crate) mod heartbeats;
 pub(crate) mod held;
+pub(crate) mod llm_refresh;
 pub(crate) mod mail_stop;
 pub(crate) mod password_reset;
 pub(crate) mod permission_approvers;
@@ -184,6 +186,7 @@ pub(crate) fn all() -> Vec<Registered> {
     out.extend(focus_groups::actions());
     out.extend(db_read::actions());
     out.extend(vault_owner_confirm::actions());
+    out.extend(llm_refresh::actions());
     out
 }
 
@@ -223,6 +226,7 @@ pub(crate) fn not_cardable() -> Vec<&'static NotCardableSpec> {
     out.extend(focus_groups::not_cardable());
     out.extend(db_read::not_cardable());
     out.extend(vault_owner_confirm::not_cardable());
+    out.extend(llm_refresh::not_cardable());
     out
 }
 

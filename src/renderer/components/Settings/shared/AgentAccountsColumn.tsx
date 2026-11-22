@@ -435,6 +435,11 @@ function AccountRow({
               Sign in again by {formatWhen(account.signInEndsAt)}
             </Tag>
           )}
+          {signedIn && account.access === 'expired' && (
+            <Tag tone="muted" title={account.accessNote ?? undefined} data-testid={`llm-access-${account.id}`}>
+              Access token expired
+            </Tag>
+          )}
           {account.addedOutsideK2 && (
             <Tag
               tone="muted"
@@ -459,6 +464,11 @@ function AccountRow({
             </p>
           )}
           {account.detail && account.state !== 'signed_in' && <p className={SETTING_ROW_HINT}>{account.detail}</p>}
+          {signedIn && account.access === 'expired' && account.accessNote && (
+            <p className={SETTING_ROW_HINT} data-testid={`llm-access-note-${account.id}`}>
+              {account.accessNote}
+            </p>
+          )}
           <UsageMeter account={account} limits={limits} refreshing={refreshing} refreshError={refreshError} />
         </div>
       </div>

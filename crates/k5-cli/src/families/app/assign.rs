@@ -164,15 +164,24 @@ mod tests {
         // `db connect` keeps its own: the value goes back to its words.
         assert_eq!(
             take(&["db", "connect", "j", "--read-only", "--assign", "ada"]),
-            taken("", &["db", "connect", "j", "--read-only", "--assign", "ada"])
+            taken(
+                "",
+                &["db", "connect", "j", "--read-only", "--assign", "ada"]
+            )
         );
         assert_eq!(
             take(&["--assign", "ada", "database", "connect", "j", "--new"]),
-            taken("", &["database", "connect", "j", "--new", "--assign", "ada"])
+            taken(
+                "",
+                &["database", "connect", "j", "--new", "--assign", "ada"]
+            )
         );
         assert_eq!(
             take(&["db", "connect", "j", "--assign=ada", "--read-only"]),
-            taken("", &["db", "connect", "j", "--read-only", "--assign", "ada"])
+            taken(
+                "",
+                &["db", "connect", "j", "--read-only", "--assign", "ada"]
+            )
         );
         // Help still wins there, and the other db verbs are the requests'.
         assert_eq!(

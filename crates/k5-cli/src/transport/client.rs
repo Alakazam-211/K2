@@ -846,6 +846,10 @@ pub struct Client {
     pub send_max_time: Option<Duration>,
     /// `K2_CP_MAX_TIME`: `_compute_send POST` only.
     pub compute_post_max_time: Option<Duration>,
+    /// `_vault_sock_call`'s fourth word, its `--max-time` (the phone
+    /// confirm waits up to 330 s): the vault socket only, not
+    /// `_migrate_send`'s.
+    pub vault_sock_max_time: Option<Duration>,
     /// Between tries. [`PAUSE`]; a test may shorten it.
     pub pause: Duration,
     /// `daemon.port` in the K2 home: a refused loopback connect tries the
@@ -933,6 +937,7 @@ impl Client {
             post_max_time: None,
             send_max_time: None,
             compute_post_max_time: None,
+            vault_sock_max_time: None,
             pause: PAUSE,
             port_file: None,
             healer: None,
@@ -1843,7 +1848,9 @@ impl Client {
             Kind::ComputeGet => COMPUTE_GET_MAX_TIME,
             Kind::ComputePost => self.compute_post_max_time.unwrap_or(COMPUTE_POST_MAX_TIME),
             Kind::VaultSockGet | Kind::VaultSockPost if self.migrate_sock => MIGRATE_SOCK_MAX_TIME,
-            Kind::VaultSockGet | Kind::VaultSockPost => VAULT_SOCK_MAX_TIME,
+            Kind::VaultSockGet | Kind::VaultSockPost => {
+                self.vault_sock_max_time.unwrap_or(VAULT_SOCK_MAX_TIME)
+            }
             Kind::PassportProject => PASSPORT_PROJECT_MAX_TIME,
             Kind::Cards => CARDS_TIME,
             Kind::FeedbackOptin => FEEDBACK_MAX_TIME,
@@ -2756,6 +2763,12 @@ mod tests {
         assert_eq!(c.max_time(Kind::ComputePost), Duration::from_secs(3700));
         assert_eq!(c.max_time(Kind::ComputeGet), Duration::from_secs(60));
         assert_eq!(c.max_time(Kind::SendJsonPost), Duration::from_secs(330));
+        // _vault_sock_call's fourth word: the vault socket only.
+        c.vault_sock_max_time = Some(Duration::from_secs(330));
+        assert_eq!(c.max_time(Kind::VaultSockPost), Duration::from_secs(330));
+        assert_eq!(c.max_time(Kind::VaultSockGet), Duration::from_secs(330));
+        c.migrate_sock = true;
+        assert_eq!(c.max_time(Kind::VaultSockPost), Duration::from_secs(600));
     }
 
     #[test]

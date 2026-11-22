@@ -103,7 +103,10 @@ fn help_never_acts() {
         help("scan --help", &["scan", "--help"]),
         // native: onboarding adopt --help
         help("adopt --help", &["adopt", "--help"]),
-        shell(help("adopt, a file, then -h", &["adopt", "CLAUDE.md", "-h"])),
+        shell(help(
+            "adopt, a file, then -h",
+            &["adopt", "CLAUDE.md", "-h"],
+        )),
         // native: onboarding defer --help
         help("defer --help", &["defer", "--help"]),
         help("defer -h", &["defer", "-h"]),

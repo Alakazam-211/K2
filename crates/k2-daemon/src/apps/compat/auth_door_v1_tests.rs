@@ -8,6 +8,48 @@ use super::super::door::{self, publishable_key, Ctx, Ingress, SESSION_COOKIE};
 use super::super::http::{DoorAnswer, DoorRequest};
 use super::*;
 
+/// Set a pass's end in the user store (as time passing would).
+fn set_pass_end(pass: &str, at: i64) {
+    let id = skin::resolve_skin_token(pass).expect("live").id;
+    let c = rusqlite::Connection::open(k2_core::paths::k2_home().join("skin.db")).unwrap();
+    assert_eq!(c.execute("UPDATE tokens SET expires_at = ?1 WHERE id = ?2", rusqlite::params![at, id]).unwrap(), 1);
+}
+
+#[test]
+fn a_pass_that_ends_mid_session_gets_a_clean_refusal_never_a_loop() {
+    let f = fx("auth_life");
+    skin::set_principal_password(&ann(&f), Some("correct horse 1")).unwrap();
+    let pk = publishable_key(&f.svc);
+    let lc = ctx(&f, Ingress::Link, |_| {});
+    let login = || body(&route(&req("POST", "/auth/v1/token?grant_type=password", &[("apikey", &pk)], json!({"email": "ann-auth_life@example.com", "password": "correct horse 1"})), &lc));
+    // A fresh session ends well past supabase-js's refresh window, and a
+    // refresh answers that same end: the client won't ask again soon.
+    let s = login();
+    let (token, rt) = (s["access_token"].as_str().unwrap().to_string(), s["refresh_token"].as_str().unwrap().to_string());
+    assert!(s["expires_in"].as_i64().unwrap() > REFRESH_MARGIN_SECS, "{s}");
+    let r = body(&route(&req("POST", "/auth/v1/token?grant_type=refresh_token", &[("apikey", &pk)], json!({"refresh_token": rt})), &lc));
+    assert_eq!(r["expires_at"], s["expires_at"], "a plain pass never moves its end");
+    // A pass with no end of its own reads as 2100: never refreshed.
+    assert_eq!(door::pass_claims(&f.app, "u", "e", None)["exp"], door::NO_EXPIRY);
+    // Inside the refresh window: a clean "sign in again", not the same answer again.
+    let pass = door::unwrap_pass(&token).to_string();
+    set_pass_end(&pass, now_secs() + 60);
+    let a = route(&req("POST", "/auth/v1/token?grant_type=refresh_token", &[("apikey", &pk)], json!({"refresh_token": rt})), &lc);
+    assert_eq!((a.status, body(&a)["code"].as_str()), (400, Some("session_expired")));
+    // Past its end: every door says so cleanly (no 500), whatever the
+    // wrapped token's own claims still say.
+    set_pass_end(&pass, now_secs() - 10);
+    let a = route(&req("GET", "/auth/v1/user", &[("apikey", &pk), ("Authorization", &format!("Bearer {token}"))], Value::Null), &lc);
+    assert_eq!((a.status, body(&a)["code"].as_str()), (403, Some("bad_jwt")));
+    let a = route(&req("POST", "/auth/v1/token?grant_type=refresh_token", &[("apikey", &pk)], json!({"refresh_token": rt})), &lc);
+    assert_eq!((a.status, body(&a)["code"].as_str()), (400, Some("refresh_token_not_found")));
+    let data = DoorRequest { method: "GET".into(), path: "/rest/v1/x".into(), headers: vec![("apikey".into(), pk.clone()), ("authorization".into(), format!("Bearer {token}"))], ..Default::default() };
+    match door::resolve(&data, &lc) {
+        Err(a) => assert_eq!(a.status, 401),
+        Ok(w) => panic!("an ended pass resolved: {w:?}"),
+    }
+}
+
 fn ctx(f: &Fx, ingress: Ingress, edit: impl FnOnce(&mut super::super::door_config::DoorConfig)) -> Ctx {
     let mut cfg = cfg_for(&f.app, "shop");
     edit(&mut cfg);

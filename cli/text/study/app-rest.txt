@@ -57,6 +57,19 @@ WHO A REQUEST IS
             K2REST001 naming the part, never a wrong answer. The schema
             cache reloads by itself after a migration (on the first request
             that names something new).
+  GAPS, AND WHAT TO DO INSTEAD
+    embeds through a view    select the view's columns, or embed from the
+                             underlying table; or write the join into the
+                             view itself
+    many-to-many embeds      embed the junction table and nest the far
+                             side (orders?select=*,order_items(products(*))),
+                             or an rpc / a view with explicit joins
+    textSearch, overlaps     an rpc that runs the query (it gets your RLS)
+  CHECKED AGAINST
+    /rest/v1 against real PostgREST 12.2.3 (the same fixture, policies and
+    identities on both sides; every answer compared). /auth/v1 against
+    GoTrue's documented shapes and supabase-js's own source, not a running
+    GoTrue.
 
 /auth/v1 (GoTrue's shapes, over K2 App users)
   getUser updateUser({password}) signInWithPassword exchangeCodeForSession

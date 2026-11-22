@@ -51,6 +51,10 @@ pub const PENDING_TTL: Duration = Duration::from_secs(15 * 60);
 pub use super::door::PENDING_PREFIX;
 /// Most pending passes held at once (the oldest go first past it).
 const MAX_PENDING: usize = 10_000;
+/// supabase-js refreshes a session this close to its end (its auto-refresh
+/// ticks every 30 s and acts 3 ticks ahead); a plain pass this close
+/// refuses a refresh rather than answer the same `exp` again.
+pub const REFRESH_MARGIN_SECS: i64 = 120;
 /// The API version K2's answers follow.
 pub const API_VERSION: &str = "2024-01-01";
 
@@ -504,6 +508,13 @@ fn refresh(req: &DoorRequest, ctx: &Ctx) -> DoorAnswer {
             return gerr(400, "refresh_token_not_found", "Invalid Refresh Token: Refresh Token Not Found");
         };
         let (claims, exp) = pass_facts(ctx, raw);
+        // A plain pass can't be extended: inside supabase-js's refresh window
+        // the same answer would only bring the client straight back, so the
+        // last stretch is a clean "sign in again" instead.
+        let left = exp - now_secs();
+        if left < REFRESH_MARGIN_SECS {
+            return gerr(400, "session_expired", format!("this session ends in {left} s and can't be extended: sign in again"));
+        }
         let user = s.principal_id.as_deref().and_then(principal_by_id).map(|p| user_json(&ctx.cfg.app_id, &p)).unwrap_or(Value::Null);
         return session_answer(ctx, raw, claims, exp, None, user);
     }

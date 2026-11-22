@@ -200,7 +200,7 @@
 5 cli crates/k2-daemon/src/voice/transcripts.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 5 cli crates/k2-vault/src/vault.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 5 cli crates/k5-cli/src/families/workspace/agent.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
-5 cli src/renderer/components/Settings/sections/K5CliBetaRow.tsx debt: the command name typed out; use CLI_NAME or cli_name!()
+5 cli src/renderer/components/Settings/sections/K5CliBetaRow.tsx keeper: the k5 beta switch's words name the k5 program (k2-client's cli_install runs it), not this build's command
 4 cli crates/k2-core/src/board/schema.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 4 cli crates/k2-core/src/ci.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 4 cli crates/k2-core/src/ci_monitors.rs debt: the command name typed out; use CLI_NAME or cli_name!()
@@ -297,7 +297,7 @@
 3 cli src-tauri/src/commands/settings.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 3 cli src/renderer/components/Settings/sections/AppsServerSection.tsx debt: the command name typed out; use CLI_NAME or cli_name!()
 3 cli src/renderer/components/Settings/sections/CiPreviewRow.tsx debt: the command name typed out; use CLI_NAME from @/lib/brand; B9
-3 cli src/renderer/components/Settings/sections/GeneralSection.tsx debt: the command name typed out; use CLI_NAME or cli_name!()
+3 cli src/renderer/components/Settings/sections/GeneralSection.tsx keeper: the k5 beta switch's search entry names the k5 program (k2-client's cli_install runs it), not this build's command
 3 cli src/renderer/lib/context-stack.ts debt: the command name typed out; use CLI_NAME or cli_name!()
 3 cli src/renderer/lib/published-subdomains.ts debt: the command name typed out; use CLI_NAME or cli_name!()
 2 cli crates/k2-client/src/cli_install.rs debt: the command name typed out; use CLI_NAME or cli_name!()
@@ -582,7 +582,7 @@
 1 cli src/renderer/lib/harness-missing.ts debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli src/renderer/lib/product-feedback.ts debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli src/renderer/lib/thread-compose-attachments.ts debt: the command name typed out; use CLI_NAME or cli_name!()
-1 cli src/renderer/lib/thread-reply.ts debt: the command name typed out; use CLI_NAME or cli_name!()
+1 cli src/renderer/lib/thread-reply.ts keeper: stored; the first build's Thread reply header, parsed in messages that build wrote (they always say k2)
 1 cli src/renderer/lib/zen/zen-source-ask.ts debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli src/renderer/stores/active-agents.ts debt: the command name typed out; use CLI_NAME or cli_name!()
 17 value src/renderer/components/Wiki/WikiPage.tsx keeper: wire+inert; the wiki index's scope (daemon); the page's own view mode
@@ -595,7 +595,7 @@
 2 value crates/k5-cli/src/families/agent/set.rs keeper: stored; the agent mode (--mode, settings.rs:26), as the daemon reads it
 5 value crates/k2-core/src/overlay/doc.rs keeper: stored+wire; the Thread sender, login and via; a collected line's origin
 5 value src/renderer/components/Help/HelpExplorer.tsx keeper: stored; the CLI catalog's tool key
-5 value src/renderer/components/Help/cli-explorer.ts debt: command (2 lines); B9; keeps: stored; the CLI catalog's tool key
+5 value src/renderer/components/Help/cli-explorer.ts keeper: stored; the CLI catalog's tool key (cli-catalog.generated.json)
 5 value src/renderer/components/Thread/systemNotice.fixtures.ts keeper: wire; the Thread system author's login, from and via
 5 value src/renderer/components/Wiki/wiki-api.ts keeper: wire+inert; the wiki index's scope (daemon); the page's own view mode
 4 value cli/src/mail.sh keeper: wire+outside; the mail certificate's owner and ipStrategySetBy in the daemon's JSON (mail/defaults.rs:1665); Stalwart's app password label, the daemon's default_label (mail/app_password.rs:125)
@@ -640,7 +640,7 @@
 2 value crates/k2-daemon/src/sql/pgmove/real_move.rs keeper: outside; Postgres, the schema's name
 2 value crates/k2-daemon/src/wiki_routes.rs keeper: wire; the wiki index's scope query
 2 value src/renderer/components/AgentPane/inbox-browser.ts keeper: wire; the chat-about stamp's kind, [k2 inboxID:...]
-2 value src/renderer/components/Settings/sections/GeneralSection.tsx debt: command (2 lines); B9
+2 value src/renderer/components/Settings/sections/GeneralSection.tsx keeper: inert; a search keyword, the k5 program's name for the k5 beta switch
 2 value src/renderer/components/Settings/sections/SewSection.tsx keeper: wire; the Sew identity the daemon reads
 2 value src/renderer/components/Settings/sections/ZenWidgetData.tsx keeper: wire; madeBy, from the Garden data JSON
 2 value src/renderer/components/Settings/sections/sew-api.ts keeper: wire; the Sew identity the daemon reads

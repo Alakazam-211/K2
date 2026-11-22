@@ -16,6 +16,13 @@ export interface DockRect {
   height: number
 }
 
+/** The appearance in native units: the corner radius in window px (CSS px
+ *  times the app zoom). */
+export function nativeAppearance(a: DockAppearance, zoom: number): DockAppearance {
+  const z = Number.isFinite(zoom) && zoom > 0 ? zoom : 1
+  return z === 1 ? a : { ...a, cornerRadius: a.cornerRadius * z }
+}
+
 /** Edges to whole device pixels (not origin and size separately). */
 export function snapRect(r: DockRect, dpr: number): DockRect {
   const scale = Number.isFinite(dpr) && dpr > 0 ? dpr : 1

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { dockAppearance, parseCssColor, sameAppearance, snapRect } from './dockGeometry'
+import { dockAppearance, nativeAppearance, parseCssColor, sameAppearance, snapRect } from './dockGeometry'
 
 describe('snapRect', () => {
   it('rounds edges to device pixels at 2x (half points survive)', () => {
@@ -104,5 +104,15 @@ describe('dockAppearance', () => {
     expect(sameAppearance(null, a)).toBe(false)
     expect(sameAppearance({ ...a }, a)).toBe(true)
     expect(sameAppearance({ ...a, cornerRadius: 4 }, a)).toBe(false)
+  })
+})
+
+describe('nativeAppearance', () => {
+  it('scales the corner radius by the app zoom (window px), and nothing else', () => {
+    const a = { background: [10, 20, 30, 255] as [number, number, number, number], cornerRadius: 16, corners: [false, false, true, true] as [boolean, boolean, boolean, boolean] }
+    expect(nativeAppearance(a, 0.9)).toEqual({ ...a, cornerRadius: 14.4 })
+    expect(nativeAppearance(a, 1.25)).toEqual({ ...a, cornerRadius: 20 })
+    expect(nativeAppearance(a, 1)).toBe(a)
+    expect(nativeAppearance(a, Number.NaN)).toBe(a)
   })
 })

@@ -23,7 +23,8 @@ import {
   type BrowserFace,
   type FrozenFrame,
 } from './browserFreeze'
-import { dockAppearance, sameAppearance, snapRect, type DockAppearance } from './dockGeometry'
+import { dockAppearance, nativeAppearance, sameAppearance, snapRect, type DockAppearance } from './dockGeometry'
+import { appZoom } from '@/lib/app-zoom'
 import { cornerRadius, freezesInUnderlay, pageLayersSync, type PageMode } from '@/lib/page-layers'
 import { underlayActive, useBrowserLayeringStore, useBrowserUnderlay } from '@/stores/browser-layering'
 
@@ -346,11 +347,23 @@ export function BrowserPane({
     return snapRect({ x: r.x, y: r.y, width: r.width, height: r.height }, window.devicePixelRatio || 1)
   }, [])
 
-  // Background + rounded corners last sent to the native view.
+  /** The dock as measured, not snapped: the underlay's PageLayers snap
+   *  after their zoom conversion. */
+  const measureRawRect = useCallback((): Rect | null => {
+    const el = contentRef.current
+    if (!el) return null
+    const r = el.getBoundingClientRect()
+    if (r.width <= 0 || r.height <= 0) return null
+    return { x: r.x, y: r.y, width: r.width, height: r.height }
+  }, [])
+
+  // Background + rounded corners last sent to the native view, in native
+  // units: the radius in window px (CSS px times the app zoom), or the
+  // page's own corner leaves a sliver under or over the pane's.
   const appearanceRef = useRef<DockAppearance | null>(null)
   const readAppearance = useCallback((): DockAppearance | null => {
     const el = contentRef.current
-    return el ? dockAppearance(el) : null
+    return el ? nativeAppearance(dockAppearance(el), appZoom()) : null
   }, [])
 
   const createView = useCallback(async (targetUrl: string): Promise<void> => {
@@ -601,14 +614,16 @@ export function BrowserPane({
       windowId: itemId,
       element: () => contentRef.current,
       measure: () => {
-        const rect = measureRect()
+        const rect = measureRawRect()
         if (!rect) return null
+        // PageLayers wants corners in CSS px (it scales once, at the end);
+        // the appearance holds them in window px.
         const look = appearanceRef.current
-        return look ? { ...rect, radius: cornerRadius(look.cornerRadius, look.corners) } : rect
+        return look ? { ...rect, radius: cornerRadius(look.cornerRadius / appZoom(), look.corners) } : rect
       },
       mode: () => layerModeRef.current,
     })
-  }, [underlay, created, faceHidden, itemId, measureRect])
+  }, [underlay, created, faceHidden, itemId, measureRawRect])
   useEffect(() => {
     if (underlay && created) pageLayersSync.now()
   }, [underlay, created, face])

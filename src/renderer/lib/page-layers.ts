@@ -145,7 +145,25 @@ export function buildPageLayers(
     pages: input.pages.map((p) => (p.rect ? { ...p, rect: { ...p.rect, ...css(p.rect) } } : p)),
     claims: input.claims.map((c) => (c.area === 'fullscreen' ? c : { ...c, area: css(c.area) })),
   })
-  return { ...toWindowPx(set, zoom), viewport: input.viewport }
+  const out = toWindowPx(set, zoom)
+  // Pages' edges on the device-pixel grid in window px, AFTER the zoom
+  // (at 110 % a CSS-grid edge is off the window grid). Claims and minus
+  // are snapped outward natively.
+  return {
+    ...out,
+    viewport: input.viewport,
+    layers: out.layers.map((l) => ({ ...l, rect: snapToDevice(l.rect, input.dpr) })),
+  }
+}
+
+/** Edges (not origin and size apart) to whole device pixels. */
+export function snapToDevice<T extends PageShape>(s: T, dpr: number): T {
+  const k = Number.isFinite(dpr) && dpr > 0 ? dpr : 1
+  const left = Math.round(s.x * k) / k
+  const top = Math.round(s.y * k) / k
+  const right = Math.round((s.x + s.width) * k) / k
+  const bottom = Math.round((s.y + s.height) * k) / k
+  return { ...s, x: left, y: top, width: Math.max(0, right - left), height: Math.max(0, bottom - top) }
 }
 
 function scaleCorners(c: Corners | undefined, z: number): Corners | undefined {

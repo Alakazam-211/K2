@@ -165,6 +165,28 @@ describe('app zoom: everything is sent in window px (the UI view points)', () =>
   })
 })
 
+describe('device-pixel snap after the zoom', () => {
+  it('at 110 % page edges land on the 2x device grid in window px', () => {
+    const onGrid = (v: number): boolean => Math.abs(v * 2 - Math.round(v * 2)) < 1e-9
+    for (const measuredScale of [1, 1.1]) {
+      const set = buildPageLayers({
+        parentWindow: 'main',
+        epoch: 'e1',
+        generation: 1,
+        dpr: 2,
+        viewport: [1320, 990],
+        zoom: 1.1,
+        measuredScale,
+        pages: [{ windowId: 'a', order: 1, rect: { x: 100.3, y: 40.7, width: 333.3, height: 500.45, radius: 16 }, mode: 'live', element: null }],
+        claims: [],
+      })
+      const r = set.layers[0].rect
+      for (const edge of [r.x, r.y, r.x + r.width, r.y + r.height]) expect(onGrid(edge), `edge ${edge} (measured ${measuredScale})`).toBe(true)
+      expect(r.radius).toBeCloseTo(17.6, 9)
+    }
+  })
+})
+
 describe('face rules in underlay', () => {
   it('only dialogs, drags and motion freeze a page', () => {
     expect(freezesInUnderlay(claim(1, 'menu', 'fullscreen'))).toBe(false)

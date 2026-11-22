@@ -149,7 +149,9 @@ fn app_user_rooms_ok_as_the_shell_does() {
             // native: app user rooms-ok --json
             one(
                 "rooms-ok --json: asked, exit 2",
-                &["user", "rooms-ok", "qa1", "tess", "--json", "--assign", "ada"],
+                &[
+                    "user", "rooms-ok", "qa1", "tess", "--json", "--assign", "ada",
+                ],
                 ok(ASKED),
                 2,
             ),

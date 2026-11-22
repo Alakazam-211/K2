@@ -219,7 +219,9 @@ mod tests {
         assert_eq!(p(&["a", "b", "c"]), Some(Err(Stop::usage(USAGE))));
         assert_eq!(
             p(&["a", "b", "--assign", "ada"]),
-            Some(Err(Stop::usage(format!("Unknown flag: --assign ({USAGE})"))))
+            Some(Err(Stop::usage(format!(
+                "Unknown flag: --assign ({USAGE})"
+            ))))
         );
         assert_eq!(p(&["a", "-h"]), None);
         assert_eq!(p(&["a", "b", "c", "-h"]), Some(Err(Stop::usage(USAGE))));

@@ -1486,6 +1486,31 @@ pub fn heal(rig: &Rig) -> Reply {
     }
 }
 
+/// A row with `-h` or `--help` after a bare `--`, as the front routes it:
+/// the words after `--` are the command's or the text, so the family
+/// answers when the front's help scan stops at `--`
+/// ([`k5_cli::front::route`] sends `noun args…` to the family). Where the
+/// front still reads a help word anywhere, it hands the line to the shell
+/// and both sides are the shell's ([`Compare::Shell`]). Any other row is
+/// left as it is.
+pub fn as_the_front_routes(noun: &str, c: Case) -> Case {
+    let mut after = c.args.iter().skip_while(|w| **w != "--").skip(1);
+    if !after.any(|w| matches!(*w, "-h" | "--help")) {
+        return c;
+    }
+    let line: Vec<std::ffi::OsString> = std::iter::once(noun)
+        .chain(c.args.iter().copied())
+        .map(std::ffi::OsString::from)
+        .collect();
+    match k5_cli::front::route(&line) {
+        k5_cli::front::Route::Family(_) => c,
+        _ => Case {
+            compare: Compare::Shell,
+            ..c
+        },
+    }
+}
+
 /// The passport's settings (the stub's port), and `extra`.
 pub fn with_passport(extra: &[(&'static str, &str)]) -> Vec<(&'static str, String)> {
     [

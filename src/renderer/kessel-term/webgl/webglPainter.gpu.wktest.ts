@@ -118,9 +118,16 @@ async function bundle(): Promise<string> {
   return out.outputFiles[0].text
 }
 
-/** Resident MB of this WebKit build's processes, by kind. */
-function webkitRss(): Record<string, number> {
-  const lines = execFileSync('ps', ['-axo', 'rss=,command='], { encoding: 'utf8' }).split('\n')
+/** Resident MB of this WebKit build's processes, by kind. Some sandboxes
+ *  (compute nodes among them) refuse `ps`; the sample then says why. It is
+ *  printed, never asserted: the gate is the context/buffer checks. */
+function webkitRss(): Record<string, number | string> {
+  let lines: string[]
+  try {
+    lines = execFileSync('ps', ['-axo', 'rss=,command='], { encoding: 'utf8' }).split('\n')
+  } catch (e) {
+    return { unavailable: e instanceof Error ? e.message : String(e) }
+  }
   const out: Record<string, number> = {}
   for (const line of lines) {
     if (!/ms-playwright\/webkit|WebKit\.framework/.test(line)) continue
@@ -150,7 +157,7 @@ describe('the WebGL terminal painter in WebKit gives its GPU memory back', () =>
     page.on('pageerror', (e) => errors.push(String(e)))
     await page.setContent('<!doctype html><html><body></body></html>')
     await page.addScriptTag({ content: await bundle() })
-    const rss: Array<[string, Record<string, number>]> = [['start', webkitRss()]]
+    const rss: Array<[string, Record<string, number | string>]> = [['start', webkitRss()]]
 
     const parked = (await page.evaluate('window.gpu.parkPanes(40)')) as {
       live: number

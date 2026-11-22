@@ -47,6 +47,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+use crate::cli_name;
+
 /// The leaves of a delegated daemon unit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Leaves {
@@ -362,8 +364,8 @@ pub fn disarm_with(cg: &dyn Cg, base: &Path) -> Result<bool, String> {
 }
 
 /// The refusal when box prep predates the restart guard.
-pub const UNGUARDED: &str = "the daemon's unit has Delegate=yes but no restart guard (box prep before 0.46.16): \
-     the daemon keeps the unit whole so it can restart. Re-run k2 app box prepare --cores-mem-min <MiB> (owner), then restart the daemon";
+pub const UNGUARDED: &str = concat!("the daemon's unit has Delegate=yes but no restart guard (box prep before 0.46.16): \
+     the daemon keeps the unit whole so it can restart. Re-run ", cli_name!(), " app box prepare --cores-mem-min <MiB> (owner), then restart the daemon");
 
 /// Set up the leaves under `fs_root` (normally `/sys/fs/cgroup`) for the
 /// process cgroup `self_path`, owned by `uid`, given the unit's restart
@@ -391,7 +393,7 @@ pub fn setup_with(
     }
     let owner = cg.owner(&base).map_err(|e| format!("{}: {e}", base.display()))?;
     if owner != uid {
-        return Err("the daemon's unit isn't delegated to it (box prep: k2 app box prepare --cores-mem-min, then restart the daemon)".into());
+        return Err(concat!("the daemon's unit isn't delegated to it (box prep: ", cli_name!(), " app box prepare --cores-mem-min, then restart the daemon)").into());
     }
     if guard == Guard::None {
         // An older daemon may have split the unit already: undo the part

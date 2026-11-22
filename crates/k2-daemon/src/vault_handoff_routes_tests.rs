@@ -682,6 +682,61 @@ fn a_cross_server_key_without_sites_lands_as_a_file_the_agent_reads() {
     });
 }
 
+/// `always` on an accept adds the sender to the agent's accept-from list,
+/// so it takes that list's floor: a Member login with `always` is refused
+/// with `role_required` (nothing decided, nothing added); an Admin login is
+/// added; a Member's plain accept works as before.
+#[test]
+fn decide_always_takes_an_owner_or_admin_login() {
+    with_temp_home(|| {
+        let _db = k2_core::db::scoped_for_test();
+        let v = crate::vault::ensure_test_vault();
+        let (sales, ops) = (workspace("sales"), workspace("ops"));
+        link(&sales, &ops);
+        let member = VaultCaller { actor: Actor::Login { username: "mia".into(), role: Role::Member }, channel: Channel::Login, session_id: None };
+        let admin = VaultCaller { actor: Actor::Login { username: "lee".into(), role: Role::Admin }, channel: Channel::Login, session_id: None };
+        let sales_agent = Actor::Agent(AgentActor { workspace_id: sales.id.clone(), session_id: None, shell: false, vault_manage: false });
+        let listed = || -> usize {
+            let (st, j, raw) = call_p(&v, ACCEPT_FROM, &owner(), Value::Null, HashMap::from([("workspace".to_string(), ops.id.clone())]));
+            assert_eq!(st, 200, "{raw}");
+            j["entries"].as_array().expect("entries").len()
+        };
+        let pending = |name: &str| -> String {
+            put(&v, &sales, name, &sentinel(), &sales_agent);
+            let (st, j, raw) = call(&v, SEND, &agent(&sales), json!({ "name": name, "to": ops.name }));
+            assert_eq!(st, 200, "{raw}");
+            assert_eq!(j["status"], "pending", "{raw}");
+            j["deliveryId"].as_str().expect("id").to_string()
+        };
+
+        // A Member with `always`: refused, the delivery stays pending and the
+        // sender is not added.
+        let first = pending("STRIPE_KEY");
+        let (st, j, _) = call(&v, DECIDE, &member, json!({ "id": first, "action": "accept", "always": true }));
+        assert_eq!((st, code(&j)), (403, "role_required"), "{j}");
+        assert_eq!(listed(), 0, "a refused always adds nothing");
+        assert_eq!(v.handoff_get(&first, "in").expect("row").status, "pending", "a refused always decides nothing");
+
+        // An Admin with `always`: accepted and added.
+        let (st, j, raw) = call(&v, DECIDE, &admin, json!({ "id": first, "action": "accept", "always": true }));
+        assert_eq!(st, 200, "{raw}");
+        assert_eq!(j["delivery"]["status"], "landed", "{raw}");
+        assert_eq!(j["alwaysAdded"], format!("ws:{}", sales.id), "{raw}");
+        assert_eq!(listed(), 1);
+
+        // A Member's plain accept is unchanged (the list goes back to empty
+        // first, so the next send pends).
+        let (st, _, raw) = call(&v, ACCEPT_FROM, &owner(), json!({ "workspace": ops.id, "sender": sales.name, "action": "remove" }));
+        assert_eq!(st, 200, "{raw}");
+        assert_eq!(listed(), 0);
+        let second = pending("OPENAI_KEY");
+        let (st, j, raw) = call(&v, DECIDE, &member, json!({ "id": second, "action": "accept" }));
+        assert_eq!(st, 200, "{raw}");
+        assert_eq!(j["delivery"]["status"], "landed", "{raw}");
+        assert_eq!(listed(), 0, "a plain accept adds no one");
+    });
+}
+
 /// The accept-from list takes the vault.accept-from card's floor (Admin):
 /// a Member login is refused with `role_required` on add and remove and
 /// nothing changes; an Admin login and the owner token edit it.

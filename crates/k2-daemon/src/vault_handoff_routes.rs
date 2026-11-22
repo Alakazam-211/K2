@@ -814,6 +814,18 @@ fn decide(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &str) -> Re
         audit(&stamp, &format!("deny {} {id}: {}", b.action, e.code), ingress);
         return Err(e);
     }
+    // `always` also adds the sender to this agent's accept-from list, so it
+    // takes that list's floor (Admin): the owner token, an Owner or an Admin
+    // login. A Member is refused before anything is decided; a plain accept
+    // or decline is unchanged.
+    if b.always && c.actor.is_member() {
+        let e = VaultError::forbidden(
+            "role_required",
+            "always (adding the sender to who this agent accepts secrets from) takes an Owner or Admin login (or the owner); accept without it",
+        );
+        audit(&stamp, &format!("deny {} always {id}: {}", b.action, e.code), ingress);
+        return Err(e);
+    }
     let before = vault.handoff_get(id, "in")?;
     let d = Decision { action: b.action.clone(), as_name: b.as_name.clone(), replace: b.replace };
     let got = match vault.handoff_decide(id, &d, &c.actor) {

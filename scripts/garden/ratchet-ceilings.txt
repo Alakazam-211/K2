@@ -5,6 +5,7 @@
 # dispatcher.rs +19, K2's ruling: db cluster archive's route arm (POST /cli/db/clusters/archive); the dispatcher split after 0.46.17 brings it down.
 # dispatcher.rs +6, K2's ruling: focus-group arm, body in focus_group_routes; the dispatcher split after 0.46.17 brings it down.
 # dispatcher.rs +2, K2's ruling: kit explain arm, body in kit_explain_route; the dispatcher split after 0.46.17 brings it down.
+# client.rs, with K2's OK: listed at its size; split planned after 0.46.17: core, proxy/tunnel, socket paths.
 16916 crates/k2-daemon/src/routes/dispatcher.rs
 8569 src/renderer/stores/tabs.ts
 7642 crates/k2-core/src/skin.rs
@@ -16,6 +17,7 @@
 4901 crates/k2-daemon/src/project_group_routes.rs
 4896 crates/k2-daemon/src/compute_routes.rs
 4358 crates/k2-daemon/src/skin_routes.rs
+4270 crates/k5-cli/src/transport/client.rs
 4797 crates/k2-vault/src/vault.rs
 4483 crates/k2-daemon/src/sql/mod.rs
 4404 crates/k2-daemon/src/feedback_routes.rs

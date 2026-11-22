@@ -675,7 +675,9 @@ print("database cap: %s%s" % ("unlimited (0)" if cap == 0 else out["cap"], " (th
 # answer (`--json` raw).
 _db_named_post() {
     local body="$1" as_json="$2" what="$3" path="${4:-/cli/db/clusters}"
-    _compute_split "$(K2_CP_MAX_TIME=900 _compute_send POST "$path" "$body")"
+    # A restore or a drill waits for the whole replay (the daemon caps it at
+    # 6 h): those calls set _K2_DB_MAX_TIME.
+    _compute_split "$(K2_CP_MAX_TIME="${_K2_DB_MAX_TIME:-900}" _compute_send POST "$path" "$body")"
     if [ "$_CP_STATUS" != "200" ]; then
         printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
 raw=sys.stdin.read()
@@ -1200,7 +1202,7 @@ else:
                     c_name="${1:-}"; shift 2>/dev/null || true
                     while [ $# -gt 0 ]; do case "$1" in --json) as_json=true; shift ;; *) _db_err "usage" "unexpected '$1' — k2 db cluster $c_op <name>"; exit 2 ;; esac; done
                     case "$c_name" in ""|-*) _db_err "usage" "k2 db cluster $c_op <name>"; exit 2 ;; esac
-                    _db_named_post "$(_compute_json K2_CJ_op="$c_op" K2_CJ_project="$(_compute_ws "")" K2_CJ_name="$c_name")" "$as_json" "pitr-$c_op" ;;
+                    _K2_DB_MAX_TIME=21900 _db_named_post "$(_compute_json K2_CJ_op="$c_op" K2_CJ_project="$(_compute_ws "")" K2_CJ_name="$c_name")" "$as_json" "pitr-$c_op" ;;
                 restore|restore-drill)
                     c_name="${1:-}"; shift 2>/dev/null || true
                     local c_to="" c_as=""
@@ -1217,10 +1219,10 @@ else:
                     case "$c_name" in ""|-*) _db_err "usage" "k2 db cluster $c_op <name>"; exit 2 ;; esac
                     if [ "$c_op" = restore ]; then
                         [ -n "$c_to" ] && [ -n "$c_as" ] || { _db_err "usage" "k2 db cluster restore <name> --to <time> --as <new-name> (a new cluster beside the old one; never in place)"; exit 2; }
-                        _db_named_post "$(_compute_json K2_CJ_op=restore K2_CJ_project="$(_compute_ws "")" K2_CJ_name="$c_name" K2_CJ_to="$c_to" K2_CJ_as="$c_as")" "$as_json" pitr-restore
+                        _K2_DB_MAX_TIME=21900 _db_named_post "$(_compute_json K2_CJ_op=restore K2_CJ_project="$(_compute_ws "")" K2_CJ_name="$c_name" K2_CJ_to="$c_to" K2_CJ_as="$c_as")" "$as_json" pitr-restore
                     else
                         [ -z "$c_as" ] || { _db_err "usage" "restore-drill takes no --as (the drill cluster is <name>_drill, removed after)"; exit 2; }
-                        _db_named_post "$(_compute_json K2_CJ_op=restore-drill K2_CJ_project="$(_compute_ws "")" K2_CJ_name="$c_name" K2_CJ_to="$c_to")" "$as_json" pitr-drill
+                        _K2_DB_MAX_TIME=21900 _db_named_post "$(_compute_json K2_CJ_op=restore-drill K2_CJ_project="$(_compute_ws "")" K2_CJ_name="$c_name" K2_CJ_to="$c_to")" "$as_json" pitr-drill
                     fi ;;
                 drop-drill)
                     c_name="${1:-}"; shift 2>/dev/null || true

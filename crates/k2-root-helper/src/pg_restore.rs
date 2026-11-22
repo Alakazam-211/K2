@@ -30,7 +30,7 @@ use crate::apps::put;
 use crate::ctx::{Ctx, Fail, HResult};
 use crate::pg_major::{
     as_postgres, create_named_layout, lsclusters, named_json, named_of, named_state, named_wait_online, present,
-    read_small, real_dir, save_named_state, sql_at, subdir, system_id, CHMOD, DD, DU, FIND,
+    put_at, read_small, real_dir, save_named_state, sql_at, subdir, system_id, CHMOD, DD, DU, FIND,
 };
 
 pub const PG_DROPCLUSTER: &str = "/usr/bin/pg_dropcluster";
@@ -342,6 +342,12 @@ pub fn restore_to(ctx: &Ctx, m: PgMajor, name: &ClusterName, new: &ClusterName, 
             .dir(&format!("{}/conf.d", named::etc_dir(m.get(), nn)))
             .map_err(|e| Fail::io_err("open the cluster's conf.d", e))?;
         put(ctx, &d, pr::RESTORE_CONF_FILE, pr::recovery_conf(m.get(), src, target).as_bytes())?;
+        // The start waits for the replay, however long (never a systemd or
+        // pg_ctlcluster timeout that stops a cluster still replaying).
+        let etc = ctx.dir(&named::etc_dir(m.get(), nn)).map_err(|e| Fail::io_err("open the cluster's config dir", e))?;
+        put(ctx, &etc, pr::PG_CTL_CONF_FILE, pr::restore_pg_ctl_conf().as_bytes())?;
+        put_at(ctx, &restore_dropin_path(m.get(), nn), pr::restore_dropin().as_bytes())?;
+        ctx.run_ok(SYSTEMCTL, &["daemon-reload"], None)?;
         let mut rs = restores_state(ctx)?;
         rs.restores.retain(|r| !(r.major == m.get() && r.name == nn));
         rs.restores.push(RestoreRec {
@@ -377,9 +383,9 @@ pub fn restore_to(ctx: &Ctx, m: PgMajor, name: &ClusterName, new: &ClusterName, 
             m.get()
         ))
     };
-    if let Err(e) = ctx.run_ok(SYSTEMCTL, &["start", &unit], None) {
-        return Err(fail(format!("the cluster didn't start ({})", e.msg)));
-    }
+    // A start that errors (a wrapper's wait ran out) while Postgres keeps
+    // replaying is not a failure: only a postmaster that is gone is.
+    let start_err = ctx.run_ok(SYSTEMCTL, &["start", &unit], None).err().map(|e| e.msg);
     let mut promoted = false;
     let mut seen_up = false;
     for i in 0..pr::RECOVERY_WAIT_SECS {
@@ -387,6 +393,7 @@ pub fn restore_to(ctx: &Ctx, m: PgMajor, name: &ClusterName, new: &ClusterName, 
         match r {
             Some(r) if r.online() => {
                 seen_up = true;
+                // Still replaying (or not yet taking connections): wait.
                 if let Ok(a) = sql_at(ctx, m, port, "postgres", pr::IN_RECOVERY_SQL) {
                     if a.trim() == "false" {
                         promoted = true;
@@ -394,8 +401,14 @@ pub fn restore_to(ctx: &Ctx, m: PgMajor, name: &ClusterName, new: &ClusterName, 
                     }
                 }
             }
-            _ if seen_up || i > 30 => {
+            _ if seen_up => {
                 return Err(fail("Postgres stopped before reaching the time (a missing WAL segment, or no commit after the time in the WAL)".into()));
+            }
+            _ if i >= pr::START_GRACE_SECS => {
+                return Err(fail(format!(
+                    "Postgres never started{}",
+                    start_err.as_deref().map(|e| format!(" ({e})")).unwrap_or_default()
+                )));
             }
             _ => {}
         }
@@ -411,6 +424,7 @@ pub fn restore_to(ctx: &Ctx, m: PgMajor, name: &ClusterName, new: &ClusterName, 
     let rec_new = {
         let _pg = crate::take_lock(ctx, "pg")?;
         crate::apps::unput(ctx, &format!("{}/conf.d", named::etc_dir(m.get(), nn)), None, pr::RESTORE_CONF_FILE)?;
+        undo_restore_start(ctx, m.get(), nn)?;
         let row = named_wait_online(ctx, m, nn)?;
         if row.port != port || row.data_dir != data {
             return Err(fail("the restored cluster answers another port or data dir".into()));
@@ -440,6 +454,26 @@ pub fn restore_to(ctx: &Ctx, m: PgMajor, name: &ClusterName, new: &ClusterName, 
     v["walReplayed"] = json!({"first": range.first.name(), "last": range.last.name(), "count": range.count});
     v["drill"] = json!(drill);
     Ok(v)
+}
+
+/// The instance's drop-in folder (where the slice drop-in is).
+fn dropin_dir(m: u32, n: &str) -> String {
+    named::slice_dropin(m, n).rsplit_once('/').expect("dir").0.to_string()
+}
+
+fn restore_dropin_path(m: u32, n: &str) -> String {
+    format!("{}/{}", dropin_dir(m, n), pr::RESTORE_DROPIN_FILE)
+}
+
+/// After promotion: the start's long waits go again (the drop-in, and
+/// `pg_ctl.conf` back to no options, as `pg_createcluster` writes it).
+fn undo_restore_start(ctx: &Ctx, m: u32, n: &str) -> HResult<()> {
+    if crate::apps::unput(ctx, &dropin_dir(m, n), None, pr::RESTORE_DROPIN_FILE)? {
+        ctx.run_ok(SYSTEMCTL, &["daemon-reload"], None)?;
+    }
+    let etc = ctx.dir(&named::etc_dir(m, n)).map_err(|e| Fail::io_err("open the cluster's config dir", e))?;
+    put(ctx, &etc, pr::PG_CTL_CONF_FILE, b"# Written by k2-root-helper after a point-in-time restore.\npg_ctl_options = ''\n")?;
+    Ok(())
 }
 
 // ── pg drop-drill ───────────────────────────────────────────────────────
@@ -481,7 +515,9 @@ pub fn drop_drill(ctx: &Ctx, m: PgMajor, name: &ClusterName) -> HResult<J> {
         }
         None => false,
     };
-    if crate::apps::unput(ctx, &named::slice_dropin(m.get(), n).rsplit_once('/').expect("dir").0, None, "k2-slice.conf")? {
+    let dropins = dropin_dir(m.get(), n);
+    let restore_gone = crate::apps::unput(ctx, &dropins, None, pr::RESTORE_DROPIN_FILE)?;
+    if crate::apps::unput(ctx, &dropins, None, "k2-slice.conf")? || restore_gone {
         ctx.run_ok(SYSTEMCTL, &["daemon-reload"], None)?;
     }
     st.clusters.retain(|c| !(c.major == m.get() && c.name == n));

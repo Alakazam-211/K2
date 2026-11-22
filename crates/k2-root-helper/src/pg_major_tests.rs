@@ -70,6 +70,11 @@ struct World {
     /// Point-in-time restore tests (protocol 19): named clusters that stay
     /// down after a start (Postgres ending recovery early).
     stay_down: HashSet<String>,
+    /// Restore tests: named clusters whose `systemctl start` errors (a
+    /// wrapper's wait ran out) while Postgres runs on, replaying.
+    start_errs_but_runs: HashSet<String>,
+    /// Restore tests: `pg_is_in_recovery()` answers true this many more times.
+    recovery_polls: u32,
     /// Point-in-time restore tests: programs as postgres the match below
     /// doesn't know (`pg_basebackup`, `tar`, a file-writing `dd`), answered
     /// first when the hook says so.
@@ -226,6 +231,10 @@ fn pg_box() -> (T, W) {
             if op == Some("is-active") {
                 return out(0, "active\n");
             }
+            let slow = a.get(1).and_then(|u| u.strip_prefix("postgresql@")).and_then(|u| u.strip_suffix(".service")).and_then(|u| u.split_once('-')).is_some_and(|(_, n)| ww.borrow().start_errs_but_runs.contains(n));
+            if op == Some("start") && slow {
+                return ExecOut { status: 1, stdout: vec![], stderr: b"Job for postgresql@17-fb_slow.service failed: timeout".to_vec() };
+            }
             out(0, "")
         }),
     );
@@ -327,6 +336,10 @@ fn pg_box() -> (T, W) {
                     w.sql.push((port, sql.clone()));
                     if let Some((_, e)) = w.fail_on.as_ref().filter(|(n, _)| sql.contains(n.as_str())) {
                         return ExecOut { status: 3, stdout: vec![], stderr: e.clone().into_bytes() };
+                    }
+                    if sql.contains("pg_is_in_recovery") && w.recovery_polls > 0 {
+                        w.recovery_polls -= 1;
+                        return out(0, "true\n");
                     }
                     if let Some((_, a)) = w.answers.iter().find(|(n, _)| sql.contains(n.as_str())) {
                         return out(0, &a.clone());

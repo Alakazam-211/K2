@@ -320,6 +320,31 @@ pub fn recovery_conf(m: u32, source: &str, target: UtcTime) -> String {
     )
 }
 
+/// A restore's start may take as long as the replay to consistency: the
+/// systemd drop-in that lets `systemctl start` wait for it (no start
+/// timeout), beside the slice drop-in, removed once the cluster is
+/// promoted.
+pub const RESTORE_DROPIN_FILE: &str = "k2-restore.conf";
+pub fn restore_dropin() -> &'static str {
+    "# Point-in-time restore: the start waits for the replay. Written by k2-root-helper `pg restore-to`; removed after promotion.\n\
+     [Service]\n\
+     TimeoutStartSec=infinity\n"
+}
+/// ... and `pg_ctlcluster`'s own wait for the start (Debian's
+/// `pg_ctl.conf`), as long as the whole replay may take. The file
+/// `pg_createcluster` wrote comes back after promotion.
+pub const PG_CTL_CONF_FILE: &str = "pg_ctl.conf";
+pub fn restore_pg_ctl_conf() -> String {
+    format!(
+        "# Point-in-time restore: wait for the replay. Written by k2-root-helper `pg restore-to`; replaced after promotion.\n\
+         pg_ctl_options = '-t {RECOVERY_WAIT_SECS}'\n"
+    )
+}
+/// A start that returned an error while Postgres keeps replaying is not a
+/// failure: the helper keeps polling. Only a postmaster that is gone counts:
+/// after it was seen running, or when it never came up in this long.
+pub const START_GRACE_SECS: u32 = 120;
+
 /// SQL run on a running source before a restore: a commit stamped now (a
 /// time target needs a commit after it to stop at) and a WAL switch; the
 /// answer is the segment just closed.
@@ -483,6 +508,8 @@ mod tests {
         assert!(c.contains("recovery_target_action = 'promote'\n"));
         assert!(c.contains("archive_mode = off\n"));
         assert_eq!(base_dir(17, "feedback"), "/var/lib/postgresql/k2-wal/17-feedback.base");
+        assert!(restore_dropin().contains("TimeoutStartSec=infinity\n"));
+        assert!(restore_pg_ctl_conf().contains(&format!("pg_ctl_options = '-t {RECOVERY_WAIT_SECS}'\n")));
     }
 
     #[test]

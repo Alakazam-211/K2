@@ -114,6 +114,19 @@ impl StandIn {
         conf.push_str("listen_addresses = ''\n");
         let cf = self.root.join(format!("standin-{m}-{n}.conf"));
         std::fs::write(&cf, conf).unwrap();
+        if n.starts_with("pitrslow") {
+            // A slow start: the unit's start gives up at once (a wrapper's
+            // wait ran out) and Postgres only comes up 8 s later, then
+            // replays. The helper must wait, not report a failure.
+            let (bin, log, cfs) = (self.bin.clone(), self.log(m, n), cf.display().to_string());
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(8));
+                let _ = Command::new(format!("{bin}/pg_ctl"))
+                    .args(["-D", &data, "-o", &format!("-c config_file={cfs}"), "-l", &log, "-W", "start"])
+                    .output();
+            });
+            return ExecOut { status: 1, stdout: vec![], stderr: b"Job for the unit failed: timeout".to_vec() };
+        }
         let o = Command::new(format!("{}/pg_ctl", self.bin))
             .args(["-D", &data, "-o", &format!("-c config_file={}", cf.display()), "-l", &self.log(m, n), "-w", "-t", "120", "start"])
             .output()
@@ -334,6 +347,17 @@ fn pitr_real_pg() {
     );
     assert!(!under(&t.root, &format!("/etc/postgresql/{m}/pitrdrill/conf.d/96-k2-restore.conf")).exists(), "the recovery settings are gone");
     println!("PASS restore to {}: rows 1-5, not 6-7", target.token());
+
+    // A slow start (the unit's start errors, Postgres comes up 8 s later and
+    // replays): waited for, never reported as a failure.
+    let t0 = now();
+    let r = ok_json(&t, &["pg", "restore-to", &src, "pitrslow", &target.stamp(), "--drill"]);
+    assert_eq!(r["created"], true, "{r}");
+    assert!(now() - t0 >= 8, "it waited for the late start");
+    assert_eq!(si.psql(m, "pitrslow", "SELECT count(*) || ':' || max(id) FROM drill"), "5:5", "the slow restore holds the same rows");
+    assert!(!under(&t.root, &format!("/etc/systemd/system/postgresql@{m}-pitrslow.service.d/k2-restore.conf")).exists());
+    ok_json(&t, &["pg", "drop-drill", &format!("{m}-pitrslow")]);
+    println!("PASS a slow start (start error, up 8 s later) is waited for, not failed");
 
     // A hole in the spool after the backup: refused before anything is made.
     for i in 8..11 {

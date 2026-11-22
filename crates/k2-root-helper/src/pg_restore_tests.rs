@@ -228,6 +228,8 @@ fn restore_to_a_time_makes_a_new_cluster_and_drop_drill_removes_it() {
     assert!(!t.p(&format!("/etc/postgresql/17/fb_drill/conf.d/{}", pr::RESTORE_CONF_FILE)).exists());
     assert!(t.p("/etc/postgresql/17/fb_drill/conf.d/98-k2-cluster.conf").exists());
     assert!(!t.p("/etc/postgresql/17/fb_drill/conf.d/97-k2-wal-archive.conf").exists(), "a restore doesn't archive");
+    assert!(!t.p("/etc/systemd/system/postgresql@17-fb_drill.service.d/k2-restore.conf").exists(), "the start's long wait is gone after promotion");
+    assert_eq!(std::fs::read_to_string(t.p("/etc/postgresql/17/fb_drill/pg_ctl.conf")).unwrap().lines().last(), Some("pg_ctl_options = ''"));
     let rec = named_rec(&t, 17, "fb_drill");
     assert_eq!((rec.port, rec.wal_archive), (port, false));
     let r = restores(&t).get(17, "fb_drill").cloned().unwrap();
@@ -345,4 +347,48 @@ fn backups_report_the_window_and_a_gap() {
     let v = json(&t.call(&["pg", "backups", "17-feedback"]));
     assert_eq!(v["wal"]["gap"], json!("000000010000000000000005"), "{v}");
     assert_eq!(v["restorableTo"], json!(null));
+}
+
+/// A long replay: the unit's start errors (a wrapper's wait ran out) while
+/// Postgres keeps running and replaying for many polls. That is not a
+/// failure: the helper keeps waiting with no start timeout of its own (the
+/// drop-in and pg_ctl.conf say so while it replays) and promotes.
+#[test]
+fn a_long_replay_is_waited_for_not_failed() {
+    let (t, w) = archiving_box();
+    let n = now();
+    base_backup(&t, n - 600, "000000010000000000000003");
+    spool(&t, &["000000010000000000000003"], n);
+    {
+        let mut b = w.borrow_mut();
+        b.start_errs_but_runs.insert("fb_slow".into());
+        b.recovery_polls = 500;
+    }
+    // While it starts, the long waits are in place (seen by the fake start).
+    let r = t.root.clone();
+    let seen = Rc::new(RefCell::new(None));
+    let s2 = seen.clone();
+    let prev = t.exec.0.borrow().programs.get(SYSTEMCTL).cloned().unwrap();
+    t.exec.0.borrow_mut().programs.insert(
+        SYSTEMCTL.into(),
+        Rc::new(move |a| {
+            if a.first().map(String::as_str) == Some("start") && a.get(1).is_some_and(|u| u.contains("fb_slow")) {
+                let dropin = std::fs::read_to_string(under(&r, "/etc/systemd/system/postgresql@17-fb_slow.service.d/k2-restore.conf")).ok();
+                let ctl = std::fs::read_to_string(under(&r, "/etc/postgresql/17/fb_slow/pg_ctl.conf")).ok();
+                *s2.borrow_mut() = Some((dropin, ctl));
+            }
+            prev(a)
+        }),
+    );
+    let v = json(&t.call(&["pg", "restore-to", "17-feedback", "fb_slow", &UtcTime::from_epoch(n - 60).stamp(), "--drill"]));
+    assert_eq!((v["created"].clone(), v["name"].clone()), (json!(true), json!("fb_slow")), "{v}");
+    assert_eq!(w.borrow().recovery_polls, 0, "it waited through every replaying poll");
+    let (dropin, ctl) = seen.borrow().clone().expect("the start ran");
+    assert_eq!(dropin.as_deref(), Some(pr::restore_dropin()), "no start timeout while it replays");
+    assert_eq!(ctl, Some(pr::restore_pg_ctl_conf()), "pg_ctlcluster waits as long as the replay may");
+    assert!(!t.p("/etc/systemd/system/postgresql@17-fb_slow.service.d/k2-restore.conf").exists());
+    assert!(restores(&t).get(17, "fb_slow").unwrap().ok);
+    // drop-drill removes the drop-in folder's files too.
+    ok(&t.call(&["pg", "drop-drill", "17-fb_slow"]));
+    assert!(!t.p("/etc/systemd/system/postgresql@17-fb_slow.service.d/k2-slice.conf").exists());
 }

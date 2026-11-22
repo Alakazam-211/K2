@@ -7,7 +7,7 @@
 
 mod common;
 
-use k5_cli::called_as::{CalledAs, WOULD_REFUSE_VAR};
+use k5_cli::called_as::{fallthrough_env, CALLED_AS_VAR, WOULD_REFUSE_VAR};
 use k5_cli::passport::{self, Verdict, OFFLINE_ANYWHERE, OFFLINE_FIRST};
 #[cfg(unix)]
 use std::ffi::OsString;
@@ -161,11 +161,8 @@ fn the_prelude_unsets_every_hand_over_variable() {
         .filter_map(|l| l.strip_prefix("unset "))
         .flat_map(str::split_whitespace)
         .collect();
-    let mut names: Vec<&str> = CalledAs::Primary
-        .fallthrough_env()
-        .iter()
-        .map(|(n, _)| *n)
-        .collect();
+    let mut names: Vec<&str> = fallthrough_env().iter().map(|(n, _)| *n).collect();
+    names.push(CALLED_AS_VAR);
     names.push(WOULD_REFUSE_VAR);
     for name in names {
         assert!(unset.contains(&name), "the prelude never unsets {name}");

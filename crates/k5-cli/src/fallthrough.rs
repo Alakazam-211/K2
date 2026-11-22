@@ -1,9 +1,10 @@
 //! Handing a verb to the shell CLI.
 //!
 //! A verb the front doesn't handle runs in the shell CLI, with the
-//! arguments exactly as they came (never re-encoded or rewritten) and three
-//! variables added ([`CalledAs::fallthrough_env`]); nothing else changes,
-//! and the shell finds its passport and token itself.
+//! arguments exactly as they came (never re-encoded or rewritten) and two
+//! variables added ([`fallthrough_env`]); nothing else changes, and the
+//! shell finds its passport and token itself. The name the front was
+//! called by is not one of them: the shell reads no name.
 //!
 //! Which copy of the script runs, first that applies:
 //!
@@ -48,15 +49,14 @@
 //! On Unix the front becomes bash (`exec`): the process id, the terminal,
 //! signals and the process ancestry the passport check walks are bash's
 //! own, and so is the exit code. bash's `$0` is `/dev/fd/N`, which says
-//! nothing about the name or the folder, so the front passes both: the
-//! name it was called by in `K5_CLI_CALLED_AS`, and in `K5_CLI_SCRIPT_DIR`
+//! nothing about the folder, so the front passes in `K5_CLI_SCRIPT_DIR`
 //! the folder where an install keeps the files shipped beside the CLI
 //! ([`script_dir_for`]). The shell closes N first thing, so the commands
 //! it starts don't inherit it; bash reads the script through its own
 //! descriptor. On Windows bash runs as a child, `$0` is the path, and the
 //! front exits with bash's code.
 
-use crate::called_as::{CalledAs, SCRIPT_DIR_VAR};
+use crate::called_as::{fallthrough_env, SCRIPT_DIR_VAR};
 use crate::embedded;
 use crate::exit::Exit;
 use crate::home::HomeError;
@@ -462,8 +462,8 @@ pub fn interpreter(args: &[OsString]) -> Result<PathBuf, FrontError> {
 }
 
 /// The command that runs `script` (`/dev/fd/N` on Unix) in `bash` with
-/// `args` as they came, and the front's variables for the shell: the three
-/// of [`CalledAs::fallthrough_env`], and [`SCRIPT_DIR_VAR`] set to
+/// `args` as they came, and the front's variables for the shell: the two
+/// of [`fallthrough_env`], and [`SCRIPT_DIR_VAR`] set to
 /// `script_dir`, or taken away when there is none (so a value left by
 /// another call is never read as this one's). The rest of the environment
 /// is this process's own.
@@ -471,11 +471,10 @@ pub fn command(
     bash: &Path,
     script: &OsStr,
     args: &[OsString],
-    who: CalledAs,
     script_dir: Option<&Path>,
 ) -> Command {
     let mut cmd = Command::new(bash);
-    cmd.arg(script).args(args).envs(who.fallthrough_env());
+    cmd.arg(script).args(args).envs(fallthrough_env());
     match script_dir {
         Some(dir) => cmd.env(SCRIPT_DIR_VAR, dir),
         None => cmd.env_remove(SCRIPT_DIR_VAR),
@@ -515,13 +514,13 @@ pub fn dev_fd(fd: &std::os::fd::OwnedFd) -> OsString {
 /// stands), then [`run`]; its error's line on stderr, and its exit. Nothing
 /// else has changed the process environment, so it is what the shell
 /// inherits.
-pub fn hand_off(who: CalledAs, args: &[OsString]) -> Exit {
+pub fn hand_off(args: &[OsString]) -> Exit {
     match crate::passport::hand_off_env(crate::passport::current(args)) {
         (name, Some(value)) => std::env::set_var(name, value),
         (name, None) => std::env::remove_var(name),
     }
     trace::mark("passport rule");
-    let err = run(who, args);
+    let err = run(args);
     // The shell never ran: nothing went to the daemon, so no plain-http
     // line before the front's own.
     crate::prelude::plain_http::skip();
@@ -533,7 +532,7 @@ pub fn hand_off(who: CalledAs, args: &[OsString]) -> Exit {
 /// this returns only when that fails; on Windows bash runs as a child and
 /// this process exits with its code. What comes back is the front's own
 /// error.
-pub fn run(who: CalledAs, args: &[OsString]) -> FrontError {
+pub fn run(args: &[OsString]) -> FrontError {
     if crate::python::here() == crate::python::Python3::Missing {
         return FrontError::NoPython { noun: noun(args) };
     }
@@ -559,7 +558,7 @@ pub fn run(who: CalledAs, args: &[OsString]) -> FrontError {
             Ok(fd) => fd,
             Err(err) => return FrontError::Run { bash, err },
         };
-        let mut cmd = command(&bash, &dev_fd(&fd), args, who, dir.as_deref());
+        let mut cmd = command(&bash, &dev_fd(&fd), args, dir.as_deref());
         trace::finish("descriptor and command");
         let err = cmd.exec();
         FrontError::Run { bash, err }
@@ -569,7 +568,7 @@ pub fn run(who: CalledAs, args: &[OsString]) -> FrontError {
         // No /dev/fd: bash runs the path. The open file stays open until
         // bash is done.
         trace::finish("command");
-        match command(&bash, script.path.as_os_str(), args, who, dir.as_deref()).status() {
+        match command(&bash, script.path.as_os_str(), args, dir.as_deref()).status() {
             Ok(status) => std::process::exit(status.code().unwrap_or(1)),
             Err(err) => FrontError::Run { bash, err },
         }
@@ -1005,7 +1004,6 @@ mod tests {
             Path::new("/bin/bash"),
             OsStr::new("/dev/fd/4"),
             &args,
-            CalledAs::Primary,
             Some(Path::new("/opt/k 2")),
         );
         assert_eq!(cmd.get_program(), "/bin/bash");
@@ -1022,8 +1020,7 @@ mod tests {
                 )
             })
             .collect();
-        let mut want: Vec<(String, Option<String>)> = CalledAs::Primary
-            .fallthrough_env()
+        let mut want: Vec<(String, Option<String>)> = fallthrough_env()
             .iter()
             .map(|(k, v)| (k.to_string(), Some(v.to_string())))
             .collect();
@@ -1033,17 +1030,11 @@ mod tests {
         envs.sort();
         assert_eq!(
             envs, want,
-            "only the four variables are added, nothing removed"
+            "only the three variables are added, nothing removed"
         );
         // No folder: the variable is taken away, so an inherited one is
         // never read as this call's.
-        let cmd = command(
-            Path::new("/bin/bash"),
-            OsStr::new("/dev/fd/4"),
-            &[],
-            CalledAs::Primary,
-            None,
-        );
+        let cmd = command(Path::new("/bin/bash"), OsStr::new("/dev/fd/4"), &[], None);
         let dir: Vec<_> = cmd
             .get_envs()
             .filter(|(k, _)| *k == SCRIPT_DIR_VAR)

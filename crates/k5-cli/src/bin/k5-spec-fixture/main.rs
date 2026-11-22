@@ -7,23 +7,19 @@
 //! row starts, or one the runner hands back, goes to the shell CLI as the
 //! front hands it over.
 
-use k5_cli::called_as::CalledAs;
 use k5_cli::fallthrough;
 use std::ffi::OsString;
 
 mod table;
 
 fn main() {
-    let mut argv = std::env::args_os();
-    let argv0 = argv.next().unwrap_or_default();
-    let args: Vec<OsString> = argv.collect();
-    let who = CalledAs::current(&argv0);
+    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     let words: Option<Vec<&str>> = args.iter().map(|a| a.to_str()).collect();
     let row = words
         .as_deref()
         .and_then(|w| k5_cli::spec::find(table::SPEC, w));
     let exit = row
         .and_then(|row| k5_cli::spec::run(row, &args))
-        .unwrap_or_else(|| fallthrough::hand_off(who, &args));
+        .unwrap_or_else(|| fallthrough::hand_off(&args));
     std::process::exit(exit.code());
 }

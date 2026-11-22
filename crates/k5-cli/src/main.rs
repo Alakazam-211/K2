@@ -19,8 +19,8 @@ use k5_cli::front::{self, Route};
 use k5_cli::offline::{self, Env, Prelude};
 use k5_cli::pages::{self, Page};
 use k5_cli::{
-    check, cli_status, codex_gate, daemon, embedded, fallthrough, notice, out, passport, port, spec,
-    trace,
+    check, cli_status, codex_gate, daemon, embedded, fallthrough, notice, out, passport, port,
+    spec, trace,
 };
 use std::ffi::OsString;
 
@@ -76,28 +76,24 @@ fn cli_status(args: &[OsString], json: bool) -> Exit {
 }
 
 /// The shell CLI runs the command line ([`fallthrough::hand_off`]).
-fn shell(who: CalledAs, args: &[OsString]) -> Exit {
-    fallthrough::hand_off(who, args)
+fn shell(args: &[OsString]) -> Exit {
+    fallthrough::hand_off(args)
 }
 
 /// A help page the binary could not print (its gate): a native family's
 /// help-word line goes to the family's own code first
 /// ([`front::help_word_family`]), anything else to the shell.
-fn after_help_gate(who: CalledAs, args: &[OsString]) -> Exit {
+fn after_help_gate(args: &[OsString]) -> Exit {
     match front::help_word_family(args) {
-        Some(noun) => (noun.run)(args).unwrap_or_else(|| shell(who, args)),
-        None => shell(who, args),
+        Some(noun) => (noun.run)(args).unwrap_or_else(|| shell(args)),
+        None => shell(args),
     }
 }
 
 /// A page: printed here when the shell's environment lets the binary
 /// answer it ([`pages`]), else handed to the shell.
-fn page(
-    who: CalledAs,
-    args: &[OsString],
-    answer: impl FnOnce(&Prelude, &Env) -> Option<Page>,
-) -> Exit {
-    page_or(answer, || shell(who, args))
+fn page(args: &[OsString], answer: impl FnOnce(&Prelude, &Env) -> Option<Page>) -> Exit {
+    page_or(answer, || shell(args))
 }
 
 /// [`page`], with `otherwise` in place of the shell when the binary
@@ -158,7 +154,7 @@ fn main() {
             let _ = out::write_flushed(&mut std::io::stderr().lock(), &line);
             std::process::exit(Exit::Usage.code());
         }
-        port::Check::Shell => std::process::exit(shell(who, &args).code()),
+        port::Check::Shell => std::process::exit(shell(&args).code()),
     }
     trace::mark("port");
     // The shell's Codex tab gate (`_cli_codex_tab_gate`), before the front
@@ -167,7 +163,7 @@ fn main() {
     match codex_gate::check(&args) {
         codex_gate::Verdict::Go => {}
         codex_gate::Verdict::Stop(exit) => std::process::exit(exit.code()),
-        codex_gate::Verdict::Shell => std::process::exit(shell(who, &args).code()),
+        codex_gate::Verdict::Shell => std::process::exit(shell(&args).code()),
     }
     trace::mark("codex gate");
     let route = front::route(&args);
@@ -183,23 +179,23 @@ fn main() {
         }
         // A family's code (its row's `run`, in its module): a form it
         // hands back goes to the shell before anything is printed or sent.
-        Route::Family(noun) => (noun.run)(&args).unwrap_or_else(|| shell(who, &args)),
-        Route::Spec(row) => spec::run(row, &args).unwrap_or_else(|| shell(who, &args)),
-        Route::Study(s) => page(who, &args, |p, env| {
+        Route::Family(noun) => (noun.run)(&args).unwrap_or_else(|| shell(&args)),
+        Route::Spec(row) => spec::run(row, &args).unwrap_or_else(|| shell(&args)),
+        Route::Study(s) => page(&args, |p, env| {
             pages::study_page(s, p, env, || passport::current(&args).would_refuse())
         }),
         Route::Help(form) => page_or(
             |p, env| pages::help_page(form, p, env, || passport::current(&args).would_refuse()),
-            || after_help_gate(who, &args),
+            || after_help_gate(&args),
         ),
-        Route::Daily => page(who, &args, |p, env| {
+        Route::Daily => page(&args, |p, env| {
             pages::daily_page(p, env, || passport::current(&args).would_refuse())
         }),
-        Route::Composed(c) => page(who, &args, |p, env| {
+        Route::Composed(c) => page(&args, |p, env| {
             let argv = words(&args)?;
             pages::composed_page(c, &argv, p, env, || passport::current(&args).would_refuse())
         }),
-        Route::Unknown => page(who, &args, |p, env| {
+        Route::Unknown => page(&args, |p, env| {
             let argv = words(&args)?;
             pages::unknown_page(&argv, p, env, || passport::current(&args).would_refuse())
         }),
@@ -209,7 +205,7 @@ fn main() {
             }
             Exit::Usage
         }
-        Route::Fallthrough => shell(who, &args),
+        Route::Fallthrough => shell(&args),
     };
     trace::finish("command");
     std::process::exit(exit.code());

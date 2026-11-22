@@ -1,5 +1,6 @@
 //! The name the command was called by, and what the front hands the shell
-//! CLI when a verb falls through to it.
+//! CLI when a verb falls through to it ([`fallthrough_env`]). The name is
+//! not among them: the shell reads no name, and prints the command's own.
 //!
 //! The name matters only for the aliases the brand file asks for (Rosson's
 //! rule 1): every line the command prints carries its own name, the
@@ -35,11 +36,14 @@
 use k2_client::brand::{self, AliasMode};
 use std::ffi::OsStr;
 
-/// The variable that tells the shell the name the front was called by.
+/// A name to take as the one the command was called by, when it is the
+/// command's own or an alias (rule 1 of the module notes). The front no
+/// longer hands it to the shell, which reads no name; the shell still
+/// takes it out of its environment, so nothing it starts sees one.
 pub const CALLED_AS_VAR: &str = "K5_CLI_CALLED_AS";
-/// The variable that tells the shell the front has dealt with the notice
-/// that asks callers of k2 to use k5 (shown it, or decided not to), so the
-/// shell does not show it again.
+/// The variable that tells the shell the front has dealt with an alias's
+/// notice ([`crate::notice`]: shown it, or decided not to), so the shell
+/// does not show it again.
 pub const NOTICE_DONE_VAR: &str = "K5_CLI_NOTICE_DONE";
 /// The variable that tells the shell the call came through the front. Its
 /// requests to the daemon then say so.
@@ -54,11 +58,14 @@ pub const WOULD_REFUSE_VAR: &str = "K5_CLI_WOULD_REFUSE";
 /// (links resolved), where it looks first for the files shipped beside
 /// the CLI (`k2-approve`, `k2-widget-shot.mjs`). The front runs the script
 /// as `/dev/fd/N`, so the folder of the shell's `$0` says nothing. It is a
-/// path, so it is not in [`CalledAs::fallthrough_env`]; the front sets it
-/// beside the three fixed ones ([`crate::fallthrough::command`]).
+/// path, so it is not in [`fallthrough_env`]; the front sets it beside the
+/// two fixed ones ([`crate::fallthrough::command`]).
 pub const SCRIPT_DIR_VAR: &str = "K5_CLI_SCRIPT_DIR";
-/// Every variable the front hands the shell. Each is one name, not a
-/// setting read under three.
+/// Every variable the shell takes as the front's and out of its
+/// environment (`cli/src/prelude.sh`), so the native verbs keep them from
+/// the programs they start too: [`CALLED_AS_VAR`], the two of
+/// [`fallthrough_env`], the passport rule's and the folder. Each is one
+/// name, not a setting read under three.
 pub const FRONT_VARS: [&str; 5] = [
     CALLED_AS_VAR,
     NOTICE_DONE_VAR,
@@ -132,22 +139,13 @@ impl CalledAs {
             &Names::COMPILED,
         )
     }
+}
 
-    /// What the front sets for the shell CLI when it hands a verb on:
-    /// the name that matched (the command's own for [`CalledAs::Primary`]),
-    /// that the notice is dealt with, and that the call came through the
-    /// front.
-    pub fn fallthrough_env(self) -> [(&'static str, &'static str); 3] {
-        let name = match self {
-            CalledAs::Primary => brand::CLI_NAME,
-            CalledAs::Alias { name, .. } => name,
-        };
-        [
-            (CALLED_AS_VAR, name),
-            (NOTICE_DONE_VAR, "1"),
-            (VIA_VAR, VIA_RUST),
-        ]
-    }
+/// What the front sets for the shell CLI when it hands a verb on: that
+/// the notice is dealt with, and that the call came through the front.
+/// Whatever name it was called by, the same.
+pub fn fallthrough_env() -> [(&'static str, &'static str); 2] {
+    [(NOTICE_DONE_VAR, "1"), (VIA_VAR, VIA_RUST)]
 }
 
 /// The rule, over `argv[0]`, a lookup of the environment, the system's
@@ -392,32 +390,23 @@ mod tests {
         }
     }
 
+    /// The front hands on no name: the same two variables whatever it
+    /// was called by.
     #[test]
-    fn the_fallthrough_env_names_the_caller() {
-        let alias = CalledAs::Alias {
-            name: "ab1",
-            mode: Silent,
-        };
+    fn the_fallthrough_env_names_no_caller() {
         assert_eq!(
-            alias.fallthrough_env(),
-            [
-                ("K5_CLI_CALLED_AS", "ab1"),
-                ("K5_CLI_NOTICE_DONE", "1"),
-                ("K5_CLI_VIA", "rust")
-            ]
-        );
-        assert_eq!(
-            Primary.fallthrough_env()[0],
-            ("K5_CLI_CALLED_AS", k2_client::brand::CLI_NAME)
+            fallthrough_env(),
+            [("K5_CLI_NOTICE_DONE", "1"), ("K5_CLI_VIA", "rust")]
         );
     }
 
-    /// The front's variables: the three fixed ones, the passport rule's
-    /// count, then the folder.
+    /// The front's variables: the name the shell takes out unread, the two
+    /// fixed ones, the passport rule's count, then the folder.
     #[test]
-    fn the_front_hands_on_five_names() {
-        let fixed: Vec<&str> = Primary.fallthrough_env().iter().map(|(k, _)| *k).collect();
-        assert_eq!(FRONT_VARS[..3], fixed[..]);
+    fn the_shell_takes_out_five_names() {
+        let fixed: Vec<&str> = fallthrough_env().iter().map(|(k, _)| *k).collect();
+        assert_eq!(FRONT_VARS[0], "K5_CLI_CALLED_AS");
+        assert_eq!(FRONT_VARS[1..3], fixed[..]);
         assert_eq!(FRONT_VARS[3], "K5_CLI_WOULD_REFUSE");
         assert_eq!(FRONT_VARS[4], "K5_CLI_SCRIPT_DIR");
     }

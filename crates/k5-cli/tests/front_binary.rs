@@ -233,7 +233,6 @@ fn a_verb_falls_through_and_answers_as_the_shell_does() {
     for case in &cases {
         let want = rig.bash(case, &[]);
         assert_eq!(rig.front("k2", case, &[]), want, "k2 {case:?}");
-        let want = rig.bash(case, &[("K5_CLI_CALLED_AS", "k5")]);
         assert_eq!(rig.front("k5", case, &[]), want, "k5 {case:?}");
     }
     // The unknown verb's exit code came through.
@@ -326,7 +325,7 @@ fn a_cache_that_cannot_be_written_is_one_line_and_exit_1() {
     assert_eq!(out.stderr.lines().count(), 1, "{out:?}");
 }
 
-/// The front adds its four variables and bash reads them; bash's `$0` is
+/// The front adds its three variables and bash reads them; bash's `$0` is
 /// `/dev/fd/N`, the open cache file, and the shell closes N. Shown by the
 /// shell's own trace (bash takes `SHELLOPTS=xtrace` from the environment,
 /// which the front passes on).
@@ -417,6 +416,6 @@ fn a_verb_that_falls_through_without_python3_says_so_and_runs_nothing() {
     }
     // With python3 the same verb goes to the shell.
     let with = rig.front("k5", &unknown(), &[]);
-    assert_eq!(with, rig.bash(&unknown(), &[("K5_CLI_CALLED_AS", "k5")]));
+    assert_eq!(with, rig.bash(&unknown(), &[]));
     assert!(rig.cache().exists(), "the shell CLI was not written out");
 }

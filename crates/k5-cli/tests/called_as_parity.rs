@@ -1,14 +1,14 @@
 //! What the front hands the shell CLI, and what the shell does with it.
-//! The shell no longer reads the name it was called by (every line it
-//! prints carries the command's own name), so `called_as` is the front's
-//! alone (its own tests are in `src/called_as.rs`); the shell takes
-//! `K5_CLI_CALLED_AS` out of the environment with the front's other
-//! variables, and reads the notice and via flags.
+//! The shell reads no name it was called by (every line it prints carries
+//! the command's own name), so `called_as` is the front's alone (its own
+//! tests are in `src/called_as.rs`) and the front hands no name on. The
+//! shell still takes `K5_CLI_CALLED_AS` out of the environment with the
+//! front's other variables, and reads the notice and via flags.
 
 mod common;
 
 #[cfg(unix)]
-use k5_cli::called_as::CalledAs;
+use k5_cli::called_as::fallthrough_env;
 
 /// The prelude's lines that read the other two variables the front sets.
 fn handoff_block() -> String {
@@ -37,8 +37,8 @@ fn the_prelude_reads_no_name_and_still_holds_the_handoff() {
 }
 
 /// What the front hands on is what the shell acts on: the notice marked
-/// done and the via flag. The name goes out of the environment unread, so
-/// nothing the shell starts sees it.
+/// done and the via flag. No name, and one set by a caller goes out of the
+/// environment unread, so nothing the shell starts sees it.
 #[cfg(unix)]
 #[test]
 fn the_fallthrough_env_is_what_the_shell_reads() {
@@ -46,16 +46,20 @@ fn the_fallthrough_env_is_what_the_shell_reads() {
         "{}\n{UNSET_LINE}\nprintf '%s|%s|%s\\n' \"$_K5_NOTICE_DONE\" \"$_K5_CLI_VIA\" \"${{K5_CLI_CALLED_AS-unset}}\"",
         handoff_block()
     );
-    let alias = CalledAs::Alias {
-        name: "ab1",
-        mode: k2_client::brand::AliasMode::Silent,
-    };
-    for who in [CalledAs::Primary, alias] {
-        for argv0 in ["k2", "k5", "/opt/k5-front/libexec/k2-cli"] {
-            let env = who.fallthrough_env();
-            let shell = common::bash(&script, argv0, &env);
-            assert_eq!(shell, "1|rust|unset\n", "{who:?} called from {argv0:?}");
-        }
+    let env = fallthrough_env();
+    let mut set_by_caller = env.to_vec();
+    set_by_caller.push(("K5_CLI_CALLED_AS", "ab1"));
+    for argv0 in ["k2", "k5", "/opt/k5-front/libexec/k2-cli"] {
+        assert_eq!(
+            common::bash(&script, argv0, &env),
+            "1|rust|unset\n",
+            "called from {argv0:?}"
+        );
+        assert_eq!(
+            common::bash(&script, argv0, &set_by_caller),
+            "1|rust|unset\n",
+            "called from {argv0:?}, a name set by the caller"
+        );
     }
     // Without the front, none is set.
     assert_eq!(common::bash(&script, "k5", &[]), "||unset\n");

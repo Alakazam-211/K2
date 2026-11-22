@@ -893,10 +893,13 @@ const DB_HELD_CARD: &str = r#"{"ok":true,"status":"held","request":{"id":"w_abc1
 fn held_cards_and_assign_answer_as_the_shell_does() {
     let rig = Rig::new(VERB, "dbcards");
     let egress_held = r#"{"status":"held","request":{"id":"w_eg1","summary":"egress api.example.com for app1"},"hint":"held for the owner","card":{"raised":true,"where":"a permission card w_eg1 is on a's Thread: sent to every owner and admin (ada, bo); pass --assign <login> to send it to one."}}"#;
+    // db connect's own --assign goes with --read-only only (the shell's
+    // pre-scan hands it back to the verb): its rows are in
+    // db_connect_read_only. The held card here is a plain App connect's.
     let v = vec![
         one(
-            "db connect --assign: held, where the card is",
-            &["db", "connect", "app1", "--new", "--assign", "ada"],
+            "db connect: held, where the card is",
+            &["db", "connect", "app1", "--new"],
             202,
             DB_HELD_CARD,
             2,
@@ -916,8 +919,8 @@ fn held_cards_and_assign_answer_as_the_shell_does() {
             2,
         ),
         one(
-            "db connect --assign=bo --json: held",
-            &["db", "connect", "--assign=bo", "app1", "--new", "--json"],
+            "db connect --json: held",
+            &["db", "connect", "app1", "--new", "--json"],
             202,
             DB_HELD_CARD,
             2,

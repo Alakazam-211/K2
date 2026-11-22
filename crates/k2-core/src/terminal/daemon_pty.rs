@@ -1419,9 +1419,8 @@ impl DaemonPtySession {
             }
         }
         let events = owner.watch(&sid);
-        // The child's start time as ptyd (its parent) read it (review B5).
-        let mut ptyd_start: Option<u64> = None;
-        let pid = match owner.request(Request::Spawn {
+        // With the child's start time as ptyd (its parent) read it (review B5).
+        let (pid, ptyd_start) = match owner.request(Request::Spawn {
             sid: sid.clone(),
             argv,
             env: child_env,
@@ -1436,10 +1435,7 @@ impl DaemonPtySession {
             },
             meta: meta.clone(),
         }) {
-            Ok(Reply::Spawned { pid, start, .. }) => {
-                ptyd_start = start;
-                pid
-            }
+            Ok(Reply::Spawned { pid, start, .. }) => (pid, start),
             Ok(Reply::Error { code, detail }) => {
                 owner.unwatch(&sid);
                 log_debug!("[daemon_pty] ptyd spawn failed session={} code={}", cfg.session_id, code);

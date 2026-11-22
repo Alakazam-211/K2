@@ -737,7 +737,7 @@ mod tests {
                 }
                 let text = std::fs::read_to_string(&p).unwrap();
                 let prod = text.find("\n#[cfg(test)]\nmod tests {").map_or(text.as_str(), |i| &text[..i]);
-                if ["bg_proc::command(", "bg_proc::tokio_command(", "Command::new("].iter().any(|n| prod.contains(n)) {
+                if ["bg_proc::command(", "bg_proc::command_keeping_session(", "bg_proc::tokio_command(", "Command::new("].iter().any(|n| prod.contains(n)) {
                     found.push(p.strip_prefix(&src).unwrap().to_string_lossy().replace('\\', "/"));
                 }
             }

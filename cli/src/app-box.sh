@@ -17,8 +17,11 @@ cmd_app_box_service() {
         *) sub="show" ;;
     esac
     local app="" json_out=0 reason="" app_port="" rest=()
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --json) json_out=1; shift ;;
             --reason) _need_value "$@"; reason="${2:-}"; shift 2 ;;
             --app-port) _need_value "$@"; app_port="${2:-}"; shift 2 ;;

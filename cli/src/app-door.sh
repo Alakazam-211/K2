@@ -10,8 +10,11 @@ EOF
 
 cmd_app_suspend() {
     local app="" reason="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --reason) _need_value "$@"; reason="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_door_usage; return 0 ;;
@@ -34,8 +37,11 @@ print("  %s" % v.get("hint", ""))'
 
 cmd_app_resume() {
     local app="" start=0 json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --start) start=1; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_door_usage; return 0 ;;
@@ -64,8 +70,11 @@ elif v.get("hint") or v.get("note"):
 
 cmd_app_audit() {
     local app="" since="" verb="" denied=0 limit="" verify=0 json_out=0 oldest=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --oldest-first) oldest=1; shift ;;
             --newest-first) oldest=0; shift ;;
             --since) _need_value "$@"; since="${2:-}"; shift 2 ;;
@@ -116,8 +125,11 @@ for d in v.get("chain") or []:
 # forwarder's per-request log; `GET /cli/app/requests`, apps/requests.rs).
 cmd_app_requests() {
     local app="" since="" until="" status="" path="" method="" limit="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --since) _need_value "$@"; since="${2:-}"; shift 2 ;;
             --until) _need_value "$@"; until="${2:-}"; shift 2 ;;
             --status) _need_value "$@"; status="${2:-}"; shift 2 ;;
@@ -183,8 +195,11 @@ if v.get("dropped"):
 
 cmd_app_quota() {
     local app="" json_out=0 reset=0 reason="" rps="" burst="" sockets="" body="" upload="" subs="" any=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --rps) _need_value "$@"; rps="${2:-}"; any=1; shift 2 ;;
             --burst) _need_value "$@"; burst="${2:-}"; any=1; shift 2 ;;
             --sockets) _need_value "$@"; sockets="${2:-}"; any=1; shift 2 ;;

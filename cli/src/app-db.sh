@@ -97,8 +97,11 @@ cmd_app_db() {
     esac
     local app="" json_out=0 new=0 db="" major="" cluster="" name="" as="" nomig=0 wait=0 timeout=600 drop=0 reason=""
     local bad="" ro=0 why="" assign=""
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --json) json_out=1; shift ;;
             --new) new=1; shift ;;
             --db|--major|--cluster|--name|--as|--timeout|--reason|--why|--assign)
@@ -326,8 +329,11 @@ cmd_app_egress() {
         *) sub="show" ;;
     esac
     local app="" json_out=0 reason="" tail="" hosts=()
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --json) json_out=1; shift ;;
             --reason) _need_value "$@"; reason="${2:-}"; shift 2 ;;
             --tail) _need_value "$@"; tail="${2:-}"; shift 2 ;;

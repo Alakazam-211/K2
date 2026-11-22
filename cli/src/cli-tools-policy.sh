@@ -1198,6 +1198,24 @@ _k2_takes_dashdash() {
         # (0.46.17; the loops' `case "$_dd$1"`, see _app_says_help).
         "app auth"|"app pairing"|"app push"|"app email") return 0 ;;    # app-auth.sh
         "app approvals"|"app approve"|"app deny"|"app access") return 0 ;;  # app-auth.sh
+        "app box-service"|"app box-services") return 0 ;;                 # app-box.sh
+        "app catalog"|"app install") return 0 ;;                          # app-catalog.sh, app-doctor.sh
+        "app db"|"app database"|"app egress") return 0 ;;                # app-db.sh
+        "app doctor"|"app rehost"|"app build"|"app deploy"|"app rollback") return 0 ;;  # app-doctor.sh
+        "app stop"|"app start"|"app restart"|"app link"|"app seal") return 0 ;;          # app-doctor.sh
+        "app deployment"|"app config"|"app inspect"|"app history") return 0 ;;          # app-doctor.sh
+        "app logs"|"app errors"|"app uninstall"|"app expose"|"app release") return 0 ;;  # app-doctor.sh
+        "app handover"|"app unpark"|"app park"|"app exception") return 0 ;;              # app-doctor.sh
+        "app suspend"|"app resume"|"app audit"|"app requests"|"app quota"|"app quotas") return 0 ;;  # app-door.sh
+        "app guest"|"app init"|"app links") return 0 ;;                  # app-guests.sh, app-init.sh, app-links.sh
+        "app people"|"app invite-settings"|"app profile"|"app login"|"app set") return 0 ;;  # app-people.sh
+        "app recording"|"app recordings"|"app account-deletion"|"app account-deletions") return 0 ;;  # app-recording.sh
+        "app members"|"app room-names"|"app chat"|"app self"|"app usage"|"app remote-pass") return 0 ;;  # app-recording.sh
+        "app sdk") return 0 ;;                                            # app-sdk.sh
+        "app updates"|"app data"|"app label"|"app test-guests"|"app test-guest") return 0 ;;  # app-updates.sh
+        "app move-plan"|"app domain"|"app domains"|"app warnings"|"app clean-mode") return 0 ;;  # app-updates.sh
+        "app key"|"app keys") return 0 ;;                                 # app-updates.sh
+        "app wallet") return 0 ;;                                         # app-wallet.sh
         "changes diff"|"changes stage"|"changes add"|"changes unstage"|"changes discard") return 0 ;;  # changes.sh
         "sim type") return 0 ;;               # sim.sh _sim_type
         "zen garden"|"zen gardens") return 0 ;;  # garden-access.sh cmd_zen_garden

@@ -106,14 +106,16 @@ cmd_app_install_catalog() {
     # nothing, even right after a flag that takes a value (0.46.17: `k2 app
     # install --catalog x --address --help` installed with --help as the
     # address). A value flag as the last word is a usage error, exit 2.
-    if _wants_help "$@"; then _app_catalog_usage; return 0; fi
+    if _app_says_help "$@"; then _app_catalog_usage; return 0; fi
     local entry="" address="" id="" variant="" version="" ws="" dry=0 wait=1 rebind=0 json_out=0 domain=""
+    local _dd=""
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
             --catalog|--address|--id|--variant|--version|--workspace|--domain)
                 [ $# -ge 2 ] || { echo "usage: $1 needs a value (k2 app catalog --help)" >&2; exit 2; } ;;
         esac
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --catalog) _need_value "$@"; entry="${2:-}"; shift 2 ;;
             --catalog=*) entry="${1#--catalog=}"; shift ;;
             --address) _need_value "$@"; address="${2:-}"; shift 2 ;;
@@ -200,7 +202,7 @@ cmd_app_catalog() {
     # catalog job --app -h` asked for the jobs of an App named -h), as
     # app install --catalog does. A value flag as the last word is a usage
     # error, exit 2.
-    if _wants_help "$@"; then _app_catalog_usage; return 0; fi
+    if _app_says_help "$@"; then _app_catalog_usage; return 0; fi
     local sub="${1:-list}"
     case "$sub" in
         -h|--help|help) _app_catalog_usage; return 0 ;;
@@ -210,12 +212,14 @@ cmd_app_catalog() {
         *) echo "Unknown: k2 app catalog $sub (list|show|check|job|retry; k2 app catalog --help)" >&2; exit 2 ;;
     esac
     local json_out=0 args=() id="" app=""
+    local _dd=""
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
             --id|--app)
                 [ $# -ge 2 ] || { echo "usage: $1 needs a value (k2 app catalog --help)" >&2; exit 2; } ;;
         esac
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --json) json_out=1; shift ;;
             --id) id="$2"; shift 2 ;;
             --app) app="$2"; shift 2 ;;

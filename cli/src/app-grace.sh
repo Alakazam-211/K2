@@ -185,6 +185,7 @@ if v.get("suggestion"):
 # free only what K2 made and can make again; print each item.
 cmd_app_resources_clean() {
     local json_out=0 dry=0
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
         case "$1" in
             --dry-run) dry=1; shift ;;
@@ -253,6 +254,7 @@ if v.get("hint"):
 # (0.46.4, disk guard Slice B): CPU and memory over time, box and per App.
 cmd_app_resources_trends() {
     local json_out=0 app="" window=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
         case "$1" in
             --app) _need_value "$@"; app="${2:-}"; shift 2 ;;
@@ -340,6 +342,7 @@ cmd_app_resources() {
     if [ "${1:-}" = clean ]; then shift; cmd_app_resources_clean "$@"; return; fi
     if [ "${1:-}" = trends ]; then shift; cmd_app_resources_trends "$@"; return; fi
     local json_out=0 app="" owner="" rescan=0 wait=0
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) json_out=1; shift ;;
@@ -393,6 +396,7 @@ else:
 
 cmd_app_resources_settings() {
     local json_out=0 mode="" warn="" warn_free="" refuse="" reserve="" critical="" critical_free="" changed=0
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) json_out=1; shift ;;

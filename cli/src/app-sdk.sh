@@ -20,8 +20,11 @@ cmd_app_sdk() {
 # k2 app sdk add <app-folder> [--sew] [--json]
 _app_sdk_add() {
     local folder="" sew=0 json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --sew) sew=1; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_sdk_usage; return 0 ;;
@@ -62,8 +65,11 @@ print("Keep vendor/ with the App (not in .k2appignore): its Seed carries it.")
 # k2 app sdk status <app-folder> [--json]
 _app_sdk_status() {
     local folder="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_sdk_usage; return 0 ;;
             -*) echo "Unknown flag: $1 (k2 app sdk --help)" >&2; exit 2 ;;
@@ -89,8 +95,11 @@ if any(r["state"] in ("older", "missing") for r in v["packages"]):
 # k2 app sdk kit <sew-app-kit-<v>.tar.gz> [--json]
 _app_sdk_kit() {
     local path="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_sdk_usage; return 0 ;;
             -*) echo "Unknown flag: $1 (k2 app sdk --help)" >&2; exit 2 ;;

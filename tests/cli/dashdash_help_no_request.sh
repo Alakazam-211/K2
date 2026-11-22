@@ -327,6 +327,74 @@ app approvals -- w_1
 app approve -- w_1
 app deny -- w_1
 app access -- ws
+app box-service -- acme
+app box-services -- acme
+app catalog show -- web
+app install -- acme
+app db status -- acme
+app database status -- acme
+app egress -- acme
+app doctor -- acme
+app rehost -- acme
+app build -- acme
+app deploy -- acme web
+app rollback -- acme
+app stop -- acme
+app start -- acme
+app restart -- acme
+app link -- acme
+app seal -- acme
+app deployment -- acme
+app config --memory 8G -- acme
+app inspect -- acme
+app history -- acme
+app logs -- acme
+app errors -- acme
+app uninstall -- acme
+app expose --local -- acme
+app release --apps uninstall -- ws
+app handover --to ws -- acme
+app unpark -- acme
+app park -- acme
+app exception -- acme off
+app suspend -- acme
+app resume -- acme
+app audit -- acme
+app requests -- acme
+app quota -- acme
+app quotas -- acme
+app guest list -- acme
+app init --template static -- acme
+app links -- acme
+app people -- acme
+app invite-settings -- acme
+app profile settings -- acme
+app login settings -- acme
+app set --deletion-grace 7d -- acme
+app recording -- acme
+app recordings -- acme
+app account-deletion -- acme
+app account-deletions -- acme
+app members -- lobby
+app room-names -- lobby hide
+app chat -- acme
+app self -- acme
+app usage -- acme
+app remote-pass -- acme
+app sdk status -- acme
+app updates ls -- acme
+app data ls -- acme
+app label take acme -- x
+app test-guests -- acme
+app test-guest -- acme
+app move-plan -- svc
+app domain add acme -- x
+app domains -- acme
+app warnings -- acme
+app clean-mode on -- acme
+app key revoke -- k1
+app keys -- acme
+app wallet remove -- w1
 changes diff -- a.txt
 changes stage -- a.txt
 changes add -- a.txt

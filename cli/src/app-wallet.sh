@@ -14,8 +14,11 @@ cmd_app_wallet() {
     local sub="${1:-}"
     [ $# -gt 0 ] && shift
     local json_out=0 a1="" a2="" a3="" on="" fb="" clear=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --json) json_out=1; shift ;;
             --on) on=1; shift ;;
             --off) on=0; shift ;;
@@ -118,9 +121,10 @@ _app_take_assign() {
         case "$1" in
             --) _APP_ARGS+=("$@"); break ;;
             --assign)
-                # Help wins: `--assign -h` is a help request, never a login.
-                # The flag goes; the help word stays for the verb's own page.
-                if [ $# -ge 2 ] && _wants_help "$2"; then
+                # Help wins: `--assign -h` (or the word help) is a help
+                # request, never a login. The flag goes; the help word stays
+                # for the verb's own page.
+                if [ $# -ge 2 ] && _app_says_help "$2"; then
                     _APP_ARGS+=("$2"); shift 2; continue
                 fi
                 if [ $# -lt 2 ] || [ -z "$2" ]; then

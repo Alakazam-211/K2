@@ -42,8 +42,11 @@ EOF
 
 cmd_app_recording() {
     local app="" set_mode=0 level="" days="" required="" server_read="" json_out=0 days_named=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             set) set_mode=1; shift ;;
             --start-level) level="${2:-}"; shift 2 || { echo "usage: --start-level none|admin|moderator|member" >&2; exit 2; } ;;
             --start-level=*) level="${1#*=}"; shift ;;
@@ -148,8 +151,11 @@ cmd_app_account_deletion() {
         complete|cancel) action="$1"; shift ;;
         list) shift ;;
     esac
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_account_deletion_usage; return 0 ;;
             -*) echo "Unknown flag: $1 (k2 app account-deletion --help)" >&2; exit 2 ;;
@@ -193,8 +199,11 @@ print("Now delete what the App keeps for them in its own data.")'
 
 cmd_app_members() {
     local room="" app="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --app) _need_value "$@"; app="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_surfaces_usage; return 0 ;;
@@ -226,8 +235,11 @@ print("  + %s" % v["admins"])'
 
 cmd_app_room_names() {
     local room="" mode="" json_out=0 hide=""
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_surfaces_usage; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
@@ -265,8 +277,11 @@ EOF
 
 cmd_app_chat() {
     local app="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_chat_usage; return 0 ;;
             -*) echo "Unknown flag: $1 (k2 app chat <app> [--json])" >&2; exit 2 ;;
@@ -326,8 +341,11 @@ for s in spaces:
 
 cmd_app_self() {
     local app="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_surfaces_usage; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
@@ -350,8 +368,11 @@ if v.get("deployment"):
 
 cmd_app_usage() {
     local app="" hours="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --hours) _need_value "$@"; hours="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_surfaces_usage; return 0 ;;
@@ -379,6 +400,7 @@ for x in v.get("verbs") or []:
 # k2 app token rotate <app> — a remote App pass (AR10). Owner, outside K2.
 cmd_app_token_rotate() {
     local app="" ttl="" keep=0 caps="" json_out=0
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
         case "$1" in
             --ttl) _need_value "$@"; ttl="${2:-}"; shift 2 ;;
@@ -414,8 +436,11 @@ sys.stderr.write("  %s\n" % v.get("note", ""))'
 
 cmd_app_remote_pass() {
     local app="" revoke=0 id="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --revoke) revoke=1; shift; case "${1:-}" in ''|-*) ;; *) id="$1"; shift ;; esac ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_door_usage; return 0 ;;

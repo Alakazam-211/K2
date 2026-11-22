@@ -4,8 +4,11 @@
 # one App, and what they may do there (the owner's person × agent grid).
 cmd_app_people() {
     local app="" user="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) echo "usage: k2 app people <app> [<user>] [--json]   (app: service id, <workspace>/<name> or host)"; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
@@ -86,8 +89,11 @@ print("Stay signed in: %s" % (("%s days" % d) if d else "off (7-day login)"))'
 cmd_app_invite_settings() {
     local app="" json_out=0 invite_ttl="" reset_ttl="" url="" isub="" ibody="" rsub="" rbody="" defaults="" max_devices=""
     _read_body_file() { [ -f "$1" ] || { echo "no such file: $1" >&2; exit 2; }; cat "$1"; }
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --invite-ttl) _need_value "$@"; invite_ttl="${2:-}"; shift 2 ;;
             --reset-ttl) _need_value "$@"; reset_ttl="${2:-}"; shift 2 ;;
             --set-password-url) _need_value "$@"; url="${2:-}"; shift 2 ;;
@@ -166,8 +172,11 @@ print("  devices per person: %s%s" % (v.get("maxDevices"), " (default)" if v.get
 # users" may only turn them off (never on, never the box login).
 cmd_app_profile_settings() {
     local app="" names="" image="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --names) _need_value "$@"; names="${2:-}"; shift 2 ;;
             --image|--picture) _need_value "$@"; image="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
@@ -213,8 +222,11 @@ EOF
 
 cmd_app_set() {
     local app="" mode="" grace="" logs="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --account-deletion) _need_value "$@"; mode="${2:-}"; shift 2 ;;
             --account-deletion=*) mode="${1#*=}"; shift ;;
             --deletion-grace) _need_value "$@"; grace="${2:-}"; shift 2 ;;

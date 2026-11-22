@@ -12,8 +12,11 @@ EOF
 cmd_app_guest_reads() {
     local what="$1"; shift
     local app="" json_out=0 limit="" cursor=""
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --json) json_out=1; shift ;;
             --limit) _need_value "$@"; limit="${2:-}"; shift 2 ;;
             --cursor) _need_value "$@"; cursor="${2:-}"; shift 2 ;;
@@ -116,6 +119,7 @@ else:
 
 cmd_app_grant_kind() {
     local app="" kind="" revoke=0 json_out=0 rooms_csv="" max="" caps="" max_level="" uploads=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
         case "$1" in
             --max) _need_value "$@"; max="${2:-}"; shift 2 ;;
@@ -239,6 +243,7 @@ print("  its server: chat.pass() with the person'"'"'s own session (k2.withGuest
 
 cmd_app_grants() {
     local app="" json_out=0
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) json_out=1; shift ;;
@@ -277,8 +282,11 @@ cmd_app_guest() {
         *) echo "usage: k2 app guest rooms|ceiling|list <app> …" >&2; exit 2 ;;
     esac
     local app="" user="" set_mode=0 rooms_csv="" json_out=0 have_rooms=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_guest_rooms_usage; return 0 ;;
             set) set_mode=1; shift

@@ -10,14 +10,18 @@ cmd_app_links() {
     case "$sub" in
         ""|-h|--help|help) _app_links_usage; return 0 ;;
         set|off|check|status) shift ;;
+        --) sub=status ;;
         -*) echo "usage: k2 app links <app> | set|off|check <app> (k2 app links --help)" >&2; exit 2 ;;
         *) sub=status ;;
     esac
     local app="" json_out=0 ios="" android="" paths="" drops=""
     local nl='
 '
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --ios) [ "$sub" = set ] || { echo "--ios goes with k2 app links set" >&2; exit 2; }; _need_value "$@"; ios="$ios${2:-}$nl"; shift 2 ;;
             --android) [ "$sub" = set ] || { echo "--android goes with k2 app links set" >&2; exit 2; }; _need_value "$@"; android="$android${2:-}$nl"; shift 2 ;;
             --path) [ "$sub" = set ] || { echo "--path goes with k2 app links set" >&2; exit 2; }; _need_value "$@"; paths="$paths${2:-}$nl"; shift 2 ;;

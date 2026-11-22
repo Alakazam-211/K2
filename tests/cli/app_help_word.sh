@@ -272,6 +272,232 @@ esac
 grep -q '^GET /cli/app/approvals' <<<"$SENT" && ok "k2 app approve -- help: reads the approvals" \
     || { bad "k2 app approve -- help: did not read the approvals"; show "$SENT"; }
 
+echo "== the other app-*.sh verbs: the word help is help =="
+while IFS= read -r row; do
+    [ -n "$row" ] && help_row "$row"
+done <<'ROWS'
+app box-service shop help
+app box-service request shop redis help
+app catalog show web help
+app install --catalog web help
+app install shop help
+app db status shop help
+app egress shop help
+app egress add shop api.acme.test help
+app doctor . help
+app doctor --store . help
+app engine install help
+app engine status help
+app rehost shop help
+app rehost status shop help
+app rehost policy shop --policy auto help
+app box prepare help
+app box unprep help
+app box auto-prepare status help
+app box podman uninstall help
+app build . help
+app deploy shop web help
+app rollback shop help
+app stop shop help
+app restart shop help
+app link shop help
+app seal shop help
+app deployment shop help
+app config shop --memory 8G help
+app list --json help
+app inspect shop help
+app history shop help
+app logs shop help
+app errors shop help
+app uninstall shop help
+app expose shop --local help
+app handover shop --to ws2 help
+app park shop help
+app unpark shop help
+app release ws --apps uninstall help
+app exec shop help
+app shell shop help
+app exception shop off help
+app sessions --live help
+app suspend shop help
+app resume shop help
+app audit shop help
+app requests shop help
+app quota shop help
+app resources --json help
+app resources clean help
+app resources trends help
+app guest rooms shop ada help
+app guest list shop help
+app grant shop --kind guests-rooms help
+app grants shop help
+app init web help
+app links shop help
+app people shop help
+app invite-settings shop help
+app login settings shop help
+app profile settings shop help
+app set shop --deletion-grace 7d help
+app recording shop help
+app account-deletion shop help
+app members lobby help
+app room-names lobby hide help
+app chat shop help
+app self shop help
+app usage shop help
+app token rotate shop help
+app remote-pass shop help
+app sdk add . help
+app sdk status . help
+app sdk kit kit.tar.gz help
+app updates ls shop help
+app updates key shop help
+app updates token shop --file notes.txt help
+app updates push shop --channel beta --version 1.0.0 --artifact linux=notes.txt help
+app updates promote shop --from beta --to stable help
+app updates rollback shop --channel beta --to 1.0.0 help
+app updates pull shop --version 1.0.0 help
+app updates stats shop help
+app updates fleet help
+app data ls shop help
+app data get shop notes.txt help
+app data rm shop notes.txt help
+app data mv shop a.txt b.txt help
+app data put shop notes.txt help
+app label take shop help
+app user add shop bob --test help
+app user rooms-ok shop bob help
+app test-guests shop help
+app move-plan svc help
+app domain add shop help
+app domain list shop help
+app domain external shop www.acme.test on help
+app domain check shop help
+app domains shop help
+app warnings shop help
+app clean-mode shop on help
+app key revoke k1 help
+app key mint shop --scopes users help
+app keys shop help
+app wallet settings shop help
+app wallet remove help
+app user add bob help
+app user show bob --app shop help
+app user image bob --clear help
+app user sessions bob --app shop help
+app user invite bob --app shop help
+app user reset bob help
+app user password bob --password-stdin help
+app user chat bob member help
+app user unlock bob help
+app user email bob --email bob@acme.test help
+app user full-name bob --name Bob help
+app user agent bob ws help
+app user rooms bob --agent sales help
+app role create sales help
+app role room sales lobby help
+app role paths sales lobby --read a/ help
+app role update sales --clear help
+app roles add --from shop --app shop help
+app grant add --subject bob --kind room --target lobby help
+app grant rm --id g1 help
+app grant set --id g1 --scope read help
+app grant role --id g1 --role sales help
+app grant copy-host shop help
+app front-door --mode off help
+app hydra status help
+app token create --name t --agent sales help
+app token rooms t1 --agent sales help
+ROWS
+
+echo "== the other app-*.sh verbs: a name that is literally help goes after -- =="
+while IFS= read -r row; do
+    [ -n "$row" ] && name_row "$row"
+done <<'ROWS'
+app box-service -- help
+app box-service request -- help redis
+app catalog show -- help
+app install --catalog web -- help
+app install -- help
+app db status -- help
+app egress -- help
+app egress add -- help api.acme.test
+app rehost -- help
+app rehost status -- help
+app rehost policy --policy auto -- help
+app deploy -- help web
+app rollback -- help
+app stop -- help
+app restart -- help
+app link -- help
+app seal -- help
+app deployment -- help
+app config --memory 8G -- help
+app inspect -- help
+app history -- help
+app logs -- help
+app errors -- help
+app uninstall -- help
+app expose --local -- help
+app handover --to ws2 -- help
+app park -- help
+app unpark --to ws2 -- help
+app release --apps uninstall -- help
+app exception -- help off
+app suspend -- help
+owner app resume -- help
+app audit -- help
+app requests -- help
+app quota -- help
+app guest rooms -- help ada
+app guest list -- help
+app links -- help
+app people -- help
+app invite-settings -- help
+app login settings -- help
+app profile settings -- help
+app set --deletion-grace 7d -- help
+app recording -- help
+app account-deletion -- help
+app members -- help
+owner app room-names -- help hide
+app chat -- help
+app self -- help
+app usage -- help
+app remote-pass -- help
+app updates ls -- help
+app updates key -- help
+app updates token --file notes.txt -- help
+app updates push --channel beta --version 1.0.0 --artifact linux=notes.txt -- help
+app updates promote --from beta --to stable -- help
+app updates rollback --channel beta --to 1.0.0 -- help
+app updates pull --version 1.0.0 -- help
+app updates stats -- help
+app data ls -- help
+app data get --to - -- help notes.txt
+app data rm -- help notes.txt
+app data mv -- help a.txt b.txt
+app data put -- help notes.txt
+app label take shop -- help
+app test-guests -- help
+app move-plan -- help
+app domain add shop -- help
+app domain list -- help
+app domain external -- help www.acme.test on
+app domain check shop -- help
+app domains -- help
+app warnings -- help
+app clean-mode -- help on
+app key revoke -- help
+app key mint --scopes users -- help
+app keys -- help
+app wallet remove -- help
+local app init --template static -- help
+app doctor -- help
+local app build -- help
+local app sdk status -- help
+ROWS
+
 echo ""
 echo "app_help_word: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

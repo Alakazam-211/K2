@@ -7,8 +7,11 @@ EOF
 
 cmd_app_init() {
     local template="" folder="" name="" app="" voice="" dry=0 json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --template) _need_value "$@"; template="${2:-}"; shift 2 ;;
             --template=*) template="${1#--template=}"; shift ;;
             --name) _need_value "$@"; name="${2:-}"; shift 2 ;;

@@ -801,7 +801,7 @@ case "${1:-help}" in
             # RS-A15: `k2 app grant <app> --kind …` owns its --help too.
             grant)
                 case "${3:-}" in
-                    ""|list|add|create|rm|remove|delete|revoke|copy-host|copyhost|-h|--help)
+                    ""|list|add|create|rm|remove|delete|revoke|set|update|role|hooks|hook|copy-host|copyhost|-h|--help)
                         if _app_says_help "${@:2}"; then _app_family_usage; _app_rt_usage; exit 0; fi
                         ;;
                 esac

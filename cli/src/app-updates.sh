@@ -44,8 +44,11 @@ for r in v.get("releases", []):
 # k2 app updates ls <app> [--channel c] [--release r] [--json]
 _app_updates_ls() {
     local app="" ch="" rel="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --channel) _need_value "$@"; ch="${2:-}"; shift 2 ;;
             --release) _need_value "$@"; rel="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
@@ -86,8 +89,11 @@ if e:
 # k2 app updates key <app> [--set <pubkey> | --set-file <file.pub>] [--json]
 _app_updates_key() {
     local app="" key="" key_file="" json_out=0 setting=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --set) _need_value "$@"; key="${2:-}"; setting=1; shift 2 ;;
             --set-file) _need_value "$@"; key_file="${2:-}"; setting=1; shift 2 ;;
             --show) shift ;;
@@ -137,8 +143,11 @@ else:
 # k2 app updates token <app> --file <path> | --stdin | (show)
 _app_updates_token() {
     local app="" file="" from_stdin=0 json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --file) _need_value "$@"; file="${2:-}"; shift 2 ;;
             --stdin) from_stdin=1; shift ;;
             --json) json_out=1; shift ;;
@@ -192,8 +201,11 @@ _app_updates_push() {
     local app="" ch="" ver="" notes_file="" no_wait=0 json_out=0 evidence=""
     local -a arts=() sigs=() drops=()
     local usage="usage: k2 app updates push <app> --channel <name> --version <semver> --artifact <platform>=<file> [--artifact …] [--sig <platform>=<file.sig>] [--notes-file <file>] [--drop-platform <platform>] [--evidence <ci release run>] [--no-wait] [--json]"
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --channel) _need_value "$@"; ch="${2:-}"; shift 2 ;;
             --version) _need_value "$@"; ver="${2:-}"; shift 2 ;;
             --artifact) _need_value "$@"; arts+=("${2:-}"); shift 2 ;;
@@ -283,8 +295,11 @@ print(r[0]["state"] if r else "missing")
 # k2 app updates promote <app> --from a --to b [--version v] [--drop-platform] [--json]
 _app_updates_promote() {
     local app="" from="" to="" ver="" drop=0 json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --from) _need_value "$@"; from="${2:-}"; shift 2 ;;
             --to) _need_value "$@"; to="${2:-}"; shift 2 ;;
             --version) _need_value "$@"; ver="${2:-}"; shift 2 ;;
@@ -312,8 +327,11 @@ else:
 # k2 app updates rollback <app> --channel c --to v [--json]
 _app_updates_rollback() {
     local app="" ch="" to="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --channel) _need_value "$@"; ch="${2:-}"; shift 2 ;;
             --to) _need_value "$@"; to="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
@@ -337,8 +355,11 @@ print("WARNING: " + v["warning"])
 # k2 app updates pull <app> --version v [--json]
 _app_updates_pull() {
     local app="" ver="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --version) _need_value "$@"; ver="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_updates_usage; return 0 ;;
@@ -365,8 +386,11 @@ print(v.get("note", ""))
 # k2 app updates stats <app> [--days N] [--json]
 _app_updates_stats() {
     local app="" days="30" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --days) _need_value "$@"; days="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_updates_usage; return 0 ;;
@@ -398,6 +422,7 @@ for ver, n in sorted((u.get("byVersion") or {}).items()):
 # k2 app updates fleet [--json]
 _app_updates_fleet() {
     local json_out=0
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) json_out=1; shift ;;
@@ -436,8 +461,11 @@ cmd_app_data() {
 # k2 app data ls <app-id> [<path>] [--json] (0.46.4).
 _app_data_ls() {
     local app="" path="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_data_usage; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
@@ -477,8 +505,11 @@ if v.get("truncated"):
 # it into place: a failed get never leaves half a file.
 _app_data_get() {
     local app="" path="" to="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --to) to="${2:-}"; [ -n "$to" ] || { echo "usage: --to <local path> | -" >&2; exit 2; }; shift 2 ;;
             --to=*) to="${1#--to=}"; shift ;;
             --json) json_out=1; shift ;;
@@ -548,8 +579,11 @@ print("%d %d %d %d" % (v["size"], v["mtime"], 1 if v["eof"] else 0, v["offset"] 
 # k2 app data rm <app-id> <path> [--recursive] [--json] (0.46.4).
 _app_data_rm() {
     local app="" path="" rec="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             -r|--recursive) rec=1; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_data_usage; return 0 ;;
@@ -571,8 +605,11 @@ print("removed %s %s from App %s" % (kind, v.get("at"), v.get("app")))'
 # k2 app data mv <app-id> <from> <to> [--force] [--json] (0.46.4).
 _app_data_mv() {
     local app="" from="" to="" force="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             -f|--force) force=1; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_data_usage; return 0 ;;
@@ -593,11 +630,14 @@ print("moved %s to %s in App %s%s" % (v.get("from"), v.get("to"), v.get("app"), 
 # k2 app data put <app-id> <path> [--to <dir>] [--json] (0.46.3): copy a file
 # or folder of the App's workspace into its data folder.
 _app_data_put() {
-    # Help wins: -h or --help anywhere, even as a value flag's word.
-    if _wants_help "$@"; then _app_data_usage; return 0; fi
+    # Help wins: -h, --help or the word help anywhere before a bare --,
+    # even as a value flag's word.
+    if _app_says_help "$@"; then _app_data_usage; return 0; fi
     local app="" from="" to="" json_out=0 dov=""
+    local _dd=""
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --to) _need_value "$@"; to="${2:-}"; shift 2 ;;
             --disk-override) _need_value "$@"; dov="${2:-}"; shift 2 ;;
             --disk-override=*) dov="${1#--disk-override=}"; shift ;;
@@ -631,8 +671,11 @@ cmd_app_label() {
         *) echo "usage: k2 app label take|return <app-id> <label> [--json]" >&2; exit 2 ;;
     esac
     local app="" label="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_grace_usage; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
@@ -683,6 +726,7 @@ _app_test_guest() {
     local action="$1"
     shift
     local app="" name="" role="" expires="" json_out=0 rooms_csv="" pw_stdin=0
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
         case "$1" in
             --test) shift ;;
@@ -784,6 +828,7 @@ if w.get("rooms"):
 _app_test_guest_rooms_ok() {
     local app="" name="" reason="" json_out=0
     local usage="usage: k2 app user rooms-ok <app-id> <test-login> [--assign <login>] [--reason TEXT] [--json]"
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
         case "$1" in
             --reason) _need_value "$@"; reason="${2:-}"; shift 2 ;;
@@ -837,8 +882,11 @@ else:
 
 cmd_app_test_guests() {
     local app="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_test_guest add --help; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
@@ -862,8 +910,11 @@ for t in g:
 # done, and with --request ONE held request for all the owner's steps.
 cmd_app_move_plan() {
     local svc="" app="" request=0 reason="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --app) _need_value "$@"; app="${2:-}"; shift 2 ;;
             --request) request=1; shift ;;
             --reason) _need_value "$@"; reason="${2:-}"; shift 2 ;;
@@ -955,8 +1006,11 @@ EOF
         *) echo "usage: k2 app domain add|rm <app-id> <subdomain> [--json]" >&2; exit 2 ;;
     esac
     local app="" label="" json_out=0 transfer="" external=""
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --json) json_out=1; shift ;;
             --transfer) transfer=1; shift ;;
             --external) external=1; shift ;;
@@ -989,8 +1043,11 @@ else:
 
 cmd_app_domains() {
     local app="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) cmd_app_domain --help; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
@@ -1050,8 +1107,11 @@ elif pb.get("why"):
 # makes no check or certificate for it), or K2's front does (off).
 cmd_app_domain_external() {
     local app="" host="" mode="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) cmd_app_domain --help; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
@@ -1077,8 +1137,11 @@ cmd_app_domain_custom() {
     local verb="$1"
     shift
     local app="" host="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) cmd_app_domain --help; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
@@ -1142,8 +1205,11 @@ if v.get("note") and not v.get("already"):
 
 cmd_app_warnings() {
     local app="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_grace_usage; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
@@ -1188,14 +1254,18 @@ if tracing and tracing != "on":
 
 cmd_app_clean_mode() {
     local app="" onoff="" restart="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --restart) restart=1; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_grace_usage; return 0 ;;
             on|off) onoff="$1"; shift ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
-            *) app="$1"; shift ;;
+            # After --: the App, then on or off.
+            *) if [ -n "$_dd" ] && [ -n "$app" ]; then onoff="$1"; else app="$1"; fi; shift ;;
         esac
     done
     { [ -z "$app" ] || [ -z "$onoff" ]; } && { echo "usage: k2 app clean-mode <app> on|off [--restart]" >&2; exit 2; }
@@ -1220,8 +1290,11 @@ cmd_app_key() {
             # One <key-id> (never a word that starts with -), --json
             # anywhere; -h anywhere is the help.
             local id="" json_out=0 bad=""
+            local _dd=""
+            if _app_says_help "$@"; then set -- --help; fi
             while [ $# -gt 0 ]; do
-                case "$1" in
+                case "$_dd$1" in
+                    --) _dd=: ;;
                     -h|--help) _app_grace_usage; return 0 ;;
                     --json) json_out=1 ;;
                     -*|"") bad=1 ;;
@@ -1245,11 +1318,14 @@ print("%s %s (%s)" % ("revoked" if v.get("revoked") else "already revoked:", v.g
 }
 
 cmd_app_key_mint() {
-    # Help wins: -h or --help anywhere, even as a value flag's word.
-    if _wants_help "$@"; then _app_grace_usage; return 0; fi
+    # Help wins: -h, --help or the word help anywhere before a bare --,
+    # even as a value flag's word.
+    if _app_says_help "$@"; then _app_grace_usage; return 0; fi
     local app="" scopes="" rooms="" roles="" label="" show=0 json_out=0
+    local _dd=""
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --scopes|--scope) _need_value "$@"; scopes="${2:-}"; shift 2 ;;
             --rooms|--room) _need_value "$@"; rooms="${2:-}"; shift 2 ;;
             --roles|--role) _need_value "$@"; roles="${2:-}"; shift 2 ;;
@@ -1301,8 +1377,11 @@ if v.get("key"):
 
 cmd_app_keys() {
     local app="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_grace_usage; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;

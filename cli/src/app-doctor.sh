@@ -40,8 +40,14 @@ else:
 
 cmd_app_doctor() {
     local json_out=0 store=0 folder="" voice=""
+    local _dd=""
+    # The help word is the loop's -h; --store before it picks the page.
+    if _app_says_help "$@"; then
+        case " $* " in *" --store "*) set -- --store --help ;; *) set -- --help ;; esac
+    fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --json) json_out=1; shift ;;
             --store) store=1; shift ;;
             --voice) voice=1; shift ;;
@@ -77,6 +83,7 @@ cmd_app_engine() {
         install)
             shift
             local from="" json_out=0
+            if _app_says_help "$@"; then set -- --help; fi
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --from) _need_value "$@"; from="${2:-}"; shift 2 ;;
@@ -101,6 +108,7 @@ print("k2-app-engine %s installed and answering (protocol %s, runtime %s, %s)" %
         status)
             shift
             local json_out=0
+            if _app_says_help "$@"; then set -- --help; fi
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --json) json_out=1; shift ;;
@@ -147,8 +155,11 @@ cmd_app_rehost() {
         status)
             shift
             local app=""
+            local _dd=""
+            if _app_says_help "$@"; then set -- --help; fi
             while [ $# -gt 0 ]; do
-                case "$1" in
+                case "$_dd$1" in
+                    --) _dd=:; shift ;;
                     --json) json_out=1; shift ;;
                     -h|--help) _app_rt_usage; return 0 ;;
                     -*) echo "Unknown argument: $1" >&2; exit 2 ;;
@@ -187,8 +198,11 @@ for a, s in sorted((v.get("apps") or {}).items()):
         policy)
             shift
             local app="" policy="" window="" nooverlap=""
+            local _dd=""
+            if _app_says_help "$@"; then set -- --help; fi
             while [ $# -gt 0 ]; do
-                case "$1" in
+                case "$_dd$1" in
+                    --) _dd=:; shift ;;
                     --policy) _need_value "$@"; policy="${2:-}"; shift 2 ;;
                     --window) _need_value "$@"; window="${2:-}"; shift 2 ;;
                     --when-no-overlap) _need_value "$@"; nooverlap="${2:-}"; shift 2 ;;
@@ -215,8 +229,11 @@ if v.get("warning"):
         -h|--help|"") _app_rt_usage ;;
         *)
             local app="" yes="" pause=""
+            local _dd=""
+            if _app_says_help "$@"; then set -- --help; fi
             while [ $# -gt 0 ]; do
-                case "$1" in
+                case "$_dd$1" in
+                    --) _dd=:; shift ;;
                     --yes) yes=1; shift ;;
                     --pause) pause=1; shift ;;
                     --json) json_out=1; shift ;;
@@ -264,6 +281,7 @@ cmd_app_box() {
             [ "${1:-}" = "uninstall" ] || { echo "usage: k2 app box podman uninstall [--json]" >&2; exit 2; }
             shift
             local json_out=0 raw
+            if _app_says_help "$@"; then set -- --help; fi
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --json) json_out=1; shift ;;
@@ -289,6 +307,7 @@ print("The distro Podman is as it was.")'
             # F8: k2 app box unprep [--dry-run] [--yes] [--json] (owner).
             shift
             local json_out=0 dry_run="" yes="" raw
+            if _app_says_help "$@"; then set -- --help; fi
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --dry-run) dry_run=1; shift ;;
@@ -357,6 +376,7 @@ if v.get("note"):
                 *) echo "usage: k2 app box auto-prepare on|off|status|retry [--json]" >&2; exit 2 ;;
             esac
             local json_out=0 raw
+            if _app_says_help "$@"; then set -- --help; fi
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --json) json_out=1; shift ;;
@@ -411,6 +431,7 @@ print("Automatic prep: %s" % ("on" if ap.get("enabled") else "off (appsAutoPrepa
         prepare)
             shift
             local runtime="" json_out=0 cores="" mem="" tasks="" install_podman="" dry_run="" podman_from=""
+            if _app_says_help "$@"; then set -- --help; fi
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --runtime) _need_value "$@"; runtime="${2:-}"; shift 2 ;;
@@ -607,8 +628,11 @@ _app_validate_seed() {
 
 cmd_app_build() {
     local folder="" types=0 json_out=0 dov="" manifest=""
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --manifest) _need_value "$@"; manifest="${2:-}"; shift 2 ;;
             --manifest=*) manifest="${1#--manifest=}"; shift ;;
             --types) types=1; shift ;;
@@ -693,11 +717,17 @@ cmd_app_install() {
     # `--catalog <entry>` is the one-click install (a daemon job, app-catalog.sh).
     local _a
     for _a in "$@"; do
-        case "$_a" in --catalog|--catalog=*) cmd_app_install_catalog "$@"; return ;; esac
+        case "$_a" in
+            --) break ;;
+            --catalog|--catalog=*) cmd_app_install_catalog "$@"; return ;;
+        esac
     done
     local app="" ws="" tunnel=0 memory="" seed="" folder="" engine="" json_out=0 dov="" pgmajor="" transfer=""
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --transfer) transfer=1; shift ;;
             --disk-override) _need_value "$@"; dov="${2:-}"; shift 2 ;;
             --disk-override=*) dov="${1#--disk-override=}"; shift ;;
@@ -757,8 +787,11 @@ else:
 # k2 app deploy <app-id> <folder|seed> [--reason TEXT] [--no-wait] [--types] [--json]
 cmd_app_deploy() {
     local app="" target="" reason="" wait=150 types=0 json_out=0 engine="" dov="" manifest=""
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --disk-override) _need_value "$@"; dov="${2:-}"; shift 2 ;;
             --disk-override=*) dov="${1#--disk-override=}"; shift ;;
             --manifest) _need_value "$@"; manifest="${2:-}"; shift 2 ;;
@@ -838,8 +871,11 @@ if not m.get("ignoreFile") and m.get("bytes", 0) > (20 << 20):
 # k2 app rollback <app-id> [--to SEED] [--no-wait] [--json]
 cmd_app_rollback() {
     local app="" to="" wait=150 json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --to) _need_value "$@"; to="${2:-}"; shift 2 ;;
             --no-wait) wait=0; shift ;;
             --json) json_out=1; shift ;;
@@ -858,8 +894,11 @@ cmd_app_rollback() {
 cmd_app_lifecycle() {
     local verb="$1"; shift
     local app="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_rt_usage; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
@@ -887,8 +926,11 @@ print("%s: %s" % (v.get("app"), v.get("state") or v.get("already") or "ok"))'
 # Exit 0 open, 1 not open (the App isn't running walled), 2 usage, 3 infra.
 cmd_app_link() {
     local app="" rotate=0 json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --rotate) rotate=1; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_rt_usage; return 0 ;;
@@ -933,8 +975,11 @@ print("  requests     %s (refused %s, wrong link %s), %s connected" % (l.get("re
 # The value is never shown. Exit 0 ok, 1 no key yet, 2 usage, 3 refused/infra.
 cmd_app_seal() {
     local app="" rotate=0 yes=0 json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             rotate) rotate=1; shift ;;
             --yes|-y) yes=1; shift ;;
             --json) json_out=1; shift ;;
@@ -991,8 +1036,11 @@ else:
 # k2 app deployment <app-id> [<deployment-id>] [--json] — who, commit, state (L3).
 cmd_app_deployment() {
     local app="" id="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_rt_usage; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
@@ -1025,8 +1073,11 @@ cmd_app_config() {
     local -a kv=()
     local egress_add="" egress_rm="" port_add="" port_rm=""
     local io_r="" io_w="" io_ri="" io_wi=""
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --memory) _need_value "$@"; kv+=("K2_CJ_memory=${2:-}"); shift 2 ;;
             --cpu-weight) _need_value "$@"; kv+=("K2_CJ_cpuWeight=${2:-}"); shift 2 ;;
             --tasks) _need_value "$@"; kv+=("K2_CJ_tasks=${2:-}"); shift 2 ;;
@@ -1101,6 +1152,7 @@ print(v.get("note", ""))'
 # k2 app list [--workspace WS] [--box] [--json]
 cmd_app_list() {
     local ws="" json_out=0 box=0
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
         case "$1" in
             --workspace) _need_value "$@"; ws="${2:-}"; shift 2 ;;
@@ -1174,8 +1226,11 @@ for n in v.get("notices", []):
 # k2 app inspect <app-id> [--json]
 cmd_app_inspect() {
     local app="" json_out=0 res=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --json) json_out=1; shift ;;
             --resources) res=1; shift ;;
             -h|--help) _app_rt_usage; return 0 ;;
@@ -1227,8 +1282,11 @@ print("  audit     %s" % ("chain verifies (%s rows)" % au.get("rows") if au.get(
 # k2 app history <app-id> [--limit N] [--json]   |   k2 app history --widget <name>
 cmd_app_history() {
     local app="" widget="" limit="" json_out=0 users=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --widget) _need_value "$@"; widget="${2:-}"; shift 2 ;;
             --limit) _need_value "$@"; limit="${2:-}"; shift 2 ;;
             --users) users=1; shift ;;
@@ -1293,8 +1351,11 @@ print("audit chain: %s" % ("verifies" if v.get("auditVerified") else "BROKEN (k2
 # k2 app logs <app> --client [--user U] [--kind crash|log] [--since 1d] [--limit N] [--json]
 cmd_app_logs() {
     local app="" dep="" tail=200 follow=0 client=0 cuser="" ckind="" csince="" climit="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --deployment) _need_value "$@"; dep="${2:-}"; shift 2 ;;
             --tail) _need_value "$@"; tail="${2:-}"; shift 2 ;;
             --follow|-f) follow=1; shift ;;
@@ -1378,8 +1439,11 @@ print(v["framed"])'
 # lines, framed as untrusted.
 cmd_app_errors() {
     local app="" since=3600 kind="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --since) _need_value "$@"; since="${2:-}"; shift 2 ;;
             --kind)
                 _need_value "$@"
@@ -1434,8 +1498,11 @@ print(v["framed"])
 # unless --drop-access; --purge (the owner in person) is already explicit.
 cmd_app_uninstall() {
     local app="" purge=0 drop=0 json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --purge) purge=1; shift ;;
             --drop-access) drop=1; shift ;;
             --json) json_out=1; shift ;;
@@ -1470,8 +1537,11 @@ EOF
 # with no reinstall. POST /cli/app/expose {app, tunnel, transfer?}.
 cmd_app_expose() {
     local app="" mode="" transfer=0 json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --tunnel) [ "$mode" = "local" ] && { echo "usage: --tunnel or --local, not both" >&2; exit 2; }; mode="tunnel"; shift ;;
             --local) [ "$mode" = "tunnel" ] && { echo "usage: --tunnel or --local, not both" >&2; exit 2; }; mode="local"; shift ;;
             --transfer) transfer=1; shift ;;
@@ -1587,8 +1657,11 @@ cmd_app_handover() {
         esac
     fi
     local app="" to="" brief_file="" db="" coll="" reset_shared="" copy_source="" reason="" dry=0 json_out=0 detail=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --to) _need_value "$@"; to="${2:-}"; shift 2 ;;
             --detail) detail=1; shift ;;
             --brief) _need_value "$@"; brief_file="${2:-}"; shift 2 ;;
@@ -1713,8 +1786,11 @@ for h in rows:
 cmd_app_ownership() {
     local verb="$1"; shift
     local app="" to="" reason="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --to) _need_value "$@"; to="${2:-}"; shift 2 ;;
             --reason) _need_value "$@"; reason="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
@@ -1744,8 +1820,11 @@ cmd_app_ownership() {
 # k2 app release <workspace> --apps handover:<ws>|uninstall|park [--json]
 cmd_app_release() {
     local ws="" apps="" drop=0 json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --apps) _need_value "$@"; apps="${2:-}"; shift 2 ;;
             --drop-access) drop=1; shift ;;
             --json) json_out=1; shift ;;
@@ -1843,6 +1922,7 @@ _app_rt_post_file() {
 # most, exit 2 past it); a terminal, /dev/null or --no-stdin sends none.
 cmd_app_exec() {
     local app="" timeout="" json_out=0 no_stdin=0
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
         case "$1" in
             --timeout) timeout="$(_compute_secs "${2:-}")"; shift 2 ;;
@@ -1915,6 +1995,7 @@ print(124 if v.get("timedOut") else (c if isinstance(c, int) and 0 <= c <= 255 e
 # too (echo ls | k2 app shell jobs).
 cmd_app_shell() {
     local app=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
         case "$1" in
             -h|--help) _app_rt_usage; return 0 ;;
@@ -2100,15 +2181,19 @@ sys.exit(code if isinstance(code, int) and 0 <= code <= 255 else (0 if code is N
 # who may manage the App.
 cmd_app_exception() {
     local app="" mode="" reason="" json_out=0 devices=()
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --device) _need_value "$@"; devices+=("${2:-}"); shift 2 ;;
             --reason) _need_value "$@"; reason="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_rt_usage; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
             on|off) if [ -n "$app" ]; then mode="$1"; else app="$1"; fi; shift ;;
-            *) app="$1"; shift ;;
+            # After --: the App, then on or off.
+            *) if [ -n "$_dd" ] && [ -n "$app" ]; then mode="$1"; else app="$1"; fi; shift ;;
         esac
     done
     { [ -z "$app" ] || [ -z "$mode" ]; } && { echo "usage: k2 app exception <app-id> on [--device dri-render128]... [--reason TEXT] | off" >&2; exit 2; }
@@ -2200,6 +2285,7 @@ EOF
 # socket open right now and guests signed in, per App. Counts only.
 cmd_app_sessions() {
     local live=0 count=0 json_out=0
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
         case "$1" in
             --live) live=1; shift ;;

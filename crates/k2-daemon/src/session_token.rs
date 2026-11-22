@@ -1234,6 +1234,17 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/app/shell",
         "/cli/app/start",
         "/cli/app/stop",
+        // Supabase-compat lane D: k2 app storage, its own workspace's Apps
+        // (the handler: "Build and run Apps").
+        "/cli/app/storage/bucket",
+        "/cli/app/storage/buckets",
+        "/cli/app/storage/enable",
+        "/cli/app/storage/import",
+        "/cli/app/storage/import/status",
+        "/cli/app/storage/key/rotate",
+        "/cli/app/storage/ls",
+        "/cli/app/storage/status",
+        "/cli/app/storage/verify",
         "/cli/app/uninstall",
         "/cli/app/validate",
         // 0.46.0 grace: warnings, clean mode (on narrows; off needs switch

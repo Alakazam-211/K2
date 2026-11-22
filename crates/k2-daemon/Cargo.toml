@@ -306,6 +306,13 @@ notify = { version = "7", features = ["macos_fsevent"] }
 # signing keys ever live in the daemon — verify only.
 sha2 = "0.10"
 minisign-verify = "0.2"
+# The Supabase-compatible /storage/v1 door (prd-app-supabase-compat-v1 §10,
+# lane D): a Postgres driver for the per-request role switch and claims
+# (lane C adds the shared pool; this lane keeps a small copy behind the
+# same seam until it lands), and MD5 only to check an imported object
+# against the source's S3-style ETag (never for anything secret).
+tokio-postgres = "0.7"
+md-5 = "0.10"
 # Sew S29 (K12): the KEK id check — Sew's S4 §5.3 formula is a blake3
 # derive_key over the master key. Only for that id; tarballs stay sha2.
 blake3 = "1"

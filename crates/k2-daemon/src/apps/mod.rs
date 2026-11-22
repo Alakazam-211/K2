@@ -5,6 +5,9 @@
 //! are `k2_core::deploy`.
 
 pub mod access;
+/// The Supabase-compatible App data layer (prd-app-supabase-compat-v1):
+/// the `/storage/v1` door and storage import (lane D) so far.
+pub mod compat;
 // 0.46.9: one-click suite Apps (prd-one-click-suite-apps-v1): the catalog
 // routes and the daemon install job.
 pub mod catalog_job;

@@ -335,6 +335,19 @@ pub(super) const ROWS: &[Route] = &[
     // each part keeps its own route's rule).
     get("/cli/app/status", Member),
     post("/cli/app/stop", Admin),
+    // Supabase-compat lane D: k2 app storage (compat/storage_routes.rs). As
+    // `k2 app data`: an App's stored files are not a Member's read; every
+    // write is Admin (the handler: the owner, an Admin, or the App's own
+    // agent with "Build and run Apps").
+    post("/cli/app/storage/bucket", Admin),
+    get("/cli/app/storage/buckets", Admin),
+    post("/cli/app/storage/enable", Admin),
+    post("/cli/app/storage/import", Admin),
+    get("/cli/app/storage/import/status", Admin),
+    post("/cli/app/storage/key/rotate", Admin),
+    get("/cli/app/storage/ls", Admin),
+    get("/cli/app/storage/status", Admin),
+    post("/cli/app/storage/verify", Admin),
     // S19: suspend narrows, for the owner and Admins (Rosson 0.46.8: never a
     // Member). A passport: its own workspace's Apps, with no switch (handler).
     post("/cli/app/suspend", Admin),

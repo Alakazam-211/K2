@@ -483,8 +483,9 @@ async fn real_pg_storage_door() {
     assert_eq!(st, 401, "no anon lane");
     // Compat off: the door says so (the App path doesn't divert then).
     test_seams::set_config(app, None);
-    let (st, _, _) = call(app, req("GET", "/bucket", Some("test-a"), &[], b"")).await;
-    assert_eq!(st, 404);
+    let (st, _, body) = call(app, req("GET", "/bucket", Some("test-a"), &[], b"")).await;
+    assert_eq!((st, j(&body)["message"].clone()), (400, json!("storage is not on for this App")), "Supabase's shape: HTTP 400, statusCode 404");
+    assert_eq!(j(&body)["statusCode"], "404");
     drop(srv);
 }
 

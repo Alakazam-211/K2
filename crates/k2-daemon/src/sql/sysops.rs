@@ -1592,6 +1592,7 @@ impl SystemOps for FakeSystemOps {
                 self.query_answers.iter().filter(|(k, _)| k.strip_prefix(&prefix).is_some_and(|n| sql.contains(n))).collect();
             hits.sort();
             if let Some((_, a)) = hits.first() {
+                self.pg.lock().unwrap_or_else(|p| p.into_inner()).helper_sql.push(sql.clone());
                 self.record(format!("psql {wire} {db} {}", sql.lines().next().unwrap_or("")));
                 return Ok((*a).clone());
             }

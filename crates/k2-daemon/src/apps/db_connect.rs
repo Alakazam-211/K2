@@ -418,6 +418,34 @@ pub(crate) fn connections_of(app: &str) -> R<Vec<Conn>> {
     })
 }
 
+/// Every App connection to `db` (by name): (app, env name). `k2 db cluster
+/// switch` re-creates each on the database's new cluster.
+pub(crate) fn connections_on_db(db_name: &str) -> Vec<(String, String)> {
+    let h = k2_core::db::shared();
+    let c = h.lock();
+    let Ok(mut st) = c.prepare("SELECT app_id, as_name FROM app_db_connections WHERE database_name = ?1 AND env = 'production' ORDER BY app_id, as_name") else {
+        return vec![];
+    };
+    st.query_map(rusqlite::params![db_name], |r| Ok((r.get(0)?, r.get(1)?))).map(|it| it.flatten().collect()).unwrap_or_default()
+}
+
+/// `k2 db cluster switch`: connect the App to its database again, now that
+/// the database's record names another cluster (the same login name, a new
+/// password set there, the URLs with the new port, the door, a re-host and
+/// the check), exactly as `k2 app db connect --db` does.
+pub(crate) fn reconnect_for_switch(by: &str, app_id: &str, as_name: &str) -> R<J> {
+    let c = connection(app_id, as_name)?.ok_or_else(|| not_connected(app_id, as_name))?;
+    let app = {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        store::get_app(&conn, app_id).map_err(super::routes::db_err)?
+    }
+    .ok_or_else(|| no(deploy::codes::APP_NOT_FOUND, 404, format!("no App {app_id}")))?;
+    let ask = parse_ask(&json!({"app": app_id, "db": c.database, "as": as_name, "noMigrateUrl": !c.migrate_url}))?;
+    let p = plan(&app, &ask)?;
+    perform(by, &app, &ask, &p)
+}
+
 fn connection(app: &str, as_name: &str) -> R<Option<Conn>> {
     Ok(connections_of(app)?.into_iter().find(|c| c.as_name == as_name && c.env == "production"))
 }
@@ -1250,3 +1278,7 @@ mod tests;
 #[cfg(test)]
 #[path = "db_connect_real_pg.rs"]
 mod real_pg_connect;
+
+#[cfg(test)]
+#[path = "db_connect_switch_real_pg.rs"]
+mod real_pg_switch;

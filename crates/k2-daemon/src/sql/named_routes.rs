@@ -69,6 +69,9 @@ struct Body {
     /// `restore`: the new cluster's name.
     #[serde(rename = "as")]
     as_name: Option<String>,
+    /// `switch`: the database to move, and the confirm (`--yes`).
+    db: Option<String>,
+    yes: bool,
 }
 
 /// The workspace the caller acts for: an agent's own, or (the owner) the
@@ -227,6 +230,7 @@ pub fn handle(ops: &dyn SystemOps, who: Who, is_post: bool, body: &[u8], params:
             }
         }
         "basebackup" | "backups" | "restore" | "restore-drill" | "drop-drill" => pitr_op(ops, &who, &b, &project),
+        "switch" => switch_op(ops, &who, &b, &project),
         other => err(
             "400 Bad Request",
             "usage",
@@ -366,6 +370,39 @@ fn pitr_op(ops: &dyn SystemOps, who: &Who, b: &Body, project: &str) -> CliRespon
             }
             CliResponse::ok_json(v.to_string())
         }
+        Err(e) => ensure_err(e),
+    }
+}
+
+/// `switch {db, to, yes}`: the owner for any workspace's database, or a
+/// local agent with the Postgres versions switch for its own workspace's;
+/// gated like `create` (it makes a cluster the database's home).
+fn switch_op(ops: &dyn SystemOps, who: &Who, b: &Body, project: &str) -> CliResponse {
+    let usage = concat!(k2_core::cli_name!(), " db cluster switch <db> --to <cluster> [--yes]");
+    let (Some(db), Some(to)) = (
+        b.db.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+        b.to.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+    ) else {
+        return err("400 Bad Request", "usage", usage);
+    };
+    let owner_ws = {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        conn.query_row("SELECT project_id FROM sql_databases WHERE name = ?1 AND status = 'active' LIMIT 1", rusqlite::params![db], |r| r.get::<_, String>(0))
+            .ok()
+    };
+    let Some(owner_ws) = owner_ws else {
+        return err("404 Not Found", "not_found", format!("no active database named {db}"));
+    };
+    if !matches!(who, Who::Owner) && owner_ws != project {
+        return err("403 Forbidden", "cluster_not_yours", format!("{db} is another workspace's database"));
+    }
+    if let Err(r) = gate(who, VersionsAct::NamedClusterCreate, &owner_ws) {
+        return r;
+    }
+    let secrets = crate::sql::secrets::FileSecretStore::default();
+    match crate::sql::switch::switch(ops, &secrets, db, to, b.yes, &who.label()) {
+        Ok(v) => CliResponse::ok_json(v.to_string()),
         Err(e) => ensure_err(e),
     }
 }

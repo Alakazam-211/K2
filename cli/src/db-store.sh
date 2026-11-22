@@ -751,6 +751,29 @@ elif w == "pitr-drill":
         print("hint: %s" % v["hint"])
     if not v.get("ok"):
         sys.exit(1)
+elif w == "pitr-switch":
+    if v.get("needsConfirm"):
+        print("switch %s: %s -> %s (%s)" % (v.get("db"), v.get("from"), v.get("to"), v.get("kind")))
+        print("moment: %s UTC" % v.get("moment"))
+        print("lost: %s" % v.get("lost"))
+        for a in v.get("apps") or []:
+            print("App %s (%s) is connected again on %s and re-hosted" % (a.get("app"), a.get("as"), v.get("to")))
+        sys.exit(0)
+    print("switched %s: %s -> %s (%s; data as at %s UTC)" % (v.get("db"), v.get("from"), v.get("to"), v.get("kind"), v.get("moment")))
+    for a in v.get("apps") or []:
+        if a.get("ok"):
+            print("  App %s (%s): connected on the new cluster" % (a.get("app"), a.get("as")))
+        else:
+            print("  App %s (%s): FAILED %s: %s" % (a.get("app"), a.get("as"), a.get("error"), a.get("hint")))
+    print("  logins set: %s" % ", ".join(v.get("loginsSet") or []))
+    if v.get("loginsNotSet"):
+        print("  logins NOT set (no secret K2 holds): %s" % ", ".join(v["loginsNotSet"]))
+    arc = v.get("archive")
+    if arc:
+        print("  archive: %s" % json.dumps(arc))
+    print("rollback: %s" % v.get("rollback"))
+    if not v.get("ok"):
+        sys.exit(1)
 elif w == "pitr-drop":
     d = v.get("dropped") or {}
     print("removed %s/%s (restored from %s)" % (d.get("major"), d.get("name"), d.get("from")) if d.get("dropped") else "nothing to remove")
@@ -1224,6 +1247,34 @@ else:
                         [ -z "$c_as" ] || { _db_err "usage" "restore-drill takes no --as (the drill cluster is <name>_drill, removed after)"; exit 2; }
                         _K2_DB_MAX_TIME=21900 _db_named_post "$(_compute_json K2_CJ_op=restore-drill K2_CJ_project="$(_compute_ws "")" K2_CJ_name="$c_name" K2_CJ_to="$c_to")" "$as_json" pitr-drill
                     fi ;;
+                switch)
+                    # POST /cli/db/clusters {op: switch, db, to, yes}: shows the
+                    # moment and what is lost; nothing changes without --yes
+                    # (or a person typing the database's name at the prompt).
+                    local s_db="${1:-}"; shift 2>/dev/null || true
+                    local s_to="" s_yes=""
+                    while [ $# -gt 0 ]; do
+                        case "$1" in
+                            --json) as_json=true; shift ;;
+                            --to) _need_value "$@"; s_to="${2:-}"; shift 2 ;;
+                            --to=*) s_to="${1#*=}"; shift ;;
+                            --yes) s_yes=1; shift ;;
+                            *) _db_err "usage" "unexpected '$1' — k2 db cluster switch <db> --to <cluster> [--yes]"; exit 2 ;;
+                        esac
+                    done
+                    case "$s_db" in ""|-*) _db_err "usage" "k2 db cluster switch <db> --to <cluster> [--yes]"; exit 2 ;; esac
+                    [ -n "$s_to" ] || { _db_err "usage" "k2 db cluster switch <db> --to <cluster> [--yes]"; exit 2; }
+                    if [ -z "$s_yes" ]; then
+                        _db_named_post "$(_compute_json K2_CJ_op=switch K2_CJ_project="$(_compute_ws "")" K2_CJ_db="$s_db" K2_CJ_to="$s_to")" "$as_json" pitr-switch
+                        if [ -t 0 ] && [ -t 1 ] && [ "$as_json" != true ]; then
+                            printf 'Type the database name (%s) to switch it: ' "$s_db" >&2
+                            local s_typed=""; read -r s_typed || true
+                            [ "$s_typed" = "$s_db" ] || { _db_err "not_confirmed" "nothing changed"; exit 2; }
+                        else
+                            _db_err "confirm_needed" "nothing changed: read the moment and what is lost above, then run it again with --yes"; exit 2
+                        fi
+                    fi
+                    _K2_DB_MAX_TIME=3600 _db_named_post "$(_compute_json K2_CJ_op=switch K2_CJ_project="$(_compute_ws "")" K2_CJ_db="$s_db" K2_CJ_to="$s_to" K2_CJ_yes_b=1)" "$as_json" pitr-switch ;;
                 drop-drill)
                     c_name="${1:-}"; shift 2>/dev/null || true
                     while [ $# -gt 0 ]; do
@@ -1237,7 +1288,7 @@ else:
                     case "$c_name" in ""|-*) _db_err "usage" "k2 db cluster drop-drill <name> [--major <M>]"; exit 2 ;; esac
                     if [ -n "$c_major" ]; then case "$c_major" in [1-9][0-9]) ;; *) _db_err "usage" "--major takes a Postgres major (e.g. 17)"; exit 2 ;; esac; fi
                     _db_named_post "$(_compute_json K2_CJ_op=drop-drill K2_CJ_project="$(_compute_ws "")" K2_CJ_name="$c_name" K2_CJ_major_n="$c_major")" "$as_json" pitr-drop ;;
-                *) _db_err "usage" "k2 db cluster create <major> --name <name> [--port <port>] [--wal-archive] | k2 db cluster restart <name> | k2 db cluster archive <name> on|off | k2 db cluster basebackup|backups <name> | k2 db cluster restore <name> --to <time> --as <new> | k2 db cluster restore-drill <name> [--to <time>] | k2 db cluster drop-drill <name>"; exit 2 ;;
+                *) _db_err "usage" "k2 db cluster create <major> --name <name> [--port <port>] [--wal-archive] | k2 db cluster restart <name> | k2 db cluster archive <name> on|off | k2 db cluster basebackup|backups <name> | k2 db cluster restore <name> --to <time> --as <new> | k2 db cluster restore-drill <name> [--to <time>] | k2 db cluster drop-drill <name> | k2 db cluster switch <db> --to <cluster> [--yes]"; exit 2 ;;
             esac ;;
         default-major)
             local major="${1:-}"; shift || true

@@ -33,6 +33,12 @@ OWNER (engine — server-side owner/admin gate; agents exit 3)
                                  restore into <name>_drill, check it (markers around the
                                  moment and every table's rows), remove it, record it
   cluster drop-drill <name>      remove a drill or a failed restore (only those)
+  cluster switch <db> --to <cluster> [--yes]
+                                 point a database at its restored cluster (or back at the
+                                 one it was switched away from): shows the moment and what
+                                 is lost, then closes the old copy, sets K2's logins, moves
+                                 the record and connects each App again (re-hosted). The old
+                                 cluster is kept, closed, for the rollback
   default-major <M> [--json]     owner: the major new databases go on (new boxes: 17;
                                  existing boxes keep their current major until set)
   enable [--json]                catalog + start unit if baked (--bake --with-db)

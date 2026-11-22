@@ -67,6 +67,11 @@ NAMED CLUSTERS (the owner, or the Postgres-versions switch)
   k2 db cluster restore <n> --to -15m --as <n>_old   a new cluster at
                                      that moment, never in place
   k2 db cluster restore-drill <n>    prove a restore works (monthly)
+  k2 db cluster switch <db> --to <n>_old [--yes]   move the database
+    to the restore: every write after the restore's moment stays behind
+    in the old cluster (kept, closed). Logins and passwords go back to
+    the moment too: K2 sets its own and each App's again, re-hosts the
+    Apps (a moment's downtime). Roll back with switch <db> --to <old>.
   k2 db clusters --health --json     archiver: archivedCount,
     lastArchivedAt, failedCount, lastFailedAt, currentLsn (text LSN,
     0/1A2B3C4D); all null when the cluster isn't running.

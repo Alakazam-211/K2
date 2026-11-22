@@ -102,6 +102,17 @@
       ]
     },
     {
+      "name": "db cluster switch",
+      "usage": "k2 db cluster switch <db> --to <cluster> [--yes] [--json]",
+      "description": "Point a database at a cluster restore made from its current one, or back at the cluster it was switched away from (the rollback, while that one is kept). Without --yes it changes nothing and shows the moment the data goes back to and what is lost: every write after that moment stays behind in the old cluster, kept and closed. With --yes: the old copy closes (no write lands on both), K2's own logins get their passwords now (a restore's are locked), the record moves in one transaction (exactly one active row per name), each App connected to the database is connected again on the new cluster and re-hosted (a short downtime), and a restored target starts archiving with a base backup. A person at a terminal may type the database's name instead of --yes. Owner, or an agent with \"Let this agent manage Postgres versions\" for its own workspace's database.",
+      "args": [{"name": "db", "required": true}],
+      "flags": [
+        {"name": "--to", "arg": "cluster", "description": "The restored cluster, or the one it was switched away from (required)."},
+        {"name": "--yes", "arg": null, "description": "Confirm: without it nothing changes (agents must pass it)."},
+        {"name": "--json", "arg": null, "description": "JSON output: the preview (needsConfirm, moment, lost, apps) or the result (switched, apps, loginsSet, archive, rollback)."}
+      ]
+    },
+    {
       "name": "db cluster restart",
       "usage": "k2 db cluster restart <name> [--json]",
       "description": "Restart one named cluster K2 made (a minor update, a drill), nothing else: its databases' connections drop and come back. The owner, or an agent with \"Let this agent manage Postgres versions\" for its own workspace's cluster.",

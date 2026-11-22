@@ -57,6 +57,14 @@ class H(http.server.BaseHTTPRequestHandler):
                 out = {"ok": ok, "cluster": "17/%s" % b.get("name"), "target": "2026-11-22T10:15:01Z", "markers": {"before": True, "after": not ok},
                        "databases": [{"database": "app_db", "tables": 2, "rows": 5, "rowsMatch": ok, "diffs": [] if ok else [{"table": "public.orders", "atTheMoment": 3, "restored": 4}]}],
                        "missingDatabases": [], "storageCheck": "not checked", "drillCluster": "17/feedback_drill", "dropped": True}
+            elif op == "switch":
+                pre = {"db": b.get("db"), "from": "17/feedback", "to": "17/%s" % b.get("to"), "kind": "restore", "moment": "2026-11-22T10:00:00Z",
+                       "lost": "app_db goes back to 2026-11-22T10:00:00Z UTC: every write after that moment is left behind", "apps": [{"app": "shop", "as": "DATABASE_URL"}]}
+                if b.get("yes") is True:
+                    out = dict(pre, ok=True, switched=True, apps=[{"app": "shop", "as": "DATABASE_URL", "ok": True}], loginsSet=["app_db_migrator"], archive=None,
+                               rollback="k2 db cluster switch app_db --to feedback")
+                else:
+                    out = dict(pre, ok=False, needsConfirm=True)
             elif op == "drop-drill":
                 out = {"ok": True, "dropped": {"major": 17, "name": b.get("name"), "dropped": True, "from": "17/feedback"}}
         elif u.path == "/cli/app/cron/add":
@@ -145,6 +153,24 @@ last_body | grep -q '"to": *"-1h"' || fail "drill --to: $(last_body)"
 run db cluster drop-drill feedback_drill --major 17
 [ "$RC" = 0 ] || fail "drop-drill: $OUT"
 echo "$OUT" | grep -q 'removed 17/feedback_drill' || fail "drop-drill output: $OUT"
+
+# Switch: no --yes shows the moment, sends no confirm and exits 2 (no
+# terminal here); --yes confirms.
+: >"$FAKE_DIR/requests.log"
+run db cluster switch app_db --to fb_old
+[ "$RC" = 2 ] || fail "switch without --yes exits 2 (got $RC): $OUT"
+echo "$OUT" | grep -q 'moment: 2026-11-22T10:00:00Z UTC' || fail "the preview shows the moment: $OUT"
+echo "$OUT" | grep -q 'lost: ' || fail "the preview says what is lost: $OUT"
+echo "$OUT" | grep -q 'confirm_needed' || fail "it asks for --yes: $OUT"
+[ "$(wc -l <"$FAKE_DIR/requests.log" | tr -d ' ')" = 1 ] || fail "one request only: $(cat "$FAKE_DIR/requests.log")"
+grep -q '"yes"' "$FAKE_DIR/requests.log" && fail "no confirm sent without --yes"
+run db cluster switch app_db --to fb_old --yes
+[ "$RC" = 0 ] || fail "switch --yes: $OUT"
+echo "$OUT" | grep -q 'switched app_db: 17/feedback -> 17/fb_old' || fail "switch output: $OUT"
+echo "$OUT" | grep -q 'rollback: k2 db cluster switch app_db --to feedback' || fail "the rollback is named: $OUT"
+python3 -c 'import json,sys; b=json.loads(sys.argv[1]); assert b["op"]=="switch" and b["db"]=="app_db" and b["to"]=="fb_old" and b["yes"] is True, b' "$(last_body)" || fail "switch body"
+run db cluster switch app_db
+[ "$RC" = 2 ] || fail "switch without --to is a usage error"
 
 # App cron.
 run app cron add shop "*/15 * * * *" --path /api/cron/sync --method post --timeout 2m

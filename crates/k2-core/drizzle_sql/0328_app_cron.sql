@@ -16,7 +16,12 @@
 -- beyond a short excerpt, never the secret).
 --
 -- `pg_cluster_pitr`: per named cluster, the last base backup the daemon
--- took (daily for an archiving cluster) and the last restore drill.
+-- took (daily for an archiving cluster), the last restore drill, and for a
+-- cluster `restore-to` made: its source and the moment (epoch seconds).
+--
+-- `pg_db_switches`: each `k2 db cluster switch` of a database between a
+-- cluster and its restore (and back): written in the same transaction as
+-- the `sql_databases` row it moves.
 CREATE TABLE IF NOT EXISTS app_cron (
     id TEXT PRIMARY KEY,
     app_id TEXT NOT NULL,
@@ -61,5 +66,20 @@ CREATE TABLE IF NOT EXISTS pg_cluster_pitr (
     last_drill_at INTEGER,
     last_drill_ok INTEGER,
     last_drill_json TEXT,
+    restored_from TEXT,
+    restored_to INTEGER,
     PRIMARY KEY (major, name)
 );
+--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS pg_db_switches (
+    db_name TEXT NOT NULL,
+    database_id TEXT NOT NULL,
+    from_cluster TEXT NOT NULL,
+    to_cluster TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('restore', 'rollback')),
+    moment INTEGER NOT NULL,
+    at INTEGER NOT NULL,
+    by TEXT
+);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS pg_db_switches_db ON pg_db_switches (db_name, at DESC);

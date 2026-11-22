@@ -263,6 +263,13 @@ pub fn restore(ops: &dyn SystemOps, c: &Cluster, as_name: &str, target: UtcTime)
         let db = k2_core::db::shared();
         let conn = db.lock();
         cluster::record_in(&conn, &r, true).map_err(EnsureError::Helper)?;
+        // `k2 db cluster switch` reads where it came from and its moment.
+        conn.execute(
+            "INSERT INTO pg_cluster_pitr (major, name, restored_from, restored_to) VALUES (?1, ?2, ?3, ?4) \
+             ON CONFLICT(major, name) DO UPDATE SET restored_from = ?3, restored_to = ?4",
+            rusqlite::params![r.major as i64, r.name, c.name, target.epoch()],
+        )
+        .map_err(|e| EnsureError::Helper(format!("record the restore: {e}")))?;
     }
     Ok(json!({
         "ok": true,

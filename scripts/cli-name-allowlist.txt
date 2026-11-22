@@ -604,7 +604,6 @@
 10 value crates/k2-daemon/src/sql/cluster.rs keeper: stored; the Postgres cluster record's role
 7 value crates/k2-daemon/src/docs/host.rs keeper: stored; the docs audit's actor
 7 value src-tauri/src/commands/settings.rs debt: command (6 lines); B9; keeps: outside; the package's lib folder
-6 value crates/k5-cli/src/called_as.rs debt: command (6 lines); B4
 6 value src/renderer/lib/zen/garden-access-api.ts keeper: wire; the Garden access actor and signer kind from the daemon
 5 value cli/src/agent.sh keeper: stored; the agent mode (--mode, settings.rs:26) and an old pack id in a context stack (context_layers.rs:1780), as the daemon reads them
 2 value crates/k5-cli/src/families/agent/set.rs keeper: stored; the agent mode (--mode, settings.rs:26), as the daemon reads it

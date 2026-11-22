@@ -22,6 +22,8 @@
 #      spec-census.py          cli/src -> crates/k5-cli/tests/data/spec_census.tsv
 #      router-forms.py         cli/src -> crates/k5-cli/tests/data/router_forms.tsv
 #   4. build-styles.mjs        styles -> styles.generated.css / .ts
+#      brand-values.mjs        the brand file (K2_BRAND_DIR, else brand/k2)
+#                              -> src/renderer/lib/brand.generated.ts
 #   5. the CLI goldens (tests/golden/permission_off): only checked. They
 #      pin what the CLI prints with permissions off, so a difference is for
 #      a person to read first. After reading it, --bless-goldens re-captures.
@@ -94,6 +96,10 @@ if [ -f scripts/router-forms.py ]; then
 fi
 # shellcheck disable=SC2046
 run "styles" node scripts/build-styles.mjs $(flag)
+if [ -f scripts/brand-values.mjs ]; then
+    # shellcheck disable=SC2046
+    run "renderer brand names" node scripts/brand-values.mjs renderer $(flag)
+fi
 
 if [ "$BLESS" = 1 ]; then
     run "CLI goldens (re-capture)" env PERMISSION_GOLDEN_BLESS=1 bash tests/cli/permission_off_golden.sh

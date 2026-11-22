@@ -55,7 +55,8 @@ const REFUSED: &str = r#"{"error":"Invalid or missing auth token"}"#;
 /// The shell's transport, from the built `cli/k2`: the env reader, the
 /// healed passport, the curl config and `_k2_curl`, the socket-first
 /// senders' TCP credential, the request
-/// functions, `urlencode`, `cli_post_form` and the cell-socket arms.
+/// functions, `urlencode`, `cli_post_form`, the cell-socket arms and the
+/// compute senders.
 fn bash_lib() -> String {
     let k2 = common::cli_script();
     let next = "# Read one secret from stdin into _K2_SECRET: a hidden prompt when stdin";
@@ -87,6 +88,8 @@ fn bash_lib() -> String {
             "# END_CLI_PASSPORT_PROJECT",
         ),
         common::block(&k2, "_compute_in_k2_tree() {", "}"),
+        // `--assign`'s query on an App POST (0.46.17).
+        common::block(&k2, "_compute_assign_path() {", "}"),
         common::block(&k2, "_compute_send() {", "}"),
         common::block(&k2, "_compute_in_session() {", "}"),
     ]

@@ -157,7 +157,7 @@ def die(err, exit_code=None, permission=None):
     # switches are on carries `permission`; it ends with the one closing
     # line the other families print ("Ask with: …" / "It can't be requested.").
     if isinstance(permission, dict):
-        cmd = permission.get("command")
+        cmd = "k2 <tail>".replace("<tail>", permission["tail"]) if isinstance(permission.get("tail"), str) and permission["tail"] else permission.get("command")
         if isinstance(cmd, str) and cmd:
             sys.stderr.write("Ask with: " + cmd + "\n")
         elif permission.get("requestable") is False:

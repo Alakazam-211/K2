@@ -762,7 +762,7 @@ for a in actions:
         sys.stderr.write(json.dumps({"error": {"code": err.get("code") or "daemon_error",
                                                "hint": err.get("hint") or err.get("code") or ""}}) + "\n")
         # The refusal's closing line, as every refused command ends.
-        p = resp.get("permission") if isinstance(resp, dict) else None
+        p = resp.get("permission") if isinstance(resp, dict) else None; p = dict(p, command="k2 <tail>".replace("<tail>", p["tail"])) if isinstance(p, dict) and isinstance(p.get("tail"), str) and p["tail"] else p
         if isinstance(p, dict):
             if isinstance(p.get("command"), str) and p["command"]:
                 sys.stderr.write("Ask with: " + p["command"] + "\n")
@@ -1393,7 +1393,7 @@ in_session = os.environ.get("IN_SESSION") == "true"
 permission_lines = []
 
 def note_permission(resp):
-    p = resp.get("permission") if isinstance(resp, dict) else None
+    p = resp.get("permission") if isinstance(resp, dict) else None; p = dict(p, command="k2 <tail>".replace("<tail>", p["tail"])) if isinstance(p, dict) and isinstance(p.get("tail"), str) and p["tail"] else p
     if not isinstance(p, dict) or permission_lines:
         return
     if isinstance(p.get("command"), str) and p["command"]:
@@ -2073,7 +2073,7 @@ def emit(ok, changed):
                 print("      %-12s %s" % (words.get(r.get("status"), r.get("status")), txt))
             if a.get("permissionsNote"):
                 print("      %s" % a["permissionsNote"])
-            hs = a.get("hireSwitch")
+            hs = a.get("hireSwitch"); hs = dict(hs, command="k2 <tail>".replace("<tail>", hs["tail"])) if isinstance(hs, dict) and isinstance(hs.get("tail"), str) and hs["tail"] else hs
             if hs:
                 print("      %-12s %s" % ("needs", "'Let this agent hire agents': it is off, so the real hire is refused (%s)" % (hs.get("code") or "hire_off")))
                 if hs.get("command"):

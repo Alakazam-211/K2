@@ -3408,7 +3408,7 @@ try:
     v = json.loads(raw)
 except Exception:
     sys.exit(0)
-p = v.get("permission") if isinstance(v, dict) else None
+p = v.get("permission") if isinstance(v, dict) else None; p = dict(p, command="k2 <tail>".replace("<tail>", p["tail"])) if isinstance(p, dict) and isinstance(p.get("tail"), str) and p["tail"] else p
 if not isinstance(p, dict):
     sys.exit(0)
 cmd = p.get("command")
@@ -9319,7 +9319,7 @@ def refused(route, code, data, raw):
     why = str(err) if err else (raw.decode('utf-8', 'replace').strip()[:300] or 'no body')
     verb = 'refused' if code in (401, 403) else 'answered'
     print(f\"Error: k2 heartbeat wake: K2's server {verb} {route} with HTTP {code}: {why}\", file=sys.stderr)
-    p = data.get('permission') if isinstance(data, dict) else None
+    p = data.get('permission') if isinstance(data, dict) else None; p = dict(p, command='k2 <tail>'.replace('<tail>', p['tail'])) if isinstance(p, dict) and isinstance(p.get('tail'), str) and p['tail'] else p
     if isinstance(p, dict):
         cmd = p.get('command')
         if isinstance(cmd, str) and cmd:
@@ -31563,7 +31563,7 @@ if code != "200" or d.get("ok") is False or (isinstance(d.get("error"), str) and
     e = d.get("error")
     msg = d.get("message") or (e.get("hint") if isinstance(e, dict) else None) or ""
     print("k2 front: error: " + str(e if not isinstance(e, dict) else e.get("code")) + (": " + msg if msg else ""), file=sys.stderr)
-    p = d.get("permission")
+    p = d.get("permission"); p = dict(p, command="k2 <tail>".replace("<tail>", p["tail"])) if isinstance(p, dict) and isinstance(p.get("tail"), str) and p["tail"] else p
     if isinstance(p, dict):
         if p.get("command"):
             print("Ask with: " + p["command"], file=sys.stderr)
@@ -31988,7 +31988,7 @@ if isinstance(e, dict):
     print("k2 firewall: error: %s: %s" % (e.get("code"), e.get("hint") or ""), file=sys.stderr)
 else:
     print("k2 firewall: error: %s%s" % (e, (": " + d["message"]) if d.get("message") else ""), file=sys.stderr)
-p = d.get("permission")
+p = d.get("permission"); p = dict(p, command="k2 <tail>".replace("<tail>", p["tail"])) if isinstance(p, dict) and isinstance(p.get("tail"), str) and p["tail"] else p
 if isinstance(p, dict):
     if p.get("command"):
         print("Ask with: " + p["command"], file=sys.stderr)
@@ -32289,7 +32289,7 @@ else:
     print("k2 desktop: error: HTTP " + code, file=sys.stderr)
 if d.get("closable"):
     print("desktops you could close: " + ", ".join(d["closable"]), file=sys.stderr)
-p = d.get("permission")
+p = d.get("permission"); p = dict(p, command="k2 <tail>".replace("<tail>", p["tail"])) if isinstance(p, dict) and isinstance(p.get("tail"), str) and p["tail"] else p
 if isinstance(p, dict) and p.get("command"):
     print("Ask with: " + p["command"], file=sys.stderr)
 elif c == "desktop_people_only" or (isinstance(p, dict) and p.get("requestable") is False):
@@ -76955,7 +76955,7 @@ for a in actions:
         sys.stderr.write(json.dumps({"error": {"code": err.get("code") or "daemon_error",
                                                "hint": err.get("hint") or err.get("code") or ""}}) + "\n")
         # The refusal's closing line, as every refused command ends.
-        p = resp.get("permission") if isinstance(resp, dict) else None
+        p = resp.get("permission") if isinstance(resp, dict) else None; p = dict(p, command="k2 <tail>".replace("<tail>", p["tail"])) if isinstance(p, dict) and isinstance(p.get("tail"), str) and p["tail"] else p
         if isinstance(p, dict):
             if isinstance(p.get("command"), str) and p["command"]:
                 sys.stderr.write("Ask with: " + p["command"] + "\n")
@@ -77946,7 +77946,7 @@ in_session = os.environ.get("IN_SESSION") == "true"
 permission_lines = []
 
 def note_permission(resp):
-    p = resp.get("permission") if isinstance(resp, dict) else None
+    p = resp.get("permission") if isinstance(resp, dict) else None; p = dict(p, command="k2 <tail>".replace("<tail>", p["tail"])) if isinstance(p, dict) and isinstance(p.get("tail"), str) and p["tail"] else p
     if not isinstance(p, dict) or permission_lines:
         return
     if isinstance(p.get("command"), str) and p["command"]:
@@ -78626,7 +78626,7 @@ def emit(ok, changed):
                 print("      %-12s %s" % (words.get(r.get("status"), r.get("status")), txt))
             if a.get("permissionsNote"):
                 print("      %s" % a["permissionsNote"])
-            hs = a.get("hireSwitch")
+            hs = a.get("hireSwitch"); hs = dict(hs, command="k2 <tail>".replace("<tail>", hs["tail"])) if isinstance(hs, dict) and isinstance(hs.get("tail"), str) and hs["tail"] else hs
             if hs:
                 print("      %-12s %s" % ("needs", "'Let this agent hire agents': it is off, so the real hire is refused (%s)" % (hs.get("code") or "hire_off")))
                 if hs.get("command"):
@@ -84807,7 +84807,7 @@ def dumps(obj):
 LAST_PERMISSION = [None]
 
 def permission_lines(p):
-    # Same rules as _permission_closing_lines.
+    p = dict(p, command="k2 <tail>".replace("<tail>", p["tail"])) if isinstance(p, dict) and isinstance(p.get("tail"), str) and p["tail"] else p  # the rules of _permission_closing_lines
     if not isinstance(p, dict):
         return []
     cmd = p.get("command")
@@ -86255,7 +86255,7 @@ def die(err, exit_code=None, permission=None):
     # switches are on carries `permission`; it ends with the one closing
     # line the other families print ("Ask with: …" / "It can't be requested.").
     if isinstance(permission, dict):
-        cmd = permission.get("command")
+        cmd = "k2 <tail>".replace("<tail>", permission["tail"]) if isinstance(permission.get("tail"), str) and permission["tail"] else permission.get("command")
         if isinstance(cmd, str) and cmd:
             sys.stderr.write("Ask with: " + cmd + "\n")
         elif permission.get("requestable") is False:
@@ -104069,7 +104069,7 @@ else:
 # …" or "It can't be requested." The CLI's exit trap prints it after the
 # error line (the note file is _permission_note's).
 def note_permission(v):
-    p = v.get("permission") if isinstance(v, dict) else None
+    p = v.get("permission") if isinstance(v, dict) else None; p = dict(p, command="k2 <tail>".replace("<tail>", p["tail"])) if isinstance(p, dict) and isinstance(p.get("tail"), str) and p["tail"] else p
     path = os.environ.get("D_PERM_NOTE") or ""
     if not isinstance(p, dict) or not path:
         return

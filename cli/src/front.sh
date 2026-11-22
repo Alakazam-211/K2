@@ -35,7 +35,7 @@ if code != "200" or d.get("ok") is False or (isinstance(d.get("error"), str) and
     e = d.get("error")
     msg = d.get("message") or (e.get("hint") if isinstance(e, dict) else None) or ""
     print("k2 front: error: " + str(e if not isinstance(e, dict) else e.get("code")) + (": " + msg if msg else ""), file=sys.stderr)
-    p = d.get("permission")
+    p = d.get("permission"); p = dict(p, command="k2 <tail>".replace("<tail>", p["tail"])) if isinstance(p, dict) and isinstance(p.get("tail"), str) and p["tail"] else p
     if isinstance(p, dict):
         if p.get("command"):
             print("Ask with: " + p["command"], file=sys.stderr)

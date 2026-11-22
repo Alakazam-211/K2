@@ -372,7 +372,7 @@ try:
     v = json.loads(raw)
 except Exception:
     sys.exit(0)
-p = v.get("permission") if isinstance(v, dict) else None
+p = v.get("permission") if isinstance(v, dict) else None; p = dict(p, command="k2 <tail>".replace("<tail>", p["tail"])) if isinstance(p, dict) and isinstance(p.get("tail"), str) and p["tail"] else p
 if not isinstance(p, dict):
     sys.exit(0)
 cmd = p.get("command")

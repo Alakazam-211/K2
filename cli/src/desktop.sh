@@ -37,7 +37,7 @@ else:
     print("k2 desktop: error: HTTP " + code, file=sys.stderr)
 if d.get("closable"):
     print("desktops you could close: " + ", ".join(d["closable"]), file=sys.stderr)
-p = d.get("permission")
+p = d.get("permission"); p = dict(p, command="k2 <tail>".replace("<tail>", p["tail"])) if isinstance(p, dict) and isinstance(p.get("tail"), str) and p["tail"] else p
 if isinstance(p, dict) and p.get("command"):
     print("Ask with: " + p["command"], file=sys.stderr)
 elif c == "desktop_people_only" or (isinstance(p, dict) and p.get("requestable") is False):

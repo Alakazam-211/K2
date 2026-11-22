@@ -642,7 +642,7 @@ def refused(route, code, data, raw):
     why = str(err) if err else (raw.decode('utf-8', 'replace').strip()[:300] or 'no body')
     verb = 'refused' if code in (401, 403) else 'answered'
     print(f\"Error: k2 heartbeat wake: K2's server {verb} {route} with HTTP {code}: {why}\", file=sys.stderr)
-    p = data.get('permission') if isinstance(data, dict) else None
+    p = data.get('permission') if isinstance(data, dict) else None; p = dict(p, command='k2 <tail>'.replace('<tail>', p['tail'])) if isinstance(p, dict) and isinstance(p.get('tail'), str) and p['tail'] else p
     if isinstance(p, dict):
         cmd = p.get('command')
         if isinstance(cmd, str) and cmd:

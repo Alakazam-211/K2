@@ -32,7 +32,7 @@ if isinstance(e, dict):
     print("k2 firewall: error: %s: %s" % (e.get("code"), e.get("hint") or ""), file=sys.stderr)
 else:
     print("k2 firewall: error: %s%s" % (e, (": " + d["message"]) if d.get("message") else ""), file=sys.stderr)
-p = d.get("permission")
+p = d.get("permission"); p = dict(p, command="k2 <tail>".replace("<tail>", p["tail"])) if isinstance(p, dict) and isinstance(p.get("tail"), str) and p["tail"] else p
 if isinstance(p, dict):
     if p.get("command"):
         print("Ask with: " + p["command"], file=sys.stderr)

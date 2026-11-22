@@ -246,7 +246,7 @@ else:
 # …" or "It can't be requested." The CLI's exit trap prints it after the
 # error line (the note file is _permission_note's).
 def note_permission(v):
-    p = v.get("permission") if isinstance(v, dict) else None
+    p = v.get("permission") if isinstance(v, dict) else None; p = dict(p, command="k2 <tail>".replace("<tail>", p["tail"])) if isinstance(p, dict) and isinstance(p.get("tail"), str) and p["tail"] else p
     path = os.environ.get("D_PERM_NOTE") or ""
     if not isinstance(p, dict) or not path:
         return

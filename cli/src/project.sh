@@ -83,7 +83,7 @@ def dumps(obj):
 LAST_PERMISSION = [None]
 
 def permission_lines(p):
-    # Same rules as _permission_closing_lines.
+    p = dict(p, command="k2 <tail>".replace("<tail>", p["tail"])) if isinstance(p, dict) and isinstance(p.get("tail"), str) and p["tail"] else p  # the rules of _permission_closing_lines
     if not isinstance(p, dict):
         return []
     cmd = p.get("command")

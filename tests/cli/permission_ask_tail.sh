@@ -15,6 +15,11 @@
 # transports' closing line (connections add), desktop env, front status
 # and firewall, each with its own printer.
 #
+# An older CLI, from before tail, against a daemon that sends both keys:
+# it still prints the daemon's whole command, unchanged. The older CLI is
+# a scratch copy of this checkout's bash CLI with the tail rule taken out
+# again (the copy is the bash CLI from before the rule, byte for byte).
+#
 # Hermetic: throwaway HOME, every K2_*/K2SO_* var unset, a python stub
 # daemon on loopback. No real daemon, ~/.k2 or keychain.
 #
@@ -104,10 +109,11 @@ fail=0
 ok() { pass=$((pass + 1)); }
 bad() { echo "  FAIL: $*" >&2; fail=$((fail + 1)); }
 
-# run <args…>: as an agent in a K2 terminal. Sets ERR and RC.
+# run <args…>: as an agent in a K2 terminal, with $PROG (default the CLI
+# under test). Sets ERR and RC.
 run() {
     set +e
-    K2_PORT="$PORT" K2_HOOK_TOKEN=passport-tail "$K2" "$@" </dev/null >"$SANDBOX/out" 2>"$SANDBOX/err"
+    K2_PORT="$PORT" K2_HOOK_TOKEN=passport-tail "${PROG:-$K2}" "$@" </dev/null >"$SANDBOX/out" 2>"$SANDBOX/err"
     RC=$?
     set -e
     ERR="$(cat "$SANDBOX/err")"
@@ -131,6 +137,37 @@ for mode in new old number empty; do
             case "$ERR" in *"zz permission"*) bad "$mode: k2 $form: the server's name leaked: $ERR" ;; *) ok ;; esac
         fi
     done
+done
+
+# The older CLI: the bash CLI with the tail rule taken out again.
+cat > "$SANDBOX/untail.py" <<'UNTAIL'
+import re, sys
+s = open(sys.argv[1]).read()
+n0 = s.count("<tail>")
+# A rule after an assignment: "; v = dict(v, command=...) if ... else v".
+s, a = re.subn(r"""; (\w+) = dict\(\1, command=(["'])k2 <tail>\2\.replace\(\2<tail>\2, \1\[\2tail\2\]\)\) if isinstance\(\1, dict\) and isinstance\(\1\.get\(\2tail\2\), str\) and \1\[\2tail\2\] else \1\n""", "\n", s)
+# The rule on a line of its own, in place of a comment.
+s, b = re.subn(r"""(\n +)p = dict\(p, command="k2 <tail>"\.replace\("<tail>", p\["tail"\]\)\) if isinstance\(p, dict\) and isinstance\(p\.get\("tail"\), str\) and p\["tail"\] else p  # the rules of _permission_closing_lines\n""", r"\1# Same rules as _permission_closing_lines.\n", s)
+# mail's die: cmd from the tail.
+s, c = re.subn(r"""cmd = "k2 <tail>"\.replace\("<tail>", permission\["tail"\]\) if isinstance\(permission\.get\("tail"\), str\) and permission\["tail"\] else permission\.get\("command"\)""", 'cmd = permission.get("command")', s)
+if "<tail>" in s or a + b + c == 0:
+    sys.exit("untail: the tail rule is still there (%d left of %d; %d %d %d)" % (s.count("<tail>"), n0, a, b, c))
+open(sys.argv[2], "w").write(s)
+print("untail: %d rules taken out" % (a + b + c))
+UNTAIL
+OLD="$SANDBOX/old-k2"
+python3 -I "$SANDBOX/untail.py" "$CLI_BASH_SOURCE" "$OLD" >/dev/null
+chmod +x "$OLD"
+if grep -q '<tail>' "$OLD" || ! grep -q 'p = v.get("permission") if isinstance(v, dict) else None$' "$OLD"; then
+    bad "the older CLI still has the tail rule, or lost its printer"
+fi
+echo new > "$MODE"
+for form in "connections add billing" "desktop env" "front status" "firewall"; do
+    # shellcheck disable=SC2086
+    PROG="$OLD" run $form
+    [ "$RC" != 0 ] && ok || bad "older CLI: k2 $form: exit 0 on a refusal ($ERR)"
+    [ "$(last_err_line)" = "$THEIRS" ] && ok || bad "older CLI: k2 $form: the last line: $(last_err_line)"
+    [ "$(printf '%s\n' "$ERR" | grep -c '^Ask with: ')" = 1 ] && ok || bad "older CLI: k2 $form: one Ask line: $ERR"
 done
 
 echo "permission_ask_tail: $pass passed, $fail failed"

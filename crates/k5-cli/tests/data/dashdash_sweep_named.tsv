@@ -1,0 +1,6 @@
+# The named differences of tests/dashdash_sweep_parity.rs: lines with a bare
+# `--` the binary answers otherwise than the shell, each with its class (B the
+# reads differ, C the shell sends a write the binary doesn't, D only the exit,
+# stdout or stderr differ) and why. A line where only the binary sends a write
+# (A) is never named: it is fixed.
+class	line	reason

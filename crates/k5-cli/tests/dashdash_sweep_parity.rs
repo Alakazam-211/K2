@@ -18,6 +18,17 @@
 //! request is its request line and its body. A side still running at
 //! [`DEADLINE`] is killed and counts as hung (both hung is the same).
 //!
+//! A line that differs has a class, worst first: A the binary sends a
+//! write the shell doesn't (always a failure: fix it), B the reads differ,
+//! C the shell sends a write the binary doesn't, D only the exit, stdout or
+//! stderr differ. A B, C or D line passes only when
+//! `tests/data/dashdash_sweep_named.tsv` names it with its class and why;
+//! a named line that no longer differs so fails too. The counts per class
+//! and family, and every A and B line, are printed first.
+//! `DASHDASH_SWEEP_OUT=<folder>` writes every differing line in full
+//! (`sweep-rows.txt`) and the named list as the run found it
+//! (`sweep-named.tsv`).
+//!
 //! It prints each form where the shell sends a write (anything but a GET)
 //! after a `--`, marked when the request holds the `--` itself as a value:
 //! that is the shell acting on a word it should not have read, a shell
@@ -181,10 +192,18 @@ impl Machine {
         self.stub.reset(&[]);
     }
 
+    /// The scratch folder (as typed and URL-encoded), the shell CLI's
+    /// path, the stub's port and a run's random job id, written the same
+    /// on both sides.
     fn mask(&self, text: &str) -> String {
-        text.replace(&self.dir.to_string_lossy().to_string(), "<dir>")
+        let dir = self.dir.to_string_lossy().to_string();
+        let encoded = dir.replace('/', "%2F");
+        let text = text
+            .replace(&dir, "<dir>")
+            .replace(&encoded, "<dir>")
             .replace(&cli_k2().to_string_lossy().to_string(), "<cli>")
-            .replace(&self.stub.port.to_string(), "<port>")
+            .replace(&self.stub.port.to_string(), "<port>");
+        mask_after(&text, "\"clientJobId\": \"")
     }
 
     fn run(&self, bash: bool, argv: &[String]) -> Got {
@@ -264,6 +283,23 @@ impl Machine {
     }
 }
 
+/// `text` with the hex digits after each `key` written `<id>`.
+fn mask_after(text: &str, key: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(at) = rest.find(key) {
+        let (head, tail) = rest.split_at(at + key.len());
+        out.push_str(head);
+        let n = tail.bytes().take_while(u8::is_ascii_hexdigit).count();
+        if n > 0 {
+            out.push_str("<id>");
+        }
+        rest = &tail[n..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// A write the shell sent, marked when it holds the `--` itself as a
 /// value (the word a verb should never have read).
 fn write_of(argv: &[String], request: &str) -> Option<String> {
@@ -285,9 +321,100 @@ fn shown(g: &Got) -> String {
     )
 }
 
+fn is_write(request: &str) -> bool {
+    !request.starts_with("GET ")
+}
+
+/// How a line differs, worst first: `A` the binary sends a write the
+/// shell doesn't; `B` the reads differ; `C` the shell sends a write the
+/// binary doesn't; `D` the same requests, and only the exit, stdout or
+/// stderr differ. `None`: no difference.
+fn class(bash: &Got, k5: &Got) -> Option<char> {
+    if bash == k5 {
+        return None;
+    }
+    let writes =
+        |g: &Got| -> Vec<String> { g.requests.iter().filter(|r| is_write(r)).cloned().collect() };
+    let reads = |g: &Got| -> Vec<String> {
+        g.requests
+            .iter()
+            .filter(|r| !is_write(r))
+            .cloned()
+            .collect()
+    };
+    let (bw, kw) = (writes(bash), writes(k5));
+    Some(if kw.iter().any(|r| !bw.contains(r)) {
+        'A'
+    } else if reads(bash) != reads(k5) {
+        'B'
+    } else if bw != kw {
+        'C'
+    } else {
+        'D'
+    })
+}
+
+/// What differs on a line of class `B`, `C` or `D`, for the named list.
+fn what(bash: &Got, k5: &Got) -> String {
+    let mut parts = Vec::new();
+    if bash.code != k5.code {
+        parts.push(format!("exit {:?} vs {:?}", bash.code, k5.code));
+    }
+    if bash.stdout != k5.stdout {
+        parts.push("stdout".to_string());
+    }
+    if bash.stderr != k5.stderr {
+        parts.push("stderr".to_string());
+    }
+    if bash.requests != k5.requests {
+        parts.push(format!(
+            "requests: bash {}, k5 {}",
+            bash.requests.len(),
+            k5.requests.len()
+        ));
+    }
+    parts.join("; ")
+}
+
+/// The named differences: `class<TAB>line<TAB>reason`, the line as
+/// `k2 <words>`.
+const NAMED: &str = "crates/k5-cli/tests/data/dashdash_sweep_named.tsv";
+
+fn named() -> Vec<(char, String)> {
+    let p = root().join(NAMED);
+    let text = fs::read_to_string(&p).unwrap_or_else(|e| panic!("read {}: {e}", p.display()));
+    let mut lines = text.lines().filter(|l| !l.starts_with('#'));
+    assert_eq!(
+        lines.next(),
+        Some("class\tline\treason"),
+        "{NAMED}: its header"
+    );
+    lines
+        .map(|l| {
+            let cols: Vec<&str> = l.split('\t').collect();
+            assert_eq!(cols.len(), 3, "{NAMED}: {l}");
+            let c = cols[0].chars().next().unwrap_or(' ');
+            assert!(
+                matches!(c, 'B' | 'C' | 'D') && cols[0].len() == 1,
+                "{NAMED}: {l}: the class is B, C or D (a write only the binary sends is never named)"
+            );
+            assert!(!cols[2].trim().is_empty(), "{NAMED}: {l}: no reason");
+            (c, cols[1].to_string())
+        })
+        .collect()
+}
+
+struct Row {
+    class: char,
+    line: String,
+    what: String,
+    shown: String,
+}
+
 #[test]
 fn every_form_with_a_dashdash_answers_as_the_shell_does() {
     let probes = probes();
+    let named = named();
     let next = AtomicUsize::new(0);
     let differ = Mutex::new(Vec::new());
     let writes = Mutex::new(Vec::new());
@@ -314,12 +441,13 @@ fn every_form_with_a_dashdash_answers_as_the_shell_does() {
                             writes.lock().unwrap().push(wr);
                         }
                     }
-                    if b != r {
-                        differ.lock().unwrap().push(format!(
-                            "{line}\n bash: {}\n k5:   {}",
-                            shown(&b),
-                            shown(&r)
-                        ));
+                    if let Some(c) = class(&b, &r) {
+                        differ.lock().unwrap().push(Row {
+                            class: c,
+                            what: what(&b, &r),
+                            shown: format!("{line}\n bash: {}\n k5:   {}", shown(&b), shown(&r)),
+                            line,
+                        });
                     }
                 }
                 let _ = fs::remove_dir_all(&bash_side.dir);
@@ -330,14 +458,33 @@ fn every_form_with_a_dashdash_answers_as_the_shell_does() {
     let mut differ = differ.into_inner().unwrap();
     let mut writes = writes.into_inner().unwrap();
     let mut hung = hung.into_inner().unwrap();
-    differ.sort();
+    differ.sort_by(|a, b| (a.class, &a.line).cmp(&(b.class, &b.line)));
     writes.sort();
     hung.sort();
-    let suspects = writes.iter().filter(|w| w.starts_with("SUSPECT")).count();
+    let count = |c: char| differ.iter().filter(|r| r.class == c).count();
     println!(
-        "dashdash sweep: {} probes, {} differ, {} shell writes after a -- ({suspects} suspect), {} hung on the shell",
+        "dashdash sweep: {} probes, {} differ: A={} B={} C={} D={}",
         probes.len(),
         differ.len(),
+        count('A'),
+        count('B'),
+        count('C'),
+        count('D')
+    );
+    let mut per_family = std::collections::BTreeMap::new();
+    for r in &differ {
+        let family = r.line.split(' ').nth(1).unwrap_or_default().to_string();
+        *per_family.entry((r.class, family)).or_insert(0usize) += 1;
+    }
+    for ((c, family), n) in &per_family {
+        println!("dashdash sweep: class {c} {family} {n}");
+    }
+    for r in differ.iter().filter(|r| matches!(r.class, 'A' | 'B')) {
+        println!("dashdash sweep row {}: {}", r.class, r.shown);
+    }
+    let suspects = writes.iter().filter(|w| w.starts_with("SUSPECT")).count();
+    println!(
+        "dashdash sweep: {} shell writes after a -- ({suspects} suspect), {} hung on the shell",
         writes.len(),
         hung.len()
     );
@@ -347,10 +494,39 @@ fn every_form_with_a_dashdash_answers_as_the_shell_does() {
     for h in &hung {
         println!("  hung: {h}");
     }
+    // DASHDASH_SWEEP_OUT=<folder>: every differing row in full, and the
+    // named list as this run found it.
+    if let Some(out) = std::env::var_os("DASHDASH_SWEEP_OUT") {
+        let out = PathBuf::from(out);
+        fs::create_dir_all(&out).unwrap();
+        let rows: Vec<String> = differ
+            .iter()
+            .map(|r| format!("[{}] {}", r.class, r.shown))
+            .collect();
+        fs::write(out.join("sweep-rows.txt"), rows.join("\n") + "\n").unwrap();
+        let mut tsv = String::from("class\tline\treason\n");
+        for r in differ.iter().filter(|r| r.class != 'A') {
+            tsv.push_str(&format!("{}\t{}\t{}\n", r.class, r.line, r.what));
+        }
+        fs::write(out.join("sweep-named.tsv"), tsv).unwrap();
+    }
+    let mut failures = Vec::new();
+    for r in &differ {
+        if !named.iter().any(|(c, l)| *c == r.class && *l == r.line) {
+            failures.push(format!("[{}] {}", r.class, r.shown));
+        }
+    }
+    for (c, l) in &named {
+        if !differ.iter().any(|r| r.class == *c && r.line == *l) {
+            failures.push(format!(
+                "{NAMED}: [{c}] {l}: named, but it no longer differs so"
+            ));
+        }
+    }
     assert!(
-        differ.is_empty(),
-        "{} line(s) with a -- answer otherwise than the shell:\n{}",
-        differ.len(),
-        differ.join("\n")
+        failures.is_empty(),
+        "{} line(s) with a -- answer otherwise than the shell and not named (or named and gone):\n{}",
+        failures.len(),
+        failures.join("\n")
     );
 }

@@ -218,7 +218,11 @@ mod tests {
             }
             let src = std::fs::read_to_string(f).unwrap();
             let rel = f.display().to_string().replace('\\', "/");
-            for (n, line) in non_test_lines(f, &src) {
+            // Everything from a file's `#[cfg(test)] mod tests {` on is tests
+            // (non_test_lines can lose a test module's end on a brace inside
+            // a string).
+            let prod_lines = src.find("\n#[cfg(test)]\nmod tests {").map_or(usize::MAX, |i| src[..i].lines().count() + 1);
+            for (n, line) in non_test_lines(f, &src).into_iter().filter(|(n, _)| *n <= prod_lines) {
                 let code = line.split("//").next().unwrap_or("");
                 let at = format!("{rel}:{n}");
                 if code.contains(concat!("command_keeping", "_session(")) {

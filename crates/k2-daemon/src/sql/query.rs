@@ -137,7 +137,7 @@ fn touches_k2_internal(names: &Names) -> bool {
 fn touches_session_lock(names: &Names) -> bool {
     names.tables.iter().any(|t| {
         let name = last_part_lower(t);
-        name == "k2_actor_lock" || name == "k2_principal_lock"
+        name == "k2_actor_lock" || name == "k2_principal_lock" || name == "k2_claims_lock"
     })
 }
 

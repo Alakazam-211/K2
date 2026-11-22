@@ -6738,6 +6738,62 @@
       "live": {"topic": "unread", "alsoTopics": ["my-access"], "role": "read"}
     },
     {
+      "verb": "identity.token",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/skin/identity-token"
+        }
+      },
+      "request": [],
+      "response": {
+        "title": "IdentityToken",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "claimsToken": {
+            "type": "string",
+            "description": "For SELECT k2.set_claims($1) inside a transaction on the App's own database connection."
+          },
+          "expiresIn": {
+            "type": "integer",
+            "description": "How long the token is good for, in seconds (a duration)."
+          },
+          "database": {
+            "type": "string"
+          },
+          "use": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "ok",
+          "claimsToken",
+          "expiresIn",
+          "database"
+        ]
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "failed"
+      ],
+      "doc": "A 60-second claims token for the person whose session pass this is, for the App's own Postgres connection: in a transaction, SELECT k2.set_claims(token), then auth.uid() and the rest answer for that person (the Supabase-compatible layer must be on).",
+      "example": "const {claimsToken} = await k2.asGuest(pass).identity.token()"
+    },
+    {
       "verb": "me.events",
       "cap": null,
       "exposure": ["app"],

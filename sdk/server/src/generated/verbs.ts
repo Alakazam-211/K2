@@ -50,6 +50,17 @@ export const APP_VERBS = {
     responseNames: {},
     response: {"additionalProperties":false,"properties":{"agents":{"items":{"additionalProperties":false,"properties":{"can":{"additionalProperties":false,"properties":{"activity":{"type":"boolean"},"chat":{"type":"boolean"},"download":{"type":"boolean"},"files":{"type":"string"},"heartbeats":{"type":"string"},"identity":{"type":"boolean"},"members":{"type":"boolean"},"send":{"type":"boolean"},"store":{"type":"string"},"tickets":{"type":"string"},"upload":{"type":"boolean"},"wiki":{"type":"boolean"}},"type":"object"},"caps":{"items":{"type":"string"},"type":"array"},"color":{"type":["string","null"]},"displayName":{"type":"string"},"folders":{"additionalProperties":false,"properties":{"download":{"items":{"type":"string"},"type":"array"},"read":{"items":{"type":"string"},"type":"array"},"upload":{"items":{"type":"string"},"type":"array"},"uploadDir":{"type":"string"},"write":{"items":{"type":"string"},"type":"array"}},"type":"object"},"handle":{"type":"string"},"image":{"type":["string","null"]},"muted":{"type":"boolean"},"room":{"type":"string"},"ticketsWaiting":{"type":"integer"},"unread":{"type":"integer"},"waiting":{"type":"integer"}},"type":"object"},"type":"array"},"app":{"type":"string"},"catalogVersion":{"type":"integer"},"chat":{"type":"boolean"},"features":{"items":{"type":"string"},"type":"array"},"instanceId":{"type":"string"},"kind":{"enum":["guest","app","token"]},"ok":{"type":"boolean"},"principalId":{"type":["string","null"]},"publicHost":{"type":["string","null"]},"rooms":{"items":{"additionalProperties":false,"properties":{"caps":{"items":{"type":"string"},"type":"array"},"folders":{"additionalProperties":false,"properties":{"download":{"items":{"type":"string"},"type":"array"},"read":{"items":{"type":"string"},"type":"array"},"upload":{"items":{"type":"string"},"type":"array"},"uploadDir":{"type":"string"},"write":{"items":{"type":"string"},"type":"array"}},"type":"object"},"handle":{"type":"string"},"room":{"type":"string"}},"type":"object"},"type":"array"},"serverId":{"type":["string","null"]},"username":{"type":"string"}},"type":"object"},
   },
+  'identity.token': {
+    cap: null,
+    effect: 'read',
+    kind: 'call',
+    feature: 'app-api-v1',
+    door: 'both',
+    http: { method: 'GET', route: '/cli/skin/identity-token', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"claimsToken":{"type":"string"},"database":{"type":"string"},"expiresIn":{"type":"integer"},"ok":{"type":"boolean"},"use":{"type":"string"}},"type":"object"},
+  },
   'me.events': {
     cap: null,
     effect: 'read',
@@ -1779,6 +1790,16 @@ export interface AppMe {
   /** This server's stable id (key rows across servers by serverId + room). */
   readonly serverId: string | null
   readonly username: string
+}
+
+export interface IdentityToken {
+  /** For SELECT k2.set_claims($1) inside a transaction on the App's own database connection. */
+  readonly claimsToken: string
+  readonly database: string
+  /** How long the token is good for, in seconds (a duration). */
+  readonly expiresIn: number
+  readonly ok: boolean
+  readonly use?: string
 }
 
 export interface AppAccessFrame {
@@ -4130,6 +4151,7 @@ export type AppErrorCode = (typeof APP_ERROR_CODES)[number]
 /** Every App verb: its arguments and its answer (or frame). */
 export interface AppVerbs {
   'me.get': { args: Record<string, never>; value: AppMe }
+  'identity.token': { args: Record<string, never>; value: IdentityToken }
   'me.events': { args: { scope: 'me' | 'guests' }; value: AppAccessFrame }
   'roomAgents.list': { args: Record<string, never>; value: AppRoomAgents }
   'guests.login': { args: { app?: string; device?: AppDevice; password: string; username: string }; value: AppGuestLogin }
@@ -4280,7 +4302,7 @@ export interface AppVerbs {
   'project.events': { args: { group: string }; value: AppProjectFrame }
 }
 
-export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'auth.exchange' | 'auth.doorStatus' | 'guests.rooms' | 'guests.setRooms' | 'app.rooms' | 'guests.list' | 'password.change' | 'guests.logout' | 'guests.refresh' | 'guests.devices' | 'guests.revokeDevice' | 'profile.get' | 'profile.update' | 'profile.setImage' | 'profile.clearImage' | 'profile.sessions' | 'profile.revokeSession' | 'profile.signOutOthers' | 'profile.deleteAccount' | 'diagnostics.send' | 'push.register' | 'push.unregister' | 'push.device' | 'push.prefs' | 'push.viewing' | 'push.send' | 'push.status' | 'push.devices' | 'pairing.start' | 'pairing.status' | 'pairing.cancel' | 'pairing.check' | 'pairing.redeem' | 'email.send' | 'email.status' | 'email.log' | 'app.info' | 'password.forgot' | 'password.reset' | 'thread.page' | 'thread.latest' | 'thread.activity' | 'thread.activityRooms' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.attachmentToken' | 'thread.catchup' | 'thread.setRead' | 'thread.markAllRead' | 'thread.unread' | 'thread.mute' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.downloads' | 'files.download' | 'files.downloadToken' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.uploadCreate' | 'files.uploadStatus' | 'files.uploadComplete' | 'files.uploadAbort' | 'files.uploadToken' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.attachment' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass' | 'guests.chat' | 'guests.setChat' | 'chat.member' | 'chat.whois' | 'chat.createChannel' | 'chat.channels' | 'chat.setChannels' | 'chat.space' | 'recordings.list' | 'recordings.get' | 'recordings.transcript' | 'project.list' | 'project.read' | 'project.post' | 'project.markRead'
+export type AppCallVerb = 'me.get' | 'identity.token' | 'roomAgents.list' | 'guests.login' | 'auth.exchange' | 'auth.doorStatus' | 'guests.rooms' | 'guests.setRooms' | 'app.rooms' | 'guests.list' | 'password.change' | 'guests.logout' | 'guests.refresh' | 'guests.devices' | 'guests.revokeDevice' | 'profile.get' | 'profile.update' | 'profile.setImage' | 'profile.clearImage' | 'profile.sessions' | 'profile.revokeSession' | 'profile.signOutOthers' | 'profile.deleteAccount' | 'diagnostics.send' | 'push.register' | 'push.unregister' | 'push.device' | 'push.prefs' | 'push.viewing' | 'push.send' | 'push.status' | 'push.devices' | 'pairing.start' | 'pairing.status' | 'pairing.cancel' | 'pairing.check' | 'pairing.redeem' | 'email.send' | 'email.status' | 'email.log' | 'app.info' | 'password.forgot' | 'password.reset' | 'thread.page' | 'thread.latest' | 'thread.activity' | 'thread.activityRooms' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.attachmentToken' | 'thread.catchup' | 'thread.setRead' | 'thread.markAllRead' | 'thread.unread' | 'thread.mute' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.downloads' | 'files.download' | 'files.downloadToken' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.uploadCreate' | 'files.uploadStatus' | 'files.uploadComplete' | 'files.uploadAbort' | 'files.uploadToken' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.attachment' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass' | 'guests.chat' | 'guests.setChat' | 'chat.member' | 'chat.whois' | 'chat.createChannel' | 'chat.channels' | 'chat.setChannels' | 'chat.space' | 'recordings.list' | 'recordings.get' | 'recordings.transcript' | 'project.list' | 'project.read' | 'project.post' | 'project.markRead'
 export type AppSubscribeVerb = 'me.events' | 'thread.events' | 'thread.stream' | 'files.events' | 'activity.events' | 'recordings.events' | 'project.events'
 
 /** The named helpers: one per App verb a server calls (browser-only rows have none), grouped by surface. */
@@ -4290,6 +4312,10 @@ export interface AppSurfaces {
     get(args?: Record<string, never>): Promise<AppMe>
     /** This pass's access changed: read me.get again. No details, ever. Also read me.get on every open. Any live pass opens it, one with no rooms too. no cap · WS /cli/skin/me/events?scope=. e.g. `const off = k2.asGuest(pass).me.onAccessChanged(({me, ended}) => ended ? showSignedOut() : render(me))` */
     events(args: { scope: 'me' | 'guests' }, onFrame: (frame: AppAccessFrame) => void, onError?: (error: K2Error) => void): () => void
+  }
+  readonly identity: {
+    /** A 60-second claims token for the person whose session pass this is, for the App's own Postgres connection: in a transaction, SELECT k2.set_claims(token), then auth.uid() and the rest answer for that person (the Supabase-compatible layer must be on). no cap · GET /cli/skin/identity-token. e.g. `const {claimsToken} = await k2.asGuest(pass).identity.token()` */
+    token(args?: Record<string, never>): Promise<IdentityToken>
   }
   readonly roomAgents: {
     /** The agents in the pass's rooms: handle, name, color and picture, plus unread and waiting (thread:read) and waiting tickets (tickets:read) where the caps allow. no cap · GET /cli/skin/agents. e.g. `const {agents} = await k2.roomAgents.list()` */
@@ -4618,4 +4644,4 @@ export interface AppSurfaces {
 }
 
 /** The surface names, in catalog order (the client builds one object each). */
-export const APP_SURFACES = ['me', 'roomAgents', 'guests', 'auth', 'app', 'password', 'profile', 'diagnostics', 'push', 'pairing', 'email', 'thread', 'files', 'resources', 'tickets', 'wiki', 'storeDocs', 'db', 'heartbeats', 'activity', 'agentIdentity', 'room', 'chat', 'recordings', 'project'] as const
+export const APP_SURFACES = ['me', 'identity', 'roomAgents', 'guests', 'auth', 'app', 'password', 'profile', 'diagnostics', 'push', 'pairing', 'email', 'thread', 'files', 'resources', 'tickets', 'wiki', 'storeDocs', 'db', 'heartbeats', 'activity', 'agentIdentity', 'room', 'chat', 'recordings', 'project'] as const

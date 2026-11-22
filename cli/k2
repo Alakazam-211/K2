@@ -11833,6 +11833,9 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         Set/clear guest email (omit/empty clears)
   k2 app user full-name <username> [--name <text>]
                                         Set/clear full name (omit/empty clears)
+  k2 app user meta <app-id> <user> [--app-metadata '{…}'] [--user-metadata '{…}'] [--json]
+                                        Read or replace app_metadata / user_metadata (JSON objects,
+                                        16 KiB each) for the Supabase-compatible layer (k2 app compat)
   k2 app user agent <username> <workspace> | <username> --clear
                                         Owner only. Mark this login as that workspace's agent
                                         (db actor kind agent, not guest); --clear = a person again
@@ -17603,6 +17606,251 @@ for l in json.load(sys.stdin).get("lines") or []:
     esac
 }
 
+# ── k2 app compat / identity / user meta (prd-app-supabase-compat-v1, lane A)
+# The Supabase-compatible data layer for one App: POST /cli/app/compat/*,
+# /cli/app/identity/*, /cli/app/user/meta. Exit codes: 0 ok, 1 usage or
+# failed, 3 refused. Only names and counts are printed, never a password,
+# a key or a URL with credentials.
+
+_app_compat_usage() {
+    cat <<'EOF'
+k2 app compat — the Supabase-compatible data layer for one App (off by default)
+
+  k2 app compat on <app-id> --db <name> [--json]
+      Turn it on for one App and one database its workspace owns. K2 makes
+      the standard roles anon, authenticated and service_role (BYPASSRLS)
+      once per cluster, the door's login <db>_authenticator, the auth schema
+      (auth.uid(), auth.jwt(), auth.role(), auth.email(), auth.users) and
+      the database's claims key, takes CONNECT on the database from PUBLIC,
+      and writes auth.users from the App's users (ids kept). Running it
+      again is safe: same login, same key; it also puts the key's rights
+      back if someone widened them. Warnings say what anon and
+      authenticated can reach. Refused: a schema named auth K2 didn't make
+      (compat_auth_schema_taken, exit 3).
+  k2 app compat off <app-id> [--json]
+      The door login stops (unless another App on the database uses it).
+      auth.users and the auth schema stay: your foreign keys point at them.
+  k2 app compat status <app-id> [--json]
+      The settings, the issuers and their keys, when auth.users was last
+      written, and warnings.
+  k2 app compat set <app-id> <setting> <value> [--json]
+      anon on|off                 requests with only the publishable key run
+                                  as anon (off by default)
+      service-key-public on|off   accept the server key on the public host
+                                  (off: the gateway link only)
+      origins <a,b|none>          other origins the doors answer
+      schemas <a,b>               schemas the data door exposes (public)
+      max-rows <n>                rows per answer (1000)
+      sub token|user              a third-party token's sub: the issuer's
+                                  id (token, the cut-over setting) or the App
+                                  user's id (user; the issuer's id moves to
+                                  <key>_uid)
+      unknown-email refuse|authenticated
+                                  a valid token whose email is no App user:
+                                  refused 403 not_a_user (default), or
+                                  authenticated as Supabase does
+  k2 app compat sync-users <app-id> [--json]
+      Check auth.users against the App's users now and repair a difference
+      (the store wins). K2 also does this at every start and whenever a user
+      is added, changed, disabled or removed.
+
+In Postgres: policies are standard (CREATE POLICY … TO authenticated USING
+(auth.uid() = user_id)). auth.* answer from claims K2 set: on the doors (the
+door login only), on the brokered lane (POST /cli/db/query runs as
+authenticated with the person's claims), or on your server's own connection
+after SELECT k2.set_claims(<token>) inside a transaction (the token: GET
+/cli/skin/identity-token with the person's pass, on the gateway link). A
+login that sets request.jwt.claims itself is nobody to auth.*. Third-party
+tokens: k2 app identity --help. Study: k2 study supabase-compat.
+
+Exit: 0 ok · 1 usage or failed · 3 refused
+EOF
+}
+
+_app_identity_usage() {
+    cat <<'EOF'
+k2 app identity — third-party tokens an App trusts (Supabase-compatible layer)
+
+  k2 app identity issuer add <app-id> --key <name> --issuer <iss> --audience <aud> --jwks <https-url> [--json]
+      Trust ID tokens from one issuer (a phone app's sign-in), pinned to that
+      exact iss and aud, its keys from that URL. --key is a short name
+      (firebase): under `k2 app compat set <app> sub user` the issuer's own
+      id is in the claim <key>_uid.
+  k2 app identity issuer rm <app-id> <iss|key> [--json]
+  k2 app identity issuers <app-id> [--json]
+      Each issuer and its keys: when fetched, when they expire, and the
+      first refresh that failed.
+  k2 app identity unlink <app-id> <user> [--json]
+      Forget the (issuer, sub) pairs recorded for a user: the next token
+      from them is recorded afresh.
+
+The check: RS256 or ES256; the signature against the issuer's keys; iss and
+aud equal the pinned values; exp and iat with 60 s of slack; email_verified
+true. The email, lower-cased, must be a user of this App (else 403
+not_a_user; k2 app compat set <app> unknown-email). A disabled user is
+refused. The first match records the token's sub for that user; a different
+user or sub later is 403 identity_changed, with an audit row. Keys are kept
+as long as the issuer's cache header says, refreshed at half that, and
+fetched once more (at most once a minute) for an unknown key id. Expired
+and unreachable: every token from that issuer is 401
+issuer_keys_unavailable, and status warns from the first failed refresh.
+
+Exit: 0 ok · 1 usage or failed · 3 refused
+EOF
+}
+
+_app_compat_bad() {
+    printf '{"error":"usage","hint":%s}\n' "$(printf '%s' "$1" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" >&2
+    exit 1
+}
+
+# Print an answer's compat view and warnings (stdin).
+_app_compat_print() {
+    python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+c = v.get("compat") or {}
+if v.get("on") is False:
+    print("%s: the Supabase-compatible layer is off (k2 app compat on %s --db <name>)" % (v.get("app"), v.get("app")))
+    sys.exit(0)
+if c:
+    print("%s → %s  door login %s" % (c.get("app"), c.get("database"), c.get("authenticator")))
+    print("anon %s · server key on the public host %s · sub %s · unknown email %s" % (
+        "on" if c.get("anon") else "off", "on" if c.get("serviceKeyPublic") else "off", c.get("sub"), c.get("unknownEmail")))
+    print("schemas %s · origins %s · max rows %s" % (",".join(c.get("schemas") or []), ",".join(c.get("origins") or []) or "same origin only", (c.get("limits") or {}).get("maxRows")))
+u = v.get("users")
+if isinstance(u, dict):
+    print("auth.users: %s added, %s changed, %s removed" % (u.get("inserted"), u.get("updated"), u.get("deleted")))
+for i in v.get("issuers") or []:
+    k = i.get("keys") or {}
+    print("issuer %s  %s  aud %s  keys %s" % (i.get("key"), i.get("issuer"), i.get("audience"), "fetched" if k.get("fetched") else "not fetched yet"))
+for w in v.get("warnings") or []:
+    print("warning: %s" % w)
+if v.get("note"):
+    print("note: %s" % v["note"])'
+}
+
+_app_compat_post() {
+    local path="$1" body="$2" json_out="$3"
+    K2_CP_MAX_TIME=300 _app_rt_post "$path" "$body"
+    [ "$_CP_STATUS" = 200 ] || _app_db_fail
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | _app_compat_print
+}
+
+cmd_app_compat() {
+    local sub="${1:-}"
+    case "$sub" in
+        on|off|status|set|sync-users) shift ;;
+        ""|-h|--help|help) _app_compat_usage; return 0 ;;
+        *) _app_compat_bad "k2 app compat on|off|status|set|sync-users <app-id> (k2 app compat --help)" ;;
+    esac
+    local app="" db="" json_out=0 pos=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            --db) [ $# -ge 2 ] && [ -n "${2:-}" ] || _app_compat_bad "--db needs a value"; db="$2"; shift 2 ;;
+            --db=*) db="${1#*=}"; shift ;;
+            -h|--help) _app_compat_usage; return 0 ;;
+            -*) _app_compat_bad "unknown flag $1 (k2 app compat --help)" ;;
+            *) if [ -z "$app" ]; then app="$1"; else pos+=("$1"); fi; shift ;;
+        esac
+    done
+    [ -n "$app" ] || _app_compat_bad "name the App: k2 app compat $sub <app-id>"
+    case "$sub" in
+        on)
+            [ -n "$db" ] || _app_compat_bad "name the database: k2 app compat on $app --db <name> (k2 db list)"
+            _app_compat_post /cli/app/compat/on "$(_compute_json K2_CJ_app="$app" K2_CJ_db="$db")" "$json_out" ;;
+        off) _app_compat_post /cli/app/compat/off "$(_compute_json K2_CJ_app="$app")" "$json_out" ;;
+        sync-users) _app_compat_post /cli/app/compat/sync-users "$(_compute_json K2_CJ_app="$app")" "$json_out" ;;
+        set)
+            [ "${#pos[@]}" = 2 ] || _app_compat_bad "k2 app compat set $app <setting> <value> (k2 app compat --help)"
+            _app_compat_post /cli/app/compat/set "$(_compute_json K2_CJ_app="$app" K2_CJ_key="${pos[0]}" K2_CJ_value="${pos[1]}")" "$json_out" ;;
+        status)
+            _compute_split "$(_compute_send GET /cli/app/compat/status "app=$(urlencode "$app")")"
+            [ "$_CP_STATUS" = 200 ] || _app_db_fail
+            if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+            printf '%s' "$_CP_BODY" | _app_compat_print ;;
+    esac
+}
+
+cmd_app_identity() {
+    local sub="${1:-}" verb=""
+    case "$sub" in
+        issuer) shift; verb="${1:-}"; case "$verb" in add|rm) shift ;; *) _app_compat_bad "k2 app identity issuer add|rm <app-id> … (k2 app identity --help)" ;; esac ;;
+        issuers|unlink) shift ;;
+        ""|-h|--help|help) _app_identity_usage; return 0 ;;
+        *) _app_compat_bad "k2 app identity issuer add|rm, issuers, unlink (k2 app identity --help)" ;;
+    esac
+    local app="" json_out=0 key="" iss="" aud="" jwks="" pos=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            --key|--issuer|--audience|--jwks)
+                [ $# -ge 2 ] && [ -n "${2:-}" ] || _app_compat_bad "$1 needs a value"
+                case "$1" in --key) key="$2" ;; --issuer) iss="$2" ;; --audience) aud="$2" ;; --jwks) jwks="$2" ;; esac
+                shift 2 ;;
+            -h|--help) _app_identity_usage; return 0 ;;
+            -*) _app_compat_bad "unknown flag $1 (k2 app identity --help)" ;;
+            *) if [ -z "$app" ]; then app="$1"; else pos+=("$1"); fi; shift ;;
+        esac
+    done
+    [ -n "$app" ] || _app_compat_bad "name the App (k2 app identity --help)"
+    case "$sub:$verb" in
+        issuer:add)
+            [ -n "$key" ] && [ -n "$iss" ] && [ -n "$aud" ] && [ -n "$jwks" ] || _app_compat_bad "issuer add needs --key, --issuer, --audience and --jwks"
+            _app_compat_post /cli/app/identity/issuer/add "$(_compute_json K2_CJ_app="$app" K2_CJ_key="$key" K2_CJ_issuer="$iss" K2_CJ_audience="$aud" K2_CJ_jwks="$jwks")" "$json_out" ;;
+        issuer:rm)
+            [ "${#pos[@]}" = 1 ] || _app_compat_bad "k2 app identity issuer rm $app <iss|key>"
+            _app_compat_post /cli/app/identity/issuer/rm "$(_compute_json K2_CJ_app="$app" K2_CJ_issuer="${pos[0]}")" "$json_out" ;;
+        unlink:)
+            [ "${#pos[@]}" = 1 ] || _app_compat_bad "k2 app identity unlink $app <user>"
+            K2_CP_MAX_TIME=60 _app_rt_post /cli/app/identity/unlink "$(_compute_json K2_CJ_app="$app" K2_CJ_user="${pos[0]}")"
+            [ "$_CP_STATUS" = 200 ] || _app_db_fail
+            if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("%s: %s recorded sign-in pair(s) cleared" % (v.get("user"), v.get("cleared")))' ;;
+        issuers:)
+            _compute_split "$(_compute_send GET /cli/app/identity/issuers "app=$(urlencode "$app")")"
+            [ "$_CP_STATUS" = 200 ] || _app_db_fail
+            if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+            printf '%s' "$_CP_BODY" | _app_compat_print ;;
+    esac
+}
+
+# k2 app user meta <app-id> <user> [--app-metadata JSON] [--user-metadata JSON] [--json]
+cmd_app_user_meta() {
+    local app="" user="" am="" um="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            --app-metadata|--user-metadata)
+                [ $# -ge 2 ] || _app_compat_bad "$1 needs a JSON object"
+                if [ "$1" = --app-metadata ]; then am="$2"; else um="$2"; fi
+                shift 2 ;;
+            -h|--help)
+                echo "k2 app user meta <app-id> <user> [--app-metadata '{…}'] [--user-metadata '{…}'] [--json]"
+                echo "  read, or replace, an App user's app_metadata (yours to set, never the user's) and"
+                echo "  user_metadata (the user may set it too). JSON objects, 16 KiB each. Both reach the"
+                echo "  claims (auth.jwt()) and auth.users when the Supabase-compatible layer is on."
+                return 0 ;;
+            -*) _app_compat_bad "unknown flag $1 (k2 app user meta --help)" ;;
+            *) if [ -z "$app" ]; then app="$1"; elif [ -z "$user" ]; then user="$1"; else _app_compat_bad "k2 app user meta <app-id> <user>"; fi; shift ;;
+        esac
+    done
+    [ -n "$app" ] && [ -n "$user" ] || _app_compat_bad "k2 app user meta <app-id> <user> (k2 app user meta --help)"
+    local body
+    body="$(_compute_json K2_CJ_app="$app" K2_CJ_user="$user" K2_CJ_appMetadata_j="$am" K2_CJ_userMetadata_j="$um" 2>/dev/null)" \
+        || _app_compat_bad "--app-metadata and --user-metadata take JSON objects"
+    K2_CP_MAX_TIME=60 _app_rt_post /cli/app/user/meta "$body"
+    [ "$_CP_STATUS" = 200 ] || _app_db_fail
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+print("%s (%s)" % (v.get("user"), v.get("id")))
+print("app_metadata  %s" % json.dumps(v.get("appMetadata")))
+print("user_metadata %s" % json.dumps(v.get("userMetadata")))'
+}
 # ── App box services (0.46.0) ────────────────────────────────────────
 # A walled App reaches a service on this box's loopback only through an
 # owner-approved forward into its wall. New ones are held for the owner;
@@ -24679,6 +24927,9 @@ cmd_app() {
         egress) shift; cmd_app_egress "$@" ;;
         # 0.46.11: an App's database (prd-app-database-integrations-v1 S2).
         db|database) shift; cmd_app_db "$@" ;;
+        # The Supabase-compatible data layer (prd-app-supabase-compat-v1, lane A).
+        compat) shift; cmd_app_compat "$@" ;;
+        identity) shift; cmd_app_identity "$@" ;;
         box-service|box-services) shift; cmd_app_box_service "$@" ;;
         token|tokens)
             shift || true
@@ -24724,6 +24975,8 @@ cmd_skin() {
             case "$action" in
                 # 0.46.17: a test login into its role's rooms, on a card.
                 rooms-ok) _app_test_guest_rooms_ok "$@"; return $? ;;
+                # The compat layer's per-user metadata (lane A).
+                meta) cmd_app_user_meta "$@"; return $? ;;
                 add|remove|rm|password)
                     for _a in "$@"; do
                         if [[ "$_a" == "--test" ]]; then
@@ -59597,6 +59850,40 @@ cmd_schema() {
       ]
     },
     {
+      "name": "app compat",
+      "usage": "k2 app compat on <app-id> --db <name> | off <app-id> | status <app-id> | set <app-id> <setting> <value> | sync-users <app-id> [--json]",
+      "description": "The Supabase-compatible data layer for one App (off by default): the roles anon, authenticated, service_role, the door login <db>_authenticator, auth.uid()/jwt()/role()/email(), auth.users written from the App's users (ids kept), CONNECT taken from PUBLIC. Settings: anon, service-key-public, origins, schemas, max-rows, sub token|user, unknown-email refuse|authenticated; risky ones answer with warnings. Exit 0 ok, 1 usage or failed, 3 refused (compat_auth_schema_taken).",
+      "args": [{"name": "app-id", "required": true}],
+      "flags": [
+        {"name": "--db", "arg": "name", "description": "With on: a database the App's workspace owns (k2 db list)."},
+        {"name": "--json", "arg": null, "description": "{ok, compat: {app, database, authenticator, anon, serviceKeyPublic, origins, schemas, limits, sub, unknownEmail, usersSyncedAt}, users: {inserted, updated, deleted}, issuers[], warnings[]}."}
+      ]
+    },
+    {
+      "name": "app identity",
+      "usage": "k2 app identity issuer add <app-id> --key <name> --issuer <iss> --audience <aud> --jwks <https-url> | issuer rm <app-id> <iss|key> | issuers <app-id> | unlink <app-id> <user> [--json]",
+      "description": "Third-party ID tokens an App trusts (a phone app's sign-in): pinned issuer, audience and key-set URL; RS256/ES256, exp/iat with 60 s slack, email_verified; the email must be a user of the App (else 403 not_a_user); a changed (issuer, sub) is 403 identity_changed until unlink. Keys expired and unreachable: 401 issuer_keys_unavailable.",
+      "args": [{"name": "app-id", "required": true}],
+      "flags": [
+        {"name": "--key", "arg": "name", "description": "Short name; under sub user the issuer's id is <name>_uid."},
+        {"name": "--issuer", "arg": "iss", "description": "The exact iss the tokens carry."},
+        {"name": "--audience", "arg": "aud", "description": "The exact aud the tokens carry."},
+        {"name": "--jwks", "arg": "https-url", "description": "The issuer's key set."},
+        {"name": "--json", "arg": null, "description": "{ok, issuer} | {ok, issuers[]: {key, issuer, audience, jwks, keys: {fetched, fetchedAt, expiresAt, warning}}} | {ok, user, cleared}."}
+      ]
+    },
+    {
+      "name": "app user meta",
+      "usage": "k2 app user meta <app-id> <user> [--app-metadata JSON] [--user-metadata JSON] [--json]",
+      "description": "Read or replace an App user's app_metadata (never the user's to set) and user_metadata: JSON objects, 16 KiB each, in the claims (auth.jwt()) and auth.users when the Supabase-compatible layer is on.",
+      "args": [{"name": "app-id", "required": true}, {"name": "user", "required": true}],
+      "flags": [
+        {"name": "--app-metadata", "arg": "JSON", "description": "Replaces app_metadata."},
+        {"name": "--user-metadata", "arg": "JSON", "description": "Replaces user_metadata."},
+        {"name": "--json", "arg": null, "description": "{ok, user, id, appMetadata, userMetadata}."}
+      ]
+    },
+    {
       "name": "app status",
       "usage": "k2 app status <app-id> [--no-checks] [--public] [--json]",
       "description": "How an App is doing in one answer: deploy, health, its host.checks, errors in the last hour, resources, door, hosts, phone, the update feed, and next: one exact command per red or yellow item. Exit 0 green, 1 red, 2 yellow, 3 refused. App output is never printed.",
@@ -66244,7 +66531,7 @@ if nx:
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-errors live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing auth-pages app-profile app-account-deletion app-transfers app-transfers-http app-chat app-recording chat-voice chat-voice-rooms voice-rooms tauri tauri-voice skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared ci ci-release ci-stats provenance vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes docs sim design db-upgrade app-databases jobs heartbeats mail-watch mail-reader folder-trust email-notifications box-move board chat-refresh desktop send-feedback organization agent-templates suite-apps postal"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-errors live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing auth-pages app-profile app-account-deletion app-transfers app-transfers-http app-chat app-recording chat-voice chat-voice-rooms voice-rooms tauri tauri-voice skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared ci ci-release ci-stats provenance vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes docs sim design db-upgrade app-databases supabase-compat jobs heartbeats mail-watch mail-reader folder-trust email-notifications box-move board chat-refresh desktop send-feedback organization agent-templates suite-apps postal"
 
 _study_usage() {
     cat <<'EOF'
@@ -66288,6 +66575,7 @@ _study_title() {
         db) echo "Workspace database" ;;
         db-upgrade) echo "Moving a database to a newer Postgres" ;;
         app-databases) echo "An App's database: what reaches what, and connecting one" ;;
+        supabase-compat) echo "Supabase-style RLS and auth.* on an App's database" ;;
         mail) echo "Agent email" ;;
         connect-boundary) echo "K2 vs Connect" ;;
         apps) echo "Apps" ;;
@@ -66425,6 +66713,7 @@ K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a bri
   db                  Loopback Postgres; db_agent_access is create-only
   db-upgrade          Move a database to a newer Postgres; old copy kept 14 days
   app-databases       Connect an App to Postgres (k2 app db); which App kinds reach what
+  supabase-compat     Supabase-style RLS, auth.uid() and auth.users on an App's database
   mail                Agent email; bodies untrusted; send is governed
   connect-boundary    K2 app/daemon/CLI vs Connect (separate product)
   apps                App guests; k2skn_ prefix never grid
@@ -66519,6 +66808,7 @@ _study_page() {
         db) _study_page_db ;;
         db-upgrade) _study_page_db_upgrade ;;
         app-databases) _study_page_app_databases ;;
+        supabase-compat) _study_page_supabase_compat ;;
         mail) _study_page_mail ;;
         connect-boundary) _study_page_connect_boundary ;;
         apps) _study_page_skins ;;
@@ -67692,6 +67982,7 @@ THE SERVER SDK (@k2/server: Node 22+, no dependencies, typed)
 EVERY VERB, BY CAP (helper, method and route, what it does)
 no cap (your own rooms)
   me.get                   GET  /cli/skin/me                                     Who this pass is: guest or App, its agents (identity, caps, what they allow, folders, unread and waiting tickets where the caps allow), this server's ids and features.
+  identity.token           GET  /cli/skin/identity-token                         A 60-second claims token for the person whose session pass this is, for the App's own Postgres connection: in a transaction, SELECT k2.set_claims(token), then auth.uid() and the rest answer for that person (the Supabase-compatible layer must be on).
   me.events                WS   /cli/skin/me/events?scope=                       This pass's access changed: read me.get again. No details, ever. Also read me.get on every open. Any live pass opens it, one with no rooms too.
   roomAgents.list          GET  /cli/skin/agents                                 The agents in the pass's rooms: handle, name, color and picture, plus unread and waiting (thread:read) and waiting tickets (tickets:read) where the caps allow.
   guests.login             POST /cli/skin/login (server only)                    Log a guest in through this App; the answer carries the guest's session pass, or mustChangePassword and a change token when someone else set the password.
@@ -70148,6 +70439,80 @@ YOUR OWN SCRIPTS
   k2 db dsn prints no password. k2 db run [--db <name>] -- <command>
   hands the command DATABASE_URL in its environment; k2 db dsn --reveal
   prints it on purpose (then keep it out of chats, notes and git).
+EOF
+}
+
+_study_page_supabase_compat() {
+    cat <<'EOF'
+k2 study supabase-compat — Supabase-style RLS and auth.* on an App's database
+
+WHAT IT IS
+  The Supabase-compatible data layer, for one App at a time (off by
+  default). Someone who knows Supabase and Postgres row-level security
+  reads your database and knows what they see: the roles anon,
+  authenticated and service_role, CREATE POLICY … TO authenticated USING
+  (auth.uid() = user_id), auth.uid() / auth.jwt() / auth.role() /
+  auth.email(), current_setting('request.jwt.claims'), and auth.users.
+  K2's App users stay the user store; auth.users is a copy K2 writes.
+
+TURN IT ON
+  k2 app compat on <app> --db <name>     a database the App's workspace owns
+  k2 app compat status <app>             settings, issuers, warnings
+  Then write migrations as on Supabase:
+    ALTER TABLE notes ENABLE ROW LEVEL SECURITY;
+    CREATE POLICY own ON notes FOR ALL TO authenticated
+      USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+    GRANT SELECT, INSERT, UPDATE, DELETE ON notes TO authenticated;
+  Foreign keys to auth.users(id) work (ON DELETE CASCADE fires when K2
+  removes a user). Read auth.users through your own SECURITY DEFINER
+  function; no App role reads it directly. Never write it: K2 rewrites it
+  from the App's users (at start, on every user change, and with
+  k2 app compat sync-users).
+
+WHERE THE CLAIMS COME FROM
+  The doors (/rest/v1, /storage/v1): K2 logs in as <db>_authenticator and
+    sets the role and request.jwt.claims for each request.
+  The brokered lane (POST /cli/db/query, /cli/db/rows): runs as
+    authenticated with the person's claims.
+  Your server's own DATABASE_URL: GET /cli/skin/identity-token with the
+    person's session pass (gateway link only) gives a 60-second token;
+    BEGIN; SELECT k2.set_claims($1); …your queries…; COMMIT;
+  Anything else is nobody: a login that sets request.jwt.claims or makes
+  a table named like K2's lock gets auth.uid() = null. A reader or grantee
+  (k2 db grant, k2 db request-read) can still set k2.skin_principal, the
+  older lane: per-user rules on k2.skin_uid() aren't a boundary for them.
+
+THE CLAIMS (auth.jwt())
+  {"sub": <user id>, "role": "authenticated", "email": …, "iss": "k2",
+   "aud": "authenticated", "session_id": …,
+   "app_metadata": {"k2_app": <app>, "k2_role": <App role>, …},
+   "user_metadata": {…}, "iat": …, "exp": …}
+  app_metadata and user_metadata: k2 app user meta <app> <user>.
+
+PHONE APPS (third-party tokens)
+  k2 app identity issuer add <app> --key firebase --issuer <iss>
+    --audience <aud> --jwks <https url>
+  The token's verified email must be a user of the App (else 403
+  not_a_user). sub stays the issuer's id (k2 app compat set <app> sub
+  token), so auth.uid() raises on those requests, as on Supabase; match on
+  auth.email(), or switch to sub user once your policies are checked.
+
+SETTINGS AND WARNINGS (k2 app compat set <app> …)
+  anon on|off · service-key-public on|off · origins · schemas · max-rows ·
+  sub token|user · unknown-email refuse|authenticated. Turning a risky one
+  on answers with a warning, not a refusal (counts of what anon reaches,
+  tables without row security).
+
+ROLES ARE PER CLUSTER
+  Postgres role names are cluster-wide. Rights live on objects, so
+  authenticated in one database gets nothing in another, and K2 takes
+  CONNECT from PUBLIC. Still, give a moved App its own cluster
+  (k2 db cluster create); status warns when two compat databases share one.
+
+NOT IN THIS LAYER (yet)
+  Realtime, Edge Functions, OAuth providers run by K2, MFA, writing
+  auth.users from SQL, auth.sessions and auth.refresh_tokens (they exist
+  so imported functions load, and any use says they are not built yet).
 EOF
 }
 
@@ -119915,6 +120280,11 @@ case "${1:-help}" in
                 ;;
             # 0.46.11: `k2 app db` (connect an App to a database) owns its --help.
             db|database)
+                shift; cmd_app "$@"
+                ;;
+            # The Supabase-compatible layer (lane A): `k2 app compat` and
+            # `k2 app identity` own their --help.
+            compat|identity)
                 shift; cmd_app "$@"
                 ;;
             # `k2 app catalog` (one-click suite Apps) owns its --help.

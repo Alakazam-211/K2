@@ -99,6 +99,8 @@ pub mod egress_proxy;
 // 0.46.11 (prd-app-database-integrations-v1 S2): k2 app db connect,
 // status, check and disconnect, and the live check they run.
 pub mod db_connect;
+/// The Supabase-compatible data layer, one App at a time (lane A: identity).
+pub mod compat;
 pub mod db_door;
 pub mod db_probe;
 pub mod egress_routes;

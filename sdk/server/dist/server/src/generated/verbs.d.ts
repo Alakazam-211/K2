@@ -264,6 +264,42 @@ export declare const APP_VERBS: {
             readonly type: "object";
         };
     };
+    readonly 'identity.token': {
+        readonly cap: null;
+        readonly effect: "read";
+        readonly kind: "call";
+        readonly feature: "app-api-v1";
+        readonly door: "both";
+        readonly http: {
+            readonly method: "GET";
+            readonly route: "/cli/skin/identity-token";
+            readonly params: {};
+            readonly query: readonly [];
+        };
+        readonly socket: null;
+        readonly responseNames: {};
+        readonly response: {
+            readonly additionalProperties: false;
+            readonly properties: {
+                readonly claimsToken: {
+                    readonly type: "string";
+                };
+                readonly database: {
+                    readonly type: "string";
+                };
+                readonly expiresIn: {
+                    readonly type: "integer";
+                };
+                readonly ok: {
+                    readonly type: "boolean";
+                };
+                readonly use: {
+                    readonly type: "string";
+                };
+            };
+            readonly type: "object";
+        };
+    };
     readonly 'me.events': {
         readonly cap: null;
         readonly effect: "read";
@@ -10270,6 +10306,15 @@ export interface AppMe {
     readonly serverId: string | null;
     readonly username: string;
 }
+export interface IdentityToken {
+    /** For SELECT k2.set_claims($1) inside a transaction on the App's own database connection. */
+    readonly claimsToken: string;
+    readonly database: string;
+    /** How long the token is good for, in seconds (a duration). */
+    readonly expiresIn: number;
+    readonly ok: boolean;
+    readonly use?: string;
+}
 export interface AppAccessFrame {
     readonly kind: 'access_changed';
     /** scope=guests only: which of this App's own guests. Read me.get with that guest's pass. */
@@ -12421,6 +12466,10 @@ export interface AppVerbs {
         args: Record<string, never>;
         value: AppMe;
     };
+    'identity.token': {
+        args: Record<string, never>;
+        value: IdentityToken;
+    };
     'me.events': {
         args: {
             scope: 'me' | 'guests';
@@ -13521,7 +13570,7 @@ export interface AppVerbs {
         value: AppProjectFrame;
     };
 }
-export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'auth.exchange' | 'auth.doorStatus' | 'guests.rooms' | 'guests.setRooms' | 'app.rooms' | 'guests.list' | 'password.change' | 'guests.logout' | 'guests.refresh' | 'guests.devices' | 'guests.revokeDevice' | 'profile.get' | 'profile.update' | 'profile.setImage' | 'profile.clearImage' | 'profile.sessions' | 'profile.revokeSession' | 'profile.signOutOthers' | 'profile.deleteAccount' | 'diagnostics.send' | 'push.register' | 'push.unregister' | 'push.device' | 'push.prefs' | 'push.viewing' | 'push.send' | 'push.status' | 'push.devices' | 'pairing.start' | 'pairing.status' | 'pairing.cancel' | 'pairing.check' | 'pairing.redeem' | 'email.send' | 'email.status' | 'email.log' | 'app.info' | 'password.forgot' | 'password.reset' | 'thread.page' | 'thread.latest' | 'thread.activity' | 'thread.activityRooms' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.attachmentToken' | 'thread.catchup' | 'thread.setRead' | 'thread.markAllRead' | 'thread.unread' | 'thread.mute' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.downloads' | 'files.download' | 'files.downloadToken' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.uploadCreate' | 'files.uploadStatus' | 'files.uploadComplete' | 'files.uploadAbort' | 'files.uploadToken' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.attachment' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass' | 'guests.chat' | 'guests.setChat' | 'chat.member' | 'chat.whois' | 'chat.createChannel' | 'chat.channels' | 'chat.setChannels' | 'chat.space' | 'recordings.list' | 'recordings.get' | 'recordings.transcript' | 'project.list' | 'project.read' | 'project.post' | 'project.markRead';
+export type AppCallVerb = 'me.get' | 'identity.token' | 'roomAgents.list' | 'guests.login' | 'auth.exchange' | 'auth.doorStatus' | 'guests.rooms' | 'guests.setRooms' | 'app.rooms' | 'guests.list' | 'password.change' | 'guests.logout' | 'guests.refresh' | 'guests.devices' | 'guests.revokeDevice' | 'profile.get' | 'profile.update' | 'profile.setImage' | 'profile.clearImage' | 'profile.sessions' | 'profile.revokeSession' | 'profile.signOutOthers' | 'profile.deleteAccount' | 'diagnostics.send' | 'push.register' | 'push.unregister' | 'push.device' | 'push.prefs' | 'push.viewing' | 'push.send' | 'push.status' | 'push.devices' | 'pairing.start' | 'pairing.status' | 'pairing.cancel' | 'pairing.check' | 'pairing.redeem' | 'email.send' | 'email.status' | 'email.log' | 'app.info' | 'password.forgot' | 'password.reset' | 'thread.page' | 'thread.latest' | 'thread.activity' | 'thread.activityRooms' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.attachmentToken' | 'thread.catchup' | 'thread.setRead' | 'thread.markAllRead' | 'thread.unread' | 'thread.mute' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.downloads' | 'files.download' | 'files.downloadToken' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.uploadCreate' | 'files.uploadStatus' | 'files.uploadComplete' | 'files.uploadAbort' | 'files.uploadToken' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.attachment' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass' | 'guests.chat' | 'guests.setChat' | 'chat.member' | 'chat.whois' | 'chat.createChannel' | 'chat.channels' | 'chat.setChannels' | 'chat.space' | 'recordings.list' | 'recordings.get' | 'recordings.transcript' | 'project.list' | 'project.read' | 'project.post' | 'project.markRead';
 export type AppSubscribeVerb = 'me.events' | 'thread.events' | 'thread.stream' | 'files.events' | 'activity.events' | 'recordings.events' | 'project.events';
 /** The named helpers: one per App verb a server calls (browser-only rows have none), grouped by surface. */
 export interface AppSurfaces {
@@ -13532,6 +13581,10 @@ export interface AppSurfaces {
         events(args: {
             scope: 'me' | 'guests';
         }, onFrame: (frame: AppAccessFrame) => void, onError?: (error: K2Error) => void): () => void;
+    };
+    readonly identity: {
+        /** A 60-second claims token for the person whose session pass this is, for the App's own Postgres connection: in a transaction, SELECT k2.set_claims(token), then auth.uid() and the rest answer for that person (the Supabase-compatible layer must be on). no cap · GET /cli/skin/identity-token. e.g. `const {claimsToken} = await k2.asGuest(pass).identity.token()` */
+        token(args?: Record<string, never>): Promise<IdentityToken>;
     };
     readonly roomAgents: {
         /** The agents in the pass's rooms: handle, name, color and picture, plus unread and waiting (thread:read) and waiting tickets (tickets:read) where the caps allow. no cap · GET /cli/skin/agents. e.g. `const {agents} = await k2.roomAgents.list()` */
@@ -14343,4 +14396,4 @@ export interface AppSurfaces {
     };
 }
 /** The surface names, in catalog order (the client builds one object each). */
-export declare const APP_SURFACES: readonly ["me", "roomAgents", "guests", "auth", "app", "password", "profile", "diagnostics", "push", "pairing", "email", "thread", "files", "resources", "tickets", "wiki", "storeDocs", "db", "heartbeats", "activity", "agentIdentity", "room", "chat", "recordings", "project"];
+export declare const APP_SURFACES: readonly ["me", "identity", "roomAgents", "guests", "auth", "app", "password", "profile", "diagnostics", "push", "pairing", "email", "thread", "files", "resources", "tickets", "wiki", "storeDocs", "db", "heartbeats", "activity", "agentIdentity", "room", "chat", "recordings", "project"];

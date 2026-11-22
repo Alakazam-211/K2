@@ -121,6 +121,8 @@ pub fn is_route(p: &str) -> bool {
         || super::status::ROUTES.contains(&p)
         // 0.46.11: k2 app db connect|status|check|disconnect (db_connect.rs).
         || super::db_connect::ROUTES.contains(&p)
+        // Supabase-compatible layer (lane A): k2 app compat|identity|user meta.
+        || super::compat::routes::ROUTES.contains(&p)
         // 0.46.9: the suite App catalog and the one-click install.
         || super::catalog_routes::ROUTES.contains(&p)
         // 0.46.16: "Get this server ready for Apps" and the live sessions read.
@@ -159,6 +161,7 @@ pub fn is_post_route(p: &str) -> bool {
         || super::updates_routes::POST_ROUTES.contains(&p)
         // 0.46.11: k2 app db connect|check|disconnect (db_connect.rs).
         || super::db_connect::POST_ROUTES.contains(&p)
+        || super::compat::routes::POST_ROUTES.contains(&p)
         // 0.46.9: k2 app install --catalog, k2 app catalog retry.
         || super::catalog_routes::POST_ROUTES.contains(&p)
         || super::ready_offer::POST_ROUTES.contains(&p)
@@ -551,6 +554,8 @@ fn handle_inner(path: &str, who: Who, body: &[u8], params: &HashMap<String, Stri
         p if super::updates_routes::ROUTES.contains(&p) => super::updates_routes::handle(p, &who, body, params),
         // 0.46.11: an App's database, connected and checked (db_connect.rs).
         p if super::db_connect::ROUTES.contains(&p) => super::db_connect::handle(p, &who, body, params),
+        // The Supabase-compatible layer (compat/routes.rs).
+        p if super::compat::routes::ROUTES.contains(&p) => super::compat::routes::handle(p, &who, body, params),
         // 0.46.9: the suite App catalog and the one-click install job
         // (catalog_routes.rs, catalog_job.rs).
         p if super::catalog_routes::ROUTES.contains(&p) => super::catalog_routes::handle(p, &who, body, params),
@@ -2703,6 +2708,9 @@ pub(crate) fn uninstall(who: &Who, body: &[u8]) -> R<J> {
     // 0.46.11: uninstalling disconnects its databases (its logins stop,
     // its database secrets go; the databases stay).
     super::db_connect::forget_for_uninstall(&app);
+    // The Supabase-compatible layer goes with it (its door login stops;
+    // auth.users stays in the database).
+    super::compat::routes::forget_for_uninstall(&app.app_id);
     // prd-custom-app-push-v1 CP17: its push devices, settings and keys go.
     crate::app_push::forget_app(&app.service_id);
     // prd-app-phone-pairing-v1: its pairing config, codes and link files go.

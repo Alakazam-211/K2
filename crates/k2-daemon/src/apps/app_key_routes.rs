@@ -438,6 +438,8 @@ fn create_user(c: &Ctx, v: &J) -> R {
     }
     let (_, g) = app_grant(c, &p.username)?;
     let p = skin::list_principals().map_err(|e| err(500, "store", e))?.into_iter().find(|x| x.id == p.id).unwrap_or(p);
+    // The compat layer's auth.users row exists before the answer (§5.4).
+    super::compat::users_sync::after_user_change(&c.app);
     Ok(json!({ "ok": true, "user": user_json(c, &p, &g) }))
 }
 
@@ -462,6 +464,7 @@ fn set_enabled(c: &Ctx, v: &J, on: bool) -> R {
     let user = username(v)?;
     let (_, g) = app_user(c, &user)?;
     let g = skin::set_grant_enabled(&g.id, on).map_err(|e| err(500, "store", e))?;
+    super::compat::users_sync::after_user_change(&c.app);
     Ok(json!({ "ok": true, "username": user, "enabled": g.enabled }))
 }
 
@@ -474,9 +477,11 @@ fn remove_user(c: &Ctx, v: &J) -> R {
             // app-read-state-v1: the guest's read state goes with them.
             crate::read_routes::forget_guest(&pid);
         }
+        super::compat::users_sync::after_user_change(&c.app);
         return Ok(json!({ "ok": true, "username": user, "removed": "person", "done": removed }));
     }
     let done = skin::delete_grant_by_id(&g.id).map_err(|e| err(500, "store", e))?;
+    super::compat::users_sync::after_user_change(&c.app);
     Ok(json!({ "ok": true, "username": user, "removed": "app_access", "done": done }))
 }
 

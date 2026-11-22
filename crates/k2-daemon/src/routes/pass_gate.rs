@@ -376,6 +376,7 @@ mod tests {
             ("crate::thread_attachments::ROUTE", vec![crate::thread_attachments::ROUTE]),
             ("crate::ticket_attachments::ROUTE", vec![crate::ticket_attachments::ROUTE]),
             ("crate::skin_me_routes::ROUTE", vec![crate::skin_me_routes::ROUTE]),
+            ("crate::apps::compat::identity_token::ROUTE", vec![crate::apps::compat::identity_token::ROUTE]),
             ("crate::guest_rooms_routes::ROUTE", vec![crate::guest_rooms_routes::ROUTE]),
             ("crate::guest_rooms_routes::APP_ROOMS_ROUTE", vec![crate::guest_rooms_routes::APP_ROOMS_ROUTE]),
             ("crate::guest_rooms_routes::LIST_ROUTE", vec![crate::guest_rooms_routes::LIST_ROUTE]),

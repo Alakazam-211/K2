@@ -86,6 +86,13 @@ pub(super) const ROWS: &[Route] = &[
     post("/cli/app/clean-mode", Admin),
     // 0.46.9: `k2 app logs <app> --client`, read like the App's own logs.
     get("/cli/app/client-logs", Member),
+    // The Supabase-compatible layer (lane A, compat/routes.rs): People and
+    // the App's own agent with "Build and run Apps" change it; Members read.
+    post("/cli/app/compat/off", Admin),
+    post("/cli/app/compat/on", Admin),
+    post("/cli/app/compat/set", Admin),
+    get("/cli/app/compat/status", Member),
+    post("/cli/app/compat/sync-users", Admin),
     // S13: narrowing applies now, widening fields are held.
     post("/cli/app/config", Admin),
     // 0.46.4: read back, list, remove and rename inside an App's data
@@ -191,6 +198,10 @@ pub(super) const ROWS: &[Route] = &[
     get("/cli/app/handover/status", Member),
     post("/cli/app/handover/undo", Owner),
     get("/cli/app/history", Member),
+    post("/cli/app/identity/issuer/add", Admin),
+    post("/cli/app/identity/issuer/rm", Admin),
+    get("/cli/app/identity/issuers", Member),
+    post("/cli/app/identity/unlink", Admin),
     // 0.46.7 (TC-13): k2 app init --template writes into a folder, as
     // sdk add (handler: switch 1 for passports, their own workspace).
     post("/cli/app/init", Admin),
@@ -357,6 +368,7 @@ pub(super) const ROWS: &[Route] = &[
     post("/cli/app/updates/token/set", Admin),
     // Room-scope R16: an App's quotas and per-call counts from its audit.
     get("/cli/app/usage", Member),
+    post("/cli/app/user/meta", Admin),
     post("/cli/app/validate", Admin),
     // App users' personal wallets (0.46.3), the owner's side: existence,
     // label and status only; force-remove; personal agents; per-App

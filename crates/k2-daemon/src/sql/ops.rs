@@ -103,7 +103,7 @@ fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
-fn require_running() -> Result<(), OpsError> {
+pub(crate) fn require_running() -> Result<(), OpsError> {
     match current_status().as_deref() {
         Some("running") => Ok(()),
         Some(s) => Err(OpsError::NotReady(format!(
@@ -118,14 +118,14 @@ fn require_running() -> Result<(), OpsError> {
 
 /// The cluster a database lives on (the resolver, V31). A database whose
 /// recorded major has no cluster record is not ready, never 5432.
-fn cluster_of(db_name: &str) -> Result<Cluster, OpsError> {
+pub(crate) fn cluster_of(db_name: &str) -> Result<Cluster, OpsError> {
     cluster::for_db(db_name).map_err(OpsError::NotReady)
 }
 
 /// A database in a `k2 db upgrade` move or rollback: K2's own superuser
 /// paths (migrate, drop, grant, revoke, bind, restore, rotate, the boot
 /// seal) wait for it (PG-B security review #2 F8).
-fn refuse_if_moving(db_name: &str) -> Result<(), OpsError> {
+pub(crate) fn refuse_if_moving(db_name: &str) -> Result<(), OpsError> {
     if super::pgmove::k2::moving(db_name) {
         return Err(OpsError::NotReady(format!(
             "db_maintenance: {db_name} is moving to another Postgres major; try again after the move"
@@ -156,7 +156,7 @@ fn refuse_if_moving(db_name: &str) -> Result<(), OpsError> {
 /// (`PGOPTIONS`); this covers older helpers and the legacy pg helper.
 /// The `postgres` database is K2's own (tenants can't create objects
 /// there) and its answers are parsed, so it is left as it is.
-fn su_psql(
+pub(crate) fn su_psql(
     ops: &dyn SystemOps,
     cl: &Cluster,
     db: &str,
@@ -241,7 +241,24 @@ pub fn create_nologin_role_sql(role: &str) -> String {
     )
 }
 
-fn refuse_dangerous_role_sql(sql: &str) -> Result<(), OpsError> {
+/// [`refuse_dangerous_role_sql`] with one narrow allow: K2's own
+/// `service_role` statement ([`k2_root_proto::k2_auth::SERVICE_ROLE_BYPASS_SQL`],
+/// NOLOGIN, exact text) may carry BYPASSRLS. Anything else is checked as usual.
+/// Stricter than the plain check, which passes any text that also says
+/// NOBYPASSRLS somewhere: here every SUPERUSER, CREATEDB and BYPASSRLS in
+/// the rest must be the NO… form.
+pub(crate) fn refuse_dangerous_role_sql_compat(sql: &str) -> Result<(), OpsError> {
+    let rest = sql.replace(k2_root_proto::k2_auth::SERVICE_ROLE_BYPASS_SQL, "");
+    let up = rest.to_ascii_uppercase();
+    for word in ["SUPERUSER", "CREATEDB", "BYPASSRLS", "CREATEROLE", "REPLICATION"] {
+        if up.matches(word).count() > up.matches(&format!("NO{word}")).count() {
+            return Err(OpsError::Engine(format!("internal: {} leaked into role SQL", word.to_ascii_lowercase())));
+        }
+    }
+    refuse_dangerous_role_sql(&rest)
+}
+
+pub(crate) fn refuse_dangerous_role_sql(sql: &str) -> Result<(), OpsError> {
     let up = sql.to_ascii_uppercase();
     if up.contains("SUPERUSER") && !up.contains("NOSUPERUSER") {
         return Err(OpsError::Engine(
@@ -448,12 +465,14 @@ pub(crate) fn privilege_sync_sql(db_name: &str, extra_grants: &[SyncGrant]) -> S
                AND n.nspname <> 'information_schema'\n\
                AND n.nspname NOT LIKE 'pg_toast%'\n\
                AND n.nspname NOT LIKE 'pg_temp%'\n\
+               AND n.nspname <> 'k2'\n\
+               AND NOT (n.nspname = 'auth' AND obj_description(n.oid, 'pg_namespace') = {auth_mark})\n\
            LOOP\n\
          {body}\
            END LOOP;\n\
          {after}\
          END\n\
-         $k2priv$;\n{}\n{}", crate::sql_k2_tables::fence_sql(&format!("{db_name}_agent")), crate::sql_stale_sweep::sweep_sql(db_name, &keep)
+         $k2priv$;\n{}\n{}", crate::sql_k2_tables::fence_sql(&format!("{db_name}_agent")), crate::sql_stale_sweep::sweep_sql(db_name, &keep), auth_mark = pg_quote_literal(k2_root_proto::k2_auth::AUTH_SCHEMA_MARK)
     )
 }
 
@@ -640,7 +659,7 @@ fn count_active(conn: &rusqlite::Connection, project_id: &str) -> u32 {
 pub(crate) struct DbRow {
     pub(crate) id: String,
     pub(crate) name: String,
-    project_id: String,
+    pub(crate) project_id: String,
     agent_secret_ref: Option<String>,
     migrator_secret_ref: Option<String>,
     status: String,
@@ -678,7 +697,7 @@ fn load_active_by_client(
     .ok()
 }
 
-fn load_active_by_name(conn: &rusqlite::Connection, project_id: &str, name: &str) -> Option<DbRow> {
+pub(crate) fn load_active_by_name(conn: &rusqlite::Connection, project_id: &str, name: &str) -> Option<DbRow> {
     conn.query_row(
         &format!(
             "SELECT {DB_ROW_COLS} FROM sql_databases \
@@ -1347,7 +1366,8 @@ fn create_database_inner(
     su_psql(ops, &cl, "postgres", &["-v", "ON_ERROR_STOP=1"], Some(create_db.as_bytes()))?;
 
     let grants = format!(
-        "GRANT CONNECT ON DATABASE {db} TO {agent};\n\
+        "REVOKE CONNECT ON DATABASE {db} FROM PUBLIC;\n\
+         GRANT CONNECT ON DATABASE {db} TO {migrator}, {agent};\n\
          GRANT USAGE ON SCHEMA public TO {agent};\n\
          GRANT CREATE ON SCHEMA public TO {migrator};\n\
          ALTER DEFAULT PRIVILEGES FOR ROLE {migrator} IN SCHEMA public \
@@ -3037,6 +3057,13 @@ fn normalize_relations(raw: &[String]) -> Result<Vec<(String, String)>, OpsError
                 "relation {trimmed:?} is reserved (pg_, _k2_, information_schema)"
             )));
         }
+        // K2's own schemas: the claims key and the App-user projection are
+        // read only through K2's SECURITY DEFINER functions.
+        if schema == "k2" || schema == "auth" {
+            return Err(OpsError::Usage(format!(
+                "relation {trimmed:?} is in K2's own schema {schema}: it can't be granted (auth.users is read through your own SECURITY DEFINER functions)"
+            )));
+        }
         if out.iter().any(|(s, n)| s == &schema && n == &name) {
             continue;
         }
@@ -3880,6 +3907,10 @@ struct GuestConn {
     actor: GuestActor,
     /// Database and role names a guest error must never show.
     internal: Vec<String>,
+    /// The Supabase-compatible layer is on for this database: the claims
+    /// to lock (prd-app-supabase-compat-v1 §5.2), and the lane runs as
+    /// `authenticated` so `TO authenticated` policies apply.
+    claims: Option<serde_json::Value>,
 }
 
 fn guest_conn(
@@ -3901,6 +3932,7 @@ fn guest_conn(
         dml.user.clone(),
     ];
     let cluster = cluster_of(&dml.row.name)?;
+    let claims = crate::apps::compat::claims::for_brokered(&dml.row.name, &actor.principal, &actor.pass);
     Ok(GuestConn {
         cluster,
         db: dml.row.name,
@@ -3909,6 +3941,7 @@ fn guest_conn(
         login,
         actor: actor.clone(),
         internal,
+        claims,
     })
 }
 
@@ -3951,9 +3984,19 @@ fn guest_psql_args(g: &GuestConn, rows_only: bool) -> Vec<String> {
     }
     args.extend([
         "-c".into(),
-        guest_lock_sql(&g.actor, &g.login),
+        match &g.claims {
+            Some(c) => format!(
+                "{}{}",
+                guest_lock_sql(&g.actor, &g.login),
+                k2_root_proto::k2_auth::claims_lock_sql(&c.to_string(), c.get("sub").and_then(|s| s.as_str()))
+            ),
+            None => guest_lock_sql(&g.actor, &g.login),
+        },
         "-c".into(),
-        format!("SET ROLE {}", pg_quote_ident(&g.login)),
+        match &g.claims {
+            Some(_) => "SET ROLE authenticated".to_string(),
+            None => format!("SET ROLE {}", pg_quote_ident(&g.login)),
+        },
         "-c".into(),
         "SET statement_timeout = '10s'".into(),
     ]);

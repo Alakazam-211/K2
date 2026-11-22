@@ -12,6 +12,12 @@ _study_page_app_databases() {
 EOF
 }
 
+_study_page_supabase_compat() {
+    cat <<'EOF'
+%include cli/text/study/supabase-compat.txt
+EOF
+}
+
 _study_page_db() {
     cat <<'EOF'
 %include cli/text/study/db.txt

@@ -9,6 +9,8 @@ pub mod cluster;
 pub mod identity;
 pub mod named_routes;
 pub mod ops;
+/// The Supabase-compatible layer's Postgres work (lane A).
+pub mod compat_ops;
 pub mod paths;
 pub mod pgmove;
 pub mod query;

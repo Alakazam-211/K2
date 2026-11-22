@@ -277,6 +277,9 @@ fn real_pg_read_grant_reads_and_never_writes() {
         crate::sql::ops::migrator_creds(&secrets, &row).expect("migrator")
     };
     srv.su("postgres", &format!("CREATE ROLE \"{old}\" LOGIN PASSWORD 'old-pw-1'; CREATE ROLE \"{hand}\" LOGIN PASSWORD 'hand-pw-1'"));
+    // A database an older K2 made: PUBLIC still had CONNECT (k2 db create
+    // takes it away since the Supabase-compatible layer's lane A).
+    srv.su("postgres", "GRANT CONNECT ON DATABASE rdr_main TO PUBLIC");
     // The 0.41.5 grant script, as K2's superuser ran it.
     srv.su(
         "rdr_main",

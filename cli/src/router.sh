@@ -788,6 +788,11 @@ case "${1:-help}" in
             db|database)
                 shift; cmd_app "$@"
                 ;;
+            # The Supabase-compatible layer (lane A): `k2 app compat` and
+            # `k2 app identity` own their --help.
+            compat|identity)
+                shift; cmd_app "$@"
+                ;;
             # `k2 app catalog` (one-click suite Apps) owns its --help.
             catalog)
                 shift; cmd_app "$@"

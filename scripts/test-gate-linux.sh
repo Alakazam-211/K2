@@ -53,6 +53,7 @@ ALLOWLIST=(
   "apps::db_connect::real_pg_connect::real_pg_connect_end_to_end"   # needs REALPG_CONNECT=1 and Postgres binaries (it makes its own server)
   "db_read_routes::real_pg::real_pg_read_grant_reads_and_never_writes" # needs REALPG_READ=1 and Postgres binaries (it makes its own server)
   "sql::tests::real_pg_lock::real_pg_principal_lock_owner_and_boot_pass" # needs REALPG_LOCK=1 and Postgres binaries (it makes its own server)
+  "apps::compat::real_pg_compat::real_pg_compat_identity_and_policy_drill" # needs REALPG_COMPAT=1 and Postgres binaries (it makes its own server)
 )
 
 # Root-only ignored tests the gate RUNS explicitly when it is root:

@@ -105,6 +105,11 @@ pub mod auth_door;
 #[path = "skin_link.rs"]
 pub mod link;
 
+/// App-user metadata and third-party identity links for the
+/// Supabase-compatible data layer (prd-app-supabase-compat-v1, lane A).
+#[path = "skin_compat.rs"]
+pub mod compat;
+
 /// RS-A15 `guests:rooms` (0.46.1): an App sets its own guests' rooms.
 #[path = "skin_guest_rooms.rs"]
 pub mod guest_rooms;
@@ -1714,6 +1719,9 @@ fn open_db(path: &Path) -> Result<Connection, String> {
     // The sign-in door (0.46.9): per-App door settings. Additive, no
     // numbered step.
     auth_door::ensure_schema(&conn)?;
+    // The Supabase-compatible layer (lane A): App-user metadata and
+    // third-party identity links. Additive, no numbered step.
+    compat::ensure_schema(&conn)?;
     // Copy existing guests once. A deleted host row stays deleted.
     ensure_host_grant_backfill(&mut conn)?;
     rebuild_tokens_table_if_needed(&mut conn)?;

@@ -628,6 +628,9 @@ pub mod daemon_main;
 
 #[cfg(test)]
 mod test_support;
+/// A throwaway Postgres server for real-Postgres tests (compute jobs only).
+#[cfg(test)]
+pub(crate) mod test_pg;
 #[cfg(test)]
 mod codex_no_daemon_tests;
 #[cfg(all(test, unix))]

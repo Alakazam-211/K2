@@ -260,6 +260,9 @@ cmd_app() {
         egress) shift; cmd_app_egress "$@" ;;
         # 0.46.11: an App's database (prd-app-database-integrations-v1 S2).
         db|database) shift; cmd_app_db "$@" ;;
+        # The Supabase-compatible data layer (prd-app-supabase-compat-v1, lane A).
+        compat) shift; cmd_app_compat "$@" ;;
+        identity) shift; cmd_app_identity "$@" ;;
         box-service|box-services) shift; cmd_app_box_service "$@" ;;
         token|tokens)
             shift || true
@@ -305,6 +308,8 @@ cmd_skin() {
             case "$action" in
                 # 0.46.17: a test login into its role's rooms, on a card.
                 rooms-ok) _app_test_guest_rooms_ok "$@"; return $? ;;
+                # The compat layer's per-user metadata (lane A).
+                meta) cmd_app_user_meta "$@"; return $? ;;
                 add|remove|rm|password)
                     for _a in "$@"; do
                         if [[ "$_a" == "--test" ]]; then

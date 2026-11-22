@@ -12615,6 +12615,24 @@ async fn handle_one_request(
                         crate::skin_me_routes::forbidden()
                     }
                 }
+                // Supabase-compatible layer S3 (lane A): a claims token for
+                // the person whose session pass the App's server presents,
+                // on its gateway link only (`k2.set_claims` checks it).
+                crate::apps::compat::identity_token::ROUTE => {
+                    let _ = stream.read(&mut buf).await;
+                    let presented = super::http::extract_token(&query);
+                    if presented.is_some_and(k2_core::skin::is_skin_token) {
+                        let on_link = crate::apps::gateway::current().is_some();
+                        match presented.and_then(crate::apps::gateway::resolve_pass) {
+                            Some(pass) => tokio::task::spawn_blocking(move || crate::apps::compat::identity_token::handle(&pass, on_link))
+                                .await
+                                .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e)),
+                            None => crate::skin_routes::revoked_skin_response(),
+                        }
+                    } else {
+                        crate::skin_me_routes::forbidden()
+                    }
+                }
                 // App users' personal wallets (0.46.3): `wallet.*` with an
                 // App user's OWN login session pass, self-scoped. Anything
                 // else (Connect login, owner token, passport, an App's own

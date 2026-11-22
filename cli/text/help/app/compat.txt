@@ -1,0 +1,50 @@
+k2 app compat — the Supabase-compatible data layer for one App (off by default)
+
+  k2 app compat on <app-id> --db <name> [--json]
+      Turn it on for one App and one database its workspace owns. K2 makes
+      the standard roles anon, authenticated and service_role (BYPASSRLS)
+      once per cluster, the door's login <db>_authenticator, the auth schema
+      (auth.uid(), auth.jwt(), auth.role(), auth.email(), auth.users) and
+      the database's claims key, takes CONNECT on the database from PUBLIC,
+      and writes auth.users from the App's users (ids kept). Running it
+      again is safe: same login, same key; it also puts the key's rights
+      back if someone widened them. Warnings say what anon and
+      authenticated can reach. Refused: a schema named auth K2 didn't make
+      (compat_auth_schema_taken, exit 3).
+  k2 app compat off <app-id> [--json]
+      The door login stops (unless another App on the database uses it).
+      auth.users and the auth schema stay: your foreign keys point at them.
+  k2 app compat status <app-id> [--json]
+      The settings, the issuers and their keys, when auth.users was last
+      written, and warnings.
+  k2 app compat set <app-id> <setting> <value> [--json]
+      anon on|off                 requests with only the publishable key run
+                                  as anon (off by default)
+      service-key-public on|off   accept the server key on the public host
+                                  (off: the gateway link only)
+      origins <a,b|none>          other origins the doors answer
+      schemas <a,b>               schemas the data door exposes (public)
+      max-rows <n>                rows per answer (1000)
+      sub token|user              a third-party token's sub: the issuer's
+                                  id (token, the cut-over setting) or the App
+                                  user's id (user; the issuer's id moves to
+                                  <key>_uid)
+      unknown-email refuse|authenticated
+                                  a valid token whose email is no App user:
+                                  refused 403 not_a_user (default), or
+                                  authenticated as Supabase does
+  k2 app compat sync-users <app-id> [--json]
+      Check auth.users against the App's users now and repair a difference
+      (the store wins). K2 also does this at every start and whenever a user
+      is added, changed, disabled or removed.
+
+In Postgres: policies are standard (CREATE POLICY … TO authenticated USING
+(auth.uid() = user_id)). auth.* answer from claims K2 set: on the doors (the
+door login only), on the brokered lane (POST /cli/db/query runs as
+authenticated with the person's claims), or on your server's own connection
+after SELECT k2.set_claims(<token>) inside a transaction (the token: GET
+/cli/skin/identity-token with the person's pass, on the gateway link). A
+login that sets request.jwt.claims itself is nobody to auth.*. Third-party
+tokens: k2 app identity --help. Study: k2 study supabase-compat.
+
+Exit: 0 ok · 1 usage or failed · 3 refused

@@ -433,6 +433,10 @@ pub fn spawn_health_loop() {
                         eprintln!("[db] boot seal: {line}");
                     }
                 });
+                // The Supabase-compatible layer (lane A): `auth.users` is
+                // checked against the App users now (loud on a difference),
+                // then kept in step as skin.db changes.
+                crate::apps::compat::users_sync::spawn_watcher();
                 // 0.46.17: rights an older K2 left on `public` for
                 // workspaces no longer granted, cleared once per database.
                 let _ = std::panic::catch_unwind(|| {

@@ -1,0 +1,27 @@
+k2 app identity — third-party tokens an App trusts (Supabase-compatible layer)
+
+  k2 app identity issuer add <app-id> --key <name> --issuer <iss> --audience <aud> --jwks <https-url> [--json]
+      Trust ID tokens from one issuer (a phone app's sign-in), pinned to that
+      exact iss and aud, its keys from that URL. --key is a short name
+      (firebase): under `k2 app compat set <app> sub user` the issuer's own
+      id is in the claim <key>_uid.
+  k2 app identity issuer rm <app-id> <iss|key> [--json]
+  k2 app identity issuers <app-id> [--json]
+      Each issuer and its keys: when fetched, when they expire, and the
+      first refresh that failed.
+  k2 app identity unlink <app-id> <user> [--json]
+      Forget the (issuer, sub) pairs recorded for a user: the next token
+      from them is recorded afresh.
+
+The check: RS256 or ES256; the signature against the issuer's keys; iss and
+aud equal the pinned values; exp and iat with 60 s of slack; email_verified
+true. The email, lower-cased, must be a user of this App (else 403
+not_a_user; k2 app compat set <app> unknown-email). A disabled user is
+refused. The first match records the token's sub for that user; a different
+user or sub later is 403 identity_changed, with an audit row. Keys are kept
+as long as the issuer's cache header says, refreshed at half that, and
+fetched once more (at most once a minute) for an unknown key id. Expired
+and unreachable: every token from that issuer is 401
+issuer_keys_unavailable, and status warns from the first failed refresh.
+
+Exit: 0 ok · 1 usage or failed · 3 refused

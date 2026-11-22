@@ -65,6 +65,9 @@ pub(super) const ROWS: &[Route] = &[
     // under the owner's grant; no login (or owner token) uses it.
     both("/cli/skin/guests/rooms", NoLogin),
     both("/cli/skin/hydra", Owner),
+    // prd-app-supabase-compat-v1 S3 (lane A): a person's pass, on the
+    // App's gateway link (the handler checks both).
+    get("/cli/skin/identity-token", NoLogin),
     post("/cli/skin/login", Public),
     post("/cli/skin/logout", Public),
     // Room-scope R6 (0.46.1): a pass reads its own view; no login uses it.

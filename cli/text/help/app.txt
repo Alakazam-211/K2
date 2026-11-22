@@ -97,6 +97,9 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         Set/clear guest email (omit/empty clears)
   k2 app user full-name <username> [--name <text>]
                                         Set/clear full name (omit/empty clears)
+  k2 app user meta <app-id> <user> [--app-metadata '{…}'] [--user-metadata '{…}'] [--json]
+                                        Read or replace app_metadata / user_metadata (JSON objects,
+                                        16 KiB each) for the Supabase-compatible layer (k2 app compat)
   k2 app user agent <username> <workspace> | <username> --clear
                                         Owner only. Mark this login as that workspace's agent
                                         (db actor kind agent, not guest); --clear = a person again

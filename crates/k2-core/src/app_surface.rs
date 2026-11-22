@@ -25,6 +25,8 @@ pub const CATALOG_VERSION: u32 = 56;
 pub const HTTP_ALLOWLIST: &[(&str, &str)] = &[
     ("GET", "/cli/skin/me"),
     ("HEAD", "/cli/skin/me"),
+    ("GET", "/cli/skin/identity-token"),
+    ("HEAD", "/cli/skin/identity-token"),
     ("GET", "/cli/skin/agents"),
     ("HEAD", "/cli/skin/agents"),
     ("POST", "/cli/skin/password/change"),
@@ -176,6 +178,8 @@ pub const HTTP_ALLOWLIST: &[(&str, &str)] = &[
 pub const LINK_HTTP: &[(&str, &str)] = &[
     ("GET", "/cli/skin/me"),
     ("HEAD", "/cli/skin/me"),
+    ("GET", "/cli/skin/identity-token"),
+    ("HEAD", "/cli/skin/identity-token"),
     ("GET", "/cli/skin/agents"),
     ("HEAD", "/cli/skin/agents"),
     ("POST", "/cli/skin/login"),
@@ -380,6 +384,7 @@ pub const LINK_ONLY_HTTP: &[&str] = &["/cli/skin/login", "/cli/skin/auth/exchang
 /// per-call audit and `k2 study app-api`.
 pub const VERBS: &[(&str, &str, &str, &str)] = &[
     ("GET", "/cli/skin/me", "me.get", "both"),
+    ("GET", "/cli/skin/identity-token", "identity.token", "both"),
     ("GET", "/cli/skin/agents", "roomAgents.list", "both"),
     ("POST", "/cli/skin/login", "guests.login", "link"),
     ("POST", "/cli/skin/auth/exchange", "auth.exchange", "link"),

@@ -1,0 +1,74 @@
+$ k2 study supabase-compat
+exit: 0
+--- stdout
+k2 study supabase-compat — Supabase-style RLS and auth.* on an App's database
+
+WHAT IT IS
+  The Supabase-compatible data layer, for one App at a time (off by
+  default). Someone who knows Supabase and Postgres row-level security
+  reads your database and knows what they see: the roles anon,
+  authenticated and service_role, CREATE POLICY … TO authenticated USING
+  (auth.uid() = user_id), auth.uid() / auth.jwt() / auth.role() /
+  auth.email(), current_setting('request.jwt.claims'), and auth.users.
+  K2's App users stay the user store; auth.users is a copy K2 writes.
+
+TURN IT ON
+  k2 app compat on <app> --db <name>     a database the App's workspace owns
+  k2 app compat status <app>             settings, issuers, warnings
+  Then write migrations as on Supabase:
+    ALTER TABLE notes ENABLE ROW LEVEL SECURITY;
+    CREATE POLICY own ON notes FOR ALL TO authenticated
+      USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+    GRANT SELECT, INSERT, UPDATE, DELETE ON notes TO authenticated;
+  Foreign keys to auth.users(id) work (ON DELETE CASCADE fires when K2
+  removes a user). Read auth.users through your own SECURITY DEFINER
+  function; no App role reads it directly. Never write it: K2 rewrites it
+  from the App's users (at start, on every user change, and with
+  k2 app compat sync-users).
+
+WHERE THE CLAIMS COME FROM
+  The doors (/rest/v1, /storage/v1): K2 logs in as <db>_authenticator and
+    sets the role and request.jwt.claims for each request.
+  The brokered lane (POST /cli/db/query, /cli/db/rows): runs as
+    authenticated with the person's claims.
+  Your server's own DATABASE_URL: GET /cli/skin/identity-token with the
+    person's session pass (gateway link only) gives a 60-second token;
+    BEGIN; SELECT k2.set_claims($1); …your queries…; COMMIT;
+  Anything else is nobody: a login that sets request.jwt.claims or makes
+  a table named like K2's lock gets auth.uid() = null. A reader or grantee
+  (k2 db grant, k2 db request-read) can still set k2.skin_principal, the
+  older lane: per-user rules on k2.skin_uid() aren't a boundary for them.
+
+THE CLAIMS (auth.jwt())
+  {"sub": <user id>, "role": "authenticated", "email": …, "iss": "k2",
+   "aud": "authenticated", "session_id": …,
+   "app_metadata": {"k2_app": <app>, "k2_role": <App role>, …},
+   "user_metadata": {…}, "iat": …, "exp": …}
+  app_metadata and user_metadata: k2 app user meta <app> <user>.
+
+PHONE APPS (third-party tokens)
+  k2 app identity issuer add <app> --key firebase --issuer <iss>
+    --audience <aud> --jwks <https url>
+  The token's verified email must be a user of the App (else 403
+  not_a_user). sub stays the issuer's id (k2 app compat set <app> sub
+  token), so auth.uid() raises on those requests, as on Supabase; match on
+  auth.email(), or switch to sub user once your policies are checked.
+
+SETTINGS AND WARNINGS (k2 app compat set <app> …)
+  anon on|off · service-key-public on|off · origins · schemas · max-rows ·
+  sub token|user · unknown-email refuse|authenticated. Turning a risky one
+  on answers with a warning, not a refusal (counts of what anon reaches,
+  tables without row security).
+
+ROLES ARE PER CLUSTER
+  Postgres role names are cluster-wide. Rights live on objects, so
+  authenticated in one database gets nothing in another, and K2 takes
+  CONNECT from PUBLIC. Still, give a moved App its own cluster
+  (k2 db cluster create); status warns when two compat databases share one.
+
+NOT IN THIS LAYER (yet)
+  Realtime, Edge Functions, OAuth providers run by K2, MFA, writing
+  auth.users from SQL, auth.sessions and auth.refresh_tokens (they exist
+  so imported functions load, and any use says they are not built yet).
+--- stderr
+--- requests

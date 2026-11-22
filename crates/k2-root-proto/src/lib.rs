@@ -57,6 +57,7 @@ pub mod cli;
 pub mod creds;
 pub mod desktop;
 pub mod engine;
+pub mod k2_auth;
 pub mod k2_db;
 pub mod keys;
 pub mod node_build;

@@ -66,6 +66,40 @@
       ]
     },
     {
+      "name": "app compat",
+      "usage": "k2 app compat on <app-id> --db <name> | off <app-id> | status <app-id> | set <app-id> <setting> <value> | sync-users <app-id> [--json]",
+      "description": "The Supabase-compatible data layer for one App (off by default): the roles anon, authenticated, service_role, the door login <db>_authenticator, auth.uid()/jwt()/role()/email(), auth.users written from the App's users (ids kept), CONNECT taken from PUBLIC. Settings: anon, service-key-public, origins, schemas, max-rows, sub token|user, unknown-email refuse|authenticated; risky ones answer with warnings. Exit 0 ok, 1 usage or failed, 3 refused (compat_auth_schema_taken).",
+      "args": [{"name": "app-id", "required": true}],
+      "flags": [
+        {"name": "--db", "arg": "name", "description": "With on: a database the App's workspace owns (k2 db list)."},
+        {"name": "--json", "arg": null, "description": "{ok, compat: {app, database, authenticator, anon, serviceKeyPublic, origins, schemas, limits, sub, unknownEmail, usersSyncedAt}, users: {inserted, updated, deleted}, issuers[], warnings[]}."}
+      ]
+    },
+    {
+      "name": "app identity",
+      "usage": "k2 app identity issuer add <app-id> --key <name> --issuer <iss> --audience <aud> --jwks <https-url> | issuer rm <app-id> <iss|key> | issuers <app-id> | unlink <app-id> <user> [--json]",
+      "description": "Third-party ID tokens an App trusts (a phone app's sign-in): pinned issuer, audience and key-set URL; RS256/ES256, exp/iat with 60 s slack, email_verified; the email must be a user of the App (else 403 not_a_user); a changed (issuer, sub) is 403 identity_changed until unlink. Keys expired and unreachable: 401 issuer_keys_unavailable.",
+      "args": [{"name": "app-id", "required": true}],
+      "flags": [
+        {"name": "--key", "arg": "name", "description": "Short name; under sub user the issuer's id is <name>_uid."},
+        {"name": "--issuer", "arg": "iss", "description": "The exact iss the tokens carry."},
+        {"name": "--audience", "arg": "aud", "description": "The exact aud the tokens carry."},
+        {"name": "--jwks", "arg": "https-url", "description": "The issuer's key set."},
+        {"name": "--json", "arg": null, "description": "{ok, issuer} | {ok, issuers[]: {key, issuer, audience, jwks, keys: {fetched, fetchedAt, expiresAt, warning}}} | {ok, user, cleared}."}
+      ]
+    },
+    {
+      "name": "app user meta",
+      "usage": "k2 app user meta <app-id> <user> [--app-metadata JSON] [--user-metadata JSON] [--json]",
+      "description": "Read or replace an App user's app_metadata (never the user's to set) and user_metadata: JSON objects, 16 KiB each, in the claims (auth.jwt()) and auth.users when the Supabase-compatible layer is on.",
+      "args": [{"name": "app-id", "required": true}, {"name": "user", "required": true}],
+      "flags": [
+        {"name": "--app-metadata", "arg": "JSON", "description": "Replaces app_metadata."},
+        {"name": "--user-metadata", "arg": "JSON", "description": "Replaces user_metadata."},
+        {"name": "--json", "arg": null, "description": "{ok, user, id, appMetadata, userMetadata}."}
+      ]
+    },
+    {
       "name": "app status",
       "usage": "k2 app status <app-id> [--no-checks] [--public] [--json]",
       "description": "How an App is doing in one answer: deploy, health, its host.checks, errors in the last hour, resources, door, hosts, phone, the update feed, and next: one exact command per red or yellow item. Exit 0 green, 1 red, 2 yellow, 3 refused. App output is never printed.",

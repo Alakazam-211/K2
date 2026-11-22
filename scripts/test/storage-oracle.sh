@@ -38,7 +38,9 @@ mkdir -p "$WORK/sock"
 
 # storage-api at a pinned release, built from source.
 git clone -q --depth 1 --branch "$REF" https://github.com/supabase/storage.git "$WORK/storage"
-( cd "$WORK/storage" && npm ci --ignore-scripts --no-audit --no-fund >/dev/null && npm rebuild >/dev/null && npm run build >/dev/null )
+# storage-api asks for npm 12 (its .npmrc makes the engines check strict).
+NPM="npx -y npm@12"
+( cd "$WORK/storage" && $NPM ci --ignore-scripts --no-audit --no-fund >/dev/null && $NPM rebuild >/dev/null && $NPM run build >/dev/null )
 mkdir -p "$WORK/files"
 (
     cd "$WORK/storage"

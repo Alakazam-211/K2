@@ -235,6 +235,23 @@ describe('StreamPlayback', () => {
     expect(warn).toHaveBeenCalledTimes(1)
   })
 
+  it('a socket that ends frees the worker’s decoder, every time, while the canvas stays', async () => {
+    const { el, canvas } = fakeCanvas()
+    const w = fakePlayerWorker({ canvas2d: true, decode: H264_ONLY })
+    const pb = new StreamPlayback(recorder().h, { canvas: () => el, held: () => false, env: workerEnv, startWorker: () => w })
+    pb.start()
+    await until(() => pb.kind === 'worker')
+    const resets = () => w.posted.filter((p) => p.msg.t === 'reset').length
+    for (let i = 0; i < 100; i++) {
+      pb.reset()
+      pb.frame(h264(i * 2 + 1, true))
+      pb.end()
+      expect(resets()).toBe(2 * (i + 1))
+    }
+    expect(w.posted.filter((p) => p.msg.t === 'close')).toHaveLength(0)
+    expect(canvas.transferControlToOffscreen).toHaveBeenCalledTimes(1)
+  })
+
   it('a probe that never answers falls back after PROBE_TIMEOUT_MS', () => {
     vi.useFakeTimers()
     try {

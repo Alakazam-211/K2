@@ -141,8 +141,14 @@ export class StreamPlayback {
     this.main.reset()
   }
 
-  /** The socket closed: the main path stops (nothing more is acked). */
+  /** The socket closed: the main path stops (nothing more is acked), and
+   *  the worker's decoder goes too. A Mobile or Desktop tab that hides
+   *  closes its socket, and the worker kept its configured VideoDecoder
+   *  (a VideoToolbox session and its reference frames, in WebKit's GPU
+   *  process) for as long as the tab stayed hidden. The last picture stays
+   *  on the canvas; the next socket starts with a keyframe either way. */
   end(): void {
+    this.worker?.reset()
     this.main.reset()
   }
 

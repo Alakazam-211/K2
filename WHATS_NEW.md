@@ -191,8 +191,9 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **`k2 mail create --help` prints the help of `k2 hostmail create`**, where the verb moved, with exit 0. Before, it printed the "moved to `k2 hostmail create`" error (exit 2). `k2 mail create` without help, and the other verbs that moved to `k2 hostmail`, still print that error.
 - **`k2 terminal read --lines` is capped at 5,000 lines (a terminal's whole scrollback), or 10,000 for an older sub-terminal.** A larger number returns the last 5,000 (or 10,000) lines, with a note on stderr saying so. `k2 read --lines` has the same 5,000 cap.
 
-### Terminal
+### Desktop app
 - **Terminal tabs give their graphics memory back when you leave them.** A terminal tab you switched away from, a tab under Settings and a tab you closed each kept its WebGL drawing surface (a full-size picture of the pane) until the app happened to clean up, one per tab ever shown; font and zoom changes left old glyph pages behind the same way. Over a long day this piled up in the app's graphics process and pushed the Mac into swap. Now a hidden or closed tab holds none of it, and the visible tab holds one surface and one glyph page; coming back to a tab redraws it at once, as before.
+- **A hidden Mobile or Desktop tab lets go of its video decoder.** When the tab hides its stream stops, but the decoder behind it (and the frames it keeps) stayed open until the tab was shown again or closed. It now closes when the stream stops; the last picture stays in the tab, and showing it again starts the stream as before.
 
 ### Settings
 - **Changes to the Send feedback settings are recorded.** When the owner or an admin turns "Allow sending feedback to K2", "Agents may send feedback to K2" or "Agents may include K2 details" on or off (Settings → General → Send feedback), Settings → Logs → Access Audit records who changed which one, from what to what. A change that leaves a setting as it was, or a refused attempt, records nothing.

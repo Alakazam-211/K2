@@ -2738,11 +2738,15 @@ pub fn artifacts_upgrade_hint(node_id: &str, offer: &Offer) -> String {
     let runs = if offer.node_version.is_empty() { "an old k2-node".to_string() } else { format!("k2-node {}", offer.node_version) };
     let who = match node.as_ref().filter(|n| n.is_tenant()) {
         Some(n) => format!("it belongs to {}, so that server's owner updates it", n.owner_label.as_deref().unwrap_or("the server that shares it with you")),
-        None => format!("its owner updates it on that machine (sudo k2-node setup) or from here (k2 compute node update {name})"),
+        None => format!(
+            "its owner updates it on that machine (sudo k2-node setup) or from here ({cli} compute node update {name})",
+            cli = k2_core::brand::CLI_NAME
+        ),
     };
     format!(
-        "node '{name}' runs {runs}, which can't send artifacts (this server runs K2 {}): the node needs the update, not this server; {who}",
-        env!("CARGO_PKG_VERSION")
+        "node '{name}' runs {runs}, which can't send artifacts (this server runs {product} {}): the node needs the update, not this server; {who}",
+        env!("CARGO_PKG_VERSION"),
+        product = k2_core::brand::PRODUCT_NAME
     )
 }
 

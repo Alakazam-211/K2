@@ -73,8 +73,10 @@ fn no_installer(program: &str) -> String {
         return "grok has no Windows installer K2 can run; install it from x.ai, then try again".to_string();
     }
     if cfg!(windows) && program == "agy" {
-        return "agy has no Windows installer K2 can run; install it from antigravity.google, then try again"
-            .to_string();
+        return format!(
+            "agy has no Windows installer {product} can run; install it from antigravity.google, then try again",
+            product = crate::brand::PRODUCT_NAME
+        );
     }
     format!("unknown program: {program}")
 }

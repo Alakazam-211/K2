@@ -32,6 +32,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use k2_core::brand::CLI_NAME;
 use k2_core::compute::retention::{self as rt, human_bytes, human_secs, Keep, Why};
 use k2_core::compute::{self as compute, codes, store};
 use k2_core::log_debug;
@@ -324,7 +325,7 @@ pub fn summary() -> serde_json::Value {
     if only_bytes > cap {
         line.push_str(&format!(" · over the cap: {} held as only copies (they go by age, never for the cap)", human_bytes(only_bytes)));
     } else if total > cap {
-        line.push_str(" · OVER THE CAP (k2 compute prune --dry-run shows what goes)");
+        line.push_str(&format!(" · OVER THE CAP ({cli} compute prune --dry-run shows what goes)", cli = CLI_NAME));
     }
     serde_json::json!({
         "bytes": total,
@@ -432,8 +433,9 @@ pub fn outcome_json(o: &Outcome, now: i64) -> serde_json::Value {
         ));
     } else if over {
         text.push(format!(
-            "still over the cap: pinned, unfinished and in-use files hold {} (k2 compute unpin <job>, or k2 compute retention set --cap SIZE)",
-            human_bytes(stuck)
+            "still over the cap: pinned, unfinished and in-use files hold {} ({cli} compute unpin <job>, or {cli} compute retention set --cap SIZE)",
+            human_bytes(stuck),
+            cli = CLI_NAME
         ));
     }
     for (u, w) in o.removed.iter().take(20) {
@@ -515,7 +517,10 @@ fn retention_route(who: &Who) -> R<serde_json::Value> {
             utc_date(c["until"].as_i64().unwrap_or(0))
         ));
     }
-    text.push("change it: k2 compute retention set --max-age 7d --cap 20G (or default / auto); remove now: k2 compute prune".into());
+    text.push(format!(
+        "change it: {cli} compute retention set --max-age 7d --cap 20G (or default / auto); remove now: {cli} compute prune",
+        cli = CLI_NAME
+    ));
     v["pins"] = serde_json::to_value(pins.values().collect::<Vec<_>>()).unwrap_or_default();
     v["text"] = text.into();
     Ok(v)
@@ -552,7 +557,7 @@ fn retention_set(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     drop(conn);
     let disk_total = compute::advertise::probe(&compute::compute_dir()).disk_total_bytes;
     let line = p.line(disk_total);
-    Ok(serde_json::json!({"policy": policy_json(&p, disk_total), "text": [format!("compute store retention: {line} (the hourly sweep applies it; k2 compute prune --dry-run shows what goes now)")]}))
+    Ok(serde_json::json!({"policy": policy_json(&p, disk_total), "text": [format!("compute store retention: {line} (the hourly sweep applies it; {cli} compute prune --dry-run shows what goes now)", cli = CLI_NAME)]}))
 }
 
 /// `POST /cli/compute/pin|unpin {job}`.
@@ -587,19 +592,25 @@ fn pin_route(who: &Who, body: &[u8], on: bool) -> R<serde_json::Value> {
     }
     let text = if on {
         let mut t = vec![format!(
-            "{} {short}: retention never removes its files on this server ({here} of its {all} artifacts are here, {}) until k2 compute unpin {short}",
+            "{} {short}: retention never removes its files on this server ({here} of its {all} artifacts are here, {}) until {cli} compute unpin {short}",
             if changed { "pinned" } else { "already pinned" },
-            human_bytes(bytes)
+            human_bytes(bytes),
+            cli = CLI_NAME
         )];
         if here < all {
             t.push(format!(
-                "the other {} are only on the node, which drops them 7 days after the job ended: k2 compute fetch {short} copies them here, and the pin keeps them",
-                all - here
+                "the other {} are only on the node, which drops them 7 days after the job ended: {cli} compute fetch {short} copies them here, and the pin keeps them",
+                all - here,
+                cli = CLI_NAME
             ));
         }
         t
     } else {
-        vec![format!("{} {short}: its files here follow the retention rule again (k2 compute retention shows it)", if changed { "unpinned" } else { "wasn't pinned:" })]
+        vec![format!(
+            "{} {short}: its files here follow the retention rule again ({cli} compute retention shows it)",
+            if changed { "unpinned" } else { "wasn't pinned:" },
+            cli = CLI_NAME
+        )]
     };
     Ok(serde_json::json!({"job": j.id, "short": short, "pinned": on, "changed": changed, "filesHere": here, "files": all, "bytesHere": bytes, "text": text}))
 }

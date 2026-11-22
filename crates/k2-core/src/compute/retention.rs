@@ -130,7 +130,10 @@ pub fn save(conn: &Connection, p: &Policy, by: &str, at: i64) -> Result<(), Stri
         }
     }
     if p.max_age_secs.is_some_and(|a| a < 3600) {
-        return Err("the max age is at least 1h (k2 compute prune --older-than removes younger files once)".into());
+        return Err(format!(
+            "the max age is at least 1h ({cli} compute prune --older-than removes younger files once)",
+            cli = crate::brand::CLI_NAME
+        ));
     }
     if *p == Policy::default() {
         conn.execute("DELETE FROM compute_admin_settings WHERE key = ?1", params![POLICY_KEY]).map_err(|e| e.to_string())?;

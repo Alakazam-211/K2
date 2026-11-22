@@ -13,6 +13,7 @@ const MOMENT: i64 = 1_763_806_500; // 2025-11-22T10:15:00Z
 
 struct Fx {
     pid: String,
+    path: String,
     secrets: MemSecretStore,
 }
 
@@ -45,7 +46,7 @@ fn fx() -> Fx {
             conn.execute(&format!("DELETE FROM {t}"), []).unwrap();
         }
         conn.execute("INSERT INTO sql_server (id, status, installed_major, listen, updated_at) VALUES (1, 'running', 17, 'localhost', 1)", []).unwrap();
-        conn.execute("INSERT INTO projects (id, name, path) VALUES (?1, 'sw', '/tmp/k2-switch-ws')", [&pid]).unwrap();
+        conn.execute("INSERT INTO projects (id, name, path) VALUES (?1, 'sw', ?2)", [&pid, &format!("/tmp/k2-switch-ws-{pid}")]).unwrap();
         conn.execute(
             "INSERT INTO sql_databases (id, project_id, name, status, created_at, cluster_major, cluster_name, agent_secret_ref, migrator_secret_ref) \
              VALUES ('d-app', ?1, 'app_db', 'active', 1, 17, 'feedback', ?2, ?3)",
@@ -63,7 +64,9 @@ fn fx() -> Fx {
     db.lock()
         .execute("INSERT INTO pg_cluster_pitr (major, name, restored_from, restored_to) VALUES (17, 'fb_old', 'feedback', ?1)", [MOMENT])
         .unwrap();
-    Fx { pid, secrets }
+    let path = format!("/tmp/k2-switch-ws-{pid}");
+    std::fs::create_dir_all(&path).unwrap();
+    Fx { pid, path, secrets }
 }
 
 fn ops() -> FakeSystemOps {
@@ -199,8 +202,8 @@ fn the_switch_route_is_gated() {
     let _g = crate::sql::sql_server_test_lock();
     let f = fx();
     let o = ops();
-    k2_core::db::shared().lock().execute("INSERT OR IGNORE INTO projects (id, name, path) VALUES ('p-other', 'other', '/tmp/k2-switch-other')", []).unwrap();
-    let body = json!({"op": "switch", "project": "/tmp/k2-switch-ws", "db": "app_db", "to": "fb_old", "yes": true}).to_string();
+    k2_core::db::shared().lock().execute("INSERT OR IGNORE INTO projects (id, name, path) VALUES ('p-other', 'other', '/tmp/k2-switch-other-ws')", []).unwrap();
+    let body = json!({"op": "switch", "project": f.path, "db": "app_db", "to": "fb_old", "yes": true}).to_string();
     let p = std::collections::HashMap::new();
     let r = crate::sql::named_routes::handle(&o, Who::Owner, false, body.as_bytes(), &p);
     assert!(r.body.contains("\"clusters\""), "a GET lists: {}", r.body);

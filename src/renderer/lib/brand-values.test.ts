@@ -270,7 +270,7 @@ describe('the update keys', () => {
 
   it('brand/xy given K2\'s primary key on purpose is refused by the ship check, the overlay and the shell values', () => {
     const dir = xyWithKey('xy-our-key', K2_PRIMARY)
-    const msg = `carries K2's update key ${K2_PRIMARY.id}; only k2 and k5 may ship it`
+    const msg = `carries the ceremony's update key ${K2_PRIMARY.id}; only k2 and k5 may ship it`
     expect(refused(['update-keys', '--brand', dir])).toContain(msg)
     expect(refused(['tauri', '--brand', dir])).toContain(msg)
     expect(refused(['shell', '--brand', dir])).toContain(msg)
@@ -278,7 +278,7 @@ describe('the update keys', () => {
 
   it('brand/xy given the retired key U1 is refused too', () => {
     const dir = xyWithKey('xy-retired-key', K2_RETIRED)
-    expect(refused(['update-keys', '--brand', dir])).toContain(`carries K2's update key ${K2_RETIRED.id}`)
+    expect(refused(['update-keys', '--brand', dir])).toContain(`carries the ceremony's update key ${K2_RETIRED.id}`)
   })
 
   it('brand/xy given its own fresh key passes', () => {
@@ -289,7 +289,7 @@ describe('the update keys', () => {
   it('a k2 or k5 brand with keys other than the ceremony\'s is refused', () => {
     const k2 = readFileSync(join(ROOT, 'brand/k2/brand.toml'), 'utf8')
     const dir = brandFolder('k2-other-key', k2.slice(0, k2.indexOf('[update]')) + updateTable(TEST_KEY))
-    expect(refused(['update-keys', '--brand', dir])).toContain("brand k2 must carry exactly K2's update keys")
+    expect(refused(['update-keys', '--brand', dir])).toContain("brand k2 must carry exactly the ceremony's update keys")
   })
 
   it.each([

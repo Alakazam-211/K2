@@ -65,8 +65,14 @@ export function brandDir(arg, env = process.env) {
   return isAbsolute(d) ? d : join(ROOT, d)
 }
 
+/** A path as people read it: from the repo root, or whole when outside it. */
+function shown(file) {
+  const r = relative(ROOT, file)
+  return r && !r.startsWith('..') ? r : file
+}
+
 function fail(file, msg) {
-  throw new Error(`brand file ${relative(ROOT, file) || file}: ${msg}`)
+  throw new Error(`brand file ${shown(file)}: ${msg}`)
 }
 
 /** One value: a "string", an integer, or a list of { k = "v", ... } tables
@@ -247,19 +253,19 @@ export function ownUpdateKeys(file = RELEASE_KEYS_RS) {
  *  k2 and k5 must carry exactly K2's own keys; any other brand must carry
  *  none of them, nor the retired one, by key id or by key. */
 export function updateKeyProblems(brand, own = ownUpdateKeys()) {
-  if (!brand.update) return [`${relative(ROOT, brand.file)}: [update] is missing; a build needs its own update keys`]
+  if (!brand.update) return [`${shown(brand.file)}: [update] is missing; a build needs its own update keys`]
   const mine = brand.update.keys
   if (OWN_KEY_BRANDS.includes(brand.id)) {
     const want = own.keys.map((k) => `${k.role} ${k.key_id} ${k.pubkey}`).join('\n')
     const have = mine.map((k) => `${k.role} ${k.key_id} ${k.pubkey}`).join('\n')
-    return want === have ? [] : [`${relative(ROOT, brand.file)}: brand ${brand.id} must carry exactly K2's update keys (crates/k2-release-keys UPDATER_KEYS), in order`]
+    return want === have ? [] : [`${shown(brand.file)}: brand ${brand.id} must carry exactly the ceremony's update keys (crates/k2-release-keys UPDATER_KEYS), in order`]
   }
   const ours = [...own.keys, own.retired]
   const out = []
   for (const k of mine) {
     for (const o of ours) {
       if (k.key_id === o.key_id || k.pubkey === o.pubkey) {
-        out.push(`${relative(ROOT, brand.file)}: brand ${brand.id} carries K2's update key ${o.key_id}; only ${OWN_KEY_BRANDS.join(' and ')} may ship it`)
+        out.push(`${shown(brand.file)}: brand ${brand.id} carries the ceremony's update key ${o.key_id}; only ${OWN_KEY_BRANDS.join(' and ')} may ship it`)
       }
     }
   }
@@ -394,7 +400,7 @@ function main(argv) {
         have = ''
       }
       if (have !== rendererModule(brand)) {
-        console.error(`brand-values: ${rel} is not what ${relative(ROOT, brand.file)} makes; run node scripts/brand-values.mjs renderer`)
+        console.error(`brand-values: ${rel} is not what ${shown(brand.file)} makes; run node scripts/brand-values.mjs renderer`)
         process.exit(1)
       }
       console.log(`brand-values: ${rel} is current for ${brand.id}`)

@@ -79,6 +79,12 @@ pub async fn serve_session_bytes_connection(
             return;
         }
     };
+    // The token must open THIS session (the one these params name), not
+    // just pass the dispatcher's gate.
+    if !crate::stream_token::opens_session(&token, &owner_token, &session_id) {
+        send_forbidden_then_close(stream, "invalid or missing token for this session").await;
+        return;
+    }
     // Default to offset 0 (full history) if the client doesn't pass
     // `from`. Invalid (non-numeric) `from` is a hard error —
     // catching it up front avoids ambiguity later.
@@ -287,10 +293,19 @@ pub async fn serve_session_bytes_connection(
 /// when we send this — the caller invoked us before the WS
 /// handshake, so a 400 with a JSON error body is appropriate.
 async fn send_error_then_close(stream: &mut TcpStream, message: &str) {
+    send_status_then_close(stream, "400 Bad Request", message).await;
+}
+
+/// Refuse the upgrade: the token doesn't open this session.
+async fn send_forbidden_then_close(stream: &mut TcpStream, message: &str) {
+    send_status_then_close(stream, "403 Forbidden", message).await;
+}
+
+async fn send_status_then_close(stream: &mut TcpStream, status: &str, message: &str) {
     use tokio::io::AsyncWriteExt;
     let body = format!("{{\"error\":{}}}", serde_json::json!(message));
     let resp = format!(
-        "HTTP/1.1 400 Bad Request\r\n\
+        "HTTP/1.1 {status}\r\n\
          Content-Type: application/json\r\n\
          Content-Length: {}\r\n\
          {}\

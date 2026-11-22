@@ -242,6 +242,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **An API key reaches only its own sessions.** A key can write only into sessions its own principal opened, never a workspace's main agent terminal, and the session lists show only those.
 - **The server status page shows restart details only to the owner and Admins.**
 - Programs the daemon starts now run in their own session.
+- Reading a terminal checks the caller's access on every form of the request.
 
 ### Databases
 - **Turn WAL archiving on or off on a named cluster you already have.** `k2 db cluster archive <name> on|off` sets the same archiving `k2 db cluster create --wal-archive` sets at creation, then restarts that cluster if it is running. Off stops archiving but keeps the spool and every WAL file already in it for your backup to ship. The owner runs it, or an agent with "Let this agent manage Postgres versions" on its own workspace's cluster; it needs the root helper from this release (`k2 root-helper update`).

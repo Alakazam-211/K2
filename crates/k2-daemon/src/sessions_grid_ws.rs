@@ -832,6 +832,13 @@ pub async fn serve_session_grid_connection(
         }
     };
 
+    // The token must open THIS session (the one these params name), not
+    // just pass the dispatcher's gate.
+    if !crate::stream_token::opens_session(&token, &owner_token, &session_id) {
+        send_error_then_close(stream, "invalid or missing token for this session").await;
+        return;
+    }
+
     let session = match v2_session_map::lookup_by_session_id(&session_id) {
         Some(s) => s,
         None => {

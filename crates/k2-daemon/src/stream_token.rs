@@ -111,6 +111,20 @@ pub fn authorizes_session(token: &str, session_id: &SessionId) -> bool {
         .authorizes_session(token, session_id)
 }
 
+/// Does `token` open `session_id`'s terminal sockets (grid, bytes)? The owner
+/// token, a login, or a stream token minted for exactly this session. Each
+/// socket asks this of the session it is about to serve, with the token and
+/// `session=` from the same parsed params it serves from, so it serves only
+/// the session its token opens.
+pub fn opens_session(token: &str, owner_token: &str, session_id: &SessionId) -> bool {
+    if token.is_empty() {
+        return false;
+    }
+    (!owner_token.is_empty() && crate::routes::http::ct_eq_token(token, owner_token))
+        || k2_core::connect_users::validate_session(token).is_some()
+        || authorizes_session(token, session_id)
+}
+
 /// True iff the RAW query carries a `token=` that is a live stream token scoped
 /// to the `session=` UUID in the SAME query. Used by the grid/bytes dispatcher
 /// gate so an external caller streams with the per-session token. Both values

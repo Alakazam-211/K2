@@ -53,6 +53,7 @@ mod sidecar_cli_integration;
 mod sidecar_worktree_integration;
 mod spawn_fail_keeps_pin_integration;
 mod splice_ingress_integration;
+mod terminal_read_scope_integration;
 mod test_daemon_runtime_isolation;
 mod transport_truncation_integration;
 mod triage_integration;

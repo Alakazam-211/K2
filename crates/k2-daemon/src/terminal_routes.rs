@@ -50,17 +50,6 @@ use crate::session_lookup;
 /// All three forms produce the same response shape:
 /// `{"lines":["row1","row2",...]}`.
 pub fn handle_read(params: &HashMap<String, String>) -> CliResponse {
-    // Stage 3: grant-bound remote shells require matching grant (or owner).
-    // Gate when `id=` is a UUID that is remote-bound; non-remote is passthrough.
-    if let Some(id_str) = params
-        .get("id")
-        .map(String::as_str)
-        .filter(|s| !s.is_empty())
-    {
-        if let Some(resp) = gate_remote_io_if_bound(id_str, params) {
-            return resp;
-        }
-    }
     let requested_lines: usize = params
         .get("lines")
         .and_then(|s| s.parse().ok())
@@ -80,9 +69,9 @@ fn gate_remote_io_if_bound(
     let presented = params.get("token").map(String::as_str);
     // Owner identity for the gate:
     // 1. Production: hook_config token set at daemon boot.
-    // 2. Tests / fallback: if the presented token is neither a grant nor
-    //    a connect-user session, it is the owner credential (dispatcher
-    //    already required token_ok for non-grant paths).
+    // 2. Tests / fallback: if the presented token is neither a grant, a
+    //    connect-user session nor a session passport, it is the owner
+    //    credential (the dispatcher admitted nothing else).
     let hook = k2_core::hook_config::get_token();
     let owner_buf: String = if !hook.is_empty() {
         hook.to_string()
@@ -91,7 +80,8 @@ fn gate_remote_io_if_bound(
             Some(t)
                 if !t.is_empty()
                     && !k2_core::remote_sessions::is_grant_token(t)
-                    && k2_core::connect_users::validate_session(t).is_none() =>
+                    && k2_core::connect_users::validate_session(t).is_none()
+                    && crate::session_token::validate_hook(t).is_none() =>
             {
                 t.to_string()
             }
@@ -118,6 +108,193 @@ pub(crate) fn resolve_screen_lines(
     params: &HashMap<String, String>,
     requested_lines: usize,
 ) -> Result<Vec<String>, CliResponse> {
+    // What the address itself names, before any session is looked up: a
+    // workspace (`workspace=`, `id=<project_id>:<agent>`) and the id it
+    // gives. A scoped caller that may not read that workspace learns
+    // nothing more (not even whether a session is live there).
+    let named = params
+        .get("id")
+        .or_else(|| params.get("session"))
+        .map(String::as_str)
+        .filter(|s| !s.is_empty());
+    let named_workspace = address_workspace(params).map(|ws| vec![ws]);
+    may_read_session(
+        params,
+        &ReadTarget { session: named, workspaces: named_workspace.as_deref() },
+    )?;
+    // Then the session the read resolved to, by its own id and workspaces,
+    // whichever form named it.
+    let screen = resolve_screen(params)?;
+    let id = screen.id().to_string();
+    let workspaces = session_workspaces(&screen);
+    may_read_session(
+        params,
+        &ReadTarget { session: Some(id.as_str()), workspaces: Some(workspaces.as_slice()) },
+    )?;
+    Ok(screen.lines(requested_lines))
+}
+
+/// What a terminal read names, as far as it is known: the session's id and
+/// the workspaces (`projects.id`) the session belongs to. `None`: not known
+/// yet (the read hasn't resolved that far).
+pub(crate) struct ReadTarget<'a> {
+    pub session: Option<&'a str>,
+    pub workspaces: Option<&'a [String]>,
+}
+
+/// Who may read a terminal's screen, whichever way the read names it: a
+/// session id (`id=` / `session=`), the canonical `<project_id>[:<agent>]`
+/// key, or `workspace=` (a name, path, id, sidecar or session id). The one
+/// check every form goes through (to become
+/// `terminal_access::may_read_session`).
+///
+/// - An App pass never reads a terminal.
+/// - A remote-session shell is read only with its own grant or the owner
+///   token, and a grant reads only its own shell.
+/// - A workspace-scoped caller (an agent's passport, a job run's, a cell's)
+///   reads a session only when every workspace it belongs to is the
+///   caller's own or a local connection (the rule `workspace=` had). A
+///   session K2 can't place in any workspace is refused.
+/// - The owner token, a login and other unscoped callers: no workspace
+///   check (today's behaviour).
+pub(crate) fn may_read_session(
+    params: &HashMap<String, String>,
+    target: &ReadTarget<'_>,
+) -> Result<(), CliResponse> {
+    if params
+        .get("token")
+        .is_some_and(|t| k2_core::skin::is_skin_token(t) && !k2_core::skin::is_api_key_prefix(t))
+    {
+        return Err(crate::skin_routes::skin_terminal_forbidden());
+    }
+    if let Some(sid) = target.session {
+        if let Some(resp) = gate_remote_io_if_bound(sid, params) {
+            return Err(resp);
+        }
+    }
+    let Some(principal) = crate::caller_workspace::principal_from_params(params) else {
+        return Ok(());
+    };
+    let Some(workspaces) = target.workspaces else {
+        return Ok(());
+    };
+    if workspaces.is_empty() {
+        return Err(unplaced_session());
+    }
+    for ws in workspaces {
+        match crate::comms::gate_cross_workspace(Some(&principal), ws) {
+            Ok(()) => {}
+            Err(Some(resp)) => return Err(resp),
+            Err(None) => return Err(unplaced_session()),
+        }
+    }
+    Ok(())
+}
+
+/// A scoped caller asked for a session K2 can't place in a workspace.
+fn unplaced_session() -> CliResponse {
+    CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "ok": false,
+            "error": {
+                "code": "forbidden",
+                "hint": "K2 can't tell which workspace this terminal belongs to, so it can only be read by the owner or a login",
+            },
+        })
+        .to_string(),
+    }
+}
+
+/// The workspace a read's address names before any session is looked up:
+/// `workspace=<name|path|id|ws/sidecar>`, or the project in
+/// `id=<project_id>:<agent>`. `None`: the address names no workspace K2 has.
+fn address_workspace(params: &HashMap<String, String>) -> Option<String> {
+    if let Some(ws) = params
+        .get("workspace")
+        .map(String::as_str)
+        .filter(|s| !s.is_empty())
+    {
+        return crate::comms::resolve_target_project(ws).map(|(_, id)| id);
+    }
+    let id = params
+        .get("id")
+        .or_else(|| params.get("session"))
+        .map(String::as_str)
+        .filter(|s| !s.is_empty())?;
+    if id.contains(':') && SessionId::parse(id).is_none() {
+        return key_project(id);
+    }
+    None
+}
+
+/// The project a session-map key names (`<project_id>` or
+/// `<project_id>:<agent>`), when that project exists.
+fn key_project(key: &str) -> Option<String> {
+    let pid = key.split(':').next().map(str::trim).filter(|p| !p.is_empty())?;
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.query_row("SELECT id FROM projects WHERE id = ?1", [pid], |r| r.get::<_, String>(0))
+        .ok()
+}
+
+/// The workspaces a live session belongs to: its passport's, its session-map
+/// key's and its folder's (the longest registered project or worktree that
+/// holds its cwd).
+fn session_workspaces(screen: &Screen) -> Vec<String> {
+    fn add(out: &mut Vec<String>, ws: String) {
+        if !ws.trim().is_empty() && !out.contains(&ws) {
+            out.push(ws);
+        }
+    }
+    let id = screen.id();
+    let mut out = Vec::new();
+    if let Some(ws) = crate::session_token::workspace_for_session(&id.to_string()) {
+        add(&mut out, ws);
+    }
+    if let Some(ws) = crate::v2_session_map::agent_name_for_session_id(&id)
+        .as_deref()
+        .and_then(key_project)
+    {
+        add(&mut out, ws);
+    }
+    if let Screen::V2(session) = screen {
+        if let Some(cwd) = session.cwd.as_ref() {
+            if let Some((ws, _)) = crate::git_notes_routes::owning_project(&cwd.to_string_lossy()) {
+                add(&mut out, ws);
+            }
+        }
+    }
+    out
+}
+
+/// The session a read resolved to.
+enum Screen {
+    /// A workspace+agent PTY (its live `Term`).
+    V2(std::sync::Arc<k2_core::terminal::daemon_pty::DaemonPtySession>),
+    /// A `terminal spawn` sub-terminal (its replay ring).
+    Stream(SessionId, std::sync::Arc<k2_core::session::SessionEntry>),
+}
+
+impl Screen {
+    fn id(&self) -> SessionId {
+        match self {
+            Screen::V2(session) => session.session_id,
+            Screen::Stream(id, _) => *id,
+        }
+    }
+
+    fn lines(&self, requested_lines: usize) -> Vec<String> {
+        match self {
+            Screen::V2(session) => v2_grid_lines(session, requested_lines),
+            Screen::Stream(_, entry) => stream_lines(entry, requested_lines),
+        }
+    }
+}
+
+/// Resolve the session a read's params name (see [`resolve_screen_lines`]).
+fn resolve_screen(params: &HashMap<String, String>) -> Result<Screen, CliResponse> {
     // 0.39.x: workspace-name addressed read — the `k2so read <workspace>`
     // surface. Resolves a workspace NAME (or path / id) the same way
     // `msg` / `inbox` do, then reads that workspace's canonical
@@ -131,15 +308,8 @@ pub(crate) fn resolve_screen_lines(
         .map(String::as_str)
         .filter(|s| !s.is_empty())
     {
-        // C2: scoped principal reading ANOTHER workspace's live terminal
-        // requires a local connection. Owner ambient (no principal) bypasses.
-        // Unknown targets fall through to the existing not-found 400.
-        let principal = crate::caller_workspace::principal_from_params(params);
-        match crate::comms::gate_cross_workspace(principal.as_ref(), ws) {
-            Ok(()) => {}
-            Err(Some(resp)) => return Err(resp),
-            Err(None) => {}
-        }
+        // The workspace check for this form runs in
+        // `resolve_screen_lines` (`may_read_session`), like every other form.
         // `sales/1` → that sidecar session (D14). Session UUID first-arg
         // is handled below via session=.
         if let Some(crate::workspace_msg::MsgTarget::Sidecar {
@@ -160,7 +330,7 @@ pub(crate) fn resolve_screen_lines(
                 if let Some(live) =
                     crate::workspace_msg::lookup_live_for_sidecar(&project_id, &conversation_key)
                 {
-                    return Ok(v2_grid_lines(&live.0, requested_lines));
+                    return Ok(Screen::V2(live.0));
                 }
             }
             return Err(CliResponse::bad_request(format!(
@@ -172,7 +342,7 @@ pub(crate) fn resolve_screen_lines(
         {
             if let Some(sid) = k2_core::session::SessionId::parse(&session_id) {
                 if let Some(session) = crate::v2_session_map::lookup_by_session_id(&sid) {
-                    return Ok(v2_grid_lines(&session, requested_lines));
+                    return Ok(Screen::V2(session));
                 }
             }
         }
@@ -198,7 +368,7 @@ pub(crate) fn resolve_screen_lines(
             .filter(|s| !s.is_empty());
         let key = build_canonical_read_key(&project_id, agent);
         return match crate::v2_session_map::lookup_by_agent_name(&key) {
-            Some(session) => Ok(v2_grid_lines(&session, requested_lines)),
+            Some(session) => Ok(Screen::V2(session)),
             None => Err(CliResponse::bad_request(format!(
                 "no live session for workspace '{ws}'{} — it may be asleep \
                  (see who is there with `k2 sessions`)",
@@ -227,7 +397,7 @@ pub(crate) fn resolve_screen_lines(
         && k2_core::session::SessionId::parse(id_str).is_none()
     {
         if let Some(session) = crate::v2_session_map::lookup_by_agent_name(id_str) {
-            return Ok(v2_grid_lines(&session, requested_lines));
+            return Ok(Screen::V2(session));
         }
         return Err(CliResponse::bad_request(format!(
             "no live v2 session under canonical key '{id_str}'"
@@ -243,7 +413,7 @@ pub(crate) fn resolve_screen_lines(
     };
 
     if let Some(session) = crate::v2_session_map::lookup_by_session_id(&session_id) {
-        return Ok(v2_grid_lines(&session, requested_lines));
+        return Ok(Screen::V2(session));
     }
 
     // Form 3 fallback: sub-terminal session-stream registry. This
@@ -258,6 +428,11 @@ pub(crate) fn resolve_screen_lines(
         )),
     };
 
+    Ok(Screen::Stream(session_id, entry))
+}
+
+/// The last `requested_lines` of a sub-terminal's replay ring as text.
+fn stream_lines(entry: &k2_core::session::SessionEntry, requested_lines: usize) -> Vec<String> {
     // Decode every Frame::Text's bytes. LineMux emits a Frame::Text
     // at each commit_line / flush_pending_text boundary — the raw
     // `\n` delimiter is CONSUMED on commit and isn't included in
@@ -306,7 +481,7 @@ pub(crate) fn resolve_screen_lines(
     }
 
     let start = lines.len().saturating_sub(requested_lines);
-    Ok(lines[start..].to_vec())
+    lines[start..].to_vec()
 }
 
 /// Render a v2 session's live grid + scrollback as plain-text lines

@@ -146,6 +146,11 @@ pub fn shell_settings(env: &Env, cwd: &Path) -> Option<Settings> {
 /// shell. `p` says whether the shell has a port at all; `would_refuse`:
 /// the passport rule's count, on the request.
 pub fn ask(env: &Env, p: &Prelude, would_refuse: impl FnOnce() -> bool) -> Option<Ask> {
+    // The Codex tab gate let a help word by: off, asked of nobody
+    // (`_K2_PERMISSION_ON=0`, `_K2_SF_AGENTS_OFF=0`).
+    if crate::codex_gate::held() {
+        return Some(Ask::Off);
+    }
     let settings = shell_settings(env, Path::new("/"))?;
     let Auth::Passport { passport, sock } = &settings.auth else {
         return Some(Ask::Off);

@@ -78,6 +78,7 @@ pub mod called_as;
 pub mod cards;
 pub mod check;
 pub mod cli_status;
+pub mod codex_gate;
 pub mod confirm;
 pub mod daemon;
 pub mod dashdash;

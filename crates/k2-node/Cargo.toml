@@ -54,6 +54,10 @@ libc = "0.2"
 
 [dev-dependencies]
 zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+# zip 9's deflate-flate2 takes flate2 with no backend; without a crate that
+# picks one, `cargo test -p k2-node` alone stops at flate2's compile_error.
+# flate2's default (rust_backend, miniz_oxide) is the one already in the tree.
+flate2 = "1.1.9"
 tokio = { version = "1", features = ["full", "test-util"] }
 k2-root-proto = { path = "../k2-root-proto", features = ["test-signer"] }
 # Hostile `.app` uploads in simhost's tests (k2-node-proto already uses it).

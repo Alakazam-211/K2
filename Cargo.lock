@@ -5087,6 +5087,7 @@ dependencies = [
 name = "k2-node"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "futures-util",
  "k2-node-proto",
  "k2-redact",

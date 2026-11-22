@@ -88,6 +88,7 @@ part_web() {
     step "release brand-mark check on made-up binaries"; bash tests/garden/brand-mark.sh
     step "brand name policy (brand.sh lint), offline"; bash tests/garden/brand-lint.sh
     step "k2-literal gate on broken trees";        bash tests/garden/k2-literal-gate.sh
+    step "distributor pipeline template, offline"; bash tests/garden/distributor-template.sh
     step "private-docs gate";                      bash scripts/private-docs-gate.sh
     step "typecheck:web";                          bun run typecheck:web
     step "vitest";                                 bunx vitest run --reporter=dot

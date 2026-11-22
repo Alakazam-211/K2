@@ -200,6 +200,12 @@ jobs:
       - name: k2-literal gate on broken trees
         run: bash tests/garden/k2-literal-gate.sh
 
+      # The template a distributor copies into its own repo
+      # (templates/distributor/): its files, its example brand, no real
+      # distributor's name, and its driver on scratch repos.
+      - name: Distributor pipeline template, offline
+        run: bash tests/garden/distributor-template.sh
+
       - name: private-docs gate (cloud-business docs stay in the private repo)
         run: bash scripts/private-docs-gate.sh
 

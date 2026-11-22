@@ -229,13 +229,20 @@ const HOSTCHAT: &str = concat!("## The server (`", cli_name!(), " hostchat`, Man
 /// line is kept. All gates off: the file goes, unless it carries someone's
 /// own notes (then only the managed region says chat isn't available).
 pub fn ensure_chat_skill(dot: &Path, g: ChatGates) -> std::io::Result<()> {
-    use crate::skills::version::wrap_managed_skill;
-    const YOURS: &str = "<!-- Content below this line is yours — K2 will never modify it. -->";
+    use crate::skills::version::{
+        wrap_managed_skill, SKILL_YOURS_LINE as YOURS, SKILL_YOURS_LINES,
+    };
     let path = dot.join("skills/k2-chat/SKILL.md");
     let existing = std::fs::read_to_string(&path).ok();
+    // The person's part follows the "yours" line: the new one, or the one
+    // files were written with before it (the rewrite writes the new one).
     let tail = existing
         .as_deref()
-        .and_then(|e| e.split_once(YOURS).map(|(_, t)| t.to_string()))
+        .and_then(|e| {
+            SKILL_YOURS_LINES
+                .iter()
+                .find_map(|line| e.split_once(line).map(|(_, t)| t.to_string()))
+        })
         .unwrap_or_else(|| "\n".to_string());
     let has_notes = !tail.trim().is_empty();
     let body = match skill_body(g) {
@@ -405,6 +412,33 @@ mod tests {
         ensure_chat_skill(&dot, user).unwrap();
         ensure_chat_skill(&dot, off).unwrap();
         assert!(!path.exists());
+        std::fs::remove_dir_all(&dot).unwrap();
+    }
+
+    /// A chat skill written with the old "yours" line (it names the
+    /// product): the person's notes below it are found and kept, and the
+    /// rewrite has the new line only.
+    #[test]
+    fn an_old_yours_line_keeps_the_notes_and_becomes_the_new_one() {
+        use crate::skills::version::{SKILL_YOURS_LINE, SKILL_YOURS_LINE_OLD};
+        let dot = scratch();
+        let path = dot.join("skills/k2-chat/SKILL.md");
+        let user = ChatGates {
+            sew_on: true,
+            has_access: true,
+            manage: false,
+        };
+        ensure_chat_skill(&dot, user).unwrap();
+        let fresh = std::fs::read_to_string(&path).unwrap();
+        let old = format!(
+            "{}my own note\n",
+            fresh.replace(SKILL_YOURS_LINE, SKILL_YOURS_LINE_OLD)
+        );
+        std::fs::write(&path, &old).unwrap();
+        ensure_chat_skill(&dot, user).unwrap();
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(after, format!("{fresh}my own note\n"));
+        assert!(!after.contains(SKILL_YOURS_LINE_OLD), "{after}");
         std::fs::remove_dir_all(&dot).unwrap();
     }
 }

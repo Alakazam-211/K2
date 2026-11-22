@@ -217,3 +217,16 @@ fn template_charter_from_role_takes_the_managed_inside_and_the_notes() {
     assert_eq!(charter_from_role("---\nname: x\n---\n\n# Persona — X\n\nMy own charter.\n"), "My own charter.\n");
     assert_eq!(charter_from_role("Just text.\n"), "Just text.\n");
 }
+
+/// A ROLE.md written today has the "yours" line that names no product, and
+/// it is read as the line too; the old line above (in files written before)
+/// still is. Neither ends up in the charter.
+#[test]
+fn template_charter_from_role_drops_the_new_yours_line_too() {
+    use crate::hire::template::apply::{role_body, ROLE_YOURS_LINE, ROLE_YOURS_LINE_OLD};
+    let body = role_body("Max", "You are Max.\n");
+    assert!(body.contains(ROLE_YOURS_LINE), "{body}");
+    assert!(!body.contains(ROLE_YOURS_LINE_OLD), "{body}");
+    let role = format!("---\nname: max\nrole: developer\n---\n\n{body}\nPrefers tabs.\n");
+    assert_eq!(charter_from_role(&role), "You are Max.\n\nPrefers tabs.\n");
+}

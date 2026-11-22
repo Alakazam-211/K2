@@ -49,9 +49,19 @@ pub const SKILL_BEGIN_MARKER: &str = "<!-- K2:MANAGED:BEGIN -->";
 pub const SKILL_END_MARKER: &str = "<!-- K2:MANAGED:END -->";
 
 /// The line [`wrap_managed_skill`] writes under the managed region: what a
-/// person writes below it is theirs.
+/// person writes below it is theirs. It names no product, so a person sees
+/// the same line in every brand's build.
 pub const SKILL_YOURS_LINE: &str =
+    "<!-- Content below this line is yours: it is never changed. -->";
+
+/// The line files were written with before [`SKILL_YOURS_LINE`]. It is
+/// still read as the same line, in every brand, and never written: the
+/// next upgrade of such a file writes the new one.
+pub const SKILL_YOURS_LINE_OLD: &str =
     "<!-- Content below this line is yours — K2 will never modify it. -->";
+
+/// Every "yours" line a file may hold, the one written first.
+pub const SKILL_YOURS_LINES: [&str; 2] = [SKILL_YOURS_LINE, SKILL_YOURS_LINE_OLD];
 
 // ── Version constants ────────────────────────────────────────────────
 
@@ -521,7 +531,8 @@ pub fn wrap_managed_skill_for(
 }
 
 /// What follows the managed region, split into the "yours" lines our
-/// writes put at its top and the person's part: `(how many "yours" lines,
+/// writes put at its top (the old line or the new one) and the person's
+/// part: `(how many "yours" lines,
 /// the person's part)`. Several lines are the old upgrade's doing: each
 /// upgrade kept the line and wrote it again. The person's part is the
 /// bytes after the last of them, as they are; with none, the text after
@@ -529,7 +540,10 @@ pub fn wrap_managed_skill_for(
 fn split_footer(after_end: &str) -> (usize, &str) {
     let mut count = 0;
     let mut rest = after_end;
-    while let Some(r) = rest.trim_start().strip_prefix(SKILL_YOURS_LINE) {
+    while let Some(r) = SKILL_YOURS_LINES
+        .iter()
+        .find_map(|line| rest.trim_start().strip_prefix(line))
+    {
         count += 1;
         rest = r
             .strip_prefix("\r\n")
@@ -1290,6 +1304,50 @@ mod tests {
             "{text}"
         );
         assert_eq!(yours_count(&text), 2);
+        fs::remove_dir_all(path.parent().expect("a folder")).ok();
+    }
+
+    /// A file written with the old "yours" line (it names the product) is
+    /// read as before: left alone while current, and an upgrade writes the
+    /// new line once, with the person's part as it was. Several old lines,
+    /// the old upgrade's doing, collapse to one new line.
+    #[test]
+    fn an_old_yours_line_is_read_and_an_update_writes_the_new_one() {
+        assert!(
+            !SKILL_YOURS_LINE.contains("K2"),
+            "the new line names no product"
+        );
+        let path = scratch_skill("old-line");
+        let fresh = wrap_managed_skill_for("workspace", 1, "a", None, UNSTAMPED_BRAND_KEY);
+        let old = fresh.replace(SKILL_YOURS_LINE, SKILL_YOURS_LINE_OLD) + PERSONS;
+        fs::write(&path, &old).expect("write the old file");
+        let out =
+            ensure_skill_up_to_date_for(&path, "workspace", 1, "a", None, UNSTAMPED_BRAND_KEY);
+        assert!(matches!(out, SkillUpgradeOutcome::UpToDate), "{out:?}");
+        assert_eq!(fs::read_to_string(&path).expect("read the skill"), old);
+
+        let out =
+            ensure_skill_up_to_date_for(&path, "workspace", 2, "b", None, UNSTAMPED_BRAND_KEY);
+        assert!(matches!(out, SkillUpgradeOutcome::Upgraded), "{out:?}");
+        let text = fs::read_to_string(&path).expect("read the skill");
+        assert_eq!(
+            text,
+            format!(
+                "{}{PERSONS}",
+                wrap_managed_skill_for("workspace", 2, "b", None, UNSTAMPED_BRAND_KEY)
+            )
+        );
+        assert!(!text.contains(SKILL_YOURS_LINE_OLD), "{text}");
+
+        let several = fresh.replace(SKILL_YOURS_LINE, SKILL_YOURS_LINE_OLD)
+            + &format!("{SKILL_YOURS_LINE_OLD}\n{SKILL_YOURS_LINE}\n{SKILL_YOURS_LINE_OLD}\n")
+            + PERSONS;
+        fs::write(&path, &several).expect("write the file with several lines");
+        ensure_skill_up_to_date_for(&path, "workspace", 1, "a", None, UNSTAMPED_BRAND_KEY);
+        assert_eq!(
+            fs::read_to_string(&path).expect("read the skill"),
+            format!("{fresh}{PERSONS}")
+        );
         fs::remove_dir_all(path.parent().expect("a folder")).ok();
     }
 

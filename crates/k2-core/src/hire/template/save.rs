@@ -409,7 +409,9 @@ pub fn charter_from_role(text: &str) -> String {
         .lines()
         .filter(|l| {
             let t = l.trim();
-            t != "## Your notes" && !t.starts_with("_Yours: K2 never changes")
+            t != "## Your notes"
+                && t != super::apply::ROLE_YOURS_LINE
+                && t != super::apply::ROLE_YOURS_LINE_OLD
         })
         .collect();
     let notes = notes.join("\n");

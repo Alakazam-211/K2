@@ -347,10 +347,21 @@ pub fn charter(tpl: &Template, vars: &BTreeMap<String, String>, plan: &AnswerPla
     out
 }
 
+/// The line under "## Your notes" in a ROLE.md: what the person writes
+/// below it is theirs. It names no product, so a person sees the same line
+/// in every brand's build.
+pub(crate) const ROLE_YOURS_LINE: &str =
+    "_Yours: what you write below this line is never changed._";
+
+/// The line ROLE.md files were written with before [`ROLE_YOURS_LINE`]. It
+/// stays in those files (it sits in the person's part, which is never
+/// rewritten) and is still read as the same line, in every brand.
+pub(crate) const ROLE_YOURS_LINE_OLD: &str = "_Yours: K2 never changes anything below this line._";
+
 /// The ROLE.md body under the generated frontmatter.
 pub(crate) fn role_body(display_name: &str, charter: &str) -> String {
     format!(
-        "# Persona — {display_name}\n\n{}\n{charter}{}\n\n## Your notes\n\n_Yours: K2 never changes anything below this line._\n",
+        "# Persona — {display_name}\n\n{}\n{charter}{}\n\n## Your notes\n\n{ROLE_YOURS_LINE}\n",
         crate::skills::version::SKILL_BEGIN_MARKER,
         crate::skills::version::SKILL_END_MARKER,
     )

@@ -183,9 +183,8 @@
 6 K2 src/renderer/stores/voice-core.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 5 K2 crates/k2-app-engine/src/quadlet.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 5 K2 crates/k2-core/src/contract/libs.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-1 K2 crates/k2-core/src/hire/template/save.rs keeper: reads the _Yours: K2 never changes line back (apply.rs writes it)
 5 K2 crates/k2-core/src/push/vectors.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-5 K2 crates/k2-core/src/skills/version.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+4 K2 crates/k2-core/src/skills/version.rs keeper: markers read back: K2:MANAGED (parse_skill, hire/template upgrade and apply, migrations), the old yours line (read in files written before the new one, never written), and the # K2 heading the legacy-file check reads
 5 K2 crates/k2-core/src/tunnel/connector.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 5 K2 crates/k2-core/src/workspace/onboarding.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 5 K2 crates/k2-core/src/zen/sync.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -231,7 +230,7 @@
 5 K2 src/renderer/lib/federation.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 5 K2 src/renderer/lib/live-view/timeline/scenarios-v1.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 4 K2 crates/k2-core/src/agent_hooks/install.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-3 K2 crates/k2-core/src/app_templates/doctor.rs debt: K2's patched copy names the upstream repo that holds the wry patch; waits for a ruling; keeps: the WryPatch::K2 variant (code)
+3 K2 crates/k2-core/src/app_templates/doctor.rs debt: K2's patched copy names the upstream repo that holds the wry patch; waits for a ruling
 4 K2 crates/k2-core/src/external_agents/grokbot.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 4 K2 crates/k2-core/src/firewall.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 4 K2 crates/k2-core/src/heartbeats/wakeup_wait.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -411,7 +410,6 @@
 2 K2 crates/k2-core/src/product_feedback/diagnostics.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-core/src/product_feedback/screenshot.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-core/src/secret_paths.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-1 K2 crates/k2-core/src/sew_chat/teach.rs keeper: the yours line, which ensure_chat_skill reads back to keep a person's part
 2 K2 crates/k2-core/src/sim/ios/simctl.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-core/src/sim/manager.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-core/src/skin_account_deletion.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -611,7 +609,7 @@
 1 K2 crates/k2-core/src/garden_data/sqlite.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/git_identity.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/hire/apply.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-1 K2 crates/k2-core/src/hire/template/apply.rs keeper: the _Yours: K2 never changes line, which save.rs reads back
+1 K2 crates/k2-core/src/hire/template/apply.rs keeper: the old _Yours line, which save.rs still reads in ROLE.md files written before the new one; never written
 1 K2 crates/k2-core/src/jscheck/mod.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/llm_accounts/auto_next.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/llm_accounts/pins.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)

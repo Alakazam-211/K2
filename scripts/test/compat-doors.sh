@@ -4,7 +4,7 @@
 #
 #   k2 compute run --sha <c> --stall-timeout off \
 #     --needs rust@1.99.1,cmake@3,cargo-nextest,sys:postgresql --mem 28G \
-#     -- bash scripts/test/compat-doors.sh [rest|unit|realpg|oracle|licences|all]
+#     -- bash scripts/test/compat-doors.sh [rest|unit|realpg|oracle|licences|deny|all]
 #
 # k2-rest's own tests, the daemon's compat unit tests, and (realpg) the
 # tests marked #[ignore] that need a throwaway Postgres (REALPG_COMPAT=1;
@@ -83,6 +83,12 @@ if [ "$what" = oracle ] || [ "$what" = rest ] || [ "$what" = all ]; then
     fi
     "$pgrst_dir/postgrest" --version || { echo "PostgREST does not run"; exit 1; }
     run "oracle: K2 vs PostgREST $pgrst_v" env REALPG_COMPAT=1 ORACLE_POSTGREST="$pgrst_dir/postgrest" cargo test -p k2-rest --features testkit oracle_ -- --ignored --nocapture
+fi
+if [ "$what" = deny ]; then
+    # The app-wide gate: advisories, bans, licenses and sources for every
+    # shipped crate, on the committed Cargo.lock (--locked).
+    echo "=== cargo deny (scripts/ci/cargo-deny.sh ci)"
+    bash scripts/ci/cargo-deny.sh ci "${K2_JOB_CACHE:-$HOME/.cache}/cargo-deny" || fail=1
 fi
 for d in /tmp/k2rest-*; do
     [ -d "$d/data" ] && "$REALPG_BIN/pg_ctl" -D "$d/data" -m immediate stop >/dev/null 2>&1

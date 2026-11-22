@@ -174,7 +174,8 @@ fn who_a_request_is_follows_the_table() {
     assert_eq!(c["role"], "authenticated");
     assert_eq!(c["aud"], "authenticated");
     assert_eq!(c["email"], "ann-who@example.com");
-    assert_eq!(c["app_metadata"]["k2_app"], f.svc.as_str());
+    assert_eq!(c["app_metadata"]["k2_app"], f.app.as_str());
+    assert_eq!(c["iss"], format!("k2:app:{}", f.app), "PRD 5.2: iss names the App id");
     assert!(c["session_id"].as_str().is_some_and(|s| !s.is_empty()) && c["exp"].as_i64().is_some() && c["iat"].as_i64().is_some(), "{c}");
     // A cookie write needs an Origin.
     assert_eq!(refused(resolve(&req("POST", &[("apikey", &pk), ("cookie", &cookie)]), &pub_ctx)), (403, "origin_required".into()));
@@ -273,6 +274,19 @@ fn a_third_party_check_can_only_give_authenticated() {
         let (st, c) = refused(resolve(&req("GET", &[("apikey", &pk), ("authorization", &h)]), &cx));
         assert_eq!((st, c.as_str()), (500, "bad_claims"), "{forged}");
     }
+    // A K2 pass in its JWT shape goes to the pass check, never to the
+    // issuer check (lane A's issuers::verify sits behind this hook).
+    fn never(_: &DoorConfig, t: &str) -> Result<(Value, Option<String>), (u16, String, String)> {
+        panic!("a K2 pass reached the third-party check: {t}")
+    }
+    TEST_VERIFIER.with(|t| t.set(Some(never)));
+    let link = ctx(&f, Ingress::Link, |_| {});
+    let pass = k2_core::skin::resolve_skin_token(&f.web).unwrap();
+    let wrapped = wrap_pass(&f.web, &session_claims(&link.cfg.app_id, &pass));
+    assert!(looks_like_jwt(&wrapped), "it has a JWT's shape");
+    let w = resolve(&req("GET", &[("apikey", &pk), ("authorization", &format!("Bearer {wrapped}"))]), &link).expect("the pass check takes it");
+    assert!(matches!(w.who, Who::Person { .. }), "{w:?}");
+    assert_eq!(w.caller.claims["sub"], f.ann_id.as_str());
     TEST_VERIFIER.with(|t| t.set(None));
 }
 

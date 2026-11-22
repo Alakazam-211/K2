@@ -4,7 +4,7 @@ name = "k2-rest"
 # bump it.
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
+license = "MIT OR Apache-2.0"
 publish = false
 description = "K2's PostgREST-compatible grammar for an App's /rest/v1 door (prd-app-supabase-compat-v1 §7): the request parser, the schema cache and the SQL builder. No daemon types and no driver: it turns a request into SQL text, and the daemon runs it."
 

@@ -263,15 +263,15 @@ pub const NO_EXPIRY: i64 = 4_102_444_800;
 
 /// The claims a wrapped pass carries: what K2 knows of the session, and
 /// nothing a reader could take for more.
-pub fn pass_claims(svc: &str, sub: &str, email: &str, exp: Option<i64>) -> Value {
-    json!({ "sub": sub, "role": "authenticated", "aud": "authenticated", "email": email, "iss": issuer(svc), "exp": exp.unwrap_or(NO_EXPIRY) })
+pub fn pass_claims(app_id: &str, sub: &str, email: &str, exp: Option<i64>) -> Value {
+    json!({ "sub": sub, "role": "authenticated", "aud": "authenticated", "email": email, "iss": issuer(app_id), "exp": exp.unwrap_or(NO_EXPIRY) })
 }
 
 /// [`pass_claims`] for a live session pass, read from the user store now.
-pub fn session_claims(svc: &str, pass: &SkinPass) -> Value {
+pub fn session_claims(app_id: &str, pass: &SkinPass) -> Value {
     let pid = pass.principal_id.clone().unwrap_or_default();
     let email = principal(&pid).and_then(|p| p.email).unwrap_or_default();
-    pass_claims(svc, &pid, &email, pass.expires_at)
+    pass_claims(app_id, &pid, &email, pass.expires_at)
 }
 
 /// The claims inside a [`wrap_pass`] token (`None`: a bare pass).
@@ -307,8 +307,8 @@ pub fn looks_like_jwt(s: &str) -> bool {
 /// CONTRACT NOTE: PRD §5.2 leaves `iss` open; lane A's `claims.rs` is the
 /// one place that should build these claims. Until it lands the doors
 /// build them here, to the §5.2 shape.
-pub fn issuer(service_id: &str) -> String {
-    format!("k2:app:{service_id}")
+pub fn issuer(app_id: &str) -> String {
+    format!("k2:app:{app_id}")
 }
 
 fn now_secs() -> i64 {
@@ -316,18 +316,18 @@ fn now_secs() -> i64 {
 }
 
 /// The claims for a K2 session of this App (PRD §5.2).
-pub fn person_claims(service_id: &str, pass: &SkinPass, p: Option<&SkinPrincipal>) -> Value {
+pub fn person_claims(app_id: &str, pass: &SkinPass, p: Option<&SkinPrincipal>) -> Value {
     let now = now_secs();
     json!({
         "sub": pass.principal_id.clone().unwrap_or_default(),
         "role": "authenticated",
         "email": p.and_then(|p| p.email.clone()).unwrap_or_default(),
         "phone": "",
-        "iss": issuer(service_id),
+        "iss": issuer(app_id),
         "aud": "authenticated",
         "session_id": pass.id,
         "app_metadata": {
-            "k2_app": service_id,
+            "k2_app": app_id,
             "k2_role": p.and_then(|p| p.role_name.clone()),
             "provider": "email",
             "providers": ["email"],
@@ -340,13 +340,13 @@ pub fn person_claims(service_id: &str, pass: &SkinPass, p: Option<&SkinPrincipal
 }
 
 /// The claims for the server key (Supabase's service key carries these).
-pub fn service_claims(service_id: &str) -> Value {
-    json!({ "role": "service_role", "iss": issuer(service_id), "iat": now_secs() })
+pub fn service_claims(app_id: &str) -> Value {
+    json!({ "role": "service_role", "iss": issuer(app_id), "iat": now_secs(), "app_metadata": { "k2_app": app_id, "provider": "k2", "providers": ["k2"] } })
 }
 
 /// The claims for the anon lane.
-pub fn anon_claims(service_id: &str) -> Value {
-    json!({ "role": "anon", "iss": issuer(service_id), "iat": now_secs() })
+pub fn anon_claims(app_id: &str) -> Value {
+    json!({ "role": "anon", "iss": issuer(app_id), "iat": now_secs(), "app_metadata": { "k2_app": app_id, "provider": "k2", "providers": ["k2"] } })
 }
 
 /// An App user by principal id (cached for two seconds: a role change shows
@@ -372,9 +372,9 @@ fn service_key(service_id: &str, raw: &str) -> Option<String> {
     grant.has(k2_core::app_grace::keys::SCOPE_SERVICE).then_some(key.id)
 }
 
-fn person(service_id: &str, pass: SkinPass, device: bool) -> Resolved {
+fn person(app_id: &str, pass: SkinPass, device: bool) -> Resolved {
     let p = pass.principal_id.as_deref().and_then(principal);
-    let claims = person_claims(service_id, &pass, p.as_ref());
+    let claims = person_claims(app_id, &pass, p.as_ref());
     Resolved { caller: Caller { role: DbRole::Authenticated, claims }, who: Who::Person { pass, device } }
 }
 
@@ -383,6 +383,7 @@ fn person(service_id: &str, pass: SkinPass, device: bool) -> Resolved {
 pub fn resolve(req: &DoorRequest, ctx: &Ctx) -> Result<Resolved, DoorAnswer> {
     let cfg = &ctx.cfg;
     let svc = ctx.service_id.as_str();
+    let app = ctx.cfg.app_id.as_str();
     let link = ctx.ingress == Ingress::Link;
     let Some(apikey) = req.header("apikey").filter(|k| !k.is_empty()) else {
         return Err(refuse(401, "no_api_key", "No API key found in request", Some("send the App's publishable key (k2 app compat status) as the apikey header")));
@@ -407,7 +408,7 @@ pub fn resolve(req: &DoorRequest, ctx: &Ctx) -> Result<Resolved, DoorAnswer> {
                 Some("call K2_GATEWAY_URL from server code, or the owner runs k2 app compat set <app> service-key-public on"),
             ));
         }
-        return Ok(Resolved { caller: Caller { role: DbRole::Service, claims: service_claims(svc) }, who: Who::Service { key_id } });
+        return Ok(Resolved { caller: Caller { role: DbRole::Service, claims: service_claims(app) }, who: Who::Service { key_id } });
     }
     if !is_publishable(apikey) {
         return Err(refuse(401, "bad_api_key", "the apikey is neither this App's publishable key nor its server key", None));
@@ -438,13 +439,13 @@ pub fn resolve(req: &DoorRequest, ctx: &Ctx) -> Result<Resolved, DoorAnswer> {
         if b.starts_with(PENDING_PREFIX) {
             // A recovery or invite link's pass whose password was set: the
             // session it became, for server code (the link) only.
-            let Some(raw) = super::auth_door_v1::upgraded_pass(raw_bearer.unwrap_or(b), svc).filter(|_| link) else {
+            let Some(raw) = super::auth_door_v1::upgraded_pass(raw_bearer.unwrap_or(b), svc, app).filter(|_| link) else {
                 return Err(refuse(401, "pass_invalid", "this pass only sets a password (PUT /auth/v1/user); sign in again", None));
             };
             let Some(pass) = k2_core::skin::resolve_skin_token(&raw).filter(|p| p.session && p.app == svc) else {
                 return Err(refuse(401, "pass_invalid", "the pass is not a live session of this App", Some("sign in again")));
             };
-            return Ok(person(svc, pass, false));
+            return Ok(person(app, pass, false));
         }
         if !k2_core::skin::is_skin_token(b) {
             return Err(refuse(401, "bad_credential", "the bearer is not a credential this door takes", None));
@@ -452,7 +453,7 @@ pub fn resolve(req: &DoorRequest, ctx: &Ctx) -> Result<Resolved, DoorAnswer> {
         let Some(pass) = k2_core::skin::resolve_skin_token(b).filter(|p| p.session && p.app == svc) else {
             return Err(refuse(401, "pass_invalid", "the pass is not a live session of this App", Some("sign in again")));
         };
-        if !claims_match(raw_bearer.unwrap_or(b), &session_claims(svc, &pass)) {
+        if !claims_match(raw_bearer.unwrap_or(b), &session_claims(app, &pass)) {
             return Err(refuse(401, "bad_jwt", "the token's claims are not the ones K2 wrote for this session", Some("sign in again")));
         }
         let device = k2_core::skin::app_login::device_for_session(&pass.id).ok().flatten().is_some();
@@ -464,7 +465,7 @@ pub fn resolve(req: &DoorRequest, ctx: &Ctx) -> Result<Resolved, DoorAnswer> {
                 Some("in a browser the session cookie carries it; server code sends the pass on K2_GATEWAY_URL"),
             ));
         }
-        return Ok(person(svc, pass, device));
+        return Ok(person(app, pass, device));
     }
     if !link {
         if let Some(raw) = req.cookie(SESSION_COOKIE) {
@@ -474,11 +475,11 @@ pub fn resolve(req: &DoorRequest, ctx: &Ctx) -> Result<Resolved, DoorAnswer> {
             if req.is_write() && req.header("origin").is_none() {
                 return Err(refuse(403, "origin_required", "a write with the session cookie needs an Origin header", None));
             }
-            return Ok(person(svc, pass, false));
+            return Ok(person(app, pass, false));
         }
     }
     if cfg.anon {
-        return Ok(Resolved { caller: Caller { role: DbRole::Anon, claims: anon_claims(svc) }, who: Who::Anon });
+        return Ok(Resolved { caller: Caller { role: DbRole::Anon, claims: anon_claims(app) }, who: Who::Anon });
     }
     Err(refuse(401, "anon_off", "Anonymous access is disabled", Some("sign in; or the owner turns the anon lane on: k2 app compat set <app> anon on")))
 }

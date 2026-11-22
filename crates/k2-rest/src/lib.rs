@@ -18,6 +18,10 @@
 //! inserts, bulk inserts, upserts (`on_conflict`, merge or ignore,
 //! `missing=default`), updates and deletes with `return=representation`.
 //! Anything else is [`ApiError::unsupported`]: a 400 naming the part.
+//!
+//! Provenance: written for K2 from PostgREST's public documentation and its
+//! observed answers (the oracle rig, `oracle.rs`, runs real PostgREST beside
+//! it); no part is ported or translated from PostgREST's source.
 
 pub mod build;
 pub mod error;

@@ -75,7 +75,7 @@ fn now_secs() -> i64 {
 }
 
 /// A K2 App user as GoTrue's user object.
-pub fn user_json(svc: &str, p: &SkinPrincipal) -> Value {
+pub fn user_json(app_id: &str, p: &SkinPrincipal) -> Value {
     let created = iso(p.created_at);
     json!({
         "id": p.id,
@@ -86,7 +86,7 @@ pub fn user_json(svc: &str, p: &SkinPrincipal) -> Value {
         "phone": "",
         "confirmed_at": created,
         "last_sign_in_at": Value::Null,
-        "app_metadata": { "provider": "email", "providers": ["email"], "k2_app": svc, "k2_role": p.role_name },
+        "app_metadata": { "provider": "email", "providers": ["email"], "k2_app": app_id, "k2_role": p.role_name },
         "user_metadata": { "full_name": p.full_name },
         "identities": [],
         "created_at": created,
@@ -127,7 +127,7 @@ fn cookie(value: Option<(&str, i64)>) -> String {
 fn pass_facts(ctx: &Ctx, pass: &str) -> (Value, i64) {
     match session_of(pass, &ctx.service_id) {
         Some(p) => {
-            let c = door::session_claims(&ctx.service_id, &p);
+            let c = door::session_claims(&ctx.cfg.app_id, &p);
             let exp = c["exp"].as_i64().unwrap_or(door::NO_EXPIRY);
             (c, exp)
         }
@@ -207,19 +207,19 @@ fn pending(raw: &str, app: &str) -> Option<Pending> {
 /// The session pass a pending pass turned into (its password was set), for
 /// the data door: server code that kept the `k2vrf_` from `verifyOtp` keeps
 /// working as the person until it expires.
-pub fn upgraded_pass(token: &str, app: &str) -> Option<String> {
+pub fn upgraded_pass(token: &str, svc: &str, app_id: &str) -> Option<String> {
     let raw = door::unwrap_pass(token);
-    let p = pending(raw, app)?;
-    if !door::claims_match(token, &pending_claims(app, &p)) {
+    let p = pending(raw, svc)?;
+    if !door::claims_match(token, &pending_claims(app_id, &p)) {
         return None;
     }
     p.session.map(|(s, _)| s)
 }
 
 /// The claims a pending pass carries.
-fn pending_claims(app: &str, p: &Pending) -> Value {
+fn pending_claims(app_id: &str, p: &Pending) -> Value {
     let email = principal_by_id(&p.principal_id).and_then(|u| u.email).unwrap_or_default();
-    door::pass_claims(app, &p.principal_id, &email, Some(p.exp))
+    door::pass_claims(app_id, &p.principal_id, &email, Some(p.exp))
 }
 
 // ── who ──────────────────────────────────────────────────────────────
@@ -245,7 +245,7 @@ fn holder(req: &DoorRequest, ctx: &Ctx) -> Result<Option<Holder>, DoorAnswer> {
         let raw = door::unwrap_pass(token);
         if raw.starts_with(PENDING_PREFIX) {
             return match pending(raw, &ctx.service_id) {
-                Some(p) if !door::claims_match(token, &pending_claims(&ctx.service_id, &p)) => Err(edited()),
+                Some(p) if !door::claims_match(token, &pending_claims(&ctx.cfg.app_id, &p)) => Err(edited()),
                 Some(p) => match &p.session {
                     Some((pass, _)) => Ok(session_of(pass, &ctx.service_id).map(Holder::Session)),
                     None => Ok(Some(Holder::Pending(raw.to_string(), p))),
@@ -256,7 +256,7 @@ fn holder(req: &DoorRequest, ctx: &Ctx) -> Result<Option<Holder>, DoorAnswer> {
         let Some(pass) = session_of(raw, &ctx.service_id) else {
             return Err(gerr(403, "bad_jwt", "invalid JWT: unable to parse or verify signature, the session has ended"));
         };
-        if !door::claims_match(token, &door::session_claims(&ctx.service_id, &pass)) {
+        if !door::claims_match(token, &door::session_claims(&ctx.cfg.app_id, &pass)) {
             return Err(edited());
         }
         if public && via_bearer && app_login::device_for_session(&pass.id).ok().flatten().is_none() {
@@ -359,11 +359,11 @@ fn get_user(req: &DoorRequest, ctx: &Ctx) -> DoorAnswer {
         Err(a) => a,
         Ok(None) => gerr(401, "no_authorization", "This endpoint requires a valid Bearer token"),
         Ok(Some(Holder::Session(pass))) => match pass.principal_id.as_deref().and_then(principal_by_id) {
-            Some(p) => ok(user_json(&ctx.service_id, &p)),
+            Some(p) => ok(user_json(&ctx.cfg.app_id, &p)),
             None => gerr(403, "user_not_found", "User from sub claim in JWT does not exist"),
         },
         Ok(Some(Holder::Pending(_, p))) => match principal_by_id(&p.principal_id) {
-            Some(u) => ok(user_json(&ctx.service_id, &u)),
+            Some(u) => ok(user_json(&ctx.cfg.app_id, &u)),
             None => gerr(403, "user_not_found", "User from sub claim in JWT does not exist"),
         },
     }
@@ -402,11 +402,11 @@ fn update_user(req: &DoorRequest, ctx: &Ctx) -> DoorAnswer {
                     return gerr(422, "weak_password", e);
                 }
             }
-            ok(user_json(&ctx.service_id, &p))
+            ok(user_json(&ctx.cfg.app_id, &p))
         }
         Ok(Some(Holder::Pending(raw, p))) => {
             let Some(pw) = password else {
-                return ok(principal_by_id(&p.principal_id).map(|u| user_json(&ctx.service_id, &u)).unwrap_or(Value::Null));
+                return ok(principal_by_id(&p.principal_id).map(|u| user_json(&ctx.cfg.app_id, &u)).unwrap_or(Value::Null));
             };
             match skin::invites::consume(&p.link_token, pw) {
                 Ok(skin::invites::Consume::Ok) => {}
@@ -419,14 +419,14 @@ fn update_user(req: &DoorRequest, ctx: &Ctx) -> DoorAnswer {
             });
             let Ok(store::Minted::Plain(s)) = minted else {
                 // The password is set; no session where a login wouldn't get one.
-                return ok(principal_by_id(&p.principal_id).map(|u| user_json(&ctx.service_id, &u)).unwrap_or(Value::Null));
+                return ok(principal_by_id(&p.principal_id).map(|u| user_json(&ctx.cfg.app_id, &u)).unwrap_or(Value::Null));
             };
             skin::profile::record_session(&s.meta.id, skin::profile::VIA_PASSWORD, Some("password link"));
             let exp = skin::resolve_skin_token(&s.raw).and_then(|x| x.expires_at);
             if let Some(e) = pendings().lock().unwrap_or_else(|e| e.into_inner()).get_mut(&digest(&raw)) {
                 e.session = Some((s.raw.clone(), exp));
             }
-            let user = principal_by_id(&p.principal_id).map(|u| user_json(&ctx.service_id, &u)).unwrap_or(Value::Null);
+            let user = principal_by_id(&p.principal_id).map(|u| user_json(&ctx.cfg.app_id, &u)).unwrap_or(Value::Null);
             let a = ok(user);
             match ctx.ingress {
                 Ingress::Public { .. } => {
@@ -467,11 +467,11 @@ fn sign_in(req: &DoorRequest, ctx: &Ctx) -> DoorAnswer {
                 Ok(store::Minted::Plain(s)) => {
                     skin::profile::record_session(&s.meta.id, skin::profile::VIA_PASSWORD, Some("supabase-js"));
                     let (claims, exp) = pass_facts(ctx, &s.raw);
-                    session_answer(ctx, &s.raw, claims, exp, None, user_json(&ctx.service_id, &p))
+                    session_answer(ctx, &s.raw, claims, exp, None, user_json(&ctx.cfg.app_id, &p))
                 }
                 Ok(store::Minted::Device(d)) => {
                     let (claims, exp) = pass_facts(ctx, &d.session.raw);
-                    session_answer(ctx, &d.session.raw, claims, exp, Some(&d.refresh), user_json(&ctx.service_id, &p))
+                    session_answer(ctx, &d.session.raw, claims, exp, Some(&d.refresh), user_json(&ctx.cfg.app_id, &p))
                 }
                 Err(e) if e == skin::HOST_LOGIN_DENIED => bad(),
                 Err(e) => gerr(500, "unexpected_failure", e),
@@ -504,21 +504,21 @@ fn refresh(req: &DoorRequest, ctx: &Ctx) -> DoorAnswer {
             return gerr(400, "refresh_token_not_found", "Invalid Refresh Token: Refresh Token Not Found");
         };
         let (claims, exp) = pass_facts(ctx, raw);
-        let user = s.principal_id.as_deref().and_then(principal_by_id).map(|p| user_json(&ctx.service_id, &p)).unwrap_or(Value::Null);
+        let user = s.principal_id.as_deref().and_then(principal_by_id).map(|p| user_json(&ctx.cfg.app_id, &p)).unwrap_or(Value::Null);
         return session_answer(ctx, raw, claims, exp, None, user);
     }
     if raw.starts_with(PENDING_PREFIX) {
         let Some(p) = pending(raw, &ctx.service_id) else {
             return gerr(400, "refresh_token_not_found", "Invalid Refresh Token: Refresh Token Not Found");
         };
-        let user = principal_by_id(&p.principal_id).map(|u| user_json(&ctx.service_id, &u)).unwrap_or(Value::Null);
-        return session_answer(ctx, raw, pending_claims(&ctx.service_id, &p), p.exp, None, user);
+        let user = principal_by_id(&p.principal_id).map(|u| user_json(&ctx.cfg.app_id, &u)).unwrap_or(Value::Null);
+        return session_answer(ctx, raw, pending_claims(&ctx.cfg.app_id, &p), p.exp, None, user);
     }
     match app_login::refresh(raw, Some(&ctx.service_id)) {
         Ok(app_login::Refresh::Ok(d)) => {
             let p = skin::resolve_skin_token(&d.session.raw).and_then(|x| x.principal_id).and_then(|id| principal_by_id(&id));
             let (claims, exp) = pass_facts(ctx, &d.session.raw);
-            session_answer(ctx, &d.session.raw, claims, exp, Some(&d.refresh), p.map(|p| user_json(&ctx.service_id, &p)).unwrap_or(Value::Null))
+            session_answer(ctx, &d.session.raw, claims, exp, Some(&d.refresh), p.map(|p| user_json(&ctx.cfg.app_id, &p)).unwrap_or(Value::Null))
         }
         Ok(app_login::Refresh::Reused) => gerr(400, "refresh_token_already_used", "Invalid Refresh Token: Already Used"),
         Ok(app_login::Refresh::Invalid) => gerr(400, "refresh_token_not_found", "Invalid Refresh Token: Refresh Token Not Found"),
@@ -545,7 +545,7 @@ fn pkce(req: &DoorRequest, ctx: &Ctx) -> DoorAnswer {
     };
     let p = out["principalId"].as_str().and_then(principal_by_id);
     let (claims, exp) = pass_facts(ctx, pass);
-    session_answer(ctx, pass, claims, exp, None, p.map(|p| user_json(&ctx.service_id, &p)).unwrap_or(Value::Null))
+    session_answer(ctx, pass, claims, exp, None, p.map(|p| user_json(&ctx.cfg.app_id, &p)).unwrap_or(Value::Null))
 }
 
 /// A mailed link's token for this App: who it is for (not used yet).
@@ -563,7 +563,7 @@ fn pending_session(ctx: &Ctx, t: &store::TokenTarget, token: &str) -> (String, V
         session: None,
     };
     let raw = new_pending(p.clone());
-    let user = principal_by_id(&t.principal_id).map(|p| user_json(&ctx.service_id, &p)).unwrap_or(Value::Null);
+    let user = principal_by_id(&t.principal_id).map(|p| user_json(&ctx.cfg.app_id, &p)).unwrap_or(Value::Null);
     (raw, user, p)
 }
 
@@ -583,7 +583,7 @@ fn verify_post(req: &DoorRequest, ctx: &Ctx) -> DoorAnswer {
         return gerr(403, "otp_expired", "Email link is invalid or has expired");
     };
     let (raw, user, p) = pending_session(ctx, &t, token);
-    session_answer(ctx, &raw, pending_claims(&ctx.service_id, &p), p.exp, None, user)
+    session_answer(ctx, &raw, pending_claims(&ctx.cfg.app_id, &p), p.exp, None, user)
 }
 
 /// May a mailed link send the browser to `url`? The App's own host (the
@@ -619,7 +619,7 @@ fn verify_link(req: &DoorRequest, ctx: &Ctx, q: &HashMap<String, String>) -> Doo
     let (raw, _, p) = pending_session(ctx, &t, token);
     let a = DoorAnswer::new(303).header("Location", redirect);
     match ctx.ingress {
-        Ingress::Public { .. } => with_cookies(a, Some((&raw, &door::wrap_pass(&raw, &pending_claims(&ctx.service_id, &p)), PENDING_TTL.as_secs() as i64))),
+        Ingress::Public { .. } => with_cookies(a, Some((&raw, &door::wrap_pass(&raw, &pending_claims(&ctx.cfg.app_id, &p)), PENDING_TTL.as_secs() as i64))),
         // On the link a click can't happen; answer the pass for server code.
         Ingress::Link => a.header("x-k2-pending-pass", raw),
     }

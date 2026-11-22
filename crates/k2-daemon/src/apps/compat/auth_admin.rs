@@ -37,6 +37,13 @@ pub fn app_origins(svc: &str) -> Vec<String> {
     crate::apps::origins::for_service(svc, &name).into_iter().map(|o| o.trim_end_matches('/').to_string()).collect()
 }
 
+/// The runtime App id of a service (the claims' and users' `k2_app`).
+fn app_id_of(svc: &str) -> String {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::deploy::store::get_app_by_service(&conn, svc).ok().flatten().map(|a| a.app_id).unwrap_or_else(|| svc.to_string())
+}
+
 /// This App's users: (person, their grant on this App).
 fn app_users(svc: &str) -> Result<Vec<(SkinPrincipal, skin::SkinGrant)>, DoorAnswer> {
     let principals = skin::list_principals().map_err(store_err)?;
@@ -59,7 +66,7 @@ fn only_this_app(svc: &str, principal_id: &str) -> Result<bool, DoorAnswer> {
 }
 
 fn admin_user_json(svc: &str, p: &SkinPrincipal, g: &skin::SkinGrant) -> Value {
-    let mut u = user_json(svc, p);
+    let mut u = user_json(&app_id_of(svc), p);
     if !g.enabled {
         u["banned_until"] = json!("2999-12-31T00:00:00Z");
     }

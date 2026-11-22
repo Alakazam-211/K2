@@ -224,6 +224,15 @@ pub enum Compare {
     /// name filled in; the binary prints the template. That is
     /// `scripts/cli-parity.sh`'s named difference `doc-mktemp-wording`.
     MktempTried { stem: &'static str },
+    /// A NUL in words bash reads with `read -r` from a file the shell's
+    /// Python wrote: bash 4 and newer drop the NUL, as the binary does;
+    /// macOS's `/bin/bash` 3.2 stops the value there. Everything as
+    /// [`Compare::Exact`] but stderr, which on a bash before 4 must be
+    /// the binary's without `dropped` (what follows the NUL), and exact
+    /// elsewhere. For K2 to rule on (`bash32-read-nul`); the shell's
+    /// fix (its Python drops the NUL) makes the row fail, saying the
+    /// mark goes.
+    Bash32ReadNul { dropped: &'static str },
 }
 
 /// Each `k2-update.` followed by six letters or digits (the random part
@@ -973,6 +982,26 @@ impl Rig {
                 mask_temp_names(&r.stderr),
                 mask_temp_names(&b.stderr),
                 "{name}: stderr (mktemp's name masked)"
+            );
+        } else if let Compare::Bash32ReadNul { dropped } = c.compare {
+            let want = if bash_version() < (4, 0) {
+                assert!(
+                    r.stderr.contains(dropped),
+                    "{name}: the binary's stderr has no {dropped:?}: {:?}",
+                    r.stderr
+                );
+                assert!(
+                    !b.stderr.contains(dropped),
+                    "{name}: bash {:?} read past the NUL: the bash32-read-nul mark goes",
+                    bash_version()
+                );
+                r.stderr.replacen(dropped, "", 1)
+            } else {
+                r.stderr.clone()
+            };
+            assert_eq!(
+                want, b.stderr,
+                "{name}: stderr (bash 3.2's read stops at a NUL)"
             );
         } else if let Compare::MktempTried { stem } = c.compare {
             let rust = (r.code, r.stderr.as_str());

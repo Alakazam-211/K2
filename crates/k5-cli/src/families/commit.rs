@@ -12,9 +12,8 @@
 //! - `commit [-m m] [--merge]`: `Requesting AI Commit...` (or `... &
 //!   Merge...`), then `cli_request_post /cli/commit` (or
 //!   `/cli/commit-merge`) and the answer as it came. `commit --merge`
-//!   alone posts as bash 4.4 and newer do; bash before 4.4 stops on the
-//!   empty `rest` array (the named difference `bash32-empty-array`). A refusal's body is
-//!   printed with exit 0, as the shell does (a known T5 row).
+//!   alone posts too. A refusal's body is printed with exit 0, as the
+//!   shell does (a known T5 row).
 //! - `reviews`: `cli_request /cli/reviews | python3 …` ([`reviews`]): the
 //!   rows, or one error line and exit 1 for an answer that is not JSON, an
 //!   empty one or an object (the daemon's error); a Python 3.12 traceback

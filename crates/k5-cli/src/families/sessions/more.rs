@@ -9,9 +9,7 @@
 //!   tool's checks, the usage line (exit 1) with no id or no label; else
 //!   `cli_request_post /cli/sessions/label id=…&label=…&lock=…` over TCP,
 //!   piped into the shell's Python ([`label_reader`]), with `set -o
-//!   pipefail`'s exit. The label is the words joined by spaces; bash
-//!   before 4.4 stops on the empty array when there are none (the named
-//!   difference `bash32-empty-array`).
+//!   pipefail`'s exit. The label is the words joined by spaces.
 //!
 //! A request with no answer is the transport's line, then SIGPIPE, as for
 //! any request on the left of a pipe ([`super::super::end_in_pipe`]).

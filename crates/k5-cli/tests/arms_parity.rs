@@ -117,14 +117,7 @@ fn trust_folders_and_commit() {
             0,
         ),
         // native: commit --merge
-        // bash before 4.4 stops on the empty `rest` array (macOS's
-        // /bin/bash 3.2 then ends 0, sending nothing); the binary posts as
-        // bash 4.4 and newer do.
-        bash32_empty_array(
-            one("commit --merge alone", &["--merge"], r#"{"ok":true}"#, 0),
-            &["rest"],
-            Some((0, 0)),
-        ),
+        one("commit --merge alone", &["--merge"], r#"{"ok":true}"#, 0),
         case(
             "a refusal: its body, exit 0 (known T5 row)",
             &[],

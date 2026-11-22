@@ -59,12 +59,6 @@ fn traceback(c: Case) -> Case {
     }
 }
 
-/// A send with an empty list: macOS's bash 3.2 stops at it (exit 2,
-/// nothing sent) until the shell's fix lands (`bash32-empty-array`).
-fn empty_list(c: Case, arrays: &'static [&'static str]) -> Case {
-    bash32_empty_array(c, arrays, Some((2, 0)))
-}
-
 fn refused(name: &'static str, args: &'static [&'static str]) -> Case {
     case(
         name,
@@ -472,23 +466,17 @@ fn push_writes_answer_as_the_shell_does() {
             0,
             1,
         ),
-        empty_list(
-            one(
-                "push send to a room",
-                &["push", "send", "acme", "--room", "lobby"],
-                r#"{"queued":0}"#,
-                0,
-            ),
-            &["tos"],
+        one(
+            "push send to a room",
+            &["push", "send", "acme", "--room", "lobby"],
+            r#"{"queued":0}"#,
+            0,
         ),
-        empty_list(
-            one(
-                "push test",
-                &["push", "test", "acme", "--to", "ann", "--title", "dropped"],
-                sent,
-                0,
-            ),
-            &["datas"],
+        one(
+            "push test",
+            &["push", "test", "acme", "--to", "ann", "--title", "dropped"],
+            sent,
+            0,
         ),
         stop("push send: no one", &["push", "send", "acme"], 2),
         stop(
@@ -496,13 +484,10 @@ fn push_writes_answer_as_the_shell_does() {
             &["push", "send", "acme", "--to", "a", "--room", "r"],
             2,
         ),
-        empty_list(
-            stop(
-                "push send: a badge that isn't a number",
-                &["push", "send", "acme", "--to", "a", "--badge", "x"],
-                2,
-            ),
-            &["datas"],
+        stop(
+            "push send: a badge that isn't a number",
+            &["push", "send", "acme", "--to", "a", "--badge", "x"],
+            2,
         ),
         stop(
             "push send: data without =",
@@ -522,15 +507,12 @@ fn push_writes_answer_as_the_shell_does() {
             2,
         ),
         refused("push on: a refusal", &["push", "on", "acme"]),
-        empty_list(
-            traceback(one(
-                "push send: skips that are a list",
-                &["push", "send", "acme", "--to", "a"],
-                r#"{"skipped":[1]}"#,
-                1,
-            )),
-            &["datas"],
-        ),
+        traceback(one(
+            "push send: skips that are a list",
+            &["push", "send", "acme", "--to", "a"],
+            r#"{"skipped":[1]}"#,
+            1,
+        )),
     ];
     // `push devices rm acme -h`: the shell takes -h as the device id and
     // sends the remove (a bash bug; the row flips when the fix lands).
@@ -624,27 +606,24 @@ fn email_writes_answer_as_the_shell_does() {
             2,
             1,
         ),
-        empty_list(
-            case(
-                "email send, a text file",
-                &[
-                    "email",
-                    "send",
-                    "acme",
-                    "--to",
-                    "a@acme.example",
-                    "--subject",
-                    "S",
-                    "--text-file",
-                    "body.txt",
-                ],
-                &[],
-                vec![ok(r#"{"id":"em_2","status":"queued","recipients":2}"#)],
-                text_file,
-                0,
-                1,
-            ),
-            &["ccs"],
+        case(
+            "email send, a text file",
+            &[
+                "email",
+                "send",
+                "acme",
+                "--to",
+                "a@acme.example",
+                "--subject",
+                "S",
+                "--text-file",
+                "body.txt",
+            ],
+            &[],
+            vec![ok(r#"{"id":"em_2","status":"queued","recipients":2}"#)],
+            text_file,
+            0,
+            1,
         ),
         stop("email on: no sender", &["email", "on", "acme"], 2),
         stop(
@@ -663,25 +642,22 @@ fn email_writes_answer_as_the_shell_does() {
             &["email", "send", "acme", "--to", "a", "--subject", "s"],
             2,
         ),
-        empty_list(
-            stop(
-                "email send: a header without =",
-                &[
-                    "email",
-                    "send",
-                    "acme",
-                    "--to",
-                    "a",
-                    "--subject",
-                    "s",
-                    "--text",
-                    "t",
-                    "--header",
-                    "X",
-                ],
-                2,
-            ),
-            &["ccs"],
+        stop(
+            "email send: a header without =",
+            &[
+                "email",
+                "send",
+                "acme",
+                "--to",
+                "a",
+                "--subject",
+                "s",
+                "--text",
+                "t",
+                "--header",
+                "X",
+            ],
+            2,
         ),
         stop(
             "email send: a file that isn't there",
@@ -829,28 +805,23 @@ fn bash_bugs_copied() {
         // app-auth.sh:881-885: a list value that names a list (`--to
         // --cc`) switches which list the Python fills, so the To list is
         // sent empty and the address goes to Cc. Flips when the fix lands.
-        // No --bcc, --reply-to, --header or --tag: macOS's bash 3.2 stops at
-        // the first empty array too (`bash32-empty-array`).
-        empty_list(
-            one(
-                "email send: a list value switches the list (bash bug)",
-                &[
-                    "email",
-                    "send",
-                    "acme",
-                    "--to",
-                    "--cc",
-                    "--cc",
-                    "b@acme.example",
-                    "--subject",
-                    "s",
-                    "--text",
-                    "t",
-                ],
-                r#"{"id":"em_3","status":"queued","recipients":1}"#,
-                0,
-            ),
-            &["bccs", "rts", "hdrs", "tags"],
+        one(
+            "email send: a list value switches the list (bash bug)",
+            &[
+                "email",
+                "send",
+                "acme",
+                "--to",
+                "--cc",
+                "--cc",
+                "b@acme.example",
+                "--subject",
+                "s",
+                "--text",
+                "t",
+            ],
+            r#"{"id":"em_3","status":"queued","recipients":1}"#,
+            0,
         ),
     ];
     for c in v {

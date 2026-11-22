@@ -42,13 +42,6 @@ fn run(name: &'static str, args: &'static [&'static str], replies: Vec<Reply>, c
     case(name, args, &[], replies, owner_and_port, code, n)
 }
 
-/// `sender check|set|rm` with no `--reply-to`: macOS's bash 3.2 stops at
-/// the empty `rts` array (`set -u`: exit 1, nothing sent) until the
-/// shell's fix lands (`bash32-empty-array`).
-fn no_reply_to(c: Case) -> Case {
-    bash32_empty_array(c, &["rts"], Some((1, 0)))
-}
-
 fn stop(name: &'static str, args: &'static [&'static str], code: i32) -> Case {
     case(name, args, &[], vec![], owner_and_port, code, 0)
 }
@@ -146,12 +139,12 @@ fn notifications_answer_as_the_shell_does() {
             0,
         ),
         // covers: notifications email sender check
-        no_reply_to(run(
+        run(
             "sender check",
             &["email", "sender", "check", "s1"],
             vec![ok(SENDER)],
             0,
-        )),
+        ),
         // covers: notifications email sender set
         run(
             "sender set",
@@ -168,12 +161,12 @@ fn notifications_answer_as_the_shell_does() {
             0,
         ),
         // covers: notifications email sender rm
-        no_reply_to(run(
+        run(
             "sender remove",
             &["email", "sender", "remove", "s1"],
             vec![ok(r#"{"removed":"s1","address":"a@x","reservedDays":30}"#)],
             0,
-        )),
+        ),
         // covers: notifications email sender resume
         run(
             "sender resume",

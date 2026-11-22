@@ -566,7 +566,6 @@ fn side_case(r: &Rig, c: &Case, python: bool) -> Case {
         no_python3: c.no_python3,
         stdin: c.stdin,
         deadline: c.deadline,
-        bash32_empty_array: c.bash32_empty_array,
     }
 }
 

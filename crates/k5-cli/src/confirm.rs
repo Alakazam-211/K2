@@ -472,14 +472,38 @@ impl Confirm<'_> {
 /// `tok="$(_vault_confirm_token <action> <secret-id> <label>)" || exit 3`:
 /// ask the daemon over the vault socket for a confirm token (Touch ID on
 /// a Mac, Windows Hello, this terminal on a server with no owner login, an
-/// owner login's password, or the vault password typed here). `None`: the
-/// caller ends the command with exit 3 (see the module's notes); what the
-/// shell prints on the way is printed.
+/// owner login's password, the vault password typed here, or the owner's
+/// phone). `None`: the caller ends the command with exit 3 (see the
+/// module's notes); what the shell prints on the way is printed.
 pub fn confirm_token(
     c: &mut Confirm<'_>,
     action: &str,
     secret_id: &str,
     label: &str,
+) -> Option<String> {
+    confirm_token_with(c, action, secret_id, label, None)
+}
+
+/// `_vault_confirm_token`'s phone method and timeouts.
+const PHONE_WAIT: std::time::Duration = std::time::Duration::from_secs(330);
+
+/// `_vault_confirm_token <action> <secret-id> <label> <extra>`: as
+/// [`confirm_token`], with `extra` (a JSON object: a share's `grant`)
+/// merged into the phone card's request.
+///
+/// The phone (0.46.17), when the start's answer offers it
+/// (`phoneOffered`): `K2_VAULT_CONFIRM_METHOD=phone`, or `phoneOnly` with
+/// no method set, asks the phone alone; over SSH the phone card goes up
+/// beside this computer's own prompt (Touch ID, Windows Hello; the first
+/// answer wins); and when nobody answers that prompt (409
+/// `confirm_unanswered` or `vault_presence_required`) the phone card,
+/// once. Any other method set means never the phone.
+pub fn confirm_token_with(
+    c: &mut Confirm<'_>,
+    action: &str,
+    secret_id: &str,
+    label: &str,
+    extra: Option<&Value>,
 ) -> Option<String> {
     let start = dumps(&object(vec![
         ("action", Value::Str(Text::from(action))),
@@ -494,12 +518,8 @@ pub fn confirm_token(
     if first_setup && !text.is_empty() {
         out::stderr_line(&format!("You are approving: {text}"));
     }
-    let forced = k2_client::env_names::first_nonempty_os_in(
-        k2_client::env_names::VAULT_CONFIRM_METHOD,
-        |n| std::env::var_os(n),
-    )
-    .is_some_and(|(_, v)| v == "vault-password");
-    if !first_setup && forced {
+    let want_m = env_value(k2_client::env_names::VAULT_CONFIRM_METHOD);
+    if !first_setup && want_m == "vault-password" {
         if has_word(&methods, "vault-password") {
             methods = "vault-password".into();
         } else {
@@ -507,28 +527,81 @@ pub fn confirm_token(
             return None;
         }
     }
-    let id = str_or_null(secret_id);
+    let mut phone_ok = flag_field(&v, "phoneOffered");
+    let phone_only = flag_field(&v, "phoneOnly");
+    let over_ssh = ["SSH_CONNECTION", "SSH_TTY"]
+        .iter()
+        .any(|n| std::env::var_os(n).is_some_and(|x| !x.is_empty()));
+    if want_m == "phone" || (phone_only && phone_ok && want_m.is_empty()) {
+        if !phone_ok {
+            out::stderr_line(NO_PHONE_HERE);
+            return None;
+        }
+        methods = "phone".into();
+    }
+    if !want_m.is_empty() && want_m != "phone" {
+        phone_ok = false;
+    }
+    let mut req = String::new();
+    let mut max = None;
+    let id = || str_or_null(secret_id);
     let a = || Value::Str(Text::from(action));
-    let finish = if has_word(&methods, "local-auth") {
-        out::stderr_line("Approve on this Mac (Touch ID or your login password)…");
-        object(vec![
+    let finish = if has_word(&methods, "phone") {
+        let r = phone_raise(c, action, secret_id, label, extra);
+        if r.req.is_empty() {
+            out::stderr_line(
+                "no_phone_confirm: the phone card could not be raised (above)",
+            );
+            return None;
+        }
+        out::stderr_line(&format!(
+            "Approve on your phone: {}. Waiting for your phone… (5 minutes)",
+            r.line
+        ));
+        max = Some(PHONE_WAIT);
+        req = r.req;
+        phone_body(action, secret_id, label, &req)
+    } else if has_word(&methods, "local-auth") || has_word(&methods, "windows-hello") {
+        let (lm, where_word) = if has_word(&methods, "local-auth") {
+            ("local-auth", "this Mac (Touch ID or your login password)")
+        } else {
+            (
+                "windows-hello",
+                "this PC (Windows Hello or your Windows password)",
+            )
+        };
+        if phone_ok && over_ssh {
+            let r = phone_raise(c, action, secret_id, label, extra);
+            req = r.req;
+            if !req.is_empty() {
+                out::stderr_line(&format!(
+                    "Approve on {where_word}, or on your phone: {}. Waiting for your phone… (5 minutes; the first answer wins)",
+                    r.line
+                ));
+                if lm == "windows-hello" {
+                    out::stderr_line(WINDOWS_HELLO_STAYS);
+                }
+                max = Some(PHONE_WAIT);
+            }
+        }
+        if req.is_empty() {
+            out::stderr_line(&format!("Approve on {where_word}…"));
+        }
+        let mut o = vec![
             ("action", a()),
-            ("secretId", id),
-            ("method", Value::Str(Text::from("local-auth"))),
+            ("secretId", id()),
+            ("method", Value::Str(Text::from(lm))),
             ("label", Value::Str(Text::from(label))),
-        ])
-    } else if has_word(&methods, "windows-hello") {
-        out::stderr_line("Approve on this PC (Windows Hello or your Windows password)…");
-        object(vec![
-            ("action", a()),
-            ("secretId", id),
-            ("method", Value::Str(Text::from("windows-hello"))),
-        ])
+        ];
+        if !req.is_empty() {
+            o.push(("phoneRequest", Value::Str(Text::from(req.as_str()))));
+        }
+        object(o)
     } else if has_word(&methods, "terminal") {
         out::stderr_line("Confirming from this terminal (this server has no owner login yet)…");
         object(vec![
             ("action", a()),
-            ("secretId", id),
+            ("secretId", id()),
             ("method", Value::Str(Text::from("terminal"))),
         ])
     } else if has_word(&methods, "owner-login-password") {
@@ -543,7 +616,7 @@ pub fn confirm_token(
         let pw = prompt::ask_hidden(&format!("Sign-in password for owner login {login}: "));
         object(vec![
             ("action", a()),
-            ("secretId", id),
+            ("secretId", id()),
             ("method", Value::Str(Text::from("owner-login-password"))),
             ("username", Value::Str(Text::from(login.as_str()))),
             ("password", text_of_bytes(pw.expose())),
@@ -552,7 +625,7 @@ pub fn confirm_token(
         let pw = prompt::ask_hidden("Vault password: ");
         object(vec![
             ("action", a()),
-            ("secretId", id),
+            ("secretId", id()),
             ("method", Value::Str(Text::from("vault-password"))),
             ("password", text_of_bytes(pw.expose())),
         ])
@@ -562,9 +635,280 @@ pub fn confirm_token(
     };
     let body = Secret::new(dumps(&finish).into_bytes());
     drop(finish);
-    let s = c.post("confirm/finish", body.expose()).ok()?;
+    let mut s = sock_within(c, "confirm/finish", body.expose(), max);
     drop(body);
-    token_of(&s.body)
+    // Nobody answered this computer's own prompt: the phone, once.
+    if s.status == "409" && phone_ok && req.is_empty() && methods != "phone" && unanswered(&s.body)
+    {
+        out::stderr_line("Nobody answered on this computer.");
+        let r = phone_raise(c, action, secret_id, label, extra);
+        if r.req.is_empty() {
+            // `_vault_fail` on the phone card's own answer: a 200 there
+            // (its reader raised) exits 0 with no token.
+            return match fail(&r.split, c.closing, c.passport) {
+                Exit::Ok => Some(String::new()),
+                _ => None,
+            };
+        }
+        out::stderr_line(&format!(
+            "Approve on your phone: {}. Waiting for your phone… (5 minutes)",
+            r.line
+        ));
+        let b = dumps(&phone_body(action, secret_id, label, &r.req));
+        s = sock_within(c, "confirm/finish", b.as_bytes(), Some(PHONE_WAIT));
+    }
+    if !s.ok() {
+        fail(&s, c.closing, c.passport);
+        return None;
+    }
+    token_after(&s.body)
+}
+
+/// The finish's reader: `Confirmed on your phone.` when the phone
+/// answered (`confirmedOn`), then the token; or the traceback (printed)
+/// and `None`.
+fn token_after(body: &[u8]) -> Option<String> {
+    let r = match load(body) {
+        Ok(Value::Object(pairs)) => {
+            if matches!(get(&pairs, "confirmedOn"), Some(Value::Str(t)) if *t == Text::from("phone"))
+            {
+                out::stderr_line("Confirmed on your phone.");
+            }
+            match get(&pairs, "token") {
+                Some(t) => return Some(py::str_of(t)),
+                None => Raise::at(6, "KeyError: 'token'"),
+            }
+        }
+        Ok(other) => Raise::no_attribute(4, &other, "get"),
+        Err(r) => Raise::at(3, r.exception),
+    };
+    out::stderr_line(r.text().trim_end_matches('\n'));
+    None
+}
+
+/// `no_phone_confirm` when the phone was asked for and isn't offered.
+pub const NO_PHONE_HERE: &str = concat!(
+    "no_phone_confirm: this step can't be confirmed from a phone here (the owner's own terminal, ",
+    "permission cards on, and not an owner-login change); unset K2_VAULT_CONFIRM_METHOD to confirm at this computer"
+);
+
+/// Beside the phone card, on a PC.
+pub const WINDOWS_HELLO_STAYS: &str =
+    "(If you answer on the phone, the Windows Hello prompt on this PC may stay open: dismiss it.)";
+
+/// `_envn NAME`: the first non-empty of its K5_, K2_ and K2SO_ names.
+fn env_value(names: &[&'static str]) -> String {
+    k2_client::env_names::first_nonempty_os_in(names, |n| std::env::var_os(n))
+        .map(|(_, v)| v.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// `print("1" if json.load(sys.stdin).get(key) else "")`: the traceback
+/// (printed) reads as no.
+fn flag_field(v: &Result<Value, Raise>, key: &str) -> bool {
+    match field(v, key) {
+        Ok(x) => x.is_some_and(py::truthy),
+        Err(r) => {
+            out::stderr_line(r.text().trim_end_matches('\n'));
+            false
+        }
+    }
+}
+
+/// `_vault_sock_call POST <route> <json> <max-time>`.
+fn sock_within(
+    c: &mut Confirm<'_>,
+    route: &str,
+    body: &[u8],
+    max: Option<std::time::Duration>,
+) -> Split {
+    c.client.vault_sock_max_time = max;
+    let s = sock_call(c.client, c.sock, true, route, body);
+    c.client.vault_sock_max_time = None;
+    s
+}
+
+/// The confirm/finish body that the phone answers.
+fn phone_body(action: &str, secret_id: &str, label: &str, req: &str) -> Value {
+    object(vec![
+        ("action", Value::Str(Text::from(action))),
+        ("secretId", str_or_null(secret_id)),
+        ("method", Value::Str(Text::from("phone"))),
+        ("label", Value::Str(Text::from(label))),
+        ("phoneRequest", Value::Str(Text::from(req))),
+    ])
+}
+
+/// `(json.load(sys.stdin).get("error") or {}).get("code") in
+/// ("confirm_unanswered", "vault_presence_required")`: the traceback
+/// (printed) reads as no.
+fn unanswered(body: &[u8]) -> bool {
+    let code = load(body).and_then(|v| {
+        let e = crate::families::py_get(&v, "error", 1)?
+            .filter(|e| py::truthy(e))
+            .cloned()
+            .unwrap_or(Value::Object(Vec::new()));
+        Ok(crate::families::py_get(&e, "code", 1)?.cloned())
+    });
+    match code {
+        Ok(Some(Value::Str(t))) => {
+            t == Text::from("confirm_unanswered") || t == Text::from("vault_presence_required")
+        }
+        Ok(_) => false,
+        Err(r) => {
+            out::stderr_line(r.text().trim_end_matches('\n'));
+            false
+        }
+    }
+}
+
+/// `_vault_phone_raise`'s `_VPC_REQ` and `_VPC_LINE`, and the answer its
+/// start got (the `_SC_STATUS` and `_SC_BODY` a `_vault_fail` after it
+/// reads).
+struct Raised {
+    req: String,
+    line: String,
+    split: Split,
+}
+
+/// `_vault_phone_raise <action> <secret-id> <label> <extra>`: raise the
+/// owner's phone card for this confirm, on the Thread of the workspace
+/// this terminal is in (`PROJECT_PATH`, else `$PWD`) or
+/// `VAULT_CONFIRM_THREAD`'s. A refusal prints why and raises nothing.
+fn phone_raise(
+    c: &mut Confirm<'_>,
+    action: &str,
+    secret_id: &str,
+    label: &str,
+    extra: Option<&Value>,
+) -> Raised {
+    let mut here = env_value(k2_client::env_names::PROJECT_PATH);
+    if here.is_empty() {
+        here = crate::daemon::logical_cwd(std::env::var_os("PWD"))
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+    }
+    let thread = env_value(k2_client::env_names::VAULT_CONFIRM_THREAD);
+    let mut o: Vec<(Text, Value)> = vec![
+        (Text::from("action"), Value::Str(Text::from(action))),
+        (Text::from("secretId"), str_or_null(secret_id)),
+        (Text::from("label"), Value::Str(Text::from(label))),
+        (Text::from("phone"), Value::Bool(true)),
+        (Text::from("workspacePath"), Value::Str(Text::from(here.as_str()))),
+    ];
+    if !thread.is_empty() {
+        o.push((Text::from("thread"), Value::Str(Text::from(thread.as_str()))));
+    }
+    // `o.update(extra)`: a key already there keeps its place.
+    if let Some(Value::Object(more)) = extra {
+        for (k, v) in more {
+            match o.iter_mut().find(|(ok, _)| ok == k) {
+                Some((_, old)) => *old = v.clone(),
+                None => o.push((k.clone(), v.clone())),
+            }
+        }
+    }
+    let split = sock_call(
+        c.client,
+        c.sock,
+        true,
+        "confirm/start",
+        dumps(&Value::Object(o)).as_bytes(),
+    );
+    let none = |split| Raised {
+        req: String::new(),
+        line: String::new(),
+        split,
+    };
+    if !split.ok() {
+        match no_card_line(&split.body) {
+            Ok(l) => out::stderr_line(&l),
+            Err(r) => out::stderr_line(r.text().trim_end_matches('\n')),
+        }
+        return none(split);
+    }
+    match card_line(&split.body) {
+        Ok(l) => {
+            let (req, line) = read_tab_pair(&l);
+            Raised { req, line, split }
+        }
+        Err(r) => {
+            out::stderr_line(r.text().trim_end_matches('\n'));
+            none(split)
+        }
+    }
+}
+
+/// The refusal's line: `(no phone card: <hint, else code, else "the
+/// daemon did not answer">)`. A body that isn't a JSON object is no
+/// error; an error that is something else than an object raises.
+fn no_card_line(body: &[u8]) -> Result<String, Raise> {
+    let e = match load(body) {
+        Ok(Value::Object(pairs)) => get(&pairs, "error")
+            .filter(|e| py::truthy(e))
+            .cloned()
+            .unwrap_or(Value::Object(Vec::new())),
+        _ => Value::Object(Vec::new()),
+    };
+    let pick = |k: &str| -> Result<Option<Value>, Raise> {
+        Ok(crate::families::py_get(&e, k, 7)?
+            .filter(|x| py::truthy(x))
+            .cloned())
+    };
+    let why = match pick("hint")? {
+        Some(h) => py::str_of(&h),
+        None => match pick("code")? {
+            Some(c) => py::str_of(&c),
+            None => "the daemon did not answer".to_string(),
+        },
+    };
+    Ok(format!("(no phone card: {why})"))
+}
+
+/// The card's line, `<request>\tcard <request> on <addr>'s Thread[ —
+/// <thread>] (<text>)`, as the shell's Python prints it (up to its first
+/// newline, as `read` takes it).
+fn card_line(body: &[u8]) -> Result<String, Raise> {
+    let v = load(body).map_err(|r| Raise::at(3, r.exception))?;
+    let p = crate::families::py_get(&v, "phone", 3)?
+        .filter(|p| py::truthy(p))
+        .cloned()
+        .unwrap_or(Value::Object(Vec::new()));
+    let why = match crate::families::py_get(&p, "thread", 4)? {
+        Some(x @ Value::Str(_)) if py::truthy(x) => format!(" — {}", py::str_of(x)),
+        Some(x) if py::truthy(x) => {
+            return Err(Raise::at(
+                4,
+                format!(
+                    "TypeError: can only concatenate str (not \"{}\") to str",
+                    py::type_name(x)
+                ),
+            ))
+        }
+        _ => String::new(),
+    };
+    // `p.get(key, "")`: a key there with null is "None".
+    let f = |k: &str| match &p {
+        Value::Object(pairs) => get(pairs, k).map_or_else(String::new, py::str_of),
+        _ => String::new(),
+    };
+    let req = f("request");
+    Ok(format!(
+        "{req}\tcard {req} on {}'s Thread{why} ({})",
+        f("addr"),
+        f("text")
+    ))
+}
+
+/// `IFS=$'\t' read -r a b`: the first line, tabs at its ends dropped,
+/// split at its first tab; the rest, its tabs in front dropped, is `b`.
+fn read_tab_pair(out: &str) -> (String, String) {
+    let line = out.split('\n').next().unwrap_or("").replace('\0', "");
+    let line = line.trim_matches('\t');
+    match line.split_once('\t') {
+        Some((a, b)) => (a.to_string(), b.trim_start_matches('\t').to_string()),
+        None => (line.to_string(), String::new()),
+    }
 }
 
 /// `tok="$(_vault_confirm_token_plan <action> <plan> <key>)" || exit 3`:
@@ -706,6 +1050,57 @@ mod tests {
         assert_eq!(dumps(&text_of_bytes("p\u{e9}".as_bytes())), "\"p\\u00e9\"");
     }
 
+    #[test]
+    fn read_splits_at_the_first_tab() {
+        let r = |s: &str| read_tab_pair(s);
+        assert_eq!(r("pr_1\tcard pr_1 on a's Thread (t)\n"), ("pr_1".into(), "card pr_1 on a's Thread (t)".into()));
+        // No request: the leading tab goes, and the line is the request.
+        assert_eq!(r("\tcard  on a's Thread ()\n"), ("card  on a's Thread ()".into(), String::new()));
+        // More tabs stay in the rest; a newline ends the line.
+        assert_eq!(r("a\t\tb\tc\t\nnext"), ("a".into(), "b\tc".into()));
+        assert_eq!(r(""), (String::new(), String::new()));
+    }
+
+    #[test]
+    fn the_card_line_is_the_shell_s() {
+        assert_eq!(
+            card_line(br#"{"phone":{"request":"pr_1","addr":"ws1","thread":"why","text":"Rekey"}}"#).unwrap(),
+            "pr_1\tcard pr_1 on ws1's Thread — why (Rekey)"
+        );
+        // A key there with null prints None; a missing one is empty.
+        assert_eq!(
+            card_line(br#"{"phone":{"request":null}}"#).unwrap(),
+            "None\tcard None on 's Thread ()"
+        );
+        assert_eq!(card_line(br#"{"phone":0}"#).unwrap(), "\tcard  on 's Thread ()");
+        assert!(card_line(br#"{"phone":{"thread":5}}"#)
+            .unwrap_err()
+            .exception
+            .starts_with("TypeError: can only concatenate str (not \"int\")"));
+        assert_eq!(card_line(br#"{"phone":"x"}"#).unwrap_err().frames, vec![(4, "<module>")]);
+        assert_eq!(card_line(b"[1]").unwrap_err().frames, vec![(3, "<module>")]);
+        assert_eq!(card_line(b"").unwrap_err().frames, vec![(3, "<module>")]);
+    }
+
+    #[test]
+    fn the_no_card_line_is_the_shell_s() {
+        assert_eq!(no_card_line(br#"{"error":{"code":"c","hint":"h"}}"#).unwrap(), "(no phone card: h)");
+        assert_eq!(no_card_line(br#"{"error":{"code":"c","hint":""}}"#).unwrap(), "(no phone card: c)");
+        assert_eq!(no_card_line(b"").unwrap(), "(no phone card: the daemon did not answer)");
+        assert_eq!(no_card_line(b"[1]").unwrap(), "(no phone card: the daemon did not answer)");
+        assert!(no_card_line(br#"{"error":"boom"}"#).is_err());
+    }
+
+    #[test]
+    fn only_these_codes_fall_back_to_the_phone() {
+        assert!(unanswered(br#"{"error":{"code":"confirm_unanswered"}}"#));
+        assert!(unanswered(br#"{"error":{"code":"vault_presence_required"}}"#));
+        assert!(!unanswered(br#"{"error":{"code":"locked"}}"#));
+        assert!(!unanswered(br#"{"error":null}"#));
+        assert!(!unanswered(b"not json"));
+        assert!(!unanswered(br#"{"error":"confirm_unanswered"}"#));
+    }
+
     /// The texts are the shell's (in the default brand, whose names the
     /// shell spells).
     #[test]
@@ -716,11 +1111,20 @@ mod tests {
         .unwrap();
         for l in OWNER_ONLY
             .iter()
-            .chain([NO_METHOD, NO_PASSWORD_FOR_METHOD].iter())
+            .chain([NO_METHOD, NO_PASSWORD_FOR_METHOD, NO_PHONE_HERE, WINDOWS_HELLO_STAYS].iter())
             .chain(
                 [
-                    "Approve on this Mac (Touch ID or your login password)…",
-                    "Approve on this PC (Windows Hello or your Windows password)…",
+                    "where_word=\"this Mac (Touch ID or your login password)\"",
+                    "where_word=\"this PC (Windows Hello or your Windows password)\"",
+                    "echo \"Approve on ${where_word}…\"",
+                    "Approve on ${where_word}, or on your phone: ${_VPC_LINE}. Waiting for your phone… (5 minutes; the first answer wins)",
+                    "Approve on your phone: ${_VPC_LINE}. Waiting for your phone… (5 minutes)",
+                    "no_phone_confirm: the phone card could not be raised (above)",
+                    "Nobody answered on this computer.",
+                    "Confirmed on your phone.",
+                    "(no phone card: %s)",
+                    "card %s on %s'\"'\"'s Thread%s (%s)",
+                    "(\" — \" + p[\"thread\"])",
                     "Confirming from this terminal (this server has no owner login yet)…",
                     "Which owner login on this server (k2 users lists them): ",
                     "Sign-in password for owner login %s: ",

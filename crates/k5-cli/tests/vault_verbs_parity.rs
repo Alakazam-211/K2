@@ -1239,3 +1239,254 @@ fn the_json_forms() {
         rig.check(&c);
     }
 }
+
+// The vault confirm from the owner's phone (0.46.17), on `vault rekey`
+// (every owner confirm takes the same path): the house rig, each side
+// against the same vault socket answers. tests/cli/vault_phone_confirm.sh
+// holds the same flows on both sides.
+
+const OFFERED: &str = r#"{"methods":["local-auth"],"phoneOffered":true}"#;
+const CARD: &str = r#"{"phone":{"request":"pr_abc123","card":"c1","addr":"ws1","thread":"the workspace you ran it in","expiresIn":300,"text":"Rekey the vault"}}"#;
+const UNANSWERED: &str = r#"{"ok":false,"error":{"code":"confirm_unanswered","hint":"no one answered this Mac's prompt within two minutes"}}"#;
+const PHONE_OFF: &str = r#"{"ok":false,"error":{"code":"phone_off","hint":"no phone paired"}}"#;
+const SSH: (&str, &str) = ("SSH_CONNECTION", "192.0.2.7 50000 192.0.2.8 22");
+
+fn rekey(name: &'static str, replies: Vec<Reply>, env: &[(&'static str, &str)], code: i32) -> VCase {
+    let mut c = person(name, &["rekey"], replies, b"", code);
+    c.env = env.iter().map(|(k, v)| (*k, v.to_string())).collect();
+    c
+}
+
+#[test]
+fn phone_at_the_computer_and_nobody_answers() {
+    let rig = VRig::new();
+    for c in [
+        rekey(
+            "rekey, phone offered, at the computer: its own prompt alone",
+            vec![ok(OFFERED), ok(r#"{"token":"t"}"#), ok("{}")],
+            &[],
+            0,
+        ),
+        rekey(
+            "rekey, nobody answers the computer: the phone card, once",
+            vec![
+                ok(OFFERED),
+                Reply::Answer(409, UNANSWERED.into()),
+                ok(CARD),
+                ok(r#"{"token":"tok-phone","confirmedOn":"phone"}"#),
+                ok("{}"),
+            ],
+            &[],
+            0,
+        ),
+        rekey(
+            "rekey, nobody answers and the phone card is refused",
+            vec![
+                ok(OFFERED),
+                Reply::Answer(409, UNANSWERED.into()),
+                Reply::Answer(403, PHONE_OFF.into()),
+            ],
+            &[],
+            3,
+        ),
+        // The shell's _vault_fail on the card's 200 exits 0 with no token,
+        // and the step goes on with a null confirmToken (a bash bug, copied).
+        traceback(rekey(
+            "rekey, nobody answers and the phone card's answer is unreadable",
+            vec![
+                ok(OFFERED),
+                Reply::Answer(409, UNANSWERED.into()),
+                ok("not json"),
+                ok("{}"),
+            ],
+            &[],
+            0,
+        )),
+        traceback(rekey(
+            "rekey, a 409 that isn't JSON: no phone card",
+            vec![ok(OFFERED), Reply::Answer(409, "busy".into())],
+            &[],
+            3,
+        )),
+        rekey(
+            "rekey over SSH, the method local: never the phone",
+            vec![ok(OFFERED), Reply::Answer(409, UNANSWERED.into())],
+            &[("SSH_TTY", "/dev/ttys009"), ("K2_VAULT_CONFIRM_METHOD", "local")],
+            3,
+        ),
+    ] {
+        rig.check(&c);
+    }
+}
+
+#[test]
+fn phone_over_ssh() {
+    let rig = VRig::new();
+    for c in [
+        rekey(
+            "rekey over SSH: the phone card beside the prompt",
+            vec![ok(OFFERED), ok(CARD), ok(r#"{"token":"tok-local"}"#), ok("{}")],
+            &[SSH],
+            0,
+        ),
+        rekey(
+            "rekey over SSH, Windows Hello: the phone card, and the prompt may stay open",
+            vec![
+                ok(r#"{"methods":["windows-hello"],"phoneOffered":true}"#),
+                ok(CARD),
+                ok(r#"{"token":"t"}"#),
+                ok("{}"),
+            ],
+            &[SSH],
+            0,
+        ),
+        rekey(
+            "rekey over SSH, the phone card refused: the prompt alone",
+            vec![ok(OFFERED), Reply::Answer(403, PHONE_OFF.into()), ok(r#"{"token":"t"}"#), ok("{}")],
+            &[SSH],
+            0,
+        ),
+    ] {
+        rig.check(&c);
+    }
+}
+
+#[test]
+fn phone_only() {
+    let rig = VRig::new();
+    let only = r#"{"methods":[],"phoneOffered":true,"phoneOnly":true}"#;
+    for c in [
+        rekey(
+            "rekey, no check here at all: the phone alone",
+            vec![ok(only), ok(CARD), ok(r#"{"token":"t"}"#), ok("{}")],
+            &[],
+            0,
+        ),
+        rekey(
+            "rekey, phone only and the card refused",
+            vec![ok(only), Reply::Answer(403, PHONE_OFF.into())],
+            &[],
+            3,
+        ),
+    ] {
+        rig.check(&c);
+    }
+}
+
+#[test]
+fn phone_method_setting() {
+    let rig = VRig::new();
+    for c in [
+        rekey(
+            "rekey, K2_VAULT_CONFIRM_METHOD=phone at the computer",
+            vec![ok(OFFERED), ok(CARD), ok(r#"{"token":"t"}"#), ok("{}")],
+            &[("K2_VAULT_CONFIRM_METHOD", "phone")],
+            0,
+        ),
+        rekey(
+            "rekey, K5_VAULT_CONFIRM_METHOD=phone, not offered here",
+            vec![ok(r#"{"methods":["local-auth"]}"#)],
+            &[("K5_VAULT_CONFIRM_METHOD", "phone")],
+            3,
+        ),
+    ] {
+        rig.check(&c);
+    }
+}
+
+#[test]
+fn phone_windows_hello_label() {
+    let rig = VRig::new();
+    rig.check(&rekey(
+        "rekey, Windows Hello at the computer: the label goes too",
+        vec![ok(r#"{"methods":["windows-hello"]}"#), ok(r#"{"token":"t"}"#), ok("{}")],
+        &[],
+        0,
+    ));
+}
+
+#[test]
+fn phone_card_thread_setting() {
+    let rig = VRig::new();
+    rig.check(&rekey(
+        "rekey, the phone card on K2_VAULT_CONFIRM_THREAD's Thread",
+        vec![
+            ok(OFFERED),
+            ok(r#"{"phone":{"request":"pr_t","addr":"ws2","thread":"the one you named","text":"Rekey"}}"#),
+            ok(r#"{"token":"t"}"#),
+            ok("{}"),
+        ],
+        &[("K2_VAULT_CONFIRM_METHOD", "phone"), ("K2_VAULT_CONFIRM_THREAD", "ws2")],
+        0,
+    ));
+}
+
+#[test]
+fn phone_confirmed_without_a_token() {
+    let rig = VRig::new();
+    rig.check(&traceback(rekey(
+        "rekey, confirmed on the phone with no token",
+        vec![ok(OFFERED), ok(CARD), ok(r#"{"confirmedOn":"phone"}"#)],
+        &[("K2_VAULT_CONFIRM_METHOD", "phone")],
+        3,
+    )));
+}
+
+#[test]
+fn phone_card_names_the_share() {
+    let rig = VRig::new();
+    let mut c = daemon(
+        "grant: the phone card names the share",
+        &["grant", "API", "--to", "ws:a", "--as", "env"],
+        Reply::Answer(
+            403,
+            r#"{"error":{"code":"vault_confirm_required","hint":"confirm"}}"#.into(),
+        ),
+        0,
+    );
+    c.vault = Some(vec![
+        ok(r#"{"secret":{"id":"sec-1"}}"#),
+        ok(OFFERED),
+        ok(CARD),
+        ok(r#"{"token":"ctok-7788","confirmedOn":"phone"}"#),
+        ok(r#"{"grant":{"id":"g9"}}"#),
+    ]);
+    c.vault_requests = 5;
+    c.env = vec![("K2_VAULT_CONFIRM_METHOD", "phone".to_string())];
+    c.secrets = vec!["ctok-7788"];
+    rig.check(&c);
+}
+
+/// The phone's lines name no command (an xy build says nothing of k2 or
+/// k5); the setting's name in the refusal is a stored name.
+#[test]
+fn the_phone_lines_say_the_brand_s_name() {
+    let rig = VRig::new();
+    let cli = k2_client::brand::CLI_NAME;
+    let c = rekey(
+        "brand: the phone alone",
+        vec![ok(OFFERED), ok(CARD), ok(r#"{"token":"t","confirmedOn":"phone"}"#), ok("{}")],
+        &[("K2_VAULT_CONFIRM_METHOD", "phone")],
+        0,
+    );
+    let ran = rig.run(false, false, &c);
+    assert_eq!(ran.out.code, Some(0), "{ran:#?}");
+    assert!(ran.out.stderr.starts_with(
+        "Approve on your phone: card pr_abc123 on ws1's Thread — the workspace you ran it in (Rekey the vault). Waiting for your phone… (5 minutes)\nConfirmed on your phone.\n"
+    ), "{ran:#?}");
+    let c = rekey(
+        "brand: not offered",
+        vec![ok(r#"{"methods":["local-auth"]}"#)],
+        &[("K2_VAULT_CONFIRM_METHOD", "phone")],
+        3,
+    );
+    let ran = rig.run(false, false, &c);
+    assert_eq!(ran.out.code, Some(3), "{ran:#?}");
+    assert_eq!(
+        ran.out.stderr,
+        "no_phone_confirm: this step can't be confirmed from a phone here (the owner's own terminal, permission cards on, and not an owner-login change); unset K2_VAULT_CONFIRM_METHOD to confirm at this computer\n"
+    );
+    if cli != "k2" {
+        assert!(!ran.out.stderr.contains("k2 ") && !ran.out.stderr.contains("k5 "));
+    }
+}

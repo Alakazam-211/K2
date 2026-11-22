@@ -1336,8 +1336,15 @@ fn grant(
             o.to
         ));
         let label = format!("share {name} with {}", o.to);
-        let Some(tok) = confirm::confirm_token(&mut ctx.confirm(), "grant-read", &gsid, &label)
-        else {
+        // The phone card names the share itself and binds it (0.46.17).
+        let grant = crate::out::json::parse(&body).ok().map(|g| confirm::object(vec![("grant", g)]));
+        let Some(tok) = confirm::confirm_token_with(
+            &mut ctx.confirm(),
+            "grant-read",
+            &gsid,
+            &label,
+            grant.as_ref(),
+        ) else {
             return Err(Exit::Refused);
         };
         let Some(b) = confirm::with_confirm_token(&body, &tok, None) else {

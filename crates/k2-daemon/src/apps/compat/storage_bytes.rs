@@ -20,7 +20,8 @@
 
 use std::path::{Path, PathBuf};
 
-use md5::Md5;
+// md-5 0.11 is on digest 0.11, sha2 0.10 on digest 0.10: two Digest traits.
+use md5::{Digest as _, Md5};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 

@@ -622,7 +622,7 @@ fn spawn_child(
         // M1b: the root helper moves the waiting exec helper into the
         // agent's root-owned cgroup, or the service stops here.
         if let Some(iso) = iso.as_ref() {
-            if let Err(e) = k2_core::agent_cgroup::place_spawned(iso, child.id()) {
+            if let Err(e) = k2_core::agent_cgroup::place_spawned(iso, child.id(), None) {
                 let _ = child.wait();
                 return Err(e.to_string());
             }

@@ -1140,7 +1140,7 @@ impl Server {
                     },
                 );
                 self.idle_since = None;
-                Reply::Spawned { sid, pid: child.pid }
+                Reply::Spawned { sid, pid: child.pid, start: crate::spawn::start_time(child.pid) }
             }
             Err(e) => {
                 self.log.line(&format!("spawn failed sid={sid}: {}", e.kind()));

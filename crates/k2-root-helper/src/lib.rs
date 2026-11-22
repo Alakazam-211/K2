@@ -271,7 +271,7 @@ fn dispatch(
         Verb::AppsPodmanUninstall => Some(podman::uninstall(ctx)?),
 
         Verb::DesktopPackagesInstall => Some(desktop::packages_install(ctx)?),
-        Verb::AgentsPlace { ws, pid } => Some(agents::place(ctx, who, ws, *pid)?),
+        Verb::AgentsPlace { ws, pid, start } => Some(agents::place(ctx, who, ws, *pid, *start)?),
         Verb::AgentsCheck => Some(agents::check(ctx, who)?),
 
         Verb::FrontStatus => Some(front::status(ctx)?),

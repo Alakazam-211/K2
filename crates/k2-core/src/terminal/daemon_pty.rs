@@ -1235,7 +1235,7 @@ impl DaemonPtySession {
         // agent's root-owned cgroup (or the session doesn't start).
         if let Some(iso) = cfg.isolation.as_ref().filter(|i| i.root_placed) {
             let pid = child_pid.and_then(|p| u32::try_from(p).ok()).ok_or_else(|| io::Error::other("agent isolation: the spawn reported no pid to place"))?;
-            crate::agent_cgroup::place_spawned(iso, pid)?;
+            crate::agent_cgroup::place_spawned(iso, pid, None)?;
         }
 
         let pty_ms = __t_pty.elapsed().as_secs_f64() * 1000.0;
@@ -1419,6 +1419,8 @@ impl DaemonPtySession {
             }
         }
         let events = owner.watch(&sid);
+        // The child's start time as ptyd (its parent) read it (review B5).
+        let mut ptyd_start: Option<u64> = None;
         let pid = match owner.request(Request::Spawn {
             sid: sid.clone(),
             argv,
@@ -1434,7 +1436,10 @@ impl DaemonPtySession {
             },
             meta: meta.clone(),
         }) {
-            Ok(Reply::Spawned { pid, .. }) => pid,
+            Ok(Reply::Spawned { pid, start, .. }) => {
+                ptyd_start = start;
+                pid
+            }
             Ok(Reply::Error { code, detail }) => {
                 owner.unwatch(&sid);
                 log_debug!("[daemon_pty] ptyd spawn failed session={} code={}", cfg.session_id, code);
@@ -1466,7 +1471,10 @@ impl DaemonPtySession {
         // parent; the helper checks the process, never the parent).
         if let Some(iso) = cfg.isolation.as_ref().filter(|i| i.root_placed) {
             let p = u32::try_from(pid).map_err(|_| io::Error::other("agent isolation: no pid to place"))?;
-            crate::agent_cgroup::place_spawned(iso, p)?;
+            // ptyd is the parent: the start time it read at spawn, so a pid
+            // reused after the helper died isn't placed (review B5). An
+            // older ptyd sends none; the daemon reads it now.
+            crate::agent_cgroup::place_spawned(iso, p, ptyd_start)?;
         }
         // The vault binds this session's agent socket record to this ptyd
         // instance and process.

@@ -25423,15 +25423,17 @@ LABELLED BY AGENT (on wherever the server can have it)
 
   Who places the sessions decides the rest. With the root helper (protocol
   18; /boot-status agentIsolation says "identity": "on") each agent's cgroup
-  is root's: no agent, fenced or not, can put a process into another
-  agent's cgroup. Without it ("identity": "unavailable", "traceable": true)
-  the daemon places them in cgroups the server's user owns, so an agent
-  without the fence can move a process into another agent's cgroup.
+  is root's: an agent can't move itself into another agent's cgroup.
+  Without it ("identity": "unavailable", "traceable": true) the daemon
+  places them in cgroups the server's user owns, so an agent without the
+  fence can move a process into another agent's cgroup.
 
   What it doesn't do, for an agent without the fence: that agent runs as
-  the server's user, so it can move a process out of its own label (its
-  passport then stops working), and it can read the owner token on disk
-  and call as the owner.
+  the server's user, the same user as every other agent. It can make
+  another agent's session run its commands (through that agent's files,
+  the owner token on disk, or ptrace where the kernel allows it), it can
+  move any agent's processes out of their cgroup (that drops their label
+  and their passport stops working), and it can call as the owner.
 
   Where it's unavailable (macOS, a user-unit install, a box prepared before
   0.46.16, a container) passports work as before; /boot-status

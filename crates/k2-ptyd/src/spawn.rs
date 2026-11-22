@@ -25,6 +25,17 @@ pub struct Spawned {
     pub master: OwnedFd,
 }
 
+/// `pid`'s start time in clock ticks since boot (`/proc/<pid>/stat` field
+/// 22), Linux only.
+pub fn start_time(pid: i32) -> Option<u64> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // After the `)` that ends comm: field 3 onward; field 22 is index 19.
+    stat.rsplit_once(')')?.1.split_whitespace().nth(19)?.parse().ok()
+}
+
 /// Resolve `argv[0]` against the CHILD's `PATH` (from `env`), like
 /// `execvp` would in the child. Absolute / relative-with-slash names are
 /// used as given.

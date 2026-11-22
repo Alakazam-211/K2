@@ -216,6 +216,12 @@ pub enum Reply {
     Spawned {
         sid: String,
         pid: i32,
+        /// The child's start time in clock ticks since boot (`/proc/<pid>/stat`
+        /// field 22, Linux), read while ptyd (its parent) still holds it: a
+        /// later check can tell this process from a reused pid. `None` where
+        /// there's no procfs, and from a ptyd older than the field.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start: Option<u64>,
     },
     Sessions {
         sessions: Vec<SessionInfo>,

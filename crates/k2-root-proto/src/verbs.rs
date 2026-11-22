@@ -934,7 +934,7 @@ pub enum Verb {
     /// `agents place <workspace id> <pid>` (daemon): make the agent's
     /// cgroup `<unit>/agents/a-<id>` root-owned and move `pid` (a process of
     /// the daemon's user, in its unit, waiting in the exec helper) into it.
-    AgentsPlace { ws: crate::agent_cgroup::AgentWs, pid: u32 },
+    AgentsPlace { ws: crate::agent_cgroup::AgentWs, pid: u32, start: u64 },
     /// `agents check` (daemon, read-only): whether `agents place` would
     /// accept this caller (its registered system unit, the agents' leaf
     /// delegated to it). The daemon asks once at boot before it lets the
@@ -1533,9 +1533,10 @@ impl Verb {
             ["apps", "podman", "uninstall"] => Verb::AppsPodmanUninstall,
             ["desktop", "packages", "install"] => Verb::DesktopPackagesInstall,
             ["agents", "check"] => Verb::AgentsCheck,
-            ["agents", "place", ws, pid] => Verb::AgentsPlace {
+            ["agents", "place", ws, pid, start] => Verb::AgentsPlace {
                 ws: crate::agent_cgroup::AgentWs::parse(ws).ok_or(REFUSED)?,
                 pid: crate::agent_cgroup::pid_ok(pid).ok_or(REFUSED)?,
+                start: crate::agent_cgroup::start_ok(start).ok_or(REFUSED)?,
             },
             ["front", "status"] => Verb::FrontStatus,
             ["front", "install"] => Verb::FrontInstall,
@@ -1812,7 +1813,7 @@ impl Verb {
             Verb::AppsPodmanInstall => s(&["apps", "podman", "install"]),
             Verb::AppsPodmanUninstall => s(&["apps", "podman", "uninstall"]),
             Verb::DesktopPackagesInstall => s(&["desktop", "packages", "install"]),
-            Verb::AgentsPlace { ws, pid } => s(&["agents", "place", ws.as_str(), &pid.to_string()]),
+            Verb::AgentsPlace { ws, pid, start } => s(&["agents", "place", ws.as_str(), &pid.to_string(), &start.to_string()]),
             Verb::AgentsCheck => s(&["agents", "check"]),
             Verb::FrontStatus => s(&["front", "status"]),
             Verb::FrontInstall => s(&["front", "install"]),
@@ -2347,7 +2348,7 @@ pub fn catalog() -> Vec<Verb> {
         Verb::AppsPodmanInstall,
         Verb::AppsPodmanUninstall,
         Verb::DesktopPackagesInstall,
-        Verb::AgentsPlace { ws: crate::agent_cgroup::AgentWs::parse("ws-1").expect("ws"), pid: 4242 },
+        Verb::AgentsPlace { ws: crate::agent_cgroup::AgentWs::parse("ws-1").expect("ws"), pid: 4242, start: 123456 },
         Verb::AgentsCheck,
     ];
     v.extend(SewVerb::catalog().into_iter().map(Verb::Sew));

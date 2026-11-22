@@ -600,13 +600,10 @@ pub fn wait_placed(dir: &str, within: std::time::Duration) -> Result<(), String>
         let me = std::fs::read_to_string("/proc/self/cgroup").map_err(|e| format!("/proc/self/cgroup: {e}"))?;
         let now = crate::agents_leaf::parse_self_cgroup(&me).ok_or("no cgroup v2 path in /proc/self/cgroup")?;
         if now.trim_end_matches('/') == want {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::MetadataExt;
-                let owner = std::fs::symlink_metadata(dir).map_err(|e| format!("{dir}: {e}"))?.uid();
-                if owner != 0 {
-                    return Err(format!("{dir} is not root's (uid {owner})"));
-                }
+            // Review B3: the cgroup it is in now is root's and holds it, by
+            // one handle (never a lookup by name after reading /proc).
+            if !crate::agent_cgroup::held_by(std::path::Path::new(dir), std::process::id(), 0) {
+                return Err(format!("{dir} is not a root-owned cgroup holding this process"));
             }
             return Ok(());
         }

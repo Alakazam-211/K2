@@ -55,6 +55,20 @@ pub fn pid_ok(s: &str) -> Option<u32> {
     (2..=4_194_304).contains(&n).then_some(n)
 }
 
+/// A start time (clock ticks since boot, `/proc/<pid>/stat` field 22):
+/// digits only, no leading zero, at most 20.
+pub fn start_ok(s: &str) -> Option<u64> {
+    if s.is_empty() || s.len() > 20 || !s.bytes().all(|b| b.is_ascii_digit()) || (s.len() > 1 && s.starts_with('0')) {
+        return None;
+    }
+    s.parse().ok()
+}
+
+/// `stat` (the text of `/proc/<pid>/stat`) → the start time (field 22).
+pub fn start_of_stat(stat: &str) -> Option<u64> {
+    stat.rsplit_once(')')?.1.split_whitespace().nth(19)?.parse().ok()
+}
+
 /// The daemon's unit cgroup from its own `/proc/<pid>/cgroup` path: the
 /// path minus a trailing `/daemon` (DelegateSubgroup) leaf. `None` for the
 /// root cgroup, a user-scope daemon, or anything that isn't a `.service`.
@@ -91,6 +105,20 @@ mod tests {
     use super::*;
 
     const UNIT: &str = "/k2cores.slice/k2-daemon.service";
+
+    /// Review B5: the start time the daemon passes, and the one the helper
+    /// reads back from `/proc/<pid>/stat` (a comm with spaces and a `)`).
+    #[test]
+    fn start_times_parse_strictly() {
+        assert_eq!(start_ok("123456"), Some(123456));
+        assert_eq!(start_ok("0"), Some(0));
+        for bad in ["", "01", "-1", "12a", "1 2", &"9".repeat(21)] {
+            assert_eq!(start_ok(bad), None, "{bad:?}");
+        }
+        let stat = "4242 (k2-daemon) x) S 1 4242 4242 0 -1 4194560 100 0 0 0 1 2 0 0 20 0 1 0 987654 12345678 300";
+        assert_eq!(start_of_stat(stat), Some(987654));
+        assert_eq!(start_of_stat("4242 (cut"), None);
+    }
 
     #[test]
     fn ids_and_pids() {

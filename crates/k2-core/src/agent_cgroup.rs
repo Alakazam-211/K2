@@ -61,10 +61,11 @@ pub const CLAIM: &str = "labelled by agent: each agent's terminals, job runs and
 
 /// The claim with the root helper placing sessions (M1b).
 pub const CLAIM_ROOT: &str = "labelled by agent: each agent's terminals, job runs and published services run in its own \
-     root-owned cgroup, placed by the root helper, and no agent (fenced or not) can take another agent's label. A copied \
+     root-owned cgroup, placed by the root helper, and an agent can't move itself into another agent's cgroup. A copied \
      terminal or job passport alone no longer works (App exec and microVM cell passports aren't bound and work as before). \
-     An unfenced agent can still drop its own label (its passport then stops working) or read the owner token on disk; \
-     the folder fence closes both for one agent";
+     An unfenced agent is still the same user as every other agent: it can make another agent's session run its commands \
+     (through that agent's files, the owner token on disk, or ptrace where the kernel allows it), and it can move any \
+     agent's processes out of their cgroup, which drops that label. The folder fence closes these for the agent it fences";
 
 /// The claim that holds on this box now.
 pub fn claim() -> &'static str {
@@ -158,21 +159,66 @@ pub enum Decision {
     Refuse { detail: String },
 }
 
-/// [`classify`] plus who owns the agent cgroup (a `stat`, M1b).
-pub fn with_owner(peer: PeerAgent) -> PeerAgent {
+/// [`classify`] plus whether the agent cgroup is root's and holds `pid`
+/// (M1b review B3): the directory is opened once (never through a link),
+/// its owner read from that handle (`fstat`), and `pid` looked for in the
+/// `cgroup.procs` opened through it. A cgroup swapped in under the same name
+/// after `/proc/<pid>/cgroup` was read is a different handle: either not
+/// root's, or not holding `pid`.
+pub fn with_owner(peer: PeerAgent, pid: u32) -> PeerAgent {
     match peer {
         PeerAgent::Agent { ws, cgroup, .. } => {
-            #[cfg(unix)]
-            let root_owned = {
-                use std::os::unix::fs::MetadataExt;
-                std::fs::symlink_metadata(Path::new(CGROUP_FS).join(cgroup.trim_start_matches('/'))).is_ok_and(|m| m.uid() == 0)
-            };
-            #[cfg(not(unix))]
-            let root_owned = false;
+            let root_owned = held_by(&Path::new(CGROUP_FS).join(cgroup.trim_start_matches('/')), pid, 0);
             PeerAgent::Agent { ws, cgroup, root_owned }
         }
         other => other,
     }
+}
+
+/// The cgroup directory `dir` is `uid`'s (and so is its `cgroup.procs`)
+/// and lists `pid` among its own processes, all read through one handle
+/// opened without following a link. `false` on any doubt.
+#[cfg(unix)]
+pub fn held_by(dir: &Path, pid: u32, uid: u32) -> bool {
+    use std::io::Read;
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(c) = std::ffi::CString::new(dir.as_os_str().as_bytes()) else { return false };
+    // SAFETY: a NUL-terminated path; the fd is owned right after.
+    let fd = unsafe { libc::open(c.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC) };
+    if fd < 0 {
+        return false;
+    }
+    // SAFETY: a fresh fd this function owns.
+    let dirfd = unsafe { OwnedFd::from_raw_fd(fd) };
+    let owner = |fd: libc::c_int| -> Option<libc::uid_t> {
+        // SAFETY: fstat into a zeroed struct on an open fd.
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        (unsafe { libc::fstat(fd, &mut st) } == 0).then_some(st.st_uid)
+    };
+    if owner(dirfd.as_raw_fd()) != Some(uid) {
+        return false;
+    }
+    // SAFETY: openat relative to the handle above; the fd is owned right after.
+    let pfd = unsafe { libc::openat(dirfd.as_raw_fd(), c"cgroup.procs".as_ptr(), libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC) };
+    if pfd < 0 {
+        return false;
+    }
+    // SAFETY: a fresh fd this function owns.
+    let mut procs = unsafe { std::fs::File::from_raw_fd(pfd) };
+    if owner(procs.as_raw_fd()) != Some(uid) {
+        return false;
+    }
+    let mut s = String::new();
+    if procs.read_to_string(&mut s).is_err() {
+        return false;
+    }
+    s.split_whitespace().any(|p| p.parse::<u32>().ok() == Some(pid))
+}
+
+#[cfg(not(unix))]
+pub fn held_by(_dir: &Path, _pid: u32, _uid: u32) -> bool {
+    false
 }
 
 /// How a session was bound: its agent, and whether the root helper placed
@@ -199,10 +245,11 @@ pub fn decide(bound: Option<Bound>, peer: &PeerAgent) -> Decision {
 
 // ── who places sessions: the root helper (M1b) or the daemon itself ───
 
-/// Puts `pid` (an exec helper waiting to run agent `ws`) into the agent's
-/// root-owned cgroup: the daemon registers the root helper's `agents place`
-/// at boot when the helper serves it. `Ok(cgroup path)`.
-pub type Placer = Box<dyn Fn(&str, u32) -> Result<String, String> + Send + Sync>;
+/// Puts `pid` (an exec helper waiting to run agent `ws`, started at `start`,
+/// clock ticks since boot) into the agent's root-owned cgroup: the daemon
+/// registers the root helper's `agents place` at boot when the helper
+/// serves it. `Ok(cgroup path)`.
+pub type Placer = Box<dyn Fn(&str, u32, u64) -> Result<String, String> + Send + Sync>;
 
 static PLACER: OnceLock<Placer> = OnceLock::new();
 static NO_PLACER_WHY: OnceLock<String> = OnceLock::new();
@@ -222,10 +269,17 @@ pub fn root_placement() -> bool {
     PLACER.get().is_some()
 }
 
-/// Place `pid` for `ws` through the root helper.
-pub fn place(ws: &str, pid: u32) -> Result<String, String> {
+/// `pid`'s start time in clock ticks since boot (`/proc/<pid>/stat` field
+/// 22). `None` without procfs.
+pub fn proc_start_time(pid: u32) -> Option<u64> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    stat.rsplit_once(')')?.1.split_whitespace().nth(19)?.parse().ok()
+}
+
+/// Place `pid` (started at `start`) for `ws` through the root helper.
+pub fn place(ws: &str, pid: u32, start: u64) -> Result<String, String> {
     match PLACER.get() {
-        Some(p) => p(ws, pid),
+        Some(p) => p(ws, pid, start),
         None => Err("no root helper places agent sessions on this box".into()),
     }
 }
@@ -234,12 +288,19 @@ pub fn place(ws: &str, pid: u32) -> Result<String, String> {
 /// (its exec helper, `pid`, waits for it) into the agent's root-owned
 /// cgroup. On a refusal the process is killed (it never runs unplaced; the
 /// helper would refuse on its own once its wait ends). Nothing for a
-/// session the daemon placed.
-pub fn place_spawned(iso: &SessionIsolation, pid: u32) -> std::io::Result<()> {
+/// session the daemon placed. `start`: the process's start time as its
+/// parent read it (ptyd); `None` when the daemon is the parent (it reads it
+/// now: an unreaped child's pid can't be reused). The root helper places
+/// the process only if that start time still matches (review B5).
+pub fn place_spawned(iso: &SessionIsolation, pid: u32, start: Option<u64>) -> std::io::Result<()> {
     if !(iso.identity && iso.root_placed) {
         return Ok(());
     }
-    match place(&iso.ws, pid) {
+    let start = match start.or_else(|| proc_start_time(pid)) {
+        Some(s) => Ok(s),
+        None => Err(format!("no start time for pid {pid}")),
+    };
+    match start.and_then(|s| place(&iso.ws, pid, s)) {
         Ok(cg) => {
             crate::log_debug!("[agents] pid {pid} placed in {cg} by the root helper (agent {})", iso.ws);
             Ok(())
@@ -456,7 +517,7 @@ pub fn peer_of_socket(fd: std::os::fd::RawFd, a: &Avail) -> (PeerAgent, Option<u
             return (PeerAgent::Unknown { why: "the calling process exited while it was checked".into() }, Some(pid), Pinned::Pidfd);
         }
         return match path {
-            Ok(p) => (with_owner(classify(&a.agents_rel, &p)), Some(pid), Pinned::Pidfd),
+            Ok(p) => (with_owner(classify(&a.agents_rel, &p), pid), Some(pid), Pinned::Pidfd),
             Err(e) => (PeerAgent::Unknown { why: e }, Some(pid), Pinned::Pidfd),
         };
     }
@@ -469,7 +530,7 @@ pub fn peer_of_socket(fd: std::os::fd::RawFd, a: &Avail) -> (PeerAgent, Option<u
     }
     let pid = cred.pid as u32;
     match cgroup_of_pid(pid) {
-        Ok(p) => (with_owner(classify(&a.agents_rel, &p)), Some(pid), Pinned::Pid),
+        Ok(p) => (with_owner(classify(&a.agents_rel, &p), pid), Some(pid), Pinned::Pid),
         Err(e) => (PeerAgent::Unknown { why: e }, Some(pid), Pinned::Pid),
     }
 }
@@ -480,7 +541,7 @@ pub fn whois(pid: u32) -> serde_json::Value {
     let a = availability();
     let cg = cgroup_of_pid(pid);
     let peer = match (&a, &cg) {
-        (Ok(a), Ok(p)) => with_owner(classify(&a.agents_rel, p)),
+        (Ok(a), Ok(p)) => with_owner(classify(&a.agents_rel, p), pid),
         (_, Err(e)) => PeerAgent::Unknown { why: e.clone() },
         (Err(_), Ok(p)) => PeerAgent::Outside { cgroup: p.clone() },
     };
@@ -600,6 +661,41 @@ mod tests {
         for on in [None, Some(""), Some("1"), Some("on"), Some("yes")] {
             assert!(!switch_off_from(on), "{on:?}");
         }
+    }
+
+    /// Review B5: a live process has a start time, and the same one twice.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_start_time_names_one_process() {
+        let mine = proc_start_time(std::process::id()).expect("this process's start time");
+        assert_eq!(proc_start_time(std::process::id()), Some(mine), "stable for the same process");
+        assert_eq!(proc_start_time(0), None, "no such process");
+    }
+
+    /// Review B3: ownership and membership come from one handle; a link, a
+    /// missing or unlisted pid, or another owner is a no.
+    #[cfg(unix)]
+    #[test]
+    fn held_by_reads_owner_and_procs_through_one_handle() {
+        let root = std::env::temp_dir().join(format!("k2-heldby-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let cg = root.join("a-ws1");
+        std::fs::create_dir_all(&cg).unwrap();
+        std::fs::write(cg.join("cgroup.procs"), "101\n4242\n").unwrap();
+        // SAFETY: geteuid has no preconditions.
+        let me = unsafe { libc::geteuid() };
+        assert!(held_by(&cg, 4242, me), "listed, owned by me");
+        assert!(!held_by(&cg, 4243, me), "not listed");
+        assert!(!held_by(&cg, 4242, me + 1), "another owner");
+        std::os::unix::fs::symlink(&cg, root.join("a-link")).unwrap();
+        assert!(!held_by(&root.join("a-link"), 4242, me), "never through a link");
+        std::fs::create_dir_all(root.join("a-empty")).unwrap();
+        assert!(!held_by(&root.join("a-empty"), 4242, me), "no cgroup.procs");
+        std::fs::create_dir_all(root.join("a-linkedprocs")).unwrap();
+        std::os::unix::fs::symlink(cg.join("cgroup.procs"), root.join("a-linkedprocs/cgroup.procs")).unwrap();
+        assert!(!held_by(&root.join("a-linkedprocs"), 4242, me), "a linked cgroup.procs is refused");
+        assert!(!held_by(&root.join("missing"), 4242, me));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

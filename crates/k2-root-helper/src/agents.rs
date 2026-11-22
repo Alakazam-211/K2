@@ -25,7 +25,7 @@
 
 use std::path::{Path, PathBuf};
 
-use k2_root_proto::agent_cgroup::{argv1, may_place_from, unit_of, AgentWs, AGENTS_LEAF, EXEC_HELPER_ARG};
+use k2_root_proto::agent_cgroup::{argv1, may_place_from, start_of_stat, unit_of, AgentWs, AGENTS_LEAF, EXEC_HELPER_ARG};
 
 use crate::caller::Caller;
 use crate::ctx::{Ctx, Fail, HResult};
@@ -143,11 +143,17 @@ pub fn check(ctx: &Ctx, who: &Caller) -> HResult<serde_json::Value> {
     Ok(serde_json::json!({ "ok": true, "unit": unit, "agents": format!("{unit}/{AGENTS_LEAF}") }))
 }
 
-/// `agents place <ws> <pid>`.
-pub fn place(ctx: &Ctx, who: &Caller, ws: &AgentWs, pid: u32) -> HResult<serde_json::Value> {
+/// `agents place <ws> <pid> <start>`.
+pub fn place(ctx: &Ctx, who: &Caller, ws: &AgentWs, pid: u32, start: u64) -> HResult<serde_json::Value> {
     let (unit, leaf, daemon_uid) = unit_and_leaf(ctx, who)?;
     // 3. The process: held first, checked, moved, still the same after.
     let held = ctx.procs.hold(pid as i32).ok_or_else(|| Fail::state("agents place refused: no such process"))?;
+    // The one the daemon started (review B5): its start time, as its parent
+    // read it at spawn, must match; a pid reused since is another process.
+    let stat = String::from_utf8_lossy(&read(ctx, &format!("/proc/{pid}/stat"))?).into_owned();
+    if start_of_stat(&stat) != Some(start) {
+        return Err(Fail::state("agents place refused: the process is not the one the daemon started (start time differs)"));
+    }
     if ctx.procs.ruid_of(pid as i32) != Some(daemon_uid) {
         return Err(Fail::state("agents place refused: the process is not the daemon user's"));
     }

@@ -110,7 +110,7 @@ pub fn for_job(run_sid: &str, ws: &str, root: &Path, env: &mut std::collections:
 /// lost) when the session's process is in its own agent's cgroup now.
 pub fn bind_from_live_cgroup(sid: &SessionId, pid: u32, ws: Option<&str>) {
     let (Some(ws), Ok(a)) = (ws.map(str::trim).filter(|w| !w.is_empty()), agent_cgroup::availability()) else { return };
-    match agent_cgroup::cgroup_of_pid(pid).map(|p| agent_cgroup::with_owner(agent_cgroup::classify(&a.agents_rel, &p))) {
+    match agent_cgroup::cgroup_of_pid(pid).map(|p| agent_cgroup::with_owner(agent_cgroup::classify(&a.agents_rel, &p), pid)) {
         Ok(peer) if peer.ws() == Some(ws) => {
             // M1b: a root-owned cgroup means the root helper placed it.
             let root_owned = matches!(peer, PeerAgent::Agent { root_owned: true, .. });
@@ -163,8 +163,8 @@ pub fn register_root_placement() {
         agent_cgroup::set_no_placer(why);
         return;
     }
-    agent_cgroup::set_placer(Box::new(|ws: &str, pid: u32| {
-        let argv = vec!["agents".to_string(), "place".to_string(), ws.to_string(), pid.to_string()];
+    agent_cgroup::set_placer(Box::new(|ws: &str, pid: u32, start: u64| {
+        let argv = vec!["agents".to_string(), "place".to_string(), ws.to_string(), pid.to_string(), start.to_string()];
         let out = crate::root_helper::call(&argv, None)?;
         let v: serde_json::Value = serde_json::from_slice(&out).map_err(|e| format!("agents place: not JSON: {e}"))?;
         v["cgroup"].as_str().map(str::to_string).ok_or_else(|| format!("agents place: no cgroup in {v}"))

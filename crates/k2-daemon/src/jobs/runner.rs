@@ -352,7 +352,7 @@ fn spawn(job: &Job, live: &Arc<Live>, log_path: &Path) -> Result<Started, (JobEr
     // root-owned cgroup, or the run stops here (killed before it ran).
     #[cfg(unix)]
     if let Some(iso) = placed.as_ref() {
-        if let Err(e) = k2_core::agent_cgroup::place_spawned(iso, child.id()) {
+        if let Err(e) = k2_core::agent_cgroup::place_spawned(iso, child.id(), None) {
             let _ = child.wait();
             crate::session_token::revoke_job_passport(&live.session_id);
             let _ = std::fs::remove_file(crate::agent_isolation::job_socket(&live.session_id));

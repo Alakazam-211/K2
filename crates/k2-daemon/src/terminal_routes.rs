@@ -49,15 +49,46 @@ use crate::session_lookup;
 ///
 /// All three forms produce the same response shape:
 /// `{"lines":["row1","row2",...]}`.
+///
+/// `lines=` is capped ([`MAX_SCREEN_LINES`] for a screen,
+/// [`MAX_REPLAY_LINES`] for a sub-terminal's replay ring). A larger number
+/// is clamped, never refused: the answer is the last `max` lines, with
+/// `capped: {asked, max}` and a `note` saying so.
 pub fn handle_read(params: &HashMap<String, String>) -> CliResponse {
-    let requested_lines: usize = params
-        .get("lines")
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(50);
-    match resolve_screen_lines(params, requested_lines) {
-        Ok(tail) => CliResponse::ok_json(serde_json::json!({ "lines": tail }).to_string()),
+    let requested_lines = requested_lines(params);
+    match read_screen(params, requested_lines) {
+        Ok(read) => {
+            let mut body = serde_json::json!({ "lines": read.lines });
+            if requested_lines > read.max {
+                body["capped"] = serde_json::json!({ "asked": requested_lines, "max": read.max });
+                body["note"] = serde_json::json!(format!(
+                    "lines is capped at {} for this terminal; these are its last {} lines",
+                    read.max, read.max
+                ));
+            }
+            CliResponse::ok_json(body.to_string())
+        }
         Err(resp) => resp,
     }
+}
+
+/// The most lines one read returns from a terminal's screen: its whole
+/// scrollback (the live rows below it come on top).
+pub const MAX_SCREEN_LINES: usize = k2_core::terminal::daemon_pty::SCROLLBACK_CAP;
+
+/// The most lines one read returns from an older sub-terminal's replay ring
+/// (`terminal spawn --command`), which keeps up to
+/// [`k2_core::session::REPLAY_CAP`] frames.
+pub const MAX_REPLAY_LINES: usize = 10_000;
+
+/// `lines=` as asked: 50 when absent or not a number; a number too large
+/// for this machine counts as the largest (it is clamped anyway).
+fn requested_lines(params: &HashMap<String, String>) -> usize {
+    params
+        .get("lines")
+        .and_then(|s| s.trim().parse::<u128>().ok())
+        .map(|n| usize::try_from(n).unwrap_or(usize::MAX))
+        .unwrap_or(50)
 }
 
 /// Shared write/read gate for remote-session-bound PTYs.
@@ -108,6 +139,21 @@ pub(crate) fn resolve_screen_lines(
     params: &HashMap<String, String>,
     requested_lines: usize,
 ) -> Result<Vec<String>, CliResponse> {
+    read_screen(params, requested_lines).map(|read| read.lines)
+}
+
+/// A read's answer: the lines, and the cap that applied to this terminal.
+struct ScreenRead {
+    lines: Vec<String>,
+    max: usize,
+}
+
+/// [`resolve_screen_lines`] that also says the cap (`requested_lines` is
+/// clamped to it).
+fn read_screen(
+    params: &HashMap<String, String>,
+    requested_lines: usize,
+) -> Result<ScreenRead, CliResponse> {
     // What the address itself names, before any session is looked up: a
     // workspace (`workspace=`, `id=<project_id>:<agent>`) and the id it
     // gives. A scoped caller that may not read that workspace learns
@@ -131,7 +177,8 @@ pub(crate) fn resolve_screen_lines(
         params,
         &ReadTarget { session: Some(id.as_str()), workspaces: Some(workspaces.as_slice()) },
     )?;
-    Ok(screen.lines(requested_lines))
+    let max = screen.max_lines();
+    Ok(ScreenRead { lines: screen.lines(requested_lines.min(max)), max })
 }
 
 /// What a terminal read names, as far as it is known: the session's id and
@@ -282,6 +329,14 @@ impl Screen {
         match self {
             Screen::V2(session) => session.session_id,
             Screen::Stream(id, _) => *id,
+        }
+    }
+
+    /// The most lines one read returns from this terminal.
+    fn max_lines(&self) -> usize {
+        match self {
+            Screen::V2(_) => MAX_SCREEN_LINES,
+            Screen::Stream(..) => MAX_REPLAY_LINES,
         }
     }
 

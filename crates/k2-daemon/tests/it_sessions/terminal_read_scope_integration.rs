@@ -448,3 +448,99 @@ async fn a_terminal_socket_serves_only_the_session_its_token_opens() {
     drop(d);
     finish();
 }
+
+// ── the lines= cap ───────────────────────────────────────────────────
+
+fn lines_of(r: &Resp) -> Vec<String> {
+    assert_eq!(r.status, 200, "read: {}", r.body);
+    r.json()["lines"]
+        .as_array()
+        .unwrap_or_else(|| panic!("lines array: {}", r.body))
+        .iter()
+        .map(|l| l.as_str().unwrap_or_else(|| panic!("a line is text: {}", r.body)).to_string())
+        .collect()
+}
+
+fn assert_not_capped(r: &Resp, what: &str) {
+    let v = r.json();
+    assert!(v.get("capped").is_none() && v.get("note").is_none(), "{what}: no cap note at or under the cap: {}", r.body);
+}
+
+fn assert_capped(r: &Resp, asked: &str, max: usize, what: &str) {
+    let v = r.json();
+    assert_eq!(v["capped"]["max"], json!(max), "{what}: capped.max: {}", r.body);
+    assert_eq!(v["capped"]["asked"].to_string(), asked, "{what}: capped.asked: {}", r.body);
+    let note = v["note"].as_str().unwrap_or_else(|| panic!("{what}: a note: {}", r.body));
+    assert!(note.contains(&format!("capped at {max}")), "{what}: the note names the cap: {note}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_read_is_capped_at_the_scrollback_and_the_replay_bound() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let tag = &uuid::Uuid::new_v4().to_string()[..6];
+    let a = seed_ws(&env, &format!("trcap{tag}"));
+
+    // A screen with more output than its 5,000-row scrollback holds.
+    let body = json!({
+        "agent_name": "tab-trcap",
+        "cwd": a.path.to_string_lossy(),
+        "command": "/bin/sh",
+        "args": ["-c", "seq 1 6000; exec cat"],
+        "cols": 80,
+        "rows": 24,
+    });
+    let r = post(port, "/cli/sessions/v2/spawn", OWNER, body).await;
+    assert_eq!(r.status, 200, "spawn: {}", r.body);
+    let s = r.json()["sessionId"].as_str().expect("sessionId").to_string();
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let r = read(port, OWNER, &format!("id={s}&lines=3")).await;
+        if lines_of(&r).iter().any(|l| l == "6000") {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "seq never finished: {}", r.body);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    // At the cap: 5,000 lines, no note.
+    let at = read(port, OWNER, &format!("id={s}&lines=5000")).await;
+    let at_lines = lines_of(&at);
+    assert_eq!(at_lines.len(), 5000, "at the cap");
+    assert_not_capped(&at, "screen at the cap");
+    assert_eq!(at_lines.last().map(String::as_str), Some("6000"), "the last line is the newest");
+    // Under it: as asked.
+    let under = read(port, OWNER, &format!("id={s}&lines=10")).await;
+    assert_eq!(lines_of(&under).len(), 10, "under the cap");
+    assert_not_capped(&under, "screen under the cap");
+    // Over it: clamped to the same 5,000, with the note.
+    let over = read(port, OWNER, &format!("id={s}&lines=9000")).await;
+    assert_eq!(lines_of(&over), at_lines, "over the cap = the last 5,000");
+    assert_capped(&over, "9000", 5000, "screen over the cap");
+    // A number too large for a usize is the same clamp, not the default 50.
+    let huge = read(port, OWNER, &format!("id={s}&lines=99999999999999999999999")).await;
+    assert_eq!(lines_of(&huge).len(), 5000, "a huge number");
+    assert_eq!(huge.json()["capped"]["max"], json!(5000), "a huge number: {}", huge.body);
+
+    // An older sub-terminal's replay ring: 12,000 frames, capped at 10,000.
+    let rid = SessionId::new();
+    let entry = k2_core::session::registry::register(rid);
+    for i in 0..12_000 {
+        entry.publish(k2_core::session::Frame::Text { bytes: format!("row {i}").into_bytes(), style: None });
+    }
+    let at = read(port, OWNER, &format!("id={rid}&lines=10000")).await;
+    let at_rows = lines_of(&at);
+    assert_eq!(at_rows.len(), 10_000, "replay at the cap");
+    assert_eq!(at_rows.first().map(String::as_str), Some("row 2000"), "replay: the last 10,000 frames");
+    assert_eq!(at_rows.last().map(String::as_str), Some("row 11999"), "replay: newest last");
+    assert_not_capped(&at, "replay at the cap");
+    let over = read(port, OWNER, &format!("id={rid}&lines=20000")).await;
+    assert_eq!(lines_of(&over), at_rows, "replay over the cap = the last 10,000");
+    assert_capped(&over, "20000", 10_000, "replay over the cap");
+    let under = read(port, OWNER, &format!("id={rid}&lines=50")).await;
+    let under_rows = lines_of(&under);
+    assert_eq!(under_rows.len(), 50, "replay under the cap");
+    assert_eq!(under_rows.last().map(String::as_str), Some("row 11999"), "replay under the cap: newest last");
+    drop(d);
+}

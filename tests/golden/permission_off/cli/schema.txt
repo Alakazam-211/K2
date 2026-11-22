@@ -130,7 +130,7 @@ exit: 0
       "description": "Read another workspace's LIVE terminal (last N lines of plain text). Peek before you inject, or diagnose a stuck agent.",
       "args": [{"name": "workspace", "required": true}],
       "flags": [
-        {"name": "--lines", "arg": "N", "description": "Trailing lines to return. Default 50."},
+        {"name": "--lines", "arg": "N", "description": "Trailing lines to return. Default 50, at most 5000 (a whole scrollback); a larger N returns the last 5000, with a note on stderr."},
         {"name": "--agent", "arg": "name", "description": "Read a specific agent's session (default: workspace primary)."}
       ]
     },
@@ -148,7 +148,7 @@ exit: 0
       "usage": "k2 terminal read <terminal-id> [--lines N]",
       "description": "Read a PTY's screen by session id (the by-id complement to 'k2 read <workspace>').",
       "args": [{"name": "terminal-id", "required": true}],
-      "flags": [{"name": "--lines", "arg": "N", "description": "Trailing lines to return. Default 50."}]
+      "flags": [{"name": "--lines", "arg": "N", "description": "Trailing lines to return. Default 50, at most 5000 (a whole scrollback), or 10000 for an older sub-terminal; a larger N returns the most it can, with a note on stderr."}]
     },
     {
       "name": "terminal spawn",

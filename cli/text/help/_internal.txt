@@ -6,7 +6,7 @@ Humans rarely run them directly.
 TERMINAL (raw PTY I/O)
   terminal spawn --command "..."                Spawn a sub-terminal
   terminal write <id> "text"                    Paste + Enter to PTY by id
-  terminal read <id> [--lines N]                Last N lines from buffer
+  terminal read <id> [--lines N]                Last N lines (at most 5000)
 
 SESSIONS (low-level session lifecycle)
   sessions list [--json]                        Raw session map

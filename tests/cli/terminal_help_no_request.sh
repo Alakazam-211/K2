@@ -133,7 +133,7 @@ check terminal spawn --title T --command ls --wait --help
 check terminal spawn -h --command ls
 echo "== k2 terminal read =="
 ref terminal read --help
-case "$REF" in "Usage: k2 terminal read <terminal-id> [--lines N]") ok "the read usage" ;; *) bad "not the read usage: $REF" ;; esac
+case "$REF" in "Usage: k2 terminal read <terminal-id> [--lines N]"*"at most 5000; 10000 for an older sub-terminal)") ok "the read usage, with the --lines cap" ;; *) bad "not the read usage: $REF" ;; esac
 check terminal read -h
 check terminal read t1 -h
 check terminal read t1 --lines --help

@@ -778,7 +778,11 @@ cmd_terminal_write() {
 
 cmd_terminal_read() {
     # -h/--help anywhere prints the usage and reads nothing (0.46.17).
-    if _wants_help "$@"; then echo "Usage: k2 terminal read <terminal-id> [--lines N]"; return 0; fi
+    if _wants_help "$@"; then
+        echo "Usage: k2 terminal read <terminal-id> [--lines N]"
+        echo "  --lines N   trailing lines (default 50, at most 5000; 10000 for an older sub-terminal)"
+        return 0
+    fi
     local terminal_id="${1:-}"
     local lines=50
     shift || true
@@ -792,12 +796,18 @@ cmd_terminal_read() {
         echo "Usage: k2 terminal read <terminal-id> [--lines N]" >&2
         exit 1
     fi
-    cli_request "/cli/terminal/read" "id=$(urlencode "$terminal_id")&lines=$lines" | python3 -c "
-import json, sys
+    # A read over the cap (5000 lines, 10000 for an older sub-terminal) is
+    # clamped by K2's server; its note goes to stderr on fd 3 (python's own
+    # stderr is silenced so a non-JSON answer falls back to the raw one).
+    { cli_request "/cli/terminal/read" "id=$(urlencode "$terminal_id")&lines=$lines" | python3 -c "
+import json, os, sys
 data = json.loads(sys.stdin.read())
 for line in data.get('lines', []):
     print(line)
-" 2>/dev/null || cli_request "/cli/terminal/read" "id=$(urlencode "$terminal_id")&lines=$lines"
+if isinstance(data.get('note'), str):
+    sys.stdout.flush()
+    os.write(3, ('k2 terminal read: ' + data['note'] + '\n').encode())
+" 2>/dev/null; } 3>&2 || cli_request "/cli/terminal/read" "id=$(urlencode "$terminal_id")&lines=$lines"
 }
 
 # 0.39.x: read a workspace's live terminal by NAME — the read
@@ -881,6 +891,9 @@ if isinstance(data, dict) and 'error' in data:
     sys.exit(1)
 for line in data.get('lines', []):
     print(line)
+if isinstance(data.get('note'), str):
+    sys.stdout.flush()
+    sys.stderr.write('k2 read: ' + data['note'] + '\n')
 "
     else
         cli_send cli_request "/cli/terminal/read" "$query"

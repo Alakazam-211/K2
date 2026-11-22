@@ -246,6 +246,18 @@
       ]
     },
     {
+      "name": "db import supabase",
+      "usage": "k2 db import supabase <dump> --db <name> [--dry-run] [--allow-unresolved] [--json]",
+      "description": "Restore a Supabase project's pg_dump -Fc (workspace-relative) into a fresh database this workspace owns, recognisably the same: Supabase's own schemas (auth, storage, realtime, supabase_functions, graphql, pgsodium, vault, net, pgbouncer, cron, supabase_migrations) and extensions dropped; extensions a database owner may create (pgcrypto, uuid-ossp, pg_trgm, ...) carried into an extensions schema; everything restored with no owner, so the migrator owns it and SECURITY DEFINER functions keep bypassing row security; grants kept for anon, authenticated and service_role, Supabase's own roles' dropped, other roles' dropped and named; default privileges for postgres become the migrator's; FORCE ROW LEVEL SECURITY lifted with a warning per table; K2's auth.users (same ids, no passwords) and storage tables with the dump's rows; the App's triggers on auth.users and policies on storage.objects kept; 14-digit migrations renamed 0001_name and recorded (files in .k2/db/migrations, map in .k2/db/supabase-migrations.json). Anything it can't carry (vault.decrypted_secrets, net.http_post, cron.schedule, an auth/storage object K2 lacks, a policy for another role, an extension the box lacks) stops it with the list (exit 3, import_unresolved) unless --allow-unresolved. Refusals: import_target_not_empty, import_migrations_folder, roles_conflict (exit 3); import_failed (exit 1: the database is half-loaded; drop it and import into a fresh one). Then: k2 app user import for the people.",
+      "args": [{"name": "dump", "required": true}],
+      "flags": [
+        {"name": "--db", "arg": "name", "description": "A fresh database this workspace owns (k2 db create --cluster <its own> --name <db>)."},
+        {"name": "--dry-run", "arg": null, "description": "Read and check everything; write nothing; print the report."},
+        {"name": "--allow-unresolved", "arg": null, "description": "Restore despite unresolved references (objects needing them may fail)."},
+        {"name": "--json", "arg": null, "description": "The report: {db, dryRun, dropped, carried, grants, forceLifted, authUsers, storage, columnsNotCarried, migrations, unresolved, notes, next}."}
+      ]
+    },
+    {
       "name": "db drop",
       "usage": "k2 db drop --yes [--db <name|id>] [--test] [--json]",
       "description": "Drop a live database this workspace owns (default: its default database) and its own roles; --test drops only the test database (404 if none). Frees one slot of the cap. Apps connected to it are told; their door refuses it from then.",

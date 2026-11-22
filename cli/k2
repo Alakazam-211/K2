@@ -11763,6 +11763,16 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         K2 makes a password and prints it once; the person chooses their
                                         own at first sign-in (or k2 app user invite: a mailed link, so you
                                         handle no password)
+  k2 app user import <app> --file users.jsonl [--apply] [--role R] [--json]
+                                        People from another user store (Supabase's auth.users, one JSON
+                                        object per line: id, email, encrypted_password, raw_app_meta_data,
+                                        raw_user_meta_data, created_at, banned_until) into ONE App, each
+                                        keeping its id. bcrypt hashes ($2a$/$2b$/$2y$) sign in and become
+                                        Argon2 at the first sign-in; nobody is asked to reset. A dry run
+                                        unless --apply; any clash (an id, email or username already someone
+                                        else's) and --apply writes nothing. Run again for the users delta:
+                                        changed rows update, a password set on K2 since is kept. The owner,
+                                        or the App's own agent with "Let this agent manage its Apps' users"
   k2 app user add <app-id> <name> --test [--role R] [--room H] [--expires 24h] [--password-stdin]
                                         A test guest of ONE App: signs in only through that App's
                                         link, a role the App defines, ends on its own (24 h, at most
@@ -17419,6 +17429,79 @@ print(json.dumps({"error": e.get("code", "usage"), "hint": e.get("hint", "")}))'
         exit 1
     fi
     _compute_fail "$_CP_STATUS" "$_CP_BODY"
+}
+
+# ── k2 app user import (prd-app-supabase-compat-v1 S2) ───────────────
+# `k2 app user import <app> --file users.jsonl [--apply] [--role R] [--json]`:
+# App users from another user store (Supabase's auth.users, one JSON object
+# per line) with their own ids; bcrypt passwords work and become Argon2 at
+# the first sign-in. A dry run unless --apply. The file goes in the request
+# body (python reads it: never argv). Exit 0 done, 1 clashes or a usage
+# error, 3 refused.
+_app_user_import() {
+    local app="" file="" apply=false role="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --file) file="${2-}"; if [ $# -ge 2 ]; then shift 2; else shift; fi ;;
+            --file=*) file="${1#--file=}"; shift ;;
+            --app) app="${2-}"; if [ $# -ge 2 ]; then shift 2; else shift; fi ;;
+            --app=*) app="${1#--app=}"; shift ;;
+            --apply) apply=true; shift ;;
+            --role) role="${2-}"; if [ $# -ge 2 ]; then shift 2; else shift; fi ;;
+            --role=*) role="${1#--role=}"; shift ;;
+            --json) json_out=1; shift ;;
+            -h|--help) echo "Usage: k2 app user import <app> --file users.jsonl [--apply] [--role R] [--json]" >&2; return 0 ;;
+            -*) echo "{\"error\":\"usage\",\"hint\":\"unexpected $1 (k2 app user import <app> --file users.jsonl [--apply] [--role R])\"}" >&2; return 1 ;;
+            *) [ -z "$app" ] && app="$1"; shift ;;
+        esac
+    done
+    if [ -z "$app" ] || [ -z "$file" ]; then
+        echo '{"error":"usage","hint":"k2 app user import <app> --file users.jsonl [--apply] [--role R]: one JSON object per line (id, email, encrypted_password, raw_app_meta_data, raw_user_meta_data, created_at, banned_until)"}' >&2
+        return 1
+    fi
+    if [ ! -r "$file" ]; then
+        echo "{\"error\":\"usage\",\"hint\":\"can't read $file\"}" >&2
+        return 1
+    fi
+    local body
+    body="$(K2_UI_FILE="$file" K2_UI_APP="$app" K2_UI_ROLE="$role" K2_UI_APPLY="$apply" python3 -c '
+import json, os
+with open(os.environ["K2_UI_FILE"], encoding="utf-8") as f:
+    lines = f.read()
+b = {"app": os.environ["K2_UI_APP"], "lines": lines, "apply": os.environ["K2_UI_APPLY"] == "true"}
+if os.environ.get("K2_UI_ROLE"):
+    b["role"] = os.environ["K2_UI_ROLE"]
+print(json.dumps(b))')" || return 1
+    K2_CP_MAX_TIME=600 _app_rt_post /cli/app/user/import "$body"
+    unset body
+    case "$_CP_STATUS" in
+        200|409) ;;
+        *) _app_db_fail ;;
+    esac
+    if [ "$json_out" = 1 ]; then
+        printf '%s\n' "$_CP_BODY"
+        printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; sys.exit(1 if json.load(sys.stdin).get("clashes") else 0)'
+        return $?
+    fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+done = v.get("written")
+print("App users for %s: %s" % (v.get("app"), "imported" if done else ("refused, nothing written" if v.get("apply") else "dry run, nothing written")))
+print("  new %s, updated %s, unchanged %s · without a password %s · disabled (banned) %s · K2 password kept %s" % (
+    v.get("new"), v.get("updated"), v.get("unchanged"), v.get("passwordless"), v.get("disabled"), v.get("keptK2Password")))
+names = v.get("derivedUsernames") or []
+for n in names[:20]:
+    print("  username %s for %s (from the email)" % (n.get("username"), n.get("id")))
+if len(names) > 20:
+    print("  ... and %d more usernames (--json lists every one)" % (len(names) - 20))
+for c in v.get("clashes") or []:
+    print("  clash line %s: %s%s" % (c.get("line"), c.get("reason"), " (%s)" % c["email"] if c.get("email") else ""))
+if v.get("clashes"):
+    print("  fix the clashing lines (or leave them out) and run again; --apply writes nothing while any clash", file=sys.stderr)
+    sys.exit(1)
+if not done:
+    print("  run again with --apply to write; ids are kept, bcrypt passwords work and become Argon2 at each first sign-in")'
 }
 
 _app_egress_usage() {
@@ -24958,6 +25041,8 @@ cmd_skin() {
     case "$sub" in
         user|users)
             local _a _has_app=0
+            # k2 app user import <app> names its App first (its --role is the App's).
+            [ "${1:-}" = "import" ] && _has_app=1
             for _a in "$@"; do
                 # A test guest names its App as the positional <app-id>
                 # (k2 app user add <app-id> <name> --test --role R), 0.46.5.
@@ -24986,6 +25071,8 @@ cmd_skin() {
                     done ;;
             esac
             case "$action" in
+                # prd-app-supabase-compat-v1 S2: users with their own ids and hashes.
+                import) _app_user_import "$@"; return $? ;;
                 add)
                     local username="" password_stdin=0 temp_password=0 email="" app="" role=""
                     while [[ $# -gt 0 ]]; do
@@ -58086,6 +58173,18 @@ cmd_schema() {
       ]
     },
     {
+      "name": "db import supabase",
+      "usage": "k2 db import supabase <dump> --db <name> [--dry-run] [--allow-unresolved] [--json]",
+      "description": "Restore a Supabase project's pg_dump -Fc (workspace-relative) into a fresh database this workspace owns, recognisably the same: Supabase's own schemas (auth, storage, realtime, supabase_functions, graphql, pgsodium, vault, net, pgbouncer, cron, supabase_migrations) and extensions dropped; extensions a database owner may create (pgcrypto, uuid-ossp, pg_trgm, ...) carried into an extensions schema; everything restored with no owner, so the migrator owns it and SECURITY DEFINER functions keep bypassing row security; grants kept for anon, authenticated and service_role, Supabase's own roles' dropped, other roles' dropped and named; default privileges for postgres become the migrator's; FORCE ROW LEVEL SECURITY lifted with a warning per table; K2's auth.users (same ids, no passwords) and storage tables with the dump's rows; the App's triggers on auth.users and policies on storage.objects kept; 14-digit migrations renamed 0001_name and recorded (files in .k2/db/migrations, map in .k2/db/supabase-migrations.json). Anything it can't carry (vault.decrypted_secrets, net.http_post, cron.schedule, an auth/storage object K2 lacks, a policy for another role, an extension the box lacks) stops it with the list (exit 3, import_unresolved) unless --allow-unresolved. Refusals: import_target_not_empty, import_migrations_folder, roles_conflict (exit 3); import_failed (exit 1: the database is half-loaded; drop it and import into a fresh one). Then: k2 app user import for the people.",
+      "args": [{"name": "dump", "required": true}],
+      "flags": [
+        {"name": "--db", "arg": "name", "description": "A fresh database this workspace owns (k2 db create --cluster <its own> --name <db>)."},
+        {"name": "--dry-run", "arg": null, "description": "Read and check everything; write nothing; print the report."},
+        {"name": "--allow-unresolved", "arg": null, "description": "Restore despite unresolved references (objects needing them may fail)."},
+        {"name": "--json", "arg": null, "description": "The report: {db, dryRun, dropped, carried, grants, forceLifted, authUsers, storage, columnsNotCarried, migrations, unresolved, notes, next}."}
+      ]
+    },
+    {
       "name": "db drop",
       "usage": "k2 db drop --yes [--db <name|id>] [--test] [--json]",
       "description": "Drop a live database this workspace owns (default: its default database) and its own roles; --test drops only the test database (404 if none). Frees one slot of the cap. Apps connected to it are told; their door refuses it from then.",
@@ -60128,6 +60227,18 @@ cmd_schema() {
         {"name": "--temp-password", "arg": null, "description": "K2 makes a password and prints it once; the person chooses their own at first sign-in."},
         {"name": "--app", "arg": "app", "description": "Published service id or <workspace>/<name>. No box login. Agents: one of their own workspace's Apps."},
         {"name": "--role", "arg": "role", "description": "With --app: the role on that App (host-wide or tagged for that App)."}
+      ]
+    },
+    {
+      "name": "app user import",
+      "usage": "k2 app user import <app> --file users.jsonl [--apply] [--role R] [--json]",
+      "description": "App users from another user store (Supabase's auth.users export, one JSON object per line: id, email, encrypted_password, raw_app_meta_data, raw_user_meta_data, created_at, banned_until; username optional, else from the email) into one App, each keeping its id. bcrypt hashes ($2a$/$2b$/$2y$) sign in and are replaced by Argon2 at the first sign-in; nobody must reset. A dry run unless --apply: counts, derived usernames and every clash (an id, email or username someone else has; a bad line). With any clash --apply writes nothing (exit 1). Running it again updates changed rows and adds new ones; a password set on K2 since is kept. A future banned_until imports the login with its App grant off. The owner, or the App's own agent with \"Let this agent manage its Apps' users\" (its new logins are tied to its workspace; it never touches another login). Not the App key.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--file", "arg": "users.jsonl", "description": "The users, one JSON object per line."},
+        {"name": "--apply", "arg": null, "description": "Write (default: a dry run)."},
+        {"name": "--role", "arg": "R", "description": "The role new App grants get (default: no rooms)."},
+        {"name": "--json", "arg": null, "description": "{app, apply, written, total, new, updated, unchanged, keptK2Password, passwordless, disabled, derivedUsernames[{id, username}], clashes[{line, id, email, reason}]}."}
       ]
     },
     {
@@ -70657,6 +70768,28 @@ ACTOR (who is calling, not just which principal)
     CREATE POLICY audit_read_own ON audit_log FOR SELECT TO PUBLIC
       USING (principal = k2.skin_uid());
 
+FROM SUPABASE (prd-app-supabase-compat-v1)
+  k2 db import supabase <dump> --db <fresh db> [--dry-run]
+    The project's `pg_dump -Fc`, workspace-relative. Use a cluster of the
+    App's own (k2 db cluster create 17 --name <app>; then k2 db create
+    --cluster <app> --name <db>): anon, authenticated and service_role
+    are cluster-wide. Supabase's own schemas and extensions are dropped;
+    the migrator owns everything (SECURITY DEFINER keeps bypassing row
+    security); grants for the standard roles are kept, others named;
+    FORCE RLS is lifted with a warning; auth.users keeps the ids (never a
+    password); 14-digit migrations become 0001_name.sql, recorded, with
+    the map in .k2/db/supabase-migrations.json. It never guesses: a
+    reference it can't carry (vault., net., cron., auth.identities, a
+    policy for another role) stops it with the list (--allow-unresolved
+    restores anyway). Then the people, same ids:
+  k2 app user import <app> --file users.jsonl [--apply]
+    users.jsonl from Supabase's SQL editor, one object per line:
+    select json_build_object('id', id, 'email', email, 'encrypted_password',
+      encrypted_password, 'raw_app_meta_data', raw_app_meta_data,
+      'raw_user_meta_data', raw_user_meta_data, 'created_at', created_at,
+      'banned_until', banned_until) from auth.users;
+    bcrypt passwords work and become Argon2 at each first sign-in.
+
 STORE
   `k2 store` is JSONB in the same DB. Create-new-DB still needs the
   write passport; list/get/put need ownership or a grant, not the
@@ -72819,6 +72952,10 @@ PER-APP LOGINS (0.45.5)
     k2 app user rooms <u> --app <app> --agent sales   that App's rooms
     k2 app grant add … --kind app --target <app> --role R | --room sales
     k2 app role create R --app <app>           a role only that App can use
+    k2 app user import <app> --file users.jsonl [--apply]   people from
+                                               another store, ids kept; bcrypt
+                                               passwords sign in (k2 study db,
+                                               FROM SUPABASE)
   <app> = a service id, or <workspace>/<publish name>. `host` = box login.
   AGENT APP USERS (0.46.4): an agent with "Let this agent manage its Apps'
   users" (its own switch, the owner's both ways) adds people to its
@@ -104736,6 +104873,7 @@ _db_py() {
     D_MANAGE="${D_MANAGE:-false}" D_ROLE="${D_ROLE:-}" D_ACCESS="${D_ACCESS:-}" \
     D_RELATIONS="${D_RELATIONS:-[]}" D_MAJOR="${D_MAJOR:-}" \
     D_REVEAL="${D_REVEAL:-false}" D_AS="${D_AS:-}" D_PERM_NOTE="${_K2_PERMISSION_NOTE:-}" \
+    D_ALLOW="${D_ALLOW:-false}" D_DRY="${D_DRY:-false}" \
     _K5_PY_HTTP="$_K5_PY_HTTP" _K5_PY_HEADERS="$(_k5_py_headers)" python3 - <<'PYEOF'
 import json, os, sys, urllib.error, urllib.parse, urllib.request
 # Loopback and plain http skip the proxy; remote https may use it.
@@ -104761,12 +104899,13 @@ def die(err, exit_code=None):
     sys.stderr.write(dumps({"error": {"code": code, "hint": hint}}) + "\n")
     refused = ("gated", "forbidden", "owner_only", "unknown_major", "unsupported_major", "preview_major",
                "major_eol", "not_upward", "cluster_refused", "helper_needed", "db_upgrade_off",
-               "major_mismatch")
+               "major_mismatch", "import_unresolved", "import_target_not_empty",
+               "import_migrations_folder", "roles_conflict")
     if exit_code is None:
         exit_code = 3 if code in refused else 2 if code == "usage" else 1
     sys.exit(exit_code)
 
-def request(method, route, params=None, body=None):
+def request(method, route, params=None, body=None, timeout=60):
     qs = urllib.parse.urlencode(params or {})
     url = base + route + ("?" + qs if qs else "")
     data = dumps(body).encode() if body is not None else None
@@ -104776,7 +104915,7 @@ def request(method, route, params=None, body=None):
     if data is not None:
         req.add_header("Content-Type", "application/json")
     try:
-        with urllib.request.urlopen(k5_request(req), timeout=60) as resp:
+        with urllib.request.urlopen(k5_request(req), timeout=timeout) as resp:
             raw = resp.read().decode("utf-8", "replace")
             return resp.status, raw
     except urllib.error.HTTPError as e:
@@ -104790,6 +104929,42 @@ def load(raw):
         return json.loads(raw) if raw else {}
     except Exception:
         return {"raw": raw}
+
+def print_import(r):
+    # k2 db import supabase's report (prd-app-supabase-compat-v1 S2).
+    print("%s %s" % ("would import into" if r.get("dryRun") else "imported into", r.get("db")))
+    dropped = r.get("dropped") or {}
+    sch = dropped.get("schemas") or {}
+    if sch:
+        print("dropped:    Supabase's own schemas %s" % ", ".join("%s (%s)" % (k, v) for k, v in sch.items()))
+    if dropped.get("extensions"):
+        print("dropped:    extensions %s" % ", ".join(dropped["extensions"]))
+    c = r.get("carried") or {}
+    print("carried:    %s table(s), %s function(s), %s policy(ies); extensions %s" % (
+        c.get("tables"), c.get("functions"), c.get("policies"), ", ".join(c.get("extensions") or []) or "none"))
+    for x in c.get("onSupabaseTables") or []:
+        print("kept:       %s" % x)
+    g = r.get("grants") or {}
+    print("grants:     %s kept for anon/authenticated/service_role; %s to Supabase's own roles dropped" % (g.get("kept"), g.get("droppedSupabase")))
+    if g.get("droppedRoles"):
+        print("warning:    grants to %s dropped (an App's own roles aren't carried)" % ", ".join(g["droppedRoles"]))
+    for t in r.get("forceLifted") or []:
+        print("warning:    FORCE ROW LEVEL SECURITY lifted on %s" % t)
+    print("auth.users: %s row(s), ids kept, no passwords" % r.get("authUsers"))
+    s = r.get("storage") or {}
+    print("storage:    %s bucket(s), %s object row(s); the files themselves are copied separately" % (s.get("buckets"), s.get("objects")))
+    if r.get("columnsNotCarried"):
+        print("not carried: %s" % ", ".join(r["columnsNotCarried"]))
+    m = r.get("migrations") or {}
+    if m.get("count"):
+        pairs = ["%s -> %s" % (x.get("supabase"), x.get("renamed")) for x in (m.get("map") or [])[:5]]
+        print("migrations: %s renamed (%s%s); map in %s" % (m["count"], ", ".join(pairs), ", ..." if m["count"] > 5 else "", m.get("mapFile")))
+    for u in r.get("unresolved") or []:
+        print("unresolved: %s -> %s" % (u.get("object"), u.get("reference")))
+    for n in r.get("notes") or []:
+        print("note:       %s" % n)
+    for n in r.get("next") or []:
+        print("next:       %s" % n)
 
 status, raw = 0, ""
 d = {}
@@ -104886,6 +105061,21 @@ elif verb == "restore":
         body["db"] = os.environ["D_DB"]
     status, raw = request("POST", "/cli/db/restore", body=body)
     d = load(raw)
+elif verb == "import-supabase":
+    body = {"project": ws_path, "file": os.environ.get("D_FILE", ""), "db": os.environ.get("D_DB", "")}
+    if os.environ.get("D_ALLOW") == "true":
+        body["allowUnresolved"] = True
+    if os.environ.get("D_DRY") == "true":
+        body["dryRun"] = True
+    status, raw = request("POST", "/cli/db/import/supabase", body=body, timeout=6 * 3600)
+    d = load(raw)
+    # A refusal still carries the report (what was unresolved, what was
+    # loaded before a failure): print it before the error.
+    if isinstance(d, dict) and isinstance(d.get("report"), dict):
+        if as_json:
+            print(dumps(d["report"]))
+        else:
+            print_import(d["report"])
 elif verb == "drop":
     body = {"project": ws_path, "yes": os.environ.get("D_YES") == "true"}
     if os.environ.get("D_TEST") == "true":
@@ -105114,6 +105304,8 @@ elif verb == "dump":
     print("dump: %s" % d.get("path"))
 elif verb == "restore":
     print("restored %s" % d.get("restored"))
+elif verb == "import-supabase":
+    print_import(d)
 elif verb == "drop":
     print("dropped %s" % d.get("dropped"))
     for a in d.get("apps") or []:
@@ -105255,6 +105447,13 @@ AGENT (workspace — identity from token, never body project=)
   dump  [--out .k2/db/dumps/<ts>.dump] [--db <name|id>]
   restore <file> [--db <name|id>]
                                  workspace-relative (no .. / abs)
+  import supabase <dump> --db <name> [--dry-run] [--allow-unresolved]
+                                 A Supabase project's pg_dump -Fc into a fresh
+                                 database: Supabase's own schemas dropped,
+                                 owners remapped to the migrator, grants kept
+                                 for anon/authenticated/service_role, FORCE RLS
+                                 lifted (warned), 14-digit migrations renamed
+                                 (k2 study db, FROM SUPABASE)
   drop --yes [--db <name|id>]    a live database (default: the default one).
                                  --db on migrate/dump/restore/drop: one this
                                  workspace owns (a grant reaches dsn --db only)
@@ -106135,6 +106334,30 @@ else:
             done
             [ -n "$file" ] || { _db_err "usage" "k2 db restore <file> [--db <name>]"; exit 2; }
             D_VERB="restore" D_JSON="$as_json" D_FILE="$file" D_DB="$db_sel" _db_py ;;
+        import)
+            # `k2 db import supabase <dump> --db <name>` (prd-app-supabase-compat-v1
+            # S2): a Supabase pg_dump -Fc, mapped and restored as the migrator.
+            local kind="${1:-}" db_sel="" allow=false dry=false
+            shift 2>/dev/null || true
+            file=""
+            if [ "$kind" != "supabase" ]; then
+                _db_err "usage" "k2 db import supabase <dump> --db <name> [--dry-run] [--allow-unresolved] [--json]"; exit 2
+            fi
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --json) as_json=true; shift ;;
+                    --db) _db_need_db_value "$@"; db_sel="$2"; shift 2 ;;
+                    --db=*) db_sel="${1#*=}"; shift ;;
+                    --allow-unresolved) allow=true; shift ;;
+                    --dry-run) dry=true; shift ;;
+                    -*) _db_err "usage" "unexpected '$1'"; exit 2 ;;
+                    *) [ -z "$file" ] || { _db_err "usage" "unexpected '$1'"; exit 2; }; file="$1"; shift ;;
+                esac
+            done
+            if [ -z "$file" ] || [ -z "$db_sel" ]; then
+                _db_err "usage" "k2 db import supabase <dump> --db <name>: the dump (workspace-relative, pg_dump -Fc) and a fresh database this workspace owns"; exit 2
+            fi
+            D_VERB="import-supabase" D_JSON="$as_json" D_FILE="$file" D_DB="$db_sel" D_ALLOW="$allow" D_DRY="$dry" _db_py ;;
         drop)
             local test=false db_sel=""
             while [ $# -gt 0 ]; do

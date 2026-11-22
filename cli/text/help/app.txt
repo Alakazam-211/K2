@@ -27,6 +27,16 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         K2 makes a password and prints it once; the person chooses their
                                         own at first sign-in (or k2 app user invite: a mailed link, so you
                                         handle no password)
+  k2 app user import <app> --file users.jsonl [--apply] [--role R] [--json]
+                                        People from another user store (Supabase's auth.users, one JSON
+                                        object per line: id, email, encrypted_password, raw_app_meta_data,
+                                        raw_user_meta_data, created_at, banned_until) into ONE App, each
+                                        keeping its id. bcrypt hashes ($2a$/$2b$/$2y$) sign in and become
+                                        Argon2 at the first sign-in; nobody is asked to reset. A dry run
+                                        unless --apply; any clash (an id, email or username already someone
+                                        else's) and --apply writes nothing. Run again for the users delta:
+                                        changed rows update, a password set on K2 since is kept. The owner,
+                                        or the App's own agent with "Let this agent manage its Apps' users"
   k2 app user add <app-id> <name> --test [--role R] [--room H] [--expires 24h] [--password-stdin]
                                         A test guest of ONE App: signs in only through that App's
                                         link, a role the App defines, ends on its own (24 h, at most

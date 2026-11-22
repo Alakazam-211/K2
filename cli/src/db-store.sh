@@ -19,6 +19,7 @@ _db_py() {
     D_MANAGE="${D_MANAGE:-false}" D_ROLE="${D_ROLE:-}" D_ACCESS="${D_ACCESS:-}" \
     D_RELATIONS="${D_RELATIONS:-[]}" D_MAJOR="${D_MAJOR:-}" \
     D_REVEAL="${D_REVEAL:-false}" D_AS="${D_AS:-}" D_PERM_NOTE="${_K2_PERMISSION_NOTE:-}" \
+    D_ALLOW="${D_ALLOW:-false}" D_DRY="${D_DRY:-false}" \
     _K5_PY_HTTP="$_K5_PY_HTTP" _K5_PY_HEADERS="$(_k5_py_headers)" python3 - <<'PYEOF'
 import json, os, sys, urllib.error, urllib.parse, urllib.request
 # Loopback and plain http skip the proxy; remote https may use it.
@@ -44,12 +45,13 @@ def die(err, exit_code=None):
     sys.stderr.write(dumps({"error": {"code": code, "hint": hint}}) + "\n")
     refused = ("gated", "forbidden", "owner_only", "unknown_major", "unsupported_major", "preview_major",
                "major_eol", "not_upward", "cluster_refused", "helper_needed", "db_upgrade_off",
-               "major_mismatch")
+               "major_mismatch", "import_unresolved", "import_target_not_empty",
+               "import_migrations_folder", "roles_conflict")
     if exit_code is None:
         exit_code = 3 if code in refused else 2 if code == "usage" else 1
     sys.exit(exit_code)
 
-def request(method, route, params=None, body=None):
+def request(method, route, params=None, body=None, timeout=60):
     qs = urllib.parse.urlencode(params or {})
     url = base + route + ("?" + qs if qs else "")
     data = dumps(body).encode() if body is not None else None
@@ -59,7 +61,7 @@ def request(method, route, params=None, body=None):
     if data is not None:
         req.add_header("Content-Type", "application/json")
     try:
-        with urllib.request.urlopen(k5_request(req), timeout=60) as resp:
+        with urllib.request.urlopen(k5_request(req), timeout=timeout) as resp:
             raw = resp.read().decode("utf-8", "replace")
             return resp.status, raw
     except urllib.error.HTTPError as e:
@@ -73,6 +75,42 @@ def load(raw):
         return json.loads(raw) if raw else {}
     except Exception:
         return {"raw": raw}
+
+def print_import(r):
+    # k2 db import supabase's report (prd-app-supabase-compat-v1 S2).
+    print("%s %s" % ("would import into" if r.get("dryRun") else "imported into", r.get("db")))
+    dropped = r.get("dropped") or {}
+    sch = dropped.get("schemas") or {}
+    if sch:
+        print("dropped:    Supabase's own schemas %s" % ", ".join("%s (%s)" % (k, v) for k, v in sch.items()))
+    if dropped.get("extensions"):
+        print("dropped:    extensions %s" % ", ".join(dropped["extensions"]))
+    c = r.get("carried") or {}
+    print("carried:    %s table(s), %s function(s), %s policy(ies); extensions %s" % (
+        c.get("tables"), c.get("functions"), c.get("policies"), ", ".join(c.get("extensions") or []) or "none"))
+    for x in c.get("onSupabaseTables") or []:
+        print("kept:       %s" % x)
+    g = r.get("grants") or {}
+    print("grants:     %s kept for anon/authenticated/service_role; %s to Supabase's own roles dropped" % (g.get("kept"), g.get("droppedSupabase")))
+    if g.get("droppedRoles"):
+        print("warning:    grants to %s dropped (an App's own roles aren't carried)" % ", ".join(g["droppedRoles"]))
+    for t in r.get("forceLifted") or []:
+        print("warning:    FORCE ROW LEVEL SECURITY lifted on %s" % t)
+    print("auth.users: %s row(s), ids kept, no passwords" % r.get("authUsers"))
+    s = r.get("storage") or {}
+    print("storage:    %s bucket(s), %s object row(s); the files themselves are copied separately" % (s.get("buckets"), s.get("objects")))
+    if r.get("columnsNotCarried"):
+        print("not carried: %s" % ", ".join(r["columnsNotCarried"]))
+    m = r.get("migrations") or {}
+    if m.get("count"):
+        pairs = ["%s -> %s" % (x.get("supabase"), x.get("renamed")) for x in (m.get("map") or [])[:5]]
+        print("migrations: %s renamed (%s%s); map in %s" % (m["count"], ", ".join(pairs), ", ..." if m["count"] > 5 else "", m.get("mapFile")))
+    for u in r.get("unresolved") or []:
+        print("unresolved: %s -> %s" % (u.get("object"), u.get("reference")))
+    for n in r.get("notes") or []:
+        print("note:       %s" % n)
+    for n in r.get("next") or []:
+        print("next:       %s" % n)
 
 status, raw = 0, ""
 d = {}
@@ -169,6 +207,21 @@ elif verb == "restore":
         body["db"] = os.environ["D_DB"]
     status, raw = request("POST", "/cli/db/restore", body=body)
     d = load(raw)
+elif verb == "import-supabase":
+    body = {"project": ws_path, "file": os.environ.get("D_FILE", ""), "db": os.environ.get("D_DB", "")}
+    if os.environ.get("D_ALLOW") == "true":
+        body["allowUnresolved"] = True
+    if os.environ.get("D_DRY") == "true":
+        body["dryRun"] = True
+    status, raw = request("POST", "/cli/db/import/supabase", body=body, timeout=6 * 3600)
+    d = load(raw)
+    # A refusal still carries the report (what was unresolved, what was
+    # loaded before a failure): print it before the error.
+    if isinstance(d, dict) and isinstance(d.get("report"), dict):
+        if as_json:
+            print(dumps(d["report"]))
+        else:
+            print_import(d["report"])
 elif verb == "drop":
     body = {"project": ws_path, "yes": os.environ.get("D_YES") == "true"}
     if os.environ.get("D_TEST") == "true":
@@ -397,6 +450,8 @@ elif verb == "dump":
     print("dump: %s" % d.get("path"))
 elif verb == "restore":
     print("restored %s" % d.get("restored"))
+elif verb == "import-supabase":
+    print_import(d)
 elif verb == "drop":
     print("dropped %s" % d.get("dropped"))
     for a in d.get("apps") or []:
@@ -1200,6 +1255,30 @@ else:
             done
             [ -n "$file" ] || { _db_err "usage" "k2 db restore <file> [--db <name>]"; exit 2; }
             D_VERB="restore" D_JSON="$as_json" D_FILE="$file" D_DB="$db_sel" _db_py ;;
+        import)
+            # `k2 db import supabase <dump> --db <name>` (prd-app-supabase-compat-v1
+            # S2): a Supabase pg_dump -Fc, mapped and restored as the migrator.
+            local kind="${1:-}" db_sel="" allow=false dry=false
+            shift 2>/dev/null || true
+            file=""
+            if [ "$kind" != "supabase" ]; then
+                _db_err "usage" "k2 db import supabase <dump> --db <name> [--dry-run] [--allow-unresolved] [--json]"; exit 2
+            fi
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --json) as_json=true; shift ;;
+                    --db) _db_need_db_value "$@"; db_sel="$2"; shift 2 ;;
+                    --db=*) db_sel="${1#*=}"; shift ;;
+                    --allow-unresolved) allow=true; shift ;;
+                    --dry-run) dry=true; shift ;;
+                    -*) _db_err "usage" "unexpected '$1'"; exit 2 ;;
+                    *) [ -z "$file" ] || { _db_err "usage" "unexpected '$1'"; exit 2; }; file="$1"; shift ;;
+                esac
+            done
+            if [ -z "$file" ] || [ -z "$db_sel" ]; then
+                _db_err "usage" "k2 db import supabase <dump> --db <name>: the dump (workspace-relative, pg_dump -Fc) and a fresh database this workspace owns"; exit 2
+            fi
+            D_VERB="import-supabase" D_JSON="$as_json" D_FILE="$file" D_DB="$db_sel" D_ALLOW="$allow" D_DRY="$dry" _db_py ;;
         drop)
             local test=false db_sel=""
             while [ $# -gt 0 ]; do

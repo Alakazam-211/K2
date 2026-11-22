@@ -137,6 +137,28 @@ ACTOR (who is calling, not just which principal)
     CREATE POLICY audit_read_own ON audit_log FOR SELECT TO PUBLIC
       USING (principal = k2.skin_uid());
 
+FROM SUPABASE (prd-app-supabase-compat-v1)
+  k2 db import supabase <dump> --db <fresh db> [--dry-run]
+    The project's `pg_dump -Fc`, workspace-relative. Use a cluster of the
+    App's own (k2 db cluster create 17 --name <app>; then k2 db create
+    --cluster <app> --name <db>): anon, authenticated and service_role
+    are cluster-wide. Supabase's own schemas and extensions are dropped;
+    the migrator owns everything (SECURITY DEFINER keeps bypassing row
+    security); grants for the standard roles are kept, others named;
+    FORCE RLS is lifted with a warning; auth.users keeps the ids (never a
+    password); 14-digit migrations become 0001_name.sql, recorded, with
+    the map in .k2/db/supabase-migrations.json. It never guesses: a
+    reference it can't carry (vault., net., cron., auth.identities, a
+    policy for another role) stops it with the list (--allow-unresolved
+    restores anyway). Then the people, same ids:
+  k2 app user import <app> --file users.jsonl [--apply]
+    users.jsonl from Supabase's SQL editor, one object per line:
+    select json_build_object('id', id, 'email', email, 'encrypted_password',
+      encrypted_password, 'raw_app_meta_data', raw_app_meta_data,
+      'raw_user_meta_data', raw_user_meta_data, 'created_at', created_at,
+      'banned_until', banned_until) from auth.users;
+    bcrypt passwords work and become Argon2 at each first sign-in.
+
 STORE
   `k2 store` is JSONB in the same DB. Create-new-DB still needs the
   write passport; list/get/put need ownership or a grant, not the

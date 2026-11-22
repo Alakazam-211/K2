@@ -291,6 +291,8 @@ cmd_skin() {
     case "$sub" in
         user|users)
             local _a _has_app=0
+            # k2 app user import <app> names its App first (its --role is the App's).
+            [ "${1:-}" = "import" ] && _has_app=1
             for _a in "$@"; do
                 # A test guest names its App as the positional <app-id>
                 # (k2 app user add <app-id> <name> --test --role R), 0.46.5.
@@ -319,6 +321,8 @@ cmd_skin() {
                     done ;;
             esac
             case "$action" in
+                # prd-app-supabase-compat-v1 S2: users with their own ids and hashes.
+                import) _app_user_import "$@"; return $? ;;
                 add)
                     local username="" password_stdin=0 temp_password=0 email="" app="" role=""
                     while [[ $# -gt 0 ]]; do

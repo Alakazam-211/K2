@@ -198,7 +198,7 @@ pub fn pg_ident_for_project(project_id: &str) -> String {
     format!("ws_{sanitized}")
 }
 
-fn pg_quote_ident(s: &str) -> String {
+pub(crate) fn pg_quote_ident(s: &str) -> String {
     format!("\"{}\"", s.replace('"', "\"\""))
 }
 pub(crate) fn pg_quote_literal(s: &str) -> String {
@@ -512,7 +512,7 @@ fn apply_privilege_sync(
     Ok(())
 }
 
-fn privilege_sync_for_row(
+pub(crate) fn privilege_sync_for_row(
     ops: &dyn SystemOps,
     secrets: &dyn SecretStore,
     row: &DbRow,
@@ -601,7 +601,7 @@ pub(crate) fn seal_k2_internal_tables_sql(db_name: &str) -> String {
     )
 }
 
-fn seal_k2_internal_tables(ops: &dyn SystemOps, cl: &Cluster, db_name: &str) -> Result<(), OpsError> {
+pub(crate) fn seal_k2_internal_tables(ops: &dyn SystemOps, cl: &Cluster, db_name: &str) -> Result<(), OpsError> {
     let sql = seal_k2_internal_tables_sql(db_name);
     su_psql(ops, cl, db_name, &["-v", "ON_ERROR_STOP=1"], Some(sql.as_bytes()))?;
     Ok(())
@@ -837,7 +837,7 @@ fn owned_row(project_id: &str, spec: &str) -> Result<DbRow, OpsError> {
 }
 
 /// `--db` when given, else the workspace's default database.
-fn target_row(project_id: &str, db: Option<&str>) -> Result<DbRow, OpsError> {
+pub(crate) fn target_row(project_id: &str, db: Option<&str>) -> Result<DbRow, OpsError> {
     match db.map(str::trim).filter(|s| !s.is_empty()) {
         Some(spec) => owned_row(project_id, spec),
         None => active_row(project_id),
@@ -1746,7 +1746,7 @@ fn grant_agent_k2_tables(ops: &dyn SystemOps, db: &str) -> Result<(), OpsError> 
     Ok(())
 }
 
-fn ensure_migrations_table(
+pub(crate) fn ensure_migrations_table(
     ops: &dyn SystemOps,
     db: &str,
     user: &str,

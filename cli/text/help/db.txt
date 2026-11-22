@@ -90,6 +90,13 @@ AGENT (workspace — identity from token, never body project=)
   dump  [--out .k2/db/dumps/<ts>.dump] [--db <name|id>]
   restore <file> [--db <name|id>]
                                  workspace-relative (no .. / abs)
+  import supabase <dump> --db <name> [--dry-run] [--allow-unresolved]
+                                 A Supabase project's pg_dump -Fc into a fresh
+                                 database: Supabase's own schemas dropped,
+                                 owners remapped to the migrator, grants kept
+                                 for anon/authenticated/service_role, FORCE RLS
+                                 lifted (warned), 14-digit migrations renamed
+                                 (k2 study db, FROM SUPABASE)
   drop --yes [--db <name|id>]    a live database (default: the default one).
                                  --db on migrate/dump/restore/drop: one this
                                  workspace owns (a grant reaches dsn --db only)

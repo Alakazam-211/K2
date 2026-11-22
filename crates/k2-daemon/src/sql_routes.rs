@@ -28,6 +28,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/db/migrate"
         | "/cli/db/dump"
         | "/cli/db/restore"
+        | crate::sql::import_supabase::ROUTE
         | "/cli/db/drop"
         | "/cli/db/grant"
         | crate::db_read_routes::REQUEST_READ
@@ -56,6 +57,8 @@ pub fn dispatch_post(path: &str, body: &[u8]) -> CliResponse {
         "/cli/db/migrate" => routes::handle_migrate(body),
         "/cli/db/dump" => routes::handle_dump(body),
         "/cli/db/restore" => routes::handle_restore(body),
+        // prd-app-supabase-compat-v1 S2: a Supabase dump, mapped.
+        crate::sql::import_supabase::ROUTE => crate::sql::import_supabase::handle(body),
         "/cli/db/drop" => routes::handle_drop(body),
         "/cli/db/grant" => routes::handle_grant(body),
         crate::db_read_routes::REQUEST_READ => crate::db_read_routes::handle_request_read_tcp(body),
@@ -159,6 +162,12 @@ mod tests {
     #[test]
     fn get_bind_405() {
         let r = dispatch("/cli/db/bind", &HashMap::new()).unwrap();
+        assert_eq!(r.status, "405 Method Not Allowed");
+    }
+
+    #[test]
+    fn get_import_supabase_405() {
+        let r = dispatch(crate::sql::import_supabase::ROUTE, &HashMap::new()).unwrap();
         assert_eq!(r.status, "405 Method Not Allowed");
     }
 

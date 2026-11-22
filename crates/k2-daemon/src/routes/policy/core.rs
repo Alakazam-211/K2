@@ -303,6 +303,8 @@ pub(super) const ROWS: &[Route] = &[
     get("/cli/db/dsn", Member),
     post("/cli/db/dump", Member),
     post("/cli/db/grant", Member),
+    // prd-app-supabase-compat-v1 S2: into a database the caller owns (handler).
+    post("/cli/db/import/supabase", Member),
     get("/cli/db/list", Member),
     post("/cli/db/migrate", Member),
     both("/cli/db/query", Member),

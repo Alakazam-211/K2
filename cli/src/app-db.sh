@@ -279,6 +279,79 @@ print(json.dumps({"error": e.get("code", "usage"), "hint": e.get("hint", "")}))'
     _compute_fail "$_CP_STATUS" "$_CP_BODY"
 }
 
+# ── k2 app user import (prd-app-supabase-compat-v1 S2) ───────────────
+# `k2 app user import <app> --file users.jsonl [--apply] [--role R] [--json]`:
+# App users from another user store (Supabase's auth.users, one JSON object
+# per line) with their own ids; bcrypt passwords work and become Argon2 at
+# the first sign-in. A dry run unless --apply. The file goes in the request
+# body (python reads it: never argv). Exit 0 done, 1 clashes or a usage
+# error, 3 refused.
+_app_user_import() {
+    local app="" file="" apply=false role="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --file) file="${2-}"; if [ $# -ge 2 ]; then shift 2; else shift; fi ;;
+            --file=*) file="${1#--file=}"; shift ;;
+            --app) app="${2-}"; if [ $# -ge 2 ]; then shift 2; else shift; fi ;;
+            --app=*) app="${1#--app=}"; shift ;;
+            --apply) apply=true; shift ;;
+            --role) role="${2-}"; if [ $# -ge 2 ]; then shift 2; else shift; fi ;;
+            --role=*) role="${1#--role=}"; shift ;;
+            --json) json_out=1; shift ;;
+            -h|--help) echo "Usage: k2 app user import <app> --file users.jsonl [--apply] [--role R] [--json]" >&2; return 0 ;;
+            -*) echo "{\"error\":\"usage\",\"hint\":\"unexpected $1 (k2 app user import <app> --file users.jsonl [--apply] [--role R])\"}" >&2; return 1 ;;
+            *) [ -z "$app" ] && app="$1"; shift ;;
+        esac
+    done
+    if [ -z "$app" ] || [ -z "$file" ]; then
+        echo '{"error":"usage","hint":"k2 app user import <app> --file users.jsonl [--apply] [--role R]: one JSON object per line (id, email, encrypted_password, raw_app_meta_data, raw_user_meta_data, created_at, banned_until)"}' >&2
+        return 1
+    fi
+    if [ ! -r "$file" ]; then
+        echo "{\"error\":\"usage\",\"hint\":\"can't read $file\"}" >&2
+        return 1
+    fi
+    local body
+    body="$(K2_UI_FILE="$file" K2_UI_APP="$app" K2_UI_ROLE="$role" K2_UI_APPLY="$apply" python3 -c '
+import json, os
+with open(os.environ["K2_UI_FILE"], encoding="utf-8") as f:
+    lines = f.read()
+b = {"app": os.environ["K2_UI_APP"], "lines": lines, "apply": os.environ["K2_UI_APPLY"] == "true"}
+if os.environ.get("K2_UI_ROLE"):
+    b["role"] = os.environ["K2_UI_ROLE"]
+print(json.dumps(b))')" || return 1
+    K2_CP_MAX_TIME=600 _app_rt_post /cli/app/user/import "$body"
+    unset body
+    case "$_CP_STATUS" in
+        200|409) ;;
+        *) _app_db_fail ;;
+    esac
+    if [ "$json_out" = 1 ]; then
+        printf '%s\n' "$_CP_BODY"
+        printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; sys.exit(1 if json.load(sys.stdin).get("clashes") else 0)'
+        return $?
+    fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+done = v.get("written")
+print("App users for %s: %s" % (v.get("app"), "imported" if done else ("refused, nothing written" if v.get("apply") else "dry run, nothing written")))
+print("  new %s, updated %s, unchanged %s · without a password %s · disabled (banned) %s · K2 password kept %s" % (
+    v.get("new"), v.get("updated"), v.get("unchanged"), v.get("passwordless"), v.get("disabled"), v.get("keptK2Password")))
+names = v.get("derivedUsernames") or []
+for n in names[:20]:
+    print("  username %s for %s (from the email)" % (n.get("username"), n.get("id")))
+if len(names) > 20:
+    print("  ... and %d more usernames (--json lists every one)" % (len(names) - 20))
+for c in v.get("clashes") or []:
+    print("  clash line %s: %s%s" % (c.get("line"), c.get("reason"), " (%s)" % c["email"] if c.get("email") else ""))
+if v.get("clashes"):
+    print("  fix the clashing lines (or leave them out) and run again; --apply writes nothing while any clash", file=sys.stderr)
+    sys.exit(1)
+if not done:
+    print("  run again with --apply to write; ids are kept, bcrypt passwords work and become Argon2 at each first sign-in")'
+}
+
 _app_egress_usage() {
     cat <<'EOF'
 %include cli/text/help/app/egress.txt

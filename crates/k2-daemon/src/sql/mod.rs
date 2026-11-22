@@ -6,7 +6,7 @@
 
 pub mod actor;
 pub mod cluster;
-pub mod identity;
+pub mod identity; pub mod import_supabase;
 pub mod named_routes;
 pub mod ops;
 /// The Supabase-compatible layer's Postgres work (lane A).

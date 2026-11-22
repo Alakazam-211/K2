@@ -17,7 +17,7 @@ use super::sysops::{RealSystemOps, SystemOps};
 #[cfg(test)]
 use super::sysops::FakeSystemOps;
 
-fn err_json(status: &'static str, code: &str, hint: impl Into<String>) -> CliResponse {
+pub(crate) fn err_json(status: &'static str, code: &str, hint: impl Into<String>) -> CliResponse {
     CliResponse {
         status,
         content_type: "application/json",
@@ -29,11 +29,11 @@ fn err_json(status: &'static str, code: &str, hint: impl Into<String>) -> CliRes
     }
 }
 
-fn ops_err(e: OpsError) -> CliResponse {
+pub(crate) fn ops_err(e: OpsError) -> CliResponse {
     err_json(e.status(), e.code(), e.hint())
 }
 
-fn ok_json(v: serde_json::Value) -> CliResponse {
+pub(crate) fn ok_json(v: serde_json::Value) -> CliResponse {
     CliResponse::ok_json(v.to_string())
 }
 
@@ -100,7 +100,7 @@ fn err_forbidden_on_db(need: &str, access: &ops::UnscopedAccess) -> CliResponse 
 /// `active_row` once (first owned active, else first grant) and gate
 /// **that** row's level — owning it ⇒ write, else that grant. No row →
 /// 404, never a passport 403.
-fn interact_for(project_id: &str, need: &str) -> Result<(), CliResponse> {
+pub(crate) fn interact_for(project_id: &str, need: &str) -> Result<(), CliResponse> {
     if request_principal().is_none() {
         return Ok(());
     }
@@ -156,7 +156,7 @@ pub fn rotate_for_handover(name: &str) -> Result<(Vec<String>, String), String> 
     ops::rotate_database_for_handover(ops(), name)
 }
 
-fn ops() -> &'static dyn SystemOps {
+pub(crate) fn ops() -> &'static dyn SystemOps {
     current_ops()
 }
 

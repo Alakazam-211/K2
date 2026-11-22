@@ -347,6 +347,18 @@
       ]
     },
     {
+      "name": "app user import",
+      "usage": "k2 app user import <app> --file users.jsonl [--apply] [--role R] [--json]",
+      "description": "App users from another user store (Supabase's auth.users export, one JSON object per line: id, email, encrypted_password, raw_app_meta_data, raw_user_meta_data, created_at, banned_until; username optional, else from the email) into one App, each keeping its id. bcrypt hashes ($2a$/$2b$/$2y$) sign in and are replaced by Argon2 at the first sign-in; nobody must reset. A dry run unless --apply: counts, derived usernames and every clash (an id, email or username someone else has; a bad line). With any clash --apply writes nothing (exit 1). Running it again updates changed rows and adds new ones; a password set on K2 since is kept. A future banned_until imports the login with its App grant off. The owner, or the App's own agent with \"Let this agent manage its Apps' users\" (its new logins are tied to its workspace; it never touches another login). Not the App key.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--file", "arg": "users.jsonl", "description": "The users, one JSON object per line."},
+        {"name": "--apply", "arg": null, "description": "Write (default: a dry run)."},
+        {"name": "--role", "arg": "R", "description": "The role new App grants get (default: no rooms)."},
+        {"name": "--json", "arg": null, "description": "{app, apply, written, total, new, updated, unchanged, keptK2Password, passwordless, disabled, derivedUsernames[{id, username}], clashes[{line, id, email, reason}]}."}
+      ]
+    },
+    {
       "name": "app user invite",
       "usage": "k2 app user invite <username> --app <app> [--email e] [--role R] [--from <address>] [--json]",
       "description": "Mail a person a one-time link to set their own password for one App (no password ever goes in the mail). A new person needs --email and is made App-only (that App's grant, no box login). The owner, or an agent with \"manage Apps\" for its own workspace's Apps: an agent's invite leaves from its workspace's address under its email sending mode (off: exit 3; approval: held, the link's clock starts when it is sent). No mail path: an agent is refused, the owner gets the link once. Links expire (invites 72 h by default; k2 app login settings).",

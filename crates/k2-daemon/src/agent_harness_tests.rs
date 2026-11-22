@@ -201,6 +201,45 @@ fn bad_requests_credentials_and_member_logins_are_refused_before_anything_moves(
     assert!(live(&id).is_none());
 }
 
+/// Antigravity can launch in a tab but can't hold a pinned chat yet (K2
+/// can't answer its folder-trust question, which could swallow the
+/// handover): every way of naming it is refused before anything moves, at
+/// the route and in the swap core the other doors share.
+#[test]
+fn moving_a_pinned_chat_to_antigravity_is_refused() {
+    let home = crate::test_support::TempHome::new();
+    k2_core::db::init_for_tests();
+    let (id, path, handle) = workspace(&home, "agy");
+    let sid = uuid::Uuid::new_v4().to_string();
+    pin(&id, "claude", &sid);
+    let why = "Antigravity can't be a pinned chat yet: its folder-trust question could swallow the handover";
+    for harness in ["agy", "agy --dangerously-skip-permissions", "/home/u/.local/bin/agy"] {
+        for dry_run in [false, true] {
+            let (s, v) = call(&Caller::Owner, json!({ "workspace": handle, "harness": harness, "dryRun": dry_run }));
+            assert_eq!(s, "400 Bad Request", "{harness}: {v}");
+            assert_eq!(v["error"]["code"], "harness_not_pinnable", "{harness}: {v}");
+            assert_eq!(v["error"]["hint"], why, "{harness}: {v}");
+            assert_eq!(v["switched"], json!(false), "{v}");
+        }
+    }
+    // The shared swap core (pinned-chat menu, permission card) refuses too.
+    let err = crate::pinned_chat::run_swap(&path, "agy", "recent", "", "test", None).expect_err("refused");
+    assert_eq!(err.status, "400 Bad Request");
+    assert!(err.body.contains(why), "{}", err.body);
+    assert_eq!(pinned(&id), ("claude".to_string(), Some(sid)), "the pinned chat never moved");
+    assert!(live(&id).is_none(), "nothing spawned");
+    assert!(!std::path::Path::new(&path).join(".k2").join("handoffs").exists(), "no handover written");
+
+    // A chat already on agy (a default agent set to Antigravity) may still
+    // refresh: that is not a move, so this refusal doesn't apply (here it
+    // stops later, at the launch check: no agy in a test build).
+    let (other_id, other_path, _) = workspace(&home, "agyon");
+    pin(&other_id, "agy", &uuid::Uuid::new_v4().to_string());
+    let e = crate::pinned_chat::run_swap(&other_path, "agy", "recent", "", "test", None)
+        .expect_err("no agy to launch in a test build");
+    assert!(!e.body.contains(why), "a refresh is not a move: {}", e.body);
+}
+
 #[test]
 fn already_on_the_harness_is_a_no_op() {
     let home = crate::test_support::TempHome::new();

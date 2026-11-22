@@ -969,10 +969,18 @@ pub(crate) fn run_swap(
             "project not registered: {project_path}"
         )));
     };
-    preflight_harness(project_path, target)?;
     // The same harness: a refresh. The chat carries on, so its Thread comes
     // too, and its note must survive the new CLI's start-up.
     let refresh = crate::agent_harness::current_harness(&project_id, project_path) == target;
+    // A move onto a harness that can't hold a pinned chat yet (Antigravity)
+    // is refused before anything is touched; refreshing one that already
+    // holds it (a default agent set to it) is not a move.
+    if !refresh {
+        if let Some(why) = crate::agent_harness::not_pinnable(target) {
+            return Err(crate::cli_response::CliResponse::bad_request(why));
+        }
+    }
+    preflight_harness(project_path, target)?;
     if refresh && k2_core::workspace::resume_chat::thread_hold_settling(&project_id) {
         return Err(swap_refused(
             "409 Conflict",

@@ -71,6 +71,17 @@ pub(crate) struct Target {
     pub handle: String,
 }
 
+/// Why a pinned chat can't move to `harness` (a normalized provider key),
+/// or `None` when it can. Antigravity (`agy`) can launch in a tab, but K2
+/// can't answer its folder-trust question yet (its `workspace_trust.pbtxt`
+/// layout is unknown), and that question could swallow the handover. Stays
+/// until K2 can pre-trust a folder for agy. Also checked by the swap core
+/// ([`crate::pinned_chat::run_swap`]), so every door refuses alike.
+pub(crate) fn not_pinnable(harness: &str) -> Option<&'static str> {
+    (harness == "agy")
+        .then_some("Antigravity can't be a pinned chat yet: its folder-trust question could swallow the handover")
+}
+
 fn refused(status: &'static str, code: &str, hint: impl Into<String>) -> CliResponse {
     CliResponse {
         status,
@@ -224,6 +235,9 @@ pub fn handle(body: &[u8], caller: &Caller, ingress: &str) -> CliResponse {
         Ok(h) => h,
         Err(e) => return refused("400 Bad Request", "unknown_harness", e),
     };
+    if let Some(why) = not_pinnable(harness) {
+        return refused("400 Bad Request", "harness_not_pinnable", why);
+    }
     let mode = match req.mode.trim() {
         "" | "recent" => "recent",
         "full" => "full",

@@ -203,7 +203,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Members can use terminal sessions.** A Member login can open and use terminal sessions, and they run as the server's user. Give Member only to people you'd trust with the server.
 
 ### Desktop app
-- **On macOS, web pages in a browser tab sit beneath K2's own windows and menus, so menus, toasts and overlays no longer interrupt clicking, scrolling or hovering on the page.** Settings can switch back to the previous behaviour.
+- **On macOS, web pages in a browser tab sit beneath K2's own windows and menus, so menus, toasts and popovers no longer interrupt clicking, scrolling or hovering on the page.** Settings can switch back to the previous behaviour.
 
 ### Agents
 - **Right-clicking an agent puts Workspace settings first.**

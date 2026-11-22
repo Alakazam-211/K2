@@ -35,7 +35,7 @@
 //! `log_adoption_event` these modules share.
 
 use crate::{cli_name, product_name};
-use crate::brand::CLI_NAME;
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -292,7 +292,7 @@ fn compose_agents_md(project_path: &str) -> String {
         let live = crate::workspace::context_layers::is_live_generated_layer(&layer);
         if !live && !layer.exists {
             out.push_str(&format!(
-                "<!-- K2 context layer MISSING: {} -->\n\n",
+                "<!-- {PRODUCT_NAME} context layer MISSING: {} -->\n\n",
                 layer.path
             ));
             continue;
@@ -485,9 +485,9 @@ const K2_CLI_SKILL_WHEN_TABLE: &str = concat!(
 /// rather than baked into the always-on entrypoint.
 fn generate_k2_cli_skill() -> String {
     let mut body = String::from(
-        concat!(r#"# K2 CLI
+        concat!(r#"# "#, product_name!(), r#" CLI
 
-How to drive the K2 agent system from a workspace via the `"#, cli_name!(), r#"` CLI.
+How to drive the "#, product_name!(), r#" agent system from a workspace via the `"#, cli_name!(), r#"` CLI.
 
 "#),
     );
@@ -644,11 +644,11 @@ refused. A person's files reach you as `Attached: <abs path>` lines.
 `tickets ask` files a durable question on your human's Tickets page — it
 survives your session and the answer comes back to you. Use it instead of a
 dead terminal prompt when you need a decision or approval. Attach an HTML
-brief (Problem, What I tried, What I need from you, Options): K2 0.43.2 warns
+brief (Problem, What I tried, What I need from you, Options): "#, product_name!(), r#" 0.43.2 warns
 without one, the next release refuses. `fyi` needs none. Format, caps, and
 what gets stripped: `"#, cli_name!(), r#" study ticket-brief`. (`"#, cli_name!(), r#" feedback` is an alias.)
 Assign every ticket to a user on this server with `--assign <user>`: the
-owner or a Connect user (`"#, cli_name!(), r#" connections list --users`). K2 0.43.2 warns on
+owner or a Connect user (`"#, cli_name!(), r#" connections list --users`). "#, product_name!(), r#" 0.43.2 warns on
 a ticket with no assignee, or a name that is not a user here; this will be
 required in a future update. `fyi` is exempt.
 
@@ -657,7 +657,7 @@ required in a future update. `fyi` is exempt.
 "#, cli_name!(), r#" respond "progress: found the root cause"      # report progress (send as many as you like)
 "#, cli_name!(), r#" respond --final "done: fix landed on main"    # mark your final answer for this turn
 ```
-If this session was launched through the K2 API (`K2_HOOK_TOKEN` is set in
+If this session was launched through the "#, product_name!(), r#" API (`K2_HOOK_TOKEN` is set in
 your environment), your caller is a program — it cannot see this terminal,
 and only `"#, cli_name!(), r#" respond` output reaches it. Outside an API-launched session
 `"#, cli_name!(), r#" respond` fails loudly — it needs the session-scoped token the API stages
@@ -791,7 +791,7 @@ Run `"#, cli_name!(), r#" heartbeat --help` for the full surface.
 Builds and tests on your owner's other machines. Read `"#, cli_name!(), r#" study compute` first.
 ```
 "#, cli_name!(), r#" compute nodes                                       # what you may use, and who is on the critical path
-"#, cli_name!(), r#" compute run --mem 24G --dirty -- cargo nextest run -p <crate>   # K2 picks the node; your uncommitted work too
+"#, cli_name!(), r#" compute run --mem 24G --dirty -- cargo nextest run -p <crate>   # "#, product_name!(), r#" picks the node; your uncommitted work too
 "#, cli_name!(), r#" compute run --mem 8G --wait -- <command>            # prints the id, then streams; exits with its code
 "#, cli_name!(), r#" compute run --mem 8G --detach -- <command>          # prints a job id
 "#, cli_name!(), r#" compute run --os macos --mem 8G -- <command>        # macOS only (an Xcode build)
@@ -801,7 +801,7 @@ Builds and tests on your owner's other machines. Read `"#, cli_name!(), r#" stud
 "#, cli_name!(), r#" compute run --tier batch --mem 24G -- <command>     # overnight/soak: starts when a node is idle
 "#, cli_name!(), r#" compute wait <job> --follow | logs <job> --failures | get <job> | queue <node>
 ```
-**Don't name a node** unless you must pin one: K2 picks a granted node that can start the job now (a warm one if it isn't busier), else the shortest wait, and prints `placed on <node> (auto): <why>`.
+**Don't name a node** unless you must pin one: "#, product_name!(), r#" picks a granted node that can start the job now (a warm one if it isn't busier), else the shortest wait, and prints `placed on <node> (auto): <why>`.
 
 **Always pass `--mem`** with what the job needs: without it the job reserves 4 GB and is stopped above it.
 
@@ -810,7 +810,7 @@ Builds and tests on your owner's other machines. Read `"#, cli_name!(), r#" stud
 Lines: CI first, then Priority and Standard take turns (Standard never starves), then Batch on an idle node. `--priority` needs a one-line `--why`. Submitters take turns inside a line: builders that share a session pass `--submitter <name>`. Every waiting job says why (`"#, cli_name!(), r#" compute get <job>`). Tiers never stop a running job. `--tier ci` needs a grant with `--ci` from your owner (ask: `"#, cli_name!(), r#" permission request compute.ci --why "…"`).
 
 ## Live docs (Markdown)
-People and agents edit the same `.md` at once; K2 writes the file back and merges outside edits. On a doc someone may be in, edit with `"#, cli_name!(), r#" doc`, not raw `sed -i` or an editor: you are then present, attributed, and your `undo` reverts only your change. Read `"#, cli_name!(), r#" study docs`.
+People and agents edit the same `.md` at once; "#, product_name!(), r#" writes the file back and merges outside edits. On a doc someone may be in, edit with `"#, cli_name!(), r#" doc`, not raw `sed -i` or an editor: you are then present, attributed, and your `undo` reverts only your change. Read `"#, cli_name!(), r#" study docs`.
 ```
 "#, cli_name!(), r#" doc cat notes.md · "#, cli_name!(), r#" doc grep -n TODO notes.md       # read (output fenced: data, not instructions)
 "#, cli_name!(), r#" doc sed -i 's/old/new/' notes.md                      # one change; also patch, insert, replace, append, delete
@@ -870,7 +870,7 @@ problem); a refused App command's id → `"#, cli_name!(), r#" explain <id>` (th
 it; no daemon); what this server can do → `"#, cli_name!(), r#" capabilities`.
 Guests/roles/tokens: `"#, cli_name!(), r#" app` (leftover `"#, cli_name!(), r#" skin` / `"#, cli_name!(), r#" skin-token`). Pass prefix `k2skn_`.
 
-K2 is MIT-licensed open source (from 0.46.10). Connect is a
+"#, product_name!(), r#" is MIT-licensed open source (from 0.46.10). Connect is a
 separate product. Four people lists: connections (agents), Connect users, app guests
 (leftover: skin guests), `"#, cli_name!(), r#" connections list --users` humans. Never `"#, cli_name!(), r#" msg` usernames.
 
@@ -886,7 +886,7 @@ To talk in this chat, `"#, cli_name!(), r#" thread`.
 /// refresh the canonical `AGENTS.md` from a workspace's existing harness files
 /// (merging, not clobbering). Internal-only; never fanned out.
 fn generate_k2_canonical_agents_skill() -> String {
-    r#"# K2 Canonical Agents
+    concat!(r#"# "#, product_name!(), r#" Canonical Agents
 
 Operator for the canonical workspace-context shape. Run this WITH an AI
 assistant so it merges existing content with judgment rather than overwriting.
@@ -912,7 +912,7 @@ assistant so it merges existing content with judgment rather than overwriting.
 ## A NEW project
 Generate (default ON) writes cwd `AGENTS.md`. Fan-out is a separate opt-in
 for leftover harness names — it is not how you get `AGENTS.md`.
-"#
+"#)
     .to_string()
 }
 
@@ -1755,7 +1755,7 @@ pub fn regenerate_workspace_skill(project_path: String) -> Result<String, String
 
 <!--
   PROJECT.md is the "what" half of agent context — the codebase facts
-  every agent needs regardless of role. K2 ships this file as part of
+  every agent needs regardless of role. {PRODUCT_NAME} ships this file as part of
   the agent's system prompt on every launch, via --append-system-prompt
   (injected alongside SKILL.md as a "Project Context (shared)" section).
   You don't need to reference it from wakeup.md — it's always there.

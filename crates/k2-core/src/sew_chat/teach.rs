@@ -21,7 +21,7 @@ use std::path::Path;
 
 use rusqlite::{params, Connection, OptionalExtension};
 
-use crate::cli_name;
+use crate::{cli_name, product_name};
 
 /// The tier of a noun (prd-agent-noun-tiers-v1 §4), for when the tier
 /// manifest lands: `chat` is Everyday by relevance, `hostchat` is Opt-in
@@ -144,7 +144,7 @@ pub fn skill_body(g: ChatGates) -> Option<String> {
     if g.shows_chat() || g.shows_manage() {
         out.push_str(
             concat!("`", cli_name!(), " chat` = inside Spaces (use + community admin); `", cli_name!(), " hostchat` = the server on this box.\n\
-             `", cli_name!(), " chat` runs as YOUR chat member: chat's roles decide where you may post, and K2 gives you a\n\
+             `", cli_name!(), " chat` runs as YOUR chat member: chat's roles decide where you may post, and ", product_name!(), " gives you a\n\
              level per Space (read < reply < send < manage). A Space may queue your posts for a human's\n\
              approval. Exit codes: 0 ok (queued too), 1 error, 2 usage or wait timeout, 3 not allowed.\n\n"),
         );

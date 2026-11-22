@@ -16,7 +16,7 @@
 //! - **One HTTP client** (`src-tauri/src/k2_http.rs`): Tauri's HTTP plugin
 //!   builds a new client per request, so every call pays a new handshake.
 
-use crate::cli_name;
+use crate::{cli_name, product_name};
 
 /// The Tauri release the template asks for.
 pub const TAURI_FLOOR: (u32, u32, u32) = (2, 12, 5);
@@ -149,8 +149,8 @@ const PRIVACY_MANIFEST: &str = concat!(r#"<?xml version="1.0" encoding="UTF-8"?>
   <false/>
   <key>NSPrivacyTrackingDomains</key>
   <array/>
-  <!-- What your App keeps about its people. A K2 App keeps it on the App
-       owner's own K2 server. Keep this list the same as App Store Connect's
+  <!-- What your App keeps about its people. A "#, product_name!(), r#" App keeps it on the App
+       owner's own "#, product_name!(), r#" server. Keep this list the same as App Store Connect's
        App Privacy answers (k2/README.md, What user data your App stores
        and why). -->
   <key>NSPrivacyCollectedDataTypes</key>

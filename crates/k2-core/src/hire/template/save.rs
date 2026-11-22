@@ -24,7 +24,7 @@ use std::sync::Mutex;
 
 use serde::Serialize;
 
-use crate::brand::CLI_NAME;
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
 
 use super::super::recipe;
 use super::super::HireError;
@@ -91,7 +91,7 @@ pub fn check_secret(file: &str, text: &str) -> R<()> {
             status: 422,
             code: "secret_found",
             hint: format!(
-                "{file} line {line} holds what looks like {kind}. A template never carries secrets: remove it (keep secrets in the K2 vault), then try again"
+                "{file} line {line} holds what looks like {kind}. A template never carries secrets: remove it (keep secrets in the {PRODUCT_NAME} vault), then try again"
             ),
             file: Some(file.to_string()),
             line: Some(line),
@@ -111,7 +111,7 @@ pub fn check_id(id: &str) -> R<()> {
         return Err(TemplateError::new(
             409,
             "id_reserved",
-            format!("'{id}' is one of K2's built-in template ids or old ids; pick another id"),
+            format!("'{id}' is one of {PRODUCT_NAME}'s built-in template ids or old ids; pick another id"),
         ));
     }
     Ok(())
@@ -628,7 +628,7 @@ pub fn save(inp: &SaveInput) -> R<SaveOutcome> {
     let (mut files, skipped, mut manifest) = gather(inp)?;
     manifest.version = version;
     let toml_text = format!(
-        "# Saved by K2 from an agent's setup ({CLI_NAME} agent template save).\n{}",
+        "# Saved by {PRODUCT_NAME} from an agent's setup ({CLI_NAME} agent template save).\n{}",
         toml::to_string(&manifest).map_err(|e| internal(format!("template.toml: {e}")))?
     );
     check_secret("template.toml", &toml_text)?;
@@ -723,7 +723,7 @@ pub fn remove(id: &str, version: Option<u32>, only_author: Option<&str>) -> R<se
         return Err(bad_id(id));
     }
     if super::reserved_names().contains(id) {
-        return Err(TemplateError::new(409, "id_reserved", format!("'{id}' is one of K2's built-in templates; it can't be removed")));
+        return Err(TemplateError::new(409, "id_reserved", format!("'{id}' is one of {PRODUCT_NAME}'s built-in templates; it can't be removed")));
     }
     let _guard = LIBRARY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let have = versions_of(id);

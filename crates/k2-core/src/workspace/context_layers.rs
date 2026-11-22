@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::brand::CLI_NAME;
-use crate::cli_name;
+use crate::{cli_name, product_name};
 
 /// Soft size warning threshold for the composed AGENTS.md body (64 KiB).
 pub const SOFT_WARN_BYTES: u64 = 64 * 1024;
@@ -331,10 +331,10 @@ pub fn list_builtin_catalog() -> Vec<ContextCatalogEntry> {
         builtin_catalog_entry(
             KESSEL_PACK_ID,
             KESSEL_PACK_PATH,
-            "Kessel: K2's own agent",
+            concat!("Kessel: ", product_name!(), "'s own agent"),
             KESSEL_PACK_SOURCE,
             "static",
-            "Lean always-on orders for Kessel, the agent that runs K2 for its person: setup, settings and agent management.",
+            concat!("Lean always-on orders for Kessel, the agent that runs ", product_name!(), " for its person: setup, settings and agent management."),
             Some("1.0.0"),
             false,
             &["role", "kessel"],
@@ -378,7 +378,7 @@ pub fn list_builtin_catalog() -> Vec<ContextCatalogEntry> {
             "User roster",
             USERS_ROSTER_SOURCE,
             "live",
-            concat!("Live list of humans on this K2 box (username with their real name when set, e.g. z3thon — Rosson Long; role; disabled). Regenerates whenever AGENTS.md is rewritten. Do not `", cli_name!(), " msg` these names."),
+            concat!("Live list of humans on this ", product_name!(), " box (username with their real name when set, e.g. z3thon — Rosson Long; role; disabled). Regenerates whenever AGENTS.md is rewritten. Do not `", cli_name!(), " msg` these names."),
             None,
             false,
             &["live", "roster", "users"],
@@ -1066,11 +1066,11 @@ pub fn render_connections_roster_body(project_path: &str) -> String {
     out.push_str(
         concat!("Live roster of **connected workspace-agents** (peers, not sub-agents). \
          These are **workspace-agents** you can `", cli_name!(), " msg`. Humans who can sign \
-         into this K2 box are **not** listed here — they write to you from the \
+         into this ", product_name!(), " box are **not** listed here — they write to you from the \
          app as `[from <name>]`. To see them: `", cli_name!(), " connections list --users`, \
          or stack **User roster** (`", cli_name!(), " agent context add users:roster`) for \
          always-on context. Do **not** `", cli_name!(), " msg` those names. Regenerated whenever \
-         K2 rewrites AGENTS.md.\n\n"),
+         ", product_name!(), " rewrites AGENTS.md.\n\n"),
     );
     out.push_str("Message / peek:\n\n");
     out.push_str(concat!("    ", cli_name!(), " msg <workspace-name> \"short live knock\"\n"));
@@ -1135,8 +1135,8 @@ pub fn render_connections_roster_body(project_path: &str) -> String {
 pub fn render_heartbeats_roster_body(project_path: &str) -> String {
     let mut out = String::new();
     out.push_str(
-        "Live catalog of this workspace’s **heartbeats** (scheduled wakes). \
-         Regenerated whenever K2 rewrites AGENTS.md.\n\n",
+        concat!("Live catalog of this workspace’s **heartbeats** (scheduled wakes). \
+         Regenerated whenever ", product_name!(), " rewrites AGENTS.md.\n\n"),
     );
     out.push_str("Manage:\n\n");
     out.push_str(concat!("    ", cli_name!(), " heartbeat list\n"));
@@ -1194,8 +1194,8 @@ pub fn render_heartbeats_roster_body(project_path: &str) -> String {
 pub fn render_skills_roster_body(project_path: &str) -> String {
     let mut out = String::new();
     out.push_str(
-        "Live catalog of **loadable skills** (documentation profiles under `.k2/skills/`). \
-         Regenerated whenever K2 rewrites AGENTS.md.\n\n",
+        concat!("Live catalog of **loadable skills** (documentation profiles under `.k2/skills/`). \
+         Regenerated whenever ", product_name!(), " rewrites AGENTS.md.\n\n"),
     );
     out.push_str(
         "Skills are **on-demand** — load the matching `SKILL.md` when you need depth. \
@@ -1251,9 +1251,9 @@ pub fn render_users_roster_body(_project_path: &str) -> String {
 
     let mut out = String::new();
     out.push_str(
-        concat!("These are **humans** who can sign into this K2 box — not workspace-agents.\n\
+        concat!("These are **humans** who can sign into this ", product_name!(), " box — not workspace-agents.\n\
          They write to you from the app as `[from <name>]`; someone signed in to an App is `[guest <login> on App <app>]`, never one of them. Do **not** `", cli_name!(), " msg` these names.\n\
-         CLI lookup: `", cli_name!(), " connections list --users`. Regenerated whenever K2 rewrites AGENTS.md.\n\n"),
+         CLI lookup: `", cli_name!(), " connections list --users`. Regenerated whenever ", product_name!(), " rewrites AGENTS.md.\n\n"),
     );
     if any_named {
         out.push_str(
@@ -1289,7 +1289,7 @@ pub fn render_skin_roster_body(_project_path: &str) -> String {
          (leftover: `", cli_name!(), " skin user list`). \
          Keys for other sites: `", cli_name!(), " app token create --name <label> --agent sales` \
          (leftover: `", cli_name!(), " skin-token create --name`). \
-         Regenerated whenever K2 rewrites AGENTS.md.\n\n"),
+         Regenerated whenever ", product_name!(), " rewrites AGENTS.md.\n\n"),
     );
     if users.is_empty() {
         out.push_str("### No app users yet\n\n");
@@ -1329,8 +1329,8 @@ pub fn render_skin_roster_body(_project_path: &str) -> String {
 pub fn render_apps_maintained_body(project_path: &str) -> String {
     let mut out = String::new();
     out.push_str(
-        concat!("The K2 Apps **this agent maintains** (`", cli_name!(), " app inspect <app>`). Another agent's Apps aren't listed. \
-         Regenerated whenever K2 rewrites AGENTS.md.\n\n"),
+        concat!("The ", product_name!(), " Apps **this agent maintains** (`", cli_name!(), " app inspect <app>`). Another agent's Apps aren't listed. \
+         Regenerated whenever ", product_name!(), " rewrites AGENTS.md.\n\n"),
     );
     let Ok(ws) = resolve_project_id(project_path) else {
         out.push_str("_This folder isn't a registered workspace._\n");
@@ -1630,7 +1630,7 @@ Short standing orders for coordinating peers. Full playbook:
 ## Role
 
 You coordinate work across **connected workspaces** (peers, not sub-agents).
-Your harness owns sub-agent/worktree spawn; K2 wires messaging and the tray.
+Your harness owns sub-agent/worktree spawn; "#, product_name!(), r#" wires messaging and the tray.
 
 ## Every wake
 
@@ -1648,7 +1648,7 @@ Your harness owns sub-agent/worktree spawn; K2 wires messaging and the tray.
 "#);
 
 /// Lean always-on K2 Agent (planner) layer — planning orientation, not the full skill.
-const K2_AGENT_PACK_MD: &str = concat!(r#"# K2 Agent / planner (always-on)
+const K2_AGENT_PACK_MD: &str = concat!(r#"# "#, product_name!(), r#" Agent / planner (always-on)
 
 Short standing orders for planning. Full playbook:
 `.k2/skills/k2-agent/SKILL.md` (load on demand).
@@ -1674,24 +1674,24 @@ Write durable plans under `.k2/prds/` / `.k2/milestones/`; keep PROJECT.md curre
 "#);
 
 /// Lean always-on Kessel layer (0.46.12): what Kessel is for and how it asks.
-const KESSEL_PACK_MD: &str = concat!(r#"# Kessel: K2's own agent (always-on)
+const KESSEL_PACK_MD: &str = concat!(r#"# Kessel: "#, product_name!(), r#"'s own agent (always-on)
 
-You are Kessel, the agent that runs K2 for your person: setup, settings and
-the agents on this server. The app is K2; you are its helper.
+You are Kessel, the agent that runs "#, product_name!(), r#" for your person: setup, settings and
+the agents on this server. The app is "#, product_name!(), r#"; you are its helper.
 
 ## How you work
 
-- Learn a K2 command before you use it: `"#, cli_name!(), r#" study` lists the pages, and
+- Learn a "#, product_name!(), r#" command before you use it: `"#, cli_name!(), r#" study` lists the pages, and
   every verb takes `--help`. Don't guess flags.
 - Make agents with `"#, cli_name!(), r#" agent hire --template <id>` (`"#, cli_name!(), r#" agent template list`
   shows the types). Ask your person before you hire.
-- When K2 refuses you, ask on the card it prints. Never work around a
+- When "#, product_name!(), r#" refuses you, ask on the card it prints. Never work around a
   refusal, and never ask for more than the task needs.
 - Report what you changed on the Thread, and how you checked it.
 
 ## Do not
 
-- Handle secrets in chat or the wiki: K2's vault and secret cards hold them.
+- Handle secrets in chat or the wiki: "#, product_name!(), r#"'s vault and secret cards hold them.
 - Change another agent's files, or speak for another agent.
 - Paste long docs into always-on context; link the path instead.
 "#);

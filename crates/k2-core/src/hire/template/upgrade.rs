@@ -24,7 +24,7 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use crate::brand::CLI_NAME;
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
 
 use super::super::HireCaller;
 use super::apply::{charter, fill_note, role_body, AnswerPlan};
@@ -33,6 +33,7 @@ use super::lock::{self, TemplateLock};
 use super::render::{placeholders, render};
 use super::save::TemplateError;
 use crate::skills::version::{SKILL_BEGIN_MARKER, SKILL_END_MARKER};
+use crate::product_name;
 
 type R<T> = Result<T, TemplateError>;
 
@@ -255,7 +256,7 @@ impl Pass<'_> {
             self.kept.insert(rel.to_string());
             self.wrote |= !already;
             let why = if risky && sha256_text(&current) == locked {
-                "written before K2 kept the hire's values; review the new text"
+                concat!("written before ", product_name!(), " kept the hire's values; review the new text")
             } else {
                 "the agent changed it; kept, new text beside it"
             };
@@ -317,7 +318,7 @@ impl Pass<'_> {
             self.kept.insert(ROLE_REL.to_string());
             self.wrote = true;
             let why = if risky && sha256_text(block) == locked {
-                "written before K2 kept the hire's values; review the new charter"
+                concat!("written before ", product_name!(), " kept the hire's values; review the new charter")
             } else {
                 "the agent changed the K2:MANAGED block; kept, new text beside it"
             };
@@ -352,7 +353,7 @@ impl Pass<'_> {
             self.kept.insert(e.path.clone());
             if !already {
                 self.wrote = true;
-                let mut r = up("pack", &e.path, "keep", Some("stacked before K2 kept pack checksums; review the new text".into()));
+                let mut r = up("pack", &e.path, "keep", Some(concat!("stacked before ", product_name!(), " kept pack checksums; review the new text").into()));
                 r.proposed = Some(p);
                 r.diff = self.with_diff.then(|| line_diff(&current, body));
                 self.rows.push(r);
@@ -433,7 +434,7 @@ fn run(ws: &str, lock: TemplateLock, t: Option<&Template>, actor: &str, dry: boo
             let title = if to > from {
                 format!("Your {name} template went {from} → {to}")
             } else {
-                format!("K2 updated your {name} context packs")
+                format!("{PRODUCT_NAME} updated your {name} context packs")
             };
             if let Err(e) = crate::inbox::compose(Path::new(ws), &title, text, Some("normal"), Some("k2"), Some("k2")) {
                 crate::log_debug!("[agent-templates] upgrade note for {ws}: {e}");
@@ -596,7 +597,7 @@ fn report_note(name: &str, from: u32, to: u32, rows: &[UpRow]) -> String {
     let mut out = if to > from {
         format!("Your {name} template went {from} → {to}.")
     } else {
-        format!("K2 refreshed the context packs your {name} template stacked.")
+        format!("{PRODUCT_NAME} refreshed the context packs your {name} template stacked.")
     };
     let list = |v: &[String]| v.join(", ");
     let replaced = pick("replace");
@@ -655,7 +656,7 @@ fn version_files(id: &str, v: u32) -> R<BTreeMap<String, String>> {
         return Err(TemplateError::new(
             404,
             "unknown_template",
-            format!("K2 ships only v{} of the built-in '{}'", t.meta.version, t.meta.id),
+            format!("{PRODUCT_NAME} ships only v{} of the built-in '{}'", t.meta.version, t.meta.id),
         ));
     }
     let dir = super::library_dir().join(id).join(format!("v{v}"));

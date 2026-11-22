@@ -21,7 +21,7 @@
 //! injects project-global conventions into every agent of a given tier.
 
 use crate::{cli_name, product_name};
-use crate::brand::CLI_NAME;
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
 use std::fs;
 use std::path::PathBuf;
 
@@ -76,7 +76,7 @@ table; whichever you prefer is fine.
 ## Available Tools
 
 Standard CLI tools are available in your terminal (`gh`, `git`,
-`curl`, etc.). K2 tools:
+`curl`, etc.). "#, product_name!(), r#" tools:
 
 ```
 "#, cli_name!(), r#" terminal spawn --title "..." --command "..."   # run parallel tasks
@@ -248,7 +248,7 @@ pub fn generate_manager_skill_content(project_path: &str, project_name: &str) ->
 
     // ── 1. Identity + Workspace Context ──
     skill.push_str(&format!(
-        "# K2 Workspace Manager Skill\n\nYou are the primary agent for the **{}** workspace, operating in manager mode.\n\nA workspace has at most one primary agent (you). Specialist personas are **skill profiles** — documentation, not separate spawnable agents. Your harness (Claude Code, Cursor, Tauri Cmd+T) handles all sub-agent and worktree spawning natively; K2 does not.\n\n",
+        "# {PRODUCT_NAME} Workspace Manager Skill\n\nYou are the primary agent for the **{}** workspace, operating in manager mode.\n\nA workspace has at most one primary agent (you). Specialist personas are **skill profiles** — documentation, not separate spawnable agents. Your harness (Claude Code, Cursor, Tauri Cmd+T) handles all sub-agent and worktree spawning natively; {PRODUCT_NAME} does not.\n\n",
         project_name
     ));
 
@@ -324,14 +324,14 @@ On each wake, run through this in order:
 
 ### By Task Complexity
 - **Simple** (typo, config, single-file fix): work directly in the main branch.
-- **Complex** (multi-file feature, refactor, new system): hand off to your harness's sub-agent / worktree feature. Load a skill profile (`"#, cli_name!(), r#" skills profile <name>`) into the spawned session's context so the sub-agent has the right persona. K2 no longer spawns agents — your harness does.
+- **Complex** (multi-file feature, refactor, new system): hand off to your harness's sub-agent / worktree feature. Load a skill profile (`"#, cli_name!(), r#" skills profile <name>`) into the spawned session's context so the sub-agent has the right persona. "#, product_name!(), r#" no longer spawns agents — your harness does.
 
 "#));
 
     // ── 5. Skills Protocol ──
     skill.push_str(concat!(r#"## Skill Profiles
 
-Skill profiles are markdown documents at `.k2/skills/<name>/SKILL.md` describing a role, persona, or capability set. The harness loads them; K2 does not spawn them.
+Skill profiles are markdown documents at `.k2/skills/<name>/SKILL.md` describing a role, persona, or capability set. The harness loads them; "#, product_name!(), r#" does not spawn them.
 
 ```
 "#, cli_name!(), r#" skills list                              # what skill profiles exist here
@@ -344,7 +344,7 @@ Skill profiles are markdown documents at `.k2/skills/<name>/SKILL.md` describing
 When you need a specialist persona on a piece of work:
 1. `"#, cli_name!(), r#" skills profile <name>` — print the SKILL.md content.
 2. Load it into your harness's sub-agent context (Claude Code sub-agent prompt, Cursor worktree instructions, etc.).
-3. Your harness handles the worktree + spawn. K2 tracks the resulting merge review.
+3. Your harness handles the worktree + spawn. "#, product_name!(), r#" tracks the resulting merge review.
 
 "#));
 
@@ -398,12 +398,12 @@ Only workspaces linked via `"#, cli_name!(), r#" connections` are reachable.
 ```
 "#, cli_name!(), r#" tickets template > brief.html
 "#, cli_name!(), r#" tickets ask "<title>" --html brief.html --assign <user> [--option "..."]... [--wait]
-# (`"#, cli_name!(), r#" feedback` is a compatibility alias. Product "Feedback" for K2 itself is separate/future.)
+# (`"#, cli_name!(), r#" feedback` is a compatibility alias. Product "Feedback" for "#, product_name!(), r#" itself is separate/future.)
 ```
-Files a durable question on your human's Tickets page — it survives your session (unlike a terminal prompt) and the answer comes back to you. Use it whenever you need a decision or approval. Attach an HTML brief with `--html` (Problem, What I tried, What I need from you, Options); K2 cleans it and shows it as a page above the thread. 0.43.2 warns without one and the next release refuses; `fyi` needs none. See `"#, cli_name!(), r#" study ticket-brief`. Assign every ticket to a user on this server with `--assign <user>` (the owner or a Connect user: `"#, cli_name!(), r#" connections list --users`); 0.43.2 warns on a ticket with no assignee or a name that is not a user here, and this will be required in a future update. Track answers with `"#, cli_name!(), r#" tickets list` / `"#, cli_name!(), r#" tickets show <id>`. A person who picks one of your options answers the ticket; a free-text message puts it in `needs_discussion` — reply with `"#, cli_name!(), r#" tickets comment <id> "<reply>"`, settle it, then mark it answered (`"#, cli_name!(), r#" tickets resolve <id> --answered "<outcome>"`) or resolved (`"#, cli_name!(), r#" tickets resolve <id>`). You decide when the discussion is done. Attach workspace files to the ask, a comment or the settled outcome with `--file path[:line]` (repeatable, up to 10; a pointer to the file, never a copy; secrets are refused); a person's files reach you as `Attached: <abs path>` lines.
+Files a durable question on your human's Tickets page — it survives your session (unlike a terminal prompt) and the answer comes back to you. Use it whenever you need a decision or approval. Attach an HTML brief with `--html` (Problem, What I tried, What I need from you, Options); "#, product_name!(), r#" cleans it and shows it as a page above the thread. 0.43.2 warns without one and the next release refuses; `fyi` needs none. See `"#, cli_name!(), r#" study ticket-brief`. Assign every ticket to a user on this server with `--assign <user>` (the owner or a Connect user: `"#, cli_name!(), r#" connections list --users`); 0.43.2 warns on a ticket with no assignee or a name that is not a user here, and this will be required in a future update. Track answers with `"#, cli_name!(), r#" tickets list` / `"#, cli_name!(), r#" tickets show <id>`. A person who picks one of your options answers the ticket; a free-text message puts it in `needs_discussion` — reply with `"#, cli_name!(), r#" tickets comment <id> "<reply>"`, settle it, then mark it answered (`"#, cli_name!(), r#" tickets resolve <id> --answered "<outcome>"`) or resolved (`"#, cli_name!(), r#" tickets resolve <id>`). You decide when the discussion is done. Attach workspace files to the ask, a comment or the settled outcome with `--file path[:line]` (repeatable, up to 10; a pointer to the file, never a copy; secrets are refused); a person's files reach you as `Attached: <abs path>` lines.
 
 ### Respond to your API caller
-If this session was launched through the K2 API (`K2_HOOK_TOKEN` is set in your environment), your caller is a program — it cannot see this terminal, and only `"#, cli_name!(), r#" respond` output reaches it.
+If this session was launched through the "#, product_name!(), r#" API (`K2_HOOK_TOKEN` is set in your environment), your caller is a program — it cannot see this terminal, and only `"#, cli_name!(), r#" respond` output reaches it.
 ```
 "#, cli_name!(), r#" respond "progress: found the root cause"      # report progress (send as many as you like)
 "#, cli_name!(), r#" respond --final "done: fix landed on main"    # mark your final answer for this turn
@@ -478,7 +478,7 @@ Run `"#, cli_name!(), r#" glossary <term>` for definitions of K2-specific terms 
 /// No delegation — custom agents send work to workspace inboxes.
 pub fn generate_custom_agent_skill_content(project_name: &str, agent_name: &str) -> String {
     let mut skill = format!(
-r#"# K2 Agent Skill
+r#"# {PRODUCT_NAME} Agent Skill
 
 You are {agent_name}, a custom agent for {project_name}.
 
@@ -553,11 +553,11 @@ Only workspaces linked via `"#, cli_name!(), r#" connections` are reachable.
 "#, cli_name!(), r#" tickets ask "<title>" --html brief.html --assign <user> [--option "..."]... [--wait]
 ```
 
-Files a durable question on your human's Tickets page — it survives your session (unlike a terminal prompt) and the answer comes back to you. Use it whenever you need a decision or approval. Attach an HTML brief with `--html` (Problem, What I tried, What I need from you, Options); K2 cleans it and shows it as a page above the thread. 0.43.2 warns without one and the next release refuses; `fyi` needs none. See `"#, cli_name!(), r#" study ticket-brief`. Assign every ticket to a user on this server with `--assign <user>` (the owner or a Connect user: `"#, cli_name!(), r#" connections list --users`); 0.43.2 warns on a ticket with no assignee or a name that is not a user here, and this will be required in a future update. Track answers with `"#, cli_name!(), r#" tickets list` / `"#, cli_name!(), r#" tickets show <id>`. A person who picks one of your options answers the ticket; a free-text message puts it in `needs_discussion` — reply with `"#, cli_name!(), r#" tickets comment <id> "<reply>"`, settle it, then mark it answered (`"#, cli_name!(), r#" tickets resolve <id> --answered "<outcome>"`) or resolved (`"#, cli_name!(), r#" tickets resolve <id>`). You decide when the discussion is done. Attach workspace files to the ask, a comment or the settled outcome with `--file path[:line]` (repeatable, up to 10; a pointer to the file, never a copy; secrets are refused); a person's files reach you as `Attached: <abs path>` lines.
+Files a durable question on your human's Tickets page — it survives your session (unlike a terminal prompt) and the answer comes back to you. Use it whenever you need a decision or approval. Attach an HTML brief with `--html` (Problem, What I tried, What I need from you, Options); "#, product_name!(), r#" cleans it and shows it as a page above the thread. 0.43.2 warns without one and the next release refuses; `fyi` needs none. See `"#, cli_name!(), r#" study ticket-brief`. Assign every ticket to a user on this server with `--assign <user>` (the owner or a Connect user: `"#, cli_name!(), r#" connections list --users`); 0.43.2 warns on a ticket with no assignee or a name that is not a user here, and this will be required in a future update. Track answers with `"#, cli_name!(), r#" tickets list` / `"#, cli_name!(), r#" tickets show <id>`. A person who picks one of your options answers the ticket; a free-text message puts it in `needs_discussion` — reply with `"#, cli_name!(), r#" tickets comment <id> "<reply>"`, settle it, then mark it answered (`"#, cli_name!(), r#" tickets resolve <id> --answered "<outcome>"`) or resolved (`"#, cli_name!(), r#" tickets resolve <id>`). You decide when the discussion is done. Attach workspace files to the ask, a comment or the settled outcome with `--file path[:line]` (repeatable, up to 10; a pointer to the file, never a copy; secrets are refused); a person's files reach you as `Attached: <abs path>` lines.
 
 ## Respond to your API caller
 
-If this session was launched through the K2 API (`K2_HOOK_TOKEN` is set in your environment), your caller is a program — it cannot see this terminal, and only `"#, cli_name!(), r#" respond` output reaches it.
+If this session was launched through the "#, product_name!(), r#" API (`K2_HOOK_TOKEN` is set in your environment), your caller is a program — it cannot see this terminal, and only `"#, cli_name!(), r#" respond` output reaches it.
 
 ```
 "#, cli_name!(), r#" respond "progress: found the root cause"      # report progress (send as many as you like)
@@ -633,9 +633,9 @@ Run `"#, cli_name!(), r#" glossary <term>` for definitions of K2-specific terms 
 /// older shared `generate_custom_agent_skill_content` doesn't emit.
 pub fn generate_k2_agent_skill_content(project_name: &str, agent_name: &str) -> String {
     let mut skill = format!(
-r#"# K2 Agent Skill (Comprehensive)
+r#"# {PRODUCT_NAME} Agent Skill (Comprehensive)
 
-You are **{agent_name}**, the K2 planner for **{project_name}**. Your job is planning — turn raw requests into well-scoped PRDs, milestones, and technical specs. Engineering happens in other workspaces (or in your own harness's sub-agent sessions); you do not implement.
+You are **{agent_name}**, the {PRODUCT_NAME} planner for **{project_name}**. Your job is planning — turn raw requests into well-scoped PRDs, milestones, and technical specs. Engineering happens in other workspaces (or in your own harness's sub-agent sessions); you do not implement.
 
 This skill lists the full daily + power-user CLI surface so you can triage, message, schedule wakes, and coordinate with other workspaces.
 
@@ -675,7 +675,7 @@ This skill lists the full daily + power-user CLI surface so you can triage, mess
 "#, cli_name!(), r#" inbox folders                  # list folders you have created
 ```
 
-K2 does not impose a folder taxonomy — organize like email (e.g., `projects/`, `reference/`, `issues/`, `done/`).
+"#, product_name!(), r#" does not impose a folder taxonomy — organize like email (e.g., `projects/`, `reference/`, `issues/`, `done/`).
 
 ## Report status + completion
 
@@ -769,11 +769,11 @@ Only workspaces linked via `"#, cli_name!(), r#" connections` are reachable.
 "#, cli_name!(), r#" tickets ask "<title>" --html brief.html --assign <user> [--option "..."]... [--wait]
 ```
 
-Files a durable question on your human's Tickets page — it survives your session (unlike a terminal prompt) and the answer comes back to you. Use it whenever you need a decision or approval. Attach an HTML brief with `--html` (Problem, What I tried, What I need from you, Options); K2 cleans it and shows it as a page above the thread. 0.43.2 warns without one and the next release refuses; `fyi` needs none. See `"#, cli_name!(), r#" study ticket-brief`. Assign every ticket to a user on this server with `--assign <user>` (the owner or a Connect user: `"#, cli_name!(), r#" connections list --users`); 0.43.2 warns on a ticket with no assignee or a name that is not a user here, and this will be required in a future update. Track answers with `"#, cli_name!(), r#" tickets list` / `"#, cli_name!(), r#" tickets show <id>`. A person who picks one of your options answers the ticket; a free-text message puts it in `needs_discussion` — reply with `"#, cli_name!(), r#" tickets comment <id> "<reply>"`, settle it, then mark it answered (`"#, cli_name!(), r#" tickets resolve <id> --answered "<outcome>"`) or resolved (`"#, cli_name!(), r#" tickets resolve <id>`). You decide when the discussion is done. Attach workspace files to the ask, a comment or the settled outcome with `--file path[:line]` (repeatable, up to 10; a pointer to the file, never a copy; secrets are refused); a person's files reach you as `Attached: <abs path>` lines.
+Files a durable question on your human's Tickets page — it survives your session (unlike a terminal prompt) and the answer comes back to you. Use it whenever you need a decision or approval. Attach an HTML brief with `--html` (Problem, What I tried, What I need from you, Options); "#, product_name!(), r#" cleans it and shows it as a page above the thread. 0.43.2 warns without one and the next release refuses; `fyi` needs none. See `"#, cli_name!(), r#" study ticket-brief`. Assign every ticket to a user on this server with `--assign <user>` (the owner or a Connect user: `"#, cli_name!(), r#" connections list --users`); 0.43.2 warns on a ticket with no assignee or a name that is not a user here, and this will be required in a future update. Track answers with `"#, cli_name!(), r#" tickets list` / `"#, cli_name!(), r#" tickets show <id>`. A person who picks one of your options answers the ticket; a free-text message puts it in `needs_discussion` — reply with `"#, cli_name!(), r#" tickets comment <id> "<reply>"`, settle it, then mark it answered (`"#, cli_name!(), r#" tickets resolve <id> --answered "<outcome>"`) or resolved (`"#, cli_name!(), r#" tickets resolve <id>`). You decide when the discussion is done. Attach workspace files to the ask, a comment or the settled outcome with `--file path[:line]` (repeatable, up to 10; a pointer to the file, never a copy; secrets are refused); a person's files reach you as `Attached: <abs path>` lines.
 
 ## Respond to your API caller
 
-If this session was launched through the K2 API (`K2_HOOK_TOKEN` is set in your environment), your caller is a program — it cannot see this terminal, and only `"#, cli_name!(), r#" respond` output reaches it.
+If this session was launched through the "#, product_name!(), r#" API (`K2_HOOK_TOKEN` is set in your environment), your caller is a program — it cannot see this terminal, and only `"#, cli_name!(), r#" respond` output reaches it.
 
 ```
 "#, cli_name!(), r#" respond "progress: found the root cause"      # report progress (send as many as you like)
@@ -846,7 +846,7 @@ Worktrees may originate from your harness (Claude Code sub-agent, Cursor worktre
 "#, cli_name!(), r#" skills regenerate [<name>]               # refresh SKILL.md from templates
 ```
 
-Skills are documents the harness loads when spawning sub-agents — K2 no longer spawns. When you want a specialist persona applied to work, print the SKILL.md and load it into your harness's session context.
+Skills are documents the harness loads when spawning sub-agents — "#, product_name!(), r#" no longer spawns. When you want a specialist persona applied to work, print the SKILL.md and load it into your harness's session context.
 
 ## Settings + diagnostics
 
@@ -879,9 +879,9 @@ Run `"#, cli_name!(), r#" glossary <term>` for definitions of K2-specific terms 
 /// backup → atomic copy-write → manifest, default dry-run.
 pub fn generate_canonical_agent_skill_content(project_name: &str) -> String {
     format!(
-        r#"# K2 Canonical Agent Skill
+        r#"# {PRODUCT_NAME} Canonical Agent Skill
 
-You are the K2 Canonical Agent for the **{project_name}** workspace. Your
+You are the {PRODUCT_NAME} Canonical Agent for the **{project_name}** workspace. Your
 job is to **unify this workspace's AI-harness files safely** — never to
 overwrite the user's content.
 
@@ -923,7 +923,7 @@ per-harness files are **generated mirrors** of them.
 8. **Report** — tell the user exactly what changed and where the
    backups + manifest live.
 9. **Unwind** — the SAME skill undoes it. Manifest-driven exact restore:
-   put each backed-up original back, trash anything K2 created fresh,
+   put each backed-up original back, trash anything {PRODUCT_NAME} created fresh,
    leave `.k2/` intact.
 
 ## Safety contract (non-negotiable)
@@ -1065,11 +1065,11 @@ pub fn write_opt_in_skill(project_path: &str, skill: OptInSkill) -> PathBuf {
 /// its own session-level instructions; this is just K2-CLI context.
 pub fn generate_template_skill_content(project_name: &str, agent_name: &str) -> String {
     let mut skill = format!(
-r#"# K2 Skill Profile — {agent_name}
+r#"# {PRODUCT_NAME} Skill Profile — {agent_name}
 
 A skill profile for **{project_name}**.
 
-A skill is a documentation profile — a persona / capability set the harness can apply to a sub-agent session. K2 does not spawn this skill; your harness (Claude Code, Cursor, Tauri Cmd+T) does. When your harness loads this profile into a session's context, the CLI surface below is what's available to you inside that session.
+A skill is a documentation profile — a persona / capability set the harness can apply to a sub-agent session. {PRODUCT_NAME} does not spawn this skill; your harness (Claude Code, Cursor, Tauri Cmd+T) does. When your harness loads this profile into a session's context, the CLI surface below is what's available to you inside that session.
 
 "#,
         agent_name = agent_name,
@@ -1207,7 +1207,7 @@ pub fn compose_agent_wake_context(
         }
     }
 
-    md.push_str(&format!("# K2 Agent: {}\n\n", agent_name));
+    md.push_str(&format!("# {PRODUCT_NAME} Agent: {}\n\n", agent_name));
     md.push_str(&format!("## Identity\n**Role:** {}\n\n", role));
     // Reference the agent's full profile (absolute path so it resolves from worktrees)
     md.push_str(&format!(
@@ -1341,7 +1341,7 @@ pub const K2_PERMISSIONS_SKILL_DESCRIPTION: &str =
 pub const K2_PERMISSIONS_SKILL_BODY: &str = concat!(
     r#"# Permission cards (Beta)
 
-Permission cards are on for you: "Let agents ask with permission cards" is on for this server (Settings → Access → Permission Cards; on by default from K2 0.46.11), and a person turned on your own "Let this agent ask for permission" switch in your workspace's settings. When K2 refuses you something a person can allow, ask that person with one command. K2 shows them a card; they press Allow or Deny.
+Permission cards are on for you: "Let agents ask with permission cards" is on for this server (Settings → Access → Permission Cards; on by default from "#, product_name!(), r#" 0.46.11), and a person turned on your own "Let this agent ask for permission" switch in your workspace's settings. When "#, product_name!(), r#" refuses you something a person can allow, ask that person with one command. "#, product_name!(), r#" shows them a card; they press Allow or Deny.
 
 ## The closing line
 
@@ -1365,7 +1365,7 @@ If `"#, cli_name!(), r#" permission` ever says unknown command, cards were turne
 
 1. Run the Ask-with line as printed; fill in only `--why`.
 2. You may also ask before any refusal, when you know the action.
-3. Several needs: one request per action. K2 groups requests sent within 5 minutes into one card per set of approvers. Answers still come one per request.
+3. Several needs: one request per action. "#, product_name!(), r#" groups requests sent within 5 minutes into one card per set of approvers. Answers still come one per request.
 
 ## Held
 
@@ -1387,7 +1387,7 @@ A hold (exit 2) already made a request the approvers can see in Settings. Asking
 
 ## What people see
 
-- K2 writes the card on your Thread: what changes, what it means, how long. Your `--why` shows under it, labelled with your name.
+- "#, product_name!(), r#" writes the card on your Thread: what changes, what it means, how long. Your `--why` shows under it, labelled with your name.
 - The people it asks get Allow and Deny, and a push: everyone who may approve, or only those `--to` or the owner's list names.
 - The person you're working with, if they can't approve, sees that an admin was asked and that they can keep working with you meanwhile. They can leave the approver a note. You don't need to relay notes, and you never see them.
 
@@ -1401,7 +1401,7 @@ Run it as printed. The owner or an admin allows it and confirms it's them, and t
 
 ## A secret another agent sent you
 
-When another agent sends you a secret (`"#, cli_name!(), r#" vault send NAME --to <you>`) and it waits for a person, K2 puts a card on your Thread itself: the person taps Allow to accept it or Deny to decline it, on the desktop or the phone. Don't run `"#, cli_name!(), r#" vault incoming accept` (it's a person's), and don't ask when the card is there (`"#, cli_name!(), r#" vault incoming` says where it is). To let agents on this server take one agent's secrets without a person accepting each, ask once for all of them: `"#, cli_name!(), r#" permission request vault.accept-from sender=<agent> receivers=<agent>[,<agent>…] --why "<what you need it for>"` (one card names every receiver; an owner or admin allows it; it lets them receive, never send; `--assign <login>` asks one person). No card for one (it couldn't go up)? `"#, cli_name!(), r#" vault incoming` puts it up, or ask:
+When another agent sends you a secret (`"#, cli_name!(), r#" vault send NAME --to <you>`) and it waits for a person, "#, product_name!(), r#" puts a card on your Thread itself: the person taps Allow to accept it or Deny to decline it, on the desktop or the phone. Don't run `"#, cli_name!(), r#" vault incoming accept` (it's a person's), and don't ask when the card is there (`"#, cli_name!(), r#" vault incoming` says where it is). To let agents on this server take one agent's secrets without a person accepting each, ask once for all of them: `"#, cli_name!(), r#" permission request vault.accept-from sender=<agent> receivers=<agent>[,<agent>…] --why "<what you need it for>"` (one card names every receiver; an owner or admin allows it; it lets them receive, never send; `--assign <login>` asks one person). No card for one (it couldn't go up)? `"#, cli_name!(), r#" vault incoming` puts it up, or ask:
 
     "#, cli_name!(), r#" permission request vault.incoming.accept id=<hd_… id> --why "<what you need it for>"
 
@@ -1413,7 +1413,7 @@ A secret a person gave you leaves this server only when a person says so. So `"#
 
     "#, cli_name!(), r#" permission request vault.send secret=NAME to=<agent>::<host> --why "<what you need it for>"
 
-Several secrets for the same agent go on one card: `secret=A,B,C`. The owner or an admin confirms it's them and K2 sends it as them, so don't run the send again when the `[permission:]` turn says approved. They may also let you send those secrets to that agent yourself from now on: then a later `"#, cli_name!(), r#" vault send` of them there just works, and any other secret or agent still asks. `"#, cli_name!(), r#" vault send-allow` lists what you may send without asking. Denied: nothing was sent.
+Several secrets for the same agent go on one card: `secret=A,B,C`. The owner or an admin confirms it's them and "#, product_name!(), r#" sends it as them, so don't run the send again when the `[permission:]` turn says approved. They may also let you send those secrets to that agent yourself from now on: then a later `"#, cli_name!(), r#" vault send` of them there just works, and any other secret or agent still asks. `"#, cli_name!(), r#" vault send-allow` lists what you may send without asking. Denied: nothing was sent.
 
 ## A server secret you need
 
@@ -1470,7 +1470,7 @@ When the `[permission:]` turn says approved, they have that role on your App, an
 
 ## Refreshing your own chat
 
-A long pinned chat goes stale. `"#, cli_name!(), r#" agent refresh --note "<what the next chat needs>"` (or `--notes-file <path>`) starts a new chat on the same harness that carries on from this one. Your main session only; a sidecar has its own chat. With your workspace's "Let this agent refresh its pinned chat" off, the refusal ends with the line to ask with, and K2 keeps your note for the card:
+A long pinned chat goes stale. `"#, cli_name!(), r#" agent refresh --note "<what the next chat needs>"` (or `--notes-file <path>`) starts a new chat on the same harness that carries on from this one. Your main session only; a sidecar has its own chat. With your workspace's "Let this agent refresh its pinned chat" off, the refusal ends with the line to ask with, and "#, product_name!(), r#" keeps your note for the card:
 
     "#, cli_name!(), r#" permission request chat.refresh notes=<hash> --why "<what you need it for>"
 
@@ -1508,7 +1508,7 @@ A job reads a private GitHub repo only with a grant, and every grant needs this 
 
     "#, cli_name!(), r#" permission request compute.git-access-setup --why "<what you need it for>"
 
-Run it as printed. The owner or an admin enters a GitHub App key or a read-only token in K2's own form on the card: it goes straight into this server's vault and you never see it. Never ask for a key or token in chat or on a secret card. When the `[permission:]` turn comes back (it may say "already on": they set it in the form), run the grant again: it ends with `"#, cli_name!(), r#" permission request compute.git-access repos=<owner>/<repo> --why "..."`, a second card. Once that's approved, run your job again. `"#, cli_name!(), r#" study compute` (GIT ACCESS).
+Run it as printed. The owner or an admin enters a GitHub App key or a read-only token in "#, product_name!(), r#"'s own form on the card: it goes straight into this server's vault and you never see it. Never ask for a key or token in chat or on a secret card. When the `[permission:]` turn comes back (it may say "already on": they set it in the form), run the grant again: it ends with `"#, cli_name!(), r#" permission request compute.git-access repos=<owner>/<repo> --why "..."`, a second card. Once that's approved, run your job again. `"#, cli_name!(), r#" study compute` (GIT ACCESS).
 
 ## CI on compute nodes
 
@@ -1583,8 +1583,8 @@ Run it as printed (without `token=` it rechecks every token). The owner or an ad
 ## Published sites
 
 - Making your own site private needs no card: `"#, cli_name!(), r#" publish visibility <name> private`.
-- To make it public, run `"#, cli_name!(), r#" publish visibility <name> public --reason "..."`. K2 puts its `publish.public` card on your Thread and exits 2. Wait for the answer. A dev server can't be asked for: offer a PIN instead.
-- To put it behind a PIN, run `"#, cli_name!(), r#" publish visibility <name> pin`. K2 puts its `publish.pin` card on your Thread and exits 2. The person types the PIN into K2's own form. You never see it, so never ask for it.
+- To make it public, run `"#, cli_name!(), r#" publish visibility <name> public --reason "..."`. "#, product_name!(), r#" puts its `publish.public` card on your Thread and exits 2. Wait for the answer. A dev server can't be asked for: offer a PIN instead.
+- To put it behind a PIN, run `"#, cli_name!(), r#" publish visibility <name> pin`. "#, product_name!(), r#" puts its `publish.pin` card on your Thread and exits 2. The person types the PIN into "#, product_name!(), r#"'s own form. You never see it, so never ask for it.
 
 ## The answer
 

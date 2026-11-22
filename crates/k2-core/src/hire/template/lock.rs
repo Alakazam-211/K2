@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::super::HireError;
+use crate::product_name;
 
 pub const LOCK_REL: &str = ".k2/agent/template.lock";
 
@@ -86,7 +87,7 @@ pub fn write(workspace: &str, lock: &TemplateLock) -> Result<(), HireError> {
     if let Some(parent) = p.parent() {
         std::fs::create_dir_all(parent).map_err(|e| HireError::internal(format!("{}: {e}", parent.display())))?;
     }
-    let mut text = String::from("# Written by K2 when this agent was made from a template. Don't edit.\n");
+    let mut text = String::from(concat!("# Written by ", product_name!(), " when this agent was made from a template. Don't edit.\n"));
     text.push_str(&toml::to_string(lock).map_err(|e| HireError::internal(format!("template lock: {e}")))?);
     crate::fs_atomic::atomic_write_str(&p, &text).map_err(|e| HireError::internal(format!("{}: {e}", p.display())))
 }

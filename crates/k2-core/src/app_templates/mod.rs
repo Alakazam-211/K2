@@ -56,8 +56,8 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use serde_json::{json, Value as J};
 
-use crate::brand::CLI_NAME;
-use crate::cli_name;
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
+use crate::{cli_name, product_name};
 
 /// The templates `k2 app init` knows.
 pub const TEMPLATES: &[&str] = &["tauri", "static", "node-api"];
@@ -230,7 +230,7 @@ pub fn plan_with(folder: &Path, template: &str, o: &Options) -> Result<Plan, Tem
     let mut p = Plan { template: template.to_string(), folder: folder.display().to_string(), name: base.clone(), files: Vec::new(), next: Vec::new(), notes: Vec::new() };
     if host.is_none() {
         p.notes.push(format!(
-            "this box has no K2 Connect name yet, so the files say <your-app-host> where {app_id}'s host goes; put it in once the App has one ({CLI_NAME} app list shows its URL)"
+            "this box has no {PRODUCT_NAME} Connect name yet, so the files say <your-app-host> where {app_id}'s host goes; put it in once the App has one ({CLI_NAME} app list shows its URL)"
         ));
     }
     let host_s = host.clone().unwrap_or_else(|| "<your-app-host>".into());
@@ -394,7 +394,7 @@ fn plan_tauri(folder: &Path, t: &Tauri, p: &mut Plan) -> Result<(), TemplateErro
         p.files.push(FilePlan {
             path: format!("src-tauri/{f}"),
             action: Action::Snippet,
-            note: format!("K2 edits tauri.conf.json only: add this to {f} by hand"),
+            note: format!("{PRODUCT_NAME} edits tauri.conf.json only: add this to {f} by hand"),
             content: snippet,
             before: None,
         });
@@ -438,14 +438,14 @@ fn plan_tauri(folder: &Path, t: &Tauri, p: &mut Plan) -> Result<(), TemplateErro
     plan_ci(folder, &project, t.ci, p);
     let token_step = |dl: Option<&str>| {
         format!(
-            "ask K2 Web (the team that runs k2.dev, through your K2 contact) for this App's download-host token ({}), then {CLI_NAME} app updates token {app_id} --file <file>   (never on the command line)",
+            "ask {PRODUCT_NAME} Web (the team that runs k2.dev, through your {PRODUCT_NAME} contact) for this App's download-host token ({}), then {CLI_NAME} app updates token {app_id} --file <file>   (never on the command line)",
             dl.unwrap_or(concat!(cli_name!(), " app updates token <app> names the id it is for"))
         )
     };
     p.next = match t.existing {
         Some(e) => vec![
             format!("point the shell's window at the live site: app.windows[0].url = \"https://{host}/\" in src-tauri/tauri.conf.json"),
-            "npx tauri signer generate -w ~/.tauri/myapp.key   (on your own Mac; keep the key there, or in the K2 vault)".into(),
+            concat!("npx tauri signer generate -w ~/.tauri/myapp.key   (on your own Mac; keep the key there, or in the ", product_name!(), " vault)").into(),
             "put the printed public key in src-tauri/tauri.conf.json plugins.updater.pubkey".into(),
             format!("{CLI_NAME} app updates key {app_id} --set \"$(cat ~/.tauri/myapp.key.pub)\""),
             token_step(e.dl_id.as_deref()),
@@ -454,7 +454,7 @@ fn plan_tauri(folder: &Path, t: &Tauri, p: &mut Plan) -> Result<(), TemplateErro
             format!("{CLI_NAME} app status {app_id}"),
         ],
         None => vec![
-            "npx tauri signer generate -w ~/.tauri/myapp.key   (on your own Mac; keep the key there, or in the K2 vault)".into(),
+            concat!("npx tauri signer generate -w ~/.tauri/myapp.key   (on your own Mac; keep the key there, or in the ", product_name!(), " vault)").into(),
             "put the printed public key in src-tauri/tauri.conf.json plugins.updater.pubkey".into(),
             format!("{CLI_NAME} app install {app_id} --tunnel   (once: the App and its public URL)"),
             format!("{CLI_NAME} app updates key {app_id} --set \"$(cat ~/.tauri/myapp.key.pub)\""),
@@ -492,7 +492,7 @@ fn plan_ci(folder: &Path, project: &str, facts: Option<&ci::CiFacts>, p: &mut Pl
             p.files.push(FilePlan {
                 path: ".k2/ci.toml".into(),
                 action: Action::Snippet,
-                note: concat!("already there without [release]: K2 doesn't edit it; add this section (", cli_name!(), " study ci-release)").into(),
+                note: concat!("already there without [release]: ", product_name!(), " doesn't edit it; add this section (", cli_name!(), " study ci-release)").into(),
                 content: section,
                 before: None,
             });
@@ -551,7 +551,7 @@ fn plan_runtime(folder: &Path, p: &mut Plan) -> bool {
         doctor::WryPatch::K2 => None,
         doctor::WryPatch::Other(row) => {
             p.notes.push(format!(
-                "{root_rel} patches wry its own way ({row}): K2 leaves it. Make sure it answers IPC from the main frame only (k2/README.md, Runtime fixes)"
+                "{root_rel} patches wry its own way ({row}): {PRODUCT_NAME} leaves it. Make sure it answers IPC from the main frame only (k2/README.md, Runtime fixes)"
             ));
             None
         }
@@ -582,7 +582,7 @@ fn plan_runtime(folder: &Path, p: &mut Plan) -> bool {
         p.files.push(FilePlan {
             path: crate_rel.into(),
             action: Action::Snippet,
-            note: format!("K2 doesn't edit a Cargo.toml: add these ({})", why.join("; ")),
+            note: format!("{PRODUCT_NAME} doesn't edit a Cargo.toml: add these ({})", why.join("; ")),
             content: here,
             before: None,
         });
@@ -626,7 +626,7 @@ fn plan_store(folder: &Path, name: &str, voice: bool, p: &mut Plan) {
         p.files.push(FilePlan {
             path: android.into(),
             action: Action::Snippet,
-            note: format!("tauri android init writes this file and K2 doesn't edit it: put these inside <manifest>, and {ask}"),
+            note: format!("tauri android init writes this file and {PRODUCT_NAME} doesn't edit it: put these inside <manifest>, and {ask}"),
             content: missing.iter().map(|l| format!("{l}\n")).collect(),
             before: None,
         });
@@ -656,7 +656,7 @@ fn plan_voice(folder: &Path, name: &str, host: &str, entitlements: Option<&str>,
             p.files.push(FilePlan {
                 path: shown.to_string(),
                 action: Action::Snippet,
-                note: "bundle.macOS.entitlements names this file, and K2 doesn't write outside src-tauri/: add these by hand".into(),
+                note: concat!("bundle.macOS.entitlements names this file, and ", product_name!(), " doesn't write outside src-tauri/: add these by hand").into(),
                 content: text::plist_entries(&ents),
                 before: None,
             });
@@ -695,7 +695,7 @@ fn plist_keys(folder: &Path, rel: &str, entries: &[(String, String)], what: &str
         p.files.push(FilePlan {
             path: rel.to_string(),
             action: Action::Snippet,
-            note: "already there and K2 doesn't edit a plist: add these inside its <dict>".into(),
+            note: concat!("already there and ", product_name!(), " doesn't edit a plist: add these inside its <dict>").into(),
             content: text::plist_entries(&missing),
             before: None,
         });
@@ -739,7 +739,7 @@ pub fn apply(folder: &Path, plan: &Plan) -> Result<Applied, TemplateError> {
             Action::Edit => {
                 let now = std::fs::read_to_string(&path).map_err(|e| err(codes::IO, format!("{}: {e}", f.path)))?;
                 if Some(&now) != f.before.as_ref() {
-                    return Err(err(codes::CHANGED_UNDER_US, format!("{} changed while K2 planned the edit: run {CLI_NAME} app init again", f.path)));
+                    return Err(err(codes::CHANGED_UNDER_US, format!("{} changed while {PRODUCT_NAME} planned the edit: run {CLI_NAME} app init again", f.path)));
                 }
                 std::fs::write(&path, &f.content).map_err(|e| err(codes::IO, format!("{}: {e}", f.path)))?;
                 a.edited.push(f.path.clone());

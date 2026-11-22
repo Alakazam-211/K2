@@ -16,7 +16,7 @@ use serde::Serialize;
 use super::store;
 use super::{codes, err, TemplateError};
 use crate::brand::CLI_NAME;
-use crate::cli_name;
+use crate::{cli_name, product_name};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -232,7 +232,7 @@ fn tauri_too_old(what: &str, have: (u32, u32, u32), path: &str) -> Finding {
         why.push("an IPC request with an empty path aborts the app (tauri#16197)");
     }
     if why.is_empty() {
-        why.push("the release K2 tests Apps on");
+        why.push(concat!("the release ", product_name!(), " tests Apps on"));
     }
     Finding {
         id: "tauri_too_old",

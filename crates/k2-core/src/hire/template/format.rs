@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 
 use super::super::recipe::{self, HeartbeatIn, InlineLayer, MemberRecipe, SkillIn, WikiNote};
 use super::render;
+use crate::brand::PRODUCT_NAME;
 
 pub const SCHEMA: u32 = 1;
 /// Params a template may declare (each one a `{{name}}` in its text).
@@ -435,7 +436,7 @@ pub fn validate(files: BTreeMap<String, String>, dir: Option<std::path::PathBuf>
     let manifest = files.get("template.toml").ok_or_else(|| err("missing template.toml".into()))?;
     let meta: TemplateToml = toml::from_str(manifest).map_err(|e| err(format!("template.toml: {e}")))?;
     if meta.schema != SCHEMA {
-        return Err(err(format!("template.toml: schema {} (this K2 reads schema {SCHEMA})", meta.schema)));
+        return Err(err(format!("template.toml: schema {} (this {PRODUCT_NAME} reads schema {SCHEMA})", meta.schema)));
     }
     if meta.id != id {
         return Err(err(format!("template.toml: id '{}' doesn't match its folder '{id}'", meta.id)));
@@ -630,6 +631,6 @@ fn check_suggest(s: &str) -> Result<(), String> {
     match super::action_kind(s) {
         super::ActionKind::Standing | super::ActionKind::NotChecked => Ok(()),
         super::ActionKind::OneTime => Err(format!("'{s}' is a one-time action; templates suggest standing switches only")),
-        super::ActionKind::Unknown => Err(format!("'{s}' is not a K2 permission action")),
+        super::ActionKind::Unknown => Err(format!("'{s}' is not a {PRODUCT_NAME} permission action")),
     }
 }

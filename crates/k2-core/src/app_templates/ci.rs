@@ -23,7 +23,7 @@
 
 use std::fmt::Write as _;
 
-use crate::brand::CLI_NAME;
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
 use crate::cli_name;
 
 /// The Rust toolchain the template pins (ci.toml `needs` and the signer
@@ -86,8 +86,8 @@ pub fn ci_toml(project: &str, f: &CiFacts) -> String {
     let lane = f.lane.as_deref().unwrap_or("ci-standard");
     let owner_note = if f.owner.is_some() { "this server's seat" } else { concat!("PUT YOUR SEAT'S OWNER HERE (", cli_name!(), " compute seats)") };
     format!(
-        r#"# K2 CI and release builds for this Tauri app ({CLI_NAME} app init --template
-# tauri; {CLI_NAME} study ci). Commit this file: K2 reads it at each commit.
+        r#"# {PRODUCT_NAME} CI and release builds for this Tauri app ({CLI_NAME} app init --template
+# tauri; {CLI_NAME} study ci). Commit this file: {PRODUCT_NAME} reads it at each commit.
 version = 1
 
 # Each push you check ({CLI_NAME} ci run; {CLI_NAME} ci watch on): the Linux bundle builds.
@@ -134,7 +134,7 @@ pub fn signer_toml(project: &str, bin: &str, f: &CiFacts) -> String {
 # signing machine approves it after reading every line:
 #   sudo /usr/local/libexec/k2-signer/k2-signer-admin policy-approve {project} < .k2/signer.toml
 # then again with the sha256 it prints. Check the three fingerprints below
-# against what YOUR screens say: controllers = this K2 server
+# against what YOUR screens say: controllers = this {PRODUCT_NAME} server
 # ({CLI_NAME} ci signers prints controllerFp), owners = your seat owner's roster
 # key ({CLI_NAME} compute owners, and the owner's own screen). All zeros = not
 # filled in: such a policy refuses every bundle.
@@ -200,7 +200,7 @@ pub fn build_linux_sh() -> String {
     format!(
         r#"#!/usr/bin/env bash
 # The Linux release build of this Tauri app ({CLI_NAME} app init --template tauri).
-# K2 Compute runs it for {CLI_NAME} ci release / {CLI_NAME} ci run; it runs by hand too
+# {PRODUCT_NAME} Compute runs it for {CLI_NAME} ci release / {CLI_NAME} ci run; it runs by hand too
 # (Linux, Rust, Node and Tauri's system packages installed).
 #
 # Two nodes must make the same bytes (the signer compares them), so:
@@ -395,9 +395,9 @@ ditto -c -k --keepParent "${{apps[0]}}" "$out/$bin.app.zip"
 pub fn readme_section(app_id: &str, project: &str) -> String {
     format!(
         r#"
-## Release builds on K2 Compute
+## Release builds on {PRODUCT_NAME} Compute
 
-This box never builds the app: K2 Compute does, on your seat's nodes, and
+This box never builds the app: {PRODUCT_NAME} Compute does, on your seat's nodes, and
 your own signer signs. Files: `.k2/ci.toml` (what runs), `k2/ci/build-linux.sh`
 (the build, reproducible), `.k2/signer.toml` (the signer policy's start).
 

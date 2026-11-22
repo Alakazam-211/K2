@@ -461,7 +461,14 @@ pub mod mac {
                 m.borrow_mut().insert(k, v);
             }));
         })
-        .await
+        .await?;
+        // Known only if it was kept (not refused for a window that closed).
+        let state = super::queue(app);
+        let mut q = state.0.lock().unwrap();
+        if q.label_gen(parent) == gen {
+            q.known.insert(parent.to_string());
+        }
+        Ok(())
     }
 
     pub async fn cache_page(view: &Webview, key: &str) -> Result<(), String> {
@@ -774,7 +781,6 @@ pub async fn browser_set_page_layers(
         }
         if !queue(&app).0.lock().unwrap().known.contains(&parent) {
             mac::cache_ui(&app, &parent).await?;
-            queue(&app).0.lock().unwrap().known.insert(parent.clone());
         }
         // Pages created before underlay came on (a setting flip) or adopted.
         for l in &layers.layers {
@@ -855,7 +861,6 @@ pub async fn browser_underlay_clear(
     #[cfg(target_os = "macos")]
     {
         mac::cache_ui(&app, &parent).await?;
-        queue(&app).0.lock().unwrap().known.insert(parent.clone());
         let (tx, rx) = tokio::sync::oneshot::channel();
         let p = parent.clone();
         app.run_on_main_thread(move || {

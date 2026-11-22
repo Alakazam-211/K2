@@ -1080,10 +1080,19 @@ pub(crate) fn frame_changed(view: &NSView) {
       .map(|win| ptr(&*win.ui) == me || win.pages.iter().any(|p| ptr(&*p.view) == me))
       .unwrap_or(false)
   });
-  if hit {
-    DIRTY.with(|d| d.borrow_mut().insert(key));
-    ensure_commit_observer();
+  if !hit {
+    return;
   }
+  // A live resize (and AppKit's drag tracking) can leave the run loop
+  // without a BeforeWaiting pass: rebuild now, in this pass.
+  if view.window().is_some_and(|w| w.inLiveResize()) {
+    if let Err(e) = rebuild_mask(key) {
+      eprintln!("wry underlay: mask during a live resize: {e}");
+    }
+    return;
+  }
+  DIRTY.with(|d| d.borrow_mut().insert(key));
+  ensure_commit_observer();
 }
 
 #[repr(C)]
@@ -1110,8 +1119,10 @@ extern "C" {
   static kCFRunLoopCommonModes: *const c_void;
 }
 
-/// kCFRunLoopBeforeWaiting.
+/// kCFRunLoopBeforeWaiting and kCFRunLoopExit: Core Animation commits at
+/// both (a tracking loop often exits without waiting).
 const BEFORE_WAITING: usize = 1 << 5;
+const EXIT: usize = 1 << 7;
 /// Core Animation commits at order 2000000; run just before it.
 const BEFORE_CA_COMMIT: isize = 1_999_000;
 
@@ -1136,7 +1147,7 @@ fn ensure_commit_observer() {
       release: std::ptr::null(),
       copy_description: std::ptr::null(),
     };
-    let obs = CFRunLoopObserverCreate(std::ptr::null(), BEFORE_WAITING, true, BEFORE_CA_COMMIT, rebuild_dirty, &mut ctx);
+    let obs = CFRunLoopObserverCreate(std::ptr::null(), BEFORE_WAITING | EXIT, true, BEFORE_CA_COMMIT, rebuild_dirty, &mut ctx);
     if obs.is_null() {
       OBSERVER.with(|o| o.set(false));
       // No observer: rebuild now, as before.

@@ -60,3 +60,5 @@ pub mod users_sync;
 mod real_pg_compat;
 #[cfg(test)]
 mod storage_real_pg;
+#[cfg(test)]
+mod storage_oracle;

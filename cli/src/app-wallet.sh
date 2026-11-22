@@ -185,6 +185,8 @@ cmd_app() {
         engine) shift; cmd_app_engine "$@" ;;
         rehost) shift; cmd_app_rehost "$@" ;;
         data) shift; cmd_app_data "$@" ;;
+        # Supabase-compat lane D: the /storage/v1 door, buckets, import.
+        storage) shift; cmd_app_storage "$@" ;;
         sdk) shift; cmd_app_sdk "$@" ;;
         updates) shift; cmd_app_updates "$@" ;;
         resources) shift; cmd_app_resources "$@" ;;

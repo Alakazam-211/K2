@@ -100,6 +100,91 @@
       ]
     },
     {
+      "name": "app storage status",
+      "usage": "k2 app storage status <app-id> [--json]",
+      "description": "An App's Supabase-compatible storage door (/storage/v1 on the App's own host): on while the compat layer is on, its database, whether the storage schema is in, the buckets, the last import and warnings (public buckets, the server key on the public host). GET /cli/app/storage/status. Owner, Admin, or the App's agent with Build and run Apps.",
+      "args": [{"name": "app-id", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "{app, on, database, schema, anon, door, buckets[], import, warnings[]}."}]
+    },
+    {
+      "name": "app storage enable",
+      "usage": "k2 app storage enable <app-id> [--json]",
+      "description": "Put the storage schema (storage.buckets, storage.objects, storage.foldername/filename/extension, Supabase's columns and grants) into the App's compat database as its migrator. Needs k2 app compat on first (compat_off, exit 3). Safe to run again. POST /cli/app/storage/enable.",
+      "args": [{"name": "app-id", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "{ok, app, database, door}."}]
+    },
+    {
+      "name": "app storage buckets",
+      "usage": "k2 app storage buckets <app-id> [--json]",
+      "description": "The App's buckets: id, public or private, file size limit, allowed types. GET /cli/app/storage/buckets.",
+      "args": [{"name": "app-id", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "{buckets:[{id, name, public, file_size_limit, allowed_mime_types, created_at, updated_at}]}."}]
+    },
+    {
+      "name": "app storage bucket",
+      "usage": "k2 app storage bucket create|update|rm <app-id> <bucket> [--public|--private] [--file-size-limit 50MB] [--mime TYPE]... [--json]",
+      "description": "Make, change or remove a bucket (rm only when empty). A public bucket answers /storage/v1/object/public/<bucket>/<path> to anyone with the URL: the answer carries a warning. POST /cli/app/storage/bucket.",
+      "args": [{"name": "op", "required": true}, {"name": "app-id", "required": true}, {"name": "bucket", "required": true}],
+      "flags": [
+        {"name": "--public", "arg": null, "description": "Anyone with an object's URL reads it."},
+        {"name": "--private", "arg": null, "description": "Storage policies decide every read (the default)."},
+        {"name": "--file-size-limit", "arg": "SIZE", "description": "Bytes, or 50MB / 1GB (default 50 MiB, at most 5 GiB)."},
+        {"name": "--mime", "arg": "TYPE", "description": "An allowed type (image/* style); repeat for more."},
+        {"name": "--json", "arg": null, "description": "{ok, op, bucket, result, warning?}."}
+      ]
+    },
+    {
+      "name": "app storage ls",
+      "usage": "k2 app storage ls <app-id> <bucket> [<prefix>] [--limit N] [--json]",
+      "description": "One folder level of a bucket, as the App's operator (service_role): folders and files with size and type. GET /cli/app/storage/ls.",
+      "args": [{"name": "app-id", "required": true}, {"name": "bucket", "required": true}, {"name": "prefix", "required": false}],
+      "flags": [
+        {"name": "--limit", "arg": "N", "description": "At most N entries (default 100, at most 1000)."},
+        {"name": "--json", "arg": null, "description": "{bucket, entries:[{name, id, updated_at, created_at, last_accessed_at, metadata}]}."}
+      ]
+    },
+    {
+      "name": "app storage import",
+      "usage": "k2 app storage import <app-id> --from https://<ref>.supabase.co --key-secret <name> [--bucket <id>]... [--concurrency N] [--json]",
+      "description": "Copy a Supabase project's buckets and objects into the App, in the daemon (no client needed): each object checked by size and by MD5 against the source's eTag, the ledger kept so a rerun copies only what changed and a cut transfer resumes. <name> is a vault secret in the App's workspace holding the project's service-role key, with the project's host allowed for it (k2 vault hosts <name> --add <ref>.supabase.co); it is never printed. A row the database dump carried keeps its id and owner. POST /cli/app/storage/import.",
+      "args": [{"name": "app-id", "required": true}],
+      "flags": [
+        {"name": "--from", "arg": "URL", "description": "The project's https:// URL."},
+        {"name": "--key-secret", "arg": "NAME", "description": "The vault secret holding its service-role key."},
+        {"name": "--bucket", "arg": "ID", "description": "Only this bucket; repeat for more (default: all)."},
+        {"name": "--concurrency", "arg": "N", "description": "Objects at once, 1-32 (default 8)."},
+        {"name": "--json", "arg": null, "description": "{started, app, from, status}."}
+      ]
+    },
+    {
+      "name": "app storage import-status",
+      "usage": "k2 app storage import-status <app-id> [--json]",
+      "description": "The running or last import: buckets, objects planned, copied (bytes), skipped as unchanged, failed, and the first errors. GET /cli/app/storage/import/status.",
+      "args": [{"name": "app-id", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "{app, running, state:{from, status, startedAt, finishedAt, buckets, planned, copied, skipped, failed, bytesCopied, errors[]}}."}]
+    },
+    {
+      "name": "app storage verify",
+      "usage": "k2 app storage verify <app-id> [--from <url> --key-secret <name>] [--json]",
+      "description": "Re-hash every object's bytes against what the import recorded and check every row has its bytes; with --from, also list objects at the source that aren't here. Exit 0 clean, 1 not. POST /cli/app/storage/verify.",
+      "args": [{"name": "app-id", "required": true}],
+      "flags": [
+        {"name": "--from", "arg": "URL", "description": "The source project, to list what is missing here."},
+        {"name": "--key-secret", "arg": "NAME", "description": "With --from: its service-role key's vault secret."},
+        {"name": "--json", "arg": null, "description": "{app, clean, verify:{checked, ok, bad[], missing[]}}."}
+      ]
+    },
+    {
+      "name": "app storage key rotate",
+      "usage": "k2 app storage key rotate <app-id> --yes [--json]",
+      "description": "A new signing key for the App's signed URLs: every signed download and upload URL made before stops at once, so it needs --yes. POST /cli/app/storage/key/rotate.",
+      "args": [{"name": "app-id", "required": true}],
+      "flags": [
+        {"name": "--yes", "arg": null, "description": "Yes, end every outstanding signed URL."},
+        {"name": "--json", "arg": null, "description": "{ok, app, note}."}
+      ]
+    },
+    {
       "name": "app status",
       "usage": "k2 app status <app-id> [--no-checks] [--public] [--json]",
       "description": "How an App is doing in one answer: deploy, health, its host.checks, errors in the last hour, resources, door, hosts, phone, the update feed, and next: one exact command per red or yellow item. Exit 0 green, 1 red, 2 yellow, 3 refused. App output is never printed.",

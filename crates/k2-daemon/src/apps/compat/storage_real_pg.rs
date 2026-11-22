@@ -123,6 +123,11 @@ const USER_B: &str = "0b0b0b0b-0000-4000-8000-00000000000b";
 const ORG1: &str = "11111111-1111-4111-8111-111111111111";
 const ORG2: &str = "22222222-2222-4222-8222-222222222222";
 
+/// The same fixture for the oracle (storage-api's own database).
+pub fn app_sql_for_oracle() -> String {
+    app_sql()
+}
+
 /// The reference app's policy shape: a member's organisation is the first
 /// path segment. Public `avatars` reads for anyone.
 fn app_sql() -> String {
@@ -457,5 +462,289 @@ async fn real_pg_storage_door() {
     test_seams::set_config(app, None);
     let (st, _, _) = call(app, req("GET", "/bucket", Some("test-a"), &[], b"")).await;
     assert_eq!(st, 404);
+    drop(srv);
+}
+
+// ── the import, against a stand-in Supabase project ──────────────────
+
+/// One object at the stand-in source.
+#[derive(Clone)]
+struct SrcObj {
+    id: String,
+    bytes: Vec<u8>,
+    etag: String,
+    updated_at: String,
+}
+
+#[derive(Default)]
+struct Mock {
+    key: String,
+    buckets: Vec<Value>,
+    objects: std::collections::BTreeMap<(String, String), SrcObj>,
+    /// Objects whose first full download is cut halfway.
+    cut_once: std::collections::HashSet<String>,
+    requests: usize,
+    ranged: usize,
+}
+
+type MockRef = std::sync::Arc<std::sync::Mutex<Mock>>;
+
+fn md5_hex(b: &[u8]) -> String {
+    use md5::{Digest, Md5};
+    super::storage_bytes::hex(&Md5::digest(b))
+}
+
+fn sha_hex(b: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    super::storage_bytes::hex(&Sha256::digest(b))
+}
+
+fn src_obj(bytes: Vec<u8>, t: &str) -> SrcObj {
+    SrcObj { id: uuid::Uuid::new_v4().to_string(), etag: format!("\"{}\"", md5_hex(&bytes)), bytes, updated_at: t.into() }
+}
+
+fn decode_path(p: &str) -> String {
+    storage_door::decode(p).expect("a decodable path")
+}
+
+/// Supabase's list for one level under `prefix`.
+fn mock_list(m: &Mock, bucket: &str, prefix: &str, limit: usize, offset: usize) -> Value {
+    let mut entries: std::collections::BTreeMap<String, Value> = Default::default();
+    for ((b, name), o) in &m.objects {
+        if b != bucket || !name.starts_with(prefix) {
+            continue;
+        }
+        let rest = &name[prefix.len()..];
+        match rest.split_once('/') {
+            Some((folder, _)) => {
+                entries.insert(folder.to_string(), json!({"name": folder, "id": null, "metadata": null}));
+            }
+            None => {
+                entries.insert(
+                    rest.to_string(),
+                    json!({"name": rest, "id": o.id, "updated_at": o.updated_at, "created_at": "2026-01-02T03:04:05.000Z",
+                           "metadata": {"eTag": o.etag, "size": o.bytes.len(), "mimetype": "image/jpeg", "cacheControl": "max-age=3600"}}),
+                );
+            }
+        }
+    }
+    Value::Array(entries.into_values().skip(offset).take(limit).collect())
+}
+
+async fn mock_conn(mut s: tokio::net::TcpStream, m: MockRef) {
+    let mut buf = Vec::new();
+    let mut tmp = [0u8; 8192];
+    let head_end = loop {
+        if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+            break i + 4;
+        }
+        match s.read(&mut tmp).await {
+            Ok(0) | Err(_) => return,
+            Ok(n) => buf.extend_from_slice(&tmp[..n]),
+        }
+    };
+    let head = String::from_utf8_lossy(&buf[..head_end]).into_owned();
+    let hv = |k: &str| {
+        head.lines().skip(1).find_map(|l| l.split_once(':').filter(|(n, _)| n.trim().eq_ignore_ascii_case(k)).map(|(_, v)| v.trim().to_string()))
+    };
+    let len: usize = hv("content-length").and_then(|v| v.parse().ok()).unwrap_or(0);
+    while buf.len() < head_end + len {
+        match s.read(&mut tmp).await {
+            Ok(0) | Err(_) => return,
+            Ok(n) => buf.extend_from_slice(&tmp[..n]),
+        }
+    }
+    let body = buf[head_end..head_end + len].to_vec();
+    let mut first = head.lines().next().unwrap_or("").split_whitespace();
+    let (method, target) = (first.next().unwrap_or("").to_string(), first.next().unwrap_or("").to_string());
+    let reply = |status: &str, ctype: &str, extra: &str, body: &[u8], send: usize| {
+        let mut out = format!("HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\n{extra}Connection: close\r\n\r\n", body.len()).into_bytes();
+        out.extend_from_slice(&body[..send.min(body.len())]);
+        out
+    };
+    let out = {
+        let mut g = m.lock().unwrap_or_else(|e| e.into_inner());
+        g.requests += 1;
+        let key_ok = hv("apikey").as_deref() == Some(g.key.as_str()) && hv("authorization") == Some(format!("Bearer {}", g.key));
+        if !key_ok {
+            reply("401 Unauthorized", "application/json", "", br#"{"statusCode":"403","error":"Unauthorized","message":"bad key"}"#, usize::MAX)
+        } else if method == "GET" && target == "/storage/v1/bucket" {
+            reply("200 OK", "application/json", "", Value::Array(g.buckets.clone()).to_string().as_bytes(), usize::MAX)
+        } else if let Some(b) = target.strip_prefix("/storage/v1/object/list/") {
+            let v: Value = serde_json::from_slice(&body).expect("list body");
+            let prefix = v["prefix"].as_str().unwrap_or("");
+            let l = mock_list(&g, &decode_path(b), prefix, v["limit"].as_u64().unwrap_or(100) as usize, v["offset"].as_u64().unwrap_or(0) as usize);
+            reply("200 OK", "application/json", "", l.to_string().as_bytes(), usize::MAX)
+        } else if let Some(t) = target.strip_prefix("/storage/v1/object/authenticated/") {
+            let t = decode_path(t);
+            let (b, n) = t.split_once('/').expect("bucket/name");
+            match g.objects.get(&(b.to_string(), n.to_string())).cloned() {
+                None => reply("400 Bad Request", "application/json", "", br#"{"statusCode":"404","error":"not_found","message":"Object not found"}"#, usize::MAX),
+                Some(o) => match hv("range").and_then(|r| r.strip_prefix("bytes=").and_then(|x| x.strip_suffix('-')).and_then(|x| x.parse::<usize>().ok())) {
+                    Some(from) if from < o.bytes.len() => {
+                        g.ranged += 1;
+                        let part = &o.bytes[from..];
+                        let cr = format!("Content-Range: bytes {from}-{}/{}\r\n", o.bytes.len() - 1, o.bytes.len());
+                        reply("206 Partial Content", "application/octet-stream", &cr, part, usize::MAX)
+                    }
+                    _ => {
+                        let send = if g.cut_once.remove(n) { o.bytes.len() / 2 } else { usize::MAX };
+                        reply("200 OK", "application/octet-stream", "", &o.bytes, send)
+                    }
+                },
+            }
+        } else {
+            reply("404 Not Found", "text/plain", "", b"no", usize::MAX)
+        }
+    };
+    let _ = s.write_all(&out).await;
+    let _ = s.shutdown().await;
+}
+
+async fn mock_source(m: MockRef) -> String {
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("mock source bind");
+    let addr = l.local_addr().expect("addr");
+    tokio::spawn(async move {
+        while let Ok((s, _)) = l.accept().await {
+            tokio::spawn(mock_conn(s, m.clone()));
+        }
+    });
+    format!("http://{addr}")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "runs only with REALPG_STORAGE=1 and Postgres binaries (a Linux compute job)"]
+async fn real_pg_storage_import() {
+    use super::storage_import::{self as imp, Opts, Source};
+    let _home = crate::test_support::TempHome::new();
+    let srv = Server::start();
+    let app = "moved";
+    storage_app(&srv, app, "st_import", false).await;
+    let cfg = test_seams::config(app).flatten().expect("config");
+    let ctx = super::storage_ops::Ctx {
+        app_id: app.into(),
+        target: super::storage_bind::authenticator_target(&cfg).expect("target"),
+        bytes: super::storage_bytes::ByteStore::for_app(app),
+    };
+
+    // The source: two buckets, nested folders, a 3 MiB object that is cut
+    // off once, an object whose eTag doesn't match its bytes, and a folder
+    // placeholder.
+    let m: MockRef = Default::default();
+    let t0 = "2026-03-04T05:06:07.000Z";
+    {
+        let mut g = m.lock().unwrap();
+        g.key = "src-service-role-key".into();
+        g.buckets = vec![
+            json!({"id": "photos", "name": "photos", "public": false, "file_size_limit": 52428800, "allowed_mime_types": null}),
+            json!({"id": "logos", "name": "logos", "public": true, "file_size_limit": null, "allowed_mime_types": ["image/*"]}),
+        ];
+        for org in 0..3usize {
+            for sub in 0..4usize {
+                for i in 0..3usize {
+                    let bytes: Vec<u8> = (0..(1000 + org * 997 + sub * 101 + i * 13)).map(|x| (x * 31 + org + sub + i) as u8).collect();
+                    g.objects.insert(("photos".into(), format!("org{org}/sub{sub}/p{i}.jpg")), src_obj(bytes, t0));
+                }
+            }
+        }
+        g.objects.insert(("photos".into(), "org0/.emptyFolderPlaceholder".into()), src_obj(vec![], t0));
+        let big: Vec<u8> = (0..3 * 1024 * 1024u32).map(|x| (x % 251) as u8).collect();
+        g.objects.insert(("photos".into(), "org1/big.bin".into()), src_obj(big, t0));
+        g.cut_once.insert("org1/big.bin".into());
+        let mut bad = src_obj(b"these bytes".to_vec(), t0);
+        bad.etag = format!("\"{}\"", md5_hex(b"other bytes"));
+        g.objects.insert(("photos".into(), "org2/bad.bin".into()), bad);
+        g.objects.insert(("logos".into(), "acme logo (1).png".into()), src_obj(b"logo".to_vec(), t0));
+    }
+    let total = m.lock().unwrap().objects.len();
+    let base = mock_source(m.clone()).await;
+
+    // A row the dump already carried (lane B): it keeps its id and owner.
+    let dumped_id = "dddddddd-0000-4000-8000-000000000001";
+    srv.su(
+        "st_import",
+        &format!("INSERT INTO storage.objects (id, bucket_id, name, owner, owner_id) VALUES ('{dumped_id}', 'photos', 'org0/sub0/p0.jpg', '{USER_A}', '{USER_A}')"),
+    )
+    .await;
+
+    let src = Source { base: base.clone(), key: "src-service-role-key".into() };
+    let opts = Opts { buckets: vec![], concurrency: 4 };
+    let s1 = imp::run(ctx.clone(), src.clone(), opts.clone()).await.expect("first run");
+    eprintln!("first run: {s1:?}");
+    assert_eq!(s1.buckets, 2);
+    assert_eq!(s1.planned, total, "every source object is planned");
+    assert_eq!((s1.copied, s1.failed, s1.skipped), (total - 1, 1, 0), "all but the mismatched one: {:?}", s1.errors);
+    assert_eq!(s1.status, "done_with_failures");
+    assert!(s1.errors.iter().any(|e| e.contains("org2/bad.bin") && e.contains("MD5")), "the mismatch is named: {:?}", s1.errors);
+    assert!(m.lock().unwrap().ranged >= 1, "the cut-off object resumed with Range");
+
+    // Every byte checked: what is in the App hashes to the source's bytes.
+    let src_objs = m.lock().unwrap().objects.clone();
+    let rows = super::storage_ops::all_objects(&ctx).await.expect("rows");
+    assert_eq!(rows.len(), total - 1);
+    for (b, n, id, version, size) in &rows {
+        let o = &src_objs[&(b.clone(), n.clone())];
+        let p = ctx.bytes.object_path(id, version.as_deref().expect("a version")).expect("path");
+        let got = std::fs::read(&p).unwrap_or_else(|e| panic!("{b}/{n}: {e}"));
+        assert_eq!(sha_hex(&got), sha_hex(&o.bytes), "{b}/{n}: the bytes");
+        assert_eq!(*size, Some(o.bytes.len() as i64), "{b}/{n}: metadata.size");
+        if n == "org0/sub0/p0.jpg" {
+            assert_eq!(id, dumped_id, "the dump's row keeps its id");
+        } else {
+            assert_eq!(id, &o.id, "{b}/{n}: the source's id is kept");
+        }
+    }
+    let mut c = super::storage_pg::connect(&srv.target("postgres", "st_import")).await.expect("su");
+    let owner: Option<String> = c.client().query_one("SELECT owner::text FROM storage.objects WHERE id = $1::text::uuid", &[&dumped_id]).await.expect("owner").get(0);
+    assert_eq!(owner.as_deref(), Some(USER_A), "the dump's row keeps its owner");
+    let public: bool = c.client().query_one("SELECT public FROM storage.buckets WHERE id = 'logos'", &[]).await.expect("bucket").get(0);
+    assert!(public, "the bucket's settings came across");
+
+    // The door serves an imported object.
+    storage_door::set_test_callers(callers());
+    let (st, _, body) = call(app, req("GET", "/object/public/logos/acme%20logo%20(1).png", None, &[], b"")).await;
+    assert_eq!((st, body.as_slice()), (200, b"logo".as_slice()), "an imported public object");
+
+    // Verify: clean but for the one that failed.
+    let v = imp::verify(&ctx, Some(&src)).await.expect("verify");
+    assert!(v.bad.is_empty(), "{v:?}");
+    assert_eq!(v.missing, vec!["photos/org2/bad.bin".to_string()]);
+
+    // Again: nothing changed, nothing copied.
+    let before = m.lock().unwrap().requests;
+    let s2 = imp::run(ctx.clone(), src.clone(), opts.clone()).await.expect("second run");
+    assert_eq!((s2.copied, s2.skipped, s2.failed), (0, total - 1, 1), "a rerun copies only what changed: {s2:?}");
+    let fetched = m.lock().unwrap().requests - before;
+    assert!(fetched < 20, "a rerun lists, it doesn't download ({fetched} requests)");
+
+    // One object changes at the source, the bad one is fixed: two copies.
+    {
+        let mut g = m.lock().unwrap();
+        let k = ("photos".to_string(), "org1/sub1/p1.jpg".to_string());
+        let id = g.objects[&k].id.clone();
+        let mut o = src_obj(b"new content".to_vec(), "2026-05-06T07:08:09.000Z");
+        o.id = id;
+        g.objects.insert(k, o);
+        let k = ("photos".to_string(), "org2/bad.bin".to_string());
+        let b = g.objects[&k].bytes.clone();
+        g.objects.get_mut(&k).unwrap().etag = format!("\"{}\"", md5_hex(&b));
+    }
+    let s3 = imp::run(ctx.clone(), src.clone(), opts).await.expect("third run");
+    assert_eq!((s3.copied, s3.failed, s3.status.as_str()), (2, 0, "done"), "{s3:?}");
+    let v = imp::verify(&ctx, Some(&src)).await.expect("verify");
+    assert!(v.bad.is_empty() && v.missing.is_empty(), "{v:?}");
+    assert_eq!(v.checked, total);
+
+    // Bytes changed on disk behind K2's back: verify says so.
+    let (b, n, id, version, _) =
+        super::storage_ops::all_objects(&ctx).await.expect("rows").into_iter().find(|r| r.1 == "org0/sub1/p2.jpg").expect("row");
+    std::fs::write(ctx.bytes.object_path(&id, version.as_deref().unwrap()).unwrap(), b"tampered").expect("tamper");
+    let v = imp::verify(&ctx, None).await.expect("verify");
+    assert_eq!(v.bad, vec![format!("{b}/{n}: bytes don't match the copy's hash")]);
+
+    // A wrong key is refused by the source, loudly.
+    let bad = imp::run(ctx.clone(), Source { base, key: "wrong".into() }, Opts { buckets: vec![], concurrency: 2 }).await.expect("a run");
+    assert_eq!(bad.status, "failed");
+    assert!(bad.errors.iter().any(|e| e.contains("401")), "{:?}", bad.errors);
     drop(srv);
 }

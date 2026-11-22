@@ -20,6 +20,7 @@ app-doctor.sh
 app-catalog.sh
 app-db.sh
 app-compat.sh
+app-storage.sh
 app-box.sh
 app-grace.sh
 app-sdk.sh
@@ -115,6 +116,7 @@ study-basics.sh
 study-db-mail.sh
 study-app-tickets.sh
 study-tauri.sh
+study-app-storage.sh
 study-app-accounts.sh
 study-app-transfers-http.sh
 study-app-rest.sh

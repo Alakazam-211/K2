@@ -1,0 +1,102 @@
+k2 study app-storage — Supabase-compatible file storage on an App's own host
+
+What it is. An App with the Supabase-compatible layer on gets /storage/v1
+on its own host: the same routes, bodies and answers as Supabase Storage,
+so supabase-js's storage.from(bucket) and the Dart storage client work with
+only the URL and the key changed. Buckets and objects are rows in the App's
+own database (storage.buckets, storage.objects, with Supabase's columns),
+and the App's own storage policies decide every call. The bytes live on
+this box, in a folder of the App that only the door reaches.
+
+TURN IT ON
+  k2 app compat on <app> --db <db>     the layer (roles, the door's login)
+  k2 app storage enable <app>          the storage schema into that database
+  k2 app storage status <app>          the door, buckets, warnings
+  Your migrations then write policies, exactly as on Supabase:
+    CREATE POLICY "org read" ON storage.objects FOR SELECT TO authenticated
+      USING (bucket_id = 'photos'
+             AND (storage.foldername(name))[1] IN (SELECT user_org_ids()));
+  storage.foldername(), storage.filename() and storage.extension() exist.
+
+WHO A CALL RUNS AS (the same rules as /rest/v1)
+  the App's session cookie (browser)    authenticated; a write also needs
+                                        this host's Origin (or a listed one)
+  a device pass or third-party token    authenticated (a phone app)
+  the person's pass on the gateway link authenticated (your server code)
+  the App key with the service scope    service_role (bypasses policies);
+                                        on the gateway link only, unless
+                                        service-key-public is on
+  nothing                               anon, only with the anon lane on
+  A web session's pass is never taken as a bearer on the public host.
+
+THE CALLS (all under /storage/v1)
+  POST|PUT object/<bucket>/<path>          upload; x-upsert: true replaces.
+                                           Raw body or multipart (the file
+                                           part, cacheControl, metadata)
+  GET|HEAD object/[authenticated/]<bucket>/<path>   download (Range, ETag)
+  GET  object/info/<bucket>/<path>         the row
+  DELETE object/<bucket>/<path>            one; DELETE object/<bucket>
+                                           {prefixes: [...]} several
+  POST object/list/<bucket>                {prefix, limit, offset, sortBy,
+                                           search}: one folder level
+  POST object/move | object/copy           {bucketId, sourceKey,
+                                           destinationKey, destinationBucket?}
+  POST object/sign/<bucket>/<path>         {expiresIn} → {signedURL}
+  POST object/sign/<bucket>                {expiresIn, paths} → per path
+  POST object/upload/sign/<bucket>/<path>  → {url, token}; PUT that url with
+                                           the bytes, no credential
+  GET  object/public/<bucket>/<path>       a public bucket, no credential
+  GET|POST bucket, GET|PUT|DELETE bucket/<id>, POST bucket/<id>/empty
+  Every answer closes the connection.
+
+ANSWERS ARE SUPABASE'S
+  A refusal is HTTP 400 with the real status in the body:
+    {"statusCode": "409", "code": "KeyAlreadyExists", "error": "Duplicate",
+     "message": "The resource already exists"}
+  That is the answer to an upload over an object that is there (without
+  x-upsert): an offline queue that replays uploads reads it as "done".
+  Not found is statusCode 404 (a policy that hides a row says not found);
+  a policy that refuses a write is 403 "new row violates row-level security
+  policy"; too big 413; a type the bucket doesn't take 415. Only "no
+  credential with the anon lane off" is a real 401.
+
+SIGNED URLS
+  Signed by the App's own key in the vault (HS256), naming one path and an
+  expiry; no session in them, no per-person cap. They keep working after the
+  person who made one signs out, until expiresIn runs out. A changed token,
+  another path or an expired one is refused (InvalidSignature,
+  ExpiredToken). k2 app storage key rotate <app> --yes makes a new key:
+  every link made before stops at once.
+
+PUBLIC BUCKETS
+  k2 app storage bucket create <app> logos --public: every object in it is
+  readable by anyone with its URL, with no sign-in. K2 warns when you make
+  one, and status lists them.
+
+LIMITS
+  Per bucket: a file size limit (50 MiB unless set, at most 5 GiB) and an
+  optional list of types (image/* style). Uploads stream to disk; nothing is
+  held in memory.
+
+MOVING FROM SUPABASE
+  1. k2 db import supabase <dump> --db <db>   the rows, with the storage
+     policies and storage.objects rows (ids, owners)
+  2. Put the project's service-role key in the App workspace's vault and
+     allow the project's host for it:
+       k2 vault hosts <name> --add <ref>.supabase.co
+  3. k2 app storage import <app> --from https://<ref>.supabase.co --key-secret <name>
+     Every bucket and object, each checked by size and MD5 against the
+     source's eTag. It runs in the daemon (no client needed); watch it with
+     k2 app storage import-status <app>. Run it again any time: unchanged
+     objects are skipped, new and changed ones copied, a cut transfer
+     resumes. A row the dump carried keeps its id and owner.
+  4. k2 app storage verify <app> --from … --key-secret …   re-hashes every
+     object and lists anything missing; exit 1 when it isn't clean.
+
+NOT IN V1
+  Image transforms (/render/image), resumable TUS uploads
+  (/upload/resumable), the S3 protocol (/s3): each is a 400 naming the part,
+  never a wrong answer.
+
+SEE ALSO
+  k2 app storage --help · k2 study app-databases · k2 study vault

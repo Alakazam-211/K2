@@ -208,7 +208,7 @@ pub fn third_party(app: &AppFacts, _token: &str) -> SResult<Caller> {
 
 /// The live stores.
 pub fn live_lookups() -> Lookups<'static> {
-    Lookups { pass: &|raw| k2_core::skin::try_resolve_skin_token(raw), app_key: &|raw| k2_core::api_keys::resolve_app_key(raw) }
+    Lookups { pass: &k2_core::skin::try_resolve_skin_token, app_key: &k2_core::api_keys::resolve_app_key }
 }
 
 #[cfg(test)]

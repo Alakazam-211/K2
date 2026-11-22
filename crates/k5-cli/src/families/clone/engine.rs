@@ -470,11 +470,16 @@ impl Engine {
 
     /// `vault_sock(route, body)`.
     fn vault_sock(&self, route: &str, data: Vec<u8>) -> E<Value> {
+        self.vault_sock_within(route, data, 180)
+    }
+
+    /// `vault_sock(route, body, timeout)`.
+    fn vault_sock_within(&self, route: &str, data: Vec<u8>, timeout: u64) -> E<Value> {
         let vs = self.vsock.display().to_string();
         let mut req = Request::new(
             Method::Post,
             format!("/cli/vault/{route}"),
-            Duration::from_secs(180),
+            Duration::from_secs(timeout),
         )
         .data(data)
         .header("Content-Type", "application/json")
@@ -483,7 +488,7 @@ impl Engine {
             req = req.header(n.clone(), v.clone());
         }
         let bytes = urllib::encode_http_client("localhost", &req);
-        let r = net::over_unix(&self.vsock, &bytes, Duration::from_secs(180));
+        let r = net::over_unix(&self.vsock, &bytes, Duration::from_secs(timeout));
         net::wipe(&mut req);
         let unreachable =
             |e: &str| Stop::fail("vault_unreachable", format!("vault socket {vs}: {e}"), 3);
@@ -554,34 +559,159 @@ impl Engine {
     fn confirm_local(&self, action: &str, secret_id: &Value, label: &str) -> E<Value> {
         self.need_vault_sock()?;
         let start = obj(vec![("action", s(action))]);
-        let methods = or(
-            dget_v(
-                &self.vault_sock("confirm/start", dumps(&start).into_bytes())?,
-                "methods",
-            )?,
-            Value::Array(Vec::new()),
-        );
+        let started = self.vault_sock("confirm/start", dumps(&start).into_bytes())?;
+        let methods = or(dget_v(&started, "methods")?, Value::Array(Vec::new()));
         let mut body = obj(vec![("action", s(action)), ("secretId", secret_id.clone())]);
-        let data = if py_in("local-auth", &methods)? {
+        let mut wait = 180;
+        let card = || {
+            obj(vec![
+                ("action", s(action)),
+                ("secretId", secret_id.clone()),
+                ("label", s(label)),
+            ])
+        };
+        let pw = if py_in("local-auth", &methods)? {
             self.say(&format!(
                 "Approve on this Mac (Touch ID or your login password): {label}"
             ));
             set(&mut body, "method", s("local-auth"));
             set(&mut body, "label", s(label));
-            dumps(&body).into_bytes()
+            if let Some(req) = self.phone_card(&started, &card(), false)? {
+                set(&mut body, "phoneRequest", req);
+                wait = 330;
+            }
+            None
         } else if py_in("connect-password", &methods)? {
             set(&mut body, "method", s("connect-password"));
-            let pw = self.password(&format!("Your password on {} ({label}): ", self.local_url))?;
-            with_password(&body, &pw)
+            Some(self.password(&format!("Your password on {} ({label}): ", self.local_url))?)
         } else if py_in("vault-password", &methods)? {
             set(&mut body, "method", s("vault-password"));
-            let pw = self.password(&format!("Vault password ({label}): "))?;
-            with_password(&body, &pw)
+            Some(self.password(&format!("Vault password ({label}): "))?)
         } else {
             return Err(Self::no_method_local());
         };
-        let r = self.vault_sock("confirm/finish", data)?;
+        let r = self.finish_or_phone(&started, &card(), &body, pw.as_ref(), wait)?;
         Ok(index(&r, "token")?)
+    }
+
+    /// `phone_card(started, start, fallback)` (0.46.17): also raise the
+    /// owner's phone card for this confirm (the first answer wins), when
+    /// the daemon offers it and this computer's prompt can't be seen (over
+    /// SSH), or (`fallback`) when nobody answered it. The card's request
+    /// id, or `None` (this computer alone).
+    fn phone_card(&self, started: &Value, start: &Value, fallback: bool) -> E<Option<Value>> {
+        use k2_client::env_names as en;
+        let envn = |names: &[&'static str]| {
+            en::first_nonempty_os_in(names, |n| std::env::var_os(n))
+                .map(|(_, v)| v.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        };
+        if !truthy_get(started, "phoneOffered")? || envn(en::VAULT_CONFIRM_METHOD) == "local" {
+            return Ok(None);
+        }
+        let ssh = ["SSH_CONNECTION", "SSH_TTY"]
+            .iter()
+            .any(|n| std::env::var_os(n).is_some_and(|v| !v.is_empty()));
+        if !fallback && !ssh {
+            return Ok(None);
+        }
+        let mut body = start.clone();
+        let mut here = envn(en::PROJECT_PATH);
+        if here.is_empty() {
+            here = std::env::current_dir()
+                .map_err(|e| Stop::Raised(format!("FileNotFoundError: {e}")))?
+                .to_string_lossy()
+                .into_owned();
+        }
+        set(&mut body, "phone", Value::Bool(true));
+        set(&mut body, "workspacePath", s(&here));
+        let thread = envn(en::VAULT_CONFIRM_THREAD);
+        if !thread.is_empty() {
+            set(&mut body, "thread", s(&thread));
+        }
+        let p = match self.vault_sock("confirm/start", dumps(&body).into_bytes()) {
+            Ok(v) => or(dget_v(&v, "phone")?, obj(vec![])),
+            Err(Stop::Fail { hint, .. }) => {
+                self.say(&format!("(no phone card: {})", st(&hint)));
+                return Ok(None);
+            }
+            Err(e) => return Err(e),
+        };
+        if !truthy_get(&p, "request")? {
+            return Ok(None);
+        }
+        let place = if truthy_get(&p, "thread")? {
+            format!(" ({})", st(&index(&p, "thread")?))
+        } else {
+            String::new()
+        };
+        let req = index(&p, "request")?;
+        let addr = st(&p::dget_or(&p, "addr", s(""))?);
+        if fallback {
+            self.say(&format!(
+                "Approve on your phone: card {} on {addr}'s Thread{place}. Waiting for your phone… (5 minutes)",
+                st(&req)
+            ));
+        } else {
+            self.say(&format!(
+                "  or on your phone: card {} on {addr}'s Thread{place}. Waiting for your phone… (5 minutes; the first answer wins)",
+                st(&req)
+            ));
+        }
+        Ok(Some(req))
+    }
+
+    /// `finish_or_phone(started, start, body, wait)`: confirm/finish here;
+    /// when nobody answered this computer's prompt, the phone card once
+    /// instead. `pw` is the body's `password`, spliced in last.
+    fn finish_or_phone(
+        &self,
+        started: &Value,
+        start: &Value,
+        body: &Value,
+        pw: Option<&Secret>,
+        wait: u64,
+    ) -> E<Value> {
+        let data = |b: &Value| match pw {
+            Some(pw) => with_password(b, pw),
+            None => dumps(b).into_bytes(),
+        };
+        let e = match self.vault_sock_within("confirm/finish", data(body), wait) {
+            Err(e @ Stop::Fail { .. }) => e,
+            r => return r,
+        };
+        let Stop::Fail { code, .. } = &e else {
+            return Err(e);
+        };
+        let unanswered = matches!(code, Value::Str(t)
+            if matches!(t.as_str(), Some("confirm_unanswered" | "vault_presence_required")));
+        if !unanswered || truthy_get(body, "phoneRequest")? || truthy_get(body, "proposal")? {
+            return Err(e);
+        }
+        self.say("Nobody answered on this Mac.");
+        let Some(req) = self.phone_card(started, start, true)? else {
+            return Err(e);
+        };
+        // `b = dict(body); b.update(method="phone", phoneRequest=req)`:
+        // the password (when there is one) keeps its place before the
+        // request.
+        let mut b = body.clone();
+        set(&mut b, "method", s("phone"));
+        let bytes = match pw {
+            Some(pw) => {
+                let mut d = with_password(&b, pw);
+                d.pop();
+                d.extend_from_slice(b", \"phoneRequest\": ");
+                d.extend_from_slice(dumps(&req).as_bytes());
+                d.push(b'}');
+                d
+            }
+            None => {
+                set(&mut b, "phoneRequest", req);
+                dumps(&b).into_bytes()
+            }
+        };
+        self.vault_sock_within("confirm/finish", bytes, 330)
     }
 
     /// `vault_target(side, label)`.
@@ -639,13 +769,8 @@ impl Engine {
         let reason = st(&reason);
         if local {
             let start = obj(vec![("action", s("clone-carry"))]);
-            let methods = or(
-                dget_v(
-                    &self.vault_sock("confirm/start", dumps(&start).into_bytes())?,
-                    "methods",
-                )?,
-                Value::Array(Vec::new()),
-            );
+            let started = self.vault_sock("confirm/start", dumps(&start).into_bytes())?;
+            let methods = or(dget_v(&started, "methods")?, Value::Array(Vec::new()));
             let mut body = obj(vec![
                 ("action", s("clone-carry")),
                 ("clonePlan", ask.clone()),
@@ -653,20 +778,28 @@ impl Engine {
             if py::truthy(proposal) {
                 set(&mut body, "proposal", proposal.clone());
             }
-            let data = if py_in("local-auth", &methods)? {
+            let mut wait = 180;
+            let card = || obj(vec![("action", s("clone-carry")), ("clonePlan", ask.clone())]);
+            let pw = if py_in("local-auth", &methods)? {
                 self.say(&format!(
                     "Approve on this Mac (Touch ID or your login password): {reason}"
                 ));
                 set(&mut body, "method", s("local-auth"));
-                dumps(&body).into_bytes()
+                // A clone proposal's one confirm is answered at the Mac only.
+                if !py::truthy(proposal) {
+                    if let Some(req) = self.phone_card(&started, &card(), false)? {
+                        set(&mut body, "phoneRequest", req);
+                        wait = 330;
+                    }
+                }
+                None
             } else if py_in("vault-password", &methods)? {
                 set(&mut body, "method", s("vault-password"));
-                let pw = self.password(&format!("Vault password ({reason}): "))?;
-                with_password(&body, &pw)
+                Some(self.password(&format!("Vault password ({reason}): "))?)
             } else {
                 return Err(Self::no_method_local());
             };
-            return self.vault_sock("confirm/finish", data);
+            return self.finish_or_phone(&started, &card(), &body, pw.as_ref(), wait);
         }
         self.https_gate(w, true)?;
         let methods = or(dget_v(&conf, "methods")?, Value::Array(Vec::new()));

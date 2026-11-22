@@ -843,6 +843,75 @@ fn clone_preview_and_here() {
             local_requests: 7,
             ..case("here --copy: the secret copied in place after a confirm", &["here", "ws1", "--copy", "API_KEY"])
         },
+        // 0.46.17, the owner's phone: nobody answers this computer's
+        // prompt, so the phone card, once.
+        CCase {
+            local: vec![
+                ok(RECIPIENT),
+                ok(PREVIEW),
+                ok(r#"{"bundle_path":"/b/x.tar"}"#),
+                ok(UNPACKED),
+                ok(r#"{"methods":["local-auth"],"phoneOffered":true}"#),
+                Reply::Answer(
+                    409,
+                    r#"{"ok":false,"error":{"code":"confirm_unanswered","hint":"no one answered"}}"#.into(),
+                ),
+                ok(r#"{"phone":{"request":"pr_c1","addr":"ws1","thread":"the workspace you ran it in"}}"#),
+                ok(r#"{"token":"VT-3","confirmedOn":"phone"}"#),
+                ok(r#"{"copied":1}"#),
+            ],
+            local_requests: 9,
+            ..case("here --copy: nobody answers here, the phone card once", &["here", "ws1", "--copy", "API_KEY"])
+        },
+        // Over SSH: the phone card beside the prompt, the first answer wins.
+        CCase {
+            local: vec![
+                ok(RECIPIENT),
+                ok(PREVIEW),
+                ok(r#"{"bundle_path":"/b/x.tar"}"#),
+                ok(UNPACKED),
+                ok(r#"{"methods":["local-auth"],"phoneOffered":true}"#),
+                ok(r#"{"phone":{"request":"pr_c2","addr":"ws1"}}"#),
+                ok(r#"{"token":"VT-4"}"#),
+                ok(r#"{"copied":1}"#),
+            ],
+            local_requests: 8,
+            ..case("here --copy over SSH: the phone beside the prompt", &["here", "ws1", "--copy", "API_KEY"])
+        }
+        .env(vec![("SSH_CONNECTION", "192.0.2.7 50000 192.0.2.8 22"), ("K2_VAULT_CONFIRM_THREAD", "ws2")]),
+        // Over SSH with K2_VAULT_CONFIRM_METHOD=local: never the phone.
+        CCase {
+            local: vec![
+                ok(RECIPIENT),
+                ok(PREVIEW),
+                ok(r#"{"bundle_path":"/b/x.tar"}"#),
+                ok(UNPACKED),
+                ok(r#"{"methods":["local-auth"],"phoneOffered":true}"#),
+                Reply::Answer(
+                    409,
+                    r#"{"ok":false,"error":{"code":"confirm_unanswered","hint":"no one answered"}}"#.into(),
+                ),
+            ],
+            local_requests: 6,
+            code: 3,
+            ..case("here --copy over SSH, the method local: never the phone", &["here", "ws1", "--copy", "API_KEY"])
+        }
+        .env(vec![("SSH_TTY", "/dev/pts/9"), ("K2_VAULT_CONFIRM_METHOD", "local")]),
+        // The .env files' carry confirm over SSH, and its phone card refused.
+        CCase {
+            local: vec![
+                Reply::Answer(503, r#"{"error":"vault closed"}"#.into()),
+                ok(PREVIEW),
+                ok(r#"{"methods":["local-auth"],"phoneOffered":true}"#),
+                Reply::Answer(403, r#"{"ok":false,"error":{"code":"phone_off","hint":"no phone paired"}}"#.into()),
+                ok(r#"{"token":"VT-5"}"#),
+                ok(r#"{"bundle_path":"/b/x.tar"}"#),
+                ok(UNPACKED),
+            ],
+            local_requests: 7,
+            ..case("here --copy --env-files over SSH: the phone card refused, this computer alone", &["here", "ws1", "--copy", "API_KEY", "--env-files"])
+        }
+        .env(vec![("SSH_CONNECTION", "192.0.2.7 50000 192.0.2.8 22")]),
         CCase {
             local: vec![
                 ok(RECIPIENT),
@@ -1101,6 +1170,29 @@ fn clone_approve() {
                 &["approve", "cp-7"],
             )
         },
+        // 0.46.17: over SSH the approve's confirm raises the phone card
+        // beside the prompt.
+        CCase {
+            local: vec![
+                ok(PROPOSALS_HERE),
+                ok(PROPOSALS_HERE),
+                ok(RECIPIENT),
+                ok(PREVIEW_PLAIN),
+                ok(r#"{"methods":["local-auth"],"phoneOffered":true}"#),
+                ok(r#"{"phone":{"request":"pr_a1","addr":"ws1","thread":"the server's own agent"}}"#),
+                ok(r#"{"token":"CA-1"}"#),
+                ok(r#"{"ok":true}"#),
+                ok(r#"{"bundle_path":"/b/x.tar"}"#),
+                ok(UNPACKED),
+                ok(r#"{"ok":true}"#),
+            ],
+            local_requests: 11,
+            ..case(
+                "approve over SSH: the phone card beside the prompt",
+                &["approve", "cp-77"],
+            )
+        }
+        .env(vec![("SSH_CONNECTION", "192.0.2.7 50000 192.0.2.8 22")]),
         CCase {
             local: vec![ok(r#"{"proposals":[]}"#)],
             local_requests: 1,

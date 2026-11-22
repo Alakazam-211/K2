@@ -1032,8 +1032,9 @@ pub(crate) fn hire_off_hint(workspace_id: &str, ws: &str) -> String {
 
 /// What the real hire still needs, for a template dry run that skipped the
 /// switch (`hireSwitch` in its answer): `None` when the caller isn't an
-/// agent or its switch is on. `command` is the card to ask with, present
-/// only while permission cards are on for that agent.
+/// agent or its switch is on. `command` is the card to ask with and `tail`
+/// the same line after the command's name, present only while permission
+/// cards are on for that agent.
 fn hire_switch_note(who: &Who) -> Option<serde_json::Value> {
     let Who::Agent { project_id, .. } = who else {
         return None;
@@ -1049,6 +1050,7 @@ fn hire_switch_note(who: &Who) -> Option<serde_json::Value> {
     });
     if k2_core::permission::gate::enabled_for(project_id) {
         v["command"] = serde_json::json!(crate::permission::walls::ask_command(HIRE_ACTION, &serde_json::Map::new()));
+        v["tail"] = serde_json::json!(crate::permission::walls::ask_tail(HIRE_ACTION, &serde_json::Map::new()));
     }
     Some(v)
 }

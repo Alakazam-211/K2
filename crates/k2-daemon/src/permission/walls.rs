@@ -1306,16 +1306,22 @@ pub(crate) fn ask_command(action: &str, params: &Map<String, Value>) -> String {
     ask_command_named(CLI_NAME, action, params)
 }
 
-/// [`ask_command`] with the command's name as a value: the one place the
-/// Ask line is built.
+/// [`ask_command`] with the command's name as a value.
 fn ask_command_named(cli: &str, action: &str, params: &Map<String, Value>) -> String {
-    let mut cmd = format!("{cli} permission request {action}");
+    format!("{cli} {}", ask_tail(action, params))
+}
+
+/// The Ask line after the command's name, quoted for a shell: the one
+/// place it is built. A refusal's `permission` object sends it as `tail`,
+/// so a CLI prints it after its own name.
+pub(crate) fn ask_tail(action: &str, params: &Map<String, Value>) -> String {
+    let mut tail = format!("permission request {action}");
     for (k, v) in params {
         let v = v.as_str().map(shell_word).unwrap_or_else(|| format!("<{k}>"));
-        cmd.push_str(&format!(" {k}={v}"));
+        tail.push_str(&format!(" {k}={v}"));
     }
-    cmd.push_str(&format!(" --why \"{WHY_PLACEHOLDER}\""));
-    cmd
+    tail.push_str(&format!(" --why \"{WHY_PLACEHOLDER}\""));
+    tail
 }
 
 /// The `permission` object for this refusal, or `None` when it isn't a
@@ -1338,13 +1344,8 @@ pub(crate) fn permission_for(req: &Refused<'_>) -> Option<Value> {
                     // command; the params object carries null for it.
                     params.insert((*k).to_string(), v.map(Value::String).unwrap_or(Value::Null));
                 }
-                let command = ask_command(action, &params);
-                to_value(PermissionRefusal::Requestable {
-                    action: action.to_string(),
-                    params,
-                    approvers: floor.label().to_string(),
-                    command,
-                })
+                let tail = ask_tail(action, &params);
+                to_value(PermissionRefusal::requestable(action, params, floor.label(), tail))
             }
             Target::Cannot { r#where } => to_value(PermissionRefusal::not_requestable(r#where)),
         });
@@ -2789,6 +2790,40 @@ mod tests {
             ask_command_named("xy", "connections.add", &params),
             "xy permission request connections.add to='a b'\\''c' --why \"<what you need it for>\""
         );
+    }
+
+    /// The Ask line's tail names no command: the CLI puts its own name in
+    /// front. Pinned as literals with no brand in them.
+    #[test]
+    fn the_ask_tail_is_the_line_after_the_name() {
+        let mut params = Map::new();
+        params.insert("to".to_string(), json!("a b'c"));
+        assert_eq!(ask_tail("connections.add", &params), "permission request connections.add to='a b'\\''c' --why \"<what you need it for>\"");
+        assert_eq!(ask_tail("compute.use", &Map::new()), "permission request compute.use --why \"<what you need it for>\"");
+    }
+
+    /// A refusal's `permission` object carries `tail` beside `command`, and
+    /// `command` is this build's name, a space and the tail, for every
+    /// action the walls map names.
+    #[test]
+    fn every_permission_object_carries_the_tail() {
+        let p = teach_of(403, "POST", "/cli/connections", &[("action", "add"), ("target", "pog-sales")], None, json!({"error":{"code":"agents_create_connections_disabled"}})).unwrap();
+        assert_eq!(p["tail"], "permission request connections.add to=pog-sales --why \"<what you need it for>\"", "{p}");
+        let mut asks = 0;
+        for row in ROWS {
+            let Target::Ask { action, .. } = row.target else { continue };
+            let mut params = Map::new();
+            for (k, v) in row.fixed {
+                params.insert((*k).to_string(), json!(v));
+            }
+            let p = to_value(PermissionRefusal::requestable(action, params.clone(), "owner", ask_tail(action, &params)));
+            let tail = p["tail"].as_str().expect("tail");
+            assert!(tail.starts_with(&format!("permission request {action}")), "{p}");
+            assert_eq!(p["command"].as_str(), Some(format!("{CLI_NAME} {tail}").as_str()), "{p}");
+            assert_eq!(p["command"].as_str(), Some(ask_command(action, &params).as_str()), "{p}");
+            asks += 1;
+        }
+        assert!(asks > 50, "the walls map's actions: {asks}");
     }
 
     /// A command name in `text` other than this build's: one of `names`

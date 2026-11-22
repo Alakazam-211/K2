@@ -345,7 +345,7 @@ fn not_cardable(id: &str) -> Option<CliResponse> {
             "ok": false,
             "error": { "code": code::NOT_CARDABLE, "hint": hint },
             "permission": match covered {
-                Some(by) => json!({ "action": by, "params": {}, "command": super::walls::ask_command(by, &Map::new()) }),
+                Some(by) => json!({ "action": by, "params": {}, "command": super::walls::ask_command(by, &Map::new()), "tail": super::walls::ask_tail(by, &Map::new()) }),
                 None => json!({ "requestable": false, "where": n.r#where }),
             },
         })

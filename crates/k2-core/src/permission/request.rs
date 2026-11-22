@@ -199,12 +199,22 @@ impl PermissionRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum PermissionRefusal {
-    /// A mapped wall: the exact command to ask with.
+    /// A mapped wall: the exact command to ask with. Build it with
+    /// [`PermissionRefusal::requestable`].
     Requestable {
         action: String,
         params: serde_json::Map<String, Value>,
         approvers: String,
+        /// The whole Ask line with this server's command name, for a CLI
+        /// that doesn't read `tail` yet.
         command: String,
+        /// The Ask line after the command's name, already quoted for a
+        /// shell (`permission request <action> ... --why "..."`). A CLI
+        /// prints its own compiled name and this, so a CLI of one brand
+        /// talking to a server of another prints a command that exists on
+        /// its own machine. Empty in an object from before it existed.
+        #[serde(default)]
+        tail: String,
     },
     /// Anything else, including a machine-only refusal (`where` = "at the
     /// machine", §5.5): "It can't be requested."
@@ -220,6 +230,19 @@ pub enum PermissionRefusal {
 }
 
 impl PermissionRefusal {
+    /// A mapped wall's object from the Ask line's `tail`: `command` is this
+    /// build's command name, a space and the tail.
+    pub fn requestable(action: impl Into<String>, params: serde_json::Map<String, Value>, approvers: impl Into<String>, tail: impl Into<String>) -> Self {
+        let tail = tail.into();
+        PermissionRefusal::Requestable {
+            action: action.into(),
+            params,
+            approvers: approvers.into(),
+            command: format!("{} {tail}", crate::brand::CLI_NAME),
+            tail,
+        }
+    }
+
     pub fn not_requestable(where_: impl Into<String>) -> Self {
         PermissionRefusal::NotRequestable { requestable: false, where_: where_.into(), hint: None }
     }
@@ -360,17 +383,23 @@ mod tests {
 
     #[test]
     fn refusal_object_wire_shapes() {
-        let r = PermissionRefusal::Requestable {
-            action: "compute.use".into(),
-            params: serde_json::Map::new(),
-            approvers: "owner or admin".into(),
-            command: "k2 permission request compute.use --why \"<what you need it for>\"".into(),
-        };
+        let r = PermissionRefusal::requestable(
+            "compute.use",
+            serde_json::Map::new(),
+            "owner or admin",
+            "permission request compute.use --why \"<what you need it for>\"",
+        );
         assert_eq!(
             serde_json::to_value(&r).unwrap(),
             json!({"action": "compute.use", "params": {}, "approvers": "owner or admin",
-                   "command": "k2 permission request compute.use --why \"<what you need it for>\""})
+                   "command": "k2 permission request compute.use --why \"<what you need it for>\"",
+                   "tail": "permission request compute.use --why \"<what you need it for>\""})
         );
+        // An object from before `tail` still reads, with an empty one.
+        let old: PermissionRefusal = serde_json::from_value(json!({"action": "compute.use", "params": {}, "approvers": "owner",
+            "command": "k2 permission request compute.use --why \"<what you need it for>\""}))
+        .unwrap();
+        assert!(matches!(&old, PermissionRefusal::Requestable { tail, .. } if tail.is_empty()), "{old:?}");
         let n = PermissionRefusal::not_requestable(WHERE_AT_MACHINE);
         assert_eq!(serde_json::to_value(&n).unwrap(), json!({"requestable": false, "where": "at the machine"}));
         let m = PermissionRefusal::at_the_machine("At z3mbpz, run: sudo k2-node admin level policy");

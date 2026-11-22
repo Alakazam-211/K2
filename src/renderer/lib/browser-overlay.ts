@@ -225,8 +225,14 @@ export function BrowserOverlayClaim({
  * covered when the dock has no size (display:none; the pane's own
  * visibility rules hide it then).
  */
-export function useBrowserCovered(ref: RefObject<Element | null>): boolean {
-  const all = useSyncExternalStore(subscribeOverlayClaims, overlayClaims, overlayClaims)
+export function useBrowserCovered(
+  ref: RefObject<Element | null>,
+  /** Only these claims cover (the macOS underlay leaves menus, popovers
+   *  and toasts over a live page). Omitted: every claim. */
+  counts?: (claim: OverlayClaim) => boolean,
+): boolean {
+  const every = useSyncExternalStore(subscribeOverlayClaims, overlayClaims, overlayClaims)
+  const all = counts ? every.filter(counts) : every
   const [covered, setCovered] = useState(false)
   const allRef = useRef(all)
   allRef.current = all
@@ -241,7 +247,7 @@ export function useBrowserCovered(ref: RefObject<Element | null>): boolean {
     setCovered(coveringClaims(current, measureElement(el), el).length > 0)
   }
 
-  useLayoutEffect(recompute, [all])
+  useLayoutEffect(recompute, [every])
 
   useEffect(() => {
     const el = ref.current

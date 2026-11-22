@@ -22,7 +22,7 @@ ls src-tauri/dfn3/* >/dev/null 2>&1 || echo stub > src-tauri/dfn3/stub.txt
 export CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-6}"
 if [ -n "${K2_JOB_CACHE:-}" ]; then export CARGO_TARGET_DIR="$K2_JOB_CACHE/target"; fi
-touched='^(third_party/wry/src/(lib\.rs|wkwebview/(mod\.rs|underlay/|class/wry_web_view\.rs))|src-tauri/src/(lib\.rs|commands/(mod\.rs|browser_page_layers\.rs|browser_webviews\.rs)))'
+touched='^[^ ]*(third_party/wry/src/(lib\.rs|wkwebview/(mod\.rs|underlay/|class/wry_web_view\.rs))|src-tauri/src/(lib\.rs|commands/(mod\.rs|browser_page_layers\.rs|browser_webviews\.rs))):[0-9]+:[0-9]+: (warning|error)'
 rc=0
 echo "underlay-mac-check: cargo check -p k2 (lib + tests)"
 cargo check -p k2 --locked --lib --tests --message-format short > check.log 2>&1 || rc=$?
@@ -54,4 +54,12 @@ set -e
 tail -40 test.log
 [ "$trc" = 0 ] || { echo "underlay-mac-check: FAILED: tests exit $trc"; exit 1; }
 grep -qE '^test result: ok\. [1-9][0-9]* passed' test.log || { echo "underlay-mac-check: FAILED: no tests ran"; exit 1; }
+echo "underlay-mac-check: clippy (the touched files)"
+cargo clippy -p k2 --locked --lib --tests --message-format short > clippy.log 2>&1 || { tail -30 clippy.log; echo "underlay-mac-check: FAILED: clippy"; exit 1; }
+grep -E "$touched" clippy.log > touched-clippy.log || true
+if [ -s touched-clippy.log ]; then
+    echo "underlay-mac-check: FAILED: clippy warnings in the files the underlay touches:"
+    cat touched-clippy.log
+    exit 1
+fi
 echo "underlay-mac-check: OK"

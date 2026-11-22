@@ -139,7 +139,6 @@ pub fn set_window(spec: WindowSpec) -> Result<(), String> {
   if layer_of(&spec.ui).is_none() {
     return Err("underlay: the UI view has no layer to mask".into());
   }
-  BELOW.with(|b| b.borrow_mut().insert(key));
   let (old_hover, dropped) = WINS.with(|w| {
     let mut w = w.borrow_mut();
     let prev = w.remove(&key);

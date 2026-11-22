@@ -24,6 +24,8 @@ import {
   type FrozenFrame,
 } from './browserFreeze'
 import { dockAppearance, sameAppearance, snapRect, type DockAppearance } from './dockGeometry'
+import { cornerRadius, freezesInUnderlay, pageLayersSync, type PageMode } from '@/lib/page-layers'
+import { underlayActive, useBrowserLayeringStore, useBrowserUnderlay } from '@/stores/browser-layering'
 
 export { focusVisibleBrowserAddress } from './focusBrowserAddress'
 export { normalizeUrl }
@@ -118,6 +120,31 @@ export function currentParentWindow(): string {
     return 'main'
   }
 }
+
+// macOS underlay (0.46.17, `browserLayering`): this window's PageLayers
+// sync. A failure drops the window to the legacy path for the session, and
+// turning the setting off does the same on purpose.
+function underlayOn(): boolean {
+  return underlayActive(useBrowserLayeringStore.getState())
+}
+function leaveUnderlay(): void {
+  pageLayersSync.reset()
+  void invoke('browser_underlay_clear', { parentWindow: currentParentWindow() }).catch((e) => {
+    console.warn(`[browser-underlay] could not go back to the legacy path: ${String(e)}`)
+  })
+}
+pageLayersSync.configure({
+  parentWindow: currentParentWindow,
+  active: underlayOn,
+  hoverPrivateFallback: () => useBrowserLayeringStore.getState().hoverPrivateFallback,
+  fail: (reason) => {
+    useBrowserLayeringStore.getState().markFailed(reason)
+    leaveUnderlay()
+  },
+})
+useBrowserLayeringStore.subscribe((state, prev) => {
+  if (underlayActive(prev) && !underlayActive(state) && state.failed === null) leaveUnderlay()
+})
 
 /**
  * Whether the native child should be shown.
@@ -247,7 +274,11 @@ export function BrowserPane({
   )
   // A DOM overlay (menu, dialog, toast, drag, drawer slide) whose box
   // intersects the dock. OS focus does not cover.
-  const covered = useBrowserCovered(contentRef)
+  // macOS underlay: the page sits below K2, so menus, popovers and toasts
+  // over it leave it live (they claim input instead); dialogs, drags and
+  // motion still freeze it.
+  const underlay = useBrowserUnderlay()
+  const covered = useBrowserCovered(contentRef, underlay ? freezesInUnderlay : undefined)
   const face: BrowserFace = !shown ? 'hidden' : covered ? 'frozen' : 'live'
   // "Visible" for creation, navigation and the URL poll: live only.
   const visible = face === 'live'
@@ -286,6 +317,8 @@ export function BrowserPane({
   const pendingUrlRef = useRef<string>('')
   const visibleRef = useRef(visible)
   visibleRef.current = visible
+  const underlayRef = useRef(underlay)
+  underlayRef.current = underlay
 
   // Freeze-frame picture shown in the dock while the native view is hidden
   // under an overlay (null when the page is live or hidden).
@@ -352,6 +385,7 @@ export function BrowserPane({
         parentWindow,
         appearance,
         ...(design ? { design: true } : {}),
+        ...(underlayRef.current ? { layering: 'underlay' } : {}),
       })
       appearanceRef.current = appearance
       createdRef.current = true
@@ -385,10 +419,16 @@ export function BrowserPane({
       if (!createdRef.current) return
       const rect = measureRect()
       if (!rect) return
-      void invoke('browser_set_bounds', { itemId, rect, parentWindow }).catch(() => {
-        // View may have been closed in a race; the visibility/lifecycle
-        // effects own recovery.
-      })
+      if (underlayRef.current) {
+        // The page's frame rides the window's PageLayers set (same pass,
+        // one size change per frame, never during a drag).
+        pageLayersSync.frame()
+      } else {
+        void invoke('browser_set_bounds', { itemId, rect, parentWindow }).catch(() => {
+          // View may have been closed in a race; the visibility/lifecycle
+          // effects own recovery.
+        })
+      }
       // A split, a drawer or a Style change can move the dock onto (or off)
       // a rounded pane corner, or change the pane background.
       const appearance = readAppearance()
@@ -538,6 +578,37 @@ export function BrowserPane({
   useEffect(() => {
     freezeRef.current?.set(face)
   }, [face])
+
+  // ── Underlay: this pane is one layer of the window's PageLayers ─────
+  // Live while the page shows; still while a dialog, drag or motion
+  // freezes it (K2 keeps input, and the page is not resized).
+  const layerModeRef = useRef<PageMode>('live')
+  layerModeRef.current = face === 'live' ? 'live' : 'still'
+  const faceHidden = face === 'hidden'
+  useEffect(() => {
+    if (!underlay || !created || faceHidden) return
+    return pageLayersSync.register({
+      windowId: itemId,
+      element: () => contentRef.current,
+      measure: () => {
+        const rect = measureRect()
+        if (!rect) return null
+        const look = appearanceRef.current
+        return look ? { ...rect, radius: cornerRadius(look.cornerRadius, look.corners) } : rect
+      },
+      mode: () => layerModeRef.current,
+    })
+  }, [underlay, created, faceHidden, itemId, measureRect])
+  useEffect(() => {
+    if (underlay && created) pageLayersSync.now()
+  }, [underlay, created, face])
+  // Back from underlay (setting off, or a failure): the legacy path places
+  // the view again.
+  const wasUnderlayRef = useRef(underlay)
+  useEffect(() => {
+    if (wasUnderlayRef.current && !underlay) scheduleBoundsPush()
+    wasUnderlayRef.current = underlay
+  }, [underlay, scheduleBoundsPush])
 
   // ── Navigate requests (openUrlInPane navigate-in-place reuse) ───────
   // Tab panes: only a request from THIS window (navSeq bump) moves the

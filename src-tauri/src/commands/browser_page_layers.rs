@@ -80,8 +80,11 @@ pub struct WireLayer {
     pub mode: String,
 }
 
+/// `id`, `kind` and `frost` are Design's wire fields: routing and the mask
+/// read the shape only (frost is a later spike).
 #[derive(serde::Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct WireClaim {
     #[serde(flatten)]
     pub shape: WireShape,
@@ -101,7 +104,9 @@ pub struct PageLayers {
     #[serde(default)]
     pub parent_window: Option<String>,
     pub generation: u64,
+    /// Sent by Design's shape; native placement works in points.
     #[serde(default)]
+    #[allow(dead_code)]
     pub dpr: Option<f64>,
     /// The UI page size the rects were measured at.
     #[serde(default)]

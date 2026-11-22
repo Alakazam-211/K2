@@ -75,6 +75,7 @@ pub mod browser_page_layers;
 // The pure underlay rules from K2's wry fork (shapes, owner, gesture
 // latch), run in this crate's tests on any host.
 #[cfg(test)]
+#[allow(dead_code)]
 #[path = "../../../third_party/wry/src/wkwebview/underlay/logic.rs"]
 mod wry_underlay_logic;
 // Design mode picker (prd-browser-design-mode-v1 D-A11): guest script,

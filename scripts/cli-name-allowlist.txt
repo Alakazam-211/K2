@@ -107,7 +107,6 @@
 10 cli crates/k2-daemon/src/zen_access_routes.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 9 cli crates/k2-daemon/src/apps/exec.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 9 cli crates/k2-daemon/src/apps/guarded.rs debt: the command name typed out; use CLI_NAME or cli_name!()
-9 cli crates/k2-daemon/src/compute_allow.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 9 cli crates/k2-daemon/src/compute_move.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 9 cli crates/k2-daemon/src/mail/defaults.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 9 cli crates/k2-daemon/src/mail/external.rs debt: the command name typed out; use CLI_NAME or cli_name!()

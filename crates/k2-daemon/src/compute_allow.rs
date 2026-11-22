@@ -83,8 +83,8 @@ pub(crate) fn not_allowed(ws: &Ws, node_name: &str, names: &[String], what: &str
         403,
         format!(
             "{what} '{node_name}' is not on workspace {}'s compute node list, so its jobs (and the source they sync) never go there. \
-             Its list: {}. Name one of those, or no node (K2 picks one on the list). Only a person adds a node: \
-             k2 compute allow-nodes --add {node_name} --workspace {} (the owner or an Admin, from a terminal outside {PRODUCT_NAME}), \
+             Its list: {}. Name one of those, or no node ({PRODUCT_NAME} picks one on the list). Only a person adds a node: \
+             {CLI_NAME} compute allow-nodes --add {node_name} --workspace {} (the owner or an Admin, from a terminal outside {PRODUCT_NAME}), \
              or they approve the card {}'s agent asks with: {CLI_NAME} permission request compute.allow-nodes nodes={node_name}",
             ws.handle,
             list_words(names),
@@ -115,7 +115,7 @@ pub(crate) fn check_node(ws: &Ws, node: &store::NodeRow, what: &str) -> R<()> {
 fn off_list_detail(node: &str, ws: &str) -> String {
     format!(
         "'{node}' is no longer on workspace {ws}'s compute node list, so this job never started there. \
-         Run it again: K2 places it on a node on the list (k2 compute allow-nodes)"
+         Run it again: {PRODUCT_NAME} places it on a node on the list ({CLI_NAME} compute allow-nodes)"
     )
 }
 
@@ -267,7 +267,7 @@ pub(crate) fn set(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         return Err(no(
             compute::codes::BAD_REQUEST,
             400,
-            "say one of: the whole list (k2 compute allow-nodes linux-1,arch-1), --add NODE, --remove NODE, or --clear",
+            format!("say one of: the whole list ({CLI_NAME} compute allow-nodes linux-1,arch-1), --add NODE, --remove NODE, or --clear"),
         ));
     }
     let ws = target_ws(who, s(&v, "workspace")).map_err(|r| other_workspace(who, s(&v, "workspace"), r))?;
@@ -296,7 +296,7 @@ pub(crate) fn set(who: &Who, body: &[u8]) -> R<serde_json::Value> {
             return Err(no(
                 compute::codes::BAD_REQUEST,
                 400,
-                format!("workspace {} has no node list to remove from; set one: k2 compute allow-nodes <node>[,<node>…]", ws.handle),
+                format!("workspace {} has no node list to remove from; set one: {CLI_NAME} compute allow-nodes <node>[,<node>…]", ws.handle),
             ));
         };
         let gone = resolve(&remove)?;
@@ -327,7 +327,7 @@ pub(crate) fn set(who: &Who, body: &[u8]) -> R<serde_json::Value> {
                         403,
                         format!(
                             "{} {} not granted to workspace {}, so a node list entry would never let its jobs in. A person grants {} first \
-                             (Settings → Cores → Compute, or k2 compute grant <node> --workspace {} from a terminal outside {PRODUCT_NAME}); then ask to add {}",
+                             (Settings → Cores → Compute, or {CLI_NAME} compute grant <node> --workspace {} from a terminal outside {PRODUCT_NAME}); then ask to add {}",
                             ungranted.join(", "),
                             if ungranted.len() == 1 { "is" } else { "are" },
                             ws.handle,
@@ -347,14 +347,14 @@ pub(crate) fn set(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         let hint = if clear {
             format!(
                 "clearing workspace {}'s compute node list opens every node granted to it at once (more than adding the ones it needs), \
-                 so only a person does it: the owner or an Admin, from a terminal outside {PRODUCT_NAME} (k2 compute allow-nodes --clear --workspace {}). \
-                 To reach one more node, ask for just that node: k2 compute allow-nodes --add <node>. An agent may only narrow its list",
+                 so only a person does it: the owner or an Admin, from a terminal outside {PRODUCT_NAME} ({CLI_NAME} compute allow-nodes --clear --workspace {}). \
+                 To reach one more node, ask for just that node: {CLI_NAME} compute allow-nodes --add <node>. An agent may only narrow its list",
                 ws.handle, ws.handle
             )
         } else {
             format!(
                 "{words} workspace {}'s compute node list lets its jobs (and the source they sync) reach more machines, so a person decides: \
-                 the owner or an Admin, from a terminal outside {PRODUCT_NAME} (k2 compute allow-nodes --add {} --workspace {}), or on the card \
+                 the owner or an Admin, from a terminal outside {PRODUCT_NAME} ({CLI_NAME} compute allow-nodes --add {} --workspace {}), or on the card \
                  this agent asks for ({CLI_NAME} permission request compute.allow-nodes nodes={}). An agent may only narrow its list",
                 ws.handle,
                 added.join(","),
@@ -416,7 +416,7 @@ fn other_workspace(who: &Who, requested: Option<&str>, r: crate::compute_routes:
         format!(
             "an agent changes only its own workspace's compute node list, never {handle}'s. {handle}'s own agent asks for a node on a card \
              ({CLI_NAME} permission request compute.allow-nodes nodes=<node>, from its terminal), or a person runs \
-             k2 compute allow-nodes --add <node> --workspace {handle} from a terminal outside {PRODUCT_NAME}"
+             {CLI_NAME} compute allow-nodes --add <node> --workspace {handle} from a terminal outside {PRODUCT_NAME}"
         ),
     )
     .with("workspace", handle)

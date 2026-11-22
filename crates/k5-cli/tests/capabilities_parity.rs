@@ -15,9 +15,10 @@
 //! - The session: an agent on its cell socket and over TCP, `HOOK_SOCK`
 //!   with no passport (refused before anything is sent), the gates.
 //! - `_CP_404_EXIT` exported changes nothing (a 404 is 3).
-//! - What the binary hands to the shell: a `CODEX_` setting in a session,
-//!   a line with a help flag that is no help page. `capabilities --help`
-//!   is a help page.
+//! - What the binary hands to the shell: a `CODEX_` setting in a Codex
+//!   tab K2 started, a line with a help flag that is no help page.
+//!   `capabilities --help` is a help page. With no tab marker the Codex
+//!   tab gate sends nothing (exit 3).
 
 #![cfg(unix)]
 
@@ -427,18 +428,41 @@ fn the_session_and_the_gates() {
 #[test]
 fn hands_these_to_the_shell() {
     let rig = Rig::new(VERB, "shell");
-    let v = vec![with(
-        with_passport(&[("K2_HOOK_SOCK", "{sock}"), ("CODEX_THREAD_ID", "t1")]),
-        shell(case(
-            "a CODEX_ setting",
-            &[],
-            &[],
-            vec![ok(CAPS)],
-            nothing,
-            0,
-            1,
-        )),
-    )];
+    let session = PASSPORT.split_once('.').expect("session.secret").0;
+    let v = vec![
+        // In a Codex tab K2 started (the tab marker names the passport's
+        // session), the shell's Codex tab gate lets it by.
+        with(
+            with_passport(&[
+                ("K2_HOOK_SOCK", "{sock}"),
+                ("CODEX_THREAD_ID", "t1"),
+                ("K2_CODEX_TAB_ISOLATED", session),
+            ]),
+            shell(case(
+                "a CODEX_ setting in a tab K2 started",
+                &[],
+                &[],
+                vec![ok(CAPS)],
+                nothing,
+                0,
+                1,
+            )),
+        ),
+        // No tab marker: the Codex tab gate sends nothing (exit 3), the
+        // binary's own answer.
+        with(
+            with_passport(&[("K2_HOOK_SOCK", "{sock}"), ("CODEX_THREAD_ID", "t1")]),
+            case(
+                "a CODEX_ setting and no tab marker",
+                &[],
+                &[],
+                vec![],
+                nothing,
+                3,
+                0,
+            ),
+        ),
+    ];
     for c in v {
         rig.check(&c);
     }

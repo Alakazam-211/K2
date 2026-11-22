@@ -877,7 +877,7 @@ _compute_follow() {
     local cursor=0 query state_file fails=0 lost=0 gen=""
     state_file="$(mktemp -t k2-compute-XXXXXX)"
     # shellcheck disable=SC2064
-    trap "rm -f '$state_file' '$state_file.err' '$state_file.q'; echo '[k2 compute] detached; the job keeps running. k2 compute attach ${job:0:8} | k2 compute cancel ${job:0:8} --force' >&2; exit 130" INT
+    trap "rm -f '$state_file' '$state_file.err' '$state_file.q' '$state_file.mv'; echo '[k2 compute] detached; the job keeps running. k2 compute attach ${job:0:8} | k2 compute cancel ${job:0:8} --force' >&2; exit 130" INT
     case "$start" in
         seq:*) query="since_seq=${start#seq:}" ;;
         *) cursor="$start"; query="" ;;
@@ -887,7 +887,7 @@ _compute_follow() {
         if [ -n "${_CP_DEADLINE:-}" ]; then
             local left=$(( _CP_DEADLINE - $(date +%s) ))
             if [ "$left" -le 0 ]; then
-                rm -f "$state_file" "$state_file.err" "$state_file.q"
+                rm -f "$state_file" "$state_file.err" "$state_file.q" "$state_file.mv"
                 trap - INT
                 echo "{\"error\":\"still_running\",\"jobs\":[\"${job:0:8}\"],\"hint\":\"the wait limit passed; the job keeps going: k2 compute wait ${job:0:8} --follow\"}" >&2
                 exit "${_CP_DEADLINE_RC:-3}"
@@ -942,6 +942,20 @@ def s(x):
 # field (no signal, no reason) shifted every later one (mini-1 smoke printed
 # the start time as the job id). s() never lets "|" through.
 fa = ((j.get("ctl") or {}).get("failedAttempts") or [{}])[-1]
+# The record of the generation this answer read, once it ended without
+# ending the job: a move (no retry used) or a retry. The daemon says which
+# ("moved": its words; null for a retry).
+rec = next((a for a in (v.get("attempts") or []) if isinstance(a, dict) and not a.get("current") and a.get("generation") == v.get("generation")), None)
+moved = ""
+if rec is not None:
+    if rec.get("moved"):
+        moved = str(rec["moved"])
+    elif "moved" not in rec and rec.get("attempt") == j.get("attempt"):
+        # An older daemon: the attempt number stayed, so it was a move.
+        moved = str(rec.get("next") or "placed again")
+    else:
+        fa = {"reason": rec.get("reason"), "state": rec.get("state")}
+open(os.environ["K2_CP_STATE"] + ".mv", "w").write(moved.replace("\n", " ") + "\n")
 open(os.environ["K2_CP_STATE"], "w").write("|".join([
     s(v.get("cursor", 0)), "1" if v.get("end") else "0", s(j.get("state")), s(j.get("exitCode")),
     s(j.get("signal")), s(j.get("reason")), s(j.get("short")), s(j.get("node")),
@@ -960,14 +974,23 @@ open(os.environ["K2_CP_STATE"] + ".err", "w").write(json.dumps(err) + "\n")
         IFS='|' read -r cursor end st code sig reason short node started ended qpos qreason fgen jgen attempt lastfail < "$state_file"
         lost=0
         [ -z "$gen" ] && gen="$fgen"
-        # The attempt we followed ended in an infrastructure failure and a
-        # new attempt is queued: keep following that one.
+        # The generation we followed ended without ending the job and a new
+        # one is queued: keep following that one. A move (a node gave it
+        # back, went offline before it started, or never answered a request
+        # to give it back) is not a failure and uses no retry; only a real
+        # retry says "infrastructure failure".
         if [ "$end" = "1" ] && [ -n "$jgen" ] && [ "$jgen" != "$gen" ] && [ "$st" != "done" ] && [ "$st" != "failed" ] && [ "$st" != "cancelled" ] && [ "$st" != "timeout" ] && [ "$st" != "interrupted" ] && [ "$st" != "unknown" ]; then
-            # attempt, started, ended and sig come from the daemon (and the
-            # node behind it): digits only reach $(( )).
-            local prev="?"
-            [[ "$attempt" =~ ^[0-9]+$ ]] && prev=$((10#$attempt - 1))
-            echo "[k2 compute] attempt $prev hit an infrastructure failure (${lastfail:-?}); retrying as attempt $attempt on $node" >&2
+            local moved=""
+            IFS= read -r moved < "$state_file.mv" || true
+            if [ -n "$moved" ]; then
+                echo "[k2 compute] moved: $moved; now on $node (not a failure, no retry used)" >&2
+            else
+                # attempt, started, ended and sig come from the daemon (and
+                # the node behind it): digits only reach $(( )).
+                local prev="?"
+                [[ "$attempt" =~ ^[0-9]+$ ]] && prev=$((10#$attempt - 1))
+                echo "[k2 compute] attempt $prev hit an infrastructure failure (${lastfail:-?}); retrying as attempt $attempt on $node" >&2
+            fi
             gen="$jgen"
             cursor=0
             _CP_LAST_Q=""
@@ -986,7 +1009,7 @@ open(os.environ["K2_CP_STATE"] + ".err", "w").write(json.dumps(err) + "\n")
             _CP_LAST_Q="$qpos|$qreason"
         fi
         if [ "$end" = "1" ]; then
-            rm -f "$state_file" "$state_file.q"
+            rm -f "$state_file" "$state_file.q" "$state_file.mv"
             trap - INT
             [ "$st" = "done" ] && rm -f "$state_file.err"
             [ "$as_json" = "1" ] && _compute_print_result "$job"

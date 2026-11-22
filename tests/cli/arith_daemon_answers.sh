@@ -10,6 +10,11 @@
 #   compute wait --follow  the job's startedAt, endedAt, signal and attempt
 #   compute run (a split run, --shards on the daemon's side)  the signal
 #
+# And what the follower says when the generation it followed ended without
+# ending the job: a move (the attempt number stays, no retry used) prints
+# `moved: …`, never "infrastructure failure"; a retry names the end its
+# attempt record has.
+#
 # A stub daemon on loopback answers with crafted values: a subscript with
 # a command in it, and a name (ARITH_PROBE) of a variable this test puts in
 # the CLI's environment holding one. The command must never run (a marker
@@ -190,6 +195,45 @@ logs "$(retry_job '"ARITH_PROBE"')" "$done0"
 run_k2 "attempt ARITH_PROBE (names a variable)" compute wait job00001 --follow
 expect_eq "attempt ARITH_PROBE: the retry's exit" "$RC" "0"
 expect_has "attempt ARITH_PROBE: no number" "$ERR" "attempt ? hit an infrastructure failure"
+
+echo "== compute wait --follow: a move is not a failure =="
+# The generation changes and the attempt doesn't: a node gave the job back
+# (or never answered a request to), and K2 placed it again. The daemon's
+# attempt record says so ("moved"); the follower prints it as a move.
+moved_logs() { # <attempt record as JSON>
+    pyjson 'import json, sys
+rec = json.loads(sys.argv[1])
+moved = {"chunks": [], "end": True, "cursor": 1, "generation": 1, "attempts": [rec, {"attempt": 1, "generation": 2, "current": True}],
+         "job": {"state": "queued", "short": "job00001", "node": "k2n10-vin", "attempt": 1, "generation": 2}}
+done = {"chunks": [], "end": True, "cursor": 1, "generation": 2,
+        "job": {"state": "done", "short": "job00001", "node": "k2n10-vin", "exitCode": 0, "generation": 2}}
+print(json.dumps([moved, done]))' "$1" > "$SANDBOX/logs.json"
+}
+moved_logs '{"attempt": 1, "generation": 1, "current": false, "state": "assigned", "reason": "withdrawn", "nextCode": "withdrawn", "moved": "k2n9-vin gave it back from its queue before it started for k2n10-vin"}'
+run_k2 "a move" compute wait job00001 --follow
+expect_eq "a move: the job's exit" "$RC" "0"
+expect_has "a move: says it moved" "$ERR" "[k2 compute] moved: k2n9-vin gave it back from its queue before it started for k2n10-vin; now on k2n10-vin (not a failure, no retry used)"
+expect_lacks "a move: never an infrastructure failure" "$ERR" "infrastructure failure"
+moved_logs '{"attempt": 1, "generation": 1, "current": false, "state": "assigned", "reason": "withdraw_unanswered", "asked": "withdraw_requested", "nextCode": "withdraw_unanswered", "moved": "k2n7-vin didn'"'"'t answer a request to give it back within 3 min; K2 took it back (k2n7-vin is told not to run it)"}'
+run_k2 "an unanswered withdraw" compute wait job00001 --follow
+expect_has "an unanswered withdraw: says it moved" "$ERR" "[k2 compute] moved: k2n7-vin didn't answer a request to give it back within 3 min; K2 took it back (k2n7-vin is told not to run it); now on k2n10-vin (not a failure, no retry used)"
+expect_lacks "an unanswered withdraw: never an infrastructure failure" "$ERR" "infrastructure failure"
+# A daemon from before the words: the attempt number stayed, so a move.
+moved_logs '{"attempt": 1, "generation": 1, "current": false, "state": "assigned", "reason": "withdraw_requested", "next": "taken back from k2n9-vin'"'"'s queue before it started, to move it to k2n10-vin (no retry used)"}'
+run_k2 "a move, older daemon" compute wait job00001 --follow
+expect_has "a move, older daemon: says it moved" "$ERR" "[k2 compute] moved: taken back from k2n9-vin's queue before it started"
+expect_lacks "a move, older daemon: never an infrastructure failure" "$ERR" "infrastructure failure"
+# A real retry with its record: the record's own end, not "?".
+pyjson 'import json
+retried = {"chunks": [], "end": True, "cursor": 1, "generation": 1,
+           "attempts": [{"attempt": 1, "generation": 1, "current": False, "state": "interrupted", "reason": "node_update", "nextCode": "retry_backoff", "moved": None},
+                        {"attempt": 2, "generation": 2, "current": True}],
+           "job": {"state": "queued", "short": "job00001", "node": "n2", "attempt": 2, "generation": 2}}
+done = {"chunks": [], "end": True, "cursor": 1, "generation": 2, "job": {"state": "done", "short": "job00001", "node": "n2", "exitCode": 0, "generation": 2}}
+print(json.dumps([retried, done]))' > "$SANDBOX/logs.json"
+run_k2 "a retry with its record" compute wait job00001 --follow
+expect_has "a retry with its record: the real end" "$ERR" "attempt 1 hit an infrastructure failure (node_update); retrying as attempt 2 on n2"
+expect_lacks "a retry with its record: no move line" "$ERR" "moved:"
 
 echo "== compute run, a split run: the signal =="
 printf '%s' '{"job": {"id": "jobset01-0000", "short": "jobset01", "state": "queued"}, "shards": [{"index": 0, "node": "n1"}, {"index": 1, "node": "n2"}]}' > "$SANDBOX/run.json"

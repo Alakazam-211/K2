@@ -713,7 +713,9 @@ impl Rig {
         let sent = self.read(Side::NoPython3, true, name);
         let tools = self.take_tool_log();
         println!("-- rust, no python3: {out:?}");
-        if handed {
+        // With no python3 the Codex tab gate can't walk the processes here
+        // when ps can't: the binary hands the line to the shell.
+        if handed || codex_walk_needs_python3(&c.env) {
             let words: Vec<OsString> = self.argv(c).into_iter().map(OsString::from).collect();
             let line = k5_cli::fallthrough::FrontError::NoPython {
                 noun: k5_cli::fallthrough::noun(&words),
@@ -1115,6 +1117,54 @@ fn as_before_311(text: &str) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// Whether the Codex tab gate's walk of the processes above a call
+/// needs `python3` on this host for a row with `env`: a Codex call in a
+/// K2 session whose tab marker names its passport's session (the only
+/// case the gate walks), where `ps` here doesn't give the chain above
+/// this process ([`ps_gives_the_chain`]). The binary then walks with
+/// `python3`, as the shell does (`k5_cli::codex_gate::ancestry`); with
+/// none it hands the line to the shell.
+pub fn codex_walk_needs_python3(env: &[(&'static str, String)]) -> bool {
+    let lookup = |name: &str| {
+        env.iter()
+            .rev()
+            .find(|(k, _)| *k == name)
+            .map(|(_, v)| OsString::from(v))
+    };
+    k5_cli::codex_gate::bind_on(&lookup)
+        && k5_cli::codex_gate::applies(&lookup)
+        && k5_cli::codex_gate::marker_matches(&lookup)
+        && !ps_gives_the_chain()
+}
+
+/// Whether `ps -axo pid=,ppid=,command=` here exits 0 with every process
+/// from this one up to pid 1, as the gate reads it
+/// (`k5_cli::codex_gate::ps_chain`). Not where a sandbox refuses `ps`
+/// (Codex's own on a Mac, and the macOS test nodes').
+pub fn ps_gives_the_chain() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        let Ok(o) = Command::new("ps")
+            .args(["-axo", "pid=,ppid=,command="])
+            .stdin(Stdio::null())
+            .output()
+        else {
+            return false;
+        };
+        let mut rows = o.stdout;
+        rows.extend_from_slice(&o.stderr);
+        let chain = String::from_utf8(rows).ok().and_then(|rows| {
+            k5_cli::codex_gate::ps_chain(
+                rows.trim_end_matches('\n'),
+                &std::process::id().to_string(),
+            )
+        });
+        let complete = o.status.success() && chain.is_some();
+        println!("ps here gives the chain above this process: {complete}");
+        complete
+    })
 }
 
 /// The `python3` on `PATH` (the one the shell runs): its major and minor

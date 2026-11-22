@@ -20,7 +20,8 @@
 mod common;
 
 use common::parity::{
-    case, owner_and_port, with_passport, Case, Compare, Rig, Side, OWNER, PASSPORT,
+    case, codex_walk_needs_python3, owner_and_port, with_passport, Case, Compare, Rig, Side, OWNER,
+    PASSPORT,
 };
 
 const REFUSED_HEAD: &str = "Error: this Codex tab was started before this update or outside K2";
@@ -135,10 +136,11 @@ fn row(
         noun: k5_cli::fallthrough::noun(&words),
     }
     .to_string();
+    // (A matching marker's walk is python3's where ps can't give it.)
     let handed = String::from_utf8_lossy(&rig.raw(Side::NoPython3).1).contains(&no_python);
     assert_eq!(
         handed,
-        by == By::Shell,
+        by == By::Shell || codex_walk_needs_python3(&c.env),
         "{verb} {args:?} {env:?}: handed to the shell"
     );
     let (bash_err, rust_err) = (rig.raw(Side::Bash).1, rig.raw(Side::Rust).1);

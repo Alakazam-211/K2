@@ -727,6 +727,9 @@ if m:
     elif m.get("tmLocalSnapshotsError"):
         s += " · Time Machine local snapshots: unknown (%s)" % m["tmLocalSnapshotsError"]
     print(s)
+    # 0.46.17: the compute store here (fetched artifacts, job blobs) and its rule.
+    if (m.get("store") or {}).get("line"):
+        print("  " + m["store"]["line"])
 if v.get("notYet"):
     print("not yet: " + v["notYet"])'
     exit 0

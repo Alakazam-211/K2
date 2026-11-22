@@ -32762,7 +32762,7 @@ Agents:
   k2 compute status [--json]                 every node at a glance: state, waits
                  (foreign locks), run/queue and the jobs, free CPU/mem, load,
                  disk free vs floor; plus this controller (disk, Time Machine
-                 local snapshots). Hand-run lock files, cache sizes and pinned
+                 local snapshots, the compute store's size and rule). Hand-run lock files, cache sizes and pinned
                  long-runners need node reporting, which nodes don't send yet.
                  (k2 compute status <job> is get)
   k2 compute info <node> [--json]
@@ -33212,6 +33212,32 @@ Owner / admin (refused for agents and inside K2 terminals, except where
   k2 compute placement v1|v2|status           how K2 ranks nodes when no node is
                    named (owner): v2 (default) = load first, a warm slot worth
                    one load step, bursts spread; v1 = the 0.46.5 order
+  k2 compute prune [--older-than DURATION] [--dry-run] [--json]
+                   free this server's disk now: removes the fetched job
+                   artifacts (~/.k2/compute/artifacts) and job source blobs
+                   (~/.k2/compute/blobs) the retention rule lets go: jobs that
+                   ended more than the max age ago (default 7d; --older-than 3d
+                   for this run only, 0 = every ended job), then the jobs
+                   that ended first until the store is under its cap. Never a
+                   pinned job's, a job that hasn't ended, or files a fetch is
+                   reading; a secret job's files the node deleted after this
+                   server fetched them (the only copy) go by age, never for
+                   the cap. Job records and logs stay. Safe while the daemon
+                   runs (it also sweeps hourly by itself). Prints counts and
+                   bytes removed and kept; --dry-run removes nothing.
+                   Durations: 3d, 72h, 90m, 1d12h
+  k2 compute pin <job> [--json]      keep that job's fetched files here until
+                   unpin (the sweep and prune skip them; a split run: every
+                   shard's). Fetch first: files that are only on the node are
+                   lost when the node drops them, 7 days after the job ended.
+                   (Not a job pinned to a node: that is run with a node named.)
+  k2 compute unpin <job> [--json]    its files follow the rule again
+  k2 compute retention [--json]      the store's size, the rule, the last
+                   sweep, the pins, and each only copy with the date it goes
+  k2 compute retention set [--max-age DURATION|default] [--cap SIZE|auto]
+                   change the rule. Max age default 7d (at least 1h); cap
+                   auto = 20 GB or 10% of the disk, whichever is smaller (at
+                   least 1G). Sizes: 20G, 512M, 1T
   k2 compute node add <name> [--url URL] [--json]   mint a 10-minute enroll code (CODE.FP);
                    --json: {code, expiresAt, name, controller} for scripts
   k2 compute node confirm <name> <code>        the 6 digits the node shows
@@ -36137,6 +36163,9 @@ if m:
     elif m.get("tmLocalSnapshotsError"):
         s += " · Time Machine local snapshots: unknown (%s)" % m["tmLocalSnapshotsError"]
     print(s)
+    # 0.46.17: the compute store here (fetched artifacts, job blobs) and its rule.
+    if (m.get("store") or {}).get("line"):
+        print("  " + m["store"]["line"])
 if v.get("notYet"):
     print("not yet: " + v["notYet"])'
     exit 0
@@ -38577,11 +38606,78 @@ print(v.get("cursor"))')"
             echo "[k2 compute] next: k2 compute events --follow --since $cursor" >&2
             ;;
         local) cmd_compute_local "$@" ;;
+        # The compute store on this server (0.46.17): fetched artifacts and
+        # job blobs under ~/.k2/compute. Owner / Admin.
+        prune|pin|unpin|retention) cmd_compute_store "$sub" "$@" ;;
         *)
             echo "usage: unknown compute verb '$sub' (k2 compute --help)" >&2
             exit 2
             ;;
     esac
+}
+
+# ── k2 compute prune | pin | unpin | retention (0.46.17) ─────────────
+# This server's compute store: the files `k2 compute fetch` pulled from
+# nodes (~/.k2/compute/artifacts) and the jobs' source blobs
+# (~/.k2/compute/blobs). The daemon owns the retention rule and does the
+# deleting, hourly on its own and on `prune` (compute_retention.rs); these
+# verbs send the request and print the daemon's `text` lines (--json: its
+# whole answer). Owner and Admins only: from a terminal outside K2 (a K2
+# tab sends its passport, refused with owner_only). Durations: 3d, 72h,
+# 90m, 1d12h. Sizes: 20G, 512M, 1T.
+cmd_compute_store() {
+    local sub="$1" as_json=0 older="" dry=0 job="" max_age="" cap=""
+    shift
+    local pusage="usage: k2 compute prune [--older-than DURATION] [--dry-run] [--json]"
+    local rusage="usage: k2 compute retention [--json]  |  k2 compute retention set [--max-age DURATION|default] [--cap SIZE|auto] [--json]"
+    case "$sub" in
+        prune)
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --older-than) _need_value "$@"; older="${2:-}"; shift 2
+                        [[ "$older" =~ ^[0-9dhms]+$ ]] || { echo "$pusage (--older-than takes 3d, 72h, 90m or 1d12h)" >&2; exit 2; } ;;
+                    --dry-run|-n) dry=1; shift ;;
+                    --json) as_json=1; shift ;;
+                    *) echo "$pusage (unknown '$1')" >&2; exit 2 ;;
+                esac
+            done
+            # A big store takes a while to measure and move aside.
+            K2_CP_MAX_TIME=600 _compute_call POST /cli/compute/prune "$(_compute_json K2_CJ_olderThan="$older" K2_CJ_dryRun_b="$dry")" tcp
+            ;;
+        pin|unpin)
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --json) as_json=1; shift ;;
+                    -*) echo "usage: k2 compute $sub <job> [--json] (unknown '$1')" >&2; exit 2 ;;
+                    *) [ -z "$job" ] || { echo "usage: k2 compute $sub <job> [--json] (one job)" >&2; exit 2; }
+                       job="$1"; shift ;;
+                esac
+            done
+            [ -n "$job" ] || { echo "usage: k2 compute $sub <job> [--json]" >&2; exit 2; }
+            _compute_call POST "/cli/compute/$sub" "$(_compute_json K2_CJ_job="$job")" tcp
+            ;;
+        retention)
+            local rset=0
+            [ "${1:-}" = "set" ] && { rset=1; shift; }
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --max-age) [ "$rset" = 1 ] || { echo "$rusage" >&2; exit 2; }
+                        _need_value "$@"; max_age="${2:-}"; shift 2 ;;
+                    --cap) [ "$rset" = 1 ] || { echo "$rusage" >&2; exit 2; }
+                        _need_value "$@"; cap="${2:-}"; shift 2 ;;
+                    --json) as_json=1; shift ;;
+                    *) echo "$rusage (unknown '$1')" >&2; exit 2 ;;
+                esac
+            done
+            if [ "$rset" = 1 ]; then
+                [ -n "$max_age$cap" ] || { echo "$rusage (set needs --max-age and/or --cap)" >&2; exit 2; }
+                _compute_call POST /cli/compute/retention/set "$(_compute_json K2_CJ_maxAge="$max_age" K2_CJ_cap="$cap")" tcp
+            else
+                _compute_call GET /cli/compute/retention "" tcp
+            fi
+            ;;
+    esac
+    _compute_text "$as_json"
 }
 
 # ── k2 compute receipt | provenance | verify ─────────────────────────
@@ -59939,7 +60035,7 @@ cmd_schema() {
     },
     {
       "name": "compute",
-      "usage": "k2 compute <nodes|status|info|run|test|prewarm|jobs|get|fetch|wait|attach|logs|rightsize|stats|cancel|retry|events|cache|queue|retier|move|allow-nodes|git-access|receipt|provenance|verify|node|grant|revoke|grants|access|operate|manage|usage|preview|placement|roster|lanes|seats|trust|owners|local> [...]",
+      "usage": "k2 compute <nodes|status|info|run|test|prewarm|jobs|get|fetch|wait|attach|logs|rightsize|stats|cancel|retry|events|cache|queue|retier|move|allow-nodes|git-access|receipt|provenance|verify|node|grant|revoke|grants|access|operate|manage|usage|preview|placement|prune|pin|unpin|retention|roster|lanes|seats|trust|owners|local> [...]",
       "description": "Run commands on your own machines (compute nodes). Exit codes: 0 to 255 the command's own exit (attached runs), 2 bad usage, 3 infra with a JSON code on stderr (node_offline, not_granted, compute_off, queue_full, owner_only, job_started), 130 you detached with Ctrl-C (the job keeps running). Read k2 study compute first.",
       "args": [{"name": "verb", "required": true}],
       "flags": []
@@ -60297,6 +60393,55 @@ cmd_schema() {
         {"name": "--all", "arg": null, "description": "Every workspace's caches."},
         {"name": "--name", "arg": "NAME", "description": "Only this cache."},
         {"name": "--node", "arg": "N", "description": "Only on this node."}
+      ]
+    },
+    {
+      "name": "compute prune",
+      "usage": "k2 compute prune [--older-than DURATION] [--dry-run] [--json]",
+      "description": "Free this server's disk now: remove the fetched job artifacts (~/.k2/compute/artifacts) and job source blobs (~/.k2/compute/blobs) the retention rule lets go: jobs that ended more than the max age ago (default 7 days), then the oldest until the store is under its cap. Never a pinned job's files, a job that hasn't ended, or files a fetch is reading; a secret job's only copy (the node deleted its own after the fetch) goes by age, never for the cap. Safe while the daemon runs; the daemon also does this hourly. Prints what it removed and kept (counts and bytes). Owner or Admin, from a terminal outside K2.",
+      "args": [],
+      "flags": [
+        {"name": "--older-than", "arg": "DURATION", "description": "This run only: remove ended jobs older than this (3d, 72h, 90m, 1d12h; 0 = every ended job) instead of the max age."},
+        {"name": "--dry-run", "arg": null, "description": "Say what would go; remove nothing."},
+        {"name": "--json", "arg": null, "description": "The whole answer: removed, kept, items, policy."}
+      ]
+    },
+    {
+      "name": "compute pin",
+      "usage": "k2 compute pin <job> [--json]",
+      "description": "Keep that job's fetched files on this server until unpin: retention and prune skip them (a split run: every shard's). It says how many of its files are here; fetch the rest first, since a node drops its copy 7 days after the job ended. Not the same as a job pinned to a node. Owner or Admin.",
+      "args": [{"name": "job", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "compute unpin",
+      "usage": "k2 compute unpin <job> [--json]",
+      "description": "The job's files here follow the retention rule again. Owner or Admin.",
+      "args": [{"name": "job", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "compute retention",
+      "usage": "k2 compute retention [--json]",
+      "description": "This server's compute store: its size (artifacts, blobs), the retention rule (max age, cap), the last sweep, the pinned jobs, and each only copy (a secret job's files the node deleted after the fetch) with the date it goes. Owner or Admin; k2 compute status shows a one-line summary to everyone.",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "compute retention set",
+      "usage": "k2 compute retention set [--max-age DURATION|default] [--cap SIZE|auto] [--json]",
+      "description": "Change the retention rule. Max age: how long after a job ends its files stay (default 7d, at least 1h). Cap: the store's size limit (auto = 20 GB or 10% of the disk, whichever is smaller; at least 1G). Owner or Admin.",
+      "args": [],
+      "flags": [
+        {"name": "--max-age", "arg": "DURATION|default", "description": "3d, 72h, 1d12h; default = 7 days."},
+        {"name": "--cap", "arg": "SIZE|auto", "description": "20G, 512M, 1T; auto = 20 GB or 10% of the disk."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
       ]
     },
     {
@@ -73580,6 +73725,36 @@ RESULTS (one object, artifacts, test lists)
   test list: k2 compute logs <job> --failures prints the failing tests
   first, then the log lines that look like failures.
 
+THE STORE ON THIS SERVER (fetched files, blobs)
+  k2 compute fetch copies a job's files into this server's store first
+  (~/.k2/compute/artifacts/<job>-g<attempt>/), then to --out. A --dirty
+  run keeps your uncommitted changes in ~/.k2/compute/blobs/ until the
+  node takes them, and for k2 compute retry. The daemon keeps the store in
+  bounds by itself, every hour, also with no app open:
+    - a job's files and blob go once it ended more than 7 days ago (the
+      node keeps its own copy that long);
+    - then the jobs that ended first go until the store is under its cap
+      (20 GB, or 10% of the disk if that is smaller). Only this server's
+      copy: while the node still has the file, a later fetch pulls it again;
+    - never a pinned job's, never a job that hasn't ended, never files a
+      fetch is reading or read in the last 10 minutes;
+    - a secret job's files that the node deleted after this server fetched
+      them are the only copy: they go by age (7 days), never for the cap.
+      k2 compute retention lists each as "only copy, kept until <date>";
+      if they alone fill the cap the store line says "over the cap: N GB
+      held as only copies" and nothing of theirs is removed for it.
+  Job records and logs stay (k2 compute get still works; logs: 14 days).
+  k2 compute status shows the store's size and rule on the controller line.
+  The owner or an Admin, from a terminal outside K2:
+    k2 compute prune --dry-run             what would go; removes nothing
+    k2 compute prune [--older-than 3d]     remove it now; prints counts, bytes
+    k2 compute pin <job>  /  unpin <job>   keep a job's files here, or not
+    k2 compute retention [set --max-age 14d --cap 30G]   read or change the rule
+  No need to delete files by hand: prune does it safely while the daemon
+  runs. An agent gets owner_only for these: ask your person, or keep your
+  own copy (fetch --out into your workspace). A retry of a --dirty job
+  whose blob went answers source_pruned: submit it again.
+
 NEVER STUCK
   --queue-timeout 2h|off    not started in time → failed/queue_timeout (exit 3,
                             with what it waited on). Default 2h attached or
@@ -73911,7 +74086,14 @@ COMMON ERRORS
                          already wait for the owner on that node; wait or withdraw
   approval_expired       the owner didn't decide in 24 h, or the node stayed offline
   verb_not_allowed       not an admin verb; a root script is the escape hatch
-  node_upgrade_required  --needs on an older k2-node: update it there (sudo k2-node setup);
+  node_reconnecting      fetch: the node just reconnected (an update or restart) and
+                         hasn't said what it can do yet: fetch again in a minute
+  source_pruned          retry of a --dirty job whose changes the store's retention
+                         removed: submit it again (THE STORE ON THIS SERVER)
+  node_upgrade_required  fetch: that k2-node can't send artifacts; the error names the
+                         node, its version and who updates it (the node's owner;
+                         nothing on this server).
+                         --needs on an older k2-node: update it there (sudo k2-node setup);
                          --secret: the node isn't Linux + job wall + 0.46.4 + trust own
                          (or a seat on a lane with secrets, 0.46.10)
   secret_not_granted     no compute: grant for that secret on that node; only a person

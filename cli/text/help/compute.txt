@@ -10,7 +10,7 @@ Agents:
   k2 compute status [--json]                 every node at a glance: state, waits
                  (foreign locks), run/queue and the jobs, free CPU/mem, load,
                  disk free vs floor; plus this controller (disk, Time Machine
-                 local snapshots). Hand-run lock files, cache sizes and pinned
+                 local snapshots, the compute store's size and rule). Hand-run lock files, cache sizes and pinned
                  long-runners need node reporting, which nodes don't send yet.
                  (k2 compute status <job> is get)
   k2 compute info <node> [--json]
@@ -460,6 +460,32 @@ Owner / admin (refused for agents and inside K2 terminals, except where
   k2 compute placement v1|v2|status           how K2 ranks nodes when no node is
                    named (owner): v2 (default) = load first, a warm slot worth
                    one load step, bursts spread; v1 = the 0.46.5 order
+  k2 compute prune [--older-than DURATION] [--dry-run] [--json]
+                   free this server's disk now: removes the fetched job
+                   artifacts (~/.k2/compute/artifacts) and job source blobs
+                   (~/.k2/compute/blobs) the retention rule lets go: jobs that
+                   ended more than the max age ago (default 7d; --older-than 3d
+                   for this run only, 0 = every ended job), then the jobs
+                   that ended first until the store is under its cap. Never a
+                   pinned job's, a job that hasn't ended, or files a fetch is
+                   reading; a secret job's files the node deleted after this
+                   server fetched them (the only copy) go by age, never for
+                   the cap. Job records and logs stay. Safe while the daemon
+                   runs (it also sweeps hourly by itself). Prints counts and
+                   bytes removed and kept; --dry-run removes nothing.
+                   Durations: 3d, 72h, 90m, 1d12h
+  k2 compute pin <job> [--json]      keep that job's fetched files here until
+                   unpin (the sweep and prune skip them; a split run: every
+                   shard's). Fetch first: files that are only on the node are
+                   lost when the node drops them, 7 days after the job ended.
+                   (Not a job pinned to a node: that is run with a node named.)
+  k2 compute unpin <job> [--json]    its files follow the rule again
+  k2 compute retention [--json]      the store's size, the rule, the last
+                   sweep, the pins, and each only copy with the date it goes
+  k2 compute retention set [--max-age DURATION|default] [--cap SIZE|auto]
+                   change the rule. Max age default 7d (at least 1h); cap
+                   auto = 20 GB or 10% of the disk, whichever is smaller (at
+                   least 1G). Sizes: 20G, 512M, 1T
   k2 compute node add <name> [--url URL] [--json]   mint a 10-minute enroll code (CODE.FP);
                    --json: {code, expiresAt, name, controller} for scripts
   k2 compute node confirm <name> <code>        the 6 digits the node shows

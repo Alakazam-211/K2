@@ -2604,6 +2604,8 @@ fn fetch_artifact_on(
     clock: PullClock,
 ) -> Result<std::path::PathBuf, (String, String)> {
     let dst = artifact_cache_path(&job.id, job.generation, &info.sha256);
+    // In use while this pull runs: retention leaves the folder alone.
+    let _in_use = crate::compute_retention::use_path(dst.parent().unwrap_or(&dst));
     if cache_holds(&dst, info) {
         return Ok(dst);
     }
@@ -2611,9 +2613,18 @@ fn fetch_artifact_on(
     if !online {
         return Err(("node_offline".into(), "the job's node is offline; artifacts stay on it for 7 days, fetch again when it's back".into()));
     }
-    let has = |feat: &str| offer.as_ref().is_some_and(|o| o.features.iter().any(|f| f == feat));
+    // A node that just reconnected (an update or restart in a rollout)
+    // says what it can do a moment after it attaches: wait for that, never
+    // read "no offer yet" as "too old".
+    let Some(offer) = offer.or_else(|| await_offer(&job.node_id, OFFER_WAIT)) else {
+        return Err((
+            "node_reconnecting".into(),
+            "the node just reconnected (an update or a restart) and hasn't said what it can do yet; fetch again in a minute".into(),
+        ));
+    };
+    let has = |feat: &str| offer.features.iter().any(|f| f == feat);
     if !has(results::FEATURE_ARTIFACTS) {
-        return Err(("node_upgrade_required".into(), "that node's k2-node can't send artifacts; update it there (sudo k2-node setup)".into()));
+        return Err(("node_upgrade_required".into(), artifacts_upgrade_hint(&job.node_id, &offer)));
     }
     if let Some(e) = pull_cap_refusal(route, over_relay, info.bytes) {
         return Err(e);
@@ -2692,6 +2703,47 @@ fn fetch_artifact_on(
             (c, h)
         }
     })
+}
+
+/// How long a fetch waits for the offer of a node that just attached.
+pub const OFFER_WAIT: Duration = Duration::from_secs(10);
+
+/// The node's offer once it comes (`None`: it went offline, or `max`
+/// passed first).
+fn await_offer(node_id: &str, max: Duration) -> Option<Offer> {
+    let deadline = Instant::now() + max;
+    loop {
+        let seen = change_counter();
+        let (online, _, offer) = live_view(node_id);
+        if offer.is_some() || !online {
+            return offer;
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return None;
+        }
+        wait_change(seen, (deadline - now).min(Duration::from_millis(250)));
+    }
+}
+
+/// A node whose k2-node can't send artifacts: which side needs the
+/// update (the node, never this server) and who does it.
+pub fn artifacts_upgrade_hint(node_id: &str, offer: &Offer) -> String {
+    let node = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::node_by_id(&conn, node_id)
+    };
+    let name = node.as_ref().map(|n| n.name.clone()).unwrap_or_else(|| node_id.to_string());
+    let runs = if offer.node_version.is_empty() { "an old k2-node".to_string() } else { format!("k2-node {}", offer.node_version) };
+    let who = match node.as_ref().filter(|n| n.is_tenant()) {
+        Some(n) => format!("it belongs to {}, so that server's owner updates it", n.owner_label.as_deref().unwrap_or("the server that shares it with you")),
+        None => format!("its owner updates it on that machine (sudo k2-node setup) or from here (k2 compute node update {name})"),
+    };
+    format!(
+        "node '{name}' runs {runs}, which can't send artifacts (this server runs K2 {}): the node needs the update, not this server; {who}",
+        env!("CARGO_PKG_VERSION")
+    )
 }
 
 /// Wait on pull `request_id` until it's done, the node goes quiet for
@@ -2818,23 +2870,6 @@ pub fn fetch_artifact_wait(
             return Ok(Fetched::Pending { got: pull_progress(&dst) });
         }
         wait_change(seen, (deadline - now).min(Duration::from_millis(500)));
-    }
-}
-
-/// Drop fetched artifacts older than the node keeps them.
-fn sweep_artifact_cache() {
-    let root = compute::compute_dir().join("artifacts");
-    let Ok(rd) = std::fs::read_dir(&root) else { return };
-    for e in rd.flatten() {
-        let old = e
-            .metadata()
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|t| t.elapsed().ok())
-            .is_some_and(|d| d.as_secs() as i64 > results::KEEP_SECS);
-        if old {
-            let _ = std::fs::remove_dir_all(e.path());
-        }
     }
 }
 
@@ -3638,7 +3673,8 @@ pub fn ticker_running() -> bool {
 }
 
 /// Periodic upkeep: placements, the never-stuck sweep (queue timeouts,
-/// moves, lost nodes), metering, log retention.
+/// moves, lost nodes), metering, log retention, the compute store's
+/// retention (hourly, `compute_retention`).
 fn ensure_ticker() {
     let mut g = TICKER.lock().unwrap_or_else(|p| p.into_inner());
     if g.as_ref().is_some_and(|h| !h.is_finished()) {
@@ -3648,11 +3684,16 @@ fn ensure_ticker() {
             let every = Duration::from_millis(compute::retry::tuning().tick_millis.max(50));
             let mut tick = tokio::time::interval(every);
             let mut last_daily: Option<Instant> = None;
+            let mut last_hourly: Option<Instant> = None;
             loop {
                 tick.tick().await;
                 let daily = last_daily.is_none_or(|t| t.elapsed() > Duration::from_secs(86_400));
                 if daily {
                     last_daily = Some(Instant::now());
+                }
+                let hourly = last_hourly.is_none_or(|t| t.elapsed() > Duration::from_secs(3600));
+                if hourly {
+                    last_hourly = Some(Instant::now());
                 }
                 let _ = tokio::task::spawn_blocking(move || {
                     let ids: Vec<(String, &'static str, u64, u64)> = with_engine(|e| {
@@ -3671,7 +3712,11 @@ fn ensure_ticker() {
                     }
                     if daily {
                         logs::sweep(14);
-                        sweep_artifact_cache();
+                    }
+                    // The compute store's retention (0.46.17): fetched
+                    // artifacts and blobs past the max age or over the cap.
+                    if hourly {
+                        crate::compute_retention::sweep_tick();
                     }
                     // Machines switched off in Settings: remove once idle.
                     crate::compute_routes::sweep_retiring();

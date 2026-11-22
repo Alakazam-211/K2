@@ -122,10 +122,17 @@ pub(super) const ROWS: &[Route] = &[
     post("/cli/compute/nodes/wall", Admin),
     get("/cli/compute/owners", Admin),
     post("/cli/compute/owners/consent", Admin),
+    // The compute store on this server (0.46.17, `compute_retention`):
+    // keep a job's fetched files (pin/unpin), remove what the retention
+    // rule lets go (prune), read and set the rule. The owner's and Admins'.
+    post("/cli/compute/pin", Admin),
     // 0.46.7 (CE-18): Batch jobs that install --needs on granted nodes.
     post("/cli/compute/prewarm", Member),
+    post("/cli/compute/prune", Admin),
     // A node's queue, redacted per §7 (an agent verb: its own workspace).
     get("/cli/compute/queue", Member),
+    get("/cli/compute/retention", Admin),
+    post("/cli/compute/retention/set", Admin),
     // prd-compute-blacksmith-class-v1 R1: a reader of the caller's own runs.
     get("/cli/compute/rightsize", Member),
     get("/cli/compute/roster", Admin),
@@ -150,6 +157,7 @@ pub(super) const ROWS: &[Route] = &[
     post("/cli/compute/trust/deny", Admin),
     get("/cli/compute/trust/requests", Admin),
     post("/cli/compute/trust/withdraw", Admin),
+    post("/cli/compute/unpin", Admin),
     get("/cli/compute/usage", Admin),
     post("/cli/compute/verify", Member),
 ];

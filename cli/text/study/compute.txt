@@ -987,6 +987,36 @@ RESULTS (one object, artifacts, test lists)
   test list: k2 compute logs <job> --failures prints the failing tests
   first, then the log lines that look like failures.
 
+THE STORE ON THIS SERVER (fetched files, blobs)
+  k2 compute fetch copies a job's files into this server's store first
+  (~/.k2/compute/artifacts/<job>-g<attempt>/), then to --out. A --dirty
+  run keeps your uncommitted changes in ~/.k2/compute/blobs/ until the
+  node takes them, and for k2 compute retry. The daemon keeps the store in
+  bounds by itself, every hour, also with no app open:
+    - a job's files and blob go once it ended more than 7 days ago (the
+      node keeps its own copy that long);
+    - then the jobs that ended first go until the store is under its cap
+      (20 GB, or 10% of the disk if that is smaller). Only this server's
+      copy: while the node still has the file, a later fetch pulls it again;
+    - never a pinned job's, never a job that hasn't ended, never files a
+      fetch is reading or read in the last 10 minutes;
+    - a secret job's files that the node deleted after this server fetched
+      them are the only copy: they go by age (7 days), never for the cap.
+      k2 compute retention lists each as "only copy, kept until <date>";
+      if they alone fill the cap the store line says "over the cap: N GB
+      held as only copies" and nothing of theirs is removed for it.
+  Job records and logs stay (k2 compute get still works; logs: 14 days).
+  k2 compute status shows the store's size and rule on the controller line.
+  The owner or an Admin, from a terminal outside K2:
+    k2 compute prune --dry-run             what would go; removes nothing
+    k2 compute prune [--older-than 3d]     remove it now; prints counts, bytes
+    k2 compute pin <job>  /  unpin <job>   keep a job's files here, or not
+    k2 compute retention [set --max-age 14d --cap 30G]   read or change the rule
+  No need to delete files by hand: prune does it safely while the daemon
+  runs. An agent gets owner_only for these: ask your person, or keep your
+  own copy (fetch --out into your workspace). A retry of a --dirty job
+  whose blob went answers source_pruned: submit it again.
+
 NEVER STUCK
   --queue-timeout 2h|off    not started in time → failed/queue_timeout (exit 3,
                             with what it waited on). Default 2h attached or
@@ -1318,7 +1348,14 @@ COMMON ERRORS
                          already wait for the owner on that node; wait or withdraw
   approval_expired       the owner didn't decide in 24 h, or the node stayed offline
   verb_not_allowed       not an admin verb; a root script is the escape hatch
-  node_upgrade_required  --needs on an older k2-node: update it there (sudo k2-node setup);
+  node_reconnecting      fetch: the node just reconnected (an update or restart) and
+                         hasn't said what it can do yet: fetch again in a minute
+  source_pruned          retry of a --dirty job whose changes the store's retention
+                         removed: submit it again (THE STORE ON THIS SERVER)
+  node_upgrade_required  fetch: that k2-node can't send artifacts; the error names the
+                         node, its version and who updates it (the node's owner;
+                         nothing on this server).
+                         --needs on an older k2-node: update it there (sudo k2-node setup);
                          --secret: the node isn't Linux + job wall + 0.46.4 + trust own
                          (or a seat on a lane with secrets, 0.46.10)
   secret_not_granted     no compute: grant for that secret on that node; only a person

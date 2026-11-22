@@ -215,11 +215,11 @@ pub const POST_ROUTES: &[&str] = &[
 ];
 
 pub fn is_route(p: &str) -> bool {
-    ROUTES.contains(&p) || crate::compute_trust::is_route(p) || crate::compute_provenance::is_route(p) || crate::ci_routes::is_route(p)
+    ROUTES.contains(&p) || crate::compute_trust::is_route(p) || crate::compute_provenance::is_route(p) || crate::ci_routes::is_route(p) || crate::compute_retention::is_route(p)
 }
 
 pub fn is_post_route(p: &str) -> bool {
-    POST_ROUTES.contains(&p) || crate::compute_trust::POST_ROUTES.contains(&p) || crate::compute_provenance::POST_ROUTES.contains(&p) || crate::ci_routes::POST_ROUTES.contains(&p)
+    POST_ROUTES.contains(&p) || crate::compute_trust::POST_ROUTES.contains(&p) || crate::compute_provenance::POST_ROUTES.contains(&p) || crate::ci_routes::POST_ROUTES.contains(&p) || crate::compute_retention::POST_ROUTES.contains(&p)
 }
 
 pub fn is_socket(p: &str) -> bool {
@@ -766,6 +766,8 @@ pub fn handle_from(path: &str, who: Who, body: &[u8], params: &HashMap<String, S
         "/cli/compute/cache" => caches(&who, params, mgr),
         "/cli/compute/cache/lineages" => crate::compute_gens::cache_lineages(&who, params),
         "/cli/compute/cache/clear" => cache_clear(&who, body, mgr),
+        // The compute store here (0.46.17): prune, pin/unpin, retention.
+        p if crate::compute_retention::is_route(p) => crate::compute_retention::handle(p, &who, body),
         // Node admin (prd-k2-node-admin-v1): approvals, policy, update,
         // health, alerts; and a shared node's servers.
         p if crate::compute_admin::is_route(p) => crate::compute_admin::handle(p, &who, body, params, mgr),
@@ -4015,6 +4017,7 @@ fn fetch_code(code: &str) -> &'static str {
     match code {
         "node_offline" => codes::NODE_OFFLINE,
         "node_upgrade_required" => "node_upgrade_required",
+        "node_reconnecting" => "node_reconnecting",
         "relay_cap" => "relay_cap",
         "artifact_timeout" => "artifact_timeout",
         "artifact_gone" => "artifact_gone",
@@ -4070,6 +4073,8 @@ fn job_artifact(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Va
     let info = o.artifacts.iter().find(|a| a.name == name).ok_or_else(|| {
         no("artifact_not_found", 404, format!("job {short} kept no artifact named '{name}' (k2 compute fetch {short} lists them)"))
     })?;
+    // In use while it pulls and reads: retention leaves the folder alone.
+    let _in_use = crate::compute_retention::use_artifacts(&j.id, j.generation);
     // GH#80: no deadline for the whole file; the pull fails when the node
     // goes quiet (a slow relay is slow, not stuck).
     let timeout = compute_ws::PULL_IDLE;
@@ -4083,7 +4088,7 @@ fn job_artifact(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Va
         let c = fetch_code(&code);
         let status = match c {
             "artifact_gone" | "artifact_not_found" => 410,
-            "artifact_timeout" | "artifact_unavailable" => 503,
+            "artifact_timeout" | "artifact_unavailable" | "node_reconnecting" => 503,
             _ => 409,
         };
         no(c, status, hint)
@@ -4300,6 +4305,7 @@ fn retry_one(who: &Who, j: &store::JobRow) -> R<store::JobRow> {
     }
     // 0313: never run with a marker where an `--env` value was.
     env_kept(j)?;
+    crate::compute_retention::source_kept(j)?;
     let r = {
         let db = k2_core::db::shared();
         let conn = db.lock();

@@ -629,3 +629,123 @@ fn an_auto_job_goes_to_a_shared_node_only_when_it_starts_there_now() {
     draining.control = frames::Control::Draining;
     assert!(!go(&draining, &view(0, 0, 2), &none, &Sent::default(), Tier::Normal));
 }
+
+// ── fetch across k2-node versions (0.46.17) ──────────────────────
+
+/// A live session for `node_id` holding `offer` as-is (`None`: attached,
+/// its offer not in yet, as right after a reconnect).
+fn conn_with(node_id: &str, offer: Option<Offer>) -> mpsc::UnboundedReceiver<Out> {
+    let (tx, rx) = mpsc::unbounded_channel::<Out>();
+    with_engine(|e| {
+        e.next_conn += 1;
+        let conn_id = e.next_conn;
+        e.conns.insert(
+            node_id.to_string(),
+            Conn {
+                conn_id,
+                tx,
+                route: "lan",
+                offer,
+                statement: None,
+                lineages: None,
+                bytes_in: Arc::new(AtomicU64::new(0)),
+                bytes_out: Arc::new(AtomicU64::new(0)),
+                last_in: Arc::new(AtomicI64::new(compute::now())),
+            },
+        );
+    });
+    rx
+}
+
+/// A rollout: the node reconnected and its offer comes a moment after.
+/// The fetch waits for it instead of answering node_upgrade_required.
+#[test]
+fn a_fetch_waits_for_the_offer_of_a_node_that_just_reconnected() {
+    let _home = crate::test_support::TempHome::new();
+    let _db = k2_core::db::scoped_for_test();
+    let body = b"built during a rollout".to_vec();
+    let (j, info) = flow_job("a0110a710123456789abcdef01234567", "n-rollout", &body);
+    let mut rx = conn_with("n-rollout", None);
+    let (job, inf) = (j.clone(), info.clone());
+    let pull = std::thread::spawn(move || fetch_artifact(&job, &inf, false, Duration::from_secs(10)));
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!pull.is_finished(), "no offer yet: the fetch waits, it doesn't answer");
+    with_engine(|e| e.conns.get_mut("n-rollout").expect("conn").offer = Some(offer_with(&[results::FEATURE_ARTIFACTS])));
+    notify_change();
+    let get = next_sent(&mut rx, |f| match f {
+        Frame::ArtifactGet(g) => Some(g.clone()),
+        _ => None,
+    });
+    test_frame("n-rollout", chunk(&get.request_id, 0, &body, true, &info));
+    let path = pull.join().unwrap().unwrap_or_else(|(c, h)| panic!("{c}: {h}"));
+    assert_eq!(std::fs::read(path).unwrap(), body);
+    test_detach("n-rollout");
+}
+
+/// No offer within the wait: a retryable node_reconnecting, never
+/// "update the node".
+#[test]
+fn a_node_whose_offer_never_comes_is_reconnecting_not_too_old() {
+    let _home = crate::test_support::TempHome::new();
+    let _db = k2_core::db::scoped_for_test();
+    let (j, info) = flow_job("ec0ec0ec0123456789abcdef01234567", "n-quiet-offer", b"x");
+    let _rx = conn_with("n-quiet-offer", None);
+    let (code, hint) = fetch_artifact(&j, &info, false, Duration::from_secs(5)).expect_err("no offer");
+    assert_eq!(code, "node_reconnecting", "{hint}");
+    assert!(hint.contains("fetch again"), "{hint}");
+    test_detach("n-quiet-offer");
+}
+
+/// A k2-node that really can't send artifacts: the error names the node,
+/// its version and this server's, says the node needs the update (not
+/// this server), and who does it: a shared node's owner server.
+#[test]
+fn node_upgrade_required_names_the_side_and_who_updates_it() {
+    let _home = crate::test_support::TempHome::new();
+    let _db = k2_core::db::scoped_for_test();
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::insert_pending_node(&conn, "n-old", "old-box", "fp-old", "pem", &BTreeMap::new(), "owner", "123456", 1).expect("node");
+        store::set_tenant_of(&conn, "n-old", "other.example").expect("tenant");
+    }
+    let (j, info) = flow_job("01d01d010123456789abcdef01234567", "n-old", b"x");
+    let mut o = offer_with(&[]);
+    o.node_version = "0.40.1".into();
+    let _rx = conn_with("n-old", Some(o));
+    let (code, hint) = fetch_artifact(&j, &info, false, Duration::from_secs(5)).expect_err("too old");
+    assert_eq!(code, "node_upgrade_required");
+    assert!(hint.contains("node 'old-box' runs k2-node 0.40.1"), "{hint}");
+    assert!(hint.contains(&format!("this server runs K2 {}", env!("CARGO_PKG_VERSION"))), "{hint}");
+    assert!(hint.contains("the node needs the update, not this server"), "{hint}");
+    assert!(hint.contains("other.example") && hint.contains("owner updates it"), "{hint}");
+    test_detach("n-old");
+}
+
+/// A node one release behind (this release's feature set, an older
+/// version string) still serves a paced fetch.
+#[cfg(unix)]
+#[test]
+fn a_node_one_release_behind_still_serves_a_fetch() {
+    let _home = crate::test_support::TempHome::new();
+    let _db = k2_core::db::scoped_for_test();
+    let body: Vec<u8> = (0..2048u32).map(|i| (i % 7) as u8).collect();
+    let (j, info) = flow_job("be41defe0123456789abcdef01234567", "n-behind", &body);
+    let mut feats = k2_node::node::node_features();
+    feats.push(results::FEATURE_ARTIFACT_FLOW.to_string());
+    let feats: Vec<&str> = feats.iter().map(String::as_str).collect();
+    let mut o = offer_with(&feats);
+    o.node_version = "0.46.15".into();
+    let mut rx = conn_with("n-behind", Some(o));
+    let (job, inf) = (j.clone(), info.clone());
+    let pull = std::thread::spawn(move || fetch_artifact(&job, &inf, false, Duration::from_secs(10)));
+    let get = next_sent(&mut rx, |f| match f {
+        Frame::ArtifactGet(g) => Some(g.clone()),
+        _ => None,
+    });
+    assert_eq!(get.window, Some(frames::ARTIFACT_WINDOW), "paced, as with a current node");
+    test_frame("n-behind", chunk(&get.request_id, 0, &body, true, &info));
+    let path = pull.join().unwrap().unwrap_or_else(|(c, h)| panic!("{c}: {h}"));
+    assert_eq!(std::fs::read(path).unwrap(), body);
+    test_detach("n-behind");
+}

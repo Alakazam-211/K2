@@ -35,6 +35,8 @@ pub mod pinned_only;
 pub mod pkgreq;
 pub mod result;
 pub mod retry;
+/// 0.46.17: how long the requesting server keeps fetched artifacts and blobs.
+pub mod retention;
 /// prd-compute-blacksmith-class-v1 R1: `k2 compute rightsize`, `--mem auto`.
 pub mod rightsize;
 pub mod rollout;

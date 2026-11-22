@@ -441,10 +441,77 @@ print(v.get("cursor"))')"
             echo "[k2 compute] next: k2 compute events --follow --since $cursor" >&2
             ;;
         local) cmd_compute_local "$@" ;;
+        # The compute store on this server (0.46.17): fetched artifacts and
+        # job blobs under ~/.k2/compute. Owner / Admin.
+        prune|pin|unpin|retention) cmd_compute_store "$sub" "$@" ;;
         *)
             echo "usage: unknown compute verb '$sub' (k2 compute --help)" >&2
             exit 2
             ;;
     esac
+}
+
+# ── k2 compute prune | pin | unpin | retention (0.46.17) ─────────────
+# This server's compute store: the files `k2 compute fetch` pulled from
+# nodes (~/.k2/compute/artifacts) and the jobs' source blobs
+# (~/.k2/compute/blobs). The daemon owns the retention rule and does the
+# deleting, hourly on its own and on `prune` (compute_retention.rs); these
+# verbs send the request and print the daemon's `text` lines (--json: its
+# whole answer). Owner and Admins only: from a terminal outside K2 (a K2
+# tab sends its passport, refused with owner_only). Durations: 3d, 72h,
+# 90m, 1d12h. Sizes: 20G, 512M, 1T.
+cmd_compute_store() {
+    local sub="$1" as_json=0 older="" dry=0 job="" max_age="" cap=""
+    shift
+    local pusage="usage: k2 compute prune [--older-than DURATION] [--dry-run] [--json]"
+    local rusage="usage: k2 compute retention [--json]  |  k2 compute retention set [--max-age DURATION|default] [--cap SIZE|auto] [--json]"
+    case "$sub" in
+        prune)
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --older-than) _need_value "$@"; older="${2:-}"; shift 2
+                        [[ "$older" =~ ^[0-9dhms]+$ ]] || { echo "$pusage (--older-than takes 3d, 72h, 90m or 1d12h)" >&2; exit 2; } ;;
+                    --dry-run|-n) dry=1; shift ;;
+                    --json) as_json=1; shift ;;
+                    *) echo "$pusage (unknown '$1')" >&2; exit 2 ;;
+                esac
+            done
+            # A big store takes a while to measure and move aside.
+            K2_CP_MAX_TIME=600 _compute_call POST /cli/compute/prune "$(_compute_json K2_CJ_olderThan="$older" K2_CJ_dryRun_b="$dry")" tcp
+            ;;
+        pin|unpin)
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --json) as_json=1; shift ;;
+                    -*) echo "usage: k2 compute $sub <job> [--json] (unknown '$1')" >&2; exit 2 ;;
+                    *) [ -z "$job" ] || { echo "usage: k2 compute $sub <job> [--json] (one job)" >&2; exit 2; }
+                       job="$1"; shift ;;
+                esac
+            done
+            [ -n "$job" ] || { echo "usage: k2 compute $sub <job> [--json]" >&2; exit 2; }
+            _compute_call POST "/cli/compute/$sub" "$(_compute_json K2_CJ_job="$job")" tcp
+            ;;
+        retention)
+            local rset=0
+            [ "${1:-}" = "set" ] && { rset=1; shift; }
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --max-age) [ "$rset" = 1 ] || { echo "$rusage" >&2; exit 2; }
+                        _need_value "$@"; max_age="${2:-}"; shift 2 ;;
+                    --cap) [ "$rset" = 1 ] || { echo "$rusage" >&2; exit 2; }
+                        _need_value "$@"; cap="${2:-}"; shift 2 ;;
+                    --json) as_json=1; shift ;;
+                    *) echo "$rusage (unknown '$1')" >&2; exit 2 ;;
+                esac
+            done
+            if [ "$rset" = 1 ]; then
+                [ -n "$max_age$cap" ] || { echo "$rusage (set needs --max-age and/or --cap)" >&2; exit 2; }
+                _compute_call POST /cli/compute/retention/set "$(_compute_json K2_CJ_maxAge="$max_age" K2_CJ_cap="$cap")" tcp
+            else
+                _compute_call GET /cli/compute/retention "" tcp
+            fi
+            ;;
+    esac
+    _compute_text "$as_json"
 }
 

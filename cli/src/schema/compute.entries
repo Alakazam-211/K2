@@ -1,6 +1,6 @@
     {
       "name": "compute",
-      "usage": "k2 compute <nodes|status|info|run|test|prewarm|jobs|get|fetch|wait|attach|logs|rightsize|stats|cancel|retry|events|cache|queue|retier|move|allow-nodes|git-access|receipt|provenance|verify|node|grant|revoke|grants|access|operate|manage|usage|preview|placement|roster|lanes|seats|trust|owners|local> [...]",
+      "usage": "k2 compute <nodes|status|info|run|test|prewarm|jobs|get|fetch|wait|attach|logs|rightsize|stats|cancel|retry|events|cache|queue|retier|move|allow-nodes|git-access|receipt|provenance|verify|node|grant|revoke|grants|access|operate|manage|usage|preview|placement|prune|pin|unpin|retention|roster|lanes|seats|trust|owners|local> [...]",
       "description": "Run commands on your own machines (compute nodes). Exit codes: 0 to 255 the command's own exit (attached runs), 2 bad usage, 3 infra with a JSON code on stderr (node_offline, not_granted, compute_off, queue_full, owner_only, job_started), 130 you detached with Ctrl-C (the job keeps running). Read k2 study compute first.",
       "args": [{"name": "verb", "required": true}],
       "flags": []
@@ -358,6 +358,55 @@
         {"name": "--all", "arg": null, "description": "Every workspace's caches."},
         {"name": "--name", "arg": "NAME", "description": "Only this cache."},
         {"name": "--node", "arg": "N", "description": "Only on this node."}
+      ]
+    },
+    {
+      "name": "compute prune",
+      "usage": "k2 compute prune [--older-than DURATION] [--dry-run] [--json]",
+      "description": "Free this server's disk now: remove the fetched job artifacts (~/.k2/compute/artifacts) and job source blobs (~/.k2/compute/blobs) the retention rule lets go: jobs that ended more than the max age ago (default 7 days), then the oldest until the store is under its cap. Never a pinned job's files, a job that hasn't ended, or files a fetch is reading; a secret job's only copy (the node deleted its own after the fetch) goes by age, never for the cap. Safe while the daemon runs; the daemon also does this hourly. Prints what it removed and kept (counts and bytes). Owner or Admin, from a terminal outside K2.",
+      "args": [],
+      "flags": [
+        {"name": "--older-than", "arg": "DURATION", "description": "This run only: remove ended jobs older than this (3d, 72h, 90m, 1d12h; 0 = every ended job) instead of the max age."},
+        {"name": "--dry-run", "arg": null, "description": "Say what would go; remove nothing."},
+        {"name": "--json", "arg": null, "description": "The whole answer: removed, kept, items, policy."}
+      ]
+    },
+    {
+      "name": "compute pin",
+      "usage": "k2 compute pin <job> [--json]",
+      "description": "Keep that job's fetched files on this server until unpin: retention and prune skip them (a split run: every shard's). It says how many of its files are here; fetch the rest first, since a node drops its copy 7 days after the job ended. Not the same as a job pinned to a node. Owner or Admin.",
+      "args": [{"name": "job", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "compute unpin",
+      "usage": "k2 compute unpin <job> [--json]",
+      "description": "The job's files here follow the retention rule again. Owner or Admin.",
+      "args": [{"name": "job", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "compute retention",
+      "usage": "k2 compute retention [--json]",
+      "description": "This server's compute store: its size (artifacts, blobs), the retention rule (max age, cap), the last sweep, the pinned jobs, and each only copy (a secret job's files the node deleted after the fetch) with the date it goes. Owner or Admin; k2 compute status shows a one-line summary to everyone.",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "compute retention set",
+      "usage": "k2 compute retention set [--max-age DURATION|default] [--cap SIZE|auto] [--json]",
+      "description": "Change the retention rule. Max age: how long after a job ends its files stay (default 7d, at least 1h). Cap: the store's size limit (auto = 20 GB or 10% of the disk, whichever is smaller; at least 1G). Owner or Admin.",
+      "args": [],
+      "flags": [
+        {"name": "--max-age", "arg": "DURATION|default", "description": "3d, 72h, 1d12h; default = 7 days."},
+        {"name": "--cap", "arg": "SIZE|auto", "description": "20G, 512M, 1T; auto = 20 GB or 10% of the disk."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
       ]
     },
     {

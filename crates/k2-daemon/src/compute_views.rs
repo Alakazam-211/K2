@@ -449,6 +449,8 @@ fn controller_machine() -> serde_json::Value {
         "name": compute_ws::controller_label(),
         "diskFreeBytes": hw.disk_free_bytes,
         "diskTotalBytes": hw.disk_total_bytes,
+        // 0.46.17: fetched artifacts and job blobs here, and the rule.
+        "store": crate::compute_retention::summary(),
     });
     if cfg!(target_os = "macos") {
         match k2_core::bg_proc::command("tmutil").args(["listlocalsnapshots", "/"]).stdin(std::process::Stdio::null()).output() {

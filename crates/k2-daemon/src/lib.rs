@@ -427,6 +427,8 @@ pub mod compute_node_flags;
 // Package requests through nodes (0.46.9, self-serve environments).
 pub mod compute_pkg;
 pub mod compute_place;
+// The compute store's retention, `k2 compute prune`, pin/unpin (0.46.17).
+pub mod compute_retention;
 /// B2: cache generations on the controller (plan fields, scratch refs, lineages).
 pub mod compute_gens;
 // `k2 compute rightsize` and `--mem auto` (prd-compute-blacksmith-class-v1 R1).

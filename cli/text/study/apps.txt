@@ -730,9 +730,11 @@ HELD FOR THE OWNER: THE CARD (0.46.17)
   or denies it there, in Settings → App Approvals, or with k2 app approve
   from a terminal outside K2; one answer closes the others.
   Who gets it: every owner and admin, unless you name them with
-  --assign <login>[,<login>…] on the command (k2 app db connect app1 --new
-  --assign ada). A name that isn't an owner or admin login here is refused
-  before anything runs (unknown_approver, approver_not_eligible).
+  --assign <login>[,<login>…] on the command (k2 app egress add app1
+  api.example.com --assign ada). A name that isn't an owner or admin login
+  here is refused before anything runs (unknown_approver,
+  approver_not_eligible). k2 app db connect is the one exception: there
+  --assign goes with --read-only only (k2 app db --help).
   Where it stands: k2 app approvals <w_id> (or --state all): pending,
   approved, denied, withdrawn, expired or failed, and the card's state.
   You see only the requests you asked for. You never approve one; you can

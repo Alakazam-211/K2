@@ -899,9 +899,11 @@ if os.environ.get("HELP_NATIVE_WHY"):
 # ---- The captured forms ------------------------------------------------
 # Every other help form of the router (crates/k5-cli/tests/data/
 # router_forms.tsv, scripts/router-forms.py): each form with help, --help
-# or -h among its words, and each form that is not an alias with --help and
+# or -h among its words, and each other form, an alias too, with --help and
 # with -h after it (the native bar's H class, crates/k5-cli/tests/
-# native_bar.rs, and its -h twin). Leaving out the forms above (a file's
+# native_bar.rs, and its -h twin). An alias's help is tried as well: a case
+# label the router lists beside another (`sessions archives`, after
+# `sessions list`) may have its own help arm. Leaving out the forms above (a file's
 # print), the pages the binary puts together (pages.rs, Composed: chat's
 # usage, help/--help/-h with a word), the top level help words, and `cli`
 # and `study`, whose pages the front words itself.
@@ -983,16 +985,14 @@ for l in form_lines[1:]:
     c = l.split("\t")
     if len(c) != 7:
         sys.exit("FAIL: %s: a row of %d columns: %r" % (FORMS_TSV, len(c), l))
-    form, argv_col, alias = c[0], c[1], c[2]
+    form, argv_col = c[0], c[1]
     argv = (form if argv_col == "-" else argv_col).split(" ")
     if any(not w or "\t" in w or "|" in w for w in argv):
         sys.exit("FAIL: %s: a word this list can't hold: %r" % (FORMS_TSV, l))
     if any(w in HELP_WORDS for w in form.split(" ")):
         tries = [argv]
-    elif alias == "-":
-        tries = [argv + ["--help"], argv + ["-h"]]
     else:
-        tries = []
+        tries = [argv + ["--help"], argv + ["-h"]]
     for t in tries:
         key = tuple(t)
         if key in cseen or key in file_forms or composed_form(t) or t[0] in HELP_FIRST or t[0].startswith("help-") \

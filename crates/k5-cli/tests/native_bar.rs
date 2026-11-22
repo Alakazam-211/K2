@@ -7,7 +7,7 @@
 //! - every form of `tests/data/router_forms.tsv` (`scripts/router-forms.py`
 //!   reads them from the router and each family's dispatch), with its
 //!   `argv` when it has one;
-//! - each form that is not an alias with `--help` after it (a help form);
+//! - each form, an alias too, with `--help` after it (a help form);
 //! - each form whose `--schema` entry takes `--json` with `--json` after it;
 //! - the shapes of `tests/data/native_bar_shapes.tsv`: documented flags,
 //!   and error and environment edges, each with its class;
@@ -164,7 +164,7 @@ fn probes() -> Vec<Probe> {
         .collect();
     let family_of = |word: &str| arm.get(word).cloned().unwrap_or_else(|| word.to_string());
     for r in &forms {
-        let (form, alias, json) = (&r[0], &r[2], &r[5]);
+        let (form, json) = (&r[0], &r[5]);
         let argv = words(if r[1] == "-" { form } else { &r[1] });
         let family = family_of(&argv[0]);
         firsts.insert(argv[0].clone());
@@ -183,7 +183,7 @@ fn probes() -> Vec<Probe> {
             form.clone(),
             argv.clone(),
         ));
-        if alias == "-" && !help {
+        if !help {
             let mut a = argv.clone();
             a.push("--help".into());
             out.push(probe("H", format!("{form} --help"), a));

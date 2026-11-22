@@ -173,7 +173,7 @@ fn probe_file_state(abs: &Path) -> HarnessFileState {
     match fs::read_to_string(abs) {
         Ok(content)
             if content.contains(K2_GENERATED_SIGNATURE)
-                || content.contains(crate::workspace::onboarding::AGENTS_MD_COMPOSE_BANNER) =>
+                || crate::workspace::onboarding::has_agents_md_compose_banner(&content) =>
         {
             HarnessFileState::Unified {
                 form: UnifiedForm::Copy,

@@ -430,8 +430,9 @@ fn approve_bin_and_owner(rig: &Rig) {
     owner_and_port(rig);
 }
 
-/// `approve verify --help` and `-h` (`text::FAMILY_FORMS`): the words go
-/// to `k2-approve`, which answers its own help, as the shell's do. A help
+/// `approve verify --help` and `-h`, and the same after its aliases
+/// `show` and `key-id` (`text::FAMILY_FORMS`): the words go to
+/// `k2-approve`, which answers its own help, as the shell's do. A help
 /// line a gate stops is the shell's.
 #[test]
 fn the_verify_help_lines_are_the_family_s() {
@@ -450,6 +451,44 @@ fn the_verify_help_lines_are_the_family_s() {
         case(
             "verify -h: k2-approve runs in its place",
             &["verify", "-h"],
+            &[("K2_APPROVE_BIN", "{secrets}/k2-approve")],
+            vec![],
+            approve_bin_and_owner,
+            4,
+            0,
+        ),
+        // native: approve show --help
+        case(
+            "show --help: k2-approve runs in its place",
+            &["show", "--help"],
+            &[("K2_APPROVE_BIN", "{secrets}/k2-approve")],
+            vec![],
+            approve_bin_and_owner,
+            4,
+            0,
+        ),
+        case(
+            "show -h: k2-approve runs in its place",
+            &["show", "-h"],
+            &[("K2_APPROVE_BIN", "{secrets}/k2-approve")],
+            vec![],
+            approve_bin_and_owner,
+            4,
+            0,
+        ),
+        // native: approve key-id --help
+        case(
+            "key-id --help: k2-approve runs in its place",
+            &["key-id", "--help"],
+            &[("K2_APPROVE_BIN", "{secrets}/k2-approve")],
+            vec![],
+            approve_bin_and_owner,
+            4,
+            0,
+        ),
+        case(
+            "key-id -h: k2-approve runs in its place",
+            &["key-id", "-h"],
             &[("K2_APPROVE_BIN", "{secrets}/k2-approve")],
             vec![],
             approve_bin_and_owner,

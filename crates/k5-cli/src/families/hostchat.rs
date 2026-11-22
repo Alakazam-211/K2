@@ -31,10 +31,11 @@
 //! ([`needs_value`]; the shell stops on `_need_nonempty_value`'s line,
 //! which names its own path, exit 1).
 //!
-//! `media`, `people` and `approvals` with one help flag after them read
-//! it as their sub-command, as the shell's do (`media`'s help page, exit
-//! 0; `people`'s and `approvals`' usage line, exit 2): help forms whose page is this
-//! code ([`crate::text::FAMILY_FORMS`]); a help line a gate stops is the
+//! `media`, `people` (alias `person`) and `approvals` (alias `approval`)
+//! with one help flag after them read it as their sub-command, as the
+//! shell's do (`media`'s help page, exit 0; `people`'s and `approvals`'
+//! usage line, exit 2): help forms whose page is this code
+//! ([`crate::text::FAMILY_FORMS`]); a help line a gate stops is the
 //! shell's ([`prelude::help_line_gated`]: the shell skips its connection
 //! gate for a help line).
 //!
@@ -325,6 +326,10 @@ pub const OWNER: crate::route::Owner = crate::route::Owner::Native;
 /// No verb rows: every form is [`OWNER`]'s.
 pub const VERBS: &[crate::route::Verb] = &[];
 
+/// The verbs that read one help flag after them as their sub-command
+/// (their help forms are [`crate::text::FAMILY_FORMS`]).
+const HELP_AS_SUB: &[&str] = &["media", "people", "person", "approvals", "approval"];
+
 /// `k5 hostchat ...`: `args` is the whole command line after `argv[0]`.
 /// `None`: the shell CLI answers it.
 pub fn run(args: &[OsString]) -> Option<Exit> {
@@ -344,7 +349,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .collect::<Option<_>>()?;
     let help_as_sub = matches!(
         words.as_slice(),
-        ["media" | "people" | "approvals", "-h" | "--help"]
+        [sub, "-h" | "--help"] if HELP_AS_SUB.contains(sub)
     );
     if !help_as_sub && words.iter().any(|w| matches!(*w, "-h" | "--help")) {
         return None;

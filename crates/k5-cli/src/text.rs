@@ -139,10 +139,20 @@ macro_rules! family {
 /// version line and all (not a captured page: every release moves the
 /// version, and the manifest names other versions too).
 ///
-/// `approve verify` (the words go to `k2-approve`, which answers its own
-/// help, [`crate::families::approve`]); `hostchat media`, `people` and
-/// `approvals` (the flag is the sub-command: `media`'s help page, or the
-/// usage line, [`crate::families::hostchat`]).
+/// `approve verify` and its aliases `show` and `key-id` (the words go to
+/// `k2-approve`, which answers its own help,
+/// [`crate::families::approve`]); `hostchat media`, `people` (alias
+/// `person`) and `approvals` (alias `approval`): the flag is the
+/// sub-command: `media`'s help page, or the usage line
+/// ([`crate::families::hostchat`]).
+///
+/// `permission`'s aliases `ask` (`request`), `deny` (`approve`) and
+/// `beta off` (`beta on`) are the family's as their verbs are.
+///
+/// `mail`'s owner verbs that moved to `hostmail`
+/// ([`crate::families::mail::RETIRED`], but `create`, whose help is a
+/// captured page): the router arm reads no help flag after them, so `-h`
+/// or `--help` there is the moved-verb usage line, exit 2, nothing sent.
 ///
 /// `done --help` and `done -h` ([`crate::families::done`]): the help is
 /// the loop's, after the gates (`_done_usage`).
@@ -151,6 +161,8 @@ pub static FAMILY_FORMS: &[HelpForm] = &[
     family!("permission" "-h"),
     family!("permission" "request" "--help"),
     family!("permission" "request" "-h"),
+    family!("permission" "ask" "--help"),
+    family!("permission" "ask" "-h"),
     family!("permission" "update" "--help"),
     family!("permission" "update" "-h"),
     family!("permission" "status" "--help"),
@@ -163,10 +175,14 @@ pub static FAMILY_FORMS: &[HelpForm] = &[
     family!("permission" "pending" "-h"),
     family!("permission" "approve" "--help"),
     family!("permission" "approve" "-h"),
+    family!("permission" "deny" "--help"),
+    family!("permission" "deny" "-h"),
     family!("permission" "beta" "--help"),
     family!("permission" "beta" "-h"),
     family!("permission" "beta" "on" "--help"),
     family!("permission" "beta" "on" "-h"),
+    family!("permission" "beta" "off" "--help"),
+    family!("permission" "beta" "off" "-h"),
     family!("permission" "beta" "status" "--help"),
     family!("permission" "beta" "status" "-h"),
     family!("permission" "approvers" "--help"),
@@ -181,12 +197,62 @@ pub static FAMILY_FORMS: &[HelpForm] = &[
     family!("done" "-h"),
     family!("approve" "verify" "--help"),
     family!("approve" "verify" "-h"),
+    family!("approve" "show" "--help"),
+    family!("approve" "show" "-h"),
+    family!("approve" "key-id" "--help"),
+    family!("approve" "key-id" "-h"),
     family!("hostchat" "media" "--help"),
     family!("hostchat" "media" "-h"),
     family!("hostchat" "people" "--help"),
     family!("hostchat" "people" "-h"),
+    family!("hostchat" "person" "--help"),
+    family!("hostchat" "person" "-h"),
     family!("hostchat" "approvals" "--help"),
     family!("hostchat" "approvals" "-h"),
+    family!("hostchat" "approval" "--help"),
+    family!("hostchat" "approval" "-h"),
+    family!("mail" "status" "--help"),
+    family!("mail" "status" "-h"),
+    family!("mail" "domain" "--help"),
+    family!("mail" "domain" "-h"),
+    family!("mail" "doctor" "--help"),
+    family!("mail" "doctor" "-h"),
+    family!("mail" "config" "--help"),
+    family!("mail" "config" "-h"),
+    family!("mail" "approvals" "--help"),
+    family!("mail" "approvals" "-h"),
+    family!("mail" "catchall" "--help"),
+    family!("mail" "catchall" "-h"),
+    family!("mail" "alias" "--help"),
+    family!("mail" "alias" "-h"),
+    family!("mail" "ooo" "--help"),
+    family!("mail" "ooo" "-h"),
+    family!("mail" "footer" "--help"),
+    family!("mail" "footer" "-h"),
+    family!("mail" "spam" "--help"),
+    family!("mail" "spam" "-h"),
+    family!("mail" "queue" "--help"),
+    family!("mail" "queue" "-h"),
+    family!("mail" "acl" "--help"),
+    family!("mail" "acl" "-h"),
+    family!("mail" "autoconfig" "--help"),
+    family!("mail" "autoconfig" "-h"),
+    family!("mail" "app-password" "--help"),
+    family!("mail" "app-password" "-h"),
+    family!("mail" "person" "--help"),
+    family!("mail" "person" "-h"),
+    family!("mail" "dkim" "--help"),
+    family!("mail" "dkim" "-h"),
+    family!("mail" "dmarc" "--help"),
+    family!("mail" "dmarc" "-h"),
+    family!("mail" "ptr" "--help"),
+    family!("mail" "ptr" "-h"),
+    family!("mail" "bans" "--help"),
+    family!("mail" "bans" "-h"),
+    family!("mail" "allowlist" "--help"),
+    family!("mail" "allowlist" "-h"),
+    family!("mail" "audit-sieve" "--help"),
+    family!("mail" "audit-sieve" "-h"),
 ];
 
 /// The captured help form that is exactly `argv` ([`CAPTURED_FORMS`],

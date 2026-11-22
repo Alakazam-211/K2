@@ -1226,6 +1226,12 @@ fn the_help_lines_are_the_family_s() {
                 &["request", "--help"],
                 &["request", "-h"],
             ),
+            // native: permission ask --help
+            usage(
+                "ask: the usage, the probe only",
+                &["ask", "--help"],
+                &["ask", "-h"],
+            ),
             // native: permission update --help
             usage(
                 "update: the usage, the probe only",
@@ -1262,6 +1268,12 @@ fn the_help_lines_are_the_family_s() {
                 &["approve", "--help"],
                 &["approve", "-h"],
             ),
+            // native: permission deny --help
+            usage(
+                "deny: the usage, the probe only",
+                &["deny", "--help"],
+                &["deny", "-h"],
+            ),
             // native: permission beta --help
             beta(
                 "beta: no probe, the usage",
@@ -1273,6 +1285,12 @@ fn the_help_lines_are_the_family_s() {
                 "beta on: no probe, the usage",
                 &["beta", "on", "--help"],
                 &["beta", "on", "-h"],
+            ),
+            // native: permission beta off --help
+            beta(
+                "beta off: no probe, the usage",
+                &["beta", "off", "--help"],
+                &["beta", "off", "-h"],
             ),
             // native: permission beta status --help
             beta(

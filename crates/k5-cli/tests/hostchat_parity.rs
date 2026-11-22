@@ -2972,8 +2972,8 @@ fn hostchat_apps_a_person_s_steps() {
     rig.check(&none);
 }
 
-/// `media`, `people` and `approvals` with one help flag after them
-/// (`text::FAMILY_FORMS`): the flag is the sub-command, as the shell's
+/// `media`, `people` (alias `person`) and `approvals` (alias `approval`)
+/// with one help flag after them (`text::FAMILY_FORMS`): the flag is the sub-command, as the shell's
 /// parsers read it: `media`'s help page (exit 0), `people`'s and
 /// `approvals`' usage line (exit 2); nothing sent. A help line a gate stops is the shell's (it skips its
 /// connection gate for a help line).
@@ -3006,6 +3006,13 @@ fn hostchat_help_as_a_sub_command() {
         // native: hostchat approvals --help
         bad("approvals --help: the usage", &["approvals", "--help"]),
         bad("approvals -h: the usage", &["approvals", "-h"]),
+        // The aliases, as their verbs.
+        // native: hostchat person --help
+        bad("person --help: the usage", &["person", "--help"]),
+        bad("person -h: the usage", &["person", "-h"]),
+        // native: hostchat approval --help
+        bad("approval --help: the usage", &["approval", "--help"]),
+        bad("approval -h: the usage", &["approval", "-h"]),
         with(
             with_passport(&[]),
             case(

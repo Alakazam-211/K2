@@ -15,7 +15,11 @@
 //! - [`py`]: the Python value rules the printers share.
 //! - [`reader`]: `mail reader`, the mail reader for people.
 //! - The retired owner verbs ([`RETIRED`]): each is the router's
-//!   moved-verb usage line, exit 2, after the gates.
+//!   moved-verb usage line, exit 2, after the gates. With `-h` or
+//!   `--help` after it too (but `create`'s, a captured page): the router
+//!   arm reads no help flag there, so those lines are help forms whose
+//!   page is this code ([`crate::text::FAMILY_FORMS`]); a help line a
+//!   gate stops is the shell's ([`crate::prelude::help_line_gated`]).
 //! - The bare line ([`bare`]): `mail` alone is the family's help page,
 //!   exit 0; `mail --json` the unknown-command line, exit 2; each after
 //!   the gates.

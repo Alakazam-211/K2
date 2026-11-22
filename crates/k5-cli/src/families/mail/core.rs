@@ -1880,6 +1880,11 @@ pub fn run(
             return Some(Exit::Error);
         }
     };
+    // A help line (a retired verb's, [`crate::text::FAMILY_FORMS`]) a gate
+    // stops is the shell's: its gates read the help flag.
+    if prelude::help_line_gated(args, &settings) {
+        return None;
+    }
     if prelude::gate(&settings).is_none()
         && settings.port_text.as_deref().and_then(curl_port).is_none()
     {

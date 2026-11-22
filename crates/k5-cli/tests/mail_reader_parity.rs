@@ -19,7 +19,8 @@
 //! - Who it is: the owner from disk, a passport over TCP, the `mail` id
 //!   tool's refusal in a session with no passport.
 //! - One answer above 256 KiB: thousands of inboxes.
-//! - The retired owner verbs: the moved-verb line, exit 2, nothing sent.
+//! - The retired owner verbs: the moved-verb line, exit 2, nothing sent,
+//!   with `-h` or `--help` after them too.
 //! - Help never acts.
 //!
 //! The forms here have no census entry (the census is the `--schema`
@@ -918,5 +919,131 @@ fn mail_retired_verbs_say_where_they_went() {
     ];
     for c in &v {
         rig.check(c);
+    }
+}
+
+/// The retired verbs with `-h` or `--help` after them (`text::FAMILY_FORMS`;
+/// `create`'s is a captured page): the router arm reads no help flag
+/// there, so each is the moved-verb line, exit 2, nothing sent. A help
+/// line a gate stops is the shell's (its gates read the flag).
+#[test]
+fn mail_retired_verbs_help_is_the_moved_line() {
+    let rig = Rig::new(VERB, "retiredhelp");
+    let mut v = vec![
+        // native: mail status --help
+        usage_case("status --help", &["status", "--help"]),
+        usage_case("status -h", &["status", "-h"]),
+        // native: mail domain --help
+        usage_case("domain --help", &["domain", "--help"]),
+        usage_case("domain -h", &["domain", "-h"]),
+        // native: mail doctor --help
+        usage_case("doctor --help", &["doctor", "--help"]),
+        usage_case("doctor -h", &["doctor", "-h"]),
+        // native: mail config --help
+        usage_case("config --help", &["config", "--help"]),
+        usage_case("config -h", &["config", "-h"]),
+        // native: mail approvals --help
+        usage_case("approvals --help", &["approvals", "--help"]),
+        usage_case("approvals -h", &["approvals", "-h"]),
+        // native: mail catchall --help
+        usage_case("catchall --help", &["catchall", "--help"]),
+        usage_case("catchall -h", &["catchall", "-h"]),
+        // native: mail alias --help
+        usage_case("alias --help", &["alias", "--help"]),
+        usage_case("alias -h", &["alias", "-h"]),
+        // native: mail ooo --help
+        usage_case("ooo --help", &["ooo", "--help"]),
+        usage_case("ooo -h", &["ooo", "-h"]),
+        // native: mail footer --help
+        usage_case("footer --help", &["footer", "--help"]),
+        usage_case("footer -h", &["footer", "-h"]),
+        // native: mail spam --help
+        usage_case("spam --help", &["spam", "--help"]),
+        usage_case("spam -h", &["spam", "-h"]),
+        // native: mail queue --help
+        usage_case("queue --help", &["queue", "--help"]),
+        usage_case("queue -h", &["queue", "-h"]),
+        // native: mail acl --help
+        usage_case("acl --help", &["acl", "--help"]),
+        usage_case("acl -h", &["acl", "-h"]),
+        // native: mail autoconfig --help
+        usage_case("autoconfig --help", &["autoconfig", "--help"]),
+        usage_case("autoconfig -h", &["autoconfig", "-h"]),
+        // native: mail app-password --help
+        usage_case("app-password --help", &["app-password", "--help"]),
+        usage_case("app-password -h", &["app-password", "-h"]),
+        // native: mail person --help
+        usage_case("person --help", &["person", "--help"]),
+        usage_case("person -h", &["person", "-h"]),
+        // native: mail dkim --help
+        usage_case("dkim --help", &["dkim", "--help"]),
+        usage_case("dkim -h", &["dkim", "-h"]),
+        // native: mail dmarc --help
+        usage_case("dmarc --help", &["dmarc", "--help"]),
+        usage_case("dmarc -h", &["dmarc", "-h"]),
+        // native: mail ptr --help
+        usage_case("ptr --help", &["ptr", "--help"]),
+        usage_case("ptr -h", &["ptr", "-h"]),
+        // native: mail bans --help
+        usage_case("bans --help", &["bans", "--help"]),
+        usage_case("bans -h", &["bans", "-h"]),
+        // native: mail allowlist --help
+        usage_case("allowlist --help", &["allowlist", "--help"]),
+        usage_case("allowlist -h", &["allowlist", "-h"]),
+        // native: mail audit-sieve --help
+        usage_case("audit-sieve --help", &["audit-sieve", "--help"]),
+        usage_case("audit-sieve -h", &["audit-sieve", "-h"]),
+    ];
+    v.extend([
+        case(
+            "status --help in a session with no passport",
+            &["status", "--help"],
+            &[("K2_HOOK_SOCK", "{deadsock}")],
+            vec![],
+            owner_and_port,
+            3,
+            0,
+        ),
+        compare(
+            Compare::Shell,
+            case(
+                "status --help, no port: the shell's",
+                &["status", "--help"],
+                &[],
+                vec![],
+                owner_only,
+                1,
+                0,
+            ),
+        ),
+    ]);
+    for c in &v {
+        rig.check(c);
+    }
+}
+
+/// A retired verb's help line names the command by the brand's name (in
+/// a build with `K2_BRAND_DIR=brand/xy` it says `xy`), never a typed `k2`
+/// or `k5`, and sends nothing.
+#[test]
+fn mail_retired_help_says_the_brand_s_name() {
+    let cli = k2_client::brand::CLI_NAME;
+    let rig = Rig::new(VERB, "retiredbrand");
+    for (args, verb) in [
+        (&["status", "--help"][..], "status"),
+        (&["audit-sieve", "-h"], "audit-sieve"),
+    ] {
+        let c = case("brand", args, &[], vec![], owner_and_port, 2, 0);
+        let (out, log) = rig.binary(&c, false);
+        assert_eq!(
+            out.stderr,
+            format!(
+                "{{\"error\":{{\"code\":\"usage\",\"hint\":\"'{cli} mail {verb}' moved to '{cli} hostmail {verb}' (server admin)\"}}}}\n"
+            ),
+            "{args:?}"
+        );
+        assert_eq!(out.stdout, "", "{args:?}");
+        assert_eq!(out.code, Some(2), "{args:?}");
+        assert!(log.is_empty(), "{args:?}");
     }
 }

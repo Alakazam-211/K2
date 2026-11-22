@@ -232,20 +232,21 @@ mod tests {
 
     #[tokio::test]
     async fn place_copy_remove() {
+        const V1: &str = "0b7d4d0e-9a2c-4b8f-8e7d-9a106f1c4a52";
         let (_d, s) = store();
         let id = "6f1c4a52-0b7d-4d0e-9a2c-3b8f1e7d9a10";
         let mut body: &[u8] = b"bytes";
         let mut st = s.stage(&mut body, 100).await.expect("stage");
-        let p = s.place(&mut st, id, "v1").expect("place");
+        let p = s.place(&mut st, id, V1).expect("place");
         drop(st);
         assert_eq!(std::fs::read(&p).expect("read"), b"bytes");
-        assert!(s.has(id, "v1"));
-        let c = s.stage_copy(id, "v1").expect("copy");
+        assert!(s.has(id, V1));
+        let c = s.stage_copy(id, V1).expect("copy");
         assert_eq!(c.size, 5);
         assert_eq!(std::fs::read(&c.path).expect("read copy"), b"bytes");
-        s.remove(id, "v1");
-        assert!(!s.has(id, "v1"));
+        s.remove(id, V1);
+        assert!(!s.has(id, V1));
         assert!(!p.parent().expect("dir").exists(), "the empty object folder goes too");
-        assert_eq!(s.stage_copy(id, "v1").expect_err("gone").code, "NoSuchKey");
+        assert_eq!(s.stage_copy(id, V1).expect_err("gone").code, "NoSuchKey");
     }
 }

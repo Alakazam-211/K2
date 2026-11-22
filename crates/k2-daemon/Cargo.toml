@@ -312,7 +312,7 @@ minisign-verify = "0.2"
 # same seam until it lands), and MD5 only to check an imported object
 # against the source's S3-style ETag (never for anything secret).
 tokio-postgres = "0.7"
-md-5 = "0.10"
+md-5 = "0.11"
 # Sew S29 (K12): the KEK id check — Sew's S4 §5.3 formula is a blake3
 # derive_key over the master key. Only for that id; tarballs stay sha2.
 blake3 = "1"

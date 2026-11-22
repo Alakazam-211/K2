@@ -179,7 +179,7 @@ fn callers() -> HashMap<String, Caller> {
 /// One raw request through the door: `(HTTP status, headers, body)`.
 pub async fn call(app_id: &str, raw: Vec<u8>) -> (u16, HashMap<String, String>, Vec<u8>) {
     let (head, len) = storage_door::door_head(&raw).expect("a door request head");
-    let (mut client, mut server) = tokio::io::duplex(1 << 20);
+    let (client, mut server) = tokio::io::duplex(1 << 20);
     let app = app_id.to_string();
     let srv = tokio::spawn(async move {
         storage_door::serve(&mut server, &head, len, &app, Via::Public).await;
@@ -484,6 +484,8 @@ struct Mock {
     /// Objects whose first full download is cut halfway.
     cut_once: std::collections::HashSet<String>,
     requests: usize,
+    /// Object downloads (any range).
+    downloads: usize,
     ranged: usize,
 }
 
@@ -576,6 +578,7 @@ async fn mock_conn(mut s: tokio::net::TcpStream, m: MockRef) {
             let l = mock_list(&g, &decode_path(b), prefix, v["limit"].as_u64().unwrap_or(100) as usize, v["offset"].as_u64().unwrap_or(0) as usize);
             reply("200 OK", "application/json", "", l.to_string().as_bytes(), usize::MAX)
         } else if let Some(t) = target.strip_prefix("/storage/v1/object/authenticated/") {
+            g.downloads += 1;
             let t = decode_path(t);
             let (b, n) = t.split_once('/').expect("bucket/name");
             match g.objects.get(&(b.to_string(), n.to_string())).cloned() {
@@ -711,11 +714,11 @@ async fn real_pg_storage_import() {
     assert_eq!(v.missing, vec!["photos/org2/bad.bin".to_string()]);
 
     // Again: nothing changed, nothing copied.
-    let before = m.lock().unwrap().requests;
+    let before = m.lock().unwrap().downloads;
     let s2 = imp::run(ctx.clone(), src.clone(), opts.clone()).await.expect("second run");
     assert_eq!((s2.copied, s2.skipped, s2.failed), (0, total - 1, 1), "a rerun copies only what changed: {s2:?}");
-    let fetched = m.lock().unwrap().requests - before;
-    assert!(fetched < 20, "a rerun lists, it doesn't download ({fetched} requests)");
+    let fetched = m.lock().unwrap().downloads - before;
+    assert_eq!(fetched, 1, "a rerun downloads only the object that failed before");
 
     // One object changes at the source, the bad one is fixed: two copies.
     {

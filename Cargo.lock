@@ -5851,6 +5851,7 @@ dependencies = [
  "libc",
  "mail-builder",
  "mail-parser",
+ "md-5",
  "minisign-verify",
  "nix 0.29.0",
  "notify",

@@ -1243,6 +1243,7 @@ mod tests {
         ("/cli/daemon/update/latest", "reads the cached latest-known version; never fetches"),
         ("/cli/daemon/update/status", "reads the updater state"),
         ("/cli/fs/upload/status", "reads an upload session's received ranges; create, complete, abort and token are POST routes"),
+        ("/cli/app/storage/import/status", "reads an App's storage import progress file; starting an import is POST /cli/app/storage/import"),
         ("/cli/project-config/has-run-command", "reads project config"),
         ("/cli/project-config/run-command", "returns the configured command string; never runs it"),
         ("/cli/publish/client-ip/list", "reads the client-IP opt-in list; writes nothing"),

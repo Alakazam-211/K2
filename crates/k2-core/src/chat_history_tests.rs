@@ -1611,19 +1611,19 @@ fn seed_agy_store(cli_dir: &std::path::Path) -> rusqlite::Connection {
 fn agy_exists_is_the_conversation_file_from_any_folder() {
     let tmp = U6TempDir::new("agy-exists");
     let _writer = seed_agy_store(&tmp.path);
-    assert!(agy_session_file_exists_in(&tmp.path, AGY_A));
-    assert!(agy_session_file_exists_in(&tmp.path, AGY_B));
-    assert!(!agy_session_file_exists_in(&tmp.path, AGY_GONE), "no file, no conversation");
+    assert!(agy::agy_session_file_exists_in(&tmp.path, AGY_A));
+    assert!(agy::agy_session_file_exists_in(&tmp.path, AGY_B));
+    assert!(!agy::agy_session_file_exists_in(&tmp.path, AGY_GONE), "no file, no conversation");
     // Only a UUID names a conversation file, never a path.
-    assert!(!agy_session_file_exists_in(&tmp.path, "../conversations/x"));
-    assert!(!agy_session_file_exists_in(&tmp.path, ""));
+    assert!(!agy::agy_session_file_exists_in(&tmp.path, "../conversations/x"));
+    assert!(!agy::agy_session_file_exists_in(&tmp.path, ""));
 }
 
 #[test]
 fn agy_sessions_are_the_project_family_newest_first_without_subagents() {
     let tmp = U6TempDir::new("agy-list");
     let _writer = seed_agy_store(&tmp.path);
-    let got = agy_sessions_in(&tmp.path, Some("/w/proj one_x"));
+    let got = agy::agy_sessions_in(&tmp.path, Some("/w/proj one_x"));
     let ids: Vec<&str> = got.iter().map(|s| s.session_id.as_str()).collect();
     assert_eq!(
         ids,
@@ -1638,23 +1638,24 @@ fn agy_sessions_are_the_project_family_newest_first_without_subagents() {
     assert_eq!(got[1].message_count, 2);
     assert_eq!(got[1].timestamp, 1_795_321_923_159, "last_modified_time in unix ms");
     // From the worktree, the family is the same.
-    let wt: Vec<String> = agy_sessions_in(&tmp.path, Some("/w/proj one_x/.worktrees/feat"))
+    let wt: Vec<String> = agy::agy_sessions_in(&tmp.path, Some("/w/proj one_x/.worktrees/feat"))
         .into_iter()
         .map(|s| s.session_id)
         .collect();
     assert_eq!(wt, vec![AGY_WT.to_string(), AGY_A.to_string()]);
     // `/w/proj one_x2` is another folder, not a child.
-    assert!(agy_sessions_in(&tmp.path, Some("/w/proj one_x2")).is_empty());
+    assert!(agy::agy_sessions_in(&tmp.path, Some("/w/proj one_x2")).is_empty());
     // No filter: every person's conversation that still has its file.
-    let all: Vec<String> = agy_sessions_in(&tmp.path, None).into_iter().map(|s| s.session_id).collect();
+    let all: Vec<String> =
+        agy::agy_sessions_in(&tmp.path, None).into_iter().map(|s| s.session_id).collect();
     assert_eq!(all, vec![AGY_B.to_string(), AGY_WT.to_string(), AGY_A.to_string()]);
 }
 
 #[test]
 fn agy_no_store_is_empty_not_an_error() {
     let tmp = U6TempDir::new("agy-none");
-    assert!(agy_sessions_in(&tmp.path, Some("/w/proj")).is_empty());
-    assert!(!agy_session_file_exists_in(&tmp.path, AGY_A));
+    assert!(agy::agy_sessions_in(&tmp.path, Some("/w/proj")).is_empty());
+    assert!(!agy::agy_session_file_exists_in(&tmp.path, AGY_A));
 }
 
 #[test]
@@ -1683,8 +1684,8 @@ fn agy_detect_exists_list_and_path_read_home() {
 
 #[test]
 fn agy_uri_path_decodes_percent_escapes() {
-    assert_eq!(agy_uri_path("file:///w/proj%20one_x").as_deref(), Some("/w/proj one_x"));
-    assert_eq!(agy_uri_path("file:///w/caf%C3%A9").as_deref(), Some("/w/café"));
-    assert_eq!(agy_uri_path("file:///w/100%").as_deref(), Some("/w/100%"), "a stray % stays");
-    assert_eq!(agy_uri_path("/w/no-scheme"), None);
+    assert_eq!(agy::agy_uri_path("file:///w/proj%20one_x").as_deref(), Some("/w/proj one_x"));
+    assert_eq!(agy::agy_uri_path("file:///w/caf%C3%A9").as_deref(), Some("/w/café"));
+    assert_eq!(agy::agy_uri_path("file:///w/100%").as_deref(), Some("/w/100%"), "a stray % stays");
+    assert_eq!(agy::agy_uri_path("/w/no-scheme"), None);
 }

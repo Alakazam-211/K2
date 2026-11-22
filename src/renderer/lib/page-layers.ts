@@ -27,8 +27,7 @@ import {
 
 export type Corners = number | [number, number, number, number]
 
-/** In a sent set: window px from the top-left of the K2 window's content
- *  area (the UI view's points: what K2 compares and places natively). */
+/** Window CSS px from the top-left of the K2 window's content area. */
 export interface PageShape {
   x: number
   y: number
@@ -58,6 +57,9 @@ export interface PageClaim extends PageShape {
   frost?: boolean
 }
 
+/** As sent, every shape in it (rects, minus, claims, corners) is in window
+ *  px, the UI view's points: what K2 compares and places natively
+ *  (`buildPageLayers` converts from CSS px under the app zoom). */
 export interface PageLayers {
   parentWindow: string
   /** K2's own field: one id per page load (and per return to underlay).

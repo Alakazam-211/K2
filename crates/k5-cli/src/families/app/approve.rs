@@ -109,6 +109,11 @@ pub fn parse(verb: &str, words: &[&str]) -> Option<Result<Ask, Stop>> {
     if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
         return None;
     }
+    // `cmd_app_approve`'s `_app_says_help`: the word `help` before a bare
+    // `--` is help too, wherever it stands (the id is never `help`).
+    if verb == "approve" && says_help(words) {
+        return None;
+    }
     Some(match verb {
         "approve" => match words.first() {
             None | Some(&"") => Err(Stop::usage(usage::APPROVE)),
@@ -118,6 +123,14 @@ pub fn parse(verb: &str, words: &[&str]) -> Option<Result<Ask, Stop>> {
         _ if words.first() == Some(&"revoke") => revoke(&words[1..]),
         _ => list(words),
     })
+}
+
+/// `_app_says_help`'s word: `help` before the first bare `--`.
+pub(super) fn says_help(words: &[&str]) -> bool {
+    words
+        .iter()
+        .take_while(|w| **w != "--")
+        .any(|w| *w == "help")
 }
 
 /// `cmd_app_approvals`' loop and checks.
@@ -620,6 +633,13 @@ mod tests {
             Some(Ok(Ask::Approve { id: "r".into() }))
         );
         assert_eq!(parse("approve", &["r", "-h"]), None);
+        // `_app_says_help`: the word help anywhere before a bare `--`.
+        assert_eq!(parse("approve", &["r", "help"]), None);
+        assert_eq!(parse("approve", &["help"]), None);
+        assert_eq!(
+            parse("approve", &["r", "--", "help"]),
+            Some(Ok(Ask::Approve { id: "r".into() }))
+        );
     }
 
     #[test]

@@ -22,7 +22,8 @@
 //!   loop; its value counts for `--json`; the verbs handed to `cmd_skin`
 //!   and `cmd_skin_token` get the words without it; before the verb it
 //!   is the shell's.
-//! - Help never acts, but where the shell takes `-h` as a value or an id.
+//! - Help never acts, but where the shell takes `-h` as a value; `approve`
+//!   reads `-h`, `--help` or `help` anywhere before a bare `--`.
 
 #![cfg(unix)]
 
@@ -300,15 +301,22 @@ fn help_never_acts() {
         (&["approvals", "-h"][..], 0),
         (&["approvals", "revoke", "w-1", "--help"], 0),
         (&["deny", "req-1", "-h"], 0),
-        (&["approve", "-h"], 2),
-        (&["approve", "--help"], 2),
+        // 0.46.17: `cmd_app_approve` reads help anywhere before a bare
+        // `--` (`_app_says_help`): the grace page, exit 0, nothing sent.
+        // It looked at its first word only (usage on stderr, exit 2), and
+        // `approve <id> -h` read the list and asked for the confirm.
+        (&["approve", "-h"], 0),
+        (&["approve", "--help"], 0),
+        (&["approve", "help"], 0),
+        (&["approve", "req-9", "-h"], 0),
+        (&["approve", "req-9", "--help"], 0),
+        (&["approve", "req-9", "help"], 0),
     ] {
         rig.check(&shell(stop("help never acts", args, code)));
     }
-    // The shell takes `-h` as a value or an id and sends (bash bugs,
-    // app-auth.sh:1646 approvals revoke --app, app-auth.sh:1670 deny
-    // --reason, and app-auth.sh:1632-1635 approve, which looks at its first
-    // word only; the rows flip when the fixes land).
+    // The shell takes `-h` as a value and sends (bash bugs,
+    // app-auth.sh:1646 approvals revoke --app and app-auth.sh:1670 deny
+    // --reason; the rows flip when the fixes land).
     rig.check(&shell(read(
         "help as a value acts: approvals revoke --app -h (bash bug)",
         &["approvals", "revoke", "--app", "-h"],
@@ -318,15 +326,6 @@ fn help_never_acts() {
         "help as a value acts: deny --reason -h (bash bug)",
         &["deny", "req-1", "--reason", "-h"],
         r#"{"request":{"id":"req-1","status":"denied","summary":"s"}}"#,
-    )));
-    rig.check(&shell(case(
-        "help after the id acts: approve req-9 -h (bash bug)",
-        &["approve", "req-9", "-h"],
-        &[],
-        vec![ok(LIST)],
-        owner_and_port,
-        3,
-        1,
     )));
 }
 

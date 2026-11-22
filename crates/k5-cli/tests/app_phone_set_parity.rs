@@ -16,9 +16,9 @@
 //! - The confirm step: in a session the 403 is the refusal; outside one,
 //!   no service id is the refusal, and with one the confirm is asked over
 //!   the vault socket (none here: its failure, exit 3).
-//! - Help never acts: `-h` and `--help` on every write send nothing,
-//!   but `push devices rm` (the shell's bug: its two words are taken as
-//!   they come, so `-h` is a device id and it sends the remove).
+//! - Help never acts: `-h` and `--help` on every write send nothing, and
+//!   on `push devices rm` the word `help` too, anywhere before a bare `--`
+//!   (0.46.17; it took its two words as they came and sent the remove).
 //! - A refusal; no daemon; a value flag given last; Python's raise.
 
 #![cfg(unix)]
@@ -514,17 +514,19 @@ fn push_writes_answer_as_the_shell_does() {
             1,
         )),
     ];
-    // `push devices rm acme -h`: the shell takes -h as the device id and
-    // sends the remove (a bash bug; the row flips when the fix lands).
-    v.push(shell(case(
-        "push devices rm: -h is taken as the id (bash bug)",
-        &["push", "devices", "rm", "acme", "-h"],
-        &[],
-        vec![ok(r#"{"ok":true}"#)],
-        owner_and_port,
-        0,
-        1,
-    )));
+    // 0.46.17: `devices rm` reads help anywhere before a bare `--`
+    // (`_app_says_help`): the push page, exit 0, nothing removed. It read
+    // its words by position, so `rm acme -h` sent the remove with -h as
+    // the id, and `rm acme apd_1 -h` removed the phone.
+    for args in [
+        &["push", "devices", "rm", "acme", "-h"][..],
+        &["push", "devices", "rm", "acme", "apd_1", "-h"],
+        &["push", "devices", "rm", "acme", "apd_1", "--help"],
+        &["push", "devices", "rm", "acme", "apd_1", "help"],
+        &["push", "devices", "remove", "acme", "help"],
+    ] {
+        v.push(shell(stop("push devices rm: help never acts", args, 0)));
+    }
     for c in v {
         rig.check(&c);
     }

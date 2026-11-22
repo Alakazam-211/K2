@@ -151,6 +151,13 @@ pub fn parse(verb: &str, words: &[&str]) -> Option<Result<Ask, Stop>> {
     }
     let sub = *words.first()?;
     let rest = &words[1..];
+    // `cmd_app_push_devices rm`'s `_app_says_help`: the word `help` too.
+    if (verb, sub) == ("push", "devices")
+        && matches!(rest.first(), Some(&"rm" | &"remove"))
+        && super::approve::says_help(&rest[1..])
+    {
+        return None;
+    }
     Some(match (verb, sub) {
         ("links", "set" | "off" | "check") => links(sub, rest),
         ("pairing", "setup" | "set") => pairing_setup(rest),
@@ -1428,5 +1435,13 @@ mod tests {
         assert_eq!(stop(&["set", "a"], "push").line, usage::PUSH_SET);
         assert!(parse("push", &["devices", "acme"]).is_none());
         assert!(parse("email", &["show", "acme"]).is_none());
+        // `devices rm`: help anywhere before a bare `--`, never an id.
+        assert!(parse("push", &["devices", "rm", "acme", "apd_1", "help"]).is_none());
+        assert!(parse("push", &["devices", "remove", "acme", "help"]).is_none());
+        assert!(parse("push", &["devices", "rm", "acme", "apd_1", "-h"]).is_none());
+        assert!(matches!(
+            parse("push", &["devices", "rm", "acme", "apd_1", "--", "help"]),
+            Some(Ok(Ask::Post { .. }))
+        ));
     }
 }

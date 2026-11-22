@@ -46,4 +46,7 @@ pub mod crud;
 pub mod version;
 pub mod writer;
 
+#[cfg(test)]
+mod brand_refresh_tests;
+
 pub use crud::SkillSummary;

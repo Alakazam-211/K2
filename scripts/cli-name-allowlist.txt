@@ -289,7 +289,7 @@
 3 cli crates/k2-daemon/src/mail/cert_names.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 3 cli crates/k2-daemon/src/mail/domains.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 3 cli crates/k2-daemon/src/mail/drafts.rs debt: the command name typed out; use CLI_NAME or cli_name!()
-3 cli crates/k2-daemon/src/permission/actions/postal.rs debt: the command name typed out; use CLI_NAME or cli_name!()
+3 cli crates/k2-daemon/src/permission/actions/postal.rs keeper: outside; p5's own subcommand (p5 k2 link) in its error lines, a word of p5's, not this build's command
 3 cli crates/k2-daemon/src/person_wallet_routes.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 3 cli crates/k2-daemon/src/publish_site_routes.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 3 cli crates/k2-daemon/src/sew_chat/routes_admin.rs debt: the command name typed out; use CLI_NAME or cli_name!()

@@ -24,6 +24,9 @@ import { webFeatures } from '@/web/features'
 
 export const LS_BROWSER_LAYERING = 'k2.browserLayering'
 export const LS_BROWSER_HOVER_PRIVATE_FALLBACK = 'k2.browserHoverPrivateWebkitFallback'
+/** '1' = the first click on a page in an inactive window also reaches the
+ *  page. Off by default (Design: that click only activates the window). */
+export const LS_BROWSER_PAGE_FIRST_CLICK = 'k2.browserPageFirstClick'
 
 export type BrowserLayering = 'underlay' | 'legacy'
 
@@ -52,13 +55,21 @@ export function writeBrowserLayering(mode: BrowserLayering): void {
   }
 }
 
-export function readHoverPrivateFallback(): boolean {
+function readFlag(key: string): boolean {
   try {
     if (typeof localStorage === 'undefined') return false
-    return localStorage.getItem(LS_BROWSER_HOVER_PRIVATE_FALLBACK) === '1'
+    return localStorage.getItem(key) === '1'
   } catch {
     return false
   }
+}
+
+export function readHoverPrivateFallback(): boolean {
+  return readFlag(LS_BROWSER_HOVER_PRIVATE_FALLBACK)
+}
+
+export function readPageFirstClick(): boolean {
+  return readFlag(LS_BROWSER_PAGE_FIRST_CLICK)
 }
 
 interface BrowserLayeringState {
@@ -67,6 +78,7 @@ interface BrowserLayeringState {
   /** Why the underlay was dropped this session, or null. */
   failed: string | null
   hoverPrivateFallback: boolean
+  pageFirstClick: boolean
   setMode: (mode: BrowserLayering) => void
   /** The underlay failed at run time: legacy until K2 restarts. */
   markFailed: (reason: string) => void
@@ -76,6 +88,7 @@ export const useBrowserLayeringStore = create<BrowserLayeringState>((set, get) =
   mode: readBrowserLayering(),
   failed: null,
   hoverPrivateFallback: readHoverPrivateFallback(),
+  pageFirstClick: readPageFirstClick(),
   setMode: (mode) => {
     writeBrowserLayering(mode)
     set({ mode })

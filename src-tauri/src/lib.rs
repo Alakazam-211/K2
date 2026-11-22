@@ -1763,6 +1763,11 @@ pub fn run() {
                     // later would tell Sew (vs-live V36). At most a second.
                     commands::native_voice::leave_on_quit(app);
                 }
+                // A K2 window closed: the browser underlay lets go of its
+                // UI webview and pages (else they live on offscreen).
+                tauri::RunEvent::WindowEvent { label, event: tauri::WindowEvent::Destroyed, .. } => {
+                    commands::browser_page_layers::window_destroyed(app, &label);
+                }
                 tauri::RunEvent::Exit => {
                     // Cmd+Q (NSApplication terminate:) skips CloseRequested
                     // and lands here: the same ending as the close button

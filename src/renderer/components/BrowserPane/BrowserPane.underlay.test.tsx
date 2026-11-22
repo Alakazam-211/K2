@@ -122,7 +122,8 @@ describe('Browser pane in the macOS underlay', () => {
     })
     expect(last?.viewport).toEqual([window.innerWidth, window.innerHeight])
     const opts = calls().find((c) => c[0] === 'browser_set_page_layers')?.[1] as { options: unknown }
-    expect(opts.options).toEqual({ hoverPrivateWebkitFallback: false })
+    expect(opts.options).toEqual({ hoverPrivateWebkitFallback: false, pageFirstClick: false })
+    expect(typeof last?.epoch).toBe('string')
   })
 
   it('a menu over the page leaves it live: a claim, no snapshot and no hide', async () => {
@@ -162,7 +163,7 @@ describe('Browser pane in the macOS underlay', () => {
     }
     await mount()
     expect(useBrowserLayeringStore.getState().failed).toContain('no layer to mask')
-    expect(calls()).toContainEqual(['browser_underlay_clear', { parentWindow: 'main' }])
+    expect(calls()).toContainEqual(['browser_underlay_clear', { parentWindow: 'main', epoch: expect.any(String) }])
     expect(warn).toHaveBeenCalled()
     // The legacy path places the view again.
     await frames(2)
@@ -174,7 +175,35 @@ describe('Browser pane in the macOS underlay', () => {
     act(() => useBrowserLayeringStore.getState().setMode('legacy'))
     await flush()
     await frames(2)
-    expect(calls()).toContainEqual(['browser_underlay_clear', { parentWindow: 'main' }])
+    expect(calls()).toContainEqual(['browser_underlay_clear', { parentWindow: 'main', epoch: expect.any(String) }])
     expect(calls().map((c) => c[0])).toContain('browser_set_bounds')
+  })
+
+  it('after a freeze the page comes back through a live set, never a deferred set_bounds', async () => {
+    const view = await (async () => {
+      renderInPrimaryRoom(<BrowserPane itemId="ul" tabId="tab-ul" paneGroupId="pg-ul" url="https://example.com" />)
+      await flush()
+      await frames(3)
+      return document
+    })()
+    let dialog = { release: (): void => {} }
+    act(() => {
+      dialog = claimBrowserOverlay({ kind: 'modal', area: 'fullscreen' })
+    })
+    await flush()
+    const img = view.querySelector('img[data-browser-freeze]') as HTMLImageElement
+    expect(img).not.toBeNull()
+    act(() => {
+      img.dispatchEvent(new Event('load'))
+    })
+    await frames(2)
+    const start = calls().length
+    act(() => dialog.release())
+    await flush()
+    await frames(2)
+    const after = since(start).map((c) => c[0])
+    expect(after).toContain('browser_set_visible')
+    expect(after).not.toContain('browser_set_bounds')
+    expect(sets(start).at(-1)?.layers[0].mode).toBe('live')
   })
 })

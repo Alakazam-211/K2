@@ -349,11 +349,15 @@ mod real {
         parsed: &Url,
         rect: &Rect,
         appearance: Option<&Appearance>,
+        underlay: bool,
     ) -> Result<(), String> {
         let view = app
             .get_webview(label)
             .ok_or_else(|| format!("expected existing webview {label}"))?;
-        apply_bounds(&view, rect)?;
+        // Underlay: the window's layer sets place it.
+        if !underlay {
+            apply_bounds(&view, rect)?;
+        }
         if let Some(appearance) = appearance {
             apply_appearance(&view, appearance);
         }
@@ -645,6 +649,10 @@ mod real {
         }
         #[cfg(not(target_os = "macos"))]
         let _ = layering;
+        #[cfg(target_os = "macos")]
+        let underlay_on = underlay;
+        #[cfg(not(target_os = "macos"))]
+        let underlay_on = false;
         // A Design tab (D-A4: a Browser tab with a `design` field) gets the
         // picker; a plain Browser tab never does. Older renderers send no
         // flag: plain Browser.
@@ -666,7 +674,9 @@ mod real {
             let state = views(&app);
             let mut map = state.0.lock().unwrap();
             if let Some(view) = map.get(&key) {
-                let _ = apply_bounds(view, &rect);
+                if !underlay_on {
+                    let _ = apply_bounds(view, &rect);
+                }
                 if let Some(appearance) = &appearance {
                     apply_appearance(view, appearance);
                 }
@@ -691,7 +701,7 @@ mod real {
         if !free {
             // Native view still registered — adopt rather than collide.
             if app.get_webview(&label).is_some() {
-                return adopt_existing(&app, &key, &label, &parsed, &rect, appearance.as_ref());
+                return adopt_existing(&app, &key, &label, &parsed, &rect, appearance.as_ref(), underlay_on);
             }
         }
 
@@ -770,12 +780,12 @@ mod real {
                 if msg.contains("already exists") {
                     // Adopt the survivor instead of failing the OAuth UI.
                     if app.get_webview(&label).is_some() {
-                        return adopt_existing(&app, &key, &label, &parsed, &rect, appearance.as_ref());
+                        return adopt_existing(&app, &key, &label, &parsed, &rect, appearance.as_ref(), underlay_on);
                     }
                     reap_browser_label(&app, &key, &label);
                     let _ = wait_label_free(&app, &label).await;
                     if app.get_webview(&label).is_some() {
-                        return adopt_existing(&app, &key, &label, &parsed, &rect, appearance.as_ref());
+                        return adopt_existing(&app, &key, &label, &parsed, &rect, appearance.as_ref(), underlay_on);
                     }
                     window
                         .add_child(
@@ -790,8 +800,11 @@ mod real {
             }
         };
 
-        // Initial anchors and corners (bounds came with add_child).
-        let _ = apply_bounds(&view, &rect);
+        // Initial anchors and corners (bounds came with add_child). In
+        // underlay the window's layer sets place it.
+        if !underlay_on {
+            let _ = apply_bounds(&view, &rect);
+        }
         if let Some(appearance) = &appearance {
             apply_appearance(&view, appearance);
         }
@@ -836,6 +849,11 @@ mod real {
     ) -> Result<(), String> {
         let parent = resolve_parent(parent_window.as_deref());
         let key = registry_key(parent, &item_id);
+        // Underlay: the window's layer sets place its pages; a deferred
+        // set_bounds here could land after a newer set.
+        if super::super::browser_page_layers::underlay_window(&app, parent) {
+            return Ok(());
+        }
         let state = views(&app);
         let guard = state.0.lock().unwrap();
         let view = guard.get(&key).ok_or("no such browser view")?;

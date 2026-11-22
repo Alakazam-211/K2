@@ -5,8 +5,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   LS_BROWSER_HOVER_PRIVATE_FALLBACK,
   LS_BROWSER_LAYERING,
+  LS_BROWSER_PAGE_FIRST_CLICK,
   readBrowserLayering,
   readHoverPrivateFallback,
+  readPageFirstClick,
   underlayActive,
   useBrowserLayeringStore,
 } from './browser-layering'
@@ -58,5 +60,11 @@ describe('browserLayering', () => {
     expect(readHoverPrivateFallback()).toBe(false)
     localStorage.setItem(LS_BROWSER_HOVER_PRIVATE_FALLBACK, '1')
     expect(readHoverPrivateFallback()).toBe(true)
+  })
+
+  it('the first click on a page is off unless stored as 1', () => {
+    expect(readPageFirstClick()).toBe(false)
+    localStorage.setItem(LS_BROWSER_PAGE_FIRST_CLICK, '1')
+    expect(readPageFirstClick()).toBe(true)
   })
 })

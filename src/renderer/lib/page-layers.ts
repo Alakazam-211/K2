@@ -58,6 +58,10 @@ export interface PageClaim extends PageShape {
 
 export interface PageLayers {
   parentWindow: string
+  /** K2's own field: one id per page load (and per return to underlay).
+   *  `generation` counts within it, so after a reload K2 starts afresh
+   *  instead of dropping every set as older than the last load's. */
+  epoch: string
   generation: number
   dpr: number
   /** The UI page size the rects were measured at (native stale guard). */
@@ -109,6 +113,7 @@ export function freezesInUnderlay(claim: OverlayClaim): boolean {
 
 export function buildPageLayers(input: {
   parentWindow: string
+  epoch: string
   generation: number
   dpr: number
   viewport: [number, number]
@@ -142,6 +147,7 @@ export function buildPageLayers(input: {
   }))
   return {
     parentWindow: input.parentWindow,
+    epoch: input.epoch,
     generation: input.generation,
     dpr: input.dpr,
     viewport: input.viewport,
@@ -159,6 +165,26 @@ export function cornerRadius(radius: number, corners: readonly [boolean, boolean
 
 // ── The per-window aggregator ────────────────────────────────────────────
 
+/** K2's switches that ride with each set. */
+export interface UnderlayOptions {
+  /** The named private WebKit hover route. Off by default. */
+  hoverPrivateWebkitFallback: boolean
+  /** The first click on a page in an inactive window reaches the page. Off. */
+  pageFirstClick: boolean
+}
+
+let epochCount = 0
+const loadId =
+  (typeof performance !== 'undefined' && Number.isFinite(performance.timeOrigin) ? Math.round(performance.timeOrigin).toString(36) : '0') +
+  '-' +
+  Math.random().toString(36).slice(2, 10)
+
+/** A new epoch: this page load, and how many times it entered underlay. */
+export function nextEpoch(): string {
+  epochCount += 1
+  return `${loadId}:${epochCount}`
+}
+
 export interface PageSource {
   windowId: string
   element: () => Element | null
@@ -168,12 +194,12 @@ export interface PageSource {
 
 export interface PageLayersDeps {
   parentWindow: () => string
-  send: (layers: PageLayers, hoverPrivateWebkitFallback: boolean) => Promise<void>
+  send: (layers: PageLayers, options: UnderlayOptions) => Promise<void>
   /** The underlay failed: the window goes back to the legacy path. */
   fail: (reason: string) => void
   /** Only send while the underlay is in use in this window. */
   active: () => boolean
-  hoverPrivateFallback: () => boolean
+  options: () => UnderlayOptions
   viewport: () => [number, number]
   dpr: () => number
   raf: (fn: () => void) => void
@@ -182,11 +208,10 @@ export interface PageLayersDeps {
 
 const defaultDeps: PageLayersDeps = {
   parentWindow: () => 'main',
-  send: (layers, hoverPrivateWebkitFallback) =>
-    invoke('browser_set_page_layers', { layers, options: { hoverPrivateWebkitFallback } }),
+  send: (layers, options) => invoke('browser_set_page_layers', { layers, options }),
   fail: () => {},
   active: () => false,
-  hoverPrivateFallback: () => false,
+  options: () => ({ hoverPrivateWebkitFallback: false, pageFirstClick: false }),
   viewport: () => [typeof window === 'undefined' ? 0 : window.innerWidth, typeof window === 'undefined' ? 0 : window.innerHeight],
   dpr: () => (typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1),
   raf: (fn) => (typeof requestAnimationFrame === 'function' ? requestAnimationFrame(() => fn()) : setTimeout(fn, 16)),
@@ -202,6 +227,8 @@ export class PageLayersSync {
   private readonly sources = new Map<string, { src: PageSource; order: number }>()
   private nextOrder = 1
   private generation = 0
+  private epochId = nextEpoch()
+  private dprWatch: (() => void) | null = null
   private frameQueued = false
   private nowQueued = false
   private sentEmpty = true
@@ -221,6 +248,7 @@ export class PageLayersSync {
     const prev = this.sources.get(src.windowId)
     this.sources.set(src.windowId, { src, order: prev?.order ?? this.nextOrder++ })
     if (!this.unsubscribe) this.unsubscribe = subscribeOverlayClaims(() => this.now())
+    this.watchDpr()
     this.frame()
     return () => {
       if (this.sources.get(src.windowId)?.src !== src) return
@@ -228,6 +256,8 @@ export class PageLayersSync {
       if (this.sources.size === 0 && this.unsubscribe) {
         this.unsubscribe()
         this.unsubscribe = null
+        this.dprWatch?.()
+        this.dprWatch = null
       }
       this.now()
     }
@@ -264,6 +294,7 @@ export class PageLayersSync {
     }))
     return buildPageLayers({
       parentWindow: this.deps.parentWindow(),
+      epoch: this.epochId,
       generation: this.generation + 1,
       dpr: this.deps.dpr(),
       viewport: this.deps.viewport(),
@@ -280,17 +311,48 @@ export class PageLayersSync {
     this.generation = set.generation
     this.sentEmpty = set.layers.length === 0
     try {
-      await this.deps.send(set, this.deps.hoverPrivateFallback())
+      await this.deps.send(set, this.deps.options())
     } catch (e) {
       this.failed = true
       this.deps.fail(String(e))
     }
   }
 
-  /** Back to legacy (setting off or a failure handled): start afresh later. */
-  reset(): void {
+  /** The epoch sets are sent in now. */
+  get epoch(): string {
+    return this.epochId
+  }
+
+  /** Back to legacy (setting off or a failure handled). Returns the epoch
+   *  being left (K2 ignores its late sets); a later underlay starts a new
+   *  one, with its generations from 1. */
+  reset(): string {
+    const left = this.epochId
+    this.epochId = nextEpoch()
+    this.generation = 0
     this.failed = false
     this.sentEmpty = true
+    return left
+  }
+
+  /** A move to a display with another scale: claims are snapped to device
+   *  pixels natively, so send a fresh set. */
+  private watchDpr(): void {
+    if (this.dprWatch || typeof window === 'undefined' || typeof window.matchMedia !== 'function') return
+    const arm = (): void => {
+      const mq = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`)
+      const onChange = (): void => {
+        mq.removeEventListener?.('change', onChange)
+        this.dprWatch = null
+        if (this.sources.size > 0) {
+          arm()
+          this.frame()
+        }
+      }
+      mq.addEventListener?.('change', onChange)
+      this.dprWatch = () => mq.removeEventListener?.('change', onChange)
+    }
+    arm()
   }
 }
 

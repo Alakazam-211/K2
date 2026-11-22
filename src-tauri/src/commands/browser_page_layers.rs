@@ -103,6 +103,11 @@ pub struct WireClaim {
 pub struct PageLayers {
     #[serde(default)]
     pub parent_window: Option<String>,
+    /// K2's own field: one id per renderer page load (and per return to
+    /// underlay). `generation` counts within it; a new epoch starts afresh,
+    /// so a reloaded UI is never stuck behind its old generation.
+    #[serde(default)]
+    pub epoch: Option<String>,
     pub generation: u64,
     /// Sent by Design's shape; native placement works in points.
     #[serde(default)]
@@ -124,6 +129,58 @@ pub struct UnderlayOptions {
     /// The private `WKMouseTrackingObserver` hover fallback. Off by default.
     #[serde(default)]
     pub hover_private_webkit_fallback: bool,
+    /// The first click on a page in an inactive window also reaches the
+    /// page. Off by default (Design: it only activates the window).
+    #[serde(default)]
+    pub page_first_click: bool,
+}
+
+/// Caps on what the renderer may send (it is not trusted to be sane).
+pub const MAX_LAYERS: usize = 32;
+pub const MAX_CLAIMS: usize = 256;
+pub const MAX_MINUS: usize = 64;
+/// Shapes may reach this far past the UI view's edges.
+pub const CLAMP_MARGIN: f64 = 64.0;
+/// This many stale sets in a row (same epoch, older generation) and the
+/// window falls back to legacy: the renderer and K2 disagree.
+pub const STALE_LIMIT: u32 = 8;
+/// This many 5 s main-thread timeouts in a row and the window falls back.
+pub const TIMEOUT_LIMIT: u32 = 3;
+
+/// Cut a set down to the caps. True when anything was dropped.
+pub fn cap_counts(set: &mut PageLayers) -> bool {
+    let mut cut = false;
+    if set.layers.len() > MAX_LAYERS {
+        set.layers.truncate(MAX_LAYERS);
+        cut = true;
+    }
+    if set.claims.len() > MAX_CLAIMS {
+        set.claims.truncate(MAX_CLAIMS);
+        cut = true;
+    }
+    for l in &mut set.layers {
+        if l.minus.len() > MAX_MINUS {
+            l.minus.truncate(MAX_MINUS);
+            cut = true;
+        }
+    }
+    cut
+}
+
+/// A shape clipped to the UI view plus a margin; None when it is not
+/// finite or nothing is left.
+pub fn clamp_shape(s: &WireShape, ui: (f64, f64)) -> Option<WireShape> {
+    if ![s.x, s.y, s.width, s.height].iter().all(|v| v.is_finite()) {
+        return None;
+    }
+    let x0 = s.x.max(-CLAMP_MARGIN);
+    let y0 = s.y.max(-CLAMP_MARGIN);
+    let x1 = (s.x + s.width).min(ui.0 + CLAMP_MARGIN);
+    let y1 = (s.y + s.height).min(ui.1 + CLAMP_MARGIN);
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+    Some(WireShape { x: x0, y: y0, width: x1 - x0, height: y1 - y0, radius: s.radius, chamfer: s.chamfer })
 }
 
 /// Is this set measured at a size other than the UI view's current one?
@@ -141,10 +198,19 @@ pub fn back_to_front(layers: &[WireLayer]) -> Vec<&WireLayer> {
     v
 }
 
-/// Generations per window, and the newest set waiting for the main thread.
+/// Epochs and generations per window, and the newest set waiting for the
+/// main thread.
 #[derive(Default)]
 pub struct Queue {
     last_gen: HashMap<String, u64>,
+    /// The renderer epoch each window's generations belong to.
+    epoch: HashMap<String, String>,
+    /// The epoch a window left underlay in: its late sets are ignored.
+    cleared: HashMap<String, String>,
+    /// Stale sets in a row, per window.
+    stale: HashMap<String, u32>,
+    /// Main-thread timeouts in a row, per window.
+    timeouts: HashMap<String, u32>,
     pending: HashMap<String, (PageLayers, UnderlayOptions)>,
     scheduled: HashSet<String>,
     /// UI views (by window label) and pages (by registry key) already kept
@@ -155,8 +221,12 @@ pub struct Queue {
 /// What `offer` decided for one incoming set.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Offer {
-    /// Older than (or the same as) one already seen: ignored.
-    Stale,
+    /// Older than (or the same as) one already seen in this epoch: ignored,
+    /// and counted (the count in a row).
+    Stale(u32),
+    /// From an epoch that already went back to legacy (a set in flight
+    /// when the renderer switched): ignored.
+    Refused,
     /// Folded into an apply that is already queued.
     Coalesced,
     /// Queue a main-thread apply for this window.
@@ -165,11 +235,25 @@ pub enum Offer {
 
 impl Queue {
     pub fn offer(&mut self, parent: &str, set: PageLayers, opts: UnderlayOptions) -> Offer {
+        let ep = set.epoch.clone().unwrap_or_default();
+        if self.cleared.get(parent) == Some(&ep) {
+            return Offer::Refused;
+        }
+        if self.epoch.get(parent) != Some(&ep) {
+            // A reload (or a return to underlay): its generations start over.
+            self.epoch.insert(parent.to_string(), ep);
+            self.last_gen.remove(parent);
+            self.stale.remove(parent);
+            self.cleared.remove(parent);
+        }
         if let Some(last) = self.last_gen.get(parent) {
             if set.generation <= *last {
-                return Offer::Stale;
+                let n = self.stale.entry(parent.to_string()).or_insert(0);
+                *n += 1;
+                return Offer::Stale(*n);
             }
         }
+        self.stale.remove(parent);
         self.last_gen.insert(parent.to_string(), set.generation);
         self.pending.insert(parent.to_string(), (set, opts));
         if self.scheduled.insert(parent.to_string()) {
@@ -185,18 +269,82 @@ impl Queue {
         self.pending.remove(parent)
     }
 
-    /// Back to legacy: forget the window (a later underlay starts afresh).
-    pub fn reset(&mut self, parent: &str) {
+    /// Back to legacy: forget the window's sets, and ignore any still in
+    /// flight from `epoch` (default: the current one). A later underlay
+    /// comes with a new epoch.
+    pub fn clear(&mut self, parent: &str, epoch: Option<String>) {
+        let ep = epoch.or_else(|| self.epoch.get(parent).cloned()).unwrap_or_default();
+        self.cleared.insert(parent.to_string(), ep);
+        self.epoch.remove(parent);
         self.last_gen.remove(parent);
+        self.stale.remove(parent);
+        self.timeouts.remove(parent);
         self.pending.remove(parent);
         self.scheduled.remove(parent);
     }
+
+    /// Is the window in underlay (a live epoch, not cleared)?
+    pub fn underlay(&self, parent: &str) -> bool {
+        self.epoch.contains_key(parent)
+    }
+
+    /// One more 5 s timeout in a row; returns the count.
+    pub fn timed_out(&mut self, parent: &str) -> u32 {
+        let n = self.timeouts.entry(parent.to_string()).or_insert(0);
+        *n += 1;
+        *n
+    }
+
+    pub fn answered(&mut self, parent: &str) {
+        self.timeouts.remove(parent);
+    }
+
+    /// The K2 window closed: drop everything about it (a reused label then
+    /// starts clean).
+    pub fn forget_window(&mut self, parent: &str) {
+        self.last_gen.remove(parent);
+        self.stale.remove(parent);
+        self.timeouts.remove(parent);
+        self.epoch.remove(parent);
+        self.cleared.remove(parent);
+        self.pending.remove(parent);
+        self.scheduled.remove(parent);
+        let prefix = format!("{parent}\0");
+        self.known.retain(|k| k != parent && !k.starts_with(&prefix));
+    }
 }
+
 
 pub struct PageLayersQueue(pub Mutex<Queue>);
 
 pub fn init(app: &AppHandle) {
     app.manage(PageLayersQueue(Mutex::new(Queue::default())));
+    // The hover route, logged at startup: public unless a set asks for the
+    // named private fallback (then logged again).
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app.run_on_main_thread(mac::log_hover_route_at_startup);
+    }
+}
+
+/// Is this K2 window in underlay right now? (browser_set_bounds then leaves
+/// its pages to the layer sets: Tauri's deferred bounds could land after a
+/// newer set.)
+pub fn underlay_window(app: &AppHandle, parent: &str) -> bool {
+    app.try_state::<PageLayersQueue>().is_some_and(|q| q.0.lock().unwrap().underlay(parent))
+}
+
+/// A K2 window closed: forget it here and on the main thread, so its UI
+/// webview (and its WebContent process) can go.
+pub fn window_destroyed(app: &AppHandle, label: &str) {
+    if let Some(q) = app.try_state::<PageLayersQueue>() {
+        q.0.lock().unwrap().forget_window(label);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let label = label.to_string();
+        let _ = app.run_on_main_thread(move || mac::window_destroyed(&label));
+    }
 }
 
 fn queue(app: &AppHandle) -> tauri::State<'_, PageLayersQueue> {
@@ -219,7 +367,7 @@ pub mod mac {
     use tauri::{AppHandle, Manager, Webview};
     use wry::underlay::{self, PageSpec, Shape, WindowSpec};
 
-    use super::{back_to_front, corners, viewport_stale, PageLayers, UnderlayOptions, WireShape};
+    use super::{back_to_front, clamp_shape, corners, viewport_stale, PageLayers, UnderlayOptions, WireShape};
 
     thread_local! {
         /// K2 window label -> its UI (content) webview.
@@ -305,6 +453,32 @@ pub mod mac {
         PAGES.with(|m| m.borrow().iter().filter(|(k, _)| k.starts_with(&prefix)).map(|(_, v)| v.clone()).collect())
     }
 
+    /// Main thread, at startup: log the hover route in use.
+    pub fn log_hover_route_at_startup() {
+        set_hover_route(false);
+    }
+
+    /// The K2 window `label` closed (main thread): drop its UI view and
+    /// pages from here and from wry's registry.
+    pub fn window_destroyed(label: &str) {
+        let prefix = format!("{label}\0");
+        let pages: Vec<Retained<NSView>> = PAGES.with(|m| {
+            let mut m = m.borrow_mut();
+            let keys: Vec<String> = m.keys().filter(|k| k.starts_with(&prefix)).cloned().collect();
+            keys.into_iter().filter_map(|k| m.remove(&k)).collect()
+        });
+        SIZED.with(|s| {
+            let mut s = s.borrow_mut();
+            for v in &pages {
+                s.remove(&(Retained::as_ptr(v) as usize));
+            }
+        });
+        if let Some(ui) = UIS.with(|m| m.borrow_mut().remove(label)) {
+            underlay::drop_ui(&ui);
+        }
+        log::info!("[browser-underlay] window {label:?} closed: its UI view and {} page(s) let go", pages.len());
+    }
+
     /// Back to legacy for one window: no mask, stock routing, pages on top.
     pub fn clear(parent: &str) -> Result<(), String> {
         let ui = UIS.with(|m| m.borrow().get(parent).cloned()).ok_or("underlay: UI view not known")?;
@@ -346,6 +520,7 @@ pub mod mac {
             return Err("underlay: apply off the main thread".into());
         }
         set_hover_route(opts.hover_private_webkit_fallback);
+        underlay::set_page_first_mouse(opts.page_first_click);
         let ui = UIS.with(|m| m.borrow().get(parent).cloned()).ok_or("underlay: UI view not known")?;
         // SAFETY: AppKit getter on the main thread.
         let sv = unsafe { ui.superview() }.ok_or("underlay: the UI view has no superview")?;
@@ -355,39 +530,47 @@ pub mod mac {
         let now = Instant::now();
         let mut held = false;
         transaction(true);
+        let clip = |s: &WireShape| clamp_shape(s, (uw, uh)).and_then(|c| shape(&c));
         let result = (|| {
-            let mut back_first: Vec<Retained<NSView>> = Vec::new();
+            let mut set_pages: Vec<Retained<NSView>> = Vec::new();
             let mut specs: Vec<PageSpec> = Vec::new();
             for layer in back_to_front(&set.layers) {
                 let key = format!("{parent}\0{}", layer.window_id);
                 let Some(view) = PAGES.with(|m| m.borrow().get(&key).cloned()) else { continue };
                 let live = layer.mode == "live";
-                let Some(rect) = shape(&layer.rect) else { continue };
+                let Some(rect) = clip(&layer.rect) else { continue };
                 // Still (drag, motion): never resized. Stale: the anchors hold.
                 if live && !stale {
                     held |= place(&view, &ui, &sv, &rect, (uw, uh), now);
                 }
-                back_first.push(view.clone());
+                set_pages.push(view.clone());
                 specs.push(PageSpec {
                     view,
                     corners: rect,
-                    minus: layer.minus.iter().filter_map(shape).collect(),
+                    minus: layer.minus.iter().filter_map(clip).collect(),
                     live,
                 });
             }
+            // Every page of this window goes below the UI view: the ones not
+            // in the set (hidden tabs) furthest back, so one un-hiding never
+            // flashes above K2 before its set arrives.
+            let in_set: std::collections::HashSet<usize> = set_pages.iter().map(|v| Retained::as_ptr(v) as usize).collect();
+            let mut back_first: Vec<Retained<NSView>> =
+                pages_of(parent).into_iter().filter(|v| !in_set.contains(&(Retained::as_ptr(v) as usize))).collect();
+            back_first.extend(set_pages);
             underlay::order(&ui, &back_first, true)?;
             specs.reverse(); // wry wants front first
             underlay::set_window(WindowSpec {
                 ui: ui.clone(),
                 pages: specs,
-                claims: set.claims.iter().filter_map(|c| shape(&c.shape)).collect(),
+                claims: set.claims.iter().filter_map(|c| clip(&c.shape)).collect(),
             })
         })();
         transaction(false);
         result.map(|()| held)
     }
 
-    /// Frame a page at `rect` (page px) in its superview. Returns true when
+    /// Frame a page at `rect` (UI px) in its superview. Returns true when
     /// the size change waits for the next frame.
     fn place(view: &NSView, ui: &NSView, sv: &NSView, rect: &Shape, ui_size: (f64, f64), now: Instant) -> bool {
         let top = if ui.isFlipped() { rect.y } else { ui_size.1 - rect.y - rect.h };
@@ -494,10 +677,20 @@ pub async fn browser_set_page_layers(
 ) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
+        let mut layers = layers;
         let parent = match layers.parent_window.as_deref() {
             Some(s) if !s.is_empty() => s.to_string(),
             _ => "main".to_string(),
         };
+        // Only a K2 window's own UI webview, never a browser page's label.
+        if app.get_webview_window(&parent).is_none() {
+            return Err(format!("underlay: {parent:?} is not a K2 window"));
+        }
+        if cap_counts(&mut layers) {
+            log::warn!(
+                "[browser-underlay] {parent:?}: a set over the caps ({MAX_LAYERS} layers, {MAX_CLAIMS} claims, {MAX_MINUS} minus) was cut down"
+            );
+        }
         if !queue(&app).0.lock().unwrap().known.contains(&parent) {
             mac::cache_ui(&app, &parent).await?;
             queue(&app).0.lock().unwrap().known.insert(parent.clone());
@@ -516,13 +709,39 @@ pub async fn browser_set_page_layers(
         }
         let offer = queue(&app).0.lock().unwrap().offer(&parent, layers, options.unwrap_or_default());
         match offer {
-            Offer::Stale | Offer::Coalesced => Ok(()),
+            Offer::Coalesced => Ok(()),
+            Offer::Refused => {
+                log::debug!("[browser-underlay] {parent:?}: a set from before the switch to legacy, ignored");
+                Ok(())
+            }
+            Offer::Stale(n) => {
+                log::warn!("[browser-underlay] {parent:?}: a set older than one already applied ({n} in a row), ignored");
+                if n >= STALE_LIMIT {
+                    Err(format!("underlay: {n} sets in a row were older than one already applied"))
+                } else {
+                    Ok(())
+                }
+            }
             Offer::Schedule => {
                 let (tx, rx) = tokio::sync::oneshot::channel();
-                schedule_apply(&app, parent, Some(tx));
+                schedule_apply(&app, parent.clone(), Some(tx));
                 match tokio::time::timeout(std::time::Duration::from_secs(5), rx).await {
-                    Ok(Ok(r)) => r,
-                    _ => Err("underlay: the main thread did not answer".into()),
+                    Ok(Ok(r)) => {
+                        queue(&app).0.lock().unwrap().answered(&parent);
+                        r
+                    }
+                    // A long native menu, a modal or sleep can hold the main
+                    // thread: the apply still runs when it frees. Only a run
+                    // of these falls back.
+                    _ => {
+                        let n = queue(&app).0.lock().unwrap().timed_out(&parent);
+                        log::warn!("[browser-underlay] {parent:?}: the main thread did not answer in 5 s ({n} in a row)");
+                        if n >= TIMEOUT_LIMIT {
+                            Err(format!("underlay: the main thread did not answer {n} times in a row"))
+                        } else {
+                            Ok(())
+                        }
+                    }
                 }
             }
         }
@@ -536,12 +755,16 @@ pub async fn browser_set_page_layers(
 
 /// Back to the legacy path for one K2 window: no mask, pages on top.
 #[tauri::command]
-pub async fn browser_underlay_clear(app: AppHandle, parent_window: Option<String>) -> Result<(), String> {
+pub async fn browser_underlay_clear(
+    app: AppHandle,
+    parent_window: Option<String>,
+    epoch: Option<String>,
+) -> Result<(), String> {
     let parent = match parent_window.as_deref() {
         Some(s) if !s.is_empty() => s.to_string(),
         _ => "main".to_string(),
     };
-    queue(&app).0.lock().unwrap().reset(&parent);
+    queue(&app).0.lock().unwrap().clear(&parent, epoch);
     #[cfg(target_os = "macos")]
     {
         mac::cache_ui(&app, &parent).await?;
@@ -571,8 +794,13 @@ mod tests {
     use super::*;
 
     fn set(gen: u64) -> PageLayers {
+        set_in("load-1", gen)
+    }
+
+    fn set_in(epoch: &str, gen: u64) -> PageLayers {
         serde_json::from_value(serde_json::json!({
             "parentWindow": "main",
+            "epoch": epoch,
             "generation": gen,
             "dpr": 2,
             "viewport": [1200, 800],
@@ -609,15 +837,98 @@ mod tests {
         let o = UnderlayOptions::default();
         assert_eq!(q.offer("main", set(5), o), Offer::Schedule);
         assert_eq!(q.offer("main", set(6), o), Offer::Coalesced, "one apply takes the newest");
-        assert_eq!(q.offer("main", set(6), o), Offer::Stale, "same generation again");
-        assert_eq!(q.offer("main", set(4), o), Offer::Stale, "older");
+        assert_eq!(q.offer("main", set(6), o), Offer::Stale(1), "same generation again");
+        assert_eq!(q.offer("main", set(4), o), Offer::Stale(2), "older, counted in a row");
         assert_eq!(q.offer("window-2", set(1), o), Offer::Schedule, "generations are per window");
         let (taken, _) = q.take("main").expect("pending set");
         assert_eq!(taken.generation, 6);
         assert!(q.take("main").is_none());
         assert_eq!(q.offer("main", set(7), o), Offer::Schedule);
-        q.reset("main");
-        assert_eq!(q.offer("main", set(1), o), Offer::Schedule, "after legacy, a fresh start is accepted");
+    }
+
+    #[test]
+    fn a_reloaded_ui_starts_a_new_epoch_and_its_sets_apply() {
+        let mut q = Queue::default();
+        let o = UnderlayOptions::default();
+        assert_eq!(q.offer("main", set_in("load-1", 40), o), Offer::Schedule);
+        q.take("main");
+        // The UI reloads: its generation restarts at 1.
+        assert_eq!(q.offer("main", set_in("load-2", 1), o), Offer::Schedule, "a new load is never stale");
+        q.take("main");
+        assert_eq!(q.offer("main", set_in("load-2", 2), o), Offer::Schedule);
+    }
+
+    #[test]
+    fn stale_sets_count_in_a_row_and_a_fresh_one_resets_the_count() {
+        let mut q = Queue::default();
+        let o = UnderlayOptions::default();
+        q.offer("main", set(10), o);
+        q.take("main");
+        for n in 1..=STALE_LIMIT {
+            assert_eq!(q.offer("main", set(3), o), Offer::Stale(n));
+        }
+        assert_eq!(q.offer("main", set(11), o), Offer::Schedule);
+        q.take("main");
+        assert_eq!(q.offer("main", set(5), o), Offer::Stale(1), "the run starts over");
+    }
+
+    #[test]
+    fn after_clear_late_sets_of_that_epoch_are_refused_and_a_new_epoch_is_accepted() {
+        let mut q = Queue::default();
+        let o = UnderlayOptions::default();
+        q.offer("main", set_in("a", 5), o);
+        q.take("main");
+        assert!(q.underlay("main"));
+        q.clear("main", Some("a".into()));
+        assert!(!q.underlay("main"));
+        assert_eq!(q.offer("main", set_in("a", 6), o), Offer::Refused, "in flight when the renderer switched");
+        assert!(!q.underlay("main"));
+        assert_eq!(q.offer("main", set_in("b", 1), o), Offer::Schedule, "back to underlay with a new epoch");
+        assert!(q.underlay("main"));
+    }
+
+    #[test]
+    fn timeouts_count_in_a_row_until_an_answer() {
+        let mut q = Queue::default();
+        assert_eq!(q.timed_out("main"), 1);
+        assert_eq!(q.timed_out("main"), 2);
+        q.answered("main");
+        assert_eq!(q.timed_out("main"), 1);
+    }
+
+    #[test]
+    fn a_closed_window_is_forgotten_and_a_reused_label_starts_clean() {
+        let mut q = Queue::default();
+        let o = UnderlayOptions::default();
+        q.known.insert("window-2".into());
+        q.known.insert("window-2\0tab".into());
+        q.known.insert("main\0tab".into());
+        q.offer("window-2", set_in("x", 9), o);
+        q.forget_window("window-2");
+        assert!(!q.known.contains("window-2"));
+        assert!(!q.known.contains("window-2\0tab"));
+        assert!(q.known.contains("main\0tab"), "other windows keep theirs");
+        assert!(!q.underlay("window-2"));
+        assert!(q.take("window-2").is_none(), "nothing pending");
+        assert_eq!(q.offer("window-2", set_in("x", 1), o), Offer::Schedule, "same label, same epoch: clean");
+    }
+
+    #[test]
+    fn caps_cut_counts_and_clamp_shapes_to_the_ui() {
+        let mut s = set(1);
+        s.layers = (0..40).map(|_| s.layers[0].clone()).collect();
+        s.layers[0].minus = (0..70).map(|_| s.layers[1].rect.clone()).collect();
+        s.claims = (0..300).map(|_| s.claims[0].clone()).collect();
+        assert!(cap_counts(&mut s));
+        assert_eq!((s.layers.len(), s.claims.len(), s.layers[0].minus.len()), (MAX_LAYERS, MAX_CLAIMS, MAX_MINUS));
+        assert!(!cap_counts(&mut s));
+        let big = WireShape { x: -1e9, y: 10.0, width: 2e9, height: 1e12, radius: None, chamfer: None };
+        let c = clamp_shape(&big, (1200.0, 800.0)).expect("clipped, not dropped");
+        assert_eq!((c.x, c.y, c.width, c.height), (-CLAMP_MARGIN, 10.0, 1200.0 + 2.0 * CLAMP_MARGIN, 800.0 + CLAMP_MARGIN - 10.0));
+        let off = WireShape { x: 5000.0, y: 0.0, width: 10.0, height: 10.0, radius: None, chamfer: None };
+        assert!(clamp_shape(&off, (1200.0, 800.0)).is_none());
+        let nan = WireShape { x: f64::NAN, y: 0.0, width: 10.0, height: 10.0, radius: None, chamfer: None };
+        assert!(clamp_shape(&nan, (1200.0, 800.0)).is_none());
     }
 
     #[test]
@@ -628,8 +939,11 @@ mod tests {
     }
 
     #[test]
-    fn options_default_to_the_public_hover_route() {
+    fn options_default_to_the_public_hover_route_and_first_click_off() {
         let o: UnderlayOptions = serde_json::from_value(serde_json::json!({})).unwrap();
         assert!(!o.hover_private_webkit_fallback);
+        assert!(!o.page_first_click);
+        let o: UnderlayOptions = serde_json::from_value(serde_json::json!({"pageFirstClick": true})).unwrap();
+        assert!(o.page_first_click);
     }
 }

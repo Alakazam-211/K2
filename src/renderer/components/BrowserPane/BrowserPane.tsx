@@ -128,15 +128,19 @@ function underlayOn(): boolean {
   return underlayActive(useBrowserLayeringStore.getState())
 }
 function leaveUnderlay(): void {
-  pageLayersSync.reset()
-  void invoke('browser_underlay_clear', { parentWindow: currentParentWindow() }).catch((e) => {
+  // K2 ignores sets still in flight from the epoch being left.
+  const epoch = pageLayersSync.reset()
+  void invoke('browser_underlay_clear', { parentWindow: currentParentWindow(), epoch }).catch((e) => {
     console.warn(`[browser-underlay] could not go back to the legacy path: ${String(e)}`)
   })
 }
 pageLayersSync.configure({
   parentWindow: currentParentWindow,
   active: underlayOn,
-  hoverPrivateFallback: () => useBrowserLayeringStore.getState().hoverPrivateFallback,
+  options: () => {
+    const s = useBrowserLayeringStore.getState()
+    return { hoverPrivateWebkitFallback: s.hoverPrivateFallback, pageFirstClick: s.pageFirstClick }
+  },
   fail: (reason) => {
     useBrowserLayeringStore.getState().markFailed(reason)
     leaveUnderlay()
@@ -535,6 +539,12 @@ export function BrowserPane({
           // Bounds may have gone stale while hidden (mosaic resizes under
           // display:none, a drawer slide) — re-assert before showing.
           if (!createdRef.current) return
+          if (underlayRef.current) {
+            // Underlay: the live set places the page in the same native
+            // turn (Tauri's deferred set_bounds could land after it).
+            pageLayersSync.now()
+            return
+          }
           const { itemId: id, parentWindow: parent, measureRect: measure } = freezeCtx.current
           const rect = measure()
           if (!rect) return

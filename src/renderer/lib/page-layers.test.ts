@@ -30,6 +30,7 @@ describe('buildPageLayers', () => {
   it('orders pages back to front and keeps rect, corners and mode', () => {
     const set = buildPageLayers({
       parentWindow: 'main',
+      epoch: 'e1',
       generation: 7,
       dpr: 2,
       viewport: VIEW,
@@ -38,6 +39,7 @@ describe('buildPageLayers', () => {
     })
     expect(set).toEqual({
       parentWindow: 'main',
+      epoch: 'e1',
       generation: 7,
       dpr: 2,
       viewport: VIEW,
@@ -52,6 +54,7 @@ describe('buildPageLayers', () => {
   it('menus, popovers, toasts and dialogs become claims; drags and motion do not', () => {
     const set = buildPageLayers({
       parentWindow: 'main',
+      epoch: 'e1',
       generation: 1,
       dpr: 1,
       viewport: VIEW,
@@ -78,6 +81,7 @@ describe('buildPageLayers', () => {
     dialog.appendChild(embedded)
     const set = buildPageLayers({
       parentWindow: 'main',
+      epoch: 'e1',
       generation: 1,
       dpr: 1,
       viewport: VIEW,
@@ -92,6 +96,7 @@ describe('buildPageLayers', () => {
   it('a page with no size is left out', () => {
     const set = buildPageLayers({
       parentWindow: 'main',
+      epoch: 'e1',
       generation: 1,
       dpr: 1,
       viewport: VIEW,
@@ -133,7 +138,7 @@ describe('PageLayersSync', () => {
         sent.push(set)
       },
       fail,
-      hoverPrivateFallback: () => false,
+      options: () => ({ hoverPrivateWebkitFallback: false, pageFirstClick: false }),
       viewport: () => VIEW,
       dpr: () => 2,
       raf: (fn) => frames.push(fn),
@@ -209,6 +214,38 @@ describe('PageLayersSync', () => {
     h.sync.register(src('a', 0))
     await h.run(h.frames)
     expect(h.sent).toEqual([])
+  })
+
+  it('a reload starts a new epoch whose generations start over (K2 applies them)', async () => {
+    const before = harness()
+    before.sync.register(src('a', 0))
+    for (let i = 0; i < 5; i++) {
+      before.sync.frame()
+      await before.run(before.frames)
+    }
+    const old = before.sent.at(-1)!
+    expect(old.generation).toBeGreaterThan(1)
+    // A new page load: a new module instance, a new sync.
+    const after = harness()
+    after.sync.register(src('a', 0))
+    await after.run(after.frames)
+    const fresh = after.sent[0]
+    expect(fresh.generation).toBe(1)
+    expect(fresh.epoch).not.toBe(old.epoch)
+  })
+
+  it('leaving underlay returns the old epoch and starts a new one', async () => {
+    const h = harness()
+    h.sync.register(src('a', 0))
+    await h.run(h.frames)
+    const first = h.sent[0].epoch
+    const left = h.sync.reset()
+    expect(left).toBe(first)
+    expect(h.sync.epoch).not.toBe(first)
+    h.sync.frame()
+    await h.run(h.frames)
+    expect(h.sent.at(-1)?.epoch).toBe(h.sync.epoch)
+    expect(h.sent.at(-1)?.generation).toBe(1)
   })
 
   it('a native failure falls back once and stops sending', async () => {

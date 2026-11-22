@@ -22,7 +22,7 @@
 //!   transport's line, exit 1, sent once).
 //! - What the binary hands to the shell: help. A value flag as the last
 //!   word is the shell's too, but its `$2: unbound variable` line names
-//!   the script's path, so no row can compare it (the plan's D6; the
+//!   the script's path, so no row can compare it (bash's own edge; the
 //!   family's unit tests hold the hand-back).
 //! - Help never acts: every write with `-h` or `--help` anywhere prints
 //!   its help and sends nothing ([`help_never_acts`]).

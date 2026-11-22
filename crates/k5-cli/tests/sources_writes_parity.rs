@@ -11,7 +11,7 @@
 //! - `trigger`: every sub-verb, a short id matched from the list, and
 //!   thousands of triggers (above 256 KiB).
 //!
-//! Rows named `bash D6:` are a value flag as the last word: `shift 2`
+//! Rows named `bash edge:` are a value flag as the last word: `shift 2`
 //! fails under `set -e` and bash ends with 1, saying nothing (copied until
 //! bash is fixed). The row named `bash bug: --from -` is the parser's
 //! program arriving on stdin (`python3 - <<'PY'`), so `--from -` reads an
@@ -473,7 +473,7 @@ fn sources_try() {
             0,
         ),
         case(
-            "bash D6: try --name last",
+            "bash edge: try --name last",
             &["try", "--url", "u", "--name"],
             &[],
             vec![],
@@ -630,7 +630,7 @@ fn sources_approve_and_secret() {
             0,
         ),
         case(
-            "bash D6: approve --keep last",
+            "bash edge: approve --keep last",
             &["approve", "web", "--keep"],
             &[],
             vec![],
@@ -1098,7 +1098,7 @@ fn sources_pin_and_trigger() {
             0,
         ),
         case(
-            "bash D6: trigger --source last",
+            "bash edge: trigger --source last",
             &["trigger", "list", "--source"],
             &[],
             vec![],

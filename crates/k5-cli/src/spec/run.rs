@@ -7,7 +7,7 @@
 //! 2. The tool's checks with `HOOK_SOCK` set: the stale-passport and
 //!    require-passport lines, exit 3 ([`crate::prelude::id_tool`]). The
 //!    runner keeps them only because bash makes them before the verb
-//!    runs (K2's ruling); they go with [`crate::tools`] after T5. A row's
+//!    runs; they go with [`crate::tools`] after T5. A row's
 //!    tool is always an `id` tool: the runner hands any other to the shell,
 //!    whose open tools send the owner token over TCP in a K2 terminal
 //!    (COMPAT-58) where the binary sends the passport (PRD 13.9 #4).

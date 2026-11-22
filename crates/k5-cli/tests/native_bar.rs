@@ -1,5 +1,5 @@
 //! The native bar: which command lines the k5 binary still hands to the
-//! shell CLI. It is the 0.46.17 ship bar (K2's ruling): every command
+//! shell CLI. It is the 0.46.17 ship bar: every command
 //! native.
 //!
 //! What it runs (each a probe):
@@ -13,7 +13,7 @@
 //!   and error and environment edges, each with its class;
 //! - [`PROXIED`]: one form of each family the shell answers with its
 //!   Python's urllib, with `K2_HOST=https://<name>` through the person's
-//!   proxy (K2's ruling): see [`proxied_falls_through`].
+//!   proxy: see [`proxied_falls_through`].
 //!
 //! How: the built binary, with a scratch home and K2 home, a stub daemon
 //! that answers every request with 200 and the owner token and port on
@@ -31,7 +31,7 @@
 //!
 //! - V a verb (or its `--json` twin), H a help form, F a documented flag
 //!   or shape, E an error or environment edge on a k5 code path: the bar
-//!   counts these (K2's ruling);
+//!   counts these;
 //! - P an edge that exists only because python3 is missing (the
 //!   native-without-python3 difference): listed, not counted.
 //!

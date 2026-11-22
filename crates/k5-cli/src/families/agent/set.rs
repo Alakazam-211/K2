@@ -1,5 +1,5 @@
 //! `cmd_agent_set` (`cli/src/agent.sh`): the conf, then the plan and the
-//! urllib calls of the block's own (K2's ruling D4): `/cli/workspace/set`,
+//! urllib calls of the block's own: `/cli/workspace/set`,
 //! the display name, the persona, project memberships, and the focus group
 //! (`/cli/focus-groups/list`, then `/cli/focus-groups/assign` with the
 //! project token: the session's passport in a K2 terminal, so a refusal

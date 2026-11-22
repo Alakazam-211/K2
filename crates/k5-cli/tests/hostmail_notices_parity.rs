@@ -392,7 +392,7 @@ fn text_on_stdin_that_is_not_plain() {
     }
 }
 
-/// A NUL on stdin (K2's ruling, the named difference `nul-in-stdin-text`;
+/// A NUL on stdin (the named difference `nul-in-stdin-text`;
 /// `scripts/cli-parity.sh` checks bash's side): the binary sends the text
 /// as read, each NUL as JSON's `\u0000`, never cut at it; only the
 /// trailing newlines go. One request, the shell's answer printed, exit 0.

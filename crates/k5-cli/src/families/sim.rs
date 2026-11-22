@@ -34,7 +34,7 @@
 //! Hand-backs to the shell, decided before anything is printed or sent:
 //! a word that is not UTF-8, `HOOK_SOCK` with a `CODEX_` variable, a port
 //! curl won't take, a `python3` the binary can't tell; and three of
-//! bash's own edges, where bash prints its own error line (D6): a
+//! bash's own edges, where bash prints its own error line: a
 //! `--workspace` folder or an install path `cd` or `dirname` reads as an
 //! option (a leading `-`) or one `CDPATH` would move, a duration with
 //! other than ASCII in it (Python's `\d` and `float` take any digits), and

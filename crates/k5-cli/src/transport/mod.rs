@@ -14,7 +14,7 @@
 //! - [`permission`]: the refusal's closing line.
 //! - [`encode`]: the query escaping (Python's `quote`).
 //! - [`urllib`]: the shell's embedded Python clients' `urlopen`, for the
-//!   families whose shell side is a `python3` block (K2's ruling D4).
+//!   families whose shell side is a `python3` block.
 //! - [`remote`], [`tls`] and [`proxy`]: another K2 server, over https
 //!   only, through the person's proxy when one is set. The daemon's own
 //!   targets (loopback TCP, the cell socket) never read a proxy setting,

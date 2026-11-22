@@ -1,5 +1,5 @@
 //! The shell's Python blocks at `K2_HOST=https://<name>` with the
-//! person's proxy set (K2's ruling): bash's Python tunnels through it
+//! person's proxy set: bash's Python tunnels through it
 //! (`_K2_PY_PROXY_RULE`'s `ProxyHandler`, `http.client`'s CONNECT), and the
 //! binary's urllib families (db, store, calendar, project; preset's row
 //! is in `plain_http_daemon_parity.rs`) do the

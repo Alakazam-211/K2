@@ -3751,10 +3751,10 @@ mod tests {
         "NO_PROXY",
     ];
 
-    /// The daemon's paths never read a proxy setting (K2's ruling, the
-    /// Steward's proof): with every proxy variable set in this process,
-    /// every kind of daemon call builds a target with no place for a
-    /// proxy (TCP or the cell socket), on loopback and on a LAN host,
+    /// The daemon's paths never read a proxy setting. The proof: with
+    /// every proxy variable set in this process, every kind of daemon
+    /// call builds a target with no place for a proxy (TCP or the cell
+    /// socket), on loopback and on a LAN host,
     /// with the owner token and with a passport. Only a client that
     /// `remote::apply` pointed at a remote `https://` base carries one.
     #[cfg(unix)]
@@ -3889,7 +3889,7 @@ mod tests {
             src.join("transport/client.rs"),
         ];
         // curl's reading, and the shell's Python's (the urllib families'
-        // https daemon, K2's ruling).
+        // https daemon).
         let readers = [
             ["from_", "process_env"].concat(),
             ["python_", "environ"].concat(),
@@ -3944,7 +3944,7 @@ mod tests {
     /// No credential ever follows a redirect: a 3xx is the answer, on the
     /// transport's calls and the urllib adapter's alike. A first server
     /// answers 302 with a `Location` at a second one, which must get
-    /// nothing (K2's rule from the clone engine's redirect ruling).
+    /// nothing (the clone engine's redirect rule).
     #[test]
     fn a_redirect_is_the_answer_and_never_followed() {
         use std::io::{Read, Write};

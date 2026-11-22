@@ -1,6 +1,6 @@
 //! `cmd_agent_context` and its verbs (`cli/src/agent-context.sh`): the
 //! AGENTS.md layer stack over `/cli/context/*`, each call a urllib request
-//! of `_context_http`'s own (K2's ruling D4).
+//! of `_context_http`'s own.
 
 use super::{abs_user, at, cli, cut, dumps, err_json, obj, product, py_strip, raised, s, str_or};
 use crate::exit::Exit;

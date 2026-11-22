@@ -457,8 +457,8 @@ assert_contains "retry posts" "$seen" '/cli/skin/grant-hooks/retry'
 assert_contains "skip posts" "$seen" '/cli/skin/grant-hooks/skip'
 assert_contains "reconcile posts" "$seen" '/cli/skin/grant-hooks/reconcile'
 assert_contains "target body" "$seen" '{"kind": "chat", "enabled": true, "socket": "/run/sew/mgmt.sock"}'
-# curl writes the escape's hex in lower case, the k5 binary in upper (K2's
-# ruling): compare it either way.
+# curl writes the escape's hex in lower case, the k5 binary in upper:
+# compare it either way.
 assert_contains "log query subject (%3a or %3A)" "$(printf '%s' "$seen" | sed 's/%3A/%3a/g')" "subject=k2%3aowner"
 assert_contains "log query limit" "$seen" 'limit=5'
 assert_contains "schema grant set" "$schema" '"name": "app grant set"'

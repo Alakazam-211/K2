@@ -61,7 +61,7 @@ SRC = os.path.join(ROOT, "cli", "src")
 OUT = "crates/k5-cli/tests/data/router_forms.tsv"
 EXTRA = "crates/k5-cli/tests/data/router_forms_extra.tsv"
 CEILING = "crates/k5-cli/tests/data/native_bar_ceiling.tsv"
-# The classes the ship bar counts (K2's ruling): V a verb (or its --json
+# The classes the ship bar counts: V a verb (or its --json
 # twin), H a help form, F a documented flag shape, E an error or
 # environment edge on a k5 code path. P (an edge that exists only
 # because python3 is missing: the native-without-python3 difference) is

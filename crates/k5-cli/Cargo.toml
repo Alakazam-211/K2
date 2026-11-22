@@ -31,7 +31,7 @@ blake3 = "1"
 flate2 = "1.1.9"
 k2-client = { path = "../k2-client" }
 # TLS for a server on another machine (`talk ws@host`, `read ws@host`,
-# a Connect host's tray upload): K2's ruling D5. rustls with the ring
+# a Connect host's tray upload). rustls with the ring
 # provider (no aws-lc-rs, so no C toolchain and no OpenSSL terms), over
 # our own HTTP/1.1 client (src/transport/tls.rs), and the OS's root
 # certificates as curl trusts them (rustls-native-certs; it reads

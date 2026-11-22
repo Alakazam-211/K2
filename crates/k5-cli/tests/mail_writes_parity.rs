@@ -1222,8 +1222,7 @@ fn big_file(r: &Rig) {
 /// Linux refuses past 128 KiB: `python3` never starts (exit 126,
 /// `Argument list too long`) and nothing is sent. The binary sends it
 /// once and prints the answer. Elsewhere (macOS: one limit for the whole
-/// environment) both send it. The named difference `env-answer-large`
-/// (K2's ruling).
+/// environment) both send it. The named difference `env-answer-large`.
 #[test]
 fn a_large_body() {
     let rig = Rig::new(VERB, "large");

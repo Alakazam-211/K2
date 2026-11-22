@@ -8,7 +8,7 @@
 //!
 //! The binary hands these to the shell: a number past bash's 64-bit
 //! integers where `[ … -lt … ]` reads one (bash's own error lines, with
-//! its script's path in them: the plan's D6).
+//! its script's path in them: bash's own edges).
 
 use super::core::{
     self, fits_bash, is_uint, print, run_env, usage, At, End, Plan, Py, Secs, Within, MODULE, R,

@@ -178,7 +178,7 @@ fn recording_policy_lines_say_the_brand_s_name() {
 }
 
 /// A value flag as the last word: the shell's `_need_value` line. One
-/// with an empty value: one plain line, exit 2 (K2's D6), where the shell
+/// with an empty value: one plain line, exit 2, where the shell
 /// stops on its own `${2:?…}` line.
 #[test]
 fn a_value_flag_with_no_value_is_the_d6_line() {

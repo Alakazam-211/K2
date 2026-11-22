@@ -11,7 +11,7 @@
     --root DIR                                   read the tree at DIR (the gate's own bite test)
 
 A form is one census entry, or its --json twin when the entry takes
---json (K2's R4 ruling 7): `whoami` and `whoami --json`.
+--json: `whoami` and `whoami --json`.
 
 The link: a parity case says which forms it drives with a tag on the
 line just above it, one form per tag, the form spelled as here:
@@ -36,7 +36,7 @@ or a form whose last case or tag is gone), and when a form the ceiling
 lists now has a case (run --write so the ceiling falls with it). The
 ship bar is an empty ceiling.
 
-K5-only forms (crates/k5-cli/tests/data/k5_only_forms.tsv, K2's ruling)
+K5-only forms (crates/k5-cli/tests/data/k5_only_forms.tsv)
 are census forms the shell has no answer of its own for: they are out
 of the count, and each names the unit tests that cover it. The gate
 fails when a listed form is no census form, when a named test is not a

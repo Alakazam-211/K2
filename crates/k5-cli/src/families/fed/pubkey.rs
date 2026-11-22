@@ -2,7 +2,7 @@
 //! public key, derived as the shell does it (`cli/src/federation.sh`):
 //! `openssl pkey -pubout` for the PEM, and the SHA-256 of its DER form
 //! (the shell's `shasum -a 256`, here in Rust) for the fingerprint.
-//! openssl is an OS tool (K2's D8); the binary starts it as the shell
+//! openssl is an OS tool; the binary starts it as the shell
 //! does, with the key file's path on its command line and nothing else.
 
 use super::super::Shown;

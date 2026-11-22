@@ -649,8 +649,8 @@ fn words(w: Vec<&'static str>) -> &'static [&'static str] {
     Box::leak(w.into_boxed_slice())
 }
 
-/// `talk ws@https://<host>` through the person's proxy (K2's ruling on
-/// the shared transport): Basic in the CONNECT, the host's token only
+/// `talk ws@https://<host>` through the person's proxy (the shared
+/// transport's rule): Basic in the CONNECT, the host's token only
 /// inside the tunnel, the same screen on both sides.
 #[test]
 fn talk_at_a_remote_host_through_the_proxy() {

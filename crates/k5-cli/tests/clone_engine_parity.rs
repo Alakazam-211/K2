@@ -22,8 +22,8 @@
 //! sides), the remote's name [`tunnel::HOST`] (never resolves) and this
 //! server's `localhost`; the person's proxy is a recording CONNECT proxy
 //! that tunnels to the front (or refuses). Both sides read the proxy as
-//! the shell's Python does and write `http.client`'s CONNECT head (K2's
-//! ruling: one proxy rule for every urllib-style family), so the heads
+//! the shell's Python does and write `http.client`'s CONNECT head (one
+//! proxy rule for every urllib-style family), so the heads
 //! are compared byte for byte (bash's as Python 3.12 writes them: the
 //! named difference python-connect-host), besides counted and read for
 //! secrets. A bite runs
@@ -503,7 +503,7 @@ impl CRig {
                     want.remote.join("\n----\n"),
                 ),
                 ("clone-tmp", got.tmp.join("\n"), want.tmp.join("\n")),
-                // http.client's CONNECT on both sides (K2's ruling: one
+                // http.client's CONNECT on both sides (one
                 // proxy rule), bash's as Python 3.12 writes it.
                 (
                     "CONNECT heads",

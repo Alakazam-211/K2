@@ -1,5 +1,5 @@
-//! The person's proxy as the shell's embedded Python reads it (K2's
-//! ruling for the urllib-shaped families): `_K2_PY_PROXY_RULE` installs a
+//! The person's proxy as the shell's embedded Python reads it (the rule
+//! for the urllib-shaped families): `_K2_PY_PROXY_RULE` installs a
 //! `urllib.request.ProxyHandler()` with the environment's settings, and
 //! skips it for a URL `k2_direct` calls this computer's. For an `https://`
 //! daemon on another machine, urllib then tunnels through the proxy with

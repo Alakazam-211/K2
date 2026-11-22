@@ -27,7 +27,7 @@
 //! The route table's `board` row is the family's; a word that is not
 //! UTF-8, `HOOK_SOCK` with a `CODEX_` variable, a port curl won't take and
 //! a `python3` the binary can't tell still go to the shell (the edge
-//! hand-backs every family keeps until D6). An answer that is not UTF-8 is
+//! hand-backs every family keeps). An answer that is not UTF-8 is
 //! read with U+FFFD for each bad byte, as [`super::inbox`]; so is what
 //! `apply` reads on stdin.
 

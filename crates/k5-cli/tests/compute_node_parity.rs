@@ -845,7 +845,7 @@ fn compute_node_admin() {
         // covers: compute node take-owner
         // With no terminal to open, the binary hands take-owner to the
         // shell, whose /dev/tty redirect error names the script: no row
-        // can compare that line (the D6 class).
+        // can compare that line (one of bash's own edges).
         words("take-owner, no node", &["node", "take-owner"], 2),
         words("take-owner, a flag", &["node", "take-owner", "--yes"], 2),
         words(

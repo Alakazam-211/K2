@@ -13,7 +13,7 @@
 //! Text on stdin that is not UTF-8 is held as Python's environment holds
 //! it (each bad byte its surrogate escape), so the request's
 //! `dumps(body).encode()` raises as the shell's does, nothing sent. Where
-//! this differs from the shell (K2's ruling): text on stdin with a NUL.
+//! this differs from the shell: text on stdin with a NUL.
 //! Bash's `$(…)` drops it and, from bash 4.4, warns on stderr naming its
 //! own line; this keeps the text as read, the NUL sent as JSON's
 //! `\u0000`, never cut there (`scripts/cli-parity.sh`'s named difference
@@ -116,8 +116,8 @@ fn text(py_: &mut Py) -> Value {
     sv(py_.env("M_TEXT"))
 }
 
-/// `$(cat)`'s trailing newlines dropped. A NUL stays where it was (K2's
-/// ruling; bash drops it: the named difference `nul-in-stdin-text`).
+/// `$(cat)`'s trailing newlines dropped. A NUL stays where it was
+/// (bash drops it: the named difference `nul-in-stdin-text`).
 fn stdin_text(mut all: Vec<u8>) -> Vec<u8> {
     while all.last() == Some(&b'\n') {
         all.pop();
@@ -482,7 +482,7 @@ fn footer_change_py(py_: &mut Py, set: bool) -> R<()> {
 mod tests {
     use super::*;
 
-    /// K2's ruling: a NUL on stdin stays in the text, sent as `\u0000`;
+    /// A NUL on stdin stays in the text, sent as `\u0000`;
     /// only `$(cat)`'s trailing newlines go.
     #[test]
     fn a_nul_on_stdin_stays_in_place() {

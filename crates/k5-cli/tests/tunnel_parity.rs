@@ -18,7 +18,7 @@
 //! - What the binary hands to the shell: help with `-h` or `--help` in a
 //!   place that is not a help page. (A value flag as the last word is the
 //!   shell's too; its `$2: unbound variable` line names the script's path,
-//!   which differs between the two sides, so no row here: K2's D6 class.)
+//!   which differs between the two sides, so no row here: one of bash's own edges.)
 
 #![cfg(unix)]
 

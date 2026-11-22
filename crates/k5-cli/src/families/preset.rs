@@ -10,7 +10,7 @@
 //!    compact JSON on stderr (`_preset_err "usage" …`), exit 2, nothing
 //!    sent.
 //! 3. `_preset_py`, a `python3 -` block with its own urllib client
-//!    ([`crate::transport::urllib`], K2's ruling D4): `GET
+//!    ([`crate::transport::urllib`]): `GET
 //!    /cli/presets/list` (every verb but `add` resolves its preset there
 //!    first), then the verb's POST, each `urlopen(…, timeout=30)` once.
 //!    Its errors are compact JSON on stderr: exit 4 for `not_found` and

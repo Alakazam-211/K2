@@ -32,7 +32,7 @@
 //! about 1 MiB in all on macOS) stops bash there ("Argument list too
 //! long", exit 126); the binary reads the answers itself and prints the
 //! status. That is the named difference `env-answer-large`
-//! (`scripts/cli-parity.sh`), K2's ruling.
+//! (`scripts/cli-parity.sh`).
 //!
 //! `publish` ([`Run::publish`], [`publish`]): serve on and its port, the
 //! claim check (`cli_send cli_post`), then the Connect steps through the
@@ -47,7 +47,7 @@
 //!
 //! `K2_CONNECT_BASE` with no scheme, or plain `http://` to a host that is
 //! not this computer, is refused as publish starts, before any request:
-//! one line, exit 2 (K2's rulings; the shell does the same). Through the
+//! one line, exit 2 (the shell does the same). Through the
 //! person's proxy when one is set for an `https://` base
 //! ([`crate::transport::proxy`]).
 //!
@@ -56,7 +56,7 @@
 //! read or a control-plane base it doesn't send to itself, a word that is
 //! not UTF-8, a command line with `-h` or `--help` ([`crate::front`]),
 //! a `--workspace` folder that `cd` reads as an option or that `CDPATH`
-//! would move (bash's own edges, D6), a port that is set but is no port
+//! would move (bash's own edges), a port that is set but is no port
 //! curl takes, and a `python3` the binary can't tell. An answer that is
 //! not UTF-8 is read with U+FFFD for each bad byte, as
 //! [`super::inbox`].
@@ -372,7 +372,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     settings.port_text.as_deref().and_then(curl_port)?;
     let mut connect = Connect::default();
     if matches!(form, Form::Ask(Verb::Publish, _)) {
-        // K2's rulings on the control plane's base, as publish starts and
+        // The rules on the control plane's base, as publish starts and
         // before any request: no scheme, or plain http to another machine,
         // is refused.
         if let Some(line) = base_refusal(&connect_base()) {
@@ -422,7 +422,7 @@ fn connect_base() -> String {
         )
 }
 
-/// K2's rulings on `K2_CONNECT_BASE` (the shell checks the same, first):
+/// The rules on `K2_CONNECT_BASE` (the shell checks the same, first):
 /// a base with no scheme is refused (curl would guess `http://` and send
 /// the token there), and so is plain `http://` to a host that is not a
 /// loopback literal (a token goes to another machine over https only;

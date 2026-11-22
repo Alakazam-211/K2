@@ -544,7 +544,7 @@ fn a_proxy_that_never_answers_is_a_connect_timeout() {
 }
 
 /// The shell's Python reads the variables as urllib's
-/// `getproxies_environment` does (K2's ruling for the urllib families):
+/// `getproxies_environment` does:
 /// any spelling ending in `_proxy`, the lower-case one winning and an
 /// empty lower-case one taking the key away; `all_proxy` never serves an
 /// https request.

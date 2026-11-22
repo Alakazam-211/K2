@@ -19,7 +19,7 @@
 //! (`--room`, `--after`, `--limit`, `--recording`, `--call`, `--notice`,
 //! `--require-recording`, `--start-level`) as the last word or with an
 //! empty value (the shell stops on `${2:?…}` with a line naming its own
-//! path: the D6 class, until its native line is ruled); `set rooms` with
+//! path: one of bash's own edges); `set rooms` with
 //! a count longer than 18 digits (the shell's `test` can't read it); a
 //! variable `_compute_fail` or `_compute_json` reads from the environment
 //! ([`self::sew::env_shell`]); and the forms every family hands back.

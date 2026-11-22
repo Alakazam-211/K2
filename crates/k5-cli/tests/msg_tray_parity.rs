@@ -655,7 +655,7 @@ fn tray_value_flag_last_is_the_d6_line() {
 }
 
 /// The tray's upload goes to this machine's daemon, which never goes
-/// through a proxy (K2's ruling on the shared transport): with every
+/// through a proxy (the shared transport's rule): with every
 /// proxy variable set and no no_proxy, both sides send the upload, the
 /// deliver and the delete to the daemon, and the proxy sees nothing.
 #[test]

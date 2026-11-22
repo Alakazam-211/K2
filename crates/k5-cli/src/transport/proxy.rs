@@ -1,5 +1,5 @@
 //! The person's proxy, for an `https://` request to another machine
-//! (K2's ruling on the shared transport): what curl 8.5 does with the
+//! (the shared transport's rule): what curl 8.5 does with the
 //! proxy variables, for the one kind of target that may use them.
 //!
 //! Which requests: ONLY a [`super::wire::Target::Tls`] to a host that is
@@ -32,13 +32,13 @@
 //!   request was sent. A proxy that refuses the connection is curl's 7
 //!   (tried again as any refused connect is), one whose name doesn't
 //!   resolve curl's 5, one that doesn't answer in time curl's 28.
-//! - A refused CONNECT (a 407, say) is final (K2's ruling): one CONNECT,
+//! - A refused CONNECT (a 407, say) is final: one CONNECT,
 //!   never tried again, curl 8.5's exit 56. A newer curl (8.23) exits 7
 //!   there, which the shell's `_k2_curl` tries 4 times: the named
 //!   difference curl-version-proxy-exit (`scripts/cli-parity.sh`).
 //!
 //! A proxy URL's user and password (`http://user:pass@proxy:port`) are
-//! allowed (K2's ruling): no refusal and no warning. They are the
+//! allowed: no refusal and no warning. They are the
 //! person's own credential for their proxy, sent only to it, in the
 //! CONNECT head; the token rides inside the tunnel, never to the proxy.
 //!

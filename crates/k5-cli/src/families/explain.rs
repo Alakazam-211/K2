@@ -171,7 +171,7 @@ pub const KIT_ROUTE_SINCE: &str = "0.46.17";
 /// After a 403 on the cell socket, `_explain_kit`'s look at the daemon's
 /// version: a daemon before [`KIT_ROUTE_SINCE`] answers the route so on
 /// the socket (it isn't an agent verb there), and so does a real refusal
-/// (K2's ruling: the 403 alone decides nothing). The version from
+/// (the 403 alone decides nothing). The version from
 /// `/boot-status` on `127.0.0.1` at the settings' port, as
 /// `_update_daemon_version` reads it ([`super::update::daemon_version`]):
 /// true only for one older than [`KIT_ROUTE_SINCE`]; no answer or no
@@ -261,7 +261,7 @@ fn py_exit(x: Option<&Value>, stderr: &mut String) -> Exit {
 
 /// The line for a server from before [`KIT_ROUTE`] (it answers 404 or
 /// 405, or 403 on the cell socket with an older version): no fallback to
-/// another route (K2's ruling).
+/// another route.
 pub const OLDER_SERVER: &str = concat!(
     "This ",
     product_name!(),

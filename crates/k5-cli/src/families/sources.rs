@@ -26,7 +26,7 @@
 //! verb (its usage error), a word that is not UTF-8, `HOOK_SOCK` set with a `CODEX_` variable exported, a
 //! port curl won't take, a `python3` the binary can't tell, a `PWD` bash
 //! would tidy, and a duration bash's own arithmetic fails on (it names
-//! the script's path: D6).
+//! the script's path: one of bash's own edges).
 //!
 //! Where the shell's Python raises, this prints a Python 3.12 traceback,
 //! as [`super::sessions`] says; its frames may differ, its exception's

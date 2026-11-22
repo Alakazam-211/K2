@@ -20,7 +20,7 @@
 //!   no temp folder (Linux; macOS's mktemp falls back, so it is native
 //!   there), help. A duration that is none goes to the shell too;
 //!   bash's own arithmetic error names the script's path there, so it has
-//!   no row until D6's named difference.
+//!   no row until it has a named difference.
 
 #![cfg(unix)]
 

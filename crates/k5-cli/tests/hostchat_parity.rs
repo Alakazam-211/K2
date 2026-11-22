@@ -787,7 +787,7 @@ fn hostchat_hands_these_to_the_shell() {
 /// line, "Error: <flag> takes a value", and exit 2. With an empty value:
 /// bash stops on its own `${2:?…}` line (`<path to cli/k2>: line <n>: 2:
 /// <flag> <what>`) and exits 1; the binary prints one plain line and
-/// exits 2 (K2's D6, `scripts/cli-parity.sh`'s named difference
+/// exits 2 (`scripts/cli-parity.sh`'s named difference
 /// `edge-usage-exit-2`). Neither sends anything.
 #[test]
 fn hostchat_value_flag_with_no_value_is_the_d6_line() {
@@ -897,7 +897,7 @@ fn hostchat_value_flag_with_no_value_is_the_d6_line() {
         let name = c.name;
         // The flag as the last word: both print the shell's _need_value
         // line and exit 2. An empty value: bash's own `${2:?…}` line and
-        // exit 1, the binary's D6 line and exit 2.
+        // exit 1, the binary's one plain line and exit 2.
         let last = args.last() == Some(&flag);
         rig.prepare(Side::Bash, &c);
         let b = rig.run(true, &c);

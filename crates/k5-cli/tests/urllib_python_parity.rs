@@ -281,8 +281,8 @@ fn python(row: &Row, port: u16, scratch: &std::path::Path) -> String {
 
 /// The python3 the rows run: older than 3.10? There `socket.timeout` is
 /// its own class, so a timeout prints as `socket.timeout`; from 3.10 on
-/// it is `TimeoutError`, which the adapter always prints (the coordinator's
-/// ruling: the binary has no Python version to copy).
+/// it is `TimeoutError`, which the adapter always prints (the binary has
+/// no Python version to copy).
 fn python_before_310(scratch: &std::path::Path) -> bool {
     let out = Command::new("python3")
         .args([

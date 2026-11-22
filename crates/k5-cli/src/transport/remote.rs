@@ -107,8 +107,8 @@ pub fn routed_with(host: &str, env: impl Fn(&str) -> Lookup) -> Option<Base> {
 
 /// The person's proxy for a request a Python block's urllib sends to a
 /// host it names (clone's engine), read as the shell's Python reads it
-/// (K2's ruling: one proxy rule for every urllib-style family, which
-/// supersedes R4's curl rules for clone): plain http never uses a proxy;
+/// (one proxy rule for every urllib-style family, which
+/// supersedes the curl rules for clone): plain http never uses a proxy;
 /// then `k2_direct` on `host` (the one urllib connects to, brackets off,
 /// in any case) and urllib's reading of the variables and `no_proxy` for
 /// `netloc` (urllib's `req.host`: the URL's host and port as written,
@@ -131,7 +131,7 @@ pub fn python_proxy_env() -> proxy::python::Env {
 }
 
 /// The route of a request the shell's Python blocks send to the daemon at
-/// `K2_HOST=https://<host>` (K2's ruling: bash's Python tunnels through
+/// `K2_HOST=https://<host>` (bash's Python tunnels through
 /// the person's proxy, and the binary does too, reading the settings as
 /// that Python reads them): `k2_direct` first (this computer never uses
 /// a proxy), then urllib's `getproxies_environment` and
@@ -153,7 +153,7 @@ pub fn plain_http_refusal(b: &Base, url: &str) -> Option<String> {
     (!b.tls && !literal_loopback(&b.host)).then(|| plain_http_line(url))
 }
 
-/// K2's ruling (with the Steward's): this computer is judged by the URL
+/// The rule: this computer is judged by the URL
 /// AS WRITTEN, never by resolving a name (DNS rebinding): an IPv4 literal
 /// in 127.0.0.0/8, the IPv6 literal `::1` (bracketed or not), or exactly
 /// the name `localhost`. `x.localhost`, `LOCALHOST`, `localhost.` and

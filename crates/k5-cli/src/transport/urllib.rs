@@ -2,7 +2,7 @@
 //! `urllib.request.urlopen(k5_request(req), timeout=t)` sends and what it
 //! hands back, for the families whose shell side is a `python3` block
 //! (`_db_py`, `_cal_py`, `_mail_py`, `_project_py`, `_preset_py`,
-//! feedback's, agent's and clone's `call`). K2's ruling D4: no new crate,
+//! feedback's, agent's and clone's `call`). No new crate,
 //! the binary's own loopback transport ([`super::wire`]'s address rules),
 //! with Python's request and Python's exceptions.
 //!
@@ -11,9 +11,9 @@
 //! Always TCP to the shell's `BASE_URL` (urllib has no cell socket):
 //! `http://HOST:PORT`, never a proxy (`_K2_PY_PROXY_RULE`: plain http is
 //! direct), or, for `HOST=https://<name>`, TLS to `<name>` on the port
-//! ([`super::tls`], K2's ruling D5), as the shell's Python opens its
+//! ([`super::tls`]), as the shell's Python opens its
 //! `https://` `BASE_URL`: through the person's proxy where that Python
-//! goes through it (K2's ruling: the shared CONNECT path,
+//! goes through it (the shared CONNECT path,
 //! [`super::proxy::tunnel_head`], with the settings read and the CONNECT
 //! head written as urllib does, [`super::proxy::python`]), the
 //! certificate checked inside the tunnel, the token only inside it. A URL
@@ -1432,7 +1432,7 @@ fn tls_raised(f: &super::wire::Failure) -> Raised {
 /// One `urllib.request.urlopen(req, timeout=...)` of `place` and the body
 /// read after it, for a Python block that talks to a server that is not
 /// the daemon (the Connect account server): plain TCP, or TLS over it for
-/// `https://` ([`super::tls`], K2's ruling D5), with
+/// `https://` ([`super::tls`]), with
 /// [`encode_plain`]'s request. Never a proxy: a caller hands a URL the
 /// person's proxy would carry to the shell. The answer and the
 /// exceptions are [`Opener::open`]'s.

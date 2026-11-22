@@ -30,7 +30,7 @@
 //!    ([`conf::fetch`]).
 //! 5. The verb's own Python: a printer of the conf (`conf`, `get`), of
 //!    `/cli/agent/list` (`list`), or a urllib POST of its own ([`Opener`],
-//!    K2's ruling D4: `/cli/agent/retire`, `/cli/workspace/ensure-pinned-chat`).
+//!    `/cli/agent/retire`, `/cli/workspace/ensure-pinned-chat`).
 //! 6. The EXIT trap's lines ([`crate::prelude::Closing`]).
 //!
 //! Answers are read from the response body, never handed on in the

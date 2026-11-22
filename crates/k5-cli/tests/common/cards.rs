@@ -5,8 +5,8 @@
 //! arguments: `cli/k2` and the binary must send the same request (or
 //! none) and print the same page with the same exit.
 //!
-//! With no `python3` the binary's probe reads the daemon's answer itself
-//! (K2's ruling), so two rows answer otherwise there, on purpose: a
+//! With no `python3` the binary's probe reads the daemon's answer itself,
+//! so two rows answer otherwise there, on purpose: a
 //! `PYTHON*` setting and a locale that is not UTF-8 (no Python reads the
 //! answer, so neither counts). Each reads the daemon's "on" as on
 //! ([`check_without_python3`]).

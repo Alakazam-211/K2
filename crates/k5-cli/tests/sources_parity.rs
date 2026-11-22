@@ -835,7 +835,7 @@ fn sources_refusals_and_no_answer() {
 
 /// `simulate` and `refresh`. (Every verb is native now; the shell's
 /// own arithmetic errors still go to it, but they name the script's path,
-/// so no row can compare them: D6.)
+/// so no row can compare them: bash's own edges.)
 #[test]
 fn sources_simulate_refresh_and_the_shell() {
     let rig = Rig::new(VERB, "sim");

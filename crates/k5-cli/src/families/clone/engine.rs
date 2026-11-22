@@ -276,7 +276,7 @@ fn loads_or_error(raw: &[u8]) -> Value {
     }
 }
 
-/// R10's refusal: a URL the binary doesn't send to (nothing sent).
+/// The refusal for a URL the binary doesn't send to (nothing sent).
 pub fn unsendable(base: &str) -> Stop {
     Stop::fail(
         "usage",
@@ -286,7 +286,7 @@ pub fn unsendable(base: &str) -> Stop {
 }
 
 /// The person's proxy for a request to `t`, read as the shell's Python
-/// reads it (K2's ruling: one proxy rule for every urllib-style family),
+/// reads it (one proxy rule for every urllib-style family),
 /// or the refusal for a proxy setting the binary doesn't read (nothing
 /// sent).
 pub fn route_of(t: &pyurl::Target, base: &str) -> E<Option<crate::transport::proxy::Proxy>> {
@@ -294,8 +294,8 @@ pub fn route_of(t: &pyurl::Target, base: &str) -> E<Option<crate::transport::pro
     match crate::transport::remote::python_route(&t.host, &t.host_header, t.tls) {
         Route::Direct => Ok(None),
         Route::Via(p) => Ok(Some(p)),
-        // A proxy URL of another scheme is named (the Steward's line, the
-        // named difference python-proxy-other-scheme).
+        // A proxy URL of another scheme is named (the named difference
+        // python-proxy-other-scheme).
         Route::Shell => Err(Stop::fail(
             "usage",
             crate::transport::proxy::python::unsupported_reason(

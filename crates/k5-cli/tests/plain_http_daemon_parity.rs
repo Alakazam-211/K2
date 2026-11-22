@@ -1,4 +1,4 @@
-//! The daemon's host (Rosson's ruling, through the Steward; the shell's
+//! The daemon's host (the shell's
 //! prelude, `cli/src/cli-tools-policy.sh` after `_k2_daemon_base`):
 //!
 //! - `K2_HOST` that isn't this computer as written is allowed over plain
@@ -10,7 +10,7 @@
 //!   not, a Tailscale host too.
 //! - `K2_HOST=https://<name>` reaches the daemon over TLS, through the
 //!   person's proxy for a name that isn't this computer (its user and
-//!   password are allowed: K2's ruling), with no warning. A proxy that
+//!   password are allowed), with no warning. A proxy that
 //!   refuses the tunnel (407) is final: one CONNECT, curl 8.5's exit 56.
 //!
 //! The stub daemon listens on 127.0.0.1; `K2_HOST=0.0.0.0` reaches it
@@ -417,7 +417,7 @@ fn preset_list_over_tls_to_an_https_host() {
 
 /// `K2_HOST=https://<a name>` with the person's proxy: the shell's Python
 /// tunnels through it as `http.client` does, and so does the binary's
-/// urllib adapter (K2's ruling: the shared CONNECT path, the settings read
+/// urllib adapter (the shared CONNECT path, the settings read
 /// as urllib reads them): the same CONNECT head byte for byte, with no
 /// `Proxy-Authorization` when the proxy URL has no user part, and the
 /// token inside the tunnel alone. The other families and the proxy's own
@@ -509,7 +509,7 @@ fn whoami_through_a_proxy_that_refuses_the_tunnel() {
     }
 }
 
-// The shared client's CONNECT tunnel (the Steward's conditions for it):
+// The shared client's CONNECT tunnel (the conditions for it):
 // the certificate is checked inside the tunnel, `no_proxy` and loopback
 // go direct, and a proxy that won't tunnel is final. The daemon's name
 // here is `0.0.0.0`: no loopback name, so it is proxied, yet a direct

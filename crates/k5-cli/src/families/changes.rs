@@ -32,7 +32,7 @@
 //! a word that is not UTF-8, `HOOK_SOCK` with a `CODEX_` variable, a port
 //! curl won't take, a `python3` the binary can't tell, and a
 //! `--workspace` folder `cd` reads as an option or one `CDPATH` would
-//! move (bash prints its own error there, D6). An answer that is not
+//! move (bash prints its own error there). An answer that is not
 //! UTF-8 is read with U+FFFD for each bad byte.
 
 pub mod diff;

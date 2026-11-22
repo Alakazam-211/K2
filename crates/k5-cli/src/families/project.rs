@@ -16,7 +16,7 @@
 //!    sent. `msg -` reads its text from stdin (`$(cat)`: NULs and trailing
 //!    newlines dropped).
 //! 4. `_project_py`, a `python3 -` block with its own urllib client
-//!    ([`crate::transport::urllib`], K2's ruling D4): the verb's GETs and
+//!    ([`crate::transport::urllib`]): the verb's GETs and
 //!    POSTs of `/cli/project-group/*` (and `/cli/agent-access/set` for
 //!    `access`), each `urlopen(…, timeout=30)` once, and its lines. Its
 //!    errors are compact JSON on stderr: exit 4 for a name that can't be

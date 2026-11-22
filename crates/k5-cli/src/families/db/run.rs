@@ -4,7 +4,7 @@
 //! process's place (`exec "$@"`) with the DSN in its environment as
 //! `NAME` (`DATABASE_URL` by default).
 //!
-//! The DSN in the child's environment is the feature (K2's ruling). It is
+//! The DSN in the child's environment is the feature. It is
 //! never on argv (ours or the child's), never printed, never in a log
 //! line.
 //!

@@ -12,10 +12,10 @@ then schema-tail.sh's). Columns:
 
   entry    the entry's name
   forms    2 when the entry takes --json (the JSON form and the text form),
-           else 1. A verb form is one of these (K2's ruling: the target
+           else 1. A verb form is one of these (the target
            counts forms).
   where    the bash code that answers it, anchored on the function and the
-           arm word, never a line number (K2's ruling: an edit elsewhere in
+           arm word, never a line number (an edit elsewhere in
            the file does not move the row): cli/src/<file>:<function>:<words>,
            the case arm of its last word, found from the router's arm for
            its first word through each dispatching function (`cmd_*`, or a
@@ -35,9 +35,9 @@ then schema-tail.sh's). Columns:
            (the first that applies, in this order):
              out:no-arm       the router has no arm for it
              out:no-request   it sends nothing (help, local, a page)
-             out:python-client  mail, calendar, hostmail, db (K2's ruling 10)
+             out:python-client  mail, calendar, hostmail, db
              out:open-tool    an open tool: bash sends the owner token over
-                              TCP in a K2 terminal (COMPAT-58; ruling 4)
+                              TCP in a K2 terminal (COMPAT-58)
              out:secret       it reads a secret
              out:prompt       it asks the person (read)
              out:confirm      a confirm token or step

@@ -487,7 +487,7 @@ fn a_kit_id_is_the_kit_s_explain() {
     for c in native {
         rig.check(&c);
         let (out, sent) = rig.binary(&c, false);
-        // K2's ruling: an older daemon (no such route) is one line, exit 1.
+        // An older daemon (no such route) is one line, exit 1.
         if c.name.starts_with("an older daemon") {
             let line = format!("{}\n", k5_cli::families::explain::OLDER_SERVER);
             assert_eq!(out.stderr, line, "{}", c.name);
@@ -542,7 +542,7 @@ fn a_kit_id_is_the_kit_s_explain() {
     rig.check(&guard);
 }
 
-/// A 403 on the cell socket (K2's ruling): a daemon before 0.46.17 answers
+/// A 403 on the cell socket: a daemon before 0.46.17 answers
 /// the kit route so there (it isn't an agent verb on the socket), and so
 /// does a real refusal. The 403 alone decides nothing: one GET of
 /// `/boot-status` on loopback, with no credential, and only a version

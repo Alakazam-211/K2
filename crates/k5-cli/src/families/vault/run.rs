@@ -3,7 +3,7 @@
 //! where its run helper is (`GET /cli/vault/run-helper`), then the helper
 //! in this process's place (`exec`), with only names on its argv.
 //!
-//! K2's ruling 1b, which this follows:
+//! The rule this follows:
 //!
 //! - the passport reaches the helper on fd 3 (`--token-fd 3`), a pipe,
 //!   never in its environment: `K2_HOOK_TOKEN`, `K5_HOOK_TOKEN` and

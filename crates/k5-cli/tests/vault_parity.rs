@@ -147,7 +147,7 @@ fn help_never_acts() {
     }
 }
 
-/// Help never acts (K2's ruling), even where a value flag would take the
+/// Help never acts, even where a value flag would take the
 /// word: `_vault_fetch` checks every word first (`_wants_help`), so
 /// `--json --help` prints the fetch help, exit 0, and sends NO request
 /// (it used to send the fetch with `--help` as its body). The binary

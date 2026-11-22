@@ -3,7 +3,7 @@
 //! daemon names. Each side must print the same, exit the same, send the
 //! same requests and leave the same helper log: the helper's argv, the
 //! passport it read on fd 3, and whether any passport name or value is
-//! in its environment. K2's ruling 1b, the binary's side of it:
+//! in its environment. The rule, the binary's side of it:
 //!
 //! - the passport reaches the helper on fd 3, never in its environment
 //!   (the log, and the rig's spies: the helper's own children see its

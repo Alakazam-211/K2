@@ -58,7 +58,7 @@ fn its_spec_rows_are_the_table_s() {
     assert!(text.lines().nth(1) == Some(head.as_str()), "{head}");
 }
 
-/// K2's ruling: a row is anchored on the function and the arm word, never
+/// A row is anchored on the function and the arm word, never
 /// a line number, so an edit elsewhere in a file moves no row. `where` is
 /// `-` or `cli/src/<file>:<function>:<words>`, with a `~` when no arm names
 /// the last word.

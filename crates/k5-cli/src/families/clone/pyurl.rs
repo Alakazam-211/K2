@@ -24,7 +24,7 @@
 //!   ...')`, raised out of `urlopen` (a traceback). Brackets around the
 //!   host are dropped for the connect and the certificate's name.
 //!
-//! What the binary refuses instead (K2's ruling R10, a clear usage line,
+//! What the binary refuses instead (a clear usage line,
 //! nothing sent; the shell's Python would try): a byte outside printable
 //! ASCII or a blank anywhere in the URL or the decoded host, and an empty
 //! host before a port. A remote server's port outside 1 to 65535 never
@@ -53,7 +53,7 @@ pub enum Miss {
     NoHost,
     /// An exception out of `urlopen`, as `Class: message`.
     Raised(String),
-    /// A form the binary refuses (R10).
+    /// A form the binary refuses.
     Unsendable,
 }
 
@@ -211,7 +211,7 @@ pub fn port_text(url: &str) -> String {
     }
 }
 
-/// Would any request to `base` be refused by the binary (R10)? Checked
+/// Would any request to `base` be refused by the binary? Checked
 /// once, before anything is sent: a route the engine adds never makes a
 /// sendable base unsendable.
 pub fn unsendable(base: &str) -> bool {

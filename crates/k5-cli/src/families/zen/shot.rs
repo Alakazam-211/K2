@@ -4,7 +4,7 @@
 //! (`k2-widget-shot.mjs`, run by Node with Playwright's WebKit) renders it
 //! and writes the PNG.
 //!
-//! The runner stays an outside program, as git does (K2's ruling D8): the
+//! The runner stays an outside program, as git does: the
 //! binary finds it where the shell does, beside the program people ran
 //! ([`crate::fallthrough::script_dir_for`], the folder the front hands
 //! the shell in `K5_CLI_SCRIPT_DIR`), and runs it with the `node` on

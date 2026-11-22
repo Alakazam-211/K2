@@ -20,7 +20,7 @@
 //! 6. Every step's line ([`emit`]), or the JSON; exit non-zero when a
 //!    step failed.
 //!
-//! Every call is the block's own urllib call (K2's ruling D4) with the
+//! Every call is the block's own urllib call with the
 //! shell's credential: outside a session `$TOKEN` (the owner token, or the
 //! token set) for every route. In a session (a cell socket set) the hire
 //! acts as this agent ([`session_stop`], `_agent_hire_session`): with no

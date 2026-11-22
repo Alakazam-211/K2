@@ -32,7 +32,7 @@
 //! `K2_HOST=https://<name>`), the remote URL as typed (a query, a
 //! fragment, a `%` escape), and the person's proxy for an `https://`
 //! server that isn't this computer (the shared CONNECT path, by curl's
-//! rules: K2's ruling R4). Refused instead, nothing sent (R10): a URL
+//! rules). Refused instead, nothing sent: a URL
 //! with a byte outside printable ASCII, an empty host, and a proxy
 //! setting the binary doesn't read (the named differences
 //! clone-url-not-printable, clone-url-empty-host and clone-proxy-unread
@@ -568,7 +568,7 @@ fn daemon_base(host: &str, port: &str) -> String {
 }
 
 #[cfg(unix)]
-/// Before anything is sent to `base`: R10's refusal for a URL the binary
+/// Before anything is sent to `base`: the refusal for a URL the binary
 /// doesn't send to, and the refusal for a proxy setting it doesn't read.
 /// A port Python can't read, or no host, is Python's own failure at the
 /// request, as the shell's engine meets it.

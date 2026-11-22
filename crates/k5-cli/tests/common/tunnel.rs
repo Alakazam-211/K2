@@ -1,6 +1,6 @@
 //! A recording proxy and a TLS stub server, for the rows that send a
-//! token to another machine through the person's proxy (K2's ruling on
-//! the shared transport).
+//! token to another machine through the person's proxy (the shared
+//! transport's rule).
 //!
 //! - [`Pki`]: a throwaway CA, written as PEM for `SSL_CERT_FILE` (both
 //!   sides trust it that way), and a server certificate signed by it, for

@@ -1,5 +1,5 @@
 //! `cmd_agent_retire` and `cmd_agent_restart` (`cli/src/agent.sh`): the
-//! conf, then one urllib POST of the block's own (K2's ruling D4).
+//! conf, then one urllib POST of the block's own.
 
 use super::conf::fetch;
 use super::{abs_user, at, cli, dumps, err_json, head, obj, product, py_strip, raised, s, str_or};

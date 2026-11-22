@@ -38,7 +38,7 @@
 //! 7. The EXIT trap's lines.
 //!
 //! The temp files (`mktemp`) and the upload body files are made with the
-//! system's `mktemp`, as the shell makes them (K2's D8): its own error
+//! system's `mktemp`, as the shell makes them: its own error
 //! line on a `TMPDIR` that can't be used.
 //!
 //! The shell answers itself (see [`parse`]): a file word starting with

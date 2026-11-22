@@ -775,7 +775,7 @@ fn leak_words(w: &[&str]) -> &'static [&'static str] {
 /// Help anywhere on a verb that changes something prints help and sends
 /// nothing; `publish` and a port curl won't take are the shell's. (A
 /// `--workspace` folder `cd` reads as an option is the shell's too, where
-/// bash prints its own error naming the script, D6: not compared here.)
+/// bash prints its own error naming the script: not compared here.)
 #[test]
 fn wiki_hands_these_to_the_shell() {
     let rig = Rig::new(VERB, "shell");
@@ -1272,7 +1272,7 @@ fn cp_case(
 }
 
 /// `wiki publish` calls the control plane itself through the person's
-/// proxy (K2's ruling on the shared transport): a throwaway CA trusted
+/// proxy (the shared transport's rule): a throwaway CA trusted
 /// through SSL_CERT_FILE on both sides, a recording proxy, and the
 /// control plane as a TLS stub under a name that never resolves.
 #[test]
@@ -1433,7 +1433,7 @@ fn dead_tcp_port() -> u16 {
     l.local_addr().unwrap().port()
 }
 
-/// K2's rulings on `K2_CONNECT_BASE`, checked as publish starts: no
+/// The rules on `K2_CONNECT_BASE`, checked as publish starts: no
 /// scheme, or plain http to a host that is not this computer, is one
 /// line and exit 2, with nothing sent. The bash side flips by itself
 /// once cli/k2 carries the fix (pending-bash-fix until then: the

@@ -17,7 +17,7 @@
 //! 3. `_feedback_detect_session` ([`detect_session`]); with
 //!    `TEST_FEEDBACK_DETECT=1` only its kind is printed.
 //! 4. The shell's Python, a `python3 -` block with its own urllib client
-//!    ([`crate::transport::urllib`], K2's ruling D4): the payload, one
+//!    ([`crate::transport::urllib`]): the payload, one
 //!    POST of `/cli/feedback/create` with the shell's `$TOKEN` as Bearer,
 //!    then the ticket's line, or with `--wait` a GET of
 //!    `/cli/feedback/show` every 2 s until it is answered, closed or the

@@ -5,7 +5,7 @@
 //! comes with none, when a tag names no form, and when the list is stale
 //! because a form gained a case. The ship bar is an empty list.
 //!
-//! K5-only forms (`tests/data/k5_only_forms.tsv`, K2's ruling) are out of
+//! K5-only forms (`tests/data/k5_only_forms.tsv`) are out of
 //! the count; each names the unit tests that cover it, and those must be
 //! `#[test]` fns in their files. A form leaves the count only by that list.
 

@@ -1,5 +1,5 @@
 # K5-only forms: the binary answers them and the shell has none of its own to compare (the
-# shell's `cli status` only points at the binary). K2's ruling: they are out of the parity
+# shell's `cli status` only points at the binary). They are out of the parity
 # coverage count (scripts/parity-coverage.py), and each names the unit tests that cover it,
 # as <file>::<test fn>, comma separated. Each must be a census form, and each test must exist.
 # A form leaves the coverage count only by this list: the gate fails when one leaves the census

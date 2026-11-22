@@ -1,4 +1,4 @@
-//! TLS for a server on another machine (K2's ruling D5): `https://` in
+//! TLS for a server on another machine: `https://` in
 //! the shell's `BASE_URL`, as curl makes the connection.
 //!
 //! rustls with the ring provider, over our own HTTP/1.1 client

@@ -61,7 +61,7 @@ fn server(acts: Vec<Act>) -> (u16, Arc<Mutex<Vec<Vec<u8>>>>) {
 
 /// The proxy variables the shell's Python reads, spelled so that only
 /// the transport's own files name them in full (the reader test in
-/// transport/client.rs).
+/// transport/client/tunnel.rs).
 const HTTPS_PROXY: &str = concat!("https", "_proxy");
 const NO_PROXY: &str = concat!("no", "_proxy");
 

@@ -401,7 +401,9 @@ pub const SKILL_VERSION_WORKSPACE: u32 = 66;
 /// `k2 app user rooms-ok`).
 /// v25 = 0.46.17: never raise or answer `vault.owner-confirm` (the owner's
 /// own terminal's vault confirm, answered on their phone).
-pub const SKILL_VERSION_PERMISSIONS: u32 = 25;
+/// v26 = 0.46.17: "LLM tokens" (`llm.tokens-refresh`; `access_expired` needs
+/// nothing).
+pub const SKILL_VERSION_PERMISSIONS: u32 = 26;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

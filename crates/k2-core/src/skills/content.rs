@@ -1553,6 +1553,26 @@ Focus groups are this server's sidebar groups of workspaces. `"#,
 
 (`focus-groups.create name=<name>`, `focus-groups.rename group=<group> to=<new name>`; `group=none` takes a workspace out of its group.) Run it as printed. The owner or an admin allows it, and the card makes exactly that change, once: don't run the command again. Each further change is its own card.
 
+## LLM tokens
+
+`"#,
+    cli_name!(),
+    r#" llm tokens list` and `"#,
+    cli_name!(),
+    r#" llm tokens status` are yours: each token's state, and `access_expired` when its short-lived access token has expired. That needs nothing: the token is still signed in, and its CLI renews it on its next run (the server default, or a token a chat is using), or "#,
+    product_name!(),
+    r#" within 30 minutes. `needs_login` needs a person to sign it in again: ask your human in your Thread. A recheck of the tokens (`"#,
+    cli_name!(),
+    r#" llm tokens refresh`) is a person's; yours is refused `owner_only` (exit 3) and ends with:
+
+    "#,
+    cli_name!(),
+    r#" permission request llm.tokens-refresh token=<id> --why "<what you need it for>"
+
+Run it as printed (without `token=` it rechecks every token). The owner or an admin allows it once, and the `[permission:]` turn says each token's state. Nothing is signed in, switched or shown. `"#,
+    cli_name!(),
+    r#" study llm-tokens`.
+
 ## Apps
 
 - App guests never see permission cards. Never tell a guest a switch, agent, server or request id; say an administrator was asked.
@@ -2651,6 +2671,10 @@ mod tests {
             // 0.46.17: focus groups are a person's; each change is a card.
             "k2 permission request focus-groups.assign group=<group> target=<workspace>",
             "focus_group_needs_person",
+            // 0.46.17: a person rechecks the LLM tokens; an expired access
+            // token needs nothing.
+            concat!(cli_name!(), " permission request llm.tokens-refresh token=<id> --why"),
+            "`access_expired`",
         ] {
             assert!(body.contains(must), "the k2-permissions skill must teach: {must}");
         }

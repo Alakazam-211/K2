@@ -23,10 +23,24 @@
 //!   a manager.
 //! - [`SKILL_VERSION_WORKSPACE`] — version tier for the loadable
 //!   `k2-cli` skill that ships with every workspace.
+//!
+//! **The brand is part of the key too.** The text names the command an
+//! agent runs and the software it talks about, two separate words of the
+//! brand file: the command (`[cli]`: its name and its aliases with their
+//! modes) and the product (`[names] product`). A file is current only when
+//! it was written for this build's two as well as this version, so a brand
+//! change alone rewrites every unmodified file, like a version bump. Their
+//! key is stamped as `skill_brand`, except for the brand every file was
+//! written under before the stamp existed (product `K2`, command `k2` with
+//! `k2so` silent): that build writes no stamp, so its files stay as they
+//! were, byte for byte, and a file with no stamp is read as written for
+//! that brand.
 
 use std::fs;
 use std::path::Path;
+use std::sync::OnceLock;
 
+use crate::brand::{AliasMode, CLI_ALIAS_MODES, CLI_NAME, PRODUCT_NAME};
 use crate::fs_atomic::atomic_write_str;
 
 // ── Managed region markers ────────────────────────────────────────────
@@ -425,6 +439,37 @@ pub fn skill_checksum_hex(bytes: &[u8]) -> String {
     format!("{:016x}", h)
 }
 
+// ── The brand's key ──────────────────────────────────────────────────
+
+/// The key of a brand's names as generated text uses them: the product's
+/// name, the command's name, then each alias with its mode, in the brand
+/// file's order. The product and the command are separate values (a
+/// partner's are unrelated words); a change to any of them is a new key.
+pub fn brand_names_key(product: &str, name: &str, aliases: &[(&str, AliasMode)]) -> String {
+    let mut text = format!("product={product};name={name}");
+    for (alias, mode) in aliases {
+        let mode = match mode {
+            AliasMode::Silent => "silent",
+            AliasMode::Notice => "notice",
+            AliasMode::Tombstone => "tombstone",
+        };
+        text.push_str(&format!(";alias={alias}:{mode}"));
+    }
+    skill_checksum_hex(text.as_bytes())
+}
+
+/// The key of the brand every skill was written under before the key was
+/// stamped: product `K2`, command `k2`, `aliases = [{ name = "k2so", mode =
+/// "silent" }]`. A file with no `skill_brand` line was written for it, and a
+/// build with it writes none.
+pub const UNSTAMPED_BRAND_KEY: &str = "2497424e3775b5de";
+
+/// This build's key: its brand's product and `[cli]` table.
+pub fn brand_key() -> &'static str {
+    static KEY: OnceLock<String> = OnceLock::new();
+    KEY.get_or_init(|| brand_names_key(PRODUCT_NAME, CLI_NAME, CLI_ALIAS_MODES))
+}
+
 // ── Wrap + parse ─────────────────────────────────────────────────────
 
 /// Build the final file contents for a generated skill. `body` is the
@@ -436,19 +481,39 @@ pub fn skill_checksum_hex(bytes: &[u8]) -> String {
 /// used by the harness-canonical writer to add `name:` / `description:`
 /// fields that Claude Code and Pi expect, without losing our upgrade
 /// metadata.
+///
+/// The frontmatter carries this build's brand key as `skill_brand`, unless
+/// it is [`UNSTAMPED_BRAND_KEY`].
 pub fn wrap_managed_skill(
     skill_type: &str,
     version: u32,
     body: &str,
     extra_frontmatter: Option<&str>,
 ) -> String {
+    wrap_managed_skill_for(skill_type, version, body, extra_frontmatter, brand_key())
+}
+
+/// [`wrap_managed_skill`] for the brand key `brand`, which need not be this
+/// build's (tests write another brand's file with it).
+pub fn wrap_managed_skill_for(
+    skill_type: &str,
+    version: u32,
+    body: &str,
+    extra_frontmatter: Option<&str>,
+    brand: &str,
+) -> String {
     let trimmed = body.trim();
     let checksum = skill_checksum_hex(trimmed.as_bytes());
+    let stamp = if brand == UNSTAMPED_BRAND_KEY {
+        String::new()
+    } else {
+        format!("\nskill_brand: {brand}")
+    };
     let extras = extra_frontmatter
         .map(|s| format!("\n{}", s.trim_end()))
         .unwrap_or_default();
     format!(
-        "---\nk2_skill: {skill_type}\nskill_version: {version}\nskill_checksum: {checksum}{extras}\n---\n\n{begin}\n{trimmed}\n{end}\n\n{yours}\n",
+        "---\nk2_skill: {skill_type}\nskill_version: {version}\nskill_checksum: {checksum}{stamp}{extras}\n---\n\n{begin}\n{trimmed}\n{end}\n\n{yours}\n",
         begin = SKILL_BEGIN_MARKER,
         end = SKILL_END_MARKER,
         yours = SKILL_YOURS_LINE,
@@ -513,6 +578,9 @@ pub struct ParsedSkill {
     pub k2_skill: Option<String>,
     pub skill_version: Option<u32>,
     pub skill_checksum: Option<String>,
+    /// The brand key the file was written for (`skill_brand`); `None` when
+    /// it has no stamp. [`ParsedSkill::brand_key`] reads it.
+    pub skill_brand: Option<String>,
     /// Frontmatter lines OTHER than our upgrade keys — preserved on
     /// rewrite so harness-specific fields like `name:` / `description:`
     /// survive unchanged.
@@ -526,11 +594,29 @@ pub struct ParsedSkill {
     pub has_markers: bool,
 }
 
+impl ParsedSkill {
+    /// The brand key the file was written for: its stamp, or
+    /// [`UNSTAMPED_BRAND_KEY`] when it has none.
+    pub fn brand_key(&self) -> &str {
+        self.skill_brand.as_deref().unwrap_or(UNSTAMPED_BRAND_KEY)
+    }
+
+    /// The file is on the current contract for this type, version and
+    /// brand key: it has its markers and all three match.
+    fn is_current(&self, skill_type: &str, version: u32, brand: &str) -> bool {
+        self.has_markers
+            && self.k2_skill.as_deref() == Some(skill_type)
+            && self.skill_version == Some(version)
+            && self.brand_key() == brand
+    }
+}
+
 pub fn parse_skill(content: &str) -> ParsedSkill {
     let mut parsed = ParsedSkill {
         k2_skill: None,
         skill_version: None,
         skill_checksum: None,
+        skill_brand: None,
         extra_frontmatter: String::new(),
         managed_region: None,
         after_end: String::new(),
@@ -550,6 +636,7 @@ pub fn parse_skill(content: &str) -> ParsedSkill {
                         "k2_skill" => parsed.k2_skill = Some(v.to_string()),
                         "skill_version" => parsed.skill_version = v.parse().ok(),
                         "skill_checksum" => parsed.skill_checksum = Some(v.to_string()),
+                        "skill_brand" => parsed.skill_brand = Some(v.to_string()),
                         _ if !k.is_empty() && !v.is_empty() => {
                             extras.push_str(&format!("{}: {}\n", k, v));
                         }
@@ -598,7 +685,8 @@ fn log_if_err<E: std::fmt::Display>(label: &str, path: &Path, res: Result<(), E>
 /// — no per-skill one-off ensure/migrate helpers.
 ///
 /// - missing file → create with wrapped body
-/// - current version AND type match → no-op (file on disk is fine)
+/// - current version, type AND brand key match → no-op (file on disk
+///   is fine)
 /// - no markers → legacy file; wrap the new content ABOVE existing
 ///   content (preserving user's custom content, if any, below)
 /// - markers + checksum match → rewrite managed region, preserve tail
@@ -611,12 +699,34 @@ pub fn ensure_skill_up_to_date(
     fresh_body: &str,
     extra_frontmatter: Option<&str>,
 ) -> SkillUpgradeOutcome {
+    ensure_skill_up_to_date_for(
+        skill_path,
+        skill_type,
+        current_version,
+        fresh_body,
+        extra_frontmatter,
+        brand_key(),
+    )
+}
+
+/// [`ensure_skill_up_to_date`] for the brand key `brand` (tests stand in
+/// for another brand's build with it).
+pub fn ensure_skill_up_to_date_for(
+    skill_path: &Path,
+    skill_type: &str,
+    current_version: u32,
+    fresh_body: &str,
+    extra_frontmatter: Option<&str>,
+    brand: &str,
+) -> SkillUpgradeOutcome {
+    let wrap = |body: &str| {
+        wrap_managed_skill_for(skill_type, current_version, body, extra_frontmatter, brand)
+    };
     if let Some(parent) = skill_path.parent() {
         let _ = fs::create_dir_all(parent);
     }
     if !skill_path.exists() {
-        let wrapped =
-            wrap_managed_skill(skill_type, current_version, fresh_body, extra_frontmatter);
+        let wrapped = wrap(fresh_body);
         log_if_err(
             "ensure_skill_up_to_date create",
             skill_path,
@@ -629,10 +739,7 @@ pub fn ensure_skill_up_to_date(
     let parsed = parse_skill(&existing);
 
     // Fast path: already on the current contract.
-    if parsed.has_markers
-        && parsed.k2_skill.as_deref() == Some(skill_type)
-        && parsed.skill_version == Some(current_version)
-    {
+    if parsed.is_current(skill_type, current_version, brand) {
         collapse_footer(skill_path, &existing, &parsed);
         return SkillUpgradeOutcome::UpToDate;
     }
@@ -660,8 +767,7 @@ pub fn ensure_skill_up_to_date(
         let first_h1 = after_fm.lines().find(|l| l.starts_with("# ")).unwrap_or("");
         let is_our_legacy_output = first_h1.starts_with("# K2 ");
 
-        let wrapped =
-            wrap_managed_skill(skill_type, current_version, fresh_body, extra_frontmatter);
+        let wrapped = wrap(fresh_body);
         let final_content = if is_our_legacy_output {
             wrapped
         } else if after_fm.trim().is_empty() {
@@ -690,9 +796,7 @@ pub fn ensure_skill_up_to_date(
     let stamped = parsed.skill_checksum.as_deref().unwrap_or("");
     if actual_checksum == stamped {
         // The person's part stays as it is, under one "yours" line.
-        let wrapped =
-            wrap_managed_skill(skill_type, current_version, fresh_body, extra_frontmatter);
-        let final_content = with_persons_part(wrapped, &parsed.after_end);
+        let final_content = with_persons_part(wrap(fresh_body), &parsed.after_end);
         log_if_err(
             "ensure_skill_up_to_date upgrade",
             skill_path,
@@ -705,7 +809,7 @@ pub fn ensure_skill_up_to_date(
     // the proposed new version next to the file so the user can diff
     // and merge when they're ready.
     let proposed_path = skill_path.with_extension("md.proposed");
-    let wrapped = wrap_managed_skill(skill_type, current_version, fresh_body, extra_frontmatter);
+    let wrapped = wrap(fresh_body);
     log_if_err(
         "ensure_skill_up_to_date propose",
         &proposed_path,
@@ -724,7 +828,8 @@ pub fn ensure_skill_up_to_date(
 /// `gardenAccess` switch). Same version and type, but the managed region
 /// isn't `fresh_body`: rewrite it when the person didn't edit it (the
 /// stamped checksum matches; their tail below the marker stays), else drop
-/// the `.proposed` sibling. Everything else is `ensure_skill_up_to_date`.
+/// the `.proposed` sibling. Everything else (another version or brand key
+/// included) is `ensure_skill_up_to_date`.
 pub fn refresh_skill_body(
     skill_path: &Path,
     skill_type: &str,
@@ -732,13 +837,39 @@ pub fn refresh_skill_body(
     fresh_body: &str,
     extra_frontmatter: Option<&str>,
 ) -> SkillUpgradeOutcome {
+    refresh_skill_body_for(
+        skill_path,
+        skill_type,
+        current_version,
+        fresh_body,
+        extra_frontmatter,
+        brand_key(),
+    )
+}
+
+/// [`refresh_skill_body`] for the brand key `brand`.
+pub fn refresh_skill_body_for(
+    skill_path: &Path,
+    skill_type: &str,
+    current_version: u32,
+    fresh_body: &str,
+    extra_frontmatter: Option<&str>,
+    brand: &str,
+) -> SkillUpgradeOutcome {
     let existing = fs::read_to_string(skill_path).ok();
     let parsed = existing.as_deref().map(parse_skill);
-    let same_contract = parsed.as_ref().is_some_and(|p| {
-        p.has_markers && p.k2_skill.as_deref() == Some(skill_type) && p.skill_version == Some(current_version)
-    });
+    let same_contract = parsed
+        .as_ref()
+        .is_some_and(|p| p.is_current(skill_type, current_version, brand));
     let Some(parsed) = parsed.filter(|_| same_contract) else {
-        return ensure_skill_up_to_date(skill_path, skill_type, current_version, fresh_body, extra_frontmatter);
+        return ensure_skill_up_to_date_for(
+            skill_path,
+            skill_type,
+            current_version,
+            fresh_body,
+            extra_frontmatter,
+            brand,
+        );
     };
     let region = parsed.managed_region.as_deref().unwrap_or("").trim();
     if region == fresh_body.trim() {
@@ -747,7 +878,13 @@ pub fn refresh_skill_body(
         }
         return SkillUpgradeOutcome::UpToDate;
     }
-    let wrapped = wrap_managed_skill(skill_type, current_version, fresh_body, extra_frontmatter);
+    let wrapped = wrap_managed_skill_for(
+        skill_type,
+        current_version,
+        fresh_body,
+        extra_frontmatter,
+        brand,
+    );
     if skill_checksum_hex(region.as_bytes()) != parsed.skill_checksum.as_deref().unwrap_or("") {
         let proposed_path = skill_path.with_extension("md.proposed");
         log_if_err("refresh_skill_body propose", &proposed_path, atomic_write_str(&proposed_path, &wrapped));
@@ -819,17 +956,224 @@ mod tests {
         assert!(!wrapped.contains("k2so_skill"));
     }
 
-    // ── The footer: one "yours" line, the person's part untouched ────
+    // ── The brand key ─────────────────────────────────────────────────
+
+    /// A key no brand in these tests is built with.
+    fn other_key() -> String {
+        brand_names_key("Globex Desk", "zq", &[])
+    }
 
     fn scratch_skill(tag: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "k2-skill-footer-{tag}-{}-{}",
+            "k2-skill-brand-key-{tag}-{}-{}",
             std::process::id(),
             uuid::Uuid::new_v4()
         ));
         fs::create_dir_all(&dir).expect("make the scratch folder");
         dir.join("SKILL.md")
     }
+
+    #[test]
+    fn the_unstamped_key_is_the_k2_table() {
+        assert_eq!(
+            brand_names_key("K2", "k2", &[("k2so", AliasMode::Silent)]),
+            UNSTAMPED_BRAND_KEY
+        );
+    }
+
+    /// The k2 brand's file holds the unstamped names, so a k2 build writes
+    /// no `skill_brand` line and its skills stay byte for byte as before.
+    /// A change to brand/k2's product or `[cli]` table fails here: it would
+    /// stamp and rewrite every k2 workspace's skills.
+    #[test]
+    fn the_k2_brand_file_is_the_unstamped_table() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../brand/k2/brand.toml");
+        let text = fs::read_to_string(&path).expect("read brand/k2/brand.toml");
+        let doc: toml::Table = toml::from_str(&text).expect("brand/k2/brand.toml is TOML");
+        let product = doc["names"]["product"]
+            .as_str()
+            .expect("names.product is a string");
+        let cli = doc["cli"].as_table().expect("[cli] is a table");
+        let name = cli["name"].as_str().expect("cli.name is a string");
+        let aliases: Vec<(&str, AliasMode)> = cli["aliases"]
+            .as_array()
+            .expect("cli.aliases is a list")
+            .iter()
+            .map(|a| {
+                let mode = match a["mode"].as_str().expect("an alias's mode") {
+                    "silent" => AliasMode::Silent,
+                    "notice" => AliasMode::Notice,
+                    "tombstone" => AliasMode::Tombstone,
+                    other => panic!("unknown alias mode {other:?}"),
+                };
+                (a["name"].as_str().expect("an alias's name"), mode)
+            })
+            .collect();
+        assert_eq!(
+            brand_names_key(product, name, &aliases),
+            UNSTAMPED_BRAND_KEY
+        );
+    }
+
+    #[test]
+    fn this_builds_key_is_its_brand_table() {
+        assert_eq!(
+            brand_key(),
+            brand_names_key(PRODUCT_NAME, CLI_NAME, CLI_ALIAS_MODES)
+        );
+    }
+
+    /// The product and the command are separate values: a change to
+    /// either alone, or to an alias or its mode, is a new key.
+    #[test]
+    fn the_key_changes_with_the_product_the_name_an_alias_or_a_mode() {
+        let keys = [
+            brand_names_key("K2", "k2", &[("k2so", AliasMode::Silent)]),
+            brand_names_key("Globex Desk", "k2", &[("k2so", AliasMode::Silent)]),
+            brand_names_key("K2", "k5", &[("k2so", AliasMode::Silent)]),
+            brand_names_key("K5", "k5", &[("k2", AliasMode::Notice)]),
+            brand_names_key("K5", "k5", &[("k2", AliasMode::Tombstone)]),
+            brand_names_key("K5", "k5", &[]),
+            brand_names_key(
+                "K5",
+                "k5",
+                &[("k2", AliasMode::Notice), ("k2so", AliasMode::Silent)],
+            ),
+            // The two words are not run together: "ab" + "c" is not "a" + "bc".
+            brand_names_key("ab", "c", &[]),
+            brand_names_key("a", "bc", &[]),
+        ];
+        for (i, a) in keys.iter().enumerate() {
+            assert_eq!(a.len(), 16, "{a}");
+            for b in &keys[i + 1..] {
+                assert_ne!(a, b);
+            }
+        }
+    }
+
+    /// Under the unstamped key the file is today's shape, byte for byte.
+    #[test]
+    fn the_unstamped_key_writes_todays_bytes() {
+        let wrapped =
+            wrap_managed_skill_for("workspace", 3, "# K2 body\n", None, UNSTAMPED_BRAND_KEY);
+        let want = format!(
+            "---\nk2_skill: workspace\nskill_version: 3\nskill_checksum: {}\n---\n\n{SKILL_BEGIN_MARKER}\n# K2 body\n{SKILL_END_MARKER}\n\n{SKILL_YOURS_LINE}\n",
+            skill_checksum_hex(b"# K2 body")
+        );
+        assert_eq!(wrapped, want);
+        assert_eq!(parse_skill(&wrapped).skill_brand, None);
+        assert_eq!(parse_skill(&wrapped).brand_key(), UNSTAMPED_BRAND_KEY);
+    }
+
+    #[test]
+    fn another_key_is_stamped_and_read_back() {
+        let key = other_key();
+        let wrapped = wrap_managed_skill_for(
+            "workspace",
+            3,
+            "body",
+            Some("name: x\ndescription: y"),
+            &key,
+        );
+        assert!(
+            wrapped.contains(&format!("\nskill_brand: {key}\nname: x\n")),
+            "{wrapped}"
+        );
+        let parsed = parse_skill(&wrapped);
+        assert_eq!(parsed.skill_brand.as_deref(), Some(key.as_str()));
+        assert_eq!(parsed.brand_key(), key);
+        assert_eq!(parsed.extra_frontmatter, "name: x\ndescription: y");
+        assert_eq!(parsed.managed_region.as_deref(), Some("body"));
+    }
+
+    /// A file written for one brand, at the current version, is
+    /// rewritten for another: the brand change alone refreshes it.
+    #[test]
+    fn a_key_change_alone_refreshes_an_unedited_file() {
+        let path = scratch_skill("change");
+        let old = other_key();
+        let new = brand_names_key("Initech Hub", "zr", &[("zq", AliasMode::Notice)]);
+        fs::write(
+            &path,
+            wrap_managed_skill_for("workspace", 9, "run `zq msg`", None, &old),
+        )
+        .expect("write the old brand's file");
+        let out = ensure_skill_up_to_date_for(&path, "workspace", 9, "run `zr msg`", None, &new);
+        assert!(matches!(out, SkillUpgradeOutcome::Upgraded), "{out:?}");
+        let parsed = parse_skill(&fs::read_to_string(&path).expect("read the skill"));
+        assert_eq!(parsed.brand_key(), new);
+        assert_eq!(parsed.skill_version, Some(9));
+        assert_eq!(parsed.managed_region.as_deref(), Some("run `zr msg`"));
+        // Written for this key now: the next start leaves it alone.
+        let again = ensure_skill_up_to_date_for(&path, "workspace", 9, "run `zr msg`", None, &new);
+        assert!(matches!(again, SkillUpgradeOutcome::UpToDate), "{again:?}");
+        fs::remove_dir_all(path.parent().expect("a folder")).ok();
+    }
+
+    /// Today's files (no stamp) are rewritten by a build of another
+    /// table, and a stamped file goes back to no stamp under the
+    /// unstamped table.
+    #[test]
+    fn unstamped_and_stamped_files_refresh_both_ways() {
+        let path = scratch_skill("both");
+        let key = other_key();
+        fs::write(
+            &path,
+            wrap_managed_skill_for("k2-cli", 4, "a", None, UNSTAMPED_BRAND_KEY),
+        )
+        .expect("write today's file");
+        let out = ensure_skill_up_to_date_for(&path, "k2-cli", 4, "b", None, &key);
+        assert!(matches!(out, SkillUpgradeOutcome::Upgraded), "{out:?}");
+        let text = fs::read_to_string(&path).expect("read the skill");
+        assert_eq!(parse_skill(&text).brand_key(), key);
+
+        let out = ensure_skill_up_to_date_for(&path, "k2-cli", 4, "a", None, UNSTAMPED_BRAND_KEY);
+        assert!(matches!(out, SkillUpgradeOutcome::Upgraded), "{out:?}");
+        let text = fs::read_to_string(&path).expect("read the skill");
+        assert!(!text.contains("skill_brand:"), "{text}");
+        assert_eq!(parse_skill(&text).managed_region.as_deref(), Some("a"));
+        fs::remove_dir_all(path.parent().expect("a folder")).ok();
+    }
+
+    /// A person's edit is kept under a brand change too: the new text goes
+    /// beside it as `.proposed`, stamped with the new key.
+    #[test]
+    fn an_edited_file_gets_a_proposed_sibling_on_a_key_change() {
+        let path = scratch_skill("edited");
+        let key = other_key();
+        let edited = wrap_managed_skill_for("workspace", 2, "theirs", None, UNSTAMPED_BRAND_KEY)
+            .replace("theirs", "theirs, edited");
+        fs::write(&path, &edited).expect("write the edited file");
+        let out = ensure_skill_up_to_date_for(&path, "workspace", 2, "ours", None, &key);
+        assert!(matches!(out, SkillUpgradeOutcome::UserModified), "{out:?}");
+        assert_eq!(fs::read_to_string(&path).expect("read the skill"), edited);
+        let proposed =
+            fs::read_to_string(path.with_extension("md.proposed")).expect("read the proposed file");
+        assert_eq!(parse_skill(&proposed).brand_key(), key);
+        fs::remove_dir_all(path.parent().expect("a folder")).ok();
+    }
+
+    /// `refresh_skill_body` (same version, another body) also refreshes on
+    /// a key change alone, even when the body is the same.
+    #[test]
+    fn refresh_skill_body_refreshes_on_a_key_change() {
+        let path = scratch_skill("refresh");
+        let key = other_key();
+        fs::write(
+            &path,
+            wrap_managed_skill_for("k2-zen", 5, "same", None, UNSTAMPED_BRAND_KEY),
+        )
+        .expect("write the file");
+        let out = refresh_skill_body_for(&path, "k2-zen", 5, "same", None, UNSTAMPED_BRAND_KEY);
+        assert!(matches!(out, SkillUpgradeOutcome::UpToDate), "{out:?}");
+        let out = refresh_skill_body_for(&path, "k2-zen", 5, "same", None, &key);
+        assert!(matches!(out, SkillUpgradeOutcome::Upgraded), "{out:?}");
+        let text = fs::read_to_string(&path).expect("read the skill");
+        assert_eq!(parse_skill(&text).brand_key(), key);
+        fs::remove_dir_all(path.parent().expect("a folder")).ok();
+    }
+
+    // ── The footer: one "yours" line, the person's part untouched ────
 
     /// What a person wrote under the "yours" line: a blank line first, no
     /// newline at the end, so any trim would show.
@@ -839,27 +1183,24 @@ mod tests {
         text.matches(SKILL_YOURS_LINE).count()
     }
 
-    #[test]
-    fn wrap_ends_with_one_yours_line() {
-        let wrapped = wrap_managed_skill("workspace", 3, "# K2 body\n", None);
-        let want = format!(
-            "---\nk2_skill: workspace\nskill_version: 3\nskill_checksum: {}\n---\n\n{SKILL_BEGIN_MARKER}\n# K2 body\n{SKILL_END_MARKER}\n\n{SKILL_YOURS_LINE}\n",
-            skill_checksum_hex(b"# K2 body")
-        );
-        assert_eq!(wrapped, want);
-    }
-
     /// A file through five upgrades: after each one the "yours" line is
     /// there once, the managed text is the new version's, and the
     /// person's part is byte for byte what they wrote.
     #[test]
     fn five_upgrades_keep_one_yours_line_and_the_persons_part() {
         let path = scratch_skill("five");
-        let first = wrap_managed_skill("workspace", 1, "body v1", None);
+        let first = wrap_managed_skill_for("workspace", 1, "body v1", None, UNSTAMPED_BRAND_KEY);
         fs::write(&path, format!("{first}{PERSONS}")).expect("write the first version");
         for v in 2..=6 {
             let body = format!("body v{v}");
-            let out = ensure_skill_up_to_date(&path, "workspace", v, &body, None);
+            let out = ensure_skill_up_to_date_for(
+                &path,
+                "workspace",
+                v,
+                &body,
+                None,
+                UNSTAMPED_BRAND_KEY,
+            );
             assert!(
                 matches!(out, SkillUpgradeOutcome::Upgraded),
                 "v{v}: {out:?}"
@@ -877,21 +1218,20 @@ mod tests {
         fs::remove_dir_all(path.parent().expect("a folder")).ok();
     }
 
-    /// An unedited file with nothing below the line, through five
-    /// upgrades: each time it is exactly the fresh file.
+    /// With nothing below the line, an upgrade writes the fresh file.
     #[test]
-    fn five_upgrades_with_no_persons_part_write_the_fresh_file() {
+    fn an_upgrade_with_no_persons_part_writes_the_fresh_file() {
         let path = scratch_skill("bare");
-        fs::write(&path, wrap_managed_skill("workspace", 1, "a", None)).expect("write the file");
-        for v in 2..=6 {
-            let body = format!("body v{v}");
-            ensure_skill_up_to_date(&path, "workspace", v, &body, None);
-            assert_eq!(
-                fs::read_to_string(&path).expect("read the skill"),
-                wrap_managed_skill("workspace", v, &body, None),
-                "v{v}"
-            );
-        }
+        fs::write(
+            &path,
+            wrap_managed_skill_for("workspace", 1, "a", None, UNSTAMPED_BRAND_KEY),
+        )
+        .expect("write the file");
+        ensure_skill_up_to_date_for(&path, "workspace", 2, "b", None, UNSTAMPED_BRAND_KEY);
+        assert_eq!(
+            fs::read_to_string(&path).expect("read the skill"),
+            wrap_managed_skill_for("workspace", 2, "b", None, UNSTAMPED_BRAND_KEY)
+        );
         fs::remove_dir_all(path.parent().expect("a folder")).ok();
     }
 
@@ -901,12 +1241,13 @@ mod tests {
     #[test]
     fn several_yours_lines_collapse_to_one() {
         let path = scratch_skill("collapse");
-        let fresh = wrap_managed_skill("workspace", 3, "same", None);
+        let fresh = wrap_managed_skill_for("workspace", 3, "same", None, UNSTAMPED_BRAND_KEY);
         let extra = format!("{SKILL_YOURS_LINE}\n").repeat(3);
         let old = format!("{fresh}{extra}{PERSONS}");
         assert_eq!(yours_count(&old), 4);
         fs::write(&path, &old).expect("write the old file");
-        let out = ensure_skill_up_to_date(&path, "workspace", 3, "same", None);
+        let out =
+            ensure_skill_up_to_date_for(&path, "workspace", 3, "same", None, UNSTAMPED_BRAND_KEY);
         assert!(matches!(out, SkillUpgradeOutcome::UpToDate), "{out:?}");
         assert_eq!(
             fs::read_to_string(&path).expect("read the skill"),
@@ -915,28 +1256,16 @@ mod tests {
 
         // refresh_skill_body's same-text path does the same.
         fs::write(&path, &old).expect("write the old file again");
-        let out = refresh_skill_body(&path, "workspace", 3, "same", None);
+        let out = refresh_skill_body_for(&path, "workspace", 3, "same", None, UNSTAMPED_BRAND_KEY);
         assert!(matches!(out, SkillUpgradeOutcome::UpToDate), "{out:?}");
         assert_eq!(
             fs::read_to_string(&path).expect("read the skill"),
             format!("{fresh}{PERSONS}")
         );
 
-        // A body change at the same version (refresh_skill_body) writes the
-        // line once.
-        fs::write(&path, &old).expect("write the old file again");
-        let out = refresh_skill_body(&path, "workspace", 3, "other", None);
-        assert!(matches!(out, SkillUpgradeOutcome::Upgraded), "{out:?}");
-        let text = fs::read_to_string(&path).expect("read the skill");
-        assert_eq!(yours_count(&text), 1, "{text}");
-        assert!(
-            text.ends_with(&format!("{SKILL_YOURS_LINE}\n{PERSONS}")),
-            "{text}"
-        );
-
         // And an upgrade from it writes the line once.
         fs::write(&path, &old).expect("write the old file again");
-        ensure_skill_up_to_date(&path, "workspace", 4, "new", None);
+        ensure_skill_up_to_date_for(&path, "workspace", 4, "new", None, UNSTAMPED_BRAND_KEY);
         let text = fs::read_to_string(&path).expect("read the skill");
         assert_eq!(yours_count(&text), 1, "{text}");
         assert!(
@@ -952,9 +1281,9 @@ mod tests {
     fn a_yours_line_inside_the_persons_part_stays() {
         let path = scratch_skill("inner");
         let persons = format!("notes\n{SKILL_YOURS_LINE}\nmore\n");
-        let first = wrap_managed_skill("workspace", 1, "a", None);
+        let first = wrap_managed_skill_for("workspace", 1, "a", None, UNSTAMPED_BRAND_KEY);
         fs::write(&path, format!("{first}{persons}")).expect("write the file");
-        ensure_skill_up_to_date(&path, "workspace", 2, "b", None);
+        ensure_skill_up_to_date_for(&path, "workspace", 2, "b", None, UNSTAMPED_BRAND_KEY);
         let text = fs::read_to_string(&path).expect("read the skill");
         assert!(
             text.ends_with(&format!("{SKILL_YOURS_LINE}\n{persons}")),

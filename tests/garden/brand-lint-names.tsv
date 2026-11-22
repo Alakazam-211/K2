@@ -1,0 +1,57 @@
+# Names and the answer scripts/brand.sh lint --name gives for each
+# (tests/garden/brand-lint.sh reads it). Tab-separated:
+#   <command> <product or -> <answer>
+# The answer is the first rule the name breaks (scripts/brand/lint.py's
+# order: shape, product, ours, hard, unique, text, soft), or ok. The
+# written lists only: the live host and package checks are tested apart.
+command	product	answer
+q7	-	ok
+zz	-	ok
+q7	Initech Hub	ok
+xy	-	unique
+X1	-	shape
+x	-	shape
+2x	-	shape
+x-y	-	shape
+x_y	-	shape
+abcdefghijklm	-	shape
+abcdefghijkl	-	ok
+k2	-	ours
+k5	-	ours
+k9	-	ours
+ks	-	ours
+kz	-	ours
+k2so	-	ours
+k2x	-	ours
+k5cli	-	ours
+kessel	-	ours
+con	-	hard
+nul	-	hard
+com1	-	hard
+lpt9	-	hard
+cd	-	hard
+ls	-	hard
+if	-	hard
+or	-	hard
+sc	-	hard
+py	-	hard
+gh	-	hard
+go	-	hard
+jq	-	hard
+rg	-	hard
+uv	-	hard
+ga	-	hard
+gl	-	hard
+ll	-	hard
+zi	-	hard
+it	-	text
+so	-	text
+lc	-	text
+b4	-	soft
+zf	-	soft
+yj	-	soft
+q7	K2 Desk	ours
+q7	kessel one	ours
+q7	Globex Desk	unique
+q7	Acme	text
+q7	 Hooli	product

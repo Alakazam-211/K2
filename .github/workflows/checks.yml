@@ -187,8 +187,14 @@ jobs:
       - name: Ceiling-zero gate on scratch repos
         run: bash tests/garden/ceiling-zero-gate.sh
 
+      - name: The brand mark is static data (only its reader reads it)
+        run: bash scripts/brand/mark-static-gate.sh
+
       - name: Release brand-mark check on made-up binaries
         run: bash tests/garden/brand-mark.sh
+
+      - name: Brand name policy (brand.sh lint), offline
+        run: bash tests/garden/brand-lint.sh
 
       - name: private-docs gate (cloud-business docs stay in the private repo)
         run: bash scripts/private-docs-gate.sh

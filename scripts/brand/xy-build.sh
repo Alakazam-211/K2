@@ -4,6 +4,7 @@
 #
 #   bash scripts/brand/xy-build.sh
 #
+# 0. The name policy on brand/xy (scripts/brand.sh lint).
 # 1. cargo check of the workspace's crates (rust-check's list, and the k5
 #    binary) with K2_BRAND_DIR=brand/xy, every target, -D warnings.
 # 2. cargo build of the k5 binary for xy: its pages and its --schema are
@@ -15,9 +16,17 @@
 # 4. A bite: the same corpus with `Run k2 msg k2 hi` planted fails judges a
 #    and b, and with `XY` planted fails judge c.
 #
-# The xy build goes in its own target folder ($CARGO_TARGET_DIR/xy): a
-# brand change rebuilds every crate that names the brand, so sharing the
-# default build's folder would rebuild the world twice per run.
+# The target folder (K2's ruling): the xy build gets a folder of its own,
+# made for this run under the node's temp directory ($TMPDIR), never the
+# shared cache and never a folder in $CARGO_TARGET_DIR. It starts cold, so
+# the free space there is checked first: under XY_MIN_FREE_GB (default 40)
+# nothing is built and the run fails with a line asking to resubmit on a
+# node with more free disk. The folder is removed on every way out, with an
+# M line that says so.
+#
+# XY_BUILD_OUT=<folder>: also write the review files there before the
+# judges run (the corpus as corpus.tgz, the debt rows the judges would
+# ask for as xy-debt.txt, the forms that fell through).
 # Runs cargo and the CLI: on K2 Compute (Linux) only.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -26,7 +35,26 @@ step() { echo ""; echo "── xy build: $* ──"; }
 
 export RUSTFLAGS="${RUSTFLAGS:--D warnings}"
 export K2_BRAND_DIR=brand/xy
-XY_TARGET="${CARGO_TARGET_DIR:-$ROOT/target}/xy"
+XY_MIN_FREE_GB="${XY_MIN_FREE_GB:-40}"
+
+step "the xy brand's names pass the name policy"
+bash scripts/brand.sh lint brand/xy
+
+# Free disk for the xy folder, before anything builds.
+XY_PARENT="${TMPDIR:-/tmp}"
+free_gb="$(df -Pk "$XY_PARENT" | awk 'NR == 2 { print int($4 / 1048576) }')"
+echo "M xy target: ${free_gb:-unknown} GB free under $XY_PARENT (want $XY_MIN_FREE_GB)"
+if [ -z "$free_gb" ] || [ "$free_gb" -lt "$XY_MIN_FREE_GB" ]; then
+    echo "M xy build=1 failed: [disk: ${free_gb:-unknown} GB free under $XY_PARENT, want $XY_MIN_FREE_GB; nothing was built; resubmit on a node with more free disk, never in the shared folder]"
+    exit 1
+fi
+XY_TARGET="$(mktemp -d "$XY_PARENT/k2-xy-build.XXXXXX")"
+W="$(mktemp -d "$XY_PARENT/k2-xy-corpus.XXXXXX")"
+cleanup() {
+    rm -rf "$XY_TARGET" "$W"
+    echo "M xy target removed: $([ -e "$XY_TARGET" ] && echo no || echo yes)"
+}
+trap cleanup EXIT
 export CARGO_TARGET_DIR="$XY_TARGET"
 
 step "cargo check, K2_BRAND_DIR=brand/xy"
@@ -40,10 +68,15 @@ BIN="$XY_TARGET/debug/k5-cli"
 step "the xy binary carries the xy brand mark, and only it"
 python3 scripts/brand/check-brand-mark.py --brand xy "$BIN"
 
-W="$(mktemp -d)"
-trap 'rm -rf "$W"' EXIT
 step "what the xy binary prints"
 bash scripts/brand/collect-outputs.sh "$BIN" brand/xy "$W/corpus"
+if [ -n "${XY_BUILD_OUT:-}" ]; then
+    mkdir -p "$XY_BUILD_OUT"
+    tar -C "$W" -czf "$XY_BUILD_OUT/corpus.tgz" corpus
+    cp "$W/fell-through.txt" "$XY_BUILD_OUT/"
+    python3 scripts/brand/output-judges.py --brand brand/xy --write-debt "$W/corpus" > "$XY_BUILD_OUT/xy-debt.txt" 2>/dev/null || true
+    echo "review files in $XY_BUILD_OUT: corpus.tgz, fell-through.txt, xy-debt.txt ($(wc -l < "$XY_BUILD_OUT/xy-debt.txt" | tr -d ' ') rows)"
+fi
 
 step "the output judges"
 python3 scripts/brand/output-judges.py --brand brand/xy "$W/corpus"

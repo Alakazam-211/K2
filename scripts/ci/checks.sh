@@ -16,12 +16,12 @@
 #               pinned tools, the allow-list rules and a canary (checks.yml
 #               audit; prd-security-sweep-0464-v1 SS14), and cargo deny:
 #               the root deny.toml against every shipped crate
-#   all         the four, in that order
 #   brand-xy    the CI brand (brand/xy): cargo check with K2_BRAND_DIR,
 #               the k5 binary built for it, and the output judges on what
-#               it prints (scripts/brand/xy-build.sh). Not in `all` yet: it
-#               joins rust-check once its first run on K2 Compute is green
-#               (judge a still finds one help line naming k5).
+#               it prints (scripts/brand/xy-build.sh: in a folder of its
+#               own under $TMPDIR, after a free-disk check, removed on
+#               every way out)
+#   all         the five, in that order
 #
 # Network: web (bun install) and audit (crates.io for cargo-audit, the
 # osv-scanner release download, the RustSec database and osv.dev) need
@@ -84,7 +84,9 @@ part_web() {
     step "brand gate on broken trees";             bash tests/garden/brand-gate.sh
     step "brand output judges on small corpora";   bash tests/garden/brand-output-judges.sh
     step "ceiling-zero gate on scratch repos";     bash tests/garden/ceiling-zero-gate.sh
+    step "the brand mark is static data (only its reader reads it)"; bash scripts/brand/mark-static-gate.sh
     step "release brand-mark check on made-up binaries"; bash tests/garden/brand-mark.sh
+    step "brand name policy (brand.sh lint), offline"; bash tests/garden/brand-lint.sh
     step "private-docs gate";                      bash scripts/private-docs-gate.sh
     step "typecheck:web";                          bun run typecheck:web
     step "vitest";                                 bunx vitest run --reporter=dot
@@ -252,13 +254,18 @@ part_rust_test() {
     unset RUSTFLAGS
 }
 
+part_brand_xy() {
+    step "the xy brand: name policy, check, build, brand mark, output judges"
+    bash scripts/brand/xy-build.sh
+}
+
 case "${1:-}" in
     web) part_web ;;
     rust-check) part_rust_check ;;
     rust-test) part_rust_test ;;
     audit) part_audit ;;
-    all) part_web; part_rust_check; part_rust_test; part_audit ;;
-    brand-xy) step "the xy brand: check, build, output judges"; bash scripts/brand/xy-build.sh ;;
+    all) part_web; part_rust_check; part_rust_test; part_audit; part_brand_xy ;;
+    brand-xy) part_brand_xy ;;
     *) echo "usage: scripts/ci/checks.sh web|rust-check|rust-test|audit|all|brand-xy" >&2; exit 2 ;;
 esac
 echo ""

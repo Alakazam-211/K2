@@ -23,6 +23,7 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
+use k2_core::brand::PRODUCT_NAME;
 use k2_core::log_debug;
 
 use k2_core::session::{registry, Frame, SessionId};
@@ -247,7 +248,9 @@ fn unplaced_session() -> CliResponse {
             "ok": false,
             "error": {
                 "code": "forbidden",
-                "hint": "K2 can't tell which workspace this terminal belongs to, so it can only be read by the owner or a login",
+                "hint": format!(
+                    "{PRODUCT_NAME} can't tell which workspace this terminal belongs to, so it can only be read by the owner or a login"
+                ),
             },
         })
         .to_string(),

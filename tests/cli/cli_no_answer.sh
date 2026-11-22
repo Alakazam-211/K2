@@ -24,6 +24,9 @@
 # CLI ends that group). The 30 s limit is waited out four times (case 1 in
 # each run, and 1b). Exit status: 1, or 141 when the CLI ended a reader
 # beside the request (see _k2_end_command in cli/k2).
+# Which stand-in ran is the shell's own way to find the reader: the k5
+# binary (K5_CLI_UNDER_TEST) ends the request in its own process, so there
+# it must start neither ps nor pgrep, and every other check is the same.
 # Run with: bash tests/cli/cli_no_answer.sh
 set -euo pipefail
 
@@ -268,15 +271,23 @@ echo "== again with no ps (refused): the CLI finds the reader with pgrep =="
 RUN_PATH="$WORKDIR/nops:$PATH"
 : >"$WORKDIR/standin.log"
 unanswered_cases "no ps: " "nops-"
-assert_contains "no ps: the stand-in ps was refused" "$(cat "$WORKDIR/standin.log")" "ps-refused"
-assert_contains "no ps: pgrep found the reader" "$(cat "$WORKDIR/standin.log")" "pgrep"
+if [ -n "${K5_CLI_UNDER_TEST:-}" ]; then
+    assert_eq "no ps: the binary started neither ps nor pgrep" "$(cat "$WORKDIR/standin.log")" ""
+else
+    assert_contains "no ps: the stand-in ps was refused" "$(cat "$WORKDIR/standin.log")" "ps-refused"
+    assert_contains "no ps: pgrep found the reader" "$(cat "$WORKDIR/standin.log")" "pgrep"
+fi
 
 echo "== again with neither ps nor pgrep, the CLI leading its own group =="
 RUN_PATH="$WORKDIR/nopgrep:$PATH"
 LEAD=(python3 -c "$LEAD_PY")
 : >"$WORKDIR/standin.log"
 unanswered_cases "no ps or pgrep: " "nopg-"
-assert_contains "no ps or pgrep: the stand-in pgrep was refused" "$(cat "$WORKDIR/standin.log")" "pgrep-refused"
+if [ -n "${K5_CLI_UNDER_TEST:-}" ]; then
+    assert_eq "no ps or pgrep: the binary started neither ps nor pgrep" "$(cat "$WORKDIR/standin.log")" ""
+else
+    assert_contains "no ps or pgrep: the stand-in pgrep was refused" "$(cat "$WORKDIR/standin.log")" "pgrep-refused"
+fi
 RUN_PATH="$PATH"
 LEAD=()
 

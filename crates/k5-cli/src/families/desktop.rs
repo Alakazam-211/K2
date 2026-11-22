@@ -824,9 +824,10 @@ fn refusal_python(status: &str, d: &Value, e: &mut String) -> Result<(), Raise> 
         );
     }
     let p = match dict_get(d, "permission") {
-        Some(o @ Value::Object(_)) => Some(o),
+        Some(o @ Value::Object(_)) => Some(crate::transport::permission::named(o)),
         _ => None,
     };
+    let p = p.as_deref();
     let command = p.and_then(|o| dict_get(o, "command").filter(|v| py::truthy(v)));
     let unrequestable = p.is_some_and(|o| dict_get(o, "requestable") == Some(&Value::Bool(false)));
     if let Some(command) = command {

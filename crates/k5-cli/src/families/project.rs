@@ -932,6 +932,7 @@ fn permission_lines(p: &Value) -> Vec<String> {
     let Value::Object(pairs) = p else {
         return Vec::new();
     };
+    let pairs = &*crate::transport::permission::named_pairs(pairs);
     if let Some(Value::Str(c)) = get(pairs, "command") {
         let c = st(&Value::Str(c.clone()));
         if !c.is_empty() {

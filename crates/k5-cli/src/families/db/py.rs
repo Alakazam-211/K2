@@ -976,6 +976,7 @@ impl<'a> Py<'a> {
         let Some(p @ Value::Object(_)) = at(v, "permission") else {
             return;
         };
+        let p = &*crate::transport::permission::named(p);
         let mut lines = Vec::new();
         match at(p, "command") {
             Some(Value::Str(c)) if py::truthy(&Value::Str(c.clone())) => {

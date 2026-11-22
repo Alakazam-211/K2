@@ -13,7 +13,9 @@
 //!    status line); Python's `$` also takes it before one final `\n`.
 //! 3. It must parse as JSON (Python's `json.loads`), be an object, and its
 //!    `permission` an object.
-//! 4. A non-empty string `command`: `Ask with: <command>`.
+//! 4. A non-empty string `command`: `Ask with: <command>`. A non-empty
+//!    string `tail` (a newer daemon) first makes `command` this CLI's own
+//!    name, a space and the tail ([`named`]).
 //! 5. Else `requestable` exactly `false`: its non-empty string `hint`, if
 //!    any, then `It can't be requested.`
 //!
@@ -31,7 +33,47 @@
 //! caller's.
 
 use crate::out::json::{self, Value};
+use k2_client::brand::CLI_NAME;
+use std::borrow::Cow;
 use std::io::{self, Write};
+
+/// A refusal's `permission` object as every printer reads it: when it
+/// holds a non-empty string `tail` (the Ask line after the command's name,
+/// quoted by the daemon), its `command` becomes this CLI's compiled name, a
+/// space and the tail, so a server of another brand never puts its own
+/// name in our Ask line. Anything else is the object as sent, so an older
+/// daemon's `command` prints. The shell's rule, in each of its printers:
+/// `dict(p, command="k2 <tail>".replace("<tail>", p["tail"]))`.
+pub fn named(p: &Value) -> Cow<'_, Value> {
+    match p {
+        Value::Object(pairs) => match named_pairs(pairs) {
+            Cow::Borrowed(_) => Cow::Borrowed(p),
+            Cow::Owned(pairs) => Cow::Owned(Value::Object(pairs)),
+        },
+        _ => Cow::Borrowed(p),
+    }
+}
+
+/// [`named`] on an object's pairs.
+pub fn named_pairs(pairs: &[(json::Text, Value)]) -> Cow<'_, [(json::Text, Value)]> {
+    let tail = pairs
+        .iter()
+        .find(|(k, _)| k.as_str() == Some("tail"))
+        .map(|(_, v)| v);
+    let Some(Value::Str(tail)) = tail else {
+        return Cow::Borrowed(pairs);
+    };
+    if tail.code_points().is_empty() {
+        return Cow::Borrowed(pairs);
+    }
+    let command = Value::Str(tail.prefixed(&format!("{CLI_NAME} ")));
+    let mut out = pairs.to_vec();
+    match out.iter_mut().find(|(k, _)| k.as_str() == Some("command")) {
+        Some((_, v)) => *v = command,
+        None => out.push((json::Text::from("command"), command)),
+    }
+    Cow::Owned(out)
+}
 
 /// The note: one or two lines, the last being the closing line.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,6 +118,8 @@ pub fn note(text: &[u8]) -> Option<Note> {
     if !matches!(permission, Value::Object(_)) {
         return None;
     }
+    let permission = named(permission);
+    let permission = permission.as_ref();
     let mut lines = Vec::new();
     match get(permission, "command") {
         Some(Value::Str(cmd)) if *cmd != json::Text::from("") => {
@@ -145,6 +189,56 @@ mod tests {
             ),
             Some(vec!["Ask with: k2 permission request --why ...".to_string()])
         );
+    }
+
+    #[test]
+    fn the_tail_takes_this_clis_name() {
+        let want = format!("Ask with: {CLI_NAME} permission request a.b to='x y' --why \"<w>\"");
+        // A newer daemon: its own name (zz, no brand) in command is not ours.
+        assert_eq!(
+            lines(
+                r#"{"permission":{"command":"zz permission request a.b to='x y' --why \"<w>\"","tail":"permission request a.b to='x y' --why \"<w>\""}}"#
+            ),
+            Some(vec![want.clone()])
+        );
+        // tail with no command at all still makes the line.
+        assert_eq!(
+            lines(r#"{"permission":{"tail":"permission request a.b to='x y' --why \"<w>\""}}"#),
+            Some(vec![want])
+        );
+        // No usable tail (an older daemon, a number, empty): the daemon's command.
+        for text in [
+            r#"{"permission":{"command":"zz permission request a.b"}}"#,
+            r#"{"permission":{"command":"zz permission request a.b","tail":7}}"#,
+            r#"{"permission":{"command":"zz permission request a.b","tail":""}}"#,
+            r#"{"permission":{"command":"zz permission request a.b","tail":null}}"#,
+        ] {
+            assert_eq!(
+                lines(text),
+                Some(vec!["Ask with: zz permission request a.b".to_string()]),
+                "{text}"
+            );
+        }
+        // A lone surrogate in the tail: Python can't print it, so no note.
+        assert_eq!(
+            lines(r#"{"permission":{"command":"zz a","tail":"a \ud83d"}}"#),
+            None
+        );
+    }
+
+    #[test]
+    fn named_keeps_an_object_with_no_tail_as_it_is() {
+        let v = json::parse(r#"{"command":"zz a","requestable":true}"#).unwrap();
+        assert!(matches!(named(&v), Cow::Borrowed(_)));
+        let v = json::parse(r#"{"tail":"b c","requestable":true}"#).unwrap();
+        let n = named(&v);
+        assert_eq!(
+            get(n.as_ref(), "command"),
+            Some(&Value::Str(json::Text::from(
+                format!("{CLI_NAME} b c").as_str()
+            )))
+        );
+        assert_eq!(get(n.as_ref(), "requestable"), Some(&Value::Bool(true)));
     }
 
     #[test]

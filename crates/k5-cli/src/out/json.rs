@@ -69,6 +69,19 @@ impl Text {
             Repr::Loose(points) => points.clone(),
         }
     }
+
+    /// `prefix + self`, as Python joins two `str`: a lone surrogate stays
+    /// one.
+    pub fn prefixed(&self, prefix: &str) -> Text {
+        match &self.0 {
+            Repr::Utf8(s) => Text(Repr::Utf8(format!("{prefix}{s}"))),
+            Repr::Loose(points) => {
+                let mut all: Vec<u32> = prefix.chars().map(u32::from).collect();
+                all.extend_from_slice(points);
+                Text(Repr::Loose(all))
+            }
+        }
+    }
 }
 
 impl From<&str> for Text {

@@ -656,6 +656,7 @@ pub fn refused(route: &str, code: u16, data: Option<&Value>, raw: &[u8]) -> End 
         let p = dict
             .map(|d| get_or(d, "permission", Value::Null))
             .unwrap_or(Value::Null);
+        let p = crate::transport::permission::named(&p).into_owned();
         if let Value::Str(cmd) = get_or(&p, "command", Value::Null) {
             let cmd = py::str_of(&Value::Str(cmd));
             if !cmd.is_empty() {

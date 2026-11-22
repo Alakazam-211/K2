@@ -591,12 +591,13 @@ fn front_python(status: &str, d: &Value, o: &mut String, e: &mut String) -> Resu
         };
         push(e, format!("{ERROR}{what}{tail}").as_str());
         if let Some(Value::Object(p)) = dict_get(d, "permission") {
-            if let Some(command) = get(p, "command").filter(|c| py::truthy(c)) {
+            let p = crate::transport::permission::named_pairs(p);
+            if let Some(command) = get(&p, "command").filter(|c| py::truthy(c)) {
                 push(
                     e,
                     format!("Ask with: {}", plus_str(command, R_ASK)?).as_str(),
                 );
-            } else if get(p, "requestable") == Some(&Value::Bool(false)) {
+            } else if get(&p, "requestable") == Some(&Value::Bool(false)) {
                 push(e, "It can't be requested.");
             }
         }

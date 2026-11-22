@@ -302,6 +302,7 @@ fn template_rows(h: &mut Hire, a: &Value, fr: &dyn Fn(u32) -> Vec<Frame>) -> R<(
         ));
     }
     if let Some(hs) = act::get(a, "hireSwitch").filter(|v| py::truthy(v)) {
+        let hs = &*crate::transport::permission::named(hs);
         let code = super::or(act::get(hs, "code"), s("hire_off"));
         h.stdout.push_str(&format!(
             "      {} 'Let this agent hire agents': it is off, so the real hire is refused ({})\n",

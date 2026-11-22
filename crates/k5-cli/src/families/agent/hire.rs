@@ -690,7 +690,7 @@ impl Hire<'_> {
         if !self.perm.is_empty() {
             return;
         }
-        let p = Value::Object(p.clone());
+        let p = Value::Object(crate::transport::permission::named_pairs(p).into_owned());
         let text = |k: &str| match act::get(&p, k) {
             Some(Value::Str(t)) if py::truthy(&Value::Str(t.clone())) => {
                 Some(py::str_of(&Value::Str(t.clone())))

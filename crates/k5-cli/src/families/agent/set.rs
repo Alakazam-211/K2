@@ -1063,6 +1063,7 @@ impl Run<'_> {
                 )])) + "\n";
                 // The refusal's closing line, as every refused command ends.
                 if let Some(p @ Value::Object(_)) = at(&resp, "permission") {
+                    let p = &*crate::transport::permission::named(p);
                     match at(p, "command") {
                         Some(c @ Value::Str(_)) if py::truthy(c) => {
                             lines.push_str(&format!("Ask with: {}\n", py::str_of(c)));

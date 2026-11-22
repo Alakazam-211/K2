@@ -810,9 +810,10 @@ fn error_python(d: &Value, o: &mut String) -> Result<(), Raise> {
         push(o, &format!("{ERROR}{}{message}", py::str_of(&e)));
     }
     if let Some(Value::Object(p)) = dict_get(d, "permission") {
-        if let Some(command) = get(p, "command").filter(|c| py::truthy(c)) {
+        let p = crate::transport::permission::named_pairs(p);
+        if let Some(command) = get(&p, "command").filter(|c| py::truthy(c)) {
             push(o, &format!("Ask with: {}", plus_str(command, line::E_ASK)?));
-        } else if get(p, "requestable") == Some(&Value::Bool(false)) {
+        } else if get(&p, "requestable") == Some(&Value::Bool(false)) {
             push(o, "It can't be requested.");
         }
     }

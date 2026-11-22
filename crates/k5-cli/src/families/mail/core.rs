@@ -674,7 +674,7 @@ impl Py {
         let mut lines = dumps(&obj(vec![("error", obj(out))]));
         lines.push('\n');
         if let Some(Value::Object(perm)) = permission {
-            let perm = Value::Object(perm.clone());
+            let perm = Value::Object(crate::transport::permission::named_pairs(perm).into_owned());
             let cmd = attr_get(&perm, "command").ok().flatten();
             match cmd {
                 Some(Value::Str(t)) if !t.code_points().is_empty() => {

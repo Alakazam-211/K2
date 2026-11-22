@@ -290,6 +290,15 @@ macro_rules! cli_name {{
     }};
 }}
 
+/// A helper program's file name, `<command>-<part>`, as a literal, for
+/// `concat!` in a `const`: `helper_name!(\"agent\")`.
+#[macro_export]
+macro_rules! helper_name {{
+    ($part:literal) => {{
+        concat!({cli:?}, \"-\", $part)
+    }};
+}}
+
 /// The product's name, as people read it.
 pub const PRODUCT_NAME: &str = product_name!();
 
@@ -426,6 +435,15 @@ macro_rules! cli_name {
     };
 }
 
+/// A helper program's file name, `<command>-<part>`, as a literal, for
+/// `concat!` in a `const`: `helper_name!("agent")`.
+#[macro_export]
+macro_rules! helper_name {
+    ($part:literal) => {
+        concat!("ab", "-", $part)
+    };
+}
+
 /// The product's name, as people read it.
 pub const PRODUCT_NAME: &str = product_name!();
 
@@ -488,8 +506,8 @@ pub const RETIRED: &[RetiredName] = &[RetiredName { name: "abc", block_begin: "#
     }
 
     /// The default brand's install tokens are today's bytes: the lines in
-    /// people's shell startup files, the fish file's name and the system
-    /// path. A change to the generator that moves one fails here.
+    /// people's shell startup files, the fish file's name, the system path
+    /// and the helper programs' names. A change to the generator that moves one fails here.
     #[test]
     fn the_default_brand_gives_todays_install_tokens() {
         let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../brand/k2/brand.toml");
@@ -503,6 +521,8 @@ pub const RETIRED: &[RetiredName] = &[RetiredName { name: "abc", block_begin: "#
             "pub const RETIRED: &[RetiredName] = &[];\n",
             // The product's form and the command's form are one text.
             "pub const PATH_BLOCK_EARLIER: &[(&str, &str)] = &[];\n",
+            // Helper programs keep today's names (k2-ptyd, k2-daemon, ...).
+            "        concat!(\"k2\", \"-\", $part)\n",
         ] {
             assert!(out.contains(line), "{line:?} in:\n{out}");
         }

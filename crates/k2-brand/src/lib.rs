@@ -16,6 +16,10 @@
 //! (`k2_client::cli_install`) and the root helper's paths
 //! (`k2_root_proto::paths`) read them from here.
 //!
+//! A helper program's file name is the command's name, a dash and the
+//! helper's part: `helper_name!("agent")` is `k2-agent` in the default
+//! brand. It is a macro only, a literal for `concat!` and `const`s.
+//!
 //! The text forms are macros as well as consts, so a `const` sentence can
 //! be built with `concat!` and still be one `&'static str`. Inside this
 //! crate the macros are named by their bare names only, after the
@@ -150,5 +154,18 @@ mod tests {
     fn the_macros_build_const_sentences() {
         const LINE: &str = concat!("run ", cli_name!(), " msg in ", product_name!());
         assert_eq!(LINE, format!("run {CLI_NAME} msg in {PRODUCT_NAME}"));
+    }
+
+    /// A helper's name is the command's name, a dash and the part, as a
+    /// literal a `const` can hold.
+    #[test]
+    fn helper_names_are_the_command_a_dash_and_the_part() {
+        const AGENT: &str = helper_name!("agent");
+        assert_eq!(AGENT, format!("{CLI_NAME}-agent"));
+        assert_eq!(helper_name!("ptyd"), format!("{CLI_NAME}-ptyd"));
+        assert_eq!(
+            concat!("/usr/bin/", helper_name!("daemon")),
+            format!("/usr/bin/{CLI_NAME}-daemon")
+        );
     }
 }

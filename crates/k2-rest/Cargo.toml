@@ -1,0 +1,22 @@
+[package]
+name = "k2-rest"
+# Its own version line, independent of the K2 release: release.sh does not
+# bump it.
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "K2's PostgREST-compatible grammar for an App's /rest/v1 door (prd-app-supabase-compat-v1 §7): the request parser, the schema cache and the SQL builder. No daemon types and no driver: it turns a request into SQL text, and the daemon runs it."
+
+[features]
+# A throwaway Postgres server for real-Postgres tests (initdb + pg_ctl from
+# REALPG_BIN). Std only; never in a shipped build.
+testkit = []
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time"] }
+tokio-postgres = "0.7"

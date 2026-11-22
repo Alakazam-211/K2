@@ -1374,8 +1374,8 @@ pub async fn dispatch(mut stream: TcpStream, state: crate::DaemonState, ingress:
             crate::response_wire::reset();
             super::answer_probe::start(&[]);
             let mut answered_head = Vec::new();
-            let outcome =
-                crate::watch_tcp_in_place!(handle_one_request(&mut stream, &state, ingress, &mut answered_head));
+            let outcome = match crate::apps::compat::door::link_door(&mut stream, ingress).await { Some(keep) => if keep { DispatchOutcome::KeepAlive } else { DispatchOutcome::Done }, // compat doors, App link only
+                None => crate::watch_tcp_in_place!(handle_one_request(&mut stream, &state, ingress, &mut answered_head)) };
             match outcome {
                 DispatchOutcome::KeepAlive => {
                     // An arm that answered without consuming its request

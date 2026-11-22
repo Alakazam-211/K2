@@ -382,7 +382,9 @@ where
     match live(app_id) {
         None => {
             let local = super::local_answers::for_app(app_id);
-            let head = match read_first(client, app_id, local.as_ref(), crate::client_ip::visitor_of(mode), None).await {
+            // The compat doors answer while the App is down too.
+            let compat = super::compat::door::watching(app_id).then_some(app_id);
+            let head = match read_first(client, app_id, local.as_ref(), crate::client_ip::visitor_of(mode), None, compat).await {
                 Some(FirstRequest::Answered) => return,
                 Some(FirstRequest::Pass(bytes)) => bytes,
                 None => consume_request_head(client).await,
@@ -449,10 +451,14 @@ where
     // The sign-in door (0.46.9, `auth_door`): only where every request is
     // parsed (the rewrite), never on a raw splice.
     let door = mode.and_then(|m| super::auth_door::hook_for(&be.app_id).map(|h| (m, h)));
+    // The Supabase-compatible doors (prd-app-supabase-compat-v1 §4): the
+    // rewrite only, like every door that reads requests after the first.
+    let compat_id = be.app_id.clone();
+    let compat = (mode.is_some() && super::compat::door::watching(&compat_id)).then_some(compat_id.as_str());
     // K2's other doors on every later request (0.46.10): the rewrite only.
-    let divert = mode.map(|_| super::voice_door::divert_for(label));
+    let divert = mode.map(|_| super::compat::door::divert_for(compat, label));
     let port = be.port;
-    let (mut pending, mut head_read) = match read_first(client, label, local.as_ref(), visitor, door.as_ref()).await {
+    let (mut pending, mut head_read) = match read_first(client, label, local.as_ref(), visitor, door.as_ref(), compat).await {
         Some(FirstRequest::Answered) => return TlsAppOutcome::Answered,
         Some(FirstRequest::Pass(bytes)) => (bytes, true),
         None => (Vec::new(), false),
@@ -477,7 +483,11 @@ where
         };
         // A later request is K2's: served as a first request, App up or down.
         let mut r = crate::client_ip::Replay::new(rest, client);
-        match super::voice_door::first_request(&mut r, label, None, visitor).await {
+        let next = match compat {
+            Some(app) => super::compat::door::first_request(&mut r, app, label, None, visitor).await,
+            None => super::voice_door::first_request(&mut r, label, None, visitor).await,
+        };
+        match next {
             FirstRequest::Answered => return TlsAppOutcome::Answered,
             FirstRequest::Pass(mut bytes) => {
                 bytes.extend_from_slice(&r.unread());
@@ -500,6 +510,7 @@ async fn read_first<S>(
     local: Option<&crate::client_ip::LocalAnswer>,
     visitor: Option<std::net::IpAddr>,
     door: Option<&(crate::client_ip::Mode, crate::client_ip::DoorHook)>,
+    compat: Option<&str>,
 ) -> Option<FirstRequest>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -513,7 +524,7 @@ where
         // Not the door's: the call door and the local answers read the
         // same bytes again.
         let mut r = crate::client_ip::Replay::new(p.bytes, client);
-        let got = read_first_plain(&mut r, app_id, local, visitor).await;
+        let got = read_first_plain(&mut r, app_id, local, visitor, compat).await;
         let rest = r.unread();
         return Some(match got {
             Some(FirstRequest::Answered) => FirstRequest::Answered,
@@ -524,7 +535,7 @@ where
             None => FirstRequest::Pass(rest),
         });
     }
-    read_first_plain(client, app_id, local, visitor).await
+    read_first_plain(client, app_id, local, visitor, compat).await
 }
 
 /// [`read_first`] without the sign-in door.
@@ -533,10 +544,16 @@ async fn read_first_plain<S>(
     app_id: &str,
     local: Option<&crate::client_ip::LocalAnswer>,
     visitor: Option<std::net::IpAddr>,
+    compat: Option<&str>,
 ) -> Option<FirstRequest>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    // The compat doors read the head first; anything else goes on to the
+    // call and transfer doors and the local answers from there.
+    if let Some(app) = compat {
+        return Some(super::compat::door::first_request(client, app, app_id, local, visitor).await);
+    }
     // The call door and the transfer door (0.46.9, while any transfer is
     // live on this box) are both read here.
     if super::voice_door::watching(app_id) || crate::transfer_door::watching() {

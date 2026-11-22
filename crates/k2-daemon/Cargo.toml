@@ -378,6 +378,15 @@ pg_query = "=6.2.1"
 # Constant-time zeroing of key buffers read from key stores.
 zeroize = "1"
 
+# The Supabase-compatible App data doors (prd-app-supabase-compat-v1 §7.1):
+# a pooled Postgres connection per compat database instead of one psql
+# process per call. tokio-postgres (MIT OR Apache-2.0) speaks the protocol;
+# deadpool-postgres (MIT OR Apache-2.0) keeps the pool. The grammar and SQL
+# builder are K2's own crate, k2-rest.
+tokio-postgres = "0.7"
+deadpool-postgres = "0.14"
+k2-rest = { path = "../k2-rest" }
+
 # K2 vault on macOS (KV5, KV7): the box key in the login Keychain through
 # Security.framework (never /usr/bin/security), and the owner confirm via
 # LocalAuthentication (system-drawn Touch ID / password sheet).
@@ -482,6 +491,8 @@ mail-builder = { version = "1.0", default-features = false }
 # Docs test (kit v0.9.5 rollback): writes a newer kit's table into a temp
 # docs store, as that kit would. The redb k2-core and the kit already link.
 redb = "2"
+# The compat doors' real-Postgres tests: k2-rest's throwaway server.
+k2-rest = { path = "../k2-rest", features = ["testkit"] }
 
 # K2 compute nodes: the headless contract test drives the REAL node runtime
 # (a separate crate that never links k2-core) against the in-process daemon.

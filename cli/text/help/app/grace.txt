@@ -48,6 +48,13 @@ Move a legacy --cmd service to an App yourself (walkthrough: k2 study app-move):
                                        $K2_SECRETS_DIR/K2_APP_KEY at its next
                                        start (--show prints it once instead).
                                        From an agent: held for the owner.
+                                       Scopes: users rooms fetch push email
+                                       signin, and for the Supabase-compatible
+                                       doors service (service_role on
+                                       /rest/v1, the gateway link only unless
+                                       allowed on the public host) and links
+                                       (invite and recovery links back to the
+                                       App).
   k2 app keys [<app>] [--json]         App keys (never the key itself).
   k2 app key revoke <key-id>           Stops it at once.
   k2 app approvals [<request-id>] [--app A] [--state S|--all] [--json]

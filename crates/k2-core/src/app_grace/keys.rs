@@ -12,6 +12,8 @@
 //! | `fetch` | call an outside API through K2 with a secret granted to the service, by name |
 //! | `push`  | send notifications to its own guests' phones (prd-custom-app-push-v1, 0.46.4) |
 //! | `email` | send email from the App's own sender (prd-email-notifications-core-v1, 0.46.5) |
+//! | `service` | the server key on the Supabase-compatible doors: `service_role` (prd-app-supabase-compat-v1 §4) |
+//! | `links` | invite and recovery links handed back to the App to mail itself (§8.3) |
 //!
 //! `spaces` (Space grants) is named so a mint can say "later": it arrives
 //! with Sew in K2. The ceiling (`rooms` workspace ids, `roles` role ids) is
@@ -36,8 +38,17 @@ pub const SCOPE_EMAIL: &str = "email";
 /// all a server hosted elsewhere needs to sign people in. `users` opens it
 /// too, so existing keys work.
 pub const SCOPE_SIGNIN: &str = "signin";
+/// The App's server key on its Supabase-compatible doors
+/// (prd-app-supabase-compat-v1 §4): `/rest/v1` and `/storage/v1` run as
+/// `service_role` (BYPASSRLS), and `/auth/v1/admin/*` opens. On the gateway
+/// link only, unless the owner allows it on the public host.
+pub const SCOPE_SERVICE: &str = "service";
+/// `/auth/v1/admin/generate_link` hands invite and recovery links back to
+/// the App to mail itself (prd-app-supabase-compat-v1 §8.3). Off unless the
+/// owner mints a key with it; the App's status warns while one exists.
+pub const SCOPE_LINKS: &str = "links";
 /// Scopes a key can hold today.
-pub const SCOPES: &[&str] = &[SCOPE_USERS, SCOPE_ROOMS, SCOPE_FETCH, SCOPE_PUSH, SCOPE_EMAIL, SCOPE_SIGNIN];
+pub const SCOPES: &[&str] = &[SCOPE_USERS, SCOPE_ROOMS, SCOPE_FETCH, SCOPE_PUSH, SCOPE_EMAIL, SCOPE_SIGNIN, SCOPE_SERVICE, SCOPE_LINKS];
 /// Named for later: refused at mint with a pointer.
 pub const LATER_SCOPES: &[&str] = &["spaces"];
 /// Rooms one key may name.

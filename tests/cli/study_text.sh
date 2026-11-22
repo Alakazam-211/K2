@@ -239,7 +239,9 @@ if [ "$NEW" != "$CLI_BASH_SOURCE" ]; then
     # A second topic: the refusal and the usage.
     native errors db
     native errors db --json
-    handed -- errors
+    # A stray -- (study takes none): the binary's own refusal, the shell's
+    # line and exit 2, nothing sent (the front's _k2_takes_dashdash rule).
+    native -- errors
     # A passport, and a page that asks nothing: the binary's own page.
     RUN_ENV=("K2_HOOK_TOKEN=sessT.notreal1" "$BROKEN")
     run "$NEW" "$SANDBOX/out/bin" study errors

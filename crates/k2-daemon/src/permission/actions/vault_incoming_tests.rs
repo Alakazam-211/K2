@@ -113,6 +113,7 @@ fn the_card_is_registered_admin_click_one_time_and_k2_presented() {
     assert!(crate::routes::route_policy::lookup(ROUTE).and_then(|x| x.post).is_some(), "{ROUTE} has a POST row");
     assert!(crate::permission::present::find_not_cardable(ACTION).is_none(), "no longer 'can't be requested'");
     assert_eq!(ask_line("hd_1"), "k2 permission request vault.incoming.accept id=hd_1 --why \"<what you need it for>\"");
+    assert_eq!(ask_tail("hd_1"), "permission request vault.incoming.accept id=hd_1 --why \"<what you need it for>\"");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

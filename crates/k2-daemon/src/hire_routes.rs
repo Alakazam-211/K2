@@ -40,7 +40,7 @@ use k2_core::hire::{ledger, links, HireCaller, HireError};
 use crate::cli_response::CliResponse;
 use crate::compute_routes::Who;
 use crate::routes::http::V1Principal;
-use k2_core::brand::CLI_NAME;
+use k2_core::brand::CLI_SLOT;
 
 pub const MAX_BODY: usize = 2 * 1024 * 1024;
 
@@ -122,6 +122,14 @@ fn ok(v: serde_json::Value) -> CliResponse {
 
 fn err(status: u16, code: &'static str, hint: impl Into<String>) -> CliResponse {
     hire_error_response(&HireError::new(status, code, hint))
+}
+
+/// The 403 `hire_off` refusal for [`hire_off_hint`]'s template: the hint
+/// with this server's names, the template beside it as `hintTemplate`.
+fn hire_off(template: &str) -> CliResponse {
+    let mut body = HireError::new(403, "hire_off", k2_core::brand::fill_names(template)).body();
+    body["error"]["hintTemplate"] = serde_json::json!(template);
+    CliResponse { status: status_line(403), content_type: "application/json", body: body.to_string() }
 }
 
 /// The `/v1` uniform 404 (same body as an unknown `/v1` path).
@@ -1005,8 +1013,9 @@ fn passport_authority(who: &Who) -> Result<ConvergeAuthority, HireError> {
 }
 
 /// The refusal an agent gets when its workspace's "Let this agent hire
-/// agents" is off (`hire_off`; the walls map teaches `agents.hire`).
-pub(crate) const HIRE_OFF_HINT: &str = "Ask your human to turn on 'Let this agent hire agents' in Settings → Workspaces / Agents → {ws} → Permissions (or run k2 agent access set {ws} agents_hire on as the owner). Opening your own sidecars is a separate switch.";
+/// agents" is off (`hire_off`; the walls map teaches `agents.hire`), as a
+/// template: `{cli}` is the command's name ([`hire_off_hint`]).
+pub(crate) const HIRE_OFF_HINT: &str = "Ask your human to turn on 'Let this agent hire agents' in Settings → Workspaces / Agents → {ws} → Permissions (or run {cli} agent access set {ws} agents_hire on as the owner). Opening your own sidecars is a separate switch.";
 
 /// The card an agent asks with for "Let this agent hire agents".
 const HIRE_ACTION: &str = "agents.hire";
@@ -1017,14 +1026,17 @@ const HIRE_ACTION: &str = "agents.hire";
 /// `k2 permission` is an unknown command for it (`k2 study permissions`,
 /// "Off"), so the hint says what the person clicks and how they turn cards
 /// on so the next ask is a card (0.46.16: an agent that had hired before
-/// 0.46.12 got `hire_off` with neither).
+/// 0.46.12 got `hire_off` with neither). A template: the command's name is
+/// `{cli}` ([`k2_core::brand::CLI_SLOT`]); the hint sent is it filled with
+/// this server's name, the template beside it as `hintTemplate`
+/// ([`hire_off`]), so a CLI of another brand names its own (C5).
 pub(crate) fn hire_off_hint(workspace_id: &str, ws: &str) -> String {
     let base = HIRE_OFF_HINT.replace("{ws}", ws);
     if k2_core::permission::gate::enabled_for(workspace_id) {
         base
     } else {
         format!(
-            "{base} Permission cards are off for you, so no card can go up: to approve from a card instead, your human turns them on ({}) and you ask with {CLI_NAME} permission request {HIRE_ACTION}.",
+            "{base} Permission cards are off for you, so no card can go up: to approve from a card instead, your human turns them on ({}) and you ask with {CLI_SLOT} permission request {HIRE_ACTION}.",
             crate::apps::user_hold::PERMISSION_CARDS_ON_PATH
         )
     }
@@ -1043,10 +1055,12 @@ fn hire_switch_note(who: &Who) -> Option<serde_json::Value> {
         return None;
     }
     let ws = k2_core::workspace_session_handles::workspace_address_name_shared(project_id).unwrap_or_else(|_| project_id.clone());
+    let template = hire_off_hint(project_id, &ws);
     let mut v = serde_json::json!({
         "on": false,
         "code": "hire_off",
-        "hint": hire_off_hint(project_id, &ws),
+        "hint": k2_core::brand::fill_names(&template),
+        "hintTemplate": template,
     });
     if k2_core::permission::gate::enabled_for(project_id) {
         v["command"] = serde_json::json!(crate::permission::walls::ask_command(HIRE_ACTION, &serde_json::Map::new()));
@@ -1077,7 +1091,7 @@ fn agent_hire_gate(who: &Who, body: &[u8]) -> Result<(), CliResponse> {
     let ws = k2_core::workspace_session_handles::workspace_address_name_shared(project_id).unwrap_or_else(|_| project_id.clone());
     if !(template && dry_run) && !k2_core::workspace::settings::agents_can_hire_agents(project_id) {
         audit("agent-hire", &who.label(), &outcome("hire_off"));
-        return Err(err(403, "hire_off", hire_off_hint(project_id, &ws)));
+        return Err(hire_off(&hire_off_hint(project_id, &ws)));
     }
     if !is_main_session(project_id, session_id) {
         audit("agent-hire", &who.label(), &outcome("main_only"));

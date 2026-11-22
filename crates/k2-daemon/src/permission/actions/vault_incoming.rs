@@ -112,7 +112,13 @@ pub(crate) static ACCEPT: ActionSpec = ActionSpec {
 
 /// The exact line an agent asks with (Beta on), for its texts.
 pub(crate) fn ask_line(delivery_id: &str) -> String {
-    format!("{CLI_NAME} permission request {ACTION} id={delivery_id} --why \"<what you need it for>\"")
+    format!("{CLI_NAME} {}", ask_tail(delivery_id))
+}
+
+/// [`ask_line`] after the command's name: an item's `askTail`, for a CLI
+/// to put its own name in front (white-label C5).
+pub(crate) fn ask_tail(delivery_id: &str) -> String {
+    format!("permission request {ACTION} id={delivery_id} --why \"<what you need it for>\"")
 }
 
 fn id_of(ctx: &Ctx) -> Result<&str, String> {
@@ -410,7 +416,7 @@ pub(crate) fn present_for(rec: &HandoffRecord) -> Value {
     let handle = present::workspace_handle(ws);
     let params = k2_params(&vault, rec);
     let ctx = Ctx { workspace_id: ws.to_string(), workspace_handle: handle.clone(), params: params.clone() };
-    if let Check::Moved(why) | Check::Unavailable { why, .. } = (reg.check)(&ctx) {
+    if let Check::Moved(why) | Check::Unavailable { why, .. } = reg.check_named(&ctx) {
         return json!({ "card": null, "why": why });
     }
     let hash = params_hash(&params);

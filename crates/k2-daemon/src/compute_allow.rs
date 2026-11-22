@@ -30,8 +30,9 @@ use k2_core::compute::allow::{self, Change};
 use k2_core::compute::proto::frames::JobState;
 use k2_core::compute::{self as compute, store};
 use k2_core::brand::PRODUCT_NAME;
+use k2_core::brand::{CLI_SLOT, PRODUCT_SLOT};
 
-use crate::compute_routes::{audit, b, json_body, need_credential, no, owner_only, resolve_node_for, s, target_ws, Who, Ws, R};
+use crate::compute_routes::{audit, b, json_body, named_no, need_credential, no, owner_only, resolve_node_for, s, target_ws, Who, Ws, R};
 use k2_core::brand::CLI_NAME;
 
 /// `GET` the list (`k2 compute allow-nodes`).
@@ -78,14 +79,14 @@ fn list_words(names: &[String]) -> String {
 /// there, "named", "--same-node-as …"). Carries `node`, `nodes` (what a
 /// person would add: the permission card's value) and `allowed`.
 pub(crate) fn not_allowed(ws: &Ws, node_name: &str, names: &[String], what: &str) -> crate::compute_routes::Refusal {
-    no(
+    named_no(
         NODE_NOT_ALLOWED,
         403,
         format!(
             "{what} '{node_name}' is not on workspace {}'s compute node list, so its jobs (and the source they sync) never go there. \
-             Its list: {}. Name one of those, or no node ({PRODUCT_NAME} picks one on the list). Only a person adds a node: \
-             {CLI_NAME} compute allow-nodes --add {node_name} --workspace {} (the owner or an Admin, from a terminal outside {PRODUCT_NAME}), \
-             or they approve the card {}'s agent asks with: {CLI_NAME} permission request compute.allow-nodes nodes={node_name}",
+             Its list: {}. Name one of those, or no node ({PRODUCT_SLOT} picks one on the list). Only a person adds a node: \
+             {CLI_SLOT} compute allow-nodes --add {node_name} --workspace {} (the owner or an Admin, from a terminal outside {PRODUCT_SLOT}), \
+             or they approve the card {}'s agent asks with: {CLI_SLOT} permission request compute.allow-nodes nodes={node_name}",
             ws.handle,
             list_words(names),
             ws.handle,
@@ -264,10 +265,10 @@ pub(crate) fn set(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     let (nodes, add, remove) = (names_in(&v, "nodes")?, names_in(&v, "add")?, names_in(&v, "remove")?);
     let asks = [!nodes.is_empty(), !add.is_empty(), !remove.is_empty(), clear].iter().filter(|x| **x).count();
     if asks != 1 {
-        return Err(no(
+        return Err(named_no(
             compute::codes::BAD_REQUEST,
             400,
-            format!("say one of: the whole list ({CLI_NAME} compute allow-nodes linux-1,arch-1), --add NODE, --remove NODE, or --clear"),
+            format!("say one of: the whole list ({CLI_SLOT} compute allow-nodes linux-1,arch-1), --add NODE, --remove NODE, or --clear"),
         ));
     }
     let ws = target_ws(who, s(&v, "workspace")).map_err(|r| other_workspace(who, s(&v, "workspace"), r))?;
@@ -293,10 +294,10 @@ pub(crate) fn set(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         old_ids.as_ref().map(|o| -> R<Vec<String>> { Ok(allow::normalize(&[o.clone(), resolve(&add)?].concat())) }).transpose()?
     } else {
         let Some(o) = old_ids.as_ref() else {
-            return Err(no(
+            return Err(named_no(
                 compute::codes::BAD_REQUEST,
                 400,
-                format!("workspace {} has no node list to remove from; set one: {CLI_NAME} compute allow-nodes <node>[,<node>…]", ws.handle),
+                format!("workspace {} has no node list to remove from; set one: {CLI_SLOT} compute allow-nodes <node>[,<node>…]", ws.handle),
             ));
         };
         let gone = resolve(&remove)?;
@@ -322,12 +323,12 @@ pub(crate) fn set(who: &Who, body: &[u8]) -> R<serde_json::Value> {
                 let ungranted: Vec<String> = ids.iter().filter(|id| store::grant(&conn, id, &ws.id).is_none()).map(|id| name_of(&conn, id)).collect();
                 if !ungranted.is_empty() {
                     let list = ungranted.join(",");
-                    return Err(no(
+                    return Err(named_no(
                         NOT_GRANTED,
                         403,
                         format!(
                             "{} {} not granted to workspace {}, so a node list entry would never let its jobs in. A person grants {} first \
-                             (Settings → Cores → Compute, or {CLI_NAME} compute grant <node> --workspace {} from a terminal outside {PRODUCT_NAME}); then ask to add {}",
+                             (Settings → Cores → Compute, or {CLI_SLOT} compute grant <node> --workspace {} from a terminal outside {PRODUCT_SLOT}); then ask to add {}",
                             ungranted.join(", "),
                             if ungranted.len() == 1 { "is" } else { "are" },
                             ws.handle,
@@ -347,22 +348,22 @@ pub(crate) fn set(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         let hint = if clear {
             format!(
                 "clearing workspace {}'s compute node list opens every node granted to it at once (more than adding the ones it needs), \
-                 so only a person does it: the owner or an Admin, from a terminal outside {PRODUCT_NAME} ({CLI_NAME} compute allow-nodes --clear --workspace {}). \
-                 To reach one more node, ask for just that node: {CLI_NAME} compute allow-nodes --add <node>. An agent may only narrow its list",
+                 so only a person does it: the owner or an Admin, from a terminal outside {PRODUCT_SLOT} ({CLI_SLOT} compute allow-nodes --clear --workspace {}). \
+                 To reach one more node, ask for just that node: {CLI_SLOT} compute allow-nodes --add <node>. An agent may only narrow its list",
                 ws.handle, ws.handle
             )
         } else {
             format!(
                 "{words} workspace {}'s compute node list lets its jobs (and the source they sync) reach more machines, so a person decides: \
-                 the owner or an Admin, from a terminal outside {PRODUCT_NAME} ({CLI_NAME} compute allow-nodes --add {} --workspace {}), or on the card \
-                 this agent asks for ({CLI_NAME} permission request compute.allow-nodes nodes={}). An agent may only narrow its list",
+                 the owner or an Admin, from a terminal outside {PRODUCT_SLOT} ({CLI_SLOT} compute allow-nodes --add {} --workspace {}), or on the card \
+                 this agent asks for ({CLI_SLOT} permission request compute.allow-nodes nodes={}). An agent may only narrow its list",
                 ws.handle,
                 added.join(","),
                 ws.handle,
                 added.join(",")
             )
         };
-        let mut r = no(NEEDS_PERSON, 403, hint).with("workspace", ws.handle.clone());
+        let mut r = named_no(NEEDS_PERSON, 403, hint).with("workspace", ws.handle.clone());
         // The card values: `nodes` (what to add) or `clear` (one of them
         // only, so each refusal names one card).
         if !added.is_empty() {
@@ -410,13 +411,13 @@ fn other_workspace(who: &Who, requested: Option<&str>, r: crate::compute_routes:
         return r;
     };
     let handle = crate::compute_routes::ws_by_token(req).map(|w| w.handle).unwrap_or_else(|| req.to_string());
-    no(
+    named_no(
         "forbidden",
         403,
         format!(
             "an agent changes only its own workspace's compute node list, never {handle}'s. {handle}'s own agent asks for a node on a card \
-             ({CLI_NAME} permission request compute.allow-nodes nodes=<node>, from its terminal), or a person runs \
-             {CLI_NAME} compute allow-nodes --add <node> --workspace {handle} from a terminal outside {PRODUCT_NAME}"
+             ({CLI_SLOT} permission request compute.allow-nodes nodes=<node>, from its terminal), or a person runs \
+             {CLI_SLOT} compute allow-nodes --add <node> --workspace {handle} from a terminal outside {PRODUCT_SLOT}"
         ),
     )
     .with("workspace", handle)
@@ -445,5 +446,12 @@ mod tests {
         assert_eq!(body["error"]["code"], NODE_NOT_ALLOWED);
         assert_eq!(body["error"]["nodes"], "k2n2-m1");
         assert_eq!(body["error"]["allowed"], serde_json::json!(["k2-arch", "k2n9"]));
+        // The hint names this server's command; its template has the slots
+        // a CLI of another brand fills with its own (white-label C5).
+        let t = body["error"]["hintTemplate"].as_str().expect("hintTemplate");
+        assert!(t.contains("{cli} compute allow-nodes --add k2n2-m1") && t.contains("{cli} permission request compute.allow-nodes"), "{t}");
+        assert!(t.contains("outside {product}") && !t.contains(&format!("{CLI_NAME} compute")) && !t.contains(&format!("{CLI_NAME} permission")), "{t}");
+        assert_eq!(body["error"]["hint"].as_str(), Some(k2_core::brand::fill_names(t).as_str()));
+        assert_eq!(r.hint, k2_core::brand::fill_names(t));
     }
 }

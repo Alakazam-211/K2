@@ -104,7 +104,7 @@ pub(crate) fn cached_check(req: &PermissionRequest) -> Check {
         }
     }
     let c = match present::find_action(&req.action) {
-        Some(r) => (r.check)(&present::ctx_of(req)),
+        Some(r) => r.check_named(&present::ctx_of(req)),
         None => Check::Moved("K2 no longer knows this action".to_string()),
     };
     if let Ok(mut g) = CACHE.lock() {

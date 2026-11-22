@@ -287,6 +287,7 @@ fn a_carried_difference_offers_the_card_until_the_person_signs() {
     let (s, v) = sign(&agent(&ws), false, json!({"widget": "board"}));
     assert_eq!(s, "200 OK", "{v}");
     assert_eq!(v["review"]["ask"], json!("k2 zen widget sign board --ask"), "{v}");
+    assert_eq!(v["review"]["askTail"], json!("zen widget sign board --ask"), "after the command's name (C5): {v}");
     assert_eq!(v["review"]["changes"], json!("Since it was signed, this widget now asks for presence:read."), "the answer's review line");
     let (s, v) = sign(&agent(&ws), false, json!({"widget": "board", "ask": true}));
     assert_eq!(s, "200 OK", "{v}");

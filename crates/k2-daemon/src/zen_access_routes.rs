@@ -1021,11 +1021,18 @@ pub(crate) fn carry_review(widget: &str, hash: &str) -> J {
         k2_core::zen::version_carry::unreviewed_difference(&conn, widget, hash).ok().flatten()
     };
     match d {
-        Some(d) => json!({
-            "changes": format!("Since it was signed, this widget {d}."),
-            "ask": format!("k2 zen widget sign {widget} --ask"),
-            "message": format!("K2 kept {widget}'s signature at upgrade although its manifest changed after it was signed; ask the person to look: k2 zen widget sign {widget} --ask"),
-        }),
+        Some(d) => {
+            // `ask` with this server's name, and `askTail`, the same line
+            // after the name: a CLI puts its own in front (white-label C5).
+            let (cli, product) = (k2_core::brand::CLI_NAME, k2_core::brand::PRODUCT_NAME);
+            let tail = format!("zen widget sign {widget} --ask");
+            json!({
+                "changes": format!("Since it was signed, this widget {d}."),
+                "ask": format!("{cli} {tail}"),
+                "askTail": tail,
+                "message": format!("{product} kept {widget}'s signature at upgrade although its manifest changed after it was signed; ask the person to look: {cli} {tail}"),
+            })
+        }
         None => J::Null,
     }
 }

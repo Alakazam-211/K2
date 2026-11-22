@@ -139,7 +139,7 @@ pub(crate) fn handle(params: &HashMap<String, String>, card: &CardCtx<'_>, who: 
     }
     // The tighten twin, through the Settings route's own entry, as the
     // person: no confirm (§4.4).
-    match (twin.apply)(&twin_ctx(&req, twin.spec), who, None) {
+    match twin.apply_named(&twin_ctx(&req, twin.spec), who, None) {
         Applied::Done { .. } => {}
         Applied::Refused { code: c, message } => {
             unclaim(req.id.as_str(), &marker, req.result_message.as_deref());

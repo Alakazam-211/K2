@@ -123,10 +123,43 @@ pub fn release_tag_url(version: &str) -> String {
     format!("{RELEASES_URL_PREFIX}tag/v{}", version.strip_prefix('v').unwrap_or(version))
 }
 
+/// Where a daemon's text template puts the command's name: a hint sent as
+/// a template beside the hint (`hintTemplate`, white-label C5) holds this,
+/// so a CLI of another brand can put its own name there.
+pub const CLI_SLOT: &str = "{cli}";
+
+/// Where a daemon's text template puts the product's name.
+pub const PRODUCT_SLOT: &str = "{product}";
+
+/// A text template with `cli` and `product` put in for [`CLI_SLOT`] and
+/// [`PRODUCT_SLOT`]: the command's name first, then the product's (the
+/// shell CLI's `k2_hint_fill` does the same, in that order).
+pub fn fill_names_with(template: &str, cli: &str, product: &str) -> String {
+    template.replace(CLI_SLOT, cli).replace(PRODUCT_SLOT, product)
+}
+
+/// [`fill_names_with`] with this build's names.
+pub fn fill_names(template: &str) -> String {
+    fill_names_with(template, CLI_NAME, PRODUCT_NAME)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::cli_name;
+
+    /// A template takes any brand's names, the command's first; a text with
+    /// no slot is as it was.
+    #[test]
+    fn a_template_takes_the_names_it_is_given() {
+        let t = "run {cli} compute allow-nodes --add n1 from a terminal outside {product} ({cli} help)";
+        assert_eq!(
+            fill_names_with(t, "zz", "Globex Desk"),
+            "run zz compute allow-nodes --add n1 from a terminal outside Globex Desk (zz help)"
+        );
+        assert_eq!(fill_names(t), format!("run {CLI_NAME} compute allow-nodes --add n1 from a terminal outside {PRODUCT_NAME} ({CLI_NAME} help)"));
+        assert_eq!(fill_names("no names {here}"), "no names {here}");
+    }
 
     /// The values, spelled out: a change to one is a rename people see.
     #[test]

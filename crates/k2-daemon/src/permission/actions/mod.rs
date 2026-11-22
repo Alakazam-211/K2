@@ -142,6 +142,43 @@ pub(crate) enum Applied {
     Refused { code: String, message: String },
 }
 
+impl Check {
+    /// The texts with this server's names: a check may word a hint as a
+    /// template ([`k2_core::brand::CLI_SLOT`], [`k2_core::brand::PRODUCT_SLOT`]),
+    /// which the request's refusal sends beside the hint as `hintTemplate`
+    /// (white-label C5). Everything else that reads a check (a card, the
+    /// click, the cache, a raise) reads it through [`Registered::check_named`].
+    pub(crate) fn filled(self) -> Check {
+        match self {
+            Check::Moved(t) => Check::Moved(k2_core::brand::fill_names(&t)),
+            Check::Unavailable { code, why } => Check::Unavailable { code, why: k2_core::brand::fill_names(&why) },
+            other => other,
+        }
+    }
+}
+
+impl Applied {
+    /// The message with this server's names ([`Check::filled`]).
+    pub(crate) fn filled(self) -> Applied {
+        match self {
+            Applied::Done { message } => Applied::Done { message: k2_core::brand::fill_names(&message) },
+            Applied::Refused { code, message } => Applied::Refused { code, message: k2_core::brand::fill_names(&message) },
+        }
+    }
+}
+
+impl Registered {
+    /// `check`, its texts with this server's names ([`Check::filled`]).
+    pub(crate) fn check_named(&self, ctx: &Ctx) -> Check {
+        (self.check)(ctx).filled()
+    }
+
+    /// `apply`, its message with this server's names ([`Applied::filled`]).
+    pub(crate) fn apply_named(&self, ctx: &Ctx, who: &Answerer, confirm_token: Option<&str>) -> Applied {
+        (self.apply)(ctx, who, confirm_token).filled()
+    }
+}
+
 /// One catalog action with its daemon half.
 pub(crate) struct Registered {
     pub spec: &'static ActionSpec,
@@ -262,5 +299,26 @@ mod tests {
     fn the_answerer_stamp_matches_the_confirm_broker() {
         assert_eq!(Answerer::OwnerToken.stamp(), "owner");
         assert_eq!(Answerer::Login { user: "rosson".into(), role: "owner".into() }.stamp(), "connect:rosson");
+    }
+
+    /// A check worded as a template: everything that reads it gets this
+    /// server's names, and the request's refusal also sends the template
+    /// as `hintTemplate` (white-label C5). A text with no slot is as it was.
+    #[test]
+    fn a_check_s_template_takes_this_server_s_names() {
+        let t = "ask with {cli} permission request a.b, from outside {product}";
+        let want = k2_core::brand::fill_names(t);
+        assert!(!want.contains('{'), "{want}");
+        assert_eq!(Check::Moved(t.into()).filled(), Check::Moved(want.clone()));
+        assert_eq!(Check::Unavailable { code: "c", why: t.into() }.filled(), Check::Unavailable { code: "c", why: want.clone() });
+        assert_eq!(Applied::Refused { code: "c".into(), message: t.into() }.filled(), Applied::Refused { code: "c".into(), message: want.clone() });
+        assert_eq!(Applied::Done { message: t.into() }.filled(), Applied::Done { message: want.clone() });
+        let r = crate::permission::answer::named_err(400, "bad_params", t);
+        let v: Value = serde_json::from_str(&r.body).expect("json");
+        assert_eq!((v["error"]["hint"].as_str(), v["error"]["hintTemplate"].as_str()), (Some(want.as_str()), Some(t)), "{v}");
+        let r = crate::permission::answer::named_err(400, "bad_params", "no names here");
+        let v: Value = serde_json::from_str(&r.body).expect("json");
+        assert_eq!(v["error"]["hint"], "no names here");
+        assert!(v["error"].get("hintTemplate").is_none(), "{v}");
     }
 }

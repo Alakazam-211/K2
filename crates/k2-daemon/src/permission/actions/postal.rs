@@ -736,7 +736,7 @@ fn present(ws: &Ws, action: &str, params: Map<String, Value>, why: &str, held_re
     };
     let handle = present::workspace_handle(&ws.id);
     let ctx = Ctx { workspace_id: ws.id.clone(), workspace_handle: handle.clone(), params: params.clone() };
-    if let Check::Moved(why) | Check::Unavailable { why, .. } = (reg.check)(&ctx) {
+    if let Check::Moved(why) | Check::Unavailable { why, .. } = reg.check_named(&ctx) {
         return json!({ "card": null, "why": why });
     }
     let at = k2_core::overlay::now_secs();

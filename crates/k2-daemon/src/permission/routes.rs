@@ -415,8 +415,8 @@ fn request(workspace_id: &str, session_id: &str, body: &Map<String, Value>) -> C
                 "text": format!("{} is already {} for {}. Nothing to ask; run your command again.", w.setting, present::on_word(spec.direction), w.scope),
             }))
         }
-        super::actions::Check::Moved(why) => return err(400, code::BAD_PARAMS, why),
-        super::actions::Check::Unavailable { code: c, why } => return err(409, c, why),
+        super::actions::Check::Moved(why) => return answer::named_err(400, code::BAD_PARAMS, &why),
+        super::actions::Check::Unavailable { code: c, why } => return answer::named_err(409, c, &why),
         super::actions::Check::Needed => {}
     }
     let hash = params_hash(&values);

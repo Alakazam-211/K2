@@ -763,9 +763,13 @@ pub(crate) fn waiting_note(username: &str) -> Option<serde_json::Value> {
         }
     }
     let app = on_app?;
+    // `ask` with this server's name, and `askTail`, the same line after
+    // the name: a CLI puts its own in front (white-label C5).
+    let tail = format!("app user invite {} --app {app}", p.username);
     Some(serde_json::json!({
         "rooms": held,
-        "ask": format!("k2 app user invite {} --app {app}", p.username),
+        "ask": format!("{} {tail}", k2_core::brand::CLI_NAME),
+        "askTail": tail,
     }))
 }
 

@@ -131,6 +131,22 @@ fn status_line(code: u16) -> &'static str {
     }
 }
 
+/// [`err`] for a hint worded as a template ([`k2_core::brand::CLI_SLOT`],
+/// [`k2_core::brand::PRODUCT_SLOT`]): the hint has this server's names,
+/// and the template rides beside it as `hintTemplate` for a CLI to fill
+/// with its own (white-label C5). With no slot it is [`err`].
+pub(crate) fn named_err(status: u16, code: &str, template: &str) -> CliResponse {
+    let hint = k2_core::brand::fill_names(template);
+    if hint == template {
+        return err(status, code, hint);
+    }
+    CliResponse {
+        status: status_line(status),
+        content_type: "application/json",
+        body: json!({ "ok": false, "error": { "code": code, "hint": hint, "hintTemplate": template } }).to_string(),
+    }
+}
+
 pub(crate) fn err(status: u16, code: &str, hint: impl std::fmt::Display) -> CliResponse {
     CliResponse {
         status: status_line(status),
@@ -533,7 +549,7 @@ fn decide_one(
     if present::text_hash_of(registered.spec, &ctx) != req.text_hash {
         return record(RequestState::Stale, Some("the card's wording changed after it was asked"), None);
     }
-    match (registered.check)(&ctx) {
+    match registered.check_named(&ctx) {
         Check::AlreadyDone => {
             let on = present::on_word(registered.spec.direction);
             let msg = format!("Already {on}. Nothing was applied.");
@@ -566,7 +582,7 @@ fn decide_one(
     // 3. The apply, through the route's own entry, as the answerer.
     CURRENT_REQUEST.with(|c| *c.borrow_mut() = Some(req.display_id().to_string()));
     ANSWER_OPTS.with(|c| *c.borrow_mut() = applied_opts);
-    let applied = (registered.apply)(&ctx, who, token);
+    let applied = registered.apply_named(&ctx, who, token);
     ANSWER_OPTS.with(|c| *c.borrow_mut() = AnswerOpts::default());
     CURRENT_REQUEST.with(|c| *c.borrow_mut() = None);
     match applied {

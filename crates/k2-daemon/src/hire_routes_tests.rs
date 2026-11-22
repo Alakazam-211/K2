@@ -570,6 +570,10 @@ fn a_plain_dry_run_tells_the_truth_and_the_refusal_teaches_the_card() {
         assert!(hint.contains(crate::apps::user_hold::PERMISSION_CARDS_ON_PATH), "and where they go on: {hint}");
         assert!(hint.ends_with("you ask with k2 permission request agents.hire."), "{hint}");
         assert!(v.get("permission").is_none(), "no card object while cards are off: {v}");
+        // The template beside it names no command: a CLI fills in its own (C5).
+        let t = v["error"]["hintTemplate"].as_str().expect("hintTemplate");
+        assert!(t.ends_with("you ask with {cli} permission request agents.hire.") && t.contains("(or run {cli} agent access set "), "{t}");
+        assert_eq!(k2_core::brand::fill_names(t), hint);
     }
     assert!(!Path::new(&path).exists(), "a dry run writes nothing");
     // The same refusal on the real run.
@@ -589,6 +593,11 @@ fn a_plain_dry_run_tells_the_truth_and_the_refusal_teaches_the_card() {
         "{v}"
     );
     assert!(v["hireSwitch"]["hint"].as_str().expect("hint").contains("Permission cards are off for you"), "{v}");
+    assert_eq!(
+        v["hireSwitch"]["hint"].as_str().map(str::to_string),
+        v["hireSwitch"]["hintTemplate"].as_str().map(k2_core::brand::fill_names),
+        "{v}"
+    );
     assert!(v["hireSwitch"].get("command").is_none(), "{v}");
 
     // Cards on for this agent (both switches): the hint is the plain one and

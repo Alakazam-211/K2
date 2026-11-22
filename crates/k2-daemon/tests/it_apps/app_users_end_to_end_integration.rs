@@ -210,6 +210,8 @@ async fn another_room_waits_for_the_persons_password_and_the_answer_says_so() {
     assert_eq!(r.json()["waitingForReset"]["rooms"], json!([b.ops.handle]), "{}", r.body);
     let ask = r.json()["waitingForReset"]["ask"].as_str().expect("how").to_string();
     assert_eq!(ask, format!("k2 app user invite {u} --app {}", b.shop_name));
+    // The line after the command's name, for a CLI to put its own in front (C5).
+    assert_eq!(r.json()["waitingForReset"]["askTail"], json!(format!("app user invite {u} --app {}", b.shop_name)), "{}", r.body);
     // Still tied, with a session (a password nobody chose through a flow).
     k2_daemon::test_harness::guest_with_own_password(&u, PW);
     assert!(tie_of(&u).is_some());

@@ -89,7 +89,7 @@ use serde_json::{json, Value};
 use super::held::{error_of, route_floor, text_param};
 use super::{Answerer, Applied, Check, Ctx, Registered};
 use crate::vault::actor::{Channel, VaultCaller};
-use k2_core::brand::CLI_NAME;
+use k2_core::brand::{CLI_NAME, CLI_SLOT};
 use k2_core::cli_name;
 
 /// The card's id.
@@ -425,7 +425,7 @@ fn check_share(ctx: &Ctx) -> Check {
     }
     if share.how.level() > m.delivery_ceiling.level() {
         return Check::Moved(format!(
-            "{name} can be delivered at most as {ceiling}. Ask for that first: {CLI_NAME} permission request vault.delivery secret={name} delivery={how}",
+            "{name} can be delivered at most as {ceiling}. Ask for that first: {CLI_SLOT} permission request vault.delivery secret={name} delivery={how}",
             name = share.secret,
             ceiling = m.delivery_ceiling,
             how = share.how.as_str()
@@ -454,7 +454,7 @@ fn check_share(ctx: &Ctx) -> Check {
         // one would never arrive.
         if g.delivery == Delivery::Env && share.how == Delivery::File {
             return Check::Moved(format!(
-                "{} already gets {} as env, which wins over a file. Remove that first: {CLI_NAME} publish secret remove {} {}",
+                "{} already gets {} as env, which wins over a file. Remove that first: {CLI_SLOT} publish secret remove {} {}",
                 svc.name, share.secret, svc.name, share.secret
             ));
         }
@@ -626,7 +626,7 @@ fn check_use(ctx: &Ctx) -> Check {
     };
     if is_own_workspace(ctx, ask.from) {
         return Check::Moved(format!(
-            "{} is your own workspace: you already use its secrets. To read one that a person gave it: {CLI_NAME} permission request vault.delivery secret={} delivery=file",
+            "{} is your own workspace: you already use its secrets. To read one that a person gave it: {CLI_SLOT} permission request vault.delivery secret={} delivery=file",
             ask.from, ask.secret
         ));
     }

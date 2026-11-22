@@ -719,6 +719,9 @@ pub(crate) fn view(vault: &LocalVault, r: &HandoffRecord) -> Value {
             Value::Null
         },
         "ask": (r.direction == "in" && r.status == "pending").then(|| crate::permission::actions::vault_incoming::ask_line(&r.delivery_id)),
+        // The same line after the command's name: a CLI puts its own name
+        // in front (white-label C5).
+        "askTail": (r.direction == "in" && r.status == "pending").then(|| crate::permission::actions::vault_incoming::ask_tail(&r.delivery_id)),
     })
 }
 

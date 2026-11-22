@@ -684,7 +684,7 @@ pub async fn browser_set_page_layers(
         };
         // Only a K2 window's own UI webview, never a browser page's label.
         if app.get_webview_window(&parent).is_none() {
-            return Err(format!("underlay: {parent:?} is not a K2 window"));
+            return Err(format!("underlay: {parent:?} is not one of the app's own windows"));
         }
         if cap_counts(&mut layers) {
             log::warn!(

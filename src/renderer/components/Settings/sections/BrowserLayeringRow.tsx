@@ -8,10 +8,11 @@
 import { Toggle } from '@/components/ui'
 import { isMacPlatform } from '@/lib/desktop-chrome'
 import { webFeatures } from '@/web/features'
+import { PRODUCT_NAME } from '@/lib/brand'
 import { readBrowserLayering, useBrowserLayeringStore } from '@/stores/browser-layering'
 import { SETTING_ROW_HINT, SETTING_ROW_LABEL, SaveError, SaveNote, SettingSwitchRow, useSaveStatus } from '../controls/SettingControls'
 
-export const BROWSER_LAYERING_LABEL = "Keep web pages live under K2's menus"
+export const BROWSER_LAYERING_LABEL = `Keep web pages live under ${PRODUCT_NAME}'s menus`
 
 export function BrowserLayeringRow({ mac = isMacPlatform() }: { mac?: boolean }): React.JSX.Element | null {
   const mode = useBrowserLayeringStore((s) => s.mode)
@@ -24,7 +25,7 @@ export function BrowserLayeringRow({ mac = isMacPlatform() }: { mac?: boolean })
     const want = next ? 'underlay' : 'legacy'
     setMode(want)
     if (readBrowserLayering(true) === want) save.saved()
-    else save.failed("this computer's storage is blocked, so it lasts until K2 closes")
+    else save.failed(`this computer's storage is blocked, so it lasts until ${PRODUCT_NAME} closes`)
   }
   return (
     <SettingSwitchRow
@@ -39,7 +40,7 @@ export function BrowserLayeringRow({ mac = isMacPlatform() }: { mac?: boolean })
       <div className={SETTING_ROW_LABEL}>{BROWSER_LAYERING_LABEL}</div>
       <div className={SETTING_ROW_HINT}>
         In a browser tab, menus, toasts and popovers no longer freeze the page, and clicks, scrolling and hover reach it. Off: the previous behaviour.
-        {on && failed ? ' It could not start in this window, so the previous behaviour is in use until K2 restarts.' : ''}
+        {on && failed ? ` It could not start in this window, so the previous behaviour is in use until ${PRODUCT_NAME} restarts.` : ''}
       </div>
       <SaveError state={save.state} />
     </SettingSwitchRow>

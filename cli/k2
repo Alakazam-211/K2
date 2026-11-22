@@ -2488,6 +2488,10 @@ _k2_proc_table_pgrep() {
 # In a caller's group (a script that ran k2 without job control) nothing
 # is signalled: that group holds the caller too. $1: the probe, ended
 # already; reaped here so bash prints no report of it either.
+# Known limit: with neither ps nor pgrep, and k2 in its caller's process
+# group, nothing is signalled, so the reader may still print a second
+# line. Ending the group would kill the caller. A /proc walk on Linux is
+# the planned follow-up.
 _k2_end_group() {
     local n=0
     kill -0 -- "-$$" 2>/dev/null || return 0

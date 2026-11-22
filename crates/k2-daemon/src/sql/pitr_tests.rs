@@ -320,6 +320,7 @@ fn an_unsafe_marker_table_refuses_the_drill() {
     let c = feedback(&pid);
     let mut ops = drill_ops("before\n", "public.orders|3\n");
     ops.query_answers.insert("psql 17-feedback postgres|pg_trigger".into(), "r|postgres|postgres|1|0\n".into());
+    ops.query_answers.insert("helper drop-drill 17-feedback_da602".into(), json!({"dropped": false}).to_string());
     let e = drill(&ops, &c, None).unwrap_err();
     assert!(e.hint().contains("marker table"), "{e:?}");
     assert!(sent(&ops, "INSERT INTO k2_restore_drill.markers").is_empty(), "{:?}", ops.recorded());

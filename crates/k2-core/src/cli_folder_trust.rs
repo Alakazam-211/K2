@@ -26,6 +26,12 @@ pub mod scan;
 /// The folder-trust gate: decisions, card asks, re-scan (SS9–SS11).
 pub mod gate;
 
+/// The harnesses whose own trust stores K2 writes. Not `agy`: Antigravity
+/// keeps its trust in `workspace_trust.pbtxt`, a protobuf-text file whose
+/// layout K2 hasn't seen written (agy reports a corrupt one and won't
+/// overwrite it), so agy's own "Do you trust the contents of this
+/// project?" is left to the person. An agy launch still passes K2's folder gate like every
+/// program ([`needs_gate`]).
 const HARNESS_BASENAMES: &[&str] = &["claude", "codex", "grok", "gemini", "cursor-agent"];
 const LOGIN_SHELL_BASENAMES: &[&str] = &[
     "zsh",
@@ -1397,6 +1403,20 @@ mod tests {
         assert!(!is_folder_trust_harness(Some("/bin/bash")));
         assert!(!is_folder_trust_harness(Some("pi")));
         assert!(!is_folder_trust_harness(Some("cat")));
+    }
+
+    /// Antigravity: K2 writes no grant into agy's own trust file (that
+    /// question stays agy's), but every agy launch still passes K2's
+    /// folder gate, the never-ask preset and a bare `agy` alike.
+    #[test]
+    fn agy_passes_the_gate_but_k2_writes_no_agy_grant() {
+        assert!(!is_folder_trust_harness(Some("agy")));
+        assert!(!is_folder_trust_harness(Some("/home/u/.local/bin/agy")));
+        let no_env = std::collections::HashMap::new();
+        for args in [vec![], vec!["--dangerously-skip-permissions".to_string()]] {
+            assert!(needs_gate(Some("agy"), &args, &no_env), "agy {args:?} must be gated");
+        }
+        assert!(needs_gate(Some("/home/u/.local/bin/agy"), &[], &no_env));
     }
 
     #[test]

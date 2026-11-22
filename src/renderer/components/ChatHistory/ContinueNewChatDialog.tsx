@@ -26,6 +26,7 @@ export const PROVIDER_CONFIG: Record<string, ProviderConfig> = {
   pi: { command: 'pi', label: 'Pi', resumeFlag: '--session' },
   codex: { command: 'codex', label: 'Codex', resumeSubcommand: 'resume' },
   hermes: { command: 'hermes', label: 'Hermes', resumeFlag: '--resume' },
+  agy: { command: 'agy', label: 'Antigravity', resumeFlag: '--conversation' },
 }
 
 export function providerKeyForCommand(command: string | null | undefined): string | null {

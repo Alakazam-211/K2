@@ -43,6 +43,14 @@ describe('CLI install commands', () => {
     expect(installingCliLabel('gemini')).toBe('Installing Gemini…')
   })
 
+  it('installs Antigravity with Google’s installer, not the Gemini CLI package', () => {
+    expect(CLI_INSTALL_COMMANDS.agy).toBe('curl -fsSL https://antigravity.google/cli/install.sh | bash')
+    expect(CLI_INSTALL_COMMANDS.agy).not.toContain('gemini-cli')
+    expect(installingCliLabel('agy')).toBe('Installing Antigravity…')
+    expect(installableCliProgram('agy --dangerously-skip-permissions')).toBe('agy')
+    expect(installableCliProgram('antigravity')).toBeNull()
+  })
+
   it('matches grok --always-approve and ignores a path token', () => {
     expect(installableCliProgram('grok --always-approve')).toBe('grok')
     expect(installableCliProgram('claude --dangerously-skip-permissions')).toBe('claude')

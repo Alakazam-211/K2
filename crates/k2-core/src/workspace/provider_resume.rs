@@ -140,6 +140,18 @@ const PROVIDERS: &[ProviderResume] = &[
         grammar: ResumeGrammar::Flag("--resume"),
         premint: None,
     },
+    ProviderResume {
+        provider: "agy",
+        command: "agy",
+        // Google's Antigravity terminal app (0.46.17). `agy --conversation
+        // <id>` resumes by id from any folder; `-c/--continue` is the last
+        // conversation of the current folder and is never used. An id agy
+        // can't find prints `conversation "<id>" not found` and starts a
+        // new one. No premint: agy mints its own ids, so callers spawn bare
+        // and adopt the id post-hoc (`agy --help` and runs of agy 1.5.14).
+        grammar: ResumeGrammar::Flag("--conversation"),
+        premint: None,
+    },
 ];
 
 /// Basename of a command's first token — `~/bin/claude` → `claude`,
@@ -209,11 +221,11 @@ pub const GEMINI_SESSION_ID_FLAG: &str = "--session-id";
 /// The union of flag tokens that carry a session id in SOME supported
 /// provider's grammar: `--session-id` (claude/grok premint),
 /// `--resume` / `-r` (claude/grok/gemini/cursor/hermes resume + shared
-/// aliases), `--session` (pi). Single source for the grammar-union
-/// matcher ([`argv_references_session`]) and the per-provider extractor
-/// ([`session_id_from_spawn_argv`]) — new grammars are added HERE and in
-/// [`PROVIDERS`], nowhere else.
-const SESSION_FLAG_TOKENS: &[&str] = &["--session-id", "--resume", "-r", "--session"];
+/// aliases), `--session` (pi), `--conversation` (agy). Single source for
+/// the grammar-union matcher ([`argv_references_session`]) and the
+/// per-provider extractor ([`session_id_from_spawn_argv`]) — new grammars
+/// are added HERE and in [`PROVIDERS`], nowhere else.
+const SESSION_FLAG_TOKENS: &[&str] = &["--session-id", "--resume", "-r", "--session", "--conversation"];
 
 /// Does a spawned argv claim ownership of `session_id`? Recognizes
 /// EVERY grammar K2 (or a user) launches supported agents with:
@@ -400,6 +412,9 @@ impl ProviderResume {
             // a compression fork still resolves (hermes redirects
             // `--resume <old-id>` to the chain tip itself).
             "hermes" => crate::chat_history::hermes_session_exists(session_id),
+            // Ignores project_path too: agy keeps one store for every
+            // folder and resumes an id from any of them.
+            "agy" => crate::chat_history::agy_session_file_exists(session_id),
             _ => false,
         }
     }
@@ -420,6 +435,7 @@ impl ProviderResume {
             "pi" => crate::chat_history::detect_pi_session(project_path),
             "codex" => crate::chat_history::detect_codex_session(project_path),
             "hermes" => crate::chat_history::detect_hermes_session(project_path),
+            "agy" => crate::chat_history::detect_agy_session(project_path),
             _ => None,
         }
     }
@@ -514,7 +530,9 @@ pub fn injection_profile_for_provider(provider: &str) -> InjectionProfile {
             post_spawn_settle: Duration::from_millis(1000),
         },
         // ?2004h liars — readiness is the settle floor alone (flat 7s).
-        "codex" | "gemini" | "pi" | "hermes" => InjectionProfile {
+        // agy (1.5.14) turns ?2004h on before it draws its sign-in screen,
+        // so the flip says nothing about its prompt box (PTY capture).
+        "codex" | "gemini" | "pi" | "hermes" | "agy" => InjectionProfile {
             ready_via_bracketed_paste: false,
             post_spawn_settle: Duration::from_millis(7000),
         },
@@ -876,6 +894,7 @@ mod tests {
             ("pi", "pi"),
             ("codex", "codex"),
             ("hermes", "hermes"),
+            ("agy", "agy"),
         ] {
             let a = provider_resume_for_command(cmd)
                 .unwrap_or_else(|| panic!("adapter missing for {cmd}"));
@@ -925,6 +944,15 @@ mod tests {
         // picker — RESUMABLE_CLI_TOOLS comment).
         let pi = provider_resume_for_provider("pi").unwrap();
         assert_eq!(pi.resume_args(&[], "SID"), args(&["--session", "SID"]));
+        // Antigravity resumes by id with --conversation, after the
+        // preset's never-ask flag: `agy --dangerously-skip-permissions
+        // --conversation <id>` (its -c/--continue is the folder's last
+        // conversation and takes no id).
+        let agy = provider_resume_for_command("agy --dangerously-skip-permissions").unwrap();
+        assert_eq!(
+            agy.resume_args(&args(&["--dangerously-skip-permissions"]), "SID"),
+            args(&["--dangerously-skip-permissions", "--conversation", "SID"])
+        );
     }
 
     #[test]
@@ -958,7 +986,7 @@ mod tests {
             grok.premint_args(&args(&["--always-approve"]), "NEW"),
             Some(args(&["--always-approve", "--session-id", "NEW"]))
         );
-        for p in ["pi", "codex", "gemini", "cursor", "hermes"] {
+        for p in ["pi", "codex", "gemini", "cursor", "hermes", "agy"] {
             assert_eq!(
                 provider_resume_for_provider(p)
                     .unwrap()
@@ -974,8 +1002,8 @@ mod tests {
     #[test]
     fn argv_references_session_matches_every_supported_grammar() {
         let sid = "11111111-2222-3333-4444-555555555555";
-        // Flag styles (claude/grok/gemini/cursor/pi).
-        for flag in ["--session-id", "--resume", "-r", "--session"] {
+        // Flag styles (claude/grok/gemini/cursor/pi/agy).
+        for flag in ["--session-id", "--resume", "-r", "--session", "--conversation"] {
             let args = args(&["--dangerously-skip-permissions", flag, sid]);
             assert!(
                 argv_references_session(&args, sid),
@@ -1154,6 +1182,25 @@ mod tests {
             !codex.argv_carries_session_identity(&args(&["-c", "resume"])),
             "subcommand match is leading-position only"
         );
+
+        let agy = provider_resume_for_provider("agy").unwrap();
+        assert!(agy.argv_carries_session_identity(&args(&["--conversation", "X"])));
+        assert!(!agy.argv_carries_session_identity(&args(&["--dangerously-skip-permissions"])));
+    }
+
+    #[test]
+    fn agy_spawn_argv_stamps_the_conversation_id() {
+        let sid = "9dd75581-8ba0-4c12-a3e7-c3a323f18e7a";
+        let argv = args(&["--dangerously-skip-permissions", "--conversation", sid]);
+        assert_eq!(session_id_from_spawn_argv("agy", &argv).as_deref(), Some(sid));
+        assert_eq!(
+            session_id_from_spawn_argv("/home/u/.local/bin/agy", &argv).as_deref(),
+            Some(sid),
+            "the installer's path resolves by basename"
+        );
+        assert!(argv_references_session(&argv, sid));
+        // A fresh launch names no conversation: agy mints its own.
+        assert_eq!(session_id_from_spawn_argv("agy", &args(&["--dangerously-skip-permissions"])), None);
     }
 
     #[test]
@@ -1343,6 +1390,58 @@ mod tests {
             "newest cli+unarchived by started_at — subagent/archived skipped"
         );
         assert_eq!(hermes.newest_on_disk("/Users/fixture/other-proj"), None);
+    }
+
+    #[test]
+    fn agy_adapter_exists_and_newest_via_home() {
+        let guard = HomeGuard::new("agy-adapter");
+        let project = "/Users/fixture/agy-proj";
+        let older = "11111111-1111-4111-8111-111111111111";
+        let newer = "22222222-2222-4222-8222-222222222222";
+        let foreign = "33333333-3333-4333-8333-333333333333";
+        let dir = guard.home.join(".gemini").join("antigravity-cli");
+        std::fs::create_dir_all(dir.join("conversations")).unwrap();
+        let conn = rusqlite::Connection::open(dir.join("conversation_summaries.db")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE conversation_summaries (conversation_id text, title text NOT NULL DEFAULT '', \
+             preview text NOT NULL DEFAULT '', step_count integer NOT NULL DEFAULT 0, \
+             last_modified_time datetime NOT NULL, workspace_uris text NOT NULL, \
+             parent_conversation_id text NOT NULL DEFAULT '', PRIMARY KEY (conversation_id))",
+        )
+        .unwrap();
+        for (id, t, uri) in [
+            (older, "2026-11-22 04:00:00.000000000+00:00", "file:///Users/fixture/agy-proj"),
+            (newer, "2026-11-22 05:00:00.000000000+00:00", "file:///Users/fixture/agy-proj"),
+            (foreign, "2026-11-22 06:00:00.000000000+00:00", "file:///Users/fixture/other"),
+        ] {
+            conn.execute(
+                "INSERT INTO conversation_summaries (conversation_id, last_modified_time, workspace_uris) \
+                 VALUES (?1, ?2, ?3)",
+                rusqlite::params![id, t, format!("[\"{uri}\"]")],
+            )
+            .unwrap();
+            std::fs::write(dir.join("conversations").join(format!("{id}.db")), b"").unwrap();
+        }
+
+        let agy = provider_resume_for_provider("agy").unwrap();
+        assert_eq!(agy.command, "agy");
+        assert_eq!(agy.grammar, ResumeGrammar::Flag("--conversation"));
+        assert_eq!(agy.premint, None, "agy mints its own ids — post-hoc discovery family");
+        assert!(agy.session_file_exists(older, project));
+        // One store for every folder: agy resumes an id from anywhere.
+        assert!(agy.session_file_exists(foreign, project));
+        assert!(!agy.session_file_exists("44444444-4444-4444-8444-444444444444", project));
+        assert!(!agy.session_file_exists("", project));
+        assert_eq!(agy.newest_on_disk(project).as_deref(), Some(newer));
+        assert_eq!(agy.newest_on_disk("/Users/fixture/nothing-here"), None);
+    }
+
+    #[test]
+    fn agy_adapter_degrades_when_store_absent() {
+        let _guard = HomeGuard::new("agy-absent");
+        let agy = provider_resume_for_provider("agy").unwrap();
+        assert!(!agy.session_file_exists("11111111-1111-4111-8111-111111111111", "/x"));
+        assert_eq!(agy.newest_on_disk("/x"), None);
     }
 
     #[test]
@@ -1722,9 +1821,9 @@ mod tests {
                 "{provider} must poll bracketed paste for readiness"
             );
         }
-        // ?2004h liars: codex/gemini/pi set it before real readiness,
+        // ?2004h liars: codex/gemini/pi/agy set it before real readiness,
         // hermes toggles it per repaint.
-        for provider in ["codex", "gemini", "pi", "hermes"] {
+        for provider in ["codex", "gemini", "pi", "hermes", "agy"] {
             assert!(
                 !injection_profile_for_provider(provider).ready_via_bracketed_paste,
                 "{provider} must NOT trust bracketed paste as readiness"
@@ -1735,7 +1834,7 @@ mod tests {
     #[test]
     fn injection_profile_settles_are_study_derived() {
         // Liar paste-fallback: flat 7s (hermes study was the slowest).
-        for provider in ["hermes", "codex", "gemini", "pi"] {
+        for provider in ["hermes", "codex", "gemini", "pi", "agy"] {
             assert_eq!(
                 injection_profile_for_provider(provider).post_spawn_settle,
                 Duration::from_millis(7000),

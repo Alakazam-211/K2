@@ -23,6 +23,7 @@ export const PROVIDER_AGENT_NAME: Record<string, string> = {
   codex: 'Codex',
   grok: 'Grok',
   hermes: 'Hermes',
+  agy: 'Antigravity',
 }
 
 interface ProviderIconProps {

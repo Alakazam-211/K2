@@ -18,11 +18,11 @@ const LAUNCH_PROMPT_SOFT_MAX_BYTES: usize = 100 * 1024;
 /// Does this command support interactive positional first-turn / resume
 /// launch-param prompts for host-sessions?
 ///
-/// `true` for Claude, Codex, Grok, Gemini, Cursor Agent, Pi.
+/// `true` for Claude, Codex, Grok, Gemini, Cursor Agent, Pi, Antigravity.
 /// `false` for Hermes (no interactive first-turn argv) and unknowns.
 pub fn supports_launch_param(command: &str) -> bool {
     match provider_resume_for_command(command).map(|p| p.provider) {
-        Some("claude" | "codex" | "grok" | "gemini" | "cursor" | "pi") => true,
+        Some("claude" | "codex" | "grok" | "gemini" | "cursor" | "pi" | "agy") => true,
         // hermes: inject fallback; unknown: inject fallback
         _ => false,
     }
@@ -59,6 +59,17 @@ pub fn append_interactive_prompt(
     }
 
     let mut out = args.to_vec();
+
+    // Antigravity ignores a bare argument ("Prompts are read only from
+    // -p/--print, -i/--prompt-interactive, or stdin"); its stay-open first
+    // turn is `--prompt-interactive <text>`. The value is always the next
+    // argument, a leading dash included (agy's flag parser, checked on
+    // 1.5.14), so no `--` is needed.
+    if provider_resume_for_command(command).map(|p| p.provider) == Some("agy") {
+        out.push("--prompt-interactive".to_string());
+        out.push(prompt.to_string());
+        return Some(out);
+    }
 
     // Leading-dash prompts would be parsed as flags. Prefer `--` separator
     // (Claude / Grok / Gemini / Cursor / Pi / Codex all accept it as end-of-options).
@@ -185,6 +196,29 @@ mod tests {
             assert_eq!(out, args(&["--resume", "SID", "go"]), "{cmd}");
             assert!(!out.iter().any(|a| a == "--print" || a == "-p" || a == "--single"));
         }
+    }
+
+    /// Antigravity's stay-open first turn is `--prompt-interactive <text>`
+    /// (a bare argument is ignored); never `-p`/`--print`, never `--`.
+    #[test]
+    fn agy_first_turn_is_prompt_interactive() {
+        assert!(supports_launch_param("agy"));
+        assert!(supports_launch_param("/home/u/.local/bin/agy"));
+        let base = args(&["--dangerously-skip-permissions", "--conversation", "SID"]);
+        let out = append_interactive_prompt("agy", &base, "go on").unwrap();
+        assert_eq!(
+            out,
+            args(&["--dangerously-skip-permissions", "--conversation", "SID", "--prompt-interactive", "go on"])
+        );
+        let dash = append_interactive_prompt("agy", &[], "-not-a-flag").unwrap();
+        assert_eq!(dash, args(&["--prompt-interactive", "-not-a-flag"]));
+        for out in [&out, &dash] {
+            assert!(!out.iter().any(|a| a == "--print" || a == "-p" || a == "--prompt" || a == "--"));
+        }
+        assert_eq!(
+            redact_launch_prompt_args(&out, "go on"),
+            args(&["--dangerously-skip-permissions", "--conversation", "SID", "--prompt-interactive", "<launch-prompt>"])
+        );
     }
 
     #[test]

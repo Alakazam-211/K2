@@ -63,8 +63,9 @@ pub fn build_continue_seed(req: &ContinueSeedRequest) -> Result<String, String> 
         return Err("sessionId required".into());
     }
     let label = provider_label(provider).ok_or_else(|| "unknown provider".to_string())?;
-    if provider == "cursor" {
-        // No turn extractor. Do not open store.db or use its meta name.
+    if provider == "cursor" || provider == "agy" {
+        // No turn extractor (Cursor: do not open store.db or use its meta
+        // name; Antigravity: message bodies are protobuf K2 does not read).
         return Err(match req.mode {
             ContinueMode::Full => "no readable transcript".into(),
             ContinueMode::Recent => "no turns".into(),
@@ -105,6 +106,7 @@ fn provider_label(provider: &str) -> Option<&'static str> {
         "pi" => "Pi",
         "codex" => "Codex",
         "hermes" => "Hermes",
+        "agy" => "Antigravity",
         _ => return None,
     })
 }
@@ -307,6 +309,7 @@ fn display_name(provider: &str, session_id: &str, project_path: &str) -> String 
         "codex" => crate::chat_history::parse_codex_sessions(filter),
         "grok" => crate::chat_history::parse_grok_sessions(filter),
         "hermes" => crate::chat_history::parse_hermes_sessions(filter),
+        "agy" => crate::chat_history::parse_agy_sessions(filter),
         _ => return "Untitled".to_string(),
     };
     match rows {
@@ -1574,6 +1577,23 @@ mod tests {
             mode: ContinueMode::Recent,
             ..request
         };
+        assert_err(build_continue_seed(&recent), "no turns");
+    }
+
+    /// Antigravity conversations can't seed a new chat: K2 reads no agy
+    /// message bodies, so both modes say so (never "unknown provider").
+    #[test]
+    fn agy_has_no_readable_transcript() {
+        let home = HomeGuard::new("agy");
+        let project = project_dir(&home);
+        let request = ContinueSeedRequest {
+            provider: "agy".into(),
+            session_id: "9dd75581-8ba0-4c12-a3e7-c3a323f18e7a".into(),
+            project_path: project.to_string_lossy().into_owned(),
+            mode: ContinueMode::Full,
+        };
+        assert_err(build_continue_seed(&request), "no readable transcript");
+        let recent = ContinueSeedRequest { mode: ContinueMode::Recent, ..request };
         assert_err(build_continue_seed(&recent), "no turns");
     }
 

@@ -194,6 +194,10 @@ fn ensure_danger_flags(mut args: Vec<String>, declared: &[String], command: &str
         if cmd.contains("copilot") {
             v.push("--allow-all".into());
         }
+        // Antigravity shares Claude's flag; its program name is exactly `agy`.
+        if cmd.trim_end_matches(".exe") == "agy" {
+            v.push("--dangerously-skip-permissions".into());
+        }
         // Unknown binary: no safe auto-flag to invent.
         v
     };
@@ -1427,6 +1431,19 @@ mod tests {
             ensure_danger_flags(vec!["--yolo".into()], &[], "claude"),
             vec!["--dangerously-skip-permissions".to_string(), "--yolo".to_string()]
         );
+    }
+
+    /// Antigravity's never-ask flag is Claude's spelling: stripped by the
+    /// floor without the opt-in, put back (once) with it, and only for
+    /// a program named exactly `agy`.
+    #[test]
+    fn agy_danger_flag_is_stripped_and_restored() {
+        let flag = "--dangerously-skip-permissions".to_string();
+        assert_eq!(strip_danger_flags(vec![flag.clone(), "--model".into(), "x".into()], &[]), vec!["--model", "x"]);
+        assert_eq!(ensure_danger_flags(vec![], &[], "agy"), vec![flag.clone()]);
+        assert_eq!(ensure_danger_flags(vec![], &[], "/home/u/.local/bin/agy"), vec![flag.clone()]);
+        assert_eq!(ensure_danger_flags(vec![flag.clone()], &[], "agy"), vec![flag.clone()], "never twice");
+        assert_eq!(ensure_danger_flags(vec![], &[], "agyx"), Vec::<String>::new(), "another program");
     }
 
     /// A6 / Pi: dead resume uses `--session`, never `--continue`.

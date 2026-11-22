@@ -89,6 +89,14 @@ describe('findChatSessionInTab', () => {
     expect(hit).toEqual({ sessionId: SID, provider: 'claude' })
   })
 
+  it('finds an Antigravity resume tab by its --conversation id', () => {
+    const tab = terminalTab({
+      data: { command: 'agy', args: ['--dangerously-skip-permissions', '--conversation', SID], sessionId: PTY },
+    })
+    expect(findChatSessionInTab(tab, ids)).toEqual({ sessionId: SID, provider: 'agy' })
+    expect(conversationIdFromArgs('agy', ['--conversation', SID])).toBe(SID)
+  })
+
   it('matches conversationId first, ignoring the PTY sessionId', () => {
     const tab = terminalTab({
       data: {

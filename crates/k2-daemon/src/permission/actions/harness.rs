@@ -64,7 +64,7 @@ pub(crate) static SWITCH: ActionSpec = ActionSpec {
 
 /// The asked-for harness, normalized.
 fn harness_of(ctx: &Ctx) -> Result<&'static str, String> {
-    let raw = text_param(ctx, "harness").ok_or("name the harness: harness=<claude|codex|grok|gemini|cursor|pi|hermes>")?;
+    let raw = text_param(ctx, "harness").ok_or("name the harness: harness=<claude|codex|grok|gemini|agy|cursor|pi|hermes>")?;
     normalize_harness(raw)
 }
 

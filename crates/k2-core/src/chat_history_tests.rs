@@ -1557,3 +1557,134 @@ fn parse_cursor_ide_sessions_dedupes_composer_id_across_workspaces() {
         "latest-lastUpdatedAt entry must win",
     );
 }
+
+// ── Antigravity (`agy`) discovery ──────────────────────────────────
+//
+// The fixture is the store agy 1.5.14 wrote in runs of the CLI: one
+// `conversations/<id>.db` per conversation and a WAL-mode
+// `conversation_summaries.db` with these columns (a subset of its 21;
+// the rest have defaults in agy's own schema).
+
+const AGY_A: &str = "9dd75581-8ba0-4c12-a3e7-c3a323f18e7a";
+const AGY_B: &str = "08feec00-bfbc-4c45-8a0e-5ce0af79d45a";
+const AGY_WT: &str = "258dd886-6b84-4692-a88e-0aec9ef90e54";
+const AGY_SUB: &str = "3a5b1bda-cebb-450a-ace4-2b0a347e9310";
+const AGY_GONE: &str = "f5305b1b-2064-4fac-a1a1-ba68315e2660";
+
+fn seed_agy_store(cli_dir: &std::path::Path) -> rusqlite::Connection {
+    std::fs::create_dir_all(cli_dir.join("conversations")).unwrap();
+    let conn = rusqlite::Connection::open(cli_dir.join("conversation_summaries.db")).unwrap();
+    conn.pragma_update(None, "journal_mode", "wal").expect("WAL");
+    conn.execute_batch(
+        "CREATE TABLE `conversation_summaries` (`conversation_id` text,\
+         `title` text NOT NULL DEFAULT \"\",`preview` text NOT NULL DEFAULT \"\",\
+         `step_count` integer NOT NULL DEFAULT 0,`last_modified_time` datetime NOT NULL,\
+         `workspace_uris` text NOT NULL,`parent_conversation_id` text NOT NULL DEFAULT \"\",\
+         `nesting_depth` integer NOT NULL DEFAULT 0,PRIMARY KEY (`conversation_id`))",
+    )
+    .unwrap();
+    let rows: &[(&str, &str, &str, &str, &str, &str)] = &[
+        // The folder has a space and an underscore, percent-encoded as agy writes it.
+        (AGY_A, "", "first prompt", "2026-11-22 04:32:03.159929872+00:00", "file:///w/proj%20one_x", ""),
+        (AGY_WT, "Named chat", "x", "2026-11-22 04:33:59.561168596+00:00", "file:///w/proj%20one_x/.worktrees/feat", ""),
+        (AGY_B, "", "other folder", "2026-11-22 04:34:30.000000000+00:00", "file:///w/other", ""),
+        // A subagent of A, newest of all: never a person's conversation.
+        (AGY_SUB, "", "sub", "2026-11-22 04:40:00.000000000+00:00", "file:///w/proj%20one_x", AGY_A),
+        // A summary whose conversation file is gone.
+        (AGY_GONE, "", "gone", "2026-11-22 04:41:00.000000000+00:00", "file:///w/proj%20one_x", ""),
+    ];
+    for (id, title, preview, modified, uri, parent) in rows {
+        conn.execute(
+            "INSERT INTO conversation_summaries (conversation_id, title, preview, step_count, \
+             last_modified_time, workspace_uris, parent_conversation_id) VALUES (?1, ?2, ?3, 2, ?4, ?5, ?6)",
+            rusqlite::params![id, title, preview, modified, format!("[\"{uri}\"]"), parent],
+        )
+        .unwrap();
+    }
+    for id in [AGY_A, AGY_B, AGY_WT, AGY_SUB] {
+        std::fs::write(cli_dir.join("conversations").join(format!("{id}.db")), b"").unwrap();
+    }
+    conn
+}
+
+#[test]
+fn agy_exists_is_the_conversation_file_from_any_folder() {
+    let tmp = U6TempDir::new("agy-exists");
+    let _writer = seed_agy_store(&tmp.path);
+    assert!(agy_session_file_exists_in(&tmp.path, AGY_A));
+    assert!(agy_session_file_exists_in(&tmp.path, AGY_B));
+    assert!(!agy_session_file_exists_in(&tmp.path, AGY_GONE), "no file, no conversation");
+    // Only a UUID names a conversation file, never a path.
+    assert!(!agy_session_file_exists_in(&tmp.path, "../conversations/x"));
+    assert!(!agy_session_file_exists_in(&tmp.path, ""));
+}
+
+#[test]
+fn agy_sessions_are_the_project_family_newest_first_without_subagents() {
+    let tmp = U6TempDir::new("agy-list");
+    let _writer = seed_agy_store(&tmp.path);
+    let got = agy_sessions_in(&tmp.path, Some("/w/proj one_x"));
+    let ids: Vec<&str> = got.iter().map(|s| s.session_id.as_str()).collect();
+    assert_eq!(
+        ids,
+        vec![AGY_WT, AGY_A],
+        "worktree (newer) then the folder; no subagent, no missing file, no other folder"
+    );
+    assert_eq!(got[0].project, "/w/proj one_x/.worktrees/feat");
+    assert_eq!(got[0].origin_branch.as_deref(), Some("feat"));
+    assert_eq!(got[0].title, "Named chat");
+    assert_eq!(got[1].title, "first prompt", "no title: the first prompt");
+    assert_eq!(got[1].provider, "agy");
+    assert_eq!(got[1].message_count, 2);
+    assert_eq!(got[1].timestamp, 1_795_321_923_159, "last_modified_time in unix ms");
+    // From the worktree, the family is the same.
+    let wt: Vec<String> = agy_sessions_in(&tmp.path, Some("/w/proj one_x/.worktrees/feat"))
+        .into_iter()
+        .map(|s| s.session_id)
+        .collect();
+    assert_eq!(wt, vec![AGY_WT.to_string(), AGY_A.to_string()]);
+    // `/w/proj one_x2` is another folder, not a child.
+    assert!(agy_sessions_in(&tmp.path, Some("/w/proj one_x2")).is_empty());
+    // No filter: every person's conversation that still has its file.
+    let all: Vec<String> = agy_sessions_in(&tmp.path, None).into_iter().map(|s| s.session_id).collect();
+    assert_eq!(all, vec![AGY_B.to_string(), AGY_WT.to_string(), AGY_A.to_string()]);
+}
+
+#[test]
+fn agy_no_store_is_empty_not_an_error() {
+    let tmp = U6TempDir::new("agy-none");
+    assert!(agy_sessions_in(&tmp.path, Some("/w/proj")).is_empty());
+    assert!(!agy_session_file_exists_in(&tmp.path, AGY_A));
+}
+
+#[test]
+fn agy_detect_exists_list_and_path_read_home() {
+    let _g = UNIT6_HOME_LOCK.lock();
+    let _scoped_db = crate::db::scoped_for_test();
+    let _h = U6HomeGuard::new("agy-home");
+    let home = crate::paths::home_dir().unwrap();
+    let _writer = seed_agy_store(&home.join(".gemini").join("antigravity-cli"));
+    assert_eq!(detect_agy_session("/w/proj one_x").as_deref(), Some(AGY_WT));
+    assert_eq!(detect_active_session("agy", "/w/other").unwrap().as_deref(), Some(AGY_B));
+    assert!(agy_session_file_exists(AGY_A));
+    assert!(!agy_session_file_exists(AGY_GONE));
+    let path = resolve_session_storage_path("agy", AGY_A, "/w/proj one_x").expect("path");
+    assert!(
+        path.replace('\\', "/").ends_with(&format!(".gemini/antigravity-cli/conversations/{AGY_A}.db")),
+        "{path}"
+    );
+    assert_eq!(resolve_session_storage_path("agy", AGY_GONE, "/w/proj one_x"), None);
+    let listed = list_all_sessions(Some("/w/proj one_x")).expect("list");
+    let agy: Vec<&str> =
+        listed.iter().filter(|s| s.provider == "agy").map(|s| s.session_id.as_str()).collect();
+    assert_eq!(agy.len(), 2, "both of the folder's conversations in Chat history: {listed:?}");
+    assert!(agy.contains(&AGY_A) && agy.contains(&AGY_WT));
+}
+
+#[test]
+fn agy_uri_path_decodes_percent_escapes() {
+    assert_eq!(agy_uri_path("file:///w/proj%20one_x").as_deref(), Some("/w/proj one_x"));
+    assert_eq!(agy_uri_path("file:///w/caf%C3%A9").as_deref(), Some("/w/café"));
+    assert_eq!(agy_uri_path("file:///w/100%").as_deref(), Some("/w/100%"), "a stray % stays");
+    assert_eq!(agy_uri_path("/w/no-scheme"), None);
+}

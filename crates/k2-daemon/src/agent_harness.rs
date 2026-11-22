@@ -217,7 +217,7 @@ pub fn handle(body: &[u8], caller: &Caller, ingress: &str) -> CliResponse {
         return refused(
             "400 Bad Request",
             "usage",
-            "usage: k2 agent harness <workspace> <harness> (claude, codex, grok, gemini, cursor, pi, or hermes)",
+            "usage: k2 agent harness <workspace> <harness> (claude, codex, grok, gemini, agy, cursor, pi, or hermes)",
         );
     }
     let harness = match k2_core::workspace::canonical_swap::normalize_harness(&req.harness) {

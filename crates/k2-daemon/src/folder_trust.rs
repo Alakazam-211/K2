@@ -159,6 +159,7 @@ fn tool_display(tool: Option<&str>) -> String {
         Some("codex") => "Codex".into(),
         Some("grok") => "Grok".into(),
         Some("gemini") => "Gemini".into(),
+        Some("agy") => "Antigravity".into(),
         Some("cursor-agent") => "Cursor".into(),
         Some(_) => md_code_inline(&tool.unwrap_or_default().chars().take(80).collect::<String>()),
         None => "a program".into(),

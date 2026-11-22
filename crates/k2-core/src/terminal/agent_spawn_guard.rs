@@ -60,6 +60,7 @@ pub const AGENT_CLIS: &[&str] = &[
     "codex",
     "grok",
     "gemini",
+    "agy",
     "cursor-agent",
     "cursor",
     "pi",

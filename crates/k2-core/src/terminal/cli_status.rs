@@ -156,7 +156,7 @@ pub fn launchable_harnesses() -> Vec<&'static str> {
 /// The flag that makes `program` print its version and exit, or `None`
 /// when K2 doesn't run it at all. The presets carry no version flag, so
 /// this table is that definition. Every launchable harness answers
-/// `--version` (checked against claude, codex, grok, gemini, cursor-agent,
+/// `--version` (checked against claude, codex, grok, gemini, agy, cursor-agent,
 /// pi and ollama; opencode, goose, aider, copilot and interpreter document
 /// it) except:
 /// - `hermes`: K2 hasn't confirmed a flag that prints a version and exits
@@ -771,7 +771,7 @@ mod tests {
         assert_eq!(
             launchable_harnesses(),
             [
-                "claude", "codex", "grok", "gemini", "cursor-agent", "pi", "hermes", "opencode",
+                "claude", "codex", "grok", "gemini", "agy", "cursor-agent", "pi", "hermes", "opencode",
                 "goose", "aider", "ollama", "copilot", "interpreter",
             ]
         );

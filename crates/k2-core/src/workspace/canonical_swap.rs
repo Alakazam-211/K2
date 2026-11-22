@@ -195,7 +195,7 @@ fn normalize_target(raw: &str) -> Result<&'static str, String> {
     let lower = base.to_ascii_lowercase();
     if lower.is_empty() {
         return Err(
-            "harness required (claude, codex, grok, gemini, cursor, pi, or hermes)".to_string(),
+            "harness required (claude, codex, grok, gemini, agy, cursor, pi, or hermes)".to_string(),
         );
     }
     if let Some(adapter) = provider_resume_for_provider(&lower) {
@@ -205,7 +205,7 @@ fn normalize_target(raw: &str) -> Result<&'static str, String> {
         return Ok(adapter.provider);
     }
     Err(format!(
-        "unknown harness: {raw} (expected claude, codex, grok, gemini, cursor, pi, or hermes)"
+        "unknown harness: {raw} (expected claude, codex, grok, gemini, agy, cursor, pi, or hermes)"
     ))
 }
 

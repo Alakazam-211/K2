@@ -77,6 +77,9 @@ export const RESUMABLE_CLI_TOOLS: Record<string, ResumableCliTool> = {
   // Hermes resumes by id (or title): `hermes --resume <session>`. Its
   // `--continue` is most-recent GLOBAL (not cwd-scoped) — never use it.
   'hermes': { resumeFlag: '--resume', provider: 'hermes' },
+  // Antigravity resumes by id with `agy --conversation <id>`, from any
+  // folder. Its `-c`/`--continue` is the folder's last conversation.
+  'agy': { resumeFlag: '--conversation', provider: 'agy' },
 }
 
 // ── Agent activity ────────────────────────────────────────────────
@@ -88,7 +91,7 @@ export const AGENT_IDLE_THRESHOLD_MS = 5000  // 5 seconds without grid output �
 // is warned before closing the tab or quitting the app.
 export const KNOWN_AGENT_COMMANDS = new Set([
   // Cloud CLI agents
-  'claude', 'cursor-agent', 'grok', 'codex', 'gemini', 'copilot',
+  'claude', 'cursor-agent', 'grok', 'codex', 'gemini', 'agy', 'copilot',
   'aider', 'opencode', 'gpt', 'goose', 'pi',
   // Nous Research's Hermes Agent. NOTE: `hermes` is also the name of
   // Meta's JS engine binary — a rare false positive here only makes

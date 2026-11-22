@@ -46,7 +46,7 @@ fn assert_shape(body: &str) {
     assert_eq!(
         programs,
         [
-            "claude", "codex", "grok", "gemini", "cursor-agent", "pi", "hermes", "opencode", "goose",
+            "claude", "codex", "grok", "gemini", "agy", "cursor-agent", "pi", "hermes", "opencode", "goose",
             "aider", "ollama", "copilot", "interpreter",
         ],
         "exactly the launchable harnesses, in a stable order: {body}"

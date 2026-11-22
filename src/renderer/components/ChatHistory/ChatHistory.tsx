@@ -74,7 +74,7 @@ interface ApiChat {
 /// explicit `<resumeFlag> <sessionId>` we append. This matters most for Pi:
 /// `--resume` opens an interactive picker, so leaving it in the preset would
 /// shadow our `--session <uuid>` and trap the uuid as a chat message.
-const SESSION_FLAGS_TO_STRIP = new Set(['--resume', '-r', '--continue', '-c', '--session'])
+const SESSION_FLAGS_TO_STRIP = new Set(['--resume', '-r', '--continue', '-c', '--session', '--conversation'])
 
 function getPresetArgsForProvider(provider: string): string[] {
   const config = PROVIDER_CONFIG[provider]

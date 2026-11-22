@@ -10,6 +10,7 @@ export const CLI_INSTALL_COMMANDS = {
   codex: 'curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh',
   grok: 'curl -fsSL https://x.ai/cli/install.sh | bash',
   gemini: 'npm install -g --prefix "$HOME/.local" @google/gemini-cli',
+  agy: 'curl -fsSL https://antigravity.google/cli/install.sh | bash',
 } as const
 
 export type InstallableCli = keyof typeof CLI_INSTALL_COMMANDS
@@ -19,6 +20,7 @@ const CLI_INSTALL_LABELS: Record<InstallableCli, string> = {
   codex: 'Codex',
   grok: 'Grok',
   gemini: 'Gemini',
+  agy: 'Antigravity',
 }
 
 /** Delay before the GUI says an install is running. A basename that is

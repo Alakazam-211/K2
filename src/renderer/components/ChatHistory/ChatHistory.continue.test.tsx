@@ -494,7 +494,7 @@ describe('continue harness order', () => {
 
   it('keeps the built-in list when no preset is enabled', () => {
     expect(continueHarnessKeys([])).toEqual([
-      'claude', 'cursor', 'grok', 'gemini', 'pi', 'codex', 'hermes',
+      'claude', 'cursor', 'grok', 'gemini', 'pi', 'codex', 'hermes', 'agy',
     ])
   })
 })

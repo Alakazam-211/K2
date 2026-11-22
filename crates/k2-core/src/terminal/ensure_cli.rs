@@ -1,4 +1,4 @@
-//! Install one missing LLM CLI (claude, codex, grok, or gemini).
+//! Install one missing LLM CLI (claude, codex, grok, gemini or agy).
 //!
 //! [`ensure_cli`] is the production entry: it looks up the fixed command
 //! table and resolves the basename on [`super::login_path::augmented_path`].
@@ -29,10 +29,10 @@ pub struct EnsureCliResult {
 }
 
 /// The agent CLIs K2 knows how to install. Every entry has a
-/// [`fixed_install_command`] (on Windows, all but `grok`); a test pins the
-/// two together. [`super::cli_status`] reports on every launchable
-/// harness, a superset of these.
-pub const HARNESSES: &[&str] = &["claude", "codex", "grok", "gemini"];
+/// [`fixed_install_command`] (on Windows, all but `grok` and `agy`); a test
+/// pins the two together. [`super::cli_status`] reports on every
+/// launchable harness, a superset of these.
+pub const HARNESSES: &[&str] = &["claude", "codex", "grok", "gemini", "agy"];
 
 /// Fixed installer for one basename. `None` for anything else — callers
 /// must not invent a command.
@@ -45,6 +45,9 @@ pub fn fixed_install_command(program: &str) -> Option<&'static str> {
         }
         "grok" => Some("curl -fsSL https://x.ai/cli/install.sh | bash"),
         "gemini" => Some(r#"npm install -g --prefix "$HOME/.local" @google/gemini-cli"#),
+        // Google's own Antigravity installer: one binary at
+        // `~/.local/bin/agy` (on the spawn PATH), macOS and Linux.
+        "agy" => Some("curl -fsSL https://antigravity.google/cli/install.sh | bash"),
         _ => None,
     }
 }
@@ -52,7 +55,8 @@ pub fn fixed_install_command(program: &str) -> Option<&'static str> {
 /// Windows: the vendors' own Windows installs, run by PowerShell. Claude's
 /// native installer lands in `~\.local\bin`; npm globals in `%APPDATA%\npm`
 /// (both on the spawn PATH). Grok publishes no Windows installer K2 can
-/// run, so it is not in the table: asking for it says so.
+/// run, so it is not in the table: asking for it says so. Neither does
+/// Antigravity that K2 has checked (its `install.sh` is macOS and Linux).
 #[cfg(windows)]
 pub fn fixed_install_command(program: &str) -> Option<&'static str> {
     match program {
@@ -67,6 +71,10 @@ pub fn fixed_install_command(program: &str) -> Option<&'static str> {
 fn no_installer(program: &str) -> String {
     if cfg!(windows) && program == "grok" {
         return "grok has no Windows installer K2 can run; install it from x.ai, then try again".to_string();
+    }
+    if cfg!(windows) && program == "agy" {
+        return "agy has no Windows installer K2 can run; install it from antigravity.google, then try again"
+            .to_string();
     }
     format!("unknown program: {program}")
 }
@@ -108,7 +116,7 @@ pub fn find_installed(program: &str, path: &str) -> Option<std::path::PathBuf> {
 
 /// Inner ensure. `shell_command` is what `/bin/sh -c` runs when the
 /// basename is missing. Production passes the fixed table entry; tests
-/// pass a local script. A program outside the four returns before any
+/// pass a local script. A program outside the table returns before any
 /// process is started, even if a script was passed.
 ///
 /// `resolve_path` is called before the installer and again after it
@@ -391,6 +399,9 @@ mod tests {
         assert!(fixed_install_command("grok").is_none());
         let err = ensure_cli("grok").unwrap_err();
         assert!(err.contains("no Windows installer"), "{err}");
+        assert!(fixed_install_command("agy").is_none());
+        let err = ensure_cli("agy").unwrap_err();
+        assert!(err.contains("no Windows installer"), "{err}");
         assert!(fixed_install_command("vim").is_none());
     }
 
@@ -446,13 +457,18 @@ mod tests {
         assert!(fixed_install_command("vim").is_none());
         assert!(fixed_install_command("claude --dangerously-skip-permissions").is_none());
         assert!(fixed_install_command("/usr/bin/claude").is_none());
+        // Antigravity: Google's installer, never the old Gemini CLI's npm package.
+        let agy = fixed_install_command("agy").unwrap();
+        assert_eq!(agy, "curl -fsSL https://antigravity.google/cli/install.sh | bash");
+        assert!(!agy.contains("gemini-cli"));
+        assert!(fixed_install_command("antigravity").is_none(), "the program is agy");
     }
 
     #[test]
     fn cli_install_harness_list_is_the_install_table() {
-        assert_eq!(HARNESSES, &["claude", "codex", "grok", "gemini"]);
+        assert_eq!(HARNESSES, &["claude", "codex", "grok", "gemini", "agy"]);
         for program in HARNESSES {
-            if cfg!(windows) && *program == "grok" {
+            if cfg!(windows) && (*program == "grok" || *program == "agy") {
                 assert!(fixed_install_command(program).is_none());
                 continue;
             }
@@ -472,7 +488,7 @@ mod tests {
         let err = ensure_cli_with_shell("vim", &script, || String::new()).unwrap_err();
         assert!(
             !marker.exists(),
-            "a program outside the four must not start the script"
+            "a program outside the table must not start the script"
         );
         assert!(err.contains("unknown program"), "unexpected error: {err}");
         let _ = fs::remove_dir_all(&dir);

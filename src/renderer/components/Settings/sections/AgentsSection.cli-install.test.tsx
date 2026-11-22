@@ -277,7 +277,7 @@ describe('Agent tools on this computer', () => {
     render(<AgentsSection />)
     const line = await screen.findByTestId('tools-not-supported')
     expect(line.textContent).toContain('Not supported on this computer')
-    expect(line.textContent).toContain('Cursor Agent, Pi, Hermes and 6 more')
+    expect(line.textContent).toContain('Antigravity, Cursor Agent, Pi and 7 more')
     fireEvent.click(screen.getByRole('button', { name: /More agents/ }))
     for (const p of ['cursor-agent', 'pi', 'aider', 'copilot']) expect(screen.queryByTestId(`tool-row-${p}`), p).toBeNull()
     expect(document.body.textContent).not.toMatch(/Unknown/i)

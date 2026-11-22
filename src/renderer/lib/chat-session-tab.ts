@@ -16,9 +16,10 @@ const COMMAND_TO_PROVIDER: Record<string, string> = {
   pi: 'pi',
   codex: 'codex',
   hermes: 'hermes',
+  agy: 'agy',
 }
 
-const IDENTITY_FLAGS = new Set(['--session-id', '--resume', '-r', '--session'])
+const IDENTITY_FLAGS = new Set(['--session-id', '--resume', '-r', '--session', '--conversation'])
 const FROM_BRANCH_SUFFIX = / \(from [^)]+\)$/
 
 export interface ChatSessionTabHit {

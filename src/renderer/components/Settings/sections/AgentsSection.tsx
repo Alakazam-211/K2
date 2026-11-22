@@ -70,7 +70,15 @@ const AGENT_TOOLS: AgentTool[] = [
     notes: `${SUBS_NOTE} Without a subscription, set the XAI_API_KEY environment variable instead.`,
     keywords: ['grok', 'xai'],
   },
-  { name: 'Gemini CLI', command: 'gemini', installCommand: CLI_INSTALL_COMMANDS.gemini, docs: 'https://geminicli.com', notes: 'Needs Node.js 18 or later. Sign in with your Google account the first time it runs.', keywords: ['gemini', 'google'] },
+  { name: 'Gemini CLI', command: 'gemini', installCommand: CLI_INSTALL_COMMANDS.gemini, docs: 'https://geminicli.com', notes: 'Needs Node.js 18 or later and a Gemini API key: Google ended Google-account sign-in for the Gemini CLI. With a Google subscription, use Antigravity.', keywords: ['gemini', 'google'] },
+  {
+    name: 'Antigravity',
+    command: 'agy',
+    installCommand: CLI_INSTALL_COMMANDS.agy,
+    docs: 'https://antigravity.google/docs/install',
+    notes: 'Google’s agent for the terminal. Sign in with your Google account the first time it runs; on a server with no browser it shows a link and asks for the code. A Gemini API key also works.',
+    keywords: ['antigravity', 'agy', 'google', 'gemini'],
+  },
   {
     name: 'Cursor Agent',
     command: 'cursor-agent',
@@ -91,8 +99,8 @@ const AGENT_TOOLS: AgentTool[] = [
   { name: 'Open Interpreter', command: 'interpreter', installCommand: 'pip install open-interpreter', docs: 'https://docs.openinterpreter.com', notes: 'Lets a model run code on this computer. Choose a model provider after installing.', keywords: ['interpreter', 'open interpreter'] },
 ]
 
-/** The four K2 can install itself, shown first when nothing is installed. */
-const FEATURED = new Set(['claude', 'codex', 'grok', 'gemini'])
+/** The ones K2 can install itself, shown first when nothing is installed. */
+const FEATURED = new Set(['claude', 'codex', 'grok', 'gemini', 'agy'])
 
 function cliManifest(): SettingEntry[] {
   return AGENT_TOOLS.map((t) => ({

@@ -2280,16 +2280,26 @@ pub const BUILT_IN_AGENT_PRESETS: &[(&str, &str, &str, &str, i64)] = &[
     ("b0a1c2d3-e4f5-6789-abcd-ef0123456002", "Codex", "codex --yolo", "", 1),
     ("b0a1c2d3-e4f5-6789-abcd-ef0123456014", "Grok", "grok --always-approve", "", 2),
     ("b0a1c2d3-e4f5-6789-abcd-ef0123456003", "Gemini", "gemini --yolo", "", 3),
-    ("b0a1c2d3-e4f5-6789-abcd-ef0123456006", "Cursor Agent", "cursor-agent", "", 4),
-    ("b0a1c2d3-e4f5-6789-abcd-ef0123456012", "Pi", "pi", "", 5),
-    ("b0a1c2d3-e4f5-6789-abcd-ef0123456013", "Hermes", "hermes", "", 6),
-    ("b0a1c2d3-e4f5-6789-abcd-ef0123456007", "OpenCode", "opencode", "", 7),
-    ("b0a1c2d3-e4f5-6789-abcd-ef0123456011", "Goose", "goose", "", 8),
-    ("b0a1c2d3-e4f5-6789-abcd-ef0123456005", "Aider", "aider", "", 9),
-    ("b0a1c2d3-e4f5-6789-abcd-ef0123456009", "Ollama", "ollama run llama3.2", "", 10),
-    ("b0a1c2d3-e4f5-6789-abcd-ef0123456004", "Copilot", "copilot --allow-all", "", 11),
-    ("b0a1c2d3-e4f5-6789-abcd-ef0123456010", "Interpreter", "interpreter", "", 12),
+    // Google's Antigravity terminal app, beside the old Gemini CLI: `agy`
+    // signs in with the person's Google account, while the Gemini CLI now
+    // takes API keys only. `--dangerously-skip-permissions` is agy's
+    // never-ask flag (`agy --help`, 1.5.14).
+    (ANTIGRAVITY_PRESET_ID, ANTIGRAVITY_PRESET_LABEL, "agy --dangerously-skip-permissions", "", 4),
+    ("b0a1c2d3-e4f5-6789-abcd-ef0123456006", "Cursor Agent", "cursor-agent", "", 5),
+    ("b0a1c2d3-e4f5-6789-abcd-ef0123456012", "Pi", "pi", "", 6),
+    ("b0a1c2d3-e4f5-6789-abcd-ef0123456013", "Hermes", "hermes", "", 7),
+    ("b0a1c2d3-e4f5-6789-abcd-ef0123456007", "OpenCode", "opencode", "", 8),
+    ("b0a1c2d3-e4f5-6789-abcd-ef0123456011", "Goose", "goose", "", 9),
+    ("b0a1c2d3-e4f5-6789-abcd-ef0123456005", "Aider", "aider", "", 10),
+    ("b0a1c2d3-e4f5-6789-abcd-ef0123456009", "Ollama", "ollama run llama3.2", "", 11),
+    ("b0a1c2d3-e4f5-6789-abcd-ef0123456004", "Copilot", "copilot --allow-all", "", 12),
+    ("b0a1c2d3-e4f5-6789-abcd-ef0123456010", "Interpreter", "interpreter", "", 13),
 ];
+
+/// The built-in Antigravity preset's id (0.46.17).
+pub const ANTIGRAVITY_PRESET_ID: &str = "b0a1c2d3-e4f5-6789-abcd-ef0123456015";
+/// The built-in Antigravity preset's label (0.46.17).
+pub const ANTIGRAVITY_PRESET_LABEL: &str = "Antigravity";
 
 /// Seed built-in agent presets.
 ///
@@ -2313,6 +2323,10 @@ pub(crate) fn seed_agent_presets(conn: &Connection) -> Result<()> {
     let presets = BUILT_IN_AGENT_PRESETS;
 
     for (id, label, command, icon, sort_order) in presets {
+        if *label == ANTIGRAVITY_PRESET_LABEL {
+            seed_antigravity_preset(conn, id, command, icon, *sort_order)?;
+            continue;
+        }
         conn.execute(
             "INSERT INTO agent_presets (id, label, command, icon, enabled, sort_order, is_built_in) \
              SELECT ?1, ?2, ?3, ?4, 1, ?5, 1 \
@@ -2426,14 +2440,81 @@ pub(crate) fn seed_agent_presets(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// Truthful migration-0070 metadata for the 13 built-in presets, keyed by
+/// Add the built-in Antigravity preset (0.46.17) once, on new and existing
+/// installs alike, and slot it right after Gemini. No migration: the boot
+/// seed adds it, like every built-in before it.
+///
+/// - **Never a second Antigravity.** Nothing is added when any preset is
+///   already labelled Antigravity (any case), or when a preset the person
+///   added themselves already runs `agy`: theirs stays the one in the bar.
+/// - **Placed only on the boot that adds it**, so a person who later moves
+///   it keeps their order.
+/// - **Order kept, nothing else touched.** Antigravity takes Gemini's slot
+///   + 1. Only when another preset already holds that slot does every
+///   preset from that slot on move down by one (the person's own included,
+///   so their relative order is unchanged). Labels, commands, enabled flags
+///   and metadata are never written here. With no Gemini row it goes last.
+fn seed_antigravity_preset(
+    conn: &Connection,
+    id: &str,
+    command: &str,
+    icon: &str,
+    seed_order: i64,
+) -> Result<()> {
+    let already: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM agent_presets \
+         WHERE lower(label) = lower(?1) \
+            OR (is_built_in = 0 AND (trim(command) = 'agy' OR trim(command) LIKE 'agy %'))",
+        params![ANTIGRAVITY_PRESET_LABEL],
+        |r| r.get(0),
+    )?;
+    if already > 0 {
+        return Ok(());
+    }
+    conn.execute(
+        "INSERT INTO agent_presets (id, label, command, icon, enabled, sort_order, is_built_in) \
+         VALUES (?1, ?2, ?3, ?4, 1, ?5, 1)",
+        params![id, ANTIGRAVITY_PRESET_LABEL, command, icon, seed_order],
+    )?;
+    let gemini: Option<i64> = conn
+        .query_row(
+            "SELECT sort_order FROM agent_presets WHERE label = 'Gemini' AND is_built_in = 1",
+            [],
+            |r| r.get(0),
+        )
+        .ok();
+    let slot: i64 = match gemini {
+        Some(g) => g + 1,
+        None => conn.query_row(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM agent_presets WHERE id != ?1",
+            params![id],
+            |r| r.get(0),
+        )?,
+    };
+    let taken: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM agent_presets WHERE sort_order = ?1 AND id != ?2",
+        params![slot, id],
+        |r| r.get(0),
+    )?;
+    if taken > 0 {
+        conn.execute(
+            "UPDATE agent_presets SET sort_order = sort_order + 1 WHERE sort_order >= ?1 AND id != ?2",
+            params![slot, id],
+        )?;
+    }
+    conn.execute("UPDATE agent_presets SET sort_order = ?1 WHERE id = ?2", params![slot, id])?;
+    Ok(())
+}
+
+/// Truthful migration-0070 metadata for the 14 built-in presets, keyed by
 /// LABEL (the same uniqueness key `seed_agent_presets` reconciles on —
 /// built-in ids historically disagreed between modules, labels never did).
 ///
 /// Columns: (label, danger_flags JSON array, env JSON object, readiness).
 ///
-/// - `danger_flags`: ONLY the five audited auto-approve flags, each on its
-///   owner. Presets we have NOT audited stay NULL (= unknown), which the
+/// - `danger_flags`: ONLY the audited auto-approve flags, each on its
+///   owner (five flags on six presets: Antigravity's is Claude's
+///   `--dangerously-skip-permissions`). Presets we have NOT audited stay NULL (= unknown), which the
 ///   host-session policy treats as "strip the hardcoded floor + warn" —
 ///   never as "safe". Keep in sync with
 ///   `v1_host_sessions::policy::DANGER_FLAGS` (the legacy floor).
@@ -2442,8 +2523,8 @@ pub(crate) fn seed_agent_presets(conn: &Connection) -> Result<()> {
 /// - `readiness`: the 2026-07 TUI signal studies behind
 ///   `provider_resume::injection_profile_for_provider`, same classes:
 ///   'bracketed-paste' (claude/grok/cursor-agent — the ?2004h flip is
-///   trustworthy) or 'settle:<ms>' (codex/gemini 2000, pi 1500, hermes
-///   7000 — ?2004h lies). The unstudied six stay NULL (= unknown).
+///   trustworthy) or 'settle:<ms>' (codex/gemini 2000, pi 1500, hermes and
+///   agy 7000 — ?2004h lies). The unstudied six stay NULL (= unknown).
 const BUILT_IN_PRESET_METADATA: &[(&str, Option<&str>, Option<&str>, Option<&str>)] = &[
     ("Claude", Some(r#"["--dangerously-skip-permissions"]"#), None, Some("bracketed-paste")),
     (
@@ -2453,6 +2534,9 @@ const BUILT_IN_PRESET_METADATA: &[(&str, Option<&str>, Option<&str>, Option<&str
         Some("settle:2000"),
     ),
     ("Gemini", Some(r#"["--yolo"]"#), None, Some("settle:2000")),
+    // agy's never-ask flag (`agy --help`); ?2004h comes on before its
+    // first screen, so readiness is a settle like hermes.
+    ("Antigravity", Some(r#"["--dangerously-skip-permissions"]"#), None, Some("settle:7000")),
     ("Grok", Some(r#"["--always-approve"]"#), None, Some("bracketed-paste")),
     ("Cursor Agent", None, None, Some("bracketed-paste")),
     ("Pi", None, None, Some("settle:1500")),
@@ -5437,7 +5521,7 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(n, 13, "expected 13 built-in presets");
+        assert_eq!(n, 14, "expected 14 built-in presets");
         let cmd: String = conn
             .query_row(
                 "SELECT command FROM agent_presets WHERE label = 'Codex' AND is_built_in = 1",
@@ -5446,6 +5530,215 @@ mod tests {
             )
             .unwrap();
         assert_eq!(cmd, "codex --yolo");
+    }
+
+    /// Launch-bar order of the built-ins, by label.
+    fn built_in_labels_in_order(conn: &Connection) -> Vec<String> {
+        let mut stmt = conn
+            .prepare("SELECT label FROM agent_presets WHERE is_built_in = 1 ORDER BY sort_order, label")
+            .unwrap();
+        stmt.query_map([], |r| r.get::<_, String>(0)).unwrap().map(|r| r.unwrap()).collect()
+    }
+
+    fn antigravity_rows(conn: &Connection) -> Vec<(String, String, i64, i64, i64)> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, command, enabled, sort_order, is_built_in FROM agent_presets \
+                 WHERE lower(label) = 'antigravity' OR command LIKE 'agy%' ORDER BY is_built_in DESC",
+            )
+            .unwrap();
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect()
+    }
+
+    /// A new install: Antigravity launches `agy` in its never-ask mode,
+    /// right after Gemini, and the Gemini preset is still there unchanged.
+    #[test]
+    fn new_install_gets_antigravity_after_gemini() {
+        let conn = fresh_memory();
+        run_migrations(&conn).unwrap();
+        seed_agent_presets(&conn).unwrap();
+        assert_eq!(
+            antigravity_rows(&conn),
+            vec![(ANTIGRAVITY_PRESET_ID.to_string(), "agy --dangerously-skip-permissions".to_string(), 1, 4, 1)]
+        );
+        let labels = built_in_labels_in_order(&conn);
+        assert_eq!(
+            labels,
+            [
+                "Claude", "Codex", "Grok", "Gemini", "Antigravity", "Cursor Agent", "Pi", "Hermes",
+                "OpenCode", "Goose", "Aider", "Ollama", "Copilot", "Interpreter",
+            ]
+        );
+        let gemini: String = conn
+            .query_row("SELECT command FROM agent_presets WHERE label = 'Gemini' AND is_built_in = 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(gemini, "gemini --yolo", "Gemini stays for API-key users");
+        // Every sort_order is distinct: no ties in the launch bar.
+        let ties: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM (SELECT sort_order FROM agent_presets GROUP BY sort_order HAVING COUNT(*) > 1)",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(ties, 0);
+    }
+
+    /// An install from before 0.46.17 that the person rearranged and edited:
+    /// Antigravity lands right after Gemini, the person's order is kept,
+    /// and none of their presets' labels, commands or switches change.
+    #[test]
+    fn existing_install_gets_antigravity_without_clobbering_edits() {
+        let conn = fresh_memory();
+        run_migrations(&conn).unwrap();
+        // The 0.46.16 seed, then the person's own changes.
+        let old: &[(&str, &str, &str, i64)] = &[
+            ("b0a1c2d3-e4f5-6789-abcd-ef0123456001", "Claude", "claude --dangerously-skip-permissions", 0),
+            ("b0a1c2d3-e4f5-6789-abcd-ef0123456002", "Codex", "codex --yolo", 1),
+            ("b0a1c2d3-e4f5-6789-abcd-ef0123456014", "Grok", "grok --always-approve", 2),
+            ("b0a1c2d3-e4f5-6789-abcd-ef0123456003", "Gemini", "gemini --model gemini-2.5-pro", 3),
+            ("b0a1c2d3-e4f5-6789-abcd-ef0123456006", "Cursor Agent", "cursor-agent", 4),
+            ("b0a1c2d3-e4f5-6789-abcd-ef0123456012", "Pi", "pi", 5),
+            ("b0a1c2d3-e4f5-6789-abcd-ef0123456013", "Hermes", "hermes", 6),
+            ("b0a1c2d3-e4f5-6789-abcd-ef0123456007", "OpenCode", "opencode", 7),
+            ("b0a1c2d3-e4f5-6789-abcd-ef0123456011", "Goose", "goose", 8),
+            ("b0a1c2d3-e4f5-6789-abcd-ef0123456005", "Aider", "aider", 9),
+            ("b0a1c2d3-e4f5-6789-abcd-ef0123456009", "Ollama", "ollama run llama3.2", 10),
+            ("b0a1c2d3-e4f5-6789-abcd-ef0123456004", "Copilot", "copilot --allow-all", 11),
+            ("b0a1c2d3-e4f5-6789-abcd-ef0123456010", "Interpreter", "interpreter", 12),
+        ];
+        for (id, label, command, order) in old {
+            conn.execute(
+                "INSERT INTO agent_presets (id, label, command, icon, enabled, sort_order, is_built_in) \
+                 VALUES (?1, ?2, ?3, '', 1, ?4, 1)",
+                params![id, label, command, order],
+            )
+            .unwrap();
+        }
+        // Cursor Agent switched off; a preset of the person's own, last.
+        conn.execute("UPDATE agent_presets SET enabled = 0 WHERE label = 'Cursor Agent'", []).unwrap();
+        conn.execute(
+            "INSERT INTO agent_presets (id, label, command, icon, enabled, sort_order, is_built_in) \
+             VALUES ('mine-1', 'My Wrapper', 'my-wrapper --fast', '', 1, 13, 0)",
+            [],
+        )
+        .unwrap();
+        let snapshot = |conn: &Connection| -> Vec<(String, String, String, i64)> {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, label, command, enabled FROM agent_presets \
+                     WHERE label != 'Antigravity' ORDER BY id",
+                )
+                .unwrap();
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+                .unwrap()
+                .map(|r| r.unwrap())
+                .collect()
+        };
+        let before = snapshot(&conn);
+
+        seed_agent_presets(&conn).unwrap();
+
+        assert_eq!(snapshot(&conn), before, "labels, commands and switches untouched");
+        let rows = antigravity_rows(&conn);
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].1, "agy --dangerously-skip-permissions");
+        assert_eq!(rows[0].3, 4, "right after Gemini (3)");
+        let mut stmt = conn
+            .prepare("SELECT label FROM agent_presets ORDER BY sort_order")
+            .unwrap();
+        let order: Vec<String> =
+            stmt.query_map([], |r| r.get::<_, String>(0)).unwrap().map(|r| r.unwrap()).collect();
+        assert_eq!(
+            order,
+            [
+                "Claude", "Codex", "Grok", "Gemini", "Antigravity", "Cursor Agent", "Pi", "Hermes",
+                "OpenCode", "Goose", "Aider", "Ollama", "Copilot", "Interpreter", "My Wrapper",
+            ],
+            "everything from Gemini's next slot moves down one; the person's order is kept"
+        );
+        let ties: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM (SELECT sort_order FROM agent_presets GROUP BY sort_order HAVING COUNT(*) > 1)",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(ties, 0, "no ties after the move");
+        let (danger, readiness): (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT danger_flags, readiness FROM agent_presets WHERE id = ?1",
+                params![ANTIGRAVITY_PRESET_ID],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(danger.as_deref(), Some(r#"["--dangerously-skip-permissions"]"#));
+        assert_eq!(readiness.as_deref(), Some("settle:7000"));
+
+        // Later boots: no second row, and a person's move or edit stays.
+        conn.execute(
+            "UPDATE agent_presets SET sort_order = 99, command = 'agy --model x', enabled = 0 WHERE id = ?1",
+            params![ANTIGRAVITY_PRESET_ID],
+        )
+        .unwrap();
+        seed_agent_presets(&conn).unwrap();
+        seed_agent_presets(&conn).unwrap();
+        assert_eq!(
+            antigravity_rows(&conn),
+            vec![(ANTIGRAVITY_PRESET_ID.to_string(), "agy --model x".to_string(), 0, 99, 1)]
+        );
+    }
+
+    /// A person who already added agy themselves keeps theirs as the one.
+    #[test]
+    fn a_persons_own_agy_preset_is_not_doubled() {
+        for (label, command) in [("Antigravity", "agy"), ("Google agent", "agy --model x"), ("antigravity", "my-agy-wrapper")] {
+            let conn = fresh_memory();
+            run_migrations(&conn).unwrap();
+            conn.execute(
+                "INSERT INTO agent_presets (id, label, command, icon, enabled, sort_order, is_built_in) \
+                 VALUES ('mine-agy', ?1, ?2, '', 1, 20, 0)",
+                params![label, command],
+            )
+            .unwrap();
+            seed_agent_presets(&conn).unwrap();
+            assert_eq!(
+                antigravity_rows(&conn).iter().filter(|r| r.4 == 1).count(),
+                0,
+                "{label}/{command}: no built-in Antigravity beside the person's own"
+            );
+            let theirs: (String, String) = conn
+                .query_row("SELECT label, command FROM agent_presets WHERE id = 'mine-agy'", [], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })
+                .unwrap();
+            assert_eq!(theirs, (label.to_string(), command.to_string()));
+        }
+        // Another program whose name only starts with `agy` is not agy.
+        let conn = fresh_memory();
+        run_migrations(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO agent_presets (id, label, command, icon, enabled, sort_order, is_built_in) \
+             VALUES ('mine-x', 'Other', 'agyx --fast', '', 1, 20, 0)",
+            [],
+        )
+        .unwrap();
+        seed_agent_presets(&conn).unwrap();
+        assert_eq!(antigravity_rows(&conn).iter().filter(|r| r.4 == 1).count(), 1);
+    }
+
+    /// Restore built-ins brings Antigravity back with its metadata.
+    #[test]
+    fn reset_built_ins_restores_antigravity() {
+        let _scoped = scoped_for_test();
+        let presets = crate::db_ops::presets_reset_built_ins().expect("reset");
+        let agy = presets.iter().find(|p| p.label == ANTIGRAVITY_PRESET_LABEL).expect("Antigravity after reset");
+        assert_eq!(agy.command, "agy --dangerously-skip-permissions");
+        assert_eq!(agy.enabled, 1);
+        assert_eq!(agy.sort_order, 4);
     }
 
     #[test]
@@ -5503,7 +5796,7 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(n, 13, "reseeding must not duplicate rows");
+        assert_eq!(n, 14, "reseeding must not duplicate rows");
     }
 
     /// Migration-0070 metadata lands truthfully on a FRESH install: the
@@ -5547,6 +5840,10 @@ mod tests {
             (Some(r#"["--yolo"]"#.into()), None, Some("settle:2000".into()))
         );
         assert_eq!(
+            row("Antigravity"),
+            (Some(r#"["--dangerously-skip-permissions"]"#.into()), None, Some("settle:7000".into()))
+        );
+        assert_eq!(
             row("Grok"),
             (Some(r#"["--always-approve"]"#.into()), None, Some("bracketed-paste".into()))
         );
@@ -5582,7 +5879,7 @@ mod tests {
             .unwrap()
             .flatten()
             .collect();
-        assert_eq!(rows.len(), 5, "exactly the five audited flag owners");
+        assert_eq!(rows.len(), 6, "exactly the six audited flag owners");
         for (label, json) in rows {
             let parsed: Vec<String> = serde_json::from_str(&json)
                 .unwrap_or_else(|e| panic!("{label} danger_flags must be a JSON string array: {e}"));

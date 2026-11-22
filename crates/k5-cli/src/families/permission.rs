@@ -1160,6 +1160,7 @@ fn printer(verb: &str, status: u16, raw: &str, now: i64) -> Shown {
             .map_or_else(|| "OK.".to_string(), |m| py::str_of(&m));
         stdout.push_str(&format!("{said}\n"));
     } else {
+        let v = if verb == "list" { named_actions(v) } else { v };
         let options = Options {
             indent: Some(2),
             ..Options::default()
@@ -1173,6 +1174,33 @@ fn printer(verb: &str, status: u16, raw: &str, now: i64) -> Shown {
         stderr,
         exit: Exit::Ok,
     }
+}
+
+/// `list`'s answer with each action's `command` this binary's own name, a
+/// space and the action's `tail`, where it holds a non-empty string one
+/// (white-label C5); an action with none is as sent. The shell's
+/// `[a.update(command="k2 <tail>"...) for a in v["actions"] ...]`.
+fn named_actions(v: Value) -> Value {
+    let Value::Object(mut pairs) = v else {
+        return v;
+    };
+    for (k, x) in pairs.iter_mut() {
+        let (Some("actions"), Value::Array(items)) = (k.as_str(), x) else {
+            continue;
+        };
+        for a in items.iter_mut() {
+            if let Value::Object(p) = a {
+                let named = match crate::transport::permission::named_pairs(p) {
+                    std::borrow::Cow::Owned(n) => Some(n),
+                    std::borrow::Cow::Borrowed(_) => None,
+                };
+                if let Some(n) = named {
+                    *p = n;
+                }
+            }
+        }
+    }
+    Value::Object(pairs)
 }
 
 fn raised(stdout: String, r: &Raise) -> Shown {

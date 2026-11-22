@@ -253,6 +253,43 @@ fn the_printer_says_what_the_shell_s_python_says() {
     assert_eq!(when(&v("\"soon\"")), "soon");
 }
 
+/// `list`: each action's command is this binary's own name and its tail
+/// (white-label C5), whatever name the server put in front; with no usable
+/// tail (an older daemon, an empty one) the daemon's command as sent.
+#[test]
+fn list_names_each_action_by_this_binary() {
+    let cli = k2_client::brand::CLI_NAME;
+    let r = print_answer(
+        "list",
+        200,
+        br#"{"actions":[{"id":"a.b","command":"zz permission request a.b --why \"<w>\"","tail":"permission request a.b --why \"<w>\""},{"id":"c.d","command":"zz permission request c.d","tail":""},{"id":"e.f","command":"zz e"}]}"#,
+        false,
+        0,
+    );
+    assert_eq!(r.exit, Exit::Ok);
+    for want in [
+        format!(r#""command": "{cli} permission request a.b --why \"<w>\"","#),
+        r#""command": "zz permission request c.d","#.to_string(),
+        r#""command": "zz e""#.to_string(),
+    ] {
+        assert!(r.stdout.contains(&want), "{want}\n{}", r.stdout);
+    }
+    assert!(
+        !r.stdout.contains("zz permission request a.b"),
+        "{}",
+        r.stdout
+    );
+    // Another verb's dump is as sent.
+    let r = print_answer(
+        "pending",
+        200,
+        br#"{"actions":[{"command":"zz a","tail":"b"}]}"#,
+        false,
+        0,
+    );
+    assert!(r.stdout.contains(r#""command": "zz a""#), "{}", r.stdout);
+}
+
 #[test]
 fn the_pending_lookup_is_the_shell_s() {
     let raw = br#"{"requests":[{"requestId":"a","cardId":"c1","addr":"k2/x"},{"requestId":"b","proof":{"kind":"confirm"}}]}"#;

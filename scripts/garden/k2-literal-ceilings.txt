@@ -1,0 +1,68 @@
+# Lines of server text for a person that still type a literal `k2 <word>`,
+# per family: `<count> <family>`. Checked by scripts/garden/k2-literal-gate.py
+# (scripts/brand-gate.sh runs it). A family may not go over its row, and a
+# family with no row may have none. Never raise a row by hand: send the text
+# as a {cli} template or build it with CLI_NAME. Lower the rows with
+# --tighten; the B7 steps that convert a family do that in the same commit.
+#
+# `skip <path> <reason>`: a file or folder (ending in /) whose text is not
+# printed by a CLI for a person, or is not the server's command. Each one
+# needs its reason; a skip for a path that is gone is an error. A skipped
+# file is still held line by line by the brand gate's cli rows
+# (scripts/cli-name-allowlist.txt).
+
+skip crates/k2-client/src/cli_copy.rs the CLI's own install names: the shim's marker, read back by our own code
+skip crates/k2-client/src/cli_install.rs the CLI's own install names: the links it makes and their notes
+skip crates/k2-core/src/app_templates/ App template files written into a repo, read by the App's developer
+skip crates/k2-core/src/feedback_brief.rs HTML briefs written to disk for the owner
+skip crates/k2-core/src/refusals/mod.rs the refusal registry; the CLI carries its own copy (_k2_refusals_json)
+skip crates/k2-core/src/refusals/rows.rs the refusal registry; the CLI carries its own copy (_k2_refusals_json)
+skip crates/k2-core/src/sew_chat/teach.rs agent teaching text, written for agents
+skip crates/k2-core/src/skills/content.rs skill files written for agents (rebrand step B6)
+skip crates/k2-core/src/workspace/context_layers.rs agent context files, written for agents
+skip crates/k2-core/src/workspace/skill_regen.rs skill files written for agents (rebrand step B6)
+skip crates/k2-core/src/zen/skill.rs skill files written for agents
+
+601 apps
+371 mail
+202 compute
+160 apps (Sew)
+144 vault
+107 zen
+106 db
+65 other
+60 doc
+45 organization
+38 chat
+38 publish
+35 ci
+34 inbox
+32 voice
+27 sim
+26 setup
+23 workspace
+20 agent sidecar
+17 agent
+17 desktop
+17 firewall
+16 agent hire
+16 thread
+15 board
+14 domain
+13 clone
+12 heartbeat
+11 connect
+11 fed
+11 front
+11 msg/postal
+10 workspace trust
+9 contract (API docs)
+9 job
+8 llm
+6 git tools
+5 approve
+4 sources
+3 permission card checks and applies
+3 terminal
+2 feedback
+2 tickets

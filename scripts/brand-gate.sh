@@ -4,7 +4,7 @@
 #
 #   bash scripts/brand-gate.sh
 #
-# Two scripts, all ratchets (a count may only fall):
+# Three scripts, all ratchets (a count may only fall):
 #   1. k2.dev: scripts/garden/zone-gate.py for Rust and for the renderer,
 #      ceilings in scripts/garden/zone-ceilings*.txt. Use k2_core::hosts or
 #      @/lib/hosts.
@@ -20,9 +20,14 @@
 #      - the bash CLI's unsure uses of the command name, one ceiling per
 #        reason, scripts/garden/cli-name-unsure-ceilings.txt.
 #      Every allowlist row has a reason (keeper or debt).
+#   3. scripts/garden/k2-literal-gate.py: server text for a person (k2-daemon,
+#      k2-core, k2-client) that types a literal `k2 <word>`, one ceiling per
+#      family, scripts/garden/k2-literal-ceilings.txt. Rebrand step B7 turns
+#      these into {cli} templates; this keeps new ones out meanwhile.
 # Run in CI by .github/workflows/checks.yml and scripts/ci/checks.sh.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 python3 "$HERE/scripts/garden/zone-gate.py"
 python3 "$HERE/scripts/garden/zone-gate.py" --area renderer
 python3 "$HERE/scripts/garden/brand-gate.py"
+python3 "$HERE/scripts/garden/k2-literal-gate.py"

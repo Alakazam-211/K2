@@ -169,7 +169,8 @@ jobs:
 
       # k2.dev (the zone gate, Rust and renderer), the product's names
       # (K2, K5, the release repo) and the command's name (k2, k5) outside
-      # the brand and hosts modules.
+      # the brand and hosts modules, and server text for a person that types
+      # a literal `k2 <word>` (scripts/garden/k2-literal-gate.py).
       - name: Brand gate (no new hard-coded product name, command name or k2.dev)
         run: bash scripts/brand-gate.sh
 
@@ -195,6 +196,9 @@ jobs:
 
       - name: Brand name policy (brand.sh lint), offline
         run: bash tests/garden/brand-lint.sh
+
+      - name: k2-literal gate on broken trees
+        run: bash tests/garden/k2-literal-gate.sh
 
       - name: private-docs gate (cloud-business docs stay in the private repo)
         run: bash scripts/private-docs-gate.sh

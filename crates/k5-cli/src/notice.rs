@@ -21,6 +21,7 @@
 //! rule and is tested everywhere with a stand-in for the console check.
 
 use crate::called_as::CalledAs;
+use k2_client::brand::AliasMode;
 
 /// The notice, one line, on stderr. It never repeats the arguments.
 pub const TEXT: &str = "note: k2 is now k5 (the same command). Type k5 from now on.";
@@ -36,16 +37,22 @@ pub enum Streams {
     Unknown,
 }
 
-/// Whether the notice shows: only when called as `k2`; not when stdout
-/// and stderr are merged into one capture; and when the merged check
-/// can't tell, only when `stderr_is_console` says stderr is a console.
-/// That check runs only then.
+/// Whether the notice shows: only when called by an alias in mode
+/// `notice`; not when stdout and stderr are merged into one capture; and
+/// when the merged check can't tell, only when `stderr_is_console` says
+/// stderr is a console. That check runs only then.
 pub fn should_show(
     called_as: CalledAs,
     streams: Streams,
     stderr_is_console: impl FnOnce() -> bool,
 ) -> bool {
-    if called_as != CalledAs::K2Name {
+    if !matches!(
+        called_as,
+        CalledAs::Alias {
+            mode: AliasMode::Notice,
+            ..
+        }
+    ) {
         return false;
     }
     match streams {
@@ -139,15 +146,33 @@ mod tests {
         panic!("the console check ran although the merged check could tell")
     }
 
+    const NOTICE: CalledAs = CalledAs::Alias {
+        name: "ab1",
+        mode: AliasMode::Notice,
+    };
+
     #[test]
-    fn only_k2_and_only_when_not_merged() {
-        assert!(should_show(CalledAs::K2Name, Streams::Apart, never_asked));
-        assert!(!should_show(CalledAs::K2Name, Streams::Merged, never_asked));
-        for streams in [Streams::Apart, Streams::Merged, Streams::Unknown] {
-            assert!(
-                !should_show(CalledAs::K5Name, streams, never_asked),
-                "{streams:?}"
-            );
+    fn only_a_notice_alias_and_only_when_not_merged() {
+        assert!(should_show(NOTICE, Streams::Apart, never_asked));
+        assert!(!should_show(NOTICE, Streams::Merged, never_asked));
+        let others = [
+            CalledAs::Primary,
+            CalledAs::Alias {
+                name: "ab1",
+                mode: AliasMode::Silent,
+            },
+            CalledAs::Alias {
+                name: "ab1",
+                mode: AliasMode::Tombstone,
+            },
+        ];
+        for who in others {
+            for streams in [Streams::Apart, Streams::Merged, Streams::Unknown] {
+                assert!(
+                    !should_show(who, streams, never_asked),
+                    "{who:?} {streams:?}"
+                );
+            }
         }
     }
 
@@ -155,8 +180,8 @@ mod tests {
     /// stderr shows it and anything else (a pipe, a file) doesn't.
     #[test]
     fn when_it_can_t_tell_only_a_console_shows_it() {
-        assert!(should_show(CalledAs::K2Name, Streams::Unknown, || true));
-        assert!(!should_show(CalledAs::K2Name, Streams::Unknown, || false));
+        assert!(should_show(NOTICE, Streams::Unknown, || true));
+        assert!(!should_show(NOTICE, Streams::Unknown, || false));
     }
 
     #[cfg(unix)]

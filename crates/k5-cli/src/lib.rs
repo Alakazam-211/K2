@@ -26,8 +26,9 @@
 //!   requests use, by the shell CLI's settings.
 //! - [`dashdash`]: a bare `--` as the shell reads it: which verbs take
 //!   one, the refusal for the others, and the help scans that stop at it.
-//! - [`called_as`]: the name the command was called by (k2 or k5), and the
-//!   variables the front hands the shell when a verb falls through.
+//! - [`called_as`]: the name the command was called by (its own, or one
+//!   of the brand's aliases and its mode), and the variables the front
+//!   hands the shell when a verb falls through.
 //! - [`home`]: the K2 home and a workspace's private folder, by k2-client's
 //!   rules.
 //! - [`route`]: the route table, one row per arm of the shell router's

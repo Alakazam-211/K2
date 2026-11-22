@@ -1005,7 +1005,7 @@ mod tests {
             Path::new("/bin/bash"),
             OsStr::new("/dev/fd/4"),
             &args,
-            CalledAs::K5Name,
+            CalledAs::Primary,
             Some(Path::new("/opt/k 2")),
         );
         assert_eq!(cmd.get_program(), "/bin/bash");
@@ -1022,7 +1022,7 @@ mod tests {
                 )
             })
             .collect();
-        let mut want: Vec<(String, Option<String>)> = CalledAs::K5Name
+        let mut want: Vec<(String, Option<String>)> = CalledAs::Primary
             .fallthrough_env()
             .iter()
             .map(|(k, v)| (k.to_string(), Some(v.to_string())))
@@ -1041,7 +1041,7 @@ mod tests {
             Path::new("/bin/bash"),
             OsStr::new("/dev/fd/4"),
             &[],
-            CalledAs::K2Name,
+            CalledAs::Primary,
             None,
         );
         let dir: Vec<_> = cmd

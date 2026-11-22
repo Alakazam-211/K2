@@ -46,7 +46,11 @@ fn the_fallthrough_env_is_what_the_shell_reads() {
         "{}\n{UNSET_LINE}\nprintf '%s|%s|%s\\n' \"$_K5_NOTICE_DONE\" \"$_K5_CLI_VIA\" \"${{K5_CLI_CALLED_AS-unset}}\"",
         handoff_block()
     );
-    for who in [CalledAs::K2Name, CalledAs::K5Name] {
+    let alias = CalledAs::Alias {
+        name: "ab1",
+        mode: k2_client::brand::AliasMode::Silent,
+    };
+    for who in [CalledAs::Primary, alias] {
         for argv0 in ["k2", "k5", "/opt/k5-front/libexec/k2-cli"] {
             let env = who.fallthrough_env();
             let shell = common::bash(&script, argv0, &env);

@@ -1,29 +1,38 @@
 //! The name the command was called by, and what the front hands the shell
 //! CLI when a verb falls through to it.
 //!
-//! The rule is the shell CLI's (`cli/src/prelude.sh`, pinned by
-//! `tests/cli/called_as.sh`):
+//! The name matters only for the aliases the brand file asks for (Rosson's
+//! rule 1): every line the command prints carries its own name, the
+//! brand's, whatever it was called by. So the one question is "is this
+//! name one of my aliases, and in which mode?", asked of a table of names
+//! ([`Names`]): the command's own and its aliases with their modes. The
+//! front asks it of the compiled table, the brand file's
+//! ([`Names::COMPILED`], from `k2_client::brand`); the tests ask it of
+//! tables of their own, so no brand is spelled here.
 //!
-//! 1. `K5_CLI_CALLED_AS` wins when it is exactly `k2` or `k5`. Any other
-//!    value, empty included, is ignored.
-//! 2. Otherwise the last part of `argv[0]` decides: `k5` means k5, and any
-//!    other name (`k2`, the old `k2so` shim, a copy under another name)
-//!    counts as k2.
+//! The rule ([`called_as`]):
 //!
-//! On Windows the program is `k5.exe`, and `argv[0]` holds what the person
-//! typed (`k5`, `k5.exe`, `K5`, `C:\bin\K5.EXE`). File names there ignore
-//! case and the shell finds `k5.exe` for `k5`, so on Windows the name is
-//! compared without case and a trailing `.exe` is dropped first; both
-//! `\` and `/` end a folder name. Elsewhere the shell's rule holds byte for
-//! byte: `K5` and `k5.exe` are other programs and count as k2.
+//! 1. `K5_CLI_CALLED_AS` wins when it is exactly the command's name or one
+//!    of its aliases. Any other value, empty included, is ignored.
+//! 2. Otherwise the last part of `argv[0]` decides: an alias's name is
+//!    that alias ([`CalledAs::Alias`]), and any other name (the command's
+//!    own, a copy under another name, a test's path) is the command
+//!    ([`CalledAs::Primary`]).
 //!
-//! The two names are the values the shell compares against, not words for
-//! people, so they are spelled here and not taken from
-//! [`k2_client::brand`]. Today `brand::CLI_NAME` is `k2`, the name the
-//! k2 side stands for; a test pins that, so the rename that moves
-//! `CLI_NAME` to `k5` has to decide what calling the command `k2` means
-//! then.
+//! On Windows the program is `<name>.exe`, and `argv[0]` holds what the
+//! person typed (`xy`, `xy.exe`, `XY`, `C:\bin\XY.EXE`). File names there
+//! ignore case and the shell finds `xy.exe` for `xy`, so on Windows the
+//! name is compared without case and a trailing `.exe` is dropped first;
+//! both `\` and `/` end a folder name. Elsewhere the comparison is byte for
+//! byte: `XY` and `xy.exe` are other programs.
+//!
+//! An alias in mode `notice` or `tombstone` shows only when `argv[0]`
+//! names the alias, so its link must point at the command itself, not at
+//! a shared shim that runs the command under its own name. That is the
+//! install's and the packaging's part, and a condition of the switch that
+//! turns such an alias on.
 
+use k2_client::brand::{self, AliasMode};
 use std::ffi::OsStr;
 
 /// The variable that tells the shell the name the front was called by.
@@ -58,13 +67,44 @@ pub const FRONT_VARS: [&str; 5] = [
     SCRIPT_DIR_VAR,
 ];
 
-/// Which of the command's two names it was called by.
+/// The names a command answers to: its own, and its aliases, each with
+/// what it does when the command is called by it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Names {
+    /// The command's own name.
+    pub name: &'static str,
+    /// The other names it answers to, each with its mode.
+    pub aliases: &'static [(&'static str, AliasMode)],
+}
+
+impl Names {
+    /// The brand file's: the command's name and its aliases, as compiled.
+    pub const COMPILED: Names = Names {
+        name: brand::CLI_NAME,
+        aliases: brand::CLI_ALIAS_MODES,
+    };
+
+    /// The alias called `name` exactly, as [`CalledAs::Alias`].
+    fn alias(&self, name: &[u8]) -> Option<CalledAs> {
+        self.aliases
+            .iter()
+            .find(|(alias, _)| alias.as_bytes() == name)
+            .map(|&(name, mode)| CalledAs::Alias { name, mode })
+    }
+}
+
+/// Which of the command's names it was called by.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CalledAs {
-    /// `k2`, or any name but `k5`.
-    K2Name,
-    /// `k5`.
-    K5Name,
+    /// Its own name, or a name it does not know.
+    Primary,
+    /// One of its aliases, with the alias's mode.
+    Alias {
+        /// The alias, as the table spells it.
+        name: &'static str,
+        /// What a call by it does.
+        mode: AliasMode,
+    },
 }
 
 /// Whose rule reads `argv[0]`: see the module notes.
@@ -82,39 +122,49 @@ impl Os {
 }
 
 impl CalledAs {
-    /// The name, as [`CALLED_AS_VAR`] carries it: `k2` or `k5`.
-    pub fn name(self) -> &'static str {
-        match self {
-            CalledAs::K2Name => "k2",
-            CalledAs::K5Name => "k5",
-        }
-    }
-
-    /// The name this process was called by, from its `argv[0]` and its
-    /// environment.
+    /// The name this process was called by, from its `argv[0]`, its
+    /// environment and the compiled table.
     pub fn current(argv0: &OsStr) -> CalledAs {
-        called_as(argv0, |name| std::env::var(name).ok(), Os::CURRENT)
+        called_as(
+            argv0,
+            |name| std::env::var(name).ok(),
+            Os::CURRENT,
+            &Names::COMPILED,
+        )
     }
 
     /// What the front sets for the shell CLI when it hands a verb on:
-    /// the name it was called by, that the notice is dealt with, and that
-    /// the call came through the front.
+    /// the name that matched (the command's own for [`CalledAs::Primary`]),
+    /// that the notice is dealt with, and that the call came through the
+    /// front.
     pub fn fallthrough_env(self) -> [(&'static str, &'static str); 3] {
+        let name = match self {
+            CalledAs::Primary => brand::CLI_NAME,
+            CalledAs::Alias { name, .. } => name,
+        };
         [
-            (CALLED_AS_VAR, self.name()),
+            (CALLED_AS_VAR, name),
             (NOTICE_DONE_VAR, "1"),
             (VIA_VAR, VIA_RUST),
         ]
     }
 }
 
-/// The rule, over `argv[0]`, a lookup of the environment and the system's
-/// way with file names.
-pub fn called_as(argv0: &OsStr, lookup: impl Fn(&str) -> Option<String>, os: Os) -> CalledAs {
-    match lookup(CALLED_AS_VAR).as_deref() {
-        Some("k2") => return CalledAs::K2Name,
-        Some("k5") => return CalledAs::K5Name,
-        _ => {}
+/// The rule, over `argv[0]`, a lookup of the environment, the system's
+/// way with file names, and a table of names.
+pub fn called_as(
+    argv0: &OsStr,
+    lookup: impl Fn(&str) -> Option<String>,
+    os: Os,
+    names: &Names,
+) -> CalledAs {
+    if let Some(value) = lookup(CALLED_AS_VAR) {
+        if value == names.name {
+            return CalledAs::Primary;
+        }
+        if let Some(alias) = names.alias(value.as_bytes()) {
+            return alias;
+        }
     }
     let bytes = argv0.as_encoded_bytes();
     let base = match os {
@@ -122,24 +172,49 @@ pub fn called_as(argv0: &OsStr, lookup: impl Fn(&str) -> Option<String>, os: Os)
         Os::Windows => bytes.rsplit(|b| *b == b'/' || *b == b'\\').next(),
     }
     .unwrap_or_default();
-    let is_k5 = match os {
-        Os::Unix => base == b"k5",
+    let alias = match os {
+        Os::Unix => names.alias(base),
         Os::Windows => {
             let lower = base.to_ascii_lowercase();
-            lower.strip_suffix(b".exe").unwrap_or(&lower[..]) == b"k5"
+            names.alias(lower.strip_suffix(b".exe").unwrap_or(&lower[..]))
         }
     };
-    if is_k5 {
-        CalledAs::K5Name
-    } else {
-        CalledAs::K2Name
-    }
+    alias.unwrap_or(CalledAs::Primary)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use CalledAs::{K2Name, K5Name};
+    use AliasMode::{Notice, Silent, Tombstone};
+    use CalledAs::Primary;
+
+    /// A brand with no aliases.
+    const XY: Names = Names {
+        name: "xy",
+        aliases: &[],
+    };
+
+    /// The command after the rename: the old name in mode notice, the old
+    /// shim's name silent.
+    const K5: Names = Names {
+        name: "k5",
+        aliases: &[("k2", Notice), ("k2so", Silent)],
+    };
+
+    /// The release after that: the old name in mode tombstone.
+    const K5_TOMBSTONE: Names = Names {
+        name: "k5",
+        aliases: &[("k2", Tombstone)],
+    };
+
+    const K2_NOTICE: CalledAs = CalledAs::Alias {
+        name: "k2",
+        mode: Notice,
+    };
+    const K2SO_SILENT: CalledAs = CalledAs::Alias {
+        name: "k2so",
+        mode: Silent,
+    };
 
     fn with(value: Option<&'static str>) -> impl Fn(&str) -> Option<String> {
         move |name| {
@@ -148,66 +223,92 @@ mod tests {
         }
     }
 
-    fn unix(argv0: &str, value: Option<&'static str>) -> CalledAs {
-        called_as(OsStr::new(argv0), with(value), Os::Unix)
+    fn unix(names: &Names, argv0: &str, value: Option<&'static str>) -> CalledAs {
+        called_as(OsStr::new(argv0), with(value), Os::Unix, names)
     }
 
-    fn windows(argv0: &str, value: Option<&'static str>) -> CalledAs {
-        called_as(OsStr::new(argv0), with(value), Os::Windows)
+    fn windows(names: &Names, argv0: &str, value: Option<&'static str>) -> CalledAs {
+        called_as(OsStr::new(argv0), with(value), Os::Windows, names)
     }
 
-    /// The cases of `tests/cli/called_as.sh`, and a few more.
+    /// No aliases: every name is the command, and the variable set to a
+    /// name it does not know is ignored.
+    #[test]
+    fn with_no_aliases_every_name_is_the_command() {
+        for argv0 in [
+            "xy",
+            "k2",
+            "k5",
+            "k2so",
+            "foo",
+            "/usr/local/bin/xy",
+            "/tmp/x/some-copy",
+            "",
+        ] {
+            assert_eq!(unix(&XY, argv0, None), Primary, "argv0 {argv0:?}");
+            assert_eq!(windows(&XY, argv0, None), Primary, "Windows {argv0:?}");
+            assert_eq!(unix(&XY, argv0, Some("k5")), Primary, "{argv0:?}, k5");
+            assert_eq!(unix(&XY, argv0, Some("xy")), Primary, "{argv0:?}, xy");
+        }
+    }
+
+    /// The cases of `tests/cli/called_as.sh`, and a few more, against a
+    /// table with two aliases.
     #[test]
     fn the_name_by_argv0_alone() {
         let rows: &[(&str, CalledAs)] = &[
-            ("k2", K2Name),
-            ("k5", K5Name),
-            ("/usr/local/bin/k5", K5Name),
-            ("/tmp/x/k2", K2Name),
-            ("./k5", K5Name),
-            ("k2so", K2Name),
-            ("/tmp/x/some-copy", K2Name),
-            ("", K2Name),
-            ("/", K2Name),
-            ("/usr/local/bin/k5/", K2Name),
-            ("k5/k2", K2Name),
-            ("K5", K2Name),
-            ("k5.exe", K2Name),
-            ("k5 ", K2Name),
-            ("C:\\bin\\k5", K2Name),
+            ("k5", Primary),
+            ("k2", K2_NOTICE),
+            ("k2so", K2SO_SILENT),
+            ("/usr/local/bin/k2", K2_NOTICE),
+            ("/tmp/x/k5", Primary),
+            ("./k2", K2_NOTICE),
+            ("/opt/k2so", K2SO_SILENT),
+            ("/tmp/x/some-copy", Primary),
+            ("", Primary),
+            ("/", Primary),
+            ("/usr/local/bin/k2/", Primary),
+            ("k2/k5", Primary),
+            ("K2", Primary),
+            ("k2.exe", Primary),
+            ("k2 ", Primary),
+            ("k2-cli", Primary),
+            ("C:\\bin\\k2", Primary),
         ];
         for (argv0, want) in rows {
-            assert_eq!(unix(argv0, None), *want, "argv0 {argv0:?}");
+            assert_eq!(unix(&K5, argv0, None), *want, "argv0 {argv0:?}");
         }
     }
 
     #[test]
-    fn the_variable_wins_when_it_names_k2_or_k5() {
+    fn the_variable_wins_when_it_names_the_command_or_an_alias() {
         let rows: &[(&str, Option<&'static str>, CalledAs)] = &[
-            ("k2", Some("k5"), K5Name),
-            ("k5", Some("k2"), K2Name),
-            ("some-copy", Some("k5"), K5Name),
-            ("k2so", Some("k5"), K5Name),
-            ("k2", Some("k2"), K2Name),
-            ("k5", Some("k5"), K5Name),
-            // Ignored: empty, or anything but the two bare names.
-            ("k5", Some(""), K5Name),
-            ("k2", Some(""), K2Name),
-            ("k5", Some("k2so"), K5Name),
-            ("k2", Some("K5"), K2Name),
-            ("k5", Some("k2 "), K5Name),
-            ("k2", Some("/usr/local/bin/k5"), K2Name),
-            ("some-copy", Some("k5-cli"), K2Name),
-            ("k2", Some("k5.exe"), K2Name),
+            ("k2", Some("k5"), Primary),
+            ("k5", Some("k2"), K2_NOTICE),
+            ("some-copy", Some("k2"), K2_NOTICE),
+            ("k2", Some("k2so"), K2SO_SILENT),
+            ("k2so", Some("k5"), Primary),
+            ("k2", Some("k2"), K2_NOTICE),
+            ("k5", Some("k5"), Primary),
+            // Ignored: empty, or anything but a bare name in the table.
+            ("k2", Some(""), K2_NOTICE),
+            ("k5", Some(""), Primary),
+            ("k5", Some("xy"), Primary),
+            ("k2", Some("K5"), K2_NOTICE),
+            ("k5", Some("k2 "), Primary),
+            ("k5", Some("/usr/local/bin/k2"), Primary),
+            ("some-copy", Some("k2-cli"), Primary),
+            ("k5", Some("k2.exe"), Primary),
+            ("k5", Some("K2"), Primary),
         ];
         for (argv0, value, want) in rows {
             assert_eq!(
-                unix(argv0, *value),
+                unix(&K5, argv0, *value),
                 *want,
                 "argv0 {argv0:?}, {CALLED_AS_VAR}={value:?}"
             );
             assert_eq!(
-                windows(argv0, *value),
+                windows(&K5, argv0, *value),
                 *want,
                 "Windows: argv0 {argv0:?}, {CALLED_AS_VAR}={value:?}"
             );
@@ -215,26 +316,40 @@ mod tests {
     }
 
     #[test]
+    fn a_tombstone_alias_is_an_alias_in_that_mode() {
+        let tomb = CalledAs::Alias {
+            name: "k2",
+            mode: Tombstone,
+        };
+        assert_eq!(unix(&K5_TOMBSTONE, "/usr/bin/k2", None), tomb);
+        assert_eq!(windows(&K5_TOMBSTONE, "K2.EXE", None), tomb);
+        assert_eq!(unix(&K5_TOMBSTONE, "k5", Some("k2")), tomb);
+        assert_eq!(unix(&K5_TOMBSTONE, "k2so", None), Primary);
+    }
+
+    #[test]
     fn on_windows_case_and_exe_are_ignored() {
         let rows: &[(&str, CalledAs)] = &[
-            ("k5", K5Name),
-            ("k5.exe", K5Name),
-            ("K5.EXE", K5Name),
-            ("K5", K5Name),
-            ("k5.Exe", K5Name),
-            ("C:\\Program Files\\K2\\k5.exe", K5Name),
-            ("C:/tools/k5", K5Name),
-            ("\\\\server\\share\\K5.exe", K5Name),
-            ("k2.exe", K2Name),
-            ("k2so.exe", K2Name),
-            ("k5.exe.exe", K2Name),
-            ("k5.com", K2Name),
-            (".exe", K2Name),
-            ("k5\\", K2Name),
-            ("C:\\k5\\k2.exe", K2Name),
+            ("k2", K2_NOTICE),
+            ("k2.exe", K2_NOTICE),
+            ("K2.EXE", K2_NOTICE),
+            ("K2", K2_NOTICE),
+            ("k2.Exe", K2_NOTICE),
+            ("C:\\bin\\k2.exe", K2_NOTICE),
+            ("C:\\Program Files\\K2\\k2.exe", K2_NOTICE),
+            ("C:/tools/k2", K2_NOTICE),
+            ("\\\\server\\share\\K2.exe", K2_NOTICE),
+            ("K2SO.EXE", K2SO_SILENT),
+            ("k5.exe", Primary),
+            ("K5", Primary),
+            ("k2.exe.exe", Primary),
+            ("k2.com", Primary),
+            (".exe", Primary),
+            ("k2\\", Primary),
+            ("C:\\k2\\k5.exe", Primary),
         ];
         for (argv0, want) in rows {
-            assert_eq!(windows(argv0, None), *want, "Windows argv0 {argv0:?}");
+            assert_eq!(windows(&K5, argv0, None), *want, "Windows argv0 {argv0:?}");
         }
     }
 
@@ -243,63 +358,67 @@ mod tests {
     fn an_argv0_that_is_not_utf8_is_read_by_its_bytes() {
         use std::os::unix::ffi::OsStrExt;
         assert_eq!(
-            called_as(OsStr::from_bytes(b"/opt/\xff/k5"), with(None), Os::Unix),
-            K5Name
+            called_as(
+                OsStr::from_bytes(b"/opt/\xff/k2"),
+                with(None),
+                Os::Unix,
+                &K5
+            ),
+            K2_NOTICE
         );
         assert_eq!(
-            called_as(OsStr::from_bytes(b"/opt/k5\xff"), with(None), Os::Unix),
-            K2Name
+            called_as(OsStr::from_bytes(b"/opt/k2\xff"), with(None), Os::Unix, &K5),
+            Primary
         );
+    }
+
+    /// The compiled table: the command's own name is the command, and
+    /// each alias is itself in its own mode. No brand is named here.
+    #[test]
+    fn the_compiled_table_is_the_brand_file_s() {
+        let names = Names::COMPILED;
+        assert_eq!(names.name, k2_client::brand::CLI_NAME);
+        assert_eq!(names.aliases, k2_client::brand::CLI_ALIAS_MODES);
+        assert_eq!(unix(&names, names.name, None), Primary);
+        assert_eq!(windows(&names, names.name, None), Primary);
+        for &(name, mode) in names.aliases {
+            let want = CalledAs::Alias { name, mode };
+            assert_eq!(unix(&names, name, None), want, "alias {name}");
+            assert_eq!(
+                windows(&names, &format!("{}.EXE", name.to_uppercase()), None),
+                want,
+                "alias {name}"
+            );
+        }
     }
 
     #[test]
     fn the_fallthrough_env_names_the_caller() {
+        let alias = CalledAs::Alias {
+            name: "ab1",
+            mode: Silent,
+        };
         assert_eq!(
-            K2Name.fallthrough_env(),
+            alias.fallthrough_env(),
             [
-                ("K5_CLI_CALLED_AS", "k2"),
+                ("K5_CLI_CALLED_AS", "ab1"),
                 ("K5_CLI_NOTICE_DONE", "1"),
                 ("K5_CLI_VIA", "rust")
             ]
         );
         assert_eq!(
-            K5Name.fallthrough_env(),
-            [
-                ("K5_CLI_CALLED_AS", "k5"),
-                ("K5_CLI_NOTICE_DONE", "1"),
-                ("K5_CLI_VIA", "rust")
-            ]
+            Primary.fallthrough_env()[0],
+            ("K5_CLI_CALLED_AS", k2_client::brand::CLI_NAME)
         );
-        // What the front hands on, the shell reads back as the same name.
-        for who in [K2Name, K5Name] {
-            let env = who.fallthrough_env();
-            let lookup = |name: &str| {
-                env.iter()
-                    .find(|(k, _)| *k == name)
-                    .map(|(_, v)| v.to_string())
-            };
-            assert_eq!(called_as(OsStr::new("some-copy"), lookup, Os::Unix), who);
-        }
     }
 
     /// The front's variables: the three fixed ones, the passport rule's
     /// count, then the folder.
     #[test]
     fn the_front_hands_on_five_names() {
-        let fixed: Vec<&str> = K2Name.fallthrough_env().iter().map(|(k, _)| *k).collect();
+        let fixed: Vec<&str> = Primary.fallthrough_env().iter().map(|(k, _)| *k).collect();
         assert_eq!(FRONT_VARS[..3], fixed[..]);
         assert_eq!(FRONT_VARS[3], "K5_CLI_WOULD_REFUSE");
         assert_eq!(FRONT_VARS[4], "K5_CLI_SCRIPT_DIR");
-    }
-
-    /// The brand's command name is the k2 side today, and its aliases count
-    /// as k2. When the rename moves `CLI_NAME`, this fails on purpose.
-    #[test]
-    fn the_brand_names_today() {
-        assert_eq!(K2Name.name(), k2_client::brand::CLI_NAME);
-        for alias in k2_client::brand::CLI_ALIASES {
-            assert_eq!(unix(alias, None), K2Name, "alias {alias}");
-            assert_eq!(windows(alias, None), K2Name, "alias {alias}");
-        }
     }
 }

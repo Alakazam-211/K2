@@ -161,7 +161,7 @@ fn the_prelude_unsets_every_hand_over_variable() {
         .filter_map(|l| l.strip_prefix("unset "))
         .flat_map(str::split_whitespace)
         .collect();
-    let mut names: Vec<&str> = CalledAs::K2Name
+    let mut names: Vec<&str> = CalledAs::Primary
         .fallthrough_env()
         .iter()
         .map(|(n, _)| *n)

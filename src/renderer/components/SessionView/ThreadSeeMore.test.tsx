@@ -11,6 +11,7 @@ import type { ReactNode } from 'react'
 import { TabVisibilityContext } from '@/contexts/TabVisibilityContext'
 import { ThreadOverlayPane } from './ThreadOverlayPane'
 import { ThreadFloatSearch } from './ThreadFloatSearch'
+import { THREAD_SEARCH_HIGHLIGHT_CURRENT } from './threadSearch'
 import type { OverlayThreadItem, ThreadTurn } from './overlayThread'
 import { renderInRoom, testRoom } from '@/test-utils/room'
 import { primaryScope } from '@/kessel/server-scope'
@@ -306,9 +307,11 @@ describe('See more in the desktop Thread', () => {
 describe('a search hit in a folded message', () => {
   const g = globalThis as unknown as { CSS?: unknown; Highlight?: unknown }
   let prev: { css: unknown; h: unknown }
+  let reg: Map<string, { ranges: Range[] }>
   beforeEach(() => {
     prev = { css: g.CSS, h: g.Highlight }
-    g.CSS = { highlights: new Map() }
+    reg = new Map()
+    g.CSS = { highlights: reg }
     g.Highlight = class {
       ranges: Range[]
       constructor(...r: Range[]) {
@@ -339,6 +342,10 @@ describe('a search hit in a folded message', () => {
     expect(screen.getByTestId('thread-search-count').textContent).toContain('1 of 1')
     expect(toggleOf('m2')!.getAttribute('aria-expanded')).toBe('true')
     expect(clipOf('m2').style.maxHeight).toBe('')
+    // The match inside the fold is painted, as in any message.
+    const current = reg.get(THREAD_SEARCH_HIGHLIGHT_CURRENT)?.ranges[0]
+    expect(current?.toString()).toBe('zebra')
+    expect(current?.startContainer.parentElement?.closest('[data-zen-message]')?.getAttribute('data-zen-message')).toBe('m2')
   })
 
   it('a match in a short message leaves the long one folded', async () => {

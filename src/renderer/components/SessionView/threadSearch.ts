@@ -337,9 +337,11 @@ function pointAt(segments: readonly TextSegment[], offset: number, end: boolean)
 }
 
 /** The message words a bubble draws (not its quote of another message, its
- *  cards' controls or the author line). */
+ *  cards' controls or the author line), folded behind See more or not. */
 export function messageBodies(row: Element): Element[] {
-  return Array.from(row.querySelectorAll(':scope [data-zen-bubble] > .chat-markdown'))
+  return Array.from(
+    row.querySelectorAll(':scope [data-zen-bubble] > .chat-markdown, :scope [data-zen-bubble] > .thread-fold > .thread-fold-clip > * > .chat-markdown'),
+  )
 }
 
 /** Ranges over each occurrence of `query` in `roots`' drawn text. */

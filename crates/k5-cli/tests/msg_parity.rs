@@ -886,8 +886,8 @@ fn msg_after_dashes_as_the_shell_does() {
             0,
         ),
     ];
-    for c in &v {
-        rig.check(c);
+    for c in v {
+        rig.check(&as_the_front_routes(VERB, c));
     }
 }
 

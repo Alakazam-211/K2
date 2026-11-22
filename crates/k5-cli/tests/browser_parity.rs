@@ -432,8 +432,8 @@ fn browser_note_after_dashes() {
             0,
         ),
     ];
-    for c in &v {
-        rig.check(c);
+    for c in v {
+        rig.check(&as_the_front_routes(VERB, c));
     }
 }
 

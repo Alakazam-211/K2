@@ -416,8 +416,8 @@ fn remind_after_dashes_as_the_shell_does() {
             0,
         ),
     ];
-    for c in &v {
-        rig.check(c);
+    for c in v {
+        rig.check(&as_the_front_routes("remind", c));
     }
     // covers: heartbeat remind
     let hb = Rig::new("heartbeat", "rdashes");
@@ -441,7 +441,7 @@ fn remind_after_dashes_as_the_shell_does() {
             0,
         ),
     ] {
-        hb.check(&c);
+        hb.check(&as_the_front_routes("heartbeat", c));
     }
 }
 

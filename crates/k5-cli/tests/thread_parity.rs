@@ -949,7 +949,7 @@ fn thread_after_dashes_as_the_shell_does() {
             0,
         ),
     ] {
-        rig.check(&c);
+        rig.check(&as_the_front_routes(VERB, c));
     }
 }
 

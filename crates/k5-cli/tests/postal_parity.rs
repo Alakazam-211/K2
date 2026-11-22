@@ -218,7 +218,9 @@ fn words_after_dashes() {
             0,
         ),
     ];
-    check(&rig, v);
+    for c in v {
+        rig.check(&as_the_front_routes(VERB, c));
+    }
 }
 
 #[test]

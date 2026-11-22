@@ -193,8 +193,8 @@ impl Machine {
     }
 
     /// The scratch folder (as typed and URL-encoded), the shell CLI's
-    /// path, the stub's port and a run's random job id, written the same
-    /// on both sides.
+    /// path, the stub's port, a run's random job id and a traceback
+    /// frame's line number, written the same on both sides.
     fn mask(&self, text: &str) -> String {
         let dir = self.dir.to_string_lossy().to_string();
         let encoded = dir.replace('/', "%2F");
@@ -203,7 +203,11 @@ impl Machine {
             .replace(&encoded, "<dir>")
             .replace(&cli_k2().to_string_lossy().to_string(), "<cli>")
             .replace(&self.stub.port.to_string(), "<port>");
-        mask_after(&text, "\"clientJobId\": \"")
+        let text = mask_after(&text, "\"clientJobId\": \"");
+        // A Python traceback's frame line: the shell's block and the
+        // binary's copy of it raise on the same line of the answer, at
+        // their own line numbers (the parity rig's Compare::Traceback).
+        mask_after(&text, "File \"<string>\", line ")
     }
 
     fn run(&self, bash: bool, argv: &[String]) -> Got {
@@ -283,7 +287,8 @@ impl Machine {
     }
 }
 
-/// `text` with the hex digits after each `key` written `<id>`.
+/// `text` with the hex digits after each `key` written `<id>` (a decimal
+/// line number too).
 fn mask_after(text: &str, key: &str) -> String {
     let mut out = String::new();
     let mut rest = text;

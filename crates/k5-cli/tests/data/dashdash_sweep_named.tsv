@@ -4,3 +4,11 @@
 # stdout or stderr differ) and why. A line where only the binary sends a write
 # (A) is never named: it is fixed.
 class	line	reason
+D	k2 approve key-id -- -h	stderr only, exit 2 on both, nothing sent: with no k2-approve program on PATH the shell's cmd_approve_local says first "k2 approve key-id: the k2-approve program isn't installed here." (and how to build it); the binary reads the words first and prints "k2 approve: key-id takes one PEM file" and the approve usage
+D	k2 approve key-id -- x-k5-sweep	stderr only, exit 2 on both, nothing sent: the shell says the k2-approve program isn't installed here; the binary says "k2 approve: key-id takes one PEM file" and the approve usage (as approve key-id -- -h)
+D	k2 approve show -- -h	stderr only, exit 2 on both, nothing sent: the shell says "k2 approve show: the k2-approve program isn't installed here."; the binary says "k2 approve: show takes one payload file" and the approve usage
+D	k2 approve show -- x-k5-sweep	stderr only, exit 2 on both, nothing sent: the shell says the k2-approve program isn't installed here; the binary says "k2 approve: show takes one payload file" and the approve usage
+D	k2 approve verify -- -h	stderr only, exit 2 on both, nothing sent: the shell says "k2 approve verify: the k2-approve program isn't installed here."; the binary reads the words first and prints "k2 approve: unknown argument --" and the approve usage
+D	k2 approve verify -- x-k5-sweep	stderr only, exit 2 on both, nothing sent: the shell says the k2-approve program isn't installed here; the binary prints "k2 approve: unknown argument --" and the approve usage
+D	k2 doc av read -- -h	exit 0 vs 2, nothing sent on either: the shell's _doc_av reads -h anywhere, after a -- too, and prints the doc av help (exit 0); the binary's help scan stops at the --, so it prints "Error: k2 doc av read needs --config <file>" and the usage JSON (exit 2). Bash's scan is the odd one (every other doc verb stops at --)
+D	k2 doc av summary -- -h	exit 0 vs 2, nothing sent on either: as doc av read -- -h (the shell prints the doc av help; the binary "Error: k2 doc av summary needs --config <file>", exit 2)

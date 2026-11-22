@@ -115,6 +115,15 @@ impl StandIn {
         }
         // No TCP listener on a shared node: the socket only.
         conf.push_str("listen_addresses = ''\n");
+        // The helper's restore hba admits postgres by peer; the stand-in runs
+        // as the test's user, so it reads the same rule as trust.
+        let hba = under(&self.root, &format!("/etc/postgresql/{m}/{n}/{}", k2_root_proto::pg_restore::RESTORE_HBA_FILE));
+        if conf.contains(&hba.to_string_lossy().to_string()) {
+            let body = std::fs::read_to_string(&hba).unwrap().replace(" peer", " trust");
+            let standin = self.root.join(format!("standin-hba-{m}-{n}.conf"));
+            std::fs::write(&standin, body).unwrap();
+            conf = conf.replace(&hba.to_string_lossy().to_string(), &standin.to_string_lossy());
+        }
         let cf = self.root.join(format!("standin-{m}-{n}.conf"));
         std::fs::write(&cf, conf).unwrap();
         if n.starts_with("pitrslow") {
@@ -313,6 +322,9 @@ fn pitr_real_pg() {
     let v = ok_json(&t, &["pg", "ensure-cluster", &src, "5446", "--wal-archive"]);
     assert_eq!((v["created"].clone(), v["walArchive"].clone()), (json!(true), json!(true)), "{v}");
     si.psql(m, "pitrsrc", "CREATE TABLE drill (id int PRIMARY KEY, at timestamptz NOT NULL DEFAULT clock_timestamp())");
+    // A login and another database the restore must not open (N1, N2).
+    si.psql(m, "pitrsrc", "CREATE ROLE appuser LOGIN PASSWORD 'old-pass'");
+    si.psql(m, "pitrsrc", "CREATE DATABASE otherdb");
     si.psql(m, "pitrsrc", "INSERT INTO drill (id) SELECT generate_series(1, 3)");
     // A base backup, then rows 4-5.
     let b = ok_json(&t, &["pg", "basebackup", &src]);
@@ -339,6 +351,19 @@ fn pitr_real_pg() {
     );
     assert!(!under(&t.root, &format!("/etc/postgresql/{m}/pitrdrill/conf.d/96-k2-restore.conf")).exists(), "the recovery settings are gone");
     println!("PASS restore to {}: rows 1-5, not 6-7", target.token());
+
+    // A serving restore (N1, N2): logins locked, sessions ended, every
+    // database but postgres closed, then opened without the socket-only
+    // settings.
+    let r = ok_json(&t, &["pg", "restore-to", &src, "pitrserve", &target.stamp()]);
+    assert_eq!((r["created"].clone(), r["socketOnly"].clone()), (json!(true), json!(false)), "{r}");
+    assert!(r["loginsLocked"].as_u64() >= Some(1), "{r}");
+    assert_eq!(si.psql(m, "pitrserve", "SELECT rolcanlogin::text FROM pg_roles WHERE rolname = 'appuser'"), "false", "its logins are locked");
+    assert_eq!(si.psql(m, "pitrserve", "SELECT datallowconn::text FROM pg_database WHERE datname = 'otherdb'"), "false", "other databases closed");
+    assert_eq!(si.psql(m, "pitrserve", "SELECT count(*) FROM drill"), "5", "the rows of the moment");
+    assert!(!under(&t.root, &format!("/etc/postgresql/{m}/pitrserve/conf.d/zz-k2-restore-local.conf")).exists(), "opened after the lock");
+    assert_eq!(si.psql(m, "pitrsrc", "SELECT rolcanlogin::text FROM pg_roles WHERE rolname = 'appuser'"), "true", "never the source");
+    println!("PASS a serving restore locks its logins, closes the other databases and opens only then");
 
     // A slow start (the unit's start errors, Postgres comes up 8 s later and
     // replays): waited for, never reported as a failure.

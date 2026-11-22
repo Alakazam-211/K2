@@ -451,6 +451,8 @@ fn review_m1_a_reused_name_or_a_foreign_identity_is_never_dropped() {
     let e = err_of(&t.call(&["pg", "drop-drill", "17-fb_drill"]));
     assert!(e.starts_with("not_drill") && e.contains("7999999999999999999"), "{e}");
     assert!(t.p("/var/lib/postgresql/17/fb_drill").exists());
+    // Re-review M1: a refused drop stops nothing.
+    assert!(!t.non_query_calls().iter().any(|c| c == &format!("{SYSTEMCTL} stop postgresql@17-fb_drill.service")), "{:?}", t.non_query_calls());
     // Its source's identity: dropped.
     std::fs::write(t.root.join("controldata-id"), named_rec(&t, 17, "feedback").system_id).unwrap();
     assert_eq!(json(&t.call(&["pg", "drop-drill", "17-fb_drill"]))["dropped"], true);
@@ -559,4 +561,117 @@ fn review_l5_auto_conf_is_stripped() {
     }));
     json(&t.call(&["pg", "restore-to", "17-feedback", "fb_drill", &UtcTime::from_epoch(n - 60).stamp(), "--drill"]));
     assert_eq!(std::fs::read_to_string(t.p("/var/lib/postgresql/17/fb_drill/postgresql.auto.conf")).unwrap(), "work_mem = '8MB'\n");
+}
+
+// ── re-review: N1, M2(a), M2(c) ─────────────────────────────────────────
+
+/// What the cluster's conf.d and hba hold when its unit starts.
+fn capture_start(t: &T, name: &str) -> Rc<RefCell<Vec<(String, Option<String>, Option<String>)>>> {
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let (s2, r, n) = (seen.clone(), t.root.clone(), name.to_string());
+    let prev = t.exec.0.borrow().programs.get(SYSTEMCTL).cloned().unwrap();
+    t.exec.0.borrow_mut().programs.insert(
+        SYSTEMCTL.into(),
+        Rc::new(move |a| {
+            if matches!(a.first().map(String::as_str), Some("start" | "restart")) && a.get(1).is_some_and(|u| u.contains(&format!("17-{n}."))) {
+                let local = std::fs::read_to_string(under(&r, &format!("/etc/postgresql/17/{n}/conf.d/{}", pr::RESTORE_LOCAL_CONF_FILE))).ok();
+                let hba = std::fs::read_to_string(under(&r, &format!("/etc/postgresql/17/{n}/{}", pr::RESTORE_HBA_FILE))).ok();
+                s2.borrow_mut().push((a[0].clone(), local, hba));
+            }
+            prev(a)
+        }),
+    );
+    seen
+}
+
+/// N1: every restore replays socket-only, with no sessions and postgres
+/// alone; a serving one ends every other session after locking its logins
+/// and only then restarts open; a drill stays socket-only.
+#[test]
+fn n1_restores_replay_socket_only_and_open_only_after_the_lock() {
+    let (t, w) = archiving_box();
+    let n = now();
+    base_backup(&t, n - 600, "000000010000000000000003");
+    spool(&t, &["000000010000000000000003"], n);
+    let seen = capture_start(&t, "fb_serve");
+    let v = json(&t.call(&["pg", "restore-to", "17-feedback", "fb_serve", &UtcTime::from_epoch(n - 60).stamp()]));
+    assert_eq!(v["socketOnly"], false, "{v}");
+    let starts = seen.borrow().clone();
+    assert_eq!(starts[0].0, "start");
+    assert_eq!(starts[0].1.as_deref(), Some(pr::restore_local_conf(17, "fb_serve").as_str()), "replays socket-only, hot_standby off");
+    assert_eq!(starts[0].2.as_deref(), Some(pr::RESTORE_HBA), "postgres alone");
+    assert_eq!(starts.last().unwrap().0, "restart");
+    assert_eq!(starts.last().unwrap().1, None, "restarts open only without the socket-only settings");
+    // The order: lock, then every other session ended, then the restart.
+    let port = v["port"].as_u64().unwrap() as u16;
+    let sql: Vec<String> = w.borrow().sql.iter().filter(|(p, _)| *p == port).map(|(_, s)| s.clone()).collect();
+    let lock = sql.iter().position(|s| s == pr::LOCK_LOGINS_SQL).expect("locked");
+    let end = sql.iter().position(|s| s == pr::END_SESSIONS_SQL).expect("sessions ended");
+    assert!(lock < end, "NOLOGIN before ending the sessions");
+    let restart_at = t.non_query_calls().iter().position(|c| c == &format!("{SYSTEMCTL} restart postgresql@17-fb_serve.service")).expect("a restart");
+    assert!(t.non_query_calls()[..restart_at].iter().all(|c| !c.contains("fb_serve") || !c.contains("restart")));
+    assert!(!t.p(&format!("/etc/postgresql/17/fb_serve/conf.d/{}", pr::RESTORE_LOCAL_CONF_FILE)).exists());
+    // A drill keeps it (and is never restarted open).
+    let seen = capture_start(&t, "fb_drill");
+    let v = json(&t.call(&["pg", "restore-to", "17-feedback", "fb_drill", &UtcTime::from_epoch(n - 60).stamp(), "--drill"]));
+    assert_eq!(v["socketOnly"], true);
+    assert!(seen.borrow().iter().all(|(op, local, _)| op == "start" && local.is_some()), "{:?}", seen.borrow());
+    assert!(t.p(&format!("/etc/postgresql/17/fb_drill/conf.d/{}", pr::RESTORE_LOCAL_CONF_FILE)).exists());
+    // A restore that dies (here: Postgres stops) keeps the socket-only
+    // settings and the postgres-only hba: nothing else reaches it.
+    w.borrow_mut().stay_down.insert("fb_dead".into());
+    err_of(&t.call(&["pg", "restore-to", "17-feedback", "fb_dead", &UtcTime::from_epoch(n - 60).stamp()]));
+    assert_eq!(
+        std::fs::read_to_string(t.p(&format!("/etc/postgresql/17/fb_dead/conf.d/{}", pr::RESTORE_LOCAL_CONF_FILE))).unwrap(),
+        pr::restore_local_conf(17, "fb_dead")
+    );
+    assert_eq!(std::fs::read_to_string(t.p(&format!("/etc/postgresql/17/fb_dead/{}", pr::RESTORE_HBA_FILE))).unwrap(), pr::RESTORE_HBA);
+}
+
+/// M2(a): the cleanup of a failed restore never waits on the pg lock: here
+/// another caller holds it when the extract fails, and the cleanup still
+/// runs in full.
+#[test]
+fn m2a_cleanup_runs_while_the_pg_lock_is_held() {
+    use std::os::fd::AsRawFd;
+    let (t, w) = archiving_box();
+    let n = now();
+    base_backup(&t, n - 600, "000000010000000000000003");
+    spool(&t, &["000000010000000000000003"], n);
+    let root = t.root.clone();
+    let held: Rc<RefCell<Option<std::fs::File>>> = Rc::new(RefCell::new(None));
+    let h2 = held.clone();
+    w.borrow_mut().extra = Some(Rc::new(move |prog, a, stdin| {
+        if prog == "tar" {
+            let f = std::fs::File::open(under(&root, "/run/k2-root-helper.pg.lock")).unwrap();
+            // SAFETY: a valid fd we own.
+            assert_eq!(unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) }, 0, "the test takes the pg lock");
+            *h2.borrow_mut() = Some(f);
+            return Some(ExecOut { status: 2, stdout: vec![], stderr: b"tar: unexpected EOF".to_vec() });
+        }
+        fake_tools(&root, prog, a, stdin)
+    }));
+    let e = err_of(&t.call(&["pg", "restore-to", "17-feedback", "fb_bad", &UtcTime::from_epoch(n - 60).stamp()]));
+    assert!(held.borrow().is_some(), "the pg lock was held during the failure");
+    assert!(!e.contains("cleanup left"), "{e}");
+    assert_eq!(std::fs::read_to_string(t.p("/etc/postgresql/17/fb_bad/start.conf")).unwrap().lines().last(), Some("manual"));
+    assert!(!t.p("/etc/systemd/system/postgresql@17-fb_bad.service.d/k2-restore.conf").exists());
+    assert!(!t.p(&format!("/etc/postgresql/17/fb_bad/conf.d/{}", pr::RESTORE_CONF_FILE)).exists());
+    assert!(t.non_query_calls().iter().any(|c| c == &format!("{SYSTEMCTL} stop postgresql@17-fb_bad.service")));
+}
+
+/// M2(c): an error after the restore is recorded finished never stops it.
+#[test]
+fn m2c_an_error_after_the_record_never_stops_a_finished_restore() {
+    let (t, _w) = archiving_box();
+    let n = now();
+    base_backup(&t, n - 600, "000000010000000000000003");
+    spool(&t, &["000000010000000000000003"], n);
+    crate::pg_restore::test_seam::FAIL_AFTER_RECORD.with(|f| f.set(true));
+    let o = t.call(&["pg", "restore-to", "17-feedback", "fb_done", &UtcTime::from_epoch(n - 60).stamp()]);
+    crate::pg_restore::test_seam::FAIL_AFTER_RECORD.with(|f| f.set(false));
+    assert!(o.stderr.contains("injected failure after the record"), "{}", o.stderr);
+    assert!(restores(&t).get(17, "fb_done").unwrap().ok);
+    assert!(!t.non_query_calls().iter().any(|c| c == &format!("{SYSTEMCTL} stop postgresql@17-fb_done.service")), "never stopped");
+    assert_eq!(std::fs::read_to_string(t.p("/etc/postgresql/17/fb_done/start.conf")).unwrap().lines().last(), Some("auto"));
 }

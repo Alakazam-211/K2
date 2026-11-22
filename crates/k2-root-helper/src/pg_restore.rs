@@ -71,6 +71,13 @@ fn pause(ctx: &Ctx) {
     }
 }
 
+#[cfg(test)]
+pub(crate) mod test_seam {
+    //! Tests: fail a restore after it is recorded finished.
+    use std::cell::Cell;
+    thread_local! { pub static FAIL_AFTER_RECORD: Cell<bool> = const { Cell::new(false) }; }
+}
+
 // ── state ───────────────────────────────────────────────────────────────
 
 pub(crate) fn restores_state(ctx: &Ctx) -> HResult<RestoresState> {
@@ -343,9 +350,12 @@ fn flush_source(ctx: &Ctx, m: PgMajor, row: &ClusterRow) -> HResult<()> {
 fn log_tail(ctx: &Ctx, m: u32, n: &str) -> String {
     // As postgres (the log is postgres's; review L3), passwords redacted.
     let path = format!("/var/log/postgresql/postgresql-{m}-{n}.log");
-    let Ok(out) = as_postgres(ctx, TAIL, &["-n", "400", "--", &path], None) else { return String::new() };
+    // Capped by bytes as well as lines (re-review L3).
+    let Ok(out) = as_postgres(ctx, TAIL, &["-c", "65536", "--", &path], None) else { return String::new() };
     let text = crate::pg::redact_passwords(&String::from_utf8_lossy(&out.stdout));
-    let lines: Vec<&str> = text.lines().filter(|l| l.contains("FATAL") || l.contains("PANIC") || l.contains("recovery")).collect();
+    let all: Vec<&str> = text.lines().collect();
+    let lines: Vec<&str> =
+        all[all.len().saturating_sub(400)..].iter().copied().filter(|l| l.contains("FATAL") || l.contains("PANIC") || l.contains("recovery")).collect();
     lines[lines.len().saturating_sub(4)..].join(" | ").chars().take(1200).collect()
 }
 
@@ -429,9 +439,16 @@ pub fn restore_to(ctx: &Ctx, m: PgMajor, name: &ClusterName, new: &ClusterName, 
     // it start and promote by itself (review M2).
     match restore_body(ctx, m, src, nn, target, drill, &base, &range, port) {
         Ok(v) => Ok(v),
-        Err(e) => {
-            if let Ok(_pg) = crate::take_lock(ctx, "pg") {
-                cleanup_failed(ctx, m.get(), nn);
+        // Re-review M2(c): a restore already recorded finished is never
+        // stopped by an error after it (reading it back, say).
+        Err(e) if restores_state(ctx).ok().and_then(|st| st.get(m.get(), nn).map(|r| r.ok)) == Some(true) => Err(e),
+        // Re-review M2(a): the cleanup never waits on the pg lock (it only
+        // touches this cluster's own files, under its own lock, held), so
+        // it is never skipped; a step that fails is named in the error.
+        Err(mut e) => {
+            let left = cleanup_failed(ctx, m.get(), nn);
+            if !left.is_empty() {
+                e.msg = format!("{}; cleanup left: {}", e.msg, left.join(", "));
             }
             Err(e)
         }
@@ -439,14 +456,26 @@ pub fn restore_to(ctx: &Ctx, m: PgMajor, name: &ClusterName, new: &ClusterName, 
 }
 
 /// A failed restore: stopped, `manual`, no recovery settings, no start
-/// drop-in, `pg_ctl.conf` back to no wait. Best effort (each step on its
+/// drop-in, `pg_ctl.conf` back to no wait; the socket-only settings stay
+/// (re-review N1). Each step on its own; the ones that failed are
+/// answered (never skipped silently). Best effort (each step on its
 /// own); the cluster stays for `drop-drill`.
-fn cleanup_failed(ctx: &Ctx, m: u32, n: &str) {
-    let _ = ctx.run_ok(SYSTEMCTL, &["stop", &named::unit(m, n)], None);
+fn cleanup_failed(ctx: &Ctx, m: u32, n: &str) -> Vec<String> {
+    let mut left = Vec::new();
+    if ctx.run_ok(SYSTEMCTL, &["stop", &named::unit(m, n)], None).is_err() {
+        left.push("the unit's stop".to_string());
+    }
     let etc = named::etc_dir(m, n);
-    let _ = crate::apps::unput(ctx, &format!("{etc}/conf.d"), None, pr::RESTORE_CONF_FILE);
-    let _ = undo_restore_start(ctx, m, n);
-    let _ = crate::pg_major::write_start_conf(ctx, &etc, false, None);
+    if crate::apps::unput(ctx, &format!("{etc}/conf.d"), None, pr::RESTORE_CONF_FILE).is_err() {
+        left.push(format!("{etc}/conf.d/{}", pr::RESTORE_CONF_FILE));
+    }
+    if undo_restore_start(ctx, m, n).is_err() {
+        left.push("the start drop-in and pg_ctl.conf".to_string());
+    }
+    if crate::pg_major::write_start_conf(ctx, &etc, false, None).is_err() {
+        left.push("start.conf manual".to_string());
+    }
+    left
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -467,6 +496,11 @@ fn restore_body(
             .dir(&format!("{}/conf.d", named::etc_dir(m.get(), nn)))
             .map_err(|e| Fail::io_err("open the cluster's conf.d", e))?;
         put(ctx, &d, pr::RESTORE_CONF_FILE, pr::recovery_conf(m.get(), src, target).as_bytes())?;
+        // Re-review N1: every restore starts socket-only, takes no session
+        // while it replays, and admits postgres alone.
+        put(ctx, &d, pr::RESTORE_LOCAL_CONF_FILE, pr::restore_local_conf(m.get(), nn).as_bytes())?;
+        let etc_d = ctx.dir(&named::etc_dir(m.get(), nn)).map_err(|e| Fail::io_err("open the cluster's config dir", e))?;
+        put(ctx, &etc_d, pr::RESTORE_HBA_FILE, pr::RESTORE_HBA.as_bytes())?;
         if drill {
             put(ctx, &d, pr::DRILL_LOCAL_CONF_FILE, pr::DRILL_LOCAL_CONF.as_bytes())?;
         }
@@ -545,6 +579,15 @@ fn restore_body(
         }
         lines.first().and_then(|l| l.parse::<u64>().ok()).unwrap_or(0)
     };
+    // Re-review N1: NOLOGIN doesn't end a session; every other one ends
+    // now. Only then does a serving restore open (a restart without the
+    // socket-only settings); a drill stays socket-only.
+    let ended: u64 = sql_at(ctx, m, port, "postgres", pr::END_SESSIONS_SQL)?.lines().last().and_then(|l| l.trim().parse().ok()).unwrap_or(0);
+    if !drill {
+        crate::apps::unput(ctx, &format!("{}/conf.d", named::etc_dir(m.get(), nn)), None, pr::RESTORE_LOCAL_CONF_FILE)?;
+        ctx.run_ok(SYSTEMCTL, &["restart", &unit], None)?;
+        named_wait_online(ctx, m, nn)?;
+    }
     // Promoted: the recovery settings go; the cluster is recorded as one
     // the helper made, and only then starts at boot.
     let rec_new = {
@@ -568,10 +611,15 @@ fn restore_body(
         st.clusters.retain(|r| !(r.major == m.get() && r.name == nn));
         st.clusters.push(rec_new.clone());
         save_named_state(ctx, &st)?;
-        set_restore(ctx, m.get(), nn, |r| r.ok = true)?;
         crate::pg_major::write_start_conf(ctx, &named::etc_dir(m.get(), nn), true, Some("manual"))?;
+        // Last: from here an error never stops it (re-review M2(c)).
+        set_restore(ctx, m.get(), nn, |r| r.ok = true)?;
         rec_new
     };
+    #[cfg(test)]
+    if test_seam::FAIL_AFTER_RECORD.with(|f| f.get()) {
+        return Err(Fail::io("injected failure after the record"));
+    }
     let row = named_wait_online(ctx, m, nn)?;
     let mut v = named_json(ctx, &row, &rec_new);
     v["created"] = json!(true);
@@ -581,6 +629,8 @@ fn restore_body(
     v["walReplayed"] = json!({"first": range.first.name(), "last": range.last.name(), "count": range.count});
     v["drill"] = json!(drill);
     v["loginsLocked"] = json!(locked);
+    v["sessionsEnded"] = json!(ended);
+    v["socketOnly"] = json!(drill);
     Ok(v)
 }
 
@@ -643,9 +693,9 @@ pub fn drop_drill(ctx: &Ctx, m: PgMajor, name: &ClusterName) -> HResult<J> {
     if present(ctx, &data) && !real_dir(ctx, &data) {
         return Err(Fail::state("cluster_layout_refused: the drill's data dir is a link or a file; nothing changed"));
     }
-    ctx.run_ok(SYSTEMCTL, &["stop", &named::unit(m.get(), n)], None)?;
-    // Its own identity, read while stopped: the source's (a restore) or the
-    // empty cluster's (one that failed before the extract), or none at all.
+    // Its own identity, read BEFORE anything stops (re-review M1: a refused
+    // call changes nothing): the source's (a restore) or the empty
+    // cluster's (one that failed before the extract), or none at all.
     let id = if present(ctx, &format!("{data}/global/pg_control")) { data_system_id(ctx, m, &data) } else { None };
     let vouched = match id.as_deref() {
         None => !present(ctx, &format!("{data}/global/pg_control")),
@@ -657,6 +707,7 @@ pub fn drop_drill(ctx: &Ctx, m: PgMajor, name: &ClusterName) -> HResult<J> {
             id
         )));
     }
+    ctx.run_ok(SYSTEMCTL, &["stop", &named::unit(m.get(), n)], None)?;
     crate::pg_major::no_links_above(ctx, m)?;
     let mut dropped = false;
     if present(ctx, &data) {

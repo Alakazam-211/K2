@@ -67,6 +67,31 @@ pub const DISK_FACTOR: u64 = 2;
 /// logins and passwords never reach the network.
 pub const DRILL_LOCAL_CONF_FILE: &str = "zz-k2-drill-local.conf";
 pub const DRILL_LOCAL_CONF: &str = "# Point-in-time restore drill: the local socket only. Written by k2-root-helper `pg restore-to --drill`.\nlisten_addresses = ''\n";
+/// Every restore, from its first start (re-review N1): the local socket
+/// only, no connections while it replays (`hot_standby = off`), and an
+/// hba file that admits `postgres` alone (peer). A helper killed mid-replay
+/// leaves a cluster that promotes by itself still reachable by postgres
+/// only. A serving restore loses it (a restart) only after its logins are
+/// locked and every other session ended; a drill keeps it.
+pub const RESTORE_LOCAL_CONF_FILE: &str = "zz-k2-restore-local.conf";
+pub const RESTORE_HBA_FILE: &str = "k2-restore-hba.conf";
+pub const RESTORE_HBA: &str = "# Point-in-time restore: postgres alone, on the socket. Written by k2-root-helper `pg restore-to`.\nlocal all postgres peer\n";
+pub fn restore_local_conf(m: u32, n: &str) -> String {
+    format!(
+        "# Point-in-time restore: the local socket only, no connections while it replays, postgres alone.\n\
+         # Written by k2-root-helper `pg restore-to`.\n\
+         listen_addresses = ''\n\
+         hot_standby = off\n\
+         hba_file = '{}/{RESTORE_HBA_FILE}'\n",
+        crate::pg_named::etc_dir(m, n)
+    )
+}
+/// After promotion: every session but the helper's own and postgres's ends
+/// (re-review N1: NOLOGIN alone doesn't end a session). The answer is the
+/// count ended.
+pub const END_SESSIONS_SQL: &str = "SELECT count(pg_catalog.pg_terminate_backend(pid)) FROM pg_catalog.pg_stat_activity \
+WHERE pid <> pg_catalog.pg_backend_pid() AND backend_type = 'client backend' AND usename IS DISTINCT FROM 'postgres';\n";
+
 /// Files K2 may find in an instance's systemd drop-in folder; anything else
 /// there makes the name taken (review M2).
 pub const OWN_DROPINS: &[&str] = &["k2-slice.conf", RESTORE_DROPIN_FILE];
@@ -89,7 +114,15 @@ pub fn strip_auto_conf(text: &str) -> (String, Vec<String>) {
     let mut gone = Vec::new();
     for line in text.lines() {
         let key = line.trim_start().split(|c: char| c == '=' || c.is_whitespace()).next().unwrap_or("").to_ascii_lowercase();
-        let strip = key == "restore_command" || key.starts_with("archive_") || key.starts_with("recovery_") || key.starts_with("primary_");
+        let strip = key == "restore_command"
+            || key.starts_with("archive_")
+            || key.starts_with("recovery_")
+            || key.starts_with("primary_")
+            // Re-review N3: where it listens and who it lets in are the
+            // helper's (conf.d), never the source's.
+            || matches!(key.as_str(), "listen_addresses" | "port" | "hba_file" | "ident_file" | "data_directory" | "config_file" | "external_pid_file" | "hot_standby")
+            || key.starts_with("unix_socket_")
+            || key.starts_with("ssl");
         if strip {
             gone.push(key);
         } else {
@@ -103,11 +136,16 @@ pub fn strip_auto_conf(text: &str) -> (String, Vec<String>) {
 /// A non-drill restore's logins go NOLOGIN until K2 sets their current
 /// passwords again (review M3): a password rotated, or a login revoked,
 /// after the moment never comes back to life. Superusers stay (only
-/// `postgres`, peer on the socket). The first line is how many it locks,
-/// the last how many logins are left (0).
+/// `postgres`, peer on the socket). Every database but `postgres` and the
+/// templates closes too (re-review N2): it held every database as it was
+/// at the moment, grants included; `k2 db cluster switch` opens only the one
+/// it moves. The first line is how many logins it locks, the last how many
+/// are left (0).
 pub const LOCK_LOGINS_SQL: &str = "SELECT count(*) FROM pg_catalog.pg_roles WHERE rolcanlogin AND NOT rolsuper AND rolname !~ '^pg_';\n\
 SELECT pg_catalog.format('ALTER ROLE %I NOLOGIN;', rolname) FROM pg_catalog.pg_roles \
 WHERE rolcanlogin AND NOT rolsuper AND rolname !~ '^pg_'\n\\gexec\n\
+SELECT pg_catalog.format('ALTER DATABASE %I ALLOW_CONNECTIONS false;', datname) FROM pg_catalog.pg_database \
+WHERE datname NOT IN ('postgres', 'template0', 'template1') AND datallowconn\n\\gexec\n\
 SELECT count(*) FROM pg_catalog.pg_roles WHERE rolcanlogin AND NOT rolsuper AND rolname !~ '^pg_';\n";
 
 // ── UTC times ───────────────────────────────────────────────────────────
@@ -584,6 +622,14 @@ mod tests {
         );
         assert_eq!(t, "# Do not edit\nwork_mem = '16MB'\n");
         assert_eq!(gone, vec!["archive_command", "restore_command", "primary_conninfo", "archive_mode", "recovery_target_time"]);
+        let (t, gone) = strip_auto_conf("listen_addresses = '*'\nport = 5999\nhba_file = '/tmp/h'\nident_file='/tmp/i'\nunix_socket_directories = '/tmp'\nwork_mem = '1MB'\n");
+        assert_eq!(t, "work_mem = '1MB'\n");
+        assert_eq!(gone.len(), 5);
+        let c = restore_local_conf(17, "fb");
+        assert!(c.contains("listen_addresses = ''\n") && c.contains("hot_standby = off\n"), "{c}");
+        assert!(c.contains("hba_file = '/etc/postgresql/17/fb/k2-restore-hba.conf'\n"), "{c}");
+        assert_eq!(RESTORE_HBA.lines().filter(|l| !l.starts_with('#')).collect::<Vec<_>>(), vec!["local all postgres peer"]);
+        assert!(LOCK_LOGINS_SQL.contains("ALLOW_CONNECTIONS false") && LOCK_LOGINS_SQL.contains("NOT IN ('postgres', 'template0', 'template1')"));
         assert!(LOCK_LOGINS_SQL.contains("\\gexec") && LOCK_LOGINS_SQL.contains("NOT rolsuper"));
         assert_eq!(lock_ns(17, "feedback"), "pgrestore-17-feedback");
         assert!(DRILL_LOCAL_CONF.contains("listen_addresses = ''"));

@@ -208,6 +208,28 @@ fn open_sql(db: &str, open: bool) -> String {
     }
 }
 
+fn switching() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static S: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> = std::sync::OnceLock::new();
+    S.get_or_init(Default::default)
+}
+
+/// Re-review N4: one switch of a database at a time (held for the switch).
+pub(crate) struct DbBusy(String);
+impl DbBusy {
+    pub(crate) fn take(db: &str) -> Result<Self, EnsureError> {
+        let mut s = switching().lock().unwrap_or_else(|e| e.into_inner());
+        if !s.insert(db.to_string()) {
+            return Err(EnsureError::Refused(format!("busy: a switch of {db} is already running")));
+        }
+        Ok(Self(db.to_string()))
+    }
+}
+impl Drop for DbBusy {
+    fn drop(&mut self) {
+        switching().lock().unwrap_or_else(|e| e.into_inner()).remove(&self.0);
+    }
+}
+
 /// `k2 db cluster switch <db> --to <cluster> [--yes]`. Without `confirm`
 /// it changes nothing and answers the moment and what would be lost.
 pub fn switch(ops: &dyn SystemOps, secrets: &dyn SecretStore, db: &str, to_spec: &str, confirm: bool, by: &str) -> Result<Value, EnsureError> {
@@ -279,6 +301,7 @@ pub fn switch(ops: &dyn SystemOps, secrets: &dyn SecretStore, db: &str, to_spec:
         v["needsConfirm"] = json!(true);
         return Ok(v);
     }
+    let _busy = DbBusy::take(db)?;
     // 3. The old copy closes; the target's opens.
     psql(ops, &from, "postgres", &open_sql(db, false))?;
     if let Err(e) = psql(ops, &to, "postgres", &open_sql(db, true)) {

@@ -71,6 +71,12 @@ impl Servers {
         run(&format!("{}/psql", bin()), &["-X", "-tA", "-h", &self.sock(), "-p", &p, "-U", "postgres", "-d", db, "-v", "ON_ERROR_STOP=1", "-c", sql], &[], None)
             .unwrap_or_else(|e| panic!("superuser SQL on {port} failed: {e}\n{sql}"))
     }
+    /// Superuser SQL on stdin (psql meta-commands such as `\gexec` work).
+    fn su_stdin(&self, port: u16, sql: &str) -> String {
+        let p = port.to_string();
+        run(&format!("{}/psql", bin()), &["-X", "-tA", "-h", &self.sock(), "-p", &p, "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1"], &[], Some(sql.as_bytes()))
+            .unwrap_or_else(|e| panic!("superuser SQL on {port} failed: {e}\n{sql}"))
+    }
     /// SQL as a login over TCP, the way the App connects with its URL.
     fn with_url(&self, url: &str, sql: &str) -> Result<String, String> {
         let u = db_probe::parse_url(url).ok_or("not a URL")?;
@@ -263,6 +269,14 @@ fn real_pg_switch_and_rollback() {
     check("the App's URL is on fbsrc", port_of_url(&url0) == SRC_PORT, &url0.split('@').nth(1).unwrap_or(""), &mut fails);
     let w = srv.with_url(&url0, "insert into notes values (1, 'a'), (2, 'b'), (3, 'c'); select count(*) from notes");
     check("the App writes rows 1-3", w.as_deref() == Ok("3"), format!("{w:?}"), &mut fails);
+    // Another workspace's database on the same cluster, and a workspace's
+    // login that may read it at the moment (re-review N2).
+    srv.su(SRC_PORT, "postgres", "CREATE DATABASE other_db");
+    srv.su(SRC_PORT, "other_db", "CREATE TABLE secrets_t (v text); INSERT INTO secrets_t VALUES ('theirs')");
+    srv.su(SRC_PORT, "postgres", "CREATE ROLE ws_gone_agent LOGIN PASSWORD 'gone-pass'");
+    srv.su(SRC_PORT, "other_db", "GRANT SELECT ON secrets_t TO ws_gone_agent");
+    let gone_url = format!("postgres://ws_gone_agent:gone-pass@127.0.0.1:{SRC_PORT}/other_db");
+    check("the workspace reads other_db at the moment", srv.with_url(&gone_url, "select v from secrets_t").as_deref() == Ok("theirs"), "", &mut fails);
 
     // 2. The restored copy: a base backup at the moment, beside it, its
     // logins locked as `pg restore-to` locks them.
@@ -275,8 +289,8 @@ fn real_pg_switch_and_rollback() {
     .expect("pg_basebackup");
     let moment = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
     srv.start("fbold", OLD_PORT);
-    let locked = srv.su(OLD_PORT, "postgres", &k2_root_proto::pg_restore::LOCK_LOGINS_SQL.replace("\n\\gexec\n", "\n").lines().next().unwrap().to_string());
-    srv.su(OLD_PORT, "postgres", "DO $$ DECLARE r record; BEGIN FOR r IN SELECT rolname FROM pg_roles WHERE rolcanlogin AND NOT rolsuper AND rolname !~ '^pg_' LOOP EXECUTE format('ALTER ROLE %I NOLOGIN', r.rolname); END LOOP; END $$");
+    // What `pg restore-to` runs on a serving restore, word for word.
+    let locked = srv.su_stdin(OLD_PORT, k2_root_proto::pg_restore::LOCK_LOGINS_SQL);
     check("the restored copy's logins are locked", srv.su(OLD_PORT, "postgres", "select count(*) from pg_roles where rolcanlogin and not rolsuper") == "0", &locked, &mut fails);
     named_record(major, "fbold", OLD_PORT, &ws, false);
     k2_core::db::shared()
@@ -286,6 +300,9 @@ fn real_pg_switch_and_rollback() {
     // Rows after the moment, on the source only.
     let w = srv.with_url(&url0, "insert into notes values (4, 'd'), (5, 'e'); select count(*) from notes");
     check("rows 4-5 land on fbsrc after the moment", w.as_deref() == Ok("5"), format!("{w:?}"), &mut fails);
+    // After the moment the workspace's access goes (K2 holds no grant for it).
+    srv.su(SRC_PORT, "postgres", "ALTER ROLE ws_gone_agent NOLOGIN");
+    check("other_db is closed on the restored copy", srv.su(OLD_PORT, "postgres", "select datallowconn::text from pg_database where datname = 'other_db'") == "false", "", &mut fails);
 
     let secrets = crate::sql::secrets::FileSecretStore::default();
     let switch = |to: &str, yes: bool| crate::sql::routes::with_test_ops(srv, || crate::sql::switch::switch(srv, &secrets, &dbname, to, yes, "owner"));
@@ -309,6 +326,14 @@ fn real_pg_switch_and_rollback() {
     check("the old copy is closed", closed == "f", &closed, &mut fails);
     let old = srv.with_url(&url0, "select 1");
     check("the old URL can't reach the old copy", old.is_err(), format!("{old:?}"), &mut fails);
+    // Re-review N2: the revoked workspace reads nothing on the restored
+    // cluster: its login stays locked, and other_db stays closed.
+    let gone_restored = gone_url.replace(&format!(":{SRC_PORT}/"), &format!(":{OLD_PORT}/"));
+    let r = srv.with_url(&gone_restored, "select v from secrets_t");
+    check("a workspace revoked after the moment can't read another database on the restored cluster", r.is_err(), format!("{r:?}"), &mut fails);
+    let r = srv.with_url(&gone_restored.replace("/other_db", &format!("/{dbname}")), "select 1");
+    check("nor the switched database", r.is_err(), format!("{r:?}"), &mut fails);
+    check("other_db is still closed after the switch", srv.su(OLD_PORT, "postgres", "select datallowconn::text from pg_database where datname = 'other_db'") == "false", "", &mut fails);
 
     // 5. The rollback: the old rows are back.
     let b = switch("fbsrc", true);

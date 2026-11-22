@@ -216,3 +216,18 @@ fn the_switch_route_is_gated() {
     assert_eq!(for_db("app_db").unwrap().name, "feedback");
     let _ = f;
 }
+
+/// Re-review N4: one switch of a database at a time.
+#[test]
+fn a_second_switch_of_the_same_database_is_refused_while_one_runs() {
+    let _g = crate::sql::sql_server_test_lock();
+    let f = fx();
+    let o = ops();
+    let held = DbBusy::take("app_db").unwrap();
+    let e = switch(&o, &f.secrets, "app_db", "fb_old", true, "owner").unwrap_err();
+    assert!(e.hint().starts_with("busy"), "{e:?}");
+    assert!(sent(&o, "ALLOW_CONNECTIONS").is_empty(), "nothing closed");
+    assert_eq!(for_db("app_db").unwrap().name, "feedback");
+    drop(held);
+    assert_eq!(switch(&o, &f.secrets, "app_db", "fb_old", true, "owner").unwrap()["switched"], true);
+}

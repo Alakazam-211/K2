@@ -6,7 +6,7 @@
 # as an ordinary user, never on the M5:
 #
 #   k2 compute run --sha <c> --stall-timeout off --mem 28G --cache k2-supa-d \
-#     --needs rust@1.99.1,cmake@3,cargo-nextest,node@26,sys:postgresql \
+#     --needs rust@1.99.1,cmake@3,cargo-nextest,node@26 \
 #     -- bash scripts/test/storage-oracle.sh
 #
 # Env: REALPG_BIN (Postgres binaries; found under /usr/lib/postgresql when
@@ -15,9 +15,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 REF="${STORAGE_API_REF:-v1.98.5}"
-if [ -z "${REALPG_BIN:-}" ]; then
-    REALPG_BIN="$(ls -d /usr/lib/postgresql/*/bin 2>/dev/null | sort -V | tail -1)"
-fi
+REALPG_BIN="${REALPG_BIN:-$(bash "$ROOT/scripts/test/pg-binaries.sh")}"
 [ -x "$REALPG_BIN/initdb" ] || { echo "storage-oracle: no Postgres binaries (REALPG_BIN=$REALPG_BIN)" >&2; exit 1; }
 command -v node >/dev/null || { echo "storage-oracle: no node (--needs node@26)" >&2; exit 1; }
 echo "postgres: $("$REALPG_BIN/postgres" --version); node: $(node --version); storage-api: $REF"
@@ -33,11 +31,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# The oracle's own Postgres (password auth for storage-api's pool).
+# The oracle's own Postgres (trust on loopback; storage-api's password is ignored).
 "$REALPG_BIN/initdb" -D "$WORK/pg" -U postgres --auth=trust -E UTF8 >/dev/null
 mkdir -p "$WORK/sock"
 "$REALPG_BIN/pg_ctl" -D "$WORK/pg" -o "-p $PGPORT -k $WORK/sock -c listen_addresses=127.0.0.1" -l "$WORK/pg.log" -w start >/dev/null
-"$REALPG_BIN/psql" -h "$WORK/sock" -p "$PGPORT" -U postgres -v ON_ERROR_STOP=1 -qc "ALTER ROLE postgres PASSWORD 'postgres'; CREATE DATABASE oracle;"
 
 # storage-api at a pinned release, built from source.
 git clone -q --depth 1 --branch "$REF" https://github.com/supabase/storage.git "$WORK/storage"
@@ -45,7 +42,7 @@ git clone -q --depth 1 --branch "$REF" https://github.com/supabase/storage.git "
 mkdir -p "$WORK/files"
 (
     cd "$WORK/storage"
-    env DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:$PGPORT/oracle" \
+    env DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:$PGPORT/postgres" \
         AUTH_JWT_SECRET="$SECRET" AUTH_JWT_ALGORITHM=HS256 \
         DB_INSTALL_ROLES=true DB_ANON_ROLE=anon DB_SERVICE_ROLE=service_role DB_AUTHENTICATED_ROLE=authenticated \
         DB_SUPER_USER=postgres DB_ALLOW_MIGRATION_REFRESH=true \
@@ -68,7 +65,7 @@ echo "storage-api up on :$API_PORT"
 cd "$ROOT"
 set +e
 env ORACLE_URL="http://127.0.0.1:$API_PORT" \
-    ORACLE_DB_URL="postgresql://postgres:postgres@127.0.0.1:$PGPORT/oracle" \
+    ORACLE_DB_URL="postgresql://postgres:postgres@127.0.0.1:$PGPORT/postgres" \
     ORACLE_JWT_SECRET="$SECRET" REALPG_STORAGE=1 REALPG_BIN="$REALPG_BIN" \
     cargo test -p k2-daemon --lib compat::storage_oracle -- --ignored --nocapture --test-threads=1 2>&1 | tee "$WORK/test.log"
 rc=${PIPESTATUS[0]}

@@ -72,6 +72,7 @@ import { StartPageRow } from './StartPageRow'
 import { primaryScope } from '@/kessel/server-scope'
 import { AppFontRows } from '../shared/AppFontRows'
 import { ChatLinkCopyRow } from './ChatLinkCopyRow'
+import { BrowserLayeringRow } from './BrowserLayeringRow'
 import { ClonePersonalComputersRow } from './ClonePersonalComputersRow'
 import { PostalServerSwitch } from './PostalServerSwitch'
 import { K5_CLI_LABEL, K5CliBetaRow } from './K5CliBetaRow'
@@ -103,6 +104,7 @@ export const GENERAL_MANIFEST: SettingEntry[] = [
   { id: 'general.font-family', section: 'general', group: 'General', label: 'Font family', description: `The font ${PRODUCT_NAME} uses for code and text. Same setting as Editors / Fonts → Code`, keywords: ['font', 'typeface', 'family', 'text', 'monospace'] },
   { id: 'general.font-size', section: 'general', group: 'General', label: 'Font size', description: 'Text size for code, the message box, chats and tickets. Same setting as Editors / Fonts → Code', keywords: ['font', 'size', 'text size', 'zoom', 'bigger', 'smaller'] },
   { id: 'general.link-copy-button', section: 'general', group: 'General', label: 'Show a copy button beside links on hover', description: 'A copy icon beside links in chats, Threads and tickets. Off by default; this computer only. Right-click a link to copy it either way', keywords: ['copy', 'link', 'url', 'hover', 'button', 'icon', 'chat', 'thread', 'clipboard'] },
+  { id: 'general.browser-layering', section: 'general', group: 'General', label: "Keep web pages live under K2's menus", description: 'macOS: in a browser tab, menus, toasts and popovers no longer freeze the page, and clicks, scrolling and hover reach it. Off: the previous behaviour. This computer only', keywords: ['browser', 'web page', 'underlay', 'menu', 'toast', 'freeze', 'hover', 'scroll', 'layering'] },
   { id: 'general.devtools', section: 'general', group: 'General', label: 'Developer tools', description: 'Opens the web inspector for this window, for troubleshooting. This computer only.', keywords: ['devtools', 'developer', 'console', 'inspect', 'inspector', 'debug', 'network', 'logs'] },
   { id: 'general.owner-timezone', section: 'general', group: 'General', label: 'Your timezone', description: "What a reminder's \"13:00\" and a mail check window mean on this server. Empty: the server's own clock", keywords: ['timezone', 'time zone', 'zone', 'clock', 'reminder', 'heartbeat', 'schedule', 'mail', 'check window', 'utc'] },
   { id: 'general.your-account', section: 'general', group: 'General', label: 'Your account', description: 'The login on your phone or laptop that counts as you', keywords: ['account', 'login', 'owner', 'you', 'me', 'this is me', 'linked', 'phone', 'laptop', 'connect', 'identity'] },
@@ -278,6 +280,9 @@ function GeneralTab({ isRemote }: { isRemote: boolean }): React.JSX.Element {
         {/* Hover copy icon beside chat links (Rosson 2026-11-04): next to
             the font card, off by default, this computer only. */}
         <ChatLinkCopyRow />
+        {/* macOS browser underlay (0.46.17): one click back to the previous
+            behaviour. Renders nothing off macOS. */}
+        <BrowserLayeringRow />
         <StartPageRow />
         {/* Desktop only: open the web inspector (prod + debug) for
             diagnosing remote freezes / network. Pref is thin-client

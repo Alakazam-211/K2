@@ -57,7 +57,7 @@ fn object_json() -> String {
     format!(
         "json_build_object('name', o.name, 'bucket_id', o.bucket_id, 'owner', o.owner, 'owner_id', o.owner_id, \
          'id', o.id, 'version', o.version, 'updated_at', {}, 'created_at', {}, 'last_accessed_at', {}, \
-         'metadata', o.metadata, 'user_metadata', coalesce(o.user_metadata, '{}'::jsonb), \
+         'metadata', o.metadata, 'user_metadata', coalesce(o.user_metadata, '{{}}'::jsonb), \
          'archived_at', NULL, 'is_delete_marker', false, 'is_versioned', false)::text",
         ts("o.updated_at"),
         ts("o.created_at"),

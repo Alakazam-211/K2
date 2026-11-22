@@ -117,6 +117,7 @@ study-app-tickets.sh
 study-tauri.sh
 study-app-accounts.sh
 study-app-transfers-http.sh
+study-app-rest.sh
 study-skins.sh
 study-feedback-sessions.sh
 study-compute.sh

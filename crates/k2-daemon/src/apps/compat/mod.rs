@@ -10,11 +10,15 @@
 //!
 //! Lane C (the doors): the doors on an App's own host and gateway link
 //! (`door`, `http`), the per-database connection pool (`pool`) and the
-//! `/rest/v1` door (`rest_door`; its grammar is the `k2_rest` crate).
+//! `/rest/v1` door (`rest_door`; its grammar is the `k2_rest` crate), the
+//! `/auth/v1` door (`auth_door_v1`, `auth_admin`).
 
+pub mod auth_admin;
+pub mod auth_door_v1;
 pub mod claims;
 pub mod door;
 pub mod door_config;
+pub mod drill_http;
 pub mod http;
 pub mod identity_token;
 pub mod issuers;

@@ -1,0 +1,17 @@
+{
+  "name": "@k2/supabase",
+  "version": "0.1.0",
+  "description": "The small shim that runs supabase-js against an App's K2 doors without putting the session's pass where page script can read it.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  }
+}

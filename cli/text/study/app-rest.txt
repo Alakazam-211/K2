@@ -1,0 +1,81 @@
+k2 study app-rest — supabase-js against your App's K2 doors: /rest/v1 and /auth/v1
+
+THE SHAPE
+  An App with the Supabase-compatible layer on (k2 app compat on <app>
+  --db <db>, the owner's) answers /rest/v1 and /auth/v1 on its own host
+  (<app>.<box>.k2.dev, its custom names) and on its gateway link
+  (K2_GATEWAY_URL, from server code in the wall). K2 answers them before
+  your App, App up or down. supabase-js works unchanged for .from() and
+  .rpc(): only the URL and the key change. Auth calls go through a small
+  shim, @k2/supabase, so the session's pass never sits where page script
+  can read it.
+
+  createClient(<your App's own URL>, 'k2pk_<your App's service id>')
+    The publishable key names the App. It is not a secret and grants
+    nothing by itself (k2 app compat status shows it).
+
+WHO A REQUEST IS
+  browser, signed in      the HttpOnly session cookie (k2_skin_session),
+                          same origin; a write also needs its Origin
+  phone app               a device pass, or a third-party ID token from a
+                          trusted issuer, as Authorization: Bearer
+  server code, as a user  the person's pass as Authorization: Bearer, on
+                          K2_GATEWAY_URL (read it from the cookie)
+  server code, as service the App key with the service scope as apikey, on
+                          K2_GATEWAY_URL only unless the owner allows the
+                          public host; it runs as service_role (BYPASSRLS)
+  signed out              the publishable key alone: anon, only when the
+                          owner turned the anon lane on
+  A web session's pass sent as a bearer on the public host is refused
+  (web_pass_as_bearer). Every request runs in one Postgres transaction as
+  anon, authenticated or service_role, with request.jwt.claims set for
+  that transaction only: auth.uid(), auth.jwt(), auth.role(), auth.email()
+  and your row policies work as on Supabase.
+
+/rest/v1 (PostgREST's grammar)
+  verbs     GET HEAD POST PATCH DELETE on tables and views;
+            GET HEAD POST on rpc/<fn> (named arguments)
+  filters   eq neq gt gte lt lte like ilike match imatch in is cs cd,
+            not.<op>, or=(…) and and=(…) one level, filters on embeds
+  select    columns, alias:col, col::type, data->a->>b, *, embeds through
+            foreign keys: alias:rel!fk_or_column!inner(cols), nested,
+            rel=is.null, each embed's own order and limit
+  shape     order (asc desc nullsfirst nullslast), limit, offset, Range;
+            Accept: application/vnd.pgrst.object+json (single, maybeSingle)
+  counts    Prefer: count=exact|planned|estimated, Content-Range, HEAD
+  writes    Prefer: return=representation|minimal; bulk insert; columns=;
+            upsert: resolution=merge-duplicates|ignore-duplicates,
+            on_conflict=; missing=default. PATCH and DELETE need a filter
+            (21000, as on Supabase)
+  errors    PostgREST's {code, message, details, hint}: a unique
+            violation is 409 23505; an RLS refusal 403 (401 for anon)
+  limits    1,000 rows an answer; 8 s a statement (3 s anon, none for the
+            service role); 10 MiB bodies
+  NOT YET   textSearch, overlaps and range operators, csv(), nested and()
+            inside or(), spread embeds, aggregates, many-to-many embeds,
+            embeds through views, explain(), PUT, the OpenAPI root: a 400
+            K2REST001 naming the part, never a wrong answer. The schema
+            cache reloads by itself after a migration (on the first request
+            that names something new).
+
+/auth/v1 (GoTrue's shapes, over K2 App users)
+  getUser updateUser({password}) signInWithPassword exchangeCodeForSession
+  verifyOtp({type: invite|recovery, token_hash}) setSession refreshSession
+  signOut({scope}); with the server key: auth.admin listUsers getUserById
+  createUser updateUserById deleteUser; generateLink (invite, recovery)
+  needs the key's links scope and hands the link back for your App to mail.
+  On the public host a session answer sets the HttpOnly cookies and its
+  JSON holds no token. On the link, access_token is the pass in a JWT's
+  shape (supabase-js decodes it in setSession); never edit its claims: a
+  token whose claims K2 didn't write is refused.
+  A link (invite or recovery) gives a short pass that only sets the
+  password (updateUser); setting it makes the real session. user_metadata,
+  email changes, OAuth, magic links, phone and MFA are not supported.
+
+THE SHIM (@k2/supabase, sdk/supabase in K2's repo, MIT)
+  server  createServerClient(url, key, { cookies: k2Cookies(cookieStore,
+          { supabaseUrl: url }) })
+  browser k2BrowserAuth(createBrowserClient(url, key), { url, key })
+
+SEE ALSO
+  k2 study app-databases, k2 study app-identity, k2 study app-api

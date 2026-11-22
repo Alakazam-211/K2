@@ -435,6 +435,17 @@ pub fn resolve(req: &DoorRequest, ctx: &Ctx) -> Result<Resolved, DoorAnswer> {
                 Err((status, code, message)) => Err(refuse(status, &code, message, None)),
             };
         }
+        if b.starts_with(PENDING_PREFIX) {
+            // A recovery or invite link's pass whose password was set: the
+            // session it became, for server code (the link) only.
+            let Some(raw) = super::auth_door_v1::upgraded_pass(raw_bearer.unwrap_or(b), svc).filter(|_| link) else {
+                return Err(refuse(401, "pass_invalid", "this pass only sets a password (PUT /auth/v1/user); sign in again", None));
+            };
+            let Some(pass) = k2_core::skin::resolve_skin_token(&raw).filter(|p| p.session && p.app == svc) else {
+                return Err(refuse(401, "pass_invalid", "the pass is not a live session of this App", Some("sign in again")));
+            };
+            return Ok(person(svc, pass, false));
+        }
         if !k2_core::skin::is_skin_token(b) {
             return Err(refuse(401, "bad_credential", "the bearer is not a credential this door takes", None));
         }
@@ -562,6 +573,10 @@ async fn answer(req: DoorRequest, ctx: &Ctx) -> DoorAnswer {
     let Some(door) = door_of(&req.path) else {
         return refuse(404, "not_found", "no such door", None);
     };
+    if door == Door::Auth {
+        // The auth door reads its own credentials (a sign-in has none yet).
+        return super::auth_door_v1::handle(req, ctx).await;
+    }
     let (r2, c2) = (req.clone(), ctx.clone());
     let who = match blocking(move || resolve(&r2, &c2)).await {
         Some(Ok(w)) => w,
@@ -570,10 +585,14 @@ async fn answer(req: DoorRequest, ctx: &Ctx) -> DoorAnswer {
     };
     match door {
         Door::Rest => super::rest_door::handle(&req, ctx, &who).await,
-        Door::Auth => refuse(404, "not_built", "the /auth/v1 door is not on this server yet", None),
+        Door::Auth => unreachable_auth(),
         // Never reached: serve_one hands storage to serve_storage first.
         Door::Storage => refuse(404, "not_built", "the /storage/v1 door is not on this server yet", None),
     }
+}
+
+fn unreachable_auth() -> DoorAnswer {
+    refuse(500, "failed", "the auth door answers before the caller is resolved (a K2 bug)", None)
 }
 
 /// Serve one door request whose head (`head_len` bytes) is next on `s`.

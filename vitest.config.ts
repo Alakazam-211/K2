@@ -27,9 +27,10 @@ export default defineConfig({
   },
   test: {
     // sdk/server: the App server SDK's unit tests (runtime S23).
+    // sdk/supabase: @k2/supabase, the supabase-js shim (prd-app-supabase-compat-v1 §8.2).
     // sdk/activity: @k2/activity, the activity SDK's core (0.46.5).
     // sdk/mail-reader: @k2/mail-reader, the mail reader views (OA4).
-    include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'sdk/server/test/**/*.test.ts', 'sdk/activity/test/**/*.test.ts', 'sdk/mail-reader/test/**/*.test.ts', 'sdk/mail-reader/test/**/*.test.tsx'],
+    include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'sdk/server/test/**/*.test.ts', 'sdk/supabase/test/**/*.test.ts', 'sdk/activity/test/**/*.test.ts', 'sdk/mail-reader/test/**/*.test.ts', 'sdk/mail-reader/test/**/*.test.tsx'],
     environment: 'node',
   },
 })

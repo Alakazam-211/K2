@@ -37,3 +37,6 @@ pub use schema::{introspect_sql, SchemaCache};
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(all(test, feature = "testkit"))]
+mod oracle;

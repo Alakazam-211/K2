@@ -41,6 +41,11 @@ fn ask_line(nodes: &str) -> String {
     format!("k2 permission request compute.allow-nodes nodes={nodes} --why \"<what you need it for>\"")
 }
 
+/// The same line after the command's name (the permission object's `tail`).
+fn ask_tail(nodes: &str) -> String {
+    format!("permission request compute.allow-nodes nodes={nodes} --why \"<what you need it for>\"")
+}
+
 struct Resp {
     status: u16,
     body: String,
@@ -261,7 +266,7 @@ async fn an_agent_asks_to_add_nodes_to_its_own_list_and_only_those_are_added() {
         assert!(v["error"]["hint"].as_str().unwrap_or("").contains(&format!("k2 permission request compute.allow-nodes nodes={nodes}")), "{body}: {v}");
         assert_eq!(
             v["permission"],
-            json!({ "action": "compute.allow-nodes", "params": { "nodes": nodes }, "approvers": "owner or admin", "command": ask_line(nodes) }),
+            json!({ "action": "compute.allow-nodes", "params": { "nodes": nodes }, "approvers": "owner or admin", "command": ask_line(nodes), "tail": ask_tail(nodes) }),
             "{body}: {v}"
         );
     }

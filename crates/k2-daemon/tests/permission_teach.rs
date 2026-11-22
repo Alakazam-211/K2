@@ -256,6 +256,7 @@ async fn refusals_teach_only_while_both_switches_are_on() {
                 "params": {},
                 "approvers": "owner or admin",
                 "command": "k2 permission request compute.use --why \"<what you need it for>\"",
+                "tail": "permission request compute.use --why \"<what you need it for>\"",
             }),
             "{label}: {v}"
         );

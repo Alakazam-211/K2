@@ -33,6 +33,8 @@ use serde_json::{json, Value};
 
 const OWNER: &str = "owner-token-permission-compute-access";
 const ASK: &str = "k2 permission request compute.use --why \"<what you need it for>\"";
+/// The same line after the command's name (the permission object's `tail`).
+const ASK_TAIL: &str = "permission request compute.use --why \"<what you need it for>\"";
 
 struct Resp {
     status: u16,
@@ -238,7 +240,7 @@ async fn an_agent_asks_for_its_own_compute_access_and_only_that_turns_on() {
         assert_eq!(v["error"]["code"], "forbidden", "{body}: the refusal itself is unchanged: {v}");
         assert_eq!(
             v["permission"],
-            json!({ "action": "compute.use", "params": {}, "approvers": "owner or admin", "command": ASK }),
+            json!({ "action": "compute.use", "params": {}, "approvers": "owner or admin", "command": ASK, "tail": ASK_TAIL }),
             "{body}: {v}"
         );
     }

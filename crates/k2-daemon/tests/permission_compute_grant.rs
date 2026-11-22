@@ -41,6 +41,11 @@ fn ask_line(values: &str) -> String {
     format!("k2 permission request compute.grant {values} --why \"<what you need it for>\"")
 }
 
+/// The same line after the command's name (the permission object's `tail`).
+fn ask_tail(values: &str) -> String {
+    format!("permission request compute.grant {values} --why \"<what you need it for>\"")
+}
+
 struct Resp {
     status: u16,
     body: String,
@@ -261,6 +266,7 @@ async fn an_agent_asks_for_its_own_grant_limits_and_only_those_change() {
                 "params": { "node": "pcg-n1", "max-time": "4h" },
                 "approvers": "owner or admin",
                 "command": ask_line("max-time=4h node=pcg-n1"),
+                "tail": ask_tail("max-time=4h node=pcg-n1"),
             }),
             "{body}: {}",
             r.body

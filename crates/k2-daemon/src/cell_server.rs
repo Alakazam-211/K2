@@ -442,6 +442,13 @@ mod unix_impl {
             Some((p, q)) => (p, q),
             None => (target, ""),
         };
+        // As on TCP: each security parameter at most once, before anything
+        // reads one.
+        if let Some(key) = crate::routes::http::repeated_security_key(query) {
+            let body = crate::routes::http::repeated_key_body(key);
+            write_response(&mut stream, "400 Bad Request", "application/json", &body, "").await;
+            return;
+        }
         // R1 slice 10: a /cli/* answer names the daemon's version.
         let k5_version = if path.starts_with("/cli/") { crate::cli_usage::SERVER_VERSION_HEADER } else { "" };
 

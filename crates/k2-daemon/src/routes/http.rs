@@ -41,15 +41,99 @@ pub(crate) fn presented_bearer<'a>(query: &'a str, bearer: Option<&'a str>) -> &
 
 /// Extract the raw `token=<value>` from a URL-encoded query string. No
 /// full urlencoded decoding — the token is always hex so there's nothing
-/// to decode. Returns the first `token=` value seen (the contract callers
-/// depend on when a malformed query duplicates the key).
+/// to decode. A query that names `token` more than once has no token
+/// (`None`): the dispatcher refuses such a request before any gate
+/// ([`repeated_security_key`]), and every other reader agrees.
 pub(crate) fn extract_token(query: &str) -> Option<&str> {
+    let mut found = None;
+    let mut named = false;
     for pair in query.split('&') {
-        if let Some(v) = pair.strip_prefix("token=") {
-            return Some(v);
+        if pair == "token" || pair.starts_with("token=") {
+            if named {
+                return None;
+            }
+            named = true;
+            found = pair.strip_prefix("token=");
+        }
+    }
+    found
+}
+
+/// Query keys that name a credential, a caller or what a request acts on.
+/// A request may name each at most once: gates and handlers read these
+/// from different parsers (the first value, or the last), so one value is
+/// the only reading they all share. `project` / `project_path` are not
+/// here yet: the `k2` CLI's request helpers put the session's own
+/// `project=` first and some verbs add another (handlers read the last).
+pub(crate) const SECURITY_KEYS: &[&str] = &[
+    "token",
+    "pass",
+    "session",
+    "session_id",
+    "sessionId",
+    "cell_session_id",
+    "principal_bound",
+    "id",
+    "sid",
+    "workspace",
+    "ws",
+    "agent",
+    "agent_name",
+    "project_id",
+    "path",
+    "addr",
+    "from",
+    "to",
+    "room",
+    "handle",
+    "app",
+    "user",
+    "username",
+    "grant",
+    "key",
+    "target",
+];
+
+/// The first security key ([`SECURITY_KEYS`]) the raw query names more
+/// than once, if any. A key counts with or without a value (`id` and
+/// `id=…` are both `id`).
+pub(crate) fn repeated_security_key(query: &str) -> Option<&'static str> {
+    let mut seen: Vec<&'static str> = Vec::new();
+    for pair in query.split('&') {
+        let key = pair.split_once('=').map(|(k, _)| k).unwrap_or(pair);
+        if let Some(k) = SECURITY_KEYS.iter().find(|s| **s == key) {
+            if seen.contains(k) {
+                return Some(k);
+            }
+            seen.push(k);
         }
     }
     None
+}
+
+/// The dispatcher's check, before any gate: a request whose query repeats
+/// a security key is answered 400 usage (its body consumed) and `true`
+/// comes back (the connection then closes). Its own read buffer: the
+/// dispatcher's still holds the peeked head `path_and_query` borrows.
+pub(crate) async fn refuse_repeated_key(stream: &mut TcpStream, path_and_query: &str) -> bool {
+    let query = path_and_query.split_once('?').map(|(_, q)| q).unwrap_or("");
+    let Some(key) = repeated_security_key(query) else { return false };
+    let mut buf = vec![0u8; 16 * 1024];
+    let _ = read_post_body(stream, &mut buf).await;
+    send_response(stream, "400 Bad Request", "application/json", &repeated_key_body(key)).await;
+    true
+}
+
+/// The answer to a request that repeats a security key: 400, usage.
+pub(crate) fn repeated_key_body(key: &str) -> String {
+    serde_json::json!({
+        "ok": false,
+        "error": {
+            "code": "usage",
+            "hint": format!("the request names `{key}` more than once; send each of token, session, id, workspace, agent and the like once"),
+        },
+    })
+    .to_string()
 }
 
 /// COMPAT-58: extract the `Authorization: Bearer <token>` credential from a
@@ -2323,12 +2407,30 @@ mod tests {
     }
 
     #[test]
-    fn token_ok_first_token_value_wins_when_duplicated() {
-        // If `token=` appears twice (malformed query), the first
-        // value is what gates the request — that's the current
-        // behavior and the contract callers depend on.
-        assert!(token_ok("token=first&token=second", "first"));
+    fn a_repeated_token_is_no_token() {
+        // A query that names `token` twice has no token for any reader
+        // (the dispatcher refuses it before the gates anyway).
+        assert!(!token_ok("token=first&token=second", "first"));
         assert!(!token_ok("token=first&token=second", "second"));
+        assert_eq!(extract_token("token=first&token=second"), None);
+        assert_eq!(extract_token("token=a&token"), None, "a bare key counts");
+        assert_eq!(extract_token("x=1&token=a"), Some("a"));
+        assert_eq!(extract_token("tokens=a&mytoken=b"), None, "only the key token");
+    }
+
+    #[test]
+    fn repeated_security_parameters_are_refused() {
+        for key in SECURITY_KEYS {
+            let q = format!("{key}=a&x=1&{key}=b");
+            assert_eq!(repeated_security_key(&q), Some(*key), "{q}");
+            assert_eq!(repeated_security_key(&format!("{key}&{key}=b")), Some(*key), "a bare key counts: {key}");
+            assert_eq!(repeated_security_key(&format!("{key}=a&x=1&x=2")), None, "other keys may repeat: {key}");
+        }
+        assert_eq!(repeated_security_key(""), None);
+        assert_eq!(repeated_security_key("project=/a&project=/b"), None, "the k2 CLI's own project= then a verb's");
+        assert_eq!(repeated_security_key("token=a&session=b&id=c&workspace=d&agent=e&pass=f"), None);
+        let body: serde_json::Value = serde_json::from_str(&repeated_key_body("token")).unwrap();
+        assert_eq!(body["error"]["code"], "usage");
     }
 
     #[test]

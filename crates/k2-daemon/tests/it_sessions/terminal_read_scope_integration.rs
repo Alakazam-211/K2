@@ -254,6 +254,11 @@ async fn a_passport_on_its_cell_socket_is_held_to_the_same_rule() {
         assert_refused(&uds(q).await, Some("not_connected"), &format!("cell socket, {form}"));
     }
     assert_reads(&uds(format!("id={}", x.sa)).await, "cell socket, own session");
+    // A repeated security parameter is refused here too.
+    let r = uds(format!("id={}&id={}", x.sa, x.sb)).await;
+    if r.status != 400 || r.body.contains("\"lines\"") {
+        miss(format!("cell socket, a repeated id: want 400, got {} {}", r.status, r.body));
+    }
     drop(d);
     finish();
 }
@@ -397,17 +402,32 @@ async fn a_terminal_socket_serves_only_the_session_its_token_opens() {
     let own = grid_frames(&format!("ws://127.0.0.1:{port}/cli/sessions/grid?session={}&token={ta}", x.sa), 3).await;
     assert!(has_event(&own, "snapshot"), "own session's grid: {own:?}");
 
-    // A's token with B named as well: refused, nothing of B.
-    let grid = grid_frames(
-        &format!("ws://127.0.0.1:{port}/cli/sessions/grid?session={}&token={ta}&session={}", x.sa, x.sb),
-        3,
-    )
-    .await;
-    if has_event(&grid, "snapshot") {
-        let has_b = grid.iter().any(|f| f.contains(&marker));
-        miss(format!("grid: A's token opened B's session (B's screen in it: {has_b})"));
-    } else if !grid.iter().any(|f| f.contains("invalid or missing token for this session")) {
-        miss(format!("grid: refused without saying why: {grid:?}"));
+    // A's token with B named as well (a repeated security parameter):
+    // refused before the upgrade, nothing of B.
+    match tokio_tungstenite::connect_async(format!(
+        "ws://127.0.0.1:{port}/cli/sessions/grid?session={}&token={ta}&session={}",
+        x.sa, x.sb
+    ))
+    .await
+    {
+        Err(tokio_tungstenite::tungstenite::Error::Http(resp)) => {
+            if resp.status().as_u16() != 400 {
+                miss(format!("grid: refused with {} (want 400)", resp.status()));
+            }
+        }
+        Err(e) => miss(format!("grid: refused with an unexpected error: {e}")),
+        Ok((mut ws, _)) => {
+            let mut frames = Vec::new();
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+            while let Ok(Some(Ok(m))) = tokio::time::timeout_at(deadline, ws.next()).await {
+                if let Message::Text(t) = m {
+                    frames.push(t.to_string());
+                }
+            }
+            let has_b = frames.iter().any(|f| f.contains(&marker));
+            let snapshot = has_event(&frames, "snapshot");
+            miss(format!("grid: A's token opened a socket with B named (snapshot: {snapshot}, B's screen in it: {has_b})"));
+        }
     }
 
     // The bytes socket serves session-stream sessions: two of them, with
@@ -428,8 +448,8 @@ async fn a_terminal_socket_serves_only_the_session_its_token_opens() {
     .await;
     match bytes {
         Err(tokio_tungstenite::tungstenite::Error::Http(resp)) => {
-            if resp.status().as_u16() != 403 {
-                miss(format!("bytes: refused with {} (want 403)", resp.status()));
+            if resp.status().as_u16() != 400 {
+                miss(format!("bytes: refused with {} (want 400)", resp.status()));
             }
         }
         Err(e) => miss(format!("bytes: refused with an unexpected error: {e}")),
@@ -543,4 +563,79 @@ async fn a_read_is_capped_at_the_scrollback_and_the_replay_bound() {
     assert_eq!(under_rows.len(), 50, "replay under the cap");
     assert_eq!(under_rows.last().map(String::as_str), Some("row 11999"), "replay under the cap: newest last");
     drop(d);
+}
+
+// ── a repeated security parameter ────────────────────────────────────
+
+/// One raw request: `method pq` with no credential but what `pq` carries.
+async fn raw_req(port: u16, method: &'static str, pq: String) -> Resp {
+    let body = (method == "POST").then(String::new);
+    tokio::task::spawn_blocking(move || req_blocking(port, method, &pq, body)).await.unwrap()
+}
+
+/// A request that names token, session, id, workspace, agent or pass more
+/// than once is refused (400 usage) on every door, before any gate, and
+/// reads or writes nothing; the same request with each named once is
+/// answered as before.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn repeated_security_parameters_are_refused() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let x = two_workspaces(&env, d.port).await;
+    let marker = format!("TRWRITE{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+    let pairs = [("k2rs_unknown", "k2rs_unknown"), ("a", "b")];
+    for (port, door) in [(d.port, "loopback"), (d.tunnel_port, "tunnel listener")] {
+        for (a, b) in pairs {
+            let what = format!("{door}, token {a:?} then {b:?}");
+            let r = raw_req(port, "GET", format!("/cli/terminal/read?token={a}&token={b}&id={}", x.sb)).await;
+            if r.status == 200 || r.body.contains("\"lines\"") {
+                miss(format!("read, {what}: answered {} {}", r.status, r.body));
+            }
+            let r = raw_req(
+                port,
+                "POST",
+                format!("/cli/terminal/write?token={a}&token={b}&id={}&message={marker}&no_submit=true", x.sb),
+            )
+            .await;
+            if r.status == 200 || r.body.contains("\"success\":true") {
+                miss(format!("write, {what}: answered {} {}", r.status, r.body));
+            }
+        }
+    }
+    // Nothing reached B's terminal.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let screen = read(d.port, OWNER, &format!("id={}&lines=200", x.sb)).await;
+    assert_eq!(screen.status, 200, "owner read: {}", screen.body);
+    if screen.body.contains(&marker) {
+        miss(format!("B's terminal received text from a request without one credential: {}", screen.body));
+    }
+    // Each security key, repeated next to the owner token: 400 usage.
+    for (key, a, b) in [
+        ("token", OWNER, OWNER),
+        ("session", x.sb.as_str(), x.sa.as_str()),
+        ("id", x.sa.as_str(), x.sb.as_str()),
+        ("workspace", x.a.handle.as_str(), x.b.handle.as_str()),
+        ("agent", "helper", "other"),
+        ("pass", "a", "b"),
+    ] {
+        let pq = if key == "token" {
+            format!("/cli/terminal/read?token={a}&token={b}&id={}", x.sa)
+        } else {
+            format!("/cli/terminal/read?token={OWNER}&{key}={a}&{key}={b}")
+        };
+        let r = raw_req(d.port, "GET", pq).await;
+        let code = serde_json::from_str::<Value>(&r.body).ok().and_then(|v| v["error"]["code"].as_str().map(str::to_string));
+        if r.status != 400 || code.as_deref() != Some("usage") {
+            miss(format!("repeated {key}: want 400 usage, got {} {}", r.status, r.body));
+        }
+    }
+    // Named once, the owner's read and write answer as before.
+    let r = raw_req(d.port, "GET", format!("/cli/terminal/read?token={OWNER}&id={}", x.sa)).await;
+    assert_reads(&r, "owner, each key once");
+    let r = raw_req(d.port, "POST", format!("/cli/terminal/write?token={OWNER}&id={}&message=once&no_submit=true", x.sa)).await;
+    if r.status != 200 {
+        miss(format!("owner write, each key once: {} {}", r.status, r.body));
+    }
+    drop(d);
+    finish();
 }

@@ -1582,14 +1582,10 @@ async fn handle_one_request(
     ).server_version(ingress == Ingress::Loopback)); // X-K5-Server-Version on a /cli/* answer
 
     // H5 (E2E splice hardening): reject `Transfer-Encoding: chunked`.
-    // `read_post_body` is Content-Length-driven ONLY — it never decodes
-    // chunked framing. A chunked POST would therefore leave the chunk
-    // size-lines + trailers unconsumed in the stream, and the keep-alive
-    // loop would parse those leftover bytes as the NEXT request → request
-    // smuggling / keep-alive desync. The daemon's own clients never send
-    // chunked, so refuse it LOUDLY (400) and close the connection rather
-    // than half-read a body we can't frame. The check runs on every
-    // request (the head is already peeked), keeping the relay strictly L4.
+    // `read_post_body` is Content-Length-driven ONLY: a chunked body's
+    // size lines would be read as the NEXT request (keep-alive desync).
+    // Our clients never send chunked: refuse it (400) and close, on every
+    // request, keeping the relay strictly L4.
     if super::http::request_is_chunked(&req) {
         let _ = stream.read(&mut buf).await;
         super::http::send_response(
@@ -1601,6 +1597,10 @@ async fn handle_one_request(
         .await;
         // Force-close: we cannot safely find the next request boundary in
         // a chunked stream we don't decode, so keep-alive is unsafe here.
+        return DispatchOutcome::Done;
+    }
+    // Each security parameter at most once, on every door, before any gate.
+    if super::http::refuse_repeated_key(&mut *stream, path_and_query).await {
         return DispatchOutcome::Done;
     }
 

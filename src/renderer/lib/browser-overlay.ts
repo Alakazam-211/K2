@@ -28,6 +28,7 @@
  * Not daemon state: this is per-window view state for one native view.
  */
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type RefObject } from 'react'
+import { underlayActive, useBrowserLayeringStore } from '@/stores/browser-layering'
 
 export interface OverlayRect {
   x: number
@@ -52,6 +53,8 @@ export interface OverlayClaim {
 export interface OverlayHandle {
   readonly id: number
   update(area: OverlayArea): void
+  /** The overlay's DOM root changed (a ref that attached late). */
+  retarget(element: Element | null): void
   release(): void
 }
 
@@ -90,6 +93,12 @@ export function claimBrowserOverlay(input: {
       const cur = claims.get(id)
       if (!cur || sameArea(cur.area, area)) return
       claims.set(id, { ...cur, area })
+      publish()
+    },
+    retarget(element) {
+      const cur = claims.get(id)
+      if (!cur || cur.element === element) return
+      claims.set(id, { ...cur, element })
       publish()
     },
     release() {
@@ -149,6 +158,33 @@ export function measureElement(el: Element | null): OverlayRect | null {
   return { x: r.x, y: r.y, width: r.width, height: r.height }
 }
 
+/**
+ * The box an element draws: its own rect, or, for a wrapper with no box of
+ * its own (display:contents, a zero-size positioner), the union of its
+ * children's. Null when nothing is drawn yet.
+ */
+export function drawnRect(el: Element | null, depth = 0): OverlayRect | null {
+  if (!el) return null
+  const r = el.getBoundingClientRect()
+  if (r.width > 0 && r.height > 0) return { x: r.x, y: r.y, width: r.width, height: r.height }
+  if (depth >= 4) return null
+  let u: { l: number; t: number; r: number; b: number } | null = null
+  for (const child of Array.from(el.children)) {
+    const c = drawnRect(child, depth + 1)
+    if (!c) continue
+    u = u
+      ? { l: Math.min(u.l, c.x), t: Math.min(u.t, c.y), r: Math.max(u.r, c.x + c.width), b: Math.max(u.b, c.y + c.height) }
+      : { l: c.x, t: c.y, r: c.x + c.width, b: c.y + c.height }
+  }
+  return u ? { x: u.l, y: u.t, width: u.r - u.l, height: u.b - u.t } : null
+}
+
+/** A claim that covers nothing (yet). */
+const NOTHING: OverlayRect = { x: 0, y: 0, width: 0, height: 0 }
+
+/** How many frames a claim waits for its element to be drawn. */
+const MEASURE_TRIES = 120
+
 export interface BrowserOverlayOptions {
   /** Claim only while true (an open menu, a visible toast). */
   active: boolean
@@ -165,9 +201,17 @@ export interface BrowserOverlayOptions {
 /**
  * Claim an area over the Browser page while `active`. Released on close and
  * on unmount. A ref claim is re-measured after the first frame (menus place
- * themselves in an effect), on its own resize, and on a window resize. A
- * ref that is not attached yet claims the whole window: over-hiding is the
- * safe bias.
+ * themselves in an effect), on its own resize, and on a window resize.
+ *
+ * A ref that is not attached or drawn yet (mounts a frame late, a
+ * display:contents wrapper, zero size):
+ *  - legacy path (the page floats over K2): claims the whole window until
+ *    it can be measured. Over-hiding is the safe bias there.
+ *  - macOS underlay: claims nothing until it can be measured (a whole-window
+ *    claim would take every click and scroll off the page), then its real
+ *    box. Retried every frame for a while, and logged in dev.
+ * Only `fullscreen: true` (real modals and scrims) claims the window on
+ * purpose.
  */
 export function useBrowserOverlay({
   active,
@@ -180,23 +224,69 @@ export function useBrowserOverlay({
 
   useLayoutEffect(() => {
     if (!active) return
-    const el = ref?.current ?? null
-    const measure = (): OverlayArea => {
-      if (fullscreen || !el) return 'fullscreen'
-      return measureElement(el) ?? 'fullscreen'
-    }
-    const handle = claimBrowserOverlay({ kind, area: measure(), element: el })
-    handleRef.current = handle
-    if (fullscreen || !el) {
+    if (fullscreen) {
+      const handle = claimBrowserOverlay({ kind, area: 'fullscreen', element: ref?.current ?? null })
+      handleRef.current = handle
       return () => {
         handle.release()
         handleRef.current = null
       }
     }
+    const underlay = (): boolean => underlayActive(useBrowserLayeringStore.getState())
+    // Not measurable yet. Underlay: nothing (or the last box it had).
+    // Legacy, as before: its own rect when attached, else the whole window.
+    const unmeasured = (): OverlayArea => {
+      if (underlay()) return last ?? NOTHING
+      return el ? (measureElement(el) ?? 'fullscreen') : 'fullscreen'
+    }
+    let el: Element | null = ref?.current ?? null
+    let last: OverlayRect | null = null
+    let logged = false
+    const measure = (): OverlayArea => {
+      const r = drawnRect(el)
+      if (r) {
+        last = r
+        return r
+      }
+      if (!logged && import.meta.env.DEV && underlay()) {
+        logged = true
+        console.warn(
+          `[browser-overlay] a ${kind} claim has no drawn box yet (${el ? 'not laid out' : 'ref not attached'}); claiming nothing until it does`,
+        )
+      }
+      return unmeasured()
+    }
+    const handle = claimBrowserOverlay({ kind, area: measure(), element: el })
+    handleRef.current = handle
+    let ro: ResizeObserver | null = null
     const remeasure = (): void => handle.update(measure())
-    const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame(remeasure) : null
-    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(remeasure) : null
-    ro?.observe(el)
+    const observe = (): void => {
+      ro?.disconnect()
+      ro = el && typeof ResizeObserver === 'function' ? new ResizeObserver(remeasure) : null
+      if (el) ro?.observe(el)
+    }
+    observe()
+    // Until it is attached and drawn: look again every frame (a ref that
+    // mounts late, a portal, a box placed in an effect). Then once more,
+    // as before (menus place themselves after the first frame).
+    let tries = 0
+    let raf: number | null = null
+    const tick = (): void => {
+      raf = null
+      const cur = ref?.current ?? null
+      if (cur !== el) {
+        el = cur
+        handle.retarget(el)
+        observe()
+      }
+      remeasure()
+      if (!drawnRect(el) && ++tries < MEASURE_TRIES && typeof requestAnimationFrame === 'function') {
+        raf = requestAnimationFrame(tick)
+      } else if (!drawnRect(el) && import.meta.env.DEV && underlay()) {
+        console.warn(`[browser-overlay] a ${kind} claim gave up measuring after ${tries} frames`)
+      }
+    }
+    if (typeof requestAnimationFrame === 'function') raf = requestAnimationFrame(tick)
     window.addEventListener('resize', remeasure)
     return () => {
       if (raf !== null) cancelAnimationFrame(raf)

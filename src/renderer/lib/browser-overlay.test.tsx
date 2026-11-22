@@ -2,7 +2,8 @@
 // Fail loud: the arbiter decides when a native Browser page gives way.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render } from '@testing-library/react'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { useBrowserLayeringStore } from '@/stores/browser-layering'
 import {
   BrowserOverlayClaim,
   beginBrowserMotion,
@@ -12,10 +13,18 @@ import {
   overlayClaims,
   rectsOverlap,
   resetBrowserOverlaysForTest,
+  subscribeOverlayClaims,
   useBrowserCovered,
   useBrowserOverlay,
+  type OverlayArea,
   type OverlayRect,
 } from './browser-overlay'
+
+// A Mac, so the underlay can be on; each test picks the path in the store.
+vi.mock('@/lib/desktop-chrome', async (orig) => ({
+  ...(await orig<typeof import('@/lib/desktop-chrome')>()),
+  isMacPlatform: () => true,
+}))
 
 const PANE: OverlayRect = { x: 400, y: 40, width: 600, height: 500 }
 
@@ -49,6 +58,8 @@ class ResizeObserverStub {
 }
 
 beforeEach(() => {
+  // The legacy path unless a test turns the underlay on.
+  useBrowserLayeringStore.setState({ mode: 'legacy', failed: null })
   resetBrowserOverlaysForTest()
   globalThis.ResizeObserver = ResizeObserverStub as unknown as typeof ResizeObserver
   stubRects()
@@ -215,7 +226,53 @@ describe('useBrowserOverlay / useBrowserCovered', () => {
     expect(covered).toBe(false)
   })
 
-  it('a ref that is not attached claims the whole window (over-hide is the safe bias)', () => {
+  it('macOS underlay: a popover whose ref mounts a frame late gets its real rect, never the whole window', async () => {
+    useBrowserLayeringStore.setState({ mode: 'underlay', failed: null })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    function Late(): React.JSX.Element | null {
+      const ref = useRef<HTMLDivElement>(null)
+      const [shown, setShown] = useState(false)
+      useBrowserOverlay({ active: true, ref, kind: 'popover' })
+      useEffect(() => {
+        requestAnimationFrame(() => setShown(true))
+      }, [])
+      return shown ? <div ref={ref} data-rect="900,40,200,120" /> : null
+    }
+    const seen: OverlayArea[] = []
+    const off = subscribeOverlayClaims(() => {
+      for (const c of overlayClaims()) seen.push(c.area)
+    })
+    render(<Late />)
+    expect(overlayClaims().map((c) => c.area)).toEqual([{ x: 0, y: 0, width: 0, height: 0 }])
+    for (let i = 0; i < 4; i++) {
+      await act(async () => {
+        await new Promise<void>((r) => requestAnimationFrame(() => r()))
+      })
+    }
+    expect(overlayClaims().map((c) => c.area)).toEqual([{ x: 900, y: 40, width: 200, height: 120 }])
+    expect(seen).not.toContain('fullscreen')
+    expect(overlayClaims()[0].element).not.toBeNull()
+    off()
+    warn.mockRestore()
+  })
+
+  it('a display:contents wrapper claims the box its children draw', () => {
+    useBrowserLayeringStore.setState({ mode: 'underlay', failed: null })
+    function Wrapped(): React.JSX.Element {
+      const ref = useRef<HTMLDivElement>(null)
+      useBrowserOverlay({ active: true, ref, kind: 'menu' })
+      return (
+        <div ref={ref} style={{ display: 'contents' }}>
+          <div data-rect="100,50,80,40" />
+          <div data-rect="150,80,60,60" />
+        </div>
+      )
+    }
+    render(<Wrapped />)
+    expect(overlayClaims().map((c) => c.area)).toEqual([{ x: 100, y: 50, width: 110, height: 90 }])
+  })
+
+  it('legacy path: a ref that is not attached claims the whole window (over-hide is the safe bias)', () => {
     function Detached(): null {
       const ref = useRef<HTMLDivElement>(null)
       useBrowserOverlay({ active: true, ref, kind: 'popover' })

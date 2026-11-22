@@ -19462,7 +19462,7 @@ print(v.get("note", ""))
 w = v.get("roomsWait") or {}
 if w.get("rooms"):
     print("Its role also names %s; %s, until an owner or admin lets it in on a card." % (", ".join(w["rooms"]), w.get("why") or "it signs in only to your own room"))
-    print("Ask with: %s" % w.get("ask"))'
+    print("Ask with: %s" % ("k2 <tail>".replace("<tail>", w["askTail"]) if isinstance(w.get("askTail"), str) and w["askTail"] else w.get("ask")))'
 }
 
 # k2 app user rooms-ok <app> <login> [--assign <login>] [--reason T] [--json]
@@ -117694,7 +117694,7 @@ if verb == "request":
 elif verb in ("update", "cancel", "approve", "deny", "beta", "agent"):
     print(v.get("message") or v.get("hint") or "OK.")
 else:
-    print(json.dumps(v, indent=2))
+    [a.update(command="k2 <tail>".replace("<tail>", a["tail"])) for a in (v.get("actions") if verb == "list" and isinstance(v.get("actions"), list) else []) if isinstance(a, dict) and isinstance(a.get("tail"), str) and a["tail"]]; print(json.dumps(v, indent=2))
 ' || true
     case "$status" in
         2??) exit 0 ;;

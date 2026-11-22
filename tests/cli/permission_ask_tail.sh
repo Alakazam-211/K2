@@ -13,7 +13,8 @@
 # brand of ours has, so the test means the same under any brand's build. A
 # line that still printed `command` would show it. Covered: the shared
 # transports' closing line (connections add), desktop env, front status
-# and firewall, each with its own printer.
+# and firewall, each with its own printer; and `k2 permission list`, whose
+# actions each carry `command` and `tail` the same way.
 #
 # An older CLI, from before tail, against a daemon that sends both keys:
 # it still prints the daemon's whole command, unchanged. The older CLI is
@@ -55,6 +56,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 MODE = sys.argv[2]
 TAIL = 'permission request connections.add to=\'a b\'\\\'\'c\' --why "<what you need it for>"'
+LIST_TAIL = 'permission request compute.use --why "<what you need it for>"'
 
 class H(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -65,6 +67,17 @@ class H(BaseHTTPRequestHandler):
         if n:
             self.rfile.read(n)
         mode = open(MODE).read().strip()
+        if self.path.startswith("/cli/permission/enabled"):
+            return self.reply(200, {"enabled": True})
+        if self.path.startswith("/cli/permission/list"):
+            a = {"id": "compute.use", "command": "zz " + LIST_TAIL}
+            if mode == "new":
+                a["tail"] = LIST_TAIL
+            elif mode == "number":
+                a["tail"] = 7
+            elif mode == "empty":
+                a["tail"] = ""
+            return self.reply(200, {"agent": "ws", "actions": [a], "requests": []})
         p = {"action": "connections.add", "params": {"to": "a b'c"}, "approvers": "owner or admin",
              "command": "zz " + TAIL}
         if mode == "new":
@@ -73,9 +86,11 @@ class H(BaseHTTPRequestHandler):
             p["tail"] = 7
         elif mode == "empty":
             p["tail"] = ""
-        body = json.dumps({"ok": False, "error": {"code": "owner_only", "hint": "only the owner may do this"},
-                           "permission": p}).encode()
-        self.send_response(403)
+        self.reply(403, {"ok": False, "error": {"code": "owner_only", "hint": "only the owner may do this"},
+                         "permission": p})
+    def reply(self, status, obj):
+        body = json.dumps(obj).encode()
+        self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Connection", "close")
@@ -121,6 +136,16 @@ run() {
 
 last_err_line() { printf '%s\n' "$ERR" | sed -e '/^$/d' | tail -1; }
 
+# k2 permission list: the action's command, as json.dumps writes it.
+LIST_OURS='"command": "k2 permission request compute.use --why \"<what you need it for>\""'
+LIST_THEIRS='"command": "zz permission request compute.use --why \"<what you need it for>\""'
+list_check() { # <label> <want>
+    run permission list
+    [ "$RC" = 0 ] && ok || bad "$1: k2 permission list: exit $RC ($ERR)"
+    grep -qF -- "$2" "$SANDBOX/out" && ok || bad "$1: k2 permission list: no $2 in: $(cat "$SANDBOX/out")"
+    [ "$(grep -c '"command": ' "$SANDBOX/out")" = 1 ] && ok || bad "$1: k2 permission list: one command: $(cat "$SANDBOX/out")"
+}
+
 OURS="Ask with: k2 permission request connections.add to='a b'\\''c' --why \"<what you need it for>\""
 THEIRS="Ask with: zz permission request connections.add to='a b'\\''c' --why \"<what you need it for>\""
 
@@ -137,6 +162,7 @@ for mode in new old number empty; do
             case "$ERR" in *"zz permission"*) bad "$mode: k2 $form: the server's name leaked: $ERR" ;; *) ok ;; esac
         fi
     done
+    if [ "$mode" = new ]; then list_check "$mode" "$LIST_OURS"; else list_check "$mode" "$LIST_THEIRS"; fi
 done
 
 # The older CLI: the bash CLI with the tail rule taken out again.
@@ -150,10 +176,14 @@ s, a = re.subn(r"""; (\w+) = dict\(\1, command=(["'])k2 <tail>\2\.replace\(\2<ta
 s, b = re.subn(r"""(\n +)p = dict\(p, command="k2 <tail>"\.replace\("<tail>", p\["tail"\]\)\) if isinstance\(p, dict\) and isinstance\(p\.get\("tail"\), str\) and p\["tail"\] else p  # the rules of _permission_closing_lines\n""", r"\1# Same rules as _permission_closing_lines.\n", s)
 # mail's die: cmd from the tail.
 s, c = re.subn(r"""cmd = "k2 <tail>"\.replace\("<tail>", permission\["tail"\]\) if isinstance\(permission\.get\("tail"\), str\) and permission\["tail"\] else permission\.get\("command"\)""", 'cmd = permission.get("command")', s)
-if "<tail>" in s or a + b + c == 0:
-    sys.exit("untail: the tail rule is still there (%d left of %d; %d %d %d)" % (s.count("<tail>"), n0, a, b, c))
+# permission list: each action's command from its tail.
+s, d = re.subn(r"""\[a\.update\(command="k2 <tail>"\.replace\("<tail>", a\["tail"\]\)\) for a in \(v\.get\("actions"\) if verb == "list" and isinstance\(v\.get\("actions"\), list\) else \[\]\) if isinstance\(a, dict\) and isinstance\(a\.get\("tail"\), str\) and a\["tail"\]\]; """, "", s)
+# A test login's rooms: the ask from its askTail.
+s, e = re.subn(r"""\("k2 <tail>"\.replace\("<tail>", w\["askTail"\]\) if isinstance\(w\.get\("askTail"\), str\) and w\["askTail"\] else w\.get\("ask"\)\)""", 'w.get("ask")', s)
+if "<tail>" in s or a + b + c == 0 or d != 1 or e != 1:
+    sys.exit("untail: the tail rule is still there (%d left of %d; %d %d %d %d %d)" % (s.count("<tail>"), n0, a, b, c, d, e))
 open(sys.argv[2], "w").write(s)
-print("untail: %d rules taken out" % (a + b + c))
+print("untail: %d rules taken out" % (a + b + c + d + e))
 UNTAIL
 OLD="$SANDBOX/old-k2"
 python3 -I "$SANDBOX/untail.py" "$CLI_BASH_SOURCE" "$OLD" >/dev/null
@@ -169,6 +199,7 @@ for form in "connections add billing" "desktop env" "front status" "firewall"; d
     [ "$(last_err_line)" = "$THEIRS" ] && ok || bad "older CLI: k2 $form: the last line: $(last_err_line)"
     [ "$(printf '%s\n' "$ERR" | grep -c '^Ask with: ')" = 1 ] && ok || bad "older CLI: k2 $form: one Ask line: $ERR"
 done
+PROG="$OLD" list_check "older CLI" "$LIST_THEIRS"
 
 echo "permission_ask_tail: $pass passed, $fail failed"
 [ "$fail" = 0 ]

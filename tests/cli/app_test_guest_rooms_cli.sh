@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # 0.46.17: the CLI half of a test login's rooms.
 #   - `k2 app user add <app> <login> --test --role R` from an agent ends with
-#     the Ask with: line when the role names rooms past the agent's own;
+#     the Ask with: line when the role names rooms past the agent's own: this
+#     CLI's own name before the daemon's askTail (white-label C5), or the
+#     daemon's whole ask when it sends no askTail (an older daemon);
 #   - `k2 app user rooms-ok <app> <login> [--assign <login>]` posts the App
 #     route (with ?assign=), says where the card is and exits 2 while it
 #     waits; an owner's answer (opened) exits 0; help sends nothing.
@@ -38,10 +40,14 @@ class H(http.server.BaseHTTPRequestHandler):
         b = json.loads(body or "{}") if body.startswith("{") else {}
         status, out = 200, {"ok": True}
         if u.path == "/cli/app/test-guest/add":
+            # The server's own command name is zz (no brand of ours); an
+            # older daemon (login "olds") sends no askTail.
             out = {"ok": True, "username": b.get("username"), "app": "qa1", "role": "tester", "rooms": [], "expiresAt": 4102444800,
                    "tied": True, "note": "a test guest",
                    "roomsWait": {"rooms": ["sales"], "why": "a test login your agent made signs in only to ops's own room",
-                                 "ask": "k2 app user rooms-ok qa1 %s" % b.get("username")}}
+                                 "ask": "zz app user rooms-ok qa1 %s" % b.get("username")}}
+            if b.get("username") != "olds":
+                out["roomsWait"]["askTail"] = "app user rooms-ok qa1 %s" % b.get("username")
         elif u.path == "/cli/app/test-guest/rooms-ok":
             if b.get("username") == "owned":
                 out = {"ok": True, "status": "opened", "username": "owned", "rooms": ["sales"], "note": "owned can now use sales"}
@@ -89,6 +95,10 @@ grep -qF "A TEST LOGIN'S ROOMS (0.46.17)" <<<"$("$CLI" study apps)" || fail "k2 
 run app user add qa1 tess --test --role tester --expires 7d
 [ "$RC" -eq 0 ] || fail "add exits 0: $RC $ERR"
 grep -qF 'Ask with: k2 app user rooms-ok qa1 tess' <<<"$OUT" || fail "the add ends with its Ask with: line: $OUT"
+if grep -qF 'zz app user' <<<"$OUT"; then fail "the server's command name leaked: $OUT"; fi
+run app user add qa1 olds --test --role tester
+[ "$RC" -eq 0 ] || fail "add (an older daemon) exits 0: $RC $ERR"
+grep -qF 'Ask with: zz app user rooms-ok qa1 olds' <<<"$OUT" || fail "no askTail: the daemon's ask as sent: $OUT"
 grep -qF 'Its role also names sales' <<<"$OUT" || fail "and says which rooms wait: $OUT"
 
 : >"$FAKE_DIR/requests.log"

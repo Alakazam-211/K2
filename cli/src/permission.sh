@@ -204,7 +204,7 @@ if verb == "request":
 elif verb in ("update", "cancel", "approve", "deny", "beta", "agent"):
     print(v.get("message") or v.get("hint") or "OK.")
 else:
-    print(json.dumps(v, indent=2))
+    [a.update(command="k2 <tail>".replace("<tail>", a["tail"])) for a in (v.get("actions") if verb == "list" and isinstance(v.get("actions"), list) else []) if isinstance(a, dict) and isinstance(a.get("tail"), str) and a["tail"]]; print(json.dumps(v, indent=2))
 ' || true
     case "$status" in
         2??) exit 0 ;;

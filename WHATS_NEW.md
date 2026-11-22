@@ -193,6 +193,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 ### Desktop app
 - **Terminal tabs give their graphics memory back when you leave them.** A terminal tab you switched away from, a tab under Settings and a tab you closed each kept its WebGL drawing surface (a full-size picture of the pane) until the app happened to clean up, one per tab ever shown; font and zoom changes left old glyph pages behind the same way. Over a long day this piled up in the app's graphics process and pushed the Mac into swap. Now a hidden or closed tab holds none of it, and the visible tab holds one surface and one glyph page; coming back to a tab redraws it at once, as before.
+- **A terminal drawn without WebGL frees each line's picture as it scrolls away.** Lines with box drawing or block characters (the borders of agent CLIs and other full-screen tools) are drawn as small pictures, and each one stayed in graphics memory after its line scrolled off until the app happened to clean up. On a busy terminal that was a steady climb. They are now freed as the line leaves.
 - **A hidden Mobile or Desktop tab lets go of its video decoder.** When the tab hides its stream stops, but the decoder behind it (and the frames it keeps) stayed open until the tab was shown again or closed. It now closes when the stream stops; the last picture stays in the tab, and showing it again starts the stream as before.
 
 ### Settings

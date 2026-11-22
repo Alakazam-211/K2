@@ -166,6 +166,19 @@ function SyntheticRowCanvas({
   for (const c of cells) endCss = Math.max(endCss, c.leftCss + c.widthCss)
   const wDev = Math.max(1, Math.round(endCss * dpr))
   const hDev = Math.max(1, Math.round(cellHeight * dpr))
+  // Free the bitmap when the row leaves: its backing store lives in
+  // WebKit's GPU process until the element is collected, and rows mount
+  // and unmount with every line of scrolled output (each row key is its
+  // absolute buffer row), so on a busy terminal they piled up between
+  // collections. A zero-size canvas holds nothing.
+  React.useLayoutEffect(() => {
+    const canvas = ref.current
+    return () => {
+      if (!canvas) return
+      canvas.width = 0
+      canvas.height = 0
+    }
+  }, [])
   React.useLayoutEffect(() => {
     const canvas = ref.current
     const ctx = canvas?.getContext('2d')

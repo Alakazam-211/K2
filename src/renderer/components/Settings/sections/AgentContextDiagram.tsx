@@ -1,5 +1,6 @@
 import React from 'react'
 import { Surface } from '@/components/ui'
+import { CLI_NAME } from '@/lib/brand'
 
 // Context management stack (prd-context-hamburger-v1): always-on AGENTS.md is a
 // stack of markdown sources — pinned (AGENT + PROJECT + Tooling) plus
@@ -24,7 +25,7 @@ const HARNESS_MIRRORS: { label: string; path: string; note?: string }[] = [
 // The two LOADABLE skills — separate lane, NOT the canonical entrypoint.
 // Loaded on demand from `.k2/skills/`, never compiled into AGENTS.md.
 const LOADABLE_SKILLS: { label: string; path: string; blurb: string }[] = [
-  { label: 'k2-cli', path: '.k2/skills/k2-cli/', blurb: 'How to use the k2 CLI: check in, report status, delegate and message.' },
+  { label: 'k2-cli', path: '.k2/skills/k2-cli/', blurb: `How to use the ${CLI_NAME} CLI: check in, report status, delegate and message.` },
   { label: 'k2-canonical-agents', path: '.k2/skills/k2-canonical-agents/', blurb: 'How to set up or undo the read-only links safely.' },
 ]
 
@@ -87,7 +88,7 @@ export function AgentContextDiagram(): React.JSX.Element {
           <Box kind="always" title="ROLE.md" path=".k2/agent/ROLE.md" note="The agent's role" />
           <Box kind="always" title="PROJECT.md" path=".k2/PROJECT.md" note="About the project" />
           <Box kind="optional" title="Optional layers" note="Wiki index, user docs and packs, in the order you set" />
-          <Box kind="always" title="Tooling" note="A pointer to the k2 CLI, written by K2" />
+          <Box kind="always" title="Tooling" note={`A pointer to the ${CLI_NAME} CLI, written by K2`} />
           <p className="type-hint text-[var(--color-text-secondary)] mt-1 leading-snug">Edit these in a workspace&rsquo;s Context tab.</p>
         </div>
 

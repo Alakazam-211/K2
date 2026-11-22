@@ -17,7 +17,9 @@
 //             serves for it ([] when none; then the url, if any, is shown)
 
 /** The command the empty state names (Published's voice). */
-export const APP_DEPLOY_EXAMPLE = 'k2 app deploy'
+import { CLI_NAME } from '@/lib/brand'
+
+export const APP_DEPLOY_EXAMPLE = `${CLI_NAME} app deploy`
 
 export interface WorkspaceApp {
   appId: string

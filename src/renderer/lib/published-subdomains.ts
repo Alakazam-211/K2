@@ -22,6 +22,7 @@
 import { daemonCliPost, daemonCliPostQuery } from '@/lib/daemon-cli'
 import type { ServerScope } from '@/kessel/server-scope'
 import { DASHBOARD_URL, ZONE } from '@/lib/hosts'
+import { CLI_NAME } from '@/lib/brand'
 
 /** The daemon route that performs Connect control-plane calls with the
  *  vault-held tunnel token. INTEGRATOR: confirm this name against the
@@ -150,7 +151,7 @@ export const CONTROL_PLANE_MESSAGES: Record<string, string> = {
 
 /** The daemon's answer when it has no such route (older daemon). */
 export const PROXY_MISSING_MESSAGE =
-  "This K2 server can't manage published subdomains from Settings yet. Update it, or use `k2 publish subdomain create` in a terminal."
+  `This K2 server can't manage published subdomains from Settings yet. Update it, or use \`${CLI_NAME} publish subdomain create\` in a terminal.`
 
 function str(v: unknown): string {
   return typeof v === 'string' ? v.trim() : ''
@@ -282,7 +283,7 @@ export function publishedSubdomains(scope: ServerScope): PublishedSubdomainsApi 
         try {
           await daemonCliPostQuery(scope, CLAIM_ROUTE, { label, project: projectId, target })
         } catch (e) {
-          warning = `Created, but the owning workspace wasn't recorded: ${e instanceof Error ? e.message : String(e)}. Adopt it from that workspace with: k2 publish subdomain claim ${label}`
+          warning = `Created, but the owning workspace wasn't recorded: ${e instanceof Error ? e.message : String(e)}. Adopt it from that workspace with: ${CLI_NAME} publish subdomain claim ${label}`
         }
       }
       return { refreshed: await refreshMap(scope), warning }
@@ -318,7 +319,7 @@ export function publishedSubdomains(scope: ServerScope): PublishedSubdomainsApi 
         try {
           await daemonCliPostQuery(scope, UNCLAIM_ROUTE, { label, project: projectId })
         } catch (e) {
-          warning = `Removed, but the workspace record wasn't cleared: ${e instanceof Error ? e.message : String(e)}. Clear it from that workspace with: k2 publish subdomain unclaim ${label}`
+          warning = `Removed, but the workspace record wasn't cleared: ${e instanceof Error ? e.message : String(e)}. Clear it from that workspace with: ${CLI_NAME} publish subdomain unclaim ${label}`
         }
       }
       return { refreshed: await refreshMap(scope), warning }

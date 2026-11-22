@@ -26,6 +26,7 @@ import { primaryScope } from '@/kessel/server-scope'
 import { useSettingsStore } from '@/stores/settings'
 import { fetchViewerRole } from '@/components/Presence/PresenceKickButton'
 import { SettingsLink } from './ComputeBits'
+import { CLI_NAME } from '@/lib/brand'
 
 export const ORG_CHART_SWITCH_LABEL = 'Org Chart'
 export const ORG_CHART_SWITCH_LINE =
@@ -40,7 +41,7 @@ export const ORG_CHART_MANIFEST: SettingEntry[] = [
     section: 'org-chart',
     label: 'Org Chart',
     description: 'Turn the Org Chart on for this server: the top-bar tab, orgs and heads, and the daily bulletin, with its night run times.',
-    keywords: ['org chart', 'organization', 'orgs', 'departments', 'bulletin', 'head', 'night run', 'canvas', 'k2 organization'],
+    keywords: ['org chart', 'organization', 'orgs', 'departments', 'bulletin', 'head', 'night run', 'canvas', `${CLI_NAME} organization`],
   },
 ]
 

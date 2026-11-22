@@ -17,6 +17,7 @@ import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { daemonErrorOf } from '@/lib/daemon-error'
 import { settingsUpdate } from '@/lib/daemon-settings'
 import { primaryScope } from '@/kessel/server-scope'
+import { CLI_NAME } from '@/lib/brand'
 
 export type CheckStatus = 'ok' | 'warn' | 'fail' | 'unknown'
 
@@ -382,7 +383,7 @@ export function engineNeeded(d: BoxDoctor): boolean {
 
 /** Prepare still has work: a row whose fix is box prep isn't ok. */
 export function prepareNeeded(d: BoxDoctor): boolean {
-  return d.linux && d.checks.some((c) => c.status !== 'ok' && (c.fix ?? '').startsWith('k2 app box prepare'))
+  return d.linux && d.checks.some((c) => c.status !== 'ok' && (c.fix ?? '').startsWith(`${CLI_NAME} app box prepare`))
 }
 
 /** The window's server answered `apps_disabled` (Apps (beta) are off). */

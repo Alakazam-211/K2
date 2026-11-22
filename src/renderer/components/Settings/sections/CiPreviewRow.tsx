@@ -10,7 +10,7 @@ import React, { useEffect, useState } from 'react'
 import type { SettingEntry } from '../searchManifest'
 import { SETTING_ROW_HINT, SETTING_ROW_LABEL, SaveError, SaveNote, SettingSwitchRow, useSaveStatus } from '../controls/SettingControls'
 import { Toggle } from '@/components/ui'
-import { PRODUCT_NAME } from '@/lib/brand'
+import { CLI_NAME, PRODUCT_NAME } from '@/lib/brand'
 import type { HostRole } from './host-role'
 import { ciPreviewErrorText, fetchCiPreview, fetchCiPreviewRole, saveCiPreview } from './ci-preview-api'
 
@@ -20,8 +20,8 @@ export const CI_PREVIEW_ENTRY: SettingEntry = {
   id: 'compute.ci-preview',
   section: 'compute',
   label: CI_PREVIEW_LABEL,
-  description: `${PRODUCT_NAME} checks every pushed commit on your compute machines (k2 ci). Owner only`,
-  keywords: ['ci', 'k2 ci', 'ciPreview', 'continuous integration', 'checks', 'push', 'commit', 'github status'],
+  description: `${PRODUCT_NAME} checks every pushed commit on your compute machines (${CLI_NAME} ci). Owner only`,
+  keywords: ['ci', `${CLI_NAME} ci`, 'ciPreview', 'continuous integration', 'checks', 'push', 'commit', 'github status'],
 }
 
 type Value = { kind: 'loading' } | { kind: 'ready'; on: boolean } | { kind: 'error'; message: string }
@@ -88,7 +88,7 @@ export function CiPreviewRow({ computeOn }: { computeOn: boolean }): React.JSX.E
     >
       <div className={SETTING_ROW_LABEL}>{CI_PREVIEW_LABEL}</div>
       <p className={SETTING_ROW_HINT}>
-        {PRODUCT_NAME} checks every pushed commit on your compute machines, for the repos agents set up with k2 ci. CI checks go
+        {PRODUCT_NAME} checks every pushed commit on your compute machines, for the repos agents set up with {CLI_NAME} ci. CI checks go
         ahead of other jobs in the queue, so other jobs may wait longer. Changes take effect at once.
       </p>
       {!computeOn ? (

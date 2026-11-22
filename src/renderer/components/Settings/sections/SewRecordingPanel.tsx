@@ -40,6 +40,7 @@ import {
   type SewRecordingPolicies,
 } from './sew-api'
 import { SewFailed, usePersonConfirm } from './sew-ui'
+import { CLI_NAME } from '@/lib/brand'
 
 export const RECORDING_UNAVAILABLE = "This server's chat can't record in Apps yet"
 
@@ -254,7 +255,7 @@ export function RecordingPanel({ sample, canMutate, isOwner, installId = null }:
           <SettingsGroup
             title="This server’s rules"
             card
-            hint="Everything starts off. Each person in a call still answers their own consent notice, and is never recorded after saying no. The owner or an admin changes the rest from a terminal on the server (k2 hostchat recording policy set)."
+            hint={`Everything starts off. Each person in a call still answers their own consent notice, and is never recorded after saying no. The owner or an admin changes the rest from a terminal on the server (${CLI_NAME} hostchat recording policy set).`}
             testId="sew-recording-policies"
           >
             {policies.policies.filter((p) => !RECORDING_SWITCHES.some((sw) => sw.key === p.key)).map((p) => (

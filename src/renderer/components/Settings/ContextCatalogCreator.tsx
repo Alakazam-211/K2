@@ -10,6 +10,7 @@ import remarkGfm from 'remark-gfm'
 import { primaryScope } from '@/kessel/server-scope'
 import { Button } from '@/components/ui'
 import { SettingsLoadState } from './controls/SettingControls'
+import { CLI_NAME } from '@/lib/brand'
 
 const CATALOG_PACK_SYSTEM_PROMPT = `You are authoring a K2 context catalog pack (library), not AGENTS.md, not a skill.
 
@@ -21,7 +22,7 @@ id must stay user:<slug> (or the existing id); reserved prefixes are forbidden (
 
 layer.md: lean standing orders, no leading H1, prefer links over dumps, stay under 16 KiB.
 
-This pack is library only until someone stacks it (k2 agent context add <id>).`
+This pack is library only until someone stacks it (${CLI_NAME} agent context add <id>).`
 
 interface Props {
   packDir: string

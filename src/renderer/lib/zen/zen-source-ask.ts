@@ -17,6 +17,7 @@
 import { create } from 'zustand'
 import type { ZenSourceView } from './zen-sources'
 import { parseSourceAddress } from './zen-sources'
+import { CLI_NAME } from '@/lib/brand'
 
 /** What the draft is about. `view` is the last view K2 has (may be null:
  *  a source the card never read). */
@@ -73,7 +74,7 @@ export function zenSourceAskDraft(req: ZenSourceAskRequest): string {
     lines.push(`I'm asking about ${oneLine(req.itemKey, 80)}.`)
   }
   if (p?.host) lines.push(`This check runs on ${p.host}.`)
-  lines.push(`Read it with: k2 sources show ${name}${p?.host ? ` (on ${p.host})` : ''}`)
+  lines.push(`Read it with: ${CLI_NAME} sources show ${name}${p?.host ? ` (on ${p.host})` : ''}`)
   lines.push('')
   lines.push('Can you look into it? ')
   return lines.join('\n')

@@ -65,6 +65,7 @@ import { useDesktopPresence } from './useDesktopPresence'
 import { useDesktopStatus } from './useDesktopStatus'
 import { useDesktopStream } from './useDesktopStream'
 import type { WorkerLike } from '@/components/Stream/stream-player'
+import { CLI_NAME } from '@/lib/brand'
 
 export const DESKTOP_CONNECTING = 'Connecting to this computer’s screen…'
 
@@ -474,7 +475,7 @@ function DesktopView(props: DesktopViewProps): React.JSX.Element {
               // A remote room never switches on screen sharing for another
               // machine (prd-remote-desktop-tab S1): say where to do it.
               if (err instanceof RoomWriteRefusedError) {
-                const text = `Remote desktop is turned on at that computer itself: on ${err.hostKey}, open Settings → Remote desktop (or run k2 desktop enable there).`
+                const text = `Remote desktop is turned on at that computer itself: on ${err.hostKey}, open Settings → Remote desktop (or run ${CLI_NAME} desktop enable there).`
                 useToastStore.getState().addToast(text, 'error')
                 return
               }

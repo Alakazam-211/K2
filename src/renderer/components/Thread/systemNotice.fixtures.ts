@@ -5,7 +5,7 @@
 // a Thread really receives.
 
 import type { OverlayThreadItem } from '@/components/SessionView/overlayThread'
-import { PRODUCT_NAME } from '@/lib/brand'
+import { CLI_NAME, PRODUCT_NAME } from '@/lib/brand'
 
 const P = PRODUCT_NAME
 
@@ -84,14 +84,14 @@ export const INFO_NOTICES = {
   jobAdded: item(
     'n-job-add',
     5,
-    `${P}: job **nightly-backup** added by ada: every day at 02:00, runs \`scripts/backup.sh\` (timeout 30m). It runs unattended with only the secrets granted to job:nightly-backup. \`k2 job disable nightly-backup\` stops it.`,
+    `${P}: job **nightly-backup** added by ada: every day at 02:00, runs \`scripts/backup.sh\` (timeout 30m). It runs unattended with only the secrets granted to job:nightly-backup. \`${CLI_NAME} job disable nightly-backup\` stops it.`,
     { kind: 'info', code: 'job.added' },
     'k2-job',
   ),
   jobChanged: item(
     'n-job-edit',
     6,
-    `${P}: job **nightly-backup** changed by ada: every day at 03:00, runs \`scripts/backup.sh\` (timeout 30m). It runs unattended with only the secrets granted to job:nightly-backup. \`k2 job disable nightly-backup\` stops it.`,
+    `${P}: job **nightly-backup** changed by ada: every day at 03:00, runs \`scripts/backup.sh\` (timeout 30m). It runs unattended with only the secrets granted to job:nightly-backup. \`${CLI_NAME} job disable nightly-backup\` stops it.`,
     { kind: 'info', code: 'job.changed' },
     'k2-job',
   ),
@@ -99,7 +99,7 @@ export const INFO_NOTICES = {
   testGuest: item(
     'n-guest',
     8,
-    `${P}: ada added the test guest **qa-1** to App **orders** (role tester, for 2 hours). It signs in only through the App's gateway link and ends on its own. \`k2 app user remove qa-1 --test\` removes it now.`,
+    `${P}: ada added the test guest **qa-1** to App **orders** (role tester, for 2 hours). It signs in only through the App's gateway link and ends on its own. \`${CLI_NAME} app user remove qa-1 --test\` removes it now.`,
     { kind: 'info', code: 'app.test_guest_added' },
     'k2-apps',
   ),
@@ -162,7 +162,7 @@ export const MAIL_NOTICE_CARD: OverlayThreadItem = {
     author: { ...SYSTEM_AUTHOR },
     body: `${P}: new mail from ada@example.com`,
     created_at: 1_793_000_780,
-    notice: { source: 'imap', inbox: 'orders', fromAddr: 'ada@example.com', auth: 'pass', subject: 'Invoice', readCommand: 'k2 mail read 7', delivered: true, noticeId: 7 },
+    notice: { source: 'imap', inbox: 'orders', fromAddr: 'ada@example.com', auth: 'pass', subject: 'Invoice', readCommand: `${CLI_NAME} mail read 7`, delivered: true, noticeId: 7 },
     systemNotice: { kind: 'info', code: 'mail.vip' },
   },
 }

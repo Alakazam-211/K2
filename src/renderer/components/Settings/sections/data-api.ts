@@ -6,6 +6,7 @@
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { primaryScope } from '@/kessel/server-scope'
+import { CLI_NAME } from '@/lib/brand'
 
 export interface SqlStatus {
   ok: boolean
@@ -353,7 +354,7 @@ export const SAMPLE_STATUS: SqlStatus = {
   listen: 'localhost',
   port: 5432,
   publishHint:
-    'off-box *.k2.dev: k2 publish subdomain create <label> --target localhost:5432 (port already listening — do not publish run Postgres)',
+    `off-box *.k2.dev: ${CLI_NAME} publish subdomain create <label> --target localhost:5432 (port already listening — do not publish run Postgres)`,
   lastError: null,
 }
 

@@ -33,6 +33,7 @@ import {
   type HireForm,
   type KeyDoor,
 } from './api-keys-api'
+import { CLI_NAME } from '@/lib/brand'
 
 /** The hire-key confirm, in the create form. Touch ID (`local-auth`) exists
  *  only for the owner on a Mac; Linux and Windows confirm with a password
@@ -166,7 +167,7 @@ function confirmProblem(confirm: OwnerConfirm, e: unknown): Problem | null {
   if (e instanceof NoConfirmMethod) {
     return {
       what: 'K2 can’t confirm it’s you on this computer yet.',
-      next: 'There’s no Touch ID or password to confirm with. Set a vault password from a terminal outside K2 (k2 vault confirm-password set), then try again.',
+      next: `There’s no Touch ID or password to confirm with. Set a vault password from a terminal outside K2 (${CLI_NAME} vault confirm-password set), then try again.`,
       detail: null,
     }
   }

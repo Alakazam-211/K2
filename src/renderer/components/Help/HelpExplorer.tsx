@@ -26,6 +26,7 @@ import {
   type GlossaryEntry,
   type SearchResult,
 } from './cli-explorer'
+import { CLI_NAME } from '@/lib/brand'
 
 const MONO = "'MesloLGM Nerd Font', Menlo, Monaco, monospace"
 const SANS = "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', system-ui, sans-serif"
@@ -218,7 +219,7 @@ function NounCard({
       ) : null}
       {!count && !noun.help && tool.id === 'k2' ? (
         <div className="mt-1 text-[11px] text-[var(--color-text-muted)]">
-          Every command: <code style={{ fontFamily: MONO }}>{`k2 help ${noun.noun}`}</code>
+          Every command: <code style={{ fontFamily: MONO }}>{`${CLI_NAME} help ${noun.noun}`}</code>
         </div>
       ) : null}
     </li>
@@ -411,7 +412,7 @@ export default function HelpExplorer({
           <p className="m-0 mt-2 text-[12px] text-[var(--color-text-secondary)]">
             {glossary.status === 'loading'
               ? 'Loading the glossary from K2…'
-              : 'The glossary comes from the K2 server, which did not answer. Commands and k2 study pages still work.'}
+              : `The glossary comes from the K2 server, which did not answer. Commands and ${CLI_NAME} study pages still work.`}
           </p>
         </div>
       )
@@ -431,7 +432,7 @@ export default function HelpExplorer({
           </button>
           <h2 className="m-0 text-[15px] font-semibold text-[var(--color-text-primary)]">{page.title}</h2>
           <div className="mt-1 mb-2">
-            <CodeLine text={set === 'study' ? `k2 study ${page.id}` : `k2 glossary ${page.id}`} />
+            <CodeLine text={set === 'study' ? `${CLI_NAME} study ${page.id}` : `${CLI_NAME} glossary ${page.id}`} />
           </div>
           {set === 'study' ? (
             <pre
@@ -458,12 +459,12 @@ export default function HelpExplorer({
     return (
       <div data-testid={`help-pages-${set}`}>
         <h2 className="m-0 text-[15px] font-semibold text-[var(--color-text-primary)]">
-          {set === 'study' ? 'k2 study' : 'Glossary'}
+          {set === 'study' ? `${CLI_NAME} study` : 'Glossary'}
         </h2>
         <p className="m-0 mt-1 mb-2 text-[12px] leading-[1.5] text-[var(--color-text-secondary)]">
           {set === 'study'
-            ? 'Bounded teaching pages: concepts, not a flag dump. Agents read them with k2 study <topic>.'
-            : 'K2 words, from the K2 server. Agents read them with k2 glossary <term>.'}
+            ? `Bounded teaching pages: concepts, not a flag dump. Agents read them with ${CLI_NAME} study <topic>.`
+            : `K2 words, from the K2 server. Agents read them with ${CLI_NAME} glossary <term>.`}
         </p>
         <ul className="m-0 p-0 list-none">
           {pages.map((p) => (
@@ -648,7 +649,7 @@ export default function HelpExplorer({
               selected={target.kind === 'pages' && target.set === 'study'}
               onClick={() => setTarget({ kind: 'pages', set: 'study' })}
             >
-              k2 study
+              {CLI_NAME} study
             </RailButton>
             <RailButton
               testId="help-rail-glossary"

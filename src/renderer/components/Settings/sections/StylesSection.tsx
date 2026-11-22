@@ -44,6 +44,7 @@ import type { SettingEntry } from '../searchManifest'
 import { splitPage, useSplitPage, SPLIT_PAGE_MIN_PX } from '../controls/split-page'
 import { SaveNote, SettingRow, SettingsGroup, SETTING_LIST_ROW_HOVER } from '../controls/SettingControls'
 import { Button, Input, Segmented, Slider, Tag, cx } from '@/components/ui'
+import { CLI_NAME } from '@/lib/brand'
 
 /** Below this page width (CSS px) the style list goes on top of the shown
  *  style, one scroll (controls/split-page). */
@@ -898,7 +899,7 @@ export function StylesSection(): React.JSX.Element {
                   >
                     <div style={{ color: 'var(--term-fg)' }}>
                       <span style={{ color: 'var(--term-ansi-10)' }}>➜</span>{' '}
-                      <span style={{ color: 'var(--term-ansi-12)' }}>~/k2</span> k2 agent list
+                      <span style={{ color: 'var(--term-ansi-12)' }}>~/k2</span> {CLI_NAME} agent list
                     </div>
                     <div style={{ color: 'var(--term-ansi-2)' }}>✓ appa — ready</div>
                     <div style={{ color: 'var(--term-ansi-3)' }}>● momo — working</div>

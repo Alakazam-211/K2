@@ -24,6 +24,7 @@ import {
   type AgentNoticeRow,
   type NoticeSenderChoice,
 } from './email-notice-api'
+import { CLI_NAME } from '@/lib/brand'
 
 const muted = SETTING_ROW_HINT
 
@@ -151,7 +152,7 @@ export function AgentEmailNoticesRow({ scope, projectId }: { scope: ServerScope;
         <div data-testid="agent-email-notices-confirm" className="mt-2 space-y-2">
           {choices.length === 0 && !row?.sender ? (
             <p className={muted}>
-              No free sender for this workspace yet. Add one first (from your own terminal): k2 notifications email sender
+              No free sender for this workspace yet. Add one first (from your own terminal): {CLI_NAME} notifications email sender
               add notices@your-domain
             </p>
           ) : (

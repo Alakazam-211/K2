@@ -16,7 +16,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui'
-import { PRODUCT_NAME } from '@/lib/brand'
+import { CLI_NAME, PRODUCT_NAME } from '@/lib/brand'
 import { daemonErrorText } from '@/lib/daemon-error'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { AccessSheet, DIALOG_MUTED } from '@/components/Settings/sections/AccessDialogs'
@@ -177,7 +177,7 @@ export function AppsReadyOffer(): React.JSX.Element | null {
         {!offerView && run?.state === 'failed' ? (
           <div data-testid="apps-ready-failed">
             <p className={DIALOG_MUTED} role="alert">
-              The setup stopped: {run.error ?? 'unknown error'}. Nothing was restarted. Run it again, or use k2 app box prepare.
+              The setup stopped: {run.error ?? 'unknown error'}. Nothing was restarted. Run it again, or use {CLI_NAME} app box prepare.
             </p>
             {run.blocking.length ? <BlockingList title="Still to fix:" rows={run.blocking} /> : null}
           </div>

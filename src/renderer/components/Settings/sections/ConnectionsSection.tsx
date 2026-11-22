@@ -117,9 +117,10 @@ import {
   StatusFact,
   type HealthTone,
 } from './ConnectionsParts'
+import { CLI_NAME } from '@/lib/brand'
 
 export const CONNECTIONS_MANIFEST: SettingEntry[] = [
-  { id: 'connections.add', section: 'connections', label: 'Add a server', description: 'Save another K2 server to connect to', keywords: ['server', 'remote', 'connect', 'host', 'add', 'k2 connect', 'address book'] },
+  { id: 'connections.add', section: 'connections', label: 'Add a server', description: 'Save another K2 server to connect to', keywords: ['server', 'remote', 'connect', 'host', 'add', `${CLI_NAME} connect`, 'address book'] },
   { id: 'connections.remember-password', section: 'connections', label: 'Remember password', description: 'Keep a server’s password in this computer’s keychain', keywords: ['token', 'password', 'keychain', 'remember', 'credentials'] },
   { id: 'connections.list', section: 'connections', label: 'Saved servers', description: 'Edit or remove saved K2 servers', keywords: ['servers', 'hosts', 'edit', 'remove', 'list', 'search', 'filter'] },
   {

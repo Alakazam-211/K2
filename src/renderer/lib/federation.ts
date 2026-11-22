@@ -25,6 +25,7 @@ import { useConnectHostStore } from '@/stores/connect-host'
 import { primaryScope } from '@/kessel/server-scope'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { ZONE, ZONE_SUFFIX, boxHost } from '@/lib/hosts'
+import { CLI_NAME } from '@/lib/brand'
 
 /** Trust state of a pinned peer (mirrors `federation::PeerTrust`). */
 export type PeerTrust = 'pending' | 'trusted' | 'blocked'
@@ -727,7 +728,7 @@ async function pairV2(
     const ok = await confirmCode({
       code: rev.sas,
       host,
-      verifyCommand: `k2 fed pair-verify ${pairVerifyToken(rev.reveal)}`,
+      verifyCommand: `${CLI_NAME} fed pair-verify ${pairVerifyToken(rev.reveal)}`,
     })
     if (!ok) {
       throw new Error('Pairing cancelled: the codes were not confirmed. Nothing was trusted.')
@@ -996,7 +997,7 @@ export async function autoPairWithHost(
     const side = !remoteOk && !localOk ? `both servers` : !remoteOk ? `"${host}"` : `this server`
     throw new Error(
       `The pairing did not finish on ${side}: it still shows the older pairing code, or no trust. ` +
-        `Nothing else changed. Pair again; k2 fed peers on each server shows where it stopped.`,
+        `Nothing else changed. Pair again; ${CLI_NAME} fed peers on each server shows where it stopped.`,
     )
   }
 }
@@ -1016,11 +1017,11 @@ export function repairStepsForPeer(peer: FederationPeer, here: string): string[]
   const there = federatedPeerHost(peer) || peerShownLabel(peer)
   return [
     `Easiest: sign in to ${there} in this app (Settings → Connections → Add a server) as its owner or an admin, then click Re-pair again. The app runs every step on both servers.`,
-    `Or with the k2 CLI, an owner on each server: on ${here}, run k2 fed pair-start and send the k2pair1: token to ${there}'s owner.`,
-    `On ${there}: k2 fed pair-join <token>, and send back the k2pair2: token.`,
-    `On ${here}: k2 fed pair-finish <token>. It prints a pairing code and a k2pair3: token for ${there}.`,
-    `On ${there}: k2 fed pair-verify <token>. It prints its pairing code.`,
-    `If the two codes match, each owner runs the k2 fed confirm line their own server printed (within 10 minutes). Both must confirm.`,
+    `Or with the ${CLI_NAME} CLI, an owner on each server: on ${here}, run ${CLI_NAME} fed pair-start and send the k2pair1: token to ${there}'s owner.`,
+    `On ${there}: ${CLI_NAME} fed pair-join <token>, and send back the k2pair2: token.`,
+    `On ${here}: ${CLI_NAME} fed pair-finish <token>. It prints a pairing code and a k2pair3: token for ${there}.`,
+    `On ${there}: ${CLI_NAME} fed pair-verify <token>. It prints its pairing code.`,
+    `If the two codes match, each owner runs the ${CLI_NAME} fed confirm line their own server printed (within 10 minutes). Both must confirm.`,
   ]
 }
 

@@ -15,6 +15,7 @@ import {
   type SecretChoice,
 } from '../../lib/clone-options'
 import { touchIdOrVaultPassword } from '@/lib/desktop-words'
+import { CLI_NAME } from '@/lib/brand'
 
 // Options-phase blocks of the Clone dialog (prd-clone-carries-threads-and-
 // vault-v1 §4.1): "Bring the Thread" (D3, ticked by default, always shown),
@@ -189,7 +190,7 @@ export function EnvFilesBlock({ pull }: { pull: boolean }): React.JSX.Element {
       <p className={`${muted} pl-[22px]`}>
         Their values travel inside the bundle and need {touchIdOrVaultPassword()}. Unticked, they stay behind and
         you re-add them on {pull ? 'this computer' : 'the host'}. Move them into the vault first:{' '}
-        <span className="font-mono">k2 vault import .env</span>
+        <span className="font-mono">{CLI_NAME} vault import .env</span>
       </p>
     </div>
   )

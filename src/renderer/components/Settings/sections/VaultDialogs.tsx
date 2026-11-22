@@ -39,6 +39,7 @@ import {
   whenWords,
   withCurrent,
 } from './vault-copy'
+import { CLI_NAME } from '@/lib/brand'
 
 /** A dropdown with its label above and a hint under it. */
 function Pick({ label, hint, children }: { label: string; hint?: React.ReactNode; children: React.ReactNode }): React.JSX.Element {
@@ -297,7 +298,7 @@ function ConfirmStep({ c, testId, other }: { c: Confirm; testId: string; other?:
       <Callout tone="warn" role="alert" className="type-hint space-y-1" data-testid="vault-no-confirm">
         <p className="font-medium">K2 can’t confirm it’s you on this server yet.</p>
         <p>Set a vault password first. In a terminal outside K2, run:</p>
-        <p className="font-mono select-all">k2 vault confirm-password set</p>
+        <p className="font-mono select-all">{CLI_NAME} vault confirm-password set</p>
         {other ? (
           <>
             <p>{other.text}</p>
@@ -1316,7 +1317,7 @@ export function RecoveryDialog({ onClose, onConfirmed }: { onClose: () => void; 
             then type three of them back.
           </p>
         ) : null}
-        <ConfirmStep c={c} testId="vault-recovery-password" other={{ text: 'Or set up the recovery key there instead:', command: 'k2 vault recovery show-once' }} />
+        <ConfirmStep c={c} testId="vault-recovery-password" other={{ text: 'Or set up the recovery key there instead:', command: `${CLI_NAME} vault recovery show-once` }} />
         {error ? <FailedNote what={error.what} detail={error.detail} next={error.next} /> : null}
       </form>
     )

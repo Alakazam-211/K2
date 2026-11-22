@@ -2,6 +2,7 @@ import React from 'react'
 import type { SettingEntry } from '../searchManifest'
 import { AgentContextDiagram } from './AgentContextDiagram'
 import { Surface } from '@/components/ui'
+import { CLI_NAME } from '@/lib/brand'
 
 // Renamed from "Agent Skills" → "Canonical Agent Flow" (canonical-agents
 // PRD §11). The section is no longer a four-tier "skills shipped to tiers of
@@ -35,7 +36,7 @@ const OPT_IN_SKILLS: { dir: string; label: string; blurb: string }[] = [
     dir: 'workspace-manager',
     label: 'Workspace Manager',
     blurb:
-      'What a manager agent needs to know: its standing orders, the k2 commands, and how to hand off and review work. Turn it on from a manager workspace.',
+      `What a manager agent needs to know: its standing orders, the ${CLI_NAME} commands, and how to hand off and review work. Turn it on from a manager workspace.`,
   },
   {
     dir: 'k2-agent',

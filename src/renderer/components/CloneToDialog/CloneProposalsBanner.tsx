@@ -19,6 +19,7 @@ import { loadWhoami } from '@/lib/shared-whoami'
 import { useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
 import { openableHosts } from '@/lib/voice-chat-only'
 import { denyProposal, fetchOpenProposals, proposerName, type CloneProposal } from '@/lib/clone-proposals'
+import { CLI_NAME } from '@/lib/brand'
 
 /** The workspace part of a Thread address, or null for a non-workspace one. */
 export function proposalWorkspaceOf(addr: string): string | null {
@@ -131,8 +132,8 @@ export function CloneProposalsBanner({ addr, refreshKey }: { addr: string; refre
               {!runnable && (
                 <p className="text-[11px] text-[var(--color-text-muted)]" data-testid="clone-proposal-cli-hint">
                   {p.target === 'here' || !host
-                    ? `Run it from a terminal: k2 clone approve ${p.id}`
-                    : `Open this agent on its own server to review it, or run k2 clone approve ${p.id}`}
+                    ? `Run it from a terminal: ${CLI_NAME} clone approve ${p.id}`
+                    : `Open this agent on its own server to review it, or run ${CLI_NAME} clone approve ${p.id}`}
                 </p>
               )}
             </div>

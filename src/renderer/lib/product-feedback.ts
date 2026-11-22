@@ -9,6 +9,7 @@
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import type { ServerScope } from '@/kessel/server-scope'
+import { CLI_NAME } from '@/lib/brand'
 
 export const PRODUCT_FEEDBACK_FEATURE = 'product-feedback-v1' as const
 /** prd-feedback-screenshot-v1: the server takes one screenshot per feedback. */
@@ -41,7 +42,7 @@ export const DIAGNOSTICS_HINT =
   "Versions, settings that are on, recent errors and the end of K2's log, with passwords, keys and names taken out. You can read all of it first."
 /** The hint at the top of the Send tab (Rosson 2026-11-10): agents can send it too. */
 export const ASK_AGENT_HINT =
-  'Or ask your agent: in its chat, say \u201cSend this issue as feedback to K2\u201d and it sends the feedback to us itself, with k2 send-feedback.'
+  `Or ask your agent: in its chat, say \u201cSend this issue as feedback to K2\u201d and it sends the feedback to us itself, with ${CLI_NAME} send-feedback.`
 export const REMEMBER_LABEL = 'Remember this for my feedback on this server'
 
 export interface FeedbackService {

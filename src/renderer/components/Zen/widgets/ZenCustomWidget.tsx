@@ -55,6 +55,7 @@ import { loadGardenAccessSwitch, useGardenAccessSwitchStore } from '@/lib/zen/ga
 import { ZenGardenHistoryModal } from './ZenGardenHistoryModal'
 import { zenLargeWidgetText } from '@/lib/zen/zen-widget-size'
 import { turnOnZenCore, useZenCoreState, zenCoreOffText, zenWidgetCore } from '@/lib/zen/zen-widget-core'
+import { CLI_NAME } from '@/lib/brand'
 
 /** A source's link, when it's a plain https URL (PRD §12.8: opened in the
  *  system browser by K2, never by the sealed frame). */
@@ -325,7 +326,7 @@ export function ZenCustomWidget({ decl, bridge }: ZenWidgetProps): React.JSX.Ele
   if (!widget) {
     return (
       <Card testId="unreadable">
-        <span>K2 can’t read this widget’s placement. Ask your agent to run k2 zen validate.</span>
+        <span>K2 can’t read this widget’s placement. Ask your agent to run {CLI_NAME} zen validate.</span>
       </Card>
     )
   }

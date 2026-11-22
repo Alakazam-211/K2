@@ -38,6 +38,7 @@ import {
   type Lines,
   type Trends,
 } from './app-resources-api'
+import { CLI_NAME } from '@/lib/brand'
 
 export const APPS_RESOURCES_MANIFEST: SettingEntry[] = [
   {
@@ -45,7 +46,7 @@ export const APPS_RESOURCES_MANIFEST: SettingEntry[] = [
     section: 'skin-access',
     label: 'Disk and memory',
     description: 'Disk used and free against the disk guard, the biggest users, CPU and memory over a day, and what K2 can clean',
-    keywords: ['disk', 'disk guard', 'box usage', 'resources', 'storage', 'free space', 'clean', 'cpu', 'memory', 'ram', 'k2 app resources'],
+    keywords: ['disk', 'disk guard', 'box usage', 'resources', 'storage', 'free space', 'clean', 'cpu', 'memory', 'ram', `${CLI_NAME} app resources`],
     group: 'This server',
   },
 ]

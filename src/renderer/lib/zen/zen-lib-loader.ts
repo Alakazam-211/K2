@@ -25,6 +25,7 @@
 
 import manifestJson from '@shared/zen-lib.json'
 import { zenLibInlineSafe } from './zen-lib-inline'
+import { CLI_NAME } from '@/lib/brand'
 
 /** One file of a library. */
 export interface ZenLibFile {
@@ -155,7 +156,7 @@ export type ZenLibResolvedOne = { entry: ZenLibEntry; warning: string | null } |
 /** What `<id>@<want>` loads (Rust `resolve_one`, rule for rule). */
 export function zenLibResolveOne(id: string, want: string, manifest: ZenLibManifest = ZEN_LIB_MANIFEST): ZenLibResolvedOne {
   const rows = manifest.libs.filter((e) => e.id === id)
-  if (rows.length === 0) return { error: `K2's widget library has no ${id}@${want}; see k2 zen guide libs for what's available` }
+  if (rows.length === 0) return { error: `K2's widget library has no ${id}@${want}; see ${CLI_NAME} zen guide libs for what's available` }
   let warning: string | null = null
   const matched = rows.filter((e) => zenLibVersionMatches(e, want))
   let pick = newest(matched)
@@ -176,7 +177,7 @@ export function zenLibResolveOne(id: string, want: string, manifest: ZenLibManif
         }
       }
       const list = [...rows].sort((a, b) => zenLibVersionCmp(a.version, b.version)).map((e) => `${e.line} (${e.version})`)
-      return { error: `K2 ships ${id} line${list.length === 1 ? '' : 's'} ${list.join(', ')}; this widget asks for ${id}@${want} (k2 zen guide libs)` }
+      return { error: `K2 ships ${id} line${list.length === 1 ? '' : 's'} ${list.join(', ')}; this widget asks for ${id}@${want} (${CLI_NAME} zen guide libs)` }
     }
   }
   const chosen: ZenLibEntry = pick
@@ -205,7 +206,7 @@ export interface ZenLibResolved {
 function parseRef(ref: unknown): { id: string; want: string } | { cdn: { url: string; integrity: string } } | { bad: string } {
   if (typeof ref === 'string') {
     const at = ref.lastIndexOf('@')
-    if (at <= 0 || at === ref.length - 1) return { bad: `'${ref}': name a library as <id>@<line>, like uplot@1 (k2 zen guide libs)` }
+    if (at <= 0 || at === ref.length - 1) return { bad: `'${ref}': name a library as <id>@<line>, like uplot@1 (${CLI_NAME} zen guide libs)` }
     return { id: ref.slice(0, at), want: ref.slice(at + 1) }
   }
   if (ref && typeof ref === 'object' && !Array.isArray(ref)) {
@@ -382,7 +383,7 @@ function errorFor(code: ZenLibErrorCode, ref: ZenLibRef, entry: ZenLibEntry | nu
   const name = entry ? `${entry.title} ${entry.version}` : refLabel(ref)
   const tail = detail ? ` (${detail})` : ''
   const text: Record<ZenLibErrorCode, string> = {
-    unknown_lib: `K2 has no library '${refLabel(ref)}'. See k2 zen guide libs.${tail}`,
+    unknown_lib: `K2 has no library '${refLabel(ref)}'. See ${CLI_NAME} zen guide libs.${tail}`,
     airgapped: `This widget needs ${name}, which K2 downloads on first use. This computer is air-gapped, so K2 won't download it.`,
     fetch_failed: `K2 couldn't load ${name}${tail}.`,
     hash_mismatch: `${name} didn't match its pinned fingerprint, so K2 refused it.`,

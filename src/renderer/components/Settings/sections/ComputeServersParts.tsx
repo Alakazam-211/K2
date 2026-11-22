@@ -39,6 +39,7 @@ import {
   type ServersChangeResult,
   type ShareLimitsJson,
 } from './compute-api'
+import { CLI_NAME } from '@/lib/brand'
 
 const muted = 'text-[var(--color-text-muted)]'
 const secondary = 'text-[var(--color-text-secondary)]'
@@ -569,7 +570,7 @@ function OwnerConfirm({
       </p>
       <p className={`type-hint ${secondary}`} data-testid="compute-owner-key">
         Its key: <span className={`font-mono break-all ${primary}`}>{fp}</span>. Check it matches what {label} shows (controllerFp in{' '}
-        <span className="font-mono">k2 compute nodes --json</span> there) before you approve.
+        <span className="font-mono">{CLI_NAME} compute nodes --json</span> there) before you approve.
       </p>
       <label className={`type-hint ${secondary} flex items-center gap-2`}>
         <Checkbox checked={leave} onChange={(e) => setLeave(e.target.checked)} aria-label="Remove this server from the node" />
@@ -611,7 +612,7 @@ function AddServerForm({
   const [err, setErr] = useState<string | null>(null)
   const submit = async (): Promise<void> => {
     if (!url.trim() || !code.trim()) {
-      setErr('The new server’s address and the CODE.FP its `k2 compute node add` printed')
+      setErr(`The new server’s address and the CODE.FP its \`${CLI_NAME} compute node add\` printed`)
       return
     }
     let forSecs: number | undefined

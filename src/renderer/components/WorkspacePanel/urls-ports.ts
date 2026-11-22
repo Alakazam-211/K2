@@ -1,5 +1,6 @@
 import { thisMachine } from '@/lib/desktop-words'
 import { ZONE } from '@/lib/hosts'
+import { CLI_NAME } from '@/lib/brand'
 // Published drawer + K2 Connect settings — pure derivation logic, split
 // from the components so it's unit-testable without React/DOM.
 //
@@ -116,7 +117,7 @@ export function sortedTargets(
 // local-only / Start-vs-Stop rules are unit-testable without React.
 
 /** Canonical empty-state example — not bare `k2 publish`. */
-export const PUBLISH_RUN_EXAMPLE = 'k2 publish run <name> --cmd "…" --port <n>'
+export const PUBLISH_RUN_EXAMPLE = `${CLI_NAME} publish run <name> --cmd "…" --port <n>`
 
 /** Wire `kind` after tolerant parse. Unknown / missing → `cmd`. */
 export type PublishedServiceKind = 'cmd' | 'skin'
@@ -283,7 +284,7 @@ export function sortedServices(services: readonly PublishedService[]): Published
 export function unattributedHint(count: number): string | null {
   if (count <= 0) return null
   const noun = count === 1 ? '1 nested URL is' : `${count} nested URLs are`
-  return `${noun} not claimed to a workspace — k2 publish subdomain claim <label>`
+  return `${noun} not claimed to a workspace — ${CLI_NAME} publish subdomain claim <label>`
 }
 
 /** Healthy in the details modal = daemon `status === 'running'` (not an HTTP probe). */

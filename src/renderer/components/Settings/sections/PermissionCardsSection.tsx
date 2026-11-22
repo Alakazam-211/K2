@@ -65,6 +65,7 @@ import {
   type PermissionRecent,
   type PermissionViewerRole,
 } from './permission-cards-api'
+import { CLI_NAME } from '@/lib/brand'
 
 export const PERMISSION_CARDS_MANIFEST: SettingEntry[] = [
   {
@@ -74,14 +75,14 @@ export const PERMISSION_CARDS_MANIFEST: SettingEntry[] = [
     beta: true,
     description:
       'Let agents ask, with a card in their Thread, for a setting you would otherwise change in Settings. Owner only; on by default',
-    keywords: ['permission cards', 'permission', 'cards', 'ask', 'request', 'approve', 'allow', 'deny', 'beta', 'k2 permission'],
+    keywords: ['permission cards', 'permission', 'cards', 'ask', 'request', 'approve', 'allow', 'deny', 'beta', `${CLI_NAME} permission`],
   },
   {
     id: 'permission-cards.approvers',
     section: 'permission-cards',
     label: 'Who agents ask',
     description: 'Who gets agents’ cards when an agent names no one: everyone who can answer, or only the people you pick. Owner only',
-    keywords: ['permission cards', 'approvers', 'who agents ask', 'who is asked', 'push', 'k2 permission approvers', '--to'],
+    keywords: ['permission cards', 'approvers', 'who agents ask', 'who is asked', 'push', `${CLI_NAME} permission approvers`, '--to'],
   },
   {
     id: 'permission-cards.agents',

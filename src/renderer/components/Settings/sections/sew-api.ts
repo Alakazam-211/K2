@@ -10,12 +10,12 @@
 // functions as return values only. Nothing here logs, stores or toasts them.
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
-import { PRODUCT_NAME } from '@/lib/brand'
+import { CLI_NAME, PRODUCT_NAME } from '@/lib/brand'
 import { primaryScope } from '@/kessel/server-scope'
 import { readConfirmIdentity, type ConfirmIdentity } from './confirm-password-ui'
 
 /** Every CLI hint names the noun through this (one-line rename). */
-export const SEW_CLI = 'k2 hostchat'
+export const SEW_CLI = `${CLI_NAME} hostchat`
 
 
 // ── wire types ────────────────────────────────────────────────────────────

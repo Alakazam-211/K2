@@ -37,11 +37,12 @@ import { takeZenGardenAsk } from '@/lib/zen/zen-garden-ask'
 import type { ZenWidgetProps } from '../zen-registry'
 import { ZenConversation } from './ZenConversationWidget'
 import { ZenAgentAvatar, ZenWidgetStyles, useZenRows } from './zen-widget-kit'
+import { CLI_NAME } from '@/lib/brand'
 
 export const ZEN_GARDEN_EMPTY_TITLE = 'This Garden is empty.'
 export const ZEN_GARDEN_EMPTY_ASK = 'Ask your agents to add things to this Garden.'
 export const ZEN_NO_LOCAL_AGENTS = 'No agents on this computer yet. Add one from Home.'
-export const ZEN_GARDEN_HINT = '(Use the k2-zen skill: built-in widgets, or your own with k2 zen widget new; check with k2 zen validate.)'
+export const ZEN_GARDEN_HINT = `(Use the k2-zen skill: built-in widgets, or your own with ${CLI_NAME} zen widget new; check with ${CLI_NAME} zen validate.)`
 
 /** The draft Ask my agent puts in the message box (never sent). */
 export function zenGardenAskDraft(garden: { id: string; name: string }): string {

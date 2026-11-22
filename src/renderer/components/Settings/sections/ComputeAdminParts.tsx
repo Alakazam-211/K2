@@ -33,6 +33,7 @@ import {
 } from './compute-admin-api'
 import { touchIdOrPassword } from '@/lib/desktop-words'
 import { confirmPasswordLabel, LoginUsernameField, readConfirmIdentity, type ConfirmIdentity } from './confirm-password-ui'
+import { CLI_NAME } from '@/lib/brand'
 
 const POLL_MS = 5000
 const muted = 'text-[var(--color-text-muted)]'
@@ -162,7 +163,7 @@ function RequestCard({
         return
       }
       setConfirm({ step: 'idle' })
-      setError('No way to confirm here yet. Set a vault password from a terminal outside K2: k2 vault confirm-password set.')
+      setError(`No way to confirm here yet. Set a vault password from a terminal outside K2: ${CLI_NAME} vault confirm-password set.`)
     } catch (e) {
       setConfirm({ step: 'idle' })
       setError(daemonErrorText(e))
@@ -423,7 +424,7 @@ export function NodeAdminPanel({ node, defaultOpen = false }: { node: string; de
             </Button>
           </div>
           <div className={`type-hint ${muted}`}>
-            {view.alertsTo ? `Alerts go to ${view.alertsTo}.` : 'Alerts go to nobody yet: choose a workspace to receive them with the k2 CLI.'} They only fire while this server is awake.
+            {view.alertsTo ? `Alerts go to ${view.alertsTo}.` : `Alerts go to nobody yet: choose a workspace to receive them with the ${CLI_NAME} CLI.`} They only fire while this server is awake.
           </div>
         </>
       ) : null}

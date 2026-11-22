@@ -11,6 +11,7 @@
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { primaryScope, type ServerScope } from '@/kessel/server-scope'
 import { mailErrorInfo } from './email-api'
+import { CLI_NAME } from '@/lib/brand'
 
 /** Which door the viewer came through. */
 export type ForwardViewer = 'staff' | 'person'
@@ -169,13 +170,13 @@ export function isStaffRefusal(err: unknown): boolean {
  *  (the daemon still decides). Staff here = owner or Admin. */
 export function resumeRule(viewer: ForwardViewer, reason: string | null): { can: boolean; why: string | null } {
   if (reason === 'revoked') {
-    return { can: false, why: 'The address pressed Stop, so K2 won’t send there. Only the owner or an Admin can choose it again, and should ask them first (k2 hostmail forward add --restart-stopped).' }
+    return { can: false, why: `The address pressed Stop, so K2 won’t send there. Only the owner or an Admin can choose it again, and should ask them first (${CLI_NAME} hostmail forward add --restart-stopped).` }
   }
   if (reason === 'not_told') {
     return { can: false, why: 'K2 can’t email the address its link to stop this. It goes back on by itself when that email goes.' }
   }
   if (reason === 'upgrade_required') {
-    return { can: false, why: 'Not forwarding: the mail server needs upgrading (k2 hostmail upgrade). It resumes by itself after the upgrade.' }
+    return { can: false, why: `Not forwarding: the mail server needs upgrading (${CLI_NAME} hostmail upgrade). It resumes by itself after the upgrade.` }
   }
   if (reason === 'air_gap' || reason === 'receive_only') {
     return { can: false, why: 'K2 resumes it by itself when that changes.' }

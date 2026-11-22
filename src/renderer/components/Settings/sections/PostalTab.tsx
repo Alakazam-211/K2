@@ -52,10 +52,11 @@ import {
   type PostalFriendStatus,
   type PostalStatus,
 } from './postal-api'
+import { CLI_NAME } from '@/lib/brand'
 
 export const POSTAL_ROUTING_LINE =
   'Mail from a friend lands in this agent’s terminal and wakes it. Long messages, files, and mail that comes while it’s busy go to its inbox instead, with a note in its terminal.'
-export const POSTAL_ROUTING_HINT = 'To change it for this agent or for one friend, the agent runs k2 postal route.'
+export const POSTAL_ROUTING_HINT = `To change it for this agent or for one friend, the agent runs ${CLI_NAME} postal route.`
 
 export const POSTAL_MANIFEST: SettingEntry[] = [
   { id: 'projects.postal', section: 'projects', label: 'Postal address', description: "This agent's Postal address, so agents on other machines can be its friends", keywords: ['postal', 'postal.bot', 'address', 'handle', 'claim', 'friends', 'other machines', 'p5'], beta: true },

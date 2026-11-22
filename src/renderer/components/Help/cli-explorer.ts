@@ -10,6 +10,7 @@
 //   - GET /cli/glossary (+ /cli/glossary/get) — live from the daemon.
 
 import { K2_NODE_BLURBS, K2_NODE_INTRO, K2_EXPLORER_INTRO, K2_NOUN_GROUPS, type K2NounNote } from './k2Nouns'
+import { CLI_NAME, PRODUCT_NAME } from '@/lib/brand'
 
 export interface CliCatalog {
   k2: {
@@ -87,9 +88,9 @@ export interface GlossaryEntry {
   summary: string
 }
 
-/** The daemon glossary predates the rename; show it as K2. */
+/** The daemon glossary predates the rename; show it with this build's names. */
 export function fixK2Name(text: string): string {
-  return text.replace(/\bK2SO\b/g, 'K2').replace(/\bk2so\b/g, 'k2')
+  return text.replace(/\bK2SO\b/g, PRODUCT_NAME).replace(/\bk2so\b/g, CLI_NAME)
 }
 
 export function buildExplorerModel(catalog: CliCatalog): ExplorerModel {
@@ -147,7 +148,7 @@ export function buildExplorerModel(catalog: CliCatalog): ExplorerModel {
 
   return {
     tools: [
-      { id: 'k2', name: 'k2', intro: K2_EXPLORER_INTRO, groups: k2Groups },
+      { id: 'k2', name: CLI_NAME, intro: K2_EXPLORER_INTRO, groups: k2Groups },
       {
         id: 'k2-node',
         name: 'k2-node',
@@ -275,8 +276,8 @@ export function searchExplorer(
     }
   }
   for (const p of model.study) {
-    const s = Math.max(scoreText(q, words, p.title, p.summary, p.body ?? ''), scoreText(q, words, p.id), scoreText(q, words, `k2 study ${p.id}`))
-    if (s) out.push({ key: p.key, kind: 'page', label: p.title, detail: `k2 study ${p.id} · ${p.summary}`, score: s, target: { kind: 'pages', set: 'study', pageId: p.id } })
+    const s = Math.max(scoreText(q, words, p.title, p.summary, p.body ?? ''), scoreText(q, words, p.id), scoreText(q, words, `${CLI_NAME} study ${p.id}`))
+    if (s) out.push({ key: p.key, kind: 'page', label: p.title, detail: `${CLI_NAME} study ${p.id} · ${p.summary}`, score: s, target: { kind: 'pages', set: 'study', pageId: p.id } })
   }
   for (const p of glossary) {
     const s = scoreText(q, words, p.title, p.summary)

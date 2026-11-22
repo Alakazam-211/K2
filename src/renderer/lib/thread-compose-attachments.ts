@@ -16,6 +16,7 @@
 
 import type { ServerScope } from '@/kessel/server-scope'
 import { httpCodeOf } from '@/lib/daemon-http-error'
+import { CLI_NAME } from '@/lib/brand'
 
 /** One file waiting in the message box: a path on the Thread's server. */
 export interface ThreadComposeFile {
@@ -157,7 +158,7 @@ const ATTACHMENT_REFUSALS: Record<string, string> = {
   attachment_outside_workspace:
     "A file isn't inside this agent's workspace. Copy it into the workspace (e.g. out/) and attach it again.",
   attachment_not_a_file: "A file can't be attached: it is missing, or it is a folder.",
-  attachment_secret: 'A file looks like a secret. Secrets travel through the vault (k2 vault), not the Thread.',
+  attachment_secret: `A file looks like a secret. Secrets travel through the vault (${CLI_NAME} vault), not the Thread.`,
 }
 
 /** The refusal of a post with files, in words: the daemon's hint when it

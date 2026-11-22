@@ -11,6 +11,7 @@
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import type { ServerScope } from '@/kessel/server-scope'
+import { CLI_NAME } from '@/lib/brand'
 
 export const SIM_STATUS_ROUTE = 'sim/status'
 export const SIM_DEVICES_ROUTE = 'sim/devices'
@@ -339,10 +340,10 @@ export function offeredPlatforms(lanes: readonly SimLaneStatus[]): SimPlatform[]
  *  prd-ios-on-mac-node-0467-v1 §3.9). Most happen on the Mac, so this is a
  *  list to follow, not a one-click card. */
 export const MAC_NODE_STEPS: readonly string[] = [
-  'On this server: k2 compute node add <name>',
+  `On this server: ${CLI_NAME} compute node add <name>`,
   'On the Mac: install k2-node, Xcode and an iOS Simulator runtime (xcodebuild -downloadPlatform iOS)',
   'On the Mac: sudo k2-node setup --sim',
-  'On this server: k2 compute grant <name> --workspace <workspace>',
+  `On this server: ${CLI_NAME} compute grant <name> --workspace <workspace>`,
 ]
 
 /** What Members and agents see instead of the steps. */

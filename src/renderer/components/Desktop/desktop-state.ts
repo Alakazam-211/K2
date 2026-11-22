@@ -6,6 +6,7 @@
 // Pure: no React, no DOM.
 
 import type { Lane } from './desktop-wire'
+import { CLI_NAME } from '@/lib/brand'
 
 /** The machine's state as `status.state` reports it (even while off). */
 export type MachineState =
@@ -578,7 +579,7 @@ export function askRefusalText(err: unknown, hostKey: string): string {
   const hint = typeof e.message === 'string' ? e.message.trim() : ''
   const atTheMac = 'allow K2 Screen in System Settings → Privacy & Security (Screen & System Audio Recording, and Accessibility)'
   if (code === 'desktop_off') {
-    return `Remote desktop is off on ${hostKey}. Turn it on at that computer itself: Settings → Remote desktop (or run k2 desktop enable there).`
+    return `Remote desktop is off on ${hostKey}. Turn it on at that computer itself: Settings → Remote desktop (or run ${CLI_NAME} desktop enable there).`
   }
   if (code === 'owner_only' || code === 'role_required') return `Only an Owner of ${hostKey} can ask at the Mac.`
   // An older K2 there has no ask route: the person at the Mac does it by hand.

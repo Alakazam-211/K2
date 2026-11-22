@@ -26,6 +26,7 @@
 
 import registry from '@shared/session-event-kinds.json'
 import type { SessionEventMessage } from '@/stores/session-events'
+import { CLI_NAME } from '@/lib/brand'
 
 export type SessionEventClass = 'app' | 'workspace' | 'handshake' | 'inbox' | 'viewing'
 
@@ -67,11 +68,11 @@ export const SESSION_EVENT_ROUTES = {
   session_activity_changed: { class: 'app', app: true, carried: true },
   review_queue_changed: {
     class: 'workspace',
-    ignored: 'The Review Queue modal was deleted in 0.40.31; `k2 review` still emits it for the CLI.',
+    ignored: `The Review Queue modal was deleted in 0.40.31; \`${CLI_NAME} review\` still emits it for the CLI.`,
   },
   review_changed: {
     class: 'workspace',
-    ignored: 'ReviewPanel was deleted in 0.40.31; `k2 review` still emits it for the CLI.',
+    ignored: `ReviewPanel was deleted in 0.40.31; \`${CLI_NAME} review\` still emits it for the CLI.`,
   },
   tunnel_status_changed: { class: 'app', app: true },
   tunnel_subdomains_changed: { class: 'app', app: true },

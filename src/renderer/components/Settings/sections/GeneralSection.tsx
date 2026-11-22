@@ -97,7 +97,7 @@ import { CLI_NAME, PRODUCT_NAME, RELEASES_URL_PREFIX } from '@/lib/brand'
 export const GENERAL_MANIFEST: SettingEntry[] = [
   { id: 'general.app-version', section: 'general', group: 'General', label: `${PRODUCT_NAME} app`, description: `The ${PRODUCT_NAME} version on this computer: check for, download and install updates`, keywords: ['update', 'version', 'check', 'release', 'download', 'install', 'app version'] },
   { id: 'general.auto-update-checks', section: 'general', group: 'General', label: 'Check for updates automatically', description: 'Look for a new version every few hours and say when one is ready. This computer only.', keywords: ['update', 'automatic', 'auto', 'check', 'disable', 'background'] },
-  { id: 'general.cli-version', section: 'general', group: 'General', label: `${CLI_NAME} command`, description: `The ${CLI_NAME} command-line tool for terminals and agents: its version, and installing or updating it`, keywords: ['k2', 'cli', 'command', 'terminal', 'install', 'update', 'path', 'cli version'] },
+  { id: 'general.cli-version', section: 'general', group: 'General', label: `${CLI_NAME} command`, description: `The ${CLI_NAME} command-line tool for terminals and agents: its version, and installing or updating it`, keywords: [CLI_NAME, 'cli', 'command', 'terminal', 'install', 'update', 'path', 'cli version'] },
   { id: 'general.git-tools', section: 'general', group: 'General', label: 'Git', description: "Whether git works on this server. On a Mac without Apple's command line tools, install them in one click (no Xcode needed)", keywords: ['git', 'xcode', 'xcode-select', 'command line tools', 'clt', 'developer tools', 'install', 'apple', 'homebrew', 'apt'] },
   { id: 'general.release-notes', section: 'general', group: 'General', label: 'Release notes', description: "What's new in this version and the ones before it", keywords: ['release notes', 'whats new', 'changelog', 'changes', 'new'] },
   { id: 'general.start-page', section: 'general', group: 'General', label: 'Start page', description: `The page ${PRODUCT_NAME} opens on: Home or Agents. This computer only.`, keywords: ['start', 'startup', 'launch', 'open', 'default page', 'home', 'agents', 'workspaces', 'landing'] },
@@ -114,7 +114,7 @@ export const GENERAL_MANIFEST: SettingEntry[] = [
   { id: 'general.keep-daemon-on-quit', section: 'general', group: 'Server', label: 'Keep server running when the window is closed', description: 'On: the red close button hides the window and agents keep running. Off: it quits everything. Cmd+Q always quits.', keywords: ['daemon', 'server', 'agent', 'companion', 'close', 'red button', 'window', 'hide', 'background', 'persistent'] },
   { id: 'general.agents-survive-restarts', section: 'general', group: 'Server', label: 'Agents keep running through updates and restarts', description: `Agent sessions keep running when ${PRODUCT_NAME} updates, restarts or crashes. On by default. Works on macOS and Linux.`, keywords: ['agents', 'survive', 'restart', 'update', 'crash', 'keep', 'running', 'ptyd', 'session', 'terminal'] },
   { id: 'general.clone-personal-computers', section: 'general', group: 'Server', label: "Allow cloning agents to people's personal computers", description: "When off, Admins and Members can't clone agents from this server to their own computers. Owner only.", keywords: ['clone', 'copy', 'agent', 'workspace', 'personal', 'computer', 'pull', 'permission', 'migrate'] },
-  { id: 'general.k5-cli-beta', section: 'general', group: 'Server', label: 'New k5 command', description: `The ${CLI_NAME} and k5 commands run the new k5 program instead of the shell script. Off by default. Owner only. Not on Windows yet.`, keywords: ['k5', 'k2', 'cli', 'command', 'terminal', 'rust', 'binary', 'script', 'beta', 'new'], beta: true },
+  { id: 'general.k5-cli-beta', section: 'general', group: 'Server', label: 'New k5 command', description: `The ${CLI_NAME} and k5 commands run the new k5 program instead of the shell script. Off by default. Owner only. Not on Windows yet.`, keywords: ['k5', CLI_NAME, 'cli', 'command', 'terminal', 'rust', 'binary', 'script', 'beta', 'new'], beta: true },
   { id: 'general.restart-host', section: 'general', group: 'Server', label: 'Restart connected server', description: "Restart the server you're connected to, not this computer", keywords: ['restart', 'reboot', 'remote', 'host', 'connect', 'server', 'daemon', 'bounce'] },
   { id: 'general.update-host', section: 'general', group: 'Server', label: 'Update connected server', description: "Update the server you're connected to, not this computer", keywords: ['update', 'upgrade', 'remote', 'host', 'connect', 'server', 'daemon', 'version'] },
 ]
@@ -778,7 +778,7 @@ function CLIVersionRow({ primary }: { primary: boolean }): React.JSX.Element {
 
   const below = readError ? (
     <Callout tone="error" role="alert" className="flex items-start justify-between gap-4">
-      <p className="type-hint min-w-0 break-words">Couldn&apos;t read the k2 command&apos;s status: {readError}</p>
+      <p className="type-hint min-w-0 break-words">Couldn&apos;t read the {CLI_NAME} command&apos;s status: {readError}</p>
       <Button className="flex-shrink-0" onClick={() => void checkStatus()}>
         Try again
       </Button>
@@ -787,7 +787,7 @@ function CLIVersionRow({ primary }: { primary: boolean }): React.JSX.Element {
     <>
       <Callout tone="error" role="alert">
         <p className="type-hint break-words">
-          Couldn&apos;t {status?.installed ? 'change' : 'install'} the k2 command: {installError}
+          Couldn&apos;t {status?.installed ? 'change' : 'install'} the {CLI_NAME} command: {installError}
         </p>
       </Callout>
       {extras}

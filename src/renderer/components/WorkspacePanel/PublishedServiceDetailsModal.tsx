@@ -16,6 +16,7 @@ import {
   serviceSkinUiLabel,
   type PublishedService,
 } from './urls-ports'
+import { CLI_NAME } from '@/lib/brand'
 
 interface PublishedServiceDetailsModalProps {
   service: PublishedService
@@ -194,7 +195,7 @@ export function PublishedByoDetailsModal({
           </Field>
           <Field label="Host">{dash(hostLabel)}</Field>
           <p className="text-[10px] text-[var(--color-text-muted)]">
-            Created with <span className="font-mono">k2 publish subdomain create</span>
+            Created with <span className="font-mono">{CLI_NAME} publish subdomain create</span>
             . No <span className="font-mono">publish run</span> process on this row.
           </p>
         </div>

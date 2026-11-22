@@ -65,6 +65,7 @@ import {
   type UnprepPlan,
 } from './apps-server-api'
 import { OPEN_EVENT as APPS_READY_OPEN_EVENT } from '@/components/AppsReadyOffer/apps-ready-api'
+import { CLI_NAME } from '@/lib/brand'
 
 export const APPS_SERVER_MANIFEST: SettingEntry[] = [
   {
@@ -73,7 +74,7 @@ export const APPS_SERVER_MANIFEST: SettingEntry[] = [
     label: 'Apps on this server',
     beta: true,
     description: 'Turn Apps on or off, check and set up this server, and install the App runtime',
-    keywords: ['apps', 'app', 'beta', 'this server', 'doctor', 'prepare', 'box', 'podman', 'engine', 'k2 app doctor', 'setup'],
+    keywords: ['apps', 'app', 'beta', 'this server', 'doctor', 'prepare', 'box', 'podman', 'engine', `${CLI_NAME} app doctor`, 'setup'],
     group: 'This server',
   },
 ]
@@ -640,8 +641,8 @@ const CHECK_DOT: Record<string, DotTone> = { ok: 'ok', warn: 'warn', fail: 'erro
 /** Where a check's fix lives: the button on this page when there is one,
  *  else the daemon's own words for the server. */
 export function fixWords(fix: string): string {
-  if (fix.startsWith('k2 app box prepare')) return 'Fix: Prepare this server, under Set up.'
-  if (fix.startsWith('k2 app engine')) return 'Fix: Install App runtime, under Set up.'
+  if (fix.startsWith(`${CLI_NAME} app box prepare`)) return 'Fix: Prepare this server, under Set up.'
+  if (fix.startsWith(`${CLI_NAME} app engine`)) return 'Fix: Install App runtime, under Set up.'
   return `Fix on the server: ${fix}`
 }
 

@@ -1,6 +1,8 @@
 // View-only Inbox browser helpers (prd-view-only-inbox-browser-v1).
 // Tray = `k2 inbox` packages. Mail = `k2 mail`. Postal is reserved, never fetched.
 
+import { CLI_NAME } from '@/lib/brand'
+
 export const TRAY_SOURCE_ID = 'tray'
 export const MAIL_PAGE_LIMIT = 50
 
@@ -289,8 +291,8 @@ export function chatAboutStampLine(stamp: ChatAboutStamp): string {
 }
 
 export function chatAboutOpenLine(stamp: ChatAboutStamp): string {
-  if (stamp.kind === 'tray') return `Open: k2 inbox read ${stamp.id}`
-  return `Open: k2 mail read ${stamp.id}`
+  if (stamp.kind === 'tray') return `Open: ${CLI_NAME} inbox read ${stamp.id}`
+  return `Open: ${CLI_NAME} mail read ${stamp.id}`
 }
 
 /** Stamp + Open: + blank + note. No body paste, no legacy `[inbox:]`. */

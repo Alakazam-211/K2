@@ -26,6 +26,14 @@
 //! And the manifest `k2 --schema` prints, joined from `cli/src` as the
 //! shell's build joins it (`src/families/schema/join.rs`): writes
 //! `$OUT_DIR/schema.rs` (read by `src/families/schema.rs`).
+//!
+//! The pages and the manifest spell the command as the default brand does
+//! (`src/brand_text.rs`, `SOURCE_NAME`). In a build of a brand with
+//! another command (`K2_BRAND_DIR`, read through the `k2-brand` build
+//! dependency) each page and the manifest are rewritten to that name by
+//! the CLI name rule (`brand_text::rewrite`) and the rewritten copies,
+//! under `$OUT_DIR/text`, are embedded. A default build embeds the files
+//! as they are.
 
 use flate2::write::GzEncoder;
 use flate2::Compression;
@@ -35,6 +43,34 @@ use std::path::{Path, PathBuf};
 
 #[path = "src/families/schema/join.rs"]
 mod schema_join;
+
+#[path = "src/brand_text.rs"]
+mod brand_text;
+
+/// The command's name in this build (the brand file's `[cli] name`) and
+/// the verbs the rewrite reads text by, when it differs from the name the
+/// sources spell; `None` in a default build (nothing is rewritten).
+struct Brand {
+    name: &'static str,
+    verbs: std::collections::BTreeSet<String>,
+}
+
+impl Brand {
+    fn of_this_build(manifest: &Path) -> Option<Brand> {
+        let name = k2_brand::CLI_NAME;
+        if name == brand_text::SOURCE_NAME {
+            return None;
+        }
+        let root = manifest.join("../..");
+        println!("cargo:rerun-if-changed={}", root.join("cli/src").display());
+        let verbs = brand_text::verbs(&root).unwrap_or_else(|e| panic!("the CLI's verbs: {e}"));
+        Some(Brand { name, verbs })
+    }
+
+    fn rewrite(&self, text: &str) -> String {
+        brand_text::rewrite(text, brand_text::SOURCE_NAME, self.name, &self.verbs)
+    }
+}
 
 /// How far into the script the version line may be (prelude.sh puts it
 /// on line 12; k2-client's script check reads 40 lines too).
@@ -89,14 +125,15 @@ fn main() {
     let rs_path = out.join("embedded.rs");
     std::fs::write(&rs_path, rs).unwrap_or_else(|e| panic!("write {}: {e}", rs_path.display()));
 
-    text(&manifest, &out);
-    schema(&manifest, &out);
+    let brand = Brand::of_this_build(&manifest);
+    text(&manifest, &out, brand.as_ref());
+    schema(&manifest, &out, brand.as_ref());
 }
 
 /// `$OUT_DIR/schema.rs`: the body `k2 --schema` prints after its version
 /// line, joined from `cli/src` as `scripts/build-cli.sh` joins it
 /// (`src/families/schema/join.rs`).
-fn schema(manifest: &Path, out: &Path) {
+fn schema(manifest: &Path, out: &Path, brand: Option<&Brand>) {
     let src = manifest.join("../../cli/src");
     for name in ["ORDER", "schema-head.sh", "schema-tail.sh", "schema"] {
         println!("cargo:rerun-if-changed={}", src.join(name).display());
@@ -107,6 +144,10 @@ fn schema(manifest: &Path, out: &Path) {
     };
     let order = read("ORDER").unwrap_or_else(|e| panic!("{e}"));
     let body = schema_join::body(&order, read).unwrap_or_else(|e| panic!("--schema: {e}"));
+    let body = match brand {
+        Some(b) => b.rewrite(&body),
+        None => body,
+    };
     let txt = out.join("schema.txt");
     std::fs::write(&txt, body).unwrap_or_else(|e| panic!("write {}: {e}", txt.display()));
     let lit = txt
@@ -121,14 +162,18 @@ fn schema(manifest: &Path, out: &Path) {
 }
 
 /// `$OUT_DIR/text.rs`: the study and help pages, and the help forms.
-fn text(manifest: &Path, out: &Path) {
+fn text(manifest: &Path, out: &Path, brand: Option<&Brand>) {
     let text_dir = manifest.join("../../cli/text");
     let native = manifest.join("src/help_native.txt");
     println!("cargo:rerun-if-changed={}", text_dir.display());
     println!("cargo:rerun-if-changed={}", native.display());
 
-    let study = pages(&text_dir.join("study"));
-    let help = pages(&text_dir.join("help"));
+    let study = branded(
+        pages(&text_dir.join("study")),
+        brand,
+        &out.join("text/study"),
+    );
+    let help = branded(pages(&text_dir.join("help")), brand, &out.join("text/help"));
     let mut rs = String::new();
     for (name, list) in [("STUDY", &study), ("HELP", &help)] {
         writeln!(rs, "pub static {name}: &[(&str, &str)] = &[").expect("write to a String");
@@ -304,6 +349,32 @@ fn captured(manifest: &Path, file_forms: &[Vec<String>], rs: &mut String) {
         .expect("write to a String");
     }
     rs.push_str("];\n");
+}
+
+/// The pages to embed: in a brand's build, each page rewritten to its
+/// command's name and written under `dir` (`<key>.txt`); else the files
+/// as they are.
+fn branded(
+    list: Vec<(String, PathBuf)>,
+    brand: Option<&Brand>,
+    dir: &Path,
+) -> Vec<(String, PathBuf)> {
+    let Some(brand) = brand else {
+        return list;
+    };
+    list.into_iter()
+        .map(|(key, path)| {
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+            let to = dir.join(format!("{key}.txt"));
+            let parent = to.parent().expect("a page's file has a folder");
+            std::fs::create_dir_all(parent)
+                .unwrap_or_else(|e| panic!("create {}: {e}", parent.display()));
+            std::fs::write(&to, brand.rewrite(&text))
+                .unwrap_or_else(|e| panic!("write {}: {e}", to.display()));
+            (key, to)
+        })
+        .collect()
 }
 
 /// Whether `text` uses only the escapes `src/help_captured.txt` has:

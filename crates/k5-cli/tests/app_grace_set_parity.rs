@@ -857,7 +857,7 @@ fn the_changes_help_never_acts() {
 }
 
 /// The lines name the command and the product by the brand's names (in a
-/// build with `K2_BRAND_DIR=brand/xy` they say `xy` and `XY`), never a
+/// build with `K2_BRAND_DIR=brand/xy` they say `xy` and `Globex Desk`), never a
 /// typed `k2`, `k5` or `K2`.
 #[test]
 fn the_lines_say_the_brand_s_name() {

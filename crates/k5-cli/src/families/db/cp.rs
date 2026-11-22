@@ -1381,7 +1381,7 @@ mod tests {
     }
 
     /// Every name a line prints is the brand's: an xy build says `xy`
-    /// and `XY`, and no line says k2, k5 or K2.
+    /// and `Globex Desk`, and no line says k2, k5 or K2.
     #[test]
     fn the_lines_name_the_brand() {
         use super::super::{parse, Form};

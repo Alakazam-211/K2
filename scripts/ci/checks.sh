@@ -3,7 +3,7 @@
 # the K2 Compute CI gate (scripts/ci/run-checks.sh) runs exactly what
 # GitHub runs (plan-ci-release-on-k2-compute-v1 §3).
 #
-#   scripts/ci/checks.sh web|rust-check|rust-test|audit|all
+#   scripts/ci/checks.sh web|rust-check|rust-test|audit|all|brand-xy
 #
 #   web         packaging tests, bun install, gates, typecheck, vitest,
 #               SDK typecheck, zen widget CLI, vite build   (checks.yml web)
@@ -17,6 +17,11 @@
 #               audit; prd-security-sweep-0464-v1 SS14), and cargo deny:
 #               the root deny.toml against every shipped crate
 #   all         the four, in that order
+#   brand-xy    the CI brand (brand/xy): cargo check with K2_BRAND_DIR,
+#               the k5 binary built for it, and the output judges on what
+#               it prints (scripts/brand/xy-build.sh). Not in `all` yet: it
+#               joins rust-check once its first run on K2 Compute is green
+#               (judge a still finds one help line naming k5).
 #
 # Network: web (bun install) and audit (crates.io for cargo-audit, the
 # osv-scanner release download, the RustSec database and osv.dev) need
@@ -77,6 +82,8 @@ part_web() {
     step "brand gate (no new product or command name, or k2.dev)"; bash scripts/brand-gate.sh
     step "zone gate on broken trees";              bash tests/garden/zone-gate.sh
     step "brand gate on broken trees";             bash tests/garden/brand-gate.sh
+    step "brand output judges on small corpora";   bash tests/garden/brand-output-judges.sh
+    step "ceiling-zero gate on scratch repos";     bash tests/garden/ceiling-zero-gate.sh
     step "private-docs gate";                      bash scripts/private-docs-gate.sh
     step "typecheck:web";                          bun run typecheck:web
     step "vitest";                                 bunx vitest run --reporter=dot
@@ -250,7 +257,8 @@ case "${1:-}" in
     rust-test) part_rust_test ;;
     audit) part_audit ;;
     all) part_web; part_rust_check; part_rust_test; part_audit ;;
-    *) echo "usage: scripts/ci/checks.sh web|rust-check|rust-test|audit|all" >&2; exit 2 ;;
+    brand-xy) step "the xy brand: check, build, output judges"; bash scripts/brand/xy-build.sh ;;
+    *) echo "usage: scripts/ci/checks.sh web|rust-check|rust-test|audit|all|brand-xy" >&2; exit 2 ;;
 esac
 echo ""
 echo "checks: ${1} passed"

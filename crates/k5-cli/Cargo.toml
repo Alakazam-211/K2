@@ -48,10 +48,14 @@ rustls-native-certs = "0.8"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
-# build.rs packs cli/k2 into the binary: gzip, and its BLAKE3.
+# build.rs packs cli/k2 into the binary: gzip, and its BLAKE3. k2-brand
+# gives it the command's name of this build (K2_BRAND_DIR), so a brand's
+# build embeds its pages with its own name (src/brand_text.rs). k2-brand
+# is in the workspace already, so Cargo.lock gains no crate.
 [build-dependencies]
 blake3 = "1"
 flate2 = "1.1.9"
+k2-brand = { path = "../k2-brand" }
 
 # The TLS tests mint a throwaway CA and server certificate at run time, so
 # no key is committed. ring, as the client; the version k2-core uses.

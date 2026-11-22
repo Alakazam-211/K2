@@ -373,7 +373,7 @@ fn settings_answer_as_the_shell_does() {
 }
 
 /// The lines name the command and the product by the brand's names (in a
-/// build with `K2_BRAND_DIR=brand/xy` they say `xy` and `XY`).
+/// build with `K2_BRAND_DIR=brand/xy` they say `xy` and `Globex Desk`).
 #[test]
 fn the_lines_say_the_brand_s_names() {
     let rig = Rig::new("send-feedback", "brand");

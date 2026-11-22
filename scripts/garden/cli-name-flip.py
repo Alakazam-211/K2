@@ -5,8 +5,9 @@ rewrite it to `k5`.
     python3 scripts/garden/cli-name-flip.py                 dry run: counts per class
     python3 scripts/garden/cli-name-flip.py --unsure        the lines it will not touch, for hand review
     python3 scripts/garden/cli-name-flip.py --show CLASS    the lines of one class
-    python3 scripts/garden/cli-name-flip.py --apply --root DIR
+    python3 scripts/garden/cli-name-flip.py --apply --root DIR [--to NAME]
                                                             rewrite DIR/cli/src (text and comments only)
+                                                            to NAME (default k5)
 
     ... --area rust        the same for Rust sources (crates/, src-tauri/src/);
                            the default area is cli
@@ -47,7 +48,9 @@ asserts a sentence has to change with the sentence.
 --apply is for the release that changes the name, and for the test that
 proves the rewrite leaves a script that still parses. It needs --root, so
 it can never run on the tree it lives in by accident; it rewrites `text`
-and `comment` uses to k5 and leaves `kept` and `unsure` alone.
+and `comment` uses to k5 (or to --to NAME, a command name such as a CI
+brand's) and leaves `kept` and `unsure` alone. crates/k5-cli/src/brand_text.rs
+is this rule for printed text, in Rust; its test compares the two.
 """
 import os
 import re
@@ -456,7 +459,7 @@ def collect(root):
     return rows
 
 
-def apply(root, rows):
+def apply(root, rows, to="k5"):
     by_file = {}
     for rel, n, s, e, cls, _ in rows:
         if cls in ("text", "comment"):
@@ -468,7 +471,7 @@ def apply(root, rows):
         for n, s, e in sorted(edits, reverse=True):
             line = lines[n - 1]
             assert line[s:e] == "k2", f"{rel}:{n}: expected k2 at {s}"
-            lines[n - 1] = line[:s] + "k5" + line[e:]
+            lines[n - 1] = line[:s] + to + line[e:]
         with open(path, "w", encoding="utf-8") as f:
             f.write("\n".join(lines))
     return sum(len(v) for v in by_file.values()), len(by_file)
@@ -480,6 +483,7 @@ def main(argv):
     mode = "count"
     show = None
     area = "cli"
+    to = "k5"
     args = list(argv)
     while args:
         a = args.pop(0)
@@ -491,11 +495,13 @@ def main(argv):
             mode = "apply"
         elif a == "--root" and args:
             root = args.pop(0)
+        elif a == "--to" and args and re.fullmatch(r"[a-z][a-z0-9]{1,11}", args[0]):
+            to = args.pop(0)
         elif a == "--area" and args and args[0] in ("cli", "rust"):
             area = args.pop(0)
         else:
             sys.exit("cli-name-flip: usage: cli-name-flip.py [--area cli|rust] [--unsure | --show text|comment|kept|unsure] [--root DIR]\n"
-                     "                      cli-name-flip.py [--area cli|rust] --apply --root DIR")
+                     "                      cli-name-flip.py [--area cli|rust] --apply --root DIR [--to NAME]")
     if mode == "apply":
         if root is None:
             sys.exit("cli-name-flip: --apply needs --root DIR (it never rewrites the tree it runs from by default)")
@@ -512,8 +518,8 @@ def main(argv):
                 print(f"{rel}:{n}: [{why}] {text[:170]}")
         return 0
     if mode == "apply":
-        changed, files = apply(root, rows)
-        print(f"cli-name-flip: rewrote {changed} uses of k2 to k5 in {files} files under {root}/{place}.")
+        changed, files = apply(root, rows, to)
+        print(f"cli-name-flip: rewrote {changed} uses of k2 to {to} in {files} files under {root}/{place}.")
         return 0
     totals = {c: 0 for c in CLASSES}
     for row in rows:

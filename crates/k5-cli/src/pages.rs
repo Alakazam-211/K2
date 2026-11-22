@@ -1208,7 +1208,7 @@ mod tests {
 
     /// [`STUDY_TITLES`] is `_STUDY_TOPIC_IDS` in its order, then
     /// `permissions`, each with `_study_title`'s line (the names the
-    /// brand's: a `K2_BRAND_DIR=brand/xy` build says `xy` and `XY`).
+    /// brand's: a `K2_BRAND_DIR=brand/xy` build says `xy` and `Globex Desk`).
     #[test]
     fn the_study_titles_are_the_shell_s_in_the_brand_s_name() {
         let sh = src("study-index.sh");

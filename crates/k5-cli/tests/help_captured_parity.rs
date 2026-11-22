@@ -23,7 +23,7 @@
 //! the second doesn't ([`a_zen_form_runs_the_garden_hint_first`]).
 //!
 //! The text names the command and the product by the brand: in a build
-//! with `K2_BRAND_DIR=brand/xy` every captured page says `xy` and `XY`
+//! with `K2_BRAND_DIR=brand/xy` every captured page says `xy` and `Globex Desk`
 //! where bash says `k2` and `K2` ([`the_pages_say_the_brand_s_name`],
 //! [`the_card_pages_say_the_brand_s_name`]).
 
@@ -625,7 +625,7 @@ fn says_the_brand(argv: &[String], want: &str, text: &str) {
 }
 
 /// The pages name the command and the product by the brand (in a build
-/// with `K2_BRAND_DIR=brand/xy` they say `xy` and `XY`), never a typed
+/// with `K2_BRAND_DIR=brand/xy` they say `xy` and `Globex Desk`), never a typed
 /// `k2` or `K2` where bash named them.
 #[test]
 fn the_pages_say_the_brand_s_name() {

@@ -290,11 +290,40 @@ pub fn render(text: &str) -> String {
     out
 }
 
+/// The rewrite `build.rs` runs over the pages in a brand's build (by
+/// path there too): the tests below hold the embedded pages to it, and it
+/// to the flip's rule.
+#[cfg(test)]
+#[path = "brand_text.rs"]
+mod brand_text;
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::path::{Path, PathBuf};
+    use std::sync::OnceLock;
+
+    fn root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+
+    /// The CLI's verbs, as `build.rs` reads them for the rewrite.
+    fn verbs() -> &'static BTreeSet<String> {
+        static VERBS: OnceLock<BTreeSet<String>> = OnceLock::new();
+        VERBS.get_or_init(|| brand_text::verbs(&root()).unwrap())
+    }
+
+    /// A page's bytes as this build embeds them: the file's, with the
+    /// command's name rewritten in a brand's build (`K2_BRAND_DIR`).
+    fn as_built(bytes: Vec<u8>) -> Vec<u8> {
+        let name = k2_client::brand::CLI_NAME;
+        if name == brand_text::SOURCE_NAME {
+            return bytes;
+        }
+        let text = String::from_utf8(bytes).expect("a page is UTF-8");
+        brand_text::rewrite(&text, brand_text::SOURCE_NAME, name, verbs()).into_bytes()
+    }
 
     fn text_dir(which: &str) -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -340,7 +369,7 @@ mod tests {
         );
         for (key, bytes) in &disk {
             assert!(
-                embedded[key] == *bytes,
+                embedded[key] == as_built(bytes.clone()),
                 "cli/text/{which}/{key}.txt differs from the embedded copy (a stale build)"
             );
         }
@@ -352,7 +381,8 @@ mod tests {
     }
 
     /// A build that missed a change to cli/text can't pass: the key set is
-    /// the file set, and each page is the file's bytes now.
+    /// the file set, and each page is the file's bytes now (in a brand's
+    /// build, with its command's name, [`as_built`]).
     #[test]
     fn the_embedded_pages_are_the_files_on_disk() {
         same_as_disk(STUDY, "study");
@@ -508,6 +538,94 @@ mod tests {
             assert_eq!(found.owner, crate::route::Owner::Native, "{:?}", f.argv);
             assert!(f.argv.iter().any(|w| *w == "-h" || *w == "--help"));
         }
+    }
+
+    /// The default build embeds the files byte for byte: the default
+    /// brand's command is the name the sources spell.
+    #[test]
+    fn the_sources_spell_the_default_brand_s_command() {
+        let toml = std::fs::read_to_string(root().join("brand/k2/brand.toml")).unwrap();
+        let name = toml
+            .lines()
+            .skip_while(|l| l.trim() != "[cli]")
+            .find_map(|l| l.strip_prefix("name = \""))
+            .and_then(|l| l.strip_suffix('"'))
+            .expect("brand/k2/brand.toml has [cli] name");
+        assert_eq!(name, brand_text::SOURCE_NAME);
+        if k2_client::brand::BRAND_ID == "k2" {
+            assert_eq!(k2_client::brand::CLI_NAME, brand_text::SOURCE_NAME);
+            assert_eq!(as_built(b"Run k2 msg".to_vec()), b"Run k2 msg");
+        }
+    }
+
+    /// The Rust rewrite is the flip's rule: `scripts/garden/cli-name-flip.py
+    /// --apply --to xy` on a copy of `cli/` gives, for every `cli/text`
+    /// page and every schema entries file, what [`brand_text::rewrite`]
+    /// gives for the file. Needs `python3` (every build node has it).
+    #[test]
+    fn the_rewrite_is_the_flip_s_rule() {
+        let tmp = std::env::temp_dir().join(format!(
+            "k5-brand-text-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fn copy(from: &Path, to: &Path) {
+            std::fs::create_dir_all(to).unwrap();
+            for entry in std::fs::read_dir(from).unwrap() {
+                let path = entry.unwrap().path();
+                let dest = to.join(path.file_name().unwrap());
+                if path.is_dir() {
+                    copy(&path, &dest);
+                } else {
+                    std::fs::copy(&path, &dest).unwrap();
+                }
+            }
+        }
+        for part in ["src", "text"] {
+            copy(&root().join("cli").join(part), &tmp.join("cli").join(part));
+        }
+        let run = std::process::Command::new("python3")
+            .arg(root().join("scripts/garden/cli-name-flip.py"))
+            .args(["--apply", "--to", "xy", "--root"])
+            .arg(&tmp)
+            .output()
+            .expect("run python3 scripts/garden/cli-name-flip.py");
+        assert!(
+            run.status.success(),
+            "the flip failed: {}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        let mut files = Vec::new();
+        for (dir, end) in [("cli/text", ".txt"), ("cli/src/schema", ".entries")] {
+            let mut todo = vec![root().join(dir)];
+            while let Some(d) = todo.pop() {
+                for entry in std::fs::read_dir(&d).unwrap() {
+                    let path = entry.unwrap().path();
+                    if path.is_dir() {
+                        todo.push(path);
+                    } else if path.to_str().unwrap().ends_with(end) {
+                        files.push(path.strip_prefix(root()).unwrap().to_path_buf());
+                    }
+                }
+            }
+        }
+        assert!(files.len() > 400, "only {} files", files.len());
+        let mut differ = Vec::new();
+        for rel in &files {
+            let ours = std::fs::read_to_string(root().join(rel)).unwrap();
+            let flip = std::fs::read_to_string(tmp.join(rel)).unwrap();
+            if brand_text::rewrite(&ours, "k2", "xy", verbs()) != flip {
+                differ.push(rel.display().to_string());
+            }
+        }
+        std::fs::remove_dir_all(&tmp).unwrap();
+        assert!(
+            differ.is_empty(),
+            "the rewrite and the flip differ on {differ:?}"
+        );
     }
 
     #[test]

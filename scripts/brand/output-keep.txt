@@ -1,0 +1,71 @@
+# What a brand's build may still print that spells k2 or k5, for judge b of
+# scripts/brand/output-judges.py (read its header). Tab-separated.
+#
+#   keep<TAB><python regex><TAB><who reads it, why it stays in every brand>
+#       A reviewed identifier family. The judge takes out every match of
+#       every keep pattern before it looks for a bare k2 or k5.
+#   debt<TAB><b|c><TAB><the line, exactly>
+#       A line found before the judges existed (wherever the corpus prints
+#       it). Fix the line, then drop the row. A row that matches nothing any
+#       more fails the run.
+#
+# Judge a has no rows here, by K2's ruling: no line may use another name
+# as the command.
+keep	\.k2(?![A-Za-z0-9_])	a dotted name: the home and a workspace's private folder (~/.k2, .k2/), a file suffix (.env.k2), a bundle id (dev.k2.<box>): paths and ids programs read; they move with the home work (tier 2), not with the command
+keep	(?<![A-Za-z0-9_])k2/	a folder named k2 in a path (an App repo's k2/ folder, /etc/k2/, /opt/k2/): a path a program reads
+keep	/k2(?![A-Za-z0-9_])	a path that ends in a folder or user named k2 (/home/k2, a backup folder in an example)
+keep	(?<![A-Za-z0-9_])k2\.dev(?![A-Za-z0-9_-])	our zone and public site: the zone gate (scripts/garden/zone-gate.py) owns it
+keep	(?<![A-Za-z0-9_])k[25]-[a-z0-9][a-z0-9_.-]*	a program, package, unit or crate name (k2-node, k2-root-helper, k2-watch.service): file names an installed copy checks (eval 3.5, asset names)
+keep	@k2/	the App server SDK's package scope (@k2/server): an npm name Apps import
+keep	(?<![A-Za-z0-9_])k2\.[A-Za-z_][A-Za-z0-9_]*	an API name in the App SDK or SQL (k2.asApp, k2.actor_kind): code an App calls, the same in every brand
+keep	(?<![A-Za-z0-9_])cli/k2(?![A-Za-z0-9_])	the bash CLI's path in the repo
+keep	"k2"	a JSON value that is exactly k2 ("tool": "k2", a mode): a stored or wire value (ruling 5)
+keep	\[k2[\] ]	a [k2 ...] log or stamp prefix
+keep	(?<![A-Za-z0-9_])k2:[a-z<]	a Sew, Homes or widget id (k2:<name> too) (k2:owner, k2:workspace:<uuid>): ids other servers parse (eval 3.5)
+keep	(?<![A-Za-z0-9_])k2\|(?=[a-z])|(?<=[a-z|])\|k2(?![A-Za-z0-9_])	a value in a list of choices (--identity k2|standalone, <off|custom|manager|k2>): a stored value (ruling 5)
+keep	\.k2so(?![A-Za-z0-9_])	the retired home and workspace folders (.k2so/), named where a page says what is still read from them
+keep	(?<![A-Za-z0-9_])k2so\.db	the retired database file name, a link the daemon keeps
+#
+# Debt: the lines of cli/text that the CLI name rule does not rewrite (the
+# flip calls them unsure or kept: a value, or prose it cannot read as the
+# command). Step B8 rewords or sorts them; each row then goes.
+debt	b	                                (the repo root, or where you ran k2 from inside it),
+debt	b	Documents: xy store … (same DB). Files: workspace FS. No k2 hostdb.
+debt	b	                                          k2     K2 applies it at your provider's firewall
+debt	b	                                          auto   k2 once an apply was recorded, else owner
+debt	b	         then enable). Default k2; standalone = Sew's own password logins.
+debt	b	                              Who owns the mail certificate (k2 |
+debt	b	tokens on Settings → Language Models → Subs / Tokens, or run k2 from a terminal outside K2.
+debt	b	  terminal), k2 asks for the confirm. Anyone else (an agent, a script, an
+debt	b	                         fingerprints; export again to this box's key (k2
+debt	b	      without one, k2 prints a hint (K2 uses the first line otherwise).
+debt	b	                            k2: K2's own agent (k2so is accepted too)
+debt	b	            k2 object's helpers.
+debt	b	  --mode <mode>           Agent mode: off | custom | manager | k2   (default: custom).
+debt	b	  --mode <mode>           off | custom | manager | k2 ("off" also sets enabled=false)
+debt	b	        where k2 uses the owner's token; a K2 tab sends the tab's passport
+debt	b	  k2: K2 issues, installs and renews it; Stalwart ACME stays Manual —
+debt	b	                         xy hostmail config shows both under forwarding, and k2
+debt	b	Needs the root helper /usr/local/libexec/k2-root-helper (user k2 runs it
+debt	b	printed once. Default --label is k2. POST /cli/mail/app-password.
+debt	b	  --label <s>            Description (default k2)
+debt	b	  k2             The mail host is attached in `xy domain` (role mail) and
+debt	b	other K2 token is in its environment, and a k2 it runs refuses (exit 3)
+debt	b	CALLS WORK ON EVERY LIVE HOST from Sew 0.7.2 ("every App origin" in k2
+debt	b	  k2 for a drain). No row: the request never reached K2 (DNS, the relay,
+debt	b	     or `agent` → `jobs`, since k2 nouns are reserved):
+debt	b	     Agents: exit 3. Do not sudo k2 — that is not an owner passport.
+debt	b	    const k2 = fromEnv()
+debt	b	Sew 0.6.0+: a shorter way, chat for every App user with one chat key (k2
+debt	b	    xy hostchat status: identity k2 (else xy hostchat enable). xy hostchat
+debt	b	          weston --backend=headless --renderer=gl --xwayland --socket=k2-$$ &
+debt	b	          WAYLAND_DISPLAY=k2-$$ ./my-gpu-tests'
+debt	b	    to the job's working dir (the repo root, or where you ran k2 from inside
+debt	b	    keeps your apex mail where it is), publish its records, then k2
+debt	b	      how to get it (k5: Python 3, for a command it hands to the shell CLI).
+debt	b	  Subs / Tokens, or run k2 from a terminal outside K2 (otherwise exit 3,
+debt	b	  k2             The mail host is attached in `xy domain` (role mail) AND
+debt	b	    acme-cert-names   on k2 boxes "Manual (K2 owns and renews this
+debt	b	  when it is self-signed, expired or does not cover the mail host — k2
+debt	b	  K2 pins one. Variant = how people sign in (k2 = K2 logins, standalone =
+debt	b	kit server sets behindK2Front (xy hostchat home shows Sew's version; k2

@@ -708,7 +708,7 @@ fn a_403_on_the_cell_socket_asks_the_version() {
 }
 
 /// The lines name the brand (in a build with `K2_BRAND_DIR=brand/xy` they
-/// say `xy` and `XY`): the usage of a usage error, a kit id's error line,
+/// say `xy` and `Globex Desk`): the usage of a usage error, a kit id's error line,
 /// and the older server's line.
 #[test]
 fn explain_lines_say_the_brand_s_name() {

@@ -1045,7 +1045,7 @@ fn the_local_clock_writes_a_zone() {
 }
 
 /// Every name a line prints is the brand's: a `K2_BRAND_DIR=brand/xy`
-/// build says `xy` and `XY`, and no line says k2, k5 or K2.
+/// build says `xy` and `Globex Desk`, and no line says k2, k5 or K2.
 #[test]
 fn the_lines_name_the_brand() {
     use super::postal;

@@ -1,12 +1,27 @@
 # The xy brand: a stand-in brand for CI, so a build can prove that no name
 # is spelled outside the brand file. Not a product. Alias modes: silent,
 # notice, tombstone.
+#
+# Its product name and its command are unrelated words on purpose: a
+# brand has two names, the product's (prose and screens) and the
+# command's (anything typed or copied), and neither is made from the
+# other. A build that prints one where the other belongs, or "XY" at all,
+# fails the output judges (scripts/brand/output-judges.py).
 id = "xy"
 schema = 1
 
 [names]
-product = "XY"
+product = "Globex Desk"
 
 [cli]
 name = "xy"
 aliases = []
+
+# Packaging values, for the builds that are not cargo (scripts/brand-values.mjs
+# on the packaging branch). Neutral placeholders: example.* and .invalid
+# names nobody owns, so an xy packaging build runs and publishes nothing.
+[package]
+bundle_id = "example.globex.desk"
+update_feed = "https://updates.example.invalid/latest.json"
+desktop_id = "globex-desk"
+gui_binary = "globex-desk"

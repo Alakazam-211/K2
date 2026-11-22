@@ -223,6 +223,15 @@ xshow() { python3 "$FLIP" --root "$X" --show "$1"; }
 xshow kept | grep -q '^cli/text/study/a.txt:3: ' || die "the text file's stamp: $(xshow kept)"; ok
 python3 "$FLIP" --apply --root "$X" | grep -q "rewrote 2 uses of k2 to k5 in 1 files" || die "--apply on the text file"; ok
 [ "$(cat "$X/cli/text/study/a.txt")" = "$(printf 'Run k5 msg <addr> to send.\nExample: eval "$(k5 msg --json)"\n[k2 sidecar] a stamp')" ] || die "the rewritten text file: $(cat "$X/cli/text/study/a.txt")"; ok
+# --to NAME rewrites to another command name (a brand's); a name that is
+# not a command name's shape is refused.
+printf 'Run k2 msg <addr> to send.\n' > "$X/cli/text/study/a.txt"
+python3 "$FLIP" --apply --to xy --root "$X" | grep -q "rewrote 1 uses of k2 to xy in 1 files" || die "--apply --to xy"; ok
+[ "$(cat "$X/cli/text/study/a.txt")" = 'Run xy msg <addr> to send.' ] || die "the --to xy file: $(cat "$X/cli/text/study/a.txt")"; ok
+set +e
+out="$(python3 "$FLIP" --apply --to X-Y --root "$X" 2>&1)"; code=$?
+set -e
+[ "$code" = 1 ] && case "$out" in *"usage: cli-name-flip.py"*) ok ;; *) die "--to X-Y: exit $code: $out" ;; esac
 
 # ── the real parts, rewritten in a copy ─────────────────────────────────
 C="$T/copy"

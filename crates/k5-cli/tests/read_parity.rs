@@ -826,7 +826,7 @@ fn read_on_the_cell_socket_with_no_passport() {
 }
 
 /// The no-owner line names the product by the brand (in a build with
-/// `K2_BRAND_DIR=brand/xy` it says `XY`): on the cell socket with no
+/// `K2_BRAND_DIR=brand/xy` it says `Globex Desk`): on the cell socket with no
 /// passport, after the socket failed.
 #[test]
 fn read_lines_say_the_brand_s_name() {

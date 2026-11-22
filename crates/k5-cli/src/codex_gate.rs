@@ -299,10 +299,7 @@ fn earlier_steps_pass(args: &[OsString], env: &Env) -> bool {
         return false;
     }
     let prelude = offline::shell_pwd(env).and_then(|cwd| offline::prelude(env, &cwd));
-    if !prelude.is_ok_and(|p| p.port && p.token) {
-        return false;
-    }
-    crate::daemon::current().is_ok_and(|s| crate::prelude::gate(&s).is_none())
+    prelude.is_ok_and(|p| p.port && p.token)
 }
 
 /// The page `line` is when the front prints it ([`pages`]): a help form
@@ -440,7 +437,9 @@ pub fn has_shared_server(rows: &str, start: &str) -> bool {
             && (listens
                 || c.contains("--managed-daemon")
                 || c.contains("app-server daemon")
-                || (!par.is_empty() && awk_num(par) == 1 && par.trim().bytes().all(|b| b.is_ascii_digit())))
+                || (!par.is_empty()
+                    && awk_num(par) == 1
+                    && par.trim().bytes().all(|b| b.is_ascii_digit())))
         {
             return true;
         }
@@ -677,8 +676,14 @@ mod tests {
 
     #[test]
     fn off_outside_a_codex_call_or_a_session() {
-        assert_eq!(decide(&args(&["whoami"]), env(&[SOCK, PASS]), never), Decision::Off);
-        assert_eq!(decide(&args(&["whoami"]), env(&[TID, PASS]), never), Decision::Off);
+        assert_eq!(
+            decide(&args(&["whoami"]), env(&[SOCK, PASS]), never),
+            Decision::Off
+        );
+        assert_eq!(
+            decide(&args(&["whoami"]), env(&[TID, PASS]), never),
+            Decision::Off
+        );
         assert_eq!(
             decide(&args(&["whoami"]), env(&[TID, ("K2_PANE_ID", "p")]), never),
             Decision::Off
@@ -688,7 +693,10 @@ mod tests {
             assert_eq!(decide(&args(&["whoami"]), e, never), Decision::Off, "{off}");
         }
         let e = env(&[TID, SOCK, (BIND_SWITCH, "OFF")]);
-        assert!(matches!(decide(&args(&["whoami"]), e, never), Decision::Refuse { .. }));
+        assert!(matches!(
+            decide(&args(&["whoami"]), e, never),
+            Decision::Refuse { .. }
+        ));
     }
 
     #[test]
@@ -699,12 +707,18 @@ mod tests {
         for m in ["sessB", "sess", "sessA.x", ""] {
             let e = env(&[TID, SOCK, PASS, (TAB_MARKER, m)]);
             assert!(
-                matches!(decide(&args(&["whoami"]), e, never), Decision::Refuse { anc: None, .. }),
+                matches!(
+                    decide(&args(&["whoami"]), e, never),
+                    Decision::Refuse { anc: None, .. }
+                ),
                 "{m}"
             );
         }
         let e = env(&[TID, SOCK, ("K2_HOOK_TOKEN", "sessA"), (TAB_MARKER, "sessA")]);
-        assert!(matches!(decide(&args(&["whoami"]), e, never), Decision::Refuse { .. }));
+        assert!(matches!(
+            decide(&args(&["whoami"]), e, never),
+            Decision::Refuse { .. }
+        ));
         let e = env(&[TID, ("K2_PANE_ID", "p"), PASS, (TAB_MARKER, "sessA")]);
         assert_eq!(decide(&args(&["inbox"]), e, walk), Decision::Confirmed);
     }
@@ -712,7 +726,10 @@ mod tests {
     #[test]
     fn the_walk_decides_a_matching_marker() {
         let e = || env(&[TID, SOCK, PASS, (TAB_MARKER, "sessA")]);
-        assert_eq!(decide(&args(&["x"]), e(), || Some(Anc::Blind)), Decision::Blind);
+        assert_eq!(
+            decide(&args(&["x"]), e(), || Some(Anc::Blind)),
+            Decision::Blind
+        );
         assert_eq!(decide(&args(&["x"]), e(), || None), Decision::Unknown);
         for a in [Anc::Shared, Anc::Broken] {
             assert_eq!(
@@ -728,8 +745,23 @@ mod tests {
     #[test]
     fn the_allowed_words_and_a_help_flag() {
         let e = || env(&[TID, SOCK, PASS]);
-        for w in ["help", "--help", "-h", "schema", "--schema", "version", "--version", "-v", "explain", ""] {
-            assert_eq!(decide(&args(&[w, "x"]), e(), never), Decision::Allowed, "{w}");
+        for w in [
+            "help",
+            "--help",
+            "-h",
+            "schema",
+            "--schema",
+            "version",
+            "--version",
+            "-v",
+            "explain",
+            "",
+        ] {
+            assert_eq!(
+                decide(&args(&[w, "x"]), e(), never),
+                Decision::Allowed,
+                "{w}"
+            );
         }
         assert_eq!(decide(&args(&[]), e(), never), Decision::Allowed);
         for kit in ["MPC-1", "mpc-x", "MpCe-2", "mpce-"] {
@@ -743,13 +775,19 @@ mod tests {
             );
         }
         for not_kit in ["MPCX-1", "MPC", "mpce", "xMPC-1"] {
-            assert_eq!(decide(&args(&["explain", not_kit]), e(), never), Decision::Allowed);
+            assert_eq!(
+                decide(&args(&["explain", not_kit]), e(), never),
+                Decision::Allowed
+            );
         }
         assert_eq!(
             decide(&args(&["msg", "--", "--help"]), e(), never),
             Decision::HelpOf("msg".into())
         );
-        assert_eq!(decide(&args(&["whoami", "-h"]), e(), never), Decision::HelpOf("whoami".into()));
+        assert_eq!(
+            decide(&args(&["whoami", "-h"]), e(), never),
+            Decision::HelpOf("whoami".into())
+        );
         assert_eq!(
             decide(&args(&["-x", "--help"]), e(), never),
             Decision::HelpOf("-x".into())
@@ -776,7 +814,10 @@ mod tests {
             p = product_name!(),
             c = cli_name!()
         );
-        assert_eq!(refusal(OsStr::new("whoami"), None), format!("{base}{end}").into_bytes());
+        assert_eq!(
+            refusal(OsStr::new("whoami"), None),
+            format!("{base}{end}").into_bytes()
+        );
         assert_eq!(
             refusal(OsStr::new("whoami"), Some(Anc::Shared)),
             format!(
@@ -798,8 +839,7 @@ mod tests {
     /// product, never K2's (the setting's own name stays).
     #[test]
     fn the_refusal_names_the_brand_s_name() {
-        let t = String::from_utf8(refusal(OsStr::new("whoami"), Some(Anc::Broken)))
-            .expect("UTF-8");
+        let t = String::from_utf8(refusal(OsStr::new("whoami"), Some(Anc::Broken))).expect("UTF-8");
         assert!(t.ends_with(&format!(
             "Help still works here: {} help whoami\n",
             cli_name!()

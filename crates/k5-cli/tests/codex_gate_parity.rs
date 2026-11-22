@@ -20,7 +20,7 @@
 mod common;
 
 use common::parity::{
-    case, nothing, owner_and_port, with_passport, Case, Compare, Rig, Side, OWNER, PASSPORT,
+    case, owner_and_port, with_passport, Case, Compare, Rig, Side, OWNER, PASSPORT,
 };
 
 const REFUSED_HEAD: &str = "Error: this Codex tab was started before this update or outside K2";

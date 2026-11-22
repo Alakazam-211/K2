@@ -413,7 +413,9 @@ if [ "$NEW" != "$CLI_BASH_SOURCE" ]; then
     native "$SOCK" -- who
     # fs is an id tool with no arm: bash's session checks refuse it first.
     handed "$SOCK" -- fs
-    handed "$SOCK" "CODEX_THREAD_ID=t1" -- mail send --help
+    # A Codex call with no tab marker: the Codex tab gate answers a help
+    # flag with `help <first word>` (crates/k5-cli/src/codex_gate.rs).
+    native "$SOCK" "CODEX_THREAD_ID=t1" -- mail send --help
     native "$SOCK" "CODEX_THREAD_ID=t1" -- agent --help
     # An agent's terminal: a passport and its live socket (a bound socket
     # file; nothing needs to listen, the checks only test that it is one).

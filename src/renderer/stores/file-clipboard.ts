@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { formatDropPaths } from '@/lib/drop-payload'
 import { useToastStore } from '@/stores/toast'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export type ClipboardMode = 'copy' | 'cut'
 
@@ -19,7 +20,7 @@ interface FileClipboardState {
 
 /** What the OS clipboard gets when a copy's names can't go as text. */
 export const COPY_AS_TEXT_REFUSAL =
-  "Copied in K2 only: a file name has a line break in it, so it can't be pasted as text."
+  `Copied in ${PRODUCT_NAME} only: a file name has a line break in it, so it can't be pasted as text.`
 
 /** Mirror the in-app file clipboard to the OS clipboard so Cmd+V in
  *  the terminal (or any other native app) pastes the file paths, quoted

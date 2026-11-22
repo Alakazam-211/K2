@@ -54,6 +54,7 @@ import {
   type PairCodeStatus,
   type PairedPhone,
 } from './phone-pairing-api'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** How often the status fallback is read while a code shows. */
 export const PAIR_STATUS_POLL_MS = 3000
@@ -107,7 +108,7 @@ export function QrCode({
 export function PairQr({ url }: { url: string }): React.JSX.Element {
   return (
     <div data-pair-qr="">
-      <QrCode url={url} label="QR code that pairs the K2 phone app" />
+      <QrCode url={url} label={`QR code that pairs the ${PRODUCT_NAME} phone app`} />
     </div>
   )
 }
@@ -342,8 +343,8 @@ function CodePanel({ code, left, onHide }: { code: PairCode; left: number; onHid
             <p className={SETTING_ROW_LABEL}>Scan this with your phone&apos;s camera</p>
             <p className={SETTING_ROW_HINT}>
               {code.pairUrl
-                ? 'Or open the K2 app, tap Pair, and type the code below.'
-                : 'This server has no public address yet, so there is no QR. Open the K2 app, tap Pair, and type the code below.'}{' '}
+                ? `Or open the ${PRODUCT_NAME} app, tap Pair, and type the code below.`
+                : `This server has no public address yet, so there is no QR. Open the ${PRODUCT_NAME} app, tap Pair, and type the code below.`}{' '}
               Pairs as <span className="font-mono">{code.user}</span>.
             </p>
           </div>
@@ -418,7 +419,7 @@ function PairingCards({ p }: { p: Pairing }): React.JSX.Element {
               <p className={SETTING_ROW_LABEL} data-pair-success-text="">
                 Paired {outcome.deviceName} as <span className="font-mono">{outcome.user}</span>
               </p>
-              <p className={SETTING_ROW_HINT}>It&apos;s in Paired phones below and can use K2 now.</p>
+              <p className={SETTING_ROW_HINT}>It&apos;s in Paired phones below and can use {PRODUCT_NAME} now.</p>
             </div>
           </div>
           <Button className="flex-shrink-0" onClick={() => p.setOutcome(null)}>
@@ -499,7 +500,7 @@ function PairingCards({ p }: { p: Pairing }): React.JSX.Element {
         )}
         <SettingRow
           label="Pairing code"
-          hint="A one-time code and QR that sign the K2 app in on your phone. It works once, for 10 minutes."
+          hint={`A one-time code and QR that sign the ${PRODUCT_NAME} app in on your phone. It works once, for 10 minutes.`}
           below={
             p.codeError ? (
               <Callout tone="error" role="alert" className="type-hint space-y-0.5" data-pair-code-error="">
@@ -532,7 +533,7 @@ function PairingCards({ p }: { p: Pairing }): React.JSX.Element {
         </Button>
       }
     >
-      K2 couldn&apos;t read which phones are paired with this server, so it can&apos;t make a code yet.
+      {PRODUCT_NAME} couldn&apos;t read which phones are paired with this server, so it can&apos;t make a code yet.
     </SettingsLoadState>
   ) : undefined
 
@@ -652,7 +653,7 @@ function PairingCards({ p }: { p: Pairing }): React.JSX.Element {
           }
         >
           <p className={DIALOG_MUTED}>
-            It&apos;s signed out of this server right away. To use K2 on it again, pair it with a new code.
+            It&apos;s signed out of this server right away. To use {PRODUCT_NAME} on it again, pair it with a new code.
           </p>
           {removeError && (
             <FailedNote what="Couldn't remove this phone." next="It's still paired. Try again." detail={removeError.hint} />
@@ -762,7 +763,7 @@ function PairingCompact({ p }: { p: Pairing }): React.JSX.Element {
       {code && (
         <div className="space-y-2" data-pair-code="">
           <p className="m-0 type-hint text-[var(--color-text-secondary)]">
-            Scan with the phone&apos;s camera, or type the code on the K2 app&apos;s Pair screen. Pairs as{' '}
+            Scan with the phone&apos;s camera, or type the code on the {PRODUCT_NAME} app&apos;s Pair screen. Pairs as{' '}
             <span className="font-mono">{code.user}</span>.
           </p>
           {code.pairUrl && <PairQr url={code.pairUrl} />}

@@ -114,6 +114,7 @@ import type { ProjectWithWorkspaces } from '@/stores/projects'
 import type { HomeRow } from '@/stores/homes'
 import type { TerminalItemData } from '@/stores/tabs'
 import { seedMember, spawnDaemon, type Spawned } from '@/test-utils/two-daemons.global-setup'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 function env(name: string): string {
   const v = process.env[name]
@@ -369,7 +370,7 @@ describe('the 0.43.2 floor against a real old B (Z5, Z42; T1.3)', () => {
     const copy = roomAccessCopy(entry.access, room.scope.label, version)
     expect(copy.chip).toBe('View only')
     expect(copy.switchLabel).toBe('Switch to Old B')
-    expect(copy.title).toBe(`Old B runs K2 ${version}, which can’t save this room’s tabs safely.`)
+    expect(copy.title).toBe(`Old B runs ${PRODUCT_NAME} ${version}, which can’t save this room’s tabs safely.`)
   })
 
   it('old B below the floor: the row switches the window once, with one toast, and no room reaches old B', async () => {
@@ -389,7 +390,7 @@ describe('the 0.43.2 floor against a real old B (Z5, Z42; T1.3)', () => {
     expect((pickHost.mock.calls[0][0] as ConnectHost).port).toBe(oldB.port)
     expect(peekHostSelect()).toMatchObject({ hostId: 'id-oldb', row: { address: row.address } })
     expect(homeRooms.store.getState().entries[row.address]).toBe(undefined)
-    expect(toasts()).toEqual(['Old B runs K2 0.40.150. It opens by switching this window. Update it to open it here.'])
+    expect(toasts()).toEqual([`Old B runs ${PRODUCT_NAME} 0.40.150. It opens by switching this window. Update it to open it here.`])
     await new Promise((r) => setTimeout(r, 200))
     expect(requestsForRoomOnOldB(mark)).toEqual([])
     expect(useConnectHostStore.getState().activeHost).toBe('local')
@@ -406,7 +407,7 @@ describe('the 0.43.2 floor against a real old B (Z5, Z42; T1.3)', () => {
     const mark = h.requests.length
     expect(openHomeRow(row)).toBe('switching')
     expect(pickHost).toHaveBeenCalledTimes(1)
-    expect(toasts()).toEqual(['Old B runs an older K2. It opens by switching this window. Update it to open it here.'])
+    expect(toasts()).toEqual([`Old B runs an older ${PRODUCT_NAME}. It opens by switching this window. Update it to open it here.`])
     expect(homeRooms.store.getState().entries[row.address]).toBe(undefined)
     expect(requestsForRoomOnOldB(mark)).toEqual([])
   })
@@ -427,7 +428,7 @@ describe('the 0.43.2 floor against a real old B (Z5, Z42; T1.3)', () => {
     expect(homeRooms.store.getState().entries[row.address]).toBe(undefined)
     expect(homeRooms.store.getState().shown).toBe(null)
     expect(peekHostSelect()).toMatchObject({ hostId: 'id-oldb', row: { address: row.address } })
-    expect(toasts()).toEqual(['Old B runs K2 0.40.150. It opens by switching this window. Update it to open it here.'])
+    expect(toasts()).toEqual([`Old B runs ${PRODUCT_NAME} 0.40.150. It opens by switching this window. Update it to open it here.`])
     // Old B answered its boot-status read only: no list, no layout, no socket.
     const toOldB = requestsForRoomOnOldB(mark)
     expect(toOldB).toEqual([])

@@ -6,6 +6,7 @@
 // (permission)".
 
 import type { HireRow } from '@/lib/agent-templates-api'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** A plain name, and the raw path or id it stands for (shown quietly). */
 export interface PlainItem {
@@ -65,7 +66,7 @@ export function hireRowWords(r: Pick<HireRow, 'step' | 'target'>): PlainItem {
       return { what: 'Its folder', raw: r.target }
     case 'register':
       // The folder row above already shows the path.
-      return { what: 'Adds it to your agents in K2' }
+      return { what: `Adds it to your agents in ${PRODUCT_NAME}` }
     case 'role':
     case 'wiki':
     case 'wiki-index':

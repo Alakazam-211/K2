@@ -152,6 +152,7 @@ import { primaryScope } from '@/kessel/server-scope'
 import { clientToCssPx } from '@/lib/app-zoom'
 import { SPLIT_PAGE_MIN_PX } from '@/components/Settings/controls/split-page'
 import { HALVES_MIN_WIDTH, ScrollEdge, halves, useCssWidth } from '@/components/Settings/controls/halves'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export { HALVES_MIN_WIDTH }
 
@@ -1398,7 +1399,7 @@ function defaultViewError(err: unknown, tried: ProjectDefaultView): DefaultViewE
   // JSON-in-the-message shape is read too.
   const code = (err instanceof DaemonHttpError ? err.code : null) ?? daemonErrorInfo(err).code
   if (code === 'forbidden') return { plain: 'Couldn’t change it. Only the owner or an admin can.' }
-  if (code === 'agent_permission_off') return { plain: 'Couldn’t change it. This agent needs Manage K2 projects on.' }
+  if (code === 'agent_permission_off') return { plain: `Couldn’t change it. This agent needs Manage ${PRODUCT_NAME} projects on.` }
   return { reason: errorMessage(err), tried }
 }
 
@@ -1805,7 +1806,7 @@ export function ProjectSettingsDetail({
                   <Swatch
                     color={groupAvatarColor(detail.id)}
                     label="Automatic color"
-                    title="Automatic: a steady color K2 picks for this project"
+                    title={`Automatic: a steady color ${PRODUCT_NAME} picks for this project`}
                     selected={detail.color === null}
                     onClick={() => void saveColor(null)}
                   >
@@ -2549,7 +2550,7 @@ export default function ProjectSettings(): React.JSX.Element {
               testId="project-settings-list-error"
               action={<Button variant="quiet" onClick={retryList}>Try again</Button>}
             >
-              K2 couldn’t read the project list from this server, so nothing is shown here.
+              {PRODUCT_NAME} couldn’t read the project list from this server, so nothing is shown here.
             </SettingsLoadState>
           ) : groups === null ? (
             <SettingsLoadState kind="loading" title="Loading your projects…" testId="project-settings-loading" />

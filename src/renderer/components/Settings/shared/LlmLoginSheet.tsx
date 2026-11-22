@@ -51,6 +51,7 @@ import {
   useLlmAccountsStore,
 } from '@/stores/llm-accounts'
 import { KesselOffer } from '@/components/KesselSheet/KesselOffer'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export type LoginSheetStart =
   /** Add a token: choose the provider here (or start on `tool`) and how. */
@@ -343,7 +344,7 @@ export function LlmLoginSheet({
           <p className="font-medium">
             {display} API token “{keyDone.label}” is saved on {server}.
           </p>
-          {keyDone.tail ? <p data-testid="llm-key-tail">Key ending {keyDone.tail}. K2 never shows the whole key again.</p> : null}
+          {keyDone.tail ? <p data-testid="llm-key-tail">Key ending {keyDone.tail}. {PRODUCT_NAME} never shows the whole key again.</p> : null}
         </Callout>
         <p className={DIALOG_MUTED}>
           {display} bills every chat that uses it per token. To use it, make it the server default on Subs / Tokens,
@@ -540,7 +541,7 @@ export function LlmLoginSheet({
 
         {failed ? (
           <FailedNote
-            what={login.state === 'timed_out' ? 'The sign-in timed out.' : login.state === 'cancelled' ? 'The sign-in was cancelled.' : `K2 couldn’t sign in to ${display}.`}
+            what={login.state === 'timed_out' ? 'The sign-in timed out.' : login.state === 'cancelled' ? 'The sign-in was cancelled.' : `${PRODUCT_NAME} couldn’t sign in to ${display}.`}
             next={
               provider?.apiKeys && !relogin
                 ? 'Nothing was saved. Try again, or paste an API token instead.'
@@ -592,7 +593,7 @@ export function LlmLoginSheet({
   const title = start.kind === 'relogin' ? `Sign “${start.label}” in again` : 'Add a token'
   const intro =
     start.kind === 'relogin'
-      ? `${display} runs its own sign-in on the server. K2 never sees your password.`
+      ? `${display} runs its own sign-in on the server. ${PRODUCT_NAME} never sees your password.`
       : `A subscription or API token your agents can use on ${server}. Adding one doesn’t change the server default.`
 
   return (
@@ -659,7 +660,7 @@ export function LlmLoginSheet({
         ) : null}
         {!relogin && providers.length === 0 ? (
           <p className={DIALOG_MUTED} data-testid="llm-no-providers">
-            This server has no provider K2 can save a token for yet.
+            This server has no provider {PRODUCT_NAME} can save a token for yet.
           </p>
         ) : null}
 
@@ -727,7 +728,7 @@ export function LlmLoginSheet({
                 : 'Open the sign-in page on this device, phone or laptop, then paste back the code it shows.'}
             </p>
             {!relogin ? (
-              <p className={`${DIALOG_MUTED} mt-1`}>{provider.display} runs its own sign-in on the server. K2 never sees your password.</p>
+              <p className={`${DIALOG_MUTED} mt-1`}>{provider.display} runs its own sign-in on the server. {PRODUCT_NAME} never sees your password.</p>
             ) : null}
             {tried && airgapProblem ? (
               <p className="type-hint text-[var(--color-status-error-soft)] mt-1" data-field-problem="">
@@ -741,7 +742,7 @@ export function LlmLoginSheet({
           <Field
             label="API token"
             htmlFor={ids.key}
-            hint={`From your ${provider.display} account. K2 keeps it on this server and never shows it again.`}
+            hint={`From your ${provider.display} account. ${PRODUCT_NAME} keeps it on this server and never shows it again.`}
             problem={tried ? keyProblem : null}
           >
             <div className="flex items-center gap-2">
@@ -765,7 +766,7 @@ export function LlmLoginSheet({
 
         {error ? (
           how === 'key' ? (
-            <FailedNote what="K2 couldn’t add the API token." next="Nothing was saved. Check that you copied the whole token, paste it again, then try again." detail={error} />
+            <FailedNote what={`${PRODUCT_NAME} couldn’t add the API token.`} next="Nothing was saved. Check that you copied the whole token, paste it again, then try again." detail={error} />
           ) : (
             <FailedNote what="The sign-in didn’t start." next="Nothing was saved. Try again in a moment." detail={error} />
           )

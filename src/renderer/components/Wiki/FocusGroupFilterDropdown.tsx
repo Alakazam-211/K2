@@ -7,6 +7,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { floatMaterial } from '@/components/ui/float-material'
 import type { WikiFocusGroup } from './wiki-api'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export type FocusGroupFilterOption = {
   id: string
@@ -136,7 +137,7 @@ export function FocusGroupFilterDropdown({
         type="button"
         onClick={() => setOpen((o) => !o)}
         className="flex items-center gap-1.5 px-2 py-1.5 text-[11px] bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] border border-[var(--color-border)] outline-none cursor-pointer hover:text-[var(--color-text-primary)] transition-colors max-w-[180px]"
-        title="Filter the K2 map by focus group"
+        title={`Filter the ${PRODUCT_NAME} map by focus group`}
       >
         {selected.color && (
           <span

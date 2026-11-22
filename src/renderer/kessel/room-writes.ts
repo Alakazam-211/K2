@@ -26,6 +26,8 @@
 // it uses the ROOM's scope (`room.scope`), never `primaryScope()`.
 
 /** route → why a remote room sends it to its own server. */
+import { PRODUCT_NAME } from '@/lib/brand'
+
 export const ROOM_WRITES: Readonly<Record<string, string>> = Object.freeze({
   // Keep-alive (MS39).
   'projects/activate': 'tells B the room is open, so B does not reap the workspace',
@@ -92,7 +94,7 @@ export const ROOM_WRITES: Readonly<Record<string, string>> = Object.freeze({
   'docs/approve': 'Approve / Decline on a change made for you, in the file tab’s panel on B',
   'docs/lease': 'Take the lock, its renewal while the tab is open, and Release, from the file tab’s panel on B',
   // A live text file in the new editors (E4a) on B: B's kit checks the rights.
-  'docs/use-theirs': 'Use their version after a save outside K2 merged into a live file on B, as one undoable edit',
+  'docs/use-theirs': `Use their version after a save outside ${PRODUCT_NAME} merged into a live file on B, as one undoable edit`,
   'docs/say': 'Ask the person or agent holding part of a live file on B, from its Changes row',
   'fs/upload-binary': 'a file dropped on B’s terminal is uploaded to B',
   'fs/upload-chunk': 'a large file dropped on B’s terminal is uploaded to B',
@@ -186,7 +188,7 @@ export const ROOM_WRITES: Readonly<Record<string, string>> = Object.freeze({
   // whoever is at B; B refuses it while Remote desktop is off there and for
   // anyone but an Owner. Turning sharing on (`desktop/enable`) stays off
   // this list: that is done at B itself.
-  'desktop/ask': 'Ask at the Mac on a Desktop tab re-asks B’s K2 Screen for its macOS permission (Owner on B; refused while B’s switch is off)',
+  'desktop/ask': `Ask at the Mac on a Desktop tab re-asks B’s ${PRODUCT_NAME} Screen for its macOS permission (Owner on B; refused while B’s switch is off)`,
   'desktop/ticket':
     'a Desktop tab watching B gets its 60 s stream ticket from B; B checks this login (Owners and Admins, a Member only with a grant) and that the switch is on',
 })

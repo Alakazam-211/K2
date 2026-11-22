@@ -16,6 +16,7 @@ import {
   type FolderTrustState,
 } from '@/components/Settings/sections/FolderTrustRow'
 import type { ServerScope } from '@/kessel/server-scope'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** States that keep the gate shut: waiting for a person, or "Don't trust". */
 const HOLDING: readonly FolderTrustState[] = ['pending', 'changed', 'undecided', 'denied']
@@ -62,14 +63,14 @@ export function FolderTrustHoldPanel({ hold, inline = false }: { hold: FolderTru
   const canDecide = status.can_decide === true
   const denied = status.state === 'denied'
   const title = denied
-    ? "K2 won't start this chat in this folder"
+    ? `${PRODUCT_NAME} won't start this chat in this folder`
     : canDecide
       ? "This chat can't start until you decide about its folder"
       : "This chat can't start until the owner trusts its folder"
   const line = denied
     ? `${folderTrustLine(status)}.${canDecide ? '' : " Only this server's owner can change that."}`
     : canDecide
-      ? 'K2 found settings in this folder that run commands when the agent starts:'
+      ? `${PRODUCT_NAME} found settings in this folder that run commands when the agent starts:`
       : "Only this server's owner can decide. The chat starts on its own once they do."
   return (
     <div

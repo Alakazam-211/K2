@@ -51,13 +51,14 @@ import {
 import { HealthWord, StatusDot, type HealthTone } from './ConnectionsParts'
 import { ActionNote, readFailure, useActionNote } from './ActionNote'
 import type { SettingEntry } from '../searchManifest'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const REMOTE_DESKTOP_MANIFEST: SettingEntry[] = [
   {
     id: 'remote-desktop.switch',
     section: 'remote-desktop',
     label: 'Remote Desktop',
-    description: "See and drive this computer's screen from another K2 (people only)",
+    description: `See and drive this computer's screen from another ${PRODUCT_NAME} (people only)`,
     keywords: ['remote desktop', 'screen', 'screen sharing', 'vnc', 'control', 'desktop tab', 'k2 screen'],
   },
   {
@@ -141,7 +142,7 @@ export function auditSentence(l: DesktopAuditLine): string {
 
 /** The two macOS permissions as steps a person follows at a glance. */
 export const PERMISSION_STEPS: ReadonlyArray<{ pane: PermissionPane; label: string; hint: string }> = [
-  { pane: 'screen', label: 'Screen Recording', hint: 'Lets K2 Screen show this screen to the people you allow.' },
+  { pane: 'screen', label: 'Screen Recording', hint: `Lets ${PRODUCT_NAME} Screen show this screen to the people you allow.` },
   {
     pane: 'accessibility',
     label: 'Accessibility',
@@ -152,7 +153,7 @@ export const PERMISSION_STEPS: ReadonlyArray<{ pane: PermissionPane; label: stri
 /** After the switch went on: what to do next, in one line. */
 export function turnedOnNote(permission: DesktopPermission | undefined): string {
   if (!permission || permission.step === 'ready') return 'Remote Desktop is on. Owners and Admins can open this screen now.'
-  return 'Remote Desktop is on. Allow K2 Screen in the macOS prompts on this Mac; this page updates by itself.'
+  return `Remote Desktop is on. Allow ${PRODUCT_NAME} Screen in the macOS prompts on this Mac; this page updates by itself.`
 }
 
 function PermissionSteps({
@@ -177,11 +178,11 @@ function PermissionSteps({
   return (
     <div data-testid="remote-desktop-permission" data-step={permission.step}>
       <SettingRow
-        label="Allow K2 Screen on this Mac"
+        label={`Allow ${PRODUCT_NAME} Screen on this Mac`}
         hint={
           <span data-testid="remote-desktop-permission-line">
             {permission.line}
-            {permission.checking ? ' K2 notices by itself when you do.' : ''}
+            {permission.checking ? ` ${PRODUCT_NAME} notices by itself when you do.` : ''}
           </span>
         }
         testId="remote-desktop-permission-head"
@@ -297,7 +298,7 @@ export function RemoteDesktopSection({ scope = primaryScope() }: { scope?: Serve
         <BetaTag />
       </h2>
       <p className={SETTING_ROW_HINT}>
-        Open this computer’s screen in a Desktop tab on another K2, live. For people only: agents can’t use it.
+        Open this computer’s screen in a Desktop tab on another {PRODUCT_NAME}, live. For people only: agents can’t use it.
       </p>
     </header>
   )
@@ -307,7 +308,7 @@ export function RemoteDesktopSection({ scope = primaryScope() }: { scope?: Serve
       <div className={`w-full ${CONTENT_WIDTH} space-y-6 pb-6`}>
         {header}
         <SettingsLoadState kind="empty" title="This server can’t share its screen yet" testId="remote-desktop-unsupported">
-          Update K2 on this computer to use Remote Desktop.
+          Update {PRODUCT_NAME} on this computer to use Remote Desktop.
         </SettingsLoadState>
       </div>
     )
@@ -336,7 +337,7 @@ export function RemoteDesktopSection({ scope = primaryScope() }: { scope?: Serve
               </Button>
             }
           >
-            K2 couldn’t read this computer’s screen-sharing settings.
+            {PRODUCT_NAME} couldn’t read this computer’s screen-sharing settings.
             {fail.shape ? <span className="block mt-1 text-[var(--color-text-muted)]">Details: {fail.shape}.</span> : null}
           </SettingsLoadState>
         ) : (
@@ -421,7 +422,7 @@ export function RemoteDesktopSection({ scope = primaryScope() }: { scope?: Serve
     void act(
       () => askDesktop(scope, { open: pane }),
       permissionNote,
-      `Opened System Settings on ${machine}. Allow K2 Screen there.`,
+      `Opened System Settings on ${machine}. Allow ${PRODUCT_NAME} Screen there.`,
       'Couldn’t open System Settings.',
     )
   }
@@ -500,7 +501,7 @@ export function RemoteDesktopSection({ scope = primaryScope() }: { scope?: Serve
         <>
           <SettingsGroup
             title="Hidden apps"
-            hint={status.backend === 'linux' ? 'On Linux, K2 can’t hide apps from the picture.' : 'Windows of these apps never show in the picture, so passwords and wallets stay private.'}
+            hint={status.backend === 'linux' ? `On Linux, ${PRODUCT_NAME} can’t hide apps from the picture.` : 'Windows of these apps never show in the picture, so passwords and wallets stay private.'}
             card
             testId="remote-desktop-hidden"
           >
@@ -544,7 +545,7 @@ export function RemoteDesktopSection({ scope = primaryScope() }: { scope?: Serve
           >
             <SettingRow
               label="Let a Member watch"
-              hint="Their K2 username on this server."
+              hint={`Their ${PRODUCT_NAME} username on this server.`}
               testId="remote-desktop-grant-row"
               below={grantNote.note ? <ActionNote note={grantNote.note} testId="remote-desktop-grant-note" /> : undefined}
             >

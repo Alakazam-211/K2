@@ -16,6 +16,7 @@
 //   secret.
 
 import type { OverlayThreadItem } from '@/components/SessionView/overlayThread'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** Is this item a secret card K2's sheet can draw? */
 export function isZenSecretItem(item: OverlayThreadItem | null | undefined): boolean {
@@ -57,9 +58,9 @@ export function createZenSecretSheet(deps: ZenSecretSheetDeps): ZenSecretSheet {
         return { ok: false, code: 'failed', message: 'That secret card isn’t waiting for an answer any more.' }
       }
       if (!deps.pressed()) {
-        return { ok: false, code: 'failed', message: 'K2 opens a secret card only just after the person clicks in the widget.' }
+        return { ok: false, code: 'failed', message: `${PRODUCT_NAME} opens a secret card only just after the person clicks in the widget.` }
       }
-      if (open) return { ok: false, code: 'rate_limited', message: 'K2 is already showing a secret card.' }
+      if (open) return { ok: false, code: 'rate_limited', message: `${PRODUCT_NAME} is already showing a secret card.` }
       open = true
       try {
         await deps.show({ address, cardId })

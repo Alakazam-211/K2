@@ -11,9 +11,10 @@
 import { StateEffect, StateField, type EditorState, type Extension, type Range } from '@codemirror/state'
 import { Decoration, EditorView, WidgetType, type DecorationSet } from '@codemirror/view'
 import type { KeptPair } from './merge3'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const KEPT_YOURS = 'Kept both · yours'
-export const KEPT_THEIRS = 'Kept both · saved outside K2'
+export const KEPT_THEIRS = `Kept both · saved outside ${PRODUCT_NAME}`
 
 class KeptTag extends WidgetType {
   constructor(readonly label: string) {

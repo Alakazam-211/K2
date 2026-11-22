@@ -18,6 +18,7 @@
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { zenLocalScope } from './zen-api'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** The longest link `k2.open` takes (= the daemon's `links::MAX_URL_CHARS`). */
 export const ZEN_LINK_MAX_CHARS = 2048
@@ -42,8 +43,8 @@ export function zenLinkTarget(raw: unknown): ZenLinkTarget | string {
   } catch {
     return 'that isn’t a full http or https link'
   }
-  if (u.protocol !== 'http:' && u.protocol !== 'https:') return 'K2 opens only http and https links'
-  if (u.username || u.password) return 'K2 never opens a link with a user name or password in it'
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return `${PRODUCT_NAME} opens only http and https links`
+  if (u.username || u.password) return `${PRODUCT_NAME} never opens a link with a user name or password in it`
   if (!u.hostname) return 'the link has no host'
   // `URL.origin` lower-cases the host and drops a default port, as the
   // daemon's `links::site_of` does.

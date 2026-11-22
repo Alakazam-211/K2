@@ -20,6 +20,7 @@
 
 import { FEATURES, gte } from '@/lib/server-capabilities'
 import type { PoolBoot } from '@/lib/host-pool'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** The oldest K2 that opens in place (Q5). Below it the row switches the
  *  window. Same number as the room's own `version-too-old` banner. */
@@ -46,6 +47,6 @@ export function homeRoomVerdict(boot: PoolBoot | null | undefined): HomeRoomVerd
 
 /** The toast for a server below the floor. */
 export function oldServerToastText(serverLabel: string, version: string | null): string {
-  const runs = version === null ? 'an older K2' : `K2 ${version}`
+  const runs = version === null ? `an older ${PRODUCT_NAME}` : `${PRODUCT_NAME} ${version}`
   return `${serverLabel} runs ${runs}. It opens by switching this window. Update it to open it here.`
 }

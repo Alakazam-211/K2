@@ -71,6 +71,7 @@ import {
   chamferCutFor,
   chamferVars,
 } from './chamfer'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 // The square Style's chamfers live in ./chamfer (the cards use them too).
 export {
@@ -861,7 +862,7 @@ export const ThreadBubble = memo(function ThreadBubble({
             // that does nothing visible reads as broken (2026-11-05).
             const shown = (err: unknown): void => {
               console.warn('[thread] answer failed:', err)
-              setPickError(daemonErrorText(err) || 'K2 couldn’t record that answer.')
+              setPickError(daemonErrorText(err) || `${PRODUCT_NAME} couldn’t record that answer.`)
             }
             setPickError(null)
             try {

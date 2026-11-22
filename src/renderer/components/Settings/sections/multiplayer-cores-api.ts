@@ -16,6 +16,7 @@
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { primaryScope, type ServerScope } from '@/kessel/server-scope'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** What is open live on one core right now. `paths`: at most 5,
  *  workspace-relative, only the caller's own readable ones. */
@@ -282,7 +283,7 @@ export function turnOffMessage(open: DocCoreOpen): string {
   const are = open.files === 1 ? 'is' : 'are'
   return (
     `${plural(open.files, 'file', 'files')} ${are} open live${pathsSuffix(open.paths)}. ` +
-    'K2 writes every change to disk, closes them, and they reopen the usual way. Their history stays.'
+    `${PRODUCT_NAME} writes every change to disk, closes them, and they reopen the usual way. Their history stays.`
   )
 }
 
@@ -291,6 +292,6 @@ export function failedWriteBackLine(core: Pick<DocCore, 'id' | 'name' | 'descrip
   const kind = plainCore(core).sentence
   return (
     `${f.path} couldn't be written when multiplayer was turned off for ${kind} (${f.error}). ` +
-    `Its last changes are kept in K2's history, and turning multiplayer on again for ${kind} writes them.`
+    `Its last changes are kept in ${PRODUCT_NAME}'s history, and turning multiplayer on again for ${kind} writes them.`
   )
 }

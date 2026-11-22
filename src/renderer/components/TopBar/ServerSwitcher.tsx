@@ -44,6 +44,7 @@ import { K2_ICON_PX, ServerIcon } from '@/components/icons/K2Icons'
 import { statusColor } from './server-status'
 import { openableHosts } from '@/lib/voice-chat-only'
 import { TRAFFIC_LIGHT_CLUSTER_GAP_PX } from '@/lib/desktop-chrome'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** Address shown under a saved host in the dropdown. Omit default
  *  https port 443 (`rosson.k2.dev`, not `rosson.k2.dev:443`). LAN /
@@ -119,7 +120,7 @@ export function hostIndicator(
       case 'wedged':
         return {
           color: '#f85149',
-          title: 'Connection is stuck at the system network layer — restart K2 to clear it',
+          title: `Connection is stuck at the system network layer — restart ${PRODUCT_NAME} to clear it`,
         }
       case 'connected':
         break // fall through to the plain connection status

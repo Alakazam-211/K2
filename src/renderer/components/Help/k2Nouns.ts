@@ -35,7 +35,7 @@ export interface K2NounGroup {
 }
 
 export const K2_EXPLORER_INTRO =
-  `A workspace is an agent. In a K2 terminal you (or the agent) run \`${CLI_NAME} <noun> …\`.`
+  `A workspace is an agent. In a ${PRODUCT_NAME} terminal you (or the agent) run \`${CLI_NAME} <noun> …\`.`
 
 export const K2_NOUN_GROUPS: K2NounGroup[] = [
   {
@@ -55,7 +55,7 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
       },
       {
         noun: 'voice',
-        blurb: 'Preview: voice rooms on this server. See who is in them; the owner and Admins change and moderate them. People talk from the K2 app.',
+        blurb: `Preview: voice rooms on this server. See who is in them; the owner and Admins change and moderate them. People talk from the ${PRODUCT_NAME} app.`,
         example: `${CLI_NAME} voice rooms`,
       },
       {
@@ -98,7 +98,7 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
       { noun: 'review', blurb: "Approve, reject or comment on an agent's proposed work.", example: `${CLI_NAME} review approve sales` },
       {
         noun: 'approve',
-        blurb: 'Ask a person to approve exact bytes on their phone (Face ID); they sign there, K2 only carries it.',
+        blurb: `Ask a person to approve exact bytes on their phone (Face ID); they sign there, ${PRODUCT_NAME} only carries it.`,
         example: `${CLI_NAME} approve request --payload p.bin --wait --out approval.json`,
       },
       {
@@ -192,7 +192,7 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
       },
       {
         noun: 'desktop',
-        blurb: "See and control this computer's screen from another K2 window (Owners and Admins; off until turned on).",
+        blurb: `See and control this computer's screen from another ${PRODUCT_NAME} window (Owners and Admins; off until turned on).`,
         example: `${CLI_NAME} desktop status`,
       },
       { noun: 'commit', blurb: 'AI-assisted commit (`--merge` to merge too).' },
@@ -275,7 +275,7 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
     id: 'server',
     title: 'Server',
     items: [
-      { noun: 'daemon', blurb: 'Status, start/stop and logs of the K2 daemon.', example: `${CLI_NAME} daemon status` },
+      { noun: 'daemon', blurb: `Status, start/stop and logs of the ${PRODUCT_NAME} daemon.`, example: `${CLI_NAME} daemon status` },
       { noun: 'settings', blurb: 'Read/update daemon and workspace settings.', example: `${CLI_NAME} settings` },
       { noun: 'setup', blurb: 'Your setup list on this server: what is done, what is left.', example: `${CLI_NAME} setup` },
       { noun: 'push', blurb: "The phones that get this server's pushes, and encrypted pushes.", example: `${CLI_NAME} push devices` },
@@ -291,7 +291,7 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
         example: `${CLI_NAME} hostchat status`,
         note: 'linux-sidecar',
       },
-      { noun: 'root-helper', blurb: "K2's one root door on Linux: status and update.", example: `${CLI_NAME} root-helper status` },
+      { noun: 'root-helper', blurb: `${PRODUCT_NAME}'s one root door on Linux: status and update.`, example: `${CLI_NAME} root-helper status` },
       { noun: 'git-tools', blurb: "Is git usable here: install Apple's command line tools, or how to install git on Linux.", example: `${CLI_NAME} git-tools` },
       { noun: 'onboarding', blurb: 'First launch: adopt or create workspaces.' },
     ],
@@ -304,10 +304,10 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
       { noun: 'explain', blurb: 'What an App refusal id means, its fix and who fixes it.', example: `${CLI_NAME} explain apps_manage_off` },
       {
         noun: 'send-feedback',
-        blurb: 'Tell Alakazam Labs, who make K2, about K2 itself: a bug or an idea (not your human: that is tickets).',
+        blurb: `Tell Alakazam Labs, who make ${PRODUCT_NAME}, about ${PRODUCT_NAME} itself: a bug or an idea (not your human: that is tickets).`,
         example: `${CLI_NAME} send-feedback "<text>" --category bug`,
       },
-      { noun: 'glossary', blurb: 'Define a K2 term.', example: `${CLI_NAME} glossary inbox` },
+      { noun: 'glossary', blurb: `Define a ${PRODUCT_NAME} term.`, example: `${CLI_NAME} glossary inbox` },
       { noun: 'help', blurb: 'Daily verbs; `--advanced` for the power-user ones.', example: `${CLI_NAME} help --advanced` },
       { noun: 'whats-new', blurb: 'Release notes.' },
       { noun: 'version', blurb: 'CLI version.', example: `${CLI_NAME} version` },
@@ -330,7 +330,7 @@ export const K2_NODE_BLURBS: Record<string, string> = {
   setup: 'Install the node (root, once).',
   uninstall: 'Remove the node (root).',
   run: 'Run the node in the foreground.',
-  enroll: 'Join a K2 server as one of its compute nodes.',
+  enroll: `Join a ${PRODUCT_NAME} server as one of its compute nodes.`,
   request: 'Ask the running node to enroll itself (machine owner).',
   tools: 'Install or list toolchains for jobs (node, python, rust, …).',
   packages: 'Which system packages jobs may install.',
@@ -340,10 +340,10 @@ export const K2_NODE_BLURBS: Record<string, string> = {
   resume: 'Take jobs again.',
   policy: "Show or set the node's policy.",
   'install-files': 'Installer: write the service files.',
-  'check-home': 'Installer: refuse a home that runs K2.',
+  'check-home': `Installer: refuse a home that runs ${PRODUCT_NAME}.`,
   version: 'Node version.',
   admin: 'Remote admin level, audit chain and the root executor.',
-  servers: 'The K2 servers this node serves: add, limits, pause, revoke (node sharing).',
+  servers: `The ${PRODUCT_NAME} servers this node serves: add, limits, pause, revoke (node sharing).`,
   sim: "iPhones on this Mac (the iOS Simulator) for one of your own servers: turn on or off, or see what's set up.",
   gc: "Free disk now: ended jobs' folders and idle build caches (machine owner).",
   'wall-probe': 'Tests only: what a walled job on this node can reach.',

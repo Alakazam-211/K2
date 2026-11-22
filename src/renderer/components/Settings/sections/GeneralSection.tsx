@@ -195,7 +195,7 @@ export function GeneralSection(): React.JSX.Element {
         <div className="min-w-0">
           <h2 className="type-title text-[var(--color-text-primary)]">General</h2>
           <p className="type-hint text-[var(--color-text-secondary)] mt-0.5">
-            Updates and preferences for K2 on this computer, and the server it runs.
+            Updates and preferences for {PRODUCT_NAME} on this computer, and the server it runs.
           </p>
         </div>
 
@@ -256,7 +256,7 @@ function GeneralTab({ isRemote }: { isRemote: boolean }): React.JSX.Element {
   const updateOffered = webFeatures.appUpdater && (updateStatus === 'available' || updateStatus === 'ready')
   return (
     <>
-      <SettingsGroup title="K2" card>
+      <SettingsGroup title={PRODUCT_NAME} card>
         <AppVersionRow isRemote={isRemote} />
         {webFeatures.appUpdater && <AutoUpdateChecksRow />}
         <CLIVersionRow primary={!updateOffered} />
@@ -509,7 +509,7 @@ function AppVersionRow({ isRemote }: { isRemote: boolean }): React.JSX.Element {
       settingId="general.app-version"
       label={
         <span className="flex items-center gap-2 min-w-0">
-          <span>K2 app</span>
+          <span>{PRODUCT_NAME} app</span>
           {isRemote && (
             <Tag tone="neutral" title={`The ${PRODUCT_NAME} version on this computer. The connected server's version is under Connected server.`}>
               This computer
@@ -565,7 +565,7 @@ function AutoUpdateChecksRow(): React.JSX.Element {
       }
     >
       <div className={SETTING_ROW_LABEL}>Check for updates automatically</div>
-      <div className={SETTING_ROW_HINT}>Every few hours. K2 tells you when a new version is ready.</div>
+      <div className={SETTING_ROW_HINT}>Every few hours. {PRODUCT_NAME} tells you when a new version is ready.</div>
       <SaveError state={save.state} />
     </SettingSwitchRow>
   )
@@ -1166,7 +1166,7 @@ function DaemonRow(): React.JSX.Element {
                 {/* The raw reason ("connection refused") stays on hover for
                     troubleshooting; the sentence says it plainly. */}
                 <p className="type-hint break-words" title={status.reason || undefined}>
-                  The K2 server is installed but isn&apos;t answering. Restart it; if it still doesn&apos;t answer, the
+                  The {PRODUCT_NAME} server is installed but isn&apos;t answering. Restart it; if it still doesn&apos;t answer, the
                   log says why.
                 </p>
               </Callout>

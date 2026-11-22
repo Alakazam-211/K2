@@ -20,6 +20,7 @@ import {
 import { Button, Callout } from '@/components/ui'
 import { SettingsGroup, SettingsLoadState } from '../controls/SettingControls'
 import { ConnectionRow, Facts, ProblemNote, ServerAddress, StatusDot, StatusFact } from './ConnectionsParts'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** Why a gone agent stopped working, in plain words. */
 function goneLine(host: string): string {
@@ -131,7 +132,7 @@ export function FederationOverview({
               detail={loadError}
               action={<Button onClick={() => void reload()}>Try again</Button>}
             >
-              K2 couldn’t read this computer’s workspaces.
+              {PRODUCT_NAME} couldn’t read this computer’s workspaces.
             </SettingsLoadState>
           ) : conns.length === 0 ? (
             <SettingsLoadState kind="empty" title="No agents connected yet">

@@ -12,6 +12,7 @@ import { useEffect, useRef } from 'react'
 import type { ZenWorkChange } from '@/lib/zen/zen-custom-work'
 import { zenButtonStyle } from './ZenOverlay'
 import { ZEN_SHEET_TITLE_STYLE, ZenSheet } from './ZenSheet'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 const muted: React.CSSProperties = { color: 'var(--zen-text-muted)' }
 const mono: React.CSSProperties = { fontFamily: 'var(--zen-font-mono, ui-monospace, monospace)', fontSize: 11 }
@@ -85,7 +86,7 @@ export function ZenWorkSheet({ change, widget, onDone }: ZenWorkSheetProps): Rea
       )}
       {change.kind === 'settle' && (
         <p style={muted} data-testid="zen-work-settle">
-          K2 stops the agent and removes its worktree {str(change.worktree) && <span style={mono}>{str(change.worktree)}</span>}
+          {PRODUCT_NAME} stops the agent and removes its worktree {str(change.worktree) && <span style={mono}>{str(change.worktree)}</span>}
           {change.discard === true
             ? `: its ${str(change.unlanded) || '0'} commit(s) that aren’t landed are thrown away, and uncommitted files go to the Trash.`
             : ' and deletes its branch (every commit is landed).'}{' '}
@@ -94,7 +95,7 @@ export function ZenWorkSheet({ change, widget, onDone }: ZenWorkSheetProps): Rea
       )}
       {change.kind === 'end' && (
         <p style={muted} data-testid="zen-work-end">
-          K2 ends the agent’s process now, even mid-turn. Its tab, transcript and Thread stay, so it can start again
+          {PRODUCT_NAME} ends the agent’s process now, even mid-turn. Its tab, transcript and Thread stay, so it can start again
           {str(change.worktree) ? (
             <>
               {' '}

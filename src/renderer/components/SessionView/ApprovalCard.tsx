@@ -6,6 +6,7 @@
 // asked and where it stands. K2 Design polishes it later.
 
 import type { JSX } from 'react'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export type ApprovalStatus = 'waiting' | 'approved' | 'declined' | 'expired' | 'cancelled'
 
@@ -40,7 +41,7 @@ export function coerceApproval(raw: unknown): ThreadApprovalDoc | null {
 /** The requester line, as the phone shows it: who asked is the daemon's
  *  report, never part of the signed bytes (SA-11). */
 export function approvalRequesterLine(a: ThreadApprovalDoc): string | null {
-  return a.requestedBy ? `K2 says ${a.requestedBy} asked for this.` : null
+  return a.requestedBy ? `${PRODUCT_NAME} says ${a.requestedBy} asked for this.` : null
 }
 
 /** The card's one line. */

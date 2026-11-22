@@ -21,6 +21,7 @@
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { primaryScope } from '@/kessel/server-scope'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export type AppCoreId = 'db' | 'files' | 'thread' | 'mail' | 'sew'
 
@@ -35,7 +36,7 @@ export interface AppCoreInfo {
 
 /** The cores, in the daemon's order (`APP_CORES`). */
 export const APP_CORES: readonly AppCoreInfo[] = [
-  { id: 'db', label: 'Database', detail: 'its own tables through K2 (store), and a private database flag', later: null },
+  { id: 'db', label: 'Database', detail: `its own tables through ${PRODUCT_NAME} (store), and a private database flag`, later: null },
   { id: 'files', label: 'Files and rooms', detail: 'files, wiki, tickets and activity in its own room', later: null },
   { id: 'thread', label: 'Thread', detail: 'Thread with this agent, its heartbeats (read) and its name', later: null },
   { id: 'mail', label: 'Mail', detail: 'mail and calendar for its guests', later: 'Takes effect when App mail lands' },
@@ -159,7 +160,7 @@ function parseDatabase(v: unknown): BoxAppDatabase | null {
 /** The Apps-row chip: "Postgres 16 · 17 available", or null with no database. */
 export function postgresChip(db: BoxAppDatabase | null): string | null {
   if (!db) return null
-  if (db.unknown) return 'Postgres: not a K2 database'
+  if (db.unknown) return `Postgres: not a ${PRODUCT_NAME} database`
   if (db.major === null) return null
   const avail = db.available.length ? ` · ${db.available.join(', ')} available` : ''
   return `Postgres ${db.major}${avail}`

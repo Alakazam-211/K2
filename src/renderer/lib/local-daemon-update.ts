@@ -14,6 +14,7 @@
 
 import { useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export interface LocalDaemonUpdateState {
   phase: 'idle' | 'restarting' | 'done' | 'failed'
@@ -52,7 +53,7 @@ export function daemonUpdateCopy(
 ): GateCopy | null {
   if (state.phase === 'failed') {
     return {
-      heading: 'K2 daemon needs attention',
+      heading: `${PRODUCT_NAME} daemon needs attention`,
       subline:
         state.from_version && state.to_version
           ? `The daemon is v${state.from_version}; this app is v${state.to_version}.`
@@ -63,7 +64,7 @@ export function daemonUpdateCopy(
   }
   if (state.phase === 'restarting') {
     return {
-      heading: 'Updating K2 daemon…',
+      heading: `Updating ${PRODUCT_NAME} daemon…`,
       subline:
         state.from_version && state.to_version
           ? `Restarting the daemon (v${state.from_version} → v${state.to_version}).`
@@ -74,7 +75,7 @@ export function daemonUpdateCopy(
   }
   if (waitReason !== null && isVersionMismatchReason(waitReason)) {
     return {
-      heading: 'Updating K2 daemon…',
+      heading: `Updating ${PRODUCT_NAME} daemon…`,
       subline: 'Waiting for the daemon that matches this app.',
       detail: null,
       forceReload: false,

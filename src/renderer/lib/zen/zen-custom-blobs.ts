@@ -13,6 +13,7 @@
 //   name in Downloads on the desktop, `saveBlobInBrowser` on the web).
 
 import type { DownloadSliceReader, ReadRangeResponse } from '../fs-transfer'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const ZEN_BLOB_MAX_BYTES = 16 * 1024 * 1024
 export const ZEN_DOWNLOAD_MAX_BYTES = 50 * 1024 * 1024
@@ -81,7 +82,7 @@ export function zenDownloadMatches(name: string, what: { head: Uint8Array } | { 
   const want = EXT_KIND[ext]
   const got = 'head' in what ? zenSniffDownload(what.head) : (MIME_KIND[what.mime] ?? null)
   if (!want || got !== want) {
-    return `the file isn’t a .${ext} (K2 saves a file only under the extension its bytes match)`
+    return `the file isn’t a .${ext} (${PRODUCT_NAME} saves a file only under the extension its bytes match)`
   }
   return null
 }
@@ -148,12 +149,12 @@ export function zenDownloadName(raw: unknown, mime?: unknown): { name: string } 
   let ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : ''
   if (!ext) {
     const fromMime = typeof mime === 'string' ? MIME_EXT[mime.split(';')[0].trim().toLowerCase()] : undefined
-    if (!fromMime) return { problem: 'K2 saves images, PDFs and text files: give the name an extension (like .png)' }
+    if (!fromMime) return { problem: `${PRODUCT_NAME} saves images, PDFs and text files: give the name an extension (like .png)` }
     ext = fromMime
     name = `${name}.${ext}`
   }
   if (!ZEN_DOWNLOAD_EXTENSIONS.includes(ext)) {
-    return { problem: `K2 saves images, PDFs and text files (${ZEN_DOWNLOAD_EXTENSIONS.join(' ')}), not .${ext}` }
+    return { problem: `${PRODUCT_NAME} saves images, PDFs and text files (${ZEN_DOWNLOAD_EXTENSIONS.join(' ')}), not .${ext}` }
   }
   if (name.length > ZEN_DOWNLOAD_NAME_MAX) {
     const keep = ZEN_DOWNLOAD_NAME_MAX - ext.length - 1
@@ -216,7 +217,7 @@ function isObj(v: unknown): v is Record<string, unknown> {
 
 function asSlice(v: unknown): ZenBlobSlice {
   if (!isObj(v) || typeof v.base64 !== 'string' || typeof v.len !== 'number' || typeof v.eof !== 'boolean') {
-    throw new Error('The daemon answered a blob read K2 doesn’t understand.')
+    throw new Error(`The daemon answered a blob read ${PRODUCT_NAME} doesn’t understand.`)
   }
   return v as unknown as ZenBlobSlice
 }

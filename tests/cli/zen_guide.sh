@@ -417,8 +417,12 @@ assert_eq "everything validates after the reset" "$rc" "0"
 
 echo "== safe-mode lines are the app's own (FC-T18) =="
 SAFE_PAGE="$(nd zen guide safe-mode)"
-# The app's sentences, with typographic apostrophes made plain.
-app_text="$(sed "s/’/'/g" "$ZEN_VIEW")"
+# The app's sentences, with typographic apostrophes made plain and the
+# product's name as the default brand file spells it (the app builds the
+# name in from brand/k2/brand.toml; cli/k2 is the default brand's).
+product="$(sed -n 's/^product = "\(.*\)"$/\1/p' "$PROJECT_ROOT/brand/k2/brand.toml")"
+[ -n "$product" ] || { echo "FAIL: no [names] product in brand/k2/brand.toml" >&2; exit 1; }
+app_text="$(sed -e "s/’/'/g" -e "s/[$]{PRODUCT_NAME}/$product/g" "$ZEN_VIEW")"
 lines="$(printf '%s\n' "$SAFE_PAGE" | sed -n '/^THE LINES$/,/^THE WAYS OUT/p' | grep -E '^  [A-Z]' | grep -v '^  When ')"
 assert_eq "safe-mode quotes nine lines" "$(line_count "$lines")" "9"
 while IFS= read -r l; do

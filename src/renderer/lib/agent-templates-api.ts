@@ -15,6 +15,7 @@
 import { daemonCliGet, daemonCliPost, daemonCliPostQuery } from '@/lib/daemon-cli'
 import { httpCodeOf, httpDetailsOf, httpStatusOf } from '@/lib/daemon-http-error'
 import type { ServerScope } from '@/kessel/server-scope'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 // ── Types (the daemon's JSON; camelCase from serde) ──────────────────
 
@@ -287,7 +288,7 @@ export function authorLabel(author: string): string {
 /** What each plan step is, in the Review's words. */
 export const HIRE_STEP_LABELS: Record<string, string> = {
   folder: 'Folder',
-  register: 'Add to K2',
+  register: `Add to ${PRODUCT_NAME}`,
   role: 'Charter',
   wiki: 'Wiki note',
   'wiki-index': 'Wiki index',
@@ -328,11 +329,11 @@ export function permissionTarget(target: string): string {
 
 export const SAVE_ERROR_COPY = {
   bad_id: 'Use lowercase letters, numbers and single hyphens for the id.',
-  id_reserved: 'That id belongs to a template built into K2. Choose another id.',
+  id_reserved: `That id belongs to a template built into ${PRODUCT_NAME}. Choose another id.`,
   id_taken: 'Someone else already saved a template with that id. Choose another id.',
   own_workspace_only: 'An agent can save only its own setup as a template.',
   too_large: 'This setup is too big for a template. Take fewer wiki notes, or make its files smaller.',
-  no_workspace: 'K2 can’t find this agent on the server anymore.',
+  no_workspace: `${PRODUCT_NAME} can’t find this agent on the server anymore.`,
   forbidden: 'Only an Owner or Admin can save templates.',
   unsupported: SAVE_UNSUPPORTED_TEXT,
 } as const
@@ -390,7 +391,7 @@ export function saveErrorView(e: unknown): SaveErrorView {
   if (httpStatusOf(e) === 403) {
     return { code, text: SAVE_ERROR_COPY.forbidden, detail: message, fieldsProblem: false }
   }
-  return { code, text: 'K2 couldn’t save the template.', detail: message, fieldsProblem: false }
+  return { code, text: `${PRODUCT_NAME} couldn’t save the template.`, detail: message, fieldsProblem: false }
 }
 
 // ── Create errors ────────────────────────────────────────────────────
@@ -416,7 +417,7 @@ export function hireErrorView(e: unknown): HireErrorView {
     return { text: 'That folder already holds an agent made from another template. Choose another folder.', detail, folderProblem: true }
   }
   if (/permission denied|EACCES|EPERM|not writable|read-only file system/i.test(detail)) {
-    return { text: 'K2 can’t write to that folder. Choose another folder.', detail, folderProblem: true }
+    return { text: `${PRODUCT_NAME} can’t write to that folder. Choose another folder.`, detail, folderProblem: true }
   }
-  return { text: 'K2 couldn’t make the agent.', detail, folderProblem: false }
+  return { text: `${PRODUCT_NAME} couldn’t make the agent.`, detail, folderProblem: false }
 }

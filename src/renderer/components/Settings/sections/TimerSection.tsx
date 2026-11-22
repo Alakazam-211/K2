@@ -17,6 +17,7 @@ import {
   useSaveStatus,
 } from '../controls/SettingControls'
 import type { SettingEntry } from '../searchManifest'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const TIMER_MANIFEST: SettingEntry[] = [
   { id: 'timer.visible', section: 'timer', label: 'Show the Timer in the Top Bar', description: 'The clock button that starts and stops the timer', keywords: ['timer', 'clock', 'show', 'hide'] },
@@ -299,7 +300,7 @@ export function TimerSection(): React.JSX.Element {
         action={<Button onClick={load}>Try again</Button>}
         testId="timer-history-error"
       >
-        K2 couldn’t read the history on this server. Nothing is lost; try again in a moment.
+        {PRODUCT_NAME} couldn’t read the history on this server. Nothing is lost; try again in a moment.
       </SettingsLoadState>
     ) : status === 'loading' ? (
       <SettingsLoadState kind="loading" title="Loading your time entries…" testId="timer-history-loading" />

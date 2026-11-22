@@ -5,9 +5,10 @@
 import { useEffect, useState } from 'react'
 import type { SampleScenario, SampleStatus, SampleWorkbookSource } from '@/lib/live-view/sample-source'
 import { SampleBannerView, SAMPLE_BANNER_TITLE } from './shell/SampleBanner'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export { SAMPLE_BANNER_TITLE }
-export const SAMPLE_BANNER_LINE = 'A preview of watching a workbook live: an agent’s turn played from K2’s sample workbook. Nothing here comes from the file you opened.'
+export const SAMPLE_BANNER_LINE = `A preview of watching a workbook live: an agent’s turn played from ${PRODUCT_NAME}’s sample workbook. Nothing here comes from the file you opened.`
 
 const SCENARIOS: readonly { value: SampleScenario; label: string }[] = [
   { value: 'turn', label: 'Live turn' },

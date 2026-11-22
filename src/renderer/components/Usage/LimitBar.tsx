@@ -14,6 +14,7 @@ import {
   windowReset,
   type UsageWindow,
 } from '@/lib/subscription-usage'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** The text line above the bar: "Session 42% · 3h", "Weekly · reset — re-checking". */
 export function limitBarLabel(w: UsageWindow, nowMs: number): string {
@@ -24,7 +25,7 @@ export function limitBarLabel(w: UsageWindow, nowMs: number): string {
 
 /** The hover text: "Session 42% used · refreshes in 3h · on pace (40% of the window gone)". */
 export function limitBarTitle(w: UsageWindow, nowMs: number): string | undefined {
-  if (windowReset(w, nowMs)) return `${w.label} reset; K2 is checking the new numbers`
+  if (windowReset(w, nowMs)) return `${w.label} reset; ${PRODUCT_NAME} is checking the new numbers`
   const until = formatResetsIn(w.resetsAt, nowMs)
   const pace = paceMark(w, nowMs)
   if (!until && !pace) return undefined

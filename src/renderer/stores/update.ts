@@ -8,6 +8,7 @@ import {
   rememberUpdateCheckStarted,
   type UpdateOffer,
 } from '@/lib/auto-update-checks'
+import { PRODUCT_NAME } from '@/lib/brand'
 // relaunch handled by Rust-side relaunch_via_open (helper script)
 
 type UpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'error'
@@ -271,7 +272,7 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
       console.error('[updater] Relaunch after Linux install failed:', err)
       set({
         status: 'error',
-        error: `K2 v${version} is installed. Please reopen K2 to use it. (${updateErrorText(err)})`,
+        error: `${PRODUCT_NAME} v${version} is installed. Please reopen ${PRODUCT_NAME} to use it. (${updateErrorText(err)})`,
         linuxInstalling: false,
       })
     }
@@ -332,7 +333,7 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
       console.error('[updater] Relaunch failed:', err)
       set({
         status: 'error',
-        error: 'Update installed. Please reopen K2 to use the new version.',
+        error: `Update installed. Please reopen ${PRODUCT_NAME} to use the new version.`,
       })
     }
   },

@@ -83,6 +83,7 @@ import { buildGardenMembership, fetchGardenUses, type GardenMembership } from '@
 import { ZenWidgetData } from './ZenWidgetData'
 import { DataSourcesSection } from './DataSourcesSection'
 import { gardensLandingSelection, takeGardensLanding, useGardensLandingStore } from '../gardens-landing'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 const CONTENT_WIDTH = 'max-w-[52rem]'
 /** A list row: the Workspaces list's row (selected: the accent wash and bar).
@@ -476,12 +477,12 @@ function GardenDataSections({
       <div data-garden-data-sections-error="">
         <SettingsLoadState
           kind="error"
-          title="K2 couldn’t work out which data belongs where"
+          title={`${PRODUCT_NAME} couldn’t work out which data belongs where`}
           detail={error}
           testId="garden-membership-error"
           action={<Button variant="quiet" onClick={onRetry}>Try again</Button>}
         >
-          Local Data and External Data show once K2 can read every Garden’s page.
+          Local Data and External Data show once {PRODUCT_NAME} can read every Garden’s page.
         </SettingsLoadState>
       </div>
     )
@@ -546,17 +547,17 @@ function StylesPane({ onHistory }: { onHistory(t: GardenHistoryTarget): void }):
   }, [justUsed, justReset])
 
   const use = async (name: string): Promise<void> => {
-    if (await attempt(() => setZenGlobalTheme(name), setBusy, (e) => setError(e ? `K2 couldn’t switch to ${name}. ${e}` : null))) setJustUsed(name)
+    if (await attempt(() => setZenGlobalTheme(name), setBusy, (e) => setError(e ? `${PRODUCT_NAME} couldn’t switch to ${name}. ${e}` : null))) setJustUsed(name)
   }
 
   const reset = async (): Promise<void> => {
     const yes = await useConfirmDialogStore.getState().confirm({
       title: 'Reset the shared look?',
-      message: 'Every change to the look your Gardens share goes back to K2’s defaults. Each Garden’s own page stays as it is. K2 keeps a copy in history first.',
+      message: `Every change to the look your Gardens share goes back to ${PRODUCT_NAME}’s defaults. Each Garden’s own page stays as it is. ${PRODUCT_NAME} keeps a copy in history first.`,
       confirmLabel: 'Reset',
       destructive: true,
     })
-    if (yes && (await attempt(resetZenSettingsFile, setBusy, (e) => setError(e ? `K2 couldn’t reset the shared look. ${e}` : null)))) {
+    if (yes && (await attempt(resetZenSettingsFile, setBusy, (e) => setError(e ? `${PRODUCT_NAME} couldn’t reset the shared look. ${e}` : null)))) {
       setJustReset(true)
       loadRecent()
     }
@@ -570,7 +571,7 @@ function StylesPane({ onHistory }: { onHistory(t: GardenHistoryTarget): void }):
         {st.themes.length === 0 ? (
           <div className="px-4 py-3">
             <p className={SETTING_ROW_LABEL}>No themes yet</p>
-            <p className={SETTING_ROW_HINT}>K2’s themes show here once Gardens finish setting up.</p>
+            <p className={SETTING_ROW_HINT}>{PRODUCT_NAME}’s themes show here once Gardens finish setting up.</p>
           </div>
         ) : (
           <ul data-gardens-theme-list="" className="divide-y divide-[var(--color-border)]">
@@ -585,7 +586,7 @@ function StylesPane({ onHistory }: { onHistory(t: GardenHistoryTarget): void }):
                       {!t.builtin && <Tag tone="muted">Yours</Tag>}
                       {justUsed === t.name && <DoneNote text="Switched" />}
                     </div>
-                    <p className={SETTING_ROW_HINT}>{t.summary || (t.builtin ? 'Comes with K2.' : 'A theme you or your agents made.')}</p>
+                    <p className={SETTING_ROW_HINT}>{t.summary || (t.builtin ? `Comes with ${PRODUCT_NAME}.` : 'A theme you or your agents made.')}</p>
                   </div>
                   {!inUse && (
                     <Button variant="quiet" className="flex-shrink-0" disabled={busy} aria-label={`Use ${t.name}`} onClick={() => void use(t.name)}>
@@ -602,9 +603,9 @@ function StylesPane({ onHistory }: { onHistory(t: GardenHistoryTarget): void }):
         {st.path ? (
           <SettingRow
             label="Gardens folder"
-            hint="Where K2 keeps each Garden’s page, your themes and their history."
+            hint={`Where ${PRODUCT_NAME} keeps each Garden’s page, your themes and their history.`}
             settingId="zen-gardens.folder"
-            below={revealError ? <InlineError text={`K2 couldn’t open the folder. ${revealError}`} testId="gardens-reveal-error" /> : undefined}
+            below={revealError ? <InlineError text={`${PRODUCT_NAME} couldn’t open the folder. ${revealError}`} testId="gardens-reveal-error" /> : undefined}
           >
             <Button
               variant="quiet"
@@ -626,7 +627,7 @@ function StylesPane({ onHistory }: { onHistory(t: GardenHistoryTarget): void }):
               {justReset && <DoneNote text="Reset" />}
             </span>
           }
-          hint="Undo every change to the look your Gardens share. K2 keeps a copy first."
+          hint={`Undo every change to the look your Gardens share. ${PRODUCT_NAME} keeps a copy first.`}
         >
           <Button variant="danger-quiet" disabled={busy} data-gardens-reset-zen="" onClick={() => void reset()}>
             Reset…
@@ -639,7 +640,7 @@ function StylesPane({ onHistory }: { onHistory(t: GardenHistoryTarget): void }):
             <h3 className="type-heading text-[var(--color-text-primary)] min-h-[1.5rem] flex items-center">Recent look changes</h3>
             <SettingsLoadState
               kind="error"
-              title="K2 couldn’t read the recent look changes"
+              title={`${PRODUCT_NAME} couldn’t read the recent look changes`}
               detail={recentError}
               testId="gardens-look-history-error"
               action={<Button variant="quiet" onClick={loadRecent}>Try again</Button>}
@@ -776,7 +777,7 @@ function AddAgent({
           >
             {error ? (
               <p role="alert" className="type-hint text-[var(--color-status-error-soft)] p-1">
-                K2 couldn’t list this computer’s agents. {error}
+                {PRODUCT_NAME} couldn’t list this computer’s agents. {error}
               </p>
             ) : agents === null ? (
               <p className={`${SETTING_ROW_HINT} p-1`}>Loading…</p>
@@ -884,20 +885,20 @@ function GardenPane({
   }
 
   const add = (a: LocalAgent): void => {
-    void run(`K2 couldn’t let ${a.name} edit ${garden.name}.`, () => setGardenEditor(id, a.id, true)).then((ok) => {
+    void run(`${PRODUCT_NAME} couldn’t let ${a.name} edit ${garden.name}.`, () => setGardenEditor(id, a.id, true)).then((ok) => {
       if (ok) useToastStore.getState().addToast(`${a.name} can edit ${garden.name}`, 'success')
     })
   }
 
   // G26: Remove with an 8 s Undo toast (ZenGardenSyncControls' toast).
   const remove = (agent: string, name: string): void => {
-    void run(`K2 couldn’t remove ${name}.`, () => setGardenEditor(id, agent, false)).then((ok) => {
+    void run(`${PRODUCT_NAME} couldn’t remove ${name}.`, () => setGardenEditor(id, agent, false)).then((ok) => {
       if (!ok) return
       useToastStore.getState().addToast(`${name} can no longer edit ${garden.name}`, 'success', 8000, {
         label: 'Undo',
         onClick: () =>
           void setGardenEditor(id, agent, true)
-            .catch((err: unknown) => setError(`K2 couldn’t add ${name} back. ${gardenAccessErrorText(err)}`))
+            .catch((err: unknown) => setError(`${PRODUCT_NAME} couldn’t add ${name} back. ${gardenAccessErrorText(err)}`))
             .finally(load),
       })
     })
@@ -921,7 +922,7 @@ function GardenPane({
       stopRenaming()
       return
     }
-    if (await attempt(() => renameZenSettingsGardenNow(id, clean), setBusy, (e) => setError(e ? `K2 couldn’t rename ${garden.name}. ${e}` : null))) {
+    if (await attempt(() => renameZenSettingsGardenNow(id, clean), setBusy, (e) => setError(e ? `${PRODUCT_NAME} couldn’t rename ${garden.name}. ${e}` : null))) {
       setRenaming(false)
       setRenamed(true)
     }
@@ -934,7 +935,7 @@ function GardenPane({
       confirmLabel: 'Delete',
       destructive: true,
     })
-    if (yes && (await attempt(() => deleteZenSettingsGarden(id), setBusy, (e) => setError(e ? `K2 couldn’t delete ${garden.name}. ${e}` : null)))) onDeleted()
+    if (yes && (await attempt(() => deleteZenSettingsGarden(id), setBusy, (e) => setError(e ? `${PRODUCT_NAME} couldn’t delete ${garden.name}. ${e}` : null)))) onDeleted()
   }
 
   const listed = useMemo(() => new Set((access?.editors ?? []).map((e) => e.agent)), [access])
@@ -1004,7 +1005,7 @@ function GardenPane({
       {loadError ? (
         <SettingsLoadState
           kind="error"
-          title={`K2 couldn’t read who can edit ${garden.name}`}
+          title={`${PRODUCT_NAME} couldn’t read who can edit ${garden.name}`}
           detail={loadError}
           testId="garden-pane-load-error"
           action={<Button variant="quiet" onClick={load}>Try again</Button>}
@@ -1144,7 +1145,7 @@ function DeletedPane({
     <div className={`w-full ${CONTENT_WIDTH} space-y-6 pb-6`} data-gardens-pane="deleted" data-garden-deleted-pane={garden.id}>
       <PaneHeader
         title={garden.name}
-        hint={`Deleted${who ? ` by ${who}` : ''}${garden.deletedAt !== null ? ` · ${gardenDay(garden.deletedAt)}` : ''}. K2 keeps a copy in history.`}
+        hint={`Deleted${who ? ` by ${who}` : ''}${garden.deletedAt !== null ? ` · ${gardenDay(garden.deletedAt)}` : ''}. ${PRODUCT_NAME} keeps a copy in history.`}
       />
       <ActionError text={error} onDismiss={() => setError(null)} testId="garden-restore-error" />
       <SettingsGroup title="This deleted Garden" card>
@@ -1158,7 +1159,7 @@ function DeletedPane({
               setError(null)
               restoreDeletedGarden(garden.id)
                 .then(onRestored)
-                .catch((err: unknown) => setError(`K2 couldn’t restore ${garden.name}. ${gardenAccessErrorText(err)}`))
+                .catch((err: unknown) => setError(`${PRODUCT_NAME} couldn’t restore ${garden.name}. ${gardenAccessErrorText(err)}`))
                 .finally(() => setBusy(false))
             }}
           >
@@ -1265,7 +1266,7 @@ export function ZenGardensAccessPage(): React.JSX.Element {
           <div className={`w-full ${CONTENT_WIDTH} mb-6`} data-gardens-error="">
             <SettingsLoadState
               kind="error"
-              title={st.failure ? 'K2 couldn’t refresh the Gardens list' : 'K2 couldn’t read every detail of your Gardens'}
+              title={st.failure ? `${PRODUCT_NAME} couldn’t refresh the Gardens list` : `${PRODUCT_NAME} couldn’t read every detail of your Gardens`}
               detail={st.failure?.kind === 'unreadable' ? null : (st.failure ? zenSettingsErrorText(new Error(st.failure.message)) : error)}
               action={
                 <Button

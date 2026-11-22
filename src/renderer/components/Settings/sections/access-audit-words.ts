@@ -40,7 +40,7 @@ export function auditWho(user: string, ws: WorkspaceNamer = plainWorkspace): Aud
   const u = user.trim()
   if (!u || u === '-') return { name: 'Someone', agent: false }
   if (u === 'owner') return { name: 'You', agent: false }
-  if (u === 'k2' || u.startsWith('system:')) return { name: 'K2', agent: false }
+  if (u === 'k2' || u.startsWith('system:')) return { name: PRODUCT_NAME, agent: false }
   // An agent's passport the daemon refused before it knew which agent:
   // the row names no one more exact than "An agent".
   if (u === 'agent-passport') return { name: 'An agent', agent: false }
@@ -63,7 +63,7 @@ export function auditWhoText(user: string, ws: WorkspaceNamer = plainWorkspace):
 const SIGN_IN_FAILURES: Record<string, string> = {
   bad_creds: 'couldn’t sign in: wrong username or password',
   locked: 'couldn’t sign in: locked out after too many tries',
-  rate_limited: 'couldn’t sign in: too many tries, so K2 is waiting',
+  rate_limited: `couldn’t sign in: too many tries, so ${PRODUCT_NAME} is waiting`,
   blocked_ingress: 'was blocked: came in by a route this server doesn’t accept',
 }
 
@@ -72,7 +72,7 @@ const SIGN_IN_RESULT: Record<string, string> = {
   ok: 'Signed in',
   bad_creds: 'Wrong username or password',
   locked: 'Account locked after too many tries',
-  rate_limited: 'Too many tries; K2 made them wait',
+  rate_limited: `Too many tries; ${PRODUCT_NAME} made them wait`,
   blocked_ingress: 'Blocked: this server doesn’t accept sign-ins that way',
 }
 
@@ -269,7 +269,7 @@ const ACTION_WORDS: Record<string, string> = {
   'compute.admin-approve': 'run an owner-only step on a compute node',
   'agents.manage': 'manage its sidecars',
   'agents.hire': 'hire agents',
-  'projects.manage': 'manage K2 projects',
+  'projects.manage': `manage ${PRODUCT_NAME} projects`,
   'apps.build': 'build and run Apps',
   'apps.manage-full': 'manage its Apps end to end',
   'apps.manage-users': 'manage its Apps’ users',
@@ -321,7 +321,7 @@ const VIA_WORDS: Record<string, string> = {
   'owner-token': 'the owner’s own key',
   login: 'their sign-in',
   passport: 'the agent’s own pass',
-  daemon: 'K2 itself',
+  daemon: `${PRODUCT_NAME} itself`,
 }
 
 export type PermissionLine = { id: string; action: string; state: string; via: string; rest: string }
@@ -446,7 +446,7 @@ function vaultDetail(ev: AuthAuditEvent, ctx: DetailContext): string {
   let m: RegExpExecArray | null
   if (verb === 'export' && (m = /^export (\d+) \[([^\]]*)\]/.exec(rest))) {
     const list = secretList(m[2]!.split(','))
-    return `${list || secrets(Number(m[1]))}, copied out to another K2 server`
+    return `${list || secrets(Number(m[1]))}, copied out to another ${PRODUCT_NAME} server`
   }
   if (verb === 'import' && (m = /^import (\d+) from \S+ into (\S+)/.exec(rest))) {
     const into = m[2] === '-' ? 'this server' : m[2]!.split(',').map(ctx.ws).join(', ')
@@ -490,7 +490,7 @@ const EVENT_WORDS: Record<string, string> = {
 
 const CLIENT_WORDS: Record<string, string> = {
   web: 'A web browser',
-  api: 'The K2 app or command line',
+  api: `The ${PRODUCT_NAME} app or command line`,
 }
 
 /** One row of the opened record: a plain value, and the raw value quietly. */

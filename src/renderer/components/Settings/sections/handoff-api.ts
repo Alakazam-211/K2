@@ -6,6 +6,7 @@
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { primaryScope, type ServerScope } from '@/kessel/server-scope'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** One delivery, as `/cli/vault/incoming` and `/cli/vault/sent` list it. */
 export interface HandoffView {
@@ -247,7 +248,7 @@ export function handoffKindWords(kind: string): string {
 }
 
 const DELIVERY_WORDS: Record<string, string> = {
-  fetch: 'for fetch only (K2 adds it to requests; never shown)',
+  fetch: `for fetch only (${PRODUCT_NAME} adds it to requests; never shown)`,
   agent: 'on the ssh agent (never shown)',
   file: 'as a file',
   env: 'as env',

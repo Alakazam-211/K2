@@ -65,7 +65,7 @@ import {
   type UnprepPlan,
 } from './apps-server-api'
 import { OPEN_EVENT as APPS_READY_OPEN_EVENT } from '@/components/AppsReadyOffer/apps-ready-api'
-import { CLI_NAME } from '@/lib/brand'
+import { CLI_NAME, PRODUCT_NAME, PRODUCT_NAME_PATTERN } from '@/lib/brand'
 
 export const APPS_SERVER_MANIFEST: SettingEntry[] = [
   {
@@ -234,7 +234,7 @@ export function AppsServerSection({ middle }: { middle?: React.ReactNode } = {})
       setUnprep(null)
       setNotice({
         tone: 'ok',
-        text: `The server setup is undone.${r.kept.length || r.note ? ' The Apps user, App data and K2’s container engine stay.' : ''} Automatic setup pauses until you press Retry.`,
+        text: `The server setup is undone.${r.kept.length || r.note ? ` The Apps user, App data and ${PRODUCT_NAME}’s container engine stay.` : ''} Automatic setup pauses until you press Retry.`,
       })
       await load()
     } catch (e) {
@@ -331,7 +331,7 @@ export function AppsServerSection({ middle }: { middle?: React.ReactNode } = {})
           ) : box.kind === 'error' ? (
             <SettingsLoadState
               kind="error"
-              title="K2 couldn’t check this server"
+              title={`${PRODUCT_NAME} couldn’t check this server`}
               detail={box.text}
               action={<Button onClick={() => void recheck()}>Try again</Button>}
             >
@@ -393,7 +393,7 @@ export function AppsServerSection({ middle }: { middle?: React.ReactNode } = {})
         <SettingsGroup
           card
           title="Set up this server"
-          hint="K2 makes these changes through its admin helper. You see each change first."
+          hint={`${PRODUCT_NAME} makes these changes through its admin helper. You see each change first.`}
           action={
             <OverflowMenu
               label="More set-up actions"
@@ -446,7 +446,7 @@ export function AppsServerSection({ middle }: { middle?: React.ReactNode } = {})
               >
                 <div className={SETTING_ROW_LABEL}>Keep this server set up</div>
                 <p className={SETTING_ROW_HINT}>
-                  After each K2 update, K2 sets the server up for Apps by itself, so agents you allow can deploy without
+                  After each {PRODUCT_NAME} update, {PRODUCT_NAME} sets the server up for Apps by itself, so agents you allow can deploy without
                   anyone typing commands on it. It stops and tells you if the server already runs containers another way.
                 </p>
                 {doctor.autoPrepare.state ? (
@@ -461,7 +461,7 @@ export function AppsServerSection({ middle }: { middle?: React.ReactNode } = {})
                       {doctor.autoPrepare.undoneAt !== null
                         ? 'Paused because you undid the setup.'
                         : `Stopped: ${doctor.autoPrepare.detail ?? doctor.autoPrepare.code ?? 'this server can’t be set up'}.`}{' '}
-                      K2 won&apos;t try again until you press Retry or K2 updates.
+                      {PRODUCT_NAME} won&apos;t try again until you press Retry or {PRODUCT_NAME} updates.
                     </p>
                     <Button
                       onClick={() => void retryAuto()}
@@ -489,7 +489,7 @@ export function AppsServerSection({ middle }: { middle?: React.ReactNode } = {})
             </SettingRow>
             <SettingRow
               label="App runtime"
-              hint={`Runs each App in its own container. Signed by K2 and matched to this server’s K2.${engineNeeded(doctor) ? '' : ' It’s installed and answering.'}`}
+              hint={`Runs each App in its own container. Signed by ${PRODUCT_NAME} and matched to this server’s ${PRODUCT_NAME}.${engineNeeded(doctor) ? '' : ' It’s installed and answering.'}`}
               below={
                 engineLine ? (
                   <p className="type-hint text-[var(--color-status-error-soft)] leading-relaxed" data-testid="apps-engine-status">
@@ -605,6 +605,9 @@ const LAST_RUN_WORDS: Record<string, string> = {
   blocked: 'stopped',
 }
 
+/** The "(K2's)" the daemon adds after its own Podman, in this build's name. */
+const OURS_SUFFIX = new RegExp(String.raw`\s*\(${PRODUCT_NAME_PATTERN}[’']s\)\s*$`, 'i')
+
 /** A check's value in plain words: no K2-internal notes, just the number
  *  a person reads ("Podman 5.2", "38 GB"); the kernel's own version is left
  *  out. Unknown checks show the daemon's detail. */
@@ -615,7 +618,7 @@ export function checkValue(c: Pick<BoxCheck, 'id' | 'detail'>): string {
     case 'kernel':
       return ''
     case 'podman': {
-      const v = d.replace(/\s*\(K2[’']s\)\s*$/i, '')
+      const v = d.replace(OURS_SUFFIX, '')
       return /^\d/.test(v) ? `Podman ${v}` : v.replace(/^podman\b/i, 'Podman')
     }
     case 'disk': {

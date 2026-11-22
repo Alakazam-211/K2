@@ -73,6 +73,7 @@ import {
   type RevealedSecret,
   type RevealMode,
 } from './permissionCardView'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 const EDGE = CARD_EDGE
 const FILL = CARD_FILL
@@ -448,7 +449,7 @@ function AnswerControls({
           <CardButton label="Set a PIN" testId="permission-allow" primary disabled={busy} onClick={() => setStep({ kind: 'pin' })} />
           <CardButton label={PERMISSION_LABEL.deny} testId="permission-deny" disabled={busy} onClick={() => setStep({ kind: 'deny' })} />
         </div>
-        <Muted testId="permission-pin-note">You type the PIN into K2's form. The agent never sees it.</Muted>
+        <Muted testId="permission-pin-note">You type the PIN into {PRODUCT_NAME}'s form. The agent never sees it.</Muted>
         <ErrorLine text={error} />
       </div>
     )
@@ -477,7 +478,7 @@ function AnswerControls({
           <CardButton label="Set up GitHub access" testId="permission-allow" primary disabled={busy} onClick={() => setStep({ kind: 'git' })} />
           <CardButton label={PERMISSION_LABEL.deny} testId="permission-deny" disabled={busy} onClick={() => setStep({ kind: 'deny' })} />
         </div>
-        <Muted testId="permission-git-note">You enter the key or token in K2's form. The agent never sees it.</Muted>
+        <Muted testId="permission-git-note">You enter the key or token in {PRODUCT_NAME}'s form. The agent never sees it.</Muted>
         <ErrorLine text={error} />
       </div>
     )

@@ -11,6 +11,8 @@
 // on the REMOTE machine you're connected to over K2 Connect, NEVER this Mac
 // (the local Tauri auto-updater owns the local update path in GeneralSection).
 
+import { PRODUCT_NAME } from '@/lib/brand'
+
 export type UpdateRole = 'owner' | 'admin' | 'member'
 
 /**
@@ -841,7 +843,7 @@ export function newerNoArtifactCopy(
 /** 0.46.3: a newer version exists but the host's K2 came from a package
  *  manager, so it updates there, not from here. */
 export function newerViaPackageCopy(hostLabel: string, latest: string): string {
-  return `A newer version (v${latest}) is out. ${hostLabel}'s K2 was installed with a package manager, so update it there (for example \`sudo pacman -Syu k2\`).`
+  return `A newer version (v${latest}) is out. ${hostLabel}'s ${PRODUCT_NAME} was installed with a package manager, so update it there (for example \`sudo pacman -Syu k2\`).`
 }
 
 /** The confirm-dialog copy for the install-&-restart step — it NAMES the

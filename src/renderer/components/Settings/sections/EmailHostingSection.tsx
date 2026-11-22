@@ -91,6 +91,7 @@ import { Button, Callout, Checkbox, Input, Surface, Tag } from '@/components/ui'
 import { AccessSheet, CopyLine, DIALOG_FIELD, DIALOG_MUTED, FailedNote, Field } from './AccessDialogs'
 import { StatusDot, type HealthTone } from './ConnectionsParts'
 import { LinuxOnlyNote } from './LinuxOnlyNote'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const EMAIL_HOSTING_MANIFEST: SettingEntry[] = [
   { id: 'email-hosting.server', section: 'email-hosting', label: 'Email Server', description: 'Install and run your own mail server (Linux servers)', keywords: ['mail', 'email', 'smtp', 'stalwart', 'server', 'enable', 'preflight', 'hosting', 'install', 'uninstall'] },
@@ -146,7 +147,7 @@ function isMailStatus(s: unknown): s is MailStatus {
 const STATE_WORD: Record<string, { word: string; tone: HealthTone; hint: string }> = {
   running: { word: 'Running', tone: 'ok', hint: 'Receiving and sending mail for your domains.' },
   degraded: { word: 'Running with problems', tone: 'warn', hint: 'Mail still flows, but something needs a look.' },
-  installing: { word: 'Installing', tone: 'warn', hint: 'K2 is setting the server up. This page updates as each step finishes.' },
+  installing: { word: 'Installing', tone: 'warn', hint: `${PRODUCT_NAME} is setting the server up. This page updates as each step finishes.` },
   error: { word: 'Install stopped', tone: 'error', hint: 'The install stopped part-way. Resume it to carry on from the last step that finished.' },
   stopped: { word: 'Stopped', tone: 'neutral', hint: 'The server isn’t running. Your mail is kept.' },
   disabled: { word: 'Turned off', tone: 'neutral', hint: 'The server is off and your mail is kept. Incoming mail bounces until you turn it back on.' },
@@ -326,8 +327,8 @@ const STEP_WORDS: Record<string, string> = {
   bootstrap: 'Finish its first-time setup',
   'restart-normal': 'Restart it normally',
   'server-config': 'Turn on the mail ports',
-  'service-account': 'Create an account for K2',
-  'api-key': 'Create a key for K2',
+  'service-account': `Create an account for ${PRODUCT_NAME}`,
+  'api-key': `Create a key for ${PRODUCT_NAME}`,
   'recovery-off': 'Remove the setup password',
   restart: 'Restart with the final settings',
 }
@@ -533,7 +534,7 @@ function ServerTab({
           </span>
         </FactRow>
         {versionText ? (
-          <FactRow label="Version" hint={status.version !== status.pinnedVersion && status.pinnedVersion ? `K2 expects version ${status.pinnedVersion}.` : undefined}>
+          <FactRow label="Version" hint={status.version !== status.pinnedVersion && status.pinnedVersion ? `${PRODUCT_NAME} expects version ${status.pinnedVersion}.` : undefined}>
             <span className="type-row text-[var(--color-text-secondary)] whitespace-nowrap">{versionText}</span>
           </FactRow>
         ) : null}
@@ -561,7 +562,7 @@ function ServerTab({
       {notInstalled ? (
         <SettingsGroup
           title="Install the email server"
-          hint="K2 checks this server first. Anything marked Must fix stops the install; warnings don’t."
+          hint={`${PRODUCT_NAME} checks this server first. Anything marked Must fix stops the install; warnings don’t.`}
           card
           testId="hosting-install"
           action={
@@ -648,7 +649,7 @@ function ServerTab({
 
       {status.state === 'error' && !hasProgress ? (
         <SettingsGroup card>
-          <SettingRow label="Resume the install" hint="K2 carries on from the last step that finished.">
+          <SettingRow label="Resume the install" hint={`${PRODUCT_NAME} carries on from the last step that finished.`}>
             <Button variant="accent" disabled={!canMutate || busy} onClick={() => void doEnable()}>
               {busy ? 'Resuming…' : 'Resume install'}
             </Button>
@@ -798,7 +799,7 @@ function UninstallDialog({
         </>
       }
     >
-      <p className={DIALOG_MUTED}>K2 removes the server program. Your domains and addresses stop working until you install it again.</p>
+      <p className={DIALOG_MUTED}>{PRODUCT_NAME} removes the server program. Your domains and addresses stop working until you install it again.</p>
       <label className="flex items-start gap-2 cursor-pointer">
         <Checkbox className="mt-0.5" checked={purge} disabled={busy} onChange={(e) => setPurge(e.target.checked)} aria-label="Also delete all mail" />
         <span>
@@ -862,7 +863,7 @@ function DomainList({
           <SettingsLoadState kind="loading" title="Loading domains…" />
         ) : domains.length === 0 ? (
           <SettingsLoadState kind="empty" title="No domains yet" action={add}>
-            Add a domain you own. K2 then shows the DNS records to add at your domain’s DNS provider.
+            Add a domain you own. {PRODUCT_NAME} then shows the DNS records to add at your domain’s DNS provider.
           </SettingsLoadState>
         ) : undefined
       }
@@ -921,7 +922,7 @@ function AddDomainDialog({ onClose, onAdded, onExists }: { onClose: () => void; 
   return (
     <AccessSheet
       title="Add a domain"
-      intro="Agents can get addresses on it once its DNS records check out. K2 shows you the records to add next."
+      intro={`Agents can get addresses on it once its DNS records check out. ${PRODUCT_NAME} shows you the records to add next.`}
       onClose={onClose}
       busy={busy}
       testId="hosting-add-domain"
@@ -1128,7 +1129,7 @@ function DomainDetailView({
         </div>
         <p className={SETTING_ROW_HINT}>
           {detail.status === 'verified'
-            ? `Verified on ${fmtDay(detail.verifiedAt)}. K2 checks it again every day.`
+            ? `Verified on ${fmtDay(detail.verifiedAt)}. ${PRODUCT_NAME} checks it again every day.`
             : 'It starts working once the mail routing, sender and signing records below check out.'}{' '}
           Plus addressing is on: mail to name+anything@{detail.domain} still reaches name@{detail.domain}, so an agent can hand
           out a tagged address without making a new one. Mail to names that don’t exist is refused.
@@ -1312,7 +1313,7 @@ function SendingGroup({ detail, canMutate, onChanged }: { detail: DomainDetail; 
           {relayField('Port', 'Usually 587.', relayPort, setRelayPort, '587')}
           {relayField('Username', 'The sign-in your relay gave you.', relayUser, setRelayUser, 'postmaster@example.com')}
           {relayField('Password', 'Kept on this server; never shown again.', relayPass, setRelayPass, '', 'password')}
-          {relayField('SPF include', 'From your relay’s setup page. K2 adds it to the SPF record above.', spfInclude, setSpfInclude, 'include:relay.example')}
+          {relayField('SPF include', `From your relay’s setup page. ${PRODUCT_NAME} adds it to the SPF record above.`, spfInclude, setSpfInclude, 'include:relay.example')}
         </>
       ) : null}
       <div className="px-4 py-3">
@@ -1636,7 +1637,7 @@ function RotateDialog({ row, onClose, onDone }: { row: AddressRow; onClose: () =
       }
     >
       <p className={DIALOG_MUTED}>
-        Mail apps signed in with the old password are signed out, and its app passwords stop working. K2 shows the new one once.
+        Mail apps signed in with the old password are signed out, and its app passwords stop working. {PRODUCT_NAME} shows the new one once.
       </p>
       {error ? <FailedNote what={plainFailure("No new password was made.", error)} detail={error} next="The old password still works. Try again in a moment." /> : null}
     </AccessSheet>
@@ -1662,7 +1663,7 @@ function PasswordShownOnce({ creds, onClose }: { creds: RotatedMailboxPassword; 
         <CopyLine mono={false} label="Password" value={creds.password} testId="hosting-once-password" />
       </Surface>
       <p className={DIALOG_MUTED}>
-        Incoming mail (IMAP) on port {creds.imap?.port ?? 443}, sending (SMTP) on port {creds.submission?.port ?? 465}. K2 won’t show this password again.
+        Incoming mail (IMAP) on port {creds.imap?.port ?? 443}, sending (SMTP) on port {creds.submission?.port ?? 465}. {PRODUCT_NAME} won’t show this password again.
       </p>
     </AccessSheet>
   )

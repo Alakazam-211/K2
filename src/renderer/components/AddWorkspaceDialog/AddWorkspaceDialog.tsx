@@ -4,9 +4,10 @@ import { Callout, DialogScrim, Checkbox, DialogCloseButton, useDialogCancel } fr
 import { useAddWorkspaceDialogStore } from '../../stores/add-workspace-dialog'
 import { GitToolsBanner } from '@/components/GitTools/GitToolsNotice'
 import { ADD_WORKSPACE_Z } from '@/lib/overlay-layers'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** The dialog's title; the nav's Add menu names it the same way. */
-export const ADD_WORKSPACE_TITLE = 'Add Workspace to K2'
+export const ADD_WORKSPACE_TITLE = `Add Workspace to ${PRODUCT_NAME}`
 
 // The Skip / Start-Fresh / Adopt consent picker was removed with the
 // canonical-agents PRD (§7 Removal Catalog): harness fan-out is now off by

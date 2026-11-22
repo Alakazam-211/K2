@@ -84,6 +84,7 @@ import { usePresetsStore, type AgentPreset } from '@/stores/presets'
 import { useSettingsStore } from '@/stores/settings'
 import { ReviewCard, ReviewItems, ReviewRow, ReviewSection, TemplateSheetFrame } from './TemplateSheetFrame'
 import { hireRowWords, rowNote } from './review-words'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 // ── Copy (purpose only) ──────────────────────────────────────────────
 
@@ -91,7 +92,7 @@ export const CREATE_AGENT_COPY = {
   title: 'Create an agent',
   pick: 'Pick what kind of agent it is',
   pickIntro: 'Each kind starts with its own charter, notes and context. You can change any of it later.',
-  builtIn: 'Built into K2',
+  builtIn: `Built into ${PRODUCT_NAME}`,
   yours: 'Yours',
   name: 'Name and folder',
   nameIntro: 'The agent works in its own folder on this server.',
@@ -100,7 +101,7 @@ export const CREATE_AGENT_COPY = {
   tool: 'Choose its tool',
   toolIntro: 'The agent thinks with one of the tools on this server.',
   review: 'Review',
-  reviewIntro: 'This is everything K2 will set up for the agent.',
+  reviewIntro: `This is everything ${PRODUCT_NAME} will set up for the agent.`,
   create: 'Create agent',
   creating: 'Creating…',
   tryAgain: 'Try again',
@@ -511,7 +512,7 @@ function CreateAgentBody(): React.JSX.Element {
               {(list.error as Error).message}
             </p>
           ) : (
-            <FailedNote what="K2 couldn’t load the agent templates." next="Try again in a moment." detail={hireErrorView(list.error).detail} />
+            <FailedNote what={`${PRODUCT_NAME} couldn’t load the agent templates.`} next="Try again in a moment." detail={hireErrorView(list.error).detail} />
           )
         ) : (
           <p className={DIALOG_MUTED} data-testid="create-agent-empty">
@@ -591,7 +592,7 @@ function CreateAgentBody(): React.JSX.Element {
           {groups.yours.length ? group(CREATE_AGENT_COPY.yours, groups.yours, 'create-agent-yours') : null}
         </div>
         {detailError ? (
-          <FailedNote what="K2 couldn’t load that template." next="Try again, or pick another kind." detail={detailError} />
+          <FailedNote what={`${PRODUCT_NAME} couldn’t load that template.`} next="Try again, or pick another kind." detail={detailError} />
         ) : null}
       </TemplateSheetFrame>
     )
@@ -865,7 +866,7 @@ function CreateAgentBody(): React.JSX.Element {
       {plan?.state === 'loading' || !plan ? (
         <div className="flex items-center gap-2" role="status" data-testid="create-agent-review-loading">
           <Spinner />
-          <span className={DIALOG_MUTED}>Checking what K2 will set up…</span>
+          <span className={DIALOG_MUTED}>Checking what {PRODUCT_NAME} will set up…</span>
         </div>
       ) : planFailed ? (
         <div data-testid="create-agent-review-error">
@@ -955,7 +956,7 @@ function ReviewBody({
           )}
         </ReviewRow>
       </ReviewCard>
-      <ReviewSection title="What K2 sets up" testId="create-agent-rows">
+      <ReviewSection title={`What ${PRODUCT_NAME} sets up`} testId="create-agent-rows">
         <ReviewItems
           items={asArray<HireResult['rows'][number]>(plan.rows).map((r, i) => ({
             key: `${r.step}-${r.target}-${i}`,

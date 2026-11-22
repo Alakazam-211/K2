@@ -9,7 +9,7 @@
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import type { ServerScope } from '@/kessel/server-scope'
-import { CLI_NAME } from '@/lib/brand'
+import { CLI_NAME, PRODUCT_NAME } from '@/lib/brand'
 
 export const PRODUCT_FEEDBACK_FEATURE = 'product-feedback-v1' as const
 /** prd-feedback-screenshot-v1: the server takes one screenshot per feedback. */
@@ -18,7 +18,7 @@ export const PRODUCT_FEEDBACK_SCREENSHOT_FEATURE = 'product-feedback-screenshot-
 export const MAX_SCREENSHOT_BYTES = 2 * 1024 * 1024
 export const MAX_SCREENSHOT_SIDE = 4096
 /** The button's tooltip and label, and the dialog's title (PRD §3). */
-export const SEND_FEEDBACK_LABEL = 'Send feedback to K2'
+export const SEND_FEEDBACK_LABEL = `Send feedback to ${PRODUCT_NAME}`
 export const CONTACT_ADDRESS = 'hello@alakazamlabs.com'
 export const MAX_TEXT_BYTES = 20_000
 
@@ -35,14 +35,14 @@ export type FeedbackState = 'queued' | 'sending' | 'sent' | 'failed' | 'refused'
 
 /** The PRD's line under the text box (PF2). */
 export const WHATS_SENT_LINE =
-  'Sent to Alakazam Labs with your K2 and OS versions. Nothing else from your computer unless you tick the box below.'
+  `Sent to Alakazam Labs with your ${PRODUCT_NAME} and OS versions. Nothing else from your computer unless you tick the box below.`
 /** The consent checkbox and its line (PF25). */
-export const DIAGNOSTICS_LABEL = 'Include details about K2 on this computer'
+export const DIAGNOSTICS_LABEL = `Include details about ${PRODUCT_NAME} on this computer`
 export const DIAGNOSTICS_HINT =
-  "Versions, settings that are on, recent errors and the end of K2's log, with passwords, keys and names taken out. You can read all of it first."
+  `Versions, settings that are on, recent errors and the end of ${PRODUCT_NAME}'s log, with passwords, keys and names taken out. You can read all of it first.`
 /** The hint at the top of the Send tab (Rosson 2026-11-10): agents can send it too. */
 export const ASK_AGENT_HINT =
-  `Or ask your agent: in its chat, say \u201cSend this issue as feedback to K2\u201d and it sends the feedback to us itself, with ${CLI_NAME} send-feedback.`
+  `Or ask your agent: in its chat, say \u201cSend this issue as feedback to ${PRODUCT_NAME}\u201d and it sends the feedback to us itself, with ${CLI_NAME} send-feedback.`
 export const REMEMBER_LABEL = 'Remember this for my feedback on this server'
 
 export interface FeedbackService {
@@ -369,8 +369,8 @@ export async function forgetScreenshot(scope: ServerScope, draftId: string): Pro
 
 /** "Copy as text" (PF7): what the person wrote, ready for an email. */
 export function feedbackAsText(a: { category: FeedbackCategory; text: string; k2Version: string | null }): string {
-  const lines = [`To: ${CONTACT_ADDRESS}`, `Feedback about K2 (${a.category})`]
-  if (a.k2Version) lines.push(`K2 ${a.k2Version}`)
+  const lines = [`To: ${CONTACT_ADDRESS}`, `Feedback about ${PRODUCT_NAME} (${a.category})`]
+  if (a.k2Version) lines.push(`${PRODUCT_NAME} ${a.k2Version}`)
   lines.push('', a.text.trim())
   return lines.join('\n')
 }

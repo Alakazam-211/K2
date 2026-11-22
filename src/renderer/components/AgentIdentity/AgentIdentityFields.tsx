@@ -36,6 +36,7 @@ import { AVATAR_ROUND, SETTING_FIELD_WIDTH, SETTING_ROW_HINT, SettingRow } from 
 import { Button, Input, cx } from '@/components/ui'
 import { GROUP_AVATAR_COLORS } from '@/components/Projects/ProjectGroupAvatar'
 import { normalizeHexColor } from '@/components/Projects/projects-api'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** Plan B cross-window sync: re-emit `sync:projects` after a host-aware
  *  write so other windows re-fetch (the old Tauri shims did this). */
@@ -675,13 +676,13 @@ export function AgentHandleField({
             <span className="break-all">{handle}::{tunnelHost}</span>
           ) : handle ? (
             <>
-              Get a subdomain so this agent can talk to other people&apos;s agents on K2.{' '}
+              Get a subdomain so this agent can talk to other people&apos;s agents on {PRODUCT_NAME}.{' '}
               <button
                 type="button"
                 className="text-[var(--color-accent)] hover:underline bg-transparent border-none p-0 cursor-pointer no-drag"
                 onClick={() => useSettingsStore.getState().openSettings('k2-connect')}
               >
-                Open K2 Connect
+                Open {PRODUCT_NAME} Connect
               </button>
             </>
           ) : undefined
@@ -739,13 +740,13 @@ export function AgentHandleField({
       )}
       {handle && !tunnelHost && (
         <p className="text-[9px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
-          Get a subdomain so this agent can talk to other people&apos;s agents on K2.{' '}
+          Get a subdomain so this agent can talk to other people&apos;s agents on {PRODUCT_NAME}.{' '}
           <button
             type="button"
             className="text-[var(--color-accent)] hover:underline bg-transparent border-none p-0 cursor-pointer no-drag"
             onClick={() => useSettingsStore.getState().openSettings('k2-connect')}
           >
-            Open K2 Connect
+            Open {PRODUCT_NAME} Connect
           </button>
         </p>
       )}

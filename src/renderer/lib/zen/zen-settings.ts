@@ -33,6 +33,7 @@ import { zenLocalScope, zenLoadFailure, type ZenLoadFailure } from './zen-api'
 import { parseZenGardens, zenGardenClashText, type ZenGarden } from './zen-gardens'
 import { ZenPageParseError } from './zen-page'
 import { loadZenTemplates, zenTemplateName } from './zen-templates'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** One Garden as Settings shows it: the list entry plus its own theme pick. */
 export interface ZenSettingsGarden extends ZenGarden {
@@ -185,7 +186,7 @@ export function zenSettingsErrorText(err: unknown, name?: string): string {
   if (/zen_not_set_up/.test(msg)) return 'Gardens aren’t set up on this computer yet.'
   if (/unknown_garden/.test(msg)) return 'That Garden is gone. It may have been deleted somewhere else.'
   if (/unknown_theme/.test(msg)) return 'That theme is gone. Pick another one.'
-  if (/unknown zen route/i.test(msg)) return 'K2 on this computer is older than this app. Update it to use Gardens.'
+  if (/unknown zen route/i.test(msg)) return `${PRODUCT_NAME} on this computer is older than this app. Update it to use Gardens.`
   return msg || 'Something went wrong.'
 }
 

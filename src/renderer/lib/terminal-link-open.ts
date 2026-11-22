@@ -15,8 +15,9 @@ import { daemonCliPost } from '@/lib/daemon-cli'
 import { scopeMayWrite, type ServerScope } from '@/kessel/server-scope'
 import type { RoomProjectsStore } from '@/stores/room'
 import { useToastStore } from '@/stores/toast'
+import { PRODUCT_NAME } from '@/lib/brand'
 
-export const TERMINAL_LINK_REFUSED = "K2 opens web links from the terminal; this link type isn't opened"
+export const TERMINAL_LINK_REFUSED = `${PRODUCT_NAME} opens web links from the terminal; this link type isn't opened`
 
 /** What a clicked terminal URL becomes. */
 export type TerminalUrlPlan = { kind: 'web' } | { kind: 'file'; path: string } | { kind: 'refused' }

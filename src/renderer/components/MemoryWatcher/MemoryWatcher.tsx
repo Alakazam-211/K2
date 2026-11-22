@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useToastStore } from '@/stores/toast'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 interface RendererMemoryStatus {
   resident_bytes: number
@@ -90,7 +91,7 @@ export default function MemoryWatcher(): React.JSX.Element | null {
             ? `RSS grew ${growthMB} MB above baseline`
             : `RSS hit ${mb} MB`
           addToast(
-            `K2 memory: ${reason}. Consider restarting the app to avoid being reaped by macOS.`,
+            `${PRODUCT_NAME} memory: ${reason}. Consider restarting the app to avoid being reaped by macOS.`,
             'error',
             10_000
           )

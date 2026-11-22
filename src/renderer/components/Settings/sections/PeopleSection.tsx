@@ -53,6 +53,7 @@ import {
   type RoleRow,
 } from './user-access-api'
 import { useAccessData, type AppsData, type Part, type PartName, type UserDetailErrors } from './user-access-load'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export { parsePeople }
 export type { PersonRow }
@@ -62,14 +63,14 @@ export const PEOPLE_MANIFEST: SettingEntry[] = [
     id: 'people.roster',
     section: 'people',
     label: 'User Access',
-    description: 'Who can use this server’s K2 page, its Apps and chat, and what each person reaches.',
+    description: `Who can use this server’s ${PRODUCT_NAME} page, its Apps and chat, and what each person reaches.`,
     keywords: ['people', 'user access', 'full name', 'principal', 'guest', 'username', 'grant', 'password', 'app', 'unlock', 'reset password', 'role'],
     group: 'People',
   },
 ]
 
 /** Why an Admin's password actions are off on a box login's row. */
-export const BOX_LOGIN_REASON = 'This person also signs in to K2 itself, not only its Apps, so only the owner can change their password or unlock them.'
+export const BOX_LOGIN_REASON = `This person also signs in to ${PRODUCT_NAME} itself, not only its Apps, so only the owner can change their password or unlock them.`
 
 /**
  * The daemon's rule (0.46.6, `owner_or_admin_for`): the Owner resets,
@@ -384,7 +385,7 @@ export function PeopleSection(): React.JSX.Element {
                 testId="people-error"
                 action={<Button onClick={() => void refresh()}>Try again</Button>}
               >
-                K2 couldn’t read who can use your Apps. Nothing has changed.
+                {PRODUCT_NAME} couldn’t read who can use your Apps. Nothing has changed.
               </SettingsLoadState>
             </>
           ) : person ? (
@@ -589,7 +590,7 @@ function Everyone({
           }
         >
           People show up here when you add them, when they accept an invite to one of your Apps, or when an agent sets them up
-          for its App. To let someone run K2 itself, use Admin Access.
+          for its App. To let someone run {PRODUCT_NAME} itself, use Admin Access.
         </SettingsLoadState>
       </>
     )
@@ -952,7 +953,7 @@ export function ResetPanel({ person, onReset }: { person: PersonRow; onReset: ((
             {person.pendingReset
               ? `The extra access you gave starts once they choose their own password. Until then they reach only ${agent}.`
               : `They reach only ${agent} until they choose their own password, in the App or from a reset link you send. Anything more you give waits until then.`}{' '}
-            The agent may have entered their email, so K2 never sends your reset there: send it to an address you know is
+            The agent may have entered their email, so {PRODUCT_NAME} never sends your reset there: send it to an address you know is
             theirs, or get a one-time link.
           </>
         }
@@ -1005,7 +1006,7 @@ function SignInCard({
     if (!on) {
       const ok = await useConfirmDialogStore.getState().confirm({
         title: `Turn off ${HOST_LABEL} for ${person.username}?`,
-        message: `${person.username} is signed out of this server’s K2 page and can’t sign in again until you turn it back on. Their Apps aren’t changed.`,
+        message: `${person.username} is signed out of this server’s ${PRODUCT_NAME} page and can’t sign in again until you turn it back on. Their Apps aren’t changed.`,
         confirmLabel: 'Turn off',
         destructive: true,
       })
@@ -1126,7 +1127,7 @@ function SignInCard({
       ) : null}
       <SettingRow
         label={HOST_LABEL}
-        hint={host ? `Signs in to this server’s own K2 page. ${reachWords(hostRole, person.defaultRoomHandles)}` : 'Off. They can’t sign in to this server’s own K2 page.'}
+        hint={host ? `Signs in to this server’s own ${PRODUCT_NAME} page. ${reachWords(hostRole, person.defaultRoomHandles)}` : `Off. They can’t sign in to this server’s own ${PRODUCT_NAME} page.`}
         below={<SaveError state={writes.at('host')} />}
         testId="person-host"
       >
@@ -1255,7 +1256,7 @@ function NotedCard({
   const remove = async (grant: GrantRow): Promise<void> => {
     const ok = await useConfirmDialogStore.getState().confirm({
       title: `Remove the note about ${grant.targetId}?`,
-      message: `K2 forgets that ${person.username} may use ${grant.targetId}. Nothing else changes.`,
+      message: `${PRODUCT_NAME} forgets that ${person.username} may use ${grant.targetId}. Nothing else changes.`,
       confirmLabel: 'Remove',
       destructive: true,
     })
@@ -1263,7 +1264,7 @@ function NotedCard({
     if (await writes.run(grant.id, () => daemonCliPost(primaryScope(), 'skin/grants/delete', { id: grant.id }))) await refresh()
   }
   return (
-    <SettingsGroup title="Databases and tools" hint="Kept as a note for your records. K2 doesn’t enforce these." card testId="person-noted">
+    <SettingsGroup title="Databases and tools" hint={`Kept as a note for your records. ${PRODUCT_NAME} doesn’t enforce these.`} card testId="person-noted">
       {noted.map((grant) => (
         <SettingRow
           key={grant.id}
@@ -1360,7 +1361,7 @@ function AccountTab({
         <SettingRow label="Username" hint="What they sign in with. It can’t be changed.">
           <span className={cx(SETTING_FIELD_WIDTH, 'type-row font-mono text-[var(--color-text-primary)] truncate')}>{person.username}</span>
         </SettingRow>
-        <SettingRow label="Email" hint="Where K2 sends their invite and reset links.">
+        <SettingRow label="Email" hint={`Where ${PRODUCT_NAME} sends their invite and reset links.`}>
           <span className={cx(SETTING_FIELD_WIDTH, 'type-row text-[var(--color-text-primary)] truncate')}>{person.email ?? 'None'}</span>
         </SettingRow>
       </SettingsGroup>
@@ -1382,7 +1383,7 @@ function AccountTab({
             // safe either way (it says when they weren't locked).
             <SettingRow
               label="Locked out?"
-              hint="K2 couldn’t read whether they’re locked out right now. Unlock them if they can’t sign in."
+              hint={`${PRODUCT_NAME} couldn’t read whether they’re locked out right now. Unlock them if they can’t sign in.`}
               below={<SaveError state={writes.at('unlock')} />}
             >
               <Button disabled={!canReset || writes.busy === 'unlock'} onClick={() => void unlock()} data-testid="person-lock-unknown">

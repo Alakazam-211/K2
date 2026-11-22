@@ -7,6 +7,7 @@
 import React from 'react'
 import type { SettingEntry } from '../searchManifest'
 import type { SettingsSection } from '@/stores/settings'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** The providers that are coming, in nav order, with their CLI prefixes. */
 export const COMING_SOON_BOTS: { id: SettingsSection; name: string; cliPrefix: string }[] = [
@@ -17,7 +18,7 @@ export const COMING_SOON_BOTS: { id: SettingsSection; name: string; cliPrefix: s
 ]
 
 export function comingSoonBotCopy(name: string): string {
-  return `${name} support is coming soon — K2 will detect ${name} agents on this server and let you use them like Grok Bot.`
+  return `${name} support is coming soon — ${PRODUCT_NAME} will detect ${name} agents on this server and let you use them like Grok Bot.`
 }
 
 export const COMING_SOON_BOTS_MANIFEST: SettingEntry[] = COMING_SOON_BOTS.map((b) => ({

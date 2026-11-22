@@ -5,6 +5,7 @@
 
 import type { HealthTone } from './ConnectionsParts'
 import { boxHost } from '@/lib/hosts'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export type TunnelState =
   | 'loading'
@@ -96,7 +97,7 @@ export function summarizeTunnel(f: TunnelFacts): TunnelSummary {
       state: 'reachable',
       tone: 'ok',
       word: 'Reachable',
-      hint: 'Your phone and other computers can reach this server at this address. Add it under Connected Servers on another computer, or pair K2 Companion.',
+      hint: `Your phone and other computers can reach this server at this address. Add it under Connected Servers on another computer, or pair ${PRODUCT_NAME} Companion.`,
       action: 'turn-off',
     }
   }
@@ -117,8 +118,8 @@ export function summarizeTunnel(f: TunnelFacts): TunnelSummary {
       tone: 'error',
       word: "Couldn't turn on",
       hint: host
-        ? `K2 couldn't open the tunnel to ${host}. Check this computer is online, then try again.`
-        : "K2 couldn't open the tunnel. Check this computer is online, then try again.",
+        ? `${PRODUCT_NAME} couldn't open the tunnel to ${host}. Check this computer is online, then try again.`
+        : `${PRODUCT_NAME} couldn't open the tunnel. Check this computer is online, then try again.`,
       action: 'try-again',
       detail: f.startError,
     }

@@ -39,6 +39,7 @@ import {
   type GardenUnsigned,
 } from '@/lib/zen/garden-access-api'
 import { ZenOverlay, zenButtonStyle } from './ZenOverlay'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export type GardenHistoryTarget =
   | { kind: 'garden'; garden: string; name: string; readOnly?: boolean }
@@ -51,13 +52,13 @@ export type GardenHistoryTarget =
     }
 
 export const GARDEN_NOT_SIGNED_TEXT =
-  'This version was changed outside K2 and isn’t signed, so it runs without your data.'
+  `This version was changed outside ${PRODUCT_NAME} and isn’t signed, so it runs without your data.`
 
 /** 0.46.5 S0: a widget's version now covers its manifest, so a version
  *  saved by an older K2 comes back with a new version hash; only the live
  *  one's signature was carried at upgrade. */
 export const GARDEN_RESTORE_OLD_VERSION_TEXT =
-  'A version saved before K2 0.46.5 comes back as a new version, so it may need signing again.'
+  `A version saved before ${PRODUCT_NAME} 0.46.5 comes back as a new version, so it may need signing again.`
 
 const PAGE = 50
 
@@ -164,7 +165,7 @@ function HistoryLine({
           {confirming && (
             <div className="flex items-center flex-wrap" style={{ gap: 8, marginTop: 6 }} data-garden-history-restore-confirm="">
               <span>
-                Restore this version? K2 keeps the current one in history first.
+                Restore this version? {PRODUCT_NAME} keeps the current one in history first.
                 {widget && <> {GARDEN_RESTORE_OLD_VERSION_TEXT}</>}
               </span>
               <button type="button" style={zenButtonStyle(true)} disabled={busy} onClick={restore}>

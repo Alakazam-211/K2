@@ -2,6 +2,7 @@ import React from 'react'
 import { useSettingsStore } from '@/stores/settings'
 import { Toggle } from '@/components/ui'
 import { SettingRow } from '../controls/SettingControls'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 // ── PRD boot-status-ghost §2.3 — "Hide this server's details from the internet" ──
 // What `/boot-status` tells a caller with no valid sign-in on the tunnel,
@@ -18,7 +19,7 @@ import { SettingRow } from '../controls/SettingControls'
 
 export const BOOT_STATUS_PUBLIC_DETAIL = {
   compat:
-    'Anyone can see that K2 is running here, its version and its features. Older phone apps need this.',
+    `Anyone can see that ${PRODUCT_NAME} is running here, its version and its features. Older phone apps need this.`,
   ghost:
     'Visitors who aren\u2019t signed in see only that the server is up. Signed-in apps and phones still get everything; phone apps older than 4.0.4 lose newer features until they update.',
 } as const

@@ -98,7 +98,7 @@ import { findLocalNode, onComputeSync } from './compute-packages-api'
 import { touchIdOrPassword } from '@/lib/desktop-words'
 import { ActionError, CopyBox, NodeStatus, SettingsLink, failureFor, hardwareLine, osLine, tierWord, tierWords, type ActionFailure } from './ComputeBits'
 import { CI_PREVIEW_ENTRY, CiPreviewRow } from './CiPreviewRow'
-import { CLI_NAME } from '@/lib/brand'
+import { CLI_NAME, PRODUCT_NAME } from '@/lib/brand'
 
 export const COMPUTE_MANIFEST: SettingEntry[] = [
   { id: 'compute.preview', section: 'compute', label: 'Let agents use your machines', description: 'Let this server run jobs on your other machines', keywords: ['compute', 'node', 'nodes', 'preview', `${CLI_NAME} compute`, 'offload', 'build'] },
@@ -1334,12 +1334,12 @@ function ThisComputerPart({
       <SettingsLoadState kind="loading" title="Checking this computer…" />
     ) : state === 'disabled' ? (
       <SettingsLoadState kind="empty" title="Compute is off on this computer">
-        This computer’s own K2 has compute off. Switch this window to This computer, then turn on Let agents use your machines on the
+        This computer’s own {PRODUCT_NAME} has compute off. Switch this window to This computer, then turn on Let agents use your machines on the
         Machines tab.
       </SettingsLoadState>
     ) : state === 'error' && !status ? (
       <SettingsLoadState kind="error" title="Couldn’t check this computer" detail={error} action={<Button onClick={() => void onChanged()}>Try again</Button>}>
-        K2 on this computer didn’t answer. Nothing changed here.
+        {PRODUCT_NAME} on this computer didn’t answer. Nothing changed here.
       </SettingsLoadState>
     ) : undefined
 
@@ -1417,18 +1417,18 @@ export function RemoteAdminToggles({
   return (
     <div className="divide-y divide-[var(--color-border)]" data-testid="compute-remote-admin">
       <SettingSwitchRow
-        control={<Toggle checked={keepUpdated} disabled={disabled} onChange={onKeepUpdated} aria-label="Let K2 keep this computer updated and healthy" />}
+        control={<Toggle checked={keepUpdated} disabled={disabled} onChange={onKeepUpdated} aria-label={`Let ${PRODUCT_NAME} keep this computer updated and healthy`} />}
       >
-        <div className={SETTING_ROW_LABEL}>Let K2 keep this computer updated and healthy</div>
+        <div className={SETTING_ROW_LABEL}>Let {PRODUCT_NAME} keep this computer updated and healthy</div>
         <p className={SETTING_ROW_HINT}>
-          K2 installs signed updates to its job runner, rolls back a bad one, and can pause jobs or lower limits. Raising a limit waits for you.
+          {PRODUCT_NAME} installs signed updates to its job runner, rolls back a bad one, and can pause jobs or lower limits. Raising a limit waits for you.
         </p>
       </SettingSwitchRow>
       {keepUpdated ? (
         <SettingSwitchRow
-          control={<Toggle checked={allowRoot} disabled={disabled} onChange={onAllowRoot} aria-label="Also let K2 run admin scripts as root" />}
+          control={<Toggle checked={allowRoot} disabled={disabled} onChange={onAllowRoot} aria-label={`Also let ${PRODUCT_NAME} run admin scripts as root`} />}
         >
-          <div className={SETTING_ROW_LABEL}>Also let K2 run admin scripts as root</div>
+          <div className={SETTING_ROW_LABEL}>Also let {PRODUCT_NAME} run admin scripts as root</div>
           <p className={SETTING_ROW_HINT}>Each script still waits for your approval ({touchIdOrPassword()}).</p>
         </SettingSwitchRow>
       ) : null}
@@ -1437,9 +1437,9 @@ export function RemoteAdminToggles({
 }
 
 const LEVEL_WORD: Record<RemoteAdminLevel, string> = {
-  off: 'K2 can’t update this computer',
-  policy: 'K2 keeps this computer updated and healthy',
-  full: 'K2 keeps this computer updated and may run admin scripts you approve',
+  off: `${PRODUCT_NAME} can’t update this computer`,
+  policy: `${PRODUCT_NAME} keeps this computer updated and healthy`,
+  full: `${PRODUCT_NAME} keeps this computer updated and may run admin scripts you approve`,
 }
 
 /** The switches once the node is on: they show the node's level and change
@@ -1451,7 +1451,7 @@ function RemoteAdminPart({ status, onChanged }: { status: LocalStatus; onChanged
   const keepUpdated = level === 'policy' || level === 'full'
   const change = async (to: RemoteAdminLevel): Promise<void> => {
     if (to === level) return
-    const out = await run('Couldn’t change what K2 may do on this computer.', 'change it', () => setLocalRemoteAdmin(to))
+    const out = await run(`Couldn’t change what ${PRODUCT_NAME} may do on this computer.`, 'change it', () => setLocalRemoteAdmin(to))
     if (out) setResult(out)
   }
   return (
@@ -1470,7 +1470,7 @@ function RemoteAdminPart({ status, onChanged }: { status: LocalStatus; onChanged
         {!keepUpdated ? (
           <div className="space-y-2" data-testid="compute-cant-update">
             <p className="type-hint text-[var(--color-status-warn-text)]">
-              K2 can’t update this computer. Turn the first switch on, or run this once in a terminal as an admin:
+              {PRODUCT_NAME} can’t update this computer. Turn the first switch on, or run this once in a terminal as an admin:
             </p>
             {status.remoteAdminCommand ? <CopyBox label="Admin command" text={status.remoteAdminCommand} /> : null}
           </div>
@@ -1761,7 +1761,7 @@ function EnableSheet({
               ) : null}
             </>
           ) : (
-            'This K2 doesn’t report whether your home folder is private.'
+            `This ${PRODUCT_NAME} doesn’t report whether your home folder is private.`
           )
         }
       >
@@ -1859,7 +1859,7 @@ function LocalNodePanel({
           <div className="type-name text-[var(--color-text-primary)]">{node?.name ?? 'Job runner installed'}</div>
           <div className={SETTING_ROW_HINT}>
             {node?.controller ? `Runs jobs for ${controllerHost(node.controller) || node.controller}` : 'Not paired with a server yet'}
-            {node?.route ? (node.route === 'relay' ? ', reached through K2’s relay.' : `, reached directly (${node.route}).`) : '.'}
+            {node?.route ? (node.route === 'relay' ? `, reached through ${PRODUCT_NAME}’s relay.` : `, reached directly (${node.route}).`) : '.'}
           </div>
           {node?.last_error ? <p className="type-hint text-[var(--color-status-warn-text)] mt-1">{node.last_error}</p> : null}
           {node?.unavailable && node.unavailable.length > 0 ? (

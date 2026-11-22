@@ -20,6 +20,7 @@ import { DaemonHttpError } from '@/lib/daemon-http-error'
 import { openQueuedWebSocket } from '@/lib/grid-dial-queue'
 import { readBinaryFrame, type DecodeSupport, type StreamFrame } from '@/components/Stream/stream-wire'
 import { desktopStreamUrl, closeReasonText, parseServerMsg, serializeViewerMsg, type Codec, type ServerMsg, type ViewerMsg } from './desktop-wire'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export type DesktopConnState = 'connecting' | 'open' | 'closed' | 'error'
 
@@ -77,7 +78,7 @@ export function ticketRefusalText(err: unknown): string {
       case 'desktop_logins_only':
         return 'Sign in to this computer from another device to watch its screen.'
       case 'audit_unavailable':
-        return "K2 couldn't write the access log, so it didn't connect you."
+        return `${PRODUCT_NAME} couldn't write the access log, so it didn't connect you.`
     }
     return err.message
   }

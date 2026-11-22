@@ -21,6 +21,7 @@ import {
 import { Button, Input, Toggle } from '@/components/ui'
 import { SettingRow } from '../controls/SettingControls'
 import { AccessSheet, DIALOG_FIELD, DIALOG_MUTED, Field } from '../sections/AccessDialogs'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** Who turned it on, in words. */
 export function autoNextByText(by: string | null): string | null {
@@ -83,7 +84,7 @@ export function AutoNextRow({
 
   const by = autoNextByText(tool.autoNext?.by ?? null)
   const hint = [
-    on ? `On${by ? `, turned on by ${by}` : ''}: at 99% K2 moves to the next ${tool.display} subscription by itself.` : 'Off: K2 never switches on its own.',
+    on ? `On${by ? `, turned on by ${by}` : ''}: at 99% ${PRODUCT_NAME} moves to the next ${tool.display} subscription by itself.` : `Off: ${PRODUCT_NAME} never switches on its own.`,
     tool.autoNext?.lastLine ?? null,
   ]
     .filter(Boolean)

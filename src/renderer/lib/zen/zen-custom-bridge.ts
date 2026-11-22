@@ -109,6 +109,7 @@ import {
 } from './zen-custom-blobs'
 import { zenStoreErrorFrom } from './zen-custom-store'
 import type { DownloadSliceReader } from '../fs-transfer'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** UW29 budgets. */
 export const ZEN_WIDGET_BUDGET = {
@@ -377,7 +378,7 @@ export interface ZenCustomLayer {
 
 /** What a retired `k2.sources.ask` answers (code `retired`, 0.46.4). */
 export const ZEN_SOURCES_ASK_RETIRED =
-  'k2.sources.ask is retired: K2 no longer opens an Ask an agent box from a card (0.46.4), and the verb goes in 0.47.0.'
+  `k2.sources.ask is retired: ${PRODUCT_NAME} no longer opens an Ask an agent box from a card (0.46.4), and the verb goes in 0.47.0.`
 
 /** How long a `not_bound` `sources.subscribe` waits for the placement to
  *  bind its address before the refusal reaches the widget (0.46.1 S3). A
@@ -617,7 +618,7 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
       refuse('rate_limited', `links.open: at most ${ZEN_LINKS_OPEN.perSecond} a second and ${ZEN_LINKS_OPEN.perMinute} a minute.`)
     }
     if (!links!.pressed()) refuse('failed', 'links.open needs a click: it works only just after the person presses in the widget.')
-    if (linkAsking) refuse('rate_limited', 'links.open: K2 is already asking the person about a link.')
+    if (linkAsking) refuse('rate_limited', `links.open: ${PRODUCT_NAME} is already asking the person about a link.`)
     linkCalls.push(now)
     const t = target as { url: string; site: string }
     linkAsking = true
@@ -879,7 +880,7 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
     if ((last !== undefined && now - last < ZEN_DOWNLOADS.everyMs) || pickCalls.length >= ZEN_DOWNLOADS.perMinute) {
       refuse('rate_limited', `uploads.pick: at most one pick every 2 seconds and ${ZEN_DOWNLOADS.perMinute} a minute.`)
     }
-    if (!u.pressed()) refuse('failed', 'uploads.pick opens K2’s picker only just after the person presses in the widget.')
+    if (!u.pressed()) refuse('failed', `uploads.pick opens ${PRODUCT_NAME}’s picker only just after the person presses in the widget.`)
     if (uploadPicking) refuse('rate_limited', 'uploads.pick: the picker is already open.')
     pickCalls.push(now)
     uploadPicking = true
@@ -899,7 +900,7 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
   }
 
   const needBoardFiles = (verb: string): ZenCustomBoardFiles => {
-    if (!deps.boardFiles) refuse('verb_unavailable', `${verb} isn’t available here (K2’s own Board widget, with board files on).`)
+    if (!deps.boardFiles) refuse('verb_unavailable', `${verb} isn’t available here (${PRODUCT_NAME}’s own Board widget, with board files on).`)
     return deps.boardFiles!
   }
 
@@ -994,7 +995,7 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
     // 0.46.7 Workbench: K2's own pane for a reached agent, after a press.
     'agents.openTerminal': async (args) => {
       const t = deps.terminal
-      if (!t) refuse('verb_unavailable', 'agents.openTerminal isn’t available here (K2’s desktop only).')
+      if (!t) refuse('verb_unavailable', `agents.openTerminal isn’t available here (${PRODUCT_NAME}’s desktop only).`)
       const address = needAddress('agents.openTerminal', args[0])
       if (!t!.pressed()) refuse('failed', 'agents.openTerminal needs a click: it works only just after the person presses in the widget.')
       return { opened: await t!.open(address) }
@@ -1165,8 +1166,8 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
     },
     'thread.pickFiles': async (args) => {
       const address = needAddress('thread.pickFiles', args[0])
-      if (deps.gesture && !deps.gesture()) refuse('failed', 'thread.pickFiles opens K2’s picker only when the person clicks in the widget.')
-      if (picking) refuse('rate_limited', 'K2’s file picker is already open.')
+      if (deps.gesture && !deps.gesture()) refuse('failed', `thread.pickFiles opens ${PRODUCT_NAME}’s picker only when the person clicks in the widget.`)
+      if (picking) refuse('rate_limited', `${PRODUCT_NAME}’s file picker is already open.`)
       picking = true
       try {
         await deps.ensureConversation(address)
@@ -1203,18 +1204,18 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
       // conversation widget or the agent's server answers it, never a
       // widget's code (prd-accept-cards-from-home-v1 §3.3).
       if (kind === 'handoff') {
-        refuse('failed', 'A widget never accepts a secret. Answer it in the agent’s Thread: on Home, in K2’s conversation widget, or on its server.')
+        refuse('failed', `A widget never accepts a secret. Answer it in the agent’s Thread: on Home, in ${PRODUCT_NAME}’s conversation widget, or on its server.`)
       }
       // Catalog v50: a secret card opens K2's own sheet outside the frame;
       // the person types the value there and it never reaches the widget.
       // The widget sends no choice (UW50 stays: never a value).
       if (kind === 'secret') {
         if (!noChoice) {
-          refuse('bad_args', 'A secret card takes no choice: K2’s own sheet asks the person for the value. Call thread.answer(address, cardId).')
+          refuse('bad_args', `A secret card takes no choice: ${PRODUCT_NAME}’s own sheet asks the person for the value. Call thread.answer(address, cardId).`)
         }
         if (args.length > 3) refuse('bad_args', 'thread.answer takes (address, cardId, choice?)')
         const sheet = deps.secrets
-        if (!sheet) refuse('verb_unavailable', 'K2 can’t show a secret card from this widget here; answer it in the agent’s Thread.')
+        if (!sheet) refuse('verb_unavailable', `${PRODUCT_NAME} can’t show a secret card from this widget here; answer it in the agent’s Thread.`)
         needSending()
         await deps.ensureConversation(address)
         const opened = await sheet!.open(address, cardId as string)

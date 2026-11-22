@@ -7,6 +7,7 @@
 
 import { failureWords } from './left-out'
 import type { PictureStatus } from './picture-source'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export type CardAction = 'retry' | 'try-camera' | 'show-list' | 'ask'
 export interface PictureCard {
@@ -87,7 +88,7 @@ export function pictureWords(pv: PictureStatus, c: PictureContext): PictureWords
     card = {
       kind: 'nopicture',
       title: 'No picture for this file yet',
-      body: 'K2 can’t read this file’s shapes yet. The list still updates live; the dots show where objects sit.',
+      body: `${PRODUCT_NAME} can’t read this file’s shapes yet. The list still updates live; the dots show where objects sit.`,
       actions: [{ id: 'retry', label: 'Retry', primary: true }, { id: 'show-list', label: 'Show the list', primary: false }],
       atTop: true,
     }

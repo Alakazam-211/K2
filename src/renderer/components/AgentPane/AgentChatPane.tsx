@@ -89,6 +89,7 @@ import { usePresetsStore } from '@/stores/presets'
 import { harnessMissingMessage, isMainChatMissing, MAIN_CHAT_MISSING_MESSAGE } from '@/lib/harness-missing'
 import { firstChatChoices, isHarnessNotInstalled, type FirstChatHarness } from '@/lib/first-chat-choice'
 import { FirstChatPicker } from './FirstChatPicker'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 interface AgentChatPaneProps {
   agentName: string
@@ -2139,7 +2140,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
             Chat session failed to start
           </div>
           <div className="text-[11px] text-[var(--color-text-muted)] max-w-[40ch]">
-            The chat process exited repeatedly right after starting, so K2
+            The chat process exited repeatedly right after starting, so {PRODUCT_NAME}
             stopped retrying to avoid a spawn loop. Click Retry to try again.
           </div>
           <RetryButton onClick={() => void handleRefresh()} refreshing={refreshing} />

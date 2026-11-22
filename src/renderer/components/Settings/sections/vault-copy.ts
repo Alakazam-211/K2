@@ -4,14 +4,15 @@
 
 import { handoffOriginText, shortDay } from './handoff-api'
 import type { VaultSecret } from './vault-api'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** How long a revealed value stays on screen. */
 export const REVEAL_SHOW_MS = 30_000
 
 const DELIVERY_LABEL: Record<string, string> = {
-  fetch: 'K2 adds it to calls',
-  proxy: 'K2 adds it to calls',
-  agent: 'SSH signs through K2; nobody sees the key',
+  fetch: `${PRODUCT_NAME} adds it to calls`,
+  proxy: `${PRODUCT_NAME} adds it to calls`,
+  agent: `SSH signs through ${PRODUCT_NAME}; nobody sees the key`,
   file: 'A file the agent can read',
   env: 'An environment variable the agent can read',
   api: 'The agent can print it',
@@ -95,7 +96,7 @@ export function isMultilineKind(kind: string): boolean {
 export function originLabel(s: Pick<VaultSecret, 'origin' | 'createdBy'> & Pick<Partial<VaultSecret>, 'handoff'>): string {
   if (s.origin.startsWith('thread:')) return 'Thread card'
   if (s.origin.startsWith('handoff:')) return handoffOriginText(s.origin, s.handoff)
-  if (s.origin.startsWith('adopt:')) return 'moved in from older K2 storage'
+  if (s.origin.startsWith('adopt:')) return `moved in from older ${PRODUCT_NAME} storage`
   if (s.createdBy.startsWith('agent:')) return `agent ${s.createdBy.slice('agent:'.length)}`
   if (s.createdBy.startsWith('guest:')) return `guest ${s.createdBy.slice('guest:'.length)}`
   return 'a person'
@@ -108,7 +109,7 @@ export function sourceWords(s: VaultSecret): string {
     const t = originLabel(s)
     return t.charAt(0).toUpperCase() + t.slice(1)
   }
-  if (s.origin.startsWith('adopt:')) return 'Moved in from older K2 storage'
+  if (s.origin.startsWith('adopt:')) return `Moved in from older ${PRODUCT_NAME} storage`
   return `Added by ${originLabel(s)}`
 }
 
@@ -156,7 +157,7 @@ export function actorWords(a: string): string {
   const who = a.slice(i + 1)
   const kind = a.slice(0, i)
   if (kind === 'connect') return who
-  if (kind === 'system') return 'K2'
+  if (kind === 'system') return PRODUCT_NAME
   return `${kind} ${who}`
 }
 

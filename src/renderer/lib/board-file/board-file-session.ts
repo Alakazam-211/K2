@@ -16,6 +16,7 @@
 // asking.
 
 import { DaemonHttpError } from '@/lib/daemon-http-error'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const BOARD_FILE_SHAPE = 1
 const IDLE_MS = 400
@@ -273,7 +274,7 @@ export function createBoardFileSession(deps: BoardFileDeps): BoardFileSession {
 
   const readOnlyWhy = (): string | null => {
     if (file === 'moved') return 'this file was moved or deleted'
-    if (file !== 'ok') return 'K2 can’t read this file right now'
+    if (file !== 'ok') return `${PRODUCT_NAME} can’t read this file right now`
     if (!canWrite) return 'this folder is read only'
     if (saveErr === 'read_only') return 'this folder is read only'
     if (missingBlocksSave) return 'a picture is missing from this file'
@@ -285,16 +286,16 @@ export function createBoardFileSession(deps: BoardFileDeps): BoardFileSession {
     const n = held.length
     const here = held.some((h) => h.heldId === null)
     if (saveErr) {
-      const why = saveErr === 'disk_full' ? 'the disk is full' : saveErr === 'read_only' ? 'this folder is read only' : saveErr === 'offline' ? 'K2 isn’t answering' : 'K2 can’t write the file'
+      const why = saveErr === 'disk_full' ? 'the disk is full' : saveErr === 'read_only' ? 'this folder is read only' : saveErr === 'offline' ? `${PRODUCT_NAME} isn’t answering` : `${PRODUCT_NAME} can’t write the file`
       return { state: 'error', text: `Not saved: ${why}. Retrying`, detail }
     }
     if (file === 'moved') return pendingCount() + n ? { state: 'error', text: 'Not saved: this file was moved or deleted' } : { state: 'saved', text: 'Read only' }
-    if (file !== 'ok') return { state: 'error', text: pendingCount() + n ? 'Not saved: K2 can’t read this file' : 'K2 can’t read this file' }
+    if (file !== 'ok') return { state: 'error', text: pendingCount() + n ? `Not saved: ${PRODUCT_NAME} can’t read this file` : `${PRODUCT_NAME} can’t read this file` }
     if (inflight) return { state: 'saving', text: 'Saving…', detail }
     if (queue.length) return { state: 'pending', text: holding ? 'Editing…' : 'Saving…', detail }
     if (n) {
       const edits = n === 1 ? '1 edit isn’t saved' : `${n} edits aren’t saved`
-      return { state: 'error', text: edits, detail: here ? 'Only this tab has it until you choose' : 'K2 keeps it until you choose, even after a restart' }
+      return { state: 'error', text: edits, detail: here ? 'Only this tab has it until you choose' : `${PRODUCT_NAME} keeps it until you choose, even after a restart` }
     }
     return { state: 'saved', text: 'Saved', detail }
   }
@@ -760,7 +761,7 @@ export function createBoardFileSession(deps: BoardFileDeps): BoardFileSession {
 
   function refusalText(code: string, hint?: string): string {
     if (code === 'object_locked') return 'That item is locked in this file, so the change was undone'
-    return `K2 couldn’t save that change, so it was undone (${hint || code})`
+    return `${PRODUCT_NAME} couldn’t save that change, so it was undone (${hint || code})`
   }
 
   const applyToShadow = (ops: BoardOp[]): void => {

@@ -6,6 +6,7 @@
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { primaryScope } from '@/kessel/server-scope'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export type GitToolsState = 'ready' | 'not_installed' | 'installing' | 'git_broken'
 
@@ -67,7 +68,7 @@ export async function recheckGitTools(): Promise<GitToolsStatus> {
 
 /** What Apple's dialog wants, shown while the install runs. */
 export const APPLE_INSTALLER_HINT =
-  "Apple's installer is open (it can be behind the K2 window). Click Install, not Get Xcode (that opens the App Store for the full Xcode), agree to Apple's licence, then wait for the download (about 5–15 min)."
+  `Apple's installer is open (it can be behind the ${PRODUCT_NAME} window). Click Install, not Get Xcode (that opens the App Store for the full Xcode), agree to Apple's licence, then wait for the download (about 5–15 min).`
 
 /** One short line for the state. */
 export function gitToolsStateLabel(s: GitToolsStatus): string {

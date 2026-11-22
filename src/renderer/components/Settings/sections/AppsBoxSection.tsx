@@ -68,6 +68,7 @@ import { AppHandoverSheet, approveWithConfirm } from './AppHandoverSheet'
 import { APP_APPROVE_CONFIRM_ACTION } from './app-approvals-api'
 import { vaultApi } from './vault-api'
 import { isAppsOff } from './apps-server-api'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 type Load = { kind: 'loading' } | { kind: 'off' } | { kind: 'ready'; apps: BoxApp[] } | { kind: 'error'; text: string }
 
@@ -247,7 +248,7 @@ export function AppsBoxSection(): React.JSX.Element | null {
           ) : load.kind === 'error' ? (
             <SettingsLoadState
               kind="error"
-              title="K2 couldn’t list the Apps on this server"
+              title={`${PRODUCT_NAME} couldn’t list the Apps on this server`}
               detail={load.text}
               action={<Button onClick={() => void refresh()}>Try again</Button>}
             >

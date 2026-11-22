@@ -17,6 +17,7 @@
 
 import { SmartphoneIcon } from '@/components/icons/K2Icons'
 import { setupAcceptedLine, type SimDeviceProfile, type SimLaneNeed, type SimLaneSetup, type SimPlatform, type SimState } from './simApi'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export interface DevicePickerGroup {
   platform: SimPlatform
@@ -112,8 +113,8 @@ function NotReady({
             {failedLine}
             <div>
               {many
-                ? "The server's owner accepts them together, once. K2 puts them on this workspace's Thread to read and accept."
-                : "The server's owner accepts it once. K2 puts the licence on this workspace's Thread to read and accept."}
+                ? `The server's owner accepts them together, once. ${PRODUCT_NAME} puts them on this workspace's Thread to read and accept.`
+                : `The server's owner accepts it once. ${PRODUCT_NAME} puts the licence on this workspace's Thread to read and accept.`}
             </div>
           </>
         }
@@ -161,7 +162,7 @@ function NotReady({
         title={`Set up ${PLATFORM_LABEL[g.platform]}`}
         body={
           <div>
-            The server's owner sets it up once: K2 downloads {install.what}
+            The server's owner sets it up once: {PRODUCT_NAME} downloads {install.what}
             {install.bytes ? ` (about ${formatBytes(install.bytes)})` : ''}.{ownerRetries ? '' : ' The owner can start it from this tab.'}
           </div>
         }

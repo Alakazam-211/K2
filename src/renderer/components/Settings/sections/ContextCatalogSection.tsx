@@ -21,13 +21,14 @@ import { SETTING_ROW_HINT, SettingsGroup, SettingsLoadState, SETTING_LIST_ROW_HO
 import { DeletePackDialog, NewPackDialog } from './ContextCatalogDialogs'
 import { isLivePack, isUserPack, packMatches, packSummary } from './context-catalog-copy'
 import { useActiveHostRole } from './useActiveHostRole'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const CONTEXT_CATALOG_MANIFEST: SettingEntry[] = [
   {
     id: 'context-catalog.library',
     section: 'context-catalog',
     label: 'Context Catalog',
-    description: 'Ready-made instructions you can add to any workspace’s agents: the ones K2 ships and your own.',
+    description: `Ready-made instructions you can add to any workspace’s agents: the ones ${PRODUCT_NAME} ships and your own.`,
     keywords: ['context', 'catalog', 'pack', 'library', 'layer', 'agents.md', 'instructions', 'standing orders'],
   },
   {
@@ -219,8 +220,8 @@ export function ContextCatalogSection(): React.JSX.Element {
 
         {load.kind === 'ready' && builtIn.length > 0 ? (
           <SettingsGroup
-            title="Built into K2"
-            hint="These come with K2 and stay up to date with it. Recommended ones suit most workspaces."
+            title={`Built into ${PRODUCT_NAME}`}
+            hint={`These come with ${PRODUCT_NAME} and stay up to date with it. Recommended ones suit most workspaces.`}
             card
             testId="context-catalog-builtin"
           >
@@ -293,7 +294,7 @@ function PackRow({
             <span className="type-hint text-[var(--color-text-secondary)] font-mono truncate">{p.id}</span>
             {p.recommended ? <Tag tone="accent">Recommended</Tag> : null}
             {!mine && isLivePack(p) ? (
-              <Tag tone="muted" title="K2 rebuilds this list from current data each time it updates the agent’s instructions.">
+              <Tag tone="muted" title={`${PRODUCT_NAME} rebuilds this list from current data each time it updates the agent’s instructions.`}>
                 Updates itself
               </Tag>
             ) : null}

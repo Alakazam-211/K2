@@ -29,6 +29,7 @@ import {
   readerRoleText,
   type ReaderLogRow,
 } from './mail-reader-log-api'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const MAIL_READER_LOG_MANIFEST: SettingEntry[] = [
   {
@@ -60,7 +61,7 @@ function ReadRow({ r, open, onToggle }: { r: ReaderLogRow; open: boolean; onTogg
     { label: 'Through', value: agentTab ? 'An agent tab’s Inbox' : 'The Mail page' },
     {
       label: 'Outcome',
-      value: refused ? 'Refused: K2 didn’t open the mail' : 'Allowed',
+      value: refused ? `Refused: ${PRODUCT_NAME} didn’t open the mail` : 'Allowed',
     },
     { label: 'Reason given', value: r.reason || 'None given' },
     { label: 'From', value: readerFromText(r.ipHint) },
@@ -206,8 +207,8 @@ export function MailReaderLogSection(): React.JSX.Element {
       >
         <span data-testid="reader-log-error">
           {view.unreadable
-            ? 'This server sent an answer K2 couldn’t read, so there’s nothing to show yet. Try again; if it keeps happening, update K2 on that server.'
-            : 'K2 couldn’t read this server’s mailbox log, so there’s nothing to show yet. Nothing in it is lost; try again in a moment.'}
+            ? `This server sent an answer ${PRODUCT_NAME} couldn’t read, so there’s nothing to show yet. Try again; if it keeps happening, update ${PRODUCT_NAME} on that server.`
+            : `${PRODUCT_NAME} couldn’t read this server’s mailbox log, so there’s nothing to show yet. Nothing in it is lost; try again in a moment.`}
         </span>
       </SettingsLoadState>
     ) : all.length === 0 && !narrowed ? (
@@ -226,7 +227,7 @@ export function MailReaderLogSection(): React.JSX.Element {
       <header className="min-w-0" data-settings-id="email-reader-log.log">
         <h2 className="type-title text-[var(--color-text-primary)]">Email Reader Log</h2>
         <p className={SETTING_ROW_HINT}>
-          Each time someone opens, lists or changes a mailbox from the Mail page or an agent tab, K2 records it here before the
+          Each time someone opens, lists or changes a mailbox from the Mail page or an agent tab, {PRODUCT_NAME} records it here before the
           mail is opened. The mailbox’s owner isn’t told, and no message content is kept.
         </p>
       </header>
@@ -294,7 +295,7 @@ export function MailReaderLogSection(): React.JSX.Element {
           <span className="type-hint text-[var(--color-text-secondary)]" data-testid="reader-log-count">
             {narrowed ? `Showing ${rows.length} of ` : ''}
             {all.length === 1 ? (narrowed ? 'one read' : 'One read') : `${all.length} reads`} {windowText}
-            {all.length >= READER_LOG_DEFAULT_LIMIT ? ` (K2 shows the newest ${READER_LOG_DEFAULT_LIMIT})` : ''}
+            {all.length >= READER_LOG_DEFAULT_LIMIT ? ` (${PRODUCT_NAME} shows the newest ${READER_LOG_DEFAULT_LIMIT})` : ''}
           </span>
           {narrowed && rows.length > 0 && (
             <Button variant="quiet" onClick={clear}>

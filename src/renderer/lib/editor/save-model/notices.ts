@@ -4,6 +4,7 @@
 // `saveStatus`).
 
 import { failureHint } from './write'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export type SaveNotice =
   | { kind: 'failed'; reason: string; second: boolean }
@@ -57,7 +58,7 @@ export function saveNoticeView(n: SaveNotice, fileName: string): SaveNoticeView 
         tone: 'info',
         role: 'status',
         icon: 'history',
-        title: 'Restored your unsaved changes from before K2 quit.',
+        title: `Restored your unsaved changes from before ${PRODUCT_NAME} quit.`,
         line: 'They save in a moment.',
         actions: [{ id: 'undo-restore', label: 'Undo', hint: `Back to ${fileName} as it is on disk` }],
         closable: true,
@@ -67,19 +68,19 @@ export function saveNoticeView(n: SaveNotice, fileName: string): SaveNoticeView 
         tone: 'info',
         role: 'status',
         icon: 'info',
-        title: 'Saved outside K2. Its changes are merged in.',
-        line: n.kept > 0 ? 'Where you both changed the same lines, K2 kept both versions for you to tidy.' : null,
+        title: `Saved outside ${PRODUCT_NAME}. Its changes are merged in.`,
+        line: n.kept > 0 ? `Where you both changed the same lines, ${PRODUCT_NAME} kept both versions for you to tidy.` : null,
         actions: [
           n.comparing ? { id: 'close-compare', label: 'Close compare' } : { id: 'compare', label: 'Compare' },
           { id: 'undo-theirs', label: 'Undo their save', hint: 'Puts back your text from before that save. This also replaces edits made since' },
-          { id: 'use-theirs', label: 'Use their version', hint: 'Takes the file as it was saved outside K2. Undo brings your words back' },
+          { id: 'use-theirs', label: 'Use their version', hint: `Takes the file as it was saved outside ${PRODUCT_NAME}. Undo brings your words back` },
         ],
         closable: true,
       }
     case 'undone':
       return { tone: 'info', role: 'status', icon: 'history', title: 'Put back your text from before that save.', line: 'It replaces their save in a moment.', actions: [{ id: 'redo-merge', label: 'Redo' }], closable: true }
     case 'used-theirs':
-      return { tone: 'info', role: 'status', icon: 'history', title: 'Using the version saved outside K2.', line: 'Your words are gone from the file. Undo brings them back.', actions: [{ id: 'undo-use-theirs', label: 'Undo' }], closable: true }
+      return { tone: 'info', role: 'status', icon: 'history', title: `Using the version saved outside ${PRODUCT_NAME}.`, line: 'Your words are gone from the file. Undo brings them back.', actions: [{ id: 'undo-use-theirs', label: 'Undo' }], closable: true }
     case 'missing':
       return { tone: 'warn', role: 'alert', icon: 'warn', title: `${fileName} was deleted or moved.`, line: 'Your words are still here.', actions: [{ id: 'save-again', label: 'Save it again', primary: true }, COPY], closable: false }
     case 'unmergeable':
@@ -88,7 +89,7 @@ export function saveNoticeView(n: SaveNotice, fileName: string): SaveNoticeView 
         role: 'alert',
         icon: 'warn',
         title: `${fileName} changed on disk while you had unsaved words.`,
-        line: 'K2 can’t see its text to merge. Reload takes the file; Save a copy keeps yours.',
+        line: `${PRODUCT_NAME} can’t see its text to merge. Reload takes the file; Save a copy keeps yours.`,
         actions: [{ id: 'reload', label: 'Reload' }, { ...COPY, primary: true }],
         closable: false,
       }

@@ -15,6 +15,7 @@ import { onZenThreadChange, zenThreadItemTarget } from '@/lib/zen/zen-data'
 import type { ZenPermissionAsk } from '@/lib/zen/permission-sheet'
 import { zenButtonStyle } from './ZenOverlay'
 import { ZEN_SHEET_TITLE_STYLE, ZenSheet } from './ZenSheet'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export interface ZenPermissionSheetProps {
   ask: ZenPermissionAsk
@@ -49,7 +50,7 @@ export function ZenPermissionSheet({
       panelStyle={THREAD_CARD_TOKENS}
     >
       <p style={{ color: 'var(--zen-text-muted)', fontSize: 11, ...ZEN_SHEET_TITLE_STYLE }}>
-        K2 shows this outside the widget. Only you can answer it here.
+        {PRODUCT_NAME} shows this outside the widget. Only you can answer it here.
       </p>
       {choice?.permission ? (
         <ChoiceCard

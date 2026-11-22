@@ -7,8 +7,9 @@ import { cx } from '@/components/ui'
 import { agoText, personById, type LivePerson } from '@/lib/live-view/shared/people'
 import type { LiveChange } from '@/lib/live-view/shared/source'
 import { PanelSection } from './PanelSection'
+import { PRODUCT_NAME } from '@/lib/brand'
 
-const OUTSIDE = { name: 'Saved outside K2', colour: 'var(--color-text-muted)' }
+const OUTSIDE = { name: `Saved outside ${PRODUCT_NAME}`, colour: 'var(--color-text-muted)' }
 
 export function ChangesList({
   changes,

@@ -65,6 +65,7 @@ import {
   type SqlParticipant,
   type SqlStatus,
 } from './data-api'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const DATA_MANIFEST: SettingEntry[] = [
   {
@@ -255,7 +256,7 @@ function statusSentence(status: SqlStatus): string {
     case 'running':
       return `${pg} is running. Agents and apps on this server can use their databases.`
     case 'degraded':
-      return `${pg} is running, but K2 found a problem. Databases may be slow or miss changes.`
+      return `${pg} is running, but ${PRODUCT_NAME} found a problem. Databases may be slow or miss changes.`
     case 'installing':
       return `${pg} is starting. Databases are ready in a moment.`
     case 'error':
@@ -375,7 +376,7 @@ function LiveMovesGroup({
         <ActionSheet
           testId="data-live-switch-confirm"
           title={`Switch ${ask.db} to Postgres ${ask.to}?`}
-          message={`Changes to ${ask.db} pause for a few seconds while K2 switches over; reading keeps working. After that, ${ask.db} runs on Postgres ${ask.to}.`}
+          message={`Changes to ${ask.db} pause for a few seconds while ${PRODUCT_NAME} switches over; reading keeps working. After that, ${ask.db} runs on Postgres ${ask.to}.`}
           confirmLabel="Switch now"
           busyLabel="Switching…"
           failWhat={`Couldn’t switch ${ask.db}.`}
@@ -500,7 +501,7 @@ function ServerTab({
             }
           >
             {notInstalled
-              ? 'Setting it up starts the Postgres that came with this server, so each workspace can have its own database. If the server was set up without Postgres, K2 says so and nothing changes.'
+              ? `Setting it up starts the Postgres that came with this server, so each workspace can have its own database. If the server was set up without Postgres, ${PRODUCT_NAME} says so and nothing changes.`
               : 'Your databases and their data are kept. Turn it on to use them again.'}
           </SettingsLoadState>
         }

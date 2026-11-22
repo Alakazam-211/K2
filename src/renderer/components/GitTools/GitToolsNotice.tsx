@@ -15,6 +15,7 @@ import {
   recheckGitTools,
   type GitToolsStatus,
 } from '@/lib/git-tools'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** While git isn't ready, ask the daemon again this often. */
 export const GIT_TOOLS_POLL_MS = 5000
@@ -168,7 +169,7 @@ export function GitToolsRow({ primary = true }: { primary?: boolean } = {}): Rea
         {s.needs === 'apple_clt' && (
           <p className="type-hint text-[var(--color-text-secondary)]">
             Apple&apos;s command line tools give this Mac git (about 1–2 GB; Xcode isn&apos;t needed). Workspaces
-            are added anyway; K2 sets up their git when the tools are ready.
+            are added anyway; {PRODUCT_NAME} sets up their git when the tools are ready.
           </p>
         )}
         <div className="text-[var(--color-text-secondary)]">
@@ -220,10 +221,10 @@ export function GitToolsBanner(): React.JSX.Element | null {
     <Callout tone="warn" data-testid="git-tools-banner">
       <p>
         {s.state === 'git_broken'
-          ? "git is installed on this server but fails. K2 adds the workspace now and sets up git once it works."
+          ? `git is installed on this server but fails. ${PRODUCT_NAME} adds the workspace now and sets up git once it works.`
           : mac
-            ? "git isn't installed on this Mac yet. K2 adds the workspace now and sets up git once Apple's command line tools are installed (about 1–2 GB; Xcode isn't needed)."
-            : "git isn't installed on this server yet. K2 adds the workspace now and sets up git once git is installed."}
+            ? `git isn't installed on this Mac yet. ${PRODUCT_NAME} adds the workspace now and sets up git once Apple's command line tools are installed (about 1–2 GB; Xcode isn't needed).`
+            : `git isn't installed on this server yet. ${PRODUCT_NAME} adds the workspace now and sets up git once git is installed.`}
       </p>
       <div className="mt-2 flex items-center justify-between gap-2">
         <span className="type-hint" data-testid="git-tools-state">

@@ -46,6 +46,7 @@ import {
   type SecretScope,
   type ThreadAnswerPayload,
 } from './overlayThread'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** The daemon refusals that turn the card red and want a second click.
  *  `card_readable_delivery` only comes from a server older than 0.46.3
@@ -219,14 +220,14 @@ export function SecretPlan({
   } else if (delivery === 'agent') {
     body = (
       <>
-        K2 will sign with this {b('ssh key')} for {b(agent)} (ssh and git, from its next session), for {b(where)};{' '}
+        {PRODUCT_NAME} will sign with this {b('ssh key')} for {b(agent)} (ssh and git, from its next session), for {b(where)};{' '}
         {b(agent)} never sees it.
       </>
     )
   } else if (sites.length > 0) {
     body = (
       <>
-        K2 will add this to calls to {b(listWords(sites.map(siteLabel)))}
+        {PRODUCT_NAME} will add this to calls to {b(listWords(sites.map(siteLabel)))}
         {inject ? <> {b(injectWords(inject))}</> : null}, for {b(where)}; {b(agent)} never sees it.
         {inject?.dst.startsWith('query:') ? ' Sites can log URLs.' : null}
       </>
@@ -234,7 +235,7 @@ export function SecretPlan({
   } else {
     body = (
       <>
-        {agent} didn't say which site this is for, so K2 can't use it yet.{' '}
+        {agent} didn't say which site this is for, so {PRODUCT_NAME} can't use it yet.{' '}
         {compact ? 'Use More options to add one.' : advancedOpen ? 'Add one below.' : 'Open Advanced to add one.'}
       </>
     )
@@ -456,17 +457,17 @@ export function SecretCard({
     session: 'this session',
   }
   const deliveryLabel: Record<SecretDelivery, string> = {
-    fetch: 'K2 adds it to calls',
+    fetch: `${PRODUCT_NAME} adds it to calls`,
     file: `a file ${agent} can read`,
     env: `an environment variable ${agent} can read`,
-    agent: `K2 signs with it (ssh and git); ${agent} never sees it`,
+    agent: `${PRODUCT_NAME} signs with it (ssh and git); ${agent} never sees it`,
   }
   // `agent` is for ssh keys only: offered when the agent proposed it.
   const deliveryChoices: readonly SecretDelivery[] =
     proposedDelivery === 'agent' ? ['agent', 'file', 'env'] : ['fetch', 'file', 'env']
   const mode = injectMode(inject)
   const modeLabel: Record<InjectMode, string> = {
-    default: 'The format K2 knows for this key (else a Bearer token)',
+    default: `The format ${PRODUCT_NAME} knows for this key (else a Bearer token)`,
     bearer: 'A Bearer token (Authorization: Bearer)',
     header: 'A header',
     basic: 'A Basic login',
@@ -544,7 +545,7 @@ export function SecretCard({
       />
       {noSite && delivery === 'file' && sites.length === 0 && (
         <div className={`text-[10px] ${muted}`} data-testid="thread-secret-no-site">
-          {agent} didn&apos;t name a site, so this is saved as a file for {agent}. To have K2 add it to calls to a site
+          {agent} didn&apos;t name a site, so this is saved as a file for {agent}. To have {PRODUCT_NAME} add it to calls to a site
           instead, {compact ? 'use More options' : 'open Advanced'}.
         </div>
       )}
@@ -556,7 +557,7 @@ export function SecretCard({
       )}
       {unknownInject && (
         <div className={`text-[11px] ${danger}`} role="alert" data-testid="thread-secret-update">
-          Update K2 to answer this card. {agent} asked K2 to send this secret in a way this app can&apos;t show.
+          Update {PRODUCT_NAME} to answer this card. {agent} asked {PRODUCT_NAME} to send this secret in a way this app can&apos;t show.
         </div>
       )}
       <input
@@ -629,7 +630,7 @@ export function SecretCard({
 
               {delivery === 'fetch' && !unknownInject && (
                 <fieldset className="flex flex-col gap-1" data-testid="thread-secret-inject">
-                  <legend className={`mb-0.5 ${muted}`}>How K2 sends it</legend>
+                  <legend className={`mb-0.5 ${muted}`}>How {PRODUCT_NAME} sends it</legend>
                   {injectModes.map((m) => (
                     <label key={m} className="flex items-start gap-1 cursor-pointer">
                       <Radio

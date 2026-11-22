@@ -3,9 +3,10 @@
 // colour null) shows as "Saved outside K2" in K2's grey.
 
 import type { Actor } from './schema'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const EXT_ID = 'kit:external'
-export const OUTSIDE_NAME = 'Saved outside K2'
+export const OUTSIDE_NAME = `Saved outside ${PRODUCT_NAME}`
 export const OUTSIDE_GREY = '#8a8f98'
 
 const ACTORS = new Map<string, Actor>()

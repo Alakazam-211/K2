@@ -8,6 +8,7 @@ import { ZenCustomRefusal } from '@/lib/zen/zen-custom-bridge'
 import type { ZenBlobInfo, ZenCustomBlobs } from '@/lib/zen/zen-custom-blobs'
 import { base64ToBytes, bytesToBase64 } from '@/lib/zen/zen-custom-blobs'
 import { BOARD_FILE_BLOB_CHUNK, blobHashOfRef, type BoardFileApi, type BoardFileSession } from './board-file-session'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 const sha256 = async (bytes: Uint8Array): Promise<string> => {
   const d = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes as unknown as ArrayBuffer))
@@ -37,7 +38,7 @@ export function createBoardFileBlobs(api: BoardFileApi, path: string, session: B
       } catch (err) {
         throw new ZenCustomRefusal('blob_missing', err instanceof Error ? err.message : 'That picture can’t be read.')
       }
-      if (a.display !== true) throw new ZenCustomRefusal('blob_missing', 'That part of the file isn’t a picture K2 shows.')
+      if (a.display !== true) throw new ZenCustomRefusal('blob_missing', `That part of the file isn’t a picture ${PRODUCT_NAME} shows.`)
       mime = a.mime ?? mime
       const b = base64ToBytes(a.data)
       if (!out) out = new Uint8Array(a.total)
@@ -45,7 +46,7 @@ export function createBoardFileBlobs(api: BoardFileApi, path: string, session: B
       out.set(b, at)
       at += b.length
       if (at >= a.total) break
-      if (b.length === 0) throw new ZenCustomRefusal('failed', 'K2 answered an empty slice before the end of a picture.')
+      if (b.length === 0) throw new ZenCustomRefusal('failed', `${PRODUCT_NAME} answered an empty slice before the end of a picture.`)
     }
     session.rememberBlob(hash, mime, out)
     return { mime, bytes: out }

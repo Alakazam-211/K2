@@ -259,8 +259,8 @@ function StatusGroup({ status }: PanelProps): React.JSX.Element {
       </SettingsGroup>
       {status.consistent === false ? (
         <Callout tone="warn" className="type-hint space-y-0.5">
-          <p className="font-medium">The server and K2 disagree about whether chat is running.</p>
-          <p>K2 checks again on its own. If this stays, restart the server.</p>
+          <p className="font-medium">The server and {PRODUCT_NAME} disagree about whether chat is running.</p>
+          <p>{PRODUCT_NAME} checks again on its own. If this stays, restart the server.</p>
           {status.note || status.lastError ? <p className="text-[var(--color-text-secondary)]">The server said: {(status.note ?? status.lastError ?? '').replace(/[.\s]+$/, '')}.</p> : null}
         </Callout>
       ) : null}
@@ -504,8 +504,8 @@ function SetupGroup({ status, sample, canMutate, reload }: PanelProps): React.JS
               <label className="flex items-start gap-2 cursor-pointer">
                 <Radio name="sew-identity" className="mt-0.5" checked={identity === 'k2'} onChange={() => setIdentity('k2')} aria-label={`${PRODUCT_NAME} accounts`} />
                 <span>
-                  <span className={SETTING_ROW_LABEL}>K2 accounts</span>
-                  <span className={`block ${SETTING_ROW_HINT}`}>People sign in with the account they use for K2.</span>
+                  <span className={SETTING_ROW_LABEL}>{PRODUCT_NAME} accounts</span>
+                  <span className={`block ${SETTING_ROW_HINT}`}>People sign in with the account they use for {PRODUCT_NAME}.</span>
                 </span>
               </label>
               <label className="flex items-start gap-2 cursor-pointer">
@@ -945,8 +945,8 @@ function UninstallSheet({
         {purge ? (
           <div className={purgeOnly ? 'space-y-3' : 'space-y-3 pl-6'}>
             <Callout tone="warn" className="type-hint leading-relaxed">
-              This also deletes the recovery key in the K2 vault. Backups kept on another machine can’t be read without it, so show and copy it
-              first (Backups and keys) if you want to keep them readable. K2 doesn’t delete copies kept elsewhere.
+              This also deletes the recovery key in the {PRODUCT_NAME} vault. Backups kept on another machine can’t be read without it, so show and copy it
+              first (Backups and keys) if you want to keep them readable. {PRODUCT_NAME} doesn’t delete copies kept elsewhere.
             </Callout>
             <TypeToConfirm label={`Type ${expectHost} to confirm`} expect={expectHost} value={typed} onChange={setTyped} disabled={!canPurge || busy} />
             <label className="flex items-start gap-2 cursor-pointer">
@@ -1173,7 +1173,7 @@ function BackupsGroup({ status, sample, canMutate, reload, notify }: PanelProps)
                 </>
               ) : ship?.kind === 'box-backup' && !ship.boxBackup?.ok ? (
                 <>
-                  K2 can’t see the server’s backup keep them on another machine yet. Check that scheduled backups are turned on.
+                  {PRODUCT_NAME} can’t see the server’s backup keep them on another machine yet. Check that scheduled backups are turned on.
                   {ship.boxBackup?.reason ? <span className="block text-[var(--color-text-muted)]">The server said: {ship.boxBackup.reason.replace(/[.\s]+$/, '')}.</span> : null}
                 </>
               ) : undefined
@@ -1422,7 +1422,7 @@ function RecoveryKeyGroup({ status, sample }: PanelProps): React.JSX.Element | n
       </SettingsGroup>
       {!inVault && status.recoveryKeySaved === false && isLive(status.state) ? (
         <Callout tone="warn" className="type-hint">
-          The recovery key isn’t in the vault yet. K2 copies it there on its own, at start or when you show it.
+          The recovery key isn’t in the vault yet. {PRODUCT_NAME} copies it there on its own, at start or when you show it.
         </Callout>
       ) : null}
       {error ? <SewFailed what="Couldn’t show the recovery key." failure={error} next="Nothing changed. Try again." /> : null}
@@ -1559,7 +1559,7 @@ function UnbindSheet({ space, onClose, onDone }: { space: SewAppSpace; onClose: 
         <label className="flex items-start gap-2 cursor-pointer">
           <Radio name="sew-unbind" className="mt-0.5" checked={remove} onChange={() => setRemove(true)} aria-label={`Remove the people ${PRODUCT_NAME} added`} />
           <span>
-            <span className={SETTING_ROW_LABEL}>Remove the people K2 added</span>
+            <span className={SETTING_ROW_LABEL}>Remove the people {PRODUCT_NAME} added</span>
             <span className={`block ${DIALOG_MUTED}`}>People someone added by hand always stay.</span>
           </span>
         </label>
@@ -1765,7 +1765,7 @@ export function SewSection(): React.JSX.Element {
     <header className="min-w-0">
       <h2 className="type-title text-[var(--color-text-primary)]">Chat / Voice</h2>
       <p className="type-hint text-[var(--color-text-secondary)] mt-1 leading-relaxed max-w-[75ch]">
-        Team chat and voice calls for the people and Apps on this server. K2 sets them up, keeps them healthy and backs them up.
+        Team chat and voice calls for the people and Apps on this server. {PRODUCT_NAME} sets them up, keeps them healthy and backs them up.
       </p>
     </header>
   )

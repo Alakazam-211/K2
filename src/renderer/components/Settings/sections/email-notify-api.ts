@@ -7,6 +7,7 @@
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import type { ServerScope } from '@/kessel/server-scope'
 import { vaultConfirmOn } from './vault-api'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export interface NotifySenderPause {
   pausedAt: number
@@ -183,7 +184,7 @@ export function pauseText(p: NotifySenderPause): string {
 
 /** Who a sender sends for, in words (an App by the name it sends as). */
 export function ownerText(s: Pick<NotifySender, 'owner' | 'app' | 'fromName'>): string {
-  if (s.owner === 'system') return 'K2’s own email'
+  if (s.owner === 'system') return `${PRODUCT_NAME}’s own email`
   if (s.app) return s.fromName ? `The ${s.fromName} App` : 'An App'
   return 'Not used by an App'
 }
@@ -254,7 +255,7 @@ export function logWhatText(r: Pick<NotifyLogItem, 'subject' | 'purpose' | 'orig
   if (r.purpose) return PURPOSES[r.purpose] ?? r.purpose.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase())
   if (r.origin === 'agent') return 'Agent notice'
   if (r.origin === 'app') return 'App email'
-  return 'Email from K2'
+  return `Email from ${PRODUCT_NAME}`
 }
 
 /** A log row's status, in words, with a tag tone. */

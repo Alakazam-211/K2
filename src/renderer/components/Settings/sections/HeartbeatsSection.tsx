@@ -32,6 +32,7 @@ import { primaryScope } from '@/kessel/server-scope'
 import { HeartbeatStatusLine } from '@/components/common/HeartbeatStatusLine'
 import { useHeartbeatDueRefetch } from '@/hooks/useHeartbeatDueRefetch'
 import { DialogCloseButton, Toggle, Tag, useDialogCancel } from '@/components/ui'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 // ── Types mirroring the backend agent_heartbeats table ────────────────
 
@@ -951,7 +952,7 @@ function agentModeLabel(mode: string | null | undefined, fallbackName: string | 
     case 'pod':
       return 'Workspace Manager'
     case 'agent':
-      return 'K2 Agent'
+      return `${PRODUCT_NAME} Agent`
     case 'custom':
       // Custom agents have a meaningful display name — show it.
       return fallbackName ?? 'Custom Agent'

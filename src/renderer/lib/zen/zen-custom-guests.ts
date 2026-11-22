@@ -18,6 +18,7 @@
 
 import type { CatalogErrorCode, CatalogWireError } from '../contract/catalog-types'
 import { CATALOG_ERROR_CODES } from '../contract/catalog-types'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** The verbs this file answers: RS-A15's two, plus the App's ceiling and
  *  guest list (prd-app-caps-0464-v1 AC3, catalog v22; reads, no sheet). */
@@ -133,7 +134,7 @@ export function createZenCustomGuests(deps: ZenCustomGuestsDeps): ZenCustomGuest
         const err = zenGuestsErrorFrom(raw)
         // Only a write waits for the person; the widget never sees the ask.
         if (verb !== 'guests.setRooms' || err.daemonCode !== 'confirm_required' || !err.ask) throw err
-        if (sheetOpen) throw new ZenGuestsError('rate_limited', 'K2 is already asking the person about another change')
+        if (sheetOpen) throw new ZenGuestsError('rate_limited', `${PRODUCT_NAME} is already asking the person about another change`)
         sheetOpen = true
         let token: string | null
         try {

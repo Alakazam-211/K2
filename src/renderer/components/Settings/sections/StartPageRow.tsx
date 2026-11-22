@@ -9,6 +9,7 @@ import { useState } from 'react'
 import { readStartPage, writeStartPage, type StartPage } from '@/stores/page-view'
 import { Segmented } from '@/components/ui'
 import { SaveError, SaveNote, SettingRow, useSaveStatus } from '../controls/SettingControls'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 const OPTIONS: Array<{ id: StartPage; label: string }> = [
   { id: 'home', label: 'Home' },
@@ -21,7 +22,7 @@ export function StartPageRow(): React.JSX.Element {
   return (
     <SettingRow
       label="Start page"
-      hint="The page K2 opens on when it starts or after you sign in."
+      hint={`The page ${PRODUCT_NAME} opens on when it starts or after you sign in.`}
       settingId="general.start-page"
       below={typeof save.state === 'object' ? <SaveError state={save.state} /> : undefined}
     >
@@ -35,7 +36,7 @@ export function StartPageRow(): React.JSX.Element {
           setValue(next)
           // Read back: blocked storage keeps it for this window only.
           if (readStartPage() === next) save.saved()
-          else save.failed("this computer's storage is blocked, so it lasts until K2 closes")
+          else save.failed(`this computer's storage is blocked, so it lasts until ${PRODUCT_NAME} closes`)
         }}
         options={OPTIONS.map((opt) => ({
           value: opt.id,

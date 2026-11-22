@@ -11,12 +11,13 @@ import { DEFAULT_SEQUENCE } from '@/lib/live-view/timeline/follow-play'
 import { FilmGlyph } from '../shell/glyphs'
 import type { ShellConfig } from '../shell/shell-config'
 import { TimelineHero } from './TimelineHero'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const TIMELINE_SHELL: ShellConfig = {
   kind: 'timeline',
   kindLabel: 'Timeline',
   fileGlyph: <FilmGlyph size={15} />,
-  bannerLine: 'Played from K2’s sample edit; nothing here comes from the file you opened.',
+  bannerLine: `Played from ${PRODUCT_NAME}’s sample edit; nothing here comes from the file you opened.`,
   panel: [
     { id: 'watching', title: 'Watching' },
     { id: 'messages', title: 'Messages' },

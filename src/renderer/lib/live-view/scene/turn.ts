@@ -11,6 +11,7 @@ import { DOCS } from './fold'
 import { actorOf } from './wording'
 import { applyGroup, blankState, claimRecord, finish, peerFrom, SELF, type LogEntry, type SimEvent, type SimState, type SimStep } from './sim'
 import type { Actor, Frame } from './types'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export interface Scenario {
   id: string
@@ -66,7 +67,7 @@ function buildTurn(): Scenario {
         label: startish ? 'start' : null,
         kind: startish ? 'state' : null,
         what: startish
-          ? `Ada opens living-room.blend as a tab: the snapshot at rev ${GOLD.state.upto} and the scene's still from K2 Render. Sam has Floor selected; Atlas has joined. Agents act, people watch.`
+          ? `Ada opens living-room.blend as a tab: the snapshot at rev ${GOLD.state.upto} and the scene's still from ${PRODUCT_NAME} Render. Sam has Floor selected; Atlas has joined. Agents act, people watch.`
           : e._note || null,
       })
   }

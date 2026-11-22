@@ -27,12 +27,13 @@ import { zenPinGridText } from '@/lib/zen/zen-pin-grid'
 import { ZenOverlay, zenButtonStyle } from './ZenOverlay'
 import { SettingDropdown } from '@/components/Settings/controls/SettingControls'
 import { ZEN_GLASS_PILL_PROPS, ZEN_TILE_PROPS } from '@/lib/zen/zen-materials'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const ZEN_RECENT_FIRST_LABEL = 'Recent agents first'
 export const ZEN_RECENT_FIRST_NOTE =
   'Below your pinned agents, the agents you last messaged from a Garden on this computer come first, on My Home and Agents. Garden 1 starts with it on; your choice here sticks on this computer only. The app’s Agents page doesn’t change.'
 export const ZEN_GARDEN_THEME_NOTE = 'For this Garden only. Your other Gardens keep their theme.'
-export const ZEN_GARDEN_THEME_FAILED_NOTE = 'Couldn’t load the themes. K2 on this computer may be older than this app.'
+export const ZEN_GARDEN_THEME_FAILED_NOTE = `Couldn’t load the themes. ${PRODUCT_NAME} on this computer may be older than this app.`
 export const ZEN_PIN_GRID_NOTE = 'Set by this Garden. Pinned agents past the grid head the list below it.'
 export const ZEN_PIN_GRID_NOTE_NO_LIMIT = 'Set by this Garden. The grid adds rows as you pin more.'
 

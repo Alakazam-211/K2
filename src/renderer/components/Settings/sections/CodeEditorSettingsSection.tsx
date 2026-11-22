@@ -23,11 +23,12 @@ import {
 } from '../controls/SettingControls'
 import { AccessSheet, FailedNote } from './AccessDialogs'
 import type { SettingEntry } from '../searchManifest'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const CODE_EDITOR_MANIFEST: SettingEntry[] = [
   // Appearance
   { id: 'code-editor.theme', section: 'code-editor', group: 'Appearance', label: 'Theme', description: 'Colours for code in the editor', keywords: ['theme', 'colors', 'colours', 'appearance', 'dark mode', 'light mode', 'custom theme', 'new theme'] },
-  { id: 'code-editor.font-family', section: 'code-editor', group: 'Appearance', label: 'Font family', description: 'For code here and for text across K2', keywords: ['font', 'typeface', 'family'] },
+  { id: 'code-editor.font-family', section: 'code-editor', group: 'Appearance', label: 'Font family', description: `For code here and for text across ${PRODUCT_NAME}`, keywords: ['font', 'typeface', 'family'] },
   { id: 'code-editor.font-size', section: 'code-editor', group: 'Appearance', label: 'Font size', description: 'For code, the message box, chats and tickets', keywords: ['font', 'size', 'zoom'] },
   { id: 'code-editor.font-ligatures', section: 'code-editor', group: 'Appearance', label: 'Font ligatures', description: 'Joins pairs like => into one symbol', keywords: ['ligatures', 'font', 'arrow', 'fira', 'jetbrains'] },
   { id: 'code-editor.cursor-style', section: 'code-editor', group: 'Appearance', label: 'Cursor shape', description: 'Bar, block or underline', keywords: ['cursor', 'caret', 'style'] },
@@ -278,7 +279,7 @@ export function useImperialVault(protocol: SecurityProtocol) {
       if (detected && !alarmTriggered) {
         setAlarmTriggered(true)
         setStatus('compromised')
-        console.warn('[K2] Congratulations. You are being rescued.')
+        console.warn('[${PRODUCT_NAME}] Congratulations. You are being rescued.')
       }
     }, 5000)
 
@@ -350,7 +351,7 @@ export function CodeEditorSettingsSection(): React.JSX.Element {
     <div className="w-full space-y-6 pb-6" data-testid="code-page">
       <header className="min-w-0">
         <h2 className="type-title text-[var(--color-text-primary)]">Code</h2>
-        <p className={SETTING_ROW_HINT}>How files look and behave in K2’s code editor. The preview shows each change as you make it.</p>
+        <p className={SETTING_ROW_HINT}>How files look and behave in {PRODUCT_NAME}’s code editor. The preview shows each change as you make it.</p>
       </header>
 
       <div className="flex gap-6 items-start">
@@ -511,7 +512,7 @@ export function CodeEditorSettingsSection(): React.JSX.Element {
             <EditorSwitch id="code-editor.sticky-scroll" field="stickyScroll" label="Sticky scroll" hint="Keeps the current function or class name pinned at the top." />
           </SettingsGroup>
 
-          <SettingsGroup card title="Keyboard" hint="Shortcuts in the editor. Change K2’s own shortcuts in Key Bindings." testId="code-keyboard">
+          <SettingsGroup card title="Keyboard" hint={`Shortcuts in the editor. Change ${PRODUCT_NAME}’s own shortcuts in Key Bindings.`} testId="code-keyboard">
             <EditorSwitch id="code-editor.vim-mode" field="vimMode" label="Vim mode" hint="Vim keys and modes: hjkl, insert and visual mode, : commands." />
             <ShortcutRow label="Select the next match" hint="Adds a cursor at the next match of the selected word." keys={[mac ? '⌘D' : 'Ctrl+D']} />
             <ShortcutRow label="Find and replace" hint="Opens search at the top of the file, with a replace field." keys={[mac ? '⌘F' : 'Ctrl+F']} />

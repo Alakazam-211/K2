@@ -32,6 +32,7 @@ import {
   type ChatGrant,
   type SewStatus,
 } from './sew-api'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 const muted = 'text-[var(--color-text-muted)]'
 const PENDING_REFRESH_MS = 5000
@@ -71,7 +72,7 @@ export function HookStatePill({
   switch (grant.hookState) {
     case 'pending':
       return (
-        <Tag tone="warn" data-testid="sew-hook-pill" title={grant.hookError ?? 'K2 keeps telling Sew'}>
+        <Tag tone="warn" data-testid="sew-hook-pill" title={grant.hookError ?? `${PRODUCT_NAME} keeps telling Sew`}>
           Pending
         </Tag>
       )
@@ -195,7 +196,7 @@ export function SewPersonAccess({
   }
 
   const hint = !principalId
-    ? 'K2 on the server needs an update before this person can use chat.'
+    ? `${PRODUCT_NAME} on the server needs an update before this person can use chat.`
     : !installed
       ? 'Chat and voice isn’t set up on this server yet.'
       : !targetOn && grant

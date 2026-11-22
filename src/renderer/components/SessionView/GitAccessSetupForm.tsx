@@ -17,6 +17,7 @@ import { daemonCliPost } from '@/lib/daemon-cli'
 import { daemonErrorText } from '@/lib/daemon-error'
 import { Radio } from '@/components/ui'
 import type { ServerScope } from '@/kessel/server-scope'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** The setup route, relative to `/cli/`. */
 export const GIT_ACCESS_SETUP_ROUTE = 'compute/git-access/setup'
@@ -73,7 +74,7 @@ export function GitAccessSetupForm({
       keyRef.current.value = await file.text()
       setError(null)
     } catch {
-      setError("K2 couldn't read that file. Paste the key instead.")
+      setError(`${PRODUCT_NAME} couldn't read that file. Paste the key instead.`)
     }
   }
 

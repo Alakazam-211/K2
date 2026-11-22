@@ -19,6 +19,7 @@
 
 import { adoptLayout, isHtmlDocPane, readingOrder, type LayoutNode } from './dashboard-layout'
 import type { SettingEntry } from '@/components/Settings/searchManifest'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export type ProjectRole = 'owner' | 'admin' | 'member'
 
@@ -64,7 +65,7 @@ export function defaultViewLockReason(
   caps: ProjectSettingsCaps,
   daemonKnowsDefaultView: boolean,
 ): string | null {
-  if (!daemonKnowsDefaultView) return 'Needs a newer K2 on this server.'
+  if (!daemonKnowsDefaultView) return `Needs a newer ${PRODUCT_NAME} on this server.`
   if (!caps.canEditLooks) return 'Only the owner or an admin can change this.'
   return null
 }
@@ -73,7 +74,7 @@ export function defaultViewLockReason(
  *  can. The same rule as the project's view (it changes it for everyone):
  *  owner or admin (`ProjectSettingsCaps.canEditLooks`); a daemon before 0302 has no route for it. */
 export function memberViewLockReason(canEditLooks: boolean, daemonKnowsMemberViews: boolean): string | null {
-  if (!daemonKnowsMemberViews) return 'Needs a newer K2 on this server.'
+  if (!daemonKnowsMemberViews) return `Needs a newer ${PRODUCT_NAME} on this server.`
   if (!canEditLooks) return 'Only the owner or an admin can change where an agent opens.'
   return null
 }

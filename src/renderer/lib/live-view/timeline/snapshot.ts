@@ -18,6 +18,7 @@ import type { SimState } from './sim'
 import { framePhrase, heldWhat, holdGoneText, placeOf, plural, refusalPhrase, trackRenames } from './wording'
 import { DEFAULT_SEQUENCE } from './follow-play'
 import { sayTime } from '../shared/say-time'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** The clock the sample's times count from (its at_ms are offsets). */
 export const SAMPLE_CLOCK0 = Date.UTC(2026, 10, 13, 14, 15, 0)
@@ -140,7 +141,7 @@ function activity(S: SimState, M: TimelineModel, agent: string | null): LiveShel
   if (fresh && fresh.kind === 'frame') {
     const ph = framePhrase(fresh.frame, fresh.before, fresh.after)
     const text = ph.text.replace(' · ' + ph.place, '').replace(' at ' + ph.place, '').replace(' to ' + ph.place, '')
-    return actorOf(fresh.actor).kind === 'file' ? { who: null, text: `Saved outside K2: ${trackRenames(fresh.frame) || text}` } : { who: fresh.actor, text }
+    return actorOf(fresh.actor).kind === 'file' ? { who: null, text: `Saved outside ${PRODUCT_NAME}: ${trackRenames(fresh.frame) || text}` } : { who: fresh.actor, text }
   }
   if (claim && who) return { who: who.id, text: `holds ${plural(claim.keys.length, 'clip')}: “${claim.note || ''}”` }
   const here = agent && S.peers[agent]
@@ -165,7 +166,7 @@ function changes(S: SimState, M: TimelineModel, clock0: number): LiveChange[] {
     } else if (e.kind === 'save' && e.save.outcome !== 'ingested' && e.save.outcome !== 'kept_both') {
       out.push({ id, who: 'file', verb: 'saved', text: e.save.outcome === 'declined' ? '· the file can’t be live any more' : '· the file was deleted or moved', at_ms: clock0 + e.at, target: null, tone: 'outside' })
     } else if (e.kind === 'snap') {
-      out.push({ id, who: 'K2', verb: 'took', text: `took in a new snapshot ${e.text.replace(/^A new snapshot came in /, '')}`, at_ms: clock0 + e.at, target: null })
+      out.push({ id, who: PRODUCT_NAME, verb: 'took', text: `took in a new snapshot ${e.text.replace(/^A new snapshot came in /, '')}`, at_ms: clock0 + e.at, target: null })
     } else if (e.kind === 'claim_end' && e.how === 'gone_outside_save') {
       out.push({ id, who: e.actor, verb: 'lost', text: holdGoneText(M, e).replace(/^[^’]+’s hold on (.+?) ended:/, 'lost its hold on $1:'), at_ms: clock0 + e.at, target: null, tone: 'outside' })
     }

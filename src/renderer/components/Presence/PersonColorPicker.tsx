@@ -18,9 +18,10 @@ import React, { useEffect, useRef, useState } from 'react'
 import type { ServerScope } from '@/kessel/server-scope'
 import { normalizeHexColor } from './PresenceChip'
 import { fetchPersonColor, setPersonColor, type PersonColorView } from './person-color-api'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** The note under the disabled controls on a server without the route. */
-export const COLOR_NEEDS_NEWER_SERVER = 'Needs a newer K2 server.'
+export const COLOR_NEEDS_NEWER_SERVER = `Needs a newer ${PRODUCT_NAME} server.`
 /** The hex field's message for anything that isn't `#RRGGBB`. */
 export const HEX_FORMAT_HINT = 'Use #RRGGBB, for example #3a9e96.'
 

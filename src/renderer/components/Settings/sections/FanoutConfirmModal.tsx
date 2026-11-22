@@ -6,6 +6,7 @@ import { daemonCliPost } from '@/lib/daemon-cli'
 import { AgentContextDiagram } from './AgentContextDiagram'
 import { FANOUT_ENABLE_WARNING } from './CanonicalAgentButtons'
 import { primaryScope } from '@/kessel/server-scope'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 // Shared confirmation modal for the per-workspace "Canonical Agent" /
 // "Enable harness fan-out" checkbox. Replaces the bare `window.confirm`
@@ -75,7 +76,7 @@ export function FanoutConfirmModal({
       onSkillRouteTaken()
     } catch (err) {
       console.error('[fanout-modal] write-opt-in k2-canonical-agent failed:', err)
-      setError('Could not set up the K2 Canonical Agent skill. Please try again.')
+      setError(`Could not set up the ${PRODUCT_NAME} Canonical Agent skill. Please try again.`)
       setBusy(null)
     }
   }
@@ -122,7 +123,7 @@ export function FanoutConfirmModal({
         <div className="min-h-0 overflow-y-auto">
           <div className="px-5 pb-2">
             <p className="type-hint text-[var(--color-text-muted)] mt-1 leading-relaxed">
-              Canonical fan-out makes K2&rsquo;s generated{' '}
+              Canonical fan-out makes {PRODUCT_NAME}&rsquo;s generated{' '}
               <span className="font-mono text-[var(--color-text-secondary)]">.k2/AGENTS.md</span> the
               single source of truth, and points each AI tool&rsquo;s file
               (<span className="font-mono">CLAUDE.md</span>, <span className="font-mono">AGENTS.md</span>, &hellip;)
@@ -162,7 +163,7 @@ export function FanoutConfirmModal({
                   {busy === 'skill' ? 'Setting up…' : 'Set it up agentically'}
                 </div>
                 <div className="mt-1 type-hint leading-snug text-[var(--color-text-muted)]">
-                  Recommended. The K2 Canonical Agent merges your files into the canon — nothing changes without you.
+                  Recommended. The {PRODUCT_NAME} Canonical Agent merges your files into the canon — nothing changes without you.
                 </div>
               </button>
 
@@ -176,7 +177,7 @@ export function FanoutConfirmModal({
                   {busy === 'programmatic' ? 'Enabling…' : 'Symlink it now'}
                 </div>
                 <div className="mt-1 type-hint leading-snug text-[var(--color-text-muted)]">
-                  K2 links your files to the canon automatically. Your originals are moved into .k2/migration/ first.
+                  {PRODUCT_NAME} links your files to the canon automatically. Your originals are moved into .k2/migration/ first.
                 </div>
               </button>
             </div>

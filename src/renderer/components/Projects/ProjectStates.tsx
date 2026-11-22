@@ -24,6 +24,7 @@ import {
   StateCanvas as Canvas,
   StateRetry,
 } from './StateCard'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** The project list is loading, or its read failed (never an endless
  *  "Loading…": the store keeps the failure in `groupsError`). */
@@ -47,7 +48,7 @@ export function ProjectListLoadState(): React.JSX.Element {
           testId="projects-list-error"
           action={<StateRetry onClick={retry} busy={retrying} />}
         >
-          K2 couldn’t get the project list from the server. Your agents are fine.
+          {PRODUCT_NAME} couldn’t get the project list from the server. Your agents are fine.
         </ProjectStateCard>
       ) : (
         <ProjectStateCard kind="loading" title="Loading your projects…" testId="projects-list-loading" />
@@ -108,7 +109,7 @@ export function ProjectLoadState({
           testId="project-load-error"
           action={<StateRetry onClick={onRetry} busy={retrying} />}
         >
-          K2 couldn’t get this project from the server. Your agents are fine.
+          {PRODUCT_NAME} couldn’t get this project from the server. Your agents are fine.
         </ProjectStateCard>
       ) : (
         <ProjectStateCard kind="loading" title={name ? `Loading ${name}…` : 'Loading the project…'} testId="project-loading" />

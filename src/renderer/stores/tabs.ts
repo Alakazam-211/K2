@@ -101,6 +101,7 @@ import {
   tabIsDropCandidateForApiSessionRemoval,
   tabMatchesApiSession,
 } from './tabs-api-sessions'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** Project path → id (+ primary workspace) for host-session tab routing.
  *  Ledger sales pilot: api- SessionAdded must park under the event's
@@ -3372,7 +3373,7 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
       } else if (agentMode === 'custom') {
         title = 'Agent'
       } else if (agentMode === 'agent') {
-        title = 'K2'
+        title = PRODUCT_NAME
       } else if (!agentMode || agentMode === 'off') {
         title = 'Workspace'  // agent-mode-off: workspace is its own agent
       }

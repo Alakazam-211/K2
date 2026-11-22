@@ -25,6 +25,7 @@ import {
   type PairingStatus,
 } from './app-pairing-api'
 import { confirmWays } from '@/lib/desktop-words'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 const muted = 'type-hint text-[var(--color-text-muted)]'
 const secondary = 'type-hint text-[var(--color-text-secondary)]'
@@ -186,7 +187,7 @@ export function AppPhonePairing({ app }: { app: string }): React.JSX.Element {
               </p>
             ))}
             {status.hosts.length === 0 ? (
-              <p className={muted}>No public address yet: the App needs K2 Connect and its own address before phones can pair.</p>
+              <p className={muted}>No public address yet: the App needs {PRODUCT_NAME} Connect and its own address before phones can pair.</p>
             ) : (
               status.hosts.map((h) => {
                 const c = (checks ?? status.lastCheck ?? []).find((x) => x.host === h.host)
@@ -250,7 +251,7 @@ export function AppPhonePairing({ app }: { app: string }): React.JSX.Element {
                   <Input aria-label="Google Play link" className={field} value={storeAndroid} onChange={(e) => setStoreAndroid(e.target.value)} />
                 </label>
                 <p className={muted}>
-                  While pairing is on, K2 answers this App&apos;s iOS and Android link files on its hosts. In your app, list
+                  While pairing is on, {PRODUCT_NAME} answers this App&apos;s iOS and Android link files on its hosts. In your app, list
                   each host exactly, never a wildcard. Saving asks you to confirm ({confirmWays()}).
                 </p>
                 {confirm.step === 'password' ? (

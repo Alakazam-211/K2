@@ -9,6 +9,7 @@
 // directly, mirroring daemon-ws.ts's scheme/port rules.
 
 import type { ConnectHost } from '@/stores/connect-host'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** The fields needed to reach a daemon — a subset of ConnectHost plus
  *  the token under trial (which may not be the stored one yet). */
@@ -73,19 +74,19 @@ export async function validateHost(
     }
   }
   if (!resp) {
-    return { ok: false, reason: `Couldn't reach ${c.hostname} — the connection failed. Try again, or relaunch K2 if it persists.` }
+    return { ok: false, reason: `Couldn't reach ${c.hostname} — the connection failed. Try again, or relaunch ${PRODUCT_NAME} if it persists.` }
   }
   if (resp.status === 401 || resp.status === 403) {
     return { ok: false, reason: 'The server rejected this password.' }
   }
   if (!resp.ok) {
-    return { ok: false, reason: `Server returned ${resp.status}. It may not be a K2 daemon.` }
+    return { ok: false, reason: `Server returned ${resp.status}. It may not be a ${PRODUCT_NAME} daemon.` }
   }
   let status: BootStatus
   try {
     status = (await resp.json()) as BootStatus
   } catch {
-    return { ok: false, reason: 'Server response was not a valid K2 boot status.' }
+    return { ok: false, reason: `Server response was not a valid ${PRODUCT_NAME} boot status.` }
   }
   if (typeof status.protocol !== 'number' || status.protocol < minProtocol) {
     return {
@@ -129,11 +130,11 @@ export function isRfc1918OrLinkLocalIpv4(hostname: string): boolean {
 const LAN_PORT_REQUIRED =
   'LAN server URL needs an explicit port (the daemon sticky port, e.g. http://192.168.1.50:60710).'
 const LAN_HTTPS_TEACHING =
-  'LAN K2 servers speak HTTP, not HTTPS (the cert is *.k2.dev). Use http://<ip>:<port>.'
+  `LAN ${PRODUCT_NAME} servers speak HTTP, not HTTPS (the cert is *.k2.dev). Use http://<ip>:<port>.`
 
 export function parseServerUrl(raw: string): ParsedServerUrl {
   const trimmed = raw.trim()
-  if (!trimmed) return { ok: false, reason: 'Enter the K2 server URL.' }
+  if (!trimmed) return { ok: false, reason: `Enter the ${PRODUCT_NAME} server URL.` }
   const hasScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)
 
   let peekHost = trimmed

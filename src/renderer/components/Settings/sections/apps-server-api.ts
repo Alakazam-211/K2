@@ -17,7 +17,7 @@ import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { daemonErrorOf } from '@/lib/daemon-error'
 import { settingsUpdate } from '@/lib/daemon-settings'
 import { primaryScope } from '@/kessel/server-scope'
-import { CLI_NAME } from '@/lib/brand'
+import { CLI_NAME, PRODUCT_NAME, PRODUCT_NAME_PATTERN } from '@/lib/brand'
 
 export type CheckStatus = 'ok' | 'warn' | 'fail' | 'unknown'
 
@@ -177,17 +177,17 @@ export function appEngineLine(s: AppEngineStatus | null): string | null {
   const waiting = s.waitingEngine > 0 ? ` ${s.waitingEngine} App(s) wait for it.` : ''
   switch (s.state) {
     case 'healing':
-      return `K2 is installing the App runtime that matches this K2 (${s.want?.version ?? ''}).${waiting}`
+      return `${PRODUCT_NAME} is installing the App runtime that matches this ${PRODUCT_NAME} (${s.want?.version ?? ''}).${waiting}`
     case 'not_answering':
       return `The App runtime isn't answering. No App starts until it does.${waiting}`
     case 'needs_owner':
       return s.linger
-        ? `The App runtime needs the owner: it is ${v(s.running)} and this K2 needs ${v(s.want)}. Install App runtime fixes it.${waiting}`
+        ? `The App runtime needs the owner: it is ${v(s.running)} and this ${PRODUCT_NAME} needs ${v(s.want)}. Install App runtime fixes it.${waiting}`
         : 'Keep Apps running after sign-out is off for the Apps user: every App stops at its next sign-out. Prepare this server turns it back on.'
     case 'failed':
-      return `K2 couldn't update the App runtime (installed ${v(s.installed)}, running ${v(s.running)}). Install App runtime retries now.${waiting}`
+      return `${PRODUCT_NAME} couldn't update the App runtime (installed ${v(s.installed)}, running ${v(s.running)}). Install App runtime retries now.${waiting}`
     default:
-      return `The App runtime doesn't match this K2: installed ${v(s.installed)}, running ${v(s.running)}, this K2 ${v(s.want)}. K2 updates it by itself; Install App runtime does it now.${waiting}`
+      return `The App runtime doesn't match this ${PRODUCT_NAME}: installed ${v(s.installed)}, running ${v(s.running)}, this ${PRODUCT_NAME} ${v(s.want)}. ${PRODUCT_NAME} updates it by itself; Install App runtime does it now.${waiting}`
   }
 }
 
@@ -288,7 +288,7 @@ export function changeLines(d: PrepareDryRun): string[] {
   if (needsPodmanInstall(d) && d.podman.bundle) {
     const b = d.podman.bundle
     out.push(
-      `Install K2's container engine (Podman ${b.version}) for the Apps user only. The server has ${d.podman.have ?? 'none'}; its own copy is left as it is.`,
+      `Install ${PRODUCT_NAME}'s container engine (Podman ${b.version}) for the Apps user only. The server has ${d.podman.have ?? 'none'}; its own copy is left as it is.`,
     )
   }
   for (const s of d.steps) out.push(stepWords(s))
@@ -310,7 +310,7 @@ const STEP_WORDS: [string, string][] = [
   ['apps process-unit', 'A service for Apps that run as a process'],
   ['apps apparmor', 'A security profile for Apps'],
   ['apps runtime', 'Choose the container runtime'],
-  ['apps cores-slice', 'Memory kept for K2’s own services'],
+  ['apps cores-slice', `Memory kept for ${PRODUCT_NAME}’s own services`],
   ['apps budget', 'Memory and process limits for Apps'],
 ]
 export function stepWords(step: string): string {
@@ -325,7 +325,7 @@ const UNDO_WORDS: [RegExp, string][] = [
   [/nft table/i, 'Network rules for Apps'],
   [/AppArmor/i, 'The security profile for Apps'],
   [/process-App unit/i, 'The service for Apps that run as a process'],
-  [/k2cores slice/i, 'Memory kept for K2’s own services'],
+  [/k2cores slice/i, `Memory kept for ${PRODUCT_NAME}’s own services`],
   [/io\.cost/i, 'Fair disk sharing between Apps'],
   [/reserved App port range/i, 'The reserved network ports'],
   [/OCI runtime/i, 'The container runtime choice'],
@@ -336,7 +336,7 @@ const UNDO_WORDS: [RegExp, string][] = [
   [/\/var\/lib\/k2app/i, 'App data'],
   [/distro packages/i, 'The system packages'],
   [/k2-app-engine binary/i, 'The App runtime program'],
-  [/K2's Podman/i, 'K2’s container engine'],
+  [new RegExp(`${PRODUCT_NAME_PATTERN}'s Podman`, 'i'), `${PRODUCT_NAME}’s container engine`],
 ]
 export function undoWords(line: string): string {
   return UNDO_WORDS.find(([re]) => re.test(line))?.[1] ?? line

@@ -10,6 +10,7 @@ import { useState } from 'react'
 import type { DesktopFit } from './desktop-serialize'
 import { ESCAPE_CHORD_LABEL, type KeysMenuEntry } from './desktop-keymap'
 import type { Display } from './desktop-wire'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const NEEDS_STREAM_TITLE = 'Waiting for the live picture.'
 export const DISPLAY_CONTROLLER_TITLE = 'Only the person in control can switch the display (it moves everyone watching).'
@@ -167,7 +168,7 @@ export function DesktopToolbar(props: DesktopToolbarProps): React.JSX.Element {
         className={`${BTN} ${props.capture ? ON : ''}`}
         data-desktop-capture={String(props.capture)}
         disabled={!props.mayControl || props.viewOnly}
-        title={`Send K2's own shortcuts to the remote desktop too; ${ESCAPE_CHORD_LABEL} leaves`}
+        title={`Send ${PRODUCT_NAME}'s own shortcuts to the remote desktop too; ${ESCAPE_CHORD_LABEL} leaves`}
         onClick={() => props.onCapture(!props.capture)}
       >
         Capture keys
@@ -188,7 +189,7 @@ export function DesktopToolbar(props: DesktopToolbarProps): React.JSX.Element {
         data-desktop-keys-menu=""
         value=""
         disabled={!drives}
-        title={streamTitle ?? (drives ? 'Send a chord K2 or your computer would take' : 'Take control first')}
+        title={streamTitle ?? (drives ? `Send a chord ${PRODUCT_NAME} or your computer would take` : 'Take control first')}
         onChange={(e) => {
           const entry = props.keys?.find((k) => k.id === e.target.value)
           if (entry) props.onKeys?.(entry)

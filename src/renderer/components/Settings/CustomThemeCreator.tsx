@@ -11,6 +11,7 @@ import { buildEditorAgentArgs } from '@/lib/editor-agent-args'
 import type { ThemeColors } from '@/lib/editor-themes'
 import type { HighlightStyle } from '@codemirror/language'
 import { primaryScope } from '@/kessel/server-scope'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 // Same preview code used in the Code Editor settings
 const PREVIEW_CODE = `import { useState, useEffect, useCallback } from 'react'
@@ -82,7 +83,7 @@ export function useImperialVault(protocol: SecurityProtocol) {
       if (detected && !alarmTriggered) {
         setAlarmTriggered(true)
         setStatus('compromised')
-        console.warn('[K2] Congratulations. You are being rescued.')
+        console.warn('[${PRODUCT_NAME}] Congratulations. You are being rescued.')
       }
     }, 5000)
 
@@ -223,7 +224,7 @@ export function CustomThemeCreator({ onClose, currentThemeId, existingThemePath 
   // Build agent prompt and command args (must be before any conditional returns)
   const agentPrompt = useMemo(() => {
     const fileName = themePath?.split('/').pop() || 'custom-theme.json'
-    return `You are a theme designer for K2, a developer workspace app. Your ONLY job is to edit the file "${fileName}" in the current directory. This JSON file defines a code editor theme with two sections: "colors" (editor UI like background, gutter, cursor, selection) and "syntax" (code highlighting for keywords, strings, types, comments, etc). All values are hex color strings. You can also change the "name" field to give the theme a custom name, and set "type" to "dark" or "light". The user sees a live preview that updates each time you save. Ask what kind of theme they want, then iterate. Do NOT edit any other files.`
+    return `You are a theme designer for ${PRODUCT_NAME}, a developer workspace app. Your ONLY job is to edit the file "${fileName}" in the current directory. This JSON file defines a code editor theme with two sections: "colors" (editor UI like background, gutter, cursor, selection) and "syntax" (code highlighting for keywords, strings, types, comments, etc). All values are hex color strings. You can also change the "name" field to give the theme a custom name, and set "type" to "dark" or "light". The user sees a live preview that updates each time you save. Ask what kind of theme they want, then iterate. Do NOT edit any other files.`
   }, [themePath])
 
   const terminalCommand = agentCommand?.command
@@ -234,7 +235,7 @@ export function CustomThemeCreator({ onClose, currentThemeId, existingThemePath 
       command: agentCommand.command,
       baseArgs: agentCommand.args,
       systemBrief: agentPrompt,
-      userMessage: `Open and read the file ${fileName} in the current directory. This is a K2 editor theme JSON file. The user can see a live preview on the right that updates each time you save. Start by asking them what they'd like to name their theme and what style they're going for (dark, light, warm, cool, vibrant, muted, etc.), then start editing the colors.`,
+      userMessage: `Open and read the file ${fileName} in the current directory. This is a ${PRODUCT_NAME} editor theme JSON file. The user can see a live preview on the right that updates each time you save. Start by asking them what they'd like to name their theme and what style they're going for (dark, light, warm, cool, vibrant, muted, etc.), then start editing the colors.`,
     })
   }, [agentCommand, agentPrompt, themePath])
 

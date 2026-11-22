@@ -13,6 +13,7 @@
 import { useState, type JSX, type ReactNode } from 'react'
 import { daemonErrorText } from '@/lib/daemon-error'
 import { CARD_DANGER_TEXT, CARD_MUTED, CardButton, CardField } from './cardControls'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** The daemon's limit on a dismiss reason (`CLOSE_REASON_MAX_CHARS`). */
 export const CARD_DISMISS_REASON_MAX = 200
@@ -47,7 +48,7 @@ export function CardDismiss({
       await onDismiss(reason.trim() || undefined)
     } catch (err) {
       console.warn('[thread] dismiss failed:', err)
-      setError(daemonErrorText(err) || 'K2 couldn’t dismiss this card.')
+      setError(daemonErrorText(err) || `${PRODUCT_NAME} couldn’t dismiss this card.`)
       setBusy(false)
       return
     }

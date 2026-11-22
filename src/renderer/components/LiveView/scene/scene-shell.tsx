@@ -12,12 +12,13 @@ import { CubeGlyph } from '../shell/glyphs'
 import type { ShellConfig } from '../shell/shell-config'
 import { SceneHero } from './SceneHero'
 import { ScenePanel, scenePanelFor } from './ScenePanel'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const SCENE_SHELL: ShellConfig = {
   kind: 'scene',
   kindLabel: '3D scene',
   fileGlyph: <CubeGlyph size={15} />,
-  bannerLine: 'Played from K2’s sample scene; nothing here comes from the file you opened.',
+  bannerLine: `Played from ${PRODUCT_NAME}’s sample scene; nothing here comes from the file you opened.`,
   panel: [
     { id: 'changes', title: 'Activity' },
     { id: 'messages', title: 'Messages' },

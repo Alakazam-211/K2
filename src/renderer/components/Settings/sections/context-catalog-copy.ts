@@ -8,6 +8,7 @@
 // workspace happens in Workspaces / Agents → a workspace → Context.
 
 import type { ContextCatalogEntry } from '@/lib/context-stack'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** One line for each pack K2 ships, for a person reading Settings. The
  *  server's own description is written for agents (file paths, commands);
@@ -19,7 +20,7 @@ const BUILTIN_SUMMARY: Record<string, string> = {
   'subagents:pack': 'Asks agents to hand heavy work to helper agents in their own copy of the code, then review it.',
   'browser:pack': 'Tells agents about agent-browser and agent-desktop, which let them use a web browser and this computer’s apps, and the rules: give focus back, never type passwords.',
   'manager:pack': 'Short standing orders for an agent that coordinates other workspaces.',
-  'k2:pack': 'Short standing orders for K2’s own planning agent.',
+  'k2:pack': `Short standing orders for ${PRODUCT_NAME}’s own planning agent.`,
   'connections:roster': 'Lists the agents connected to this workspace, on this computer and on others.',
   'heartbeats:roster': 'Lists this workspace’s scheduled wake-ups and how often each one runs.',
   'skills:roster': 'Lists the skills agents here can load when they need one.',
@@ -97,7 +98,7 @@ export function shortNameProblem(slug: string, taken: readonly string[]): string
 export function createFailureNext(reason: string): string {
   const r = reason.toLowerCase()
   if (r.includes('already exists')) return 'A pack with this short name is already in the catalog. Pick another short name.'
-  if (r.includes('reserved')) return 'K2 keeps this short name for its own packs. Pick another short name.'
+  if (r.includes('reserved')) return `${PRODUCT_NAME} keeps this short name for its own packs. Pick another short name.`
   if (r.includes('filesystem-safe')) return 'Use only lowercase letters, numbers, - and _ in the short name.'
   return 'Nothing was added. Try again in a moment.'
 }

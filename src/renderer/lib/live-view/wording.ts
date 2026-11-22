@@ -5,6 +5,7 @@
 
 import { colLetters, colOfCellField, type Band, type OpsChangeFrame, type WatchOp } from '@k2/mpc-client'
 import { a1Text, cornerPlace, gridOf, rectA1, sheetOfRow, titleOf, type Book, type Rect4 } from './workbook'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** Who a change or claim is by, as the view shows them. */
 export interface Actor {
@@ -16,7 +17,7 @@ export interface Actor {
 }
 
 /** K2's name and colour for an outside save's actor (`kit:external`, colour null: the host's to choose). */
-export const FILE_ACTOR_NAME = 'Saved outside K2'
+export const FILE_ACTOR_NAME = `Saved outside ${PRODUCT_NAME}`
 export const FILE_ACTOR_COLOUR = 'var(--color-text-muted)'
 
 export function actorFrom(a: { id: string; name: string; kind: string; colour: string | null } | null | undefined): Actor {
@@ -91,7 +92,7 @@ function bandWords(b: Band, title: string, blank: boolean): { text: string; plac
 export function framePhrase(f: OpsChangeFrame, B0: Book, B1: Book): Phrase {
   const file = f.actor.kind === 'file'
   const who = file ? null : actorFrom(f.actor).name
-  const lead = file ? 'was saved outside K2: ' : ''
+  const lead = file ? `was saved outside ${PRODUCT_NAME}: ` : ''
   const out = (text: string, place: string | number, sheet: string | null, target: PhraseTarget | null = null): Phrase => ({ who, lead, text, place: String(place), sheet, target })
   const sch = B1.schema
   const gs = sch.grid

@@ -11,6 +11,7 @@ import { cellShown, formatNumber, gridOf, sheetsOf, styleOf, titleOf, type Book 
 import { actorFrom, type Actor } from '@/lib/live-view/wording'
 import { LiveEntrySwitch } from './LiveEntrySwitch'
 import { Avatar, EyeOffGlyph, FollowGlyph, InfoGlyph, SheetGlyph } from './parts'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export function WorkbookHeader({
   state,
@@ -125,7 +126,7 @@ export function FormulaBar({
     value = <span className="font-[family-name:var(--font-code)] text-[var(--color-accent-text)]">{shown.formula}</span>
     chip =
       shown.result != null ? (
-        <Tag tone="neutral" title="The file's cached result: K2 has no calculator" className="lv-num">
+        <Tag tone="neutral" title={`The file's cached result: ${PRODUCT_NAME} has no calculator`} className="lv-num">
           as last calculated {g && cell ? formatNumber(shown.result, styleOf(g, cell).numfmt).text : shown.result}
         </Tag>
       ) : (
@@ -152,7 +153,7 @@ export function FormulaBar({
         </span>
       ) : null}
       {state.firstLiveEdit != null && state.tier === 'live' ? (
-        <span className="inline-flex items-center gap-1 type-hint text-[var(--color-text-muted)]" title="K2 has no calculator: every cached result stays as the file last calculated it">
+        <span className="inline-flex items-center gap-1 type-hint text-[var(--color-text-muted)]" title={`${PRODUCT_NAME} has no calculator: every cached result stays as the file last calculated it`}>
           <InfoGlyph size={12} />
           Results not recalculated since rev {state.firstLiveEdit}
         </span>

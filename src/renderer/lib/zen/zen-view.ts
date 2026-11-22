@@ -24,6 +24,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useZenWindowStore, type ZenRailView } from './zen-window'
 import { zenAvailable } from './zen-platform'
 import type { ZenControlKind } from './zen-page'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** Why this window is in safe mode. */
 export type ZenSafeCause =
@@ -63,7 +64,7 @@ const PROBLEM_TEXT: Record<ZenControlProblem, string> = {
 export const ZEN_CONTROL_PROBLEM_TEXT: Readonly<Record<ZenControlProblem, string>> = PROBLEM_TEXT
 
 /** G19: the daemon on this computer has no Gardens routes. */
-export const ZEN_OUTDATED_TEXT = 'K2 on this computer is older than this app. Update it to use Gardens.'
+export const ZEN_OUTDATED_TEXT = `${PRODUCT_NAME} on this computer is older than this app. Update it to use Gardens.`
 
 /** The banner's cause line (Z29). */
 export function zenSafeCauseText(cause: ZenSafeCause): string {
@@ -78,9 +79,9 @@ export function zenSafeCauseText(cause: ZenSafeCause): string {
         ? `${CONTROL_NAME[cause.control]}’s menu (${cause.menu.label}) ${PROBLEM_TEXT[cause.problem]}.`
         : `${CONTROL_NAME[cause.control]} ${PROBLEM_TEXT[cause.problem]}.`
     case 'unreachable':
-      return 'Can’t reach K2 on this computer.'
+      return `Can’t reach ${PRODUCT_NAME} on this computer.`
     case 'unreadable':
-      return `K2 on this computer sent a Zen page this app can’t read: ${cause.message}`
+      return `${PRODUCT_NAME} on this computer sent a Zen page this app can’t read: ${cause.message}`
     case 'outdated':
       return ZEN_OUTDATED_TEXT
   }

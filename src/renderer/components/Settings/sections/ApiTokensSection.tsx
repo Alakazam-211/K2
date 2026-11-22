@@ -44,6 +44,7 @@ import { AccessAuditLink } from '../shared/AccessAuditLink'
 import { ConfirmSheet } from './AccessDialogs'
 import { AppAccessDialog, CreateKeyDialog, type CreatedKey } from './ApiKeyDialogs'
 import { useActiveHostRole } from './useActiveHostRole'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export { hireConfirmCopy } from './ApiKeyDialogs'
 
@@ -525,7 +526,7 @@ export function WorkspaceApiKeysPanel({
       title="API keys"
       card
       testId="workspace-api-keys"
-      hint="Keys that let other apps call this workspace through the K2 API. A key reaches it when it’s given this workspace or every workspace."
+      hint={`Keys that let other apps call this workspace through the ${PRODUCT_NAME} API. A key reaches it when it’s given this workspace or every workspace.`}
       action={<Button variant="quiet" onClick={openGlobal}>Manage all keys</Button>}
     >
       {error && (

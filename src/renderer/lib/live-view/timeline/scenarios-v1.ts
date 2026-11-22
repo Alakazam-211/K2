@@ -10,6 +10,7 @@ import { CONT, MKR, PROPS, TLR, UNIT, type Claim, type OutsideSaveEvent, type Re
 import { ensurePeer, simulateRaw, step, type LoadingState, type Scenario, type SimEvent, type SimState } from './sim'
 import { pairOf } from './time'
 import { ATLAS, B30, blank, BROOK, CTX, EXT, FRT, fromTurn, initTurn, jFirst, jP2, KAI, pres, ptr, SAM, SELF, stepOf, TURN, vpt } from './world'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** Opening: the welcome, then the snapshot's pages in the schema's root order, then the view index's units pages. */
 export function buildOpen(): Scenario {
@@ -145,7 +146,7 @@ export function buildSaves(): Scenario[] {
       group: 'Outside saves',
       title: 'Outside save, missing: the file was deleted or moved',
       base: fromTurn(jSave - 1),
-      steps: [before('The turn is written back (rev 35).'), step('missing', [save({ _at_ms: 321000, outcome: 'missing' })], 'The file is deleted or moved outside K2. The live version is kept.')],
+      steps: [before('The turn is written back (rev 35).'), step('missing', [save({ _at_ms: 321000, outcome: 'missing' })], `The file is deleted or moved outside ${PRODUCT_NAME}. The live version is kept.`)],
     },
   ]
 }
@@ -185,10 +186,10 @@ export function buildEmpty(): Scenario[] {
       title: 'Errors: files that can’t be watched live',
       base: initTurn,
       steps: [
-        step('many timelines', [decl('live_many_timelines', 'This file holds 3 timelines', 'K2 watches one timeline per file live. You can still open the saved file.')]),
-        step('overlap', [decl('live_overlap', 'Two clips overlap on V2', 'K2 can only watch a timeline live when the clips on a track don’t overlap (except across a transition). Fix it in the file and K2 tries again on the next save.')]),
-        step('between frames', [decl('live_time_off_tick', 'Some times fall between frames', 'A few clips start or end at times K2 can’t count exactly, so it won’t watch this file live. You can still open the saved file.')]),
-        step('too large', [decl('live_too_large', 'Too large to watch live, for now', 'This timeline has 2,612 items. K2 watches up to 2,500 live today. You can still open the saved file.')]),
+        step('many timelines', [decl('live_many_timelines', 'This file holds 3 timelines', `${PRODUCT_NAME} watches one timeline per file live. You can still open the saved file.`)]),
+        step('overlap', [decl('live_overlap', 'Two clips overlap on V2', `${PRODUCT_NAME} can only watch a timeline live when the clips on a track don’t overlap (except across a transition). Fix it in the file and ${PRODUCT_NAME} tries again on the next save.`)]),
+        step('between frames', [decl('live_time_off_tick', 'Some times fall between frames', `A few clips start or end at times ${PRODUCT_NAME} can’t count exactly, so it won’t watch this file live. You can still open the saved file.`)]),
+        step('too large', [decl('live_too_large', 'Too large to watch live, for now', `This timeline has 2,612 items. ${PRODUCT_NAME} watches up to 2,500 live today. You can still open the saved file.`)]),
       ],
     },
   ]

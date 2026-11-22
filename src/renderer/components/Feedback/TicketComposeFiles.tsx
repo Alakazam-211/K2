@@ -33,6 +33,7 @@ import {
 } from '@/lib/thread-compose-attachments'
 import { ThreadAttachmentChip, ThreadAttachmentChips } from '@/components/Thread/ThreadZenKit'
 import { TICKET_ATTACHMENTS_FEATURE } from './feedback-api'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** May this ticket's box take files, and if not, why (the "+" title). */
 export function ticketComposeAttach(
@@ -40,7 +41,7 @@ export function ticketComposeAttach(
   projectPath: string | null | undefined,
 ): { on: boolean; why: string | null } {
   if (!scope.serverSupports(TICKET_ATTACHMENTS_FEATURE)) {
-    return { on: false, why: 'This server’s K2 doesn’t take files on tickets yet (it needs 0.46.6).' }
+    return { on: false, why: `This server’s ${PRODUCT_NAME} doesn’t take files on tickets yet (it needs 0.46.6).` }
   }
   if (!projectPath) return { on: false, why: 'This ticket’s workspace was removed, so files can’t be attached.' }
   return { on: true, why: null }

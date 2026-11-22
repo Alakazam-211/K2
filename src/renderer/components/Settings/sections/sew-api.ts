@@ -274,9 +274,9 @@ export const SEW_ENABLE_STEPS: { id: string; label: string }[] = [
   { id: 'db', label: 'Start the database' },
   { id: 'migrate', label: 'Prepare the database' },
   { id: 'start', label: 'Start chat' },
-  { id: 'token', label: 'Connect K2 to chat' },
+  { id: 'token', label: `Connect ${PRODUCT_NAME} to chat` },
   { id: 'health', label: 'Check that it answers' },
-  { id: 'link', label: 'Finish linking to K2' },
+  { id: 'link', label: `Finish linking to ${PRODUCT_NAME}` },
 ]
 
 export const SEW_PREFLIGHT_LABELS: Record<string, string> = {
@@ -284,7 +284,7 @@ export const SEW_PREFLIGHT_LABELS: Record<string, string> = {
   arch: 'Processor',
   systemd: 'Service manager',
   postgres: 'Database (PostgreSQL)',
-  helper: 'K2’s system helper',
+  helper: `${PRODUCT_NAME}’s system helper`,
   pin: 'Chat release',
   source: 'Where the chat server comes from',
   ram: 'Memory',
@@ -292,8 +292,8 @@ export const SEW_PREFLIGHT_LABELS: Record<string, string> = {
   port: 'Chat’s network port',
   binary: 'Chat program',
   existing_data: 'Chat data already on this server',
-  daemon_port: 'K2’s network port',
-  vault: 'K2 vault',
+  daemon_port: `${PRODUCT_NAME}’s network port`,
+  vault: `${PRODUCT_NAME} vault`,
   voice_ports: 'Voice call ports',
 }
 
@@ -303,7 +303,7 @@ export const SEW_FIXABLE_CHECKS = ['source', 'existing_data']
 /** "12.3 of 24.7 MB" / "from K2's cache" beside the download step. */
 export function downloadNote(d: SewDownload | null | undefined): string | null {
   if (!d) return null
-  if (d.source === 'cache') return `${d.label ?? 'The chat server'} from K2's download cache`
+  if (d.source === 'cache') return `${d.label ?? 'The chat server'} from ${PRODUCT_NAME}'s download cache`
   if (d.source === 'tarball') return `${d.label ?? 'The chat server'} from the file you named`
   if (d.source !== 'download' || typeof d.bytes !== 'number') return null
   const mb = (n: number): string => (n / 1e6).toFixed(1)
@@ -352,12 +352,12 @@ export const SEW_ALARMS: Record<string, SewAlarmInfo> = {
   backup_failed: { severity: 'error', title: 'The last backup failed', fix: 'Back up now to see what went wrong.', action: 'backup' },
   drill_failed: { severity: 'error', title: 'The last restore test failed', fix: 'A backup couldn’t be restored in the test.', ...HEALTH },
   drill_stale: { severity: 'warn', title: 'No restore test in 8 days', fix: 'The server tests a backup every day. Check that scheduled restore tests run.' },
-  k2_mgmt_unreachable: { severity: 'error', title: 'K2 can’t reach the chat server', fix: 'Chat’s services run, but K2 can’t talk to them.', ...HEALTH },
-  k2_recovery_key_not_saved: { severity: 'warn', title: 'Recovery key isn’t in the vault yet', fix: 'K2 copies it into the vault on its own, at start or when you show it. If this stays, check that the vault is open.', action: 'recovery-key' },
+  k2_mgmt_unreachable: { severity: 'error', title: `${PRODUCT_NAME} can’t reach the chat server`, fix: `Chat’s services run, but ${PRODUCT_NAME} can’t talk to them.`, ...HEALTH },
+  k2_recovery_key_not_saved: { severity: 'warn', title: 'Recovery key isn’t in the vault yet', fix: `${PRODUCT_NAME} copies it into the vault on its own, at start or when you show it. If this stays, check that the vault is open.`, action: 'recovery-key' },
   k2_master_key_due: { severity: 'warn', title: 'Time to change the encryption key', fix: 'Changing it now and then keeps old messages safe if a key ever leaks.', ask: 'Ask an admin to change the key on the server.', command: cli('rotate-master') },
-  k2_vault_key_mismatch: { severity: 'error', title: 'K2’s key doesn’t match chat’s', fix: 'Don’t change anything yet.', ...HEALTH },
-  k2_helper_pin_mismatch: { severity: 'warn', title: 'K2’s system helper is out of date', fix: 'Update K2 on this server, then update chat.' },
-  k2_jwks_url_drift: { severity: 'error', title: 'Chat can’t check K2 sign-ins', fix: 'K2’s network port changed.', ...HEALTH },
+  k2_vault_key_mismatch: { severity: 'error', title: `${PRODUCT_NAME}’s key doesn’t match chat’s`, fix: 'Don’t change anything yet.', ...HEALTH },
+  k2_helper_pin_mismatch: { severity: 'warn', title: `${PRODUCT_NAME}’s system helper is out of date`, fix: `Update ${PRODUCT_NAME} on this server, then update chat.` },
+  k2_jwks_url_drift: { severity: 'error', title: `Chat can’t check ${PRODUCT_NAME} sign-ins`, fix: `${PRODUCT_NAME}’s network port changed.`, ...HEALTH },
   k2_owner_blocked: { severity: 'warn', title: 'Setting you up as owner failed', fix: 'Try again from User Access, where it syncs people to chat.' },
   k2_backup_offbox_none: { severity: 'warn', title: 'Backups stay on this server', fix: 'Choose where copies of the backups go, so a disk loss doesn’t take them too.', action: 'offbox' },
   k2_backup_not_shipped: { severity: 'warn', title: 'The last backup wasn’t copied to another machine', fix: 'Check where copies of the backups go, under Backups and keys.', action: 'offbox' },
@@ -365,7 +365,7 @@ export const SEW_ALARMS: Record<string, SewAlarmInfo> = {
   k2_upgrade_rollback_failed: { severity: 'error', title: 'An update failed and couldn’t go back', fix: 'Someone has to fix this on the server itself.', ask: 'Ask an admin to read the update’s record on the server.', command: 'cat /usr/local/lib/sew/upgrade-state.json' },
   k2_turn_cert_missing: { severity: 'error', title: 'Voice calls have no certificate', fix: 'Calls can’t connect securely.', ...RENEW },
   k2_turn_cert_expired: { severity: 'error', title: 'The voice certificate expired', fix: 'Calls can’t connect securely.', ...RENEW },
-  k2_turn_cert_expiring: { severity: 'warn', title: 'The voice certificate expires soon', fix: 'K2 renews it on its own before then.', ask: 'To renew it now, ask an admin to renew the voice certificate on the server.', command: cli('media renew') },
+  k2_turn_cert_expiring: { severity: 'warn', title: 'The voice certificate expires soon', fix: `${PRODUCT_NAME} renews it on its own before then.`, ask: 'To renew it now, ask an admin to renew the voice certificate on the server.', command: cli('media renew') },
   k2_turn_tls_mismatch: { severity: 'error', title: 'Voice uses the wrong certificate', fix: 'Calls may fail to connect.', ...RENEW },
   k2_voice_probe_failed: { severity: 'warn', title: 'A test call from outside failed', fix: 'The server’s firewall may be blocking the voice ports.', ask: 'Ask an admin to open the voice ports, then test a call again on the server.', command: cli('media probe') },
   voice_engine_down: { severity: 'error', title: 'Voice calls are down', fix: 'The voice service stopped.', ask: 'Ask an admin to check the voice service on the server.', command: cli('media status') },
@@ -374,7 +374,7 @@ export const SEW_ALARMS: Record<string, SewAlarmInfo> = {
 
 /** Info for any alarm string; unknown ones keep their name as the title. */
 export function alarmInfo(alarm: string): SewAlarmInfo {
-  return SEW_ALARMS[alarm] ?? { severity: 'warn', title: alarm, fix: 'K2 has no description for this one yet.', ask: 'Ask an admin to check chat’s status on the server.', command: cli('status') }
+  return SEW_ALARMS[alarm] ?? { severity: 'warn', title: alarm, fix: `${PRODUCT_NAME} has no description for this one yet.`, ask: 'Ask an admin to check chat’s status on the server.', command: cli('status') }
 }
 
 /** The daemon's setup warnings (`supervisor::split_setup_warnings`,
@@ -388,7 +388,7 @@ const SEW_WARNINGS: Record<string, Omit<SewAlarmInfo, 'severity'>> = {
 }
 
 export function warningInfo(w: SewWarning): Omit<SewAlarmInfo, 'severity'> & { detail?: string } {
-  return SEW_WARNINGS[w.code] ?? { title: 'Chat reported something to check', fix: 'K2 has no plain description for this one yet.', detail: w.message }
+  return SEW_WARNINGS[w.code] ?? { title: 'Chat reported something to check', fix: `${PRODUCT_NAME} has no plain description for this one yet.`, detail: w.message }
 }
 
 /** A failed call in plain words: `line` says what went wrong (null when
@@ -406,7 +406,7 @@ export function sewFailure(e: unknown): SewFailure {
   const { code, status, message } = sewErrorInfo(e)
   const hint = message
   const f = (line: string | null, next: string | null = null): SewFailure => ({ line, next, detail: hint, code })
-  if (code === 'owner_confirm_required') return f('This step needs you to confirm it’s you first.', 'Try again and confirm when K2 asks.')
+  if (code === 'owner_confirm_required') return f('This step needs you to confirm it’s you first.', `Try again and confirm when ${PRODUCT_NAME} asks.`)
   if (code === 'owner_only' || code === 'forbidden' || code === 'wrong_credential' || (status === 403 && !code)) return f(SEW_NO_PERMISSION, 'Ask the server’s owner or an admin to do it.')
   if (code === 'owner_not_ready') return f('Chat is still setting you up as owner.', 'Wait a minute, then try again.')
   if (status === 429) return f('Too many tries.', 'Wait a minute, then try again.')
@@ -415,8 +415,8 @@ export function sewFailure(e: unknown): SewFailure {
   if (code === 'not_installed' || code === 'unknown_sew_binary') return f('Chat isn’t installed on this server.', 'Set it up from the Overview tab first.')
   if (code === 'not_running' || code === 'sew_not_running' || code === 'mgmt_unreachable' || code === 'sew_unreachable' || code === 'sew_unavailable') return f('Chat isn’t running, so it can’t do this right now.', 'Wait for chat to come back (the Overview tab shows it), then try again.')
   if (code === 'backups_unavailable') return f('This chat server can’t make backups.', 'Update chat from the Overview tab, then try again.')
-  if (code === 'vault_closed' || code === 'vault_error') return f('The K2 vault is locked, so K2 can’t reach chat’s keys.', 'Open the vault (Settings → Vault), then try again.')
-  if (code === 'invalid_path') return f('That folder isn’t there on the server, or K2 can’t write to it.', 'Check that the disk is mounted and the folder exists, then try again.')
+  if (code === 'vault_closed' || code === 'vault_error') return f(`The ${PRODUCT_NAME} vault is locked, so ${PRODUCT_NAME} can’t reach chat’s keys.`, 'Open the vault (Settings → Vault), then try again.')
+  if (code === 'invalid_path') return f(`That folder isn’t there on the server, or ${PRODUCT_NAME} can’t write to it.`, 'Check that the disk is mounted and the folder exists, then try again.')
   if (code === 'space_bound') return f('That Space is already connected to another App.', 'Check the Space ID, or disconnect it from the other App first.')
   if (code === 'space_not_found') return f('Chat has no Space with that ID.', 'Copy the Space ID again from the App’s settings.')
   if (code === 'app_mismatch') return f('That Space belongs to a different App.', 'Check the App and the Space ID.')
@@ -425,7 +425,7 @@ export function sewFailure(e: unknown): SewFailure {
   if (code === 'not_available') return f('That choice isn’t available yet.', 'Pick another one.')
   if (code === 'preflight_failed') return f('The server checks found something to fix first.', 'Fix what’s marked Needs fixing, then try again.')
   if (code === 'config_failed' || code === 'restart_failed' || code === 'reconfigure_failed') return f('Chat didn’t accept the change.', 'Nothing changed. Try again in a moment.')
-  if (code === 'db_error' || code === 'io_error') return f('K2 couldn’t save the change on the server.', 'Try again in a moment.')
+  if (code === 'db_error' || code === 'io_error') return f(`${PRODUCT_NAME} couldn’t save the change on the server.`, 'Try again in a moment.')
   if (code === 'unsupported') return f('Chat and voice run on Linux servers only.')
   if (code === 'backup_failed') {
     if (/no space|disk full|ENOSPC|out of (disk|space)/i.test(hint)) return f('The backup ran out of disk space.', 'Free up space on the server, then back up again.')

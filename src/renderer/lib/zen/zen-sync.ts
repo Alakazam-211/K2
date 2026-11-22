@@ -32,6 +32,7 @@ import { create } from 'zustand'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { scopeForHost, type ServerScope } from '@/kessel/server-scope'
 import { setZenCatalogBadge } from './zen-templates'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 function localScope(): ServerScope {
   return scopeForHost('local')
@@ -423,7 +424,7 @@ export function zenNewsCardText(item: ZenNewsItem): { title: string; lead: strin
   return {
     title: `${item.gardenName} has a fresh look`,
     lead: null,
-    body: 'It syncs with K2’s default, so it got this release’s improvements.',
+    body: `It syncs with ${PRODUCT_NAME}’s default, so it got this release’s improvements.`,
     button: item.keepPrevious ? 'Keep my previous look' : null,
   }
 }

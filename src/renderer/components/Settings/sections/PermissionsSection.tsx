@@ -20,6 +20,7 @@ import {
   SettingsLoadState,
 } from '../controls/SettingControls'
 import { HealthWord, StatusDot, type HealthTone } from './ConnectionsParts'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 interface PermissionStatus {
   fullDiskAccess: boolean
@@ -66,28 +67,28 @@ const PERMISSIONS: Permission[] = [
   {
     id: 'permissions-full-disk-access',
     label: 'Full Disk Access',
-    purpose: 'So K2 can open workspaces in folders macOS guards, like Documents, Downloads, Desktop and iCloud Drive.',
+    purpose: `So ${PRODUCT_NAME} can open workspaces in folders macOS guards, like Documents, Downloads, Desktop and iCloud Drive.`,
     field: 'fullDiskAccess',
     command: 'permissions_request_full_disk_access',
   },
   {
     id: 'permissions-accessibility',
     label: 'Accessibility',
-    purpose: 'So K2 can type keystrokes for you and work with automation tools.',
+    purpose: `So ${PRODUCT_NAME} can type keystrokes for you and work with automation tools.`,
     field: 'accessibility',
     command: 'permissions_request_accessibility',
   },
   {
     id: 'permissions-apple-events',
     label: 'Automation',
-    purpose: 'So K2 can ask other Mac apps to do things, like opening a file in your editor.',
+    purpose: `So ${PRODUCT_NAME} can ask other Mac apps to do things, like opening a file in your editor.`,
     field: null,
     command: 'permissions_request_apple_events',
   },
   {
     id: 'permissions-local-network',
     label: 'Local Network',
-    purpose: 'So K2 can find servers on your network and the K2 Companion app on your phone.',
+    purpose: `So ${PRODUCT_NAME} can find servers on your network and the ${PRODUCT_NAME} Companion app on your phone.`,
     field: null,
     command: 'permissions_request_local_network',
   },
@@ -146,8 +147,8 @@ function Note({ perm, kind, note }: { perm: Permission; kind: StatusKind; note: 
     note.kind === 'asking'
       ? 'macOS is asking you now. Choose Allow in its window, and this row updates by itself.'
       : perm.field
-        ? `System Settings is open at ${perm.label}. Turn on K2 there, and this row updates by itself.`
-        : `System Settings is open at ${perm.label}. Turn on K2 there. macOS doesn’t tell apps about this one, so this row stays at Can’t tell.`
+        ? `System Settings is open at ${perm.label}. Turn on ${PRODUCT_NAME} there, and this row updates by itself.`
+        : `System Settings is open at ${perm.label}. Turn on ${PRODUCT_NAME} there. macOS doesn’t tell apps about this one, so this row stays at Can’t tell.`
   return (
     <p role="status" className={`${SETTING_ROW_HINT} mt-1`}>
       {text}
@@ -269,7 +270,7 @@ export function PermissionsSection(): React.JSX.Element {
       <header className="min-w-0">
         <h2 className="type-title text-[var(--color-text-primary)]">Accessibility</h2>
         <p className="type-hint text-[var(--color-text-secondary)] mt-1 leading-relaxed max-w-[75ch]">
-          What K2 can reach on this Mac. You turn each one on in System Settings, under Privacy &amp; Security, and this
+          What {PRODUCT_NAME} can reach on this Mac. You turn each one on in System Settings, under Privacy &amp; Security, and this
           page updates by itself.
         </p>
       </header>
@@ -278,7 +279,7 @@ export function PermissionsSection(): React.JSX.Element {
         <Callout tone="warn" role="alert" className="type-hint" data-testid="permissions-read-failed">
           <div className="flex items-center justify-between gap-4">
             <div className="min-w-0 space-y-0.5">
-              <p className="font-medium">K2 couldn&rsquo;t read these permissions from macOS.</p>
+              <p className="font-medium">{PRODUCT_NAME} couldn&rsquo;t read these permissions from macOS.</p>
               <p className="text-[var(--color-text-secondary)]">
                 Each one shows Can&rsquo;t tell until it can. You can still check them in System Settings.
               </p>
@@ -299,7 +300,7 @@ export function PermissionsSection(): React.JSX.Element {
           state={
             read.kind === 'loading' ? (
               <SettingsLoadState kind="loading" title="Checking permissions…" testId="permissions-loading">
-                Asking macOS what K2 is allowed to use.
+                Asking macOS what {PRODUCT_NAME} is allowed to use.
               </SettingsLoadState>
             ) : undefined
           }
@@ -319,7 +320,7 @@ export function PermissionsSection(): React.JSX.Element {
         {read.kind === 'ready' && (
           <p className={SETTING_ROW_HINT} data-testid="permissions-cant-tell">
             Can&rsquo;t tell: macOS doesn&rsquo;t let apps check Automation or Local Network. Open System Settings to
-            see whether K2 has them.
+            see whether {PRODUCT_NAME} has them.
           </p>
         )}
       </div>
@@ -340,28 +341,28 @@ export const PERMISSIONS_MANIFEST: SettingEntry[] = [
     id: 'permissions-full-disk-access',
     section: 'permissions',
     label: 'Full Disk Access',
-    description: 'Lets K2 open workspaces in Documents, Downloads, Desktop and iCloud Drive.',
+    description: `Lets ${PRODUCT_NAME} open workspaces in Documents, Downloads, Desktop and iCloud Drive.`,
     keywords: ['full disk access', 'fda', 'tcc', 'documents', 'downloads', 'icloud', 'permission'],
   },
   {
     id: 'permissions-accessibility',
     section: 'permissions',
     label: 'Accessibility',
-    description: 'Lets K2 type keystrokes for you and work with automation tools.',
+    description: `Lets ${PRODUCT_NAME} type keystrokes for you and work with automation tools.`,
     keywords: ['accessibility', 'a11y', 'keystrokes', 'automation', 'permission'],
   },
   {
     id: 'permissions-apple-events',
     section: 'permissions',
     label: 'Automation',
-    description: 'Lets K2 ask other Mac apps to do things.',
+    description: `Lets ${PRODUCT_NAME} ask other Mac apps to do things.`,
     keywords: ['apple events', 'automation', 'applescript', 'permission'],
   },
   {
     id: 'permissions-local-network',
     section: 'permissions',
     label: 'Local Network',
-    description: 'Lets K2 find servers and the K2 Companion app on your network.',
+    description: `Lets ${PRODUCT_NAME} find servers and the ${PRODUCT_NAME} Companion app on your network.`,
     keywords: ['local network', 'lan', 'companion', 'bonjour', 'permission'],
   },
 ]

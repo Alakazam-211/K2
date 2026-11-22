@@ -13,6 +13,7 @@
 // Settings rows, the entry and the keys all read this list).
 
 import { useSyncExternalStore } from 'react'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export type LivePreviewType = 'workbook' | 'scene' | 'timeline'
 
@@ -35,7 +36,7 @@ export const LIVE_PREVIEW_SWITCHES: readonly LivePreviewSwitch[] = [
     id: 'live-workbook-preview',
     storageKey: 'k2.liveWorkbookPreview.v1',
     name: 'Watch workbooks live (preview)',
-    line: 'Workbook (.xlsx) tabs get a “Watch live” view: who’s here, what an agent holds and what it changed, cell by cell. For now it plays K2’s sample workbook, not your file. On this computer only.',
+    line: `Workbook (.xlsx) tabs get a “Watch live” view: who’s here, what an agent holds and what it changed, cell by cell. For now it plays ${PRODUCT_NAME}’s sample workbook, not your file. On this computer only.`,
     types: ['workbook'],
     testId: 'live-workbook-preview-toggle',
   },
@@ -43,7 +44,7 @@ export const LIVE_PREVIEW_SWITCHES: readonly LivePreviewSwitch[] = [
     id: 'live-scene-preview',
     storageKey: 'k2.liveScenePreview.v1',
     name: 'Watch 3D scenes live (preview)',
-    line: '3D scene tabs get a “Watch live” view: who’s here, whom you’re following and what changed. For now it plays K2’s sample scene, not your file. On this computer only.',
+    line: `3D scene tabs get a “Watch live” view: who’s here, whom you’re following and what changed. For now it plays ${PRODUCT_NAME}’s sample scene, not your file. On this computer only.`,
     types: ['scene'],
     testId: 'live-scene-preview-toggle',
   },
@@ -51,7 +52,7 @@ export const LIVE_PREVIEW_SWITCHES: readonly LivePreviewSwitch[] = [
     id: 'live-timeline-preview',
     storageKey: 'k2.liveTimelinePreview.v1',
     name: 'Watch timelines live (preview)',
-    line: 'Timeline tabs get a “Watch live” view: who’s here, whom you’re following and what changed in the edit. For now it plays K2’s sample edit, not your file. On this computer only.',
+    line: `Timeline tabs get a “Watch live” view: who’s here, whom you’re following and what changed in the edit. For now it plays ${PRODUCT_NAME}’s sample edit, not your file. On this computer only.`,
     types: ['timeline'],
     testId: 'live-timeline-preview-toggle',
   },

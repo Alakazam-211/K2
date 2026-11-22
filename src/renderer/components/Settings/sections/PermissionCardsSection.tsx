@@ -65,7 +65,7 @@ import {
   type PermissionRecent,
   type PermissionViewerRole,
 } from './permission-cards-api'
-import { CLI_NAME } from '@/lib/brand'
+import { CLI_NAME, PRODUCT_NAME } from '@/lib/brand'
 
 export const PERMISSION_CARDS_MANIFEST: SettingEntry[] = [
   {
@@ -666,7 +666,7 @@ export function PermissionCardsSection(): React.JSX.Element {
   } else if (server.on === null) {
     body = (
       <SettingsLoadState kind="empty" title="This server doesn’t have permission cards yet" testId="permission-cards-old-server">
-        Update K2 on this server to version 0.46.3 or later to use them. Until then, agents ask in their own words.
+        Update {PRODUCT_NAME} on this server to version 0.46.3 or later to use them. Until then, agents ask in their own words.
       </SettingsLoadState>
     )
   } else {

@@ -37,6 +37,7 @@ import {
   type KeyValue,
 } from './runner'
 import type { WireItem } from './engine'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 function localScope(): ServerScope {
   return scopeForHost('local')
@@ -67,11 +68,11 @@ export function localKv(): KeyValue | null {
 /** This device as the server lists it: `macos` / `windows` / `linux` /
  *  `web`, and a plain name. */
 export function thisDevice(): { name: string; platform: string } {
-  if (isWebClient()) return { name: 'K2 in a browser', platform: 'web' }
+  if (isWebClient()) return { name: `${PRODUCT_NAME} in a browser`, platform: 'web' }
   const os = desktopOsFromNavigator(typeof navigator === 'undefined' ? null : navigator)
   const platform = os === 'mac' ? 'macos' : os === 'other' ? 'desktop' : os
   const label = os === 'mac' ? 'macOS' : os === 'windows' ? 'Windows' : os === 'linux' ? 'Linux' : 'desktop'
-  return { name: `K2 desktop (${label})`, platform }
+  return { name: `${PRODUCT_NAME} desktop (${label})`, platform }
 }
 
 function newDeviceId(): string {

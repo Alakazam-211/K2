@@ -36,6 +36,7 @@ import {
   zenSyncChecked,
 } from '@/lib/zen/zen-sync'
 import { offerPinOnLock, type PinOutcome } from './data-sources-lock'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** The toast after "Also pin the N sources it shows" (data-sources-lock). */
 function pinToast(r: PinOutcome | null): void {
@@ -46,12 +47,12 @@ function pinToast(r: PinOutcome | null): void {
 }
 
 export const ZEN_LOCK_LABEL = 'Lock garden'
-export const ZEN_LOCK_TIP = 'Agents can’t change this Garden. You still can, and K2’s own updates still arrive.'
+export const ZEN_LOCK_TIP = `Agents can’t change this Garden. You still can, and ${PRODUCT_NAME}’s own updates still arrive.`
 export const ZEN_SYNC_LABEL = 'Keep in sync with future template updates'
-export const ZEN_SYNC_TIP = 'Gets K2’s improvements to this Garden’s template and theme.'
+export const ZEN_SYNC_TIP = `Gets ${PRODUCT_NAME}’s improvements to this Garden’s template and theme.`
 export const ZEN_SYNC_SCRATCH_TIP = 'Made from scratch, no template to follow'
 /** G26: the sync box's name on the Garden pane (Garden access on). */
-export const ZEN_DESIGN_UPDATES_LABEL = 'Get K2’s design updates'
+export const ZEN_DESIGN_UPDATES_LABEL = `Get ${PRODUCT_NAME}’s design updates`
 
 /** The blank start ("Start empty and ask my agent"): a Garden made from scratch. */
 const SCRATCH_TEMPLATE_ID = 'k2.blank@1'
@@ -199,7 +200,7 @@ export function ZenGardenSyncControls({
     const syncHint = scratch
       ? 'Made from scratch, so there’s no template to follow.'
       : synced === 'mixed'
-        ? `Part of it follows K2’s updates and part is your own copy. Turn this on to follow them for all of it. ${follows}`
+        ? `Part of it follows ${PRODUCT_NAME}’s updates and part is your own copy. Turn this on to follow them for all of it. ${follows}`
         : `${ZEN_SYNC_TIP} ${follows}`
     return (
       <>

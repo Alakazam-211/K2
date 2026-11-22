@@ -10,6 +10,7 @@
 import { create } from 'zustand'
 import { usePageViewStore } from '@/stores/page-view'
 import { useSettingsStore } from '@/stores/settings'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export type SendFeedbackTab = 'send' | 'sent'
 
@@ -39,7 +40,7 @@ export function currentPageLabel(): string {
   } catch {
     // The settings store isn't loaded in every window kind.
   }
-  return PAGE_LABELS[usePageViewStore.getState().page] ?? 'K2'
+  return PAGE_LABELS[usePageViewStore.getState().page] ?? PRODUCT_NAME
 }
 
 export const useSendFeedbackStore = create<SendFeedbackStore>((set) => ({

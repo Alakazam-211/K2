@@ -2,6 +2,8 @@
  * Web shim for `@tauri-apps/api/app`.
  */
 
+import { PRODUCT_NAME } from '@/lib/brand'
+
 function appVersion(): string {
   const env = (import.meta as ImportMeta & { env?: Record<string, string> }).env
   return env?.VITE_APP_VERSION ?? env?.VITE_K2_VERSION ?? '0.0.0-web'
@@ -12,7 +14,7 @@ export async function getVersion(): Promise<string> {
 }
 
 export async function getName(): Promise<string> {
-  return 'K2'
+  return PRODUCT_NAME
 }
 
 export async function getTauriVersion(): Promise<string> {

@@ -12,6 +12,7 @@
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { primaryScope, type ServerScope } from '@/kessel/server-scope'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** Where an effective value came from (§4). */
 export type NotifySource = 'user' | 'default' | 'fallback'
@@ -274,7 +275,7 @@ export function phoneStatus(p: Pick<NotifyPrefs, 'push' | 'devices'>): PhoneStat
     return {
       tone: 'neutral',
       title: phones,
-      hint: 'Pair your phone with K2 Companion to get a push when an agent posts in a Thread.',
+      hint: `Pair your phone with ${PRODUCT_NAME} Companion to get a push when an agent posts in a Thread.`,
       pair: true,
     }
   }

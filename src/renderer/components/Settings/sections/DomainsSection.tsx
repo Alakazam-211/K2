@@ -217,18 +217,19 @@ export function nameStatus(n: DomainNameRow): { tone: TagTone; label: string; hi
   return { tone: 'muted', label: 'No certificate', hint: `${role}. No certificate yet: get one from its menu.` }
 }
 
-/** Plain words for a firewall row: who opened it and what it's for. */
-export function firewallPortWords(r: FirewallPort): { who: 'K2' | 'You'; what: string } {
+/** Plain words for a firewall row: who opened it (the product, `ours`, or
+ *  you) and what it's for. */
+export function firewallPortWords(r: FirewallPort): { who: 'ours' | 'you'; what: string } {
   const only = r.allowFrom.length > 0 ? `, only from ${r.allowFrom.join(', ')}` : ''
   switch (r.source) {
     case 'ssh':
-      return { who: 'You', what: `SSH, to sign in to this server${only}` }
+      return { who: 'you', what: `SSH, to sign in to this server${only}` }
     case 'front443':
-      return { who: 'K2', what: 'Secure web: Apps on your domains, mail on the web and calls' }
+      return { who: 'ours', what: 'Secure web: Apps on your domains, mail on the web and calls' }
     case 'front80':
-      return { who: 'K2', what: 'Web: sends visitors to the secure address and proves your domains for certificates' }
+      return { who: 'ours', what: 'Web: sends visitors to the secure address and proves your domains for certificates' }
     case 'skin-direct':
-      return { who: 'K2', what: 'Apps served straight from this server' }
+      return { who: 'ours', what: 'Apps served straight from this server' }
     case 'hostmail': {
       const mail: Record<number, string> = {
         25: 'Mail: receives mail from other servers',
@@ -239,19 +240,19 @@ export function firewallPortWords(r: FirewallPort): { who: 'K2' | 'You'; what: s
         80: 'Mail: proves the domain for its certificate',
         443: 'Mail on the web',
       }
-      return { who: 'K2', what: mail[r.port] ?? 'Mail' }
+      return { who: 'ours', what: mail[r.port] ?? 'Mail' }
     }
     case 'sew-voice':
-      return { who: 'K2', what: 'Chat / Voice: calls' }
+      return { who: 'ours', what: 'Chat / Voice: calls' }
     case 'daemon':
-      return { who: 'K2', what: `${PRODUCT_NAME} on your local network` }
+      return { who: 'ours', what: `${PRODUCT_NAME} on your local network` }
     case 'owner':
     {
       const label = r.why.replace(/^owner:\s*/, '')
-      return { who: 'You', what: `${label ? label[0].toUpperCase() + label.slice(1) : 'Opened by you'}${only}` }
+      return { who: 'you', what: `${label ? label[0].toUpperCase() + label.slice(1) : 'Opened by you'}${only}` }
     }
     default:
-      return { who: 'K2', what: r.why || r.source }
+      return { who: 'ours', what: r.why || r.source }
   }
 }
 
@@ -330,7 +331,7 @@ export function DomainsSection(): React.JSX.Element {
         <header className="min-w-0">
           <h2 className="type-title text-[var(--color-text-primary)]">Custom Domains</h2>
           <p className={SETTING_ROW_HINT}>
-            Use domains you own for this server’s Apps, mail and pages. Add a domain, point it here, and K2 gets and
+            Use domains you own for this server’s Apps, mail and pages. Add a domain, point it here, and {PRODUCT_NAME} gets and
             renews the certificates.
           </p>
         </header>
@@ -678,7 +679,7 @@ export function PendingNameservers({ domain }: { domain: DomainRow }): React.JSX
           ))}
         </ul>
       )}
-      {domain.created && <p className={SETTING_ROW_HINT}>K2 also added {domain.apex} to your k2.dev account.</p>}
+      {domain.created && <p className={SETTING_ROW_HINT}>{PRODUCT_NAME} also added {domain.apex} to your k2.dev account.</p>}
     </Surface>
   )
 }
@@ -824,7 +825,7 @@ function NameItem({
           </div>
           <p className={SETTING_ROW_HINT}>{s.hint}</p>
           {n.renewal?.lastError && n.cert.state !== 'issued' && (
-            <p className={SETTING_ROW_HINT}>K2 is trying again. The server said: {n.renewal.lastError.replace(/[.\s]+$/, '')}.</p>
+            <p className={SETTING_ROW_HINT}>{PRODUCT_NAME} is trying again. The server said: {n.renewal.lastError.replace(/[.\s]+$/, '')}.</p>
           )}
           {a?.warning && (
             <p className={`${SETTING_ROW_HINT} text-[var(--color-status-warn-amber-soft)]`}>
@@ -886,7 +887,7 @@ function AppRecords({ host, app: a, busy, onCheckNow }: { host: string; app: App
       {a.pathB?.available && a.pathB.meter && <p className={SETTING_ROW_HINT} data-testid={`app-path-b-meter-${host}`}>{a.pathB.meter}</p>}
       {a.pathB && !a.pathB.available && a.pathB.why && (
         <p className={SETTING_ROW_HINT}>
-          Through K2 Connect: {a.pathB.why}
+          Through {PRODUCT_NAME} Connect: {a.pathB.why}
           {a.pathB.upgrade && (
             <>
               {' '}
@@ -1303,7 +1304,7 @@ export function FirewallPanel(): React.JSX.Element {
           <div className="px-4 py-3">
             <Callout tone="info">
               <p className="type-hint text-[var(--color-text-primary)]">
-                This server is on a home or office connection, so your domains reach it through K2 Connect (Pro).
+                This server is on a home or office connection, so your domains reach it through {PRODUCT_NAME} Connect (Pro).
               </p>
             </Callout>
           </div>
@@ -1333,7 +1334,7 @@ export function FirewallPanel(): React.JSX.Element {
                   <span className="type-name font-mono text-[var(--color-text-primary)]">
                     {r.port}/{r.proto}
                   </span>
-                  <Tag tone={w.who === 'K2' ? 'muted' : 'neutral'}>{w.who === 'K2' ? 'K2' : 'You'}</Tag>
+                  <Tag tone={w.who === 'ours' ? 'muted' : 'neutral'}>{w.who === 'ours' ? PRODUCT_NAME : 'You'}</Tag>
                 </div>
                 <p className={SETTING_ROW_HINT}>{w.what}</p>
               </div>

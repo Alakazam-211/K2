@@ -14,6 +14,7 @@ import { readText as readClipboardText } from '@tauri-apps/plugin-clipboard-mana
 import { isMacPlatform } from '@/lib/desktop-chrome'
 import { commitInput, deviceChords, keyVerdict, pasteInput } from './sim-keyboard'
 import type { SimInput } from './sim-stream'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export interface UseSimKeyboardArgs {
   /** This viewer may control the device and it is live. */
@@ -111,7 +112,7 @@ export function useSimKeyboard({ interactive, send, mac }: UseSimKeyboardArgs): 
         .then(pasteText)
         .catch((err: unknown) => {
           console.warn('[mobile] paste: could not read the clipboard:', err)
-          setNotice('K2 couldn’t read the clipboard.')
+          setNotice(`${PRODUCT_NAME} couldn’t read the clipboard.`)
         })
       return
     }
@@ -201,7 +202,7 @@ export function SimKeyboardHelp(): React.JSX.Element {
   return (
     <div className="mt-1 border-t border-[var(--color-border)] px-3 py-2 text-[11px] leading-snug text-[var(--color-text-muted)]" data-mobile-keyboard-help="">
       <div className="text-xs text-[var(--color-text-primary)]">Keyboard</div>
-      <div>Click the screen, then type: keys and paste go to the device. K2’s other shortcuts keep working.</div>
+      <div>Click the screen, then type: keys and paste go to the device. {PRODUCT_NAME}’s other shortcuts keep working.</div>
       <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
         {deviceChords(isMacPlatform()).map((c) => (
           <div key={c.keys} className="contents">

@@ -14,6 +14,8 @@
  *  (`voice::occupancy::hosts_rooms`: preview on, Linux, the K5 Space
  *  ready, Pro, at least one room). A daemon with the preview off never lists
  *  it, so the headset shows nothing at all. */
+import { PRODUCT_NAME } from '@/lib/brand'
+
 export const VOICE_ROOMS_FEATURE = 'voice-rooms-v1'
 
 /** The daemon's §4.5 state (`voice::Hosting`). The daemon owns the set and
@@ -335,15 +337,15 @@ export function joinErrorText(code: VoiceErrorCode, roomName: string, serverLabe
     case 'media_path_down':
       return `Voice on ${serverLabel} is unavailable (its network lane is down).`
     case 'member_pending':
-      return `K2 is still setting up your login on ${serverLabel}. Try again in a moment.`
+      return `${PRODUCT_NAME} is still setting up your login on ${serverLabel}. Try again in a moment.`
     case 'e2ee_unsupported':
-      return 'Call audio arrives in a later K2 update. You can see who is in the rooms now.'
+      return `Call audio arrives in a later ${PRODUCT_NAME} update. You can see who is in the rooms now.`
     case 'server_too_old':
-      return `${serverLabel} is running an older K2. Ask its owner to update it.`
+      return `${serverLabel} is running an older ${PRODUCT_NAME}. Ask its owner to update it.`
     case 'mic_denied':
-      return "K2 can't use your microphone. Turn it on for K2 in your system's privacy settings, then join again."
+      return `${PRODUCT_NAME} can't use your microphone. Turn it on for ${PRODUCT_NAME} in your system's privacy settings, then join again.`
     case 'mic_unavailable':
-      return "K2 can't open your microphone. Check that one is connected and that no other app is holding it."
+      return `${PRODUCT_NAME} can't open your microphone. Check that one is connected and that no other app is holding it.`
     case 'e2ee_refused':
       return `Couldn't join ${roomName}. The secure connection failed. Try again.`
     case 'turn_unreachable':
@@ -358,7 +360,7 @@ export function joinErrorText(code: VoiceErrorCode, roomName: string, serverLabe
       return recordedRoomJoinText(roomName)
     case 'engine_busy':
       // The plugin still holds a call that already ended (Sew < 0.8.3).
-      return "K2's call engine is still holding your last call. Try again in a minute, or reload the window (Cmd+R / Ctrl+R) if it keeps happening."
+      return `${PRODUCT_NAME}'s call engine is still holding your last call. Try again in a minute, or reload the window (Cmd+R / Ctrl+R) if it keeps happening.`
     case 'unknown':
       return hint ? `Couldn't join ${roomName} on ${serverLabel}: ${hint}` : `Couldn't join ${roomName} on ${serverLabel}.`
   }
@@ -399,16 +401,16 @@ export function callEndedText(reason: string, roomName: string, serverLabel: str
     case 'seat_lost':
     case 'connect_timeout':
       if (native) return `${serverLabel} dropped you from ${roomName}. Join again, or ask its owner if it keeps happening.`
-      return `${serverLabel} dropped you from ${roomName}. This K2 can't carry call audio yet.`
+      return `${serverLabel} dropped you from ${roomName}. This ${PRODUCT_NAME} can't carry call audio yet.`
     case 'unavailable':
-      return `The call to ${roomName} ended: K2 lost contact with ${serverLabel}. Check your internet, then join again.`
+      return `The call to ${roomName} ended: ${PRODUCT_NAME} lost contact with ${serverLabel}. Check your internet, then join again.`
     case 'e2ee_refused':
       return `The call to ${roomName} ended: the secure connection failed. Join again to continue.`
     case 'credential_lost':
       // Sew's `replaced`; a Sew older than 0.7.1 also ends a sign-out this way.
       return `The call to ${roomName} ended: you were signed out, or joined from another device.`
     case 'mic_denied':
-      return `The call to ${roomName} ended: K2 lost your microphone. Allow it in your system's privacy settings.`
+      return `The call to ${roomName} ended: ${PRODUCT_NAME} lost your microphone. Allow it in your system's privacy settings.`
     case 'credential_expired':
       return `The call to ${roomName} ended: your sign-in to ${serverLabel} expired. Join again to continue.`
     case 'app_unlinked':
@@ -433,7 +435,7 @@ export function callEndedText(reason: string, roomName: string, serverLabel: str
  *  engine (the web client): it can't show the recording notice, and no answer
  *  is never a yes. The K2 app shows the notice and joins. */
 export function recordedRoomJoinText(roomName: string): string {
-  return `${roomName} is being recorded. Join it from the K2 app, which shows the recording notice first.`
+  return `${roomName} is being recorded. Join it from the ${PRODUCT_NAME} app, which shows the recording notice first.`
 }
 
 /** The system refused the mic: the person stays in the call and can listen. */
@@ -451,9 +453,9 @@ export function engineErrorText(code: string, serverLabel: string): { line: stri
     case 'mic_denied':
       return { line: MIC_DENIED_LINE, kind: 'error' }
     case 'mic_unavailable':
-      return { line: "K2 can't open your microphone. Check that one is connected and that no other app is holding it.", kind: 'error' }
+      return { line: `${PRODUCT_NAME} can't open your microphone. Check that one is connected and that no other app is holding it.`, kind: 'error' }
     case 'device_lost':
-      return { line: 'Your audio device disconnected. K2 switched to your default device.', kind: 'info' }
+      return { line: `Your audio device disconnected. ${PRODUCT_NAME} switched to your default device.`, kind: 'info' }
     case 'turn_unreachable':
       return { line: `Can't reach ${serverLabel}'s voice server from this network.`, kind: 'error' }
     default:

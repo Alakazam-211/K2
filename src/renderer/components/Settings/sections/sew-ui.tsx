@@ -9,6 +9,7 @@ import { Button, Callout, Input, Surface } from '@/components/ui'
 import { AccessSheet, ConfirmSheet, CopyLine, DIALOG_FIELD, DIALOG_LABEL, DIALOG_MUTED } from './AccessDialogs'
 import { finishSewConfirm, sewStateChip, startSewConfirm, type SewConfirmAction, type SewFailure } from './sew-api'
 import { confirmPasswordLabel, LoginUsernameField, type ConfirmIdentity } from './confirm-password-ui'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const muted = 'text-[var(--color-text-muted)]'
 export const secondary = 'text-[var(--color-text-secondary)]'
@@ -221,7 +222,7 @@ export function usePersonConfirm(): {
               setState({ step: 'password', method: pw, who })
               return
             }
-            throw new Error('This server has no way to confirm it’s you yet. Set a vault password from a terminal outside K2 first')
+            throw new Error(`This server has no way to confirm it’s you yet. Set a vault password from a terminal outside ${PRODUCT_NAME} first`)
           } catch (e) {
             setState({ step: 'idle' })
             pending.current = null
@@ -271,7 +272,7 @@ export function usePersonConfirm(): {
     ui = (
       <AccessSheet
         title="Confirm it’s you"
-        intro={`K2 asks for ${method === 'connect-password' ? 'your sign-in password for this server' : 'your vault password'} before this step.`}
+        intro={`${PRODUCT_NAME} asks for ${method === 'connect-password' ? 'your sign-in password for this server' : 'your vault password'} before this step.`}
         onClose={cancel}
         testId="sew-person-confirm"
         footer={

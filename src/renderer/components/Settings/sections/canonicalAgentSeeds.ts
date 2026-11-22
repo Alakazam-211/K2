@@ -12,11 +12,13 @@
 //    produce a DRY-RUN plan, and STOP for confirmation (PRD §9.2).
 
 /** The two role-skills that open the normal AIFileEditor on AGENT.md. */
+import { PRODUCT_NAME } from '@/lib/brand'
+
 export type RoleSkill = 'workspace-manager' | 'k2-agent'
 
 /** Human-facing role name used in the seed text. */
 export function roleSkillLabel(role: RoleSkill): string {
-  return role === 'workspace-manager' ? 'Workspace Manager' : 'K2 Agent'
+  return role === 'workspace-manager' ? 'Workspace Manager' : `${PRODUCT_NAME} Agent`
 }
 
 /**
@@ -49,7 +51,7 @@ export function roleSeedMessage(role: RoleSkill, projectName: string): string {
  * to .k2so/.canonical-setup/plan.md → STOP for confirmation.
  */
 export const CANONICAL_SETUP_SEED =
-  `Run the K2 Canonical Agent skill. Detect per-harness canonical state, summarize it, ask which harnesses I want and what I want to do. Pull existing harness content INTO ROLE.md/PROJECT.md first (Model A), then mirror out. Produce a DRY-RUN plan to .k2so/.canonical-setup/plan.md and STOP for confirmation before writing.`
+  `Run the ${PRODUCT_NAME} Canonical Agent skill. Detect per-harness canonical state, summarize it, ask which harnesses I want and what I want to do. Pull existing harness content INTO ROLE.md/PROJECT.md first (Model A), then mirror out. Produce a DRY-RUN plan to .k2so/.canonical-setup/plan.md and STOP for confirmation before writing.`
 
 /**
  * K2 Canonical Agent — MANAGE / UNDO mode seed (PRD §9.2, verbatim).
@@ -57,4 +59,4 @@ export const CANONICAL_SETUP_SEED =
  * manifest-driven unwind for the chosen harnesses.
  */
 export const CANONICAL_MANAGE_SEED =
-  `Run the K2 Canonical Agent skill in manage mode: show the current per-harness state and the exact undo. If I confirm, run the manifest-driven unwind for the harnesses I choose.`
+  `Run the ${PRODUCT_NAME} Canonical Agent skill in manage mode: show the current per-harness state and the exact undo. If I confirm, run the manifest-driven unwind for the harnesses I choose.`

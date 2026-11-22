@@ -54,11 +54,12 @@ import {
   type NotifyStatus,
   type NotifySuppression,
 } from './email-notify-api'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const EMAIL_NOTIFICATIONS_MANIFEST: SettingEntry[] = [
-  { id: 'email-notifications.senders', section: 'email-notifications', label: 'Notification Senders', description: 'The addresses K2 sends resets, codes, App email and agent notices from', keywords: ['sender', 'noreply', 'system sender', 'relay', 'paused', 'resume', 'bounce'] },
+  { id: 'email-notifications.senders', section: 'email-notifications', label: 'Notification Senders', description: `The addresses ${PRODUCT_NAME} sends resets, codes, App email and agent notices from`, keywords: ['sender', 'noreply', 'system sender', 'relay', 'paused', 'resume', 'bounce'] },
   { id: 'email-notifications.agents', section: 'email-notifications', label: 'Agent Email Notices', description: 'Which workspaces may email the people on this server', keywords: ['agent', 'notice', 'notify', 'workspace', 'email'] },
-  { id: 'email-notifications.suppressions', section: 'email-notifications', label: 'Stopped Addresses', description: 'Addresses K2 stopped sending to after a bounce, a spam report or an unsubscribe', keywords: ['suppression', 'suppressed', 'bounce', 'complaint', 'spam', 'unsubscribe'] },
+  { id: 'email-notifications.suppressions', section: 'email-notifications', label: 'Stopped Addresses', description: `Addresses ${PRODUCT_NAME} stopped sending to after a bounce, a spam report or an unsubscribe`, keywords: ['suppression', 'suppressed', 'bounce', 'complaint', 'spam', 'unsubscribe'] },
 ]
 
 const CONTENT_WIDTH = 'max-w-[52rem]'
@@ -245,7 +246,7 @@ function ResumeDialog({
     setFailure(null)
     try {
       await api.resume(sender, askPassword ? password : undefined)
-      onDone(`${sender.address} is sending again. K2 counts its bounces from zero from now on.`)
+      onDone(`${sender.address} is sending again. ${PRODUCT_NAME} counts its bounces from zero from now on.`)
     } catch (e) {
       setBusy(false)
       // No Touch ID on that server: ask for the vault password, quietly.
@@ -292,9 +293,9 @@ function ResumeDialog({
         }}
       >
         <div className={`${DIALOG_MUTED} space-y-2`}>
-          {sender.paused && <p>K2 paused it because {pauseText(sender.paused)}.</p>}
+          {sender.paused && <p>{PRODUCT_NAME} paused it because {pauseText(sender.paused)}.</p>}
           <p>
-            Once resumed, its email goes out again. If whatever made it bounce isn’t fixed, K2 pauses it again. You confirm it’s
+            Once resumed, its email goes out again. If whatever made it bounce isn’t fixed, {PRODUCT_NAME} pauses it again. You confirm it’s
             you before it resumes.
           </p>
         </div>
@@ -329,7 +330,7 @@ function SenderRow({
   onRemove: () => void
 }): React.JSX.Element {
   const st = senderStateText(s.state)
-  const what = system ? 'K2’s own email: password resets and sign-in codes' : ownerText(s)
+  const what = system ? `${PRODUCT_NAME}’s own email: password resets and sign-in codes` : ownerText(s)
   const route = s.envelope ? `${pathText(s.path)}, bounces to ${s.envelope}` : pathText(s.path)
   return (
     <Row
@@ -470,11 +471,11 @@ export function EmailNotificationsSection({ scope }: { scope: ServerScope }): Re
       </SettingsLoadState>
     ) : problem.kind === 'old-server' ? (
       <SettingsLoadState kind="empty" title="This server can’t show email notifications yet" testId="email-notifications-old-server">
-        Update K2 on this server, then come back here.
+        Update {PRODUCT_NAME} on this server, then come back here.
       </SettingsLoadState>
     ) : problem.kind === 'unreadable' ? (
       <SettingsLoadState kind="error" title="Email notifications couldn’t load" action={tryAgain} testId="email-notifications-error">
-        This server sent an answer K2 couldn’t read, so there’s nothing to show yet. Try again; if it keeps happening, update K2
+        This server sent an answer {PRODUCT_NAME} couldn’t read, so there’s nothing to show yet. Try again; if it keeps happening, update {PRODUCT_NAME}
         on that server.
       </SettingsLoadState>
     ) : (
@@ -485,7 +486,7 @@ export function EmailNotificationsSection({ scope }: { scope: ServerScope }): Re
         action={tryAgain}
         testId="email-notifications-error"
       >
-        K2 couldn’t read this server’s email settings, so there’s nothing to show yet. Nothing is lost; try again in a moment.
+        {PRODUCT_NAME} couldn’t read this server’s email settings, so there’s nothing to show yet. Nothing is lost; try again in a moment.
       </SettingsLoadState>
     )
     return (
@@ -546,7 +547,7 @@ export function EmailNotificationsSection({ scope }: { scope: ServerScope }): Re
       <SettingsGroup
         card
         title="Senders"
-        hint="The addresses this server sends from. K2 pauses one by itself when too many of its emails bounce or are reported as spam. The one for K2’s own email is never paused: you get a warning instead."
+        hint={`The addresses this server sends from. ${PRODUCT_NAME} pauses one by itself when too many of its emails bounce or are reported as spam. The one for ${PRODUCT_NAME}’s own email is never paused: you get a warning instead.`}
         testId="notify-senders"
       >
         {note?.group === 'senders' && <DoneNote text={note.text} />}
@@ -555,7 +556,7 @@ export function EmailNotificationsSection({ scope }: { scope: ServerScope }): Re
         ) : (
           <Row
             testId="notify-no-system-sender"
-            label="No address for K2’s own email"
+            label={`No address for ${PRODUCT_NAME}’s own email`}
             hint="Password resets and sign-in codes can’t be emailed until the owner sets one from a terminal on the server."
             right={<Tag data-case="as-written" tone="warn">Not set</Tag>}
           />
@@ -621,7 +622,7 @@ export function EmailNotificationsSection({ scope }: { scope: ServerScope }): Re
       <SettingsGroup
         card
         title="Stopped addresses"
-        hint="K2 stops sending to an address after it bounces (for every sender), or after a spam report or an unsubscribe (for that sender or App). Addresses are kept scrambled, so the list shows only their domain."
+        hint={`${PRODUCT_NAME} stops sending to an address after it bounces (for every sender), or after a spam report or an unsubscribe (for that sender or App). Addresses are kept scrambled, so the list shows only their domain.`}
         settingId="email-notifications.suppressions"
         testId="notify-stopped"
       >
@@ -672,7 +673,7 @@ export function EmailNotificationsSection({ scope }: { scope: ServerScope }): Re
           <Row
             testId="notify-stopped-empty"
             label={searched ? `${searched} isn’t on the stop list` : 'No stopped addresses'}
-            hint={searched ? 'Mail to it isn’t stopped by K2.' : 'Every address can get mail from this server’s senders.'}
+            hint={searched ? `Mail to it isn’t stopped by ${PRODUCT_NAME}.` : 'Every address can get mail from this server’s senders.'}
             right={
               searched ? (
                 <Button
@@ -702,7 +703,7 @@ export function EmailNotificationsSection({ scope }: { scope: ServerScope }): Re
               <Row
                 testId="notify-unsuppress-row"
                 label={`Let mail go to ${searched} again`}
-                hint={`Takes it off ${supList.length === 1 ? 'the list' : `all ${supList.length} lists`}. If it bounces again, K2 stops again.`}
+                hint={`Takes it off ${supList.length === 1 ? 'the list' : `all ${supList.length} lists`}. If it bounces again, ${PRODUCT_NAME} stops again.`}
                 right={
                   <Button variant="danger-quiet" onClick={() => setAsk({ kind: 'unsuppress', address: searched, count: supList.length })} data-testid="notify-unsuppress">
                     Remove from list…
@@ -839,8 +840,8 @@ export function EmailNotificationsSection({ scope }: { scope: ServerScope }): Re
           onClose={() => setAsk(null)}
         >
           <p>
-            K2 stopped mail to it because it bounced, was reported as spam or unsubscribed. Only do this if the person asked for
-            mail again or their address works now. If it bounces again, K2 stops again.
+            {PRODUCT_NAME} stopped mail to it because it bounced, was reported as spam or unsubscribed. Only do this if the person asked for
+            mail again or their address works now. If it bounces again, {PRODUCT_NAME} stops again.
           </p>
         </ConfirmAction>
       )}

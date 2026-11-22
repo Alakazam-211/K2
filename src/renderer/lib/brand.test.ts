@@ -10,6 +10,7 @@ import {
   INFRA_ZONE,
   PRODUCT_LOCKUP,
   PRODUCT_NAME,
+  PRODUCT_NAME_PATTERN,
   PUBLIC_SITE,
   RELEASE_REPO,
   RELEASE_REPO_NAMES,
@@ -148,6 +149,11 @@ describe('the renderer brand module', () => {
     expect(RELEASES_URL_PREFIX).toBe(`https://github.com/${RELEASE_REPO}/releases/`)
     expect(releaseTagUrl('0.46.14')).toBe(`https://github.com/${RELEASE_REPO}/releases/tag/v0.46.14`)
     expect(releaseTagUrl('v0.46.14')).toBe(`https://github.com/${RELEASE_REPO}/releases/tag/v0.46.14`)
+  })
+
+  it('the product name pattern matches the product name and nothing looser', () => {
+    expect(new RegExp(`^${PRODUCT_NAME_PATTERN}$`).test(PRODUCT_NAME)).toBe(true)
+    expect(new RegExp(`^${PRODUCT_NAME_PATTERN}$`).test(`${PRODUCT_NAME}x`)).toBe(false)
   })
 
   it('answers with the zones constant until a server says otherwise', () => {

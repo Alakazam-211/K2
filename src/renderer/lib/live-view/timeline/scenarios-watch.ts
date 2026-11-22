@@ -9,6 +9,7 @@ import { CONT, MKR, PROPS, TLR, UNIT, type Book, type Claim, type Selection, typ
 import { ensurePeer, simulateRaw, step, type Scenario, type SimEvent, type SimState } from './sim'
 import { big } from './time'
 import { ATLAS, B30, blank, BROOK, CTX, EXT, FRT, pres, ptr, rt, SAM, SELF, vpt } from './world'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export type WatchScenario = Scenario & { frames: Record<string, TimelineFrame>; claims: { c51: Claim; c52: Claim } }
 
@@ -96,8 +97,8 @@ function buildWatch(): WatchScenario {
       step('back to Atlas', [local({ follow: true }), pv({ mode: 'pause', rung: 1920 })], 'You press Back to Atlas.', A(690000)),
       step('say something', [say({ from: SELF, to: ATLAS, at_ms: 700000, text: 'Is B-roll 03 better over this line?', ref: { at: rt(336), item: '@item:2', track: '@trk:1' } })], 'You say something to Atlas, pointing at the time and the clip.', A(701000)),
       step('Atlas answers', [say({ from: ATLAS, to: SELF, at_ms: 712000, text: 'On it: I’ll try it there once Brook lets go of Interview B.', reply: true })], 'Atlas answers.', A(713000)),
-      step('not sent', [say({ from: SELF, to: ATLAS, at_ms: 720000, text: breath, failed: true, why: 'it didn’t reach K2' })], 'A second message doesn’t go through; the words are kept.', A(721000)),
-      step('not sent again', [say({ from: SELF, to: ATLAS, at_ms: 722000, text: breath, failed: true, why: 'it still didn’t reach K2', tries: 2 })], 'Send again fails too.', A(723000)),
+      step('not sent', [say({ from: SELF, to: ATLAS, at_ms: 720000, text: breath, failed: true, why: `it didn’t reach ${PRODUCT_NAME}` })], 'A second message doesn’t go through; the words are kept.', A(721000)),
+      step('not sent again', [say({ from: SELF, to: ATLAS, at_ms: 722000, text: breath, failed: true, why: `it still didn’t reach ${PRODUCT_NAME}`, tries: 2 })], 'Send again fails too.', A(723000)),
       step('sent again', [say({ from: SELF, to: ATLAS, at_ms: 724000, text: breath })], 'Send again goes through.', A(725000)),
       step('follow Sam', [local({ follow: SAM }), pres(SAM, 'timePosition', { at: String(318n * FRT), state: 'playing', at_ms: 730000, rate: '1' }), pv({ mode: 'play' })], 'You follow Sam, who is playing.', A(730000)),
       step('Sam left', [{ kind: 'leave', who: SAM }, local({ follow: false, left: 'Sam' }), pres(SELF, 'pointer', ptr(560, '@trk:1')), pv({ mode: 'pause' })], 'Sam closes the file: Follow ends quietly.', A(760000)),
@@ -130,7 +131,7 @@ export function buildConn(): Scenario {
       step('retry now', [local({ follow: true, retry: 'trying' })], 'You press Retry now: it says it’s trying again.', { at: 472000 }),
       step('caught up', [conn(null), fr(F.move), local({ follow: true, caught: 1 })], 'Back: the change that landed meanwhile comes in.', { at: 494000 }),
       step('lost again', [conn('reconnecting')], 'It drops again.', { at: 520000 }),
-      step('can’t reconnect', [conn('failed')], 'K2 stops trying on its own and says so.', { at: 640000 }),
+      step('can’t reconnect', [conn('failed')], `${PRODUCT_NAME} stops trying on its own and says so.`, { at: 640000 }),
       step('retry fails', [local({ follow: true, retry: 'failed' })], 'You press Retry and it still can’t reach the server.', { at: 652000 }),
       step('retry works', [conn(null), local({ follow: true, caught: 0 })], 'The next Retry gets through; nothing changed while you were away.', { at: 700000 }),
     ],
@@ -167,7 +168,7 @@ export function buildHoldGone(): Scenario {
   return {
     id: 'holdgone',
     group: 'Presence and claims',
-    title: 'A hold ends outside K2: the held track is renamed in another app',
+    title: `A hold ends outside ${PRODUCT_NAME}: the held track is renamed in another app`,
     base: fromWatch,
     steps: [
       step('Brook holds Music', [{ kind: 'claim_started', claim: c }], 'Brook holds the Music track (A2) to level it.', { at: 456000 }),

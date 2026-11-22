@@ -26,7 +26,7 @@ import {
   type GlossaryEntry,
   type SearchResult,
 } from './cli-explorer'
-import { CLI_NAME } from '@/lib/brand'
+import { CLI_NAME, PRODUCT_NAME } from '@/lib/brand'
 
 const MONO = "'MesloLGM Nerd Font', Menlo, Monaco, monospace"
 const SANS = "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', system-ui, sans-serif"
@@ -411,8 +411,8 @@ export default function HelpExplorer({
           <h2 className="m-0 text-[15px] font-semibold text-[var(--color-text-primary)]">Glossary</h2>
           <p className="m-0 mt-2 text-[12px] text-[var(--color-text-secondary)]">
             {glossary.status === 'loading'
-              ? 'Loading the glossary from K2…'
-              : `The glossary comes from the K2 server, which did not answer. Commands and ${CLI_NAME} study pages still work.`}
+              ? `Loading the glossary from ${PRODUCT_NAME}…`
+              : `The glossary comes from the ${PRODUCT_NAME} server, which did not answer. Commands and ${CLI_NAME} study pages still work.`}
           </p>
         </div>
       )
@@ -464,7 +464,7 @@ export default function HelpExplorer({
         <p className="m-0 mt-1 mb-2 text-[12px] leading-[1.5] text-[var(--color-text-secondary)]">
           {set === 'study'
             ? `Bounded teaching pages: concepts, not a flag dump. Agents read them with ${CLI_NAME} study <topic>.`
-            : `K2 words, from the K2 server. Agents read them with ${CLI_NAME} glossary <term>.`}
+            : `${PRODUCT_NAME} words, from the ${PRODUCT_NAME} server. Agents read them with ${CLI_NAME} glossary <term>.`}
         </p>
         <ul className="m-0 p-0 list-none">
           {pages.map((p) => (

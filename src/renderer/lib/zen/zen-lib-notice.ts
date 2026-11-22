@@ -7,6 +7,7 @@
 // can load it directly.
 
 import type { ZenLibManifest } from './zen-lib-loader'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const ZEN_LIB_NOTICE_BEGIN =
   '<!-- zen-lib:begin (generated from src/shared/zen-lib.json by scripts/vendor-zen-lib.sh; do not edit by hand) -->'
@@ -22,14 +23,14 @@ export function renderZenLibNotice(m: ZenLibManifest): string {
     const shipped =
       l.source === 'bundled'
         ? `shipped in the app, \`src/renderer/zen-lib/${l.id}@${l.version}/\``
-        : `downloaded on first use by this computer's K2 (not shipped); licence kept at \`src/renderer/zen-lib/${l.id}@${l.version}/${l.licenseFile}\``
+        : `downloaded on first use by this computer's ${PRODUCT_NAME} (not shipped); licence kept at \`src/renderer/zen-lib/${l.id}@${l.version}/${l.licenseFile}\``
     return `| ${cell(l.title)} (\`${l.id}\`) | ${cell(l.version)} | ${cell(l.license)} | ${cell(l.copyright)} | ${shipped} |`
   })
   return [
     ZEN_LIB_NOTICE_BEGIN,
     '',
     'Libraries a Garden widget can ask for with `requires.libs` (the Zen widget',
-    'standard library). K2 inlines each one into the sealed widget frame; the frame',
+    `standard library). ${PRODUCT_NAME} inlines each one into the sealed widget frame; the frame`,
     'itself never touches the network. Each library folder keeps its full licence',
     'text in `LICENSE.txt` (Apache-2.0 libraries include their upstream NOTICE).',
     '',
@@ -37,8 +38,8 @@ export function renderZenLibNotice(m: ZenLibManifest): string {
     '|--|--|--|--|--|',
     ...rows,
     '',
-    'K2 code is **MIT**. These libraries keep their own',
-    'licences and do **not** relicense K2.',
+    `${PRODUCT_NAME} code is **MIT**. These libraries keep their own`,
+    `licences and do **not** relicense ${PRODUCT_NAME}.`,
     '',
     ZEN_LIB_NOTICE_END,
   ].join('\n')

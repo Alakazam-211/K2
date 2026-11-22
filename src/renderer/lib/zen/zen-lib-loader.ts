@@ -25,7 +25,7 @@
 
 import manifestJson from '@shared/zen-lib.json'
 import { zenLibInlineSafe } from './zen-lib-inline'
-import { CLI_NAME } from '@/lib/brand'
+import { CLI_NAME, PRODUCT_NAME } from '@/lib/brand'
 
 /** One file of a library. */
 export interface ZenLibFile {
@@ -156,7 +156,7 @@ export type ZenLibResolvedOne = { entry: ZenLibEntry; warning: string | null } |
 /** What `<id>@<want>` loads (Rust `resolve_one`, rule for rule). */
 export function zenLibResolveOne(id: string, want: string, manifest: ZenLibManifest = ZEN_LIB_MANIFEST): ZenLibResolvedOne {
   const rows = manifest.libs.filter((e) => e.id === id)
-  if (rows.length === 0) return { error: `K2's widget library has no ${id}@${want}; see ${CLI_NAME} zen guide libs for what's available` }
+  if (rows.length === 0) return { error: `${PRODUCT_NAME}'s widget library has no ${id}@${want}; see ${CLI_NAME} zen guide libs for what's available` }
   let warning: string | null = null
   const matched = rows.filter((e) => zenLibVersionMatches(e, want))
   let pick = newest(matched)
@@ -168,22 +168,22 @@ export function zenLibResolveOne(id: string, want: string, manifest: ZenLibManif
     const line = zenLibLineOf(want)
     pick = newest(rows.filter((e) => e.line === line && zenLibVersionCmp(e.version, want) >= 0))
     if (pick) {
-      warning = `K2 ships ${id} ${pick.version} and updates it inside line ${pick.line}; write "${id}@${pick.line}"`
+      warning = `${PRODUCT_NAME} ships ${id} ${pick.version} and updates it inside line ${pick.line}; write "${id}@${pick.line}"`
     } else {
       const sameLine = newest(rows.filter((e) => e.line === line))
       if (sameLine) {
         return {
-          error: `K2 ships ${id} ${sameLine.version} in line ${sameLine.line}; ${id}@${want} is newer than K2's. Write "${id}@${sameLine.line}", or update K2`,
+          error: `${PRODUCT_NAME} ships ${id} ${sameLine.version} in line ${sameLine.line}; ${id}@${want} is newer than ${PRODUCT_NAME}'s. Write "${id}@${sameLine.line}", or update ${PRODUCT_NAME}`,
         }
       }
       const list = [...rows].sort((a, b) => zenLibVersionCmp(a.version, b.version)).map((e) => `${e.line} (${e.version})`)
-      return { error: `K2 ships ${id} line${list.length === 1 ? '' : 's'} ${list.join(', ')}; this widget asks for ${id}@${want} (${CLI_NAME} zen guide libs)` }
+      return { error: `${PRODUCT_NAME} ships ${id} line${list.length === 1 ? '' : 's'} ${list.join(', ')}; this widget asks for ${id}@${want} (${CLI_NAME} zen guide libs)` }
     }
   }
   const chosen: ZenLibEntry = pick
   const retired = manifest.retired?.find((r) => r.id === id && r.line === chosen.line)
   if (retired) {
-    const w = `K2 retired ${id}@${chosen.line} in ${retired.release}: it downloads on first use now (not under air-gap); move to ${retired.use}`
+    const w = `${PRODUCT_NAME} retired ${id}@${chosen.line} in ${retired.release}: it downloads on first use now (not under air-gap); move to ${retired.use}`
     warning = warning ? `${warning}; ${w}` : w
   }
   return { entry: chosen, warning }
@@ -243,7 +243,7 @@ export function zenLibResolve(refs: readonly unknown[], manifest: ZenLibManifest
     }
     const prev = loaded.find((l) => l.key === key)
     if (prev) {
-      if (explicit && prev.explicit) out.findings.push({ index, error: false, message: `'${key}' is listed twice; K2 loads it once` })
+      if (explicit && prev.explicit) out.findings.push({ index, error: false, message: `'${key}' is listed twice; ${PRODUCT_NAME} loads it once` })
       prev.explicit ||= explicit
       return
     }
@@ -270,7 +270,7 @@ export function zenLibResolve(refs: readonly unknown[], manifest: ZenLibManifest
       if (problem) {
         out.findings.push({ index: i, error: true, message: problem })
       } else if (out.keys.some((k) => typeof k !== 'string' && k.url === p.cdn.url && k.integrity === p.cdn.integrity)) {
-        out.findings.push({ index: i, error: false, message: `${p.cdn.url} is listed twice; K2 loads it once` })
+        out.findings.push({ index: i, error: false, message: `${p.cdn.url} is listed twice; ${PRODUCT_NAME} loads it once` })
       } else {
         out.keys.push(p.cdn)
         out.entries.push(null)
@@ -383,12 +383,12 @@ function errorFor(code: ZenLibErrorCode, ref: ZenLibRef, entry: ZenLibEntry | nu
   const name = entry ? `${entry.title} ${entry.version}` : refLabel(ref)
   const tail = detail ? ` (${detail})` : ''
   const text: Record<ZenLibErrorCode, string> = {
-    unknown_lib: `K2 has no library '${refLabel(ref)}'. See ${CLI_NAME} zen guide libs.${tail}`,
-    airgapped: `This widget needs ${name}, which K2 downloads on first use. This computer is air-gapped, so K2 won't download it.`,
-    fetch_failed: `K2 couldn't load ${name}${tail}.`,
-    hash_mismatch: `${name} didn't match its pinned fingerprint, so K2 refused it.`,
-    too_large: `This widget asks for more library code than K2 allows in one widget${tail}.`,
-    older_daemon: `K2 on this computer is older than this app. Update it to load ${name}.`,
+    unknown_lib: `${PRODUCT_NAME} has no library '${refLabel(ref)}'. See ${CLI_NAME} zen guide libs.${tail}`,
+    airgapped: `This widget needs ${name}, which ${PRODUCT_NAME} downloads on first use. This computer is air-gapped, so ${PRODUCT_NAME} won't download it.`,
+    fetch_failed: `${PRODUCT_NAME} couldn't load ${name}${tail}.`,
+    hash_mismatch: `${name} didn't match its pinned fingerprint, so ${PRODUCT_NAME} refused it.`,
+    too_large: `This widget asks for more library code than ${PRODUCT_NAME} allows in one widget${tail}.`,
+    older_daemon: `${PRODUCT_NAME} on this computer is older than this app. Update it to load ${name}.`,
   }
   return new ZenLibError(code, ref, text[code])
 }
@@ -451,7 +451,7 @@ export function createZenLib(deps: ZenLibDeps): ZenLib {
     } catch (e) {
       if (e instanceof ZenLibError) throw e
       const code = daemonCode(e)
-      if (code === 'not_cached') throw errorFor('fetch_failed', ref, entry, "not in K2's download cache")
+      if (code === 'not_cached') throw errorFor('fetch_failed', ref, entry, `not in ${PRODUCT_NAME}'s download cache`)
       if (code) throw errorFor(code, ref, entry)
       throw errorFor('fetch_failed', ref, entry, e instanceof Error ? e.message : String(e))
     }
@@ -460,7 +460,7 @@ export function createZenLib(deps: ZenLibDeps): ZenLib {
   function filesOf(reply: unknown, ref: ZenLibRef, entry: ZenLibEntry | null): ZenLibFetchedFile[] {
     const r = reply as Partial<ZenLibFetchReply> | null
     if (!r || r.ok !== true || !Array.isArray(r.files)) {
-      throw errorFor('fetch_failed', ref, entry, 'unexpected answer from K2')
+      throw errorFor('fetch_failed', ref, entry, `unexpected answer from ${PRODUCT_NAME}`)
     }
     return r.files
   }

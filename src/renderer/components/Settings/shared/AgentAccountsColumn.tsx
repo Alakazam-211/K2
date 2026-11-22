@@ -71,6 +71,7 @@ import { SETTING_ROW_HINT, SettingRow, SettingsGroup, SettingsLoadState, SETTING
 import { AccessSheet, ConfirmSheet, DIALOG_FIELD, Field } from '../sections/AccessDialogs'
 import { StatusDot, type HealthTone } from '../sections/ConnectionsParts'
 import { useReorderMotion } from './useReorderMotion'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** The big 7 rows, in the page's order, with their icon names. */
 export const LOGIN_TOOL_ROWS: Array<{ id: string; label: string; agentIcon: string }> = [
@@ -112,7 +113,7 @@ export function noDefaultText(tool: Pick<LlmTool, 'display' | 'activeId' | 'live
     : null
   return live
     ? `“${live.label}”, still signed in to ${tool.display} itself, becomes the server default again.`
-    : `${tool.display} then has no server default: chats set to Server default get no token from K2.`
+    : `${tool.display} then has no server default: chats set to Server default get no token from ${PRODUCT_NAME}.`
 }
 
 /** The confirm before a server-default switch: from → to, plus a
@@ -443,10 +444,10 @@ function AccountRow({
           {account.addedOutsideK2 && (
             <Tag
               tone="muted"
-              title="Someone signed in outside K2, for example with /login in a terminal, and K2 saved that sign-in as this token. Keep it, or remove it."
+              title={`Someone signed in outside ${PRODUCT_NAME}, for example with /login in a terminal, and ${PRODUCT_NAME} saved that sign-in as this token. Keep it, or remove it.`}
               data-testid={`llm-outside-${account.id}`}
             >
-              Added outside K2
+              Added outside {PRODUCT_NAME}
             </Tag>
           )}
         </div>
@@ -770,7 +771,7 @@ export function AgentAccountsColumn(): React.JSX.Element {
             activeAcc?.kind === 'api_key' && tool.liveAccountId ? tool.accounts.find((a) => a.id === tool.liveAccountId) : undefined
           const hint = [
             canSignIn && canKey ? 'Sign in with a subscription, or paste an API token.' : canSignIn ? 'Sign in with a subscription.' : 'API tokens only.',
-            tool.accounts.length > 0 && !activeAcc ? 'No server default yet: chats set to Server default get no token from K2.' : null,
+            tool.accounts.length > 0 && !activeAcc ? `No server default yet: chats set to Server default get no token from ${PRODUCT_NAME}.` : null,
             keptLive ? `“${keptLive.label}” is still signed in to ${row.label} itself.` : null,
           ]
             .filter(Boolean)
@@ -809,7 +810,7 @@ export function AgentAccountsColumn(): React.JSX.Element {
                   hint={
                     tool.autoNext?.on
                       ? `Move the server default to the next signed-in ${row.label} subscription now.`
-                      : `Move the server default to the next signed-in ${row.label} subscription. K2 never switches on its own.`
+                      : `Move the server default to the next signed-in ${row.label} subscription. ${PRODUCT_NAME} never switches on its own.`
                   }
                 >
                   <Button
@@ -889,7 +890,7 @@ export function AgentAccountsColumn(): React.JSX.Element {
         <Callout key={`${r.service}\u0000${r.account}`} tone="warn" role="alert" className="type-hint space-y-1.5" data-testid="llm-keychain-repair">
           <p className="leading-relaxed">
             macOS asks for your password every time Claude reads its saved sign-in “{r.service}” ({r.holds}), because an
-            earlier K2 update changed who may read it. Run this once in Terminal on this Mac and enter your Mac password:
+            earlier {PRODUCT_NAME} update changed who may read it. Run this once in Terminal on this Mac and enter your Mac password:
           </p>
           <code className="block type-hint font-mono select-all break-all text-[var(--color-text-primary)]">{r.command}</code>
         </Callout>
@@ -902,7 +903,7 @@ export function AgentAccountsColumn(): React.JSX.Element {
           action={<Button onClick={() => void useLlmAccountsStore.getState().load(scope)}>Try again</Button>}
           testId="llm-accounts-error"
         >
-          {entry.reason ? 'It shows what K2 last read from this server.' : entry.error}
+          {entry.reason ? `It shows what ${PRODUCT_NAME} last read from this server.` : entry.error}
         </SettingsLoadState>
       ) : null}
 
@@ -1005,8 +1006,8 @@ function removeText(tool: LlmTool, a: LlmAccount): string {
     return `It’s the ${tool.display} server default and its sign-in has ended. ${tool.display} then has no server default, and ${tool.display}’s own sign-in file is left as it is. Sign in again with Add a token.`
   }
   return a.kind === 'api_key'
-    ? `K2 stops using this ${tool.display} API token on this server. To use it again, paste the token again.`
-    : `K2 stops using this ${tool.display} subscription on this server. You can sign it in again later with Add a token.`
+    ? `${PRODUCT_NAME} stops using this ${tool.display} API token on this server. To use it again, paste the token again.`
+    : `${PRODUCT_NAME} stops using this ${tool.display} subscription on this server. You can sign it in again later with Add a token.`
 }
 
 /** "Claude, Codex and Grok". */

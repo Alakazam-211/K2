@@ -19,12 +19,13 @@ import {
   type OwnerAccounts,
 } from './notify-api'
 import { Tag } from '@/components/ui/Tag'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** The tag on the owner's linked row in Admin Access. */
 export const OWNER_ACCOUNT_TAG = "Owner's account"
 
 export const OWNER_LINK_EXPLAINER =
-  "K2 treats sign-ins with this login as you: notifications, “you” labels and your color. It doesn't change what the login can do."
+  `${PRODUCT_NAME} treats sign-ins with this login as you: notifications, “you” labels and your color. It doesn't change what the login can do.`
 
 /** What this viewer may do with the switch. */
 export type OwnerLinkAccess = 'edit' | 'read' | 'hidden'

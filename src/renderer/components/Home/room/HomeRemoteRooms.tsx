@@ -30,6 +30,7 @@ import { hostPool } from '@/lib/host-pool-instance'
 import type { PinnedRoom } from '@/stores/room'
 import type { ServerScope } from '@/kessel/server-scope'
 import { useRemoteWarmPing } from '@/lib/remote-warm-ping'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** Keeps the shown room's connection to its server warm (no UI). */
 function RoomWarmPing({ scope, shown }: { scope: ServerScope; shown: boolean }): null {
@@ -54,7 +55,7 @@ export function roomAccessCopy(
     }
   }
   if (access === 'view-older-server') {
-    const runs = version === null ? 'an older K2' : `K2 ${version}`
+    const runs = version === null ? `an older ${PRODUCT_NAME}` : `${PRODUCT_NAME} ${version}`
     return {
       chip: 'View only',
       title: `${serverLabel} runs ${runs}, which can’t save this room’s tabs safely.`,

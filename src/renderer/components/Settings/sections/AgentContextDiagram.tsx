@@ -1,6 +1,6 @@
 import React from 'react'
 import { Surface } from '@/components/ui'
-import { CLI_NAME } from '@/lib/brand'
+import { CLI_NAME, PRODUCT_NAME } from '@/lib/brand'
 
 // Context management stack (prd-context-hamburger-v1): always-on AGENTS.md is a
 // stack of markdown sources — pinned (AGENT + PROJECT + Tooling) plus
@@ -77,7 +77,7 @@ export function AgentContextDiagram(): React.JSX.Element {
         <div className="flex items-center gap-3 flex-wrap type-hint text-[var(--color-text-secondary)]">
           <span className="flex items-center gap-1.5"><Dot kind="always" /> Always included</span>
           <span className="flex items-center gap-1.5"><Dot kind="optional" /> Optional</span>
-          <span className="flex items-center gap-1.5"><Dot kind="built" /> Built by K2</span>
+          <span className="flex items-center gap-1.5"><Dot kind="built" /> Built by {PRODUCT_NAME}</span>
           <span className="flex items-center gap-1.5"><Dot kind="link" /> Read-only link</span>
         </div>
       </div>
@@ -88,14 +88,14 @@ export function AgentContextDiagram(): React.JSX.Element {
           <Box kind="always" title="ROLE.md" path=".k2/agent/ROLE.md" note="The agent's role" />
           <Box kind="always" title="PROJECT.md" path=".k2/PROJECT.md" note="About the project" />
           <Box kind="optional" title="Optional layers" note="Wiki index, user docs and packs, in the order you set" />
-          <Box kind="always" title="Tooling" note={`A pointer to the ${CLI_NAME} CLI, written by K2`} />
+          <Box kind="always" title="Tooling" note={`A pointer to the ${CLI_NAME} CLI, written by ${PRODUCT_NAME}`} />
           <p className="type-hint text-[var(--color-text-secondary)] mt-1 leading-snug">Edit these in a workspace&rsquo;s Context tab.</p>
         </div>
 
-        <Arrow label="K2 builds" />
+        <Arrow label={`${PRODUCT_NAME} builds`} />
 
         <div className="flex flex-col gap-1.5 justify-center">
-          <StageTitle>What K2 builds</StageTitle>
+          <StageTitle>What {PRODUCT_NAME} builds</StageTitle>
           <Box kind="built" title="AGENTS.md" path=".k2/AGENTS.md" note="The one source every tool reads from" />
           <p className="type-hint text-[var(--color-text-secondary)] mt-1 leading-snug">
             One file from what you&rsquo;ve turned on. Most AI tools read it as it is.
@@ -129,7 +129,7 @@ export function AgentContextDiagram(): React.JSX.Element {
       </div>
 
       <p className="mt-3 pt-3 border-t border-[var(--color-border)] type-hint text-[var(--color-text-secondary)] leading-snug">
-        K2 always writes a copy in the project folder. The links for the other tools appear only
+        {PRODUCT_NAME} always writes a copy in the project folder. The links for the other tools appear only
         when the workspace&rsquo;s Canonical Agent box is ticked.
       </p>
     </Surface>

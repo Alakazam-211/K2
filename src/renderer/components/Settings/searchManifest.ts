@@ -11,6 +11,7 @@ import type { GeneralSubTab, ProjectsPage, SettingsSection } from '@/stores/sett
  * highlight it after jumping to the section.
  */
 import { workspaceTabForSetting, type WorkspaceSettingsTab } from './sections/workspace-tabs'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export interface SettingEntry {
   /**
@@ -168,7 +169,7 @@ export const SECTION_LABELS: Record<SettingsSection, string> = {
   'access-audit': 'Access Audit',
   permissions: 'Accessibility',
   'dictation-lab': 'Dictation Lab (dev)',
-  companion: 'K2 Companion',
+  companion: `${PRODUCT_NAME} Companion`,
   'homes-sync': 'Home Sync',
   connections: 'Connected Servers',
   'k2-connect': 'Tunnel',

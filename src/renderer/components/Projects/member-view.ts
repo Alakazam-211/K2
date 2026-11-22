@@ -21,6 +21,7 @@ import {
   type ProjectGroup,
   type ProjectGroupMemberInfo,
 } from './projects-api'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const MEMBER_VIEW_NAME: Record<ProjectDefaultView, string> = {
   terminal: 'Terminal',
@@ -61,7 +62,7 @@ export type MemberViewError = { plain: string } | { reason: string }
 export function memberViewError(err: unknown, name: string): MemberViewError {
   const code = httpCodeOf(err) ?? daemonErrorInfo(err).code
   if (code === 'forbidden') return { plain: 'Couldn’t change it. Only the owner or an admin can.' }
-  if (code === 'agent_permission_off') return { plain: 'Couldn’t change it. This agent needs Manage K2 projects on.' }
+  if (code === 'agent_permission_off') return { plain: `Couldn’t change it. This agent needs Manage ${PRODUCT_NAME} projects on.` }
   if (code === 'not_a_member') return { plain: `Couldn’t change it. ${name} isn’t in this project any more.` }
   const { hint } = daemonErrorInfo(err)
   return { reason: hint ?? (err instanceof Error ? err.message : String(err)) }

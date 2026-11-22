@@ -24,11 +24,12 @@ import {
   groupWorkspacesForFilter,
   type FilterableWorkspace,
 } from '@/components/Feedback/WorkspaceFilterDropdown'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** The picker's value for the server-wide map. Workspace values are paths
  *  (absolute), so it cannot collide. */
 export const WIKI_ALL_WORKSPACES = 'all'
-export const WIKI_ALL_WORKSPACES_LABEL = 'All of K2'
+export const WIKI_ALL_WORKSPACES_LABEL = `All of ${PRODUCT_NAME}`
 
 export interface WikiPickerWorkspace extends FilterableWorkspace {
   /** Worktree paths under this workspace (the nav's View Wiki opens those). */

@@ -11,6 +11,7 @@
 // shows after a delay rather than from a flag.
 
 import { useEffect, useState } from 'react'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** Where the start is: the session state, then the screen stream. */
 export type MobileBootPhase = 'installing' | 'booting' | 'connecting'
@@ -19,7 +20,7 @@ export type MobileBootPhase = 'installing' | 'booting' | 'connecting'
 export const BOOT_HINT_AFTER_MS = 10_000
 
 export const BOOT_HINT =
-  'The first start on this Mac can take about a minute (iOS sets up the new device, and K2 builds its screen helper once). Later starts take a few seconds.'
+  `The first start on this Mac can take about a minute (iOS sets up the new device, and ${PRODUCT_NAME} builds its screen helper once). Later starts take a few seconds.`
 
 const ORDER: MobileBootPhase[] = ['installing', 'booting', 'connecting']
 

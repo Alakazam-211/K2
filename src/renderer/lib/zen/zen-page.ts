@@ -21,6 +21,7 @@
 
 import type { ZenCustomWidgetPayload } from './zen-custom-types'
 import { parseZenCustomWidget } from './zen-custom-payload'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** The two controls every Garden page must draw and K2 checks (G24,
  *  Rosson 2026-10-04): the Zen toggle (the way out) and the Garden
@@ -742,7 +743,7 @@ export function parseZenGet(raw: unknown): ZenResolvedPage {
     throw new ZenPageParseError(why)
   }
   if (raw.schema !== undefined && raw.schema !== 1) {
-    throw new ZenPageParseError(`this K2 reads Zen schema 1, the page is schema ${String(raw.schema)}`)
+    throw new ZenPageParseError(`this ${PRODUCT_NAME} reads Zen schema 1, the page is schema ${String(raw.schema)}`)
   }
   const template = typeof page.template === 'string' ? page.template : BUILTIN_TEMPLATE_ID
   const builtin = builtinPageFor(template)

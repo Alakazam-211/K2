@@ -12,6 +12,7 @@ import {
   type VideoSource,
   type VideoTrack,
 } from './video-engine'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** Which OS privacy pane a refusal's button opens. */
 export type PrivacyPane = 'camera' | 'screen'
@@ -43,15 +44,15 @@ export function videoRefusalText(code: string, detail: unknown, what: VideoSourc
       return { line: 'Video is turned off for this room.', kind: 'error' }
     case 'camera_denied':
     case 'camera_permission_denied':
-      return { line: "K2 isn't allowed to use your camera. Allow K2 in your system's privacy settings.", kind: 'error', settings: 'camera' }
+      return { line: `${PRODUCT_NAME} isn't allowed to use your camera. Allow ${PRODUCT_NAME} in your system's privacy settings.`, kind: 'error', settings: 'camera' }
     case 'camera_permission_not_determined':
-      return { line: 'Allow K2 to use your camera when your system asks, then turn your camera on again.', kind: 'error' }
+      return { line: `Allow ${PRODUCT_NAME} to use your camera when your system asks, then turn your camera on again.`, kind: 'error' }
     case 'screen_denied':
-      return { line: "K2 isn't allowed to record your screen. Allow K2 in your system's privacy settings, then restart K2.", kind: 'error', settings: 'screen' }
+      return { line: `${PRODUCT_NAME} isn't allowed to record your screen. Allow ${PRODUCT_NAME} in your system's privacy settings, then restart ${PRODUCT_NAME}.`, kind: 'error', settings: 'screen' }
     case 'camera_busy':
       return { line: 'Another app is using your camera. Close it, then try again.', kind: 'error' }
     case 'camera_not_found':
-      return { line: "K2 can't find that camera. Plug it in, or pick another camera.", kind: 'error' }
+      return { line: `${PRODUCT_NAME} can't find that camera. Plug it in, or pick another camera.`, kind: 'error' }
     case 'video_slots_full':
       return { line: `${ROOM_CAMERA_LIMIT} cameras are already on in this room, the most it allows. Try again when someone turns theirs off.`, kind: 'error' }
     case 'screen_slots_full':
@@ -71,9 +72,9 @@ export function videoRefusalText(code: string, detail: unknown, what: VideoSourc
     case 'capture_failed':
       return { line: what === 'camera' ? "Your camera didn't start. Try again." : "Screen sharing didn't start. Try again.", kind: 'error' }
     case 'video_unsupported':
-      return { line: "Video isn't in this version of K2 yet.", kind: 'error' }
+      return { line: `Video isn't in this version of ${PRODUCT_NAME} yet.`, kind: 'error' }
     default:
-      return { line: what === 'camera' ? "K2 couldn't turn on your camera." : "K2 couldn't share your screen.", kind: 'error' }
+      return { line: what === 'camera' ? `${PRODUCT_NAME} couldn't turn on your camera.` : `${PRODUCT_NAME} couldn't share your screen.`, kind: 'error' }
   }
 }
 
@@ -86,7 +87,7 @@ export function cameraPermissionText(p: Exclude<CapturePermission, 'granted'>): 
     case 'prompt':
       return videoRefusalText('camera_permission_not_determined', null, 'camera') as VideoNoticeText
     case 'unsupported':
-      return { line: "This computer has no camera K2 can use.", kind: 'error' }
+      return { line: `This computer has no camera ${PRODUCT_NAME} can use.`, kind: 'error' }
   }
 }
 
@@ -111,7 +112,7 @@ export function localVideoReasonText(reason: string | null, what: VideoSource): 
     case 'system_ui':
       return null
     case 'background':
-      return { line: 'Your camera is paused while K2 is in the background.', kind: 'info' }
+      return { line: `Your camera is paused while ${PRODUCT_NAME} is in the background.`, kind: 'info' }
     case 'hidden':
       return { line: 'Screen sharing is paused while the window you shared is minimised or hidden.', kind: 'info' }
     case 'paused':
@@ -147,7 +148,7 @@ export function videoEngineErrorText(code: string): VideoNoticeText | null {
     case 'encoder_lost':
       return { line: 'Your video stopped: this computer could not encode it.', kind: 'error' }
     case 'video_stalled':
-      return { line: 'Video stalled. K2 is trying again.', kind: 'info' }
+      return { line: `Video stalled. ${PRODUCT_NAME} is trying again.`, kind: 'info' }
     default:
       return null
   }

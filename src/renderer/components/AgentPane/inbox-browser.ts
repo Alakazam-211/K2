@@ -1,7 +1,7 @@
 // View-only Inbox browser helpers (prd-view-only-inbox-browser-v1).
 // Tray = `k2 inbox` packages. Mail = `k2 mail`. Postal is reserved, never fetched.
 
-import { CLI_NAME } from '@/lib/brand'
+import { CLI_NAME, PRODUCT_NAME } from '@/lib/brand'
 
 export const TRAY_SOURCE_ID = 'tray'
 export const MAIL_PAGE_LIMIT = 50
@@ -66,7 +66,7 @@ export type MailMessageFull = {
 }
 
 export function traySource(): InboxBrowserSource {
-  return { id: TRAY_SOURCE_ID, kind: 'tray', label: 'K2 Inbox' }
+  return { id: TRAY_SOURCE_ID, kind: 'tray', label: `${PRODUCT_NAME} Inbox` }
 }
 
 export function formatInboxError(err: unknown): string {

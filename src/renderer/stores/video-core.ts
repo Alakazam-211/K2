@@ -37,6 +37,7 @@ import {
   type VideoNoticeText,
 } from '@/lib/voice/video-labels'
 import type { VideoCodec } from '@/lib/voice/video-frame'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** A detached tile's sink stays open this long, so a re-render doesn't flap it. */
 export const SINK_CLOSE_GRACE_MS = 2_000
@@ -624,7 +625,7 @@ export function createVideoController(deps: VideoDeps): VideoController {
     } catch (err) {
       console.warn('[video] opening the privacy settings failed:', err)
     }
-    if (!opened) notice({ line: "K2 couldn't open your settings. Open your system's privacy settings and allow K2.", kind: 'error' })
+    if (!opened) notice({ line: `${PRODUCT_NAME} couldn't open your settings. Open your system's privacy settings and allow ${PRODUCT_NAME}.`, kind: 'error' })
   }
 
   return {

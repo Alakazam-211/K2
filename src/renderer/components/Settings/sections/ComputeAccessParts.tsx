@@ -31,6 +31,7 @@ import {
 import { getAccountAccessToken } from './K2ConnectSection'
 import { listComputeMachines, ONE_CLICK_NEEDS_UPDATE, requestEnrollOffer, type ComputeMachine } from '../lib/compute-account'
 import { controllerSub, mergeMachines, nodeNameFor, sasAgrees, type MachineRow } from '../lib/compute-machines'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** Re-read the account's machines this often while the page is open. */
 const ACCOUNT_POLL_MS = 30_000
@@ -241,7 +242,7 @@ export function MachinesPart({
             ) : account.kind === 'error' ? (
               <>
                 <p className={SETTING_ROW_LABEL}>Couldn’t list the machines on your k2.dev account</p>
-                <p className={SETTING_ROW_HINT}>Machines paired with a pairing code still show. K2 tries again every 30 seconds.</p>
+                <p className={SETTING_ROW_HINT}>Machines paired with a pairing code still show. {PRODUCT_NAME} tries again every 30 seconds.</p>
                 <p className={SETTING_SERVER_REASON}>The server said: {account.message.replace(/[.\s]+$/, '')}.</p>
               </>
             ) : (

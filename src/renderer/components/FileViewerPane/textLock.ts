@@ -21,6 +21,7 @@
 // Pure (no React) so it is unit-testable and cheap to import.
 
 import { errorMessage, httpCodeOf } from '@/lib/daemon-http-error'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export interface TextLock {
   /** `unreadable`: the file is there but isn't text K2 can show
@@ -39,20 +40,20 @@ const UNREADABLE_CODES = new Set(['binary', 'not_utf8', 'too_large'])
 
 export const TEXT_LOCK_MESSAGES: Record<TextLock['reason'], string> = {
   unreadable:
-    "K2 can't open this file as text (it's binary, too large, or not UTF-8). Editing is turned off so the file isn't overwritten.",
+    `${PRODUCT_NAME} can't open this file as text (it's binary, too large, or not UTF-8). Editing is turned off so the file isn't overwritten.`,
   failed:
-    "K2 couldn't read this file, so editing is turned off and the file won't be overwritten. Use Refresh to try again.",
+    `${PRODUCT_NAME} couldn't read this file, so editing is turned off and the file won't be overwritten. Use Refresh to try again.`,
 }
 
 /** Lock headline when the person had unsaved edits as the file changed. */
 export const TEXT_LOCK_KEPT_MESSAGE =
-  "The file on disk changed to a format K2 can't edit. Your unsaved text is kept here; copy it out if you need it."
+  `The file on disk changed to a format ${PRODUCT_NAME} can't edit. Your unsaved text is kept here; copy it out if you need it.`
 
 /** Banner when a re-read fails but the buffer stays. */
 export const REREAD_FAILED_MESSAGE = "Couldn't re-read the file from disk."
 export const REREAD_KEPT_MESSAGE = 'Your unsaved changes are kept.'
 export const REREAD_DELETED_MESSAGE =
-  "The file was deleted or moved outside K2, so K2 won't recreate it unless you save."
+  `The file was deleted or moved outside ${PRODUCT_NAME}, so ${PRODUCT_NAME} won't recreate it unless you save.`
 
 /** Does this `fs/read-file` failure mean the file does not exist (now)? */
 export function isNotFoundReadError(err: unknown): boolean {

@@ -16,6 +16,7 @@ import { COST_LABEL, costSourceText, fmtCompact, fmtUsd, harnessLabel, turnsPara
 import { Button } from '@/components/ui'
 import { SettingsGroup, SettingsLoadState, SETTING_LIST_ROW_HOVER } from '../../controls/SettingControls'
 import { RetryButton, SeriesKey } from './UsageChart'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const ACTIVITY_PAGE = 50
 /** Most gap pages fetched for one live update before giving up (a remount
@@ -194,7 +195,7 @@ export function UsageActivity({
               action={<RetryButton onClick={retry} />}
               testId="usage-activity-error"
             >
-              K2 couldn’t read this range’s requests. The totals above are still current; try again.
+              {PRODUCT_NAME} couldn’t read this range’s requests. The totals above are still current; try again.
             </SettingsLoadState>
           ) : undefined
         }

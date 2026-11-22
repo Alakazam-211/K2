@@ -65,7 +65,7 @@ import { useDesktopPresence } from './useDesktopPresence'
 import { useDesktopStatus } from './useDesktopStatus'
 import { useDesktopStream } from './useDesktopStream'
 import type { WorkerLike } from '@/components/Stream/stream-player'
-import { CLI_NAME } from '@/lib/brand'
+import { CLI_NAME, PRODUCT_NAME } from '@/lib/brand'
 
 export const DESKTOP_CONNECTING = 'Connecting to this computer’s screen…'
 
@@ -387,7 +387,7 @@ function DesktopView(props: DesktopViewProps): React.JSX.Element {
   const onClipCopy = (): void => {
     void stream.clipboardGet().then(async (r) => {
       if (r.text === null) {
-        toast(r.reason === 'concealed' ? 'That copy on the other computer is a password; K2 won’t bring it over.' : 'Couldn’t read the other computer’s clipboard.')
+        toast(r.reason === 'concealed' ? `That copy on the other computer is a password; ${PRODUCT_NAME} won’t bring it over.` : 'Couldn’t read the other computer’s clipboard.')
         return
       }
       try {

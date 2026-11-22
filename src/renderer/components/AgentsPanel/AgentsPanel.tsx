@@ -6,6 +6,7 @@ import { useProjectsStore } from '@/stores/projects'
 import { useTabsStore } from '@/stores/tabs'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { primaryScope } from '@/kessel/server-scope'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 interface K2AgentInfo {
   name: string
@@ -211,9 +212,9 @@ export default function AgentsPanel(): React.JSX.Element {
   }
 
   if (agentMode === 'custom' || agentMode === 'agent') {
-    const label = agentMode === 'custom' ? 'Custom Agent' : 'K2 Agent'
+    const label = agentMode === 'custom' ? 'Custom Agent' : `${PRODUCT_NAME} Agent`
     const typeDesc = agentMode === 'custom'
-      ? 'A single agent that runs from its persona on the heartbeat. No K2 infrastructure is injected.'
+      ? `A single agent that runs from its persona on the heartbeat. No ${PRODUCT_NAME} infrastructure is injected.`
       : 'A planner agent that builds PRDs, milestones, and technical plans for this workspace.'
     // Stage A dual-read: builtin mode accepts both `k2` and legacy `k2so`.
     const singleAgent = agents.find((a) =>

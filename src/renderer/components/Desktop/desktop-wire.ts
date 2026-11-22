@@ -8,6 +8,8 @@
 // codec byte 2 = VP8.
 
 /** K2SV codec bytes. */
+import { PRODUCT_NAME } from '@/lib/brand'
+
 export const VIDEO_CODEC_H264 = 1
 export const VIDEO_CODEC_VP8 = 2
 
@@ -202,7 +204,7 @@ export function closeReasonText(code: number, reason: string): string {
       case CLOSE_REASON.sameMachine:
         return "You're on this computer."
       case CLOSE_REASON.auditUnavailable:
-        return "K2 couldn't write the access log, so it didn't connect you."
+        return `${PRODUCT_NAME} couldn't write the access log, so it didn't connect you.`
       case CLOSE_REASON.idle:
         return 'Closed after 30 minutes with no input and the tab hidden.'
       case CLOSE_REASON.disconnectedAtScreen:
@@ -218,7 +220,7 @@ export function closeReasonText(code: number, reason: string): string {
     if (reason === CLOSE_REASON.desktopAsleep) return 'The desktop is asleep. Everything on it is kept.'
     if (reason === CLOSE_REASON.desktopClosed) return 'The desktop was closed.'
     return reason === CLOSE_REASON.deskdEnded
-      ? 'K2 Screen stopped on this computer.'
+      ? `${PRODUCT_NAME} Screen stopped on this computer.`
       : 'Remote desktop was turned off on this computer.'
   }
   return 'The connection to this computer closed.'

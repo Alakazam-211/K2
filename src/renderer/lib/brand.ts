@@ -29,6 +29,10 @@ export { BRAND_ID, CLI_ALIASES, CLI_NAME, PRODUCT_NAME } from './brand.generated
 /** The company that makes it. */
 export const COMPANY_NAME = 'Alakazam Labs'
 
+/** The product's name as a RegExp source (special characters escaped), for
+ *  reading a server's text that names the product. */
+export const PRODUCT_NAME_PATTERN = PRODUCT_NAME.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
 /** The product with its maker. */
 export const PRODUCT_LOCKUP = `${PRODUCT_NAME} by ${COMPANY_NAME}`
 

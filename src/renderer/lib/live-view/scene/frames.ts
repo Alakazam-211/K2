@@ -8,6 +8,7 @@ import { clone, f32, ftext, obFileKey, parse9, placementFrom, xformText } from '
 import { CONT, PROPS, UNITS } from './fold'
 import { ACTORS, ATLAS, BROOK } from './wording'
 import type { Doc, Frame, Placement, Refusal, UnitDelta } from './types'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export function bigDoc(colls: number, per: number, tier: string): Doc {
   const D: Doc = {
@@ -100,7 +101,7 @@ export function multiPlaceFrame(D: Doc, changes: PlaceChange[], rev: number, act
     const p = D.props[a]
     const pl = placementFrom(p) as Placement
     pl.approx = 'driven'
-    units.push({ ...unitDelta(a, p.coll, [], [], pl), _note: 'rides on its parent; the place op marks it approx: driven (K2 Cores: a real field), so its box is dashed from the first move' })
+    units.push({ ...unitDelta(a, p.coll, [], [], pl), _note: `rides on its parent; the place op marks it approx: driven (${PRODUCT_NAME} Cores: a real field), so its box is dashed from the first move` })
   }
   return {
     _constructed: true, type: 'ops_change', seq: 902, rev, at_ms: null, change_kind: file ? 'external' : 'edit', actor: clone(ACTORS[actor]), client: file ? 0 : 4711, via: file ? 'file' : 'cli', on_behalf_of: null,

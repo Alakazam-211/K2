@@ -45,6 +45,7 @@ import { ScreenPicker, VideoNoticeLine } from './VideoControls'
 import { useStageTiles } from './VideoStage'
 import { TOPBAR_HEIGHT_CSS } from '../../../shared/constants'
 import { CallRecordingBadge } from './RecordingBadge'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 const NO_PEOPLE: never[] = []
 
@@ -128,7 +129,7 @@ export default function CallWindow({ closeWindow = closeThisWindow }: CallWindow
     if (!roomName) return
     try {
       void getCurrentWindow()
-        .setTitle(`K2 | ${roomName}`)
+        .setTitle(`${PRODUCT_NAME} | ${roomName}`)
         .catch(() => {})
     } catch {
       // Not in the app (tests, the web client): no OS title.

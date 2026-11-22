@@ -14,6 +14,7 @@ import {
   readLastUpdateCheck,
 } from '@/lib/auto-update-checks'
 import { compareVersions } from '@/lib/server-capabilities'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 interface UpdateInfo {
   current_version: string
@@ -29,7 +30,7 @@ function notifyUpdateAvailable(version: string, label: string): void {
   if (version === lastNotifiedVersion) return
   lastNotifiedVersion = version
   useToastStore.getState().addToast(
-    `K2 v${version} is available`,
+    `${PRODUCT_NAME} v${version} is available`,
     'info',
     8000,
     {
@@ -78,7 +79,7 @@ async function checkForUpdate(showToastIfNone = false): Promise<void> {
     // A failed Arch manifest fetch returns false with status `error`.
     // Don't toast "up to date" on top of that row.
     if (showToastIfNone && useUpdateStore.getState().status !== 'error') {
-      useToastStore.getState().addToast('K2 is up to date', 'success', 3000)
+      useToastStore.getState().addToast(`${PRODUCT_NAME} is up to date`, 'success', 3000)
     }
     return
   } catch {
@@ -92,7 +93,7 @@ async function checkForUpdate(showToastIfNone = false): Promise<void> {
       notifyUpdateAvailable(info.latest_version, 'Download')
     } else if (showToastIfNone && !info.has_update) {
       useToastStore.getState().addToast(
-        `K2 v${info.current_version} is up to date`,
+        `${PRODUCT_NAME} v${info.current_version} is up to date`,
         'success',
         3000
       )

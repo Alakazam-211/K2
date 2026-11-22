@@ -39,7 +39,7 @@ import {
   whenWords,
   withCurrent,
 } from './vault-copy'
-import { CLI_NAME } from '@/lib/brand'
+import { CLI_NAME, PRODUCT_NAME } from '@/lib/brand'
 
 /** A dropdown with its label above and a hint under it. */
 function Pick({ label, hint, children }: { label: string; hint?: React.ReactNode; children: React.ReactNode }): React.JSX.Element {
@@ -257,7 +257,7 @@ function ConfirmStep({ c, testId, other }: { c: Confirm; testId: string; other?:
     const field = (
       <Field
         label={confirmPasswordLabel(c.ask.method, c.ask.who)}
-        hint="K2 checks it once and doesn’t keep it."
+        hint={`${PRODUCT_NAME} checks it once and doesn’t keep it.`}
         htmlFor={id}
       >
         <LoginUsernameField method={c.ask.method} who={c.ask.who} testId={`${testId}-username`} />
@@ -296,8 +296,8 @@ function ConfirmStep({ c, testId, other }: { c: Confirm; testId: string; other?:
   if (c.ask.step === 'none') {
     return (
       <Callout tone="warn" role="alert" className="type-hint space-y-1" data-testid="vault-no-confirm">
-        <p className="font-medium">K2 can’t confirm it’s you on this server yet.</p>
-        <p>Set a vault password first. In a terminal outside K2, run:</p>
+        <p className="font-medium">{PRODUCT_NAME} can’t confirm it’s you on this server yet.</p>
+        <p>Set a vault password first. In a terminal outside {PRODUCT_NAME}, run:</p>
         <p className="font-mono select-all">{CLI_NAME} vault confirm-password set</p>
         {other ? (
           <>
@@ -427,7 +427,7 @@ export function RevealDialog({ secret, onClose }: { secret: VaultSecret; onClose
         }
       >
         <p className={MUTED} role="status">
-          The value is hidden again: K2 shows it for 30 seconds at a time.
+          The value is hidden again: {PRODUCT_NAME} shows it for 30 seconds at a time.
         </p>
       </Sheet>
     )
@@ -559,7 +559,7 @@ export function AddSecretDialog({
   return (
     <Sheet
       title="Add a secret"
-      intro="Agents use it by name. K2 sends it only to the sites you list, and logs every use."
+      intro={`Agents use it by name. ${PRODUCT_NAME} sends it only to the sites you list, and logs every use.`}
       onClose={onClose}
       busy={busy}
       testId="vault-add-form"
@@ -649,7 +649,7 @@ export function AddSecretDialog({
           </label>
         </fieldset>
         {presets.length > 0 && (
-          <Pick label="Service" hint="Picking one fills in its sites and how K2 sends it.">
+          <Pick label="Service" hint={`Picking one fills in its sites and how ${PRODUCT_NAME} sends it.`}>
             <SettingDropdown
               fullWidth
               menuAlign="left"
@@ -669,7 +669,7 @@ export function AddSecretDialog({
         )}
         <Field
           label="Only send it to"
-          hint={needsSite ? 'Add at least one site, like api.example.com, or choose a way agents can read it below.' : 'Separate sites with commas. K2 sends it nowhere else.'}
+          hint={needsSite ? 'Add at least one site, like api.example.com, or choose a way agents can read it below.' : `Separate sites with commas. ${PRODUCT_NAME} sends it nowhere else.`}
           htmlFor={ids.sites}
         >
           <Input
@@ -692,7 +692,7 @@ export function AddSecretDialog({
             onChange={setDelivery}
           />
         </Pick>
-        {deliveryReadable(delivery) && <ReadableNote text="Agents can see this value. Choose “K2 adds it to calls” to keep it hidden from them." />}
+        {deliveryReadable(delivery) && <ReadableNote text={`Agents can see this value. Choose “${PRODUCT_NAME} adds it to calls” to keep it hidden from them.`} />}
         <Field label="Value" hint="A key can still do anything its service allows. Use a restricted key if you can." htmlFor={ids.value}>
           <ValueField fieldRef={fieldRef} id={ids.value} label="Value" onPresence={setHas} multiline={isMultilineKind(kind)} />
         </Field>
@@ -802,7 +802,7 @@ export function SitesDialog({ secret, onClose, onChanged }: { secret: VaultSecre
   return (
     <Sheet
       title={`Sites for ${secret.name}`}
-      intro="K2 sends it only to these sites. Each change saves at once; agents follow it from their next call."
+      intro={`${PRODUCT_NAME} sends it only to these sites. Each change saves at once; agents follow it from their next call.`}
       onClose={onClose}
       busy={busy}
       testId="vault-sites-panel"
@@ -1246,7 +1246,7 @@ export function RecoveryDialog({ onClose, onConfirmed }: { onClose: () => void; 
       return (
         <>
           <SavedLine text="The recovery key is set up." />
-          <p className={MUTED}>Keep the words somewhere offline and safe. K2 won’t show them again.</p>
+          <p className={MUTED}>Keep the words somewhere offline and safe. {PRODUCT_NAME} won’t show them again.</p>
         </>
       )
     }
@@ -1254,7 +1254,7 @@ export function RecoveryDialog({ onClose, onConfirmed }: { onClose: () => void; 
       return (
         <div className="space-y-4" data-testid="vault-recovery-phrase">
           <Callout tone="warn" className="type-hint">
-            Write these 24 words down, in order, and keep them offline. K2 shows them once. Anyone with these words and a copy of the vault can read
+            Write these 24 words down, in order, and keep them offline. {PRODUCT_NAME} shows them once. Anyone with these words and a copy of the vault can read
             every secret.
           </Callout>
           <Surface chamfer material="tile" className="px-4 py-3">

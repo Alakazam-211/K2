@@ -19,6 +19,8 @@
  * (`rosson.app.k2.dev`, `a.b.k2.dev`), custom domains, LAN `ip:port`, plain
  * http and any explicit port are all "everything else".
  */
+import { PRODUCT_NAME } from '@/lib/brand'
+
 const K2_DEV_APEX_HTTPS = /^https:\/\/([a-z0-9-]+)\.k2\.dev$/i
 
 /**
@@ -71,4 +73,4 @@ export function loginUrlFor(hostBaseUrl: string): string {
  * way the fix is "update both sides", never "retry".
  */
 export const LOGIN_404_K2DEV_MESSAGE =
-  "Sign-in through this server's web address failed (404). Make sure both K2 and the server are up to date."
+  `Sign-in through this server's web address failed (404). Make sure both ${PRODUCT_NAME} and the server are up to date.`

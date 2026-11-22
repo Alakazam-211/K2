@@ -51,6 +51,7 @@ import { GARDENS_LEAD, ZenGardensAccessPage } from './ZenGardensAccessPage'
 import { DataSourcesSection } from './DataSourcesSection'
 import { useToastStore } from '@/stores/toast'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const ZEN_GARDENS_MANIFEST: SettingEntry[] = [
   {
@@ -566,7 +567,7 @@ function Advanced({
 export function zenGardensLoadWords(failure: { kind: string; message: string }): { line: string; detail: string | null } {
   if (failure.kind === 'unreadable') {
     return {
-      line: 'Its answer wasn’t a Gardens list K2 can read. Your Gardens are safe on this computer. Try again, or update K2.',
+      line: `Its answer wasn’t a Gardens list ${PRODUCT_NAME} can read. Your Gardens are safe on this computer. Try again, or update ${PRODUCT_NAME}.`,
       detail: null,
     }
   }
@@ -606,7 +607,7 @@ export function ZenGardensSection(): React.JSX.Element {
           {!hasData && st.failure && words ? (
             <SettingsLoadState
               kind="error"
-              title="K2 couldn’t read your Gardens from this computer"
+              title={`${PRODUCT_NAME} couldn’t read your Gardens from this computer`}
               detail={words.detail}
               testId="zen-gardens-load-error"
               action={
@@ -634,7 +635,7 @@ export function ZenGardensSection(): React.JSX.Element {
               </SettingsLoadState>
               {error ? (
                 <Callout tone="error" role="alert" data-testid="zen-gardens-setup-error">
-                  <p className="type-hint">K2 couldn’t set up Gardens. {error}</p>
+                  <p className="type-hint">{PRODUCT_NAME} couldn’t set up Gardens. {error}</p>
                 </Callout>
               ) : null}
               {/* 0.46.3: External Data has no page of its own on a client

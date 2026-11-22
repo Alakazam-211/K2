@@ -15,6 +15,7 @@ import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import type { ServerScope } from '@/kessel/server-scope'
 import { parseHomeAddress } from '@/lib/home-address'
 import type { RowStatus } from '@/lib/home-status'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const GROK_BOT_LABEL = 'Grok Bot'
 export const GROK_BOTS_FEATURE = 'grokbots-v1' as const
@@ -47,7 +48,7 @@ export interface GrokBotAgent {
 
 /** The note under a stale bot's compose box. */
 export const GROK_STALE_COMPOSE_NOTE =
-  "Your message reaches Grok Bot's live conversation; K2 shows each new reply as it arrives."
+  `Your message reaches Grok Bot's live conversation; ${PRODUCT_NAME} shows each new reply as it arrives.`
 
 /** A gap line: the bot may have written more in between (only the latest
  *  line at each check is visible to K2 for a stale bot). */
@@ -57,7 +58,7 @@ export const GROK_LIVE_GAP_TEXT = '… earlier messages not shown — open Grok 
  *  (in this viewer's own time zone). */
 export function grokStartText(name: string, atMs: number): string {
   const when = new Date(atMs).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
-  return `K2 started collecting ${name}'s messages here on ${when}.`
+  return `${PRODUCT_NAME} started collecting ${name}'s messages here on ${when}.`
 }
 
 export interface GrokBotStatus {

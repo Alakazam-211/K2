@@ -8,10 +8,11 @@ import type { Extension } from '@codemirror/state'
 import { HighlightStyle } from '@codemirror/language'
 import { tags } from '@lezer/highlight'
 import type { ThemeColors } from '@/lib/editor-themes'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** The named themes, in the order Settings lists them after Follow app. */
 export const NAMED_EDITOR_THEMES: { id: string; label: string }[] = [
-  { id: 'k2-dark', label: 'K2 Dark' },
+  { id: 'k2-dark', label: `${PRODUCT_NAME} Dark` },
   { id: 'one-dark', label: 'One Dark' },
   { id: 'dracula', label: 'Dracula' },
   { id: 'nord', label: 'Nord' },

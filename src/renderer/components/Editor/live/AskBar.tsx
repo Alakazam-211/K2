@@ -9,6 +9,7 @@ import { Button } from '@/components/ui'
 import type { ServerScope } from '@/kessel/server-scope'
 import { daemonCliPost } from '@/lib/daemon-cli'
 import { failureReason } from '@/lib/editor/save-model/write'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export interface Ask {
   to: { id: string; name: string }
@@ -34,7 +35,7 @@ export function AskBar({ scope, filePath, ask, onClose }: { scope: ServerScope; 
     <div role="group" aria-label={`Ask ${ask.to.name}`} data-testid="ed-ask" data-k2-chamfer="surface" className="lv-notice mx-2.5 mt-2 flex flex-none flex-wrap items-center gap-x-2.5 gap-y-1.5 rounded-[var(--radius-box)] border px-3 py-2" data-tone="info">
       {state.kind === 'sent' ? (
         <p className="type-row m-0 flex-1 text-[var(--color-text-primary)]">
-          <b className="font-semibold">Sent to {ask.to.name}.</b> <span className="text-[var(--color-text-secondary)]">Their answer comes to you in K2.</span>
+          <b className="font-semibold">Sent to {ask.to.name}.</b> <span className="text-[var(--color-text-secondary)]">Their answer comes to you in {PRODUCT_NAME}.</span>
         </p>
       ) : (
         <label className="type-row flex min-w-[240px] flex-1 items-center gap-2 text-[var(--color-text-primary)]">

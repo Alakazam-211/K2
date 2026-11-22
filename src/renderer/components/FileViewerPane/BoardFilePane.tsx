@@ -38,6 +38,7 @@ import { FILE_POLL_INTERVAL } from '@shared/constants'
 import { BoardWebStub } from './BoardWebStub'
 import { BoardFileCard } from './BoardFileCard'
 import { BoardFileName, type BoardMenuSource } from './BoardFileName'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export interface BoardFilePaneProps {
   filePath: string
@@ -195,7 +196,7 @@ function BoardFilePaneLive({ filePath, tabId }: BoardFilePaneProps): React.JSX.E
         <CardButton
           testid="board-file-start"
           onClick={() =>
-            void session.startBoard().catch((err: unknown) => useToastStore.getState().addToast(`K2 couldn’t start a board here: ${err instanceof Error ? err.message : String(err)}`, 'error'))
+            void session.startBoard().catch((err: unknown) => useToastStore.getState().addToast(`${PRODUCT_NAME} couldn’t start a board here: ${err instanceof Error ? err.message : String(err)}`, 'error'))
           }
         >
           Start a board here
@@ -213,11 +214,11 @@ function BoardFilePaneLive({ filePath, tabId }: BoardFilePaneProps): React.JSX.E
       </Card>
     )
   }
-  if (p.kind === 'newer') return <Card title={`Made by a newer K2 (needs reader ${p.needsReader ?? '?'}, this is ${p.ours ?? '?'})`}><div>Update K2 to open it. The file wasn’t changed.</div><CardButton onClick={() => void close()}>Close</CardButton></Card>
-  if (p.kind === 'shape') return <Card title="This server’s K2 is newer than this app"><div>Update K2 to open this board. The file wasn’t changed.</div><CardButton onClick={() => void close()}>Close</CardButton></Card>
+  if (p.kind === 'newer') return <Card title={`Made by a newer ${PRODUCT_NAME} (needs reader ${p.needsReader ?? '?'}, this is ${p.ours ?? '?'})`}><div>Update {PRODUCT_NAME} to open it. The file wasn’t changed.</div><CardButton onClick={() => void close()}>Close</CardButton></Card>
+  if (p.kind === 'shape') return <Card title={`This server’s ${PRODUCT_NAME} is newer than this app`}><div>Update {PRODUCT_NAME} to open this board. The file wasn’t changed.</div><CardButton onClick={() => void close()}>Close</CardButton></Card>
   if (p.kind === 'corrupt') {
     return (
-      <Card title="K2 can’t read this board">
+      <Card title={`${PRODUCT_NAME} can’t read this board`}>
         <div>{p.hint}</div>
         <div className="font-mono" data-testid="board-file-code">
           {p.code}
@@ -237,7 +238,7 @@ function BoardFilePaneLive({ filePath, tabId }: BoardFilePaneProps): React.JSX.E
   if (p.kind === 'off') return <BoardFileCard filePath={filePath} />
   if (p.kind === 'gone') return <Card title="This file was moved or deleted"><CardButton onClick={() => void close()}>Close</CardButton></Card>
   if (p.kind === 'denied') return <Card title="You can’t open this board"><div>{p.hint}</div><CardButton onClick={() => void close()}>Close</CardButton></Card>
-  if (p.kind === 'unreachable') return <Card title="K2 can’t reach this board right now"><div>{p.hint}</div><CardButton onClick={() => void session.start()}>Try again</CardButton></Card>
+  if (p.kind === 'unreachable') return <Card title={`${PRODUCT_NAME} can’t reach this board right now`}><div>{p.hint}</div><CardButton onClick={() => void session.start()}>Try again</CardButton></Card>
 
   return (
     <div ref={boxRef} className="relative flex h-full min-h-0 flex-col" data-board-file-pane={filePath}>
@@ -269,8 +270,8 @@ function BoardFileBanners({ view, session, filePath, onClose }: { view: BoardFil
   const lines: { key: string; text: string; actions?: React.ReactNode }[] = []
   const copyBtn = <CardButton testid="board-file-save-copy" onClick={startCopy}>Save a copy</CardButton>
   if (view.file === 'moved') lines.push({ key: 'moved', text: view.copiedTo ? `This file was moved or deleted. Your board is in ${view.copiedTo}.` : 'This file was moved or deleted. Your edits are kept here until you close this tab.', actions: <>{copyBtn}<CardButton onClick={onClose}>Close</CardButton></> })
-  if (view.file === 'unreadable') lines.push({ key: 'unreadable', text: 'K2 can’t read this file right now. Your edits are kept here while it tries again.' })
-  if (view.file === 'unreadable-long') lines.push({ key: 'unreadable', text: 'K2 still can’t read this file. Your edits are kept here.', actions: copyBtn })
+  if (view.file === 'unreadable') lines.push({ key: 'unreadable', text: `${PRODUCT_NAME} can’t read this file right now. Your edits are kept here while it tries again.` })
+  if (view.file === 'unreadable-long') lines.push({ key: 'unreadable', text: `${PRODUCT_NAME} still can’t read this file. Your edits are kept here.`, actions: copyBtn })
   if (view.file === 'ok' && view.status.state === 'error' && view.queued > 0) lines.push({ key: 'save', text: `${view.status.text}. Your edits are kept here.`, actions: copyBtn })
   if (view.file === 'ok' && view.readOnlyWhy && view.missing.length === 0) lines.push({ key: 'ro', text: `Read only: ${view.readOnlyWhy}.`, actions: copyBtn })
   if (view.missing.length > 0) {
@@ -290,7 +291,7 @@ function BoardFileBanners({ view, session, filePath, onClose }: { view: BoardFil
     const n = view.lostNote.edits
     lines.push({
       key: 'lost',
-      text: `K2 closed with ${n === 1 ? '1 edit' : `${n} edits`} to this board that hadn’t been saved. ${n === 1 ? 'It’s' : 'They’re'} gone.`,
+      text: `${PRODUCT_NAME} closed with ${n === 1 ? '1 edit' : `${n} edits`} to this board that hadn’t been saved. ${n === 1 ? 'It’s' : 'They’re'} gone.`,
       actions: <CardButton testid="board-file-lost-ok" onClick={() => session.setLostNote(null)}>OK</CardButton>,
     })
   }
@@ -355,7 +356,7 @@ function HeldChip({ held, session }: { held: HeldGroup[]; session: BoardFileSess
               ))}
               <div className="mt-1 flex gap-2">
                 {h.objects.some((o) => o.why === 'deleted' && !o.mine) ? (
-                  <span data-testid="board-file-no-put-back">K2 no longer has the whole item, so it can’t be put back. Your change is listed above.</span>
+                  <span data-testid="board-file-no-put-back">{PRODUCT_NAME} no longer has the whole item, so it can’t be put back. Your change is listed above.</span>
                 ) : (
                   <CardButton testid="board-file-use-mine" onClick={() => session.useMine(h.id)}>{h.objects.some((o) => o.why === 'deleted') ? 'Put it back' : 'Use mine'}</CardButton>
                 )}
@@ -577,7 +578,7 @@ function BoardFileFrame({ session, filePath, tabId, api, rename, boards, pick }:
     })
   }
 
-  if (problem) return <Card title="K2 can’t load the board’s canvas"><div>{problem}</div></Card>
+  if (problem) return <Card title={`${PRODUCT_NAME} can’t load the board’s canvas`}><div>{problem}</div></Card>
   return (
     <div ref={boxRef} className="relative flex min-h-0 min-w-0 flex-1" data-board-file-frame-slot="">
       {loaded ? (

@@ -9,7 +9,7 @@ import { primaryScope } from '@/kessel/server-scope'
 import { markZenNewsSeen } from '@/lib/zen/zen-sync'
 import { ZenGardenNewsCard } from './ZenGardenNewsCard'
 import { isEditableTarget } from '@/lib/editable-target'
-import { RELEASE_REPO, RELEASE_REPO_URL } from '@/lib/brand'
+import { PRODUCT_NAME, RELEASE_REPO, RELEASE_REPO_URL } from '@/lib/brand'
 
 const GITHUB_REPO_URL = RELEASE_REPO_URL
 
@@ -375,7 +375,7 @@ export default function WhatsNewModal({
               color: 'var(--color-text-primary)'
             }}
           >
-            What's new in K2
+            What's new in {PRODUCT_NAME}
           </div>
 
           <div
@@ -555,7 +555,7 @@ function GithubStarDrawer(): React.JSX.Element {
           lineHeight: 1.3,
         }}
       >
-        Enjoying K2?
+        Enjoying {PRODUCT_NAME}?
       </div>
       <div
         style={{

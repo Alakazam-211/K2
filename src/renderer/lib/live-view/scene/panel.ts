@@ -16,6 +16,7 @@ import { fromMockView } from './sample-views'
 import { SCENE_VIEW, parseView } from './view-address'
 import { objectOfView, objectView, viewName } from './views'
 import type { Actor, Doc, Frame } from './types'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export type SectionId = 'activity' | 'people' | 'outliner' | 'props'
 export const PANEL: readonly { id: SectionId; title: string; grow?: boolean }[] = [
@@ -147,7 +148,7 @@ export function activityItems(S: SimState, fileName: string): ActivityItem[] {
     const cur = e.i === S.i
     if (e.kind === 'frame' && e.settled) {
       const p = framePhrase(e.frame, e.before, e.after)
-      return { kind: 'change', actor: actorOf(e.actor), who: 'Saved outside K2', text: ` · ${SAVEW[(e.settled as { outcome: string }).outcome]}: ${p.text}`, when: ago(S, e.at), cur, outside: true }
+      return { kind: 'change', actor: actorOf(e.actor), who: `Saved outside ${PRODUCT_NAME}`, text: ` · ${SAVEW[(e.settled as { outcome: string }).outcome]}: ${p.text}`, when: ago(S, e.at), cur, outside: true }
     }
     if (e.kind === 'frame') {
       const p = framePhrase(e.frame, e.before, e.after)
@@ -161,9 +162,9 @@ export function activityItems(S: SimState, fileName: string): ActivityItem[] {
     }
     if (e.kind === 'settled') {
       const a = actorOf('kit:external')
-      if (e.v.outcome === 'missing') return { kind: 'saved', actor: a, who: fileName, text: ' was moved or deleted outside K2', when: ago(S, e.at), cur }
-      if (e.v.outcome === 'declined') return { kind: 'saved', actor: a, who: 'Saved outside K2 again', text: ', in a newer format · live edits paused', when: ago(S, e.at), cur }
-      return { kind: 'saved', actor: a, who: 'Saved outside K2', text: ` · ${SAVEW[e.v.outcome] || e.v.outcome}`, when: ago(S, e.at), cur }
+      if (e.v.outcome === 'missing') return { kind: 'saved', actor: a, who: fileName, text: ` was moved or deleted outside ${PRODUCT_NAME}`, when: ago(S, e.at), cur }
+      if (e.v.outcome === 'declined') return { kind: 'saved', actor: a, who: `Saved outside ${PRODUCT_NAME} again`, text: ', in a newer format · live edits paused', when: ago(S, e.at), cur }
+      return { kind: 'saved', actor: a, who: `Saved outside ${PRODUCT_NAME}`, text: ` · ${SAVEW[e.v.outcome] || e.v.outcome}`, when: ago(S, e.at), cur }
     }
     if (e.kind === 'said') return { kind: 'said', to: actorOf(e.to), text: e.text, ref: e.ref, refName: refName(e.ref), cur }
     if (e.kind === 'reply') return { kind: 'reply', actor: actorOf(e.actor), text: e.text, ref: e.ref, refName: refName(e.ref), cur }

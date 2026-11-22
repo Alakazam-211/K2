@@ -29,6 +29,7 @@ import {
   zenPausedStart,
   zenPausedStartReady,
 } from './zen-widgets-running'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export type ZenWidgetStopReason = 'not-started' | 'not-responding' | 'failing' | 'rate'
 
@@ -164,7 +165,7 @@ export function zenWidgetStopText(reason: ZenWidgetStopReason): string {
     case 'failing':
       return 'This widget keeps failing.'
     case 'rate':
-      return 'This widget kept going over its limits, so K2 stopped it.'
+      return `This widget kept going over its limits, so ${PRODUCT_NAME} stopped it.`
   }
 }
 
@@ -175,7 +176,7 @@ export const ZEN_WIDGET_PAUSED_POSTING_TEXT = 'Paused: too many posts.'
 export const ZEN_WIDGET_PAUSED_WRITES_TEXT = 'Paused: too many writes.'
 
 /** UW32: shown only when K2's own relaunch after a restart froze again. */
-export const ZEN_WIDGETS_PAUSED_TEXT = 'K2 restarted again right after relaunching this Garden’s widgets. They’re paused.'
+export const ZEN_WIDGETS_PAUSED_TEXT = `${PRODUCT_NAME} restarted again right after relaunching this Garden’s widgets. They’re paused.`
 
 /** Tests only. */
 export function __resetZenCustomRunForTests(): void {

@@ -12,6 +12,7 @@
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { primaryScope } from '@/kessel/server-scope'
 import { coerceThreadFileObjects, type ThreadFileObject } from '@/components/SessionView/overlayThread'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** `/boot-status` key: tickets carry files (0.46.6,
  *  prd-ticket-attachments-v1): comment ids and `attachments` on `show`,
@@ -299,7 +300,7 @@ export async function commentFeedback(
   // An older daemon drops `attachments` it doesn't know and answers success
   // (TA3): say so instead of losing the files quietly.
   if (files.length > 0 && res && typeof res === 'object' && !('attachments' in res)) {
-    throw new Error("This server's K2 doesn't take ticket files yet (it needs 0.46.6). The message was sent without them.")
+    throw new Error(`This server's ${PRODUCT_NAME} doesn't take ticket files yet (it needs 0.46.6). The message was sent without them.`)
   }
   return res
 }

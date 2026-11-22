@@ -33,7 +33,7 @@ import {
 } from './compute-admin-api'
 import { touchIdOrPassword } from '@/lib/desktop-words'
 import { confirmPasswordLabel, LoginUsernameField, readConfirmIdentity, type ConfirmIdentity } from './confirm-password-ui'
-import { CLI_NAME } from '@/lib/brand'
+import { CLI_NAME, PRODUCT_NAME } from '@/lib/brand'
 
 const POLL_MS = 5000
 const muted = 'text-[var(--color-text-muted)]'
@@ -163,7 +163,7 @@ function RequestCard({
         return
       }
       setConfirm({ step: 'idle' })
-      setError(`No way to confirm here yet. Set a vault password from a terminal outside K2: ${CLI_NAME} vault confirm-password set.`)
+      setError(`No way to confirm here yet. Set a vault password from a terminal outside ${PRODUCT_NAME}: ${CLI_NAME} vault confirm-password set.`)
     } catch (e) {
       setConfirm({ step: 'idle' })
       setError(daemonErrorText(e))
@@ -373,7 +373,7 @@ export function NodeAdminPanel({ node, defaultOpen = false }: { node: string; de
       {view ? (
         <>
           <div className={`type-hint ${secondary}`}>
-            Node version {view.nodeVersion ?? 'unknown'} · {view.remoteAdmin === 'off' ? 'K2 can’t update it' : view.remoteAdmin === 'full' ? 'K2 keeps it updated and may run scripts you approve' : view.remoteAdmin === 'policy' ? 'K2 keeps it updated' : 'update setting not reported'}
+            Node version {view.nodeVersion ?? 'unknown'} · {view.remoteAdmin === 'off' ? `${PRODUCT_NAME} can’t update it` : view.remoteAdmin === 'full' ? `${PRODUCT_NAME} keeps it updated and may run scripts you approve` : view.remoteAdmin === 'policy' ? `${PRODUCT_NAME} keeps it updated` : 'update setting not reported'}
             {view.at ? ` · reported ${formatRelativeTime(view.at, nowSec())}` : ''}
           </div>
           {view.needsPin ? (

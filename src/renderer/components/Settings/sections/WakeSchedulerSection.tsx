@@ -347,8 +347,8 @@ export const PAUSED_TEXT = 'Paused. It won’t run until you turn it back on.'
 
 const PAUSED_BY_K2: Record<string, string> = {
   failures: `Paused by ${PRODUCT_NAME} after failing several times. See Recent runs, then turn it back on.`,
-  wakeup_missing: 'Paused by K2: its instructions file is missing. Edit its instructions, then turn it back on.',
-  wakeup_empty: 'Paused by K2: its instructions file is empty. Edit its instructions, then turn it back on.',
+  wakeup_missing: `Paused by ${PRODUCT_NAME}: its instructions file is missing. Edit its instructions, then turn it back on.`,
+  wakeup_empty: `Paused by ${PRODUCT_NAME}: its instructions file is empty. Edit its instructions, then turn it back on.`,
 }
 
 /** The row's status line when this page words it itself: paused by a
@@ -715,7 +715,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
           action={<Button onClick={() => setStatusAttempt((n) => n + 1)}>Try again</Button>}
           testId="heartbeats-status-error"
         >
-          K2 couldn’t tell whether heartbeats are being checked. Your heartbeats are unchanged. Try again in a moment.
+          {PRODUCT_NAME} couldn’t tell whether heartbeats are being checked. Your heartbeats are unchanged. Try again in a moment.
         </SettingsLoadState>
       ) : (
         <SettingsLoadState kind="loading" title="Checking the scheduler…" testId="heartbeats-status-loading" />
@@ -743,7 +743,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
       {schedulerStatus && !wake && (
         <div className="px-4 py-3">
           <p className={SETTING_ROW_LABEL}>Wake this computer for heartbeats</p>
-          <p className={SETTING_ROW_HINT}>This server runs an older K2 that can’t wake the computer. Update K2 on it to use this.</p>
+          <p className={SETTING_ROW_HINT}>This server runs an older {PRODUCT_NAME} that can’t wake the computer. Update {PRODUCT_NAME} on it to use this.</p>
         </div>
       )}
 
@@ -984,14 +984,14 @@ export function WakeSchedulerSection(): React.JSX.Element {
           action={<Button onClick={() => setFiresAttempt((n) => n + 1)}>Try again</Button>}
           testId="heartbeats-runs-error"
         >
-          K2 couldn’t read the list of recent runs. Your heartbeats still run. Try again in a moment.
+          {PRODUCT_NAME} couldn’t read the list of recent runs. Your heartbeats still run. Try again in a moment.
         </SettingsLoadState>
       ) : (
         <SettingsLoadState kind="loading" title="Loading recent runs…" testId="heartbeats-runs-loading" />
       )
     ) : fires.length === 0 ? (
       <SettingsLoadState kind="empty" title="No runs yet" testId="heartbeats-runs-empty">
-        Each time a heartbeat is due, what K2 did shows here: ran, skipped or failed, and why.
+        Each time a heartbeat is due, what {PRODUCT_NAME} did shows here: ran, skipped or failed, and why.
       </SettingsLoadState>
     ) : undefined
 
@@ -1042,7 +1042,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
           <p role="alert" className="type-hint text-[var(--color-text-primary)] flex items-center gap-2">
             <span aria-hidden="true" className="inline-block h-2 w-2 rounded-[var(--radius-status)] bg-[var(--color-status-error)]" />
             <span>
-              Stopped updating; showing the last runs K2 read.{' '}
+              Stopped updating; showing the last runs {PRODUCT_NAME} read.{' '}
               {firesError && <span className="text-[var(--color-text-muted)]">The server said: {firesError}.</span>}
             </span>
           </p>

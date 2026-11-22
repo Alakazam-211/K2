@@ -43,6 +43,7 @@ import {
   writeTicketOpenOn,
   type TicketOpenOn,
 } from '@/lib/ticket-open-pref'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const TICKETS_MANIFEST: SettingEntry[] = [
   {
@@ -119,7 +120,7 @@ function RowSaveError({ state, status }: { state: SaveState; status: number | nu
     status === 403 || status === 401
       ? 'Couldn’t save: this login can’t change the server’s ticket rules. Nothing changed; ask the owner or an admin.'
       : status === null
-        ? 'Couldn’t save: K2 couldn’t reach this server. Nothing changed; try again.'
+        ? `Couldn’t save: ${PRODUCT_NAME} couldn’t reach this server. Nothing changed; try again.`
         : 'Couldn’t save this change. Nothing changed; try again.'
   return (
     <div role="alert" data-save-error="" data-testid="tickets-settings-save-error" className="mt-1">
@@ -266,7 +267,7 @@ export function TicketsSection(): React.JSX.Element {
         testId="tickets-settings-error"
         action={<Button onClick={() => fetchRules()}>Try again</Button>}
       >
-        K2 couldn’t read them from this server. Your own setting below still works.
+        {PRODUCT_NAME} couldn’t read them from this server. Your own setting below still works.
       </SettingsLoadState>
     ) : undefined
 

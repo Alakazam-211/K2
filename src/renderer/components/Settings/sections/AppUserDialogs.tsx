@@ -22,6 +22,7 @@ import { Button, Input, Radio } from '@/components/ui'
 import { SettingDropdown } from '../controls/SettingControls'
 import { AccessSheet, FailedNote, MUST_CHANGE_NOTE, PasswordResetDialog } from './AccessDialogs'
 import type { PersonRow } from './user-access-api'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export { MUST_CHANGE_NOTE }
 
@@ -99,7 +100,7 @@ export function AppUserResetDialog({
       intro={`${who}’s current password stops working right away, and they’re signed out of every App and device.`}
       rules={`Any password up to ${APP_PASSWORD_MAX} characters.`}
       problem={(pw) => (new TextEncoder().encode(pw.trim()).length > APP_PASSWORD_MAX ? `Use at most ${APP_PASSWORD_MAX} characters.` : null)}
-      makeHint={`K2 shows it once, after the reset, for you to copy and send to ${who}.`}
+      makeHint={`${PRODUCT_NAME} shows it once, after the reset, for you to copy and send to ${who}.`}
       signIn="They sign in to their Apps with it."
       extra={
         person.tiedTo ? (
@@ -170,7 +171,7 @@ export function OneTimeSecret({
         {copy === 'failed' ? <span className={MUTED}>Couldn’t copy. Select the text and copy it yourself.</span> : null}
       </div>
       {expiry ? <p className={MUTED}>{expiry}</p> : null}
-      <p className={MUTED}>K2 won’t show this again. Once you close this window, it’s gone.</p>
+      <p className={MUTED}>{PRODUCT_NAME} won’t show this again. Once you close this window, it’s gone.</p>
     </div>
   )
 }
@@ -278,7 +279,7 @@ export function ResetLinkDialog({
         <>
           {result.kind === 'link' ? (
             <OneTimeSecret
-              label={`Give ${person.username} this link. It works once: they open it and choose a new password on K2’s own page.`}
+              label={`Give ${person.username} this link. It works once: they open it and choose a new password on ${PRODUCT_NAME}’s own page.`}
               value={result.value}
               expiry={result.expiry}
               copyLabel="Copy reset link"
@@ -302,7 +303,7 @@ export function ResetLinkDialog({
       ) : (
         <>
           <p className={NOTE}>
-            When {person.username} uses the link, they choose a new password on a K2 page (not inside the App).
+            When {person.username} uses the link, they choose a new password on a {PRODUCT_NAME} page (not inside the App).
             Then they’re signed out of every App and device, and any lock from wrong passwords clears.
           </p>
           {tie ? <p className={NOTE}>{tie}</p> : null}
@@ -311,14 +312,14 @@ export function ResetLinkDialog({
               <Radio name="reset-mode" checked={mode === 'link'} onChange={() => setMode('link')} />
               <span>
                 Get a one-time link
-                <span className={`block ${MUTED}`}>You pass it on yourself, so no email is involved. K2 shows it once.</span>
+                <span className={`block ${MUTED}`}>You pass it on yourself, so no email is involved. {PRODUCT_NAME} shows it once.</span>
               </span>
             </label>
             <label className="flex items-start gap-2 type-control text-[var(--color-text-primary)] cursor-pointer">
               <Radio name="reset-mode" checked={mode === 'email'} onChange={() => setMode('email')} />
               <span>
                 Email them the link
-                <span className={`block ${MUTED}`}>K2 sends it to an address you give.</span>
+                <span className={`block ${MUTED}`}>{PRODUCT_NAME} sends it to an address you give.</span>
               </span>
             </label>
           </div>
@@ -326,7 +327,7 @@ export function ResetLinkDialog({
             <div className="space-y-2">
               {person.email && !storedOk ? (
                 <p className={MUTED}>
-                  The email on file ({person.email}) may have been entered by an agent, so K2 won’t send a reset
+                  The email on file ({person.email}) may have been entered by an agent, so {PRODUCT_NAME} won’t send a reset
                   there. Enter an address you know is theirs.
                 </p>
               ) : null}
@@ -346,7 +347,7 @@ export function ResetLinkDialog({
               <label className="block space-y-1">
                 <span className={MUTED}>
                   Send from (optional): the address the email comes from. Pick one no agent can read, so no agent
-                  sees the link. Leave it blank to use K2’s own sender, if this server has one.
+                  sees the link. Leave it blank to use {PRODUCT_NAME}’s own sender, if this server has one.
                 </span>
                 <Input
                   type="email"
@@ -542,7 +543,7 @@ export function AddUserDialog({
           <label className="flex items-start gap-2 type-control text-[var(--color-text-primary)] cursor-pointer">
             <Radio name="add-mode" checked={mode === 'generate'} onChange={() => setMode('generate')} />
             <span>
-              Let K2 generate one
+              Let {PRODUCT_NAME} generate one
               <span className={`block ${MUTED}`}>Shown once, after you add them.</span>
             </span>
           </label>
@@ -648,7 +649,7 @@ export function AddedUserDialog({ added, onClose }: { added: AddedUser; onClose:
           label={
             added.secret.kind === 'password'
               ? `${added.username}’s password. Give it to them yourself.`
-              : `K2 couldn’t email this link, so give it to ${added.username} yourself. It works once: they open it and choose their password.`
+              : `${PRODUCT_NAME} couldn’t email this link, so give it to ${added.username} yourself. It works once: they open it and choose their password.`
           }
           value={added.secret.value}
           expiry={added.secret.expiry}

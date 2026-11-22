@@ -16,6 +16,7 @@ import { onZenThreadChange, zenThreadItemTarget } from '@/lib/zen/zen-data'
 import type { ZenSecretAsk } from '@/lib/zen/secret-sheet'
 import { zenButtonStyle } from './ZenOverlay'
 import { ZEN_SHEET_TITLE_STYLE, ZenSheet } from './ZenSheet'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export interface ZenSecretSheetProps {
   ask: ZenSecretAsk
@@ -51,7 +52,7 @@ export function ZenSecretSheet({
       panelStyle={THREAD_CARD_TOKENS}
     >
       <p style={{ color: 'var(--zen-text-muted)', fontSize: 11, ...ZEN_SHEET_TITLE_STYLE }}>
-        K2 shows this outside the widget. The widget never sees what you type here.
+        {PRODUCT_NAME} shows this outside the widget. The widget never sees what you type here.
       </p>
       {secret ? (
         <SecretCard

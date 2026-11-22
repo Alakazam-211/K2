@@ -12,6 +12,7 @@
 
 import { daemonCliGet } from '@/lib/daemon-cli'
 import { primaryScope } from '@/kessel/server-scope'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export type PersonRow = {
   id: string | null
@@ -82,7 +83,7 @@ export type TemplateRow = {
 
 /** This server's own K2 page, as an App grant's target. */
 export const HOST_APP = 'host'
-export const HOST_LABEL = 'K2 on this server'
+export const HOST_LABEL = `${PRODUCT_NAME} on this server`
 
 export function asRecord(raw: unknown): Record<string, unknown> {
   return raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {}
@@ -123,7 +124,7 @@ const USER_DETAIL_WORDS: Record<string, string> = {
   apps: 'App names',
   appGrants: 'app access',
   locks: 'locks',
-  boxLogin: 'who signs in to K2',
+  boxLogin: `who signs in to ${PRODUCT_NAME}`,
   ties: 'agent set-ups',
   storedEmail: 'reset emails',
   mustChange: 'password changes due',

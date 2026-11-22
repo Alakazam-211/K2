@@ -42,6 +42,7 @@ import { useLlmAccountsStore, watchLlmAccounts, type LlmAccountsDoc } from '@/st
 import { requestLlmSignIn } from '@/stores/llm-sign-in-request'
 import { usePresetsStore } from '@/stores/presets'
 import { useSettingsStore } from '@/stores/settings'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** The contract's copy (purpose only). */
 export const KESSEL_SHEET_COPY = {
@@ -53,7 +54,7 @@ export const KESSEL_SHEET_COPY = {
 
 /** The line under each step's title, and the sheet's other words. */
 export const KESSEL_STEP_INTRO = {
-  step1: 'Kessel is K2’s own agent. It works in its own folder on this server.',
+  step1: `Kessel is ${PRODUCT_NAME}’s own agent. It works in its own folder on this server.`,
   step2: 'Kessel uses one of the tools signed in on this server.',
 } as const
 
@@ -83,10 +84,10 @@ export const KESSEL_CLOSE_HELD = 'Can’t close while Kessel is being made'
 /** The main button after a failed create. */
 export const KESSEL_TRY_AGAIN = 'Try again'
 export const KESSEL_CREATE_FAILED = {
-  what: 'K2 couldn’t create Kessel.',
+  what: `${PRODUCT_NAME} couldn’t create Kessel.`,
   next: 'Nothing was made. Fix what the server says, then try again.',
   /** The server couldn't write Kessel's folder. */
-  permission: 'Nothing was made. K2 can’t write to that folder. Choose another folder name, or ask whoever runs this server to check its permissions.',
+  permission: `Nothing was made. ${PRODUCT_NAME} can’t write to that folder. Choose another folder name, or ask whoever runs this server to check its permissions.`,
 } as const
 
 /** What to do after a failed create: a folder K2 can't write gets its own

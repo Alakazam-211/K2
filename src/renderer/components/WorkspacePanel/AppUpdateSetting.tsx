@@ -11,6 +11,7 @@ import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import type { ServerScope } from '@/kessel/server-scope'
 import { scopeMayWrite } from '@/kessel/server-scope'
 import { Radio } from '@/components/ui'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export type NoOverlap = 'pause' | 'defer'
 
@@ -79,7 +80,7 @@ export function AppUpdateSetting({ scope, app }: { scope: ServerScope; app: stri
   if (!state) return null
   return (
     <div data-app-update-setting="" className="space-y-1">
-      <div className="text-[10px] text-[var(--color-text-muted)]">When K2 updates and this App can&apos;t run two copies at once</div>
+      <div className="text-[10px] text-[var(--color-text-muted)]">When {PRODUCT_NAME} updates and this App can&apos;t run two copies at once</div>
       {state ? (
         <div role="radiogroup" aria-label="When an update can't run two copies" className="space-y-0.5">
           {CHOICES.map((c) => (

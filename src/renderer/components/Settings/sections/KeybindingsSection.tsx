@@ -27,6 +27,7 @@ import {
 } from '../controls/SettingControls'
 import { KEY_CHIP, KEY_CHIP_REST, KeyChip } from '../shared/KeyChip'
 import { AccessSheet, FailedNote } from './AccessDialogs'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** prd-zen-mode-v1 Z30/Z56: the Zen escape chord is fixed (the native menu
  *  accelerator on macOS, a capture listener elsewhere). Shown here as taken;
@@ -160,7 +161,7 @@ export function KeybindingsSection(): React.JSX.Element {
       <header className="min-w-0">
         <h2 className="type-title text-[var(--color-text-primary)]">Key Bindings</h2>
         <p className={SETTING_ROW_HINT}>
-          Shortcuts for K2 on this computer. Click a shortcut and press the new keys; it saves at once. Escape cancels.
+          Shortcuts for {PRODUCT_NAME} on this computer. Click a shortcut and press the new keys; it saves at once. Escape cancels.
         </p>
       </header>
 
@@ -245,7 +246,7 @@ export function KeybindingsSection(): React.JSX.Element {
                 {resetNote}
               </span>
             ) : changed > 0 ? (
-              `Puts the ${changed === 1 ? 'one shortcut' : `${changed} shortcuts`} you changed back to K2’s defaults.`
+              `Puts the ${changed === 1 ? 'one shortcut' : `${changed} shortcuts`} you changed back to ${PRODUCT_NAME}’s defaults.`
             ) : (
               'Every shortcut is on its default.'
             )
@@ -286,7 +287,7 @@ function ResetAllDialog({ changed, onClose, onDone }: { changed: number; onClose
   return (
     <AccessSheet
       title="Reset all shortcuts?"
-      intro={`The ${changed === 1 ? 'shortcut' : `${changed} shortcuts`} you changed go back to K2’s defaults. You can change them again any time.`}
+      intro={`The ${changed === 1 ? 'shortcut' : `${changed} shortcuts`} you changed go back to ${PRODUCT_NAME}’s defaults. You can change them again any time.`}
       onClose={onClose}
       busy={busy}
       testId="keys-reset-confirm"

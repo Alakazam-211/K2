@@ -6,7 +6,7 @@
 // Pure: no React, no DOM.
 
 import type { Lane } from './desktop-wire'
-import { CLI_NAME } from '@/lib/brand'
+import { CLI_NAME, PRODUCT_NAME } from '@/lib/brand'
 
 /** The machine's state as `status.state` reports it (even while off). */
 export type MachineState =
@@ -381,7 +381,7 @@ export const STATE_CARDS: Readonly<Record<Exclude<TabState, 'ready'>, CardSpec>>
   },
   not_allowed: { message: "You don't have access to this computer's screen." },
   needs_permission: {
-    message: 'Someone at this Mac has to allow K2 Screen once.',
+    message: `Someone at this Mac has to allow ${PRODUCT_NAME} Screen once.`,
     action: { id: 'ask-at-mac', label: 'Ask at the Mac', ownerOnly: true },
   },
   waiting_consent: {
@@ -392,26 +392,26 @@ export const STATE_CARDS: Readonly<Record<Exclude<TabState, 'ready'>, CardSpec>>
     message: 'The person at the screen said no.',
     action: { id: 'try-again', label: 'Try again', ownerOnly: false },
   },
-  locked: { message: "This Mac is locked. K2 can't unlock it." },
+  locked: { message: `This Mac is locked. ${PRODUCT_NAME} can't unlock it.` },
   no_session: { message: "No one is logged in on this computer's screen." },
-  no_display: { message: 'This computer has no screen K2 can show.' },
+  no_display: { message: `This computer has no screen ${PRODUCT_NAME} can show.` },
   portal_allow: { message: 'Someone at this computer has to click Allow once.' },
   same_machine: { message: "You're on this computer." },
   needs_update: {
-    message: "K2 Screen and K2 don't match; restarting it.",
+    message: `${PRODUCT_NAME} Screen and ${PRODUCT_NAME} don't match; restarting it.`,
     action: { id: 'retry', label: 'Retry', ownerOnly: false },
   },
-  unavailable: { message: "K2 Screen isn't in this build of K2 yet." },
-  blocked_in_login_items: { message: 'Turn K2 Screen on in System Settings → General → Login Items.' },
-  update_k2: { message: 'Update K2 on this computer to use Remote desktop.' },
+  unavailable: { message: `${PRODUCT_NAME} Screen isn't in this build of ${PRODUCT_NAME} yet.` },
+  blocked_in_login_items: { message: `Turn ${PRODUCT_NAME} Screen on in System Settings → General → Login Items.` },
+  update_k2: { message: `Update ${PRODUCT_NAME} on this computer to use Remote desktop.` },
   // A virtual desktop (prd-linux-virtual-desktop-v1 §6).
   not_set_up: {
-    message: 'This server has no screen. K2 can start a desktop on it once three small packages are installed.',
+    message: `This server has no screen. ${PRODUCT_NAME} can start a desktop on it once three small packages are installed.`,
     action: { id: 'set-up', label: 'Set up', ownerOnly: true },
   },
   setting_up: { message: 'Installing the desktop packages…' },
   closed: {
-    message: 'This server has no screen. K2 can start a desktop on it.',
+    message: `This server has no screen. ${PRODUCT_NAME} can start a desktop on it.`,
     memberMessage: "The desktop isn't running. An Owner or Admin can start it.",
     action: { id: 'start', label: 'Start desktop', ownerOnly: false, starters: true },
   },
@@ -515,17 +515,17 @@ export function startRefusalText(err: unknown): string {
     desktop_off: 'Remote desktop is off on this server.',
     not_set_up: 'The desktop packages aren’t installed yet.',
     too_many_desktops: 'This server already has as many desktops as it can hold.',
-    low_memory: 'This server is low on memory, so K2 didn’t start a desktop.',
+    low_memory: `This server is low on memory, so ${PRODUCT_NAME} didn’t start a desktop.`,
     desktop_gone: 'This desktop no longer exists.',
     start_failed: 'The desktop didn’t start.',
-    not_virtual: 'This server’s desktop is a real screen session: K2 doesn’t start or close it.',
+    not_virtual: `This server’s desktop is a real screen session: ${PRODUCT_NAME} doesn’t start or close it.`,
     agent_desktop_off: AGENT_SWITCH_OFF_LINE,
     no_x11_socket_dir: 'This server’s /tmp/.X11-unix folder is missing or has the wrong permissions.',
-    setup_manual: 'K2 can’t install the desktop packages on this server.',
+    setup_manual: `${PRODUCT_NAME} can’t install the desktop packages on this server.`,
     setup_failed: 'Installing the desktop packages failed.',
     setting_up: 'The desktop packages are already being installed.',
   }
-  let line = hint || fixed[code] || 'K2 couldn’t do that.'
+  let line = hint || fixed[code] || `${PRODUCT_NAME} couldn’t do that.`
   if (code === 'too_many_desktops' && Array.isArray(body.closable) && body.closable.length > 0) {
     line += ` Close one first: ${body.closable.filter((c) => typeof c === 'string').join(', ')}.`
   }
@@ -540,12 +540,12 @@ export function startRefusalText(err: unknown): string {
 
 /** The S14 sentence the off card shows before turning it on. */
 export const DESKTOP_ENABLE_CARD =
-  "Anyone you allow can see and do anything you can on this computer, including your mail, files and passwords. Owners and Admins can open it; Members only with your grant, and only to watch (Members can still use terminal sessions, which run as this server's user). It stays on until an Owner turns it off. On Linux, K2 can't hide password apps from the picture, and notifications (2FA codes too) show in it."
+  `Anyone you allow can see and do anything you can on this computer, including your mail, files and passwords. Owners and Admins can open it; Members only with your grant, and only to watch (Members can still use terminal sessions, which run as this server's user). It stays on until an Owner turns it off. On Linux, ${PRODUCT_NAME} can't hide password apps from the picture, and notifications (2FA codes too) show in it.`
 
 /** The `virtual` switch's card (§4 item 2, LD-18), word for word as the
  *  daemon's constant. */
 export const VIRTUAL_ENABLE_CARD =
-  "K2 will start a desktop on this server. Anyone you allow can see and use whatever is opened on it. Programs on it run as this server's K2 user. It stays on until an Owner turns it off."
+  `${PRODUCT_NAME} will start a desktop on this server. Anyone you allow can see and use whatever is opened on it. Programs on it run as this server's ${PRODUCT_NAME} user. It stays on until an Owner turns it off.`
 
 /** The boot-status feature key that says the routes exist. */
 export const DESKTOP_FEATURE = 'remote-desktop-v1' as const
@@ -569,7 +569,7 @@ export function openDesktopIsForMe(
 
 /** The toast after Ask at the Mac went through. */
 export const ASKED_AT_MAC =
-  'Asked at the Mac: K2 Screen is showing macOS’s permission prompt there. Someone at that Mac allows it once, and this tab connects by itself.'
+  `Asked at the Mac: ${PRODUCT_NAME} Screen is showing macOS’s permission prompt there. Someone at that Mac allows it once, and this tab connects by itself.`
 
 /** Why Ask at the Mac (`POST /cli/desktop/ask`) didn't go through, in plain
  *  words. `hostKey` names the computer. */
@@ -577,15 +577,15 @@ export function askRefusalText(err: unknown, hostKey: string): string {
   const e = (err ?? {}) as { code?: unknown; status?: unknown; message?: unknown }
   const code = typeof e.code === 'string' ? e.code : ''
   const hint = typeof e.message === 'string' ? e.message.trim() : ''
-  const atTheMac = 'allow K2 Screen in System Settings → Privacy & Security (Screen & System Audio Recording, and Accessibility)'
+  const atTheMac = `allow ${PRODUCT_NAME} Screen in System Settings → Privacy & Security (Screen & System Audio Recording, and Accessibility)`
   if (code === 'desktop_off') {
     return `Remote desktop is off on ${hostKey}. Turn it on at that computer itself: Settings → Remote desktop (or run ${CLI_NAME} desktop enable there).`
   }
   if (code === 'owner_only' || code === 'role_required') return `Only an Owner of ${hostKey} can ask at the Mac.`
   // An older K2 there has no ask route: the person at the Mac does it by hand.
   if (e.status === 404 || e.status === 405 || code === 'not_found') {
-    return `K2 on ${hostKey} is older and can’t ask from here. At that Mac, ${atTheMac}.`
+    return `${PRODUCT_NAME} on ${hostKey} is older and can’t ask from here. At that Mac, ${atTheMac}.`
   }
-  if (code === 'no_permission_needed') return hint || `K2 Screen on ${hostKey} needs no permission.`
-  return `Couldn’t ask at the Mac: ${hint || 'K2 couldn’t reach it'}. At that Mac, ${atTheMac}.`
+  if (code === 'no_permission_needed') return hint || `${PRODUCT_NAME} Screen on ${hostKey} needs no permission.`
+  return `Couldn’t ask at the Mac: ${hint || `${PRODUCT_NAME} couldn’t reach it`}. At that Mac, ${atTheMac}.`
 }

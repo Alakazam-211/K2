@@ -75,6 +75,7 @@ import {
   type ZenAnimationNode,
 } from './zen-motion'
 import { registerZenThemeEngine, type ZenThemeEngine, type ZenThemeInput, type ZenThemeResult } from './zen-theme'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 const TOKEN_KEYS = new Set(['scheme', 'colors', 'shape', 'type'])
 const BUNDLE_KEYS = new Set(['name', 'builtin', 'user', 'scope', 'tokens', 'background', 'terminal', 'font'])
@@ -317,7 +318,7 @@ export function createZenThemeEngine(): ZenThemeEngine {
   return (input) => {
     const result = buildZenTheme(input, lastGood)
     const now = (result.rejected ?? []).join(', ')
-    if (now && now !== warned) console.warn('[zen] theme keys K2 does not know were ignored:', now)
+    if (now && now !== warned) console.warn(`[zen] theme keys ${PRODUCT_NAME} does not know were ignored:`, now)
     warned = now
     return result
   }

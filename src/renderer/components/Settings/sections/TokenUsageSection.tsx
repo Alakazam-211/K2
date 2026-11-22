@@ -76,6 +76,7 @@ import {
 import { Button, Segmented, Surface } from '@/components/ui'
 import { useElementWidth } from '@/hooks/useElementWidth'
 import { SETTING_ROW_HINT, SETTING_ROW_LABEL_MIN, SettingsGroup, SettingsLoadState, SETTING_LIST_ROW_HOVER } from '../controls/SettingControls'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const TOKEN_USAGE_MANIFEST: SettingEntry[] = [
   {
@@ -802,7 +803,7 @@ export function TokenUsageSection(): React.JSX.Element {
                   action={<RetryButton onClick={retry} />}
                   testId="usage-tokens-error"
                 >
-                  {`K2 couldn’t read the usage records on ${serverName}. Try again in a moment.`}
+                  {`${PRODUCT_NAME} couldn’t read the usage records on ${serverName}. Try again in a moment.`}
                 </SettingsLoadState>
               ) : nothing ? (
                 <Surface chamfer material="tile" className="px-6 py-10 text-center" data-testid="usage-empty">

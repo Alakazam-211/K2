@@ -10,6 +10,7 @@
 import type { PlayerScenario } from './sample-player'
 import type { LivePerson } from './people'
 import type { LiveChange, LiveMessage, LiveShellSnapshot } from './source'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export type ShellKind = 'scene' | 'timeline'
 
@@ -78,7 +79,7 @@ const SCENE: World = {
   message: { id: 'm1', from: 'you', to: 'atlas', text: 'Can the table sit nearer the window?', at_ms: min(1), address: { label: 'Table', address: '@obj:7' } },
   reply: 'On it: I’ll move it once Brook lets go of the vase.',
   outsideChange: { id: 'so', who: 'file', verb: 'saved', text: 'put Rug back and moved Floor lamp', at_ms: T0 - 10_000, target: '@obj:5', tone: 'outside' },
-  declinedMessage: 'The save is in a newer format K2 can’t read live.',
+  declinedMessage: `The save is in a newer format ${PRODUCT_NAME} can’t read live.`,
 }
 
 const TIMELINE: World = {
@@ -102,7 +103,7 @@ const TIMELINE: World = {
   message: { id: 'm1', from: 'you', to: 'atlas', text: 'Can you keep the cut on the breath?', at_ms: min(1), address: { label: 'Interview B', address: '@item:2' } },
   reply: 'On it: I’ll try it there once Brook lets go of Interview B.',
   outsideChange: { id: 'to', who: 'file', verb: 'saved', text: 'moved Interview B back and put B-roll 03 back', at_ms: T0 - 10_000, target: '@item:2', tone: 'outside' },
-  declinedMessage: 'The save isn’t a timeline K2 can read live.',
+  declinedMessage: `The save isn’t a timeline ${PRODUCT_NAME} can read live.`,
 }
 
 function base(w: World, kind: ShellKind): SampleSnapshot {

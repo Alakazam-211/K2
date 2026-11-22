@@ -28,6 +28,7 @@ import { useConnectHostStore } from '@/stores/connect-host'
 import { useRemoteFolderPickerStore } from '@/stores/remote-folder-picker'
 import { useToastStore } from '@/stores/toast'
 import { primaryScope } from '@/kessel/server-scope'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** What Edit should open in the parent Settings takeover. */
 export type ContextEditTarget =
@@ -794,7 +795,7 @@ function BrowseDefaultsModal({
               <p className="type-hint text-[var(--color-text-muted)] mt-1 leading-snug">
                 Packs and live layers available on this machine for always-on
                 context. Start with <span className="text-[var(--color-accent)]">Recommended</span>{' '}
-                for a nice K2 experience.
+                for a nice {PRODUCT_NAME} experience.
               </p>
             </div>
             <DialogCloseButton className="-mt-2 -mr-3" onClick={onClose} />

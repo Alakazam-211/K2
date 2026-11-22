@@ -5,13 +5,14 @@ import { type HarnessProbe, anyHarnessUnified } from './canonicalState'
 import { FanoutConfirmModal } from './FanoutConfirmModal'
 import { primaryScope } from '@/kessel/server-scope'
 import { Toggle, Tag } from '@/components/ui'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 // The value-pitch WHY copy relocated VERBATIM from the removed consent page
 // (AddWorkspaceDialog:147-164) into the canonical button subtitle + the skill
 // briefing (canonical-agents PRD §7). This is where harness unification is
 // actually opt-in, so the pitch belongs here.
 export const CANONICAL_PITCH_SUBTITLE =
-  'Tell K2 once, every AI tool listens. Each AI coding tool reads its project notes from a different file; write your context once and every tool sees the same picture.'
+  `Tell ${PRODUCT_NAME} once, every AI tool listens. Each AI coding tool reads its project notes from a different file; write your context once and every tool sees the same picture.`
 
 // Plain-language warning shown at the fan-out checkbox decision point.
 // Enabling fan-out symlinks harness files onto K2's generated canon and can
@@ -156,7 +157,7 @@ export function CanonicalAgentButton({
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5 flex-wrap">
             <span className="type-name text-[var(--color-text-primary)]">
-              K2 Canonical Agent
+              {PRODUCT_NAME} Canonical Agent
             </span>
             {unified ? (
               <Tag tone="accent">

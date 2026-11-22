@@ -39,6 +39,7 @@ import {
   type SyncState,
   type WireItem,
 } from './engine'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const HOMES_SYNC_CONTROL_KEY = 'k2.homes.syncControl.v1'
 export const HOMES_SYNC_STATUS_KEY = 'k2.homes.syncStatus.v1'
@@ -516,7 +517,7 @@ export function statusLine(s: HomesSyncStatus): string {
     case 'synced':
       if (s.localOnly > 0) {
         const n = s.localOnly
-        return `Home sync with ${where} · Not synced: ${n} ${n === 1 ? 'person or channel' : 'people and channels'} (your home server needs K2 0.46.13 or later)`
+        return `Home sync with ${where} · Not synced: ${n} ${n === 1 ? 'person or channel' : 'people and channels'} (your home server needs ${PRODUCT_NAME} 0.46.13 or later)`
       }
       return s.pending > 0 ? `Home sync with ${where} · ${s.pending} waiting` : `Home sync with ${where}`
     case 'syncing':
@@ -528,7 +529,7 @@ export function statusLine(s: HomesSyncStatus): string {
     case 'removed':
       return `This computer was removed from Home sync on ${where}`
     case 'unsupported':
-      return `${where} doesn’t sync groups (update K2 there)`
+      return `${where} doesn’t sync groups (update ${PRODUCT_NAME} there)`
     case 'error':
       return `Home sync with ${where} hit a problem${s.error ? `: ${s.error}` : ''}`
     case 'off':

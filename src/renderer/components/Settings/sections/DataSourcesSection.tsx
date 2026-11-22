@@ -23,6 +23,7 @@ import { DataSourceTryTree, TrySummary } from './DataSourceTryTree'
 import { DataSourcesBatchDialog } from './DataSourcesBatchDialog'
 import { SimulateDialog } from './SimulateDialog'
 import { btn, danger, muted, sourcesErrorText } from './data-sources-ui'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const DATA_SOURCES_MANIFEST: SettingEntry[] = [
   {
@@ -99,7 +100,7 @@ export function DataSourcesSection({ only = null, embedded = false }: DataSource
       try {
         const list = await listSources(scope)
         // A reply without the list is a failed read, never a crash.
-        if (!list || !Array.isArray(list.sources)) throw new Error('Its answer wasn’t a list of data sources K2 can read.')
+        if (!list || !Array.isArray(list.sources)) throw new Error(`Its answer wasn’t a list of data sources ${PRODUCT_NAME} can read.`)
         setRows(list.sources)
         setRev(list.rev)
         setError(null)
@@ -150,7 +151,7 @@ export function DataSourcesSection({ only = null, embedded = false }: DataSource
         <p className={SETTING_ROW_HINT}>
           {embedded && only ? 'Checks that feed the cards here.' : 'Checks that feed Garden cards and agents.'}{' '}
           <span data-testid="sources-runs-on">
-            K2 runs them on {scope.isRemote ? scope.label : scope.label.replace(/^This computer$/, 'this computer')}
+            {PRODUCT_NAME} runs them on {scope.isRemote ? scope.label : scope.label.replace(/^This computer$/, 'this computer')}
             {macHere ? <span data-testid="sources-mac-hint"> while it’s awake</span> : null}, even with no window open.
           </span>
         </p>

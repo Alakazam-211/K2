@@ -12,6 +12,7 @@ import { BetaTag, Button } from '@/components/ui'
 import { SETTING_ROW_HINT, SettingRow, SettingsGroup, SettingsLoadState } from '../controls/SettingControls'
 import { HealthWord, StatusDot } from './ConnectionsParts'
 import { usePhonePairingFocus, usePhonePairingFocusStore } from '@/stores/phone-pairing-focus'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 // K2 Companion (task #615) — the mobile app and the Tunnel share ONE
 // tunnel (the frpc reverse tunnel at <sub>.k2.dev). The phone pairs to the
@@ -63,8 +64,8 @@ async function tunnelStatus(): Promise<TunnelStatus> {
 
 export const COMPANION_MANIFEST: SettingEntry[] = [
   { id: 'companion.status', section: 'companion', label: 'Reachable from your phone', description: 'Whether your phone can reach this server, and its address', keywords: ['status', 'tunnel', 'connect', 'reachable', 'subdomain', 'k2.dev', 'pair', 'address'] },
-  { id: 'companion.get-app', section: 'companion', label: 'Get the K2 mobile app', description: 'Install the K2 Companion app on iPhone or Android', keywords: ['mobile', 'companion', 'app', 'download', 'install', 'iphone', 'ios', 'app store', 'android', 'google play', 'qr'] },
-  { id: 'companion.pair', section: 'companion', label: 'Pair a phone', description: 'A one-time code and QR that sign the K2 phone app in', keywords: ['pair', 'phone', 'qr', 'code', 'companion', 'mobile', 'device', 'iphone', 'android', 'web access'] },
+  { id: 'companion.get-app', section: 'companion', label: `Get the ${PRODUCT_NAME} mobile app`, description: `Install the ${PRODUCT_NAME} Companion app on iPhone or Android`, keywords: ['mobile', 'companion', 'app', 'download', 'install', 'iphone', 'ios', 'app store', 'android', 'google play', 'qr'] },
+  { id: 'companion.pair', section: 'companion', label: 'Pair a phone', description: `A one-time code and QR that sign the ${PRODUCT_NAME} phone app in`, keywords: ['pair', 'phone', 'qr', 'code', 'companion', 'mobile', 'device', 'iphone', 'android', 'web access'] },
   { id: 'companion.phones', section: 'companion', label: 'Paired phones', description: 'Every phone paired with this server, with Remove', keywords: ['paired', 'phones', 'devices', 'remove', 'revoke', 'sign out', 'iphone', 'android'] },
 ]
 
@@ -193,7 +194,7 @@ export function CompanionSection(): React.JSX.Element {
           </Button>
         }
       >
-        K2 couldn&apos;t read the tunnel&apos;s status.
+        {PRODUCT_NAME} couldn&apos;t read the tunnel&apos;s status.
       </SettingsLoadState>
     ) : (
       <SettingsLoadState kind="loading" title="Checking whether your phone can reach this server…" testId="companion-status-loading" />
@@ -209,10 +210,10 @@ export function CompanionSection(): React.JSX.Element {
     <div className={`w-full ${CONTENT_WIDTH} space-y-6 pb-6`}>
       <header className="min-w-0">
         <h2 className="type-title text-[var(--color-text-primary)] flex items-center gap-2">
-          K2 Companion
+          {PRODUCT_NAME} Companion
           <BetaTag />
         </h2>
-        <p className={SETTING_ROW_HINT}>Use K2 from your phone. Install the app, then pair it with this server.</p>
+        <p className={SETTING_ROW_HINT}>Use {PRODUCT_NAME} from your phone. Install the app, then pair it with this server.</p>
       </header>
 
       <SettingsGroup title="Status" card settingId="companion.status" testId="companion-status" state={statusState}>
@@ -295,7 +296,7 @@ function StoreTile({
       target="_blank"
       rel="noreferrer"
       data-k2-focus=""
-      aria-label={`Get K2 for ${platform} on ${label}`}
+      aria-label={`Get ${PRODUCT_NAME} for ${platform} on ${label}`}
       className="relative flex flex-col items-center gap-2 p-1.5 -m-1.5 no-drag cursor-pointer"
     >
       <QrCode url={url} size={STORE_TILE} border={2} label={`${label} QR code`} />

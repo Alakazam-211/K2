@@ -9,6 +9,7 @@ import type { ServerScope } from '@/kessel/server-scope'
 import { checkedModelRow, composeModelId, modelPickerRows } from '@/lib/model-choices'
 import { fetchSessionModelOptions, switchSessionModel, type SessionModelOptions } from '@/lib/session-model-api'
 import { MODEL_PICKER_WORDS, ModelPicker } from './ModelPicker'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export interface ComposeModel {
   /** Open the picker, its search pre-filled (`/model op` → `op`). */
@@ -109,7 +110,7 @@ export function useComposeModel(input: {
         state={notSwitchable ? 'error' : state}
         onRetry={load}
         initialQuery={openAt.query}
-        footer={notSwitchable ? `This chat runs ${opts?.harness || 'a shell'}: K2 switches Claude chats.` : MODEL_PICKER_WORDS.threadFooter}
+        footer={notSwitchable ? `This chat runs ${opts?.harness || 'a shell'}: ${PRODUCT_NAME} switches Claude chats.` : MODEL_PICKER_WORDS.threadFooter}
         label="Model for this chat"
         testId="compose-model-picker"
         onPick={(v) => void choose(v)}

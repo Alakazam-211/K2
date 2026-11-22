@@ -105,6 +105,7 @@ import {
 } from './fileCategory'
 import { isNewUntitledFile, saveNewUntitledFile, untitledNamesInUse } from '@/lib/untitled-file'
 import { leaveWrite } from '@/lib/editor/save-model/write'
+import { PRODUCT_NAME } from '@/lib/brand'
 export { getFileCategory, getDefaultViewMode } from './fileCategory'
 export type { FileCategory, ViewMode } from './fileCategory'
 
@@ -850,7 +851,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
           <span
             className="text-[10px] text-[var(--color-accent)] flex-shrink-0"
             data-testid="file-viewer-live-badge"
-            title="Live: everyone in this file sees each other's edits as they happen; K2 saves the file."
+            title={`Live: everyone in this file sees each other's edits as they happen; ${PRODUCT_NAME} saves the file.`}
           >
             Live
           </span>

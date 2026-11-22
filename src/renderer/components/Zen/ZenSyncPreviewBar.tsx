@@ -17,6 +17,7 @@ import {
   type ZenSyncParts,
 } from '@/lib/zen/zen-sync'
 import { useZenGardensStore } from '@/lib/zen/zen-gardens'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 const barStyle: React.CSSProperties = {
   background: 'var(--zen-surface-raised)',
@@ -57,7 +58,7 @@ export function ZenSyncPreviewBar({
     setZenGardenSync(gardenId, part, true)
       .then(() => {
         end()
-        useToastStore.getState().addToast(`${gardenName} now syncs with K2’s default`, 'success', 8000, {
+        useToastStore.getState().addToast(`${gardenName} now syncs with ${PRODUCT_NAME}’s default`, 'success', 8000, {
           label: 'Undo',
           onClick: () => void undoZenGardenSync(gardenId),
         })
@@ -74,7 +75,7 @@ export function ZenSyncPreviewBar({
       style={barStyle}
     >
       <div className="min-w-0 flex-1" style={{ fontWeight: 600 }}>
-        Previewing K2’s {partWords(part)} for {gardenName}
+        Previewing {PRODUCT_NAME}’s {partWords(part)} for {gardenName}
         {error && <span style={{ color: 'var(--zen-danger)', fontWeight: 400 }}> · {error}</span>}
       </div>
       <button type="button" className="no-drag cursor-pointer" style={buttonStyle} disabled={busy} onClick={turnOn} data-zen-sync-preview-on="">

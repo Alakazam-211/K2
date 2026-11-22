@@ -26,6 +26,7 @@ import { subscribeVoiceEvents } from '@/lib/voice/voice-events-socket'
 import { hostIsVoiceChatOnly, isVoiceChatOnly } from '@/lib/voice-chat-only'
 import { callPersonName, dmCallRoomName } from '@/lib/home-chat/call-names'
 import { refreshHomeChatPeople, refreshHomeChatSummary, useHomeChatStore } from '@/stores/home-chat'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 const REPORTED_KEY = 'k2.voice.reportedServers.v1'
 const PREFS_KEY = 'k2.voice.prefs.v1'
@@ -182,7 +183,7 @@ useHomeChatStore.subscribe((s, prev) => {
 setUpdateInstallGuard(async () => {
   const call = voice.store.getState().call
   if (!call || voice.store.getState().engineKind !== 'native') return true
-  return window.confirm(`Updating K2 ends your call in ${call.roomName}. Update now?`)
+  return window.confirm(`Updating ${PRODUCT_NAME} ends your call in ${call.roomName}. Update now?`)
 })
 
 let starts = 0

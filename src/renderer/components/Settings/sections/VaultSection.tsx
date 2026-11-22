@@ -48,6 +48,7 @@ import {
   SitesDialog,
 } from './VaultDialogs'
 import { groupSecrets, kindLabel, sitesShort, whenWords } from './vault-copy'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export {
   REVEAL_SHOW_MS,
@@ -358,7 +359,7 @@ function AboutVault({ status }: { status: VaultStatus }): React.JSX.Element {
       >
         <Value tone={status.rollback ? 'bad' : 'plain'}>{cap(status.rollbackGuard || 'off')}</Value>
       </SettingRow>
-      <SettingRow label="Tamper check" hint="Checks the vault file hasn’t been changed outside K2.">
+      <SettingRow label="Tamper check" hint={`Checks the vault file hasn’t been changed outside ${PRODUCT_NAME}.`}>
         <Value tone={tamperOk ? 'plain' : 'bad'} testId="vault-tamper">
           {tamperOk ? 'No problems' : status.tamper}
         </Value>
@@ -367,9 +368,9 @@ function AboutVault({ status }: { status: VaultStatus }): React.JSX.Element {
         <Value>{status.confirmPassword ? 'Set' : 'Not set'}</Value>
       </SettingRow>
       {status.counts ? (
-        <SettingRow label="Secrets" hint="Yours, K2’s own, and requests waiting for you.">
+        <SettingRow label="Secrets" hint={`Yours, ${PRODUCT_NAME}’s own, and requests waiting for you.`}>
           <Value>
-            {status.counts.user} yours · {status.counts.system} K2’s · {status.counts.pendingRequests} waiting
+            {status.counts.user} yours · {status.counts.system} {PRODUCT_NAME}’s · {status.counts.pendingRequests} waiting
             {status.counts.rotateDue ? ` · ${status.counts.rotateDue} due for rotation` : ''}
           </Value>
         </SettingRow>
@@ -557,7 +558,7 @@ export function VaultSection({ scope }: { scope: ServerScope }): React.JSX.Eleme
           testId="vault-not-open"
         >
           Your secrets are kept safe, but until it opens agents can’t use them and you can’t add or change any. If your Mac asks for its password,
-          enter it to unlock the keychain; if nothing asks, quit and reopen K2. Then choose Try again.
+          enter it to unlock the keychain; if nothing asks, quit and reopen {PRODUCT_NAME}. Then choose Try again.
         </SettingsLoadState>
       </div>
     )
@@ -624,7 +625,7 @@ export function VaultSection({ scope }: { scope: ServerScope }): React.JSX.Eleme
         </SettingsLoadState>
       ) : groups.length === 0 ? (
         <SettingsLoadState kind="empty" title="No secrets yet" testId="vault-empty">
-          Add an API key, password or token with Add secret. You choose the sites K2 may send it to.
+          Add an API key, password or token with Add secret. You choose the sites {PRODUCT_NAME} may send it to.
         </SettingsLoadState>
       ) : (
         groups.map((g) => (
@@ -639,7 +640,7 @@ export function VaultSection({ scope }: { scope: ServerScope }): React.JSX.Eleme
       )}
 
       {system.length > 0 ? (
-        <SettingsGroup title="K2’s own secrets" hint="K2 uses these itself. This page shows their names only." card testId="vault-system">
+        <SettingsGroup title={`${PRODUCT_NAME}’s own secrets`} hint={`${PRODUCT_NAME} uses these itself. This page shows their names only.`} card testId="vault-system">
           {system.map((s) => (
             <SystemRow key={s.id} secret={s} onReveal={() => setDialog({ kind: 'reveal', secret: s })} />
           ))}

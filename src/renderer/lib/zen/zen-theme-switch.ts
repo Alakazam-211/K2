@@ -33,6 +33,7 @@ import { zenLocalScope } from './zen-api'
 import { ZEN_CHORD_LABEL } from './zen-shortcut'
 import { ZenPageParseError, parseZenThemeEntries, type ZenThemeEntry, type ZenThemeScope } from './zen-page'
 import { isEditableTarget } from '@/lib/editable-target'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export { ZEN_SHORTCUTS_MENU_EVENT, dispatchZenShortcutsMenu } from './zen-shortcut'
 
@@ -194,7 +195,7 @@ export function zenShortcutGroups(os: DesktopOs, pageKeys: Partial<ZenPageKeys> 
       ],
     },
     {
-      title: 'The rest of K2',
+      title: `The rest of ${PRODUCT_NAME}`,
       rows: [
         // 0.46.4: ⌃⌘6 is ⌘, and ⌃⌘5 the Wiki tab (no rail view for either).
         { keys: `${cmd},  or  ${pageKeys.settings ?? `${chord}6`}`, what: 'Settings (Zen stays on)' },

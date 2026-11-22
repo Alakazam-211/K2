@@ -11,6 +11,7 @@
 import { getLocalDaemonWs, daemonHttpBase, invalidateDaemonWs } from '@/kessel/daemon-ws'
 import { withRemoteRetry } from '@/lib/remote-retry'
 import { setAccountDbBaseLoader } from './k2-account'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** Ask the local daemon which account server to use. `null` = a daemon
  *  too old to say (it has no override, so the default is right). Throws
@@ -26,7 +27,7 @@ export async function accountDbBaseFromDaemon(): Promise<string | null> {
     invalidateDaemonWs()
     return send()
   }, { onRetry: invalidateDaemonWs })
-  if (!res.ok) throw new Error(`K2 answered HTTP ${res.status}`)
+  if (!res.ok) throw new Error(`${PRODUCT_NAME} answered HTTP ${res.status}`)
   const cfg = (await res.json()) as { accountDbUrl?: unknown }
   return typeof cfg.accountDbUrl === 'string' && cfg.accountDbUrl.trim() ? cfg.accountDbUrl : null
 }

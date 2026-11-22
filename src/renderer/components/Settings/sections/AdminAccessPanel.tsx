@@ -68,6 +68,7 @@ import {
   whoamiGet,
   type PasswordPolicy,
 } from './admin-access-api'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 const ROLE_RANK: Record<string, number> = { owner: 0, admin: 1, member: 2, voice_chat: 3 }
 
@@ -427,14 +428,14 @@ export function AdminAccessPanel(): React.JSX.Element {
         action={<Button onClick={() => void loadAll()}>Try again</Button>}
         testId="admin-access-who-failed"
       >
-        K2 needs your role to show who can sign in here. Try again, or check that this server is running.
+        {PRODUCT_NAME} needs your role to show who can sign in here. Try again, or check that this server is running.
       </SettingsLoadState>
     )
   }
   if (!canManage) {
     return oldHostNoRoles ? (
       <SettingsLoadState kind="empty" title="This server needs an update first" testId="admin-access-old-server">
-        It runs K2 {serverVersion}. Managing people here needs K2 {featureMinVersion('roles')} or later on the server.
+        It runs {PRODUCT_NAME} {serverVersion}. Managing people here needs {PRODUCT_NAME} {featureMinVersion('roles')} or later on the server.
       </SettingsLoadState>
     ) : (
       <SettingsLoadState kind="empty" title="Only an Owner or Admin can change who signs in" testId="admin-access-not-admin">
@@ -464,7 +465,7 @@ export function AdminAccessPanel(): React.JSX.Element {
           action={<Button onClick={() => { setUsersLoad('loading'); void loadUsers() }}>Try again</Button>}
           testId="admin-access-read-failed"
         >
-          Try again in a moment. If it keeps failing, restart K2 on the server. No one’s access has changed.
+          Try again in a moment. If it keeps failing, restart {PRODUCT_NAME} on the server. No one’s access has changed.
         </SettingsLoadState>
       ) : (
         <SettingsGroup
@@ -534,8 +535,8 @@ export function AdminAccessPanel(): React.JSX.Element {
               label={users.length === 0 ? 'Only you so far' : 'No one else yet'}
               hint={
                 users.length === 0
-                  ? 'You own this server. Add a person to let them sign in from their own K2 app.'
-                  : 'Add a person to let them sign in to this server from their own K2 app.'
+                  ? `You own this server. Add a person to let them sign in from their own ${PRODUCT_NAME} app.`
+                  : `Add a person to let them sign in to this server from their own ${PRODUCT_NAME} app.`
               }
               testId="admin-only-you"
             >

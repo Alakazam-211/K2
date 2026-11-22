@@ -10,6 +10,7 @@ import React, { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Button, Callout, DialogFrame, DialogScrim, Input, Radio, Surface } from '@/components/ui'
 import { SETTING_ROW_LABEL } from '../controls/SettingControls'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const DIALOG_LABEL = 'block type-row text-[var(--color-text-primary)] mb-1'
 export const DIALOG_FIELD = 'w-full type-control'
@@ -19,7 +20,7 @@ export const DIALOG_MUTED = 'type-hint text-[var(--color-text-secondary)] leadin
  * A password someone else set is temporary (0.46.6 must-change): said
  * wherever Settings shows or confirms one, when the daemon says so.
  */
-export const MUST_CHANGE_NOTE = 'It’s temporary: the next time they sign in, K2 asks them to choose their own.'
+export const MUST_CHANGE_NOTE = `It’s temporary: the next time they sign in, ${PRODUCT_NAME} asks them to choose their own.`
 
 /** Which edges of a scroll box have content past them. */
 export function useScrollEdges(): {
@@ -372,10 +373,10 @@ export function PasswordResetDialog({
           <ol className={`${DIALOG_MUTED} list-decimal pl-5 space-y-0.5`}>
             <li>{done.password ? 'Copy the password' : 'Take the password you typed'} and send it to {who} somewhere only they can read it.</li>
             <li>{signIn}</li>
-            {done.temporary ? <li>K2 then asks them to choose their own password.</li> : null}
+            {done.temporary ? <li>{PRODUCT_NAME} then asks them to choose their own password.</li> : null}
           </ol>
         </div>
-        {done.password ? <p className={DIALOG_MUTED}>K2 won’t show this password again: once you close this, it’s gone.</p> : null}
+        {done.password ? <p className={DIALOG_MUTED}>{PRODUCT_NAME} won’t show this password again: once you close this, it’s gone.</p> : null}
       </AccessSheet>
     )
   }

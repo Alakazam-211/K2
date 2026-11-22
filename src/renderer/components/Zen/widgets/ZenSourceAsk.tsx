@@ -28,6 +28,7 @@ import {
 } from '@/lib/zen/zen-source-ask'
 import { ZenAskMyAgent } from './ZenGardenEmptyWidget'
 import { ZenOverlay } from './ZenOverlay'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** K2's own bridge for the Ask box: list this computer's agents, open one,
  *  fill its message box. Never handed to a widget frame. */
@@ -77,7 +78,7 @@ function AskBox({ bridge, req, onClose }: { bridge: ZenWidgetBridge; req: ZenSou
             <div className="flex flex-col items-center" style={{ gap: 8 }}>
               <div style={{ fontWeight: 600 }}>Ask an agent about {req.view?.label ?? p?.name ?? req.address}</div>
               <div style={{ color: 'var(--zen-text-muted)', fontSize: '0.9em' }}>
-                K2 writes the question; you read it and send it.{p?.host ? ` This check runs on ${p.host}.` : ''}
+                {PRODUCT_NAME} writes the question; you read it and send it.{p?.host ? ` This check runs on ${p.host}.` : ''}
               </div>
               {phase === 'empty' && (
                 <button type="button" data-zen-soft-button="" className="cursor-pointer" onClick={ask} style={{ padding: '4px 12px', borderRadius: 999 }}>

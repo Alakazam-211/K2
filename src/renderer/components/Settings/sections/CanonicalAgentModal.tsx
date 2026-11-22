@@ -11,6 +11,7 @@ import { CANONICAL_SETUP_SEED, CANONICAL_MANAGE_SEED } from './canonicalAgentSee
 import type { HarnessProbe } from './canonicalState'
 import { harnessStateLabel } from './canonicalState'
 import { primaryScope } from '@/kessel/server-scope'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 // ── Manifest shapes (mirror crates/k2-core/src/workspace/canonical.rs) ──
 interface ManifestEntry {
@@ -133,7 +134,7 @@ export function CanonicalAgentModal({
   const seedSystemPrompt = useMemo(
     () =>
       [
-        `You are the K2 Canonical Agent for the workspace "${projectName}".`,
+        `You are the ${PRODUCT_NAME} Canonical Agent for the workspace "${projectName}".`,
         ``,
         `Source of truth (Model A): .k2/agent/ROLE.md + .k2/PROJECT.md. The per-harness`,
         `files (CLAUDE.md, GEMINI.md, …) are MIRRORS derived from them — never the reverse.`,
@@ -186,7 +187,7 @@ export function CanonicalAgentModal({
       command={agentCommand?.command}
       args={terminalArgs}
       disableSessionResume
-      title={`K2 Canonical Agent — ${projectName} (${mode === 'setup' ? 'Set up' : 'Manage / Undo'})`}
+      title={`${PRODUCT_NAME} Canonical Agent — ${projectName} (${mode === 'setup' ? 'Set up' : 'Manage / Undo'})`}
       instructions={
         mode === 'setup'
           ? 'Unify this workspace’s AI-harness files safely. The agent diagnoses per-harness state, proposes a dry-run plan, and waits for your confirmation before any write.'

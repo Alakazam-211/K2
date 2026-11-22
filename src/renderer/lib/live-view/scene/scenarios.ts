@@ -13,6 +13,7 @@ import { ACTORS, ATLAS, BROOK, SAM } from './wording'
 import { blankState, ensurePeer, pvBlank, SELF, type PreviewEvent, type SimEvent, type SimState, type SimStep } from './sim'
 import { TURN, fromTurn, initTurn, simulateRaw, stepOfLabelAfter, stepOfRev, type Scenario } from './turn'
 import type { Doc } from './types'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const ev = (kind: string, o: Partial<SimEvent> = {}): SimEvent => ({ kind, ...o })
 export const step = (label: string, events: SimEvent[] = [], what = '', extra: Partial<SimStep> = {}): SimStep => ({ at: null, label, events, what, ...extra })
@@ -105,7 +106,7 @@ export function buildStates(): Scenario[] {
       steps: [
         step('rev 63', [ev('follow', { v: false })], 'Live at rev 63.'),
         step('lost', [ev('conn', { v: 'lost' })], 'The socket closed: the picture and list keep rev 63, dimmed, and say they are reconnecting. No presence while away.'),
-        step('gave up', [ev('conn', { v: 'gaveup' })], 'K2 stops retrying after a while: it says so, keeps what you see, and offers Try again.'),
+        step('gave up', [ev('conn', { v: 'gaveup' })], `${PRODUCT_NAME} stops retrying after a while: it says so, keeps what you see, and offers Try again.`),
         step('back', [ev('conn', { v: 'ok' }), ev('toast', { tone: 'ok', text: 'Back live. Nothing changed while you were away.' })], 'Resumed: no changes were missed.'),
       ] },
     { id: 'empty', group: G, title: 'An empty scene',

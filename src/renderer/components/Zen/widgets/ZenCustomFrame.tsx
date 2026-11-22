@@ -79,6 +79,7 @@ import { cycleZenTheme } from '@/lib/zen/zen-theme-switch'
 import { useZenConfigStore, zenLocalScope } from '@/lib/zen/zen-api'
 import { exitZen } from '@/lib/zen/zen-view'
 import { registerZenCanvasFrame, setZenCanvasRegions, startZenCanvasDrag, zenCanvasPointer, zenCanvasPressedWithin } from '@/lib/zen/zen-canvas'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** UW33: one gate for every widget frame in this window (they share the
  *  500 ms budget), acting as K2's own keys would. */
@@ -247,7 +248,7 @@ export function ZenCustomFrame({
         if (bundle.hash !== widget.hash) {
           problemRef.current({
             code: 'failed',
-            message: 'This widget changed while its page was loading. It starts once K2 has read the new version.',
+            message: `This widget changed while its page was loading. It starts once ${PRODUCT_NAME} has read the new version.`,
           })
           return
         }
@@ -257,7 +258,7 @@ export function ZenCustomFrame({
       .catch((err: unknown) => {
         if (!live) return
         if (err instanceof ZenLibError) {
-          problemRef.current({ code: 'failed', message: `This widget needs a library K2 can’t load: ${err.message}` })
+          problemRef.current({ code: 'failed', message: `This widget needs a library ${PRODUCT_NAME} can’t load: ${err.message}` })
           return
         }
         const e = zenWidgetError(err)

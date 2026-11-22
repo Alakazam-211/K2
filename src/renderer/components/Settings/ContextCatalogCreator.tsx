@@ -10,9 +10,9 @@ import remarkGfm from 'remark-gfm'
 import { primaryScope } from '@/kessel/server-scope'
 import { Button } from '@/components/ui'
 import { SettingsLoadState } from './controls/SettingControls'
-import { CLI_NAME } from '@/lib/brand'
+import { CLI_NAME, PRODUCT_NAME } from '@/lib/brand'
 
-const CATALOG_PACK_SYSTEM_PROMPT = `You are authoring a K2 context catalog pack (library), not AGENTS.md, not a skill.
+const CATALOG_PACK_SYSTEM_PROMPT = `You are authoring a ${PRODUCT_NAME} context catalog pack (library), not AGENTS.md, not a skill.
 
 Edit only pack.toml and layer.md in the current directory.
 
@@ -94,7 +94,7 @@ export function ContextCatalogCreator({ packDir, title, onClose }: Props): React
       baseArgs: agentCommand.args,
       systemBrief: agentPrompt,
       userMessage:
-        'Open pack.toml and layer.md in the current directory. You are authoring a K2 context catalog pack (library). Ask what standing orders this pack should encode, then edit those two files only.',
+        `Open pack.toml and layer.md in the current directory. You are authoring a ${PRODUCT_NAME} context catalog pack (library). Ask what standing orders this pack should encode, then edit those two files only.`,
     })
   }, [agentCommand, agentPrompt])
 

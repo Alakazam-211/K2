@@ -31,6 +31,7 @@ import { DataSourceTryTree, TrySummary } from './DataSourceTryTree'
 import { btn, btnPrimary, danger, every, makerLabel, maskQuery, muted, sourcesErrorOf, sourcesErrorText } from './data-sources-ui'
 import { Radio } from '@/components/ui'
 import { SettingDropdown } from '../controls/SettingControls'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** Does a vault secret's site list include this origin? */
 export function secretFitsOrigin(s: Pick<VaultSecret, 'hosts' | 'status'>, origin: string): boolean {
@@ -285,7 +286,7 @@ export function DataSourceReview({
           >
             Add a secret
           </button>
-          {secret && <p className={muted}>K2 sends it only to {origin}. Agents never see it.</p>}
+          {secret && <p className={muted}>{PRODUCT_NAME} sends it only to {origin}. Agents never see it.</p>}
         </div>
       )}
       {secretBound && <p className={`type-hint ${muted}`}>Its address is the vault secret {pending.urlSecret}.</p>}

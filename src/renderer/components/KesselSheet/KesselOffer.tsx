@@ -18,11 +18,12 @@ import { DIALOG_MUTED } from '@/components/Settings/sections/AccessDialogs'
 import type { ServerScope } from '@/kessel/server-scope'
 import { useFirstRunStore, watchFirstRun } from '@/stores/first-run'
 import { openKesselSheet } from '@/stores/kessel-sheet'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** The contract's copy (purpose only). */
 export const KESSEL_OFFER_COPY = {
-  title: 'Meet Kessel, K2’s own agent',
-  line: 'Kessel helps you set up K2, change its settings and look after your agents. First, it helps you hire your Chief of Staff, the lead agent for your own work.',
+  title: `Meet Kessel, ${PRODUCT_NAME}’s own agent`,
+  line: `Kessel helps you set up ${PRODUCT_NAME}, change its settings and look after your agents. First, it helps you hire your Chief of Staff, the lead agent for your own work.`,
   meet: 'Meet Kessel',
   notNow: 'Not now',
 } as const

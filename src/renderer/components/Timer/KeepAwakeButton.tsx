@@ -23,6 +23,7 @@ import {
   TOP_BAR_ICON_REST_CLASS,
   type MugFill,
 } from '@/components/icons/K2Icons'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** While Keep awake is on, re-read the daemon's truth this often (agents
  *  start and stop, the power source changes). Off: no polling. */
@@ -153,7 +154,7 @@ export default function KeepAwakeButton(): React.JSX.Element | null {
   if (roomLabel !== null && (serverState !== 'ok' || unavailable)) {
     const title = unavailable ? `Keep awake: not available on ${roomLabel}` : `Keep awake on ${roomLabel}: unknown`
     const body = unavailable
-      ? `Not available on ${roomLabel}. It runs a K2 from before Keep awake (0.43.0).`
+      ? `Not available on ${roomLabel}. It runs a ${PRODUCT_NAME} from before Keep awake (0.43.0).`
       : serverState === 'offline'
         ? `${roomLabel} is offline, so its Keep awake is unknown.`
         : `Sign in to ${roomLabel} to see its Keep awake.`
@@ -204,7 +205,7 @@ export default function KeepAwakeButton(): React.JSX.Element | null {
     : target.room === null
       ? 'Only an Admin or Owner of this server can change Keep awake.'
       : target.room.readOnly
-        ? `View only: ${roomLabel} runs an older K2.`
+        ? `View only: ${roomLabel} runs an older ${PRODUCT_NAME}.`
         : `Only an Admin or Owner of ${roomLabel} can change this from here.`
 
   const tone = keepAwakeTone(status)

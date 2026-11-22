@@ -15,6 +15,7 @@ import { daemonErrorText } from '@/lib/daemon-error'
 import type { ServerScope } from '@/kessel/server-scope'
 import { Button } from '@/components/ui'
 import { SETTING_ROW_HINT, SETTING_ROW_LABEL, SettingSwitchRow } from '@/components/Settings/controls/SettingControls'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export type FolderTrustState = 'clean' | 'trusted' | 'always' | 'denied' | 'pending' | 'undecided' | 'changed'
 
@@ -69,17 +70,17 @@ export function folderTrustLine(s: FolderTrustStatus): string {
     case 'clean':
       return 'No risky settings found in this folder'
     case 'trusted':
-      return s.decided_by === 'upgrade' ? 'Trusted before K2 checked; K2 asks again if these settings change' : `Trusted this version${by}`
+      return s.decided_by === 'upgrade' ? `Trusted before ${PRODUCT_NAME} checked; ${PRODUCT_NAME} asks again if these settings change` : `Trusted this version${by}`
     case 'always':
       return `Always trusted${by}`
     case 'denied':
-      return `Not trusted${by}: K2 starts no programs here`
+      return `Not trusted${by}: ${PRODUCT_NAME} starts no programs here`
     case 'pending':
       return 'Waiting for you: choose here or on the card in Thread'
     case 'changed':
-      return 'The settings changed since you trusted them; K2 asks at the next start'
+      return `The settings changed since you trusted them; ${PRODUCT_NAME} asks at the next start`
     case 'undecided':
-      return 'Has risky settings; K2 asks at the next start'
+      return `Has risky settings; ${PRODUCT_NAME} asks at the next start`
   }
 }
 

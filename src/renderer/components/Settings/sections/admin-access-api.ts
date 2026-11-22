@@ -15,6 +15,7 @@
 import { getDaemonWs, getLocalDaemonWs, daemonHttpBase, invalidateDaemonWs } from '@/kessel/daemon-ws'
 import { withRemoteRetry } from '@/lib/remote-retry'
 import { primaryScope } from '@/kessel/server-scope'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 async function send(path: string, init: RequestInit): Promise<Response> {
   return withRemoteRetry(async () => {
@@ -173,7 +174,7 @@ export function usernameProblem(raw: string): string | null {
   if (!name) return null
   if (!/^[a-z0-9_-]+$/.test(name)) return 'Use only letters, numbers, - and _.'
   if (name.length < 2) return 'Use at least 2 characters.'
-  if (name === 'owner' || name === 'agent') return `“${name}” is kept for K2 itself. Pick another.`
+  if (name === 'owner' || name === 'agent') return `“${name}” is kept for ${PRODUCT_NAME} itself. Pick another.`
   return null
 }
 

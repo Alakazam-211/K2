@@ -4,6 +4,8 @@
  * `folder_trust_denied` shows the refusal's own sentence in the pane, not
  * the raw JSON body. `null` for any other body.
  */
+import { PRODUCT_NAME } from '@/lib/brand'
+
 export function folderTrustMessage(status: number, body: string): string | null {
   if (status !== 409) return null
   let v: unknown
@@ -19,7 +21,7 @@ export function folderTrustMessage(status: number, body: string): string | null 
   if (message) return message
   const decide = typeof r.decide === 'string' ? r.decide : ''
   return r.error === 'folder_trust_denied'
-    ? `K2 won't start programs in this folder: the owner chose "Don't trust".${decide ? ` ${decide}` : ''}`
+    ? `${PRODUCT_NAME} won't start programs in this folder: the owner chose "Don't trust".${decide ? ` ${decide}` : ''}`
     : `Waiting for the owner to trust this folder.${decide ? ` Decide: ${decide}` : ''}`
 }
 

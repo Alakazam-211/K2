@@ -7,6 +7,7 @@
  */
 
 import { isWebClient } from '@/lib/is-web'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /**
  * First DNS label of the host (customer sub on *.app.k2.dev / *.k2.dev).
@@ -39,14 +40,14 @@ export function k2BasePageTitle(
   hostname?: string | null,
   serverLabel?: string | null,
 ): string {
-  if (!isWebClient()) return `K2 | ${missionControlServerName(serverLabel)}`
+  if (!isWebClient()) return `${PRODUCT_NAME} | ${missionControlServerName(serverLabel)}`
   const sub = webSubdomainLabel(hostname)
   if (!sub || sub === 'localhost') {
     // Local web-serve still gets a clear brand; no fake sub.
-    if (sub === 'localhost') return 'localhost | K2'
-    return 'K2'
+    if (sub === 'localhost') return `localhost | ${PRODUCT_NAME}`
+    return PRODUCT_NAME
   }
-  return `${sub} | K2`
+  return `${sub} | ${PRODUCT_NAME}`
 }
 
 /**

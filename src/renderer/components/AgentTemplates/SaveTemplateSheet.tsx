@@ -36,6 +36,7 @@ import { slugifyAddressToken } from '@/lib/federation'
 import { openCreateAgentSheet, useAgentTemplatesStore } from '@/stores/agent-templates'
 import { ReviewCard, ReviewList, ReviewRow, ReviewSection, TemplateSheetFrame, type ReviewItem } from './TemplateSheetFrame'
 import { contextWords, fileWords, humanize, permissionWords, toolWords } from './review-words'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const SAVE_TEMPLATE_COPY = {
   button: 'Save as template',
@@ -55,14 +56,14 @@ export const SAVE_TEMPLATE_COPY = {
 } as const
 
 /** After step 1 on a server without the save: what happened and what next. */
-export const SAVE_UNSUPPORTED_NEXT = 'Nothing was saved. Update K2 on this server to save templates.'
+export const SAVE_UNSUPPORTED_NEXT = `Nothing was saved. Update ${PRODUCT_NAME} on this server to save templates.`
 /** The id's rule, under its field. */
 export const SAVE_ID_HINT = 'Lowercase letters, numbers and single hyphens. Saving again with the same id makes a new version.'
 
 export const SAVE_TEMPLATE_CLOSE_HELD = 'Can’t close while the template saves'
 
 const SKIP_WHY: Record<string, string> = {
-  k2_managed: 'K2 provides it',
+  k2_managed: `${PRODUCT_NAME} provides it`,
 }
 
 export function idProblem(id: string): string | null {
@@ -366,7 +367,7 @@ export function SaveTemplateSheet({ project, onClose }: { project: { path: strin
               </div>
             ) : notes.length === 0 ? (
               <p className={DIALOG_MUTED} data-testid="save-template-no-notes">
-                {notesError ? 'K2 couldn’t read this agent’s wiki.' : 'This agent has no wiki notes.'}
+                {notesError ? `${PRODUCT_NAME} couldn’t read this agent’s wiki.` : 'This agent has no wiki notes.'}
               </p>
             ) : (
               <Surface chamfer material="tile" className="divide-y divide-[var(--color-border)]" data-testid="save-template-notes">

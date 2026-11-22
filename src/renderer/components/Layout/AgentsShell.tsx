@@ -41,6 +41,7 @@ import GrokBotChatView from '@/components/GrokBots/GrokBotChatView'
 import { useGrokBotsStore } from '@/stores/grokbots'
 import HomeChatView from '@/components/HomeChat/HomeChatView'
 import { useHomeChatStore } from '@/stores/home-chat'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 interface ShellProject {
   name: string
@@ -63,7 +64,7 @@ export function RoomEmptyState({ hint, drawerToggles = false }: { hint: string; 
     >
       {drawerToggles && <NoTabBarDrawerToggles />}
       <div className="text-center">
-        <h2 className="text-lg font-medium text-[var(--color-text-muted)]">K2</h2>
+        <h2 className="text-lg font-medium text-[var(--color-text-muted)]">{PRODUCT_NAME}</h2>
         <p className="text-xs text-[var(--color-text-muted)] mt-2 opacity-60">{hint}</p>
       </div>
     </div>

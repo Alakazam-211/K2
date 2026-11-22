@@ -111,6 +111,7 @@ import { openSendFeedback } from '@/stores/send-feedback'
 import { installBothShifts } from '@/lib/both-shifts'
 import { bootAppStores } from './boot-app-stores'
 import { applyAppZoomToDocument } from '@/lib/app-zoom'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 // The first loads of the stores that come in with the app
 // (boot-app-stores.ts). They ran while the imports above were evaluated.
@@ -295,7 +296,7 @@ function BootSplash(): React.JSX.Element {
           fontFamily: 'var(--font-ui)',
         }}
       >
-        <div style={{ fontSize: '1rem', fontWeight: 500 }}>Setting up K2…</div>
+        <div style={{ fontSize: '1rem', fontWeight: 500 }}>Setting up {PRODUCT_NAME}…</div>
         <div style={{ fontSize: '0.85rem', opacity: 0.7 }}>Applying updates…</div>
         {showReload && (
           <button

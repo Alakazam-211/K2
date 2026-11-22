@@ -17,6 +17,7 @@ import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { DaemonHttpError } from '@/lib/daemon-http-error'
 import { primaryScope } from '@/kessel/server-scope'
 import { onMailChanged } from '@/stores/session-events'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** Home 0.43.2 (Q7) — call `fn` whenever the window's server says its mail
  *  state changed (`mail_changed`: server state, a domain, an approval asked
@@ -859,7 +860,7 @@ export class MailReplyError extends Error {
   /** What K2 was reading, in plain words ("your email accounts"). */
   readonly what: string
   constructor(what: string, why: string) {
-    super(`K2 got an answer it couldn't read while loading ${what} (${why}).`)
+    super(`${PRODUCT_NAME} got an answer it couldn't read while loading ${what} (${why}).`)
     this.name = 'MailReplyError'
     this.what = what
   }

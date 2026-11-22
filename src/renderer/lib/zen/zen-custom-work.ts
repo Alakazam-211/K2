@@ -22,6 +22,7 @@
 
 import type { CatalogErrorCode, CatalogWireError } from '../contract/catalog-types'
 import { CATALOG_ERROR_CODES } from '../contract/catalog-types'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** The daemon rows this file carries. */
 export const ZEN_WORK_VERBS: ReadonlySet<string> = new Set([
@@ -135,7 +136,7 @@ export function createZenCustomWork(deps: ZenCustomWorkDeps): ZenCustomWork {
       } catch (raw) {
         const err = zenWorkErrorFrom(raw)
         if (err.daemonCode !== 'confirm_required' || !err.ask) throw err
-        if (sheetOpen) throw new ZenWorkError('rate_limited', 'K2 is already asking the person about another change.')
+        if (sheetOpen) throw new ZenWorkError('rate_limited', `${PRODUCT_NAME} is already asking the person about another change.`)
         sheetOpen = true
         let yes: boolean
         try {

@@ -39,6 +39,7 @@ import {
 } from '../controls/SettingControls'
 import { ActionNote, readFailure, useActionNote } from './ActionNote'
 import type { SettingEntry } from '../searchManifest'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const VOICE_ROOMS_MANIFEST: SettingEntry[] = [
   {
@@ -74,7 +75,7 @@ export function hostingView(h: VoiceHosting): HostingView | null {
     case 'preview_off':
       return { line: 'Voice rooms are a preview, and they’re off on this server.', tone: 'info' }
     case 'sew_off':
-      return { line: 'Voice rooms need chat and voice, which isn’t on for K2 sign-ins on this server.', tone: 'warn', link: 'chat' }
+      return { line: `Voice rooms need chat and voice, which isn’t on for ${PRODUCT_NAME} sign-ins on this server.`, tone: 'warn', link: 'chat' }
     case 'voice_off':
     case 'sew_start_failed':
       return { line: 'Voice isn’t set up on this server yet.', tone: 'warn', link: 'chat' }
@@ -87,7 +88,7 @@ export function hostingView(h: VoiceHosting): HostingView | null {
       return null
     case 'voice_lane_reconnecting':
     case 'voice_lane_down':
-      return { line: 'Voice is reconnecting to K2’s network. Calls carry on as soon as it’s back.', tone: 'warn' }
+      return { line: `Voice is reconnecting to ${PRODUCT_NAME}’s network. Calls carry on as soon as it’s back.`, tone: 'warn' }
     default:
       return { line: h.line ?? h.detail ?? 'Voice rooms aren’t available right now.', tone: 'warn' }
   }
@@ -96,7 +97,7 @@ export function hostingView(h: VoiceHosting): HostingView | null {
 /** What was wrong with an answer K2 couldn't read, in words. */
 function shapeLine(shape: string): string {
   if (/^the server's answer/.test(shape)) return `${shape.charAt(0).toUpperCase()}${shape.slice(1)}.`
-  return 'Part of the server’s answer wasn’t in a form K2 can read.'
+  return `Part of the server’s answer wasn’t in a form ${PRODUCT_NAME} can read.`
 }
 
 function occupancy(r: VoiceRoom): string {
@@ -261,7 +262,7 @@ export function VoiceRoomsSection(): React.JSX.Element {
   const roomsState = !rooms ? (
     roomsFail ? (
       <SettingsLoadState kind="error" title="Couldn’t load the voice rooms" detail={roomsFail.detail} action={tryAgain} testId="voice-rooms-error">
-        K2 couldn&apos;t read this server&apos;s rooms.
+        {PRODUCT_NAME} couldn&apos;t read this server&apos;s rooms.
         {roomsFail.shape ? <span className="block mt-1 text-[var(--color-text-muted)]">{shapeLine(roomsFail.shape)}</span> : null}
       </SettingsLoadState>
     ) : (
@@ -277,7 +278,7 @@ export function VoiceRoomsSection(): React.JSX.Element {
   const hostingState = !status ? (
     statusFail ? (
       <SettingsLoadState kind="error" title="Couldn’t load the room settings" detail={statusFail.detail} action={tryAgain} testId="voice-rooms-status-error">
-        K2 couldn&apos;t read how many rooms this server hosts.
+        {PRODUCT_NAME} couldn&apos;t read how many rooms this server hosts.
         {statusFail.shape ? <span className="block mt-1 text-[var(--color-text-muted)]">{shapeLine(statusFail.shape)}</span> : null}
       </SettingsLoadState>
     ) : (
@@ -426,12 +427,12 @@ export function VoiceRoomsSection(): React.JSX.Element {
               hint={
                 <span data-testid="voice-rooms-media">
                   {status.mediaTier === 'tunnel'
-                    ? 'Through K2’s tunnel, so this server’s address isn’t published.'
+                    ? `Through ${PRODUCT_NAME}’s tunnel, so this server’s address isn’t published.`
                     : 'Directly. This server’s public address is in DNS and in every join answer, so people in a call can see it.'}
                 </span>
               }
             >
-              <span className="type-row text-[var(--color-text-secondary)]">{status.mediaTier === 'tunnel' ? 'Through K2' : 'Direct'}</span>
+              <span className="type-row text-[var(--color-text-secondary)]">{status.mediaTier === 'tunnel' ? `Through ${PRODUCT_NAME}` : 'Direct'}</span>
             </SettingRow>
           ) : null}
         </SettingsGroup>

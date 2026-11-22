@@ -5,6 +5,7 @@ import { desktopOsFromNavigator, logoOpensAppMenu, showsK2Mark, type DesktopOs }
 import { isWebClient } from '@/lib/is-web'
 import AppMenuPanel from './AppMenuPanel'
 import { DASHBOARD_URL } from '@/lib/hosts'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /**
  * 16×16 K2 mark. Hosted web opens the dashboard.
@@ -58,8 +59,8 @@ function K2Mark({ os }: { os: DesktopOs }): React.JSX.Element {
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         aria-haspopup={opensMenu ? 'menu' : undefined}
         aria-expanded={opensMenu ? open : undefined}
-        title={opensMenu ? 'Menu' : 'K2 dashboard'}
-        aria-label={opensMenu ? 'Menu' : 'Open the K2 dashboard'}
+        title={opensMenu ? 'Menu' : `${PRODUCT_NAME} dashboard`}
+        aria-label={opensMenu ? 'Menu' : `Open the ${PRODUCT_NAME} dashboard`}
       >
         <img src={k2Logo} alt="" className="h-4 w-4" />
       </button>

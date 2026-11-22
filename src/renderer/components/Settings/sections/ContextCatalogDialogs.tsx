@@ -27,6 +27,7 @@ import {
   shortNameFrom,
   shortNameProblem,
 } from './context-catalog-copy'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** New pack: name, short name (made from the name until edited), tags.
  *  Done: it's in the catalog and empty; write it now or later. */
@@ -237,7 +238,7 @@ export function DeletePackDialog({
       }
     >
       <p className={MUTED}>
-        K2 removes it, and what it says, from the catalog. Workspaces that already use it keep their own copy; remove it there in
+        {PRODUCT_NAME} removes it, and what it says, from the catalog. Workspaces that already use it keep their own copy; remove it there in
         Workspaces / Agents → the workspace → Context.
       </p>
       {error ? (

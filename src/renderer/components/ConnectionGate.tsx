@@ -54,7 +54,7 @@ import {
   tokenNotAccepted,
   webBundleReloadUrl,
 } from '@/lib/boot-status-view'
-import { noteReportedBrand } from '@/lib/brand'
+import { noteReportedBrand, PRODUCT_NAME } from '@/lib/brand'
 import { useConnectHostStore, activeHostKey, hostBaseUrl, type ConnectHost } from '@/stores/connect-host'
 import { hostPool, installHostSessionSync, postLogout } from '@/lib/host-pool-instance'
 import { hostIsVoiceChatOnly } from '@/lib/voice-chat-only'
@@ -372,7 +372,7 @@ export function remoteHostPolicy(): AcceptancePolicy {
       if (!protocolInRange(status)) {
         return {
           kind: 'wait',
-          reason: `remote serves protocol ${status.protocolMin ?? '?'}–${status.protocol}; this K2 speaks 1`,
+          reason: `remote serves protocol ${status.protocolMin ?? '?'}–${status.protocol}; this ${PRODUCT_NAME} speaks 1`,
         }
       }
       if (status.phase !== 'ready') {
@@ -1202,7 +1202,7 @@ export function ConnectionGate(): React.ReactElement {
             console.error(
               '[connection-gate] wedge/flap persisted through a page reload for',
               active.hostname,
-              '— surfacing Restart K2',
+              `— surfacing Restart ${PRODUCT_NAME}`,
             )
             wedgeConfirmed = true
             useConnectHostStore.getState().setRecovery({ kind: 'wedged' })
@@ -1808,7 +1808,7 @@ function RecoveryBanner({
               cursor: 'pointer',
             }}
           >
-            Restart K2
+            Restart {PRODUCT_NAME}
           </button>
         )}
         {recovery.kind === 'signin-required' && (
@@ -1869,9 +1869,9 @@ function ConnectingOverlay({
   // A failed App import trumps both — "Connecting…" would be a lie (the
   // daemon accepted; it's the UI bundle that couldn't load).
   const heading = importFailed
-    ? 'K2 failed to load'
+    ? `${PRODUCT_NAME} failed to load`
     : updateCopy ? updateCopy.heading
-    : migrating ? 'Setting up K2…' : 'Connecting…'
+    : migrating ? `Setting up ${PRODUCT_NAME}…` : 'Connecting…'
   const subline = importFailed
     ? 'The app interface could not be loaded.'
     : updateCopy ? updateCopy.subline
@@ -1942,12 +1942,12 @@ function ConnectingOverlay({
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.75rem' }}>
           <div style={{ fontSize: '0.85rem', opacity: 0.75, maxWidth: '440px', textAlign: 'center', lineHeight: 1.5 }}>
             {importFailed
-              ? 'The app failed to load after several attempts. Reloading usually fixes this — if it keeps happening, quit and relaunch K2.'
+              ? `The app failed to load after several attempts. Reloading usually fixes this — if it keeps happening, quit and relaunch ${PRODUCT_NAME}.`
               : updateCopy?.forceReload
                 ? 'After fixing it, reload to connect.'
               : migrating
-                ? 'K2 is still applying updates. This can take a minute on a large upgrade — you can keep waiting, or reload below.'
-                : "Your K2 daemon may still be loading. If you're unsure, quit and relaunch the app, or try reloading with the button below."}
+                ? `${PRODUCT_NAME} is still applying updates. This can take a minute on a large upgrade — you can keep waiting, or reload below.`
+                : `Your ${PRODUCT_NAME} daemon may still be loading. If you're unsure, quit and relaunch the app, or try reloading with the button below.`}
           </div>
           <button
             onClick={() => { window.location.reload() }}

@@ -107,6 +107,7 @@ import { newClientMsgId, POST_IDEMPOTENCY_FEATURE } from '@/components/SessionVi
 import { clientToCssPx } from '@/lib/app-zoom'
 import { PROJECT_BAR_ROW_HEIGHT } from './project-bar-height'
 import { TILE_FOOT_CLIP } from '@/components/ui'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 // Resize-handle hit-area thickness (px), centered on the panel's left
 // border (the dashboard's DIVIDER_HIT_PX idiom).
@@ -516,7 +517,7 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
                 testId="project-chat-error"
                 action={<StateRetry onClick={retryLoad} busy={retrying} />}
               >
-                K2 couldn’t get this project’s messages from the server. Your agents are fine.
+                {PRODUCT_NAME} couldn’t get this project’s messages from the server. Your agents are fine.
               </ProjectStateCard>
             ) : (
               <ProjectStateCard kind="loading" title="Loading the chat…" testId="project-chat-loading" />

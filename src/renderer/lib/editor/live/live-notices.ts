@@ -183,9 +183,9 @@ function connection(n: Extract<EditorLiveNotice, { kind: 'connection' }>): LiveN
   const so = n.offline > 0 ? ` ${plural(n.offline, 'offline edit')} so far.` : ''
   switch (n.state) {
     case 'reconnecting':
-      return { tone: 'warn', role: 'status', icon: 'offline', title: `Connection lost; K2 keeps trying.${so}`, line: OFFLINE_LINE, actions: [{ id: 'retry', label: 'Retry now' }], closable: false }
+      return { tone: 'warn', role: 'status', icon: 'offline', title: `Connection lost; ${PRODUCT_NAME} keeps trying.${so}`, line: OFFLINE_LINE, actions: [{ id: 'retry', label: 'Retry now' }], closable: false }
     case 'trying':
-      return { tone: 'info', role: 'status', icon: 'info', busy: true, title: 'Trying to reach the server now.', line: OFFLINE_LINE, actions: [{ id: 'retry', label: 'Trying now', disabled: true, hint: 'K2 is trying now' }], closable: false }
+      return { tone: 'info', role: 'status', icon: 'info', busy: true, title: 'Trying to reach the server now.', line: OFFLINE_LINE, actions: [{ id: 'retry', label: 'Trying now', disabled: true, hint: `${PRODUCT_NAME} is trying now` }], closable: false }
     case 'cant':
       return {
         tone: 'bad',
@@ -220,9 +220,9 @@ export function liveNoticeView(n: EditorLiveNotice, fileName: string): LiveNotic
         tone: 'info',
         role: 'status',
         icon: 'info',
-        title: 'Saved outside K2. Its changes are merged in.',
-        line: 'Where you both changed the same lines, K2 kept both versions for you to tidy.',
-        actions: [COMPARE(n.comparing), UNDO_THEIRS, { id: 'use-theirs', label: 'Use their version', hint: 'Takes the file as it was saved outside K2. Your words stay in History, and Undo brings them back' }],
+        title: `Saved outside ${PRODUCT_NAME}. Its changes are merged in.`,
+        line: `Where you both changed the same lines, ${PRODUCT_NAME} kept both versions for you to tidy.`,
+        actions: [COMPARE(n.comparing), UNDO_THEIRS, { id: 'use-theirs', label: 'Use their version', hint: `Takes the file as it was saved outside ${PRODUCT_NAME}. Your words stay in History, and Undo brings them back` }],
         closable: true,
       }
     case 'confirm-undo-theirs':
@@ -230,17 +230,17 @@ export function liveNoticeView(n: EditorLiveNotice, fileName: string): LiveNotic
     case 'undid-theirs':
       return { tone: 'info', role: 'status', icon: 'history', title: 'Put back the text from before that save.', line: 'Their save stays in History.', actions: [{ id: 'redo', label: 'Redo' }], closable: true }
     case 'used-theirs':
-      return { tone: 'info', role: 'status', icon: 'history', title: 'Using the version saved outside K2.', line: 'Your words are in History. Undo brings them back.', actions: [{ id: 'undo', label: 'Undo' }], closable: true }
+      return { tone: 'info', role: 'status', icon: 'history', title: `Using the version saved outside ${PRODUCT_NAME}.`, line: 'Your words are in History. Undo brings them back.', actions: [{ id: 'undo', label: 'Undo' }], closable: true }
     case 'theirs-gone':
-      return { tone: 'warn', role: 'alert', icon: 'warn', title: 'K2 no longer has the text of that save.', line: 'A newer save came, or K2 restarted. Compare, or undo their save.', actions: [COMPARE(n.comparing), UNDO_THEIRS], closable: true }
+      return { tone: 'warn', role: 'alert', icon: 'warn', title: `${PRODUCT_NAME} no longer has the text of that save.`, line: `A newer save came, or ${PRODUCT_NAME} restarted. Compare, or undo their save.`, actions: [COMPARE(n.comparing), UNDO_THEIRS], closable: true }
     case 'before-failed':
-      return { tone: 'bad', role: 'alert', icon: 'bad', title: 'K2 couldn’t load the text from before that save.', line: 'The merged text is still here. Try again in a moment.', actions: [{ id: 'retry-before', label: 'Retry', primary: true }], closable: true }
+      return { tone: 'bad', role: 'alert', icon: 'bad', title: `${PRODUCT_NAME} couldn’t load the text from before that save.`, line: 'The merged text is still here. Try again in a moment.', actions: [{ id: 'retry-before', label: 'Retry', primary: true }], closable: true }
     case 'before-gone':
-      return { tone: 'warn', role: 'alert', icon: 'warn', title: 'K2 no longer has the text from before that save.', line: 'The merged text is still here, and History may have that version.', actions: [], closable: true }
+      return { tone: 'warn', role: 'alert', icon: 'warn', title: `${PRODUCT_NAME} no longer has the text from before that save.`, line: 'The merged text is still here, and History may have that version.', actions: [], closable: true }
     case 'theirs-failed':
       return { tone: 'bad', role: 'alert', icon: 'bad', title: `Couldn’t use their version: ${n.reason}.`, line: 'The merged text is still here.', actions: [{ id: 'use-theirs', label: 'Retry', primary: true }], closable: true }
     case 'missing':
-      return { tone: 'warn', role: 'alert', icon: 'warn', title: `${fileName} was deleted or moved outside K2.`, line: 'Your text is still here. Save it again to keep working on it.', actions: [{ id: 'save-again', label: 'Save it again', primary: true }], closable: false }
+      return { tone: 'warn', role: 'alert', icon: 'warn', title: `${fileName} was deleted or moved outside ${PRODUCT_NAME}.`, line: 'Your text is still here. Save it again to keep working on it.', actions: [{ id: 'save-again', label: 'Save it again', primary: true }], closable: false }
     case 'save-failed':
       return { tone: 'bad', role: 'alert', icon: 'bad', title: `Couldn’t save ${fileName}: ${n.reason}.`, line: 'Your text is still here.', actions: [{ id: 'save-again', label: 'Retry', primary: true }], closable: false }
     case 'declined':
@@ -248,13 +248,13 @@ export function liveNoticeView(n: EditorLiveNotice, fileName: string): LiveNotic
         tone: 'bad',
         role: 'alert',
         icon: 'warn',
-        title: 'Saved outside K2 as something K2 can’t edit live.',
+        title: `Saved outside ${PRODUCT_NAME} as something ${PRODUCT_NAME} can’t edit live.`,
         line: `${n.message.trim() ? `${n.message.trim().replace(/[.\s]+$/, '')}. ` : ''}Live edits are paused. This is the last good version.`,
         actions: [{ id: 'save-again', label: 'Restore this version', primary: true, hint: `Saves this text as ${fileName} again` }],
         closable: false,
       }
     case 'note':
-      return { tone: 'warn', role: 'alert', icon: 'warn', title: 'A save outside K2 removed some of your text.', line: 'It’s in History too. The rest of the save is merged in.', actions: [{ id: 'copy-note', label: n.copied ? 'Copied' : 'Copy my text' }], closable: true }
+      return { tone: 'warn', role: 'alert', icon: 'warn', title: `A save outside ${PRODUCT_NAME} removed some of your text.`, line: 'It’s in History too. The rest of the save is merged in.', actions: [{ id: 'copy-note', label: n.copied ? 'Copied' : 'Copy my text' }], closable: true }
     case 'read-only':
       return { tone: 'info', role: 'status', icon: 'info', title: `Read only: you can view ${fileName} but not edit it.`, line: `${askAccess(n.owner)}.`, actions: [], closable: true }
     case 'live-off':

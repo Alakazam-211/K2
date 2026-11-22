@@ -12,6 +12,7 @@ import { Input } from '@/components/ui/Input'
 import { SearchField } from '@/components/ui/SearchField'
 import { floatMaterial, MENU_LIST, MENU_ROW } from '@/components/ui/float-material'
 import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const BOARD_FILE_EXT = '.k5board'
 
@@ -372,7 +373,7 @@ function BoardMenu(props: {
             <div role="status" className="type-control px-3 py-1.5 text-[var(--color-text-muted)]">Loading boards…</div>
           ) : list.kind === 'error' ? (
             <div className="flex items-center gap-2 px-3 py-1.5 type-control text-[var(--color-text-secondary)]" data-testid="board-file-menu-error">
-              <span>K2 couldn’t list your boards.</span>
+              <span>{PRODUCT_NAME} couldn’t list your boards.</span>
               <button type="button" role="menuitem" {...ROW} className={`${ITEM} !w-auto !px-1 underline`} onClick={() => setTries((n) => n + 1)}>
                 Try again
               </button>

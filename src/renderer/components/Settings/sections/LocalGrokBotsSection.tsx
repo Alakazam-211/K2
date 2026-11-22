@@ -36,6 +36,7 @@ import {
 } from '@/lib/grokbots'
 import { useGrokBotsStore } from '@/stores/grokbots'
 import { StatusDot, type HealthTone } from './ConnectionsParts'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const LOCAL_GROKBOTS_MANIFEST: SettingEntry[] = [
   {
@@ -44,15 +45,15 @@ export const LOCAL_GROKBOTS_MANIFEST: SettingEntry[] = [
     label: 'Show Grok Bots',
     description: 'Detect Grok Bot agents on this server and show their chats in Agents and Home',
     keywords: ['grok', 'grok bot', 'grokbot', 'sand', 'agents', 'external', 'detect', 'local'],
-    group: 'What K2 may do',
+    group: `What ${PRODUCT_NAME} may do`,
   },
   {
     id: 'grokbots.send',
     section: 'local-grokbots',
     label: 'Send to Grok Bots',
-    description: 'Let people send messages to Grok Bot agents from K2 (billed Grok turns)',
+    description: `Let people send messages to Grok Bot agents from ${PRODUCT_NAME} (billed Grok turns)`,
     keywords: ['grok', 'grok bot', 'grokbot', 'send', 'message', 'billed'],
-    group: 'What K2 may do',
+    group: `What ${PRODUCT_NAME} may do`,
   },
 ]
 
@@ -182,7 +183,7 @@ export function LocalGrokBotsSection(): React.JSX.Element {
       const ok = await useConfirmDialogStore.getState().confirm({
         title: 'Let people message Grok Bot agents?',
         message:
-          'The owner and admins can then send messages to Grok Bot agents from K2. Each message runs a billed Grok turn and is sent as the person typing. You can turn this off at any time.',
+          `The owner and admins can then send messages to Grok Bot agents from ${PRODUCT_NAME}. Each message runs a billed Grok turn and is sent as the person typing. You can turn this off at any time.`,
         confirmLabel: 'Turn on sending',
       })
       if (!ok) return
@@ -219,10 +220,10 @@ export function LocalGrokBotsSection(): React.JSX.Element {
     !canEdit || settings.show || found?.installed
       ? null
       : findError
-        ? 'You can turn this on once K2 can check this computer for Grok Bot.'
+        ? `You can turn this on once ${PRODUCT_NAME} can check this computer for Grok Bot.`
         : found
           ? 'You can turn this on once Grok Bot is installed on this computer.'
-          : 'You can turn this on once K2 has finished looking for Grok Bot.'
+          : `You can turn this on once ${PRODUCT_NAME} has finished looking for Grok Bot.`
 
   const foundState = !canEdit ? undefined : findError ? (
     <SettingsLoadState
@@ -232,7 +233,7 @@ export function LocalGrokBotsSection(): React.JSX.Element {
       action={<Button onClick={look}>Try again</Button>}
       testId="grokbots-find-error"
     >
-      Nothing was read or changed; K2 just couldn’t look on this computer.
+      Nothing was read or changed; {PRODUCT_NAME} just couldn’t look on this computer.
     </SettingsLoadState>
   ) : found === null ? (
     <SettingsLoadState kind="loading" title="Looking for Grok Bot on this computer…" testId="grokbots-looking" />
@@ -242,7 +243,7 @@ export function LocalGrokBotsSection(): React.JSX.Element {
     <div className={PAGE} data-testid="local-grokbots-settings">
       <Header readOnly={!canEdit} />
 
-      <SettingsGroup title="What K2 found" card state={foundState} testId="grokbots-found-group">
+      <SettingsGroup title={`What ${PRODUCT_NAME} found`} card state={foundState} testId="grokbots-found-group">
         {!canEdit ? (
           <StatusRow
             tone={settings.show ? 'ok' : 'neutral'}
@@ -251,7 +252,7 @@ export function LocalGrokBotsSection(): React.JSX.Element {
           >
             {settings.show
               ? 'Its agents and their chats appear in Agents and on Home, tagged Grok Bot.'
-              : 'Its agents and chats stay out of K2.'}
+              : `Its agents and chats stay out of ${PRODUCT_NAME}.`}
           </StatusRow>
         ) : found && found.installed ? (
           <StatusRow tone="ok" title="Grok Bot is on this computer" testId="grokbots-found">
@@ -269,13 +270,13 @@ export function LocalGrokBotsSection(): React.JSX.Element {
             testId="grokbots-not-found"
             action={<Button onClick={look}>Check again</Button>}
           >
-            K2 looked in <code className={PATH}>{found.dataPath}</code> and found nothing. Install Grok Bot for the user K2
+            {PRODUCT_NAME} looked in <code className={PATH}>{found.dataPath}</code> and found nothing. Install Grok Bot for the user {PRODUCT_NAME}
             runs as, then check again.
           </StatusRow>
         ) : null}
       </SettingsGroup>
 
-      <SettingsGroup title="What K2 may do" card testId="grokbots-switches">
+      <SettingsGroup title={`What ${PRODUCT_NAME} may do`} card testId="grokbots-switches">
         <SettingSwitchRow
           settingId="grokbots.show"
           control={
@@ -296,7 +297,7 @@ export function LocalGrokBotsSection(): React.JSX.Element {
         >
           <div className={SETTING_ROW_LABEL}>{SHOW_LABEL}</div>
           <div className={SETTING_ROW_HINT}>
-            List its agents in Agents and on Home and read their chats, for the user K2 runs as. Agents and App guests
+            List its agents in Agents and on Home and read their chats, for the user {PRODUCT_NAME} runs as. Agents and App guests
             never see them.
           </div>
           {showWaits && (
@@ -326,7 +327,7 @@ export function LocalGrokBotsSection(): React.JSX.Element {
         >
           <div className={SETTING_ROW_LABEL}>{SEND_LABEL}</div>
           <div className={SETTING_ROW_HINT}>
-            The owner and admins can message Grok Bot agents from K2. Each message runs a billed Grok turn and is sent as the
+            The owner and admins can message Grok Bot agents from {PRODUCT_NAME}. Each message runs a billed Grok turn and is sent as the
             person typing.
             {canEdit && !settings.show && (
               <span className="block mt-1" data-testid="grokbots-send-needs-show">

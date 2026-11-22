@@ -40,6 +40,8 @@
 // storage never pauses (and never loops worse than before this feature).
 
 /** Healthy heartbeats after which a mount counts as having started fine. */
+import { PRODUCT_NAME } from '@/lib/brand'
+
 export const ZEN_WIDGETS_HEALTHY_BEATS = 3
 
 /** After K2 relaunched a Garden's widgets on its own, another freeze within
@@ -233,7 +235,7 @@ export function takeZenPausedAtBoot(
   const marker = readZenWidgetsRunning(label, storage)
   pausedAtBoot = zenPausedStartDecision(marker, reloadNote, now)
   autoAtBoot = zenAutoRelaunch(marker, reloadNote, now)
-  if (autoAtBoot) console.info(`[zen] K2 restarted while ${autoAtBoot.garden}'s widgets were running: relaunching them`)
+  if (autoAtBoot) console.info(`[zen] ${PRODUCT_NAME} restarted while ${autoAtBoot.garden}'s widgets were running: relaunching them`)
   write(label, null, storage)
   bootTaken = true
   resolveReady()

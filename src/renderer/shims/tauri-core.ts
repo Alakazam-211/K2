@@ -15,6 +15,7 @@ import {
   writeConnectHostsStorage,
 } from '../lib/connect-hosts-storage'
 import { WEB_SECRET_STORAGE_PREFIX } from '../web/session-token'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /**
  * The one keychain service the web build keeps (in memory): Connect
@@ -84,7 +85,7 @@ function storageSetConnectHosts(json: string): void {
 function defaultFor(cmd: string): unknown {
   switch (cmd) {
     case 'plugin:app|name':
-      return 'K2'
+      return PRODUCT_NAME
     case 'plugin:app|version':
     case 'get_current_version':
       return (

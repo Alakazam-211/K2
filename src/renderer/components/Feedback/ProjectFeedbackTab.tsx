@@ -14,6 +14,7 @@ import type { ProjectGroupMemberInfo } from '@/components/Projects/projects-api'
 import { fetchAllFeedback, type FeedbackListRow, type FeedbackProjectRef } from './feedback-api'
 import { TicketBoard } from './TicketBoard'
 import { ProjectStateCard, StateCanvas, StateRetry } from '@/components/Projects/StateCard'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** The empty tab's icon (a ticket is an agent's question for a person). */
 function AskIcon(): React.JSX.Element {
@@ -108,7 +109,7 @@ export function ProjectFeedbackTab({
           testId="project-feedback-error"
           action={<StateRetry onClick={retry} busy={retrying} />}
         >
-          K2 couldn’t get them from the server. Your agents are fine.
+          {PRODUCT_NAME} couldn’t get them from the server. Your agents are fine.
         </ProjectStateCard>
       </StateCanvas>
     )

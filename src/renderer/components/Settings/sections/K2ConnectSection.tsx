@@ -69,6 +69,7 @@ import { onTunnelIdentityChanged } from '@/stores/session-events'
 import { runTunnelSwitch, type TunnelSwitchProgress } from '../lib/tunnel-switch'
 import { isAirgap } from '@/lib/airgap'
 import { boxHost } from '@/lib/hosts'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** POST /cli/tunnel/config body for a subdomain bind (account flow). No
  *  relay address: like `k2 connect login`, a bind never pins one, so the
@@ -168,7 +169,7 @@ function getDeviceId(): string {
 
 export const K2_CONNECT_MANIFEST: SettingEntry[] = [
   { id: 'k2-connect.start-stop', section: 'k2-connect', label: 'Tunnel status', description: 'Whether this server can be reached from the internet, at which address; turn the tunnel on or off', keywords: ['start', 'stop', 'turn on', 'turn off', 'tunnel', 'expose', 'connect', 'reachable', 'status'] },
-  { id: 'k2-connect.auto-start', section: 'k2-connect', label: 'Turn on again after a restart', description: 'The tunnel comes back on by itself when K2 or this computer restarts', keywords: ['auto', 'autostart', 'restart', 'reconnect', 'boot', 'relaunch'] },
+  { id: 'k2-connect.auto-start', section: 'k2-connect', label: 'Turn on again after a restart', description: `The tunnel comes back on by itself when ${PRODUCT_NAME} or this computer restarts`, keywords: ['auto', 'autostart', 'restart', 'reconnect', 'boot', 'relaunch'] },
   { id: 'k2-connect.account-login', section: 'k2-connect', label: 'k2.dev account', description: 'Sign in to choose the address this server uses', keywords: ['login', 'sign in', 'account', 'k2.dev', 'email', 'password'] },
   { id: 'k2-connect.subdomain-list', section: 'k2-connect', label: 'Address', description: 'The k2.dev address this server uses on the internet', keywords: ['subdomain', 'address', 'purchased', 'list', 'bind', 'select', 'switch'] },
   { id: 'k2-connect.urls', section: 'k2-connect', label: 'Addresses', description: "This server's address and the sites it publishes under it", keywords: ['urls', 'nested', 'subdomains', 'sites', 'routing', 'targets', 'ports', 'workspace', 'publish'] },
@@ -1138,7 +1139,7 @@ export function K2ConnectSection({
             testId="tunnel-status-error"
             action={<Button onClick={() => void reloadTunnel()}>Try again</Button>}
           >
-            K2 couldn&apos;t read this computer&apos;s tunnel status.
+            {PRODUCT_NAME} couldn&apos;t read this computer&apos;s tunnel status.
           </SettingsLoadState>
         ) : (
           <>
@@ -1221,7 +1222,7 @@ export function K2ConnectSection({
               label="Turn on again after a restart"
               hint={
                 <>
-                  When K2 or this computer restarts, the tunnel comes back on by itself.
+                  When {PRODUCT_NAME} or this computer restarts, the tunnel comes back on by itself.
                   <SaveError state={autoStartSave.state} />
                 </>
               }

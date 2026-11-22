@@ -95,6 +95,7 @@ import { isAirgap } from '@/lib/airgap'
 import { escOwnedByDialog } from './settings-esc'
 import { useAppApprovalsStore } from '@/stores/app-approvals'
 import { useTopBarFit } from '@/components/TopBar/top-bar-fit'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 // ── Section nav ──────────────────────────────────────────────────────
 // Top-level items, then titled groups with indented children.
@@ -270,7 +271,7 @@ export function settingsNav({
         { id: 'k2-connect', label: 'Tunnel', hide: hideTunnel },
         { id: 'domains', label: 'Custom Domains' },
         { id: 'connections', label: 'Connected Servers' },
-        { id: 'companion', label: 'K2 Companion' },
+        { id: 'companion', label: `${PRODUCT_NAME} Companion` },
         // homes-sync-v1 (0.46.1): your groups between this computer and your
         // phone; the devices syncing from this server, with Remove.
         { id: 'homes-sync', label: 'Home Sync' },

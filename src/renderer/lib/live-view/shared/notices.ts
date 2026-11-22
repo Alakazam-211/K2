@@ -16,6 +16,7 @@
 
 import type { OutsideSaveFrame } from '@k2/mpc-client'
 import { plural } from './people'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** An outside save as the shell needs it: the kit's frame without its envelope.
  *  `kept_both.copy.doc` is filled once the host knows the copy's document. */
@@ -93,21 +94,21 @@ function view(tone: NoticeView['tone'], role: NoticeView['role'], title: string,
 function saveView(save: OutsideSave, ctx: NoticeContext): NoticeView {
   switch (save.outcome) {
     case 'ingested':
-      return view('info', 'status', 'Saved outside K2 · now in the live file', 'The changes show as an outside change.', [DISMISS])
+      return view('info', 'status', `Saved outside ${PRODUCT_NAME} · now in the live file`, 'The changes show as an outside change.', [DISMISS])
     case 'kept_both':
       return save.copy
-        ? view('warn', 'alert', 'Saved outside K2: that save is now live.', 'What was live before is kept as a copy.', [
+        ? view('warn', 'alert', `Saved outside ${PRODUCT_NAME}: that save is now live.`, 'What was live before is kept as a copy.', [
             { id: 'open-copy', label: 'Open the copy', primary: true },
             { id: 'history', label: 'History' },
             DISMISS,
           ])
-        : view('warn', 'alert', 'Saved outside K2: that save is now live.', 'What was live before is kept in History.', [{ id: 'history', label: 'History' }, DISMISS])
+        : view('warn', 'alert', `Saved outside ${PRODUCT_NAME}: that save is now live.`, 'What was live before is kept in History.', [{ id: 'history', label: 'History' }, DISMISS])
     case 'declined':
-      return view('bad', 'alert', 'Saved outside K2, and the file can’t be live any more.', `${save.message.trim() || 'K2 can’t watch this save live.'} Edits are paused.`, [
+      return view('bad', 'alert', `Saved outside ${PRODUCT_NAME}, and the file can’t be live any more.`, `${save.message.trim() || `${PRODUCT_NAME} can’t watch this save live.`} Edits are paused.`, [
         { id: 'open-saved-file', label: 'Open the saved file', primary: true },
       ])
     case 'missing':
-      return view('warn', 'alert', `${ctx.fileName} was moved or deleted outside K2.`, 'The live version is kept. Save it again to keep working on it.', [
+      return view('warn', 'alert', `${ctx.fileName} was moved or deleted outside ${PRODUCT_NAME}.`, 'The live version is kept. Save it again to keep working on it.', [
         { id: 'save-again', label: 'Save it again', primary: true },
       ])
   }
@@ -121,7 +122,7 @@ function connectionView(n: Extract<LiveNotice, { kind: 'connection' }>, ctx: Not
     case 'trying':
       return view('info', 'status', 'Reconnecting…', 'Trying again now…', [{ id: 'retry', label: 'Trying…', disabled: true }], true)
     case 'cant':
-      return view('bad', 'alert', 'Can’t reach this file’s server.', `${n.retried ? 'Tried again just now: still no answer. ' : ''}K2 stopped trying. You see things as they were; anything new shows when you’re back.`, [
+      return view('bad', 'alert', 'Can’t reach this file’s server.', `${n.retried ? 'Tried again just now: still no answer. ' : ''}${PRODUCT_NAME} stopped trying. You see things as they were; anything new shows when you’re back.`, [
         { id: 'retry', label: 'Retry', primary: true },
         { id: 'open-saved-file', label: 'Open the saved file' },
       ])

@@ -45,6 +45,7 @@ import {
   StatusDot,
   appStateWords,
 } from './apps-ui'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const SKIN_ACCESS_MANIFEST: SettingEntry[] = [
   {
@@ -822,7 +823,7 @@ export function SkinAccessSection(): React.JSX.Element {
     }
     if (failures.length) {
       setError({
-        what: 'K2 couldn’t read everything on this page',
+        what: `${PRODUCT_NAME} couldn’t read everything on this page`,
         next: 'What did load is shown. Try again in a moment.',
         detail: failures.join(' · '),
       })
@@ -1789,7 +1790,7 @@ export function SkinAccessSection(): React.JSX.Element {
                       ) : null}
                       {mintedSecret ? (
                         <Callout tone="warn" className="type-hint space-y-2" data-testid="apps-token-secret">
-                          <p className="font-medium">Copy this key now. K2 can&rsquo;t show it again.</p>
+                          <p className="font-medium">Copy this key now. {PRODUCT_NAME} can&rsquo;t show it again.</p>
                           <code className="block break-all select-all text-[var(--color-text-primary)]">{mintedSecret}</code>
                           <Button
                             onClick={() => {

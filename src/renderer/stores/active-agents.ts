@@ -37,7 +37,7 @@ import {
   type ActivityDisplay,
   type ActivityRow,
 } from './activity'
-import { CLI_NAME } from '@/lib/brand'
+import { CLI_NAME, PRODUCT_NAME } from '@/lib/brand'
 
 // prd-daemon-activity-and-thread-working-v1 S5 (RL9): this store no longer
 // decides what an agent is doing. The daemon does (`stores/activity.ts`
@@ -457,7 +457,7 @@ export function startAgentPolling(): void {
       if (failures.length === 0) return
       const clis = failures.map((f) => f.cli).join(', ')
       useToastStore.getState().addToast(
-        `K2 couldn't install its hooks for ${clis}. Run \`${CLI_NAME} hooks status\` for details.`,
+        `${PRODUCT_NAME} couldn't install its hooks for ${clis}. Run \`${CLI_NAME} hooks status\` for details.`,
         'warning',
         10000,
       )

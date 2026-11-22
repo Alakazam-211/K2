@@ -17,6 +17,7 @@ import {
   type FeedbackSettings,
 } from '@/lib/product-feedback'
 import { openSendFeedback } from '@/stores/send-feedback'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 function Row({
   id,
@@ -83,7 +84,7 @@ export function SendFeedbackRows(): React.JSX.Element | null {
       <h3 className="type-section uppercase tracking-wider text-[var(--color-text-muted)] m-0 mb-1">Send feedback</h3>
       <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]">
         <p className="type-hint text-[var(--color-text-muted)] m-0 mr-3">
-          Tell Alakazam Labs, who make K2, about a bug or an idea: the button next to Help, or Send Feedback… in the menu.
+          Tell Alakazam Labs, who make {PRODUCT_NAME}, about a bug or an idea: the button next to Help, or Send Feedback… in the menu.
         </p>
         <button
           type="button"
@@ -96,7 +97,7 @@ export function SendFeedbackRows(): React.JSX.Element | null {
       {s && s.rememberDiagnostics !== null ? (
         <Row
           id="remember"
-          label="Start with K2 details ticked"
+          label={`Start with ${PRODUCT_NAME} details ticked`}
           hint="Your own choice on this server. You still see what is included and can untick it every time."
           checked={s.rememberDiagnostics === true}
           onChange={(v) => void save({ rememberDiagnostics: v })}
@@ -106,21 +107,21 @@ export function SendFeedbackRows(): React.JSX.Element | null {
         <>
           <Row
             id="enabled"
-            label="Allow sending feedback to K2"
+            label={`Allow sending feedback to ${PRODUCT_NAME}`}
             hint="Off: the button only offers Copy as text. Air-gap always turns it off."
             checked={s.enabled}
             onChange={(v) => void save({ enabled: v })}
           />
           <Row
             id="agents"
-            label="Agents may send feedback to K2"
+            label={`Agents may send feedback to ${PRODUCT_NAME}`}
             hint="At most 1 a minute and 3 a day per workspace, 10 a day for the server. You see theirs in the Sent tab."
             checked={s.agents}
             onChange={(v) => void save({ agents: v })}
           />
           <Row
             id="agent-diagnostics"
-            label="Agents may include K2 details"
+            label={`Agents may include ${PRODUCT_NAME} details`}
             hint="An agent can't consent for you. On: an agent's feedback may carry the same scrubbed details a person can preview."
             checked={s.agentDiagnostics}
             onChange={(v) => void save({ agentDiagnostics: v })}

@@ -12,6 +12,8 @@
 // No runtime imports: the gate, the pool and the stores all read this.
 
 /** The role's wire string. */
+import { PRODUCT_NAME } from '@/lib/brand'
+
 export const VOICE_CHAT_ROLE = 'voice_chat'
 
 /** `/boot-status` `features`: the server knows the role (Settings offers it
@@ -68,7 +70,7 @@ export function isRoleRequired(status: number, body: string): boolean {
 /** The gate screen's copy (§8.3). The web client can't carry a call. */
 export function voiceChatGateText(server: string, web: boolean): string {
   return web
-    ? `${server} gives you Voice & Chat only. You can't open this server or talk to its agents. Use the K2 desktop app to join its voice rooms.`
+    ? `${server} gives you Voice & Chat only. You can't open this server or talk to its agents. Use the ${PRODUCT_NAME} desktop app to join its voice rooms.`
     : `${server} gives you Voice & Chat only. Join its rooms from the headset. You can't open this server or talk to its agents.`
 }
 

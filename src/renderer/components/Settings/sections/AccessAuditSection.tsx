@@ -33,6 +33,7 @@ import {
 import { auditDetail, auditFields, auditWhat, auditWho, auditWhoText, type DetailContext } from './access-audit-words'
 import { localWhen, localWhenFull } from '../shared/local-time'
 import { useProjectsStore } from '@/stores/projects'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const ACCESS_AUDIT_MANIFEST: SettingEntry[] = [
   {
@@ -266,7 +267,7 @@ export function AccessAuditSection(): React.JSX.Element {
   const gate =
     view.kind === 'old-host' ? (
       <SettingsLoadState kind="empty" title="This server can’t show its sign-in history yet" testId="audit-old-host">
-        Update K2 on this server, then come back here to see who signed in.
+        Update {PRODUCT_NAME} on this server, then come back here to see who signed in.
       </SettingsLoadState>
     ) : view.kind === 'owner-only' ? (
       <SettingsLoadState kind="empty" title="Only the server’s owner can see this" testId="audit-owner-only">
@@ -278,8 +279,8 @@ export function AccessAuditSection(): React.JSX.Element {
       </SettingsLoadState>
     ) : view.kind === 'error' ? (
       <SettingsLoadState kind="error" title="Sign-in history couldn’t load" detail={view.message} action={tryAgain} testId="audit-error">
-        K2 couldn’t open this server’s access log, so there is nothing to show yet. Nothing in it is lost. Try again in a
-        moment; if it keeps failing, restart K2 on that server.
+        {PRODUCT_NAME} couldn’t open this server’s access log, so there is nothing to show yet. Nothing in it is lost. Try again in a
+        moment; if it keeps failing, restart {PRODUCT_NAME} on that server.
       </SettingsLoadState>
     ) : view.kind === 'loading' ? (
       <SettingsLoadState kind="loading" title="Loading sign-in history…" testId="audit-loading">

@@ -8,7 +8,7 @@
 // The chat pane shows this line instead, naming the program and the server.
 
 import { LOCAL_SCOPE_LABEL } from '@/kessel/server-scope'
-import { CLI_NAME } from '@/lib/brand'
+import { CLI_NAME, PRODUCT_NAME } from '@/lib/brand'
 
 const PTYD_ENOENT = /enoent:\s*([^\s:]+):\s*not found on the child PATH/i
 const PORTABLE_PTY_ENOENT = /Unable to spawn\s+(\S+)\s+because it doesn't exist on the filesystem/i
@@ -29,7 +29,7 @@ export function isMainChatMissing(raw: string): boolean {
 
 /** What to tell the person when the pinned chat's history is gone. */
 export const MAIN_CHAT_MISSING_MESSAGE =
-  "K2 kept this chat pinned and started nothing, rather than open a different one. " +
+  `${PRODUCT_NAME} kept this chat pinned and started nothing, rather than open a different one. ` +
   `Choose a chat from the menu above, or run ${CLI_NAME} sessions main set <id> (${CLI_NAME} sessions --past lists them).`
 
 /** "codex isn't installed on LZTEK. Pick another harness …", or null. */

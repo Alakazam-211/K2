@@ -20,6 +20,7 @@
 
 import { AIRGAP_TEACHING, isAirgap } from '@/lib/airgap'
 import { listSubdomains, supabaseRestGet, type K2Subdomain } from './k2-account'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** Connect control plane route that mints compute enroll tickets. */
 export const COMPUTE_ENROLL_TICKET_URL = 'https://connect.k2.dev/compute/enroll-ticket'
@@ -27,7 +28,7 @@ export const COMPUTE_ENROLL_TICKET_URL = 'https://connect.k2.dev/compute/enroll-
 /** Shown while the account side isn't there yet (table or route missing,
  *  or the route is dormant). */
 export const ONE_CLICK_NEEDS_UPDATE =
-  'One-click needs a K2 Connect update; meanwhile add a machine with an enroll code'
+  `One-click needs a ${PRODUCT_NAME} Connect update; meanwhile add a machine with an enroll code`
 
 /** Statuses that mean "this control plane can't do one-click yet": no
  *  route (404/405) or the route is dormant (503). */
@@ -41,17 +42,17 @@ const CONNECT_ERROR_SENTENCES: Record<string, string> = {
   not_owner: "That server isn't on your k2.dev account",
   unknown: "Connect doesn't know that server",
   machine_not_advertised:
-    "That machine hasn't checked in with K2 Connect in the last 10 minutes. Make sure it's on and \"Let a server run jobs on this computer\" is on (Compute → This computer, on that machine), then try again",
+    `That machine hasn't checked in with ${PRODUCT_NAME} Connect in the last 10 minutes. Make sure it's on and \"Let a server run jobs on this computer\" is on (Compute → This computer, on that machine), then try again`,
   rate_limited: 'Too many one-click requests. Wait a minute and try again',
   invalid_token: 'Your k2.dev sign-in has expired. Sign in again and retry',
   unauthorized: 'Your k2.dev sign-in has expired. Sign in again and retry',
   bad_request: "Connect couldn't read the request",
-  bad_version: 'K2 Connect expects a different request version. Update K2',
-  service_unavailable: 'K2 Connect is busy or being updated. Try again in a few minutes',
-  supabase_error: "K2 Connect couldn't reach its account store. Try again in a few minutes",
+  bad_version: `${PRODUCT_NAME} Connect expects a different request version. Update ${PRODUCT_NAME}`,
+  service_unavailable: `${PRODUCT_NAME} Connect is busy or being updated. Try again in a few minutes`,
+  supabase_error: `${PRODUCT_NAME} Connect couldn't reach its account store. Try again in a few minutes`,
   supabase_disabled: ONE_CLICK_NEEDS_UPDATE,
   ticket_unavailable: ONE_CLICK_NEEDS_UPDATE,
-  internal: 'K2 Connect hit an internal error. Try again in a few minutes',
+  internal: `${PRODUCT_NAME} Connect hit an internal error. Try again in a few minutes`,
 }
 
 function sentenceFor(code: string): string | null {

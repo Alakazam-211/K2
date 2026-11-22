@@ -54,6 +54,7 @@ import { resolveThreadComposeFiles } from '@/lib/thread-compose-attachments'
 import { pickLocalComposeFiles } from '@/lib/pick-compose-files'
 import { isWebClient } from '@/lib/is-web'
 import type { CatalogErrorCode } from '../contract/catalog-types'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** The open conversation a verb acts on (`zen-data` resolves it). */
 export interface ZenThreadTarget {
@@ -502,7 +503,7 @@ export async function zenPreviewByPath(
   }
   const r = await daemonCliGet<{ content?: unknown }>(scope, 'fs/read-file', { path: hostPath })
   const text = typeof r?.content === 'string' ? r.content : ''
-  if (text.includes('\u0000')) return { kind: 'none', reason: `${name} has no preview here. Open it in K2.` }
+  if (text.includes('\u0000')) return { kind: 'none', reason: `${name} has no preview here. Open it in ${PRODUCT_NAME}.` }
   return { kind: 'text', text, truncated: false }
 }
 
@@ -521,7 +522,7 @@ export async function zenPreviewAttachment(
       raw = await attachmentRaw(t, docId, n, 'preview')
     } catch (err) {
       if (err instanceof ZenThreadVerbError && err.code === 'too_large') {
-        return { kind: 'none', reason: `${file?.name ?? 'The file'} is too large to preview here. Open it in K2.` }
+        return { kind: 'none', reason: `${file?.name ?? 'The file'} is too large to preview here. Open it in ${PRODUCT_NAME}.` }
       }
       throw err
     }
@@ -538,7 +539,7 @@ export async function zenPreviewAttachment(
         },
       }
     }
-    return { kind: 'none', reason: `${d.name ?? file?.name ?? 'The file'} has no preview here. Open it in K2.` }
+    return { kind: 'none', reason: `${d.name ?? file?.name ?? 'The file'} has no preview here. Open it in ${PRODUCT_NAME}.` }
   }
   if (!file?.path) return { kind: 'none', reason: 'This file can’t be shown here.' }
   const link = await resolveRel(t, file.path)
@@ -550,7 +551,7 @@ export async function zenPreviewAttachment(
 export async function zenPreviewRel(t: ZenThreadTarget, rel: string): Promise<import('./zen-file-preview').ZenFilePreviewBody> {
   const link = await resolveRel(t, rel)
   if (!link) return { kind: 'none', reason: `${rel} isn’t a file in this workspace any more.` }
-  if (link.kind !== 'file') return { kind: 'none', reason: `${rel} is a folder. Open it in K2.` }
+  if (link.kind !== 'file') return { kind: 'none', reason: `${rel} is a folder. Open it in ${PRODUCT_NAME}.` }
   return zenPreviewByPath(t.scope, link.path, rel)
 }
 

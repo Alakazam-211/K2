@@ -24,7 +24,7 @@ GOLD.pc.start.forEach((q) => addActor({ id: q.handle, name: q.name, kind: q.kind
 // K2's choice: kit:external has no name or colour.
 for (const a of Object.values(ACTORS))
   if (a.kind === 'file') {
-    a.name = 'Saved outside K2'
+    a.name = `Saved outside ${PRODUCT_NAME}`
     if (!a.colour) a.colour = '#8a8f98'
   }
 addActor({ id: BROOK, name: 'Brook', kind: 'agent', colour: '#3fa37a' })

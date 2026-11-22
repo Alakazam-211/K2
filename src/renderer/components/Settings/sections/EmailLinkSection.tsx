@@ -617,7 +617,7 @@ function ConnectGroup({
             ) : (
               <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
                 <p className="type-row text-[var(--color-text-secondary)] max-w-md">
-                  K2 can’t show Google’s page here. Open it in your browser and sign in; this page still
+                  {PRODUCT_NAME} can’t show Google’s page here. Open it in your browser and sign in; this page still
                   moves on by itself.
                 </p>
                 <Button variant="accent" onClick={() => void openUrl(gmailSession.authorizationUrl)}>

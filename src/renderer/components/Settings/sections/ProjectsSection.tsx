@@ -98,7 +98,7 @@ import {
   rememberOpenedProject,
   type WorkspaceSettingsTab,
 } from './workspace-tabs'
-import { CLI_NAME } from '@/lib/brand'
+import { CLI_NAME, PRODUCT_NAME } from '@/lib/brand'
 
 /**
  * Plan B cross-window sync: the old Tauri `projects_update` /
@@ -121,7 +121,7 @@ export const PROJECTS_MANIFEST: SettingEntry[] = [
   { id: 'projects.agents', section: 'projects', label: 'Project Agents', description: 'Agent personas and wake-up notes for this workspace', keywords: ['agent', 'persona', 'wakeup', 'create'] },
   { id: 'projects.worktrees', section: 'projects', label: 'Worktrees', description: 'The git worktrees this workspace has open, and ones on disk you can reopen', keywords: ['worktree', 'git', 'branch'] },
   { id: 'projects.relations', section: 'projects', label: 'Connections', description: 'The workspaces and servers this agent can reach', keywords: ['relations', 'connected', 'connections', 'cross-workspace', 'links', 'federation'] },
-  { id: 'projects.cursor-migrate', section: 'projects', label: 'Chat migrations', description: 'Bring Cursor chats into K2', keywords: ['cursor', 'migrate', 'session', 'import'] },
+  { id: 'projects.cursor-migrate', section: 'projects', label: 'Chat migrations', description: `Bring Cursor chats into ${PRODUCT_NAME}`, keywords: ['cursor', 'migrate', 'session', 'import'] },
   { id: 'projects.default-model', section: 'projects', label: 'Default model', description: 'The model new chats in this workspace start with', keywords: ['default model', 'opus', 'sonnet', 'workspace model'] },
   { id: 'projects.llm-logins', section: 'projects', label: 'LLM tokens', description: 'The subscription or API token this workspace\'s agents use for Claude, Codex, Grok or Gemini', keywords: ['token', 'tokens', 'subscription', 'api token', 'api key', 'server default', 'login', 'account', 'pin'] },
   { id: 'projects.tabs', section: 'projects', label: 'Tabs: Show the Design tab, Show the Mobile tab', description: 'Keep the Design and Mobile tabs pinned next to Chat and Inbox for this workspace. You can always open them from the + menu', keywords: ['tabs', 'pinned', 'design', 'mobile', 'phone', 'simulator', 'design mode', 'remove', 'bring back', 'show'] },
@@ -139,7 +139,7 @@ export const PROJECTS_MANIFEST: SettingEntry[] = [
   { id: 'projects.agents-can-request-permissions', section: 'projects', label: 'Let this agent ask for permission', description: 'Beta: it can post a card in its Thread asking you or an admin to change a setting; nothing changes until someone allows it', keywords: ['can ask for permission cards', 'agents_can_request_permissions', 'permission_cards', 'permission cards', 'permission', 'card', 'ask', 'request', 'approve', 'beta', `${CLI_NAME} permission`, 'agent'] },
   { id: 'projects.agents-can-refresh-chat', section: 'projects', label: 'Let this agent refresh its pinned chat', description: 'It can start a fresh pinned chat when its chat goes stale; the old chat stays in Chat history. Off: it asks you first', keywords: ['can refresh its own pinned chat', 'agents_can_refresh_chat', 'chat_refresh', 'refresh', 'pinned chat', 'new chat', `${CLI_NAME} agent refresh`, 'chat.refresh', 'stale'] },
   { id: 'projects.agents-can-operate-compute', section: 'projects', label: 'Let this agent operate compute nodes', description: 'It can pause, resume, update and restart your compute machines without asking; changes that need full control of a machine still ask you', keywords: ['allow this agent to operate compute nodes', 'agents_can_operate_compute', 'compute_operate', 'operate', 'compute', 'compute nodes', 'node', 'machines', 'pause', 'update', `${CLI_NAME} compute`, 'passport', 'agent'] },
-  { id: 'projects.agents-can-manage-projects', section: 'projects', label: 'Let this agent manage K2 projects', description: 'It can create, rename and delete K2 projects and change their members. Off: it can still read them and post in its project chat', keywords: [`manage ${CLI_NAME} projects`, 'agents_can_manage_projects', 'projects_manage', 'project', 'projects', `${CLI_NAME} project`, 'members', 'project chat', 'passport', 'agent'] },
+  { id: 'projects.agents-can-manage-projects', section: 'projects', label: `Let this agent manage ${PRODUCT_NAME} projects`, description: `It can create, rename and delete ${PRODUCT_NAME} projects and change their members. Off: it can still read them and post in its project chat`, keywords: [`manage ${CLI_NAME} projects`, 'agents_can_manage_projects', 'projects_manage', 'project', 'projects', `${CLI_NAME} project`, 'members', 'project chat', 'passport', 'agent'] },
   { id: 'projects.agents-can-use-desktop', section: 'projects', label: 'Allow a virtual desktop', description: 'On a Linux server: it can start a desktop of its own and put windows on it, such as a browser, so you can watch and help in a Desktop tab. Separate, not private', keywords: ['allow a virtual desktop', 'virtual desktop', 'desktop', 'xvfb', 'screen', 'browser', 'windows', 'agents_can_use_desktop', 'desktop.use', `${CLI_NAME} desktop env`, 'linux', 'agent'] },
   { id: 'projects.agents-can-read-transcripts', section: 'projects', label: 'Read call transcripts', description: "It can read the transcripts of recorded calls in this server's voice rooms; every read is logged and each person's notice says agents may read it. Only the owner turns it on; shown while voice rooms are on", keywords: ['read call transcripts', 'transcripts', 'recording', 'recordings', 'voice', 'calls', 'voice_transcripts', 'voice.transcripts-read', `${CLI_NAME} voice transcript`, 'agent'] },
   { id: 'projects.agents-can-manage-org-chart', section: 'projects', label: 'Manage the org chart', description: 'It can make and change orgs, members, heads and lines on the Org Chart; it can make itself an org head. Only the owner turns it on; shown while the Org Chart is on', keywords: ['manage the org chart', 'org chart', 'organization', 'orgs', 'org head', 'bulletin', 'org_chart_manage', 'organization.manage', `${CLI_NAME} organization`, 'passport', 'agent'] },
@@ -1182,7 +1182,7 @@ export function ProjectsSection(): React.JSX.Element {
                 <div className="min-w-0">
                   <div className="type-row text-[var(--color-text-primary)]">Couldn&rsquo;t load your workspaces</div>
                   <div className={SETTING_ROW_HINT} title={listError}>
-                    K2 couldn&rsquo;t read the workspace list from this server, so nothing is shown here. Try again in a moment. If it keeps failing, restart K2.
+                    {PRODUCT_NAME} couldn&rsquo;t read the workspace list from this server, so nothing is shown here. Try again in a moment. If it keeps failing, restart {PRODUCT_NAME}.
                   </div>
                 </div>
                 <Button variant="quiet" className="flex-shrink-0" onClick={() => { void fetchProjects(); void checkList() }}>Try again</Button>
@@ -1328,7 +1328,7 @@ function WorktreeFoldersOnDisk({
     } catch (err) {
       console.error('Reopen worktree failed:', err)
       const raw = err instanceof Error ? err.message : String(err)
-      setReopenError({ path: wt.path, message: raw.replace(/[.\s]+$/, '') || 'K2 couldn\u2019t reach this server' })
+      setReopenError({ path: wt.path, message: raw.replace(/[.\s]+$/, '') || `${PRODUCT_NAME} couldn\u2019t reach this server` })
     } finally {
       setReopening(null)
     }
@@ -1770,7 +1770,7 @@ function ProjectDetail({
                   <AgentDisplayNameField
                     scope={primaryScope()}
                     projectPath={project.path}
-                    helpText="The name K2 shows for this agent. Doesn't change the handle or address."
+                    helpText={`The name ${PRODUCT_NAME} shows for this agent. Doesn't change the handle or address.`}
                     card
                   />
                   <AgentHandleField scope={primaryScope()} projectPath={project.path} projectHandle={project.handle} card />
@@ -3060,12 +3060,12 @@ export function AgentsManageProjectsToggle({
           size={compact ? 'sm' : 'md'}
           checked={enabled}
           onChange={toggle}
-          aria-label="Let this agent manage K2 projects"
+          aria-label={`Let this agent manage ${PRODUCT_NAME} projects`}
           disabled={busy || readOnly}
           data-settings-id="projects.agents-can-manage-projects"
           title={
             enabled
-              ? 'This workspace\'s agent may create and change K2 projects and their members'
+              ? `This workspace's agent may create and change ${PRODUCT_NAME} projects and their members`
               : 'This workspace\'s agent can read projects and post in its project chat, but not change them'
           }
         />
@@ -3073,11 +3073,11 @@ export function AgentsManageProjectsToggle({
       }
     >
           <div className={SETTING_ROW_LABEL}>
-            Let this agent manage K2 projects
+            Let this agent manage {PRODUCT_NAME} projects
             <AskedChip row="projects.agents-can-manage-projects" />
           </div>
           <div className={permissionDescClass(compact)}>
-            It can create, rename and delete K2 projects and change their members. Off: it can still read them and post in its project chat.
+            It can create, rename and delete {PRODUCT_NAME} projects and change their members. Off: it can still read them and post in its project chat.
           </div>
       <SaveError state={save.state} />
     </SettingSwitchRow>
@@ -4036,11 +4036,11 @@ function ClaudeMdEditor({ projectPath, projectName, onClose }: { projectPath: st
     `File: .k2/PROJECT.md (source)`,
     `Path: ${filePath}`,
     ``,
-    `This is the SOURCE. K2 compiles it (plus the agent's ROLE.md) into the`,
+    `This is the SOURCE. ${PRODUCT_NAME} compiles it (plus the agent's ROLE.md) into the`,
     `canonical .k2/skills/<name>/SKILL.md on save. Mirroring this content out`,
     `into the CLI harness files (CLAUDE.md, GEMINI.md, .cursor/rules, AGENTS.md,`,
     `etc.) is OPT-IN per workspace — it only happens if harness fan-out is`,
-    `enabled or the user runs the K2 Canonical Agent. Edit here once regardless.`,
+    `enabled or the user runs the ${PRODUCT_NAME} Canonical Agent. Edit here once regardless.`,
     ``,
     `Good content for this file:`,
     `• Project overview — what this codebase does`,
@@ -4077,7 +4077,7 @@ function ClaudeMdEditor({ projectPath, projectName, onClose }: { projectPath: st
       command={terminalCommand}
       args={terminalArgs}
       title={`Workspace Knowledge: ${projectName}`}
-      instructions="Editing .k2/PROJECT.md — the source for workspace knowledge. K2 compiles this into the canonical SKILL.md. When harness fan-out is enabled (opt-in), it also mirrors out to CLAUDE.md, AGENTS.md, GEMINI.md, .cursor/rules, .goosehints, etc. Regen runs automatically when you close this editor."
+      instructions={`Editing .k2/PROJECT.md — the source for workspace knowledge. ${PRODUCT_NAME} compiles this into the canonical SKILL.md. When harness fan-out is enabled (opt-in), it also mirrors out to CLAUDE.md, AGENTS.md, GEMINI.md, .cursor/rules, .goosehints, etc. Regen runs automatically when you close this editor.`}
       warningText="This is the source file for the workspace's shared knowledge. When harness fan-out is enabled, edits mirror into every chosen CLI LLM harness on save."
       onFileChange={handleFileChange}
       onClose={handleClose}
@@ -4251,7 +4251,7 @@ function K2AgentPersonaButton({ projectPath, projectName, onOpenEditor }: { proj
           await daemonCliPostQuery(primaryScope(), 'agents/create', {
             project: projectPath,
             name: 'k2so-agent',
-            role: 'K2 planner — builds PRDs, milestones, and technical plans',
+            role: `${PRODUCT_NAME} planner — builds PRDs, milestones, and technical plans`,
             agent_type: 'k2so',
           })
         }
@@ -4390,7 +4390,7 @@ export function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): 
   const handleAddFederated = useCallback(
     async (target: string): Promise<string | null> => {
       if (!sourcePath) {
-        throw new Error('K2 can’t find this workspace on this server. Switch to the server it’s on and try again.')
+        throw new Error(`${PRODUCT_NAME} can’t find this workspace on this server. Switch to the server it’s on and try again.`)
       }
       setRemoteError(null)
       const { reverseWarning } = await addRemoteConnection(sourcePath, target)
@@ -4404,7 +4404,7 @@ export function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): 
     async (address: string) => {
       if (!sourcePath) {
         setRemoteError(
-          'K2 can’t find this workspace on this server. Switch to the server it’s on and try again.',
+          `${PRODUCT_NAME} can’t find this workspace on this server. Switch to the server it’s on and try again.`,
         )
         return
       }
@@ -4432,7 +4432,7 @@ export function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): 
     async (address: string) => {
       if (!sourcePath) {
         setRemoteError(
-          'K2 can’t find this workspace on this server. Switch to the server it’s on and try again.',
+          `${PRODUCT_NAME} can’t find this workspace on this server. Switch to the server it’s on and try again.`,
         )
         return
       }
@@ -4874,7 +4874,7 @@ function ProjectSkillsPanel({ projectPath, onOpenEditor }: { projectPath: string
         <div className="px-4 py-3 flex items-center justify-between gap-4" data-testid="skills-load-error">
           <div className="min-w-0">
             <div className="type-row text-[var(--color-text-primary)]">Couldn&rsquo;t load this workspace&rsquo;s skills</div>
-            <div className={SETTING_ROW_HINT}>K2 couldn&rsquo;t read the skills folder. Try again in a moment.</div>
+            <div className={SETTING_ROW_HINT}>{PRODUCT_NAME} couldn&rsquo;t read the skills folder. Try again in a moment.</div>
           </div>
           <Button variant="quiet" className="flex-shrink-0" onClick={() => { setLoading(true); void fetchSkills() }}>Try again</Button>
         </div>
@@ -4982,7 +4982,7 @@ function CursorMigrationPanel({ projectPath }: { projectPath: string }): React.J
           <span className="type-badge tabular-nums text-[var(--color-text-secondary)]">{sessions.length}</span>
         </div>
         <div className={SETTING_ROW_HINT}>
-          Migrate conversations from the Cursor IDE to CLI format so they can be resumed in K2 terminals.
+          Migrate conversations from the Cursor IDE to CLI format so they can be resumed in {PRODUCT_NAME} terminals.
         </div>
       </div>
 
@@ -5107,7 +5107,7 @@ function MailAgentSendControl({
       label={<span className="inline-flex items-center gap-2">Let this agent send email<AskedChip row="projects.mail-agent-send" /><SaveNote state={save.state} /></span>}
       hint={
         <>
-          For its K2 mailboxes and linked inboxes. Approval holds each email until you send it (K2 mailboxes only; a linked inbox needs On).
+          For its {PRODUCT_NAME} mailboxes and linked inboxes. Approval holds each email until you send it ({PRODUCT_NAME} mailboxes only; a linked inbox needs On).
           {inherited && mode !== null ? ' Using the server default.' : ''}
         </>
       }

@@ -25,7 +25,7 @@ import { useConnectHostStore } from '@/stores/connect-host'
 import { primaryScope } from '@/kessel/server-scope'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { ZONE, ZONE_SUFFIX, boxHost } from '@/lib/hosts'
-import { CLI_NAME } from '@/lib/brand'
+import { CLI_NAME, PRODUCT_NAME } from '@/lib/brand'
 
 /** Trust state of a pinned peer (mirrors `federation::PeerTrust`). */
 export type PeerTrust = 'pending' | 'trusted' | 'blocked'
@@ -175,7 +175,7 @@ export function sortPeersForPicker(peers: FederationPeer[]): FederationPeer[] {
  *  trusted, federation off here) says so instead of blaming their settings. */
 export function emptyRosterNote(answered: boolean, server: string): string {
   if (!answered) {
-    return `Couldn't reach ${server}: it's offline or unreachable, or no longer trusts this server. Try again later; Settings → K2 Server → Connections shows its pairing.`
+    return `Couldn't reach ${server}: it's offline or unreachable, or no longer trusts this server. Try again later; Settings → ${PRODUCT_NAME} Server → Connections shows its pairing.`
   }
   return 'No connectable agents on this server. On their side, turn on "Let agents on other servers message this agent" for an agent, or "Let agents on other servers message every agent" in Settings → Tunnel.'
 }
@@ -702,8 +702,8 @@ async function pairV2(
     const msg = e instanceof Error ? e.message : String(e)
     if (/^not found$|\b404\b/i.test(msg.trim())) {
       throw new Error(
-        `"${host}" runs an older K2 that can't use the new pairing code. ` +
-          `Update "${host}" to K2 0.45.2 or later, then pair again.`,
+        `"${host}" runs an older ${PRODUCT_NAME} that can't use the new pairing code. ` +
+          `Update "${host}" to ${PRODUCT_NAME} 0.45.2 or later, then pair again.`,
       )
     }
     throw e
@@ -923,7 +923,7 @@ export async function autoPairWithHost(
     const inner = e instanceof Error ? e.message : String(e)
     const lead = isAuthErr(inner)
       ? `You must be an owner or admin on this server to connect across servers.`
-      : `This server isn't ready for cross-server connections — enable K2 Connect federation in Settings.`
+      : `This server isn't ready for cross-server connections — enable ${PRODUCT_NAME} Connect federation in Settings.`
     throw new Error(`${lead} (${inner})`)
   })
   const remotePub = await getPubkeyFor(remoteC).catch((e: unknown) => {
@@ -944,7 +944,7 @@ export async function autoPairWithHost(
   // "buy a subdomain" copy when pairing over a saved http host:port.
   if (!localSub && !remoteIsLan && !localLanUrl) {
     throw new Error(
-      `Can't pair with "${host}": this server has no K2 Connect tunnel.\n\n` +
+      `Can't pair with "${host}": this server has no ${PRODUCT_NAME} Connect tunnel.\n\n` +
         `Each paired server needs its own purchased <subdomain>.k2.dev so the other can reach it. ` +
         `Buy a subdomain at k2.dev, bind it under Settings → Tunnel, ` +
         `then try Pair again.`,

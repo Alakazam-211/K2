@@ -10,6 +10,7 @@
 // row access is scoped by Supabase RLS to the signed-in caller.
 
 import { AIRGAP_TEACHING, isAirgap } from '@/lib/airgap'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** The built-in account server (the Supabase project behind k2.dev
  *  accounts). Same value as `k2_core::connect_db::DEFAULT_URL`. */
@@ -43,7 +44,7 @@ export async function accountDbBase(): Promise<string> {
     url = await accountDbBaseLoader()
   } catch (err) {
     throw new Error(
-      `Couldn't read the account server address from K2: ${err instanceof Error ? err.message : String(err)}`,
+      `Couldn't read the account server address from ${PRODUCT_NAME}: ${err instanceof Error ? err.message : String(err)}`,
     )
   }
   const t = (url ?? '').trim().replace(/\/+$/, '')

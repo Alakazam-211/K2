@@ -23,6 +23,7 @@ import {
 import { useBrowserOverlay } from '@/lib/browser-overlay'
 import { LimitBar } from '@/components/Usage/LimitBar'
 import { openSettingsPage } from '@/lib/open-settings-page'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** How often the chip re-draws its countdowns and "updated X ago". */
 const CHIP_CLOCK_MS = 30_000
@@ -235,7 +236,7 @@ export default function UsageButton(): React.JSX.Element {
             <p className="text-[12px] text-[var(--color-text-secondary)]">Sign in to {roomLabel} to see its usage.</p>
           ) : airgap ? (
             <p data-testid="usage-airgap-note" className="text-[12px] text-[var(--color-text-secondary)]">
-              Off in air-gap mode. K2 does not check subscription usage while air-gap is on.
+              Off in air-gap mode. {PRODUCT_NAME} does not check subscription usage while air-gap is on.
             </p>
           ) : rows.length === 0 || !anySignedIn ? (
             <p className="text-[12px] text-[var(--color-text-secondary)]">
@@ -287,7 +288,7 @@ export default function UsageButton(): React.JSX.Element {
                 mayRefresh
                   ? undefined
                   : serverState === 'ok'
-                    ? `View only: ${roomLabel ?? 'this server'} runs an older K2`
+                    ? `View only: ${roomLabel ?? 'this server'} runs an older ${PRODUCT_NAME}`
                     : undefined
               }
               onClick={() => {

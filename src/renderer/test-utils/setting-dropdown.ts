@@ -6,6 +6,7 @@
 // after render, use `waitForMenuOptions`.
 
 import { fireEvent, screen, waitFor } from '@testing-library/react'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export interface MenuOption {
   value: string
@@ -15,7 +16,7 @@ export interface MenuOption {
 
 function menuButtons(): HTMLButtonElement[] {
   const menu = screen.queryByTestId('setting-dropdown-menu')
-  if (!menu) throw new Error('the K2 menu is not open (inside waitFor? use waitForMenuOptions)')
+  if (!menu) throw new Error(`the ${PRODUCT_NAME} menu is not open (inside waitFor? use waitForMenuOptions)`)
   return [...menu.querySelectorAll<HTMLButtonElement>('button[data-value]')]
 }
 
@@ -34,7 +35,7 @@ function asTrigger(el: HTMLElement): HTMLButtonElement {
 
 function close(t: HTMLButtonElement): void {
   fireEvent.click(t)
-  if (screen.queryByTestId('setting-dropdown-menu')) throw new Error('the K2 menu did not close')
+  if (screen.queryByTestId('setting-dropdown-menu')) throw new Error(`the ${PRODUCT_NAME} menu did not close`)
 }
 
 /** Open the menu, read its options, then close it again. */

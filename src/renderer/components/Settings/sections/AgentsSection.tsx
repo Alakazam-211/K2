@@ -35,6 +35,7 @@ import { metaChordLabel } from '@/lib/shortcut-label'
 import type { DesktopOs } from '@/lib/desktop-chrome'
 import { Button, Callout, Input, OverflowMenu, Surface, Tag, Toggle } from '@/components/ui'
 import { HALVES_MIN_WIDTH, ScrollEdge, halves, useCssWidth } from '../controls/halves'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** "Opens with ⇧⌘T …" with the chord this platform really uses. */
 export function defaultAgentLaunchCopy(os?: DesktopOs): string {
@@ -141,7 +142,7 @@ export const AGENTS_MANIFEST: SettingEntry[] = [
     id: 'agents.reset-built-ins',
     section: 'agents',
     label: 'Restore built-in presets',
-    description: 'Put the presets K2 ships with back as they were',
+    description: `Put the presets ${PRODUCT_NAME} ships with back as they were`,
     keywords: ['reset', 'restore', 'defaults', 'built-in', 'built-ins'],
   },
   {
@@ -155,7 +156,7 @@ export const AGENTS_MANIFEST: SettingEntry[] = [
     id: 'agents.submit-keys',
     section: 'agents',
     label: 'Message keys',
-    description: 'How K2 types a message into an agent’s terminal',
+    description: `How ${PRODUCT_NAME} types a message into an agent’s terminal`,
     keywords: ['inject', 'paste', 'keystroke', 'submit', 'esc', 'return', 'keys'],
   },
   ...cliManifest(),
@@ -177,7 +178,7 @@ export function AgentsSection(): React.JSX.Element {
         <div className="min-w-0 max-w-[52rem]">
           <h2 className="type-title text-[var(--color-text-primary)]">Providers / Models</h2>
           <p className={SETTING_ROW_HINT}>
-            The AI agents K2 starts and the providers behind them: which agent opens by default, the
+            The AI agents {PRODUCT_NAME} starts and the providers behind them: which agent opens by default, the
             presets on the launch bar, and the agent tools installed on {where}.
           </p>
         </div>
@@ -229,7 +230,7 @@ function DefaultAgentGroup(): React.JSX.Element {
     save.reset()
     await setDefaultAgent(id)
     // The store puts the old value back when the save fails.
-    if (useSettingsStore.getState().defaultAgent !== id) save.failed('K2 couldn’t reach this server')
+    if (useSettingsStore.getState().defaultAgent !== id) save.failed(`${PRODUCT_NAME} couldn’t reach this server`)
     else save.saved()
   }
 
@@ -353,7 +354,7 @@ function PresetsGroup(): React.JSX.Element {
   }, [])
 
   const toggle = (p: AgentPreset): void => {
-    void run(`K2 couldn’t turn ${p.label} ${p.enabled ? 'off' : 'on'}.`, () => updatePreset({ id: p.id, enabled: p.enabled ? 0 : 1 }))
+    void run(`${PRODUCT_NAME} couldn’t turn ${p.label} ${p.enabled ? 'off' : 'on'}.`, () => updatePreset({ id: p.id, enabled: p.enabled ? 0 : 1 }))
   }
 
   const move = (from: number, to: number): void => {
@@ -361,7 +362,7 @@ function PresetsGroup(): React.JSX.Element {
     const ids = presets.map((p) => p.id)
     const [moved] = ids.splice(from, 1)
     ids.splice(to, 0, moved)
-    void run('K2 couldn’t change the order.', () => reorderPresets(ids))
+    void run(`${PRODUCT_NAME} couldn’t change the order.`, () => reorderPresets(ids))
   }
 
   const remove = async (p: AgentPreset): Promise<void> => {
@@ -372,7 +373,7 @@ function PresetsGroup(): React.JSX.Element {
       destructive: true,
     })
     if (!ok) return
-    await run(`K2 couldn’t delete ${p.label}.`, () => deletePreset(p.id))
+    await run(`${PRODUCT_NAME} couldn’t delete ${p.label}.`, () => deletePreset(p.id))
   }
 
   const edit = (p: AgentPreset): void => {
@@ -454,7 +455,7 @@ function PresetsGroup(): React.JSX.Element {
         <div className="min-w-0">
           <div className="type-row text-[var(--color-text-primary)]">Couldn’t load your presets</div>
           <div className={SETTING_ROW_HINT} title={loadError}>
-            K2 couldn’t read your presets, so the launch bar may be empty too. Try again in a moment.
+            {PRODUCT_NAME} couldn’t read your presets, so the launch bar may be empty too. Try again in a moment.
           </div>
         </div>
         <Button variant="quiet" className="flex-shrink-0" onClick={() => void fetchPresets()}>
@@ -503,7 +504,7 @@ function PresetsGroup(): React.JSX.Element {
         {!nothingYet && (
           <SettingRow
             label="Built-in presets"
-            hint="Put the presets K2 ships with back as they were: their commands, icons and keys, all on. Presets you added stay."
+            hint={`Put the presets ${PRODUCT_NAME} ships with back as they were: their commands, icons and keys, all on. Presets you added stay.`}
             settingId="agents.reset-built-ins"
           >
             <RestoreBuiltInsButton onError={setActionError} />
@@ -563,7 +564,7 @@ function PresetsGroup(): React.JSX.Element {
       )}
       {loadError && !nothingYet && (
         <div className="px-4 py-3 flex items-center justify-between gap-4" role="alert" data-testid="presets-refresh-error">
-          <div className={SETTING_ROW_HINT}>K2 couldn’t refresh this list, so it may be out of date.</div>
+          <div className={SETTING_ROW_HINT}>{PRODUCT_NAME} couldn’t refresh this list, so it may be out of date.</div>
           <Button variant="quiet" className="flex-shrink-0" onClick={() => void fetchPresets()}>
             Try again
           </Button>
@@ -588,7 +589,7 @@ function RestoreBuiltInsButton({ onError }: { onError: (msg: string | null) => v
     const ok = await useConfirmDialogStore.getState().confirm({
       title: 'Restore the built-in presets?',
       message:
-        'Claude, Codex, Grok, Gemini and the other built-in presets go back to how K2 ships them, all on. Changes you made to them are lost. Presets you added stay as they are.',
+        `Claude, Codex, Grok, Gemini and the other built-in presets go back to how ${PRODUCT_NAME} ships them, all on. Changes you made to them are lost. Presets you added stay as they are.`,
       confirmLabel: 'Restore',
     })
     if (!ok) return
@@ -599,7 +600,7 @@ function RestoreBuiltInsButton({ onError }: { onError: (msg: string | null) => v
       setState('done')
     } catch (err) {
       setState('idle')
-      onError(`K2 couldn’t restore the built-in presets. ${errorText(err)}`)
+      onError(`${PRODUCT_NAME} couldn’t restore the built-in presets. ${errorText(err)}`)
     }
   }
 
@@ -771,7 +772,7 @@ function PresetForm({
       }
       onDone(id)
     } catch (err) {
-      setError(`K2 couldn’t save this preset. ${errorText(err)}`)
+      setError(`${PRODUCT_NAME} couldn’t save this preset. ${errorText(err)}`)
       setSaving(false)
     }
   }
@@ -805,7 +806,7 @@ function PresetForm({
       <SettingRow label="Name" hint="Shown on the launch bar and in the tab + menu." field>
         <Input ref={nameRef} aria-label="Name" value={form.label} placeholder="e.g. Aider with GPT" onChange={(e) => patch({ label: e.target.value })} className="w-full type-control" />
       </SettingRow>
-      <SettingRow label="Command" hint="What K2 runs in a new terminal, with any options." field>
+      <SettingRow label="Command" hint={`What ${PRODUCT_NAME} runs in a new terminal, with any options.`} field>
         <Input aria-label="Command" value={form.command} placeholder="e.g. aider --model gpt-4o" onChange={(e) => patch({ command: e.target.value })} className="w-full type-control font-mono" spellCheck={false} />
       </SettingRow>
       <SettingRow label="Icon" hint="An emoji. Leave it empty to use the agent’s logo." field>
@@ -813,7 +814,7 @@ function PresetForm({
       </SettingRow>
       <SettingRow
         label="Message keys"
-        hint={`How K2 types a message into this agent: ${injectFlowSummary(form.injectFlow)}.`}
+        hint={`How ${PRODUCT_NAME} types a message into this agent: ${injectFlowSummary(form.injectFlow)}.`}
         settingId="agents.submit-keys"
         below={
           keysOpen ? (
@@ -878,7 +879,7 @@ function SubmitKeysEditor({
   return (
     <Surface chamfer material="tile" className="p-3 space-y-3">
       <p className={SETTING_ROW_HINT}>
-        Paste message writes the text without the clipboard. Return sends it. Esc and Space are extra keys some agents need. The wait is how long K2 pauses after that step.
+        Paste message writes the text without the clipboard. Return sends it. Esc and Space are extra keys some agents need. The wait is how long {PRODUCT_NAME} pauses after that step.
       </p>
       <ol className="space-y-2">
         {steps.map((step, i) => (
@@ -1049,7 +1050,7 @@ function AgentToolsGroup({ where }: { where: string }): React.JSX.Element {
         hint="The programs your presets run. Install one here, then turn its preset on."
         card
         state={
-          <SettingsLoadState kind="empty" title={`No agent tools K2 can start on ${where}`} testId="tools-empty">
+          <SettingsLoadState kind="empty" title={`No agent tools ${PRODUCT_NAME} can start on ${where}`} testId="tools-empty">
             {`${where === 'this computer' ? 'This computer' : 'This server'} didn’t list any. Add your own command under Launch presets.`}
           </SettingsLoadState>
         }
@@ -1062,7 +1063,7 @@ function AgentToolsGroup({ where }: { where: string }): React.JSX.Element {
     notice = (
       <div className="px-4 py-3" data-testid="tools-unsupported">
         <p className={SETTING_ROW_HINT}>
-          K2 can’t check which tools are installed on {where} until it’s updated. Open a tool to see how to install it.
+          {PRODUCT_NAME} can’t check which tools are installed on {where} until it’s updated. Open a tool to see how to install it.
         </p>
       </div>
     )
@@ -1127,7 +1128,7 @@ function AgentToolsGroup({ where }: { where: string }): React.JSX.Element {
           {unsupported.map((t) => <span key={t.command} data-settings-id={`agents.cli-${t.command}`} className="absolute inset-0 pointer-events-none" />)}
           <div className="type-row text-[var(--color-text-secondary)]">Not supported on {where}</div>
           <div className={SETTING_ROW_HINT}>
-            {nameList(unsupported)}. K2 can’t start {unsupported.length === 1 ? 'it' : 'these'} here.
+            {nameList(unsupported)}. {PRODUCT_NAME} can’t start {unsupported.length === 1 ? 'it' : 'these'} here.
           </div>
         </div>
       )}
@@ -1170,7 +1171,7 @@ function ToolRow({
         setCopied(true)
         window.setTimeout(() => setCopied(false), 2000)
       },
-      () => setInstallError('K2 couldn’t copy the command. Select it and copy it by hand.'),
+      () => setInstallError(`${PRODUCT_NAME} couldn’t copy the command. Select it and copy it by hand.`),
     )
   }
 
@@ -1190,13 +1191,13 @@ function ToolRow({
     statusLine = null
   } else if (isBroken) {
     tag = <Tag tone="warn">Not working</Tag>
-    statusLine = 'Installed, but it didn’t answer when K2 checked.'
+    statusLine = `Installed, but it didn’t answer when ${PRODUCT_NAME} checked.`
   } else if (isInstalled) {
     tag = <Tag tone="ok">Installed</Tag>
     const version = reported.version ? `Version ${reported.version}` : 'Installed'
     statusLine = reported.launches ? version : `${version}. Agents may start a different copy; open Details.`
   } else {
-    statusLine = program ? 'Not installed. K2 installs it the first time you start it.' : 'Not installed'
+    statusLine = program ? `Not installed. ${PRODUCT_NAME} installs it the first time you start it.` : 'Not installed'
   }
 
   const showDetails = isInstalled || status.kind === 'checking'
@@ -1226,7 +1227,7 @@ function ToolRow({
           <div className="pl-8 space-y-3" data-testid={`tool-help-${tool.command}`}>
             {isBroken && reported && (
               <Callout tone="warn" data-testid={`tool-broken-${tool.command}`}>
-                <p className="type-hint">{tool.name} is installed on {where}, but it didn’t answer when K2 asked for its version, so agents may not start.</p>
+                <p className="type-hint">{tool.name} is installed on {where}, but it didn’t answer when {PRODUCT_NAME} asked for its version, so agents may not start.</p>
                 <p className="type-hint text-[var(--color-text-secondary)] break-words mt-0.5">
                   {reported.path ? `Found at ${reported.path}. ` : ''}It said: {reported.error?.trim().replace(/[.\s]+$/, '')}.
                 </p>
@@ -1266,7 +1267,7 @@ function ToolRow({
             )}
             {installError && (
               <Callout tone="error" role="alert">
-                <p className="type-hint break-words">K2 couldn’t install {tool.name}. {installError}</p>
+                <p className="type-hint break-words">{PRODUCT_NAME} couldn’t install {tool.name}. {installError}</p>
               </Callout>
             )}
             <div className="flex items-center gap-2">

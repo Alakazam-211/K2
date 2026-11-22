@@ -16,6 +16,7 @@
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { zenLocalScope, isZenRouteMissing } from './zen-api'
 import type { ZenWidgetBundleResponse, ZenWidgetPauseRequest, ZenWidgetResumeRequest } from './zen-custom-types'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export type ZenWidgetErrorCode =
   | 'older_daemon' // no `zen-widgets-v1` routes (UW36)
@@ -47,15 +48,15 @@ const CODES: ReadonlyArray<[RegExp, ZenWidgetErrorCode]> = [
 export function zenWidgetErrorText(code: ZenWidgetErrorCode, raw: string): string {
   switch (code) {
     case 'older_daemon':
-      return 'K2 on this computer is older than this app. Update it to run custom widgets.'
+      return `${PRODUCT_NAME} on this computer is older than this app. Update it to run custom widgets.`
     case 'widget_broken':
       return 'This widget has errors and no working version yet.'
     case 'unknown_widget':
       return 'This widget’s folder is gone.'
     case 'owner_only':
-      return 'Only you can resume a widget, from the K2 app on this computer.'
+      return `Only you can resume a widget, from the ${PRODUCT_NAME} app on this computer.`
     case 'widget_not_approved':
-      return 'This widget changed or isn’t in this Garden any more. K2 reloads it.'
+      return `This widget changed or isn’t in this Garden any more. ${PRODUCT_NAME} reloads it.`
     case 'widget_cap_missing':
       return 'This widget can’t send to agents: thread:post isn’t in its approved caps.'
     default:

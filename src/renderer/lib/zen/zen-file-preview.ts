@@ -8,6 +8,8 @@
 // nothing a file holds is ever parsed as markup (an SVG shows through
 // <img>, which runs no script).
 
+import { PRODUCT_NAME } from '@/lib/brand'
+
 export type ZenFilePreviewBody =
   | { kind: 'image'; mime: string; base64: string; fallback?: () => Promise<{ mime: string; base64: string } | null> }
   | { kind: 'text'; text: string; truncated: boolean }
@@ -104,7 +106,7 @@ export function showZenFilePreview(p: ZenFilePreview): void {
   }
   if (p.openInK2) {
     const go = p.openInK2
-    const b = button('Open in K2', () => {
+    const b = button(`Open in ${PRODUCT_NAME}`, () => {
       close()
       go()
     })

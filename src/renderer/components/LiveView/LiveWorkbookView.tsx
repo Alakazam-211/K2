@@ -21,6 +21,7 @@ import { SampleBanner } from './SampleBanner'
 import { useLiveWorkbook } from './useLiveWorkbook'
 import { FormulaBar, SheetTabs, WorkbookHeader } from './WorkbookChrome'
 import { WorkbookGrid } from './WorkbookGrid'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export interface LiveWorkbookViewProps {
   source: LiveWorkbookSource
@@ -114,8 +115,8 @@ export function LiveWorkbookView({ source, fileName, sample }: LiveWorkbookViewP
               <div className="mx-auto mb-2 w-fit text-[var(--color-text-muted)]">
                 <DocGlyph size={28} />
               </div>
-              <h3 className="type-row font-semibold">This workbook is too large for K2</h3>
-              <p className="mt-1 type-hint text-[var(--color-text-secondary)]">K2 opens workbooks up to 32 MiB. This one is bigger, so there’s no live view, no saved versions and no presence. Open it in a spreadsheet app instead, or ask the agent for a smaller extract.</p>
+              <h3 className="type-row font-semibold">This workbook is too large for {PRODUCT_NAME}</h3>
+              <p className="mt-1 type-hint text-[var(--color-text-secondary)]">{PRODUCT_NAME} opens workbooks up to 32 MiB. This one is bigger, so there’s no live view, no saved versions and no presence. Open it in a spreadsheet app instead, or ask the agent for a smaller extract.</p>
             </Surface>
           </div>
         ) : book && stage ? (

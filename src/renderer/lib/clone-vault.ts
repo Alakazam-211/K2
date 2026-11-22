@@ -10,6 +10,8 @@
 // note for the done screen. Values never pass through here.
 
 /** The destination vault, as `vault/recipient` answers it (wire shape). */
+import { PRODUCT_NAME } from '@/lib/brand'
+
 export interface VaultRecipientResponse {
   recipient?: string
   fingerprint?: string
@@ -117,7 +119,7 @@ export async function askVaultRecipient(
     }
     if (/not found/i.test(message)) {
       return {
-        note: `${destLabel} runs an older K2 that can't receive vault secrets yet. Update it, then add this workspace's secrets there.`,
+        note: `${destLabel} runs an older ${PRODUCT_NAME} that can't receive vault secrets yet. Update it, then add this workspace's secrets there.`,
       }
     }
     return { note: `Couldn't ask ${destLabel} for its vault (${message}), so vault secrets weren't copied.` }
@@ -169,7 +171,7 @@ export function vaultOutcome(
         why ??
         (report?.reason === 'no_secrets'
           ? 'This workspace has no vault secrets to copy.'
-          : 'The source server didn’t send any vault secrets (it may run an older K2).'),
+          : `The source server didn’t send any vault secrets (it may run an older ${PRODUCT_NAME}).`),
     }
   }
   if (unpack?.vault_error) {

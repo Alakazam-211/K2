@@ -117,12 +117,12 @@ import {
   StatusFact,
   type HealthTone,
 } from './ConnectionsParts'
-import { CLI_NAME } from '@/lib/brand'
+import { CLI_NAME, PRODUCT_NAME } from '@/lib/brand'
 
 export const CONNECTIONS_MANIFEST: SettingEntry[] = [
-  { id: 'connections.add', section: 'connections', label: 'Add a server', description: 'Save another K2 server to connect to', keywords: ['server', 'remote', 'connect', 'host', 'add', `${CLI_NAME} connect`, 'address book'] },
+  { id: 'connections.add', section: 'connections', label: 'Add a server', description: `Save another ${PRODUCT_NAME} server to connect to`, keywords: ['server', 'remote', 'connect', 'host', 'add', `${CLI_NAME} connect`, 'address book'] },
   { id: 'connections.remember-password', section: 'connections', label: 'Remember password', description: 'Keep a server’s password in this computer’s keychain', keywords: ['token', 'password', 'keychain', 'remember', 'credentials'] },
-  { id: 'connections.list', section: 'connections', label: 'Saved servers', description: 'Edit or remove saved K2 servers', keywords: ['servers', 'hosts', 'edit', 'remove', 'list', 'search', 'filter'] },
+  { id: 'connections.list', section: 'connections', label: 'Saved servers', description: `Edit or remove saved ${PRODUCT_NAME} servers`, keywords: ['servers', 'hosts', 'edit', 'remove', 'list', 'search', 'filter'] },
   {
     id: 'connections.pair-federated-peer',
     section: 'connections',
@@ -219,7 +219,7 @@ function signInProblem(kind: LoginFailureKind | undefined, reason: string, serve
       return { what: 'Too many sign-in tries.', next: reason }
     case 'not-found':
     case 'server':
-      return { what: `${server} didn’t accept the sign-in.`, next: 'Make sure this is a K2 server, and that it and K2 are up to date.', detail: reason }
+      return { what: `${server} didn’t accept the sign-in.`, next: `Make sure this is a ${PRODUCT_NAME} server, and that it and ${PRODUCT_NAME} are up to date.`, detail: reason }
     default:
       return { what: `Couldn’t sign in to ${server}.`, detail: reason }
   }
@@ -465,7 +465,7 @@ export function ConnectionsSection(): React.JSX.Element {
         const failure = await saveRememberedPassword(id, passwordEntered)
         if (failure) {
           setProblem({
-            what: 'You’re signed in, but K2 couldn’t save the password in the keychain.',
+            what: `You’re signed in, but ${PRODUCT_NAME} couldn’t save the password in the keychain.`,
             next: 'Turn off Remember password to finish without saving it, or try again.',
             detail: failure,
           })
@@ -515,7 +515,7 @@ export function ConnectionsSection(): React.JSX.Element {
       if (failure) {
         setRotation(null)
         setProblem({
-          what: 'You’re signed in, but K2 couldn’t save the new password in the keychain.',
+          what: `You’re signed in, but ${PRODUCT_NAME} couldn’t save the new password in the keychain.`,
           next: 'Turn off Remember password to finish without saving it, or try again.',
           detail: failure,
         })
@@ -576,7 +576,7 @@ export function ConnectionsSection(): React.JSX.Element {
       <SettingsGroup
         card
         title="Servers"
-        hint="Other K2 servers you use from this computer. Switch between them from the server menu in the top bar."
+        hint={`Other ${PRODUCT_NAME} servers you use from this computer. Switch between them from the server menu in the top bar.`}
         action={
           <Button variant="accent" onClick={beginAdd} data-settings-id="connections.add">
             Add a server
@@ -603,7 +603,7 @@ export function ConnectionsSection(): React.JSX.Element {
             <>
               <span className="truncate flex-shrink-0">This computer</span>
               <span className="type-hint text-[var(--color-text-secondary)] truncate ml-1">
-                The K2 server built into this app
+                The {PRODUCT_NAME} server built into this app
               </span>
             </>
           }
@@ -804,7 +804,7 @@ function ServerFormDialog({
         : step === 'sign-in'
           ? `Step 2 of 2. Sign in with your account on ${name}.`
           : step === 'edit'
-            ? 'Change how K2 finds and signs in to this server.'
+            ? `Change how ${PRODUCT_NAME} finds and signs in to this server.`
             : undefined
 
   const rememberRow = (
@@ -817,7 +817,7 @@ function ServerFormDialog({
       <span>
         <span className={SETTING_ROW_LABEL}>Remember password</span>
         <span className={`block ${DIALOG_MUTED}`}>
-          Saves it in this computer’s keychain, its built-in password store, so K2 signs in by itself next time.
+          Saves it in this computer’s keychain, its built-in password store, so {PRODUCT_NAME} signs in by itself next time.
         </span>
       </span>
     </label>
@@ -846,7 +846,7 @@ function ServerFormDialog({
       label={step === 'edit' ? 'Name' : 'Name (optional)'}
       htmlFor={`${id}-name`}
       problem={fieldProblem('name')}
-      hint="How it shows in K2. Leave it blank to use the address."
+      hint={`How it shows in ${PRODUCT_NAME}. Leave it blank to use the address.`}
     >
       <Input
         id={`${id}-name`}
@@ -1604,7 +1604,7 @@ function HostTile({
       setUpdateError(
         expected
           ? { what: `${label} hasn’t come back on v${expected}.`, next: 'Check for updates again from the row’s menu.' }
-          : { what: `${label} still isn’t responding.`, next: 'Check that it’s running, then use Try again. If it stays down, quit and reopen K2.' },
+          : { what: `${label} still isn’t responding.`, next: `Check that it’s running, then use Try again. If it stays down, quit and reopen ${PRODUCT_NAME}.` },
       )
     } finally {
       if (aliveRef.current) setReconnecting(false)
@@ -1862,7 +1862,7 @@ function HostTile({
     onSelect: () => {
       void confirm({
         title: `Remove ${label}?`,
-        message: `K2 forgets ${label} on this computer, including its saved password and sign-in. Nothing changes on the server, and you can add it again later.`,
+        message: `${PRODUCT_NAME} forgets ${label} on this computer, including its saved password and sign-in. Nothing changes on the server, and you can add it again later.`,
         confirmLabel: 'Remove',
         destructive: true,
       }).then((ok) => {
@@ -1984,7 +1984,7 @@ function HostTile({
           never silent. */}
       {reach === 'offline' && !isActive && !reconnecting && (
         <p className="type-hint text-[var(--color-text-secondary)] leading-relaxed">
-          K2 can’t reach this server. Check that it’s running and on your network, then try again.
+          {PRODUCT_NAME} can’t reach this server. Check that it’s running and on your network, then try again.
         </p>
       )}
       {!signedOut && voiceOnly && (

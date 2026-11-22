@@ -12,6 +12,7 @@ import { daemonCliPost } from '@/lib/daemon-cli'
 import type { ServerScope } from '@/kessel/server-scope'
 import { clearDraft, putDraft } from './drafts'
 import type { ConflictCode } from './reducer'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const EXPECT_ABSENT = 'absent'
 
@@ -82,7 +83,7 @@ export function failureReason(err: unknown): string {
   const m = raw.toLowerCase()
   if (/no space left|enospc|disk full|quota/.test(m)) return 'the drive is full'
   if (/read-only file system|erofs/.test(m)) return 'the drive is read-only'
-  if (/permission denied|eacces|eperm|not permitted/.test(m)) return 'K2 isn’t allowed to write it'
+  if (/permission denied|eacces|eperm|not permitted/.test(m)) return `${PRODUCT_NAME} isn’t allowed to write it`
   if (/timed? ?out|no answer from the server/.test(m)) return 'the server didn’t answer'
   if (/failed to fetch|network|econnrefused|offline|load failed/.test(m)) return 'the server can’t be reached'
   const clean = raw.trim().replace(/[.\s]+$/, '')
@@ -93,7 +94,7 @@ export function failureReason(err: unknown): string {
 /** What to do after the second failure, for the bar's muted line. */
 export function failureHint(reason: string): string {
   if (reason === 'the drive is full') return 'Free up some space, then try again. Your words stay here.'
-  if (reason === 'K2 isn’t allowed to write it') return 'Check who can write the file, or save a copy. Your words stay here.'
+  if (reason === `${PRODUCT_NAME} isn’t allowed to write it`) return 'Check who can write the file, or save a copy. Your words stay here.'
   if (reason === 'the drive is read-only') return 'Save a copy somewhere you can write. Your words stay here.'
   if (reason.startsWith('the server')) return 'Check the connection, then try again. Your words stay here.'
   return 'Try again, or save a copy. Your words stay here.'

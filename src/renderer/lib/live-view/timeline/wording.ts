@@ -8,6 +8,7 @@ import { actorOf } from './actors'
 import { modelOf, visibleItems, type Item, type TimelineModel } from './fold'
 import { pictureAt, type MediaFacts } from './picture'
 import { CONT, MKR, PROPS, UNIT, VIEW, type Book, type Claim, type OutsideSaveEvent, type Refusal, type TimelineFrame } from './schema'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const plural = (n: number, w: string): string => `${n} ${w}${n === 1 ? '' : 's'}`
 
@@ -141,7 +142,7 @@ export function refusalPhrase(r: Refusal, M: TimelineModel, claims?: Claim[]) {
   const it = M.items[r.unit]
   const name = it ? it.name : 'a clip'
   const verb = VERB_WORD[r.verb] || 'change'
-  const why = h ? `${h.name} is holding it` : 'K2 didn’t allow it'
+  const why = h ? `${h.name} is holding it` : `${PRODUCT_NAME} didn’t allow it`
   const c = (claims || []).find((x) => x.id === r.claim)
   const text = `couldn’t ${verb} ${name}: ${why}`
   return {
@@ -161,11 +162,11 @@ export const copyLabel = (n: unknown): string => String(n || '').replace(/\.[a-z
 
 /** An outside save's notice in two lines (kit c23d2349). */
 export function saveLine(o: OutsideSaveEvent): { l1: string; l2: string } {
-  if (o.outcome === 'kept_both') return { l1: 'Saved outside K2: that save is now live.', l2: `What was live before is kept as a copy: ${copyLabel(o.copy && o.copy.name)}` }
-  if (o.outcome === 'ingested') return { l1: 'Saved outside K2 · taken in', l2: o._summary || 'The changes show as an outside change' }
-  if (o.outcome === 'declined') return { l1: 'Saved outside K2, and the file can’t be live any more', l2: `${o.message || 'K2 can’t watch this save live.'} Edits are paused.` }
+  if (o.outcome === 'kept_both') return { l1: `Saved outside ${PRODUCT_NAME}: that save is now live.`, l2: `What was live before is kept as a copy: ${copyLabel(o.copy && o.copy.name)}` }
+  if (o.outcome === 'ingested') return { l1: `Saved outside ${PRODUCT_NAME} · taken in`, l2: o._summary || 'The changes show as an outside change' }
+  if (o.outcome === 'declined') return { l1: `Saved outside ${PRODUCT_NAME}, and the file can’t be live any more`, l2: `${o.message || `${PRODUCT_NAME} can’t watch this save live.`} Edits are paused.` }
   if (o.outcome === 'missing') return { l1: 'The file was deleted or moved', l2: 'The live version is kept. Save it again to keep working on it.' }
-  return { l1: 'Saved outside K2', l2: '' }
+  return { l1: `Saved outside ${PRODUCT_NAME}`, l2: '' }
 }
 
 /** Track renames in a frame, in words (the clip wording doesn't cover tracks). */
@@ -187,7 +188,7 @@ export function holdGoneText(M: TimelineModel, e: { actor: string; keys?: string
   const a = actorOf(e.actor)
   const k = (e.keys || e.claim?.keys || [])[0] || ''
   const was = e.claim && e.claim.note_track ? e.claim.note_track : e.was || heldWhat(M, [k])
-  return `${a.name}’s hold on ${was} ended: the ${/^@trk:/.test(k) ? 'track' : 'clip'} was renamed outside K2`
+  return `${a.name}’s hold on ${was} ended: the ${/^@trk:/.test(k) ? 'track' : 'clip'} was renamed outside ${PRODUCT_NAME}`
 }
 
 /** Where someone is, in words: the clip under their playhead and its lane ("Interview B · V1"), else a gap. */

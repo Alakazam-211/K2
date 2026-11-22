@@ -43,6 +43,7 @@ import {
   SettingsLoadState,
 } from '../controls/SettingControls'
 import { StatusDot, type HealthTone } from './ConnectionsParts'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const HOMES_SYNC_MANIFEST: SettingEntry[] = [
   {
@@ -108,15 +109,15 @@ export function homesStatusView(
         reason: null,
       }
     case 'syncing':
-      return { tone: 'ok', title: 'Syncing now…', hint: 'Sending and fetching changes with this computer’s K2 server.', reason: null }
+      return { tone: 'ok', title: 'Syncing now…', hint: `Sending and fetching changes with this computer’s ${PRODUCT_NAME} server.`, reason: null }
     case 'offline':
       return {
         tone: 'warn',
         title: 'Paused',
         hint:
           s.pending > 0
-            ? `This computer’s K2 server can’t be reached. ${changes(s.pending)} wait here and sync when it’s back.`
-            : 'This computer’s K2 server can’t be reached. Groups sync again when it’s back.',
+            ? `This computer’s ${PRODUCT_NAME} server can’t be reached. ${changes(s.pending)} wait here and sync when it’s back.`
+            : `This computer’s ${PRODUCT_NAME} server can’t be reached. Groups sync again when it’s back.`,
         reason: null,
       }
     case 'removed':
@@ -130,7 +131,7 @@ export function homesStatusView(
       return {
         tone: 'neutral',
         title: 'Not available here',
-        hint: 'This computer’s K2 server doesn’t sync groups. Update K2 to turn it on.',
+        hint: `This computer’s ${PRODUCT_NAME} server doesn’t sync groups. Update ${PRODUCT_NAME} to turn it on.`,
         reason: null,
       }
     case 'error':
@@ -214,14 +215,14 @@ export function HomesSyncSection(props: {
     try {
       raw = await transport.listDevices(deviceId)
     } catch (err) {
-      setLoadError({ plain: 'This page couldn’t read the list from this computer’s K2 server.', reason: daemonErrorText(err) })
+      setLoadError({ plain: `This page couldn’t read the list from this computer’s ${PRODUCT_NAME} server.`, reason: daemonErrorText(err) })
       return
     }
     try {
       setDevices(parseDevices(raw))
       setLoadError(null)
     } catch {
-      setLoadError({ plain: 'This computer’s K2 server sent a list K2 couldn’t read. Updating K2 usually fixes this.', reason: null })
+      setLoadError({ plain: `This computer’s ${PRODUCT_NAME} server sent a list ${PRODUCT_NAME} couldn’t read. Updating ${PRODUCT_NAME} usually fixes this.`, reason: null })
     }
   }, [supported, transport, deviceId])
 
@@ -265,7 +266,7 @@ export function HomesSyncSection(props: {
     const ok = await useConfirmDialogStore.getState().confirm({
       title: 'Change Home sync',
       message:
-        'This computer keeps its groups in step with your phone through this computer’s K2 server. You can turn that off for this computer: its groups stay here, nothing is deleted, and you can turn it back on at any time.',
+        `This computer keeps its groups in step with your phone through this computer’s ${PRODUCT_NAME} server. You can turn that off for this computer: its groups stay here, nothing is deleted, and you can turn it back on at any time.`,
       confirmLabel: 'Turn off for this computer',
     })
     if (!ok) return
@@ -313,11 +314,11 @@ export function HomesSyncSection(props: {
         <Header />
         <SettingsLoadState
           kind="empty"
-          title="This computer’s K2 server doesn’t sync groups yet"
+          title={`This computer’s ${PRODUCT_NAME} server doesn’t sync groups yet`}
           action={<Button onClick={openUpdates}>Check for updates</Button>}
           testId="homes-sync-unsupported"
         >
-          Update K2 on this computer to 0.46.1 or newer, then come back here to turn on Home sync. Your groups stay on this
+          Update {PRODUCT_NAME} on this computer to 0.46.1 or newer, then come back here to turn on Home sync. Your groups stay on this
           computer until then.
         </SettingsLoadState>
       </div>
@@ -347,7 +348,7 @@ export function HomesSyncSection(props: {
       action={<Button onClick={openCompanion}>Pair a phone</Button>}
       testId="homes-sync-no-devices"
     >
-      Pair K2 Companion on your phone and choose this computer as its server; it shows here once it syncs.
+      Pair {PRODUCT_NAME} Companion on your phone and choose this computer as its server; it shows here once it syncs.
     </SettingsLoadState>
   ) : undefined
 

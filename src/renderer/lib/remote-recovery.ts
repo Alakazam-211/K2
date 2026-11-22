@@ -31,6 +31,7 @@
 // K2 Connect panel, the top-bar host indicator, and the in-app banner render.
 
 import type { ReviveOutcome } from '@/lib/remote-session'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** The healthy baseline + the three recovery states. `bootPhase` carries the
  *  host's /boot-status phase when it answered but isn't 'ready' (e.g.
@@ -146,7 +147,7 @@ export function recoveryStatusText(label: string, recovery: RemoteRecoveryState)
     case 'signin-required':
       return `${label} needs you to sign in again.`
     case 'wedged':
-      return `Connection to ${label} is stuck at the system network layer. Restart K2 to clear it.`
+      return `Connection to ${label} is stuck at the system network layer. Restart ${PRODUCT_NAME} to clear it.`
   }
 }
 

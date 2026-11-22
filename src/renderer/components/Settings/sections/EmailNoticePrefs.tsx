@@ -32,6 +32,7 @@ import {
   setMyNoticeMute,
   type MyEmailNotices,
 } from './email-notice-api'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export interface NoticeWorkspace {
   projectId: string
@@ -172,7 +173,7 @@ export function EmailNoticePrefs({
         <SettingRow
           stack
           label={live.length > 0 ? 'Use another address' : 'Your email address'}
-          hint="K2 emails you a link. Notices start once you open it and press Confirm."
+          hint={`${PRODUCT_NAME} emails you a link. Notices start once you open it and press Confirm.`}
           below={
             sent?.ok ? (
               <p role="status" data-testid="email-notice-sent" className="flex items-start gap-1.5 type-hint text-[var(--color-status-ok-soft)] leading-relaxed">

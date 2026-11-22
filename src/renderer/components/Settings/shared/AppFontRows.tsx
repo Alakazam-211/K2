@@ -9,19 +9,20 @@ import React from 'react'
 import { useSettingsStore } from '@/stores/settings'
 import { EDITOR_FONTS } from '@/components/FileViewerPane/CodeEditor'
 import { SaveError, SaveNote, SettingDropdown, SettingRow, useSaveStatus } from '../controls/SettingControls'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const APP_FONT_SIZES = [10, 11, 12, 13, 14, 15, 16, 18, 20]
 
 const COPY = {
   general: {
     family: 'Font family',
-    familyHint: 'The font K2 uses for code and text.',
+    familyHint: `The font ${PRODUCT_NAME} uses for code and text.`,
     size: 'Font size',
     sizeHint: 'For code, the message box, chats and tickets.',
   },
   'code-editor': {
     family: 'Font family',
-    familyHint: 'For code here and for text across K2: the same setting as in General.',
+    familyHint: `For code here and for text across ${PRODUCT_NAME}: the same setting as in General.`,
     size: 'Font size',
     sizeHint: 'For code, the message box, chats and tickets.',
   },

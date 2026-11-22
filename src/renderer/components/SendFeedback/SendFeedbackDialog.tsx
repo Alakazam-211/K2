@@ -47,6 +47,7 @@ import {
 } from '@/lib/product-feedback'
 import { onProductFeedbackStatus } from '@/stores/session-events'
 import { useSendFeedbackStore, type SendFeedbackTab } from '@/stores/send-feedback'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 async function appVersion(): Promise<string | null> {
   try {
@@ -178,7 +179,7 @@ export default function SendFeedbackDialog(): React.JSX.Element {
     canSend && !sending && text.trim() !== '' && !tooLong && emailOk && (!diagOn || (draft !== null && !editBlocked))
 
   const unavailableLine = !supported
-    ? `This server's K2 is older than Send feedback. Copy your text and email ${CONTACT_ADDRESS}.`
+    ? `This server's ${PRODUCT_NAME} is older than Send feedback. Copy your text and email ${CONTACT_ADDRESS}.`
     : settings && !settings.canSend
       ? settings.message ?? `This server can't send feedback now. Copy your text and email ${CONTACT_ADDRESS}.`
       : null
@@ -327,7 +328,7 @@ export default function SendFeedbackDialog(): React.JSX.Element {
                   setSentNote(null)
                   setCopied(false)
                 }}
-                placeholder="What happened, or what would make K2 better?"
+                placeholder={`What happened, or what would make ${PRODUCT_NAME} better?`}
                 className={`${TEXTAREA_CLASS} min-h-[120px]`}
               />
               {bytes > MAX_TEXT_BYTES * 0.9 ? (
@@ -556,7 +557,7 @@ function SentList({
         </Callout>
       ) : null}
       {!supported ? (
-        <p className="text-[12px] text-[var(--color-text-muted)]">This server's K2 is older than Send feedback.</p>
+        <p className="text-[12px] text-[var(--color-text-muted)]">This server's {PRODUCT_NAME} is older than Send feedback.</p>
       ) : items === null ? (
         <p className="text-[12px] text-[var(--color-text-muted)]">Loading…</p>
       ) : items.length === 0 ? (
@@ -571,7 +572,7 @@ function SentList({
                 <span className="text-[var(--color-text-secondary)] capitalize">{it.category}</span>
                 <span className="text-[var(--color-text-muted)]">{new Date(it.createdAt).toLocaleString()}</span>
                 {!it.mine ? <span className="text-[var(--color-text-muted)] truncate">· {it.sender}</span> : null}
-                {it.hasDiagnostics ? <span className="text-[var(--color-text-muted)]">· K2 details</span> : null}
+                {it.hasDiagnostics ? <span className="text-[var(--color-text-muted)]">· {PRODUCT_NAME} details</span> : null}
                 <span className="ml-auto flex gap-1">
                   {it.state === 'failed' ? (
                     <Button size="sm" onClick={() => void onRetry(it.id)}>

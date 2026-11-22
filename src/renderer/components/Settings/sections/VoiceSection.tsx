@@ -14,6 +14,7 @@ import { isWebClient } from '@/lib/is-web'
 import { useVoice, voice } from '@/stores/voice'
 import { SETTING_ROW_HINT, SettingsGroup, SettingSwitchRow } from '../controls/SettingControls'
 import type { SettingEntry } from '../searchManifest'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const VOICE_MANIFEST: SettingEntry[] = [
   {
@@ -52,7 +53,7 @@ export function VoiceSection(): React.JSX.Element {
             {noiseRemoval
               ? 'On: background noise like typing, fans and traffic is removed before others hear you.'
               : 'Off: others hear your full microphone, background noise included. Echo cancellation and volume levelling stay on.'}
-            {web ? ' Applies to calls in the K2 desktop app.' : ' Changes take effect at once, even in a call.'}
+            {web ? ` Applies to calls in the ${PRODUCT_NAME} desktop app.` : ' Changes take effect at once, even in a call.'}
           </div>
         </SettingSwitchRow>
       </SettingsGroup>

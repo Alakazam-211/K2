@@ -17,6 +17,7 @@ import {
 import { zipStore, type ZipEntry } from '@/lib/zip-store'
 import { Radio } from '@/components/ui'
 import { SettingDropdown } from '../controls/SettingControls'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 const BTN =
   'px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] transition-colors no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default'
@@ -69,7 +70,7 @@ export async function zenDataZip(widget: string, jsonl: () => Promise<string>): 
     const page = await listGardenBlobs(widget, after ? { after, limit: 500 } : { limit: 500 })
     for (const b of page.items.filter((i) => i.refs > 0)) {
       const hash = b.ref.replace(/^k2blob:sha256-/, '')
-      if (!/^[0-9a-f]{64}$/.test(hash)) throw new Error(`a file ref K2 doesn't know: ${b.ref}`)
+      if (!/^[0-9a-f]{64}$/.test(hash)) throw new Error(`a file ref ${PRODUCT_NAME} doesn't know: ${b.ref}`)
       const bytes = new Uint8Array(b.size)
       let at = 0
       for (;;) {
@@ -163,7 +164,7 @@ export function ZenWidgetRestorePanel({ widget, onDone }: { widget: string; onDo
     <div className="mt-2 p-2 border border-[var(--color-border)]" data-garden-data-restore={widget}>
       <div className="type-section text-[var(--color-text-muted)] uppercase tracking-wider">Restore</div>
       <p className={MUTED}>
-        Go back to how {widget}&apos;s data was before a change. K2 keeps 7 days of changes, takes a snapshot first, and the restore is
+        Go back to how {widget}&apos;s data was before a change. {PRODUCT_NAME} keeps 7 days of changes, takes a snapshot first, and the restore is
         itself a change you can undo.
       </p>
       {items === null && !error ? <p className={MUTED}>Reading the history…</p> : null}

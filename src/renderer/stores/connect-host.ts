@@ -55,6 +55,7 @@ import {
   persistWebSessionToken,
   withDaemonFetch,
 } from '@/web/session-token'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /**
  * Keychain service name for remembered remote-host tokens. Each token is
@@ -908,7 +909,7 @@ export async function loginToHost(
     return {
       ok: false,
       kind: 'unreachable',
-      reason: `Couldn't establish a connection to ${host.hostname}. The server may be reachable — try again, and if it keeps failing, quit and relaunch K2.`,
+      reason: `Couldn't establish a connection to ${host.hostname}. The server may be reachable — try again, and if it keeps failing, quit and relaunch ${PRODUCT_NAME}.`,
     }
   }
   if (resp.status === 401) {
@@ -928,11 +929,11 @@ export async function loginToHost(
       kind: 'not-found',
       reason: viaEdge
         ? LOGIN_404_K2DEV_MESSAGE
-        : `Server returned 404. It may not be a K2 server.`,
+        : `Server returned 404. It may not be a ${PRODUCT_NAME} server.`,
     }
   }
   if (!resp.ok) {
-    return { ok: false, kind: 'server', reason: `Server returned ${resp.status}. It may not be a K2 server.` }
+    return { ok: false, kind: 'server', reason: `Server returned ${resp.status}. It may not be a ${PRODUCT_NAME} server.` }
   }
   // Note: when the desktop client logs in through the edge Worker the
   // response may carry a `Set-Cookie: k2_session=…` for the edge origin.

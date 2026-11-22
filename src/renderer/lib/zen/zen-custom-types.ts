@@ -10,6 +10,7 @@
 import type { CatalogWireError } from '../contract/catalog-types'
 import type { UserWidgetCap } from '../k2-caps.generated'
 import type { ZenLibRef } from './zen-lib-loader'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 // ── Where a widget came from, and the runaway pause ───────────────────
 
@@ -165,7 +166,7 @@ export const ZEN_TEMPLATES_FALLBACK: readonly ZenTemplateInfo[] = [
     // Rosson 2026-10-15: offered by name, next to the Diary (Rust
     // `GARDEN_ONE_LABEL` / `GARDEN_ONE_DESCRIPTION`).
     label: 'Garden 1',
-    description: 'K2’s default: your agents beside a conversation, pinned agents on top, live activity above the box.',
+    description: `${PRODUCT_NAME}’s default: your agents beside a conversation, pinned agents on top, live activity above the box.`,
     section: 'start',
     newUsers: true,
   },

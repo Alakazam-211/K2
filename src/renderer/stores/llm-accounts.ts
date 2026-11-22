@@ -17,6 +17,7 @@ import { isWebClient } from '@/lib/is-web'
 import { onLlmAccountsChanged, onSubscriptionUsageChanged } from '@/stores/session-events'
 import type { HarnessUsage } from '@/lib/subscription-usage'
 import { useSubscriptionUsageStore } from '@/stores/subscription-usage'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export type AccountState = 'not_set_up' | 'signing_in' | 'signed_in' | 'needs_login' | 'unknown'
 
@@ -217,7 +218,7 @@ const ROLE_REFUSED = /role_required/
 /** The daemon's `{"error":{"code","hint"}}` → a readable line. */
 export function errorText(e: unknown): string {
   const raw = rawMessage(e)
-  if (NO_WALLET.test(raw)) return 'This server runs a K2 older than 0.45.0, which has no LLM tokens.'
+  if (NO_WALLET.test(raw)) return `This server runs a ${PRODUCT_NAME} older than 0.45.0, which has no LLM tokens.`
   if (ROLE_REFUSED.test(raw)) return "Your login on this server isn't allowed to change LLM tokens."
   try {
     const parsed = JSON.parse(raw) as { error?: { hint?: unknown; code?: unknown } }
@@ -311,7 +312,7 @@ export function loadErrorText(scope: ServerScope, e: unknown): string {
   const Name = name.charAt(0).toUpperCase() + name.slice(1)
   const raw = rawMessage(e)
   if (NO_WALLET.test(raw)) {
-    return `${Name} runs a K2 older than 0.45.0, which has no LLM tokens. Update that server to manage its tokens here.`
+    return `${Name} runs a ${PRODUCT_NAME} older than 0.45.0, which has no LLM tokens. Update that server to manage its tokens here.`
   }
   if (ROLE_REFUSED.test(raw)) {
     return `Your login on ${name} can't see its LLM tokens. Ask the server's owner for a Member login or higher.`
@@ -717,7 +718,7 @@ export const PINNED_SWITCH_REASON =
 export const CLAUDE_PIN_NOTE = "This chat's Claude history will stay with this subscription."
 
 /** After picking a Claude subscription for one chat. */
-export const CLAUDE_CHAT_PIN_NOTE = "K2 copies this chat's Claude history to this subscription when it restarts."
+export const CLAUDE_CHAT_PIN_NOTE = `${PRODUCT_NAME} copies this chat's Claude history to this subscription when it restarts.`
 
 export const API_TOKEN_SUFFIX = 'billed per token'
 
@@ -814,7 +815,7 @@ export const AUTO_NEXT_CONFIRM_ACTION = 'llm-auto-next'
 
 /** Next to the switch: what it does and whose decision it is. */
 export const AUTO_NEXT_NOTE =
-  'When the subscription in use reaches 99% of its limit, K2 switches to the next signed-in one by itself. Switching accounts automatically at the limit may go against the provider’s terms. It’s your decision.'
+  `When the subscription in use reaches 99% of its limit, ${PRODUCT_NAME} switches to the next signed-in one by itself. Switching accounts automatically at the limit may go against the provider’s terms. It’s your decision.`
 
 /** This server offers no password-free confirm: ask for the vault password. */
 export class AutoNextPasswordNeeded extends Error {

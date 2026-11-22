@@ -9,6 +9,7 @@ import {
   type AppMenuActionId,
 } from '@/lib/app-menu-actions'
 import { useBrowserOverlay } from '@/lib/browser-overlay'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 type MenuEntry =
   | { kind: 'item'; id: AppMenuActionId; label: string }
@@ -19,7 +20,7 @@ const quitWord = typeof navigator !== 'undefined' && desktopOsFromNavigator(navi
 
 const MENU_SECTIONS: { title: string; items: MenuEntry[] }[] = [
   {
-    title: 'K2',
+    title: PRODUCT_NAME,
     items: [
       // First row so the open panel shows it without a scroll cap.
       { kind: 'item', id: 'new-window', label: 'New Window' },

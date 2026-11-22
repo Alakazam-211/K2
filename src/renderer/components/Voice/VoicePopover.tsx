@@ -31,6 +31,7 @@ import { CALL_PANEL_BUTTON, CALL_PANEL_ICON, CallPanelButton, RECORD_LABEL, STOP
 import { VOICE_POPOVER_WIDTH, callPanelFolds, type CallPanelButtonId } from './call-panel-fit'
 import { recordingButtons } from '@/lib/voice/recording-controls'
 import { HeadphonesIcon, MicIcon, MicOffIcon, NoiseWaveIcon, PhoneOffIcon, RecordIcon, StopRecordIcon } from '@/components/icons/K2Icons'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const noDrag = { WebkitAppRegion: 'no-drag' } as any
@@ -134,12 +135,12 @@ function CallPanel({ call }: { call: VoiceCall }): React.JSX.Element {
       </div>
       {call.relayOnly ? (
         <p data-testid="voice-relay-only" className="mt-0.5 text-[10px] text-[var(--color-text-muted)]">
-          Through K2's network (relay only)
+          Through {PRODUCT_NAME}'s network (relay only)
         </p>
       ) : null}
       {engineKind === 'seat' ? (
         <p data-testid="voice-seat-only" className="mt-0.5 text-[10px] text-[var(--color-text-muted)]">
-          {isWebClient() ? 'You can see this room here, but not talk. Use the K2 desktop app to talk.' : 'No call audio in this version: you hold a seat in the room.'}
+          {isWebClient() ? `You can see this room here, but not talk. Use the ${PRODUCT_NAME} desktop app to talk.` : 'No call audio in this version: you hold a seat in the room.'}
         </p>
       ) : null}
       {call.micDenied ? (

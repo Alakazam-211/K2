@@ -23,6 +23,7 @@ import type { ServerScope } from '@/kessel/server-scope'
 import { previewTypeFor, useLivePreview, type LivePreviewType } from '@/lib/live-view/shared/preview-keys'
 import { LiveEntrySwitchProvider, LiveEntrySwitchView, type LiveEntryMode, type LiveEntrySwitchValue } from './LiveEntrySwitch'
 import { LiveFileContext } from './live-file'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export { WATCH_LIVE_LABEL } from './LiveEntrySwitch'
 
@@ -39,9 +40,9 @@ const REAL: Partial<Record<LivePreviewType, { hint: string; view: (scope: Server
 }
 
 const ENTRIES: Record<LivePreviewType, { group: string; hint: string; view: () => React.JSX.Element }> = {
-  workbook: { group: 'Workbook view', hint: 'Plays K2’s sample workbook, not this file.', view: () => <LiveWorkbookSample /> },
-  scene: { group: 'Scene view', hint: 'Plays K2’s sample scene, not this file.', view: () => <LiveShellSample kind="scene" /> },
-  timeline: { group: 'Timeline view', hint: 'Plays K2’s sample edit, not this file.', view: () => <TimelineSample /> },
+  workbook: { group: 'Workbook view', hint: `Plays ${PRODUCT_NAME}’s sample workbook, not this file.`, view: () => <LiveWorkbookSample /> },
+  scene: { group: 'Scene view', hint: `Plays ${PRODUCT_NAME}’s sample scene, not this file.`, view: () => <LiveShellSample kind="scene" /> },
+  timeline: { group: 'Timeline view', hint: `Plays ${PRODUCT_NAME}’s sample edit, not this file.`, view: () => <TimelineSample /> },
 }
 
 export function LivePreviewEntry({

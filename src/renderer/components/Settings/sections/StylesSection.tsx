@@ -44,7 +44,7 @@ import type { SettingEntry } from '../searchManifest'
 import { splitPage, useSplitPage, SPLIT_PAGE_MIN_PX } from '../controls/split-page'
 import { SaveNote, SettingRow, SettingsGroup, SETTING_LIST_ROW_HOVER } from '../controls/SettingControls'
 import { Button, Input, Segmented, Slider, Tag, cx } from '@/components/ui'
-import { CLI_NAME } from '@/lib/brand'
+import { CLI_NAME, PRODUCT_NAME } from '@/lib/brand'
 
 /** Below this page width (CSS px) the style list goes on top of the shown
  *  style, one scroll (controls/split-page). */
@@ -62,7 +62,7 @@ export const STYLES_MANIFEST: SettingEntry[] = [
   { id: 'styles.density', section: 'styles', label: 'Spacing', description: 'Compact, Regular or Spacious room between panes and tiles', keywords: ['density', 'gaps', 'spacing', 'compact', 'regular', 'spacious', 'padding', 'tiles'] },
   { id: 'styles.dials', section: 'styles', label: 'Frost', description: 'How much Glass blurs what is behind menus and popovers', keywords: ['dials', 'frost', 'blur', 'adjust', 'tweak', 'slider', 'glass', 'effects', 'translucency'] },
   { id: 'styles.text-weight', section: 'styles', label: 'Terminal text weight', description: 'How thick text looks in terminals, saved for each theme', keywords: ['gamma', 'weight', 'thickness', 'bold', 'thin', 'chonky', 'webgl', 'text', 'terminal'] },
-  { id: 'styles.reset-defaults', section: 'styles', label: 'Reset to defaults', description: 'Put the theme, light and dark, palettes, accent colours, spacing, Frost and text weight back to how K2 ships', keywords: ['reset', 'defaults', 'default', 'restore', 'factory', 'start over', 'undo', 'original', 'theme', 'style', 'look'] },
+  { id: 'styles.reset-defaults', section: 'styles', label: 'Reset to defaults', description: `Put the theme, light and dark, palettes, accent colours, spacing, Frost and text weight back to how ${PRODUCT_NAME} ships`, keywords: ['reset', 'defaults', 'default', 'restore', 'factory', 'start over', 'undo', 'original', 'theme', 'style', 'look'] },
 ]
 
 /** A palette's accent as its swatch shows it: its saved choice, else its own. */
@@ -93,7 +93,7 @@ const DIAL_HINTS: Record<string, string> = {
 }
 
 const NOT_SAVED =
-  "This shows now, but K2 couldn't save it on this computer, so it won't last. Try the change again."
+  `This shows now, but ${PRODUCT_NAME} couldn't save it on this computer, so it won't last. Try the change again.`
 
 /** Small shapes inside a card: square on Terminal; on Glass a fraction of the
  *  card's radius, so they sit concentric within its padding. */
@@ -405,7 +405,7 @@ export function StylesSection(): React.JSX.Element {
   // every palette's accent, dial and text weight and applies DEFAULT_SELECTION.
   const handleResetToDefaults = async (): Promise<void> => {
     const ok = await useConfirmDialogStore.getState().confirm({
-      title: 'Put Themes back to how K2 ships?',
+      title: `Put Themes back to how ${PRODUCT_NAME} ships?`,
       message: 'Your look, light and dark, palettes and accent colours go back to the defaults on this computer.',
       confirmLabel: 'Reset',
     })
@@ -450,7 +450,7 @@ export function StylesSection(): React.JSX.Element {
         <div className="flex-shrink-0 px-4 pt-6 pb-3">
           <h2 className="flex items-center h-7 type-heading text-[var(--color-text-primary)]">Themes</h2>
           <p className="type-hint text-[var(--color-text-secondary)] leading-relaxed">
-            How K2 looks on this computer. Point at a theme to try it; click to use it.
+            How {PRODUCT_NAME} looks on this computer. Point at a theme to try it; click to use it.
           </p>
         </div>
         {/* Terminal: full-width list rows, so the names line up with the
@@ -933,7 +933,7 @@ export function StylesSection(): React.JSX.Element {
             <SettingRow
               settingId="styles.reset-defaults"
               label="Reset to defaults"
-              hint="The theme, light and dark, palettes, accent colours, spacing, Frost and text weight, as K2 ships them. Only on this computer."
+              hint={`The theme, light and dark, palettes, accent colours, spacing, Frost and text weight, as ${PRODUCT_NAME} ships them. Only on this computer.`}
               below={unsaved === 'defaults' ? <RowError>{NOT_SAVED}</RowError> : undefined}
             >
               {savedNote('defaults')}

@@ -77,6 +77,7 @@ import {
   type ProfileAccount,
   type ProfileRole,
 } from './admin-profile-api'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 const noDrag = { WebkitAppRegion: 'no-drag' } as React.CSSProperties
 
@@ -126,8 +127,8 @@ function Tag({ children, testId }: { children: React.ReactNode; testId?: string 
 export function ingressLabel(ingress: string): string {
   if (ingress === 'loopback') return 'This computer'
   if (ingress === 'lan') return 'Local network'
-  if (ingress === 'tunnel') return 'K2 Connect'
-  if (ingress.startsWith('edge:')) return 'K2 Connect (edge)'
+  if (ingress === 'tunnel') return `${PRODUCT_NAME} Connect`
+  if (ingress.startsWith('edge:')) return `${PRODUCT_NAME} Connect (edge)`
   return ingress || '—'
 }
 

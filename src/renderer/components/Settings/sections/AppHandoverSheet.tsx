@@ -19,6 +19,7 @@ import { APP_APPROVE_CONFIRM_ACTION, approveAppRequest } from './app-approvals-a
 import { vaultApi } from './vault-api'
 import { SettingDropdown } from '../controls/SettingControls'
 import { AccessSheet, DIALOG_FIELD, DIALOG_LABEL, DIALOG_MUTED, Field } from './AccessDialogs'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 type Step =
   | { kind: 'pick' }
@@ -127,8 +128,8 @@ export function AppHandoverSheet({
       title={`${verb} ${appId}`}
       intro={
         parked
-          ? 'Pick the agent that keeps it up from now on. K2 shows what moves before anything does.'
-          : 'Pick the agent that takes it over. K2 shows what moves before anything does, and you can undo it for 72 hours.'
+          ? `Pick the agent that keeps it up from now on. ${PRODUCT_NAME} shows what moves before anything does.`
+          : `Pick the agent that takes it over. ${PRODUCT_NAME} shows what moves before anything does, and you can undo it for 72 hours.`
       }
       onClose={onClose}
       busy={working}
@@ -207,7 +208,7 @@ export function AppHandoverSheet({
       ) : null}
       {step.kind === 'confirming' ? <p className={DIALOG_MUTED}>Confirm it’s you…</p> : null}
       {step.kind === 'password' ? (
-        <Field label="Your password" htmlFor={`handover-pw-${appId}`} hint="K2 asks for it to confirm it’s you.">
+        <Field label="Your password" htmlFor={`handover-pw-${appId}`} hint={`${PRODUCT_NAME} asks for it to confirm it’s you.`}>
           <Input id={`handover-pw-${appId}`} ref={pwRef} type="password" aria-label="Password to confirm" className={DIALOG_FIELD} />
         </Field>
       ) : null}

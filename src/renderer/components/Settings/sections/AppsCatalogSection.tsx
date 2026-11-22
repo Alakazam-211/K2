@@ -60,6 +60,7 @@ import { approveWithConfirm } from './AppHandoverSheet'
 import { APP_APPROVE_CONFIRM_ACTION } from './app-approvals-api'
 import { vaultApi } from './vault-api'
 import { isAppsOff } from './apps-server-api'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 const POLL_MS = 1500
 const CHECK_DEBOUNCE_MS = 350
@@ -100,7 +101,7 @@ export function hostOf(url: string | null | undefined): string | null {
 /** A reason in the page's words: not-published in our own sentence, the
  *  rest the server's, with its names in the page's words. */
 function reasonWords(r: CatalogReason): string {
-  if (r.code === NOT_PINNED) return 'Its first version comes with a K2 update.'
+  if (r.code === NOT_PINNED) return `Its first version comes with a ${PRODUCT_NAME} update.`
   const t = serverWords(r.text).trim().replace(/[.\s]+$/, '')
   return `${t.charAt(0).toUpperCase()}${t.slice(1)}.`
 }
@@ -545,8 +546,8 @@ export function AppsCatalogSection(): React.JSX.Element {
         Turn them on in This server first; then Hearth and Meet can be added here.
       </SettingsLoadState>
     ) : load.kind === 'old' ? (
-      <SettingsLoadState kind="empty" title="This server’s K2 can’t add Apps in one step yet" testId="catalog-server-old">
-        Update K2 on this server to add Hearth and Meet from here.
+      <SettingsLoadState kind="empty" title={`This server’s ${PRODUCT_NAME} can’t add Apps in one step yet`} testId="catalog-server-old">
+        Update {PRODUCT_NAME} on this server to add Hearth and Meet from here.
       </SettingsLoadState>
     ) : load.kind === 'error' ? (
       <SettingsLoadState
@@ -561,7 +562,7 @@ export function AppsCatalogSection(): React.JSX.Element {
       />
     ) : entries.length === 0 ? (
       <SettingsLoadState kind="empty" title="Nothing to add yet">
-        This K2 has no Apps to deploy in one step.
+        This {PRODUCT_NAME} has no Apps to deploy in one step.
       </SettingsLoadState>
     ) : undefined
 
@@ -570,14 +571,14 @@ export function AppsCatalogSection(): React.JSX.Element {
       <PaneHeader
         title="Add an App"
         testId="catalog-header"
-        hint="Apps from known publishers, set up on this server in one step. K2 checks every version before it installs it."
+        hint={`Apps from known publishers, set up on this server in one step. ${PRODUCT_NAME} checks every version before it installs it.`}
       />
       {shared.length > 0 ? (
         <Callout tone="info" className="type-hint space-y-1" role="status" data-testid={nothingPublished(entries) ? 'catalog-not-published' : 'catalog-shared-reasons'}>
           {shared.map((r) => (
             <p key={r.code}>
               {r.code === NOT_PINNED
-                ? `${namesOf(entries)} aren’t published yet. Their first versions come with a K2 update; until then there’s nothing to add here.`
+                ? `${namesOf(entries)} aren’t published yet. Their first versions come with a ${PRODUCT_NAME} update; until then there’s nothing to add here.`
                 : reasonWords(r)}
             </p>
           ))}

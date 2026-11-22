@@ -22,7 +22,7 @@
 import { daemonCliPost, daemonCliPostQuery } from '@/lib/daemon-cli'
 import type { ServerScope } from '@/kessel/server-scope'
 import { DASHBOARD_URL, ZONE } from '@/lib/hosts'
-import { CLI_NAME } from '@/lib/brand'
+import { CLI_NAME, PRODUCT_NAME } from '@/lib/brand'
 
 /** The daemon route that performs Connect control-plane calls with the
  *  vault-held tunnel token. INTEGRATOR: confirm this name against the
@@ -36,9 +36,9 @@ export const SUBDOMAIN_HOST = ZONE
  *  `_refuse_reserved_nested_label`. */
 export const RESERVED_NESTED_LABELS: Record<string, string> = {
   skin: "'skin' is reserved for your Apps' front door. Pick another label.",
-  meet: "'meet' is reserved for K2 Meet (meet.<box>.k2.dev). Pick another label.",
-  chat: "'chat' is reserved for K2 chat (chat.<box>.k2.dev). Pick another label.",
-  mail: "'mail' is reserved for K2 webmail (mail.<box>.k2.dev). Pick another label.",
+  meet: `'meet' is reserved for ${PRODUCT_NAME} Meet (meet.<box>.k2.dev). Pick another label.`,
+  chat: `'chat' is reserved for ${PRODUCT_NAME} chat (chat.<box>.k2.dev). Pick another label.`,
+  mail: `'mail' is reserved for ${PRODUCT_NAME} webmail (mail.<box>.k2.dev). Pick another label.`,
 }
 
 /** Labels the control plane itself refuses (`NESTED_RESERVED`). */
@@ -146,12 +146,12 @@ export const CONTROL_PLANE_MESSAGES: Record<string, string> = {
   primary_undeletable: 'Your primary subdomain cannot be removed.',
   not_found: 'No such subdomain.',
   invalid_token:
-    'Tunnel token rejected — re-select your subdomain in Settings -> K2 Connect to refresh it.',
+    `Tunnel token rejected — re-select your subdomain in Settings -> ${PRODUCT_NAME} Connect to refresh it.`,
 }
 
 /** The daemon's answer when it has no such route (older daemon). */
 export const PROXY_MISSING_MESSAGE =
-  `This K2 server can't manage published subdomains from Settings yet. Update it, or use \`${CLI_NAME} publish subdomain create\` in a terminal.`
+  `This ${PRODUCT_NAME} server can't manage published subdomains from Settings yet. Update it, or use \`${CLI_NAME} publish subdomain create\` in a terminal.`
 
 function str(v: unknown): string {
   return typeof v === 'string' ? v.trim() : ''
@@ -192,7 +192,7 @@ export function proxyFailureMessage(err: unknown): string {
   if (msg === 'route not found') return PROXY_MISSING_MESSAGE
   if (msg === 'pro_required') return controlPlaneErrorMessage(403, { error: msg })
   if (CONTROL_PLANE_MESSAGES[msg]) return CONTROL_PLANE_MESSAGES[msg]
-  return msg || 'The K2 server did not answer.'
+  return msg || `The ${PRODUCT_NAME} server did not answer.`
 }
 
 async function callConnect(scope: ServerScope, req: ConnectProxyRequest): Promise<unknown> {
@@ -207,7 +207,7 @@ async function callConnect(scope: ServerScope, req: ConnectProxyRequest): Promis
     )
   }
   if (!resp || typeof resp !== 'object' || typeof resp.status !== 'number') {
-    throw new PublishedSubdomainError('The K2 server sent an answer Settings could not read.')
+    throw new PublishedSubdomainError(`The ${PRODUCT_NAME} server sent an answer Settings could not read.`)
   }
   if (resp.status < 200 || resp.status >= 300) {
     const b = resp.body

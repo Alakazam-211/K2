@@ -52,6 +52,7 @@ import {
 } from '@/lib/voice/native-voice-engine'
 import type { VoiceDevices } from '@/lib/voice/voice-engine'
 import type { RecordingButtons, RecordingPerms } from '@/lib/voice/recording-controls'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** §4.3: a 30 s check while the popover is open or a call runs. */
 export const VOICE_ROOMS_POLL_MS = 30_000
@@ -463,7 +464,7 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
   const leaveK2Record = (n: NativeVoiceEngine, hostKey: string): void => {
     const target = deps.targetFor?.(hostKey) ?? null
     if (!target) return
-    void n.sessionLeave(target).catch((err: unknown) => console.warn('[voice] ending the K2 call record failed:', err))
+    void n.sessionLeave(target).catch((err: unknown) => console.warn(`[voice] ending the ${PRODUCT_NAME} call record failed:`, err))
   }
 
   const endCall = async (gen: number, reason: string, opts: { tellServer: boolean; toast: boolean }): Promise<void> => {
@@ -835,7 +836,7 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
       const now = store.getState().call
       // Still in the call (or still held): ask again, never assume a yes.
       if (now) store.setState({ call: { ...now, recordingNotice: shown } })
-      notice(e?.code === 'not_in_call' ? 'That call ended.' : "K2 couldn't send your answer to the recording notice. Try again, or leave the call.", 'error')
+      notice(e?.code === 'not_in_call' ? 'That call ended.' : `${PRODUCT_NAME} couldn't send your answer to the recording notice. Try again, or leave the call.`, 'error')
     }
   }
 
@@ -856,8 +857,8 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
             : code === 'recording_disabled'
               ? "Recording is off on this server."
               : what === 'start'
-                ? "K2 couldn't start recording this call."
-                : "K2 couldn't stop the recording.",
+                ? `${PRODUCT_NAME} couldn't start recording this call.`
+                : `${PRODUCT_NAME} couldn't stop the recording.`,
         'error',
       )
     }
@@ -1205,7 +1206,7 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
     if (native) {
       void applyNativeDevice(native, patch).catch((err: unknown) => {
         console.warn('[voice] switching audio device failed:', err)
-        notice("K2 couldn't switch to that audio device.", 'error')
+        notice(`${PRODUCT_NAME} couldn't switch to that audio device.`, 'error')
       })
       return
     }
@@ -1249,7 +1250,7 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
     } catch (err) {
       console.warn('[voice] opening the privacy settings failed:', err)
     }
-    if (!opened) notice("K2 couldn't open your settings. Open your system's sound settings and allow K2.", 'error')
+    if (!opened) notice(`${PRODUCT_NAME} couldn't open your settings. Open your system's sound settings and allow ${PRODUCT_NAME}.`, 'error')
   }
 
   // §4.4: signed out, kicked or removed on the call's server ends the call.

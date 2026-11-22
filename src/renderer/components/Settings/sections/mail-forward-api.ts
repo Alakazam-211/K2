@@ -11,7 +11,7 @@
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { primaryScope, type ServerScope } from '@/kessel/server-scope'
 import { mailErrorInfo } from './email-api'
-import { CLI_NAME } from '@/lib/brand'
+import { CLI_NAME, PRODUCT_NAME } from '@/lib/brand'
 
 /** Which door the viewer came through. */
 export type ForwardViewer = 'staff' | 'person'
@@ -170,16 +170,16 @@ export function isStaffRefusal(err: unknown): boolean {
  *  (the daemon still decides). Staff here = owner or Admin. */
 export function resumeRule(viewer: ForwardViewer, reason: string | null): { can: boolean; why: string | null } {
   if (reason === 'revoked') {
-    return { can: false, why: `The address pressed Stop, so K2 won’t send there. Only the owner or an Admin can choose it again, and should ask them first (${CLI_NAME} hostmail forward add --restart-stopped).` }
+    return { can: false, why: `The address pressed Stop, so ${PRODUCT_NAME} won’t send there. Only the owner or an Admin can choose it again, and should ask them first (${CLI_NAME} hostmail forward add --restart-stopped).` }
   }
   if (reason === 'not_told') {
-    return { can: false, why: 'K2 can’t email the address its link to stop this. It goes back on by itself when that email goes.' }
+    return { can: false, why: `${PRODUCT_NAME} can’t email the address its link to stop this. It goes back on by itself when that email goes.` }
   }
   if (reason === 'upgrade_required') {
     return { can: false, why: `Not forwarding: the mail server needs upgrading (${CLI_NAME} hostmail upgrade). It resumes by itself after the upgrade.` }
   }
   if (reason === 'air_gap' || reason === 'receive_only') {
-    return { can: false, why: 'K2 resumes it by itself when that changes.' }
+    return { can: false, why: `${PRODUCT_NAME} resumes it by itself when that changes.` }
   }
   if (reason === 'box_brake' && viewer === 'person') {
     return { can: false, why: 'Every outside forward on this server is paused. The owner or an Admin resumes them.' }
@@ -199,9 +199,9 @@ export function eventWords(e: ForwardEvent): string {
     held: 'Paused again while already paused',
     not_told: 'Owner told the address still has no stop link',
     restarted: 'Chosen again after the address pressed Stop',
-    legacy_on: 'Turned on (K2 stopped asking for a confirm)',
+    legacy_on: `Turned on (${PRODUCT_NAME} stopped asking for a confirm)`,
     legacy_stale: 'Left off (too old to turn on)',
-    legacy_due: 'Turning on (K2 stopped asking for a confirm)',
+    legacy_due: `Turning on (${PRODUCT_NAME} stopped asking for a confirm)`,
     cant_arrive: 'Owner told its mail can’t arrive',
     paused: 'Paused',
     resumed: 'Resumed',

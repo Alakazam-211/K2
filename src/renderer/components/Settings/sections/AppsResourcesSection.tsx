@@ -38,14 +38,14 @@ import {
   type Lines,
   type Trends,
 } from './app-resources-api'
-import { CLI_NAME } from '@/lib/brand'
+import { CLI_NAME, PRODUCT_NAME } from '@/lib/brand'
 
 export const APPS_RESOURCES_MANIFEST: SettingEntry[] = [
   {
     id: 'skin-access.box-usage',
     section: 'skin-access',
     label: 'Disk and memory',
-    description: 'Disk used and free against the disk guard, the biggest users, CPU and memory over a day, and what K2 can clean',
+    description: `Disk used and free against the disk guard, the biggest users, CPU and memory over a day, and what ${PRODUCT_NAME} can clean`,
     keywords: ['disk', 'disk guard', 'box usage', 'resources', 'storage', 'free space', 'clean', 'cpu', 'memory', 'ram', `${CLI_NAME} app resources`],
     group: 'This server',
   },
@@ -206,7 +206,7 @@ export function AppsResourcesSection(): React.JSX.Element | null {
       <SettingsGroup
         card
         title="Disk and memory"
-        hint="How full this server is, what uses the most, and what K2 can clean up."
+        hint={`How full this server is, what uses the most, and what ${PRODUCT_NAME} can clean up.`}
         action={
           load.kind === 'ready' ? (
             <Button disabled={busy !== null} onClick={() => void act('rescan', async () => {
@@ -223,7 +223,7 @@ export function AppsResourcesSection(): React.JSX.Element | null {
           ) : load.kind === 'error' ? (
             <SettingsLoadState
               kind="error"
-              title="K2 couldn’t read this server’s disks"
+              title={`${PRODUCT_NAME} couldn’t read this server’s disks`}
               detail={load.text}
               action={<Button onClick={() => void refresh()}>Try again</Button>}
             >
@@ -242,7 +242,7 @@ export function AppsResourcesSection(): React.JSX.Element | null {
                 const p = await clean(true)
                 if (mounted.current) setPlan(p)
                 return null
-              }, 'Couldn’t work out what K2 can clean')
+              }, `Couldn’t work out what ${PRODUCT_NAME} can clean`)
             }
           />
         ) : null}
@@ -250,7 +250,7 @@ export function AppsResourcesSection(): React.JSX.Element | null {
       {plan ? (
         <AccessSheet
           title="Clean up this server?"
-          intro={plan.items.length === 0 ? undefined : `K2 can free about ${sizeLabel(plan.totalBytes)} of things it made and can make again.`}
+          intro={plan.items.length === 0 ? undefined : `${PRODUCT_NAME} can free about ${sizeLabel(plan.totalBytes)} of things it made and can make again.`}
           onClose={() => setPlan(null)}
           busy={busy === 'clean'}
           testId="box-clean-plan-list"
@@ -281,9 +281,9 @@ export function AppsResourcesSection(): React.JSX.Element | null {
           }
         >
           {plan.items.length === 0 ? (
-            <p className={SETTING_ROW_HINT}>Nothing to clean: K2 found nothing it made and can make again.</p>
+            <p className={SETTING_ROW_HINT}>Nothing to clean: {PRODUCT_NAME} found nothing it made and can make again.</p>
           ) : (
-            <p className="sr-only">K2 can free about {sizeLabel(plan.totalBytes)} of things it made and can make again:</p>
+            <p className="sr-only">{PRODUCT_NAME} can free about {sizeLabel(plan.totalBytes)} of things it made and can make again:</p>
           )}
           {plan.items.length > 0 ? (
             <ul className="divide-y divide-[var(--color-border)]">
@@ -309,7 +309,7 @@ export function AppsResourcesSection(): React.JSX.Element | null {
 function guardWords(usage: BoxUsage): string {
   const l = usage.lines
   const env = usage.modeSource === 'env' ? ' (set in the server’s environment)' : ''
-  if (usage.mode === 'off') return `The disk guard is off${env}: K2 doesn’t hold back new work when the disk fills.`
+  if (usage.mode === 'off') return `The disk guard is off${env}: ${PRODUCT_NAME} doesn’t hold back new work when the disk fills.`
   const lead = usage.mode === 'warn' ? `The disk guard only warns${env}.` : `The disk guard is on${env}.`
   return `${lead} It warns at ${l.warnPct}% used or ${sizeLabel(l.warnFreeBytes)} free, refuses new work at ${l.refusePct}% or ${sizeLabel(l.reserveBytes)} left, and is critical at ${l.criticalPct}% or ${sizeLabel(l.criticalFreeBytes)} free. The server’s owner sets these lines.`
 }
@@ -347,7 +347,7 @@ function Ready(p: {
       </div>
       {usage.disks.length === 0 ? (
         <div className="px-4 py-3">
-          <p className={SETTING_ROW_HINT}>K2 couldn&rsquo;t read any disk on this server.</p>
+          <p className={SETTING_ROW_HINT}>{PRODUCT_NAME} couldn&rsquo;t read any disk on this server.</p>
         </div>
       ) : null}
       {usage.disks.map((d) => (
@@ -373,13 +373,13 @@ function Ready(p: {
         <div className="min-w-0">
           <p className={SETTING_ROW_LABEL}>Clean up</p>
           <p className={SETTING_ROW_HINT}>
-            {usage.k2WillClearBytes ? `K2 clears ${sizeLabel(usage.k2WillClearBytes)} of old starter copies at the next daily sweep. ` : ''}
+            {usage.k2WillClearBytes ? `${PRODUCT_NAME} clears ${sizeLabel(usage.k2WillClearBytes)} of old starter copies at the next daily sweep. ` : ''}
             {usage.scannedAt ? `Folders last measured ${formatRelativeTime(usage.scannedAt, Math.floor(Date.now() / 1000))}` : 'Folders not measured yet'}
             {usage.scanRunning ? '; a scan is running' : ''}.
           </p>
         </div>
         <Button disabled={p.busy !== null} onClick={p.onPlan} data-testid="box-clean-plan">
-          {p.busy === 'plan' ? 'Checking…' : 'What can K2 clean?'}
+          {p.busy === 'plan' ? 'Checking…' : `What can ${PRODUCT_NAME} clean?`}
         </Button>
       </div>
     </div>

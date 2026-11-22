@@ -50,6 +50,7 @@ import { useToastStore } from '@/stores/toast'
 import { Button, OverflowMenu, Surface } from '@/components/ui'
 import { SettingsLoadState, SETTING_ROW_HINT } from '../controls/SettingControls'
 import { ZenWidgetFilesLine, ZenWidgetRestorePanel, saveBytes, zenDataZip } from './ZenWidgetDataRestore'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 const MUTED = 'type-hint text-[var(--color-text-secondary)]'
 
@@ -110,7 +111,7 @@ export function makerText(m: GardenMadeBy | null): string | null {
     case 'owner':
       return 'Made by you'
     case 'k2':
-      return 'Built into K2'
+      return `Built into ${PRODUCT_NAME}`
     case 'agent':
       return `Made by ${m.handle}`
     case 'unclaimed':
@@ -125,7 +126,7 @@ export function signerText(m: GardenMadeBy | null): string | null {
     case 'owner':
       return 'Last signed by you'
     case 'k2':
-      return 'Built into K2'
+      return `Built into ${PRODUCT_NAME}`
     case 'agent':
       return `Last signed by ${m.handle}`
     case 'unclaimed':
@@ -249,7 +250,7 @@ async function exportZipAndSave(widget: string): Promise<void> {
 async function confirmDelete(widget: string, bytes: number): Promise<boolean> {
   return useConfirmDialogStore.getState().confirm({
     title: `Delete ${widget}'s data?`,
-    message: `This removes every key (${formatBytes(bytes)}) and every grant for ${widget}. K2 keeps a snapshot first. The widget itself stays.`,
+    message: `This removes every key (${formatBytes(bytes)}) and every grant for ${widget}. ${PRODUCT_NAME} keeps a snapshot first. The widget itself stays.`,
     confirmLabel: 'Delete data',
     destructive: true,
   })
@@ -538,7 +539,7 @@ export function ZenWidgetData({ only = null, except = null, embedded = false }: 
       ])
       if (mine !== seq.current) return
       // A reply without the list is a failed read, never a crash.
-      if (!s || !Array.isArray(s.spaces)) throw new Error('Its answer wasn’t a list of widget data K2 can read.')
+      if (!s || !Array.isArray(s.spaces)) throw new Error(`Its answer wasn’t a list of widget data ${PRODUCT_NAME} can read.`)
       setSpaces({ spaces: s.spaces, saves: Array.isArray(s.saves) ? s.saves : [] })
       setWidgets(Array.isArray(w.widgets) ? w.widgets : [])
       setError(null)
@@ -591,7 +592,7 @@ export function ZenWidgetData({ only = null, except = null, embedded = false }: 
       {error ? (
         <SettingsLoadState
           kind="error"
-          title="K2 couldn’t read the widget data on this computer"
+          title={`${PRODUCT_NAME} couldn’t read the widget data on this computer`}
           detail={error}
           testId="garden-data-load-error"
           action={<Button variant="quiet" onClick={reload}>Try again</Button>}

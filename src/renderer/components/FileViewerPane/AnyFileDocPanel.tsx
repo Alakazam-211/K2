@@ -33,6 +33,7 @@ import {
 import { formatRelativeTime } from '@/lib/format-relative-time'
 import { isEffectivelyHidden } from '@/lib/workspace-switch-focus'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const POLL_MS = 4_000
 /** Versions and approvals at least every this many polls. */
@@ -238,7 +239,7 @@ export function AnyFileDocPanel({ scope, filePath, hidden = false, onCoreOff }: 
     await act(`restore:${v.id}`, async () => {
       const res = await postTier0Restore(scope, filePath, v.id)
       if (!res.changed) setNotice(`Version ${v.id} already matches the current file. Nothing changed.`)
-      else if (!res.written) setNotice(`Version ${v.id} is restored in history. K2 will write the file as soon as it can.`)
+      else if (!res.written) setNotice(`Version ${v.id} is restored in history. ${PRODUCT_NAME} will write the file as soon as it can.`)
       else setNotice(`Version ${v.id} is now the newest version.`)
     })
   }

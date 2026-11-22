@@ -15,6 +15,7 @@ import {
   sortedTargets,
 } from '@/components/WorkspacePanel/urls-ports'
 import { SettingRow } from '../controls/SettingControls'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 // Addresses — the SERVER-WIDE tunnel view inside Settings → Tunnel, as rows
 // of the Addresses card: this server's address (with its local port and
@@ -107,7 +108,7 @@ export function TunnelUrlsPanel({
           {null}
         </SettingRow>
       ) : subs === null ? (
-        <SettingRow label="Sites" hint="This server's version of K2 can't list its published sites. Update K2 there to see them.">
+        <SettingRow label="Sites" hint={`This server's version of ${PRODUCT_NAME} can't list its published sites. Update ${PRODUCT_NAME} there to see them.`}>
           {null}
         </SettingRow>
       ) : rows.length === 0 ? (

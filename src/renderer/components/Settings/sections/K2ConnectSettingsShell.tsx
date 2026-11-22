@@ -15,6 +15,7 @@ import { ConnectionsSection } from './ConnectionsSection'
 import { SectionErrorBoundary } from '../SectionErrorBoundary'
 import { AccessAuditLink } from '../shared/AccessAuditLink'
 import { SETTING_ROW_HINT } from '../controls/SettingControls'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 type ConnectTab = 'tunnel' | 'people' | 'servers'
 
@@ -30,7 +31,7 @@ const PAGE: Record<ConnectTab, { title: string; blurb: string }> = {
   servers: {
     title: 'Connected Servers',
     blurb:
-      'The K2 servers you use, and the agents on other servers connected to your workspaces.',
+      `The ${PRODUCT_NAME} servers you use, and the agents on other servers connected to your workspaces.`,
   },
 }
 

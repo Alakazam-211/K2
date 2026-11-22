@@ -41,6 +41,7 @@ import {
   usernameProblem,
   type PasswordPolicy,
 } from './admin-access-api'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export { ConfirmSheet }
 
@@ -134,7 +135,7 @@ export function AddPersonDialog({
       if (canSetHigherRoles && (role === 'admin' || role === 'owner')) {
         const roleRes = await userPost('/set-role', { username: name, role })
         if (!roleRes.ok) {
-          roleNote = `${name} was added as a Member: K2 couldn’t make them ${role === 'owner' ? 'an Owner' : 'an Admin'} (${(await errText(roleRes)).replace(/[.\s]+$/, '')}). Change their role in the list.`
+          roleNote = `${name} was added as a Member: ${PRODUCT_NAME} couldn’t make them ${role === 'owner' ? 'an Owner' : 'an Admin'} (${(await errText(roleRes)).replace(/[.\s]+$/, '')}). Change their role in the list.`
         }
       }
       setPassword('')
@@ -162,7 +163,7 @@ export function AddPersonDialog({
       >
         <p className={MUTED} data-testid="added-user-msg">
           Send {who} these details yourself.
-          {added.password ? ' K2 won’t show this password again: once you close this, it’s gone.' : ' Use the password you typed.'}
+          {added.password ? ` ${PRODUCT_NAME} won’t show this password again: once you close this, it’s gone.` : ' Use the password you typed.'}
         </p>
         <Surface chamfer material="tile" className="divide-y divide-[var(--color-border)]">
           {serverAddress ? <CopyLine label="Server address" value={serverAddress} testId="added-address" /> : null}
@@ -177,12 +178,12 @@ export function AddPersonDialog({
         <div>
           <p className={LABEL}>What {who} does next</p>
           <ol className={`${MUTED} list-decimal pl-5 space-y-0.5`}>
-            <li>In K2 on their computer or phone, they add a server{serverAddress ? ' with the address above' : ''}.</li>
+            <li>In {PRODUCT_NAME} on their computer or phone, they add a server{serverAddress ? ' with the address above' : ''}.</li>
             {serverAddress ? null : (
               <li>This server has no internet address yet: turn on Settings → Tunnel, or give them its address on your network.</li>
             )}
             <li>They sign in with this username and password.</li>
-            {added.temporary ? <li>K2 then asks them to choose their own password.</li> : null}
+            {added.temporary ? <li>{PRODUCT_NAME} then asks them to choose their own password.</li> : null}
           </ol>
         </div>
       </AdminSheet>
@@ -192,7 +193,7 @@ export function AddPersonDialog({
   return (
     <AdminSheet
       title="Add a person"
-      intro="They sign in to this server from their own K2 app, with the username and password you set here."
+      intro={`They sign in to this server from their own ${PRODUCT_NAME} app, with the username and password you set here.`}
       onClose={onClose}
       busy={busy}
       testId="add-person-dialog"
@@ -280,7 +281,7 @@ export function AddPersonDialog({
 
         <PasswordChoice
           name="add-person-password"
-          makeHint="K2 shows it once, after you add them, for you to copy and send."
+          makeHint={`${PRODUCT_NAME} shows it once, after you add them, for you to copy and send.`}
           mode={mode}
           setMode={setMode}
           password={password}
@@ -328,12 +329,12 @@ export function ResetPasswordDialog({
       intro={
         ownLogin
           ? 'This is your own login. Your current password stops working, and you keep the new one.'
-          : `${who}’s current password stops working right away. The new one is temporary: when they next sign in, K2 asks them to choose their own.`
+          : `${who}’s current password stops working right away. The new one is temporary: when they next sign in, ${PRODUCT_NAME} asks them to choose their own.`
       }
       rules={policyWords(policy)}
       problem={(pw) => passwordProblem(pw, policy)}
-      makeHint={`K2 shows it once, after the reset, for you to copy and send to ${who}.`}
-      signIn={`They sign in to this server from their K2 app with it.`}
+      makeHint={`${PRODUCT_NAME} shows it once, after the reset, for you to copy and send to ${who}.`}
+      signIn={`They sign in to this server from their ${PRODUCT_NAME} app with it.`}
       onClose={onClose}
       onDone={onDone}
       submit={async (typed) => {

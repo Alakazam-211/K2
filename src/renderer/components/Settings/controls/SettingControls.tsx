@@ -23,6 +23,7 @@ import { Surface } from '@/components/ui/Surface'
 import { Spinner } from '@/components/ui/Spinner'
 import { useBrowserOverlay } from '@/lib/browser-overlay'
 import { clientRectToCss, cssViewport } from '@/lib/app-zoom'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** Set inside a card group, so a row paints the card's padding and leaves its
  *  divider to the card. */
@@ -195,7 +196,7 @@ export function useSaveStatus(holdMs = 2000): {
     failed: (err) => {
       clear()
       const raw = err instanceof Error ? err.message : typeof err === 'string' ? err : ''
-      setState({ error: raw.trim() || 'K2 couldn\u2019t reach this server.' })
+      setState({ error: raw.trim() || `${PRODUCT_NAME} couldn\u2019t reach this server.` })
     },
     reset: () => {
       clear()

@@ -15,6 +15,7 @@ import {
 } from '../controls/SettingControls'
 import type { SettingEntry } from '../searchManifest'
 import { StatusDot } from './ConnectionsParts'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const EDITORS_MANIFEST: SettingEntry[] = [
   {
@@ -37,7 +38,7 @@ export const EDITORS_MANIFEST: SettingEntry[] = [
     id: 'editors.detected-editors',
     section: 'editors',
     label: 'Apps on this Mac',
-    description: 'The editors and terminal apps K2 found, with Rescan',
+    description: `The editors and terminal apps ${PRODUCT_NAME} found, with Rescan`,
     keywords: ['detected', 'editors', 'terminal apps', 'scan', 'rescan', 'refresh', 'installed'],
   },
 ]
@@ -166,12 +167,12 @@ export function EditorsSection(): React.JSX.Element {
   const appsState =
     load.kind === 'loading' ? (
       <SettingsLoadState kind="loading" title="Looking for editors and terminal apps…" testId="editors-loading">
-        K2 checks which apps are installed on this Mac.
+        {PRODUCT_NAME} checks which apps are installed on this Mac.
       </SettingsLoadState>
     ) : load.kind === 'error' ? (
       <SettingsLoadState
         kind="error"
-        title="K2 couldn’t check which apps are installed"
+        title={`${PRODUCT_NAME} couldn’t check which apps are installed`}
         detail={load.detail}
         action={<Button onClick={() => void loadApps()}>Try again</Button>}
         testId="editors-error"
@@ -188,7 +189,7 @@ export function EditorsSection(): React.JSX.Element {
     <div className="w-full max-w-[52rem] space-y-6 pb-6" data-testid="editors-page">
       <header className="min-w-0">
         <h2 className="type-title text-[var(--color-text-primary)]">Defaults</h2>
-        <p className={SETTING_ROW_HINT}>The apps K2 opens for you outside K2: your code editor and your terminal app.</p>
+        <p className={SETTING_ROW_HINT}>The apps {PRODUCT_NAME} opens for you outside {PRODUCT_NAME}: your code editor and your terminal app.</p>
       </header>
 
       <SettingsGroup card title="Open with" testId="editors-defaults">
@@ -247,9 +248,9 @@ export function EditorsSection(): React.JSX.Element {
               {scanNote.text}
             </span>
           ) : appsState ? (
-            'The editors and terminal apps K2 finds on this Mac.'
+            `The editors and terminal apps ${PRODUCT_NAME} finds on this Mac.`
           ) : (
-            'The editors and terminal apps K2 found. Installed one just now? Rescan to add it.'
+            `The editors and terminal apps ${PRODUCT_NAME} found. Installed one just now? Rescan to add it.`
           )
         }
         action={appsState ? undefined : rescanButton}

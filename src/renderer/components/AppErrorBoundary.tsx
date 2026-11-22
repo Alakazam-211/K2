@@ -1,4 +1,5 @@
 import React from 'react'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /**
  * Top-level error boundary around the whole <App> tree.
@@ -67,7 +68,7 @@ export class AppErrorBoundary extends React.Component<
       return (
         <div className="flex h-full w-full items-center justify-center bg-[var(--color-bg)] p-8 no-drag">
           <div className="max-w-lg text-xs">
-            <p className="font-bold text-[var(--color-status-error-soft)] mb-2">Something went wrong rendering K2.</p>
+            <p className="font-bold text-[var(--color-status-error-soft)] mb-2">Something went wrong rendering {PRODUCT_NAME}.</p>
             <p className="text-[var(--color-text-muted)] mb-3">
               The view hit an unexpected error. Reloading usually fixes it — your work and
               workspaces are safe.

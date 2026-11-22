@@ -26,7 +26,7 @@
 
 import registry from '@shared/session-event-kinds.json'
 import type { SessionEventMessage } from '@/stores/session-events'
-import { CLI_NAME } from '@/lib/brand'
+import { CLI_NAME, PRODUCT_NAME } from '@/lib/brand'
 
 export type SessionEventClass = 'app' | 'workspace' | 'handshake' | 'inbox' | 'viewing'
 
@@ -49,8 +49,8 @@ export interface SessionEventRoute {
   readonly ignored?: string
 }
 
-const INBOX_ONLY = 'The phone inbox stream (K2 Companion); the desktop never subscribes.'
-const VIEWING_ONLY = 'Viewing on the hub (K2 Companion); the desktop views on its overlay socket.'
+const INBOX_ONLY = `The phone inbox stream (${PRODUCT_NAME} Companion); the desktop never subscribes.`
+const VIEWING_ONLY = `Viewing on the hub (${PRODUCT_NAME} Companion); the desktop views on its overlay socket.`
 
 /** Every wire kind, and who handles it. Typed against the client union:
  *  a kind missing here, or one the union doesn't have, does not compile. */

@@ -139,6 +139,7 @@ import {
 } from './projects-api'
 import { primaryScope } from '@/kessel/server-scope'
 import { fitToTile } from './doc-tile-fit'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 // Sidebar's drag threshold (handleProjectMouseDown): 3px x / 5px y.
 const DRAG_THRESHOLD_X = 3
@@ -975,8 +976,8 @@ export default function ProjectDashboard({
                     ) : (
                       /* §6.3 forward-compat: inert placeholder; the
                          pane object round-trips untouched on save. */
-                      <TileState title="This tile needs a newer K2.">
-                        It was made by a newer K2 and shows here after an update.
+                      <TileState title={`This tile needs a newer ${PRODUCT_NAME}.`}>
+                        It was made by a newer {PRODUCT_NAME} and shows here after an update.
                       </TileState>
                     )}
                   </PaneChrome>

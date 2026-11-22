@@ -11,6 +11,7 @@ import { blankState, ensurePeer, SELF, type SimState } from './sim'
 import { TURN, fromTurn, initTurn, stepOfLabelAfter, stepOfRev, type Scenario } from './turn'
 import { buildPresence, buildStates, ev, PV, step } from './scenarios'
 import type { Doc } from './types'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const SAVE = (id: string): (typeof GOLD.saves.cases)[number] => GOLD.saves.cases.find((c) => c.id === id) as (typeof GOLD.saves.cases)[number]
 
@@ -41,11 +42,11 @@ function buildSaves(): Scenario[] {
       step('taken in', [ev('frame', { frame: o3.frame }), ev('settled', { v: o3.settled }), ev('pick', { addr: '@obj:27' }), PV(61, 'rendering')], o3.means),
       step('picture', [PV(61, 'ready', { ms: 296 })], 'The new still shows the stool.'),
     ] },
-    { id: 'O4', c: o4, group: G, title: 'O4 · a save K2 can\'t keep live: declined, edits pause', base: fromTurn(j65 + 1), steps: [
+    { id: 'O4', c: o4, group: G, title: `O4 · a save ${PRODUCT_NAME} can't keep live: declined, edits pause`, base: fromTurn(j65 + 1), steps: [
       step('rev 65', [ev('follow', { v: false })], 'Live at rev 65.'),
       step('declined', [ev('settled', { v: o4.settled })], o4.means),
     ] },
-    { id: 'O5', c: o5, group: G, title: 'O5 · the file is moved or deleted outside K2', base: fromTurn(j65 + 1), steps: [
+    { id: 'O5', c: o5, group: G, title: `O5 · the file is moved or deleted outside ${PRODUCT_NAME}`, base: fromTurn(j65 + 1), steps: [
       step('rev 65', [ev('follow', { v: false })], 'Live at rev 65.'),
       step('missing', [ev('settled', { v: o5.settled })], o5.means),
     ] },

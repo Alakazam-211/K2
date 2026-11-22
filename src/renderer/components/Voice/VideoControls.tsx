@@ -13,6 +13,7 @@ import { policyBlockText } from '@/lib/voice/video-labels'
 import type { VideoController } from '@/stores/video-core'
 import { ChevronDownIcon, ScreenShareIcon, VideoIcon } from '@/components/icons/K2Icons'
 import { CALL_PANEL_ICON, CallPanelButton } from './CallControls'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** Which of Camera, Share screen and Choose screen the call row shows (the
  *  row's fit counts them: call-panel-fit). `on`: video is on for this call. */
@@ -173,7 +174,7 @@ export function VideoNoticeLine({ ctl, noticeOnly = false }: { ctl: VideoControl
   if (availability === 'unavailable') {
     return (
       <p data-testid="video-unavailable" className="mt-1 text-[10px] text-[var(--color-text-muted)]">
-        Video isn't in this version of K2 yet.
+        Video isn't in this version of {PRODUCT_NAME} yet.
       </p>
     )
   }
@@ -181,7 +182,7 @@ export function VideoNoticeLine({ ctl, noticeOnly = false }: { ctl: VideoControl
   const text =
     notice ??
     (policyLine ? { line: policyLine, kind: 'info' as const } : null) ??
-    (cameraBlocked ? { line: "K2 isn't allowed to use your camera.", kind: 'error' as const, settings: 'camera' as const } : null)
+    (cameraBlocked ? { line: `${PRODUCT_NAME} isn't allowed to use your camera.`, kind: 'error' as const, settings: 'camera' as const } : null)
   if (!text) return null
   return (
     <p

@@ -33,6 +33,7 @@ import {
   type ForwardShow,
   type ForwardViewer,
 } from './mail-forward-api'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 const muted = 'text-[var(--color-text-muted)]'
 
@@ -119,7 +120,7 @@ function SetForm({
         Keep a copy in this mailbox
       </label>
       <p className={`type-hint ${muted}`}>
-        This starts at once. An outside address isn’t asked: K2 emails it who set this up, with a link to stop it,
+        This starts at once. An outside address isn’t asked: {PRODUCT_NAME} emails it who set this up, with a link to stop it,
         and the owner is told. Spam, mail failing DMARC and bounces always stay here.
         {keep === undefined && ' A mailbox on this server keeps no copy unless you tick the box.'}
       </p>
@@ -183,7 +184,7 @@ function ForwardRow({
       )}
 
       {f.state === 'active' && f.kind === 'external' && f.notice === 'sent' && f.noticeAt && (
-        <p className={`type-hint ${muted}`}>K2 emailed this address a link to stop it {fmt(f.noticeAt)}.</p>
+        <p className={`type-hint ${muted}`}>{PRODUCT_NAME} emailed this address a link to stop it {fmt(f.noticeAt)}.</p>
       )}
 
       {showCounts && counts && (

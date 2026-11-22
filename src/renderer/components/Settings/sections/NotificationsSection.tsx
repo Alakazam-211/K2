@@ -61,6 +61,7 @@ import { threadPushAvailable, useNotifyPrefs } from './useNotifyPrefs'
 import { PushPreviewsRow } from './PushPreviewsRow'
 import { EmailNoticePrefs } from './EmailNoticePrefs'
 import { StatusDot } from './ConnectionsParts'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const NOTIFICATIONS_MANIFEST: SettingEntry[] = [
   {
@@ -257,7 +258,7 @@ function useRowSave(holdMs = 2000): {
   const failed = useCallback((key: string, err: unknown) => {
     if (timer.current) clearTimeout(timer.current)
     const raw = errorText(err).trim()
-    setLast({ key, state: { error: raw || 'K2 couldn’t reach this server.' } })
+    setLast({ key, state: { error: raw || `${PRODUCT_NAME} couldn’t reach this server.` } })
   }, [])
   const stateOf = useCallback((key: string): SaveState => (last && last.key === key ? last.state : 'idle'), [last])
   return { stateOf, saved, failed }
@@ -367,7 +368,7 @@ export function NotificationsSection(): React.JSX.Element {
       <div className={PAGE} data-testid="notifications-settings-unavailable">
         <Header />
         <SettingsLoadState kind="empty" title="This server doesn’t send pushes yet">
-          Update K2 on this server to 0.45.5 or newer, then come back here to choose your notifications.
+          Update {PRODUCT_NAME} on this server to 0.45.5 or newer, then come back here to choose your notifications.
         </SettingsLoadState>
       </div>
     )

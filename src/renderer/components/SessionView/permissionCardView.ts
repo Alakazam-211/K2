@@ -19,6 +19,7 @@ import { daemonCliPost } from '@/lib/daemon-cli'
 import { daemonErrorOf } from '@/lib/daemon-error'
 import { isWebClient } from '@/lib/is-web'
 import type { ServerScope } from '@/kessel/server-scope'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** `view.state` (§17.2.4). */
 export type PermissionState =
@@ -427,7 +428,7 @@ export function permissionErrorText(e: unknown): string {
     case 'bad_note':
       return info.hint || 'That note can’t be sent: one line, no links, nothing secret.'
     case 'reveal_needs_screen':
-      return info.hint || 'Open this card in K2 on your computer or the web to see it.'
+      return info.hint || `Open this card in ${PRODUCT_NAME} on your computer or the web to see it.`
     default:
       return info.hint || info.code
   }

@@ -49,6 +49,7 @@ import { SETTING_LIST_ROW_HOVER, SETTING_ROW_HINT, SETTING_ROW_LABEL, SETTING_SE
 import { AccessSheet, DIALOG_FIELD, Field } from './AccessDialogs'
 import { AppMonogram, StatusDot, type DotTone } from './apps-ui'
 import { confirmPasswordLabel, LoginUsernameField, readConfirmIdentity, scopeServerName, type ConfirmIdentity } from './confirm-password-ui'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const APP_APPROVALS_MANIFEST: SettingEntry[] = [
   {
@@ -62,7 +63,7 @@ export const APP_APPROVALS_MANIFEST: SettingEntry[] = [
 
 const DENY_MAX = 500
 const NO_CONFIRM_HINT =
-  'You can’t approve yet: this server has no way to confirm it’s you. Set a vault password on the Vault page, then come back. An owner or admin can also approve from their own K2 Connect login, with its password.'
+  `You can’t approve yet: this server has no way to confirm it’s you. Set a vault password on the Vault page, then come back. An owner or admin can also approve from their own ${PRODUCT_NAME} Connect login, with its password.`
 /** A login that may read and deny but not approve (a Member). */
 const APPROVERS_ONLY_HINT = 'Only the server’s owner or an admin approves App requests.'
 
@@ -250,7 +251,7 @@ function ServerBlock({
       {g.error ? (
         <SettingsLoadState
           kind="error"
-          title={multi ? `K2 couldn’t read the requests on ${g.server.label}` : 'K2 couldn’t read the waiting requests'}
+          title={multi ? `${PRODUCT_NAME} couldn’t read the requests on ${g.server.label}` : `${PRODUCT_NAME} couldn’t read the waiting requests`}
           detail={g.error}
           testId={`app-approvals-error-${g.server.hostKey}`}
           action={<Button onClick={onRetry}>Try again</Button>}
@@ -284,7 +285,7 @@ function HistoryBlock({ group: g, multi, onRetry }: { group: ServerApprovals; mu
     return (
       <SettingsLoadState
         kind="error"
-        title={multi ? `K2 couldn’t read the history on ${g.server.label}` : 'K2 couldn’t read the history'}
+        title={multi ? `${PRODUCT_NAME} couldn’t read the history on ${g.server.label}` : `${PRODUCT_NAME} couldn’t read the history`}
         detail={g.error}
         action={<Button onClick={onRetry}>Try again</Button>}
       >
@@ -614,7 +615,7 @@ function RequestCard({
               <Field
                 label={confirmPasswordLabel(confirm.method, who, scopeServerName(scope))}
                 htmlFor={`approve-pw-input-${r.id}`}
-                hint={badPassword ? undefined : 'K2 uses it once, to confirm it’s you.'}
+                hint={badPassword ? undefined : `${PRODUCT_NAME} uses it once, to confirm it’s you.`}
                 problem={badPassword ? 'That password didn’t match. Try again.' : null}
               >
                 <Input

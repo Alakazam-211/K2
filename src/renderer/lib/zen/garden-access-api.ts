@@ -29,6 +29,7 @@ import { create } from 'zustand'
 import { listen } from '@tauri-apps/api/event'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { zenLocalScope } from './zen-api'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 // ── Small parse helpers ─────────────────────────────────────────────
 
@@ -196,9 +197,9 @@ export function gardenActorWords(a: GardenActor): string {
       return `A terminal in ${who}’s room`
     case 'k2':
     case 'migration':
-      return 'K2'
+      return PRODUCT_NAME
     case 'disk':
-      return 'Outside K2'
+      return `Outside ${PRODUCT_NAME}`
   }
 }
 
@@ -706,7 +707,7 @@ export async function fetchGardenWidgets(): Promise<GardenWidgetLine[]> {
 export function gardenWidgetSignerWords(w: Pick<GardenWidgetLine, 'signedBy' | 'changedAt'>, now?: Date): string {
   const s = w.signedBy
   if (s) {
-    const who = s.kind === 'owner' ? 'you' : s.kind === 'k2' ? 'K2' : (s.name ?? s.handle ?? 'an agent')
+    const who = s.kind === 'owner' ? 'you' : s.kind === 'k2' ? PRODUCT_NAME : (s.name ?? s.handle ?? 'an agent')
     return s.at !== null ? `last signed by ${who} · ${gardenDay(s.at, now)}` : `last signed by ${who}`
   }
   return w.changedAt !== null ? `last changed ${gardenDay(w.changedAt, now)}` : ''
@@ -756,6 +757,6 @@ export function gardenAccessErrorText(err: unknown): string {
   if (/owner_only|gardens_owner|person_only/.test(msg)) return 'Only the computer’s owner can change who edits a Garden.'
   if (/unknown_agent/.test(msg)) return 'That agent is gone. It may have been deleted.'
   if (/unknown_garden/.test(msg)) return 'That Garden is gone. It may have been deleted somewhere else.'
-  if (/not_available|unknown zen route/i.test(msg)) return 'K2 on this computer is older than this app. Update it to use Garden access.'
+  if (/not_available|unknown zen route/i.test(msg)) return `${PRODUCT_NAME} on this computer is older than this app. Update it to use Garden access.`
   return msg || 'Something went wrong.'
 }

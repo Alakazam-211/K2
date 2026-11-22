@@ -50,6 +50,7 @@ import {
 } from '@/lib/grokbots'
 import { grokAgentOn, scopeForGrokHost, useGrokBotsStore, useGrokBotsSync } from '@/stores/grokbots'
 import { GrokBotTag } from './GrokBotTag'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 const PAGE = 100
 const TAIL = 50
@@ -139,7 +140,7 @@ export function GrokCardView({ card }: { card: GrokCard }): React.JSX.Element {
           <div data-testid="grokbot-card-state" className={`text-[10px] ${muted}`}>
             {card.provided ? 'Provided in Grok Bot' : 'Not provided yet'}
           </div>
-          <OpenInGrokBot what="K2 never asks for secrets." />
+          <OpenInGrokBot what={`${PRODUCT_NAME} never asks for secrets.`} />
         </div>
       )
     case 'template-share':
@@ -167,12 +168,12 @@ function MessageRow({ m, agentName, nowSec }: { m: GrokMessage; agentName: strin
   const notes: string[] = []
   if (m.toAgent) notes.push(`to ${m.toAgent.name}`)
   if (m.author === 'peer') notes.push(`from ${m.fromAgent?.name ?? 'another agent'}`)
-  if (m.viaK2) notes.push('sent from K2')
+  if (m.viaK2) notes.push(`sent from ${PRODUCT_NAME}`)
   if (previewOnly) notes.push('preview, open Grok Bot for the full message')
   const footer = (
     <>
       {m.card && <GrokCardView card={m.card} />}
-      {!m.card && m.openInApp && <OpenInGrokBot what={`This is a ${m.openInApp} K2 can't show.`} />}
+      {!m.card && m.openInApp && <OpenInGrokBot what={`This is a ${m.openInApp} ${PRODUCT_NAME} can't show.`} />}
       {notes.length > 0 && <div className={`text-[10px] ${muted}`}>{notes.join(' · ')}</div>}
     </>
   )
@@ -332,7 +333,7 @@ export default function GrokBotChatView({ hostKey, agentId }: { hostKey: string;
         {loadError && list?.enabled !== false && <Callout tone="error">Could not read this chat: {loadError}</Callout>}
         {!supported && (
           <Callout tone="warn" data-testid="grokbot-unsupported">
-            K2 can't read this chat yet{reason ? ` (${reason})` : ''}. Open it in Grok Bot.
+            {PRODUCT_NAME} can't read this chat yet{reason ? ` (${reason})` : ''}. Open it in Grok Bot.
           </Callout>
         )}
         {messages.map((m) => (

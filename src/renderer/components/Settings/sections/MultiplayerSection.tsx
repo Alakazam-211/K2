@@ -110,7 +110,7 @@ const CONTENT_WIDTH = 'max-w-[52rem]'
  *  case says so; a field-level one says only that a part was unreadable. */
 function shapeLine(shape: string): string {
   if (/^the server's answer/.test(shape)) return `${shape.charAt(0).toUpperCase()}${shape.slice(1)}.`
-  return 'Part of the server’s answer wasn’t in a form K2 can read.'
+  return `Part of the server’s answer wasn’t in a form ${PRODUCT_NAME} can read.`
 }
 
 /** A switch's flip: `done` (the write landed), `cancelled` (the person said
@@ -250,7 +250,7 @@ function MultiplayerCoresPage({ scope }: { scope: ServerScope }): React.JSX.Elem
         </Button>
       }
     >
-      K2 couldn&apos;t read which kinds of files open in multiplayer on this server.
+      {PRODUCT_NAME} couldn&apos;t read which kinds of files open in multiplayer on this server.
       {fail.shape ? <span className="block mt-1 text-[var(--color-text-muted)]">{shapeLine(fail.shape)}</span> : null}
     </SettingsLoadState>
   ) : (

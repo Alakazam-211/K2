@@ -49,6 +49,7 @@ import {
   type TemplateLine,
   type TemplateRow,
 } from './user-access-api'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const USER_TEMPLATES_MANIFEST: SettingEntry[] = [
   {
@@ -230,7 +231,7 @@ export function UserTemplatesSection(): React.JSX.Element {
               testId="templates-error"
               action={<Button onClick={() => { setLoad('loading'); void refresh() }}>Try again</Button>}
             >
-              K2 couldn’t read this server’s templates. Nothing has changed.
+              {PRODUCT_NAME} couldn’t read this server’s templates. Nothing has changed.
             </SettingsLoadState>
           ) : selection === 'new' ? (
             <NewTemplate
@@ -465,7 +466,7 @@ function TemplateDetail({
             <SettingRow
               key={line.id}
               label={lineLabel(line, role, apps)}
-              hint={line.kind === 'app' ? (role ? reachWords(role, [], false) : 'Remove this line and add the App again with a current role.') : 'Kept as a note. K2 doesn’t enforce it.'}
+              hint={line.kind === 'app' ? (role ? reachWords(role, [], false) : 'Remove this line and add the App again with a current role.') : `Kept as a note. ${PRODUCT_NAME} doesn’t enforce it.`}
               testId={`template-line-${line.id}`}
             >
               {line.kind !== 'app' ? <Tag tone="muted">Noted only</Tag> : null}

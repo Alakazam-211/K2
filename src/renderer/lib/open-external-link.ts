@@ -11,6 +11,7 @@
 
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { useToastStore } from '@/stores/toast'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 const EXTERNAL_LINK_PROTOCOLS = new Set(['http:', 'https:', 'mailto:'])
 
@@ -37,7 +38,7 @@ export function externalLinkUrl(href: string): string | null {
 export function openExternalLink(href: string): boolean {
   const url = externalLinkUrl(href)
   if (!url) {
-    useToastStore.getState().addToast('K2 opens only http, https and mailto links.', 'error', 4000)
+    useToastStore.getState().addToast(`${PRODUCT_NAME} opens only http, https and mailto links.`, 'error', 4000)
     return false
   }
   openUrl(url).catch((err: unknown) => {

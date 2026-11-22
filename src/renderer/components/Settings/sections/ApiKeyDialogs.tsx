@@ -33,7 +33,7 @@ import {
   type HireForm,
   type KeyDoor,
 } from './api-keys-api'
-import { CLI_NAME } from '@/lib/brand'
+import { CLI_NAME, PRODUCT_NAME } from '@/lib/brand'
 
 /** The hire-key confirm, in the create form. Touch ID (`local-auth`) exists
  *  only for the owner on a Mac; Linux and Windows confirm with a password
@@ -166,8 +166,8 @@ type OwnerConfirm = ReturnType<typeof useOwnerConfirm>
 function confirmProblem(confirm: OwnerConfirm, e: unknown): Problem | null {
   if (e instanceof NoConfirmMethod) {
     return {
-      what: 'K2 can’t confirm it’s you on this computer yet.',
-      next: `There’s no Touch ID or password to confirm with. Set a vault password from a terminal outside K2 (${CLI_NAME} vault confirm-password set), then try again.`,
+      what: `${PRODUCT_NAME} can’t confirm it’s you on this computer yet.`,
+      next: `There’s no Touch ID or password to confirm with. Set a vault password from a terminal outside ${PRODUCT_NAME} (${CLI_NAME} vault confirm-password set), then try again.`,
       detail: null,
     }
   }
@@ -195,7 +195,7 @@ function ConfirmStep({ confirm, onSubmit }: { confirm: OwnerConfirm; onSubmit: (
     <Field
       label={confirm.pwMethod === 'connect-password' ? 'Your login password' : 'Your vault password'}
       htmlFor={id}
-      hint="K2 asks because this key can hire agents."
+      hint={`${PRODUCT_NAME} asks because this key can hire agents.`}
     >
       <Input
         id={id}
@@ -512,7 +512,7 @@ export function CreateKeyDialog({
         }
       >
         <p className={DIALOG_MUTED}>
-          {created.name} is ready. This is the only time K2 shows its key: copy it now and paste it into the app that will
+          {created.name} is ready. This is the only time {PRODUCT_NAME} shows its key: copy it now and paste it into the app that will
           use it. If it’s ever lost, revoke it and create another.
         </p>
         <Surface chamfer material="tile">

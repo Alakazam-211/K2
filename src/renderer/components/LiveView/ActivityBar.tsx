@@ -8,6 +8,7 @@ import { ChevronDownIcon, RecentsIcon } from '@/components/icons/K2Icons'
 import { idleOf, type LiveWorkbookState } from '@/lib/live-view/reducer'
 import { activityLine, phraseLine, turnGroups, turnShort, type LogEntry, type PhraseTarget } from '@/lib/live-view/wording'
 import { Avatar, InfoGlyph, secondsFrom } from './parts'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export function ActivityBar({
   state,
@@ -38,7 +39,7 @@ export function ActivityBar({
         </span>
         <div className="min-w-0">
           <div className="type-row text-[var(--color-text-primary)]">{state.tier === 'blob' ? 'Not live: you see changes when the file is saved' : 'Not opened: the file is over 32 MiB'}</div>
-          <div className="type-hint text-[var(--color-text-muted)]">{state.tier === 'blob' ? 'Saved versions only. No one else’s cursor, no change outlines, no follow.' : 'K2 keeps no live copy of it.'}</div>
+          <div className="type-hint text-[var(--color-text-muted)]">{state.tier === 'blob' ? 'Saved versions only. No one else’s cursor, no change outlines, no follow.' : `${PRODUCT_NAME} keeps no live copy of it.`}</div>
         </div>
       </div>
     )
@@ -52,7 +53,7 @@ export function ActivityBar({
   let l2: string
   if (!line.actor) {
     l1 = 'No changes yet'
-    l2 = 'Changes show here as they land, worded by K2.'
+    l2 = `Changes show here as they land, worded by ${PRODUCT_NAME}.`
   } else if (line.claimLabel) {
     l1 = (
       <>
@@ -79,7 +80,7 @@ export function ActivityBar({
         {more}
       </>
     )
-    l2 = line.actor.kind === 'file' ? 'Saved outside K2: no turn, no agent' : line.latestAt != null ? `${secondsFrom(t0, line.latestAt)} into the turn` : ''
+    l2 = line.actor.kind === 'file' ? `Saved outside ${PRODUCT_NAME}: no turn, no agent` : line.latestAt != null ? `${secondsFrom(t0, line.latestAt)} into the turn` : ''
   }
   return (
     <div className="border-t border-[var(--color-border)]">

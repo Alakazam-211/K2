@@ -15,11 +15,12 @@ import React, { useEffect, useState } from 'react'
 import { Toggle } from '@/components/ui'
 import { SETTING_ROW_HINT, SETTING_ROW_LABEL, SaveError, SaveNote, SettingSwitchRow, SettingsGroup, useSaveStatus } from '../controls/SettingControls'
 import { settingsGet, settingsUpdate } from '@/lib/daemon-settings'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export const PUSH_PREVIEWS_KEY = 'pushMessagePreviews'
 export const PUSH_PREVIEWS_LABEL = 'Show message text in push notifications'
 export const PUSH_PREVIEWS_HINT =
-  "With previews on, the sender’s name and the start of each message go through K2's push relay and Apple’s and Google’s push services to reach phones. Turn previews off to send every phone on this server only “New message in Thread”."
+  `With previews on, the sender’s name and the start of each message go through ${PRODUCT_NAME}'s push relay and Apple’s and Google’s push services to reach phones. Turn previews off to send every phone on this server only “New message in Thread”.`
 
 /** The switch's value, or `null` when this server doesn't have the key (an
  *  older daemon): the row hides. */

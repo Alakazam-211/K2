@@ -11,6 +11,7 @@ import { useProjectsStore } from '../../stores/projects'
 import { REMOVE_WORKSPACE_Z } from '@/lib/overlay-layers'
 import { uninstallWorkspaceApps, workspaceAppIds } from '../Settings/sections/app-access-api'
 import { runRemoval, type RemovalStep } from './remove-workspace-flow'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 interface ModeOption {
   id: RemoveWorkspaceMode
@@ -23,7 +24,7 @@ const MODE_OPTIONS: ModeOption[] = [
     id: 'deregister_only',
     title: 'Deregister only (default)',
     description:
-      'Remove from K2\'s project list. Leave every file and symlink exactly where it is. Re-adding later picks up right where you left off.',
+      `Remove from ${PRODUCT_NAME}'s project list. Leave every file and symlink exactly where it is. Re-adding later picks up right where you left off.`,
   },
   {
     id: 'keep_current',
@@ -35,7 +36,7 @@ const MODE_OPTIONS: ModeOption[] = [
     id: 'restore_original',
     title: 'Restore pre-K2 state',
     description:
-      'Replace each file K2 took over with its archive from .k2/migration/. Files K2 created fresh are removed. Your PROJECT.md / AGENT.md / archives in .k2/ stay — reconnect later and K2 picks up where it left off.',
+      `Replace each file ${PRODUCT_NAME} took over with its archive from .k2/migration/. Files ${PRODUCT_NAME} created fresh are removed. Your PROJECT.md / AGENT.md / archives in .k2/ stay — reconnect later and ${PRODUCT_NAME} picks up where it left off.`,
   },
 ]
 
@@ -178,7 +179,7 @@ export default function RemoveWorkspaceDialog(): React.JSX.Element | null {
         {step ? null : !showingResults ? (
           <div className="flex-1 overflow-y-auto px-5 pb-3">
             <div className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)] mb-2">
-              What should K2 do with the files?
+              What should {PRODUCT_NAME} do with the files?
             </div>
             <div className="flex flex-col gap-2">
               {MODE_OPTIONS.map((opt) => (
@@ -218,7 +219,7 @@ export default function RemoveWorkspaceDialog(): React.JSX.Element | null {
         ) : (
           <div className="flex-1 overflow-y-auto px-5 pb-3">
             <div className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)] mb-1.5">
-              What K2 did
+              What {PRODUCT_NAME} did
             </div>
             <div className="flex flex-col gap-1">
               {results.map((r) => (

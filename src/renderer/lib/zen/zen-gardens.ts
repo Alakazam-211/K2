@@ -28,6 +28,7 @@ import type { ZenGardenCreateOptions, ZenGardenTemplate, ZenGardenTemplateResult
 import { requestZenGardenAsk } from './zen-garden-ask'
 import { ZenPageParseError } from './zen-page'
 import { useZenWindowStore } from './zen-window'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export interface ZenGarden {
   id: string
@@ -252,7 +253,7 @@ export async function createZenGarden(
 /** The copy when Start with the default would replace a Garden's own
  *  changes (409 `garden_has_changes`). */
 export const ZEN_GARDEN_HAS_CHANGES_TEXT =
-  'This Garden has changes of its own. Starting with the default replaces them; K2 keeps the old page in its history.'
+  `This Garden has changes of its own. Starting with the default replaces them; ${PRODUCT_NAME} keeps the old page in its history.`
 
 /** Start with the default (Rosson 2026-10-04): turn Garden `id` into
  *  `template`, keeping its id, name and place (`POST garden/template`).

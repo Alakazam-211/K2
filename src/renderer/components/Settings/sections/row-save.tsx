@@ -9,6 +9,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { SaveNote, SETTING_SERVER_REASON } from '../controls/SettingControls'
 import { daemonErrorText } from '@/lib/daemon-error'
 import { httpCodeOf, httpStatusOf } from '@/lib/daemon-http-error'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export type RowSave = 'idle' | 'saving' | 'saved' | { error: string; denied: boolean; reached: boolean }
 
@@ -87,7 +88,7 @@ export function RowSaveError({ state, testId }: { state: RowSave; testId?: strin
   const reason = state.error.replace(/[.\s]+$/, '')
   const lead = state.reached
     ? 'Couldn’t save this change. Nothing changed; try again.'
-    : 'Couldn’t save: K2 couldn’t reach this server. Nothing changed; try again.'
+    : `Couldn’t save: ${PRODUCT_NAME} couldn’t reach this server. Nothing changed; try again.`
   return (
     <div role="alert" data-save-error="" data-testid={testId} className="mt-1">
       <p className="type-hint text-[var(--color-status-error-soft)] leading-relaxed max-w-[75ch]">{lead}</p>

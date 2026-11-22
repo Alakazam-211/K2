@@ -739,6 +739,8 @@
 1 value crates/k2-daemon/src/zen_remote_routes.rs keeper: wire; the frame's hello key (sdk/k2-runtime.js:355)
 1 value crates/k2-daemon/src/zen_routes.rs keeper: wire; madeBy, in the widget sign answer
 1 value crates/k2-daemon/src/zen_sign_cards.rs keeper: stored; the permission audit's actor
+1 value crates/k2-release-keys/build.rs keeper: stored; the default brand folder brand/k2, as crates/k2-brand/build.rs reads it
+1 value crates/k2-release-keys/src/brand_keys.rs keeper: stored; the brand ids (brand/k2, brand/k5) whose builds ship the ceremony's update keys
 1 value crates/k2-root-helper/src/apps.rs keeper: wire; the podmanSource the daemon reads
 1 value crates/k2-root-helper/src/pg_major.rs keeper: wire; the source the daemon reads in the helper's answer
 1 value crates/k2-root-helper/src/sew.rs keeper: wire; Sew's --from flag

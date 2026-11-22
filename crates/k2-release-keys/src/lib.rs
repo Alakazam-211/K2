@@ -19,6 +19,12 @@
 //!   Tauri's wrapped form; only the plugin's own download path reads it,
 //!   and K2 doesn't use that path).
 //!
+//! **Per brand** (`brand/<id>/brand.toml` `[update]`, src/brand_keys.rs):
+//! `build.rs` reads the brand file (`K2_BRAND_DIR`, else `brand/k2`). The
+//! k2 and k5 brands must list exactly the keys below, and the build compiles
+//! this list as it is. Any other brand is built with its own keys, and its
+//! build stops if it carries one of these, or U1.
+//!
 //! `scripts/updater-key-ceremony.sh pubkeys <U2> <U3>` writes all four. Until
 //! the ceremony lands, the list is empty: every verifier refuses every
 //! update (fail closed), `tauri.conf.json` still holds U1, and
@@ -45,6 +51,7 @@ pub struct TrustedKey {
     pub public_key_b64: &'static str,
 }
 
+#[cfg(k2_own_update_keys)]
 // BEGIN UPDATER_KEYS (written by scripts/updater-key-ceremony.sh pubkeys)
 /// The update keys: one primary per signing Mac, each made inside that Mac's
 /// `_k2sign` user (U2 on z3mbpZ, U2b on z3mbp; a lost Mac is revoked by
@@ -63,6 +70,10 @@ pub const UPDATER_KEYS: &[TrustedKey] = &[
     },
 ];
 // END UPDATER_KEYS
+
+// Any brand but k2 and k5: its own keys, from its brand file (build.rs).
+#[cfg(not(k2_own_update_keys))]
+include!(concat!(env!("OUT_DIR"), "/brand_update_keys.rs"));
 
 /// U1, the retired update key `E9111446F65EBB05` (the minisign key line).
 /// Signing scripts use it to make bridge signatures for installs older than
@@ -266,5 +277,7 @@ pub fn version_older_than(a: &str, b: &str) -> bool {
     }
 }
 
+#[cfg(test)]
+mod brand_keys;
 #[cfg(test)]
 mod tests;

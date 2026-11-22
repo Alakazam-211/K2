@@ -17,8 +17,15 @@ minisign-verify = "0.2"
 base64 = "0.22"
 serde_json = "1"
 
+[build-dependencies]
+# build.rs reads the brand file's [update] keys (src/brand_keys.rs).
+base64 = "0.22"
+toml = "0.8"
+
 [dev-dependencies]
 # Throwaway signing keys inside the tests (ring Ed25519 + the root-proto
 # test signer, which writes minisign's exact format).
 k2-root-proto = { path = "../k2-root-proto", features = ["test-signer"] }
 ring = "0.17"
+# The tests of src/brand_keys.rs read the brand files.
+toml = "0.8"

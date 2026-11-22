@@ -146,6 +146,15 @@ pub const CAPS_S2: &str = "s2";
 /// so K2 sends them only after the relay said this.
 pub const CAPS_CALL_APS: &str = "call-aps";
 
+/// The token that says the relay sends a DM call's ring to each phone's
+/// PushKit VoIP token (`devices[].voipToken`, APNs push type `voip`: K2
+/// Companion's CallKit call screen). Only a relay build with the VoIP lane
+/// lists it. `call-aps` does NOT mean this: relays that list `call-aps`
+/// copy a ring's clear fields into a normal alert push and send no VoIP
+/// push at all, so K2 adds a `voipToken` only after the relay listed
+/// `call-voip` ([`relay_call_voip`]).
+pub const CAPS_CALL_VOIP: &str = "call-voip";
+
 fn caps_has(value: &str, token: &str) -> bool {
     value.split(',').any(|t| t.trim().eq_ignore_ascii_case(token))
 }
@@ -165,6 +174,11 @@ pub fn caps_has_call_aps(value: &str) -> bool {
     caps_has(value, CAPS_CALL_APS)
 }
 
+/// True when a `X-K2-Push-Caps` value lists `call-voip`.
+pub fn caps_has_call_voip(value: &str) -> bool {
+    caps_has(value, CAPS_CALL_VOIP)
+}
+
 /// What a relay last said it accepts.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RelayCaps {
@@ -177,11 +191,13 @@ pub struct RelayCaps {
     /// so a DM call's push asks the relay first ([`relay_caps_heard`],
     /// `K2Cloud::ensure_call_caps`).
     pub call_aps: bool,
+    /// The VoIP lane ([`CAPS_CALL_VOIP`]). Memory only, like `call_aps`.
+    pub call_voip: bool,
 }
 
 /// One gateway's caps in memory, and whether a relay answer said them this
 /// run (`heard`) or they were read back from the store (which has no
-/// `call-aps`).
+/// `call-aps` or `call-voip`).
 #[derive(Debug, Clone, Copy)]
 struct SeenCaps {
     caps: RelayCaps,
@@ -204,7 +220,7 @@ fn relay_map() -> std::sync::MutexGuard<'static, Option<CapsMap>> {
 /// (`push_relay_caps`, migrations 0211 + 0252) so the first push after a
 /// restart is sealed too.
 pub fn note_relay_caps(gateway_url: &str, s1: bool, s2: bool) {
-    note_relay_caps_full(gateway_url, RelayCaps { s1, s2, call_aps: false })
+    note_relay_caps_full(gateway_url, RelayCaps { s1, s2, call_aps: false, call_voip: false })
 }
 
 /// [`note_relay_caps`] with every token the relay listed.
@@ -243,7 +259,7 @@ pub fn relay_caps(gateway_url: &str) -> RelayCaps {
 
 /// True when a relay answer said this gateway's caps during this run. The
 /// stored caps (read back after a restart) don't count: they never hold
-/// `call-aps`.
+/// `call-aps` or `call-voip`.
 pub fn relay_caps_heard(gateway_url: &str) -> bool {
     relay_map().as_ref().and_then(|m| m.get(gateway_url)).is_some_and(|s| s.heard)
 }
@@ -292,6 +308,16 @@ pub fn relay_call_aps(gateway_url: &str) -> bool {
     c.s1 && c.call_aps
 }
 
+/// The relay sends a DM call's ring to the phone's PushKit VoIP token
+/// (`s1`, `call-aps` and `call-voip`). `call-aps` alone is not enough: it
+/// only says the ring's clear fields reach the alert push. The relay tells
+/// a ring from any other push by those clear fields, so `call-voip`
+/// without `call-aps` is not enough either.
+pub fn relay_call_voip(gateway_url: &str) -> bool {
+    let c = relay_caps(gateway_url);
+    c.s1 && c.call_aps && c.call_voip
+}
+
 /// The relay accepts format 2 too (`s1` and `s2`).
 pub fn relay_s2(gateway_url: &str) -> bool {
     let c = relay_caps(gateway_url);
@@ -327,7 +353,7 @@ pub fn load_relay_caps_full(gateway_url: &str) -> Result<Option<RelayCaps>, Stri
     conn.query_row(
         "SELECT s1, s2 FROM push_relay_caps WHERE gateway_url = ?1",
         rusqlite::params![gateway_url],
-        |r| Ok(RelayCaps { s1: r.get::<_, i64>(0)? != 0, s2: r.get::<_, i64>(1)? != 0, call_aps: false }),
+        |r| Ok(RelayCaps { s1: r.get::<_, i64>(0)? != 0, s2: r.get::<_, i64>(1)? != 0, call_aps: false, call_voip: false }),
     )
     .optional()
     .map_err(|e| e.to_string())

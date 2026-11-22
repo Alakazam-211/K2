@@ -2228,7 +2228,7 @@ mod tests {
                 .iter()
                 .map(|d| serde_json::json!({ "token": d["token"], "sent": true, "dead": false }))
                 .collect();
-            Ok(k2_core::push::GatewayResponse { call_aps: false,
+            Ok(k2_core::push::GatewayResponse { call_voip: false, call_aps: false,
                 status: 200,
                 body: serde_json::json!({ "ok": true, "results": results }).to_string(),
                 s0: true,

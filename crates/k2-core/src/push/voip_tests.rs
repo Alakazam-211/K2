@@ -2,8 +2,9 @@
 //! carries each phone's PushKit VoIP token (`devices[].voipToken`) to the
 //! relay, which sends it with APNs push type `voip`. iOS ends an app that
 //! gets a VoIP push without reporting a call, so these tests pin that ONLY
-//! a ring ever carries one, on every lane, and that a dead VoIP token
-//! clears that token alone.
+//! a ring ever carries one, on every lane, ONLY to a relay that lists
+//! `call-voip` (a relay listing just `call-aps` sends no VoIP push), and
+//! that a dead VoIP token clears that token alone.
 
 #![cfg(test)]
 
@@ -15,21 +16,29 @@ use crate::push_devices::VoipChange;
 use std::sync::{Arc, Mutex};
 
 /// Records every relay call's body; answers with the scripted response,
-/// else a 200 with no results.
+/// else a 200 with no results. Its answers list `s1`, `call-aps` and,
+/// when `call_voip`, `call-voip`.
 struct Relay {
     bodies: Mutex<Vec<serde_json::Value>>,
     script: Mutex<std::collections::VecDeque<GatewayResponse>>,
+    call_voip: bool,
 }
 
 impl Relay {
+    /// A relay with the VoIP lane (`call-voip`).
     fn new() -> Arc<Self> {
-        Arc::new(Self { bodies: Mutex::new(Vec::new()), script: Mutex::new(Default::default()) })
+        Arc::new(Self { bodies: Mutex::new(Vec::new()), script: Mutex::new(Default::default()), call_voip: true })
+    }
+    /// Today's relays: `call-aps`, no `call-voip`.
+    fn aps_only() -> Arc<Self> {
+        Arc::new(Self { bodies: Mutex::new(Vec::new()), script: Mutex::new(Default::default()), call_voip: false })
     }
     fn take(&self) -> Vec<serde_json::Value> {
         std::mem::take(&mut *self.bodies.lock().expect("relay"))
     }
     fn answer(&self, body: serde_json::Value) {
         self.script.lock().expect("relay").push_back(GatewayResponse {
+            call_voip: self.call_voip,
             call_aps: true,
             status: 200,
             body: body.to_string(),
@@ -42,7 +51,7 @@ impl Relay {
         if let Some(r) = self.script.lock().expect("relay").pop_front() {
             return r;
         }
-        GatewayResponse { call_aps: true, status: 200, body: "{\"ok\":true,\"results\":[]}".into(), s0: true, s1: true, s2: false }
+        GatewayResponse { call_voip: self.call_voip, call_aps: true, status: 200, body: "{\"ok\":true,\"results\":[]}".into(), s0: true, s1: true, s2: false }
     }
 }
 
@@ -148,8 +157,8 @@ const LANES: &[(&str, PushE2eMode, bool)] = &[
     ("generic", PushE2eMode::SealedOnly, false),
 ];
 
-/// A ring carries the phone's `voipToken` on the sealed, legacy and
-/// generic lanes, with the same body it carried before (the sealed blob,
+/// On a relay that lists `call-voip`, a ring carries the phone's
+/// `voipToken` on the sealed, legacy and generic lanes, with the same body it carried before (the sealed blob,
 /// the clear payload, the fixed words) and the ring's clear category. A
 /// phone without one carries none.
 #[test]
@@ -171,7 +180,7 @@ fn a_ring_carries_the_voip_token_on_every_lane() {
         .expect("register");
         let url = unique_url();
         let relay = Relay::new();
-        e2e::note_relay_caps_full(&url, e2e::RelayCaps { s1: true, s2: false, call_aps: true });
+        e2e::note_relay_caps_full(&url, e2e::RelayCaps { s1: true, s2: false, call_aps: true, call_voip: true });
         cloud(&url, relay.clone())
             .dispatch_in_mode(&call(CallPushState::Ringing), "bk-voip", &[with.clone(), plain.clone()], *mode)
             .expect("dispatch");
@@ -208,8 +217,9 @@ fn a_ring_carries_the_voip_token_on_every_lane() {
 /// CRITICAL (iOS ends an app that gets a VoIP push it can't report as a
 /// call): nothing but a ring ever carries a `voipToken`, on any lane: not
 /// the missed, ended or answered push, not a badge or nudge, not a Thread,
-/// ticket or project push. A ring without the relay's `call-aps` (it could
-/// not tell a sealed ring from any other push) carries none either.
+/// ticket or project push. A ring carries one only when the relay listed
+/// `call-voip` (it sends VoIP pushes) AND `call-aps` (without the ring's
+/// clear fields it could not tell a sealed ring from any other push).
 #[test]
 fn nothing_but_a_ring_ever_carries_a_voip_token() {
     let _db = crate::db::scoped_for_test();
@@ -224,15 +234,16 @@ fn nothing_but_a_ring_ever_carries_a_voip_token() {
         let mut events = not_rings();
         events.push(call(CallPushState::Ringing));
         for event in events {
-            for call_aps in [true, false] {
-                e2e::note_relay_caps_full(&url, e2e::RelayCaps { s1: true, s2: false, call_aps });
+            for (call_aps, call_voip) in [(true, true), (true, false), (false, true), (false, false)] {
+                e2e::note_relay_caps_full(&url, e2e::RelayCaps { s1: true, s2: false, call_aps, call_voip });
                 c.dispatch_in_mode(&event, "bk-voip", std::slice::from_ref(&p), *mode).expect("dispatch");
                 let bodies = relay.take();
                 assert!(!bodies.is_empty(), "{lane} {event:?}: something was sent");
                 let wire = serde_json::to_string(&bodies).expect("json");
-                let ring = event.is_voip_ring() && call_aps;
-                assert_eq!(wire.contains("voipToken"), ring, "{lane} {event:?} call-aps {call_aps}: {wire}");
-                assert_eq!(wire.contains(&vt), ring, "{lane} {event:?} call-aps {call_aps}: {wire}");
+                let ring = event.is_voip_ring() && call_aps && call_voip;
+                let what = format!("{lane} {event:?} call-aps {call_aps} call-voip {call_voip}");
+                assert_eq!(wire.contains("voipToken"), ring, "{what}: {wire}");
+                assert_eq!(wire.contains(&vt), ring, "{what}: {wire}");
             }
         }
     }
@@ -242,7 +253,93 @@ fn nothing_but_a_ring_ever_carries_a_voip_token() {
         assert!(!e.is_voip_ring(), "{e:?}");
         assert!(!K2Cloud::voip_lane(&e, true), "{e:?}");
     }
-    assert!(!K2Cloud::voip_lane(&call(CallPushState::Ringing), false), "never without call-aps");
+    assert!(!K2Cloud::voip_lane(&call(CallPushState::Ringing), false), "never without call-voip");
+}
+
+/// Today's relays list `call-aps` and no `call-voip`: they copy a ring's
+/// clear fields into a normal alert push and send no VoIP push. A relay
+/// advertising `s1,s2,call-aps` gets NO `voipToken` on a ring, on any
+/// lane, and the ring goes exactly as before the VoIP lane: its clear
+/// `category` and `interruptionLevel` still ride (`call-aps` keeps its
+/// meaning).
+#[test]
+fn a_call_aps_relay_without_call_voip_gets_no_voip_token() {
+    let _db = crate::db::scoped_for_test();
+    let _relay = super::relay_state_test_lock();
+    super::set_instance_id("voip-test-instance");
+    for (i, (lane, mode, keyed)) in LANES.iter().enumerate() {
+        let vt = voip_hex();
+        let p = phone(&format!("voip-apsonly-{lane}"), &vt, keyed.then(|| phone_key(120 + i as u8)));
+        let url = unique_url();
+        e2e::note_relay_caps_full(&url, e2e::RelayCaps { s1: true, s2: true, call_aps: true, call_voip: false });
+        assert!(e2e::relay_call_aps(&url), "{lane}: call-aps still says the clear fields ride");
+        assert!(!e2e::relay_call_voip(&url), "{lane}: call-aps is not call-voip");
+        let relay = Relay::aps_only();
+        cloud(&url, relay.clone())
+            .dispatch_in_mode(&call(CallPushState::Ringing), "bk-voip", std::slice::from_ref(&p), *mode)
+            .expect("dispatch");
+        let bodies = relay.take();
+        assert_eq!(bodies.len(), 1, "{lane}: one relay call: {bodies:?}");
+        let wire = serde_json::to_string(&bodies).expect("json");
+        assert!(!wire.contains("voipToken") && !wire.contains(&vt), "{lane}: no VoIP token on a call-aps relay: {wire}");
+        let body = &bodies[0];
+        assert_eq!(body["payload"]["category"], CALL_CATEGORY_RING, "{lane}: call-aps still copies the ring's fields: {body}");
+        assert_eq!(body["payload"]["interruptionLevel"], INTERRUPTION_TIME_SENSITIVE, "{lane}: {body}");
+        let keys: Vec<&String> = body["devices"][0].as_object().expect("entry").keys().collect();
+        let want: &[&str] = if *keyed { &["e2e", "platform", "token"] } else { &["platform", "token"] };
+        assert_eq!(keys, want, "{lane}: the device entry as before the VoIP lane");
+        // The relay's answer (call-aps, no call-voip) keeps it that way.
+        assert!(!e2e::relay_call_voip(&url), "{lane}");
+    }
+    assert!(e2e::caps_has_call_voip("s1, s2, call-aps, call-voip"));
+    assert!(e2e::caps_has_call_voip("CALL-VOIP"));
+    assert!(!e2e::caps_has_call_voip("s1,s2,call-aps"));
+    assert!(!e2e::caps_has_call_voip("call-voip2"));
+    assert!(e2e::caps_has_call_aps("s1,s2,call-aps"));
+    assert_eq!(e2e::CAPS_CALL_VOIP, "call-voip", "the relay contract");
+    assert_eq!(e2e::CAPS_CALL_APS, "call-aps", "unchanged");
+}
+
+/// The real sender on a real socket: the relay's own `X-K2-Push-Caps`
+/// header decides. With nothing heard yet, the first ring probes the
+/// relay; a relay answering `s1,s2,call-aps` gets the ring with its clear
+/// fields and no `voipToken`; one answering `s1,s2,call-aps,call-voip`
+/// gets the phone's `voipToken`.
+#[test]
+fn over_a_real_socket_only_the_call_voip_header_opens_the_voip_lane() {
+    use super::e2e_tests::{http_answer, loopback_cloud, LoopbackRelay};
+    let _db = crate::db::scoped_for_test();
+    let _relay = super::relay_state_test_lock();
+    super::set_instance_id("voip-test-instance");
+    for (caps, want) in [("s1,s2,call-aps", false), ("s1,s2,call-aps,call-voip", true)] {
+        let vt = voip_hex();
+        let p = phone(&format!("voip-socket-{want}"), &vt, None);
+        let header = format!("X-K2-Push-Caps: {caps}");
+        let marked = ["X-K2-Push-Gateway: s0", header.as_str()];
+        // The probe's answer (the relay's own 400), then the ring's.
+        let relay = LoopbackRelay::start(vec![http_answer(400, &marked), http_answer(200, &marked)]);
+        let url = relay.url.clone();
+        assert!(!e2e::relay_caps_heard(&url), "{caps}: nothing heard yet");
+        loopback_cloud(&url)
+            .dispatch_in_mode(&call(CallPushState::Ringing), "bk-voip", std::slice::from_ref(&p), PushE2eMode::Off)
+            .expect("dispatch");
+        assert!(e2e::relay_call_aps(&url), "{caps}");
+        assert_eq!(e2e::relay_call_voip(&url), want, "{caps}");
+        let seen = relay.requests();
+        assert_eq!(seen.len(), 2, "{caps}: the probe, then the ring: {seen:?}");
+        assert_eq!(seen[0].1, e2e::caps_probe_body(), "{caps}: the probe goes first");
+        let ring = &seen[1].1;
+        assert_eq!(ring["payload"]["category"], CALL_CATEGORY_RING, "{caps}: {ring}");
+        assert_eq!(ring["payload"]["data"]["callState"], "ringing", "{caps}: {ring}");
+        let entry = &ring["devices"][0];
+        assert_eq!(entry["token"], p.token.as_str(), "{caps}: {ring}");
+        if want {
+            assert_eq!(entry["voipToken"], vt.as_str(), "{caps}: {ring}");
+        } else {
+            assert!(entry.get("voipToken").is_none(), "{caps}: {ring}");
+            assert!(!ring.to_string().contains(&vt), "{caps}: {ring}");
+        }
+    }
 }
 
 /// An `fcm` row can't hold a VoIP token (refused at register), so no fcm
@@ -315,7 +412,7 @@ fn a_dead_voip_token_is_cleared_and_the_phone_stays() {
         "ok": true,
         "results": [{ "token": p.token, "sent": true, "dead": false, "voip": { "sent": false, "dead": true, "error": "apns 410: Unregistered" } }],
     }));
-    e2e::note_relay_caps_full(&url, e2e::RelayCaps { s1: true, s2: false, call_aps: true });
+    e2e::note_relay_caps_full(&url, e2e::RelayCaps { s1: true, s2: false, call_aps: true, call_voip: true });
     cloud(&url, relay.clone())
         .dispatch_in_mode(&call(CallPushState::Ringing), "bk-voip", std::slice::from_ref(&p), PushE2eMode::Off)
         .expect("dispatch");
@@ -337,7 +434,7 @@ fn a_dead_voip_token_is_cleared_and_the_phone_stays() {
     assert!(!a.line().contains(&vt));
 
     // The next ring goes with no VoIP token (the alert lane).
-    e2e::note_relay_caps_full(&url, e2e::RelayCaps { s1: true, s2: false, call_aps: true });
+    e2e::note_relay_caps_full(&url, e2e::RelayCaps { s1: true, s2: false, call_aps: true, call_voip: true });
     cloud(&url, relay.clone())
         .dispatch_in_mode(&call(CallPushState::Ringing), "bk-voip", &[row.clone()], PushE2eMode::Off)
         .expect("dispatch");
@@ -346,7 +443,7 @@ fn a_dead_voip_token_is_cleared_and_the_phone_stays() {
     // The alert token dead: the row goes, as before.
     let p2 = phone(&format!("{short}-alertdead"), &voip_hex(), None);
     relay.answer(serde_json::json!({ "ok": true, "results": [{ "token": p2.token, "sent": false, "dead": true }] }));
-    e2e::note_relay_caps_full(&url, e2e::RelayCaps { s1: true, s2: false, call_aps: true });
+    e2e::note_relay_caps_full(&url, e2e::RelayCaps { s1: true, s2: false, call_aps: true, call_voip: true });
     cloud(&url, relay.clone())
         .dispatch_in_mode(&call(CallPushState::Ringing), "bk-voip", std::slice::from_ref(&p2), PushE2eMode::Off)
         .expect("dispatch");

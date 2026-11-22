@@ -1493,6 +1493,9 @@ pub struct GatewayResponse {
     /// The caps list `call-aps` ([`e2e::CAPS_CALL_APS`]): the relay copies a
     /// DM call's `category`, `interruptionLevel` and `sound` into `aps`.
     pub call_aps: bool,
+    /// The caps list `call-voip` ([`e2e::CAPS_CALL_VOIP`]): the relay sends a
+    /// ring to the phone's PushKit VoIP token.
+    pub call_voip: bool,
 }
 
 impl GatewayResponse {
@@ -1643,8 +1646,13 @@ impl HttpDispatchSender {
             .get(e2e::CAPS_HEADER)
             .and_then(|v| v.to_str().ok())
             .is_some_and(e2e::caps_has_call_aps);
+        let call_voip = response
+            .headers()
+            .get(e2e::CAPS_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(e2e::caps_has_call_voip);
         let body = response.text().unwrap_or_default();
-        Ok(GatewayResponse { call_aps, status, body, s0, s1, s2 })
+        Ok(GatewayResponse { call_voip, call_aps, status, body, s0, s1, s2 })
     }
 }
 
@@ -2138,12 +2146,14 @@ impl K2Cloud {
 
     /// The VoIP lane (0.46.17, K2 Companion's CallKit ring) may carry this
     /// push: a DM call's ring ([`PushEvent::is_voip_ring`]) AND a relay
-    /// that copies its clear `category` / `interruptionLevel` (`call-aps`):
-    /// those are how the relay tells a sealed ring from anything else, and
-    /// it refuses a `voipToken` on a push that isn't one. Every other push
-    /// carries no `voipToken` at all.
-    pub fn voip_lane(event: &PushEvent, call_aps: bool) -> bool {
-        event.is_voip_ring() && call_aps
+    /// that sends VoIP pushes (`call_voip` = [`e2e::relay_call_voip`]: the
+    /// relay listed `call-voip`, plus `call-aps`, whose clear `category` /
+    /// `interruptionLevel` are how it tells a sealed ring from anything
+    /// else; it refuses a `voipToken` on a push that isn't one). `call-aps`
+    /// alone never opens it: those relays send no VoIP push. Every other
+    /// push carries no `voipToken` at all.
+    pub fn voip_lane(event: &PushEvent, call_voip: bool) -> bool {
+        event.is_voip_ring() && call_voip
     }
 
     /// The `voipToken` one device's entry carries: its stored VoIP token,
@@ -2193,7 +2203,7 @@ impl K2Cloud {
                 // prd-e2e-push-v1: learn the relay's `s1` capability from
                 // its per-daemon responses (a rollback clears it).
                 if resp.tells_caps() {
-                    e2e::note_relay_caps_full(&self.config.url, e2e::RelayCaps { s1: resp.s1, s2: resp.s2, call_aps: resp.call_aps });
+                    e2e::note_relay_caps_full(&self.config.url, e2e::RelayCaps { s1: resp.s1, s2: resp.s2, call_aps: resp.call_aps, call_voip: resp.call_voip });
                 }
                 if resp.is_success() {
                     note_tunnel_accepted();
@@ -2347,9 +2357,10 @@ impl K2Cloud {
     }
 
     /// Before a DM call's push: make sure the relay's caps were heard this
-    /// run. `call-aps` lives in memory only, so after a restart (or an
-    /// upgrade) the first ring would otherwise go without its clear
-    /// `category`, `interruptionLevel` and `sound`. When nothing was heard
+    /// run. `call-aps` and `call-voip` live in memory only, so after a
+    /// restart (or an upgrade) the first ring would otherwise go without its
+    /// clear `category`, `interruptionLevel` and `sound` (and without the
+    /// phone's VoIP token). When nothing was heard
     /// yet, one probe ([`e2e::caps_probe_body`], a dispatch with no devices,
     /// [`CAPS_PROBE_TIMEOUT`]) asks the relay; its answer is cached like any
     /// other. A probe that gets no answer from the relay itself is not
@@ -2371,7 +2382,7 @@ impl K2Cloud {
         match self.sender.probe(&url, &auth) {
             // Only the relay's own (S0-marked) answer says what it can do.
             Ok(resp) if resp.s0 => {
-                e2e::note_relay_caps_full(&self.config.url, e2e::RelayCaps { s1: resp.s1, s2: resp.s2, call_aps: resp.call_aps });
+                e2e::note_relay_caps_full(&self.config.url, e2e::RelayCaps { s1: resp.s1, s2: resp.s2, call_aps: resp.call_aps, call_voip: resp.call_voip });
             }
             Ok(resp) => crate::log_debug!("[push] caps probe: no relay answer (HTTP {})", resp.status),
             Err(e) => crate::log_debug!("[push] caps probe failed: {e}"),
@@ -2470,7 +2481,7 @@ impl K2Cloud {
         let stamp = PushStamp { subdomain: self.config.subdomain.clone(), instance_id: instance_id() };
         let call_aps = e2e::relay_call_aps(&self.config.url);
         let payload = e2e::generic_payload_with(event, &stamp, badge_key, call_aps);
-        let voip = Self::voip_lane(event, call_aps);
+        let voip = Self::voip_lane(event, e2e::relay_call_voip(&self.config.url));
         let url = format!("{}/push/dispatch", self.config.url);
         let devices: Vec<_> = devices.iter().map(|d| (*d).clone()).collect();
         for chunk in devices.chunks(MAX_DEVICES_PER_CALL) {
@@ -2496,7 +2507,7 @@ impl K2Cloud {
         let stamp = PushStamp { subdomain: self.config.subdomain.clone(), instance_id: instance_id() };
         let now_ms = unix_now_ms();
         let call_aps = e2e::relay_call_aps(&self.config.url);
-        let voip = Self::voip_lane(event, call_aps);
+        let voip = Self::voip_lane(event, e2e::relay_call_voip(&self.config.url));
         let mut sealed: Vec<(e2e::SealedEntry, &SealedDevice<'_>)> = Vec::with_capacity(devices.len());
         for sd in devices {
             let d = sd.device;
@@ -2675,7 +2686,7 @@ impl K2Cloud {
         let resp = self.sender.post_sealed(url, &auth, body).inspect_err(|e| out.observe_err("s1", e))?;
         out.observe("s1", &resp);
         if resp.tells_caps() {
-            e2e::note_relay_caps_full(&self.config.url, e2e::RelayCaps { s1: resp.s1, s2: resp.s2, call_aps: resp.call_aps });
+            e2e::note_relay_caps_full(&self.config.url, e2e::RelayCaps { s1: resp.s1, s2: resp.s2, call_aps: resp.call_aps, call_voip: resp.call_voip });
         }
         if resp.is_success() {
             note_tunnel_accepted();
@@ -2753,7 +2764,7 @@ impl K2Cloud {
         };
         let call_aps = e2e::relay_call_aps(&self.config.url);
         let payload = Self::payload_with(event, &stamp, badge_key, call_aps);
-        let voip = Self::voip_lane(event, call_aps);
+        let voip = Self::voip_lane(event, e2e::relay_call_voip(&self.config.url));
         let url = format!("{}/push/dispatch", self.config.url);
         for chunk in devices.chunks(MAX_DEVICES_PER_CALL) {
             let body = Self::dispatch_body(chunk, &payload, voip);
@@ -2950,7 +2961,7 @@ mod tests {
                 auth.clone(),
                 body.clone(),
             ));
-            Ok(self.script.lock().expect("mock lock").pop_front().unwrap_or_else(|| GatewayResponse { call_aps: false,
+            Ok(self.script.lock().expect("mock lock").pop_front().unwrap_or_else(|| GatewayResponse { call_voip: false, call_aps: false,
                 status: 200,
                 body: self.response.to_string(),
                 s0: false,
@@ -3619,14 +3630,14 @@ mod tests {
         let tunnel_auth = GatewayAuth::Tunnel { token: "tun-tok".into(), subdomain: "rosson".into() };
         let shared_auth = GatewayAuth::Shared { token: "shared-gw".into() };
         let ev = thread_event(ThreadMsgKind::Text, 1, "c-auth");
-        let refused = |status: u16, s0: bool, code: &str| GatewayResponse { call_aps: false,
+        let refused = |status: u16, s0: bool, code: &str| GatewayResponse { call_voip: false, call_aps: false,
             status,
             body: serde_json::json!({ "error": { "code": code } }).to_string(),
             s0,
             s1: false,
             s2: false,
         };
-        let ok = || GatewayResponse { call_aps: false, status: 200, body: r#"{"results":[]}"#.into(), s0: true, s1: false, s2: false };
+        let ok = || GatewayResponse { call_voip: false, call_aps: false, status: 200, body: r#"{"results":[]}"#.into(), s0: true, s1: false, s2: false };
         let now = unix_now();
 
         // 1. Accepted: one call, tunnel token + X-K2-Subdomain.
@@ -3692,7 +3703,7 @@ mod tests {
 
     #[test]
     fn gateway_response_reason_reads_the_error_code() {
-        let r = |b: &str| GatewayResponse { call_aps: false, status: 403, body: b.into(), s0: true, s1: false, s2: false }.reason();
+        let r = |b: &str| GatewayResponse { call_voip: false, call_aps: false, status: 403, body: b.into(), s0: true, s1: false, s2: false }.reason();
         assert_eq!(r(r#"{"error":{"code":"suspended"}}"#), "suspended");
         assert_eq!(r(r#"{"error":"unknown_token"}"#), "unknown_token");
         assert_eq!(r(r#"{"code":"subdomain_not_owned"}"#), "subdomain_not_owned");

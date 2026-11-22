@@ -318,6 +318,35 @@ async fn other_principals_read_as_before_or_not_at_all() {
     finish();
 }
 
+/// An unknown grant reads nothing, by any form, with Remote Sessions off
+/// or on, on loopback and on the tunnel listener.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_unknown_grant_reads_nothing() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let x = two_workspaces(&env, d.port).await;
+    let unknown = "k2rs_unknown";
+    let mut forms = forms_naming_b(&x);
+    forms.push((format!("id={}", x.sa), "A's id=<uuid>"));
+    for on in [false, true] {
+        if on {
+            let r = post(d.port, "/cli/remote-session/enable", OWNER, json!({})).await;
+            assert_eq!(r.status, 200, "enable: {}", r.body);
+        }
+        let switch = if on { "Remote Sessions on" } else { "Remote Sessions off" };
+        for (port, door) in [(d.port, "loopback"), (d.tunnel_port, "tunnel listener")] {
+            for (q, form) in &forms {
+                let r = read(port, unknown, q).await;
+                if r.status == 200 || r.body.contains("\"lines\"") {
+                    miss(format!("unknown grant, {switch}, {door}, {form}: read a terminal: {} {}", r.status, r.body));
+                }
+            }
+        }
+    }
+    drop(d);
+    finish();
+}
+
 // ── the grid and bytes sockets ───────────────────────────────────────
 
 /// Frames from a grid socket until it closes or `secs` pass.

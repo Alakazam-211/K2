@@ -6,7 +6,7 @@
 
 use super::*;
 use crate::sql::cluster::{for_db, record_in, Cluster};
-use crate::sql::secrets::{MemSecretStore, SecretStore as _};
+use crate::sql::secrets::MemSecretStore;
 use crate::sql::sysops::FakeSystemOps;
 
 const MOMENT: i64 = 1_763_806_500; // 2025-11-22T10:15:00Z

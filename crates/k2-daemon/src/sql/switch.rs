@@ -131,8 +131,8 @@ pub(crate) mod test_seam {
 /// anywhere rolls both back.
 fn repoint(id: &str, db: &str, from: &Cluster, to: &Cluster, dir: &Direction, by: &str) -> Result<(), EnsureError> {
     let h = k2_core::db::shared();
-    let mut conn = h.lock();
-    let tx = conn.transaction().map_err(|e| EnsureError::Helper(format!("begin: {e}")))?;
+    let conn = h.lock();
+    let tx = conn.unchecked_transaction().map_err(|e| EnsureError::Helper(format!("begin: {e}")))?;
     let n = tx
         .execute(
             "UPDATE sql_databases SET cluster_major = ?2, cluster_name = ?3 WHERE id = ?1 AND status = 'active'",

@@ -316,8 +316,10 @@ fn a_cache_that_cannot_be_written_is_one_line_and_exit_1() {
     let out = rig.front("k5", &unknown(), &[("K5_HOME_OVERRIDE", &blocked_s)]);
     assert_eq!(out.code, Some(1), "{out:?}");
     assert_eq!(out.stdout, "");
+    // The command's own name, whichever name ran it.
     let want = format!(
-        "k5: can't write the shell CLI to {}/run/cli: ",
+        "{}: can't write the shell CLI to {}/run/cli: ",
+        k2_client::brand::CLI_NAME,
         blocked.display()
     );
     assert!(out.stderr.starts_with(&want), "{out:?}");

@@ -27,11 +27,17 @@ pub fn clean(value: &str) -> Option<&str> {
     ok.then_some(value)
 }
 
-/// The line, K2's ruled text. It names the command `k5`, as the ruling
-/// does: `k5 update` is the fix whichever name ran this.
+/// The line, K2's ruled text, with the command's own name (the brand's,
+/// [`k2_client::brand::CLI_NAME`]) in both places, whichever name ran
+/// this. The ruling's text says `k5`; it reads so once the compiled name
+/// is `k5`.
 pub fn line(ours: &str, theirs: &str) -> String {
-    let k5 = crate::called_as::CalledAs::K5Name.name();
-    format!("{k5} {ours} is talking to a {theirs} server; the command on this PATH is out of date: run {k5} update")
+    line_named(k2_client::brand::CLI_NAME, ours, theirs)
+}
+
+/// [`line`] for the command called `name`.
+fn line_named(name: &str, ours: &str, theirs: &str) -> String {
+    format!("{name} {ours} is talking to a {theirs} server; the command on this PATH is out of date: run {name} update")
 }
 
 /// The server's version when an answer names one that differs from
@@ -77,11 +83,18 @@ pub fn mark_shown() {
 mod tests {
     use super::*;
 
+    /// With the name `k5` it is the ruled text, byte for byte; the line
+    /// printed has the compiled name in its place.
     #[test]
     fn the_line_is_the_ruled_text() {
         assert_eq!(
-            line("0.46.16", "0.46.17"),
+            line_named("k5", "0.46.16", "0.46.17"),
             "k5 0.46.16 is talking to a 0.46.17 server; the command on this PATH is out of date: run k5 update"
+        );
+        let name = k2_client::brand::CLI_NAME;
+        assert_eq!(
+            line("0.46.16", "0.46.17"),
+            format!("{name} 0.46.16 is talking to a 0.46.17 server; the command on this PATH is out of date: run {name} update")
         );
     }
 

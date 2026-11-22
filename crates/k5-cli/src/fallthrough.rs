@@ -199,11 +199,13 @@ impl FrontError {
         self.exit().code()
     }
 
-    /// The line printed on stderr, for a front called as `who`.
-    pub fn line(&self, who: CalledAs) -> String {
+    /// The line printed on stderr. It starts with the command's own name
+    /// (the brand's, [`k2_client::brand::CLI_NAME`]), whichever name the
+    /// front was called by.
+    pub fn line(&self) -> String {
         match self {
             FrontError::NoPython { .. } | FrontError::NoGitBash { .. } => self.to_string(),
-            _ => format!("{}: {self}", who.name()),
+            _ => format!("{}: {self}", k2_client::brand::CLI_NAME),
         }
     }
 }
@@ -523,7 +525,7 @@ pub fn hand_off(who: CalledAs, args: &[OsString]) -> Exit {
     // The shell never ran: nothing went to the daemon, so no plain-http
     // line before the front's own.
     crate::prelude::plain_http::skip();
-    crate::out::stderr_line(&err.line(who));
+    crate::out::stderr_line(&err.line());
     err.exit()
 }
 
@@ -886,8 +888,11 @@ mod tests {
             "{err:?}"
         );
         assert_eq!(
-            err.line(CalledAs::K5Name),
-            "k5: can't find where to keep the shell CLI: no home folder: set HOME"
+            err.line(),
+            format!(
+                "{}: can't find where to keep the shell CLI: no home folder: set HOME",
+                k2_client::brand::CLI_NAME
+            )
         );
         assert_eq!(err.exit_code(), 1);
     }
@@ -937,8 +942,11 @@ mod tests {
         // Never one from PATH.
         let err = find_unix_bash(false, only(&["/usr/local/bin/bash"])).expect_err("no bash");
         assert_eq!(
-            err.line(CalledAs::K2Name),
-            "k2: no bash to run the shell CLI (looked for /bin/bash, /usr/bin/bash)"
+            err.line(),
+            format!(
+                "{}: no bash to run the shell CLI (looked for /bin/bash, /usr/bin/bash)",
+                k2_client::brand::CLI_NAME
+            )
         );
         assert_eq!(err.exit_code(), 1);
     }
@@ -953,8 +961,7 @@ mod tests {
             k2_client::win_cli::GIT_BASH_NEEDED,
             format!("K2's command-line tools need {}", git_bash_how())
         );
-        assert_eq!(err.line(CalledAs::K2Name), line);
-        assert_eq!(err.line(CalledAs::K5Name), line);
+        assert_eq!(err.line(), line);
         assert_eq!(err.exit_code(), 9009);
         assert_eq!(noun(&[]), "help");
         assert_eq!(noun(&[OsString::new()]), "help");
@@ -969,8 +976,7 @@ mod tests {
             format!("k5 msg: this command is not built into k5 yet and needs Python 3. {how}, then open a new terminal.")
         };
         let here = line(python_how(cfg!(target_os = "macos")));
-        assert_eq!(err.line(CalledAs::K2Name), here);
-        assert_eq!(err.line(CalledAs::K5Name), here);
+        assert_eq!(err.line(), here);
         assert_eq!(err.exit_code(), 69);
         assert_eq!(
             line(python_how(true)),

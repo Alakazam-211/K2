@@ -21,3 +21,14 @@ bundle_id = "dev.k2.app"
 update_feed = "https://github.com/Alakazam-211/K2/releases/latest/download/latest.json"
 desktop_id = "k2"
 gui_binary = "k2-gui"
+
+# The update-signing public keys this build's updaters trust (minisign key
+# lines), compiled in by crates/k2-release-keys/build.rs. Primaries first,
+# the backup last. For k2 and k5 they are exactly the keys of the
+# update-key ceremony (scripts/updater-key-ceremony.sh); the build refuses
+# a difference. No other brand may carry them.
+[update]
+keys = [
+    { role = "primary", key_id = "76CA14D3B7EE2B69", pubkey = "RWRpK+630xTKdopKvlpWVqvnEwqyK1CZ+F5deeRjpGA2ywyWS8NnOrpv" },
+    { role = "backup", key_id = "5101A5781A5102A4", pubkey = "RWSkAlEaeKUBUZhQA52GoMLa0rt8KLdEoto26gLHRpm9QIC5ColsvG/Y" },
+]

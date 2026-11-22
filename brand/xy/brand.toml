@@ -25,3 +25,11 @@ bundle_id = "example.globex.desk"
 update_feed = "https://updates.example.invalid/latest.json"
 desktop_id = "globex-desk"
 gui_binary = "globex-desk"
+
+# A placeholder update key, made only for tests: its private half was never
+# kept, so nothing can sign for it. Never one of K2's own keys (the build and
+# scripts/brand-values.mjs update-keys refuse that).
+[update]
+keys = [
+    { role = "primary", key_id = "9A9083330F2E87CE", pubkey = "RWTOhy4PM4OQmqEdBiOv60pb9gFH30gUg9TGTOxA5sRaWb5ABsLhTcwY" },
+]

@@ -22,3 +22,11 @@ bundle_id = "dev.k2.app"
 update_feed = "https://github.com/Alakazam-211/K2/releases/latest/download/latest.json"
 desktop_id = "k2"
 gui_binary = "k2-gui"
+
+# The update-signing public keys (see brand/k2): the same keys as k2, so
+# installs keep updating across the rename.
+[update]
+keys = [
+    { role = "primary", key_id = "76CA14D3B7EE2B69", pubkey = "RWRpK+630xTKdopKvlpWVqvnEwqyK1CZ+F5deeRjpGA2ywyWS8NnOrpv" },
+    { role = "backup", key_id = "5101A5781A5102A4", pubkey = "RWSkAlEaeKUBUZhQA52GoMLa0rt8KLdEoto26gLHRpm9QIC5ColsvG/Y" },
+]

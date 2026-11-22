@@ -15,7 +15,7 @@
 //       print that file instead of writing it.
 //   node scripts/brand-values.mjs tauri [--out FILE]
 //       print (or write) the Tauri config overlay: the app's name, the
-//       bundle id and the update feed. A brand build passes the file to
+//       bundle id, the update feed and the primary update key. A brand build passes the file to
 //       `tauri build --config <file>`, which merges it over
 //       src-tauri/tauri.conf.json. For brand/k2 it changes nothing: that
 //       file already holds the same values, and
@@ -23,7 +23,14 @@
 //   node scripts/brand-values.mjs shell
 //       print the values as shell assignments (BRAND_ID, BRAND_PRODUCT,
 //       BRAND_CLI, BRAND_CLI_ALIASES, BRAND_BUNDLE_ID, BRAND_UPDATE_FEED,
-//       BRAND_DESKTOP_ID, BRAND_GUI_BINARY), for a packaging script to eval.
+//       BRAND_DESKTOP_ID, BRAND_GUI_BINARY, BRAND_UPDATE_PUBKEYS), for a
+//       packaging script to eval.
+//   node scripts/brand-values.mjs update-keys
+//       the ship check for [update]: k2 and k5 must carry exactly K2's own
+//       update keys (the ceremony's, in crates/k2-release-keys); any other
+//       brand must carry none of them (nor the retired U1), by key id or by
+//       key. Exits 1 and says why when not. tauri and shell refuse the same
+//       way. crates/k2-release-keys/build.rs refuses it at build time too.
 //
 // Two names, never made from each other (Rosson's rule): the product's
 // ([names] product, for prose and screens) and the command's ([cli] name,
@@ -45,6 +52,12 @@ const MODES = new Set(['silent', 'notice', 'tombstone'])
 /** The keys [package] holds. All four are required when a build asks for
  *  packaging values; the renderer needs none of them. */
 const PACKAGE_KEYS = ['bundle_id', 'update_feed', 'desktop_id', 'gui_binary']
+/** The keys one [update] key holds. */
+const UPDATE_KEY_KEYS = ['role', 'key_id', 'pubkey']
+/** The brands that ship K2's own update keys (the update-key ceremony's). */
+export const OWN_KEY_BRANDS = ['k2', 'k5']
+/** Where the ceremony writes K2's own keys, and the retired key U1. */
+export const RELEASE_KEYS_RS = join(ROOT, 'crates/k2-release-keys/src/lib.rs')
 
 /** The brand folder: the argument, else K2_BRAND_DIR, else brand/k2. */
 export function brandDir(arg, env = process.env) {
@@ -73,7 +86,7 @@ function parseValue(file, field, text) {
     while (pos < body.length) {
       re.lastIndex = pos
       const it = re.exec(body)
-      if (!it) fail(file, `${field} must be a list of { name = "...", mode = "..." } tables`)
+      if (!it) fail(file, `${field} must be a list of { key = "...", ... } tables`)
       const obj = {}
       for (const pair of it[1].split(',').map((s) => s.trim()).filter(Boolean)) {
         const kv = pair.match(/^([a-z_]+)\s*=\s*"([^"\\]*)"$/)
@@ -167,7 +180,97 @@ export function readBrand(dir) {
     if (!/^[a-z][a-z0-9-]*$/.test(pkg.desktop_id)) fail(file, `package.desktop_id "${pkg.desktop_id}" must be a plain file name`)
     if (!/^[a-z][a-z0-9-]*$/.test(pkg.gui_binary)) fail(file, `package.gui_binary "${pkg.gui_binary}" must be a plain file name`)
   }
-  return { file, id, product, cli, aliases, pkg }
+  let update = null
+  if (doc.tables.update) {
+    const u = doc.tables.update
+    const extra = Object.keys(u).find((k) => k !== 'keys')
+    if (extra) fail(file, `[update] holds a key it does not know: ${extra} (it knows keys)`)
+    if (!Array.isArray(u.keys) || u.keys.length === 0) fail(file, 'update.keys must be a list of { role, key_id, pubkey } tables, at least one')
+    const keys = u.keys.map((k, i) => {
+      const f = `update.keys[${i}]`
+      const bad = Object.keys(k).find((x) => !UPDATE_KEY_KEYS.includes(x))
+      if (bad) fail(file, `${f} holds a key it does not know: ${bad} (it knows ${UPDATE_KEY_KEYS.join(', ')})`)
+      const role = text(file, k, 'role', `${f}.role`)
+      const key_id = text(file, k, 'key_id', `${f}.key_id`)
+      const pubkey = text(file, k, 'pubkey', `${f}.pubkey`)
+      if (role !== 'primary' && role !== 'backup') fail(file, `${f}.role "${role}" must be primary or backup`)
+      const id = minisignKeyId(pubkey)
+      if (!id) fail(file, `${f}.pubkey is not a minisign public key line`)
+      if (id !== key_id) fail(file, `${f}.key_id "${key_id}" is not the pubkey's key id (${id})`)
+      return { role, key_id, pubkey }
+    })
+    if (keys[0].role !== 'primary') fail(file, 'update.keys must start with a primary key')
+    const seen = new Set()
+    for (const k of keys) {
+      if (seen.has(k.key_id)) fail(file, `update.keys lists ${k.key_id} twice`)
+      seen.add(k.key_id)
+    }
+    update = { keys }
+  }
+  return { file, id, product, cli, aliases, pkg, update }
+}
+
+/** minisign's key id of a public key line ("Ed", 8 id bytes, 32 key bytes):
+ *  the id bytes as a little-endian u64, 16 upper hex. Null when the line is
+ *  not one. */
+export function minisignKeyId(line) {
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(line)) return null
+  const raw = Buffer.from(line, 'base64')
+  if (raw.length !== 42 || raw[0] !== 0x45 || raw[1] !== 0x64) return null
+  return raw.readBigUInt64LE(2).toString(16).toUpperCase().padStart(16, '0')
+}
+
+/** Tauri's wrapped form of a key line (plugins.updater.pubkey). */
+export function tauriPubkey(line) {
+  return Buffer.from(`untrusted comment: minisign public key: ${minisignKeyId(line)}\n${line}\n`).toString('base64')
+}
+
+/** K2's own update keys, as the ceremony wrote them in k2-release-keys
+ *  (UPDATER_KEYS, in order, with roles), and the retired key U1. */
+export function ownUpdateKeys(file = RELEASE_KEYS_RS) {
+  const src = readFileSync(file, 'utf8')
+  const a = src.indexOf('// BEGIN UPDATER_KEYS')
+  const b = src.indexOf('// END UPDATER_KEYS')
+  if (a < 0 || b < a) throw new Error(`${relative(ROOT, file)}: no UPDATER_KEYS block`)
+  const keys = [...src.slice(a, b).matchAll(/role: "([a-z]+)",\s*key_id: "([0-9A-F]{16})",\s*public_key_b64: "([^"]+)"/g)].map((m) => ({
+    role: m[1],
+    key_id: m[2],
+    pubkey: m[3],
+  }))
+  const legacy = src.match(/^pub const LEGACY_UPDATER_KEY_B64: &str = "([^"]+)";$/m)
+  const legacyId = src.match(/^pub const LEGACY_UPDATER_KEY_ID: &str = "([0-9A-F]{16})";$/m)
+  if (!legacy || !legacyId) throw new Error(`${relative(ROOT, file)}: no LEGACY_UPDATER_KEY_B64 / _ID`)
+  return { keys, retired: { key_id: legacyId[1], pubkey: legacy[1] } }
+}
+
+/** What is wrong with a brand's update keys, as lines (empty: nothing).
+ *  k2 and k5 must carry exactly K2's own keys; any other brand must carry
+ *  none of them, nor the retired one, by key id or by key. */
+export function updateKeyProblems(brand, own = ownUpdateKeys()) {
+  if (!brand.update) return [`${relative(ROOT, brand.file)}: [update] is missing; a build needs its own update keys`]
+  const mine = brand.update.keys
+  if (OWN_KEY_BRANDS.includes(brand.id)) {
+    const want = own.keys.map((k) => `${k.role} ${k.key_id} ${k.pubkey}`).join('\n')
+    const have = mine.map((k) => `${k.role} ${k.key_id} ${k.pubkey}`).join('\n')
+    return want === have ? [] : [`${relative(ROOT, brand.file)}: brand ${brand.id} must carry exactly K2's update keys (crates/k2-release-keys UPDATER_KEYS), in order`]
+  }
+  const ours = [...own.keys, own.retired]
+  const out = []
+  for (const k of mine) {
+    for (const o of ours) {
+      if (k.key_id === o.key_id || k.pubkey === o.pubkey) {
+        out.push(`${relative(ROOT, brand.file)}: brand ${brand.id} carries K2's update key ${o.key_id}; only ${OWN_KEY_BRANDS.join(' and ')} may ship it`)
+      }
+    }
+  }
+  return out
+}
+
+/** The brand's update keys, refused when updateKeyProblems finds any. */
+export function updateKeys(brand) {
+  const problems = updateKeyProblems(brand)
+  if (problems.length) throw new Error(problems.join('\n'))
+  return brand.update.keys
 }
 
 /** The packaging values; a brand file with no [package] is refused. */
@@ -206,11 +309,12 @@ export function rendererModule(brand) {
 
 /** The Tauri config overlay (a JSON merge patch onto tauri.conf.json). */
 export function tauriOverlay(brand) {
+  const keys = updateKeys(brand)
   const p = packageValues(brand)
   return {
     productName: brand.product,
     identifier: p.bundle_id,
-    plugins: { updater: { endpoints: [p.update_feed] } },
+    plugins: { updater: { endpoints: [p.update_feed], pubkey: tauriPubkey(keys[0].pubkey) } },
   }
 }
 
@@ -218,6 +322,7 @@ const sh = (s) => `'${s.replace(/'/g, `'\\''`)}'`
 
 /** The values as shell assignments. */
 export function shellValues(brand) {
+  const keys = updateKeys(brand)
   const p = packageValues(brand)
   return [
     `BRAND_ID=${sh(brand.id)}`,
@@ -228,6 +333,7 @@ export function shellValues(brand) {
     `BRAND_UPDATE_FEED=${sh(p.update_feed)}`,
     `BRAND_DESKTOP_ID=${sh(p.desktop_id)}`,
     `BRAND_GUI_BINARY=${sh(p.gui_binary)}`,
+    `BRAND_UPDATE_PUBKEYS=${sh(keys.map((k) => k.pubkey).join(' '))}`,
     '',
   ].join('\n')
 }
@@ -311,7 +417,17 @@ function main(argv) {
     return
   }
   if (cmd === 'shell') return void process.stdout.write(shellValues(brand))
-  console.error('usage: brand-values.mjs renderer [--check|--print] | tauri [--out FILE] | shell   [--brand DIR]')
+  if (cmd === 'update-keys') {
+    const problems = updateKeyProblems(brand)
+    if (problems.length) {
+      for (const line of problems) console.error(`brand-values: REFUSED ${line}`)
+      process.exit(1)
+    }
+    for (const k of brand.update.keys) console.log(`${k.role} ${k.key_id} ${k.pubkey}`)
+    console.log(`brand-values: ${brand.id}'s update keys are its own`)
+    return
+  }
+  console.error('usage: brand-values.mjs renderer [--check|--print] | tauri [--out FILE] | shell | update-keys   [--brand DIR]')
   process.exit(2)
 }
 

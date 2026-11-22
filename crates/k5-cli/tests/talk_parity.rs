@@ -344,10 +344,7 @@ fn talk_drives_forms() {
 fn talk_read_with_no_answer_ends_in_the_pipe() {
     let rig = Rig::new(VERB, "pipe");
     rig.check(&Case {
-        compare: Compare::Bash32PipeReader {
-            stdout: "",
-            stderr: "\n",
-        },
+        compare: Compare::Waited,
         ..plain(
             "no answer to the read",
             &["ws", "--read-only"],

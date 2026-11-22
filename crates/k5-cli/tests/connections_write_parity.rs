@@ -29,7 +29,6 @@ use common::stub::Reply;
 use std::time::Duration;
 
 const VERB: &str = "connections";
-const UNPARSEABLE: &str = "Error: daemon returned an unparseable response: ''\n";
 const ADDED: &str = r#"{"ok":true,"target":"beta"}"#;
 
 fn with(env: Vec<(&'static str, String)>, c: Case) -> Case {
@@ -43,15 +42,11 @@ fn traceback(c: Case) -> Case {
     }
 }
 
-/// No answer on the left of the pipe: the line, then SIGPIPE (141);
-/// macOS's bash 3.2 runs the reader on an empty input instead (its line
-/// on stderr since 0.46.17).
+/// No answer on the left of the pipe: the line, then SIGPIPE (141), on
+/// every bash.
 fn in_pipe(c: Case) -> Case {
     Case {
-        compare: Compare::Bash32PipeReader {
-            stdout: "",
-            stderr: UNPARSEABLE,
-        },
+        compare: Compare::Waited,
         ..c
     }
 }

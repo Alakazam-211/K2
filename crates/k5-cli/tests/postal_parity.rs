@@ -948,10 +948,7 @@ fn the_owner_token_in_a_session() {
         with(
             cell(),
             Case {
-                compare: Compare::Bash32PipeReader {
-                    stdout: "",
-                    stderr: "",
-                },
+                compare: Compare::Waited,
                 ..case(
                     "a POST the cell socket may have run",
                     &["enable"],

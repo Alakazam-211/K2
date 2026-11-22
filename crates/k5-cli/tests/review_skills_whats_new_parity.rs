@@ -38,13 +38,11 @@ fn waited(c: Case) -> Case {
 }
 
 /// A request on the left of a pipe into the shell's reader, with no
-/// answer: the binary's line, then SIGPIPE. macOS's `/bin/bash` 3.2 runs
-/// the reader on the empty input, which prints `stdout` and `stderr`, and
-/// exits 1 (`scripts/cli-parity.sh`'s named difference
-/// `bash32-pipe-reader`, through [`Compare::Bash32PipeReader`]).
-fn in_pipe(c: Case, stdout: &'static str, stderr: &'static str) -> Case {
+/// answer: the line, then SIGPIPE (141), compared as
+/// [`Compare::Waited`] on every bash.
+fn in_pipe(c: Case) -> Case {
     Case {
-        compare: Compare::Bash32PipeReader { stdout, stderr },
+        compare: Compare::Waited,
         ..c
     }
 }
@@ -228,19 +226,15 @@ fn skills_answer_as_the_shell_does() {
         stop("create: no name", &["create", "--role", "x"], 1),
         stop("profile: no name", &["profile"], 1),
         stop("a verb it doesn't know", &["frob"], 1),
-        in_pipe(
-            case(
-                "list: no answer",
-                &["list"],
-                &[],
-                vec![Reply::Close],
-                owner_and_port,
-                141,
-                1,
-            ),
-            "",
-            "",
-        ),
+        in_pipe(case(
+            "list: no answer",
+            &["list"],
+            &[],
+            vec![Reply::Close],
+            owner_and_port,
+            141,
+            1,
+        )),
         // Help never acts: the usage, exit 0, nothing sent.
         shell(stop("list -h: the usage, nothing sent", &["list", "-h"], 0)),
         shell(stop(

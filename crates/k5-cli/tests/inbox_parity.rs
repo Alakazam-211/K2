@@ -95,23 +95,19 @@ fn words(v: Vec<&'static str>) -> &'static [&'static str] {
     Box::leak(v.into_boxed_slice())
 }
 
-/// What the shell's readers print on an empty input (macOS's bash 3.2
-/// runs them after a request with no answer: [`Compare::Bash32PipeReader`]).
-const NO_ITEMS: &str = "No items.\n";
-const NO_FOLDERS: &str =
-    "No folders yet. Create one by moving an item:\n  k2 inbox move <id> projects\n";
-const READ_NO_ANSWER: &str = "Error: no answer from the K2 daemon (neither this session's cell socket nor the loopback port answered). Is K2 running? Try again: k2 inbox read <id>\n";
-
-fn in_pipe(c: Case, stdout: &'static str, stderr: &'static str) -> Case {
+/// A request on the left of a pipe into the shell's reader, with no
+/// answer: the line, then SIGPIPE (141), compared as
+/// [`Compare::Waited`] on every bash.
+fn in_pipe(c: Case) -> Case {
     Case {
-        compare: Compare::Bash32PipeReader { stdout, stderr },
+        compare: Compare::Waited,
         ..c
     }
 }
 
 /// `list` or `search` with no answer.
 fn listed(c: Case) -> Case {
-    in_pipe(c, NO_ITEMS, "")
+    in_pipe(c)
 }
 
 fn reply(body: String) -> Reply {
@@ -1052,32 +1048,24 @@ fn inbox_with_no_answer() {
             141,
             1,
         )),
-        in_pipe(
-            case(
-                "read: an empty reply",
-                &["read", "a1"],
-                &[],
-                vec![Reply::Close],
-                owner_and_port,
-                141,
-                1,
-            ),
-            "",
-            READ_NO_ANSWER,
-        ),
-        in_pipe(
-            case(
-                "folders: an empty reply",
-                &["folders"],
-                &[],
-                vec![Reply::Close],
-                owner_and_port,
-                141,
-                1,
-            ),
-            NO_FOLDERS,
-            "",
-        ),
+        in_pipe(case(
+            "read: an empty reply",
+            &["read", "a1"],
+            &[],
+            vec![Reply::Close],
+            owner_and_port,
+            141,
+            1,
+        )),
+        in_pipe(case(
+            "folders: an empty reply",
+            &["folders"],
+            &[],
+            vec![Reply::Close],
+            owner_and_port,
+            141,
+            1,
+        )),
         case(
             "a reset (56): no items, exit 56",
             &[],

@@ -922,13 +922,10 @@ fn tunnel_with_no_answer() {
             56,
             2,
         ),
-        // A no answer on the left of the pipe: macOS's bash 3.2 runs the
-        // reader on an empty input (`bash32-pipe-reader`).
+        // No answer on the left of the pipe: the line, then SIGPIPE, on
+        // every bash.
         Case {
-            compare: Compare::Bash32PipeReader {
-                stdout: "",
-                stderr: "Error: daemon returned an unparseable response: ''\n",
-            },
+            compare: Compare::Waited,
             ..case(
                 "boot-status ghost: an empty reply",
                 &["boot-status", "ghost"],

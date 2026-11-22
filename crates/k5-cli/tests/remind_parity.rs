@@ -607,13 +607,10 @@ fn remind_with_a_passport() {
 fn remind_with_no_answer() {
     let rig = Rig::new("remind", "none");
     let port = dead_port();
-    // The reader after these requests (`_remind_show_result`) says this
-    // on an empty input; macOS's bash 3.2 runs it there (`in_pipe`).
+    // No answer on the left of the pipe into `_remind_show_result`: the
+    // line, then SIGPIPE, on every bash.
     let in_pipe = |c: Case| Case {
-        compare: Compare::Bash32PipeReader {
-            stdout: "",
-            stderr: "Error: empty response from daemon (is it running?)\n",
-        },
+        compare: Compare::Waited,
         ..c
     };
     let cell = || with_passport(&[("K2_HOOK_SOCK", "{sock}")]);

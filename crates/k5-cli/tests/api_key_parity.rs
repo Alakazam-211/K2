@@ -40,14 +40,11 @@ fn traceback(c: Case) -> Case {
     }
 }
 
-/// No answer on the left of the pipe: the line, then SIGPIPE (141);
-/// macOS's bash 3.2 runs the reader on an empty input instead.
+/// No answer on the left of the pipe: the line, then SIGPIPE (141), on
+/// every bash.
 fn in_pipe(c: Case) -> Case {
     Case {
-        compare: Compare::Bash32PipeReader {
-            stdout: "",
-            stderr: "Error: Expecting value: line 1 column 1 (char 0)\n",
-        },
+        compare: Compare::Waited,
         ..c
     }
 }

@@ -437,9 +437,12 @@ fn with_a_passport() {
     }
 }
 
-fn in_pipe(stdout: &'static str, c: Case) -> Case {
+/// A request on the left of a pipe into the shell's reader, with no
+/// answer: the line, then SIGPIPE (141), compared as
+/// [`Compare::Waited`] on every bash.
+fn in_pipe(c: Case) -> Case {
     Case {
-        compare: Compare::Bash32PipeReader { stdout, stderr: "" },
+        compare: Compare::Waited,
         ..c
     }
 }
@@ -452,30 +455,24 @@ fn with_no_answer() {
         ..c
     };
     let mut v = vec![
-        in_pipe(
-            "",
-            case(
-                "a term, an empty reply: the line, then SIGPIPE",
-                &["x"],
-                &[],
-                vec![Reply::Close],
-                owner_and_port,
-                141,
-                1,
-            ),
-        ),
-        in_pipe(
-            "",
-            case(
-                "a term, a 5xx with no body",
-                &["x"],
-                &[],
-                vec![Reply::Answer(502, String::new())],
-                owner_and_port,
-                141,
-                1,
-            ),
-        ),
+        in_pipe(case(
+            "a term, an empty reply: the line, then SIGPIPE",
+            &["x"],
+            &[],
+            vec![Reply::Close],
+            owner_and_port,
+            141,
+            1,
+        )),
+        in_pipe(case(
+            "a term, a 5xx with no body",
+            &["x"],
+            &[],
+            vec![Reply::Answer(502, String::new())],
+            owner_and_port,
+            141,
+            1,
+        )),
         case(
             "a term, a reset",
             &["x"],
@@ -531,10 +528,8 @@ fn with_no_answer() {
             1,
         )),
     ];
-    // The list prints its title before the request. macOS's bash 3.2 then
-    // runs the reader on nothing (bash32-pipe-reader), which the rig
-    // compares only where the binary's stdout is empty: these run on
-    // Linux.
+    // The list prints its title before the request. These run on Linux
+    // only, as when macOS's bash 3.2 still ran the reader on nothing.
     if cfg!(target_os = "linux") {
         v.push(case(
             "the list, an empty reply: the title, the line, then SIGPIPE",
@@ -572,18 +567,15 @@ fn with_no_daemon() {
 #[test]
 fn with_a_daemon_that_never_answers() {
     let rig = Rig::new(VERB, "hang");
-    rig.check(&in_pipe(
-        "",
-        case(
-            "no answer in time (28)",
-            &["x"],
-            &[],
-            vec![Reply::Hang(Duration::from_secs(35))],
-            owner_and_port,
-            141,
-            1,
-        ),
-    ));
+    rig.check(&in_pipe(case(
+        "no answer in time (28)",
+        &["x"],
+        &[],
+        vec![Reply::Hang(Duration::from_secs(35))],
+        owner_and_port,
+        141,
+        1,
+    )));
 }
 
 /// What the binary hands to the shell, before it prints or sends

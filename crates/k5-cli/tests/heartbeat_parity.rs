@@ -1721,13 +1721,10 @@ fn heartbeat_stops_and_reminders_answer_as_the_shell_does() {
 fn heartbeat_with_no_answer() {
     let rig = Rig::new(VERB, "none");
     let v = vec![
-        // bash32-pipe-reader: on macOS's /bin/bash 3.2 the list's reader
-        // runs on the empty input and the command exits 1.
+        // No answer on the left of the pipe into the list's reader: the
+        // line, then SIGPIPE, on every bash.
         Case {
-            compare: Compare::Bash32PipeReader {
-                stdout: "",
-                stderr: "Error: Expecting value: line 1 column 1 (char 0)\n",
-            },
+            compare: Compare::Waited,
             ..case(
                 "an empty reply to the list",
                 &["list"],
@@ -1738,12 +1735,9 @@ fn heartbeat_with_no_answer() {
                 1,
             )
         },
-        // bash32-pipe-reader: the fire's reader too.
+        // The fire's reader too.
         Case {
-            compare: Compare::Bash32PipeReader {
-                stdout: "",
-                stderr: "Error: Expecting value: line 1 column 1 (char 0)\n",
-            },
+            compare: Compare::Waited,
             ..case(
                 "an empty reply to a fire",
                 &["fire", "x"],
@@ -1754,13 +1748,9 @@ fn heartbeat_with_no_answer() {
                 1,
             )
         },
-        // bash32-pipe-reader: on the cell socket the reader prints nothing
-        // more on bash 3.2, and the command exits 1.
+        // And on the cell socket.
         Case {
-            compare: Compare::Bash32PipeReader {
-                stdout: "",
-                stderr: "",
-            },
+            compare: Compare::Waited,
             ..with(
                 cell(),
                 case(

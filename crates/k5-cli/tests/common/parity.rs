@@ -186,17 +186,6 @@ pub enum Compare {
     Shell,
     /// PRD 13.9 #4: bash sends the owner token, the binary the passport.
     OwnerTokenWithPassport,
-    /// No answer to a request on the left of a pipe into a reader: the
-    /// line, then death by SIGPIPE (141, `_k2_end_command`), compared as
-    /// [`Compare::Waited`] on every bash. `stdout` and `stderr` are what
-    /// the reader printed when it still ran on an empty input (the
-    /// retired named difference `bash32-pipe-reader`, before the shell
-    /// stopped the reader where ps can't run); they are no longer read,
-    /// and go when the rows move to [`Compare::Waited`].
-    Bash32PipeReader {
-        stdout: &'static str,
-        stderr: &'static str,
-    },
     /// A NUL byte in the answer, which bash's `resp=$(cli_request …)`
     /// drops and, from bash 4.4 on, warns about on stderr in one line
     /// naming `cli/k2`'s path and line, while the binary drops it
@@ -761,10 +750,7 @@ impl Rig {
             tools, with_tools,
             "{name}: the programs run with no python3"
         );
-        if matches!(
-            c.compare,
-            Compare::Waited | Compare::Bash32PipeReader { .. }
-        ) {
+        if c.compare == Compare::Waited {
             let (ws, wn) = mask_waited(&with.stderr);
             let (os, on) = mask_waited(&out.stderr);
             assert_eq!(os, ws, "{name}: stderr with no python3 (seconds masked)");
@@ -921,10 +907,7 @@ impl Rig {
                 "{name}: the binary wrote about the NUL: {:?}",
                 r.stderr
             );
-        } else if matches!(
-            c.compare,
-            Compare::Waited | Compare::Bash32PipeReader { .. }
-        ) {
+        } else if c.compare == Compare::Waited {
             let (bs, bn) = mask_waited(&b.stderr);
             let (rs, rn) = mask_waited(&r.stderr);
             assert_eq!(rs, bs, "{name}: stderr (seconds masked)");

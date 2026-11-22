@@ -204,10 +204,7 @@ fn sessions_set_label_as_the_shell_does() {
             )
         },
         Case {
-            compare: Compare::Bash32PipeReader {
-                stdout: "",
-                stderr: "Error: Expecting value: line 1 column 1 (char 0)\n",
-            },
+            compare: Compare::Waited,
             ..case(
                 "no answer: the line, then SIGPIPE",
                 &["set-label", "s", "x"],

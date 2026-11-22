@@ -216,13 +216,10 @@ fn msg_sends_as_the_shell_does() {
             2,
             5,
         ),
-        // macOS's bash 3.2 runs the handle's reader on an empty input and
-        // ends with exit 1, printing nothing.
+        // No answer on the left of the pipe into the handle's reader: the
+        // line, then SIGPIPE, on every bash.
         Case {
-            compare: Compare::Bash32PipeReader {
-                stdout: "",
-                stderr: "",
-            },
+            compare: Compare::Waited,
             ..plain(
                 "a lookup with no answer",
                 &["ws", "hi", "--idempotency-key", KEY],
@@ -720,10 +717,7 @@ fn msg_sends_as_the_shell_does() {
             1,
         )),
         Case {
-            compare: Compare::Bash32PipeReader {
-                stdout: "",
-                stderr: "",
-            },
+            compare: Compare::Waited,
             ..session(case(
                 "Postal mail the cell socket may have run",
                 &["a::abc.postal.bot", "hi"],
@@ -1097,10 +1091,7 @@ fn msg_who_and_verify_as_the_shell_does() {
             )
         },
         Case {
-            compare: Compare::Bash32PipeReader {
-                stdout: "",
-                stderr: "Error: daemon answered: \n",
-            },
+            compare: Compare::Waited,
             ..plain(
                 "who, no answer",
                 &["who", "m_1"],

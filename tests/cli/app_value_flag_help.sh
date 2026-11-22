@@ -16,6 +16,11 @@
 #     to send a held card to, and sent the put: `--assign` is taken out of
 #     the line before the verb's own help check sees it. Now `--assign -h`
 #     (or `--help`) leaves the help word for the verb, on every k2 app verb.
+#   - `k2 app approve <id> -h` (or --help, or help after the id) read the
+#     approvals and asked for the confirm: only the first word was read as
+#     help. Its page is now the one that describes it (grace.txt).
+#   - `k2 app push devices rm <app> <id> -h` removed the phone: the rm
+#     form read its words by position with no help check at all.
 #
 # Each help row: exactly the page on stdout, nothing on stderr, exit 0,
 # nothing sent. Each verb's plain form then still sends, so the stub is
@@ -23,6 +28,8 @@
 #
 # How: a python stub daemon on a free loopback port records every request
 # (any method, any path). HOME is a temp dir, no real daemon, no network.
+# The approve rows run as the owner's terminal (port and token on disk in
+# their own HOME), since approve refuses a passport before it sends.
 # Loud: every failure is named and the script exits 1.
 # Run with: bash tests/cli/app_value_flag_help.sh
 set -euo pipefail
@@ -106,10 +113,22 @@ export K2_HOOK_TOKEN="owner-token-for-test"
 export K2_PROJECT_PATH="$WORK/proj"
 cd "$WORK/proj"
 
+# AS_OWNER=1: the owner's terminal outside K2 (no passport in the env, the
+# port and the owner token on disk in another HOME). approve refuses a
+# passport before it sends anything, so its rows run as the owner.
+AS_OWNER=0
+mkdir -p "$WORK/owner/.k2"
+cat "$WORK/port" >"$WORK/owner/.k2/heartbeat.port"
+echo owner-token-for-test >"$WORK/owner/.k2/heartbeat.token"
+
 run() {
     : >"$REQ_LOG"
     set +e
-    OUT="$("$K2" "$@" </dev/null 2>"$WORK/err")"
+    if [ "$AS_OWNER" = 1 ]; then
+        OUT="$(HOME="$WORK/owner" env -u K2_PORT -u K2_HOOK_TOKEN "$K2" "$@" </dev/null 2>"$WORK/err")"
+    else
+        OUT="$("$K2" "$@" </dev/null 2>"$WORK/err")"
+    fi
     RC=$?
     set -e
     ERR="$(cat "$WORK/err")"
@@ -246,6 +265,44 @@ run app data put shop notes.txt --to sub --assign ada
 sent_line "the put with --assign" 1 '^POST /cli/app/data/put .*"to": "sub"'
 [ "$(wc -l <"$REQ_LOG" | tr -d ' ')" = 1 ] && ok "data put --assign ada: one request" \
     || { bad "data put --assign ada: not one request"; sed 's/^/      | /' "$REQ_LOG" >&2; }
+
+echo "== app approve (the owner): help after the id prints the page, nothing sent =="
+AS_OWNER=1
+# native: app approve
+page app/grace.txt app approve w_abc123 -h
+# native: app approve
+page app/grace.txt app approve w_abc123 --help
+# native: app approve
+page app/grace.txt app approve w_abc123 help
+# native: app approve
+page app/grace.txt app approve -h w_abc123
+# native: app approve
+page app/grace.txt app approve help
+echo "== app approve (the owner): the plain form still reads the approvals =="
+# native: app approve
+run app approve w_abc123
+[ "$RC" -eq 3 ] && ok "k2 app approve w_abc123: exit 3 (no such request)" || { bad "approve: exit $RC (want 3)"; show "$ERR"; }
+sent_line "the approve" 1 '^GET /cli/app/approvals '
+[ "$(wc -l <"$REQ_LOG" | tr -d ' ')" = 1 ] && ok "approve: one request" \
+    || { bad "approve: not one request"; sed 's/^/      | /' "$REQ_LOG" >&2; }
+AS_OWNER=0
+
+echo "== app push devices rm: help after the id prints the page, nothing removed =="
+# native: app push devices rm
+page app/push.txt app push devices rm shop apd_1 -h
+# native: app push devices rm
+page app/push.txt app push devices rm shop apd_1 --help
+# native: app push devices rm
+page app/push.txt app push devices rm shop apd_1 help
+# native: app push devices rm
+page app/push.txt app push devices rm shop -h apd_1
+echo "== app push devices rm: the plain rm still sends =="
+# native: app push devices rm
+run app push devices rm shop apd_1
+[ "$RC" -eq 0 ] && ok "k2 app push devices rm shop apd_1: exit 0" || { bad "devices rm: exit $RC"; show "$ERR"; }
+sent_line "the rm" 1 '^POST /cli/app/push/devices/remove .*"id": "apd_1"'
+[ "$(wc -l <"$REQ_LOG" | tr -d ' ')" = 1 ] && ok "devices rm: one request" \
+    || { bad "devices rm: not one request"; sed 's/^/      | /' "$REQ_LOG" >&2; }
 
 echo ""
 echo "app_value_flag_help: $pass passed, $fail failed"

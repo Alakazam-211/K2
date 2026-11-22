@@ -684,9 +684,24 @@ if v.get("pending"):
     print("%s device send(s) still going out" % v["pending"])'
 }
 
+# _app_says_help <words...>: -h, --help or the word help anywhere before a
+# bare --. For verbs that read their ids by position, where the house
+# check alone would let `<id> help` through.
+_app_says_help() {
+    _wants_help "$@" && return 0
+    local a
+    for a in "$@"; do
+        [ "$a" = "--" ] && break
+        [ "$a" = help ] && return 0
+    done
+    return 1
+}
+
 cmd_app_push_devices() {
     if [ "${1:-}" = rm ] || [ "${1:-}" = remove ]; then
         shift
+        # Help wins anywhere (0.46.17): `rm <app> <id> -h` removed the phone.
+        if _app_says_help "$@"; then _app_push_usage; return 0; fi
         local app="${1:-}" id="${2:-}"
         { [ -z "$app" ] || [ -z "$id" ]; } && { echo "usage: k2 app push devices rm <app> <apd_…>" >&2; exit 2; }
         _compute_call POST /cli/app/push/devices/remove "$(_compute_json K2_CJ_app="$app" K2_CJ_id="$id")"
@@ -1655,9 +1670,11 @@ if v.get("error"):
 }
 
 cmd_app_approve() {
-    case "${1:-}" in
-        ""|-h|--help) echo "usage: k2 app approve <request-id>   (the owner or an admin, in person, from a terminal outside K2)" >&2; exit 2 ;;
-    esac
+    # Help wins anywhere before a bare -- (0.46.17): the page that describes
+    # approve, on stdout, and nothing sent. It looked at the first word only,
+    # so `approve <id> -h` read the approvals and asked for the confirm.
+    if _app_says_help "$@"; then _app_grace_usage; return 0; fi
+    [ -n "${1:-}" ] || { echo "usage: k2 app approve <request-id>   (the owner or an admin, in person, from a terminal outside K2)" >&2; exit 2; }
     _app_approve "$1"
 }
 

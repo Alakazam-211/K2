@@ -21,6 +21,10 @@
 //!   no `Location`, and a scheme the handler refuses on its own.
 //! - The place a redirect names is listened on, and gets no connection.
 //!
+//! - A python3 before 3.11 has no handler for 308: the shell's answer
+//!   there is the family's HTTP error (exit 1, nothing followed), the
+//!   binary's the refusal, as with 3.11 and newer.
+//!
 //! tests/cli/py_no_redirect.sh holds the same rule from outside, with
 //! Python's audit hook on the shell side.
 
@@ -91,6 +95,13 @@ fn not_followed(name: &'static str, args: &'static [&'static str], reply: Reply,
     }
 }
 
+/// A row refusing a 308.
+fn is_308(row: &Row) -> bool {
+    row.stderr
+        .as_deref()
+        .is_some_and(|e| e.contains(" answered 308, "))
+}
+
 /// Each `127.0.0.1:<the stub's port>` as `127.0.0.1:{port}`.
 fn mask_port(text: &str, port: u16) -> String {
     text.replace(&format!("127.0.0.1:{port}"), "127.0.0.1:{port}")
@@ -130,6 +141,19 @@ fn check(rig: &Rig, there: &TcpListener, rows: Vec<Row>) {
         let (b, r) = (&runs[0], &runs[1]);
         println!("-- {}: bash {:?}", c.name, b.0);
         assert_eq!(b.2.len(), c.requests, "{}: bash's requests", c.name);
+        if is_308(&row) && python3_version() < (3, 11) {
+            // urllib before 3.11 takes no 308 (its handler has none), so
+            // the shell's Python never reaches _K2NoRedirect: the family's
+            // HTTP error, exit 1, and nothing goes to the place it names.
+            // The binary refuses it as 3.11 and newer do.
+            assert_eq!(b.0.code, Some(1), "{}: bash's exit", c.name);
+            assert!(!b.1.contains("refused: "), "{}: bash's stderr", c.name);
+            assert_eq!(r.2, b.2, "{}: the requests", c.name);
+            assert_eq!(r.0.code, Some(c.code), "{}: the exit", c.name);
+            assert_eq!(r.0.stdout, "", "{}: stdout", c.name);
+            assert_eq!(Some(&r.1), row.stderr.as_ref(), "{}: stderr", c.name);
+            continue;
+        }
         assert_eq!(b.0.code, Some(c.code), "{}: bash's exit", c.name);
         if let Some(want) = &row.stderr {
             assert_eq!(&b.1, want, "{}: bash's stderr", c.name);

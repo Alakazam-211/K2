@@ -534,14 +534,16 @@ pub fn loopback_answers(l: &std::net::TcpListener, timeout: Duration) -> Result<
         }
     };
     let left = timeout.saturating_sub(t0.elapsed()).max(Duration::from_millis(100));
+    // Two bytes sent one way and read back on the other end of the connection.
+    const PROBE: &[u8; 2] = b"lo";
     let mut got = [0u8; 2];
     let r = s
         .set_nonblocking(false)
         .and_then(|_| s.set_read_timeout(Some(left)))
-        .and_then(|_| c.write_all(b"k2"))
+        .and_then(|_| c.write_all(PROBE))
         .and_then(|_| s.read_exact(&mut got));
     match r {
-        Ok(()) if &got == b"k2" => Ok(()),
+        Ok(()) if &got == PROBE => Ok(()),
         Ok(()) => Err(format!("bytes sent over {addr} came back changed")),
         Err(e) => Err(format!("a connection to {addr} was made but no bytes crossed it ({e}, after {:.1}s)", t0.elapsed().as_secs_f64())),
     }

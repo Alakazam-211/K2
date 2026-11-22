@@ -2,7 +2,8 @@
 //! own verbs run unchanged (`pg ensure-cluster --wal-archive`, `pg
 //! basebackup`, `pg restore-to`, `pg drop-drill`); only the box under them is
 //! a stand-in: Debian's `pg_createcluster`, `pg_lsclusters`, `systemctl` and
-//! `runuser` become `initdb` and `pg_ctl` as the current user, with every
+//! `runuser` become `initdb` and `pg_ctl` as the current user (drop-drill
+//! removes the drill with the helper's own `rm` as postgres and fsx), with every
 //! `/var/lib/postgresql`, `/etc/postgresql` and `/var/log/postgresql` path
 //! moved under the test's temp root (also inside the cluster settings the
 //! helper writes, such as `archive_command` and `restore_command`).
@@ -82,6 +83,8 @@ impl StandIn {
             .clusters
             .borrow()
             .iter()
+            // Like pg_lsclusters: a cluster is its config dir.
+            .filter(|(m, n, _)| under(&self.root, &format!("/etc/postgresql/{m}/{n}")).exists())
             .map(|(m, n, p)| {
                 format!(
                     "{m} {n} {p} {} postgres /var/lib/postgresql/{m}/{n} /var/log/postgresql/postgresql-{m}-{n}.log\n",
@@ -226,6 +229,7 @@ fn wire(t: &T, si: &Rc<StandIn>) {
             std::fs::create_dir_all(etc.join("conf.d")).unwrap();
             std::fs::write(etc.join("start.conf"), "auto\n").unwrap();
             std::fs::create_dir_all(under(&s.root, "/var/log/postgresql")).unwrap();
+            s.clusters.borrow_mut().retain(|c| !(c.0 == m && c.1 == n));
             s.clusters.borrow_mut().push((m, n, p));
             out(0, "")
         }),
@@ -254,18 +258,6 @@ fn wire(t: &T, si: &Rc<StandIn>) {
                 "is-active" => out(0, if s.online(m, n) { "active\n" } else { "inactive\n" }),
                 _ => out(0, ""),
             }
-        }),
-    );
-    let s = si.clone();
-    log.programs.insert(
-        crate::pg_restore::PG_DROPCLUSTER.into(),
-        Rc::new(move |a| {
-            let (m, n): (u32, String) = (a[0].parse().unwrap(), a[1].clone());
-            s.stop(m, &n);
-            std::fs::remove_dir_all(s.data(m, &n)).unwrap();
-            std::fs::remove_dir_all(under(&s.root, &format!("/etc/postgresql/{m}/{n}"))).unwrap();
-            s.clusters.borrow_mut().retain(|c| !(c.0 == m && c.1 == n));
-            out(0, "")
         }),
     );
     log.programs.insert(SS.into(), Rc::new(|_| out(0, "")));
@@ -307,7 +299,7 @@ fn pitr_real_pg() {
     t.ctx.waits = true;
     t.ctx.lock_timeout_ms = 5_000;
     bins(&t.root, m);
-    for b in [PG_LSCLUSTERS, PG_CREATECLUSTER, SS, crate::pg_restore::PG_DROPCLUSTER] {
+    for b in [PG_LSCLUSTERS, PG_CREATECLUSTER, SS] {
         touch(&t.root, b);
     }
     let sock = format!("/tmp/k2pitr-{}", std::process::id());

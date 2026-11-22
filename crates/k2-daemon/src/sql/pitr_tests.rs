@@ -74,6 +74,14 @@ fn sent(ops: &FakeSystemOps, needle: &str) -> Vec<String> {
 #[test]
 fn times_people_write() {
     let t = |s: &str| parse_time(s, NOW).map(UtcTime::token);
+    // Review L7: non-ASCII never panics.
+    for bad in ["-5é", "é", "2025-11-22T10:15:00Ζ", "-１m"] {
+        assert!(t(bad).is_err(), "{bad:?}");
+    }
+    // Review L8: the drill's name carries the source name's hash.
+    assert_eq!(drill_name("feedback"), "feedback_da602");
+    assert_ne!(drill_name("feedback"), drill_name("feedbacl"));
+    assert!(ClusterName::parse(&drill_name("a_very_long_cluster_name")).is_some());
     assert_eq!(t("2025-11-22T10:15:00Z").unwrap(), "2025-11-22T10:15:00Z");
     assert_eq!(t("2025-11-22T10:15Z").unwrap(), "2025-11-22T10:15:00Z");
     assert_eq!(t("2025-11-22 10:15").unwrap(), "2025-11-22T10:15:00Z");
@@ -131,7 +139,7 @@ fn restore_records_the_new_cluster_beside_the_old_one() {
 fn drill_ops(markers_on_drill: &str, drill_rows: &str) -> FakeSystemOps {
     let mut ops = ops_19();
     let qa = &mut ops.query_answers;
-    qa.insert("helper drop-drill 17-feedback_drill".into(), String::new());
+    qa.insert("helper drop-drill 17-feedback_da602".into(), String::new());
     qa.insert(
         "helper backups 17-feedback".into(),
         json!({"baseBackups": [{"stamp": "20251122T000000Z", "complete": true}]}).to_string(),
@@ -139,17 +147,19 @@ fn drill_ops(markers_on_drill: &str, drill_rows: &str) -> FakeSystemOps {
     // The source (`psql --cluster 17-feedback`).
     qa.insert("psql 17-feedback postgres|FROM pg_catalog.pg_database".into(), "app_db\n".into());
     qa.insert("psql 17-feedback app_db|query_to_xml".into(), "public.orders|3\npublic.users|2\n".into());
-    qa.insert("psql 17-feedback postgres|INSERT INTO public.k2_restore_drill (id) VALUES ('k2drill".into(), "1763806501\n".into());
+    qa.insert("psql 17-feedback postgres|CREATE SCHEMA IF NOT EXISTS k2_restore_drill AUTHORIZATION postgres".into(), String::new());
+    qa.insert("psql 17-feedback postgres|pg_trigger".into(), "r|postgres|postgres|0|0\n".into());
+    qa.insert("psql 17-feedback postgres|INSERT INTO k2_restore_drill.markers (id) VALUES ('k2drill".into(), "1763806501\n".into());
     qa.insert("psql 17-feedback postgres|> 1763806501 + 1".into(), "true\n".into());
-    qa.insert("psql 17-feedback postgres|DELETE FROM public.k2_restore_drill".into(), String::new());
+    qa.insert("psql 17-feedback postgres|DROP SCHEMA IF EXISTS k2_restore_drill".into(), String::new());
     qa.insert(
-        "helper restore-to 17-feedback feedback_drill 20251122T101501Z --drill".into(),
-        named_answer("feedback_drill", 5436, json!({"baseBackup": "20251122T000000Z", "drill": true})),
+        "helper restore-to 17-feedback feedback_da602 20251122T101501Z --drill".into(),
+        named_answer("feedback_da602", 5436, json!({"baseBackup": "20251122T000000Z", "drill": true})),
     );
-    // The drill (`psql --cluster 17-feedback_drill`).
-    qa.insert("psql 17-feedback_drill postgres|FROM pg_catalog.pg_database".into(), "app_db\n".into());
-    qa.insert("psql 17-feedback_drill app_db|query_to_xml".into(), drill_rows.into());
-    qa.insert("psql 17-feedback_drill postgres|split_part(id".into(), markers_on_drill.into());
+    // The drill (`psql --cluster 17-feedback_da602`).
+    qa.insert("psql 17-feedback_da602 postgres|FROM pg_catalog.pg_database".into(), "app_db\n".into());
+    qa.insert("psql 17-feedback_da602 app_db|query_to_xml".into(), drill_rows.into());
+    qa.insert("psql 17-feedback_da602 postgres|split_part(id".into(), markers_on_drill.into());
     ops
 }
 
@@ -164,7 +174,7 @@ fn a_drill_proves_the_moment_and_cleans_up() {
     let c = feedback(&pid);
     // The insert of the "after" row answers nothing.
     let mut ops = drill_ops("before\n", "public.orders|3\npublic.users|2\n");
-    ops.query_answers.insert("helper drop-drill 17-feedback_drill".into(), json!({"dropped": true}).to_string());
+    ops.query_answers.insert("helper drop-drill 17-feedback_da602".into(), json!({"dropped": true}).to_string());
     let v = drill(&ops, &c, None).unwrap();
     assert_eq!(v["ok"], true, "{v}");
     assert_eq!(v["target"], "2025-11-22T10:15:01Z");
@@ -175,10 +185,10 @@ fn a_drill_proves_the_moment_and_cleans_up() {
     let pos = |needle: &str| log.iter().position(|l| l.contains(needle)).unwrap_or_else(|| panic!("{needle}: {log:?}"));
     assert!(pos("psql 17-feedback app_db") < pos("VALUES ('k2drill"), "counts before the first marker");
     assert!(pos("VALUES ('k2drill") < pos("helper restore-to"), "markers before the restore");
-    assert!(pos("helper restore-to") < pos("psql 17-feedback_drill app_db"), "checked on the drill");
-    assert!(log.iter().rposition(|l| l.contains("helper drop-drill")).unwrap() > pos("psql 17-feedback_drill postgres SELECT split_part"));
-    assert!(pos("psql 17-feedback postgres DELETE FROM public.k2_restore_drill") > pos("helper restore-to"));
-    assert!(for_name("feedback_drill").is_none(), "a drill is never recorded as a cluster");
+    assert!(pos("helper restore-to") < pos("psql 17-feedback_da602 app_db"), "checked on the drill");
+    assert!(log.iter().rposition(|l| l.contains("helper drop-drill")).unwrap() > pos("psql 17-feedback_da602 postgres SELECT split_part"));
+    assert!(pos("psql 17-feedback postgres DROP SCHEMA IF EXISTS k2_restore_drill") > pos("helper restore-to"), "the markers' schema goes after");
+    assert!(for_name("feedback_da602").is_none(), "a drill is never recorded as a cluster");
     let r = recorded(&c);
     assert_eq!((r["lastDrillOk"].clone(), r["drillWarning"].clone()), (json!(true), Value::Null), "{r}");
 }
@@ -192,7 +202,7 @@ fn a_drill_that_doesnt_match_the_moment_fails() {
     let (pid, _) = insert_project("pitr-drill-bad");
     let c = feedback(&pid);
     let mut ops = drill_ops("after\nbefore\n", "public.orders|4\npublic.users|2\n");
-    ops.query_answers.insert("helper drop-drill 17-feedback_drill".into(), json!({"dropped": true}).to_string());
+    ops.query_answers.insert("helper drop-drill 17-feedback_da602".into(), json!({"dropped": true}).to_string());
     let v = drill(&ops, &c, None).unwrap();
     assert_eq!(v["ok"], false, "{v}");
     assert_eq!(v["markers"], json!({"before": true, "after": true}));
@@ -200,10 +210,19 @@ fn a_drill_that_doesnt_match_the_moment_fails() {
     let r = recorded(&c);
     assert_eq!(r["lastDrillOk"], false);
     assert!(r["drillWarning"].as_str().unwrap().contains("no good restore drill yet"), "{r}");
+    // Review M4: another drill within ten minutes is refused, nothing sent.
+    let again = drill_ops("before\n", "");
+    let e = drill(&again, &c, None).unwrap_err();
+    assert!(e.hint().starts_with("busy"), "{e:?}");
+    assert!(sent(&again, "helper").iter().all(|l| !l.contains("restore-to") && !l.contains("drop-drill")), "{:?}", again.recorded());
+    {
+        let db = k2_core::db::shared();
+        db.lock().execute("UPDATE pg_cluster_pitr SET last_drill_at = last_drill_at - 3600", []).unwrap();
+    }
     // A helper refusal mid-drill: recorded, the drill still dropped.
     let mut ops = drill_ops("before\n", "");
-    ops.query_answers.remove("helper restore-to 17-feedback feedback_drill 20251122T101501Z --drill");
-    ops.query_answers.insert("helper drop-drill 17-feedback_drill".into(), json!({"dropped": true}).to_string());
+    ops.query_answers.remove("helper restore-to 17-feedback feedback_da602 20251122T101501Z --drill");
+    ops.query_answers.insert("helper drop-drill 17-feedback_da602".into(), json!({"dropped": true}).to_string());
     assert!(drill(&ops, &c, None).is_err());
     assert_eq!(sent(&ops, "helper drop-drill").len(), 2, "before and after: {:?}", ops.recorded());
     assert_eq!(recorded(&c)["lastDrillOk"], false);
@@ -286,7 +305,45 @@ fn pitr_ops_route_gate() {
     let r = h(agent.clone(), &body(r#","op":"backups","name":"feedback""#));
     assert_eq!(r.status, "200 OK", "{}", r.body);
     // A drill K2 has no record of: the owner's alone.
-    let r = h(agent, &body(r#","op":"drop-drill","name":"feedback_drill""#));
+    let r = h(agent, &body(r#","op":"drop-drill","name":"feedback_da602""#));
     assert_eq!(r.status, "403 Forbidden", "{}", r.body);
     assert!(sent(&ops, "helper basebackup").is_empty() && sent(&ops, "helper drop-drill").is_empty(), "{:?}", ops.recorded());
+}
+
+/// Review L1: a marker table someone else made (a trigger, another owner)
+/// refuses the drill before any marker is written.
+#[test]
+fn an_unsafe_marker_table_refuses_the_drill() {
+    let _g = crate::sql::sql_server_test_lock();
+    reset();
+    let (pid, _) = insert_project("pitr-drill-l1");
+    let c = feedback(&pid);
+    let mut ops = drill_ops("before\n", "public.orders|3\n");
+    ops.query_answers.insert("psql 17-feedback postgres|pg_trigger".into(), "r|postgres|postgres|1|0\n".into());
+    let e = drill(&ops, &c, None).unwrap_err();
+    assert!(e.hint().contains("marker table"), "{e:?}");
+    assert!(sent(&ops, "INSERT INTO k2_restore_drill.markers").is_empty(), "{:?}", ops.recorded());
+    assert!(sent(&ops, "helper restore-to").is_empty());
+}
+
+/// Review L2: a failed daily base backup is tried again after an hour.
+#[test]
+fn a_failed_daily_base_backup_is_retried_after_an_hour() {
+    let _g = crate::sql::sql_server_test_lock();
+    reset();
+    let (pid, _) = insert_project("pitr-tick-retry");
+    let c = feedback(&pid);
+    let mut ops = ops_19();
+    ops.query_answers.insert("helper basebackup 17-feedback".into(), "not json".into());
+    assert!(tick(&ops).is_empty(), "the backup fails");
+    assert_eq!(recorded(&c)["lastBasebackupOk"], false);
+    assert_eq!(sent(&ops, "helper basebackup").len(), 1);
+    assert!(tick(&ops).is_empty());
+    assert_eq!(sent(&ops, "helper basebackup").len(), 1, "not again within the hour");
+    {
+        let db = k2_core::db::shared();
+        db.lock().execute("UPDATE pg_cluster_pitr SET last_basebackup_at = last_basebackup_at - 3700", []).unwrap();
+    }
+    tick(&ops);
+    assert_eq!(sent(&ops, "helper basebackup").len(), 2, "tried again after an hour");
 }

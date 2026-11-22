@@ -54,9 +54,61 @@ pub const RECOVERY_WAIT_SECS: u32 = 6 * 3600;
 pub const ARCHIVE_WAIT_SECS: u32 = 120;
 /// WAL segment size K2's clusters use (initdb's default).
 pub const WAL_SEG_BYTES: u64 = 16 * 1024 * 1024;
-/// The per-cluster lock of these verbs (`/run/k2-root-helper.pgrestore.lock`):
-/// one base backup, restore or drop at a time.
-pub const LOCK_NS: &str = "pgrestore";
+/// The per-cluster lock of these verbs
+/// (`/run/k2-root-helper.pgrestore-<M>-<name>.lock`): one base backup,
+/// restore or drop of a cluster at a time (review L2).
+pub fn lock_ns(m: u32, n: &str) -> String {
+    format!("pgrestore-{m}-{n}")
+}
+/// Free space a base backup or a restore needs: the source's size times
+/// this, on the filesystem it writes to (review M4).
+pub const DISK_FACTOR: u64 = 2;
+/// A drill's cluster listens on its socket only (review M3): restored
+/// logins and passwords never reach the network.
+pub const DRILL_LOCAL_CONF_FILE: &str = "zz-k2-drill-local.conf";
+pub const DRILL_LOCAL_CONF: &str = "# Point-in-time restore drill: the local socket only. Written by k2-root-helper `pg restore-to --drill`.\nlisten_addresses = ''\n";
+/// Files K2 may find in an instance's systemd drop-in folder; anything else
+/// there makes the name taken (review M2).
+pub const OWN_DROPINS: &[&str] = &["k2-slice.conf", RESTORE_DROPIN_FILE];
+
+/// `pg_controldata`'s `Database system identifier:` (digits), if any.
+pub fn controldata_system_id(text: &str) -> Option<String> {
+    text.lines()
+        .find_map(|l| l.strip_prefix("Database system identifier:"))
+        .map(str::trim)
+        .filter(|id| crate::pg_named::system_id_ok(id))
+        .map(str::to_string)
+}
+
+/// A restored `postgresql.auto.conf` without the settings that run
+/// commands or reach other servers (`restore_command`, `archive_*`,
+/// `recovery_*`, `primary_*`): the restore's own conf.d file sets what
+/// recovery needs (review L5). Answers (text, the keys removed).
+pub fn strip_auto_conf(text: &str) -> (String, Vec<String>) {
+    let mut out = String::new();
+    let mut gone = Vec::new();
+    for line in text.lines() {
+        let key = line.trim_start().split(|c: char| c == '=' || c.is_whitespace()).next().unwrap_or("").to_ascii_lowercase();
+        let strip = key == "restore_command" || key.starts_with("archive_") || key.starts_with("recovery_") || key.starts_with("primary_");
+        if strip {
+            gone.push(key);
+        } else {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    (out, gone)
+}
+
+/// A non-drill restore's logins go NOLOGIN until K2 sets their current
+/// passwords again (review M3): a password rotated, or a login revoked,
+/// after the moment never comes back to life. Superusers stay (only
+/// `postgres`, peer on the socket). The first line is how many it locks,
+/// the last how many logins are left (0).
+pub const LOCK_LOGINS_SQL: &str = "SELECT count(*) FROM pg_catalog.pg_roles WHERE rolcanlogin AND NOT rolsuper AND rolname !~ '^pg_';\n\
+SELECT pg_catalog.format('ALTER ROLE %I NOLOGIN;', rolname) FROM pg_catalog.pg_roles \
+WHERE rolcanlogin AND NOT rolsuper AND rolname !~ '^pg_'\n\\gexec\n\
+SELECT count(*) FROM pg_catalog.pg_roles WHERE rolcanlogin AND NOT rolsuper AND rolname !~ '^pg_';\n";
 
 // ── UTC times ───────────────────────────────────────────────────────────
 
@@ -259,6 +311,10 @@ pub struct BackupInfo {
     pub ended_at: i64,
     pub start_wal: String,
     pub end_wal: String,
+    /// The source's databases' size when the backup was taken: a restore
+    /// needs [`DISK_FACTOR`] times it free (review M4).
+    #[serde(default)]
+    pub source_bytes: u64,
 }
 
 impl BackupInfo {
@@ -368,6 +424,11 @@ pub struct RestoreRec {
     /// Promoted and recorded as a named cluster.
     pub ok: bool,
     pub created_at: i64,
+    /// The system identifier `pg_createcluster` gave the empty cluster,
+    /// before the base backup replaced it: a restore that failed before the
+    /// extract still proves it is the helper's (review M1).
+    #[serde(default)]
+    pub fresh_system_id: Option<String>,
 }
 
 /// [`RESTORES_STATE`]'s shape.
@@ -474,6 +535,7 @@ mod tests {
             ended_at: ended,
             start_wal: "000000010000000000000003".into(),
             end_wal: "000000010000000000000003".into(),
+            source_bytes: 0,
         }
     }
 
@@ -513,6 +575,21 @@ mod tests {
     }
 
     #[test]
+    fn controldata_auto_conf_and_logins() {
+        let cd = "pg_control version number:            1300\nDatabase system identifier:           7354340000000000000\nDatabase cluster state: shut down\n";
+        assert_eq!(controldata_system_id(cd).as_deref(), Some("7354340000000000000"));
+        assert_eq!(controldata_system_id("Database system identifier: x1\n"), None);
+        let (t, gone) = strip_auto_conf(
+            "# Do not edit\nwork_mem = '16MB'\narchive_command = 'curl evil'\n  restore_command='sh -c x'\nprimary_conninfo = 'host=far'\nArchive_Mode = on\nrecovery_target_time = 'x'\n",
+        );
+        assert_eq!(t, "# Do not edit\nwork_mem = '16MB'\n");
+        assert_eq!(gone, vec!["archive_command", "restore_command", "primary_conninfo", "archive_mode", "recovery_target_time"]);
+        assert!(LOCK_LOGINS_SQL.contains("\\gexec") && LOCK_LOGINS_SQL.contains("NOT rolsuper"));
+        assert_eq!(lock_ns(17, "feedback"), "pgrestore-17-feedback");
+        assert!(DRILL_LOCAL_CONF.contains("listen_addresses = ''"));
+    }
+
+    #[test]
     fn restore_records() {
         let r = RestoreRec {
             major: 17,
@@ -523,6 +600,7 @@ mod tests {
             drill: true,
             ok: false,
             created_at: 1,
+            fresh_system_id: None,
         };
         let s = RestoresState { restores: vec![r] };
         let j = serde_json::to_string(&s).unwrap();

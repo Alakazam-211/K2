@@ -595,7 +595,16 @@ pub(crate) fn no_links_above(ctx: &Ctx, m: PgMajor) -> HResult<()> {
 /// `pg start-conf <M> auto|manual`.
 pub fn start_conf(ctx: &Ctx, m: PgMajor, auto: bool) -> HResult<J> {
     cluster_of(ctx, m)?;
-    let d = ctx.dir(&m.etc_dir()).map_err(|e| Fail::io_err("open the cluster's config dir", e))?;
+    let before = start_conf_of(ctx, m.get());
+    let changed = write_start_conf(ctx, &m.etc_dir(), auto, before.as_deref())?;
+    let word = if auto { "auto" } else { "manual" };
+    Ok(json!({"major": m.get(), "startConf": word, "changed": changed}))
+}
+
+/// `start.conf` in `etc` set to auto or manual (its mode and owner kept;
+/// the owner's `disabled` never overwritten). `true` when it changed.
+pub(crate) fn write_start_conf(ctx: &Ctx, etc: &str, auto: bool, before: Option<&str>) -> HResult<bool> {
+    let d = ctx.dir(etc).map_err(|e| Fail::io_err("open the cluster's config dir", e))?;
     let name = OsStr::new("start.conf");
     let st = d
         .lstat(name)
@@ -607,17 +616,16 @@ pub fn start_conf(ctx: &Ctx, m: PgMajor, auto: bool) -> HResult<J> {
     let word = if auto { "auto" } else { "manual" };
     let body = format!("# K2 (pg start-conf): auto | manual | disabled\n{word}\n");
     let owner = ctx.real_owners.then_some((st.st_uid, st.st_gid));
-    let before = start_conf_of(ctx, m.get());
     // The owner's "never start" stays (review #1 L3).
-    if before.as_deref() == Some("disabled") {
+    if before == Some("disabled") {
         return Err(Fail::state("start_conf_disabled: the owner set this cluster disabled; K2 leaves it"));
     }
-    if before.as_deref() != Some(word) {
+    if before != Some(word) {
         d.write_atomic(name, body.as_bytes(), crate::fsx::mode(&st) & 0o7777, owner)
             .map_err(|e| Fail::io_err("write start.conf", e))?;
         ctx.run_ok(SYSTEMCTL, &["daemon-reload"], None)?;
     }
-    Ok(json!({"major": m.get(), "startConf": word, "changed": before.as_deref() != Some(word)}))
+    Ok(before != Some(word))
 }
 
 // ── SQL as postgres, against one cluster ────────────────────────────────
@@ -1388,7 +1396,7 @@ pub fn ensure_named(ctx: &Ctx, m: PgMajor, name: &ClusterName, port: Option<u16>
         v["started"] = json!(false);
         return Ok(v);
     }
-    let port = create_named_layout(ctx, m, name, port, &st)?;
+    let port = create_named_layout(ctx, m, name, port, &st, true)?;
     let data = named::data_dir(m.get(), n);
     if wal_archive {
         let d = ctx
@@ -1428,7 +1436,7 @@ pub fn ensure_named(ctx: &Ctx, m: PgMajor, name: &ClusterName, port: Option<u16>
 /// packages, `pg_createcluster`, K2's cluster conf and GUCs, the slice.
 /// Shared by `ensure-cluster <M>-<name>` and `restore-to` (protocol 19).
 /// The caller holds the pg lock.
-pub(crate) fn create_named_layout(ctx: &Ctx, m: PgMajor, name: &ClusterName, port: Option<u16>, st: &NamedState) -> HResult<u16> {
+pub(crate) fn create_named_layout(ctx: &Ctx, m: PgMajor, name: &ClusterName, port: Option<u16>, st: &NamedState, start_auto: bool) -> HResult<u16> {
     let n = name.as_str();
     if st.clusters.len() >= named::MAX_NAMED {
         return Err(Fail::state("named_full: this box already has the most named clusters K2 makes"));
@@ -1440,6 +1448,21 @@ pub(crate) fn create_named_layout(ctx: &Ctx, m: PgMajor, name: &ClusterName, por
             "name_taken: a cluster or a data/config dir named {n} already exists on this box (any major); K2 never takes one over; nothing changed"
         )));
     }
+    // An instance drop-in folder someone else wrote into: the name is in
+    // use (review M2). K2's own leftovers (a dropped cluster's) are cleared.
+    let dropins = named::slice_dropin(m.get(), n).rsplit_once('/').expect("dir").0.to_string();
+    if let Ok(d) = ctx.dir(&dropins) {
+        let files = d.entries().map_err(|e| Fail::io_err("list the instance drop-ins", e))?;
+        if files.iter().any(|f| !k2_root_proto::pg_restore::OWN_DROPINS.iter().any(|o| f.to_str() == Some(*o))) {
+            return Err(Fail::state(format!(
+                "name_taken: {dropins} holds drop-ins the helper didn't write; it never takes one over; nothing changed"
+            )));
+        }
+        crate::apps::unput(ctx, &dropins, None, k2_root_proto::pg_restore::RESTORE_DROPIN_FILE)?;
+    }
+    // A restore record of an earlier cluster of this name never vouches for
+    // this one (review M1).
+    crate::pg_restore::forget_restore(ctx, m.get(), n)?;
     no_links_above_named(ctx, m)?;
     let mut busy = listening(ctx)?;
     busy.extend(sew_band_ports(ctx));
@@ -1474,9 +1497,10 @@ pub(crate) fn create_named_layout(ctx: &Ctx, m: PgMajor, name: &ClusterName, por
     no_links_above_named(ctx, m)?;
     put_at(ctx, CREATECLUSTER_DROPIN, createcluster_dropin().as_bytes())?;
     let (mt, pt) = (m.token(), port.to_string());
+    let sc = if start_auto { "auto" } else { "manual" };
     ctx.run_ok(
         PG_CREATECLUSTER,
-        &[&mt, n, "-p", &pt, "--start-conf", "auto", "--", "--auth-local=peer", "--auth-host=scram-sha-256"],
+        &[&mt, n, "-p", &pt, "--start-conf", sc, "--", "--auth-local=peer", "--auth-host=scram-sha-256"],
         None,
     )?;
     for d in [&data, &etc] {

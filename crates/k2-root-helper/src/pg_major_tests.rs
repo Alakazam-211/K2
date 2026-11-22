@@ -145,7 +145,7 @@ fn pg_box() -> (T, W) {
     w.borrow_mut().dbs.insert(5432, vec!["postgres".into(), "ws_jobs".into()]);
 
     let mut log = t.exec.0.borrow_mut();
-    let ww = w.clone();
+    let (ww, rl) = (w.clone(), root.clone());
     log.programs.insert(
         PG_LSCLUSTERS.into(),
         Rc::new(move |_| {
@@ -164,6 +164,8 @@ fn pg_box() -> (T, W) {
                 .borrow()
                 .named
                 .iter()
+                // Like pg_lsclusters: a cluster is its config dir.
+                .filter(|(m, n, _, _)| under(&rl, &format!("/etc/postgresql/{m}/{n}")).exists())
                 .map(|(m, n, p, on)| {
                     format!(
                         "{m}  {n}    {p} {} postgres /var/lib/postgresql/{m}/{n} /var/log/postgresql/postgresql-{m}-{n}.log\n",
@@ -195,10 +197,12 @@ fn pg_box() -> (T, W) {
             let p: u16 = arg_after(a, "-p").unwrap().parse().unwrap();
             if a[1] != "main" {
                 let n = a[1].clone();
+                ww.borrow_mut().named.retain(|c| !(c.0 == m && c.1 == n));
                 ww.borrow_mut().named.push((m, n.clone(), p, false));
                 ww.borrow_mut().dbs.insert(p, vec!["postgres".into()]);
                 mkdirs(&r, &[format!("/etc/postgresql/{m}/{n}/conf.d").as_str(), format!("/var/lib/postgresql/{m}/{n}").as_str()]);
-                std::fs::write(under(&r, &format!("/etc/postgresql/{m}/{n}/start.conf")), "auto\n").unwrap();
+                let sc = arg_after(a, "--start-conf").unwrap_or("auto").to_string();
+                std::fs::write(under(&r, &format!("/etc/postgresql/{m}/{n}/start.conf")), format!("{sc}\n")).unwrap();
                 return out(0, "");
             }
             ww.borrow_mut().clusters.push((m, p, false));

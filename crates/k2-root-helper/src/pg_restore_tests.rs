@@ -29,6 +29,8 @@ fn fake_tools(root: &Path, prog: &str, a: &[String], stdin: Option<&[u8]>) -> Op
             Some(out(0, ""))
         }
         "tar" => Some(out(0, "")),
+        "tail" => Some(out(0, &std::fs::read_to_string(under(root, a.last().unwrap())).unwrap_or_default())),
+        "pg_controldata" => Some(out(0, &format!("pg_control version number: 1300\nDatabase system identifier: {}\n", controldata_id(root)))),
         "dd" => {
             let of = a.iter().find_map(|x| x.strip_prefix("of=")).unwrap();
             if !of.starts_with("/var/lib/postgresql/") {
@@ -48,6 +50,12 @@ fn fake_tools(root: &Path, prog: &str, a: &[String], stdin: Option<&[u8]>) -> Op
     }
 }
 
+/// What the fake `pg_controldata` answers: `<root>/controldata-id` when a
+/// test wrote one, else the id `pg_createcluster` gives every empty cluster.
+fn controldata_id(root: &Path) -> String {
+    std::fs::read_to_string(root.join("controldata-id")).map(|s| s.trim().to_string()).unwrap_or_else(|_| "7000000000000000001".into())
+}
+
 /// akzm's box plus `17/feedback` (port 5434) made with archiving, the
 /// restore tools faked, the source answering a WAL switch and its
 /// archiver, and a restore promoting at once.
@@ -60,20 +68,9 @@ fn archiving_box() -> (T, W) {
     b.answers.push(("pg_switch_wal".into(), "1\n000000010000000000000005\n".into()));
     b.answers.push(("pg_stat_archiver".into(), "000000010000000000000005\n".into()));
     b.answers.push(("pg_is_in_recovery".into(), "false\n".into()));
+    b.answers.push(("pg_database_size".into(), "1048576\n".into()));
+    b.answers.push(("rolcanlogin".into(), "3\n0\n".into()));
     drop(b);
-    // `pg_dropcluster` (root): the cluster and its dirs go.
-    let (ww, r) = (w.clone(), t.root.clone());
-    t.exec.0.borrow_mut().programs.insert(
-        crate::pg_restore::PG_DROPCLUSTER.into(),
-        Rc::new(move |a| {
-            let (m, n) = (a[0].clone(), a[1].clone());
-            ww.borrow_mut().named.retain(|c| !(c.0.to_string() == m && c.1 == n));
-            for d in [format!("/var/lib/postgresql/{m}/{n}"), format!("/etc/postgresql/{m}/{n}")] {
-                std::fs::remove_dir_all(under(&r, &d)).unwrap();
-            }
-            out(0, "")
-        }),
-    );
     (t, w)
 }
 
@@ -102,6 +99,7 @@ fn base_backup(t: &T, ended: i64, start_wal: &str) -> String {
         ended_at: ended,
         start_wal: start_wal.into(),
         end_wal: start_wal.into(),
+        source_bytes: 1048576,
     };
     std::fs::write(t.p(&format!("{dir}/{}", pr::BACKUP_INFO_FILE)), serde_json::to_vec(&info).unwrap()).unwrap();
     for f in ["base.tar.gz", "pg_wal.tar.gz"] {
@@ -240,17 +238,22 @@ fn restore_to_a_time_makes_a_new_cluster_and_drop_drill_removes_it() {
     // The drill goes.
     let v = json(&t.call(&["pg", "drop-drill", "17-fb_drill"]));
     assert_eq!((v["dropped"].clone(), v["drill"].clone()), (json!(true), json!(true)), "{v}");
-    assert!(t.non_query_calls().iter().any(|c| c == &format!("{} 17 fb_drill", crate::pg_restore::PG_DROPCLUSTER)));
+    // Review H1: the fixed path, as postgres, never across a mount; the
+    // config dir through fsx; never pg_dropcluster.
+    assert!(
+        w.borrow().postgres_calls.iter().any(|c| c == &format!("/usr/bin/rm -rf --one-file-system -- {data}")),
+        "{:?}",
+        w.borrow().postgres_calls
+    );
     assert!(!t.p(data).exists());
+    assert!(!t.p("/etc/postgresql/17/fb_drill").exists());
     assert!(restores(&t).get(17, "fb_drill").is_none());
     let st: k2_root_proto::pg_named::NamedState =
         serde_json::from_slice(&std::fs::read(t.p(k2_root_proto::pg_named::NAMED_STATE)).unwrap()).unwrap();
     assert!(st.get(17, "fb_drill").is_none() && st.get(17, "feedback").is_some());
     assert!(err_of(&t.call(&["pg", "drop-drill", "17-fb_drill"])).starts_with("not_drill"), "only once");
     assert_eq!(tree(&t.p(SPOOL)), spool_before);
-    // The one pg_dropcluster was the drill's.
-    let drops: Vec<String> = t.non_query_calls().into_iter().filter(|c| c.contains("pg_dropcluster")).collect();
-    assert_eq!(drops, vec![format!("{} 17 fb_drill", crate::pg_restore::PG_DROPCLUSTER)]);
+    never_destructive(&t);
 }
 
 /// A finished restore that isn't a drill is never dropped.
@@ -391,4 +394,169 @@ fn a_long_replay_is_waited_for_not_failed() {
     // drop-drill removes the drop-in folder's files too.
     ok(&t.call(&["pg", "drop-drill", "17-fb_slow"]));
     assert!(!t.p("/etc/systemd/system/postgresql@17-fb_slow.service.d/k2-slice.conf").exists());
+}
+
+// ── security review (protocol 19): H1, M1-M4, L5 ───────────────────────
+
+/// H1: drop-drill never follows a link on the way to the paths it removes
+/// and never runs pg_dropcluster: a linked /var/lib/postgresql/17 is
+/// refused and nothing is removed.
+#[test]
+fn review_h1_drop_drill_refuses_a_link_above_and_never_runs_pg_dropcluster() {
+    let (t, w) = archiving_box();
+    let n = now();
+    base_backup(&t, n - 600, "000000010000000000000003");
+    spool(&t, &["000000010000000000000003"], n);
+    json(&t.call(&["pg", "restore-to", "17-feedback", "fb_drill", &UtcTime::from_epoch(n - 60).stamp(), "--drill"]));
+    // Someone running as postgres swaps a link in where root will look.
+    let real = t.p("/var/lib/postgresql/17");
+    std::fs::rename(&real, t.p("/var/lib/postgresql/17-real")).unwrap();
+    symlink(t.p("/var/lib/postgresql/17-real"), &real).unwrap();
+    let e = err_of(&t.call(&["pg", "drop-drill", "17-fb_drill"]));
+    assert!(e.starts_with("cluster_layout_refused"), "{e}");
+    assert!(t.p("/var/lib/postgresql/17-real/fb_drill").exists(), "nothing removed");
+    assert!(t.p("/etc/postgresql/17/fb_drill").exists());
+    assert!(!w.borrow().postgres_calls.iter().any(|c| c.contains("/usr/bin/rm")), "{:?}", w.borrow().postgres_calls);
+    never_destructive(&t);
+}
+
+/// M1: a restore record never vouches for a later cluster of the same
+/// name, and drop-drill also needs the cluster's own system identifier and
+/// a recorded source.
+#[test]
+fn review_m1_a_reused_name_or_a_foreign_identity_is_never_dropped() {
+    let (t, w) = archiving_box();
+    let n = now();
+    base_backup(&t, n - 600, "000000010000000000000003");
+    spool(&t, &["000000010000000000000003"], n);
+    // A restore that fails (Postgres never comes up)...
+    w.borrow_mut().stay_down.insert("fb_x".into());
+    err_of(&t.call(&["pg", "restore-to", "17-feedback", "fb_x", &UtcTime::from_epoch(n - 60).stamp()]));
+    assert!(restores(&t).get(17, "fb_x").is_some());
+    // ...removed by hand, then a real cluster of that name made: the
+    // record goes with the new cluster's creation.
+    std::fs::remove_dir_all(t.p("/var/lib/postgresql/17/fb_x")).unwrap();
+    std::fs::remove_dir_all(t.p("/etc/postgresql/17/fb_x")).unwrap();
+    w.borrow_mut().stay_down.clear();
+    ok(&t.call(&["pg", "ensure-cluster", "17-fb_x"]));
+    assert!(restores(&t).get(17, "fb_x").is_none(), "a new cluster of that name forgets the old record");
+    assert!(err_of(&t.call(&["pg", "drop-drill", "17-fb_x"])).starts_with("not_drill"));
+    assert!(t.p("/var/lib/postgresql/17/fb_x").exists());
+    // A drill whose data has another identity than its source's or the one
+    // it was made with: refused.
+    json(&t.call(&["pg", "restore-to", "17-feedback", "fb_drill", &UtcTime::from_epoch(n - 60).stamp(), "--drill"]));
+    mkdirs(&t.root, &["/var/lib/postgresql/17/fb_drill/global"]);
+    std::fs::write(t.p("/var/lib/postgresql/17/fb_drill/global/pg_control"), b"x").unwrap();
+    std::fs::write(t.root.join("controldata-id"), "7999999999999999999").unwrap();
+    let e = err_of(&t.call(&["pg", "drop-drill", "17-fb_drill"]));
+    assert!(e.starts_with("not_drill") && e.contains("7999999999999999999"), "{e}");
+    assert!(t.p("/var/lib/postgresql/17/fb_drill").exists());
+    // Its source's identity: dropped.
+    std::fs::write(t.root.join("controldata-id"), named_rec(&t, 17, "feedback").system_id).unwrap();
+    assert_eq!(json(&t.call(&["pg", "drop-drill", "17-fb_drill"]))["dropped"], true);
+    // A record whose source is no longer recorded proves nothing.
+    json(&t.call(&["pg", "restore-to", "17-feedback", "fb_drill", &UtcTime::from_epoch(n - 60).stamp(), "--drill"]));
+    let mut st: k2_root_proto::pg_named::NamedState =
+        serde_json::from_slice(&std::fs::read(t.p(k2_root_proto::pg_named::NAMED_STATE)).unwrap()).unwrap();
+    st.clusters.retain(|c| c.name != "feedback");
+    std::fs::write(t.p(k2_root_proto::pg_named::NAMED_STATE), serde_json::to_vec(&st).unwrap()).unwrap();
+    assert!(err_of(&t.call(&["pg", "drop-drill", "17-fb_drill"])).starts_with("not_drill"));
+}
+
+/// M2: a restore's cluster starts `manual` and turns `auto` once recorded;
+/// a failure on any path after its layout (here the extract) leaves it
+/// stopped, manual, with no recovery settings, start drop-in or wait.
+#[test]
+fn review_m2_a_failed_restore_cannot_start_or_promote_by_itself() {
+    let (t, w) = archiving_box();
+    let n = now();
+    base_backup(&t, n - 600, "000000010000000000000003");
+    spool(&t, &["000000010000000000000003"], n);
+    // The extract fails (a `?` exit, not the recovery wait).
+    let root = t.root.clone();
+    w.borrow_mut().extra = Some(Rc::new(move |prog, a, stdin| {
+        if prog == "tar" {
+            return Some(ExecOut { status: 2, stdout: vec![], stderr: b"tar: unexpected EOF".to_vec() });
+        }
+        fake_tools(&root, prog, a, stdin)
+    }));
+    let e = err_of(&t.call(&["pg", "restore-to", "17-feedback", "fb_bad", &UtcTime::from_epoch(n - 60).stamp()]));
+    assert!(e.contains("tar"), "{e}");
+    let etc = "/etc/postgresql/17/fb_bad";
+    assert_eq!(std::fs::read_to_string(t.p(&format!("{etc}/start.conf"))).unwrap().lines().last(), Some("manual"));
+    assert!(!t.p(&format!("{etc}/conf.d/{}", pr::RESTORE_CONF_FILE)).exists(), "no recovery settings left");
+    assert!(!t.p("/etc/systemd/system/postgresql@17-fb_bad.service.d/k2-restore.conf").exists());
+    assert_eq!(std::fs::read_to_string(t.p(&format!("{etc}/pg_ctl.conf"))).unwrap().lines().last(), Some("pg_ctl_options = ''"));
+    assert!(t.non_query_calls().iter().any(|c| c == &format!("{SYSTEMCTL} stop postgresql@17-fb_bad.service")), "stopped");
+    // drop-drill still removes it (its identity is the empty cluster's).
+    assert_eq!(json(&t.call(&["pg", "drop-drill", "17-fb_bad"]))["dropped"], true);
+    // A success: auto only after it is recorded.
+    let root = t.root.clone();
+    w.borrow_mut().extra = Some(Rc::new(move |prog, a, stdin| fake_tools(&root, prog, a, stdin)));
+    json(&t.call(&["pg", "restore-to", "17-feedback", "fb_ok", &UtcTime::from_epoch(n - 60).stamp(), "--drill"]));
+    assert_eq!(std::fs::read_to_string(t.p("/etc/postgresql/17/fb_ok/start.conf")).unwrap().lines().last(), Some("auto"));
+    assert!(t.non_query_calls().iter().any(|c| c.starts_with(PG_CREATECLUSTER) && c.contains("fb_ok") && c.contains("--start-conf manual")));
+    // A drop-in folder with someone else's file: the name is taken.
+    mkdirs(&t.root, &["/etc/systemd/system/postgresql@17-fb_other.service.d"]);
+    std::fs::write(t.p("/etc/systemd/system/postgresql@17-fb_other.service.d/override.conf"), "[Service]\n").unwrap();
+    assert!(err_of(&t.call(&["pg", "ensure-cluster", "17-fb_other"])).starts_with("name_taken"));
+}
+
+/// M3: a restore that will serve locks its logins until K2 sets their
+/// current passwords; a drill listens on its socket only.
+#[test]
+fn review_m3_logins_locked_and_drills_local_only() {
+    let (t, w) = archiving_box();
+    let n = now();
+    base_backup(&t, n - 600, "000000010000000000000003");
+    spool(&t, &["000000010000000000000003"], n);
+    let v = json(&t.call(&["pg", "restore-to", "17-feedback", "fb_serve", &UtcTime::from_epoch(n - 60).stamp()]));
+    assert_eq!(v["loginsLocked"], 3, "{v}");
+    let port = v["port"].as_u64().unwrap() as u16;
+    assert!(w.borrow().sql.iter().any(|(p, s)| *p == port && s == pr::LOCK_LOGINS_SQL), "the lock ran on the restored cluster");
+    assert!(!w.borrow().sql.iter().any(|(p, s)| *p == 5434 && s == pr::LOCK_LOGINS_SQL), "never on the source");
+    assert!(!t.p(&format!("/etc/postgresql/17/fb_serve/conf.d/{}", pr::DRILL_LOCAL_CONF_FILE)).exists());
+    let v = json(&t.call(&["pg", "restore-to", "17-feedback", "fb_drill", &UtcTime::from_epoch(n - 60).stamp(), "--drill"]));
+    assert_eq!(v["loginsLocked"], 0);
+    assert_eq!(std::fs::read_to_string(t.p(&format!("/etc/postgresql/17/fb_drill/conf.d/{}", pr::DRILL_LOCAL_CONF_FILE))).unwrap(), pr::DRILL_LOCAL_CONF);
+    // A lock that leaves a login: the restore fails, and is cleaned up.
+    w.borrow_mut().answers.retain(|(k, _)| k != "rolcanlogin");
+    w.borrow_mut().answers.insert(0, ("rolcanlogin".into(), "3\n1\n".into()));
+    let e = err_of(&t.call(&["pg", "restore-to", "17-feedback", "fb_leak", &UtcTime::from_epoch(n - 60).stamp()]));
+    assert!(e.starts_with("recovery_failed") && e.contains("logins could not all be locked"), "{e}");
+    assert_eq!(std::fs::read_to_string(t.p("/etc/postgresql/17/fb_leak/start.conf")).unwrap().lines().last(), Some("manual"));
+}
+
+/// M4: no room for twice the source: refused before anything is written.
+#[test]
+fn review_m4_a_full_disk_is_refused_first() {
+    let (mut t, _w) = archiving_box();
+    let n = now();
+    base_backup(&t, n - 600, "000000010000000000000003");
+    spool(&t, &["000000010000000000000003"], n);
+    t.ctx.free_bytes = |_| Ok(1024 * 1024);
+    let e = err_of(&t.call(&["pg", "basebackup", "17-feedback"]));
+    assert!(e.starts_with("disk_low"), "{e}");
+    let e = err_of(&t.call(&["pg", "restore-to", "17-feedback", "fb_x", &UtcTime::from_epoch(n - 60).stamp(), "--drill"]));
+    assert!(e.starts_with("disk_low"), "{e}");
+    assert!(!t.p("/var/lib/postgresql/17/fb_x").exists(), "nothing made");
+}
+
+/// L5: the restored postgresql.auto.conf loses commands and other servers.
+#[test]
+fn review_l5_auto_conf_is_stripped() {
+    let (t, w) = archiving_box();
+    let n = now();
+    base_backup(&t, n - 600, "000000010000000000000003");
+    spool(&t, &["000000010000000000000003"], n);
+    let root = t.root.clone();
+    w.borrow_mut().extra = Some(Rc::new(move |prog, a, stdin| {
+        if prog == "tar" && a.iter().any(|x| x.ends_with("base.tar.gz")) {
+            let dir = under(&root, a.last().unwrap());
+            std::fs::write(dir.join("postgresql.auto.conf"), "work_mem = '8MB'\narchive_command = 'curl far'\n").unwrap();
+        }
+        fake_tools(&root, prog, a, stdin)
+    }));
+    json(&t.call(&["pg", "restore-to", "17-feedback", "fb_drill", &UtcTime::from_epoch(n - 60).stamp(), "--drill"]));
+    assert_eq!(std::fs::read_to_string(t.p("/var/lib/postgresql/17/fb_drill/postgresql.auto.conf")).unwrap(), "work_mem = '8MB'\n");
 }

@@ -1849,9 +1849,9 @@ impl Verb {
             Verb::PgHbaApp { .. } => Daemon,
             // Reading and a dry run.
             Verb::PgClusters | Verb::PgAddMajor { dry_run: true, .. } => Open,
-            // What base backups and WAL a named cluster has (names, sizes,
-            // times): reading only.
-            Verb::PgBackups { .. } => Open,
+            // What base backups and WAL a named cluster has: reading only,
+            // but it walks postgres-owned folders as root, so only the
+            // daemon asks (review L6).
             // A cluster's boot setting and the shared slice override what
             // the owner chose: the daemon's call only (review #1 L3).
             Verb::PgInstallSlice | Verb::PgStartConf { auto: true, .. } => Daemon,
@@ -1871,6 +1871,7 @@ impl Verb {
             // cluster on a port, removing a drill: the daemon's call (the
             // owner's or the Postgres-versions switch's).
             | Verb::PgBaseBackup { .. }
+            | Verb::PgBackups { .. }
             | Verb::PgRestoreTo { .. }
             | Verb::PgDropDrill { .. }
             | Verb::PgStartConf { auto: false, .. }
@@ -3037,6 +3038,7 @@ mod tests {
                         // take the `pgrestore` lock themselves and the pg lock
                         // only around their root writes.
                         | Verb::PgBaseBackup { .. }
+                        | Verb::PgBackups { .. }
                         | Verb::PgRestoreTo { .. }
                         | Verb::PgDropDrill { .. }
                         // Daemon-class only to keep targets from agents; read-only.
@@ -3534,7 +3536,7 @@ mod tests {
     fn restore_verbs() {
         for (a, class) in [
             (&["pg", "basebackup", "17-feedback"][..], Class::Daemon),
-            (&["pg", "backups", "17-feedback"][..], Class::Open),
+            (&["pg", "backups", "17-feedback"][..], Class::Daemon),
             (&["pg", "restore-to", "17-feedback", "fb_drill", "20261122T101500Z", "--drill"][..], Class::Daemon),
             (&["pg", "restore-to", "16-audit", "audit_old", "20260131T235959Z"][..], Class::Daemon),
             (&["pg", "drop-drill", "17-fb_drill"][..], Class::Daemon),

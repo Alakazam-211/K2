@@ -31,6 +31,8 @@ use super::sysops::SystemOps;
 pub const DRILL_WARN_DAYS: i64 = 30;
 /// One automatic base backup a day per archiving named cluster.
 pub const BASEBACKUP_EVERY_SECS: i64 = 86_400;
+/// A failed daily base backup is tried again this soon.
+pub const BASEBACKUP_RETRY_SECS: i64 = 3600;
 /// How often the daemon looks (headless; no client needed).
 pub const TICK_SECS: u64 = 1800;
 
@@ -56,6 +58,10 @@ pub fn parse_time(s: &str, now: i64) -> Result<UtcTime, String> {
              2026-11-22T12:15:00+02:00, or -15m / -2h / -1d"
         )
     };
+    // Review L7: every form is ASCII; slicing below never splits a char.
+    if !s.is_ascii() {
+        return Err(bad());
+    }
     if let Some(rel) = s.strip_prefix('-') {
         let (n, unit) = rel.split_at(rel.len().saturating_sub(1));
         let n: i64 = n.parse().map_err(|_| bad())?;
@@ -248,6 +254,7 @@ fn restored_cluster(v: &Value, c: &Cluster, new: &ClusterName) -> Result<Cluster
 /// is recorded as K2's, in the source's workspace.
 pub fn restore(ops: &dyn SystemOps, c: &Cluster, as_name: &str, target: UtcTime) -> Result<Value, EnsureError> {
     let new = check_new_name(c, as_name)?;
+    let _busy = Busy::take(c)?;
     let argv = restore_argv(c, &new, target, false);
     let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
     let v = call(ops, &refs)?;
@@ -292,12 +299,36 @@ fn forget(major: u32, name: &str) {
 
 // ── the drill ───────────────────────────────────────────────────────────
 
-/// The drill cluster's name: `<name>_drill` (cut to fit 24).
+/// The drill cluster's name: `<name>_d<4 hex>` (review L8): the hash of
+/// the source's name, so it never is a name someone picks by hand for
+/// another cluster (`feedback_drill`), cut to fit 24.
 pub fn drill_name(name: &str) -> String {
-    format!("{}_drill", &name[..name.len().min(18)])
+    let h = name.bytes().fold(0x811c_9dc5u32, |h, b| (h ^ u32::from(b)).wrapping_mul(0x0100_0193));
+    format!("{}_d{:04x}", &name[..name.len().min(18)], h & 0xffff)
 }
 
-const MARKER_TABLE: &str = "public.k2_restore_drill";
+/// Review L1: the markers live in a schema K2 makes for the drill, owned by
+/// the superuser, checked before each write (a plain table, no triggers,
+/// both owned by `postgres`), dropped after.
+const MARKER_SCHEMA: &str = "k2_restore_drill";
+const MARKER_TABLE: &str = "k2_restore_drill.markers";
+const MARKER_CHECK_SQL: &str = "SELECT c.relkind::text || '|' || pg_catalog.pg_get_userbyid(c.relowner) || '|' || pg_catalog.pg_get_userbyid(n.nspowner) || '|' || \
+(SELECT count(*) FROM pg_catalog.pg_trigger t WHERE t.tgrelid = c.oid) || '|' || \
+(SELECT count(*) FROM pg_catalog.pg_rules r WHERE r.schemaname = n.nspname AND r.tablename = c.relname) \
+FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+WHERE n.nspname = 'k2_restore_drill' AND c.relname = 'markers';\n";
+
+fn markers_safe(ops: &dyn SystemOps, c: &Cluster) -> Result<(), EnsureError> {
+    let got = psql(ops, c, "postgres", MARKER_CHECK_SQL)?;
+    let got = got.lines().last().unwrap_or("").trim().to_string();
+    if got != "r|postgres|postgres|0|0" {
+        return Err(EnsureError::Refused(format!(
+            "{}: the drill's marker table isn't a plain table owned by postgres without triggers or rules ({got:?}); drop schema {MARKER_SCHEMA} and run the drill again",
+            c.label()
+        )));
+    }
+    Ok(())
+}
 
 /// Every user table's row count in one database, `schema.table|count`
 /// lines (as postgres: row security doesn't hide rows from the count).
@@ -340,9 +371,18 @@ fn counts(ops: &dyn SystemOps, c: &Cluster) -> Result<Counts, EnsureError> {
 /// whole second after the first row's commit, and the second row commits
 /// after it. Answers the moment.
 fn mark(ops: &dyn SystemOps, c: &Cluster, run: &str) -> Result<UtcTime, EnsureError> {
+    psql(
+        ops,
+        c,
+        "postgres",
+        &format!(
+            "CREATE SCHEMA IF NOT EXISTS {MARKER_SCHEMA} AUTHORIZATION postgres;\n\
+             CREATE TABLE IF NOT EXISTS {MARKER_TABLE} (id text PRIMARY KEY, at timestamptz NOT NULL DEFAULT clock_timestamp());\n"
+        ),
+    )?;
+    markers_safe(ops, c)?;
     let first = format!(
-        "CREATE TABLE IF NOT EXISTS {MARKER_TABLE} (id text PRIMARY KEY, at timestamptz NOT NULL DEFAULT clock_timestamp());\n\
-         INSERT INTO {MARKER_TABLE} (id) VALUES ('{run}:before');\n\
+        "INSERT INTO {MARKER_TABLE} (id) VALUES ('{run}:before');\n\
          SELECT ceil(extract(epoch FROM clock_timestamp()))::bigint;\n"
     );
     let out = psql(ops, c, "postgres", &first)?;
@@ -359,13 +399,51 @@ fn mark(ops: &dyn SystemOps, c: &Cluster, run: &str) -> Result<UtcTime, EnsureEr
     if !passed {
         return Err(EnsureError::Helper("the source's clock didn't pass the drill's moment".into()));
     }
+    markers_safe(ops, c)?;
     psql(ops, c, "postgres", &format!("INSERT INTO {MARKER_TABLE} (id) VALUES ('{run}:after');\n"))?;
     Ok(UtcTime::from_epoch(t))
+}
+
+/// Review M4: one restore or drill per cluster at a time, and a drill at
+/// most every [`DRILL_MIN_GAP_SECS`] (each copies the whole cluster).
+pub const DRILL_MIN_GAP_SECS: i64 = 600;
+
+fn in_flight() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static S: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> = std::sync::OnceLock::new();
+    S.get_or_init(Default::default)
+}
+
+/// Held while a restore or a drill of `c` runs.
+struct Busy(String);
+impl Busy {
+    fn take(c: &Cluster) -> Result<Self, EnsureError> {
+        let key = c.label();
+        let mut s = in_flight().lock().unwrap_or_else(|e| e.into_inner());
+        if !s.insert(key.clone()) {
+            return Err(EnsureError::Refused(format!("busy: a restore or drill of {key} is already running")));
+        }
+        Ok(Self(key))
+    }
+}
+impl Drop for Busy {
+    fn drop(&mut self) {
+        in_flight().lock().unwrap_or_else(|e| e.into_inner()).remove(&self.0);
+    }
 }
 
 /// `k2 db cluster restore-drill <name> [--to <time>]`.
 pub fn drill(ops: &dyn SystemOps, c: &Cluster, at: Option<UtcTime>) -> Result<Value, EnsureError> {
     ops.helper_pgrestore().map_err(EnsureError::Helper)?;
+    let _busy = Busy::take(c)?;
+    let last = recorded(c)["lastDrillAt"].as_str().and_then(UtcTime::parse).map(UtcTime::epoch);
+    if let Some(l) = last.filter(|l| now() - l < DRILL_MIN_GAP_SECS) {
+        return Err(EnsureError::Refused(format!(
+            "busy: the last drill of {} was at {} UTC; drills run at most every {} minutes",
+            c.label(),
+            UtcTime::from_epoch(l).token(),
+            DRILL_MIN_GAP_SECS / 60
+        )));
+    }
     if c.state == "down" && at.is_none() {
         return Err(EnsureError::Refused(format!("{} isn't running; a drill to now needs it (or give --to)", c.label())));
     }
@@ -408,7 +486,7 @@ pub fn drill(ops: &dyn SystemOps, c: &Cluster, at: Option<UtcTime>) -> Result<Va
     // Always: the throwaway cluster goes, the source's markers go.
     let dropped = drop_drill(ops, c.major, &dname).map(|v| v["dropped"] == true).unwrap_or(false);
     if at.is_none() {
-        let _ = psql(ops, c, "postgres", &format!("DELETE FROM {MARKER_TABLE} WHERE id LIKE '{run}:%';\n"));
+        let _ = psql(ops, c, "postgres", &format!("DROP SCHEMA IF EXISTS {MARKER_SCHEMA} CASCADE;\n"));
     }
     let (v, after, markers) = match result {
         Ok(x) => x,
@@ -475,7 +553,9 @@ pub fn tick(ops: &dyn SystemOps) -> Vec<String> {
         .filter(|c| {
             let r = recorded(c);
             let last = r["lastBasebackupAt"].as_str().and_then(UtcTime::parse).map(UtcTime::epoch);
-            last.is_none_or(|t| now() - t >= BASEBACKUP_EVERY_SECS)
+            // Review L2: a failed one is tried again after an hour.
+            let every = if r["lastBasebackupOk"] == false { BASEBACKUP_RETRY_SECS } else { BASEBACKUP_EVERY_SECS };
+            last.is_none_or(|t| now() - t >= every)
         })
         .collect();
     let mut done = Vec::new();

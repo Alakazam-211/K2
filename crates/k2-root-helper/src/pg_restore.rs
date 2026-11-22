@@ -17,8 +17,29 @@
 //!   stops; the cluster is left stopped and droppable with `drop-drill`).
 //! - `drop-drill` removes only a cluster `restore-to` made as a drill or
 //!   one whose restore failed; the helper still never drops any other.
-//! - These verbs run long: each holds the `pgrestore` lock for itself and
-//!   the `pg` lock only around its root writes.
+//! - These verbs run long: each holds its cluster's `pgrestore-<M>-<name>`
+//!   lock and the `pg` lock only around its root writes.
+//!
+//! Security review (protocol 19), what each fix is:
+//! - H1: `drop-drill` never runs `pg_dropcluster` (it re-reads paths from
+//!   postgres-owned config as root). It removes the fixed paths derived
+//!   from the NAME: the data dir as postgres (`rm --one-file-system`), the
+//!   config dir through fsx (beneath, never following a link).
+//! - M1: a restore record vouches for one cluster only: a new cluster of
+//!   that name forgets it, and `drop-drill` also needs the cluster's own
+//!   system identifier (`pg_controldata`, stopped) to be the source's or
+//!   the one the empty cluster had, and the source still recorded.
+//! - M2: a restore's cluster starts `manual` and turns `auto` only once it
+//!   is recorded; any failure after its layout stops it and removes the
+//!   recovery settings, the start drop-in and `pg_ctl.conf`'s wait.
+//! - M3: a non-drill restore's logins go NOLOGIN until K2 sets their
+//!   current passwords (`k2 db cluster switch`); a drill listens on its
+//!   socket only.
+//! - M4: a base backup and a restore need the source's size twice over
+//!   free where they write.
+//! - L3: the log is read as postgres, with passwords redacted. L5: the
+//!   restored `postgresql.auto.conf` loses `restore_command`, `archive_*`,
+//!   `recovery_*` and `primary_*`.
 
 use k2_root_proto::paths::SYSTEMCTL;
 use k2_root_proto::pg_major::{ClusterRow, PgMajor, MKDIR, PG_SOCKET_DIR, RM};
@@ -33,8 +54,9 @@ use crate::pg_major::{
     put_at, read_small, real_dir, save_named_state, sql_at, subdir, system_id, CHMOD, DD, DU, FIND,
 };
 
-pub const PG_DROPCLUSTER: &str = "/usr/bin/pg_dropcluster";
 const TAR: &str = "/usr/bin/tar";
+const TAIL: &str = "/usr/bin/tail";
+const PG_CONTROLDATA: &str = "pg_controldata";
 
 fn now() -> i64 {
     std::time::SystemTime::now()
@@ -56,6 +78,44 @@ pub(crate) fn restores_state(ctx: &Ctx) -> HResult<RestoresState> {
         None => Ok(RestoresState::default()),
         Some(b) => serde_json::from_slice(&b).map_err(|_| Fail::state("pg-restores.json unreadable; nothing changed")),
     }
+}
+
+/// Forget any restore record for `m/n` (a new cluster of that name is
+/// never a drill: review M1). The caller holds the pg lock.
+pub(crate) fn forget_restore(ctx: &Ctx, m: u32, n: &str) -> HResult<()> {
+    let mut st = restores_state(ctx)?;
+    let before = st.restores.len();
+    st.restores.retain(|r| !(r.major == m && r.name == n));
+    if st.restores.len() != before {
+        save_restores(ctx, &st)?;
+    }
+    Ok(())
+}
+
+/// Free bytes where `abs` lives, against `need` (review M4).
+fn disk_floor(ctx: &Ctx, abs: &str, need: u64, what: &str) -> HResult<()> {
+    let free = (ctx.free_bytes)(&ctx.p(abs)).map_err(|e| Fail::io(format!("free space of {abs}: {e}")))?;
+    if free < need {
+        return Err(Fail::state(format!(
+            "disk_low: {what} needs {} MiB free on the disk of {abs}, and it has {} MiB; nothing written",
+            need / (1024 * 1024),
+            free / (1024 * 1024)
+        )));
+    }
+    Ok(())
+}
+
+/// The databases' size of a running cluster (bytes).
+fn cluster_bytes(ctx: &Ctx, m: PgMajor, port: u16) -> HResult<u64> {
+    let out = sql_at(ctx, m, port, "postgres", "SELECT coalesce(sum(pg_catalog.pg_database_size(datname)), 0)::bigint FROM pg_catalog.pg_database;\n")?;
+    out.lines().last().and_then(|l| l.trim().parse().ok()).ok_or_else(|| Fail::state("the cluster answered no size"))
+}
+
+/// `pg_controldata` of a stopped cluster's data dir, as postgres: its
+/// system identifier (None: no `pg_control` there).
+fn data_system_id(ctx: &Ctx, m: PgMajor, data: &str) -> Option<String> {
+    let out = as_postgres(ctx, &m.bin(PG_CONTROLDATA), &[data], None).ok()?;
+    pr::controldata_system_id(&String::from_utf8_lossy(&out.stdout))
 }
 
 fn save_restores(ctx: &Ctx, s: &RestoresState) -> HResult<()> {
@@ -176,7 +236,7 @@ pub fn backups(ctx: &Ctx, m: PgMajor, name: &ClusterName) -> HResult<J> {
 /// cluster into `<base_dir>/<stamp>/` (postgres 0700), its info file, then
 /// the oldest beyond [`pr::BASE_KEEP`] (and unfinished ones) removed.
 pub fn basebackup(ctx: &Ctx, m: PgMajor, name: &ClusterName) -> HResult<J> {
-    let _own = crate::take_lock(ctx, pr::LOCK_NS)?;
+    let _own = crate::take_lock(ctx, &pr::lock_ns(m.get(), name.as_str()))?;
     let n = name.as_str();
     let (row, rec) = named_of(ctx, m, name)?;
     if !rec.wal_archive {
@@ -195,6 +255,8 @@ pub fn basebackup(ctx: &Ctx, m: PgMajor, name: &ClusterName) -> HResult<J> {
         return Err(Fail::state("base_dir_refused: the base backup folder is not a postgres-owned directory"));
     }
     as_postgres(ctx, CHMOD, &["0700", "--", &root], None)?;
+    let source_bytes = cluster_bytes(ctx, m, row.port)?;
+    disk_floor(ctx, &root, source_bytes.saturating_mul(pr::DISK_FACTOR), "a base backup")?;
     let started = now();
     let stamp = UtcTime::from_epoch(started).stamp();
     let dir = format!("{root}/{stamp}");
@@ -228,6 +290,7 @@ pub fn basebackup(ctx: &Ctx, m: PgMajor, name: &ClusterName) -> HResult<J> {
         ended_at: ended,
         start_wal: start_wal.name(),
         end_wal: end_wal.name(),
+        source_bytes,
     };
     let body = serde_json::to_vec_pretty(&info).map_err(|_| Fail::io("encode the backup info"))?;
     let info_path = format!("{dir}/{}", pr::BACKUP_INFO_FILE);
@@ -278,9 +341,10 @@ fn flush_source(ctx: &Ctx, m: PgMajor, row: &ClusterRow) -> HResult<()> {
 /// The last FATAL/PANIC lines of a cluster's log (no data: recovery's own
 /// lines), for a loud failure.
 fn log_tail(ctx: &Ctx, m: u32, n: &str) -> String {
+    // As postgres (the log is postgres's; review L3), passwords redacted.
     let path = format!("/var/log/postgresql/postgresql-{m}-{n}.log");
-    let Ok(Some(b)) = read_small(ctx, &path, 4 * 1024 * 1024) else { return String::new() };
-    let text = String::from_utf8_lossy(&b);
+    let Ok(out) = as_postgres(ctx, TAIL, &["-n", "400", "--", &path], None) else { return String::new() };
+    let text = crate::pg::redact_passwords(&String::from_utf8_lossy(&out.stdout));
     let lines: Vec<&str> = text.lines().filter(|l| l.contains("FATAL") || l.contains("PANIC") || l.contains("recovery")).collect();
     lines[lines.len().saturating_sub(4)..].join(" | ").chars().take(1200).collect()
 }
@@ -295,8 +359,9 @@ fn set_restore(ctx: &Ctx, m: u32, n: &str, f: impl FnOnce(&mut RestoreRec)) -> H
 
 /// `pg restore-to <M>-<name> <new> <time> [--drill]`.
 pub fn restore_to(ctx: &Ctx, m: PgMajor, name: &ClusterName, new: &ClusterName, target: UtcTime, drill: bool) -> HResult<J> {
-    let _own = crate::take_lock(ctx, pr::LOCK_NS)?;
     let (src, nn) = (name.as_str(), new.as_str());
+    let _own = crate::take_lock(ctx, &pr::lock_ns(m.get(), src))?;
+    let _new = crate::take_lock(ctx, &pr::lock_ns(m.get(), nn))?;
     if target.epoch() > now() {
         return Err(Fail::state(format!("target_in_future: {} is later than now; nothing restored", target.token())));
     }
@@ -333,21 +398,17 @@ pub fn restore_to(ctx: &Ctx, m: PgMajor, name: &ClusterName, new: &ClusterName, 
             target.token()
         )));
     }
-    // The new cluster's config and the records, under the pg lock.
+    // Review M4: the restored copy needs room (the source's size, twice).
+    let bdir = format!("{}/{}", pr::base_dir(m.get(), src), base.stamp);
+    let need = if base.source_bytes > 0 { base.source_bytes } else { dir_bytes(ctx, &bdir).saturating_mul(4) };
+    disk_floor(ctx, &format!("/var/lib/postgresql/{}", m.get()), need.saturating_mul(pr::DISK_FACTOR), "a restore")?;
+    // The new cluster's config and the records, under the pg lock. It
+    // starts `manual` (review M2): nothing brings it up at boot before it
+    // is recorded.
     let port = {
         let _pg = crate::take_lock(ctx, "pg")?;
         let st = named_state(ctx)?;
-        let port = create_named_layout(ctx, m, new, None, &st)?;
-        let d = ctx
-            .dir(&format!("{}/conf.d", named::etc_dir(m.get(), nn)))
-            .map_err(|e| Fail::io_err("open the cluster's conf.d", e))?;
-        put(ctx, &d, pr::RESTORE_CONF_FILE, pr::recovery_conf(m.get(), src, target).as_bytes())?;
-        // The start waits for the replay, however long (never a systemd or
-        // pg_ctlcluster timeout that stops a cluster still replaying).
-        let etc = ctx.dir(&named::etc_dir(m.get(), nn)).map_err(|e| Fail::io_err("open the cluster's config dir", e))?;
-        put(ctx, &etc, pr::PG_CTL_CONF_FILE, pr::restore_pg_ctl_conf().as_bytes())?;
-        put_at(ctx, &restore_dropin_path(m.get(), nn), pr::restore_dropin().as_bytes())?;
-        ctx.run_ok(SYSTEMCTL, &["daemon-reload"], None)?;
+        let port = create_named_layout(ctx, m, new, None, &st, false)?;
         let mut rs = restores_state(ctx)?;
         rs.restores.retain(|r| !(r.major == m.get() && r.name == nn));
         rs.restores.push(RestoreRec {
@@ -359,10 +420,63 @@ pub fn restore_to(ctx: &Ctx, m: PgMajor, name: &ClusterName, new: &ClusterName, 
             drill,
             ok: false,
             created_at: now(),
+            fresh_system_id: data_system_id(ctx, m, &named::data_dir(m.get(), nn)),
         });
         save_restores(ctx, &rs)?;
         port
     };
+    // From here, any failure stops the cluster and removes what would let
+    // it start and promote by itself (review M2).
+    match restore_body(ctx, m, src, nn, target, drill, &base, &range, port) {
+        Ok(v) => Ok(v),
+        Err(e) => {
+            if let Ok(_pg) = crate::take_lock(ctx, "pg") {
+                cleanup_failed(ctx, m.get(), nn);
+            }
+            Err(e)
+        }
+    }
+}
+
+/// A failed restore: stopped, `manual`, no recovery settings, no start
+/// drop-in, `pg_ctl.conf` back to no wait. Best effort (each step on its
+/// own); the cluster stays for `drop-drill`.
+fn cleanup_failed(ctx: &Ctx, m: u32, n: &str) {
+    let _ = ctx.run_ok(SYSTEMCTL, &["stop", &named::unit(m, n)], None);
+    let etc = named::etc_dir(m, n);
+    let _ = crate::apps::unput(ctx, &format!("{etc}/conf.d"), None, pr::RESTORE_CONF_FILE);
+    let _ = undo_restore_start(ctx, m, n);
+    let _ = crate::pg_major::write_start_conf(ctx, &etc, false, None);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn restore_body(
+    ctx: &Ctx,
+    m: PgMajor,
+    src: &str,
+    nn: &str,
+    target: UtcTime,
+    drill: bool,
+    base: &BackupInfo,
+    range: &pr::WalRange,
+    port: u16,
+) -> HResult<J> {
+    {
+        let _pg = crate::take_lock(ctx, "pg")?;
+        let d = ctx
+            .dir(&format!("{}/conf.d", named::etc_dir(m.get(), nn)))
+            .map_err(|e| Fail::io_err("open the cluster's conf.d", e))?;
+        put(ctx, &d, pr::RESTORE_CONF_FILE, pr::recovery_conf(m.get(), src, target).as_bytes())?;
+        if drill {
+            put(ctx, &d, pr::DRILL_LOCAL_CONF_FILE, pr::DRILL_LOCAL_CONF.as_bytes())?;
+        }
+        // The start waits for the replay, however long (never a systemd or
+        // pg_ctlcluster timeout that stops a cluster still replaying).
+        let etc = ctx.dir(&named::etc_dir(m.get(), nn)).map_err(|e| Fail::io_err("open the cluster's config dir", e))?;
+        put(ctx, &etc, pr::PG_CTL_CONF_FILE, pr::restore_pg_ctl_conf().as_bytes())?;
+        put_at(ctx, &restore_dropin_path(m.get(), nn), pr::restore_dropin().as_bytes())?;
+        ctx.run_ok(SYSTEMCTL, &["daemon-reload"], None)?;
+    }
     // The data: the base backup over a cleared data dir, as postgres.
     let data = named::data_dir(m.get(), nn);
     let bdir = format!("{}/{}", pr::base_dir(m.get(), src), base.stamp);
@@ -370,12 +484,12 @@ pub fn restore_to(ctx: &Ctx, m: PgMajor, name: &ClusterName, new: &ClusterName, 
     as_postgres(ctx, TAR, &["-xzf", &format!("{bdir}/base.tar.gz"), "-C", &data], None)?;
     as_postgres(ctx, MKDIR, &["-p", "-m", "0700", "--", &format!("{data}/pg_wal")], None)?;
     as_postgres(ctx, TAR, &["-xzf", &format!("{bdir}/pg_wal.tar.gz"), "-C", &format!("{data}/pg_wal")], None)?;
+    strip_auto_conf(ctx, &data)?;
     as_postgres(ctx, DD, &[&format!("of={data}/recovery.signal"), "status=none"], Some(b""))?;
     as_postgres(ctx, CHMOD, &["0700", "--", &data], None)?;
     // Replay, then promotion.
     let unit = named::unit(m.get(), nn);
     let fail = |why: String| -> Fail {
-        let _ = ctx.run_ok(SYSTEMCTL, &["stop", &unit], None);
         let tail = log_tail(ctx, m.get(), nn);
         Fail::state(format!(
             "recovery_failed: {why}{}; {}/{nn} is left stopped (remove it with `pg drop-drill`)",
@@ -419,8 +533,20 @@ pub fn restore_to(ctx: &Ctx, m: PgMajor, name: &ClusterName, new: &ClusterName, 
     if !promoted {
         return Err(fail(format!("recovery didn't finish within {} s", pr::RECOVERY_WAIT_SECS)));
     }
+    // Review M3: a restore that will serve (not a drill) keeps no login
+    // until K2 sets its current password again.
+    let locked = if drill {
+        0
+    } else {
+        let out = sql_at(ctx, m, port, "postgres", pr::LOCK_LOGINS_SQL)?;
+        let lines: Vec<&str> = out.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+        if lines.last() != Some(&"0") {
+            return Err(fail(format!("its logins could not all be locked ({:?} left)", lines.last())));
+        }
+        lines.first().and_then(|l| l.parse::<u64>().ok()).unwrap_or(0)
+    };
     // Promoted: the recovery settings go; the cluster is recorded as one
-    // the helper made.
+    // the helper made, and only then starts at boot.
     let rec_new = {
         let _pg = crate::take_lock(ctx, "pg")?;
         crate::apps::unput(ctx, &format!("{}/conf.d", named::etc_dir(m.get(), nn)), None, pr::RESTORE_CONF_FILE)?;
@@ -443,6 +569,7 @@ pub fn restore_to(ctx: &Ctx, m: PgMajor, name: &ClusterName, new: &ClusterName, 
         st.clusters.push(rec_new.clone());
         save_named_state(ctx, &st)?;
         set_restore(ctx, m.get(), nn, |r| r.ok = true)?;
+        crate::pg_major::write_start_conf(ctx, &named::etc_dir(m.get(), nn), true, Some("manual"))?;
         rec_new
     };
     let row = named_wait_online(ctx, m, nn)?;
@@ -453,7 +580,21 @@ pub fn restore_to(ctx: &Ctx, m: PgMajor, name: &ClusterName, new: &ClusterName, 
     v["baseBackup"] = json!(base.stamp);
     v["walReplayed"] = json!({"first": range.first.name(), "last": range.last.name(), "count": range.count});
     v["drill"] = json!(drill);
+    v["loginsLocked"] = json!(locked);
     Ok(v)
+}
+
+/// The extracted `postgresql.auto.conf` without commands or other servers
+/// (review L5): read as root without following a link, written back as
+/// postgres.
+fn strip_auto_conf(ctx: &Ctx, data: &str) -> HResult<()> {
+    let path = format!("{data}/postgresql.auto.conf");
+    let Some(b) = read_small(ctx, &path, 1024 * 1024)? else { return Ok(()) };
+    let (text, gone) = pr::strip_auto_conf(&String::from_utf8_lossy(&b));
+    if !gone.is_empty() {
+        as_postgres(ctx, DD, &[&format!("of={path}"), "status=none"], Some(text.as_bytes()))?;
+    }
+    Ok(())
 }
 
 /// The instance's drop-in folder (where the slice drop-in is).
@@ -480,44 +621,64 @@ fn undo_restore_start(ctx: &Ctx, m: u32, n: &str) -> HResult<()> {
 
 /// `pg drop-drill <M>-<name>`: stop and remove a cluster `restore-to` made
 /// as a drill, or one whose restore failed. Anything else: `not_drill`.
+/// Review H1: never `pg_dropcluster` (it trusts postgres-owned config as
+/// root); review M1: the record alone proves nothing.
 pub fn drop_drill(ctx: &Ctx, m: PgMajor, name: &ClusterName) -> HResult<J> {
-    let _own = crate::take_lock(ctx, pr::LOCK_NS)?;
     let n = name.as_str();
+    let _own = crate::take_lock(ctx, &pr::lock_ns(m.get(), n))?;
     let mut rs = restores_state(ctx)?;
+    let not = |why: &str| Fail::state(format!("not_drill: {}/{n} {why}; the helper never drops any other cluster; nothing changed", m.get()));
     let Some(r) = rs.get(m.get(), n).cloned() else {
-        return Err(Fail::state(format!(
-            "not_drill: {}/{n} isn't a cluster `restore-to` made; the helper never drops any other cluster; nothing changed",
-            m.get()
-        )));
+        return Err(not("isn't a cluster `restore-to` made"));
     };
     if !r.drill && r.ok {
-        return Err(Fail::state(format!(
-            "not_drill: {}/{n} is a finished restore, not a drill; the helper doesn't drop it; nothing changed",
-            m.get()
-        )));
+        return Err(not("is a finished restore, not a drill"));
     }
     let _pg = crate::take_lock(ctx, "pg")?;
-    let data = named::data_dir(m.get(), n);
-    let row = lsclusters(ctx)?.into_iter().find(|x| x.major == m.get() && x.name == n);
     let mut st = named_state(ctx)?;
-    if st.get(m.get(), n).is_some() {
-        named_of(ctx, m, name)?;
+    let source = st.get(m.get(), &r.from).cloned().ok_or_else(|| not("has a restore record whose source isn't a recorded cluster"))?;
+    let data = named::data_dir(m.get(), n);
+    let etc_parent = format!("/etc/postgresql/{}", m.get());
+    crate::pg_major::no_links_above(ctx, m)?;
+    if present(ctx, &data) && !real_dir(ctx, &data) {
+        return Err(Fail::state("cluster_layout_refused: the drill's data dir is a link or a file; nothing changed"));
     }
-    let dropped = match row {
-        Some(row) => {
-            if row.data_dir != data || !real_dir(ctx, &data) {
-                return Err(Fail::state("cluster_layout_refused: the drill's data dir isn't the named-cluster layout; nothing changed"));
-            }
-            crate::pg_major::no_links_above(ctx, m)?;
-            ctx.run_ok(SYSTEMCTL, &["stop", &named::unit(m.get(), n)], None)?;
-            ctx.run_ok(PG_DROPCLUSTER, &[&m.token(), n], None)?;
-            true
-        }
-        None => false,
+    ctx.run_ok(SYSTEMCTL, &["stop", &named::unit(m.get(), n)], None)?;
+    // Its own identity, read while stopped: the source's (a restore) or the
+    // empty cluster's (one that failed before the extract), or none at all.
+    let id = if present(ctx, &format!("{data}/global/pg_control")) { data_system_id(ctx, m, &data) } else { None };
+    let vouched = match id.as_deref() {
+        None => !present(ctx, &format!("{data}/global/pg_control")),
+        Some(id) => id == source.system_id || r.fresh_system_id.as_deref() == Some(id),
     };
+    if !vouched {
+        return Err(not(&format!(
+            "has the system identifier {:?}, neither its source's nor the one it was made with",
+            id
+        )));
+    }
+    crate::pg_major::no_links_above(ctx, m)?;
+    let mut dropped = false;
+    if present(ctx, &data) {
+        as_postgres(ctx, RM, &["-rf", "--one-file-system", "--", &data], None)?;
+        dropped = true;
+    }
+    match ctx.dir(&etc_parent) {
+        Ok(d) => {
+            if d.kind(std::ffi::OsStr::new(n)).map_err(|e| Fail::io_err("stat the config dir", e))? != crate::fsx::Kind::Missing {
+                d.remove_tree(std::ffi::OsStr::new(n)).map_err(|e| Fail::io_err("remove the config dir", e))?;
+                dropped = true;
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(Fail::io_err("open the config dirs", e)),
+    }
     let dropins = dropin_dir(m.get(), n);
-    let restore_gone = crate::apps::unput(ctx, &dropins, None, pr::RESTORE_DROPIN_FILE)?;
-    if crate::apps::unput(ctx, &dropins, None, "k2-slice.conf")? || restore_gone {
+    let mut reload = false;
+    for f in pr::OWN_DROPINS {
+        reload |= crate::apps::unput(ctx, &dropins, None, f)?;
+    }
+    if reload {
         ctx.run_ok(SYSTEMCTL, &["daemon-reload"], None)?;
     }
     st.clusters.retain(|c| !(c.major == m.get() && c.name == n));

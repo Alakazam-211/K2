@@ -212,8 +212,16 @@ pub fn parse(words: &[&str]) -> Option<Parsed> {
     }
     let rest = &words[1..];
     if sub == "signer" || sub == "signers" {
-        if matches!(rest.first(), Some(&("-h" | "--help"))) {
+        // `-h` or `--help` anywhere before a bare `--` is the help; no
+        // signer verb takes a `--`, so one is a usage error and nothing is
+        // sent (the shell's `_wants_help "$@"` and the loop after it).
+        if crate::dashdash::wants_help(rest) {
             return Some(Parsed::Help);
+        }
+        if rest.contains(&"--") {
+            return Some(Parsed::Usage(format!(
+                "usage: ci signer takes no '--' ({CLI} help ci)"
+            )));
         }
         return Some(signer::parse(sub, rest));
     }

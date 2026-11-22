@@ -16,7 +16,8 @@
 //!   before anything is sent. `add` and `reveal` (the vault's confirm) are
 //!   `tests/cli/ci_signer_code_stdin.sh`'s and `compute_trust_cli.sh`'s.
 //! - Help never acts: each verb that changes something with `-h` or
-//!   `--help` sends nothing.
+//!   `--help` sends nothing, on a signer line anywhere before a `--`; a
+//!   `--` on a signer line is a usage error and sends nothing.
 //! - `evidence` and `provenance` names from the answer: one that is
 //!   absolute, has a `..` part, holds a newline or a NUL, or reaches a
 //!   link inside `--out` is refused (exit 3, `ci_name_unsafe`) and each
@@ -749,8 +750,55 @@ fn ci_help_never_acts() {
         ("setup -h", &["setup", "--plan", "--out", "f", "-h"]),
         ("signer add -h", &["signer", "-h"]),
         ("signer remove --help", &["signer", "--help", "remove", "x"]),
+        ("signer remove <fp> -h", &["signer", "remove", "FP1", "-h"]),
+        ("signer rm <fp> --help", &["signer", "rm", "FP1", "--help"]),
+        (
+            "signer finish --done -h",
+            &["signer", "finish", "p1", "--done", "f.json", "-h"],
+        ),
+        (
+            "signer reveal --reveal --help",
+            &["signer", "reveal", "p1", "--reveal", "f.json", "--help"],
+        ),
+        (
+            "signer add ... --help",
+            &["signer", "add", "C.F", "--hello", "f.json", "--help"],
+        ),
+        ("signer list -h", &["signer", "list", "-h"]),
+        ("signers --help", &["signers", "--help"]),
     ] {
         v.push(case(name, args, &[], vec![], owner_and_port, 0, 0));
+    }
+    // No signer verb takes a `--`: a usage error, nothing sent, and a
+    // `-h` after it is not help.
+    for (name, args) in [
+        (
+            "signer remove -- <fp>",
+            &["signer", "remove", "--", "FP1"][..],
+        ),
+        (
+            "signer remove <fp> -- -h",
+            &["signer", "remove", "FP1", "--", "-h"],
+        ),
+        (
+            "signer remove <fp> -- --help",
+            &["signer", "remove", "FP1", "--", "--help"],
+        ),
+        (
+            "signer finish --done -- -h",
+            &["signer", "finish", "p1", "--done", "f.json", "--", "-h"],
+        ),
+        (
+            "signer reveal --reveal -- --help",
+            &[
+                "signer", "reveal", "p1", "--reveal", "f.json", "--", "--help",
+            ],
+        ),
+        ("signer list -- -h", &["signer", "list", "--", "-h"]),
+        ("signers --", &["signers", "--"]),
+        ("signer --", &["signer", "--"]),
+    ] {
+        v.push(case(name, args, &[], vec![], owner_and_port, 2, 0));
     }
     for c in v {
         rig.check(&c);

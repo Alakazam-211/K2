@@ -1069,7 +1069,14 @@ async fn async_main() {
     // arrives via the provision/migration step, which a client-box migration
     // skipped (internal migration-runbook lesson L-cli). Linux-only, never
     // clobbers a symlink, non-fatal.
-    let staged_cli = match k2_core::cli_stage::stage_cli() {
+    // What the commands run (the owner's k5 switch), read once: the stage
+    // and its PATH line below go by the same answer. Only Linux stages.
+    let cli_choice = if cfg!(target_os = "linux") {
+        k2_core::cli_stage::current_choice()
+    } else {
+        k2_core::cli_install::Choice::Script { note: None }
+    };
+    let staged_cli = match k2_core::cli_stage::stage_cli_for(&cli_choice) {
         Ok(Some(path)) => {
             log_debug!("[daemon] k2 CLI staged: {}", path.display());
             Some(path)
@@ -1091,7 +1098,7 @@ async fn async_main() {
     #[cfg(unix)]
     std::thread::spawn(move || {
         if let Some(staged) = staged_cli.as_deref() {
-            match k2_core::cli_install::boot_path_for_staged(staged) {
+            match k2_core::cli_install::boot_path_for_staged_as(staged, &cli_choice) {
                 Some(Ok(k2_core::cli_install::PathOutcome::BlockAdded { file })) => {
                     log_debug!("[daemon] k2 CLI: added the K2 PATH line to {}", file.display())
                 }
@@ -1114,7 +1121,7 @@ async fn async_main() {
         }
     });
     #[cfg(not(unix))]
-    let _ = staged_cli;
+    let _ = (staged_cli, cli_choice);
 
     if lan {
         log_debug!(

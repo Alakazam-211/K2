@@ -389,3 +389,202 @@ fn a_default_brand_install_makes_exactly_todays_links() {
         }
     }
 }
+
+// ── The PATH block when the links run the k5 binary ─────────────────────
+
+/// A K2 script in `<root>/<dir>/k2`, as a distro package or an old admin
+/// install leaves one.
+fn k2_script_in(root: &Path, dir: &str) -> PathBuf {
+    let dir = root.join(dir);
+    fs::create_dir_all(&dir).expect("make the bin folder");
+    let script = dir.join("k2");
+    fs::write(&script, "#!/bin/bash\nK2_CLI_VERSION=\"0.46.7\"\n").expect("write the script");
+    script
+}
+
+/// A stand-in k5 binary at `<dir>/k5-cli` (its bytes are never read here).
+fn binary_in(dir: &Path) -> Choice {
+    fs::create_dir_all(dir).expect("make the binary's folder");
+    let binary = dir.join("k5-cli");
+    fs::write(&binary, "stand-in").expect("write the stand-in binary");
+    Choice::Binary { binary }
+}
+
+/// The zsh/bash block's line, as the shell runs it: `~/.local/bin` first.
+fn path_after_block(home: &Path, login: &str) -> String {
+    format!("{}:{login}", user_bin_dir(home).display())
+}
+
+/// What the Linux stage leaves in `~/.local/bin` when the links run the
+/// binary: `k2` and `k5`, links to it.
+fn staged_links(home: &Path, runs: &Choice) {
+    let bin = user_bin_dir(home);
+    fs::create_dir_all(&bin).expect("make ~/.local/bin");
+    for name in ["k2", "k5"] {
+        symlink(runs.binary().expect("the binary"), bin.join(name)).expect("link");
+    }
+}
+
+/// Arch: the package's `/usr/bin/k2` (the script) is first on the login
+/// PATH and the stage linked `~/.local/bin/k2` and `k5` at the binary. With
+/// the switch on, the block goes in, so a new Terminal runs the links; a
+/// second heal still leaves exactly one block.
+#[test]
+fn arch_a_package_script_first_on_path_gets_the_block_when_the_links_run_the_binary() {
+    let home = Home::new("arch-on");
+    let h = home.path();
+    let root = h.join("fake-root");
+    let pkg = k2_script_in(&root, "usr/bin");
+    let runs = binary_in(&root.join("usr/bin"));
+    staged_links(h, &runs);
+    let login = format!("{0}/usr/local/sbin:{0}/usr/local/bin:{0}/usr/bin", root.display());
+    assert_eq!(first_on_path(&login, "k2"), Some(pkg.clone()), "the package's script is first before the block");
+    let profile = h.join(".bash_profile");
+    let arch_profile = "#\n# ~/.bash_profile\n#\n\n[[ -f ~/.bashrc ]] && . ~/.bashrc\n";
+    fs::write(&profile, arch_profile).expect("write Arch's default .bash_profile");
+    let names = Names::compiled();
+
+    let first = names
+        .ensure_path_block_as(h, Path::new("/bin/bash"), None, Some(&login), false, &runs)
+        .expect("ensure the block");
+    assert_eq!(first, PathOutcome::BlockAdded { file: profile.clone() });
+    assert_eq!(read(&profile), format!("{arch_profile}{K2_ZSH}"), "Arch's lines stay, the block is appended");
+    let after = path_after_block(h, &login);
+    assert_eq!(first_on_path(&after, "k2"), Some(user_bin_dir(h).join("k2")), "k2 runs the link");
+    assert_eq!(first_on_path(&after, "k5"), Some(user_bin_dir(h).join("k5")), "k5 is found");
+
+    let second = names
+        .ensure_path_block_as(h, Path::new("/bin/bash"), None, Some(&login), false, &runs)
+        .expect("a second heal");
+    assert_eq!(second, PathOutcome::BlockPresent { file: profile.clone() });
+    assert_eq!(read(&profile).matches(BLOCK_BEGIN).count(), 1, "exactly one block");
+}
+
+/// The same Arch shape with the switch off: today's answer, nothing written.
+#[test]
+fn arch_with_the_switch_off_the_package_script_is_enough() {
+    let home = Home::new("arch-off");
+    let h = home.path();
+    let root = h.join("fake-root");
+    let pkg = k2_script_in(&root, "usr/bin");
+    let login = format!("{0}/usr/local/bin:{0}/usr/bin", root.display());
+    let names = Names::compiled();
+    for runs in [SCRIPT, Choice::Script { note: Some("the switch is off".into()) }] {
+        let got = names
+            .ensure_path_block_as(h, Path::new("/bin/bash"), None, Some(&login), false, &runs)
+            .expect("ensure the block");
+        assert_eq!(got, PathOutcome::FoundElsewhere { path: pkg.clone() });
+    }
+    let plain = names.ensure_path_block(h, Path::new("/bin/bash"), None, Some(&login), false).expect("ensure");
+    assert_eq!(plain, PathOutcome::FoundElsewhere { path: pkg });
+    for f in [".bash_profile", ".bash_login", ".profile"] {
+        assert!(!h.join(f).exists(), "switch off: no {f} written");
+    }
+    assert!(!user_bin_dir(h).exists(), "switch off: nothing in ~/.local/bin");
+}
+
+/// The opt-out wins with the binary too: no block.
+#[test]
+fn the_opt_out_wins_when_the_links_run_the_binary() {
+    let home = Home::new("arch-opted-out");
+    let h = home.path();
+    let root = h.join("fake-root");
+    k2_script_in(&root, "usr/bin");
+    let runs = binary_in(&root.join("usr/bin"));
+    staged_links(h, &runs);
+    fs::create_dir_all(opt_out_path(h).parent().expect("~/.k2")).expect("make ~/.k2");
+    fs::write(opt_out_path(h), "").expect("write the opt-out");
+    let login = format!("{}/usr/bin", root.display());
+    let got = Names::compiled()
+        .ensure_path_block_as(h, Path::new("/bin/bash"), None, Some(&login), false, &runs)
+        .expect("ensure the block");
+    assert_eq!(got, PathOutcome::OptedOut);
+    assert!(!h.join(".bash_profile").exists(), "no startup file written");
+}
+
+/// With the binary, a k5 binary found first on PATH is still enough (the
+/// system link already runs it): no block.
+#[test]
+fn a_k5_binary_first_on_path_is_enough_when_the_links_run_it() {
+    let home = Home::new("binary-first");
+    let h = home.path();
+    let sys = h.join("usr-local-bin");
+    fs::create_dir_all(&sys).expect("make the system bin folder");
+    let mut elf = b"\x7fELF".to_vec();
+    elf.extend_from_slice(b"\0\0K5_CLI_VERSION=1.0.0\0");
+    fs::write(sys.join("k2"), &elf).expect("write a k5 binary stand-in");
+    let runs = binary_in(&h.join("bin"));
+    let login = format!("{}:{BARE_LOGIN_PATH}", sys.display());
+    let got = Names::compiled()
+        .ensure_path_block_as(h, Path::new("/bin/zsh"), None, Some(&login), false, &runs)
+        .expect("ensure the block");
+    assert_eq!(got, PathOutcome::FoundElsewhere { path: sys.join("k2") });
+    assert!(!h.join(".zprofile").exists());
+}
+
+/// macOS after an update: an install with an old admin-made
+/// `/usr/local/bin/k2` (a script, in a folder K2 can't write) updates its
+/// bundle (the boot heal of the new bundle, switch off: today's answer, no
+/// `k5`, no block), then the owner turns the switch on (the relink runs the
+/// same heal with the binary): `~/.local/bin/k2` and `k5` run the binary
+/// and the block puts `~/.local/bin` first. The next boot's heal adds
+/// nothing.
+#[test]
+fn macos_after_an_update_the_switch_on_links_k5_and_adds_the_block_past_an_old_system_k2() {
+    let home = Home::new("mac-update");
+    let h = home.path();
+    let sys = h.join("usr-local-bin");
+    let old_k2 = k2_script_in(h, "usr-local-bin");
+    let login = format!("{}:{BARE_LOGIN_PATH}", sys.display());
+    let (cli, shim) = bundle(h, "K2", "k2", Some("k2so"));
+    let input = HealInput {
+        system_bin: Some(&sys),
+        login_path: Some(&login),
+        ..input(&cli, shim.as_deref(), "/bin/zsh")
+    };
+    let names = Names::compiled();
+    let bin = user_bin_dir(h);
+    let zprofile = h.join(".zprofile");
+    // The folder is root's on that Mac: K2 can't write it.
+    let mode = |p: &Path, m: u32| {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(p, fs::Permissions::from_mode(m)).expect("chmod");
+    };
+    mode(&sys, 0o555);
+
+    // The install before the update, and the boot heal of the updated
+    // bundle (new script bytes at the same place), both with the switch off.
+    let before = names.heal_at(h, &input, &SCRIPT).expect("the old install's heal");
+    assert_eq!(before.path, PathOutcome::FoundElsewhere { path: old_k2.clone() });
+    fs::write(&cli, "#!/bin/bash\nK2_CLI_VERSION=\"1.0.1\"\n").expect("the update's new script");
+    let updated = names.heal_at(h, &input, &SCRIPT).expect("the updated bundle's boot heal");
+    assert_eq!(updated.user_link, LinkOutcome::Current);
+    assert_eq!(updated.user_k5, None, "no k5 while the switch is off");
+    assert_eq!(updated.path, PathOutcome::FoundElsewhere { path: old_k2.clone() });
+    assert!(!zprofile.exists(), "switch off: no block, as today");
+    assert_eq!(entries(&bin), vec!["k2"]);
+
+    // The switch flips on: the relink's heal with the binary.
+    let runs = binary_in(&h.join("Applications/K2.app/Contents/MacOS"));
+    let binary = runs.binary().expect("the binary").to_path_buf();
+    let on = names.heal_at(h, &input, &runs).expect("the relink's heal");
+    assert!(matches!(on.system_link, Some(LinkOutcome::Foreign { .. })), "{:?}", on.system_link);
+    assert_eq!(on.user_link, LinkOutcome::Repointed { from: cli.clone() });
+    assert_eq!(on.user_k5, Some(LinkOutcome::Created));
+    assert_eq!(link_target(&bin.join("k2")), binary);
+    assert_eq!(link_target(&bin.join("k5")), binary);
+    assert_eq!(on.path, PathOutcome::BlockAdded { file: zprofile.clone() });
+    assert_eq!(read(&zprofile), K2_ZSH);
+    let after = path_after_block(h, &login);
+    assert_eq!(first_on_path(&after, "k2"), Some(bin.join("k2")), "k2 runs the link, not the old script");
+    assert_eq!(first_on_path(&after, "k5"), Some(bin.join("k5")));
+    assert_eq!(fs::read_to_string(&old_k2).expect("read"), "#!/bin/bash\nK2_CLI_VERSION=\"0.46.7\"\n", "the old k2 is left as it was");
+
+    // The next boot's heal: nothing new, one block.
+    let again = names.heal_at(h, &input, &runs).expect("the next boot's heal");
+    assert_eq!(again.user_link, LinkOutcome::Current);
+    assert_eq!(again.user_k5, Some(LinkOutcome::Current));
+    assert_eq!(again.path, PathOutcome::BlockPresent { file: zprofile.clone() });
+    assert_eq!(read(&zprofile), K2_ZSH, "exactly one block");
+    mode(&sys, 0o755);
+}

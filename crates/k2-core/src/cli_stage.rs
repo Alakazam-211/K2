@@ -317,14 +317,20 @@ fn stage_k2_with_fallback(
 /// back to `~/.local/bin/k2` when the canonical path isn't writable by
 /// the daemon user.
 pub fn stage_cli() -> Result<Option<PathBuf>, String> {
+    stage_cli_for(&current_choice())
+}
+
+/// [`stage_cli`] for what `choice` says the commands run, so a caller that
+/// also adds the PATH line ([`crate::cli_install::boot_path_for_staged_as`])
+/// judges it by the same choice.
+pub fn stage_cli_for(choice: &k2_client::cli_install::Choice) -> Result<Option<PathBuf>, String> {
     if !cfg!(target_os = "linux") {
         return Ok(None);
     }
     let fallback = std::env::var_os("HOME")
         .filter(|h| !h.is_empty())
         .map(|h| crate::cli_install::user_bin_dir(Path::new(&h)).join(crate::cli_install::CLI_NAME));
-    let choice = current_choice();
-    stage_cli_with_fallback_as(Path::new(INSTALL_PATH), fallback.as_deref(), StageAs::of(&choice))
+    stage_cli_with_fallback_as(Path::new(INSTALL_PATH), fallback.as_deref(), StageAs::of(choice))
 }
 
 /// What this daemon's commands run, by the owner's switch: on Linux the

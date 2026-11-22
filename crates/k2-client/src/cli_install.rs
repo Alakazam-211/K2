@@ -914,7 +914,9 @@ pub enum PathOutcome {
     /// The login PATH already has `~/.local/bin`.
     OnPath,
     /// The login PATH already runs a K2 `k2` (e.g. `/usr/local/bin/k2`, a
-    /// distro package's `/usr/bin/k2`): nothing to add.
+    /// distro package's `/usr/bin/k2`): nothing to add. When the links run
+    /// the k5 binary, only the binary found there counts: a script would
+    /// hide them, so the block is added ([`Names::ensure_path_block_as`]).
     FoundElsewhere { path: PathBuf },
     /// The block was added to this file.
     BlockAdded { file: PathBuf },
@@ -960,6 +962,19 @@ pub fn ensure_path_block(
     Names::compiled().ensure_path_block(home, shell, zdotdir, login_path, force)
 }
 
+/// [`ensure_path_block`] for links that run what `runs` says
+/// ([`Names::ensure_path_block_as`]).
+pub fn ensure_path_block_as(
+    home: &Path,
+    shell: &Path,
+    zdotdir: Option<&Path>,
+    login_path: Option<&str>,
+    force: bool,
+    runs: &Choice,
+) -> Result<PathOutcome, String> {
+    Names::compiled().ensure_path_block_as(home, shell, zdotdir, login_path, force, runs)
+}
+
 /// Remove this build's PATH block, and a retired name's, from every startup
 /// file that has one (only the lines between and including the markers)
 /// and record the opt-out so the boot heal doesn't add it back. Returns the
@@ -991,6 +1006,25 @@ impl Names {
         login_path: Option<&str>,
         force: bool,
     ) -> Result<PathOutcome, String> {
+        self.ensure_path_block_as(home, shell, zdotdir, login_path, force, &Choice::Script { note: None })
+    }
+
+    /// [`Names::ensure_path_block`] for links that run what `runs` says.
+    /// With the script, a K2 `k2` found first on the login PATH is enough
+    /// ([`PathOutcome::FoundElsewhere`]). With the k5 binary, only the k5
+    /// binary found first is: a script there (a distro package's
+    /// `/usr/bin/k2`, an old root-owned `/usr/local/bin/k2`) would run
+    /// instead of the links, so the block goes in and puts `~/.local/bin`
+    /// first. The opt-out and the one-block rules hold either way.
+    pub fn ensure_path_block_as(
+        &self,
+        home: &Path,
+        shell: &Path,
+        zdotdir: Option<&Path>,
+        login_path: Option<&str>,
+        force: bool,
+        runs: &Choice,
+    ) -> Result<PathOutcome, String> {
         let Some(kind) = shell_kind(shell) else {
             return Ok(PathOutcome::Skipped {
                 reason: format!("K2 doesn't know how to set PATH for {}", shell.display()),
@@ -1019,7 +1053,10 @@ impl Names {
         match login_path {
             Some(p) if path_list_has_dir(p, &bin) => return Ok(PathOutcome::OnPath),
             Some(p) => {
-                if let Some(found) = first_on_path(p, self.name).filter(|f| is_k2_cli_script(f)) {
+                // With the links on the k5 binary, only a k5 binary found
+                // first is enough: a script there would run instead of them.
+                let enough = |f: &PathBuf| is_k2_cli_script(f) && (runs.binary().is_none() || is_k5_binary(f));
+                if let Some(found) = first_on_path(p, self.name).filter(enough) {
                     return Ok(PathOutcome::FoundElsewhere { path: found });
                 }
             }
@@ -1268,7 +1305,7 @@ impl Names {
         };
 
         let path = if user_link.is_ours() {
-            self.ensure_path_block(home, input.shell, input.zdotdir, input.login_path, input.force_path)?
+            self.ensure_path_block_as(home, input.shell, input.zdotdir, input.login_path, input.force_path, runs)?
         } else {
             PathOutcome::Skipped {
                 reason: format!("{} isn't K2's link", user_link_path.display()),
@@ -1364,6 +1401,13 @@ pub fn boot_heal(exe: &Path) -> Option<Result<HealReport, String>> {
 /// `None` when the copy went elsewhere (`/usr/local/bin`, already on PATH).
 #[cfg(unix)]
 pub fn boot_path_for_staged(staged: &Path) -> Option<Result<PathOutcome, String>> {
+    boot_path_for_staged_as(staged, &Choice::Script { note: None })
+}
+
+/// [`boot_path_for_staged`] for a stage that put what `runs` says there
+/// ([`ensure_path_block_as`]).
+#[cfg(unix)]
+pub fn boot_path_for_staged_as(staged: &Path, runs: &Choice) -> Option<Result<PathOutcome, String>> {
     let home = crate::paths::home_dir()?;
     if staged != user_bin_dir(&home).join(CLI_NAME) {
         return None;
@@ -1371,7 +1415,7 @@ pub fn boot_path_for_staged(staged: &Path) -> Option<Result<PathOutcome, String>
     let shell = user_shell();
     let login = crate::process::login_shell_path(&shell);
     let zdot = zdotdir();
-    Some(ensure_path_block(&home, &shell, zdot.as_deref(), login.as_deref(), false))
+    Some(ensure_path_block_as(&home, &shell, zdot.as_deref(), login.as_deref(), false, runs))
 }
 
 /// chmod 0755 (best effort): a bundle copied without modes still runs.

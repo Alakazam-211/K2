@@ -118,7 +118,9 @@ pub(crate) fn handle_with(by: Option<&str>, is_post: bool, body: &[u8], relink: 
 }
 
 /// Re-point the commands now, as the boot does: the Linux stage
-/// (`k2_core::cli_stage::stage_cli`) and the macOS heal
+/// (`k2_core::cli_stage::stage_cli_for`) and, when the links run the k5
+/// binary, its PATH line (`k2_core::cli_install::boot_path_for_staged_as`),
+/// and the macOS heal
 /// (`k2_core::cli_install::boot_heal`). One line per thing it did. Never in
 /// a test build: those run as root on CI, where a stage would write the
 /// real `/usr/local/bin`.
@@ -127,8 +129,25 @@ pub fn relink() -> Value {
         return json!(["skipped: test build"]);
     }
     let mut lines: Vec<String> = Vec::new();
-    match k2_core::cli_stage::stage_cli() {
-        Ok(Some(path)) => lines.push(format!("staged {}", path.display())),
+    let choice = k2_core::cli_stage::current_choice();
+    match k2_core::cli_stage::stage_cli_for(&choice) {
+        Ok(Some(path)) => {
+            lines.push(format!("staged {}", path.display()));
+            // With the binary, a K2 script earlier on PATH (a distro
+            // package's /usr/bin/k2) would hide the links: the PATH line
+            // now, not at the next boot. With the script, as before.
+            #[cfg(unix)]
+            match choice.binary().and_then(|_| k2_core::cli_install::boot_path_for_staged_as(&path, &choice)) {
+                Some(Ok(k2_core::cli_install::PathOutcome::BlockAdded { file })) => {
+                    lines.push(format!("added the PATH line to {}", file.display()))
+                }
+                Some(Ok(k2_core::cli_install::PathOutcome::Skipped { reason })) => {
+                    lines.push(format!("PATH line not added: {reason}"))
+                }
+                Some(Err(e)) => lines.push(format!("couldn't add the PATH line: {e}")),
+                _ => {}
+            }
+        }
         Ok(None) => {}
         Err(e) => lines.push(format!("couldn't stage the command: {e}")),
     }

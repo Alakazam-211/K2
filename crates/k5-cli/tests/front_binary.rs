@@ -180,8 +180,10 @@ fn version_prints_what_the_shell_prints() {
 /// A known family's line the front hands to the shell: the first form of
 /// the native bar's ceiling (`tests/data/native_bar_ceiling.tsv`, the
 /// probes k5 still hands to bash) that the front routes to the shell, so a
-/// lane that makes one native moves the pick on by itself. It fails loudly
-/// when the ceiling holds none.
+/// lane that makes one native moves the pick on by itself. With an empty
+/// ceiling (every probe native), a help word on a line that is no help
+/// form, `mail create x --help`, which the front still hands over. It
+/// fails loudly when the front answers that too.
 fn shell_family_line() -> Vec<OsString> {
     let file = concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -192,8 +194,9 @@ fn shell_family_line() -> Vec<OsString> {
         .filter(|l| !l.starts_with('#') && !l.starts_with("class\t"))
         .filter_map(|l| l.split('\t').nth(2))
         .map(|form| form.split(' ').map(OsString::from).collect::<Vec<_>>())
+        .chain(std::iter::once(args(&["mail", "create", "x", "--help"])))
         .find(|line| k5_cli::front::route(line) == k5_cli::front::Route::Fallthrough)
-        .expect("no form of the native bar's ceiling falls through: pick another line")
+        .expect("no ceiling form nor mail create x --help falls through: pick another line")
 }
 
 /// A line the front hands to the shell, which needs no daemon: an

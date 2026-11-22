@@ -21,7 +21,7 @@
 //! the DB lock.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -70,6 +70,10 @@ struct Conn {
     lineages: Option<k2_core::compute::proto::gens::LineageStatus>,
     bytes_in: Arc<AtomicU64>,
     bytes_out: Arc<AtomicU64>,
+    /// When the last frame (not a pong) came in on this session (unix
+    /// secs; the attach time until one does). An ask the node never
+    /// answered on a session that also sent nothing else since closes it.
+    last_in: Arc<AtomicI64>,
 }
 
 #[derive(Default)]
@@ -148,6 +152,21 @@ pub fn wait_change(seen: u64, timeout: Duration) -> u64 {
 /// Is `node_id` connected right now?
 pub fn is_online(node_id: &str) -> bool {
     with_engine(|e| e.conns.contains_key(node_id))
+}
+
+/// When the node's live session last sent a frame (pongs don't count).
+pub fn last_frame_at(node_id: &str) -> Option<i64> {
+    with_engine(|e| e.conns.get(node_id).map(|c| c.last_in.load(Ordering::Relaxed)))
+}
+
+/// End the node's live session now: it is offline here at once (nothing
+/// more is placed on it), its writer stops, and the node reconnects; the
+/// welcome then lists only what this server still runs there (V47).
+fn close_session(node_id: &str) {
+    if let Some(c) = with_engine(|e| e.conns.remove(node_id)) {
+        let _ = c.tx.send(Out::Close);
+    }
+    k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncSettings, serde_json::json!({"compute": "node_offline"}));
 }
 
 /// `(online, route, live offer)` for display.
@@ -581,12 +600,23 @@ async fn run_session(
     let (tx, mut rx) = mpsc::unbounded_channel::<Out>();
     let bytes_in = Arc::new(AtomicU64::new(0));
     let bytes_out = Arc::new(AtomicU64::new(0));
+    let last_in = Arc::new(AtomicI64::new(compute::now()));
     let conn_id = with_engine(|e| {
         e.next_conn += 1;
         let id = e.next_conn;
         if let Some(old) = e.conns.insert(
             node_id.clone(),
-            Conn { conn_id: id, tx: tx.clone(), route, offer: None, statement: None, lineages: None, bytes_in: bytes_in.clone(), bytes_out: bytes_out.clone() },
+            Conn {
+                conn_id: id,
+                tx: tx.clone(),
+                route,
+                offer: None,
+                statement: None,
+                lineages: None,
+                bytes_in: bytes_in.clone(),
+                bytes_out: bytes_out.clone(),
+                last_in: last_in.clone(),
+            },
         ) {
             let _ = old.tx.send(Out::Close);
         }
@@ -605,13 +635,18 @@ async fn run_session(
             .collect();
         // Cancels still owed: a forced cancel, and (shared nodes) the "only
         // if not started" ones (V57) the node never answered.
+        let now = compute::now();
         let cancels: Vec<Frame> = active
             .iter()
             .filter_map(|j| {
                 let reason = match j.reason.as_deref() {
                     Some("cancel_requested") => "cancelled",
-                    Some(pending::CANCEL) if j.node_queued => frames::CANCEL_IF_QUEUED,
-                    Some(pending::WITHDRAW) | Some(pending::TIMEOUT) | Some(pending::RESEND) | Some(pending::PULL) if j.node_queued => frames::CANCEL_WITHDRAW,
+                    Some(marker) if j.node_queued && pending::any(Some(marker)) => {
+                        // Asked again on this session: the node gets the
+                        // whole wait to answer before K2 settles it.
+                        store::stamp_node_ask(&conn, &j.id, j.generation, marker, now, false);
+                        pending::frame_reason(marker)
+                    }
                     _ => return None,
                 };
                 Some(Frame::Cancel(Cancel { job_id: j.id.clone(), generation: j.generation as u32, reason: reason.into() }))
@@ -656,7 +691,7 @@ async fn run_session(
     let worker = tokio::task::spawn_blocking(move || frame_worker(worker_node, worker_route, conn_id, work_rx));
 
     let keys = SessionKeys { key, session, node_spki, node_id: node_id.clone() };
-    let why = pump(&mut sink, &mut source, &mut rx, &work_tx, &keys, &bytes_in, &bytes_out, Duration::from_secs(frames::PING_SECS)).await;
+    let why = pump(&mut sink, &mut source, &mut rx, &work_tx, &keys, &bytes_in, &bytes_out, &last_in, Duration::from_secs(frames::PING_SECS)).await;
     // A peer that reads nothing must not hold this session open forever.
     let _ = tokio::time::timeout(Duration::from_secs(2), sink.send(Message::Close(None))).await;
     drop(work_tx);
@@ -681,6 +716,10 @@ async fn run_session(
     }
     notify_change();
 }
+
+/// A session that brings nothing in (no frame, no pong) for this many of
+/// its pings ends `idle` (60 s at [`frames::PING_SECS`]).
+const IDLE_PINGS: u32 = 3;
 
 /// What a session seals and opens with.
 struct SessionKeys {
@@ -708,6 +747,7 @@ async fn pump<Si, St>(
     keys: &SessionKeys,
     bytes_in: &AtomicU64,
     bytes_out: &AtomicU64,
+    last_in: &AtomicI64,
     ping_every: Duration,
 ) -> &'static str
 where
@@ -750,10 +790,22 @@ where
     };
     let reader = async {
         let mut seq_in: u64 = 0;
+        // A live node answers every ping with a pong (any node: its
+        // websocket library does) and sends an offer every 30 s, so a
+        // session that brings nothing in for three pings is dead, even if
+        // our writes still succeed (a half-open link through a relay). It
+        // ends here, so the node is offline, the node-lost rule can start
+        // and the node's reattach gets the welcome's re-asks.
+        let idle = ping_every.saturating_mul(IDLE_PINGS);
         loop {
-            let Some(Ok(msg)) = source.next().await else { return "node_closed" };
+            let msg = match tokio::time::timeout(idle, source.next()).await {
+                Err(_) => return "idle",
+                Ok(Some(Ok(msg))) => msg,
+                Ok(_) => return "node_closed",
+            };
             match msg {
                 Message::Text(t) => {
+                    last_in.store(compute::now(), Ordering::Relaxed);
                     bytes_in.fetch_add(t.len() as u64, Ordering::Relaxed);
                     match frames::open(node_spki, Direction::NodeToController, session, seq_in, &t) {
                         Ok(f) => {
@@ -887,7 +939,17 @@ pub fn test_attach(node_id: &str, offer: Offer) -> TestConn {
         let id = e.next_conn;
         e.conns.insert(
             node_id.to_string(),
-            Conn { conn_id: id, tx, route: "loopback", offer: None, statement: None, lineages: None, bytes_in: Arc::new(AtomicU64::new(0)), bytes_out: Arc::new(AtomicU64::new(0)) },
+            Conn {
+                conn_id: id,
+                tx,
+                route: "loopback",
+                offer: None,
+                statement: None,
+                lineages: None,
+                bytes_in: Arc::new(AtomicU64::new(0)),
+                bytes_out: Arc::new(AtomicU64::new(0)),
+                last_in: Arc::new(AtomicI64::new(compute::now())),
+            },
         );
     });
     let conn_id = with_engine(|e| e.conns.get(node_id).map(|c| c.conn_id)).unwrap_or(0);
@@ -905,7 +967,13 @@ pub fn test_detach(node_id: &str) {
 /// a live session (blocking).
 #[doc(hidden)]
 pub fn test_frame(node_id: &str, f: Frame) {
-    let conn_id = with_engine(|e| e.conns.get(node_id).map(|c| c.conn_id)).unwrap_or(0);
+    let conn_id = with_engine(|e| {
+        e.conns.get(node_id).map(|c| {
+            c.last_in.store(compute::now(), Ordering::Relaxed);
+            c.conn_id
+        })
+    })
+    .unwrap_or(0);
     handle_frame(node_id, "loopback", conn_id, f, &mut HashMap::new(), &mut HashSet::new());
 }
 
@@ -1463,6 +1531,154 @@ fn given_back_job(node_id: &str, job: &store::JobRow) {
     notify_change();
 }
 
+/// A "give it back" ask the node hasn't answered in
+/// [`share::ASK_RESEND_SECS`]: send it once more (the node answers from
+/// its ledger, so a second ask is safe). True when it went out.
+pub fn ask_again(node_id: &str, j: &store::JobRow, ask: &store::NodeAsk, now: i64) -> bool {
+    let sent = send_cancel_if_not_started(node_id, &j.id, j.generation, pending::frame_reason(&ask.marker));
+    if sent {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::stamp_node_ask(&conn, &j.id, j.generation, &ask.marker, ask.at, true);
+        store::record_event(
+            &conn,
+            "controller",
+            "withdraw_asked_again",
+            Some(node_id),
+            Some(&j.workspace_id),
+            Some(&j.id),
+            serde_json::json!({"generation": j.generation, "asked": ask.marker, "waitedSecs": now - ask.at}),
+        );
+    }
+    sent
+}
+
+/// A "give it back" ask the node never answered within
+/// [`share::ASK_SETTLE_SECS`] while it stayed connected (the answer was
+/// lost on a busy node, or the session stopped delivering): the
+/// controller settles it itself, so a job is never stuck `assigned`.
+///
+/// - **The fence:** the job moves to a new generation (a CAS on
+///   `(job, generation)`), so every later frame of the old attempt is
+///   ignored, and a late start of it gets a stop ([`stop_stale`]).
+/// - The node gets a forced `superseded` cancel for the old attempt (a
+///   queued one ends; a started one stops).
+/// - A session that sent nothing at all since the ask is closed: the node
+///   reconnects, and the welcome lists only what this server still runs
+///   there (V47), so the old attempt can't start.
+/// - Then the job goes where the ask meant it to: a move (`--any`) to a
+///   node that can take it, a pull to the node asked, a re-send to the same
+///   node with the fresh plan, a queue timeout fails it. No retry is used
+///   and there is no health strike.
+///
+/// A person's no-force cancel (`cancel_if_queued`) is never settled for
+/// them: the job says how to end it (`--force`).
+pub fn settle_unanswered(node_id: &str, j: &store::JobRow, ask: &store::NodeAsk, now: i64) {
+    let short = compute::message::short(&j.id).to_string();
+    let quiet = last_frame_at(node_id).is_none_or(|t| t < ask.at);
+    let name = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::node_by_id(&conn, node_id).map(|n| n.name).unwrap_or_else(|| node_id.to_string())
+    };
+    if ask.marker == pending::CANCEL {
+        let detail = format!(
+            "{name} hasn't answered the cancel in {}; k2 compute cancel {short} --force stops it",
+            k2_core::compute::attempts::ask_settle_words()
+        );
+        if j.detail.as_deref() != Some(detail.as_str()) {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            store::set_job_reason(&conn, &j.id, Some(pending::CANCEL), Some(&detail));
+            store::record_event(&conn, "controller", "cancel_unanswered", Some(node_id), Some(&j.workspace_id), Some(&j.id), serde_json::json!({"generation": j.generation}));
+        }
+        if quiet {
+            close_session(node_id);
+        }
+        notify_change();
+        return;
+    }
+    let generation = j.generation;
+    let waited = now - ask.at;
+    let timeout = ask.marker == pending::TIMEOUT;
+    let row = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        // Still this ask, unanswered (an answer that landed since wins).
+        let Some(cur) = store::job_by_id(&conn, &j.id) else { return };
+        if cur.generation != generation || cur.state != "assigned" || !cur.node_queued || cur.reason.as_deref() != Some(ask.marker.as_str()) {
+            return;
+        }
+        if timeout {
+            let limit = cur.ctl.queue_timeout_secs.unwrap_or(0);
+            let detail = format!(
+                "not started within {} (it waited in {name}'s queue, and {name} didn't answer the request to give it back; it is told not to run it)",
+                compute::message::duration(limit)
+            );
+            if store::set_job_state_if(&conn, &j.id, "assigned", JobState::Failed, Some("queue_timeout"), Some(&detail), now) != Ok(true) {
+                return;
+            }
+            store::clear_node_queued(&conn, &j.id);
+            store::record_event(
+                &conn,
+                "controller",
+                "job_queue_timeout",
+                Some(node_id),
+                Some(&j.workspace_id),
+                Some(&j.id),
+                serde_json::json!({"nodeQueued": true, "unanswered": true, "waitedSecs": waited}),
+            );
+        } else {
+            if store::requeue_new_generation(&conn, &j.id, generation, k2_core::compute::attempts::next::WITHDRAW_UNANSWERED) != Ok(true) {
+                return;
+            }
+            store::record_event(
+                &conn,
+                "controller",
+                "withdraw_unanswered",
+                Some(node_id),
+                Some(&j.workspace_id),
+                Some(&j.id),
+                serde_json::json!({"generation": generation, "newGeneration": generation + 1, "asked": ask.marker, "waitedSecs": waited, "sessionClosed": quiet}),
+            );
+        }
+        // For the node's health view: it owed an answer it never gave.
+        store::record_event(&conn, "controller", "node_ask_unanswered", Some(node_id), None, None, serde_json::json!({"job": j.id, "asked": ask.marker}));
+        store::job_by_id(&conn, &j.id)
+    };
+    // In this order on the node's one channel: the stop of the old attempt
+    // goes before anything this job sends it next (a re-send's assign).
+    send_superseded(node_id, &j.id, generation as u32);
+    if quiet {
+        close_session(node_id);
+    }
+    crate::compute_place::drop_hold(&j.id);
+    let Some(row) = row else { return };
+    if timeout {
+        finalize(&j.id);
+        notify_change();
+        return;
+    }
+    match ask.marker.as_str() {
+        // `k2 compute move` asked for it: to the node asked, or placed again.
+        pending::PULL => crate::compute_move::place_pulled(node_id, j),
+        // A re-send goes back to the same node with the fresh plan.
+        pending::RESEND => kick(node_id),
+        // A move: to a node that can take it now (any node where it can
+        // wait, when its node is paused or draining); else it waits on
+        // this server, and the sweeper moves it when one can.
+        _ => {
+            let held = crate::compute_place::node_held(node_id);
+            let moved = row.ctl.any.is_some()
+                && crate::compute_place::try_move(&row, &[], held.is_some(), k2_core::compute::attempts::next::WITHDRAW_UNANSWERED).is_some();
+            if !moved {
+                kick(node_id);
+            }
+        }
+    }
+    notify_change();
+}
+
 /// The reason a re-sent job carries while it is back on this server.
 pub const RESENT: &str = "resent";
 
@@ -1492,7 +1708,7 @@ pub fn resend_queued(node_id: &str, workspace_id: &str, only: Option<&[String]>)
         {
             let db = k2_core::db::shared();
             let conn = db.lock();
-            store::set_job_reason(&conn, &j.id, Some(pending::RESEND), j.detail.as_deref());
+            store::set_pending_ask(&conn, &j.id, j.generation, pending::RESEND, j.detail.as_deref(), compute::now());
             store::record_event(&conn, "controller", "resend_asked", Some(node_id), Some(&j.workspace_id), Some(&j.id), serde_json::json!({"generation": j.generation}));
         }
         if send_cancel_if_not_started(node_id, &j.id, j.generation, frames::CANCEL_WITHDRAW) {
@@ -1862,6 +2078,11 @@ fn on_state(node_id: &str, s: StateUpdate) {
     if terminal_outputs {
         secret_artifacts_after(node_id, &s.job_id);
     }
+    // A live frame of an attempt this server already ended or moved on
+    // from (a node that starts a generation K2 settled after its ask went
+    // unanswered): stop it now, not only on the next reattach's snapshot,
+    // so the job never runs twice.
+    stop_stale(node_id, &s.job_id, s.generation, s.state);
     apply_observation(
         node_id,
         &s.job_id,
@@ -1938,7 +2159,7 @@ pub fn release_held_ends(now: Instant) {
 fn on_snapshot(node_id: &str, s: JobsSnapshot, seen: &mut HashSet<String>) {
     for j in &s.jobs {
         seen.insert(format!("{}#{}", j.job_id, j.generation));
-        stop_stale(node_id, j);
+        stop_stale(node_id, &j.job_id, j.generation, j.state);
         // `done` is published only once its log is here (the live end
         // after the log applies it).
         if end_waits_for_log(node_id, j) {
@@ -1989,23 +2210,31 @@ pub fn send_cancel_if_not_started(node_id: &str, job_id: &str, generation: i64, 
     send_to(node_id, Frame::Cancel(Cancel { job_id: job_id.into(), generation: generation as u32, reason: reason.into() }))
 }
 
-/// A node reconnected still running an attempt this controller already
-/// ended (it was `node_lost`, or a newer attempt replaced it): tell it to
-/// stop, so a lost node never keeps a slot busy for nothing.
-fn stop_stale(node_id: &str, j: &frames::LedgerJob) {
-    if j.state.is_terminal() {
+/// A node still has an attempt this controller already ended or moved on
+/// from (it was `node_lost`, a newer attempt replaced it, or its ask went
+/// unanswered and K2 settled it): tell it to stop, so a lost node never
+/// keeps a slot busy for nothing and a job never runs twice. On a
+/// reattach's snapshot and on every live state.
+fn stop_stale(node_id: &str, job_id: &str, generation: u32, state: JobState) {
+    if state.is_terminal() {
         return;
     }
     let stale = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        store::job_by_id(&conn, &j.job_id).is_some_and(|row| {
-            (row.generation as u32) > j.generation || (row.node_id != node_id) || (row.generation as u32 == j.generation && row.is_terminal())
+        store::job_by_id(&conn, job_id).is_some_and(|row| {
+            (row.generation as u32) > generation || (row.node_id != node_id) || (row.generation as u32 == generation && row.is_terminal())
         })
     };
     if stale {
-        send_to(node_id, Frame::Cancel(Cancel { job_id: j.job_id.clone(), generation: j.generation, reason: "superseded".into() }));
+        send_superseded(node_id, job_id, generation);
     }
+}
+
+/// The forced stop of one attempt (`superseded`): a queued one ends, a
+/// started one is stopped.
+fn send_superseded(node_id: &str, job_id: &str, generation: u32) -> bool {
+    send_to(node_id, Frame::Cancel(Cancel { job_id: job_id.into(), generation, reason: pshare::codes::SUPERSEDED.into() }))
 }
 
 /// Protocol 9: a node's self-statement. Kept only when it opens with the

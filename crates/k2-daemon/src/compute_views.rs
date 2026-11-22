@@ -1128,6 +1128,9 @@ fn job_event_json(e: &store::EventRow) -> Option<serde_json::Value> {
         // as job_end.
         "job_cancel" if s("state") == Some("queued") && d.get("onNode").is_none() => ("finished", Some("cancelled"), Some("cancelled")),
         "job_retry" | "job_requeue" => ("requeued", Some("queued"), s("why").or(s("reason"))),
+        // Its node never answered a request to give it back: K2 took it
+        // back itself (no retry used).
+        "withdraw_unanswered" => ("requeued", Some("queued"), Some("withdraw_unanswered")),
         "job_move" => ("moved", Some("queued"), s("why")),
         _ => return None,
     };
@@ -1673,9 +1676,13 @@ pub(crate) fn cancel_one(who: &Who, seen: &store::JobRow, queued_only: bool) -> 
         if queued_only && j.node_queued && j.reason.as_deref() != Some("cancel_requested") {
             // V57: the node answers its real state; a started job is never
             // touched without --force.
-            let sent = j.reason.as_deref() == Some(pending::CANCEL)
-                || compute_ws::send_cancel_if_not_started(&j.node_id, &j.id, j.generation, k2_core::compute::proto::frames::CANCEL_IF_QUEUED);
-            store::set_job_reason(&conn, &j.id, Some(pending::CANCEL), None);
+            let again = j.reason.as_deref() == Some(pending::CANCEL);
+            let sent = again || compute_ws::send_cancel_if_not_started(&j.node_id, &j.id, j.generation, k2_core::compute::proto::frames::CANCEL_IF_QUEUED);
+            if again {
+                store::set_job_reason(&conn, &j.id, Some(pending::CANCEL), None);
+            } else {
+                store::set_pending_ask(&conn, &j.id, j.generation, pending::CANCEL, None, compute::now());
+            }
             store::record_event(
                 &conn,
                 &by,

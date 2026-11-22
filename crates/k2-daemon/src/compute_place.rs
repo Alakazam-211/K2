@@ -2631,8 +2631,13 @@ fn sweep_node_queued(now: i64, awake: i64, nodes: &HashMap<String, NodeRow>) {
     for j in held {
         let Some(n) = nodes.get(&j.node_id) else { continue };
         let online = compute_ws::is_online(&n.id);
-        if pending::any(j.reason.as_deref()) || j.reason.as_deref() == Some("cancel_requested") {
-            continue; // waiting for the node's answer
+        if j.reason.as_deref() == Some("cancel_requested") {
+            continue; // a forced cancel: the node's end, or node-lost
+        }
+        if pending::any(j.reason.as_deref()) {
+            // Waiting for the node's answer, never forever (0.46.17).
+            chase_ask(&j, n, online, now, awake);
+            continue;
         }
         let since = if j.ctl.queued_at > 0 { j.ctl.queued_at } else { j.created_at };
         if let Some(limit) = j.ctl.queue_timeout_secs.filter(|l| *l > 0) {
@@ -2644,7 +2649,7 @@ fn sweep_node_queued(now: i64, awake: i64, nodes: &HashMap<String, NodeRow>) {
                 } else {
                     let db = k2_core::db::shared();
                     let conn = db.lock();
-                    store::set_job_reason(&conn, &j.id, Some(pending::TIMEOUT), j.detail.as_deref());
+                    store::set_pending_ask(&conn, &j.id, j.generation, pending::TIMEOUT, j.detail.as_deref(), now);
                     drop(conn);
                     compute_ws::send_cancel_if_not_started(&n.id, &j.id, j.generation, frames::CANCEL_WITHDRAW);
                 }
@@ -2682,7 +2687,7 @@ fn sweep_node_queued(now: i64, awake: i64, nodes: &HashMap<String, NodeRow>) {
         {
             let db = k2_core::db::shared();
             let conn = db.lock();
-            store::set_job_reason(&conn, &j.id, Some(pending::WITHDRAW), None);
+            store::set_pending_ask(&conn, &j.id, j.generation, pending::WITHDRAW, None, now);
             store::note_withdraw(&conn, &j.id, now);
             store::record_event(
                 &conn,
@@ -2704,6 +2709,62 @@ fn sweep_node_queued(now: i64, awake: i64, nodes: &HashMap<String, NodeRow>) {
     }
 }
 
+/// A node-queued job whose node owes an answer to a "give it back" ask
+/// (its `reason` is a pending marker). Before 0.46.17 the sweeper waited
+/// for that answer with no limit, so a lost answer left the job `assigned`
+/// forever while the node stayed connected. Now, while the node is
+/// connected, the ask goes once more after [`share::ASK_RESEND_SECS`] and
+/// is settled by the controller after [`share::ASK_SETTLE_SECS`]
+/// ([`compute_ws::settle_unanswered`]). After this machine wakes, the wait
+/// counts from the wake. An offline node is the node-lost rule's (its
+/// reattach asks again and restarts the wait).
+///
+/// A pending ask never blocks `--queue-timeout`: when the job's queue time
+/// runs out while a move, pull or re-send waits, the ask becomes the
+/// timeout's (same send time), so it fails at the latest when that ask is
+/// settled.
+fn chase_ask(j: &JobRow, n: &NodeRow, online: bool, now: i64, awake: i64) {
+    let t = retry::tuning();
+    let marker = j.reason.as_deref().unwrap_or_default();
+    let since = if j.ctl.queued_at > 0 { j.ctl.queued_at } else { j.created_at };
+    let timeout_due = j.ctl.queue_timeout_secs.filter(|l| *l > 0).is_some_and(|limit| now - since >= limit && now - awake >= 2 * t.replace_after_secs);
+    if timeout_due && matches!(marker, pending::WITHDRAW | pending::RESEND | pending::PULL) {
+        if !online {
+            // The node can't start it while we're not attached, and drops
+            // it on the next attach (V47): fail it now.
+            fail_queue_timeout(j, &n.name, now);
+            return;
+        }
+        let at = store::NodeAsk::of(j).map_or(now, |a| a.at);
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            store::set_job_reason(&conn, &j.id, Some(pending::TIMEOUT), j.detail.as_deref());
+            store::stamp_node_ask(&conn, &j.id, j.generation, pending::TIMEOUT, at, false);
+        }
+        drop_hold(&j.id);
+        compute_ws::send_cancel_if_not_started(&n.id, &j.id, j.generation, frames::CANCEL_WITHDRAW);
+        return;
+    }
+    if !online {
+        return;
+    }
+    // An ask from before 0.46.17 (or one whose stamp a write lost) is
+    // counted from now.
+    let Some(ask) = store::NodeAsk::of(j).cloned() else {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::stamp_node_ask(&conn, &j.id, j.generation, marker, now, false);
+        return;
+    };
+    let waited = now - ask.at.max(awake);
+    if waited >= share::ASK_SETTLE_SECS {
+        compute_ws::settle_unanswered(&n.id, j, &ask, now);
+    } else if waited >= share::ASK_RESEND_SECS && !ask.resent {
+        compute_ws::ask_again(&n.id, j, &ask, now);
+    }
+}
+
 /// A waiting job's mover state for its own workspace (jobs, get, queue):
 /// pinned or auto, and for an auto job the withdraws that bounced in a row
 /// and when the mover may try again. `None`: not waiting.
@@ -2721,7 +2782,14 @@ pub fn move_state_json(j: &JobRow, now: i64) -> Option<serde_json::Value> {
     let note = if pulling {
         crate::compute_move::pulling_note(j)
     } else if moving {
-        "moving: its node was asked to give it back for a node that can start it now".to_string()
+        match store::NodeAsk::of(j) {
+            Some(a) => format!(
+                "moving: its node was asked to give it back {} ago, for a node that can start it now; K2 takes it back itself at {}",
+                compute::message::duration(now - a.at),
+                k2_core::compute::attempts::ask_settle_words()
+            ),
+            None => "moving: its node was asked to give it back for a node that can start it now".to_string(),
+        }
     } else if j.withdraws > 0 && wait > 0 {
         format!("tried to move it {} time(s) in a row; the node it was meant for filled first; next try in {wait}s", j.withdraws)
     } else {

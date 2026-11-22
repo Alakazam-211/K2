@@ -61,7 +61,28 @@ pub mod pending {
     pub fn any(reason: Option<&str>) -> bool {
         matches!(reason, Some(WITHDRAW) | Some(TIMEOUT) | Some(CANCEL) | Some(RESEND) | Some(PULL))
     }
+
+    /// The cancel frame's reason that carries the ask: a person's no-force
+    /// cancel is `if_queued`, every "give it back" is `withdraw`.
+    pub fn frame_reason(marker: &str) -> &'static str {
+        if marker == CANCEL {
+            crate::compute::proto::frames::CANCEL_IF_QUEUED
+        } else {
+            crate::compute::proto::frames::CANCEL_WITHDRAW
+        }
+    }
 }
+
+/// A "give it back" ask the node hasn't answered in this long (while it
+/// stays connected) is sent once more: the node answers from its ledger,
+/// so a second ask is safe (an answer can be lost on a busy node).
+pub const ASK_RESEND_SECS: i64 = 60;
+/// …and after this long the controller settles it itself: the old
+/// `(job, generation)` is fenced (a new generation), the node is told to
+/// stop it (`superseded`), and the job goes where the ask meant it to.
+/// A person's no-force cancel is never settled for them: it only says how
+/// to end it (`--force`).
+pub const ASK_SETTLE_SECS: i64 = 180;
 
 /// This session's share on the node, when the node sent one.
 pub fn view(offer: &Offer) -> Option<&ShareView> {

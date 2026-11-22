@@ -42,10 +42,17 @@ pub struct AttemptRecord {
     pub started_at: Option<i64>,
     pub ended_at: i64,
     /// The row's state and reason when it ended (`interrupted` +
-    /// `node_update`; `assigned` + `withdraw_resend` for a re-send).
+    /// `node_update`). A generation that ended while K2 waited for the
+    /// node's answer to an ask keeps the outcome here (`assigned` +
+    /// `withdrawn`, `withdraw_unanswered`, `node_lost`, `resent`), never
+    /// the pending marker; the marker is in `asked`.
     pub state: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// The pending ask (`withdraw_requested`, `withdraw_resend`,
+    /// `pull_requested`, …) the node was answering when it ended.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asked: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -76,10 +83,19 @@ pub mod next {
     pub const NODE_LOST: &str = "node_lost";
     /// Its node no longer had it in its queue.
     pub const NOT_ON_NODE: &str = "not_on_node";
+    /// `k2 compute move` took it back from a shared node's queue.
+    pub const PULLED_BACK: &str = "pulled_back";
+    /// Its node never answered a request to give it back
+    /// ([`super::super::share::ASK_SETTLE_SECS`]): K2 took it back itself
+    /// and told the node not to run it.
+    pub const WITHDRAW_UNANSWERED: &str = "withdraw_unanswered";
 }
 
 /// The record of `j`'s current generation, as it ends now.
 pub fn record_of(j: &JobRow, next: &str, now: i64) -> AttemptRecord {
+    // A pending ask is never an end: the record says what came of it.
+    let asked = j.reason.clone().filter(|r| super::share::pending::any(Some(r)));
+    let reason = if asked.is_some() { Some(next.to_string()) } else { j.reason.clone() };
     AttemptRecord {
         attempt: j.attempt,
         generation: j.generation,
@@ -88,7 +104,8 @@ pub fn record_of(j: &JobRow, next: &str, now: i64) -> AttemptRecord {
         started_at: j.started_at,
         ended_at: j.ended_at.unwrap_or(now),
         state: j.state.clone(),
-        reason: j.reason.clone(),
+        reason,
+        asked,
         detail: j.detail.clone(),
         exit_code: j.exit_code,
         next: next.to_string(),
@@ -140,6 +157,9 @@ pub fn attach_outputs(ctl: &mut JobCtl, node_id: &str, generation: i64, o: Outpu
 pub fn end_words(state: &str, reason: Option<&str>, started: bool, node: &str) -> String {
     let terminal = matches!(state, "done" | "failed" | "cancelled" | "timeout" | "interrupted" | "unknown");
     if !terminal {
+        if reason == Some(next::WITHDRAW_UNANSWERED) {
+            return format!("{node} didn't answer a request to give it back within {}", ask_settle_words());
+        }
         return if started { format!("it was running on {node}") } else { format!("it never started on {node}") };
     }
     let r = reason.unwrap_or("");
@@ -184,8 +204,33 @@ pub fn next_words(next: &str, node: &str, then: Option<&str>) -> String {
         next::WITHDRAWN => format!("taken back from {node}'s queue before it started, to move it{} (no retry used)", then.map(|t| format!(" to {t}")).unwrap_or_default()),
         next::NODE_LOST => format!("{node} went offline before it started it; placed again{elsewhere} (no retry used)"),
         next::NOT_ON_NODE => format!("{node} no longer had it in its queue; placed again{elsewhere} (no retry used)"),
+        next::PULLED_BACK => format!("taken back from {node}'s queue as asked (k2 compute move); placed again{elsewhere} (no retry used)"),
+        next::WITHDRAW_UNANSWERED => format!(
+            "{node} didn't answer a request to give it back within {}; K2 took it back ({node} is told not to run it) and placed it again{elsewhere} (no retry used)",
+            ask_settle_words()
+        ),
         other => format!("placed again{elsewhere} ({other})"),
     }
+}
+
+/// A move in a few words, for a follower's `moved:` line (`None`: not a
+/// move, a retry). `then` = the node the next generation went to.
+pub fn move_words(next: &str, node: &str, then: Option<&str>) -> Option<String> {
+    let to = then.map(|t| format!(" for {t}")).unwrap_or_default();
+    Some(match next {
+        next::WITHDRAWN => format!("{node} gave it back from its queue before it started{to}"),
+        next::RESENT => format!("{node} gave it back from its queue to take the grant's new caps"),
+        next::NODE_LOST => format!("{node} went offline before it started it"),
+        next::NOT_ON_NODE => format!("{node} no longer had it in its queue"),
+        next::PULLED_BACK => format!("taken back from {node}'s queue as asked (k2 compute move)"),
+        next::WITHDRAW_UNANSWERED => format!("{node} didn't answer a request to give it back within {}; K2 took it back ({node} is told not to run it)", ask_settle_words()),
+        _ => return None,
+    })
+}
+
+/// "3 min" ([`super::share::ASK_SETTLE_SECS`]).
+pub fn ask_settle_words() -> String {
+    format!("{} min", super::share::ASK_SETTLE_SECS / 60)
 }
 
 /// The `--artifact` side of one attempt for `get`: `not_asked` (no
@@ -248,10 +293,14 @@ pub fn list_json(j: &JobRow, names: &HashMap<String, String>) -> Vec<serde_json:
             "endedAt": r.ended_at,
             "state": r.state,
             "reason": r.reason,
+            "asked": r.asked,
             "detail": r.detail,
             "exitCode": r.exit_code,
             "why": end_words(&r.state, r.reason.as_deref(), r.started_at.is_some(), &node),
             "next": next_words(&r.next, &node, then.as_deref()),
+            "nextCode": r.next,
+            // A move (no retry used) in a few words; null for a retry.
+            "moved": move_words(&r.next, &node, then.as_deref()),
             "log": log_json(&j.id, r.generation, &logs_cmd),
             "artifacts": artifacts_json(asked, r.started_at.is_some(), true, r.outputs.as_ref(), r.reason.as_deref(), &node, &fetch),
         }));
@@ -403,6 +452,46 @@ mod tests {
         assert!(n.starts_with("retried automatically on k2n12") && n.contains("--retries 0"), "{n}");
         assert!(next_words(next::RESENT, "k2n7", None).contains("new caps"));
         assert!(next_words(next::WITHDRAWN, "k2n7", Some("k2n9")).contains("to move it to k2n9"));
+    }
+
+    #[test]
+    fn an_unanswered_withdraw_is_said_plainly_and_is_a_move() {
+        let n = next_words(next::WITHDRAW_UNANSWERED, "k2n7", Some("k2n9"));
+        assert_eq!(
+            n,
+            "k2n7 didn't answer a request to give it back within 3 min; K2 took it back (k2n7 is told not to run it) and placed it again on k2n9 (no retry used)"
+        );
+        assert_eq!(end_words("assigned", Some(next::WITHDRAW_UNANSWERED), false, "k2n7"), "k2n7 didn't answer a request to give it back within 3 min");
+        let m = move_words(next::WITHDRAW_UNANSWERED, "k2n7", Some("k2n9")).expect("a move");
+        assert!(m.starts_with("k2n7 didn't answer") && !m.contains("infrastructure"), "{m}");
+        assert_eq!(move_words(next::WITHDRAWN, "k2n9-vin", Some("k2n10-vin")).as_deref(), Some("k2n9-vin gave it back from its queue before it started for k2n10-vin"));
+        for moved in [next::WITHDRAWN, next::NODE_LOST, next::NOT_ON_NODE, next::RESENT, next::PULLED_BACK] {
+            assert!(move_words(moved, "a", None).is_some(), "{moved} is a move");
+        }
+        for retried in [next::RETRY_AUTO, next::RETRY_ASKED] {
+            assert_eq!(move_words(retried, "a", None), None, "{retried} is a retry");
+        }
+    }
+
+    #[test]
+    fn a_record_keeps_the_outcome_not_the_pending_marker() {
+        crate::tunnel::test_support::with_temp_home(a_record_keeps_the_outcome);
+    }
+
+    fn a_record_keeps_the_outcome() {
+        let mut j = row(1, 1);
+        j.state = "assigned".into();
+        j.reason = Some(crate::compute::share::pending::WITHDRAW.into());
+        let r = record_of(&j, next::WITHDRAW_UNANSWERED, 50);
+        assert_eq!((r.reason.as_deref(), r.asked.as_deref(), r.next.as_str()), (Some("withdraw_unanswered"), Some("withdraw_requested"), "withdraw_unanswered"));
+        j.reason = Some(crate::compute::share::pending::RESEND.into());
+        let r = record_of(&j, next::RESENT, 50);
+        assert_eq!((r.reason.as_deref(), r.asked.as_deref()), (Some("resent"), Some("withdraw_resend")));
+        // A real end keeps its reason, with no ask.
+        j.state = "interrupted".into();
+        j.reason = Some("node_update".into());
+        let r = record_of(&j, next::RETRY_AUTO, 50);
+        assert_eq!((r.reason.as_deref(), r.asked), (Some("node_update"), None));
     }
 
     #[test]

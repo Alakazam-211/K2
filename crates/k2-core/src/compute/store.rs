@@ -726,6 +726,36 @@ pub struct JobCtl {
     /// `pull_requested` while the answer travels). Controller-only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pull: Option<PullAsk>,
+    /// The "give it back" ask a shared node hasn't answered yet (its
+    /// `reason` is a [`super::share::pending`] marker): which one, for
+    /// which generation, and since when. The sweeper asks once more after
+    /// [`super::share::ASK_RESEND_SECS`] and settles it itself after
+    /// [`super::share::ASK_SETTLE_SECS`]. Cleared when the generation ends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_ask: Option<NodeAsk>,
+}
+
+/// An ask a shared node owes an answer to (0.46.17).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeAsk {
+    /// The pending marker it was asked under (`withdraw_requested`, …).
+    pub marker: String,
+    /// The generation it was asked for.
+    pub generation: i64,
+    /// When it was asked (or asked again on a reattach).
+    pub at: i64,
+    /// It was sent once more after [`super::share::ASK_RESEND_SECS`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub resent: bool,
+}
+
+impl NodeAsk {
+    /// The ask that goes with `j`'s current marker and generation, if any.
+    pub fn of(j: &JobRow) -> Option<&NodeAsk> {
+        let marker = j.reason.as_deref()?;
+        j.ctl.node_ask.as_ref().filter(|a| a.marker == marker && a.generation == j.generation)
+    }
 }
 
 /// A pull-back asked by `k2 compute move` (0.46.17).
@@ -1412,6 +1442,25 @@ pub fn assign_if_queued(conn: &Connection, id: &str, at: i64) -> Result<bool, St
     set_job_state_if(conn, id, "queued", JobState::Assigned, None, None, at)
 }
 
+/// A "give it back" ask goes to the node: the job's `reason` becomes the
+/// pending `marker` (with `detail`) and the ask is stamped `at` for
+/// generation `generation` ([`JobCtl::node_ask`]), so the sweeper can ask
+/// again and settle it if the node never answers.
+pub fn set_pending_ask(conn: &Connection, id: &str, generation: i64, marker: &str, detail: Option<&str>, at: i64) {
+    set_job_reason(conn, id, Some(marker), detail);
+    stamp_node_ask(conn, id, generation, marker, at, false);
+}
+
+/// Stamp (or re-stamp) the ask a node owes for `id` (see [`set_pending_ask`]).
+pub fn stamp_node_ask(conn: &Connection, id: &str, generation: i64, marker: &str, at: i64, resent: bool) {
+    let Some(j) = job_by_id(conn, id) else { return };
+    let mut ctl = j.ctl.clone();
+    ctl.node_ask = Some(NodeAsk { marker: marker.to_string(), generation, at, resent });
+    if ctl != j.ctl {
+        let _ = set_job_ctl(conn, id, &ctl);
+    }
+}
+
 pub fn set_job_reason(conn: &Connection, id: &str, reason: Option<&str>, detail: Option<&str>) {
     let _ = conn.execute(
         "UPDATE compute_jobs SET reason = ?2, detail = ?3 WHERE id = ?1",
@@ -1730,6 +1779,8 @@ fn with_attempt_record(conn: &Connection, id: &str, next: &str) -> Result<Option
     let plan = j.plan().ok_or_else(|| "stored plan unreadable".to_string())?;
     let mut ctl = j.ctl.clone();
     super::attempts::push(&mut ctl, super::attempts::record_of(&j, next, super::now()));
+    // An ask the node owed for this generation ends with it.
+    ctl.node_ask = None;
     plan_json_with(&plan, &ctl).map(Some)
 }
 
@@ -1886,6 +1937,7 @@ pub const JOB_STREAM_KINDS: &[&str] = &[
     "job_retry",
     "job_requeue",
     "job_move",
+    "withdraw_unanswered",
 ];
 
 /// Job events after `after` (an event id; negative = the newest `limit`),

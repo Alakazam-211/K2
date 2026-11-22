@@ -575,6 +575,346 @@ async fn any_moves_only_after_a_confirmed_withdraw_under_a_new_generation() {
     compute_ws::test_detach("mv-b");
 }
 
+// ── an ask the node never answers (0.46.17) ──────────────────────────
+
+/// This machine has been awake long before `now` (the sweeper's deadlines
+/// count from a wake; the ticker notes it, these tests call it).
+fn awake_long_before(now: i64) {
+    k2_daemon::compute_place::note_tick(now - 100_000);
+    k2_daemon::compute_place::note_tick(now - 50_000);
+}
+
+/// Back to a machine that woke now (as the lost-node test leaves it).
+fn awake_now() {
+    k2_daemon::compute_place::note_tick(k2_core::compute::now());
+}
+
+const SUPERSEDED: &str = "superseded";
+
+/// The bite (jobs stuck `assigned` / `withdraw_requested` while their node
+/// stays connected, 2026-11-21): the node never answers the mover's
+/// withdraw. It is asked once more at 60 s; at 180 s K2 settles it itself:
+/// the old generation is fenced, the node is told `superseded`, the job
+/// goes to the node that can start it, with no retry used. The node sent
+/// nothing since the ask, so its session is closed. A late answer and a
+/// late start of the old generation change nothing (the start gets a
+/// stop): the job never runs twice. Before 0.46.17 the job stayed on A,
+/// `withdraw_requested`, for good.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn withdraw_never_answered_is_settled_and_fenced() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let ws = seed_ws(&env, "unanswered");
+    active_node("ua-a", "ua-a", "linux", &ws);
+    active_node("ua-b", "ua-b", "linux", &ws);
+    let mut a = compute_ws::test_attach("ua-a", offer(&["artifacts", "stall", FEATURE_QUEUE], 1, Some(view(Role::Tenant, 1, 0))));
+    let job = queued_any_on(d.port, &ws, "ua-a", &mut a).await;
+    let mut b = compute_ws::test_attach("ua-b", solo(0, 2));
+    // The ask goes out after A's last frame (A says nothing more).
+    let t0 = k2_core::compute::now() + 2;
+    awake_long_before(t0);
+    k2_daemon::compute_place::sweep(t0);
+    assert_eq!(cancels(&a.frames()), vec![(job.clone(), 1, CANCEL_WITHDRAW.to_string())], "withdraw first");
+    let ask = row(&job).ctl.node_ask.expect("the ask is stamped");
+    assert_eq!((ask.marker.as_str(), ask.generation, ask.at, ask.resent), ("withdraw_requested", 1, t0, false));
+    // Not answered. Within a minute: nothing more.
+    k2_daemon::compute_place::sweep(t0 + 30);
+    assert!(cancels(&a.frames()).is_empty(), "no second withdraw while the first is young");
+    // After a minute: asked once more, and only once.
+    k2_daemon::compute_place::sweep(t0 + 61);
+    assert_eq!(cancels(&a.frames()), vec![(job.clone(), 1, CANCEL_WITHDRAW.to_string())], "asked once more");
+    assert_eq!(events("withdraw_asked_again", &job), 1);
+    k2_daemon::compute_place::sweep(t0 + 120);
+    assert!(cancels(&a.frames()).is_empty(), "only once more");
+    let rj = row(&job);
+    assert_eq!((rj.node_id.as_str(), rj.state.as_str(), rj.reason.as_deref(), rj.generation), ("ua-a", "assigned", Some("withdraw_requested"), 1), "still waiting: {rj:?}");
+    let r = get(d.port, "/cli/compute/jobs/get", OWNER, &format!("job={job}")).await;
+    let note = j(&r)["move"]["note"].as_str().map(str::to_string).unwrap_or_else(|| panic!("a move note: {}", r.body));
+    assert!(note.contains("K2 takes it back itself at 3 min"), "{note}");
+    // After three minutes: K2 settles it.
+    k2_daemon::compute_place::sweep(t0 + 181);
+    let rj = row(&job);
+    assert_eq!((rj.node_id.as_str(), rj.generation, rj.attempt, rj.ctl.retries_used), ("ua-b", 2, 1, 0), "settled to B under generation 2: {rj:?}");
+    assert!(!rj.is_terminal(), "{rj:?}");
+    assert!(rj.ctl.failed_attempts.is_empty(), "no retry, no failed attempt");
+    assert_eq!(rj.ctl.node_ask, None, "the ask ended with its generation");
+    assert_eq!(cancels(&a.frames()), vec![(job.clone(), 1, SUPERSEDED.to_string())], "A is told not to run generation 1");
+    assert_eq!(assigns(&b.frames()).iter().map(|x| (x.0.clone(), x.1)).collect::<Vec<_>>(), vec![(job.clone(), 2)]);
+    assert_eq!(events("withdraw_unanswered", &job), 1);
+    assert_eq!(events("withdraw", &job), 0, "never a confirmed withdraw");
+    let rec = rj.ctl.attempts.last().expect("the attempt record").clone();
+    assert_eq!(
+        (rec.generation, rec.next.as_str(), rec.reason.as_deref(), rec.asked.as_deref()),
+        (1, "withdraw_unanswered", Some("withdraw_unanswered"), Some("withdraw_requested")),
+        "the outcome, not the pending marker: {rec:?}"
+    );
+    assert!(k2_daemon::compute_place::set_aside_until("ua-a", t0 + 181).is_none(), "no health strike");
+    assert!(!compute_ws::is_online("ua-a"), "A sent nothing since the ask: its session is closed");
+    // The follower's words for generation 1: a move, never a failure.
+    let r = get(d.port, "/cli/compute/jobs/logs", OWNER, &format!("job={job}&generation=1")).await;
+    let l = j(&r);
+    let first = &l["attempts"][0];
+    assert_eq!((first["generation"].as_i64(), first["nextCode"].as_str()), (Some(1), Some("withdraw_unanswered")), "{l}");
+    let moved = first["moved"].as_str().unwrap_or_else(|| panic!("a move: {l}"));
+    assert_eq!(moved, "ua-a didn't answer a request to give it back within 3 min; K2 took it back (ua-a is told not to run it)");
+    let next = first["next"].as_str().unwrap();
+    assert!(next.ends_with("placed it again on ua-b (no retry used)") && !next.contains("infrastructure"), "{next}");
+
+    // A comes back. Its late answer for generation 1 changes nothing.
+    let mut a = compute_ws::test_attach("ua-a", offer(&["artifacts", "stall", FEATURE_QUEUE], 0, Some(view(Role::Tenant, 0, 0))));
+    compute_ws::test_frame("ua-a", state(&job, 1, JobState::Cancelled, Some("withdrawn"), None));
+    let rj = row(&job);
+    assert_eq!((rj.node_id.as_str(), rj.generation, rj.state.as_str()), ("ua-b", 2, "assigned"));
+    // A late start of generation 1 gets a stop; the job stays B's.
+    compute_ws::test_frame("ua-a", state(&job, 1, JobState::Running, None, None));
+    assert_eq!(cancels(&a.frames()), vec![(job.clone(), 1, SUPERSEDED.to_string())], "a stale start is stopped at once");
+    let rj = row(&job);
+    assert_eq!((rj.node_id.as_str(), rj.generation, rj.state.as_str(), rj.started_at), ("ua-b", 2, "assigned", None), "never running on A: {rj:?}");
+    compute_ws::test_frame("ua-b", state(&job, 2, JobState::Running, None, None));
+    assert_eq!(row(&job).state, "running");
+    compute_ws::test_frame("ua-b", state(&job, 2, JobState::Done, None, None));
+    let rj = row(&job);
+    assert_eq!((rj.state.as_str(), rj.node_id.as_str(), rj.generation), ("done", "ua-b", 2));
+    assert_eq!(events("job_start", &job), 1, "it ran once");
+    compute_ws::test_detach("ua-a");
+    compute_ws::test_detach("ua-b");
+    awake_now();
+}
+
+/// Never twice, on a live session: the node keeps sending (its answer to
+/// the ask alone is lost), so its session stays open after K2 settles the
+/// ask. When it then starts the old generation, the live `running` gets a
+/// `superseded` stop at once (not only on a reattach's snapshot), and the
+/// job's row stays with the new generation.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_late_start_of_a_settled_attempt_is_stopped_and_never_runs_twice() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let ws = seed_ws(&env, "latestart");
+    active_node("ls-a", "ls-a", "linux", &ws);
+    active_node("ls-b", "ls-b", "linux", &ws);
+    let mut a = compute_ws::test_attach("ls-a", offer(&["artifacts", "stall", FEATURE_QUEUE], 1, Some(view(Role::Tenant, 1, 0))));
+    let job = queued_any_on(d.port, &ws, "ls-a", &mut a).await;
+    let mut b = compute_ws::test_attach("ls-b", solo(0, 2));
+    let t0 = k2_core::compute::now();
+    awake_long_before(t0);
+    k2_daemon::compute_place::sweep(t0);
+    assert_eq!(cancels(&a.frames()), vec![(job.clone(), 1, CANCEL_WITHDRAW.to_string())]);
+    // A still talks (a queue position), but its answer never comes.
+    compute_ws::test_frame("ls-a", state(&job, 1, JobState::Queued, Some("node_queued"), Some(QueuePos { pos: 1, of: Some(2), eta_secs: None, eta_p90_secs: None, blocked_by: None })));
+    assert_eq!(row(&job).reason.as_deref(), Some("withdraw_requested"), "a position keeps the ask");
+    k2_daemon::compute_place::sweep(t0 + 61);
+    assert_eq!(cancels(&a.frames()).len(), 1, "asked once more");
+    k2_daemon::compute_place::sweep(t0 + 181);
+    let rj = row(&job);
+    assert_eq!((rj.node_id.as_str(), rj.generation, rj.ctl.retries_used), ("ls-b", 2, 0), "{rj:?}");
+    assert_eq!(cancels(&a.frames()), vec![(job.clone(), 1, SUPERSEDED.to_string())]);
+    assert!(compute_ws::is_online("ls-a"), "A kept talking: its session stays");
+    assert_eq!(assigns(&b.frames()).len(), 1);
+    // A had started generation 1 meanwhile (its `running` was lost too)
+    // and says so now: told to stop, at once.
+    compute_ws::test_frame("ls-a", state(&job, 1, JobState::Running, None, None));
+    assert_eq!(cancels(&a.frames()), vec![(job.clone(), 1, SUPERSEDED.to_string())], "a live stale start gets a stop");
+    let rj = row(&job);
+    assert_eq!((rj.node_id.as_str(), rj.generation, rj.state.as_str(), rj.started_at), ("ls-b", 2, "assigned", None), "{rj:?}");
+    // Its stop lands: nothing changes here either.
+    compute_ws::test_frame("ls-a", state(&job, 1, JobState::Cancelled, Some(SUPERSEDED), None));
+    assert_eq!((row(&job).node_id.as_str(), row(&job).generation, row(&job).state.as_str()), ("ls-b", 2, "assigned"));
+    assert_eq!(events("job_start", &job), 0, "generation 1 never counted as the job's start");
+    compute_ws::test_detach("ls-a");
+    compute_ws::test_detach("ls-b");
+    awake_now();
+}
+
+/// An answer that comes between the second ask and the deadline is the
+/// plain move it always was: one generation step, no `superseded`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_answer_before_the_deadline_is_a_plain_move() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let ws = seed_ws(&env, "lateok");
+    active_node("lo-a", "lo-a", "linux", &ws);
+    active_node("lo-b", "lo-b", "linux", &ws);
+    let mut a = compute_ws::test_attach("lo-a", offer(&["artifacts", "stall", FEATURE_QUEUE], 1, Some(view(Role::Tenant, 1, 0))));
+    let job = queued_any_on(d.port, &ws, "lo-a", &mut a).await;
+    let mut b = compute_ws::test_attach("lo-b", solo(0, 2));
+    let t0 = k2_core::compute::now() + 2;
+    awake_long_before(t0);
+    k2_daemon::compute_place::sweep(t0);
+    k2_daemon::compute_place::sweep(t0 + 61);
+    assert_eq!(cancels(&a.frames()).len(), 2, "the ask and the second ask");
+    compute_ws::test_frame("lo-a", state(&job, 1, JobState::Cancelled, Some("withdrawn"), None));
+    let rj = row(&job);
+    assert_eq!((rj.node_id.as_str(), rj.generation, rj.ctl.retries_used), ("lo-b", 2, 0), "{rj:?}");
+    let rec = rj.ctl.attempts.last().expect("record").clone();
+    assert_eq!((rec.next.as_str(), rec.reason.as_deref(), rec.asked.as_deref()), ("withdrawn", Some("withdrawn"), Some("withdraw_requested")));
+    k2_daemon::compute_place::sweep(t0 + 181);
+    assert!(cancels(&a.frames()).is_empty(), "no superseded: nothing to settle");
+    assert_eq!(row(&job).generation, 2, "one step, no double");
+    assert_eq!(assigns(&b.frames()).len(), 1);
+    assert_eq!((events("withdraw", &job), events("withdraw_unanswered", &job)), (1, 0));
+    assert!(compute_ws::is_online("lo-a"));
+    compute_ws::test_detach("lo-a");
+    compute_ws::test_detach("lo-b");
+    awake_now();
+}
+
+/// A pending ask never blocks `--queue-timeout`: the queue time runs out
+/// while the mover's withdraw waits; the ask becomes the timeout's, and
+/// when the node never answers it the job ends `failed/queue_timeout`
+/// and the node is told `superseded`. Before 0.46.17 the pending marker
+/// skipped the timeout check, for good.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_pending_withdraw_does_not_block_the_queue_timeout() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let ws = seed_ws(&env, "qtimeout");
+    active_node("qt-a", "qt-a", "linux", &ws);
+    active_node("qt-b", "qt-b", "linux", &ws);
+    let mut a = compute_ws::test_attach("qt-a", offer(&["artifacts", "stall", FEATURE_QUEUE], 1, Some(view(Role::Tenant, 1, 0))));
+    let job = queued_any_on(d.port, &ws, "qt-a", &mut a).await;
+    let t0 = k2_core::compute::now() + 2;
+    awake_long_before(t0);
+    // Its queue time (10 min) runs out 10 s after the mover asks.
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let mut ctl = store::job_by_id(&conn, &job).expect("job").ctl;
+        ctl.queue_timeout_secs = Some(600);
+        ctl.queued_at = t0 - 590;
+        store::set_job_ctl(&conn, &job, &ctl).expect("ctl");
+    }
+    let _b = compute_ws::test_attach("qt-b", solo(0, 2));
+    k2_daemon::compute_place::sweep(t0);
+    assert_eq!(cancels(&a.frames()), vec![(job.clone(), 1, CANCEL_WITHDRAW.to_string())]);
+    assert_eq!(row(&job).reason.as_deref(), Some("withdraw_requested"));
+    // B fills; no answer from A. The queue time runs out: the ask is the timeout's now.
+    compute_ws::test_frame("qt-b", Frame::Offer(solo(2, 2)));
+    k2_daemon::compute_place::sweep(t0 + 11);
+    let rj = row(&job);
+    assert_eq!((rj.state.as_str(), rj.reason.as_deref()), ("assigned", Some("withdraw_timeout")), "{rj:?}");
+    assert_eq!(rj.ctl.node_ask.as_ref().map(|a| (a.marker.as_str(), a.at)), Some(("withdraw_timeout", t0)), "the ask keeps its send time");
+    assert_eq!(cancels(&a.frames()), vec![(job.clone(), 1, CANCEL_WITHDRAW.to_string())]);
+    // Never answered: failed/queue_timeout at the deadline, A told to drop it.
+    k2_daemon::compute_place::sweep(t0 + 181);
+    let rj = row(&job);
+    assert_eq!((rj.state.as_str(), rj.reason.as_deref(), rj.node_queued, rj.generation), ("failed", Some("queue_timeout"), false, 1), "{rj:?}");
+    assert!(rj.detail.as_deref().is_some_and(|d| d.contains("didn't answer")), "{rj:?}");
+    let c = cancels(&a.frames());
+    assert_eq!(c.last(), Some(&(job.clone(), 1, SUPERSEDED.to_string())), "{c:?}");
+    assert_eq!(events("job_queue_timeout", &job), 1);
+    compute_ws::test_detach("qt-a");
+    compute_ws::test_detach("qt-b");
+    awake_now();
+}
+
+/// A person's no-force cancel is never settled for them (it could be a
+/// job they still want if it started): after the deadline it says how to
+/// end it. A re-send (a raised grant) the node never answers goes back to
+/// the same node, the stop of the old generation first, then the new one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_unanswered_cancel_says_force_and_a_resend_goes_back_in_order() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let ws = seed_ws(&env, "cancelresend");
+    active_node("cr-1", "cr-1", "linux", &ws);
+    let mut n = compute_ws::test_attach("cr-1", offer(&["artifacts", "stall", FEATURE_QUEUE, FEATURE_SERVERS], 1, Some(view(Role::Tenant, 1, 0))));
+    let mut jobs = Vec::new();
+    for _ in 0..2 {
+        let r = run(d.port, OWNER, json!({"node": "cr-1", "workspace": ws.id, "detach": true})).await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        jobs.push(j(&r)["job"]["id"].as_str().unwrap().to_string());
+    }
+    assert_eq!(assigns(&n.frames()).len(), 2);
+    for (i, id) in jobs.iter().enumerate() {
+        compute_ws::test_frame("cr-1", state(id, 1, JobState::Queued, Some("node_queued"), Some(QueuePos { pos: i as u32 + 1, of: Some(3), eta_secs: None, eta_p90_secs: None, blocked_by: None })));
+    }
+    let (cancelled, resent) = (jobs[0].clone(), jobs[1].clone());
+    let r = post(d.port, "/cli/compute/jobs/cancel", OWNER, json!({"job": cancelled, "ifState": "queued"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(d.port, "/cli/compute/grants/set", OWNER, json!({"node": "cr-1", "workspace": ws.id, "maxParallel": 3})).await;
+    assert_eq!(j(&r)["resent"], 1, "{}", r.body);
+    assert_eq!(
+        cancels(&n.frames()),
+        vec![(cancelled.clone(), 1, CANCEL_IF_QUEUED.to_string()), (resent.clone(), 1, CANCEL_WITHDRAW.to_string())]
+    );
+    let t0 = k2_core::compute::now();
+    awake_long_before(t0);
+    // The node keeps talking (an offer), but answers neither.
+    compute_ws::test_frame("cr-1", Frame::Offer(fresh(offer(&["artifacts", "stall", FEATURE_QUEUE, FEATURE_SERVERS], 1, Some(view(Role::Tenant, 1, 2))))));
+    let _ = n.frames();
+    k2_daemon::compute_place::sweep(t0 + 61);
+    let mut again = cancels(&n.frames());
+    again.sort();
+    let mut want = vec![(cancelled.clone(), 1, CANCEL_IF_QUEUED.to_string()), (resent.clone(), 1, CANCEL_WITHDRAW.to_string())];
+    want.sort();
+    assert_eq!(again, want, "each asked once more, as it was asked");
+    k2_daemon::compute_place::sweep(t0 + 181);
+    // The cancel: not settled, it says how to end it.
+    let rc = row(&cancelled);
+    assert_eq!((rc.state.as_str(), rc.reason.as_deref(), rc.generation), ("assigned", Some("cancel_if_queued"), 1), "{rc:?}");
+    let short = &cancelled[..8];
+    assert_eq!(rc.detail.as_deref(), Some(format!("cr-1 hasn't answered the cancel in 3 min; k2 compute cancel {short} --force stops it").as_str()));
+    // The re-send: back to the same node, the stop of generation 1 first.
+    let order: Vec<(String, String, u32)> = n
+        .frames()
+        .into_iter()
+        .filter_map(|f| match f {
+            Frame::Cancel(c) => Some(("cancel".to_string(), c.job_id, c.generation)),
+            Frame::Assign(a) => Some(("assign".to_string(), a.fence.job_id, a.fence.generation)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(order, vec![("cancel".to_string(), resent.clone(), 1), ("assign".to_string(), resent.clone(), 2)], "never a cancel of the cancel-asked job; the re-send in order");
+    let rr = row(&resent);
+    assert_eq!((rr.node_id.as_str(), rr.generation, rr.ctl.retries_used), ("cr-1", 2, 0), "{rr:?}");
+    assert_eq!(rr.ctl.attempts.last().map(|r| (r.next.as_str(), r.asked.as_deref())), Some(("withdraw_unanswered", Some("withdraw_resend"))));
+    assert!(compute_ws::is_online("cr-1"), "the node kept talking");
+    compute_ws::test_detach("cr-1");
+    awake_now();
+}
+
+/// `k2 compute move --to` on a job in a node's own queue, and the node
+/// never answers: at the deadline K2 takes it back itself and pins it to
+/// the node asked, as a given-back pull would be; the first node is told
+/// `superseded`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_unanswered_pull_is_settled_to_the_node_asked() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let ws = seed_ws(&env, "pullquiet");
+    active_node("pq-a", "pq-a", "linux", &ws);
+    active_node("pq-b", "pq-b", "linux", &ws);
+    let mut a = compute_ws::test_attach("pq-a", offer(&["artifacts", "stall", FEATURE_QUEUE], 1, Some(view(Role::Tenant, 1, 0))));
+    let mut b = compute_ws::test_attach("pq-b", solo(0, 2));
+    let r = run(d.port, OWNER, json!({"node": "pq-a", "workspace": ws.id})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let job = j(&r)["job"]["id"].as_str().unwrap().to_string();
+    let sent = assigns(&a.frames());
+    assert_eq!(sent.iter().map(|x| x.0.clone()).collect::<Vec<_>>(), vec![job.clone()], "pinned: into A's queue at once");
+    compute_ws::test_frame("pq-a", state(&job, sent[0].1, JobState::Queued, Some("node_queued"), None));
+    let r = post(d.port, "/cli/compute/jobs/move", OWNER, json!({"job": job, "to": "pq-b"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(cancels(&a.frames()), vec![(job.clone(), 1, CANCEL_WITHDRAW.to_string())]);
+    assert_eq!(row(&job).reason.as_deref(), Some("pull_requested"));
+    let t0 = k2_core::compute::now();
+    awake_long_before(t0);
+    k2_daemon::compute_place::sweep(t0 + 61);
+    assert_eq!(cancels(&a.frames()), vec![(job.clone(), 1, CANCEL_WITHDRAW.to_string())], "asked once more");
+    assert!(assigns(&b.frames()).is_empty(), "nothing moves before the deadline");
+    k2_daemon::compute_place::sweep(t0 + 181);
+    let rj = row(&job);
+    assert_eq!((rj.node_id.as_str(), rj.generation, rj.ctl.retries_used, rj.ctl.any.is_none()), ("pq-b", 2, 0, true), "pinned to B: {rj:?}");
+    assert!(rj.ctl.pull.is_none(), "the pull is done: {rj:?}");
+    assert_eq!(cancels(&a.frames()), vec![(job.clone(), 1, SUPERSEDED.to_string())]);
+    assert_eq!(assigns(&b.frames()).iter().map(|x| (x.0.clone(), x.1)).collect::<Vec<_>>(), vec![(job.clone(), 2)]);
+    assert_eq!((events("withdraw_unanswered", &job), events("pull", &job)), (1, 1));
+    assert_eq!(rj.ctl.attempts.last().map(|r| (r.next.as_str(), r.asked.as_deref())), Some(("withdraw_unanswered", Some("pull_requested"))));
+    compute_ws::test_detach("pq-a");
+    compute_ws::test_detach("pq-b");
+    awake_now();
+}
+
 /// V56: a node lost while holding a queued job: a new generation, no retry
 /// used, no health strike. V57/V47 answer-owed cancels end there too.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

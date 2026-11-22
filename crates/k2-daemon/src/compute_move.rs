@@ -704,7 +704,7 @@ fn pull(who: &Who, j: &store::JobRow, mut ctl: store::JobCtl, to: Option<(&store
         if !store::set_waiting_job_ctl(&conn, &j.id, j.generation, &ctl).map_err(|e| no("internal", 500, e))? {
             return Err(no(pshare::codes::JOB_STARTED, 409, format!("job {short} started (or ended) just now; it stays where it is")));
         }
-        store::set_job_reason(&conn, &j.id, Some(pending::PULL), None);
+        store::set_pending_ask(&conn, &j.id, j.generation, pending::PULL, None, now);
         store::record_event(
             &conn,
             &who.label(),
@@ -746,13 +746,25 @@ pub(crate) fn pulling_note(j: &store::JobRow) -> String {
 /// and no health strike, then pinned to the node asked, or placed again
 /// (auto: to a node that starts it now, else held on this server).
 pub(crate) fn pulled_back(node_id: &str, job: &store::JobRow) {
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        if store::requeue_new_generation(&conn, &job.id, job.generation, k2_core::compute::attempts::next::PULLED_BACK) != Ok(true) {
+            return;
+        }
+    }
+    place_pulled(node_id, job);
+}
+
+/// A pulled job is back on this server under its new generation (the
+/// node gave it back, or K2 took it back itself when the node never
+/// answered): pinned to the node asked, or placed again. `job` is the row
+/// as it was before the requeue (its pull ask).
+pub(crate) fn place_pulled(node_id: &str, job: &store::JobRow) {
     let ask = job.ctl.pull.clone().unwrap_or_default();
     let row = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        if store::requeue_new_generation(&conn, &job.id, job.generation, "pulled_back") != Ok(true) {
-            return;
-        }
         let Some(mut r) = store::job_by_id(&conn, &job.id) else { return };
         r.ctl.pull = None;
         let _ = store::set_job_ctl(&conn, &r.id, &r.ctl);

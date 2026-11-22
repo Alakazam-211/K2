@@ -3070,7 +3070,7 @@ fn supersede_older(ws: &Ws, key: &str, new_job: &store::JobRow) -> Vec<String> {
             if cur.state == "assigned" && cur.node_queued && !asked_already {
                 store::set_job_ctl(&conn, &cur.id, &ctl).ok()?;
                 let sent = compute_ws::send_cancel_if_not_started(&cur.node_id, &cur.id, cur.generation, k2_core::compute::proto::frames::CANCEL_IF_QUEUED);
-                store::set_job_reason(&conn, &cur.id, Some(pending::CANCEL), None);
+                store::set_pending_ask(&conn, &cur.id, cur.generation, pending::CANCEL, None, compute::now());
                 event(if sent { "asked_the_node" } else { "asked_when_the_node_is_back" });
                 return Some(false);
             }

@@ -301,6 +301,7 @@ fn relay_conn(node_id: &str, features: &[&str]) -> mpsc::UnboundedReceiver<Out> 
                 lineages: None,
                 bytes_in: Arc::new(AtomicU64::new(0)),
                 bytes_out: Arc::new(AtomicU64::new(0)),
+                last_in: Arc::new(AtomicI64::new(compute::now())),
             },
         );
     });
@@ -425,7 +426,8 @@ async fn the_session_keeps_reading_while_its_writes_wait() {
         }
         n
     });
-    let server = pump(&mut sink, &mut source, &mut rx, &work_tx, &keys, &bytes_in, &bytes_out, Duration::from_secs(3600));
+    let last_in = AtomicI64::new(0);
+    let server = pump(&mut sink, &mut source, &mut rx, &work_tx, &keys, &bytes_in, &bytes_out, &last_in, Duration::from_secs(3600));
     tokio::select! {
         why = server => panic!("the session ended early: {why}"),
         _ = node => unreachable!("the node never stops on its own"),

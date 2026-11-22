@@ -37,7 +37,9 @@ fn a_refused_sandbox_passes_through_unchanged() {
         "a plain spawn",
         &["spawn", "--command", "ls"],
         &[],
-        vec![ok(r#"{"success":true,"terminalId":"t1","agentName":"agent-a","sandbox":"none"}"#)],
+        vec![ok(
+            r#"{"success":true,"terminalId":"t1","agentName":"agent-a","sandbox":"none"}"#,
+        )],
         owner_and_port,
         0,
         1,

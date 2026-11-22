@@ -633,6 +633,30 @@ fn db_connect_read_only() {
             CARD_UP,
             2,
         ),
+        // The card's login is in the ask's body, never ?assign=.
+        one(
+            "db connect --read-only: --assign before db, in the body",
+            &[
+                "--assign",
+                "ada",
+                "db",
+                "connect",
+                "jobs",
+                "--read-only",
+                "--why",
+                "verify",
+            ],
+            200,
+            CARD_UP,
+            2,
+        ),
+        one(
+            "db connect --read-only --assign=: in the body",
+            &["db", "connect", "jobs", "--assign=ada", "--read-only"],
+            200,
+            CARD_UP,
+            2,
+        ),
         one(
             "db connect --read-only: --reason is the why",
             &[
@@ -756,16 +780,22 @@ fn db_connect_read_only() {
             &["db", "connect", "jobs", "--wait", "--read-only"],
             1,
         ),
-        // `k2 app`'s pre-scan (app-wallet.sh _app_take_assign) takes
-        // --assign before db connect reads it, so app-db.sh's "--assign goes
-        // with --read-only" refusal is never reached: a plain App connect,
-        // with ?assign= on its POST. Copied from the shell as it is.
-        one(
-            "db connect --new --assign: the pre-scan takes it",
+        // `k2 app`'s pre-scan (app-wallet.sh _app_take_assign) hands db
+        // connect's own --assign back to it, wherever it is on the line.
+        stop(
+            "db connect --new --assign: no --read-only",
             &["db", "connect", "jobs", "--new", "--assign", "ada"],
-            200,
-            PASS,
-            0,
+            1,
+        ),
+        stop(
+            "db connect --new: --assign before db, no --read-only",
+            &["--assign", "ada", "db", "connect", "jobs", "--new"],
+            1,
+        ),
+        stop(
+            "database connect --db --assign=: no --read-only",
+            &["database", "connect", "jobs", "--db", "d", "--assign=ada"],
+            1,
         ),
         stop(
             "db connect --why with no value",

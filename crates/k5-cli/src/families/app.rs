@@ -803,7 +803,8 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         return bare(args);
     }
     // `_app_take_assign`, first in `cmd_app`: `--assign` before `--` is
-    // the requests' ([`assign`]), never the verb's. Its usage line comes
+    // the requests' ([`assign`]), never the verb's (`db connect`'s own goes
+    // back to its words). Its usage line comes
     // after the settings and gates, as a verb's own usage line does.
     let all: Vec<&str> = args.iter().map(|a| a.to_str()).collect::<Option<_>>()?;
     let (assign, kept) = match assign::take(all.get(1..).unwrap_or_default()) {

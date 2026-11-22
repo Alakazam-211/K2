@@ -11,6 +11,10 @@
 //!   help word stays, so the verb prints its own page. With no value, or
 //!   an empty one, it is the usage line on stderr and exit 2, before
 //!   anything is sent.
+//! - `db connect` (and `database connect`) has its own `--assign`: the
+//!   `--read-only` ask's body field, refused without `--read-only`. There
+//!   the value goes back to the verb's words as `--assign <v>` (at the
+//!   end), and no `?assign=` is added.
 //! - [`path`] is `_compute_assign_path`: a POST to `/cli/app/…` carries
 //!   the value as `?assign=` (`&assign=` when the path has a query
 //!   already), quoted as `urlencode` quotes it. A GET and every other path
@@ -41,8 +45,8 @@ pub struct Taken<'a> {
 
 /// `_app_take_assign "$@"` on the words after `app`.
 pub fn take<'a>(words: &[&'a str]) -> Result<Taken<'a>, Stop> {
-    let mut assign = String::new();
-    let mut kept = Vec::with_capacity(words.len());
+    let mut assign: Option<&'a str> = None;
+    let mut kept = Vec::with_capacity(words.len() + 2);
     let mut i = 0;
     while let Some(&w) = words.get(i) {
         match w {
@@ -57,8 +61,8 @@ pub fn take<'a>(words: &[&'a str]) -> Result<Taken<'a>, Stop> {
                     i += 2;
                     continue;
                 }
-                Some(v) if !v.is_empty() => {
-                    assign = (*v).to_string();
+                Some(&v) if !v.is_empty() => {
+                    assign = Some(v);
                     i += 2;
                     continue;
                 }
@@ -66,14 +70,21 @@ pub fn take<'a>(words: &[&'a str]) -> Result<Taken<'a>, Stop> {
             },
             _ => match w.strip_prefix("--assign=") {
                 Some("") => return Err(usage(USAGE_EQ)),
-                Some(v) => assign = v.to_string(),
+                Some(v) => assign = Some(v),
                 None => kept.push(w),
             },
         }
         i += 1;
     }
+    // `db connect`'s own --assign goes back to the verb.
+    if matches!(kept.first(), Some(&("db" | "database"))) && kept.get(1) == Some(&"connect") {
+        if let Some(v) = assign.take() {
+            kept.push("--assign");
+            kept.push(v);
+        }
+    }
     Ok(Taken {
-        assign,
+        assign: assign.unwrap_or_default().to_string(),
         words: kept,
     })
 }
@@ -150,6 +161,28 @@ mod tests {
         );
         // `--assignee` is no --assign.
         assert_eq!(take(&["x", "--assignee"]), taken("", &["x", "--assignee"]));
+        // `db connect` keeps its own: the value goes back to its words.
+        assert_eq!(
+            take(&["db", "connect", "j", "--read-only", "--assign", "ada"]),
+            taken("", &["db", "connect", "j", "--read-only", "--assign", "ada"])
+        );
+        assert_eq!(
+            take(&["--assign", "ada", "database", "connect", "j", "--new"]),
+            taken("", &["database", "connect", "j", "--new", "--assign", "ada"])
+        );
+        assert_eq!(
+            take(&["db", "connect", "j", "--assign=ada", "--read-only"]),
+            taken("", &["db", "connect", "j", "--read-only", "--assign", "ada"])
+        );
+        // Help still wins there, and the other db verbs are the requests'.
+        assert_eq!(
+            take(&["db", "connect", "j", "--assign", "-h"]),
+            taken("", &["db", "connect", "j", "-h"])
+        );
+        assert_eq!(
+            take(&["db", "check", "j", "--assign", "ada"]),
+            taken("ada", &["db", "check", "j"])
+        );
     }
 
     #[test]

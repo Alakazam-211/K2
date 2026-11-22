@@ -859,13 +859,17 @@ mod tests {
         assert_eq!(chain.lines().count(), 4);
         assert!(has_shared_server(&chain, "500"));
         let plain = "    1     0 init\n  400     1 /bin/zsh\n  500   400 /bin/bash k2";
-        assert!(!has_shared_server(&ps_chain(plain, "500").expect("a chain"), "500"));
+        assert!(!has_shared_server(
+            &ps_chain(plain, "500").expect("a chain"),
+            "500"
+        ));
         assert_eq!(ps_chain("garbage\n  500 400 x", "500"), None);
         assert_eq!(ps_chain("  500   400 x", "500"), None);
         assert_eq!(ps_chain("", "500"), None);
         let detached = "    1     0 init\n  300     1 codex app-server\n  500   300 bash";
         assert!(has_shared_server(detached, "500"));
-        let private = "    1     0 init\n  290     1 codex\n  300   290 codex app-server\n  500   300 bash";
+        let private =
+            "    1     0 init\n  290     1 codex\n  300   290 codex app-server\n  500   300 bash";
         assert!(!has_shared_server(private, "500"));
     }
 }

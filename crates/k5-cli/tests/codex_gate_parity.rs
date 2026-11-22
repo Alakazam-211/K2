@@ -73,11 +73,9 @@ impl Env {
                 codex,
                 ("K2_CODEX_NO_DAEMON", "1"),
             ]),
-            Env::Host => with_passport(&[
-                ("K2_HOOK_SOCK", "{sock}"),
-                codex,
-                ("K2_HOST", "127.0.0.1"),
-            ]),
+            Env::Host => {
+                with_passport(&[("K2_HOOK_SOCK", "{sock}"), codex, ("K2_HOST", "127.0.0.1")])
+            }
             Env::Matching => with_passport(&[
                 ("K2_HOOK_SOCK", "{sock}"),
                 codex,
@@ -125,9 +123,19 @@ fn row(
         ..case("codex gate", args, &[], vec![], setup, code, requests)
     };
     rig.check(&c);
-    // The last run (the binary with no python3) handed the line to the
-    // shell only when the binary did: the gate needs no python3.
-    let handed = k5_cli::fallthrough::cache_dir(&rig.k2home).exists();
+    // The last run had no python3 on PATH: a line handed to the shell
+    // ends there with the missing-Python line (the rig holds it to that),
+    // a line the binary answers prints what it printed with one.
+    let words: Vec<std::ffi::OsString> = rig
+        .argv(&c)
+        .into_iter()
+        .map(std::ffi::OsString::from)
+        .collect();
+    let no_python = k5_cli::fallthrough::FrontError::NoPython {
+        noun: k5_cli::fallthrough::noun(&words),
+    }
+    .to_string();
+    let handed = String::from_utf8_lossy(&rig.raw(Side::NoPython3).1).contains(&no_python);
     assert_eq!(
         handed,
         by == By::Shell,
@@ -163,12 +171,7 @@ fn port_on_disk(r: &Rig) {
 /// A command line refused under every unconfirmed setting, with and
 /// without the owner token on disk.
 fn refused(verb: &'static str, args: &'static [&'static str]) {
-    for env in [
-        Env::Sock,
-        Env::Pane,
-        Env::OtherMarker,
-        Env::NoDaemonSet,
-    ] {
+    for env in [Env::Sock, Env::Pane, Env::OtherMarker, Env::NoDaemonSet] {
         for owner in [false, true] {
             row(verb, args, env, owner, 3, 0, By::Binary);
         }
@@ -254,5 +257,13 @@ fn explain_a_kit_id() {
 fn the_matching_marker_lets_it_by() {
     row("whoami", &[], Env::Matching, false, 0, 1, By::Binary);
     row("wiki", &["index"], Env::Matching, false, 0, 1, By::Binary);
-    row("wiki", &["index"], Env::PaneMatching, false, 0, 1, By::Binary);
+    row(
+        "wiki",
+        &["index"],
+        Env::PaneMatching,
+        false,
+        0,
+        1,
+        By::Binary,
+    );
 }

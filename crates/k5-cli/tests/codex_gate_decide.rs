@@ -138,7 +138,11 @@ fn run_row(gate: &std::path::Path, row: &Row) {
         String::from_utf8_lossy(&o.stdout).into_owned(),
         String::from_utf8_lossy(&o.stderr).into_owned(),
     );
-    let want = (Some(code), stdout, String::from_utf8_lossy(&stderr).into_owned());
+    let want = (
+        Some(code),
+        stdout,
+        String::from_utf8_lossy(&stderr).into_owned(),
+    );
     assert_eq!(
         got, want,
         "{:?} {:?} (walk {:?}): the binary decided {d:?}",
@@ -259,10 +263,8 @@ fn every_family_decides_as_the_shell() {
         "study",
         "no-such-verb",
     ]);
-    let sessions: [&[(&'static str, &str)]; 2] = [
-        &[("K2_HOOK_SOCK", "/s")],
-        &[("K2_PANE_ID", "p1")],
-    ];
+    let sessions: [&[(&'static str, &str)]; 2] =
+        [&[("K2_HOOK_SOCK", "/s")], &[("K2_PANE_ID", "p1")]];
     let mut n = 0;
     for w in &words {
         for sess in sessions {
@@ -273,10 +275,8 @@ fn every_family_decides_as_the_shell() {
                     &[Anc::Clear]
                 };
                 for &anc in ancs {
-                    let mut env: Vec<(&'static str, String)> = sess
-                        .iter()
-                        .map(|(k, v)| (*k, v.to_string()))
-                        .collect();
+                    let mut env: Vec<(&'static str, String)> =
+                        sess.iter().map(|(k, v)| (*k, v.to_string())).collect();
                     env.push(("CODEX_THREAD_ID", "t1".into()));
                     env.push(("K2_HOOK_TOKEN", "sessA.x".into()));
                     if let Some(m) = marker {

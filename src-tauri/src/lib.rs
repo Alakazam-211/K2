@@ -1011,6 +1011,7 @@ pub fn run() {
             // installed CLI reports no heal needed and stays quiet.
             // Browser Tab (S1): registry for child browser webviews.
             crate::commands::browser_webviews::init(&app.handle().clone());
+            crate::commands::browser_page_layers::init(&app.handle().clone());
 
             // Native voice (Sew 0.10.4): one log line per noise removal change,
             // so a call's log says whether it ran DeepFilterNet3.
@@ -1487,6 +1488,10 @@ pub fn run() {
             // Embedded Browser Tab (S1 spike) — child-webview lifecycle.
             commands::browser_webviews::browser_create,
             commands::browser_webviews::browser_set_bounds,
+            // Browser underlay (macOS, behind browserLayering): the whole
+            // PageLayers set per window, and the switch back to legacy.
+            commands::browser_page_layers::browser_set_page_layers,
+            commands::browser_page_layers::browser_underlay_clear,
             commands::browser_webviews::browser_set_visible,
             commands::browser_webviews::browser_navigate,
             commands::browser_webviews::browser_current_url,

@@ -174,10 +174,16 @@ objc2-core-graphics = { version = "0.3.2", default-features = false, features = 
 objc2-quartz-core = { version = "0.3.2", default-features = false, features = [
     "std",
     "CALayer",
+    # Browser underlay: one transaction per page-layers set.
+    "CATransaction",
 ] }
 # Same tao tauri-runtime-wry uses (path-patched to third_party/tao). Only for
 # `tao::platform::macos::set_event_fault_hook` (src/event_faults.rs).
 tao = "0.37"
+# Same wry tauri-runtime-wry uses (path-patched to third_party/wry). Only for
+# `wry::underlay`, K2's macOS browser underlay (commands/browser_page_layers.rs).
+# No features of its own: tauri-runtime-wry picks them.
+wry = { version = "0.57", default-features = false }
 log = "0.4"
 # Traffic-light positioning + observers (commands/traffic_lights.rs): objc2
 # sends are `C-unwind`, so `objc2::exception::catch` can stop an ObjC

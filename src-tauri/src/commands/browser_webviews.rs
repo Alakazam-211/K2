@@ -314,6 +314,10 @@ mod real {
     /// with label … already exists` (Email Link Gmail OAuth re-open, double
     /// create from ResizeObserver).
     fn reap_browser_label(app: &AppHandle, key: &str, label: &str) {
+        // Underlay: the page gets its tracking areas back and leaves the
+        // routing before it closes (posted ahead of the close).
+        #[cfg(target_os = "macos")]
+        super::super::browser_page_layers::mac::forget_page(app, key);
         if let Some(old) = views(app).0.lock().unwrap().remove(key) {
             let _ = old.close();
         }
@@ -616,6 +620,7 @@ mod real {
         parent_window: Option<String>,
         appearance: Option<Appearance>,
         design: Option<bool>,
+        layering: Option<String>,
     ) -> Result<(), String> {
         // Serialize all creates so two concurrent creates for the same label
         // cannot both pass "label free" and race add_child.
@@ -625,6 +630,19 @@ mod real {
         let parent = resolve_parent(parent_window.as_deref()).to_string();
         let key = registry_key(&parent, &item_id);
         let label = tauri_label(&parent, &item_id);
+        // Underlay (macOS, `browserLayering`): new pages go in below the UI
+        // view. A failure here leaves the page on top (legacy) and is
+        // logged; the renderer's first layer set reports it.
+        #[cfg(target_os = "macos")]
+        let underlay = layering.as_deref() == Some("underlay");
+        #[cfg(target_os = "macos")]
+        if layering.is_some() {
+            if let Err(e) = underlay_insert_mode(&app, &parent, underlay).await {
+                log::warn!("[browser-underlay] {parent:?}: {e}; this page opens on the legacy path");
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = layering;
         // A Design tab (D-A4: a Browser tab with a `design` field) gets the
         // picker; a plain Browser tab never does. Older renderers send no
         // flag: plain Browser.
@@ -775,8 +793,33 @@ mod real {
         if let Some(appearance) = &appearance {
             apply_appearance(&view, appearance);
         }
+        #[cfg(target_os = "macos")]
+        if underlay {
+            super::super::browser_page_layers::mac::forget_page(&app, &key);
+            if let Err(e) = super::super::browser_page_layers::mac::cache_page(&view, &key).await {
+                log::warn!("[browser-underlay] {key:?}: {e}");
+            }
+        }
         views(&app).0.lock().unwrap().insert(key, view);
         Ok(())
+    }
+
+    /// Where this window's new pages go: below the UI view (underlay) or on
+    /// top (legacy). Awaited, so the add_child after it sees it.
+    #[cfg(target_os = "macos")]
+    async fn underlay_insert_mode(app: &AppHandle, parent: &str, below: bool) -> Result<(), String> {
+        use super::super::browser_page_layers::mac;
+        mac::cache_ui(app, parent).await?;
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let p = parent.to_string();
+        app.run_on_main_thread(move || {
+            let _ = tx.send(mac::set_children_below(&p, below));
+        })
+        .map_err(|e| e.to_string())?;
+        match tokio::time::timeout(std::time::Duration::from_secs(5), rx).await {
+            Ok(Ok(r)) => r,
+            _ => Err("the main thread did not answer".into()),
+        }
     }
 
     /// Bounds re-assert from the renderer bridge. Also called unconditionally
@@ -918,6 +961,11 @@ mod real {
     enum HistoryStep {
         Back,
         Forward,
+    }
+
+    /// The page for a registry key (`parent\0item`), for the underlay.
+    pub fn view_by_key(app: &AppHandle, key: &str) -> Option<Webview> {
+        views(app).0.lock().unwrap().get(key).cloned()
     }
 
     fn browser_view(
@@ -1393,8 +1441,14 @@ mod stub {
         _parent_window: Option<String>,
         _appearance: Option<super::Appearance>,
         _design: Option<bool>,
+        _layering: Option<String>,
     ) -> Result<(), String> {
         Err(OFF.into())
+    }
+
+    /// No pages in this build.
+    pub fn view_by_key(_app: &AppHandle, _key: &str) -> Option<tauri::Webview> {
+        None
     }
     #[tauri::command]
     pub async fn browser_set_appearance(

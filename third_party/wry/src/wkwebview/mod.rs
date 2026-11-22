@@ -10,6 +10,8 @@ mod navigation;
 mod proxy;
 #[cfg(target_os = "macos")]
 mod synthetic_mouse_events;
+#[cfg(target_os = "macos")]
+pub mod underlay;
 mod util;
 
 #[cfg(target_os = "ios")]
@@ -669,7 +671,12 @@ impl InnerWebView {
       #[cfg(target_os = "macos")]
       {
         if is_child {
-          ns_view.addSubview(&webview);
+          // K2 underlay: in an underlay window a new page goes straight in
+          // below the UI view, never on top and then moved.
+          match underlay::insert_below_target(&ns_view) {
+            Some(ui) => ns_view.addSubview_positioned_relativeTo(&webview, underlay::BELOW_MODE, Some(&ui)),
+            None => ns_view.addSubview(&webview),
+          }
         } else {
           // inject the webview into the window
           let ns_window = ns_view.window().unwrap();

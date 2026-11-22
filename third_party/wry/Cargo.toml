@@ -296,6 +296,9 @@ features = [
     "NSMenu",
     "NSGraphics",
     "NSScreen",
+    # K2 underlay (src/wkwebview/underlay): hover gates and the exit event.
+    "NSTrackingArea",
+    "NSGraphicsContext",
 ]
 default-features = false
 
@@ -375,6 +378,10 @@ features = [
     "NSValue",
     "NSRange",
     "NSRunLoop",
+    # K2 underlay: subviews / tracking-area lists, the in-place sort.
+    "NSArray",
+    "NSObjCRuntime",
+    "NSGeometry",
 ]
 default-features = false
 

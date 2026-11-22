@@ -390,6 +390,9 @@ pub(crate) mod wkwebview;
 use wkwebview::*;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use wkwebview::{PrintMargin, PrintOptions, WryWebView};
+/// K2 fork: the macOS browser underlay (routing, masks, hover gates).
+#[cfg(target_os = "macos")]
+pub use wkwebview::underlay;
 
 #[cfg(target_os = "windows")]
 pub(crate) mod webview2;

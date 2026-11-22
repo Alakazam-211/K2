@@ -560,3 +560,32 @@ fn compute_follow_a_move() {
         rig.check(&c);
     }
 }
+
+/// The move line names the command by the brand's name (in a build with
+/// `K2_BRAND_DIR=brand/xy` it says `xy`), never a typed `k2` or `k5`.
+#[test]
+fn the_move_line_says_the_brand_s_name() {
+    let rig = Rig::new(VERB, "movebrand");
+    let cli = k2_client::brand::CLI_NAME;
+    let c = case(
+        "brand",
+        &["wait", "abcd1234", "--follow"],
+        &[],
+        vec![
+            ok(r#"{"chunks":[],"end":true,"cursor":1,"generation":1,"attempts":[{"attempt":1,"generation":1,"moved":"node-a gave it back"}],"job":{"state":"queued","short":"abcd1234","node":"node-b","attempt":1,"generation":2}}"#),
+            ok(r#"{"chunks":[],"end":true,"cursor":1,"generation":2,"job":{"state":"done","short":"abcd1234","node":"node-b","exitCode":0,"generation":2}}"#),
+        ],
+        owner_and_port,
+        0,
+        2,
+    );
+    let (out, log) = rig.binary(&c, false);
+    assert_eq!(
+        out.stderr,
+        format!(
+            "[{cli} compute] moved: node-a gave it back; now on node-b (not a failure, no retry used)\n[{cli} compute] exit 0 \u{b7} {cli} compute logs abcd1234 --failures\n"
+        )
+    );
+    assert_eq!(out.code, Some(0));
+    assert_eq!(log.len(), 2, "two polls, nothing else sent: {log:?}");
+}

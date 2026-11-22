@@ -1899,9 +1899,13 @@ fn daemon_life_lines_say_the_brand_s_name() {
 const FIX_VERSION: &str = "0.46.9";
 /// The stand-in daemon binary.
 const FIX_BIN: &str = "#!/bin/sh\necho stand-in k2-daemon\n";
-/// The update keys, U2 then U3 (the shell's `_DAEMON_UPDATE_PUBKEYS`).
-const U2: &str = k5_cli::families::daemon::install::UPDATE_KEYS[0];
-const U3: &str = k5_cli::families::daemon::install::UPDATE_KEYS[1];
+/// The update keys, U2 then U3 (the shell's `_DAEMON_UPDATE_PUBKEYS`): the
+/// first primary and the last key, the offline backup (one key in a brand
+/// that has only one).
+const U2: &str = k5_cli::families::daemon::install::UPDATE_KEYS[0].public_key_b64;
+const U3: &str = k5_cli::families::daemon::install::UPDATE_KEYS
+    [k5_cli::families::daemon::install::UPDATE_KEYS.len() - 1]
+    .public_key_b64;
 
 fn tagged_manifest(v: &str) -> String {
     format!(

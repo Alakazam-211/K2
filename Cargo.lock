@@ -5315,6 +5315,7 @@ dependencies = [
  "flate2",
  "k2-brand",
  "k2-client",
+ "k2-release-keys",
  "libc",
  "rcgen 0.13.2",
  "rustls",

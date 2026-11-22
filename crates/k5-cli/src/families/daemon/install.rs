@@ -56,13 +56,12 @@ use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-/// The update keys (`_DAEMON_UPDATE_PUBKEYS`): minisign key lines, U2
-/// (primary) then U3 (offline backup). A copy of
-/// `k2_release_keys::UPDATER_KEYS`; a test pins it to the shell's line.
-pub const UPDATE_KEYS: [&str; 2] = [
-    "RWRpK+630xTKdopKvlpWVqvnEwqyK1CZ+F5deeRjpGA2ywyWS8NnOrpv",
-    "RWSkAlEaeKUBUZhQA52GoMLa0rt8KLdEoto26gLHRpm9QIC5ColsvG/Y",
-];
+/// The update keys (`_DAEMON_UPDATE_PUBKEYS`): primaries first, the
+/// offline backup last. The daemon's own list,
+/// `k2_release_keys::UPDATER_KEYS`, compiled from this build's brand file
+/// (`[update]`): K2's keys in a k2 or k5 build, the brand's own in any
+/// other. A test pins the k2 brand's keys to the shell's line.
+pub const UPDATE_KEYS: &[k2_release_keys::TrustedKey] = k2_release_keys::UPDATER_KEYS;
 
 /// The first release signed with the update keys
 /// (`_DAEMON_FIRST_U2_VERSION`).
@@ -477,7 +476,7 @@ pub fn verify(bin: &str, sig: &str, asset: &str, ver: &str) -> Result<(), String
     }
     for k in UPDATE_KEYS {
         let o = match Command::new("minisign")
-            .args(["-V", "-P", k, "-m", bin, "-x", sig, "-Q"])
+            .args(["-V", "-P", k.public_key_b64, "-m", bin, "-x", sig, "-Q"])
             .stderr(Stdio::null())
             .output()
         {
@@ -963,10 +962,56 @@ mod tests {
         std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("read {}: {e}", p.display()))
     }
 
+    /// The `pubkey = "..."` lines of a brand file's `[update]` table, in
+    /// order.
+    fn brand_update_keys(id: &str) -> Vec<String> {
+        let p = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../brand/{id}/brand.toml"));
+        let text =
+            std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("read {}: {e}", p.display()));
+        let table = text
+            .split("\n[")
+            .find(|t| t.starts_with("update]\n"))
+            .unwrap_or_else(|| panic!("{} has no [update] table", p.display()));
+        let keys: Vec<String> = table
+            .split("pubkey = \"")
+            .skip(1)
+            .map(|rest| rest.split('"').next().expect("a closing quote").to_string())
+            .collect();
+        assert!(!keys.is_empty(), "{} lists no update key", p.display());
+        keys
+    }
+
+    fn compiled_keys() -> Vec<String> {
+        UPDATE_KEYS
+            .iter()
+            .map(|k| k.public_key_b64.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn the_keys_are_this_build_s_brand_s() {
+        let id = k2_client::brand::BRAND_ID;
+        assert_eq!(compiled_keys(), brand_update_keys(id), "brand {id}");
+        if id != "k2" && id != "k5" {
+            // Another brand's k5 binary never carries K2's keys.
+            for ours in brand_update_keys("k2") {
+                assert!(
+                    !compiled_keys().contains(&ours),
+                    "brand {id} carries K2's key {ours}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn the_keys_and_the_first_version_are_the_shell_s() {
         let sh = shell();
-        let keys = format!("_DAEMON_UPDATE_PUBKEYS=\"{}\"\n", UPDATE_KEYS.join(" "));
+        // The shell is the k2 brand's: its line is brand/k2's keys, which a
+        // k2 build compiles in (the_keys_are_this_build_s_brand_s).
+        let keys = format!(
+            "_DAEMON_UPDATE_PUBKEYS=\"{}\"\n",
+            brand_update_keys("k2").join(" ")
+        );
         assert!(
             sh.contains(&keys),
             "the update keys moved in daemon-install.sh"

@@ -30,6 +30,10 @@ path = "src/main.rs"
 blake3 = "1"
 flate2 = "1.1.9"
 k2-client = { path = "../k2-client" }
+# The update keys `daemon install` verifies with: the daemon's own list,
+# compiled from this build's brand file. Verify-only and light (minisign-verify,
+# base64, serde_json); all already in Cargo.lock.
+k2-release-keys = { path = "../k2-release-keys" }
 # TLS for a server on another machine (`talk ws@host`, `read ws@host`,
 # a Connect host's tray upload). rustls with the ring
 # provider (no aws-lc-rs, so no C toolchain and no OpenSSL terms), over

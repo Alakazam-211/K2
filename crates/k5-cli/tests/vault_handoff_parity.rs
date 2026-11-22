@@ -16,6 +16,9 @@ use common::parity::{PASSPORT, PERMISSION_ASK};
 use common::stub::Reply;
 use common::vault::{VCase, VCompare, VRig};
 
+/// The daemon's refusal of an accept-from edit by a login under Admin.
+const ROLE_REQUIRED: &str = r#"{"ok":false,"error":{"code":"role_required","hint":"editing who an agent accepts secrets from takes an Owner or Admin login (or the owner)"}}"#;
+
 fn ok(body: &str) -> Reply {
     Reply::Answer(200, body.to_string())
 }
@@ -332,6 +335,20 @@ fn the_lists_and_the_small_verbs() {
             &["accept-from", "add", "bob::h", "--workspace", "proj"],
             vec![ok(r#"{"entries":[]}"#)],
             0,
+        ),
+        // 0.46.17: editing the list takes an Owner or Admin login; any
+        // other login gets the vault's role refusal, exit 3.
+        person(
+            "accept-from add, not an owner or admin login",
+            &["accept-from", "add", "bob::h", "--workspace", "proj"],
+            vec![Reply::Answer(403, ROLE_REQUIRED.into())],
+            3,
+        ),
+        person(
+            "accept-from remove, not an owner or admin login",
+            &["accept-from", "remove", "bob::h", "--workspace", "proj"],
+            vec![Reply::Answer(403, ROLE_REQUIRED.into())],
+            3,
         ),
         refused(
             "accept-from add, no workspace",

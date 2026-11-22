@@ -3,6 +3,9 @@
 #   - `--assign <login>[,<login>…]` anywhere before `--` on a k2 app command
 #     rides its POST as ?assign= (never into the subcommand's own flags);
 #     a bare --assign is a usage error that sends nothing; GETs don't carry it.
+#     The one exception is `k2 app db connect`, whose own --assign goes with
+#     --read-only (db_request_read_cli.sh has its rows): there it is not
+#     taken, so a connect without --read-only refuses it and sends nothing.
 #   - a held answer prints where its card is and who it went to;
 #   - `k2 app approvals <id> --state S` asks for that request / state and
 #     prints each request's card line.
@@ -41,10 +44,9 @@ class H(http.server.BaseHTTPRequestHandler):
             shown = {k: v for k, v in q.items() if k != "token"}
             f.write("%s %s %s %s\n" % (self.command, u.path, json.dumps(shown, sort_keys=True), body))
         status, out = 200, {"ok": True}
-        if u.path == "/cli/app/db/connect":
-            status, out = 202, {"ok": True, "status": "held", "request": {"id": "w_abc123", "summary": "k2 app db connect app1 → a new database"},
-                                "switches": [], "diff": {"lines": ["connect App app1"]}, "hint": "one card for everything connecting needs",
-                                "card": {"raised": True, "new": True, "id": "w_abc123", "where": WHERE}}
+        if u.path == "/cli/app/egress/add" and q.get("assign") == "ada":
+            status, out = 202, {"ok": True, "status": "held", "request": {"id": "w_abc123", "summary": "egress api.example.com for app1"},
+                                "hint": "held for the owner", "card": {"raised": True, "new": True, "id": "w_abc123", "where": WHERE}}
         elif u.path == "/cli/app/egress/add":
             status, out = 202, {"ok": True, "status": "held", "request": {"id": "w_eg1", "summary": "egress api.example.com for app1"},
                                 "hint": "held for the owner", "card": {"raised": True, "where": "a permission card w_eg1 is on a's Thread: sent to every owner and admin (ada, bo); pass --assign <login> to send it to one."}}
@@ -100,12 +102,23 @@ run app db connect app1 --new --assign ada --help
 if grep -q '^POST' "$FAKE_DIR/requests.log"; then fail "help acted: $(cat "$FAKE_DIR/requests.log")"; fi
 
 # ── --assign rides the POST, not the subcommand's flags ──────────────
-run app db connect app1 --new --assign ada
+run app egress add app1 api.example.com --assign ada
 [ "$RC" -eq 2 ] || fail "held exits 2, got $RC: $OUT $ERR"
-reqs_to /cli/app/db/connect | grep -qF '{"assign": "ada"}' || fail "connect carries ?assign=ada: $(cat "$FAKE_DIR/requests.log")"
-reqs_to /cli/app/db/connect | grep -q '"assign": "ada".*"new": true' || fail "the body is the command's own: $(reqs_to /cli/app/db/connect)"
-grep -qF 'owner: a permission card w_abc123' <<<"$OUT" || fail "the held answer says where the card is: $OUT"
+reqs_to /cli/app/egress/add | grep -qF '{"assign": "ada"}' || fail "egress carries ?assign=ada: $(cat "$FAKE_DIR/requests.log")"
+reqs_to /cli/app/egress/add | grep -qF '{"app": "app1", "hosts": ["api.example.com"]}' || fail "the body is the command's own: $(reqs_to /cli/app/egress/add)"
+grep -qF 'a permission card w_abc123' <<<"$OUT" || fail "the held answer says where the card is: $OUT"
 grep -qF 'sent to ada, as you asked (--assign)' <<<"$OUT" || fail "and who it went to: $OUT"
+
+# k2 app db connect keeps its own --assign (it goes with --read-only):
+# without --read-only it is refused and nothing is sent, wherever it is.
+for args in "app db connect app1 --new --assign ada" "app --assign ada db connect app1 --new" "app database connect app1 --new --assign=ada"; do
+    : >"$FAKE_DIR/requests.log"
+    # shellcheck disable=SC2086
+    run $args
+    [ "$RC" -eq 1 ] || fail "k2 $args is refused (exit 1), got $RC: $OUT $ERR"
+    grep -qF -- '--why and --assign go with --read-only' <<<"$ERR" || fail "k2 $args says why: $ERR"
+    [ ! -s "$FAKE_DIR/requests.log" ] || fail "k2 $args sent requests: $(cat "$FAKE_DIR/requests.log")"
+done
 
 # Before the subcommand, a list, the = form.
 : >"$FAKE_DIR/requests.log"

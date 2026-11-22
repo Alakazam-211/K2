@@ -108,12 +108,15 @@ for r in rows:
 # to those people (owner or admin logins on this server, or owner). Taken
 # out of the arguments here; _compute_send adds it to the POST (?assign=)
 # and the daemon refuses a name that can't approve before anything runs.
+# One verb has its own --assign: `k2 app db connect --read-only` sends it
+# in the read request's body, and refuses it without --read-only. There the
+# login goes back to the verb instead (help and usage checks still run here).
 _app_take_assign() {
     _K2_ASSIGN=""
     _APP_ARGS=()
     while [ $# -gt 0 ]; do
         case "$1" in
-            --) _APP_ARGS+=("$@"); return 0 ;;
+            --) _APP_ARGS+=("$@"); break ;;
             --assign)
                 # Help wins: `--assign -h` is a help request, never a login.
                 # The flag goes; the help word stays for the verb's own page.
@@ -132,6 +135,11 @@ _app_take_assign() {
             *) _APP_ARGS+=("$1"); shift ;;
         esac
     done
+    case "${_APP_ARGS[0]:-} ${_APP_ARGS[1]:-}" in
+        "db connect"|"database connect")
+            [ -z "$_K2_ASSIGN" ] || _APP_ARGS+=(--assign "$_K2_ASSIGN")
+            _K2_ASSIGN="" ;;
+    esac
 }
 
 cmd_app() {

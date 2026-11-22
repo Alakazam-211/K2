@@ -102,7 +102,8 @@ help="$("$CLI" db --help)"
 for want in "browse [--app <app>]" "request-read --db <name|id> | --app <app>" "--assign <login>" "requests [--json]" "list --all" "permission_cards_off"; do
     grep -qF -- "$want" <<<"$help" || fail "k2 db --help names $want"
 done
-for args in "db request-read --help" "db request-read --db x -h" "db browse --help" "db requests --help" "app db connect jobs --read-only --help"; do
+for args in "db request-read --help" "db request-read --db x -h" "db browse --help" "db requests --help" "app db connect jobs --read-only --help" \
+            "app db connect jobs --read-only --assign -h" "app db connect jobs --new --assign --help"; do
     # shellcheck disable=SC2086
     run $args
     [ "$RC" -eq 0 ] || fail "k2 $args prints help, exit 0, got $RC: $ERR"
@@ -121,6 +122,15 @@ for args in "db request-read" "db request-read --db" "db request-read --why" "db
     grep -q 'usage' <<<"$ERR" || fail "k2 $args says usage: $ERR"
 done
 [ ! -s "$FAKE_DIR/requests.log" ] || fail "usage errors sent requests: $(cat "$FAKE_DIR/requests.log")"
+# `k2 app`'s held-card --assign (app-wallet.sh _app_take_assign) leaves db
+# connect's own alone: without --read-only it is refused, wherever it is.
+for args in "app db connect jobs --new --assign ada" "app --assign ada db connect jobs --new" "app db connect jobs --db d --assign=ada"; do
+    # shellcheck disable=SC2086
+    run $args
+    [ "$RC" -eq 1 ] || fail "k2 $args is refused (exit 1), got $RC: $OUT $ERR"
+    grep -qF -- '--why and --assign go with --read-only' <<<"$ERR" || fail "k2 $args says why: $ERR"
+done
+[ ! -s "$FAKE_DIR/requests.log" ] || fail "a refused --assign sent requests: $(cat "$FAKE_DIR/requests.log")"
 
 # ── browse ───────────────────────────────────────────────────────────
 run db browse
@@ -169,6 +179,22 @@ run app db connect jobs --read-only --why "verify"
 [ "$RC" -eq 2 ] || fail "connect --read-only with the card up exits 2 (held), got $RC: $OUT $ERR"
 last_req | grep -q '^POST /cli/db/request-read .*"app": "jobs", "why": "verify", "connect": true' || fail "the same ask, with connect: $(last_req)"
 grep -q '^Card pr_1 raised' <<<"$OUT" || fail "card line: $OUT"
+# --assign is the read request's own: in its body, never ?assign=.
+for args in "app db connect jobs --read-only --why verify --assign ada" "app --assign ada db connect jobs --read-only --why verify" \
+            "app db connect jobs --assign=ada --read-only --why verify"; do
+    # shellcheck disable=SC2086
+    run $args
+    [ "$RC" -eq 2 ] || fail "k2 $args: the card is up, exit 2, got $RC: $OUT $ERR"
+    python3 -c '
+import json, sys
+m, p, rest = sys.argv[1].split(" ", 2)
+q, i = json.JSONDecoder().raw_decode(rest)
+b = json.loads(rest[i:])
+assert (m, p) == ("POST", "/cli/db/request-read"), (m, p)
+assert "assign" not in q, q
+assert b == {"app": "jobs", "why": "verify", "assign": "ada", "connect": True}, b' "$(last_req)" || fail "k2 $args sends assign in the body: $(last_req)"
+    grep -q '^Asks: ada' <<<"$OUT" || fail "k2 $args asks ada: $OUT"
+done
 run app db connect readable --read-only
 [ "$RC" -eq 0 ] || fail "a database you read answers its DSN, exit 0, got $RC: $ERR"
 [ "$OUT" = "postgres://ws_r_agent@127.0.0.1:5432/ws_o_notes" ] || fail "the read-only DSN, no password: $OUT"

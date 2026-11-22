@@ -476,7 +476,8 @@ pub mod mac {
             }));
         })
         .await?;
-        let mut q = super::queue(&app).0.lock().unwrap();
+        let state = super::queue(&app);
+        let mut q = state.0.lock().unwrap();
         if q.label_gen(label_of(key)) == gen {
             q.known.insert(key.to_string());
         }

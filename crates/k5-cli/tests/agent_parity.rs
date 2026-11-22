@@ -1761,7 +1761,7 @@ fn context_writes() {
 /// tests/cli/agent_context_pinned_empty_id.sh's stub answers them.
 const LAYERS_NO_ID: &str = r#"{"pinned":[{"label":"Role (persona)","path":".k2/agent/ROLE.md","enabled":true},{"id":"","label":"Empty"},{"id":null,"label":"Null"},{"id":0,"label":"Zero"},{"id":"pinned:tooling","label":"Tooling footer","enabled":true}],"layers":[{"id":"L1","path":"docs/a.md","label":"Doc A","enabled":true},{"id":"L2","label":"Role (persona)","path":"notes/role.md"}]}"#;
 
-/// q17's fix: a pinned row with no id never matches the typed token, so
+/// 0.46.17's fix: a pinned row with no id never matches the typed token, so
 /// remove, on, off and move resolve the layer's real id, and a token
 /// nothing matches is not found (exit 4) with no write sent: each row's
 /// request count is the stub's whole log, so a write would fail it.

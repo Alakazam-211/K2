@@ -1912,7 +1912,7 @@ fn many_browsed(n: usize) -> String {
     format!(r#"{{"ok":true,"databases":[{}]}}"#, rows.join(","))
 }
 
-/// q17's `db browse` (and `list --all`), `db request-read` and `db
+/// 0.46.17's `db browse` (and `list --all`), `db request-read` and `db
 /// requests`: another workspace's database, read-only, on a card.
 #[test]
 fn db_reads_another_workspace_s_database() {

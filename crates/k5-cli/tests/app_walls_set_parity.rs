@@ -604,7 +604,7 @@ const CARD_UP: &str = r#"{"id":"pr_1","status":"pending","action":"db.read","tex
 
 const READ_ONLY: &str = r#"{"ok":true,"status":"read_only","readOnly":true,"name":"ws_o_notes","dsn":"postgres://ws_r_agent@127.0.0.1:5432/ws_o_notes","dsnHasPassword":false,"dsnHint":"no password shown"}"#;
 
-/// q17's `db connect <app> --read-only`: the ask of `db request-read`
+/// 0.46.17's `db connect <app> --read-only`: the ask of `db request-read`
 /// with `connect`. A card that is up is held (2); once the caller reads
 /// the database, its read-only DSN with no password (0).
 #[test]

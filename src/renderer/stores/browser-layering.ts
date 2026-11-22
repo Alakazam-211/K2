@@ -109,6 +109,19 @@ export function underlayActive(
   return mac && desktop && s.mode === 'underlay' && s.failed === null
 }
 
+/** One line for the console: "underlay ON" or "legacy (why)". */
+export function layeringStatus(
+  s: Pick<BrowserLayeringState, 'mode' | 'failed'>,
+  mac: boolean = isMacPlatform(),
+  desktop: boolean = webFeatures.browserPane,
+): string {
+  if (!desktop) return 'legacy (web client: no native browser pages)'
+  if (!mac) return 'legacy (not macOS)'
+  if (s.mode !== 'underlay') return 'legacy (the browserLayering setting is legacy)'
+  if (s.failed !== null) return `legacy (fell back this session: ${s.failed})`
+  return 'underlay ON'
+}
+
 /** React: is the underlay in use in this window right now. */
 export function useBrowserUnderlay(): boolean {
   const mode = useBrowserLayeringStore((s) => s.mode)

@@ -37,6 +37,19 @@ use std::sync::Mutex;
 
 use tauri::{AppHandle, Manager};
 
+/// An underlay log line: to K2's log and to stderr, so dev mode's log file
+/// (and a terminal) shows it too.
+#[cfg(target_os = "macos")]
+macro_rules! say {
+    ($lvl:ident, $($arg:tt)*) => {{
+        let line = format!($($arg)*);
+        log::$lvl!("{line}");
+        eprintln!("{line}");
+    }};
+}
+#[cfg(target_os = "macos")]
+pub(crate) use say;
+
 /// A number or `[tl, tr, br, bl]`.
 #[derive(serde::Deserialize, Clone, Copy, Debug, PartialEq)]
 #[serde(untagged)]
@@ -218,6 +231,8 @@ pub struct Queue {
     /// Main-thread timeouts in a row, per window.
     timeouts: HashMap<String, u32>,
     pending: HashMap<String, (PageLayers, UnderlayOptions)>,
+    /// Windows whose first apply result was logged.
+    reported: HashSet<String>,
     /// Bumped each time a window label closes: work begun for the old
     /// window (an in-flight set, a webview cache) sees a different number
     /// and drops itself, so a closed window is never revived and a reused
@@ -292,6 +307,7 @@ impl Queue {
         self.timeouts.remove(parent);
         self.pending.remove(parent);
         self.scheduled.remove(parent);
+        self.reported.remove(parent);
     }
 
     /// The label's generation (see `label_gen`).
@@ -318,6 +334,7 @@ impl Queue {
     /// The K2 window closed: drop everything about it (a reused label then
     /// starts clean).
     pub fn forget_window(&mut self, parent: &str) {
+        self.reported.remove(parent);
         *self.label_gen.entry(parent.to_string()).or_insert(0) += 1;
         // Late sets of the closed window's epoch stay refused.
         match self.epoch.remove(parent) {
@@ -540,7 +557,7 @@ pub mod mac {
         if let Some(ui) = UIS.with(|m| m.borrow_mut().remove(label)) {
             underlay::drop_ui(&ui);
         }
-        log::info!("[browser-underlay] window {label:?} closed: its UI view and {} page(s) let go", pages.len());
+        say!(info, "[browser-underlay] window {label:?} closed: its UI view and {} page(s) let go", pages.len());
     }
 
     /// Back to legacy for one window: no mask, stock routing, pages on top.
@@ -561,7 +578,7 @@ pub mod mac {
             }
         });
         if changed {
-            log::info!("[browser-underlay] {}", underlay::set_hover_route(private));
+            say!(info, "[browser-underlay] {}", underlay::set_hover_route(private));
         }
     }
 
@@ -722,8 +739,15 @@ fn schedule_apply(app: &AppHandle, parent: String, tx: Option<tokio::sync::onesh
         };
         let r = mac::apply(&parent, &set, opts);
         let held = matches!(r, Ok(true));
+        let first = queue(&app2).0.lock().unwrap().reported.insert(parent.clone());
+        if first {
+            match &r {
+                Ok(_) => say!(info, "[browser-underlay] window {parent:?}: underlay ON (first set applied: {} layer(s), {} claim(s))", set.layers.len(), set.claims.len()),
+                Err(e) => say!(warn, "[browser-underlay] window {parent:?}: the first set failed: {e}"),
+            }
+        }
         if let Err(e) = &r {
-            log::warn!("[browser-underlay] apply failed for {parent:?}: {e}");
+            say!(warn, "[browser-underlay] apply failed for {parent:?}: {e}");
         }
         if held {
             // Put the set back unless a newer one arrived, and re-apply
@@ -751,7 +775,7 @@ fn schedule_apply(app: &AppHandle, parent: String, tx: Option<tokio::sync::onesh
         }
     });
     if let Err(e) = queued {
-        log::warn!("[browser-underlay] could not reach the main thread: {e}");
+        say!(warn, "[browser-underlay] could not reach the main thread: {e}");
     }
 }
 
@@ -762,6 +786,18 @@ pub async fn browser_set_page_layers(
     layers: PageLayers,
     options: Option<UnderlayOptions>,
 ) -> Result<(), String> {
+    let parent = layers.parent_window.clone().unwrap_or_else(|| "main".into());
+    let r = set_page_layers(app, layers, options).await;
+    #[cfg(target_os = "macos")]
+    if let Err(e) = &r {
+        say!(warn, "[browser-underlay] window {parent:?}: falling back to the legacy path: {e}");
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = parent;
+    r
+}
+
+async fn set_page_layers(app: AppHandle, layers: PageLayers, options: Option<UnderlayOptions>) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         let mut layers = layers;
@@ -790,25 +826,25 @@ pub async fn browser_set_page_layers(
             }
             if let Some(view) = super::browser_webviews::view_by_key(&app, &key) {
                 if let Err(e) = mac::cache_page(&view, &key).await {
-                    log::warn!("[browser-underlay] {key:?}: {e}");
+                    say!(warn, "[browser-underlay] {key:?}: {e}");
                 }
             }
         }
         // The awaits above can outlive the window: a set for a window that
         // closed meanwhile must not bring its queue entries back.
         if app.get_webview_window(&parent).is_none() || queue(&app).0.lock().unwrap().label_gen(&parent) != gen_at_start {
-            log::debug!("[browser-underlay] {parent:?} closed while its set was on the way; dropped");
+            say!(debug, "[browser-underlay] {parent:?} closed while its set was on the way; dropped");
             return Ok(());
         }
         let offer = queue(&app).0.lock().unwrap().offer(&parent, layers, options.unwrap_or_default());
         match offer {
             Offer::Coalesced => Ok(()),
             Offer::Refused => {
-                log::debug!("[browser-underlay] {parent:?}: a set from before the switch to legacy, ignored");
+                say!(debug, "[browser-underlay] {parent:?}: a set from before the switch to legacy, ignored");
                 Ok(())
             }
             Offer::Stale(n) => {
-                log::warn!("[browser-underlay] {parent:?}: a set older than one already applied ({n} in a row), ignored");
+                say!(warn, "[browser-underlay] {parent:?}: a set older than one already applied ({n} in a row), ignored");
                 if n >= STALE_LIMIT {
                     Err(format!("underlay: {n} sets in a row were older than one already applied"))
                 } else {
@@ -828,7 +864,7 @@ pub async fn browser_set_page_layers(
                     // of these falls back.
                     _ => {
                         let n = queue(&app).0.lock().unwrap().timed_out(&parent);
-                        log::warn!("[browser-underlay] {parent:?}: the main thread did not answer in 5 s ({n} in a row)");
+                        say!(warn, "[browser-underlay] {parent:?}: the main thread did not answer in 5 s ({n} in a row)");
                         if n >= TIMEOUT_LIMIT {
                             Err(format!("underlay: the main thread did not answer {n} times in a row"))
                         } else {
@@ -871,7 +907,7 @@ pub async fn browser_underlay_clear(
             Ok(Ok(r)) => r,
             _ => Err("underlay: the main thread did not answer".into()),
         };
-        log::info!("[browser-underlay] {parent:?} back to the legacy path: {r:?}");
+        say!(info, "[browser-underlay] {parent:?} back to the legacy path: {r:?}");
         r
     }
     #[cfg(not(target_os = "macos"))]

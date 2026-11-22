@@ -26,7 +26,7 @@ import {
 import { dockAppearance, nativeAppearance, sameAppearance, snapRect, type DockAppearance } from './dockGeometry'
 import { appZoom } from '@/lib/app-zoom'
 import { cornerRadius, freezesInUnderlay, pageLayersSync, type PageMode } from '@/lib/page-layers'
-import { underlayActive, useBrowserLayeringStore, useBrowserUnderlay } from '@/stores/browser-layering'
+import { layeringStatus, underlayActive, useBrowserLayeringStore, useBrowserUnderlay } from '@/stores/browser-layering'
 
 export { focusVisibleBrowserAddress } from './focusBrowserAddress'
 export { normalizeUrl }
@@ -149,7 +149,11 @@ pageLayersSync.configure({
 })
 useBrowserLayeringStore.subscribe((state, prev) => {
   if (underlayActive(prev) && !underlayActive(state) && state.failed === null) leaveUnderlay()
+  const now = layeringStatus(state)
+  if (now !== layeringStatus(prev)) console.info(`[browser-underlay] window ${currentParentWindow()}: ${now}`)
 })
+// Once per window load: which path this window's browser pages take.
+console.info(`[browser-underlay] window ${currentParentWindow()}: ${layeringStatus(useBrowserLayeringStore.getState())}`)
 
 /**
  * Whether the native child should be shown.

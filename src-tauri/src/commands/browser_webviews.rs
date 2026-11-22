@@ -644,7 +644,7 @@ mod real {
         #[cfg(target_os = "macos")]
         if layering.is_some() {
             if let Err(e) = underlay_insert_mode(&app, &parent, underlay).await {
-                log::warn!("[browser-underlay] {parent:?}: {e}; this page opens on the legacy path");
+                super::super::browser_page_layers::say!(warn, "[browser-underlay] {parent:?}: {e}; this page opens on the legacy path");
             }
         }
         #[cfg(not(target_os = "macos"))]
@@ -812,7 +812,7 @@ mod real {
         if underlay {
             super::super::browser_page_layers::mac::forget_page(&app, &key);
             if let Err(e) = super::super::browser_page_layers::mac::cache_page(&view, &key).await {
-                log::warn!("[browser-underlay] {key:?}: {e}");
+                super::super::browser_page_layers::say!(warn, "[browser-underlay] {key:?}: {e}");
             }
         }
         views(&app).0.lock().unwrap().insert(key, view);

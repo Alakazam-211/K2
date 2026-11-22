@@ -9,6 +9,7 @@ import {
   readBrowserLayering,
   readHoverPrivateFallback,
   readPageFirstClick,
+  layeringStatus,
   underlayActive,
   useBrowserLayeringStore,
 } from './browser-layering'
@@ -60,6 +61,19 @@ describe('browserLayering', () => {
     expect(readHoverPrivateFallback()).toBe(false)
     localStorage.setItem(LS_BROWSER_HOVER_PRIVATE_FALLBACK, '1')
     expect(readHoverPrivateFallback()).toBe(true)
+  })
+
+  it('says which path a window takes and why', () => {
+    expect(layeringStatus({ mode: 'underlay', failed: null }, true, true)).toBe('underlay ON')
+    expect(layeringStatus({ mode: 'underlay', failed: null }, false, true)).toBe('legacy (not macOS)')
+    expect(layeringStatus({ mode: 'legacy', failed: null }, true, true)).toContain('setting is legacy')
+    expect(layeringStatus({ mode: 'underlay', failed: 'stale' }, true, true)).toBe('legacy (fell back this session: stale)')
+    expect(layeringStatus({ mode: 'underlay', failed: null }, true, false)).toContain('web client')
+  })
+
+  it('macOS with no stored key reads underlay; the Settings row reads the same store', () => {
+    localStorage.removeItem(LS_BROWSER_LAYERING)
+    expect(readBrowserLayering(true)).toBe('underlay')
   })
 
   it('the first click on a page is off unless stored as 1', () => {

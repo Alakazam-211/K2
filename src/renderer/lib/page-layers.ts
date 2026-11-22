@@ -318,6 +318,7 @@ export class PageLayersSync {
   private generation = 0
   private epochId = nextEpoch()
   private dprWatch: (() => void) | null = null
+  private reportedEpoch: string | null = null
   private frameQueued = false
   private nowQueued = false
   private sentEmpty = true
@@ -403,6 +404,10 @@ export class PageLayersSync {
     this.sentEmpty = set.layers.length === 0
     try {
       await this.deps.send(set, this.deps.options())
+      if (this.reportedEpoch !== set.epoch && set.layers.length > 0) {
+        this.reportedEpoch = set.epoch
+        console.info(`[browser-underlay] window ${set.parentWindow}: underlay ON, first set applied (${set.layers.length} page(s))`)
+      }
     } catch (e) {
       this.failed = true
       this.deps.fail(String(e))

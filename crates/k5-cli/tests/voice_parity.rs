@@ -621,7 +621,7 @@ fn voice_with_no_daemon() {
     ));
 }
 
-/// Help never acts (K2's rule): `-h` or `--help` anywhere on a line that
+/// Help never acts: `-h` or `--help` anywhere on a line that
 /// would change something prints help and sends nothing, even where a
 /// value flag (`--call`, `--room`) would take the word (`_wants_help`
 /// first). The binary hands such a line to the shell.

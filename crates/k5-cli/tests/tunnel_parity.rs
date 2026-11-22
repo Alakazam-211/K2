@@ -987,7 +987,7 @@ fn tunnel_hands_these_to_the_shell() {
         compare: Compare::Shell,
         ..c
     };
-    // Help never acts (K2's rule): -h or --help anywhere prints the
+    // Help never acts: -h or --help anywhere prints the
     // tunnel help on stdout, exit 0, and sends nothing (`cmd_tunnel`'s
     // `_wants_help`).
     let v = vec![

@@ -742,7 +742,7 @@ fn api_key_hands_these_to_the_shell() {
     }
 }
 
-/// Help never acts (K2's rule): -h or --help anywhere prints the usage on
+/// Help never acts: -h or --help anywhere prints the usage on
 /// stdout, exit 0, and sends nothing (cmd_api_key's `_wants_help`), even
 /// where the word would be a value: `revoke -h`, `create --label -h`,
 /// `hire-ceiling k1 --app-login -h`. The front hands each line to the

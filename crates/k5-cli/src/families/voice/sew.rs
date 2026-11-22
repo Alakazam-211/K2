@@ -5,7 +5,7 @@
 //!
 //! Written inside this lane's families for now (the brief's rule for a
 //! helper not on the line yet): other lanes port the same helpers for
-//! compute, app and board, and the gardener folds them into one.
+//! compute, app and board, to be folded into one later.
 //!
 //! - [`send`]: `raw="$(_compute_send …)"`, split as `_compute_split` splits
 //!   it ([`Sent`]).

@@ -76,7 +76,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
 /// to the shell.
 ///
 /// Shared by the families that print a page (schema, explain); it sits
-/// here until the gardener moves it beside [`crate::pages`].
+/// here until it moves beside [`crate::pages`].
 pub fn shell_prelude() -> Option<(Env, Prelude)> {
     let env = Env::current();
     let p = offline::shell_pwd(&env)

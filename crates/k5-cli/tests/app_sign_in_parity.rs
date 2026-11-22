@@ -469,7 +469,7 @@ fn init_and_store_doctor_answer_as_the_shell_does() {
     );
 }
 
-/// Help never acts (K2's rule): the write verbs with `-h` or `--help`
+/// Help never acts: the write verbs with `-h` or `--help`
 /// anywhere print help and send nothing; both sides are the shell's.
 #[test]
 fn help_never_acts() {

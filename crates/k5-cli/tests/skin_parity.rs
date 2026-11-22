@@ -816,7 +816,7 @@ fn skin_with_no_answer() {
 }
 
 /// What the binary hands to the shell, before it prints or sends
-/// anything: both sides are the shell's. Help never acts (K2's rule):
+/// anything: both sides are the shell's. Help never acts:
 /// the router's `skin)` arm prints the family's page for -h or --help
 /// anywhere, and sends nothing.
 #[test]

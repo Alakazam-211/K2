@@ -741,7 +741,7 @@ fn domain_list_large() {
     }
 }
 
-/// Help never acts (K2's rule): `-h` or `--help` anywhere on a line that
+/// Help never acts: `-h` or `--help` anywhere on a line that
 /// would change something prints help and sends nothing. The binary hands
 /// such a line to the shell, which checks `_wants_help` first.
 #[test]

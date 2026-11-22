@@ -129,7 +129,7 @@ fn the_family_alone_and_an_unknown_verb() {
 }
 
 /// Help anywhere on a line that changes something prints help and sends
-/// nothing (K2's rule). A help form is a page; any other line is the
+/// nothing. A help form is a page; any other line is the
 /// shell's, which prints the verb's help before it reads a word.
 #[test]
 fn help_never_acts() {

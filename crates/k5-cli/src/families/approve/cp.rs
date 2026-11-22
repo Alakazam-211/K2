@@ -1,8 +1,8 @@
 //! The steps every `_compute_call` family of this lane shares (approve,
 //! send-feedback, notifications, notify and clone propose), as the shell
 //! CLI runs them (`cli/src/compute-lib.sh`, the end of
-//! `cli/src/cli-tools-policy.sh`). It lives in a family's module until the
-//! gardener gives it a place of its own.
+//! `cli/src/cli-tools-policy.sh`). It lives in a family's module until it
+//! gets a place of its own.
 //!
 //! - [`open`]: the settings, the two gates and the client of an open tool
 //!   (no passport check after the gates). A line the shell counts as one

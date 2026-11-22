@@ -1789,7 +1789,7 @@ fn heartbeat_with_no_answer() {
     }
 }
 
-/// Help never acts (K2's rule): `-h` or `--help` anywhere on a line that
+/// Help never acts: `-h` or `--help` anywhere on a line that
 /// would change something prints help and sends nothing. The binary hands
 /// such a line to the shell, whose arm prints the help first.
 #[test]

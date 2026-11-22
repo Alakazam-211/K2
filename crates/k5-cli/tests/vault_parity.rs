@@ -64,7 +64,7 @@ fn a_traceback_compares_by_its_shape() {
     assert_eq!(traceback_shape(a), "x\n<traceback>\nKeyError\ny\n");
 }
 
-/// Help never acts (K2's rule): `-h` or `--help` anywhere on the line of
+/// Help never acts: `-h` or `--help` anywhere on the line of
 /// a verb that changes something prints help and sends nothing, on both
 /// sides (the binary hands these lines to the shell).
 ///

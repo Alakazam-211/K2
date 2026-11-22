@@ -738,7 +738,7 @@ fn mail_watch_sends_as_the_shell_does() {
     }
 }
 
-/// Help never acts (K2's rule): every verb that changes something, with
+/// Help never acts: every verb that changes something, with
 /// `-h` or `--help` anywhere on the line, prints its help and sends
 /// nothing.
 #[test]

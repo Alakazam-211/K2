@@ -666,7 +666,7 @@ fn api_hands_these_to_the_shell() {
         ..c
     };
     let v = vec![
-        // Help never acts (K2's rule): -h or --help anywhere prints the
+        // Help never acts: -h or --help anywhere prints the
         // usage on stdout, exit 0, and sends nothing (cmd_api's
         // `_wants_help`). The forms in src/help_captured.txt (`api`, `api
         // on` and `api status` with -h or --help) the binary answers

@@ -771,7 +771,7 @@ fn nothing_listening() {
     );
 }
 
-/// Help never acts (K2's rule): the write verbs with `-h` or `--help`
+/// Help never acts: the write verbs with `-h` or `--help`
 /// anywhere print help and send nothing. The binary hands help forms to
 /// the shell, so both sides are the shell's here.
 #[test]

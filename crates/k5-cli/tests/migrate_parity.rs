@@ -123,7 +123,7 @@ fn help_and_usage() {
     }
 }
 
-/// Help never acts (K2's rule): `-h` or `--help` on the line of a step
+/// Help never acts: `-h` or `--help` on the line of a step
 /// that changes something prints the help and sends nothing. The binary
 /// hands these lines on (the front's rule for a family's help).
 #[test]

@@ -2,7 +2,7 @@
 //! the few Python operations the shell's readers raise in. Lifted from
 //! [`crate::families::organization`] and [`super`] (remind), which had
 //! near copies; workspace, review, skills, whats-new and commit use them
-//! too. It lives here, in a family's module, until the gardener gives it
+//! too. It lives here, in a family's module, until it gets
 //! a place of its own (`families/mod.rs` is S0's).
 //!
 //! Each Python helper takes `at`, which makes the [`Raise`] for an

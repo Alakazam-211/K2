@@ -160,7 +160,7 @@ fn help_and_usage() {
     rig.check(&c);
 }
 
-/// Help never acts (K2's rule): `-h` or `--help` on the line of a verb
+/// Help never acts: `-h` or `--help` on the line of a verb
 /// that changes something prints the help and sends nothing. The binary
 /// hands these lines on (the front's rule for a family's help).
 #[test]

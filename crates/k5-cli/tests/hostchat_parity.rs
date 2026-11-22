@@ -930,7 +930,7 @@ fn hostchat_value_flag_with_no_value_is_the_d6_line() {
     }
 }
 
-/// Help never acts (K2's rule): `-h` or `--help` anywhere on a line that
+/// Help never acts: `-h` or `--help` anywhere on a line that
 /// would change something prints help and sends nothing. The binary hands
 /// such a line to the shell. Where bash acts anyway (a value flag takes
 /// `-h`/`--help` as its value, so the loop never sees it: a bash bug,
@@ -2456,7 +2456,7 @@ fn hostchat_owner_sessions_with_no_answer() {
     }
 }
 
-/// Help never acts (K2's rule): `-h` or `--help` anywhere on an
+/// Help never acts: `-h` or `--help` anywhere on an
 /// `owner-sessions` line prints its help and sends nothing, on both
 /// sides. The exact help forms are the front's captured pages; the rest
 /// the binary hands to the shell, whose loop prints the same page.

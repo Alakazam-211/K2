@@ -551,7 +551,7 @@ pub fn assert_same_retried(name: &str, b: &SideRun, r: &SideRun) {
     assert_same(name, &once, r);
 }
 
-/// K2's rule for a token and a proxy: the proxy saw a CONNECT for
+/// The rule for a token and a proxy: the proxy saw a CONNECT for
 /// `target` with `basic` (the proxy's own credential, when given) and
 /// never the token; the token went to the TLS stub, inside the tunnel,
 /// as the `Authorization` header, once per request.

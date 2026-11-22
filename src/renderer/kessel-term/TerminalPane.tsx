@@ -2942,7 +2942,10 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // workspace parks, and Settings (display:none shell) make WKWebView
   // reclaim contexts; the 3s restore window then expires → permanent
   // `webgl-context-lost-unrestored` demotion. Dispose cleanly when hidden
-  // and remount on show instead.
+  // and remount on show instead. The canvas element itself only exists
+  // while the surface is active (see the painter host below): a hidden
+  // pane used to keep its full-size drawing buffer and live context, one
+  // per tab ever shown, in WebKit's GPU process.
   const settingsOpen = useSettingsStore((s) => s.settingsOpen)
   // Also only while its column is on screen: Thread view (and a Split with no
   // Terminal side) keeps the grid in a display:none column with the tab
@@ -5638,12 +5641,19 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
              transforms over the canvas exactly as they do over the
              DOM rows. Scrolling is painted internally (fraction
              uniform), not via translateY. pointer-events stay on the
-             container — the canvas is inert like the row divs. */
-          <canvas
-            ref={webglCanvasRef}
-            data-terminal-webgl-canvas=""
-            style={{ display: 'block', pointerEvents: 'none' }}
-          />
+             container — the canvas is inert like the row divs.
+             Rendered only while the GL surface is live: every show gets
+             a fresh element and every hide releases the old one's
+             context (webglPainter dispose), so a hidden or parked pane
+             holds no drawing buffer and no slot in WebKit's 16-context
+             list. */
+          webglSurfaceActive ? (
+            <canvas
+              ref={webglCanvasRef}
+              data-terminal-webgl-canvas=""
+              style={{ display: 'block', pointerEvents: 'none' }}
+            />
+          ) : null
         ) : (
         <div
           style={{

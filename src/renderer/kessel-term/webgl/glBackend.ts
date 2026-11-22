@@ -48,7 +48,13 @@ export interface PainterBackend {
   /** Read one pixel (device coords, y-down like the rect space) from
    *  the drawing buffer — sanity probe. Null when the read fails. */
   readPixel(x: number, y: number): [number, number, number, number] | null
-  dispose(): void
+  /** Delete every GL object this backend made. `release` also gives the
+   *  context itself back: the drawing buffer shrinks to 1x1 and the context
+   *  is lost (WEBGL_lose_context), so the GPU process frees it now instead
+   *  of whenever the canvas is collected. Only for a canvas that is being
+   *  thrown away: a lost context can't be used again on the same element.
+   *  The context-restore path disposes WITHOUT `release` (it reuses it). */
+  dispose(opts?: { release?: boolean }): void
 }
 
 const RECT_VS = `#version 300 es
@@ -191,13 +197,24 @@ export function createWebgl2Backend(
     powerPreference: 'high-performance',
   }) as WebGL2RenderingContext | null
   if (!gl) return null
+  // A context we can't build on is handed straight back (the pane drops to
+  // the DOM strip and never uses this canvas for GL again).
+  const giveUp = (): null => {
+    canvas.width = 0
+    canvas.height = 0
+    gl.getExtension('WEBGL_lose_context')?.loseContext()
+    return null
+  }
 
   const rectProgram = link(gl, RECT_VS, RECT_FS)
-  if (!rectProgram) return null
+  if (!rectProgram) return giveUp()
   const uRectResolution = gl.getUniformLocation(rectProgram, 'u_resolution')
 
   const glyphProgram = link(gl, GLYPH_VS, GLYPH_FS)
-  if (!glyphProgram) return null
+  if (!glyphProgram) {
+    gl.deleteProgram(rectProgram)
+    return giveUp()
+  }
   const uGlyphResolution = gl.getUniformLocation(glyphProgram, 'u_resolution')
   const uGlyphCols = gl.getUniformLocation(glyphProgram, 'u_cols')
   const uGlyphCell = gl.getUniformLocation(glyphProgram, 'u_cell')
@@ -343,7 +360,7 @@ export function createWebgl2Backend(
       return [out[0], out[1], out[2], out[3]]
     },
 
-    dispose(): void {
+    dispose(opts?: { release?: boolean }): void {
       gl.deleteBuffer(unitQuad)
       gl.deleteBuffer(rectInstances)
       gl.deleteBuffer(glyphInstances)
@@ -352,6 +369,15 @@ export function createWebgl2Backend(
       gl.deleteTexture(atlasTexture)
       gl.deleteProgram(rectProgram)
       gl.deleteProgram(glyphProgram)
+      if (opts?.release) {
+        // The canvas keeps its drawing buffer (front + back, full pane
+        // size in device px) for as long as the element lives. Shrink it,
+        // then lose the context so WebKit drops it from its live-context
+        // list at once (it holds 16, then force-loses the oldest).
+        canvas.width = 0
+        canvas.height = 0
+        gl.getExtension('WEBGL_lose_context')?.loseContext()
+      }
     },
   }
 }

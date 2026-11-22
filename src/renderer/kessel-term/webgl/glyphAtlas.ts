@@ -66,6 +66,17 @@ function attachAtlasPage(canvas: HTMLCanvasElement): void {
   document.body?.appendChild(canvas)
 }
 
+/** Detach a page and free its pixels now. A page is up to 4096² RGBA
+ *  (64 MB), and its backing store lives in WebKit's GPU process until the
+ *  element is collected; a zero-size canvas holds none. Pages are replaced
+ *  on every growth, font/zoom change and every time a pane is shown again,
+ *  so waiting for GC let them pile up. */
+function releasePage(canvas: HTMLCanvasElement): void {
+  canvas.remove()
+  canvas.width = 0
+  canvas.height = 0
+}
+
 export interface GlyphSlot {
   texX: number
   texY: number
@@ -152,7 +163,7 @@ export class GlyphAtlas implements GlyphSource {
    *  attachAtlasPage). Call when the atlas is replaced (font/DPR
    *  change) or the painter is disposed. */
   dispose(): void {
-    this.canvas.remove()
+    releasePage(this.canvas)
   }
 
   get size(): number {
@@ -241,7 +252,7 @@ export class GlyphAtlas implements GlyphSource {
         const gctx = grown.getContext('2d', { willReadFrequently: true })
         if (!gctx) return null
         gctx.drawImage(this.canvas, 0, 0)
-        this.canvas.remove()
+        releasePage(this.canvas)
         attachAtlasPage(grown)
         this.canvas = grown
         this.ctx = gctx

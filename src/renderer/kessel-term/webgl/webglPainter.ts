@@ -304,7 +304,14 @@ export function createWebglPainter(
         canvas.removeEventListener('webglcontextlost', onContextLost)
         canvas.removeEventListener('webglcontextrestored', onContextRestored)
       }
-      backend?.dispose()
+      // The pane renders a fresh canvas for every painter, so this one's
+      // context is released, not just emptied: drawing buffer shrunk and
+      // the context lost, freed in the GPU process now (not at GC).
+      if (backend) backend.dispose({ release: true })
+      else if (canvas) {
+        canvas.width = 0
+        canvas.height = 0
+      }
       backend = null
       canvas = null
       lastFrame = null

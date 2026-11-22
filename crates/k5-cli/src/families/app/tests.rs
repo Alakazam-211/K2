@@ -701,3 +701,41 @@ fn group_two_helpers() {
         "No crashes, failed health gates or failed builds in the window.\n"
     );
 }
+
+#[test]
+fn the_help_word_and_a_names_dashdash_are_the_shells() {
+    // `_app_says_help`: the word help before a bare `--`, wherever it is.
+    assert!(shell_words(&["deny", "w_1", "help"]));
+    assert!(shell_words(&["pairing", "off", "acme", "help"]));
+    assert!(shell_words(&["deny", "w_1", "--reason", "help"]));
+    assert!(shell_words(&["user", "add", "bob", "help"]));
+    // exec and shell: help before the App or as the first word after it.
+    assert!(shell_words(&["exec", "acme", "help"]));
+    assert!(shell_words(&["exec", "help"]));
+    assert!(shell_words(&["exec", "--json", "acme", "-h"]));
+    assert!(shell_words(&["shell", "acme", "--help"]));
+    // Everything after that is the command's own.
+    assert!(!shell_words(&["exec", "acme", "ls", "help"]));
+    assert!(!shell_words(&["exec", "acme", "ls", "-h"]));
+    assert!(!shell_words(&["exec", "--timeout", "help", "acme", "ls"]));
+    // An empty word is never the App (passport::app_cmd_says_help).
+    assert!(shell_words(&["exec", "", "help"]));
+    // After the `--` help is a name; the verb's loop reads it.
+    assert!(shell_words(&["deny", "--", "help"]));
+    assert!(shell_words(&["pairing", "off", "--", "acme"]));
+    // exec and shell take a `--` of their own: the command's words.
+    assert!(!shell_words(&["exec", "acme", "--", "ls", "help"]));
+    assert!(!shell_words(&["shell", "acme", "--", "ls"]));
+    // No help word, no `--`: the family's.
+    assert!(!shell_words(&["deny", "w_1"]));
+    assert!(!shell_words(&["pairing", "off", "acme", "helper"]));
+    assert!(!shell_words(&[]));
+    // The shell's helper, as its source spells it.
+    let src = shell_source("app-auth.sh");
+    assert!(src.contains("        [ \"$a\" = help ] && return 0\n"));
+    assert!(shell_source("router.sh").contains("_app_says_help \"${@:4}\"; }; then"));
+    assert!(shell_source("router.sh").contains("if _app_cmd_says_help \"${@:3}\"; then"));
+    assert!(
+        shell_source("cli-tools-policy.sh").contains("            -h|--help|help) return 0 ;;\n")
+    );
+}

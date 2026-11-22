@@ -843,25 +843,16 @@ fn help_never_acts() {
         &["db", "connect", "acme", "--new", "-h"],
         &["db", "check", "--help", "acme"],
         &["db", "disconnect", "acme", "-h"],
-    ] {
-        rig.check(&shell(stop("help never acts", args, 0)));
-    }
-    // A value flag takes the next word as it comes, so `-h` there is a
-    // value and the write is sent (bash bugs, app-db.sh:313 and
-    // app-db.sh:101-106; the rows flip when the fixes land).
-    for args in [
-        &["egress", "add", "acme", "h", "--reason", "-h"][..],
+        // 0.46.17: `-h` or `--help` where a value goes is help too
+        // (`_app_says_help` before the loop); it was the value, and the
+        // write was sent.
+        &["egress", "add", "acme", "h", "--reason", "-h"],
         &["egress", "mode", "acme", "broad", "--reason", "--help"],
         &["db", "check", "acme", "--as", "-h"],
         &["db", "disconnect", "acme", "--reason", "--help"],
+        &["egress", "add", "acme", "h", "--reason", "help"],
     ] {
-        rig.check(&shell(one(
-            "help as a value acts (bash bug)",
-            args,
-            200,
-            r#"{"status":"allowed","mode":"broad","app":"acme","db":"d","as":"A","ok":true}"#,
-            0,
-        )));
+        rig.check(&shell(stop("help never acts", args, 0)));
     }
 }
 

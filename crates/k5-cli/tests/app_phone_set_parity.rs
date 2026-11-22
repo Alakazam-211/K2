@@ -720,14 +720,14 @@ fn help_never_acts_on_a_write() {
         (&["links", "off", "--help", "acme"], 0),
         (&["links", "check", "acme", "-h"], 0),
         (&["pairing", "setup", "acme", "--ios", "T", "--help"], 0),
-        (&["pairing", "off", "acme", "-h"], 2),
-        (&["pairing", "check", "-h", "acme"], 2),
+        (&["pairing", "off", "acme", "-h"], 0),
+        (&["pairing", "check", "-h", "acme"], 0),
         (&["push", "setup", "acme", "--fcm", "x", "-h"], 0),
-        (&["push", "creds", "rm", "acme", "--all", "--help"], 2),
-        (&["push", "check", "acme", "-h"], 2),
-        (&["push", "on", "acme", "--help"], 2),
-        (&["push", "off", "-h", "acme"], 2),
-        (&["push", "set", "acme", "--chat", "on", "-h"], 2),
+        (&["push", "creds", "rm", "acme", "--all", "--help"], 0),
+        (&["push", "check", "acme", "-h"], 0),
+        (&["push", "on", "acme", "--help"], 0),
+        (&["push", "off", "-h", "acme"], 0),
+        (&["push", "set", "acme", "--chat", "on", "-h"], 0),
         (&["push", "send", "acme", "--to", "a", "--help"], 0),
         (&["push", "test", "acme", "--to", "a", "-h"], 0),
         (&["email", "on", "acme", "--sender", "s", "-h"], 0),
@@ -748,27 +748,17 @@ fn help_never_acts_on_a_write() {
             ],
             0,
         ),
+        // 0.46.17: `-h` where a value goes is help too (`_app_says_help`
+        // before the loop); it was the value, and the write was sent.
+        (&["links", "set", "acme", "--ios", "-h"], 0),
+        (
+            &["pairing", "setup", "acme", "--ios", "T", "--host", "-h"],
+            0,
+        ),
+        (&["pairing", "off", "acme", "help"], 0),
     ];
     for (args, code) in lines {
         rig.check(&shell(stop("help never acts", args, *code)));
-    }
-    // A value flag takes the next word as it comes, so `-h` there is a
-    // value and the write is sent (bash bugs, app-links.sh:21 and
-    // app-auth.sh:176; the rows flip when the fixes land). `email` is
-    // safe: the router answers its -h with the family's usage first.
-    for args in [
-        &["links", "set", "acme", "--ios", "-h"][..],
-        &["pairing", "setup", "acme", "--ios", "T", "--host", "-h"],
-    ] {
-        rig.check(&shell(case(
-            "help as a value acts (bash bug)",
-            args,
-            &[],
-            vec![ok(r#"{"app":"acme"}"#)],
-            owner_and_port,
-            0,
-            1,
-        )));
     }
 }
 

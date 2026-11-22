@@ -557,7 +557,9 @@ mod tests {
             // `publish` answers its own `--` the same way; the front's line
             // comes first now.
             &["publish", "ps", "--"],
-            &["app", "push", "send", "acme", "--to", "--"],
+            // `app push` takes one now (a name after it, 0.46.17); `app
+            // user` still takes none.
+            &["app", "user", "list", "acme", "--"],
             &["whoami", "--"],
             &["--", "ls"],
             &["--version", "--"],

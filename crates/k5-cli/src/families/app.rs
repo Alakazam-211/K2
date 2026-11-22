@@ -81,7 +81,9 @@
 //! 5. The EXIT trap's lines.
 //!
 //! The shell answers these itself ([`run`] returns `None`): a session
-//! with `CODEX_*` set (the shared Codex lookup), a word that is not UTF-8, a verb no group here takes, a port curl won't take, and
+//! with `CODEX_*` set (the shared Codex lookup), a word that is not UTF-8,
+//! the word `help` before a bare `--`, a bare `--` on a verb other than
+//! `exec` and `shell`, and their help before the command ([`shell_words`]), a verb no group here takes, a port curl won't take, and
 //! a `python3` the binary can't tell ([`crate::families`], Without
 //! Python). Help forms never reach here: the front sends them to their
 //! page or to the shell.
@@ -707,6 +709,23 @@ pub const VERBS: &[crate::route::Verb] = &[
     },
 ];
 
+/// Whether the words after `app` are the shell's to read (0.46.17): the
+/// word `help` before a bare `--` (the shell's `_app_says_help`, in the
+/// router's app arm and before each verb's loop: help, never a name), or
+/// a bare `--` (the names after it go to the loop's name arm, `case
+/// "$_dd$1"`). `exec` and `shell` keep their own `--`, and everything
+/// after the App is the command's: help only before the App or as the
+/// first word after it ([`crate::passport::app_cmd_says_help`]).
+pub fn shell_words(words: &[&str]) -> bool {
+    match words.first() {
+        Some(&("exec" | "shell")) => {
+            let rest: Vec<OsString> = words[1..].iter().map(OsString::from).collect();
+            crate::passport::app_cmd_says_help(&rest)
+        }
+        _ => crate::dashdash::before(words).contains(&"help") || words.contains(&"--"),
+    }
+}
+
 /// The words after `app`, read by the group the verb names. `None`: the
 /// shell's. `Err`: where the verb's loop stopped.
 pub fn parse(words: &[&str]) -> Option<Result<Ask, Stop>> {
@@ -808,6 +827,9 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     // back to its words). Its usage line comes
     // after the settings and gates, as a verb's own usage line does.
     let all: Vec<&str> = args.iter().map(|a| a.to_str()).collect::<Option<_>>()?;
+    if shell_words(all.get(1..).unwrap_or_default()) {
+        return None;
+    }
     let (assign, kept) = match assign::take(all.get(1..).unwrap_or_default()) {
         Ok(t) => (t.assign, t.words),
         Err(stop) => return run_ask(args, &all, Err(stop), String::new()),

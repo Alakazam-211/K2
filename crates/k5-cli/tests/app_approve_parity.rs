@@ -311,22 +311,14 @@ fn help_never_acts() {
         (&["approve", "req-9", "-h"], 0),
         (&["approve", "req-9", "--help"], 0),
         (&["approve", "req-9", "help"], 0),
+        // 0.46.17: `-h` where a value goes is help too (`_app_says_help`
+        // before the loop); it was the value, and the call was sent.
+        (&["approvals", "revoke", "--app", "-h"], 0),
+        (&["deny", "req-1", "--reason", "-h"], 0),
+        (&["deny", "req-1", "--reason", "help"], 0),
     ] {
         rig.check(&shell(stop("help never acts", args, code)));
     }
-    // The shell takes `-h` as a value and sends (bash bugs,
-    // app-auth.sh:1646 approvals revoke --app and app-auth.sh:1670 deny
-    // --reason; the rows flip when the fixes land).
-    rig.check(&shell(read(
-        "help as a value acts: approvals revoke --app -h (bash bug)",
-        &["approvals", "revoke", "--app", "-h"],
-        r#"{"revoked":[]}"#,
-    )));
-    rig.check(&shell(read(
-        "help as a value acts: deny --reason -h (bash bug)",
-        &["deny", "req-1", "--reason", "-h"],
-        r#"{"request":{"id":"req-1","status":"denied","summary":"s"}}"#,
-    )));
 }
 
 const CARDS: &str = r#"{"canApprove":false,"requests":[{"id":"w_abc","status":"pending","kind":"manage","appLabel":"app1","workspaceHandle":"a","requestedBy":"agent:a","summary":"connect é","reasons":[],"card":{"id":"w_abc","state":"pending","card":"c1","thread":"a","routedTo":[{"login":"ada","role":"admin"},"x",{"login":"bo é"}],"narrowed":true}},{"id":"w_e","status":"pending","kind":"k","appLabel":"b","requestedBy":"r","summary":"s","card":{}},{"id":"w_old","status":"denied","kind":"manage","appLabel":"app1","workspaceHandle":"a","requestedBy":"agent:a","summary":"older","reasons":[],"decidedBy":"owner","card":null},{"id":"w_n","status":"pending","kind":"k","appLabel":"c","requestedBy":"r","summary":"t","card":{"routedTo":[]}},{"id":"w_s","status":"pending","kind":"k","appLabel":"d","requestedBy":"r","summary":"u","card":"not a dict"}]}"#;

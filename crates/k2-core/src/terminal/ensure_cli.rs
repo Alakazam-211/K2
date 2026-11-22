@@ -261,7 +261,6 @@ fn is_executable(path: &std::path::Path) -> bool {
 
 #[cfg(unix)]
 fn run_installer(shell_command: &str, child_path: &str) -> Result<(), String> {
-    use std::os::unix::process::CommandExt;
     use std::process::Stdio;
     use std::sync::mpsc;
     use std::thread;

@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
 #[cfg(unix)]
-use std::os::unix::process::{CommandExt, ExitStatusExt};
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::Ordering;
@@ -546,10 +546,7 @@ mod tests {
 
     const LEADER_CHILD_READY: &str = "leader-child-ready";
 
-    /// Not a check: the child of the test below. Sleeps only when spawned
-    /// as one. (Not `/bin/sleep`: macOS hides an Apple binary's environment.)
     #[test]
-    #[ignore = "child process for a_leader_is_ours_only_with_its_run_id_in_its_environment"]
     fn a_job_run_leads_its_own_session() {
         let mut c = std::process::Command::new("sleep");
         c.arg("5");
@@ -563,7 +560,10 @@ mod tests {
         assert_ne!(theirs, ours, "the run is not in the daemon's session (review B1)");
     }
 
+    /// Not a check: the child of the test below. Sleeps only when spawned
+    /// as one. (Not `/bin/sleep`: macOS hides an Apple binary's environment.)
     #[test]
+    #[ignore = "child process for a_leader_is_ours_only_with_its_run_id_in_its_environment"]
     fn leader_child_sleeps() {
         use std::io::Write;
         if std::env::var_os("LEADER_CHILD").is_some() {

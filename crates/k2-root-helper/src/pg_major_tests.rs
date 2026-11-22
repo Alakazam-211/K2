@@ -67,6 +67,13 @@ struct World {
     named: Vec<(u32, String, u16, bool)>,
     /// port → `pg_control_system().system_identifier`
     sysid: HashMap<u16, String>,
+    /// Point-in-time restore tests (protocol 19): named clusters that stay
+    /// down after a start (Postgres ending recovery early).
+    stay_down: HashSet<String>,
+    /// Point-in-time restore tests: programs as postgres the match below
+    /// doesn't know (`pg_basebackup`, `tar`, a file-writing `dd`), answered
+    /// first when the hook says so.
+    extra: Option<Rc<dyn Fn(&str, &[String], Option<&[u8]>) -> Option<ExecOut>>>,
 }
 
 type W = Rc<RefCell<World>>;
@@ -202,7 +209,7 @@ fn pg_box() -> (T, W) {
                 let unit = a[1].trim_start_matches("postgresql@").trim_end_matches(".service");
                 let (m, n) = unit.split_once('-').unwrap();
                 let m: u32 = m.parse().unwrap();
-                let on = op != Some("stop");
+                let on = op != Some("stop") && !ww.borrow().stay_down.contains(n);
                 if n == "main" {
                     for c in ww.borrow_mut().clusters.iter_mut().filter(|c| c.0 == m) {
                         c.2 = on;
@@ -305,6 +312,11 @@ fn pg_box() -> (T, W) {
             }
             let mut w = ww.borrow_mut();
             w.postgres_calls.push(format!("{} {}", envs.join(" "), a.join(" ")).trim().to_string());
+            if let Some(h) = w.extra.clone() {
+                if let Some(o) = h(&prog, a, stdin) {
+                    return o;
+                }
+            }
             match prog.as_str() {
                 "psql" => {
                     let port: u16 = arg_after(a, "-p").map(|p| p.parse().unwrap()).unwrap_or(5432);
@@ -1229,7 +1241,7 @@ fn psql_cluster_runs_that_majors_psql_on_its_port() {
 fn version_announces_pgmajor_on_protocol_9() {
     let t = box_root();
     let v = json(&t.call(&["helper", "version"]));
-    assert_eq!(v["protocol"], 18, "pgmajor came in 9; 17 is 0.46.14's one bump (additive); 18 is 0.46.17's one bump");
+    assert_eq!(v["protocol"], 19, "19 is the first bump after 0.46.17; pgmajor came in 9; 17 is 0.46.14's one bump (additive); 18 is 0.46.17's one bump");
     assert_eq!(v["namespaces"]["pgmajor"], true);
     assert_eq!(v["namespaces"]["pg"], true, "protocols are additive");
     const { assert!(PROTOCOL >= k2_root_proto::version::PGMAJOR_MIN_PROTOCOL) };
@@ -1560,7 +1572,7 @@ fn schema_only_dump_force_kept_off_force_back_and_quiesce_repl() {
 fn version_announces_pgdual_on_protocol_10() {
     let t = box_root();
     let v = json(&t.call(&["helper", "version"]));
-    assert_eq!(v["protocol"], 18, "pgdual came in 10 (additive); 18 is 0.46.17's one bump");
+    assert_eq!(v["protocol"], 19, "19 is the first bump after 0.46.17; pgdual came in 10 (additive); 18 is 0.46.17's one bump");
     assert_eq!(v["namespaces"]["pgdual"], true);
     assert_eq!(v["namespaces"]["creds"], true);
     assert_eq!(k2_root_proto::version::PGDUAL_MIN_PROTOCOL, 10);
@@ -1803,7 +1815,7 @@ fn named_verbs_are_the_daemons() {
 fn version_announces_pgnamed_on_protocol_15() {
     let t = box_root();
     let v: serde_json::Value = serde_json::from_slice(&t.call(&["helper", "version"]).stdout).unwrap();
-    assert_eq!(v["protocol"], 18, "pgnamed came in 15 (additive); 18 is 0.46.17's one bump");
+    assert_eq!(v["protocol"], 19, "19 is the first bump after 0.46.17; pgnamed came in 15 (additive); 18 is 0.46.17's one bump");
     assert_eq!(v["namespaces"]["pgnamed"], true);
     assert_eq!(v["namespaces"]["pgmajor"], true, "protocols are additive");
 }
@@ -1827,7 +1839,7 @@ fn restarts_of(t: &T, unit: &str) -> usize {
 fn version_announces_pgarchive_on_protocol_18() {
     let t = box_root();
     let v: serde_json::Value = serde_json::from_slice(&t.call(&["helper", "version"]).stdout).unwrap();
-    assert_eq!(v["protocol"], k2_root_proto::version::PGARCHIVE_MIN_PROTOCOL);
+    assert!(v["protocol"].as_u64() >= Some(u64::from(k2_root_proto::version::PGARCHIVE_MIN_PROTOCOL)), "{v}");
     assert_eq!(v["namespaces"]["pgarchive"], true, "{v}");
     assert_eq!(v["namespaces"]["pgnamed"], true, "protocols are additive");
 }
@@ -2014,3 +2026,11 @@ fn wal_archive_as_root() {
     assert_ne!(o.code, exit::OK, "a link where the conf goes is refused");
     assert_eq!(std::fs::read(t.p("/etc/k2-link-target")).unwrap(), b"untouched");
 }
+
+// Point-in-time restore (protocol 19), same fakes.
+#[path = "pg_restore_tests.rs"]
+mod pg_restore_tests;
+
+// Point-in-time restore against a real Postgres (`#[ignore]`, REALPG_PITR=1).
+#[path = "pitr_real_pg.rs"]
+mod pitr_real_pg;

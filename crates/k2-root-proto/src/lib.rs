@@ -64,6 +64,8 @@ pub mod node_build;
 pub mod paths;
 pub mod pg_major;
 pub mod pg_named;
+/// Point-in-time restore of named clusters (protocol 19, `namespaces.pgrestore`).
+pub mod pg_restore;
 /// Live dual-run of one database (protocol 10, `namespaces.pgdual`).
 pub mod pg_dual;
 pub mod sew;

@@ -331,6 +331,7 @@ fn box_root() -> T {
         audit: Box::new(audit.clone()),
         out: RefCell::new(Vec::new()),
         lock_timeout_ms: 300,
+        waits: false,
         // Plenty by default; the disk-floor tests pick less.
         free_bytes: |_| Ok(u64::MAX),
     };

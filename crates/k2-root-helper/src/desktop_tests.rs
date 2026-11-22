@@ -224,7 +224,7 @@ fn helper_version_says_it_speaks_the_desktop_namespace() {
     let o = t.call(&["helper", "version"]);
     ok(&o);
     let v = json(&o);
-    assert_eq!(v["protocol"], 18, "desktop came in 16 (additive); 18 is 0.46.17's one bump");
+    assert_eq!(v["protocol"], 19, "19 is the first bump after 0.46.17; desktop came in 16 (additive); 18 is 0.46.17's one bump");
     assert_eq!(v["namespaces"]["desktop"], true);
     assert_eq!(k2_root_proto::version::DESKTOP_MIN_PROTOCOL, 16);
 }

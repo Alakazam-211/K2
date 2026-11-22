@@ -31,22 +31,22 @@ use crate::fsx::{Dir, Kind};
 const FE: &str = "DEBIAN_FRONTEND=noninteractive";
 
 /// Seconds the helper waits for a cluster it just started to answer.
-const START_WAIT_TRIES: u32 = 30;
+pub(crate) const START_WAIT_TRIES: u32 = 30;
 
 // ── small fs helpers (fixed paths only) ─────────────────────────────────
 
-fn present(ctx: &Ctx, abs: &str) -> bool {
+pub(crate) fn present(ctx: &Ctx, abs: &str) -> bool {
     ctx.p(abs).symlink_metadata().is_ok()
 }
 
-fn split_dyn(abs: &str) -> (&str, &str) {
+pub(crate) fn split_dyn(abs: &str) -> (&str, &str) {
     let i = abs.rfind('/').expect("absolute");
     (if i == 0 { "/" } else { &abs[..i] }, &abs[i + 1..])
 }
 
 /// A small text file under a fixed directory, without following links
 /// (`None` when missing).
-fn read_small(ctx: &Ctx, abs: &str, cap: usize) -> HResult<Option<Vec<u8>>> {
+pub(crate) fn read_small(ctx: &Ctx, abs: &str, cap: usize) -> HResult<Option<Vec<u8>>> {
     let (parent, name) = split_dyn(abs);
     let d = match ctx.dir(parent) {
         Ok(d) => d,
@@ -58,7 +58,7 @@ fn read_small(ctx: &Ctx, abs: &str, cap: usize) -> HResult<Option<Vec<u8>>> {
 
 /// A fixed directory, each missing component created 0755 root (a link
 /// or a file anywhere on the way is a refusal).
-fn subdir(ctx: &Ctx, abs: &str) -> HResult<Dir> {
+pub(crate) fn subdir(ctx: &Ctx, abs: &str) -> HResult<Dir> {
     match ctx.dir(abs) {
         Ok(d) => return Ok(d),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -72,7 +72,7 @@ fn subdir(ctx: &Ctx, abs: &str) -> HResult<Dir> {
 }
 
 /// Canned bytes into a fixed file (0644 root), `Ok(true)` when changed.
-fn put_at(ctx: &Ctx, abs: &str, bytes: &[u8]) -> HResult<bool> {
+pub(crate) fn put_at(ctx: &Ctx, abs: &str, bytes: &[u8]) -> HResult<bool> {
     let (parent, name) = split_dyn(abs);
     let d = subdir(ctx, parent)?;
     put(ctx, &d, name, bytes)
@@ -86,7 +86,7 @@ fn today_days() -> i64 {
     secs.div_euclid(86_400)
 }
 
-fn trimmed(err: &[u8]) -> String {
+pub(crate) fn trimmed(err: &[u8]) -> String {
     let e = crate::pg::redact_passwords(&String::from_utf8_lossy(err));
     e.trim().chars().take(1500).collect()
 }
@@ -108,7 +108,7 @@ pub fn installed_majors(ctx: &Ctx) -> Vec<u32> {
         .collect()
 }
 
-fn major_installed(ctx: &Ctx, m: PgMajor) -> bool {
+pub(crate) fn major_installed(ctx: &Ctx, m: PgMajor) -> bool {
     present(ctx, &m.bin("postgres")) && present(ctx, &m.bin("pg_dump")) && present(ctx, &m.bin("psql"))
 }
 
@@ -123,10 +123,10 @@ pub fn lsclusters(ctx: &Ctx) -> HResult<Vec<ClusterRow>> {
     Ok(parse_lsclusters(&String::from_utf8_lossy(&out.stdout)))
 }
 
-const CHMOD: &str = "/usr/bin/chmod";
-const DD: &str = "/usr/bin/dd";
-const DU: &str = "/usr/bin/du";
-const FIND: &str = "/usr/bin/find";
+pub(crate) const CHMOD: &str = "/usr/bin/chmod";
+pub(crate) const DD: &str = "/usr/bin/dd";
+pub(crate) const DU: &str = "/usr/bin/du";
+pub(crate) const FIND: &str = "/usr/bin/find";
 
 /// The K2-layout cluster of `m` (`<M>/main` under /var/lib/postgresql).
 pub(crate) fn cluster_of(ctx: &Ctx, m: PgMajor) -> HResult<ClusterRow> {
@@ -167,7 +167,7 @@ fn codename(ctx: &Ctx) -> Option<String> {
     os_release_codename(&String::from_utf8_lossy(&t))
 }
 
-fn listening(ctx: &Ctx) -> HResult<Vec<u16>> {
+pub(crate) fn listening(ctx: &Ctx) -> HResult<Vec<u16>> {
     if !present(ctx, SS) {
         return Err(Fail::state("ss (iproute2) is missing: can't check the port"));
     }
@@ -577,7 +577,7 @@ pub fn ensure_cluster(ctx: &Ctx, m: PgMajor, port: Option<u16>) -> HResult<J> {
 }
 
 /// A directory, not a link (`symlink_metadata`: never follows).
-fn real_dir(ctx: &Ctx, abs: &str) -> bool {
+pub(crate) fn real_dir(ctx: &Ctx, abs: &str) -> bool {
     ctx.p(abs).symlink_metadata().is_ok_and(|m| m.file_type().is_dir())
 }
 
@@ -1227,7 +1227,7 @@ pub(crate) fn named_state(ctx: &Ctx) -> HResult<NamedState> {
     }
 }
 
-fn save_named_state(ctx: &Ctx, s: &NamedState) -> HResult<()> {
+pub(crate) fn save_named_state(ctx: &Ctx, s: &NamedState) -> HResult<()> {
     let bytes = serde_json::to_vec_pretty(s).map_err(|_| Fail::io("encode pg-named.json"))?;
     let d = subdir(ctx, STATE_DIR)?;
     put(ctx, &d, split_dyn(named::NAMED_STATE).1, &bytes).map(|_| ())
@@ -1264,7 +1264,7 @@ fn no_links_above_named(ctx: &Ctx, m: PgMajor) -> HResult<()> {
 
 /// `SELECT system_identifier FROM pg_control_system()` of the cluster on
 /// `port` (digits, or a refusal).
-fn system_id(ctx: &Ctx, m: PgMajor, port: u16) -> HResult<String> {
+pub(crate) fn system_id(ctx: &Ctx, m: PgMajor, port: u16) -> HResult<String> {
     let id = sql_at(ctx, m, port, "postgres", "SELECT system_identifier FROM pg_catalog.pg_control_system();\n")?;
     let id = id.trim().to_string();
     if !named::system_id_ok(&id) {
@@ -1301,7 +1301,7 @@ fn named_verified(ctx: &Ctx, m: PgMajor, name: &ClusterName) -> HResult<(Cluster
     named_of(ctx, m, name)
 }
 
-fn named_wait_online(ctx: &Ctx, m: PgMajor, name: &str) -> HResult<ClusterRow> {
+pub(crate) fn named_wait_online(ctx: &Ctx, m: PgMajor, name: &str) -> HResult<ClusterRow> {
     for i in 0..START_WAIT_TRIES {
         if let Some(r) = lsclusters(ctx)?.into_iter().find(|r| r.major == m.get() && r.name == name) {
             if r.online() {
@@ -1328,14 +1328,14 @@ fn wal_spool(ctx: &Ctx, m: PgMajor, name: &str) -> HResult<String> {
     Ok(d)
 }
 
-fn spool_bytes(ctx: &Ctx, m: u32, name: &str) -> u64 {
+pub(crate) fn spool_bytes(ctx: &Ctx, m: u32, name: &str) -> u64 {
     as_postgres(ctx, DU, &["-sb", "--", &named::wal_spool(m, name)], None)
         .ok()
         .and_then(|o| String::from_utf8_lossy(&o.stdout).split_whitespace().next().and_then(|n| n.parse().ok()))
         .unwrap_or(0)
 }
 
-fn named_json(ctx: &Ctx, r: &ClusterRow, rec: &NamedRec) -> J {
+pub(crate) fn named_json(ctx: &Ctx, r: &ClusterRow, rec: &NamedRec) -> J {
     let mut v = cluster_json(ctx, r);
     v["unit"] = json!(named::unit(r.major, &r.name));
     v["startConf"] = json!(read_small(ctx, &format!("{}/start.conf", named::etc_dir(r.major, &r.name)), 4096)
@@ -1388,6 +1388,48 @@ pub fn ensure_named(ctx: &Ctx, m: PgMajor, name: &ClusterName, port: Option<u16>
         v["started"] = json!(false);
         return Ok(v);
     }
+    let port = create_named_layout(ctx, m, name, port, &st)?;
+    let data = named::data_dir(m.get(), n);
+    if wal_archive {
+        let d = ctx
+            .dir(&format!("{}/conf.d", named::etc_dir(m.get(), n)))
+            .map_err(|e| Fail::io_err("open the cluster's conf.d", e))?;
+        wal_spool(ctx, m, n)?;
+        put(ctx, &d, named::WAL_ARCHIVE_CONF_FILE, named::wal_archive_conf(m.get(), n).as_bytes())?;
+    }
+    let unit = named::unit(m.get(), n);
+    ctx.run_ok(SYSTEMCTL, &["start", &unit], None)?;
+    let row = named_wait_online(ctx, m, n)?;
+    if row.port != port || row.data_dir != data {
+        return Err(Fail::state("cluster_layout_refused: the new cluster answers another port or data dir; not recorded"));
+    }
+    let rec = NamedRec {
+        major: m.get(),
+        name: n.to_string(),
+        port,
+        data_dir: data,
+        system_id: system_id(ctx, m, port)?,
+        wal_archive,
+        created_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0),
+    };
+    st.clusters.push(rec.clone());
+    save_named_state(ctx, &st)?;
+    let mut v = named_json(ctx, &row, &rec);
+    v["created"] = json!(true);
+    v["started"] = json!(true);
+    Ok(v)
+}
+
+/// A new named cluster `m/name` on disk, not started and not recorded:
+/// the name free on every major, a free band port (or `port`), the
+/// packages, `pg_createcluster`, K2's cluster conf and GUCs, the slice.
+/// Shared by `ensure-cluster <M>-<name>` and `restore-to` (protocol 19).
+/// The caller holds the pg lock.
+pub(crate) fn create_named_layout(ctx: &Ctx, m: PgMajor, name: &ClusterName, port: Option<u16>, st: &NamedState) -> HResult<u16> {
+    let n = name.as_str();
     if st.clusters.len() >= named::MAX_NAMED {
         return Err(Fail::state("named_full: this box already has the most named clusters K2 makes"));
     }
@@ -1450,38 +1492,11 @@ pub fn ensure_named(ctx: &Ctx, m: PgMajor, name: &ClusterName, port: Option<u16>
         .map_err(|e| Fail::io_err("open the cluster's conf.d", e))?;
     put(ctx, &d, CLUSTER_CONF_FILE, cluster_conf().as_bytes())?;
     put(ctx, &d, k2_root_proto::paths::PG_CONFD_FILE, pg_guc_conf().as_bytes())?;
-    if wal_archive {
-        wal_spool(ctx, m, n)?;
-        put(ctx, &d, named::WAL_ARCHIVE_CONF_FILE, named::wal_archive_conf(m.get(), n).as_bytes())?;
-    }
     install_slice(ctx)?;
     if put_at(ctx, &named::slice_dropin(m.get(), n), slice_dropin().as_bytes())? {
         ctx.run_ok(SYSTEMCTL, &["daemon-reload"], None)?;
     }
-    let unit = named::unit(m.get(), n);
-    ctx.run_ok(SYSTEMCTL, &["start", &unit], None)?;
-    let row = named_wait_online(ctx, m, n)?;
-    if row.port != port || row.data_dir != data {
-        return Err(Fail::state("cluster_layout_refused: the new cluster answers another port or data dir; not recorded"));
-    }
-    let rec = NamedRec {
-        major: m.get(),
-        name: n.to_string(),
-        port,
-        data_dir: data,
-        system_id: system_id(ctx, m, port)?,
-        wal_archive,
-        created_at: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0),
-    };
-    st.clusters.push(rec.clone());
-    save_named_state(ctx, &st)?;
-    let mut v = named_json(ctx, &row, &rec);
-    v["created"] = json!(true);
-    v["started"] = json!(true);
-    Ok(v)
+    Ok(port)
 }
 
 /// `pg psql --cluster <M>/<name>`: that major's psql on the recorded port.

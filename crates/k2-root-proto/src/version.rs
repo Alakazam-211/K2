@@ -161,6 +161,17 @@
 //!   refuses the argv, so the daemon asks for the update before it sends
 //!   it. Another 0.46.17 lane that needs a helper change joins 18 here with
 //!   its own namespace flag; never 19 before 18 ships.
+//! - 19 = every root-helper change of the first release after 0.46.17, in
+//!   one bump, shared by every lane (the ONE place to add to it; isolation
+//!   M1b's `agents` verbs and the Supabase-compat lane A role verbs join it
+//!   with their own flags): point-in-time restore of a named cluster
+//!   (prd-app-supabase-compat-v1 §11.1, lane E), `pg basebackup
+//!   <M>-<name>`, `pg backups <M>-<name>` (open, read-only), `pg
+//!   restore-to <M>-<name> <new> <UTC stamp> [--drill]` (always a new
+//!   cluster, never in place) and `pg drop-drill <M>-<name>` (only a
+//!   throwaway cluster restore-to made), under `namespaces.pgrestore`,
+//!   [`PGRESTORE_MIN_PROTOCOL`] ([`crate::pg_restore`]). The daemon gates
+//!   on the flag, never on the number alone.
 //!
 //! The first `k2-root-helper` build ships 3 and 4 together and answers 4.
 //! Protocols are additive: a newer helper serves an older daemon.
@@ -169,7 +180,7 @@ use std::cmp::Ordering;
 use std::fmt;
 
 /// What this build of the helper speaks.
-pub const PROTOCOL: u32 = 18;
+pub const PROTOCOL: u32 = 19;
 
 /// `k2 hostmail upgrade` through the root helper. 4, not 2: the daemon's
 /// table moves from 0.16.20 OR 0.16.10 (pin 0.16.25), so `install-bin`
@@ -225,6 +236,10 @@ pub const MAIL_MODES_MIN_PROTOCOL: u32 = 17;
 /// named cluster. Gated on this AND `namespaces.pgarchive == true`: a 17
 /// helper refuses the argv.
 pub const PGARCHIVE_MIN_PROTOCOL: u32 = 18;
+/// `pg basebackup|backups|restore-to|drop-drill` on a named cluster
+/// (protocol 19, lane E). Gated on this AND `namespaces.pgrestore == true`:
+/// an 18 helper refuses the argv.
+pub const PGRESTORE_MIN_PROTOCOL: u32 = 19;
 /// Sew's recorder install (`engine sew recording …`, 0.46.11 K-a). Gated on
 /// this AND `namespaces.sewrecording == true`: a 14 helper refuses the argv.
 pub const SEW_RECORDING_MIN_PROTOCOL: u32 = 15;
@@ -414,7 +429,16 @@ mod tests {
         assert_eq!(HANDOFF_MIN_PROTOCOL, 5);
         assert_eq!(APPS_MIN_PROTOCOL, 6);
         assert_eq!(SEW_MIN_PROTOCOL, 7);
-        assert_eq!(PROTOCOL, 18, "protocol 18 = 0.46.17's one bump (archiving on an existing named cluster); 17 = 0.46.14's (Stalwart's tree for Stalwart alone)");
+        assert_eq!(PROTOCOL, 19, "protocol 19 = the first bump after 0.46.17 (point-in-time restore, isolation, compat roles); 18 = 0.46.17's (archiving on an existing named cluster)");
+        assert_eq!(PGRESTORE_MIN_PROTOCOL, 19, "pg basebackup / restore-to join the bump after 0.46.17");
+        for argv in [
+            &["pg", "basebackup", "17-feedback"][..],
+            &["pg", "backups", "17-feedback"][..],
+            &["pg", "restore-to", "17-feedback", "fb_drill", "20261122T101500Z", "--drill"][..],
+            &["pg", "drop-drill", "17-fb_drill"][..],
+        ] {
+            assert!(crate::verbs::catalog().iter().any(|v| v.argv() == argv), "protocol 19 carries {argv:?}");
+        }
         assert_eq!(PGARCHIVE_MIN_PROTOCOL, 18, "pg wal-archive joins 0.46.17's one bump");
         assert!(
             crate::verbs::catalog().iter().any(|v| v.argv() == ["pg", "wal-archive", "17-feedback", "off"]),

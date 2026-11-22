@@ -753,6 +753,24 @@ pub enum Verb {
     /// (`archive_mode` needs one). Already in that state: answers it again,
     /// no write and no restart.
     PgNamedArchive { major: PgMajor, name: ClusterName, on: bool },
+    // pg, protocol 19 (`namespaces.pgrestore`, see `crate::pg_restore`)
+    /// `pg basebackup <M>-<name>`: a base backup of a named cluster the
+    /// helper made, archiving and running, as postgres into
+    /// [`crate::pg_restore::base_dir`]; the newest
+    /// [`crate::pg_restore::BASE_KEEP`] stay.
+    PgBaseBackup { major: PgMajor, name: ClusterName },
+    /// `pg backups <M>-<name>` (open, read-only): the base backups and the
+    /// spool's WAL (range, gap, newest), the window a restore can reach.
+    PgBackups { major: PgMajor, name: ClusterName },
+    /// `pg restore-to <M>-<name> <new> <YYYYMMDDTHHMMSSZ> [--drill]` (UTC):
+    /// a NEW named cluster `<M>/<new>` from the newest base backup that
+    /// ended at or before the time, its WAL replayed from the source's
+    /// spool to the time, then promoted. Never in place; refused on a WAL
+    /// gap or a time later than the newest WAL in the spool.
+    PgRestoreTo { major: PgMajor, name: ClusterName, new_name: ClusterName, target: crate::pg_restore::UtcTime, drill: bool },
+    /// `pg drop-drill <M>-<name>`: stop and remove a cluster `restore-to`
+    /// made as a drill (or one whose restore failed); never any other.
+    PgDropDrill { major: PgMajor, name: ClusterName },
     /// `pg start-conf <M> auto|manual` (`clusters tidy` sets an empty
     /// cluster `manual`; never a drop).
     PgStartConf { major: PgMajor, auto: bool },
@@ -1287,6 +1305,32 @@ impl Verb {
                 }
                 Verb::PgEnsureNamed { major, name, port, wal_archive }
             }
+            ["pg", "basebackup", r] => {
+                let (major, name) = crate::pg_named::parse_ref(r).ok_or(REFUSED)?;
+                Verb::PgBaseBackup { major, name }
+            }
+            ["pg", "backups", r] => {
+                let (major, name) = crate::pg_named::parse_ref(r).ok_or(REFUSED)?;
+                Verb::PgBackups { major, name }
+            }
+            ["pg", "restore-to", r, new, t, rest @ ..] => {
+                let (major, name) = crate::pg_named::parse_ref(r).ok_or(REFUSED)?;
+                let new_name = ClusterName::parse(new).ok_or(REFUSED)?;
+                if new_name == name {
+                    return Err(REFUSED);
+                }
+                let target = crate::pg_restore::UtcTime::parse_stamp(t).ok_or(REFUSED)?;
+                let drill = match rest {
+                    [] => false,
+                    ["--drill"] => true,
+                    _ => return Err(REFUSED),
+                };
+                Verb::PgRestoreTo { major, name, new_name, target, drill }
+            }
+            ["pg", "drop-drill", r] => {
+                let (major, name) = crate::pg_named::parse_ref(r).ok_or(REFUSED)?;
+                Verb::PgDropDrill { major, name }
+            }
             ["pg", "wal-archive", r, v] => {
                 let (major, name) = crate::pg_named::parse_ref(r).ok_or(REFUSED)?;
                 Verb::PgNamedArchive { major, name, on: on_off(v).ok_or(REFUSED)? }
@@ -1635,6 +1679,16 @@ impl Verb {
             Verb::PgNamedArchive { major, name, on } => {
                 s(&["pg", "wal-archive", &crate::pg_named::ref_token(*major, name), on_off_name(*on)])
             }
+            Verb::PgBaseBackup { major, name } => s(&["pg", "basebackup", &crate::pg_named::ref_token(*major, name)]),
+            Verb::PgBackups { major, name } => s(&["pg", "backups", &crate::pg_named::ref_token(*major, name)]),
+            Verb::PgRestoreTo { major, name, new_name, target, drill } => {
+                let mut v = s(&["pg", "restore-to", &crate::pg_named::ref_token(*major, name), new_name.as_str(), &target.stamp()]);
+                if *drill {
+                    v.push("--drill".into());
+                }
+                v
+            }
+            Verb::PgDropDrill { major, name } => s(&["pg", "drop-drill", &crate::pg_named::ref_token(*major, name)]),
             Verb::PgStartConf { major, auto } => {
                 s(&["pg", "start-conf", &major.token(), if *auto { "auto" } else { "manual" }])
             }
@@ -1795,6 +1849,9 @@ impl Verb {
             Verb::PgHbaApp { .. } => Daemon,
             // Reading and a dry run.
             Verb::PgClusters | Verb::PgAddMajor { dry_run: true, .. } => Open,
+            // What base backups and WAL a named cluster has (names, sizes,
+            // times): reading only.
+            Verb::PgBackups { .. } => Open,
             // A cluster's boot setting and the shared slice override what
             // the owner chose: the daemon's call only (review #1 L3).
             Verb::PgInstallSlice | Verb::PgStartConf { auto: true, .. } => Daemon,
@@ -1810,6 +1867,12 @@ impl Verb {
             // A named cluster's archive setting (protocol 18): the daemon's
             // call (the owner's or the Postgres-versions switch's).
             | Verb::PgNamedArchive { .. }
+            // Point-in-time restore (protocol 19): a backup's disk, a new
+            // cluster on a port, removing a drill: the daemon's call (the
+            // owner's or the Postgres-versions switch's).
+            | Verb::PgBaseBackup { .. }
+            | Verb::PgRestoreTo { .. }
+            | Verb::PgDropDrill { .. }
             | Verb::PgStartConf { auto: false, .. }
             | Verb::PgCopyRoles { .. }
             | Verb::PgMoveDump { .. }
@@ -1974,6 +2037,15 @@ impl Verb {
                 // make every restart "busy" (Postgres orders the SQL).
                 | Verb::PgMoveDump { .. }
                 | Verb::PgMoveRestore { .. }
+                // A base backup or a restore runs as long as the data takes;
+                // each takes the `pgrestore` lock for itself and the pg lock
+                // only around its short root writes (the new cluster's
+                // creation and record), so a restart is never "busy" for an
+                // hour. A drop takes both the same way.
+                | Verb::PgBaseBackup { .. }
+                | Verb::PgBackups { .. }
+                | Verb::PgRestoreTo { .. }
+                | Verb::PgDropDrill { .. }
                 | Verb::PgLogicalConf { wal_keep_mb: None, .. }
                 | Verb::PgDual { op: crate::pg_dual::DualOp::Status, .. }
                 | Verb::PgSystemctl {
@@ -2121,6 +2193,23 @@ pub fn catalog() -> Vec<Verb> {
         Verb::PgNamedSystemctl { op: PgOp::IsActive, major: m17, name: ClusterName::parse("feedback").expect("name") },
         Verb::PgNamedArchive { major: m17, name: ClusterName::parse("feedback").expect("name"), on: true },
         Verb::PgNamedArchive { major: m17, name: ClusterName::parse("feedback").expect("name"), on: false },
+        Verb::PgBaseBackup { major: m17, name: ClusterName::parse("feedback").expect("name") },
+        Verb::PgBackups { major: m17, name: ClusterName::parse("feedback").expect("name") },
+        Verb::PgRestoreTo {
+            major: m17,
+            name: ClusterName::parse("feedback").expect("name"),
+            new_name: ClusterName::parse("fb_drill").expect("name"),
+            target: crate::pg_restore::UtcTime::parse_stamp("20261122T101500Z").expect("time"),
+            drill: true,
+        },
+        Verb::PgRestoreTo {
+            major: m17,
+            name: ClusterName::parse("feedback").expect("name"),
+            new_name: ClusterName::parse("fb_restored").expect("name"),
+            target: crate::pg_restore::UtcTime::parse_stamp("20261122T101500Z").expect("time"),
+            drill: false,
+        },
+        Verb::PgDropDrill { major: m17, name: ClusterName::parse("fb_drill").expect("name") },
         Verb::PgStartConf { major: m16, auto: true },
         Verb::PgStartConf { major: m16, auto: false },
         Verb::PgInstallSlice,
@@ -2944,6 +3033,12 @@ mod tests {
                         | Verb::AppsLogs { .. }
                         | Verb::PgMoveDump { .. }
                         | Verb::PgMoveRestore { .. }
+                        // Point-in-time restore (protocol 19): long runs that
+                        // take the `pgrestore` lock themselves and the pg lock
+                        // only around their root writes.
+                        | Verb::PgBaseBackup { .. }
+                        | Verb::PgRestoreTo { .. }
+                        | Verb::PgDropDrill { .. }
                         // Daemon-class only to keep targets from agents; read-only.
                         | Verb::CredsStatus
                         // Daemon-class so no other caller can loop it (A-L3);
@@ -3428,6 +3523,48 @@ mod tests {
             &["pg", "psql", "--cluster", "17/feedback", "-d", "x"],
             &["pg", "psql", "--cluster", "17-Feedback", "-d", "x"],
             &["pg", "psql", "-d", "x", "--cluster", "17-feedback"],
+        ] {
+            assert!(Verb::parse(r).is_err(), "expected refusal: {r:?}");
+        }
+    }
+
+    /// Point-in-time restore (protocol 19): named clusters only, a strict
+    /// UTC time, a new name that isn't the source's, `--drill` last.
+    #[test]
+    fn restore_verbs() {
+        for (a, class) in [
+            (&["pg", "basebackup", "17-feedback"][..], Class::Daemon),
+            (&["pg", "backups", "17-feedback"][..], Class::Open),
+            (&["pg", "restore-to", "17-feedback", "fb_drill", "20261122T101500Z", "--drill"][..], Class::Daemon),
+            (&["pg", "restore-to", "16-audit", "audit_old", "20260131T235959Z"][..], Class::Daemon),
+            (&["pg", "drop-drill", "17-fb_drill"][..], Class::Daemon),
+        ] {
+            let v = Verb::parse(a).unwrap_or_else(|e| panic!("{a:?}: {e}"));
+            assert_eq!(v.class(), class, "{a:?}");
+            assert!(!v.takes_lock(), "{a:?}: long verbs take their own locks");
+            assert_eq!(v.stdin_cap(), None, "{a:?}");
+            assert_eq!(v.argv(), a.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "round trip");
+        }
+        for r in [
+            &["pg", "basebackup", "17"][..],
+            &["pg", "basebackup", "17-main"],
+            &["pg", "basebackup", "17/feedback"],
+            &["pg", "basebackup", "17-feedback", "--now"],
+            &["pg", "backups"],
+            &["pg", "restore-to", "17-feedback", "feedback", "20261122T101500Z"],
+            &["pg", "restore-to", "17-feedback", "main", "20261122T101500Z"],
+            &["pg", "restore-to", "17-feedback", "fb-x", "20261122T101500Z"],
+            &["pg", "restore-to", "17-feedback", "fb_x", "2026-11-22T10:15:00Z"],
+            &["pg", "restore-to", "17-feedback", "fb_x", "2026-11-22 10:15:00"],
+            &["pg", "restore-to", "17-feedback", "fb_x", "2026-11-22T10:15:00+01:00"],
+            &["pg", "restore-to", "17-feedback", "fb_x", "now"],
+            &["pg", "restore-to", "17-feedback", "fb_x", "20261122T101500Z", "--in-place"],
+            &["pg", "restore-to", "17-feedback", "fb_x", "20261122T101500Z", "--drill", "--drill"],
+            &["pg", "restore-to", "17-feedback", "fb_x"],
+            &["pg", "restore-to", "17", "fb_x", "20261122T101500Z"],
+            &["pg", "drop-drill", "17"],
+            &["pg", "drop-drill", "17-main"],
+            &["pg", "drop-drill", "17-fb_drill", "--force"],
         ] {
             assert!(Verb::parse(r).is_err(), "expected refusal: {r:?}");
         }

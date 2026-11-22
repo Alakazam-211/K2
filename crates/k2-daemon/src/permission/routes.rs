@@ -863,6 +863,11 @@ fn list(workspace_id: &str, area: Option<&str>, search: Option<&str>) -> CliResp
                 _ => "needed",
             })
         };
+        let tail = format!(
+            "permission request {}{} --why \"<what you need it for>\"",
+            s.id,
+            s.params.iter().filter(|p| p.required).map(|p| format!(" {}=…", p.key)).collect::<String>()
+        );
         actions.push(json!({
             "id": s.id,
             "area": s.area.as_str(),
@@ -875,7 +880,10 @@ fn list(workspace_id: &str, area: Option<&str>, search: Option<&str>) -> CliResp
             "direction": s.direction,
             "params": s.params.iter().map(|p| json!({ "key": p.key, "kind": p.kind, "required": p.required, "list": p.list, "choices": p.choices })).collect::<Vec<_>>(),
             "now": now_state,
-            "command": format!("{CLI_NAME} permission request {}{} --why \"<what you need it for>\"", s.id, s.params.iter().filter(|p| p.required).map(|p| format!(" {}=…", p.key)).collect::<String>()),
+            // `command` with this server's name, and `tail`, the same line
+            // after the name: a CLI puts its own in front (white-label C5).
+            "command": format!("{CLI_NAME} {tail}"),
+            "tail": tail,
         }));
     }
     let recent: Vec<Value> = store::for_workspace(workspace_id, 20).unwrap_or_default().iter().map(summary).collect();

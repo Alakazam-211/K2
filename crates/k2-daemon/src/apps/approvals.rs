@@ -237,7 +237,12 @@ pub(crate) fn held_note(who: &Who, r: &reqs::AppRequest) -> J {
                     if let Some(e) = failed {
                         out["where"] = json!(format!("no permission card went up ({}); the request waits in {approvals}", e["code"].as_str().unwrap_or("refused")));
                         out["error"] = e;
-                        out["ask"] = json!(format!("{CLI_NAME} permission request apps.approve request={} --why \"<what you need it for>\"", r.id));
+                        // `ask` with this server's name, and `askTail`, the
+                        // same line after the name: a CLI puts its own in
+                        // front (white-label C5).
+                        let tail = crate::permission::walls::ask_tail("apps.approve", &serde_json::Map::from_iter([("request".to_string(), json!(r.id))]));
+                        out["ask"] = json!(format!("{CLI_NAME} {tail}"));
+                        out["askTail"] = json!(tail);
                     }
                     out
                 }

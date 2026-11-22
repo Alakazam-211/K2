@@ -371,10 +371,14 @@ pub(crate) fn add_checked(app: &GuestApp, by: &str, agent: Option<&str>, n: &New
             .map(|r| r.room_policy.keys().filter(|k| k.as_str() != ws).map(|k| super::routes::ws_handle(k)).collect())
             .unwrap_or_default();
         if !others.is_empty() {
+            // `ask` with this server's name, and `askTail`, the same line
+            // after the name: a CLI puts its own in front (white-label C5).
+            let tail = format!("app user rooms-ok {} {}", app.app_id, p.username);
             out["roomsWait"] = json!({
                 "rooms": others,
                 "why": format!("a test login your agent made signs in only to {}'s own room", super::routes::ws_handle(ws)),
-                "ask": format!("{} app user rooms-ok {} {}", k2_core::brand::CLI_NAME, app.app_id, p.username),
+                "ask": format!("{} {tail}", k2_core::brand::CLI_NAME),
+                "askTail": tail,
             });
         }
     }

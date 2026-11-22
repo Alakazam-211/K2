@@ -374,6 +374,11 @@ fn the_list_finds_the_card_by_password() {
     let found = v["actions"].as_array().expect("actions").iter().find(|a| a["id"] == ACTION).cloned().unwrap_or_else(|| panic!("{v}"));
     assert_eq!(found["setting"], "Reset the person's password (their App)", "{found}");
     assert!(!found["whatChanges"].as_str().unwrap().contains('{'), "no raw placeholders: {found}");
+    // `tail` is the Ask line after the command's name; `command` is this
+    // build's name, a space and the tail.
+    let tail = found["tail"].as_str().expect("tail");
+    assert_eq!(tail, format!("permission request {ACTION} user=… --why \"<what you need it for>\""), "{found}");
+    assert_eq!(found["command"].as_str(), Some(format!("{} {tail}", k2_core::brand::CLI_NAME).as_str()), "{found}");
 }
 
 /// Rosson Q1 (2026-10-29): an Admin resets App-only users from the card,

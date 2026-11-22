@@ -122,6 +122,8 @@ fn an_agents_test_login_reaches_its_roles_rooms_only_after_an_owner_allows_the_c
     // The add says what waits and how to ask.
     assert_eq!(added["roomsWait"]["rooms"], json!([f.b.handle]), "{added}");
     assert_eq!(added["roomsWait"]["ask"], format!("k2 app user rooms-ok {} {user}", f.app_id), "{added}");
+    // The line after the command's name, for a CLI to put its own in front.
+    assert_eq!(added["roomsWait"]["askTail"], format!("app user rooms-ok {} {user}", f.app_id), "{added}");
     // Today's rule: only the agent's own room.
     assert_eq!(rooms_now(&user, &f.svc), vec![f.a.id.clone()]);
 

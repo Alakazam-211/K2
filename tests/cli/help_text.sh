@@ -360,7 +360,8 @@ if [ "$NEW" != "$CLI_BASH_SOURCE" ]; then
         native -- $argv
     done < "$LIST"
     [ "$rows" -gt 300 ] || bad "only $rows rows in $LIST"
-    for cmd in "mail create --help" "chat --help x" "mail send x --help" "migrate status --help" \
+    # (mail create --help and migrate status --help are pages since 0.46.17.)
+    for cmd in "mail create x --help" "chat --help x" "mail send x --help" "migrate status x --help" \
         "wiki nope" "mail --help x"; do
         # shellcheck disable=SC2086
         handed -- $cmd

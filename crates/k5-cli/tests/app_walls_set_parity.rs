@@ -634,7 +634,10 @@ fn db_connect_read_only() {
             2,
         ),
         // The card's login is in the ask's body, never ?assign=.
-        one(
+        // --assign before db: the front hands the line to the shell before
+        // app's own pre-scan runs, so this row is bash against bash through
+        // the front (Compare::Shell).
+        shell(one(
             "db connect --read-only: --assign before db, in the body",
             &[
                 "--assign",
@@ -649,7 +652,7 @@ fn db_connect_read_only() {
             200,
             CARD_UP,
             2,
-        ),
+        )),
         one(
             "db connect --read-only --assign=: in the body",
             &["db", "connect", "jobs", "--assign=ada", "--read-only"],
@@ -787,11 +790,12 @@ fn db_connect_read_only() {
             &["db", "connect", "jobs", "--new", "--assign", "ada"],
             1,
         ),
-        stop(
+        // --assign before db: the front hands it to the shell (as above).
+        shell(stop(
             "db connect --new: --assign before db, no --read-only",
             &["--assign", "ada", "db", "connect", "jobs", "--new"],
             1,
-        ),
+        )),
         stop(
             "database connect --db --assign=: no --read-only",
             &["database", "connect", "jobs", "--db", "d", "--assign=ada"],

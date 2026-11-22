@@ -10,6 +10,9 @@
  * Drags and layout motion are not claims: they freeze the panes they cover
  * (`still`), as today.
  *
+ * Claims and nested-claim `minus` shapes carry the corners the claim's
+ * element draws (radius, Terminal chamfer, frost; `claim-shape.ts`).
+ *
  * Nesting: a claim whose DOM root holds a page (a Browser inside a dialog)
  * does not cover that page. It goes into the other pages' `minus` instead
  * of the global claims.
@@ -24,8 +27,9 @@ import {
   type OverlayClaim,
   type OverlayRect,
 } from './browser-overlay'
+import { ClaimShapes, type Corners } from './claim-shape'
 
-export type Corners = number | [number, number, number, number]
+export type { Corners }
 
 /** Window CSS px from the top-left of the K2 window's content area. */
 export interface PageShape {
@@ -200,6 +204,8 @@ function buildCssSet(input: {
   viewport: [number, number]
   pages: readonly PageEntry[]
   claims: readonly OverlayClaim[]
+  /** The shape reader; PageLayersSync keeps one so unchanged claims aren't re-read. */
+  shapes?: ClaimShapes
 }): PageLayers {
   const pages = input.pages
     .filter((p): p is PageEntry & { rect: PageShape } => p.rect !== null && p.rect.width > 0 && p.rect.height > 0)
@@ -208,17 +214,23 @@ function buildCssSet(input: {
   const claims: PageClaim[] = []
   // Claims that hold a page: K2 things above the OTHER pages only.
   const nested: Array<{ shape: PageShape; holds: Set<string> }> = []
+  const shapes = input.shapes ?? new ClaimShapes()
+  const live = new Set<number>()
   for (const c of input.claims) {
     const kind = claimKind(c.kind)
     if (!kind) continue
-    const shape = shapeOf(areaRect(c.area, input.viewport))
-    if (shape.width <= 0 || shape.height <= 0) continue
+    const area = areaRect(c.area, input.viewport)
+    if (area.width <= 0 || area.height <= 0) continue
+    live.add(c.id)
+    const { frost, ...corners } = shapes.look(c, area, input.viewport)
+    const shape: PageShape = { ...shapeOf(area), ...corners }
     const holds = new Set(
       pages.filter((p) => c.element && p.element && c.element.contains(p.element)).map((p) => p.windowId),
     )
     if (holds.size > 0) nested.push({ shape, holds })
-    else claims.push({ ...shape, id: c.id, kind })
+    else claims.push({ ...shape, id: c.id, kind, ...(frost ? { frost } : null) })
   }
+  shapes.keep(live)
   const layers: PageLayer[] = pages.map((p, i) => ({
     windowId: p.windowId,
     z: i + 1,
@@ -326,6 +338,7 @@ export class PageLayersSync {
   private sentEmpty = true
   private failed = false
   private unsubscribe: (() => void) | null = null
+  private readonly shapes = new ClaimShapes()
   private deps: PageLayersDeps
 
   constructor(deps: Partial<PageLayersDeps> = {}) {
@@ -394,6 +407,7 @@ export class PageLayersSync {
       viewport: this.deps.viewport(),
       pages,
       claims: overlayClaims(),
+      shapes: this.shapes,
     })
   }
 

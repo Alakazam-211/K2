@@ -25,7 +25,46 @@ function claim(id: number, kind: OverlayClaim['kind'], area: OverlayClaim['area'
 
 afterEach(() => {
   resetBrowserOverlaysForTest()
+  vi.restoreAllMocks()
+  styles.clear()
+  document.documentElement.removeAttribute('data-style')
+  document.body.replaceChildren()
 })
+
+// Computed styles by element: jsdom doesn't cascade the app's CSS, so each
+// test says what the browser would compute for the boxes it builds.
+const styles = new Map<Element, Record<string, string>>()
+
+function mockStyles() {
+  return vi.spyOn(window, 'getComputedStyle').mockImplementation(
+    (el: Element) => ({ getPropertyValue: (p: string) => styles.get(el)?.[p] ?? '' }) as CSSStyleDeclaration,
+  )
+}
+
+function corners(tl: string, tr = tl, br = tl, bl = tl): Record<string, string> {
+  return {
+    'border-top-left-radius': tl,
+    'border-top-right-radius': tr,
+    'border-bottom-right-radius': br,
+    'border-bottom-left-radius': bl,
+  }
+}
+
+/** A box at `r` with the given attributes and computed style. */
+function box(
+  r: { x: number; y: number; width: number; height: number },
+  css: Record<string, string> = {},
+  attrs: Record<string, string> = {},
+  parent: Element = document.body,
+): HTMLElement {
+  const el = document.createElement('div')
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v)
+  el.getBoundingClientRect = () =>
+    ({ ...r, top: r.y, left: r.x, right: r.x + r.width, bottom: r.y + r.height, toJSON: () => r }) as DOMRect
+  styles.set(el, css)
+  parent.appendChild(el)
+  return el
+}
 
 describe('buildPageLayers', () => {
   it('orders pages back to front and keeps rect, corners and mode', () => {
@@ -187,6 +226,106 @@ describe('device-pixel snap after the zoom', () => {
   })
 })
 
+describe('claim shapes (read from the claim element at send time)', () => {
+  const MENU = { x: 10, y: 50, width: 200, height: 300 }
+  const build = (claims: OverlayClaim[], pages: PageEntry[] = [page('a', 1, 0)]) =>
+    buildPageLayers({ parentWindow: 'main', epoch: 'e1', generation: 1, dpr: 2, viewport: VIEW, pages, claims })
+
+  it('a Glass menu at 16px gives radius 16', () => {
+    document.documentElement.setAttribute('data-style', 'glass')
+    mockStyles()
+    const el = box(MENU, { ...corners('16px'), 'backdrop-filter': 'none' }, { 'data-material': 'raised', 'data-float': 'menu' })
+    expect(build([claim(1, 'menu', MENU, el)]).claims).toEqual([{ id: 1, kind: 'menu', ...MENU, radius: 16 }])
+  })
+
+  it('mixed corners give [tl, tr, br, bl]', () => {
+    mockStyles()
+    const el = box(MENU, corners('12px', '12px', '0px', '4px'))
+    expect(build([claim(1, 'popover', MENU, el)]).claims[0].radius).toEqual([12, 12, 0, 4])
+  })
+
+  it('percentages and elliptical radii use the horizontal radius against the box; a pill fits its side', () => {
+    mockStyles()
+    const pct = box(MENU, corners('10%', '8px 20px', '0px', '0px'))
+    expect(build([claim(1, 'popover', MENU, pct)]).claims[0].radius).toEqual([20, 8, 0, 0])
+    const pill = { x: 10, y: 50, width: 200, height: 40 }
+    const p = box(pill, corners('9999px'))
+    expect(build([claim(2, 'toast', pill, p)]).claims[0].radius).toBe(20)
+  })
+
+  it('a Terminal chamfered menu gives a chamfer, read through its shadow wrapper', () => {
+    document.documentElement.setAttribute('data-style', 'terminal')
+    mockStyles()
+    const wrapper = box(MENU, { 'clip-path': 'none' }, { 'data-k2-chamfer-float': 'menu' })
+    box(
+      MENU,
+      { ...corners('0px'), '--k2-ch-cut': '7px', 'clip-path': 'polygon(0px 0px, 1px 1px)' },
+      { 'data-k2-chamfer': 'surface', 'data-material': 'raised', 'data-k2-menu': '' },
+      wrapper,
+    )
+    expect(build([claim(1, 'menu', MENU, wrapper)]).claims).toEqual([{ id: 1, kind: 'menu', ...MENU, chamfer: 7 }])
+  })
+
+  it('a chamfered first row cuts only its top corners', () => {
+    mockStyles()
+    const el = box(MENU, { ...corners('0px'), '--k2-ch-cut': '5px', 'clip-path': 'polygon(0px 0px)' }, { 'data-k2-chamfer-rows': 'first' })
+    expect(build([claim(1, 'popover', MENU, el)]).claims[0].chamfer).toEqual([5, 5, 0, 0])
+  })
+
+  it('a chamfer attribute the style does not draw (Glass) is not a chamfer', () => {
+    document.documentElement.setAttribute('data-style', 'glass')
+    mockStyles()
+    const el = box(MENU, { ...corners('14px'), '--k2-ch-cut': '7px', 'clip-path': 'none' }, { 'data-k2-chamfer': 'surface' })
+    const [c] = build([claim(1, 'menu', MENU, el)]).claims
+    expect(c.chamfer).toBeUndefined()
+    expect(c.radius).toBe(14)
+  })
+
+  it('a frost popover gives frost true', () => {
+    document.documentElement.setAttribute('data-style', 'glass')
+    mockStyles()
+    const el = box(MENU, { ...corners('16px'), 'backdrop-filter': 'none', '-webkit-backdrop-filter': 'blur(24px) saturate(1.6)' }, { 'data-material': 'frost' })
+    expect(build([claim(1, 'popover', MENU, el)]).claims).toEqual([{ id: 1, kind: 'popover', ...MENU, radius: 16, frost: true }])
+  })
+
+  it('frost follows what is drawn: the frost marker in Terminal, or with no blur, is not frost', () => {
+    document.documentElement.setAttribute('data-style', 'terminal')
+    mockStyles()
+    const el = box(MENU, { ...corners('0px'), 'backdrop-filter': 'none' }, { 'data-material': 'frost' })
+    expect(build([claim(1, 'popover', MENU, el)]).claims[0].frost).toBeUndefined()
+  })
+
+  it('a fullscreen modal gets no shape', () => {
+    mockStyles()
+    const el = box({ x: 0, y: 0, width: 1200, height: 800 }, { ...corners('16px'), 'backdrop-filter': 'blur(8px)' })
+    expect(build([claim(1, 'modal', 'fullscreen', el)]).claims).toEqual([{ id: 1, kind: 'modal', x: 0, y: 0, width: 1200, height: 800 }])
+  })
+
+  it('a claim whose area is not its element\'s box gets no shape', () => {
+    mockStyles()
+    const el = box({ x: 300, y: 300, width: 50, height: 50 }, corners('16px'))
+    expect(build([claim(1, 'popover', MENU, el)]).claims).toEqual([{ id: 1, kind: 'popover', ...MENU }])
+  })
+
+  it('a claim clipped at the right edge gets zero right corners', () => {
+    mockStyles()
+    const r = { x: 1100, y: 50, width: 200, height: 300 }
+    const el = box(r, corners('16px'))
+    expect(build([claim(1, 'menu', r, el)]).claims[0].radius).toEqual([16, 0, 0, 16])
+  })
+
+  it('a nested claim\'s minus carries its shape', () => {
+    mockStyles()
+    const area = { x: 200, y: 100, width: 600, height: 500 }
+    const dialog = box(area, corners('16px'))
+    const embedded = document.createElement('div')
+    dialog.appendChild(embedded)
+    const set = build([claim(9, 'modal', area, dialog)], [page('tab', 1, 0), page('oauth', 2, 300, 'live', embedded)])
+    expect(set.claims).toEqual([])
+    expect(set.layers.find((l) => l.windowId === 'tab')?.minus).toEqual([{ ...area, radius: 16 }])
+  })
+})
+
 describe('face rules in underlay', () => {
   it('only dialogs, drags and motion freeze a page', () => {
     expect(freezesInUnderlay(claim(1, 'menu', 'fullscreen'))).toBe(false)
@@ -276,6 +415,35 @@ describe('PageLayersSync', () => {
     h.sync.now()
     await h.run(h.tasks)
     expect(h.sent.at(-1)?.layers[0].mode).toBe('still')
+  })
+
+  it('unchanged claims do not re-read styles; a moved claim reuses its reading', async () => {
+    const spy = mockStyles()
+    const h = harness()
+    h.sync.register(src('a', 0))
+    await h.run(h.frames)
+    const el = box({ x: 10, y: 50, width: 100, height: 200 }, corners('16px'))
+    const menu = claimBrowserOverlay({ kind: 'menu', area: { x: 10, y: 50, width: 100, height: 200 }, element: el })
+    await h.run(h.tasks)
+    expect(h.sent.at(-1)?.claims[0].radius).toBe(16)
+    const reads = spy.mock.calls.length
+    expect(reads).toBeGreaterThan(0)
+    for (let i = 0; i < 3; i++) {
+      h.sync.frame()
+      await h.run(h.frames)
+    }
+    expect(spy.mock.calls.length).toBe(reads)
+    el.getBoundingClientRect = () => ({ x: 10, y: 60, width: 100, height: 200, top: 60, left: 10, right: 110, bottom: 260 }) as DOMRect
+    menu.update({ x: 10, y: 60, width: 100, height: 200 })
+    await h.run(h.tasks)
+    expect(h.sent.at(-1)?.claims[0]).toMatchObject({ y: 60, radius: 16 })
+    expect(spy.mock.calls.length).toBe(reads)
+    // A new claim on a new element is read.
+    const el2 = box({ x: 500, y: 50, width: 100, height: 100 }, corners('8px'))
+    claimBrowserOverlay({ kind: 'popover', area: { x: 500, y: 50, width: 100, height: 100 }, element: el2 })
+    await h.run(h.tasks)
+    expect(h.sent.at(-1)?.claims[1].radius).toBe(8)
+    expect(spy.mock.calls.length).toBeGreaterThan(reads)
   })
 
   it('the last page leaving sends one empty set, then nothing', async () => {

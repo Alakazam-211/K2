@@ -141,11 +141,19 @@ mod tests {
             let t = brand_file::install_tokens(r.name);
             assert_eq!(
                 (r.block_begin, r.block_end, r.fish_conf),
-                (t.block_begin.as_str(), t.block_end.as_str(), t.fish_conf.as_str()),
+                (
+                    t.block_begin.as_str(),
+                    t.block_end.as_str(),
+                    t.fish_conf.as_str()
+                ),
                 "{}",
                 r.name
             );
-            assert_ne!(r.block_begin, PATH_BLOCK_BEGIN, "{} has the command's own marker", r.name);
+            assert_ne!(
+                r.block_begin, PATH_BLOCK_BEGIN,
+                "{} has the command's own marker",
+                r.name
+            );
         }
     }
 

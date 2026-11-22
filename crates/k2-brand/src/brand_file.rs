@@ -507,7 +507,8 @@ pub const RETIRED: &[RetiredName] = &[RetiredName { name: "abc", block_begin: "#
 
     /// The default brand's install tokens are today's bytes: the lines in
     /// people's shell startup files, the fish file's name, the system path
-    /// and the helper programs' names. A change to the generator that moves one fails here.
+    /// and the helper programs' names. A change to the generator that moves
+    /// one fails here.
     #[test]
     fn the_default_brand_gives_todays_install_tokens() {
         let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../brand/k2/brand.toml");
@@ -549,21 +550,36 @@ pub const RETIRED: &[RetiredName] = &[RetiredName { name: "abc", block_begin: "#
             block_begin: \"# >>> XYOLD CLI >>>\", block_end: \"# <<< XYOLD CLI <<<\", \
             fish_conf: \"xyold-cli.fish\" }];\n";
         assert!(out.contains(want), "{want:?} in:\n{out}");
-        assert!(out.contains("pub const PATH_BLOCK_BEGIN: &str = \"# >>> XY CLI >>>\";\n"), "{out}");
-        assert!(out.contains("pub const FISH_CONF: &str = \"xy-cli.fish\";\n"), "{out}");
-        assert!(out.contains("pub const SYSTEM_CLI_PATH: &str = \"/usr/local/bin/xy\";\n"), "{out}");
+        assert!(
+            out.contains("pub const PATH_BLOCK_BEGIN: &str = \"# >>> XY CLI >>>\";\n"),
+            "{out}"
+        );
+        assert!(
+            out.contains("pub const FISH_CONF: &str = \"xy-cli.fish\";\n"),
+            "{out}"
+        );
+        assert!(
+            out.contains("pub const SYSTEM_CLI_PATH: &str = \"/usr/local/bin/xy\";\n"),
+            "{out}"
+        );
         let retired = out
             .lines()
             .find(|l| l.starts_with("pub const RETIRED"))
             .expect("a RETIRED line");
-        assert!(!retired.contains("xy2"), "a silent alias is not retired: {retired}");
+        assert!(
+            !retired.contains("xy2"),
+            "a silent alias is not retired: {retired}"
+        );
 
         let tomb = TempBrand::new(
             "tombstone",
             Some(&text.replace("\"notice\"", "\"tombstone\"")),
         );
         let out = render(&load(&tomb.file()).expect("loads"));
-        assert!(out.contains(want), "a tombstone alias is retired too:\n{out}");
+        assert!(
+            out.contains(want),
+            "a tombstone alias is retired too:\n{out}"
+        );
     }
 
     /// With a product and a command that are unrelated words, the PATH

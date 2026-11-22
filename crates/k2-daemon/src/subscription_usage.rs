@@ -1995,11 +1995,8 @@ fn grok_command(program: &str) -> Command {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        cmd.process_group(0);
-    }
+    // Its own session (bg_proc), so its own process group: the killpg
+    // below takes the whole tree.
     cmd
 }
 
@@ -3960,7 +3957,7 @@ pub(crate) mod tests {
             .split("mod tests")
             .next()
             .expect("module head");
-        assert!(head.contains("process_group(0)"));
+        assert!(head.contains("Its own session (bg_proc), so its own process group"));
         assert!(head.contains("killpg"));
         assert!(!head.contains("cli-chat-proxy.grok.com"));
     }

@@ -1259,9 +1259,7 @@ impl Host for RealHost {
             // SAFETY: setsid in the child before exec; no allocation.
             unsafe {
                 c.pre_exec(|| {
-                    if libc::setsid() < 0 {
-                        return Err(io::Error::last_os_error());
-                    }
+                    k2_core::bg_proc::own_session()?;
                     Ok(())
                 });
             }

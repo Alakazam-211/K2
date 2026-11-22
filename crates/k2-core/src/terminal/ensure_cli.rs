@@ -271,8 +271,8 @@ fn run_installer(shell_command: &str, child_path: &str) -> Result<(), String> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .env("PATH", child_path)
-        .process_group(0);
+        .env("PATH", child_path);
+    // Its own session (bg_proc), so its own process group for the kill.
     let child = cmd
         .spawn()
         .map_err(|e| format!("installer failed to start: {e}"))?;

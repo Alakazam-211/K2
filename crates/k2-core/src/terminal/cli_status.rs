@@ -413,11 +413,7 @@ fn probe_version(
     if !search_path.is_empty() {
         cmd.env("PATH", search_path);
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        cmd.process_group(0);
-    }
+    // Its own session (bg_proc), so its own process group for the kill.
     let child = cmd.spawn().map_err(|e| format!("could not start: {e}"))?;
     let pid = child.id();
     let (tx, rx) = mpsc::channel();

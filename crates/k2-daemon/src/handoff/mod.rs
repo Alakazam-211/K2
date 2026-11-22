@@ -856,9 +856,7 @@ fn run_blocking(exe: &std::path::Path) -> Result<u32, Failed> {
             // Its own session: the root helper's caller check wants the
             // unit's main process to be a session leader whose sudo calls
             // share its session.
-            if libc::setsid() == -1 {
-                return Err(std::io::Error::last_os_error());
-            }
+            k2_core::bg_proc::own_session()?;
             if libc::dup2(theirs_fd, CHILD_FD) == -1 {
                 return Err(std::io::Error::last_os_error());
             }

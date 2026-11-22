@@ -506,9 +506,7 @@ fn spawn_prepared(
         use std::os::unix::process::CommandExt;
         unsafe {
             c.pre_exec(|| {
-                if libc::setsid() == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
+                k2_core::bg_proc::own_session()?;
                 Ok(())
             });
         }

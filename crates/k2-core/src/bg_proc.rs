@@ -4,11 +4,84 @@
 //! steals focus. The source guard below fails on a raw `Command::new` in
 //! k2-core, k2-daemon, k2-client or src-tauri.
 
+//!
+//! On Unix every such child also runs in a session of its own (`setsid`),
+//! except the daemon's own `sudo` calls ([`SUDO_PATHS`]) and what asks for
+//! [`command_keeping_session`]. The root helper takes a `sudo` in the
+//! daemon's session, whose parent is the daemon, for the daemon itself; a
+//! child that stayed in that session and then ran `sudo` (a `k2 job`'s
+//! argv, a program on PATH the daemon runs that another user of this
+//! account can replace) would pass that check too.
+
 use std::ffi::OsStr;
+use std::process::Command;
 
-pub use k2_client::bg_proc::{command, hide, CREATE_NO_WINDOW};
+pub use k2_client::bg_proc::{hide, CREATE_NO_WINDOW};
 
-/// [`command`] for tokio: windowless on Windows, plain elsewhere.
+/// The `sudo` the daemon reaches the root helper (and the older helpers)
+/// through. Only these keep the daemon's session.
+pub const SUDO_PATHS: &[&str] = &["/usr/bin/sudo", "/usr/bin/sudo-rs", "/usr/lib/cargo/bin/sudo"];
+
+/// A background child: windowless on Windows; on Unix in its own session
+/// unless it is one of [`SUDO_PATHS`].
+pub fn command(program: impl AsRef<OsStr>) -> Command {
+    let keep = keeps_session(program.as_ref());
+    let mut c = k2_client::bg_proc::command(program);
+    if !keep {
+        in_own_session(&mut c);
+    }
+    c
+}
+
+/// Only the daemon's own `sudo`, by its absolute path.
+pub fn keeps_session(program: &OsStr) -> bool {
+    SUDO_PATHS.iter().any(|s| program == OsStr::new(s))
+}
+
+/// A background child that stays in this process's session: the daemon's
+/// own `sudo` calls (also kept by [`command`] by path), and a helper that
+/// runs inside a terminal session rather than under the daemon (`k2 vault
+/// run`, whose program reads the terminal).
+pub fn command_keeping_session(program: impl AsRef<OsStr>) -> Command {
+    k2_client::bg_proc::command(program)
+}
+
+/// Make `c`'s child lead a session of its own (Unix; nothing elsewhere).
+/// Idempotent: a later `setsid` of the caller's own is harmless.
+pub fn in_own_session(c: &mut Command) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: `own_session` only calls async-signal-safe functions
+        // (getsid, getpid, setsid) and allocates nothing.
+        unsafe {
+            c.pre_exec(own_session);
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = c;
+}
+
+/// In a forked child before exec: lead a new session, unless it already
+/// does. Fails (and so fails the spawn) when the child can't: it is a
+/// process-group leader already (`process_group(0)` asks for that; use
+/// the session instead, whose group has the same id).
+#[cfg(unix)]
+pub fn own_session() -> std::io::Result<()> {
+    // SAFETY: plain syscalls on this process.
+    unsafe {
+        if libc::getsid(0) == libc::getpid() {
+            return Ok(());
+        }
+        if libc::setsid() == -1 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
+/// [`command`] for tokio: windowless on Windows, in its own session on
+/// Unix.
 pub fn tokio_command(program: impl AsRef<OsStr>) -> tokio::process::Command {
     tokio::process::Command::from(command(program))
 }
@@ -79,6 +152,74 @@ mod tests {
         // The one allowed line is the helper itself.
         assert_eq!(allowed.len(), 1, "allow-listed raw Command::new lines: {allowed:?}");
         assert!(allowed[0].replace('\\', "/").contains("k2-client/src/bg_proc.rs:"), "{allowed:?}");
+    }
+
+    /// A child of the daemon leads its own session: a program it runs
+    /// (a `k2 job`'s argv, a tool on PATH) that then runs `sudo` is not in
+    /// the daemon's session, which the root helper requires of the daemon.
+    #[cfg(unix)]
+    #[test]
+    fn a_background_child_leads_its_own_session_and_sudo_keeps_the_daemons() {
+        use std::ffi::OsStr;
+        let mut own = super::command("sleep").arg("5").spawn().expect("spawn sleep");
+        let mut kept = super::command_keeping_session("sleep").arg("5").spawn().expect("spawn sleep");
+        let mut tk_cmd = super::tokio_command("sleep");
+        let mut tk = tk_cmd.as_std_mut().arg("5").spawn().expect("spawn sleep (tokio_command's)");
+        // SAFETY: getsid reads session ids.
+        let (s_own, s_kept, s_tk, s_me) =
+            unsafe { (libc::getsid(own.id() as i32), libc::getsid(kept.id() as i32), libc::getsid(tk.id() as i32), libc::getsid(0)) };
+        let own_pid = own.id() as i32;
+        let tk_pid = tk.id() as i32;
+        for c in [&mut own, &mut kept, &mut tk] {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+        assert_eq!(s_own, own_pid, "bg_proc::command: the child leads its own session");
+        assert_ne!(s_own, s_me);
+        assert_eq!(s_tk, tk_pid, "bg_proc::tokio_command: the same");
+        assert_eq!(s_kept, s_me, "command_keeping_session stays in this session");
+        // The daemon's own sudo (the root helper's caller check) keeps it.
+        for s in super::SUDO_PATHS {
+            assert!(super::keeps_session(OsStr::new(s)), "{s}");
+        }
+        for p in ["sudo", "/usr/local/bin/sudo", "sh", "/bin/sh", "claude", "/home/k2/.local/bin/claude"] {
+            assert!(!super::keeps_session(OsStr::new(p)), "{p} must get its own session");
+        }
+    }
+
+    /// No daemon spawn stays in the daemon's session except the two kinds
+    /// `bg_proc` allows: its own `sudo` and `command_keeping_session`, used
+    /// only by `k2 vault run` (which runs in a terminal's session, not under
+    /// the daemon). And no `process_group(0)` (it would make the session
+    /// impossible: a group leader can't `setsid`).
+    #[test]
+    fn no_daemon_spawn_keeps_the_daemons_session() {
+        let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let mut files = Vec::new();
+        for r in ["k2-core/src", "k2-daemon/src"] {
+            rs_files(&crates.join(r), &mut files);
+        }
+        assert!(files.len() > 300, "the scan found the sources ({} files)", files.len());
+        let (mut keeping, mut groups) = (Vec::new(), Vec::new());
+        for f in &files {
+            if is_test_file(f) || f.ends_with("bg_proc.rs") {
+                continue;
+            }
+            let src = std::fs::read_to_string(f).unwrap();
+            for (n, line) in non_test_lines(f, &src) {
+                let code = line.split("//").next().unwrap_or("");
+                let at = format!("{}:{n}", f.display()).replace('\\', "/");
+                if code.contains(concat!("command_keeping", "_session(")) {
+                    keeping.push(at.clone());
+                }
+                if code.contains(concat!(".process", "_group(")) {
+                    groups.push(at);
+                }
+            }
+        }
+        assert_eq!(keeping.len(), 1, "spawns that keep the daemon's session: {keeping:?}");
+        assert!(keeping[0].contains("k2-daemon/src/vault/run.rs:"), "{keeping:?}");
+        assert!(groups.iter().all(|g| g.contains("k2-daemon/src/vault/run.rs:")), "process_group outside k2 vault run: {groups:?}");
     }
 
     #[test]

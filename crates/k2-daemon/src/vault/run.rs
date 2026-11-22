@@ -511,7 +511,10 @@ mod imp {
         // --no-mask gives the child the terminal on stdout and stderr too.
         let shares_terminal = foreground_tty(0) || (args.no_mask && (foreground_tty(1) || foreground_tty(2)));
 
-        let mut cmd = k2_core::bg_proc::command(&args.cmd[0]);
+        // `k2 vault run` runs inside the caller's terminal session (the CLI
+        // started this helper there, not the daemon): its program may read
+        // the terminal, so it stays in that session.
+        let mut cmd = k2_core::bg_proc::command_keeping_session(&args.cmd[0]);
         cmd.args(&args.cmd[1..]);
         // The child gets the secrets, not the agent's identity: no K2
         // credential variable, and the no-owner guard, so a k2 it runs

@@ -253,12 +253,11 @@ mod tests {
             std::process::id(),
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
         );
-        use std::os::unix::process::CommandExt;
         // `; :` keeps the shell from exec-ing sleep, so the marker stays in
-        // argv. Its own process group, so the kill below takes the sleep too.
+        // argv. Its own session (bg_proc), so its own process group: the kill
+        // below takes the sleep too.
         let mut child = crate::bg_proc::command("/bin/sh")
             .args(["-c", "/bin/sleep 300; :", &marker])
-            .process_group(0)
             .spawn()
             .expect("spawn sh");
         let pid = child.id();

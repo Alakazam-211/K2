@@ -395,9 +395,7 @@ impl RuntimeEngine for ProcessEngine {
         };
         unsafe {
             cmd.pre_exec(|| {
-                if libc::setsid() == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
+                k2_core::bg_proc::own_session()?;
                 Ok(())
             });
         }

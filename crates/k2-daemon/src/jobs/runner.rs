@@ -310,13 +310,10 @@ fn spawn(job: &Job, live: &Arc<Live>, log_path: &Path) -> Result<Started, (JobEr
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     #[cfg(unix)]
-    let spawned = {
-        cmd.process_group(0);
-        cmd.spawn().map(|c| {
-            let pgid = c.id() as i32;
-            (c, Group { pgid })
-        }).map_err(|e| e.to_string())
-    };
+    let spawned = spawn_own_session(&mut cmd).map(|c| {
+        let pgid = c.id() as i32;
+        (c, Group { pgid })
+    }).map_err(|e| e.to_string());
     #[cfg(windows)]
     let spawned = crate::publish_runtime::win_job::spawn_in_job(&mut cmd).map(|(c, job)| (c, Group { job }));
     let (mut child, group) = match spawned {
@@ -337,6 +334,20 @@ fn spawn(job: &Job, live: &Arc<Live>, log_path: &Path) -> Result<Started, (JobEr
         readers.push(std::thread::spawn(move || pump(pipe, &redactor, &sink)));
     }
     Ok(Started { child, group, sink, readers, materialized: mat })
+}
+
+/// Start a job run in a session of its own (`setsid`: it leads its session
+/// and its process group, so the group is still `pgid == pid`). Agent
+/// Isolation M1b review B1: a run in the daemon's session would look like
+/// the daemon to the root helper's caller check (a `sudo` under the
+/// daemon, in its session), so a job's argv could ask for daemon-class
+/// helper verbs (`agents place`, credentials, drop-ins).
+#[cfg(unix)]
+pub(crate) fn spawn_own_session(cmd: &mut std::process::Command) -> std::io::Result<std::process::Child> {
+    // `bg_proc::command` already asks for it; said again here so a run
+    // never depends on how its Command was made.
+    k2_core::bg_proc::in_own_session(cmd);
+    cmd.spawn()
 }
 
 /// The capped log. Bytes past the cap are counted, not kept.
@@ -539,6 +550,20 @@ mod tests {
     /// as one. (Not `/bin/sleep`: macOS hides an Apple binary's environment.)
     #[test]
     #[ignore = "child process for a_leader_is_ours_only_with_its_run_id_in_its_environment"]
+    fn a_job_run_leads_its_own_session() {
+        let mut c = std::process::Command::new("sleep");
+        c.arg("5");
+        let mut child = spawn_own_session(&mut c).expect("spawn sleep");
+        let pid = child.id() as i32;
+        // SAFETY: getsid reads a session id; no preconditions.
+        let (theirs, ours) = unsafe { (libc::getsid(pid), libc::getsid(0)) };
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(theirs, pid, "the run leads its own session");
+        assert_ne!(theirs, ours, "the run is not in the daemon's session (review B1)");
+    }
+
+    #[test]
     fn leader_child_sleeps() {
         use std::io::Write;
         if std::env::var_os("LEADER_CHILD").is_some() {

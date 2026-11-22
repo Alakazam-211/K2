@@ -490,9 +490,7 @@ mod tests {
             // SAFETY: setsid is async-signal-safe.
             unsafe {
                 cmd.pre_exec(|| {
-                    if libc::setsid() == -1 {
-                        return Err(std::io::Error::last_os_error());
-                    }
+                    crate::bg_proc::own_session()?;
                     Ok(())
                 });
             }

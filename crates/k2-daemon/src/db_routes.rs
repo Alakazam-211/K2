@@ -319,20 +319,8 @@ pub fn handle_window_state_get() -> CliResponse {
 }
 
 // ── Projects ──────────────────────────────────────────────────────────
-
-pub fn handle_projects_list() -> CliResponse {
-    // The read pool (speed pass P1): this route writes nothing.
-    serialized(pops::projects_list_with_workspaces_read())
-}
-
-pub fn handle_projects_get_icon(params: &HashMap<String, String>) -> CliResponse {
-    let path = str_param(params, "path");
-    if path.is_empty() {
-        return CliResponse::bad_request("Missing 'path' parameter");
-    }
-    let project_id = opt_str(params, "project_id");
-    serialized(pops::projects_get_icon(&path, project_id.as_deref()))
-}
+// `GET /cli/projects/list` and `/cli/projects/get-icon` are in
+// `crate::project_icons` (`?icons=rev`, ETag / 304, 0.46.17).
 
 pub fn handle_projects_get_editors() -> CliResponse {
     ok_serialized(k2_core::editors::get_installed_editors())

@@ -101,14 +101,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // ── Reads ───────────────────────────────────────────────────
         // GET /cli/project-group/list
         // All groups + member counts + poc + pin/sort metadata, nav
-        // order (pinned first, then sort_order, then name).
-        "/cli/project-group/list" => match project_groups::list_groups() {
-            Ok(groups) => {
-                let groups = with_read_state(groups);
-                CliResponse::ok_json(serde_json::json!({ "ok": true, "groups": groups }).to_string())
-            }
-            Err(e) => core_error(e),
-        },
+        // order (pinned first, then sort_order, then name). `?icons=rev`
+        // (0.46.17): `iconRev` per row (crate::project_icons).
+        "/cli/project-group/list" => crate::project_icons::group_list(params),
 
         // GET /cli/project-group/show?group=<id|name|prefix>
         // One group: members enriched with (workspaceId, name, path,
@@ -167,36 +162,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         }
 
         // GET /cli/project-group/icon?group=<id|name|prefix>
-        // §6.7.7 — the group's icon dataUrl, served OUTSIDE the
-        // list/show payloads (dataUrls run ~10-50KB — the nav rail
-        // fetches per group and client-caches, the get-icon idiom).
-        // `found:false` = unset (the renderer falls back to initials +
-        // the stable color).
-        "/cli/project-group/icon" => {
-            let selector = str_param(params, "group");
-            if selector.is_empty() {
-                return Some(usage_error("missing group (a project name, id, or unique prefix)"));
-            }
-            let group_id = match project_groups::resolve_group(&selector) {
-                Ok(id) => id,
-                Err(e) => return Some(resolve_error_response(&selector, e)),
-            };
-            match project_groups::get_group_icon(&group_id) {
-                Ok(icon) => CliResponse::ok_json(
-                    serde_json::json!({
-                        "ok": true,
-                        "groupId": group_id,
-                        "found": icon.is_some(),
-                        // 0.46.1: the same key list/show carry, so the
-                        // client caches the blob under it.
-                        "iconKey": icon.as_deref().map(project_groups::icon_key),
-                        "dataUrl": icon,
-                    })
-                    .to_string(),
-                ),
-                Err(e) => core_error(e),
-            }
-        }
+        // §6.7.7 — the group's icon dataUrl, outside list/show; `iconRev`,
+        // ETag and 304 since 0.46.17 (crate::project_icons).
+        "/cli/project-group/icon" => crate::project_icons::group_icon(params),
 
         // ── POST-only mutations reached via the GET chain → 405 ─────
         // (feedback_post_only_route_guards house rule.)
@@ -428,7 +396,7 @@ pub(crate) fn messages_after_seq_body(
     }
 }
 
-fn with_read_state(groups: Vec<project_groups::ProjectGroup>) -> Vec<serde_json::Value> {
+pub(crate) fn with_read_state(groups: Vec<project_groups::ProjectGroup>) -> Vec<serde_json::Value> {
     let rows: Vec<serde_json::Value> = groups
         .iter()
         .map(|g| serde_json::to_value(g).unwrap_or_else(|_| serde_json::json!({ "id": g.id })))

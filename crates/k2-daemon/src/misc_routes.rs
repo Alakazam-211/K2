@@ -1559,10 +1559,10 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // W6 (0.40.30) — one preset with its migration-0070 metadata.
         "/cli/presets/get" => crate::db_routes::handle_presets_get(params),
         "/cli/window-state/get" => crate::db_routes::handle_window_state_get(),
-        "/cli/projects/list" => crate::db_routes::handle_projects_list(),
+        "/cli/projects/list" => crate::project_icons::projects_list(params),
         // task #672 — canonical Active-set snapshot (GET).
         "/cli/projects/active" => crate::db_routes::handle_projects_active(),
-        "/cli/projects/get-icon" => crate::db_routes::handle_projects_get_icon(params),
+        "/cli/projects/get-icon" => crate::project_icons::project_icon(params),
         "/cli/projects/get-editors" => crate::db_routes::handle_projects_get_editors(),
         "/cli/projects/get-all-editors" => crate::db_routes::handle_projects_get_all_editors(),
         // Git GETs — libgit2 operations. Per F5, these can block the

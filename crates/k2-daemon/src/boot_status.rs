@@ -1374,6 +1374,9 @@ pub fn features() -> Vec<&'static str> {
     // 0.46.16 (prd-postal-in-k2-v1 S0): the `/v1` door writes the Postal
     // label itself, so p5 sends the raw body (an older K2 gets p5's label).
     out.push(k2_core::postal::FEATURE_LABEL);
+    // 0.46.17: `?icons=rev` on the workspace and project lists, and
+    // `iconRev` + ETag / 304 on the icon routes (crate::project_icons).
+    out.push(crate::project_icons::FEATURE);
     // Remote desktop (prd-remote-desktop-tab-v1 §5): whenever the routes
     // exist, so clients show + → Desktop (Beta) and the off card.
     out.push(crate::desktop::FEATURE);
@@ -1611,6 +1614,7 @@ mod tests {
                 "post-idempotency-v1",
                 "send-once",
                 "postal-label",
+                "project-icons-rev-v1",
                 "remote-desktop-v1",
                 // Sew 0.9.0's pin: voice:record in App roles.
                 "app-voice-record-v1",

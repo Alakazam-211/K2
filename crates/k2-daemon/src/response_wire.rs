@@ -13,6 +13,13 @@
 //!   tag may also come as the `if_none_match` query parameter: a header a
 //!   web page sets itself makes the browser ask first (a CORS preflight,
 //!   one more round trip), a query parameter does not.
+//! - **Icon ETag / 304** on the routes in [`ICON_ETAG_ROUTES`]
+//!   (`project-icons-rev-v1`): a 200 JSON answer with an `iconRev` carries
+//!   the strong `ETag: "<iconRev>"`, so a phone that holds the list's
+//!   `iconRev` already knows the tag, and a matching `If-None-Match` gets
+//!   `304 Not Modified` with no body. No icon (`iconRev` null): no tag.
+//! - **Repeated query keys** ([`Request::repeated`]): the parsed params keep
+//!   one value per key, so a handler that refuses a repeated key asks here.
 //!
 //! The dispatcher notes each request ([`note`]) inside the connection's
 //! [`scope`]; the writers in `routes/http.rs` call [`shape`]. Outside a
@@ -24,6 +31,10 @@ use std::io::Write as _;
 
 /// Routes whose 200 JSON answers carry an ETag and may answer 304.
 pub const ETAG_ROUTES: &[&str] = &["/cli/projects/list"];
+
+/// Routes whose 200 JSON answers carry `ETag: "<iconRev>"` and may answer
+/// 304 (`project-icons-rev-v1`).
+pub const ICON_ETAG_ROUTES: &[&str] = &["/cli/projects/get-icon", "/cli/project-group/icon"];
 
 /// Smaller JSON bodies are sent as they are: gzip would save a few bytes
 /// and cost a little time on both ends.
@@ -42,6 +53,8 @@ pub struct Request {
     pub remote: bool,
     /// A GET of a route in [`ETAG_ROUTES`].
     pub etag: bool,
+    /// A GET of a route in [`ICON_ETAG_ROUTES`].
+    pub icon_etag: bool,
     /// The request's `If-None-Match` header, else its `if_none_match`
     /// query parameter.
     pub if_none_match: Option<String>,
@@ -49,6 +62,9 @@ pub struct Request {
     /// version (`X-K5-Server-Version`, R1 slice 10). Never off the machine,
     /// where a ghost `/boot-status` hides the version from strangers.
     pub server_version: bool,
+    /// Query keys sent more than once, in first-seen order (raw, as the
+    /// params map keys them).
+    pub repeated: Vec<String>,
 }
 
 impl Request {
@@ -56,12 +72,15 @@ impl Request {
     /// request head (request line and headers).
     pub fn from_head(remote: bool, method: &str, path_and_query: &str, head: &str) -> Request {
         let path = path_and_query.split('?').next().unwrap_or("");
-        let etag = method.eq_ignore_ascii_case("GET") && ETAG_ROUTES.contains(&path);
+        let get = method.eq_ignore_ascii_case("GET");
+        let etag = get && ETAG_ROUTES.contains(&path);
+        let icon_etag = get && ICON_ETAG_ROUTES.contains(&path);
         Request {
             gzip: remote && crate::static_files::accepts(header_value(head, "accept-encoding"), "gzip"),
             remote,
             etag,
-            if_none_match: if etag {
+            icon_etag,
+            if_none_match: if etag || icon_etag {
                 header_value(head, "if-none-match").map(str::to_string).or_else(|| {
                     k2_core::agent_hooks::parse_query_params(path_and_query)
                         .remove("if_none_match")
@@ -71,7 +90,13 @@ impl Request {
                 None
             },
             server_version: !remote && path.starts_with("/cli/"),
+            repeated: repeated_keys(path_and_query),
         }
+    }
+
+    /// Was the query key `key` sent more than once?
+    pub fn repeats(&self, key: &str) -> bool {
+        self.repeated.iter().any(|k| k == key)
     }
 
     /// Keep the version header only when `on_this_machine` (the request
@@ -81,6 +106,24 @@ impl Request {
         self.server_version &= on_this_machine;
         self
     }
+}
+
+/// The keys of `path_and_query`'s query that appear more than once (a
+/// pair with no `=` is not a key, as in the params parser).
+fn repeated_keys(path_and_query: &str) -> Vec<String> {
+    let Some((_, query)) = path_and_query.split_once('?') else { return Vec::new() };
+    let mut seen: Vec<&str> = Vec::new();
+    let mut repeated: Vec<String> = Vec::new();
+    for key in query.split('&').filter_map(|pair| pair.split_once('=').map(|(k, _)| k)) {
+        if seen.contains(&key) {
+            if !repeated.iter().any(|r| r == key) {
+                repeated.push(key.to_string());
+            }
+        } else {
+            seen.push(key);
+        }
+    }
+    repeated
 }
 
 /// A header's value in `head` (first match, trimmed), or `None`.
@@ -139,6 +182,24 @@ pub fn etag_of(body: &str) -> String {
     format!("W/\"{hex}\"")
 }
 
+/// The strong ETag of an icon answer: `"<iconRev>"` from the body's
+/// top-level `iconRev`; `None` when it is null, empty or absent.
+pub fn icon_etag_of(body: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(body).ok()?;
+    let rev = v.get("iconRev")?.as_str().filter(|r| !r.is_empty())?;
+    Some(format!("\"{rev}\""))
+}
+
+/// Does `If-None-Match` name the icon tag `tag`? Each comma-separated entry
+/// may be the bare rev (`abc`), quoted (`"abc"`) or weak (`W/"abc"`); `*`
+/// matches any tag.
+pub fn icon_not_modified(if_none_match: Option<&str>, tag: &str) -> bool {
+    let Some(inm) = if_none_match else { return false };
+    let bare = |t: &str| t.trim().trim_start_matches("W/").trim_matches('"').to_string();
+    let want = bare(tag);
+    !want.is_empty() && inm.split(',').any(|t| t.trim() == "*" || bare(t) == want)
+}
+
 fn is_json(ct: &str) -> bool {
     ct.split(';').next().is_some_and(|t| t.trim().eq_ignore_ascii_case("application/json"))
 }
@@ -151,10 +212,17 @@ pub fn shape(req: &Request, status: &str, ct: &str, body: &str) -> Shaped {
     if req.server_version {
         headers.push_str(crate::cli_usage::SERVER_VERSION_HEADER);
     }
-    if req.etag && ok && json {
-        let tag = etag_of(body);
+    let tag = match (ok && json, req.etag, req.icon_etag) {
+        (true, true, _) => Some((etag_of(body), false)),
+        (true, _, true) => icon_etag_of(body).map(|t| (t, true)),
+        _ => None,
+    };
+    if let Some((tag, icon)) = tag {
         headers.push_str(&format!("ETag: {tag}\r\nCache-Control: no-cache\r\n"));
-        if crate::static_files::not_modified(req.if_none_match.as_deref(), &tag) {
+        let inm = req.if_none_match.as_deref();
+        let unchanged =
+            if icon { icon_not_modified(inm, &tag) } else { crate::static_files::not_modified(inm, &tag) };
+        if unchanged {
             if req.remote {
                 headers.push_str("Vary: Accept-Encoding\r\n");
             }
@@ -362,6 +430,98 @@ mod tests {
             let s = shape(&r, "200 OK", "application/json", "{}");
             assert!(!s.headers.contains("X-K5-Server-Version"), "{r:?}: {:?}", s.headers);
         }
+    }
+
+    /// `project-icons-rev-v1`: an icon answer's tag is its `iconRev`; a
+    /// matching `If-None-Match` (header or query) is a 304 with no body, a
+    /// stale one the full answer.
+    #[test]
+    fn icon_routes_tag_their_rev_and_answer_304() {
+        let body = r#"{"found":true,"dataUrl":"data:image/png;base64,AAAA","iconRev":"0123456789abcdef"}"#;
+        let inm = "If-None-Match: \"0123456789abcdef\"";
+        for path in ICON_ETAG_ROUTES {
+            let first = Request::from_head(false, "GET", &format!("{path}?token=t"), &head(&[]));
+            assert!(first.icon_etag && !first.etag, "{path}");
+            let s = shape(&first, "200 OK", "application/json", body);
+            assert!(s.headers.contains("ETag: \"0123456789abcdef\"\r\n"), "{path}: {:?}", s.headers);
+            assert!(s.headers.contains("Cache-Control: no-cache\r\n"));
+            assert_eq!(s.body, body.as_bytes());
+
+            let again = Request::from_head(false, "GET", &format!("{path}?token=t"), &head(&[inm]));
+            let s = shape(&again, "200 OK", "application/json", body);
+            assert_eq!(s.status, "304 Not Modified", "{path}");
+            assert!(!s.has_body);
+            assert!(s.body.is_empty());
+            assert!(s.headers.contains("ETag: \"0123456789abcdef\"\r\n"));
+
+            let q = Request::from_head(false, "GET", &format!("{path}?if_none_match=%220123456789abcdef%22"), &head(&[]));
+            assert_eq!(shape(&q, "200 OK", "application/json", body).status, "304 Not Modified", "{path}");
+
+            let stale = Request::from_head(false, "GET", path, &head(&["If-None-Match: \"ffffffffffffffff\""]));
+            let s = shape(&stale, "200 OK", "application/json", body);
+            assert_eq!(s.status, "200 OK", "{path}");
+            assert_eq!(s.body, body.as_bytes());
+
+            // No icon: no tag, and an If-None-Match never makes it a 304.
+            let none = r#"{"found":false,"dataUrl":null,"iconRev":null}"#;
+            let s = shape(&again, "200 OK", "application/json", none);
+            assert_eq!(s.status, "200 OK");
+            assert!(!s.headers.contains("ETag"), "{:?}", s.headers);
+            // A POST or an error answer: never.
+            let post = Request::from_head(false, "POST", path, &head(&[inm]));
+            assert_eq!(shape(&post, "200 OK", "application/json", body).status, "200 OK");
+            let err = shape(&again, "400 Bad Request", "application/json", body);
+            assert_eq!(err.status, "400 Bad Request");
+            assert!(!err.headers.contains("ETag"));
+        }
+        // The list keeps its own whole-body tag.
+        let list = Request::from_head(false, "GET", "/cli/projects/list", &head(&[inm]));
+        assert!(list.etag && !list.icon_etag);
+        assert_eq!(shape(&list, "200 OK", "application/json", body).status, "200 OK");
+        assert_eq!(icon_etag_of(r#"{"iconRev":""}"#), None);
+        assert_eq!(icon_etag_of("not json"), None);
+    }
+
+    /// The phone sends the rev bare, quoted, weak, or in a list.
+    #[test]
+    fn icon_if_none_match_takes_bare_quoted_weak_and_lists() {
+        let body = r#"{"found":true,"dataUrl":"data:image/png;base64,AAAA","iconRev":"abc0123456789def"}"#;
+        for inm in [
+            "abc0123456789def",
+            "\"abc0123456789def\"",
+            "W/\"abc0123456789def\"",
+            "\"old\", abc0123456789def",
+            "W/\"old\" , W/\"abc0123456789def\"",
+            "x,\"y\",\"abc0123456789def\"",
+            "*",
+        ] {
+            for path in ICON_ETAG_ROUTES {
+                let r = Request::from_head(false, "GET", path, &head(&[&format!("If-None-Match: {inm}")]));
+                let s = shape(&r, "200 OK", "application/json", body);
+                assert_eq!(s.status, "304 Not Modified", "{path} If-None-Match: {inm}");
+                assert!(s.body.is_empty() && !s.has_body, "{inm}");
+            }
+        }
+        for inm in ["abc0123456789de", "\"abc0123456789deff\"", "W/\"other\"", "\"\"", ""] {
+            let r = Request::from_head(false, "GET", ICON_ETAG_ROUTES[0], &head(&[&format!("If-None-Match: {inm}")]));
+            let s = shape(&r, "200 OK", "application/json", body);
+            assert_eq!(s.status, "200 OK", "If-None-Match: {inm}");
+            assert_eq!(s.body, body.as_bytes(), "{inm}");
+        }
+        assert!(icon_not_modified(Some("abc"), "\"abc\""));
+        assert!(!icon_not_modified(None, "\"abc\""));
+        assert!(!icon_not_modified(Some("*"), "\"\""), "no rev, no match");
+    }
+
+    #[test]
+    fn repeated_query_keys_are_noted() {
+        let r = Request::from_head(false, "GET", "/cli/projects/list?token=t&icons=rev&a=1&icons=rev&a=2&icons=x", &head(&[]));
+        assert_eq!(r.repeated, vec!["icons".to_string(), "a".to_string()]);
+        assert!(r.repeats("icons"));
+        assert!(!r.repeats("token"));
+        let once = Request::from_head(false, "GET", "/cli/projects/list?token=t&icons=rev&iconsx=1&flag", &head(&[]));
+        assert!(once.repeated.is_empty(), "{:?}", once.repeated);
+        assert!(Request::from_head(false, "GET", "/cli/projects/list", &head(&[])).repeated.is_empty());
     }
 
     #[test]

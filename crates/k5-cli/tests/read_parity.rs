@@ -24,9 +24,11 @@
 //!   socket with no `Authorization` line and never the owner token; "not
 //!   served" goes on to TCP with the owner token, no answer to the no-owner
 //!   line.
+//! - The help (0.46.17): `-h` or `--help` anywhere is the read help, read
+//!   nothing, past both gates.
 //! - What the binary hands to the shell: a workspace on another server, a
-//!   `--lines` with a space or a `#`, `--help` (which the shell reads as
-//!   the workspace `--help`), a port that is no port.
+//!   `--lines` with a space or a `#`, a help word with other words, a port
+//!   that is no port.
 
 #![cfg(unix)]
 
@@ -1004,26 +1006,27 @@ fn read_hands_these_to_the_shell() {
             0,
             1,
         )),
+        // Help never acts (0.46.17): the help, past both gates.
         shell(case(
-            "--help, the virtual desktop's switch: the shell's connection gate",
+            "--help, the virtual desktop's switch: the help",
             &["--help"],
             &[("K2_NO_OWNER_FALLBACK", "1")],
             vec![],
             owner_and_port,
-            1,
+            0,
             0,
         )),
         shell(case(
-            "--help, no port: the shell's gate",
+            "--help, no port: the help",
             &["--help"],
             &[],
             vec![],
             owner_only,
-            1,
+            0,
             0,
         )),
         shell(case(
-            "--agent --help",
+            "--agent --help: the help, not --agent's value",
             &["acme", "--agent", "--help"],
             &[],
             vec![],
@@ -1046,34 +1049,31 @@ fn read_hands_these_to_the_shell() {
     }
 }
 
-/// The family's own help lines (`text::FAMILY_FORMS`): the shell has no
-/// help for `read`, it reads the workspace `--help` (a bash bug: help
-/// asks; these rows flip when the shell's fix lands). A help line a gate
-/// stops is the shell's (above).
+/// The help lines: since 0.46.17 the shell prints the read help for
+/// `-h` or `--help` and reads nothing (it read a workspace named
+/// `--help`). The page is the binary's; the gates' rows are above.
 #[test]
-fn the_help_lines_are_the_family_s() {
+fn the_help_lines_print_the_help() {
     let rig = Rig::new(VERB, "help");
     let v = vec![
-        // The shell has no help for read: it reads the workspace `--help`
-        // (a bash bug: help asks). The family's own help lines.
         // native: read --help
         case(
-            "--help reads the workspace --help",
+            "--help: the help, nothing read",
             &["--help"],
             &[],
-            vec![ok(LINES)],
+            vec![],
             owner_and_port,
             0,
-            1,
+            0,
         ),
         case(
-            "-h reads the workspace -h",
+            "-h: the help, nothing read",
             &["-h"],
             &[],
-            vec![ok(LINES)],
+            vec![],
             owner_and_port,
             0,
-            1,
+            0,
         ),
     ];
     for c in v {

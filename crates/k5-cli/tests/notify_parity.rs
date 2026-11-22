@@ -135,8 +135,8 @@ fn notify_answers_as_the_shell_does() {
             vec![ok("<html>")],
             1,
         )),
-        // `-h` there is an unknown argument to bash (no request).
-        shell(stop("-h: an unknown argument", &["email", "ada", "-h"], 2)),
+        // Help never acts (0.46.17): bash prints the help, no request.
+        shell(stop("-h: the help", &["email", "ada", "-h"], 0)),
     ];
     for c in v {
         rig.check(&c);
@@ -167,36 +167,31 @@ fn the_lines_say_the_brand_s_name() {
     }
 }
 
-/// `notify email mute --help` and `-h` (`text::FAMILY_FORMS`): `mute`
-/// reads the flag as the workspace and mutes it, as the shell's does (a
-/// bash bug: help acts; these rows flip when the shell's fix lands). A
-/// help line a gate stops is the shell's.
+/// `notify email mute --help` and `-h` (0.46.17): the notify help, sent
+/// nothing, past both gates. Before, `mute` read the flag as the
+/// workspace and muted it.
 #[test]
-fn the_mute_help_lines_are_the_family_s() {
+fn the_mute_help_lines_print_the_help() {
     let rig = Rig::new("notify", "help");
     let v = vec![
         // native: notify email mute --help
-        run(
-            "email mute --help mutes the workspace --help",
-            &["email", "mute", "--help"],
-            vec![ok(r#"{"muted":true,"workspace":"--help"}"#)],
+        stop("email mute --help", &["email", "mute", "--help"], 0),
+        stop("email mute -h", &["email", "mute", "-h"], 0),
+        shell(stop(
+            "email mute, a workspace, then -h",
+            &["email", "mute", "acme", "-h"],
             0,
-        ),
-        run(
-            "email mute -h mutes the workspace -h",
-            &["email", "mute", "-h"],
-            vec![ok(r#"{"muted":true,"workspace":"-h"}"#)],
-            0,
-        ),
-        shell(case(
-            "email mute --help, the virtual desktop's switch: the shell's gate",
+        )),
+        shell(stop("email unmute --help", &["email", "unmute", "--help"], 0)),
+        case(
+            "email mute --help, the virtual desktop's switch: the help",
             &["email", "mute", "--help"],
             &[("K2_NO_OWNER_FALLBACK", "1")],
             vec![],
             owner_and_port,
-            1,
             0,
-        )),
+            0,
+        ),
     ];
     for c in v {
         rig.check(&c);

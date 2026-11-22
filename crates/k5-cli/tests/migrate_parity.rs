@@ -138,36 +138,16 @@ fn help_never_acts() {
         &["import-secrets", "begin", "--new", "--help"],
         &["approve", "mv_1", "-h"],
         &["approve", "mv_1", "--json", "--help"],
+        // Since 0.46.17 a value flag never takes the help word (it sent
+        // the export with -h as the move key).
+        &["export-secrets", "--to", "-h", "--out", "f"],
+        &["export-secrets", "--to", "age1x", "--out", "--help"],
+        &["status", "--help"],
     ] {
         let mut c = case("help", args, 0);
         c.handed = true;
         rig.check(&c);
     }
-}
-
-/// A bash bug, reported: `--to` and `--out` take `-h` as their value, so
-/// `k2 migrate export-secrets --to -h --out f` sends the export
-/// (cli/src/migrate.sh, cmd_migrate's export-secrets arm). The binary
-/// hands the line to the shell (the front's rule for `-h`), so both send
-/// it. FLIP: when bash's fix lands this fails; then the line prints the
-/// help and sends nothing, and this becomes a help_never_acts row.
-#[test]
-fn export_to_takes_help_as_its_value_bash_bug() {
-    let rig = VRig::new();
-    let c = sock(
-        "export, -h as --to's value (bash bug)",
-        &["export-secrets", "--to", "-h", "--out", "f"],
-        vec![ok(EXPORT)],
-        0,
-    );
-    let bash = rig.run(true, false, &c);
-    assert_eq!(bash.out.code, Some(0), "{bash:#?}");
-    assert_eq!(
-        bash.vault.len(),
-        1,
-        "FLIP: bash no longer sends it: {bash:#?}"
-    );
-    assert!(bash.vault[0].contains("\"to\": \"-h\""), "{bash:#?}");
 }
 
 #[test]

@@ -58,11 +58,10 @@
 //!   [`remote::sends_here`]: a path after the host, a user part, IPv6;
 //!   HTTPS where curl would use a proxy; plain http to anything but a
 //!   literal loopback address);
-//! - a word that is not UTF-8, and a command line with `-h` or `--help`
-//!   ([`crate::front`]), but `read --help` and `read -h`: the shell reads
-//!   the workspace `--help` (a bash bug: help asks), and so does this
-//!   ([`crate::text::FAMILY_FORMS`]), where no gate stops the line
-//!   ([`prelude::help_line_gated`]);
+//! - a word that is not UTF-8, and a command line with `-h` or `--help`:
+//!   the shell prints the read help for it and reads nothing (since
+//!   0.46.17), and the front sends it to that page or to the shell
+//!   ([`crate::front`]), so it never gets here;
 //! - a `--lines` value with a byte that is not printable ASCII, or a `#`:
 //!   the shell hands it to curl as it is, and curl refuses it or cuts it;
 //! - a port that is set but is no port curl takes, and a `python3` the
@@ -234,6 +233,9 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .skip(1)
         .map(|a| a.to_str())
         .collect::<Option<_>>()?;
+    if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
+        return None;
+    }
     let Some(ask) = parse(&words) else {
         return Some(needs_value(words.last().copied().unwrap_or_default()));
     };
@@ -257,9 +259,6 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
             return Some(Exit::Error);
         }
     };
-    if prelude::help_line_gated(args, &settings) {
-        return None;
-    }
     if prelude::gate(&settings).is_none() {
         // A port curl won't take is the shell's.
         settings.port_text.as_deref().and_then(curl_port)?;

@@ -2,9 +2,9 @@
 //! parity rig ([`common::parity`]): the same requests, stdout, stderr and
 //! exit code.
 //!
-//! - The words: no term, an empty one, a term (escaped, unicode, a help
-//!   flag as the term, which the front hands to the shell), words after
-//!   it. (A term that is not UTF-8 is
+//! - The words: no term, an empty one, a term (escaped, unicode), words
+//!   after it, a help word (the help: it asks nothing, since 0.46.17).
+//!   (A term that is not UTF-8 is
 //!   escaped by [`k5_cli::transport::encode::quote_bytes`], whose own
 //!   tests pin it; the rig's words are UTF-8.)
 //! - The list's answers: terms (odd types, unicode padding, many: one
@@ -14,7 +14,7 @@
 //!   JSON, empty, odd types.
 //! - The owner from disk, a passport over TCP, a re-minted, a healed and
 //!   a dead passport, PRD 13.9 #4's owner token with a passport, the gates
-//!   (a help word lets the virtual desktop's guard by).
+//!   (a help word goes past both: the help).
 //! - No answer (an empty reply, a 5xx with no body, none in time): the
 //!   line, then death by SIGPIPE (141), after the title for the list; a
 //!   reset, not HTTP, TMPDIR unusable and no daemon: the reader on an
@@ -43,7 +43,7 @@ fn with(env: Vec<(&'static str, String)>, c: Case) -> Case {
 }
 
 /// A line the front hands to the shell: one with `-h` or `--help` in it
-/// (no glossary line is a help page).
+/// that is no help form of its own (`glossary -h x`).
 fn shell(c: Case) -> Case {
     Case {
         compare: Compare::Shell,
@@ -171,13 +171,14 @@ fn the_list() {
             3,
             0,
         ),
+        // Help never acts (0.46.17): the help, past both gates.
         shell(case(
-            "a help word lets the guard by: the connection gate",
+            "a help word past the gates: the help",
             &["x", "--help"],
             &[("K2_NO_OWNER_FALLBACK", "1")],
             vec![],
             owner_and_port,
-            1,
+            0,
             0,
         )),
     ];
@@ -208,43 +209,44 @@ fn one_term() {
             0,
             1,
         ),
-        // The family's own help lines (a bash bug: help asks).
+        // Help never acts (0.46.17): the family's help lines are the
+        // help page, asked nothing, past both gates.
         // native: glossary --help
         case(
-            "--help is a term",
+            "--help: the help",
             &["--help"],
             &[],
-            vec![ok(TERM)],
+            vec![],
             owner_and_port,
             0,
-            1,
+            0,
         ),
         case(
-            "-h alone is a term",
+            "-h alone: the help",
             &["-h"],
             &[],
-            vec![ok(TERM)],
+            vec![],
             owner_and_port,
             0,
-            1,
+            0,
         ),
         case(
-            "--help: the virtual desktop's guard lets it by, the connection gate",
+            "--help past the virtual desktop's guard and the connection gate",
             &["--help"],
             &[("K2_NO_OWNER_FALLBACK", "1")],
             vec![],
             owner_and_port,
-            1,
+            0,
             0,
         ),
         shell(case(
-            "-h is a term",
+            "-h before a term: the help",
             &["-h", "x"],
             &[],
-            vec![ok(TERM)],
+            vec![],
             owner_and_port,
             0,
-            1,
+            0,
         )),
         case(
             "no fields",

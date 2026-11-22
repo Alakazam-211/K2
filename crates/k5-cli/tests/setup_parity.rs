@@ -1930,13 +1930,11 @@ fn a_write_with_a_daemon_that_never_answers() {
     rig.check(&c);
 }
 
-/// `setup skip --help` and `setup skip -h` (`text::FAMILY_FORMS`): the
-/// loop reads the flag as the step's name and sends the skip, as the
-/// shell's does (a bash bug: help acts; these rows flip when the shell's
-/// fix lands). A help line a gate stops is the shell's: the shell skips
-/// its connection gate for it.
+/// `setup skip --help` and `setup skip -h` (0.46.17): the setup help,
+/// sent nothing, past the gates. Before, the loop read the flag as the
+/// step's name and sent the skip.
 #[test]
-fn the_skip_help_lines_are_the_family_s() {
+fn the_skip_help_lines_print_the_help() {
     let rig = Rig::new(VERB, "help");
     let shell = |c: Case| Case {
         compare: Compare::Shell,
@@ -1945,32 +1943,41 @@ fn the_skip_help_lines_are_the_family_s() {
     let v = vec![
         // native: setup skip --help
         case(
-            "skip --help skips the step --help",
+            "skip --help: the help",
             &["skip", "--help"],
             &[],
-            vec![text(LIST)],
+            vec![],
             owner_and_port,
             0,
-            1,
+            0,
         ),
         case(
-            "skip -h skips the step -h",
+            "skip -h: the help",
             &["skip", "-h"],
             &[],
-            vec![text(LIST)],
+            vec![],
             owner_and_port,
             0,
-            1,
+            0,
         ),
         shell(case(
-            "skip --help, no port: the shell skips its gate",
+            "--name, then --help: the help, not the name",
+            &["kessel", "--name", "--help"],
+            &[],
+            vec![],
+            owner_and_port,
+            0,
+            0,
+        )),
+        case(
+            "skip --help, no port: the help",
             &["skip", "--help"],
             &[],
             vec![],
             owner_only,
-            1,
             0,
-        )),
+            0,
+        ),
     ];
     for c in v {
         rig.check(&c);

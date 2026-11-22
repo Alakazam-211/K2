@@ -239,20 +239,20 @@ fn release_answers_as_the_shell_does() {
     }
 }
 
-/// Help never acts: the shell's lines, nothing sent.
+/// Help never acts: the shell's page (since 0.46.17), nothing sent.
 #[test]
 fn help_is_the_shell_s_and_sends_nothing() {
     for verb in ["reserve", "release"] {
         let rig = Rig::new(verb, "help");
         for c in [
-            shell(case("-h", &["-h"], &[AGENT], vec![], owner_and_port, 2, 0)),
+            shell(case("-h", &["-h"], &[AGENT], vec![], owner_and_port, 0, 0)),
             shell(case(
                 "--help after a path",
                 &["p", "--help"],
                 &[AGENT],
                 vec![],
                 owner_and_port,
-                2,
+                0,
                 0,
             )),
         ] {

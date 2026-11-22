@@ -47,15 +47,12 @@
 //! send-feedback's settings ([`agent_reports`]), every word after it
 //! theirs.
 //!
-//! `setup skip --help` and `setup skip -h` reach [`run`] through their
-//! help forms ([`crate::text::FAMILY_FORMS`]): the loop reads the flag as
-//! the step's name and sends the skip (a bash bug: help acts), as this
-//! does where no gate stops the line ([`prelude::help_line_gated`]: the
-//! shell skips its connection gate for a help line).
-//!
 //! The shell CLI answers these forms itself ([`run`] returns `None`): a
-//! command line where the loop reads `-h`, `--help` or `help` as help
-//! (the front sends a help line on, [`crate::front`]); a word that is not UTF-8; a host
+//! command line with `-h` or `--help` anywhere (since 0.46.17 the shell
+//! prints the setup help for it and sends nothing: `setup skip --help`
+//! skipped a step named `--help`), or where the loop reads `help` as
+//! help (the front sends a help line on, [`crate::front`]); a word that
+//! is not UTF-8; a host
 //! setting that is not a plain host name or IPv4 address (bash hands curl
 //! the URL as written); a `python3` the binary can't tell
 //! ([`crate::families`], Without Python); and each form whose switch is
@@ -390,6 +387,9 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .skip(1)
         .map(|a| a.to_str())
         .collect::<Option<_>>()?;
+    if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
+        return None;
+    }
     let read = parse(&words);
     if matches!(read, Err(Stop::Help)) {
         return None;
@@ -416,9 +416,6 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
             return Some(Exit::Error);
         }
     };
-    if prelude::help_line_gated(args, &settings) {
-        return None;
-    }
     if prelude::gate(&settings).is_none() && !plain_host(&settings.host) {
         return None;
     }

@@ -139,22 +139,8 @@ macro_rules! family {
 /// version line and all (not a captured page: every release moves the
 /// version, and the manifest names other versions too).
 ///
-/// Verbs that read the help flag as a word, so the shell asks the daemon
-/// or acts (bash bugs, copied until the shell's fix lands; each family
-/// hands a help line a gate stops to the shell,
-/// [`crate::prelude::help_line_gated`]): `reviews` (it reads no word: it
-/// asks) and `trust-folders` (it sends) ([`crate::families::commit`]),
-/// `glossary` (the term) and `read` (the workspace); `setup skip` (the
-/// step's name: it sends) and `sessions live` (the workspace).
-///
-/// `notifications email` verbs ([`crate::families::notifications`]):
-/// `status` (it reads no word: it asks), `sender resume` (the sender: it
-/// sends), `system-sender show` and `relay list` (no word read: they ask),
-/// `system-sender set` (the sender), `clear` and `test` (no word read:
-/// they send), `relay rm` (the relay: it sends); `notify email mute` (the
-/// workspace: it sends, [`crate::families::notify`]); `approve verify`
-/// (the words go to `k2-approve`, which answers its own help,
-/// [`crate::families::approve`]); `hostchat media`, `people` and
+/// `approve verify` (the words go to `k2-approve`, which answers its own
+/// help, [`crate::families::approve`]); `hostchat media`, `people` and
 /// `approvals` (the flag is the sub-command: `media`'s help page, or the
 /// usage line, [`crate::families::hostchat`]).
 ///
@@ -191,38 +177,8 @@ pub static FAMILY_FORMS: &[HelpForm] = &[
     family!("--schema" "-h"),
     family!("schema" "--help"),
     family!("schema" "-h"),
-    family!("reviews" "--help"),
-    family!("reviews" "-h"),
-    family!("trust-folders" "--help"),
-    family!("trust-folders" "-h"),
-    family!("glossary" "--help"),
-    family!("glossary" "-h"),
-    family!("read" "--help"),
-    family!("read" "-h"),
-    family!("setup" "skip" "--help"),
-    family!("setup" "skip" "-h"),
-    family!("sessions" "live" "--help"),
-    family!("sessions" "live" "-h"),
     family!("done" "--help"),
     family!("done" "-h"),
-    family!("notifications" "email" "status" "--help"),
-    family!("notifications" "email" "status" "-h"),
-    family!("notifications" "email" "sender" "resume" "--help"),
-    family!("notifications" "email" "sender" "resume" "-h"),
-    family!("notifications" "email" "system-sender" "show" "--help"),
-    family!("notifications" "email" "system-sender" "show" "-h"),
-    family!("notifications" "email" "system-sender" "set" "--help"),
-    family!("notifications" "email" "system-sender" "set" "-h"),
-    family!("notifications" "email" "system-sender" "clear" "--help"),
-    family!("notifications" "email" "system-sender" "clear" "-h"),
-    family!("notifications" "email" "system-sender" "test" "--help"),
-    family!("notifications" "email" "system-sender" "test" "-h"),
-    family!("notifications" "email" "relay" "list" "--help"),
-    family!("notifications" "email" "relay" "list" "-h"),
-    family!("notifications" "email" "relay" "rm" "--help"),
-    family!("notifications" "email" "relay" "rm" "-h"),
-    family!("notify" "email" "mute" "--help"),
-    family!("notify" "email" "mute" "-h"),
     family!("approve" "verify" "--help"),
     family!("approve" "verify" "-h"),
     family!("hostchat" "media" "--help"),

@@ -556,42 +556,56 @@ fn sessions_write_help_never_acts() {
     }
 }
 
-/// `sessions live --help` and `-h` (`text::FAMILY_FORMS`): `live` is not
-/// one of the verbs `cmd_sessions` checks for help, so it reads the flag
-/// as the workspace and asks to resolve it (a bash bug: help asks; these
-/// rows flip when the shell's fix lands). A help line a gate stops is
-/// the shell's.
+/// `sessions live`, `archives`, `compact` and `set-label` with `-h` or
+/// `--help` (0.46.17): the sessions help, nothing asked or read, past
+/// both gates. Before, `live` read the flag as the workspace and asked to
+/// resolve it, `compact` looked for its archive and `archives` listed
+/// them.
 #[test]
-fn sessions_live_help_lines_are_the_family_s() {
+fn sessions_live_help_lines_print_the_help() {
     let rig = Rig::new(VERB, "livehelp");
+    let shell = |c: Case| Case {
+        compare: Compare::Shell,
+        ..c
+    };
     for c in [
         // native: sessions live --help
-        row(
-            "live --help: the workspace --help, resolved",
+        row("live --help: the help", &["live", "--help"], vec![], 0, 0),
+        row("live -h: the help", &["live", "-h"], vec![], 0, 0),
+        shell(row(
+            "live, a path, then -h: the help",
+            &["live", "/w/acme", "-h"],
+            vec![],
+            0,
+            0,
+        )),
+        // native: sessions archives --help
+        row("archives --help", &["archives", "--help"], vec![], 0, 0),
+        // native: sessions compact --help
+        row("compact --help", &["compact", "--help"], vec![], 0, 0),
+        shell(row(
+            "compact, a session, then -h: the help",
+            &["compact", "ab12", "-h"],
+            vec![],
+            0,
+            0,
+        )),
+        shell(row(
+            "set-label --help: the help",
+            &["set-label", "ab12", "x", "--help"],
+            vec![],
+            0,
+            0,
+        )),
+        case(
+            "live --help, the virtual desktop's switch: the help",
             &["live", "--help"],
-            vec![ok(r#"{"path":"/w/acme"}"#), ok("[]")],
+            &[("K2_NO_OWNER_FALLBACK", "1")],
+            vec![],
+            owner_and_port,
             0,
-            2,
-        ),
-        row(
-            "live -h: the workspace -h, none resolved",
-            &["live", "-h"],
-            vec![ok("{}"), ok("[]")],
             0,
-            2,
         ),
-        Case {
-            compare: Compare::Shell,
-            ..case(
-                "live --help, the virtual desktop's switch: the shell's gate",
-                &["live", "--help"],
-                &[("K2_NO_OWNER_FALLBACK", "1")],
-                vec![],
-                owner_and_port,
-                1,
-                0,
-            )
-        },
     ] {
         rig.check(&c);
     }

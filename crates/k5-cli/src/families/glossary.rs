@@ -4,12 +4,10 @@
 //! What runs, in the shell's order:
 //!
 //! 1. The settings ([`crate::daemon`]), a re-minted passport taken at once,
-//!    and the two gates ([`crate::prelude`]). A `-h` or `--help` word
-//!    anywhere lets the virtual desktop's guard by (`_k2_offline_verb`):
-//!    the connection gate then stops it. `glossary` is the open tool
+//!    and the two gates ([`crate::prelude`]). `glossary` is the open tool
 //!    `help`, so no passport check comes after them.
 //! 2. The first word after `glossary` is the term (`${1:-}`); every other
-//!    word is never read. `--help` and `-h` are terms like any other.
+//!    word is never read.
 //! 3. No term (none, or an empty one): two lines on stdout (the title and
 //!    an empty one), then `cli_request /cli/glossary/list` over TCP on the
 //!    left of a pipe into the shell's Python ([`list_reader`]).
@@ -25,11 +23,10 @@
 //!
 //! The shell CLI answers these forms itself ([`run`] returns `None`): a
 //! port that is set but is no port curl takes, and a `python3` the binary
-//! can't tell ([`crate::families`]). `glossary --help` and `glossary -h`
-//! reach [`run`] through their help forms ([`crate::text::FAMILY_FORMS`]):
-//! the word is the term (a bash bug: help asks). Any other line with `-h`
-//! or `--help` in it never gets here: the front sends it to the shell
-//! ([`crate::front`]), which reads the word as a term.
+//! can't tell ([`crate::families`]), and a line with `-h` or `--help` in
+//! it: the shell prints the glossary help for it and asks nothing (since
+//! 0.46.17), and the front sends it to that page or to the shell
+//! ([`crate::front`]), so it never gets here.
 
 use super::{curl_port, pipefail, py_get, py_iter, py_left, request_piped_tcp, Raise, Shown};
 use crate::daemon::{self, Settings};
@@ -37,7 +34,7 @@ use crate::exit::Exit;
 use crate::out::json::{self, Value};
 use crate::out::{self, py};
 use crate::passport;
-use crate::prelude::{self, Closing, Gate};
+use crate::prelude::{self, Closing};
 use crate::python;
 use crate::transport::encode::quote_bytes;
 use k2_client::brand::PRODUCT_NAME;
@@ -77,7 +74,8 @@ pub const RUN_LINE: &str = concat!(
 
 /// The command line, when the binary answers it.
 pub fn run(args: &[OsString]) -> Option<Exit> {
-    if !python::family_native(python::here()) {
+    let help = args.iter().any(|w| w == "-h" || w == "--help");
+    if help || !python::family_native(python::here()) {
         return None;
     }
     let settings = match daemon::current() {
@@ -87,21 +85,11 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
             return Some(Exit::Error);
         }
     };
-    if gate(args, &settings).is_none() {
+    if prelude::gate(&settings).is_none() {
         // A port curl won't take is the shell's.
         settings.port_text.as_deref().and_then(curl_port)?;
     }
     Some(run_with(args, settings))
-}
-
-/// The gate that stops `args`: the virtual desktop's guard but where a
-/// help word lets it by, then the connection gate.
-fn gate(args: &[OsString], s: &Settings) -> Option<Gate> {
-    let help = args.iter().any(|w| w == "-h" || w == "--help");
-    match prelude::gate(s) {
-        Some(Gate::VirtualDesktop) if help => Some(Gate::CannotConnect),
-        g => g,
-    }
 }
 
 /// The term's bytes as the shell holds them.
@@ -117,7 +105,7 @@ fn bytes(w: &OsString) -> Vec<u8> {
 }
 
 fn run_with(args: &[OsString], mut settings: Settings) -> Exit {
-    if let Some(gate) = gate(args, &settings) {
+    if let Some(gate) = prelude::gate(&settings) {
         return gate.stop();
     }
     // `run` hands a port curl won't take to the shell.

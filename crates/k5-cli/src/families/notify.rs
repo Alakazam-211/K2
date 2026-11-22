@@ -11,11 +11,11 @@
 //! 3. The EXIT trap's lines.
 //!
 //! A flag that takes a value and comes last ends the command with 1 and
-//! no line, as the shell's `shift 2` does. `-h` and `--help` are the
-//! front's, but `email mute --help` and `-h` mute the workspace `--help`
-//! as the shell's do (a bash bug: help acts): help forms whose page is
-//! this code ([`crate::text::FAMILY_FORMS`]); a help line a gate stops is
-//! the shell's.
+//! no line, as the shell's `shift 2` does. A line with `-h` or `--help`
+//! in it is the shell's: since 0.46.17 it prints the notify help and
+//! sends nothing (`email mute --help` muted a workspace named `--help`),
+//! and the front sends it to that page or on ([`crate::front`]), so it
+//! never gets here.
 
 use super::app::py as p;
 use super::approve::cp::{self, env_text, one_line, page, start, stdout_line, usage};
@@ -41,6 +41,9 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .skip(1)
         .map(|a| a.to_str())
         .collect::<Option<_>>()?;
+    if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
+        return None;
+    }
     let mut r = match start(args) {
         Ok(r) => r,
         Err(e) => return e,

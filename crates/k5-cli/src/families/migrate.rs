@@ -34,8 +34,7 @@
 //! The shell CLI answers ([`run`] returns `None`): a word that is not
 //! UTF-8, `HOOK_SOCK` set with a `CODEX_` variable exported, a `python3`
 //! the binary can't tell, and a form that asks the daemon with a port that
-//! is not one curl takes (a form past the connection gate only when `-h`
-//! or `--help` is a flag's value, or a port that is set and no port).
+//! is not one curl takes (a port that is set and no port).
 //!
 //! Where the shell's Python raises (an answer that is not JSON, a field of
 //! a type it doesn't expect), this prints a Python 3.12 traceback and
@@ -199,6 +198,14 @@ fn absolute(p: &str, pwd: &str) -> String {
 pub fn parse(words: &[&str], pwd: &dyn Fn() -> String) -> Parsed {
     let sub = words.first().copied().unwrap_or("");
     let rest = words.get(1..).unwrap_or_default();
+    // Since 0.46.17 `-h` or `--help` anywhere after these verbs is the
+    // help, never a flag's value (`export-secrets --to -h` sent the export
+    // with `-h` as its key, `status --help` asked). `approve` keeps its own.
+    if matches!(sub, "status" | "export-secrets" | "import-secrets")
+        && rest.iter().any(|w| matches!(*w, "-h" | "--help"))
+    {
+        return Parsed::Help;
+    }
     match sub {
         "" | "-h" | "--help" | "help" => Parsed::Help,
         "status" => Parsed::Call(Call {
@@ -879,6 +886,16 @@ mod tests {
             Parsed::Usage(APPROVE_FLAG)
         );
         assert_eq!(parse(&["approve"], &pwd), Parsed::Usage(APPROVE_USAGE));
+        for help in [
+            &["status", "--help"][..],
+            &["status", "--json", "-h"],
+            &["export-secrets", "--to", "-h", "--out", "f"],
+            &["export-secrets", "--to", "age1x", "--out", "--help"],
+            &["export-secrets", "--bogus", "-h"],
+            &["import-secrets", "--bogus", "--help"],
+        ] {
+            assert_eq!(parse(help, &pwd), Parsed::Help, "{help:?}");
+        }
         assert_eq!(
             parse(&["export-secrets", "--to"], &pwd),
             Parsed::ShiftFails("--to".into())

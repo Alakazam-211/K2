@@ -30,9 +30,9 @@
 //! printed. A port that is no port is curl's 3 (or 75 when `TMPDIR` can't
 //! be used).
 //!
-//! The shell answers ([`run`] returns `None`): `-h` or `--help` (the front
-//! sends those on; `_reserve_args` reads them as words that are no path),
-//! paths whose joined text ends in a newline (`$(…)` drops it), a word that
+//! The shell answers ([`run`] returns `None`): `-h` or `--help` anywhere
+//! (since 0.46.17 a short page, nothing sent; the front sends those to
+//! that page or on), paths whose joined text ends in a newline (`$(…)` drops it), a word that
 //! is not UTF-8, `HOOK_SOCK` set with a `CODEX_` variable exported, and a
 //! `python3` the binary can't tell.
 

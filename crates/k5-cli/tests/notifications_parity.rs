@@ -560,11 +560,11 @@ fn notifications_answer_as_the_shell_does() {
             3,
         ),
         run("no answer", &["email"], vec![Reply::Close], 3),
-        // `-h` there is an unknown flag to bash (no request).
+        // Help never acts (0.46.17): bash prints the help, no request.
         shell(stop(
-            "-h: an unknown flag",
+            "-h: the help",
             &["email", "relay", "add", "-h"],
-            2,
+            0,
         )),
     ];
     for c in v {
@@ -598,138 +598,107 @@ fn the_lines_say_the_brand_s_name() {
     }
 }
 
-/// The help lines whose verb reads the flag as a word or reads no word
-/// (`text::FAMILY_FORMS`): they ask or act as the shell's do (bash bugs:
-/// help asks, and `sender resume`, `system-sender set|clear|test` and
-/// `relay rm` change something; these rows flip when the shell's fix
-/// lands). A help line a gate stops is the shell's.
+/// The help lines (0.46.17): `-h` or `--help` anywhere prints the
+/// notifications help and changes nothing, past both gates. Before,
+/// `email status`, `system-sender show` and `relay list` asked, and
+/// `sender resume`, `system-sender set|clear|test` and `relay rm` acted
+/// on a sender or relay named `--help`.
 #[test]
-fn the_help_lines_are_the_family_s() {
+fn the_help_lines_print_the_help() {
     let rig = Rig::new("notifications", "help");
-    let relays = r#"{"relays":[{"id":"r1","host":"h","port":25,"tls":"implicit","username":"u","fromDomain":"d","lastTestOk":false}]}"#;
     let v = vec![
         // native: notifications email status --help
-        run(
-            "email status --help asks",
-            &["email", "status", "--help"],
-            vec![ok(STATUS)],
-            0,
-        ),
-        run(
-            "email status -h asks",
-            &["email", "status", "-h"],
-            vec![ok(STATUS)],
-            0,
-        ),
+        stop("email status --help", &["email", "status", "--help"], 0),
+        stop("email status -h", &["email", "status", "-h"], 0),
         // native: notifications email sender resume --help
-        run(
-            "sender resume --help resumes the sender --help",
+        stop(
+            "sender resume --help",
             &["email", "sender", "resume", "--help"],
-            vec![ok(r#"{"sender":"--help"}"#)],
             0,
         ),
-        run(
-            "sender resume -h resumes the sender -h",
-            &["email", "sender", "resume", "-h"],
-            vec![ok(r#"{"sender":"-h"}"#)],
+        stop("sender resume -h", &["email", "sender", "resume", "-h"], 0),
+        shell(stop(
+            "sender resume, a sender, then -h",
+            &["email", "sender", "resume", "s@x.example", "-h"],
             0,
-        ),
+        )),
         // native: notifications email system-sender show --help
-        run(
-            "system-sender show --help asks",
+        stop(
+            "system-sender show --help",
             &["email", "system-sender", "show", "--help"],
-            vec![ok(r#"{"systemSender":null}"#)],
             0,
         ),
-        run(
-            "system-sender show -h asks",
+        stop(
+            "system-sender show -h",
             &["email", "system-sender", "show", "-h"],
-            vec![ok(SENDER)],
             0,
         ),
         // native: notifications email system-sender set --help
-        run(
-            "system-sender set --help sets the sender --help",
+        stop(
+            "system-sender set --help",
             &["email", "system-sender", "set", "--help"],
-            vec![ok(SENDER)],
             0,
         ),
-        run(
-            "system-sender set -h sets the sender -h",
+        stop(
+            "system-sender set -h",
             &["email", "system-sender", "set", "-h"],
-            vec![ok(SENDER)],
             0,
         ),
         // native: notifications email system-sender clear --help
-        run(
-            "system-sender clear --help clears it",
+        stop(
+            "system-sender clear --help",
             &["email", "system-sender", "clear", "--help"],
-            vec![ok("{}")],
             0,
         ),
-        run(
-            "system-sender clear -h clears it",
+        stop(
+            "system-sender clear -h",
             &["email", "system-sender", "clear", "-h"],
-            vec![ok("{}")],
             0,
         ),
         // native: notifications email system-sender test --help
-        run(
-            "system-sender test --help sends a test",
+        stop(
+            "system-sender test --help",
             &["email", "system-sender", "test", "--help"],
-            vec![ok(TEST)],
             0,
         ),
-        run(
-            "system-sender test -h sends a test",
+        stop(
+            "system-sender test -h",
             &["email", "system-sender", "test", "-h"],
-            vec![ok(TEST)],
             0,
         ),
         // native: notifications email relay list --help
-        run(
-            "relay list --help asks",
+        stop(
+            "relay list --help",
             &["email", "relay", "list", "--help"],
-            vec![ok(relays)],
             0,
         ),
-        run(
-            "relay list -h asks",
-            &["email", "relay", "list", "-h"],
-            vec![ok(relays)],
-            0,
-        ),
+        stop("relay list -h", &["email", "relay", "list", "-h"], 0),
         // native: notifications email relay rm --help
-        run(
-            "relay rm --help removes the relay --help",
-            &["email", "relay", "rm", "--help"],
-            vec![ok("{}")],
+        stop("relay rm --help", &["email", "relay", "rm", "--help"], 0),
+        stop("relay rm -h", &["email", "relay", "rm", "-h"], 0),
+        shell(stop(
+            "relay rm, a relay, then --help",
+            &["email", "relay", "rm", "r1", "--help"],
             0,
-        ),
-        run(
-            "relay rm -h removes the relay -h",
-            &["email", "relay", "rm", "-h"],
-            vec![ok("{}")],
-            0,
-        ),
-        shell(case(
-            "system-sender clear --help, the virtual desktop's switch: the shell's gate",
+        )),
+        case(
+            "system-sender clear --help, the virtual desktop's switch: the help",
             &["email", "system-sender", "clear", "--help"],
             &[("K2_NO_OWNER_FALLBACK", "1")],
             vec![],
             owner_and_port,
-            1,
             0,
-        )),
-        shell(case(
-            "email status --help, no port: the shell's gate",
+            0,
+        ),
+        case(
+            "email status --help, no port: the help",
             &["email", "status", "--help"],
             &[],
             vec![],
             owner_only,
-            1,
             0,
-        )),
+            0,
+        ),
     ];
     for c in v {
         rig.check(&c);

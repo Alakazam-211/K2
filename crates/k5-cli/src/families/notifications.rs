@@ -17,12 +17,11 @@
 //! A flag that takes a value and comes last is the shell's `_need_value`
 //! line, exit 2. `relay add` reads the
 //! password from the terminal without echo, else the first line of stdin;
-//! it goes only into the request body. `-h` and `--help` are the front's,
-//! but where the shell's verb reads the flag as a word or reads no word
-//! (`email status`, `sender resume`, `system-sender show|set|clear|test`,
-//! `relay list|rm`: bash bugs, help asks or acts), those lines are help
-//! forms whose page is this code ([`crate::text::FAMILY_FORMS`]); a help
-//! line a gate stops is the shell's ([`crate::prelude::help_line_gated`]).
+//! it goes only into the request body. A line with `-h` or `--help` in
+//! it is the shell's: since 0.46.17 it prints the notifications help and
+//! changes nothing (`email sender resume --help` resumed a sender named
+//! `--help`, `relay rm --help` removed one), and the front sends it to
+//! that page or on ([`crate::front`]), so it never gets here.
 
 use super::app::call::{Cj, Ctx};
 use super::app::py::{self as p, Out};
@@ -54,6 +53,9 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .skip(1)
         .map(|a| a.to_str())
         .collect::<Option<_>>()?;
+    if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
+        return None;
+    }
     let mut r = match start(args) {
         Ok(r) => r,
         Err(e) => return e,

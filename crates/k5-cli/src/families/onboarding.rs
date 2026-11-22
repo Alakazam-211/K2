@@ -13,7 +13,10 @@
 //!
 //! The shell answers a folder `cd` can't enter (its own line names the
 //! script) and a set `CDPATH`, a word that is not UTF-8, a port curl
-//! won't take and a `python3` the binary can't tell.
+//! won't take and a `python3` the binary can't tell. A line with `-h` or
+//! `--help` in it is the shell's too: since 0.46.17 it prints the
+//! onboarding help and sends nothing (`adopt --help` sent an adopt of a
+//! file named `--help`), and the front sends it to that page or on.
 
 use super::{curl_port, without_nuls};
 use crate::daemon;
@@ -147,6 +150,9 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .skip(1)
         .map(|a| a.to_str())
         .collect::<Option<_>>()?;
+    if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
+        return None;
+    }
     let ask = parse(&words);
     if !crate::python::family_native(crate::python::here()) {
         return None;

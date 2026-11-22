@@ -11,7 +11,8 @@
 //!   JSON, empty, an error object: one error line, exit 1; a row it
 //!   can't read: the traceback); the caller's stdin is never read.
 //! - No answer: the line, exit 1 (`reviews`: then SIGPIPE).
-//! - Help never acts: `commit -h` is the shell's usage, nothing sent.
+//! - Help never acts: `commit -h` is the shell's usage, nothing sent;
+//!   `reviews` and `trust-folders` print their help page (0.46.17).
 
 #![cfg(unix)]
 
@@ -221,54 +222,40 @@ fn reviews() {
     }
 }
 
-/// `reviews` and `trust-folders` read no word, so their help lines
-/// (`text::FAMILY_FORMS`) ask and send as the shell's do (bash bugs: help
-/// asks, and `trust-folders --help` sends; these rows flip when the
-/// shell's fix lands). A help line a gate stops is the shell's.
+/// The help lines of `reviews` and `trust-folders`: since 0.46.17 the
+/// shell prints each one's help page for `-h` or `--help` and asks or
+/// sends nothing (`reviews --help` asked for the list, `trust-folders
+/// --help` sent the POST), past both gates.
 #[test]
 fn the_help_lines_of_reviews_and_trust_folders() {
-    let rig = Rig::new("reviews", "help");
-    for c in [
-        // native: reviews --help
-        one("reviews --help asks", &["--help"], "[]", 0),
-        one(
-            "reviews -h asks",
-            &["-h"],
-            r#"[{"agentName":"a","branch":"b"}]"#,
-            0,
-        ),
-        shell(case(
-            "reviews --help, the virtual desktop's switch: the shell's gate",
-            &["--help"],
-            &[("K2_NO_OWNER_FALLBACK", "1")],
-            vec![],
-            owner_and_port,
-            1,
-            0,
-        )),
-    ] {
-        rig.check(&c);
-    }
-    let rig = Rig::new("trust-folders", "help");
-    for c in [
-        // native: trust-folders --help
-        one(
-            "trust-folders --help sends",
-            &["--help"],
-            "{\"folders\":[]}\n",
-            0,
-        ),
-        one("trust-folders -h sends", &["-h"], "{\"folders\":[]}\n", 0),
-        shell(case(
-            "trust-folders --help, no port: the shell's gate",
-            &["--help"],
-            &[],
-            vec![],
-            owner_only,
-            1,
-            0,
-        )),
-    ] {
-        rig.check(&c);
+    for verb in ["reviews", "trust-folders"] {
+        let rig = Rig::new(verb, "help");
+        for c in [
+            // native: reviews --help
+            // native: trust-folders --help
+            stop("--help: the help", &["--help"], 0),
+            stop("-h: the help", &["-h"], 0),
+            shell(stop("a word, then -h: the help", &["x", "-h"], 0)),
+            case(
+                "--help, the virtual desktop's switch: the help",
+                &["--help"],
+                &[("K2_NO_OWNER_FALLBACK", "1")],
+                vec![],
+                owner_and_port,
+                0,
+                0,
+            ),
+            case(
+                "--help, no port: the help",
+                &["--help"],
+                &[],
+                vec![],
+                owner_only,
+                0,
+                0,
+            ),
+        ] {
+            rig.check(&c);
+        }
     }
 }

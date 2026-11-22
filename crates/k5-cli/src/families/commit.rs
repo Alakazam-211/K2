@@ -24,14 +24,12 @@
 //!
 //! Each runs after the settings and the two gates ([`crate::prelude`]);
 //! each is an open tool. A request with no answer is the transport's
-//! line, exit 1 (`reviews`: the line, then SIGPIPE). `trust-folders` and
-//! `reviews` read no word, so `reviews --help` asks and `trust-folders
-//! --help` sends, as the shell's do (bash bugs, copied until the shell's
-//! fix lands): their help forms reach [`run`] ([`crate::text::FAMILY_FORMS`]),
-//! and a help line a gate stops is the shell's ([`prelude::help_line_gated`]).
-//! The shell answers: `commit`'s `-h` or `--help` (the front sends those
-//! on; the shell prints the usage and sends nothing), a word that is not
-//! UTF-8, a port curl won't take, and a `python3` the binary can't tell.
+//! line, exit 1 (`reviews`: the line, then SIGPIPE).
+//! The shell answers: a line with `-h` or `--help` in it (the front sends
+//! it to a help page or on: `commit` prints the usage, and since 0.46.17
+//! `reviews` and `trust-folders` print their help, and none sends
+//! anything), a word that is not UTF-8, a port curl won't take, and a
+//! `python3` the binary can't tell.
 //!
 //! `commit`'s `-m` (or `--message`) as the last word is
 //! [`out::need_value`]'s line and exit 2, nothing sent, after the gates:
@@ -212,6 +210,9 @@ pub fn parse(words: &[&str]) -> Option<Ask> {
 /// `None`: the shell CLI answers it.
 pub fn run(args: &[OsString]) -> Option<Exit> {
     let words: Vec<&str> = args.iter().map(|a| a.to_str()).collect::<Option<_>>()?;
+    if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
+        return None;
+    }
     let ask = parse(&words)?;
     if !python::family_native(python::here()) {
         return None;
@@ -223,9 +224,6 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
             return Some(Exit::Error);
         }
     };
-    if prelude::help_line_gated(args, &settings) {
-        return None;
-    }
     if let Some(gate) = prelude::gate(&settings) {
         return Some(gate.stop());
     }

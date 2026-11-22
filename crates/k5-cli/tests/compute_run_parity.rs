@@ -1163,3 +1163,44 @@ fn the_submit_lines_say_the_brand_s_name() {
         assert!(log.is_empty(), "{args:?}");
     }
 }
+
+/// `compute run`, attached and with `--wait`, follows a moved job into its
+/// new generation: the `moved:` line, never "infrastructure failure" (the
+/// shell's 46854e87d1).
+#[test]
+fn compute_run_follows_a_move() {
+    let rig = Rig::new(VERB, "runmove");
+    let moved = || {
+        ok(r#"{"chunks":[],"end":true,"cursor":1,"generation":1,"attempts":[{"attempt":1,"generation":1,"current":false,"reason":"withdrawn","moved":"node-a gave it back from its queue before it started for node-b"},{"attempt":1,"generation":2,"current":true}],"job":{"state":"queued","short":"abcd1234","node":"node-b","attempt":1,"generation":2}}"#)
+    };
+    let after = || {
+        ok(&format!(
+            r#"{{"cursor":"c:1","end":true,"generation":2,"chunks":[{}],"job":{},"queue":{{}}}}"#,
+            out_err(),
+            done("0").replace("\"generation\":1", "\"generation\":2")
+        ))
+    };
+    let v = vec![
+        case(
+            "attached: a move, then the output",
+            &["run", "--", "make"],
+            &[],
+            vec![ok(SUBMIT), moved(), after()],
+            owner_and_port,
+            0,
+            3,
+        ),
+        case(
+            "--wait: a move, then the output",
+            &["run", "mini", "--wait", "--", "make"],
+            &[],
+            vec![ok(PLAIN), moved(), after()],
+            owner_and_port,
+            0,
+            3,
+        ),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}

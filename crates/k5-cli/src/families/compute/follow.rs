@@ -9,8 +9,11 @@
 //! come, escape sequences and control bytes taken out unless `raw`. No
 //! answer: one "lost" line, a poll every 10 seconds, and after 60 of
 //! them the `lost_contact` line, exit 3. Any status but 200:
-//! `_compute_fail`. An attempt that hit an infrastructure failure while a
-//! new one waits: a line, and the new one is followed. A queued job: one
+//! `_compute_fail`. A generation that ended without ending the job while a
+//! new one waits: a line, and the new one is followed. The line says
+//! `moved:` and the daemon's words when the attempt record says it moved
+//! (or, from an older daemon, the attempt number stayed), and "hit an
+//! infrastructure failure" only for a real retry. A queued job: one
 //! line each time its place or its reason changes. At the end: `done`
 //! with an exit code exits with it (`exit N`), killed by a signal 128 plus
 //! it; any other end its line and the job's error JSON, exit 3.
@@ -97,6 +100,8 @@ pub struct State {
     pub jgen: String,
     pub attempt: String,
     pub lastfail: String,
+    /// The move's words (`.mv`): empty unless the generation read moved.
+    pub moved: String,
     /// The wait line (`.q`).
     pub qline: String,
     /// The job's error JSON (`.err`).
@@ -261,6 +266,17 @@ fn follow_on(cp: &mut Cp<'_>, f: &Follow, job8: &str) -> Exit {
             st.state.as_str(),
             "done" | "failed" | "cancelled" | "timeout" | "interrupted" | "unknown"
         );
+        if st.end && !st.jgen.is_empty() && st.jgen != gen && !ended && !st.moved.is_empty() {
+            // A move is not a failure and uses no retry.
+            out::stderr_line(&format!(
+                "[{CLI_NAME} compute] moved: {}; now on {} (not a failure, no retry used)",
+                st.moved, st.node
+            ));
+            gen = st.jgen.clone();
+            cursor = "0".to_string();
+            last_q.clear();
+            continue;
+        }
         if st.end && !st.jgen.is_empty() && st.jgen != gen && !ended {
             let lastfail = if st.lastfail.is_empty() {
                 "?"
@@ -420,10 +436,59 @@ pub fn poll_reader(body: &[u8], raw: bool, lost: bool, to_err: bool) -> Result<S
         let ctl = p::get(&j, "ctl")
             .map(|x| p::or(x, Value::Object(vec![])))
             .map_err(at(l))?;
-        let fa = p::get(&ctl, "failedAttempts")
+        let mut fa = p::get(&ctl, "failedAttempts")
             .map(|x| p::or(x, Value::Array(vec![Value::Object(vec![])])))
             .and_then(|x| p::at(&x, -1))
             .map_err(at(l))?;
+        // The record of the generation this answer read, once it ended
+        // without ending the job: a move (no retry used) or a retry.
+        let l = line!("rec = next(");
+        let mut rec = None;
+        let attempts = p::get(&v, "attempts").map_err(at(l))?;
+        for a in p::iter_or_empty(attempts).map_err(at(l))? {
+            if p::is_dict(&a)
+                && !p::truthy(&p::get(&a, "current").map_err(at(l))?)
+                && p::eq(
+                    &p::get(&a, "generation").map_err(at(l))?,
+                    &p::get(&v, "generation").map_err(at(l))?,
+                )
+            {
+                rec = Some(a);
+                break;
+            }
+        }
+        let mut moved = String::new();
+        if let Some(rec) = rec {
+            let l = line!("if rec.get(\"moved\")");
+            let said = p::get(&rec, "moved").map_err(at(l))?;
+            let l = line!("elif \"moved\" not in rec");
+            if p::truthy(&said) {
+                moved = p::str_of(&said);
+            } else if !p::has(&rec, "moved").map_err(at(l))?
+                && p::eq(
+                    &p::get(&rec, "attempt").map_err(at(l))?,
+                    &p::get(&j, "attempt").map_err(at(l))?,
+                )
+            {
+                // An older daemon: the attempt number stayed, so a move.
+                let l = line!("moved = str(rec.get(\"next\")");
+                let next = p::get(&rec, "next").map_err(at(l))?;
+                moved = p::str_of(&p::or(next, s("placed again")));
+            } else {
+                let l = line!("fa = {\"reason\"");
+                fa = super::writes::object(vec![
+                    ("reason", p::get(&rec, "reason").map_err(at(l))?),
+                    ("state", p::get(&rec, "state").map_err(at(l))?),
+                ]);
+            }
+        }
+        // `IFS= read -r moved` of `moved.replace("\n", " ")`: no newline
+        // is left; NULs dropped.
+        let moved: String = moved
+            .replace('\n', " ")
+            .chars()
+            .filter(|c| *c != '\0')
+            .collect();
         let g = |x: &Value, k: &str, l: u32| p::get(x, k).map_err(at(l));
         let (r1, r2, r3, r4) = (
             line!("s(v.get(\"cursor\", 0))"),
@@ -498,6 +563,7 @@ pub fn poll_reader(body: &[u8], raw: bool, lost: bool, to_err: bool) -> Result<S
             jgen,
             attempt,
             lastfail,
+            moved,
             qline,
             err,
         })
@@ -514,7 +580,9 @@ mod tests {
         assert_eq!(line!("v = json.load"), 3);
         assert_eq!(line!("for c in chunks"), 10);
         assert_eq!(line!("fa = ("), 25);
-        assert_eq!(line!("err = {"), 36);
+        assert_eq!(line!("rec = next("), 29);
+        assert_eq!(line!("fa = {\"reason\""), 38);
+        assert_eq!(line!("err = {"), 50);
     }
 
     #[test]

@@ -418,3 +418,145 @@ fn compute_follow_reads_only_digits() {
         rig.check(&c);
     }
 }
+
+/// The generation followed ended without ending the job (the shell's
+/// 46854e87d1): a move (the attempt record's `moved` words, or from an
+/// older daemon an attempt number that stayed) prints `moved: …; now on
+/// <node> (not a failure, no retry used)`, never "infrastructure
+/// failure"; a retry names its record's end. Whatever the record holds.
+#[test]
+fn compute_follow_a_move() {
+    let rig = Rig::new(VERB, "followmove");
+    let first = |rec: &str, attempt: &str| -> Reply {
+        ok(&format!(
+            r#"{{"chunks":[],"end":true,"cursor":1,"generation":1,"attempts":[{rec},{{"attempt":1,"generation":2,"current":true}}],"job":{{"state":"queued","short":"abcd1234","node":"node-b","attempt":{attempt},"generation":2}}}}"#
+        ))
+    };
+    let after = || {
+        ok(r#"{"chunks":[],"end":true,"cursor":1,"generation":2,"job":{"state":"done","short":"abcd1234","node":"node-b","exitCode":0,"generation":2}}"#)
+    };
+    let follow = |name: &'static str, rec: &str, attempt: &str| {
+        case(
+            name,
+            &["wait", "abcd1234", "--follow"],
+            &[],
+            vec![first(rec, attempt), after()],
+            owner_and_port,
+            0,
+            2,
+        )
+    };
+    let v = vec![
+        // native: compute wait --follow
+        follow(
+            "a move, the daemon's words",
+            r#"{"attempt":1,"generation":1,"current":false,"state":"assigned","reason":"withdrawn","moved":"node-a gave it back from its queue before it started for node-b"}"#,
+            "1",
+        ),
+        follow(
+            "an unanswered withdraw, words with a quote",
+            r#"{"attempt":1,"generation":1,"current":false,"reason":"withdraw_unanswered","moved":"node-a didn't answer a request to give it back within 3 min; K2 took it back"}"#,
+            "1",
+        ),
+        follow(
+            "a move, words with a newline, a NUL, a backslash and a dollar",
+            r#"{"attempt":1,"generation":1,"moved":"one\ntwo\u0000three \\n $HOME `x`"}"#,
+            "1",
+        ),
+        follow(
+            "a move, words that aren't a string",
+            r#"{"attempt":1,"generation":1.0,"moved":{"to":"node-b","n":[1,2.5,null,true]}}"#,
+            "1",
+        ),
+        follow(
+            "an older daemon: the attempt stayed",
+            r#"{"attempt":1,"generation":1,"current":false,"reason":"withdraw_requested","next":"taken back from node-a's queue before it started, to move it to node-b (no retry used)"}"#,
+            "1",
+        ),
+        follow(
+            "an older daemon, no next words",
+            r#"{"attempt":1,"generation":1,"next":""}"#,
+            "1",
+        ),
+        follow(
+            "an older daemon, neither has an attempt",
+            r#"{"generation":1}"#,
+            "null",
+        ),
+        follow(
+            "a retry with its record",
+            r#"{"attempt":1,"generation":1,"current":false,"state":"interrupted","reason":"node_update","nextCode":"retry_backoff","moved":null}"#,
+            "2",
+        ),
+        follow(
+            "a retry, moved empty, the record's state",
+            r#"{"attempt":1,"generation":1,"state":"lost","moved":""}"#,
+            "2",
+        ),
+        follow(
+            "no moved key, the attempt moved on: a retry",
+            r#"{"attempt":1,"generation":1,"reason":"oom"}"#,
+            "2",
+        ),
+        follow(
+            "the record is still current: the failed attempts' end",
+            r#"{"attempt":1,"generation":1,"current":true,"moved":"not this one"}"#,
+            "2",
+        ),
+        follow(
+            "no record for this generation",
+            r#"{"attempt":1,"generation":7,"moved":"not this one"}"#,
+            "1",
+        ),
+        follow(
+            "records that aren't objects",
+            r#""text",[1],null,{"attempt":1,"generation":1,"moved":"the third"}"#,
+            "1",
+        ),
+        case(
+            "attach: a move",
+            &["attach", "abcd"],
+            &[],
+            vec![
+                ok(JOB),
+                first(
+                    r#"{"attempt":1,"generation":1,"moved":"node-a gave it back"}"#,
+                    "1",
+                ),
+                after(),
+            ],
+            owner_and_port,
+            0,
+            3,
+        ),
+        case(
+            "attempts an object: its keys, no record",
+            &["wait", "abcd1234", "--follow"],
+            &[],
+            vec![
+                ok(r#"{"chunks":[],"end":true,"cursor":1,"generation":1,"attempts":{"generation":1},"job":{"state":"queued","short":"abcd1234","node":"node-b","attempt":2,"generation":2,"ctl":{"failedAttempts":[{"reason":"node_lost"}]}}}"#),
+                after(),
+            ],
+            owner_and_port,
+            0,
+            2,
+        ),
+        Case {
+            compare: Compare::Traceback,
+            ..case(
+                "attempts a number: Python's raise",
+                &["wait", "abcd1234", "--follow"],
+                &[],
+                vec![ok(
+                    r#"{"chunks":[],"end":true,"cursor":1,"generation":1,"attempts":5,"job":{"state":"queued","short":"abcd1234","node":"node-b","attempt":1,"generation":2}}"#,
+                )],
+                owner_and_port,
+                1,
+                1,
+            )
+        },
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}

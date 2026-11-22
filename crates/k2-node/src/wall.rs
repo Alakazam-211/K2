@@ -30,6 +30,7 @@ use std::ffi::{CStr, CString};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use k2_node_proto::health::{WALL_JOB_USER, WALL_NONE, WALL_SEATBELT};
 use serde::{Deserialize, Serialize};
@@ -385,6 +386,10 @@ pub enum ShimEnd {
     /// again, e.g. needrestart's `systemctl restart` after an apt upgrade.
     /// Nothing ran; the message for stderr; the shim exits [`SPEC_GONE_EXIT`].
     Gone(String),
+    /// The job's loopback doesn't answer ([`loopback_check`], 0.46.17):
+    /// nothing ran; the message for stderr; the shim exits
+    /// [`LOOPBACK_EXIT`] (recorded in the rc file when the spec has one).
+    NoLoopback(String),
     /// The command ran as the shim's child and ended so (recorded in the
     /// rc file when it could be: `rc_error` says why not). The shim exits
     /// the same way.
@@ -477,6 +482,87 @@ pub fn spec_gone_message(spec_path: &Path) -> String {
     )
 }
 
+/// How long the shim's loopback check waits on each address (0.46.17).
+/// On a working loopback it answers in well under a millisecond.
+pub const LOOPBACK_CHECK_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// How `job-exec` exits when the job's loopback doesn't answer
+/// ([`ShimEnd::NoLoopback`]): sysexits' EX_UNAVAILABLE.
+pub const LOOPBACK_EXIT: u8 = 69;
+
+/// The loopback check (0.46.17), run by the shim inside the job's unit
+/// before the job's command: a listener on 127.0.0.1 (and on ::1 when this
+/// network namespace has IPv6 loopback) must take a connection and pass a
+/// few bytes within `timeout`. A filter that drops loopback packets (a
+/// k2-node 0.46.14 `none` unit: `IPAddressDeny=any` with no allow for
+/// localhost) otherwise makes every local client in the job hang (a test
+/// that starts a server and connects to it) instead of failing. An `Err`
+/// is the whole message for the job's stderr.
+pub fn loopback_check(timeout: Duration) -> Result<(), String> {
+    use std::net::{Ipv4Addr, Ipv6Addr, TcpListener};
+    let v4 = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).map_err(|e| no_loopback(&format!("it can't listen on 127.0.0.1 ({e}): loopback (lo) isn't up in this job's network namespace")))?;
+    loopback_answers(&v4, timeout).map_err(|e| no_loopback(&e))?;
+    match TcpListener::bind((Ipv6Addr::LOCALHOST, 0)) {
+        Ok(v6) => loopback_answers(&v6, timeout).map_err(|e| no_loopback(&e)),
+        // No IPv6 loopback in this namespace (IPv6 off on lo, or a kernel
+        // without IPv6): nothing to check, as for any program here.
+        Err(e) if matches!(e.raw_os_error(), Some(libc::EADDRNOTAVAIL) | Some(libc::EAFNOSUPPORT)) => Ok(()),
+        Err(e) => Err(no_loopback(&format!("it can't listen on ::1 ({e})"))),
+    }
+}
+
+fn no_loopback(why: &str) -> String {
+    format!(
+        "k2-node job-exec: this job's loopback doesn't work, so nothing was run: {why}. A server the job starts on 127.0.0.1 or ::1 could not be reached (a client would hang). This is the node's job sandbox, not the job: run it on another node, and tell the node's owner (a job's sandbox must let loopback through: k2-node 0.46.17 or newer does, as long as no firewall rule on this machine drops it)."
+    )
+}
+
+/// One loopback round trip on `l`: connect (bounded by `timeout`, never a
+/// blocking connect), accept, and two bytes from the client to the server.
+/// An `Err` says which step failed and how.
+pub fn loopback_answers(l: &std::net::TcpListener, timeout: Duration) -> Result<(), String> {
+    use std::io::{Read, Write};
+    let addr = l.local_addr().map_err(|e| format!("the check's listener has no address ({e})"))?;
+    let t0 = Instant::now();
+    let mut c = loopback_connect(addr, timeout)?;
+    l.set_nonblocking(true).map_err(|e| format!("listener on {addr}: {e}"))?;
+    let mut s = loop {
+        match l.accept() {
+            Ok((s, _)) => break s,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock && t0.elapsed() < timeout => std::thread::sleep(Duration::from_millis(2)),
+            Err(e) => return Err(format!("a connect to {addr} completed but the listener never got it ({e}, after {:.1}s)", t0.elapsed().as_secs_f64())),
+        }
+    };
+    let left = timeout.saturating_sub(t0.elapsed()).max(Duration::from_millis(100));
+    let mut got = [0u8; 2];
+    let r = s
+        .set_nonblocking(false)
+        .and_then(|_| s.set_read_timeout(Some(left)))
+        .and_then(|_| c.write_all(b"k2"))
+        .and_then(|_| s.read_exact(&mut got));
+    match r {
+        Ok(()) if &got == b"k2" => Ok(()),
+        Ok(()) => Err(format!("bytes sent over {addr} came back changed")),
+        Err(e) => Err(format!("a connection to {addr} was made but no bytes crossed it ({e}, after {:.1}s)", t0.elapsed().as_secs_f64())),
+    }
+}
+
+/// A connect to `addr` that gives up after `timeout`. A timeout means the
+/// handshake's packets were dropped: what a firewall or an address filter
+/// does to what it denies, and why the job saw a hang, not an error.
+pub fn loopback_connect(addr: std::net::SocketAddr, timeout: Duration) -> Result<std::net::TcpStream, String> {
+    let t0 = Instant::now();
+    std::net::TcpStream::connect_timeout(&addr, timeout).map_err(|e| {
+        if matches!(e.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock) {
+            format!("a connect to {addr} (a listener this check opened) got no answer in {:.1}s: loopback packets are dropped (an address filter or firewall rule that covers lo)", t0.elapsed().as_secs_f64())
+        } else if e.raw_os_error() == Some(libc::ENETUNREACH) {
+            format!("a connect to {addr} (a listener this check opened) failed: {e}: loopback (lo) isn't up in this job's network namespace")
+        } else {
+            format!("a connect to {addr} (a listener this check opened) failed: {e}")
+        }
+    })
+}
+
 /// The shim: read + delete the spec, then run the job with exactly its env
 /// and cwd (`PATH` from that env finds the program). Without an rc file
 /// in the spec (or for a secret-env job, never adopted) it execs and
@@ -497,6 +583,14 @@ pub fn job_exec(spec_path: &Path) -> ShimEnd {
         Ok(s) => s,
         Err(e) => return ShimEnd::Failed(format!("k2-node job-exec: {}: {e}", spec_path.display())),
     };
+    // 0.46.17: loopback must answer before the job runs, so a sandbox that
+    // drops it fails the job at once, with why, instead of hanging it.
+    if let Err(e) = loopback_check(LOOPBACK_CHECK_TIMEOUT) {
+        if let Some(rc) = &spec.rc_file {
+            let _ = write_rc(rc, &k2_node_proto::frames::ExitInfo { code: Some(i32::from(LOOPBACK_EXIT)), signal: None });
+        }
+        return ShimEnd::NoLoopback(e);
+    }
     match job_command(&spec) {
         Err(e) => ShimEnd::Failed(e),
         Ok(Run::Exec(mut cmd, program)) => {
@@ -1376,6 +1470,51 @@ pub fn probe(read: &[String], list: &[String], connect: &[String]) -> serde_json
 
 #[cfg(test)]
 mod tests {
+    /// 0.46.17: on a working loopback the shim's check passes, fast.
+    #[test]
+    fn the_loopback_check_passes_on_a_working_loopback() {
+        let t0 = std::time::Instant::now();
+        super::loopback_check(super::LOOPBACK_CHECK_TIMEOUT).unwrap();
+        assert!(t0.elapsed() < std::time::Duration::from_secs(1), "{:?}", t0.elapsed());
+    }
+
+    /// 0.46.17: loopback whose packets are dropped (the field report: a
+    /// k2-node 0.46.14 `none` unit's `IPAddressDeny=any` with no localhost
+    /// allow) fails the check within its timeout, saying the packets are
+    /// dropped, instead of hanging. Modelled without privileges: a
+    /// listener whose accept queue is full (backlog 0, one connection
+    /// waiting), where Linux drops every further SYN as a filter does.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_loopback_that_drops_packets_fails_the_check_in_bounded_time() {
+        use std::os::fd::AsRawFd;
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        // SAFETY: listen(2) again on our own listening socket: backlog 0.
+        assert_eq!(unsafe { libc::listen(l.as_raw_fd(), 0) }, 0);
+        let addr = l.local_addr().unwrap();
+        let _waiting = std::net::TcpStream::connect(addr).unwrap();
+        let t0 = std::time::Instant::now();
+        let timeout = std::time::Duration::from_millis(600);
+        let e = super::loopback_answers(&l, timeout).expect_err("a dropped handshake must fail the check");
+        let took = t0.elapsed();
+        assert!(took >= timeout && took < std::time::Duration::from_secs(3), "bounded by the timeout: {took:?}");
+        assert!(e.contains(&format!("a connect to {addr}")) && e.contains("got no answer") && e.contains("loopback packets are dropped"), "{e}");
+        // The job's message says what happened, that nothing ran, and what to do.
+        let m = super::no_loopback(&e);
+        assert!(m.starts_with("k2-node job-exec: this job's loopback doesn't work, so nothing was run: "), "{m}");
+        assert!(m.contains("run it on another node, and tell the node's owner") && m.contains("0.46.17"), "{m}");
+    }
+
+    /// The check's own refusal for a connect that fails (not dropped).
+    #[test]
+    fn a_refused_loopback_connect_is_named() {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap();
+        drop(l);
+        let e = super::loopback_connect(addr, std::time::Duration::from_secs(2)).expect_err("nothing listens there");
+        assert!(e.contains(&format!("a connect to {addr}")) && e.contains("failed"), "{e}");
+    }
+
     /// GPU jobs S3: a GPU job's runtime dir is the job's own, 0700; a link
     /// or a file there is refused; a job without a GPU never gets one.
     #[test]

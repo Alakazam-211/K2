@@ -70,6 +70,49 @@ pub fn with_proxy_env(mut env: Vec<(String, String)>, plan_env: &std::collection
     (env, replaced)
 }
 
+/// The names that point a client at a proxy (either case).
+pub const PROXY_URL_VARS: &[&str] = &["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"];
+/// What `NO_PROXY` must name so loopback never goes through a proxy.
+pub const LOOPBACK_NO_PROXY: &[&str] = &["localhost", "127.0.0.1", "::1"];
+
+/// 0.46.17: when the job's env names a proxy (its own `--env`, or the Mac
+/// no-lan proxy's), `NO_PROXY` and `no_proxy` both name loopback, so a
+/// client never sends a request for a server the job started on
+/// 127.0.0.1 to the proxy (where it hangs or fails). The job's own
+/// entries stay (both spellings' entries, merged, in order); `*` is left
+/// as it is. Returns the env and whether it changed. Without a proxy
+/// nothing changes.
+pub fn with_loopback_no_proxy(mut env: Vec<(String, String)>) -> (Vec<(String, String)>, bool) {
+    if !env.iter().any(|(k, v)| PROXY_URL_VARS.contains(&k.as_str()) && !v.trim().is_empty()) {
+        return (env, false);
+    }
+    let mut entries: Vec<String> = Vec::new();
+    for (_, v) in env.iter().filter(|(k, _)| k == "NO_PROXY" || k == "no_proxy") {
+        for e in v.split(',').map(str::trim).filter(|e| !e.is_empty()) {
+            if !entries.iter().any(|x| x.eq_ignore_ascii_case(e)) {
+                entries.push(e.to_string());
+            }
+        }
+    }
+    if entries.iter().any(|e| e == "*") {
+        return (env, false);
+    }
+    for lo in LOOPBACK_NO_PROXY {
+        if !entries.iter().any(|x| x.eq_ignore_ascii_case(lo)) {
+            entries.push(lo.to_string());
+        }
+    }
+    let want = entries.join(",");
+    let before: Vec<Option<String>> = ["NO_PROXY", "no_proxy"].iter().map(|n| env.iter().find(|(k, _)| k == n).map(|(_, v)| v.clone())).collect();
+    if before.iter().all(|v| v.as_deref() == Some(want.as_str())) {
+        return (env, false);
+    }
+    env.retain(|(k, _)| k != "NO_PROXY" && k != "no_proxy");
+    env.push(("NO_PROXY".into(), want.clone()));
+    env.push(("no_proxy".into(), want));
+    (env, true)
+}
+
 /// The job-log line when a job's own `--env` named one of the proxy's.
 pub fn replaced_line(replaced: &[String]) -> Option<String> {
     (!replaced.is_empty()).then(|| format!("network: your --env {} was replaced by the node's no-lan proxy", replaced.join(", ")))
@@ -324,6 +367,38 @@ mod tests {
         assert_eq!(replaced_line(&replaced).unwrap(), "network: your --env HTTPS_PROXY, https_proxy was replaced by the node's no-lan proxy");
         let (_, none) = with_proxy_env(vec![], &Default::default(), 19880);
         assert!(none.is_empty() && replaced_line(&none).is_none());
+    }
+
+    /// 0.46.17: a proxy in the job's env never takes loopback: NO_PROXY and
+    /// no_proxy name localhost, 127.0.0.1 and ::1, keeping the job's own.
+    #[test]
+    fn a_proxy_in_the_env_never_takes_loopback() {
+        let e = |pairs: &[(&str, &str)]| pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<Vec<_>>();
+        let get = |env: &[(String, String)], k: &str| env.iter().filter(|(n, _)| n == k).map(|(_, v)| v.clone()).collect::<Vec<_>>();
+        // No proxy: nothing changes.
+        let (env, changed) = with_loopback_no_proxy(e(&[("PATH", "/usr/bin"), ("NO_PROXY", "corp.internal")]));
+        assert!(!changed);
+        assert_eq!(env, e(&[("PATH", "/usr/bin"), ("NO_PROXY", "corp.internal")]));
+        // A job's own proxy without NO_PROXY: both spellings name loopback.
+        let (env, changed) = with_loopback_no_proxy(e(&[("http_proxy", "http://proxy.example:3128")]));
+        assert!(changed);
+        assert_eq!(get(&env, "NO_PROXY"), vec!["localhost,127.0.0.1,::1"]);
+        assert_eq!(get(&env, "no_proxy"), vec!["localhost,127.0.0.1,::1"]);
+        // Its own entries stay, both spellings merged; loopback added once.
+        let (env, changed) = with_loopback_no_proxy(e(&[("HTTPS_PROXY", "http://p:1"), ("NO_PROXY", "a.example, LOCALHOST"), ("no_proxy", "b.example")]));
+        assert!(changed);
+        assert_eq!(get(&env, "NO_PROXY"), vec!["a.example,LOCALHOST,b.example,127.0.0.1,::1"]);
+        assert_eq!(get(&env, "no_proxy"), vec!["a.example,LOCALHOST,b.example,127.0.0.1,::1"]);
+        // `*` (no proxy for anything) is left alone; ALL_PROXY counts.
+        let (_, changed) = with_loopback_no_proxy(e(&[("ALL_PROXY", "socks5://p:1"), ("no_proxy", "*")]));
+        assert!(!changed);
+        let (env, changed) = with_loopback_no_proxy(e(&[("all_proxy", "socks5://p:1")]));
+        assert!(changed && get(&env, "no_proxy") == vec!["localhost,127.0.0.1,::1"]);
+        // The Mac no-lan proxy's env already names loopback: unchanged.
+        let (proxied, _) = with_proxy_env(vec![], &Default::default(), 19883);
+        let (after, changed) = with_loopback_no_proxy(proxied.clone());
+        assert!(!changed, "{after:?}");
+        assert_eq!(after, proxied);
     }
 
     /// `K2_JOB_PROXY` is K2-reserved: a job's `--env` can't fake it.

@@ -787,6 +787,14 @@ pub fn runtime_max(max_secs: Option<u64>) -> Option<u64> {
 /// them, so another server's jobs keep away from it on every node.
 pub const TEAM_RESTRICT_NAMESPACES: &str = "RestrictNamespaces=~user net";
 
+/// The `IPAddressAllow=` every job unit with an address filter gets
+/// (`none` and `no-lan`): systemd's `localhost` is 127.0.0.0/8 and ::1,
+/// and an allow wins over any deny. A k2-node 0.46.14 `none` unit had
+/// `IPAddressDeny=any` without it, so its loopback packets were dropped
+/// and a connect to 127.0.0.1 hung (the job-exec shim's loopback check,
+/// [`crate::wall::loopback_check`], now fails such a job at once).
+pub const LOOPBACK_ALLOW: &str = "localhost";
+
 /// The keywords systemd takes in `IPAddressAllow=`/`IPAddressDeny=`.
 pub const IP_ACCESS_KEYWORDS: &[&str] = &["any", "localhost", "link-local", "multicast"];
 
@@ -937,7 +945,7 @@ pub fn systemd_run_argv(p: &UnitPlan) -> Vec<String> {
             // (`localhost`, `any`, …) only as a whole value, so
             // `localhost 10.254.254.1/32` fails to parse in systemd-run
             // itself, before any unit exists ([`ip_access_value_ok`]).
-            prop("IPAddressAllow=localhost".into());
+            prop(format!("IPAddressAllow={LOOPBACK_ALLOW}"));
             if !p.allow_ips.is_empty() {
                 prop(format!("IPAddressAllow={}", p.allow_ips.join(" ")));
             }
@@ -949,6 +957,14 @@ pub fn systemd_run_argv(p: &UnitPlan) -> Vec<String> {
             let mut deny: Vec<String> = NO_LAN_DENY.iter().map(|s| s.to_string()).collect();
             deny.extend(p.lan_extra.iter().cloned());
             prop(format!("IPAddressDeny={}", deny.join(" ")));
+            // 0.46.17: loopback is allowed outright, as under `none`. systemd
+            // lets through what `IPAddressAllow=` matches whatever the deny
+            // list says, so an on-link prefix of this machine wide enough to
+            // cover 127.0.0.0/8 or ::1 ([`lan_deny_extra`]: an interface
+            // with a /0 or a very short mask) can never drop the job's own
+            // loopback. A dropped loopback packet doesn't fail: a connect
+            // to a server the job started just hangs.
+            prop(format!("IPAddressAllow={LOOPBACK_ALLOW}"));
         }
         Network::On => {}
     }
@@ -2283,6 +2299,48 @@ mod tests {
         assert!(a.iter().any(|x| x == "CPUQuota=1%"), "never below 1%");
     }
 
+    /// 0.46.17 (a field report from two tenant nodes on k2-node 0.46.14:
+    /// a connect to 127.0.0.1 inside the job never completed). systemd's
+    /// address filter covers `lo` too, and drops (never refuses) what it
+    /// denies, so a unit with a deny and no loopback allow hangs every
+    /// local client. Every unit shape with an address filter allows
+    /// `localhost` (127.0.0.0/8 and ::1, which wins over a deny), even when
+    /// this machine's own "LAN" prefix is wide enough to cover loopback.
+    #[test]
+    fn every_filtered_unit_allows_its_own_loopback() {
+        let allows_lo = |a: &[String]| a.iter().any(|x| x == "IPAddressAllow=localhost");
+        let mut shapes: Vec<(&str, UnitPlan)> = Vec::new();
+        let mut none = plan();
+        none.network = Network::None;
+        shapes.push(("none", none.clone()));
+        let mut dummies = none.clone();
+        dummies.netns = Some(PathBuf::from("/run/netns/k2job-j1-g1"));
+        dummies.allow_ips = vec!["10.254.254.1/32".into()];
+        shapes.push(("none + dummies", dummies));
+        let mut no_lan = plan();
+        no_lan.network = Network::NoLan;
+        shapes.push(("no-lan", no_lan.clone()));
+        // An interface with a /0 (or a short mask) on node-a: its on-link
+        // prefix covers 127.0.0.1 and ::1.
+        let mut wide = no_lan.clone();
+        wide.lan_extra = vec!["0.0.0.0/0".into(), "::/0".into(), "120.0.0.0/5".into()];
+        shapes.push(("no-lan, a /0 on-link prefix", wide));
+        let mut tenant = no_lan;
+        tenant.unit = "k2job-t3-0123456789abcdef.service".into();
+        tenant.slice = slice_name(3);
+        tenant.restrict_userns = true;
+        shapes.push(("a team tenant's no-lan", tenant));
+        for (what, p) in &shapes {
+            let a = systemd_run_argv(p);
+            assert!(a.iter().any(|x| x.starts_with("IPAddressDeny=")), "{what}: {a:?}");
+            assert!(allows_lo(&a), "{what}: a deny without IPAddressAllow=localhost drops loopback: {a:?}");
+            assert_unit_props_parse(&a);
+        }
+        // `on` has no filter at all (loopback is the host's).
+        let on = systemd_run_argv(&plan());
+        assert!(!on.iter().any(|x| x.starts_with("IPAddressDeny=") || x.starts_with("IPAddressAllow=")), "{on:?}");
+    }
+
     /// Every `-p` of a job unit is one systemd 255's `systemd-run` parses
     /// client side for a transient *service* (the unit type we use: never
     /// `--scope`, which takes no exec properties such as
@@ -2368,14 +2426,13 @@ mod tests {
             a.iter().any(|x| x.contains("-/run/systemd/resolve")),
             "no DNS side channel"
         );
-        // The namespace is only ever for `none`: on/no-lan never get one.
+        // The namespace is only ever for `none`: on/no-lan never get one, nor
+        // the dummies' prefixes. No-lan's only allow is its loopback (0.46.17).
         p.network = Network::NoLan;
         let a = systemd_run_argv(&p);
-        assert!(
-            !a.iter()
-                .any(|x| x.starts_with("NetworkNamespacePath") || x.starts_with("IPAddressAllow")),
-            "{a:?}"
-        );
+        assert!(!a.iter().any(|x| x.starts_with("NetworkNamespacePath")), "{a:?}");
+        let allows: Vec<&String> = a.iter().filter(|x| x.starts_with("IPAddressAllow")).collect();
+        assert_eq!(allows, vec!["IPAddressAllow=localhost"], "{a:?}");
         // The wire: a start carries its dummies; an older executor's
         // Started names no namespace (the node then stops the unit).
         let s = JobStart {

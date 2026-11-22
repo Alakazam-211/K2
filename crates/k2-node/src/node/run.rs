@@ -1281,6 +1281,11 @@ impl Node {
         } else {
             (env, network, None)
         };
+        // 0.46.17: a proxy in the job's env never takes loopback.
+        let (env, no_proxy_set) = super::egress_run::with_loopback_no_proxy(env);
+        if no_proxy_set && easy {
+            sys(&mut journal, "network: your proxy env skips loopback (NO_PROXY and no_proxy name localhost,127.0.0.1,::1)");
+        }
         let proxy_port = egress.as_ref().map(|r| r.port());
         // GPU jobs (0.46.11): only a walled unit gets a GPU (root leases the
         // device); never a GPU job run anywhere else without one.

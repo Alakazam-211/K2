@@ -110,8 +110,47 @@ out="$(PATH="$T/bin" BRAND_LINT_BREW_NAMES="file://$T/nope.txt" "$(command -v py
 # Ours get no live checks (our own install may be on the host).
 live "$HERE/brand/k2"; [ "$rc" = 0 ] || die "brand/k2 --live: $out"; ok
 
+# ── --registry: the private list of reserved distributor brands ───────
+# A stand-in registry with neutral names (the real one never goes in the
+# repo): command, product, brand id, tab-separated.
+REG="$T/registry.tsv"
+printf '# reserved brands\n\nq4\tInitech Hub\tinitech\nq5\tUmbrella Desk\tumbrella\n' > "$REG"
+brand r-free hooli q6 "Hooli Works"
+lint "$T/r-free" --registry "$REG"
+[ "$rc" = 0 ] && [[ "$out" == *"ok (the written lists, the registry (2 brands))"* ]] || die "a free brand, with the registry: $out"; ok
+brand r-cmd hooli q4 "Hooli Works"
+lint "$T/r-cmd"; [ "$rc" = 0 ] || die "without --registry the registry is not read: $out"; ok
+lint "$T/r-cmd" --registry "$REG"
+[ "$rc" = 1 ] && [[ "$out" == *"command q4: registry: the reserved brand initech has it as its command"* ]] || die "a reserved command: $out"; ok
+brand r-prod hooli q6 "umbrella desk"
+lint "$T/r-prod" --registry "$REG"
+[ "$rc" = 1 ] && [[ "$out" == *"product umbrella desk: registry: the reserved brand umbrella has it as its product"* ]] || die "a reserved product, any case: $out"; ok
+brand r-id initech q6 "Hooli Works"
+lint "$T/r-id" --registry "$REG"
+[ "$rc" = 0 ] || die "a brand's own reservation is not a collision: $out"; ok
+brand r-id2 q5 q6 "Hooli Works"
+lint "$T/r-id2" --registry "$REG"
+[ "$rc" = 1 ] && [[ "$out" == *"id q5: registry: the reserved brand umbrella has it as its command"* ]] || die "an id that is a reserved command: $out"; ok
+brand r-alias hooli q6 "Hooli Works" q5
+lint "$T/r-alias" --registry "$REG"
+[ "$rc" = 1 ] && [[ "$out" == *"alias q5: registry"* ]] || die "a reserved alias: $out"; ok
+got="$(bash "$B" lint --name q4 --product "Hooli Works" --registry "$REG" 2>/dev/null || true)"
+[ "$got" = "$(printf 'q4\tregistry')" ] || die "--name with the registry: $got"; ok
+got="$(bash "$B" lint --name q6 --product "initech hub" --registry "$REG" 2>/dev/null || true)"
+[ "$got" = "$(printf 'q6\tregistry')" ] || die "--product with the registry: $got"; ok
+# A missing or malformed registry stops the lint: never free unchecked.
+lint "$T/r-free" --registry "$T/nope.tsv"
+[ "$rc" = 1 ] && [[ "$out" == *"the registry check did not run"* ]] || die "a missing registry: $out"; ok
+printf 'q4 Initech Hub initech\n' > "$T/bad.tsv"
+lint "$T/r-free" --registry "$T/bad.tsv"
+[ "$rc" = 1 ] && [[ "$out" == *"bad.tsv:1: not <command> <product> <brand id>"* ]] || die "a row that is not tab-separated: $out"; ok
+printf 'Q-4\tInitech Hub\tinitech\n' > "$T/bad.tsv"
+lint "$T/r-free" --registry "$T/bad.tsv"
+[ "$rc" = 1 ] && [[ "$out" == *"must match"* ]] || die "a row whose command is not a name: $out"; ok
+
 # ── usage ─────────────────────────────────────────────────────────────
-for args in "" "--name" "--name a b" "$T/nope" "$HERE/brand/xy --nope"; do
+for args in "" "--name" "--name a b" "$T/nope" "$HERE/brand/xy --nope" "$HERE/brand/xy --registry" \
+    "--registry $REG"; do
     # shellcheck disable=SC2086
     lint $args
     [ "$rc" = 2 ] || die "args '$args': rc $rc: $out"; ok

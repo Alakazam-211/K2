@@ -2,8 +2,8 @@
 """The name policy for a brand: its command, its aliases, its id and its
 product name, each checked on its own rules.
 
-    bash scripts/brand.sh lint <brand folder> [--live]
-    bash scripts/brand.sh lint --name <command> [--product <name>]
+    bash scripts/brand.sh lint <brand folder> [--live] [--registry <file>]
+    bash scripts/brand.sh lint --name <command> [--product <name>] [--registry <file>]
 
 A brand has two names that are never made from each other: the product's
 (prose and screens) and the command's (anything a person or agent types).
@@ -17,6 +17,8 @@ The command, each alias and the brand id:
            helper of ours
   hard     on the hard list of brand/reserved-names.txt
   unique   another brand we hold has it as an id, a command or an alias
+  registry a brand in the registry (--registry) has it as its command or
+           its id
   text     a bare word of our own text (the default build's outputs:
            cli/k2, cli/text, the goldens, the CLI catalog): a word rule
            could not rewrite or check it, and an agent could not read it
@@ -26,6 +28,7 @@ The product:
   product  empty, longer than 40, a control character, or space at an end
   ours     K2, K5 or Kessel, as the product or a word of it
   unique   another brand we hold has it as its product (any case)
+  registry a brand in the registry has it as its product (any case)
   text     the product, whole, is in our own text
 Ours (brand/k2, brand/k5 in this repo) are checked for shape only.
 
@@ -49,6 +52,19 @@ The live checks fail loudly when a source can't be read: a name is never
 called free without its check. Their sources can be pointed elsewhere
 (BRAND_LINT_BREW_NAMES, BRAND_LINT_BREW_ALIASES, BRAND_LINT_DEBIAN_CONTENTS:
 a URL, file:// too); the tests use that, and are offline.
+
+--registry <file> also checks the names against the brands we have
+reserved for distributors, whose brand files we never hold. The file is
+private (it never goes in this repo) and only our onboarding passes it.
+One brand per line, tab-separated:
+
+    <command><TAB><product><TAB><brand id>
+
+Blank lines and lines starting with # are skipped; any other line that is
+not three fields, or a command or id not of the command's shape, stops the
+lint. The row whose brand id is the brand being linted is that brand's own
+reservation and is not a collision. A missing file stops the lint: a name
+is never called free without its check.
 
 --name checks one command name (and --product one product) against the
 brands this repo holds and prints `<name><TAB><answer>`: the first rule it
@@ -173,6 +189,44 @@ def text_hits(word, case):
     return count, first
 
 
+def read_registry(path):
+    """The reserved brands: [{"name", "product", "id"}] from a private file."""
+    rows = []
+    try:
+        f = open(path, encoding="utf-8")
+    except OSError as e:
+        sys.exit(f"brand lint: can't read the registry {path} ({e.strerror}): the registry check did not run")
+    with f:
+        for n, line in enumerate(f.read().split("\n"), 1):
+            if not line.strip() or line.startswith("#"):
+                continue
+            cols = line.split("\t")
+            if len(cols) != 3 or not all(c.strip() for c in cols):
+                sys.exit(f"brand lint: {path}:{n}: not <command> <product> <brand id>, tab-separated")
+            name, product, bid = (c.strip() for c in cols)
+            if not SHAPE.fullmatch(name) or not SHAPE.fullmatch(bid):
+                sys.exit(f"brand lint: {path}:{n}: the command and the id must match ^[a-z][a-z0-9]{{1,11}}$")
+            rows.append({"name": name, "product": product, "id": bid})
+    return rows
+
+
+def registry_findings(names, product, own_id, registry):
+    """(what, value, rule, why) for each name or the product a reserved
+    brand other than `own_id` already has."""
+    out = []
+    for r in registry:
+        if r["id"] == own_id:
+            continue
+        for what, name in names:
+            for kind in ("name", "id"):
+                if name == r[kind]:
+                    shown = "command" if kind == "name" else "id"
+                    out.append((what, name, "registry", f"the reserved brand {r['id']} has it as its {shown}"))
+        if product is not None and product.casefold() == r["product"].casefold():
+            out.append(("product", product, "registry", f"the reserved brand {r['id']} has it as its product"))
+    return out
+
+
 def name_findings(name, what, others, hard, soft, ok):
     """(rule, why) for every rule `name` breaks, in the order of the header."""
     out = []
@@ -287,10 +341,10 @@ def package_findings(name, ok):
 
 # ── the commands ───────────────────────────────────────────────────────
 
-ORDER = ("shape", "product", "ours", "hard", "unique", "text", "soft", "host", "package")
+ORDER = ("shape", "product", "ours", "hard", "unique", "registry", "text", "soft", "host", "package")
 
 
-def lint_brand(folder, live):
+def lint_brand(folder, live, registry=None):
     brand = read_brand(folder)
     others = [b for b in held() if b["folder"] != brand["folder"]]
     hard, soft = reserved()
@@ -309,6 +363,8 @@ def lint_brand(folder, live):
                 findings.append((what, name, rule, why))
         for rule, why in product_findings(brand["product"], others):
             findings.append(("product", brand["product"], rule, why))
+        if registry is not None:
+            findings += registry_findings(names, brand["product"], brand["id"], registry)
         if live:
             for what, name in names[1:]:
                 for rule, why in host_findings(name) + package_findings(name, ok):
@@ -319,16 +375,20 @@ def lint_brand(folder, live):
         print(f"brand lint: {brand['id']}: REFUSED ({len(findings)} finding(s))", file=sys.stderr)
         return 1
     live_note = ", the host and the package indexes" if live and not is_ours(brand) else ""
+    if registry is not None and not is_ours(brand):
+        live_note += f", the registry ({len(registry)} brands)"
     print(f"brand lint: {brand['id']}: command {brand['name']}, product {brand['product']!r}: ok (the written lists{live_note})")
     return 0
 
 
-def lint_name(name, product):
+def lint_name(name, product, registry=None):
     hard, soft = reserved()
     others = held()
     found = name_findings(name, "command", others, hard, soft, {})
     if product is not None:
         found += product_findings(product, others)
+    if registry is not None:
+        found += [(rule, why) for _, _, rule, why in registry_findings([("command", name)], product, None, registry)]
     rules = sorted({r for r, _ in found}, key=ORDER.index)
     answer = rules[0] if rules else "ok"
     print(f"{name}\t{answer}")
@@ -338,14 +398,24 @@ def lint_name(name, product):
 
 
 def main(argv):
-    usage = "usage: brand.sh lint <brand folder> [--live] | brand.sh lint --name <command> [--product <name>]"
-    if argv[:1] == ["--name"] and len(argv) in (2, 4) and (len(argv) == 2 or argv[2] == "--product"):
-        return lint_name(argv[1], argv[3] if len(argv) == 4 else None)
-    if len(argv) in (1, 2) and not argv[0].startswith("-") and argv[1:] in ([], ["--live"]):
-        if not os.path.isfile(os.path.join(argv[0], "brand.toml")):
-            print(f"brand lint: no brand.toml in {argv[0]}", file=sys.stderr)
+    usage = ("usage: brand.sh lint <brand folder> [--live] [--registry <file>]"
+             " | brand.sh lint --name <command> [--product <name>] [--registry <file>]")
+    args = list(argv)
+    registry = None
+    if "--registry" in args:
+        i = args.index("--registry")
+        if i + 1 >= len(args) or args[i + 1].startswith("-") or args.count("--registry") != 1:
+            print(usage, file=sys.stderr)
             return 2
-        return lint_brand(argv[0], live=argv[1:] == ["--live"])
+        registry = read_registry(args[i + 1])
+        del args[i:i + 2]
+    if args[:1] == ["--name"] and len(args) in (2, 4) and (len(args) == 2 or args[2] == "--product"):
+        return lint_name(args[1], args[3] if len(args) == 4 else None, registry)
+    if len(args) in (1, 2) and not args[0].startswith("-") and args[1:] in ([], ["--live"]):
+        if not os.path.isfile(os.path.join(args[0], "brand.toml")):
+            print(f"brand lint: no brand.toml in {args[0]}", file=sys.stderr)
+            return 2
+        return lint_brand(args[0], live=args[1:] == ["--live"], registry=registry)
     print(usage, file=sys.stderr)
     return 2
 

@@ -137,6 +137,16 @@ pub(super) const ROWS: &[Refusal] = &[
         concat!("The owner turns both on: ", cli_name!(), " app access <workspace> --build on --manage on (the owner's own terminal, outside ", product_name!(), ").")),
     r("role_not_this_apps", "access", 400, Who::Agent, "A test guest gets one of this App's own roles (or none), and that role isn't one.",
         concat!("Use one of the App's roles, or create one: ", cli_name!(), " app role create <name> --app <app-id>")),
+    // k2 app user rooms-ok (apps::test_guest_rooms): letting a test login
+    // into the other rooms its role names.
+    r("test_guest_expired", "access", 409, Who::Agent, "That test login has ended (a test login ends on its own: 24 h by default, at most 7 days), so no room can be opened to it.",
+        concat!("Make a new test login (", cli_name!(), " app user add <app-id> <name> --test --role <role>), then ask again: ", cli_name!(), " app user rooms-ok <app-id> <name>")),
+    r("test_guest_no_role", "access", 409, Who::Agent, "The test login has no role on this App (or its role was removed), and only the rooms a role names can be opened to it.",
+        concat!("Make a test login with one of the App's roles (", cli_name!(), " app user add <app-id> <name> --test --role <role>), then ask again: ", cli_name!(), " app user rooms-ok <app-id> <name>")),
+    r("test_guest_not_tied", "access", 409, Who::Agent, "A person made that login, not an agent, so it already signs in to every room its role names. There is nothing to open.",
+        "Nothing to do: sign in with the login in any room its role names."),
+    r("test_guest_nothing_to_open", "access", 409, Who::Agent, "The login's role names no room but the agent's own, which the login reaches already. There is nothing to open.",
+        concat!("Add the room to the role (", cli_name!(), " app role room <role> <handle>), then ask again: ", cli_name!(), " app user rooms-ok <app-id> <login>")),
     r("too_many_test_guests", "access", 409, Who::Agent, "The App already has as many test guests as it may.",
         concat!("Remove one first. List them: ", cli_name!(), " app test-guests <app-id>")),
     r("workspace_not_found", "access", 404, Who::Agent, "No workspace by that name or id on this server.",

@@ -162,6 +162,18 @@ ACCESS (who may do what: switches, owners, workspaces)
   role_not_this_apps (exit 2)
       fix: Use one of the App's roles, or create one: k2 app role create
       <name> --app <app-id>
+  test_guest_expired (exit 3)
+      fix: Make a new test login (k2 app user add <app-id> <name> --test
+      --role <role>), then ask again: k2 app user rooms-ok <app-id> <name>
+  test_guest_no_role (exit 3)
+      fix: Make a test login with one of the App's roles (k2 app user add
+      <app-id> <name> --test --role <role>), then ask again: k2 app user
+      rooms-ok <app-id> <name>
+  test_guest_not_tied (exit 3)
+      fix: Nothing to do: sign in with the login in any room its role names.
+  test_guest_nothing_to_open (exit 3)
+      fix: Add the room to the role (k2 app role room <role> <handle>), then
+      ask again: k2 app user rooms-ok <app-id> <login>
   too_many_test_guests (exit 3)
       fix: Remove one first. List them: k2 app test-guests <app-id>
   workspace_not_found (exit 3)

@@ -26,3 +26,7 @@ src/shared/cli-catalog.generated.json linguist-generated
 # The migrations list: two branches that each add a last line merge with
 # both lines kept. build.rs refuses a name or a number that is there twice.
 crates/k2-core/drizzle_sql/ORDER merge=union
+
+# The k5 binary's captured shell help, byte for byte: some pages end a line
+# with a blank, as the shell prints them, so whitespace checks skip it.
+crates/k5-cli/src/help_captured.txt -whitespace

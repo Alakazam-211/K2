@@ -1337,7 +1337,9 @@ fn grant(
         ));
         let label = format!("share {name} with {}", o.to);
         // The phone card names the share itself and binds it (0.46.17).
-        let grant = crate::out::json::parse(&body).ok().map(|g| confirm::object(vec![("grant", g)]));
+        let grant = crate::out::json::parse(&body)
+            .ok()
+            .map(|g| confirm::object(vec![("grant", g)]));
         let Some(tok) = confirm::confirm_token_with(
             &mut ctx.confirm(),
             "grant-read",

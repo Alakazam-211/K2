@@ -779,7 +779,12 @@ impl Engine {
                 set(&mut body, "proposal", proposal.clone());
             }
             let mut wait = 180;
-            let card = || obj(vec![("action", s("clone-carry")), ("clonePlan", ask.clone())]);
+            let card = || {
+                obj(vec![
+                    ("action", s("clone-carry")),
+                    ("clonePlan", ask.clone()),
+                ])
+            };
             let pw = if py_in("local-auth", &methods)? {
                 self.say(&format!(
                     "Approve on this Mac (Touch ID or your login password): {reason}"

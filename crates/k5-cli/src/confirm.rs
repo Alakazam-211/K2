@@ -549,9 +549,7 @@ pub fn confirm_token_with(
     let finish = if has_word(&methods, "phone") {
         let r = phone_raise(c, action, secret_id, label, extra);
         if r.req.is_empty() {
-            out::stderr_line(
-                "no_phone_confirm: the phone card could not be raised (above)",
-            );
+            out::stderr_line("no_phone_confirm: the phone card could not be raised (above)");
             return None;
         }
         out::stderr_line(&format!(
@@ -794,10 +792,16 @@ fn phone_raise(
         (Text::from("secretId"), str_or_null(secret_id)),
         (Text::from("label"), Value::Str(Text::from(label))),
         (Text::from("phone"), Value::Bool(true)),
-        (Text::from("workspacePath"), Value::Str(Text::from(here.as_str()))),
+        (
+            Text::from("workspacePath"),
+            Value::Str(Text::from(here.as_str())),
+        ),
     ];
     if !thread.is_empty() {
-        o.push((Text::from("thread"), Value::Str(Text::from(thread.as_str()))));
+        o.push((
+            Text::from("thread"),
+            Value::Str(Text::from(thread.as_str())),
+        ));
     }
     // `o.update(extra)`: a key already there keeps its place.
     if let Some(Value::Object(more)) = extra {
@@ -1053,9 +1057,15 @@ mod tests {
     #[test]
     fn read_splits_at_the_first_tab() {
         let r = |s: &str| read_tab_pair(s);
-        assert_eq!(r("pr_1\tcard pr_1 on a's Thread (t)\n"), ("pr_1".into(), "card pr_1 on a's Thread (t)".into()));
+        assert_eq!(
+            r("pr_1\tcard pr_1 on a's Thread (t)\n"),
+            ("pr_1".into(), "card pr_1 on a's Thread (t)".into())
+        );
         // No request: the leading tab goes, and the line is the request.
-        assert_eq!(r("\tcard  on a's Thread ()\n"), ("card  on a's Thread ()".into(), String::new()));
+        assert_eq!(
+            r("\tcard  on a's Thread ()\n"),
+            ("card  on a's Thread ()".into(), String::new())
+        );
         // More tabs stay in the rest; a newline ends the line.
         assert_eq!(r("a\t\tb\tc\t\nnext"), ("a".into(), "b\tc".into()));
         assert_eq!(r(""), (String::new(), String::new()));
@@ -1064,7 +1074,10 @@ mod tests {
     #[test]
     fn the_card_line_is_the_shell_s() {
         assert_eq!(
-            card_line(br#"{"phone":{"request":"pr_1","addr":"ws1","thread":"why","text":"Rekey"}}"#).unwrap(),
+            card_line(
+                br#"{"phone":{"request":"pr_1","addr":"ws1","thread":"why","text":"Rekey"}}"#
+            )
+            .unwrap(),
             "pr_1\tcard pr_1 on ws1's Thread — why (Rekey)"
         );
         // A key there with null prints None; a missing one is empty.
@@ -1072,29 +1085,49 @@ mod tests {
             card_line(br#"{"phone":{"request":null}}"#).unwrap(),
             "None\tcard None on 's Thread ()"
         );
-        assert_eq!(card_line(br#"{"phone":0}"#).unwrap(), "\tcard  on 's Thread ()");
+        assert_eq!(
+            card_line(br#"{"phone":0}"#).unwrap(),
+            "\tcard  on 's Thread ()"
+        );
         assert!(card_line(br#"{"phone":{"thread":5}}"#)
             .unwrap_err()
             .exception
             .starts_with("TypeError: can only concatenate str (not \"int\")"));
-        assert_eq!(card_line(br#"{"phone":"x"}"#).unwrap_err().frames, vec![(4, "<module>")]);
+        assert_eq!(
+            card_line(br#"{"phone":"x"}"#).unwrap_err().frames,
+            vec![(4, "<module>")]
+        );
         assert_eq!(card_line(b"[1]").unwrap_err().frames, vec![(3, "<module>")]);
         assert_eq!(card_line(b"").unwrap_err().frames, vec![(3, "<module>")]);
     }
 
     #[test]
     fn the_no_card_line_is_the_shell_s() {
-        assert_eq!(no_card_line(br#"{"error":{"code":"c","hint":"h"}}"#).unwrap(), "(no phone card: h)");
-        assert_eq!(no_card_line(br#"{"error":{"code":"c","hint":""}}"#).unwrap(), "(no phone card: c)");
-        assert_eq!(no_card_line(b"").unwrap(), "(no phone card: the daemon did not answer)");
-        assert_eq!(no_card_line(b"[1]").unwrap(), "(no phone card: the daemon did not answer)");
+        assert_eq!(
+            no_card_line(br#"{"error":{"code":"c","hint":"h"}}"#).unwrap(),
+            "(no phone card: h)"
+        );
+        assert_eq!(
+            no_card_line(br#"{"error":{"code":"c","hint":""}}"#).unwrap(),
+            "(no phone card: c)"
+        );
+        assert_eq!(
+            no_card_line(b"").unwrap(),
+            "(no phone card: the daemon did not answer)"
+        );
+        assert_eq!(
+            no_card_line(b"[1]").unwrap(),
+            "(no phone card: the daemon did not answer)"
+        );
         assert!(no_card_line(br#"{"error":"boom"}"#).is_err());
     }
 
     #[test]
     fn only_these_codes_fall_back_to_the_phone() {
         assert!(unanswered(br#"{"error":{"code":"confirm_unanswered"}}"#));
-        assert!(unanswered(br#"{"error":{"code":"vault_presence_required"}}"#));
+        assert!(unanswered(
+            br#"{"error":{"code":"vault_presence_required"}}"#
+        ));
         assert!(!unanswered(br#"{"error":{"code":"locked"}}"#));
         assert!(!unanswered(br#"{"error":null}"#));
         assert!(!unanswered(b"not json"));

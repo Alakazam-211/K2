@@ -1251,7 +1251,12 @@ const UNANSWERED: &str = r#"{"ok":false,"error":{"code":"confirm_unanswered","hi
 const PHONE_OFF: &str = r#"{"ok":false,"error":{"code":"phone_off","hint":"no phone paired"}}"#;
 const SSH: (&str, &str) = ("SSH_CONNECTION", "192.0.2.7 50000 192.0.2.8 22");
 
-fn rekey(name: &'static str, replies: Vec<Reply>, env: &[(&'static str, &str)], code: i32) -> VCase {
+fn rekey(
+    name: &'static str,
+    replies: Vec<Reply>,
+    env: &[(&'static str, &str)],
+    code: i32,
+) -> VCase {
     let mut c = person(name, &["rekey"], replies, b"", code);
     c.env = env.iter().map(|(k, v)| (*k, v.to_string())).collect();
     c
@@ -1311,7 +1316,10 @@ fn phone_at_the_computer_and_nobody_answers() {
         rekey(
             "rekey over SSH, the method local: never the phone",
             vec![ok(OFFERED), Reply::Answer(409, UNANSWERED.into())],
-            &[("SSH_TTY", "/dev/ttys009"), ("K2_VAULT_CONFIRM_METHOD", "local")],
+            &[
+                ("SSH_TTY", "/dev/ttys009"),
+                ("K2_VAULT_CONFIRM_METHOD", "local"),
+            ],
             3,
         ),
     ] {
@@ -1325,7 +1333,12 @@ fn phone_over_ssh() {
     for c in [
         rekey(
             "rekey over SSH: the phone card beside the prompt",
-            vec![ok(OFFERED), ok(CARD), ok(r#"{"token":"tok-local"}"#), ok("{}")],
+            vec![
+                ok(OFFERED),
+                ok(CARD),
+                ok(r#"{"token":"tok-local"}"#),
+                ok("{}"),
+            ],
             &[SSH],
             0,
         ),
@@ -1342,7 +1355,12 @@ fn phone_over_ssh() {
         ),
         rekey(
             "rekey over SSH, the phone card refused: the prompt alone",
-            vec![ok(OFFERED), Reply::Answer(403, PHONE_OFF.into()), ok(r#"{"token":"t"}"#), ok("{}")],
+            vec![
+                ok(OFFERED),
+                Reply::Answer(403, PHONE_OFF.into()),
+                ok(r#"{"token":"t"}"#),
+                ok("{}"),
+            ],
             &[SSH],
             0,
         ),
@@ -1399,7 +1417,11 @@ fn phone_windows_hello_label() {
     let rig = VRig::new();
     rig.check(&rekey(
         "rekey, Windows Hello at the computer: the label goes too",
-        vec![ok(r#"{"methods":["windows-hello"]}"#), ok(r#"{"token":"t"}"#), ok("{}")],
+        vec![
+            ok(r#"{"methods":["windows-hello"]}"#),
+            ok(r#"{"token":"t"}"#),
+            ok("{}"),
+        ],
         &[],
         0,
     ));
@@ -1465,7 +1487,12 @@ fn the_phone_lines_say_the_brand_s_name() {
     let cli = k2_client::brand::CLI_NAME;
     let c = rekey(
         "brand: the phone alone",
-        vec![ok(OFFERED), ok(CARD), ok(r#"{"token":"t","confirmedOn":"phone"}"#), ok("{}")],
+        vec![
+            ok(OFFERED),
+            ok(CARD),
+            ok(r#"{"token":"t","confirmedOn":"phone"}"#),
+            ok("{}"),
+        ],
         &[("K2_VAULT_CONFIRM_METHOD", "phone")],
         0,
     );

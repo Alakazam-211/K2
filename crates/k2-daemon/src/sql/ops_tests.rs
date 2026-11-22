@@ -274,9 +274,16 @@ fn ensure_k2_helpers_sql_is_set_local_uuid_no_create_role() {
     assert!(sql.contains("pg_temp.k2_principal_lock"), "{sql}");
     assert!(sql.contains("undefined_table"), "{sql}");
     assert!(
-        sql.contains("SET search_path = pg_temp, pg_catalog"),
+        sql.contains("SET search_path = pg_catalog, pg_temp"),
         "{sql}"
     );
+    // The lock counts only when the definer (the migrator) owns it.
+    let skin = &sql[sql.find("FUNCTION k2.skin_uid()").expect("skin_uid")..sql.find("FUNCTION k2.set_principal").expect("set_principal")];
+    assert!(
+        skin.contains("c.relowner = (SELECT r.oid FROM pg_catalog.pg_roles r WHERE r.rolname = current_user)"),
+        "skin_uid must check the lock's owner: {skin}"
+    );
+    assert!(skin.contains("c.relpersistence = 't'"), "{skin}");
     assert!(!sql.contains("k2.lock_principal"), "{sql}");
     assert!(
         sql.contains("nullif(current_setting('k2.skin_principal', true), '')::uuid"),

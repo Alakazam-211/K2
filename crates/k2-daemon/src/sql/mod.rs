@@ -3653,6 +3653,7 @@ mod tests {
     }
 
     mod real_pg;
+    mod real_pg_lock;
     mod real_pg_majors;
     mod real_pg_named;
 

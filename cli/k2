@@ -70246,6 +70246,9 @@ BYO BFF (principal helpers)
   the BFF LOGIN can still SET another guest's uuid. Example POLICY
   stays copy-into-migrations (not auto-applied). No FORCE RLS.
   `k2.skin_uid()` is a typed accessor, not a stronger identity source.
+  A reader or grantee (k2 db grant, k2 db request-read) runs its own
+  SQL: it can set which App user it acts as; per-user rules aren't a
+  boundary for them. Only a lock K2 wrote counts as the guest lane's.
 
 ACTOR (who is calling, not just which principal)
   Brokered app calls (POST /cli/db/query and the rows doors) also lock
@@ -104909,6 +104912,9 @@ ANOTHER WORKSPACE'S DATABASE (read-only, on a card)
                                  owner or admin login, or owner). Deny changes
                                  nothing. Once allowed, k2 db dsn --db <name> is your
                                  read-only DSN (k2 db run --db <name> -- <cmd>)
+                                 A reader or grantee can set which App user
+                                 it acts as; per-user rules aren't a boundary
+                                 for them
   requests [--json]              your request-read asks and where each one is
                                  (pending, approved, denied, …); k2 permission status
                                  <id> for one

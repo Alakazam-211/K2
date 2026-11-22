@@ -5,27 +5,38 @@
 //! postgres, before any tenant object exists in the target (no tenant DDL
 //! ever runs as postgres), and only the ones the dump lists ([`is_k2_entry`]).
 
-/// The principal helpers. `k2.skin_uid()` is owned by the migrator.
+/// The principal helpers. `k2.skin_uid()` is owned by the migrator: the
+/// principal lock counts only when the definer (the migrator) owns it, as
+/// for `k2.actor_info()`; any other `pg_temp.k2_principal_lock` is ignored.
 pub const PRINCIPAL_HELPERS_SQL: &str = r#"CREATE SCHEMA IF NOT EXISTS k2;
 GRANT USAGE ON SCHEMA k2 TO PUBLIC;
 CREATE OR REPLACE FUNCTION k2.skin_uid() RETURNS uuid
 LANGUAGE plpgsql
 STABLE
 SECURITY DEFINER
-SET search_path = pg_temp, pg_catalog
+SET search_path = pg_catalog, pg_temp
 AS $k2fn$
 DECLARE
+  rel oid;
   locked uuid;
 BEGIN
   BEGIN
-    SELECT id INTO locked FROM pg_temp.k2_principal_lock LIMIT 1;
+    rel := 'pg_temp.k2_principal_lock'::regclass;
+  EXCEPTION
+    WHEN undefined_table OR invalid_schema_name THEN
+      rel := NULL;
+  END;
+  IF rel IS NOT NULL AND EXISTS (
+    SELECT 1 FROM pg_catalog.pg_class c
+    WHERE c.oid = rel
+      AND c.relpersistence = 't'
+      AND c.relowner = (SELECT r.oid FROM pg_catalog.pg_roles r WHERE r.rolname = current_user)
+  ) THEN
+    SELECT l.id INTO locked FROM pg_temp.k2_principal_lock l LIMIT 1;
     IF FOUND THEN
       RETURN locked;
     END IF;
-  EXCEPTION
-    WHEN undefined_table THEN
-      NULL;
-  END;
+  END IF;
   RETURN nullif(current_setting('k2.skin_principal', true), '')::uuid;
 END;
 $k2fn$;

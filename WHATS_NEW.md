@@ -63,6 +63,9 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ### Email hosting
 - **Agents that manage email hosting can create as many addresses as they need; the owner can still set a cap.** A workspace whose agent has "Let this agent manage hosted mail" on no longer stops at the default of 5 addresses. The owner sets a cap for it on purpose with `k2 hostmail config --workspace <ws> --address-cap <n>`, and `--address-cap none` clears it. An agent without the switch keeps the default of 5, as before. `k2 hostmail config` shows each workspace's cap, for example `Addresses: unlimited (this agent manages email hosting)`. Send limits, mailbox quotas and the other server-wide limits are unchanged. An agent that manages email hosting can no longer set or clear the cap on its own workspace: that cap is the owner's.
 - **An agent can ask for a different address cap on a permission card.** When `k2 hostmail create` stops at the cap, or `k2 hostmail config --address-cap` is refused, the refusal ends with `k2 permission request mail.address-cap cap=<n|none> target=<workspace> --why "…"` (permission cards on). The card names the workspace, its cap today and what it becomes; the owner or an admin allows it in one tap, the cap is set, and the change is in the Access Audit.
+## Unreleased (after 0.46.17)
+
+- **`k2.skin_uid()` counts the principal lock only when K2 wrote it.** As `k2.actor_info()` already did, the lock must be owned by the database's migrator; any other table of that name is ignored. Existing databases get the new helper at the next daemon start. `k2 db --help` and `k2 study db` now say plainly that a reader or grantee can set which App user it acts as, so per-user rules aren't a boundary for them.
 
 ## 0.46.17 — Read-only calendar links, live documents that save in groups, and agents that report only with your yes
 

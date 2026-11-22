@@ -239,7 +239,8 @@ fn help_words_ask_nothing() {
             row("help-advanced", &["x", "-h"], env, owner, 0, 0, By::Binary);
             // schema and explain are the shell's.
             row("schema", &[], env, owner, 0, 0, By::Shell);
-            row("explain", &["whoami"], env, owner, 0, 0, By::Shell);
+            // (explain of an id it has no refusal for: exit 4.)
+            row("explain", &["whoami"], env, owner, 4, 0, By::Shell);
         }
     }
 }

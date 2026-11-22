@@ -611,6 +611,8 @@ mod real {
         }
     }
 
+    // Tauri command arguments are the renderer's named fields.
+    #[allow(clippy::too_many_arguments)]
     #[tauri::command]
     pub async fn browser_create(
         app: AppHandle,

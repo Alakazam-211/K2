@@ -452,6 +452,19 @@ async fn real_pg_storage_door() {
     let (st, _, body) = call(app, req("GET", "/render/image/authenticated/photos/x.png", Some("test-a"), &[], b"")).await;
     assert_eq!((st, j(&body)["error"].clone()), (400, json!("k2_unsupported")));
 
+    // ── a JWT-shaped token whose claims K2 didn't write ──
+    {
+        use base64::Engine as _;
+        let b64 = |v: Value| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(v.to_string());
+        let forged = format!(
+            "{}.{}.c2lnbmF0dXJl",
+            b64(json!({"alg": "HS256", "typ": "JWT"})),
+            b64(json!({"sub": USER_A, "role": "service_role", "pass": "k2skn_made.up"}))
+        );
+        let (st, _, body) = call(app, req("GET", &format!("/object/photos/{ORG2}/s/b.jpg"), Some(&forged), &[], b"")).await;
+        assert_eq!((st, j(&body)["error"].clone()), (400, json!("InvalidJWT")), "forged claims are never read: {}", String::from_utf8_lossy(&body));
+    }
+
     // ── the anon lane off: no credential is 401 ──
     let mut cfg = test_seams::config(app).flatten().expect("config");
     cfg.anon = false;

@@ -352,6 +352,26 @@ mod tests {
     }
 
     #[test]
+    fn a_jwt_shaped_token_with_claims_k2_didnt_write_is_refused() {
+        use base64::Engine as _;
+        let b64 = |v: Value| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(v.to_string());
+        // The pass shape the auth door hands supabase-js (header.claims.pass),
+        // with claims made up by the caller: service_role, someone else's id.
+        let forged = format!(
+            "{}.{}.{}",
+            b64(json!({"alg": "HS256", "typ": "JWT"})),
+            b64(json!({"sub": USER, "role": "service_role", "pass": "k2skn_made.up"})),
+            "c2lnbmF0dXJl"
+        );
+        for via in [Via::Public, Via::Link] {
+            let r = ReqAuth { method: "GET".into(), authorization: Some(format!("Bearer {forged}")), ..Default::default() };
+            // Even with a live pass behind the lookup, the claims are not read.
+            let e = run(&bind(), via, r, Some(pass("svc-jobs")), Some(key_row("svc-jobs", &["service"]))).expect_err("forged claims");
+            assert_eq!(e.code, "InvalidJWT", "{via:?}: {e}");
+        }
+    }
+
+    #[test]
     fn cookies_and_origins_parse() {
         assert_eq!(cookie_value("a=1; k2_skin_session=k2skn_x.y ;b=2", SESSION_COOKIE), Some("k2skn_x.y"));
         assert_eq!(cookie_value("k2_skin_sessionX=1", SESSION_COOKIE), None);

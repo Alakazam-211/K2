@@ -59,6 +59,8 @@ import {
 } from './ThreadMessageMenu'
 
 import { THREAD_JUMP_PILL_CSS } from './ThreadJumpPill'
+import { MessageFold, useFoldHost } from './MessageFold'
+import { THREAD_FOLD_CSS } from './messageFoldCss'
 import { THREAD_SYSTEM_NOTICE_CSS, ThreadSystemNoticeRow } from './ThreadSystemNotice'
 import { parseSystemNotice, SYSTEM_NOTICE_FEATURE } from './systemNotice'
 import { FOOTER_BLUR_LAYERS, FOOTER_TINT_STOPS, FOOTER_TINT_STOPS_OPAQUE } from '@/components/ui/scrollEdgeLayers'
@@ -372,7 +374,7 @@ export function ThreadFooterFade({ top }: { top?: number | null }): JSX.Element 
 }
 
 export function ThreadZenStyles(): JSX.Element {
-  return <style data-thread-zen-styles="">{THREAD_ZEN_CSS + THREAD_CHAMFER_CSS + THREAD_TAIL_CSS + THREAD_FOOTER_FADE_CSS + THREAD_SENDER_CSS + THREAD_JUMP_PILL_CSS + THREAD_SYSTEM_NOTICE_CSS}</style>
+  return <style data-thread-zen-styles="">{THREAD_ZEN_CSS + THREAD_CHAMFER_CSS + THREAD_TAIL_CSS + THREAD_FOOTER_FADE_CSS + THREAD_SENDER_CSS + THREAD_JUMP_PILL_CSS + THREAD_SYSTEM_NOTICE_CSS + THREAD_FOLD_CSS}</style>
 }
 
 /** The message list's padding and the space between messages (the
@@ -737,6 +739,9 @@ export const ThreadBubble = memo(function ThreadBubble({
     [menuArgs],
   )
   const gestures = useThreadMessageGestures(bubbleRef, menuOn ? openMenu : null)
+  // "See more": a plain message's words, where the list lends folds (the
+  // desktop Thread and a ticket's). Cards and notices never fold.
+  const foldBody = useFoldHost() !== null && kind === 'text' && !offer && !notice
   const cardClosed = dimClosedCards && kind === 'choice' && item.doc.choice?.status === 'voided' && !!item.doc.choice.closedAs
   const maxWidth = threadBubbleMaxWidth(narrow)
   const column = threadSenderRootProps(mine ? null : sender, maxWidth, narrow)
@@ -821,7 +826,16 @@ export const ThreadBubble = memo(function ThreadBubble({
       }}
     >
       {quote ?? (reply && <ThreadReplyQuote reply={reply} />)}
-      {bodyText && <ChatMessageBody text={bodyText} style={cardClosed ? BUBBLE_BODY_CLOSED_STYLE : BUBBLE_BODY_STYLE} />}
+      {bodyText &&
+        (foldBody ? (
+          // Taller than the fold: "See more" (MessageFold). The words only;
+          // Copy, Reply and Save to stash take the text, never this view.
+          <MessageFold foldKey={item.id}>
+            <ChatMessageBody text={bodyText} style={BUBBLE_BODY_STYLE} />
+          </MessageFold>
+        ) : (
+          <ChatMessageBody text={bodyText} style={cardClosed ? BUBBLE_BODY_CLOSED_STYLE : BUBBLE_BODY_STYLE} />
+        ))}
       {kind === 'choice' && item.doc.choice && (
         <ChoiceCard
           options={item.doc.choice.options}

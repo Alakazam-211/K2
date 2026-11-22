@@ -44,6 +44,7 @@ import { ThreadMessageColumn } from '@/components/Thread/ThreadColumn'
 import { threadTextColumnStyle } from './threadTextWidth'
 import { THREAD_JUMP_BOTTOM_PX, ThreadJumpPill } from '@/components/Thread/ThreadJumpPill'
 import { useRenderWindow } from '@/components/Thread/useRenderWindow'
+import { createFoldHost, FoldContext, type FoldHost } from '@/components/Thread/MessageFold'
 import { usePrependHold } from '@/components/Thread/usePrependHold'
 import { useCallTileListInset } from '@/components/Voice/useCallTileListInset'
 import {
@@ -506,6 +507,32 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
   const onSearchScroll = useCallback((top: number) => {
     savedScrollTopRef.current = top
   }, [])
+  // "See more" (MessageFold): which long messages are open, kept while this
+  // Thread is open (a row the render window drops comes back as it was).
+  // Opening one stops the follow, so the list doesn't stick to the newest
+  // under the reader; folding back at the bottom follows again.
+  const foldHostRef = useRef<FoldHost | null>(null)
+  if (!foldHostRef.current) {
+    foldHostRef.current = createFoldHost({
+      scroller: () => listRef.current,
+      unfollow,
+      refollow: () => {
+        const el = listRef.current
+        if (!el || el.scrollHeight - el.scrollTop - el.clientHeight > THREAD_JUMP_BOTTOM_PX) return
+        pinBottomRef.current = true
+        noteBottom(true)
+      },
+      ownScroll: (el) => {
+        savedScrollTopRef.current = el.scrollTop
+      },
+    })
+  }
+  const foldHost = foldHostRef.current
+  const foldThreadRef = useRef(addr)
+  if (foldThreadRef.current !== addr) {
+    foldThreadRef.current = addr
+    foldHost.open.clear()
+  }
   useThreadSearchPane({
     list: listRef,
     content: contentRef,
@@ -649,6 +676,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
         <ThreadFileActionsProvider value={fileActions}>
         <FileLinkProvider workspace={addr} transport={fileLinkTransport} open={openFileLink}>
           {/* Narrow (< 480px): bubbles use the column (ThreadColumn). */}
+          <FoldContext.Provider value={foldHost}>
           <ThreadMessageColumn
             ref={contentRef}
             gap={THREAD_LIST_GAP}
@@ -686,6 +714,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
             ))}
             <ThreadWindowSpacer px={win.below} gap={THREAD_LIST_GAP} edge="bottom" />
           </ThreadMessageColumn>
+          </FoldContext.Provider>
         </FileLinkProvider>
         </ThreadFileActionsProvider>
         </ThreadSenderAvatarContext.Provider>

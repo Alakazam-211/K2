@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { parseThreadReply } from '@/lib/thread-reply'
 import { threadBubbleText } from '@/components/Thread/ThreadZenKit'
+import { insideFolded, revealFolded } from '@/components/Thread/MessageFold'
 import type { OverlayDoc, OverlayThreadItem } from './overlayThread'
 import {
   THREAD_SEARCH_CLOSED,
@@ -144,6 +145,11 @@ export function useThreadSearchPane(o: {
     }
     paintThreadSearch(owner, all, current)
     if (t && revealRef.current === t.key && currentRow) {
+      // A match in a folded message's hidden part: "See more" opens first
+      // (at once), so the scroll below finds the words where they are.
+      const at = current ? current.startContainer : null
+      const node = at instanceof Element ? at : (at?.parentElement ?? currentRow.querySelector('[data-fold="folded"]'))
+      if (node && insideFolded(node)) revealFolded(node)
       revealRef.current = null
       scrollMatchIntoView(list, current ?? currentRow, latest.current.onScrollWrite)
     }

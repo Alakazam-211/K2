@@ -588,7 +588,7 @@ fn reason(s: u16) -> &'static str {
 
 impl Answer {
     pub fn json(status: u16, v: &Value) -> Self {
-        Answer { status, headers: vec![("Content-Type".into(), "application/json".into())], body: v.to_string().into_bytes() }
+        Answer { status, headers: vec![("Content-Type".into(), "application/json; charset=utf-8".into())], body: v.to_string().into_bytes() }
     }
     pub fn err(e: &StorageError) -> Self {
         Self::json(e.http_status(), &e.body())

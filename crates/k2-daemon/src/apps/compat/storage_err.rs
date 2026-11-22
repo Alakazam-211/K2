@@ -73,7 +73,7 @@ impl StorageError {
     }
     /// A bucket id or name that is taken.
     pub fn bucket_exists() -> Self {
-        Self::new(409, "ResourceAlreadyExists", "Duplicate", "The resource already exists")
+        Self::new(409, "BucketAlreadyExists", "Duplicate", "The resource already exists")
     }
     /// A storage policy said no (Postgres 42501).
     pub fn rls() -> Self {
@@ -98,7 +98,8 @@ impl StorageError {
         Self::new(400, "InvalidRequest", "InvalidRequest", msg)
     }
     pub fn too_large(limit: u64) -> Self {
-        Self::new(413, "EntityTooLarge", "Payload too large", format!("The object exceeded the maximum allowed size ({limit} bytes)"))
+        let _ = limit;
+        Self::new(413, "EntityTooLarge", "Payload too large", "The object exceeded the maximum allowed size")
     }
     pub fn mime(mime: &str) -> Self {
         Self::new(415, "InvalidMimeType", "invalid_mime_type", format!("mime type {mime} is not supported"))

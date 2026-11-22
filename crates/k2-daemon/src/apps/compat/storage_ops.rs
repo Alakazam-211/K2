@@ -57,19 +57,34 @@ fn object_json() -> String {
     format!(
         "json_build_object('name', o.name, 'bucket_id', o.bucket_id, 'owner', o.owner, 'owner_id', o.owner_id, \
          'id', o.id, 'version', o.version, 'updated_at', {}, 'created_at', {}, 'last_accessed_at', {}, \
-         'metadata', o.metadata, 'user_metadata', o.user_metadata)::text",
+         'metadata', o.metadata, 'user_metadata', coalesce(o.user_metadata, '{}'::jsonb), \
+         'archived_at', NULL, 'is_delete_marker', false, 'is_versioned', false)::text",
         ts("o.updated_at"),
         ts("o.created_at"),
         ts("o.last_accessed_at")
     )
 }
 
+/// `GET /object/info/…`: Supabase's ObjectInfo (`metadata` is the user's).
+fn info_json() -> String {
+    format!(
+        "json_build_object('id', o.id, 'name', o.name, 'bucket_id', o.bucket_id, 'version', o.version, \
+         'size', (o.metadata->>'size')::bigint, 'content_type', o.metadata->>'mimetype', \
+         'cache_control', o.metadata->>'cacheControl', 'content_encoding', o.metadata->>'contentEncoding', \
+         'etag', o.metadata->>'eTag', 'last_modified', coalesce(o.metadata->>'lastModified', {u}), \
+         'created_at', {c}, 'metadata', coalesce(o.user_metadata, '{{}}'::jsonb), \
+         'archived_at', NULL, 'is_delete_marker', false, 'is_versioned', false)::text",
+        u = ts("o.updated_at"),
+        c = ts("o.created_at"),
+    )
+}
+
 /// One `storage.buckets` row as JSON text (alias `b`).
 fn bucket_json() -> String {
     format!(
-        "json_build_object('id', b.id, 'name', b.name, 'owner', b.owner, 'owner_id', b.owner_id, 'public', b.public, \
+        "json_build_object('id', b.id, 'name', b.name, 'owner', coalesce(b.owner::text, ''), 'public', b.public, \
          'type', b.type, 'file_size_limit', b.file_size_limit, 'allowed_mime_types', b.allowed_mime_types, \
-         'created_at', {}, 'updated_at', {})::text",
+         'created_at', {}, 'updated_at', {}, 'versioning_status', 'DISABLED')::text",
         ts("b.created_at"),
         ts("b.updated_at")
     )
@@ -184,7 +199,8 @@ pub async fn bucket_info(ctx: &Ctx, bucket: &str) -> SResult<BucketInfo> {
 pub async fn bucket_list(ctx: &Ctx, caller: &Caller) -> SResult<Value> {
     let mut conn = connect(&ctx.target).await?;
     let tx = begin_as(&mut conn, caller).await?;
-    let rows = tx.query(&format!("SELECT {} FROM storage.buckets b ORDER BY b.name", bucket_json()), &[]).await.map_err(pgerr)?;
+    // Supabase's list has no ORDER BY unless one is asked for: table order.
+    let rows = tx.query(&format!("SELECT {} FROM storage.buckets b", bucket_json()), &[]).await.map_err(pgerr)?;
     let out: SResult<Vec<Value>> = rows.iter().map(|r| parse(&r.get::<_, String>(0))).collect();
     Ok(Value::Array(out?))
 }
@@ -388,7 +404,7 @@ pub async fn info(ctx: &Ctx, caller: &Caller, bucket: &str, name: &str) -> SResu
     let mut conn = connect(&ctx.target).await?;
     let tx = begin_as(&mut conn, caller).await?;
     let row = tx
-        .query_opt(&format!("SELECT {} FROM storage.objects o WHERE o.bucket_id = $1 AND o.name = $2", object_json()), &[&bucket, &name])
+        .query_opt(&format!("SELECT {} FROM storage.objects o WHERE o.bucket_id = $1 AND o.name = $2", info_json()), &[&bucket, &name])
         .await
         .map_err(pgerr)?
         .ok_or_else(StorageError::not_found)?;
@@ -479,14 +495,14 @@ pub async fn complete_upload(
     let wrote = if cur.is_some() {
         tx.execute(
             "UPDATE storage.objects SET owner = $2::text::uuid, owner_id = $3, metadata = $4::text::jsonb, \
-             user_metadata = $5::text::jsonb, version = $6, last_accessed_at = now() WHERE id = $1::text::uuid",
+             user_metadata = coalesce($5::text::jsonb, '{}'::jsonb), version = $6, last_accessed_at = now() WHERE id = $1::text::uuid",
             &[&id, &owner_uuid, &owner_id, &md, &um, &version],
         )
         .await
     } else {
         tx.execute(
             "INSERT INTO storage.objects (id, bucket_id, name, owner, owner_id, metadata, user_metadata, version) \
-             VALUES ($1::text::uuid, $2, $3, $4::text::uuid, $5, $6::text::jsonb, $7::text::jsonb, $8)",
+             VALUES ($1::text::uuid, $2, $3, $4::text::uuid, $5, $6::text::jsonb, coalesce($7::text::jsonb, '{}'::jsonb), $8)",
             &[&id, &bucket, &name, &owner_uuid, &owner_id, &md, &um, &version],
         )
         .await
@@ -586,18 +602,20 @@ pub async fn list(ctx: &Ctx, caller: &Caller, bucket: &str, o: &ListOpts) -> SRe
     };
     let sql = format!(
         "WITH o AS ( \
-           SELECT substr(name, length($2) + 1) AS rest, id, updated_at, created_at, last_accessed_at, metadata \
+           SELECT substr(name, length($2) + 1) AS rest, id, updated_at, created_at, last_accessed_at, metadata, version \
            FROM storage.objects WHERE bucket_id = $1 AND starts_with(name, $2) \
              AND starts_with(lower(substr(name, length($2) + 1)), lower($3)) \
          ), e AS ( \
            SELECT DISTINCT ON (split_part(rest, '/', 1)) split_part(rest, '/', 1) AS name, NULL::uuid AS id, \
              NULL::timestamptz AS updated_at, NULL::timestamptz AS created_at, NULL::timestamptz AS last_accessed_at, \
-             NULL::jsonb AS metadata FROM o WHERE position('/' in rest) > 0 \
+             NULL::jsonb AS metadata, NULL::text AS version FROM o WHERE position('/' in rest) > 0 \
            UNION ALL \
-           SELECT rest, id, updated_at, created_at, last_accessed_at, metadata FROM o WHERE position('/' in rest) = 0 \
+           SELECT rest, id, updated_at, created_at, last_accessed_at, metadata, version FROM o WHERE position('/' in rest) = 0 \
          ) \
          SELECT json_build_object('name', e.name, 'id', e.id, 'updated_at', {u}, 'created_at', {c}, \
-           'last_accessed_at', {l}, 'metadata', e.metadata)::text \
+           'last_accessed_at', {l}, 'metadata', e.metadata, 'version', e.version, 'archived_at', NULL, \
+           'is_delete_marker', CASE WHEN e.id IS NULL THEN NULL ELSE false END, \
+           'is_versioned', CASE WHEN e.id IS NULL THEN NULL ELSE false END)::text \
          FROM e ORDER BY {order} LIMIT $4 OFFSET $5",
         u = ts("e.updated_at"),
         c = ts("e.created_at"),
@@ -631,7 +649,8 @@ pub async fn move_object(ctx: &Ctx, caller: &Caller, bucket: &str, from: &str, t
         .ok_or_else(StorageError::not_found)?;
     tx.commit().await.map_err(pgerr)?;
     let (id, version): (String, Option<String>) = (row.get(0), row.get(1));
-    Ok(json!({ "message": "Successfully moved", "Id": id, "Key": to, "version": version }))
+    let _ = id;
+    Ok(json!({ "message": "Successfully moved", "version": version }))
 }
 
 /// Copy an object as the caller (new id, new bytes).

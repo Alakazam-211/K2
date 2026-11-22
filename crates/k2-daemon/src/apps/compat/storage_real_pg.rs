@@ -313,7 +313,12 @@ async fn real_pg_storage_door() {
         j(&body)
     };
     let top = list("test-a", ORG1.to_string()).await;
-    assert_eq!(top, json!([{"name": "sub1", "id": null, "updated_at": null, "created_at": null, "last_accessed_at": null, "metadata": null}]), "a folder");
+    assert_eq!(
+        top,
+        json!([{"name": "sub1", "id": null, "updated_at": null, "created_at": null, "last_accessed_at": null, "metadata": null,
+                "version": null, "archived_at": null, "is_delete_marker": null, "is_versioned": null}]),
+        "a folder"
+    );
     let files = list("test-a", format!("{ORG1}/sub1")).await;
     assert_eq!(files.as_array().map(Vec::len), Some(1));
     assert_eq!(files[0]["name"], "p1.jpg");
@@ -356,7 +361,7 @@ async fn real_pg_storage_door() {
     assert_eq!((st, body.as_slice()), (200, b"second bytes".as_slice()), "the signed link, no session");
     let tampered = format!("{}x", signed);
     let (st, _, body) = call(app, req("GET", &tampered, None, &[], b"")).await;
-    assert_eq!((st, j(&body)["error"].clone()), (400, json!("InvalidSignature")), "a tampered token");
+    assert_eq!((st, j(&body)["error"].clone()), (400, json!("InvalidJWT")), "a tampered token");
     let other = signed.replace("p1.jpg", "p2.jpg");
     let (st, _, body) = call(app, req("GET", &other, None, &[], b"")).await;
     assert_eq!((st, j(&body)["error"].clone()), (400, json!("InvalidSignature")), "a token for another path");
@@ -381,7 +386,7 @@ async fn real_pg_storage_door() {
     // Rotation ends every outstanding link.
     super::storage_sign::rotate(app).expect("rotate");
     let (st, _, body) = call(app, req("GET", &signed, None, &[], b"")).await;
-    assert_eq!((st, j(&body)["error"].clone()), (400, json!("InvalidSignature")), "a link from before the rotation");
+    assert_eq!((st, j(&body)["error"].clone()), (400, json!("InvalidJWT")), "a link from before the rotation");
 
     // ── signed upload URL ──
     let p4 = format!("{ORG1}/sub1/p4.jpg");
@@ -392,7 +397,11 @@ async fn real_pg_storage_door() {
     assert_eq!(st, 200, "the signed upload, no credential: {}", String::from_utf8_lossy(&body));
     let (st, _, body) = call(app, req("GET", &format!("/object/info/photos/{p4}"), Some("test-a"), &[], b"")).await;
     assert_eq!(st, 200);
-    assert_eq!(j(&body)["owner"], USER_A, "the token's owner owns the object");
+    assert_eq!(j(&body)["size"], 17, "info: {}", String::from_utf8_lossy(&body));
+    let mut su = super::storage_pg::connect(&srv.target("postgres", "st_door")).await.expect("su");
+    let owner: Option<String> =
+        su.client().query_one("SELECT owner::text FROM storage.objects WHERE name = $1", &[&p4]).await.expect("owner").get(0);
+    assert_eq!(owner.as_deref(), Some(USER_A), "the token's owner owns the object");
     let (st, _, body) = call(app, req("POST", &format!("/object/upload/sign/photos/{ORG1}/x.jpg"), Some("test-b"), &[], b"")).await;
     assert_eq!((st, j(&body)["statusCode"].clone()), (400, json!("403")), "B can't get an upload link into org1");
 
@@ -441,7 +450,8 @@ async fn real_pg_storage_door() {
     // ── buckets and unsupported parts ──
     let (st, _, body) = call(app, req("GET", "/bucket", Some("test-a"), &[], b"")).await;
     assert_eq!(st, 200);
-    let ids: Vec<String> = j(&body).as_array().expect("buckets").iter().map(|b| b["id"].as_str().expect("bucket id").to_string()).collect();
+    let mut ids: Vec<String> = j(&body).as_array().expect("buckets").iter().map(|b| b["id"].as_str().expect("bucket id").to_string()).collect();
+    ids.sort();
     assert_eq!(ids, vec!["avatars".to_string(), "photos".to_string()], "the buckets the caller may see");
     let (st, _, body) = call(app, req("POST", "/bucket", Some("test-svc"), &[], br#"{"name": "docs", "public": false, "file_size_limit": "1MB"}"#)).await;
     assert_eq!((st, j(&body)), (200, json!({"name": "docs"})));

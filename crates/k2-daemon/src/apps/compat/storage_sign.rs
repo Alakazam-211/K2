@@ -112,7 +112,8 @@ pub fn verify_with(key: &[u8], token: &str, url: &str, scope: &str, now: i64) ->
     v.validate_exp = false;
     v.required_spec_claims = Default::default();
     let data = decode::<UrlClaims>(token, &DecodingKey::from_secret(key), &v).map_err(|e| match e.kind() {
-        jsonwebtoken::errors::ErrorKind::InvalidSignature => StorageError::invalid_signature("Invalid signature"),
+        // Supabase's words for a token another key signed, or one changed.
+        jsonwebtoken::errors::ErrorKind::InvalidSignature => StorageError::invalid_jwt("signature verification failed"),
         _ => StorageError::invalid_jwt(format!("Invalid JWT: {e}")),
     })?;
     let c = data.claims;
@@ -198,13 +199,14 @@ mod tests {
         let k = b"k1k1k1k1k1k1k1k1k1k1k1k1k1k1k1k1";
         let t = sign_with(k, &claims("b/x", SCOPE_DOWNLOAD, NOW + 60)).expect("sign");
         let e = verify_with(b"k2k2k2k2k2k2k2k2k2k2k2k2k2k2k2k2", &t, "b/x", SCOPE_DOWNLOAD, NOW).expect_err("rotated key");
-        assert_eq!(e.code, "InvalidSignature");
+        assert_eq!(e.code, "InvalidJWT");
+        assert_eq!(e.message, "signature verification failed");
         // Swap the payload for one naming another path, keep the signature.
         let parts: Vec<&str> = t.split('.').collect();
         let forged_claims = sign_with(b"attacker-attacker-attacker-attac", &claims("b/secret", SCOPE_DOWNLOAD, NOW + 60)).expect("sign");
         let forged_payload = forged_claims.split('.').nth(1).expect("payload");
         let forged = format!("{}.{}.{}", parts[0], forged_payload, parts[2]);
-        assert_eq!(verify_with(k, &forged, "b/secret", SCOPE_DOWNLOAD, NOW).expect_err("forged").code, "InvalidSignature");
+        assert_eq!(verify_with(k, &forged, "b/secret", SCOPE_DOWNLOAD, NOW).expect_err("forged").code, "InvalidJWT");
         assert_eq!(verify_with(k, "not-a-token", "b/x", SCOPE_DOWNLOAD, NOW).expect_err("garbage").code, "InvalidJWT");
         // alg=none is never taken.
         let none = format!("eyJhbGciOiJub25lIn0.{}.", parts[1]);
@@ -220,7 +222,7 @@ mod tests {
         assert!(verify(&other, &t, "b/x", SCOPE_DOWNLOAD, NOW).is_err(), "another App's key");
         rotate(&app).expect("rotate");
         let e = verify(&app, &t, "b/x", SCOPE_DOWNLOAD, NOW).expect_err("old link after rotation");
-        assert_eq!(e.code, "InvalidSignature");
+        assert_eq!(e.code, "InvalidJWT");
         let t2 = sign_download(&app, "b/x", 3600, NOW).expect("sign again");
         verify(&app, &t2, "b/x", SCOPE_DOWNLOAD, NOW).expect("new link");
     }

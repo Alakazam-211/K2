@@ -1283,7 +1283,7 @@ pub fn render_skin_roster_body(_project_path: &str) -> String {
 
     let mut out = String::new();
     out.push_str(
-        concat!("These are **app** guests (K2-login sessions for custom UIs) — \
+        concat!("These are **app** guests (sessions with a ", product_name!(), " login, for custom UIs) — \
          not Connect / Server Access operators, and not workspace-agents.\n\
          Do **not** `", cli_name!(), " msg` these names. CLI lookup: `", cli_name!(), " app user list` \
          (leftover: `", cli_name!(), " skin user list`). \

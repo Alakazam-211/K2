@@ -1049,10 +1049,11 @@ mod tests {
     fn caps_cut_counts_and_clamp_shapes_to_the_ui() {
         let mut s = set(1);
         s.layers = (0..40).map(|_| s.layers[0].clone()).collect();
-        s.layers[0].minus = (0..70).map(|_| s.layers[1].rect.clone()).collect();
+        // The frontmost (last at equal z) layer has too many minus shapes.
+        s.layers[39].minus = (0..70).map(|_| s.layers[1].rect.clone()).collect();
         s.claims = (0..300).map(|_| s.claims[0].clone()).collect();
         assert!(cap_counts(&mut s));
-        assert_eq!((s.layers.len(), s.claims.len(), s.layers[0].minus.len()), (MAX_LAYERS, MAX_CLAIMS, MAX_MINUS));
+        assert_eq!((s.layers.len(), s.claims.len(), s.layers[MAX_LAYERS - 1].minus.len()), (MAX_LAYERS, MAX_CLAIMS, MAX_MINUS));
         assert!(!cap_counts(&mut s));
         let big = WireShape { x: -1e9, y: 10.0, width: 2e9, height: 1e12, radius: None, chamfer: None };
         let c = clamp_shape(&big, (1200.0, 800.0)).expect("clipped, not dropped");

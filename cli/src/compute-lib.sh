@@ -118,7 +118,7 @@ _compute_fail() {
     local status="$1" body="$2" not_found="${3:-3}" line="" rows=""
     [ "${_K2_REFUSAL_AREA:-}" = app ] && rows="$(_k2_refusals_json 2>/dev/null)"
     if [ -n "$body" ]; then
-        line="$(printf '%s' "$body" | K2_RF_ROWS="$rows" K2_RF_JSON="${_K2_ARGS_JSON:-0}" python3 -c '
+        line="$(printf '%s' "$body" | _k2_hint_fill | K2_RF_ROWS="$rows" K2_RF_JSON="${_K2_ARGS_JSON:-0}" python3 -c '
 import json, os, sys
 raw = sys.stdin.read()
 try:

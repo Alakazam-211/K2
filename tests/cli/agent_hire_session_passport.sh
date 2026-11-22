@@ -88,9 +88,15 @@ def mode():
         return ""
 
 def hire(who, body):
-    if who == "agent" and mode() == "switch-off":
-        return 403, {"ok": False, "error": {"code": "hire_off", "hint": "Ask your human to turn on 'Let this agent hire agents'."},
-                     "permission": {"action": "agents.hire", "command": ASK}}
+    if who == "agent" and mode() in ("switch-off", "switch-off-old"):
+        # The hint names the command and the product: the server's own are
+        # zz and Globex Desk; its template beside it (white-label C5),
+        # unless the daemon is older (switch-off-old).
+        t = "Ask your human to turn on 'Let this agent hire agents' (or run {cli} agent access set ws1 agents_hire on as the owner, from outside {product})."
+        e = {"code": "hire_off", "hint": t.replace("{cli}", "zz").replace("{product}", "Globex Desk")}
+        if mode() == "switch-off":
+            e["hintTemplate"] = t
+        return 403, {"ok": False, "error": e, "permission": {"action": "agents.hire", "command": ASK}}
     if who == "agent" and body.get("path") == EXISTING:
         return 403, {"ok": False, "error": {"code": "not_your_hire", "hint": "that folder is a workspace this agent didn't hire"}}
     if body.get("preset") == "No Such Tool":
@@ -424,6 +430,14 @@ all_passport "hiring off"
 assert_eq "hiring off: only the hire core asked" "$(field path | sort -u | tr '\n' ' ')" "/cli/agents/hire "
 assert_contains "hiring off: the refusal" "$err" "hire_off"
 assert_eq "hiring off: the card line, last" "$(printf '%s\n' "$err" | tail -n 1)" 'Ask with: k2 permission request agents.hire --why "<what you need it for>"'
+assert_contains "hiring off: the hint with this CLI's names" "$err" "(or run k2 agent access set ws1 agents_hire on as the owner, from outside K2)."
+assert_lacks "hiring off: not the server's command" "$err" "zz agent"
+assert_lacks "hiring off: not the server's product" "$err" "Globex Desk"
+printf 'switch-off-old' >"$MODE_FILE"
+run "${SESSION[@]}" -- agent hire "$WORK/off" --name Off
+: >"$MODE_FILE"
+assert_eq "hiring off, no template: exit 3" "$rc" "3"
+assert_contains "hiring off, no template: the hint as sent" "$err" "(or run zz agent access set ws1 agents_hire on as the owner, from outside Globex Desk)."
 
 echo "== in a session: the daemon refuses a folder the agent didn't hire =="
 run "${SESSION[@]}" -- agent hire "$EXISTING" --name Taken --onboard "hello"

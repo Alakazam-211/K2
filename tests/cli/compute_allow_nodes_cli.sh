@@ -11,6 +11,10 @@
 # (`forbidden`) exit 3 and end with "It can't be requested."; the help and
 # `k2 study compute` name the card and the new code. (The permissions
 # skill's section is checked in k2-core: it equals `k2 study permissions`.)
+# A hint that names the command and the product comes with `hintTemplate`
+# beside it (white-label C5): the CLI prints the template with its own
+# names (k2, K2), never the server's (zz, Globex Desk); a daemon that sends
+# no template (old-ws) has its hint printed as sent.
 
 set -euo pipefail
 
@@ -68,10 +72,13 @@ class H(BaseHTTPRequestHandler):
             f.write(json.dumps({"path": u.path, "body": body}) + "\n")
         if u.path != "/cli/compute/allow-nodes/set":
             return self.reply(404, {"error": {"code": "not_found", "hint": u.path}})
-        if body.get("workspace") == "other-ws":
-            return self.reply(403, {"error": {"code": "forbidden", "workspace": "other-ws",
-                                              "hint": "an agent changes only its own workspace's compute node list, never other-ws's"},
-                                    "permission": NOT})
+        if body.get("workspace") in ("other-ws", "old-ws"):
+            ws = body["workspace"]
+            t = "an agent changes only its own workspace's compute node list, never %s's: a person runs {cli} compute allow-nodes --add <node> --workspace %s from a terminal outside {product}" % (ws, ws)
+            e = {"code": "forbidden", "workspace": ws, "hint": t.replace("{cli}", "zz").replace("{product}", "Globex Desk")}
+            if ws == "other-ws":
+                e["hintTemplate"] = t
+            return self.reply(403, {"error": e, "permission": NOT})
         add = body.get("add") or ""
         if "k2n9-ungranted" in add:
             return self.reply(403, {"error": {"code": "allow_nodes_not_granted", "workspace": "builder", "notGranted": "k2n9-ungranted",
@@ -133,6 +140,13 @@ err="$("$K2" compute allow-nodes --add k2n13-vin --workspace other-ws 2>&1 </dev
 set -e
 expect_eq "another workspace exits 3" "$rc" "3"
 expect_eq "another workspace can't be requested" "$(printf '%s\n' "$err" | tail -1)" "It can't be requested."
+expect_has "another workspace: the hint with this CLI's names" "$err" "a person runs k2 compute allow-nodes --add <node> --workspace other-ws from a terminal outside K2"
+case "$err" in *"zz compute"*|*"Globex Desk"*) bad "another workspace: the server's names leaked: $err" ;; *) ok "another workspace: no server names" ;; esac
+set +e
+err="$("$K2" compute allow-nodes --add k2n13-vin --workspace old-ws 2>&1 </dev/null >/dev/null)"; rc=$?
+set -e
+expect_eq "no template (an older daemon) exits 3" "$rc" "3"
+expect_has "no template: the hint as sent" "$err" "a person runs zz compute allow-nodes --add <node> --workspace old-ws from a terminal outside Globex Desk"
 
 echo "== help and study name the card =="
 help="$("$K2" compute --help)"

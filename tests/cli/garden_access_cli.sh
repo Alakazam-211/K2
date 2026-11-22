@@ -252,9 +252,16 @@ fi
 if run2 2 zen widget claim tally --ask; then
     case "$SERR" in *"--ask is for k2 zen widget sign"*) ok "--ask is sign's only" ;; *) bad "claim --ask: $SERR" ;; esac
 fi
-routes "{$ACCESS_ON, \"/cli/zen/widget/sign\": [200, {\"ok\": true, \"widget\": \"tally\", \"hash\": \"abcdef012345\", \"madeBy\": {\"kind\": \"owner\"}, \"stamped\": false, \"vouched\": false, \"review\": {\"changes\": \"Since it was signed, this widget now asks for presence:read.\", \"ask\": \"k2 zen widget sign tally --ask\"}}]}"
+# The server's own command is zz: askTail is the line after its name, which
+# this CLI prints after its own (white-label C5); an older daemon sends no
+# askTail, and its ask prints as sent.
+routes "{$ACCESS_ON, \"/cli/zen/widget/sign\": [200, {\"ok\": true, \"widget\": \"tally\", \"hash\": \"abcdef012345\", \"madeBy\": {\"kind\": \"owner\"}, \"stamped\": false, \"vouched\": false, \"review\": {\"changes\": \"Since it was signed, this widget now asks for presence:read.\", \"ask\": \"zz zen widget sign tally --ask\", \"askTail\": \"zen widget sign tally --ask\"}}]}"
 if run2 0 zen widget sign tally; then
-    case "$SOUT" in *"Note: tally changed since it was signed: it now asks for presence:read. Ask the person to look: k2 zen widget sign tally --ask"*) ok "a carried difference offers the card" ;; *) bad "review note: $SOUT" ;; esac
+    case "$SOUT" in *"Note: tally changed since it was signed: it now asks for presence:read. Ask the person to look: k2 zen widget sign tally --ask"*) ok "a carried difference offers the card, with this CLI's name" ;; *) bad "review note: $SOUT" ;; esac
+fi
+routes "{$ACCESS_ON, \"/cli/zen/widget/sign\": [200, {\"ok\": true, \"widget\": \"tally\", \"hash\": \"abcdef012345\", \"madeBy\": {\"kind\": \"owner\"}, \"stamped\": false, \"vouched\": false, \"review\": {\"changes\": \"Since it was signed, this widget now asks for presence:read.\", \"ask\": \"zz zen widget sign tally --ask\"}}]}"
+if run2 0 zen widget sign tally; then
+    case "$SOUT" in *"Ask the person to look: zz zen widget sign tally --ask"*) ok "no askTail (an older daemon): the ask as sent" ;; *) bad "review note, no askTail: $SOUT" ;; esac
 fi
 
 echo "== an agent's delete asks the person (G19) =="

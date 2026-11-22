@@ -16,6 +16,12 @@
 # and firewall, each with its own printer; and `k2 permission list`, whose
 # actions each carry `command` and `tail` the same way.
 #
+# A hint that names a command or the product comes with `hintTemplate`
+# beside it, `{cli}` and `{product}` where the names go: the CLI prints the
+# template with its own names (k2, K2), never the server's (zz, Globex
+# Desk). With no usable template the hint prints as sent. Covered through
+# `k2 permission request` (the _k2_hint_fill rule every hint printer uses).
+#
 # An older CLI, from before tail, against a daemon that sends both keys:
 # it still prints the daemon's whole command, unchanged. The older CLI is
 # a scratch copy of this checkout's bash CLI with the tail rule taken out
@@ -57,6 +63,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 MODE = sys.argv[2]
 TAIL = 'permission request connections.add to=\'a b\'\\\'\'c\' --why "<what you need it for>"'
 LIST_TAIL = 'permission request compute.use --why "<what you need it for>"'
+HINT_T = "ask for that first: {cli} permission request vault.delivery secret=S delivery=file, from outside {product}"
 
 class H(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -69,6 +76,15 @@ class H(BaseHTTPRequestHandler):
         mode = open(MODE).read().strip()
         if self.path.startswith("/cli/permission/enabled"):
             return self.reply(200, {"enabled": True})
+        if self.path.startswith("/cli/permission/request"):
+            e = {"code": "bad_params", "hint": HINT_T.replace("{cli}", "zz").replace("{product}", "Globex Desk")}
+            if mode == "new":
+                e["hintTemplate"] = HINT_T
+            elif mode == "number":
+                e["hintTemplate"] = 7
+            elif mode == "empty":
+                e["hintTemplate"] = ""
+            return self.reply(400, {"ok": False, "error": e})
         if self.path.startswith("/cli/permission/list"):
             a = {"id": "compute.use", "command": "zz " + LIST_TAIL}
             if mode == "new":
@@ -146,6 +162,16 @@ list_check() { # <label> <want>
     [ "$(grep -c '"command": ' "$SANDBOX/out")" = 1 ] && ok || bad "$1: k2 permission list: one command: $(cat "$SANDBOX/out")"
 }
 
+# A hint: the template with this CLI's names, or the hint as sent.
+HINT_OURS="Error [bad_params]: ask for that first: k2 permission request vault.delivery secret=S delivery=file, from outside K2"
+HINT_THEIRS="Error [bad_params]: ask for that first: zz permission request vault.delivery secret=S delivery=file, from outside Globex Desk"
+hint_check() { # <label> <want>
+    run permission request vault.delivery secret=S delivery=file --why "for the deploy"
+    [ "$RC" = 2 ] && ok || bad "$1: k2 permission request: exit $RC, want 2 ($ERR)"
+    [ "$(last_err_line)" = "$2" ] && ok || bad "$1: k2 permission request: the last line: $(last_err_line)"
+    [ "$(printf '%s\n' "$ERR" | grep -c '^Error \[')" = 1 ] && ok || bad "$1: k2 permission request: one error line: $ERR"
+}
+
 OURS="Ask with: k2 permission request connections.add to='a b'\\''c' --why \"<what you need it for>\""
 THEIRS="Ask with: zz permission request connections.add to='a b'\\''c' --why \"<what you need it for>\""
 
@@ -163,6 +189,7 @@ for mode in new old number empty; do
         fi
     done
     if [ "$mode" = new ]; then list_check "$mode" "$LIST_OURS"; else list_check "$mode" "$LIST_THEIRS"; fi
+    if [ "$mode" = new ]; then hint_check "$mode" "$HINT_OURS"; else hint_check "$mode" "$HINT_THEIRS"; fi
 done
 
 # The older CLI: the bash CLI with the tail rule taken out again.
@@ -178,12 +205,15 @@ s, b = re.subn(r"""(\n +)p = dict\(p, command="k2 <tail>"\.replace\("<tail>", p\
 s, c = re.subn(r"""cmd = "k2 <tail>"\.replace\("<tail>", permission\["tail"\]\) if isinstance\(permission\.get\("tail"\), str\) and permission\["tail"\] else permission\.get\("command"\)""", 'cmd = permission.get("command")', s)
 # permission list: each action's command from its tail.
 s, d = re.subn(r"""\[a\.update\(command="k2 <tail>"\.replace\("<tail>", a\["tail"\]\)\) for a in \(v\.get\("actions"\) if verb == "list" and isinstance\(v\.get\("actions"\), list\) else \[\]\) if isinstance\(a, dict\) and isinstance\(a\.get\("tail"\), str\) and a\["tail"\]\]; """, "", s)
-# A test login's rooms: the ask from its askTail.
-s, e = re.subn(r"""\("k2 <tail>"\.replace\("<tail>", w\["askTail"\]\) if isinstance\(w\.get\("askTail"\), str\) and w\["askTail"\] else w\.get\("ask"\)\)""", 'w.get("ask")', s)
-if "<tail>" in s or a + b + c == 0 or d != 1 or e != 1:
-    sys.exit("untail: the tail rule is still there (%d left of %d; %d %d %d %d %d)" % (s.count("<tail>"), n0, a, b, c, d, e))
+# An ask from its askTail (a test login's rooms, an invite's rooms, a
+# vault delivery with no card yet, a widget's review).
+s, e = re.subn(r"""\("k2 <tail>"\.replace\("<tail>", (\w+)\["askTail"\]\) if isinstance\(\1\.get\("askTail"\), str\) and \1\["askTail"\] else \1\.get\("ask"\)\)""", r'\1.get("ask")', s)
+# The hint rule: k2_hint_fill leaves every hint as sent.
+s, f = re.subn(r"""\n( +)v\["hint"\] = t\.replace\("\{cli\}", _names\[0\]\)\.replace\("\{product\}", _names\[1\]\)\n""", r"\n\1pass\n", s)
+if "<tail>" in s or a + b + c == 0 or d != 1 or e != 7 or f != 1:
+    sys.exit("untail: the tail rule is still there (%d left of %d; %d %d %d %d %d %d)" % (s.count("<tail>"), n0, a, b, c, d, e, f))
 open(sys.argv[2], "w").write(s)
-print("untail: %d rules taken out" % (a + b + c + d + e))
+print("untail: %d rules taken out" % (a + b + c + d + e + f))
 UNTAIL
 OLD="$SANDBOX/old-k2"
 python3 -I "$SANDBOX/untail.py" "$CLI_BASH_SOURCE" "$OLD" >/dev/null
@@ -200,6 +230,7 @@ for form in "connections add billing" "desktop env" "front status" "firewall"; d
     [ "$(printf '%s\n' "$ERR" | grep -c '^Ask with: ')" = 1 ] && ok || bad "older CLI: k2 $form: one Ask line: $ERR"
 done
 PROG="$OLD" list_check "older CLI" "$LIST_THEIRS"
+PROG="$OLD" hint_check "older CLI" "$HINT_THEIRS"
 
 echo "permission_ask_tail: $pass passed, $fail failed"
 [ "$fail" = 0 ]

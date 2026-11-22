@@ -1351,7 +1351,7 @@ print(json.dumps(out))' ${answers[@]+"${answers[@]}"}) || exit 2
 import json, os, re, sys
 import urllib.error, urllib.parse, urllib.request
 # Loopback and plain http skip the proxy; remote https may use it.
-exec(os.environ["_K2_PY_PROXY_RULE"])
+exec(os.environ["_K2_PY_PROXY_RULE"]); exec(os.environ["_K2_PY_HINT_FILL"])
 exec(os.environ.pop("_K5_PY_HTTP"))
 
 dir_arg = os.environ["HIRE_DIR"]
@@ -1453,10 +1453,10 @@ def http_post_json(route, body, timeout=30, tok=None):
                                  headers=headers, method="POST")
     try:
         with urllib.request.urlopen(k5_request(req), timeout=timeout) as r:
-            return json.loads(r.read().decode("utf-8", "replace"))
+            return k2_hint_fill(json.loads(r.read().decode("utf-8", "replace")))
     except urllib.error.HTTPError as e:
         try:
-            d = json.loads(e.read().decode("utf-8", "replace"))
+            d = k2_hint_fill(json.loads(e.read().decode("utf-8", "replace")))
         except Exception:
             return {"error": "HTTP %s on %s" % (e.code, route)}
         if in_session and isinstance(d, dict):

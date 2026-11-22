@@ -56,7 +56,10 @@ CHAT = {"ok": True, "name": "shop", "chat": {"appId": "svc-1", "feature": True, 
      ]}]}}
 ANSWERS = {
     "/cli/skin/users": {"username": "lee", "generatedPassword": "Temp-Pass-123", "passwordMustChange": True,
-        "waitingForReset": {"rooms": ["ops"], "ask": "k2 permission request apps.user-password-reset user=wes app=shop mode=link --why x"}},
+        # The server's own command is zz: askTail is the line after its
+        # name, which this CLI prints after its own (white-label C5).
+        "waitingForReset": {"rooms": ["ops"], "ask": "zz permission request apps.user-password-reset user=wes app=shop mode=link --why x",
+                            "askTail": "permission request apps.user-password-reset user=wes app=shop mode=link --why x"}},
     "/cli/skin/users/sessions": {"ok": True, "username": "lee", "app": "svc-1", "sessions": [
         {"id": "ses_1", "kind": "browser", "client": "Safari on macOS", "createdAt": 1, "lastSeenAt": 2, "push": False}]},
     "/cli/skin/users/sessions/revoke": {"ok": True, "username": "lee", "app": "svc-1", "ended": 1},
@@ -73,6 +76,9 @@ class H(BaseHTTPRequestHandler):
         with open(LOG, "a") as f:
             f.write(json.dumps({"method": self.command, "path": path, "query": self.path.partition("?")[2], "body": body_in}) + "\n")
         v = ANSWERS.get(path)
+        if path == "/cli/skin/users" and body_in and '"olds"' in body_in:
+            # An older daemon: no askTail, its ask as sent.
+            v = dict(v, waitingForReset={"rooms": ["ops"], "ask": "zz permission request apps.user-password-reset user=olds app=shop mode=link --why x"})
         st = 200 if v is not None else 404
         body = json.dumps(v if v is not None else {"error": {"code": "not_found", "hint": path}}).encode()
         self.send_response(st)
@@ -133,6 +139,9 @@ expect_has "--apply-tokens: says why" "$(cat "$SANDBOX/err")" "next request"
 run app user add wes --app shop
 expect_has "add: what waits and the card" "$(cat "$SANDBOX/out")" "Waiting: everything else works now, but they can't use room ops until they choose their own password"
 expect_has "add: the card line" "$(cat "$SANDBOX/out")" "k2 permission request apps.user-password-reset user=wes app=shop mode=link"
+if grep -Fq "zz permission" "$SANDBOX/out"; then bad "add: the server's command leaked: $(cat "$SANDBOX/out")"; else ok "add: not the server's command"; fi
+run app user add olds --app shop
+expect_has "add, no askTail (an older daemon): the ask as sent" "$(cat "$SANDBOX/out")" "zz permission request apps.user-password-reset user=olds app=shop mode=link"
 
 echo "== k2 app user sessions =="
 run app user sessions lee --app shop

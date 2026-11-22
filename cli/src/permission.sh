@@ -131,7 +131,7 @@ _permission_print() {
         printf '%s\n' "$body"
         exit 0
     fi
-    printf '%s' "$body" | K2_PV="$verb" K2_PS="$status" python3 -c '
+    printf '%s' "$body" | _k2_hint_fill | K2_PV="$verb" K2_PS="$status" python3 -c '
 import json, os, sys, time
 verb, status = os.environ["K2_PV"], int(os.environ["K2_PS"])
 raw = sys.stdin.read()

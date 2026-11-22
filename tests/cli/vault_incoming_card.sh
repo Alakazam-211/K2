@@ -61,8 +61,15 @@ ITEMS = [
     {"deliveryId": ID, "status": "pending", "name": "STRIPE_KEY", "peer": "sales", "workspace": "ops", "createdAt": "2026-11-07T10:00:00Z",
      "card": {"request": ID, "addr": "ops", "card": "c-1", "expiresAt": 1}, "ask": "k2 permission request vault.incoming.accept id=" + ID + " --why \"<what you need it for>\"",
      "landsAs": {"delivery": "file", "ceiling": "env", "expiresAt": None}},
+    # The server's own command is zz: askTail is the line after its name,
+    # which this CLI prints after its own (white-label C5).
     {"deliveryId": "hd_nocard", "status": "pending", "name": "OTHER", "peer": "sales", "workspace": "ops", "createdAt": "2026-11-07T10:00:00Z",
-     "card": None, "ask": "k2 permission request vault.incoming.accept id=hd_nocard --why \"<what you need it for>\"",
+     "card": None, "ask": "zz permission request vault.incoming.accept id=hd_nocard --why \"<what you need it for>\"",
+     "askTail": "permission request vault.incoming.accept id=hd_nocard --why \"<what you need it for>\"",
+     "landsAs": {"delivery": "env", "ceiling": "env", "expiresAt": None}},
+    # An older daemon: no askTail, its ask as sent.
+    {"deliveryId": "hd_old", "status": "pending", "name": "OLDER", "peer": "sales", "workspace": "ops", "createdAt": "2026-11-07T10:00:00Z",
+     "card": None, "ask": "zz permission request vault.incoming.accept id=hd_old --why \"<what you need it for>\"",
      "landsAs": {"delivery": "env", "ceiling": "env", "expiresAt": None}},
 ]
 class H(http.server.BaseHTTPRequestHandler):
@@ -84,6 +91,8 @@ for _ in $(seq 1 100); do curl -s "http://127.0.0.1:$PORT/" >/dev/null 2>&1 && b
 out="$(env HOME="$WORK" K2_HOST=127.0.0.1 K2_PORT="$PORT" K2_HOOK_TOKEN=stub-token K2_PROJECT_PATH="$WORK" "$K2_CLI" vault incoming)" || fail "incoming: $out"
 <<<"$(<<<"$out" grep -F "STRIPE_KEY")" grep -Fq "(waiting for a person: the card on the Thread of ops)" || fail "incoming: the card line: $out"
 <<<"$(<<<"$out" grep -F "OTHER")" grep -Fq "(no card yet: k2 permission request vault.incoming.accept id=hd_nocard" || fail "incoming: the ask line: $out"
+<<<"$(<<<"$out" grep -F "OLDER")" grep -Fq "(no card yet: zz permission request vault.incoming.accept id=hd_old" || fail "incoming: no askTail, the ask as sent: $out"
+if <<<"$(<<<"$out" grep -F "OTHER")" grep -Fq "zz permission"; then fail "incoming: the server's command leaked: $out"; fi
 if <<<"$out" grep -Fq "from their own terminal"; then fail "incoming still says 'from their own terminal': $out"; fi
 ok "k2 vault incoming: where each card is, or the line to ask with"
 

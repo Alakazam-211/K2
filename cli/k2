@@ -29,6 +29,9 @@ set -euo pipefail
 # as typed text. Never $0's name: the Rust front runs this script as
 # /dev/fd/N. The brand flip rewrites this one word with the rest.
 _K2_CLI_NAME=k2
+# The product's own name, for a line that names it from code (a daemon's
+# hint template's {product}, _k2_hint_fill). The brand flip rewrites it.
+_K2_PRODUCT_NAME=K2
 
 # What the Rust front sets when it hands a command to this script. Empty
 # counts as unset.
@@ -1300,6 +1303,52 @@ export _K2_PY_PROXY_RULE
 # marker above. Not exported: the rule carries it, and a block without the
 # rule gets it on its own command line and pops it, as _K5_PY_HTTP.
 _K2_PY_TLS="${_K2_PY_PROXY_RULE%%"# _K2_PY_TLS ends here."*}"
+
+# A hint with this CLI's own names (white-label C5). A daemon that names a
+# command or the product in a hint also sends the hint as a template beside
+# it, `hintTemplate`, with {cli} and {product} where the names go; the hint
+# a CLI prints is that template with its own names, so a server of another
+# brand never names a command this machine doesn't have. With no template
+# (an older daemon) the hint is as sent. The one rule, for every printer:
+# k2_hint_fill(v) fills each object in v (nested ones too) that has a
+# non-empty string hintTemplate, and returns v. An embedded Python block
+# that reads the daemon itself runs exec(os.environ["_K2_PY_HINT_FILL"]);
+# a body in a shell variable goes through _k2_hint_fill. Not a secret.
+_K2_PY_HINT_FILL='
+def k2_hint_fill(v, _names=("'"$_K2_CLI_NAME"'", "'"$_K2_PRODUCT_NAME"'")):
+    if isinstance(v, dict):
+        t = v.get("hintTemplate")
+        if isinstance(t, str) and t:
+            v["hint"] = t.replace("{cli}", _names[0]).replace("{product}", _names[1])
+        for x in v.values():
+            k2_hint_fill(x)
+    elif isinstance(v, list):
+        for x in v:
+            k2_hint_fill(x)
+    return v
+'
+export _K2_PY_HINT_FILL
+
+# _k2_hint_fill: a daemon answer on stdin, on stdout with k2_hint_fill's
+# hints. One with no hintTemplate, or that isn't JSON, is as it came (no
+# python3 runs for it).
+_k2_hint_fill() {
+    local body
+    body="$(cat; printf x)"
+    body="${body%x}"
+    case "$body" in
+        *'"hintTemplate"'*) ;;
+        *) printf '%s' "$body"; return 0 ;;
+    esac
+    printf '%s' "$body" | python3 -c "$_K2_PY_HINT_FILL"'
+import json, sys
+raw = sys.stdin.read()
+try:
+    v = json.loads(raw)
+except Exception:
+    sys.stdout.write(raw); sys.exit(0)
+sys.stdout.write(json.dumps(k2_hint_fill(v)))'
+}
 # A secret for an embedded Python script that is itself read from stdin (a
 # heredoc) rides stdin ahead of the script, never argv or the environment (ps
 # shows a command line to every account on this computer, and the environment
@@ -24734,7 +24783,7 @@ if pw:
     print("To handle no password at all: k2 app user invite <username> --app <app> mails them a link.")
 w=d.get("waitingForReset") or {}
 if w.get("rooms"):
-    print("Waiting: everything else works now, but they can'"'"'t use room %s until they choose their own password, because you set this login up: first sign-in with a temporary password, an invite (%s), or your App'"'"'s forgot-password flow." % (", ".join(w["rooms"]), w.get("ask")))'
+    print("Waiting: everything else works now, but they can'"'"'t use room %s until they choose their own password, because you set this login up: first sign-in with a temporary password, an invite (%s), or your App'"'"'s forgot-password flow." % (", ".join(w["rooms"]), ("k2 <tail>".replace("<tail>", w["askTail"]) if isinstance(w.get("askTail"), str) and w["askTail"] else w.get("ask"))))'
                     ;;
                 show)
                     # app-user-profile P6 (0.46.5): a person's profile in one
@@ -24875,7 +24924,7 @@ else:
     print("No mail path on this box: give %s this one-time link yourself (shown once):\n%s" % (d.get("username"), d.get("link")))
 w=d.get("waitingForReset") or {}
 if w.get("rooms"):
-    print("Waiting: everything else works now, but they can'"'"'t use room %s until they choose their own password, because you set this login up: first sign-in with a temporary password, an invite (%s), or your App'"'"'s forgot-password flow." % (", ".join(w["rooms"]), w.get("ask")))'
+    print("Waiting: everything else works now, but they can'"'"'t use room %s until they choose their own password, because you set this login up: first sign-in with a temporary password, an invite (%s), or your App'"'"'s forgot-password flow." % (", ".join(w["rooms"]), ("k2 <tail>".replace("<tail>", w["askTail"]) if isinstance(w.get("askTail"), str) and w["askTail"] else w.get("ask"))))'
                     ;;
                 reset)
                     local username="" app="" to="" code=0 from="" json_out=0 revoke=0
@@ -25199,7 +25248,7 @@ else:
     print("Skin user %s default rooms: %s" % (d.get("username",""), ", ".join(handles) if handles else "(none)"))
 w=d.get("waitingForReset") or {}
 if w.get("rooms"):
-    print("Waiting: everything else works now, but they can'"'"'t use room %s until they choose their own password, because you set this login up: first sign-in with a temporary password, an invite (%s), or your App'"'"'s forgot-password flow." % (", ".join(w["rooms"]), w.get("ask")))'
+    print("Waiting: everything else works now, but they can'"'"'t use room %s until they choose their own password, because you set this login up: first sign-in with a temporary password, an invite (%s), or your App'"'"'s forgot-password flow." % (", ".join(w["rooms"]), ("k2 <tail>".replace("<tail>", w["askTail"]) if isinstance(w.get("askTail"), str) and w["askTail"] else w.get("ask"))))'
                     ;;
                 role)
                     local username="${1:-}" role="${2:-}"
@@ -25215,7 +25264,7 @@ d=json.load(sys.stdin)
 print("Skin user %s role: %s" % (d.get("username",""), d.get("roleName") or d.get("role_name") or "—"))
 w=d.get("waitingForReset") or {}
 if w.get("rooms"):
-    print("Waiting: everything else works now, but they can'"'"'t use room %s until they choose their own password, because you set this login up: first sign-in with a temporary password, an invite (%s), or your App'"'"'s forgot-password flow." % (", ".join(w["rooms"]), w.get("ask")))'
+    print("Waiting: everything else works now, but they can'"'"'t use room %s until they choose their own password, because you set this login up: first sign-in with a temporary password, an invite (%s), or your App'"'"'s forgot-password flow." % (", ".join(w["rooms"]), ("k2 <tail>".replace("<tail>", w["askTail"]) if isinstance(w.get("askTail"), str) and w["askTail"] else w.get("ask"))))'
                     ;;
                 unassign)
                     local username="${1:-}"
@@ -33897,7 +33946,7 @@ _compute_fail() {
     local status="$1" body="$2" not_found="${3:-3}" line="" rows=""
     [ "${_K2_REFUSAL_AREA:-}" = app ] && rows="$(_k2_refusals_json 2>/dev/null)"
     if [ -n "$body" ]; then
-        line="$(printf '%s' "$body" | K2_RF_ROWS="$rows" K2_RF_JSON="${_K2_ARGS_JSON:-0}" python3 -c '
+        line="$(printf '%s' "$body" | _k2_hint_fill | K2_RF_ROWS="$rows" K2_RF_JSON="${_K2_ARGS_JSON:-0}" python3 -c '
 import json, os, sys
 raw = sys.stdin.read()
 try:
@@ -42904,7 +42953,7 @@ for d in items:
         if c.get("card"):
             extra = "  (waiting for a person: the card on the Thread of %s)" % (c.get("addr") or d.get("workspace") or "the agent")
         else:
-            extra = "  (no card yet: %s)" % (d.get("ask") or "k2 permission request vault.incoming.accept id=%s" % d.get("deliveryId"))
+            extra = "  (no card yet: %s)" % (("k2 <tail>".replace("<tail>", d["askTail"]) if isinstance(d.get("askTail"), str) and d["askTail"] else d.get("ask")) or "k2 permission request vault.incoming.accept id=%s" % d.get("deliveryId"))
     if d.get("ref"): extra = "  " + d["ref"]
     print("%-22s %-10s %-28s %-24s %s%s" % (d.get("landedName") or d.get("name"), d.get("status"), who, d.get("createdAt") or "", d.get("deliveryId"), extra))
     if d.get("note"): print("    note: %s" % d["note"])
@@ -77904,7 +77953,7 @@ print(json.dumps(out))' ${answers[@]+"${answers[@]}"}) || exit 2
 import json, os, re, sys
 import urllib.error, urllib.parse, urllib.request
 # Loopback and plain http skip the proxy; remote https may use it.
-exec(os.environ["_K2_PY_PROXY_RULE"])
+exec(os.environ["_K2_PY_PROXY_RULE"]); exec(os.environ["_K2_PY_HINT_FILL"])
 exec(os.environ.pop("_K5_PY_HTTP"))
 
 dir_arg = os.environ["HIRE_DIR"]
@@ -78006,10 +78055,10 @@ def http_post_json(route, body, timeout=30, tok=None):
                                  headers=headers, method="POST")
     try:
         with urllib.request.urlopen(k5_request(req), timeout=timeout) as r:
-            return json.loads(r.read().decode("utf-8", "replace"))
+            return k2_hint_fill(json.loads(r.read().decode("utf-8", "replace")))
     except urllib.error.HTTPError as e:
         try:
-            d = json.loads(e.read().decode("utf-8", "replace"))
+            d = k2_hint_fill(json.loads(e.read().decode("utf-8", "replace")))
         except Exception:
             return {"error": "HTTP %s on %s" % (e.code, route)}
         if in_session and isinstance(d, dict):
@@ -110651,7 +110700,7 @@ r = d.get("review")
 if isinstance(r, dict) and r.get("ask"):
     # 0.46.5: the upgrade kept this version signed although its manifest
     # had changed; the person hasn\x27t looked yet.
-    print("Note: %s %s. Ask the person to look: %s" % (d.get("widget"), (r.get("changes") or "").rstrip(".").replace("Since it was signed, this widget", "changed since it was signed: it"), r.get("ask")))
+    print("Note: %s %s. Ask the person to look: %s" % (d.get("widget"), (r.get("changes") or "").rstrip(".").replace("Since it was signed, this widget", "changed since it was signed: it"), ("k2 <tail>".replace("<tail>", r["askTail"]) if isinstance(r.get("askTail"), str) and r["askTail"] else r.get("ask"))))
 '
 }
 
@@ -117621,7 +117670,7 @@ _permission_print() {
         printf '%s\n' "$body"
         exit 0
     fi
-    printf '%s' "$body" | K2_PV="$verb" K2_PS="$status" python3 -c '
+    printf '%s' "$body" | _k2_hint_fill | K2_PV="$verb" K2_PS="$status" python3 -c '
 import json, os, sys, time
 verb, status = os.environ["K2_PV"], int(os.environ["K2_PS"])
 raw = sys.stdin.read()

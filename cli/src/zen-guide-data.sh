@@ -1378,7 +1378,7 @@ r = d.get("review")
 if isinstance(r, dict) and r.get("ask"):
     # 0.46.5: the upgrade kept this version signed although its manifest
     # had changed; the person hasn\x27t looked yet.
-    print("Note: %s %s. Ask the person to look: %s" % (d.get("widget"), (r.get("changes") or "").rstrip(".").replace("Since it was signed, this widget", "changed since it was signed: it"), r.get("ask")))
+    print("Note: %s %s. Ask the person to look: %s" % (d.get("widget"), (r.get("changes") or "").rstrip(".").replace("Since it was signed, this widget", "changed since it was signed: it"), ("k2 <tail>".replace("<tail>", r["askTail"]) if isinstance(r.get("askTail"), str) and r["askTail"] else r.get("ask"))))
 '
 }
 

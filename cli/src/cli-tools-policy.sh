@@ -735,6 +735,52 @@ export _K2_PY_PROXY_RULE
 # marker above. Not exported: the rule carries it, and a block without the
 # rule gets it on its own command line and pops it, as _K5_PY_HTTP.
 _K2_PY_TLS="${_K2_PY_PROXY_RULE%%"# _K2_PY_TLS ends here."*}"
+
+# A hint with this CLI's own names (white-label C5). A daemon that names a
+# command or the product in a hint also sends the hint as a template beside
+# it, `hintTemplate`, with {cli} and {product} where the names go; the hint
+# a CLI prints is that template with its own names, so a server of another
+# brand never names a command this machine doesn't have. With no template
+# (an older daemon) the hint is as sent. The one rule, for every printer:
+# k2_hint_fill(v) fills each object in v (nested ones too) that has a
+# non-empty string hintTemplate, and returns v. An embedded Python block
+# that reads the daemon itself runs exec(os.environ["_K2_PY_HINT_FILL"]);
+# a body in a shell variable goes through _k2_hint_fill. Not a secret.
+_K2_PY_HINT_FILL='
+def k2_hint_fill(v, _names=("'"$_K2_CLI_NAME"'", "'"$_K2_PRODUCT_NAME"'")):
+    if isinstance(v, dict):
+        t = v.get("hintTemplate")
+        if isinstance(t, str) and t:
+            v["hint"] = t.replace("{cli}", _names[0]).replace("{product}", _names[1])
+        for x in v.values():
+            k2_hint_fill(x)
+    elif isinstance(v, list):
+        for x in v:
+            k2_hint_fill(x)
+    return v
+'
+export _K2_PY_HINT_FILL
+
+# _k2_hint_fill: a daemon answer on stdin, on stdout with k2_hint_fill's
+# hints. One with no hintTemplate, or that isn't JSON, is as it came (no
+# python3 runs for it).
+_k2_hint_fill() {
+    local body
+    body="$(cat; printf x)"
+    body="${body%x}"
+    case "$body" in
+        *'"hintTemplate"'*) ;;
+        *) printf '%s' "$body"; return 0 ;;
+    esac
+    printf '%s' "$body" | python3 -c "$_K2_PY_HINT_FILL"'
+import json, sys
+raw = sys.stdin.read()
+try:
+    v = json.loads(raw)
+except Exception:
+    sys.stdout.write(raw); sys.exit(0)
+sys.stdout.write(json.dumps(k2_hint_fill(v)))'
+}
 # A secret for an embedded Python script that is itself read from stdin (a
 # heredoc) rides stdin ahead of the script, never argv or the environment (ps
 # shows a command line to every account on this computer, and the environment

@@ -29,6 +29,9 @@ set -euo pipefail
 # as typed text. Never $0's name: the Rust front runs this script as
 # /dev/fd/N. The brand flip rewrites this one word with the rest.
 _K2_CLI_NAME=k2
+# The product's own name, for a line that names it from code (a daemon's
+# hint template's {product}, _k2_hint_fill). The brand flip rewrites it.
+_K2_PRODUCT_NAME=K2
 
 # What the Rust front sets when it hands a command to this script. Empty
 # counts as unset.

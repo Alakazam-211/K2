@@ -875,7 +875,7 @@ for d in items:
         if c.get("card"):
             extra = "  (waiting for a person: the card on the Thread of %s)" % (c.get("addr") or d.get("workspace") or "the agent")
         else:
-            extra = "  (no card yet: %s)" % (d.get("ask") or "k2 permission request vault.incoming.accept id=%s" % d.get("deliveryId"))
+            extra = "  (no card yet: %s)" % (("k2 <tail>".replace("<tail>", d["askTail"]) if isinstance(d.get("askTail"), str) and d["askTail"] else d.get("ask")) or "k2 permission request vault.incoming.accept id=%s" % d.get("deliveryId"))
     if d.get("ref"): extra = "  " + d["ref"]
     print("%-22s %-10s %-28s %-24s %s%s" % (d.get("landedName") or d.get("name"), d.get("status"), who, d.get("createdAt") or "", d.get("deliveryId"), extra))
     if d.get("note"): print("    note: %s" % d["note"])

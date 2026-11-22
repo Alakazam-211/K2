@@ -99,8 +99,10 @@ pub fn handed_back(words: &[&str]) -> bool {
 /// The line `--token <t>` prints (`_doc_token_stdin`).
 pub const TOKEN_NOTE: &str = "note: --token is visible to every account on this computer while the command runs; use --token-stdin";
 
+/// `-h` or `--help` before the first bare `--` (`_wants_help "$@"`): the
+/// words after it are the verb's (a path named `-h`).
 fn wants_help(words: &[&str]) -> bool {
-    words.iter().any(|w| matches!(*w, "-h" | "--help"))
+    crate::dashdash::wants_help(words)
 }
 
 /// `k5 doc ...`: `args` is the whole command line after `argv[0]`.

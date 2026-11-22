@@ -186,7 +186,7 @@ fn spec_route(table: &'static [SpecVerb], args: &[OsString]) -> Route {
     let Some(words) = words else {
         return Route::Fallthrough;
     };
-    if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
+    if help_words(&words).any(|w| matches!(*w, "-h" | "--help")) {
         return help_route(args).map_or(Route::Fallthrough, Route::Help);
     }
     if let Some(form) = text::captured_form(&words) {

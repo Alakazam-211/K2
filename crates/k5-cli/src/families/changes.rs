@@ -257,7 +257,9 @@ impl<'a> Words<'a> {
 /// end; or the refusal, with `_CH_JSON` as it stood.
 pub fn parse(words: &[&str]) -> Result<(Verb, bool), Die> {
     let sub = words.first().copied().unwrap_or("");
-    if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
+    // `_wants_help "$@"`: only the words before a bare `--` (a file named
+    // `-h` after one is staged, not help).
+    if crate::dashdash::wants_help(words) {
         return Ok((
             Verb::Help {
                 notes: matches!(sub, "notes" | "note"),
@@ -893,7 +895,7 @@ fn run_with(
     mut settings: Settings,
     parsed: Result<(Verb, bool), Die>,
 ) -> Exit {
-    let offline = words.iter().any(|w| matches!(*w, "-h" | "--help"));
+    let offline = crate::dashdash::wants_help(words);
     let skip = words.first() == Some(&"help") || offline;
     let no_token = settings.auth == Auth::None;
     if settings.no_owner_fallback && no_token && !offline {

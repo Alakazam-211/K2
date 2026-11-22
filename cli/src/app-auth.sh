@@ -10,15 +10,18 @@ cmd_app_auth() {
     case "$sub" in
         -h|--help|help) _app_auth_usage; return 0 ;;
         door|origins) shift ;;
-        ""|--json) sub=status ;;
+        ""|--json|--) sub=status ;;
         -*) echo "Unknown flag: $sub (k2 app auth --help)" >&2; exit 2 ;;
         *) sub=status ;;
     esac
     local app="" json_out=0 onoff="" origins="" clear=0
     local nl='
 '
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --json) json_out=1; shift ;;
             --origin) [ "$sub" = origins ] || { echo "--origin goes with k2 app auth origins" >&2; exit 2; }; _need_value "$@"; origins="$origins${2:-}$nl"; shift 2 ;;
             --clear) [ "$sub" = origins ] || { echo "--clear goes with k2 app auth origins" >&2; exit 2; }; clear=1; shift ;;
@@ -150,8 +153,11 @@ cmd_app_pairing() {
 
 cmd_app_pairing_status() {
     local app="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_pairing_usage; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
@@ -168,8 +174,11 @@ cmd_app_pairing_setup() {
     local app="" json_out=0 ios="" android="" hosts="" origins="" paths="" appstore="" playstore="" desktop=0
     local nl='
 '
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --desktop-only) desktop=1; shift ;;
             --ios) _need_value "$@"; ios="$ios${2:-}$nl"; shift 2 ;;
             --android) _need_value "$@"; android="$android${2:-}$nl"; shift 2 ;;
@@ -243,8 +252,12 @@ print(json.dumps(b))')" || exit 2
 
 cmd_app_pairing_off() {
     local app="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
+            -h|--help) _app_pairing_usage; return 0 ;;
             --json) json_out=1; shift ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
             *) app="$1"; shift ;;
@@ -258,8 +271,12 @@ cmd_app_pairing_off() {
 
 cmd_app_pairing_check() {
     local app="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
+            -h|--help) _app_pairing_usage; return 0 ;;
             --json) json_out=1; shift ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
             *) app="$1"; shift ;;
@@ -286,8 +303,12 @@ sys.exit(1 if bad else 0)'
 
 cmd_app_pairing_log() {
     local app="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
+            -h|--help) _app_pairing_usage; return 0 ;;
             --json) json_out=1; shift ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
             *) app="$1"; shift ;;
@@ -376,8 +397,11 @@ cmd_app_push() {
 
 cmd_app_push_status() {
     local app="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_push_usage; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
@@ -427,8 +451,11 @@ _app_push_on_post() {
 
 cmd_app_push_setup() {
     local app="" p8="" kid="" team="" bundle="" sa="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --apns-key) _need_value "$@"; p8="${2:-}"; shift 2 ;;
             --key-id) _need_value "$@"; kid="${2:-}"; shift 2 ;;
             --team-id) _need_value "$@"; team="${2:-}"; shift 2 ;;
@@ -475,8 +502,12 @@ cmd_app_push_creds() {
         *) echo "usage: k2 app push creds rm <app> --apns|--fcm|--all" >&2; exit 2 ;;
     esac
     local app="" platform="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
+            -h|--help) _app_push_usage; return 0 ;;
             --apns) platform=apns; shift ;;
             --fcm) platform=fcm; shift ;;
             --all) platform=all; shift ;;
@@ -493,8 +524,12 @@ cmd_app_push_creds() {
 
 cmd_app_push_check() {
     local app="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
+            -h|--help) _app_push_usage; return 0 ;;
             --json) json_out=1; shift ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
             *) app="$1"; shift ;;
@@ -524,8 +559,12 @@ sys.exit(1 if bad else 0)'
 cmd_app_push_onoff() {
     local mode="$1"; shift
     local app="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
+            -h|--help) _app_push_usage; return 0 ;;
             --json) json_out=1; shift ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
             *) app="$1"; shift ;;
@@ -541,8 +580,12 @@ cmd_app_push_onoff() {
 
 cmd_app_push_set() {
     local app="" replies="" chat="" previews="" maxd="" register="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
+            -h|--help) _app_push_usage; return 0 ;;
             --agent-replies) _need_value "$@"; replies="${2:-}"; shift 2 ;;
             --chat) _need_value "$@"; chat="${2:-}"; shift 2 ;;
             --previews) _need_value "$@"; previews="${2:-}"; shift 2 ;;
@@ -571,8 +614,11 @@ cmd_app_push_send() {
     local mode="$1"; shift
     local app="" room="" title="" text="" topic="" collapse="" thread="" sound="" badge="" prio="" ttl="" chan="" silent=0 json_out=0
     local tos=() datas=()
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --to) _need_value "$@"; tos+=("${2:-}"); shift 2 ;;
             --room) _need_value "$@"; room="${2:-}"; shift 2 ;;
             --title) _need_value "$@"; title="${2:-}"; shift 2 ;;
@@ -659,8 +705,12 @@ _compute_send_call() {
 
 cmd_app_push_log() {
     local app="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
+            -h|--help) _app_push_usage; return 0 ;;
             --json) json_out=1; shift ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
             *) app="$1"; shift ;;
@@ -687,6 +737,19 @@ if v.get("pending"):
 # _app_says_help <words...>: -h, --help or the word help anywhere before a
 # bare --. For verbs that read their ids by position, where the house
 # check alone would let `<id> help` through.
+#
+# The k2 app verbs that read names (an App, a request id, a login) use it
+# the same way (0.46.17): the word help before a bare -- is help, never a
+# name, and a name that is literally help goes after the --. A verb with a
+# loop puts this before it, so the loop's own -h arm prints the page:
+#     local _dd=""
+#     if _app_says_help "$@"; then set -- --help; fi
+#     while [ $# -gt 0 ]; do
+#         case "$_dd$1" in
+#             --) _dd=:; shift ;;
+# After the --, _dd puts a : in front of each word, so no flag arm matches
+# and every word goes to the loop's name arm (*), which reads "$1" as typed.
+# Each such verb is in _k2_takes_dashdash.
 _app_says_help() {
     _wants_help "$@" && return 0
     local a
@@ -697,11 +760,25 @@ _app_says_help() {
     return 1
 }
 
+# _app_names <words...>: the words with the first bare -- taken out, in
+# _APP_NAMES. For verbs that read only names, by position (approve, push
+# devices rm), after the help check: there a -- only says the words after
+# it are names.
+_app_names() {
+    _APP_NAMES=()
+    local a seen=0
+    for a in "$@"; do
+        if [ "$a" = "--" ] && [ "$seen" = 0 ]; then seen=1; continue; fi
+        _APP_NAMES+=("$a")
+    done
+}
+
 cmd_app_push_devices() {
     if [ "${1:-}" = rm ] || [ "${1:-}" = remove ]; then
         shift
         # Help wins anywhere (0.46.17): `rm <app> <id> -h` removed the phone.
         if _app_says_help "$@"; then _app_push_usage; return 0; fi
+        _app_names "$@"; set -- ${_APP_NAMES[@]+"${_APP_NAMES[@]}"}
         local app="${1:-}" id="${2:-}"
         { [ -z "$app" ] || [ -z "$id" ]; } && { echo "usage: k2 app push devices rm <app> <apd_…>" >&2; exit 2; }
         _compute_call POST /cli/app/push/devices/remove "$(_compute_json K2_CJ_app="$app" K2_CJ_id="$id")"
@@ -709,8 +786,12 @@ cmd_app_push_devices() {
         return 0
     fi
     local app="" guest="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
+            -h|--help) _app_push_usage; return 0 ;;
             --guest|--user) _need_value "$@"; guest="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
@@ -805,8 +886,11 @@ cmd_app_email() {
 
 cmd_app_email_show() {
     local app="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_email_usage; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
@@ -821,8 +905,11 @@ cmd_app_email_show() {
 
 cmd_app_email_on() {
     local app="" sender="" scope="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --sender|--from) _need_value "$@"; sender="${2:-}"; shift 2 ;;
             --scope) _need_value "$@"; scope="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
@@ -841,8 +928,11 @@ cmd_app_email_on() {
 cmd_app_email_onoff() {
     local mode="$1"; shift
     local app="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_email_usage; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
@@ -862,8 +952,11 @@ cmd_app_email_onoff() {
 cmd_app_email_send() {
     local app="" subject="" text="" text_file="" html_file="" key="" json_out=0
     local tos=() ccs=() bccs=() rts=() hdrs=() tags=()
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --to) _need_value "$@"; tos+=("${2:-}"); shift 2 ;;
             --cc) _need_value "$@"; ccs+=("${2:-}"); shift 2 ;;
             --bcc) _need_value "$@"; bccs+=("${2:-}"); shift 2 ;;
@@ -940,8 +1033,11 @@ print(line)'
 
 cmd_app_email_log() {
     local app="" limit="" status="" tag="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --limit) _need_value "$@"; limit="${2:-}"; shift 2 ;;
             --status) _need_value "$@"; status="${2:-}"; shift 2 ;;
             --tag) _need_value "$@"; tag="${2:-}"; shift 2 ;;
@@ -979,8 +1075,12 @@ for r in rows:
 
 cmd_app_email_status() {
     local app="" id="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
+            -h|--help) _app_email_usage; return 0 ;;
             --json) json_out=1; shift ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
             *) if [ -z "$app" ]; then app="$1"; else id="$1"; fi; shift ;;
@@ -1575,8 +1675,11 @@ cmd_app_approvals() {
     fi
     local app="" all=0 json_out=0 state="" id=""
     local usage="k2 app approvals [<request-id>] [--app A] [--state pending|approved|denied|withdrawn|expired|failed|all] [--all] [--json]"
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --app) _need_value "$@"; app="${2:-}"; shift 2 ;;
             --all) all=1; shift ;;
             --state) [ $# -ge 2 ] || { echo "usage: $usage" >&2; exit 2; }; state="$2"; shift 2 ;;
@@ -1674,6 +1777,7 @@ cmd_app_approve() {
     # approve, on stdout, and nothing sent. It looked at the first word only,
     # so `approve <id> -h` read the approvals and asked for the confirm.
     if _app_says_help "$@"; then _app_grace_usage; return 0; fi
+    _app_names "$@"; set -- ${_APP_NAMES[@]+"${_APP_NAMES[@]}"}
     [ -n "${1:-}" ] || { echo "usage: k2 app approve <request-id>   (the owner or an admin, in person, from a terminal outside K2)" >&2; exit 2; }
     _app_approve "$1"
 }
@@ -1684,8 +1788,11 @@ cmd_app_approve() {
 _app_approvals_revoke() {
     local id="" app="" json_out=0
     local usage="usage: k2 app approvals revoke <request-id> | --app <name> [--json]   (the owner)"
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --app) [ $# -ge 2 ] || { echo "$usage" >&2; exit 2; }; app="$2"; shift 2 ;;
             --json) json_out=1; shift ;;
             -h|--help) echo "$usage"; return 0 ;;
@@ -1708,11 +1815,14 @@ print(v.get("note") or "")'
 
 cmd_app_deny() {
     local id="" reason="" json_out=0
+    local _dd=""
+    if _app_says_help "$@"; then set -- --help; fi
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --reason) _need_value "$@"; reason="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
-            -h|--help) echo "usage: k2 app deny <request-id> [--reason TEXT]   (an owner/admin denies; the requester withdraws its own)" >&2; return 0 ;;
+            -h|--help) echo "usage: k2 app deny <request-id> [--reason TEXT]   (an owner/admin denies; the requester withdraws its own)"; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
             *) id="$1"; shift ;;
         esac
@@ -1737,12 +1847,15 @@ for c in v.get("coreList") or []:
 }
 
 cmd_app_access() {
-    # Help wins: -h or --help anywhere, even as a value flag's word.
-    if _wants_help "$@"; then _app_grace_usage; return 0; fi
+    # Help wins: -h, --help or the word help anywhere before a bare --,
+    # even as a value flag's word.
+    if _app_says_help "$@"; then _app_grace_usage; return 0; fi
     local ws="" build="" manage="" users="" open="" json_out=0 cores=""
     local _usage="usage: k2 app access <workspace> [--build on|off] [--manage on|off] [--users on|off] [--core db|files|thread|mail|sew=on|off[,…]]… [--json]"
+    local _dd=""
     while [ $# -gt 0 ]; do
-        case "$1" in
+        case "$_dd$1" in
+            --) _dd=:; shift ;;
             --build) _need_value "$@"; build="${2:-}"; shift 2 ;;
             --users) _need_value "$@"; users="${2:-}"; shift 2 ;;
             --manage) _need_value "$@"; manage="${2:-}"; shift 2 ;;

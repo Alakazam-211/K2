@@ -802,14 +802,15 @@ case "${1:-help}" in
             grant)
                 case "${3:-}" in
                     ""|list|add|create|rm|remove|delete|revoke|copy-host|copyhost|-h|--help)
-                        if _wants_help "${@:2}"; then _app_family_usage; _app_rt_usage; exit 0; fi
+                        if _app_says_help "${@:2}"; then _app_family_usage; _app_rt_usage; exit 0; fi
                         ;;
                 esac
                 shift; cmd_app "$@"
                 ;;
             *)
-                # Help on stdout, exit 0, as every other help page.
-                if _wants_help "${@:2}"; then
+                # Help on stdout, exit 0, as every other help page. The word
+                # help before a bare -- is help too, never a name (0.46.17).
+                if _app_says_help "${@:2}"; then
                     _app_family_usage
                     _app_rt_usage
                     exit 0

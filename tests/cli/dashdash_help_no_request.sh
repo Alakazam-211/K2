@@ -319,6 +319,14 @@ vault run --secret A -- true
 db run -- true
 app exec acme -- ls
 app shell acme -- ls
+app auth -- acme
+app pairing status -- acme
+app push status -- acme
+app email show -- acme
+app approvals -- w_1
+app approve -- w_1
+app deny -- w_1
+app access -- ws
 changes diff -- a.txt
 changes stage -- a.txt
 changes add -- a.txt

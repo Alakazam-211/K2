@@ -1194,6 +1194,10 @@ _k2_takes_dashdash() {
         "vault run") return 0 ;;              # migrate.sh _vault_run
         "db run") return 0 ;;                 # db-store.sh cmd_db run
         "app exec"|"app shell") return 0 ;;   # app-doctor.sh cmd_app_exec, cmd_app_shell
+        # A name after `--` is a name, even one that is literally help
+        # (0.46.17; the loops' `case "$_dd$1"`, see _app_says_help).
+        "app auth"|"app pairing"|"app push"|"app email") return 0 ;;    # app-auth.sh
+        "app approvals"|"app approve"|"app deny"|"app access") return 0 ;;  # app-auth.sh
         "changes diff"|"changes stage"|"changes add"|"changes unstage"|"changes discard") return 0 ;;  # changes.sh
         "sim type") return 0 ;;               # sim.sh _sim_type
         "zen garden"|"zen gardens") return 0 ;;  # garden-access.sh cmd_zen_garden

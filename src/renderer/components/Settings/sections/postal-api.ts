@@ -92,6 +92,28 @@ export interface PostalSettings {
   adminsMayAccept: boolean
 }
 
+/** The settings as read: the two switches, plus whether this server holds
+ *  its Postal approval token (`approvalsLinked`; null while Postal is off
+ *  or when the daemon can't tell) and, after a switch-on whose link
+ *  failed, the daemon's plain words for why (`linkFailed`). */
+export interface PostalSettingsRead extends PostalSettings {
+  approvalsLinked: boolean | null
+  linkFailed: string | null
+}
+
+type SettingsWire = { enabled?: unknown; adminsMayAccept?: unknown; approvalsLinked?: unknown; decideToken?: { state?: unknown; hint?: unknown } }
+
+function settingsOf(v: SettingsWire): PostalSettingsRead {
+  const dt = v.decideToken
+  const failed = dt && dt.state === 'failed' && typeof dt.hint === 'string' ? dt.hint : null
+  return {
+    enabled: v.enabled === true,
+    adminsMayAccept: v.adminsMayAccept === true,
+    approvalsLinked: typeof v.approvalsLinked === 'boolean' ? v.approvalsLinked : null,
+    linkFailed: failed,
+  }
+}
+
 /** What a person reads for a refused or failed Postal call: the daemon's
  *  hint (never a stack trace). */
 export function postalErrorText(err: unknown): string {
@@ -197,9 +219,15 @@ export function fetchPostalFriends(scope: ServerScope, workspace: string): Promi
   return daemonCliGet<PostalFriends>(scope, 'postal/friends', { workspace })
 }
 
-export async function fetchPostalSettings(scope: ServerScope): Promise<PostalSettings> {
-  const v = await daemonCliGet<{ enabled?: unknown; adminsMayAccept?: unknown }>(scope, 'postal/settings')
-  return { enabled: v.enabled === true, adminsMayAccept: v.adminsMayAccept === true }
+export async function fetchPostalSettings(scope: ServerScope): Promise<PostalSettingsRead> {
+  return settingsOf(await daemonCliGet<SettingsWire>(scope, 'postal/settings'))
+}
+
+/** The owner's Link now: this server gets its Postal approval token from
+ *  the Postal network with its K2 Connect account (never a page on the
+ *  Postal website). A failure throws the daemon's plain words for why. */
+export async function linkPostalApprovals(scope: ServerScope): Promise<PostalSettingsRead> {
+  return settingsOf(await daemonCliPost<SettingsWire>(scope, 'postal/settings', { link: true }))
 }
 
 // ── Writes ─────────────────────────────────────────────────────────────
@@ -245,9 +273,8 @@ export function blockPostalFriend(scope: ServerScope, workspace: string, peer: s
   return daemonCliPost(scope, 'postal/block', { workspace, peer })
 }
 
-export async function savePostalSettings(scope: ServerScope, patch: Partial<PostalSettings>): Promise<PostalSettings> {
-  const v = await daemonCliPost<{ enabled?: unknown; adminsMayAccept?: unknown }>(scope, 'postal/settings', patch)
-  return { enabled: v.enabled === true, adminsMayAccept: v.adminsMayAccept === true }
+export async function savePostalSettings(scope: ServerScope, patch: Partial<PostalSettings>): Promise<PostalSettingsRead> {
+  return settingsOf(await daemonCliPost<SettingsWire>(scope, 'postal/settings', patch))
 }
 
 // ── The viewer's role ──────────────────────────────────────────────────

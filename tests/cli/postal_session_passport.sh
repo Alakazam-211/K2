@@ -260,13 +260,14 @@ VERBS=(
     "disable|owner|postal disable"
     "admins-may-accept|owner|postal admins-may-accept on"
     "code|owner|postal code pr_7"
+    "link|owner|postal link"
     "owner-link|owner|postal owner-link"
 )
 
 # The transport a verb takes in a session with a live cell socket.
 via_for() {
     case "$1" in
-        settings|disable|admins-may-accept|code|owner-link) echo tcp ;;
+        settings|disable|admins-may-accept|code|link|owner-link) echo tcp ;;
         *) echo uds ;;
     esac
 }

@@ -112,6 +112,11 @@ pub(crate) static PAIR_ACCEPT_SPEC: ActionSpec = ActionSpec {
         // `code`: the request carries a pairing code (SAS v2): Allow opens
         // K2's own form for the code shown on the other side's screen.
         ParamSpec { key: "pairing", kind: ParamKind::Choice, required: false, list: false, choices: &["code"] },
+        // `link`: this server couldn't get its approval token when the
+        // request arrived, and the kind of why (the card says so, and that
+        // Accept links first). Kept on the card so its words stay fixed; a
+        // kind, never free text.
+        ParamSpec { key: "link", kind: ParamKind::Choice, required: false, list: false, choices: crate::postal_net::decide_token::KINDS },
     ],
     floor: Floor::Admin,
     direction: Direction::Loosen,
@@ -400,6 +405,9 @@ pub(crate) fn with_computed(action: &str, ctx: &Ctx) -> Option<Ctx> {
                     product_name!()
                 ));
             }
+            if let Some(words) = text_param(ctx, "link").and_then(crate::postal_net::decide_token::kind_words) {
+                effect.push_str(&format!(" {}", cant_accept_words(words)));
+            }
             if let Some(fp) = f.as_ref().and_then(|f| f.peer_fingerprint.clone()) {
                 effect.push_str(&format!(" Their key: {fp}."));
             }
@@ -477,7 +485,10 @@ fn apply_invite(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
         return refused_of(r);
     }
     let v: Value = serde_json::from_str(&r.body).unwrap_or(Value::Null);
-    let message = if v["sent"].as_bool() == Some(true) {
+    let message = if let Some(hint) = v["hint"].as_str().filter(|_| v["sent"].as_bool() != Some(true)) {
+        // Kept here: this server can't accept the answer yet.
+        format!("Friend request to {to} for {}: {hint}.", ctx.workspace_handle)
+    } else if v["sent"].as_bool() == Some(true) {
         format!(
             "Friend request to {to} sent for {}. When they answer, a person on each side types the other's 6-digit code on a card. {} postal friends shows it under Requests out.",
             ctx.workspace_handle,
@@ -883,7 +894,36 @@ pub(crate) fn present_pair_accept(ws: &Ws, f: &k2_core::postal::store::Friend) -
     } else {
         format!("{} asked to be friends on Postal. A person here accepts or rejects it.", f.peer_address)
     };
+    // A request with a pairing code is confirmed with the owner's token.
+    if gate::code(&f.id).is_some() {
+        if let Some(why) = cant_accept_now() {
+            params.insert("link".into(), json!(why));
+        }
+    }
     present(ws, PAIR_ACCEPT, params, &why, Some(f.id.clone()), Asker::Daemon)
+}
+
+/// The card's sentence when this server couldn't get its approval token as
+/// the request arrived: what is missing, why, and the one-click fix (Accept
+/// links first; Link now in Settings). Never a Postal website page.
+pub(crate) fn cant_accept_words(why: &str) -> String {
+    format!(
+        "This server can't accept friend requests yet: it doesn't have its Postal approval token ({}). Accept gets it first, with this server's {} Connect account, then accepts; or the owner presses Link now in Settings → General → Postal.",
+        why.trim().trim_end_matches('.'),
+        product_name!()
+    )
+}
+
+/// Why (its kind) this server can't accept a request right now, when it can't: with
+/// the network connected and no approval token here, it is asked for first
+/// (unattended: it waits after a failure, never a storm).
+fn cant_accept_now() -> Option<String> {
+    use crate::postal_net::decide_token::{self, Why};
+    if !k2_core::postal::gate::network_available() {
+        return None;
+    }
+    let net = crate::postal_net::net()?;
+    decide_token::ready(&net, Why::Request, "server").err().map(|e| decide_token::kind(&e).to_string())
 }
 
 /// Close every open `postal.pair.accept` card for friend row `friend_id`:
@@ -963,3 +1003,7 @@ mod tests;
 #[cfg(test)]
 #[path = "postal_async_tests.rs"]
 mod async_tests;
+
+#[cfg(test)]
+#[path = "postal_link_tests.rs"]
+mod link_tests;

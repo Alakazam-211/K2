@@ -13,7 +13,10 @@
 //     it happened; a request that stopped waiting reloads and says so;
 //   - an invite the network hasn't sent yet says Not sent yet;
 //   - the owner's switch posts postal/settings {enabled} and re-reads
-//     /boot-status so the tab appears.
+//     /boot-status so the tab appears;
+//   - with no approval token (approvalsLinked: false) a row says friend
+//     requests can't be accepted yet; the owner's Link now posts {link: true}
+//     and a failure says why, never with a Postal website link.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
@@ -23,7 +26,7 @@ const cli = vi.hoisted(() => ({
   role: 'owner' as string,
   status: null as unknown,
   friends: [] as unknown[],
-  settings: { enabled: false, adminsMayAccept: false },
+  settings: { enabled: false, adminsMayAccept: false } as Record<string, unknown>,
   code: '' as string,
   getFail: null as Error | null,
   gets: [] as { route: string; params: unknown }[],
@@ -49,6 +52,10 @@ vi.mock('@/lib/daemon-cli', () => ({
     cli.posts.push({ route, body })
     if (cli.postFail[route]) throw cli.postFail[route]
     if (route === 'postal/settings') {
+      if ((body as { link?: unknown }).link === true) {
+        cli.settings = { ...cli.settings, approvalsLinked: true }
+        return { ok: true, ...cli.settings, decideToken: { state: 'minted', label: 'initech', hint: 'Postal approvals are linked for this server' } }
+      }
       cli.settings = { ...cli.settings, ...(body as object) }
       return { ok: true, ...cli.settings }
     }
@@ -577,5 +584,61 @@ describe('PostalServerSwitch', () => {
     const toggle = await screen.findByTestId('postal-switch')
     await screen.findByText(/Only this server.s owner can turn this on or off/)
     expect((toggle as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it("no approval token: says friend requests can't be accepted and Link now posts {link: true}", async () => {
+    cli.settings = { enabled: true, adminsMayAccept: false, approvalsLinked: false }
+    render(<PostalServerSwitch scope={scope} />)
+    const row = await screen.findByTestId('postal-approvals')
+    expect(row.textContent).toContain('Friend requests can’t be accepted on this server yet: it doesn’t have its Postal approval token.')
+    expect(row.textContent).not.toMatch(/https?:\/\/|postal\.bot\//)
+    const link = within(row).getByTestId('postal-link-now')
+    await waitFor(() => expect((link as HTMLButtonElement).disabled).toBe(false))
+    await act(async () => {
+      fireEvent.click(link)
+    })
+    expect(cli.posts).toContainEqual({ route: 'postal/settings', body: { link: true } })
+    await waitFor(() => expect(screen.queryByTestId('postal-approvals')).toBeNull())
+  })
+
+  it('a Link now that fails says why in plain words, with no Postal website link', async () => {
+    cli.settings = { enabled: true, adminsMayAccept: false, approvalsLinked: false }
+    cli.postFail['postal/settings'] = new DaemonHttpError(
+      "this server couldn't get its Postal approval token, so nobody here can accept friend requests yet: the Postal network didn't accept this server's K2 Connect account (401). Try again with Link now in Settings → General → Postal (or k2 postal link); if it keeps failing, the owner can link approvals by hand with k2 postal owner-link",
+      409,
+      'unauthorized',
+    )
+    render(<PostalServerSwitch scope={scope} />)
+    const link = await screen.findByTestId('postal-link-now')
+    await waitFor(() => expect((link as HTMLButtonElement).disabled).toBe(false))
+    await act(async () => {
+      fireEvent.click(link)
+    })
+    const row = await screen.findByTestId('postal-approvals')
+    await waitFor(() => expect(row.textContent).toContain("Didn't accept this server's K2 Connect account".slice(1)))
+    expect(row.textContent).not.toMatch(/https?:\/\/|postal\.bot\//)
+  })
+
+  it('after a switch-on whose link failed, the row says why', async () => {
+    cli.settings = { enabled: true, adminsMayAccept: false, approvalsLinked: false, decideToken: { state: 'failed', hint: 'the Postal network didn’t answer' } }
+    render(<PostalServerSwitch scope={scope} />)
+    const row = await screen.findByTestId('postal-approvals')
+    expect(row.textContent).toContain('The Postal network didn’t answer.')
+  })
+
+  it('a non-owner sees the row without Link now', async () => {
+    cli.role = 'admin'
+    cli.settings = { enabled: true, adminsMayAccept: false, approvalsLinked: false }
+    render(<PostalServerSwitch scope={scope} />)
+    await screen.findByText(/Only this server.s owner can turn this on or off/)
+    const row = await screen.findByTestId('postal-approvals')
+    expect(within(row).queryByTestId('postal-link-now')).toBeNull()
+  })
+
+  it('approvals linked: no row', async () => {
+    cli.settings = { enabled: true, adminsMayAccept: false, approvalsLinked: true }
+    render(<PostalServerSwitch scope={scope} />)
+    await screen.findByTestId('postal-admins-hint')
+    expect(screen.queryByTestId('postal-approvals')).toBeNull()
   })
 })

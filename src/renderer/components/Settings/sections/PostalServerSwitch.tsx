@@ -8,31 +8,40 @@
 // A server without Postal (an older daemon: 404) shows no group at all.
 // A save that fails puts the switch back, says so in plain words and offers
 // Try again (the same change once more).
+//
+// Postal on with no approval token here (`approvalsLinked: false`): friend
+// requests can't be accepted, so a row says so (with why, after a failed
+// link) and gives the owner Link now, which posts `{link: true}`: the server
+// gets the token with its Connect account. Never a Postal website page.
 
 import React, { useEffect, useState } from 'react'
 import type { SettingEntry } from '../searchManifest'
 import { SETTING_ROW_HINT, SETTING_ROW_LABEL, SaveNote, SettingSwitchRow, SettingsGroup, useSaveStatus } from '../controls/SettingControls'
 import { BetaTag, Button, Toggle } from '@/components/ui'
 import { httpStatusOf } from '@/lib/daemon-http-error'
+import { PRODUCT_NAME } from '@/lib/brand'
 import type { ServerScope } from '@/kessel/server-scope'
 import {
   fetchPostalSettings,
   fetchPostalViewerRole,
+  linkPostalApprovals,
   postalErrorText,
   postalPlainError,
   refreshPostalFeature,
   savePostalSettings,
   type PostalSettings,
+  type PostalSettingsRead,
 } from './postal-api'
 
 export const POSTAL_SWITCH_LABEL = 'Let agents have friends on other machines'
 export const POSTAL_ADMINS_LABEL = 'Admins may accept friend requests'
+export const POSTAL_LINK_NOW = 'Link now'
 
 export const POSTAL_SERVER_MANIFEST: SettingEntry[] = [
   { id: 'general.postal', section: 'general', group: 'Server', label: 'Postal', description: 'Let agents have friends on other machines (addresses like scout::initech.postal.bot). Off by default; owner only', keywords: ['postal', 'postal.bot', 'friends', 'other machines', 'address', 'invite', 'p5'], beta: true },
 ]
 
-type State = { kind: 'loading' } | { kind: 'hidden' } | { kind: 'ready'; value: PostalSettings } | { kind: 'error'; message: string }
+type State = { kind: 'loading' } | { kind: 'hidden' } | { kind: 'ready'; value: PostalSettingsRead } | { kind: 'error'; message: string }
 
 /** A change that didn't save: which switch, what it tried, and why. */
 type Failed = { key: keyof PostalSettings; next: boolean; message: string } | null
@@ -41,6 +50,42 @@ type Failed = { key: keyof PostalSettings; next: boolean; message: string } | nu
 export function postalAdminsHint(on: boolean, isOwner: boolean): string {
   if (on) return 'On: admins accept new friends for this server’s agents too.'
   return isOwner ? 'Off: only you accept new friends for this server’s agents.' : 'Off: only the owner accepts new friends for this server’s agents.'
+}
+
+/** A sentence as the daemon wrote it, capitalised and ending in one stop. */
+function sentenceOf(text: string): string {
+  const t = text.trim().replace(/[.\s]+$/, '')
+  return t ? `${t.charAt(0).toUpperCase()}${t.slice(1)}.` : ''
+}
+
+/** Postal is on and this server has no approval token: nobody here can
+ *  accept a friend request. Says so, and the owner's one click (Link now:
+ *  the server gets the token itself; never a page on the Postal website). */
+function ApprovalsRow({
+  failed,
+  isOwner,
+  busy,
+  onLink,
+}: {
+  failed: string | null
+  isOwner: boolean
+  busy: boolean
+  onLink: () => void
+}): React.JSX.Element {
+  return (
+    <div className="px-4 py-3 flex flex-wrap items-center gap-x-3 gap-y-1" data-testid="postal-approvals">
+      <p role="status" className="type-hint text-[var(--color-status-error-soft)] leading-relaxed max-w-[var(--measure-text,75ch)]">
+        Friend requests can&rsquo;t be accepted on this server yet: it doesn&rsquo;t have its Postal approval token.
+        {failed ? ` ${sentenceOf(failed)}` : ''}
+        {isOwner ? ` Link now gets it with this server’s ${PRODUCT_NAME} Connect account.` : ' The server’s owner links it here.'}
+      </p>
+      {isOwner ? (
+        <Button size="sm" onClick={onLink} disabled={busy} data-testid="postal-link-now">
+          {POSTAL_LINK_NOW}
+        </Button>
+      ) : null}
+    </div>
+  )
 }
 
 /** What failed, and Try again (the same change once more). */
@@ -63,6 +108,8 @@ export function PostalServerSwitch({ scope }: { scope: ServerScope }): React.JSX
   const [role, setRole] = useState<string | null>(null)
   const [busy, setBusy] = useState<keyof PostalSettings | null>(null)
   const [failed, setFailed] = useState<Failed>(null)
+  const [linking, setLinking] = useState(false)
+  const [linkFailed, setLinkFailed] = useState<string | null>(null)
   const mainSave = useSaveStatus()
   const adminsSave = useSaveStatus()
 
@@ -90,6 +137,19 @@ export function PostalServerSwitch({ scope }: { scope: ServerScope }): React.JSX
   if (state.kind === 'hidden' || state.kind === 'loading') return null
 
   const isOwner = role === 'owner'
+
+  const linkNow = async (): Promise<void> => {
+    if (state.kind !== 'ready' || linking || !isOwner) return
+    setLinking(true)
+    setLinkFailed(null)
+    try {
+      setState({ kind: 'ready', value: await linkPostalApprovals(scope) })
+    } catch (err) {
+      setLinkFailed(postalPlainError(err))
+    } finally {
+      setLinking(false)
+    }
+  }
 
   const flip = async (key: keyof PostalSettings, next: boolean): Promise<void> => {
     if (state.kind !== 'ready' || busy || !isOwner) return
@@ -154,6 +214,9 @@ export function PostalServerSwitch({ scope }: { scope: ServerScope }): React.JSX
             ) : null}
             {failed?.key === 'enabled' ? <SaveFailed failed={failed} busy={busy !== null} onRetry={() => void flip('enabled', failed.next)} /> : null}
           </SettingSwitchRow>
+          {state.value.enabled && state.value.approvalsLinked === false ? (
+            <ApprovalsRow failed={linkFailed ?? state.value.linkFailed} isOwner={isOwner} busy={linking || busy !== null} onLink={() => void linkNow()} />
+          ) : null}
           {state.value.enabled ? (
             <SettingSwitchRow
               settingId="general.postal-admins-accept"

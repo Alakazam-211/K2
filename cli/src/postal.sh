@@ -64,10 +64,16 @@ People (an Owner or Admin) do the same directly, or in the workspace's Postal ta
                                       side's screen (this server checks it, then
                                       signs; a code that doesn't match fails the
                                       request on both sides)
+  k2 postal link                     the Owner: Link now. This server gets its
+                                      Postal approval token from the Postal network
+                                      with its K2 Connect account, so people here
+                                      can accept friend requests (turning Postal on
+                                      does it too; Settings → General → Postal has
+                                      the same Link now)
   k2 postal owner-link [--token-stdin]
-                                      the Owner, once: link Postal approvals for
-                                      this server (opens a page to approve; or hand
-                                      over a k2c_pd_ token approved elsewhere)
+                                      the Owner, by hand, only when k2 postal link
+                                      keeps failing (or hand over a k2c_pd_ token
+                                      approved elsewhere)
   k2 postal enable | disable         the server's switch (the Owner)
   k2 postal admins-may-accept on|off let Admins answer incoming requests too (the
                                       Owner); claim and invite are already an
@@ -149,7 +155,7 @@ if err:
     print("Error: %s%s" % ((code + ": ") if code else "", hint), file=sys.stderr)
     if os.environ.get("PS") and code in ("owner_only", "postal_people_only") and "Postal tab" not in hint and "Settings" not in hint:
         print(os.environ["PL"], file=sys.stderr)
-    perm = ("owner_only", "forbidden", "postal_off", "postal_people_only", "postal_people_decide", "postal_owner_decides", "postal_own_workspace_only", "role_required", "postal_not_friends", "postal_secret_in_text", "postal_route_louder", "postal_owner_link_missing", "postal_rekey_pending")
+    perm = ("owner_only", "forbidden", "postal_off", "postal_people_only", "postal_people_decide", "postal_owner_decides", "postal_own_workspace_only", "role_required", "postal_not_friends", "postal_secret_in_text", "postal_route_louder", "postal_owner_link_missing", "postal_rekey_pending", "postal_cant_accept", "postal_link_lost")
     sys.exit(3 if code in perm else {"not_found": 4, "postal_no_address": 4, "postal_no_code": 4, "usage": 2, "bad_postal_address": 2, "postal_code_needed": 2, "too_large": 2}.get(code, 1))
 if os.environ.get("PJ") == "true":
     print(json.dumps(d, indent=2)); sys.exit(0)
@@ -164,6 +170,16 @@ if d.get("asked"):
 if v == "settings":
     print("Postal: %s" % ("on" if d.get("enabled") else "off"))
     print("Admins may accept friend requests: %s" % ("yes" if d.get("adminsMayAccept") else "no (the Owner only)"))
+    dt = d.get("decideToken") if isinstance(d.get("decideToken"), dict) else {}
+    if dt.get("state") == "failed":
+        h = dt.get("hint") or "this server could not get its Postal approval token"
+        print("Approvals: not linked: %s." % (h[0].upper() + h[1:]).rstrip("."))
+    elif dt.get("state") in ("minted", "replaced", "kept"):
+        print("Approvals: linked; people here can accept friend requests")
+    elif d.get("enabled") and d.get("approvalsLinked") is True:
+        print("Approvals: linked")
+    elif d.get("enabled") and d.get("approvalsLinked") is False:
+        print("Approvals: not linked yet, so friend requests cannot be accepted here: the owner runs k2 postal link (Link now in Settings → General → Postal)")
     sys.exit(0)
 h = d.get("handle")
 ws = (d.get("workspace") or {}).get("handle") or "this workspace"
@@ -204,7 +220,7 @@ if v in ("status", "claim"):
     if c:
         print("Friends:  %d   requests in: %d   out: %d" % (c.get("accepted", 0), c.get("pendingIn", 0), c.get("pendingOut", 0)))
     if d.get("ownerLinked") is False:
-        print("Approvals: not linked yet; the owner runs k2 postal owner-link once")
+        print("Approvals: not linked yet, so friend requests cannot be accepted here: the owner runs k2 postal link (Link now in Settings → General → Postal)")
     note = (d.get("plane") or {}).get("note")
     if note: print(note)
     sys.exit(0)
@@ -274,7 +290,7 @@ cmd_postal() {
     }
     # Every verb that reaches the daemon acts as the session in a session.
     case "$sub" in
-        status|friends|claim|invite|accept|reject|code|route|owner-link|send|remove|block|enable|disable|admins-may-accept|settings|link-p5)
+        status|friends|claim|invite|accept|reject|code|route|link|owner-link|send|remove|block|enable|disable|admins-may-accept|settings|link-p5)
             _postal_session_token ;;
     esac
     case "$sub" in
@@ -301,6 +317,9 @@ cmd_postal() {
                 [ -n "$targets" ] || { echo "Usage: k2 postal route [--friend <address>] terminal|inbox|inbox+pointer|thread:<person>… [--no-wake] | --clear" >&2; exit 2; }
                 _K2_PIPE_MARK=1 cli_send cli_post_json "/cli/postal/route" "$(_postal_body "workspace=$ws" "friend=$friend" "targets=$targets" "wake=$wakev")" | _postal_print route "$as_json"
             fi ;;
+        link)
+            # Link now: the server gets its approval token itself (owner only).
+            cli_post_json "/cli/postal/settings" "$(_postal_body "link=__true")" | _postal_print settings "$as_json" ;;
         owner-link)
             if $token_stdin; then
                 local tok

@@ -75,6 +75,7 @@ fn setup(on: bool) -> (Box1, crate::postal_routes::SwitchGuard) {
     crate::vault::postal::install();
     k2_core::postal::keys::clear_decide_token(LABEL).expect("a clean slate");
     let guard = crate::postal_routes::switch_for_test(on);
+    reset_for_test();
     let stub = Arc::new(Stub::default());
     super::super::install(Arc::new(Plane::new(Box::new(stub.clone()), Box::new(|| Ok(("k2c_connect_test".to_string(), LABEL.to_string()))))));
     (Box1 { _home: home, stub, vault }, guard)
@@ -233,4 +234,141 @@ fn a_persons_accept_with_no_token_asks_once() {
     // With the token here, an Accept asks nothing.
     accept();
     assert_eq!(b.stub.calls().len(), 2, "no mint with a token here");
+}
+
+// ── If an invite can be sent, it can be accepted ──────────────
+
+fn net() -> Arc<Plane> {
+    super::super::net().expect("the test's plane")
+}
+
+/// The owner's Link now through the settings route: its status and answer.
+fn link_now_route() -> (String, Value) {
+    let r = crate::postal_routes::handle(crate::postal_routes::SETTINGS, Who::Owner, true, json!({ "link": true }).to_string().as_bytes(), &HashMap::new());
+    assert!(!r.body.contains("k2c_pd_"), "the token is never in an answer: {}", r.body);
+    (r.status.to_string(), serde_json::from_str(&r.body).expect("json"))
+}
+
+/// No page on the Postal website is ever offered.
+fn no_web_page(text: &str) {
+    assert!(!text.contains("http://") && !text.contains("https://") && !text.contains("postal.bot/"), "no web page: {text}");
+}
+
+fn e500() -> crate::postal_net::plane::CallError {
+    crate::postal_net::plane::CallError::Plane(k2_core::postal::sdk::plane::PlaneError::Api {
+        status: 500,
+        code: k2_core::postal::sdk::plane::Code::Internal,
+        message: String::new(),
+        retry_after_s: None,
+    })
+}
+
+#[test]
+fn a_server_upgraded_with_postal_on_mints_once_at_start() {
+    // Postal was on before the upgrade: no off-to-on switch ever runs.
+    let (b, _g) = setup(true);
+    b.stub.script("/decide-token", vec![minted(TOKEN_A)]);
+    on_start(&net());
+    on_start(&net()); // the loop's next good pass
+    assert_eq!(b.stub.calls(), ["/decide-token"], "once");
+    assert_eq!(stored().as_deref(), Some(TOKEN_A));
+    assert_eq!(audits().last().expect("audit").2, "label=initech minted (Postal was on when this server started)");
+    let n = notices_for(LABEL);
+    assert_eq!(n.len(), 1, "{n:?}");
+    assert!(!n[0].contains("k2c_pd_"), "{}", n[0]);
+    assert!(audits().iter().all(|a| !a.2.contains("k2c_pd_")));
+}
+
+#[test]
+fn the_start_check_with_a_token_here_asks_nothing() {
+    let (b, _g) = setup(true);
+    k2_core::postal::keys::set_decide_token(LABEL, TOKEN_A).expect("stored");
+    on_start(&net());
+    assert!(b.stub.calls().is_empty(), "{:?}", b.stub.calls());
+}
+
+#[test]
+fn a_failed_start_is_not_a_retry_storm() {
+    let (b, _g) = setup(true);
+    b.stub.script("/decide-token", vec![plane_error(500, "internal")]);
+    on_start(&net());
+    assert_eq!(b.stub.calls(), ["/decide-token"], "the start check tries once (no 5xx retries)");
+    // Within the wait every unattended ask answers the same failure
+    // without calling the plane: the loop again, an agent's invite and
+    // claim, the send loop, a request arriving.
+    on_start(&net());
+    for why in [Why::Start, Why::Invite { person: false }, Why::Claim { person: false }, Why::Request] {
+        let e = ready(&net(), why, "agent:scout").expect_err("no token, and it waits");
+        assert_eq!(e.code(), "internal", "{why:?}");
+    }
+    assert_eq!(b.stub.calls().len(), 1, "no plane call while it waits: {:?}", b.stub.calls());
+    assert!(unattended_wait(&e500()) >= std::time::Duration::from_secs(300));
+    // A person's Link now asks at once, and links.
+    b.stub.script("/decide-token", vec![minted(TOKEN_A)]);
+    let (s, v) = link_now_route();
+    assert_eq!((s.as_str(), v["decideToken"]["state"].as_str(), v["approvalsLinked"].as_bool()), ("200 OK", Some("minted"), Some(true)), "{v}");
+    assert_eq!(b.stub.calls().len(), 2);
+    assert_eq!(stored().as_deref(), Some(TOKEN_A));
+    assert_eq!(audits().last().expect("audit").2, "label=initech minted (the owner's Link now)");
+}
+
+#[test]
+fn a_429_holds_a_persons_ask_too_until_its_retry_after() {
+    let (b, _g) = setup(true);
+    b.stub.script("/decide-token", vec![plane_error(429, "rate_limited")]);
+    let e = ready(&net(), Why::Accept, "owner").expect_err("rate limited");
+    assert_eq!(e.code(), "rate_limited");
+    let again = ready(&net(), Why::Accept, "owner").expect_err("still waiting");
+    assert_eq!(again.code(), "rate_limited");
+    assert_eq!(b.stub.calls(), ["/decide-token"], "the plane's retry_after is kept by every ask");
+    let hint = failed_hint(&again);
+    assert!(hint.contains("asked too often") && hint.contains("Link now"), "{hint}");
+    no_web_page(&hint);
+}
+
+#[test]
+fn an_unattended_ask_never_replaces_a_lost_token() {
+    let (b, _g) = setup(true);
+    b.stub.script("/decide-token", vec![plane_error(409, "already_minted")]);
+    let e = ready(&net(), Why::Request, "k2").expect_err("lost there, not here");
+    assert_eq!(e.code(), "postal_link_lost");
+    assert_eq!(b.stub.calls(), ["/decide-token"], "no revoke without a person");
+    assert!(e.hint().contains("Link now"), "{}", e.hint());
+    no_web_page(&e.hint());
+    // The owner's Link now replaces it.
+    b.stub.script("/decide-token", vec![plane_error(409, "already_minted"), minted(TOKEN_B)]);
+    b.stub.script("/decide-token/revoke", vec![(200, json!({ "revoked": 1 }))]);
+    let (s, v) = link_now_route();
+    assert_eq!((s.as_str(), v["decideToken"]["state"].as_str()), ("200 OK", Some("replaced")), "{v}");
+    assert_eq!(stored().as_deref(), Some(TOKEN_B));
+}
+
+#[test]
+fn a_link_now_that_fails_says_why_and_names_owner_link_only_as_the_fallback() {
+    let (b, _g) = setup(true);
+    b.stub.script("/decide-token", vec![plane_error(401, "unauthorized")]);
+    let (s, v) = link_now_route();
+    assert_eq!((s.as_str(), v["error"]["code"].as_str()), ("409 Conflict", Some("unauthorized")), "{v}");
+    let hint = v["error"]["hint"].as_str().expect("hint");
+    assert!(hint.contains(&format!("didn't accept this server's {} Connect account", k2_core::product_name!())), "why it failed: {hint}");
+    assert!(hint.contains("Link now") && hint.ends_with(&format!("by hand with {} postal owner-link", k2_core::cli_name!())), "{hint}");
+    no_web_page(hint);
+    assert_eq!(b.stub.calls(), ["/decide-token"], "a 401 is answered, not retried");
+    assert_eq!(stored(), None);
+    // The settings read says approvals aren't linked.
+    let r = crate::postal_routes::handle(crate::postal_routes::SETTINGS, Who::Owner, false, b"", &HashMap::new());
+    let v: Value = serde_json::from_str(&r.body).expect("json");
+    assert_eq!(v["approvalsLinked"], json!(false), "{v}");
+}
+
+#[test]
+fn a_switch_on_that_fails_says_why_without_a_web_page() {
+    let (b, _g) = setup(false);
+    b.stub.script("/decide-token", vec![plane_error(401, "unauthorized")]);
+    let v = switch(true);
+    assert_eq!((v["decideToken"]["state"].as_str(), v["approvalsLinked"].as_bool()), (Some("failed"), Some(false)), "{v}");
+    let hint = v["decideToken"]["hint"].as_str().expect("hint");
+    assert!(hint.contains("Link now"), "{hint}");
+    no_web_page(hint);
+    assert_eq!(b.stub.calls(), ["/decide-token"]);
 }

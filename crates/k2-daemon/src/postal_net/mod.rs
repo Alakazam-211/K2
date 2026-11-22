@@ -10,7 +10,8 @@
 //! - [`receive`]: hold pull, open and verify, store before ACK, land.
 //! - [`send`]: the outbox, hold only.
 //! - [`decide_token`]: the owner's decide token, minted on the owner's
-//!   switch-on and revoked on switch-off.
+//!   switch-on (or once at start, or before an invite, a claim or an
+//!   accept that would otherwise be stuck) and revoked on switch-off.
 //! - [`live`]: the live listener's check, not mounted (S6 waits on the
 //!   plane's P-6).
 //!
@@ -330,7 +331,14 @@ impl Loop {
                 Duration::ZERO
             }
         };
+        let good = r.is_ok();
         note(&r);
+        // A server that had Postal on before it started never sees an
+        // off-to-on switch: its approval token is asked for once, here,
+        // on the first good pass (no token here only; never a storm).
+        if good {
+            decide_token::on_start(&net);
+        }
         pause
     }
 

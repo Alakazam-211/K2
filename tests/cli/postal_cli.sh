@@ -16,7 +16,9 @@
 # --help as the text, or flags before `--`) sends the text as typed; a value
 # flag before the address is refused with the address-first form's line
 # (--from, --summary, --no-wake then --from, --idempotency-key, --secret),
-# never dropped; route sends its targets; owner-link reads a
+# never dropped; route sends its targets; link posts {link: true} to the
+# settings route and says what came of it (no token, no web page; a
+# failure names owner-link only as the by-hand fallback); owner-link reads a
 # token from stdin; adopt says "not available yet"; postal send takes a
 # label by the Postal plane's rule and refuses the rest (exit 2, no
 # request). Hermetic: HOME is a throwaway dir, every K2_*/K2SO_* var is
@@ -103,6 +105,14 @@ class H(BaseHTTPRequestHandler):
             out = {"ok": True, "friend": b.get("friend"), "route": None if b.get("clear") else {"targets": b.get("targets", "").split(), "wake": b.get("wake", True)}}
         elif p == "/cli/postal/owner-link":
             out = {"ok": True, "label": "acme", "linked": True}
+        elif p == "/cli/postal/settings" and method == "POST" and json.loads(body or b"{}").get("link") is True:
+            if mode() == "linkfail":
+                status, out = 409, {"ok": False, "error": {"code": "unauthorized", "hint": "this server couldn't get its Postal approval token, so nobody here can accept friend requests yet: the Postal network didn't accept this server's K2 Connect account (401). Try again with Link now in Settings → General → Postal (or k2 postal link); if it keeps failing, the owner can link approvals by hand with k2 postal owner-link"}}
+            else:
+                out = {"ok": True, "enabled": True, "adminsMayAccept": False, "approvalsLinked": True,
+                       "decideToken": {"state": "minted", "label": "acme", "hint": "Postal approvals are linked for this server"}}
+        elif p == "/cli/postal/settings":
+            out = {"ok": True, "enabled": True, "adminsMayAccept": False, "approvalsLinked": mode() != "unlinked"}
         elif p == "/cli/postal/decide":
             b = json.loads(body or b"{}")
             if b.get("decision") == "accept" and b.get("code"):
@@ -213,6 +223,25 @@ set +e; out="$(k2 postal owner-link --token-stdin < "$WORK/tok" 2>&1)"; rc=$?; s
 assert_eq "owner-link --token-stdin: exit 0" "$rc" "0"
 assert_contains "owner-link: linked" "$out" "Postal approvals linked for acme"
 assert_not_contains "owner-link: the token is never printed" "$out" "k2c_pd_"
+
+echo "== Link now (approvals) =="
+run postal link
+assert_eq "link: exit 0" "$rc" "0"
+assert_eq "link: posts link to the settings route" "$(last /cli/postal/settings)" 'POST {"link": true}'
+assert_contains "link: says approvals are linked" "$out" "Approvals: linked; people here can accept friend requests"
+assert_not_contains "link: no token" "$out" "k2c_pd_"
+assert_not_contains "link: no web page" "$out" "https://"
+echo linkfail > "$WORK/mode"
+run postal link
+assert_eq "link that fails: exit 1" "$rc" "1"
+assert_contains "link that fails: says why" "$out" "didn't accept this server's K2 Connect account"
+assert_contains "link that fails: owner-link only as the by-hand fallback" "$out" "by hand with k2 postal owner-link"
+echo unlinked > "$WORK/mode"
+run postal settings
+assert_eq "settings unlinked: exit 0" "$rc" "0"
+assert_contains "settings unlinked: offers k2 postal link" "$out" "Approvals: not linked yet, so friend requests cannot be accepted here: the owner runs k2 postal link"
+assert_not_contains "settings unlinked: never owner-link first" "$out" "owner-link"
+echo person > "$WORK/mode"
 
 echo "== off =="
 echo off > "$WORK/mode"

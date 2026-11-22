@@ -28,6 +28,7 @@
 //!   POST /cli/postal/owner-link {token?}                     the Owner: link Postal approvals
 //!   POST /cli/postal/enable   {why?}                         the Owner; agent → a postal.enable card
 //!   GET|POST /cli/postal/settings {enabled, adminsMayAccept} read: any login; write: the Owner
+//!                                 | {link: true}             the Owner's Link now (the approval token)
 //!   POST /cli/postal/link-p5  {workspace}                    a postal.link-p5 card (the Owner's)
 //! ```
 //!
@@ -403,6 +404,36 @@ fn friends(ws: &Ws) -> CliResponse {
     ok(json!({ "ok": true, "state": "on", "workspace": ws.json(), "handle": handle, "friends": friends, "plane": plane() }))
 }
 
+/// The rule, before an invite or a claim is recorded or its card goes
+/// up: **if an invite can be sent, it can be accepted.** With the network
+/// connected and no approval token here, the token is asked for first (an
+/// agent's ask is unattended: it waits after a failure). A failure that
+/// won't pass by itself refuses up front, saying what is missing and why;
+/// one that may (the network had a problem, a rate limit) lets it wait
+/// here, and `pairing::send_unsent` sends no invite until the token is here.
+/// Not connected: nothing goes out anyway, so nothing is asked.
+fn accept_ready(who: &Who, invite: bool) -> Result<(), CliResponse> {
+    use crate::postal_net::decide_token::{self, Why};
+    if !k2_core::postal::gate::network_available() {
+        return Ok(());
+    }
+    let Some(net) = crate::postal_net::net() else { return Ok(()) };
+    let person = who.passport().is_none();
+    let why = if invite { Why::Invite { person } } else { Why::Claim { person } };
+    match decide_token::ready(&net, why, &actor(who)) {
+        Ok(()) => Ok(()),
+        Err(e) if e.is_retryable() => Ok(()),
+        Err(e) => {
+            let what = if invite {
+                "a friend request can't go out from this server yet, because its answer couldn't be accepted here"
+            } else {
+                "this workspace can't take a Postal address yet, because friend requests to it couldn't be accepted here"
+            };
+            Err(err("409 Conflict", "postal_cant_accept", format!("{what}: {}", decide_token::failed_hint(&e))))
+        }
+    }
+}
+
 fn people_only(what: &str) -> CliResponse {
     err("403 Forbidden", "postal_people_only", format!("{what} is a person's: an Owner or Admin does it in the workspace's Postal tab"))
 }
@@ -425,11 +456,17 @@ fn claim(who: &Who, ws: &Ws, address: Option<&str>, why: Option<&str>) -> CliRes
             (None, Some(other)) if other != ws.id => return store_err(StoreError::AddressTaken),
             _ => {}
         }
+        if let Err(r) = accept_ready(who, false) {
+            return r;
+        }
         let why = why.map(|w| w.chars().filter(|c| !c.is_control()).take(NOTE_MAX).collect::<String>());
         return crate::permission::actions::postal::ask_claim(ws, session, &a, why.as_deref().filter(|w| !w.trim().is_empty()));
     }
     if !admin(who) {
         return people_only("claiming a Postal address");
+    }
+    if let Err(r) = accept_ready(who, false) {
+        return r;
     }
     record_claim(who, ws, &addr)
 }
@@ -470,6 +507,9 @@ pub(crate) fn claim_as(who: &Who, ws_id: &str, address: &str) -> CliResponse {
     let Some(addr) = k2_core::postal::parse_address(address) else {
         return err("400 Bad Request", "bad_postal_address", "address must be a Postal address: handle::label.postal.bot");
     };
+    if let Err(r) = accept_ready(who, false) {
+        return r;
+    }
     record_claim(who, &ws, &addr)
 }
 
@@ -515,10 +555,16 @@ fn invite(who: &Who, ws: &Ws, to: Option<&str>, why: Option<&str>) -> CliRespons
         let Some(why) = note.as_deref().filter(|w| !w.trim().is_empty()) else {
             return err("400 Bad Request", "usage", "say why: --why \"what you want to do together\" (your person reads it on the card)");
         };
+        if let Err(r) = accept_ready(who, true) {
+            return r;
+        }
         return crate::permission::actions::postal::ask_invite(ws, session, &peer.as_string(), why);
     }
     if !admin(who) {
         return people_only("sending a friend request");
+    }
+    if let Err(r) = accept_ready(who, true) {
+        return r;
     }
     record_invite(ws, &handle, &peer, note.as_deref(), &actor(who))
 }
@@ -542,14 +588,22 @@ pub(crate) fn record_invite(ws: &Ws, handle: &store::Handle, peer: &k2_core::pos
             }
             let f = k2_core::db::read(|conn| store::friend(conn, &f.id)).unwrap_or(f);
             let sent = f.pair_id.is_some();
-            ok(json!({
+            let mut out = json!({
                 "ok": true,
                 "workspace": ws.json(),
                 "friend": f,
                 "sent": sent,
                 "network": if sent { "sent" } else { k2_core::postal::gate::NOT_YET },
                 "plane": plane(),
-            }))
+            });
+            // Kept here because this server can't accept the answer yet.
+            if !sent && k2_core::postal::gate::network_available() && crate::postal_net::decide_token::linked() == Some(false) {
+                out["hint"] = json!(format!(
+                    "recorded; it goes out once this server has its Postal approval token, so the answer can be accepted here: {}",
+                    crate::postal_net::decide_token::LINK_NOW
+                ));
+            }
+            ok(out)
         }
         Err(e) => store_err(e),
     }
@@ -567,10 +621,14 @@ pub(crate) fn invite_as(who: &Who, ws_id: &str, to: &str, note: Option<&str>) ->
     let Some(peer) = k2_core::postal::parse_address(to) else {
         return err("400 Bad Request", "bad_postal_address", "to must be a Postal address: handle::label.postal.bot");
     };
-    match handle_of(&ws) {
-        Ok(h) => record_invite(&ws, &h, &peer, note, &actor(who)),
-        Err(r) => r,
+    let h = match handle_of(&ws) {
+        Ok(h) => h,
+        Err(r) => return r,
+    };
+    if let Err(r) = accept_ready(who, true) {
+        return r;
     }
+    record_invite(&ws, &h, &peer, note, &actor(who))
 }
 
 fn decide(who: &Who, ws: &Ws, id: Option<&str>, decision: Option<&str>, code: Option<&str>) -> CliResponse {
@@ -666,9 +724,10 @@ pub(crate) fn confirm_with_code(who: &Who, ws: &Ws, id: &str, code: Option<&str>
     };
     // A person's Accept with no decide token here asks the plane for one, once.
     let label = k2_core::postal::parse_address(&handle.address).map(|a| a.label).unwrap_or_default();
+    // Got, the accept goes on below in this same action.
     if let Err(e) = crate::postal_net::decide_token::ensure_for_accept(&net, &label, &actor(who)) {
         let status = if e.is_retryable() { "503 Service Unavailable" } else { "409 Conflict" };
-        return err(status, &e.code(), format!("{} (the owner can also link approvals with {} postal owner-link)", e.hint(), cli_name!()));
+        return err(status, &e.code(), crate::postal_net::decide_token::failed_hint(&e));
     }
     match crate::postal_net::pairing::confirm(&net, &f, &typed, &actor(who)) {
         Ok(crate::postal_net::pairing::Outcome::Accepted { friends }) => {
@@ -805,6 +864,9 @@ fn settings(who: &Who, is_post: bool, v: &Value) -> CliResponse {
         if who.passport().is_some() || !who.is_owner() {
             return err("403 Forbidden", "owner_only", "the server's owner turns Postal on or off");
         }
+        if v.get("link").is_some() {
+            return link_now(who, v);
+        }
         let mut partial = serde_json::Map::new();
         for (wire, key) in [("enabled", "postalEnabled"), ("adminsMayAccept", "postalAdminsMayAccept")] {
             match v.get(wire) {
@@ -833,12 +895,39 @@ fn settings(who: &Who, is_post: bool, v: &Value) -> CliResponse {
             Err(e) => return err("500 Internal Server Error", "internal", e),
         }
     }
+    settings_answer(token)
+}
+
+/// The settings answer: the two switches, whether approvals are linked
+/// (`approvalsLinked`, while Postal is on; null when it can't be told) and
+/// what a switch or Link now just did (`decideToken`).
+fn settings_answer(token: Option<Value>) -> CliResponse {
     let s = k2_core::app_settings::load();
-    let mut out = json!({ "ok": true, "enabled": k2_core::postal::enabled(), "adminsMayAccept": s.postal_admins_may_accept });
+    let on = k2_core::postal::enabled();
+    let linked = if on { crate::postal_net::decide_token::linked() } else { None };
+    let mut out = json!({ "ok": true, "enabled": on, "adminsMayAccept": s.postal_admins_may_accept, "approvalsLinked": linked });
     if let Some(d) = token {
         out["decideToken"] = d;
     }
     ok(out)
+}
+
+/// The owner's Link now (`{link: true}`; Settings' button, `k2 postal
+/// link`): this server gets its approval token itself, with its Connect
+/// account. A failure is an error that says why, with owner-link as the
+/// by-hand fallback last.
+fn link_now(who: &Who, v: &Value) -> CliResponse {
+    if v.get("link") != Some(&Value::Bool(true)) {
+        return err("400 Bad Request", "usage", "link is true (Link now)");
+    }
+    if !k2_core::postal::enabled() {
+        return err("409 Conflict", "postal_off", "Postal is off on this server: turning it on links approvals too");
+    }
+    let r = crate::postal_net::decide_token::link_now(&actor(who));
+    match &r {
+        Ok(_) => settings_answer(Some(crate::postal_net::decide_token::answer(&r))),
+        Err(e) => err(if e.is_retryable() { "503 Service Unavailable" } else { "409 Conflict" }, &e.code(), crate::postal_net::decide_token::failed_hint(e)),
+    }
 }
 
 // ── send, route, code, owner link (S4, S5, S3 network) ─────────────────

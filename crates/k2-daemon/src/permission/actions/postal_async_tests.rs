@@ -66,6 +66,10 @@ impl StubPlane {
                     ("POST", "/session") => ("200 OK", json!({ "token": "pst_0123456789abcdef0123456789abcdef", "label": LABEL, "expires_at": "x" })),
                     ("PUT", "/me") => ("200 OK", json!({ "ok": true })),
                     ("POST", "/pairs") => ("200 OK", json!({ "id": "pr_async", "status": "pending_out" })),
+                    ("POST", "/decide-token") => (
+                        "200 OK",
+                        json!({ "token": "k2c_pd_0123456789abcdef0123456789abcdef", "scope": "postal-decide", "label": LABEL, "minted_at": "x" }),
+                    ),
                     _ => ("404 Not Found", json!({ "error": { "code": "not_found", "message": "" } })),
                 };
                 let answer = answer.to_string();
@@ -157,14 +161,17 @@ fn a_cards_allow_and_deny_reach_the_plane_from_a_tokio_worker() {
     let ws = Arc::new(seed("pasy"));
     let admin = login("pasa", Role::Admin);
 
-    // The claim card's Allow registers the address's key on the plane.
+    // The agent's claim gets this server's approval token first (with no
+    // token here, an address could get requests nobody can accept); the
+    // claim card's Allow registers the address's key on the plane.
     let addr = format!("{}::{LABEL}.postal.bot", ws.handle);
     let card = card_of(&agent_post(crate::postal_routes::CLAIM, &ws, json!({ "address": addr })));
+    assert_eq!(plane.seen(), ["POST /decide-token"]);
     let (s, a) = answer_on_a_worker(&rt, &admin, &ws, &card, "Allow");
     assert_eq!((s.as_str(), a["action"]["result"]["outcome"].as_str()), ("200 OK", Some("approved")), "{a}");
     let h = k2_core::db::read(|c| store::handle_for_workspace(c, &ws.id)).expect("claimed");
     assert_eq!((h.address.as_str(), h.status.as_str()), (addr.as_str(), "claimed"), "the key is on the plane: {h:?}");
-    assert_eq!(plane.seen(), ["POST /session", "PUT /me"]);
+    assert_eq!(plane.seen(), ["POST /decide-token", "POST /session", "PUT /me"]);
 
     // The invite card's Allow sends the request.
     let peer = "ops::globex.postal.bot";
@@ -185,8 +192,8 @@ fn a_cards_allow_and_deny_reach_the_plane_from_a_tokio_worker() {
     assert_eq!(friend(&ws, denied).status, "rejected");
     assert!(crate::postal_net::made_for_test(), "the Deny made the plane client");
 
-    // The same for the code form's accept: the client is made, then this
-    // server (no K2 Connect sign-in here) can't get its approval token.
+    // The same for the code form's accept: the client is made; the approval
+    // token is here already, and the pairing has no handshake to confirm.
     let coded = "lab2::gamma.postal.bot";
     let (_, id) = incoming(&ws, coded, "pr_code", Some("482913"));
     crate::postal_net::forget_for_test();

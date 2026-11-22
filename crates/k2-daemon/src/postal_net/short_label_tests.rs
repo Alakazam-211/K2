@@ -74,7 +74,9 @@ fn a_two_character_label_registers_and_pairs_through_the_sdk() {
     let me_put = calls.iter().find(|c| c.0 == "PUT" && c.1 == "/me").expect("PUT /me");
     assert!(me_put.2.contains(ME), "the address the plane registers: {}", me_put.2);
 
-    // Pair: a friend request to another short label goes out.
+    // Pair: a friend request to another short label goes out (this server
+    // holds its approval token, so it can accept the answer).
+    k2_core::postal::keys::set_decide_token("z3", "k2c_pd_0123456789abcdef0123456789abcdef").expect("the approval token");
     let friend_id = {
         let db = k2_core::db::shared();
         let conn = db.lock();

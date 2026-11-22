@@ -129,6 +129,9 @@ pub enum CallError {
     NoConnect(String),
     /// The owner hasn't linked a decide token for this label yet.
     NoOwnerLink(String),
+    /// The plane holds a decide token for this label that this server
+    /// lost; only a person's ask replaces it (never an unattended one).
+    LinkLost(String),
 }
 
 impl CallError {
@@ -148,6 +151,7 @@ impl CallError {
             },
             CallError::NoConnect(_) => "postal_no_connect".into(),
             CallError::NoOwnerLink(_) => "postal_owner_link_missing".into(),
+            CallError::LinkLost(_) => "postal_link_lost".into(),
         }
     }
 
@@ -157,8 +161,12 @@ impl CallError {
             CallError::Plane(e) => e.to_string(),
             CallError::NoConnect(e) => e.clone(),
             CallError::NoOwnerLink(label) => format!(
-                "this server's owner hasn't linked Postal approvals for {label} yet: the owner runs {} postal owner-link once (it opens a page to approve)",
-                k2_core::cli_name!()
+                "this server doesn't have its Postal approval token for {label} yet, so nobody here can accept friend requests: {}",
+                super::decide_token::LINK_NOW
+            ),
+            CallError::LinkLost(label) => format!(
+                "the Postal network holds an approval token for {label} that this server no longer has: {} (it replaces the old one)",
+                super::decide_token::LINK_NOW
             ),
         }
     }
@@ -168,7 +176,7 @@ impl CallError {
         match self {
             CallError::Transport(_) => true,
             CallError::Plane(e) => e.is_retryable(),
-            CallError::NoConnect(_) | CallError::NoOwnerLink(_) => false,
+            CallError::NoConnect(_) | CallError::NoOwnerLink(_) | CallError::LinkLost(_) => false,
         }
     }
 }

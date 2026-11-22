@@ -5,7 +5,8 @@
 //! The steps, each box doing only its own:
 //! 1. **Ask** (this box, `from`): a person allowed the invite (a card, or
 //!    the tab), so the request row waits `pending_out` with no pair id.
-//!    [`send_unsent`] makes the commitment and `POST /pairs`.
+//!    [`send_unsent`] makes the commitment and `POST /pairs`, once this
+//!    box holds the owner's decide token (so it can confirm the answer).
 //! 2. **Respond** (the other box, `to`): K2 answers a request for a claimed
 //!    handle by itself (its key and nonce only; nothing is trusted yet),
 //!    unless the peer is blocked or the handle has too many waiting.
@@ -63,6 +64,12 @@ fn take(id: &str) -> Option<State> {
 
 fn has(id: &str) -> bool {
     with_pairs(|m| m.contains_key(id))
+}
+
+/// Tests: hold a finished handshake for `pair_id`, as step 3 or 4 would.
+#[cfg(test)]
+pub(crate) fn hold_handshake_for_test(pair_id: &str, hs: Handshake) {
+    put(pair_id, State::Handshake(hs));
 }
 
 /// Is a handshake waiting for this pair's person (the code check)?
@@ -150,9 +157,21 @@ pub fn registered_fingerprint(h: &store::Handle) -> Option<String> {
 
 // ---------------------------------------------------------------- 1. ask
 
-/// Send every request a person allowed that isn't on the plane yet.
+/// Send every request a person allowed that isn't on the plane yet, and
+/// only once this server can accept the answer: with no approval token
+/// here it is asked for first (unattended, so it waits after a failure);
+/// still none, nothing goes out and the requests wait here (if an invite
+/// can be sent, it can be accepted).
 pub fn send_unsent(net: &Plane) -> Result<(), CallError> {
-    for f in db(store::unsent_outgoing) {
+    let unsent = db(store::unsent_outgoing);
+    if unsent.is_empty() {
+        return Ok(());
+    }
+    if let Err(e) = super::decide_token::ready(net, super::decide_token::Why::Invite { person: false }, "server") {
+        k2_core::log_debug!("[postal] {} friend request(s) wait: no approval token here ({})", unsent.len(), e.code());
+        return Ok(());
+    }
+    for f in unsent {
         let Some(h) = db(|c| store::handle(c, &f.handle_id)) else { continue };
         if h.status != "claimed" {
             continue;

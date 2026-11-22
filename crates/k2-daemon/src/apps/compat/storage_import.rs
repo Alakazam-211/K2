@@ -503,6 +503,8 @@ async fn run_inner(ctx: &Ctx, src: &Source, opts: &Opts, state: &Arc<Mutex<State
     ));
     let n = opts.concurrency.clamp(1, 32);
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // Borrowed by every copy's future (each `async move` takes the reference).
+    let rows = &rows;
     futures_util::stream::iter(objects)
         .for_each_concurrent(n, |o| {
             let (c, ledger_file, state, stop) = (c.clone(), ledger_file.clone(), state.clone(), stop.clone());

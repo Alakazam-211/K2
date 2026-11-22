@@ -17,10 +17,12 @@ use super::schema::{
 };
 use super::{chrome_caps, stdlib, BRIDGE_CAPS, BUILTIN_THEMES, BUILTIN_WIDGET_CAPS, DEFAULT_THEME, REQUIRED_CONTROLS};
 use crate::contract::{self, gen, Exposure};
+use crate::brand::CLI_NAME;
+use crate::cli_name;
 
 /// Frontmatter description line for the skill file.
 pub const SKILL_DESCRIPTION: &str =
-    "Build Zen Gardens (~/.k2/zen): k2 zen garden, place K2's built-in widgets (a whole Home group or one agent) or your own sealed custom widgets (k2 zen widget), themes, tokens, font, motion, validate, reset; agents request, never grant";
+    concat!("Build Zen Gardens (~/.k2/zen): ", cli_name!(), " zen garden, place K2's built-in widgets (a whole Home group or one agent) or your own sealed custom widgets (", cli_name!(), " zen widget), themes, tokens, font, motion, validate, reset; agents request, never grant");
 
 fn fmt_num(n: f64) -> String {
     if n.fract() == 0.0 {
@@ -63,7 +65,7 @@ pub fn generate_k2_zen_skill_for(access_on: bool) -> String {
 fn generate_k2_zen_skill_off() -> String {
     let mut s = String::new();
     s.push_str(
-        "# K2 Zen Gardens\n\n\
+        concat!("# K2 Zen Gardens\n\n\
 Zen Mode is a mode of a K2 desktop window. In Zen the window shows a **Garden**:\n\
 a personal page that lives on THIS computer. The human can have as many Gardens\n\
 as they like and switches between them with the Garden switcher (or Cmd+Option+1-9).\n\
@@ -76,40 +78,40 @@ texting page). + New Garden opens one window: a name and the ready-made Gardens 
 cards (the Diary, the Kanban, start with the default, or start empty and ask you).\n\n\
 When the human asks you to add something to a Garden, you edit that Garden's\n\
 file. A message that starts **\"In my Zen Garden ... (id g-...)\"** means: edit\n\
-`~/.k2/zen/gardens/<id>.toml`, then run `k2 zen validate --garden <id>`.\n\n\
+`~/.k2/zen/gardens/<id>.toml`, then run `", cli_name!(), " zen validate --garden <id>`.\n\n\
 ## Gardens\n\n\
-- `k2 zen garden list [--json]`: index, id, name, template; `*` marks a Garden with its own theme.\n\
-- `k2 zen garden new <name> [--texting] [--at <n>]`: a new Garden (empty, or `--texting` for the\n\
+- `", cli_name!(), " zen garden list [--json]`: index, id, name, template; `*` marks a Garden with its own theme.\n\
+- `", cli_name!(), " zen garden new <name> [--texting] [--at <n>]`: a new Garden (empty, or `--texting` for the\n\
   texting page) at position n (default: the end). Prints its id and file.\n\
-- `k2 zen garden rename <garden> <name>`: names are 1 to 60 characters and unique (case aside).\n\
-- `k2 zen garden reorder <garden> <position>`: positions are 1-based.\n\
-- `k2 zen garden template <garden> texting|blank [--force]`: turn a Garden into the texting\n\
+- `", cli_name!(), " zen garden rename <garden> <name>`: names are 1 to 60 characters and unique (case aside).\n\
+- `", cli_name!(), " zen garden reorder <garden> <position>`: positions are 1-based.\n\
+- `", cli_name!(), " zen garden template <garden> texting|blank [--force]`: turn a Garden into the texting\n\
   page (the default) or an empty page; same id, name and place. The old file is kept in\n\
   `.history/`. A file with its own layout, widgets or theme tables needs `--force`.\n\
-- `k2 zen garden delete <garden>`: the page moves into `.history/` (never lost); the last Garden can't be deleted.\n\n\
+- `", cli_name!(), " zen garden delete <garden>`: the page moves into `.history/` (never lost); the last Garden can't be deleted.\n\n\
 `<garden>` is an id (`g-3f9a12c0`) or a name. Ids never change, so renaming or\n\
 reordering never touches the file. Only the human turns Zen on (the Zen toggle in\n\
-the app's top bar); until then every `k2 zen` verb exits 3.\n\n\
+the app's top bar); until then every `", cli_name!(), " zen` verb exits 3.\n\n\
 ## Files (`~/.k2/zen/`, owned by this computer's K2)\n\n\
 - `gardens/<id>.toml`: one Garden's page: its template, its layout of K2's built-in\n\
   widgets, and theme tables that restyle this Garden only. **This is the file you edit.**\n\
 - `zen.toml`: the human's theme changes for every Garden, on top of the active theme.\n\
 - `themes/<name>/theme.toml`: a theme bundle (colours, font, terminal palette,\n\
   optional background image next to it).\n\
-- `gardens.json`: the Garden list. K2 writes it. **Never write gardens.json**; use `k2 zen garden`.\n\
-- `active.json`: the active theme. K2 writes it. **Never write active.json**; use `k2 zen theme`.\n\
+- `gardens.json`: the Garden list. K2 writes it. **Never write gardens.json**; use `", cli_name!(), " zen garden`.\n\
+- `active.json`: the active theme. K2 writes it. **Never write active.json**; use `", cli_name!(), " zen theme`.\n\
 - `.history/`: the last 20 good versions of each file, and deleted Gardens. K2 writes it. **Never write .history/.**\n\
 - `widgets/<name>/`: your custom widgets (see Custom widgets). **You edit these too.**\n\
 - `sync.json`, `news.json`, `.defaults/`, `.locks/`: which Gardens sync with K2's\n\
   defaults or are locked, which Garden news was seen, K2's defaults that own-copy\n\
   Gardens sit on, and locked Gardens' frozen copies. K2 writes them. **Never write\n\
-  sync.json, news.json, .defaults/ or .locks/**; read them with `k2 zen sync`,\n\
-  `k2 zen garden list` and `k2 zen news`.\n\
+  sync.json, news.json, .defaults/ or .locks/**; read them with `", cli_name!(), " zen sync`,\n\
+  `", cli_name!(), " zen garden list` and `", cli_name!(), " zen news`.\n\
 - `links.json`: the sites each Garden opens in the person's browser without asking\n\
   (`k2.open`; the person chose Always on K2's card). K2 writes it. **Never write links.json**;\n\
-  read it with `k2 zen links`.\n\
+  read it with `", cli_name!(), " zen links`.\n\
 - `agents-order.json`: the person's order and pins in each Garden's Agents widget, on this\n\
-  computer. K2 writes it. **Never write agents-order.json**; read it with `k2 zen agents-order`.\n\
+  computer. K2 writes it. **Never write agents-order.json**; read it with `", cli_name!(), " zen agents-order`.\n\
 - Widgets in your own Gardens need no permissions: a widget can talk to your agents\n\
   right away. **Never write grants.json** or `pins.json` (K2 never reads them).\n\n\
 ## Synced with K2's defaults, or its own copy\n\n\
@@ -118,36 +120,36 @@ built-in layers under its theme) either sync with K2's defaults, following K2's\
 improvements, or are the Garden's own copy that no K2 update changes.\n\
 Editing a Garden's file never changes whether it syncs. A synced Garden follows\n\
 K2's improvements under your edits; to keep it exactly as it is, the person turns\n\
-sync off in Settings → Gardens (you can't: `k2 zen sync <garden> on|off` answers an\n\
+sync off in Settings → Gardens (you can't: `", cli_name!(), " zen sync <garden> on|off` answers an\n\
 agent with 403 `zen_local_only`). Suggest it to the person when it matters.\n\
-`k2 zen sync` lists each Garden's state; `k2 zen sync <garden> preview` prints it as\n\
-if synced; `k2 zen news` lists new catalog Gardens. `k2 zen guide sync` has more.\n\n\
+`", cli_name!(), " zen sync` lists each Garden's state; `", cli_name!(), " zen sync <garden> preview` prints it as\n\
+if synced; `", cli_name!(), " zen news` lists new catalog Gardens. `", cli_name!(), " zen guide sync` has more.\n\n\
 ## Locked Gardens\n\n\
 **A locked Garden: don't edit it. Ask the person.** The person locks a Garden in\n\
-Settings → Gardens so agents can't change it (`k2 zen garden list` marks it\n\
+Settings → Gardens so agents can't change it (`", cli_name!(), " zen garden list` marks it\n\
 `locked`). K2 puts back any edit to a locked Garden's file (the edit is kept in\n\
-`.history/gardens/<id>.toml/refused/`), refuses `k2 zen garden rename|delete|template|reorder`,\n\
-`k2 zen reset --garden` and `k2 zen theme set|next|prev --garden` with exit 3\n\
-(`garden_locked`), and `k2 zen validate --garden <id>` exits 3. Only the person can\n\
-unlock it (`k2 zen garden lock|unlock` refuses agents). Themes it uses still change it.\n\n\
+`.history/gardens/<id>.toml/refused/`), refuses `", cli_name!(), " zen garden rename|delete|template|reorder`,\n\
+`", cli_name!(), " zen reset --garden` and `", cli_name!(), " zen theme set|next|prev --garden` with exit 3\n\
+(`garden_locked`), and `", cli_name!(), " zen validate --garden <id>` exits 3. Only the person can\n\
+unlock it (`", cli_name!(), " zen garden lock|unlock` refuses agents). Themes it uses still change it.\n\n\
 ## Workflow\n\n\
-1. `k2 zen garden list` to find the Garden (or make one with `k2 zen garden new`).\n\
+1. `", cli_name!(), " zen garden list` to find the Garden (or make one with `", cli_name!(), " zen garden new`).\n\
 2. Edit `~/.k2/zen/gardens/<id>.toml`. Every Zen window reloads on save.\n\
-3. Run `k2 zen validate --garden <id>` before you tell the human it's done. It prints\n\
+3. Run `", cli_name!(), " zen validate --garden <id>` before you tell the human it's done. It prints\n\
    `file:line:col: message` and exits 1 on any error. A file with errors is NOT\n\
    shown: Zen keeps the last good version and shows the error line.\n\
-4. Undo with `k2 zen history --garden <id>` then `k2 zen reset --garden <id> --to <snapshot>`,\n\
-   or `k2 zen reset --garden <id>` for the Garden's empty stub.\n\
-5. `k2 zen reload` re-reads now; `k2 zen doctor` checks the setup; `k2 zen path`\n\
+4. Undo with `", cli_name!(), " zen history --garden <id>` then `", cli_name!(), " zen reset --garden <id> --to <snapshot>`,\n\
+   or `", cli_name!(), " zen reset --garden <id>` for the Garden's empty stub.\n\
+5. `", cli_name!(), " zen reload` re-reads now; `", cli_name!(), " zen doctor` checks the setup; `", cli_name!(), " zen path`\n\
    prints the folder.\n\n\
-`k2 zen guide` is the user guide, and it needs no daemon: short pages (start with\n\
-`k2 zen guide gardens`; then `files`, `widgets`, `bands`, `required`, `menus`, `themes`,\n\
+`", cli_name!(), " zen guide` is the user guide, and it needs no daemon: short pages (start with\n\
+`", cli_name!(), " zen guide gardens`; then `files`, `widgets`, `bands`, `required`, `menus`, `themes`,\n\
 `sync`, `examples`, `undo`, `safe-mode`) and whole Garden files you can pipe into a Garden:\n\
-`k2 zen guide example --list`, then\n\
-`k2 zen guide example <name> --toml > ~/.k2/zen/gardens/<id>.toml`.\n\n\
-`k2 zen` talks only to the K2 on this computer (each person's Gardens live on\n\
+`", cli_name!(), " zen guide example --list`, then\n\
+`", cli_name!(), " zen guide example <name> --toml > ~/.k2/zen/gardens/<id>.toml`.\n\n\
+`", cli_name!(), " zen` talks only to the K2 on this computer (each person's Gardens live on\n\
 their own computer), so only an agent on this computer can edit them.\n\n\
-## A Garden page\n\n",
+## A Garden page\n\n"),
     );
     s.push_str(&format!(
         "```toml\n\
@@ -246,7 +248,7 @@ column it is `column` unless you set `orientation = \"row\"` or an `edge`.\n\n"
         s.push_str(&format!("`{kind}` is {what}. Only the template places it; a Garden file can't.\n\n"));
     }
     s.push_str(
-        "### A whole group, or one agent\n\n\
+        concat!("### A whole group, or one agent\n\n\
 - **Whole group:** `kind = \"agents\"` with `home = \"<group name or id>\"`: every agent of that\n\
   Home group, with a Conversation beside it (`agents = \"<that widget's id>\"`). Add\n\
   `home-picker = true` to let the human switch groups inside the widget.\n\
@@ -274,20 +276,20 @@ column it is `column` unless you set `orientation = \"row\"` or an `edge`.\n\n"
   this computer only (never in the Garden file or Garden sync). Their order beats the widget's\n\
   (the group's, or a `list-from` list's); once they pin or unpin in a Garden, that Garden's own\n\
   pins replace the agents' workspace pins in its pin grid. You can read both with\n\
-  `k2 zen agents-order [<garden>] [--json]`; you can't set them (only the person can, in Zen).\n\
-- Picking a group in a Garden never changes the Home page.\n\n",
+  `", cli_name!(), " zen agents-order [<garden>] [--json]`; you can't set them (only the person can, in Zen).\n\
+- Picking a group in a Garden never changes the Home page.\n\n"),
     );
 
     s.push_str("## Themes, defaults and your changes\n\n");
     s.push_str(
-        "K2's themes are built into the app and read-only. `~/.k2/zen/` holds only the\n\
+        concat!("K2's themes are built into the app and read-only. `~/.k2/zen/` holds only the\n\
 human's changes, layered on top. App updates never touch those files. For one\n\
 Garden the stack is: K2's `basic` theme, then K2's copy of the active theme,\n\
 then `themes/<active>/theme.toml`, then `zen.toml`, then `gardens/<id>.toml`.\n\
 A later file wins key by key; anything a file leaves out comes from below.\n\n\
 One theme is active for the computer, and a Garden may pick its own. K2 keeps\n\
-that pick; change it only with `k2 zen theme`.\n\n\
-Built-in themes: ",
+that pick; change it only with `", cli_name!(), " zen theme`.\n\n\
+Built-in themes: "),
     );
     s.push_str(
         &BUILTIN_THEMES
@@ -298,17 +300,17 @@ Built-in themes: ",
     );
     s.push_str(&format!(
         ". Every other theme sits on top of `{DEFAULT_THEME}`.\n\n\
-- `k2 zen theme list` lists the themes (built in, and the human's own).\n\
-- `k2 zen theme next` / `k2 zen theme prev` cycle them; `k2 zen theme set <name>` picks one.\n\
-  Add `--garden <name|id>` for one Garden; `k2 zen theme set --garden <name> --clear` drops a Garden's pick.\n\
-- `k2 zen theme new <name> [--from <theme>]` starts a theme bundle in\n\
+- `{CLI_NAME} zen theme list` lists the themes (built in, and the human's own).\n\
+- `{CLI_NAME} zen theme next` / `{CLI_NAME} zen theme prev` cycle them; `{CLI_NAME} zen theme set <name>` picks one.\n\
+  Add `--garden <name|id>` for one Garden; `{CLI_NAME} zen theme set --garden <name> --clear` drops a Garden's pick.\n\
+- `{CLI_NAME} zen theme new <name> [--from <theme>]` starts a theme bundle in\n\
   `~/.k2/zen/themes/<name>/` from a copy of a theme (default: K2's theme of that\n\
   name, else `{DEFAULT_THEME}`). Using a built-in's name makes an override of it.\n\
-- `k2 zen reset --theme <name>` clears it: an override is removed (K2's theme\n\
+- `{CLI_NAME} zen reset --theme <name>` clears it: an override is removed (K2's theme\n\
   shows again); a theme only the human has goes back to a copy of `{DEFAULT_THEME}`.\n\n\
-To make a theme: `k2 zen theme new <name>`, edit `~/.k2/zen/themes/<name>/theme.toml`,\n\
-add a background image next to it if asked, run `k2 zen validate`, then\n\
-`k2 zen theme set <name>` (or `--garden <id>` for one Garden).\n\n"
+To make a theme: `{CLI_NAME} zen theme new <name>`, edit `~/.k2/zen/themes/<name>/theme.toml`,\n\
+add a background image next to it if asked, run `{CLI_NAME} zen validate`, then\n\
+`{CLI_NAME} zen theme set <name>` (or `--garden <id>` for one Garden).\n\n"
     ));
     s.push_str(
         "## Rules every file follows\n\n\
@@ -436,7 +438,7 @@ Zen Mode (Ctrl+Cmd+Z on macOS, Ctrl+Alt+Z on Linux and Windows).\n\n",
     );
     s.push_str(&bridge_section());
     s.push_str(
-        "Each `agents.list()` / `agents.subscribe(cb)` row has `activity`: what the agent's\n\
+        concat!("Each `agents.list()` / `agents.subscribe(cb)` row has `activity`: what the agent's\n\
 server says it is doing (the daemon decides; K2 never guesses). `working`;\n\
 `monitoring` (the turn is done, only background work is left); `needs-you` (the\n\
 daemon's `waiting`: a permission prompt or a question in the terminal);\n\
@@ -483,12 +485,12 @@ sidecar's process after K2's own sheet asks the person: `{ended: true}`, or\n\
 `{ended: false, cancelled: true}` on Cancel; an asleep one answers `{ended: false,\n\
 cancelled: false}` at once; someone with it open in a tab is `sidecar_attached`.\n\
 `k2.agents.archive({address})` takes a stopped one off the list with no sheet\n\
-(`{archived: true}`); `k2 sidecar new <name>` on the command line brings it back. A\n\
+(`{archived: true}`); `", cli_name!(), " sidecar new <name>` on the command line brings it back. A\n\
 main agent or a heartbeat session is `bad_args`. `sidecar_live` means end it first;\n\
 `worktree_sidecar` means retire it with `k2.agents.settle`.\n\n\
 Built-in widgets get their caps from K2. A custom widget asks for caps in its\n\
 manifest and gets every one it asks for at once: widgets in your own Gardens\n\
-need no permissions.\n\n",
+need no permissions.\n\n"),
     );
     s.push_str(&custom_widgets_section());
     s.push_str(&phone_section());
@@ -503,20 +505,20 @@ need no permissions.\n\n",
 /// can't silently skip its edit.
 pub const GARDEN_ACCESS_EDITS: &[(&str, &str)] = &[
     (
-        "When the human asks you to add something to a Garden, you edit that Garden's\nfile. A message that starts **\"In my Zen Garden ... (id g-...)\"** means: edit\n`~/.k2/zen/gardens/<id>.toml`, then run `k2 zen validate --garden <id>`.\n\n",
-        "When the human asks you to add something to a Garden, you change that Garden's\npage through K2. A message that starts **\"In my Zen Garden ... (id g-...)\"** means:\nwrite the page with `k2 zen garden put <id> --from page.toml`, then run\n`k2 zen validate --garden <id>`.\n\n",
+        concat!("When the human asks you to add something to a Garden, you edit that Garden's\nfile. A message that starts **\"In my Zen Garden ... (id g-...)\"** means: edit\n`~/.k2/zen/gardens/<id>.toml`, then run `", cli_name!(), " zen validate --garden <id>`.\n\n"),
+        concat!("When the human asks you to add something to a Garden, you change that Garden's\npage through K2. A message that starts **\"In my Zen Garden ... (id g-...)\"** means:\nwrite the page with `", cli_name!(), " zen garden put <id> --from page.toml`, then run\n`", cli_name!(), " zen validate --garden <id>`.\n\n"),
     ),
     (
-        "- `k2 zen garden delete <garden>`: the page moves into `.history/` (never lost); the last Garden can't be deleted.\n\n",
-        "- `k2 zen garden delete <garden>`: only the person deletes a Garden. From you it asks them\nwith a card (exit 3, \"Asked the person to delete <garden>\"); the page moves into\n`.history/` (never lost); the last Garden can't be deleted.\n\n",
+        concat!("- `", cli_name!(), " zen garden delete <garden>`: the page moves into `.history/` (never lost); the last Garden can't be deleted.\n\n"),
+        concat!("- `", cli_name!(), " zen garden delete <garden>`: only the person deletes a Garden. From you it asks them\nwith a card (exit 3, \"Asked the person to delete <garden>\"); the page moves into\n`.history/` (never lost); the last Garden can't be deleted.\n\n"),
     ),
     (
         "## Files (`~/.k2/zen/`, owned by this computer's K2)\n\n",
-        "## Garden access (who may edit a Garden)\n\n\
+        concat!("## Garden access (who may edit a Garden)\n\n\
 Each Garden has one list of the agents who may edit it. **Edit a Garden only when\n\
-you're on its list (`k2 zen garden access <g>`); otherwise K2 asks the person. After a\n\
-change, `k2 zen validate --widget <w> --sign`.**\n\n\
-- **Make a Garden** with `k2 zen garden new <name> [--from page.toml] [--widgets <dir>…]`:\n\
+you're on its list (`", cli_name!(), " zen garden access <g>`); otherwise K2 asks the person. After a\n\
+change, `", cli_name!(), " zen validate --widget <w> --sign`.**\n\n\
+- **Make a Garden** with `", cli_name!(), " zen garden new <name> [--from page.toml] [--widgets <dir>…]`:\n\
   no card, the page and its new widgets land in one call, 5 a day (`garden_budget`).\n\
   You're its maker, not on its list: K2 puts a `garden.access` card on your Thread with\n\
   the person in the same step.\n\
@@ -525,11 +527,11 @@ change, `k2 zen validate --widget <w> --sign`.**\n\n\
   (you must be on the list of every Garden that places the widget; a draft placed nowhere\n\
   is open). Unlisted, they answer `garden_access_needed` (exit 3) and K2 shows the card.\n\
   After Allow you edit until the person removes you or locks the Garden.\n\
-- **Ask** with `k2 zen garden access <g> ask [--reason \"…\"]`: one waiting card per\n\
+- **Ask** with `", cli_name!(), " zen garden access <g> ask [--reason \"…\"]`: one waiting card per\n\
   Garden; after Not now, none for 24 hours.\n\
-- **The computer-wide look** (`k2 zen reset` of `zen.toml` or a theme, `k2 zen theme\n\
+- **The computer-wide look** (`", cli_name!(), " zen reset` of `zen.toml` or a theme, `", cli_name!(), " zen theme\n\
   set|next|prev` with no `--garden`) needs you on at least one Garden's list.\n\
-- **Only the person deletes a Garden**; `k2 zen garden delete <g>` asks them\n\
+- **Only the person deletes a Garden**; `", cli_name!(), " zen garden delete <g>` asks them\n\
   (`garden_delete_person`, a `garden.delete` card, exit 3). You can't change a list,\n\
   lock or unlock.\n\
 - **Using is never gated**: any agent shows in, and is talked to through, any Garden.\n\
@@ -537,48 +539,48 @@ change, `k2 zen validate --widget <w> --sign`.**\n\n\
   K2 or an agent on that Garden's list signed it. The version is the code AND the\n\
   manifest (caps, reads, sources, libraries): a raw edit of either lands but runs without\n\
   that data (`needs_editor`) until someone listed signs it. On every placing Garden's list,\n\
-  `k2 zen widget sign <w>` signs it; otherwise it answers `sign_needs_person` (exit 3) and\n\
+  `", cli_name!(), " zen widget sign <w>` signs it; otherwise it answers `sign_needs_person` (exit 3) and\n\
   K2 puts a `zen.sign` card on your Thread showing the person what changed;\n\
-  `k2 zen widget sign <w> --ask` asks on purpose. A later change needs a new sign.\n\
+  `", cli_name!(), " zen widget sign <w> --ask` asks on purpose. A later change needs a new sign.\n\
 - **History**: every change, signature, access change, ask and delete is in the\n\
-  Garden's History (Settings → Gardens; `k2 zen garden history <g>` and\n\
-  `k2 zen widget history <w>` for the person). `k2 study garden-access` has more.\n\
-- Keep as mine, \"It's mine\" (`k2 zen widget claim`) and proposals are retired: they\n\
-  answer with a notice through 0.46.x and are removed in 0.47.0. `k2 study garden-changes`\n\
+  Garden's History (Settings → Gardens; `", cli_name!(), " zen garden history <g>` and\n\
+  `", cli_name!(), " zen widget history <w>` for the person). `", cli_name!(), " study garden-access` has more.\n\
+- Keep as mine, \"It's mine\" (`", cli_name!(), " zen widget claim`) and proposals are retired: they\n\
+  answer with a notice through 0.46.x and are removed in 0.47.0. `", cli_name!(), " study garden-changes`\n\
   lists what to update in your workspace before then.\n\n\
-## Files (`~/.k2/zen/`, owned by this computer's K2)\n\n",
+## Files (`~/.k2/zen/`, owned by this computer's K2)\n\n"),
     ),
     (
         "widgets, and theme tables that restyle this Garden only. **This is the file you edit.**\n",
-        "widgets, and theme tables that restyle this Garden only. **Change it with\n`k2 zen garden put <id> --from page.toml`** (a raw edit runs without data until signed).\n",
+        concat!("widgets, and theme tables that restyle this Garden only. **Change it with\n`", cli_name!(), " zen garden put <id> --from page.toml`** (a raw edit runs without data until signed).\n"),
     ),
     (
         "- `widgets/<name>/`: your custom widgets (see Custom widgets). **You edit these too.**\n",
-        "- `widgets/<name>/`: your custom widgets (see Custom widgets). **Change them with\n`k2 zen widget put <name> --dir <folder>`.**\n",
+        concat!("- `widgets/<name>/`: your custom widgets (see Custom widgets). **Change them with\n`", cli_name!(), " zen widget put <name> --dir <folder>`.**\n"),
     ),
     (
         "2. Edit `~/.k2/zen/gardens/<id>.toml`. Every Zen window reloads on save.\n",
-        "2. Stage the page in your workspace and write it with `k2 zen garden put <id> --from page.toml`\n(you must be on the Garden's list). Every Zen window reloads on the write.\n",
+        concat!("2. Stage the page in your workspace and write it with `", cli_name!(), " zen garden put <id> --from page.toml`\n(you must be on the Garden's list). Every Zen window reloads on the write.\n"),
     ),
     (
-        "export`). Every call needs a grant the person gave (Settings → Gardens → Local Data,\nor `k2 zen data grant`), or one a grant admin gave.",
-        "export`). On the list of every Garden that places the widget, you read and write its\ndata with no grant; otherwise every call needs a grant the person gave (Settings →\nGardens, a Garden's Local Data, or `k2 zen data grant`), or one a grant admin gave.",
+        concat!("export`). Every call needs a grant the person gave (Settings → Gardens → Local Data,\nor `", cli_name!(), " zen data grant`), or one a grant admin gave."),
+        concat!("export`). On the list of every Garden that places the widget, you read and write its\ndata with no grant; otherwise every call needs a grant the person gave (Settings →\nGardens, a Garden's Local Data, or `", cli_name!(), " zen data grant`), or one a grant admin gave."),
     ),
     (
-        "- **After editing a widget, run `k2 zen validate --widget <w> --sign`: it signs the widget as\nyou, and the widget then reads and writes data with YOUR grants.** (`k2 zen widget sign\n<w>` signs alone; a plain validate never signs.) An unsigned\nversion gets no data (`author_unknown`). Never sign with the owner token (never use\n`~/.k2/daemon.token`), and never edit a widget the person made unless they ask.\nWhen you change a widget the person made (with the switch), its new version isn't\ntheirs, so it runs without its data until they keep it: K2 puts a card on their Thread\nwith you (\"Keep as mine\" / \"Leave it as <you>'s\"; the answer says `keepAsMine` and\n`keepCard`), or an inbox note when you have no Thread. Only they can tap it (your\npassport is refused); Settings → Gardens → Local Data undoes it.\n",
-        "- **After a change, run `k2 zen validate --widget <w> --sign`.** A widget version runs\nwith the Garden's data only when the person, K2 or an agent on that Garden's list\nsigned it; any other version keeps its own `k2.store` keyspace, `agents:read` and\n`presence:read`, and every other call answers `needs_editor` (\"Someone who edits this\nGarden has to sign this version.\"). (`k2 zen widget sign <w>` signs alone; a plain\nvalidate never signs.) Never sign with the owner token (never use\n`~/.k2/daemon.token`), and never edit a widget the person made unless they ask.\n",
+        concat!("- **After editing a widget, run `", cli_name!(), " zen validate --widget <w> --sign`: it signs the widget as\nyou, and the widget then reads and writes data with YOUR grants.** (`", cli_name!(), " zen widget sign\n<w>` signs alone; a plain validate never signs.) An unsigned\nversion gets no data (`author_unknown`). Never sign with the owner token (never use\n`~/.k2/daemon.token`), and never edit a widget the person made unless they ask.\nWhen you change a widget the person made (with the switch), its new version isn't\ntheirs, so it runs without its data until they keep it: K2 puts a card on their Thread\nwith you (\"Keep as mine\" / \"Leave it as <you>'s\"; the answer says `keepAsMine` and\n`keepCard`), or an inbox note when you have no Thread. Only they can tap it (your\npassport is refused); Settings → Gardens → Local Data undoes it.\n"),
+        concat!("- **After a change, run `", cli_name!(), " zen validate --widget <w> --sign`.** A widget version runs\nwith the Garden's data only when the person, K2 or an agent on that Garden's list\nsigned it; any other version keeps its own `k2.store` keyspace, `agents:read` and\n`presence:read`, and every other call answers `needs_editor` (\"Someone who edits this\nGarden has to sign this version.\"). (`", cli_name!(), " zen widget sign <w>` signs alone; a plain\nvalidate never signs.) Never sign with the owner token (never use\n`~/.k2/daemon.token`), and never edit a widget the person made unless they ask.\n"),
     ),
     (
-        "- **Your own widget's data, no grant** (0.46.1): with the person's \"Manage Gardens and\ndata sources\" switch, the agent that signed a widget's newest version reads and\nwrites its data with `k2 store --widget <w>` (seed it), audited. Without the switch,\nask for a grant.\n",
-        "- **Your own widget's data, no grant**: on the list of every Garden that places it, you\nread and write its data with `k2 store --widget <w>` (seed it). Otherwise ask for a\ngrant.\n",
+        concat!("- **Your own widget's data, no grant** (0.46.1): with the person's \"Manage Gardens and\ndata sources\" switch, the agent that signed a widget's newest version reads and\nwrites its data with `", cli_name!(), " store --widget <w>` (seed it), audited. Without the switch,\nask for a grant.\n"),
+        concat!("- **Your own widget's data, no grant**: on the list of every Garden that places it, you\nread and write its data with `", cli_name!(), " store --widget <w>` (seed it). Otherwise ask for a\ngrant.\n"),
     ),
     (
         "human's Gardens); `--clear` removes it. Person, or an agent with the switch.\n",
         "human's Gardens); `--clear` removes it. Any agent on this computer; an agent's\npreview runs without data.\n",
     ),
     (
-        "- `k2 zen widget put board --dir ./board [--prune]` writes the whole folder in one\nchecked call (a folder with errors writes nothing). Without \"Manage Gardens and\ndata sources\" it becomes ONE proposal for the folder (its changed code files);\napproving it writes them all at once, or nothing if a file moved since.\n",
-        "- `k2 zen widget put board --dir ./board [--prune]` writes the whole folder in one\nchecked call (a folder with errors writes nothing) and signs it as you. It needs you\non the list of every Garden that places the widget (a draft placed nowhere is open);\notherwise it answers `garden_access_needed` (exit 3) and K2 asks the person.\n",
+        concat!("- `", cli_name!(), " zen widget put board --dir ./board [--prune]` writes the whole folder in one\nchecked call (a folder with errors writes nothing). Without \"Manage Gardens and\ndata sources\" it becomes ONE proposal for the folder (its changed code files);\napproving it writes them all at once, or nothing if a file moved since.\n"),
+        concat!("- `", cli_name!(), " zen widget put board --dir ./board [--prune]` writes the whole folder in one\nchecked call (a folder with errors writes nothing) and signs it as you. It needs you\non the list of every Garden that places the widget (a draft placed nowhere is open);\notherwise it answers `garden_access_needed` (exit 3) and K2 asks the person.\n"),
     ),
     (
         // 0.46.4: `retired` (k2.sources.ask until 0.47.0), then catalog v22's
@@ -603,10 +605,10 @@ fn garden_access_skill(off: &str) -> String {
 /// grants, signing.
 fn garden_data_section() -> String {
     String::from(
-        "### A widget's data (`k2.store`, this computer only)\n\n\
+        concat!("### A widget's data (`k2.store`, this computer only)\n\n\
 A custom widget that asks for `store:read` / `store:write` gets its own keyspace,\n\
 `data:<widget>`, in a file K2 keeps on THIS computer (and `k2.save.*` for private\n\
-saves). `k2 zen guide services` has every rule; `k2 study garden-data` is your side.\n\n\
+saves). `", cli_name!(), " zen guide services` has every rule; `", cli_name!(), " study garden-data` is your side.\n\n\
 - **Use `k2.store` for data; never inline data into the widget's code** (code warns above\n\
   512 KB and stops at 1 MB, and a code edit is a new version).\n\
 - One key per object (`obj/<id>`, or `project/<pid>/board/<bid>/obj/<id>`), values JSON\n\
@@ -615,7 +617,7 @@ saves). `k2 zen guide services` has every rule; `k2 study garden-data` is your s
 - **Change some fields, keep the rest: `k2.store.patch(key, {done: true}, {ifRev})`**\n\
   (`null` removes a field; fields it doesn't name stay, even ones your code doesn't\n\
   know). It answers `{rev, value}` with the whole document. Prefer it to a\n\
-  read-modify-write `put`; agents: `k2 store patch --widget <w> <key> --value '{…}'`.\n\
+  read-modify-write `put`; agents: `", cli_name!(), " store patch --widget <w> <key> --value '{…}'`.\n\
 - **Files (images, PDFs) are blobs, never base64 in a value:** `const {ref} = await\n\
   k2.blobs.put(file)`, keep `ref` in a value, draw with `img.src = await k2.blobs.url(ref)`.\n\
   `k2.pick({accept: ['image/*'], multiple: true})` (cap `uploads:pick`) opens K2's picker\n\
@@ -627,14 +629,14 @@ saves). `k2 zen guide services` has every rule; `k2 study garden-data` is your s
   under a key). After a restore, match your echoes by rev and take who and when from\n\
   `by` / `at` (restored values bring their old `updatedBy`); a change with `restore` was a\n\
   restore. Keys that mirror access go in the manifest's `restoreSkips`. Agents:\n\
-  `k2 store history|snapshot|restore --widget <w> --prefix p/` (always a prefix: the whole\n\
+  `", cli_name!(), " store history|snapshot|restore --widget <w> --prefix p/` (always a prefix: the whole\n\
   widget is the person's).\n\
-- **Agents use `k2 store --widget <name>`** (`get put patch rm list changes batch grants\n\
+- **Agents use `", cli_name!(), " store --widget <name>`** (`get put patch rm list changes batch grants\n\
   export`). Every call needs a grant the person gave (Settings → Gardens → Local Data,\n\
-  or `k2 zen data grant`), or one a grant admin gave. `k2 store grants --widget <w>`\n\
+  or `", cli_name!(), " zen data grant`), or one a grant admin gave. `", cli_name!(), " store grants --widget <w>`\n\
   says what you can touch and why.\n\
-- **After editing a widget, run `k2 zen validate --widget <w> --sign`: it signs the widget as\n\
-  you, and the widget then reads and writes data with YOUR grants.** (`k2 zen widget sign\n\
+- **After editing a widget, run `", cli_name!(), " zen validate --widget <w> --sign`: it signs the widget as\n\
+  you, and the widget then reads and writes data with YOUR grants.** (`", cli_name!(), " zen widget sign\n\
   <w>` signs alone; a plain validate never signs.) An unsigned\n\
   version gets no data (`author_unknown`). Never sign with the owner token (never use\n\
   `~/.k2/daemon.token`), and never edit a widget the person made unless they ask.\n\
@@ -647,7 +649,7 @@ saves). `k2 zen guide services` has every rule; `k2 study garden-data` is your s
   to a project to get its data; ask the person. A grant admin grants only inside its\n\
   own prefix, never above its own level, never to itself.\n\
 - A widget's own script checks the data's shape: write Board data through `bin/board`\n\
-  (it validates); a raw `k2 store put` skips Board's schema. Widgets must tolerate bad\n\
+  (it validates); a raw `", cli_name!(), " store put` skips Board's schema. Widgets must tolerate bad\n\
   values (an agent may write one).\n\
 - **A locked Garden's data still changes**: Lock freezes how a Garden works, not\n\
   what's in it. A widget that asks for `sources:read` may write data too when it asks\n\
@@ -659,18 +661,18 @@ saves). `k2 zen guide services` has every rule; `k2 study garden-data` is your s
   agent-made reader needs its maker's read grant on that widget too.\n\
 - **Your own widget's data, no grant** (0.46.1): with the person's \"Manage Gardens and\n\
   data sources\" switch, the agent that signed a widget's newest version reads and\n\
-  writes its data with `k2 store --widget <w>` (seed it), audited. Without the switch,\n\
+  writes its data with `", cli_name!(), " store --widget <w>` (seed it), audited. Without the switch,\n\
   ask for a grant.\n\
-- Big changes: `k2 store batch --widget <w> < ops.json` (≤ 1,000 ops, one rev, all or\n\
-  nothing). History: `k2 store export --widget <w> --at <YYYY-MM-DD>`.\n\
-- The example: `k2 zen guide example board-lite` (a sticky-note board in its data, and\n\
+- Big changes: `", cli_name!(), " store batch --widget <w> < ops.json` (≤ 1,000 ops, one rev, all or\n\
+  nothing). History: `", cli_name!(), " store export --widget <w> --at <YYYY-MM-DD>`.\n\
+- The example: `", cli_name!(), " zen guide example board-lite` (a sticky-note board in its data, and\n\
   the agent's `bin/board-lite` beside it).\n\
 - **The Kanban Garden** (`k2:kanban@5`, New Garden → Kanban) keeps its board in\n\
   `data:k2:kanban`, one board per Garden under `board/<garden id>/` (its **For agents**\n\
   button shows the exact prefix `<p>`): `<p>col/<id>` = `{name, order}`, `<p>card/<id>` =\n\
   `{title, note, col, order}` (`col` is a column's `<id>`, `note` is markdown, lower\n\
-  `order` first). With a grant, `k2 store list --widget k2:kanban --prefix <p>`, then:\n\
-  `k2 store put --widget k2:kanban <p>card/<new-id> --if-rev 0 --value '{\"title\":\"…\",\"col\":\"todo\",\"order\":4096}'`\n\
+  `order` first). With a grant, `", cli_name!(), " store list --widget k2:kanban --prefix <p>`, then:\n\
+  `", cli_name!(), " store put --widget k2:kanban <p>card/<new-id> --if-rev 0 --value '{\"title\":\"…\",\"col\":\"todo\",\"order\":4096}'`\n\
   Change a card with `--if-rev <rev>`; never write `<p>meta`.\n\
   Its Thread is K2's own Conversation in a second column, \"Thread\", that starts folded:\n\
   the board's **Thread** button folds and unfolds it (so do K2's tab and chevron). The\n\
@@ -684,21 +686,21 @@ saves). `k2 zen guide services` has every rule; `k2 study garden-data` is your s
 - **The Board Garden** (`k2:board@1`, New Garden → Board, a Beta behind the Board core:\n\
   off by default, adding the Garden turns it on): a whiteboard whose boards live in\n\
   `data:k2:board` (`boards/<b>`, `board/<b>/meta`, `board/<b>/obj/<id>`). **Work on it\n\
-  with `k2 board`, never raw `k2 store` writes**: it checks every field (a value over\n\
+  with `", cli_name!(), " board`, never raw `", cli_name!(), " store` writes**: it checks every field (a value over\n\
   its limit is refused, never cut), keeps locked objects, and deleting an object takes\n\
   its connectors, mind-map children and pinned comments with it. Access is per board:\n\
-  `k2 zen data grant k2:board --agent <h> --level write --prefix board/<b>/` (the\n\
-  board's **For agents** panel shows the line). Start with `k2 board boards`,\n\
-  `k2 board list --board <b>`, `k2 board add sticky --text \"…\"`, `k2 board apply\n\
-  ops.json`; `k2 study board` is the page. People are stable keys (`agent:<handle>`,\n\
+  `", cli_name!(), " zen data grant k2:board --agent <h> --level write --prefix board/<b>/` (the\n\
+  board's **For agents** panel shows the line). Start with `", cli_name!(), " board boards`,\n\
+  `", cli_name!(), " board list --board <b>`, `", cli_name!(), " board add sticky --text \"…\"`, `", cli_name!(), " board apply\n\
+  ops.json`; `", cli_name!(), " study board` is the page. People are stable keys (`agent:<handle>`,\n\
   `person:owner`), never display names. While the core is off every call answers\n\
   `core_off`; the boards are kept. A widget reads who may reach its data with\n\
   `k2.store.grantees()` (store:read).\n\
 - **The box disk card** (`k2:box-disk@1`, 0.46.4): this computer's disks against the\n\
   disk guard's lines, the biggest users and their agents, and what K2 clears on its own.\n\
   Read only (no caps, no buttons); it reads `k2.app.resources()` once a minute. Place it\n\
-  with `widget = \"k2:box-disk@1\"`. The numbers are `k2 app resources`'s; to free space,\n\
-  `k2 app resources clean --dry-run` (only what K2 made and can make again).\n\
+  with `widget = \"k2:box-disk@1\"`. The numbers are `", cli_name!(), " app resources`'s; to free space,\n\
+  `", cli_name!(), " app resources clean --dry-run` (only what K2 made and can make again).\n\
 - **The Compute Garden** (`k2:canvas@1`, New Garden → Compute): K2's canvas, a page of tiles.\n\
   Its tiles have ids: `compute` (**Compute load**: each of this server's compute nodes, read\n\
   with `k2.compute.nodes()`, cap `compute:nodes`) and `agents` (**Agents**: every agent the\n\
@@ -706,9 +708,9 @@ saves). `k2 zen guide services` has every rule; `k2 study garden-data` is your s
   file picks which tiles it offers, and their order: `tiles = \"compute,agents\"` under\n\
   `[widget.props.config]` (a tile left out isn't offered at all). Each person shows or hides\n\
   the offered tiles (the Tiles menu, or a tile's ×), saved for them on this computer; that\n\
-  choice wins. `k2.compute.nodes()` gives the nodes `k2 compute status` lists, with the same\n\
+  choice wins. `k2.compute.nodes()` gives the nodes `", cli_name!(), " compute status` lists, with the same\n\
   counts: on a node several servers share, `running` and `queued` count every server's jobs\n\
-  (`queueFrom: \"node\"`); otherwise only this server's (`queueFrom: \"server\"`).\n\n",
+  (`queueFrom: \"node\"`); otherwise only this server's (`queueFrom: \"server\"`).\n\n"),
     )
 }
 
@@ -759,7 +761,7 @@ Every Garden shows on a phone in K2 Companion, and every device lists the same G
 there is no way to hide a Garden on a phone or show one only there. With no `[phone]`\n\
 table a Garden uses the default layout (one screen per column, every widget). Add\n\
 `[[phone.screen]]` when the person asks for a mobile version; a widget you leave out of it\n\
-doesn't load on a phone. `k2 zen guide phone` has the whole page.\n\n\
+doesn't load on a phone. `{CLI_NAME} zen guide phone` has the whole page.\n\n\
 ```toml\n\
 [[phone.screen]]\n\
 label = \"Fleet\"          # optional, 1 to {LABEL_MAX} characters\n\
@@ -770,7 +772,7 @@ height = \"{HEIGHT_FILL}\"          # \"{HEIGHT_FILL}\" (alone on its screen), \
 [phone.screen.widget.config]\n\
 bubble = false            # custom widgets only; merged over the desktop's config\n\
 ```\n\n\
-- 1 to {MAX_SCREENS} screens. Write it with `k2 zen garden put <id> --from page.toml`, like any edit:\n\
+- 1 to {MAX_SCREENS} screens. Write it with `{CLI_NAME} zen garden put <id> --from page.toml`, like any edit:\n\
   you need the Garden's list, and a bad `[phone]` writes nothing.\n\
 - `config` is merged, key by key: write only what differs, and the desktop's sources stay bound.\n\
 - In the widget: `k2.view === 'phone'`, `k2.viewport`, `k2.setHeight(px)`, `k2.onVisible(fn)`.\n\
@@ -781,11 +783,11 @@ bubble = false            # custom widgets only; merged over the desktop's confi
 fn custom_widgets_section() -> String {
     let c = contract::catalog();
     let mut s = String::from(
-        "## Custom widgets (your own HTML, CSS and JS)\n\n\
+        concat!("## Custom widgets (your own HTML, CSS and JS)\n\n\
 When the built-in widgets can't do what the human asks (\"make my agents look like a\n\
 game\", \"a diary\", \"a globe of my servers\"), write a **custom widget**: a small web\n\
 page in a folder, placed in a Garden. K2 runs it **sealed**: no network, no storage,\n\
-no popups, no files, no K2 internals. It talks to K2 only through the `k2` object,\n\
+no popups, no files, no K2 internals. It talks to K2 only through the `", cli_name!(), "` object,\n\
 with the caps its manifest asks for. **Widgets can talk to your agents right away:**\n\
 no review, no permission dialog, nothing for the human to allow.\n\n\
 ### The folder\n\n\
@@ -798,11 +800,11 @@ inlines it all into one page; `k2.asset(\"cat.png\")` gives a file as a `data:` 
 ```\n\n\
 - `schema` 1; `name` 1–40 characters (shown to the human as the widget's own words);\n\
   `description` up to 200; `entry` defaults to `index.html`.\n\
-- `caps`: only ",
+- `caps`: only "),
     );
     s.push_str(&ticks(&c.caps_exposed_to(Exposure::Widget)));
     s.push_str(
-        ". Any other cap is an error. An empty list is fine (a clock).\n\
+        concat!(". Any other cap is an error. An empty list is fine (a clock).\n\
 - `reasons`: one line (up to 140) per cap, in your words. K2 shows its own sentence too.\n\
 - `requires.libs`: libraries from K2's standard library (see What's available),\n\
   inlined before your scripts. `id` is optional and must equal the folder name.\n\
@@ -844,9 +846,9 @@ a few invisible rails: the sealed frame, an audit line per post, and a runaway g
 more than 120 posts in 10 minutes, or 20 identical texts to one agent, pauses posting\n\
 (`sending_off`) with a small \"Paused: too many posts. Resume\" notice on the widget\n\
 until the human clicks Resume. The widget keeps running meanwhile.\n\n\
-### The `k2` object\n\n\
-Run `k2 zen guide api` for every helper with an example and its errors. In short, by\n\
-cap:\n\n",
+### The `", cli_name!(), "` object\n\n\
+Run `", cli_name!(), " zen guide api` for every helper with an example and its errors. In short, by\n\
+cap:\n\n"),
     );
     for (cap, rows) in gen::widget_groups(c) {
         match cap.and_then(|n| c.cap(n)) {
@@ -867,7 +869,7 @@ cap:\n\n",
         s.push('\n');
     }
     s.push_str(
-        "Also: `k2.call(verb, ...args)`, `k2.subscribe(verb, ...args, cb)` (alias `k2.on`),\n\
+        concat!("Also: `k2.call(verb, ...args)`, `k2.subscribe(verb, ...args, cb)` (alias `k2.on`),\n\
 `k2.connected`, `k2.can(verb)`, `k2.ready()` (call once you have drawn), `k2.config`,\n\
 `k2.widget`, `k2.asset(name)`, `k2.motion.reduced`, and `k2.open(url)` (= `k2.links.open`).\n\n\
 **Links open in the person's browser with `k2.open(url)`** (ask for `links:open`): http and\n\
@@ -875,7 +877,7 @@ https only, within 5 s of the person's click in your widget (else `failed` \"nee
 once a second and 10 a minute. The first time for a site in each Garden, K2 asks them on its\n\
 own card (Don't open, Open once, Always open this site from this Garden); a no answers\n\
 `{ok: false}`. The frame can't open popups or navigate, so `<a target=_blank>` does nothing.\n\
-Agents can read what each Garden may open with `k2 zen links`; only the person changes it.\n\n\
+Agents can read what each Garden may open with `", cli_name!(), " zen links`; only the person changes it.\n\n\
 **`await k2.connected` before `k2.can`, `k2.config`, `k2.widget` or `k2.motion`.** K2\n\
 connects the frame after your top-level script runs; until then `k2.can()` is false and\n\
 the others are empty, so a widget that checks them at startup draws as if it had no\n\
@@ -888,7 +890,7 @@ k2.connected.then(() => {\n\
 }, () => showNote('K2 didn’t start this widget.'))\n\
 ```\n\n\
 Every call returns a Promise; every subscribe\n\
-returns its unsubscribe. A refused call rejects with a `K2Error` (`.code`: ",
+returns its unsubscribe. A refused call rejects with a `K2Error` (`.code`: "),
     );
     // `needs_editor` exists only with Garden access lists on: the off text
     // is 0.46.3's (GARDEN_ACCESS_EDITS names it for on).
@@ -901,7 +903,7 @@ returns its unsubscribe. A refused call rejects with a `K2Error` (`.code`: ",
             .join(", "),
     );
     s.push_str(
-        ").\n\n\
+        concat!(").\n\n\
 ### Rules\n\n\
 - **`textContent` for anything an agent wrote, never `innerHTML`.** Agent text can hold markup.\n\
 - No inline handlers (`onclick=`): they don't run. Use `addEventListener` in a script file.\n\
@@ -948,7 +950,7 @@ them, so you never rebuild a chat panel:\n\n\
   drawn until it's back), clears when your widget stops or unloads, and a footer counts the\n\
   agents off your list that need the person. Map from `agents.list()`: never guess addresses.\n\
   If the person drags rows in that Agents widget, their order wins over yours\n\
-  (`k2 zen agents-order` shows it).\n\
+  (`", cli_name!(), " zen agents-order` shows it).\n\
 - **A context chip:** `k2.conversation.setContext(text)` (needs `thread:post`) puts a chip the\n\
   person sees (\"Board: K2 Boards\") on the box of every Conversation that follows your widget\n\
   (`agents = \"<your id>\"`, or through an Agents widget's `list-from`); with none following it\n\
@@ -965,39 +967,39 @@ await k2.conversation.setContext('Board: ' + board.name)\n\
 chatButton.addEventListener('click', () => k2.layout.toggle(2))\n\
 ```\n\n\
 ### Workflow\n\n\
-1. `k2 zen widget new <name> --from k2:diary` (or `--from hello`, `--from arcade`, `--from board-lite`, `--from source-trend`) copies a\n\
+1. `", cli_name!(), " zen widget new <name> --from k2:diary` (or `--from hello`, `--from arcade`, `--from board-lite`, `--from source-trend`) copies a\n\
    working example into `~/.k2/zen/widgets/<name>/`.\n\
 2. Edit the folder; place it in a Garden (`kind = \"custom\"`, `widget = \"<name>\"`).\n\
-3. `k2 zen validate --widget <name>` and `k2 zen validate --garden <id>` before you say\n\
+3. `", cli_name!(), " zen validate --widget <name>` and `", cli_name!(), " zen validate --garden <id>` before you say\n\
    it's done. A folder with errors keeps serving its last good version. A plain\n\
    validate never signs; \"pending\" (placed, not run in a Zen window yet) exits 0\n\
    (`--strict` exits 2). Runtime errors fail validate only for a placed widget's saved\n\
    version from the last 24 h; an unplaced widget's or older ones are warnings, and\n\
-   `k2 zen widget errors <name> --clear` drops them once fixed (`--strict` exits 2\n\
-   while they are logged). A plain `k2 zen validate` lists each widget and where it is placed.\n\
+   `", cli_name!(), " zen widget errors <name> --clear` drops them once fixed (`--strict` exits 2\n\
+   while they are logged). A plain `", cli_name!(), " zen validate` lists each widget and where it is placed.\n\
 4. Tell the human it's ready: it talks to their agents as soon as it's placed.\n\
 \n\
 **Keep the widget outside `~/.k2` (the dev loop).** Stage the folder in your\n\
 workspace and go through K2; never copy files into `~/.k2` yourself:\n\
-- `k2 zen validate --dir ./board` checks the staged folder like a widget folder and\n\
+- `", cli_name!(), " zen validate --dir ./board` checks the staged folder like a widget folder and\n\
   writes nothing (Zen needn't be set up).\n\
-- `k2 zen widget preview --dir ./board [--config sources=fleet,deploys]` places it\n\
+- `", cli_name!(), " zen widget preview --dir ./board [--config sources=fleet,deploys]` places it\n\
   alone on K2's own \"Widget preview\" Garden as `preview-<name>` (never one of the\n\
   human's Gardens); `--clear` removes it. Person, or an agent with the switch.\n\
-- `k2 zen widget preview --dir ./board --shot board.png --theme dark [--width 420\n\
+- `", cli_name!(), " zen widget preview --dir ./board --shot board.png --theme dark [--width 420\n\
   --height 360] [--data fixtures.json]` renders it headless to a PNG: K2's real frame\n\
   on a Garden canvas, sample data from a stand-in bridge (or your `--data`: keys\n\
   `\"<verb> <address>\"` or `\"<verb>\"`, and `\"store\"`). Writes nothing else; any agent.\n\
   Look at the PNG in both themes before you say it's done; don't build your own\n\
   headless render. Needs Node and Playwright's WebKit.\n\
-- `k2 zen widget put board --dir ./board [--prune]` writes the whole folder in one\n\
+- `", cli_name!(), " zen widget put board --dir ./board [--prune]` writes the whole folder in one\n\
   checked call (a folder with errors writes nothing). Without \"Manage Gardens and\n\
   data sources\" it becomes ONE proposal for the folder (its changed code files);\n\
   approving it writes them all at once, or nothing if a file moved since.\n\
-- `k2 zen validate --garden <id> --from page.toml` checks a staged Garden page;\n\
-  `k2 zen garden put <id> --from page.toml` writes it.\n\
-5. `k2 zen widget list` shows each widget's state and placements; `k2 zen history --widget\n\
-   <name>` and `k2 zen reset --widget <name> --to <utc>` undo a bad edit. To stop a\n\
+- `", cli_name!(), " zen validate --garden <id> --from page.toml` checks a staged Garden page;\n\
+  `", cli_name!(), " zen garden put <id> --from page.toml` writes it.\n\
+5. `", cli_name!(), " zen widget list` shows each widget's state and placements; `", cli_name!(), " zen history --widget\n\
+   <name>` and `", cli_name!(), " zen reset --widget <name> --to <utc>` undo a bad edit. To stop a\n\
    widget, take its `[[widget]]` out of the Garden file.\n\n\
 **The Diary** (`k2:diary@1`, the Diary Garden in New Garden) is the canonical example:\n\
 a haunted journal with one page per agent on this computer. The human turns the page\n\
@@ -1005,9 +1007,9 @@ a haunted journal with one page per agent on this computer. The human turns the 
 sinks in and the reply bleeds back in handwriting. It keeps to this computer's agents,\n\
 and its Garden keeps only one ⋯ menu floating over the page (the Garden switcher and\n\
 the Zen toggle) and hides the window's stoplights (`stoplights = \"hidden\"`).\n\
-Copy it with `k2 zen widget new my-diary --from k2:diary`; a built-in widget itself\n\
+Copy it with `", cli_name!(), " zen widget new my-diary --from k2:diary`; a built-in widget itself\n\
 never changes.\n\n\
-Files K2 owns here too: **never write grants.json** or `pins.json`.\n\n",
+Files K2 owns here too: **never write grants.json** or `pins.json`.\n\n"),
     );
     s.push_str(&kit_section());
     s.push_str(&sources_section());
@@ -1017,7 +1019,7 @@ Files K2 owns here too: **never write grants.json** or `pins.json`.\n\n",
 /// 0.46.3 (Garden gaps): K2's widget kit, shipped as standard libraries.
 fn kit_section() -> String {
     String::from(
-        "### K2's widget kit (`k2-thread`, `k2-help`)\n\n\
+        concat!("### K2's widget kit (`k2-thread`, `k2-help`)\n\n\
 Don't hand-build a Thread panel or help popovers: K2 ships both as libraries\n\
 (`requires.libs`), in K2's look, following the Garden's light/dark.\n\n\
 **A Thread panel** (`\"k2-thread@1\"`, caps `thread:read`, `thread:post`, `agents:read`):\n\n\
@@ -1052,18 +1054,18 @@ row.address, look: 'chamfer'})`, then `bar.setAddress(a)`, `bar.destroy()`. Your
 drawing: `k2.thread.onActivity(address, ({turn}) => …)` gives the turn an App guest\n\
 gets (counts and step kinds, never text); `K2Activity.describe(K2Activity.coerce(turn,\n\
 Date.now()), Date.now())` gives K2's words. **No turn = no bar: never infer one** from\n\
-messages, timing or the agent's reply. Every live surface: `k2 study live`.\n\n",
+messages, timing or the agent's reply. Every live surface: `", cli_name!(), " study live`.\n\n"),
     )
 }
 
 /// Garden v3 (contract-sources-v1 §6, §11.4): cards that read data sources.
 fn sources_section() -> String {
     let mut s = String::from(
-        "### Cards that read data sources\n\n\
+        concat!("### Cards that read data sources\n\n\
 A **data source** is a check a K2 server runs (an HTTP JSON URL polled on a schedule,\n\
 rated ok / warn / crit / unknown, with a short history). A card never fetches; it reads\n\
 the source's **card view** from the server that runs it. Make and inspect sources with\n\
-`k2 sources` (`k2 study data-sources`); a person approves what you propose.\n\n\
+`", cli_name!(), " sources` (`", cli_name!(), " study data-sources`); a person approves what you propose.\n\n\
 - Ask for `sources:read` and say which sources in the manifest: `\"sources\": \"config\"`\n\
   (the placement's `config.source`, `config.sources` as a comma-separated list, and\n\
   `config.latest`) or a fixed list of names on this computer (`\"sources\": [\"fleet\"]`,\n\
@@ -1072,12 +1074,12 @@ the source's **card view** from the server that runs it. Make and inspect source
   **saved**; else `server_not_saved`). At most 8 other servers per Garden.\n\
 - **A card that reads sources may also post and save** (0.46.1): with `thread:post`\n\
   and/or `store:write` in its caps too, it keeps them. Validate notes the reach\n\
-  (`sources_reach_thread`, `sources_reach_store`) and `k2 zen widget show` says it:\n\
+  (`sources_reach_thread`, `sources_reach_store`) and `", cli_name!(), " zen widget show` says it:\n\
   source values it shows can reach the agents it posts to, or agents granted its data.\n\
   Post only what the person asked for. `k2.sources.ask` is retired (0.46.4: it answers\n\
   `retired`, and goes in 0.47.0); never draw an \"Ask an agent\" button.\n\
 - Its runtime errors reach you as class, code and line only, never message text\n\
-  (`k2 zen widget errors <name>`), so don't put values in thrown errors.\n\
+  (`", cli_name!(), " zen widget errors <name>`), so don't put values in thrown errors.\n\
 - Draw from the view: `display` (pending / paused / stale / ok / warn / crit /\n\
   unknown), `items[]` with `health`, `reason` and `list` (an `extract.lists` item, key\n\
   `<list>/<key>`), `fields`, `counts`, `soft` (`{count, of, level}`: \"soft crit 2/3\"\n\
@@ -1108,16 +1110,16 @@ k2.connected.then(() => {\n\
 })\n\
 ```\n\n\
 Charts: name a library's line in `requires.libs` (`uplot@1` for sparklines and\n\
-history lines; `chart.js@4` for bar and pie; `echarts`, `d3` too; `k2 zen guide libs`).\n\
+history lines; `chart.js@4` for bar and pie; `echarts`, `d3` too; `", cli_name!(), " zen guide libs`).\n\
 They run offline; no CDN, no eval.\n\n\
 **Built-in cards** (place them with `widget = \"k2:<card>@3\"`, `config.source` and, for\n\
-several sources, `config.sources = \"a, b\"`):\n\n",
+several sources, `config.sources = \"a, b\"`):\n\n"),
     );
     for (id, presets) in super::builtin_widgets::SOURCE_CARDS {
         s.push_str(&format!("- `{id}` with {}\n", presets.iter().map(|p| format!("`--preset {p}`")).collect::<Vec<_>>().join(" or ")));
     }
     s.push_str(
-        "\n`k2 sources propose --preset k2-fleet --preset-arg boxes=ohana,larkspur --name fleet --label Fleet`\n\
+        concat!("\n`", cli_name!(), " sources propose --preset k2-fleet --preset-arg boxes=ohana,larkspur --name fleet --label Fleet`\n\
 makes the fleet source; `config.source = \"fleet::<that server>\"` shows it on a Mac's Garden.\n\
 `k2-fleet-summary` (K2 Web's one route) gives the same item keys and fields, so a card\n\
 keeps working when the source switches. `k2:version-spread@3` measures boxes against\n\
@@ -1128,8 +1130,8 @@ one tile, the worst health wins), says \"soft crit 2/3\", keeps `extract.lists` 
 the main grid (`config.list = \"certs\"` shows one), and subscribes again by itself after a\n\
 refusal (5 s, doubling to 60 s). `k2:<card>@1` and `@2` still run as shipped. On its first\n\
 start 0.46.4 moved them to `@3` once, in each Garden file it safely could; a locked Garden\n\
-or one with errors kept them (`k2 zen news` lists those). Move any left to `@3` when you\n\
-next edit that Garden (never a locked one).\n\n",
+or one with errors kept them (`", cli_name!(), " zen news` lists those). Move any left to `@3` when you\n\
+next edit that Garden (never a locked one).\n\n"),
     );
     s
 }
@@ -1143,10 +1145,10 @@ fn whats_available_section() -> String {
         s.push_str("This K2 ships no libraries yet; write plain JavaScript.\n\n");
     } else {
         s.push_str(
-            "Use K2's libraries; don't copy them into the widget's folder. Name each by its line in\n\
+            concat!("Use K2's libraries; don't copy them into the widget's folder. Name each by its line in\n\
 the manifest's `requires.libs`: the major (`\"uplot@1\"`), or `0.minor` below 1.0\n\
 (`\"three@0.186\"`), never a patch: K2 updates patches inside a line. Each defines a\n\
-global; they don't count toward the code limit. `k2 zen guide libs` says which to pick.\n\n",
+global; they don't count toward the code limit. `", cli_name!(), " zen guide libs` says which to pick.\n\n"),
         );
         for l in &m.libs {
             let how = match l.source {
@@ -1175,7 +1177,7 @@ fetches and checks it, the frame never touches the network, and air-gap blocks i
 ### Limits\n\n\
 - Code (HTML + JS + CSS after inlining): 1 MB, with a warning above 512 KB (\"this widget\n\
   is large\": split it, or make it an App). Each asset 1 MB; all assets 2 MB; the bundled\n\
-  page 3.5 MB. Libraries: up to {} per widget, outside those limits (`k2 zen guide libs`).\n\
+  page 3.5 MB. Libraries: up to {} per widget, outside those limits (`{CLI_NAME} zen guide libs`).\n\
 - 10 custom widgets per page. Per widget: 60 calls a second, 16 live subscriptions,\n\
   64 KB per message, 8 live servers.\n\
 - WebGL, canvas, wasm and blob workers work. No network, storage, popups or dialogs\n\
@@ -1188,7 +1190,7 @@ fetches and checks it, the frame never touches the network, and air-gap blocks i
 - `source-trend`: one data source with the resilient handler-object subscription and a\n\
   uPlot sparkline (`config.source`, `config.series`).\n\
 - `k2:kanban` (the Kanban): columns and cards in the widget's data, pointer drag, agents too.\n\
-- `k2:board` (the Board, Beta): a whiteboard in the widget's data; agents use `k2 board`.\n\n",
+- `k2:board` (the Board, Beta): a whiteboard in the widget's data; agents use `{CLI_NAME} board`.\n\n",
         m.cdn_hosts.join(", "),
         kb(m.max_bytes_per_widget),
     ));
@@ -1209,7 +1211,7 @@ fn controls_section() -> String {
     let mut s = String::new();
     s.push_str(&format!(
         "### Controls, bands and menus\n\n\
-Before moving controls, read `k2 zen guide bands` and `k2 zen guide required`.\n\n\
+Before moving controls, read `{CLI_NAME} zen guide bands` and `{CLI_NAME} zen guide required`.\n\n\
 K2's controls are widgets too (**Zen controls**). Place them with `[[widget]]` like any\n\
 widget. The two required ones are {}: a file that places any Zen control replaces ALL of\n\
 the template's and must place both, once each, somewhere the human can reach in one\n\

@@ -27,14 +27,9 @@
 # These rows are kept apart from scripts/brand-allowlist.txt (the product's
 # names) so the commits that lower them stay apart too.
 
-316 cli crates/k2-core/src/skills/content.rs debt: the command name typed out; use CLI_NAME or cli_name!(); B6
-165 cli crates/k2-core/src/workspace/skill_regen.rs debt: the command name typed out; use CLI_NAME or cli_name!(); B6
-124 cli crates/k2-core/src/zen/skill.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 83 cli src/renderer/components/Help/k2Nouns.ts debt: the command name typed out; use CLI_NAME or cli_name!()
 61 cli crates/k2-daemon/src/sew/supervisor.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 51 cli crates/k2-daemon/src/compute_routes.rs debt: the command name typed out; use CLI_NAME or cli_name!()
-45 cli crates/k2-core/src/workspace/context_layers.rs debt: the command name typed out; use CLI_NAME or cli_name!()
-41 cli crates/k2-core/src/sew_chat/teach.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 38 cli crates/k2-daemon/src/vault_routes.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 29 cli crates/k2-daemon/src/mail/routes_send.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 28 cli crates/k2-core/src/app_templates/mod.rs debt: the command name typed out; use CLI_NAME or cli_name!()
@@ -311,7 +306,6 @@
 3 cli src/renderer/lib/context-stack.ts debt: the command name typed out; use CLI_NAME or cli_name!()
 3 cli src/renderer/lib/published-subdomains.ts debt: the command name typed out; use CLI_NAME or cli_name!()
 2 cli crates/k2-client/src/cli_install.rs debt: the command name typed out; use CLI_NAME or cli_name!()
-2 cli crates/k2-core/src/agents_leaf.rs debt: the command name typed out; use CLI_NAME or cli_name!(); B6
 2 cli crates/k2-core/src/app_grace/mod.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 2 cli crates/k2-core/src/board/ops.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 2 cli crates/k2-core/src/cli_folder_trust/gate.rs debt: the command name typed out; use CLI_NAME or cli_name!()

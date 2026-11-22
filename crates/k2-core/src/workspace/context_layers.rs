@@ -15,6 +15,9 @@ use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::brand::CLI_NAME;
+use crate::cli_name;
+
 /// Soft size warning threshold for the composed AGENTS.md body (64 KiB).
 pub const SOFT_WARN_BYTES: u64 = 64 * 1024;
 
@@ -375,7 +378,7 @@ pub fn list_builtin_catalog() -> Vec<ContextCatalogEntry> {
             "User roster",
             USERS_ROSTER_SOURCE,
             "live",
-            "Live list of humans on this K2 box (username with their real name when set, e.g. z3thon — Rosson Long; role; disabled). Regenerates whenever AGENTS.md is rewritten. Do not `k2 msg` these names.",
+            concat!("Live list of humans on this K2 box (username with their real name when set, e.g. z3thon — Rosson Long; role; disabled). Regenerates whenever AGENTS.md is rewritten. Do not `", cli_name!(), " msg` these names."),
             None,
             false,
             &["live", "roster", "users"],
@@ -386,7 +389,7 @@ pub fn list_builtin_catalog() -> Vec<ContextCatalogEntry> {
             "App guest roster",
             SKIN_ROSTER_SOURCE,
             "live",
-            "Live list of app guests (username, role, password, default rooms). Not Connect / Server Access. Regenerates whenever AGENTS.md is rewritten. Do not `k2 msg` these names. Leftover catalog id: skin:roster.",
+            concat!("Live list of app guests (username, role, password, default rooms). Not Connect / Server Access. Regenerates whenever AGENTS.md is rewritten. Do not `", cli_name!(), " msg` these names. Leftover catalog id: skin:roster."),
             None,
             false,
             &["live", "roster", "app", "skin"],
@@ -685,8 +688,8 @@ pub struct ParsedUserPack {
 }
 
 fn stub_layer_md() -> &'static str {
-    "Standing orders for this catalog pack. Keep this layer lean — prefer links over dumps.\n\
-     This pack is library-only until someone stacks it (`k2 agent context add <id>`).\n"
+    concat!("Standing orders for this catalog pack. Keep this layer lean — prefer links over dumps.\n\
+     This pack is library-only until someone stacks it (`", cli_name!(), " agent context add <id>`).\n")
 }
 
 fn stub_pack_toml(id: &str, name: &str, author: &str, tags: &[String]) -> String {
@@ -1023,9 +1026,9 @@ pub fn render_live_layer_body(project_path: &str, layer: &ContextLayer) -> Optio
 pub fn render_this_workspace_paragraph(project_path: &str) -> String {
     let mut out = String::from("### This workspace\n\n");
     out.push_str(
-        "Other sessions may be working in this workspace (the main agent, sidecars, \
-         chat tabs). `k2 sessions` lists them with addresses you can `k2 msg`; \
-         `k2 sessions --past` finds older conversations to reopen.",
+        concat!("Other sessions may be working in this workspace (the main agent, sidecars, \
+         chat tabs). `", cli_name!(), " sessions` lists them with addresses you can `", cli_name!(), " msg`; \
+         `", cli_name!(), " sessions --past` finds older conversations to reopen."),
     );
     let named: Vec<String> = {
         let db = crate::db::shared();
@@ -1061,19 +1064,19 @@ pub fn render_this_workspace_paragraph(project_path: &str) -> String {
 pub fn render_connections_roster_body(project_path: &str) -> String {
     let mut out = String::new();
     out.push_str(
-        "Live roster of **connected workspace-agents** (peers, not sub-agents). \
-         These are **workspace-agents** you can `k2 msg`. Humans who can sign \
+        concat!("Live roster of **connected workspace-agents** (peers, not sub-agents). \
+         These are **workspace-agents** you can `", cli_name!(), " msg`. Humans who can sign \
          into this K2 box are **not** listed here — they write to you from the \
-         app as `[from <name>]`. To see them: `k2 connections list --users`, \
-         or stack **User roster** (`k2 agent context add users:roster`) for \
-         always-on context. Do **not** `k2 msg` those names. Regenerated whenever \
-         K2 rewrites AGENTS.md.\n\n",
+         app as `[from <name>]`. To see them: `", cli_name!(), " connections list --users`, \
+         or stack **User roster** (`", cli_name!(), " agent context add users:roster`) for \
+         always-on context. Do **not** `", cli_name!(), " msg` those names. Regenerated whenever \
+         K2 rewrites AGENTS.md.\n\n"),
     );
     out.push_str("Message / peek:\n\n");
-    out.push_str("    k2 msg <workspace-name> \"short live knock\"\n");
-    out.push_str("    k2 msg <workspace-name> --inbox-wake <path> [path…]\n");
-    out.push_str("    k2 read <workspace-name>\n");
-    out.push_str("    k2 connections list\n\n");
+    out.push_str(concat!("    ", cli_name!(), " msg <workspace-name> \"short live knock\"\n"));
+    out.push_str(concat!("    ", cli_name!(), " msg <workspace-name> --inbox-wake <path> [path…]\n"));
+    out.push_str(concat!("    ", cli_name!(), " read <workspace-name>\n"));
+    out.push_str(concat!("    ", cli_name!(), " connections list\n\n"));
     out.push_str(&render_this_workspace_paragraph(project_path));
 
     let local = crate::connections::list_peers(project_path).unwrap_or_default();
@@ -1082,8 +1085,8 @@ pub fn render_connections_roster_body(project_path: &str) -> String {
     if local.is_empty() && remotes.is_empty() {
         out.push_str("### No connected agents yet\n\n");
         out.push_str("Wire a peer with:\n\n");
-        out.push_str("    k2 connections add <other-workspace-path>\n");
-        out.push_str("    k2 connections add agent::host.k2.dev   # remote form\n");
+        out.push_str(concat!("    ", cli_name!(), " connections add <other-workspace-path>\n"));
+        out.push_str(concat!("    ", cli_name!(), " connections add agent::host.k2.dev   # remote form\n"));
         return out;
     }
 
@@ -1122,8 +1125,8 @@ pub fn render_connections_roster_body(project_path: &str) -> String {
     }
 
     out.push_str(
-        "To update: `k2 connections add|remove …` — this layer rewrites on the next AGENTS.md regen \
-         and when connections change.\n",
+        concat!("To update: `", cli_name!(), " connections add|remove …` — this layer rewrites on the next AGENTS.md regen \
+         and when connections change.\n"),
     );
     out
 }
@@ -1136,9 +1139,9 @@ pub fn render_heartbeats_roster_body(project_path: &str) -> String {
          Regenerated whenever K2 rewrites AGENTS.md.\n\n",
     );
     out.push_str("Manage:\n\n");
-    out.push_str("    k2 heartbeat list\n");
-    out.push_str("    k2 heartbeat signal wakeup <name>\n");
-    out.push_str("    k2 heartbeat enable|disable <name>\n\n");
+    out.push_str(concat!("    ", cli_name!(), " heartbeat list\n"));
+    out.push_str(concat!("    ", cli_name!(), " heartbeat signal wakeup <name>\n"));
+    out.push_str(concat!("    ", cli_name!(), " heartbeat enable|disable <name>\n\n"));
     out.push_str(
         "WAKEUP.md is the **user message** for that schedule — do not paste full wake \
          bodies into AGENTS.md; edit the path listed below.\n\n",
@@ -1148,7 +1151,7 @@ pub fn render_heartbeats_roster_body(project_path: &str) -> String {
     if rows.is_empty() {
         out.push_str("### No heartbeats yet\n\n");
         out.push_str("Create one in Settings → Workspaces / Agents → <agent> → Heartbeats, or:\n\n");
-        out.push_str("    k2 heartbeat create <name> --every 1h\n");
+        out.push_str(concat!("    ", cli_name!(), " heartbeat create <name> --every 1h\n"));
         return out;
     }
 
@@ -1248,9 +1251,9 @@ pub fn render_users_roster_body(_project_path: &str) -> String {
 
     let mut out = String::new();
     out.push_str(
-        "These are **humans** who can sign into this K2 box — not workspace-agents.\n\
-         They write to you from the app as `[from <name>]`; someone signed in to an App is `[guest <login> on App <app>]`, never one of them. Do **not** `k2 msg` these names.\n\
-         CLI lookup: `k2 connections list --users`. Regenerated whenever K2 rewrites AGENTS.md.\n\n",
+        concat!("These are **humans** who can sign into this K2 box — not workspace-agents.\n\
+         They write to you from the app as `[from <name>]`; someone signed in to an App is `[guest <login> on App <app>]`, never one of them. Do **not** `", cli_name!(), " msg` these names.\n\
+         CLI lookup: `", cli_name!(), " connections list --users`. Regenerated whenever K2 rewrites AGENTS.md.\n\n"),
     );
     if any_named {
         out.push_str(
@@ -1280,19 +1283,19 @@ pub fn render_skin_roster_body(_project_path: &str) -> String {
 
     let mut out = String::new();
     out.push_str(
-        "These are **app** guests (K2-login sessions for custom UIs) — \
+        concat!("These are **app** guests (K2-login sessions for custom UIs) — \
          not Connect / Server Access operators, and not workspace-agents.\n\
-         Do **not** `k2 msg` these names. CLI lookup: `k2 app user list` \
-         (leftover: `k2 skin user list`). \
-         Keys for other sites: `k2 app token create --name <label> --agent sales` \
-         (leftover: `k2 skin-token create --name`). \
-         Regenerated whenever K2 rewrites AGENTS.md.\n\n",
+         Do **not** `", cli_name!(), " msg` these names. CLI lookup: `", cli_name!(), " app user list` \
+         (leftover: `", cli_name!(), " skin user list`). \
+         Keys for other sites: `", cli_name!(), " app token create --name <label> --agent sales` \
+         (leftover: `", cli_name!(), " skin-token create --name`). \
+         Regenerated whenever K2 rewrites AGENTS.md.\n\n"),
     );
     if users.is_empty() {
         out.push_str("### No app users yet\n\n");
         out.push_str("Add a guest in Settings → Cores → Apps, or:\n\n");
-        out.push_str("    k2 app user add <username>\n");
-        out.push_str("    k2 app token create --name vercel --agent sales\n");
+        out.push_str(concat!("    ", cli_name!(), " app user add <username>\n"));
+        out.push_str(concat!("    ", cli_name!(), " app token create --name vercel --agent sales\n"));
         return out;
     }
     out.push_str("| USERNAME | ROLE | PASSWORD | DEFAULT ROOMS |\n");
@@ -1326,8 +1329,8 @@ pub fn render_skin_roster_body(_project_path: &str) -> String {
 pub fn render_apps_maintained_body(project_path: &str) -> String {
     let mut out = String::new();
     out.push_str(
-        "The K2 Apps **this agent maintains** (`k2 app inspect <app>`). Another agent's Apps aren't listed. \
-         Regenerated whenever K2 rewrites AGENTS.md.\n\n",
+        concat!("The K2 Apps **this agent maintains** (`", cli_name!(), " app inspect <app>`). Another agent's Apps aren't listed. \
+         Regenerated whenever K2 rewrites AGENTS.md.\n\n"),
     );
     let Ok(ws) = resolve_project_id(project_path) else {
         out.push_str("_This folder isn't a registered workspace._\n");
@@ -1337,7 +1340,7 @@ pub fn render_apps_maintained_body(project_path: &str) -> String {
     let conn = db.lock();
     let apps = crate::deploy::store::list_apps(&conn, Some(&ws)).unwrap_or_default();
     if apps.is_empty() {
-        out.push_str("_No Apps yet._ `k2 app install <id>` makes one; `k2 study apps` explains Apps.\n");
+        out.push_str(concat!("_No Apps yet._ `", cli_name!(), " app install <id>` makes one; `", cli_name!(), " study apps` explains Apps.\n"));
         return out;
     }
     let now = crate::deploy::now();
@@ -1355,7 +1358,7 @@ pub fn render_apps_maintained_body(project_path: &str) -> String {
             if recent && matches!(h.state.as_str(), "applied" | "final") {
                 let from = crate::workspace_session_handles::workspace_address_name(&conn, &h.from_workspace).unwrap_or_else(|_| h.from_workspace.clone());
                 notes.push(format!(
-                    "- **{}** was handed over to you from {} ({} ago){}: `k2 app handover brief {}`. Their Thread history with guests stays with them.",
+                    "- **{}** was handed over to you from {} ({} ago){}: `{CLI_NAME} app handover brief {}`. Their Thread history with guests stays with them.",
                     a.app_id,
                     if h.from_workspace.is_empty() { "the owner (parked)".to_string() } else { from },
                     human_age(now - h.approved_at.unwrap_or(now)),
@@ -1619,7 +1622,7 @@ fn list_project_paths_with_skin_roster() -> Result<Vec<String>, ContextError> {
 }
 
 /// Lean always-on Manager layer — triage/delegate orientation, not the full skill.
-const MANAGER_PACK_MD: &str = r#"# Workspace Manager (always-on)
+const MANAGER_PACK_MD: &str = concat!(r#"# Workspace Manager (always-on)
 
 Short standing orders for coordinating peers. Full playbook:
 `.k2/skills/workspace-manager/SKILL.md` (load on demand).
@@ -1631,21 +1634,21 @@ Your harness owns sub-agent/worktree spawn; K2 wires messaging and the tray.
 
 ## Every wake
 
-1. `k2 inbox` and `k2 organization bulletin`: new work, then today's bulletin.
-2. Triage live msgs + `k2 inbox` (act / file / reply / archive).
-3. Prefer `k2 msg <ws> --inbox-wake <path>` for real work packages; live `msg` for short knocks.
-4. Peek with `k2 read <ws>` before injecting into a peer.
-5. `k2 organization update "…"` then `k2 done` (or `--blocked "…"`).
+1. `"#, cli_name!(), r#" inbox` and `"#, cli_name!(), r#" organization bulletin`: new work, then today's bulletin.
+2. Triage live msgs + `"#, cli_name!(), r#" inbox` (act / file / reply / archive).
+3. Prefer `"#, cli_name!(), r#" msg <ws> --inbox-wake <path>` for real work packages; live `msg` for short knocks.
+4. Peek with `"#, cli_name!(), r#" read <ws>` before injecting into a peer.
+5. `"#, cli_name!(), r#" organization update "…"` then `"#, cli_name!(), r#" done` (or `--blocked "…"`).
 
 ## Do not
 
 - Dump full skill bodies into always-on context (toggle this layer off if unused).
 - Treat peers as subordinates; connections are bidirectional.
-- Use `k2 mail` for agent-to-agent work (that's email).
-"#;
+- Use `"#, cli_name!(), r#" mail` for agent-to-agent work (that's email).
+"#);
 
 /// Lean always-on K2 Agent (planner) layer — planning orientation, not the full skill.
-const K2_AGENT_PACK_MD: &str = r#"# K2 Agent / planner (always-on)
+const K2_AGENT_PACK_MD: &str = concat!(r#"# K2 Agent / planner (always-on)
 
 Short standing orders for planning. Full playbook:
 `.k2/skills/k2-agent/SKILL.md` (load on demand).
@@ -1657,30 +1660,30 @@ Write durable plans under `.k2/prds/` / `.k2/milestones/`; keep PROJECT.md curre
 
 ## Every wake
 
-1. `k2 inbox` and `k2 organization bulletin`: new work, then today's bulletin.
-2. Capture work with `k2 inbox compose` / read tray packages.
+1. `"#, cli_name!(), r#" inbox` and `"#, cli_name!(), r#" organization bulletin`: new work, then today's bulletin.
+2. Capture work with `"#, cli_name!(), r#" inbox compose` / read tray packages.
 3. Plan in docs; register ship-ready items via inbox when useful.
-4. Coordinate with `k2 msg` / `--inbox-wake`; keep live msgs short.
-5. `k2 organization update "…"` then `k2 done`.
+4. Coordinate with `"#, cli_name!(), r#" msg` / `--inbox-wake`; keep live msgs short.
+5. `"#, cli_name!(), r#" organization update "…"` then `"#, cli_name!(), r#" done`.
 
 ## Do not
 
 - Implement large changes yourself when the plan belongs elsewhere.
 - Bloat always-on context with full skill or PRD dumps — link paths instead.
 - Skip writing decisions back to PROJECT.md / PRDs.
-"#;
+"#);
 
 /// Lean always-on Kessel layer (0.46.12): what Kessel is for and how it asks.
-const KESSEL_PACK_MD: &str = r#"# Kessel: K2's own agent (always-on)
+const KESSEL_PACK_MD: &str = concat!(r#"# Kessel: K2's own agent (always-on)
 
 You are Kessel, the agent that runs K2 for your person: setup, settings and
 the agents on this server. The app is K2; you are its helper.
 
 ## How you work
 
-- Learn a K2 command before you use it: `k2 study` lists the pages, and
+- Learn a K2 command before you use it: `"#, cli_name!(), r#" study` lists the pages, and
   every verb takes `--help`. Don't guess flags.
-- Make agents with `k2 agent hire --template <id>` (`k2 agent template list`
+- Make agents with `"#, cli_name!(), r#" agent hire --template <id>` (`"#, cli_name!(), r#" agent template list`
   shows the types). Ask your person before you hire.
 - When K2 refuses you, ask on the card it prints. Never work around a
   refusal, and never ask for more than the task needs.
@@ -1691,7 +1694,7 @@ the agents on this server. The app is K2; you are its helper.
 - Handle secrets in chat or the wiki: K2's vault and secret cards hold them.
 - Change another agent's files, or speak for another agent.
 - Paste long docs into always-on context; link the path instead.
-"#;
+"#);
 
 /// Lean standing order: prefer subagent worktrees for heavy work.
 const SUBAGENTS_PACK_MD: &str = r#"# Always use subagents
@@ -1701,7 +1704,7 @@ Always use subagents in worktrees to do your heavy work to protect your context 
 
 /// Browser and computer use (0.46.11): the text of the user pack it replaces,
 /// byte for byte (same H2 title, so a migrated workspace's file is unchanged).
-const BROWSER_PACK_MD: &str = r##"## Browser and computer use
+const BROWSER_PACK_MD: &str = concat!(r##"## Browser and computer use
 
 You can drive a web browser and this machine's desktop apps, not only a terminal. Two open-source CLIs, run through your shell, do it. Nothing needs to be "loaded". Remember this after every context compaction.
 
@@ -1719,8 +1722,8 @@ You can drive a web browser and this machine's desktop apps, not only a terminal
 - **Desktop:**
   - Read `agent-desktop skills get desktop` and `agent-desktop skills get platform` first.
   - Then the loop: `snapshot` (@refs), `find`, `click`, `type`, `screenshot`.
-- **On a Linux server with no screen:** get your own display with `eval "$(k2 desktop env)"` (it starts or wakes a desktop of your own and sets `DISPLAY`, `XAUTHORITY` and `K2_DESKTOP_PROFILE`), then run `agent-browser --headed …` or any GUI program in that shell; people watch it in a Desktop tab. Run it again within 30 minutes to keep it, `k2 desktop env --release` when done.
-- It needs your workspace's "Allow a virtual desktop" switch (refused: run the `Ask with:` line it prints). Point a browser's profile at `$K2_DESKTOP_PROFILE` so its logins stay on your desktop. More: `k2 study desktop`.
+- **On a Linux server with no screen:** get your own display with `eval "$("##, cli_name!(), r##" desktop env)"` (it starts or wakes a desktop of your own and sets `DISPLAY`, `XAUTHORITY` and `K2_DESKTOP_PROFILE`), then run `agent-browser --headed …` or any GUI program in that shell; people watch it in a Desktop tab. Run it again within 30 minutes to keep it, `"##, cli_name!(), r##" desktop env --release` when done.
+- It needs your workspace's "Allow a virtual desktop" switch (refused: run the `Ask with:` line it prints). Point a browser's profile at `$K2_DESKTOP_PROFILE` so its logins stay on your desktop. More: `"##, cli_name!(), r##" study desktop`.
 
 **Rules:**
 - **Focus:** if you ever have to take focus (bring a window or app to the front, or click with a physical, headed pointer), give it back to the window that had it before, in the same step. Never leave the person's focus somewhere else.
@@ -1728,7 +1731,7 @@ You can drive a web browser and this machine's desktop apps, not only a terminal
 - **Passwords:** never type them. Secrets come from a secret card or the vault, read inside your script and never echoed.
 - **Irreversible clicks:** ask your person before any irreversible or outward-facing click: submit, pay, publish, delete, send.
 - **Clean up:** close the tabs, sessions (`agent-browser close`) and windows you open.
-"##;
+"##);
 
 /// Lean wiki hygiene — how to keep `.k2/wiki/` healthy without bloating AGENTS.md.
 const WIKI_HYGIENE_PACK_MD: &str = r#"# Wiki hygiene (always-on)

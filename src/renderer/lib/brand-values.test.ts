@@ -7,7 +7,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSyn
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
-import { BRAND_ID, CLI_ALIASES, CLI_NAME, PRODUCT_NAME } from './brand'
+import { BRAND_ID, CLI_ALIASES, CLI_NAME, PRODUCT_NAME, RELEASE_REPO } from './brand'
 
 const ROOT = resolve(__dirname, '../../..')
 const SCRIPT = join(ROOT, 'scripts/brand-values.mjs')
@@ -132,6 +132,18 @@ describe('the packaging values', () => {
     expect(desktop).toContain(`Exec=${values.BRAND_GUI_BINARY}\n`)
     expect(desktop).toContain(`Icon=${values.BRAND_DESKTOP_ID}\n`)
     expect(values.BRAND_CLI_ALIASES).toBe('k2so')
+  })
+
+  it('the app ships the CLI under the brand\'s command name and its aliases', () => {
+    const conf = JSON.parse(readFileSync(join(ROOT, 'src-tauri/tauri.conf.json'), 'utf8'))
+    for (const name of [CLI_NAME, ...CLI_ALIASES]) expect(conf.bundle.resources, name).toContain(`../cli/${name}`)
+  })
+
+  it('brand/k2\'s update feed is the release repo\'s, as k2-client builds it (APP_FEED_URL)', () => {
+    const feed = JSON.parse(run(['tauri'])).plugins.updater.endpoints
+    expect(feed).toEqual([`https://github.com/${RELEASE_REPO}/releases/latest/download/latest.json`])
+    const rust = readFileSync(join(ROOT, 'crates/k2-client/src/brand.rs'), 'utf8')
+    expect(rust).toContain('pub const APP_FEED_URL: &str = concat!("https://github.com/", release_repo!(), "/releases/latest/download/latest.json");')
   })
 
   it('a brand of its own gets its own overlay', () => {

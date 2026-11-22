@@ -15,9 +15,10 @@
 //       print that file instead of writing it.
 //   node scripts/brand-values.mjs tauri [--out FILE]
 //       print (or write) the Tauri config overlay: the app's name, the
-//       bundle id and the update feed. `tauri build` merges it when it is in
-//       TAURI_CONFIG or passed with --config. For brand/k2 it changes
-//       nothing: src-tauri/tauri.conf.json holds the same values, and
+//       bundle id and the update feed. A brand build passes the file to
+//       `tauri build --config <file>`, which merges it over
+//       src-tauri/tauri.conf.json. For brand/k2 it changes nothing: that
+//       file already holds the same values, and
 //       src/renderer/lib/brand-values.test.ts fails when they drift.
 //   node scripts/brand-values.mjs shell
 //       print the values as shell assignments (BRAND_ID, BRAND_PRODUCT,

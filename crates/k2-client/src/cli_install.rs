@@ -70,10 +70,15 @@ use serde::Serialize;
 use crate::brand::PRODUCT_NAME;
 
 /// First line of the PATH block this build writes into a shell startup
-/// file (`# >>> K2 CLI >>>` with the default brand).
+/// file, with the product's name (`# >>> K2 CLI >>>` with the default
+/// brand).
 pub const BLOCK_BEGIN: &str = k2_brand::PATH_BLOCK_BEGIN;
 /// Last line of the PATH block.
 pub const BLOCK_END: &str = k2_brand::PATH_BLOCK_END;
+/// Earlier forms of this build's own markers (the command in upper case,
+/// when that is not the product's form): found, replaced and removed like
+/// its own. None with the default brand.
+pub const BLOCK_EARLIER: &[(&str, &str)] = k2_brand::PATH_BLOCK_EARLIER;
 
 /// The command's name, from the brand file.
 pub use crate::brand::CLI_NAME;
@@ -137,6 +142,10 @@ pub struct Names {
     /// This build's PATH block markers.
     pub block_begin: &'static str,
     pub block_end: &'static str,
+    /// Earlier forms of this build's own markers (begin, end). A block
+    /// with one is this build's: replaced in place, and removed by the
+    /// undo.
+    pub earlier: &'static [(&'static str, &'static str)],
     /// This build's fish startup file in `conf.d`.
     pub fish_conf: &'static str,
 }
@@ -150,6 +159,7 @@ impl Names {
             retired: k2_brand::RETIRED,
             block_begin: BLOCK_BEGIN,
             block_end: BLOCK_END,
+            earlier: BLOCK_EARLIER,
             fish_conf: FISH_CONF,
         }
     }
@@ -160,9 +170,17 @@ impl Names {
     }
 
     /// The marker pairs this build may remove or replace: its own first,
-    /// then each retired name's.
+    /// then its own earlier forms, then each retired name's.
     fn marker_pairs(&self) -> Vec<(&'static str, &'static str)> {
         let mut out = vec![(self.block_begin, self.block_end)];
+        out.extend(self.replaced_pairs());
+        out
+    }
+
+    /// The marker pairs whose block this build replaces with its own: its
+    /// earlier forms, then each retired name's.
+    fn replaced_pairs(&self) -> Vec<(&'static str, &'static str)> {
+        let mut out: Vec<(&'static str, &'static str)> = self.earlier.to_vec();
         out.extend(self.retired.iter().map(|r| (r.block_begin, r.block_end)));
         out
     }
@@ -850,16 +868,19 @@ impl Names {
         remove_marked(content, &self.marker_pairs())
     }
 
-    /// `content` with the first complete block of a retired name replaced
-    /// by `block`, in the same place, or `None` when there is none.
+    /// `content` with the first complete block of an earlier form or a
+    /// retired name replaced by `block`, in the same place, and any other
+    /// such block after it removed, or `None` when there is none. One
+    /// block is left either way.
     fn replace_retired_block(&self, content: &str, block: &str) -> Option<String> {
-        let pairs: Vec<(&str, &str)> = self.retired.iter().map(|r| (r.block_begin, r.block_end)).collect();
+        let pairs = self.replaced_pairs();
         let lines: Vec<&str> = content.split_inclusive('\n').collect();
         let (begin, end) = find_block(&lines, 0, &pairs)?;
+        let rest: String = lines[end + 1..].concat();
         let mut out = String::with_capacity(content.len() + block.len());
         out.extend(lines[..begin].iter().copied());
         out.push_str(block);
-        out.extend(lines[end + 1..].iter().copied());
+        out.push_str(&remove_marked(&rest, &pairs).unwrap_or(rest));
         Some(out)
     }
 }
@@ -922,9 +943,10 @@ pub enum PathOutcome {
     BlockAdded { file: PathBuf },
     /// The block was already in this file.
     BlockPresent { file: PathBuf },
-    /// A block of a name this build is retiring was replaced by this
-    /// build's, in the same place (fish: this build's file took the old
-    /// one's place).
+    /// A block of an earlier form of this build's markers, or of a name
+    /// this build is retiring, was replaced by this build's, in the same
+    /// place (fish: this build's file took the old one's place); or one
+    /// was removed from beside this build's, so the file holds one block.
     BlockReplaced { file: PathBuf },
     /// The person removed the PATH line; left alone.
     OptedOut,
@@ -1039,6 +1061,12 @@ impl Names {
         let file = self.startup_file(kind, home, zdotdir);
         let content = read_or_empty(&file)?;
         if self.has_block(&content) {
+            // This build's block is there: an earlier form's or a retired
+            // name's beside it goes, so the file holds one block.
+            if let Some(next) = remove_marked(&content, &self.replaced_pairs()) {
+                write_startup_file(&file, &next)?;
+                return Ok(PathOutcome::BlockReplaced { file });
+            }
             return Ok(PathOutcome::BlockPresent { file });
         }
         let block = self.path_block(kind);

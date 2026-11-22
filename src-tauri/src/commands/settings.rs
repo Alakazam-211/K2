@@ -742,8 +742,10 @@ fn cli_install_system_now() -> Result<String, String> {
     }
 }
 
-/// Remove K2's PATH line: only the lines between the `# >>> K2 CLI >>>`
-/// markers, from every startup file that has them. The boot heal then
+/// Remove K2's PATH line: only the lines between the build's PATH block
+/// markers (`# >>> K2 CLI >>>` with the default brand; the product's name,
+/// and an earlier command-form marker too), from every startup file that
+/// has them. The boot heal then
 /// leaves it out until the person installs from Settings again. Returns the
 /// files changed.
 #[tauri::command]

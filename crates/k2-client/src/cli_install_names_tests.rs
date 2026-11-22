@@ -19,6 +19,7 @@ const XY: Names = Names {
     retired: &[],
     block_begin: "# >>> XY CLI >>>",
     block_end: "# <<< XY CLI <<<",
+    earlier: &[],
     fish_conf: "xy-cli.fish",
 };
 
@@ -37,6 +38,7 @@ const K5: Names = Names {
     retired: &[K2_RETIRED],
     block_begin: "# >>> K5 CLI >>>",
     block_end: "# <<< K5 CLI <<<",
+    earlier: &[],
     fish_conf: "k5-cli.fish",
 };
 
@@ -128,9 +130,11 @@ fn the_default_names_are_todays_bytes() {
             retired: &[],
             block_begin: "# >>> K2 CLI >>>",
             block_end: "# <<< K2 CLI <<<",
+            earlier: &[],
             fish_conf: "k2-cli.fish",
         }
     );
+    assert_eq!(BLOCK_EARLIER, &[] as &[(&str, &str)], "the default brand's markers have one form");
     assert_eq!(path_block(ShellKind::Zsh), K2_ZSH);
     assert_eq!(path_block(ShellKind::Bash), K2_ZSH);
     assert_eq!(path_block(ShellKind::Fish), K2_FISH);
@@ -327,6 +331,121 @@ fn a_file_with_two_brands_blocks_keeps_both_through_two_heals() {
             assert_eq!(read(&zprofile), both, "{} run {run}", names.name);
         }
     }
+}
+
+/// A brand whose product and command are unrelated words: product
+/// "Globex Desk", command `gd`. Its markers carry the product; a build
+/// before K2's ruling wrote them with the command in upper case.
+const GD: Names = Names {
+    name: "gd",
+    aliases: &[],
+    retired: &[],
+    block_begin: "# >>> Globex Desk CLI >>>",
+    block_end: "# <<< Globex Desk CLI <<<",
+    earlier: &[("# >>> GD CLI >>>", "# <<< GD CLI <<<")],
+    fish_conf: "gd-cli.fish",
+};
+
+const GD_ZSH: &str =
+    "# >>> Globex Desk CLI >>>\nexport PATH=\"$HOME/.local/bin:$PATH\"\n# <<< Globex Desk CLI <<<\n";
+const GD_OLD_ZSH: &str = "# >>> GD CLI >>>\nexport PATH=\"$HOME/.local/bin:$PATH\"\n# <<< GD CLI <<<\n";
+const GD_OLD_FISH: &str = "# >>> GD CLI >>>\nif not contains -- $HOME/.local/bin $PATH\n    \
+                           set -gx PATH $HOME/.local/bin $PATH\nend\n# <<< GD CLI <<<\n";
+
+/// The marked blocks in `content`: begin lines of any `# >>> ... CLI >>>`.
+fn block_count(content: &str) -> usize {
+    content.lines().filter(|l| l.starts_with("# >>> ") && l.ends_with(" CLI >>>")).count()
+}
+
+/// The markers carry the product, and the block is the product's.
+#[test]
+fn the_block_carries_the_product_not_the_command() {
+    assert_eq!(GD.path_block(ShellKind::Zsh), GD_ZSH);
+    assert!(!GD.path_block(ShellKind::Fish).contains("GD CLI"));
+}
+
+/// The old command-form block is found and replaced in place, with no
+/// login PATH needed (the line was already on PATH); a second run changes
+/// nothing.
+#[test]
+fn the_old_marker_is_replaced_in_place() {
+    let home = Home::new("gd-old");
+    let h = home.path();
+    let (cli, _) = bundle(h, "Globex Desk", "gd", None);
+    let zprofile = h.join(".zprofile");
+    let (before, after) = ("# before\n", "alias gs='git status'\n");
+    fs::write(&zprofile, format!("{before}{GD_OLD_ZSH}{after}")).unwrap();
+    let healed = format!("{before}{GD_ZSH}{after}");
+    for run in 1..=2 {
+        let r = GD
+            .heal_at(h, &HealInput { login_path: None, ..input(&cli, None, "/bin/zsh") }, &SCRIPT)
+            .expect("heal");
+        let want = if run == 1 {
+            PathOutcome::BlockReplaced { file: zprofile.clone() }
+        } else {
+            PathOutcome::BlockPresent { file: zprofile.clone() }
+        };
+        assert_eq!(r.path, want, "run {run}");
+        assert_eq!(read(&zprofile), healed, "run {run}: the new block takes the old one's place");
+    }
+}
+
+/// fish: the build's own fish file keeps its name (the command's) and its
+/// old-form block becomes the product's, in place.
+#[test]
+fn the_old_marker_in_the_fish_file_is_replaced_in_place() {
+    let home = Home::new("gd-fish");
+    let h = home.path();
+    let (cli, _) = bundle(h, "Globex Desk", "gd", None);
+    fs::create_dir_all(conf_d(h)).unwrap();
+    let fish = conf_d(h).join("gd-cli.fish");
+    fs::write(&fish, GD_OLD_FISH).unwrap();
+    let r = GD
+        .heal_at(h, &HealInput { login_path: None, ..input(&cli, None, "/usr/bin/fish") }, &SCRIPT)
+        .expect("fish heal");
+    assert_eq!(r.path, PathOutcome::BlockReplaced { file: fish.clone() });
+    assert_eq!(read(&fish), GD.path_block(ShellKind::Fish));
+}
+
+/// A file with both markers ends with exactly one block, the product's,
+/// whichever comes first; the lines around them stay byte for byte.
+#[test]
+fn a_file_with_both_markers_ends_with_one_block() {
+    for (tag, start, want) in [
+        ("new-first", format!("# a\n{GD_ZSH}# b\n{GD_OLD_ZSH}# c\n"), format!("# a\n{GD_ZSH}# b\n# c\n")),
+        ("old-first", format!("# a\n{GD_OLD_ZSH}# b\n{GD_ZSH}# c\n"), format!("# a\n# b\n{GD_ZSH}# c\n")),
+        ("two-old", format!("# a\n{GD_OLD_ZSH}# b\n{GD_OLD_ZSH}# c\n"), format!("# a\n{GD_ZSH}# b\n# c\n")),
+    ] {
+        let home = Home::new(&format!("gd-both-{tag}"));
+        let h = home.path();
+        let (cli, _) = bundle(h, "Globex Desk", "gd", None);
+        let zprofile = h.join(".zprofile");
+        fs::write(&zprofile, &start).unwrap();
+        for run in 1..=2 {
+            GD.heal_at(h, &input(&cli, None, "/bin/zsh"), &SCRIPT).expect("heal");
+            let now = read(&zprofile);
+            assert_eq!(block_count(&now), 1, "{tag} run {run}:\n{now}");
+            assert_eq!(now, want, "{tag} run {run}");
+        }
+    }
+}
+
+/// The undo finds the old command-form block as well as the product's,
+/// and never another brand's.
+#[test]
+fn the_undo_removes_the_old_and_the_new_marker() {
+    let home = Home::new("gd-undo");
+    let h = home.path();
+    let zprofile = h.join(".zprofile");
+    fs::write(&zprofile, format!("# a\n{GD_OLD_ZSH}# b\n{GD_ZSH}# c\n{K2_ZSH}")).unwrap();
+    fs::create_dir_all(conf_d(h)).unwrap();
+    let fish = conf_d(h).join("gd-cli.fish");
+    fs::write(&fish, GD_OLD_FISH).unwrap();
+
+    let changed = GD.remove_path_block_at(h, None).expect("undo");
+    assert_eq!(changed, vec![zprofile.clone(), fish.clone()]);
+    assert_eq!(read(&zprofile), format!("# a\n# b\n# c\n{K2_ZSH}"), "another brand's block stays");
+    assert!(!fish.exists(), "the fish file was all the old block");
 }
 
 /// The names of the entries in `dir`, sorted (none when it is missing).

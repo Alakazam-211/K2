@@ -731,4 +731,23 @@ describe('focusComposeAfterAttach (a file just attached)', () => {
     expect(focusComposeAfterAttach(ta)).toBe(false)
     expect(document.activeElement).toBe(other)
   })
+
+  it('a box outside a compose bar (Zen): focused or not, the caret goes to the end; another Zen box keeps it', () => {
+    const zen = document.createElement('textarea')
+    zen.value = 'Look at this'
+    document.body.appendChild(zen)
+    expect(focusComposeAfterAttach(zen)).toBe(true)
+    expect(document.activeElement).toBe(zen)
+    expect([zen.selectionStart, zen.selectionEnd]).toEqual([12, 12])
+    // Already focused, caret at the start: still moved to the end.
+    zen.setSelectionRange(0, 0)
+    expect(focusComposeAfterAttach(zen)).toBe(true)
+    expect([zen.selectionStart, zen.selectionEnd]).toEqual([12, 12])
+    // Another agent's Zen box has the caret: it stays there.
+    const otherZen = document.createElement('textarea')
+    document.body.appendChild(otherZen)
+    otherZen.focus()
+    expect(focusComposeAfterAttach(zen)).toBe(false)
+    expect(document.activeElement).toBe(otherZen)
+  })
 })

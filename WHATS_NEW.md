@@ -310,6 +310,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 ### Threads
 - Thread: after you attach a file, the message box is ready to type in, and Return sends the file even with no text.
+- The same in a Garden's message box: after you pick or drop a file there, you can type right away without clicking the box, and Return with no text sends the file on its own.
 - **A ticket's discussion is now kept as a Thread.** Its messages work as before everywhere (the Tickets page, the phone, Apps and `k2 tickets`), keep their files, and stay after the ticket's workspace is removed. Tickets from earlier releases move over in the background after the update.
 
 ### Agent messages

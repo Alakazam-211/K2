@@ -195,12 +195,16 @@ export function composeBarMayTakeFocus(textarea: HTMLTextAreaElement): boolean {
  *  files). Only `.focus()`: nothing scrolls, the pointer stays put. Not a
  *  hidden box (another tab or chat), not while a dialog is up (one opened
  *  while the file was on its way), not out of another text field or
- *  another agent's message box the person moved to meanwhile. Returns
- *  whether it moved the caret. */
+ *  another agent's message box the person moved to meanwhile. Used by the
+ *  desktop Thread box and the Zen box (Gardens). Returns whether it moved
+ *  the caret. */
 export function focusComposeAfterAttach(textarea: HTMLTextAreaElement | null): boolean {
   if (!textarea || !textarea.isConnected || isEffectivelyHidden(textarea)) return false
-  if (isModalOpen() || isTypingElsewhere()) return false
+  if (isModalOpen()) return false
   const active = typeof document === 'undefined' ? null : document.activeElement
+  // The box itself holding the caret is never "elsewhere" (a Zen box is a
+  // text field outside `[data-compose-bar]`).
+  if (active !== textarea && isTypingElsewhere()) return false
   if (
     active instanceof HTMLTextAreaElement &&
     active !== textarea &&

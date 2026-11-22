@@ -11,6 +11,9 @@
 //   4. Return with no file and no words sends nothing, as before.
 //   5. Shift+Return is a new line (no send, the key is left to the box).
 //   6. Return while an IME is composing sends nothing.
+//   7. GH#87, the whole run with no click: a pick or a drop on the box,
+//      the caret lands in the box, and Return where the caret is posts the
+//      file alone.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react'
 import type { ServerScope } from '@/kessel/server-scope'
@@ -221,6 +224,46 @@ describe('Return with files', () => {
       },
     ])
     await waitFor(() => expect(chipNames()).toEqual([]))
+  })
+
+  it('the whole run with no click: pick, the caret lands in the box, Return there posts the file alone (GH#87)', async () => {
+    const box = renderBar()
+    await nextFrame()
+    act(() => box.blur())
+    expect(document.activeElement).not.toBe(box)
+    await pick([`${WS}/docs/report.pdf`])
+    await waitFor(() => expect(chipNames()).toEqual(['report.pdf']))
+    await waitFor(() => expect(document.activeElement).toBe(box))
+    // Return goes wherever the caret is, never to a box picked by the test.
+    const target = document.activeElement
+    if (!(target instanceof HTMLElement)) throw new Error('nothing holds the caret')
+    await act(async () => {
+      fireEvent.keyDown(target, { key: 'Enter' })
+    })
+    expect(threadPosts()).toEqual([
+      { addr: 'sales', text: '', via: 'compose', attachments: [{ path: `${WS}/docs/report.pdf` }] },
+    ])
+    await waitFor(() => expect(chipNames()).toEqual([]))
+  })
+
+  it('a drop on the box itself: the caret lands in the box, and Return there posts the file alone', async () => {
+    const box = renderBar()
+    await nextFrame()
+    act(() => box.blur())
+    const bar = document.querySelector('[data-compose-bar]') as HTMLElement
+    const file = new File(['x'], 'notes.txt')
+    Object.defineProperty(file, 'path', { value: `${WS}/notes.txt` })
+    await act(async () => {
+      fireEvent.drop(bar, { dataTransfer: { files: [file], types: ['Files'], getData: () => '' } })
+    })
+    await waitFor(() => expect(chipNames()).toEqual(['notes.txt']))
+    await waitFor(() => expect(document.activeElement).toBe(box))
+    await act(async () => {
+      fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Enter' })
+    })
+    expect(threadPosts()).toEqual([
+      { addr: 'sales', text: '', via: 'compose', attachments: [{ path: `${WS}/notes.txt` }] },
+    ])
   })
 
   it('Return with no file and no words sends nothing', async () => {

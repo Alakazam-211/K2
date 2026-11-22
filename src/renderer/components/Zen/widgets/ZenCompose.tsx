@@ -3,7 +3,8 @@
 //
 // Enter sends, Shift+Enter adds a line, Esc clears. "+" picks files on this
 // computer with the same native picker as the Agents page's "message the
-// agent" box; files dropped on the box are attached too. Sending goes through
+// agent" box; files dropped on the box are attached too. Once a file is on,
+// the box takes the caret (GH#87), and Return with no text sends the files. Sending goes through
 // the bridge (`thread.post`, cap `thread:post`), which runs the existing
 // attach path (local paths as they are, or an upload to the agent's own
 // server) and the one compose send. A failed send puts the text back.
@@ -15,7 +16,8 @@
 //
 // When the person picks this agent (a row click, or Add agent), the box
 // takes keyboard focus once it can be typed in (`zen-compose-focus`).
-// Nothing else focuses it: not first render, not a remote update.
+// Besides that and a file just attached, nothing focuses it: not first
+// render, not a remote update.
 //
 // 0.46.0 (Rosson 2026-10-16): past 3 lines the box stacks like the desktop
 // Thread's (the shared rule in ThreadZenKit), on by default.
@@ -23,6 +25,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import { pickLocalComposeFiles } from '@/lib/pick-compose-files'
+import { focusComposeAfterAttach } from '@/lib/workspace-switch-focus'
 import {
   ConnectedStashDrawer,
   isComposeStashChord,
@@ -250,15 +253,26 @@ export function ZenCompose({
     }
   }, [address, attachments, boardContext.context, bridge, disabled, draft, onSend, reply, sending, setDraft])
 
+  // Files just attached (a pick or a drop): the box is ready to type in,
+  // caret after any words, and Return sends the files with no text. Only
+  // `.focus()`, so the pointer stays put; never over a dialog, into a
+  // hidden box or out of a field the person moved to meanwhile
+  // (focusComposeAfterAttach, the desktop Thread box's rule).
+  const focusAfterAttach = useCallback(() => {
+    requestAnimationFrame(() => {
+      focusComposeAfterAttach(ref.current)
+    })
+  }, [])
+
   const pick = useCallback(() => {
     void pickLocalComposeFiles()
       .then((paths) => {
         if (!paths || paths.length === 0) return
         setAttachments((cur) => [...cur, ...paths.map((path) => ({ kind: 'path' as const, path, name: baseName(path) }))])
-        ref.current?.focus()
+        focusAfterAttach()
       })
       .catch((err: unknown) => setError(`Couldn’t attach: ${err instanceof Error ? err.message : String(err)}`))
-  }, [])
+  }, [focusAfterAttach])
 
   const onDrop = useCallback((e: React.DragEvent) => {
     if (!allowAttachments) return
@@ -273,7 +287,8 @@ export function ZenCompose({
       next.push(path ? { kind: 'path', path, name: baseName(path) } : { kind: 'file', file: f, name: f.name || 'file' })
     }
     setAttachments((cur) => [...cur, ...next])
-  }, [allowAttachments])
+    focusAfterAttach()
+  }, [allowAttachments, focusAfterAttach])
 
   // Save to stash (the "+" menu and Cmd+S, as in the Thread box): the
   // draft and its files, then the box clears. Picked and dropped files are

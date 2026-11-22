@@ -4321,3 +4321,8 @@ mod heartbeat_turned_off_notice;
 // 0.46.17: a choice card's metadata map (k2 thread ask --meta).
 #[path = "card_meta_tests.rs"]
 mod card_meta;
+
+// 0.46.17 (GH#87): a compose post with files and no text is stored; one
+// with neither is refused.
+#[path = "attachment_only_tests.rs"]
+mod attachment_only;

@@ -92,6 +92,12 @@ mod tests {
             "k5 0.46.16 is talking to a 0.46.17 server; the command on this PATH is out of date: run k5 update"
         );
         let name = k2_client::brand::CLI_NAME;
+        // The command, where a person types it; never the product's name.
+        let printed = line("0.46.16", "0.46.17");
+        assert!(
+            !printed.contains(k2_client::brand::PRODUCT_NAME),
+            "{printed}"
+        );
         assert_eq!(
             line("0.46.16", "0.46.17"),
             format!("{name} 0.46.16 is talking to a 0.46.17 server; the command on this PATH is out of date: run {name} update")

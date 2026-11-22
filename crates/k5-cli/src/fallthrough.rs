@@ -893,6 +893,12 @@ mod tests {
                 k2_client::brand::CLI_NAME
             )
         );
+        // The prefix is the command, never the product's name.
+        assert!(
+            !err.line().contains(k2_client::brand::PRODUCT_NAME),
+            "{}",
+            err.line()
+        );
         assert_eq!(err.exit_code(), 1);
     }
 

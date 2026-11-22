@@ -646,6 +646,29 @@ pub const RETIRED: &[RetiredName] = &[RetiredName { name: "abc", block_begin: "#
         }
     }
 
+    /// The software's name and the command's name are two values a brand
+    /// sets apart: neither is made from the other. A helper's name comes
+    /// from the command, never from the product.
+    #[test]
+    fn the_product_and_the_command_stay_apart() {
+        let text =
+            "id = \"gd\"\nschema = 1\n[names]\nproduct = \"Globex Desk\"\n[cli]\nname = \"gd\"\n";
+        let t = TempBrand::new("apart", Some(text));
+        let out = render(&load(&t.file()).expect("loads"));
+        for line in [
+            "        \"Globex Desk\"\n",
+            "        \"gd\"\n",
+            "        concat!(\"gd\", \"-\", $part)\n",
+        ] {
+            assert!(out.contains(line), "{line:?} in:\n{out}");
+        }
+        let helper = out
+            .lines()
+            .find(|l| l.contains("concat!("))
+            .expect("the helper_name line");
+        assert!(!helper.contains("Globex"), "{helper}");
+    }
+
     #[test]
     fn strings_are_written_escaped_for_rust() {
         let t = TempBrand::new(

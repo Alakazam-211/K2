@@ -1,6 +1,8 @@
 //! What a call by one of the brand's aliases does before the command
 //! runs: the notice, or the tombstone. Both are built from the brand
-//! table's two names ([`crate::called_as::Names`]), never spelled here.
+//! table's two command names, the alias and the command
+//! ([`crate::called_as::Names`]), never spelled here. Both are words a
+//! person types, so neither uses the product's name.
 //!
 //! - An alias in mode `notice`: the command runs, after one line on
 //!   stderr ([`text`]): `note: <alias> is now <name> (the same command).

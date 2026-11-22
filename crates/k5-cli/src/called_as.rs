@@ -21,11 +21,12 @@
 //!    ([`CalledAs::Primary`]).
 //!
 //! On Windows the program is `<name>.exe`, and `argv[0]` holds what the
-//! person typed (`xy`, `xy.exe`, `XY`, `C:\bin\XY.EXE`). File names there
+//! person typed (`xy`, `xy.exe`, `Xy`, `C:\bin\XY.EXE`: the command in
+//! other cases, never the product's name). File names there
 //! ignore case and the shell finds `xy.exe` for `xy`, so on Windows the
 //! name is compared without case and a trailing `.exe` is dropped first;
 //! both `\` and `/` end a folder name. Elsewhere the comparison is byte for
-//! byte: `XY` and `xy.exe` are other programs.
+//! byte: `Xy` and `xy.exe` are other programs.
 //!
 //! An alias in mode `notice` or `tombstone` shows only when `argv[0]`
 //! names the alias, so its link must point at the command itself, not at

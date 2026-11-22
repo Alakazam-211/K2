@@ -240,7 +240,8 @@ struct RegisterBody {
     /// from `null` (V14).
     #[serde(deserialize_with = "double_option")]
     e2e: Option<Option<serde_json::Value>>,
-    /// 0.46.17: the phone's PushKit VoIP token (hex, `apns` only). A DM
+    /// 0.46.17: the phone's PushKit VoIP token (exactly 64-200 hex
+    /// characters, either case, as the relay checks it; `apns` only). A DM
     /// call's ring goes to it (CallKit); every other push stays on `token`.
     /// Every register states it: absent, `null` or `""` clears it, so an
     /// older build or the flag off never gets a VoIP push it can't report.
@@ -1488,8 +1489,9 @@ mod tests {
     /// device; every register states it again (absent, `null` or `""`
     /// clears it, so an older build or the flag off never keeps one); the
     /// reply and the owner's device list say `voip: true|false` and never
-    /// the token; a VoIP token on an `fcm` device, a non-hex one or a
-    /// non-string one is a usage error that changes nothing.
+    /// the token; a VoIP token on an `fcm` device, one that is not exactly
+    /// 64-200 hex characters (spaces and slashes included) or a non-string
+    /// one is a usage error that changes nothing.
     #[test]
     fn register_device_voip_token_is_stored_restated_and_never_echoed() {
         let _home = crate::test_support::TempHome::new();
@@ -1519,12 +1521,21 @@ mod tests {
         let mine = lv["devices"].as_array().expect("devices").iter().find(|d| d["deviceId"] == id.as_str()).expect("listed").clone();
         assert_eq!(mine["voip"], true, "{mine}");
 
-        // Refused: an fcm device, non-hex, too short, a non-string. Nothing changes.
+        // Refused: an fcm device, non-hex, outside the relay's 64-200, a
+        // trailing or leading space, only spaces, a slash, a non-string.
+        // Nothing changes.
+        let apns = |t: serde_json::Value| serde_json::json!({ "deviceId": id, "platform": "apns", "token": alert, "voipToken": t });
         for (body, why) in [
             (serde_json::json!({ "deviceId": id, "platform": "fcm", "token": alert, "voipToken": voip_hex() }), "fcm"),
-            (serde_json::json!({ "deviceId": id, "platform": "apns", "token": alert, "voipToken": "zz".repeat(32) }), "non-hex"),
-            (serde_json::json!({ "deviceId": id, "platform": "apns", "token": alert, "voipToken": "abc123" }), "too short"),
-            (serde_json::json!({ "deviceId": id, "platform": "apns", "token": alert, "voipToken": 42 }), "not a string"),
+            (apns(serde_json::json!("zz".repeat(32))), "non-hex"),
+            (apns(serde_json::json!("abc123")), "too short"),
+            (apns(serde_json::json!("a".repeat(63))), "63 characters"),
+            (apns(serde_json::json!("a".repeat(201))), "201 characters"),
+            (apns(serde_json::json!(format!("{} ", voip_hex()))), "a trailing space"),
+            (apns(serde_json::json!(format!(" {}", voip_hex()))), "a leading space"),
+            (apns(serde_json::json!("   ")), "only spaces"),
+            (apns(serde_json::json!(format!("{}/{}", "a".repeat(32), "a".repeat(32)))), "a slash"),
+            (apns(serde_json::json!(42)), "not a string"),
         ] {
             let resp = reg(body);
             assert_eq!(resp.status, "400 Bad Request", "{why}: {}", resp.body);
@@ -1533,6 +1544,17 @@ mod tests {
             let row = push_devices::get_device(&id).expect("get").expect("row");
             assert_eq!(row.voip_token.as_deref(), Some(vt.as_str()), "{why}: unchanged");
             assert_eq!(row.platform, "apns", "{why}: unchanged");
+        }
+
+        // Accepted: exactly 64 and exactly 200 hex characters, either case,
+        // stored as sent.
+        for (t, why) in [
+            ("A".repeat(32) + &"f".repeat(32), "64 characters, mixed case"),
+            ("0".repeat(100) + &"aBcDeF0123".repeat(10), "200 characters"),
+        ] {
+            let v = ok_json(reg(apns(serde_json::json!(t))));
+            assert_eq!(v["voip"], true, "{why}: {v}");
+            assert_eq!(push_devices::get_device(&id).expect("get").expect("row").voip_token.as_deref(), Some(t.as_str()), "{why}");
         }
 
         // Every register restates it: absent, null and "" each clear it.

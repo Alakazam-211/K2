@@ -361,8 +361,16 @@ fn only_apns_rows_hold_a_voip_token_and_other_writers_keep_it() {
     .expect_err("fcm with a VoIP token");
     assert!(err.contains("apns"), "{err}");
     assert!(crate::push_devices::get_device("voip-fcm").expect("get").is_none(), "nothing written");
-    let bads: Vec<String> =
-        vec!["".into(), " ".into(), "xyz".into(), "a".repeat(15), "a".repeat(513), format!(" {} ", voip_hex()), "g".repeat(64)];
+    let bads: Vec<String> = vec![
+        "".into(),
+        " ".into(),
+        "xyz".into(),
+        "a".repeat(63),
+        "a".repeat(201),
+        format!(" {} ", voip_hex()),
+        format!("{} ", voip_hex()),
+        "g".repeat(64),
+    ];
     for bad in bads {
         let r = crate::push_devices::upsert_device_voip(
             "voip-bad",
@@ -385,13 +393,53 @@ fn only_apns_rows_hold_a_voip_token_and_other_writers_keep_it() {
         .expect("clear");
     assert_eq!(cleared.voip_token, None);
     assert_eq!(crate::push_devices::validate_voip_token("apns", Some(&vt)), Ok(VoipChange::Set(vt.clone())));
-    assert_eq!(crate::push_devices::validate_voip_token("apns", Some("  ")), Ok(VoipChange::Clear));
+    assert_eq!(crate::push_devices::validate_voip_token("apns", Some("")), Ok(VoipChange::Clear));
+    assert_eq!(crate::push_devices::validate_voip_token("apns", None), Ok(VoipChange::Clear));
     assert_eq!(crate::push_devices::validate_voip_token("fcm", None), Ok(VoipChange::Clear));
+    assert_eq!(crate::push_devices::validate_voip_token("fcm", Some("")), Ok(VoipChange::Clear));
     assert!(crate::push_devices::validate_voip_token("fcm", Some(&vt)).is_err());
     // Never serialized: a stored row's JSON has no VoIP token.
     let p = phone("voip-json", &vt, None);
     let json = serde_json::to_string(&p).expect("json");
     assert!(!json.contains(&vt) && !json.contains("voipToken") && !json.contains("voip_token"), "{json}");
+}
+
+/// The relay's bounds: exactly 64-200 hex characters, either case. 63 and
+/// 201 are refused, and so is anything with a space (leading, trailing or
+/// only spaces), a slash or another non-hex character. Nothing is trimmed:
+/// a token is stored exactly as sent. Only `None` and `""` clear it.
+#[test]
+fn a_voip_token_is_64_to_200_hex_characters_exactly() {
+    use crate::push_devices::{validate_voip_token as v, VOIP_TOKEN_MAX, VOIP_TOKEN_MIN};
+    assert_eq!((VOIP_TOKEN_MIN, VOIP_TOKEN_MAX), (64, 200), "the relay's bounds");
+    let mixed64 = format!("{}{}", "aB3f".repeat(15), "0F9e");
+    assert_eq!(mixed64.len(), 64);
+    for ok in ["a".repeat(64), "F".repeat(64), "0".repeat(200), "c".repeat(137), mixed64, format!("{}{}", "AbCdEf".repeat(33), "12")] {
+        assert_eq!(v("apns", Some(&ok)), Ok(VoipChange::Set(ok.clone())), "{} chars accepted, stored as sent", ok.len());
+    }
+    let hex64 = "a".repeat(64);
+    let bads = [
+        "a".repeat(63),
+        "a".repeat(201),
+        "A".repeat(63),
+        "F".repeat(201),
+        format!("{hex64} "),
+        format!(" {hex64}"),
+        format!("{hex64}\n"),
+        format!("{}\t{}", "a".repeat(32), "a".repeat(32)),
+        format!("{}/{}", "a".repeat(32), "a".repeat(32)),
+        format!("{}-{}", "a".repeat(32), "a".repeat(32)),
+        format!("{}g", "a".repeat(64)),
+        format!("0x{}", "a".repeat(64)),
+        " ".into(),
+        "   ".into(),
+    ];
+    for bad in bads {
+        let e = v("apns", Some(&bad)).expect_err(&format!("{bad:?} ({} chars) is refused", bad.len()));
+        assert!(e.starts_with("usage:") && e.contains("64-200"), "{bad:?}: {e}");
+    }
+    assert_eq!(v("apns", None), Ok(VoipChange::Clear));
+    assert_eq!(v("apns", Some("")), Ok(VoipChange::Clear));
 }
 
 /// The relay's `results[].voip.dead` (Apple refused the VoIP token)

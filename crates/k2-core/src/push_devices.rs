@@ -62,23 +62,27 @@ pub struct PushDevice {
 pub enum VoipChange {
     /// Leave it (every caller but the phone's own register).
     Keep,
-    /// The phone sent none (absent, `null` or blank): clear it. An older
+    /// The phone sent none (absent, `null` or `""`): clear it. An older
     /// build, or the flag off, must never get a VoIP push it can't report.
     Clear,
     /// Store this token (checked by [`validate_voip_token`]).
     Set(String),
 }
 
-/// Shortest and longest VoIP token accepted (APNs tokens are hex; 64
-/// characters today, and Apple says the length may change).
-pub const VOIP_TOKEN_MIN: usize = 16;
-pub const VOIP_TOKEN_MAX: usize = 512;
+/// Shortest and longest VoIP token accepted: the push relay's own bounds
+/// (APNs tokens are hex; 64 characters today, and Apple says the length
+/// may change). A token the relay would refuse is refused here, at
+/// register, so no ring ever carries one.
+pub const VOIP_TOKEN_MIN: usize = 64;
+pub const VOIP_TOKEN_MAX: usize = 200;
 
-/// The register route's `voipToken` as a [`VoipChange`]: `None` or a blank
-/// string clears it; anything else must be an APNs token (hex, within
-/// [`VOIP_TOKEN_MIN`]..=[`VOIP_TOKEN_MAX`]) on an `apns` device.
+/// The register route's `voipToken` as a [`VoipChange`]: `None` or `""`
+/// clears it; anything else must be an APNs token on an `apns` device:
+/// exactly [`VOIP_TOKEN_MIN`]..=[`VOIP_TOKEN_MAX`] hex characters, either
+/// case, as the relay checks it. Nothing is trimmed: a space, a slash or
+/// any other character is a usage error that changes nothing.
 pub fn validate_voip_token(platform: &str, voip_token: Option<&str>) -> Result<VoipChange, String> {
-    let Some(t) = voip_token.map(str::trim).filter(|t| !t.is_empty()) else {
+    let Some(t) = voip_token.filter(|t| !t.is_empty()) else {
         return Ok(VoipChange::Clear);
     };
     if platform != "apns" {

@@ -906,7 +906,13 @@ fn hostchat_value_flag_with_no_value_is_the_d6_line() {
             assert_eq!(b.code, Some(2), "{name}: bash's exit: {b:?}");
             assert_eq!(b.stderr, format!("Error: {flag} takes a value\n"), "{name}");
         } else {
-            assert_eq!(b.code, Some(1), "{name}: bash's exit: {b:?}");
+            // macOS's /bin/bash 3.2 ends 0 there: under set -e with an EXIT
+            // trap set (cli/k2's _permission_note_flush), a failed
+            // `${2:?…}` exits with the trap's status. For K2 to rule on
+            // (`bash32-expansion-exit`); the row fails, saying the mark
+            // goes, once the shell exits 1 there too.
+            let want = if bash_version() < (4, 0) { 0 } else { 1 };
+            assert_eq!(b.code, Some(want), "{name}: bash's exit: {b:?}");
             assert_eq!(b.stderr.lines().count(), 1, "{name}: bash's stderr: {b:?}");
             assert!(
                 b.stderr.ends_with(&format!(": 2: {hint}\n")),

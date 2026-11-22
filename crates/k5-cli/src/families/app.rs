@@ -125,6 +125,7 @@ pub mod py;
 pub mod reads;
 pub mod recording;
 pub mod resources;
+pub mod rooms_ok;
 pub mod runtime;
 pub mod shell;
 pub mod sign_in;
@@ -835,6 +836,16 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         // requests, so with `--assign` that line is the shell's.
         Some("user" | "users") if !assign.is_empty() && kept.get(1) == Some(&"chat") => {
             return None
+        }
+        // `user rooms-ok` POSTs to `/cli/app/…` through `_compute_send`,
+        // which adds `?assign=`: `cmd_skin` reads its words, with what the
+        // pre-scan took ([`rooms_ok`]).
+        Some("user" | "users") if kept.get(1) == Some(&"rooms-ok") => {
+            let taken = super::skin::Taken {
+                assign,
+                args_json: call::args_json(&all),
+            };
+            return super::skin::run_app_taken(args, taken);
         }
         Some(v) if SKIN_VERBS.contains(&v) => return super::skin::run_app(args),
         _ => {}

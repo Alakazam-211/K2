@@ -165,6 +165,9 @@ pub enum Ask {
     /// `grant copy-host <app> [--dry-run] [--json]`: `_app_rt_post`, the
     /// App family's code (`app grant copy-host` is the same arm).
     CopyHost(super::app::guests::Ask),
+    /// `user rooms-ok <app> <login> …`: `_app_test_guest_rooms_ok`, the
+    /// App family's code ([`super::app::rooms_ok`]).
+    RoomsOk(super::app::rooms_ok::RoomsOk),
     /// The shell answers it.
     Shell,
 }
@@ -350,6 +353,11 @@ fn user(words: &[&str]) -> Result<Ask, Stop> {
         return Ok(Ask::Shell);
     }
     match action {
+        "rooms-ok" => match super::app::rooms_ok::parse(rest) {
+            Some(Ok(r)) => Ok(Ask::RoomsOk(r)),
+            Some(Err(stop)) => Err(Stop::err(&[stop.line.as_str()], stop.exit)),
+            None => Ok(Ask::Shell),
+        },
         "add" => user_add(rest),
         "show" => user_show(rest),
         "image" => user_image(rest),
@@ -1687,7 +1695,18 @@ fn hydra(rest: &[&str]) -> Result<Ask, Stop> {
 /// `k5 skin ...`: `args` is the whole command line after `argv[0]`.
 /// `None`: the shell CLI answers it (see the module's notes).
 pub fn run(args: &[OsString]) -> Option<Exit> {
-    run_as(args, true)
+    run_as(args, true, Taken::default())
+}
+
+/// What `cmd_app`'s pre-scan (`_app_take_assign`) took before `cmd_skin`
+/// reads the words: the `--assign` logins (`_K2_ASSIGN`), and whether
+/// `--json` was among every word typed (`_K2_ARGS_JSON`, an `--assign`
+/// value too). Only `user rooms-ok` sends a request that reads them
+/// (`_compute_send`); from `skin` there is no pre-scan.
+#[derive(Debug, Default)]
+pub struct Taken {
+    pub assign: String,
+    pub args_json: bool,
 }
 
 /// The `grant` words `cmd_app` hands to `cmd_skin` (`grant|grants)` in
@@ -1723,10 +1742,16 @@ pub fn run_app(args: &[OsString]) -> Option<Exit> {
             return None;
         }
     }
-    run_as(args, false)
+    run_as(args, false, Taken::default())
 }
 
-fn run_as(args: &[OsString], teach: bool) -> Option<Exit> {
+/// `k5 app user rooms-ok ...`: [`run_app`], with what `cmd_app`'s
+/// pre-scan took out of the words.
+pub fn run_app_taken(args: &[OsString], taken: Taken) -> Option<Exit> {
+    run_as(args, false, taken)
+}
+
+fn run_as(args: &[OsString], teach: bool, taken: Taken) -> Option<Exit> {
     let hook_sock = super::hook_sock();
     if hook_sock.is_some() && prelude::codex_env(std::env::vars_os().map(|(name, _)| name)) {
         return None;
@@ -1786,6 +1811,7 @@ fn run_as(args: &[OsString], teach: bool) -> Option<Exit> {
         settings,
         teach,
         cards,
+        taken,
     ))
 }
 
@@ -1796,6 +1822,7 @@ fn run_with(
     mut settings: Settings,
     teach: bool,
     cards: Option<crate::cards::Ask>,
+    taken: Taken,
 ) -> Exit {
     if let Some(gate) = prelude::gate(&settings) {
         return gate.stop();
@@ -1879,6 +1906,12 @@ fn run_with(
         Ask::CopyHost(g) => {
             let ctx = app_ctx(client, args, &settings, teach);
             return app_run(ctx, closing, |ctx| super::app::guests::run(ctx, &g));
+        }
+        Ask::RoomsOk(r) => {
+            let mut ctx = app_ctx(client, args, &settings, teach);
+            ctx.assign = taken.assign;
+            ctx.args_json |= taken.args_json;
+            return app_run(ctx, closing, |ctx| super::app::rooms_ok::run(ctx, &r));
         }
         Ask::Shell => unreachable!("handed to the shell before the run"),
     };

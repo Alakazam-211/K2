@@ -481,7 +481,7 @@ pub fn drop_drill(ctx: &Ctx, m: PgMajor, name: &ClusterName) -> HResult<J> {
         }
         None => false,
     };
-    if crate::apps::unput(ctx, &named::slice_dropin(m.get(), n).rsplit_once('/').expect("dir").0.to_string(), None, "k2-slice.conf")? {
+    if crate::apps::unput(ctx, &named::slice_dropin(m.get(), n).rsplit_once('/').expect("dir").0, None, "k2-slice.conf")? {
         ctx.run_ok(SYSTEMCTL, &["daemon-reload"], None)?;
     }
     st.clusters.retain(|c| !(c.major == m.get() && c.name == n));

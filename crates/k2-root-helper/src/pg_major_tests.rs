@@ -73,8 +73,11 @@ struct World {
     /// Point-in-time restore tests: programs as postgres the match below
     /// doesn't know (`pg_basebackup`, `tar`, a file-writing `dd`), answered
     /// first when the hook says so.
-    extra: Option<Rc<dyn Fn(&str, &[String], Option<&[u8]>) -> Option<ExecOut>>>,
+    extra: Option<ExtraTool>,
 }
+
+/// A restore test's extra postgres-side program: `(prog, args, stdin)`.
+type ExtraTool = Rc<dyn Fn(&str, &[String], Option<&[u8]>) -> Option<ExecOut>>;
 
 type W = Rc<RefCell<World>>;
 

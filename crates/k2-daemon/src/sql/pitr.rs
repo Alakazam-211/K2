@@ -474,7 +474,7 @@ pub fn tick(ops: &dyn SystemOps) -> Vec<String> {
         .filter(|c| c.is_named() && c.holds_k2_databases() && c.origin == "created" && c.wal_archive && c.state != "down")
         .filter(|c| {
             let r = recorded(c);
-            let last = r["lastBasebackupAt"].as_str().and_then(|t| UtcTime::parse(t)).map(UtcTime::epoch);
+            let last = r["lastBasebackupAt"].as_str().and_then(UtcTime::parse).map(UtcTime::epoch);
             last.is_none_or(|t| now() - t >= BASEBACKUP_EVERY_SECS)
         })
         .collect();

@@ -90,6 +90,9 @@ export type SettingsSection =
   /** Settings → Notifications (0.45.5, prd-thread-push-notifications-v1 §9):
    *  your phone pushes, workspace defaults, people. Needs `thread-push-v1`. */
   | 'notifications'
+  /** Settings → Getting started (plan-getting-started-settings-v1): start
+   *  the setup list again, and Kessel on a server already in use. */
+  | 'getting-started'
   /** Settings → Gardens → Gardens (this computer's Zen Gardens: list, lock,
    *  sync, theme, folder; desktop only, like the Zen toggle). The Gardens
    *  group's first page, so `openSettings('zen-gardens')` lands here (0.45.7). */

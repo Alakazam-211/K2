@@ -145,6 +145,7 @@ export function sectionLabel(section: SettingsSection, opts: { gardensPage?: boo
 export const SECTION_LABELS: Record<SettingsSection, string> = {
   general: 'General',
   notifications: 'Notifications',
+  'getting-started': 'Getting started',
   'token-usage': 'Usage',
   styles: 'Themes',
   projects: 'Workspaces / Agents',

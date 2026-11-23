@@ -5,6 +5,7 @@ import { SectionErrorBoundary } from './SectionErrorBoundary'
 import { SettingsSearchModal } from './SettingsSearchModal'
 import { searchPickPage, type SettingEntry } from './searchManifest'
 import { GeneralSection, GENERAL_MANIFEST } from './sections/GeneralSection'
+import { GettingStartedSection, GETTING_STARTED_MANIFEST } from './sections/GettingStartedSection'
 import { WORKSPACE_SETTINGS_MANIFEST } from './sections/WorkspaceSettingsPage'
 import { TokenUsageSection, TOKEN_USAGE_MANIFEST } from './sections/TokenUsageSection'
 import { LlmTokensSection, LLM_TOKENS_MANIFEST } from './sections/LlmTokensSection'
@@ -217,6 +218,9 @@ export function settingsNav({
     ...(notifications
       ? ([{ kind: 'item', id: 'notifications' as const, label: 'Notifications' }] satisfies NavBlock[])
       : []),
+    // plan-getting-started-settings-v1: start setup again, and Kessel, on a
+    // server already in use. Every person sees it.
+    { kind: 'item', id: 'getting-started', label: 'Getting started' },
     { kind: 'item', id: 'styles', label: 'Themes' },
     { kind: 'item', id: 'projects', label: 'Workspaces / Agents' },
     { kind: 'item', id: 'project-groups', label: 'Projects' },
@@ -367,6 +371,7 @@ export default function Settings(): React.JSX.Element {
   const allEntries = useMemo<SettingEntry[]>(
     () => [
       ...GENERAL_MANIFEST,
+      ...GETTING_STARTED_MANIFEST,
       ...TOKEN_USAGE_MANIFEST,
       ...STYLES_MANIFEST,
       ...WORKSPACE_SETTINGS_MANIFEST,
@@ -787,6 +792,11 @@ export default function Settings(): React.JSX.Element {
         {activeSection === 'project-groups' && (
           <SectionErrorBoundary>
             <ProjectGroupSettings />
+          </SectionErrorBoundary>
+        )}
+        {activeSection === 'getting-started' && (
+          <SectionErrorBoundary>
+            <GettingStartedSection />
           </SectionErrorBoundary>
         )}
         {activeSection === 'tickets' && (

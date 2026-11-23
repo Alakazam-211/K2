@@ -32,6 +32,9 @@ export const FIRST_RUN_SKIP_PATH = 'first-run/skip'
 export const FIRST_RUN_OFFER_DISMISS_PATH = 'first-run/offer/dismiss'
 export const FIRST_RUN_KESSEL_PATH = 'first-run/kessel'
 export const FIRST_RUN_COS_START_PATH = 'first-run/chief-of-staff/start'
+/** Settings → Getting started (plan-getting-started-settings-v1). */
+export const FIRST_RUN_RESTART_PATH = 'first-run/restart'
+export const FIRST_RUN_KESSEL_WELCOME_PATH = 'first-run/kessel/welcome'
 
 /** Row ids this client knows, in the contract's order. `chief_of_staff`
  *  takes `first_agent`'s place while the server's Kessel switch is on; the
@@ -76,6 +79,18 @@ export interface KesselSeat {
   path: string
 }
 
+/** `kesselSeat`: the server's Kessel whatever its switch says (Settings →
+ *  Getting started). Null from an older daemon. */
+export interface KesselSeatInfo {
+  exists: boolean
+  workspaceId: string | null
+  name: string | null
+}
+
+/** What `first-run/restart` did: the list started again, or (a Member while
+ *  the list is off) the owner was asked on a ticket, now or before. */
+export type RestartOutcome = { kind: 'restarted' } | { kind: 'asked'; already: boolean }
+
 /** What the Kessel sheet starts from: name, handle and folder, all editable. */
 export interface KesselDefaults {
   name: string
@@ -105,6 +120,11 @@ export interface FirstRunDoc {
   kessel: KesselSeat | null
   /** Present while the server's Kessel switch is on. */
   kesselDefaults: KesselDefaults | null
+  /** The owner's Kessel switch, sent either way (Settings → Getting
+   *  started); false from an older daemon. */
+  kesselFirstRun?: boolean
+  /** The server's Kessel, sent either way; null from an older daemon. */
+  kesselSeat?: KesselSeatInfo | null
 }
 
 export interface FirstRunEntry {
@@ -126,6 +146,14 @@ function parseKesselSeat(raw: unknown): KesselSeat | null {
   const workspaceId = str(o.workspaceId)
   if (!workspaceId) return null
   return { workspaceId, name: str(o.name) ?? 'Kessel', path: str(o.path) ?? '' }
+}
+
+function parseKesselSeatInfo(raw: unknown): KesselSeatInfo | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const o = raw as Record<string, unknown>
+  if (typeof o.exists !== 'boolean') return null
+  const workspaceId = str(o.workspaceId)
+  return { exists: o.exists && workspaceId !== null, workspaceId, name: str(o.name) }
 }
 
 function parseKesselDefaults(raw: unknown): KesselDefaults | null {
@@ -172,6 +200,8 @@ export function parseFirstRunDoc(raw: unknown): FirstRunDoc {
     offer: o.offer === 'meet_kessel' ? 'meet_kessel' : null,
     kessel: parseKesselSeat(o.kessel),
     kesselDefaults: parseKesselDefaults(o.kesselDefaults),
+    kesselFirstRun: o.kesselFirstRun === true,
+    kesselSeat: parseKesselSeatInfo(o.kesselSeat),
   }
 }
 
@@ -293,6 +323,14 @@ interface FirstRunStore {
    *  and wake Kessel (`POST first-run/chief-of-staff/start`). Resolves to Kessel's
    *  workspace id; throws the daemon's refusal. */
   startChiefOfStaff: (scope?: ServerScope) => Promise<string>
+  /** Settings → Getting started's "Start setup again" (`POST
+   *  first-run/restart`, `kessel: true` to turn Kessel on too). A Member
+   *  while the list is off asks the owner instead (`asked`); any other
+   *  refusal is thrown. The status is kept from the answer or read again. */
+  restart: (opts?: { kessel?: boolean }, scope?: ServerScope) => Promise<RestartOutcome>
+  /** "Start Kessel's welcome again" (`POST first-run/kessel/welcome`);
+   *  throws the daemon's refusal. */
+  kesselWelcome: (scope?: ServerScope) => Promise<void>
 }
 
 export interface CreateKesselRequest {
@@ -319,6 +357,16 @@ async function mutate(scope: ServerScope, route: string, body: Record<string, un
       entries: { ...s.entries, [key]: { doc: s.entries[key]?.doc ?? null, error: errorText(e) } },
     }))
   }
+}
+
+/** A Member's "Start setup again" while the list is off: the daemon's 403
+ *  `role_required` carrying `asked` (the owner was asked on a ticket). */
+function askedOf(e: unknown): RestartOutcome | null {
+  const err = e as { code?: unknown; body?: unknown } | null
+  if (!err || err.code !== 'role_required' || !err.body || typeof err.body !== 'object') return null
+  const asked = (err.body as Record<string, unknown>).asked
+  if (!asked || typeof asked !== 'object') return null
+  return { kind: 'asked', already: (asked as Record<string, unknown>).already === true }
 }
 
 export const useFirstRunStore = create<FirstRunStore>((set, get) => ({
@@ -370,6 +418,22 @@ export const useFirstRunStore = create<FirstRunStore>((set, get) => ({
     const seat = parseKesselSeat(out)
     if (!seat) throw new Error("The server didn't say where Kessel is.")
     return seat
+  },
+  restart: async (opts = {}, scope = primaryScope()) => {
+    const key = scope.id
+    const epoch = epochOf(key)
+    try {
+      const doc = parseFirstRunDoc(await daemonCliPost<unknown>(scope, FIRST_RUN_RESTART_PATH, opts.kessel ? { kessel: true } : {}))
+      if (epoch === epochOf(key)) set((s) => ({ entries: { ...s.entries, [key]: { doc, error: null } } }))
+      return { kind: 'restarted' }
+    } catch (e) {
+      const asked = askedOf(e)
+      if (asked) return asked
+      throw e
+    }
+  },
+  kesselWelcome: async (scope = primaryScope()) => {
+    await daemonCliPost<unknown>(scope, FIRST_RUN_KESSEL_WELCOME_PATH, {})
   },
   startChiefOfStaff: async (scope = primaryScope()) => {
     const out = await daemonCliPost<unknown>(scope, FIRST_RUN_COS_START_PATH, {})

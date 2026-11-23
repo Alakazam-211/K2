@@ -34576,7 +34576,8 @@ if rec is not None:
         moved = str(rec.get("next") or "placed again")
     else:
         fa = {"reason": rec.get("reason"), "state": rec.get("state")}
-open(os.environ["K2_CP_STATE"] + ".mv", "w").write(moved.replace("\n", " ") + "\n")
+# No NUL in the words: the read of bash 3.2 stops at one, newer bash drops it.
+open(os.environ["K2_CP_STATE"] + ".mv", "w").write(moved.replace("\0", "").replace("\n", " ") + "\n")
 open(os.environ["K2_CP_STATE"], "w").write("|".join([
     s(v.get("cursor", 0)), "1" if v.get("end") else "0", s(j.get("state")), s(j.get("exitCode")),
     s(j.get("signal")), s(j.get("reason")), s(j.get("short")), s(j.get("node")),

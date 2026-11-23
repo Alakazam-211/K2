@@ -12,8 +12,8 @@
 #
 # And what the follower says when the generation it followed ended without
 # ending the job: a move (the attempt number stays, no retry used) prints
-# `moved: …`, never "infrastructure failure"; a retry names the end its
-# attempt record has.
+# `moved: …`, never "infrastructure failure" (a NUL in its words is
+# dropped, on bash 3.2 too); a retry names the end its attempt record has.
 #
 # A stub daemon on loopback answers with crafted values: a subscript with
 # a command in it, and a name (ARITH_PROBE) of a variable this test puts in
@@ -223,6 +223,11 @@ moved_logs '{"attempt": 1, "generation": 1, "current": false, "state": "assigned
 run_k2 "a move, older daemon" compute wait job00001 --follow
 expect_has "a move, older daemon: says it moved" "$ERR" "[k2 compute] moved: taken back from node-b-vin's queue before it started"
 expect_lacks "a move, older daemon: never an infrastructure failure" "$ERR" "infrastructure failure"
+# Words with a NUL: dropped on every bash (the read of bash 3.2 stopped at
+# it, "node-b gave it").
+moved_logs '{"attempt": 1, "generation": 1, "current": false, "state": "assigned", "reason": "withdrawn", "moved": "node-b gave it\u0000 back"}'
+run_k2 "a move, words with a NUL" compute wait job00001 --follow
+expect_has "a move, words with a NUL: the whole words, the NUL dropped" "$ERR" "[k2 compute] moved: node-b gave it back; now on node-c-vin (not a failure, no retry used)"
 # A real retry with its record: the record's own end, not "?".
 pyjson 'import json
 retried = {"chunks": [], "end": True, "cursor": 1, "generation": 1,

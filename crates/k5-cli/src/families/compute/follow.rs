@@ -482,8 +482,8 @@ pub fn poll_reader(body: &[u8], raw: bool, lost: bool, to_err: bool) -> Result<S
                 ]);
             }
         }
-        // `IFS= read -r moved` of `moved.replace("\n", " ")`: no newline
-        // is left; NULs dropped.
+        // `IFS= read -r moved` of `moved.replace("\0", "").replace("\n",
+        // " ")`: no NUL and no newline is left.
         let moved: String = moved
             .replace('\n', " ")
             .chars()
@@ -582,7 +582,7 @@ mod tests {
         assert_eq!(line!("fa = ("), 25);
         assert_eq!(line!("rec = next("), 29);
         assert_eq!(line!("fa = {\"reason\""), 38);
-        assert_eq!(line!("err = {"), 50);
+        assert_eq!(line!("err = {"), 51);
     }
 
     #[test]

@@ -460,18 +460,13 @@ fn compute_follow_a_move() {
             r#"{"attempt":1,"generation":1,"current":false,"reason":"withdraw_unanswered","moved":"node-a didn't answer a request to give it back within 3 min; K2 took it back"}"#,
             "1",
         ),
-        // macOS's bash 3.2 reads the words up to the NUL (`read -r`):
-        // bash32-read-nul, for K2 to rule on.
-        Case {
-            compare: Compare::Bash32ReadNul {
-                dropped: "three \\n $HOME `x`",
-            },
-            ..follow(
-                "a move, words with a newline, a NUL, a backslash and a dollar",
-                r#"{"attempt":1,"generation":1,"moved":"one\ntwo\u0000three \\n $HOME `x`"}"#,
-                "1",
-            )
-        },
+        // The shell's Python drops the NUL before bash reads the words, so
+        // bash 3.2 prints them whole too.
+        follow(
+            "a move, words with a newline, a NUL, a backslash and a dollar",
+            r#"{"attempt":1,"generation":1,"moved":"one\ntwo\u0000three \\n $HOME `x`"}"#,
+            "1",
+        ),
         follow(
             "a move, words that aren't a string",
             r#"{"attempt":1,"generation":1.0,"moved":{"to":"node-b","n":[1,2.5,null,true]}}"#,

@@ -340,8 +340,7 @@ pub(crate) const MERGE_NEEDS_PERSON: &str = "merge_needs_person";
 /// the `git.commit` card teaches it.
 pub(crate) const COMMIT_NEEDS_PERSON: &str = "commit_needs_person";
 
-/// The steps a person makes for the agent (K2's ruling on D1, and the
-/// Steward's review of it):
+/// The steps a person makes for the agent:
 /// - a plain `k2 commit`: the desktop starts the person's default agent
 ///   preset with the message the agent chose as its prompt, a path around
 ///   the hire switch and the passport's scope (`403 commit_needs_person`);

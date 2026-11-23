@@ -188,7 +188,7 @@
 #       at <commit> (default HEAD): no lock, no signing, no version, nothing
 #       published. For trying the gates without a release.
 #   ./scripts/release.sh --dry-run <version> [notes-file]   (or K2_RELEASE_DRY=1)
-#       a rehearsal of the whole release on z3mbpZ, while the release is
+#       a rehearsal of the whole release on the build Mac, while the release is
 #       still being put together: the lock, every gate, the bump, the builds,
 #       Developer ID signing, notarization, the VM smoke, the compute Linux
 #       builds, Windows and both manifests run for real, in a scratch

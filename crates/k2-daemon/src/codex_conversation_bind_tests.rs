@@ -336,7 +336,7 @@ async fn a_socket_caller_outside_the_tab_is_refused() {
     assert_ok(tool_call(&t.a, Some("conv-A"), None), "the same call from inside the tab");
 }
 
-/// The Steward's case: a tab started before the fix ran a shared Codex
+/// The reviewer's case: a tab started before the fix ran a shared Codex
 /// app-server, so another conversation's tool call carries the starter's
 /// passport and socket, with its own thread id.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

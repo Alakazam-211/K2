@@ -5,7 +5,7 @@
 #   ./scripts/release.sh --dry-run <version> [notes-file]
 #   K2_RELEASE_DRY=1 ./scripts/release.sh <version> [notes-file]
 #
-# The whole release path runs for real on z3mbpZ, while the release is still
+# The whole release path runs for real on the build Mac, while the release is still
 # being put together and beside its last tests, so the real run only repeats
 # a known-good one. What runs and what doesn't:
 #

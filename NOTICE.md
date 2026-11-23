@@ -764,13 +764,13 @@ DEALINGS IN THE FONT SOFTWARE.
 
 ## Third-party: the .pptx renderer's fonts (SIL Open Font License 1.1)
 
-`k2-deckrender` draws slides with these fonts only (never the system's), compiled into the
-binary from `crates/k2-deckrender/fonts/` (Liberation Sans: through the vendored deckcraft-fonts,
-`vendor/deckcraft/crates/fonts/liberation-fonts-ttf-2.1.5/`). Every file is upstream's, byte for
-byte: no subsetting, no WOFF2, no renaming, no table edits. `crates/k2-deckrender/fonts/manifest.tsv`
-lists each file with its sha256, and `tests/fonts.rs` checks every file against it. Approved by the
-Kessel Steward (2026-11-11); any other font goes to the Steward first. The OFL text is above (Liberation
-Sans) and beside each family as shipped (`OFL.txt`, Liberation's `LICENSE`).
+`k2-deckrender` draws slides with these fonts only (never the system's), compiled into the binary from
+`crates/k2-deckrender/fonts/` (Liberation Sans: through the vendored deckcraft-fonts,
+`vendor/deckcraft/crates/fonts/liberation-fonts-ttf-2.1.5/`). Every file is upstream's, byte for byte:
+no subsetting, no WOFF2, no renaming, no table edits. `crates/k2-deckrender/fonts/manifest.tsv` lists
+each file with its sha256, and `tests/fonts.rs` checks every file against it. Any other font is reviewed
+for its licence before it ships. The OFL text is above (Liberation Sans) and beside each family as
+shipped (`OFL.txt`, Liberation's `LICENSE`).
 
 | Family | Copyright and Reserved Font Names | Licence files beside the fonts |
 |---|---|---|

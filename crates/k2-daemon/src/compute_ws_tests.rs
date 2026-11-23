@@ -198,7 +198,7 @@ fn a_cancel_requested_job_the_node_refuses_ends_cancelled() {
 }
 
 /// G1 (plan-ci-release-on-k2-compute-v1): the release nodes reach
-/// z3mbpZ only through the relay and the Linux AppImage is 105 MB.
+/// the build Mac only through the relay and the Linux AppImage is 105 MB.
 /// The relay keeps its 100 MB default; `over_relay` lifts it to the
 /// node's own 500 MB collection cap, never past it. LAN, loopback and
 /// unknown routes were never relay-capped.

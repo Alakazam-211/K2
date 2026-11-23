@@ -5096,7 +5096,7 @@ MANAGE
 
 WHAT HAPPENS
   At its time the agent gets one line in its session:
-    [reminder:call-jane · set by Rosson 10-26 09:12] Call Jane back.
+    [reminder:call-jane · set by Sam 10-26 09:12] Call Jane back.
   A reminder a person set also posts "Reminder fired: …" to the Thread. An
   agent's own reminder stays in its session.
 
@@ -68379,7 +68379,7 @@ REMINDERS FIRE ONCE
   k2 heartbeat remind --help has every flag. k2 remind is the short form.
   k2 reminders lists them. Snooze with k2 remind snooze <n> 10m.
   The text is delivered as one line:
-    [reminder:call-jane · set by Rosson 10-26 09:12] Call Jane back.
+    [reminder:call-jane · set by Sam 10-26 09:12] Call Jane back.
   It fires up to 24 hours late with a late stamp; later than that it
   finishes as missed and tells the owner on the Thread.
   Times are in --tz, then the owner's timezone (Settings → General), then

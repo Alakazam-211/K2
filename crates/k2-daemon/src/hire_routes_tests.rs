@@ -1107,7 +1107,7 @@ fn owners_workspace(tag: &str) -> String {
     path
 }
 
-/// Steward ruling: a hire made with a passport only ever creates. An
+/// A hire made with a passport only ever creates. An
 /// existing workspace, by its path or any other spelling of it, is refused
 /// with 403 and nothing about it changes (name, tool, model, context,
 /// files). The template door too, dry run included.

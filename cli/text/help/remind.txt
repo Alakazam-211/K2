@@ -39,7 +39,7 @@ MANAGE
 
 WHAT HAPPENS
   At its time the agent gets one line in its session:
-    [reminder:call-jane · set by Rosson 10-26 09:12] Call Jane back.
+    [reminder:call-jane · set by Sam 10-26 09:12] Call Jane back.
   A reminder a person set also posts "Reminder fired: …" to the Thread. An
   agent's own reminder stays in its session.
 

@@ -79,7 +79,7 @@ pub fn who_set(created_by: &str) -> String {
 }
 
 /// The line the agent receives:
-/// `[reminder:call-jane · set by Rosson Long 10-26 09:12] Call Jane back.`,
+/// `[reminder:call-jane · set by Sam 10-26 09:12] Call Jane back.`,
 /// with `· late by 3h 10m` when it fires late.
 pub fn fire_prompt(hb: &AgentHeartbeat, now: DateTime<Utc>) -> String {
     let fire_at = hb.fire_at.as_deref().and_then(|s| DateTime::parse_from_rfc3339(s).ok()).map(|t| t.with_timezone(&Utc));

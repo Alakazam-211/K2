@@ -111,6 +111,8 @@ print("not checked: " + v["notChecked"])'
 #                       self-statements as statements/<sha256>.json, the
 #                       owners as owners.json and each one's newest roster as
 #                       rosters/<roster key fp>.json; prints how many.
+# A raise is one plain line, never a traceback: _CI_PY_PLAIN (ci.sh) goes
+# first.
 # Each file is made fresh: the folders under <dir> are opened one at a
 # time and no link is followed, a plain file already there is removed, and
 # the new one is created with O_CREAT|O_EXCL|O_NOFOLLOW.
@@ -261,12 +263,12 @@ elif mode == "trust":
 # <evidence|provenance> <dir>`. Exits 3 with code: hint on the first one
 # refused.
 _compute_out_check() {
-    python3 -c "$_CI_OUT_PY" check "$1" "$2"
+    python3 -c "$_CI_PY_PLAIN$_CI_OUT_PY" check "$1" "$2"
 }
 
 # `_compute_write_trust <dir>`: <dir>/trust/ (see _CI_OUT_PY).
 _compute_write_trust() {
-    python3 -c "$_CI_OUT_PY" trust "$1"
+    python3 -c "$_CI_PY_PLAIN$_CI_OUT_PY" trust "$1"
 }
 
 _study_page_provenance() {
@@ -278,5 +280,5 @@ PAGE
 # `_compute_write_statements <dir>`: <dir>/provenance/<label>.intoto.jsonl
 # (see _CI_OUT_PY).
 _compute_write_statements() {
-    python3 -c "$_CI_OUT_PY" statements "$1"
+    python3 -c "$_CI_PY_PLAIN$_CI_OUT_PY" statements "$1"
 }

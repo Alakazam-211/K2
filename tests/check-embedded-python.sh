@@ -752,6 +752,33 @@ def blocks(text, base_line=1, depth=0):
     lx.parse_list(0, None)
     runners, alias = runner_functions(lx)
     var_uses = []  # (name, line) for `python3 -c "$NAME"`
+    # NAME='...' programs a block may start with: `python3 -c
+    # "$NAME"'more code'` (or "$A$B") runs NAME's text and then the rest,
+    # so the block is checked with that text in place, as Python gets it.
+    programs = {}
+    for cmd in lx.cmds:
+        for w in cmd.words:
+            lit = w.literal()
+            m = ASSIGN_RE.match(lit or "")
+            if m and lx.t[w.pos + m.end():w.pos + m.end() + 1] == "'":
+                programs[m.group(0)[:-1]] = lit[m.end():]
+
+    def lead(word):
+        """The word's leading "$NAME" parts that are such programs, and
+        how many there are."""
+        head, n = "", 0
+        for k, s in word.parts:
+            m = VAR_RE.fullmatch(s) if k == "exp" else None
+            if not m or m.group(1) not in programs:
+                break
+            head += programs[m.group(1)]
+            n += 1
+        return head, n
+
+    def resolved(word):
+        """The word's text, its leading programs written out."""
+        head, n = lead(word)
+        return head + "".join(PH if k == "exp" else s for k, s in word.parts[n:])
 
     def own_program(cmd, name):
         """True when python3 -c "$name" runs the argument that makes the
@@ -788,7 +815,9 @@ def blocks(text, base_line=1, depth=0):
                     kind, code, used = got
                     line = lx.line(code.pos)
                     if not code.expansion_only():
-                        yield kind, code.value(), line, None
+                        yield kind, resolved(code), line, None
+                    elif lead(code)[1] > 1 and lead(code)[1] == len(code.parts):
+                        yield kind, resolved(code), line, None
                     elif code_var(code) and own_program(cmd, code_var(code)):
                         pass
                     elif code_var(code):

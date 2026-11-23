@@ -19,6 +19,22 @@ _ci_exit_for() {
     esac
 }
 
+# The first lines of every ci Python that reads a daemon answer: one that
+# raises prints one plain line on stderr and exits 1, never a traceback.
+# An OS error (a file it could not write) is `io_error: <the system's
+# words>`; anything else is an answer this CLI can't read, `bad_response:
+# …` (a daemon of another version, or a 200 that isn't the route's answer).
+_CI_PY_PLAIN='import sys
+def _ci_plain(t, e, tb):
+    if issubclass(t, KeyboardInterrupt):
+        return
+    if issubclass(t, OSError):
+        sys.stderr.write("io_error: %s\n" % e)
+    else:
+        sys.stderr.write("bad_response: k2 ci can\x27t read the daemon\x27s answer (a daemon on another K2 version?)\n")
+sys.excepthook = _ci_plain
+'
+
 # _ci_call GET|POST <route> [query|json] → _CI_BODY; a refusal prints
 # `code: hint` (and the permission line when cards are on) and exits.
 _ci_call() {
@@ -55,7 +71,7 @@ except Exception:
 
 # Render a /cli/ci/* answer: $1 = status|run|watch|init|freeze.
 _ci_render() {
-    printf '%s' "$_CI_BODY" | K2_CI_VERB="$1" python3 -c '
+    printf '%s' "$_CI_BODY" | K2_CI_VERB="$1" python3 -c "$_CI_PY_PLAIN"'
 import json, os, sys, time
 v = json.load(sys.stdin)
 verb = os.environ["K2_CI_VERB"]
@@ -205,7 +221,7 @@ cmd_ci_signer() {
     case "$sub" in
         list|ls)
             _compute_call GET /cli/ci/signers ""
-            printf '%s' "$_CP_BODY" | python3 -c '
+            printf '%s' "$_CP_BODY" | python3 -c "$_CI_PY_PLAIN"'
 import json, sys
 v = json.load(sys.stdin)
 print("this server (controller): %s" % v.get("controllerFp"))
@@ -253,11 +269,12 @@ if not v["signers"]:
                 echo "note: <CODE.FP> is visible to every account on this computer while the command runs; use --code-stdin" >&2
             fi
             local prefix="${code##*.}" hj tok
-            hj="$(python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); print(json.dumps(v.get("hello", v)))' "$hello")" || { echo "usage: --hello is the JSON pair-begin printed" >&2; exit 2; }
+            # A file that is not JSON: the usage line alone, no traceback.
+            hj="$(python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); print(json.dumps(v.get("hello", v)))' "$hello" 2>/dev/null)" || { echo "usage: --hello is the JSON pair-begin printed" >&2; exit 2; }
             tok="$(_vault_confirm_token ci-signer "add:$prefix" "Pair a release signer with this server")" || exit 3
             _compute_call POST /cli/ci/signer/add "$(_compute_json K2_CJ_code_s="$code" K2_CJ_hello_j="$hj" K2_CJ_confirmToken="$tok")" tcp
             tok=""; code=""
-            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); json.dump(v["offer"], open(sys.argv[1], "w")); print("pairing %s: offer written to %s\non the signing machine: sudo k2-signer-admin pair-reveal < %s > reveal.json\nthen here: k2 ci signer reveal %s --reveal reveal.json" % (v["pairing"], sys.argv[1], sys.argv[1], v["pairing"]))' "$out"
+            printf '%s' "$_CP_BODY" | python3 -c "$_CI_PY_PLAIN"'import json,sys; v=json.load(sys.stdin); json.dump(v["offer"], open(sys.argv[1], "w")); print("pairing %s: offer written to %s\non the signing machine: sudo k2-signer-admin pair-reveal < %s > reveal.json\nthen here: k2 ci signer reveal %s --reveal reveal.json" % (v["pairing"], sys.argv[1], sys.argv[1], v["pairing"]))' "$out"
             ;;
         reveal)
             local id="${1:-}"; [ -n "$id" ] && shift
@@ -266,11 +283,11 @@ if not v["signers"]:
             { [ -n "$id" ] && [ -f "$rev" ]; } || { echo "usage: k2 ci signer reveal <pairing> --reveal reveal.json" >&2; exit 2; }
             _ci_signer_person
             local rj tok
-            rj="$(python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))))' "$rev")" || { echo "usage: --reveal is the JSON pair-reveal printed" >&2; exit 2; }
+            rj="$(python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))))' "$rev" 2>/dev/null)" || { echo "usage: --reveal is the JSON pair-reveal printed" >&2; exit 2; }
             tok="$(_vault_confirm_token ci-signer "$id" "Show the signer pairing code")" || exit 3
             _compute_call POST /cli/ci/signer/reveal "$(_compute_json K2_CJ_pairing="$id" K2_CJ_reveal_j="$rj" K2_CJ_confirmToken="$tok")" tcp
             tok=""
-            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("\n    %s\n\nType these 6 digits at the signing machine: sudo k2-signer-admin pair-accept %s > done.json\nthen here: k2 ci signer finish %s --done done.json" % (v["sas"], "<digits>", v["pairing"]))'
+            printf '%s' "$_CP_BODY" | python3 -c "$_CI_PY_PLAIN"'import json,sys; v=json.load(sys.stdin); print("\n    %s\n\nType these 6 digits at the signing machine: sudo k2-signer-admin pair-accept %s > done.json\nthen here: k2 ci signer finish %s --done done.json" % (v["sas"], "<digits>", v["pairing"]))'
             ;;
         finish)
             local id="${1:-}"; [ -n "$id" ] && shift
@@ -279,9 +296,9 @@ if not v["signers"]:
             { [ -n "$id" ] && [ -f "$done_f" ]; } || { echo "usage: k2 ci signer finish <pairing> --done done.json" >&2; exit 2; }
             _ci_signer_person
             local dj
-            dj="$(python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))))' "$done_f")" || { echo "usage: --done is the JSON pair-accept printed" >&2; exit 2; }
+            dj="$(python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))))' "$done_f" 2>/dev/null)" || { echo "usage: --done is the JSON pair-accept printed" >&2; exit 2; }
             _compute_call POST /cli/ci/signer/finish "$(_compute_json K2_CJ_pairing="$id" K2_CJ_done_j="$dj")" tcp
-            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("paired: signer %s (%s)" % (v["signer"], v["label"]))'
+            printf '%s' "$_CP_BODY" | python3 -c "$_CI_PY_PLAIN"'import json,sys; v=json.load(sys.stdin); print("paired: signer %s (%s)" % (v["signer"], v["label"]))'
             ;;
         remove|rm)
             [ -n "${1:-}" ] || { echo "usage: k2 ci signer remove <signer fingerprint>" >&2; exit 2; }
@@ -409,10 +426,10 @@ print(json.dumps(o))' "$ws" "${pos[0]:-}" "$ref" "$tier" "$check" "$dir")"
             _ci_call POST run "$body"
             if [ "$wait" = 1 ]; then
                 local id deadline state
-                id="$(printf '%s' "$_CI_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["run"]["id"])')"
+                id="$(printf '%s' "$_CI_BODY" | python3 -c "$_CI_PY_PLAIN"'import json,sys; print(json.load(sys.stdin)["run"]["id"])')"
                 deadline=$(( $(date +%s) + ${wait_min:-60} * 60 ))
                 while :; do
-                    state="$(printf '%s' "$_CI_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["run"]["state"])')"
+                    state="$(printf '%s' "$_CI_BODY" | python3 -c "$_CI_PY_PLAIN"'import json,sys; print(json.load(sys.stdin)["run"]["state"])')"
                     [ "$state" != "running" ] && break
                     if [ "$(date +%s)" -ge "$deadline" ]; then
                         [ "$as_json" = 1 ] && printf '%s\n' "$_CI_BODY" || _ci_render run
@@ -452,10 +469,10 @@ print(json.dumps(o))' "$ws" "$version" "$rev" "$tier" "$builds" "$dir" "$plan" "
             fi
             if [ "$wait" = 1 ]; then
                 local id deadline state
-                id="$(printf '%s' "$_CI_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["run"]["id"])')"
+                id="$(printf '%s' "$_CI_BODY" | python3 -c "$_CI_PY_PLAIN"'import json,sys; print(json.load(sys.stdin)["run"]["id"])')"
                 deadline=$(( $(date +%s) + ${wait_min:-180} * 60 ))
                 while :; do
-                    state="$(printf '%s' "$_CI_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["run"]["state"])')"
+                    state="$(printf '%s' "$_CI_BODY" | python3 -c "$_CI_PY_PLAIN"'import json,sys; print(json.load(sys.stdin)["run"]["state"])')"
                     [ "$state" != "running" ] && break
                     if [ "$(date +%s)" -ge "$deadline" ]; then
                         [ "$as_json" = 1 ] && printf '%s\n' "$_CI_BODY" || _ci_render run
@@ -484,7 +501,7 @@ print(json.dumps(o))' "$ws" "$version" "$rev" "$tier" "$builds" "$dir" "$plan" "
             printf '%s' "$_CI_BODY" | _compute_out_check evidence "$out_dir" || exit $?
             mkdir -p "$out_dir" || { echo "can't make $out_dir" >&2; exit 1; }
             local file
-            file="$(printf '%s' "$_CI_BODY" | python3 -c "$_CI_OUT_PY" bundle "$out_dir")" || exit 1
+            file="$(printf '%s' "$_CI_BODY" | python3 -c "$_CI_PY_PLAIN$_CI_OUT_PY" bundle "$out_dir")" || exit 1
             # Bundle v3: each build statement as <dir>/provenance/<label>.intoto.jsonl,
             # and <dir>/trust/ to check them without K2.
             local n_st n_trust
@@ -496,7 +513,7 @@ print(json.dumps(o))' "$ws" "$version" "$rev" "$tier" "$builds" "$dir" "$plan" "
                     [ -n "$jid" ] || continue
                     ( cmd_compute_fetch "$jid" --out "$out_dir/$jl" >/dev/null ) || { echo "fetching job $jid's files failed: k2 compute fetch $jid --out $out_dir/$jl" >&2; exit 1; }
                     fetched=$((fetched + 1))
-                done < <(printf '%s' "$_CI_BODY" | python3 -c '
+                done < <(printf '%s' "$_CI_BODY" | python3 -c "$_CI_PY_PLAIN"'
 import json, sys
 for label, j in sorted(json.load(sys.stdin)["jobs"].items()):
     print("%s\t%s" % (label, j["job"]))')
@@ -505,11 +522,10 @@ for label, j in sorted(json.load(sys.stdin)["jobs"].items()):
                 # The named file of each job that wrote one goes into the
                 # bundle (base64): the signer hashes it to the artifact in
                 # that job's signed receipt before it reads anything in it.
-                python3 -I - "$file" "$out_dir" "$reported" <<'PY' || exit 1
-import base64, json, os, sys
+                python3 -I -c "$_CI_PY_PLAIN"'import base64, json, os, sys
 path, out, name = sys.argv[1:4]
 if name.startswith("/") or ".." in name.split("/"):
-    sys.exit("--reported %s: a path inside each job's files (dist/build-info.json)" % name)
+    sys.exit("--reported %s: a path inside each job\x27s files (dist/build-info.json)" % name)
 b = json.load(open(path))
 added = []
 for label in sorted(b["receipts"]):
@@ -522,13 +538,12 @@ if not added:
 with open(path, "w") as fh:
     json.dump(b, fh, indent=1, sort_keys=True)
     fh.write("\n")
-print("reported %s of %s carried in the bundle" % (name, ", ".join(added)), file=sys.stderr)
-PY
+print("reported %s of %s carried in the bundle" % (name, ", ".join(added)), file=sys.stderr)' "$file" "$out_dir" "$reported" || exit 1
             fi
             if [ "$as_json" = 1 ]; then
-                printf '%s' "$_CI_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); v["path"]=sys.argv[1]; v.pop("bundle", None); print(json.dumps(v))' "$file"
+                printf '%s' "$_CI_BODY" | python3 -c "$_CI_PY_PLAIN"'import json,sys; v=json.load(sys.stdin); v["path"]=sys.argv[1]; v.pop("bundle", None); print(json.dumps(v))' "$file"
             else
-                printf '%s' "$_CI_BODY" | K2_CI_EV_PATH="$file" K2_CI_EV_DIR="$out_dir" K2_CI_EV_FETCHED="$fetched" K2_CI_EV_ST="$n_st" K2_CI_EV_TRUST="$n_trust" python3 -c '
+                printf '%s' "$_CI_BODY" | K2_CI_EV_PATH="$file" K2_CI_EV_DIR="$out_dir" K2_CI_EV_FETCHED="$fetched" K2_CI_EV_ST="$n_st" K2_CI_EV_TRUST="$n_trust" python3 -c "$_CI_PY_PLAIN"'
 import json, os, sys
 v = json.load(sys.stdin)
 print("evidence for %s %s (run %s): %s" % (v.get("project"), v.get("version"), v["short"], os.environ["K2_CI_EV_PATH"]))
@@ -561,7 +576,7 @@ print("  3. here: k2 app updates push <app> --channel beta --version %s --artifa
             p_st="$(printf '%s' "$_CI_BODY" | _compute_write_statements "$out_dir")" || exit 1
             p_trust="$(printf '%s' "$_CI_BODY" | _compute_write_trust "$out_dir")" || exit 1
             if [ "$as_json" = 1 ]; then printf '%s\n' "$_CI_BODY"; return 0; fi
-            printf '%s' "$_CI_BODY" | python3 -c '
+            printf '%s' "$_CI_BODY" | python3 -c "$_CI_PY_PLAIN"'
 import json, sys
 v = json.load(sys.stdin)
 d, n_st, n_trust = sys.argv[1:4]
@@ -581,7 +596,7 @@ ws, check, branch, days = sys.argv[1:5]
 print(urllib.parse.urlencode({k: v for k, v in (("workspace", ws), ("check", check), ("branch", branch), ("days", days)) if v}))' "$ws" "$check" "$branch" "$days")"
             _ci_call GET stats "$q"
             if [ "$as_json" = 1 ]; then printf '%s\n' "$_CI_BODY"; return 0; fi
-            printf '%s' "$_CI_BODY" | python3 -c '
+            printf '%s' "$_CI_BODY" | python3 -c "$_CI_PY_PLAIN"'
 import json, sys
 v = json.load(sys.stdin)
 def d(s):
@@ -608,7 +623,7 @@ print("  fail% = failed ÷ (passed + failed); flaky% = runs with a flaky test (k
             q="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.urlencode({"workspace": sys.argv[1]} if sys.argv[1] else {}))' "$ws")"
             _ci_call GET monitors "$q"
             if [ "$as_json" = 1 ]; then printf '%s\n' "$_CI_BODY"; return 0; fi
-            printf '%s' "$_CI_BODY" | python3 -c '
+            printf '%s' "$_CI_BODY" | python3 -c "$_CI_PY_PLAIN"'
 import json, sys, time
 v = json.load(sys.stdin)
 ms = v.get("monitors") or []
@@ -637,7 +652,7 @@ for m in ms:
                 K2_CJ_count_n="$mcount" K2_CJ_over="$mover" K2_CJ_cooldown="$mcooldown" K2_CJ_to="$mto" K2_CJ_for="$mfor")"
             _ci_call POST monitor "$body"
             if [ "$as_json" = 1 ]; then printf '%s\n' "$_CI_BODY"; return 0; fi
-            printf '%s' "$_CI_BODY" | python3 -c '
+            printf '%s' "$_CI_BODY" | python3 -c "$_CI_PY_PLAIN"'
 import json, sys
 v = json.load(sys.stdin)
 if v.get("removed"):
@@ -662,7 +677,7 @@ for k, v in (("workspace", ws), ("check", check), ("filter", filt), ("days", day
 print(urllib.parse.urlencode(o))' "$ws" "$check" "$tests_filter" "$days" "$limit")"
             _ci_call GET tests "$q"
             if [ "$as_json" = 1 ]; then printf '%s\n' "$_CI_BODY"; return 0; fi
-            printf '%s' "$_CI_BODY" | python3 -c '
+            printf '%s' "$_CI_BODY" | python3 -c "$_CI_PY_PLAIN"'
 import json, sys, time
 v = json.load(sys.stdin)
 rows = v.get("tests") or []
@@ -699,9 +714,9 @@ for r in rows:
             body="$(python3 -c 'import json,sys; o={k: v for k, v in (("workspace", sys.argv[1]), ("rev", sys.argv[2])) if v}; print(json.dumps(o))' "$ws" "${pos[0]:-}")"
             _ci_call POST setup "$body"
             local missing
-            missing="$(printf '%s' "$_CI_BODY" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["missing"]))')"
+            missing="$(printf '%s' "$_CI_BODY" | python3 -c "$_CI_PY_PLAIN"'import json,sys; print(len(json.load(sys.stdin)["missing"]))')"
             if [ "$missing" = 0 ]; then
-                printf '%s' "$_CI_BODY" | python3 -c '
+                printf '%s' "$_CI_BODY" | python3 -c "$_CI_PY_PLAIN"'
 import json, sys
 v = json.load(sys.stdin)
 with open(sys.argv[1], "w") as f:
@@ -709,9 +724,9 @@ with open(sys.argv[1], "w") as f:
     f.write("\n")' "$out_dir" || { echo "can't write $out_dir" >&2; exit 1; }
             fi
             if [ "$as_json" = 1 ]; then
-                printf '%s' "$_CI_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); v.pop("setup", None); print(json.dumps(v))'
+                printf '%s' "$_CI_BODY" | python3 -c "$_CI_PY_PLAIN"'import json,sys; v=json.load(sys.stdin); v.pop("setup", None); print(json.dumps(v))'
             else
-                printf '%s' "$_CI_BODY" | K2_CI_SETUP_OUT="$out_dir" python3 -c '
+                printf '%s' "$_CI_BODY" | K2_CI_SETUP_OUT="$out_dir" python3 -c "$_CI_PY_PLAIN"'
 import json, os, sys
 v = json.load(sys.stdin)
 print("signer setup for project %s at %s (controller %s, owner %s, lane %s):" % (v["project"], v["sha"][:12], v["controllerFp"][:16] + "...", v["owner"], v["lane"]))
@@ -734,7 +749,7 @@ print("  2. the same with the sha256 it prints, to apply them")'
             q="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.urlencode({k: v for k, v in (("workspace", sys.argv[1]), ("run", sys.argv[2])) if v}))' "$ws" "${pos[0]}")"
             _ci_call GET status "$q"
             local lines jid jhead n=0
-            lines="$(printf '%s' "$_CI_BODY" | python3 -c '
+            lines="$(printf '%s' "$_CI_BODY" | python3 -c "$_CI_PY_PLAIN"'
 import json, sys
 r = json.load(sys.stdin)["run"]
 want = [c for c in sys.argv[1].split(",") if c]
@@ -758,7 +773,7 @@ for c in r.get("checks") or []:
             if [ -z "$on" ]; then
                 q="$(python3 -c 'import sys, urllib.parse; o = {"limit": "1"}; o.update({"workspace": sys.argv[1]} if sys.argv[1] else {}); print(urllib.parse.urlencode(o))' "$ws")"
                 _ci_call GET status "$q"
-                if [ "$as_json" = 1 ]; then printf '%s' "$_CI_BODY" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin).get("watch")))'; else printf '%s' "$_CI_BODY" | python3 -c '
+                if [ "$as_json" = 1 ]; then printf '%s' "$_CI_BODY" | python3 -c "$_CI_PY_PLAIN"'import json,sys; print(json.dumps(json.load(sys.stdin).get("watch")))'; else printf '%s' "$_CI_BODY" | python3 -c "$_CI_PY_PLAIN"'
 import json, sys
 w = json.load(sys.stdin).get("watch")
 print(json.dumps(w, indent=2) if w else "watch: off (k2 ci watch on)")'; fi
@@ -837,7 +852,7 @@ print(json.dumps(o))' "$ws" "$tadd" "$tset" "$tset_given" "$tremove")"
                 _ci_call POST cache/trust/set "$body"
             fi
             if [ "$as_json" = 1 ]; then printf '%s\n' "$_CI_BODY"; else
-                printf '%s' "$_CI_BODY" | python3 -c '
+                printf '%s' "$_CI_BODY" | python3 -c "$_CI_PY_PLAIN"'
 import json, sys
 v = json.load(sys.stdin)
 b = v.get("branches") or []

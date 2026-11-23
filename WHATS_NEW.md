@@ -196,14 +196,13 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Terminal tabs give their graphics memory back when you leave them.** A terminal tab you switched away from, a tab under Settings and a tab you closed each kept its WebGL drawing surface (a full-size picture of the pane) until the app happened to clean up, one per tab ever shown; font and zoom changes left old glyph pages behind the same way. Over a long day this piled up in the app's graphics process and pushed the Mac into swap. Now a hidden or closed tab holds none of it, and the visible tab holds one surface and one glyph page; coming back to a tab redraws it at once, as before.
 - **A terminal drawn without WebGL frees each line's picture as it scrolls away.** Lines with box drawing or block characters (the borders of agent CLIs and other full-screen tools) are drawn as small pictures, and each one stayed in graphics memory after its line scrolled off until the app happened to clean up. On a busy terminal that was a steady climb. They are now freed as the line leaves.
 - **A hidden Mobile or Desktop tab lets go of its video decoder.** When the tab hides its stream stops, but the decoder behind it (and the frames it keeps) stayed open until the tab was shown again or closed. It now closes when the stream stops; the last picture stays in the tab, and showing it again starts the stream as before.
+- **On macOS, web pages in a browser tab sit beneath K2's own windows and menus, so menus, toasts and popovers no longer interrupt clicking, scrolling or hovering on the page.** To switch it off, turn off "Keep web pages live under K2's menus" in Settings → General → This computer.
 
 ### Settings
 - **Changes to the Send feedback settings are recorded.** When the owner or an admin turns "Allow sending feedback to K2", "Agents may send feedback to K2" or "Agents may include K2 details" on or off (Settings → General → Send feedback), Settings → Logs → Access Audit records who changed which one, from what to what. A change that leaves a setting as it was, or a refused attempt, records nothing.
 - **Changes to who may report are recorded.** Settings → Logs → Access Audit records who answered the agent question, and who changed which switch or part, from what to what. Only the owner or an admin can change them; a Member, a Voice & Chat login or an agent can't.
 - **Members can use terminal sessions.** A Member login can open and use terminal sessions, and they run as the server's user. Give Member only to people you'd trust with the server.
 
-### Desktop app
-- **On macOS, web pages in a browser tab sit beneath K2's own windows and menus, so menus, toasts and popovers no longer interrupt clicking, scrolling or hovering on the page.** Settings can switch back to the previous behaviour.
 
 ### Agents
 - **Right-clicking an agent puts Workspace settings first.**

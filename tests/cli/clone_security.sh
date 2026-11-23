@@ -484,10 +484,16 @@ expect_not "the remote packed nothing" "$(paths remote)" "/cli/clone/pack"
 
 echo "== a remote password goes over https, the certificate checked =="
 # A throwaway CA and a leaf for localhost (openssl), and a remote stub
-# behind TLS with it. Both CLIs trust the CA through SSL_CERT_FILE.
+# behind TLS with it. Both CLIs trust the CA through SSL_CERT_FILE. The CA
+# is a real one (basicConstraints CA:TRUE, keyUsage keyCertSign): Python
+# 3.13 and newer turn on VERIFY_X509_STRICT, which refuses a CA without
+# keyUsage. Made like the leaf, from a CSR with an extfile (self-signed).
 mkdir -p "$W/tls"
-if openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj "/CN=Acme throwaway clone CA" \
-        -keyout "$W/tls/ca.key" -out "$W/tls/ca.pem" >"$W/tls/log" 2>&1 \
+if openssl req -new -newkey rsa:2048 -nodes -subj "/CN=Acme throwaway clone CA" \
+        -keyout "$W/tls/ca.key" -out "$W/tls/ca.csr" >"$W/tls/log" 2>&1 \
+    && printf 'basicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash\n' >"$W/tls/ca.ext" \
+    && openssl x509 -req -in "$W/tls/ca.csr" -signkey "$W/tls/ca.key" -days 2 \
+        -extfile "$W/tls/ca.ext" -out "$W/tls/ca.pem" >>"$W/tls/log" 2>&1 \
     && openssl req -newkey rsa:2048 -nodes -subj "/CN=localhost" \
         -keyout "$W/tls/leaf.key" -out "$W/tls/leaf.csr" >>"$W/tls/log" 2>&1 \
     && printf 'subjectAltName=DNS:localhost\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n' >"$W/tls/leaf.ext" \

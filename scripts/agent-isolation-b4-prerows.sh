@@ -38,6 +38,7 @@ policy=/etc/dbus-1/system.d/k2-agents.conf
 hdropin="/etc/systemd/system/$unit.d/zz-k2-agents-delegate.conf"
 [ ! -e "$policy" ] || { echo "$policy is there already: not a clean test box" >&2; exit 2; }
 [ ! -e "$hdropin" ] || { echo "$hdropin is there already: not a clean test box" >&2; exit 2; }
+echo "box state at start: $(for u in k2-daemon.service "$unit" dbus.service; do printf '%s=%s ' "$u" "$(systemctl is-active "$u" 2>/dev/null)"; done)· helper daemon.toml: $(sudo sh -c 'grep -E "^(user|unit)" /etc/k2-root-helper/daemon.toml 2>/dev/null | tr "\n" " "') · bus policy file: $(ls /etc/dbus-1/system.d/k2-agents.conf 2>&1 | head -1) · $unit drop-ins: $(ls /etc/systemd/system/$unit.d/ 2>/dev/null | tr '\n' ' ')"
 echo "box: $(hostname) · $(. /etc/os-release && echo "$PRETTY_NAME") · kernel $(uname -r) · $(systemctl --version | head -1) · kernel.pid_max $(cat /proc/sys/kernel/pid_max) · kernel.apparmor_restrict_unprivileged_unconfined $(cat /proc/sys/kernel/apparmor_restrict_unprivileged_unconfined 2>/dev/null || echo absent) · kernel.apparmor_restrict_unprivileged_userns $(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo absent)"
 
 ran=0

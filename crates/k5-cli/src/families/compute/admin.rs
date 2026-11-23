@@ -14,6 +14,8 @@
 //! - [`node`]: the `node` subverbs made native so far.
 //! - [`setup`]: `compute` alone (the help page), `allow-nodes`,
 //!   `git-access`, `lanes`, `local` and `attach`.
+//! - [`store`]: `prune`, `pin`, `unpin` and `retention [set]` (this
+//!   server's compute store).
 //!
 //! What runs is what [`super::writes`] runs, in the shell's order: the
 //! settings, a re-minted passport, the two gates, the `id` tool's lines,
@@ -44,6 +46,7 @@ pub mod moves;
 pub mod node;
 pub mod retier;
 pub mod setup;
+pub mod store;
 pub mod switch;
 
 #[cfg(test)]
@@ -68,6 +71,10 @@ pub const ANSWERS: &[&str] = &[
     "lanes",
     "local",
     "attach",
+    "prune",
+    "pin",
+    "unpin",
+    "retention",
 ];
 
 /// A verb this module answers, with its words read.
@@ -78,6 +85,7 @@ enum Ask {
     Cache(cache::Ask),
     Node(node::Ask),
     Setup(setup::Ask),
+    Store(store::Ask),
 }
 
 /// Which verb: `None` for a form the binary leaves to another module or
@@ -90,6 +98,7 @@ enum Which {
     Cache,
     Node,
     Setup,
+    Store,
 }
 
 fn which(words: &[&str]) -> Option<Which> {
@@ -105,6 +114,7 @@ fn which(words: &[&str]) -> Option<Which> {
         "move" => Some(Which::Move),
         "cache" => Some(Which::Cache),
         "node" => Some(Which::Node),
+        v if store::answers(v) => Some(Which::Store),
         _ => None,
     }
 }
@@ -180,6 +190,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         }
         Which::Node => ready(node_words.expect("parsed above")).map(Ask::Node),
         Which::Setup => ready(setup_words.expect("parsed above")).map(Ask::Setup),
+        Which::Store => ready(store::parse(words[0], rest)).map(Ask::Store),
     };
     let ask = match ask {
         Ok(a) => a,
@@ -210,6 +221,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         Ask::Cache(a) => cache::send(&mut cp, a),
         Ask::Node(a) => node::send(&mut cp, a, &vault_sock),
         Ask::Setup(a) => setup::send(&mut cp, a),
+        Ask::Store(a) => store::send(&mut cp, a),
     };
     let closing = std::mem::take(&mut cp.closing);
     closing.flush(&mut client, exit);

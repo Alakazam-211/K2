@@ -11,8 +11,9 @@
 //! - [`admin`]: the admin verbs (`revoke`, `preview on|off`, `placement
 //!   v1|v2`, `access`, `operate`, `manage`, `retier`, `tier`, `move`,
 //!   `cache`, the `node` subverbs made native so far, and the setup verbs
-//!   `allow-nodes`, `git-access`, `lanes`, `local` and `attach`, and
-//!   `compute` alone). [`follow`] is `_compute_follow`.
+//!   `allow-nodes`, `git-access`, `lanes`, `local` and `attach`,
+//!   `compute` alone, and the store verbs `prune`, `pin`, `unpin` and
+//!   `retention`). [`follow`] is `_compute_follow`.
 //! - [`more`]: `retry`, `provenance`, `verify`, and `roster`, `seats`,
 //!   `trust` and `owners`.
 //! - [`submit`]: `run`, `test` and `prewarm`.

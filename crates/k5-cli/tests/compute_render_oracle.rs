@@ -422,13 +422,22 @@ fn servers() {
 #[test]
 fn status_overview() {
     let script = python_of("compute-jobs.sh", "\ncmd_compute_status() {");
-    let base = r#"{"nodes":[{"name":"linux-1","os":"linux","arch":"x86_64","status":{"state":"online","controllerPause":"paused","waiting":{"code":"busy","message":"full"},"unavailable":["gpu"],"parallelMax":4,"running":[{"short":"abcd1234","elapsedSecs":125,"workspace":"/w","argv":"cargo test","tier":"ci","cpuMillis":null,"tierWhy":"critical","submitter":"a"},{"elapsedSecs":4000}],"queued":[{"short":"q1","position":2,"ageSecs":30,"pinned":true,"workspace":"/w","argv":"x","reason":"slot","tier":"batch"},{"pinned":false}],"free":{"cpuMillis":6500,"memBytes":12884901888},"caps":{"cpuMillis":8000,"memBytes":17179869184},"idleCpuMillis":7250,"load":[1.25,0.5,0.0],"disk":{"freeBytes":107374182400,"floorBytes":10737418240,"floorFrom":"default","belowFloor":true}},"mine":{"running":1},"room":{"busy":"servers","running":3,"otherServers":2},"share":{"line":"run 1/2"}},{"name":"mac-1","status":{"disk":{"freeBytes":1}}}],"controllerMachine":{"name":"z","diskFreeBytes":53687091200,"diskTotalBytes":1099511627776,"tmLocalSnapshots":3},"notYet":"GPU stats"}"#;
+    let base = r#"{"nodes":[{"name":"linux-1","os":"linux","arch":"x86_64","status":{"state":"online","controllerPause":"paused","waiting":{"code":"busy","message":"full"},"unavailable":["gpu"],"parallelMax":4,"running":[{"short":"abcd1234","elapsedSecs":125,"workspace":"/w","argv":"cargo test","tier":"ci","cpuMillis":null,"tierWhy":"critical","submitter":"a"},{"elapsedSecs":4000}],"queued":[{"short":"q1","position":2,"ageSecs":30,"pinned":true,"workspace":"/w","argv":"x","reason":"slot","tier":"batch"},{"pinned":false}],"free":{"cpuMillis":6500,"memBytes":12884901888},"caps":{"cpuMillis":8000,"memBytes":17179869184},"idleCpuMillis":7250,"load":[1.25,0.5,0.0],"disk":{"freeBytes":107374182400,"floorBytes":10737418240,"floorFrom":"default","belowFloor":true}},"mine":{"running":1},"room":{"busy":"servers","running":3,"otherServers":2},"share":{"line":"run 1/2"}},{"name":"mac-1","status":{"disk":{"freeBytes":1}}}],"controllerMachine":{"name":"z","diskFreeBytes":53687091200,"diskTotalBytes":1099511627776,"tmLocalSnapshots":3,"store":{"line":"compute store: 2.0 GB (artifacts 1.5 GB in 3 folders, blobs 512 MB in 2 files) · keep 7 d after a job ends · cap 20.0 GB"}},"notYet":"GPU stats"}"#;
     let other =
         r#"{"nodes":[],"controllerMachine":{"name":"z","tmLocalSnapshotsError":"no tmutil"}}"#;
-    check("status", &script, &[base, other], &[], |body, now| {
-        let s = status::render(body, now);
-        (s.stdout, s.stderr)
-    });
+    // 0.46.17: the store line, empty or with no line.
+    let store_empty = r#"{"nodes":[],"controllerMachine":{"name":"z","store":{"line":""}}}"#;
+    let store_bare = r#"{"nodes":[],"controllerMachine":{"name":"z","store":{"bytes":1}}}"#;
+    check(
+        "status",
+        &script,
+        &[base, other, store_empty, store_bare],
+        &[],
+        |body, now| {
+            let s = status::render(body, now);
+            (s.stdout, s.stderr)
+        },
+    );
 }
 
 #[test]

@@ -112,6 +112,16 @@ fn run(cx: &mut Cx, body: &[u8]) -> Result<(), Raise> {
             )?;
         }
         cx.print(&line);
+        // 0.46.17: the compute store here (fetched artifacts, job blobs).
+        let l = ln!("if (m.get(\"store\") or {}).get(\"line\"):");
+        let store = p::or(cx.at(l, p::get(&m, "store"))?, dict());
+        if p::truthy(&cx.at(l, p::get(&store, "line"))?) {
+            let l = ln!("print(\"  \" + m[\"store\"][\"line\"])");
+            let x = cx.at(l, p::idx(&m, "store"))?;
+            let x = cx.at(l, p::idx(&x, "line"))?;
+            let t = cx.at(l, p::add(&s("  "), &x))?;
+            cx.print(&p::str_of(&t));
+        }
     }
     let l = ln!("if v.get(\"notYet\"):");
     if p::truthy(&cx.at(l, p::get(&v, "notYet"))?) {

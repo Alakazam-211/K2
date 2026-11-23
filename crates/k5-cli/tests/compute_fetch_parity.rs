@@ -171,6 +171,37 @@ fn compute_fetch_files() {
             3,
             1,
         ),
+        // 0.46.17: a node that just reconnected in a rollout.
+        case(
+            "the node is reconnecting",
+            &["fetch", "j1", "b.txt", "--out", "recon"],
+            &[],
+            vec![
+                ok(LIST),
+                Reply::Answer(
+                    503,
+                    r#"{"error":{"code":"node_reconnecting","hint":"the node just reconnected (an update or a restart) and hasn't said what it can do yet; fetch again in a minute"}}"#.into(),
+                ),
+            ],
+            owner_and_port,
+            3,
+            2,
+        ),
+        case(
+            "the node's k2-node can't send artifacts",
+            &["fetch", "j1", "--out", "old"],
+            &[],
+            vec![
+                ok(LIST),
+                Reply::Answer(
+                    409,
+                    r#"{"error":{"code":"node_upgrade_required","hint":"node 'node-a' runs k2-node 0.46.3, which can't send artifacts (this server runs K2 0.46.17): the node needs the update, not this server; its owner updates it on that machine (sudo k2-node setup) or from here (k2 compute node update node-a)"}}"#.into(),
+                ),
+            ],
+            owner_and_port,
+            3,
+            2,
+        ),
         traceback(case(
             "a list that is no object",
             &["fetch", "j1"],

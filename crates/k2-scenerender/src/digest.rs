@@ -325,21 +325,24 @@ pub fn listed(bytes: &[u8], lim: &InputLimits) -> Result<Listed, InputError> {
     let (mut h, ranges) = scene::layout(bytes, lim)?;
     let mesh: Vec<[u8; 32]> = h.meshes.iter().zip(&ranges).map(|(m, r)| mesh_digest(m, &bytes[r.clone()])).collect();
     // A mesh's box once, only for the meshes an object uses.
-    let mut boxes: Vec<Option<Option<([f32; 3], [f32; 3])>>> = vec![None; h.meshes.len()];
+    let mut boxes: Vec<Option<Option<MeshBox>>> = vec![None; h.meshes.len()];
     for o in &h.objects {
         let mi = o.mesh as usize;
         if boxes[mi].is_none() {
             boxes[mi] = Some(local_box(&h.meshes[mi], &bytes[ranges[mi].clone()]));
         }
     }
-    let boxes: Vec<Option<([f32; 3], [f32; 3])>> = boxes.into_iter().map(Option::flatten).collect();
+    let boxes: Vec<Option<MeshBox>> = boxes.into_iter().map(Option::flatten).collect();
     let cameras_left_out = std::mem::take(&mut h.cameras_left_out);
     Ok(Listed { items: list_header(&h, &mesh, &boxes), cameras_left_out })
 }
 
+/// A mesh's box: its lowest and highest corners.
+type MeshBox = ([f32; 3], [f32; 3]);
+
 /// The box of a mesh's positions (the first `12 * vertices` of its data);
 /// `None` when it has none or one isn't finite.
-fn local_box(m: &MeshInfo, data: &[u8]) -> Option<([f32; 3], [f32; 3])> {
+fn local_box(m: &MeshInfo, data: &[u8]) -> Option<MeshBox> {
     let n = m.vertices as usize * 12;
     let positions: Vec<[f32; 3]> = data.get(..n)?.as_chunks::<12>().0.iter()
         .map(|c| [f32::from_le_bytes([c[0], c[1], c[2], c[3]]), f32::from_le_bytes([c[4], c[5], c[6], c[7]]), f32::from_le_bytes([c[8], c[9], c[10], c[11]])])
@@ -352,7 +355,7 @@ fn local_box(m: &MeshInfo, data: &[u8]) -> Option<([f32; 3], [f32; 3])> {
     Some(([lo[0] as f32, lo[1] as f32, lo[2] as f32], [hi[0] as f32, hi[1] as f32, hi[2] as f32]))
 }
 
-fn list_header(h: &Header, mesh: &[[u8; 32]], boxes: &[Option<([f32; 3], [f32; 3])>]) -> Vec<Item> {
+fn list_header(h: &Header, mesh: &[[u8; 32]], boxes: &[Option<MeshBox>]) -> Vec<Item> {
     // The scene, the cameras and the turntable draw every object not hidden in the file.
     let all: Vec<&Object> = h.objects.iter().filter(|o| o.hidden.is_none()).collect();
     let hidden: Vec<u32> = h.objects.iter().enumerate().filter(|(_, o)| o.hidden.is_some()).map(|(i, _)| i as u32).collect();

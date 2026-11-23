@@ -317,7 +317,7 @@ fn draw(scene: &Scene, active: &[u32], frame: &Frame, p: &Params, clay: Option<&
     {
         let rows = BAND_PX as usize * w;
         let out = pixels.chunks_mut(rows * ch);
-        let items: Vec<(usize, &mut [u8], Option<&mut [u32]>)> = if ids {
+        let items: Vec<BandOut> = if ids {
             out.zip(id_px.chunks_mut(rows)).enumerate().map(|(b, (o, i))| (b, o, Some(i))).collect()
         } else {
             out.enumerate().map(|(b, o)| (b, o, None)).collect()
@@ -338,6 +338,9 @@ fn draw(scene: &Scene, active: &[u32], frame: &Frame, p: &Params, clay: Option<&
     st.raster_us = t2.elapsed().as_micros() as u64;
     (Image { width: p.width, height: p.height, alpha: p.transparent, pixels }, ids.then_some(id_px), st)
 }
+
+/// A band's number, its pixels and its ids (when the frame keeps them).
+type BandOut<'a> = (usize, &'a mut [u8], Option<&'a mut [u32]>);
 
 type VertexOut = (Vec<Obj>, Vec<V3>, Vec<V3>, Vec<[i32; 2]>);
 
@@ -1430,8 +1433,10 @@ impl Kernel<'_> {
 
     /// The raw occlusion at (x, y), 0 to 1.
     fn raw(&self, x: i64, y: i64) -> f32 {
+        // `!= Some(Greater)`, not `<= 0.0`: a NaN skips, as zero and below do.
+        use std::cmp::Ordering::Greater;
         let iw = self.depth[(y * self.w + x) as usize];
-        if !(iw > 0.0) {
+        if iw.partial_cmp(&0.0) != Some(Greater) {
             return 0.0;
         }
         let p = self.at(x, y, iw);
@@ -1453,7 +1458,7 @@ impl Kernel<'_> {
                 continue;
             }
             let gap = p[2] - 2.0 / (wa + wb);
-            if !(gap > 0.0) {
+            if gap.partial_cmp(&0.0) != Some(Greater) {
                 continue;
             }
             let a = self.at(xa, ya, wa);
@@ -1462,12 +1467,12 @@ impl Kernel<'_> {
             let (la, lb) = (dot(ea, ea), dot(eb, eb));
             let far = if la > lb { la } else { lb };
             let weight = (2.0 - far.sqrt() * self.inv_radius).min(1.0);
-            if !(weight > 0.0) {
+            if weight.partial_cmp(&0.0) != Some(Greater) {
                 continue;
             }
             let ab = sub(a, b);
             let half = 0.5 * dot(ab, ab).sqrt();
-            if !(half > 0.0) {
+            if half.partial_cmp(&0.0) != Some(Greater) {
                 continue;
             }
             let o = ((gap / half - AO_BIAS) / (1.0 - AO_BIAS)).min(1.0);

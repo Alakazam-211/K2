@@ -68,7 +68,7 @@ pub fn ids_from_png(bytes: &[u8]) -> Result<(u32, u32, Vec<u32>), String> {
     }
     let mut buf = vec![0u8; r.output_buffer_size().ok_or("ids png: too large")?];
     let n = r.next_frame(&mut buf).map_err(|e| format!("ids png: {e}"))?.buffer_size();
-    let px: Vec<u32> = buf[..n].chunks_exact(3).map(|c| (c[0] as u32) << 16 | (c[1] as u32) << 8 | c[2] as u32).collect();
+    let px: Vec<u32> = buf[..n].as_chunks::<3>().0.iter().map(|c| (c[0] as u32) << 16 | (c[1] as u32) << 8 | c[2] as u32).collect();
     if px.len() as u64 != w as u64 * h as u64 {
         return Err("ids png: short".into());
     }

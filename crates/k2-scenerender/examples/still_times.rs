@@ -180,7 +180,7 @@ fn upsample_alone(shape: &str, aspect: f32, threads: usize) {
                         let y1 = (y0 + 1).min(lh - 1);
                         for (x, o) in row.iter_mut().enumerate() {
                             let d = depth[y * w + x];
-                            if !(d > 0.0) {
+                            if d.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) {
                                 continue;
                             }
                             let fx = ((x as f32 - 0.5) * 0.5).max(0.0);

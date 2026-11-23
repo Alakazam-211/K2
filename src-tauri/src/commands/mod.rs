@@ -70,7 +70,7 @@ pub mod local_upload;
 // webview lifecycle; renderer gets commands, never webview capabilities.
 pub mod browser_webviews;
 // Browser underlay on macOS (0.46.17): `browser_set_page_layers`, beside
-// today's path behind the `browserLayering` client setting.
+// the legacy path behind the `browserLayering` client setting.
 pub mod browser_page_layers;
 // The pure underlay rules from K2's wry fork (shapes, owner, gesture
 // latch), run in this crate's tests on any host.

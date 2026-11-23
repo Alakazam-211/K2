@@ -1,4 +1,4 @@
-//! `llm.tokens-refresh [token=<id>]` (0.46.17, field report 2026-11-16): an
+//! `llm.tokens-refresh [token=<id>]` (0.46.17): an
 //! agent asks a person to recheck the server's LLM tokens (one, or all), the
 //! way `k2 llm tokens refresh` does for a person. The route stays people
 //! only: an agent's `POST /cli/llm/accounts/refresh` is refused `owner_only`,

@@ -29,7 +29,7 @@ impl Relay {
     fn new() -> Arc<Self> {
         Arc::new(Self { bodies: Mutex::new(Vec::new()), script: Mutex::new(Default::default()), call_voip: true })
     }
-    /// Today's relays: `call-aps`, no `call-voip`.
+    /// The current relays: `call-aps`, no `call-voip`.
     fn aps_only() -> Arc<Self> {
         Arc::new(Self { bodies: Mutex::new(Vec::new()), script: Mutex::new(Default::default()), call_voip: false })
     }
@@ -256,7 +256,7 @@ fn nothing_but_a_ring_ever_carries_a_voip_token() {
     assert!(!K2Cloud::voip_lane(&call(CallPushState::Ringing), false), "never without call-voip");
 }
 
-/// Today's relays list `call-aps` and no `call-voip`: they copy a ring's
+/// The current relays list `call-aps` and no `call-voip`: they copy a ring's
 /// clear fields into a normal alert push and send no VoIP push. A relay
 /// advertising `s1,s2,call-aps` gets NO `voipToken` on a ring, on any
 /// lane, and the ring goes exactly as before the VoIP lane: its clear

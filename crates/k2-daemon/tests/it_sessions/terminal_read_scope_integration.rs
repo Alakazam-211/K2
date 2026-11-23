@@ -607,7 +607,7 @@ async fn repeated_security_parameters_are_refused() {
     let screen = read(d.port, OWNER, &format!("id={}&lines=200", x.sb)).await;
     assert_eq!(screen.status, 200, "owner read: {}", screen.body);
     if screen.body.contains(&marker) {
-        miss(format!("B's terminal received text from a request without one credential: {}", screen.body));
+        miss(format!("a refused write changed the screen: {}", screen.body));
     }
     // Each security key, repeated next to the owner token: 400 usage.
     for (key, a, b) in [

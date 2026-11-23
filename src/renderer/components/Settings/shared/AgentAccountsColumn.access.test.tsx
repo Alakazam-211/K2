@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 //
-// A token whose access token expired on a good sign-in (field report
-// 2026-11-16): the row says so, with the daemon's note on who renews it,
+// A token whose access token expired on a good sign-in: the row says so, with the daemon's note on who renews it,
 // and is not drawn as signed out. A fine token and a signed-out one look as
 // before. Daemon calls are mocked; an unexpected route throws.
 

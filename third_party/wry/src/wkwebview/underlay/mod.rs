@@ -22,7 +22,6 @@
 //! set behaves exactly as stock wry. Everything here runs on the main
 //! thread; state is thread-local so no AppKit object crosses threads.
 //!
-//! Patch plan: k2-browser-lab wiki "Patch plan - Tauri underlay for K2's fork".
 
 pub mod logic;
 pub mod private_hover;
@@ -67,7 +66,7 @@ pub struct WindowSpec {
   /// K2 things that own input over pages (menus, the dock, toasts), UI px.
   pub claims: Vec<Shape>,
   /// The frontmost open claim is a menu: a click on a page only closes it
-  /// (K2 Design: like a macOS menu, the page doesn't get it).
+  /// (like a macOS menu, the page doesn't get it).
   pub swallow_page_clicks: bool,
 }
 

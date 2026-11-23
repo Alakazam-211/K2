@@ -179,7 +179,7 @@ def acct(i, label, active, st="signed_in", tool="claude"):
                       "checkedAt": "2026-10-07T10:00:00Z", "status": ""} if active else None,
             "usageCheckedAt": None,
             # The server default's access token expired on a good sign-in
-            # (field report 2026-11-16); the others are fine.
+            # (a field report); the others are fine.
             "access": "expired" if active else "fine",
             "accessNote": EXPIRED_NOTE if active else None}
 

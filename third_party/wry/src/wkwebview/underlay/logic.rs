@@ -112,7 +112,7 @@ impl Shape {
 
 /// Holes for a mask must never overlap: an even-odd fill re-opens the area
 /// two holes share (the "overlapping holes" trap). Overlapping holes are
-/// merged into one square box covering both. Disjoint holes (today's split
+/// merged into one square box covering both. Disjoint holes (the current split
 /// panes) pass through unchanged. Returns (holes, merged any).
 pub fn disjoint_holes(mut holes: Vec<Shape>) -> (Vec<Shape>, bool) {
   let mut merged_any = false;

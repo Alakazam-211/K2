@@ -980,7 +980,7 @@ fn opt_tool(v: &Option<String>) -> Result<Option<Tool>, CliResponse> {
     }
 }
 
-/// An agent's `refresh` (field report 2026-11-16): still a person's, but
+/// An agent's `refresh`: still a person's, but
 /// not a dead end. With permission cards on the refusal ends with the
 /// `llm.tokens-refresh` card's Ask-with line (a person rechecks it in one
 /// click); and most of the time nothing is needed at all.

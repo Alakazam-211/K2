@@ -2299,7 +2299,7 @@ mod tests {
         assert!(a.iter().any(|x| x == "CPUQuota=1%"), "never below 1%");
     }
 
-    /// 0.46.17 (a field report from two tenant nodes on k2-node 0.46.14:
+    /// 0.46.17 (on nodes running k2-node 0.46.14:
     /// a connect to 127.0.0.1 inside the job never completed). systemd's
     /// address filter covers `lo` too, and drops (never refuses) what it
     /// denies, so a unit with a deny and no loopback allow hangs every

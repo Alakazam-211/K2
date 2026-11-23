@@ -1,12 +1,12 @@
 //! Browser underlay, macOS (0.46.17): `browser_set_page_layers`.
 //!
-//! Beside today's path, behind the client setting `browserLayering`
+//! Beside the legacy path, behind the client setting `browserLayering`
 //! (`underlay` | `legacy`, default underlay on macOS). In underlay the
 //! browser pages are native views BELOW K2's UI webview; the UI view's
 //! layer is masked open where a page shows and closed under K2's own
 //! menus, toasts and the dock (`claims`), and input over a page is routed to
-//! it (wry's `underlay` module, K2's fork). Windows and Linux keep today's
-//! path; the command says so.
+//! it (wry's `underlay` module, K2's fork). Windows and Linux keep the
+//! legacy path; the command says so.
 //!
 //! One whole `PageLayers` set per K2 (OS) window per change, from the
 //! renderer (`src/renderer/lib/page-layers.ts`). Native side:
@@ -110,7 +110,7 @@ pub struct WireClaim {
     pub frost: Option<bool>,
 }
 
-/// K2 Design's PageLayers (patch plan §2f).
+/// The PageLayers description.
 #[derive(serde::Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct PageLayers {
@@ -211,7 +211,7 @@ pub fn clamp_shape(s: &WireShape, ui: (f64, f64)) -> Option<WireShape> {
     Some(WireShape { x: x0, y: y0, width: x1 - x0, height: y1 - y0, radius: s.radius, chamfer: s.chamfer })
 }
 
-/// K2 Design's click rule for a page click while K2 has things open: the
+/// The click rule for a page click while K2 has things open: the
 /// frontmost (most recently opened) claim that isn't a toast decides. A
 /// `menu` swallows the click (it only closes the menu, like a macOS menu); a
 /// `popover` lets it reach the page (one click closes it and acts); toasts

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Browser underlay resize-storm memory check (patch plan §8), for a real
+# Browser underlay resize-storm memory check, for a real
 # screen (the build Mac), with the built K2 app running and ONE browser tab open on
 # a page in the front K2 window. Not for compute nodes: they have no screen.
 #

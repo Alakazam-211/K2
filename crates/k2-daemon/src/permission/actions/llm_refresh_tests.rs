@@ -1,4 +1,4 @@
-//! Field report 2026-11-16: the server default's access token expired, the
+//! A field report: the server default's access token expired, the
 //! list still said `signed_in`, and an agent's `k2 llm tokens refresh` was a
 //! dead end (`owner_only`).
 //!

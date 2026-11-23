@@ -193,8 +193,7 @@ pub(crate) struct ReadTarget<'a> {
 /// Who may read a terminal's screen, whichever way the read names it: a
 /// session id (`id=` / `session=`), the canonical `<project_id>[:<agent>]`
 /// key, or `workspace=` (a name, path, id, sidecar or session id). The one
-/// check every form goes through (to become
-/// `terminal_access::may_read_session`).
+/// check every form goes through.
 ///
 /// - An App pass never reads a terminal.
 /// - A remote-session shell is read only with its own grant or the owner
@@ -204,7 +203,7 @@ pub(crate) struct ReadTarget<'a> {
 ///   caller's own or a local connection (the rule `workspace=` had). A
 ///   session K2 can't place in any workspace is refused.
 /// - The owner token, a login and other unscoped callers: no workspace
-///   check (today's behaviour).
+///   check (the current behaviour).
 pub(crate) fn may_read_session(
     params: &HashMap<String, String>,
     target: &ReadTarget<'_>,

@@ -46,7 +46,7 @@ pub const PARAM: &str = "icons";
 /// What a list sends for each row's icon.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Icons {
-    /// No `icons` key: today's answer, byte for byte.
+    /// No `icons` key: the current answer, byte for byte.
     Urls,
     /// `icons=rev`: `iconRev` (null = none) and no `iconUrl`.
     Rev,
@@ -145,7 +145,7 @@ fn rev_row(mut row: projects_ops::ProjectWithWorkspaces) -> Value {
     v
 }
 
-/// The get-icon answer: today's `found` / `dataUrl` plus `iconRev`.
+/// The get-icon answer: the current `found` / `dataUrl` plus `iconRev`.
 #[derive(serde::Serialize)]
 struct ProjectIconAnswer {
     #[serde(flatten)]

@@ -460,7 +460,7 @@ fn arch_a_package_script_first_on_path_gets_the_block_when_the_links_run_the_bin
     assert_eq!(read(&profile).matches(BLOCK_BEGIN).count(), 1, "exactly one block");
 }
 
-/// The same Arch shape with the switch off: today's answer, nothing written.
+/// The same Arch shape with the switch off: the current answer, nothing written.
 #[test]
 fn arch_with_the_switch_off_the_package_script_is_enough() {
     let home = Home::new("arch-off");
@@ -524,7 +524,7 @@ fn a_k5_binary_first_on_path_is_enough_when_the_links_run_it() {
 
 /// macOS after an update: an install with an old admin-made
 /// `/usr/local/bin/k2` (a script, in a folder K2 can't write) updates its
-/// bundle (the boot heal of the new bundle, switch off: today's answer, no
+/// bundle (the boot heal of the new bundle, switch off: the current answer, no
 /// `k5`, no block), then the owner turns the switch on (the relink runs the
 /// same heal with the binary): `~/.local/bin/k2` and `k5` run the binary
 /// and the block puts `~/.local/bin` first. The next boot's heal adds
@@ -561,7 +561,7 @@ fn macos_after_an_update_the_switch_on_links_k5_and_adds_the_block_past_an_old_s
     assert_eq!(updated.user_link, LinkOutcome::Current);
     assert_eq!(updated.user_k5, None, "no k5 while the switch is off");
     assert_eq!(updated.path, PathOutcome::FoundElsewhere { path: old_k2.clone() });
-    assert!(!zprofile.exists(), "switch off: no block, as today");
+    assert!(!zprofile.exists(), "switch off: no block, as before");
     assert_eq!(entries(&bin), vec!["k2"]);
 
     // The switch flips on: the relink's heal with the binary.

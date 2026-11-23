@@ -1480,8 +1480,8 @@ mod tests {
         assert!(t0.elapsed() < std::time::Duration::from_secs(1), "{:?}", t0.elapsed());
     }
 
-    /// 0.46.17: loopback whose packets are dropped (the field report: a
-    /// k2-node 0.46.14 `none` unit's `IPAddressDeny=any` with no localhost
+    /// 0.46.17: loopback whose packets are dropped (on nodes running k2-node 0.46.14: a
+    /// `none` unit's `IPAddressDeny=any` with no localhost
     /// allow) fails the check within its timeout, saying the packets are
     /// dropped, instead of hanging. Modelled without privileges: a
     /// listener whose accept queue is full (backlog 0, one connection

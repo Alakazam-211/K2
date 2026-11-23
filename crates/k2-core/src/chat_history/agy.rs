@@ -14,7 +14,7 @@ pub(super) fn storage_path(home: &Path, session_id: &str) -> Option<PathBuf> {
 
 // ── Antigravity (`agy`) session discovery ──────────────────────────────
 //
-// What agy 1.5.14 keeps on disk (seen in runs of the CLI, 2026-11-21):
+// What agy 1.5.14 keeps on disk (as agy 1.5.14 stores it):
 //   - `~/.gemini/antigravity-cli/conversations/<id>.db`: one SQLite file
 //     per conversation; the id is a v4 UUID and is what
 //     `agy --conversation <id>` takes, from any folder.

@@ -311,7 +311,7 @@ async fn project_icon_tags_its_rev_and_answers_304() {
         let tag = first.header("etag").unwrap_or_else(|| panic!("an ETag: {}", first.headers));
         assert_eq!(tag, format!("\"{rev}\""), "the ETag is the iconRev");
 
-        // Today's fields, unchanged; iconRev is the one added key.
+        // The current fields, unchanged; iconRev is the one added key.
         let want_keys: BTreeSet<String> = ["found", "dataUrl", "iconRev"].iter().map(|k| k.to_string()).collect();
         assert_eq!(keys(&v), want_keys, "{v}");
 
@@ -400,7 +400,7 @@ async fn project_group_list_and_icon_do_the_same() {
         assert_eq!(tag, format!("\"{key_a}\""));
         let want_keys: BTreeSet<String> =
             ["ok", "groupId", "found", "iconKey", "dataUrl", "iconRev"].iter().map(|k| k.to_string()).collect();
-        assert_eq!(keys(&v), want_keys, "today's fields, plus iconRev: {v}");
+        assert_eq!(keys(&v), want_keys, "the current fields, plus iconRev: {v}");
         assert_eq!(v["ok"], true);
         assert_eq!(v["groupId"], with.as_str());
         assert_eq!(v["found"], true);

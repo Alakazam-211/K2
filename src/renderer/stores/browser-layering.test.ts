@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-// The browserLayering switch: underlay by default on macOS only, today's
-// path kept as legacy, and a run-time failure falls back for the session.
+// The browserLayering switch: underlay by default on macOS only, the
+// previous path kept as legacy, and a run-time failure falls back for the session.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   LS_BROWSER_HOVER_PRIVATE_FALLBACK,

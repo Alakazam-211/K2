@@ -70,7 +70,7 @@ pub enum VoipChange {
 }
 
 /// Shortest and longest VoIP token accepted: the push relay's own bounds
-/// (APNs tokens are hex; 64 characters today, and Apple says the length
+/// (APNs tokens are hex; 64 characters now, and Apple says the length
 /// may change). A token the relay would refuse is refused here, at
 /// register, so no ring ever carries one.
 pub const VOIP_TOKEN_MIN: usize = 64;

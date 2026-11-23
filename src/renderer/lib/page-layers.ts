@@ -1,14 +1,14 @@
 /**
- * PageLayers (K2 Design's format, patch plan §2f): the one description of
+ * PageLayers: the one description of
  * every browser page in this K2 window, sent whole on every change to
  * `browser_set_page_layers` (macOS underlay only; Windows and Linux keep
- * today's path).
+ * the legacy path).
  *
  * Before the canvas desktop, each visible Browser pane is one layer. The
  * overlay arbiter's claims (`browser-overlay.ts`) become `claims`: K2 UI
  * over pages that owns input there (menus, popovers, toasts, dialogs).
  * Drags and layout motion are not claims: they freeze the panes they cover
- * (`still`), as today.
+ * (`still`), as in the legacy path.
  *
  * Claims and nested-claim `minus` shapes carry the corners the claim's
  * element draws (radius, Terminal chamfer, frost; `claim-shape.ts`).
@@ -82,7 +82,7 @@ export interface PageLayers {
 /** One registered page, as the aggregator reads it at send time. */
 export interface PageEntry {
   windowId: string
-  /** Registration order: later panes sit in front (they never overlap today). */
+  /** Registration order: later panes sit in front (they never overlap now). */
   order: number
   /** The dock's rect now (null while it has no size). */
   rect: PageShape | null

@@ -1,4 +1,4 @@
-//! An expired access token on a good sign-in (field report 2026-11-16):
+//! An expired access token on a good sign-in:
 //! the server default's access token expired and nothing renewed it, while
 //! the list still said plain `signed_in`.
 //!

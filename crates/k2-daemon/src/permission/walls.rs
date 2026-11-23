@@ -329,7 +329,7 @@ pub(crate) const V1_ACTIONS: [&str; 86] = [
     // 0.46.17: turn on CI on K2 Compute for the server (`ciPreview`, the
     // owner's). Its `ci.preview-off` twin is asked only.
     "ci.preview",
-    // 0.46.17 (field report 2026-11-16): a person rechecks the server's
+    // 0.46.17: a person rechecks the server's
     // LLM tokens for an agent (`k2 llm tokens refresh` is people only).
     "llm.tokens-refresh",
     // D1 (0.46.17): a person approves an agent's own review branch, and
@@ -2454,7 +2454,7 @@ mod tests {
         assert_eq!(p["approvers"], "owner or admin", "{p}");
     }
 
-    /// 0.46.17 (field report 2026-11-16): an agent's `k2 llm tokens refresh`
+    /// 0.46.17: an agent's `k2 llm tokens refresh`
     /// is people only; its refusal ends with the recheck card's line, for the
     /// token it named or for every token, never "It can't be requested". The
     /// other token changes (switch, sign-in, remove) stay a person's.

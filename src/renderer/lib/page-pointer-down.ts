@@ -6,7 +6,7 @@
  * click those menus already listen for (a pointerdown and a mousedown on
  * <body>, outside every menu).
  *
- * Whether the click also reaches the page is native (K2 Design's rule): it
+ * Whether the click also reaches the page is native: it
  * is swallowed when the frontmost open claim is a `menu`, and passes for a
  * `popover`. Toasts don't listen for outside clicks, so they stay.
  */

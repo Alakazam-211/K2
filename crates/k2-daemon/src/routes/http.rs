@@ -60,11 +60,8 @@ pub(crate) fn extract_token(query: &str) -> Option<&str> {
 }
 
 /// Query keys that name a credential, a caller or what a request acts on.
-/// A request may name each at most once: gates and handlers read these
-/// from different parsers (the first value, or the last), so one value is
-/// the only reading they all share. `project` / `project_path` are not
-/// here yet: the `k2` CLI's request helpers put the session's own
-/// `project=` first and some verbs add another (handlers read the last).
+/// A request may name each of these keys at most once, so every reader
+/// sees the same value.
 pub(crate) const SECURITY_KEYS: &[&str] = &[
     "token",
     "pass",

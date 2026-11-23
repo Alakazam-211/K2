@@ -4,7 +4,7 @@
 //   K2's UI. Menus, popovers and toasts over a page leave it live, and
 //   clicks, scroll and hover over the page reach it
 //   (src-tauri commands/browser_page_layers.rs, wry's `underlay`).
-// - `legacy`: today's path. The page floats over K2, and anything K2 draws
+// - `legacy`: the legacy path. The page floats over K2, and anything K2 draws
 //   over it freezes it (a picture shows, the native view hides).
 //
 // Windows and Linux always use `legacy` (they keep cut-outs).
@@ -25,7 +25,7 @@ import { webFeatures } from '@/web/features'
 export const LS_BROWSER_LAYERING = 'k2.browserLayering'
 export const LS_BROWSER_HOVER_PRIVATE_FALLBACK = 'k2.browserHoverPrivateWebkitFallback'
 /** '1' = the first click on a page in an inactive window also reaches the
- *  page. Off by default (Design: that click only activates the window). */
+ *  page. Off by default (that click only activates the window). */
 export const LS_BROWSER_PAGE_FIRST_CLICK = 'k2.browserPageFirstClick'
 /** 'none' = no hover gating at all (both pages and K2 get pointer moves);
  *  anything else: the gate. */

@@ -1,8 +1,7 @@
 //! The `job-exec` shim's loopback check (0.46.17) against real network
-//! namespaces. The field report: on two tenant nodes running k2-node
-//! 0.46.14, a connect to 127.0.0.1 inside a job never completed (a test
-//! that starts a local server and connects to it hung), while on a third
-//! node it worked. A 0.46.14 `network = none` unit had `IPAddressDeny=any`
+//! namespaces. On nodes running k2-node 0.46.14, a connect to 127.0.0.1
+//! inside a job never completed (a test that starts a local server and
+//! connects to it hung). A 0.46.14 `network = none` unit had `IPAddressDeny=any`
 //! and no allow for localhost; systemd's address filter covers `lo` and
 //! drops what it denies, so the handshake's packets vanished and the
 //! connect hung. The shim now checks loopback before the job's command and
@@ -13,7 +12,7 @@
 //!   `lo` up, and `lo` up with an nftables rule that drops every packet
 //!   leaving through it (the same effect as the unit's address filter);
 //! - as root, the exact 0.46.14 unit (`systemd-run`, `PrivateNetwork=yes`,
-//!   `IPAddressDeny=any`) beside today's (`IPAddressAllow=localhost`).
+//!   `IPAddressDeny=any`) beside the current one (`IPAddressAllow=localhost`).
 //!
 //! They need user namespaces (Ubuntu 24.04's AppArmor refuses them to a
 //! job user; Arch allows them), iproute2 and nft, or root and systemd, so
@@ -115,7 +114,7 @@ fn with_loopback_packets_dropped_the_job_fails_in_bounded_time() {
 }
 
 /// The exact unit shapes, as root: 0.46.14's `none` unit (a deny, no
-/// localhost allow) fails the job with the loopback error; today's (with
+/// localhost allow) fails the job with the loopback error; the current one (with
 /// `IPAddressAllow=localhost`) runs it. The shim runs as root here, in a
 /// dir under /var/lib (a unit's /tmp is its own).
 #[test]

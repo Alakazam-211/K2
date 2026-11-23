@@ -11,12 +11,12 @@
 // - What: "Replying to <name>" (or "…part of…"), the quoted message's first
 //   line in whole words (a tail that doesn't fit goes as a whole phrase,
 //   then "…"), and ×. × or Esc cancels (Esc from the box: TerminalComposeBar).
-// - Glass: the message box's own material (owner, 2026-11-22: the same
-//   glass as the box under it, and the box's text colour): the tile fill,
+// - Glass: the message box's own material (the same glass as the box under
+//   it, and the box's text colour): the tile fill,
 //   sheen and shadow, the box's edge (the soft tile edge in dark Glass, the
 //   control edge in Veil), and the words in the activity strip's main-line
-//   colour (owner: the same colour as "Working…" / "Thinking…" in the strip
-//   on the box, in every look; the strip's step line reads --zen-text).
+//   colour (the same colour as "Working…" / "Thinking…" in the strip on the
+//   box, in every look; the strip's step line reads --zen-text).
 //   Opaque, so the words read the same over any message.
 //   The pill's size and type stay.
 // - Terminal: a solid raised surface, the control edge, cut corners.

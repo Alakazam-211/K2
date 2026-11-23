@@ -1,5 +1,5 @@
 //! How a subscription token's access token stands right now, for the list,
-//! `status` and Settings (field report 2026-11-16).
+//! `status` and Settings.
 //!
 //! The stored `state` says whether the sign-in is good (`signed_in`) or
 //! not (`needs_login`, `not_set_up`). It never said that the short-lived

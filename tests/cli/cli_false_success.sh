@@ -112,11 +112,25 @@ assert_not_contains "workspace open: no unbound variable" "$open_out" "unbound v
 # ── 3. skin role create without --agent (still optional) ─────────────
 echo "== skin role create (no --agent) =="
 set +e
-role_out="$(run_k2 skin role create skintest-a 2>&1)"
+role_out="$(run_k2 skin role create skintest-a --box-wide 2>&1)"
 role_rc=$?
 set -e
 assert_not_contains "skin role create: no unbound variable" "$role_out" "unbound variable"
 assert_not_contains "skin role create: --agent still optional" "$role_out" "needs ≥1 --agent"
+
+# 0.46.18: a role names its App or says --box-wide; neither (or both) is
+# a usage refusal before anything is sent, naming both forms.
+set +e
+scope_out="$(run_k2 app role create skintest-b 2>&1)"
+scope_rc=$?
+both_out="$(run_k2 app role create skintest-b --app shop --box-wide 2>&1)"
+both_rc=$?
+set -e
+assert_eq "role create with no scope: exit 2" "$scope_rc" "2"
+assert_contains "role create with no scope: names --app" "$scope_out" "k2 app role create <name> --app <app>"
+assert_contains "role create with no scope: names --box-wide" "$scope_out" "k2 app role create <name> --box-wide"
+assert_eq "role create with both: exit 2" "$both_rc" "2"
+assert_contains "role create with both: says pick one" "$both_out" "not both"
 
 set +e
 role_upd_out="$(run_k2 skin role update skintest-a --clear 2>&1)"

@@ -1013,19 +1013,26 @@ fn role(words: &[&str]) -> Result<Ask, Stop> {
     }
 }
 
+/// `role create` names its App (`--app`) or says `--box-wide` (0.46.18):
+/// a box-wide role reaches every App and the box login.
+const ROLE_SCOPE: &str = concat!(
+    "Error: name the App the role is for: ",
+    cli_name!(),
+    " app role create <name> --app <app>. A role every App and the box login can use (only the owner edits it): ",
+    cli_name!(),
+    " app role create <name> --box-wide"
+);
+const ROLE_BOTH: &str = "Error: --app and --box-wide: a role is one App's or box-wide, not both";
+
 fn role_create(rest: &[&str]) -> Result<Ask, Stop> {
     const HELP: &str = concat!(
         "Usage: ",
         cli_name!(),
-        " app role create <name> [--agent sales] [--app <app>]"
-    );
-    const USAGE: &str = concat!(
-        "Usage: ",
-        cli_name!(),
-        " app role create <name> [--agent sales]"
+        " app role create <name> --app <app> | --box-wide [--agent sales]"
     );
     let (mut name, mut caps, mut app, mut agents) =
         (String::new(), String::new(), String::new(), Vec::new());
+    let mut box_wide = false;
     let mut w = Words::new(rest);
     while let Some(a) = w.take() {
         match a {
@@ -1033,14 +1040,21 @@ fn role_create(rest: &[&str]) -> Result<Ask, Stop> {
             "--agent" | "--agents" => agents.push(w.hard()?),
             "--app" => app = w.soft(),
             _ if a.starts_with("--app=") => app = a["--app=".len()..].to_string(),
+            "--box-wide" => box_wide = true,
             _ => positional(a, &mut name, HELP)?,
         }
     }
     if name.is_empty() {
-        return Err(Stop::err(&[USAGE], Exit::Error));
+        return Err(Stop::err(&[HELP], Exit::Error));
     }
     if !caps.is_empty() {
         return Err(Stop::err(&[ROLE_CAPS], Exit::Usage));
+    }
+    if !app.is_empty() && box_wide {
+        return Err(Stop::err(&[ROLE_BOTH], Exit::Usage));
+    }
+    if app.is_empty() && !box_wide {
+        return Err(Stop::err(&[ROLE_SCOPE], Exit::Usage));
     }
     let mut b = vec![("name", s(&name))];
     let rooms = rooms_of(&agents);
@@ -1228,15 +1242,17 @@ fn role_update(rest: &[&str]) -> Result<Ask, Stop> {
     const USAGE: &str = concat!(
         "Usage: ",
         cli_name!(),
-        " app role update <name> [--agent \u{2026} | --clear]"
+        " app role update <name> [--agent \u{2026} | --clear] [--app <app>]"
     );
     let (mut name, mut caps, mut clear, mut agents) =
         (String::new(), String::new(), false, Vec::new());
+    let mut app = String::new();
     let mut w = Words::new(rest);
     while let Some(a) = w.take() {
         match a {
             "--caps" | "--cap" => caps = w.hard()?,
             "--agent" | "--agents" => agents.push(w.hard()?),
+            "--app" => app = w.hard()?,
             "--clear" => clear = true,
             _ => positional(a, &mut name, USAGE)?,
         }
@@ -1253,6 +1269,10 @@ fn role_update(rest: &[&str]) -> Result<Ask, Stop> {
         b.push(("roomAccess", Value::Array(vec![])));
     } else if !py::strip(&joined).is_empty() {
         b.push(("rooms", Value::Array(rooms_of(&agents))));
+    }
+    let app_s = py::strip(&app);
+    if !app_s.is_empty() {
+        b.push(("app", s(app_s)));
     }
     Ok(post(
         "/cli/skin/roles/update",

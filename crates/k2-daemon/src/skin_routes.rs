@@ -1012,6 +1012,8 @@ fn agent_may_write_role(ws: &str, path: &str, body: &[u8]) -> Result<(), CliResp
         }
         "/cli/skin/roles/update" => {
             existing(&["id", "name", "role"])?;
+            // Narrowing (`--app`) names one of its own Apps only.
+            app_ok(opt_text_field(&v, &["appId", "app_id", "app"]))?;
             let role = found(&["id", "name", "role"])?;
             if let Ok(Some(p)) = role_policy_from_body(&v, true) {
                 policy_ok(&p, own_app_of(role.as_ref()).as_deref())?;
@@ -2668,8 +2670,44 @@ pub fn handle_access_post(path: &str, body: &[u8], actor: &str) -> CliResponse {
 
 pub fn handle_roles_get() -> CliResponse {
     match skin::list_roles() {
-        Ok(roles) => CliResponse::ok_json(serde_json::json!({ "roles": roles }).to_string()),
+        Ok(roles) => {
+            let roles: Vec<serde_json::Value> = roles.iter().map(role_json).collect();
+            CliResponse::ok_json(serde_json::json!({ "roles": roles }).to_string())
+        }
         Err(e) => CliResponse::internal_error(e),
+    }
+}
+
+/// What a box-wide role reaches, in one line (`role create` without an App,
+/// 0.46.18 papercut 3).
+pub const BOX_WIDE_HINT: &str = "box-wide: every App and the box login can use it, and only the owner edits it; for one App: --app <app> \
+     (to narrow this one: k2 app role update <role> --app <app>)";
+
+/// A role on the wire, with its scope (0.46.18 papercut 3): `scope` is
+/// `box` (no App: every App and the box login) or `app`, and `appLabel`
+/// names the App as `<workspace>/<name>`.
+pub fn role_json(role: &skin::SkinRole) -> serde_json::Value {
+    let mut v = serde_json::to_value(role).unwrap_or_else(|_| serde_json::json!({}));
+    match role.app_id.as_deref() {
+        None => v["scope"] = serde_json::json!("box"),
+        Some(app) => {
+            v["scope"] = serde_json::json!("app");
+            v["appLabel"] = serde_json::json!(app_label(app));
+        }
+    }
+    v
+}
+
+/// An App as `<workspace>/<name>` (its id when it is gone).
+fn app_label(app: &str) -> String {
+    let svc = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::published_services::get_by_id(&conn, app).ok().flatten()
+    };
+    match svc {
+        Some(s) => format!("{}/{}", crate::apps::routes::ws_handle(&s.project_id), s.name),
+        None => app.to_string(),
     }
 }
 
@@ -2709,7 +2747,11 @@ pub fn handle_roles_post(body: &[u8], actor: &str) -> CliResponse {
                 role.caps,
                 role.rooms
             );
-            CliResponse::ok_json(serde_json::to_string(&role).unwrap_or_else(|_| "{}".into()))
+            let mut v = role_json(&role);
+            if role.app_id.is_none() {
+                v["hint"] = serde_json::json!(BOX_WIDE_HINT);
+            }
+            CliResponse::ok_json(v.to_string())
         }
         Err(e) => CliResponse::bad_request(e),
     }
@@ -2727,6 +2769,26 @@ pub fn handle_roles_update(body: &[u8], actor: &str) -> CliResponse {
         Ok(p) => p,
         Err(e) => return e,
     };
+    // `--app`: narrow a box-wide role to one App (0.46.18 papercut 3).
+    if let Some(raw) = opt_text_field(&v, &["appId", "app_id", "app"]) {
+        let app = match resolve_app_target(raw) {
+            Ok(a) if a == skin::HOST_APP_ID => {
+                return CliResponse::bad_request("--app names one App; a role without an App is already box-wide")
+            }
+            Ok(a) => a,
+            Err(e) => return CliResponse::bad_request(e),
+        };
+        if let Err(r) = narrow_role(id_or_name, &app, actor) {
+            return r;
+        }
+        if policy.is_none() {
+            return match skin::find_role(id_or_name) {
+                Ok(Some(role)) => CliResponse::ok_json(role_json(&role).to_string()),
+                Ok(None) => CliResponse::bad_request(format!("unknown skin role '{id_or_name}'")),
+                Err(e) => CliResponse::internal_error(e),
+            };
+        }
+    }
     match skin::update_role(id_or_name, policy.as_ref()) {
         Ok(role) => {
             k2_core::log_debug!(
@@ -2735,9 +2797,37 @@ pub fn handle_roles_update(body: &[u8], actor: &str) -> CliResponse {
                 role.caps,
                 role.rooms
             );
-            CliResponse::ok_json(serde_json::to_string(&role).unwrap_or_else(|_| "{}".into()))
+            CliResponse::ok_json(role_json(&role).to_string())
         }
         Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+/// `k2 app role update <role> --app <app>`: a box-wide role becomes one
+/// App's, refused (409, naming them) while a login holds it anywhere else.
+fn narrow_role(id_or_name: &str, app: &str, actor: &str) -> Result<(), CliResponse> {
+    let conflict = |hint: String| CliResponse {
+        status: "409 Conflict",
+        content_type: "application/json",
+        body: serde_json::json!({ "ok": false, "error": { "code": "role_held_elsewhere", "hint": hint } }).to_string(),
+    };
+    match skin::narrow_role_to_app(id_or_name, app) {
+        Ok(role) => {
+            k2_core::log_debug!("[skin] actor={actor} narrowed role {} to app {app}", role.name);
+            Ok(())
+        }
+        Err(skin::NarrowRefused::Unknown) => Err(CliResponse::bad_request(format!("unknown skin role '{id_or_name}'"))),
+        Err(skin::NarrowRefused::OtherApp(other)) => Err(conflict(format!(
+            "role '{id_or_name}' belongs to the App {} already: make a role of the other App instead (k2 app role create <name> --app <app>)",
+            app_label(&other)
+        ))),
+        Err(skin::NarrowRefused::HeldElsewhere(who)) => Err(conflict(format!(
+            "role '{id_or_name}' is held outside the App {} by {}: they would lose it. Give them another role first \
+             (Settings → Access → User Access → the person → Sign-in and Apps → Role), then narrow it",
+            app_label(app),
+            who.join(", ")
+        ))),
+        Err(skin::NarrowRefused::Db(e)) => Err(CliResponse::bad_request(e)),
     }
 }
 

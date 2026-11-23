@@ -377,7 +377,8 @@ TWO CREDENTIALS (same prefix k2skn_)
   Do not mint a copyable key per person.
 
 ROLES (named bundles for guests — not Connect, not a platform token)
-  k2 app role create dentist
+  k2 app role create dentist --app <app>     one App's role (or --box-wide: every
+                                             App and the box login; the owner's)
   k2 app role room dentist sales --caps thread:read,thread:post
   k2 app role room dentist docs --caps thread:read,thread:post,files:read,tickets:read,tickets:post,wiki:read,store:read,store:write
   k2 app user role bob dentist

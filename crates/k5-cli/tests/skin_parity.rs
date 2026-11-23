@@ -463,11 +463,60 @@ fn skin_roles() {
             ),
             // covers: skin role create
             one(
-                "role create, no rooms",
-                &["role", "create", "staff"],
+                "role create --box-wide, no rooms",
+                &["role", "create", "staff", "--box-wide"],
+                r#"{"name":"staff","scope":"box","hint":"box-wide: every App and the box login can use it"}"#,
+                0,
+            ),
+            // covers: skin role create
+            one(
+                "role create --app, its scope",
+                &["role", "create", "staff", "--app", "a"],
+                r#"{"name":"staff","scope":"app","appLabel":"sales/a","roomAccess":[{"handle":"sales"}]}"#,
+                0,
+            ),
+            // covers: skin role create
+            one(
+                "role create, an older daemon's answer",
+                &["role", "create", "staff", "--app", "a"],
                 r#"{"name":"staff"}"#,
                 0,
             ),
+            // covers: skin role create
+            words(
+                "role create with neither --app nor --box-wide",
+                &["role", "create", "staff"],
+                2,
+            ),
+            // covers: skin role create
+            words(
+                "role create with --app and --box-wide",
+                &["role", "create", "staff", "--app", "a", "--box-wide"],
+                2,
+            ),
+            // covers: skin role list
+            one(
+                "role list, each role's scope",
+                &["role", "list"],
+                r#"{"roles":[{"name":"wide","scope":"box"},{"name":"shop","scope":"app","appLabel":"sales/shop","roomAccess":[{"handle":"sales"}]},{"name":"odd","scope":["box"]},{"name":"gone","scope":"app"}]}"#,
+                0,
+            ),
+            // covers: skin role update
+            one(
+                "role update --app narrows it",
+                &["role", "update", "staff", "--app", "sales/shop"],
+                r#"{"name":"staff","scope":"app","appLabel":"sales/shop"}"#,
+                0,
+            ),
+            // covers: skin role update
+            one(
+                "role update --app, held elsewhere",
+                &["role", "update", "staff", "--app", "sales/shop"],
+                r#"{"ok":false,"error":{"code":"role_held_elsewhere","hint":"role 'staff' is held outside the App sales/shop by bob"}}"#,
+                1,
+            ),
+            // covers: skin role update
+            words("role update --app with no value", &["role", "update", "staff", "--app"], 2),
             // covers: skin role create
             words(
                 "role create --caps",

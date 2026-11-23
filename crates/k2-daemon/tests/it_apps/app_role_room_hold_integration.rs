@@ -210,3 +210,90 @@ async fn with_the_switch_off_it_is_one_held_request_with_a_card_and_allow_applie
     assert_eq!(held_of(port, &b.sales).await.len(), 2, "only the two asks above were held");
     k2_daemon::apps::alerts::set_sink(None);
 }
+
+/// 0.46.18 papercut 3: a role says its scope. Without an App it is box-wide
+/// (`scope: "box"` and a hint naming `--app`); with one, `scope: "app"` and
+/// the App as `<workspace>/<name>`; the list says each role's.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_role_answers_with_its_scope_and_the_list_shows_each() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let t = tag();
+    let b = box3(&env, &t, true);
+
+    let wide = format!("swide{t}");
+    let v = owner_post(port, "/cli/skin/roles", json!({ "name": wide })).await;
+    assert_eq!(v["scope"], "box", "{v}");
+    let hint = v["hint"].as_str().expect("a box-wide role says so").to_string();
+    assert!(hint.contains("box-wide") && hint.contains("--app <app>") && hint.contains("only the owner edits it"), "{hint}");
+
+    let own = format!("sown{t}");
+    let v = owner_post(port, "/cli/skin/roles", json!({ "name": own, "app": b.shop })).await;
+    assert_eq!((v["scope"].clone(), v["appLabel"].clone()), (json!("app"), json!(format!("{}/{}", b.sales.handle, b.shop_name))), "{v}");
+    assert!(v.get("hint").is_none(), "an App's role needs no warning: {v}");
+
+    let r = get(port, "/cli/skin/roles", OWNER, "").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let roles = r.json()["roles"].as_array().expect("roles").clone();
+    let of = |n: &str| roles.iter().find(|x| x["name"] == json!(n)).cloned().unwrap_or_else(|| panic!("no {n} in {roles:?}"));
+    assert_eq!(of(&wide)["scope"], "box");
+    assert_eq!(of(&own)["scope"], "app");
+    assert_eq!(of(&own)["appLabel"], json!(format!("{}/{}", b.sales.handle, b.shop_name)));
+}
+
+/// `k2 app role update <role> --app <app>` narrows a box-wide role to one
+/// App, and is refused (409, naming them, nothing changed) while a login
+/// holds it on another App or as its own role everywhere.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_box_wide_role_narrows_to_one_app_only_while_no_one_holds_it_elsewhere() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let t = tag();
+    let b = box3(&env, &t, true);
+    let crm = app_row(&b.ops, &format!("ncrm{t}"));
+
+    // Held on another App: refused, naming who.
+    let wide = format!("nwide{t}");
+    owner_post(port, "/cli/skin/roles", json!({ "name": wide })).await;
+    let guest = format!("nguest{t}");
+    owner_post(port, "/cli/skin/users", json!({ "username": guest, "app": crm, "role": wide })).await;
+    let r = post(port, "/cli/skin/roles/update", OWNER, json!({ "name": wide, "app": b.shop })).await;
+    assert_eq!((r.status, r.code()), (409, "role_held_elsewhere".to_string()), "{}", r.body);
+    assert!(r.json()["error"]["hint"].as_str().expect("hint").contains(&guest), "names who would lose it: {}", r.body);
+    assert_eq!(k2_core::skin::find_role(&wide).unwrap().unwrap().app_id, None, "nothing changed");
+
+    // Held only on that App: narrowed.
+    let fine = format!("nfine{t}");
+    owner_post(port, "/cli/skin/roles", json!({ "name": fine })).await;
+    let on_shop = format!("nshop{t}");
+    owner_post(port, "/cli/skin/users", json!({ "username": on_shop, "app": b.shop, "role": fine })).await;
+    let v = owner_post(port, "/cli/skin/roles/update", json!({ "name": fine, "app": b.shop })).await;
+    assert_eq!(v["scope"], "app", "{v}");
+    assert_eq!(k2_core::skin::find_role(&fine).unwrap().unwrap().app_id.as_deref(), Some(b.shop.as_str()));
+
+    // A login's own role (it applies everywhere): refused too.
+    let mine = format!("nmine{t}");
+    owner_post(port, "/cli/skin/roles", json!({ "name": mine })).await;
+    let person = format!("nperson{t}");
+    owner_post(port, "/cli/skin/users", json!({ "username": person })).await;
+    owner_post(port, "/cli/skin/roles/assign", json!({ "username": person, "role": mine })).await;
+    let r = post(port, "/cli/skin/roles/update", OWNER, json!({ "name": mine, "app": b.shop })).await;
+    assert_eq!((r.status, r.code()), (409, "role_held_elsewhere".to_string()), "{}", r.body);
+    assert!(r.body.contains(&person), "{}", r.body);
+
+    // Another App's role never moves to this one.
+    let theirs = format!("ntheirs{t}");
+    owner_post(port, "/cli/skin/roles", json!({ "name": theirs, "app": crm })).await;
+    let r = post(port, "/cli/skin/roles/update", OWNER, json!({ "name": theirs, "app": b.shop })).await;
+    assert_eq!(r.status, 409, "{}", r.body);
+    assert_eq!(k2_core::skin::find_role(&theirs).unwrap().unwrap().app_id.as_deref(), Some(crm.as_str()));
+
+    // An agent narrows only to an App of its own.
+    let agents = format!("nagent{t}");
+    let r = post(port, "/cli/skin/roles", &b.agent, json!({ "name": agents, "app": b.shop })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(port, "/cli/skin/roles/update", &b.agent, json!({ "name": agents, "app": crm })).await;
+    assert_eq!(r.status, 403, "another workspace's App: {}", r.body);
+}

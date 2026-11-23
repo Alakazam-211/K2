@@ -803,24 +803,42 @@ fn caps(a: &Value, sep: &str, line: u32) -> Result<String, Raise> {
     })
 }
 
+/// A role's scope after its name (0.46.18): `  (box-wide)`, `  (App
+/// <label>)`, or nothing (an older daemon). Python's `r.get("scope") ==
+/// "box"`: only that string.
+fn scope_tag(r: &Value) -> String {
+    let is = |want: &str| matches!(g(r, "scope"), Value::Str(ref t) if t.as_str() == Some(want));
+    if is("box") {
+        "  (box-wide)".to_string()
+    } else if is("app") {
+        format!("  (App {})", st(&g(r, "appLabel")))
+    } else {
+        String::new()
+    }
+}
+
 /// `role create` (`created`) and `role update`.
 fn role_access(raw: &str, head_text: &str, created: bool) -> Shown {
     printed(raw, |d, o| {
         let d = need(d, 4)?;
         let access = orv(or2(d, "roomAccess", "room_access"), Value::Array(vec![]));
+        if created && truthy(&g(d, "hint")) {
+            o.err(format!("Note: {}", st(&g(d, "hint"))));
+        }
         let name = if created {
             st(&at_or(d, "name", s("")))
         } else {
             st(&orv(g(d, "name"), s("")))
         };
+        let tag = scope_tag(d);
         if created {
             if !truthy(&access) {
-                o.line(format!("{head_text}{name}  (none)"));
+                o.line(format!("{head_text}{name}{tag}  (none)"));
                 return Ok(Exit::Ok);
             }
-            o.line(format!("{head_text}{name}"));
+            o.line(format!("{head_text}{name}{tag}"));
         } else {
-            o.line(format!("{head_text}{name}"));
+            o.line(format!("{head_text}{name}{tag}"));
             if !truthy(&access) {
                 o.line("  (none)");
                 return Ok(Exit::Ok);
@@ -844,7 +862,7 @@ fn role_list(raw: &str) -> Shown {
         }
         for r in py_iter(&roles, 7)? {
             let r = need(&r, 8)?;
-            o.line(st(&orv(g(r, "name"), s(""))));
+            o.line(format!("{}{}", st(&orv(g(r, "name"), s(""))), scope_tag(r)));
             let access = orv(or2(r, "roomAccess", "room_access"), Value::Array(vec![]));
             if !truthy(&access) {
                 o.line("  (none)");

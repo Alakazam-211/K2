@@ -124,9 +124,11 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         at their next request
   k2 app user role <username> <role>   Assign an app role (not Connect owner/admin/member)
   k2 app user unassign <username>      Clear the assigned role (restore Thread-only + default rooms)
-  k2 app role create <name> [--agent sales] [--app <app>]
+  k2 app role create <name> --app <app> | --box-wide [--agent sales]
                                         Named bundle. No --agent = Thread dark. --agent without --caps = Thread-only on that room.
-                                        --app tags the role for one App (usable only on that App's grants).
+                                        --app: the role is that App's (usable only on its grants). --box-wide:
+                                        every App and the box login can use it, and only the owner edits it.
+                                        One of the two is required.
   k2 app role room <role> <handle> [--caps thread:read,thread:post,files:read]
                                         Add/replace functions on one room. Omit --caps = Thread-only. Not --caps with --agent.
                                         files:write never reaches the agent's .k2/ folder or its root
@@ -156,9 +158,11 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         hidden unless set. An agent's .k2 holds its inbox and sessions.
   k2 app role paths <role> <room> --clear
                                         Back to the whole room (hidden paths stay hidden)
-  k2 app role list                     Roles (per-room lines; no secrets)
-  k2 app role update <name> [--agent … | --clear]
+  k2 app role list                     Roles, each with its scope: (box-wide) or (App <app>); per-room lines
+  k2 app role update <name> [--agent … | --clear] [--app <app>]
                                         --clear empties the whole map. Always rewrites live sessions.
+                                        --app narrows a box-wide role to that App; refused (naming them)
+                                        while a login holds it on another App or the box login.
   k2 app role remove <name>            Drop an unassigned role
   k2 app grant list                    Grants (subject, kind, target, role|scope; chat rows show hook state).
                                         An agent sees the logins on its own workspace's Apps.

@@ -892,21 +892,33 @@ print("Skin user %s unassigned." % d.get("username",""))'
             shift || true
             case "$action" in
                 create)
-                    local name="" caps="" agents=() app=""
+                    # 0.46.18: a role is one App's (--app) unless it says
+                    # --box-wide: a box-wide role reaches every App and the
+                    # box login, and only the owner edits it.
+                    local name="" caps="" agents=() app="" box_wide=0
                     while [[ $# -gt 0 ]]; do
                         case "$1" in
                             --caps|--cap) _need_value "$@"; caps="${2:-}"; shift 2 ;;
                             --agent|--agents) _need_value "$@"; agents+=("${2:-}"); shift 2 ;;
                             --app) app="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
                             --app=*) app="${1#--app=}"; shift ;;
-                            --help|-h) echo "Usage: k2 app role create <name> [--agent sales] [--app <app>]" >&2; exit 0 ;;
+                            --box-wide) box_wide=1; shift ;;
+                            --help|-h) echo "Usage: k2 app role create <name> --app <app> | --box-wide [--agent sales]" >&2; exit 0 ;;
                             -*) echo "Unknown flag: $1" >&2; exit 1 ;;
                             *) [[ -z "$name" ]] && name="$1"; shift ;;
                         esac
                     done
-                    [[ -z "$name" ]] && { echo "Usage: k2 app role create <name> [--agent sales]" >&2; exit 1; }
+                    [[ -z "$name" ]] && { echo "Usage: k2 app role create <name> --app <app> | --box-wide [--agent sales]" >&2; exit 1; }
                     if [[ -n "$caps" ]]; then
                         echo "Error: use k2 app role room <role> <handle> [--caps …], not --caps with --agent" >&2
+                        exit 2
+                    fi
+                    if [[ -n "$app" && "$box_wide" = 1 ]]; then
+                        echo "Error: --app and --box-wide: a role is one App's or box-wide, not both" >&2
+                        exit 2
+                    fi
+                    if [[ -z "$app" && "$box_wide" != 1 ]]; then
+                        echo "Error: name the App the role is for: k2 app role create <name> --app <app>. A role every App and the box login can use (only the owner edits it): k2 app role create <name> --box-wide" >&2
                         exit 2
                     fi
                     local agents_nl="" a
@@ -931,11 +943,11 @@ print(json.dumps(b))')
                     printf '%s' "$raw" | python3 -c '
 import json,sys
 d=json.load(sys.stdin)
-access=d.get("roomAccess") or d.get("room_access") or []
+access=d.get("roomAccess") or d.get("room_access") or []; d.get("hint") and print("Note: %s" % (d.get("hint"),), file=sys.stderr)
 if not access:
-    print("Skin role created: %s  (none)" % (d.get("name",""),))
+    print("Skin role created: %s%s  (none)" % (d.get("name",""), ("  (box-wide)" if d.get("scope") == "box" else "  (App %s)" % (d.get("appLabel"),) if d.get("scope") == "app" else "")))
     sys.exit(0)
-print("Skin role created: %s" % d.get("name",""))
+print("Skin role created: %s%s" % (d.get("name",""), ("  (box-wide)" if d.get("scope") == "box" else "  (App %s)" % (d.get("appLabel"),) if d.get("scope") == "app" else "")))
 for a in access:
     caps=", ".join(a.get("caps") or []) or "thread-only"
     print("  %s  %s" % (a.get("handle") or "", caps))'
@@ -951,7 +963,7 @@ roles=d.get("roles",[])
 if not roles:
     print("No skin roles."); sys.exit(0)
 for r in roles:
-    print(r.get("name") or "")
+    print(r.get("name") or "", *(["(box-wide)"] if r.get("scope") == "box" else ["(App %s)" % (r.get("appLabel"),)] if r.get("scope") == "app" else []), sep="  ")
     access=r.get("roomAccess") or r.get("room_access") or []
     if not access:
         print("  (none)")
@@ -1129,18 +1141,21 @@ for a in d.get("roomAccess") or d.get("room_access") or []:
         print("      hidden: %s (never listed or read, even inside a folder)" % ", ".join(f["hide"]))'
                     ;;
                 update)
-                    local name="" caps="" clear=0 agents=()
+                    # --app: a box-wide role becomes that App's (0.46.18);
+                    # refused while a login holds it anywhere else.
+                    local name="" caps="" clear=0 agents=() app=""
                     while [[ $# -gt 0 ]]; do
                         case "$1" in
                             --caps|--cap) _need_value "$@"; caps="${2:-}"; shift 2 ;;
                             --agent|--agents) _need_value "$@"; agents+=("${2:-}"); shift 2 ;;
+                            --app) _need_value "$@"; app="${2:-}"; shift 2 ;;
                             --clear) clear=1; shift ;;
-                            --help|-h) echo "Usage: k2 app role update <name> [--agent … | --clear]" >&2; exit 0 ;;
+                            --help|-h) echo "Usage: k2 app role update <name> [--agent … | --clear] [--app <app>]" >&2; exit 0 ;;
                             -*) echo "Unknown flag: $1" >&2; exit 1 ;;
                             *) [[ -z "$name" ]] && name="$1"; shift ;;
                         esac
                     done
-                    [[ -z "$name" ]] && { echo "Usage: k2 app role update <name> [--agent … | --clear]" >&2; exit 1; }
+                    [[ -z "$name" ]] && { echo "Usage: k2 app role update <name> [--agent … | --clear] [--app <app>]" >&2; exit 1; }
                     if [[ -n "$caps" ]]; then
                         echo "Error: use k2 app role room <role> <handle> [--caps …], not --caps with --agent" >&2
                         exit 2
@@ -1152,20 +1167,22 @@ for a in d.get("roomAccess") or d.get("room_access") or []:
                         done
                     fi
                     local body raw
-                    body=$(K2_SKIN_NAME="$name" K2_SKIN_AGENTS="$agents_nl" K2_SKIN_CLEAR="$clear" python3 -c '
+                    body=$(K2_SKIN_NAME="$name" K2_SKIN_AGENTS="$agents_nl" K2_SKIN_CLEAR="$clear" K2_SKIN_APP="$app" python3 -c '
 import json,os
 b={"name": os.environ.get("K2_SKIN_NAME","")}
 if os.environ.get("K2_SKIN_CLEAR","0") == "1":
     b["roomAccess"]=[]
 elif os.environ.get("K2_SKIN_AGENTS","").strip():
     b["rooms"]=[s.strip() for s in os.environ.get("K2_SKIN_AGENTS","").splitlines() if s.strip()]
+if os.environ.get("K2_SKIN_APP","").strip():
+    b["app"]=os.environ["K2_SKIN_APP"].strip()
 print(json.dumps(b))')
                     raw=$(cli_post_json "/cli/skin/roles/update" "$body")
                     printf '%s' "$raw" | _skin_die_if_err
                     printf '%s' "$raw" | python3 -c '
 import json,sys
 d=json.load(sys.stdin)
-print("Skin role updated: %s" % (d.get("name") or ""))
+print("Skin role updated: %s%s" % (d.get("name") or "", ("  (box-wide)" if d.get("scope") == "box" else "  (App %s)" % (d.get("appLabel"),) if d.get("scope") == "app" else "")))
 access=d.get("roomAccess") or d.get("room_access") or []
 if not access:
     print("  (none)")

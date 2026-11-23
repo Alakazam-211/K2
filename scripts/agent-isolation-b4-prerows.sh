@@ -78,6 +78,15 @@ ino2="$(stat -c %i /sys/fs/cgroup/k2isorow.slice/k2isorow-empty.slice 2>/dev/nul
 row 3 "empty slice cgroup inode: after its unit ended $ino1, after daemon-reload $ino_after_reload, after a new unit $ino2"
 sudo systemctl stop k2isorow-empty.slice 2>/dev/null
 
+# PF. Whether this systemd takes PIDFDs= on a transient scope (R3): its
+#     version, and a transient scope named with ':' made by root around a
+#     sleep (the name kept unchanged as the cgroup folder).
+row PF "$(systemctl --version | head -1) · busctl $(busctl --version | head -1)"
+sudo systemd-run --quiet --collect --scope --slice="$slice" --unit="k2-agent-row:0123456789abcdef.scope" sleep 5 &
+sleep 1
+row PF-colon "a scope named k2-agent-row:0123456789abcdef.scope: $(ls -d /sys/fs/cgroup/$slice/k2-agent-row:0123456789abcdef.scope 2>&1 | first_line)"
+wait $! 2>/dev/null
+
 # 5. What the daemon's unit sets today.
 row 5 "$unit: $(systemctl show "$unit" -p MemoryMax -p MemoryHigh -p TasksMax -p OOMPolicy -p CPUWeight -p IOWeight -p Delegate -p DelegateSubgroup -p KillMode | tr '\n' ' ')"
 

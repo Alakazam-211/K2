@@ -72,7 +72,8 @@ pub const CLAIM_ROOT: &str = "labelled by agent: each agent's terminals, job run
 /// The claim with the root helper's scopes (B4).
 pub const CLAIM_SCOPE: &str = "labelled by agent: each agent's terminals, job runs and published services run in their own \
      root-owned scope outside the server's own service, placed by the root helper, and no process of the server user can put \
-     a process into another agent's scope. A copied terminal or job passport alone no longer works (App exec and microVM cell \
+     a process into another agent's scope (checked when the server starts). Sessions from before an update may still be in \
+     the old layout until they end; they get their own scope at their next start. A copied terminal or job passport alone no longer works (App exec and microVM cell \
      passports aren't bound and work as before). An unfenced agent is still the same user as every other agent: it can make \
      another agent's session run its commands (through that agent's files, the owner token on disk, or ptrace where the kernel \
      allows it), and it may be able to move an agent's processes out of their scope, which drops that label. A fenced agent \
@@ -253,7 +254,22 @@ pub struct Bound<'a> {
 /// session placed without identity (accepted as before). `peer`: who the
 /// connecting process is, by its cgroup (with [`with_owner`]).
 pub fn decide(bound: Option<Bound>, peer: &PeerAgent) -> Decision {
+    decide_in(bound, peer, crate::agent_scope::scope_placement(), crate::agent_scope::old_layout_allowed)
+}
+
+/// [`decide`] with the box's scope state passed in (pure, for tests).
+pub fn decide_in(bound: Option<Bound>, peer: &PeerAgent, scopes_on: bool, old_layout_ok: impl Fn(&str) -> bool) -> Decision {
     let Some(b) = bound else { return Decision::Allow };
+    // B4: with scopes on, a bound session is recognised from a scope only,
+    // or from the old layout while its agent has survivors listed there.
+    if let PeerAgent::Agent { ws, cgroup, .. } = peer {
+        let in_scope = crate::agent_scope::classify_scope(cgroup).is_some();
+        if scopes_on && !in_scope && !old_layout_ok(ws) {
+            return Decision::Refuse {
+                detail: format!("the passport of agent {} was presented from {}, outside an agent scope", b.ws, peer.describe()),
+            };
+        }
+    }
     match peer {
         PeerAgent::Agent { ws, root_owned, .. } if ws == b.ws && (*root_owned || !b.root_placed) => Decision::Allow,
         other => Decision::Refuse {
@@ -665,6 +681,16 @@ pub fn status_json() -> serde_json::Value {
         }),
     };
     v["switch"] = serde_json::json!(format!("{ENV_SWITCH}={}", if switch_off() { "0 (emergency off)" } else { "unset (on)" }));
+    // B4 (R4): why scopes are off, the P1 answer, and sessions still in the
+    // old layout ("old layout, not adopted"), not only in the debug log.
+    if let Some(b) = crate::agent_scope::box_state() {
+        v["scopes"] = serde_json::json!({
+            "on": crate::agent_scope::scope_placement(),
+            "whyOff": b.why_off,
+            "p1": b.p1,
+            "oldLayout": b.old_layout.iter().map(|(ws, why)| serde_json::json!({ "agent": ws, "state": "old layout, not adopted", "why": why })).collect::<Vec<_>>(),
+        });
+    }
     v["landlock"] = match landlock {
         Ok(n) => serde_json::json!({ "abi": n }),
         Err(e) => serde_json::json!({ "abi": null, "why": e }),
@@ -819,5 +845,24 @@ mod tests {
         assert_eq!(decide(selfp, &user_a), Decision::Allow, "placed before the helper: M1's rule");
         assert_eq!(decide(selfp, &root_a), Decision::Allow);
         assert!(matches!(decide(Some(Bound { ws: "B", root_placed: true }), &root_a), Decision::Refuse { .. }));
+    }
+
+    /// B4 review test 4: with scopes on, a session's passport counts from
+    /// an agent scope; from an old-layout cgroup only while that agent has
+    /// survivors listed there.
+    #[test]
+    fn with_scopes_on_a_passport_counts_from_a_scope_or_a_listed_survivor() {
+        let scope = PeerAgent::Agent { ws: "A".into(), cgroup: "/k2agents.slice/k2agents-open.slice/k2-agent-A:0123456789abcdef.scope".into(), root_owned: true };
+        let old = PeerAgent::Agent { ws: "A".into(), cgroup: format!("{LEAF}/a-A"), root_owned: true };
+        let placed = Some(Bound { ws: "A", root_placed: true });
+        let none = |_: &str| false;
+        assert_eq!(decide_in(placed, &scope, true, none), Decision::Allow);
+        let Decision::Refuse { detail } = decide_in(placed, &old, true, none) else { panic!("an old-layout cgroup with no survivors listed is refused") };
+        assert!(detail.contains("outside an agent scope"), "{detail}");
+        assert_eq!(decide_in(placed, &old, true, |w: &str| w == "A"), Decision::Allow, "a listed survivor");
+        assert!(matches!(decide_in(placed, &old, true, |w: &str| w == "B"), Decision::Refuse { .. }), "another agent's survivors don't count");
+        assert_eq!(decide_in(placed, &old, false, none), Decision::Allow, "scopes off: M1b's rule");
+        let other = PeerAgent::Agent { ws: "B".into(), cgroup: "/k2agents.slice/k2agents-open.slice/k2-agent-B:0123456789abcdef.scope".into(), root_owned: true };
+        assert!(matches!(decide_in(placed, &other, true, none), Decision::Refuse { .. }), "another agent's scope");
     }
 }

@@ -315,44 +315,69 @@ pub fn register_root_placement() {
 /// anchors are ready (and a transient unit of the server user's own is
 /// refused, P1). Then every isolated process gets its own scope.
 fn register_scope_placement() -> Result<(), String> {
+    let mut state = k2_core::agent_scope::BoxState::default();
+    let r = scope_placement_inner(&mut state);
+    if let Err(why) = &r {
+        state.why_off = Some(why.clone());
+    }
+    // R4: the reason, the P1 answer and the old-layout sessions go to
+    // `/boot-status` and the doctor, not only the debug log.
+    k2_core::agent_scope::set_box_state(state);
+    r
+}
+
+fn scope_placement_inner(state: &mut k2_core::agent_scope::BoxState) -> Result<(), String> {
     let st = crate::root_helper::state();
     if !agentscope_ok(&st) {
         return Err(crate::root_helper::helper_needed("a root-owned scope per agent session", k2_root_proto::version::AGENTSCOPE_MIN_PROTOCOL, &st));
     }
     let out = crate::root_helper::call(&["agents".to_string(), "layout".to_string()], None)?;
     let v: serde_json::Value = serde_json::from_slice(&out).map_err(|e| format!("agents layout: not JSON: {e}"))?;
+    state.p1 = v["p1"].as_str().map(str::to_string);
     layout_ready(&v)?;
     k2_core::agent_scope::set_caller(Box::new(|argv: &[String]| {
         let out = crate::root_helper::call(argv, None)?;
         serde_json::from_slice(&out).map_err(|e| format!("agents {}: not JSON: {e}", argv.get(1).map(String::as_str).unwrap_or("")))
     }));
     log_debug!("[agents] identity on: the root helper places each agent session, job run and service in its own scope");
-    adopt_survivors(&v);
+    state.old_layout = adopt_survivors(&v);
     Ok(())
 }
 
-/// M4: sessions that lived through an update in the old layout
-/// (`<unit>/agents/a-<ws>`) move into one new scope per agent, fenced and
-/// unfenced alike (an unfenced one left there would be on no allow line).
-/// The kind is the agent's fence now (fenced only narrows). One that can't
-/// be adopted stays where it is, said in the log and by `agents layout`.
-fn adopt_survivors(layout: &serde_json::Value) {
+/// M4 (review R1): sessions that lived through an update in a root-owned
+/// old-layout cgroup (`<unit>/agents/a-<ws>`, placed by the M1b helper)
+/// move into one new scope per agent; the helper refuses a cgroup the
+/// server user owns (a process could have been put there). The kind is the
+/// agent's fence now: a slice only narrows the port rules, it never means
+/// "this process is fenced". Returns the agents whose sessions stay in the
+/// old layout ("old layout, not adopted": they keep running where they are
+/// and get a scope at their next start), with why.
+fn adopt_survivors(layout: &serde_json::Value) -> Vec<(String, String)> {
+    let mut left = Vec::new();
     for s in layout["survivors"].as_array().into_iter().flatten() {
         let Some(ws) = s["ws"].as_str() else { continue };
+        if s["adoptable"].as_bool() != Some(true) {
+            left.push((ws.to_string(), format!("its old cgroup is not root's (owner uid {})", s["owner"])));
+            continue;
+        }
         let fenced = workspace_and_fence(ws).1;
         let plan = match k2_core::agent_scope::ScopePlan::new(fenced) {
             Ok(p) => p,
             Err(e) => {
-                log_debug!("[agents] survivors of agent {ws} not adopted: {e}");
+                left.push((ws.to_string(), e));
                 continue;
             }
         };
         let kind = plan.kind().as_str().to_string();
         match crate::root_helper::call(&["agents".into(), "adopt".into(), ws.to_string(), plan.id.clone(), kind], None) {
             Ok(out) => log_debug!("[agents] survivors of agent {ws} adopted into a scope: {}", String::from_utf8_lossy(&out)),
-            Err(e) => log_debug!("[agents] survivors of agent {ws} not adopted (they stay in the old layout, traceable): {e}"),
+            Err(e) => {
+                log_debug!("[agents] survivors of agent {ws} not adopted (they stay in the old layout): {e}");
+                left.push((ws.to_string(), e));
+            }
         }
     }
+    left
 }
 
 /// Pure: whether `agents layout`'s answer lets scope placement start.

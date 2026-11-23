@@ -92,14 +92,17 @@ impl ScopePlan {
         }
     }
     /// A dev server's caps (`publish_dev`: MB and CPUs), clamped into the
-    /// helper's bounds.
-    pub fn with_caps(mut self, mem_mb: i64, cpus: f64) -> Self {
+    /// helper's bounds. A CPU count that isn't a finite number is refused.
+    pub fn with_caps(mut self, mem_mb: i64, cpus: f64) -> Result<Self, String> {
         let (mlo, mhi) = MEM_MB;
         let (clo, chi) = CPU_PCT;
-        self.mem_mb = Some(mem_mb.clamp(mlo as i64, mhi as i64) as u32);
         let pct = (cpus * 100.0).round();
-        self.cpu_pct = Some(if pct.is_finite() { (pct as i64).clamp(clo as i64, chi as i64) as u32 } else { chi });
-        self
+        if !pct.is_finite() {
+            return Err(format!("a dev server's CPU cap of {cpus} isn't a number of CPUs"));
+        }
+        self.mem_mb = Some(mem_mb.clamp(mlo as i64, mhi as i64) as u32);
+        self.cpu_pct = Some((pct as i64).clamp(clo as i64, chi as i64) as u32);
+        Ok(self)
     }
     /// `k2-agent-<ws>:<id>.scope`.
     pub fn unit(&self, ws: &str) -> Option<String> {
@@ -151,6 +154,40 @@ pub fn set_caller(c: Caller) {
 /// The helper places every isolated process in its own scope here.
 pub fn scope_placement() -> bool {
     CALLER.get().is_some()
+}
+
+/// What `/boot-status` and the doctor say about scopes on this box (R4):
+/// why scope placement is off, the P1 answer, and the agents whose
+/// sessions are still in the old layout (not adopted: they keep running
+/// where they are and are placed in a scope at their next start).
+#[derive(Debug, Clone, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BoxState {
+    /// `None` while scope placement is on.
+    pub why_off: Option<String>,
+    /// `agents layout`'s P1 answer (`refused`, `ALLOWED`, `unknown`).
+    pub p1: Option<String>,
+    /// Workspace ids with sessions in the old layout, and why each wasn't
+    /// adopted.
+    pub old_layout: Vec<(String, String)>,
+}
+
+static BOX_STATE: std::sync::Mutex<Option<BoxState>> = std::sync::Mutex::new(None);
+
+/// Boot: record the box's scope state for `/boot-status` and the doctor.
+pub fn set_box_state(st: BoxState) {
+    *BOX_STATE.lock().unwrap_or_else(|e| e.into_inner()) = Some(st);
+}
+
+pub fn box_state() -> Option<BoxState> {
+    BOX_STATE.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// While scope placement is on, a bound session is recognised only from a
+/// scope, except for an agent whose sessions are still listed in the old
+/// layout (survivors of an update, until they end).
+pub fn old_layout_allowed(ws: &str) -> bool {
+    box_state().is_some_and(|b| b.old_layout.iter().any(|(w, _)| w == ws))
 }
 
 /// Place `pid` (an exec helper waiting, started at `start`) in its scope.
@@ -235,13 +272,16 @@ mod tests {
 
     #[test]
     fn dev_caps_are_bounded_integers() {
-        let p = ScopePlan::new(false).unwrap().with_caps(512, 1.5);
+        let p = ScopePlan::new(false).unwrap().with_caps(512, 1.5).unwrap();
         assert_eq!((p.mem_mb, p.cpu_pct), (Some(512), Some(150)));
         assert!(p.argv(WS, 2, 3).ends_with(&["mem=512".to_string(), "cpu=150".to_string()]));
-        let p = ScopePlan::new(false).unwrap().with_caps(1, 0.001);
+        let p = ScopePlan::new(false).unwrap().with_caps(1, 0.001).unwrap();
         assert_eq!((p.mem_mb, p.cpu_pct), (Some(16), Some(1)), "clamped up into the helper's bounds");
-        let p = ScopePlan::new(false).unwrap().with_caps(i64::MAX, f64::NAN);
+        let p = ScopePlan::new(false).unwrap().with_caps(i64::MAX, 1e9).unwrap();
         assert_eq!((p.mem_mb, p.cpu_pct), (Some(1_048_576), Some(25_600)));
+        for bad in [f64::NAN, f64::INFINITY] {
+            assert!(ScopePlan::new(false).unwrap().with_caps(512, bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

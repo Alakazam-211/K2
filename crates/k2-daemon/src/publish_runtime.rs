@@ -591,7 +591,7 @@ fn spawn_child(
         // properties; otherwise it runs uncapped while isolation applies.
         let mut iso = crate::agent_isolation::for_service(project_id, cwd);
         if let (Some(i), Some((mem, cpus))) = (iso.as_mut(), dev) {
-            i.scope = i.scope.take().map(|p| p.with_caps(mem, cpus));
+            i.scope = i.scope.take().map(|p| p.with_caps(mem, cpus)).transpose()?;
         }
         let mut spec_env: Option<String> = None;
         let (mut c, scoped) = match &iso {

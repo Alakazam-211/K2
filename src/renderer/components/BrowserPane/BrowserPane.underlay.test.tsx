@@ -28,6 +28,13 @@ vi.mock('@/lib/desktop-chrome', async (orig) => ({
   isMacPlatform: () => true,
 }))
 
+// The pane's drawn corners, when a test sets them (else the real reading).
+let look: import('./dockGeometry').DockAppearance | null = null
+vi.mock('./dockGeometry', async (orig) => {
+  const real = await orig<typeof import('./dockGeometry')>()
+  return { ...real, dockAppearance: (el: Element) => look ?? real.dockAppearance(el) }
+})
+
 class ResizeObserverStub {
   observe(): void {}
   unobserve(): void {}
@@ -74,6 +81,7 @@ beforeEach(() => {
   useSettingsStore.setState({ settingsOpen: false })
   usePageViewStore.setState({ page: 'agents' })
   layersImpl = async () => null
+  look = null
   vi.mocked(invoke).mockReset()
   vi.mocked(invoke).mockImplementation(async (cmd: string) => {
     if (cmd === 'browser_snapshot') return new Uint8Array([0xff, 0xd8, 0xff, 0xd9]).buffer
@@ -124,6 +132,16 @@ describe('Browser pane in the macOS underlay', () => {
     const opts = calls().find((c) => c[0] === 'browser_set_page_layers')?.[1] as { options: unknown }
     expect(opts.options).toEqual({ hoverPrivateWebkitFallback: false, pageFirstClick: false })
     expect(typeof last?.epoch).toBe('string')
+  })
+
+  it("the page layer's hole takes the pane's drawn radius at each corner", async () => {
+    look = { background: null, cornerRadius: 16, corners: [false, false, true, true], radii: [0, 0, 16, 16] }
+    await mount()
+    expect(sets().at(-1)?.layers[0].rect.radius).toEqual([0, 0, 16, 16])
+    // The native layer's own corners (the backup) come with create.
+    const create = calls().find((c) => c[0] === 'browser_create')?.[1] as { appearance: { cornerRadius: number; corners: boolean[] } }
+    expect(create.appearance.cornerRadius).toBe(16)
+    expect(create.appearance.corners).toEqual([false, false, true, true])
   })
 
   it('a menu over the page leaves it live: a claim, no snapshot and no hide', async () => {

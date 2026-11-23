@@ -3735,8 +3735,12 @@ pub(crate) fn repo_pick(ws: &Ws, v: &serde_json::Value) -> R<RepoPick> {
         let n = compute::sync::nested_repo(ws_dir, rel).map_err(|e| no(REPO_INVALID, 400, e))?;
         return Ok(nested_pick(n, false));
     }
-    match compute::sync::repo_root(ws_dir) {
+    let fenced = crate::agent_isolation::workspace_and_fence(&ws.id).1;
+    match compute::sync::workspace_repo_root(ws_dir, fenced) {
         Ok(home) => crate::compute_repo_pick::in_repo_workspace(ws, home, s(v, "repoDir")),
+        // M2 (S0): a fenced workspace inside a larger repo ships only a repo
+        // of its own (`--repo`), never the larger one.
+        Err(e) if fenced && compute::sync::repo_root(ws_dir).is_ok() => Err(no(REPO_INVALID, 400, e)),
         Err(_) => {
             let from_caller = s(v, "repoDir")
                 .filter(|d| !d.is_empty())

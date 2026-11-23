@@ -1021,6 +1021,19 @@ fn handle_run(params: &HashMap<String, String>) -> CliResponse {
         .map(PathBuf::from)
         .or_else(|| resolve_project_path(&project_id).map(PathBuf::from))
         .unwrap_or_else(|| PathBuf::from(&project));
+    // M2 (S0): the daemon runs, copies and serves this folder for the
+    // caller, so an agent's (a session passport's) folder is one it may read
+    // itself: never K2's home or a credential folder, and inside its
+    // workspace when its folder fence is on.
+    if let Some((ws, _)) = who.passport() {
+        let mut folders = vec![cwd.clone()];
+        if !skin_root.trim().is_empty() {
+            folders.push(cwd.join(skin_root.trim()));
+        }
+        if let Some(refusal) = crate::agent_isolation::reach_refusal(ws, &folders, "publish") {
+            return refusal;
+        }
+    }
     // K5 (§8.2): a NEW --cmd label, or a re-run of an open-path folder App,
     // runs on the open path when this box has it; an existing --cmd
     // service is untouched in 0.46.1.
@@ -1501,6 +1514,54 @@ fn handle_expose(params: &HashMap<String, String>) -> CliResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// M2 (S0): an agent's `publish run --cwd` is a folder it may read
+    /// itself: K2's own folder is refused for any agent, a folder outside
+    /// the workspace once its fence is on. Refused before anything runs.
+    #[cfg(unix)]
+    #[test]
+    fn an_agents_publish_folder_is_one_it_may_read() {
+        let home = k2_core::test_env::TempHome::new();
+        let _ = k2_core::db::init_for_tests();
+        let ws = home.path().join("DevProjects/A");
+        let elsewhere = home.path().join("sites/blog");
+        let k2 = k2_core::paths::k2_home();
+        for d in [&ws, &elsewhere, &k2] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let id = uuid::Uuid::new_v4().to_string();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute("INSERT INTO projects (id, name, path) VALUES (?1, ?2, ?3)", rusqlite::params![id, "publish-a", ws.to_string_lossy().as_ref()]).unwrap();
+        }
+        let agent = crate::compute_routes::Who::Agent { project_id: id.clone(), session_id: "s-1".into() };
+        let run = |cwd: &std::path::Path| {
+            let params: HashMap<String, String> = [
+                ("project", ws.display().to_string()),
+                ("name", "m2probe".to_string()),
+                ("cmd", "true".to_string()),
+                ("cwd", cwd.display().to_string()),
+                ("port", "45999".to_string()),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect();
+            dispatch_post_as("/cli/publish/run", &params, agent.clone())
+        };
+        let out_of_reach = |r: &CliResponse| r.status == "403 Forbidden" && r.body.contains("path_out_of_reach");
+        // (Only refusals here: an allowed run would start the service. What an
+        // agent may read is `agent_fence::reach_refusal`'s own test.)
+        let r = run(&k2);
+        assert!(out_of_reach(&r), "K2's own folder: {} {}", r.status, r.body);
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute("UPDATE projects SET isolation_mode = 'fence' WHERE id = ?1", [&id]).unwrap();
+        }
+        let r = run(&elsewhere);
+        assert!(out_of_reach(&r), "fenced: outside the workspace: {} {}", r.status, r.body);
+    }
 
     /// DM-5: a dev server has no wall, so an agent's first one is held on
     /// every box, whether or not the open path is ready there. Only the owner's

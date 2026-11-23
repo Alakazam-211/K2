@@ -8,7 +8,7 @@
 //! Every handler is a thin wrapper around `k2_core::inbox::*`.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::cli_response::CliResponse;
 
@@ -478,13 +478,21 @@ pub fn handle_deliver_post(params: &HashMap<String, String>) -> CliResponse {
         Ok(p) => p,
         Err(r) => return r,
     };
+    // M2 (S0): the daemon reads the sources for the caller, so an agent
+    // hands over only what it may read itself.
     if let Some((agent, host)) = split_federated_user_target(&target_token) {
+        if let Some(refusal) = agent_reach_refusal(params, &source_paths, None) {
+            return refusal;
+        }
         return deliver_federated_files(params, &agent, &host, &source_paths);
     }
     let Some(resolved_path) = crate::workspace_msg::resolve_workspace_allowing_handle(&target_token)
     else {
         return crate::workspace_routes::workspace_not_found_response(&target_token);
     };
+    if let Some(refusal) = agent_reach_refusal(params, &source_paths, Some(Path::new(&resolved_path))) {
+        return refusal;
+    }
     let principal = crate::caller_workspace::principal_from_params(params);
     match crate::comms::gate_cross_workspace(principal.as_ref(), &resolved_path) {
         Ok(()) => {}
@@ -561,6 +569,9 @@ pub fn handle_deliver_bundle_post(params: &HashMap<String, String>) -> CliRespon
         );
     }
     let bundle_path = PathBuf::from(&path_str);
+    if let Some(refusal) = agent_reach_refusal(params, std::slice::from_ref(&bundle_path), Some(Path::new(&resolved_path))) {
+        return refusal;
+    }
     let title = opt_param(params, "title");
     let from = opt_param(params, "from");
     let source = opt_param(params, "source");
@@ -581,6 +592,22 @@ pub fn handle_deliver_bundle_post(params: &HashMap<String, String>) -> CliRespon
     };
 
     finish_deliver_response(params, &target_token, package, from, wake)
+}
+
+/// An agent's (scoped caller's) delivery reads only files it may read
+/// itself (`agent_isolation::reach_refusal`); the owner and logins as before.
+/// A file the CLI staged into the target's own inbox staging folder
+/// (`<target>/.k2/tmp/msg-inbox/`, the upload it was allowed to make) stays
+/// in that workspace, so it is not the caller's to check.
+fn agent_reach_refusal(params: &HashMap<String, String>, paths: &[PathBuf], target: Option<&Path>) -> Option<CliResponse> {
+    let principal = crate::caller_workspace::principal_from_params(params)?;
+    let staging = target.and_then(|t| std::fs::canonicalize(t.join(".k2").join("tmp").join("msg-inbox")).ok());
+    let checked: Vec<PathBuf> = paths
+        .iter()
+        .filter(|p| !staging.as_ref().is_some_and(|s| std::fs::canonicalize(p).is_ok_and(|c| c.starts_with(s))))
+        .cloned()
+        .collect();
+    crate::agent_isolation::reach_refusal(&principal.workspace_uuid, &checked, "deliver")
 }
 
 /// Resolve `paths` (JSON array) and/or `path` (single) into source file list.
@@ -978,6 +1005,71 @@ mod tests {
         let conn = db.lock();
         let _ = conn.execute("DELETE FROM projects WHERE id = ?1", rusqlite::params![caller_id]);
         let _ = conn.execute("DELETE FROM projects WHERE id = ?1", rusqlite::params![peer_id]);
+    }
+
+    /// M2 (S0): an agent delivers only files it may read itself. A
+    /// credential folder (`~/.ssh`) or K2's own folder is refused for any
+    /// agent; with its folder fence on, anything outside its workspace is
+    /// refused too. Nothing lands. The owner delivers as before.
+    #[cfg(unix)]
+    #[test]
+    fn an_agent_delivers_only_what_it_may_read() {
+        let home = k2_core::test_env::TempHome::new();
+        let _ = k2_core::db::init_for_tests();
+        let h = home.path().to_path_buf();
+        let ws = h.join("DevProjects/A");
+        let elsewhere = h.join("notes");
+        let k2 = k2_core::paths::k2_home();
+        for d in [&ws, &elsewhere, &h.join(".ssh"), &k2] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(h.join(".ssh/id_ed25519"), "KEY").unwrap();
+        std::fs::write(k2.join("daemon.token"), "TOKEN").unwrap();
+        std::fs::write(ws.join("brief.md"), "# brief\n").unwrap();
+        std::fs::write(elsewhere.join("todo.md"), "# todo\n").unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute("INSERT INTO projects (id, name, path) VALUES (?1, ?2, ?3)", rusqlite::params![id, "deliver-a", ws.to_string_lossy().as_ref()]).unwrap();
+        }
+        let principal = HookPrincipal { workspace_uuid: id.clone(), agent_address: "agent".into() };
+        let deliver = |src: &Path, as_agent: bool| -> CliResponse {
+            let mut params = HashMap::new();
+            params.insert("workspace".to_string(), ws.display().to_string());
+            params.insert("path".to_string(), src.display().to_string());
+            params.insert("wake".to_string(), "false".to_string());
+            if as_agent {
+                crate::caller_workspace::stamp_principal(&mut params, &principal);
+                crate::caller_workspace::with_request_principal(Some(principal.clone()), || handle_deliver_post(&params))
+            } else {
+                handle_deliver_post(&params)
+            }
+        };
+        let landed = || k2_core::inbox::list_root(&ws).len();
+        for secret in [h.join(".ssh/id_ed25519"), k2.join("daemon.token")] {
+            let r = deliver(&secret, true);
+            assert_eq!(r.status, "403 Forbidden", "{}: {}", secret.display(), r.body);
+            assert!(r.body.contains("path_out_of_reach"), "{}", r.body);
+            assert_eq!(landed(), 0, "a refused delivery lands nothing");
+        }
+        let r = deliver(&elsewhere.join("todo.md"), true);
+        assert_eq!(r.status, "200 OK", "unfenced: a file outside the workspace: {}", r.body);
+        let r = deliver(&ws.join("brief.md"), true);
+        assert_eq!(r.status, "200 OK", "its own workspace: {}", r.body);
+        let before = landed();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute("UPDATE projects SET isolation_mode = 'fence' WHERE id = ?1", [&id]).unwrap();
+        }
+        let r = deliver(&elsewhere.join("todo.md"), true);
+        assert_eq!(r.status, "403 Forbidden", "fenced: outside the workspace: {}", r.body);
+        assert_eq!(landed(), before, "nothing landed");
+        let r = deliver(&ws.join("brief.md"), true);
+        assert_eq!(r.status, "200 OK", "fenced: its own workspace: {}", r.body);
+        let r = deliver(&elsewhere.join("todo.md"), false);
+        assert_eq!(r.status, "200 OK", "the owner delivers as before: {}", r.body);
     }
 
     #[test]

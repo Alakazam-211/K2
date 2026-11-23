@@ -37,6 +37,26 @@ pub fn repo_root(dir: &Path) -> Result<PathBuf, String> {
     run(c, "find the repo").map(PathBuf::from)
 }
 
+/// The workspace's own repo, the one a job ships: its top level. When
+/// `fenced` (the agent's folder fence is on), only a repo whose top level
+/// is the workspace itself: a workspace nested in a larger repo would ship
+/// folders the fence keeps out (M2, v2 §1.5 S0 item 3).
+pub fn workspace_repo_root(ws_dir: &Path, fenced: bool) -> Result<PathBuf, String> {
+    let root = repo_root(ws_dir)?;
+    if fenced {
+        let r = dunce::canonicalize(&root).map_err(|e| format!("the repo: {e}"))?;
+        let w = dunce::canonicalize(ws_dir).map_err(|e| format!("the workspace folder: {e}"))?;
+        if r != w {
+            return Err(format!(
+                "the workspace is inside a larger git repo ({}), and its folder fence is on, so K2 ships only the workspace: \
+                 make the workspace a repo of its own, or pass --repo <folder> (a git repo inside the workspace)",
+                root.display()
+            ));
+        }
+    }
+    Ok(root)
+}
+
 /// The shared git dir (a worktree's `.git` is a file pointing here).
 pub(crate) fn common_dir(root: &Path) -> Result<PathBuf, String> {
     let mut c = git(root);
@@ -673,6 +693,24 @@ mod tests {
         g(&nested, &["add", "."]);
         g(&nested, &["commit", "-q", "-m", "b"]);
         assert!(caller_checkout(&r, &ws_root, &nested).unwrap_err().contains("different repo"));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// M2 (S0): a workspace nested in a larger repo ships that repo only
+    /// while its folder fence is off; fenced, only a repo of its own.
+    #[test]
+    fn a_fenced_workspace_ships_only_its_own_repo() {
+        let d = temp("fencedroot");
+        let parent = d.join("mono");
+        nested(&parent, "top.rs");
+        let ws = parent.join("apps/a");
+        std::fs::create_dir_all(&ws).unwrap();
+        let canon = |p: &Path| p.canonicalize().unwrap();
+        assert_eq!(canon(&workspace_repo_root(&ws, false).unwrap()), canon(&parent), "unfenced: as before");
+        let e = workspace_repo_root(&ws, true).unwrap_err();
+        assert!(e.contains("inside a larger git repo") && e.contains("--repo"), "{e}");
+        // A workspace that is its own repo ships it, fenced or not.
+        assert_eq!(canon(&workspace_repo_root(&parent, true).unwrap()), canon(&parent));
         let _ = std::fs::remove_dir_all(&d);
     }
 

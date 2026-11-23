@@ -56,6 +56,41 @@ pub fn workspace_and_fence(ws: &str) -> (Option<PathBuf>, bool) {
     }
 }
 
+// ── what the daemon reads for an agent (M2, v2 §1.5 S0) ──────────────
+
+/// The refusal when the daemon would read `paths` for agent `ws` (to hand
+/// them to an inbox, publish or ship them) and one is outside the agent's
+/// reach ([`k2_core::agent_fence::reach_refusal`]): 403 `path_out_of_reach`
+/// naming the path, audited. `None`: every path is the agent's to read.
+pub fn reach_refusal(ws: &str, paths: &[PathBuf], what: &str) -> Option<crate::cli_response::CliResponse> {
+    let ws = ws.trim();
+    let (workspace, fenced) = workspace_and_fence(ws);
+    let home = k2_core::paths::home_dir()?;
+    let k2_home = k2_core::paths::k2_home();
+    let tmp = agent_cgroup::valid_ws(ws).then(|| k2_home.join("agents").join(ws).join("tmp"));
+    let workspace = match workspace {
+        Some(w) => w,
+        // No row for the caller's workspace: nothing is its own.
+        None => PathBuf::from("/nonexistent-k2-workspace"),
+    };
+    let reach = k2_core::agent_fence::AgentReach { home: &home, k2_home: &k2_home, workspace: &workspace, tmp_dir: tmp.as_deref(), fenced };
+    let (path, why) = paths.iter().find_map(|p| k2_core::agent_fence::reach_refusal(&reach, p).map(|w| (p, w)))?;
+    audit_refusal("agent.path_out_of_reach", ws, "-", &format!("{what}: {}", path.display()), "daemon");
+    Some(crate::cli_response::CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "ok": false,
+            "error": {
+                "code": "path_out_of_reach",
+                "hint": format!("{why}, so K2 won't {what} it for an agent. Copy what you mean to share into your workspace first. It can't be requested."),
+                "path": path.display().to_string(),
+            },
+        })
+        .to_string(),
+    })
+}
+
 /// The isolation for a new terminal session of workspace `ws` (`cwd` when
 /// the workspace has no row), binding its passport to the agent's cgroup
 /// when the session gets the identity and has a passport (`minted`).

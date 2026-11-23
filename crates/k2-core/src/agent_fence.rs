@@ -244,6 +244,63 @@ pub fn carve(entry: &Path, avoid: &[PathBuf]) -> Vec<PathBuf> {
     out
 }
 
+// ── what the daemon reads for an agent (M2, v2 §1.5 S0) ──────────────
+
+/// Folders under `$HOME` the daemon never reads for an agent (to hand over
+/// to another agent's inbox, publish or ship), fenced or not: the usual
+/// credential stores. K2's own home is never read either (except the
+/// agent's own private temp dir).
+pub const HOME_NEVER: &[&str] = &[
+    ".ssh", ".aws", ".azure", ".gnupg", ".config/gh", ".config/gcloud", ".config/op", ".docker", ".kube",
+    ".netrc", ".git-credentials", ".npmrc", ".pypirc", ".password-store", ".local/share/keyrings",
+];
+
+/// Who the daemon reads for: one agent's folders.
+pub struct AgentReach<'a> {
+    pub home: &'a Path,
+    pub k2_home: &'a Path,
+    /// The agent's workspace folder.
+    pub workspace: &'a Path,
+    /// The agent's private temp dir (`~/.k2/agents/<ws>/tmp`), when it has one.
+    pub tmp_dir: Option<&'a Path>,
+    /// The agent's folder fence is on: only its own folders.
+    pub fenced: bool,
+}
+
+/// Why the daemon may not read `path` for this agent; `None`: it may. A
+/// fenced agent's reach is its workspace (and the git dirs it commits
+/// into) and its private temp dir. Any agent's excludes K2's home and
+/// [`HOME_NEVER`]. Links are followed first, so a link in the workspace to
+/// a secret is the secret.
+pub fn reach_refusal(r: &AgentReach, path: &Path) -> Option<String> {
+    if !path.is_absolute() {
+        return Some(format!("{} isn't an absolute path", path.display()));
+    }
+    let resolved = std::fs::canonicalize(path).ok();
+    let p = resolved.clone().unwrap_or_else(|| path.to_path_buf());
+    if r.tmp_dir.is_some_and(|t| under(&p, &canon(t))) {
+        return None;
+    }
+    if [canon(r.k2_home), r.k2_home.to_path_buf()].iter().any(|k| under(&p, k)) {
+        return Some(format!("{} is in K2's own folder, which K2 never reads for an agent", path.display()));
+    }
+    let ws = canon(r.workspace);
+    if under(&p, &ws) || git_dirs(&ws).iter().any(|d| under(&p, &canon(d))) {
+        return None;
+    }
+    let home = canon(r.home);
+    if let Some(rel) = HOME_NEVER.iter().find(|rel| under(&p, &home.join(rel)) || under(&p, &r.home.join(rel))) {
+        return Some(format!("{} is in ~/{rel}, a credential folder K2 never reads for an agent (secrets go through the vault)", path.display()));
+    }
+    if r.fenced {
+        if resolved.is_none() {
+            return Some(format!("{} can't be resolved, and this agent's folder fence is on", path.display()));
+        }
+        return Some(format!("{} is outside this agent's workspace, and its folder fence is on", path.display()));
+    }
+    None
+}
+
 /// The harness logins this session runs on: exactly its own slot when
 /// pinned (`~/.k2/llm-accounts/<tool>/<id>/`), else the tool's own home.
 fn harness_rules(i: &ViewInputs, slots: &Path, v: &mut FenceView) -> Result<(), String> {
@@ -678,6 +735,45 @@ pub fn run_from_args(args: &[std::ffi::OsString]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// M2 (S0): what the daemon reads for an agent. A fenced agent: its
+    /// workspace and private temp dir only. Any agent: never K2's home or
+    /// a credential folder, also through a link in its workspace.
+    #[cfg(unix)]
+    #[test]
+    fn the_daemon_reads_only_what_the_agent_may() {
+        let root = std::env::temp_dir().join(format!("k2-reach-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let home = root.join("home");
+        let k2 = home.join(".k2");
+        let ws = home.join("DevProjects/A");
+        let other = home.join("DevProjects/B");
+        let tmp = k2.join("agents/ws-a/tmp");
+        for d in [&ws, &other, &tmp, &home.join(".ssh"), &home.join(".config/gh")] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        for f in [ws.join("report.md"), other.join("notes.md"), tmp.join("bundle.tar.gz"), home.join(".ssh/id_ed25519"), k2.join("daemon.token"), home.join(".config/gh/hosts.yml")] {
+            std::fs::write(&f, "x").unwrap();
+        }
+        std::os::unix::fs::symlink(home.join(".ssh/id_ed25519"), ws.join("key")).unwrap();
+        std::os::unix::fs::symlink(k2.join("daemon.token"), ws.join("token")).unwrap();
+        for fenced in [false, true] {
+            let r = AgentReach { home: &home, k2_home: &k2, workspace: &ws, tmp_dir: Some(&tmp), fenced };
+            let what = if fenced { "fenced" } else { "unfenced" };
+            assert_eq!(reach_refusal(&r, &ws.join("report.md")), None, "{what}: its workspace");
+            assert_eq!(reach_refusal(&r, &tmp.join("bundle.tar.gz")), None, "{what}: its temp dir");
+            for secret in [home.join(".ssh/id_ed25519"), k2.join("daemon.token"), home.join(".config/gh/hosts.yml"), ws.join("key"), ws.join("token")] {
+                assert!(reach_refusal(&r, &secret).is_some(), "{what}: {} is refused", secret.display());
+            }
+            assert!(reach_refusal(&r, Path::new("relative.md")).is_some(), "{what}: a relative path");
+            assert_eq!(reach_refusal(&r, &other.join("notes.md")).is_some(), fenced, "{what}: another workspace");
+            assert_eq!(reach_refusal(&r, &ws.join("../B/notes.md")).is_some(), fenced, "{what}: another workspace by ..");
+        }
+        // Another agent's temp dir is K2's folder to this one.
+        let r = AgentReach { home: &home, k2_home: &k2, workspace: &other, tmp_dir: Some(&k2.join("agents/ws-b/tmp")), fenced: false };
+        assert!(reach_refusal(&r, &tmp.join("bundle.tar.gz")).is_some(), "another agent's temp dir");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     fn inputs<'a>(home: &'a Path, k2: &'a Path, ws: &'a Path, tmp: &'a Path, env: &'a BTreeMap<String, String>) -> ViewInputs<'a> {
         ViewInputs { home, k2_home: k2, workspace: ws, tmp_dir: tmp, env }

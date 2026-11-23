@@ -3065,7 +3065,7 @@ fn on_need(node_id: &str, route: &'static str, n: Need) {
                 let root = match (sibling, job.ctl.repo.as_deref()) {
                     (Some(w), _) => compute::sync::nested_repo(std::path::Path::new(&ws), &w.path).map(|n| n.home),
                     (None, Some(rel)) => compute::sync::nested_repo(std::path::Path::new(&ws), rel).map(|n| n.home),
-                    (None, None) => compute::sync::repo_root(std::path::Path::new(&ws)),
+                    (None, None) => compute::sync::workspace_repo_root(std::path::Path::new(&ws), crate::agent_isolation::workspace_and_fence(&job.workspace_id).1),
                 };
                 let root = match root {
                     Ok(r) => r,

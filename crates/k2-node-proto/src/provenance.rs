@@ -1205,7 +1205,8 @@ pub(crate) mod tests {
         assert!(Statement::for_receipt(&sr, &q, &facts()).unwrap_err().contains("plan_digest"));
         // Each change to the receipt: the old statement fails against it,
         // a statement built for it passes.
-        let edits: Vec<(&str, Box<dyn Fn(&mut Value)>)> = vec![
+        type Edit = Box<dyn Fn(&mut Value)>;
+        let edits: Vec<(&str, Edit)> = vec![
             ("one artifact digest", Box::new(|v| v["artifacts"][1]["sha256"] = json!("8".repeat(64)))),
             ("an artifact name", Box::new(|v| v["artifacts"][0]["name"] = json!("dist/other"))),
             ("one artifact fewer", Box::new(|v| { v["artifacts"].as_array_mut().unwrap().pop(); })),

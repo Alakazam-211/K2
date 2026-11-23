@@ -358,7 +358,8 @@ mod tests {
     #[test]
     fn the_node_refuses_hostile_archives_before_writing_them() {
         use tar::EntryType as T;
-        let cases: Vec<Vec<(&str, T, &str, &[u8])>> = vec![
+        type Entry<'e> = (&'e str, T, &'e str, &'e [u8]);
+        let cases: Vec<Vec<Entry<'_>>> = vec![
             vec![("A.app/../../escape", T::Regular, "", b"x")],
             vec![("/etc/evil", T::Regular, "", b"x")],
             vec![("A.app/l", T::Symlink, "/var/k2node", b"")],

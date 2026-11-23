@@ -225,7 +225,7 @@ fn derive(
     }
     let conn = conn_id(nonce_n, nonce_c);
     let info = crypto::signed_bytes(DOMAIN, &[conn.as_bytes(), session.as_bytes(), controller_fp.as_bytes(), node_fp.as_bytes()]);
-    agreement::agree_ephemeral(key, &agreement::UnparsedPublicKey::new(&agreement::X25519, &peer), (), |shared| {
+    agreement::agree_ephemeral(key, agreement::UnparsedPublicKey::new(&agreement::X25519, &peer), (), |shared| {
         let prk = hkdf::Salt::new(hkdf::HKDF_SHA256, DOMAIN.as_bytes()).extract(shared);
         let mut c2n = [0u8; 32];
         let mut n2c = [0u8; 32];

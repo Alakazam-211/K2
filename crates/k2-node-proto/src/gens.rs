@@ -83,7 +83,7 @@ pub fn plan_features(p: &crate::frames::Plan) -> Vec<&'static str> {
 }
 
 /// The first of `plan_features(p)` the node doesn't offer, if any.
-pub fn missing_feature<'a>(p: &crate::frames::Plan, offered: &'a [String]) -> Option<&'static str> {
+pub fn missing_feature(p: &crate::frames::Plan, offered: &[String]) -> Option<&'static str> {
     plan_features(p).into_iter().find(|f| !offered.iter().any(|o| o == f))
 }
 

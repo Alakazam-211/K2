@@ -226,6 +226,8 @@ describe('PeopleSection', () => {
     expect(shop.getAttribute('aria-checked')).toBe('false')
     expect(screen.getByTestId('person-app-svc-1').textContent).toContain('Off. They can’t sign in to it until you turn it back on.')
     expect(screen.getByLabelText('Role in Shop for ada').textContent).toBe('editor')
+    // 0.46.18 papercut 2: the dropdown says it is the Role.
+    expect(screen.getByTestId('role-label-svc-1').textContent).toBe('Role')
     expect(screen.queryByText(/mailbox/i)).toBeNull()
     expect(screen.queryByText('secret-room')).toBeNull()
     expect(screen.getByTestId('person-noted').textContent).toContain('Database: reports')
@@ -250,6 +252,8 @@ describe('PeopleSection', () => {
     await waitFor(() => expect(h.daemonCliPost).toHaveBeenCalledWith('skin/grants/host', { username: 'ada', present: false }))
 
     fireEvent.click(await screen.findByRole('button', { name: 'More actions for Shop' }))
+    // "Change role…" is in the row's menu too (papercut 2).
+    expect(screen.getByRole('menuitem', { name: 'Change role…' })).toBeTruthy()
     fireEvent.click(screen.getByRole('menuitem', { name: 'Remove access…' }))
     await waitFor(() => expect(confirmSpy).toHaveBeenCalledWith(expect.objectContaining({ title: 'Remove ada’s access to Shop?', confirmLabel: 'Remove access', destructive: true })))
     await waitFor(() => expect(h.daemonCliPost).toHaveBeenCalledWith('skin/grants/delete', { id: 'g1' }))

@@ -1066,17 +1066,32 @@ function SignInCard({
   const pickRoles = pickApp ? rolesFor(pickApp, roleRows) : []
   const roleOptions = (app: string): { value: string; label: string }[] => rolesFor(app, roleRows).map((r) => ({ value: r.id, label: r.name }))
 
-  /** The role picker on a row: saves as soon as it's changed. */
+  /** The role picker on a row, under a visible "Role" (0.46.18 papercut 2:
+   *  the dropdown alone read as the App's name): saves as soon as it's changed. */
   const rolePicker = (grant: GrantRow, label: string): React.ReactNode => (
-    <SettingDropdown
-      ariaLabel={`Role in ${label} for ${person.username}`}
-      value={grant.roleId ?? ''}
-      placeholder={roles.status === 'error' ? 'Roles didn’t load' : roles.data ? 'No role' : 'Loading…'}
-      disabled={!roles.data || writes.busy === grant.id}
-      options={roleOptions(grant.targetId)}
-      onChange={(v) => void setRole(grant, v)}
-    />
+    <span className="flex items-center gap-1.5">
+      <span className="type-hint text-[var(--color-text-muted)]" data-testid={`role-label-${grant.targetId}`}>
+        Role
+      </span>
+      <SettingDropdown
+        ariaLabel={`Role in ${label} for ${person.username}`}
+        value={grant.roleId ?? ''}
+        placeholder={roles.status === 'error' ? 'Roles didn’t load' : roles.data ? 'No role' : 'Loading…'}
+        disabled={!roles.data || writes.busy === grant.id}
+        options={roleOptions(grant.targetId)}
+        onChange={(v) => void setRole(grant, v)}
+        triggerData={{ 'data-role-trigger': grant.id }}
+      />
+    </span>
   )
+  /** "Change role…": opens that row's Role menu (after the overflow menu closes). */
+  const openRole = (grant: GrantRow): void => {
+    window.setTimeout(() => {
+      const el = document.querySelector<HTMLElement>(`[data-role-trigger="${grant.id.replace(/["\\]/g, '')}"]`)
+      el?.focus()
+      el?.click()
+    }, 0)
+  }
 
   const body = !grants.data ? (
     grants.status === 'error' ? (
@@ -1154,7 +1169,10 @@ function SignInCard({
             {/* Before the switch, so every switch in the card shares one edge. */}
             <OverflowMenu
               label={`More actions for ${label}`}
-              items={[{ id: 'remove', label: 'Remove access…', danger: true, onSelect: () => void remove(grant) }]}
+              items={[
+                { id: 'role', label: 'Change role…', onSelect: () => openRole(grant) },
+                { id: 'remove', label: 'Remove access…', danger: true, onSelect: () => void remove(grant) },
+              ]}
             />
             <Toggle
               checked={grant.enabled}

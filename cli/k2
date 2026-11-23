@@ -11853,6 +11853,9 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         box). Signed-in people get the change
                                         at their next request
   k2 app user role <username> <role>   Assign an app role (not Connect owner/admin/member)
+                                        In the K2 app: Settings → Access → User Access → the person
+                                        → Sign-in and Apps → the App's Role (or Settings → Cores →
+                                        Apps → the App → Users).
   k2 app user unassign <username>      Clear the assigned role (restore Thread-only + default rooms)
   k2 app role create <name> --app <app> | --box-wide [--agent sales]
                                         Named bundle. No --agent = Thread dark. --agent without --caps = Thread-only on that room.
@@ -72387,6 +72390,10 @@ ROLES (named bundles for guests — not Connect, not a platform token)
   k2 app role room dentist sales --caps thread:read,thread:post
   k2 app role room dentist docs --caps thread:read,thread:post,files:read,tickets:read,tickets:post,wiki:read,store:read,store:write
   k2 app user role bob dentist
+  In the K2 app a person changes a login's role in two places: Settings →
+  Access → User Access → the person → What they can use → Sign-in and Apps →
+  the App's Role (or its … menu → Change role…), and Settings → Cores → Apps
+  → the App → Users.
   Session inherits the role at login (and live sessions rewrite on
   change). A site key keeps its own caps+rooms — it is not a role.
   Empty rooms on a role = Thread dark, not omnipotent.

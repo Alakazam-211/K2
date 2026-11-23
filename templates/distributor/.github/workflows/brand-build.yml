@@ -5,10 +5,10 @@
 #
 # Three jobs, so K5's build code never runs where your signing key is:
 #   pick   which K5 tag to build (hourly, or the tag you name by hand)
-#   build  steps 1 to 7: the gates, the build, the judges (no signing key;
+#   build  steps 1 to 8: the gates, the build, the judges (no signing key;
 #          a real build gets your mail sign-in clients, which the daemon
 #          carries in its bytes anyway)
-#   ship   steps 8 to 10: sign and publish (SECRETS), then push the tag
+#   ship   steps 9 to 11: sign and publish (SECRETS), then push the tag
 #          shipped/<K5 tag>. Runs only the driver and your hooks. Put it
 #          behind the protected environment "release".
 #

@@ -121,8 +121,8 @@ if scan "$T/bite" 2>/dev/null; then die "a planted two-character command passed 
 ok
 
 # ── the driver, on scratch repos ──────────────────────────────────────
-# A stand-in K5 repo: the brand tools of this tree, a ceiling file, and
-# release tags with and without them.
+# A stand-in K5 repo: the brand tools of this tree, a ceiling file, a
+# Cargo.lock, and release tags with and without them.
 U="$T/k5"
 CEIL="crates/k5-cli/tests/data/native_bar_ceiling.tsv"
 git init -q "$U"
@@ -136,6 +136,12 @@ cp "$HERE/scripts/brand.sh" "$U/scripts/brand.sh"
 cp -R "$HERE/brand" "$U/brand"
 echo "// stand-in" > "$U/crates/k2-brand/build.rs"
 echo "// stand-in" > "$U/crates/k2-release-keys/src/lib.rs"
+lockfile() { # lockfile <name version>...: the stand-in's Cargo.lock
+    local p
+    { echo "version = 4"
+      for p in "$@"; do printf '\n[[package]]\nname = "%s"\nversion = "%s"\n' "${p% *}" "${p#* }"; done; } > "$U/Cargo.lock"
+}
+lockfile "libc 0.2.170" "pg_query 6.2.1"
 ceiling() { # ceiling <fell> <H count> [<row>]
     { printf '# %s of 5117 probes fall through: V 0, H %s, F 0, E 0, P 0\n' "$1" "$2"
       printf 'class\tfamily\tform\n'
@@ -149,6 +155,10 @@ release v0.47.1
 echo "fix" >> "$U/README"
 release v0.47.2
 git -C "$U" tag vp8-decoder-v0.1.2
+# A ready tag whose Cargo.lock links libgit2: older than first_tag, so pick
+# never sees it, but check and dry-run take any release tag.
+lockfile "libc 0.2.170" "libgit2-sys 0.17.0+1.8.1" "pg_query 6.2.1"
+release v0.46.10
 sha() { git -C "$U" rev-parse "$1^{commit}"; }
 
 # A stand-in distributor repo: the template, with K5 on disk.
@@ -178,11 +188,24 @@ drv check v0.46.9
 [ "$rc" = 1 ] && [[ "$out" == *"REFUSED at step 2: v0.46.9 has no scripts/brand.sh: it predates brand builds"* ]] \
     || die "check: an old tag: $out"; ok
 drv check v0.47.0
-[ "$rc" = 1 ] && [[ "$out" == *"ceiling-zero: REFUSED"* ]] && [[ "$out" == *"REFUSED at step 3"* ]] \
+[ "$rc" = 1 ] && [[ "$out" == *"ceiling-zero: REFUSED"* ]] && [[ "$out" == *"REFUSED at step 4"* ]] \
     || die "check: a tag that falls through: $out"; ok
 drv check v0.47.1
 [ "$rc" = 0 ] && [[ "$out" == *"brand lint: globex: command gy"* ]] && [[ "$out" == *"lint_live = off"* ]] \
+    && [[ "$out" == *"licence: allowed: pg_query 6.2.1 (PostgreSQL License)"* ]] \
+    && [[ "$out" == *"refused crate(s) on the list is in it; build it"* ]] \
     && [[ "$out" == *"v0.47.1 passes the gates for globex"* ]] || die "check: a ready tag: $out"; ok
+# The licence gate: a tag that links libgit2-sys is refused at step 3, by
+# name, before the ceiling, the lint or any build.
+git2="licence: REFUSED (brand globex): this K5 release links libgit2-sys 0.17.0+1.8.1 ("
+lift="It lifts when the gix migration lands (K5 replaces libgit2 with gitoxide); wait for a release without libgit2-sys."
+for mode in check dry-run; do
+    rm -rf "$T/dryout"
+    if [ "$mode" = check ]; then drv check v0.46.10; else drv dry-run v0.46.10 --out "$T/dryout"; fi
+    [ "$rc" = 1 ] && [[ "$out" == *"$git2"* ]] && [[ "$out" == *"$lift"* ]] \
+        && [[ "$out" == *"REFUSED at step 3: the tag links code a private white-label build can't ship"* ]] \
+        && [[ "$out" != *"step 4"* ]] && [ ! -e "$T/dryout" ] || die "$mode: a tag that links libgit2-sys: $out"; ok
+done
 drv check v0.47.1 --sha "$(sha v0.47.2)"
 [ "$rc" = 1 ] && [[ "$out" == *"REFUSED at step 1: tag v0.47.1 is commit $(sha v0.47.1), not"* ]] \
     || die "check: a tag that moved: $out"; ok
@@ -214,7 +237,7 @@ echo "$k5key" > "$O/k5-update-keys.txt"
 manifest() { printf 'brand_id = globex\nk5_tag = v0.47.2\nversion = 0.47.2\ndry_run = %s\n' "$1" > "$O/manifest.txt"; }
 manifest yes
 drv ship --out "$O"
-[ "$rc" = 1 ] && [[ "$out" == *"REFUSED at step 8: a dry run's output is never shipped"* ]] || die "ship: a dry run: $out"; ok
+[ "$rc" = 1 ] && [[ "$out" == *"REFUSED at step 9: a dry run's output is never shipped"* ]] || die "ship: a dry run: $out"; ok
 manifest no
 sed -i.bak 's/^publish = .*/publish = on/' "$R/distributor.conf" && rm -f "$R/distributor.conf.bak"
 drv ship --out "$O"

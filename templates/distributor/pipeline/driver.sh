@@ -10,40 +10,43 @@
 #       newest release tag that is at least first_tag, newer than your last
 #       shipped one (your repo's shipped/<tag> tags) and not in hold.txt.
 #   driver.sh check <tag> [--sha <commit>]
-#       The gates only, steps 1 to 4, on any release tag. No build.
+#       The gates only, steps 1 to 5, on any release tag. No build.
 #   driver.sh dry-run <tag> [--sha <commit>] [--out <dir>]
-#       Steps 1 to 7 on any release tag, held or old, with no secrets. Its
+#       Steps 1 to 8 on any release tag, held or old, with no secrets. Its
 #       output can't be shipped (its manifest says dry_run = yes).
 #   driver.sh build <tag> [--sha <commit>] --out <dir>
-#       Steps 1 to 7 for real. Refuses a held tag, a tag not newer than
+#       Steps 1 to 8 for real. Refuses a held tag, a tag not newer than
 #       your last shipped one, and a build without your mail sign-in
 #       clients. Leaves bin/, SHA256SUMS and manifest.txt in <dir>.
 #   driver.sh ship --out <dir>
-#       Steps 8 to 10, run apart from the build, with your secrets. Runs
+#       Steps 9 to 11, run apart from the build, with your secrets. Runs
 #       no K5 code: only this file and your hooks.
 #
 # The steps (SECRETS marks the ones that need yours):
 #   1 fetch     K5's repo at the tag, into <work>/k5; --sha pins the commit
 #   2 tools     the tag carries the brand tools this driver calls
-#   3 ceiling   scripts/brand/ceiling-zero-gate.sh: every command is native
-#   4 lint      scripts/brand.sh lint on your brand, and --live (lint_live)
-#   5 build     K5's Linux release build with K2_BRAND_DIR = your brand
+#   3 licence   scripts/brand/licence-gate.sh: the tag's Cargo.lock holds no
+#               crate a private white-label build can't ship (today:
+#               libgit2-sys, until the gix migration replaces libgit2)
+#   4 ceiling   scripts/brand/ceiling-zero-gate.sh: every command is native
+#   5 lint      scripts/brand.sh lint on your brand, and --live (lint_live)
+#   6 build     K5's Linux release build with K2_BRAND_DIR = your brand
 #               folder (SECRETS for a real build: your mail sign-in clients)
-#   6 judge     the CLI's output names your brand only (the output judges,
+#   7 judge     the CLI's output names your brand only (the output judges,
 #               with none of K5's debt rows), and every binary carries your
 #               brand mark alone (scripts/brand/check-brand-mark.py)
-#   7 keys      a report: the build trusts your update key and none of K5's
-#   8 check     the output is a real build of your brand, unchanged; with
-#               publish = on, step 7's report must pass
-#   9 sign      hooks/sign.sh, with your signing key (SECRETS)
-#  10 publish   hooks/publish.sh, to your feed (SECRETS); then the tag
+#   8 keys      a report: the build trusts your update key and none of K5's
+#   9 check     the output is a real build of your brand, unchanged; with
+#               publish = on, step 8's report must pass
+#  10 sign      hooks/sign.sh, with your signing key (SECRETS)
+#  11 publish   hooks/publish.sh, to your feed (SECRETS); then the tag
 #               shipped/<K5 tag> in your repo, for your CI to push
 #
 # Settings: distributor.conf in your repo's root (DISTRIBUTOR_CONF names
 # another). DISTRIBUTOR_ROOT is your repo's root (default: this file's
 # folder's parent). --work <dir> (default $RUNNER_TEMP or $TMPDIR, then
-# k5-brand-build) holds the K5 checkout and the judges' corpus. Steps 5 to
-# 7 and ship run on Linux. Exit 0 done, 1 refused or failed, 2 usage.
+# k5-brand-build) holds the K5 checkout and the judges' corpus. Steps 6 to
+# 8 and ship run on Linux. Exit 0 done, 1 refused or failed, 2 usage.
 set -euo pipefail
 
 ROOT="${DISTRIBUTOR_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
@@ -152,16 +155,17 @@ cmd_pick() {
     fi
 }
 
-# ── steps 1 to 4: the gates ───────────────────────────────────────────
+# ── steps 1 to 5: the gates ───────────────────────────────────────────
 
 TOOLS="scripts/brand.sh scripts/brand/lint.py brand/reserved-names.txt
+scripts/brand/licence-gate.sh scripts/brand/copyleft-crates.txt
 scripts/brand/ceiling-zero-gate.sh scripts/brand/collect-outputs.sh
 scripts/brand/output-judges.py scripts/brand/output-keep.txt
 scripts/brand/check-brand-mark.py crates/k2-brand/build.rs
 crates/k2-release-keys/src/lib.rs"
 
 gates() { # gates <tag> <sha or empty> <dry: yes|no>
-    local tag="$1" sha="$2" dry="$3" got f last
+    local tag="$1" sha="$2" dry="$3" got f last id
     python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' \
         || refuse "needs Python 3.11 or newer (the brand tools read TOML)"
     is_release "$tag" || refuse "$tag is not a release tag (tag_regex in $CONF)"
@@ -193,11 +197,16 @@ gates() { # gates <tag> <sha or empty> <dry: yes|no>
     done
     say "all there"
 
-    step 3 "ceiling-zero: every command is native"
+    step 3 "licence: no crate a private white-label build can't ship"
+    id="$(brand_field id)"
+    bash "$K5/scripts/brand/licence-gate.sh" --brand "$id" "$K5" \
+        || refuse "the tag links code a private white-label build can't ship (above)"
+
+    step 4 "ceiling-zero: every command is native"
     bash "$K5/scripts/brand/ceiling-zero-gate.sh" --tree "$K5" \
         || refuse "the tag still hands commands to the shell CLI"
 
-    step 4 "the name policy on $BRAND"
+    step 5 "the name policy on $BRAND"
     bash "$K5/scripts/brand.sh" lint "$BRAND" || refuse "your brand fails the name policy"
     if [ "$C_lint_live" = on ]; then
         bash "$K5/scripts/brand.sh" lint "$BRAND" --live || refuse "your brand fails the live name checks"
@@ -206,7 +215,7 @@ gates() { # gates <tag> <sha or empty> <dry: yes|no>
     fi
 }
 
-# ── steps 5 to 7: build and judge ─────────────────────────────────────
+# ── steps 6 to 8: build and judge ─────────────────────────────────────
 
 BINS="k2-daemon k2-node k2-root-helper k2-app-engine k5-cli"
 MARKED="k2-daemon k2-node k2-app-engine k5-cli"
@@ -290,11 +299,11 @@ cmd_build() { # cmd_build <tag> <sha> <out> <dry>
     mkdir -p "$out"
     out="$(cd "$out" && pwd)"
 
-    step 5 "build K5 $tag as $id ($C_target)"
+    step 6 "build K5 $tag as $id ($C_target)"
     export K2_BRAND_DIR="$BRAND"
     build_linux "$C_target" "$out" "$dry"
 
-    step 6 "the output judges and the brand mark"
+    step 7 "the output judges and the brand mark"
     judge="$WORK/judge"
     rm -rf "$judge"
     mkdir -p "$judge"
@@ -310,7 +319,7 @@ cmd_build() { # cmd_build <tag> <sha> <out> <dry>
     (cd "$out/bin" && python3 "$K5/scripts/brand/check-brand-mark.py" --brand "$id" $MARKED) \
         || refuse "a binary is not marked as your brand alone"
 
-    step 7 "which update keys the build trusts"
+    step 8 "which update keys the build trusts"
     k5_update_keys > "$out/k5-update-keys.txt"
     [ -s "$out/k5-update-keys.txt" ] || refuse "found no update keys in the tag's crates/k2-release-keys/src/lib.rs"
     if keys_check "$out"; then
@@ -339,14 +348,14 @@ cmd_build() { # cmd_build <tag> <sha> <out> <dry>
     fi
 }
 
-# ── steps 8 to 10: ship (your secrets, no K5 code) ────────────────────
+# ── steps 9 to 11: ship (your secrets, no K5 code) ────────────────────
 
 manifest() { sed -n "s/^$1 = //p" "$OUT/manifest.txt"; }
 
 cmd_ship() {
     local tag
     [ -n "$OUT" ] && [ -f "$OUT/manifest.txt" ] || refuse "no manifest.txt in ${OUT:-(no --out)}"
-    step 8 "the output is a real build of your brand, unchanged"
+    step 9 "the output is a real build of your brand, unchanged"
     [ "$(manifest dry_run)" = no ] || refuse "a dry run's output is never shipped"
     (cd "$OUT/bin" && sha256sum -c --quiet ../SHA256SUMS) || refuse "the binaries changed since the build"
     [ "$(manifest brand_id)" = "$(brand_field id)" ] || refuse "built for $(manifest brand_id), not your brand"
@@ -354,14 +363,14 @@ cmd_ship() {
         keys_check "$OUT" || refuse "the build does not trust your update key alone: nothing signed or published"
     fi
 
-    step 9 "sign with your key (hooks/sign.sh)"
+    step 10 "sign with your key (hooks/sign.sh)"
     bash "$ROOT/hooks/sign.sh" "$OUT" "$CONF"
 
     if [ "$C_publish" = off ]; then
         say "publish = off: the signed files are in $OUT; nothing published, no shipped tag"
         return 0
     fi
-    step 10 "publish to your feed (hooks/publish.sh)"
+    step 11 "publish to your feed (hooks/publish.sh)"
     bash "$ROOT/hooks/publish.sh" "$OUT" "$CONF"
     tag="$(manifest k5_tag)"
     git -C "$ROOT" tag -a "shipped/$tag" \

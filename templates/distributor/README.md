@@ -155,19 +155,20 @@ yours.
 |---|---|---|
 | 1 | fetch | K5's public repo at the tag, nothing else; with `--sha`, the tag must still be the commit `pick` saw |
 | 2 | tools | the tag carries the brand tools the driver calls; an older tag is refused |
-| 3 | ceiling-zero | `scripts/brand/ceiling-zero-gate.sh`: every command line is answered by K5's own program. A tag where any command still falls through to the old shell CLI (which prints K5's names) is refused |
-| 4 | lint | `scripts/brand.sh lint` on your brand, then `--live` when `lint_live = on` |
-| 5 | build | K5's own Linux release build with `K2_BRAND_DIR` set to your brand folder. **SECRETS** for a real build: your mail sign-in clients |
-| 6 | judge | the output judges read everything the CLI prints for every help and study page: no other brand's name, and each of your names in its place. K5's own list of lines it still owes a fix ("debt") is not carried into your build: any such line fails it. Then every binary must carry your brand mark, and only yours |
-| 7 | keys | a report: does the build trust your update key, and none of K5's? |
-| 8 | check | in the ship job: the output is a real build (not a dry run) of your brand, unchanged since step 5; with `publish = on`, step 7 must pass |
-| 9 | sign | `hooks/sign.sh` with your signing key. **SECRETS** |
-| 10 | publish | `hooks/publish.sh` to your feed, then the tag `shipped/<K5 tag>` in your repo. **SECRETS** |
+| 3 | licence | `scripts/brand/licence-gate.sh`: the tag's `Cargo.lock` holds no crate on `scripts/brand/copyleft-crates.txt`. Today every tag is refused here, for `libgit2-sys` (see "The licence gate") |
+| 4 | ceiling-zero | `scripts/brand/ceiling-zero-gate.sh`: every command line is answered by K5's own program. A tag where any command still falls through to the old shell CLI (which prints K5's names) is refused |
+| 5 | lint | `scripts/brand.sh lint` on your brand, then `--live` when `lint_live = on` |
+| 6 | build | K5's own Linux release build with `K2_BRAND_DIR` set to your brand folder. **SECRETS** for a real build: your mail sign-in clients |
+| 7 | judge | the output judges read everything the CLI prints for every help and study page: no other brand's name, and each of your names in its place. K5's own list of lines it still owes a fix ("debt") is not carried into your build: any such line fails it. Then every binary must carry your brand mark, and only yours |
+| 8 | keys | a report: does the build trust your update key, and none of K5's? |
+| 9 | check | in the ship job: the output is a real build (not a dry run) of your brand, unchanged since step 6; with `publish = on`, step 8 must pass |
+| 10 | sign | `hooks/sign.sh` with your signing key. **SECRETS** |
+| 11 | publish | `hooks/publish.sh` to your feed, then the tag `shipped/<K5 tag>` in your repo. **SECRETS** |
 
-**Dry run:** `driver.sh dry-run <tag>` runs steps 1 to 7 on any release
+**Dry run:** `driver.sh dry-run <tag>` runs steps 1 to 8 on any release
 tag, held or old, with no secrets at all. Its output says `dry_run = yes`
 and is never shipped. Use it to test a new K5 tag, or a change to your
-brand file. `driver.sh check <tag>` runs only the gates (steps 1 to 4),
+brand file. `driver.sh check <tag>` runs only the gates (steps 1 to 5),
 in a few seconds, with no build.
 
 ## Signing and your update feed
@@ -204,24 +205,52 @@ a build don't follow the brand file yet.
   installers. They follow when a K5 release says its packaging reads the
   brand file; the driver then gains a step for them.
 - **Your update key and your feed's address are not read from your brand
-  yet.** K5's update keys are compiled into the programs. Step 7 checks
+  yet.** K5's update keys are compiled into the programs. Step 8 checks
   for this on every build, and the ship job refuses to publish a build
   that trusts K5's keys or lacks yours. So keep `publish = off` until a K5
   release says a brand build carries its own update key; until then ship
   signs the build and stops, and you hand it to testers yourself.
-- A tag is only built when every command is native (step 3) and the CLI's
-  output names your brand alone (step 6). Early tags fail one or the
-  other; `driver.sh check` tells you which, quickly.
+- A tag is only built when it links nothing a private white-label build
+  can't ship (step 3), every command is native (step 4) and the CLI's
+  output names your brand alone (step 7). Early tags fail one of them;
+  `driver.sh check` tells you which, quickly.
+- **No tag passes step 3 yet.** Every K5 release so far links
+  `libgit2-sys`. No partner build can pass until a K5 release replaces
+  libgit2 with gitoxide (the gix migration). See "The licence gate".
+
+## The licence gate
+
+Step 3 reads the tag's `Cargo.lock` and refuses your build when it holds
+a crate on the tag's `scripts/brand/copyleft-crates.txt`. Each row there
+names the crate, why a private white-label build can't ship it, and what
+lifts the refusal; the refusal line says all three.
+
+The rule today, in plain words:
+
+- **libgit2** is accepted in K5's own public builds only, until gix
+  replaces it, and no partner build may ship it. libgit2 is GPL-2.0 with a
+  linking exception, and its xdiff part is LGPL-2.1 and statically linked:
+  a private build can't meet those terms. So the gate refuses any tag
+  whose `Cargo.lock` has `libgit2-sys`.
+- **pg_query** (PostgreSQL License) and **SQLite** (public domain) are
+  accepted everywhere, your builds included. The list marks them
+  `allowed`; the gate names them in its output and never refuses them.
+
+The gate lifts when libgit2 goes: the first K5 release built on gitoxide
+has no `libgit2-sys` in its `Cargo.lock`, and that release passes step 3.
+Until then, `driver.sh check` refuses every tag at step 3, and that is
+expected. K5's own builds (brand `k2` or `k5`) and K5's CI only get a
+report from the gate, never a refusal.
 
 ## Secrets and what you provide
 
 | what | used by | where it lives |
 |---|---|---|
-| `MAIL_GMAIL_CLIENT_ID`, `MAIL_GMAIL_CLIENT_SECRET` | build (step 5, real builds) | CI secrets: your own Google sign-in client for mail; required |
-| `MAIL_MICROSOFT_CLIENT_ID` | build (step 5, real builds) | CI secret: your own Microsoft client; optional |
-| `UPDATE_MINISIGN_KEY`, `UPDATE_MINISIGN_PASSWORD` | ship (step 9) | CI secrets of the `release` environment: your update key's secret half |
-| `FEED_UPLOAD_URL`, `FEED_UPLOAD_TOKEN` | ship (step 10) | CI secrets of the `release` environment: where uploads go, and a token that may write there only |
-| `update_pubkey`, `feed_url` | ship (steps 8 to 10) | `distributor.conf`: public values |
+| `MAIL_GMAIL_CLIENT_ID`, `MAIL_GMAIL_CLIENT_SECRET` | build (step 6, real builds) | CI secrets: your own Google sign-in client for mail; required |
+| `MAIL_MICROSOFT_CLIENT_ID` | build (step 6, real builds) | CI secret: your own Microsoft client; optional |
+| `UPDATE_MINISIGN_KEY`, `UPDATE_MINISIGN_PASSWORD` | ship (step 10) | CI secrets of the `release` environment: your update key's secret half |
+| `FEED_UPLOAD_URL`, `FEED_UPLOAD_TOKEN` | ship (step 11) | CI secrets of the `release` environment: where uploads go, and a token that may write there only |
+| `update_pubkey`, `feed_url` | ship (steps 9 to 11) | `distributor.conf`: public values |
 | Apple Developer ID certificate, notarization key; Windows code signing certificate | sign, when apps are built | CI secrets, when that step comes |
 | Feed hosting | your users' builds | your own host: a web server, a storage bucket or releases in your own repo |
 
@@ -231,9 +260,11 @@ a build don't follow the brand file yet.
   code of your own, keep it as a small set of patches on top of each tag,
   rebased every release, and send anything general to K5 as a brand
   setting.
-- **The gates.** Never skip step 3, 4 or 6, never pass the judges a keep
-  file with debt rows in it, never build a tag whose ceiling isn't zero.
-  They are what make the build say your names and only yours.
+- **The gates.** Never skip step 3, 4, 5 or 7, never pass the judges a
+  keep file with debt rows in it, never build a tag whose ceiling isn't
+  zero, and never build a tag the licence gate refuses. The licence gate
+  keeps code out of your build that a private build can't ship; the
+  others make the build say your names and only yours.
 - **The split between build and ship.** Signing keys never go to the build
   job: it runs K5's build code.
 - **Your brand's id, once shipped.** It is in every binary, and a coming

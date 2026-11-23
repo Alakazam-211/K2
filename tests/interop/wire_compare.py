@@ -25,7 +25,11 @@ from, to, method, route):
   - for the owner channel (the scripted session against each server, whose
     calls are deterministic), the answer's status. Background traffic (the
     federation drain, the Postal loop) polls, so its statuses are compared
-    as a note only.
+    as a note only, and so is a body path that is null on one side and a
+    value on the other (an optional field not filled yet).
+
+The owner's /boot-status is left out of the structure compare (its keys
+follow boot timing; STRUCTURE_SKIP says why); its names are check 3's.
 
 Display fields are dropped before anything is compared: `hint`, `doc`,
 `message`, `command`, `use`, a string `error`, and the /boot-status names
@@ -75,6 +79,11 @@ SKIP_HEADER_VALUES = {
     "date", "content-length", "host", "etag", "x-forwarded-for", "keep-alive",
     "transfer-encoding", "connection", "last-modified", "expires", "age",
 }
+# Routes whose structure is not compared, and why. /boot-status: its keys
+# follow the boot's own timing (probes, the home database switch), not the
+# brand; the names in it (cliName, productName) are check 3's, and it is a
+# local route no other server reads.
+STRUCTURE_SKIP = {("owner", "/boot-status")}
 LOCAL_BRAND_HEADER = "x-k5-server-brand"
 LOCAL_HEADER_PREFIX = "x-k5-"
 
@@ -350,7 +359,8 @@ def counted(session):
 
 
 def shape(session, words):
-    """{key: (features, statuses)} for a session."""
+    """{key: (features, statuses)} for a session. A route in
+    STRUCTURE_SKIP is left out (its names are check 3's)."""
     sh = Shaper(session, words)
     shapes = {}
     for ex in counted(session):
@@ -358,6 +368,8 @@ def shape(session, words):
             if k not in ex:
                 raise ValueError(f"{session.path}: exchange {ex.get('seq')} has no {k!r}")
         key = sh.key(ex)
+        if (key[0], key[4]) in STRUCTURE_SKIP:
+            continue
         feats, stats = shapes.setdefault(key, (set(), set()))
         feats.update(sh.features(ex))
         stats.add(sh.status(ex))
@@ -367,6 +379,18 @@ def shape(session, words):
 def fmt_key(key):
     ch, fr, to, method, route = key
     return f"{ch} {fr}->{to} {method} {route}"
+
+
+def null_swap(f, other):
+    """`f` differs from `other` only by a null: the same body path is null
+    on one side and a value on the other (an optional field that was not
+    filled yet when that side asked)."""
+    head, sep, cls = f.rpartition("=")
+    if not sep or "b:" not in head[:3]:
+        return False
+    if cls == "null":
+        return any(g.startswith(head + "=") and g != f for g in other)
+    return head + "=null" in other
 
 
 def compare(base, mixed, words):
@@ -380,10 +404,10 @@ def compare(base, mixed, words):
     for key in sorted(set(sb) & set(sm)):
         fb, stb = sb[key]
         fm, stm = sm[key]
-        for f in sorted(fb - fm):
-            fails.append(f"{fmt_key(key)}: only in {base.name}: {f}")
-        for f in sorted(fm - fb):
-            fails.append(f"{fmt_key(key)}: only in {mixed.name}: {f}")
+        for here, there, name in ((fb, fm, base.name), (fm, fb, mixed.name)):
+            for f in sorted(here - there):
+                line = f"{fmt_key(key)}: only in {name}: {f}"
+                (notes if null_swap(f, there) else fails).append(line + (" (a null on the other side)" if null_swap(f, there) else ""))
         if stb != stm:
             line = f"{fmt_key(key)}: statuses {sorted(stb)} in {base.name}, {sorted(stm)} in {mixed.name}"
             (fails if key[0] == "owner" else notes).append(line)

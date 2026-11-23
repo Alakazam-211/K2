@@ -90,7 +90,16 @@ class Compare(unittest.TestCase):
 
     def test_the_fixture_sessions_are_alike(self):
         out = self.assert_ok()
-        self.assertIn("13 exchange keys", out)
+        self.assertIn("11 exchange keys", out)
+
+    def test_boot_status_keys_are_not_compared_but_its_names_are(self):
+        find(self.mixed, channel="owner", to="A", target="/boot-status")[0]["answer"]["body"]["rootHelper"] = {"state": "ok"}
+        self.assert_ok()
+
+    def test_a_null_on_one_side_is_a_note(self):
+        find(self.mixed, channel="peer", target="/cli/federation/roster")[0]["answer"]["body"]["updated_at"] = None
+        out = self.assert_ok()
+        self.assertIn("only in mixed: ab:$.updated_at=null (a null on the other side)", out)
 
     def test_display_fields_differ_freely(self):
         for rows, cli in ((self.base, "k2"), (self.mixed, "xy")):

@@ -42,8 +42,8 @@ keys = [
 # The fields a hosted box needs (brand/k2 says what each is). Neutral
 # placeholders: names under example.invalid, which nobody owns. Left out
 # on purpose, so they are brand/k2's (ours): [control] (the control
-# endpoints stay ours), [pins] (the root helper's keys), [machine] (a
-# brand may not rename those yet) and [phone] (xy has no phone app).
+# endpoints stay ours), [machine] (a brand may not rename those yet) and
+# [phone] (xy has no phone app).
 [zones]
 label = "desk.example.invalid"
 internal = false
@@ -67,7 +67,7 @@ dashboard = ""
 feedback = ""
 
 [mail]
-system_from = "noreply@desk.example.invalid"
+system_from = "noreply@{server}"
 system_from_name = "Globex Desk"
 postal = false
 

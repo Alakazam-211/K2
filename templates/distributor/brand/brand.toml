@@ -75,8 +75,11 @@ gui_binary = "globex-studio"
 
 # The update keys your build trusts: minisign public key lines, primaries
 # first, your backup last, and the same key as update_pubkey in
-# distributor.conf. Never one of K5's (the build refuses that). This one
-# is a placeholder made only for tests: its private half never existed.
+# distributor.conf. They sign your daemon, and so are also the trust root
+# of the Sew pins it carries. Never one of K5's (the
+# build refuses that). This one is a placeholder made only for tests: its
+# private half never existed, and `brand.sh lint --hosted` refuses it, so
+# put your own key here before you ship.
 [update]
 keys = [
     { role = "primary", key_id = "E5A48B9699901B0F", pubkey = "RWQPG5CZlouk5cumw8FmJEvxMK5bNan2q2fBqrqyCWOY7/rp5kSjA9Ri" },
@@ -113,9 +116,12 @@ dashboard = ""
 feedback = ""
 
 # The address system mail to your users comes from, and the name on it.
+# Each box sends from its own server name ({server}: noreply@{server} is
+# noreply@box.partner.example for the box box.partner.example), so SPF,
+# DKIM and DMARC go on each box's name, never on your apex domain.
 # postal: whether your boxes may join Postal (true or false).
 [mail]
-system_from = "noreply@studio.example.invalid"
+system_from = "noreply@{server}"
 system_from_name = "Globex Studio"
 postal = false
 
@@ -124,8 +130,8 @@ postal = false
 call_name = "Globex Studio"
 
 # Left out, so they are K5's own: [control] (Connect, the certificate
-# broker, push and the relays are ours), [pins] (the keys that sign the
-# root helper), [machine] (the home folder, program and unit names: a
-# brand may not rename them yet) and [phone] (your boxes pair with our
+# broker, push and the relays are ours; a brand that sets [control] sets
+# all six), [machine] (the home folder, program and unit names: a brand
+# may not rename them yet) and [phone] (your boxes pair with our
 # phone app unless you have your own: then set bundle_id, team_id and
 # push_topic).

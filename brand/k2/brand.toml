@@ -28,10 +28,14 @@ desktop_id = "k2"
 gui_binary = "k2-gui"
 
 # The update-signing public keys this build's updaters trust (minisign key
-# lines), compiled in by crates/k2-release-keys/build.rs. Primaries first,
-# the backup last. For k2 and k5 they are exactly the keys of the
-# update-key ceremony (scripts/updater-key-ceremony.sh); the build refuses
-# a difference. No other brand may carry them.
+# lines), compiled in by crates/k2-release-keys/build.rs. They are also the
+# trust root of the Sew pins the daemon carries (the pinned version and
+# sha256 are compiled in; there is no separate Sew signer). The root
+# helper carries the pins too, but is signed by its own keys
+# (crates/k2-root-proto/src/keys.rs), which have no field here yet.
+# Primaries first, the backup last. For k2 and k5 they are exactly the
+# keys of the update-key ceremony (scripts/updater-key-ceremony.sh); the
+# build refuses a difference. No other brand may carry them.
 [update]
 keys = [
     { role = "primary", key_id = "76CA14D3B7EE2B69", pubkey = "RWRpK+630xTKdopKvlpWVqvnEwqyK1CZ+F5deeRjpGA2ywyWS8NnOrpv" },
@@ -51,7 +55,9 @@ keys = [
 label = "k2.dev"
 internal = true
 
-# Our control endpoints. A brand that leaves these out uses ours.
+# Our control endpoints. A brand that leaves these out uses ours; one that
+# sets [control] sets all six. The bash CLI keeps its own copy of connect
+# (brand lint checks this file still matches it).
 [control]
 connect = "https://connect.k2.dev"
 cert = "https://cert.k2.dev/cert"
@@ -65,14 +71,6 @@ web_api = "https://k2.dev"
 [feeds]
 daemon = "https://github.com/Alakazam-211/K2/releases/latest/download/daemon-latest.json"
 downloads = "https://github.com/Alakazam-211/K2/releases/download"
-
-# The keys that sign the root helper and what it installs (the Sew pins
-# ride in the helper): today's root-helper release keys, primary first.
-[pins]
-keys = [
-    { role = "primary", key_id = "18DB69584200F795", pubkey = "RWSV9wBCWGnbGBvUcoZDJWucBgmvxNmRbApWopWr+kUOYbmuZ7+kSYI1" },
-    { role = "backup", key_id = "E9C2D2CAD052297A", pubkey = "RWR6KVLQytLC6Yiiy/nCzF6HFJXp5OwkF+AjtMhlznwZfucjf0DoDY5W" },
-]
 
 # The names ops scripts find on a box: the home folder, what the programs'
 # file names start with (k2-daemon), and what the systemd units' names
@@ -96,9 +94,12 @@ privacy = ""
 dashboard = "https://k2.dev/dashboard"
 feedback = "https://feedback.akzm.k2.dev"
 
-# System mail, and whether the brand's boxes may join Postal.
+# System mail, and whether the brand's boxes may join Postal. There is no
+# fleet-wide sender: each box sends from its own server name ({server},
+# its <label>.<zone>) through its own hostmail, so SPF, DKIM and DMARC go
+# on that name, never on a brand's apex domain.
 [mail]
-system_from = "noreply@k2.dev"
+system_from = "noreply@{server}"
 system_from_name = "K2"
 postal = true
 

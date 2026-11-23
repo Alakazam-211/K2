@@ -21,8 +21,8 @@
 //! brand. It is a macro only, a literal for `concat!` and `const`s.
 //!
 //! The brand file's other tables come out as one module each
-//! ([`names`], [`zones`], [`control`], [`feeds`], [`pins`], [`machine`],
-//! [`look`], [`links`], [`mail`], [`phone`], [`sew`]): what a hosted box
+//! ([`names`], [`zones`], [`control`], [`feeds`], [`machine`], [`look`],
+//! [`links`], [`mail`], [`phone`], [`sew`]): what a hosted box
 //! of the brand needs, each value the brand's own, the default brand's
 //! (`brand/k2`), or made from the brand's names. Most have no reader in
 //! the code yet; code that still spells a value moves to these as it is
@@ -62,18 +62,6 @@ pub struct RetiredName {
     pub block_end: &'static str,
     /// Its fish startup file, in fish's `conf.d`.
     pub fish_conf: &'static str,
-}
-
-/// One signing key a brand trusts (`[pins] keys`): a minisign public key
-/// line and its id.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct BrandKey {
-    /// `primary` or `backup`.
-    pub role: &'static str,
-    /// minisign's key id, 16 upper hex.
-    pub key_id: &'static str,
-    /// The base64 line of a `minisign.pub` file.
-    pub pubkey: &'static str,
 }
 
 include!(concat!(env!("OUT_DIR"), "/brand.rs"));
@@ -220,15 +208,6 @@ mod tests {
         {
             assert!(brand_file::is_https_url(url), "{url}");
         }
-        assert_eq!(pins::KEYS.first().map(|k| k.role), Some("primary"));
-        for k in pins::KEYS {
-            assert_eq!(
-                brand_file::minisign_key_id(k.pubkey).as_deref(),
-                Some(k.key_id),
-                "{}",
-                k.pubkey
-            );
-        }
         for name in [
             names::SHORT,
             names::COMPANY,
@@ -241,6 +220,13 @@ mod tests {
             assert!(!name.is_empty() && name.trim() == name, "{name:?}");
         }
         assert!(mail::SYSTEM_FROM.contains('@') && links::SUPPORT_EMAIL.contains('@'));
+        // `{server}` is the box's own name; any other brace is a typo.
+        let domain = mail::SYSTEM_FROM.rsplit('@').next().expect("a domain");
+        assert!(
+            domain == brand_file::SERVER_SLOT || brand_file::is_domain(domain),
+            "{}",
+            mail::SYSTEM_FROM
+        );
         assert!(machine::HOME_DIR_NAME.starts_with('.'));
         assert!(brand_file::is_command_name(machine::BINARY_PREFIX));
         assert!(brand_file::is_command_name(machine::UNIT_PREFIX));

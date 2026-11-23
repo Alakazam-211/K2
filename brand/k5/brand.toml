@@ -29,8 +29,9 @@ update_feed = "https://github.com/Alakazam-211/K2/releases/latest/download/lates
 desktop_id = "k2"
 gui_binary = "k2-gui"
 
-# The update-signing public keys (see brand/k2): the same keys as k2, so
-# installs keep updating across the rename.
+# The update-signing public keys (see brand/k2; they also carry the Sew
+# pins' trust): the same keys as k2, so installs keep updating across the
+# rename.
 [update]
 keys = [
     { role = "primary", key_id = "76CA14D3B7EE2B69", pubkey = "RWRpK+630xTKdopKvlpWVqvnEwqyK1CZ+F5deeRjpGA2ywyWS8NnOrpv" },
@@ -48,28 +49,15 @@ keys = [
 label = "k2.dev"
 internal = true
 
-# Our control endpoints. A brand that leaves these out uses ours.
-[control]
-connect = "https://connect.k2.dev"
-cert = "https://cert.k2.dev/cert"
-push = "https://push.k2.dev"
-relay = "relay.k2.dev"
-relay_list = "https://k2.dev/api/tunnel/relays"
-web_api = "https://k2.dev"
+# [control] is left out: brand/k2 spells our control endpoints, and an
+# our-brand file may not set them while the bash CLI keeps its own copy
+# (brand lint names the line).
 
 # Where updates come from, besides [package] update_feed (the app's):
 # the headless daemon's manifest, and where a release's files are.
 [feeds]
 daemon = "https://github.com/Alakazam-211/K2/releases/latest/download/daemon-latest.json"
 downloads = "https://github.com/Alakazam-211/K2/releases/download"
-
-# The keys that sign the root helper and what it installs (the Sew pins
-# ride in the helper): today's root-helper release keys, primary first.
-[pins]
-keys = [
-    { role = "primary", key_id = "18DB69584200F795", pubkey = "RWSV9wBCWGnbGBvUcoZDJWucBgmvxNmRbApWopWr+kUOYbmuZ7+kSYI1" },
-    { role = "backup", key_id = "E9C2D2CAD052297A", pubkey = "RWR6KVLQytLC6Yiiy/nCzF6HFJXp5OwkF+AjtMhlznwZfucjf0DoDY5W" },
-]
 
 # The names ops scripts find on a box: the home folder, what the programs'
 # file names start with (k2-daemon), and what the systemd units' names
@@ -93,9 +81,12 @@ privacy = ""
 dashboard = "https://k2.dev/dashboard"
 feedback = "https://feedback.akzm.k2.dev"
 
-# System mail, and whether the brand's boxes may join Postal.
+# System mail, and whether the brand's boxes may join Postal. There is no
+# fleet-wide sender: each box sends from its own server name ({server},
+# its <label>.<zone>) through its own hostmail, so SPF, DKIM and DMARC go
+# on that name, never on a brand's apex domain.
 [mail]
-system_from = "noreply@k2.dev"
+system_from = "noreply@{server}"
 system_from_name = "K5"
 postal = true
 

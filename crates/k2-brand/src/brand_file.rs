@@ -6,7 +6,7 @@
 //!
 //! What it reads: `id`, `schema`, `[names]`, the `[cli]` table, and the
 //! tables a hosted box of the brand needs (`[zones]`, `[control]`,
-//! `[feeds]`, `[pins]`, `[machine]`, `[look]`, `[links]`, `[mail]`,
+//! `[feeds]`, `[machine]`, `[look]`, `[links]`, `[mail]`,
 //! `[phone]`, `[sew]`). `[package]` and `[update]` are read by their own
 //! readers (`scripts/brand-values.mjs`, `crates/k2-release-keys`); a table
 //! or key it does not know stops the build.
@@ -44,8 +44,8 @@ const ALIAS_KEYS: &[&str] = &["name", "mode"];
 
 /// The top-level keys and tables a brand file may hold.
 const TOP_KEYS: &[&str] = &[
-    "id", "schema", "names", "cli", "package", "update", "zones", "control", "feeds", "pins",
-    "machine", "look", "links", "mail", "phone", "sew",
+    "id", "schema", "names", "cli", "package", "update", "zones", "control", "feeds", "machine",
+    "look", "links", "mail", "phone", "sew",
 ];
 
 /// The keys each table this reader checks may hold (`[cli]` has its own).
@@ -55,12 +55,9 @@ const TABLE_KEYS: &[(&str, &[&str])] = &[
         &["product", "short", "company", "lockup", "server", "login"],
     ),
     ("zones", &["label", "internal"]),
-    (
-        "control",
-        &["connect", "cert", "push", "relay", "relay_list", "web_api"],
-    ),
+    ("control", CONTROL_KEYS),
     ("feeds", &["daemon", "downloads"]),
-    ("pins", &["keys"]),
+    ("update", &["keys"]),
     ("machine", &["home", "binary_prefix", "unit_prefix"]),
     ("look", &["icons", "accent"]),
     (
@@ -80,7 +77,11 @@ const TABLE_KEYS: &[(&str, &[&str])] = &[
     ("sew", &["call_name"]),
 ];
 
-/// The keys one signing key (`[pins] keys`) may hold.
+/// `[control]`: all six or none (K2's ruling: a brand never mixes our
+/// control endpoints with its own).
+const CONTROL_KEYS: &[&str] = &["relay", "relay_list", "connect", "cert", "push", "web_api"];
+
+/// The keys one signing key (`[update] keys`) may hold.
 const KEY_KEYS: &[&str] = &["role", "key_id", "pubkey"];
 
 /// A brand file, checked.
@@ -128,9 +129,6 @@ pub struct Fields {
     pub daemon_feed: String,
     /// `feeds.downloads`: where a release's files are downloaded from.
     pub downloads: String,
-    /// `pins.keys`: the keys that sign the root helper and what it
-    /// installs (the Sew pins ride in the helper).
-    pub pin_keys: Vec<Key>,
     /// `machine.home`: the home folder's name.
     pub home: String,
     /// `machine.binary_prefix`: what the programs' file names start with.
@@ -156,7 +154,8 @@ pub struct Fields {
     pub dashboard: Option<String>,
     /// `links.feedback`: where Send feedback goes. None: the button is off.
     pub feedback: Option<String>,
-    /// `mail.system_from`: the address system mail comes from.
+    /// `mail.system_from`: the address system mail comes from, with
+    /// [`SERVER_SLOT`] for the box's own server name (`noreply@{server}`).
     pub system_from: String,
     /// `mail.system_from_name`: the name on it. Default: the product's.
     pub system_from_name: String,
@@ -171,14 +170,6 @@ pub struct Fields {
     /// `sew.call_name`: what calls and chat name the service. Default: the
     /// product's.
     pub sew_call_name: String,
-}
-
-/// One signing key: a minisign public key line and its id.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Key {
-    pub role: String,
-    pub key_id: String,
-    pub pubkey: String,
 }
 
 /// Another name the command answers to.
@@ -494,6 +485,20 @@ fn parse_fields(doc: &toml::Table, product: &str, base: Option<&Fields>) -> Resu
         base.map(|f| &f.internal_name),
         "zones.internal",
     )?;
+    if let Some(t) = opt_table(doc, "control")? {
+        let missing: Vec<&str> = CONTROL_KEYS
+            .iter()
+            .copied()
+            .filter(|k| !t.contains_key(*k))
+            .collect();
+        if !missing.is_empty() {
+            return Err(format!(
+                "[control] leaves out {}: a brand that sets [control] sets all six ({}), or leaves the table out for ours",
+                missing.join(", "),
+                CONTROL_KEYS.join(", ")
+            ));
+        }
+    }
     let url = |key: &str, f: fn(&Fields) -> &String| -> Result<String, String> {
         inherit(
             get_str(doc, "control", key, check_https)?,
@@ -521,11 +526,10 @@ fn parse_fields(doc: &toml::Table, product: &str, base: Option<&Fields>) -> Resu
         b(|f| &f.downloads),
         "feeds.downloads",
     )?;
-    let pin_keys = inherit(
-        key_list(doc, "pins")?,
-        base.map(|f| &f.pin_keys),
-        "pins.keys",
-    )?;
+    // [update] is read by its own reader (crates/k2-release-keys); its
+    // keys are also the trust root of the Sew pins a build carries. Here
+    // they are only checked for their shape.
+    check_key_list(doc, "update", "keys")?;
     let machine = |key: &str, f: fn(&Fields) -> &String| -> Result<String, String> {
         let field = format!("machine.{key}");
         let check: fn(&str, &str) -> Result<(), String> = if key == "home" {
@@ -569,7 +573,7 @@ fn parse_fields(doc: &toml::Table, product: &str, base: Option<&Fields>) -> Resu
     let dashboard = link("dashboard", |f| &f.dashboard)?;
     let feedback = link("feedback", |f| &f.feedback)?;
     let system_from = inherit(
-        get_str(doc, "mail", "system_from", check_email)?,
+        get_str(doc, "mail", "system_from", check_system_from)?,
         b(|f| &f.system_from),
         "mail.system_from",
     )?;
@@ -613,7 +617,6 @@ fn parse_fields(doc: &toml::Table, product: &str, base: Option<&Fields>) -> Resu
         web_api,
         daemon_feed,
         downloads,
-        pin_keys,
         home,
         binary_prefix,
         unit_prefix,
@@ -636,25 +639,26 @@ fn parse_fields(doc: &toml::Table, product: &str, base: Option<&Fields>) -> Resu
     })
 }
 
-/// `[<table>] keys`: a list of `{ role, key_id, pubkey }`, each a minisign
-/// public key line whose id is its `key_id`, a primary first, no key
-/// twice. None when the table or the list is not there.
-fn key_list(doc: &toml::Table, table: &str) -> Result<Option<Vec<Key>>, String> {
+/// `[<table>] <key>`, when set: a list of `{ role, key_id, pubkey }`,
+/// each a minisign public key line whose id is its `key_id`, a primary
+/// first, no key twice.
+fn check_key_list(doc: &toml::Table, table: &str, key: &str) -> Result<(), String> {
+    let list = format!("{table}.{key}");
     let Some(t) = opt_table(doc, table)? else {
-        return Ok(None);
+        return Ok(());
     };
-    let items = match t.get("keys") {
-        None => return Ok(None),
+    let items = match t.get(key) {
+        None => return Ok(()),
         Some(toml::Value::Array(a)) if !a.is_empty() => a,
         Some(_) => {
             return Err(format!(
-                "{table}.keys must be a list of {{ role, key_id, pubkey }} tables, at least one"
+                "{list} must be a list of {{ role, key_id, pubkey }} tables, at least one"
             ))
         }
     };
-    let mut keys: Vec<Key> = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
     for (i, item) in items.iter().enumerate() {
-        let f = format!("{table}.keys[{i}]");
+        let f = format!("{list}[{i}]");
         let toml::Value::Table(k) = item else {
             return Err(format!("{f} must be a table: {{ role, key_id, pubkey }}"));
         };
@@ -669,6 +673,9 @@ fn key_list(doc: &toml::Table, table: &str) -> Result<Option<Vec<Key>>, String> 
         if role != "primary" && role != "backup" {
             return Err(format!("{f}.role {role:?} must be primary or backup"));
         }
+        if i == 0 && role != "primary" {
+            return Err(format!("{list} must start with a primary key"));
+        }
         let Some(id) = minisign_key_id(&pubkey) else {
             return Err(format!("{f}.pubkey is not a minisign public key line"));
         };
@@ -677,19 +684,12 @@ fn key_list(doc: &toml::Table, table: &str) -> Result<Option<Vec<Key>>, String> 
                 "{f}.key_id {key_id:?} is not the pubkey's key id ({id})"
             ));
         }
-        if keys.iter().any(|x| x.key_id == key_id) {
-            return Err(format!("{table}.keys lists {key_id} twice"));
+        if seen.contains(&key_id) {
+            return Err(format!("{list} lists {key_id} twice"));
         }
-        keys.push(Key {
-            role,
-            key_id,
-            pubkey,
-        });
+        seen.push(key_id);
     }
-    if keys[0].role != "primary" {
-        return Err(format!("{table}.keys must start with a primary key"));
-    }
-    Ok(Some(keys))
+    Ok(())
 }
 
 /// minisign's key id of a public key line ("Ed", the 8 id bytes as a
@@ -819,6 +819,20 @@ fn check_email(v: &str, field: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Where `mail.system_from` puts the box's own server name
+/// (`<label>.<zone>`): each box sends from its own name, with SPF, DKIM
+/// and DMARC on it.
+pub const SERVER_SLOT: &str = "{server}";
+
+/// An email address whose domain is a domain or [`SERVER_SLOT`].
+fn check_system_from(v: &str, field: &str) -> Result<(), String> {
+    match v.split_once('@') {
+        Some((local, SERVER_SLOT)) => check_email(&format!("{local}@server.invalid"), field)
+            .map_err(|_| format!("{field} {v:?} must be an email address: <name>@{SERVER_SLOT} or <name>@<domain>")),
+        _ => check_email(v, field),
+    }
+}
+
 fn check_colour(v: &str, field: &str) -> Result<(), String> {
     let ok = v.len() == 7 && v.starts_with('#') && v[1..].bytes().all(|c| c.is_ascii_hexdigit());
     if !ok {
@@ -927,16 +941,6 @@ fn render_fields(f: &Fields) -> String {
         Some(s) => format!("Some({s:?})"),
         None => "None".to_string(),
     };
-    let keys: Vec<String> = f
-        .pin_keys
-        .iter()
-        .map(|k| {
-            format!(
-                "crate::BrandKey {{ role: {:?}, key_id: {:?}, pubkey: {:?} }}",
-                k.role, k.key_id, k.pubkey
-            )
-        })
-        .collect();
     format!(
         "/// `[names]`: the brand's other names.
 pub mod names {{
@@ -986,12 +990,6 @@ pub mod feeds {{
     pub const DOWNLOADS: &str = {downloads:?};
 }}
 
-/// `[pins]`: the keys that sign the root helper and what it installs.
-pub mod pins {{
-    /// Primary first.
-    pub const KEYS: &[crate::BrandKey] = &[{keys}];
-}}
-
 /// `[machine]`: the names ops scripts find on a box.
 pub mod machine {{
     /// The home folder's name.
@@ -1030,7 +1028,8 @@ pub mod links {{
 
 /// `[mail]`: system mail and Postal.
 pub mod mail {{
-    /// The address system mail comes from.
+    /// The address system mail comes from; `{{server}}` is the box's own
+    /// server name (SPF, DKIM and DMARC go on that name).
     pub const SYSTEM_FROM: &str = {system_from:?};
     /// The name on it.
     pub const SYSTEM_FROM_NAME: &str = {system_from_name:?};
@@ -1069,7 +1068,6 @@ pub mod sew {{
         web_api = f.web_api,
         daemon = f.daemon_feed,
         downloads = f.downloads,
-        keys = keys.join(", "),
         home = f.home,
         binary_prefix = f.binary_prefix,
         unit_prefix = f.unit_prefix,
@@ -1790,7 +1788,7 @@ web_api = "https://api.example.invalid"
 [feeds]
 daemon = "https://updates.example.invalid/daemon-latest.json"
 downloads = "https://updates.example.invalid/download"
-[pins]
+[update]
 keys = [
     { role = "primary", key_id = "25B77D84DA3C24B8", pubkey = "RWS4JDzahH23JaLG/sJZ6ECPc58g2hi5jkdAVvOH/XPJXUPnFf/6A99m" },
     { role = "backup", key_id = "437A6680B65F314B", pubkey = "RWRLMV+2gGZ6Q8yHeWW6I/DeKsDpzmn/FdSN6+8WfGpqDP+vMI0Slieq" },
@@ -1832,14 +1830,6 @@ call_name = "Hub Calls"
             .fields
     }
 
-    fn key(role: &str, key_id: &str, pubkey: &str) -> Key {
-        Key {
-            role: role.into(),
-            key_id: key_id.into(),
-            pubkey: pubkey.into(),
-        }
-    }
-
     /// Every field a brand may set is read as set; the machine names are
     /// the default brand's (a brand may not name them otherwise yet).
     #[test]
@@ -1868,18 +1858,6 @@ call_name = "Hub Calls"
             web_api: s("https://api.example.invalid"),
             daemon_feed: s("https://updates.example.invalid/daemon-latest.json"),
             downloads: s("https://updates.example.invalid/download"),
-            pin_keys: vec![
-                key(
-                    "primary",
-                    "25B77D84DA3C24B8",
-                    "RWS4JDzahH23JaLG/sJZ6ECPc58g2hi5jkdAVvOH/XPJXUPnFf/6A99m",
-                ),
-                key(
-                    "backup",
-                    "437A6680B65F314B",
-                    "RWRLMV+2gGZ6Q8yHeWW6I/DeKsDpzmn/FdSN6+8WfGpqDP+vMI0Slieq",
-                ),
-            ],
             home: base.home.clone(),
             binary_prefix: base.binary_prefix.clone(),
             unit_prefix: base.unit_prefix.clone(),
@@ -1909,9 +1887,6 @@ call_name = "Hub Calls"
             "    pub const CONNECT: &str = \"https://connect.example.invalid\";\n",
             "    pub const RELAY_HOST: &str = \"relay.example.invalid\";\n",
             "    pub const DAEMON: &str = \"https://updates.example.invalid/daemon-latest.json\";\n",
-            "    pub const KEYS: &[crate::BrandKey] = &[crate::BrandKey { role: \"primary\", key_id: \"25B77D84DA3C24B8\", \
-             pubkey: \"RWS4JDzahH23JaLG/sJZ6ECPc58g2hi5jkdAVvOH/XPJXUPnFf/6A99m\" }, crate::BrandKey { role: \"backup\", \
-             key_id: \"437A6680B65F314B\", pubkey: \"RWRLMV+2gGZ6Q8yHeWW6I/DeKsDpzmn/FdSN6+8WfGpqDP+vMI0Slieq\" }];\n",
             "    pub const ICONS: Option<&str> = Some(\"assets/icons\");\n",
             "    pub const ACCENT: Option<&str> = Some(\"#3A6FF7\");\n",
             "    pub const SUPPORT_URL: Option<&str> = Some(\"https://example.invalid/support\");\n",
@@ -1943,6 +1918,21 @@ call_name = "Hub Calls"
             ..base.clone()
         };
         assert_eq!(got, want);
+        // System mail comes from each box's own server name by default.
+        assert_eq!(base.system_from, format!("noreply@{SERVER_SLOT}"));
+        let t = TempBrand::new(
+            "own-from",
+            Some(&format!(
+                "{GOOD}[mail]\nsystem_from = \"hello@{{server}}\"\n"
+            )),
+        );
+        assert_eq!(
+            load(&t.file(), &default_file())
+                .expect("loads")
+                .fields
+                .system_from,
+            "hello@{server}"
+        );
         // An empty link is none, and stays none: it is not the default's.
         let t = TempBrand::new(
             "no-site-link",
@@ -1991,12 +1981,12 @@ call_name = "Hub Calls"
             ("connect = \"https://connect.example.invalid\"", "connect = \"https://connect.example.invalid:8443\"", "must be an https URL"),
             ("relay = \"relay.example.invalid\"", "relay = \"relay\"", "control.relay \"relay\" must be a domain name"),
             ("daemon = \"https://updates.example.invalid/daemon-latest.json\"", "daemon = \"\"", "feeds.daemon is empty"),
-            ("key_id = \"25B77D84DA3C24B8\"", "key_id = \"0000000000000000\"", "pins.keys[0].key_id \"0000000000000000\" is not the pubkey's key id (25B77D84DA3C24B8)"),
-            ("pubkey = \"RWS4JDzahH23JaLG/sJZ6ECPc58g2hi5jkdAVvOH/XPJXUPnFf/6A99m\"", "pubkey = \"RWnotakey\"", "pins.keys[0].pubkey is not a minisign public key line"),
-            ("role = \"primary\"", "role = \"spare\"", "pins.keys[0].role \"spare\" must be primary or backup"),
-            ("role = \"primary\"", "role = \"backup\"", "pins.keys must start with a primary key"),
-            ("key_id = \"437A6680B65F314B\", pubkey = \"RWRLMV+2gGZ6Q8yHeWW6I/DeKsDpzmn/FdSN6+8WfGpqDP+vMI0Slieq\"", "key_id = \"25B77D84DA3C24B8\", pubkey = \"RWS4JDzahH23JaLG/sJZ6ECPc58g2hi5jkdAVvOH/XPJXUPnFf/6A99m\"", "pins.keys lists 25B77D84DA3C24B8 twice"),
-            ("role = \"primary\", key_id", "role = \"primary\", why = \"x\", key_id", "pins.keys[0] holds a key it does not know: why"),
+            ("key_id = \"25B77D84DA3C24B8\"", "key_id = \"0000000000000000\"", "update.keys[0].key_id \"0000000000000000\" is not the pubkey's key id (25B77D84DA3C24B8)"),
+            ("pubkey = \"RWS4JDzahH23JaLG/sJZ6ECPc58g2hi5jkdAVvOH/XPJXUPnFf/6A99m\"", "pubkey = \"RWnotakey\"", "update.keys[0].pubkey is not a minisign public key line"),
+            ("role = \"primary\"", "role = \"spare\"", "update.keys[0].role \"spare\" must be primary or backup"),
+            ("role = \"primary\"", "role = \"backup\"", "update.keys must start with a primary key"),
+            ("key_id = \"437A6680B65F314B\", pubkey = \"RWRLMV+2gGZ6Q8yHeWW6I/DeKsDpzmn/FdSN6+8WfGpqDP+vMI0Slieq\"", "key_id = \"25B77D84DA3C24B8\", pubkey = \"RWS4JDzahH23JaLG/sJZ6ECPc58g2hi5jkdAVvOH/XPJXUPnFf/6A99m\"", "update.keys lists 25B77D84DA3C24B8 twice"),
+            ("role = \"primary\", key_id", "role = \"primary\", why = \"x\", key_id", "update.keys[0] holds a key it does not know: why"),
             ("accent = \"#3A6FF7\"", "accent = \"blue\"", "look.accent \"blue\" must be a colour in hex"),
             ("accent = \"#3A6FF7\"", "accent = \"#3A6FF\"", "look.accent \"#3A6FF\" must be a colour in hex"),
             ("icons = \"assets/icons\"", "icons = \"/abs/icons\"", "look.icons \"/abs/icons\" must be a folder from the brand folder"),
@@ -2006,6 +1996,8 @@ call_name = "Hub Calls"
             ("dashboard = \"\"", "dashboard = 7", "links.dashboard must be a string (\"\" for none)"),
             ("site = \"https://example.invalid\"", "site = \"\"", "links.site is empty"),
             ("system_from = \"noreply@example.invalid\"", "system_from = \"noreply\"", "mail.system_from \"noreply\" must be an email address"),
+            ("system_from = \"noreply@example.invalid\"", "system_from = \"noreply@{box}\"", "mail.system_from \"noreply@{box}\" must be an email address"),
+            ("system_from = \"noreply@example.invalid\"", "system_from = \"no reply@{server}\"", "mail.system_from \"no reply@{server}\" must be an email address: <name>@{server} or <name>@<domain>"),
             ("postal = false", "postal = 0", "mail.postal must be true or false"),
             ("bundle_id = \"com.example.hub\"", "bundle_id = \"Com.Example\"", "phone.bundle_id \"Com.Example\" must be a reverse-DNS id"),
             ("team_id = \"ABCDE12345\"", "team_id = \"abc\"", "phone.team_id \"abc\" must be an Apple team id"),
@@ -2185,36 +2177,6 @@ call_name = "Hub Calls"
         assert_eq!(f.push_topic, f.phone_bundle_id);
     }
 
-    /// Drift: the default brand's pin keys are the root helper's release
-    /// keys (`k2_root_proto::keys::RELEASE_KEYS`), in order.
-    #[test]
-    fn the_default_brands_pin_keys_are_the_root_helper_keys() {
-        let text = std::fs::read_to_string(repo("crates/k2-root-proto/src/keys.rs"))
-            .expect("read keys.rs");
-        let a = text
-            .find("pub const RELEASE_KEYS: &[TrustedKey] = &[")
-            .expect("RELEASE_KEYS");
-        let block = &text[a..a + text[a..].find("\n];").expect("the end of RELEASE_KEYS")];
-        let value = |l: &str, name: &str| -> Option<String> {
-            let rest = l.trim().strip_prefix(&format!("{name}: \""))?;
-            Some(rest.strip_suffix("\",")?.to_string())
-        };
-        let (mut roles, mut ids, mut lines) = (Vec::new(), Vec::new(), Vec::new());
-        for l in block.lines() {
-            roles.extend(value(l, "role"));
-            ids.extend(value(l, "key_id"));
-            lines.extend(value(l, "public_key_b64"));
-        }
-        assert!(
-            !roles.is_empty() && roles.len() == ids.len() && ids.len() == lines.len(),
-            "{block}"
-        );
-        let today: Vec<Key> = (0..roles.len())
-            .map(|i| key(&roles[i], &ids[i], &lines[i]))
-            .collect();
-        assert_eq!(default_fields().pin_keys, today);
-    }
-
     /// The distributor template's example brand is a file this build uses.
     #[test]
     fn the_distributor_templates_brand_loads() {
@@ -2234,10 +2196,102 @@ call_name = "Hub Calls"
                 &b.fields.support_email,
                 &base.support_email,
             ),
-            ("mail.system_from", &b.fields.system_from, &base.system_from),
             ("feeds.daemon", &b.fields.daemon_feed, &base.daemon_feed),
         ] {
             assert_ne!(mine, ours, "the template sets its own {what}");
         }
+    }
+
+    /// `[control]` is all six or none: a brand that sets one control
+    /// endpoint sets them all (K2's ruling), so ours and a brand's are
+    /// never mixed. Each one left out is named.
+    #[test]
+    fn a_partial_control_table_is_refused() {
+        for (i, key) in CONTROL_KEYS.iter().enumerate() {
+            let line = FULL
+                .lines()
+                .find(|l| l.starts_with(&format!("{key} = ")))
+                .unwrap_or_else(|| panic!("FULL sets control.{key}"));
+            refused(
+                &format!("control-partial-{i}"),
+                &full_with(&format!("{line}\n"), ""),
+                &format!("[control] leaves out {key}: a brand that sets [control] sets all six"),
+            );
+        }
+        refused(
+            "control-empty",
+            &format!("{GOOD}[control]\n"),
+            "[control] leaves out relay, relay_list, connect, cert, push, web_api",
+        );
+    }
+
+    /// brand/xy has no [control]: it resolves to exactly our six control
+    /// addresses, the ones `the_service_addresses_are_what_they_were`
+    /// (k2-client's hosts module) spells out.
+    #[test]
+    fn a_brand_with_no_control_table_has_our_six_addresses() {
+        let xy = std::fs::read_to_string(repo("brand/xy/brand.toml")).expect("read brand/xy");
+        let doc: toml::Table = toml::from_str(&xy).expect("brand/xy is TOML");
+        assert!(
+            doc.get("control").is_none(),
+            "brand/xy leaves [control] out"
+        );
+        let f = load(&repo("brand/xy/brand.toml"), &default_file())
+            .expect("brand/xy loads")
+            .fields;
+        let hosts =
+            std::fs::read_to_string(repo("crates/k2-client/src/hosts.rs")).expect("read hosts.rs");
+        let spelled = |name: &str| -> String {
+            let head = format!("assert_eq!({name}, \"");
+            let line = hosts
+                .lines()
+                .map(str::trim)
+                .find(|l| l.starts_with(&head))
+                .unwrap_or_else(|| panic!("hosts.rs spells out {name}"));
+            line[head.len()..]
+                .strip_suffix("\");")
+                .unwrap_or_else(|| panic!("{line}"))
+                .to_string()
+        };
+        assert_eq!(
+            [
+                &f.relay,
+                &f.relay_list,
+                &f.connect,
+                &f.cert,
+                &f.push,
+                &f.web_api
+            ]
+            .map(String::as_str),
+            [
+                spelled("RELAY_HOST"),
+                spelled("RELAY_LIST_URL"),
+                spelled("CONNECT_BASE"),
+                spelled("CERT_BROKER_URL"),
+                spelled("PUSH_GATEWAY_URL"),
+                spelled("WEB_API_BASE"),
+            ]
+            .each_ref()
+            .map(String::as_str)
+        );
+        let base = default_fields();
+        assert_eq!(
+            (
+                &f.relay,
+                &f.relay_list,
+                &f.connect,
+                &f.cert,
+                &f.push,
+                &f.web_api
+            ),
+            (
+                &base.relay,
+                &base.relay_list,
+                &base.connect,
+                &base.cert,
+                &base.push,
+                &base.web_api
+            )
+        );
     }
 }

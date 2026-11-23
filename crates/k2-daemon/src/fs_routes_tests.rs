@@ -1495,3 +1495,68 @@ fn write_file_with_expect_never_writes_over_another_save() {
     assert!(!skin_like.body.contains("no check") && skin_like.body.contains("file_changed"), "{}", skin_like.body);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A guest's copy of a folder that holds links: the copy keeps the
+/// folder's real files and folders and leaves every link out, so nothing
+/// a link points at (outside the room, or elsewhere in it) is read.
+#[test]
+fn guest_copy_of_a_folder_leaves_its_links_out() {
+    let room = config_room("copylinks");
+    let pass = writer(&room, false);
+    let outside = std::env::temp_dir().join(format!("k2-copy-out-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(outside.join("dir")).expect("outside dir");
+    std::fs::write(outside.join("other.txt"), b"bytes from outside").expect("outside file");
+    std::fs::write(outside.join("dir/inner.txt"), b"inner bytes from outside").expect("outside inner");
+    std::fs::create_dir_all(room.dir.join("notes/sub")).expect("sub");
+    std::fs::write(room.dir.join("notes/sub/keep.txt"), b"kept").expect("keep");
+    k2_core::test_env::symlink(outside.join("other.txt"), room.dir.join("notes/file-link.txt")).expect("file link");
+    k2_core::test_env::symlink(outside.join("dir"), room.dir.join("notes/dir-link")).expect("dir link");
+    k2_core::test_env::symlink(room.dir.join(".k2/agent/ROLE.md"), room.dir.join("notes/sub/role-link.md"))
+        .expect("in-room link");
+    std::fs::create_dir_all(room.dir.join("backup")).expect("backup");
+
+    let body = json_bytes(serde_json::json!({"workspace": room.handle, "sources": ["notes"], "destination": "backup"}));
+    let r = handle_copy_gated(&body, Some(pass));
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    let copied = room.dir.join("backup/notes");
+    assert_eq!(std::fs::read(copied.join("a.md")).expect("a.md copied"), b"note a");
+    assert_eq!(std::fs::read(copied.join("sub/keep.txt")).expect("keep.txt copied"), b"kept");
+    for name in ["file-link.txt", "dir-link", "sub/role-link.md"] {
+        assert!(
+            std::fs::symlink_metadata(copied.join(name)).is_err(),
+            "{name} must not be in the copy"
+        );
+    }
+    assert_eq!(std::fs::read(outside.join("other.txt")).expect("outside"), b"bytes from outside");
+    assert_eq!(room.read_role(), "original role");
+    std::fs::remove_dir_all(&outside).expect("cleanup outside");
+}
+
+/// An upload with the `files:agentconfig` opt-in, on a line with no
+/// folders: a folder path that runs through a link out of the room is
+/// refused with the jail's 400, and nothing is made outside. The same
+/// without the opt-in. A new folder in the room still takes the upload.
+#[test]
+fn upload_into_a_new_folder_past_a_link_out_of_the_room_is_refused() {
+    let room = config_room("uplink");
+    let outside = std::env::temp_dir().join(format!("k2-upload-out-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&outside).expect("outside dir");
+    k2_core::test_env::symlink(&outside, room.dir.join("notes/out")).expect("link out");
+    for opt_in in [true, false] {
+        let pass = writer(&room, opt_in);
+        let r = handle_upload_binary_gated(&upload_body(&room, "notes/out/new/deeper", "x.bin"), Some(pass.clone()));
+        assert_eq!(r.status, "400 Bad Request", "upload-binary, opt-in {opt_in}: {}", r.body);
+        assert!(r.body.contains("escapes the workspace"), "upload-binary, opt-in {opt_in}: {}", r.body);
+        let r = handle_upload_chunk_gated(&chunk_body(&room, "notes/out/new/deeper", "y.bin"), Some(pass.clone()));
+        assert_eq!(r.status, "400 Bad Request", "upload-chunk, opt-in {opt_in}: {}", r.body);
+        assert!(r.body.contains("escapes the workspace"), "upload-chunk, opt-in {opt_in}: {}", r.body);
+        let made: Vec<_> = std::fs::read_dir(&outside).expect("outside").map(|e| e.expect("entry").file_name()).collect();
+        assert!(made.is_empty(), "opt-in {opt_in}: made outside the room: {made:?}");
+
+        let dir = format!("notes/fresh-{opt_in}/deeper");
+        let r = handle_upload_binary_gated(&upload_body(&room, &dir, "x.bin"), Some(pass));
+        assert_eq!(r.status, "200 OK", "in-room upload, opt-in {opt_in}: {}", r.body);
+        assert_eq!(std::fs::read(room.dir.join(&dir).join("x.bin")).expect("landed"), b"hi");
+    }
+    std::fs::remove_dir_all(&outside).expect("cleanup outside");
+}

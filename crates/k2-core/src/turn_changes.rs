@@ -25,7 +25,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use git2::{Oid, Repository, Status, StatusOptions};
+use gix::ObjectId as Oid;
+use gix::Repository;
+
+use crate::gitx::status::{self as gstatus, Flags};
 
 use crate::overlay::{ThreadChangedFile, ThreadChanges, THREAD_CHANGES_MAX_FILES};
 
@@ -71,7 +74,7 @@ impl TurnMark {
 }
 
 fn open(path: &Path) -> Option<Repository> {
-    let repo = Repository::open(path).ok()?;
+    let repo = crate::gitx::open(path).ok()?;
     if repo.is_bare() {
         return None;
     }
@@ -79,23 +82,19 @@ fn open(path: &Path) -> Option<Repository> {
 }
 
 fn head_oid(repo: &Repository) -> Option<Oid> {
-    repo.head().ok().and_then(|h| h.peel_to_commit().ok()).map(|c| c.id())
+    crate::gitx::head_info(repo).oid
 }
 
 /// Paths that differ from HEAD (index or worktree, untracked included,
-/// ignored never). Directories are expanded (`recurse_untracked_dirs`).
+/// ignored never). Untracked folders are expanded to their files;
+/// submodules and renames are left out.
 fn dirty_paths(repo: &Repository) -> Vec<String> {
-    let mut opts = StatusOptions::new();
-    opts.include_untracked(true)
-        .recurse_untracked_dirs(true)
-        .include_ignored(false)
-        .exclude_submodules(true)
-        .renames_head_to_index(false);
-    let Ok(statuses) = repo.statuses(Some(&mut opts)) else { return Vec::new() };
-    statuses
-        .iter()
-        .filter(|e| e.status() != Status::CURRENT && !e.status().contains(Status::IGNORED))
-        .filter_map(|e| e.path().map(str::to_string))
+    let opts = gstatus::Options { untracked: gstatus::Untracked::Files, staged_renames: false, submodules: false };
+    let Ok(rows) = gstatus::statuses(repo, opts) else { return Vec::new() };
+    rows.into_iter()
+        .filter(|r| !r.flags.is_empty() && !r.path.ends_with('/'))
+        .filter(|r| r.flags.intersects(Flags::INDEX_ANY | Flags::WT_ANY | Flags::WT_NEW | Flags::CONFLICTED))
+        .map(|r| r.path)
         .take(MAX_CANDIDATES)
         .collect()
 }
@@ -114,10 +113,10 @@ fn disk_content(workdir: &Path, rel: &str, budget: Option<&mut usize>) -> Conten
             Err(_) => return Content::Absent,
         }
     } else if meta.len() > MARK_FILE_BYTES * 8 {
-        // Too big to read whole: its id comes from git's own hasher.
-        return match Oid::hash_file(git2::ObjectType::Blob, &p) {
-            Ok(oid) => Content::Blob { oid, bytes: None },
-            Err(_) => Content::Absent,
+        // Too big to read whole: its id comes from a streamed hash.
+        return match crate::gitx::hash_file(&p) {
+            Some(oid) => Content::Blob { oid, bytes: None },
+            None => Content::Absent,
         };
     } else {
         match std::fs::read(&p) {
@@ -125,7 +124,7 @@ fn disk_content(workdir: &Path, rel: &str, budget: Option<&mut usize>) -> Conten
             Err(_) => return Content::Absent,
         }
     };
-    let Ok(oid) = Oid::hash_object(git2::ObjectType::Blob, &bytes) else { return Content::Absent };
+    let Some(oid) = crate::gitx::hash_blob(&bytes) else { return Content::Absent };
     let keep = bytes.len() as u64 <= MARK_FILE_BYTES
         && match budget {
             None => true,
@@ -141,14 +140,15 @@ fn disk_content(workdir: &Path, rel: &str, budget: Option<&mut usize>) -> Conten
 /// The file's content in commit `at` (Absent when it isn't there).
 fn tree_content(repo: &Repository, at: Option<Oid>, rel: &str) -> Content {
     let Some(at) = at else { return Content::Absent };
-    let Ok(commit) = repo.find_commit(at) else { return Content::Absent };
-    let Ok(tree) = commit.tree() else { return Content::Absent };
-    let Ok(entry) = tree.get_path(Path::new(rel)) else { return Content::Absent };
-    if entry.kind() != Some(git2::ObjectType::Blob) {
+    let Some(tree) = crate::gitx::commit_tree_id(repo, at) else { return Content::Absent };
+    let Some((kind, oid)) = crate::gitx::tree_entry(repo, tree, rel) else { return Content::Absent };
+    if !(kind.is_blob() || kind == crate::gitx::EntryKind::Link) {
         return Content::Absent;
     }
-    let oid = entry.id();
-    let bytes = repo.find_blob(oid).ok().filter(|b| (b.size() as u64) <= MARK_FILE_BYTES).map(|b| b.content().to_vec());
+    let bytes = match crate::gitx::object_size(repo, oid) {
+        Some(n) if n <= MARK_FILE_BYTES => crate::gitx::blob_bytes(repo, oid),
+        _ => None,
+    };
     Content::Blob { oid, bytes }
 }
 
@@ -171,21 +171,9 @@ pub fn mark(path: &Path) -> Option<TurnMark> {
 
 /// Paths that differ between two commits' trees.
 fn tree_diff_paths(repo: &Repository, from: Option<Oid>, to: Option<Oid>) -> Vec<String> {
-    let tree = |o: Option<Oid>| o.and_then(|o| repo.find_commit(o).ok()).and_then(|c| c.tree().ok());
-    let (a, b) = (tree(from), tree(to));
-    let Ok(diff) = repo.diff_tree_to_tree(a.as_ref(), b.as_ref(), None) else { return Vec::new() };
-    let mut out = Vec::new();
-    for d in diff.deltas() {
-        for f in [d.old_file(), d.new_file()] {
-            if let Some(p) = f.path().and_then(|p| p.to_str()) {
-                out.push(p.to_string());
-            }
-        }
-        if out.len() >= MAX_CANDIDATES {
-            break;
-        }
-    }
-    out
+    let tree = |o: Option<Oid>| o.and_then(|o| crate::gitx::commit_tree_id(repo, o));
+    let Ok(diff) = crate::gitx::diff::tree_to_tree(repo, tree(from), tree(to)) else { return Vec::new() };
+    diff.into_iter().map(|c| c.path).take(MAX_CANDIDATES).collect()
 }
 
 fn commits_between(repo: &Repository, from: Option<Oid>, to: Option<Oid>) -> u32 {
@@ -193,14 +181,9 @@ fn commits_between(repo: &Repository, from: Option<Oid>, to: Option<Oid>) -> u32
     if Some(to) == from {
         return 0;
     }
-    let Ok(mut walk) = repo.revwalk() else { return 0 };
-    if walk.push(to).is_err() {
-        return 0;
-    }
-    if let Some(from) = from {
-        // A rewritten history (reset, rebase) still counts only what's new.
-        let _ = walk.hide(from);
-    }
+    // A rewritten history (reset, rebase) still counts only what's new.
+    let walk = repo.rev_walk([to]).with_hidden(from);
+    let Ok(walk) = walk.all() else { return 0 };
     walk.take(10_000).filter(Result::is_ok).count() as u32
 }
 
@@ -217,9 +200,8 @@ fn line_stats(old: &Content, new: &Content) -> Option<(u32, u32)> {
     if crate::git_changes::looks_binary(&a) || crate::git_changes::looks_binary(&b) {
         return None;
     }
-    let patch = git2::Patch::from_buffers(&a, None, &b, None, None).ok()?;
-    let (_, add, del) = patch.line_stats().ok()?;
-    Some((add as u32, del as u32))
+    let (add, del) = crate::gitx::diff::line_stats(&a, &b);
+    Some((add, del))
 }
 
 fn short(oid: Option<Oid>) -> Option<String> {
@@ -274,7 +256,8 @@ pub fn changes_since(path: &Path, start: &TurnMark) -> Option<ThreadChanges> {
     if total == 0 && commits == 0 {
         return None;
     }
-    let branch = repo.head().ok().filter(|h| h.is_branch()).and_then(|h| h.shorthand().map(str::to_string));
+    let head = crate::gitx::head_info(&repo);
+    let branch = if head.unborn || head.detached { None } else { head.branch };
     Some(ThreadChanges {
         truncated: (total as usize) > files.len(),
         files,

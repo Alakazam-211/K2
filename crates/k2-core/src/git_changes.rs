@@ -20,8 +20,11 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, OnceLock, RwLock};
 
-use git2::{DiffFindOptions, DiffOptions, Oid, Repository, RepositoryState, Status, StatusOptions};
+use git2::{Repository, Status};
 use serde::Serialize;
+
+use crate::gitx::diff::{ChangeKind, FileChange};
+use crate::gitx::status::{self as gstatus, Flags};
 
 /// Snapshot row cap (Orca's `git-status-limit`).
 pub const MAX_FILES: usize = 1000;
@@ -236,6 +239,16 @@ fn ensure_inside(workdir: &Path, full: &Path) -> Result<(), ChangesError> {
     Err(ChangesError::new(codes::BAD_PATH, format!("'{}' has no existing parent", full.display())))
 }
 
+fn open_gix(path: &str) -> Result<(gix::Repository, PathBuf), ChangesError> {
+    let repo = crate::gitx::discover(path)
+        .map_err(|e| ChangesError::new(codes::NOT_A_REPO, format!("not a git repository: {path} ({e})")))?;
+    let workdir = repo
+        .workdir()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| ChangesError::new(codes::NOT_A_REPO, format!("bare repository: {path}")))?;
+    Ok((repo, workdir))
+}
+
 fn open_repo(path: &str) -> Result<(Repository, PathBuf), ChangesError> {
     let repo = Repository::discover(path)
         .map_err(|e| ChangesError::new(codes::NOT_A_REPO, format!("not a git repository: {path} ({e})")))?;
@@ -358,84 +371,48 @@ fn group_order(g: &str) -> u8 {
     }
 }
 
-fn state_name(s: RepositoryState) -> &'static str {
-    match s {
-        RepositoryState::Clean => "clean",
-        RepositoryState::Merge => "merge",
-        RepositoryState::Revert | RepositoryState::RevertSequence => "revert",
-        RepositoryState::CherryPick | RepositoryState::CherryPickSequence => "cherry_pick",
-        RepositoryState::Bisect => "bisect",
-        RepositoryState::Rebase | RepositoryState::RebaseInteractive | RepositoryState::RebaseMerge => "rebase",
-        RepositoryState::ApplyMailbox | RepositoryState::ApplyMailboxOrRebase => "apply_mailbox",
+fn change_letter(k: ChangeKind) -> &'static str {
+    match k {
+        ChangeKind::Added => "A",
+        ChangeKind::Deleted => "D",
+        ChangeKind::Renamed => "R",
+        ChangeKind::Typechange => "T",
+        ChangeKind::Conflicted => "C",
+        ChangeKind::Modified => "M",
     }
 }
 
-fn delta_letter(d: git2::Delta) -> &'static str {
-    match d {
-        git2::Delta::Added | git2::Delta::Copied => "A",
-        git2::Delta::Deleted => "D",
-        git2::Delta::Renamed => "R",
-        git2::Delta::Typechange => "T",
-        git2::Delta::Conflicted => "C",
-        git2::Delta::Untracked => "U",
-        _ => "M",
-    }
-}
-
-/// `(additions, deletions, binary)` per new-side path of `diff`, for the
-/// paths in `wanted` only (patches are built lazily; big blobs skipped).
-fn diff_stats(diff: &git2::Diff<'_>, wanted: &HashSet<String>) -> HashMap<String, (Option<u32>, Option<u32>, bool)> {
+/// `(additions, deletions, binary)` per path of `changes`, for the paths
+/// in `wanted` only; sides over [`MAX_BLOB_BYTES`] get no counts.
+fn diff_stats(
+    repo: &gix::Repository,
+    workdir: &Path,
+    changes: &[FileChange],
+    wanted: &HashSet<String>,
+) -> HashMap<String, (Option<u32>, Option<u32>, bool)> {
     let mut out = HashMap::new();
-    for i in 0..diff.deltas().len() {
-        let Some(delta) = diff.get_delta(i) else { continue };
-        let path = delta
-            .new_file()
-            .path()
-            .or_else(|| delta.old_file().path())
-            .map(|p| p.to_string_lossy().replace('\\', "/"))
-            .unwrap_or_default();
-        if !wanted.contains(&path) {
+    let Some(mut reader) = crate::gitx::diff::WorktreeReader::new(repo) else { return out };
+    for c in changes {
+        if !wanted.contains(&c.path) {
             continue;
         }
-        if delta.old_file().size() > MAX_BLOB_BYTES || delta.new_file().size() > MAX_BLOB_BYTES {
-            out.insert(path, (None, None, false));
+        let old_path = c.old_path.as_deref().unwrap_or(&c.path);
+        let too_big = crate::gitx::diff::side_size(repo, workdir, old_path, &c.old) > MAX_BLOB_BYTES
+            || crate::gitx::diff::side_size(repo, workdir, &c.path, &c.new) > MAX_BLOB_BYTES;
+        if too_big {
+            out.insert(c.path.clone(), (None, None, false));
             continue;
         }
-        match git2::Patch::from_diff(diff, i) {
-            Ok(Some(patch)) => {
-                let binary = patch.delta().flags().is_binary();
-                if binary {
-                    out.insert(path, (None, None, true));
-                } else {
-                    let (_, adds, dels) = patch.line_stats().unwrap_or((0, 0, 0));
-                    out.insert(path, (Some(adds as u32), Some(dels as u32), false));
-                }
-            }
-            _ => {
-                out.insert(path, (None, None, delta.flags().is_binary()));
-            }
-        }
+        out.insert(c.path.clone(), crate::gitx::diff::change_stats(repo, &mut reader, c, MAX_BLOB_BYTES));
     }
     out
-}
-
-fn new_diff_opts() -> DiffOptions {
-    let mut o = DiffOptions::new();
-    o.context_lines(0).include_typechange(true);
-    o
-}
-
-fn find_renames(diff: &mut git2::Diff<'_>) {
-    let mut fo = DiffFindOptions::new();
-    fo.renames(true);
-    let _ = diff.find_similar(Some(&mut fo));
 }
 
 /// The Changes snapshot for the workspace at `path` (see the contract).
 pub fn snapshot(path: &str, base: Option<&str>) -> Result<SnapshotResult, ChangesError> {
     let ws = trim_slash(path);
     let not_repo = |rev: String| SnapshotResult::NotRepo(NotRepo { is_repo: false, workspace_path: ws.clone(), rev });
-    let Ok(repo) = Repository::discover(path) else {
+    let Ok(repo) = crate::gitx::discover(path) else {
         return Ok(not_repo(current_rev(&ws)));
     };
     let Some(workdir) = repo.workdir().map(Path::to_path_buf) else {
@@ -447,63 +424,42 @@ pub fn snapshot(path: &str, base: Option<&str>) -> Result<SnapshotResult, Change
     let rev = current_rev(&key);
 
     // ── HEAD / branch / upstream ──
-    let (mut branch, mut head_oid, mut unborn) = (None, None, false);
-    let mut head_commit: Option<git2::Commit<'_>> = None;
-    match repo.head() {
-        Ok(h) => {
-            head_oid = h.target().map(|o| o.to_string());
-            if h.is_branch() {
-                branch = h.shorthand().map(str::to_string);
-            }
-            head_commit = h.peel_to_commit().ok();
-        }
-        Err(_) => {
-            unborn = true;
-            if let Ok(r) = repo.find_reference("HEAD") {
-                branch = r.symbolic_target().map(|t| t.trim_start_matches("refs/heads/").to_string());
-            }
-        }
-    }
-    let detached = repo.head_detached().unwrap_or(false);
+    let head = crate::gitx::head_info(&repo);
+    let (branch, unborn, detached) = (head.branch.clone(), head.unborn, head.detached);
+    let head_oid = head.oid.map(|o| o.to_string());
     let (mut upstream, mut ahead, mut behind) = (None, 0usize, 0usize);
-    if let (Some(name), false) = (branch.as_deref(), unborn) {
-        if let Ok(local) = repo.find_branch(name, git2::BranchType::Local) {
-            if let Ok(up) = local.upstream() {
-                upstream = up.name().ok().flatten().map(str::to_string);
-                if let (Some(l), Some(u)) = (local.get().target(), up.get().target()) {
-                    if let Ok((a, b)) = repo.graph_ahead_behind(l, u) {
-                        ahead = a;
-                        behind = b;
-                    }
-                }
+    if let (Some(name), Some(local)) = (branch.as_deref(), head.oid) {
+        if let Some((up, tip)) = crate::gitx::upstream_of(&repo, name) {
+            upstream = Some(up);
+            if let Some((a, b)) = crate::gitx::ahead_behind(&repo, local, tip) {
+                ahead = a;
+                behind = b;
             }
         }
     }
 
     // ── base ──
     let mut base_info: Option<BaseInfo> = None;
-    let mut base_tree: Option<git2::Tree<'_>> = None;
+    let mut base_tree: Option<gix::ObjectId> = None;
     if let Some(spec) = base.filter(|s| !s.trim().is_empty()) {
         let bad_ref = |e: String| ChangesError::new(codes::BAD_REF, format!("cannot resolve base '{spec}': {e}"));
         crate::git::refuse_message_search_revspec(spec).map_err(|m| ChangesError::new(codes::BAD_REF, m))?;
-        let obj = repo.revparse_single(spec).map_err(|e| bad_ref(e.to_string()))?;
-        let base_commit = obj.peel_to_commit().map_err(|e| bad_ref(e.to_string()))?;
-        let base_oid = base_commit.id();
-        let (merge_base, a, b) = match &head_commit {
+        let base_oid = crate::gitx::resolve_commit(&repo, spec).map_err(bad_ref)?;
+        let (merge_base, a, b) = match head.oid {
             Some(hc) => {
-                let mb = repo.merge_base(hc.id(), base_oid).ok();
-                let (a, b) = repo.graph_ahead_behind(hc.id(), base_oid).unwrap_or((0, 0));
+                let mb = crate::gitx::merge_base(&repo, hc, base_oid);
+                let (a, b) = crate::gitx::ahead_behind(&repo, hc, base_oid).unwrap_or((0, 0));
                 (mb, a, b)
             }
             None => (None, 0, 0),
         };
         // No common ancestor (unrelated histories / unborn HEAD): compare
         // against the base commit itself.
-        let tree_commit = match merge_base {
-            Some(mb) => repo.find_commit(mb).map_err(|e| ChangesError::internal(e.to_string()))?,
-            None => base_commit.clone(),
-        };
-        base_tree = Some(tree_commit.tree().map_err(|e| ChangesError::internal(e.to_string()))?);
+        let tree_commit = merge_base.unwrap_or(base_oid);
+        base_tree = Some(
+            crate::gitx::commit_tree_id(&repo, tree_commit)
+                .ok_or_else(|| ChangesError::internal(format!("read the tree of {tree_commit}")))?,
+        );
         base_info = Some(BaseInfo {
             ref_name: spec.to_string(),
             oid: base_oid.to_string(),
@@ -514,13 +470,7 @@ pub fn snapshot(path: &str, base: Option<&str>) -> Result<SnapshotResult, Change
     }
 
     // ── status rows ──
-    let mut opts = StatusOptions::new();
-    opts.include_untracked(true)
-        .recurse_untracked_dirs(false)
-        .include_ignored(false)
-        .renames_head_to_index(true);
-    let statuses = repo
-        .statuses(Some(&mut opts))
+    let statuses = gstatus::statuses(&repo, gstatus::Options::changes())
         .map_err(|e| ChangesError::internal(format!("git status failed: {e}")))?;
     let mut rows: Vec<ChangeRow> = Vec::new();
     let row = |path: String, old_path: Option<String>, group: &'static str, status: &'static str, dir: bool| ChangeRow {
@@ -533,14 +483,14 @@ pub fn snapshot(path: &str, base: Option<&str>) -> Result<SnapshotResult, Change
         binary: false,
         dir,
     };
-    for entry in statuses.iter() {
-        let s = entry.status();
-        let path = entry.path().unwrap_or("").replace('\\', "/");
-        if s.is_conflicted() {
+    for entry in statuses {
+        let s = entry.flags;
+        let path = entry.path;
+        if s.contains(Flags::CONFLICTED) {
             rows.push(row(path, None, "conflicted", "C", false));
             continue;
         }
-        if s.is_wt_new() {
+        if s.contains(Flags::WT_NEW) {
             let dir = path.ends_with('/');
             rows.push(row(path, None, "untracked", "U", dir));
             continue;
@@ -548,73 +498,51 @@ pub fn snapshot(path: &str, base: Option<&str>) -> Result<SnapshotResult, Change
         if base_tree.is_some() {
             continue; // base view lists tracked paths from the base diff below
         }
-        let staged = if s.is_index_new() {
+        let staged = if s.contains(Flags::INDEX_NEW) {
             Some("A")
-        } else if s.is_index_deleted() {
+        } else if s.contains(Flags::INDEX_DELETED) {
             Some("D")
-        } else if s.is_index_renamed() {
+        } else if s.contains(Flags::INDEX_RENAMED) {
             Some("R")
-        } else if s.is_index_typechange() {
+        } else if s.contains(Flags::INDEX_TYPECHANGE) {
             Some("T")
-        } else if s.is_index_modified() {
+        } else if s.contains(Flags::INDEX_MODIFIED) {
             Some("M")
         } else {
             None
         };
         if let Some(letter) = staged {
-            let (p, old) = match (letter, entry.head_to_index()) {
-                ("R", Some(d)) => (
-                    d.new_file().path().map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or(path.clone()),
-                    d.old_file().path().map(|p| p.to_string_lossy().replace('\\', "/")),
-                ),
-                _ => (path.clone(), None),
-            };
-            rows.push(row(p, old, "staged", letter, false));
+            let old = if letter == "R" { entry.renamed_from.clone() } else { None };
+            rows.push(row(path.clone(), old, "staged", letter, false));
         }
-        let unstaged = if s.is_wt_deleted() {
+        let unstaged = if s.contains(Flags::WT_DELETED) {
             Some("D")
-        } else if s.is_wt_typechange() {
+        } else if s.contains(Flags::WT_TYPECHANGE) {
             Some("T")
-        } else if s.is_wt_modified() || s.is_wt_renamed() {
+        } else if s.contains(Flags::WT_MODIFIED) {
             Some("M")
         } else {
             None
         };
         if let Some(letter) = unstaged {
             // A staged rename's worktree edit lives at the new path.
-            let p = match entry.index_to_workdir() {
-                Some(d) => d.new_file().path().map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or(path),
-                None => path,
-            };
-            rows.push(row(p, None, "unstaged", letter, false));
+            rows.push(row(path, None, "unstaged", letter, false));
         }
     }
 
     // Base view: tracked paths that differ between merge-base and the
     // working tree (committed + staged + unstaged).
-    let mut base_diff: Option<git2::Diff<'_>> = None;
-    if let Some(tree) = &base_tree {
-        let mut o = new_diff_opts();
-        let mut diff = repo
-            .diff_tree_to_workdir_with_index(Some(tree), Some(&mut o))
+    let mut base_diff: Option<Vec<FileChange>> = None;
+    if let Some(tree) = base_tree {
+        let diff = crate::gitx::diff::tree_to_worktree(&repo, Some(tree), true)
             .map_err(|e| ChangesError::internal(format!("base diff failed: {e}")))?;
-        find_renames(&mut diff);
         let conflicted: HashSet<String> =
             rows.iter().filter(|r| r.group == "conflicted").map(|r| r.path.clone()).collect();
-        for d in diff.deltas() {
-            let p = d
-                .new_file()
-                .path()
-                .or_else(|| d.old_file().path())
-                .map(|p| p.to_string_lossy().replace('\\', "/"))
-                .unwrap_or_default();
-            if conflicted.contains(&p) || d.status() == git2::Delta::Untracked {
+        for d in &diff {
+            if conflicted.contains(&d.path) || d.kind == ChangeKind::Conflicted {
                 continue;
             }
-            let old = (d.status() == git2::Delta::Renamed)
-                .then(|| d.old_file().path().map(|p| p.to_string_lossy().replace('\\', "/")))
-                .flatten();
-            rows.push(row(p, old, "base", delta_letter(d.status()), false));
+            rows.push(row(d.path.clone(), d.old_path.clone(), "base", change_letter(d.kind), false));
         }
         base_diff = Some(diff);
     }
@@ -640,31 +568,22 @@ pub fn snapshot(path: &str, base: Option<&str>) -> Result<SnapshotResult, Change
     let wanted_staged = want("staged");
     let wanted_unstaged = want("unstaged");
     let wanted_base = want("base");
-    if !wanted_staged.is_empty() || !wanted_unstaged.is_empty() {
-        let index = repo.index().map_err(|e| ChangesError::internal(format!("read index: {e}")))?;
-        if !wanted_staged.is_empty() {
-            let head_tree = head_commit.as_ref().and_then(|c| c.tree().ok());
-            let mut o = new_diff_opts();
-            let mut d = repo
-                .diff_tree_to_index(head_tree.as_ref(), Some(&index), Some(&mut o))
-                .map_err(|e| ChangesError::internal(format!("staged diff failed: {e}")))?;
-            find_renames(&mut d);
-            for (p, v) in diff_stats(&d, &wanted_staged) {
-                stats.insert(("staged", p), v);
-            }
+    if !wanted_staged.is_empty() {
+        let d = crate::gitx::diff::tree_to_index(&repo, crate::gitx::head_tree_id(&repo), true)
+            .map_err(|e| ChangesError::internal(format!("staged diff failed: {e}")))?;
+        for (p, v) in diff_stats(&repo, &workdir, &d, &wanted_staged) {
+            stats.insert(("staged", p), v);
         }
-        if !wanted_unstaged.is_empty() {
-            let mut o = new_diff_opts();
-            let d = repo
-                .diff_index_to_workdir(Some(&index), Some(&mut o))
-                .map_err(|e| ChangesError::internal(format!("unstaged diff failed: {e}")))?;
-            for (p, v) in diff_stats(&d, &wanted_unstaged) {
-                stats.insert(("unstaged", p), v);
-            }
+    }
+    if !wanted_unstaged.is_empty() {
+        let d = crate::gitx::diff::index_to_worktree(&repo)
+            .map_err(|e| ChangesError::internal(format!("unstaged diff failed: {e}")))?;
+        for (p, v) in diff_stats(&repo, &workdir, &d, &wanted_unstaged) {
+            stats.insert(("unstaged", p), v);
         }
     }
     if let Some(d) = &base_diff {
-        for (p, v) in diff_stats(d, &wanted_base) {
+        for (p, v) in diff_stats(&repo, &workdir, d, &wanted_base) {
             stats.insert(("base", p), v);
         }
     }
@@ -708,7 +627,7 @@ pub fn snapshot(path: &str, base: Option<&str>) -> Result<SnapshotResult, Change
         upstream,
         ahead,
         behind,
-        state: state_name(repo.state()),
+        state: crate::gitx::state_name(&repo),
         base: base_info,
         counts,
         truncated,
@@ -809,35 +728,36 @@ pub struct DiffSides {
     pub deletions: Option<u32>,
 }
 
-fn blob_side(repo: &Repository, label: &str, oid: Oid) -> Result<DiffSide, ChangesError> {
-    let blob = repo.find_blob(oid).map_err(|e| ChangesError::internal(format!("read blob: {e}")))?;
-    if blob.size() as u64 > MAX_BLOB_BYTES {
-        return Ok(DiffSide::too_large(label, blob.size() as u64));
+fn blob_side(repo: &gix::Repository, label: &str, oid: gix::ObjectId) -> Result<DiffSide, ChangesError> {
+    let size = crate::gitx::object_size(repo, oid).ok_or_else(|| ChangesError::internal(format!("read blob {oid}")))?;
+    if size > MAX_BLOB_BYTES {
+        return Ok(DiffSide::too_large(label, size));
     }
-    Ok(DiffSide::from_bytes(label, blob.content()))
+    let bytes = crate::gitx::blob_bytes(repo, oid).ok_or_else(|| ChangesError::internal(format!("read blob {oid}")))?;
+    Ok(DiffSide::from_bytes(label, &bytes))
 }
 
-fn tree_side(repo: &Repository, tree: Option<&git2::Tree<'_>>, rel: &str, label: &str) -> Result<DiffSide, ChangesError> {
+fn tree_side(repo: &gix::Repository, tree: Option<gix::ObjectId>, rel: &str, label: &str) -> Result<DiffSide, ChangesError> {
     let Some(tree) = tree else { return Ok(DiffSide::missing(label)) };
-    match tree.get_path(Path::new(rel)) {
-        Ok(entry) if entry.kind() == Some(git2::ObjectType::Blob) => blob_side(repo, label, entry.id()),
-        Ok(entry) => Ok(DiffSide {
+    match crate::gitx::tree_entry(repo, tree, rel) {
+        Some((kind, id)) if kind.is_blob() || kind == crate::gitx::EntryKind::Link => blob_side(repo, label, id),
+        Some((_, id)) => Ok(DiffSide {
             // A submodule (commit) or tree: show its id as text.
             label: label.to_string(),
             exists: true,
-            text: Some(format!("{}\n", entry.id())),
+            text: Some(format!("{id}\n")),
             size: 0,
             binary: false,
             too_large: false,
         }),
-        Err(_) => Ok(DiffSide::missing(label)),
+        None => Ok(DiffSide::missing(label)),
     }
 }
 
-fn index_side(repo: &Repository, rel: &str) -> Result<DiffSide, ChangesError> {
-    let index = repo.index().map_err(|e| ChangesError::internal(format!("read index: {e}")))?;
-    match index.get_path(Path::new(rel), 0) {
-        Some(e) => blob_side(repo, "INDEX", e.id),
+fn index_side(repo: &gix::Repository, rel: &str) -> Result<DiffSide, ChangesError> {
+    let index = repo.index_or_empty().map_err(|e| ChangesError::internal(format!("read index: {e}")))?;
+    match crate::gitx::index_entry(&index, rel) {
+        Some((_, id)) => blob_side(repo, "INDEX", id),
         None => Ok(DiffSide::missing("INDEX")),
     }
 }
@@ -865,35 +785,29 @@ fn worktree_side(workdir: &Path, rel: &str) -> Result<DiffSide, ChangesError> {
 
 /// Both full sides of one file (see the contract table for `mode`).
 pub fn diff_sides(path: &str, file_path: &str, old_path: Option<&str>, mode: DiffMode) -> Result<DiffSides, ChangesError> {
-    let (repo, workdir) = open_repo(path)?;
+    let (repo, workdir) = open_gix(path)?;
     let rel = normalize_rel_path(&workdir, file_path)?;
     let old_rel = match old_path.filter(|p| !p.trim().is_empty()) {
         Some(p) => Some(normalize_rel_path(&workdir, p)?),
         None => None,
     };
     let rev = current_rev(&rev_key(&workdir));
-    let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
+    let head_tree = crate::gitx::head_tree_id(&repo);
     let tree_rel = old_rel.clone().unwrap_or_else(|| rel.clone());
 
     let (old, new, base_ref) = match &mode {
-        DiffMode::Worktree => (tree_side(&repo, head_tree.as_ref(), &tree_rel, "HEAD")?, worktree_side(&workdir, &rel)?, None),
+        DiffMode::Worktree => (tree_side(&repo, head_tree, &tree_rel, "HEAD")?, worktree_side(&workdir, &rel)?, None),
         DiffMode::Unstaged => (index_side(&repo, &rel)?, worktree_side(&workdir, &rel)?, None),
-        DiffMode::Staged => (tree_side(&repo, head_tree.as_ref(), &tree_rel, "HEAD")?, index_side(&repo, &rel)?, None),
+        DiffMode::Staged => (tree_side(&repo, head_tree, &tree_rel, "HEAD")?, index_side(&repo, &rel)?, None),
         DiffMode::Base(spec) => {
             let bad_ref = |e: String| ChangesError::new(codes::BAD_REF, format!("cannot resolve base '{spec}': {e}"));
             crate::git::refuse_message_search_revspec(spec).map_err(|m| ChangesError::new(codes::BAD_REF, m))?;
-            let base_commit = repo
-                .revparse_single(spec)
-                .map_err(|e| bad_ref(e.to_string()))?
-                .peel_to_commit()
-                .map_err(|e| bad_ref(e.to_string()))?;
-            let head_id = repo.head().ok().and_then(|h| h.target());
-            let tree_commit = match head_id.and_then(|h| repo.merge_base(h, base_commit.id()).ok()) {
-                Some(mb) => repo.find_commit(mb).map_err(|e| ChangesError::internal(e.to_string()))?,
-                None => base_commit,
-            };
-            let tree = tree_commit.tree().map_err(|e| ChangesError::internal(e.to_string()))?;
-            (tree_side(&repo, Some(&tree), &tree_rel, spec)?, worktree_side(&workdir, &rel)?, Some(spec.clone()))
+            let base_commit = crate::gitx::resolve_commit(&repo, spec).map_err(bad_ref)?;
+            let head_id = crate::gitx::head_info(&repo).oid;
+            let tree_commit = head_id.and_then(|h| crate::gitx::merge_base(&repo, h, base_commit)).unwrap_or(base_commit);
+            let tree = crate::gitx::commit_tree_id(&repo, tree_commit)
+                .ok_or_else(|| ChangesError::internal(format!("read the tree of {tree_commit}")))?;
+            (tree_side(&repo, Some(tree), &tree_rel, spec)?, worktree_side(&workdir, &rel)?, Some(spec.clone()))
         }
     };
     if !old.exists && !new.exists {
@@ -901,12 +815,9 @@ pub fn diff_sides(path: &str, file_path: &str, old_path: Option<&str>, mode: Dif
     }
     let (mut additions, mut deletions) = (None, None);
     if let (Some(a), Some(b)) = (&old.text, &new.text) {
-        if let Ok(patch) = git2::Patch::from_buffers(a.as_bytes(), None, b.as_bytes(), None, None) {
-            if let Ok((_, adds, dels)) = patch.line_stats() {
-                additions = Some(adds as u32);
-                deletions = Some(dels as u32);
-            }
-        }
+        let (adds, dels) = crate::gitx::diff::line_stats(a.as_bytes(), b.as_bytes());
+        additions = Some(adds);
+        deletions = Some(dels);
     }
     Ok(DiffSides {
         path: rel,

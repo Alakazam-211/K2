@@ -1,5 +1,8 @@
-use git2::{DiffOptions, Repository, StatusOptions, BranchType};
+use git2::{Repository, StatusOptions, BranchType};
 use serde::Serialize;
+
+use crate::gitx::diff::{ChangeKind, FileChange};
+use crate::gitx::status::{self as gstatus, Flags};
 use std::path::Path;
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -52,26 +55,19 @@ pub fn get_git_info(path: &str) -> GitInfo {
         untracked_files: 0,
     };
 
-    let repo = match Repository::discover(path) {
+    let repo = match crate::gitx::discover(path) {
         Ok(r) => r,
         Err(_) => return default,
     };
 
-    // Get current branch
-    let head = match repo.head() {
-        Ok(h) => h,
-        Err(_) => {
-            return GitInfo {
-                is_repo: true,
-                ..default
-            };
-        }
+    // Current branch (`HEAD` when detached). No commit yet: a repo with
+    // nothing else to say.
+    let Some(current_branch) = crate::gitx::head_shorthand(&repo) else {
+        return GitInfo {
+            is_repo: true,
+            ..default
+        };
     };
-
-    let current_branch = head
-        .shorthand()
-        .unwrap_or("")
-        .to_string();
 
     // Count changed and untracked files. We deliberately do NOT
     // `recurse_untracked_dirs(true)` here even though it would
@@ -87,22 +83,14 @@ pub fn get_git_info(path: &str) -> GitInfo {
     // what the sidebar's "is this workspace dirty?" indicator
     // needs anyway. Per-file detail is available on demand via
     // `get_changed_files` when the user opens the commit panel.
-    let mut opts = StatusOptions::new();
-    opts.include_untracked(true);
-
-    let (changed_files, untracked_files) = match repo.statuses(Some(&mut opts)) {
-        Ok(statuses) => {
+    let opts = gstatus::Options { untracked: gstatus::Untracked::Collapsed, staged_renames: false, submodules: true };
+    let (changed_files, untracked_files) = match gstatus::statuses(&repo, opts) {
+        Ok(rows) => {
             let mut changed = 0i32;
             let mut untracked = 0i32;
-            for entry in statuses.iter() {
-                let s = entry.status();
-                if s.contains(git2::Status::WT_NEW) || s.contains(git2::Status::INDEX_NEW) {
-                    // Check if it's purely untracked (not staged as new)
-                    if s.contains(git2::Status::WT_NEW) && !s.contains(git2::Status::INDEX_NEW) {
-                        untracked += 1;
-                    } else {
-                        changed += 1;
-                    }
+            for r in &rows {
+                if r.flags.contains(Flags::WT_NEW) && !r.flags.contains(Flags::INDEX_NEW) {
+                    untracked += 1;
                 } else {
                     changed += 1;
                 }
@@ -126,30 +114,12 @@ pub fn get_git_info(path: &str) -> GitInfo {
 }
 
 /// Calculate ahead/behind relative to upstream tracking branch.
-fn get_ahead_behind(repo: &Repository, branch_name: &str) -> (i32, i32) {
-    let local_branch = match repo.find_branch(branch_name, BranchType::Local) {
-        Ok(b) => b,
-        Err(_) => return (0, 0),
-    };
-
-    let upstream = match local_branch.upstream() {
-        Ok(u) => u,
-        Err(_) => return (0, 0),
-    };
-
-    let local_oid = match local_branch.get().target() {
-        Some(o) => o,
-        None => return (0, 0),
-    };
-
-    let upstream_oid = match upstream.get().target() {
-        Some(o) => o,
-        None => return (0, 0),
-    };
-
-    match repo.graph_ahead_behind(local_oid, upstream_oid) {
-        Ok((ahead, behind)) => (ahead as i32, behind as i32),
-        Err(_) => (0, 0),
+fn get_ahead_behind(repo: &gix::Repository, branch_name: &str) -> (i32, i32) {
+    let Some(local) = crate::gitx::local_branch_tip(repo, branch_name) else { return (0, 0) };
+    let Some((_, upstream)) = crate::gitx::upstream_of(repo, branch_name) else { return (0, 0) };
+    match crate::gitx::ahead_behind(repo, local, upstream) {
+        Some((ahead, behind)) => (ahead as i32, behind as i32),
+        None => (0, 0),
     }
 }
 
@@ -162,42 +132,31 @@ pub fn list_branches(path: &str) -> BranchList {
         remote: Vec::new(),
     };
 
-    let repo = match Repository::discover(path) {
+    let repo = match crate::gitx::discover(path) {
         Ok(r) => r,
         Err(_) => return default,
     };
 
-    let current = repo
-        .head()
-        .ok()
-        .and_then(|h| h.shorthand().map(|s| s.to_string()))
-        .unwrap_or_default();
+    let current = crate::gitx::head_shorthand(&repo).unwrap_or_default();
 
     let mut local = Vec::new();
     let mut remote = Vec::new();
 
-    if let Ok(branches) = repo.branches(None) {
-        for branch_result in branches {
-            if let Ok((branch, branch_type)) = branch_result {
-                let name = branch
-                    .name()
-                    .ok()
-                    .flatten()
-                    .unwrap_or("")
-                    .to_string();
-
-                if name.is_empty() {
-                    continue;
+    if let Ok(refs) = repo.references() {
+        if let Ok(it) = refs.local_branches() {
+            for r in it.flatten() {
+                let name = crate::gitx::short_name(r.name());
+                if !name.is_empty() {
+                    local.push(name);
                 }
-
-                match branch_type {
-                    BranchType::Local => local.push(name),
-                    BranchType::Remote => {
-                        // Skip HEAD pointers
-                        if !name.ends_with("/HEAD") {
-                            remote.push(name);
-                        }
-                    }
+            }
+        }
+        if let Ok(it) = refs.remote_branches() {
+            for r in it.flatten() {
+                let name = crate::gitx::short_name(r.name());
+                // Skip HEAD pointers
+                if !name.is_empty() && !name.ends_with("/HEAD") {
+                    remote.push(name);
                 }
             }
         }
@@ -568,7 +527,7 @@ pub fn remove_worktree(
 // ── Get Changed Files ─────────────────────────────────────────────────────
 
 pub fn get_changed_files(path: &str) -> Vec<ChangedFile> {
-    let repo = match Repository::discover(path) {
+    let repo = match crate::gitx::discover(path) {
         Ok(r) => r,
         Err(_) => return Vec::new(),
     };
@@ -576,37 +535,28 @@ pub fn get_changed_files(path: &str) -> Vec<ChangedFile> {
     // Don't recurse into untracked directories — same rationale as
     // `get_git_info` above. Walking inside node_modules/, target/,
     // etc. produces hundreds of thousands of irrelevant entries and
-    // burns CPU. Without recurse, libgit2 reports the untracked dir
-    // as a single entry (e.g. `node_modules/`) which is what every
-    // git GUI / `git status` CLI does by default.
-    let mut opts = StatusOptions::new();
-    opts.include_untracked(true);
-
-    let statuses = match repo.statuses(Some(&mut opts)) {
+    // burns CPU. Collapsed, the untracked dir is a single entry (e.g.
+    // `node_modules/`), which is what `git status` shows by default.
+    let opts = gstatus::Options { untracked: gstatus::Untracked::Collapsed, staged_renames: false, submodules: true };
+    let rows = match gstatus::statuses(&repo, opts) {
         Ok(s) => s,
         Err(_) => return Vec::new(),
     };
 
     let mut files = Vec::new();
 
-    for entry in statuses.iter() {
-        let file_path = entry.path().unwrap_or("").to_string();
-        let s = entry.status();
+    for r in rows {
+        let file_path = r.path;
+        let s = r.flags;
 
         // Determine if the change is staged (in index) vs unstaged (working tree)
-        let is_staged = s.intersects(
-            git2::Status::INDEX_NEW
-                | git2::Status::INDEX_MODIFIED
-                | git2::Status::INDEX_DELETED
-                | git2::Status::INDEX_RENAMED
-                | git2::Status::INDEX_TYPECHANGE,
-        );
+        let is_staged = s.intersects(Flags::INDEX_ANY);
 
-        let status = if s.contains(git2::Status::WT_NEW) {
+        let status = if s.contains(Flags::WT_NEW) {
             "untracked"
-        } else if s.contains(git2::Status::INDEX_NEW) {
+        } else if s.contains(Flags::INDEX_NEW) {
             "added"
-        } else if s.contains(git2::Status::WT_DELETED) || s.contains(git2::Status::INDEX_DELETED) {
+        } else if s.contains(Flags::WT_DELETED) || s.contains(Flags::INDEX_DELETED) {
             "deleted"
         } else {
             "modified"
@@ -652,11 +602,19 @@ pub struct FileDiffSummary {
 
 // ── Diff Functions ───────────────────────────────────────────────────────
 
-/// Get unified diff hunks for a single file (working tree vs HEAD).
-pub fn diff_file(repo_path: &str, file_path: &str) -> Result<Vec<DiffHunk>, String> {
-    let repo = Repository::discover(repo_path).map_err(|e| format!("Not a git repository: {e}"))?;
+/// Largest side a summary or hunk diff reads (past it: no counts).
+const DIFF_READ_CAP: u64 = 64 * 1024 * 1024;
 
-    // Make file_path relative to the repo workdir for pathspec matching
+fn discover_or_err(repo_path: &str) -> Result<gix::Repository, String> {
+    crate::gitx::discover(repo_path).map_err(|e| format!("Not a git repository: {e}"))
+}
+
+/// Get unified diff hunks for a single file (working tree vs HEAD). A
+/// folder path gives the hunks of every changed file under it.
+pub fn diff_file(repo_path: &str, file_path: &str) -> Result<Vec<DiffHunk>, String> {
+    let repo = discover_or_err(repo_path)?;
+
+    // Make file_path relative to the repo workdir for path matching
     let rel_path = if let Some(workdir) = repo.workdir() {
         let abs = std::path::Path::new(file_path);
         abs.strip_prefix(workdir)
@@ -665,37 +623,56 @@ pub fn diff_file(repo_path: &str, file_path: &str) -> Result<Vec<DiffHunk>, Stri
     } else {
         file_path.to_string()
     };
+    let rel_path = rel_path.replace('\\', "/");
+    let rel_path = rel_path.trim_end_matches('/');
+    let under = format!("{rel_path}/");
 
-    let mut opts = DiffOptions::new();
-    opts.pathspec(&rel_path);
-    opts.context_lines(3);
-
-    let head_tree = repo
-        .head()
-        .ok()
-        .and_then(|h| h.peel_to_tree().ok());
-
-    let diff = repo
-        .diff_tree_to_workdir_with_index(head_tree.as_ref(), Some(&mut opts))
+    let changes = crate::gitx::diff::tree_to_worktree(&repo, crate::gitx::head_tree_id(&repo), false)
         .map_err(|e| format!("Failed to compute diff: {e}"))?;
+    let mut reader = crate::gitx::diff::WorktreeReader::new(&repo).ok_or("No working directory")?;
+    let mut hunks = Vec::new();
+    for c in changes.iter().filter(|c| c.path == rel_path || c.path.starts_with(&under)) {
+        let old_path = c.old_path.as_deref().unwrap_or(&c.path);
+        let a = crate::gitx::diff::side_bytes(&repo, &mut reader, old_path, &c.old, DIFF_READ_CAP);
+        let b = crate::gitx::diff::side_bytes(&repo, &mut reader, &c.path, &c.new, DIFF_READ_CAP);
+        let (Some(a), Some(b)) = (a, b) else { continue };
+        if crate::gitx::diff::is_binary(&a) || crate::gitx::diff::is_binary(&b) {
+            continue; // "Binary files differ": no hunks, as libgit2 printed none
+        }
+        hunks.extend(crate::gitx::diff::hunks(&a, &b, 3).into_iter().map(to_diff_hunk));
+    }
+    Ok(hunks)
+}
 
-    collect_hunks(&diff)
+fn to_diff_hunk(h: crate::gitx::diff::Hunk) -> DiffHunk {
+    use crate::gitx::diff::LineKind;
+    DiffHunk {
+        old_start: h.old_start,
+        old_count: h.old_count,
+        new_start: h.new_start,
+        new_count: h.new_count,
+        lines: h
+            .lines
+            .into_iter()
+            .map(|l| DiffLine {
+                kind: match l.kind {
+                    LineKind::Add => "add",
+                    LineKind::Remove => "remove",
+                    LineKind::Context => "context",
+                }
+                .to_string(),
+                content: String::from_utf8_lossy(&l.content).to_string(),
+            })
+            .collect(),
+    }
 }
 
 /// Get a summary of all changed files (working tree vs HEAD).
 pub fn diff_summary(repo_path: &str) -> Result<Vec<FileDiffSummary>, String> {
-    let repo = Repository::discover(repo_path).map_err(|e| format!("Not a git repository: {e}"))?;
-
-    let mut opts = DiffOptions::new();
-    opts.context_lines(0);
-
-    let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
-
-    let diff = repo
-        .diff_tree_to_workdir_with_index(head_tree.as_ref(), Some(&mut opts))
+    let repo = discover_or_err(repo_path)?;
+    let changes = crate::gitx::diff::tree_to_worktree(&repo, crate::gitx::head_tree_id(&repo), false)
         .map_err(|e| format!("Failed to compute diff: {e}"))?;
-
-    collect_summary(&diff)
+    collect_summary(&repo, &changes)
 }
 
 /// Get a diff summary between two branches (for merge preview).
@@ -704,19 +681,14 @@ pub fn diff_between_branches(
     base_branch: &str,
     head_branch: &str,
 ) -> Result<Vec<FileDiffSummary>, String> {
-    let repo = Repository::discover(repo_path).map_err(|e| format!("Not a git repository: {e}"))?;
+    let repo = discover_or_err(repo_path)?;
 
     let base_tree = resolve_branch_tree(&repo, base_branch)?;
     let head_tree = resolve_branch_tree(&repo, head_branch)?;
 
-    let mut opts = DiffOptions::new();
-    opts.context_lines(0);
-
-    let diff = repo
-        .diff_tree_to_tree(Some(&base_tree), Some(&head_tree), Some(&mut opts))
+    let changes = crate::gitx::diff::tree_to_tree(&repo, Some(base_tree), Some(head_tree))
         .map_err(|e| format!("Failed to compute branch diff: {e}"))?;
-
-    collect_summary(&diff)
+    collect_summary(&repo, &changes)
 }
 
 /// Refuse a caller's revision spec that searches commit messages:
@@ -737,146 +709,72 @@ pub fn refuse_message_search_revspec(spec: &str) -> Result<(), String> {
 
 /// Get the content of a file at a specific git reference (branch, commit, HEAD, etc.).
 pub fn file_content_at_ref(repo_path: &str, file_path: &str, git_ref: &str) -> Result<String, String> {
-    let repo = Repository::discover(repo_path).map_err(|e| format!("Not a git repository: {e}"))?;
+    let repo = discover_or_err(repo_path)?;
 
     refuse_message_search_revspec(git_ref)?;
-    let obj = repo
-        .revparse_single(git_ref)
-        .map_err(|e| format!("Cannot resolve ref '{git_ref}': {e}"))?;
-
-    let commit = obj
-        .peel_to_commit()
-        .map_err(|e| format!("Not a commit: {e}"))?;
-
-    let tree = commit.tree().map_err(|e| format!("Failed to get tree: {e}"))?;
-
-    let entry = tree
-        .get_path(Path::new(file_path))
-        .map_err(|_| format!("File '{file_path}' not found at '{git_ref}'"))?;
-
-    let blob = repo
-        .find_blob(entry.id())
-        .map_err(|e| format!("Failed to read blob: {e}"))?;
-
-    let content = std::str::from_utf8(blob.content())
-        .map_err(|_| "File is binary".to_string())?;
-
-    Ok(content.to_string())
+    let commit = crate::gitx::resolve_commit(&repo, git_ref).map_err(|e| format!("Cannot resolve ref '{git_ref}': {e}"))?;
+    let tree = crate::gitx::commit_tree_id(&repo, commit).ok_or_else(|| "Failed to get tree".to_string())?;
+    let rel = file_path.replace('\\', "/");
+    let (kind, id) = crate::gitx::tree_entry(&repo, tree, &rel)
+        .ok_or_else(|| format!("File '{file_path}' not found at '{git_ref}'"))?;
+    if !(kind.is_blob() || kind == crate::gitx::EntryKind::Link) {
+        return Err(format!("Failed to read blob: '{file_path}' at '{git_ref}' is not a file"));
+    }
+    let bytes = crate::gitx::blob_bytes(&repo, id).ok_or_else(|| "Failed to read blob".to_string())?;
+    String::from_utf8(bytes).map_err(|_| "File is binary".to_string())
 }
 
-/// Helper: resolve a branch name to its tree.
-fn resolve_branch_tree<'a>(repo: &'a Repository, branch: &str) -> Result<git2::Tree<'a>, String> {
-    let reference = repo
-        .find_branch(branch, BranchType::Local)
-        .map_err(|e| format!("Branch '{branch}' not found: {e}"))?;
-
-    let commit = reference
-        .get()
-        .peel_to_commit()
-        .map_err(|e| format!("Failed to get commit for branch '{branch}': {e}"))?;
-
-    commit.tree().map_err(|e| format!("Failed to get tree: {e}"))
+/// Helper: resolve a local branch name to its tree.
+fn resolve_branch_tree(repo: &gix::Repository, branch: &str) -> Result<gix::ObjectId, String> {
+    let tip = crate::gitx::local_branch_tip(repo, branch).ok_or_else(|| format!("Branch '{branch}' not found"))?;
+    crate::gitx::commit_tree_id(repo, tip).ok_or_else(|| format!("Failed to get commit for branch '{branch}'"))
 }
 
-/// Helper: collect DiffHunks from a git2::Diff.
-fn collect_hunks(diff: &git2::Diff) -> Result<Vec<DiffHunk>, String> {
-    let mut hunks: Vec<DiffHunk> = Vec::new();
-
-    diff.print(git2::DiffFormat::Patch, |_delta, hunk, line| {
-        if let Some(h) = hunk {
-            // Check if we need a new hunk
-            let need_new = hunks.last().map_or(true, |last: &DiffHunk| {
-                last.old_start != h.old_start() || last.new_start != h.new_start()
-            });
-
-            if need_new {
-                hunks.push(DiffHunk {
-                    old_start: h.old_start(),
-                    old_count: h.old_lines(),
-                    new_start: h.new_start(),
-                    new_count: h.new_lines(),
-                    lines: Vec::new(),
-                });
-            }
-        }
-
-        if let Some(current_hunk) = hunks.last_mut() {
-            let kind = match line.origin() {
-                '+' => "add",
-                '-' => "remove",
-                ' ' => "context",
-                _ => return true,
-            };
-
-            let content = String::from_utf8_lossy(line.content()).to_string();
-            current_hunk.lines.push(DiffLine {
-                kind: kind.to_string(),
-                content,
-            });
-        }
-
-        true
-    })
-    .map_err(|e| format!("Failed to print diff: {e}"))?;
-
-    Ok(hunks)
-}
-
-/// Helper: collect FileDiffSummary from a git2::Diff.
-fn collect_summary(diff: &git2::Diff) -> Result<Vec<FileDiffSummary>, String> {
-    let stats = diff.stats().map_err(|e| format!("Failed to get diff stats: {e}"))?;
-    let _ = stats; // stats gives totals, we need per-file
-
+/// Helper: one FileDiffSummary per change (binary or past the read cap:
+/// 0/0, as libgit2's line stats gave).
+fn collect_summary(repo: &gix::Repository, changes: &[FileChange]) -> Result<Vec<FileDiffSummary>, String> {
+    let mut reader = crate::gitx::diff::WorktreeReader::new(repo);
     let mut summaries: Vec<FileDiffSummary> = Vec::new();
-
-    for i in 0..diff.deltas().len() {
-        let Some(delta) = diff.get_delta(i) else { continue };
-        let new_file = delta.new_file();
-        let old_file = delta.old_file();
-
-        let path = new_file
-            .path()
-            .or_else(|| old_file.path())
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_default();
-
-        let status = match delta.status() {
-            git2::Delta::Added => "added",
-            git2::Delta::Deleted => "deleted",
-            git2::Delta::Modified => "modified",
-            git2::Delta::Renamed => "renamed",
-            git2::Delta::Copied => "copied",
-            git2::Delta::Conflicted => "conflicted",
-            _ => "modified",
+    for c in changes {
+        let status = match c.kind {
+            ChangeKind::Added => "added",
+            ChangeKind::Deleted => "deleted",
+            ChangeKind::Renamed => "renamed",
+            ChangeKind::Conflicted => "conflicted",
+            ChangeKind::Modified | ChangeKind::Typechange => "modified",
         };
-
-        let old_path = if delta.status() == git2::Delta::Renamed {
-            old_file.path().map(|p| p.to_string_lossy().to_string())
-        } else {
-            None
+        let (additions, deletions) = match reader.as_mut() {
+            Some(r) => match crate::gitx::diff::change_stats(repo, r, c, DIFF_READ_CAP) {
+                (Some(a), Some(d), _) => (a, d),
+                _ => (0, 0),
+            },
+            // A bare repository has no work-tree sides: blobs only.
+            None => blob_only_stats(repo, c),
         };
-
-        // Count additions/deletions for this file
-        let mut additions = 0u32;
-        let mut deletions = 0u32;
-        if let Ok(patch) = git2::Patch::from_diff(diff, i) {
-            if let Some(patch) = patch {
-                let (_, adds, dels) = patch.line_stats().unwrap_or((0, 0, 0));
-                additions = adds as u32;
-                deletions = dels as u32;
-            }
-        }
-
         summaries.push(FileDiffSummary {
-            path,
+            path: c.path.clone(),
             status: status.to_string(),
             additions,
             deletions,
-            old_path,
+            old_path: c.old_path.clone(),
         });
     }
-
     Ok(summaries)
+}
+
+fn blob_only_stats(repo: &gix::Repository, c: &FileChange) -> (u32, u32) {
+    use crate::gitx::diff::Side;
+    let bytes = |s: &Side| match s {
+        Side::Absent => Some(Vec::new()),
+        Side::Object { id, .. } => crate::gitx::blob_bytes(repo, *id),
+        Side::Worktree { .. } => None,
+    };
+    match (bytes(&c.old), bytes(&c.new)) {
+        (Some(a), Some(b)) if !crate::gitx::diff::is_binary(&a) && !crate::gitx::diff::is_binary(&b) => {
+            crate::gitx::diff::line_stats(&a, &b)
+        }
+        _ => (0, 0),
+    }
 }
 
 // ── Index lock retry helper ──────────────────────────────────────────────
@@ -1267,24 +1165,13 @@ fn fast_forward_blockers(repo: &Repository, target: &git2::Tree) -> Result<Vec<S
 
 /// Check if a merge is currently in progress.
 pub fn merge_status(repo_path: &str) -> Result<MergeStatus, String> {
-    let repo = Repository::discover(repo_path).map_err(|e| format!("Not a git repository: {e}"))?;
+    let repo = discover_or_err(repo_path)?;
 
-    let in_progress = repo.state() == git2::RepositoryState::Merge;
+    let in_progress = repo.state() == Some(gix::state::InProgress::Merge);
 
     let conflicts = if in_progress {
-        let index = repo.index().map_err(|e| format!("Failed to get index: {e}"))?;
-        let conflict_paths: Vec<String> = index
-            .conflicts()
-            .map_err(|e| format!("Failed to check conflicts: {e}"))?
-            .filter_map(|c| c.ok())
-            .filter_map(|c| {
-                c.our
-                    .as_ref()
-                    .or(c.their.as_ref())
-                    .and_then(|entry| String::from_utf8(entry.path.clone()).ok())
-            })
-            .collect();
-        conflict_paths
+        let index = repo.index_or_empty().map_err(|e| format!("Failed to get index: {e}"))?;
+        crate::gitx::conflicted_paths(&index)
     } else {
         Vec::new()
     };

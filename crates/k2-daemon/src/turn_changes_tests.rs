@@ -11,20 +11,12 @@ fn tmp(tag: &str) -> PathBuf {
     d
 }
 
-fn git_repo(dir: &Path) -> git2::Repository {
-    let repo = git2::Repository::init(dir).expect("git init");
-    let mut cfg = repo.config().expect("config");
-    cfg.set_str("user.name", "K2 Test").expect("user.name");
-    cfg.set_str("user.email", "k2-test@example.com").expect("user.email");
+/// A repo with one commit (a.txt), made by the real git CLI.
+fn git_repo(dir: &Path) -> PathBuf {
+    k2_core::git_fixture::init_at(dir);
     fs::write(dir.join("a.txt"), "one\n").expect("write");
-    let mut idx = repo.index().expect("index");
-    idx.add_path(Path::new("a.txt")).expect("add");
-    idx.write().expect("write index");
-    let tree = repo.find_tree(idx.write_tree().expect("tree")).expect("tree");
-    let sig = repo.signature().expect("sig");
-    repo.commit(Some("HEAD"), &sig, &sig, "base", &tree, &[]).expect("commit");
-    drop(tree);
-    repo
+    k2_core::git_fixture::commit_all(dir, "base");
+    dir.to_path_buf()
 }
 
 /// Every session is the worktree agent `ws/fix` at `cwd`, unless it is `canon`.

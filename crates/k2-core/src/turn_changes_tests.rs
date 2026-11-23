@@ -11,12 +11,12 @@ fn tmp(tag: &str) -> PathBuf {
     d
 }
 
-fn init(dir: &Path) -> Repository {
-    let repo = Repository::init(dir).expect("git init");
-    let mut cfg = repo.config().expect("config");
-    cfg.set_str("user.name", "K2 Test").expect("user.name");
-    cfg.set_str("user.email", "k2-test@example.com").expect("user.email");
-    repo
+/// A repo made by the real git CLI (`crate::git_fixture`).
+struct Repo(PathBuf);
+
+fn init(dir: &Path) -> Repo {
+    crate::git_fixture::init_at(dir);
+    Repo(dir.to_path_buf())
 }
 
 fn write(dir: &Path, rel: &str, body: &str) {
@@ -27,24 +27,15 @@ fn write(dir: &Path, rel: &str, body: &str) {
     fs::write(p, body).expect("write file");
 }
 
-fn commit_all(repo: &Repository, msg: &str) -> Oid {
-    let mut idx = repo.index().expect("index");
-    idx.add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None).expect("add_all");
-    idx.update_all(["*"].iter(), None).expect("update_all");
-    idx.write().expect("write index");
-    let tree_id = idx.write_tree().expect("write_tree");
-    let tree = repo.find_tree(tree_id).expect("tree");
-    let sig = repo.signature().expect("sig");
-    let parents: Vec<git2::Commit<'_>> = repo.head().ok().and_then(|h| h.peel_to_commit().ok()).into_iter().collect();
-    let refs: Vec<&git2::Commit<'_>> = parents.iter().collect();
-    repo.commit(Some("HEAD"), &sig, &sig, msg, &tree, &refs).expect("commit")
+fn commit_all(repo: &Repo, msg: &str) -> String {
+    crate::git_fixture::commit_all(&repo.0, msg)
 }
 
 fn file<'a>(c: &'a ThreadChanges, rel: &str) -> &'a ThreadChangedFile {
     c.files.iter().find(|f| f.file == rel).unwrap_or_else(|| panic!("{rel} not in {:?}", c.files))
 }
 
-fn base_repo(tag: &str) -> (PathBuf, Repository) {
+fn base_repo(tag: &str) -> (PathBuf, Repo) {
     let dir = tmp(tag);
     let repo = init(&dir);
     write(&dir, "a.txt", "one\ntwo\nthree\n");

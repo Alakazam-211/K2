@@ -1,55 +1,43 @@
 //! Tests for `git_changes` (Changes tab v1, C1). Every test builds its
-//! own temp repo; discard tests trash into a temp dir (never the OS Trash).
+//! own temp repo with the real git CLI (`crate::git_fixture`, isolated from
+//! the machine's config); discard tests trash into a temp dir (never the OS
+//! Trash).
 
 use super::*;
+use crate::git_fixture as fx;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 fn tmp(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("k2-gitchg-{tag}-{}", uuid::Uuid::new_v4().simple()));
-    fs::create_dir_all(&d).expect("mkdir temp");
-    d
+    fx::tmp(&format!("gitchg-{tag}"))
 }
 
-fn init(dir: &Path) -> Repository {
-    let repo = Repository::init(dir).expect("git init");
-    let mut cfg = repo.config().expect("config");
-    cfg.set_str("user.name", "K2 Test").expect("user.name");
-    cfg.set_str("user.email", "k2-test@example.com").expect("user.email");
-    repo
+/// The fixture repo: just the dir (git is driven through `fx`).
+struct Repo(PathBuf);
+
+fn init(dir: &Path) -> Repo {
+    fx::init_at(dir);
+    Repo(dir.to_path_buf())
 }
 
 fn write(dir: &Path, rel: &str, body: &str) {
-    let p = dir.join(rel);
-    if let Some(parent) = p.parent() {
-        fs::create_dir_all(parent).expect("mkdir parent");
-    }
-    fs::write(p, body).expect("write file");
+    fx::write(dir, rel, body);
 }
 
-fn stage(repo: &Repository, rel: &str) {
-    let mut idx = repo.index().expect("index");
-    idx.add_path(Path::new(rel)).expect("add_path");
-    idx.write().expect("write index");
+fn stage(repo: &Repo, rel: &str) {
+    fx::stage(&repo.0, rel);
 }
 
-fn stage_remove(repo: &Repository, rel: &str) {
-    let mut idx = repo.index().expect("index");
-    idx.remove_path(Path::new(rel)).expect("remove_path");
-    idx.write().expect("write index");
+fn stage_remove(repo: &Repo, rel: &str) {
+    fx::stage_remove(&repo.0, rel);
 }
 
-fn commit_all(repo: &Repository, msg: &str) -> Oid {
-    let mut idx = repo.index().expect("index");
-    idx.add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None).expect("add_all");
-    idx.update_all(["*"].iter(), None).expect("update_all");
-    idx.write().expect("write index");
-    let tree_id = idx.write_tree().expect("write_tree");
-    let tree = repo.find_tree(tree_id).expect("tree");
-    let sig = repo.signature().expect("sig");
-    let parents: Vec<git2::Commit<'_>> = repo.head().ok().and_then(|h| h.peel_to_commit().ok()).into_iter().collect();
-    let refs: Vec<&git2::Commit<'_>> = parents.iter().collect();
-    repo.commit(Some("HEAD"), &sig, &sig, msg, &tree, &refs).expect("commit")
+fn commit_all(repo: &Repo, msg: &str) -> String {
+    fx::commit_all(&repo.0, msg)
+}
+
+fn head_branch(repo: &Repo) -> String {
+    fx::git(&repo.0, &["symbolic-ref", "--short", "HEAD"])
 }
 
 fn snap(dir: &Path, base: Option<&str>) -> Snapshot {
@@ -156,7 +144,7 @@ fn snapshot_groups_statuses_counts_and_branch() {
 
     let sn = snap(&d, None);
     assert!(sn.is_repo);
-    let head_name = repo.head().expect("head").shorthand().expect("name").to_string();
+    let head_name = head_branch(&repo);
     assert_eq!(sn.branch.as_deref(), Some(head_name.as_str()));
     assert!(!sn.detached && !sn.unborn);
     assert!(sn.head_oid.is_some());
@@ -226,25 +214,22 @@ fn snapshot_upstream_ahead_behind_and_detached_and_unborn() {
     let repo = init(&d);
     write(&d, "a.txt", "1\n");
     let c1 = commit_all(&repo, "c1");
-    let head_name = repo.head().expect("head").shorthand().expect("name").to_string();
+    let head_name = head_branch(&repo);
     // A local branch as the upstream, one commit behind us.
-    repo.branch("up", &repo.find_commit(c1).expect("c1"), false).expect("branch up");
+    fx::git(&d, &["branch", "up", &c1]);
     write(&d, "a.txt", "2\n");
     commit_all(&repo, "c2");
-    repo.find_branch(&head_name, git2::BranchType::Local)
-        .expect("local")
-        .set_upstream(Some("up"))
-        .expect("set upstream");
+    fx::git(&d, &["branch", "--set-upstream-to=up", &head_name]);
     let sn = snap(&d, None);
     assert_eq!(sn.branch.as_deref(), Some(head_name.as_str()));
     assert_eq!(sn.upstream.as_deref(), Some("up"));
     assert_eq!((sn.ahead, sn.behind), (1, 0));
 
-    repo.set_head_detached(c1).expect("detach");
+    fx::git(&d, &["checkout", "-q", "--detach", &c1]);
     let sn = snap(&d, None);
     assert!(sn.detached);
     assert_eq!(sn.branch, None);
-    assert_eq!(sn.head_oid.as_deref(), Some(c1.to_string().as_str()));
+    assert_eq!(sn.head_oid.as_deref(), Some(c1.as_str()));
 
     let e = tmp("unborn");
     init(&e);
@@ -254,6 +239,33 @@ fn snapshot_upstream_ahead_behind_and_detached_and_unborn() {
     assert_eq!(sn.head_oid, None);
     assert!(sn.branch.is_some(), "unborn branch name comes from HEAD's symbolic target");
     assert_eq!(row(&sn, "untracked", "first.txt").additions, Some(1));
+}
+
+/// Reads never write: ten snapshots (and a diff, a summary) leave
+/// `.git/index` exactly as it was, even with stat-dirty entries a status
+/// would like to refresh (the file watcher would see a write as a change).
+#[test]
+fn reads_never_write_the_index() {
+    let d = tmp("reads-no-write");
+    let repo = init(&d);
+    write(&d, "a.txt", "a\n");
+    write(&d, "b.txt", "b\n");
+    commit_all(&repo, "c1");
+    write(&d, "a.txt", "a changed\n");
+    // b.txt: same content, newer mtime (stat-dirty, content-clean).
+    let f = fs::OpenOptions::new().write(true).open(d.join("b.txt")).expect("open b");
+    f.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(30)).expect("mtime");
+    let index = d.join(".git/index");
+    let before = (fs::read(&index).expect("index bytes"), fs::metadata(&index).expect("meta").modified().expect("mtime"));
+    for _ in 0..10 {
+        let sn = snap(&d, None);
+        assert_eq!(sn.counts.unstaged, 1, "{:#?}", sn.files);
+    }
+    let _ = crate::git::get_git_info(s(&d));
+    let _ = crate::git::diff_summary(s(&d)).expect("summary");
+    let _ = diff_sides(s(&d), "a.txt", None, DiffMode::Worktree).expect("sides");
+    let after = (fs::read(&index).expect("index bytes"), fs::metadata(&index).expect("meta").modified().expect("mtime"));
+    assert!(before == after, "a read rewrote .git/index");
 }
 
 #[test]
@@ -279,14 +291,12 @@ fn snapshot_against_base_lists_the_whole_branch() {
     write(&d, "shared.txt", "base\n");
     write(&d, "doomed.txt", "x\n");
     let c1 = commit_all(&repo, "base");
-    let main_name = repo.head().expect("head").shorthand().expect("name").to_string();
-    let c1c = repo.find_commit(c1).expect("c1");
-    repo.branch("feature", &c1c, false).expect("feature");
+    let main_name = head_branch(&repo);
+    fx::git(&d, &["branch", "feature", &c1]);
     // main moves on (feature is 1 behind).
     write(&d, "main_only.txt", "m\n");
     commit_all(&repo, "main moves");
-    repo.checkout_tree(c1c.as_object(), Some(git2::build::CheckoutBuilder::new().force())).expect("checkout");
-    repo.set_head("refs/heads/feature").expect("switch");
+    fx::git(&d, &["checkout", "-q", "feature"]);
     assert!(!d.join("main_only.txt").exists(), "feature checkout drops main's file");
     write(&d, "committed.txt", "c\n");
     fs::remove_file(d.join("doomed.txt")).expect("rm");
@@ -297,7 +307,7 @@ fn snapshot_against_base_lists_the_whole_branch() {
     let sn = snap(&d, Some(&main_name));
     let base = sn.base.as_ref().expect("base info");
     assert_eq!(base.ref_name, main_name);
-    assert_eq!(base.merge_base.as_deref(), Some(c1.to_string().as_str()));
+    assert_eq!(base.merge_base.as_deref(), Some(c1.as_str()));
     assert_eq!((base.ahead, base.behind), (1, 1));
     assert_eq!(row(&sn, "base", "committed.txt").status, "A");
     assert_eq!(row(&sn, "base", "doomed.txt").status, "D");
@@ -356,7 +366,7 @@ fn diff_sides_added_deleted_renamed_and_base() {
     write(&d, "del.txt", "gone\n");
     write(&d, "orig.txt", "same\n");
     let c1 = commit_all(&repo, "c1");
-    let main_name = repo.head().expect("head").shorthand().expect("n").to_string();
+    let main_name = head_branch(&repo);
     write(&d, "new.txt", "fresh\n");
     fs::remove_file(d.join("del.txt")).expect("rm");
 
@@ -374,8 +384,7 @@ fn diff_sides_added_deleted_renamed_and_base() {
     assert_eq!(r.old.text.as_deref(), Some("same\n"));
     assert_eq!((r.additions, r.deletions), (Some(0), Some(0)));
 
-    let c1c = repo.find_commit(c1).expect("c1");
-    repo.branch("topic", &c1c, false).expect("topic");
+    fx::git(&d, &["branch", "topic", &c1]);
     let b = diff_sides(s(&d), "new.txt", None, DiffMode::Base(main_name.clone())).expect("base");
     assert_eq!(b.mode, "base");
     assert_eq!(b.base_ref.as_deref(), Some(main_name.as_str()));
@@ -529,29 +538,20 @@ fn discard_refuses_bad_paths_and_conflicts_without_touching_anything() {
         codes::NOT_A_REPO
     );
 
-    // A conflicted index entry (stages 1–3) refuses the whole request.
-    let mut idx = repo.index().expect("index");
-    let blob = repo.blob(b"x\n").expect("blob");
-    let entry = |stage_n: u16| git2::IndexEntry {
-        ctime: git2::IndexTime::new(0, 0),
-        mtime: git2::IndexTime::new(0, 0),
-        dev: 0,
-        ino: 0,
-        mode: 0o100644,
-        uid: 0,
-        gid: 0,
-        file_size: 2,
-        id: blob,
-        flags: stage_n << 12,
-        flags_extended: 0,
-        path: b"conf.txt".to_vec(),
-    };
-    for stage_n in 1..=3u16 {
-        idx.add(&entry(stage_n)).expect("conflict stage entry");
-    }
-    idx.write().expect("write");
-    assert!(repo.index().expect("reread").has_conflicts(), "fixture holds a conflict");
-    write(&d, "conf.txt", "<<<<<<<\n");
+    // A conflicted path (a real merge conflict) refuses the whole request.
+    let main = head_branch(&repo);
+    write(&d, "conf.txt", "base\n");
+    commit_all(&repo, "conf base");
+    fx::git(&d, &["checkout", "-q", "-b", "other"]);
+    write(&d, "conf.txt", "theirs\n");
+    commit_all(&repo, "theirs");
+    fx::git(&d, &["checkout", "-q", &main]);
+    write(&d, "conf.txt", "ours\n");
+    fx::git(&d, &["commit", "-q", "-am", "ours"]);
+    write(&d, "a.txt", "edited\n");
+    let m = fx::git_cmd(&d).args(["merge", "-q", "other"]).output().expect("merge");
+    assert!(!m.status.success(), "fixture: the merge conflicts");
+    assert!(fx::git(&d, &["ls-files", "-u"]).contains("conf.txt"), "fixture holds a conflict");
     let e = discard(s(&d), &["a.txt".to_string(), "conf.txt".to_string()], false, &t).expect_err("conflict");
     assert_eq!(e.code, codes::CONFLICTED);
     assert_eq!(fs::read_to_string(d.join("a.txt")).expect("a"), "edited\n");
@@ -659,7 +659,7 @@ fn classify_git_paths_for_main_and_linked_worktree() {
     // Linked worktree: its own index/HEAD under .git/worktrees/<name>,
     // shared refs under the main .git.
     let wt_path = tmp("classify-wt").join("checkout");
-    repo.worktree("wt1", &wt_path, None).expect("add worktree");
+    fx::git(&repo.0, &["worktree", "add", "-q", "-b", "wt1", wt_path.to_str().expect("utf8")]);
     let wd = repo_dirs(s(&wt_path)).expect("wt dirs");
     assert_ne!(wd.gitdir, wd.commondir);
     let wg = wd.gitdir.to_string_lossy().trim_end_matches('/').to_string();
@@ -669,6 +669,9 @@ fn classify_git_paths_for_main_and_linked_worktree() {
     assert_eq!(classify_git_path(&format!("{cg}/refs/heads/wt1"), &wd), Some(GitSignal::Shared));
     // The main checkout's index is not this worktree's.
     assert_eq!(classify_git_path(&format!("{cg}/index"), &wd), None);
+    // The shared dir is the one git names.
+    let want = PathBuf::from(fx::git(&wt_path, &["rev-parse", "--path-format=absolute", "--git-common-dir"]));
+    assert_eq!(dunce::canonicalize(&wd.commondir).expect("canon"), dunce::canonicalize(want).expect("canon"));
     // And snapshot works from the linked checkout.
     write(&wt_path, "wt_new.txt", "w\n");
     let sn = snap(&wt_path, None);
@@ -746,10 +749,9 @@ fn stage_file_adds_an_untracked_folder_recursively_respecting_gitignore() {
     assert!(sn.files.iter().any(|f| f.group == "untracked" && f.path == "x-other/"));
     #[cfg(unix)]
     assert!(sn.files.iter().any(|f| f.group == "untracked" && f.path == "x*/"));
-    let mut idx = repo.index().expect("index");
-    idx.read(true).expect("reload index");
-    assert!(idx.get_path(Path::new("x/one.txt"), 0).is_some());
-    assert!(idx.get_path(Path::new("x/deep/noise.log"), 0).is_none(), "ignored file stays out");
+    let files = fx::git(&repo.0, &["ls-files"]);
+    assert!(files.lines().any(|l| l == "x/one.txt"), "{files}");
+    assert!(!files.lines().any(|l| l == "x/deep/noise.log"), "ignored file stays out: {files}");
 
     // A plain file still stages as before.
     write(&d, "a.txt", "a2\n");

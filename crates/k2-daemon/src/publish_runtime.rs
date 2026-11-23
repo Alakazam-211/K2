@@ -396,6 +396,10 @@ fn kill_tree_checked(entry: &LiveChild) -> Result<(), String> {
         if pid <= 0 {
             return Ok(());
         }
+        // C4: a child that left the process group stays in the agent's
+        // root-owned scope; the helper stops the scope after the kill.
+        let scope = k2_core::agent_scope::scope_of_pid(pid as u32);
+        let _stop_scope = ScopeStop(scope);
         unsafe {
             let pgid = libc::getpgid(pid);
             if pgid == pid {
@@ -582,13 +586,17 @@ fn spawn_child(
     {
         // Agent Isolation (review F1): a workspace's `--cmd` service starts
         // through the exec helper, in its agent's cgroup and under its fence.
-        // A dev server's capped user scope would put it outside that cgroup,
-        // so it runs uncapped while isolation applies (said in the log).
-        let iso = crate::agent_isolation::for_service(project_id, cwd);
+        // A dev server's capped user scope would put it outside that cgroup:
+        // with the helper's scopes (B4) its caps are the scope's own
+        // properties; otherwise it runs uncapped while isolation applies.
+        let mut iso = crate::agent_isolation::for_service(project_id, cwd);
+        if let (Some(i), Some((mem, cpus))) = (iso.as_mut(), dev) {
+            i.scope = i.scope.take().map(|p| p.with_caps(mem, cpus));
+        }
         let mut spec_env: Option<String> = None;
         let (mut c, scoped) = match &iso {
             Some(iso) => {
-                if dev.is_some() {
+                if dev.is_some() && iso.scope.is_none() {
                     log_debug!("[publish] {name}: dev server caps not applied: the agent's cgroup holds it");
                 }
                 let (helper, argv, spec) = k2_core::agent_cgroup::wrap(iso, "sh".into(), vec!["-c".into(), cmd.to_string()], &Default::default())
@@ -2179,7 +2187,20 @@ fn bind_check_one(row: &ps::PublishedService) {
     notify_bind_exposed(row, &exposed);
 }
 
+/// Stops an agent scope (C4) when dropped: after the kill sequence above it.
+#[cfg(unix)]
+struct ScopeStop(Option<(String, String)>);
+
+#[cfg(unix)]
+impl Drop for ScopeStop {
+    fn drop(&mut self) {
+        k2_core::agent_scope::stop_for(self.0.take());
+    }
+}
+
 fn kill_pid_tree(pid: i32) {
+    #[cfg(unix)]
+    let _stop_scope = ScopeStop(if pid > 0 { k2_core::agent_scope::scope_of_pid(pid as u32) } else { None });
     #[cfg(unix)]
     unsafe {
         if pid <= 0 {

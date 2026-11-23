@@ -69,8 +69,21 @@ pub const CLAIM_ROOT: &str = "labelled by agent: each agent's terminals, job run
      agent's processes out of their cgroup, which drops that label. A fenced agent can't do any of this. Fencing an agent does not \
      protect it from an unfenced one";
 
+/// The claim with the root helper's scopes (B4).
+pub const CLAIM_SCOPE: &str = "labelled by agent: each agent's terminals, job runs and published services run in their own \
+     root-owned scope outside the server's own service, placed by the root helper, and no process of the server user can put \
+     a process into another agent's scope. A copied terminal or job passport alone no longer works (App exec and microVM cell \
+     passports aren't bound and work as before). An unfenced agent is still the same user as every other agent: it can make \
+     another agent's session run its commands (through that agent's files, the owner token on disk, or ptrace where the kernel \
+     allows it), and it may be able to move an agent's processes out of their scope, which drops that label. A fenced agent \
+     can still talk to other programs of the same user through their sockets. Fencing an agent does not protect it from an \
+     unfenced one";
+
 /// The claim that holds on this box now.
 pub fn claim() -> &'static str {
+    if crate::agent_scope::scope_placement() {
+        return CLAIM_SCOPE;
+    }
     if root_placement() {
         CLAIM_ROOT
     } else {
@@ -134,6 +147,10 @@ impl PeerAgent {
 /// Classify a cgroup v2 path (`/proc/<pid>/cgroup`'s `0::` value) against
 /// the agents' leaf (`agents_rel`, e.g. `/k2cores.slice/k2-daemon.service/agents`).
 pub fn classify(agents_rel: &str, path: &str) -> PeerAgent {
+    // B4: a root-made scope under `k2agents.slice` names its agent exactly.
+    if let Some((ws, _, _, cgroup)) = crate::agent_scope::classify_scope(path) {
+        return PeerAgent::Agent { ws, cgroup, root_owned: false };
+    }
     let leaf = agents_rel.trim_end_matches('/');
     let p = path.trim_end_matches('/');
     let rest = if p == leaf {
@@ -302,7 +319,11 @@ pub fn place_spawned(iso: &SessionIsolation, pid: u32, start: Option<u64>) -> st
         Some(s) => Ok(s),
         None => Err(format!("no start time for pid {pid}")),
     };
-    match start.and_then(|s| place(&iso.ws, pid, s)) {
+    let placed = start.and_then(|s| match iso.scope.as_ref().filter(|_| crate::agent_scope::scope_placement()) {
+        Some(plan) => crate::agent_scope::place(&iso.ws, plan, pid, s),
+        None => place(&iso.ws, pid, s),
+    });
+    match placed {
         Ok(cg) => {
             crate::log_debug!("[agents] pid {pid} placed in {cg} by the root helper (agent {})", iso.ws);
             Ok(())
@@ -338,6 +359,12 @@ pub fn availability() -> Result<Avail, String> {
     }
     if switch_off() {
         return Err(format!("{ENV_SWITCH}=0 in the daemon's environment (the emergency off-switch)"));
+    }
+    // B4 (helper mode): the scopes live under `k2agents.slice`, outside the
+    // daemon's unit, which then needs no delegation and no agents' leaf.
+    if crate::agent_scope::scope_placement() {
+        let agents_rel = format!("/{}", crate::agent_scope::TOP_SLICE);
+        return Ok(Avail { agents_dir: Path::new(CGROUP_FS).join(crate::agent_scope::TOP_SLICE), agents_rel });
     }
     let l = crate::agents_leaf::leaves()?;
     let agents_dir = l.base.join(crate::agents_leaf::AGENTS_LEAF);
@@ -407,6 +434,9 @@ pub struct SessionIsolation {
     pub fence: bool,
     /// The agent's workspace folder (the fence opens it).
     pub workspace: Option<PathBuf>,
+    /// B4: the root helper places this process in its own scope
+    /// (`k2-agent-<ws>:<id>.scope`); `None` for the M1b and M1 layouts.
+    pub scope: Option<crate::agent_scope::ScopePlan>,
 }
 
 /// The isolation for a session of agent `ws`: identity when the box has
@@ -418,12 +448,17 @@ pub fn intent(ws: &str, passthrough: bool, fence_on: bool, workspace: Option<&Pa
         return None;
     }
     let identity = availability().is_ok();
+    let scoped = identity && crate::agent_scope::scope_placement();
+    // A fresh scope id per spawn; with no randomness the spawn fails at
+    // `wrap` rather than run unplaced.
+    let scope = if scoped { crate::agent_scope::ScopePlan::new(fence_on).ok() } else { None };
     (identity || fence_on).then(|| SessionIsolation {
         ws: ws.trim().to_string(),
         identity,
-        root_placed: identity && root_placement(),
+        root_placed: identity && (root_placement() || scoped),
         fence: fence_on,
         workspace: workspace.map(Path::to_path_buf),
+        scope,
     })
 }
 
@@ -442,7 +477,13 @@ pub fn wrap(
     use crate::agent_fence::{default_view, fence_env, landlock_abi, ExecSpec, ViewInputs, ARG};
     let helper = exec_helper().ok_or("the daemon has no exec helper for isolated sessions")?;
     let mut spec = ExecSpec { v: 1, cgroup: None, wait_cgroup: None, fence: None, unset: Vec::new(), set: Default::default() };
-    if iso.identity {
+    if iso.identity && crate::agent_scope::scope_placement() {
+        // B4: the helper makes the scope around the waiting exec helper.
+        let plan = iso.scope.as_ref().ok_or("agent isolation: no scope id for this session")?;
+        let cg = plan.cgroup(&iso.ws).ok_or_else(|| format!("workspace id {:?} can't name a scope", iso.ws))?;
+        spec.wait_cgroup = Some(format!("{CGROUP_FS}{cg}"));
+        spec.set.insert(ENV_SESSION_MARK.into(), plan.unit(&iso.ws).unwrap_or_default());
+    } else if iso.identity {
         let a = availability()?;
         let name = cgroup_name(&iso.ws).ok_or_else(|| format!("workspace id {:?} can't name a cgroup", iso.ws))?;
         if iso.root_placed {
@@ -596,6 +637,12 @@ pub fn boot_scan(a: &Avail) -> (usize, usize) {
 pub fn status_json() -> serde_json::Value {
     let landlock = crate::agent_fence::landlock_abi();
     let mut v = match availability() {
+        Ok(a) if crate::agent_scope::scope_placement() => serde_json::json!({
+            "identity": "on",
+            "placement": "root helper (a root-owned scope per session, job run and service)",
+            "agentsCgroup": a.agents_rel,
+            "claim": claim(),
+        }),
         Ok(a) if root_placement() => serde_json::json!({
             "identity": "on",
             "placement": "root helper (root-owned agent cgroups)",

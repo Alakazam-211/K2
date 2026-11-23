@@ -1,0 +1,203 @@
+//! Agent Isolation M2, B4 (protocol 19, `namespaces.agentscope`): each
+//! agent session, job run and published service in its own root-owned
+//! systemd scope, `k2-agent-<ws>:<id>.scope`, under `k2agents.slice/
+//! k2agents-<open|fenced>.slice/`, made by the root helper with
+//! `StartTransientUnit` (`k2_root_proto::agent_scope`). The scopes are
+//! outside the daemon's unit, so no process of the K2 user can write a pid
+//! into one (the common ancestor is the root cgroup), and the slice of a
+//! fenced session is fixed at its birth.
+//!
+//! This module is the daemon side: whether the helper places scopes on this
+//! box ([`scope_placement`]), the plan one session gets ([`ScopePlan`]),
+//! the classifier for a peer's cgroup ([`classify_scope`]), and the calls
+//! ([`place`], [`stop`], [`stop_for_pid`]). With no scope placer the M1b
+//! layout (`<unit>/agents/a-<ws>`) applies as before.
+
+use std::sync::OnceLock;
+
+pub use k2_root_proto::agent_scope::{Kind, TOP_SLICE};
+use k2_root_proto::agent_scope::{parse_scope_name, scope_cgroup, scope_name, AgentWs, ScopeId};
+
+/// What one isolated process gets in scope mode: a fresh scope id, its
+/// slice (fenced or open, fixed at birth), and a dev server's caps.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopePlan {
+    /// Lowercase hex, 16 characters, new for every spawn.
+    pub id: String,
+    pub fenced: bool,
+    /// A dev server's caps, as bounded integers (the helper maps them to
+    /// `MemoryMax` and `CPUQuotaPerSecUSec`; never a property string).
+    pub mem_mb: Option<u32>,
+    pub cpu_pct: Option<u32>,
+}
+
+impl ScopePlan {
+    pub fn new(fenced: bool) -> Result<Self, String> {
+        let mut b = [0u8; 8];
+        getrandom::getrandom(&mut b).map_err(|e| format!("no random scope id: {e}"))?;
+        Ok(ScopePlan { id: b.iter().map(|x| format!("{x:02x}")).collect(), fenced, mem_mb: None, cpu_pct: None })
+    }
+    pub fn kind(&self) -> Kind {
+        if self.fenced {
+            Kind::Fenced
+        } else {
+            Kind::Open
+        }
+    }
+    /// A dev server's caps (`publish_dev`: MB and CPUs), clamped into the
+    /// helper's bounds.
+    pub fn with_caps(mut self, mem_mb: i64, cpus: f64) -> Self {
+        let (mlo, mhi) = k2_root_proto::agent_scope::MEM_MB;
+        let (clo, chi) = k2_root_proto::agent_scope::CPU_PCT;
+        self.mem_mb = Some(mem_mb.clamp(mlo as i64, mhi as i64) as u32);
+        let pct = (cpus * 100.0).round();
+        self.cpu_pct = Some(if pct.is_finite() { (pct as i64).clamp(clo as i64, chi as i64) as u32 } else { chi });
+        self
+    }
+    /// `k2-agent-<ws>:<id>.scope`.
+    pub fn unit(&self, ws: &str) -> Option<String> {
+        Some(scope_name(&AgentWs::parse(ws)?, &ScopeId::parse(&self.id)?))
+    }
+    /// `/k2agents.slice/k2agents-<kind>.slice/k2-agent-<ws>:<id>.scope`.
+    pub fn cgroup(&self, ws: &str) -> Option<String> {
+        Some(scope_cgroup(self.kind(), &AgentWs::parse(ws)?, &ScopeId::parse(&self.id)?))
+    }
+    /// The helper's argv for this plan.
+    pub fn argv(&self, ws: &str, pid: u32, start: u64) -> Vec<String> {
+        let mut v = vec!["agents".into(), "scope".into(), ws.into(), self.id.clone(), pid.to_string(), start.to_string(), self.kind().as_str().into()];
+        if let Some(m) = self.mem_mb {
+            v.push(format!("mem={m}"));
+        }
+        if let Some(c) = self.cpu_pct {
+            v.push(format!("cpu={c}"));
+        }
+        v
+    }
+}
+
+/// A peer's cgroup path that is an agent scope (or below one): its
+/// workspace, scope id, kind, and the scope's own cgroup. `None` for any
+/// other path: the classifier never matches on a prefix.
+pub fn classify_scope(path: &str) -> Option<(String, String, Kind, String)> {
+    let mut parts = path.trim_end_matches('/').strip_prefix('/')?.split('/');
+    if parts.next()? != TOP_SLICE {
+        return None;
+    }
+    let slice = parts.next()?;
+    let kind = [Kind::Open, Kind::Fenced].into_iter().find(|k| k.slice() == slice)?;
+    let unit = parts.next()?;
+    let (ws, id) = parse_scope_name(unit)?;
+    Some((ws.as_str().to_string(), id.as_str().to_string(), kind, format!("/{TOP_SLICE}/{slice}/{unit}")))
+}
+
+/// Calls the root helper (`agents …`, daemon class) and returns its JSON.
+pub type Caller = Box<dyn Fn(&[String]) -> Result<serde_json::Value, String> + Send + Sync>;
+
+static CALLER: OnceLock<Caller> = OnceLock::new();
+
+/// Boot: the root helper places agent scopes on this box (protocol 19,
+/// `namespaces.agentscope`, and `agents layout` ready).
+pub fn set_caller(c: Caller) {
+    let _ = CALLER.set(c);
+}
+
+/// The helper places every isolated process in its own scope here.
+pub fn scope_placement() -> bool {
+    CALLER.get().is_some()
+}
+
+/// Place `pid` (an exec helper waiting, started at `start`) in its scope.
+/// `Ok(the scope's cgroup)`.
+pub fn place(ws: &str, plan: &ScopePlan, pid: u32, start: u64) -> Result<String, String> {
+    let call = CALLER.get().ok_or("no root helper places agent scopes on this box")?;
+    let v = call(&plan.argv(ws, pid, start))?;
+    let want = plan.cgroup(ws).ok_or_else(|| format!("workspace id {ws:?} or scope id {:?} can't name a scope", plan.id))?;
+    match v["cgroup"].as_str() {
+        Some(cg) if cg == want => Ok(want),
+        other => Err(format!("agents scope: the helper answered {other:?}, not {want}")),
+    }
+}
+
+/// End one scope (C4): idle stop, `publish stop`, a job's end. Already
+/// gone is fine.
+pub fn stop(ws: &str, id: &str) -> Result<(), String> {
+    let call = CALLER.get().ok_or("no root helper places agent scopes on this box")?;
+    if AgentWs::parse(ws).is_none() || ScopeId::parse(id).is_none() {
+        return Err(format!("{ws:?}/{id:?} doesn't name an agent scope"));
+    }
+    call(&["agents".into(), "stop".into(), ws.into(), id.into()]).map(|_| ())
+}
+
+/// The scope `pid` runs in, if it is an agent scope: read before its
+/// process is ended, so [`stop`] can end what it left behind.
+pub fn scope_of_pid(pid: u32) -> Option<(String, String)> {
+    let path = crate::agent_cgroup::cgroup_of_pid(pid).ok()?;
+    classify_scope(&path).map(|(ws, id, _, _)| (ws, id))
+}
+
+/// After a service or job process is ended: stop its scope too, so a child
+/// that left its process group doesn't stay (a root-owned scope's
+/// `cgroup.kill` is root's). Nothing outside scope mode.
+pub fn stop_for(scope: Option<(String, String)>) {
+    if let Some((ws, id)) = scope.filter(|_| scope_placement()) {
+        if let Err(e) = stop(&ws, &id) {
+            crate::log_debug!("[agents] stop scope of agent {ws} ({id}): {e}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const WS: &str = "3f1c2d4e-0000-4000-8000-00000000abcd";
+
+    #[test]
+    fn a_plan_names_its_scope_and_slice() {
+        let p = ScopePlan { id: "0123456789abcdef".into(), fenced: true, mem_mb: None, cpu_pct: None };
+        assert_eq!(p.unit(WS).as_deref(), Some(format!("k2-agent-{WS}:0123456789abcdef.scope").as_str()));
+        assert_eq!(p.cgroup(WS).as_deref(), Some(format!("/k2agents.slice/k2agents-fenced.slice/k2-agent-{WS}:0123456789abcdef.scope").as_str()));
+        assert_eq!(p.argv(WS, 4242, 99), ["agents", "scope", WS, "0123456789abcdef", "4242", "99", "fenced"]);
+        let fresh = ScopePlan::new(false).unwrap();
+        assert_eq!(fresh.id.len(), 16, "{}", fresh.id);
+        assert_ne!(fresh.id, ScopePlan::new(false).unwrap().id);
+        assert!(p.unit("a/b").is_none());
+    }
+
+    #[test]
+    fn dev_caps_are_bounded_integers() {
+        let p = ScopePlan::new(false).unwrap().with_caps(512, 1.5);
+        assert_eq!((p.mem_mb, p.cpu_pct), (Some(512), Some(150)));
+        assert!(p.argv(WS, 2, 3).ends_with(&["mem=512".to_string(), "cpu=150".to_string()]));
+        let p = ScopePlan::new(false).unwrap().with_caps(1, 0.001);
+        assert_eq!((p.mem_mb, p.cpu_pct), (Some(16), Some(1)), "clamped up into the helper's bounds");
+        let p = ScopePlan::new(false).unwrap().with_caps(i64::MAX, f64::NAN);
+        assert_eq!((p.mem_mb, p.cpu_pct), (Some(1_048_576), Some(25_600)));
+    }
+
+    #[test]
+    fn the_classifier_reads_only_an_exact_scope() {
+        let id = "0123456789abcdef";
+        let base = format!("/k2agents.slice/k2agents-open.slice/k2-agent-{WS}:{id}.scope");
+        assert_eq!(classify_scope(&base), Some((WS.into(), id.into(), Kind::Open, base.clone())));
+        assert_eq!(classify_scope(&format!("{base}/sub")).map(|c| c.3), Some(base.clone()), "below a scope: that scope");
+        for other in [
+            "/k2agents.slice".to_string(),
+            "/k2agents.slice/k2agents-open.slice".to_string(),
+            "/k2agents.slice/k2agents-open.slice/k2agents-open-anchor.service".to_string(),
+            format!("/k2agents.slice/k2agents-other.slice/k2-agent-{WS}:{id}.scope"),
+            format!("/system.slice/k2-agent-{WS}:{id}.scope"),
+            format!("/k2agents.slice/k2agents-open.slice/k2-agent-{WS}-{id}.scope"),
+            format!("/k2agents.slice/k2agents-open.slice/k2-agent-{WS}:{id}.scope.x"),
+            format!("/k2agents.slice/k2agents-open.slice/k2-agent-{WS}:XYZ.scope"),
+            "/k2cores.slice/k2-daemon.service/agents/a-x".to_string(),
+        ] {
+            assert_eq!(classify_scope(&other), None, "{other}");
+        }
+        // One workspace id that starts another's: each reads as itself.
+        let short = format!("/k2agents.slice/k2agents-fenced.slice/k2-agent-abc:{id}.scope");
+        let long = format!("/k2agents.slice/k2agents-fenced.slice/k2-agent-abc-def:{id}.scope");
+        assert_eq!(classify_scope(&short).map(|c| c.0), Some("abc".into()));
+        assert_eq!(classify_scope(&long).map(|c| c.0), Some("abc-def".into()));
+    }
+}

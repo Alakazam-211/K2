@@ -178,13 +178,27 @@ pub fn user_manager_env() -> Vec<(&'static str, String)> {
 /// daemon under a system unit may have no user manager (PA-9).
 #[cfg(target_os = "linux")]
 pub fn user_scopes() -> Result<PathBuf, String> {
+    user_manager_probe(&["--user", "--scope", "--quiet", "--collect", "--", "true"])
+}
+
+/// `systemd-run` when this box's user has a user manager that starts
+/// services (what virtual desktops use), else why not. The service form:
+/// it moves no process, so the B4 bus policy (no attach calls for the
+/// server user) doesn't change its answer the way it does the scope form.
+#[cfg(target_os = "linux")]
+pub fn user_services() -> Result<PathBuf, String> {
+    user_manager_probe(&["--user", "--quiet", "--collect", "--wait", "--", "true"])
+}
+
+#[cfg(target_os = "linux")]
+fn user_manager_probe(args: &[&str]) -> Result<PathBuf, String> {
     let exe = ["/usr/bin/systemd-run", "/bin/systemd-run"]
         .iter()
         .map(PathBuf::from)
         .find(|p| p.exists())
         .ok_or_else(|| "systemd-run isn't on this box".to_string())?;
     let mut c = k2_core::bg_proc::command(&exe);
-    c.args(["--user", "--scope", "--quiet", "--collect", "--", "true"])
+    c.args(args)
         .envs(user_manager_env())
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -268,10 +282,13 @@ pub fn caps_of(pid: Option<i64>) -> String {
         let Some(path) = std::fs::read_to_string(format!("/proc/{pid}/cgroup")).ok().as_deref().and_then(parse_cgroup_path) else {
             return no_caps("K2 can't read this process's cgroup");
         };
-        if !path.contains("/k2-dev-") {
+        // A user scope (`k2-dev-…`), or (B4) the agent's own root-made
+        // scope, whose caps are its properties: read at the scope itself.
+        let scope = k2_core::agent_scope::classify_scope(&path).map(|c| c.3);
+        if !path.contains("/k2-dev-") && scope.is_none() {
             return no_caps("user scopes aren't available on this box");
         }
-        let dir = PathBuf::from("/sys/fs/cgroup").join(path.trim_start_matches('/'));
+        let dir = PathBuf::from("/sys/fs/cgroup").join(scope.as_deref().unwrap_or(&path).trim_start_matches('/'));
         let read = |f: &str| std::fs::read_to_string(dir.join(f)).ok();
         caps_label(CapsRead {
             mem_bytes: read("memory.max").as_deref().and_then(parse_memory_max),

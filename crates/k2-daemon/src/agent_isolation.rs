@@ -272,6 +272,12 @@ pub fn register_root_placement() {
         agent_cgroup::set_no_placer(format!("the emergency off-switch ({}=0)", agent_cgroup::ENV_SWITCH));
         return;
     }
+    // B4 first: a scope per session when the helper serves it and its
+    // slices are set up (`agents layout`). Else M1b as before.
+    match register_scope_placement() {
+        Ok(()) => return,
+        Err(why) => log_debug!("[agents] agent scopes not used: {why}"),
+    }
     if let Err(why) = agent_cgroup::availability() {
         agent_cgroup::set_no_placer(why);
         return;
@@ -302,6 +308,68 @@ pub fn register_root_placement() {
         v["cgroup"].as_str().map(str::to_string).ok_or_else(|| format!("agents place: no cgroup in {v}"))
     }));
     log_debug!("[agents] identity on: the root helper places agent sessions in root-owned cgroups");
+}
+
+/// B4: the root helper serves `agents scope` (protocol 19 and
+/// `namespaces.agentscope`) and `agents layout` says the slices and
+/// anchors are ready (and a transient unit of the server user's own is
+/// refused, P1). Then every isolated process gets its own scope.
+fn register_scope_placement() -> Result<(), String> {
+    let st = crate::root_helper::state();
+    if !agentscope_ok(&st) {
+        return Err(crate::root_helper::helper_needed("a root-owned scope per agent session", k2_root_proto::version::AGENTSCOPE_MIN_PROTOCOL, &st));
+    }
+    let out = crate::root_helper::call(&["agents".to_string(), "layout".to_string()], None)?;
+    let v: serde_json::Value = serde_json::from_slice(&out).map_err(|e| format!("agents layout: not JSON: {e}"))?;
+    layout_ready(&v)?;
+    k2_core::agent_scope::set_caller(Box::new(|argv: &[String]| {
+        let out = crate::root_helper::call(argv, None)?;
+        serde_json::from_slice(&out).map_err(|e| format!("agents {}: not JSON: {e}", argv.get(1).map(String::as_str).unwrap_or("")))
+    }));
+    log_debug!("[agents] identity on: the root helper places each agent session, job run and service in its own scope");
+    adopt_survivors(&v);
+    Ok(())
+}
+
+/// M4: sessions that lived through an update in the old layout
+/// (`<unit>/agents/a-<ws>`) move into one new scope per agent, fenced and
+/// unfenced alike (an unfenced one left there would be on no allow line).
+/// The kind is the agent's fence now (fenced only narrows). One that can't
+/// be adopted stays where it is, said in the log and by `agents layout`.
+fn adopt_survivors(layout: &serde_json::Value) {
+    for s in layout["survivors"].as_array().into_iter().flatten() {
+        let Some(ws) = s["ws"].as_str() else { continue };
+        let fenced = workspace_and_fence(ws).1;
+        let plan = match k2_core::agent_scope::ScopePlan::new(fenced) {
+            Ok(p) => p,
+            Err(e) => {
+                log_debug!("[agents] survivors of agent {ws} not adopted: {e}");
+                continue;
+            }
+        };
+        let kind = plan.kind().as_str().to_string();
+        match crate::root_helper::call(&["agents".into(), "adopt".into(), ws.to_string(), plan.id.clone(), kind], None) {
+            Ok(out) => log_debug!("[agents] survivors of agent {ws} adopted into a scope: {}", String::from_utf8_lossy(&out)),
+            Err(e) => log_debug!("[agents] survivors of agent {ws} not adopted (they stay in the old layout, traceable): {e}"),
+        }
+    }
+}
+
+/// Pure: whether `agents layout`'s answer lets scope placement start.
+pub fn layout_ready(v: &serde_json::Value) -> Result<(), String> {
+    if v["p1"].as_str() != Some("refused") {
+        return Err(format!("the server user's own transient unit in an agents slice was not refused (p1: {})", v["p1"]));
+    }
+    if v["ready"].as_bool() != Some(true) {
+        return Err(format!("the agents slices aren't set up (agents layout: {v})"));
+    }
+    Ok(())
+}
+
+/// Pure: protocol >= 19 and `namespaces.agentscope == true`.
+pub fn agentscope_ok(st: &crate::root_helper::RootHelperState) -> bool {
+    let ns = st.version_json.as_ref().and_then(|v| v.pointer("/namespaces/agentscope")).and_then(serde_json::Value::as_bool) == Some(true);
+    st.usable(k2_root_proto::version::AGENTSCOPE_MIN_PROTOCOL) && ns
 }
 
 /// Pure: protocol >= 18 and `namespaces.agentcg == true`.

@@ -48,6 +48,7 @@ pub mod active;
 pub mod agents_leaf;
 // Agent Isolation M1: per-agent cgroups (identity) and the folder fence.
 pub mod agent_cgroup;
+pub mod agent_scope;
 pub mod agent_fence;
 // prd-daemon-activity-and-thread-working-v1 S2: the per-session activity
 // row and state machine (pure; the daemon's `activity_store` owns rows).

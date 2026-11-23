@@ -1326,7 +1326,7 @@ impl Host for RealHost {
         *self.systemd_user.get_or_init(|| {
             #[cfg(target_os = "linux")]
             {
-                crate::publish_dev::user_scopes().is_ok()
+                crate::publish_dev::user_services().is_ok()
             }
             #[cfg(not(target_os = "linux"))]
             {

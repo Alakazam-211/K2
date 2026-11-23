@@ -135,6 +135,7 @@ pub fn set_owner_base_override(dir: Option<PathBuf>) {
 
 /// Where the walk down to a hire root starts: the deepest owner's base the
 /// root is inside (the home folder), else `/`.
+#[cfg_attr(not(unix), allow(dead_code))]
 fn walk_start(real: &Path) -> PathBuf {
     let mut bases: Vec<PathBuf> = Vec::new();
     if let Some(h) = crate::paths::home_dir() {

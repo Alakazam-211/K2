@@ -595,10 +595,11 @@ pub fn converge(
         (Some(_), Some(root)) if existing.is_none() && !auth.create_only => Some(root.to_path_buf()),
         _ => None,
     };
-    // First, for a new workspace inside a hire root (a key's, an agent's):
-    // no other user can change a folder on the way to the root, before any
-    // folder there is looked at or taken on.
-    if existing.is_none() {
+    // First, for a new workspace inside a hire root (a key's, an agent's)
+    // by a caller that may make one: no other user can change a folder on
+    // the way to the root, before any folder there is looked at or taken
+    // on. A caller that may not create gets that refusal below.
+    if existing.is_none() && auth.may_create {
         if let Some(root) = auth.new_workspace_root.as_deref() {
             super::root::check_root_safe(root)?;
         }

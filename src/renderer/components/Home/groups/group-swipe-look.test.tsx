@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 //
 // Home groups: what the swipe looks like. The strip follows the fingers
-// 1:1 with the incoming group's rows riding in beside it (no tile naming
-// the group, no instruction text), then glides on and lands, or glides
-// back; a rubber band at the ends. Synthetic wheel streams, fake
+// 1:1 with the neighbouring groups' rows beside it, drawn ahead of the
+// gesture and never during it (no tile naming the group, no instruction
+// text), then glides on and lands, or glides back; a rubber band at the
+// ends. A landing holds until the list shows the new group. Synthetic wheel streams, fake
 // timers and rAF. Also the bar reading the live swipe, and the
 // recent-first move.
 
@@ -17,7 +18,7 @@ vi.mock('@tauri-apps/api/event', () => ({
 }))
 
 import HomeGroupBar, { swipeTargetId, type GroupBarItem } from './HomeGroupBar'
-import { GroupSwipeStrip } from './GroupSwipeSlide'
+import { GroupSwipeStrip, STRIP_HOLD_MAX_MS, paintStrip } from './GroupSwipeSlide'
 import { rowShifts } from './useRowFlip'
 import { useHomeGroups } from './useHomeGroups'
 import { readFileSync } from 'fs'
@@ -25,7 +26,7 @@ import { join } from 'path'
 
 const groupsCss = readFileSync(join(__dirname, 'home-groups.css'), 'utf8')
 import { GLIDE_EASE, SWIPE_TUNING as T } from '@/lib/group-swipe'
-import { GLIDE_LAND_SLACK_MS, groupSwipeLive, useGroupSwipe, useGroupSwipeStore } from '@/hooks/useGroupSwipe'
+import { GLIDE_LAND_SLACK_MS, groupSwipeLive, useGroupSwipe, useGroupSwipeStore, type SwipeFrame } from '@/hooks/useGroupSwipe'
 import { selectedHome, useHomesStore, type Home } from '@/stores/homes'
 
 const G: GroupBarItem[] = [
@@ -48,9 +49,10 @@ function Nav({ variant = 'nav' }: { variant?: 'nav' | 'rail' }): React.JSX.Eleme
       <div data-group-swipe-stage="">
         <GroupSwipeStrip
           variant={variant}
-          renderIncoming={(g: Home) => {
+          groupId={home.id}
+          renderNeighbour={(g: Home) => {
             incomingRenders++
-            return <p data-testid="incoming-rows">{g.name} rows</p>
+            return <p data-testid={`neighbour-${g.name}`}>{g.name} rows</p>
           }}
         >
           <div data-scroll-edges-list="" data-testid="list">
@@ -90,7 +92,7 @@ afterEach(() => {
 })
 
 const strip = (): HTMLElement => document.querySelector('[data-group-swipe-strip]') as HTMLElement
-const incoming = (): HTMLElement | null => document.querySelector('[data-group-swipe-incoming]')
+const side = (s: 'next' | 'prev'): HTMLElement | null => document.querySelector(`[data-group-swipe-side="${s}"]`)
 /** Rosson: no tile naming the group the swipe heads to. Nothing floats
  *  over the strip: only the two lists' rows are on screen. */
 const expectNoTile = (rows: string): void => {
@@ -119,18 +121,31 @@ const glideMs = (): number => {
 }
 
 describe('the strip', () => {
-  it('follows the fingers 1:1 (0, 30%, 60%) with the next group’s rows riding in at its edge, and no tile or hint text', () => {
+  it('the neighbours sit just out of view at rest, drawn ahead of the gesture: none left of the first group', () => {
+    act(() => useHomesStore.getState().selectHome(ids[1]))
     render(<Nav />)
     expect(strip().style.transform).toBe('')
-    expect(incoming()).toBeNull()
-    expectNoTile('One rows')
+    const [prev, next] = [side('prev') as HTMLElement, side('next') as HTMLElement]
+    expect([prev.getAttribute('data-group-swipe-incoming'), prev.style.left]).toEqual([ids[0], '-100%'])
+    expect([next.getAttribute('data-group-swipe-incoming'), next.style.left]).toEqual([ids[2], '100%'])
+    for (const el of [prev, next]) expect([el.hasAttribute('inert'), el.getAttribute('aria-hidden')]).toEqual([true, 'true'])
+    cleanup()
+    act(() => useHomesStore.getState().selectHome(ids[0]))
+    render(<Nav />)
+    expect(side('prev')).toBeNull()
+    expect(side('next')?.getAttribute('data-group-swipe-incoming')).toBe(ids[1])
+  })
+
+  it('follows the fingers 1:1 (0, 30%, 60%) with the next group’s rows at its edge, drawing nothing while it moves, and no tile or hint text', () => {
+    render(<Nav />)
+    expectNoTile('One rowsTwo rows')
+    const drawn = incomingRenders
     for (let i = 0; i < 12; i++) wheel(6) // locks at 10 px, then 6 a frame: 72 px = 30%
     wait(FRAME)
     expect([strip().style.transform, strip().style.transition]).toEqual(['translate3d(-72.00px, 0, 0)', 'none'])
-    const inc = incoming() as HTMLElement
+    const inc = side('next') as HTMLElement
     expect(inc.getAttribute('data-group-swipe-incoming')).toBe(ids[1])
-    expect([inc.style.left, inc.hasAttribute('inert'), inc.getAttribute('aria-hidden')]).toEqual(['100%', true, 'true'])
-    expect(screen.getByTestId('incoming-rows').textContent).toBe('Two rows')
+    expect(screen.getByTestId('neighbour-Two').textContent).toBe('Two rows')
     // The incoming group is its rows alone.
     expect(inc.children.length).toBe(1)
     expectNoTile('One rowsTwo rows')
@@ -139,12 +154,12 @@ describe('the strip', () => {
     wait(FRAME)
     expect(strip().style.transform).toBe('translate3d(-144.00px, 0, 0)')
     expectNoTile('One rowsTwo rows')
-    // React drew the incoming group once, not per wheel event.
-    expect(incomingRenders).toBeLessThanOrEqual(2)
+    // React drew no group while the fingers moved.
+    expect(incomingRenders).toBe(drawn)
     expect(document.body.textContent).not.toMatch(HINTS)
   })
 
-  it('past the line it glides the rest of the way, then lands on the group from the top', () => {
+  it('past the line it glides the rest of the way, then lands on the group from the top, with its own neighbours', () => {
     render(<Nav />)
     screen.getByTestId('list').scrollTop = 50
     for (let i = 0; i < 20; i++) wheel(5) // 100 px = 42%
@@ -158,9 +173,9 @@ describe('the strip', () => {
     wait(ms + GLIDE_LAND_SLACK_MS)
     expect(current()).toBe('Two')
     expect([strip().style.transform, strip().style.transition]).toEqual(['', ''])
-    expect(incoming()).toBeNull()
     expect(screen.getByTestId('list').textContent).toBe('Two rows')
     expect(screen.getByTestId('list').scrollTop).toBe(0)
+    expect([side('prev'), side('next')].map((el) => el?.getAttribute('data-group-swipe-incoming'))).toEqual([ids[0], ids[2]])
   })
 
   it('short of the line and slow, it glides back', () => {
@@ -173,7 +188,7 @@ describe('the strip', () => {
     wait(ms + GLIDE_LAND_SLACK_MS)
     expect(current()).toBe('One')
     expect(strip().style.transform).toBe('')
-    expect(incoming()).toBeNull()
+    expect(side('next')?.getAttribute('data-group-swipe-incoming')).toBe(ids[1])
   })
 
   it('a quick flick short of the line still goes', () => {
@@ -191,8 +206,8 @@ describe('the strip', () => {
     for (let i = 0; i < 6; i++) wheel(-5)
     wait(FRAME)
     expect(strip().style.transform).toBe('translate3d(30.00px, 0, 0)')
-    expect(incoming()?.style.left).toBe('-100%')
-    expectNoTile('Two rowsOne rows')
+    expect(side('prev')?.style.left).toBe('-100%')
+    expectNoTile('Two rowsOne rowsThree rows')
   })
 
   it('past the first group: a third of the travel, nothing beside it, and back', () => {
@@ -200,7 +215,7 @@ describe('the strip', () => {
     for (let i = 0; i < 20; i++) wheel(-5) // 100 px of finger
     wait(FRAME)
     expect(strip().style.transform).toBe('translate3d(33.33px, 0, 0)')
-    expect(incoming()).toBeNull()
+    expect(side('prev')).toBeNull()
     letGo()
     expect(strip().style.transform).toBe('translate3d(0.00px, 0, 0)')
     wait(1000)
@@ -214,6 +229,68 @@ describe('the strip', () => {
     wait(FRAME)
     expect(strip().style.transform).toBe('translate3d(-60.00px, 0, 0)')
     expectNoTile('One rowsTwo rows')
+  })
+})
+
+describe('the landing waits for the list', () => {
+  const glide: SwipeFrame = { kind: 'glide', from: 0.5, to: 1, ms: 200, easing: GLIDE_EASE, outcome: 'commit' }
+  const motion = (groupId: string): Parameters<typeof paintStrip>[2] => ({ width: NAV, applied: null, groupId, glideFrom: null })
+
+  it('a landed rest holds the strip where it glided to until the list shows the new group; a cancel rests at once', () => {
+    const el = document.createElement('div')
+    const m = motion('g1')
+    expect(paintStrip(el, glide, m)).toBe(true)
+    expect(el.style.transform).toBe('translate3d(-240.00px, 0, 0)')
+    const landed: SwipeFrame = { kind: 'rest', landed: true }
+    // The list still draws g1 (it draws the switch a moment later).
+    expect(paintStrip(el, landed, m)).toBe(false)
+    expect(el.style.transform).toBe('translate3d(-240.00px, 0, 0)')
+    m.groupId = 'g2'
+    expect(paintStrip(el, landed, m)).toBe(true)
+    expect([el.style.transform, el.style.transition, el.style.willChange]).toEqual(['', '', ''])
+    // A cancel never waits.
+    const c = motion('g1')
+    paintStrip(el, { ...glide, to: 0, outcome: 'cancel' }, c)
+    expect(paintStrip(el, { kind: 'rest', landed: false }, c)).toBe(true)
+    expect(el.style.transform).toBe('')
+  })
+
+  it('a glide from where the fingers left the strip starts there without a forced style flush', () => {
+    const el = document.createElement('div')
+    const m = motion('g1')
+    const flush = vi.spyOn(window, 'getComputedStyle')
+    paintStrip(el, { kind: 'track', offset: 0.5 }, m)
+    paintStrip(el, glide, m)
+    expect(flush).not.toHaveBeenCalled()
+    expect([el.style.transition, el.style.transform]).toEqual([`transform 200ms ${GLIDE_EASE}`, 'translate3d(-240.00px, 0, 0)'])
+    // From anywhere else it sets the start first, then flushes once.
+    paintStrip(el, { kind: 'track', offset: 0.2 }, m)
+    paintStrip(el, { ...glide }, m)
+    expect(flush).toHaveBeenCalledTimes(1)
+  })
+
+  it('in the strip: held while the list is behind, never longer than STRIP_HOLD_MAX_MS', () => {
+    // A list that never catches up (its group was picked back meanwhile).
+    function Stuck(): React.JSX.Element {
+      useGroupSwipe(true)
+      return (
+        <nav data-group-swipe-zone="">
+          <div data-group-swipe-stage="">
+            <GroupSwipeStrip variant="nav" groupId={ids[0]} renderNeighbour={(g: Home) => <p>{g.name} rows</p>}>
+              <div data-testid="list">One rows</div>
+            </GroupSwipeStrip>
+          </div>
+        </nav>
+      )
+    }
+    render(<Stuck />)
+    for (let i = 0; i < 20; i++) wheel(5)
+    letGo()
+    wait(glideMs() + GLIDE_LAND_SLACK_MS + FRAME)
+    expect(current()).toBe('Two')
+    expect(strip().style.transform).toBe('translate3d(-240.00px, 0, 0)')
+    wait(STRIP_HOLD_MAX_MS)
+    expect(strip().style.transform).toBe('')
   })
 })
 

@@ -15,12 +15,19 @@
 //     strip (`GroupSwipeStrip`), which moves it by transform in a rAF.
 //     Track (follow the fingers), glide (from, to, ms, curve), rest.
 //   - `useGroupSwipeStore`, for everything else: `swipe` (progress 0–1,
-//     direction, and `settling` while it glides; refreshed every 5% of
-//     travel and whenever it crosses SWIPE_COMMIT_AT, not per event) and
-//     the last `release` (commit or cancel, with a sequence number).
+//     direction, and `settling` while it glides) and the last `release`
+//     (commit or cancel, with a sequence number). `swipe` is refreshed
+//     only when what React draws from it changes: the direction, moving
+//     or not, and past SWIPE_COMMIT_AT or not. Never per event: the fine
+//     travel is `groupSwipeLive`'s, so React does no work while the
+//     fingers move (0.46.18, "laggy" on 0.46.17).
 // A commit glides the strip all the way to the next group first; the
 // group switches when the glide lands, so the bar's accent moves then.
 // There is no reduced-motion variant: the swipe always slides (Rosson).
+//
+// No layout reads per event: whether a wheel event may swipe (it walks up
+// from the target reading scroll sizes) is asked once per target per
+// stream, and not at all once a gesture is being tracked.
 
 import { useEffect } from 'react'
 import { create } from 'zustand'
@@ -77,13 +84,16 @@ function emit(next: SwipeFrame): void {
   for (const fn of watchers) fn(next)
 }
 
+/** A wheel stream ends after this quiet gap (ms): what a target may do is
+ *  asked again after it. */
+const STREAM_GAP_MS = 300
+
 /** The glide's timer waits this long past its duration, so the CSS
  *  transition has painted its last frame before the group switches. */
 export const GLIDE_LAND_SLACK_MS = 16
 
-/** The store's progress steps (it is refreshed once per step, not per event). */
-const PROGRESS_STEPS = 20
-
+/** Refresh the store's swipe when what React draws from it changes: the
+ *  direction, moving or not, past the line or not. */
 function publishTrack(offset: number): void {
   const cur = useGroupSwipeStore.getState().swipe
   const progress = Math.min(1, Math.abs(offset))
@@ -92,7 +102,7 @@ function publishTrack(offset: number): void {
     cur &&
     !cur.settling &&
     cur.direction === direction &&
-    Math.floor(cur.progress * PROGRESS_STEPS) === Math.floor(progress * PROGRESS_STEPS) &&
+    cur.progress > 0 === progress > 0 &&
     cur.progress >= SWIPE_COMMIT_AT === progress >= SWIPE_COMMIT_AT
   ) {
     return
@@ -141,9 +151,9 @@ export function useGroupSwipe(enabled: boolean): void {
       const g = gliding
       gliding = null
       if (!g) return
-      if (g.outcome === 'commit') stepGroup(g.direction)
+      const moved = g.outcome === 'commit' && stepGroup(g.direction)
       useGroupSwipeStore.setState({ swipe: null })
-      emit({ kind: 'rest', landed: g.outcome === 'commit' })
+      emit({ kind: 'rest', landed: moved })
     }
 
     const glide = (d: SwipeDecision): void => {
@@ -178,12 +188,31 @@ export function useGroupSwipe(enabled: boolean): void {
       onStart: land,
     })
 
+    // Whether a target may swipe, per stream of wheel events (the walk
+    // reads scroll sizes: a layout read). Forgotten after a quiet gap.
+    let allowed = new WeakMap<Element, boolean>()
+    let lastWheel = Number.NEGATIVE_INFINITY
+    const mayStart = (target: Element): boolean => {
+      let ok = allowed.get(target)
+      if (ok === undefined) {
+        ok = swipeAllowedFrom(target)
+        allowed.set(target, ok)
+      }
+      return ok
+    }
+
     const onWheel = (e: WheelEvent): void => {
       if (e.ctrlKey || e.defaultPrevented) return
-      const inZone = e.target instanceof Element ? e.target.closest('[data-group-swipe-zone]') : null
-      if (!inZone || !swipeAllowedFrom(e.target)) return
+      const target = e.target instanceof Element ? e.target : null
+      const inZone = target?.closest('[data-group-swipe-zone]') ?? null
+      if (!target || !inZone) return
+      const now = performance.now()
+      if (now - lastWheel > STREAM_GAP_MS) allowed = new WeakMap()
+      lastWheel = now
+      // A gesture under way keeps going whatever slides under the pointer.
+      if (!tracker.tracking && !mayStart(target)) return
       zone = inZone
-      handle(tracker.feed({ deltaX: e.deltaX, deltaY: e.deltaY, deltaMode: e.deltaMode, time: performance.now() }))
+      handle(tracker.feed({ deltaX: e.deltaX, deltaY: e.deltaY, deltaMode: e.deltaMode, time: now }))
       if (settleTimer) clearTimeout(settleTimer)
       settleTimer = setTimeout(() => handle(tracker.settle(performance.now())), SWIPE_TUNING.idleMs + 4)
     }

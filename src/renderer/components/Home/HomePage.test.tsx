@@ -361,8 +361,12 @@ function homeSidebar(): HTMLElement {
   return el
 }
 
+/** A row of the live list (the neighbouring groups beside it, drawn for
+ *  the swipe, are inert copies). */
 function rowOf(label: string): HTMLElement {
-  const el = within(homeSidebar()).getByText(label).closest('[data-agent-row]')
+  const list = homeSidebar().querySelector('[data-home-list]')
+  if (!(list instanceof HTMLElement)) throw new Error('Home list is not mounted')
+  const el = within(list).getByText(label).closest('[data-agent-row]')
   if (!(el instanceof HTMLElement)) throw new Error(`no Agents row shell for ${label}`)
   return el
 }
@@ -1509,6 +1513,24 @@ describe('entering Home selects the top row when nothing is selected', () => {
     act(() => useHomesStore.getState().selectHome(work))
     expect(useProjectsStore.getState().activeProjectId).toBe('pl')
     expect(rowOf('Cortana').getAttribute('aria-current')).toBe('true')
+  })
+
+  it('the next group sits beside the list for the swipe as cheap, inert rows: the workspace’s name and avatar, no status or number', () => {
+    addWorkHome([
+      { address: 'nova::local', workspaceId: 'pn', label: 'nova-label' },
+      { address: 'bee::b.k2.dev', workspaceId: 'pb', label: 'Bee' },
+    ])
+    render(<Shell />)
+    const next = homeSidebar().querySelector('[data-group-swipe-side="next"]')
+    if (!(next instanceof HTMLElement)) throw new Error('no next group beside the list')
+    expect([next.hasAttribute('inert'), next.getAttribute('aria-hidden')]).toEqual([true, 'true'])
+    const rows = Array.from(next.querySelectorAll('[data-home-row-preview]'))
+    expect(rows.map((r) => r.getAttribute('data-home-row-preview'))).toEqual(['nova::local', 'bee::b.k2.dev'])
+    // A workspace on this server paints under its own name, as its live row will.
+    expect(rows.map((r) => r.querySelector('[data-agent-row]')?.textContent)).toEqual(['NNova', 'BBee'])
+    expect(next.querySelectorAll('[data-row-status], [data-shortcut-badge], [data-remote-row-badges], [data-nav-chip]')).toHaveLength(0)
+    // The list itself stays live.
+    expect(rowOf('Cortana').closest('[data-group-swipe-side]')).toBeNull()
   })
 
   it('picking an empty Home selects nothing new', () => {

@@ -23,7 +23,7 @@
 //     the floor up to that). Off, or below the floor, it switches this
 //     window's server (H15) and lands on Home.
 
-import { useCallback, useMemo, useRef } from 'react'
+import { memo, useCallback, useDeferredValue, useMemo, useRef } from 'react'
 import { useHomesStore, selectedHome, type Home, type HomeRow } from '@/stores/homes'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useProjectsStore } from '@/stores/projects'
@@ -53,7 +53,7 @@ import { useRemoteRoomsPreview } from '@/lib/remote-rooms-preview'
 import { homeRooms } from '@/stores/home-rooms'
 import { useHomeRowOnScreen } from './home-row-on-screen'
 import { AgentRowButton, NavRowDivider, SingleProjectItem } from '@/components/Sidebar/Sidebar'
-import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
+import ProjectAvatar, { cachedProjectIcon } from '@/components/Sidebar/ProjectAvatar'
 import ResizeHandle from '@/components/Sidebar/ResizeHandle'
 import { ScrollEdgeFrame } from '@/components/ui/ScrollEdgeFade'
 import { PresenceAvatarCluster } from '@/components/Presence/PresenceWorkspaceAvatars'
@@ -463,10 +463,10 @@ interface HomeRowDrag {
   onDrop(from: number, gap: number): void
 }
 
-/** A group's rows as the nav draws them: pins first under "Pinned", then
- *  "Agents". With `drag`, the live list (reorder, hover read-ahead);
- *  without it, the group riding in beside the list during a swipe. */
-function HomeRowItems({ home, drag }: { home: Home; drag?: HomeRowDrag }): React.JSX.Element {
+/** A group's rows as the nav draws them, live: pins first under "Pinned",
+ *  then "Agents", with reorder and the hover read-ahead. (A neighbouring
+ *  group beside the list during a swipe is `HomeRowShells`.) */
+function HomeRowItems({ home, drag }: { home: Home; drag: HomeRowDrag }): React.JSX.Element {
   const rows = displayRows(home)
   const pinCount = rows.filter(isPinned).length
   // "Pinned" over the pins; "Agents" over the rest once there are pins or
@@ -483,30 +483,27 @@ function HomeRowItems({ home, drag }: { home: Home; drag?: HomeRowDrag }): React
         agentsCaption && idx === pinCount ? <HomeRowCaption key="agents-caption" kind="agents" recentFirst={!!home.recentFirst} /> : null,
         <div
           key={row.address}
-          {...(drag ? { 'data-home-row': row.address } : { 'data-home-row-preview': row.address })}
+          data-home-row={row.address}
           data-nav-row=""
           data-pinned={isPinned(row) ? '' : undefined}
-          data-just-added={drag && justAdded === row.address ? '' : undefined}
-          className={drag && justAdded === row.address ? 'bg-[var(--color-row-hover)]' : undefined}
-          style={drag ? { opacity: drag.reorder.isDragging('home', idx) ? 0.4 : 1 } : undefined}
-          onMouseDown={
-            drag
-              ? (e) =>
-                  drag.reorder.onRowMouseDown(e, {
-                    zone: 'home',
-                    index: idx,
-                    container: () => drag.listRef.current,
-                    rowSelector: '[data-home-row]',
-                    landingGap: (from, gap) => rowDropLanding(selectedHome(useHomesStore.getState()), from, gap),
-                    bounds: () => drag.listRef.current?.closest('[data-home-list-stage]') ?? null,
-                    onDrop: drag.onDrop,
-                  })
-              : undefined
+          data-just-added={justAdded === row.address ? '' : undefined}
+          className={justAdded === row.address ? 'bg-[var(--color-row-hover)]' : undefined}
+          style={{ opacity: drag.reorder.isDragging('home', idx) ? 0.4 : 1 }}
+          onMouseDown={(e) =>
+            drag.reorder.onRowMouseDown(e, {
+              zone: 'home',
+              index: idx,
+              container: () => drag.listRef.current,
+              rowSelector: '[data-home-row]',
+              landingGap: (from, gap) => rowDropLanding(selectedHome(useHomesStore.getState()), from, gap),
+              bounds: () => drag.listRef.current?.closest('[data-home-list-stage]') ?? null,
+              onDrop: drag.onDrop,
+            })
           }
-          onClickCapture={drag?.reorder.onRowClickCapture}
+          onClickCapture={drag.reorder.onRowClickCapture}
           // Read a remote row's Thread ahead (remote Thread load Fix 4).
-          onMouseEnter={drag && !isHomeChatRow(row) ? () => homeRowHoverPrefetch.enter(row.address) : undefined}
-          onMouseLeave={drag ? () => homeRowHoverPrefetch.leave() : undefined}
+          onMouseEnter={!isHomeChatRow(row) ? () => homeRowHoverPrefetch.enter(row.address) : undefined}
+          onMouseLeave={() => homeRowHoverPrefetch.leave()}
         >
           <HomeRowView home={home} row={row} index={shortcutIndexFor(home, idx)} />
           {idx < rows.length - 1 && idx !== pinCount - 1 && <NavRowDivider />}
@@ -539,21 +536,78 @@ function EmptyGroupNote({ name, preview = false }: { name: string; preview?: boo
   )
 }
 
-/** The group a swipe heads to, riding in beside the list: its rows from
- *  the top, drawn as the list will draw them when it lands. */
-function HomeRowsPreview({ home }: { home: Home }): React.JSX.Element {
+const noop = (): void => undefined
+
+/** One row of a neighbouring group, cheap: the live row's shell (avatar,
+ *  name, pin) with no status, badges, presence or effects. An agent on the
+ *  connected server paints with its workspace's name, colour and cached
+ *  picture, as its live row will. */
+function HomeRowShell({ row, project }: { row: HomeRow; project: { name: string; path: string; color: string; iconUrl?: string | null } | null }): React.JSX.Element {
+  const avatarUrl = useHomeRowAvatar(row.address)
+  const rowColor = useHomeRowColor(row.address)
+  const chat = isHomeChatRow(row)
+  const color = project?.color ?? (chat ? 'var(--color-text-muted)' : (rowColor ?? OTHER_SERVER_AVATAR_COLOR))
+  const name = project?.name ?? row.label
+  const iconUrl = project ? (project.iconUrl ?? cachedProjectIcon(project.path)?.dataUrl ?? null) : avatarUrl
   return (
-    <ScrollEdgeFrame className="flex-1 min-h-0" scrollClassName="overflow-hidden py-1" tint={HOME_NAV_EDGE_TINT}>
-      <div>
-        <HomeRowItems home={home} />
-      </div>
-      {displayRows(home).length === 0 && <EmptyGroupNote name={home.name} preview />}
-    </ScrollEdgeFrame>
+    <AgentRowButton
+      isActive={false}
+      color={color}
+      onClick={noop}
+      onContextMenu={noop}
+      avatar={
+        <ProjectAvatar
+          projectPath={project?.path ?? `home:${row.address}`}
+          projectName={name}
+          projectColor={color}
+          iconUrl={iconUrl}
+          size={32}
+          fetchIcon={false}
+        />
+      }
+      name={name}
+      nameMark={isPinned(row) ? <HomeRowPinMark /> : undefined}
+    />
   )
 }
 
+/** A neighbouring group, drawn ahead of a swipe just out of view: its rows
+ *  from the top as cheap shells (`HomeRowShell`), with the list's captions
+ *  and lines, so it lands looking like the list it becomes. */
+const HomeRowShells = memo(function HomeRowShells({ home }: { home: Home }): React.JSX.Element {
+  const connectedKey = useConnectHostStore((s) => activeHomeHostKey(s.activeHost))
+  const connected = useConnectHostStore((s) => s.connectionStatus === 'connected')
+  const projects = useProjectsStore((s) => s.projects)
+  const rows = displayRows(home)
+  const pinCount = rows.filter(isPinned).length
+  const agentsCaption = pinCount > 0 || !!home.recentFirst
+  return (
+    <ScrollEdgeFrame className="flex-1 min-h-0" scrollClassName="overflow-hidden py-1" tint={HOME_NAV_EDGE_TINT}>
+      <div data-home-rows-shell="">
+        {pinCount > 0 && <HomeRowCaption kind="pinned" />}
+        {rows.map((row, idx) => {
+          const onHere = connected && parseHomeAddress(row.address)?.host === connectedKey
+          const ws = onHere && !isHomeChatRow(row) && !isGrokBotAddress(row.address) ? findWorkspaceForRow(projects, row) : null
+          return [
+            agentsCaption && idx === pinCount ? <HomeRowCaption key="agents-caption" kind="agents" recentFirst={!!home.recentFirst} /> : null,
+            <div key={row.address} data-home-row-preview={row.address} data-nav-row="" data-pinned={isPinned(row) ? '' : undefined}>
+              <HomeRowShell row={row} project={ws} />
+              {idx < rows.length - 1 && idx !== pinCount - 1 && <NavRowDivider />}
+            </div>,
+          ]
+        })}
+      </div>
+      {rows.length === 0 && <EmptyGroupNote name={home.name} preview />}
+    </ScrollEdgeFrame>
+  )
+})
+
 export default function HomeSidebar(): React.JSX.Element {
-  const home = useHomesStore(selectedHome)
+  const selected = useHomesStore(selectedHome)
+  // The list draws a switched-to group a moment later, in the background
+  // (React yields to the swipe and to input meanwhile): mounting a group's
+  // live rows never blocks a frame. The header and the bar switch at once.
+  const home = useDeferredValue(selected)
   const listRef = useRef<HTMLDivElement | null>(null)
   const groups = useHomeGroups()
 
@@ -599,7 +653,7 @@ export default function HomeSidebar(): React.JSX.Element {
           tinted with the nav's own fill. The sideways swipe moves it as one
           strip with the group it heads to (groups/GroupSwipeSlide). */}
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden" data-home-list-stage="" data-group-swipe-stage="">
-      <GroupSwipeStrip variant="nav" renderIncoming={(g) => <HomeRowsPreview home={g} />}>
+      <GroupSwipeStrip variant="nav" groupId={home.id} renderNeighbour={(g) => <HomeRowShells home={g} />}>
       <ScrollEdgeFrame
         className="flex-1 min-h-0"
         scrollClassName="overflow-y-auto overflow-x-hidden py-1"

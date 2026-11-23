@@ -156,6 +156,12 @@ export class GroupSwipeTracker {
     private readonly tune: typeof SWIPE_TUNING = SWIPE_TUNING,
   ) {}
 
+  /** A gesture is being tracked (the fingers are down, the axis not yet
+   *  up/down). The page skips its per-event checks then. */
+  get tracking(): boolean {
+    return this.phase === 'track' && this.axis !== 'y'
+  }
+
   /** One wheel event. */
   feed(s: WheelSample): SwipeAnswer {
     const dx = px(s.deltaX, s.deltaMode)

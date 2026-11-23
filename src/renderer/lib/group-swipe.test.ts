@@ -193,6 +193,20 @@ describe('the axis lock', () => {
   })
 })
 
+describe('tracking (what the page skips its per-event checks on)', () => {
+  it('true while a sideways gesture is tracked; not at rest, not up/down, not in the momentum tail', () => {
+    const t = tracker()
+    expect(t.tracking).toBe(false)
+    const { end } = stream(t, [4, 4, 4])
+    expect(t.tracking).toBe(true)
+    t.settle(end + T.idleMs + 1)
+    expect(t.tracking).toBe(false) // the tail
+    const v = tracker()
+    stream(v, [0, 0, 0], 0, 5)
+    expect(v.tracking).toBe(false)
+  })
+})
+
 describe('the rubber band', () => {
   it('past the last group the strip moves a third as far, and always springs back', () => {
     const t = tracker({ next: false })
@@ -315,7 +329,7 @@ describe('useGroupSwipe on the Homes store', () => {
     for (let i = 0; i < 20; i++) wheel(5) // 100 px of 240 = 42%, slowly
     expect(frames.at(-1)).toEqual({ kind: 'track', offset: 100 / D })
     expect(useGroupSwipeStore.getState().swipe).toMatchObject({ direction: 'next' })
-    expect(useGroupSwipeStore.getState().swipe?.progress).toBeGreaterThanOrEqual(0.4)
+    expect(useGroupSwipeStore.getState().swipe?.progress).toBeGreaterThanOrEqual(T.commitAt)
     wait(T.idleMs + 5)
     const glide = frames.at(-1)
     expect(glide).toMatchObject({ kind: 'glide', from: 100 / D, to: 1, outcome: 'commit' })
@@ -411,15 +425,31 @@ describe('useGroupSwipe on the Homes store', () => {
     expect(useGroupSwipeStore.getState().release).toEqual({ outcome: 'cancel', direction: 'prev', seq: 1 })
   })
 
-  it('the store is not written per wheel event (the strip moves outside React)', () => {
+  it('the store is written only when what React draws changes: moving, then past the line (the strip moves outside React)', () => {
     renderHook(() => useGroupSwipe(true))
-    let writes = 0
-    const off = useGroupSwipeStore.subscribe(() => writes++)
-    for (let i = 0; i < 40; i++) wheel(2) // 80 px: one write per 5% step, plus the line
+    const seen: string[] = []
+    const off = useGroupSwipeStore.subscribe((st) => seen.push(`${st.swipe?.direction}:${(st.swipe?.progress ?? 0) >= T.commitAt}`))
+    for (let i = 0; i < 40; i++) wheel(2) // 80 px of 240: moving, then the line at 33%
     off()
     expect(frames.filter((f) => f.kind === 'track')).toHaveLength(38) // all but the 2 before the axis locks
-    expect(writes).toBeLessThanOrEqual(8)
-    expect(writes).toBeGreaterThan(0)
+    expect(seen).toEqual(['next:false', 'next:true'])
+  })
+
+  it('no layout reads per event: where a swipe may start is asked once per stream, never while a gesture is tracked', () => {
+    renderHook(() => useGroupSwipe(true))
+    const reads = vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get')
+    wheel(4)
+    const oneWalk = reads.mock.calls.length
+    expect(oneWalk).toBeGreaterThan(0)
+    for (let i = 0; i < 30; i++) wheel(12) // the swipe, fast
+    for (const d of momentum(12)) wheel(d) // its momentum: the release, then the tail absorbed
+    expect(reads.mock.calls.length).toBe(oneWalk)
+    expect(frames.some((f) => f.kind === 'glide')).toBe(true)
+    // A new stream after a quiet gap asks again.
+    wait(1000)
+    wheel(4)
+    expect(reads.mock.calls.length).toBe(2 * oneWalk)
+    reads.mockRestore()
   })
 
   it('ignored outside the nav, when off Home, on a pinch, when already handled, or inside a sideways scroller', () => {

@@ -9,6 +9,7 @@
 // sideways swipe moves the icons as one strip with the next group's,
 // its glyph at their leading edge.
 
+import { memo, useDeferredValue } from 'react'
 import { useHomesStore, selectedHome, type Home, type HomeRow } from '@/stores/homes'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useProjectsStore } from '@/stores/projects'
@@ -18,7 +19,7 @@ import { isWebClient } from '@/lib/is-web'
 import { activeHomeHostKey, findWorkspaceForRow, parseHomeAddress } from '@/lib/home-address'
 import { useHomeRowAvatar, useHomeRowColor } from '@/lib/home-avatars'
 import { ProjectIcon, RAIL_TOP_ROW_CLASS } from '@/components/Sidebar/IconRail'
-import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
+import ProjectAvatar, { cachedProjectIcon } from '@/components/Sidebar/ProjectAvatar'
 import { DoubleChevron } from '@/components/Sidebar/SidebarCollapseButton'
 import { NavFooterPlus } from '@/components/Sidebar/NavFooterButton'
 import { EllipsisIcon, SearchIcon } from 'lucide-react'
@@ -105,9 +106,14 @@ function RailRow({ home, row }: { home: Home; row: HomeRow }): React.JSX.Element
   return <OtherRowIcon home={home} row={row} isActive={isActive} />
 }
 
+/** The short rule under a group's pinned icons. */
+function RailPinRule(): React.JSX.Element {
+  return <span aria-hidden="true" data-home-rail-pin-rule="" className="mx-auto my-[3px] h-px w-5 flex-shrink-0 bg-[var(--color-divider)]" />
+}
+
 /** A group's rail icons, pins first under a short rule. An empty group
  *  shows only a + (Add to Home), its title saying the group is empty;
- *  `preview` (the group a swipe heads to) draws it, not live. */
+ *  `preview` (a neighbouring group beside the rail) draws it, not live. */
 function RailRows({ home, preview = false }: { home: Home; preview?: boolean }): React.JSX.Element {
   const rows = displayRows(home)
   const pinCount = rows.filter(isPinned).length
@@ -135,22 +141,59 @@ function RailRows({ home, preview = false }: { home: Home; preview?: boolean }):
     <div className="flex w-full flex-col items-center gap-0.5">
       {rows.map((row, i) => [
         <RailRow key={row.address} home={home} row={row} />,
-        pinCount > 0 && i === pinCount - 1 && i < rows.length - 1 ? (
-          <span key="pin-rule" aria-hidden="true" data-home-rail-pin-rule="" className="mx-auto my-[3px] h-px w-5 flex-shrink-0 bg-[var(--color-divider)]" />
-        ) : null,
+        pinCount > 0 && i === pinCount - 1 && i < rows.length - 1 ? <RailPinRule key="pin-rule" /> : null,
       ])}
     </div>
   )
 }
 
-/** The group a swipe heads to, riding in beside the rail's icons. */
-function RailRowsPreview({ home }: { home: Home }): React.JSX.Element {
+/** One icon of a neighbouring group, cheap: the live icon's 32px box and
+ *  avatar, no status, presence or effects. */
+function RailRowShell({ row, project }: { row: HomeRow; project: { name: string; path: string; color: string; iconUrl?: string | null } | null }): React.JSX.Element {
+  const avatarUrl = useHomeRowAvatar(row.address)
+  const rowColor = useHomeRowColor(row.address)
+  const color = project?.color ?? rowColor ?? OTHER_SERVER_AVATAR_COLOR
   return (
-    <div className="flex-1 flex flex-col items-center gap-0.5 overflow-hidden w-full">
-      <RailRows home={home} preview />
-    </div>
+    <span className="relative flex h-8 w-8 flex-shrink-0 items-center justify-center" data-home-rail-row-shell={row.address}>
+      <ProjectAvatar
+        projectPath={project?.path ?? `home:${row.address}`}
+        projectName={project?.name ?? row.label}
+        projectColor={color}
+        iconUrl={project ? (project.iconUrl ?? cachedProjectIcon(project.path)?.dataUrl ?? null) : avatarUrl}
+        size={20}
+        fetchIcon={false}
+      />
+    </span>
   )
 }
+
+/** A neighbouring group beside the rail's icons, drawn ahead of a swipe:
+ *  cheap icons (`RailRowShell`), pins first under the rule. */
+const RailRowShells = memo(function RailRowShells({ home }: { home: Home }): React.JSX.Element {
+  const connectedKey = useConnectHostStore((s) => activeHomeHostKey(s.activeHost))
+  const connected = useConnectHostStore((s) => s.connectionStatus === 'connected')
+  const projects = useProjectsStore((s) => s.projects)
+  const rows = displayRows(home)
+  const pinCount = rows.filter(isPinned).length
+  return (
+    <div className="flex-1 flex flex-col items-center gap-0.5 overflow-hidden w-full">
+      {rows.length === 0 ? (
+        <RailRows home={home} preview />
+      ) : (
+        <div className="flex w-full flex-col items-center gap-0.5">
+          {rows.map((row, i) => {
+            const onHere = connected && parseHomeAddress(row.address)?.host === connectedKey
+            const ws = onHere ? findWorkspaceForRow(projects, row) : null
+            return [
+              <RailRowShell key={row.address} row={row} project={ws} />,
+              pinCount > 0 && i === pinCount - 1 && i < rows.length - 1 ? <RailPinRule key="pin-rule" /> : null,
+            ]
+          })}
+        </div>
+      )}
+    </div>
+  )
+})
 
 /** A rail button (the mock's rail control): 32 × 32, no fill at rest and
  *  muted ink; the row hover and secondary ink on hover; round in Glass. */
@@ -158,7 +201,8 @@ export const RAIL_BUTTON_CLASS =
   'no-drag flex h-8 w-8 flex-shrink-0 items-center justify-center text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-row-hover)] hover:text-[var(--color-text-secondary)] [[data-style=glass]_&]:rounded-[var(--radius-selector)]'
 
 export default function HomeIconRail(): React.JSX.Element {
-  const home = useHomesStore(selectedHome)
+  // As the nav: the icons draw a switched-to group in the background.
+  const home = useDeferredValue(useHomesStore(selectedHome))
   const groups = useHomeGroups()
   return (
     <div
@@ -199,7 +243,7 @@ export default function HomeIconRail(): React.JSX.Element {
       </div>
 
       <div className="relative flex min-h-0 w-full flex-1 flex-col overflow-hidden" data-home-rail-stage="" data-group-swipe-stage="">
-        <GroupSwipeStrip variant="rail" renderIncoming={(g) => <RailRowsPreview home={g} />}>
+        <GroupSwipeStrip variant="rail" groupId={home.id} renderNeighbour={(g) => <RailRowShells home={g} />}>
           <div className="flex-1 flex flex-col items-center gap-0.5 overflow-y-auto overflow-x-hidden w-full" data-group-swipe-scroller="">
             <RailRows home={home} />
           </div>

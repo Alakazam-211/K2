@@ -187,3 +187,115 @@ fn a_key_plain_hire_takes_on_a_folder_only_its_owner_can_write() {
     let out = key_hire(&st.root, &empty, true).expect("an empty folder is new");
     assert!(out.created && registered(&empty));
 }
+
+// ── The hire root's owner and mode ──────────────────────────────────
+
+fn assert_unsafe(e: &HireError, dir: &Path, what: &str) {
+    assert_eq!((e.status, e.code), (403, "hire_root_unsafe"), "{what}: {e}");
+    assert!(e.hint.contains(&s(dir)), "{what}: the hint names {}: {e}", dir.display());
+    assert!(e.hint.contains("can be changed by another user") && e.hint.contains("chmod go-w"), "{what}: {e}");
+}
+
+/// A key's hire in a root a group can write: refused with
+/// `hire_root_unsafe` before anything else, so a folder someone else put
+/// there first is never taken on, and no new folder is made.
+#[test]
+fn a_key_hire_in_a_group_writable_root_is_refused_before_any_folder_is_taken_on() {
+    let st = setup();
+    let theirs = st.root.join("theirs");
+    fs::create_dir(&theirs).expect("mkdir");
+    fs::write(theirs.join("notes.txt"), b"theirs").expect("write");
+    let empty = st.root.join("empty");
+    fs::create_dir(&empty).expect("mkdir");
+    chmod(&st.root, 0o770);
+    for (path, template, what) in [
+        (&theirs, true, "template, a folder with files"),
+        (&theirs, false, "plain, a folder with files"),
+        (&empty, true, "template, an empty folder"),
+        (&empty, false, "plain, an empty folder"),
+    ] {
+        let e = key_hire(&st.root, path, template).expect_err(what);
+        assert_unsafe(&e, &st.root, what);
+        assert!(!registered(path), "{what}: not registered");
+    }
+    let fresh = st.root.join("fresh");
+    let e = key_hire(&st.root, &fresh, false).expect_err("a new folder");
+    assert_unsafe(&e, &st.root, "a new folder");
+    assert!(!fresh.exists(), "no folder made");
+    assert_eq!(entries(&theirs), 1, "their folder is as it was");
+}
+
+/// The stored hire root, put back after a test that may set it.
+struct KeepRoot(Option<String>);
+
+impl KeepRoot {
+    fn new() -> Self {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        Self(super::super::root::stored_root(&conn))
+    }
+}
+
+impl Drop for KeepRoot {
+    fn drop(&mut self) {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        conn.execute("UPDATE hire_settings SET root = ?1 WHERE id = 1", rusqlite::params![self.0]).expect("put the root back");
+    }
+}
+
+fn stored() -> Option<String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    super::super::root::stored_root(&conn)
+}
+
+#[test]
+fn set_hire_root_refuses_a_world_writable_folder() {
+    let st = setup();
+    let _keep = KeepRoot::new();
+    let before = stored();
+    chmod(&st.root, 0o777);
+    let e = super::super::root::set_hire_root(&s(&st.root)).expect_err("world writable");
+    assert_unsafe(&e, &st.root, "world writable");
+    assert_eq!(stored(), before, "the root is unchanged");
+}
+
+#[test]
+fn set_hire_root_refuses_a_group_writable_folder() {
+    let st = setup();
+    let _keep = KeepRoot::new();
+    let before = stored();
+    chmod(&st.root, 0o770);
+    let e = super::super::root::set_hire_root(&s(&st.root)).expect_err("group writable");
+    assert_unsafe(&e, &st.root, "group writable");
+    assert_eq!(stored(), before, "the root is unchanged");
+}
+
+/// The sticky bit stops another user deleting a name, not making the name
+/// the next hire is about to use: `/tmp` is refused too.
+#[test]
+fn set_hire_root_refuses_a_sticky_world_writable_folder() {
+    let st = setup();
+    let _keep = KeepRoot::new();
+    let before = stored();
+    chmod(&st.root, 0o1777);
+    let e = super::super::root::set_hire_root(&s(&st.root)).expect_err("sticky world writable");
+    assert_unsafe(&e, &st.root, "sticky world writable");
+    // A root not made yet under such a folder names that folder.
+    let below = st.root.join("agents");
+    let e = super::super::root::set_hire_root(&s(&below)).expect_err("below a sticky folder");
+    assert_unsafe(&e, &st.root, "below a sticky folder");
+    assert_eq!(stored(), before, "the root is unchanged");
+}
+
+#[test]
+fn set_hire_root_takes_a_folder_only_its_owner_can_write() {
+    let st = setup();
+    let _keep = KeepRoot::new();
+    for mode in [0o700, 0o755] {
+        chmod(&st.root, mode);
+        let set = super::super::root::set_hire_root(&s(&st.root)).unwrap_or_else(|e| panic!("{mode:o}: {e}"));
+        assert_eq!(set, st.root, "{mode:o}");
+    }
+}

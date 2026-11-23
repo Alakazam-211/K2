@@ -3,7 +3,10 @@
 # from `GET /cli/first-run/status` (each step's done state is the server's
 # real state). Per person: the owner token and the logins the owner linked
 # share one list. Exit 0 ok; 2 a usage mistake; 3 refused (an agent, an app
-# pass, a Voice & Chat only login); 4 no such Focus Group; 1 anything else.
+# pass, a Voice & Chat only login, a Member while the list is off); 4 no
+# such Focus Group, or no Kessel for kessel-welcome; 1 anything else.
+# restart and kessel-welcome are Settings -> Getting started
+# (plan-getting-started-settings-v1).
 _setup_usage() {
     cat <<'EOF'
 %include cli/text/help/setup.txt
@@ -15,14 +18,17 @@ cmd_setup() {
     # nothing (`setup skip --help` skipped a step named --help, and a flag
     # that takes a value took the help word).
     if _wants_help "$@"; then _setup_usage; return 0; fi
-    local sub="" as_json=0 row="" kessel_tool="" kessel_name="" kessel_handle="" kessel_about="" have_about=0 kessel_group=""
+    local sub="" as_json=0 row="" kessel_tool="" kessel_name="" kessel_handle="" kessel_about="" have_about=0 kessel_group="" restart_kessel=0
     while [ $# -gt 0 ]; do
         case "$1" in
             -h|--help|help) _setup_usage; return 0 ;;
             --json) as_json=1; shift ;;
-            hide|show|kessel|chief-of-staff|dismiss-offer)
+            hide|show|kessel|chief-of-staff|dismiss-offer|restart|kessel-welcome)
                 [ -z "$sub" ] || { _setup_usage >&2; exit 2; }
                 sub="$1"; shift ;;
+            --kessel)
+                [ "$sub" = "restart" ] || { echo "k2 setup: --kessel goes with k2 setup restart" >&2; exit 2; }
+                restart_kessel=1; shift ;;
             agent-reports)
                 # The agent opt-in (0.46.17): send-feedback's settings read
                 # and write, in bash and curl like the rest of k2 setup.
@@ -79,7 +85,8 @@ cmd_setup() {
             if [ -n "$kessel_group" ]; then _setup_jstr "$kessel_group"; body="${body}${sep}\"focusGroup\": ${_SETUP_J}"; sep=", "; fi
             body="${body}}" ;;
         skip) _setup_jstr "$row"; body="{\"row\": ${_SETUP_J}}" ;;
-        hide|show|dismiss-offer) body='{}' ;;
+        restart) if [ "$restart_kessel" = 1 ]; then body='{"kessel": true}'; else body='{}'; fi ;;
+        hide|show|dismiss-offer|kessel-welcome) body='{}' ;;
     esac
     case "$sub" in
         "") raw="$(_setup_send GET /cli/first-run/status "$as_json")" ;;
@@ -88,6 +95,8 @@ cmd_setup() {
         kessel) raw="$(_setup_send POST /cli/first-run/kessel "$as_json" "$body")" ;;
         chief-of-staff) raw="$(_setup_send POST /cli/first-run/chief-of-staff "$as_json" "$body")" ;;
         skip) raw="$(_setup_send POST /cli/first-run/skip "$as_json" "$body")" ;;
+        restart) raw="$(_setup_send POST /cli/first-run/restart "$as_json" "$body")" ;;
+        kessel-welcome) raw="$(_setup_send POST /cli/first-run/kessel/welcome "$as_json" "$body")" ;;
     esac
     _setup_render "$sub" "$as_json" "$raw"
 }
@@ -221,7 +230,8 @@ _setup_send() {
 # Exit 0 ok; 2 a usage mistake (usage, unknown_row, tool_not_signed_in);
 # 3 refused (person_only, session_only, forbidden, role_required, a token
 # or passport refusal); 4 no such Focus Group (unknown_focus_group,
-# ambiguous_focus_group); 1 anything else, as k2 setup always has.
+# ambiguous_focus_group) or no Kessel (no_kessel); 1 anything else, as
+# k2 setup always has.
 _setup_render() {
     local sub="$1" as_json="$2" raw="$3" code body err_code="" hint="" low
     code="${raw##*$'\n'}"
@@ -276,7 +286,7 @@ _setup_render() {
     fi
     case "$err_code" in
         usage|unknown_row|tool_not_signed_in) exit 2 ;;
-        unknown_focus_group|ambiguous_focus_group) exit 4 ;;
+        unknown_focus_group|ambiguous_focus_group|no_kessel) exit 4 ;;
     esac
     low="$(printf '%s' "$err_code $hint" | tr '[:upper:]' '[:lower:]')"
     case "$low" in
@@ -310,7 +320,7 @@ if err is not None or not isinstance(d, dict) or ("rows" not in d and not (made 
     low = (code + " " + hint).lower()
     if code in ("usage", "unknown_row", "tool_not_signed_in"):
         sys.exit(2)
-    if code in ("unknown_focus_group", "ambiguous_focus_group"):
+    if code in ("unknown_focus_group", "ambiguous_focus_group", "no_kessel"):
         sys.exit(4)
     if any(w in low for w in ("person_only", "session_only", "forbidden", "role_required", "token", "passport")):
         sys.exit(3)

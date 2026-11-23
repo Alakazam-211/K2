@@ -6818,7 +6818,7 @@ exit: 0
     },
     {
       "name": "setup",
-      "usage": "k2 setup [--json] | k2 setup hide|show|dismiss-offer | k2 setup skip <step> | k2 setup kessel [--tool claude|codex|grok] [--name N] [--handle H] [--focus-group G] | k2 setup chief-of-staff --name N --about \"what they do\" --tool claude|codex|grok [--focus-group G]",
+      "usage": "k2 setup [--json] | k2 setup hide|show|dismiss-offer | k2 setup skip <step> | k2 setup restart [--kessel] | k2 setup kessel-welcome | k2 setup kessel [--tool claude|codex|grok] [--name N] [--handle H] [--focus-group G] | k2 setup chief-of-staff --name N --about \"what they do\" --tool claude|codex|grok [--focus-group G]",
       "description": "Your setup list on this server: [x] done, [ ] to do, [-] skipped. Each step is done by doing it (the list reads what is set up, never a tick). The owner and the logins the owner linked share one list; every other login has its own. Agents have no setup list (exit 3), except Kessel running k2 setup chief-of-staff.",
       "args": [],
       "flags": [
@@ -6844,6 +6844,23 @@ exit: 0
       "usage": "k2 setup skip <step> [--json]",
       "description": "Skip one step: dev_tools, llm_sign_in, first_agent (or chief_of_staff), tunnel, phone, own_sign_in.",
       "args": [{"name": "step", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON."}]
+    },
+    {
+      "name": "setup restart",
+      "usage": "k2 setup restart [--kessel] [--json]",
+      "description": "Start your setup again: the list back, skipped steps included, and the Meet Kessel offer again. The owner or an admin also turns the setup list on for this server (and Kessel at first run with --kessel), each switch in the Access Audit with who. A Member restarts their own list while it is on; while it is off, the owner is asked on a ticket and the answer is role_required (exit 3).",
+      "args": [],
+      "flags": [
+        {"name": "--kessel", "arg": null, "description": "Also turn on Kessel at first run (kesselFirstRun). The owner or an admin."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },
+    {
+      "name": "setup kessel-welcome",
+      "usage": "k2 setup kessel-welcome [--json]",
+      "description": "Kessel greets you again on its Thread and asks its first questions. The hello is sent again from Kessel's template lock only: Kessel is never made or hired again, and its notes, chats and permissions stay. No Kessel on this server: no_kessel (exit 4). Owner, Owner or Admin login.",
+      "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON."}]
     },
     {

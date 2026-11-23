@@ -2,6 +2,18 @@ k2 setup [--json]       your setup list on this server: [x] done, [ ] to do, [-]
 k2 setup hide           hide the list in the app (k2 setup still prints it)
 k2 setup show           bring the list back, skipped steps included, even after it finished
 k2 setup skip <step>    skip one step: dev_tools, llm_sign_in, first_agent (or chief_of_staff), tunnel, phone, own_sign_in
+k2 setup restart [--kessel]
+                        start your setup again: the list back, skipped steps
+                        included, and the Meet Kessel offer again. The owner
+                        or an admin also turns the setup list on for this
+                        server, and Kessel at first run with --kessel. A
+                        Member restarts their own list while it is on; while
+                        it is off, the owner is asked on a ticket (exit 3).
+k2 setup kessel-welcome Kessel greets you again on its Thread and asks its
+                        first questions. It is sent again from Kessel's
+                        template lock only: Kessel is never made or hired
+                        again, and its notes, chats and permissions stay.
+                        No Kessel on this server: exit 4. Owner or Admin.
 
 Kessel, K2's own agent (when the owner has turned on kesselFirstRun):
 k2 setup kessel [--tool claude|codex|grok] [--name N] [--handle H] [--focus-group G]

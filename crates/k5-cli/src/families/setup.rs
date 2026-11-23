@@ -48,7 +48,8 @@
 //! theirs.
 //!
 //! The shell CLI answers these forms itself ([`run`] returns `None`): a
-//! command line with `-h` or `--help` anywhere (since 0.46.17 the shell
+//! command line with one of [`SHELL_VERBS`] (`restart`, `kessel-welcome`)
+//! anywhere; a command line with `-h` or `--help` anywhere (since 0.46.17 the shell
 //! prints the setup help for it and sends nothing: `setup skip --help`
 //! skipped a step named `--help`), or where the loop reads `help` as
 //! help (the front sends a help line on, [`crate::front`]); a word that
@@ -111,6 +112,10 @@ pub const READ_NATIVE: bool = true;
 /// The writes (`hide`, `show`, `skip`, `kessel`, `chief-of-staff`,
 /// `dismiss-offer`) are the binary's. Off, the shell answers them.
 pub const WRITE_NATIVE: bool = true;
+
+/// Words that send a command line to the shell ([`run`] returns `None`):
+/// verbs the shell knows and this parser doesn't yet.
+pub const SHELL_VERBS: &[&str] = &["restart", "kessel-welcome", "--kessel"];
 
 /// The tool `setup chief-of-staff` rides (`_cli_tool_id_for_verb`).
 pub const TOOL: &str = "agent-harness";
@@ -388,6 +393,11 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .map(|a| a.to_str())
         .collect::<Option<_>>()?;
     if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
+        return None;
+    }
+    // Settings → Getting started's verbs (`restart [--kessel]`,
+    // `kessel-welcome`) are the shell's until the binary learns them.
+    if words.iter().any(|w| SHELL_VERBS.contains(w)) {
         return None;
     }
     let read = parse(&words);

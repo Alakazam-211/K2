@@ -22,7 +22,7 @@
 //!    `_postal_print` ([`print`]), which reads the answer from stdin. The
 //!    routes the cell socket serves go through `cli_send` (the socket
 //!    first with a passport and a live socket, then TCP by its rules);
-//!    `code`, `settings`, `disable`, `admins-may-accept` and `owner-link`
+//!    `code`, `settings`, `link`, `disable`, `admins-may-accept` and `owner-link`
 //!    go over TCP. No answer, or a POST the socket may have run: the line,
 //!    then death by SIGPIPE ([`super::end_in_pipe`]). The command ends
 //!    with the reader's code when it is not 0, else the call's (`send`:
@@ -112,10 +112,16 @@ People (an Owner or Admin) do the same directly, or in the workspace's Postal ta
                                       side's screen (this server checks it, then
                                       signs; a code that doesn't match fails the
                                       request on both sides)
+  {cli} postal link                     the Owner: Link now. This server gets its
+                                      Postal approval token from the Postal network
+                                      with its {product} Connect account, so people here
+                                      can accept friend requests (turning Postal on
+                                      does it too; Settings \u{2192} General \u{2192} Postal has
+                                      the same Link now)
   {cli} postal owner-link [--token-stdin]
-                                      the Owner, once: link Postal approvals for
-                                      this server (opens a page to approve; or hand
-                                      over a {token} token approved elsewhere)
+                                      the Owner, by hand, only when {cli} postal link
+                                      keeps failing (or hand over a {token} token
+                                      approved elsewhere)
   {cli} postal enable | disable         the server's switch (the Owner)
   {cli} postal admins-may-accept on|off let Admins answer incoming requests too (the
                                       Owner); claim and invite are already an
@@ -382,6 +388,7 @@ const SESSION_VERBS: &[&str] = &[
     "reject",
     "code",
     "route",
+    "link",
     "owner-link",
     "send",
     "remove",
@@ -497,6 +504,14 @@ fn run_verb(args: &[OsString], sub: &str, rest: &[&str], mut settings: Settings)
             };
             (Call2::Post("/cli/postal/route".into(), b), "route")
         }
+        // Link now: the server gets its approval token itself (the Owner).
+        "link" => (
+            Call2::Post(
+                "/cli/postal/settings".into(),
+                body(&[("link", "__true")]),
+            ),
+            "settings",
+        ),
         "owner-link" => {
             let b = if w.token_stdin {
                 // `IFS= read -r tok || true`: one line, its newline dropped.
@@ -827,6 +842,67 @@ fn among(v: &Value, list: &[&str]) -> bool {
     list.iter().any(|w| *v == super::s(w))
 }
 
+/// The settings view's approvals line: the approval token's state when
+/// the answer has one (`decideToken`, after Link now), else whether
+/// approvals are linked while Postal is on.
+fn approvals(d: &Value) -> Result<Option<String>, String> {
+    let dt = match at(d, "decideToken")? {
+        v @ Value::Object(_) => v,
+        _ => Value::Object(Vec::new()),
+    };
+    let state = at(&dt, "state")?;
+    if state == super::s("failed") {
+        let hint = at(&dt, "hint")?;
+        let h = if t(&hint) {
+            hint
+        } else {
+            super::s("this server could not get its Postal approval token")
+        };
+        // `(h[0].upper() + h[1:]).rstrip(".")`.
+        let s = match &h {
+            Value::Str(_) => {
+                let s = st(&h);
+                let mut c = s.chars();
+                let first = c.next().map(|f| f.to_uppercase().to_string());
+                format!("{}{}", first.unwrap_or_default(), c.as_str())
+            }
+            Value::Array(items) => {
+                return Err(format!(
+                    "AttributeError: '{}' object has no attribute 'upper'",
+                    py::type_name(&items[0])
+                ))
+            }
+            Value::Object(_) => return Err("KeyError: 0".into()),
+            other => {
+                return Err(format!(
+                    "TypeError: '{}' object is not subscriptable",
+                    py::type_name(other)
+                ))
+            }
+        };
+        return Ok(Some(format!(
+            "Approvals: not linked: {}.",
+            s.trim_end_matches('.')
+        )));
+    }
+    if among(&state, &["minted", "replaced", "kept"]) {
+        return Ok(Some(
+            "Approvals: linked; people here can accept friend requests".into(),
+        ));
+    }
+    if t(&at(d, "enabled")?) {
+        match at(d, "approvalsLinked")? {
+            Value::Bool(true) => return Ok(Some("Approvals: linked".into())),
+            Value::Bool(false) => return Ok(Some(NOT_LINKED.replace("{cli}", CLI_NAME))),
+            _ => {}
+        }
+    }
+    Ok(None)
+}
+
+/// Approvals not linked while Postal is on (settings, status and claim).
+const NOT_LINKED: &str = "Approvals: not linked yet, so friend requests cannot be accepted here: the owner runs {cli} postal link (Link now in Settings \u{2192} General \u{2192} Postal)";
+
 /// `_postal_print <view> <json>` on what it read from stdin; `in_session`:
 /// `HOOK_SOCK` is set (its `PS`).
 pub fn print(
@@ -862,6 +938,8 @@ const PERM: &[&str] = &[
     "postal_route_louder",
     "postal_owner_link_missing",
     "postal_rekey_pending",
+    "postal_cant_accept",
+    "postal_link_lost",
 ];
 
 fn print_lines(
@@ -980,6 +1058,9 @@ fn print_lines(
                 "no (the Owner only)"
             }
         ));
+        if let Some(line) = approvals(&d)? {
+            o.line(&line);
+        }
         return Ok(Exit::Ok);
     }
     let h = at(&d, "handle")?;
@@ -1117,9 +1198,7 @@ fn print_lines(
             ));
         }
         if at(&d, "ownerLinked")? == Value::Bool(false) {
-            o.line(&format!(
-                "Approvals: not linked yet; the owner runs {CLI_NAME} postal owner-link once"
-            ));
+            o.line(&NOT_LINKED.replace("{cli}", CLI_NAME));
         }
         let plane = at(&d, "plane")?;
         let note = if t(&plane) {
@@ -1304,6 +1383,45 @@ mod tests {
         assert!(parse(&["-x"]).unwrap_err().contains("unknown flag '-x'"));
         let w = parse(&["a", "--json", "b", "--friend", "f"]).unwrap();
         assert_eq!((w.args.len(), w.json, w.friend.as_str()), (2, true, "f"));
+    }
+
+    #[test]
+    fn the_approvals_line() {
+        let f = |s: &str| approvals(&json::parse(s).unwrap());
+        assert_eq!(
+            f(r#"{"decideToken":{"state":"failed","hint":"no sign-in.."}}"#),
+            Ok(Some("Approvals: not linked: No sign-in.".into()))
+        );
+        assert_eq!(
+            f(r#"{"decideToken":{"state":"failed"}}"#),
+            Ok(Some(
+                "Approvals: not linked: This server could not get its Postal approval token."
+                    .into()
+            ))
+        );
+        assert_eq!(
+            f(r#"{"decideToken":{"state":"failed","hint":5}}"#),
+            Err("TypeError: 'int' object is not subscriptable".into())
+        );
+        for state in ["minted", "replaced", "kept"] {
+            assert_eq!(
+                f(&format!(r#"{{"decideToken":{{"state":"{state}"}}}}"#)),
+                Ok(Some(
+                    "Approvals: linked; people here can accept friend requests".into()
+                ))
+            );
+        }
+        assert_eq!(
+            f(r#"{"enabled":true,"approvalsLinked":true,"decideToken":[1]}"#),
+            Ok(Some("Approvals: linked".into()))
+        );
+        assert_eq!(
+            f(r#"{"enabled":1,"approvalsLinked":false}"#),
+            Ok(Some(NOT_LINKED.replace("{cli}", CLI_NAME)))
+        );
+        // `is True` / `is False`: only the booleans.
+        assert_eq!(f(r#"{"enabled":true,"approvalsLinked":1}"#), Ok(None));
+        assert_eq!(f(r#"{"enabled":false,"approvalsLinked":false}"#), Ok(None));
     }
 
     #[test]

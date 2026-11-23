@@ -1411,7 +1411,9 @@ fn shell_word(s: &str) -> String {
 /// The exact command an agent runs to ask (PRD §3.1), with this build's
 /// command name.
 pub(crate) fn ask_command(action: &str, params: &Map<String, Value>) -> String {
-    ask_command_named(CLI_NAME, action, params)
+    // The command agents type now: `k5` while the owner's k5 switch is on
+    // and its links run k5, else this build's own (`k2_core::agent_cli`).
+    ask_command_named(k2_core::agent_cli::name(), action, params)
 }
 
 /// [`ask_command`] with the command's name as a value.
@@ -1572,6 +1574,44 @@ pub(crate) fn teach_tcp<'a>(status: &str, body: &'a str) -> Cow<'a, str> {
     match taught {
         Some(s) => Cow::Owned(s),
         None => Cow::Borrowed(body),
+    }
+}
+
+/// A refusal (4xx) to an agent names the command agents type now
+/// (`k2_core::agent_cli`): its hints say `k5 …` while the owner's k5
+/// switch is on and its links run k5. The same bytes otherwise, and for
+/// everyone but a valid agent passport. TCP side: after [`teach_tcp`].
+pub(crate) fn name_tcp<'a>(status: &str, body: &'a str) -> Cow<'a, str> {
+    if !(400..500).contains(&status_code(status)) {
+        return Cow::Borrowed(body);
+    }
+    let cli = k2_core::agent_cli::name();
+    if cli == CLI_NAME {
+        return Cow::Borrowed(body);
+    }
+    let agent = crate::routes::pass_gate::with_request(|r| {
+        crate::routes::http::extract_token(&r.query)
+            .filter(|t| !t.is_empty())
+            .and_then(crate::session_token::validate_hook)
+            .is_some()
+    })
+    .unwrap_or(false);
+    if agent {
+        k2_core::agent_cli::teach_as(body, cli)
+    } else {
+        Cow::Borrowed(body)
+    }
+}
+
+/// [`name_tcp`] for the cell socket, where every caller is that cell's
+/// agent.
+pub(crate) fn name_cell(status: &str, body: String) -> String {
+    if !(400..500).contains(&status_code(status)) {
+        return body;
+    }
+    match k2_core::agent_cli::teach(&body) {
+        Cow::Borrowed(_) => body,
+        Cow::Owned(named) => named,
     }
 }
 
@@ -3197,5 +3237,37 @@ mod tests {
         let found: Vec<String> =
             texts.iter().filter_map(|(at, text)| other_command(text, &others).map(|name| format!("{at} ({name}): {text}"))).collect();
         assert!(found.is_empty(), "text that names another command than this build's:\n{}", found.join("\n"));
+    }
+
+    /// The Ask line and a refusal's hints to an agent name the command
+    /// agents type now (`k2_core::agent_cli`): k5 while the owner's k5
+    /// switch is on and its links run k5; this build's own command
+    /// otherwise, byte for byte. A partner build never says k5.
+    #[test]
+    fn the_ask_line_and_refusal_hints_follow_the_k5_switch() {
+        crate::test_support::with_temp_home(|| {
+            let _runs = k2_core::agent_cli::K5RunsForTest::set(true);
+            let want = k2_core::agent_cli::name_for(k2_core::brand::BRAND_ID, CLI_NAME, || true, || true);
+            let refusal = format!(r#"{{"error":{{"code":"x","hint":"run {CLI_NAME} app list"}}}}"#);
+
+            // Off: today's bytes.
+            let ask = format!("permission request compute.use --why \"{WHY_PLACEHOLDER}\"");
+            assert_eq!(ask_command("compute.use", &Map::new()), format!("{CLI_NAME} {ask}"));
+            assert_eq!(name_cell("403 Forbidden", refusal.clone()), refusal);
+
+            k2_core::app_settings::update(json!({ "k5CliBeta": true })).expect("switch on");
+            assert_eq!(ask_command("compute.use", &Map::new()), format!("{want} {ask}"));
+            let named = refusal.replace(&format!("{CLI_NAME} app"), &format!("{want} app"));
+            assert_eq!(name_cell("403 Forbidden", refusal.clone()), named);
+            assert_eq!(name_cell("409 Conflict", refusal.clone()), named);
+            assert_eq!(name_cell("200 OK", refusal.clone()), refusal, "only a refusal");
+            // TCP: no agent passport on this request, so a person's text stays.
+            assert!(matches!(name_tcp("403 Forbidden", &refusal), Cow::Borrowed(_)));
+
+            // The links run the script after all: today's bytes again.
+            let _script = k2_core::agent_cli::K5RunsForTest::set(false);
+            assert_eq!(ask_command("compute.use", &Map::new()), format!("{CLI_NAME} {ask}"));
+            assert_eq!(name_cell("403 Forbidden", refusal.clone()), refusal);
+        });
     }
 }

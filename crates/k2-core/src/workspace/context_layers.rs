@@ -1007,16 +1007,18 @@ pub fn is_live_generated_layer(layer: &ContextLayer) -> bool {
     live_kind_for_layer(layer).is_some()
 }
 
-/// Markdown body for a live layer (no leading H1 — compose adds `## label`).
+/// Markdown body for a live layer (no leading H1 — compose adds `## label`),
+/// naming the command agents type now (`crate::agent_cli`).
 pub fn render_live_layer_body(project_path: &str, layer: &ContextLayer) -> Option<String> {
-    match live_kind_for_layer(layer)? {
-        LiveKind::Connections => Some(render_connections_roster_body(project_path)),
-        LiveKind::Heartbeats => Some(render_heartbeats_roster_body(project_path)),
-        LiveKind::Skills => Some(render_skills_roster_body(project_path)),
-        LiveKind::Users => Some(render_users_roster_body(project_path)),
-        LiveKind::Skin => Some(render_skin_roster_body(project_path)),
-        LiveKind::AppsMaintained => Some(render_apps_maintained_body(project_path)),
-    }
+    let body = match live_kind_for_layer(layer)? {
+        LiveKind::Connections => render_connections_roster_body(project_path),
+        LiveKind::Heartbeats => render_heartbeats_roster_body(project_path),
+        LiveKind::Skills => render_skills_roster_body(project_path),
+        LiveKind::Users => render_users_roster_body(project_path),
+        LiveKind::Skin => render_skin_roster_body(project_path),
+        LiveKind::AppsMaintained => render_apps_maintained_body(project_path),
+    };
+    Some(crate::agent_cli::teach(&body).into_owned())
 }
 
 /// "This workspace" (prd-workspace-sessions-cli-v1 WS-D2): a pointer to
@@ -1454,7 +1456,9 @@ fn render_live_file(project_path: &str, kind: LiveKind) -> String {
         LiveKind::Skin => render_skin_roster_body(project_path),
         LiveKind::AppsMaintained => render_apps_maintained_body(project_path),
     };
-    format!("# {title}\n\n{body}")
+    // The command agents type now (`crate::agent_cli`): today's bytes
+    // unless the owner's k5 switch is on and its links run k5.
+    crate::agent_cli::teach(&format!("# {title}\n\n{body}")).into_owned()
 }
 
 /// Write/overwrite one live roster file from current workspace state.
@@ -2245,21 +2249,18 @@ pub fn pinned_info(project_path: &str) -> Vec<PinnedLayer> {
         preview: None,
     });
 
-    // Tooling footer (generated k2-cli pointer)
+    // Tooling footer (generated k2-cli pointer), as compose writes it now.
+    let tooling = crate::workspace::skill_regen::agents_md_tooling_section_as(crate::agent_cli::name());
     out.push(PinnedLayer {
         id: "pinned:tooling".into(),
         path: String::new(),
         label: "Tooling (k2-cli pointer)".into(),
         exists: true,
-        bytes: crate::workspace::skill_regen::AGENTS_MD_TOOLING_SECTION.len() as u64,
+        bytes: tooling.len() as u64,
         generated: true,
         enabled: inc_tooling,
         editable: false,
-        preview: Some(
-            crate::workspace::skill_regen::AGENTS_MD_TOOLING_SECTION
-                .trim_end()
-                .to_string(),
-        ),
+        preview: Some(tooling.trim_end().to_string()),
     });
 
     out

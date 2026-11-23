@@ -245,8 +245,11 @@ pub fn ensure_chat_skill(dot: &Path, g: ChatGates) -> std::io::Result<()> {
         })
         .unwrap_or_else(|| "\n".to_string());
     let has_notes = !tail.trim().is_empty();
+    // The command agents type now (`crate::agent_cli`): the same bytes
+    // unless the owner's k5 switch is on and its links run k5.
+    let cli = crate::agent_cli::name();
     let body = match skill_body(g) {
-        Some(b) => b,
+        Some(b) => crate::agent_cli::teach_as(&b, cli).into_owned(),
         None if existing.is_none() => return Ok(()),
         None if !has_notes => return std::fs::remove_file(&path),
         None => "# Chat and voice\n\nChat isn't available to this workspace right now.\n".to_string(),
@@ -255,7 +258,13 @@ pub fn ensure_chat_skill(dot: &Path, g: ChatGates) -> std::io::Result<()> {
         "k2-chat",
         SKILL_VERSION_CHAT,
         &body,
-        Some(concat!("name: k2-chat\ndescription: Chat and voice for agents — ", cli_name!(), " chat (Spaces) and ", cli_name!(), " hostchat (the server)")),
+        Some(
+            crate::agent_cli::teach_as(
+                concat!("name: k2-chat\ndescription: Chat and voice for agents — ", cli_name!(), " chat (Spaces) and ", cli_name!(), " hostchat (the server)"),
+                cli,
+            )
+            .as_ref(),
+        ),
     );
     let head = wrapped.split_once(YOURS).map(|(h, _)| h).unwrap_or(&wrapped);
     let full = format!("{head}{YOURS}{tail}");

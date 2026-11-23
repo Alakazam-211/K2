@@ -682,6 +682,7 @@
 1 value crates/k2-client/src/account_session.rs debt: command (1 line); B9
 1 value crates/k2-client/src/cli_install.rs debt: command (1 line); B10
 1 value crates/k2-client/src/win_cli.rs keeper: inert; the stand-in script a Windows-only test writes (win_cli.rs tests), read by nothing else
+1 value crates/k2-core/src/agent_cli.rs keeper: wire; the default brand's id, as k2-brand's build writes BRAND_ID from brand/k2/brand.toml: the one build the k5 Beta renames
 1 value crates/k2-core/src/cli_folder_trust.rs keeper: outside; Cursor's marker file holds trustMethod; our revoke matches it
 1 value crates/k2-core/src/cli_folder_trust/gate.rs keeper: wire; a trust finding's tool, in the card's and the CLI's JSON
 1 value crates/k2-core/src/compute/trim.rs keeper: stored; compute_admin_settings.updated_by

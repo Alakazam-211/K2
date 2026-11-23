@@ -15,6 +15,11 @@
 //! write it runs the same heal the daemon runs at boot ([`relink`]). A
 //! settings reset puts it back off and runs the heal too.
 //!
+//! A flip also changes the command agents are taught
+//! (`k2_core::agent_cli`): every workspace's AGENTS.md and K2's own skills
+//! are rewritten off the request's thread ([`reteach`]), and a reset that
+//! turns it off does the same.
+//!
 //! Owner only: the owner token or an Owner login. The route table's floor
 //! is Owner, so an Admin or Member login is refused there; the handler
 //! refuses whatever else reaches it (an agent passport, an App pass, a dead
@@ -76,11 +81,18 @@ pub(crate) async fn serve_tcp(stream: &mut tokio::net::TcpStream, buf: &mut [u8]
 }
 
 pub fn handle(by: Option<&str>, is_post: bool, body: &[u8]) -> CliResponse {
-    handle_with(by, is_post, body, relink)
+    handle_with(by, is_post, body, relink, reteach)
 }
 
-/// [`handle`] with the heal passed in, so tests never touch a real bin folder.
-pub(crate) fn handle_with(by: Option<&str>, is_post: bool, body: &[u8], relink: impl FnOnce() -> Value) -> CliResponse {
+/// [`handle`] with the heal and the reteach passed in, so tests never
+/// touch a real bin folder or another test's workspaces.
+pub(crate) fn handle_with(
+    by: Option<&str>,
+    is_post: bool,
+    body: &[u8],
+    relink: impl FnOnce() -> Value,
+    reteach: impl FnOnce(),
+) -> CliResponse {
     let Some(by) = by else {
         return refuse(
             "403 Forbidden",
@@ -114,7 +126,27 @@ pub(crate) fn handle_with(by: Option<&str>, is_post: bool, body: &[u8], relink: 
     }
     let mut answer = state();
     answer["links"] = relink();
+    if was != on {
+        // The links changed under the kept "runs k5" answer: drop it, then
+        // teach agents the command they type now.
+        k2_core::agent_cli::forget();
+        reteach();
+    }
     CliResponse::ok_json(answer.to_string())
+}
+
+/// Rewrite every workspace's AGENTS.md and K2's own skills for the command
+/// agents type now (`k2_core::workspace::skill_regen::sync_cli_name_teaching_everywhere`).
+/// Off the request's thread: it recomposes every workspace. Never in a
+/// test build, where it would rewrite other tests' workspaces.
+pub fn reteach() {
+    if cfg!(test) {
+        return;
+    }
+    let _ = std::thread::Builder::new().name("k5-cli-reteach".into()).spawn(|| {
+        let n = k2_core::workspace::skill_regen::sync_cli_name_teaching_everywhere();
+        k2_core::log_debug!("[k5-cli] agents' command is {} in {n} workspace(s)", k2_core::agent_cli::name());
+    });
 }
 
 /// Re-point the commands now, as the boot does: the Linux stage
@@ -170,6 +202,9 @@ pub fn after_reset(was_on: bool) {
     }
     let _ = std::thread::Builder::new().name("k5-cli-relink".into()).spawn(|| {
         let _ = relink();
+        k2_core::agent_cli::forget();
+        let n = k2_core::workspace::skill_regen::sync_cli_name_teaching_everywhere();
+        k2_core::log_debug!("[k5-cli] agents' command is {} in {n} workspace(s)", k2_core::agent_cli::name());
     });
 }
 
@@ -196,11 +231,28 @@ mod tests {
     /// The handler as the dispatcher calls it: the caller resolved by
     /// `owner_role_identity`, a heal that only counts its runs.
     fn call(query: &str, is_post: bool, payload: &str, heals: &std::cell::Cell<u32>) -> CliResponse {
+        call_counting(query, is_post, payload, heals, &std::cell::Cell::new(0))
+    }
+
+    /// [`call`], also counting the reteach runs.
+    fn call_counting(
+        query: &str,
+        is_post: bool,
+        payload: &str,
+        heals: &std::cell::Cell<u32>,
+        reteaches: &std::cell::Cell<u32>,
+    ) -> CliResponse {
         let by = crate::routes::http::owner_role_identity(query, OWNER);
-        handle_with(by.as_deref(), is_post, payload.as_bytes(), || {
-            heals.set(heals.get() + 1);
-            json!(["healed"])
-        })
+        handle_with(
+            by.as_deref(),
+            is_post,
+            payload.as_bytes(),
+            || {
+                heals.set(heals.get() + 1);
+                json!(["healed"])
+            },
+            || reteaches.set(reteaches.get() + 1),
+        )
     }
 
     #[test]
@@ -296,6 +348,27 @@ mod tests {
             assert_eq!(flips.len(), 2, "{flips:?}");
             assert_eq!((flips[0]["outcome"].as_str(), flips[0]["user"].as_str()), (Some("on"), Some("owner-token")));
             assert_eq!(flips[1]["outcome"], "off");
+        });
+    }
+
+    /// A flip teaches agents the command they type now, once per flip; a
+    /// write of the value it already has, a read or a refused caller don't.
+    #[test]
+    fn a_flip_reteaches_agents_and_nothing_else_does() {
+        crate::test_support::with_temp_home(|| {
+            let heals = std::cell::Cell::new(0);
+            let reteaches = std::cell::Cell::new(0);
+            let q = format!("token={OWNER}");
+            call_counting("token=not-a-session", true, r#"{"on": true}"#, &heals, &reteaches);
+            call_counting(&q, false, "", &heals, &reteaches);
+            assert_eq!(reteaches.get(), 0, "a refusal and a read never reteach");
+            call_counting(&q, true, r#"{"on": true}"#, &heals, &reteaches);
+            assert_eq!(reteaches.get(), 1, "off to on");
+            call_counting(&q, true, r#"{"on": true}"#, &heals, &reteaches);
+            assert_eq!(reteaches.get(), 1, "on to on is not a flip");
+            call_counting(&q, true, r#"{"on": false}"#, &heals, &reteaches);
+            assert_eq!(reteaches.get(), 2, "on to off");
+            assert_eq!(heals.get(), 3, "every owner write heals");
         });
     }
 

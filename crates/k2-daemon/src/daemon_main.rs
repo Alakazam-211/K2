@@ -1140,6 +1140,13 @@ async fn async_main() {
             Some(Err(e)) => log_debug!("[daemon] WARN: k2 CLI heal: {e}"),
             None => {}
         }
+        // With the owner's k5 switch on, what agents are taught follows what
+        // the links run after this boot (an update can bring or drop the k5
+        // program). Off: nothing to change, nothing read.
+        if k2_core::app_settings::k5_cli_beta() {
+            let n = k2_core::workspace::skill_regen::sync_cli_name_teaching_everywhere();
+            log_debug!("[daemon] k5 CLI: agents' command is {} in {n} workspace(s)", k2_core::agent_cli::name());
+        }
     });
     #[cfg(not(unix))]
     let _ = (staged_cli, cli_choice);

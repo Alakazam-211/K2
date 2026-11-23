@@ -1515,6 +1515,10 @@ pub(crate) async fn send_response_with_cookie_and_location(
     let body: &str = &acting;
     let taught = crate::permission::walls::teach_tcp(status, body);
     let body: &str = &taught;
+    // …and a refusal to an agent names the command agents type now (`k5`
+    // while the owner's k5 switch is on and its links run k5).
+    let named = crate::permission::walls::name_tcp(status, body);
+    let body: &str = &named;
     // The Org Chart's feed field (an agent that hasn't read today's
     // bulletin); the same bytes while the Org Chart is off.
     let fed = crate::org_chart::feed::stamp_tcp(status, body);
@@ -1583,6 +1587,10 @@ pub(crate) async fn send_response_with_headers(
     let body: &str = &acting;
     let taught = crate::permission::walls::teach_tcp(status, body);
     let body: &str = &taught;
+    // …and a refusal to an agent names the command agents type now (`k5`
+    // while the owner's k5 switch is on and its links run k5).
+    let named = crate::permission::walls::name_tcp(status, body);
+    let body: &str = &named;
     // The Org Chart's feed field (an agent that hasn't read today's
     // bulletin); the same bytes while the Org Chart is off.
     let fed = crate::org_chart::feed::stamp_tcp(status, body);

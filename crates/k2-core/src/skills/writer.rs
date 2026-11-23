@@ -241,7 +241,7 @@ pub fn write_agent_skill_file(project_path: &str, agent_name: &str, agent_type: 
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "workspace".to_string());
 
-    let (mut skill_content, skill_type_tag, skill_version) = match agent_type {
+    let (skill_content, skill_type_tag, skill_version) = match agent_type {
         "manager" | "coordinator" | "pod-leader" => (
             generate_manager_skill_content(project_path, &project_name),
             "manager",
@@ -264,6 +264,10 @@ pub fn write_agent_skill_file(project_path: &str, agent_name: &str, agent_type: 
             SKILL_VERSION_TEMPLATE,
         ),
     };
+
+    // The command agents type now (`crate::agent_cli`): today's bytes
+    // unless the owner's k5 switch is on and its links run k5.
+    let mut skill_content = crate::agent_cli::teach(&skill_content).into_owned();
 
     // Append the "how to update" footer with absolute paths to PROJECT.md
     // and this agent's AGENT.md so the AI knows where the sources live

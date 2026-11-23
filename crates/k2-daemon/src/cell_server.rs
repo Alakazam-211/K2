@@ -799,6 +799,9 @@ mod unix_impl {
                 .unwrap_or(out),
             None => out,
         };
+        // A refusal names the command agents type now (`k5` while the
+        // owner's k5 switch is on and its links run k5).
+        let out = crate::permission::walls::name_cell(&status, out);
         // The Org Chart's feed field, for this cell's agent (none while off).
         let out = crate::org_chart::feed::stamp_cell(&status, &out, &this_session_id[..], &feed_principal).unwrap_or(out);
         write_response(&mut stream, &status, ctype, &out, k5_version).await;

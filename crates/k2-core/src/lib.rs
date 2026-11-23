@@ -106,6 +106,10 @@ pub mod chat_user_archive;
 // bundle). Powers both the high-bar push (P2) and the README fallback
 // (P3). HTTP/Tauri-free; see module docs + PRD k2-connect-clone-to.md.
 pub mod cli_stage;
+/// Which command agents type now (`k2`, or `k5` while the owner's Beta
+/// switch is on and its links run it), and the text agents read renamed to
+/// match (0.46.18).
+pub mod agent_cli;
 /// The `model` key of a Claude Code settings file, put back after K2
 /// switches one session's model (0.46.13, `/cli/sessions/model`).
 pub mod cli_model_settings;

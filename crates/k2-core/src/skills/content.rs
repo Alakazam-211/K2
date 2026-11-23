@@ -1116,8 +1116,21 @@ Run `"#, cli_name!(), r#" glossary <term>` for terminology specific to "#, produ
     skill
 }
 
-/// Generate the CLAUDE.md content for an agent, optionally focused on a specific task.
+/// Generate the CLAUDE.md content for an agent, optionally focused on a
+/// specific task, naming the command agents type now
+/// ([`crate::agent_cli`]: today's bytes unless the owner's k5 switch is on
+/// and its links run k5).
 pub fn compose_agent_wake_context(
+    project_path: &str,
+    agent_name: &str,
+    current_task: Option<&WorkItem>,
+) -> Result<String, String> {
+    compose_agent_wake_context_as_written(project_path, agent_name, current_task)
+        .map(|md| crate::agent_cli::teach(&md).into_owned())
+}
+
+/// [`compose_agent_wake_context`] with the brand's command as written.
+fn compose_agent_wake_context_as_written(
     project_path: &str,
     agent_name: &str,
     current_task: Option<&WorkItem>,

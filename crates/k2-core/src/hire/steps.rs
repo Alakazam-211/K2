@@ -173,10 +173,16 @@ pub(crate) fn current_setting(path: &str, field: &str) -> Option<String> {
     .flatten()
 }
 
-pub fn write_wiki_notes(path: &str, notes: &[WikiNote]) -> Result<Vec<serde_json::Value>, HireError> {
+/// A hire's wiki notes. `caller` an API key: a linked wiki takes them only
+/// at its owner-approved location ([`crate::wiki::NoteWriter::ApiKey`]).
+pub fn write_wiki_notes(path: &str, notes: &[WikiNote], caller: &super::HireCaller) -> Result<Vec<serde_json::Value>, HireError> {
+    let writer = match caller {
+        super::HireCaller::ApiKey { .. } => crate::wiki::NoteWriter::ApiKey,
+        _ => crate::wiki::NoteWriter::Workspace,
+    };
     let mut out = Vec::new();
     for n in notes {
-        let rel = crate::wiki::write_note(Path::new(path), &n.id, &n.body).map_err(HireError::usage)?;
+        let rel = crate::wiki::write_note_as(Path::new(path), &n.id, &n.body, writer).map_err(HireError::usage)?;
         out.push(serde_json::json!({ "id": n.id, "path": rel }));
     }
     Ok(out)

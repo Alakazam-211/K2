@@ -146,6 +146,7 @@ pub(crate) const ROUTES: &[Route] = &[
     route("/cli/whats_new", Scope::Shared),
     // `k2 wiki index|note|status`.
     route("/cli/wiki/index", Scope::WikiIndex),
+    route("/cli/wiki/location", Scope::Own),
     route("/cli/wiki/note", Scope::WikiNote),
     route("/cli/wiki/status", Scope::Own),
     // `k2 workspace profile` (0.46.16; its handler also refuses another

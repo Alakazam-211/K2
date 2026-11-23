@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+pub mod location;
+
 /// Relative path of the wiki directory under a workspace root.
 pub const WIKI_REL: &str = ".k2/wiki";
 
@@ -845,46 +847,61 @@ fn jail_wiki_id(id: &str) -> Result<String, String> {
     Ok(normalized)
 }
 
-/// `.k2` and `.k2/wiki` under the workspace root are real folders (or not
-/// there yet), never links: the wiki is written only inside the workspace.
-fn refuse_linked_wiki(root: &Path) -> Result<(), String> {
-    let mut cur = root.to_path_buf();
-    for part in Path::new(WIKI_REL).components() {
-        cur.push(part);
-        match fs::symlink_metadata(&cur) {
-            Ok(m) if is_link(&m) => {
-                return Err(format!(
-                    "{} is a link; the wiki is written only inside the workspace",
-                    cur.display()
-                ))
-            }
-            Ok(m) if !m.is_dir() => return Err(format!("{} is not a folder", cur.display())),
-            Ok(_) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(e) => return Err(format!("{}: {e}", cur.display())),
-        }
-    }
-    Ok(())
+/// Who is writing a note: the write rules differ only for a linked wiki.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoteWriter {
+    /// The owner, a person or an agent working in the workspace: a linked
+    /// `.k2` or `.k2/wiki` is followed.
+    Workspace,
+    /// A K2 API key (`/v1/w/<ws>/wiki/notes`, a hire by key).
+    ApiKey,
+    /// An agent template's notes.
+    Template,
 }
 
-fn is_link(m: &fs::Metadata) -> bool {
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        // FILE_ATTRIBUTE_REPARSE_POINT: a symlink or a junction.
-        if m.file_attributes() & 0x400 != 0 {
-            return true;
-        }
-    }
-    m.file_type().is_symlink()
+/// Where a write lands: `base`, then `prefix` and the note id below it,
+/// walked without following a link.
+struct WikiPlace {
+    base: PathBuf,
+    prefix: PathBuf,
 }
 
-/// Write one note under `<workspace>/.k2/wiki/`. Confined: checked against
-/// the workspace root, `.k2` and `.k2/wiki` must not be links, and the
-/// write never follows a link below the root ([`crate::confined_fs`]).
-/// Overwrite OK. Seeds the wiki vault if missing. Returns the
-/// workspace-relative path (e.g. `.k2/wiki/Interview.md`).
+/// The wiki folder for `writer` in the workspace at real path `root`.
+///
+/// - [`NoteWriter::Workspace`]: `.k2/wiki`, followed when it (or `.k2`) is
+///   a link, made when missing.
+/// - an API key or a template: a linked wiki only when its resolved target
+///   is the location the owner approved ([`location`]), and then that
+///   target as resolved for the check; an unlinked one walked from `root`
+///   without following a link.
+fn wiki_place(root: &Path, writer: NoteWriter) -> Result<WikiPlace, String> {
+    if writer != NoteWriter::Workspace {
+        return Ok(match location::outside_writer_target(root)? {
+            Some(target) => WikiPlace { base: target, prefix: PathBuf::new() },
+            None => WikiPlace { base: root.to_path_buf(), prefix: PathBuf::from(WIKI_REL) },
+        });
+    }
+    let wiki = root.join(WIKI_REL);
+    if !wiki.is_dir() {
+        fs::create_dir_all(&wiki).map_err(|e| format!("mkdir wiki: {e}"))?;
+    }
+    let base = dunce::canonicalize(&wiki).map_err(|e| format!("wiki path: {e}"))?;
+    Ok(WikiPlace { base, prefix: PathBuf::new() })
+}
+
+/// Write one note under `<workspace>/.k2/wiki/` as the owner or an agent
+/// in the workspace ([`NoteWriter::Workspace`]). See [`write_note_as`].
 pub fn write_note(workspace: &Path, id: &str, body: &str) -> Result<String, String> {
+    write_note_as(workspace, id, body, NoteWriter::Workspace)
+}
+
+/// Write one note under `<workspace>/.k2/wiki/`. Overwrite OK. Seeds the
+/// wiki vault if missing. The wiki folder is found as [`wiki_place`] says
+/// for `writer` (an API key or a template writes through a linked wiki
+/// only at its owner-approved location), and no link below it is followed
+/// ([`crate::confined_fs`]). Returns the workspace-relative path (e.g.
+/// `.k2/wiki/Interview.md`).
+pub fn write_note_as(workspace: &Path, id: &str, body: &str, writer: NoteWriter) -> Result<String, String> {
     let id = jail_wiki_id(id)?;
     if (body.len() as u64) > MAX_NOTE_BYTES {
         return Err("note too large".into());
@@ -895,11 +912,11 @@ pub fn write_note(workspace: &Path, id: &str, body: &str) -> Result<String, Stri
             workspace.display()
         ));
     }
-    seed_wiki(workspace)?;
     let root = dunce::canonicalize(&workspace)
         .map_err(|e| format!("workspace path: {e}"))?;
-    refuse_linked_wiki(&root)?;
-    crate::confined_fs::write_file(&root, &Path::new(WIKI_REL).join(&id), body.as_bytes(), None)
+    let place = wiki_place(&root, writer)?;
+    seed_in(&root, &place)?;
+    crate::confined_fs::write_file(&place.base, &place.prefix.join(&id), body.as_bytes(), None)
         .map_err(|e| format!("write note: {e}"))?;
     Ok(Path::new(WIKI_REL)
         .join(&id)
@@ -945,11 +962,15 @@ Add one line per note as the wiki grows.
 pub fn seed_wiki(workspace: &Path) -> Result<Vec<String>, String> {
     let root = dunce::canonicalize(&workspace)
         .map_err(|e| format!("workspace path: {e}"))?;
-    // Made and written inside the workspace only: never through a linked
-    // `.k2` or `.k2/wiki`, and a seed file is only ever a new file.
-    refuse_linked_wiki(&root)?;
-    let wiki_rel = Path::new(WIKI_REL);
-    crate::confined_fs::create_dir_all(&root, wiki_rel).map_err(|e| format!("mkdir wiki: {e}"))?;
+    let place = wiki_place(&root, NoteWriter::Workspace)?;
+    seed_in(&root, &place)
+}
+
+/// The seed notes in `place`, each only ever a new file.
+fn seed_in(root: &Path, place: &WikiPlace) -> Result<Vec<String>, String> {
+    if !place.prefix.as_os_str().is_empty() {
+        crate::confined_fs::create_dir_all(&place.base, &place.prefix).map_err(|e| format!("mkdir wiki: {e}"))?;
+    }
     let mut created = Vec::new();
     {
         let name = root
@@ -957,8 +978,8 @@ pub fn seed_wiki(workspace: &Path) -> Result<Vec<String>, String> {
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| "workspace".into());
         let made = crate::confined_fs::write_new_file(
-            &root,
-            &wiki_rel.join("Home.md"),
+            &place.base,
+            &place.prefix.join("Home.md"),
             format!(
                 r#"---
 title: Home
@@ -985,7 +1006,7 @@ Create new `.md` files under `.k2/wiki/` and link them with `[[Note Title]]`.
             created.push("Home.md".into());
         }
     }
-    if crate::confined_fs::write_new_file(&root, &wiki_rel.join("_Index.md"), SEED_INDEX_MD.as_bytes())
+    if crate::confined_fs::write_new_file(&place.base, &place.prefix.join("_Index.md"), SEED_INDEX_MD.as_bytes())
         .map_err(|e| format!("write _Index.md: {e}"))?
     {
         created.push("_Index.md".into());
@@ -1361,30 +1382,103 @@ mod tests {
         let _ = fs::remove_dir_all(&ws);
     }
 
-    /// A note lands inside the workspace only: a linked `.k2`, a linked
-    /// `.k2/wiki`, or a link below the wiki is refused, and nothing is
-    /// written where the link points (the seed notes included).
+    /// The owner and agents in the workspace write through a linked
+    /// `.k2/wiki` or `.k2` (an Obsidian vault elsewhere) as before, with no
+    /// approval asked. A link below the wiki is still not followed.
     #[cfg(unix)]
     #[test]
-    fn write_note_stays_inside_the_workspace_when_wiki_parts_are_links() {
+    fn workspace_writes_follow_a_linked_wiki() {
         use std::os::unix::fs::symlink;
-        let cases: [(&str, &str, &str); 3] = [
-            (".k2/wiki", "X.md", "is a link"),
-            (".k2", "X.md", "is a link"),
-            (".k2/wiki/sub", "sub/X.md", "not followed"),
-        ];
-        for (linked, id, want) in cases {
+        let _home = crate::test_env::TempHome::new();
+        for linked in [".k2/wiki", ".k2"] {
             let ws = temp_ws("write-note-linked");
-            let outside = temp_ws("write-note-linked-outside");
+            let vault = temp_ws("write-note-linked-vault");
+            if linked == ".k2" {
+                fs::create_dir_all(vault.join("wiki")).unwrap();
+            }
             let link = ws.join(linked);
             fs::create_dir_all(link.parent().unwrap()).unwrap();
-            symlink(&outside, &link).unwrap();
-            let err = write_note(&ws, id, "x").expect_err(linked);
-            assert!(err.contains(want), "{linked}: {err}");
-            let written: Vec<_> = fs::read_dir(&outside).unwrap().map(|e| e.unwrap().file_name()).collect();
-            assert!(written.is_empty(), "{linked}: nothing written outside the workspace, found {written:?}");
+            symlink(&vault, &link).unwrap();
+            let path = write_note(&ws, "X.md", "x").unwrap_or_else(|e| panic!("{linked}: {e}"));
+            assert_eq!(path, ".k2/wiki/X.md");
+            let wiki = if linked == ".k2" { vault.join("wiki") } else { vault.clone() };
+            assert_eq!(fs::read_to_string(wiki.join("X.md")).unwrap(), "x", "{linked}");
+            assert!(wiki.join("Home.md").is_file(), "{linked}: seeded in the vault");
             let _ = fs::remove_dir_all(&ws);
-            let _ = fs::remove_dir_all(&outside);
+            let _ = fs::remove_dir_all(&vault);
+        }
+
+        let ws = temp_ws("write-note-sub-link");
+        let outside = temp_ws("write-note-sub-link-outside");
+        fs::create_dir_all(ws.join(".k2/wiki")).unwrap();
+        symlink(&outside, ws.join(".k2/wiki/sub")).unwrap();
+        let err = write_note(&ws, "sub/X.md", "x").expect_err("a link below the wiki");
+        assert!(err.contains("not followed"), "{err}");
+        assert!(fs::read_dir(&outside).unwrap().next().is_none(), "nothing written through it");
+        let _ = fs::remove_dir_all(&ws);
+        let _ = fs::remove_dir_all(&outside);
+    }
+
+    /// An API key or a template writes through a linked wiki only at the
+    /// location the owner approved: unapproved is refused, approved works,
+    /// and a link that now resolves elsewhere is refused until approved
+    /// again. Nothing lands where an unapproved link points.
+    #[cfg(unix)]
+    #[test]
+    fn key_and_template_writes_need_the_owner_approved_location() {
+        use std::os::unix::fs::symlink;
+        let _home = crate::test_env::TempHome::new();
+        let ws = temp_ws("wiki-location");
+        let vault = temp_ws("wiki-location-vault");
+        let other = temp_ws("wiki-location-other");
+        fs::create_dir_all(ws.join(".k2")).unwrap();
+        symlink(&vault, ws.join(".k2/wiki")).unwrap();
+        let empty = |d: &Path| fs::read_dir(d).unwrap().next().is_none();
+
+        // Not approved: refused for a key and for a template.
+        for writer in [NoteWriter::ApiKey, NoteWriter::Template] {
+            let err = write_note_as(&ws, "K.md", "k", writer).expect_err("unapproved");
+            assert!(err.contains("not approved"), "{writer:?}: {err}");
+        }
+        assert!(empty(&vault), "nothing written in the unapproved location");
+        let st = location::state(&ws).unwrap();
+        assert_eq!((st.linked, st.status), (true, "not_approved"));
+        assert_eq!(
+            location::doctor_lines(std::slice::from_ref(&ws)).len(),
+            1,
+            "the doctor lists the unapproved link"
+        );
+
+        // Approved: a key and a template write there.
+        let st = location::approve(&ws).expect("approve");
+        assert_eq!(st.status, "approved");
+        let real_vault = dunce::canonicalize(&vault).unwrap();
+        assert_eq!(st.target.as_deref(), Some(real_vault.to_string_lossy().as_ref()));
+        write_note_as(&ws, "K.md", "k", NoteWriter::ApiKey).expect("approved: key");
+        write_note_as(&ws, "T.md", "t", NoteWriter::Template).expect("approved: template");
+        assert_eq!(fs::read_to_string(vault.join("K.md")).unwrap(), "k");
+        assert_eq!(fs::read_to_string(vault.join("T.md")).unwrap(), "t");
+        assert!(location::doctor_lines(std::slice::from_ref(&ws)).is_empty(), "approved: no doctor line");
+
+        // The link now resolves elsewhere: refused until approved again.
+        fs::remove_file(ws.join(".k2/wiki")).unwrap();
+        symlink(&other, ws.join(".k2/wiki")).unwrap();
+        let err = write_note_as(&ws, "K2.md", "k", NoteWriter::ApiKey).expect_err("changed target");
+        assert!(err.contains("the approved location is"), "{err}");
+        assert!(empty(&other), "nothing written in the changed location");
+        assert_eq!(location::state(&ws).unwrap().status, "changed");
+        // The owner's own writes are unaffected.
+        write_note(&ws, "O.md", "o").expect("owner write");
+        assert_eq!(fs::read_to_string(other.join("O.md")).unwrap(), "o");
+
+        // Not a link: a key writes inside the workspace, no approval asked.
+        let plain = temp_ws("wiki-location-plain");
+        write_note_as(&plain, "K.md", "k", NoteWriter::ApiKey).expect("unlinked wiki");
+        assert_eq!(fs::read_to_string(plain.join(".k2/wiki/K.md")).unwrap(), "k");
+        assert_eq!(location::state(&plain).unwrap().status, "not_linked");
+        assert!(location::approve(&plain).is_err(), "nothing to approve");
+        for d in [&ws, &vault, &other, &plain] {
+            let _ = fs::remove_dir_all(d);
         }
     }
 }

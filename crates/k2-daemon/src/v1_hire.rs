@@ -329,7 +329,13 @@ pub(crate) fn handle_v1_wiki_notes(
         Ok(v) => v,
         Err(e) => return usage(format!("invalid JSON body: {e}")),
     };
-    match k2_core::wiki::write_note(Path::new(&ws_path), &parsed.id, &parsed.body) {
+    // An API key writes through a linked wiki only at the location the
+    // owner approved; the owner token writes as the owner.
+    let writer = match principal {
+        V1Principal::Owner => k2_core::wiki::NoteWriter::Workspace,
+        V1Principal::Api(_) => k2_core::wiki::NoteWriter::ApiKey,
+    };
+    match k2_core::wiki::write_note_as(Path::new(&ws_path), &parsed.id, &parsed.body, writer) {
         Ok(rel) => CliResponse::ok_json(
             serde_json::json!({
                 "ok": true,

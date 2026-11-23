@@ -334,7 +334,7 @@ fn apply_plan(plan: &Plan, instance_id: &str, caller: &HireCaller, undo: &mut Ve
             }
         }
         if let Some(n) = r.wiki_notes.as_ref() {
-            steps::write_wiki_notes(&path_s, n)?;
+            steps::write_wiki_notes(&path_s, n, caller)?;
         }
         if let Some(c) = r.context.as_ref() {
             steps::add_context(&path_s, c)?;

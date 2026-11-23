@@ -572,7 +572,7 @@ pub fn converge(
 
     let mut wiki_notes = Vec::new();
     if let Some(notes) = req.wiki.as_ref() {
-        wiki_notes = steps::write_wiki_notes(&path, notes)?;
+        wiki_notes = steps::write_wiki_notes(&path, notes, caller)?;
         if !wiki_notes.is_empty() {
             changed = true;
         }

@@ -1399,6 +1399,8 @@ pub(super) const ROWS: &[Route] = &[
     post("/cli/wiki/chat/off", Member),
     post("/cli/wiki/chat/on", Member),
     get("/cli/wiki/index", Member),
+    get("/cli/wiki/location", Member),
+    post("/cli/wiki/location/approve", Owner),
     get("/cli/wiki/note", Member),
     post("/cli/wiki/seed", Member),
     post("/cli/wiki/serve", Member),

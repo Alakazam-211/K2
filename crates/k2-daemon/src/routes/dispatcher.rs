@@ -11375,7 +11375,15 @@ async fn handle_one_request(
             .await;
         }
         p if is_post && post_allowed && p.starts_with("/cli/wiki/") => {
-            if !super::http::token_ok(&query, state.token.as_str()) {
+            // The owner approves a wiki location: the owner token or an
+            // Owner-role login, never another login or a passport.
+            let owner_only = p == "/cli/wiki/location/approve";
+            let allowed = if owner_only {
+                super::http::owner_role_identity(&query, state.token.as_str()).is_some()
+            } else {
+                super::http::token_ok(&query, state.token.as_str())
+            };
+            if !allowed {
                 let _ = stream.read(&mut buf).await;
                 super::http::send_response(
                     &mut *stream,

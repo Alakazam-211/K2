@@ -1635,6 +1635,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/wiki/serve/status" | "/cli/wiki/status" => {
             crate::wiki_routes::handle_serve_status(params)
         }
+        "/cli/wiki/location" => crate::wiki_routes::handle_location_get(params),
 
         // ── Phase 2.1: Glossary ──────────────────────────────────
         "/cli/glossary" | "/cli/glossary/list" => crate::inbox_routes::handle_glossary_list(),

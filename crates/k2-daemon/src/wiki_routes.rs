@@ -516,6 +516,64 @@ pub fn handle_serve_status(params: &HashMap<String, String>) -> CliResponse {
     CliResponse::ok_json(serde_json::to_string(&st).unwrap_or_else(|_| "{}".to_string()))
 }
 
+/// The doctor's lines: every registered workspace whose wiki is a link
+/// the owner hasn't approved (or approved for another target).
+fn location_doctor() -> Vec<String> {
+    let paths: Vec<PathBuf> = k2_core::projects_ops::projects_list()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|p| PathBuf::from(p.path))
+        .collect();
+    k2_core::wiki::location::doctor_lines(&paths)
+}
+
+fn location_answer(st: &k2_core::wiki::location::LocationState, lines: Vec<String>) -> CliResponse {
+    let mut v = serde_json::to_value(st).unwrap_or_default();
+    v["ok"] = serde_json::json!(true);
+    v["lines"] = serde_json::json!(lines);
+    v["doctor"] = serde_json::json!(location_doctor());
+    CliResponse::ok_json(v.to_string())
+}
+
+/// GET /cli/wiki/location?project=<path>: is the workspace's wiki a link,
+/// where to, and has the owner approved that location for API-key and
+/// template writes. `doctor`: the registered workspaces whose linked wiki
+/// isn't approved yet.
+pub fn handle_location_get(params: &HashMap<String, String>) -> CliResponse {
+    let workspace = match need_project_path(params) {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+    match k2_core::wiki::location::state(&workspace) {
+        Ok(st) => {
+            let line = st.line();
+            location_answer(&st, vec![line])
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+/// POST /cli/wiki/location/approve?project=<path> (owner only: the route
+/// row's floor is Owner and the dispatcher arm checks it again): record the
+/// wiki's current resolved target as the approved location.
+pub fn handle_location_approve(params: &HashMap<String, String>) -> CliResponse {
+    let workspace = match need_project_path(params) {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+    match k2_core::wiki::location::approve(&workspace) {
+        Ok(st) => {
+            let line = format!(
+                "Approved {} as the wiki location of {}: API keys and templates may add notes there.",
+                st.target.as_deref().unwrap_or("?"),
+                st.workspace
+            );
+            location_answer(&st, vec![line])
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
 // ── POST handlers ──────────────────────────────────────────────────────
 
 /// POST /cli/wiki/seed?project=<path>
@@ -698,6 +756,7 @@ pub fn handle_chat_post(params: &HashMap<String, String>) -> CliResponse {
 pub fn dispatch_post(path: &str, params: &HashMap<String, String>) -> CliResponse {
     match path {
         "/cli/wiki/seed" => handle_seed_post(params),
+        "/cli/wiki/location/approve" => handle_location_approve(params),
         "/cli/wiki/serve" => handle_serve_post(params),
         // Convenience aliases
         "/cli/wiki/serve/on" => {

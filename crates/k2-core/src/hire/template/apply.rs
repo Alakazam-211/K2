@@ -439,7 +439,7 @@ pub fn workspace_steps(inp: &StepInput<'_>) -> Result<WorkspaceOutcome, HireErro
         }
         let text = fill_note(&render(body, &vars), plan.wiki.get(&id).map(Vec::as_slice).unwrap_or_default());
         if !dry {
-            crate::wiki::write_note(Path::new(inp.path), &id, &text).map_err(HireError::usage)?;
+            crate::wiki::write_note_as(Path::new(inp.path), &id, &text, crate::wiki::NoteWriter::Template).map_err(HireError::usage)?;
             files.insert(rel.clone(), sha256_text(&text));
         }
         written_notes.push(id.trim_end_matches(".md").to_string());

@@ -748,13 +748,58 @@ eval "$(awk "/^_CLONE_URL_RULE='/,/^'\$/" "$CLI_BASH_SOURCE")"
 # Where the CLI under test really connects. On Linux an LD_PRELOAD hook
 # logs every connect() it and its children make (the k5 binary and the
 # shell's python3 alike), with the address and port, whether the connect
-# then works or not. Elsewhere: the k5 binary's open sockets (lsof, by
-# its pid) and the shell's python3 audit hook. Either way a row passes
-# only on a connect to the exact address and port; a line on stderr
-# naming the host proves nothing.
+# then works or not. On macOS the same log comes from a dylib that
+# interposes connect() (DYLD_INSERT_LIBRARIES) for the k5 binary; the
+# shell's python3 there is /usr/bin/python3, which SIP keeps from loading
+# it, so the bash side uses the python3 audit hook. (lsof can't prove a
+# connect that fails at once: no route to the address, and the socket is
+# gone before lsof looks.) Either way a row passes only on a connect to
+# the exact address and port; a line on stderr naming the host proves
+# nothing.
 CONNLOG="$W/connect.log"
 HOOK=""
-if [ "$(uname -s)" = Linux ]; then
+if [ "$(uname -s)" = Darwin ] && [ "$K2" != "$CLI_BASH_SOURCE" ]; then
+    cat >"$W/connlog-mac.c" <<'CEOF'
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/socket.h>
+#include <unistd.h>
+static int k2t_connect(int fd, const struct sockaddr *sa, socklen_t len) {
+    const char *path = getenv("K2T_CONNECT_LOG");
+    if (path && sa) {
+        char host[INET6_ADDRSTRLEN] = "";
+        unsigned port = 0;
+        if (sa->sa_family == AF_INET) {
+            const struct sockaddr_in *a = (const void *)sa;
+            inet_ntop(AF_INET, &a->sin_addr, host, sizeof host);
+            port = ntohs(a->sin_port);
+        } else if (sa->sa_family == AF_INET6) {
+            const struct sockaddr_in6 *a = (const void *)sa;
+            inet_ntop(AF_INET6, &a->sin6_addr, host, sizeof host);
+            port = ntohs(a->sin6_port);
+        }
+        if (host[0]) {
+            FILE *f = fopen(path, "a");
+            if (f) {
+                fprintf(f, "%d %s %u\n", (int)getpid(), host, port);
+                fclose(f);
+            }
+        }
+    }
+    /* dyld does not interpose a call from this image itself: the real one. */
+    return connect(fd, sa, len);
+}
+__attribute__((used)) static const struct { const void *with; const void *what; } k2t_interpose[]
+    __attribute__((section("__DATA,__interpose"))) = { { (const void *)k2t_connect, (const void *)connect } };
+CEOF
+    if cc -dynamiclib -O1 -o "$W/connlog.dylib" "$W/connlog-mac.c" 2>"$W/cc.err"; then
+        HOOK=dyld
+    else
+        bad "the connect log: cc could not build the macOS hook: $(head -3 "$W/cc.err" | tr '\n' ' ')"
+    fi
+elif [ "$(uname -s)" = Linux ]; then
     cat >"$W/connlog.c" <<'CEOF'
 #define _GNU_SOURCE
 #include <arpa/inet.h>
@@ -798,25 +843,38 @@ CEOF
         bad "the connect log: cc could not build the hook: $(head -3 "$W/cc.err" | tr '\n' ' ')"
     fi
 fi
-# "${HOOKED[@]}" CMD…: CMD with the connect log on (Linux), as one
-# process (env execs it), so $! is the command's own pid.
+# "${HOOKED[@]}" CMD…: CMD with the connect log on, as one process (env
+# execs it), so $! is the command's own pid. On macOS SIP drops DYLD_*
+# when it starts /usr/bin/env or /usr/bin/python3, so the dylib's path
+# rides as K2T_DYLD and LAUNCH sets DYLD_INSERT_LIBRARIES only in the
+# environment it execs the binary with.
 HOOKED=(env)
 [ "$HOOK" != ld ] || HOOKED=(env LD_PRELOAD="$W/connlog.so" K2T_CONNECT_LOG="$CONNLOG")
-# connected ADDR PORT [PID]: a connect to exactly ADDR:PORT happened (the
-# connect log), or is open or opening from PID (lsof; the shell's python3:
-# its audit hook's exact (addr, port)).
+[ "$HOOK" != dyld ] || HOOKED=(env K2T_DYLD="$W/connlog.dylib" K2T_CONNECT_LOG="$CONNLOG")
+# "${HOOKED[@]}" "$PY" -c "$LAUNCH" PROGRAM ARGS…: exec PROGRAM with SIGINT
+# at its default (bash would start it with SIGINT ignored).
+LAUNCH='import os, signal, sys
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+if "K2T_DYLD" in os.environ:
+    os.environ["DYLD_INSERT_LIBRARIES"] = os.environ.pop("K2T_DYLD")
+os.execv(sys.argv[1], sys.argv[1:])'
+# connected ADDR PORT: a connect to exactly ADDR:PORT happened (the
+# connect log; the shell's python3 on macOS: its audit hook's exact
+# (addr, port)).
 connected() {
-    if [ "$HOOK" = ld ]; then
+    if [ "$HOOK" = ld ] || [ "$HOOK" = dyld ]; then
         awk -v a="$1" -v p="$2" '$2 == a && $3 == p { f = 1 } END { exit !f }' "$CONNLOG"
     elif [ "$K2" = "$CLI_BASH_SOURCE" ]; then
         grep -Fq "(('$1', $2" "$W/audit.log"
     else
-        lsof -nP -a -p "$3" -i 2>/dev/null | grep -Fq -- "->$1:$2" || lsof -nP -a -p "$3" -i 2>/dev/null | grep -Fq -- "->[$1]:$2"
+        # No connect log for the binary (its hook didn't build, a FAIL
+        # above): nothing proves a connect, so the row fails.
+        return 1
     fi
 }
 # elsewhere ADDR PORT: the connects logged to any other address or port.
 elsewhere() {
-    [ "$HOOK" = ld ] || return 0
+    [ "$HOOK" = ld ] || [ "$HOOK" = dyld ] || return 0
     awk -v a="$1" -v p="$2" '!($2 == a && $3 == p)' "$CONNLOG"
 }
 rule() { "$PY" -c "$_CLONE_URL_RULE
@@ -834,21 +892,32 @@ print("{\"error\": \"daemon_unreachable\", \"hint\": \"remote server http://100.
     if connected 100.64.0.1 "$PO"; then bad "the check took another port"; else ok "a connect to another port fails the check"; fi
     expect_eq "the other address shows as elsewhere" "$(elsewhere 100.64.0.1 9 | awk '{ print $2, $3 }')" "127.0.0.1 $PO"
 fi
+if [ "$HOOK" = dyld ]; then
+    # The same check through the macOS hook, with the binary itself (the
+    # only program here it loads into): a preview to the other stub.
+    fresh
+    : >"$CONNLOG"
+    "${HOOKED[@]}" "$PY" -c "$LAUNCH" "$K2" clone preview ws1 --host "http://127.0.0.1:$PO" --token "$REMOTE_TOKEN" --json </dev/null >"$W/out" 2>"$W/err" || true
+    if connected 100.64.0.1 9; then bad "macOS hook: a connect to 127.0.0.1 passed as one to 100.64.0.1:9"; else ok "macOS hook: a connect to another address fails the check"; fi
+    if connected 127.0.0.1 "$PO"; then ok "macOS hook: the check sees the connect that was made"; else bad "macOS hook: the check missed a connect to 127.0.0.1:$PO: $(cat "$CONNLOG")"; fi
+    if connected 100.64.0.1 "$PO"; then bad "macOS hook: the check took another port"; else ok "macOS hook: a connect to another port fails the check"; fi
+    expect_has "macOS hook: the other address shows as elsewhere" "$(elsewhere 100.64.0.1 9 | awk '{ print $2, $3 }')" "127.0.0.1 $PO"
+fi
 for h in 100.64.0.1 "[fd7a:115c:a1e0::1]"; do
     addr="${h//[\[\]]/}"
     fresh
     : >"$CONNLOG"
     save_token "http://$h:9" "$REMOTE_TOKEN"
-    "${HOOKED[@]}" "$PY" -c 'import os, signal, sys; signal.signal(signal.SIGINT, signal.SIG_DFL); os.execv(sys.argv[1], sys.argv[1:])' \
+    "${HOOKED[@]}" "$PY" -c "$LAUNCH" \
         "$K2" clone preview ws1 --host "http://$h:9" --json </dev/null >"$W/out" 2>"$W/err" &
     BG=$!
     seen=""
     for _ in $(seq 1 150); do
-        connected "$addr" 9 "$BG" && { seen=yes; break; }
+        connected "$addr" 9 && { seen=yes; break; }
         kill -0 "$BG" 2>/dev/null || break; sleep 0.1
     done
     # A connect that failed at once is logged before the engine exits.
-    [ -n "$seen" ] || ! connected "$addr" 9 "$BG" || seen=yes
+    [ -n "$seen" ] || ! connected "$addr" 9 || seen=yes
     pkill -P "$BG" 2>/dev/null || true
     kill "$BG" 2>/dev/null || true
     bg_wait

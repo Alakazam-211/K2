@@ -129,8 +129,8 @@
         {"name": "--gpu-mem", "arg": "4G", "description": "Only with --gpu (alone: exit 2): the job's GPU memory budget."},
         {"name": "--network", "arg": "none", "description": "No network for this job (loopback only), whatever the node's setting; the one value is none (on, no-lan: exit 2, job_network_invalid)."},
         {"name": "--netns-dummy", "arg": "NAME=ADDR/PREFIX", "description": "Linux nodes: a dummy interface in the job's own network namespace, e.g. dummy0=10.254.254.1/32; from k2-node 0.46.17 the first is the IPv4 default route (a browser gets an ICE host candidate; nothing leaves). NAME 1-15 of A-Z a-z 0-9 . _ - (not lo); the address from a private, link-local or test range only. Repeatable, at most 4; implies --network none."},
-        {"name": "--userns", "arg": null, "description": "By default a job can't create user namespaces (rootless Podman, unshare -U, bubblewrap). --userns lets this job, if the node's owner granted its workspace that on the node (k2 compute grant <node> --workspace <w> --userns). Only on nodes your own server owns; never on a node where your server is a tenant (else userns_not_granted, userns_owner_only or userns_needs_update, exit 3)."},
-        {"name": "--no-addr-filter", "arg": null, "description": "With --userns and --network none only: no per-job address filter (the job's own network namespace, loopback only, stays the wall). For tests that watch packets between the job's own namespaces. Granted separately by the node's owner (k2 compute grant <node> --workspace <w> --no-addr-filter); else no_addr_filter_invalid (exit 2)."},
+        {"name": "--userns", "arg": null, "description": "By default a job can't create user namespaces (unshare -U, bubblewrap; mount, umount2 and pivot_root stay denied). --userns lets this job, if the node's owner granted its workspace that on the node (k2 compute grant <node> --workspace <w> --userns). Only this node's own server's workspaces; never another server's jobs on a shared node, even servers of the same owner (else userns_not_granted, userns_owner_only or userns_needs_update, exit 3)."},
+        {"name": "--no-addr-filter", "arg": null, "description": "With --userns and --network none only: no per-job address filter (the job's own network namespace, loopback only, stays the wall). For tests that watch packets between the job's own namespaces. Granted separately by the node's owner (k2 compute grant <node> --workspace <w> --no-addr-filter). Only this node's own server's workspaces; never another server's jobs on a shared node, even servers of the same owner; else no_addr_filter_invalid (exit 2)."},
         {"name": "--receipt-v2", "arg": null, "description": "The node signs receipt v2; only nodes on protocol 9 take it (preview: ciPreview)."},
         {"name": "--retry-interrupted", "arg": null, "description": "Retry a job that an infrastructure failure interrupted."},
         {"name": "--no-retry", "arg": null, "description": "Never retry (the same as --retries 0)."},
@@ -1041,7 +1041,7 @@
     {
       "name": "compute grant",
       "usage": "k2 compute grant <node> --workspace WS [--max-time 2h] [--max-disk 60G] [--max-parallel 1] [--max-queued 10] [--submitter-max-running N] [--ci|--no-ci] [--gpu|--no-gpu] [--userns|--no-userns] [--no-addr-filter|--addr-filter]",
-      "description": "Grant a workspace a node, with limits. Owner or admin, or an agent allowed to manage compute nodes; --ci, --gpu and --userns need the owner or an Admin login (--userns only on a node this server owns: userns_owner_only, exit 3, where it is a tenant). Any other agent asks for its own grant's limits (no --ci or --gpu; --workspace may be left out): owner_only (exit 3) ends with k2 permission request compute.grant node=<node> max-time=… --why \"…\".",
+      "description": "Grant a workspace a node, with limits. Owner or admin, or an agent allowed to manage compute nodes; --ci, --gpu and --userns need the owner or an Admin login (--userns only for this node's own server's workspaces: userns_owner_only, exit 3, on a shared node). Any other agent asks for its own grant's limits (no --ci or --gpu; --workspace may be left out): owner_only (exit 3) ends with k2 permission request compute.grant node=<node> max-time=… --why \"…\".",
       "args": [{"name": "node", "required": true}],
       "flags": [
         {"name": "--workspace", "arg": "WS", "description": "The workspace that gets the node (an agent may leave it out: its own)."},
@@ -1054,9 +1054,9 @@
         {"name": "--no-ci", "arg": null, "description": "Take --tier ci away."},
         {"name": "--gpu", "arg": null, "description": "This workspace may send --gpu jobs; the node's own owner must also turn GPU jobs on for this server."},
         {"name": "--no-gpu", "arg": null, "description": "Take --gpu jobs away."},
-        {"name": "--userns", "arg": null, "description": "This workspace's jobs may ask --userns on this node (they may create user namespaces); only on a node this server owns."},
+        {"name": "--userns", "arg": null, "description": "This workspace's jobs may ask --userns on this node (they may create user namespaces). Only this node's own server's workspaces; never another server's jobs on a shared node, even servers of the same owner."},
         {"name": "--no-userns", "arg": null, "description": "Take --userns jobs away (and --no-addr-filter with it)."},
-        {"name": "--no-addr-filter", "arg": null, "description": "Its --userns --network none jobs may also drop their per-job address filter; granted separately, only beside --userns."},
+        {"name": "--no-addr-filter", "arg": null, "description": "Its --userns --network none jobs may also drop their per-job address filter; granted separately, only beside --userns. Only this node's own server's workspaces; never another server's jobs on a shared node, even servers of the same owner."},
         {"name": "--addr-filter", "arg": null, "description": "Take --no-addr-filter away."}
       ]
     },

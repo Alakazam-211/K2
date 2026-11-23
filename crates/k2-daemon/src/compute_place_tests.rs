@@ -1546,6 +1546,7 @@ fn no_addr_filter_needs_userns_network_none_its_feature_and_grant() {
     let w = Want { userns: true, no_addr_filter: true, network: Some(none.clone()), ..want(2) };
     let mut c = cand("own", 30, 32, 0, 2);
     c.offer.features.push(FEATURE_JOB_USERNS.into());
+    c.offer.features.push(k2_core::compute::proto::jobnet::FEATURE_JOB_NETWORK.into());
     c.grant.as_mut().unwrap().allow_userns = true;
     assert_eq!(ask_skip(&Want { no_addr_filter: false, ..w.clone() }, c.grant.as_ref(), &c.offer, true), None, "--userns alone runs there");
     assert_eq!(crate::compute_userns_ask::userns_skip(&w, true, c.grant.as_ref(), Some(&c.offer.features)), Some(skip::USERNS_NEEDS_UPDATE), "no no-addr-filter feature");

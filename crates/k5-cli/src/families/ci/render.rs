@@ -1,12 +1,13 @@
 //! `ci`'s readers: `_ci_render <verb>` and the Python each verb of
 //! `cmd_ci` pipes its answer into (`cli/src/ci.sh`). Where the shell's
-//! Python raises, this prints a traceback with Python's exception.
+//! Python raises, this prints its one plain line ([`py::plain`]), never a
+//! traceback.
 
 use super::py::{
     self, ago, d, g, g_or, has, head, int, items, ix, joined, left, or, s, t, when, R,
 };
 use crate::exit::Exit;
-use crate::families::{raised, Raise, Shown};
+use crate::families::{Raise, Shown};
 use crate::out::json::{self, Options, Value};
 use crate::out::pylib::json::loads;
 use crate::out::{self, py as opy};
@@ -37,7 +38,7 @@ fn run_shown(body: &[u8], f: impl FnOnce(&Value, &mut Out) -> R<()>) -> Shown {
     let r = load(body, L).and_then(|v| f(&v, &mut o));
     match r {
         Ok(()) => Shown::out(o.o),
-        Err(e) => raised(o.o, String::new(), &e),
+        Err(e) => py::unreadable(o.o, &e),
     }
 }
 
@@ -809,7 +810,7 @@ fn cache(v: &Value, o: &mut Out) -> R<()> {
 }
 
 /// `json.load(sys.stdin)["run"][key]`, printed in `$(…)`: the text with
-/// its trailing newlines gone, or the traceback (`Err`).
+/// its trailing newlines gone, or the plain line (`Err`).
 pub fn run_field(body: &[u8], key: &str) -> Result<String, String> {
     let r = load(body, 1)
         .and_then(|v| ix(&v, "run", 1))
@@ -822,7 +823,7 @@ pub fn run_field(body: &[u8], key: &str) -> Result<String, String> {
             }
             Ok(text)
         }
-        Err(e) => Err(e.text()),
+        Err(e) => Err(py::plain(&e.exception)),
     }
 }
 
@@ -842,8 +843,13 @@ pub fn watch_alone(body: &[u8], json_out: bool) -> Shown {
             ))
         }
         Ok(_) => Shown::out(format!("watch: off ({CLI} ci watch on)\n")),
-        Err(e) => raised(String::new(), String::new(), &e),
+        Err(e) => py::unreadable(String::new(), &e),
     }
+}
+
+/// The plain line of an OS error on `path`.
+fn os_plain(e: &std::io::Error, path: &str) -> String {
+    py::plain(&crate::out::pylib::json::os_error(e, path).last_line())
 }
 
 /// `ci setup --plan --out <file>`: the setup file when nothing is
@@ -860,7 +866,7 @@ pub fn setup(body: &[u8], out_path: &str, json_out: bool) -> Exit {
     {
         Ok(n) => Some(n),
         Err(e) => {
-            stderr(&e.text());
+            stderr(&py::plain(&e.exception));
             return Exit::Error;
         }
     };
@@ -871,22 +877,17 @@ pub fn setup(body: &[u8], out_path: &str, json_out: bool) -> Exit {
             ..Options::default()
         };
         let wrote = std::fs::File::create(out_path)
-            .map_err(|e| {
-                let f = crate::out::pylib::json::os_error(&e, out_path);
-                Raise::at(4, f.last_line()).text()
-            })
+            .map_err(|e| os_plain(&e, out_path))
             .and_then(|mut file| {
                 let text = load(body, 3)
                     .and_then(|v| ix(&v, "setup", 5))
-                    .map_err(|e| e.text())?;
+                    .map_err(|e| py::plain(&e.exception))?;
                 let text = json::to_string(&text, &opts).unwrap_or_default() + "\n";
-                std::io::Write::write_all(&mut file, text.as_bytes()).map_err(|e| {
-                    let f = crate::out::pylib::json::os_error(&e, out_path);
-                    Raise::at(5, f.last_line()).text()
-                })
+                std::io::Write::write_all(&mut file, text.as_bytes())
+                    .map_err(|e| os_plain(&e, out_path))
             });
-        if let Err(tb) = wrote {
-            stderr(&tb);
+        if let Err(line) = wrote {
+            stderr(&line);
             out::stderr_line(&format!("can't write {out_path}"));
             return Exit::Error;
         }
@@ -897,12 +898,8 @@ pub fn setup(body: &[u8], out_path: &str, json_out: bool) -> Exit {
                 pairs.retain(|(k, _)| k.as_str() != Some("setup"));
                 Shown::out(format!("{}\n", super::dumps_value(&Value::Object(pairs))))
             }
-            Ok(other) => raised(
-                String::new(),
-                String::new(),
-                &Raise::no_attribute(1, &other, "pop"),
-            ),
-            Err(e) => raised(String::new(), String::new(), &e),
+            Ok(other) => py::unreadable(String::new(), &Raise::no_attribute(1, &other, "pop")),
+            Err(e) => py::unreadable(String::new(), &e),
         }
     } else {
         run_shown(body, |v, o| setup_lines(v, o, out_path))

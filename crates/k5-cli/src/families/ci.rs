@@ -848,10 +848,10 @@ fn release(cp: &mut Cp<'_>, a: &Ask, ws: &str) -> Exit {
 }
 
 /// `x="$(… json.load(sys.stdin)["run"][key] …)"`: the text; under
-/// `set -e` a raise is its traceback and the end of the command (exit 1).
+/// `set -e` a raise is its plain line and the end of the command (exit 1).
 fn run_field(body: &[u8], key: &str) -> Result<String, Exit> {
-    render::run_field(body, key).map_err(|tb| {
-        let _ = out::write_flushed(&mut std::io::stderr().lock(), tb.as_bytes());
+    render::run_field(body, key).map_err(|line| {
+        let _ = out::write_flushed(&mut std::io::stderr().lock(), line.as_bytes());
         Exit::Error
     })
 }

@@ -18,22 +18,22 @@
 //!   it (its failures alone with `--failures`). A failing log never stops
 //!   the walk (the shell's `|| true`).
 //!
-//! Where the shell's Python raises, this prints a traceback with Python's
-//! exception and ends with 1, as the shell's `|| exit 1` (or `set -e`)
-//! does. Every name the daemon's answer puts under `--out` is checked
+//! Where the shell's Python raises, this prints its one plain line
+//! ([`py::plain`], never a traceback) and ends with 1, as the shell's
+//! `|| exit 1` (or `set -e`) does. Every name the daemon's answer puts under `--out` is checked
 //! before anything is written ([`super::outdir::check`]): one that is
 //! absolute, has a `..` part, holds a NUL or a newline, goes through a
 //! link or lands outside `--out` is refused with exit 3 and nothing is
 //! written. Each file is then made with no link followed
 //! ([`super::outdir::put`]).
 
-use super::{call, outdir, Ask};
+use super::{call, outdir, py, Ask};
 use crate::exit::Exit;
 use crate::families::compute::logs;
 use crate::families::compute::pyrt::{self as p, s};
 use crate::families::compute::reads::Stop;
 use crate::families::compute::writes::{dumps, fetch, object, print_body, str_value, Cp, Words};
-use crate::families::{raised, Raise, Shown};
+use crate::families::{Raise, Shown};
 use crate::out;
 use crate::out::json::{self, Options, Text, Value};
 use crate::out::pylib::json as pyjson;
@@ -211,8 +211,9 @@ fn usage(line: String) -> Exit {
     Exit::Usage
 }
 
-pub(super) fn tb(r: &Raise) -> Exit {
-    raised(String::new(), String::new(), r).print()
+/// A reader that raised before it printed anything: its plain line, exit 1.
+pub(super) fn fail(r: &Raise) -> Exit {
+    py::unreadable(String::new(), r).print()
 }
 
 /// `mkdir -p "$out_dir" || { echo "can't make $out_dir" >&2; exit 1; }`
@@ -263,11 +264,11 @@ pub fn provenance(cp: &mut Cp<'_>, a: &Ask, ws: &str) -> Exit {
     }
     let n_st = match write_statements(&body, &a.out_dir) {
         Ok(n) => n,
-        Err(r) => return tb(&r),
+        Err(r) => return fail(&r),
     };
     let n_trust = match write_trust(&body, &a.out_dir) {
         Ok(n) => n,
-        Err(r) => return tb(&r),
+        Err(r) => return fail(&r),
     };
     if a.json {
         return print_body(&body);
@@ -276,7 +277,7 @@ pub fn provenance(cp: &mut Cp<'_>, a: &Ask, ws: &str) -> Exit {
     let r = provenance_lines(&body, &a.out_dir, n_st, n_trust, &mut o);
     match r {
         Ok(()) => Shown::out(o).print(),
-        Err(e) => raised(o, String::new(), &e).print(),
+        Err(e) => py::unreadable(o, &e).print(),
     }
 }
 
@@ -349,8 +350,8 @@ fn bundle_file(body: &[u8], dir: &str) -> R<String> {
     Ok(path)
 }
 
-/// The jobs' reader (`< <(python3 …)`): its lines, and its traceback if
-/// it raised (the loop still reads what it printed).
+/// The jobs' reader (`< <(python3 …)`): its lines, and what it raised if
+/// it did (the loop still reads what it printed).
 fn job_lines(body: &[u8]) -> (String, Option<Raise>) {
     let mut o = String::new();
     let r = (|| -> R<()> {
@@ -414,13 +415,6 @@ fn quiet_stdout<T>(f: impl FnOnce() -> T) -> T {
     f()
 }
 
-/// A traceback of a script `python3 -I -` read on stdin.
-fn stdin_traceback(line: u32, exception: &str) -> String {
-    format!(
-        "Traceback (most recent call last):\n  File \"<stdin>\", line {line}, in <module>\n{exception}\n"
-    )
-}
-
 /// `sorted(x)` of what a bundle's `receipts` holds.
 fn sorted_labels(v: &Value) -> Result<Vec<Value>, String> {
     let mut items = p::iter(v)?;
@@ -463,30 +457,27 @@ fn reported(path: &str, out_dir: &str, name: &str) -> Result<String, String> {
             "--reported {name}: a path inside each job's files (dist/build-info.json)\n"
         ));
     }
-    let tbk = |line: u32, e: String| stdin_traceback(line, &e);
-    let text = pyjson::read_text_file(path).map_err(|f| tbk(5, f.last_line()))?;
-    let mut b = pyjson::loads(&text).map_err(|f| tbk(5, f.last_line()))?;
-    let receipts = p::idx(&b, "receipts").map_err(|e| tbk(7, e))?;
-    let labels = sorted_labels(&receipts).map_err(|e| tbk(7, e))?;
+    let text = pyjson::read_text_file(path).map_err(|f| py::plain(&f.last_line()))?;
+    let mut b = pyjson::loads(&text).map_err(|f| py::plain(&f.last_line()))?;
+    let receipts = p::idx(&b, "receipts").map_err(|e| py::plain(&e))?;
+    let labels = sorted_labels(&receipts).map_err(|e| py::plain(&e))?;
     let mut added: Vec<String> = Vec::new();
     for label in labels {
         let Value::Str(_) = &label else {
-            return Err(tbk(
-                8,
-                format!(
-                    "TypeError: join() argument must be str, bytes, or os.PathLike object, not '{}'",
-                    p::tname(&label)
-                ),
-            ));
+            let e = format!(
+                "TypeError: join() argument must be str, bytes, or os.PathLike object, not '{}'",
+                p::tname(&label)
+            );
+            return Err(py::plain(&e));
         };
         let label = p::str_of(&label);
         let f = join(&join(out_dir, &label), name);
         if f.contains('\0') || !std::path::Path::new(&f).is_file() {
             continue;
         }
-        let data = std::fs::read(&f).map_err(|e| tbk(10, pyjson::os_error(&e, &f).last_line()))?;
+        let data = std::fs::read(&f).map_err(|e| py::plain(&pyjson::os_error(&e, &f).last_line()))?;
         let enc = crate::families::store::widget::b64encode(&data);
-        set_reported(&mut b, &label, name, enc).map_err(|e| tbk(10, e))?;
+        set_reported(&mut b, &label, name, enc).map_err(|e| py::plain(&e))?;
         added.push(label);
     }
     if added.is_empty() {
@@ -494,10 +485,10 @@ fn reported(path: &str, out_dir: &str, name: &str) -> Result<String, String> {
             "--reported {name}: no job of the run wrote that file\n"
         ));
     }
-    let mut fh = open_w(path).map_err(|e| tbk(14, e))?;
-    let text = dumps_with(&b, Some(1), true).map_err(|e| tbk(15, e))?;
+    let mut fh = open_w(path).map_err(|e| py::plain(&e))?;
+    let text = dumps_with(&b, Some(1), true).map_err(|e| py::plain(&e))?;
     fh.write_all(format!("{text}\n").as_bytes())
-        .map_err(|e| tbk(15, pyjson::os_error(&e, path).last_line()))?;
+        .map_err(|e| py::plain(&pyjson::os_error(&e, path).last_line()))?;
     Ok(format!(
         "reported {name} of {} carried in the bundle\n",
         added.join(", ")
@@ -572,7 +563,7 @@ pub fn evidence(cp: &mut Cp<'_>, a: &Ask, ws: &str) -> Exit {
     }
     let mut file = match bundle_file(&body, &a.out_dir) {
         Ok(p) => p,
-        Err(r) => return tb(&r),
+        Err(r) => return fail(&r),
     };
     // `file="$(…)"` drops the trailing newlines.
     while file.ends_with('\n') {
@@ -580,17 +571,20 @@ pub fn evidence(cp: &mut Cp<'_>, a: &Ask, ws: &str) -> Exit {
     }
     let n_st = match write_statements(&body, &a.out_dir) {
         Ok(n) => n,
-        Err(r) => return tb(&r),
+        Err(r) => return fail(&r),
     };
     let n_trust = match write_trust(&body, &a.out_dir) {
         Ok(n) => n,
-        Err(r) => return tb(&r),
+        Err(r) => return fail(&r),
     };
     let mut fetched = 0usize;
     if !a.no_files {
         let (lines, raise) = job_lines(&body);
         if let Some(r) = raise {
-            let _ = out::write_flushed(&mut std::io::stderr().lock(), r.text().as_bytes());
+            let _ = out::write_flushed(
+                &mut std::io::stderr().lock(),
+                py::plain(&r.exception).as_bytes(),
+            );
         }
         for (label, job) in tab_fields(&lines) {
             if job.is_empty() {
@@ -624,7 +618,7 @@ pub fn evidence(cp: &mut Cp<'_>, a: &Ask, ws: &str) -> Exit {
     let r = evidence_lines(&body, &file, &a.out_dir, fetched, n_st, n_trust, &mut o);
     match r {
         Ok(()) => Shown::out(o).print(),
-        Err(e) => raised(o, String::new(), &e).print(),
+        Err(e) => py::unreadable(o, &e).print(),
     }
 }
 
@@ -632,7 +626,7 @@ pub fn evidence(cp: &mut Cp<'_>, a: &Ask, ws: &str) -> Exit {
 fn evidence_json(body: &[u8], file: &str) -> Exit {
     let mut v = match load(body, 1) {
         Ok(v) => v,
-        Err(r) => return tb(&r),
+        Err(r) => return fail(&r),
     };
     if let Value::Object(pairs) = &mut v {
         put_key(pairs, Text::from("path"), str_value(file));
@@ -797,7 +791,7 @@ pub fn logs(cp: &mut Cp<'_>, a: &Ask, ws: &str) -> Exit {
     };
     let mut lines = match check_lines(&body, &a.check) {
         Ok(l) => l,
-        Err(r) => return tb(&r),
+        Err(r) => return fail(&r),
     };
     while lines.ends_with('\n') {
         lines.pop();

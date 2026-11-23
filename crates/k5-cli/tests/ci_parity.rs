@@ -10,7 +10,9 @@
 //!   reader prints; `run --wait` and `release --wait` (one more status
 //!   call, `CI_WAIT_SECS=0`); refusals (`code: hint`, a string error, not
 //!   JSON, 400, 404, 413) and no answer; odd answers its Python can't
-//!   read; many runs, and a `status --json` above 256 KiB.
+//!   read, each one plain line (`bad_response` or `io_error`, exit 1),
+//!   compared exactly, never a traceback; many runs, and a `status
+//!   --json` above 256 KiB.
 //! - The signer verbs a rig can drive without a vault: `list`,
 //!   `remove`, `finish`, and each verb's usage; a session is refused
 //!   before anything is sent. `add` and `reveal` (the vault's confirm) are
@@ -35,13 +37,6 @@ const VERB: &str = "ci";
 
 fn with(env: Vec<(&'static str, String)>, c: Case) -> Case {
     Case { env, ..c }
-}
-
-fn traceback(c: Case) -> Case {
-    Case {
-        compare: Compare::Traceback,
-        ..c
-    }
 }
 
 /// A run with every line its block prints.
@@ -647,7 +642,7 @@ fn ci_refusals_and_odd_answers() {
             1,
             1,
         ),
-        traceback(case(
+        case(
             "a 200 that is not JSON",
             &["status"],
             &[],
@@ -655,8 +650,8 @@ fn ci_refusals_and_odd_answers() {
             owner_and_port,
             1,
             1,
-        )),
-        traceback(case(
+        ),
+        case(
             "a run with no sha",
             &["run"],
             &[],
@@ -666,8 +661,8 @@ fn ci_refusals_and_odd_answers() {
             owner_and_port,
             1,
             1,
-        )),
-        traceback(case(
+        ),
+        case(
             "a monitor with no to",
             &["monitor", "add", "m", "--kind", "slow"],
             &[],
@@ -675,7 +670,7 @@ fn ci_refusals_and_odd_answers() {
             owner_and_port,
             1,
             1,
-        )),
+        ),
     ];
     for c in v {
         rig.check(&c);
@@ -1010,7 +1005,7 @@ fn ci_provenance_writes_as_the_shell_does() {
             4,
             1,
         ),
-        traceback(case(
+        case(
             "provenance: a statement with no line",
             &["provenance", "r1", "--out", "odd1"],
             &[],
@@ -1018,8 +1013,8 @@ fn ci_provenance_writes_as_the_shell_does() {
             owner_and_port,
             1,
             1,
-        )),
-        traceback(case(
+        ),
+        case(
             "provenance: a line that is no string",
             &["provenance", "r1", "--out", "odd2"],
             &[],
@@ -1027,8 +1022,8 @@ fn ci_provenance_writes_as_the_shell_does() {
             owner_and_port,
             1,
             1,
-        )),
-        traceback(case(
+        ),
+        case(
             "provenance: a roster key that is no string",
             &["provenance", "r1", "--out", "odd3"],
             &[],
@@ -1038,8 +1033,8 @@ fn ci_provenance_writes_as_the_shell_does() {
             owner_and_port,
             1,
             1,
-        )),
-        traceback(case(
+        ),
+        case(
             "provenance: files that are no number",
             &["provenance", "r1", "--out", "odd4"],
             &[],
@@ -1049,7 +1044,7 @@ fn ci_provenance_writes_as_the_shell_does() {
             owner_and_port,
             1,
             1,
-        )),
+        ),
     ];
     for c in v {
         rig.check(&c);
@@ -1414,7 +1409,7 @@ fn ci_evidence_writes_and_fetches_as_the_shell_does() {
             3,
             1,
         ),
-        traceback(case(
+        case(
             "evidence: a file name that is no string",
             &["evidence", "r9", "--out", "evo1"],
             &[],
@@ -1422,8 +1417,8 @@ fn ci_evidence_writes_and_fetches_as_the_shell_does() {
             owner_and_port,
             1,
             1,
-        )),
-        traceback(case(
+        ),
+        case(
             "evidence: jobs that are no object",
             &["evidence", "r9", "--out", "evo2"],
             &[],
@@ -1433,8 +1428,8 @@ fn ci_evidence_writes_and_fetches_as_the_shell_does() {
             owner_and_port,
             1,
             1,
-        )),
-        traceback(case(
+        ),
+        case(
             "evidence: a note that is no string",
             &["evidence", "r9", "--out", "evo3", "--no-files"],
             &[],
@@ -1444,7 +1439,7 @@ fn ci_evidence_writes_and_fetches_as_the_shell_does() {
             owner_and_port,
             1,
             1,
-        )),
+        ),
     ];
     for c in v {
         rig.check(&c);
@@ -1568,7 +1563,7 @@ fn ci_logs_answer_as_the_shell_does() {
             1,
             1,
         ),
-        traceback(case(
+        case(
             "logs: a run that is no object",
             &["logs", "r1"],
             &[],
@@ -1576,8 +1571,8 @@ fn ci_logs_answer_as_the_shell_does() {
             owner_and_port,
             1,
             1,
-        )),
-        traceback(case(
+        ),
+        case(
             "logs: a job that can't be cut",
             &["logs", "r1"],
             &[],
@@ -1587,7 +1582,7 @@ fn ci_logs_answer_as_the_shell_does() {
             owner_and_port,
             1,
             1,
-        )),
+        ),
     ];
     for c in v {
         rig.check(&c);

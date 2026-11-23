@@ -12,7 +12,8 @@
 //!   removed, and the new one is created with
 //!   `O_CREAT|O_EXCL|O_NOFOLLOW`.
 //!
-//! The line numbers are the program's, for its tracebacks.
+//! Where it raises, `ci` prints one plain line ([`super::py::plain`]),
+//! never a traceback.
 
 use super::files::join;
 use crate::exit::Exit;
@@ -108,12 +109,10 @@ fn names(v: &Value, verb: &str) -> Vec<(&'static str, Text, String)> {
     got
 }
 
-/// An exception raised in `link_on`, called by `why`.
+/// An exception raised in `link_on`, called by `why` from the module's
+/// line 111.
 fn in_link_on(exception: String) -> Raise {
-    Raise {
-        frames: vec![(111, "<module>"), (100, "why"), (86, "link_on")],
-        exception,
-    }
+    Raise::at(111, exception)
 }
 
 /// `link_on(rel)`: the first link on the way to `rel` under `dir`.
@@ -206,18 +205,18 @@ fn escaped(v: &Value) -> String {
 }
 
 /// `check <verb> <dir>` on the answer: `Err` with the exit when a name is
-/// refused (its line is printed) or the answer can't be read (the
-/// traceback is printed).
+/// refused (its line is printed) or the answer can't be read (the plain
+/// line is printed).
 pub fn check(body: &[u8], verb: &str, dir: &str) -> Result<(), Exit> {
     let v = match crate::out::pylib::json::loads(&String::from_utf8_lossy(body)) {
         Ok(v) => v,
-        Err(f) => return Err(super::files::tb(&Raise::at(4, f.last_line()))),
+        Err(f) => return Err(super::files::fail(&Raise::at(4, f.last_line()))),
     };
     for (what, name, rel) in names(&v, verb) {
         let bad = match why(&name, &rel, dir) {
             Ok(Some(bad)) => bad,
             Ok(None) => continue,
-            Err(r) => return Err(super::files::tb(&r)),
+            Err(r) => return Err(super::files::fail(&r)),
         };
         let tail = str_value(&format!(" {bad}: refused, nothing written to {dir}"));
         let shown = if text(&name).is_empty() {
@@ -238,26 +237,19 @@ pub fn check(body: &[u8], verb: &str, dir: &str) -> Result<(), Exit> {
     Ok(())
 }
 
-/// Where `put` raised: its frames below the module's line, and the
-/// exception.
+/// What `put` raised.
 pub struct PutFailed {
-    frames: Vec<(u32, &'static str)>,
     exception: String,
 }
 
 impl PutFailed {
-    fn new(frames: Vec<(u32, &'static str)>, exception: String) -> PutFailed {
-        PutFailed { frames, exception }
+    fn new(exception: String) -> PutFailed {
+        PutFailed { exception }
     }
 
-    /// The traceback, `put` called from line `from` of the module.
+    /// The raise, `put` called from line `from` of the module.
     pub fn raise(self, from: u32) -> Raise {
-        let mut frames = vec![(from, "<module>")];
-        frames.extend(self.frames);
-        Raise {
-            frames,
-            exception: self.exception,
-        }
+        Raise::at(from, self.exception)
     }
 }
 
@@ -280,12 +272,12 @@ mod at {
     /// `folder(rel, make)`: the open folder that holds `rel` under `dir`,
     /// and the last part of `rel`. The first `make` folders (every one
     /// when `make < 0`) are made when missing. No link is followed.
-    fn folder(dir: &str, rel: &str, make: i64) -> Result<(OwnedFd, String), (u32, String)> {
+    fn folder(dir: &str, rel: &str, make: i64) -> Result<(OwnedFd, String), String> {
         let root = std::fs::OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_DIRECTORY)
             .open(dir)
-            .map_err(|e| (11, os_error(&e, dir).last_line()))?;
+            .map_err(|e| os_error(&e, dir).last_line())?;
         let mut fd = OwnedFd::from(root);
         let parts: Vec<&str> = rel.split('/').collect();
         let Some((last_part, head)) = parts.split_last() else {
@@ -295,7 +287,7 @@ mod at {
             if part.is_empty() {
                 continue;
             }
-            let c = name_c(part).map_err(|e| (19, e))?;
+            let c = name_c(part)?;
             if make < 0 || (i as i64) < make {
                 // SAFETY: a folder descriptor this function owns and a C
                 // string that lives through the call.
@@ -303,7 +295,7 @@ mod at {
                 if rc != 0 {
                     let e = std::io::Error::last_os_error();
                     if e.raw_os_error() != Some(libc::EEXIST) {
-                        return Err((19, os_error(&e, part).last_line()));
+                        return Err(os_error(&e, part).last_line());
                     }
                 }
             }
@@ -316,7 +308,7 @@ mod at {
                 )
             };
             if sub < 0 {
-                return Err((22, last(part)));
+                return Err(last(part));
             }
             // SAFETY: `sub` is a descriptor openat just gave us.
             fd = unsafe { OwnedFd::from_raw_fd(sub) };
@@ -326,9 +318,8 @@ mod at {
 
     /// `put(rel, text, make)` up to the open file.
     pub fn create(dir: &str, rel: &str, make: i64) -> Result<(std::fs::File, String), PutFailed> {
-        let (d, name) = folder(dir, rel, make)
-            .map_err(|(line, e)| PutFailed::new(vec![(32, "put"), (line, "folder")], e))?;
-        let c = name_c(&name).map_err(|e| PutFailed::new(vec![(35, "put")], e))?;
+        let (d, name) = folder(dir, rel, make).map_err(PutFailed::new)?;
+        let c = name_c(&name).map_err(PutFailed::new)?;
         // SAFETY: a zeroed `stat` is a valid value for fstatat to fill.
         let mut st: libc::stat = unsafe { std::mem::zeroed() };
         // SAFETY: the folder descriptor and C string live through the call.
@@ -344,16 +335,13 @@ mod at {
             if (st.st_mode & libc::S_IFMT) == libc::S_IFREG {
                 // SAFETY: as above.
                 if unsafe { libc::unlinkat(d.as_raw_fd(), c.as_ptr(), 0) } != 0 {
-                    return Err(PutFailed::new(vec![(36, "put")], last(&name)));
+                    return Err(PutFailed::new(last(&name)));
                 }
             }
         } else {
             let e = std::io::Error::last_os_error();
             if e.raw_os_error() != Some(libc::ENOENT) {
-                return Err(PutFailed::new(
-                    vec![(35, "put")],
-                    os_error(&e, &name).last_line(),
-                ));
+                return Err(PutFailed::new(os_error(&e, &name).last_line()));
             }
         }
         // SAFETY: as above.
@@ -366,7 +354,7 @@ mod at {
             )
         };
         if fd < 0 {
-            return Err(PutFailed::new(vec![(39, "put")], last(&name)));
+            return Err(PutFailed::new(last(&name)));
         }
         // SAFETY: `fd` is a descriptor openat just gave us.
         Ok((unsafe { std::fs::File::from_raw_fd(fd) }, name))
@@ -378,14 +366,11 @@ mod at {
 #[cfg(unix)]
 pub fn put(dir: &str, rel: &str, text: &Value, make: i64) -> Result<(), PutFailed> {
     let (mut f, name) = at::create(dir, rel, make)?;
-    super::files::write_str(&mut f, text, &name).map_err(|e| PutFailed::new(vec![(43, "put")], e))
+    super::files::write_str(&mut f, text, &name).map_err(PutFailed::new)
 }
 
 /// Off Unix [`super::run`] hands `evidence` and `provenance` to the shell.
 #[cfg(not(unix))]
 pub fn put(_dir: &str, _rel: &str, _text: &Value, _make: i64) -> Result<(), PutFailed> {
-    Err(PutFailed::new(
-        vec![(39, "put")],
-        "OSError: no openat here".into(),
-    ))
+    Err(PutFailed::new("OSError: no openat here".into()))
 }

@@ -1,14 +1,59 @@
 //! The few Python operations `ci`'s readers use on a value `json.load`
-//! gave, each raising what Python raises where the value is not what the
-//! reader expects. A raise names the reader's first line: the rig compares
-//! a traceback's exception, not its frames.
+//! gave, each failing where Python raises, and what the shell prints
+//! then: one plain line ([`plain`]), never a traceback.
 
-use crate::families::{py_d, py_iter, Raise};
+use crate::exit::Exit;
+use crate::families::{py_d, py_iter, Raise, Shown};
 use crate::out::json::{Text, Value};
 use crate::out::py;
 use crate::out::pylib::ops::{index, join};
+use k2_client::brand::{CLI_NAME as CLI, PRODUCT_NAME as PRODUCT};
 
 pub type R<T> = Result<T, Raise>;
+
+/// Python's `OSError` and the classes under it.
+const OS_ERRORS: &[&str] = &[
+    "OSError",
+    "BlockingIOError",
+    "BrokenPipeError",
+    "ChildProcessError",
+    "ConnectionError",
+    "ConnectionAbortedError",
+    "ConnectionRefusedError",
+    "ConnectionResetError",
+    "FileExistsError",
+    "FileNotFoundError",
+    "InterruptedError",
+    "IsADirectoryError",
+    "NotADirectoryError",
+    "PermissionError",
+    "ProcessLookupError",
+    "TimeoutError",
+];
+
+/// What `_CI_PY_PLAIN` (`cli/src/ci.sh`) prints where one of `ci`'s
+/// readers raises `exception` (`Class: words`): an OS error is
+/// `io_error: <its words>`; anything else is an answer the reader can't
+/// read, `bad_response`.
+pub fn plain(exception: &str) -> String {
+    let (class, words) = exception.split_once(": ").unwrap_or((exception, ""));
+    if OS_ERRORS.contains(&class) {
+        format!("io_error: {words}\n")
+    } else {
+        format!(
+            "bad_response: {CLI} ci can't read the daemon's answer (a daemon on another {PRODUCT} version?)\n"
+        )
+    }
+}
+
+/// A reader that raised: what it printed, then [`plain`]'s line; exit 1.
+pub fn unreadable(stdout: String, r: &Raise) -> Shown {
+    Shown {
+        stdout,
+        stderr: plain(&r.exception),
+        exit: Exit::Error,
+    }
+}
 
 /// `v.get(k)`: `None` (Null) for a missing key.
 pub fn g(v: &Value, k: &str, l: u32) -> R<Value> {

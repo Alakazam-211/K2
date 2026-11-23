@@ -113,3 +113,21 @@ fn the_files_helpers_read_paths_as_python_and_lines_as_read() {
         vec![("-".to_string(), "docs".to_string())]
     );
 }
+
+#[test]
+fn a_reader_that_raises_is_one_plain_line() {
+    use super::py::plain;
+    let bad = format!(
+        "bad_response: {} ci can't read the daemon's answer (a daemon on another {} version?)\n",
+        k2_client::brand::CLI_NAME,
+        k2_client::brand::PRODUCT_NAME
+    );
+    assert_eq!(plain("KeyError: 'run'"), bad);
+    assert_eq!(plain("json.decoder.JSONDecodeError: Expecting value"), bad);
+    assert_eq!(plain("TypeError: 'int' object is not iterable"), bad);
+    assert_eq!(
+        plain("PermissionError: [Errno 13] Permission denied: 'x'"),
+        "io_error: [Errno 13] Permission denied: 'x'\n"
+    );
+    assert_eq!(plain("OSError"), "io_error: \n");
+}

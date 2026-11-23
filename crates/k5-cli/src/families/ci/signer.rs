@@ -12,7 +12,7 @@ use super::super::compute::writes::{self, dumps, in_session, object, str_value, 
 use super::Parsed;
 use crate::confirm::confirm_token;
 use crate::exit::Exit;
-use crate::families::{raised, Raise, Shown};
+use crate::families::{Raise, Shown};
 use crate::out::json::{self, Value};
 use crate::out::pylib::json::{loads, os_error, read_text_file};
 use crate::out::{self, py};
@@ -152,18 +152,19 @@ fn usage(line: String) -> Exit {
     Exit::Usage
 }
 
-/// `python3 -c '… json.load(open(path)) …; print(json.dumps(…))'`: the
-/// value, or the traceback (then the shell's usage line, exit 2).
-fn read_json(path: &str, hello: bool) -> Result<Value, String> {
-    let text = read_text_file(path).map_err(|f| Raise::at(1, f.last_line()).text())?;
-    let v = loads(&text).map_err(|f| Raise::at(1, f.last_line()).text())?;
+/// `python3 -c '… json.load(open(path)) …; print(json.dumps(…))'
+/// 2>/dev/null`: the value, or `None` where it raises (then the shell's
+/// usage line alone, exit 2).
+fn read_json(path: &str, hello: bool) -> Option<Value> {
+    let text = read_text_file(path).ok()?;
+    let v = loads(&text).ok()?;
     if !hello {
-        return Ok(v);
+        return Some(v);
     }
     match crate::families::py_get(&v, "hello", 1) {
-        Ok(Some(h)) => Ok(h.clone()),
-        Ok(None) => Ok(v.clone()),
-        Err(r) => Err(r.text()),
+        Ok(Some(h)) => Some(h.clone()),
+        Ok(None) => Some(v.clone()),
+        Err(_) => None,
     }
 }
 
@@ -181,12 +182,12 @@ fn reader(body: &[u8], f: impl FnOnce(&Value, &mut String) -> Result<(), Raise>)
     let raw = String::from_utf8_lossy(body);
     let v = match loads(&raw) {
         Ok(v) => v,
-        Err(e) => return raised(String::new(), String::new(), &Raise::at(1, e.last_line())),
+        Err(e) => return super::py::unreadable(String::new(), &Raise::at(1, e.last_line())),
     };
     let mut o = String::new();
     match f(&v, &mut o) {
         Ok(()) => Shown::out(o),
-        Err(r) => raised(o, String::new(), &r),
+        Err(r) => super::py::unreadable(o, &r),
     }
 }
 
@@ -261,12 +262,8 @@ pub fn send(cp: &mut Cp<'_>, ask: &Ask, sock: &Path) -> Exit {
                 code.clone()
             };
             let prefix = code.rsplit('.').next().unwrap_or("").to_string();
-            let hj = match read_json(hello, true) {
-                Ok(v) => v,
-                Err(tb) => {
-                    let _ = out::write_flushed(&mut std::io::stderr().lock(), tb.as_bytes());
-                    return usage("usage: --hello is the JSON pair-begin printed".into());
-                }
+            let Some(hj) = read_json(hello, true) else {
+                return usage("usage: --hello is the JSON pair-begin printed".into());
             };
             let Some(tok) = confirm_token(
                 &mut confirm(cp, sock),
@@ -309,12 +306,8 @@ pub fn send(cp: &mut Cp<'_>, ask: &Ask, sock: &Path) -> Exit {
             if let Err(e) = person(cp) {
                 return e;
             }
-            let rj = match read_json(rev, false) {
-                Ok(v) => v,
-                Err(tb) => {
-                    let _ = out::write_flushed(&mut std::io::stderr().lock(), tb.as_bytes());
-                    return usage("usage: --reveal is the JSON pair-reveal printed".into());
-                }
+            let Some(rj) = read_json(rev, false) else {
+                return usage("usage: --reveal is the JSON pair-reveal printed".into());
             };
             let Some(tok) = confirm_token(
                 &mut confirm(cp, sock),
@@ -353,12 +346,8 @@ pub fn send(cp: &mut Cp<'_>, ask: &Ask, sock: &Path) -> Exit {
             if let Err(e) = person(cp) {
                 return e;
             }
-            let dj = match read_json(done, false) {
-                Ok(v) => v,
-                Err(tb) => {
-                    let _ = out::write_flushed(&mut std::io::stderr().lock(), tb.as_bytes());
-                    return usage("usage: --done is the JSON pair-accept printed".into());
-                }
+            let Some(dj) = read_json(done, false) else {
+                return usage("usage: --done is the JSON pair-accept printed".into());
             };
             let body = dumps(&object(vec![("pairing", str_value(id)), ("done", dj)]));
             let b = match cp.call(true, "/cli/ci/signer/finish", &body, true) {

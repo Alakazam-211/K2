@@ -3717,6 +3717,8 @@ impl RepoPick {
 
 /// `--repo` refused (bad folder, escapes the jail, not a repo there).
 pub(crate) const REPO_INVALID: &str = "repo_invalid";
+/// A fenced workspace's job asked to ship source (M2 review D1).
+pub(crate) const FENCED_NO_SOURCE: &str = "fenced_no_source";
 
 pub(crate) fn nested_pick(n: compute::sync::NestedRepo, auto: bool) -> RepoPick {
     let named = (n.root != n.home).then(|| n.root.clone());
@@ -3731,6 +3733,19 @@ pub(crate) fn nested_pick(n: compute::sync::NestedRepo, auto: bool) -> RepoPick 
 /// workspace, never `.k2/`.
 pub(crate) fn repo_pick(ws: &Ws, v: &serde_json::Value) -> R<RepoPick> {
     let ws_dir = Path::new(&ws.path);
+    // M2 review D1: a fenced workspace ships no source until its git steps
+    // run under its fence (K2 reading the repo for it could be pointed
+    // outside the fence mid-read). `--no-source` runs as before.
+    if crate::agent_isolation::workspace_and_fence(&ws.id).1 {
+        return Err(no(
+            FENCED_NO_SOURCE,
+            403,
+            format!(
+                "workspace {}'s folder fence is on, and K2 doesn't ship a fenced workspace's code yet; run with --no-source (copy what the job needs into its command or an artifact), or ask the owner to turn the fence off for this run",
+                ws.handle
+            ),
+        ));
+    }
     if let Some(rel) = s(v, "repo").filter(|r| !r.is_empty()) {
         let n = compute::sync::nested_repo(ws_dir, rel).map_err(|e| no(REPO_INVALID, 400, e))?;
         return Ok(nested_pick(n, false));

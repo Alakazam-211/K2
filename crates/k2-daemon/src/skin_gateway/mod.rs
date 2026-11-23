@@ -454,6 +454,14 @@ async fn serve(args: Args) -> Result<(), String> {
             root.display()
         );
     }
+    // M2 review G1: the App's folder is resolved once, here; every file is
+    // then opened and checked against this, never a root resolved again per
+    // request (a folder swapped for a link after start serves nothing). A
+    // folder that doesn't resolve fails the start, with the reason.
+    let root = match args.root.as_ref() {
+        Some(r) => Some(dunce::canonicalize(r).map_err(|e| format!("the App's folder {}: {e}", r.display()))?),
+        None => None,
+    };
     let listener = TcpListener::bind(args.listen)
         .await
         .map_err(|e| format!("bind {}: {e}", args.listen))?;
@@ -465,10 +473,7 @@ async fn serve(args: Args) -> Result<(), String> {
     let gw = Arc::new(Gateway {
         upstream_host: host,
         app: args.app,
-        // M2 review G1: the App's folder is resolved once, here; every file is
-        // then opened and checked against this, never a root resolved again
-        // per request (a folder swapped for a link after start serves nothing).
-        root: args.root.map(|r| dunce::canonicalize(&r).unwrap_or(r)),
+        root,
         sessions: Mutex::new(HashMap::new()),
         frame_lines: args.frame.header_lines(),
     });

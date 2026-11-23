@@ -178,3 +178,31 @@ fn a_repo_outside_the_workspace_is_refused_with_the_way_in() {
     let (r, _) = go(&f, serde_json::json!({ "repo": ".worktrees/other", "repoDir": dir(&f.outside) }));
     assert_eq!(r.expect("--repo the clone").0.commit, f.clone_head);
 }
+
+/// M2 review D1: a fenced workspace ships no source (403
+/// `fenced_no_source`, with `--no-source` named) until its git steps run
+/// under its fence. Off again, it ships as before.
+#[test]
+fn a_fenced_workspace_ships_no_source_yet() {
+    let f = fixture("fenced");
+    let set = |mode: &str| {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT OR REPLACE INTO projects (id, name, path, isolation_mode) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![f.ws.id, f.ws.handle, f.ws.path, mode],
+        )
+        .expect("project row");
+    };
+    set("fence");
+    let (r, _) = go(&f, serde_json::json!({ "repoDir": dir(&f.ws_dir) }));
+    let e = r.err().expect("a fenced workspace ships no source");
+    assert_eq!((e.code, e.status), (crate::compute_routes::FENCED_NO_SOURCE, 403), "{}", e.hint);
+    assert!(e.hint.contains("--no-source"), "{}", e.hint);
+    set("off");
+    let (r, _) = go(&f, serde_json::json!({ "repoDir": dir(&f.ws_dir) }));
+    assert!(r.is_ok(), "unfenced: as before: {:?}", r.err().map(|e| e.hint));
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.execute("DELETE FROM projects WHERE id = ?1", [&f.ws.id]).expect("cleanup");
+}

@@ -79,12 +79,12 @@ beforeEach(() => {
   current = status()
   who = { owner: true, role: 'owner' }
   useSettingsStore.setState({ closeSettings: h.closeSettings })
-  h.daemonCliGet.mockImplementation(async (_scope: unknown, route: string) => {
+  h.daemonCliGet.mockImplementation(async (route: string) => {
     if (route === 'first-run/status') return current
     if (route === 'auth/whoami') return who
     throw new Error(`unexpected GET ${route}`)
   })
-  h.daemonCliPost.mockImplementation(async (_scope: unknown, route: string) => {
+  h.daemonCliPost.mockImplementation(async (route: string) => {
     if (route === 'first-run/restart') return current
     if (route === 'first-run/kessel/welcome') return { ok: true, workspaceId: 'ws-kessel', sent: true }
     throw new Error(`unexpected POST ${route}`)
@@ -127,7 +127,7 @@ describe('Settings → Getting started', () => {
     await waitFor(() => expect(screen.getByTestId('getting-started.setup-list-line').textContent).toBe('2 steps left'))
     fireEvent.click(screen.getByTestId('getting-started-restart'))
     await waitFor(() => expect(h.closeSettings).toHaveBeenCalledTimes(1))
-    expect(h.daemonCliPost).toHaveBeenCalledWith(expect.anything(), 'first-run/restart', {})
+    expect(h.daemonCliPost).toHaveBeenCalledWith('first-run/restart', {})
   })
 
   it('says the list is off on this server', async () => {
@@ -147,7 +147,7 @@ describe('Settings → Getting started', () => {
       })
     h.daemonCliPost.mockRejectedValueOnce(refusal(false)).mockRejectedValueOnce(refusal(true))
     render(<GettingStartedSection />)
-    await waitFor(() => expect(h.daemonCliGet).toHaveBeenCalledWith(expect.anything(), 'auth/whoami'))
+    await waitFor(() => expect(h.daemonCliGet).toHaveBeenCalledWith('auth/whoami'))
     fireEvent.click(screen.getByTestId('getting-started-restart'))
     await waitFor(() => expect(screen.getByTestId('getting-started-note').textContent).toBe(GETTING_STARTED_COPY.asked))
     fireEvent.click(screen.getByTestId('getting-started-restart'))
@@ -171,7 +171,7 @@ describe('Settings → Getting started', () => {
     expect(screen.getByTestId('getting-started.kessel-line').textContent).toBe(kesselLine(null))
     fireEvent.click(button)
     await waitFor(() => expect(h.openSheet).toHaveBeenCalledTimes(1))
-    expect(h.daemonCliPost).toHaveBeenCalledWith(expect.anything(), 'first-run/restart', { kessel: true })
+    expect(h.daemonCliPost).toHaveBeenCalledWith('first-run/restart', { kessel: true })
   })
 
   it('with Kessel, Open Kessel goes to its Chat tab and the welcome waits for the confirm', async () => {
@@ -188,10 +188,10 @@ describe('Settings → Getting started', () => {
     fireEvent.click(screen.getByTestId('getting-started-kessel-welcome'))
     await waitFor(() => expect(h.confirm).toHaveBeenCalledTimes(1))
     expect(h.confirm.mock.calls[0]).toEqual([expect.objectContaining({ message: GETTING_STARTED_COPY.welcomeConfirm })])
-    expect(h.daemonCliPost).not.toHaveBeenCalledWith(expect.anything(), 'first-run/kessel/welcome', expect.anything())
+    expect(h.daemonCliPost).not.toHaveBeenCalledWith('first-run/kessel/welcome', expect.anything())
 
     fireEvent.click(screen.getByTestId('getting-started-kessel-welcome'))
     await waitFor(() => expect(screen.getByTestId('getting-started-note').textContent).toBe(GETTING_STARTED_COPY.welcomeSent))
-    expect(h.daemonCliPost).toHaveBeenCalledWith(expect.anything(), 'first-run/kessel/welcome', {})
+    expect(h.daemonCliPost).toHaveBeenCalledWith('first-run/kessel/welcome', {})
   })
 })

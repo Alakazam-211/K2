@@ -417,7 +417,7 @@ pub(crate) static SWITCHES: [Switch; 21] = [
             &[],
             "Let this agent hire agents",
             "Let {ws} hire new agents: each one gets its own workspace on this server",
-            "Only its main session can hire, never a sidecar, and only inside the hire root. It can pass on to a new agent only switches it has itself, never database access; a person is asked for the rest. It doesn't cover its own sidecars (agents.manage).",
+            "Only its main session can hire, never a sidecar, and only inside the hire root. It can pass on to a new agent only switches it has itself, never database access or compute; a person is asked for the rest. It doesn't cover its own sidecars (agents.manage).",
             &[code_wall("hire_off", "/cli/agents/hire")],
             WallCoverage::Code,
         ),

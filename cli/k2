@@ -15244,7 +15244,7 @@ WHAT A TEMPLATE IS
   A template only suggests switches; a hire never gets more than the
   hirer may give (k2 agent hire --help, PERMISSIONS). Each line says:
     would grant  the hirer may give it: the owner any, an admin what an
-                 admin can, an agent only what it has on itself.
+                 admin can, an agent only what it has (not compute).
     card         an owner or admin is asked on a card on its Thread.
     refused      no card can ask for it: the next line says who can turn
                  it on and how. The hire goes ahead; tell your person.
@@ -79550,7 +79550,7 @@ USAGE
   k2 agent hire <dir> [flags]
   k2 agent hire [<dir>] --template <id> [--name <name>] [--agent <preset>]
                 [--param <key>=<value>]... [--answer <id>=<text>]...
-                [--decline <permission>]...
+                [--decline <permission>]... [--allow <permission>]...
                 [--dry-run] [--launch] [flags]   (--dry-run wins: it only previews)
 
   The handle is the name in lowercase with dashes ("Rita Lee" → rita-lee).
@@ -79615,7 +79615,11 @@ FLAGS
                           compute.use, or permission-cards. Not one the
                           template suggests = usage error (exit 2) naming the
                           ones it does. Declined ones are not turned on, not
-                          asked for on a card, and not refused.
+                          asked for on a card, and not refused. K2 keeps the
+                          decline: a re-run leaves it off.
+  --allow <permission>    On a re-run by a person: decide a permission that
+                          was declined at an earlier hire again (repeatable).
+                          Without it a decline holds.
   --answer <id>=<text>    Answer one of the template's first-conversation
                           questions now (repeatable). Each built-in asks its
                           person 3–5 short questions (a writer: audience,
@@ -79742,26 +79746,27 @@ PERMISSIONS (a template's suggested switches)
                            run it without --dry-run). The owner may give any switch,
                            an admin login the ones an admin can turn on,
                            an agent only switches it has on itself (never
-                           database access); a member login or an API key
-                           gives none.
+                           database access, compute or an owner-only one);
+                           a member login or an API key gives none.
     card                   the hirer can't give it, so K2 asks an owner or
                            admin (the owner, for an owner-only switch) on a
                            permission card on the new agent's Thread, when
-                           it first starts if it has no Thread yet. K2 files
-                           it for the hire, so it comes even when the new
-                           agent can't ask for cards itself.
+                           it first starts if it has no Thread yet. Only
+                           while the new agent may ask for cards (its
+                           permission-cards line is granted or skip).
     refused                the hirer can't give it and no card can ask for
-                           it: permission cards are off on this server, or
-                           it is permission-cards itself (never asked on a
-                           card). The line after it says who can turn it on
-                           and how. The hire still goes ahead; tell your
-                           person.
+                           it: permission cards are off on this server, the
+                           new agent can't ask for cards, or it is
+                           permission-cards itself (never asked on a card).
+                           The line after it says who can turn it on and
+                           how. The hire still goes ahead; tell your person.
     skip                   already on (some switches are on for every new
                            agent), or permission-cards while cards are off.
     declined               left off with --decline: not turned on, not
-                           asked, and a re-run leaves it off too. The agent
-                           can still ask for it later like any switch, and
-                           a person can turn it on in Settings.
+                           asked, and a re-run leaves it off too (unless a
+                           person re-runs with --allow <permission>). The
+                           agent can still ask for it later like any
+                           switch, and a person can turn it on in Settings.
   permission-cards is "Can ask for permission cards" for the new agent.
   A re-run turns on what is still off and allowed; it never turns a
   switch off and never asks twice.
@@ -80320,7 +80325,7 @@ cmd_agent_hire() {
     local launch=false dry_run=false as_json=false no_wiki=false
     local no_agents_md=false fanout=false db_access="" color="" focus_group=""
     local take_app="" take_brief_file=""
-    local connects=() projects=() contexts=() params=() answers=() declines=()
+    local connects=() projects=() contexts=() params=() answers=() declines=() allows=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --name)
@@ -80329,6 +80334,9 @@ cmd_agent_hire() {
             --decline)
                 [ $# -ge 2 ] || { _agent_err "bad_usage" "--decline requires a permission id from the plan (see: k2 agent hire --template <id> --dry-run)"; exit 2; }
                 declines+=("$2"); shift 2 ;;
+            --allow)
+                [ $# -ge 2 ] || { _agent_err "bad_usage" "--allow requires a permission id from the plan (see: k2 agent hire --template <id> --dry-run)"; exit 2; }
+                allows+=("$2"); shift 2 ;;
             --agent)
                 [ $# -ge 2 ] || { _agent_err "bad_usage" "--agent requires a preset id/label (see: k2 preset list)"; exit 2; }
                 agent_preset="$2"; shift 2 ;;
@@ -80422,6 +80430,10 @@ cmd_agent_hire() {
         _agent_err "bad_usage" "--decline goes with --template <id>"
         exit 2
     fi
+    if [ ${#allows[@]} -gt 0 ] && [ -z "$template" ]; then
+        _agent_err "bad_usage" "--allow goes with --template <id>"
+        exit 2
+    fi
     # 0.46.12 (prd-agent-templates-v1 AT1): the daemon holds every template
     # and writes the persona; the CLI sends the id and the params.
     if [ -n "$persona" ] && { [ ! -f "$persona" ] || [ ! -r "$persona" ]; }; then
@@ -80488,11 +80500,13 @@ cmd_agent_hire() {
         ${projects[@]+"${projects[@]}"})
     contexts_json=$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' \
         ${contexts[@]+"${contexts[@]}"})
-    local params_json declines_json
+    local params_json declines_json allows_json
     params_json=$(python3 -c 'import json,sys; print(json.dumps(dict(a.split("=", 1) for a in sys.argv[1:])))' \
         ${params[@]+"${params[@]}"})
     declines_json=$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' \
         ${declines[@]+"${declines[@]}"})
+    allows_json=$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' \
+        ${allows[@]+"${allows[@]}"})
     # --answer id=text: a repeated id is a usage error (not a silent last-wins).
     local answers_json
     answers_json=$(python3 -c '
@@ -80508,7 +80522,7 @@ for a in sys.argv[1:]:
 print(json.dumps(out))' ${answers[@]+"${answers[@]}"}) || exit 2
 
     HIRE_DIR="$dir" NAME="$name" TEMPLATE="$template" TEMPLATE_PARAMS="$params_json" TEMPLATE_ANSWERS="$answers_json" \
-    TEMPLATE_DECLINES="$declines_json" \
+    TEMPLATE_DECLINES="$declines_json" TEMPLATE_ALLOWS="$allows_json" \
     PERSONA_FILE="$persona" MODE="$mode" ENABLED="$enabled" CONNECTS="$connects_json" \
     PROJECTS="$projects_json" CONTEXTS="$contexts_json" \
     LAUNCH="$launch" ONBOARD="$onboard" DRY_RUN="$dry_run" AGENT_PRESET="$agent_preset" \
@@ -80529,6 +80543,7 @@ template = os.environ.get("TEMPLATE", "").strip()
 template_params = json.loads(os.environ.get("TEMPLATE_PARAMS") or "{}")
 template_answers = json.loads(os.environ.get("TEMPLATE_ANSWERS") or "{}")
 template_declines = json.loads(os.environ.get("TEMPLATE_DECLINES") or "[]")
+template_allows = json.loads(os.environ.get("TEMPLATE_ALLOWS") or "[]")
 persona_file = os.environ.get("PERSONA_FILE", "")
 mode = os.environ.get("MODE", "")
 enabled = os.environ.get("ENABLED", "")
@@ -80644,6 +80659,8 @@ def template_body(extra):
         b["answers"] = template_answers
     if template_declines:
         b["declinePermissions"] = template_declines
+    if template_allows:
+        b["allowPermissions"] = template_allows
     if name:
         b["name"] = name
     b.update(extra)

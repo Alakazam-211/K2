@@ -1161,7 +1161,7 @@ cmd_agent_hire() {
     local launch=false dry_run=false as_json=false no_wiki=false
     local no_agents_md=false fanout=false db_access="" color="" focus_group=""
     local take_app="" take_brief_file=""
-    local connects=() projects=() contexts=() params=() answers=() declines=()
+    local connects=() projects=() contexts=() params=() answers=() declines=() allows=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --name)
@@ -1170,6 +1170,9 @@ cmd_agent_hire() {
             --decline)
                 [ $# -ge 2 ] || { _agent_err "bad_usage" "--decline requires a permission id from the plan (see: k2 agent hire --template <id> --dry-run)"; exit 2; }
                 declines+=("$2"); shift 2 ;;
+            --allow)
+                [ $# -ge 2 ] || { _agent_err "bad_usage" "--allow requires a permission id from the plan (see: k2 agent hire --template <id> --dry-run)"; exit 2; }
+                allows+=("$2"); shift 2 ;;
             --agent)
                 [ $# -ge 2 ] || { _agent_err "bad_usage" "--agent requires a preset id/label (see: k2 preset list)"; exit 2; }
                 agent_preset="$2"; shift 2 ;;
@@ -1263,6 +1266,10 @@ cmd_agent_hire() {
         _agent_err "bad_usage" "--decline goes with --template <id>"
         exit 2
     fi
+    if [ ${#allows[@]} -gt 0 ] && [ -z "$template" ]; then
+        _agent_err "bad_usage" "--allow goes with --template <id>"
+        exit 2
+    fi
     # 0.46.12 (prd-agent-templates-v1 AT1): the daemon holds every template
     # and writes the persona; the CLI sends the id and the params.
     if [ -n "$persona" ] && { [ ! -f "$persona" ] || [ ! -r "$persona" ]; }; then
@@ -1329,11 +1336,13 @@ cmd_agent_hire() {
         ${projects[@]+"${projects[@]}"})
     contexts_json=$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' \
         ${contexts[@]+"${contexts[@]}"})
-    local params_json declines_json
+    local params_json declines_json allows_json
     params_json=$(python3 -c 'import json,sys; print(json.dumps(dict(a.split("=", 1) for a in sys.argv[1:])))' \
         ${params[@]+"${params[@]}"})
     declines_json=$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' \
         ${declines[@]+"${declines[@]}"})
+    allows_json=$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' \
+        ${allows[@]+"${allows[@]}"})
     # --answer id=text: a repeated id is a usage error (not a silent last-wins).
     local answers_json
     answers_json=$(python3 -c '
@@ -1349,7 +1358,7 @@ for a in sys.argv[1:]:
 print(json.dumps(out))' ${answers[@]+"${answers[@]}"}) || exit 2
 
     HIRE_DIR="$dir" NAME="$name" TEMPLATE="$template" TEMPLATE_PARAMS="$params_json" TEMPLATE_ANSWERS="$answers_json" \
-    TEMPLATE_DECLINES="$declines_json" \
+    TEMPLATE_DECLINES="$declines_json" TEMPLATE_ALLOWS="$allows_json" \
     PERSONA_FILE="$persona" MODE="$mode" ENABLED="$enabled" CONNECTS="$connects_json" \
     PROJECTS="$projects_json" CONTEXTS="$contexts_json" \
     LAUNCH="$launch" ONBOARD="$onboard" DRY_RUN="$dry_run" AGENT_PRESET="$agent_preset" \
@@ -1370,6 +1379,7 @@ template = os.environ.get("TEMPLATE", "").strip()
 template_params = json.loads(os.environ.get("TEMPLATE_PARAMS") or "{}")
 template_answers = json.loads(os.environ.get("TEMPLATE_ANSWERS") or "{}")
 template_declines = json.loads(os.environ.get("TEMPLATE_DECLINES") or "[]")
+template_allows = json.loads(os.environ.get("TEMPLATE_ALLOWS") or "[]")
 persona_file = os.environ.get("PERSONA_FILE", "")
 mode = os.environ.get("MODE", "")
 enabled = os.environ.get("ENABLED", "")
@@ -1485,6 +1495,8 @@ def template_body(extra):
         b["answers"] = template_answers
     if template_declines:
         b["declinePermissions"] = template_declines
+    if template_allows:
+        b["allowPermissions"] = template_allows
     if name:
         b["name"] = name
     b.update(extra)

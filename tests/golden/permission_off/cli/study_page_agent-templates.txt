@@ -73,7 +73,7 @@ WHAT A TEMPLATE IS
   A template only suggests switches; a hire never gets more than the
   hirer may give (k2 agent hire --help, PERMISSIONS). Each line says:
     would grant  the hirer may give it: the owner any, an admin what an
-                 admin can, an agent only what it has on itself.
+                 admin can, an agent only what it has (not compute).
     card         an owner or admin is asked on a card on its Thread.
     refused      no card can ask for it: the next line says who can turn
                  it on and how. The hire goes ahead; tell your person.

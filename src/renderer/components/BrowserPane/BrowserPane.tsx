@@ -25,8 +25,9 @@ import {
 } from './browserFreeze'
 import { dockAppearance, nativeAppearance, sameAppearance, snapRect, type DockAppearance } from './dockGeometry'
 import { appZoom } from '@/lib/app-zoom'
-import { cornerRadius, freezesInUnderlay, pageLayersSync, type PageMode } from '@/lib/page-layers'
+import { freezesInUnderlay, pageLayersSync, type PageMode } from '@/lib/page-layers'
 import { layeringStatus, underlayActive, useBrowserLayeringStore, useBrowserUnderlay } from '@/stores/browser-layering'
+import { listenPagePointerDown } from '@/lib/page-pointer-down'
 
 export { focusVisibleBrowserAddress } from './focusBrowserAddress'
 export { normalizeUrl }
@@ -152,6 +153,9 @@ useBrowserLayeringStore.subscribe((state, prev) => {
   const now = layeringStatus(state)
   if (now !== layeringStatus(prev)) console.info(`[browser-underlay] window ${currentParentWindow()}: ${now}`)
 })
+// A click on a native page closes K2's open menus and popovers, as an
+// outside click does (the DOM never sees that click).
+listenPagePointerDown()
 // Once per window load: which path this window's browser pages take.
 console.info(`[browser-underlay] window ${currentParentWindow()}: ${layeringStatus(useBrowserLayeringStore.getState())}`)
 
@@ -620,10 +624,14 @@ export function BrowserPane({
       measure: () => {
         const rect = measureRawRect()
         if (!rect) return null
-        // PageLayers wants corners in CSS px (it scales once, at the end);
-        // the appearance holds them in window px.
+        // The hole's corners: the pane's drawn radius at each of the four
+        // corners (CSS px; PageLayers scales once, at the end). The
+        // appearance holds them in window px.
         const look = appearanceRef.current
-        return look ? { ...rect, radius: cornerRadius(look.cornerRadius / appZoom(), look.corners) } : rect
+        if (!look) return rect
+        const z = appZoom()
+        const radius = look.radii.map((r) => r / z) as [number, number, number, number]
+        return { ...rect, radius: radius.every((r) => r === radius[0]) ? radius[0] : radius }
       },
       mode: () => layerModeRef.current,
     })

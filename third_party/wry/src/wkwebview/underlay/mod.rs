@@ -66,6 +66,9 @@ pub struct WindowSpec {
   pub pages: Vec<PageSpec>,
   /// K2 things that own input over pages (menus, the dock, toasts), UI px.
   pub claims: Vec<Shape>,
+  /// The frontmost open claim is a menu: a click on a page only closes it
+  /// (K2 Design: like a macOS menu, the page doesn't get it).
+  pub swallow_page_clicks: bool,
 }
 
 struct Win {
@@ -74,6 +77,7 @@ struct Win {
   claims: Vec<Shape>,
   latch: Latch<usize>,
   hover_owner: Option<usize>,
+  swallow_page_clicks: bool,
 }
 
 /// Masks on UI views: (container, holes layer, claims layer).
@@ -119,6 +123,80 @@ pub(crate) fn reg_gen() -> u64 {
 
 pub(crate) fn hover_private() -> bool {
   HOVER_PRIVATE.load(Ordering::Relaxed)
+}
+
+/// Called on every mouse-down on a page of an underlay window, with the
+/// window's UI view (K2 tells its renderer: an outside click for its menus).
+static PAGE_DOWN_HOOK: std::sync::OnceLock<fn(&NSView)> = std::sync::OnceLock::new();
+
+pub fn set_page_down_hook(hook: fn(&NSView)) {
+  let _ = PAGE_DOWN_HOOK.set(hook);
+}
+
+thread_local! {
+  /// The page whose mouse-down was swallowed: its drags and mouse-up go too.
+  static SWALLOWING: Cell<usize> = const { Cell::new(0) };
+}
+
+/// What a page does with a mouse-down.
+pub(crate) enum PageDown {
+  /// Not an underlay page: stock behaviour.
+  Stock,
+  /// Told K2; the click goes on to the page.
+  Pass,
+  /// Told K2; the click (and its drag and mouse-up) is dropped, and the
+  /// page doesn't become first responder.
+  Swallow,
+}
+
+/// `mouseDown:` on a WryWebView.
+pub(crate) fn page_mouse_down(view: &NSView) -> PageDown {
+  if IN_FWD.with(|c| c.get()) {
+    return PageDown::Stock;
+  }
+  let Some(key) = window_key(view) else { return PageDown::Stock };
+  let me = ptr(view);
+  let found = WINS.with(|w| {
+    let w = w.borrow();
+    let win = w.get(&key)?;
+    win.pages.iter().any(|p| ptr(&*p.view) == me).then(|| (win.ui.clone(), win.swallow_page_clicks))
+  });
+  let Some((ui, swallow)) = found else { return PageDown::Stock };
+  if let Some(hook) = PAGE_DOWN_HOOK.get() {
+    hook(&ui);
+  }
+  if swallow {
+    SWALLOWING.with(|s| s.set(me));
+    PageDown::Swallow
+  } else {
+    PageDown::Pass
+  }
+}
+
+/// Is `view` a page of an underlay window with a menu open right now?
+pub(crate) fn page_swallows_now(view: &NSView) -> bool {
+  let Some(key) = window_key(view) else { return false };
+  let me = ptr(view);
+  WINS.with(|w| {
+    w.borrow()
+      .get(&key)
+      .is_some_and(|win| win.swallow_page_clicks && win.pages.iter().any(|p| ptr(&*p.view) == me))
+  })
+}
+
+/// `mouseDragged:` / `mouseUp:` on a WryWebView: true = drop it (the click
+/// was swallowed). `up` ends the swallow.
+pub(crate) fn page_mouse_swallowed(view: &NSView, up: bool) -> bool {
+  let me = ptr(view);
+  SWALLOWING.with(|s| {
+    if s.get() != me || me == 0 {
+      return false;
+    }
+    if up {
+      s.set(0);
+    }
+    true
+  })
 }
 
 /// First click on a page in an inactive window: off (Design, matching
@@ -175,7 +253,7 @@ pub fn set_window(spec: WindowSpec) -> Result<(), String> {
     // and cursor must not stay dead until the next move).
     let ui_p = ptr(&*spec.ui);
     let hover = hover.map(|o| if o == ui_p || still_here.contains(&o) { o } else { ui_p });
-    w.insert(key, Win { ui: spec.ui, pages: spec.pages, claims: spec.claims, latch, hover_owner: hover });
+    w.insert(key, Win { ui: spec.ui, pages: spec.pages, claims: spec.claims, latch, hover_owner: hover, swallow_page_clicks: spec.swallow_page_clicks });
     (hover, dropped)
   });
   bump();

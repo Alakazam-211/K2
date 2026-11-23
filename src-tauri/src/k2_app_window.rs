@@ -223,6 +223,19 @@ fn attach_k2_app_window_guards<'a, R: Runtime, M: Manager<R>>(
         })
         .on_new_window(|_url, _features| NewWindowResponse::Deny)
         .initialization_script_for_all_frames(SEALED_FRAME_GUARD_JS);
+    // A new load of the UI page (Cmd-R, a reconnect reload): the browser
+    // pages of this window must not stay drawn over the view the new page
+    // opens on (the underlay holds them until the new page places them).
+    #[cfg(target_os = "macos")]
+    let builder = builder.on_page_load(|window, payload| {
+        if payload.event() == tauri::webview::PageLoadEvent::Started {
+            // This builder is generic over the runtime; the app's is Wry.
+            let any: &dyn std::any::Any = window.app_handle();
+            if let Some(app) = any.downcast_ref::<tauri::AppHandle>() {
+                crate::commands::browser_page_layers::ui_page_load_started(app, window.label());
+            }
+        }
+    });
     attach_engine_settings(builder)
 }
 

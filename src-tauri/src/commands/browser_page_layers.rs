@@ -202,6 +202,92 @@ pub fn clamp_shape(s: &WireShape, ui: (f64, f64)) -> Option<WireShape> {
     Some(WireShape { x: x0, y: y0, width: x1 - x0, height: y1 - y0, radius: s.radius, chamfer: s.chamfer })
 }
 
+/// K2 Design's click rule for a page click while K2 has things open: the
+/// frontmost (most recently opened) claim that isn't a toast decides. A
+/// `menu` swallows the click (it only closes the menu, like a macOS menu); a
+/// `popover` lets it reach the page (one click closes it and acts); toasts
+/// never matter; nothing open: the page gets it.
+pub fn swallow_page_clicks(claims: &[WireClaim]) -> bool {
+    claims
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.kind.as_deref() != Some("toast"))
+        .max_by(|(ia, a), (ib, b)| {
+            let ka = (a.id.unwrap_or(f64::MIN), *ia as f64);
+            let kb = (b.id.unwrap_or(f64::MIN), *ib as f64);
+            ka.partial_cmp(&kb).unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .is_some_and(|(_, c)| c.kind.as_deref() == Some("menu"))
+}
+
+/// Pages held hidden after their window's UI page started a new load (a
+/// reload, a reconnect): the old page must not stay drawn over whatever the
+/// new UI shows. A held page comes back only when the new epoch's set
+/// places it live (underlay), or when the renderer shows it on the legacy
+/// path. Registry keys (`label\0item`).
+#[derive(Default, Debug)]
+pub struct Holds {
+    held: HashSet<String>,
+    /// Held pages the new renderer asked to show (it will place them).
+    asked: HashSet<String>,
+}
+
+impl Holds {
+    /// The window's UI page started loading: hold these pages.
+    pub fn hold(&mut self, keys: impl IntoIterator<Item = String>) {
+        for k in keys {
+            self.asked.remove(&k);
+            self.held.insert(k);
+        }
+    }
+
+    /// The renderer asks to show a page. True = show it now; false = it is
+    /// held for the new epoch's set (underlay), noted as asked.
+    pub fn show(&mut self, key: &str, underlay: bool) -> bool {
+        if !self.held.contains(key) {
+            return true;
+        }
+        if underlay {
+            self.asked.insert(key.to_string());
+            false
+        } else {
+            self.held.remove(key);
+            self.asked.remove(key);
+            true
+        }
+    }
+
+    /// The renderer hides a page: it no longer asks to show it.
+    pub fn hide(&mut self, key: &str) {
+        self.asked.remove(key);
+    }
+
+    /// A set places this page live: release it if held (true = unhide).
+    pub fn placed_live(&mut self, key: &str) -> bool {
+        self.asked.remove(key);
+        self.held.remove(key)
+    }
+
+    /// The window went back to legacy: the held pages the renderer asked
+    /// for come back now; the rest stay hidden until a pane shows them.
+    pub fn release_window(&mut self, label: &str) -> Vec<String> {
+        let prefix = format!("{label}\0");
+        let back: Vec<String> = self.asked.iter().filter(|k| k.starts_with(&prefix)).cloned().collect();
+        self.held.retain(|k| !k.starts_with(&prefix));
+        self.asked.retain(|k| !k.starts_with(&prefix));
+        back
+    }
+
+    pub fn forget(&mut self, key: &str) {
+        self.held.remove(key);
+        self.asked.remove(key);
+    }
+
+    pub fn is_held(&self, key: &str) -> bool {
+        self.held.contains(key)
+    }
+}
+
 /// Is this set measured at a size other than the UI view's current one?
 pub fn viewport_stale(viewport: Option<[f64; 2]>, current: (f64, f64)) -> bool {
     match viewport {
@@ -365,7 +451,49 @@ pub fn init(app: &AppHandle) {
     #[cfg(target_os = "macos")]
     {
         let _ = app.run_on_main_thread(mac::log_hover_route_at_startup);
+        mac::install_page_down_hook(app);
     }
+}
+
+/// A K2 window's UI page started a new load (Cmd-R, a reconnect reload):
+/// hide every browser page of that window, so none stays drawn over a view
+/// it doesn't belong to. The new renderer shows them again: in underlay its
+/// first set places them; on the legacy path its pane shows them.
+#[cfg(target_os = "macos")]
+pub fn ui_page_load_started(app: &AppHandle, label: &str) {
+    let pages = super::browser_webviews::views_of_window(app, label);
+    if pages.is_empty() {
+        return;
+    }
+    let underlay = underlay_window(app, label);
+    for (_, view) in &pages {
+        let _ = view.hide();
+    }
+    let keys: Vec<String> = pages.into_iter().map(|(k, _)| k).collect();
+    let n = keys.len();
+    let _ = app.run_on_main_thread(move || mac::hold_pages(keys));
+    say!(
+        info,
+        "[browser-underlay] window {label:?}: its UI page is loading again; {n} browser page(s) hidden until the new page {}",
+        if underlay { "places them" } else { "shows them" }
+    );
+}
+
+/// Show a page, unless it is held across a UI reload for the new epoch's
+/// set (underlay). Every show of a browser page goes through here on macOS.
+#[cfg(target_os = "macos")]
+pub fn show_page(app: &AppHandle, parent: &str, key: &str, view: &tauri::Webview) {
+    let underlay = underlay_window(app, parent);
+    let key = key.to_string();
+    let view = view.clone();
+    let _ = app.run_on_main_thread(move || mac::show_or_hold(&key, underlay, &view));
+}
+
+/// The renderer hid a page (it no longer wants it shown).
+#[cfg(target_os = "macos")]
+pub fn page_hidden(app: &AppHandle, key: &str) {
+    let key = key.to_string();
+    let _ = app.run_on_main_thread(move || mac::note_hidden(&key));
 }
 
 /// Is this K2 window in underlay right now? (browser_set_bounds then leaves
@@ -419,6 +547,8 @@ pub mod mac {
         static SIZED: RefCell<HashMap<usize, Instant>> = RefCell::new(HashMap::new());
         /// The hover route last installed (None = not yet).
         static HOVER: RefCell<Option<bool>> = const { RefCell::new(None) };
+        /// Pages held hidden across a UI reload (see `Holds`).
+        static HOLDS: RefCell<super::Holds> = RefCell::new(super::Holds::default());
         /// Sets in a row measured at a viewport other than the UI view's
         /// size, per window, and whether that was logged.
         static VIEWPORT_MISS: RefCell<HashMap<String, (u32, bool)>> = RefCell::new(HashMap::new());
@@ -514,6 +644,7 @@ pub mod mac {
         super::queue(app).0.lock().unwrap().known.remove(key);
         let key = key.to_string();
         let _ = app.run_on_main_thread(move || {
+            HOLDS.with(|h| h.borrow_mut().forget(&key));
             if let Some(v) = PAGES.with(|m| m.borrow_mut().remove(&key)) {
                 underlay::forget_view(&v);
                 SIZED.with(|s| s.borrow_mut().remove(&(Retained::as_ptr(&v) as usize)));
@@ -539,6 +670,44 @@ pub mod mac {
         set_hover_route(false);
     }
 
+    /// The app, for the page-down hook (set once at init).
+    static APP: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
+
+    pub fn install_page_down_hook(app: &AppHandle) {
+        let _ = APP.set(app.clone());
+        underlay::set_page_down_hook(page_down);
+    }
+
+    /// A mouse-down on a page (main thread): tell that window's renderer, so
+    /// its menus and popovers close as on an outside click.
+    fn page_down(ui: &NSView) {
+        let me = ui as *const NSView as usize;
+        let label = UIS.with(|m| {
+            m.borrow().iter().find(|(_, v)| Retained::as_ptr(v) as usize == me).map(|(k, _)| k.clone())
+        });
+        let (Some(label), Some(app)) = (label, APP.get()) else { return };
+        use tauri::Emitter;
+        let _ = app.emit_to(label.as_str(), "browser:page-pointer-down", ());
+    }
+
+    /// Main thread: hold these pages (their window's UI page started a new
+    /// load). They are hidden by the caller (Tauri's hide).
+    pub fn hold_pages(keys: Vec<String>) {
+        HOLDS.with(|h| h.borrow_mut().hold(keys));
+    }
+
+    /// Main thread: show `view` unless it is held for the new epoch's set.
+    pub fn show_or_hold(key: &str, underlay: bool, view: &Webview) {
+        if HOLDS.with(|h| h.borrow_mut().show(key, underlay)) {
+            let _ = view.show();
+        }
+    }
+
+    /// Main thread: the renderer hid this page.
+    pub fn note_hidden(key: &str) {
+        HOLDS.with(|h| h.borrow_mut().hide(key));
+    }
+
     /// The K2 window `label` closed (main thread): drop its UI view and
     /// pages from here and from wry's registry.
     pub fn window_destroyed(label: &str) {
@@ -562,6 +731,12 @@ pub mod mac {
 
     /// Back to legacy for one window: no mask, stock routing, pages on top.
     pub fn clear(parent: &str) -> Result<(), String> {
+        // Held pages the renderer asked for come back on the legacy path.
+        for key in HOLDS.with(|h| h.borrow_mut().release_window(parent)) {
+            if let Some(v) = PAGES.with(|m| m.borrow().get(&key).cloned()) {
+                v.setHidden(false);
+            }
+        }
         let ui = UIS.with(|m| m.borrow().get(parent).cloned()).ok_or("underlay: UI view not known")?;
         underlay::clear_window(&ui);
         underlay::order(&ui, &pages_of(parent), false)
@@ -625,6 +800,10 @@ pub mod mac {
                 if live && !stale {
                     held |= place(&view, &ui, &sv, &rect, (uw, uh), now);
                 }
+                // Held since a UI reload: the new epoch's set places it now.
+                if live && HOLDS.with(|h| h.borrow_mut().placed_live(&key)) {
+                    view.setHidden(false);
+                }
                 set_pages.push(view.clone());
                 specs.push(PageSpec {
                     view,
@@ -646,6 +825,7 @@ pub mod mac {
                 ui: ui.clone(),
                 pages: specs,
                 claims: set.claims.iter().filter_map(|c| clip(&c.shape)).collect(),
+                swallow_page_clicks: super::swallow_page_clicks(&set.claims),
             })
         })();
         transaction(false);
@@ -742,7 +922,13 @@ fn schedule_apply(app: &AppHandle, parent: String, tx: Option<tokio::sync::onesh
         let first = queue(&app2).0.lock().unwrap().reported.insert(parent.clone());
         if first {
             match &r {
-                Ok(_) => say!(info, "[browser-underlay] window {parent:?}: underlay ON (first set applied: {} layer(s), {} claim(s))", set.layers.len(), set.claims.len()),
+                Ok(_) => say!(
+                    info,
+                    "[browser-underlay] window {parent:?}: underlay ON (first set applied: {} layer(s), {} claim(s); layer radii [tl,tr,br,bl] {:?})",
+                    set.layers.len(),
+                    set.claims.len(),
+                    set.layers.iter().map(|l| corners(l.rect.radius)).collect::<Vec<_>>()
+                ),
                 Err(e) => say!(warn, "[browser-underlay] window {parent:?}: the first set failed: {e}"),
             }
         }
@@ -1055,6 +1241,58 @@ mod tests {
         assert!(!q.underlay("window-2"));
         // A new window under the same label (a new renderer, a new epoch).
         assert_eq!(q.offer("window-2", set_in("y", 1), o), Offer::Schedule, "the reused label starts clean");
+    }
+
+    fn claim_of(id: f64, kind: &str) -> WireClaim {
+        serde_json::from_value(serde_json::json!({"id": id, "kind": kind, "x": 0, "y": 0, "width": 10, "height": 10})).unwrap()
+    }
+
+    #[test]
+    fn a_menu_swallows_a_page_click_a_popover_passes_it_toasts_never_matter() {
+        assert!(!swallow_page_clicks(&[]), "nothing open: the page gets it");
+        assert!(swallow_page_clicks(&[claim_of(1.0, "menu")]));
+        assert!(!swallow_page_clicks(&[claim_of(1.0, "popover")]));
+        assert!(!swallow_page_clicks(&[claim_of(1.0, "toast")]));
+        assert!(swallow_page_clicks(&[claim_of(1.0, "menu"), claim_of(2.0, "toast")]), "a toast on top doesn't count");
+        assert!(swallow_page_clicks(&[claim_of(1.0, "popover"), claim_of(2.0, "menu")]), "the frontmost decides");
+        assert!(!swallow_page_clicks(&[claim_of(1.0, "menu"), claim_of(2.0, "popover")]));
+    }
+
+    #[test]
+    fn a_ui_reload_holds_the_windows_pages_until_the_new_set_places_them() {
+        let mut h = Holds::default();
+        h.hold(["main\0a".to_string(), "main\0b".to_string(), "window-2\0c".to_string()]);
+        // Underlay: the new renderer's pane asks to show "a": held for the set.
+        assert!(!h.show("main\0a", true), "not shown before the new epoch's set");
+        assert!(h.is_held("main\0a"));
+        // The new set places "a" live: released.
+        assert!(h.placed_live("main\0a"));
+        assert!(!h.is_held("main\0a"));
+        assert!(h.show("main\0a", true), "after that, shows go through");
+        // "b" (another view's page, not shown by the new UI) stays hidden.
+        assert!(h.is_held("main\0b"));
+        // Legacy: a show releases at once.
+        assert!(h.show("window-2\0c", false));
+        assert!(!h.is_held("window-2\0c"));
+        // A page nobody held shows as before.
+        assert!(h.show("main\0z", true));
+    }
+
+    #[test]
+    fn falling_back_to_legacy_brings_back_only_the_held_pages_the_renderer_asked_for() {
+        let mut h = Holds::default();
+        h.hold(["main\0a".to_string(), "main\0b".to_string()]);
+        assert!(!h.show("main\0a", true));
+        let mut back = h.release_window("main");
+        back.sort();
+        assert_eq!(back, vec!["main\0a".to_string()]);
+        assert!(!h.is_held("main\0b"), "the rest is the legacy path's to show");
+        // Hidden again by the renderer before the set: no longer asked.
+        let mut h = Holds::default();
+        h.hold(["main\0a".to_string()]);
+        h.show("main\0a", true);
+        h.hide("main\0a");
+        assert!(h.release_window("main").is_empty());
     }
 
     #[test]

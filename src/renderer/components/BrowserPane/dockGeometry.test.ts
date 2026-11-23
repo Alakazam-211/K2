@@ -79,6 +79,26 @@ describe('dockAppearance', () => {
     expect(a.background).toEqual([20, 21, 22, 255])
     expect(a.cornerRadius).toBe(11)
     expect(a.corners).toEqual([false, false, true, true])
+    expect(a.radii).toEqual([0, 0, 11, 11])
+  })
+
+  it("the page hole gets the pane's drawn radius at each corner, even past a nearer rounded ancestor", () => {
+    // A nearer wrapper rounded only at its top, which the dock doesn't touch;
+    // the pane (farther out) rounds 16 px and the dock sits on its bottom
+    // corners. Before, the nearest rounded ancestor decided: square bottom.
+    document.body.innerHTML =
+      '<div id="pane" style="border-top-left-radius: 16px; border-top-right-radius: 16px; border-bottom-right-radius: 16px; border-bottom-left-radius: 16px"><div id="wrap" style="border-top-left-radius: 4px; border-top-right-radius: 4px"><div id="dock"></div></div></div>'
+    const pane = document.getElementById('pane') as HTMLElement
+    const wrap = document.getElementById('wrap') as HTMLElement
+    const dock = document.getElementById('dock') as HTMLElement
+    vi.spyOn(pane, 'getBoundingClientRect').mockReturnValue(box(0, 0, 800, 600))
+    vi.spyOn(wrap, 'getBoundingClientRect').mockReturnValue(box(0, 10, 800, 590))
+    vi.spyOn(dock, 'getBoundingClientRect').mockReturnValue(box(0, 46, 800, 554))
+    const a = dockAppearance(dock)
+    expect(a.radii).toEqual([0, 0, 16, 16])
+    // The native layer's backup corners follow.
+    expect(a.cornerRadius).toBe(16)
+    expect(a.corners).toEqual([false, false, true, true])
   })
 
   it('square when the nearest rounded ancestor does not share a corner, or none is rounded', () => {
@@ -87,7 +107,7 @@ describe('dockAppearance', () => {
     const dock = document.getElementById('dock') as HTMLElement
     vi.spyOn(pane, 'getBoundingClientRect').mockReturnValue(box(0, 0, 800, 600))
     vi.spyOn(dock, 'getBoundingClientRect').mockReturnValue(box(200, 100, 300, 200))
-    expect(dockAppearance(dock)).toEqual({ background: null, cornerRadius: 0, corners: [false, false, false, false] })
+    expect(dockAppearance(dock)).toEqual({ background: null, cornerRadius: 0, corners: [false, false, false, false], radii: [0, 0, 0, 0] })
 
     document.body.innerHTML = '<div><div id="dock2"></div></div>'
     expect(dockAppearance(document.getElementById('dock2') as HTMLElement).cornerRadius).toBe(0)
@@ -100,7 +120,7 @@ describe('dockAppearance', () => {
   })
 
   it('sameAppearance compares by value; nothing sent yet is never the same', () => {
-    const a = { background: null, cornerRadius: 0, corners: [false, false, false, false] as [boolean, boolean, boolean, boolean] }
+    const a = { background: null, cornerRadius: 0, corners: [false, false, false, false] as [boolean, boolean, boolean, boolean], radii: [0, 0, 0, 0] as [number, number, number, number] }
     expect(sameAppearance(null, a)).toBe(false)
     expect(sameAppearance({ ...a }, a)).toBe(true)
     expect(sameAppearance({ ...a, cornerRadius: 4 }, a)).toBe(false)
@@ -108,10 +128,10 @@ describe('dockAppearance', () => {
 })
 
 describe('nativeAppearance', () => {
-  it('scales the corner radius by the app zoom (window px), and nothing else', () => {
-    const a = { background: [10, 20, 30, 255] as [number, number, number, number], cornerRadius: 16, corners: [false, false, true, true] as [boolean, boolean, boolean, boolean] }
-    expect(nativeAppearance(a, 0.9)).toEqual({ ...a, cornerRadius: 14.4 })
-    expect(nativeAppearance(a, 1.25)).toEqual({ ...a, cornerRadius: 20 })
+  it('scales the corner radii by the app zoom (window px), and nothing else', () => {
+    const a = { background: [10, 20, 30, 255] as [number, number, number, number], cornerRadius: 16, corners: [false, false, true, true] as [boolean, boolean, boolean, boolean], radii: [0, 0, 16, 16] as [number, number, number, number] }
+    expect(nativeAppearance(a, 0.9)).toEqual({ ...a, cornerRadius: 14.4, radii: [0, 0, 14.4, 14.4] })
+    expect(nativeAppearance(a, 1.25)).toEqual({ ...a, cornerRadius: 20, radii: [0, 0, 20, 20] })
     expect(nativeAppearance(a, 1)).toBe(a)
     expect(nativeAppearance(a, Number.NaN)).toBe(a)
   })

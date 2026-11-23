@@ -20,7 +20,7 @@ export interface DockRect {
  *  times the app zoom). */
 export function nativeAppearance(a: DockAppearance, zoom: number): DockAppearance {
   const z = Number.isFinite(zoom) && zoom > 0 ? zoom : 1
-  return z === 1 ? a : { ...a, cornerRadius: a.cornerRadius * z }
+  return z === 1 ? a : { ...a, cornerRadius: a.cornerRadius * z, radii: a.radii.map((r) => r * z) as DockAppearance['radii'] }
 }
 
 /** Edges to whole device pixels (not origin and size separately). */
@@ -67,6 +67,10 @@ export interface DockAppearance {
   cornerRadius: number
   /** Top-left, top-right, bottom-right, bottom-left. */
   corners: [boolean, boolean, boolean, boolean]
+  /** The drawn radius at each dock corner (tl, tr, br, bl), from the
+   *  rounded ancestor whose inner corner that dock corner sits on; 0 where
+   *  it sits on none. The browser underlay's page hole uses these. */
+  radii: [number, number, number, number]
 }
 
 const NO_CORNERS: DockAppearance['corners'] = [false, false, false, false]
@@ -80,6 +84,59 @@ const CORNER_SLOP = 1.5
  * radius minus the border). No rounded ancestor: square.
  */
 export function dockAppearance(dock: Element): DockAppearance {
+  const look = nearestRoundedLook(dock)
+  const radii = drawnCornerRadii(dock)
+  // The native layer's own corners (the backup): from the drawn radii when
+  // the nearest rounded ancestor didn't round any dock corner.
+  if (look.cornerRadius === 0 && radii.some((r) => r > 0)) {
+    return { ...look, cornerRadius: Math.max(...radii), corners: radii.map((r) => r > 0) as DockAppearance['corners'], radii }
+  }
+  return { ...look, radii }
+}
+
+/**
+ * Each dock corner's drawn radius: walking out from the dock, the first
+ * ancestor with a radius at that corner whose inner corner the dock's
+ * corner sits on clips it (outer radius minus that corner's borders). A
+ * nearer ancestor rounded elsewhere doesn't hide a farther pane's corner.
+ */
+export function drawnCornerRadii(dock: Element): [number, number, number, number] {
+  const d = dock.getBoundingClientRect()
+  const out: [number, number, number, number] = [0, 0, 0, 0]
+  const done = [false, false, false, false]
+  let node: Element | null = dock.parentElement
+  const near = (a: number, c: number): boolean => Math.abs(a - c) <= CORNER_SLOP
+  while (node && node !== document.documentElement && done.some((v) => !v)) {
+    const cs = getComputedStyle(node)
+    const radii = [cs.borderTopLeftRadius, cs.borderTopRightRadius, cs.borderBottomRightRadius, cs.borderBottomLeftRadius].map(
+      (r) => parseFloat(r) || 0,
+    )
+    if (radii.some((r) => r > 0)) {
+      const b = node.getBoundingClientRect()
+      const bl = parseFloat(cs.borderLeftWidth) || 0
+      const br = parseFloat(cs.borderRightWidth) || 0
+      const bt = parseFloat(cs.borderTopWidth) || 0
+      const bb = parseFloat(cs.borderBottomWidth) || 0
+      const inner = { left: b.left + bl, right: b.right - br, top: b.top + bt, bottom: b.bottom - bb }
+      const on = [
+        near(d.left, inner.left) && near(d.top, inner.top),
+        near(d.right, inner.right) && near(d.top, inner.top),
+        near(d.right, inner.right) && near(d.bottom, inner.bottom),
+        near(d.left, inner.left) && near(d.bottom, inner.bottom),
+      ]
+      const borders = [Math.max(bl, bt), Math.max(br, bt), Math.max(br, bb), Math.max(bl, bb)]
+      for (let i = 0; i < 4; i++) {
+        if (done[i] || !on[i] || radii[i] <= 0) continue
+        out[i] = Math.max(0, radii[i] - borders[i])
+        done[i] = true
+      }
+    }
+    node = node.parentElement
+  }
+  return out
+}
+
+function nearestRoundedLook(dock: Element): Omit<DockAppearance, 'radii'> {
   const background = paneBackground(dock)
   const d = dock.getBoundingClientRect()
   let node: Element | null = dock.parentElement

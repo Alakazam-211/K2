@@ -195,6 +195,43 @@ define_class!(
       }
     }
 
+    // A click on a page tells K2 (its menus close as on an outside click).
+    // With a menu open, the click is swallowed: no super, so no first
+    // responder change and nothing reaches the page.
+    #[unsafe(method(mouseDown:))]
+    fn mouse_down(&self, event: &NSEvent) {
+      match underlay::page_mouse_down(self.as_view()) {
+        underlay::PageDown::Swallow => {}
+        underlay::PageDown::Stock | underlay::PageDown::Pass => unsafe {
+          objc2::msg_send![super(self), mouseDown: event]
+        },
+      }
+    }
+
+    #[unsafe(method(mouseDragged:))]
+    fn mouse_dragged(&self, event: &NSEvent) {
+      if !underlay::page_mouse_swallowed(self.as_view(), false) {
+        unsafe { objc2::msg_send![super(self), mouseDragged: event] }
+      }
+    }
+
+    #[unsafe(method(mouseUp:))]
+    fn mouse_up(&self, event: &NSEvent) {
+      if !underlay::page_mouse_swallowed(self.as_view(), true) {
+        unsafe { objc2::msg_send![super(self), mouseUp: event] }
+      }
+    }
+
+    // A window drag that starts on a page while a menu is open: no.
+    #[unsafe(method(mouseDownCanMoveWindow))]
+    fn mouse_down_can_move_window(&self) -> Bool {
+      if underlay::page_swallows_now(self.as_view()) {
+        Bool::NO
+      } else {
+        unsafe { objc2::msg_send![super(self), mouseDownCanMoveWindow] }
+      }
+    }
+
     #[unsafe(method(rightMouseDown:))]
     fn right_mouse_down(&self, event: &NSEvent) {
       match underlay::route(self.as_view(), event, Route::Location, false) {

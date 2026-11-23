@@ -361,10 +361,31 @@ mod real {
         if let Some(appearance) = appearance {
             apply_appearance(&view, appearance);
         }
-        let _ = view.show();
+        show_page(app, key, &view);
         view.navigate(parsed.clone()).map_err(|e| e.to_string())?;
         views(app).0.lock().unwrap().insert(key.to_string(), view);
         Ok(())
+    }
+
+    /// Show a page. On macOS one held across a UI reload waits for the new
+    /// epoch's set in underlay (browser_page_layers::show_page).
+    fn show_page(app: &AppHandle, key: &str, view: &Webview) {
+        #[cfg(target_os = "macos")]
+        {
+            let parent = key.split('\0').next().unwrap_or("main");
+            super::super::browser_page_layers::show_page(app, parent, key, view);
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (app, key);
+            let _ = view.show();
+        }
+    }
+
+    /// Every page of one K2 window: (registry key, webview).
+    pub fn views_of_window(app: &AppHandle, label: &str) -> Vec<(String, Webview)> {
+        let prefix = format!("{label}\0");
+        views(app).0.lock().unwrap().iter().filter(|(k, _)| k.starts_with(&prefix)).map(|(k, v)| (k.clone(), v.clone())).collect()
     }
 
     /// Create (or replace) the child webview for a pane item and dock it at
@@ -680,7 +701,7 @@ mod real {
                 if let Some(appearance) = &appearance {
                     apply_appearance(view, appearance);
                 }
-                let _ = view.show();
+                show_page(&app, &key, view);
                 if view.navigate(parsed.clone()).is_err() {
                     // View may be half-dead; drop and fall through to recreate.
                     let _ = map.remove(&key);
@@ -891,9 +912,11 @@ mod real {
         let guard = state.0.lock().unwrap();
         let view = guard.get(&key).ok_or("no such browser view")?;
         if visible {
-            view.show().map_err(|e| e.to_string())?
+            show_page(&app, &key, view);
         } else {
-            view.hide().map_err(|e| e.to_string())?
+            view.hide().map_err(|e| e.to_string())?;
+            #[cfg(target_os = "macos")]
+            super::super::browser_page_layers::page_hidden(&app, &key);
         }
         Ok(())
     }
@@ -1469,6 +1492,11 @@ mod stub {
     /// No pages in this build.
     pub fn view_by_key(_app: &AppHandle, _key: &str) -> Option<tauri::Webview> {
         None
+    }
+
+    /// No pages in this build.
+    pub fn views_of_window(_app: &AppHandle, _label: &str) -> Vec<(String, tauri::Webview)> {
+        Vec::new()
     }
     #[tauri::command]
     pub async fn browser_set_appearance(

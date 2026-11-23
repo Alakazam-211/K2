@@ -407,3 +407,67 @@ describe('the bubble’s top stays put', () => {
     expect(screen.getByTestId('row').getBoundingClientRect().top).toBe(68)
   })
 })
+
+describe('a Thread opening with many folds (switch speed)', () => {
+  /** 30 messages in one list; `heights` is what each one's words measure at
+   *  mount (jsdom has no layout: getBoundingClientRect is stubbed). */
+  function openThread(heights: (i: number) => number) {
+    const realRect = HTMLElement.prototype.getBoundingClientRect
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const i = this.getAttribute('data-testid') === 'fold-inner' ? Number(this.closest('[data-row]')?.getAttribute('data-row')) : NaN
+      if (Number.isFinite(i)) return new DOMRect(0, 0, 300, heights(i))
+      return realRect.call(this)
+    })
+    const h = host()
+    const renders: number[] = []
+    function Probe({ i }: { i: number }): React.JSX.Element {
+      renders[i] = (renders[i] ?? 0) + 1
+      return <Body text={`message ${i}`} />
+    }
+    render(
+      <FoldContext.Provider value={h}>
+        <div data-testid="scroller">
+          {Array.from({ length: 30 }, (_, i) => (
+            <div key={i} data-zen-message="" data-row={i}>
+              <MessageFold foldKey={`m${i}`}>
+                <Probe i={i} />
+              </MessageFold>
+            </div>
+          ))}
+        </div>
+      </FoldContext.Provider>,
+    )
+    return { renders }
+  }
+  const tall = (i: number): number => (i % 2 ? LINE * 40 : LINE * 3)
+  const bodyStyleReads = (): number =>
+    vi.mocked(window.getComputedStyle).mock.calls.filter(([el]) => (el as Element).classList?.contains('chat-markdown')).length
+
+  it('one shared observer for every fold, and one line-height read for the list', () => {
+    openThread(tall)
+    expect(observers).toHaveLength(1)
+    expect(observers[0].targets).toHaveLength(30)
+    expect(bodyStyleReads()).toBe(1)
+  })
+
+  it('a long message is folded with its pill in the first frame, no answer from the observer needed', () => {
+    openThread(tall)
+    expect(screen.getAllByTestId('fold-toggle')).toHaveLength(15)
+    const clips = screen.getAllByTestId('fold-clip')
+    for (let i = 1; i < clips.length; i += 2) expect(clips[i].style.maxHeight).toBe(`${CLIP}px`)
+  })
+
+  it("the observer's first answer (the same heights) draws nothing again", () => {
+    const { renders } = openThread(tall)
+    const before = renders.slice()
+    const inners = screen.getAllByTestId('fold-inner')
+    act(() =>
+      observers[0].cb(
+        inners.map((target, i) => ({ target, contentRect: { height: tall(i) } }) as unknown as ResizeObserverEntry),
+      ),
+    )
+    expect(renders).toEqual(before)
+    // One style read for the whole batch, too.
+    expect(bodyStyleReads()).toBe(2)
+  })
+})

@@ -134,9 +134,86 @@ function scrollParent(el: HTMLElement): HTMLElement | null {
 /** The px (line-height) the last fold measured: a new fold's clip starts
  *  there (the same body style everywhere), not at the CSS estimate. */
 let knownLinePx = 0
-/** Tests: forget the measured line-height. */
+
+// ── One observer and one style read for every fold ─────────────────────
+// A Thread opens with ~30 folds at once. Each used to bring its own
+// ResizeObserver and read its body's computed style in every callback, and
+// drew twice: unmeasured first, then again with its pill once the observer
+// answered after the first paint, which also made the list re-stick to the
+// bottom. Now all folds share one observer; its callback (and the mount
+// pass, see MessageFold) reads the line-height once per list and font per
+// batch; and a fold measures itself in a layout effect, before the first
+// paint, so a long message draws once, folded with its pill.
+
+type FoldMeasure = (heightPx: number, linePx: number) => void
+interface FoldReg {
+  inner: HTMLElement
+  /** The list it sits in and its font: folds that share both share a
+   *  line-height (one style read per batch). */
+  batchKey: object
+  fontKey: string
+  onMeasure: FoldMeasure
+}
+const NO_HOST = {}
+const regs = new WeakMap<Element, FoldReg>()
+let sharedObserver: ResizeObserver | null = null
+let sharedObserverCtor: unknown = null
+type LineBatch = Map<object, Map<string, number>>
+/** Line-heights read during the current commit's layout effects. */
+let commitBatch: LineBatch | null = null
+
+function batchLinePx(reg: FoldReg, batch: LineBatch): number {
+  let byFont = batch.get(reg.batchKey)
+  if (!byFont) {
+    byFont = new Map()
+    batch.set(reg.batchKey, byFont)
+  }
+  let lh = byFont.get(reg.fontKey)
+  if (lh === undefined) {
+    const body = reg.inner.querySelector('.chat-markdown') ?? reg.inner
+    lh = readLinePx(body) || knownLinePx
+    byFont.set(reg.fontKey, lh)
+  }
+  return lh
+}
+
+/** The line-height for a fold measuring in a layout effect: read once per
+ *  list and font for the whole commit (the batch ends with the task). */
+function commitLinePx(reg: FoldReg): number {
+  if (!commitBatch) {
+    commitBatch = new Map()
+    queueMicrotask(() => {
+      commitBatch = null
+    })
+  }
+  return batchLinePx(reg, commitBatch)
+}
+
+function onFoldsResized(entries: ResizeObserverEntry[]): void {
+  const batch: LineBatch = new Map()
+  for (const e of entries ?? []) {
+    const reg = regs.get(e.target)
+    if (!reg) continue
+    const h = e.borderBoxSize?.[0]?.blockSize ?? e.contentRect?.height ?? reg.inner.offsetHeight
+    reg.onMeasure(h, batchLinePx(reg, batch))
+  }
+}
+
+function foldObserver(): ResizeObserver | null {
+  if (typeof ResizeObserver === 'undefined') return null
+  if (!sharedObserver || sharedObserverCtor !== ResizeObserver) {
+    sharedObserver = new ResizeObserver(onFoldsResized)
+    sharedObserverCtor = ResizeObserver
+  }
+  return sharedObserver
+}
+
+/** Tests: forget the measured line-height and the shared observer. */
 export function __resetFoldForTests(): void {
   knownLinePx = 0
+  sharedObserver = null
+  sharedObserverCtor = null
+  commitBatch = null
 }
 
 /** The pill's caret, right of its words: down on "See more", up on "See
@@ -198,25 +275,38 @@ export function MessageFold({
   const shownRef = useRef(shown)
   shownRef.current = shown
 
-  // One observer per fold, on the unclipped words: their full height comes
-  // through the clip. Only a crossing (or a new line-height) re-renders;
-  // reads happen after layout, in the observer's callback (no thrash).
-  useEffect(() => {
+  // The shared observer watches the unclipped words (their full height
+  // comes through the clip); only a crossing or a new line-height
+  // re-renders. The first measurement happens here, before the first
+  // paint: every fold of the commit reads its height after one layout, the
+  // line-height is read once per list, and a long message's pill is in its
+  // first frame (no second draw, no re-stick to the bottom).
+  useLayoutEffect(() => {
     const inner = innerRef.current
-    if (!inner || typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver((entries?: ResizeObserverEntry[]) => {
-      const e = entries?.[entries.length - 1]
-      const h = e?.borderBoxSize?.[0]?.blockSize ?? e?.contentRect?.height ?? inner.offsetHeight
-      const body = inner.querySelector('.chat-markdown') ?? inner
-      const lh = readLinePx(body) || knownLinePx
-      if (lh > 0) {
-        knownLinePx = lh
-        setLinePx((cur) => (Math.abs(cur - lh) > 0.25 ? lh : cur))
-      }
-      setLong(foldable(h, lh, shownRef.current))
-    })
-    ro.observe(inner)
-    return () => ro.disconnect()
+    if (!inner) return
+    const reg: FoldReg = {
+      inner,
+      batchKey: host ?? NO_HOST,
+      fontKey: fontSize ?? '',
+      onMeasure: (h, lh) => {
+        if (lh > 0) {
+          knownLinePx = lh
+          setLinePx((cur) => (Math.abs(cur - lh) > 0.25 ? lh : cur))
+        }
+        setLong(foldable(h, lh, shownRef.current))
+      },
+    }
+    const h = inner.getBoundingClientRect().height
+    if (h > 0) reg.onMeasure(h, commitLinePx(reg))
+    regs.set(inner, reg)
+    const ro = foldObserver()
+    ro?.observe(inner)
+    return () => {
+      regs.delete(inner)
+      ro?.unobserve(inner)
+    }
+    // The fold's list and font are fixed for its life.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   /** Open or fold, the bubble's top kept where it was (folding: kept in

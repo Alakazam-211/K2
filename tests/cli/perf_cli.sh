@@ -38,9 +38,12 @@
 #                  tunnel; two requests)
 #   workspace list k5 workspace list (the table,      <= 30 ms + the stub's
 #                  three workspaces)                     p95 handler time
-#   fallthrough    k5 heartbeat list (a verb the      median <= cli/k2's
-#                  shell answers)                        median for the same
-#                                                        + 5 ms (see below)
+#   heartbeat list k5 heartbeat list (no heartbeats)  <= 30 ms + the stub's
+#                                                        p95 handler time
+#   fallthrough    k5 heartbeat list <0xff> (a word   median <= cli/k2's
+#                  that is not UTF-8: the binary         median for the same
+#                  hands it to the shell, which          + 5 ms (see below)
+#                  ignores it and lists)
 #   agent help     k5 mail send --help in a K2        <= 30 ms
 #                  terminal (the passport, a live
 #                  cell socket: the session checks
@@ -48,8 +51,9 @@
 #   study list     k5 study with a passport (the      <= 30 ms + the stub's
 #   (passport)     cards probe over TCP, cards on)       p95 handler time
 #   --help         k5 --help in an agent's terminal   <= 30 ms + the stub's
-#   (passport)     (the cards probe over TCP, cards      p95 handler time
-#                  on: the daily tier and its line)
+#   (passport)     (the feedback opt-in and cards        p95 handler time
+#                  probes over TCP, cards on: the
+#                  daily tier and its line)
 #   thread read    k5 thread read                     <= 40 ms: pending
 #                                                        (R3.5, not timed)
 #
@@ -75,6 +79,14 @@
 # run as the front hands it over but started straight, and the front, and
 # the front's own phase times (K5_CLI_TRACE_TIMING), with a passport and
 # without one (where the passport rule walks the process ancestry).
+#
+# The fallthrough's probe can't be a plain verb: every verb is native,
+# so it would time no hand-over. A word that is not UTF-8 is one: the
+# binary reads no such word itself (src/families/heartbeat.rs, and
+# src/route.rs for a first word), and heartbeat list ignores a word it
+# doesn't know, so the shell does the same work as for heartbeat list.
+# Before timing, the script checks the probe really went to the shell:
+# the front wrote its cache file.
 #
 # The fallthrough row compares MEDIANS, not p95s. Both sides are mostly
 # the shell's own run (about 185 ms on a quiet Linux node), and the p95 of
@@ -271,7 +283,17 @@ check_same("update --cli", [k5, "update", "--cli"], bash_argv("update", "--cli")
 check_same("setup", [k5, "setup"], bash_argv("setup"))
 check_same("connect status", [k5, "connect", "status"], bash_argv("connect", "status"))
 check_same("workspace list", [k5, "workspace", "list"], bash_argv("workspace", "list"))
-check_same("fallthrough (heartbeat list)", [k5, "heartbeat", "list"], bash_argv("heartbeat", "list"))
+check_same("heartbeat list", [k5, "heartbeat", "list"], bash_argv("heartbeat", "list"))
+# The fallthrough's probe (see the top), and the proof it is a hand-over:
+# the front's cache of the shell script, <K2 home>/run/cli/k2-<hash>.sh,
+# is written by a hand-over only, and nothing above hands one over.
+FT, FT_NAME = ["heartbeat", "list", b"\xff"], "heartbeat list <0xff>"
+check_same(f"fallthrough ({FT_NAME})", [k5, *FT], bash_argv(*FT))
+caches = [os.path.join(d, n) for d, _, names in os.walk(work + "/home") for n in names
+          if d.endswith("/run/cli") and n.startswith("k2-") and n.endswith(".sh")]
+if len(caches) != 1:
+    sys.exit(f"perf_cli: FAIL: want one cache file under {work}/home after k5 {FT_NAME}, found {caches} "
+             f"(the binary answered it itself: the fallthrough needs a probe the shell answers)")
 
 results = []
 def measure(name, argv, target_ms, why):
@@ -312,8 +334,9 @@ measure_native("update --cli", ["update", "--cli"])
 measure_native("setup", ["setup"])
 measure_native("connect status", ["connect", "status"])
 measure_native("workspace list", ["workspace", "list"])
+measure_native("heartbeat list", ["heartbeat", "list"])
 FALLTHROUGH_ALLOWANCE_MS = 5.0
-def measure_fallthrough(words):
+def measure_fallthrough(words, name):
     """k5's median against cli/k2's median + a fixed allowance (see the top)."""
     theirs = timed(bash_argv(*words))
     ours = timed([k5, *words])
@@ -321,19 +344,18 @@ def measure_fallthrough(words):
     target = base + FALLTHROUGH_ALLOWANCE_MS
     ok = got <= target
     results.append(ok)
-    name = " ".join(words)
     print(f"perf_cli: info: cli/k2 {name}: median {base:.2f} ms, p95 {p95(theirs):.2f} ms (the fallthrough's base)")
     print(f"perf_cli: {'pass' if ok else 'FAIL'}: k5 {name} (fallthrough): median {got:.2f} ms, target <= {target:.2f} ms "
           f"(cli/k2's median + {FALLTHROUGH_ALLOWANCE_MS:.0f} ms); p95 {p95(ours):.2f} ms (info), "
           f"min {min(ours):.2f}, max {max(ours):.2f}")
 
-measure_fallthrough(["heartbeat", "list"])
+measure_fallthrough(FT, FT_NAME)
 for words in (["whoami"], ["done"], ["respond", "perf line"], ["inbox"], ["read", "acme"],
               ["activity"], ["sessions"], ["connections", "list"], ["feedback", "list"],
               ["feedback", "show", "fb_1"], ["update", "--cli"], ["setup"], ["connect", "status"],
-              ["workspace", "list"]):
+              ["workspace", "list"], ["heartbeat", "list"]):
     bash_p95 = p95(timed(bash_argv(*words)))
-    name = ' '.join(words[:2]) if words[0] in ('connections', 'feedback', 'update', 'connect', 'workspace') else words[0]
+    name = ' '.join(words[:2]) if words[0] in ('connections', 'feedback', 'update', 'connect', 'workspace', 'heartbeat') else words[0]
     print(f"perf_cli: info: cli/k2 {name}: p95 {bash_p95:.2f} ms (for comparison)")
 print("perf_cli: pending: k5 thread read <= 40 ms (R3.5: thread read is not native yet)")
 
@@ -343,11 +365,7 @@ print("perf_cli: pending: k5 thread read <= 40 ms (R3.5: thread read is not nati
 # (/dev/fd/3 on the cache file, the front's four variables) but started
 # straight, so the front's cost and the shell's own are told apart.
 import re, tempfile
-ft = ["heartbeat", "list"]
-caches = [os.path.join(d, n) for d, _, names in os.walk(work + "/home") for n in names
-          if d.endswith("/run/cli") and n.startswith("k2-") and n.endswith(".sh")]
-if len(caches) != 1:
-    sys.exit(f"perf_cli: FAIL: want one cache file under {work}/home, found {caches}")
+ft = FT
 script_dir = os.path.dirname(os.path.realpath(binary))
 handed = dict(env, K5_CLI_CALLED_AS="k5", K5_CLI_NOTICE_DONE="1", K5_CLI_VIA="rust", K5_CLI_SCRIPT_DIR=script_dir)
 
@@ -412,7 +430,7 @@ cell_sock = work + "/cell.sock"
 socket.socket(socket.AF_UNIX).bind(cell_sock)
 cell_env = dict(env, K2_HOOK_SOCK=cell_sock)
 
-def agent_page(name, words, run_env, target, with_stub):
+def agent_page(name, words, run_env, target, with_stub, asks=1):
     def once(argv, extra=None):
         p = subprocess.run(argv, env=dict(run_env, **(extra or {})), cwd=work + "/ws",
                            stdin=subprocess.DEVNULL, capture_output=True)
@@ -427,8 +445,8 @@ def agent_page(name, words, run_env, target, with_stub):
     handler_ns.clear()
     xs, _ = spawn_runs([k5, *words], run_env, want=a[0])
     stub_p95 = p95([n / 1e6 for n in handler_ns]) if (with_stub and handler_ns) else 0.0
-    if with_stub and len(handler_ns) != WARM + RUNS:
-        sys.exit(f"perf_cli: FAIL: {name}: {len(handler_ns)} requests in {WARM + RUNS} runs, want one each")
+    if with_stub and len(handler_ns) != asks * (WARM + RUNS):
+        sys.exit(f"perf_cli: FAIL: {name}: {len(handler_ns)} requests in {WARM + RUNS} runs, want {asks} each")
     got, goal = p95(xs), target + stub_p95
     results.append(got <= goal)
     extra = f" + the stub's p95 handler time {stub_p95:.3f} ms" if with_stub else ""
@@ -439,7 +457,9 @@ def agent_page(name, words, run_env, target, with_stub):
 
 agent_page("agent help (mail send --help, HOOK_SOCK set)", ["mail", "send", "--help"], cell_env, 30.0, False)
 agent_page("study list with a passport (cards probe)", ["study"], env, 30.0, True)
-agent_page("--help with a passport (cards probe over TCP)", ["--help"], env, 30.0, True)
+# The daily tier asks the shell's two questions: the feedback opt-in, then
+# the cards (src/pages.rs daily_tier).
+agent_page("--help with a passport (cards probe over TCP)", ["--help"], env, 30.0, True, asks=2)
 
 phases("a passport (this script's call)", env)
 owner = {k: v for k, v in env.items() if k not in ("K2_HOOK_TOKEN", "K2_CELL", "K2_SESSION_ID")}

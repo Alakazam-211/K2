@@ -78,7 +78,9 @@ fi
 check "show refuses a hidden character" 3 "refused (forbidden_char)" approve show "$FIX/payloads/invalid/char-rlo-raw.bin"
 words="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["alex-phone-bio"]["words"])' "$FIX/keys.json")"
 check "key-id prints the fingerprint words" 0 "words:  $words" approve key-id "$FIX/keys/alex-phone-bio.pem"
-check "help" 0 "k2 approve verify --approval" approve --help
+# approve --help is the family's usage (cli/text/help/approve.txt), with no
+# daemon; its last line sends relying parties to the three local verbs.
+check "help" 0 "k2 approve verify / show / key-id (no daemon; k2 approve verify --help)" approve --help
 # request/status/cancel are the daemon's: with no connection they stop at the gate.
 check "request needs the daemon" 1 "Cannot connect to K2" approve request --to alex --payload x
 

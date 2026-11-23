@@ -265,7 +265,7 @@ pub fn for_service(ws: &str, cwd: &Path) -> Option<SessionIsolation> {
 }
 
 /// M1b, at boot: the root helper places agent sessions in root-owned
-/// cgroups when it serves `agents place` (protocol 18 and
+/// cgroups when it serves `agents place` (protocol 19 and
 /// `namespaces.agentcg`). Otherwise the reason, shown in `/boot-status`:
 /// the daemon places them itself (traceable only, identity unavailable).
 pub fn register_root_placement() {
@@ -501,7 +501,7 @@ pub fn agentscope_ok(st: &crate::root_helper::RootHelperState) -> bool {
     st.usable(k2_root_proto::version::AGENTSCOPE_MIN_PROTOCOL) && ns
 }
 
-/// Pure: protocol >= 18 and `namespaces.agentcg == true`.
+/// Pure: protocol >= 19 and `namespaces.agentcg == true`.
 pub fn agentcg_ok(st: &crate::root_helper::RootHelperState) -> bool {
     let ns = st.version_json.as_ref().and_then(|v| v.pointer("/namespaces/agentcg")).and_then(serde_json::Value::as_bool) == Some(true);
     st.usable(k2_root_proto::version::AGENTCG_MIN_PROTOCOL) && ns

@@ -930,7 +930,7 @@ pub enum Verb {
     /// on an Owner's yes. Never a package name from argv; the install is
     /// simulated first and refused if it would remove anything.
     DesktopPackagesInstall,
-    // agents (protocol 18, 0.46.17 Agent Isolation M1b; see `crate::agent_cgroup`)
+    // agents (protocol 19, Agent Isolation M1b, held from 0.46.17; see `crate::agent_cgroup`)
     /// `agents place <workspace id> <pid> <start time>` (daemon): make the agent's
     /// cgroup `<unit>/agents/a-<id>` root-owned and move `pid` (a process of
     /// the daemon's user, in its unit, waiting in the exec helper) into it,

@@ -1,4 +1,4 @@
-//! `agents` namespace (protocol 18, `namespaces.agentcg`; Agent Isolation
+//! `agents` namespace (protocol 19, `namespaces.agentcg`; Agent Isolation
 //! M1b, `k2_root_proto::agent_cgroup`): root-owned per-agent cgroups.
 //!
 //! `agents place <workspace id> <pid>` (daemon class):

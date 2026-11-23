@@ -1,4 +1,4 @@
-//! Agent Isolation M1b (protocol 18, `namespaces.agentcg`): root-owned
+//! Agent Isolation M1b (protocol 19, `namespaces.agentcg`): root-owned
 //! per-agent cgroups, placed by the root helper.
 //!
 //! With M1 alone, `<unit>/agents/a-<workspace id>/` belongs to the K2 user

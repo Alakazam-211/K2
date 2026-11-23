@@ -159,14 +159,10 @@
 //!   spool; the record follows; a running cluster restarts). Under
 //!   `namespaces.pgarchive`, [`PGARCHIVE_MIN_PROTOCOL`]; a 17 helper
 //!   refuses the argv, so the daemon asks for the update before it sends
-//!   it. Also Agent Isolation M1b (`crate::agent_cgroup`): `agents check` and `agents place <workspace
-//!   id> <pid> <start time>`, the agent's cgroup made root-owned and the exec helper's
-//!   process moved into it, under `namespaces.agentcg`,
-//!   [`AGENTCG_MIN_PROTOCOL`]; a 17 helper refuses the argv, so the daemon
-//!   runs the agents traceable only (identity unavailable). Another 0.46.17 lane that needs a helper change joins 18 here with
-//!   its own namespace flag; never 19 before 18 ships.
-//! - 19 = the first release after 0.46.17, one bump (this is the ONE place
-//!   to add to it; another lane joins 19 here with its own namespace flag):
+//!   it. 18 shipped in 0.46.17.
+//! - 19 = the first release after 0.46.17, one bump shared by every lane
+//!   (the ONE place to add to it; another lane joins 19 here with its own
+//!   namespace flag):
 //!   point-in-time restore of a named cluster
 //!   (prd-app-supabase-compat-v1 §11.1, lane E), `pg basebackup
 //!   <M>-<name>`, `pg backups <M>-<name>` (open, read-only), `pg
@@ -175,7 +171,13 @@
 //!   throwaway cluster restore-to made), under `namespaces.pgrestore`,
 //!   [`PGRESTORE_MIN_PROTOCOL`] ([`crate::pg_restore`]). The daemon gates
 //!   on the flag, never on the number alone.
-//!   Also in 19, Agent Isolation M2 B4 (`crate::agent_scope`), one
+//!   Agent Isolation M1b (`crate::agent_cgroup`, held from
+//!   0.46.17): `agents check` and `agents place <workspace id> <pid> <start
+//!   time>`, the agent's cgroup made root-owned and the exec helper's
+//!   process moved into it, under `namespaces.agentcg`,
+//!   [`AGENTCG_MIN_PROTOCOL`]; an 18 helper refuses the argv, so the daemon
+//!   runs the agents traceable only (identity unavailable). And Agent
+//!   Isolation M2 B4 (`crate::agent_scope`), one
 //!   root-owned systemd scope per agent session in K2's agent slices
 //!   (`k2agents.slice` with `k2agents-open.slice` and
 //!   `k2agents-fenced.slice`, each kept alive by an anchor), outside the
@@ -259,10 +261,11 @@ pub const PGARCHIVE_MIN_PROTOCOL: u32 = 18;
 /// (protocol 19, lane E). Gated on this AND `namespaces.pgrestore == true`:
 /// an 18 helper refuses the argv.
 pub const PGRESTORE_MIN_PROTOCOL: u32 = 19;
-/// `agents place <workspace id> <pid> <start time>` (0.46.17, Agent Isolation M1b): root-owned
-/// per-agent cgroups. Gated on this AND `namespaces.agentcg == true`: below it
-/// the daemon reports agent identity unavailable (sessions traceable only).
-pub const AGENTCG_MIN_PROTOCOL: u32 = 18;
+/// `agents place <workspace id> <pid> <start time>` (Agent Isolation M1b,
+/// held from 0.46.17 into 19): root-owned per-agent cgroups. Gated on this
+/// AND `namespaces.agentcg == true`: below it the daemon reports agent
+/// identity unavailable (sessions traceable only).
+pub const AGENTCG_MIN_PROTOCOL: u32 = 19;
 /// `agents scope|adopt|stop|stop-all|layout|setup|teardown` (Agent Isolation
 /// M2 B4): root-owned per-session scopes in K2's agent slices. Gated on
 /// this AND `namespaces.agentscope == true`: below it the daemon keeps

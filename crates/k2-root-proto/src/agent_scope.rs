@@ -402,7 +402,7 @@ pub fn unit_files(sleep: &str) -> Option<Vec<(&'static str, String)>> {
 // ── verbs (`agents …`, protocol 19) ─────────────────────────────────────
 
 /// The `agents` verbs protocol 19 adds (`agents place` and `agents check`
-/// are protocol 18's, in `crate::verbs::Verb`).
+/// are M1b's (protocol 19 too), in `crate::verbs::Verb`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScopeVerb {
     /// `agents scope <ws> <id> <pid> <start> <open|fenced> [mem=N] [cpu=N]`.

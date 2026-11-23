@@ -141,6 +141,9 @@ for want, send in steps:
 end = time.time() + 120
 while p.poll() is None:
     if time.time() > end:
+        # The terminal as it was, so the rows that read it fail on their
+        # own and the suite goes on (the step's own row fails on this).
+        open(os.path.join(W, "tty"), "wb").write(seen)
         stop()
         sys.exit("ptyrun: the command never finished")
     pump(0.1)

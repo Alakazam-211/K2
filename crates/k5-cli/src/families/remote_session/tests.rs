@@ -58,7 +58,17 @@ fn the_grants_width_line_is_the_readers() {
 #[test]
 fn the_lines_are_the_shell_s() {
     let text = script();
-    for l in [BOTH, NO_TOKEN, REVOKE_USAGE, WRITE_USAGE, READ_USAGE] {
+    for l in [
+        BOTH,
+        NO_TOKEN,
+        TOKEN_FORMS,
+        REVOKE_USAGE,
+        WRITE_USAGE,
+        READ_USAGE,
+        TEXT_WAYS,
+        KEEP_WORD,
+        BOTH_STDIN,
+    ] {
         // In the shell's `echo "…"` a quote is `\"`.
         assert!(text.contains(&l.replace('"', "\\\"")), "{l:?}");
     }
@@ -124,7 +134,8 @@ fn the_words() {
         p(&["write", "s1", "ls -l", "--token-stdin"]),
         Form::Write {
             sid: "s1".into(),
-            text: "ls -l".into()
+            text: Said::Word("ls -l".into()),
+            keep: false
         }
     );
     assert!(matches!(p(&["write", "s1"]), Form::Stop { .. }));
@@ -236,4 +247,183 @@ fn the_readers() {
     assert_eq!(shown(read_reader(br#"{"lines":["a",1]}"#)).0, "a\n1\n");
     assert_eq!(shown(read_reader(b"")).0, "");
     assert_eq!(shown(read_reader(br#"{"error":"x"}"#)).1, "Error: x\n");
+}
+
+/// The shell's Python lines for `--token-file` and `write`'s text, as
+/// [`token_file`] and [`said`] print them.
+#[test]
+fn the_secret_input_lines_are_the_shell_s() {
+    let text = script();
+    for l in [
+        "sys.stderr.write(\"k2 remote-session: --token-file %s: %s\\n\" % (p, msg))",
+        "die(\"its group or others can read it (mode %04o); run: chmod 600 %s\" % (mode & 0o777, p))",
+        "if os.name == \"posix\" and mode & 0o044:",
+        "tok = data.split(b\"\\n\", 1)[0].strip(b\" \\t\\r\\x0b\\x0c\")",
+        "die(\"no token in the file\")",
+        "sys.stderr.write(\"k2 remote-session write: --text-file %s: %s\\n\" % (p, e.strerror))",
+        "sys.stderr.write(\"k2 remote-session write: --text-file %s: no text in the file\\n\" % p)",
+        "    if data.endswith(b\"\\r\\n\"):\n        data = data[:-2]\n    elif data.endswith(b\"\\n\"):\n        data = data[:-1]",
+        "sys.stderr.write(\"k2 remote-session write: -: no text on stdin\\n\")",
+        "_cli_read_secret_stdin \"Text: \"",
+        "raw=$(cli_post_form \"/cli/terminal/write\"",
+    ] {
+        assert!(text.contains(l), "{l}");
+    }
+}
+
+#[test]
+fn write_s_text_forms() {
+    let p = |w: &[&str]| parse(w).0;
+    let w = |text: Said| Form::Write {
+        sid: "s1".into(),
+        text,
+        keep: false,
+    };
+    assert_eq!(p(&["write", "s1", "-"]), w(Said::Stdin));
+    assert_eq!(
+        p(&["write", "s1", "--text-file", "pw"]),
+        w(Said::File("pw".into()))
+    );
+    // An empty word leaves its slot open, as the shell's `[ -z ]` does.
+    assert_eq!(p(&["write", "s1", "", "x"]), w(Said::Word("x".into())));
+    let stop = |l: &str| Form::Stop {
+        lines: vec![l.to_string()],
+        page: false,
+        exit: Exit::Usage,
+    };
+    assert_eq!(p(&["write", "-"]), stop("Unknown flag: -"));
+    assert_eq!(
+        p(&["write", "s1", "x", "-"]),
+        stop("Unexpected argument: -")
+    );
+    assert_eq!(
+        p(&["write", "s1", "-", "x"]),
+        stop("Unexpected argument: x")
+    );
+    assert_eq!(
+        p(&["write", "s1", "-", "-"]),
+        stop("Unexpected argument: -")
+    );
+    assert_eq!(
+        p(&["write", "s1", "x", "--text-file", "f"]),
+        stop(TEXT_WAYS)
+    );
+    assert_eq!(
+        p(&["write", "s1", "-", "--text-file", "f"]),
+        stop(TEXT_WAYS)
+    );
+    assert_eq!(p(&["write", "s1", "-", "--token-stdin"]), stop(BOTH_STDIN));
+    assert_eq!(
+        p(&["write", "s1", "--keep-newline", "-"]),
+        Form::Write {
+            sid: "s1".into(),
+            text: Said::Stdin,
+            keep: true
+        }
+    );
+    assert_eq!(p(&["write", "s1", "x", "--keep-newline"]), stop(KEEP_WORD));
+    assert_eq!(p(&["write", "s1", "--keep-newline"]), stop(WRITE_USAGE));
+    // --keep-newline is write's only.
+    assert!(matches!(
+        p(&["status", "--keep-newline"]),
+        Form::Stop { page: true, .. }
+    ));
+    assert_eq!(p(&["write", "s1", "--text-file", ""]), stop(WRITE_USAGE));
+    assert_eq!(
+        p(&["write", "s1", "-", "--text-file"]),
+        stop("Error: --text-file takes a value")
+    );
+    // --text-file is write's only.
+    assert!(matches!(
+        p(&["status", "--text-file", "f"]),
+        Form::Stop { page: true, .. }
+    ));
+    let (_, t) = parse(&["status", "--token-file", "tok"]);
+    assert_eq!(t.file, "tok");
+}
+
+fn scratch(name: &str) -> std::path::PathBuf {
+    let d = std::env::temp_dir().join(format!("k5-rs-secret-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    d
+}
+
+#[cfg(unix)]
+fn file_with(dir: &std::path::Path, name: &str, body: &[u8], mode: u32) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let p = dir.join(name);
+    std::fs::write(&p, body).unwrap();
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(mode)).unwrap();
+    p.to_string_lossy().into_owned()
+}
+
+#[cfg(unix)]
+#[test]
+fn the_token_file_s_mode_and_line() {
+    let d = scratch("token");
+    for mode in [0o600, 0o400] {
+        let p = file_with(&d, &format!("t{mode:o}"), b"  k2rs_tok \r\nsecond\n", mode);
+        assert_eq!(token_file(&p), Ok("k2rs_tok".to_string()), "{mode:o}");
+    }
+    for mode in [0o644, 0o640, 0o604, 0o660, 0o606] {
+        let p = file_with(&d, &format!("t{mode:o}"), b"k2rs_tok\n", mode);
+        assert_eq!(token_file(&p), Err(Exit::Usage), "{mode:o}");
+    }
+    let p = file_with(&d, "blank", b" \t\n", 0o600);
+    assert_eq!(token_file(&p), Err(Exit::Usage));
+    let missing = d.join("missing").to_string_lossy().into_owned();
+    assert_eq!(token_file(&missing), Err(Exit::Usage));
+    let t = Target {
+        token: "k2rs_argv".into(),
+        file: file_with(&d, "both", b"k2rs_tok\n", 0o600),
+        ..Target::default()
+    };
+    assert_eq!(apply_target(&t), Err(Exit::Usage));
+    let t = Target {
+        file: t.file.clone(),
+        ..Target::default()
+    };
+    assert_eq!(apply_target(&t), Ok(Some("k2rs_tok".to_string())));
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_text_file_is_sent_byte_for_byte() {
+    let d = scratch("text");
+    let body = b"pw \"q\" & = % + \xc3\xa9 \r\x00 end\n\n";
+    let p = file_with(&d, "pw", body, 0o600);
+    // By default one newline goes; of two, one stays.
+    let got = said(&Said::File(p.clone()), false).unwrap();
+    assert_eq!(got.expose(), &body[..body.len() - 1]);
+    let got = said(&Said::File(p), true).unwrap();
+    assert_eq!(got.expose(), body);
+    let crlf = file_with(&d, "crlf", b"pw\r\n", 0o600);
+    assert_eq!(said(&Said::File(crlf), false).unwrap().expose(), b"pw");
+    let nl = file_with(&d, "nl", b"\n", 0o600);
+    assert!(said(&Said::File(nl.clone()), false).is_err());
+    assert_eq!(said(&Said::File(nl), true).unwrap().expose(), b"\n");
+    let empty = file_with(&d, "empty", b"", 0o600);
+    assert!(said(&Said::File(empty), true).is_err());
+    let missing = d.join("missing").to_string_lossy().into_owned();
+    assert!(said(&Said::File(missing), false).is_err());
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[test]
+fn one_trailing_newline_comes_off() {
+    let strip = |b: &[u8], keep: bool| {
+        let mut v = b.to_vec();
+        strip_newline(&mut v, keep);
+        v
+    };
+    assert_eq!(strip(b"pw\n", false), b"pw");
+    assert_eq!(strip(b"pw\n\n", false), b"pw\n");
+    assert_eq!(strip(b"pw\r\n", false), b"pw");
+    assert_eq!(strip(b"pw\r\n\r\n", false), b"pw\r\n");
+    assert_eq!(strip(b"pw\r", false), b"pw\r");
+    assert_eq!(strip(b"pw", false), b"pw");
+    assert_eq!(strip(b"\n", false), b"");
+    assert_eq!(strip(b"pw\r\n", true), b"pw\r\n");
 }

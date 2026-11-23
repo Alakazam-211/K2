@@ -2,7 +2,9 @@
 # Stages 1–3 daemon: Layer 0 toggle, grants (k2rs_…), shell PTY + I/O.
 # Routes live under /cli/remote-session/* and terminal write/read with
 # grant-token support. Owner/admin for status/enable/disable/grant/revoke;
-# shell/write/read accept a grant token via --token-stdin (or --token k2rs_…).
+# shell/write/read accept a grant token via --token-stdin, --token-file
+# (or --token k2rs_…). write takes its text as a word, or, for a secret,
+# from stdin (-) or a file (--text-file): never on argv or in the env.
 
 # Parse TTL strings into integer seconds.
 # Accepts: bare seconds (1800), 30m, 45m, 1h, 90s. Echoes seconds or
@@ -116,14 +118,23 @@ cmd_help_remote_session() {
 EOF
 }
 
-# Apply --host / --token / --token-stdin for a remote-session subcommand.
+# Apply --host / --token / --token-stdin / --token-file for a
+# remote-session subcommand.
 # Grant tokens (k2rs_) set TOKEN even without --host (local drive).
 # With --host, reuses _apply_remote_host (connect-tokens / K2_REMOTE_TOKEN).
-# $3 = 1 (--token-stdin) reads the token from stdin: a token on the command
-# line is visible to other users on this machine. Both forms together, or
-# an empty stdin token, is a usage error (returns 2).
+# $3 = 1 (--token-stdin) reads the token from stdin; $4 (--token-file PATH)
+# reads it from that file (_rs_read_token_file): a token on the command
+# line is visible to other users on this machine. Two forms together, or
+# an empty token, is a usage error (returns 2).
 _rs_apply_target() {
-    local host="${1:-}" token="${2:-}" token_stdin="${3:-0}"
+    local host="${1:-}" token="${2:-}" token_stdin="${3:-0}" token_file="${4:-}"
+    if [ -n "$token_file" ]; then
+        if [ -n "$token" ] || [ "$token_stdin" = 1 ]; then
+            echo "k2 remote-session: --token-file, --token-stdin or --token: give one" >&2
+            return 2
+        fi
+        token="$(_rs_read_token_file "$token_file")" || return $?
+    fi
     if [ "$token_stdin" = 1 ]; then
         [ -z "$token" ] || { echo "k2 remote-session: --token-stdin or --token, not both" >&2; return 2; }
         _cli_read_secret_stdin "Token: "
@@ -140,6 +151,84 @@ _rs_apply_target() {
     return 0
 }
 
+# _rs_read_token_file PATH: the token in PATH on stdout (its first line,
+# blanks around it taken off). The file is opened once and its mode read
+# from that open file: one that its group or others can read is refused
+# (exit 2), as is a file with no token. On Windows the mode is not
+# checked (it has no such bits). Only the path is on python3's argv; the
+# token reaches the shell through the pipe of $(...).
+_rs_read_token_file() {
+    python3 -c '
+import os, stat, sys
+p = sys.argv[1]
+def die(msg):
+    sys.stderr.write("k2 remote-session: --token-file %s: %s\n" % (p, msg))
+    sys.exit(2)
+try:
+    fd = os.open(p, os.O_RDONLY)
+except OSError as e:
+    die(e.strerror)
+mode = stat.S_IMODE(os.fstat(fd).st_mode)
+if os.name == "posix" and mode & 0o044:
+    die("its group or others can read it (mode %04o); run: chmod 600 %s" % (mode & 0o777, p))
+data = b""
+try:
+    while True:
+        chunk = os.read(fd, 65536)
+        if not chunk:
+            break
+        data += chunk
+except OSError as e:
+    die(e.strerror)
+tok = data.split(b"\n", 1)[0].strip(b" \t\r\x0b\x0c")
+if not tok:
+    die("no token in the file")
+sys.stdout.buffer.write(tok)
+' "$1"
+}
+
+# _rs_text_quoted PATH KEEP: the text to type, percent-encoded for a form
+# body, on stdout: PATH's bytes, or with PATH empty stdin's (a terminal:
+# one line, not shown as it is typed). One trailing newline is taken off
+# (a final \r\n as a pair, else a final \n), so a file or pipe made with
+# echo doesn't press Enter twice; KEEP=1 (--keep-newline) sends every
+# byte as it is. No text left is a usage error (exit 2). The text is
+# never on argv or in the env: python3 reads it from the file or from
+# stdin (a pipe from the printf builtin for a typed line).
+_rs_text_quoted() {
+    local quote='
+import sys, urllib.parse
+p, keep = sys.argv[1], sys.argv[2] == "1"
+if p:
+    try:
+        with open(p, "rb") as f:
+            data = f.read()
+    except OSError as e:
+        sys.stderr.write("k2 remote-session write: --text-file %s: %s\n" % (p, e.strerror))
+        sys.exit(2)
+else:
+    data = sys.stdin.buffer.read()
+if not keep:
+    if data.endswith(b"\r\n"):
+        data = data[:-2]
+    elif data.endswith(b"\n"):
+        data = data[:-1]
+if not data:
+    if p:
+        sys.stderr.write("k2 remote-session write: --text-file %s: no text in the file\n" % p)
+    else:
+        sys.stderr.write("k2 remote-session write: -: no text on stdin\n")
+    sys.exit(2)
+sys.stdout.write(urllib.parse.quote_from_bytes(data, safe=""))
+'
+    if [ -n "$1" ] || [ ! -t 0 ]; then
+        python3 -c "$quote" "$1" "$2"
+    else
+        _cli_read_secret_stdin "Text: "
+        printf '%s' "$_K2_SECRET" | python3 -c "$quote" "" "$2"
+    fi
+}
+
 cmd_remote_session() {
     local sub="${1:-}"
     if [ -z "$sub" ] || [ "$sub" = "--help" ] || [ "$sub" = "-h" ] || [ "$sub" = "help" ]; then
@@ -150,18 +239,19 @@ cmd_remote_session() {
 
     case "$sub" in
         status)
-            local host="" token="" token_stdin=0 json=0
+            local host="" token="" token_stdin=0 token_file="" json=0
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --host)  _need_value "$@"; host="${2:-}"; shift 2 ;;
                     --token) _need_value "$@"; token="${2:-}"; shift 2 ;;
                     --token-stdin) token_stdin=1; shift ;;
+                    --token-file) _need_value "$@"; token_file="${2:-}"; shift 2 ;;
                     --json)  json=1; shift ;;
                     --help|-h) cmd_help_remote_session; return 0 ;;
                     *) echo "Unknown flag: $1" >&2; cmd_help_remote_session >&2; return 2 ;;
                 esac
             done
-            _rs_apply_target "$host" "$token" "$token_stdin" || return $?
+            _rs_apply_target "$host" "$token" "$token_stdin" "$token_file" || return $?
             local raw
             raw=$(cli_request "/cli/remote-session/status") || raw=""
             if printf '%s' "$raw" | python3 -c '
@@ -210,17 +300,18 @@ else:
             ;;
 
         enable|disable)
-            local host="" token="" token_stdin=0
+            local host="" token="" token_stdin=0 token_file=""
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --host)  _need_value "$@"; host="${2:-}"; shift 2 ;;
                     --token) _need_value "$@"; token="${2:-}"; shift 2 ;;
                     --token-stdin) token_stdin=1; shift ;;
+                    --token-file) _need_value "$@"; token_file="${2:-}"; shift 2 ;;
                     --help|-h) cmd_help_remote_session; return 0 ;;
                     *) echo "Unknown flag: $1" >&2; return 2 ;;
                 esac
             done
-            _rs_apply_target "$host" "$token" "$token_stdin" || return $?
+            _rs_apply_target "$host" "$token" "$token_stdin" "$token_file" || return $?
             local raw
             raw=$(cli_post_json "/cli/remote-session/${sub}" "{}") || raw=""
             if printf '%s' "$raw" | python3 -c '
@@ -243,12 +334,13 @@ if killed is not None:
             ;;
 
         grant)
-            local host="" token="" token_stdin=0 scope="shell" ttl_raw="30m" label=""
+            local host="" token="" token_stdin=0 token_file="" scope="shell" ttl_raw="30m" label=""
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --host)  _need_value "$@"; host="${2:-}"; shift 2 ;;
                     --token) _need_value "$@"; token="${2:-}"; shift 2 ;;
                     --token-stdin) token_stdin=1; shift ;;
+                    --token-file) _need_value "$@"; token_file="${2:-}"; shift 2 ;;
                     --scope) _need_value "$@"; scope="${2:-}"; shift 2 ;;
                     --ttl)   _need_value "$@"; ttl_raw="${2:-}"; shift 2 ;;
                     --label) _need_value "$@"; label="${2:-}"; shift 2 ;;
@@ -261,7 +353,7 @@ if killed is not None:
                 echo "Error: invalid --ttl '$ttl_raw' (use 30m, 1h, 90s, or bare seconds)" >&2
                 return 2
             fi
-            _rs_apply_target "$host" "$token" "$token_stdin" || return $?
+            _rs_apply_target "$host" "$token" "$token_stdin" "$token_file" || return $?
             local body raw
             body=$(SCOPE="$scope" TTL="$ttl_secs" LABEL="$label" python3 -c '
 import json,os
@@ -301,18 +393,19 @@ print("Scope: %s" % (g.get("scope") or "shell"))
             ;;
 
         grants)
-            local host="" token="" token_stdin=0 json=0
+            local host="" token="" token_stdin=0 token_file="" json=0
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --host)  _need_value "$@"; host="${2:-}"; shift 2 ;;
                     --token) _need_value "$@"; token="${2:-}"; shift 2 ;;
                     --token-stdin) token_stdin=1; shift ;;
+                    --token-file) _need_value "$@"; token_file="${2:-}"; shift 2 ;;
                     --json)  json=1; shift ;;
                     --help|-h) cmd_help_remote_session; return 0 ;;
                     *) echo "Unknown flag: $1" >&2; return 2 ;;
                 esac
             done
-            _rs_apply_target "$host" "$token" "$token_stdin" || return $?
+            _rs_apply_target "$host" "$token" "$token_stdin" "$token_file" || return $?
             local raw
             raw=$(cli_request "/cli/remote-session/grants") || raw=""
             if printf '%s' "$raw" | python3 -c '
@@ -364,12 +457,13 @@ for r in rows:
             ;;
 
         revoke)
-            local id="" host="" token="" token_stdin=0
+            local id="" host="" token="" token_stdin=0 token_file=""
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --host)  _need_value "$@"; host="${2:-}"; shift 2 ;;
                     --token) _need_value "$@"; token="${2:-}"; shift 2 ;;
                     --token-stdin) token_stdin=1; shift ;;
+                    --token-file) _need_value "$@"; token_file="${2:-}"; shift 2 ;;
                     --help|-h) cmd_help_remote_session; return 0 ;;
                     -*)
                         echo "Unknown flag: $1" >&2; return 2 ;;
@@ -383,7 +477,7 @@ for r in rows:
                 echo "Usage: k2 remote-session revoke <grant-id>" >&2
                 return 2
             fi
-            _rs_apply_target "$host" "$token" "$token_stdin" || return $?
+            _rs_apply_target "$host" "$token" "$token_stdin" "$token_file" || return $?
             local body raw
             body=$(ID="$id" python3 -c 'import json,os; print(json.dumps({"id": os.environ["ID"]}))')
             raw=$(cli_post_json "/cli/remote-session/revoke" "$body") || raw=""
@@ -408,18 +502,19 @@ if killed is not None:
             ;;
 
         shell)
-            local host="" token="" token_stdin=0 cwd=""
+            local host="" token="" token_stdin=0 token_file="" cwd=""
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --host)  _need_value "$@"; host="${2:-}"; shift 2 ;;
                     --token) _need_value "$@"; token="${2:-}"; shift 2 ;;
                     --token-stdin) token_stdin=1; shift ;;
+                    --token-file) _need_value "$@"; token_file="${2:-}"; shift 2 ;;
                     --cwd)   _need_value "$@"; cwd="${2:-}"; shift 2 ;;
                     --help|-h) cmd_help_remote_session; return 0 ;;
                     *) echo "Unknown flag: $1" >&2; return 2 ;;
                 esac
             done
-            _rs_apply_target "$host" "$token" "$token_stdin" || return $?
+            _rs_apply_target "$host" "$token" "$token_stdin" "$token_file" || return $?
             local body raw
             if [ -n "$cwd" ]; then
                 body=$(CWD="$cwd" python3 -c 'import json,os; print(json.dumps({"cwd": os.environ["CWD"]}))')
@@ -451,31 +546,68 @@ print("  k2 remote-session read  %s [--lines 50] --token-stdin" % sid)
             ;;
 
         write)
-            local sid="" text="" host="" token="" token_stdin=0
+            # The text: a word ("text", on argv: not for a secret), - (stdin)
+            # or --text-file PATH (the file), less one trailing newline
+            # unless --keep-newline. The last two go in the POST's form
+            # body, never on argv or in the URL.
+            local sid="" text="" host="" token="" token_stdin=0 token_file=""
+            local text_stdin=0 text_file="" text_ways=0 keep_newline=0
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --host)  _need_value "$@"; host="${2:-}"; shift 2 ;;
                     --token) _need_value "$@"; token="${2:-}"; shift 2 ;;
                     --token-stdin) token_stdin=1; shift ;;
+                    --token-file) _need_value "$@"; token_file="${2:-}"; shift 2 ;;
+                    --text-file) _need_value "$@"; text_file="${2:-}"; shift 2 ;;
+                    --keep-newline) keep_newline=1; shift ;;
                     --help|-h) cmd_help_remote_session; return 0 ;;
+                    -)
+                        if [ -z "$sid" ]; then echo "Unknown flag: $1" >&2; return 2
+                        elif [ -z "$text" ] && [ "$text_stdin" = 0 ]; then text_stdin=1; shift
+                        else echo "Unexpected argument: $1" >&2; return 2
+                        fi ;;
                     -*)
                         echo "Unknown flag: $1" >&2; return 2 ;;
                     *)
                         if [ -z "$sid" ]; then sid="$1"; shift
-                        elif [ -z "$text" ]; then text="$1"; shift
+                        elif [ -z "$text" ] && [ "$text_stdin" = 0 ]; then text="$1"; shift
                         else echo "Unexpected argument: $1" >&2; return 2
                         fi ;;
                 esac
             done
-            if [ -z "$sid" ] || [ -z "$text" ]; then
-                echo "Usage: k2 remote-session write <session-id> \"text\" [--token-stdin | --token k2rs_…] [--host HOST] (a token on the command line is visible to other users on this machine)" >&2
+            if [ -n "$text" ]; then text_ways=$((text_ways + 1)); fi
+            if [ "$text_stdin" = 1 ]; then text_ways=$((text_ways + 1)); fi
+            if [ -n "$text_file" ]; then text_ways=$((text_ways + 1)); fi
+            if [ -z "$sid" ] || [ "$text_ways" = 0 ]; then
+                echo "Usage: k2 remote-session write <session-id> (\"text\" | - | --text-file PATH) [--keep-newline] [--token-file PATH | --token-stdin | --token k2rs_…] [--host HOST] (text or a token on the command line is visible to other users on this machine)" >&2
                 return 2
             fi
-            _rs_apply_target "$host" "$token" "$token_stdin" || return $?
+            if [ "$text_ways" != 1 ]; then
+                echo "k2 remote-session write: give the text one way: \"text\", - (stdin) or --text-file PATH" >&2
+                return 2
+            fi
+            if [ "$keep_newline" = 1 ] && [ -n "$text" ]; then
+                echo "k2 remote-session write: --keep-newline goes with - or --text-file" >&2
+                return 2
+            fi
+            if [ "$text_stdin" = 1 ] && [ "$token_stdin" = 1 ]; then
+                echo "k2 remote-session write: - and --token-stdin both read stdin; give the token with --token-file" >&2
+                return 2
+            fi
+            _rs_apply_target "$host" "$token" "$token_stdin" "$token_file" || return $?
             local raw
-            raw=$(cli_request_post "/cli/terminal/write" \
-                "id=$(urlencode "$sid")" \
-                "message=$(urlencode "$text")") || raw=""
+            if [ -n "$text" ]; then
+                raw=$(cli_request_post "/cli/terminal/write" \
+                    "id=$(urlencode "$sid")" \
+                    "message=$(urlencode "$text")") || raw=""
+            else
+                local quoted
+                quoted="$(_rs_text_quoted "$text_file" "$keep_newline")" || return $?
+                raw=$(cli_post_form "/cli/terminal/write" \
+                    "id=$(urlencode "$sid")" \
+                    "message=$quoted") || raw=""
+                quoted=""
+            fi
             # Empty or ok:true → ack. Nested/string error → teach.
             if [ -z "$raw" ]; then
                 echo "wrote to $sid"
@@ -522,12 +654,13 @@ sys.exit(0 if isinstance(d,dict) and (d.get("ok") is True or "success" in d) els
             ;;
 
         read)
-            local sid="" lines=50 host="" token="" token_stdin=0
+            local sid="" lines=50 host="" token="" token_stdin=0 token_file=""
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --host)  _need_value "$@"; host="${2:-}"; shift 2 ;;
                     --token) _need_value "$@"; token="${2:-}"; shift 2 ;;
                     --token-stdin) token_stdin=1; shift ;;
+                    --token-file) _need_value "$@"; token_file="${2:-}"; shift 2 ;;
                     --lines) _need_value "$@"; lines="${2:-}"; shift 2 ;;
                     --help|-h) cmd_help_remote_session; return 0 ;;
                     -*)
@@ -542,7 +675,7 @@ sys.exit(0 if isinstance(d,dict) and (d.get("ok") is True or "success" in d) els
                 echo "Usage: k2 remote-session read <session-id> [--lines N] [--token-stdin | --token k2rs_…] [--host HOST] (a token on the command line is visible to other users on this machine)" >&2
                 return 2
             fi
-            _rs_apply_target "$host" "$token" "$token_stdin" || return $?
+            _rs_apply_target "$host" "$token" "$token_stdin" "$token_file" || return $?
             local raw
             raw=$(cli_request "/cli/terminal/read" \
                 "id=$(urlencode "$sid")" \

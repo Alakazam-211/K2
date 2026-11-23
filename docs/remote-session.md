@@ -59,7 +59,9 @@ Cross-device relationship / `k2 talk` style peering is a separate layer. **Do no
 
 ## CLI cookbook
 
-Owner/admin verbs need an owner or admin token (local daemon token, or Connect session / `--token-stdin` / connect-tokens when using `--host`). Drive verbs prefer a live `k2rs_…` grant. `--token-stdin` reads the token from stdin; a token on the command line (`--token`) is visible to other users on the machine.
+Owner/admin verbs need an owner or admin token (local daemon token, or Connect session / `--token-file` / `--token-stdin` / connect-tokens when using `--host`). Drive verbs prefer a live `k2rs_…` grant. `--token-file PATH` reads the token from a file only its owner can read (`chmod 600`; a file its group or others can read is refused); `--token-stdin` reads it from stdin. A token on the command line (`--token`) is visible to other users on the machine.
+
+Text for `write` that is a secret (a sudo password) goes on stdin (`write <id> -`) or in a file (`write <id> --text-file PATH`), never as the text word: argv is for text that isn't secret. Those bytes are typed as they are, less one trailing newline (`\n`, or `\r\n`), then Enter, so a password file made with `echo` doesn't press Enter twice; `--keep-newline` sends every byte. They travel in the request's body, not its URL.
 
 ```sh
 # ── On target device (owner) ──────────────────────────────────────────
@@ -75,6 +77,7 @@ k2 remote-session shell --token-stdin [--host …] [--cwd PATH]   # paste the k2
 # note sessionId from the response
 
 k2 remote-session write <session-id> "ls -la" --token-stdin [--host …]
+k2 remote-session write <session-id> --text-file ./pw --token-file ./grant   # a secret
 k2 remote-session read  <session-id> --lines 80 --token-stdin [--host …]
 
 # ── Tear down ─────────────────────────────────────────────────────────

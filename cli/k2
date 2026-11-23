@@ -26208,7 +26208,9 @@ print("Skin token revoked." if d.get("success") else "No matching active token (
 # Stages 1–3 daemon: Layer 0 toggle, grants (k2rs_…), shell PTY + I/O.
 # Routes live under /cli/remote-session/* and terminal write/read with
 # grant-token support. Owner/admin for status/enable/disable/grant/revoke;
-# shell/write/read accept a grant token via --token-stdin (or --token k2rs_…).
+# shell/write/read accept a grant token via --token-stdin, --token-file
+# (or --token k2rs_…). write takes its text as a word, or, for a secret,
+# from stdin (-) or a file (--text-file): never on argv or in the env.
 
 # Parse TTL strings into integer seconds.
 # Accepts: bare seconds (1800), 30m, 45m, 1h, 90s. Echoes seconds or
@@ -26325,16 +26327,20 @@ Grants mint a one-time k2rs_… token; shell PTYs and terminal I/O require a
 live grant (or owner break-glass on write/read).
 
 USAGE
-  k2 remote-session status [--json] [--host HOST] [--token-stdin | --token TOK]
-  k2 remote-session enable  [--host HOST] [--token-stdin | --token TOK]
-  k2 remote-session disable [--host HOST] [--token-stdin | --token TOK]
+  k2 remote-session status [--json] [--host HOST] [TOKEN]
+  k2 remote-session enable  [--host HOST] [TOKEN]
+  k2 remote-session disable [--host HOST] [TOKEN]
   k2 remote-session grant [--scope shell] [--ttl 30m|1800] [--label "..."]
-                          [--host HOST] [--token-stdin | --token TOK]
-  k2 remote-session grants [--json] [--host HOST] [--token-stdin | --token TOK]
-  k2 remote-session revoke <grant-id> [--host HOST] [--token-stdin | --token TOK]
-  k2 remote-session shell [--cwd PATH] [--host HOST] [--token-stdin | --token k2rs_…]
-  k2 remote-session write <session-id> "text" [--token-stdin | --token k2rs_…] [--host HOST]
-  k2 remote-session read  <session-id> [--lines N] [--token-stdin | --token k2rs_…] [--host HOST]
+                          [--host HOST] [TOKEN]
+  k2 remote-session grants [--json] [--host HOST] [TOKEN]
+  k2 remote-session revoke <grant-id> [--host HOST] [TOKEN]
+  k2 remote-session shell [--cwd PATH] [--host HOST] [TOKEN]
+  k2 remote-session write <session-id> ("text" | - | --text-file PATH) [--keep-newline]
+                          [TOKEN] [--host HOST]
+  k2 remote-session read  <session-id> [--lines N] [TOKEN] [--host HOST]
+
+  TOKEN is one of --token-file PATH, --token-stdin or --token TOK: an
+  owner/admin token for the admin verbs, a k2rs_… grant for the drive verbs.
 
 ADMIN (owner/admin token)
   status     Layer 0 enabled?, active grants/sessions, recent denials
@@ -26344,7 +26350,7 @@ ADMIN (owner/admin token)
   grants     List grants (no secrets)
   revoke     Revoke by id (kills bound shells)
 
-DRIVE (prefer a k2rs_… grant token, with --token-stdin)
+DRIVE (prefer a k2rs_… grant token, with --token-file or --token-stdin)
   shell      Spawn daemon-user login shell PTY under the grant
   write      Inject text into a remote-session PTY (terminal/write)
   read       Peek last N lines of a remote-session PTY (terminal/read)
@@ -26357,17 +26363,38 @@ OPTIONS
   --lines N         Lines for read (default 50)
   --host HOST       Remote daemon (https://HOST or full URL). Reuses
                     connect-tokens / --token-stdin / $K2_REMOTE_TOKEN like k2 talk.
+  --token-file PATH Read the token from PATH (its first line). Refused when
+                    the file's group or others can read it: chmod 600 PATH
   --token-stdin     Read the token from stdin: owner/connect token (admin)
                     or k2rs_… grant (drive)
   --token TOK       The token on the command line, where other users on
-                    this machine can see it; prefer --token-stdin
+                    this machine can see it; prefer --token-file or
+                    --token-stdin
+  -                 write: type stdin (on a terminal: one line, not shown
+                    as it is typed)
+  --text-file PATH  write: type PATH's bytes
+  --keep-newline    write: with - or --text-file, keep a trailing newline
+                    (by default one is taken off: a final \n, or \r\n)
   --json            Machine-readable status / grants
+
+SECRETS
+  A token or text on the command line is visible to every user on this
+  machine (ps). Give a secret (a k2rs_… token, a sudo password) with
+  --token-file, --token-stdin, write's - or write's --text-file: never as
+  a word on the command line or in an environment variable. The text
+  word ("text") is for text that isn't secret. write types the bytes of
+  - and --text-file as they are, less one trailing newline (\n, or \r\n),
+  then Enter, as for the text word: a password file made with echo
+  doesn't press Enter twice. --keep-newline sends every byte. They go in
+  the request's body, never in its URL.
 
 EXAMPLES
   k2 remote-session enable
   k2 remote-session grant --ttl 30m --label "lab overnight"
   k2 remote-session shell --token-stdin          # paste the k2rs_… token
   k2 remote-session write <session-id> "ls -la" --token-stdin
+  k2 remote-session write <session-id> --text-file ./pw --token-file ./grant
+  k2 remote-session write <session-id> - --token-file ./grant < ./pw
   k2 remote-session read  <session-id> --lines 80 --token-stdin
   k2 remote-session revoke rs_…
   k2 remote-session status --host box.k2.dev   # owner token from connect-tokens
@@ -26380,14 +26407,23 @@ EXIT CODES
 EOF
 }
 
-# Apply --host / --token / --token-stdin for a remote-session subcommand.
+# Apply --host / --token / --token-stdin / --token-file for a
+# remote-session subcommand.
 # Grant tokens (k2rs_) set TOKEN even without --host (local drive).
 # With --host, reuses _apply_remote_host (connect-tokens / K2_REMOTE_TOKEN).
-# $3 = 1 (--token-stdin) reads the token from stdin: a token on the command
-# line is visible to other users on this machine. Both forms together, or
-# an empty stdin token, is a usage error (returns 2).
+# $3 = 1 (--token-stdin) reads the token from stdin; $4 (--token-file PATH)
+# reads it from that file (_rs_read_token_file): a token on the command
+# line is visible to other users on this machine. Two forms together, or
+# an empty token, is a usage error (returns 2).
 _rs_apply_target() {
-    local host="${1:-}" token="${2:-}" token_stdin="${3:-0}"
+    local host="${1:-}" token="${2:-}" token_stdin="${3:-0}" token_file="${4:-}"
+    if [ -n "$token_file" ]; then
+        if [ -n "$token" ] || [ "$token_stdin" = 1 ]; then
+            echo "k2 remote-session: --token-file, --token-stdin or --token: give one" >&2
+            return 2
+        fi
+        token="$(_rs_read_token_file "$token_file")" || return $?
+    fi
     if [ "$token_stdin" = 1 ]; then
         [ -z "$token" ] || { echo "k2 remote-session: --token-stdin or --token, not both" >&2; return 2; }
         _cli_read_secret_stdin "Token: "
@@ -26404,6 +26440,84 @@ _rs_apply_target() {
     return 0
 }
 
+# _rs_read_token_file PATH: the token in PATH on stdout (its first line,
+# blanks around it taken off). The file is opened once and its mode read
+# from that open file: one that its group or others can read is refused
+# (exit 2), as is a file with no token. On Windows the mode is not
+# checked (it has no such bits). Only the path is on python3's argv; the
+# token reaches the shell through the pipe of $(...).
+_rs_read_token_file() {
+    python3 -c '
+import os, stat, sys
+p = sys.argv[1]
+def die(msg):
+    sys.stderr.write("k2 remote-session: --token-file %s: %s\n" % (p, msg))
+    sys.exit(2)
+try:
+    fd = os.open(p, os.O_RDONLY)
+except OSError as e:
+    die(e.strerror)
+mode = stat.S_IMODE(os.fstat(fd).st_mode)
+if os.name == "posix" and mode & 0o044:
+    die("its group or others can read it (mode %04o); run: chmod 600 %s" % (mode & 0o777, p))
+data = b""
+try:
+    while True:
+        chunk = os.read(fd, 65536)
+        if not chunk:
+            break
+        data += chunk
+except OSError as e:
+    die(e.strerror)
+tok = data.split(b"\n", 1)[0].strip(b" \t\r\x0b\x0c")
+if not tok:
+    die("no token in the file")
+sys.stdout.buffer.write(tok)
+' "$1"
+}
+
+# _rs_text_quoted PATH KEEP: the text to type, percent-encoded for a form
+# body, on stdout: PATH's bytes, or with PATH empty stdin's (a terminal:
+# one line, not shown as it is typed). One trailing newline is taken off
+# (a final \r\n as a pair, else a final \n), so a file or pipe made with
+# echo doesn't press Enter twice; KEEP=1 (--keep-newline) sends every
+# byte as it is. No text left is a usage error (exit 2). The text is
+# never on argv or in the env: python3 reads it from the file or from
+# stdin (a pipe from the printf builtin for a typed line).
+_rs_text_quoted() {
+    local quote='
+import sys, urllib.parse
+p, keep = sys.argv[1], sys.argv[2] == "1"
+if p:
+    try:
+        with open(p, "rb") as f:
+            data = f.read()
+    except OSError as e:
+        sys.stderr.write("k2 remote-session write: --text-file %s: %s\n" % (p, e.strerror))
+        sys.exit(2)
+else:
+    data = sys.stdin.buffer.read()
+if not keep:
+    if data.endswith(b"\r\n"):
+        data = data[:-2]
+    elif data.endswith(b"\n"):
+        data = data[:-1]
+if not data:
+    if p:
+        sys.stderr.write("k2 remote-session write: --text-file %s: no text in the file\n" % p)
+    else:
+        sys.stderr.write("k2 remote-session write: -: no text on stdin\n")
+    sys.exit(2)
+sys.stdout.write(urllib.parse.quote_from_bytes(data, safe=""))
+'
+    if [ -n "$1" ] || [ ! -t 0 ]; then
+        python3 -c "$quote" "$1" "$2"
+    else
+        _cli_read_secret_stdin "Text: "
+        printf '%s' "$_K2_SECRET" | python3 -c "$quote" "" "$2"
+    fi
+}
+
 cmd_remote_session() {
     local sub="${1:-}"
     if [ -z "$sub" ] || [ "$sub" = "--help" ] || [ "$sub" = "-h" ] || [ "$sub" = "help" ]; then
@@ -26414,18 +26528,19 @@ cmd_remote_session() {
 
     case "$sub" in
         status)
-            local host="" token="" token_stdin=0 json=0
+            local host="" token="" token_stdin=0 token_file="" json=0
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --host)  _need_value "$@"; host="${2:-}"; shift 2 ;;
                     --token) _need_value "$@"; token="${2:-}"; shift 2 ;;
                     --token-stdin) token_stdin=1; shift ;;
+                    --token-file) _need_value "$@"; token_file="${2:-}"; shift 2 ;;
                     --json)  json=1; shift ;;
                     --help|-h) cmd_help_remote_session; return 0 ;;
                     *) echo "Unknown flag: $1" >&2; cmd_help_remote_session >&2; return 2 ;;
                 esac
             done
-            _rs_apply_target "$host" "$token" "$token_stdin" || return $?
+            _rs_apply_target "$host" "$token" "$token_stdin" "$token_file" || return $?
             local raw
             raw=$(cli_request "/cli/remote-session/status") || raw=""
             if printf '%s' "$raw" | python3 -c '
@@ -26474,17 +26589,18 @@ else:
             ;;
 
         enable|disable)
-            local host="" token="" token_stdin=0
+            local host="" token="" token_stdin=0 token_file=""
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --host)  _need_value "$@"; host="${2:-}"; shift 2 ;;
                     --token) _need_value "$@"; token="${2:-}"; shift 2 ;;
                     --token-stdin) token_stdin=1; shift ;;
+                    --token-file) _need_value "$@"; token_file="${2:-}"; shift 2 ;;
                     --help|-h) cmd_help_remote_session; return 0 ;;
                     *) echo "Unknown flag: $1" >&2; return 2 ;;
                 esac
             done
-            _rs_apply_target "$host" "$token" "$token_stdin" || return $?
+            _rs_apply_target "$host" "$token" "$token_stdin" "$token_file" || return $?
             local raw
             raw=$(cli_post_json "/cli/remote-session/${sub}" "{}") || raw=""
             if printf '%s' "$raw" | python3 -c '
@@ -26507,12 +26623,13 @@ if killed is not None:
             ;;
 
         grant)
-            local host="" token="" token_stdin=0 scope="shell" ttl_raw="30m" label=""
+            local host="" token="" token_stdin=0 token_file="" scope="shell" ttl_raw="30m" label=""
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --host)  _need_value "$@"; host="${2:-}"; shift 2 ;;
                     --token) _need_value "$@"; token="${2:-}"; shift 2 ;;
                     --token-stdin) token_stdin=1; shift ;;
+                    --token-file) _need_value "$@"; token_file="${2:-}"; shift 2 ;;
                     --scope) _need_value "$@"; scope="${2:-}"; shift 2 ;;
                     --ttl)   _need_value "$@"; ttl_raw="${2:-}"; shift 2 ;;
                     --label) _need_value "$@"; label="${2:-}"; shift 2 ;;
@@ -26525,7 +26642,7 @@ if killed is not None:
                 echo "Error: invalid --ttl '$ttl_raw' (use 30m, 1h, 90s, or bare seconds)" >&2
                 return 2
             fi
-            _rs_apply_target "$host" "$token" "$token_stdin" || return $?
+            _rs_apply_target "$host" "$token" "$token_stdin" "$token_file" || return $?
             local body raw
             body=$(SCOPE="$scope" TTL="$ttl_secs" LABEL="$label" python3 -c '
 import json,os
@@ -26565,18 +26682,19 @@ print("Scope: %s" % (g.get("scope") or "shell"))
             ;;
 
         grants)
-            local host="" token="" token_stdin=0 json=0
+            local host="" token="" token_stdin=0 token_file="" json=0
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --host)  _need_value "$@"; host="${2:-}"; shift 2 ;;
                     --token) _need_value "$@"; token="${2:-}"; shift 2 ;;
                     --token-stdin) token_stdin=1; shift ;;
+                    --token-file) _need_value "$@"; token_file="${2:-}"; shift 2 ;;
                     --json)  json=1; shift ;;
                     --help|-h) cmd_help_remote_session; return 0 ;;
                     *) echo "Unknown flag: $1" >&2; return 2 ;;
                 esac
             done
-            _rs_apply_target "$host" "$token" "$token_stdin" || return $?
+            _rs_apply_target "$host" "$token" "$token_stdin" "$token_file" || return $?
             local raw
             raw=$(cli_request "/cli/remote-session/grants") || raw=""
             if printf '%s' "$raw" | python3 -c '
@@ -26628,12 +26746,13 @@ for r in rows:
             ;;
 
         revoke)
-            local id="" host="" token="" token_stdin=0
+            local id="" host="" token="" token_stdin=0 token_file=""
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --host)  _need_value "$@"; host="${2:-}"; shift 2 ;;
                     --token) _need_value "$@"; token="${2:-}"; shift 2 ;;
                     --token-stdin) token_stdin=1; shift ;;
+                    --token-file) _need_value "$@"; token_file="${2:-}"; shift 2 ;;
                     --help|-h) cmd_help_remote_session; return 0 ;;
                     -*)
                         echo "Unknown flag: $1" >&2; return 2 ;;
@@ -26647,7 +26766,7 @@ for r in rows:
                 echo "Usage: k2 remote-session revoke <grant-id>" >&2
                 return 2
             fi
-            _rs_apply_target "$host" "$token" "$token_stdin" || return $?
+            _rs_apply_target "$host" "$token" "$token_stdin" "$token_file" || return $?
             local body raw
             body=$(ID="$id" python3 -c 'import json,os; print(json.dumps({"id": os.environ["ID"]}))')
             raw=$(cli_post_json "/cli/remote-session/revoke" "$body") || raw=""
@@ -26672,18 +26791,19 @@ if killed is not None:
             ;;
 
         shell)
-            local host="" token="" token_stdin=0 cwd=""
+            local host="" token="" token_stdin=0 token_file="" cwd=""
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --host)  _need_value "$@"; host="${2:-}"; shift 2 ;;
                     --token) _need_value "$@"; token="${2:-}"; shift 2 ;;
                     --token-stdin) token_stdin=1; shift ;;
+                    --token-file) _need_value "$@"; token_file="${2:-}"; shift 2 ;;
                     --cwd)   _need_value "$@"; cwd="${2:-}"; shift 2 ;;
                     --help|-h) cmd_help_remote_session; return 0 ;;
                     *) echo "Unknown flag: $1" >&2; return 2 ;;
                 esac
             done
-            _rs_apply_target "$host" "$token" "$token_stdin" || return $?
+            _rs_apply_target "$host" "$token" "$token_stdin" "$token_file" || return $?
             local body raw
             if [ -n "$cwd" ]; then
                 body=$(CWD="$cwd" python3 -c 'import json,os; print(json.dumps({"cwd": os.environ["CWD"]}))')
@@ -26715,31 +26835,68 @@ print("  k2 remote-session read  %s [--lines 50] --token-stdin" % sid)
             ;;
 
         write)
-            local sid="" text="" host="" token="" token_stdin=0
+            # The text: a word ("text", on argv: not for a secret), - (stdin)
+            # or --text-file PATH (the file), less one trailing newline
+            # unless --keep-newline. The last two go in the POST's form
+            # body, never on argv or in the URL.
+            local sid="" text="" host="" token="" token_stdin=0 token_file=""
+            local text_stdin=0 text_file="" text_ways=0 keep_newline=0
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --host)  _need_value "$@"; host="${2:-}"; shift 2 ;;
                     --token) _need_value "$@"; token="${2:-}"; shift 2 ;;
                     --token-stdin) token_stdin=1; shift ;;
+                    --token-file) _need_value "$@"; token_file="${2:-}"; shift 2 ;;
+                    --text-file) _need_value "$@"; text_file="${2:-}"; shift 2 ;;
+                    --keep-newline) keep_newline=1; shift ;;
                     --help|-h) cmd_help_remote_session; return 0 ;;
+                    -)
+                        if [ -z "$sid" ]; then echo "Unknown flag: $1" >&2; return 2
+                        elif [ -z "$text" ] && [ "$text_stdin" = 0 ]; then text_stdin=1; shift
+                        else echo "Unexpected argument: $1" >&2; return 2
+                        fi ;;
                     -*)
                         echo "Unknown flag: $1" >&2; return 2 ;;
                     *)
                         if [ -z "$sid" ]; then sid="$1"; shift
-                        elif [ -z "$text" ]; then text="$1"; shift
+                        elif [ -z "$text" ] && [ "$text_stdin" = 0 ]; then text="$1"; shift
                         else echo "Unexpected argument: $1" >&2; return 2
                         fi ;;
                 esac
             done
-            if [ -z "$sid" ] || [ -z "$text" ]; then
-                echo "Usage: k2 remote-session write <session-id> \"text\" [--token-stdin | --token k2rs_…] [--host HOST] (a token on the command line is visible to other users on this machine)" >&2
+            if [ -n "$text" ]; then text_ways=$((text_ways + 1)); fi
+            if [ "$text_stdin" = 1 ]; then text_ways=$((text_ways + 1)); fi
+            if [ -n "$text_file" ]; then text_ways=$((text_ways + 1)); fi
+            if [ -z "$sid" ] || [ "$text_ways" = 0 ]; then
+                echo "Usage: k2 remote-session write <session-id> (\"text\" | - | --text-file PATH) [--keep-newline] [--token-file PATH | --token-stdin | --token k2rs_…] [--host HOST] (text or a token on the command line is visible to other users on this machine)" >&2
                 return 2
             fi
-            _rs_apply_target "$host" "$token" "$token_stdin" || return $?
+            if [ "$text_ways" != 1 ]; then
+                echo "k2 remote-session write: give the text one way: \"text\", - (stdin) or --text-file PATH" >&2
+                return 2
+            fi
+            if [ "$keep_newline" = 1 ] && [ -n "$text" ]; then
+                echo "k2 remote-session write: --keep-newline goes with - or --text-file" >&2
+                return 2
+            fi
+            if [ "$text_stdin" = 1 ] && [ "$token_stdin" = 1 ]; then
+                echo "k2 remote-session write: - and --token-stdin both read stdin; give the token with --token-file" >&2
+                return 2
+            fi
+            _rs_apply_target "$host" "$token" "$token_stdin" "$token_file" || return $?
             local raw
-            raw=$(cli_request_post "/cli/terminal/write" \
-                "id=$(urlencode "$sid")" \
-                "message=$(urlencode "$text")") || raw=""
+            if [ -n "$text" ]; then
+                raw=$(cli_request_post "/cli/terminal/write" \
+                    "id=$(urlencode "$sid")" \
+                    "message=$(urlencode "$text")") || raw=""
+            else
+                local quoted
+                quoted="$(_rs_text_quoted "$text_file" "$keep_newline")" || return $?
+                raw=$(cli_post_form "/cli/terminal/write" \
+                    "id=$(urlencode "$sid")" \
+                    "message=$quoted") || raw=""
+                quoted=""
+            fi
             # Empty or ok:true → ack. Nested/string error → teach.
             if [ -z "$raw" ]; then
                 echo "wrote to $sid"
@@ -26786,12 +26943,13 @@ sys.exit(0 if isinstance(d,dict) and (d.get("ok") is True or "success" in d) els
             ;;
 
         read)
-            local sid="" lines=50 host="" token="" token_stdin=0
+            local sid="" lines=50 host="" token="" token_stdin=0 token_file=""
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --host)  _need_value "$@"; host="${2:-}"; shift 2 ;;
                     --token) _need_value "$@"; token="${2:-}"; shift 2 ;;
                     --token-stdin) token_stdin=1; shift ;;
+                    --token-file) _need_value "$@"; token_file="${2:-}"; shift 2 ;;
                     --lines) _need_value "$@"; lines="${2:-}"; shift 2 ;;
                     --help|-h) cmd_help_remote_session; return 0 ;;
                     -*)
@@ -26806,7 +26964,7 @@ sys.exit(0 if isinstance(d,dict) and (d.get("ok") is True or "success" in d) els
                 echo "Usage: k2 remote-session read <session-id> [--lines N] [--token-stdin | --token k2rs_…] [--host HOST] (a token on the command line is visible to other users on this machine)" >&2
                 return 2
             fi
-            _rs_apply_target "$host" "$token" "$token_stdin" || return $?
+            _rs_apply_target "$host" "$token" "$token_stdin" "$token_file" || return $?
             local raw
             raw=$(cli_request "/cli/terminal/read" \
                 "id=$(urlencode "$sid")" \
@@ -60020,49 +60178,53 @@ cmd_schema() {
       "description": "Owner/admin Remote Session surface: Layer 0 master switch, shell grants (k2rs_ token shown once), grant-bound shell PTY spawn, terminal write/read. Defaults OFF. Locked id tool.",
       "args": [],
       "flags": [
-        {"name": "--host", "arg": "HOST", "description": "Remote daemon host (reuses connect-tokens / --token-stdin / --token / $K2_REMOTE_TOKEN)."},
+        {"name": "--host", "arg": "HOST", "description": "Remote daemon host (reuses connect-tokens / --token-file / --token-stdin / --token / $K2_REMOTE_TOKEN)."},
         {"name": "--token-stdin", "arg": null, "description": "Read the owner/connect token (admin) or k2rs_ grant token (drive) from stdin."},
-        {"name": "--token", "arg": "TOK", "description": "The token on the command line, where other users on this machine can see it; prefer --token-stdin."},
+        {"name": "--token-file", "arg": "PATH", "description": "Read the token from PATH (its first line); refused when the file's group or others can read it."},
+        {"name": "--token", "arg": "TOK", "description": "The token on the command line, where other users on this machine can see it; prefer --token-file or --token-stdin."},
         {"name": "--json", "arg": null, "description": "JSON output for status/grants."}
       ]
     },
     {
       "name": "remote-session status",
-      "usage": "k2 remote-session status [--json] [--host HOST] [--token-stdin | --token TOK]",
+      "usage": "k2 remote-session status [--json] [--host HOST] [--token-file PATH | --token-stdin | --token TOK]",
       "description": "Show enabled flag, active grants/sessions, recent denials (owner/admin).",
       "args": [],
       "flags": [
         {"name": "--json", "arg": null, "description": "Machine-readable object."},
         {"name": "--host", "arg": "HOST", "description": "Remote daemon."},
         {"name": "--token-stdin", "arg": null, "description": "Read the owner/admin token from stdin."},
-        {"name": "--token", "arg": "TOK", "description": "The token on the command line, where other users on this machine can see it; prefer --token-stdin."}
+        {"name": "--token-file", "arg": "PATH", "description": "Read the token from PATH (its first line); refused when the file's group or others can read it."},
+        {"name": "--token", "arg": "TOK", "description": "The token on the command line, where other users on this machine can see it; prefer --token-file or --token-stdin."}
       ]
     },
     {
       "name": "remote-session enable",
-      "usage": "k2 remote-session enable [--host HOST] [--token-stdin | --token TOK]",
+      "usage": "k2 remote-session enable [--host HOST] [--token-file PATH | --token-stdin | --token TOK]",
       "description": "Turn Remote Sessions ON (owner/admin).",
       "args": [],
       "flags": [
         {"name": "--host", "arg": "HOST", "description": "Remote daemon."},
         {"name": "--token-stdin", "arg": null, "description": "Read the owner/admin token from stdin."},
-        {"name": "--token", "arg": "TOK", "description": "The token on the command line, where other users on this machine can see it; prefer --token-stdin."}
+        {"name": "--token-file", "arg": "PATH", "description": "Read the token from PATH (its first line); refused when the file's group or others can read it."},
+        {"name": "--token", "arg": "TOK", "description": "The token on the command line, where other users on this machine can see it; prefer --token-file or --token-stdin."}
       ]
     },
     {
       "name": "remote-session disable",
-      "usage": "k2 remote-session disable [--host HOST] [--token-stdin | --token TOK]",
+      "usage": "k2 remote-session disable [--host HOST] [--token-file PATH | --token-stdin | --token TOK]",
       "description": "Turn Remote Sessions OFF and kill grant-bound shells (owner/admin).",
       "args": [],
       "flags": [
         {"name": "--host", "arg": "HOST", "description": "Remote daemon."},
         {"name": "--token-stdin", "arg": null, "description": "Read the owner/admin token from stdin."},
-        {"name": "--token", "arg": "TOK", "description": "The token on the command line, where other users on this machine can see it; prefer --token-stdin."}
+        {"name": "--token-file", "arg": "PATH", "description": "Read the token from PATH (its first line); refused when the file's group or others can read it."},
+        {"name": "--token", "arg": "TOK", "description": "The token on the command line, where other users on this machine can see it; prefer --token-file or --token-stdin."}
       ]
     },
     {
       "name": "remote-session grant",
-      "usage": "k2 remote-session grant [--scope shell] [--ttl 30m|1800] [--label \"...\"] [--host HOST] [--token-stdin | --token TOK]",
+      "usage": "k2 remote-session grant [--scope shell] [--ttl 30m|1800] [--label \"...\"] [--host HOST] [--token-file PATH | --token-stdin | --token TOK]",
       "description": "Mint a shell grant. Prints k2rs_ token once (cannot be retrieved again). Mint allowed while Layer 0 is OFF; use blocked until enable.",
       "args": [],
       "flags": [
@@ -60071,64 +60233,72 @@ cmd_schema() {
         {"name": "--label", "arg": "text", "description": "Optional human label."},
         {"name": "--host", "arg": "HOST", "description": "Remote daemon."},
         {"name": "--token-stdin", "arg": null, "description": "Read the owner/admin token from stdin."},
-        {"name": "--token", "arg": "TOK", "description": "The token on the command line, where other users on this machine can see it; prefer --token-stdin."}
+        {"name": "--token-file", "arg": "PATH", "description": "Read the token from PATH (its first line); refused when the file's group or others can read it."},
+        {"name": "--token", "arg": "TOK", "description": "The token on the command line, where other users on this machine can see it; prefer --token-file or --token-stdin."}
       ]
     },
     {
       "name": "remote-session grants",
-      "usage": "k2 remote-session grants [--json] [--host HOST] [--token-stdin | --token TOK]",
+      "usage": "k2 remote-session grants [--json] [--host HOST] [--token-file PATH | --token-stdin | --token TOK]",
       "description": "List grants (never includes token or credential hash).",
       "args": [],
       "flags": [
         {"name": "--json", "arg": null, "description": "Machine-readable object."},
         {"name": "--host", "arg": "HOST", "description": "Remote daemon."},
         {"name": "--token-stdin", "arg": null, "description": "Read the owner/admin token from stdin."},
-        {"name": "--token", "arg": "TOK", "description": "The token on the command line, where other users on this machine can see it; prefer --token-stdin."}
+        {"name": "--token-file", "arg": "PATH", "description": "Read the token from PATH (its first line); refused when the file's group or others can read it."},
+        {"name": "--token", "arg": "TOK", "description": "The token on the command line, where other users on this machine can see it; prefer --token-file or --token-stdin."}
       ]
     },
     {
       "name": "remote-session revoke",
-      "usage": "k2 remote-session revoke <grant-id> [--host HOST] [--token-stdin | --token TOK]",
+      "usage": "k2 remote-session revoke <grant-id> [--host HOST] [--token-file PATH | --token-stdin | --token TOK]",
       "description": "Revoke a grant by id and kill every PTY bound to it.",
       "args": [{"name": "grant-id", "required": true}],
       "flags": [
         {"name": "--host", "arg": "HOST", "description": "Remote daemon."},
         {"name": "--token-stdin", "arg": null, "description": "Read the owner/admin token from stdin."},
-        {"name": "--token", "arg": "TOK", "description": "The token on the command line, where other users on this machine can see it; prefer --token-stdin."}
+        {"name": "--token-file", "arg": "PATH", "description": "Read the token from PATH (its first line); refused when the file's group or others can read it."},
+        {"name": "--token", "arg": "TOK", "description": "The token on the command line, where other users on this machine can see it; prefer --token-file or --token-stdin."}
       ]
     },
     {
       "name": "remote-session shell",
-      "usage": "k2 remote-session shell [--cwd PATH] [--host HOST] [--token-stdin | --token k2rs_…]",
+      "usage": "k2 remote-session shell [--cwd PATH] [--host HOST] [--token-file PATH | --token-stdin | --token k2rs_…]",
       "description": "Spawn a daemon-user login shell PTY under a live grant. Prefer a k2rs_… grant token, with --token-stdin. Returns sessionId for write/read.",
       "args": [],
       "flags": [
         {"name": "--cwd", "arg": "PATH", "description": "Working directory (default: daemon HOME)."},
         {"name": "--host", "arg": "HOST", "description": "Remote daemon."},
         {"name": "--token-stdin", "arg": null, "description": "Read the grant token (required for drive) from stdin."},
-        {"name": "--token", "arg": "k2rs_…", "description": "The token on the command line, where other users on this machine can see it; prefer --token-stdin."}
+        {"name": "--token-file", "arg": "PATH", "description": "Read the token from PATH (its first line); refused when the file's group or others can read it."},
+        {"name": "--token", "arg": "k2rs_…", "description": "The token on the command line, where other users on this machine can see it; prefer --token-file or --token-stdin."}
       ]
     },
     {
       "name": "remote-session write",
-      "usage": "k2 remote-session write <session-id> \"text\" [--token-stdin | --token k2rs_…] [--host HOST]",
-      "description": "Inject text into a remote-session PTY via /cli/terminal/write (grant token or owner).",
-      "args": [{"name": "session-id", "required": true}, {"name": "text", "required": true}],
+      "usage": "k2 remote-session write <session-id> (\"text\" | - | --text-file PATH) [--keep-newline] [--token-file PATH | --token-stdin | --token k2rs_…] [--host HOST]",
+      "description": "Inject text into a remote-session PTY via /cli/terminal/write (grant token or owner). Give a secret with - (stdin) or --text-file, never as the text word: argv is for text that isn't secret.",
+      "args": [{"name": "session-id", "required": true}, {"name": "text", "required": false}],
       "flags": [
+        {"name": "--text-file", "arg": "PATH", "description": "Type PATH's bytes, less one trailing newline; for a secret. Sent in the request body."},
+        {"name": "--keep-newline", "arg": null, "description": "With - or --text-file, keep the trailing newline (by default one is taken off)."},
         {"name": "--token-stdin", "arg": null, "description": "Read the grant token from stdin."},
-        {"name": "--token", "arg": "k2rs_…", "description": "The token on the command line, where other users on this machine can see it; prefer --token-stdin."},
+        {"name": "--token-file", "arg": "PATH", "description": "Read the token from PATH (its first line); refused when the file's group or others can read it."},
+        {"name": "--token", "arg": "k2rs_…", "description": "The token on the command line, where other users on this machine can see it; prefer --token-file or --token-stdin."},
         {"name": "--host", "arg": "HOST", "description": "Remote daemon."}
       ]
     },
     {
       "name": "remote-session read",
-      "usage": "k2 remote-session read <session-id> [--lines N] [--token-stdin | --token k2rs_…] [--host HOST]",
+      "usage": "k2 remote-session read <session-id> [--lines N] [--token-file PATH | --token-stdin | --token k2rs_…] [--host HOST]",
       "description": "Peek last N lines of a remote-session PTY via /cli/terminal/read (grant token or owner).",
       "args": [{"name": "session-id", "required": true}],
       "flags": [
         {"name": "--lines", "arg": "N", "description": "Lines to return (default 50)."},
         {"name": "--token-stdin", "arg": null, "description": "Read the grant token from stdin."},
-        {"name": "--token", "arg": "k2rs_…", "description": "The token on the command line, where other users on this machine can see it; prefer --token-stdin."},
+        {"name": "--token-file", "arg": "PATH", "description": "Read the token from PATH (its first line); refused when the file's group or others can read it."},
+        {"name": "--token", "arg": "k2rs_…", "description": "The token on the command line, where other users on this machine can see it; prefer --token-file or --token-stdin."},
         {"name": "--host", "arg": "HOST", "description": "Remote daemon."}
       ]
     },
@@ -81516,6 +81686,8 @@ REMOTE SESSION (owner/admin Layer 0 + grants + shell PTY)
   remote-session shell [--cwd PATH] [--token-stdin]
                                                 Spawn grant-bound login shell PTY
   remote-session write <sid> "text" [--token-stdin]
+  remote-session write <sid> (- | --text-file F) [--token-file F]
+                                                A secret: stdin or a file, never argv
   remote-session read  <sid> [--lines N] [--token-stdin]
   remote-session --help                         Full Remote Session help
 

@@ -488,7 +488,7 @@ skin-token create	1	cli/src/app-wallet.sh:cmd_skin_token:create	post-json	json,p
 skin-token list	1	cli/src/app-wallet.sh:cmd_skin_token:list	request	python	candidate	3
 skin-token rooms	1	cli/src/app-wallet.sh:cmd_skin_token:rooms	post-json	json,python	candidate	3
 skin-token revoke	1	cli/src/app-wallet.sh:cmd_skin_token:revoke	post-json	json,python	candidate	3
-remote-session	2	cli/src/router.sh::remote-session	request,request-post,post-json	json,python	out:secret	-
+remote-session	2	cli/src/router.sh::remote-session	request,request-post,post-json,post-form	json,python	out:secret	-
 remote-session status	2	cli/src/remote-session.sh:cmd_help_remote_session:~	none	none	out:no-request	-
 remote-session enable	1	cli/src/remote-session.sh:cmd_help_remote_session:~	none	none	out:no-request	-
 remote-session disable	1	cli/src/remote-session.sh:cmd_help_remote_session:~	none	none	out:no-request	-

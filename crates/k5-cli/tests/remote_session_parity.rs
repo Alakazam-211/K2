@@ -9,6 +9,10 @@
 //! - The error printer: each taught code, a refusal, a usage error, an
 //!   answer it can't read, an empty one.
 //! - A grant token on stdin and on the command line, both, an empty one.
+//! - The secret inputs: a token in a file (0600 taken; 0644 and 0640
+//!   refused, sending nothing), and write's text from a file or stdin
+//!   (in the form body, less one trailing newline, or every byte with
+//!   --keep-newline), with their usage errors.
 //! - A value flag as the last word: exit 1, no line (a bash bug, copied).
 //! - The gates and the locked tool's session check; no answer.
 //! - Times: Python 3.12's `utcfromtimestamp` warning, once per line;
@@ -598,6 +602,10 @@ fn remote_session_help_never_acts() {
         &["revoke", "g1", "--help"],
         &["shell", "-h"],
         &["write", "s1", "x", "--help"],
+        &["write", "s1", "-", "--token-file", "tok", "-h"],
+        &["write", "s1", "--text-file", "pw", "--help"],
+        &["write", "s1", "-", "--keep-newline", "--help"],
+        &["status", "--token-file", "tok", "-h"],
         &["-h"],
     ] {
         let args: &'static [&'static str] = Box::leak(args.to_vec().into_boxed_slice());
@@ -610,6 +618,292 @@ fn remote_session_help_never_acts() {
             0,
             0,
         )));
+    }
+}
+
+/// The secret inputs' files, in the project folder (each side's working
+/// folder): a grant token readable by its owner only, one others can
+/// read, one its group can read, write's text and an empty file.
+fn secret_files(r: &Rig) {
+    use std::os::unix::fs::PermissionsExt;
+    owner_and_port(r);
+    for (name, body, mode) in [
+        ("tok600", &b"  k2rs_fromfile \r\nsecond line\n"[..], 0o600),
+        ("tok644", &b"k2rs_fromfile\n"[..], 0o644),
+        ("tok640", &b"k2rs_fromfile\n"[..], 0o640),
+        (
+            "text.bin",
+            &b"pw \"q\" & = % + \xc3\xa9 \r\x00 end\n\n"[..],
+            0o600,
+        ),
+        ("crlf.bin", &b"pw\r\n"[..], 0o600),
+        ("nl.bin", &b"\n"[..], 0o600),
+        ("empty", &b""[..], 0o600),
+    ] {
+        let p = r.proj.join(name);
+        std::fs::write(&p, body).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+}
+
+#[test]
+fn remote_session_secret_inputs() {
+    let rig = Rig::new(VERB, "secret");
+    let sent = || vec![reply(r#"{"success":true}"#)];
+    let v = vec![
+        case(
+            "a grant token in a 0600 file",
+            &["read", "s1", "--token-file", "tok600"],
+            &[],
+            vec![reply(r#"{"lines":["x"]}"#)],
+            secret_files,
+            0,
+            1,
+        ),
+        case(
+            "a token file others can read: refused",
+            &["status", "--token-file", "tok644"],
+            &[],
+            vec![],
+            secret_files,
+            2,
+            0,
+        ),
+        case(
+            "a token file its group can read: refused",
+            &["grants", "--token-file", "tok640"],
+            &[],
+            vec![],
+            secret_files,
+            2,
+            0,
+        ),
+        case(
+            "a token file that isn't there",
+            &["status", "--token-file", "no-such-file"],
+            &[],
+            vec![],
+            secret_files,
+            2,
+            0,
+        ),
+        case(
+            "an empty token file",
+            &["status", "--token-file", "empty"],
+            &[],
+            vec![],
+            secret_files,
+            2,
+            0,
+        ),
+        case(
+            "a token file and --token",
+            &["status", "--token-file", "tok600", "--token", "k2rs_a"],
+            &[],
+            vec![],
+            secret_files,
+            2,
+            0,
+        ),
+        case(
+            "write: the text from a file",
+            &[
+                "write",
+                "s1",
+                "--text-file",
+                "text.bin",
+                "--token-file",
+                "tok600",
+            ],
+            &[],
+            sent(),
+            secret_files,
+            0,
+            1,
+        ),
+        stdin(
+            b"sudo pw\n\x00 & = %\n",
+            case(
+                "write: the text from stdin",
+                &["write", "s1", "-", "--token-file", "tok600"],
+                &[],
+                sent(),
+                secret_files,
+                0,
+                1,
+            ),
+        ),
+        stdin(
+            b"k2rs_fromstdin\n",
+            case(
+                "write: the text from a file, the token on stdin",
+                &["write", "s1", "--text-file", "text.bin", "--token-stdin"],
+                &[],
+                sent(),
+                secret_files,
+                0,
+                1,
+            ),
+        ),
+        stdin(
+            b"",
+            case(
+                "write: nothing on stdin",
+                &["write", "s1", "-"],
+                &[],
+                vec![],
+                secret_files,
+                2,
+                0,
+            ),
+        ),
+        case(
+            "write: --keep-newline, every byte of the file",
+            &["write", "s1", "--text-file", "text.bin", "--keep-newline"],
+            &[],
+            sent(),
+            secret_files,
+            0,
+            1,
+        ),
+        stdin(
+            b"pw\n\n",
+            case(
+                "write: --keep-newline, every byte of stdin",
+                &["write", "s1", "-", "--keep-newline"],
+                &[],
+                sent(),
+                secret_files,
+                0,
+                1,
+            ),
+        ),
+        case(
+            "write: a final CRLF goes as a pair",
+            &["write", "s1", "--text-file", "crlf.bin"],
+            &[],
+            sent(),
+            secret_files,
+            0,
+            1,
+        ),
+        case(
+            "write: a lone newline is no text",
+            &["write", "s1", "--text-file", "nl.bin"],
+            &[],
+            vec![],
+            secret_files,
+            2,
+            0,
+        ),
+        stdin(
+            b"\r\n",
+            case(
+                "write: a lone CRLF on stdin is no text",
+                &["write", "s1", "-"],
+                &[],
+                vec![],
+                secret_files,
+                2,
+                0,
+            ),
+        ),
+        case(
+            "write: --keep-newline with no text",
+            &["write", "s1", "--keep-newline"],
+            &[],
+            vec![],
+            secret_files,
+            2,
+            0,
+        ),
+        case(
+            "write: --keep-newline with the word",
+            &["write", "s1", "x", "--keep-newline"],
+            &[],
+            vec![],
+            secret_files,
+            2,
+            0,
+        ),
+        case(
+            "write: an empty text file",
+            &["write", "s1", "--text-file", "empty"],
+            &[],
+            vec![],
+            secret_files,
+            2,
+            0,
+        ),
+        case(
+            "write: a text file that isn't there",
+            &["write", "s1", "--text-file", "no-such-file"],
+            &[],
+            vec![],
+            secret_files,
+            2,
+            0,
+        ),
+        stdin(
+            b"pw\n",
+            case(
+                "write: - and --token-stdin",
+                &["write", "s1", "-", "--token-stdin"],
+                &[],
+                vec![],
+                secret_files,
+                2,
+                0,
+            ),
+        ),
+        case(
+            "write: the word and --text-file",
+            &["write", "s1", "x", "--text-file", "text.bin"],
+            &[],
+            vec![],
+            secret_files,
+            2,
+            0,
+        ),
+        case(
+            "write: - with no session id",
+            &["write", "-"],
+            &[],
+            vec![],
+            secret_files,
+            2,
+            0,
+        ),
+        case(
+            "write: a word after -",
+            &["write", "s1", "-", "x"],
+            &[],
+            vec![],
+            secret_files,
+            2,
+            0,
+        ),
+        case(
+            "write: --text-file with no value",
+            &["write", "s1", "--text-file"],
+            &[],
+            vec![],
+            secret_files,
+            2,
+            0,
+        ),
+        case(
+            "status: --text-file is write's",
+            &["status", "--text-file", "text.bin"],
+            &[],
+            vec![],
+            secret_files,
+            2,
+            0,
+        ),
+    ];
+    for c in v {
+        answered_here(&rig, &c);
     }
 }
 

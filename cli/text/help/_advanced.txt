@@ -113,6 +113,8 @@ REMOTE SESSION (owner/admin Layer 0 + grants + shell PTY)
   remote-session shell [--cwd PATH] [--token-stdin]
                                                 Spawn grant-bound login shell PTY
   remote-session write <sid> "text" [--token-stdin]
+  remote-session write <sid> (- | --text-file F) [--token-file F]
+                                                A secret: stdin or a file, never argv
   remote-session read  <sid> [--lines N] [--token-stdin]
   remote-session --help                         Full Remote Session help
 

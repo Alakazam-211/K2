@@ -14,16 +14,21 @@
 //!    last word ends the command with 1 and no line (`shift 2` under
 //!    `set -e`, a bash bug, copied).
 //! 4. `grant`'s `--ttl` (`30m`, `1h`, `90s`, bare seconds), then the
-//!    target ([`apply_target`]): `--token <t>` or `--token-stdin` (one
-//!    line; no echo on a terminal) is the Bearer for the calls in place of
-//!    the owner token.
+//!    target ([`apply_target`]): `--token <t>`, `--token-stdin` (one
+//!    line; no echo on a terminal) or `--token-file PATH` ([`token_file`]:
+//!    refused when the file's group or others can read it) is the Bearer
+//!    for the calls in place of the owner token.
 //! 5. One call over TCP, held in `$(…)` (nothing when it failed; no answer
 //!    is the transport's line and exit 1):
 //!    - `status [--json]`, `grants [--json]`: a GET;
 //!    - `enable`, `disable`, `grant`, `revoke <id>`, `shell [--cwd D]`: a
 //!      POST of JSON;
 //!    - `write <sid> "text"`: `/cli/terminal/write` (a POST with the words
-//!      in the query); `read <sid> [--lines N]`: `/cli/terminal/read`.
+//!      in the query); `write <sid> -` and `write <sid> --text-file PATH`
+//!      ([`said`]): the same route, the bytes of stdin or the file (less
+//!      one trailing newline unless `--keep-newline`) in a form body,
+//!      never in the URL, argv or the environment;
+//!      `read <sid> [--lines N]`: `/cli/terminal/read`.
 //!
 //!    An answer that is an object with `"ok": true` goes to the verb's
 //!    reader; any other to the shared error printer ([`print_err`]), which
@@ -91,11 +96,27 @@ pub const NO_TOKEN: &str = concat!(
     cli_name!(),
     " remote-session: --token-stdin: no token on stdin"
 );
+pub const TOKEN_FORMS: &str = concat!(
+    cli_name!(),
+    " remote-session: --token-file, --token-stdin or --token: give one"
+);
 pub const REVOKE_USAGE: &str = concat!("Usage: ", cli_name!(), " remote-session revoke <grant-id>");
 pub const WRITE_USAGE: &str = concat!(
     "Usage: ",
     cli_name!(),
-    " remote-session write <session-id> \"text\" [--token-stdin | --token k2rs_\u{2026}] [--host HOST] (a token on the command line is visible to other users on this machine)"
+    " remote-session write <session-id> (\"text\" | - | --text-file PATH) [--keep-newline] [--token-file PATH | --token-stdin | --token k2rs_\u{2026}] [--host HOST] (text or a token on the command line is visible to other users on this machine)"
+);
+pub const TEXT_WAYS: &str = concat!(
+    cli_name!(),
+    " remote-session write: give the text one way: \"text\", - (stdin) or --text-file PATH"
+);
+pub const KEEP_WORD: &str = concat!(
+    cli_name!(),
+    " remote-session write: --keep-newline goes with - or --text-file"
+);
+pub const BOTH_STDIN: &str = concat!(
+    cli_name!(),
+    " remote-session write: - and --token-stdin both read stdin; give the token with --token-file"
 );
 pub const READ_USAGE: &str = concat!(
     "Usage: ",
@@ -112,12 +133,22 @@ pub const GRANTS_UTC_LINE: u32 = 9;
 /// The `grants` reader's line that raises (`w_st = …`).
 pub const GRANTS_WIDTH_LINE: u32 = 28;
 
-/// `--host`, `--token`, `--token-stdin`.
+/// `--host`, `--token`, `--token-stdin`, `--token-file`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Target {
     pub host: String,
     pub token: String,
     pub stdin: bool,
+    pub file: String,
+}
+
+/// `write`'s text: the word (on argv, for text that isn't secret), `-`
+/// (all of stdin) or `--text-file PATH` (all of the file).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Said {
+    Word(String),
+    Stdin,
+    File(String),
 }
 
 /// What the words ask for.
@@ -145,9 +176,11 @@ pub enum Form {
     Shell {
         cwd: String,
     },
+    /// `keep`: `--keep-newline` (no trailing newline taken off).
     Write {
         sid: String,
-        text: String,
+        text: Said,
+        keep: bool,
     },
     Read {
         sid: String,
@@ -196,6 +229,10 @@ pub fn parse(words: &[&str]) -> (Form, Target) {
     );
     let mut lines = "50".to_string();
     let mut pos: Vec<String> = Vec::new();
+    // `write`'s words, as the shell keeps them: a word that is empty
+    // leaves its slot open.
+    let (mut sid, mut text, mut text_file, mut text_stdin, mut keep) =
+        (String::new(), String::new(), String::new(), false, false);
     let positional = match sub {
         "revoke" | "read" => 1,
         "write" => 2,
@@ -218,6 +255,8 @@ pub fn parse(words: &[&str]) -> (Form, Target) {
         let slot: Option<&mut String> = match (sub, w) {
             (_, "--host") => Some(&mut t.host),
             (_, "--token") => Some(&mut t.token),
+            (_, "--token-file") => Some(&mut t.file),
+            ("write", "--text-file") => Some(&mut text_file),
             ("grant", "--scope") => Some(&mut scope),
             ("grant", "--ttl") => Some(&mut ttl),
             ("grant", "--label") => Some(&mut label),
@@ -235,8 +274,18 @@ pub fn parse(words: &[&str]) -> (Form, Target) {
         }
         match w {
             "--token-stdin" => t.stdin = true,
+            "--keep-newline" if sub == "write" => keep = true,
             "--json" if matches!(sub, "status" | "grants") => json = true,
             "--help" | "-h" => return (Form::Help, t),
+            "-" if sub == "write" => {
+                if sid.is_empty() {
+                    return (stop(format!("Unknown flag: {w}")), t);
+                } else if text.is_empty() && !text_stdin {
+                    text_stdin = true;
+                } else {
+                    return (stop(format!("Unexpected argument: {w}")), t);
+                }
+            }
             _ if positional == 0 => {
                 let page = sub == "status";
                 return (
@@ -249,6 +298,15 @@ pub fn parse(words: &[&str]) -> (Form, Target) {
                 );
             }
             _ if w.starts_with('-') => return (stop(format!("Unknown flag: {w}")), t),
+            _ if sub == "write" => {
+                if sid.is_empty() {
+                    sid = w.to_string();
+                } else if text.is_empty() && !text_stdin {
+                    text = w.to_string();
+                } else {
+                    return (stop(format!("Unexpected argument: {w}")), t);
+                }
+            }
             _ if pos.len() < positional => pos.push(w.to_string()),
             _ => return (stop(format!("Unexpected argument: {w}")), t),
         }
@@ -275,11 +333,26 @@ pub fn parse(words: &[&str]) -> (Form, Target) {
         "revoke" => Form::Revoke { id: first },
         "shell" => Form::Shell { cwd },
         "write" => {
-            let text = pos.get(1).cloned().unwrap_or_default();
-            if first.is_empty() || text.is_empty() {
+            let ways = usize::from(!text.is_empty())
+                + usize::from(text_stdin)
+                + usize::from(!text_file.is_empty());
+            if sid.is_empty() || ways == 0 {
                 stop(WRITE_USAGE)
+            } else if ways != 1 {
+                stop(TEXT_WAYS)
+            } else if keep && !text.is_empty() {
+                stop(KEEP_WORD)
+            } else if text_stdin && t.stdin {
+                stop(BOTH_STDIN)
             } else {
-                Form::Write { sid: first, text }
+                let text = if text_stdin {
+                    Said::Stdin
+                } else if text_file.is_empty() {
+                    Said::Word(text)
+                } else {
+                    Said::File(text_file)
+                };
+                Form::Write { sid, text, keep }
             }
         }
         _ if first.is_empty() => stop(READ_USAGE),
@@ -357,7 +430,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
             return Some(Exit::Error);
         }
     };
-    let grant_token = !target.token.is_empty() || target.stdin;
+    let grant_token = !target.token.is_empty() || target.stdin || !target.file.is_empty();
     if (grant_token || base.is_some()) && matches!(settings.auth, Auth::Passport { .. }) {
         return None;
     }
@@ -434,10 +507,17 @@ fn run_with(
 }
 
 /// `_rs_apply_target` (no `--host`): the grant token to send in place of
-/// the owner token, if one was given; its lines and exit 2 for both forms
-/// or an empty token on stdin.
+/// the owner token, if one was given; its lines and exit 2 for two forms,
+/// a token file that is refused or an empty token.
 pub fn apply_target(t: &Target) -> Result<Option<String>, Exit> {
     let mut token = t.token.clone();
+    if !t.file.is_empty() {
+        if !token.is_empty() || t.stdin {
+            out::stderr_line(TOKEN_FORMS);
+            return Err(Exit::Usage);
+        }
+        token = token_file(&t.file)?;
+    }
     if t.stdin {
         if !token.is_empty() {
             out::stderr_line(BOTH);
@@ -451,6 +531,116 @@ pub fn apply_target(t: &Target) -> Result<Option<String>, Exit> {
         }
     }
     Ok((!token.is_empty()).then_some(token))
+}
+
+/// `_rs_read_token_file PATH`: the token in the file at `path` (its first
+/// line, blanks around it taken off). The file is opened once and its mode
+/// read from the open file: one its group or others can read is refused,
+/// as is one with no token (the line, exit 2). No mode check on Windows.
+pub fn token_file(path: &str) -> Result<String, Exit> {
+    use std::io::Read;
+    let die = |msg: &str| {
+        out::stderr_line(&format!(
+            "{} remote-session: --token-file {path}: {msg}",
+            cli_name!()
+        ));
+        Exit::Usage
+    };
+    let strerror = super::doc::tool::strerror;
+    let mut f = std::fs::File::open(path).map_err(|e| die(&strerror(&e)))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = f
+            .metadata()
+            .map_err(|e| die(&strerror(&e)))?
+            .permissions()
+            .mode();
+        if mode & 0o044 != 0 {
+            return Err(die(&format!(
+                "its group or others can read it (mode {:04o}); run: chmod 600 {path}",
+                mode & 0o777
+            )));
+        }
+    }
+    let mut buf = Vec::new();
+    let read = f.read_to_end(&mut buf);
+    let data = prompt::Secret::new(buf);
+    read.map_err(|e| die(&strerror(&e)))?;
+    let line = data
+        .expose()
+        .split(|b| *b == b'\n')
+        .next()
+        .unwrap_or_default();
+    let blank = |b: &u8| b" \t\r\x0b\x0c".contains(b);
+    let start = line.iter().position(|b| !blank(b)).unwrap_or(line.len());
+    let end = line
+        .iter()
+        .rposition(|b| !blank(b))
+        .map_or(start, |i| i + 1);
+    let tok = &line[start..end];
+    if tok.is_empty() {
+        return Err(die("no token in the file"));
+    }
+    Ok(String::from_utf8_lossy(tok).into_owned())
+}
+
+/// `_rs_text_quoted`: `write`'s text from `-` or `--text-file`, less one
+/// trailing newline (a final `\r\n` as a pair, else a final `\n`) unless
+/// `keep` (`--keep-newline`); on a terminal, `-` is one hidden line. No
+/// text left, or a file that can't be read, is its line and exit 2.
+pub fn said(text: &Said, keep: bool) -> Result<prompt::Secret, Exit> {
+    use std::io::Read;
+    let cli = cli_name!();
+    let data = match text {
+        Said::Word(w) => return Ok(prompt::Secret::new(w.as_bytes().to_vec())),
+        Said::File(p) => {
+            let strerror = super::doc::tool::strerror;
+            let mut buf = std::fs::read(p).map_err(|e| {
+                out::stderr_line(&format!(
+                    "{cli} remote-session write: --text-file {p}: {}",
+                    strerror(&e)
+                ));
+                Exit::Usage
+            })?;
+            strip_newline(&mut buf, keep);
+            prompt::Secret::new(buf)
+        }
+        Said::Stdin if prompt::stdin_is_tty() => prompt::ask_hidden("Text: "),
+        Said::Stdin => {
+            let mut buf = Vec::new();
+            // A read error ends what was read, as Python's read() would
+            // raise; what came before it is not sent.
+            if std::io::stdin().lock().read_to_end(&mut buf).is_err() {
+                buf.clear();
+            }
+            strip_newline(&mut buf, keep);
+            prompt::Secret::new(buf)
+        }
+    };
+    if data.is_empty() {
+        match text {
+            Said::File(p) => out::stderr_line(&format!(
+                "{cli} remote-session write: --text-file {p}: no text in the file"
+            )),
+            _ => out::stderr_line(&format!("{cli} remote-session write: -: no text on stdin")),
+        }
+        return Err(Exit::Usage);
+    }
+    Ok(data)
+}
+
+/// One trailing newline off, as `_rs_text_quoted` takes it: a final
+/// `\r\n` as a pair, else a final `\n`. Nothing when `keep`.
+pub fn strip_newline(v: &mut Vec<u8>, keep: bool) {
+    if keep {
+        return;
+    }
+    if v.ends_with(b"\r\n") {
+        v.truncate(v.len() - 2);
+    } else if v.ends_with(b"\n") {
+        v.truncate(v.len() - 1);
+    }
 }
 
 /// `raw=$(cli_… <endpoint> …) || raw=""` over TCP.
@@ -546,10 +736,27 @@ fn answer(client: &mut Client, closing: &mut Closing, form: Form) -> Result<Exit
                 shell_lines,
             )
         }
-        Form::Write { sid, text } => {
+        Form::Write { sid, text, keep } => {
             let id = format!("id={}", crate::transport::encode::quote(sid));
-            let msg = format!("message={}", crate::transport::encode::quote(text));
-            let raw = held_call(client, closing, WRITE, Call::RequestPost(&[&id, &msg]))?;
+            let raw = match text {
+                Said::Word(w) => {
+                    let msg = format!("message={}", crate::transport::encode::quote(w));
+                    held_call(client, closing, WRITE, Call::RequestPost(&[&id, &msg]))?
+                }
+                Said::Stdin | Said::File(_) => {
+                    // `cli_post_form`: the text in the body, never the URL.
+                    let bytes = said(text, *keep)?;
+                    let enc = prompt::Secret::new(
+                        crate::transport::encode::quote_bytes(bytes.expose()).into_bytes(),
+                    );
+                    let mut msg = Vec::with_capacity(8 + enc.expose().len());
+                    msg.extend_from_slice(b"message=");
+                    msg.extend_from_slice(enc.expose());
+                    let msg = prompt::Secret::new(msg);
+                    let pair = std::str::from_utf8(msg.expose()).unwrap_or_default();
+                    held_call(client, closing, WRITE, Call::PostForm(&[id.as_str(), pair]))?
+                }
+            };
             return Ok(write_reader(&raw, sid).print());
         }
         Form::Read { sid, lines } => {

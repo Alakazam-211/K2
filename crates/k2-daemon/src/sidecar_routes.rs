@@ -1757,6 +1757,7 @@ fn set_fence(caller: &Caller, ws: &Workspace, on: bool) -> Result<(serde_json::V
             workspace: std::path::Path::new(&ws.path),
             tmp_dir: &tmp,
             env: &env,
+            own_secrets: None,
         })
         .map_err(|e| err("fence_unavailable", 409, e))?;
     }

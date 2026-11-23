@@ -952,7 +952,7 @@ pub fn fence_problem(ws: &str, workspace: &Path) -> Option<String> {
     let k2_home = k2_core::paths::k2_home();
     let tmp = k2_home.join("agents").join(ws).join("tmp");
     let env = std::collections::BTreeMap::new();
-    k2_core::agent_fence::default_view(&k2_core::agent_fence::ViewInputs { home: &home, k2_home: &k2_home, workspace, tmp_dir: &tmp, env: &env }).err()
+    k2_core::agent_fence::default_view(&k2_core::agent_fence::ViewInputs { home: &home, k2_home: &k2_home, workspace, tmp_dir: &tmp, env: &env, own_secrets: None }).err()
 }
 
 /// At boot: the daemon's copies of files it read for agents

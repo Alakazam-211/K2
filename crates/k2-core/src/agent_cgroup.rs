@@ -462,6 +462,9 @@ pub struct SessionIsolation {
     /// B4: the root helper places this process in its own scope
     /// (`k2-agent-<ws>:<id>.scope`); `None` for the M1b and M1 layouts.
     pub scope: Option<crate::agent_scope::ScopePlan>,
+    /// The secrets folder the vault made for this session (set by the spawn
+    /// path after the vault; the fence opens it read-only, review V2).
+    pub secrets_dir: Option<PathBuf>,
 }
 
 /// The isolation for a session of agent `ws`: identity when the box has
@@ -484,6 +487,7 @@ pub fn intent(ws: &str, passthrough: bool, fence_on: bool, workspace: Option<&Pa
         fence: fence_on,
         workspace: workspace.map(Path::to_path_buf),
         scope,
+        secrets_dir: None,
     })
 }
 
@@ -530,11 +534,11 @@ pub fn wrap(
         let k2_home = crate::paths::k2_home();
         let tmp = tmp_dir(&iso.ws)?;
         let env: std::collections::BTreeMap<String, String> = env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-        let view = default_view(&ViewInputs { home: &home, k2_home: &k2_home, workspace: ws, tmp_dir: &tmp, env: &env })?;
+        let view = default_view(&ViewInputs { home: &home, k2_home: &k2_home, workspace: ws, tmp_dir: &tmp, env: &env, own_secrets: iso.secrets_dir.as_deref() })?;
         spec.fence = Some(view);
         fence_env(&mut spec, &tmp);
     }
-    let json = serde_json::to_string(&spec).map_err(|e| e.to_string())?;
+    let json = crate::agent_fence::spec_json(&spec)?;
     let mut argv = vec![ARG.to_string(), "--".to_string(), program];
     argv.extend(args);
     Ok((helper.to_string_lossy().into_owned(), argv, json))
@@ -696,6 +700,14 @@ pub fn status_json() -> serde_json::Value {
         }),
     };
     v["switch"] = serde_json::json!(format!("{ENV_SWITCH}={}", if switch_off() { "0 (emergency off)" } else { "unset (on)" }));
+    // Secrets-view review V3: on a box that keeps session secrets under
+    // /dev/shm the fence leaves /dev/shm as it was at the session's start.
+    if let Some(r) = crate::agent_fence::shm_secrets_root(&crate::agent_fence::secrets_roots()) {
+        v["fenceShm"] = serde_json::json!(format!(
+            "this box keeps session secrets under {}: fenced sessions can't create new shared memory there (Python multiprocessing locks, headless browsers)",
+            r.display()
+        ));
+    }
     // B4 (R4): why scopes are off, the P1 answer, and sessions still in the
     // old layout ("old layout, not adopted"), not only in the debug log.
     if let Some(b) = crate::agent_scope::box_state() {

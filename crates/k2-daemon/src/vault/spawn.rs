@@ -296,19 +296,8 @@ pub fn linux_secrets_candidates(
     uid: u32,
     is_test: bool,
 ) -> Vec<PathBuf> {
-    if let Some(d) = override_dir {
-        return vec![d.to_path_buf()];
-    }
-    let mut v = Vec::new();
-    if let Some(s) = systemd_dir.filter(|_| !is_test) {
-        v.push(s.to_path_buf());
-    }
-    if let Some(x) = xdg_runtime_dir {
-        v.push(x.join("k2"));
-    }
-    v.push(PathBuf::from("/run/k2"));
-    v.push(PathBuf::from(format!("/dev/shm/k2-{uid}")));
-    v
+    // One list for the vault and the fence (secrets-view review).
+    k2_core::agent_fence::secrets_root_candidates(override_dir, systemd_dir, xdg_runtime_dir, uid, is_test)
 }
 
 /// Make `dir` 0700 owned by us (create if missing); refuse symlinks and

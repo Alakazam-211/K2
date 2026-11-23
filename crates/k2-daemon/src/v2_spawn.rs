@@ -1452,6 +1452,18 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
             &refs_from,
         );
         steps.step("vault secrets");
+        // Agent Isolation (secrets-view review V2): the fence opens the
+        // folder the vault made, never one a caller named in `env`.
+        match delivered.dir.as_ref() {
+            Some(dir) => {
+                if let Some(iso) = cfg.isolation.as_mut() {
+                    iso.secrets_dir = Some(dir.clone());
+                }
+            }
+            None => {
+                cfg.env.remove(k2_core::agent_fence::SECRETS_DIR_ENV);
+            }
+        }
         ptyd_meta.insert("workspace_uuid".into(), workspace_uuid.clone().into());
         if let Some(dir) = delivered.dir {
             ptyd_meta.insert("secrets_dir".into(), dir.to_string_lossy().into_owned().into());

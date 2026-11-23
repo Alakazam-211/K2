@@ -1155,53 +1155,112 @@ echo "done" >> $R; exec sleep 3600
     println!("row P7b: tmux new-window on the owner's server: {} · the window read the key: {}", r["tmux_new_window"], r["tmux_window_ran"]);
 }
 
-/// A fenced session can't read another session's secrets folder (its
-/// secret files and passport) under one of K2's secrets roots, here
-/// `/dev/shm/k2-<uid>`, which the view otherwise opens read-write; its own
-/// folder (`$K2_SECRETS_DIR`) still reads. (Connecting to another folder's
-/// ssh-agent socket is the Unix-socket block's, not this test's.)
+/// Two fenced sessions, each with the secrets folder the vault made for it
+/// (`$K2_SECRETS_DIR`): B can't read A's folder (a secret file and the
+/// passport the test puts there), A reads its own. A caller's own
+/// `K2_SECRETS_DIR` in the spawn request names nothing (review V2).
+/// (Connecting to another folder's ssh-agent socket is the Unix-socket
+/// block's, not this test's.)
 #[test]
 #[ignore = "needs a delegated cgroup v2 system unit on Linux: scripts/agent-isolation-kernel-tests.sh"]
 fn a_fenced_session_reads_no_other_sessions_secrets() {
     let _unit = preflight();
-    // SAFETY: no preconditions.
-    let uid = unsafe { libc::geteuid() };
-    let root = PathBuf::from(format!("/dev/shm/k2-{uid}"));
-    let other = root.join(format!("k2isotest-other-{}", std::process::id()));
-    let own = root.join(format!("k2isotest-own-{}", std::process::id()));
-    for d in [&other, &own] {
-        std::fs::create_dir_all(d).unwrap();
-    }
-    std::fs::write(other.join("STRIPE_KEY"), "OTHER SECRET\n").unwrap();
-    std::fs::write(other.join(".k2-passport"), "OTHER PASSPORT\n").unwrap();
-    std::fs::write(own.join("MY_KEY"), "MY SECRET\n").unwrap();
     let mut d = Daemon::new("secrets");
     d.start();
     let (a_id, a_ws) = d.workspace("A");
+    let (b_id, b_ws) = d.workspace("B");
     d.set_fence(&a_id, true);
-    let script = format!(
+    d.set_fence(&b_id, true);
+    // A: names its folder, then waits for the test's files and reads its own.
+    let a_script = format!(
         r#"R={a}/results; : > $R; echo $$ > {a}/pid
-cat {o}/STRIPE_KEY > {a}/o1 2>&1; echo "other_secret $? $(head -c 120 {a}/o1)" >> $R
-cat {o}/.k2-passport > {a}/o2 2>&1; echo "other_passport $? $(head -c 120 {a}/o2)" >> $R
-ls {o} > {a}/o3 2>&1; echo "other_list $? $(head -c 120 {a}/o3 | tr '\n' ' ')" >> $R
-cat {m}/MY_KEY > {a}/o4 2>&1; echo "own_secret $? $(head -c 120 {a}/o4)" >> $R
 echo "secrets_dir $K2_SECRETS_DIR" >> $R
+while [ ! -f {a}/go ]; do sleep 0.2; done
+cat "$K2_SECRETS_DIR/MY_KEY" > {a}/o1 2>&1; echo "own_secret $? $(head -c 120 {a}/o1)" >> $R
 echo "done" >> $R; exec sleep 3600
 "#,
         a = a_ws.display(),
-        o = other.display(),
-        m = own.display(),
     );
-    d.spawn_env("tab-a", &a_ws, &script, json!({ "K2_SECRETS_DIR": own.display().to_string() }));
-    let r = results(&a_ws.join("results"), "done");
-    let a_pid: i32 = std::fs::read_to_string(a_ws.join("pid")).unwrap().trim().parse().unwrap();
-    d.pids.push(a_pid);
-    let _ = std::fs::remove_dir_all(&other);
-    let _ = std::fs::remove_dir_all(&own);
-    println!("secrets: {r:?}");
-    assert_eq!(r["secrets_dir"], own.display().to_string(), "the session got its own folder");
-    for row in ["other_secret", "other_passport", "other_list"] {
-        assert!(denied(&r[row]), "{row}: another session's folder can't be read: {}", r[row]);
+    d.spawn("tab-a", &a_ws, &a_script);
+    let ra = results(&a_ws.join("results"), "secrets_dir");
+    let a_dir = PathBuf::from(ra["secrets_dir"].trim());
+    assert!(a_dir.is_absolute() && a_dir.is_dir(), "the vault made A a secrets folder: {:?}", ra["secrets_dir"]);
+    std::fs::write(a_dir.join("MY_KEY"), "A SECRET\n").unwrap();
+    std::fs::write(a_dir.join(".k2-passport"), "A PASSPORT\n").unwrap();
+    std::fs::write(a_ws.join("go"), "").unwrap();
+    // B: asks for A's folder in its own request too; reads A's files.
+    let b_script = format!(
+        r#"R={b}/results; : > $R; echo $$ > {b}/pid
+echo "secrets_dir $K2_SECRETS_DIR" >> $R
+cat {o}/MY_KEY > {b}/o1 2>&1; echo "other_secret $? $(head -c 120 {b}/o1)" >> $R
+cat {o}/.k2-passport > {b}/o2 2>&1; echo "other_passport $? $(head -c 120 {b}/o2)" >> $R
+ls {o} > {b}/o3 2>&1; echo "other_list $? $(head -c 120 {b}/o3 | tr '\n' ' ')" >> $R
+echo "done" >> $R; exec sleep 3600
+"#,
+        b = b_ws.display(),
+        o = a_dir.display(),
+    );
+    d.spawn_env("tab-b", &b_ws, &b_script, json!({ "K2_SECRETS_DIR": a_dir.display().to_string() }));
+    let rb = results(&b_ws.join("results"), "done");
+    let ra = results(&a_ws.join("results"), "done");
+    for (ws, pid) in [(&a_ws, "pid"), (&b_ws, "pid")] {
+        d.pids.push(std::fs::read_to_string(ws.join(pid)).unwrap().trim().parse().unwrap());
     }
-    assert!(r["own_secret"].starts_with("0 MY SECRET"), "the session's own folder reads: {}", r["own_secret"]);
+    println!("secrets: A {ra:?} B {rb:?}");
+    assert_ne!(rb["secrets_dir"].trim(), a_dir.display().to_string(), "B's folder is the vault's, not the one its request named");
+    for row in ["other_secret", "other_passport", "other_list"] {
+        assert!(denied(&rb[row]), "{row}: another session's folder can't be read: {}", rb[row]);
+    }
+    assert!(ra["own_secret"].starts_with("0 A SECRET"), "A reads its own folder: {}", ra["own_secret"]);
+}
+
+/// Review V1: a link a fenced session plants in /dev/shm (writable for it)
+/// is never a rule for the next fenced start, so that start can't read what
+/// it points at (the owner's keys).
+#[test]
+#[ignore = "needs a delegated cgroup v2 system unit on Linux: scripts/agent-isolation-kernel-tests.sh"]
+fn a_link_planted_in_dev_shm_opens_nothing_at_the_next_start() {
+    let _unit = preflight();
+    // SAFETY: no preconditions.
+    let uid = unsafe { libc::geteuid() };
+    // The /dev/shm secrets root exists, so /dev/shm is carved at each start.
+    std::fs::create_dir_all(format!("/dev/shm/k2-{uid}")).unwrap();
+    let link = PathBuf::from(format!("/dev/shm/k2isotest-link-{}", std::process::id()));
+    let _ = std::fs::remove_file(&link);
+    let mut d = Daemon::new("shmlink");
+    d.start();
+    let (a_id, a_ws) = d.workspace("A");
+    d.set_fence(&a_id, true);
+    let ssh = d.home.join(".ssh");
+    std::fs::create_dir_all(&ssh).unwrap();
+    std::fs::write(ssh.join("id_test"), "PRIVATE KEY\n").unwrap();
+    let plant = format!(
+        r#"R={a}/r1; : > $R; echo $$ > {a}/pid1
+ln -s {ssh} {l} 2> {a}/e1; echo "planted $? $(cat {a}/e1)" >> $R
+echo "done" >> $R; exec sleep 3600
+"#,
+        a = a_ws.display(),
+        ssh = ssh.display(),
+        l = link.display(),
+    );
+    d.spawn("tab-a1", &a_ws, &plant);
+    let r1 = results(&a_ws.join("r1"), "done");
+    d.pids.push(std::fs::read_to_string(a_ws.join("pid1")).unwrap().trim().parse().unwrap());
+    let read = format!(
+        r#"R={a}/r2; : > $R; echo $$ > {a}/pid2
+cat {l}/id_test > {a}/o1 2>&1; echo "through_link $? $(head -c 120 {a}/o1)" >> $R
+echo x > {l}/planted 2> {a}/e2; echo "write_through_link $? $(cat {a}/e2)" >> $R
+echo "done" >> $R; exec sleep 3600
+"#,
+        a = a_ws.display(),
+        l = link.display(),
+    );
+    d.spawn("tab-a2", &a_ws, &read);
+    let r2 = results(&a_ws.join("r2"), "done");
+    d.pids.push(std::fs::read_to_string(a_ws.join("pid2")).unwrap().trim().parse().unwrap());
+    let _ = std::fs::remove_file(&link);
+    println!("shm link: {r1:?} {r2:?}");
+    assert!(r1["planted"].starts_with('0'), "a fenced session can make a link in /dev/shm (the case this guards): {}", r1["planted"]);
+    assert!(denied(&r2["through_link"]), "the next fenced start can't read through it: {}", r2["through_link"]);
+    assert!(!r2["write_through_link"].starts_with('0') && !ssh.join("planted").exists(), "nor write: {}", r2["write_through_link"]);
 }

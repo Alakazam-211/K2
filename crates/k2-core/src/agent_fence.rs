@@ -89,6 +89,9 @@ pub struct ViewInputs<'a> {
     /// The session's environment as the daemon built it (the harness home
     /// variables name the login slot this session runs on).
     pub env: &'a BTreeMap<String, String>,
+    /// The secrets folder the vault made for this session (review V2: never
+    /// taken from the environment, which a spawn caller can set).
+    pub own_secrets: Option<&'a Path>,
 }
 
 /// System paths an agent reads (and executes from).
@@ -161,13 +164,42 @@ pub fn default_view(i: &ViewInputs) -> Result<FenceView, String> {
 /// spawn) as an environment variable name.
 pub const SECRETS_DIR_ENV: &str = "K2_SECRETS_DIR";
 
+/// The vault's secrets-root candidates on Linux, in its order (the vault
+/// and the fence take them from here, so they can't disagree): the
+/// daemon's `$K2_RUNTIME_DIR` alone when set; else the unit's
+/// `RuntimeDirectory` (not in test processes), `$XDG_RUNTIME_DIR/k2`,
+/// `/run/k2`, and last `/dev/shm/k2-<uid>` (review V3: only when nothing
+/// else can be made; fenced sessions then can't create shared memory).
+pub fn secrets_root_candidates(override_dir: Option<&Path>, systemd_dir: Option<&Path>, xdg_runtime_dir: Option<&Path>, uid: u32, is_test: bool) -> Vec<PathBuf> {
+    if let Some(d) = override_dir {
+        return vec![d.to_path_buf()];
+    }
+    let mut v = Vec::new();
+    if let Some(s) = systemd_dir.filter(|_| !is_test) {
+        v.push(s.to_path_buf());
+    }
+    if let Some(x) = xdg_runtime_dir {
+        v.push(x.join("k2"));
+    }
+    v.push(PathBuf::from("/run/k2"));
+    v.push(PathBuf::from(format!("/dev/shm/k2-{uid}")));
+    v
+}
+
+/// The secrets root that is `/dev/shm`'s, when the box keeps session
+/// secrets there (no other root could be made): `agents check` and the
+/// fence switch say fenced sessions there can't create shared memory.
+pub fn shm_secrets_root(roots: &[PathBuf]) -> Option<&PathBuf> {
+    roots.iter().find(|r| r.starts_with("/dev/shm"))
+}
+
 /// Where K2 keeps per-session secrets folders and its runtime files on this
-/// box (the vault's and the runtime dir's chains), those that exist: the
-/// daemon's `$K2_RUNTIME_DIR`, the unit's `RuntimeDirectory`,
-/// `$XDG_RUNTIME_DIR/k2`, `/run/user/<uid>/k2`, `/run/k2`,
-/// `/dev/shm/k2-<uid>`. A fenced view leaves them all out but the session's
-/// own folder: they hold other sessions' secret files, passports and
-/// ssh-agent sockets, and `/run` and `/dev/shm` are otherwise open.
+/// box, those that exist: every vault candidate (above, with and without
+/// the override), K2's runtime dir chain (`/run/user/<uid>/k2`), and the
+/// vault's ssh-agent fallback folders (`/tmp/k2a-<uid>-<ns>`). A fenced view
+/// leaves them all out but the session's own folder: they hold other
+/// sessions' secret files, passports and ssh-agent sockets, and `/run`,
+/// `/tmp` and `/dev/shm` are otherwise open.
 pub fn secrets_roots() -> Vec<PathBuf> {
     #[cfg(unix)]
     // SAFETY: geteuid has no failure mode.
@@ -175,20 +207,22 @@ pub fn secrets_roots() -> Vec<PathBuf> {
     #[cfg(not(unix))]
     let uid = 0u32;
     let env = |k: &str| std::env::var_os(k).filter(|x| !x.is_empty()).map(PathBuf::from);
+    let xdg = env("XDG_RUNTIME_DIR");
     let mut v: Vec<PathBuf> = Vec::new();
     v.extend(env(crate::runtime_dir::RUNTIME_DIR_ENV));
-    v.extend(crate::runtime_dir::systemd_runtime_directory());
-    v.extend(env("XDG_RUNTIME_DIR").map(|x| x.join("k2")));
+    v.extend(secrets_root_candidates(None, crate::runtime_dir::systemd_runtime_directory().as_deref(), xdg.as_deref(), uid, false));
     v.push(PathBuf::from(format!("/run/user/{uid}/k2")));
-    v.push(PathBuf::from("/run/k2"));
-    v.push(PathBuf::from(format!("/dev/shm/k2-{uid}")));
-    // The vault's ssh-agent folders when no memory root fits
-    // (`/tmp/k2a-<uid>-<n>/…/a.sock`).
     let agent_prefix = format!("k2a-{uid}-");
     if let Ok(rd) = std::fs::read_dir("/tmp") {
         v.extend(rd.flatten().filter(|e| e.file_name().to_string_lossy().starts_with(&agent_prefix)).map(|e| e.path()));
     }
-    v.into_iter().filter(|p| p.is_absolute() && p.exists()).collect()
+    let mut out: Vec<PathBuf> = Vec::new();
+    for p in v.into_iter().filter(|p| p.is_absolute() && p.exists()) {
+        if !out.contains(&p) {
+            out.push(p);
+        }
+    }
+    out
 }
 
 /// [`default_view`] with the secrets roots given (tests).
@@ -237,9 +271,12 @@ pub fn default_view_in(i: &ViewInputs, secrets: &[PathBuf]) -> Result<FenceView,
         v.rw.push(s(&i.home.join(rel)));
     }
     // The CLI and the daemon's port (never the token files), and K2's own
-    // hook scripts (notify, status line), read and run, nothing else there.
+    // hook scripts (notify, status line), read and run, when the folder
+    // holds only plain files of this user's (no links, no folders).
     v.ro.push(s(&i.k2_home.join("bin")));
-    v.ro.push(s(&i.k2_home.join("hooks")));
+    if hooks_are_plain(&i.k2_home.join("hooks")) {
+        v.ro.push(s(&i.k2_home.join("hooks")));
+    }
     v.ro.push(s(&i.k2_home.join("daemon.port")));
     v.ro.push(s(&i.k2_home.join("heartbeat.port")));
     // The harness logins this session runs on: exactly its own slot when
@@ -257,10 +294,16 @@ pub fn default_view_in(i: &ViewInputs, secrets: &[PathBuf]) -> Result<FenceView,
     avoid.extend(roots.iter().cloned());
     v.ro = carve_all(&v.ro, &avoid);
     v.rw = carve_all(&v.rw, &avoid);
-    let own = i.env.get(SECRETS_DIR_ENV).filter(|d| !d.is_empty()).map(|d| canon(Path::new(d)));
+    let own = i.own_secrets.map(canon);
     if let Some(own) = own.filter(|o| roots.iter().any(|r| o.starts_with(r) && o != r)) {
         v.ro.push(s(&own));
     }
+    // Review V1: every rule goes to the exec helper resolved, so the helper
+    // can open each with no link followed (a link planted at a rule's path
+    // later opens nothing).
+    v.ro = v.ro.iter().map(|r| s(&canon(Path::new(r)))).collect();
+    v.rw = v.rw.iter().map(|r| s(&canon(Path::new(r)))).collect();
+    v.required = v.required.iter().map(|r| s(&canon(Path::new(r)))).collect();
     Ok(v)
 }
 
@@ -290,12 +333,21 @@ pub fn carve(entry: &Path, avoid: &[PathBuf]) -> Vec<PathBuf> {
     let mut kids: Vec<PathBuf> = rd.flatten().map(|e| e.path()).collect();
     kids.sort();
     for k in kids {
-        let kc = canon(&k);
-        if avoid.iter().any(|a| *a == kc) {
+        // Review V1: a link is never a rule (it would open its target): a
+        // carved folder's children are taken as they are, links skipped.
+        match std::fs::symlink_metadata(&k) {
+            Ok(m) if m.file_type().is_symlink() => {
+                crate::log_debug!("[agents] fence view: {} is a link, left out", k.display());
+                continue;
+            }
+            Ok(_) => {}
+            Err(_) => continue,
+        }
+        if avoid.iter().any(|a| *a == k) {
             continue;
         }
-        if avoid.iter().any(|a| a.starts_with(&kc)) {
-            out.extend(carve(&kc, avoid));
+        if avoid.iter().any(|a| a.starts_with(&k)) {
+            out.extend(carve(&k, avoid));
         } else {
             out.push(k);
         }
@@ -742,8 +794,9 @@ pub fn apply_fence(view: &FenceView) -> Result<FenceReport, String> {
         let rules = view.ro.iter().map(|p| (p, false)).chain(view.rw.iter().map(|p| (p, true)));
         for (p, rw) in rules {
             let c = std::ffi::CString::new(p.as_str()).map_err(|_| format!("NUL in {p:?}"))?;
-            // SAFETY: O_PATH open of a caller-named path; the fd is owned below.
-            let fd = unsafe { libc::open(c.as_ptr(), libc::O_PATH | libc::O_CLOEXEC) };
+            // Review V1: no link followed anywhere in the path (the daemon
+            // sends resolved paths); a link there opens nothing.
+            let fd = open_no_links(&c);
             if fd < 0 {
                 let e = std::io::Error::last_os_error();
                 if view.required.contains(p) {
@@ -754,7 +807,10 @@ pub fn apply_fence(view: &FenceView) -> Result<FenceReport, String> {
             }
             // SAFETY: just opened.
             let fd = unsafe { OwnedFd::from_raw_fd(fd) };
-            let is_dir = std::fs::metadata(p).map(|m| m.is_dir()).unwrap_or(false);
+            let Some(is_dir) = kind_of(&fd) else {
+                rep.skipped.push(format!("{p}: a link or an unknown kind"));
+                continue;
+            };
             ll::add(&ruleset, &fd, rule_rights(rw, is_dir, handled)).map_err(|e| format!("Landlock rule {p}: {e}"))?;
             rep.rules += 1;
         }
@@ -766,6 +822,83 @@ pub fn apply_fence(view: &FenceView) -> Result<FenceReport, String> {
         let _ = view;
         Err("the folder fence is Linux only in this release".into())
     }
+}
+
+/// `open(path, O_PATH)` following no link in any component: `openat2` with
+/// `RESOLVE_NO_SYMLINKS`, or `O_NOFOLLOW` (the last component only) on a
+/// kernel without it. `-1` with errno set on failure.
+#[cfg(target_os = "linux")]
+fn open_no_links(c: &std::ffi::CStr) -> libc::c_int {
+    #[repr(C)]
+    struct OpenHow {
+        flags: u64,
+        mode: u64,
+        resolve: u64,
+    }
+    const RESOLVE_NO_SYMLINKS: u64 = 0x04;
+    let how = OpenHow { flags: (libc::O_PATH | libc::O_CLOEXEC) as u64, mode: 0, resolve: RESOLVE_NO_SYMLINKS };
+    // SAFETY: openat2 with a NUL-terminated path and a sized struct.
+    let fd = unsafe { libc::syscall(libc::SYS_openat2, libc::AT_FDCWD, c.as_ptr(), &how as *const OpenHow, std::mem::size_of::<OpenHow>()) } as libc::c_int;
+    if fd >= 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::ENOSYS) {
+        return fd;
+    }
+    // SAFETY: O_PATH open; the caller owns the fd.
+    unsafe { libc::open(c.as_ptr(), libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC) }
+}
+
+/// A rule's kind from its open handle: `Some(true)` a folder, `Some(false)`
+/// a file or device, `None` a link (opened as itself) or unreadable.
+#[cfg(target_os = "linux")]
+fn kind_of(fd: &std::os::fd::OwnedFd) -> Option<bool> {
+    use std::os::fd::AsRawFd;
+    // SAFETY: fstat into a zeroed struct on an open fd.
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstat(fd.as_raw_fd(), &mut st) } != 0 {
+        return None;
+    }
+    match st.st_mode & libc::S_IFMT {
+        libc::S_IFLNK => None,
+        libc::S_IFDIR => Some(true),
+        _ => Some(false),
+    }
+}
+
+/// `~/.k2/hooks` is opened only when it is a real folder of this user's
+/// holding plain files only.
+fn hooks_are_plain(dir: &Path) -> bool {
+    let Ok(m) = std::fs::symlink_metadata(dir) else { return false };
+    if !m.is_dir() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        // SAFETY: geteuid has no failure mode.
+        if m.uid() != unsafe { libc::geteuid() } {
+            return false;
+        }
+    }
+    let Ok(rd) = std::fs::read_dir(dir) else { return false };
+    rd.flatten().all(|e| e.file_type().is_ok_and(|t| t.is_file()))
+}
+
+/// The largest spec the exec helper is handed (it travels in one
+/// environment string; Linux takes up to 128 KiB there).
+pub const SPEC_MAX: usize = 120 * 1024;
+
+/// The spec as the exec helper reads it, or a refusal that says why when
+/// the view is too large to hand over (review V4).
+pub fn spec_json(spec: &ExecSpec) -> Result<String, String> {
+    let json = serde_json::to_string(spec).map_err(|e| e.to_string())?;
+    if json.len() > SPEC_MAX {
+        let rules = spec.fence.as_ref().map_or(0, |v| v.ro.len() + v.rw.len());
+        return Err(format!(
+            "the folder fence's view has {rules} rules ({} KiB), more than a session start can carry ({} KiB): a folder K2 carves (/tmp, /dev, /run) holds too many entries; the session doesn't start",
+            json.len() / 1024,
+            SPEC_MAX / 1024
+        ));
+    }
+    Ok(json)
 }
 
 /// Join the cgroup at `dir` (this process; children follow) and confirm
@@ -950,7 +1083,7 @@ mod tests {
         std::fs::write(home.join(".ssh/id_ed25519"), "KEY").unwrap();
         std::fs::write(k2.join("daemon.token"), "TOKEN").unwrap();
         let env = BTreeMap::new();
-        let view = |ws: &Path| default_view(&ViewInputs { home: &home, k2_home: &k2, workspace: ws, tmp_dir: &tmp, env: &env });
+        let view = |ws: &Path| default_view(&ViewInputs { home: &home, k2_home: &k2, workspace: ws, tmp_dir: &tmp, env: &env, own_secrets: None });
         // `.git` naming ~/.ssh.
         std::fs::write(ws.join(".git"), format!("gitdir: {}\n", home.join(".ssh").display())).unwrap();
         let r = AgentReach { home: &home, k2_home: &k2, workspace: &ws, tmp_dir: Some(&tmp), fenced: true };
@@ -975,12 +1108,13 @@ mod tests {
     }
 
     /// The secrets roots leave a fenced view (other sessions' secret files,
-    /// passports and ssh-agent sockets), except the session's own folder,
-    /// opened read-only by name; the rest of the folder holding a root stays
-    /// open; `~/.k2/hooks` is read and run.
+    /// passports and ssh-agent sockets), except the folder the vault made for
+    /// this session (review V2: an input of its own, never the environment),
+    /// opened read-only; the rest of a folder holding a root stays open;
+    /// `~/.k2/hooks` is read and run when it holds plain files only.
     #[test]
     fn a_fenced_view_leaves_other_sessions_secrets_out() {
-        let root = std::env::temp_dir().join(format!("k2-secview-{}", std::process::id()));
+        let root = canon(&std::env::temp_dir()).join(format!("k2-secview-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let home = root.join("home");
         let k2 = home.join(".k2");
@@ -989,34 +1123,84 @@ mod tests {
         let secrets = root.join("run-k2");
         let (own, other) = (secrets.join("own-1"), secrets.join("other-2"));
         let beside = root.join("beside");
-        for d in [&ws, &tmp, &own, &other, &beside] {
+        for d in [&ws, &tmp, &own, &other, &beside, &k2.join("hooks")] {
             std::fs::create_dir_all(d).unwrap();
         }
         std::fs::write(other.join(".k2-passport"), "P").unwrap();
-        // A system-wide rule covering the root, the way `/run` and `/dev/shm` do.
-        let base = canon(&root);
-        let mut env = BTreeMap::new();
-        env.insert(SECRETS_DIR_ENV.to_string(), own.display().to_string());
-        let i = ViewInputs { home: &home, k2_home: &k2, workspace: &ws, tmp_dir: &tmp, env: &env };
-        let mut v = default_view_in(&i, &[secrets.clone()]).unwrap();
-        v.ro.push(base.display().to_string());
-        let avoid: Vec<PathBuf> = [canon(&home), canon(&k2), canon(&secrets)].to_vec();
-        v.ro = carve_all(&v.ro, &avoid);
-        v.ro.push(canon(&own).display().to_string());
+        std::fs::write(k2.join("hooks/notify.sh"), "#!/bin/sh\n").unwrap();
         let covers = |rules: &[String], p: &Path| rules.iter().any(|r| canon(p).starts_with(canon(Path::new(r))));
-        for (name, rules) in [("ro", &v.ro), ("rw", &v.rw)] {
-            assert!(!covers(rules, &other.join(".k2-passport")), "{name}: another session's folder stays out: {rules:?}");
-            assert!(!covers(rules, &other), "{name}: {rules:?}");
-        }
-        assert!(covers(&v.ro, &own), "the session's own folder is read: {:?}", v.ro);
-        assert!(covers(&v.ro, &beside), "what sits beside the roots stays open: {:?}", v.ro);
-        assert!(covers(&v.ro, &k2.join("hooks")), "the hooks are read and run: {:?}", v.ro);
-        // An own folder outside every root opens nothing more.
+        // A system-wide rule over the root (the way `/run` and `/dev/shm` are).
+        let carved = carve_all(&[root.display().to_string()], &[canon(&home), canon(&secrets)]);
+        assert!(!covers(&carved, &other.join(".k2-passport")) && !covers(&carved, &own), "{carved:?}");
+        assert!(covers(&carved, &beside), "what sits beside the roots stays open: {carved:?}");
+        // The view: the vault's folder is opened, read-only.
+        let mut env = BTreeMap::new();
         env.insert(SECRETS_DIR_ENV.to_string(), other.display().to_string());
-        let i = ViewInputs { home: &home, k2_home: &k2, workspace: &ws, tmp_dir: &tmp, env: &env };
+        let i = ViewInputs { home: &home, k2_home: &k2, workspace: &ws, tmp_dir: &tmp, env: &env, own_secrets: Some(&own) };
+        let v = default_view_in(&i, &[secrets.clone()]).unwrap();
+        assert!(covers(&v.ro, &own) && !covers(&v.rw, &own), "the session's own folder is read only: {:?}", v.ro);
+        for (name, rules) in [("ro", &v.ro), ("rw", &v.rw)] {
+            assert!(!covers(rules, &other), "{name}: the environment names another folder; it stays out: {rules:?}");
+        }
+        assert!(covers(&v.ro, &k2.join("hooks")), "the hooks are read and run: {:?}", v.ro);
+        // No vault folder: nothing under the root opens, whatever the environment says.
+        let i = ViewInputs { home: &home, k2_home: &k2, workspace: &ws, tmp_dir: &tmp, env: &env, own_secrets: None };
+        let v = default_view_in(&i, &[secrets.clone()]).unwrap();
+        assert!(!covers(&v.ro, &other) && !covers(&v.rw, &other) && !covers(&v.ro, &own), "{:?}", v.ro);
+        // A folder outside every root, named as the session's own: nothing.
+        let i = ViewInputs { home: &home, k2_home: &k2, workspace: &ws, tmp_dir: &tmp, env: &env, own_secrets: Some(&other) };
         let v = default_view_in(&i, &[own.clone()]).unwrap();
         assert!(!covers(&v.ro, &other) && !covers(&v.rw, &other), "{:?}", v.ro);
+        // A link in the hooks folder: the folder stays out.
+        std::os::unix::fs::symlink(home.join(".ssh"), k2.join("hooks/x")).unwrap();
+        let v = default_view_in(&i, &[]).unwrap();
+        assert!(!covers(&v.ro, &k2.join("hooks")), "{:?}", v.ro);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Review V1: a link in a carved folder (as a fenced session can plant
+    /// in /dev/shm) is never a rule: one to the owner's keys, one into
+    /// another session's secrets folder; a real folder beside them is.
+    #[test]
+    fn a_link_planted_in_a_carved_folder_is_never_a_rule() {
+        let root = canon(&std::env::temp_dir()).join(format!("k2-carvelink-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let home = root.join("home");
+        let shm = root.join("shm");
+        let secrets = shm.join("k2-1000");
+        let other = secrets.join("other-2");
+        for d in [&home.join(".ssh"), &other, &shm.join("plain")] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::os::unix::fs::symlink(home.join(".ssh"), shm.join("x")).unwrap();
+        std::os::unix::fs::symlink(&other, shm.join("y")).unwrap();
+        let rules = carve_all(&[shm.display().to_string()], &[canon(&home), canon(&secrets)]);
+        assert!(rules.iter().any(|r| Path::new(r) == shm.join("plain")), "{rules:?}");
+        for link in ["x", "y"] {
+            assert!(!rules.iter().any(|r| Path::new(r) == shm.join(link)), "{link} is a link, never a rule: {rules:?}");
+        }
+        assert!(!rules.iter().any(|r| canon(Path::new(r)).starts_with(canon(&home))), "{rules:?}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Review V4: a view too large to hand over is refused, saying why.
+    #[test]
+    fn a_view_too_large_to_hand_over_is_refused() {
+        let view = FenceView { rw: vec![], ro: (0..5000).map(|n| format!("/tmp/an-entry-with-a-fairly-long-name-{n:05}")).collect(), required: vec![] };
+        let spec = ExecSpec { v: 1, cgroup: None, wait_cgroup: None, fence: Some(view), unset: vec![], set: BTreeMap::new() };
+        let e = spec_json(&spec).expect_err("refused");
+        assert!(e.contains("5000 rules") && e.contains("doesn't start"), "{e}");
+        let small = ExecSpec { v: 1, cgroup: None, wait_cgroup: None, fence: Some(FenceView::default()), unset: vec![], set: BTreeMap::new() };
+        assert!(spec_json(&small).is_ok());
+    }
+
+    /// One list of roots for the vault and the fence, the `/dev/shm` one last.
+    #[test]
+    fn the_secrets_roots_keep_dev_shm_last() {
+        let c = secrets_root_candidates(None, Some(Path::new("/run/k2-daemon")), Some(Path::new("/run/user/1000")), 1000, false);
+        assert_eq!(c, [PathBuf::from("/run/k2-daemon"), PathBuf::from("/run/user/1000/k2"), PathBuf::from("/run/k2"), PathBuf::from("/dev/shm/k2-1000")]);
+        assert_eq!(secrets_root_candidates(Some(Path::new("/x")), None, None, 1, false), [PathBuf::from("/x")]);
+        assert_eq!(shm_secrets_root(&c), Some(&PathBuf::from("/dev/shm/k2-1000")));
     }
 
     /// M2 review F3: the daemon reads a file for an agent from the handle it
@@ -1066,7 +1250,7 @@ mod tests {
     }
 
     fn inputs<'a>(home: &'a Path, k2: &'a Path, ws: &'a Path, tmp: &'a Path, env: &'a BTreeMap<String, String>) -> ViewInputs<'a> {
-        ViewInputs { home, k2_home: k2, workspace: ws, tmp_dir: tmp, env }
+        ViewInputs { home, k2_home: k2, workspace: ws, tmp_dir: tmp, env, own_secrets: None }
     }
 
     #[test]

@@ -59,6 +59,9 @@ pub mod codex_version;
 pub mod agent_process_name;
 // Windows CreateProcess PATHEXT / .cmd wrap (npm `claude.cmd`).
 pub mod win_cmd;
+// `k2 terminal spawn --command "<command line>"` (0.46.18): a command line
+// runs in the login shell (`-lc`); one word starts as given.
+pub mod command_line;
 // UTF-8 locale defaulting for spawned children (launchd/systemd give
 // the daemon NO LANG/LC_*; locale-less `pbcopy` MacRoman-mangles
 // TUI-driven copies while the screen looks fine).

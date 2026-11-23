@@ -981,6 +981,17 @@ fn terminal_sandbox_requested(params: &HashMap<String, String>) -> bool {
         .unwrap_or(false)
 }
 
+/// `(program, args)` for a terminal spawn's `command` (0.46.18): one word
+/// is the program with no args, exactly as before (a bare shell name still
+/// gets `exempt_shell_path` in the spawn); a command line is the login
+/// shell with `-lc <command line>` ([`k2_core::terminal::command_line`]).
+fn spawn_command_parts(command: Option<&str>) -> (Option<String>, Option<Vec<String>>) {
+    match command.and_then(k2_core::terminal::command_line::spawn_parts) {
+        Some((shell, args)) => (Some(shell), Some(args)),
+        None => (command.map(str::to_string), None),
+    }
+}
+
 fn spawn_terminal_impl(
     params: &HashMap<String, String>,
     project_path: &str,
@@ -1019,6 +1030,10 @@ fn spawn_terminal_impl(
         // Callers that want a shell pass `command=bash` (or any
         // shell of choice).
     }
+    // 0.46.18: a command line (`/bin/echo hi`, a pipe, quotes) runs as
+    // `<login shell> -lc '<command line>'`; before, the whole string was the
+    // program and the spawn failed with ENOENT. One word starts as given.
+    let (spawn_program, spawn_args) = spawn_command_parts(command.as_deref());
     let cwd = params
         .get("cwd")
         .cloned()
@@ -1058,10 +1073,23 @@ fn spawn_terminal_impl(
     let (terminal_id, pending_drained, sandbox_in_force) = if sandbox_requested {
         // The same door as `/cli/sessions/v2/spawn {"sandbox":true}`: a
         // microVM cell, or that door's own 409 with nothing spawned.
+        // A command line runs under the guest's `/bin/sh` (the host's
+        // passwd shell may not exist in the cell).
+        let (sandbox_command, sandbox_args) = match command.as_deref() {
+            Some(c) if k2_core::terminal::command_line::is_command_line(c) => {
+                let (p, a) = k2_core::terminal::command_line::wrap_in(
+                    k2_core::terminal::command_line::FALLBACK_SHELL,
+                    c,
+                );
+                (Some(p), Some(a))
+            }
+            _ => (command.clone(), None),
+        };
         let body = serde_json::json!({
             "agent_name": agent_name,
             "cwd": cwd,
-            "command": command,
+            "command": sandbox_command,
+            "args": sandbox_args,
             "cols": cols,
             "rows": rows,
             "sandbox": true,
@@ -1082,8 +1110,8 @@ fn spawn_terminal_impl(
             agent_name: agent_name.clone(),
             project_id,
             cwd: cwd.clone(),
-            command: command.clone(),
-            args: None,
+            command: spawn_program,
+            args: spawn_args,
             cols,
             rows,
             canonical_key: None,
@@ -1378,19 +1406,38 @@ mod tests {
         assert!(live.is_some(), "the plain spawn started a session");
     }
 
-    /// One `k2 terminal spawn --agent <a> --command <command>` in `ws`:
-    /// the answer, and the live session under the agent's name (taken out
-    /// of the map; the caller kills it).
+    /// One `k2 terminal spawn --agent <a> --command <command>` in `ws`.
+    /// Dropping it ends the session (`unregister` kills the child, so it
+    /// waits until the test has seen what the command did).
     #[cfg(unix)]
-    fn spawn_command(ws: &str, command: &str) -> (CliResponse, Option<std::sync::Arc<k2_core::terminal::daemon_pty::DaemonPtySession>>) {
+    struct Spawned {
+        resp: CliResponse,
+        agent: String,
+    }
+
+    #[cfg(unix)]
+    impl Spawned {
+        fn session(&self) -> Option<std::sync::Arc<k2_core::terminal::daemon_pty::DaemonPtySession>> {
+            crate::v2_session_map::lookup_by_agent_name(&self.agent)
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for Spawned {
+        fn drop(&mut self) {
+            crate::v2_session_map::unregister(&self.agent);
+        }
+    }
+
+    #[cfg(unix)]
+    fn spawn_command(ws: &str, command: &str) -> Spawned {
         let agent = format!("agent-cmdline-{}", uuid::Uuid::new_v4().simple());
         let params = HashMap::from([
             ("agent".to_string(), agent.clone()),
             ("command".to_string(), command.to_string()),
             ("cwd".to_string(), ws.to_string()),
         ]);
-        let resp = handle_terminal_spawn(&params, ws);
-        (resp, crate::v2_session_map::unregister(&agent))
+        Spawned { resp: handle_terminal_spawn(&params, ws), agent }
     }
 
     #[cfg(unix)]
@@ -1431,70 +1478,64 @@ mod tests {
         let ws = dunce::canonicalize(&ws).expect("canonical folder");
         let ws_str = ws.to_string_lossy().into_owned();
         let m = |name: &str| ws.join(name);
-        let ok = |resp: &CliResponse, what: &str| {
-            assert_eq!(resp.status, "200 OK", "{what}: body={}", resp.body);
+        let ok = |sp: &Spawned, what: &str| {
+            assert_eq!(sp.resp.status, "200 OK", "{what}: body={}", sp.resp.body);
         };
 
         // The reported line: before, `ptyd spawn: enoent` / ENOENT.
-        let (resp, s) = spawn_command(&ws_str, "/bin/echo hi");
-        ok(&resp, "/bin/echo hi");
-        if let Some(s) = s {
-            s.kill();
-        }
+        let sp = spawn_command(&ws_str, "/bin/echo hi");
+        ok(&sp, "/bin/echo hi");
+        drop(sp);
 
         // Arguments only.
-        let (resp, s) = spawn_command(&ws_str, &format!("touch '{}'", m("multi").display()));
-        ok(&resp, "multi-word");
+        let sp = spawn_command(&ws_str, &format!("touch '{}'", m("multi").display()));
+        ok(&sp, "multi-word");
         wait_for_file_to_exist(&m("multi"));
-        if let Some(s) = s {
-            s.kill();
-        }
+        drop(sp);
 
         // The session runs the login shell with `-lc <the command line>`.
-        let (resp, s) = spawn_command(&ws_str, "sleep 30");
-        ok(&resp, "sleep 30");
-        let s = s.expect("sleep is still running");
+        let sp = spawn_command(&ws_str, "sleep 30");
+        ok(&sp, "sleep 30");
+        let s = sp.session().expect("sleep is still running");
         let program = s.program.clone().expect("a program");
         assert!(std::path::Path::new(&program).is_absolute(), "the login shell by path: {program}");
         assert_eq!(s.args, vec!["-lc".to_string(), "sleep 30".to_string()]);
-        s.kill();
+        drop(s);
+        drop(sp);
 
         // A pipe.
-        let (resp, s) = spawn_command(&ws_str, &format!("echo piped | tr a-z A-Z > '{}'", m("pipe").display()));
-        ok(&resp, "pipe");
+        let sp = spawn_command(&ws_str, &format!("echo piped | tr a-z A-Z > '{}'", m("pipe").display()));
+        ok(&sp, "pipe");
         assert_eq!(wait_for_file(&m("pipe")).trim(), "PIPED");
-        if let Some(s) = s {
-            s.kill();
-        }
+        drop(sp);
 
         // Quotes, both kinds.
-        let (resp, s) = spawn_command(&ws_str, &format!("printf '%s|%s' \"a b\" 'c d' > '{}'", m("quotes").display()));
-        ok(&resp, "quotes");
+        let sp = spawn_command(&ws_str, &format!("printf '%s|%s' \"a b\" 'c d' > '{}'", m("quotes").display()));
+        ok(&sp, "quotes");
         assert_eq!(wait_for_file(&m("quotes")), "a b|c d");
-        if let Some(s) = s {
-            s.kill();
-        }
+        drop(sp);
 
         // One word, a path: started as the program itself, no shell.
         let script = m("one-word.sh");
         k2_core::test_env::write_executable(&script, &format!("#!/bin/sh\necho one > '{}'\nexec sleep 30\n", m("one").display()));
         let script_s = script.to_string_lossy().into_owned();
-        let (resp, s) = spawn_command(&ws_str, &script_s);
-        ok(&resp, "single-word path");
-        assert_eq!(wait_for_file(&m("one")).trim(), "one");
-        let s = s.expect("the script is still running");
-        assert_eq!(s.program.as_deref(), Some(script_s.as_str()), "one word is the program");
-        assert!(s.args.is_empty(), "no args: {:?}", s.args);
-        s.kill();
+        {
+            // The temp-HOME belt refuses any program outside the system bin
+            // dirs; this script is ours.
+            let _allow = k2_core::test_env::EnvVar::set(k2_core::terminal::agent_spawn_guard::ALLOW_REAL_ENV, "1");
+            let sp = spawn_command(&ws_str, &script_s);
+            ok(&sp, "single-word path");
+            assert_eq!(wait_for_file(&m("one")).trim(), "one");
+            let s = sp.session().expect("the script is still running");
+            assert_eq!(s.program.as_deref(), Some(script_s.as_str()), "one word is the program");
+            assert!(s.args.is_empty(), "no args: {:?}", s.args);
+        }
 
         // An agent CLI inside a command line: still refused, nothing runs.
-        let (resp, s) = spawn_command(&ws_str, "claude --foo");
-        if let Some(s) = s.as_ref() {
-            s.kill();
-        }
-        assert_ne!(resp.status, "200 OK", "body={}", resp.body);
-        assert!(resp.body.contains("refusing") && resp.body.contains("claude"), "body={}", resp.body);
-        assert!(s.is_none(), "a refused agent CLI starts no session");
+        let sp = spawn_command(&ws_str, "claude --foo");
+        assert_ne!(sp.resp.status, "200 OK", "body={}", sp.resp.body);
+        assert!(sp.resp.body.contains("refusing") && sp.resp.body.contains("claude"), "body={}", sp.resp.body);
+        assert!(sp.session().is_none(), "a refused agent CLI starts no session");
     }
 
     #[cfg(unix)]

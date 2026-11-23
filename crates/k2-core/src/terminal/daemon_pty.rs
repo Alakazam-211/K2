@@ -912,11 +912,19 @@ impl DaemonPtySession {
         let guarded_program: Option<String> = match cfg.program.as_deref() {
             Some(prog) => {
                 let guard = crate::terminal::agent_spawn_guard::GuardEnv::from_process();
-                match crate::terminal::agent_spawn_guard::resolve_program(
+                // 0.46.18: a shell's `-c` script is read too (`zsh -lc
+                // 'claude --foo'` from `k2 terminal spawn --command`), so an
+                // agent CLI never slips past the guard inside a command line.
+                let checked = crate::terminal::agent_spawn_guard::check_shell_script(
                     prog,
+                    &cfg.args,
                     path_for_resolve,
                     &guard,
-                ) {
+                )
+                .and_then(|()| {
+                    crate::terminal::agent_spawn_guard::resolve_program(prog, path_for_resolve, &guard)
+                });
+                match checked {
                     Ok(p) => Some(p),
                     Err(msg) => {
                         log_debug!("{} session={}", msg, cfg.session_id);

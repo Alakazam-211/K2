@@ -56,6 +56,12 @@ fn passwd() -> std::io::Result<Pw> {
     }
 }
 
+/// The login shell in this user's passwd entry (`pw_shell`), whatever the
+/// environment says. `None` when there is no entry.
+pub fn passwd_shell() -> Option<String> {
+    passwd().ok().map(|p| p.shell)
+}
+
 /// alacritty's `default_shell_command` (no program given).
 pub fn default_shell_argv(user: &ShellUser) -> Vec<String> {
     #[cfg(target_os = "macos")]

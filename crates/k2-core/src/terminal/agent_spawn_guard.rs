@@ -215,6 +215,67 @@ pub fn resolve_program(program: &str, search_path: &str, env: &GuardEnv) -> Resu
     }
 }
 
+/// Shells whose `-c` script the guard reads ([`check_shell_script`]).
+const SCRIPT_SHELLS: &[&str] = &["sh", "bash", "zsh", "dash", "ksh", "mksh", "ash", "fish", "csh", "tcsh"];
+
+/// The script a shell `program` runs from `args`: the word after the first
+/// short-flag cluster holding `c` (`-c`, `-lc`, `-ec`…). `None` when
+/// `program` is no shell or runs no `-c` script.
+pub fn shell_script<'a>(program: &str, args: &'a [String]) -> Option<&'a str> {
+    let base = Path::new(program.trim()).file_name().and_then(|n| n.to_str())?;
+    if !SCRIPT_SHELLS.contains(&base) {
+        return None;
+    }
+    let at = args.iter().position(|a| {
+        a.len() > 1
+            && a.starts_with('-')
+            && !a.starts_with("--")
+            && a[1..].chars().all(|c| c.is_ascii_alphabetic())
+            && a[1..].contains('c')
+    })?;
+    args.get(at + 1).map(String::as_str)
+}
+
+/// The words of a shell script, split on whitespace, shell operators and
+/// quotes. Rough on purpose (it fails closed): `echo claude` counts
+/// `claude` too.
+fn script_words(script: &str) -> impl Iterator<Item = &str> {
+    script
+        .split(|c: char| c.is_whitespace() || "|&;<>()`$\"'{}!".contains(c))
+        .filter(|w| !w.is_empty())
+}
+
+/// [`resolve_program`] for the agent CLIs a shell's `-c` script names
+/// (`zsh -lc 'claude --foo'`, what `k2 terminal spawn --command "claude
+/// --foo"` starts since 0.46.18, or `bash -c "…; claude -p"`). The shell
+/// itself is a system program the guard lets through, and it finds a bare
+/// name on PATH, never in the shim dirs, so each agent CLI in the script
+/// must pass on its own: in shim mode only a shim named by its own path;
+/// otherwise as [`resolve_program`] decides. Production (no env, real HOME)
+/// passes everything.
+pub fn check_shell_script(program: &str, args: &[String], search_path: &str, env: &GuardEnv) -> Result<(), String> {
+    let Some(script) = shell_script(program, args) else {
+        return Ok(());
+    };
+    for word in script_words(script) {
+        if !is_agent_cli(word) {
+            continue;
+        }
+        let passes = match env.shim_dirs.as_deref() {
+            Some(dirs) => resolve_in_shim_dirs(word, dirs).map(|p| p == word).unwrap_or(false),
+            None => resolve_program(word, search_path, env).is_ok(),
+        };
+        if !passes {
+            return Err(format!(
+                "[spawn] refusing: test tried to spawn real `{word}` inside a shell command line \
+                 ({program} -c …); install the agent shim (k2_core::test_env::AgentShim, or set \
+                 {SHIM_DIR_ENV}) and name it by its path"
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn refusal(what: &str) -> String {
     format!(
         "[spawn] refusing real agent {what} under temp HOME (set {ALLOW_REAL_ENV}=1 to override)"
@@ -590,6 +651,68 @@ mod tests {
     #[test]
     fn from_process_marks_a_test_build() {
         assert!(GuardEnv::from_process().test_build);
+    }
+
+    fn v(a: &[&str]) -> Vec<String> {
+        a.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn shell_script_finds_the_c_script() {
+        assert_eq!(shell_script("/bin/zsh", &v(&["-lc", "claude --foo"])), Some("claude --foo"));
+        assert_eq!(shell_script("sh", &v(&["-c", "x"])), Some("x"));
+        assert_eq!(shell_script("/usr/bin/bash", &v(&["-l", "-c", "x"])), Some("x"));
+        assert_eq!(shell_script("bash", &v(&["-euo", "pipefail", "-c", "x"])), Some("x"));
+        assert_eq!(shell_script("bash", &v(&["script.sh"])), None);
+        assert_eq!(shell_script("bash", &v(&["--login"])), None);
+        assert_eq!(shell_script("cat", &v(&["-c", "claude"])), None, "not a shell");
+        assert_eq!(shell_script("claude", &v(&["-c"])), None);
+    }
+
+    /// 0.46.18: `k2 terminal spawn --command "claude --foo"` runs as
+    /// `<login shell> -lc 'claude --foo'`. The shell passes the guard, so
+    /// the guard reads the script: an agent CLI in it is still refused in a
+    /// test build, under a temp HOME, and in shim mode by bare name.
+    #[test]
+    fn an_agent_cli_inside_a_shell_command_line_is_refused() {
+        let home = scratch("script-home");
+        let shims = scratch("script-shims");
+        let shim = write_exec(&shims, "claude");
+        let shim_s = shim.to_string_lossy().into_owned();
+        let envs = [
+            ("test build", test_build_env("/Users/someone")),
+            ("temp HOME", temp_home_env(&home)),
+            ("shim mode", GuardEnv { shim_dirs: Some(vec![shims.clone()]), ..test_build_env("/Users/someone") }),
+        ];
+        for (what, env) in &envs {
+            for script in [
+                "claude --foo",
+                "echo hi | claude -p x",
+                "cd /tmp && exec codex",
+                "FOO=1 /opt/homebrew/bin/claude",
+                "(grok)",
+                "x;cursor-agent",
+            ] {
+                for shell in ["/bin/zsh", "/bin/sh", "bash"] {
+                    let err = check_shell_script(shell, &v(&["-lc", script]), "/usr/bin:/bin", env)
+                        .expect_err(&format!("{what}: {shell} -lc {script:?}"));
+                    assert!(err.contains("inside a shell command line"), "{what}: {err}");
+                    assert!(err.contains("refusing"), "{what}: {err}");
+                }
+            }
+            // No agent CLI: the script passes.
+            check_shell_script("/bin/sh", &v(&["-lc", "/bin/echo hi | wc -c"]), "/usr/bin:/bin", env).expect(what);
+        }
+        // Shim mode: the shim named by its own path may run (Unix: the shim
+        // is the script itself).
+        if cfg!(unix) {
+            let (_, shim_env) = &envs[2];
+            check_shell_script("/bin/sh", &v(&["-c", &format!("{shim_s} --foo")]), "", shim_env).expect("shim by path");
+        }
+        // Production: nothing changes.
+        check_shell_script("/bin/zsh", &v(&["-lc", "claude --foo"]), "/usr/bin:/bin", &real_home_env()).expect("production passes");
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&shims);
     }
 
     #[test]

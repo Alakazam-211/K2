@@ -208,6 +208,61 @@ fn child_env_matches_the_in_process_backend() {
     assert_eq!(dumps[0], dumps[1], "P15: the ptyd child sees exactly the in-process child's env");
 }
 
+/// 0.46.18 (`k2 terminal spawn --command`): what
+/// `command_line::spawn_parts` makes of a command line (the login shell with
+/// `-lc <line>`) runs the same on the ptyd path and the in-process path:
+/// arguments, a pipe and quotes. One word (a path) is no command line and
+/// starts as the program itself on both. Before, the whole string was
+/// argv[0]: `ptyd spawn: enoent`.
+#[test]
+fn a_command_line_runs_through_the_login_shell_on_both_backends() {
+    use k2_core::terminal::command_line::spawn_parts;
+    let _g = setup();
+    for survive in [false, true] {
+        let backend = if survive { "ptyd" } else { "in-process" };
+        let dir = home().join(format!("cmdline-{survive}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let m = |n: &str| dir.join(n);
+        let cases = [
+            (format!("touch '{}'; echo made > '{}'", m("x").display(), m("multi").display()), m("multi"), "made\n"),
+            (format!("echo piped | tr a-z A-Z > '{}'", m("pipe").display()), m("pipe"), "PIPED\n"),
+            (format!("printf '%s|%s' \"a b\" 'c d' > '{}'", m("quotes").display()), m("quotes"), "a b|c d"),
+        ];
+        for (line, out, want) in &cases {
+            let (program, args) = spawn_parts(line).unwrap_or_else(|| panic!("{line:?} is a command line"));
+            assert_eq!(args, vec!["-lc".to_string(), line.clone()]);
+            let s = DaemonPtySession::spawn(DaemonPtyConfig { program: Some(program.clone()), args, cwd: Some(dir.clone()), survive, ..DaemonPtyConfig::default() })
+                .unwrap_or_else(|e| panic!("{backend}: {program} -lc {line:?}: {e}"));
+            assert_eq!(s.backend_name(), backend);
+            assert_eq!(&wait_file(out, Duration::from_secs(15)), want, "{backend}: {line:?}");
+            s.kill();
+        }
+        // Arguments with no shell syntax at all.
+        let (program, args) = spawn_parts("sleep 30").expect("a command line");
+        let s = DaemonPtySession::spawn(DaemonPtyConfig { program: Some(program.clone()), args, cwd: Some(dir.clone()), survive, ..DaemonPtyConfig::default() })
+            .unwrap_or_else(|e| panic!("{backend}: sleep 30: {e}"));
+        assert_eq!(s.backend_name(), backend);
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(alive(s.child_pid().expect("pid")), "{backend}: `{program} -lc 'sleep 30'` is running");
+        s.kill();
+
+        // One word, a path: not wrapped, runs as itself.
+        let script = m("one-word.sh");
+        k2_core::test_env::write_executable(&script, &format!("#!/bin/sh\necho one > '{}'\n", m("one").display()));
+        let script_s = script.to_string_lossy().into_owned();
+        assert_eq!(spawn_parts(&script_s), None, "one word starts as given");
+        // The temp-HOME belt refuses any program outside the system bin
+        // dirs; this script is ours.
+        let _allow = k2_core::test_env::EnvVar::set(k2_core::terminal::agent_spawn_guard::ALLOW_REAL_ENV, "1");
+        let s = DaemonPtySession::spawn(DaemonPtyConfig { program: Some(script_s.clone()), args: vec![], cwd: Some(dir.clone()), survive, ..DaemonPtyConfig::default() })
+            .unwrap_or_else(|e| panic!("{backend}: {script_s}: {e}"));
+        assert_eq!(s.backend_name(), backend);
+        assert_eq!(wait_file(&m("one"), Duration::from_secs(15)), "one\n", "{backend}");
+        s.kill();
+    }
+}
+
 #[test]
 fn terminal_query_replies_reach_the_child_live() {
     let _g = setup();

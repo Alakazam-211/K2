@@ -53,6 +53,7 @@ describe('product-feedback client', () => {
       enabled: true,
       agents: false,
       agentDiagnostics: false,
+      agentReports: null,
       rememberDiagnostics: null,
       canEdit: true,
       canSend: false,

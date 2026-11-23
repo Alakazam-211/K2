@@ -1,6 +1,7 @@
 // Setup checklist: what each row's `opens` value opens. Every opener opens
-// the thing itself (Apple's installer, the sign-in sheet, the folder pick,
-// the pairing block, the account prompt, the Kessel sheet, Kessel's Thread), never
+// the thing itself (Apple's installer, the sign-in sheet, the agent-reports
+// card, the folder pick, the pairing block, the account prompt, the Kessel
+// sheet, Kessel's Thread), never
 // a page to go looking on. A value this client doesn't know does nothing.
 
 import { useSettingsStore } from '@/stores/settings'
@@ -14,6 +15,7 @@ import { openKesselSheet } from '@/stores/kessel-sheet'
 import { openWorkspaceThread } from '@/lib/open-workspace-thread'
 import { useToastStore } from '@/stores/toast'
 import { installGitTools } from '@/lib/git-tools'
+import { openAgentReportsCard } from '@/stores/agent-reports-card'
 
 /** `kessel_thread_cos` failed to start the hire; the daemon's reason follows. */
 export const COS_START_FAILED_TEXT = "Couldn't start hiring your Chief of Staff"
@@ -51,6 +53,7 @@ export async function startDevToolsInstall(): Promise<void> {
 const OPENERS: Record<FirstRunOpens, () => void> = {
   dev_tools: () => void startDevToolsInstall(),
   llm_sign_in: () => requestLlmSignIn(),
+  agent_reports: () => openAgentReportsCard('row'),
   add_workspace: () => void startAddWorkspace(),
   tunnel: () => useSettingsStore.getState().openSettings('k2-connect'),
   phone: () => {

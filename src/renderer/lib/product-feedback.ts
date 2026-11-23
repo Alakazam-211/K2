@@ -50,10 +50,38 @@ export interface FeedbackService {
   message: string | null
 }
 
+/** Whether agents may report problems on their own (0.46.17): `off`, `cli`
+ *  (problems with the commands agents run) or `all` (anything about the
+ *  product). */
+export type AgentReportsAnswer = 'off' | 'cli' | 'all'
+
+/** A part of the details an agent may attach, in the daemon's words. */
+export interface AttachPart {
+  id: string
+  label: string
+}
+
+/** The agent opt-in as the daemon reports it
+ *  (plan-agent-reports-opt-in-app-v1). */
+export interface AgentReports {
+  /** Null while nobody has answered: agents send nothing. */
+  answer: AgentReportsAnswer | null
+  /** The part ids agents may attach, in the daemon's order. */
+  attach: string[]
+  /** When a person answered (ms), and who: `owner` or a username. */
+  askedAt: number | null
+  askedBy: string | null
+  /** Every part an agent may be allowed to attach, in order. */
+  parts: AttachPart[]
+}
+
 export interface FeedbackSettings {
   enabled: boolean
   agents: boolean
   agentDiagnostics: boolean
+  /** Null from an older daemon (no `agentsAsked` or `attachParts`): it has
+   *  the old switches only. */
+  agentReports: AgentReports | null
   /** The signed-in person's remembered choice (null for an agent). */
   rememberDiagnostics: boolean | null
   /** The owner or an admin (a person). */
@@ -179,6 +207,28 @@ function parseSections(v: unknown): DiagnosticsSection[] {
     .filter((s) => s.id !== '')
 }
 
+/** The agent opt-in from a settings answer; null from an older daemon. */
+export function parseAgentReports(r: Record<string, unknown>): AgentReports | null {
+  if (!('agentsAsked' in r) && !('attachParts' in r)) return null
+  const parts: AttachPart[] = []
+  for (const p of Array.isArray(r.attachParts) ? r.attachParts : []) {
+    if (!p || typeof p !== 'object') continue
+    const id = str((p as Record<string, unknown>).id)
+    if (!id || parts.some((x) => x.id === id)) continue
+    parts.push({ id, label: str((p as Record<string, unknown>).label) || id })
+  }
+  const asked = r.agentsAsked === true
+  const answer: AgentReportsAnswer | null = !asked ? null : r.agents !== true ? 'off' : r.agentPlatform === true ? 'all' : 'cli'
+  const attach = Array.isArray(r.agentAttach) ? r.agentAttach.filter((a): a is string => typeof a === 'string' && a !== '') : []
+  return {
+    answer,
+    attach: answer === 'off' ? [] : attach,
+    askedAt: typeof r.agentsAskedAt === 'number' ? r.agentsAskedAt : null,
+    askedBy: strOrNull(r.agentsAskedBy),
+    parts,
+  }
+}
+
 export function parseSettings(raw: unknown): FeedbackSettings {
   const r = (raw ?? {}) as Record<string, unknown>
   const svc = (r.service ?? {}) as Record<string, unknown>
@@ -187,6 +237,7 @@ export function parseSettings(raw: unknown): FeedbackSettings {
     enabled: r.enabled === true,
     agents: r.agents === true,
     agentDiagnostics: r.agentDiagnostics === true,
+    agentReports: parseAgentReports(r),
     rememberDiagnostics: typeof r.rememberDiagnostics === 'boolean' ? r.rememberDiagnostics : null,
     canEdit: r.canEdit === true,
     canSend: r.canSend === true,
@@ -246,6 +297,23 @@ export async function saveFeedbackSettings(
   patch: Partial<Pick<FeedbackSettings, 'enabled' | 'agents' | 'agentDiagnostics'>> & { rememberDiagnostics?: boolean },
 ): Promise<FeedbackSettings> {
   return parseSettings(await daemonCliPost(scope, 'product-feedback/settings', patch))
+}
+
+/** A person's answer to the agent question, as one POST: `agents`,
+ *  `agentPlatform` and `agentAttach` always together, so the daemon never
+ *  sees the parts alone (409 `answer_agents_first`). No sends
+ *  `{agents: false, agentPlatform: false, agentAttach: "none"}`. */
+export function agentReportsBody(answer: AgentReportsAnswer, attach: readonly string[]): Record<string, unknown> {
+  if (answer === 'off') return { agents: false, agentPlatform: false, agentAttach: 'none' }
+  return { agents: true, agentPlatform: answer === 'all', agentAttach: attach.length ? [...attach] : 'none' }
+}
+
+export async function saveAgentReports(
+  scope: ServerScope,
+  answer: AgentReportsAnswer,
+  attach: readonly string[],
+): Promise<FeedbackSettings> {
+  return parseSettings(await daemonCliPost(scope, 'product-feedback/settings', agentReportsBody(answer, attach)))
 }
 
 export async function collectDiagnostics(

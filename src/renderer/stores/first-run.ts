@@ -39,10 +39,13 @@ export const FIRST_RUN_KESSEL_WELCOME_PATH = 'first-run/kessel/welcome'
 /** Row ids this client knows, in the contract's order. `chief_of_staff`
  *  takes `first_agent`'s place while the server's Kessel switch is on; the
  *  daemon sends one or the other. `dev_tools` comes first, and only while
- *  git doesn't run on the server. Unknown ids are dropped. */
+ *  git doesn't run on the server. `agent_reports` (whether agents may
+ *  report problems) is the owner's and admins' only. Unknown ids are
+ *  dropped. */
 export const FIRST_RUN_ROW_IDS = [
   'dev_tools',
   'llm_sign_in',
+  'agent_reports',
   'chief_of_staff',
   'first_agent',
   'tunnel',
@@ -56,6 +59,7 @@ export type FirstRunRowId = (typeof FIRST_RUN_ROW_IDS)[number]
 export const FIRST_RUN_OPENS = [
   'dev_tools',
   'llm_sign_in',
+  'agent_reports',
   'add_workspace',
   'tunnel',
   'phone',
@@ -71,6 +75,12 @@ export type FirstRunNote = (typeof FIRST_RUN_NOTES)[number]
 
 /** The offer the LLM sign-in sheet shows once a tool is signed in. */
 export type FirstRunOffer = 'meet_kessel'
+
+/** Cards the daemon offers this person whatever the switches (`offers`):
+ *  `agent_reports`, the agent-reports card, once, on a server already in
+ *  use (plan-agent-reports-opt-in-app-v1). Unknown ids are dropped. */
+export const FIRST_RUN_CARD_OFFERS = ['agent_reports'] as const
+export type FirstRunCardOffer = (typeof FIRST_RUN_CARD_OFFERS)[number]
 
 /** The server's live Kessel (the `orchestrator` seat). */
 export interface KesselSeat {
@@ -125,6 +135,8 @@ export interface FirstRunDoc {
   kesselFirstRun?: boolean
   /** The server's Kessel, sent either way; null from an older daemon. */
   kesselSeat?: KesselSeatInfo | null
+  /** Cards to offer this person (`offers`); empty from an older daemon. */
+  offers?: FirstRunCardOffer[]
 }
 
 export interface FirstRunEntry {
@@ -202,6 +214,9 @@ export function parseFirstRunDoc(raw: unknown): FirstRunDoc {
     kesselDefaults: parseKesselDefaults(o.kesselDefaults),
     kesselFirstRun: o.kesselFirstRun === true,
     kesselSeat: parseKesselSeatInfo(o.kesselSeat),
+    offers: Array.isArray(o.offers)
+      ? FIRST_RUN_CARD_OFFERS.filter((id) => (o.offers as unknown[]).includes(id))
+      : [],
   }
 }
 
@@ -316,6 +331,9 @@ interface FirstRunStore {
   /** "Not now" on the Kessel offer, kept per person
    *  (`POST first-run/offer/dismiss`). */
   dismissOffer: (scope?: ServerScope) => Promise<void>
+  /** "Ask me later" on the agent-reports card, kept per person (`POST
+   *  first-run/offer/dismiss {offer: "agent_reports"}`, the row's skip). */
+  dismissAgentReports: (scope?: ServerScope) => Promise<void>
   /** Make Kessel (`POST first-run/kessel`). Resolves to the new seat; throws the
    *  daemon's refusal (the sheet shows it). The status is read again. */
   createKessel: (req: CreateKesselRequest, scope?: ServerScope) => Promise<KesselSeat>
@@ -406,6 +424,8 @@ export const useFirstRunStore = create<FirstRunStore>((set, get) => ({
   show: (scope = primaryScope()) => mutate(scope, FIRST_RUN_SHOW_PATH, {}),
   skip: (row, scope = primaryScope()) => mutate(scope, FIRST_RUN_SKIP_PATH, { row }),
   dismissOffer: (scope = primaryScope()) => mutate(scope, FIRST_RUN_OFFER_DISMISS_PATH, {}),
+  dismissAgentReports: (scope = primaryScope()) =>
+    mutate(scope, FIRST_RUN_OFFER_DISMISS_PATH, { offer: 'agent_reports' }),
   createKessel: async (req, scope = primaryScope()) => {
     const body: Record<string, unknown> = { tool: req.tool }
     const name = req.name?.trim()

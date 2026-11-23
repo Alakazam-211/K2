@@ -73,6 +73,7 @@ import {
 export const SETUP_CHECKLIST_COPY: Record<FirstRunRowId, { label: string; line: string }> = {
   dev_tools: { label: 'Install developer tools', line: 'Apple’s tools include git, which workspaces need.' },
   llm_sign_in: { label: 'Sign in to an AI tool', line: 'Claude, Codex or Grok. Your agents think with it.' },
+  agent_reports: { label: 'Agent reports', line: 'Not answered yet. Agents do not send reports until you choose.' },
   chief_of_staff: { label: 'Hire your Chief of Staff', line: 'Your lead agent. Kessel hires it with you.' },
   first_agent: { label: 'Make your first agent', line: 'Each workspace is an agent with its own folder.' },
   tunnel: { label: 'Link your subdomain', line: 'Gives this server an address of its own at k2.dev, so your phone and other people can reach it.' },

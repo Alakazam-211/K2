@@ -24,6 +24,7 @@ import CreateAgentSheet from './components/AgentTemplates/CreateAgentSheet'
 import WhatsNewModal from './components/WhatsNewModal/WhatsNewModal'
 import OwnerAccountPrompt from './components/OwnerAccountPrompt/OwnerAccountPrompt'
 import AppsReadyOffer from './components/AppsReadyOffer/AppsReadyOffer'
+import { AgentReportsHost } from './components/AgentReports/AgentReportsHost'
 import { UnsavedChangesModalHost } from './components/UnsavedChangesModal/UnsavedChangesModal'
 import { askBeforeBoardFileLoss } from './lib/board-file/board-file-tabs'
 import MemoryWatcher from './components/MemoryWatcher/MemoryWatcher'
@@ -1185,6 +1186,9 @@ function AppRoot(): React.JSX.Element {
       <OwnerAccountPrompt />
       {/* "Get this server ready for Apps": the owners' card (the daemon says when). */}
       <AppsReadyOffer />
+      {/* May agents report problems: the setup row's card, Settings' Choose
+          now, and the one-time offer on a server already in use. */}
+      <AgentReportsHost />
       {/* Kessel at first run: opened by the sign-in offer or the setup checklist. */}
       <KesselSheet />
       {/* Before a Claude sign-in ends: the owners' pop-up (the daemon says which). */}

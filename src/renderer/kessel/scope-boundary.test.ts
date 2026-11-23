@@ -165,6 +165,8 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   // 0.46.16 "Get this server ready for Apps": the owner's one-click card is
   // about the window's own server's App setup, like the Settings App rows.
   'components/AppsReadyOffer/apps-ready-api.ts',
+  // The agent-reports card's one host per window: the window's server.
+  'components/AgentReports/AgentReportsHost.tsx',
   'components/Settings/sections/AdminAccessDialogs.tsx',
   'components/Settings/sections/AdminAccessPanel.tsx',
   'components/Settings/sections/ApiTokensSection.tsx',

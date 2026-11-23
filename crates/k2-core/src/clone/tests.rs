@@ -2252,3 +2252,323 @@ fn unpack_keeps_file_modes_but_never_setuid_setgid_or_sticky() {
         assert_eq!(got, *want, "{rel}: header {header:o} unpacks as {want:o}, never setuid/setgid/sticky");
     }
 }
+
+// ── Bundles made on another machine: what an unpack writes, and where ──
+
+/// One archive entry written with its name bytes as given (the tar
+/// crate's own path setter refuses `..` and absolute names, which a bundle
+/// from another machine may still hold).
+struct RawEntry<'a> {
+    name: &'a str,
+    kind: tar::EntryType,
+    link: Option<&'a str>,
+    body: &'a [u8],
+}
+
+fn file_entry<'a>(name: &'a str, body: &'a [u8]) -> RawEntry<'a> {
+    RawEntry { name, kind: tar::EntryType::Regular, link: None, body }
+}
+
+fn build_raw_bundle(out: &Path, manifest: &CloneManifest, entries: &[RawEntry]) {
+    let f = fs::File::create(out).unwrap();
+    let mut b = tar::Builder::new(flate2::write::GzEncoder::new(f, flate2::Compression::default()));
+    let manifest_json = serde_json::to_vec(manifest).unwrap();
+    let mut h = tar::Header::new_gnu();
+    h.set_size(manifest_json.len() as u64);
+    h.set_mode(0o644);
+    h.set_cksum();
+    b.append_data(&mut h, "manifest.json", &manifest_json[..]).unwrap();
+    for e in entries {
+        let mut h = tar::Header::new_gnu();
+        {
+            let gnu = h.as_gnu_mut().expect("a GNU header");
+            let name = e.name.as_bytes();
+            assert!(name.len() < gnu.name.len(), "test entry name too long: {}", e.name);
+            gnu.name[..name.len()].copy_from_slice(name);
+            if let Some(link) = e.link {
+                let link = link.as_bytes();
+                assert!(link.len() < gnu.linkname.len(), "test link target too long");
+                gnu.linkname[..link.len()].copy_from_slice(link);
+            }
+        }
+        h.set_entry_type(e.kind);
+        h.set_size(e.body.len() as u64);
+        h.set_mode(0o644);
+        h.set_cksum();
+        b.append(&h, e.body).unwrap();
+    }
+    b.into_inner().unwrap().finish().unwrap();
+}
+
+/// A fresh `<root>/{dest-parent,home}` for one unpack, plus a bundle path.
+struct UnpackSite {
+    root: TempDir,
+    dest_parent: PathBuf,
+    home: PathBuf,
+    bundle: PathBuf,
+}
+
+fn unpack_site(label: &str) -> UnpackSite {
+    let root = TempDir::new(label);
+    let dest_parent = root.path().join("dest-parent");
+    let home = root.path().join("home");
+    fs::create_dir_all(&dest_parent).unwrap();
+    fs::create_dir_all(&home).unwrap();
+    let bundle = root.path().join("bundle.tar.gz");
+    UnpackSite { root, dest_parent, home, bundle }
+}
+
+/// Every file under `root` (links not followed), `/`-joined relative paths.
+fn files_under(root: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in fs::read_dir(&d).unwrap() {
+            let p = e.unwrap().path();
+            let m = fs::symlink_metadata(&p).unwrap();
+            if m.is_dir() {
+                stack.push(p);
+            } else {
+                out.push(p.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+const RAW_SOURCE: &str = "/src/proj";
+
+#[test]
+fn unpack_refuses_entries_with_parent_parts_and_writes_nothing() {
+    let slug = claude_project_hash(RAW_SOURCE);
+    let session_escape = format!("sessions/{slug}/../../../escaped-4.jsonl");
+    for name in [
+        "workspace/../escaped-1.txt",
+        "workspace/../../escaped-2.txt",
+        "workspace/sub/../../../escaped-3.txt",
+        "memory/../../../../escaped-5.txt",
+        session_escape.as_str(),
+        "providers/codex/sessions/../../../escaped-6.jsonl",
+        "providers/../../escaped-7.txt",
+    ] {
+        let site = unpack_site("unpack-parent-parts");
+        build_raw_bundle(
+            &site.bundle,
+            &manual_manifest(RAW_SOURCE),
+            &[file_entry("workspace/README.md", b"fine\n"), file_entry(name, b"out of place\n")],
+        );
+        let err = unpack_bundle(&site.bundle, &site.dest_parent, &site.home)
+            .expect_err(&format!("{name} must refuse the bundle"));
+        assert!(err.contains("not a relative path of plain names"), "{name}: {err}");
+        let landed: Vec<_> = files_under(site.root.path()).into_iter().filter(|f| f != "bundle.tar.gz").collect();
+        assert!(landed.is_empty(), "{name}: nothing is written, found {landed:?}");
+    }
+}
+
+#[test]
+fn unpack_refuses_absolute_entries() {
+    for name in ["/workspace/abs.txt", "/escaped-abs.txt", "//workspace/abs2.txt"] {
+        let site = unpack_site("unpack-absolute");
+        build_raw_bundle(
+            &site.bundle,
+            &manual_manifest(RAW_SOURCE),
+            &[file_entry("workspace/README.md", b"fine\n"), file_entry(name, b"out of place\n")],
+        );
+        let err = unpack_bundle(&site.bundle, &site.dest_parent, &site.home)
+            .expect_err(&format!("{name} must refuse the bundle"));
+        assert!(err.contains("not a relative path of plain names"), "{name}: {err}");
+        assert_eq!(fs::read_dir(&site.dest_parent).unwrap().count(), 0, "{name}: no workspace folder is made");
+    }
+}
+
+#[test]
+fn unpack_refuses_symlink_entries_and_files_through_them() {
+    // A symlink entry on its own, then ones with a file written through them.
+    let cases: Vec<Vec<RawEntry>> = vec![
+        vec![
+            RawEntry { name: "workspace/link", kind: tar::EntryType::Symlink, link: Some("../../outside"), body: b"" },
+            file_entry("workspace/README.md", b"fine\n"),
+        ],
+        vec![
+            RawEntry { name: "workspace/link", kind: tar::EntryType::Symlink, link: Some("../../outside"), body: b"" },
+            file_entry("workspace/link/planted.txt", b"through the link\n"),
+        ],
+        vec![
+            RawEntry { name: "memory/link", kind: tar::EntryType::Symlink, link: Some("/"), body: b"" },
+            file_entry("memory/link/planted.txt", b"through the link\n"),
+        ],
+    ];
+    for (i, entries) in cases.iter().enumerate() {
+        let site = unpack_site("unpack-symlink-entry");
+        let outside = site.root.path().join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        build_raw_bundle(&site.bundle, &manual_manifest(RAW_SOURCE), entries);
+        let err = unpack_bundle(&site.bundle, &site.dest_parent, &site.home)
+            .expect_err(&format!("case {i}: a symlink entry refuses the bundle"));
+        assert!(err.contains("is a symlink"), "case {i}: {err}");
+        assert!(files_under(&outside).is_empty(), "case {i}: nothing lands through the link");
+        assert_eq!(fs::read_dir(&site.dest_parent).unwrap().count(), 0, "case {i}: no workspace folder is made");
+        assert!(files_under(&site.home).is_empty(), "case {i}: nothing lands under home");
+    }
+}
+
+#[test]
+fn unpack_refuses_hard_link_entries() {
+    let site = unpack_site("unpack-hardlink-entry");
+    let outside = site.root.path().join("outside.txt");
+    fs::write(&outside, "keep\n").unwrap();
+    build_raw_bundle(
+        &site.bundle,
+        &manual_manifest(RAW_SOURCE),
+        &[
+            RawEntry { name: "workspace/hl", kind: tar::EntryType::Link, link: Some("../../outside.txt"), body: b"" },
+            file_entry("workspace/README.md", b"fine\n"),
+        ],
+    );
+    let err = unpack_bundle(&site.bundle, &site.dest_parent, &site.home).expect_err("a hard link entry refuses the bundle");
+    assert!(err.contains("is a hard link"), "{err}");
+    assert_eq!(fs::read_to_string(&outside).unwrap(), "keep\n");
+    assert_eq!(fs::read_dir(&site.dest_parent).unwrap().count(), 0, "no workspace folder is made");
+}
+
+#[test]
+fn unpack_places_provider_files_only_in_listed_session_folders() {
+    let site = unpack_site("unpack-provider-names");
+    build_raw_bundle(
+        &site.bundle,
+        &manual_manifest(RAW_SOURCE),
+        &[
+            file_entry("providers/ssh/authorized_keys", b"ssh-ed25519 AAAA other\n"),
+            file_entry("providers/config/autostart/x.desktop", b"[Desktop Entry]\n"),
+            file_entry("providers/codex/config.toml", b"[mcp_servers.x]\n"),
+            file_entry("providers/gemini/settings.json", b"{}\n"),
+            file_entry("providers/cursor/mcp.json", b"{}\n"),
+            file_entry("providers/grok/user-settings.json", b"{}\n"),
+            file_entry("providers/claude/settings.json", b"{}\n"),
+            file_entry("providers/codex/sessions/2026/11/01/rollout-1.jsonl", b"{}\n"),
+        ],
+    );
+    unpack_bundle(&site.bundle, &site.dest_parent, &site.home).expect("unlisted provider paths are skipped");
+    assert_eq!(
+        files_under(&site.home),
+        vec![".codex/sessions/2026/11/01/rollout-1.jsonl".to_string()],
+        "only the codex session lands under home"
+    );
+}
+
+#[test]
+fn unpack_skips_session_entries_outside_the_source_slug() {
+    let site = unpack_site("unpack-session-shape");
+    let slug = claude_project_hash(RAW_SOURCE);
+    let ok = format!("sessions/{slug}/a.jsonl");
+    let deep = format!("sessions/{slug}/sub/b.jsonl");
+    let other_ext = format!("sessions/{slug}/c.sh");
+    build_raw_bundle(
+        &site.bundle,
+        &manual_manifest(RAW_SOURCE),
+        &[
+            file_entry(&ok, b"{}\n"),
+            file_entry("sessions/-Users-someone-else/x.jsonl", b"{}\n"),
+            file_entry(&deep, b"{}\n"),
+            file_entry(&other_ext, b"echo\n"),
+        ],
+    );
+    let (res, _m) = unpack_bundle(&site.bundle, &site.dest_parent, &site.home).unwrap();
+    assert_eq!(
+        files_under(&site.home.join(".claude/projects")),
+        vec![format!("{}/a.jsonl", res.remote_slug)],
+        "only the source slug's session lands, under the new slug"
+    );
+}
+
+/// A link already under home (here inside a provider's session folder) is
+/// never followed: the file the bundle names below it is not written.
+#[cfg(unix)]
+#[test]
+fn unpack_never_writes_through_a_link_already_on_this_machine() {
+    let site = unpack_site("unpack-existing-link");
+    let outside = site.root.path().join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    fs::create_dir_all(site.home.join(".codex/sessions")).unwrap();
+    std::os::unix::fs::symlink(&outside, site.home.join(".codex/sessions/2026")).unwrap();
+    build_raw_bundle(
+        &site.bundle,
+        &manual_manifest(RAW_SOURCE),
+        &[file_entry("providers/codex/sessions/2026/11/rollout-1.jsonl", b"{}\n")],
+    );
+    let err = unpack_bundle(&site.bundle, &site.dest_parent, &site.home).expect_err("a link below the session folder");
+    assert!(err.contains("not followed"), "{err}");
+    assert!(files_under(&outside).is_empty(), "nothing lands through the link");
+}
+
+/// The dest folder is claimed new: a link or folder already at the name is
+/// never adopted, and a manifest name that is not one plain name falls
+/// back to `workspace`.
+#[cfg(unix)]
+#[test]
+fn unpack_claims_a_new_dest_folder() {
+    let site = unpack_site("unpack-claim");
+    let outside = site.root.path().join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    std::os::unix::fs::symlink(&outside, site.dest_parent.join("proj")).unwrap();
+    build_raw_bundle(&site.bundle, &manual_manifest(RAW_SOURCE), &[file_entry("workspace/README.md", b"fine\n")]);
+    let (res, _m) = unpack_bundle(&site.bundle, &site.dest_parent, &site.home).unwrap();
+    assert_eq!(res.dest_path, site.dest_parent.join("proj (1)"));
+    assert!(files_under(&outside).is_empty(), "the linked name is skipped, not written into");
+
+    for odd in ["/src/..", "/", ""] {
+        let site = unpack_site("unpack-claim-name");
+        build_raw_bundle(&site.bundle, &manual_manifest(odd), &[file_entry("workspace/README.md", b"fine\n")]);
+        let (res, _m) = unpack_bundle(&site.bundle, &site.dest_parent, &site.home).unwrap();
+        assert_eq!(res.dest_path, site.dest_parent.join("workspace"), "{odd}");
+    }
+}
+
+/// A bundle K2 built unpacks every workspace file byte for byte: odd
+/// names, nested folders and every byte value.
+#[test]
+fn unpack_good_bundle_is_byte_identical() {
+    let fx = build_fixture();
+    let all_bytes: Vec<u8> = (0..=255u8).cycle().take(70_000).collect();
+    let extra: Vec<(&str, Vec<u8>)> = vec![
+        ("bin/blob.bin", all_bytes),
+        ("deep/a/b/c/d/e/notes with spaces.md", b"deep\n".to_vec()),
+        ("unicode/\u{e9}t\u{e9} \u{1f600}.txt", "\u{e9}\n".as_bytes().to_vec()),
+        (".k2/wiki/Home.md", b"# Home\n".to_vec()),
+        ("empty.txt", Vec::new()),
+    ];
+    for (rel, body) in &extra {
+        let p = fx.project.join(rel);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(&p, body).unwrap();
+    }
+    let project = fx.project.to_string_lossy().to_string();
+    let inv = inventory(&project, opts(&fx.home)).unwrap();
+    let bundle = fx._root.path().join("good-bundle.tar.gz");
+    build_bundle(&inv, &opts(&fx.home), "2026-11-23T00:00:00Z".to_string(), None, None, vec![], &bundle).unwrap();
+
+    let dest_parent = fx._root.path().join("dest-parent");
+    let dest_home = fx._root.path().join("dest-home");
+    fs::create_dir_all(&dest_parent).unwrap();
+    fs::create_dir_all(&dest_home).unwrap();
+    let (res, _m) = unpack_bundle(&bundle, &dest_parent, &dest_home).unwrap();
+
+    let workspace: Vec<_> = inv.entries.iter().filter(|e| e.class == DestinationClass::Workspace).collect();
+    for (rel, _) in &extra {
+        assert!(
+            workspace.iter().any(|e| e.rel_path.replace('\\', "/") == *rel),
+            "the fixture's {rel} is in the bundle"
+        );
+    }
+    let mut want: Vec<String> = workspace.iter().map(|e| e.rel_path.replace('\\', "/")).collect();
+    want.sort();
+    assert_eq!(files_under(&res.dest_path), want, "the same workspace files, no more");
+    for e in &workspace {
+        let src = fs::read(&e.abs_path).unwrap();
+        let got = fs::read(res.dest_path.join(&e.rel_path)).unwrap();
+        assert!(src == got, "{} unpacks byte for byte", e.rel_path);
+    }
+    let memory = dest_home.join(".claude/projects").join(&res.remote_slug).join("memory/MEMORY.md");
+    assert_eq!(fs::read_to_string(memory).unwrap(), "## Memory Index\n");
+}

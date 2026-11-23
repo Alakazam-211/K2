@@ -251,6 +251,8 @@ pub use k2_client::env_names;
 /// request and card-view types plus the two switches. Off by default.
 pub mod permission;
 pub mod private_fs;
+/// Write under a trusted folder without following a link in the rest of the path.
+pub mod confined_fs;
 pub mod bg_proc;
 #[cfg(windows)]
 pub mod win_fs;

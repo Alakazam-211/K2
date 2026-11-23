@@ -10,7 +10,12 @@
 //! - `memory/<rel>`     → `<remote-home>/.claude/projects/<remote-slug>/memory/<rel>`
 //! - `sessions/<rel>`   → `<remote-home>/.claude/projects/<remote-slug-rerooted>/<rel>`
 //! - `providers/<rest>` → `<remote-home>/.<rest>` (with Cursor MD5 / Grok
-//!   percent-encode re-key; Hermes export merges into state.db)
+//!   percent-encode re-key; Hermes export merges into state.db), only for
+//!   the fixed provider list and session folders in `reroot_provider`
+//!
+//! Every entry must be a regular file at a relative path of plain names
+//! (checked for the whole bundle before anything is written), and every
+//! file is written without following a link below the folder it lands in.
 //!
 //! `dest_path = <dest_parent>/<source-name>` (collision-safe `name (1)`).
 //! The remote slug is recomputed PURELY from the final dest path
@@ -59,18 +64,23 @@ pub fn unpack_bundle(
 ) -> Result<(UnpackResult, CloneManifest), String> {
     let manifest = super::read_manifest_from_bundle(bundle_path)?;
 
+    // Every entry is checked before anything is made or written: a bundle
+    // with one entry that is not a regular file at a relative path of
+    // plain names unpacks nothing.
+    check_bundle_entries(bundle_path)?;
+
     // ── source name = basename of the source project path ─────────────
     let source_name = Path::new(&manifest.source_project_path)
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
-        .filter(|n| !n.is_empty())
+        .filter(|n| is_plain_folder_name(n))
         .unwrap_or_else(|| "workspace".to_string());
 
-    // ── collision-safe dest path ──────────────────────────────────────
-    let dest_path = collision_safe_dir(dest_parent, &source_name);
-
-    // Create the dest workspace dir UP FRONT so the slug below is computed
-    // from a path that EXISTS — `claude_project_hash` canonicalizes symlinks
+    // ── claim a new dest folder (collision-safe) ──────────────────────
+    // Made with `create_dir`, so a folder or link already there is never
+    // adopted (`name (1)`, `name (2)`, … instead). It is made UP FRONT so
+    // the slug below is computed from a path that EXISTS —
+    // `claude_project_hash` canonicalizes symlinks
     // (GH#25), and canonicalize only resolves an existing path. On macOS the
     // dest commonly lives under a symlinked prefix (`/tmp`→`/private/tmp`,
     // `/var`→`/private/var`); if we slug the not-yet-created path we'd get the
@@ -78,8 +88,7 @@ pub fn unpack_bundle(
     // project path → resume/exists-check/#23 repair) slug the canonical form
     // — sessions would land in a dir Claude never reads. Creating it first
     // makes the unpack slug match what the rest of the system computes.
-    std::fs::create_dir_all(&dest_path)
-        .map_err(|e| format!("create dest dir {}: {e}", dest_path.display()))?;
+    let dest_path = claim_dest_dir(dest_parent, &source_name)?;
 
     // ── recompute remote slug from the FINAL dest path ────────────────
     let remote_slug = claude_project_hash(&dest_path.to_string_lossy());
@@ -105,7 +114,6 @@ pub fn unpack_bundle(
         SessionPathRewrite::new(&source_project_path, &dest_project_path);
 
     let projects_dir = home.join(".claude").join("projects");
-    let remote_slug_dir = projects_dir.join(&remote_slug);
 
     // Track Gemini slugs we write so we can merge projects.json once.
     let mut gemini_slugs: HashSet<String> = HashSet::new();
@@ -123,6 +131,8 @@ pub fn unpack_bundle(
             .path()
             .map_err(|e| format!("entry path: {e}"))?
             .to_path_buf();
+        // Checked again here (this is the archive's second read).
+        check_entry(entry.header(), &archive_path)?;
 
         // manifest.json lives at the root — already parsed above.
         if archive_path == Path::new("manifest.json") {
@@ -171,7 +181,7 @@ pub fn unpack_bundle(
                         }
                     }
                 }
-                Some(ProviderDest::File(out)) => {
+                Some(ProviderDest::File { root, rel }) => {
                     // SOURCE→DEST rewrite for text session files; best-effort
                     // byte rewrite inside Cursor store.db.
                     if provider_needs_path_rewrite(&archive_path)
@@ -179,37 +189,31 @@ pub fn unpack_bundle(
                     {
                         session_rewrite.apply_in_place(&mut buf);
                     }
-                    if let Some(parent) = out.parent() {
-                        std::fs::create_dir_all(parent)
-                            .map_err(|e| format!("create dir {}: {e}", parent.display()))?;
-                    }
-                    std::fs::write(&out, &buf)
-                        .map_err(|e| format!("write {}: {e}", out.display()))?;
-                    apply_mode(&out, mode)?;
+                    write_under(&root, &rel, &buf, mode)?;
                     if let Some(slug) = gemini_slug_from_rest(&rest) {
                         gemini_slugs.insert(slug);
                     }
                 }
-                None => continue,
+                None => {
+                    crate::log_debug!(
+                        "[clone/unpack] skipped {}: not a provider session path this K2 places",
+                        archive_path.display()
+                    );
+                }
             }
             continue;
         }
 
-        let out = match reroot(
+        let (root, rel) = match reroot(
             &archive_path,
             &dest_path,
-            &remote_slug_dir,
+            &projects_dir,
             &source_slug,
             &remote_slug,
         ) {
             Some(p) => p,
-            None => continue, // unknown prefix — skip defensively.
+            None => continue, // unknown prefix or shape — skip defensively.
         };
-
-        if let Some(parent) = out.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("create dir {}: {e}", parent.display()))?;
-        }
 
         // GH#23: rewrite embedded SOURCE→DEST workspace paths inside session
         // `.jsonl` files only (the `sessions/` class). A no-op when the
@@ -221,9 +225,7 @@ pub fn unpack_bundle(
             session_rewrite.apply_in_place(&mut buf);
         }
 
-        std::fs::write(&out, &buf)
-            .map_err(|e| format!("write {}: {e}", out.display()))?;
-        apply_mode(&out, mode)?;
+        write_under(&root, &rel, &buf, mode)?;
     }
 
     // Merge Gemini dest_path → slug into projects.json (additive).
@@ -254,18 +256,71 @@ pub(crate) fn entry_mode(header: &tar::Header) -> Option<u32> {
     header.mode().ok().map(|m| m & 0o777)
 }
 
-/// Give an unpacked file the mode it had on the source (`fs::write` makes
+/// Write one unpacked file at `<root>/<rel>`. `root` is a folder this
+/// unpack picked every part of (the claimed workspace folder, the new
+/// slug's memory folder, `~/.claude/projects`, or a listed provider's
+/// session folder), made here if missing; `rel` comes from the archive and
+/// is walked without following a link ([`crate::confined_fs`]).
+/// `mode` gives the file the bits it had on the source (`fs::write` made
 /// new files 0666 & umask: every script lost its +x before 0.46.3).
-fn apply_mode(out: &Path, mode: Option<u32>) -> Result<(), String> {
-    #[cfg(unix)]
-    if let Some(m) = mode {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(out, std::fs::Permissions::from_mode(m))
-            .map_err(|e| format!("chmod {:o} {}: {e}", m, out.display()))?;
+fn write_under(root: &Path, rel: &Path, bytes: &[u8], mode: Option<u32>) -> Result<(), String> {
+    std::fs::create_dir_all(root).map_err(|e| format!("create dir {}: {e}", root.display()))?;
+    crate::confined_fs::write_file(root, rel, bytes, mode)
+        .map_err(|e| format!("write {} under {}: {e}", rel.display(), root.display()))
+}
+
+/// Read every entry header of the bundle and check it ([`check_entry`])
+/// without writing anything.
+fn check_bundle_entries(bundle_path: &Path) -> Result<(), String> {
+    let file = std::fs::File::open(bundle_path)
+        .map_err(|e| format!("open bundle {}: {e}", bundle_path.display()))?;
+    let mut ar = tar::Archive::new(flate2::read::GzDecoder::new(file));
+    for entry in ar.entries().map_err(|e| format!("read bundle: {e}"))? {
+        let entry = entry.map_err(|e| format!("read bundle entry: {e}"))?;
+        let archive_path = entry.path().map_err(|e| format!("entry path: {e}"))?.to_path_buf();
+        check_entry(entry.header(), &archive_path)?;
     }
-    #[cfg(not(unix))]
-    let _ = (out, mode);
     Ok(())
+}
+
+/// A clone bundle holds only regular files (the builder appends each
+/// file's bytes, never a link or a folder entry), each at a relative path
+/// of plain names. Anything else refuses the whole bundle: a `..`, `.`,
+/// root or drive part, an absolute path, or a symlink, hard link, folder or
+/// device entry.
+fn check_entry(header: &tar::Header, archive_path: &Path) -> Result<(), String> {
+    let kind = header.entry_type();
+    if !kind.is_file() {
+        let what = if kind.is_symlink() {
+            "a symlink"
+        } else if kind.is_hard_link() {
+            "a hard link"
+        } else if kind.is_dir() {
+            "a folder entry"
+        } else {
+            "not a regular file"
+        };
+        return Err(format!(
+            "clone bundle entry {} is {what}; a clone bundle holds only regular files, so nothing was unpacked",
+            archive_path.display()
+        ));
+    }
+    if archive_path.is_absolute() || crate::confined_fs::check_rel(archive_path).is_err() {
+        return Err(format!(
+            "clone bundle entry {} is not a relative path of plain names, so nothing was unpacked",
+            archive_path.display()
+        ));
+    }
+    Ok(())
+}
+
+/// A folder name from the manifest that is one plain name on this OS (on
+/// Windows also no `:` or `\`).
+fn is_plain_folder_name(name: &str) -> bool {
+    let odd = name.is_empty() || name == "." || name == ".." || name.contains(['/', '\0']);
+    #[cfg(windows)]
+    let odd = odd || name.contains([':', '\\']);
+    !odd
 }
 
 /// Read `threads/threads.json` from the archive, refusing more than the
@@ -285,16 +340,18 @@ fn read_threads_entry<R: std::io::Read>(entry: &mut tar::Entry<'_, R>) -> Result
     Ok(buf)
 }
 
-/// Map a bundle archive path to its on-disk destination, by class prefix.
+/// Map a bundle archive path to `(root, rel)` by class prefix: the file
+/// lands at `<root>/<rel>`, with `rel` walked without following a link.
 /// Returns `None` for an unrecognized prefix (including `providers/`,
-/// which is handled separately).
+/// which is handled separately) and for a `sessions/` entry that is not
+/// `<source-slug>[-branch]/<file>.jsonl`.
 fn reroot(
     archive_path: &Path,
     dest_path: &Path,
-    remote_slug_dir: &Path,
+    projects_dir: &Path,
     source_slug: &str,
     remote_slug: &str,
-) -> Option<PathBuf> {
+) -> Option<(PathBuf, PathBuf)> {
     let mut comps = archive_path.components();
     let first = comps.next()?.as_os_str().to_string_lossy().to_string();
     let rest: PathBuf = comps.as_path().to_path_buf();
@@ -305,16 +362,13 @@ fn reroot(
 
     match first.as_str() {
         // workspace/<rel> → <dest_path>/<rel>
-        "workspace" => Some(dest_path.join(rest)),
+        "workspace" => Some((dest_path.to_path_buf(), rest)),
         // memory/<rel> → <remote-slug>/memory/<rel>
-        "memory" => Some(remote_slug_dir.join("memory").join(rest)),
+        "memory" => Some((projects_dir.join(remote_slug).join("memory"), rest)),
         // sessions/<source-slug[-branch]>/<id>.jsonl → re-root the leading
         // <source-slug> segment onto the recomputed remote slug, keeping
         // any -<branch> worktree suffix.
-        "sessions" => {
-            let projects_dir = remote_slug_dir.parent()?;
-            Some(projects_dir.join(reroot_session_rel(&rest, source_slug, remote_slug)))
-        }
+        "sessions" => Some((projects_dir.to_path_buf(), reroot_session_rel(&rest, source_slug, remote_slug)?)),
         _ => None,
     }
 }
@@ -329,14 +383,16 @@ fn strip_first_component(path: &Path) -> PathBuf {
 /// Re-root a session rel path (`<source-slug>[-branch]/<id>.jsonl`) onto the
 /// recomputed remote slug. The first path segment is the source slug dir
 /// (possibly with a `-<branch>` suffix); swap its `<source-slug>` prefix for
-/// `<remote-slug>` and keep the rest verbatim.
-fn reroot_session_rel(rel: &Path, source_slug: &str, remote_slug: &str) -> PathBuf {
+/// `<remote-slug>` and keep the file name. `None` for any other shape (the
+/// source only bundles that one), so a session never lands in another
+/// project's folder.
+fn reroot_session_rel(rel: &Path, source_slug: &str, remote_slug: &str) -> Option<PathBuf> {
     let mut comps = rel.components();
-    let dir_seg = match comps.next() {
-        Some(c) => c.as_os_str().to_string_lossy().to_string(),
-        None => return rel.to_path_buf(),
-    };
-    let remainder: PathBuf = comps.as_path().to_path_buf();
+    let dir_seg = comps.next()?.as_os_str().to_string_lossy().to_string();
+    let file = comps.next()?.as_os_str().to_os_string();
+    if comps.next().is_some() || Path::new(&file).extension().and_then(|e| e.to_str()) != Some("jsonl") {
+        return None;
+    }
 
     // dir_seg is `<source-slug>` or `<source-slug>-<branch>`.
     let new_dir = if dir_seg == source_slug {
@@ -344,15 +400,9 @@ fn reroot_session_rel(rel: &Path, source_slug: &str, remote_slug: &str) -> PathB
     } else if let Some(branch_suffix) = dir_seg.strip_prefix(&format!("{source_slug}-")) {
         format!("{remote_slug}-{branch_suffix}")
     } else {
-        // Unexpected shape — keep as-is rather than dropping the session.
-        dir_seg
+        return None;
     };
-
-    if remainder.as_os_str().is_empty() {
-        PathBuf::from(new_dir)
-    } else {
-        PathBuf::from(new_dir).join(remainder)
-    }
+    Some(PathBuf::from(new_dir).join(file))
 }
 
 /// True when a bundle archive path belongs to the `sessions/` class
@@ -471,21 +521,25 @@ pub(super) fn replace_bytes(haystack: &[u8], needle: &[u8], replacement: &[u8]) 
     Some(out)
 }
 
-/// `<parent>/<name>`, or `<parent>/name (1)`, `name (2)`, … if taken.
-/// Mirrors the PRD's collision-safe naming.
-fn collision_safe_dir(parent: &Path, name: &str) -> PathBuf {
-    let direct = parent.join(name);
-    if !direct.exists() {
-        return direct;
-    }
-    for n in 1..=9999 {
-        let candidate = parent.join(format!("{name} ({n})"));
-        if !candidate.exists() {
-            return candidate;
+/// Make and return `<parent>/<name>`, or `<parent>/name (1)`, `name (2)`,
+/// … when taken (the PRD's collision-safe naming). Each try is one
+/// `create_dir`, so a name already used by a folder, file or link is
+/// skipped, never adopted.
+fn claim_dest_dir(parent: &Path, name: &str) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(parent).map_err(|e| format!("create dest parent {}: {e}", parent.display()))?;
+    let candidates = std::iter::once(name.to_string())
+        .chain((1..=9999).map(|n| format!("{name} ({n})")))
+        // Pathological fallback — extremely unlikely.
+        .chain(std::iter::once(format!("{name} ({})", uuid_like())));
+    for candidate in candidates {
+        let path = parent.join(candidate);
+        match std::fs::create_dir(&path) {
+            Ok(()) => return Ok(path),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("create dest dir {}: {e}", path.display())),
         }
     }
-    // Pathological fallback — extremely unlikely.
-    parent.join(format!("{name} ({})", uuid_like()))
+    Err(format!("no free folder name for {name} in {}", parent.display()))
 }
 
 fn uuid_like() -> String {

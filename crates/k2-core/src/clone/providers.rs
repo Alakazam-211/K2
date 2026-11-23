@@ -704,6 +704,13 @@ pub(crate) fn grok_percent_encode_cwd(cwd: &str) -> String {
 /// `rest` is like `gemini/tmp/...`, `cursor/chats/<md5>/...`,
 /// `grok/sessions/<encoded>/...`, `hermes/export.json`.
 ///
+/// Only the fixed provider list below is placed, and only inside the
+/// session folders the source bundles (the layout in this module's doc):
+/// `gemini/tmp/<slug>/chats/…`, `pi/agent/sessions/…`, `codex/sessions/…`,
+/// `grok/sessions/<cwd>/…`, `cursor/chats/<md5>/…`. Anything else (another
+/// provider name, a provider's config or auth file) returns `None` and is
+/// skipped.
+///
 /// Returns `None` for Hermes export (handled as SQL merge, not a file
 /// drop) and unrecognized/empty paths.
 pub(super) fn reroot_provider(
@@ -735,26 +742,47 @@ pub(super) fn reroot_provider(
             // home/.grok/sessions/<dest-encoded>/<uuid>/file
             reroot_grok(&after, home, dest_project_path)
         }
-        "gemini" | "pi" | "codex" => {
-            // home/.<provider>/<after...>
-            Some(ProviderDest::File(
-                home.join(format!(".{provider}")).join(&after),
-            ))
+        // gemini/tmp/<slug>/chats/<file> → home/.gemini/tmp/<slug>/chats/<file>
+        "gemini" => {
+            let rel = strip_lead(&after, &["tmp"])?;
+            let mut parts = rel.components().skip(1);
+            if parts.next()?.as_os_str() != "chats" || parts.next().is_none() {
+                return None;
+            }
+            provider_file(home.join(".gemini").join("tmp"), rel)
         }
-        _ => {
-            // Unknown provider: best-effort home/.<provider>/<rest>
-            Some(ProviderDest::File(
-                home.join(format!(".{provider}")).join(&after),
-            ))
+        // pi/agent/sessions/<…> → home/.pi/agent/sessions/<…>
+        "pi" => provider_file(home.join(".pi").join("agent").join("sessions"), strip_lead(&after, &["agent", "sessions"])?),
+        // codex/sessions/<…> → home/.codex/sessions/<…>
+        "codex" => provider_file(home.join(".codex").join("sessions"), strip_lead(&after, &["sessions"])?),
+        _ => None,
+    }
+}
+
+/// `after` without its leading parts `lead`; `None` when it doesn't begin
+/// with them or nothing follows them.
+fn strip_lead(after: &Path, lead: &[&str]) -> Option<PathBuf> {
+    let mut comps = after.components();
+    for want in lead {
+        if comps.next()?.as_os_str() != *want {
+            return None;
         }
     }
+    let rest = comps.as_path().to_path_buf();
+    (!rest.as_os_str().is_empty()).then_some(rest)
+}
+
+fn provider_file(root: PathBuf, rel: PathBuf) -> Option<ProviderDest> {
+    Some(ProviderDest::File { root, rel })
 }
 
 /// Where a provider archive entry should land.
 #[derive(Debug)]
 pub(super) enum ProviderDest {
-    /// Write bytes to this absolute path (after optional rewrite).
-    File(PathBuf),
+    /// Write bytes (after optional rewrite) at `<root>/<rel>`: `root` is a
+    /// session folder of a listed provider (K2 picks every part of it),
+    /// `rel` is the archive's part, walked without following a link.
+    File { root: PathBuf, rel: PathBuf },
     /// Merge JSON export into dest `~/.hermes/state.db`.
     HermesExport,
 }
@@ -764,9 +792,7 @@ fn reroot_cursor(after: &Path, home: &Path, dest_project_path: &str) -> Option<P
     let mut comps = after.components();
     let chats = comps.next()?.as_os_str().to_string_lossy().to_string();
     if chats != "chats" {
-        return Some(ProviderDest::File(
-            home.join(".cursor").join(after),
-        ));
+        return None;
     }
     let _src_md5 = comps.next()?; // discard source hash
     let remainder: PathBuf = comps.as_path().to_path_buf(); // <uuid>/store.db
@@ -775,12 +801,7 @@ fn reroot_cursor(after: &Path, home: &Path, dest_project_path: &str) -> Option<P
     }
     let dest_root = resolve_root_project_path(dest_project_path);
     let dest_md5 = md5_hex(dest_root.as_bytes());
-    Some(ProviderDest::File(
-        home.join(".cursor")
-            .join("chats")
-            .join(dest_md5)
-            .join(remainder),
-    ))
+    provider_file(home.join(".cursor").join("chats").join(dest_md5), remainder)
 }
 
 fn reroot_grok(after: &Path, home: &Path, dest_project_path: &str) -> Option<ProviderDest> {
@@ -788,7 +809,7 @@ fn reroot_grok(after: &Path, home: &Path, dest_project_path: &str) -> Option<Pro
     let mut comps = after.components();
     let sessions = comps.next()?.as_os_str().to_string_lossy().to_string();
     if sessions != "sessions" {
-        return Some(ProviderDest::File(home.join(".grok").join(after)));
+        return None;
     }
     let _src_encoded = comps.next()?; // discard source encoded cwd
     let remainder: PathBuf = comps.as_path().to_path_buf(); // <uuid>/file
@@ -796,12 +817,7 @@ fn reroot_grok(after: &Path, home: &Path, dest_project_path: &str) -> Option<Pro
         return None;
     }
     let dest_encoded = grok_percent_encode_cwd(dest_project_path);
-    Some(ProviderDest::File(
-        home.join(".grok")
-            .join("sessions")
-            .join(dest_encoded)
-            .join(remainder),
-    ))
+    provider_file(home.join(".grok").join("sessions").join(dest_encoded), remainder)
 }
 
 /// True when the archive path is under `providers/` and looks like a
@@ -1006,8 +1022,9 @@ mod unit_tests {
         let dest_md5 = md5_hex(dest.as_bytes());
         let rest = PathBuf::from(format!("cursor/chats/{src_md5}/uuid-1/store.db"));
         match reroot_provider(&rest, home, src, dest) {
-            Some(ProviderDest::File(p)) => {
-                let s = p.to_string_lossy().replace('\\', "/");
+            Some(ProviderDest::File { root, rel }) => {
+                assert_eq!(root, home.join(".cursor").join("chats").join(&dest_md5));
+                let s = root.join(rel).to_string_lossy().replace('\\', "/");
                 assert!(
                     s.ends_with(&format!(".cursor/chats/{dest_md5}/uuid-1/store.db")),
                     "got {s}"
@@ -1015,6 +1032,36 @@ mod unit_tests {
                 assert!(!s.contains(&src_md5) || src_md5 == dest_md5);
             }
             other => panic!("expected File, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reroot_places_only_listed_providers_inside_their_session_folders() {
+        let home = Path::new("/h");
+        let placed = |rest: &str| match reroot_provider(Path::new(rest), home, "/a", "/b") {
+            Some(ProviderDest::File { root, rel }) => Some(root.join(rel).to_string_lossy().replace('\\', "/")),
+            Some(ProviderDest::HermesExport) => Some("hermes-merge".into()),
+            None => None,
+        };
+        assert_eq!(placed("gemini/tmp/abc/chats/s.jsonl").as_deref(), Some("/h/.gemini/tmp/abc/chats/s.jsonl"));
+        assert_eq!(placed("pi/agent/sessions/x/s.jsonl").as_deref(), Some("/h/.pi/agent/sessions/x/s.jsonl"));
+        assert_eq!(placed("codex/sessions/2026/01/02/rollout-1.jsonl").as_deref(), Some("/h/.codex/sessions/2026/01/02/rollout-1.jsonl"));
+        for rest in [
+            "ssh/authorized_keys",
+            "config/autostart/x.desktop",
+            "bashrc/x",
+            "claude/settings.json",
+            "codex/config.toml",
+            "codex/sessions",
+            "gemini/settings.json",
+            "gemini/tmp/abc/settings.json",
+            "pi/agent/settings.json",
+            "cursor/mcp.json",
+            "cursor/chats/md5only",
+            "grok/user-settings.json",
+            "grok/sessions/enc",
+        ] {
+            assert_eq!(placed(rest), None, "{rest} is not a provider session path");
         }
     }
 

@@ -13,6 +13,8 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 ### Permission cards
 - **An agent can ask to move a published site's name to its workspace with a permission card; the owner approves it in one tap.** After a server move a name can still belong to an old workspace (`label_owned_by_other_workspace`), and only the owner or an admin may `--transfer` it. That refusal, and an agent's own `--transfer`, now end with `Ask with: k2 permission request publish.transfer label=<name>`. The card names the workspace that holds the name now; Allow moves it to the asking workspace, recorded in the access audit log with who allowed it, and the agent runs its command again. If the name moves again before the tap, the card goes stale and nothing changes.
+### Agents
+- Cloning refuses archive entries that would land outside the new workspace.
 
 ## 0.46.17 — Read-only calendar links, live documents that save in groups, and agents that report only with your yes
 

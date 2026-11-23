@@ -69173,6 +69173,10 @@ WHEN YOU ARE REFUSED
 WHAT NOT TO DO
   - Do not print tokens, DSNs, or capability-pass secrets
   - Do not pass passwords on argv
+  - Do not type a secret at a hidden prompt from a program: pipe it to
+    the --*-stdin flag (printf '%s' "$tok" | k2 ... --token-stdin).
+    A hidden prompt turns echo off before it shows, and drops what was
+    typed before it.
   - Do not treat Connect-user names as agent addresses
   - Do not assume `k2 study` succeeding means the daemon is up
 

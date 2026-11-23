@@ -719,10 +719,27 @@ pub fn diff_between_branches(
     collect_summary(&diff)
 }
 
+/// Refuse a caller's revision spec that searches commit messages:
+/// `:/text` or `<rev>^{/text}`. Every place that resolves a caller's
+/// ref, base or sha calls this right before handing it to libgit2 or
+/// `git rev-parse`. The whole string is checked, not only its start, so
+/// `main:/x` and `HEAD~1^{/fix}` are refused too. `<rev>:<path>` (a colon
+/// with no slash right after it) is still allowed.
+pub fn refuse_message_search_revspec(spec: &str) -> Result<(), String> {
+    if spec.contains(":/") || spec.contains("^{/") {
+        return Err(
+            "revision specs that search commit messages (`:/…`, `^{/…}`) aren't supported here; name a branch, tag or commit"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
 /// Get the content of a file at a specific git reference (branch, commit, HEAD, etc.).
 pub fn file_content_at_ref(repo_path: &str, file_path: &str, git_ref: &str) -> Result<String, String> {
     let repo = Repository::discover(repo_path).map_err(|e| format!("Not a git repository: {e}"))?;
 
+    refuse_message_search_revspec(git_ref)?;
     let obj = repo
         .revparse_single(git_ref)
         .map_err(|e| format!("Cannot resolve ref '{git_ref}': {e}"))?;
@@ -1420,3 +1437,7 @@ mod worktree_guard_tests;
 #[cfg(test)]
 #[path = "git_merge_guard_tests.rs"]
 mod merge_guard_tests;
+
+#[cfg(test)]
+#[path = "git_revspec_guard_tests.rs"]
+mod revspec_guard_tests;

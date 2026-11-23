@@ -138,7 +138,7 @@ fn git_failed(what: &str, e: String) -> WtError {
 
 /// The commit `rev` names, or `None`.
 fn rev_parse(dir: &Path, rev: &str) -> Option<String> {
-    if rev.starts_with('-') {
+    if rev.starts_with('-') || crate::git::refuse_message_search_revspec(rev).is_err() {
         return None;
     }
     git(dir, &["rev-parse", "--verify", "--quiet", &format!("{rev}^{{commit}}")])
@@ -285,6 +285,7 @@ pub fn resolve_base(root: &Path, base: Option<&str>) -> Result<Base, WtError> {
             WtError::new(codes::BASE_NOT_FOUND, 409, "this repository has no branch to start from yet; commit once, or pass --base <ref>")
         })?,
     };
+    crate::git::refuse_message_search_revspec(&name).map_err(|m| WtError::new(codes::BASE_NOT_FOUND, 404, m))?;
     let sha = rev_parse(root, &name)
         .ok_or_else(|| WtError::new(codes::BASE_NOT_FOUND, 404, format!("--base '{name}' is not a branch, tag or commit in this repository")))?;
     let onto = if local_branch_exists(root, &name) { Some(name.clone()) } else { default };

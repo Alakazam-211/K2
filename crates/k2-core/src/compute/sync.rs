@@ -177,6 +177,7 @@ pub fn resolve_commit(root: &Path, rev: &str) -> Result<String, String> {
     if rev.starts_with('-') {
         return Err(format!("bad revision '{rev}'"));
     }
+    crate::git::refuse_message_search_revspec(rev)?;
     let mut c = git(root);
     c.args(["rev-parse", "--verify", "--quiet", "--end-of-options", &format!("{rev}^{{commit}}")]);
     run(c, &format!("resolve '{rev}'"))

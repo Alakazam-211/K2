@@ -478,6 +478,7 @@ pub fn snapshot(path: &str, base: Option<&str>) -> Result<SnapshotResult, Change
     let mut base_tree: Option<git2::Tree<'_>> = None;
     if let Some(spec) = base.filter(|s| !s.trim().is_empty()) {
         let bad_ref = |e: String| ChangesError::new(codes::BAD_REF, format!("cannot resolve base '{spec}': {e}"));
+        crate::git::refuse_message_search_revspec(spec).map_err(|m| ChangesError::new(codes::BAD_REF, m))?;
         let obj = repo.revparse_single(spec).map_err(|e| bad_ref(e.to_string()))?;
         let base_commit = obj.peel_to_commit().map_err(|e| bad_ref(e.to_string()))?;
         let base_oid = base_commit.id();
@@ -873,6 +874,7 @@ pub fn diff_sides(path: &str, file_path: &str, old_path: Option<&str>, mode: Dif
         DiffMode::Staged => (tree_side(&repo, head_tree.as_ref(), &tree_rel, "HEAD")?, index_side(&repo, &rel)?, None),
         DiffMode::Base(spec) => {
             let bad_ref = |e: String| ChangesError::new(codes::BAD_REF, format!("cannot resolve base '{spec}': {e}"));
+            crate::git::refuse_message_search_revspec(spec).map_err(|m| ChangesError::new(codes::BAD_REF, m))?;
             let base_commit = repo
                 .revparse_single(spec)
                 .map_err(|e| bad_ref(e.to_string()))?

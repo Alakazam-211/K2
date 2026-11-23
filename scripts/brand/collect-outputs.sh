@@ -13,12 +13,15 @@
 #
 # A scratch machine: a scratch HOME and K2 home with an owner token and a
 # port on disk, a stub daemon on that port that answers every request with
-# 200 and `{}`, stdin closed, and a PATH with no python3. A form the
-# binary hands to the shell CLI then stops with its no-Python line (exit
-# 69) and runs nothing: its output is not the binary's, so it is left out
-# of the corpus and listed in <out>/../fell-through.txt (a partner build
-# comes only from a tag where none falls through:
-# scripts/brand/ceiling-zero-gate.sh).
+# 200 and `{}`, stdin closed, and a PATH of one folder: the brand's link
+# and the tools the binary's prelude check looks for before it prints a
+# page (cat, dirname and sed: crates/k5-cli/src/offline.rs `need`), and
+# nothing else, so no python3 and no bash. Without those tools every page
+# would go to the shell. A form the binary hands to the shell CLI then
+# stops with its no-Python line (exit 69) and runs nothing: its output is
+# not the binary's, so it is left out of the corpus and listed in
+# <out>/../fell-through.txt (a partner build comes only from a tag where
+# none falls through: scripts/brand/ceiling-zero-gate.sh).
 #
 # Runs the CLI: on K2 Compute only, never on a developer's machine.
 set -euo pipefail
@@ -45,6 +48,24 @@ cleanup() { [ -n "$stub_pid" ] && kill "$stub_pid" 2>/dev/null; rm -rf "$S"; }
 trap cleanup EXIT
 mkdir -p "$S/home/.k2" "$S/proj/.k2" "$S/tmp" "$S/bin" "$OUT"
 ln -s "$BIN" "$S/bin/$name"
+
+# The tools the binary's prelude check needs on PATH (offline.rs `need`).
+PRELUDE_TOOLS="cat dirname sed"
+for tool in $PRELUDE_TOOLS; do
+    at="$(command -v "$tool" || true)"
+    case "$at" in
+        /*) ln -s "$at" "$S/bin/$tool" ;;
+        *) echo "collect-outputs: needs $tool on this machine's PATH (the binary's prelude check looks for it); found none" >&2; exit 2 ;;
+    esac
+done
+# Only the link and those tools: no python3 and no bash, so a form the
+# binary hands to the shell shows as exit 69.
+for f in "$S/bin"/*; do
+    case " $name $PRELUDE_TOOLS " in
+        *" $(basename "$f") "*) ;;
+        *) echo "collect-outputs: $f should not be on the corpus PATH" >&2; exit 2 ;;
+    esac
+done
 
 # The stub daemon: 200 and `{}` for every request; it writes its port.
 python3 - "$S/port" <<'PY' &
@@ -109,4 +130,5 @@ while IFS= read -r form; do
 done < "$forms"
 kept="$(find "$OUT" -name '*.out' | wc -l | tr -d ' ')"
 echo "collect-outputs: $n forms, $kept printed by the binary, $(wc -l < "$fell" | tr -d ' ') fell through (listed in $fell)"
+echo "collect-outputs: the binary answered $kept of $n forms itself"
 [ "$kept" -gt 1000 ] || { echo "collect-outputs: only $kept forms answered by the binary" >&2; exit 1; }

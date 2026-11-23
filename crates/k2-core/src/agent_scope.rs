@@ -15,8 +15,55 @@
 
 use std::sync::OnceLock;
 
-pub use k2_root_proto::agent_scope::{Kind, TOP_SLICE};
-use k2_root_proto::agent_scope::{parse_scope_name, scope_cgroup, scope_name, AgentWs, ScopeId};
+// The names, the same as `k2_root_proto::agent_scope` (k2-core doesn't
+// depend on it at run time; the tests below check every one against it).
+pub const TOP_SLICE: &str = "k2agents.slice";
+const SCOPE_PREFIX: &str = "k2-agent-";
+const SCOPE_SUFFIX: &str = ".scope";
+const MEM_MB: (u32, u32) = (16, 1_048_576);
+const CPU_PCT: (u32, u32) = (1, 25_600);
+
+/// Which agent slice a scope is born in (fixed for its life).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Open,
+    Fenced,
+}
+
+impl Kind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Kind::Open => "open",
+            Kind::Fenced => "fenced",
+        }
+    }
+    pub fn slice(self) -> &'static str {
+        match self {
+            Kind::Open => "k2agents-open.slice",
+            Kind::Fenced => "k2agents-fenced.slice",
+        }
+    }
+}
+
+fn ws_ok(s: &str) -> bool {
+    crate::agent_cgroup::valid_ws(s)
+}
+
+fn id_ok(s: &str) -> bool {
+    (16..=32).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// `k2-agent-<ws>:<id>.scope`, or `None` when either can't name one.
+fn scope_name(ws: &str, id: &str) -> Option<String> {
+    (ws_ok(ws) && id_ok(id)).then(|| format!("{SCOPE_PREFIX}{ws}:{id}{SCOPE_SUFFIX}"))
+}
+
+/// The classifier on a unit name: exactly `k2-agent-<ws>:<id>.scope`.
+fn parse_scope_name(name: &str) -> Option<(&str, &str)> {
+    let mid = name.strip_prefix(SCOPE_PREFIX)?.strip_suffix(SCOPE_SUFFIX)?;
+    let (ws, id) = mid.split_once(':')?;
+    (ws_ok(ws) && id_ok(id)).then_some((ws, id))
+}
 
 /// What one isolated process gets in scope mode: a fresh scope id, its
 /// slice (fenced or open, fixed at birth), and a dev server's caps.
@@ -47,8 +94,8 @@ impl ScopePlan {
     /// A dev server's caps (`publish_dev`: MB and CPUs), clamped into the
     /// helper's bounds.
     pub fn with_caps(mut self, mem_mb: i64, cpus: f64) -> Self {
-        let (mlo, mhi) = k2_root_proto::agent_scope::MEM_MB;
-        let (clo, chi) = k2_root_proto::agent_scope::CPU_PCT;
+        let (mlo, mhi) = MEM_MB;
+        let (clo, chi) = CPU_PCT;
         self.mem_mb = Some(mem_mb.clamp(mlo as i64, mhi as i64) as u32);
         let pct = (cpus * 100.0).round();
         self.cpu_pct = Some(if pct.is_finite() { (pct as i64).clamp(clo as i64, chi as i64) as u32 } else { chi });
@@ -56,11 +103,11 @@ impl ScopePlan {
     }
     /// `k2-agent-<ws>:<id>.scope`.
     pub fn unit(&self, ws: &str) -> Option<String> {
-        Some(scope_name(&AgentWs::parse(ws)?, &ScopeId::parse(&self.id)?))
+        scope_name(ws, &self.id)
     }
     /// `/k2agents.slice/k2agents-<kind>.slice/k2-agent-<ws>:<id>.scope`.
     pub fn cgroup(&self, ws: &str) -> Option<String> {
-        Some(scope_cgroup(self.kind(), &AgentWs::parse(ws)?, &ScopeId::parse(&self.id)?))
+        Some(format!("/{TOP_SLICE}/{}/{}", self.kind().slice(), self.unit(ws)?))
     }
     /// The helper's argv for this plan.
     pub fn argv(&self, ws: &str, pid: u32, start: u64) -> Vec<String> {
@@ -87,7 +134,7 @@ pub fn classify_scope(path: &str) -> Option<(String, String, Kind, String)> {
     let kind = [Kind::Open, Kind::Fenced].into_iter().find(|k| k.slice() == slice)?;
     let unit = parts.next()?;
     let (ws, id) = parse_scope_name(unit)?;
-    Some((ws.as_str().to_string(), id.as_str().to_string(), kind, format!("/{TOP_SLICE}/{slice}/{unit}")))
+    Some((ws.to_string(), id.to_string(), kind, format!("/{TOP_SLICE}/{slice}/{unit}")))
 }
 
 /// Calls the root helper (`agents …`, daemon class) and returns its JSON.
@@ -122,7 +169,7 @@ pub fn place(ws: &str, plan: &ScopePlan, pid: u32, start: u64) -> Result<String,
 /// gone is fine.
 pub fn stop(ws: &str, id: &str) -> Result<(), String> {
     let call = CALLER.get().ok_or("no root helper places agent scopes on this box")?;
-    if AgentWs::parse(ws).is_none() || ScopeId::parse(id).is_none() {
+    if scope_name(ws, id).is_none() {
         return Err(format!("{ws:?}/{id:?} doesn't name an agent scope"));
     }
     call(&["agents".into(), "stop".into(), ws.into(), id.into()]).map(|_| ())
@@ -151,6 +198,28 @@ mod tests {
     use super::*;
 
     const WS: &str = "3f1c2d4e-0000-4000-8000-00000000abcd";
+
+    /// The copies above match the root helper's own names and rules.
+    #[test]
+    fn the_names_match_the_root_helpers() {
+        use k2_root_proto::agent_scope as rp;
+        assert_eq!(TOP_SLICE, rp::TOP_SLICE);
+        assert_eq!((SCOPE_PREFIX, SCOPE_SUFFIX, MEM_MB, CPU_PCT), (rp::SCOPE_PREFIX, rp::SCOPE_SUFFIX, rp::MEM_MB, rp::CPU_PCT));
+        for (k, r) in [(Kind::Open, rp::Kind::Open), (Kind::Fenced, rp::Kind::Fenced)] {
+            assert_eq!((k.as_str(), k.slice()), (r.as_str(), r.slice()));
+        }
+        let ws = rp::AgentWs::parse(WS).unwrap();
+        let id = rp::ScopeId::parse("0123456789abcdef").unwrap();
+        assert_eq!(scope_name(WS, "0123456789abcdef"), Some(rp::scope_name(&ws, &id)));
+        let p = ScopePlan { id: "0123456789abcdef".into(), fenced: true, mem_mb: Some(512), cpu_pct: Some(150) };
+        assert_eq!(p.cgroup(WS), Some(rp::scope_cgroup(rp::Kind::Fenced, &ws, &id)));
+        let argv = p.argv(WS, 4242, 99);
+        let tail: Vec<&str> = argv[1..].iter().map(String::as_str).collect();
+        assert!(rp::ScopeVerb::parse(&tail).is_some(), "the helper parses the daemon's argv: {argv:?}");
+        for name in [format!("k2-agent-{WS}:0123456789abcdef.scope"), "k2-agent-a:b.scope".into(), format!("k2-agent-{WS}-0123456789abcdef.scope")] {
+            assert_eq!(parse_scope_name(&name).is_some(), rp::parse_scope_name(&name).is_some(), "{name}");
+        }
+    }
 
     #[test]
     fn a_plan_names_its_scope_and_slice() {

@@ -15200,7 +15200,8 @@ WHAT A TEMPLATE IS
   k2 agent hire --template writer --name "Max" --agent codex --dry-run
     Prints the folder (<hire root>/<handle>, here <hire root>/max;
     k2 agent hire-root) and each file, layer and permission with its
-    label: would write · skip · yours, kept · suggested. Read it first.
+    label: would write · skip · yours, kept; a permission says would
+    grant · card · refused · skip · declined (part 3). Read it first.
   Step 2, hire and start it:
   k2 agent hire --template writer --name "Max" --agent codex --launch
     Writes the folder, ROLE.md, starter notes, context layers and
@@ -15226,6 +15227,7 @@ WHAT A TEMPLATE IS
   --answer id=text   answer a first-conversation question (show lists the
                      ids). Answer only what you know; the agent asks its
                      person the rest on its first start.
+  --decline <perm>   leave a suggested permission off (its plan line id).
   <dir>              optional: a folder instead of <hire root>/<handle>.
   Re-running the same hire is safe: the same --template and --name with
   no <dir> reuse <hire root>/<handle>; it writes only what is missing and
@@ -15238,12 +15240,15 @@ WHAT A TEMPLATE IS
   root: an existing one is owner_only (a re-run too), one elsewhere is
   outside_hire_root. A person hires anywhere.
 
-3. PERMISSIONS: SUGGESTED, NOT GRANTED
-  A hire never gets more than the hirer may give. Today a hire turns no
-  switch on: each suggestion prints as "suggested", for a person to turn
-  on (Settings → Workspaces / Agents → the agent → Permissions). When K2 refuses the new
-  agent, it asks on the permission card the refusal prints. Granting what
-  the hirer itself holds, and filing cards for the rest, comes later.
+3. PERMISSIONS: THE HIRER'S REACH DECIDES
+  A template only suggests switches; a hire never gets more than the
+  hirer may give (k2 agent hire --help, PERMISSIONS). Each line says:
+    would grant  the hirer may give it: the owner any, an admin what an
+                 admin can, an agent only what it has on itself.
+    card         a person is asked on a card on the new agent's Thread.
+    refused      cards are off here: the next line says who can turn it
+                 on and how. The hire goes ahead; tell your person.
+    skip / declined   already on / left off with --decline <perm>.
 
 4. SAVE YOUR OWN SETUP AS A TEMPLATE
   k2 agent template save . --id my-writer --summary "Writes our posts" --dry-run
@@ -15308,8 +15313,8 @@ EXIT CODES (the same for k2 agent hire and k2 agent template)
   2  bad usage: a wrong flag, param, answer or id (usage, bad_id,
      bad_template, no_charter)
   3  not allowed here: template_conflict, folder_exists, system_template,
-     own_workspace_only, not_author, role_required, owner_only,
-     outside_hire_root
+     own_workspace_only, not_author, role_required, owner_only, hire_off,
+     main_only, outside_hire_root
   4  not found: unknown_template, no_template, no_workspace, no_note,
      no_folder, not_found
 
@@ -79544,6 +79549,7 @@ USAGE
   k2 agent hire <dir> [flags]
   k2 agent hire [<dir>] --template <id> [--name <name>] [--agent <preset>]
                 [--param <key>=<value>]... [--answer <id>=<text>]...
+                [--decline <permission>]...
                 [--dry-run] [--launch] [flags]   (--dry-run wins: it only previews)
 
   The handle is the name in lowercase with dashes ("Rita Lee" → rita-lee).
@@ -79554,7 +79560,10 @@ FROM A TEMPLATE, IN THREE STEPS (k2 study agent-templates)
   1. Look:    k2 agent template list, then k2 agent template show <id>
   2. Review:  the same hire with --dry-run: the folder, and each file, layer
               and permission with its label: would write · skip ·
-              yours, kept · suggested. Nothing is written.
+              yours, kept; for a permission: would grant · card ·
+              refused · skip · declined (see PERMISSIONS). Nothing is
+              written. To leave a suggested permission off, add
+              --decline <permission> (the id the plan prints).
   3. Hire:    the same line without --dry-run. Nothing starts unless you add
               --launch; with it, K2 starts the agent and it says hello on
               its Thread. Tell your person what you hired.
@@ -79592,15 +79601,20 @@ FLAGS
                           agent made from one template with another is not
                           allowed (template_conflict, exit 3); re-running with
                           the same one is safe.
-                          A template only SUGGESTS permissions; nothing is
-                          turned on for the agent by the hire. The output
-                          lists each one as "suggested", for a person to turn
-                          on, and the agent asks on a card when K2 refuses it.
+                          A template only SUGGESTS permissions; what the
+                          hire turns on is decided by who hires (see
+                          PERMISSIONS below).
   --param <key>=<value>   A value the template asks for (repeatable). Quote a
                           value with spaces: --param about="the billing service".
                           Every built-in takes `about` (optional: what to focus
                           on). `show` lists each template's params and which
                           are required.
+  --decline <permission>  Leave one suggested permission off (repeatable): the
+                          id from the plan's permission lines, such as
+                          compute.use, or permission-cards. Not one the
+                          template suggests = usage error (exit 2) naming the
+                          ones it does. Declined ones are not turned on, not
+                          asked for on a card, and not refused.
   --answer <id>=<text>    Answer one of the template's first-conversation
                           questions now (repeatable). Each built-in asks its
                           person 3–5 short questions (a writer: audience,
@@ -79681,8 +79695,8 @@ FLAGS
   --dry-run               Show the full plan; change nothing (steps that would
                           fail are FAILED, and it exits non-zero). With
                           --template it names the folder it would use, every
-                          file it would write, each catalog layer, and the
-                          permissions it suggests.
+                          file it would write, each catalog layer, and what
+                          happens to each suggested permission.
   --json                  JSON output
 
   A failed step (a connect, a project, a context…) doesn't stop the others:
@@ -79697,8 +79711,8 @@ EXIT CODES (the same for k2 agent hire and k2 agent template)
   2  bad usage: a wrong flag, param, answer, id or --agent preset
      (usage, bad_id, bad_template, no_charter)
   3  not allowed here: template_conflict, folder_exists, system_template,
-     own_workspace_only, not_author, role_required, owner_only,
-     outside_hire_root
+     own_workspace_only, not_author, role_required, owner_only, hire_off,
+     main_only, outside_hire_root
   4  not found: unknown_template, no_template, no_workspace, no_note,
      no_folder, not_found (an unknown --connect)
   folder_exists: <hire root>/<handle> is taken; pick another --name, or
@@ -79721,9 +79735,31 @@ WHO MAY
   folder elsewhere (outside_hire_root, exit 3). A person does those: a
   person hires anywhere, from a terminal outside K2.
 
+PERMISSIONS (a template's suggested switches)
+  Who hires decides what the new agent gets. Each permission line says:
+    would grant / granted  turned on now. The owner may give any switch,
+                           an admin login the ones an admin can turn on,
+                           an agent only switches it has on itself (never
+                           database access); a member login or an API key
+                           gives none.
+    card                   the hirer can't give it, so a person is asked on
+                           a permission card on the new agent's Thread (when
+                           the agent first starts, if it has no Thread yet).
+    refused                the hirer can't give it and permission cards are
+                           off on this server: the line after it says who
+                           can turn it on and how (a Settings path or a
+                           k2 command). The hire still goes ahead; tell
+                           your person.
+    skip                   already on (or cards are off: permission-cards).
+    declined               left off with --decline.
+  permission-cards is "Can ask for permission cards" for the new agent.
+  A re-run turns on what is still off and allowed; it never turns a
+  switch off and never asks twice.
+
 EXAMPLES
   k2 agent hire --template writer --name "Max" --agent codex --dry-run
   k2 agent hire --template writer --name "Max" --agent codex --launch
+  k2 agent hire --template developer --name "Dev" --decline compute.use
   k2 agent hire ~/agents/coder --template developer --param about="the billing service"
   k2 agent hire --template writer --name "Max" \
       --answer audience="Small-business owners" --answer samples="https://example.k2.dev/blog" --launch
@@ -80274,12 +80310,15 @@ cmd_agent_hire() {
     local launch=false dry_run=false as_json=false no_wiki=false
     local no_agents_md=false fanout=false db_access="" color="" focus_group=""
     local take_app="" take_brief_file=""
-    local connects=() projects=() contexts=() params=() answers=()
+    local connects=() projects=() contexts=() params=() answers=() declines=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --name)
                 [ $# -ge 2 ] || { _agent_err "bad_usage" "--name requires a value"; exit 2; }
                 name="$2"; shift 2 ;;
+            --decline)
+                [ $# -ge 2 ] || { _agent_err "bad_usage" "--decline requires a permission id from the plan (see: k2 agent hire --template <id> --dry-run)"; exit 2; }
+                declines+=("$2"); shift 2 ;;
             --agent)
                 [ $# -ge 2 ] || { _agent_err "bad_usage" "--agent requires a preset id/label (see: k2 preset list)"; exit 2; }
                 agent_preset="$2"; shift 2 ;;
@@ -80369,6 +80408,10 @@ cmd_agent_hire() {
         _agent_err "bad_usage" "--answer goes with --template <id>"
         exit 2
     fi
+    if [ ${#declines[@]} -gt 0 ] && [ -z "$template" ]; then
+        _agent_err "bad_usage" "--decline goes with --template <id>"
+        exit 2
+    fi
     # 0.46.12 (prd-agent-templates-v1 AT1): the daemon holds every template
     # and writes the persona; the CLI sends the id and the params.
     if [ -n "$persona" ] && { [ ! -f "$persona" ] || [ ! -r "$persona" ]; }; then
@@ -80435,9 +80478,11 @@ cmd_agent_hire() {
         ${projects[@]+"${projects[@]}"})
     contexts_json=$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' \
         ${contexts[@]+"${contexts[@]}"})
-    local params_json
+    local params_json declines_json
     params_json=$(python3 -c 'import json,sys; print(json.dumps(dict(a.split("=", 1) for a in sys.argv[1:])))' \
         ${params[@]+"${params[@]}"})
+    declines_json=$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' \
+        ${declines[@]+"${declines[@]}"})
     # --answer id=text: a repeated id is a usage error (not a silent last-wins).
     local answers_json
     answers_json=$(python3 -c '
@@ -80453,6 +80498,7 @@ for a in sys.argv[1:]:
 print(json.dumps(out))' ${answers[@]+"${answers[@]}"}) || exit 2
 
     HIRE_DIR="$dir" NAME="$name" TEMPLATE="$template" TEMPLATE_PARAMS="$params_json" TEMPLATE_ANSWERS="$answers_json" \
+    TEMPLATE_DECLINES="$declines_json" \
     PERSONA_FILE="$persona" MODE="$mode" ENABLED="$enabled" CONNECTS="$connects_json" \
     PROJECTS="$projects_json" CONTEXTS="$contexts_json" \
     LAUNCH="$launch" ONBOARD="$onboard" DRY_RUN="$dry_run" AGENT_PRESET="$agent_preset" \
@@ -80472,6 +80518,7 @@ name = os.environ.get("NAME", "")
 template = os.environ.get("TEMPLATE", "").strip()
 template_params = json.loads(os.environ.get("TEMPLATE_PARAMS") or "{}")
 template_answers = json.loads(os.environ.get("TEMPLATE_ANSWERS") or "{}")
+template_declines = json.loads(os.environ.get("TEMPLATE_DECLINES") or "[]")
 persona_file = os.environ.get("PERSONA_FILE", "")
 mode = os.environ.get("MODE", "")
 enabled = os.environ.get("ENABLED", "")
@@ -80585,6 +80632,8 @@ def template_body(extra):
          "noAgentsMd": no_agents_md, "fanout": fanout}
     if template_answers:
         b["answers"] = template_answers
+    if template_declines:
+        b["declinePermissions"] = template_declines
     if name:
         b["name"] = name
     b.update(extra)
@@ -80600,7 +80649,8 @@ def template_exit(code):
     c = (code or "").lower()
     return {"usage": 2, "bad_template": 2, "unknown_template": 4, "not_found": 4,
             "template_conflict": 3, "folder_exists": 3, "owner_only": 3,
-            "system_template": 3, "hire_off": 3, "main_only": 3}.get(c, 1)
+            "system_template": 3, "hire_off": 3, "main_only": 3,
+            "outside_hire_root": 3}.get(c, 1)
 
 # 0.46.12: with --template, <dir> is optional: the daemon picks
 # <hire root>/<handle> (a dry run of the hire names it; nothing written).
@@ -81177,13 +81227,19 @@ def emit(ok, changed):
             # The daemon's own rows (folder and register are the steps above).
             words = {"write": "would write", "done": "wrote", "skip": "skip", "yours": "yours, kept",
                      "suggest": "suggested"}
+            # T3: a permission line says what happens to that switch.
+            perm_words = {"grant": "would grant", "done": "granted", "card": "card", "refused": "refused",
+                          "skip": "skip", "declined": "declined", "suggest": "suggested"}
             for r in a.get("rows") or []:
                 if r.get("step") in ("folder", "register"):
                     continue
                 txt = "%s %s" % (r.get("step"), r.get("target"))
                 if r.get("reason"):
                     txt += "  (%s)" % r["reason"]
-                print("      %-12s %s" % (words.get(r.get("status"), r.get("status")), txt))
+                w = perm_words if r.get("step") == "permission" else words
+                print("      %-12s %s" % (w.get(r.get("status"), r.get("status")), txt))
+                if r.get("step") == "permission" and r.get("hint"):
+                    print("      %-12s %s" % ("", r["hint"]))
             if a.get("permissionsNote"):
                 print("      %s" % a["permissionsNote"])
             hs = a.get("hireSwitch"); hs = dict(hs, command="k2 <tail>".replace("<tail>", hs["tail"])) if isinstance(hs, dict) and isinstance(hs.get("tail"), str) and hs["tail"] else hs
@@ -81219,7 +81275,7 @@ def exit_code_for(code):
     c = (code or "").lower()
     if c in ("bad_usage", "path_escape", "catalog_unknown", "usage"):
         return 2
-    if c in ("duplicate_layer", "refused", "precondition", "owner_only", "hire_off", "main_only"):
+    if c in ("duplicate_layer", "refused", "precondition", "owner_only", "hire_off", "main_only", "outside_hire_root"):
         return 3
     if c in ("not_found", "ambiguous"):
         return 4
@@ -81239,8 +81295,8 @@ def finish(changed):
              failed[0].get("exitCode") or exit_code_for(first.get("code")))
     sys.exit(0)
 
-TEMPLATE_PERMS_NOTE = ("suggested switches are not turned on by this K2: a person turns them on "
-                       "(Settings → Workspaces / Agents → the agent → Permissions), or the agent asks on a card")
+TEMPLATE_PERMS_NOTE = ("refused permissions stay off and the hire goes ahead: tell your person, "
+                       "or leave one off with --decline <permission>")
 
 def take_template_rows(a, resp, applied):
     """Attach the daemon's template rows to the apply-template action."""
@@ -81252,9 +81308,9 @@ def take_template_rows(a, resp, applied):
         # A template dry run skips "Let this agent hire agents" (so the
         # agent can show its person the hire); the real hire needs it.
         a["hireSwitch"] = resp["hireSwitch"]
-    if (a["permissions"].get("suggested") or a["permissions"].get("cards")) and not (a["permissions"].get("granted")):
+    if a["permissions"].get("refused"):
         a["permissionsNote"] = TEMPLATE_PERMS_NOTE
-    busy = [r for r in a["rows"] if r.get("status") in ("write", "done") and r.get("step") not in ("folder", "register")]
+    busy = [r for r in a["rows"] if r.get("status") in ("write", "done", "grant") and r.get("step") not in ("folder", "register")]
     if applied:
         a["status"] = "done" if busy else "skipped"
     else:
@@ -81408,7 +81464,7 @@ if pending_core or tpl_action:
         bad = dba_core if (code == "owner_only" and dba_core and dba_core["status"] == "pending") else (pending_core[0] if pending_core else tpl_action)
         # Fatal: every later step needs the workspace. In a session a
         # refusal (403) exits 3 whatever its code.
-        refused = code in ("owner_only", "hire_off", "main_only") or resp.get("httpStatus") == 403
+        refused = code in ("owner_only", "hire_off", "main_only", "outside_hire_root") or resp.get("httpStatus") == 403
         exit_for = 3 if refused else (template_exit(code) if tpl_action else None)
         step_failed(bad, code or "daemon_error", hint, exit_for, fatal=True)
     by_core = {x.get("step"): x for x in resp.get("steps", [])}
@@ -115909,7 +115965,8 @@ EXIT CODES (the same for k2 agent hire and k2 agent template)
   2  bad usage: a wrong flag, param, answer or id (usage, bad_id,
      bad_template, no_charter)
   3  not allowed here: template_conflict, folder_exists, system_template,
-     own_workspace_only, not_author, role_required, owner_only
+     own_workspace_only, not_author, role_required, owner_only, hire_off,
+     main_only, outside_hire_root
   4  not found: unknown_template, no_template, no_workspace, no_note,
      no_folder, not_found
   Each code and its fix: k2 study agent-templates.

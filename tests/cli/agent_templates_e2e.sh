@@ -111,6 +111,21 @@ set +e; k2 agent hire "$mpath" --template ops >/dev/null 2>&1; rc=$?; set -e
 [ "$rc" = "3" ] || fail "another template on Max: template_conflict exit 3 (got $rc)"
 ok "re-apply"
 
+echo "== permissions (T3): the owner grants, --decline leaves one off =="
+lplan="$(k2 agent hire --template lead --name "Lea" --dry-run)"
+grep -q "would grant  permission agents.hire" <<<"$lplan" || fail "the owner would grant agents.hire: $lplan"
+dplan="$(k2 agent hire --template developer --name "Dev" --decline compute.use --dry-run --json)"
+jq -e '.actions[] | select(.step == "apply-template") | .rows | any(.step == "permission" and .target == "compute.use" and .status == "declined")' <<<"$dplan" >/dev/null \
+    || fail "declined in the review: $dplan"
+set +e; k2 agent hire --template developer --name "Dev" --decline compute.usee --dry-run >/dev/null 2>"$WORK/decline.err"; rc=$?; set -e
+[ "$rc" = "2" ] || fail "a decline the template doesn't suggest is usage, exit 2 (got $rc)"
+grep -q "it suggests: permission-cards, compute.use" "$WORK/decline.err" || fail "the usage error names what it suggests: $(cat "$WORK/decline.err")"
+dev="$(k2 agent hire --template developer --name "Dev" --decline compute.use --json)"
+jq -e '.actions[] | select(.step == "apply-template") | .permissions.declined == ["compute.use"]' <<<"$dev" >/dev/null || fail "declined on the hire: $dev"
+set +e; k2 agent hire --decline compute.use "$WORK/plain" >/dev/null 2>&1; rc=$?; set -e
+[ "$rc" = "2" ] || fail "--decline without --template is usage, exit 2 (got $rc)"
+ok "permissions"
+
 echo "== save Max as a template: v1, then v2 =="
 dry="$(k2 agent template save "$mpath" --id max-writer --summary "Writes like Max" --dry-run --json)"
 [ "$(jq -r .dryRun <<<"$dry")" = "true" ] || fail "save dry run: $dry"

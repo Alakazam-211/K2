@@ -113,7 +113,8 @@ EXIT CODES (the same for k2 agent hire and k2 agent template)
   2  bad usage: a wrong flag, param, answer or id (usage, bad_id,
      bad_template, no_charter)
   3  not allowed here: template_conflict, folder_exists, system_template,
-     own_workspace_only, not_author, role_required, owner_only
+     own_workspace_only, not_author, role_required, owner_only, hire_off,
+     main_only, outside_hire_root
   4  not found: unknown_template, no_template, no_workspace, no_note,
      no_folder, not_found
   Each code and its fix: k2 study agent-templates.

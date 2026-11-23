@@ -1062,7 +1062,7 @@ echo "== k2 study agent-templates (prd-agent-templates-v1 T9, 0.46.13) =="
 at_out="$("$K2" study agent-templates)"
 for needle in "k2 agent template list" "k2 agent template show writer" "kessel and chief-of-staff" "canSave" \
     'k2 agent hire --template writer --name "Max" --agent codex --dry-run' "nothing starts" "--launch" "it says hello" \
-    "--param key=value" "--answer id=text" "SUGGESTED, NOT GRANTED" "never gets more than the hirer may give" \
+    "--param key=value" "--answer id=text" "THE HIRER'S REACH DECIDES" "never gets more than the" \
     "k2 agent template save . --id my-writer" "Never taken" "secret_found" "secret is never printed" "v2," \
     "k2 agent template add" "k2 agent template remove my-writer --version 1" "k2 agent template upgrade . --dry-run" \
     "<file>.proposed" "K2:MANAGED" "Never changed: permissions" ".k2/agent/template.lock" \

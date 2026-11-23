@@ -26,7 +26,8 @@ WHAT A TEMPLATE IS
   k2 agent hire --template writer --name "Max" --agent codex --dry-run
     Prints the folder (<hire root>/<handle>, here <hire root>/max;
     k2 agent hire-root) and each file, layer and permission with its
-    label: would write · skip · yours, kept · suggested. Read it first.
+    label: would write · skip · yours, kept; a permission says would
+    grant · card · refused · skip · declined (part 3). Read it first.
   Step 2, hire and start it:
   k2 agent hire --template writer --name "Max" --agent codex --launch
     Writes the folder, ROLE.md, starter notes, context layers and
@@ -52,6 +53,7 @@ WHAT A TEMPLATE IS
   --answer id=text   answer a first-conversation question (show lists the
                      ids). Answer only what you know; the agent asks its
                      person the rest on its first start.
+  --decline <perm>   leave a suggested permission off (its plan line id).
   <dir>              optional: a folder instead of <hire root>/<handle>.
   Re-running the same hire is safe: the same --template and --name with
   no <dir> reuse <hire root>/<handle>; it writes only what is missing and
@@ -64,12 +66,15 @@ WHAT A TEMPLATE IS
   root: an existing one is owner_only (a re-run too), one elsewhere is
   outside_hire_root. A person hires anywhere.
 
-3. PERMISSIONS: SUGGESTED, NOT GRANTED
-  A hire never gets more than the hirer may give. Today a hire turns no
-  switch on: each suggestion prints as "suggested", for a person to turn
-  on (Settings → Workspaces / Agents → the agent → Permissions). When K2 refuses the new
-  agent, it asks on the permission card the refusal prints. Granting what
-  the hirer itself holds, and filing cards for the rest, comes later.
+3. PERMISSIONS: THE HIRER'S REACH DECIDES
+  A template only suggests switches; a hire never gets more than the
+  hirer may give (k2 agent hire --help, PERMISSIONS). Each line says:
+    would grant  the hirer may give it: the owner any, an admin what an
+                 admin can, an agent only what it has on itself.
+    card         a person is asked on a card on the new agent's Thread.
+    refused      cards are off here: the next line says who can turn it
+                 on and how. The hire goes ahead; tell your person.
+    skip / declined   already on / left off with --decline <perm>.
 
 4. SAVE YOUR OWN SETUP AS A TEMPLATE
   k2 agent template save . --id my-writer --summary "Writes our posts" --dry-run
@@ -134,8 +139,8 @@ EXIT CODES (the same for k2 agent hire and k2 agent template)
   2  bad usage: a wrong flag, param, answer or id (usage, bad_id,
      bad_template, no_charter)
   3  not allowed here: template_conflict, folder_exists, system_template,
-     own_workspace_only, not_author, role_required, owner_only,
-     outside_hire_root
+     own_workspace_only, not_author, role_required, owner_only, hire_off,
+     main_only, outside_hire_root
   4  not found: unknown_template, no_template, no_workspace, no_note,
      no_folder, not_found
 

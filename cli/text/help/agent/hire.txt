@@ -9,6 +9,7 @@ USAGE
   k2 agent hire <dir> [flags]
   k2 agent hire [<dir>] --template <id> [--name <name>] [--agent <preset>]
                 [--param <key>=<value>]... [--answer <id>=<text>]...
+                [--decline <permission>]...
                 [--dry-run] [--launch] [flags]   (--dry-run wins: it only previews)
 
   The handle is the name in lowercase with dashes ("Rita Lee" → rita-lee).
@@ -19,7 +20,10 @@ FROM A TEMPLATE, IN THREE STEPS (k2 study agent-templates)
   1. Look:    k2 agent template list, then k2 agent template show <id>
   2. Review:  the same hire with --dry-run: the folder, and each file, layer
               and permission with its label: would write · skip ·
-              yours, kept · suggested. Nothing is written.
+              yours, kept; for a permission: would grant · card ·
+              refused · skip · declined (see PERMISSIONS). Nothing is
+              written. To leave a suggested permission off, add
+              --decline <permission> (the id the plan prints).
   3. Hire:    the same line without --dry-run. Nothing starts unless you add
               --launch; with it, K2 starts the agent and it says hello on
               its Thread. Tell your person what you hired.
@@ -57,15 +61,20 @@ FLAGS
                           agent made from one template with another is not
                           allowed (template_conflict, exit 3); re-running with
                           the same one is safe.
-                          A template only SUGGESTS permissions; nothing is
-                          turned on for the agent by the hire. The output
-                          lists each one as "suggested", for a person to turn
-                          on, and the agent asks on a card when K2 refuses it.
+                          A template only SUGGESTS permissions; what the
+                          hire turns on is decided by who hires (see
+                          PERMISSIONS below).
   --param <key>=<value>   A value the template asks for (repeatable). Quote a
                           value with spaces: --param about="the billing service".
                           Every built-in takes `about` (optional: what to focus
                           on). `show` lists each template's params and which
                           are required.
+  --decline <permission>  Leave one suggested permission off (repeatable): the
+                          id from the plan's permission lines, such as
+                          compute.use, or permission-cards. Not one the
+                          template suggests = usage error (exit 2) naming the
+                          ones it does. Declined ones are not turned on, not
+                          asked for on a card, and not refused.
   --answer <id>=<text>    Answer one of the template's first-conversation
                           questions now (repeatable). Each built-in asks its
                           person 3–5 short questions (a writer: audience,
@@ -146,8 +155,8 @@ FLAGS
   --dry-run               Show the full plan; change nothing (steps that would
                           fail are FAILED, and it exits non-zero). With
                           --template it names the folder it would use, every
-                          file it would write, each catalog layer, and the
-                          permissions it suggests.
+                          file it would write, each catalog layer, and what
+                          happens to each suggested permission.
   --json                  JSON output
 
   A failed step (a connect, a project, a context…) doesn't stop the others:
@@ -162,8 +171,8 @@ EXIT CODES (the same for k2 agent hire and k2 agent template)
   2  bad usage: a wrong flag, param, answer, id or --agent preset
      (usage, bad_id, bad_template, no_charter)
   3  not allowed here: template_conflict, folder_exists, system_template,
-     own_workspace_only, not_author, role_required, owner_only,
-     outside_hire_root
+     own_workspace_only, not_author, role_required, owner_only, hire_off,
+     main_only, outside_hire_root
   4  not found: unknown_template, no_template, no_workspace, no_note,
      no_folder, not_found (an unknown --connect)
   folder_exists: <hire root>/<handle> is taken; pick another --name, or
@@ -186,9 +195,31 @@ WHO MAY
   folder elsewhere (outside_hire_root, exit 3). A person does those: a
   person hires anywhere, from a terminal outside K2.
 
+PERMISSIONS (a template's suggested switches)
+  Who hires decides what the new agent gets. Each permission line says:
+    would grant / granted  turned on now. The owner may give any switch,
+                           an admin login the ones an admin can turn on,
+                           an agent only switches it has on itself (never
+                           database access); a member login or an API key
+                           gives none.
+    card                   the hirer can't give it, so a person is asked on
+                           a permission card on the new agent's Thread (when
+                           the agent first starts, if it has no Thread yet).
+    refused                the hirer can't give it and permission cards are
+                           off on this server: the line after it says who
+                           can turn it on and how (a Settings path or a
+                           k2 command). The hire still goes ahead; tell
+                           your person.
+    skip                   already on (or cards are off: permission-cards).
+    declined               left off with --decline.
+  permission-cards is "Can ask for permission cards" for the new agent.
+  A re-run turns on what is still off and allowed; it never turns a
+  switch off and never asks twice.
+
 EXAMPLES
   k2 agent hire --template writer --name "Max" --agent codex --dry-run
   k2 agent hire --template writer --name "Max" --agent codex --launch
+  k2 agent hire --template developer --name "Dev" --decline compute.use
   k2 agent hire ~/agents/coder --template developer --param about="the billing service"
   k2 agent hire --template writer --name "Max" \
       --answer audience="Small-business owners" --answer samples="https://example.k2.dev/blog" --launch

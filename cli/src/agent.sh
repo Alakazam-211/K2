@@ -1161,12 +1161,15 @@ cmd_agent_hire() {
     local launch=false dry_run=false as_json=false no_wiki=false
     local no_agents_md=false fanout=false db_access="" color="" focus_group=""
     local take_app="" take_brief_file=""
-    local connects=() projects=() contexts=() params=() answers=()
+    local connects=() projects=() contexts=() params=() answers=() declines=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --name)
                 [ $# -ge 2 ] || { _agent_err "bad_usage" "--name requires a value"; exit 2; }
                 name="$2"; shift 2 ;;
+            --decline)
+                [ $# -ge 2 ] || { _agent_err "bad_usage" "--decline requires a permission id from the plan (see: k2 agent hire --template <id> --dry-run)"; exit 2; }
+                declines+=("$2"); shift 2 ;;
             --agent)
                 [ $# -ge 2 ] || { _agent_err "bad_usage" "--agent requires a preset id/label (see: k2 preset list)"; exit 2; }
                 agent_preset="$2"; shift 2 ;;
@@ -1256,6 +1259,10 @@ cmd_agent_hire() {
         _agent_err "bad_usage" "--answer goes with --template <id>"
         exit 2
     fi
+    if [ ${#declines[@]} -gt 0 ] && [ -z "$template" ]; then
+        _agent_err "bad_usage" "--decline goes with --template <id>"
+        exit 2
+    fi
     # 0.46.12 (prd-agent-templates-v1 AT1): the daemon holds every template
     # and writes the persona; the CLI sends the id and the params.
     if [ -n "$persona" ] && { [ ! -f "$persona" ] || [ ! -r "$persona" ]; }; then
@@ -1322,9 +1329,11 @@ cmd_agent_hire() {
         ${projects[@]+"${projects[@]}"})
     contexts_json=$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' \
         ${contexts[@]+"${contexts[@]}"})
-    local params_json
+    local params_json declines_json
     params_json=$(python3 -c 'import json,sys; print(json.dumps(dict(a.split("=", 1) for a in sys.argv[1:])))' \
         ${params[@]+"${params[@]}"})
+    declines_json=$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' \
+        ${declines[@]+"${declines[@]}"})
     # --answer id=text: a repeated id is a usage error (not a silent last-wins).
     local answers_json
     answers_json=$(python3 -c '
@@ -1340,6 +1349,7 @@ for a in sys.argv[1:]:
 print(json.dumps(out))' ${answers[@]+"${answers[@]}"}) || exit 2
 
     HIRE_DIR="$dir" NAME="$name" TEMPLATE="$template" TEMPLATE_PARAMS="$params_json" TEMPLATE_ANSWERS="$answers_json" \
+    TEMPLATE_DECLINES="$declines_json" \
     PERSONA_FILE="$persona" MODE="$mode" ENABLED="$enabled" CONNECTS="$connects_json" \
     PROJECTS="$projects_json" CONTEXTS="$contexts_json" \
     LAUNCH="$launch" ONBOARD="$onboard" DRY_RUN="$dry_run" AGENT_PRESET="$agent_preset" \
@@ -1359,6 +1369,7 @@ name = os.environ.get("NAME", "")
 template = os.environ.get("TEMPLATE", "").strip()
 template_params = json.loads(os.environ.get("TEMPLATE_PARAMS") or "{}")
 template_answers = json.loads(os.environ.get("TEMPLATE_ANSWERS") or "{}")
+template_declines = json.loads(os.environ.get("TEMPLATE_DECLINES") or "[]")
 persona_file = os.environ.get("PERSONA_FILE", "")
 mode = os.environ.get("MODE", "")
 enabled = os.environ.get("ENABLED", "")
@@ -1472,6 +1483,8 @@ def template_body(extra):
          "noAgentsMd": no_agents_md, "fanout": fanout}
     if template_answers:
         b["answers"] = template_answers
+    if template_declines:
+        b["declinePermissions"] = template_declines
     if name:
         b["name"] = name
     b.update(extra)
@@ -1487,7 +1500,8 @@ def template_exit(code):
     c = (code or "").lower()
     return {"usage": 2, "bad_template": 2, "unknown_template": 4, "not_found": 4,
             "template_conflict": 3, "folder_exists": 3, "owner_only": 3,
-            "system_template": 3, "hire_off": 3, "main_only": 3}.get(c, 1)
+            "system_template": 3, "hire_off": 3, "main_only": 3,
+            "outside_hire_root": 3}.get(c, 1)
 
 # 0.46.12: with --template, <dir> is optional: the daemon picks
 # <hire root>/<handle> (a dry run of the hire names it; nothing written).
@@ -2064,13 +2078,19 @@ def emit(ok, changed):
             # The daemon's own rows (folder and register are the steps above).
             words = {"write": "would write", "done": "wrote", "skip": "skip", "yours": "yours, kept",
                      "suggest": "suggested"}
+            # T3: a permission line says what happens to that switch.
+            perm_words = {"grant": "would grant", "done": "granted", "card": "card", "refused": "refused",
+                          "skip": "skip", "declined": "declined", "suggest": "suggested"}
             for r in a.get("rows") or []:
                 if r.get("step") in ("folder", "register"):
                     continue
                 txt = "%s %s" % (r.get("step"), r.get("target"))
                 if r.get("reason"):
                     txt += "  (%s)" % r["reason"]
-                print("      %-12s %s" % (words.get(r.get("status"), r.get("status")), txt))
+                w = perm_words if r.get("step") == "permission" else words
+                print("      %-12s %s" % (w.get(r.get("status"), r.get("status")), txt))
+                if r.get("step") == "permission" and r.get("hint"):
+                    print("      %-12s %s" % ("", r["hint"]))
             if a.get("permissionsNote"):
                 print("      %s" % a["permissionsNote"])
             hs = a.get("hireSwitch"); hs = dict(hs, command="k2 <tail>".replace("<tail>", hs["tail"])) if isinstance(hs, dict) and isinstance(hs.get("tail"), str) and hs["tail"] else hs
@@ -2106,7 +2126,7 @@ def exit_code_for(code):
     c = (code or "").lower()
     if c in ("bad_usage", "path_escape", "catalog_unknown", "usage"):
         return 2
-    if c in ("duplicate_layer", "refused", "precondition", "owner_only", "hire_off", "main_only"):
+    if c in ("duplicate_layer", "refused", "precondition", "owner_only", "hire_off", "main_only", "outside_hire_root"):
         return 3
     if c in ("not_found", "ambiguous"):
         return 4
@@ -2126,8 +2146,8 @@ def finish(changed):
              failed[0].get("exitCode") or exit_code_for(first.get("code")))
     sys.exit(0)
 
-TEMPLATE_PERMS_NOTE = ("suggested switches are not turned on by this K2: a person turns them on "
-                       "(Settings → Workspaces / Agents → the agent → Permissions), or the agent asks on a card")
+TEMPLATE_PERMS_NOTE = ("refused permissions stay off and the hire goes ahead: tell your person, "
+                       "or leave one off with --decline <permission>")
 
 def take_template_rows(a, resp, applied):
     """Attach the daemon's template rows to the apply-template action."""
@@ -2139,9 +2159,9 @@ def take_template_rows(a, resp, applied):
         # A template dry run skips "Let this agent hire agents" (so the
         # agent can show its person the hire); the real hire needs it.
         a["hireSwitch"] = resp["hireSwitch"]
-    if (a["permissions"].get("suggested") or a["permissions"].get("cards")) and not (a["permissions"].get("granted")):
+    if a["permissions"].get("refused"):
         a["permissionsNote"] = TEMPLATE_PERMS_NOTE
-    busy = [r for r in a["rows"] if r.get("status") in ("write", "done") and r.get("step") not in ("folder", "register")]
+    busy = [r for r in a["rows"] if r.get("status") in ("write", "done", "grant") and r.get("step") not in ("folder", "register")]
     if applied:
         a["status"] = "done" if busy else "skipped"
     else:
@@ -2295,7 +2315,7 @@ if pending_core or tpl_action:
         bad = dba_core if (code == "owner_only" and dba_core and dba_core["status"] == "pending") else (pending_core[0] if pending_core else tpl_action)
         # Fatal: every later step needs the workspace. In a session a
         # refusal (403) exits 3 whatever its code.
-        refused = code in ("owner_only", "hire_off", "main_only") or resp.get("httpStatus") == 403
+        refused = code in ("owner_only", "hire_off", "main_only", "outside_hire_root") or resp.get("httpStatus") == 403
         exit_for = 3 if refused else (template_exit(code) if tpl_action else None)
         step_failed(bad, code or "daemon_error", hint, exit_for, fatal=True)
     by_core = {x.get("step"): x for x in resp.get("steps", [])}

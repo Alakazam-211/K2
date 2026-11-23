@@ -7,7 +7,8 @@
 //
 //   node scripts/zen-lib/check-banners.mjs             check; exit 1 on any failure
 //   node scripts/zen-lib/check-banners.mjs --print     also print each file's first line
-//   node scripts/zen-lib/check-banners.mjs --self-test the rule against small cases
+//   node scripts/zen-lib/check-banners.mjs --self-test the rule against scripts/zen-lib/banner-cases.json
+//                                                      (shared with the partner build's port of the rule)
 //
 // No network, no packages: CI runs it (checks.yml, scripts/ci/checks.sh).
 
@@ -15,42 +16,37 @@ import { readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { bannerOf, bannerProblem, copyrightLines, glueBanner, hasBanner, libraryBanner } from './banners.mjs'
+import { BANNER_WINDOW, bannerOf, bannerProblem, copyrightLines, glueBanner, hasBanner, libraryBanner } from './banners.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const MANIFEST = 'src/shared/zen-lib.json'
 const TABLE = 'crates/k2-daemon/src/zen_lib_bundled.rs'
+const CASES = 'scripts/zen-lib/banner-cases.json'
 const args = new Set(process.argv.slice(2))
 
 function selfTest() {
-  const cases = [
-    // [text, id, licence, want]
-    ['/*! acme 1.0.0 | MIT | Copyright (c) 2020 Acme | full text: Third-party notices */\ncode()', 'acme', 'MIT', true],
-    ['/*!\n * Acme v1.0.0\n * License: BSD-3-Clause\n */\ncode()', 'acme', 'BSD-3-Clause', true],
-    ['/* @license Acme, MIT */code()', 'acme', 'MIT', true],
-    ['/* @preserve\n * Acme 1.0, MIT\n */code()', 'acme', 'MIT', true],
-    ['// first\n/*! acme | MIT */\ncode()', 'acme', 'MIT', true],
-    ['/*!*/\ncode()', 'acme', 'MIT', false],
-    ['/*! https://github.com/acme/acme (v1.0.0) */\ncode()', 'acme', 'MIT', false],
-    ['/*! acme 1.0.0 | Apache license 2.0 */', 'acme', 'Apache-2.0', false],
-    ['/*! acme 1.0.0 | MIT */', 'acme', 'MIT AND Apache-2.0', false],
-    ['/*! acme 1.0.0 | MIT AND Apache-2.0 */', 'acme', 'MIT AND Apache-2.0', true],
-    ['/* acme 1.0.0 | MIT */\ncode()', 'acme', 'MIT', false],
-    ['/*! globex 1.0.0 | MIT */', 'acme', 'MIT', false],
-    ['/*! acme-k2: glue | MIT */', 'acme', 'MIT', false],
-    ['/*! acme | MITX */', 'acme', 'MIT', false],
-    ['code();/*! acme 1.0.0 | MIT */', 'acme', 'MIT', false],
-    ['// acme MIT\ncode()', 'acme', 'MIT', false],
-    ['﻿  \n/*! ACME 1.0 | MIT */', 'acme', 'MIT', true],
-  ]
+  // The rule's cases, shared with every port of it (banner-cases.json).
+  const doc = JSON.parse(readFileSync(join(ROOT, CASES), 'utf8'))
   let bad = 0
-  for (const [text, id, lic, want] of cases) {
-    const got = hasBanner(text, id, lic)
-    if (got !== want) {
-      console.error(`FAIL self-test: ${JSON.stringify(text)} (${id}, ${lic}): got ${got}, want ${want}`)
+  if (doc.window_bytes !== BANNER_WINDOW) {
+    console.error(`FAIL self-test: ${CASES} says the window is ${doc.window_bytes} bytes, banners.mjs ${BANNER_WINDOW}`)
+    bad++
+  }
+  if (!Array.isArray(doc.cases) || !doc.cases.length) throw new Error(`${CASES} has no cases`)
+  const names = new Set()
+  for (const c of doc.cases) {
+    if (names.has(c.name)) throw new Error(`${CASES}: two cases are named "${c.name}"`)
+    names.add(c.name)
+    if (typeof c.pass !== 'boolean' || typeof c.text !== 'string' || !c.id || !c.licence) throw new Error(`${CASES}: "${c.name}" is incomplete`)
+    if (Boolean(c.pad) !== c.text.includes('{{pad}}')) throw new Error(`${CASES}: "${c.name}": pad and {{pad}} go together`)
+    const text = c.pad ? c.text.replace('{{pad}}', c.pad.unit.repeat(c.pad.times)) : c.text
+    const got = hasBanner(text, c.id, c.licence)
+    if (got !== c.pass) {
+      console.error(`FAIL self-test: "${c.name}" (${c.id}, ${c.licence}): got ${got ? 'pass' : 'fail'}, want ${c.pass ? 'pass' : 'fail'}`)
       bad++
     }
   }
+  const passing = doc.cases.filter((c) => c.pass).length
   const lines = copyrightLines(
     'MIT License\n\nCopyright (c) 2020 Acme\n * Copyright 2019-2021 Globex\n   Copyright [yyyy] [name of copyright owner]\nthe above copyright notice\nCopyright Holder\n(c) 2018 Initech\n© 2017 Umbrella\n      (c) You must retain, in the Source form\n/*! @license Hooli 1.0 | (c) Hooli and other contributors | Released under MIT */\nCopyright (c) 2020 Acme\n',
   )
@@ -81,7 +77,7 @@ function selfTest() {
     console.error(`zen-lib banners: self-test: ${bad} failure(s)`)
     process.exit(1)
   }
-  console.log(`OK: zen-lib banners self-test (${cases.length} banner cases, copyright lines, written banners)`)
+  console.log(`OK: zen-lib banners self-test (${doc.cases.length} cases from ${CASES}: ${passing} pass, ${doc.cases.length - passing} fail as they should; copyright lines; written banners)`)
 }
 
 function check() {
@@ -128,7 +124,7 @@ function check() {
     else pass++
   }
   for (const p of problems) console.error(`FAIL ${p}`)
-  console.log(`zen-lib banners: ${pass} of ${want.length} served files start with a banner naming their package and licence`)
+  console.log(`zen-lib banners: ${pass} of ${want.length} served files start with a banner naming their package, licence and copyright`)
   if (problems.length) {
     console.error(`zen-lib banners: ${problems.length} failure(s); run scripts/vendor-zen-lib.sh and commit the output`)
     process.exit(1)

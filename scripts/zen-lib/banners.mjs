@@ -6,28 +6,40 @@
 //
 // A banner is a legal comment in the file's first lines: one of the
 // comments the file starts with (nothing but whitespace and other comments
-// before it) that is a `/*!` comment, or a block comment with `@license` or
-// `@preserve`. It must name the library's id from src/shared/zen-lib.json
-// as a whole word (any case) and every SPDX id of its licence, literally.
-// A bare `/*!`, or one with a URL and no SPDX id, is not a banner. This is
-// the partner build's licence-gate rule, made stricter: there the comment
-// may be anywhere in the file and any allowlisted id counts.
+// before it), starting in its first BANNER_WINDOW bytes, that is a `/*!` or
+// `//!` comment, or a block or line comment with `@license` or `@preserve`
+// (what minifiers keep). That one comment must name the library's id from
+// src/shared/zen-lib.json as a whole word (any case), every SPDX id of its
+// licence literally, and a copyright ("copyright", "(c)" or "©", any case).
+// A bare `/*!`, one with a URL and no SPDX id, or K2's old "pre-bundled for
+// K2" header (no copyright) is not a banner. This is the partner build's
+// licence-gate rule, made stricter: there the comment may be anywhere in
+// the file, any allowlisted id counts and no copyright is needed.
+//
+// scripts/zen-lib/banner-cases.json holds the cases every port of this rule
+// must pass (check-banners.mjs --self-test runs them; the partner build's
+// licence-allow.py reads the same file).
 
-/** The comments a text starts with: [{ block, bang, body }]. Stops at the
- *  first character that is neither whitespace nor a comment. */
+/** A banner starts within this many bytes (UTF-8) of the file's start. */
+export const BANNER_WINDOW = 4096
+
+/** The comments a text starts with: [{ block, bang, body, at }], `at` the
+ *  comment's start in UTF-8 bytes. Stops at the first character that is
+ *  neither whitespace nor a comment. */
 export function leadingComments(text) {
   const out = []
   let i = text.charCodeAt(0) === 0xfeff ? 1 : 0
+  const at = (j) => Buffer.byteLength(text.slice(0, j), 'utf8')
   for (;;) {
     while (i < text.length && /\s/.test(text[i])) i++
     if (text.startsWith('/*', i)) {
       const end = text.indexOf('*/', i + 2)
       if (end < 0) return out
-      out.push({ block: true, bang: text[i + 2] === '!', body: text.slice(i + 2, end) })
+      out.push({ block: true, bang: text[i + 2] === '!', body: text.slice(i + 2, end), at: at(i) })
       i = end + 2
     } else if (text.startsWith('//', i)) {
       const end = text.indexOf('\n', i)
-      out.push({ block: false, bang: false, body: text.slice(i + 2, end < 0 ? text.length : end) })
+      out.push({ block: false, bang: text[i + 2] === '!', body: text.slice(i + 2, end < 0 ? text.length : end), at: at(i) })
       if (end < 0) return out
       i = end + 1
     } else {
@@ -58,20 +70,29 @@ export function namesLicence(body, spdx) {
   return new RegExp(`(?<![A-Za-z0-9.+-])${escapeRe(spdx)}(?![A-Za-z0-9+-])`).test(body)
 }
 
-/** Whether a comment is a legal comment (kept by minifiers). */
-function isLegal(c) {
-  return c.block && (c.bang || c.body.includes('@license') || c.body.includes('@preserve'))
+/** Whether `body` names a copyright: "copyright", "(c)" or "©", any case. */
+export function namesCopyright(body) {
+  return /\bcopyright\b|\(c\)|©/i.test(body)
 }
 
-/** The banner `text` starts with that names library `id` and every id of
- *  its licence `expr`, as one line, or null. */
+/** A legal comment (what minifiers keep: `/*!`, `//!`, or `@license` or
+ *  `@preserve` in a block or line comment) inside the window. */
+function legalComments(text) {
+  return leadingComments(text).filter(
+    (c) => c.at < BANNER_WINDOW && (c.bang || c.body.includes('@license') || c.body.includes('@preserve')),
+  )
+}
+
+/** The banner `text` starts with that names library `id`, every id of its
+ *  licence `expr` and a copyright, as one line, or null. */
 export function bannerOf(text, id, expr) {
   const ids = licenceIds(expr)
   if (!ids.length) return null
-  const c = leadingComments(text).find(
-    (c) => isLegal(c) && namesPackage(c.body, id) && ids.every((spdx) => namesLicence(c.body, spdx)),
+  const c = legalComments(text).find(
+    (c) => namesPackage(c.body, id) && ids.every((spdx) => namesLicence(c.body, spdx)) && namesCopyright(c.body),
   )
-  return c ? `/*${c.body.replace(/\s*\n\s*\*?\s*/g, ' ').trimEnd()} */` : null
+  if (!c) return null
+  return c.block ? `/*${c.body.replace(/\s*\n\s*\*?\s*/g, ' ').trimEnd()} */` : `//${c.body.trimEnd()}`
 }
 
 /** Whether `text` starts with a banner naming library `id` and every id of
@@ -83,11 +104,13 @@ export function hasBanner(text, id, expr) {
 /** Why `text` has no banner, in a few words (for the check's report). */
 export function bannerProblem(text, id, expr) {
   if (hasBanner(text, id, expr)) return null
-  const legal = leadingComments(text).filter(isLegal)
-  if (!legal.length) return 'no /*!, @license or @preserve comment in its first lines'
-  if (!legal.some((c) => namesPackage(c.body, id))) return `its legal comment does not name ${id}`
-  const missing = licenceIds(expr).filter((spdx) => !legal.some((c) => namesLicence(c.body, spdx)))
-  return `its legal comment does not name ${missing.join(', ')} (the SPDX id, literally)`
+  const legal = legalComments(text)
+  if (!legal.length) return `no /*!, //!, @license or @preserve comment among the comments in its first ${BANNER_WINDOW} bytes`
+  const named = legal.filter((c) => namesPackage(c.body, id))
+  if (!named.length) return `its legal comment does not name ${id}`
+  const missing = licenceIds(expr).filter((spdx) => !named.some((c) => namesLicence(c.body, spdx)))
+  if (missing.length) return `its legal comment does not name ${missing.join(', ')} (the SPDX id, literally)`
+  return 'its legal comment names no copyright'
 }
 
 /** Copyright lines of a licence text: a line that starts (after any

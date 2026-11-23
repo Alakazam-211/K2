@@ -1,0 +1,310 @@
+{
+  "about": "Cases for the Zen widget library licence-banner rule (scripts/zen-lib/banners.mjs). Every port of the rule must give `pass` for each case: scripts/zen-lib/check-banners.mjs --self-test and the partner build's licence-allow.py read this file. A case's input is `text`, with `{{pad}}` replaced by `pad.unit` repeated `pad.times` times when `pad` is given. `id` is the zen-lib.json id, `licence` the row's SPDX expression. Byte offsets are UTF-8.",
+  "window_bytes": 4096,
+  "cases": [
+    {
+      "name": "the standard banner",
+      "text": "/*! acme 1.0.0 | MIT | Copyright (c) 2020 Acme | full text: Third-party notices */\ncode()",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": true
+    },
+    {
+      "name": "a multi-line /*! upstream banner with License: and (c)",
+      "text": "/*!\n  Acme v1.0.0\n  (c) 2006-2026 Acme and other contributors\n  License: BSD-3-Clause\n */\ncode()",
+      "id": "acme",
+      "licence": "BSD-3-Clause",
+      "pass": true
+    },
+    {
+      "name": "a block comment with @license",
+      "text": "/* @license acme 1.0.0, MIT, Copyright (c) 2020 Acme */code()",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": true
+    },
+    {
+      "name": "a block comment with @preserve",
+      "text": "/* @preserve\n * acme 1.0.0, MIT, Copyright (c) 2020 Acme\n */code()",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": true
+    },
+    {
+      "name": "a //! @license line comment",
+      "text": "//! @license acme 1.0.0 MIT Copyright (c) 2020 Acme\ncode()",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": true
+    },
+    {
+      "name": "a // @license line comment",
+      "text": "// @license acme 1.0.0 MIT Copyright (c) 2020 Acme\ncode()",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": true
+    },
+    {
+      "name": "a // @preserve line comment",
+      "text": "// @preserve acme 1.0.0 MIT Copyright (c) 2020 Acme\ncode()",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": true
+    },
+    {
+      "name": "a //! line comment",
+      "text": "//! acme 1.0.0 | MIT | Copyright (c) 2020 Acme\ncode()",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": true
+    },
+    {
+      "name": "a jsdoc block with @license and @copyright",
+      "text": "/**\n * acme 1.0.0\n * @license MIT\n * @copyright 2026 Acme\n */\ncode()",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": true
+    },
+    {
+      "name": "the banner after another leading comment",
+      "text": "// first line\n/* plain */\n/*! acme 1.0.0 | MIT | Copyright (c) 2020 Acme | full text: Third-party notices */\ncode()",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": true
+    },
+    {
+      "name": "a byte-order mark, whitespace and the id in capitals",
+      "text": "﻿  \n/*! ACME 1.0 | MIT | Copyright (c) 2020 Acme */",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": true
+    },
+    {
+      "name": "an id with a dot, named in other case",
+      "text": "/*! Highlight.js v11.12.0 (c) 2006 Acme | License: BSD-3-Clause */",
+      "id": "highlight.js",
+      "licence": "BSD-3-Clause",
+      "pass": true
+    },
+    {
+      "name": "K2's glue banner",
+      "text": "/*! acme-k2: acme 1.0.0 (BSD-2-Clause, Copyright (c) 2020 Acme); K2 additions MIT | full text: Third-party notices */\ncode()",
+      "id": "acme",
+      "licence": "BSD-2-Clause",
+      "pass": true
+    },
+    {
+      "name": "an AND licence, both ids named",
+      "text": "/*! acme 1.0.0 | MIT AND Apache-2.0 | Copyright (c) 2020 Acme */",
+      "id": "acme",
+      "licence": "MIT AND Apache-2.0",
+      "pass": true
+    },
+    {
+      "name": "the banner starting at byte 4095 (inside the window)",
+      "text": "{{pad}}/*! acme 1.0.0 | MIT | Copyright (c) 2020 Acme | full text: Third-party notices */",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": true,
+      "pad": {
+        "unit": " ",
+        "times": 4095
+      }
+    },
+    {
+      "name": "the banner starting at byte 4095, after a comment with two-byte characters",
+      "text": "/* {{pad}} */\n/*! acme 1.0.0 | MIT | Copyright (c) 2020 Acme | full text: Third-party notices */",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": true,
+      "pad": {
+        "unit": "é",
+        "times": 2044
+      }
+    },
+    {
+      "name": "a banner in a string",
+      "text": "var s=\"/*! acme 1.0.0 | MIT | Copyright (c) 2020 Acme | full text: Third-party notices */\";\ncode()",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": false
+    },
+    {
+      "name": "a banner after code",
+      "text": "code();/*! acme 1.0.0 | MIT | Copyright (c) 2020 Acme | full text: Third-party notices */",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": false
+    },
+    {
+      "name": "a banner after \"use strict\"",
+      "text": "\"use strict\";\n/*! acme 1.0.0 | MIT | Copyright (c) 2020 Acme | full text: Third-party notices */",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": false
+    },
+    {
+      "name": "a banner 1 MB deep, after code",
+      "text": "{{pad}}\n/*! acme 1.0.0 | MIT | Copyright (c) 2020 Acme | full text: Third-party notices */",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": false,
+      "pad": {
+        "unit": "var a=1;",
+        "times": 131072
+      }
+    },
+    {
+      "name": "a banner 1 MB deep, after blank lines",
+      "text": "{{pad}}/*! acme 1.0.0 | MIT | Copyright (c) 2020 Acme | full text: Third-party notices */",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": false,
+      "pad": {
+        "unit": "\n",
+        "times": 1048576
+      }
+    },
+    {
+      "name": "the banner starting at byte 4096 (outside the window)",
+      "text": "{{pad}}/*! acme 1.0.0 | MIT | Copyright (c) 2020 Acme | full text: Third-party notices */",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": false,
+      "pad": {
+        "unit": " ",
+        "times": 4096
+      }
+    },
+    {
+      "name": "the banner starting at byte 4097, after a comment with two-byte characters",
+      "text": "/* {{pad}} */\n/*! acme 1.0.0 | MIT | Copyright (c) 2020 Acme | full text: Third-party notices */",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": false,
+      "pad": {
+        "unit": "é",
+        "times": 2045
+      }
+    },
+    {
+      "name": "an MIT library whose banner says BSD-3-Clause",
+      "text": "/*! acme 1.0.0 | BSD-3-Clause | Copyright (c) 2020 Acme */\ncode()",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": false
+    },
+    {
+      "name": "K2's old pre-bundled header alone (no copyright)",
+      "text": "/*! three.js 0.186.0 (MIT), pre-bundled for K2 as a classic script; global THREE. */\ncode()",
+      "id": "three",
+      "licence": "MIT",
+      "pass": false
+    },
+    {
+      "name": "/*! with a URL and no SPDX id",
+      "text": "/*! https://github.com/acme/acme (v1.0.0) Copyright (c) 2020 Acme */\ncode()",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": false
+    },
+    {
+      "name": "a bare /*!",
+      "text": "/*!*/\ncode()",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": false
+    },
+    {
+      "name": "a licence name, not the SPDX id",
+      "text": "/*! acme 1.0.0 | Apache license 2.0 | Copyright (c) 2020 Acme */",
+      "id": "acme",
+      "licence": "Apache-2.0",
+      "pass": false
+    },
+    {
+      "name": "the SPDX id in other case",
+      "text": "/*! acme 1.0.0 | mit | Copyright (c) 2020 Acme */",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": false
+    },
+    {
+      "name": "a longer id than the licence (MITX)",
+      "text": "/*! acme | MITX | Copyright (c) 2020 Acme */",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": false
+    },
+    {
+      "name": "an AND licence, one id missing",
+      "text": "/*! acme 1.0.0 | MIT | Copyright (c) 2020 Acme */",
+      "id": "acme",
+      "licence": "MIT AND Apache-2.0",
+      "pass": false
+    },
+    {
+      "name": "no copyright",
+      "text": "/*! acme 1.0.0 | MIT */",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": false
+    },
+    {
+      "name": "another package named",
+      "text": "/*! globex 1.0.0 | MIT | Copyright (c) 2020 Globex */",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": false
+    },
+    {
+      "name": "the id only inside a longer word",
+      "text": "/*! acme-k2: glue | MIT | Copyright (c) 2020 Globex */",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": false
+    },
+    {
+      "name": "the id only inside a host name",
+      "text": "/*! https://d3js.org v7.9.0 | ISC | Copyright (c) 2020 Acme */",
+      "id": "d3",
+      "licence": "ISC",
+      "pass": false
+    },
+    {
+      "name": "package and licence in two comments",
+      "text": "/*! acme 1.0.0 Copyright (c) 2020 Acme */\n/*! MIT */\ncode()",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": false
+    },
+    {
+      "name": "a plain block comment (not legal)",
+      "text": "/* acme 1.0.0 | MIT | Copyright (c) 2020 Acme */\ncode()",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": false
+    },
+    {
+      "name": "a plain line comment (not legal)",
+      "text": "// acme 1.0.0 MIT Copyright (c) 2020 Acme\ncode()",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": false
+    },
+    {
+      "name": "an unterminated block comment",
+      "text": "/*! acme 1.0.0 | MIT | Copyright (c) 2020 Acme",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": false
+    },
+    {
+      "name": "an empty file",
+      "text": "",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": false
+    }
+  ]
+}

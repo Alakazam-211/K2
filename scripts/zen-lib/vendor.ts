@@ -183,7 +183,7 @@ function withBanner(lib: LibSpec, f: LibFile, text: string, copyright: string): 
   if ('own' in f || ('copy' in f && hasBanner(text, lib.id, lib.license))) out = text
   else if ('copy' in f || 'bundle' in f) out = `${libraryBanner(meta)}\n${text}`
   else out = `${glueBanner({ ...meta, file: f.name, title: lib.title })}\n${text}`
-  if (!hasBanner(out, lib.id, lib.license)) die(`${lib.id}@${lib.version}/${f.name}: no licence banner naming ${lib.id} and ${lib.license} in its first lines`)
+  if (!hasBanner(out, lib.id, lib.license)) die(`${lib.id}@${lib.version}/${f.name}: no licence banner naming ${lib.id}, ${lib.license} and a copyright in its first lines`)
   return out
 }
 

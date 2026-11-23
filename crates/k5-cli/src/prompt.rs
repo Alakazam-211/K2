@@ -28,7 +28,12 @@
 //! `read -s` turns the terminal's echo off (`ECHO`, `ECHOK` and `ECHONL`,
 //! as bash's `ttnoecho`) only when stdin is a terminal, and puts it back
 //! after the line, or when SIGINT, SIGTERM, SIGHUP or SIGQUIT ends the
-//! command during the read (bash restores it then too).
+//! command during the read (bash restores it then too). Echo goes off
+//! with `TCSAFLUSH`, as getpass does: what was typed before is dropped,
+//! so a secret never comes from a line the terminal showed. A hidden
+//! question ([`ask_hidden`]) turns echo off BEFORE its prompt shows, as
+//! the shell's `_k2_read_hidden` does, so nothing typed after the prompt
+//! can be echoed.
 //!
 //! What is read is a [`Secret`]: its bytes are wiped when it is dropped,
 //! and its `Debug` never shows them. Nothing here puts a value on argv or
@@ -171,14 +176,30 @@ fn line_or_end(line: Vec<u8>, ended: bool) -> Option<Secret> {
     ended.then_some(line)
 }
 
-/// `printf '%s' "$prompt" >&2; IFS= read -rs v || v=""; echo >&2`: the
-/// shell's no-echo question. The newline after it goes to stderr whatever
-/// was read.
+/// `_k2_read_hidden v "$prompt"` (the shell's `printf '%s' "$prompt" >&2;
+/// IFS= read -rs v || v=""; echo >&2`, echo off first): the no-echo
+/// question. At a terminal echo goes off before the prompt shows
+/// ([`no_echo`]), and comes back after the line, or when a signal ends
+/// the command. The newline after it goes to stderr whatever was read.
 pub fn ask_hidden(prompt_text: &str) -> Secret {
+    crate::prelude::plain_http::run();
+    let guard = no_echo();
     prompt(prompt_text);
-    let v = read_line(Echo::Hidden, AtEof::Drop);
+    let (line, ended) = read_until_newline(&mut Fd0);
+    drop(guard);
     prompt("\n");
-    v
+    finish(line, ended, AtEof::Drop)
+}
+
+/// The terminal's echo off on stdin until the guard is dropped, when stdin
+/// is a terminal (`None` otherwise, or when its settings can't be read).
+/// A signal that ends the command meanwhile puts the settings back first.
+pub(crate) fn no_echo() -> Option<NoEcho> {
+    if stdin_is_tty() {
+        NoEcho::start(0)
+    } else {
+        None
+    }
 }
 
 /// `printf '%s' "$prompt" >&2; IFS= read -r v || v=""`: a question whose
@@ -479,7 +500,7 @@ impl<T: io::Read> ByteSource for io::Bytes<T> {
 /// The terminal's echo off for as long as it lives, and back on when it
 /// is dropped or a signal ends the command.
 #[cfg(unix)]
-struct NoEcho {
+pub(crate) struct NoEcho {
     fd: i32,
     saved: libc::termios,
     /// The handlers before ours, put back after.
@@ -487,7 +508,7 @@ struct NoEcho {
 }
 
 #[cfg(not(unix))]
-struct NoEcho;
+pub(crate) struct NoEcho;
 
 #[cfg(unix)]
 mod restore {
@@ -545,7 +566,8 @@ impl NoEcho {
             }
         }
         let guard = NoEcho { fd, saved, before };
-        if unsafe { libc::tcsetattr(fd, libc::TCSADRAIN, &quiet) } != 0 {
+        // TCSAFLUSH, as getpass: input typed before this is dropped.
+        if unsafe { libc::tcsetattr(fd, libc::TCSAFLUSH, &quiet) } != 0 {
             return None;
         }
         Some(guard)

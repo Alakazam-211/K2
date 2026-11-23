@@ -390,9 +390,12 @@ fn read_secret(prompt: &str) -> String {
     let tty = super::is_tty(0);
     let mut line = Vec::new();
     let mut ended = false;
+    // Echo off before the prompt shows (_k2_read_hidden), put back after
+    // the line or when a signal ends the command.
     let hidden = tty.then(|| {
+        let echo = crate::prompt::no_echo();
         let _ = out::write_flushed(&mut std::io::stderr().lock(), prompt.as_bytes());
-        Echo::off()
+        echo
     });
     let stdin = std::io::stdin();
     let mut lock = stdin.lock();
@@ -419,50 +422,6 @@ fn read_secret(prompt: &str) -> String {
         }
     }
     String::from_utf8_lossy(&line).into_owned()
-}
-
-/// The terminal's echo, off until dropped.
-struct Echo {
-    #[cfg(unix)]
-    saved: Option<libc::termios>,
-}
-
-impl Echo {
-    #[cfg(unix)]
-    fn off() -> Echo {
-        // SAFETY: tcgetattr and tcsetattr on stdin with a zeroed termios
-        // they fill; the saved state is put back on drop.
-        unsafe {
-            let mut t: libc::termios = std::mem::zeroed();
-            if libc::tcgetattr(0, &mut t) != 0 {
-                return Echo { saved: None };
-            }
-            let saved = t;
-            t.c_lflag &= !libc::ECHO;
-            libc::tcsetattr(0, libc::TCSANOW, &t);
-            Echo { saved: Some(saved) }
-        }
-    }
-
-    #[cfg(not(unix))]
-    fn off() -> Echo {
-        Echo {}
-    }
-}
-
-impl Drop for Echo {
-    #[cfg(unix)]
-    fn drop(&mut self) {
-        if let Some(t) = &self.saved {
-            // SAFETY: puts back the state tcgetattr read.
-            unsafe {
-                libc::tcsetattr(0, libc::TCSANOW, t);
-            }
-        }
-    }
-
-    #[cfg(not(unix))]
-    fn drop(&mut self) {}
 }
 
 fn api_key_send(w: &mut Sent, k: &ApiKey) -> Exit {

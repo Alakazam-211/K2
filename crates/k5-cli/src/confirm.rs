@@ -941,22 +941,18 @@ pub fn confirm_token_plan(
     if !text.is_empty() {
         out::stderr_line(&format!("You are approving: {text}"));
     }
-    let method = if has_word(&methods, "vault-password") {
-        prompt::prompt("Vault password: ");
-        "vault-password"
+    let (method, ask) = if has_word(&methods, "vault-password") {
+        ("vault-password", "Vault password: ")
     } else if has_word(&methods, "connect-password") {
-        prompt::prompt(concat!(
-            "Your ",
-            k2_client::product_name!(),
-            " Connect password: "
-        ));
-        "connect-password"
+        (
+            "connect-password",
+            concat!("Your ", k2_client::product_name!(), " Connect password: "),
+        )
     } else {
         out::stderr_line(NO_METHOD);
         return None;
     };
-    let pw = prompt::read_line(prompt::Echo::Hidden, prompt::AtEof::Drop);
-    prompt::prompt("\n");
+    let pw = prompt::ask_hidden(ask);
     let finish = object(vec![
         ("action", Value::Str(Text::from(action))),
         ("method", Value::Str(Text::from(method))),

@@ -916,12 +916,10 @@ fn follow(cx: &mut Cx, login_id: &str) -> Done {
             }
             "waiting_for_code" if !prompted => {
                 prompted = true;
-                prompt::prompt("Paste the code: ");
                 let pasted = if prompt::stdin_is_tty() {
-                    let v = prompt::read_line(prompt::Echo::Hidden, prompt::AtEof::Drop);
-                    prompt::prompt("\n");
-                    v
+                    prompt::ask_hidden("Paste the code: ")
                 } else {
+                    prompt::prompt("Paste the code: ");
                     prompt::read_line(prompt::Echo::Shown, prompt::AtEof::Drop)
                 };
                 if STOPPED.load(Ordering::SeqCst) {

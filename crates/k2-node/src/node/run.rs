@@ -2116,6 +2116,7 @@ impl Node {
             // 0.46.18: root skips the user-namespace rules for this unit
             // (the owner's slot only; `job_userns_refusal` checked it).
             userns: a.plan.userns,
+            no_addr_filter: a.plan.no_addr_filter,
         };
         // The write ends (and the stdin read end) go to root (and the
         // unit); ours close with the call.

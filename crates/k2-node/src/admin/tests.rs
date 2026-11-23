@@ -1033,6 +1033,7 @@ fn no_unit_reaches_the_cache_generations() {
         restrict_userns: false,
         userns: false,
         own_userns: true,
+        no_addr_filter: false,
         syscall_errno: true,
         runtime_max_secs: None,
         gpu: None,

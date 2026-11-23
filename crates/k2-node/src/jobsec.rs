@@ -36,6 +36,38 @@ pub const USERNS_DENY: &str = "deny";
 /// `--userns`: the job may make user namespaces.
 pub const USERNS_ALLOW: &str = "allow";
 
+/// The unit's env (root's) for a `--no-addr-filter` job:
+/// [`NET_LO_ONLY`] = its network namespace must hold no interface but
+/// `lo` ([`lo_only_check`]), the second wall when no address filter is.
+pub const ENV_NET: &str = "K2_JOB_NET";
+/// See [`ENV_NET`].
+pub const NET_LO_ONLY: &str = "lo-only";
+
+/// The interfaces of this process's network namespace (`/proc/self/net/dev`
+/// is the namespace's own, unlike `/sys/class/net`).
+pub fn netns_interfaces() -> Result<Vec<String>, String> {
+    let t = std::fs::read_to_string("/proc/self/net/dev").map_err(|e| format!("read /proc/self/net/dev: {e}"))?;
+    Ok(parse_net_dev(&t))
+}
+
+/// The names in a `/proc/net/dev` text (two header lines, then `name: …`).
+pub fn parse_net_dev(t: &str) -> Vec<String> {
+    t.lines().skip(2).filter_map(|l| l.split_once(':').map(|(n, _)| n.trim().to_string())).filter(|n| !n.is_empty()).collect()
+}
+
+/// `--no-addr-filter`'s second wall: nothing but loopback here.
+pub fn lo_only_check() -> Result<(), String> {
+    let ifs = netns_interfaces()?;
+    let other: Vec<&String> = ifs.iter().filter(|n| n.as_str() != "lo").collect();
+    if !other.is_empty() {
+        return Err(format!("its network namespace has interfaces besides loopback ({}); a job without the address filter runs only in a namespace with lo alone", other.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")));
+    }
+    if !ifs.iter().any(|n| n == "lo") {
+        return Err("its network namespace has no loopback".into());
+    }
+    Ok(())
+}
+
 /// How long the shim waits for root to set its namespace's limit.
 pub const LIMIT_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
 
@@ -460,6 +492,11 @@ pub fn shim_wall() -> Result<(), String> {
     if mode == ShimMode::DenyLimit {
         wait_for_limit(LIMIT_WAIT).map_err(|e| no_wall(&e))?;
     }
+    match std::env::var(ENV_NET).ok().as_deref() {
+        None => {}
+        Some(NET_LO_ONLY) => lo_only_check().map_err(|e| no_wall(&e))?,
+        Some(x) => return Err(no_wall(&format!("{ENV_NET}={x:?} isn't a mode this k2-node knows"))),
+    }
     #[cfg(target_os = "linux")]
     install(mode == ShimMode::Allow).map_err(|e| no_wall(&format!("its syscall filter: {e}")))?;
     Ok(())
@@ -486,6 +523,143 @@ pub fn wait_for_limit(timeout: std::time::Duration) -> Result<(), String> {
 
 fn no_wall(why: &str) -> String {
     format!("k2-node job-exec: this job's sandbox isn't complete, so nothing was run: {why}. This is the node's job sandbox, not the job: run it on another node, and tell the node's owner.")
+}
+
+/// Test probes (`k2-node wall-probe --syscall NAME`): one syscall from this
+/// process, answered `ok` or the errno's name. Each is harmless: a clone
+/// that succeeds exits at once; arguments are null or invalid.
+#[cfg(target_os = "linux")]
+pub use probes::syscall_probe;
+
+/// Off Linux there's nothing to probe.
+#[cfg(not(target_os = "linux"))]
+pub fn syscall_probe(_name: &str) -> String {
+    "not-linux".into()
+}
+
+#[cfg(target_os = "linux")]
+mod probes {
+    const NEWUSER: u64 = 0x1000_0000;
+
+    /// What a probe's syscall said: `ok` or the errno's name.
+    fn said(r: libc::c_long) -> String {
+        if r >= 0 {
+            return "ok".into();
+        }
+        match std::io::Error::last_os_error().raw_os_error() {
+            Some(libc::EPERM) => "EPERM".into(),
+            Some(libc::ENOSYS) => "ENOSYS".into(),
+            Some(libc::EINVAL) => "EINVAL".into(),
+            Some(libc::EBADF) => "EBADF".into(),
+            Some(libc::EFAULT) => "EFAULT".into(),
+            Some(libc::ENOSPC) => "ENOSPC".into(),
+            Some(e) => format!("errno{e}"),
+            None => "?".into(),
+        }
+    }
+
+    /// A fork-like clone (no new stack): the child exits at once; the parent
+    /// reaps it.
+    fn reap_if_child(r: libc::c_long) {
+        if r == 0 {
+            // SAFETY: the child of a fork-like clone leaves at once.
+            unsafe { libc::_exit(0) };
+        }
+        if r > 0 {
+            let mut st = 0;
+            // SAFETY: waiting for our own child.
+            unsafe { libc::waitpid(r as libc::pid_t, &mut st, 0) };
+        }
+    }
+
+    pub fn syscall_probe(name: &str) -> String {
+        // SAFETY (all arms): raw syscalls with harmless arguments; every
+        // pointer is null or to a local that outlives the call.
+        unsafe {
+            match name {
+                "clone_newuser" => {
+                    let r = libc::syscall(libc::SYS_clone, NEWUSER | libc::SIGCHLD as u64, 0u64, 0u64, 0u64, 0u64);
+                    let s = said(r);
+                    reap_if_child(r);
+                    s
+                }
+                "clone3_newuser" | "clone3_plain" => {
+                    // struct clone_args (v0, 64 bytes): flags, pidfd, child_tid,
+                    // parent_tid, exit_signal, stack, stack_size, tls.
+                    let mut a = [0u64; 8];
+                    a[0] = if name == "clone3_newuser" { NEWUSER } else { 0 };
+                    a[4] = libc::SIGCHLD as u64;
+                    let r = libc::syscall(libc::SYS_clone3, a.as_mut_ptr(), std::mem::size_of_val(&a));
+                    let s = said(r);
+                    reap_if_child(r);
+                    s
+                }
+                // In a child: a multithreaded caller (the test harness) gets
+                // EINVAL from unshare(NEWUSER) whatever the filter says.
+                "unshare_newuser" => {
+                    let pid = libc::fork();
+                    if pid == 0 {
+                        let r = libc::syscall(libc::SYS_unshare, NEWUSER);
+                        let e = if r == 0 { 0 } else { std::io::Error::last_os_error().raw_os_error().unwrap_or(255) };
+                        libc::_exit(e & 0xff);
+                    }
+                    let mut st = 0;
+                    libc::waitpid(pid, &mut st, 0);
+                    match libc::WEXITSTATUS(st) {
+                        0 => "ok".into(),
+                        e if e == libc::EPERM => "EPERM".into(),
+                        e if e == libc::EINVAL => "EINVAL".into(),
+                        e if e == libc::ENOSPC => "ENOSPC".into(),
+                        e => format!("errno{e}"),
+                    }
+                }
+                "unshare_cmd" => match std::process::Command::new("unshare").args(["-U", "true"]).status() {
+                    Ok(s) if s.success() => "ok".into(),
+                    Ok(s) => format!("exit{}", s.code().unwrap_or(-1)),
+                    Err(e) => format!("no-unshare:{e}"),
+                },
+                // EBADF without a filter: the filter answers before the fd is looked at.
+                "setns" => said(libc::syscall(libc::SYS_setns, -1i64, 0i64)),
+                "fork_exec" => match std::process::Command::new("/bin/sh").args(["-c", "echo child-ran"]).output() {
+                    Ok(o) if o.status.success() && String::from_utf8_lossy(&o.stdout).contains("child-ran") => "ok".into(),
+                    Ok(o) => format!("exit{}", o.status.code().unwrap_or(-1)),
+                    Err(e) => format!("spawn:{e}"),
+                },
+                "fork" => {
+                    let r = libc::fork() as libc::c_long;
+                    let s = said(r);
+                    reap_if_child(r);
+                    s
+                }
+                // keyctl(KEYCTL_GET_KEYRING_ID, KEY_SPEC_SESSION_KEYRING, 0): any user may.
+                "keyctl" => said(libc::syscall(libc::SYS_keyctl, 0i64, -3i64, 0i64)),
+                "add_key" => said(libc::syscall(libc::SYS_add_key, 0u64, 0u64, 0u64, 0u64, -3i64)),
+                "request_key" => said(libc::syscall(libc::SYS_request_key, 0u64, 0u64, 0u64, 0i64)),
+                "io_uring_setup" => said(libc::syscall(libc::SYS_io_uring_setup, 0u64, 0u64)),
+                "io_uring_enter" => said(libc::syscall(libc::SYS_io_uring_enter, -1i64, 0u64, 0u64, 0u64, 0u64, 0u64)),
+                "io_uring_register" => said(libc::syscall(libc::SYS_io_uring_register, -1i64, 0u64, 0u64, 0u64)),
+                "bpf" => said(libc::syscall(libc::SYS_bpf, 0i64, 0u64, 0u64)),
+                "perf_event_open" => said(libc::syscall(libc::SYS_perf_event_open, 0u64, 0i64, -1i64, -1i64, 0u64)),
+                // UFFD_USER_MODE_ONLY: any user may (Linux 5.11+).
+                "userfaultfd" => said(libc::syscall(libc::SYS_userfaultfd, 1u64)),
+                "kexec_load" => said(libc::syscall(libc::SYS_kexec_load, 0u64, 0u64, 0u64, 0u64)),
+                "kexec_file_load" => said(libc::syscall(libc::SYS_kexec_file_load, -1i64, -1i64, 0u64, 0u64, 0u64)),
+                "init_module" => said(libc::syscall(libc::SYS_init_module, 0u64, 0u64, 0u64)),
+                "finit_module" => said(libc::syscall(libc::SYS_finit_module, -1i64, 0u64, 0u64)),
+                "delete_module" => said(libc::syscall(libc::SYS_delete_module, 0u64, 0u64)),
+                "open_by_handle_at" => said(libc::syscall(libc::SYS_open_by_handle_at, -1i64, 0u64, 0u64)),
+                "mount" => said(libc::syscall(libc::SYS_mount, 0u64, 0u64, 0u64, 0u64, 0u64)),
+                "umount2" => said(libc::syscall(libc::SYS_umount2, 0u64, 0u64)),
+                "pivot_root" => said(libc::syscall(libc::SYS_pivot_root, 0u64, 0u64)),
+                // ADDR_NO_RANDOMIZE: a change away from the default.
+                "personality_change" => said(libc::syscall(libc::SYS_personality, 0x0040000u64)),
+                "personality_query" => said(libc::syscall(libc::SYS_personality, 0xffff_ffffu64)),
+                "max_user_namespaces" => std::fs::read_to_string(super::MAX_USER_NAMESPACES).map(|s| s.trim().to_string()).unwrap_or_else(|e| format!("read:{e}")),
+                other => format!("unknown-probe:{other}"),
+            }
+        }
+    }
+
 }
 
 /// The denylist as a reviewer reads it: one line per syscall, what the
@@ -532,6 +706,13 @@ mod tests {
         assert_eq!(shim_mode(Some("deny-limit")), Ok(ShimMode::DenyLimit));
         assert_eq!(shim_mode(Some("allow")), Ok(ShimMode::Allow));
         assert!(shim_mode(Some("yes")).is_err());
+    }
+
+    #[test]
+    fn net_dev_names_are_read_from_the_namespace_file() {
+        let t = "Inter-|   Receive\n face |bytes\n    lo: 1 2 3\n  eth0: 4 5 6\nveth1@if2: 0\n";
+        assert_eq!(parse_net_dev(t), ["lo", "eth0", "veth1@if2"]);
+        assert_eq!(parse_net_dev("h\nh\n    lo: 0 0\n"), ["lo"]);
     }
 
     #[test]

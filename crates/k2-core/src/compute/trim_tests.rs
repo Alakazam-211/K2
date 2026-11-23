@@ -52,6 +52,7 @@ fn plan(id: &str, env: &[(&str, &str)], created_at: i64) -> Plan {
         provenance: None,
         network: None,
         userns: false,
+        no_addr_filter: false,
         with: Vec::new(),
     }
 }

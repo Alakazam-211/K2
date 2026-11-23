@@ -131,7 +131,7 @@ jobs run under a Seatbelt profile. Neither can read the node's key or state or
 people's home folders, and network = "none" keeps them off the network. On by
 default (0.46.4); a node without it: sudo k2-node setup, or from K2
 `k2 compute node wall <node>` (remote admin policy).
-  k2-node wall-probe [--read P]... [--list D]... [--connect IP:PORT]...   (tests: what this process can reach)
+  k2-node wall-probe [--read P]... [--list D]... [--connect IP:PORT]... [--syscall NAME]...   (tests: what this process can reach)
 
 Agents never run this: they use `k2 compute` on their K2 server."#;
 
@@ -1512,7 +1512,20 @@ async fn main_async(raw: Vec<String>) -> ExitCode {
         Some("admin") => cmd_admin(&a),
         Some("wall-probe") => {
             let list = |k: &str| a.flags.get(k).cloned().unwrap_or_default();
-            println!("{}", k2_node::wall::probe(&list("read"), &list("list"), &list("connect")));
+            let mut v = k2_node::wall::probe(&list("read"), &list("list"), &list("connect"));
+            // 0.46.18: one syscall each (`ok` or its errno), for the job
+            // syscall wall's tests.
+            let sys: serde_json::Map<String, serde_json::Value> = list("syscall")
+                .into_iter()
+                .map(|n| {
+                    let r = k2_node::jobsec::syscall_probe(&n);
+                    (n, r.into())
+                })
+                .collect();
+            if !sys.is_empty() {
+                v["syscall"] = serde_json::Value::Object(sys);
+            }
+            println!("{v}");
             Ok(())
         }
         Some("version") => {

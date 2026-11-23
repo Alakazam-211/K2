@@ -2580,6 +2580,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         // 0.46.15: only ever placed where it runs at that network.
         network: want.network.clone(),
         userns: false,
+        no_addr_filter: false,
     };
     let job = {
         let db = k2_core::db::shared();
@@ -3897,6 +3898,7 @@ fn run_sharded(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reque
         src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(), receipt_v: None, gpu: None, gpu_mem: None, cache_commit: None, cache_ref: None, setup: Vec::new(), cpus_burst: None, provenance: None,
         network: None,
         userns: false,
+        no_addr_filter: false,
         with: Vec::new(),
     };
     let session = who.passport().map(|(_, sid)| sid.to_string());

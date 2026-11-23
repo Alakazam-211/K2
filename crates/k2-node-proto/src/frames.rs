@@ -943,6 +943,13 @@ pub struct Plan {
     /// [`crate::userns::FEATURE_JOB_USERNS`].
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub userns: bool,
+    /// 0.46.18, `--no-addr-filter` (only with `userns` and `--network
+    /// none`, the node owner's own server only): the unit gets no cgroup
+    /// address filter; its network namespace (loopback only) stays.
+    /// False unless asked; sent only to nodes offering
+    /// [`crate::userns::FEATURE_NO_ADDR_FILTER`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_addr_filter: bool,
 }
 
 impl Plan {
@@ -1971,6 +1978,7 @@ mod tests {
             cpus_burst: None, provenance: None,
             network: None,
             userns: false,
+            no_addr_filter: false,
         }
     }
 

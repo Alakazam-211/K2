@@ -663,6 +663,7 @@ async fn w7_a_colliding_job_id_never_touches_the_other_servers_job() {
         cpu_weight: None,
         netns_dummies: vec![],
         userns: false,
+        no_addr_filter: false,
     };
     for (s, why) in [
         (base("w7-g1", &t1_root, 1), "a tenant naming the owner's key"),
@@ -1008,4 +1009,94 @@ async fn servers_add_prepares_the_user_and_records_its_uid() {
     f.servers.iter_mut().filter(|e| e.slot == slot).for_each(|e| e.state = ShareState::Revoked);
     servers::write_file(&r.config, &f).unwrap();
     r.exec.tenant_wipe(&TenantWipe { slot }).unwrap();
+}
+
+// ── 0.46.18: user namespaces and the syscall denylist ────────────────
+
+/// The probes every job runs (`k2-node wall-probe --syscall …`).
+const SYSCALL_PROBES: &[(&str, &str)] = &[
+    ("unshare_cmd", "exit1"),
+    ("clone_newuser", "EPERM"),
+    ("clone3_newuser", "ENOSYS"),
+    ("unshare_newuser", "EPERM"),
+    ("setns", "EPERM"),
+    ("io_uring_setup", "EPERM"),
+    ("bpf", "EPERM"),
+    ("userfaultfd", "EPERM"),
+    ("keyctl", "EPERM"),
+    ("add_key", "EPERM"),
+    ("request_key", "EPERM"),
+    ("perf_event_open", "EPERM"),
+    ("kexec_load", "EPERM"),
+    ("init_module", "EPERM"),
+    ("finit_module", "EPERM"),
+    ("delete_module", "EPERM"),
+    ("open_by_handle_at", "EPERM"),
+    ("mount", "EPERM"),
+    ("umount2", "EPERM"),
+    ("pivot_root", "EPERM"),
+    ("personality_change", "EPERM"),
+    ("fork_exec", "ok"),
+];
+
+fn syscall_argv(r: &Rig) -> Vec<String> {
+    let mut v = vec![r.base.join("bin/k2-node").display().to_string(), "wall-probe".into()];
+    for (p, _) in SYSCALL_PROBES {
+        v.push("--syscall".into());
+        v.push((*p).into());
+    }
+    v
+}
+
+/// A team tenant's job, an own-trust tenant's and the owner's (no
+/// `--userns`): no user namespace however asked (unshare -U, clone with
+/// CLONE_NEWUSER, clone3), and every denied call refused, in real units.
+/// The owner's `--userns` job makes one; a team tenant's `--userns` or
+/// `--no-addr-filter` start is refused at the executor.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "root + systemd ≥ 247: run in a throwaway Linux box with --ignored"]
+async fn userns_and_the_denylist_are_walled_for_team_own_and_owner_jobs() {
+    let r = rig("userns", SLOTS3);
+    let mut fake = Fake::start().await;
+    let n = node(&fake, &r, "", |_| {}).await;
+    let mut _c = fake.next_conn().await;
+    ready(&mut _c).await;
+    let argv = syscall_argv(&r);
+    for (slot, job) in [(1, "ns-team"), (2, "ns-own"), (0, "ns-owner")] {
+        let got = run(&n, slot, job, &as_strs(&argv)).await;
+        let v: serde_json::Value = serde_json::from_str(got.out.trim()).unwrap_or_else(|e| panic!("{e}: {} {}", got.out, got.err));
+        for (p, want) in SYSCALL_PROBES {
+            assert_eq!(v["syscall"][*p], *want, "slot {slot}: {p}: {v}");
+        }
+    }
+    let mut p = plan("ns-owner-userns", &["/bin/sh", "-c", "unshare -U true; echo unshare=$?"]);
+    p.userns = true;
+    start(&n, 0, p);
+    let got = finished(&n, 0, "ns-owner-userns").await;
+    assert!(got.out.contains("unshare=0"), "the owner's --userns job makes one: {} {}", got.out, got.err);
+    for (userns, no_addr_filter) in [(true, false), (true, true), (false, true)] {
+        let s = JobStart {
+            key: "t1-00000000000000aa".into(),
+            root: r.home().join("jobs/t1-00000000000000aa"),
+            rw: vec![],
+            network_none: true,
+            mem_bytes: None,
+            cpu_millis: None,
+            stop_grace_secs: 1,
+            tenant: 1,
+            no_lan: false,
+            stdin: false,
+            max_secs: None,
+            job_uid: false,
+            gpu: None,
+            cpu_weight: None,
+            netns_dummies: vec![],
+            userns,
+            no_addr_filter,
+        };
+        match start_raw(&r, s) {
+            JobAnswer::Refused(e) => assert_eq!(e.code, k2_node_proto::userns::codes::USERNS_OWNER_ONLY, "team slot userns={userns} no_addr_filter={no_addr_filter}: {}", e.message),
+            other => panic!("a team slot got userns={userns} no_addr_filter={no_addr_filter}: {other:?}"),
+        }
+    }
 }

@@ -868,13 +868,19 @@ impl Node {
     pub fn job_userns_refusal(&self, t: &Tenant, plan: &k2_node_proto::frames::Plan) -> Option<(&'static str, String)> {
         use k2_node_proto::userns::codes;
         if !plan.userns {
-            return None;
+            return plan.no_addr_filter.then(|| (codes::NO_ADDR_FILTER_INVALID, "--no-addr-filter goes only with --userns".to_string()));
         }
         if !t.is_owner() {
             return Some((
                 codes::USERNS_OWNER_ONLY,
                 "--userns is only for the node owner's own server: this job's server is a tenant of this node, so its jobs can't make user namespaces here".into(),
             ));
+        }
+        if plan.no_addr_filter {
+            let net = plan.network.as_ref();
+            if net.map(|n| n.mode) != Some(k2_node_proto::jobnet::JobNetMode::None) || net.is_some_and(|n| !n.dummies.is_empty()) {
+                return Some((codes::NO_ADDR_FILTER_INVALID, "--no-addr-filter goes only with --network none (the job's own namespace, loopback only, no --netns-dummy)".into()));
+            }
         }
         if !self.offers_job_userns() {
             return Some((
@@ -1815,6 +1821,7 @@ mod wall_tests {
             src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(), receipt_v: None, gpu: None, gpu_mem: None, cache_commit: None, cache_ref: None, setup: Vec::new(), cpus_burst: None, provenance: None,
             network: None,
             userns: false,
+            no_addr_filter: false,
             with: Vec::new(),
         };
         let fence = k2_node_proto::frames::Fence { job_id: job.into(), attempt: 1, generation: 1, plan_digest: plan.digest().unwrap() };

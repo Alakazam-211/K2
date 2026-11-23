@@ -22,6 +22,14 @@
 /// `--userns` job (its owner's) without that denial.
 pub const FEATURE_JOB_USERNS: &str = "job-userns";
 
+/// Offer feature: this node runs a `--userns --network none` job of its
+/// owner's with `--no-addr-filter`: no cgroup address filter
+/// (`IPAddressDeny=`/`IPAddressAllow=`) on the unit, so packets between
+/// the job's own namespaces reach their interfaces; the job's network
+/// namespace (loopback only, no path to the node's interfaces) stays,
+/// and the shim checks it has no interface but `lo` before anything runs.
+pub const FEATURE_NO_ADDR_FILTER: &str = "no-addr-filter";
+
 /// Refusal codes.
 pub mod codes {
     /// The workspace asked for `--userns` but the node's owner hasn't
@@ -33,4 +41,7 @@ pub mod codes {
     pub const USERNS_OWNER_ONLY: &str = "userns_owner_only";
     /// No node this job may use runs `--userns` jobs yet (k2-node 0.46.18).
     pub const USERNS_NEEDS_UPDATE: &str = "userns_needs_update";
+    /// `--no-addr-filter` without `--userns` and `--network none` (or
+    /// beside `--netns-dummy`, whose namespace has more than loopback).
+    pub const NO_ADDR_FILTER_INVALID: &str = "no_addr_filter_invalid";
 }

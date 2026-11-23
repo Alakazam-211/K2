@@ -311,6 +311,11 @@ impl Node {
         if t.speaks_gens() && self.offers_job_userns() && !f.iter().any(|x| x == k2_node_proto::userns::FEATURE_JOB_USERNS) {
             f.push(k2_node_proto::userns::FEATURE_JOB_USERNS.to_string());
         }
+        // 0.46.18: an owner's `--userns --network none` job without the
+        // cgroup address filter (its namespace stays the wall).
+        if t.speaks_gens() && self.offers_job_userns() && self.offers_job_network() && !f.iter().any(|x| x == k2_node_proto::userns::FEATURE_NO_ADDR_FILTER) {
+            f.push(k2_node_proto::userns::FEATURE_NO_ADDR_FILTER.to_string());
+        }
         // O2 (protocol 10): `Outputs.stats`, the job's 5 s series.
         if t.speaks_gens() && !f.iter().any(|x| x == k2_node_proto::gens::FEATURE_JOB_STATS) {
             f.push(k2_node_proto::gens::FEATURE_JOB_STATS.to_string());
@@ -656,13 +661,21 @@ mod job_network_tests {
         let r = n.job_userns_refusal(&tenant, &p).unwrap();
         assert_eq!(r.0, ucodes::USERNS_OWNER_ONLY, "{}", r.1);
         assert!(r.1.contains("tenant"), "a named reason: {}", r.1);
-        if cfg!(target_os = "linux") {
-            assert!(offered(&n, &owner) && offered(&n, &tenant), "every server learns the node walls user namespaces");
-            assert_eq!(n.job_userns_refusal(&owner, &p), None);
-        } else {
-            assert!(!offered(&n, &owner), "a Mac has no user namespaces to wall");
-            assert_eq!(n.job_userns_refusal(&owner, &p).map(|r| r.0), Some(ucodes::USERNS_NEEDS_UPDATE));
-        }
+        assert!(offered(&n, &owner) && offered(&n, &tenant), "every server learns the node walls user namespaces");
+        assert_eq!(n.job_userns_refusal(&owner, &p), None);
+        // --no-addr-filter: only with --userns and --network none, never a
+        // tenant's (a team job can't get it).
+        p.no_addr_filter = true;
+        assert_eq!(n.job_userns_refusal(&owner, &p).map(|r| r.0), Some(ucodes::NO_ADDR_FILTER_INVALID), "no --network none");
+        p.network = Some(JobNet::none());
+        assert_eq!(n.job_userns_refusal(&owner, &p), None);
+        assert_eq!(n.job_userns_refusal(&tenant, &p).map(|r| r.0), Some(ucodes::USERNS_OWNER_ONLY), "a tenant never gets it");
+        p.network = Some(sew());
+        assert_eq!(n.job_userns_refusal(&owner, &p).map(|r| r.0), Some(ucodes::NO_ADDR_FILTER_INVALID), "dummies: more than loopback");
+        p.network = Some(JobNet::none());
+        p.userns = false;
+        assert_eq!(n.job_userns_refusal(&owner, &p).map(|r| r.0), Some(ucodes::NO_ADDR_FILTER_INVALID), "never without --userns");
+        assert_eq!(n.job_userns_refusal(&tenant, &p).map(|r| r.0), Some(ucodes::NO_ADDR_FILTER_INVALID), "nor for a team job without it");
     }
 
     /// An older root executor (no `netns` in Ready): neither is offered, and

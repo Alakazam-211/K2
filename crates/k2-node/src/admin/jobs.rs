@@ -359,6 +359,13 @@ pub struct JobStart {
     /// absent when false (today's start, byte for byte).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub userns: bool,
+    /// 0.46.18 (`--no-addr-filter`): with `userns` and `network_none`
+    /// (the owner's slot only), the unit gets no `IPAddressDeny=`/
+    /// `IPAddressAllow=`; its own network namespace (loopback only) stays
+    /// and the shim checks it has nothing but `lo`. Root refuses it
+    /// anywhere else. Absent when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_addr_filter: bool,
 }
 
 /// systemd's `CPUWeight` range.
@@ -785,6 +792,10 @@ pub struct UnitPlan {
     /// never the node's sysctl. Off where systemd can't make one
     /// ([`Executor::own_userns_ready`]); the filter still refuses.
     pub own_userns: bool,
+    /// 0.46.18 `--no-addr-filter` (with `userns` at `network` none): no
+    /// `IPAddressDeny=`/`IPAddressAllow=`; the namespace stays, and the
+    /// shim checks it holds loopback alone ([`crate::jobsec::ENV_NET`]).
+    pub no_addr_filter: bool,
     /// systemd ≥ 247: the denylist's entries say `:EPERM` (refused); an
     /// older systemd kills the process instead (still a refusal).
     pub syscall_errno: bool,
@@ -890,6 +901,10 @@ pub fn systemd_run_argv(p: &UnitPlan) -> Vec<String> {
         crate::jobsec::USERNS_DENY
     };
     a.push(format!("--setenv={}={shim_mode}", crate::jobsec::ENV_USERNS));
+    if p.no_addr_filter && p.network == Network::None {
+        // The shim checks the namespace holds loopback alone.
+        a.push(format!("--setenv={}={}", crate::jobsec::ENV_NET, crate::jobsec::NET_LO_ONLY));
+    }
     let mut prop = |s: String| {
         a.push("-p".into());
         a.push(s);
@@ -991,16 +1006,21 @@ pub fn systemd_run_argv(p: &UnitPlan) -> Vec<String> {
                 Some(path) => prop(format!("NetworkNamespacePath={}", path.display())),
                 None => prop("PrivateNetwork=yes".into()),
             }
-            prop("IPAddressDeny=any".into());
-            // Its own loopback works (the namespace's; nothing outside it),
-            // and its dummy interfaces' addresses (0.46.14), each in its own
-            // assignment (systemd merges them): systemd-run takes a keyword
-            // (`localhost`, `any`, …) only as a whole value, so
-            // `localhost 10.254.254.1/32` fails to parse in systemd-run
-            // itself, before any unit exists ([`ip_access_value_ok`]).
-            prop(format!("IPAddressAllow={LOOPBACK_ALLOW}"));
-            if !p.allow_ips.is_empty() {
-                prop(format!("IPAddressAllow={}", p.allow_ips.join(" ")));
+            // 0.46.18 `--no-addr-filter` (the owner's `--userns` job): no
+            // address filter, so packets between the job's own namespaces
+            // reach their interfaces; the namespace itself is the wall.
+            if !p.no_addr_filter {
+                prop("IPAddressDeny=any".into());
+                // Its own loopback works (the namespace's; nothing outside it),
+                // and its dummy interfaces' addresses (0.46.14), each in its own
+                // assignment (systemd merges them): systemd-run takes a keyword
+                // (`localhost`, `any`, …) only as a whole value, so
+                // `localhost 10.254.254.1/32` fails to parse in systemd-run
+                // itself, before any unit exists ([`ip_access_value_ok`]).
+                prop(format!("IPAddressAllow={LOOPBACK_ALLOW}"));
+                if !p.allow_ips.is_empty() {
+                    prop(format!("IPAddressAllow={}", p.allow_ips.join(" ")));
+                }
             }
             // The resolver's local sockets would still answer from outside
             // the namespace (DNS as a side channel).
@@ -1048,6 +1068,20 @@ pub fn userns_slot_check(userns: bool, tenant: Slot) -> Result<(), AdminRefusal>
         return Err(refuse(
             k2_node_proto::userns::codes::USERNS_OWNER_ONLY,
             format!("--userns is only for the node owner's own server's jobs; slot {tenant} is a tenant of this node"),
+        ));
+    }
+    Ok(())
+}
+
+/// 0.46.18: `--no-addr-filter` goes only with `--userns` (the owner's
+/// slot, [`userns_slot_check`]) on a job at `network` none in a namespace
+/// with loopback alone (no `--netns-dummy`); else refused.
+pub fn no_addr_filter_check(no_addr_filter: bool, userns: bool, network: Network, dummies: usize) -> Result<(), AdminRefusal> {
+    use k2_node_proto::userns::codes;
+    if no_addr_filter && (!userns || network != Network::None || dummies > 0) {
+        return Err(refuse(
+            codes::NO_ADDR_FILTER_INVALID,
+            "--no-addr-filter goes only with --userns and --network none (the job's own namespace, loopback only, no --netns-dummy)",
         ));
     }
     Ok(())
@@ -1486,7 +1520,7 @@ impl Executor {
         let prog = find_program("systemd-run").ok_or("systemd-run not found")?;
         static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let unit = format!("{UNIT_PREFIX}userns-selftest-{}-{}.service", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
-        let a: Vec<String> = vec![
+        let mut a: Vec<String> = vec![
             format!("--unit={unit}"),
             "--quiet".into(),
             "--wait".into(),
@@ -1494,16 +1528,26 @@ impl Executor {
             "--pipe".into(),
             format!("--uid={}", ids.uid),
             format!("--gid={}", ids.gid),
-            "-p".into(),
-            "NoNewPrivileges=yes".into(),
-            "-p".into(),
-            "PrivateUsers=yes".into(),
-            "-p".into(),
-            "RuntimeMaxSec=20".into(),
-            "--".into(),
-            "/bin/cat".into(),
-            "/proc/self/uid_map".into(),
         ];
+        // The job template's namespace-making properties beside it, so a
+        // systemd that can't combine them fails here, never a job.
+        for p in [
+            "NoNewPrivileges=yes",
+            "ProtectSystem=strict",
+            "ProtectHome=yes",
+            "PrivateDevices=yes",
+            "ProtectKernelTunables=yes",
+            "ProtectControlGroups=yes",
+            "TemporaryFileSystem=/dev/shm:mode=1777",
+            "PrivateNetwork=yes",
+            RESTRICT_USER_NAMESPACES,
+            "PrivateUsers=yes",
+            "RuntimeMaxSec=20",
+        ] {
+            a.push("-p".into());
+            a.push(p.into());
+        }
+        a.extend(["--".into(), "/bin/cat".into(), "/proc/self/uid_map".into()]);
         let out = std::process::Command::new(prog)
             .args(&a)
             .env_clear()
@@ -1785,6 +1829,9 @@ impl Executor {
     }
 
     fn start_job(&self, s: &JobStart, fds: Vec<OwnedFd>) -> Result<(String, Option<u32>, Option<String>, Option<String>), AdminRefusal> {
+        // 0.46.18: `--userns` and `--no-addr-filter` are the node owner's
+        // own server's alone; a tenant's ask is refused before anything.
+        userns_slot_check(s.userns || s.no_addr_filter, s.tenant)?;
         let ids = self.job_ids(s.tenant)?;
         if key_slot(&s.key) != s.tenant {
             return Err(refuse(code::BAD_ARGS, format!("job key {:?} isn't a slot-{} key", s.key, s.tenant)));
@@ -1847,6 +1894,7 @@ impl Executor {
         // 0.46.18: `--userns` is the node owner's own server's alone, never
         // a tenant's, whatever its trust (root decides; the node only asks).
         userns_slot_check(s.userns, s.tenant)?;
+        no_addr_filter_check(s.no_addr_filter, s.userns, network, s.netns_dummies.len())?;
         let v = systemd();
         if s.tenant != OWNER_SLOT && v < MIN_SYSTEMD_TENANT {
             return Err(refuse(share::codes::TENANT_WALL_MISSING, format!("systemd {v} is older than {MIN_SYSTEMD_TENANT}: no tenant jobs here")));
@@ -1872,6 +1920,7 @@ impl Executor {
             restrict_userns,
             userns: s.userns,
             own_userns: !s.userns && self.own_userns_ready(),
+            no_addr_filter: s.no_addr_filter,
             syscall_errno: v >= MIN_SYSTEMD_PROTECT_PROC,
             runtime_max_secs: runtime_max(s.max_secs),
             gpu: None,
@@ -2252,6 +2301,7 @@ mod tests {
             restrict_userns: false,
             userns: false,
             own_userns: true,
+            no_addr_filter: false,
             syscall_errno: true,
             runtime_max_secs: None,
             gpu: None,
@@ -2340,7 +2390,7 @@ mod tests {
         assert_eq!(job_cpu_weight(1), 1, "never 0");
         assert_eq!(job_cpu_weight(1_024_000), 10_000);
         // The wire: absent unless asked; an older executor's Ready says no.
-        let s = JobStart { key: "k".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: None, cpu_millis: Some(8000), stop_grace_secs: 1, tenant: 0, no_lan: false, stdin: false, max_secs: None, job_uid: false, gpu: None, cpu_weight: Some(400), netns_dummies: vec![], userns: false };
+        let s = JobStart { key: "k".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: None, cpu_millis: Some(8000), stop_grace_secs: 1, tenant: 0, no_lan: false, stdin: false, max_secs: None, job_uid: false, gpu: None, cpu_weight: Some(400), netns_dummies: vec![], userns: false, no_addr_filter: false };
         assert!(serde_json::to_string(&JobOp::Start(s.clone())).unwrap().contains(r#""cpu_weight":400"#));
         let none = JobStart { cpu_weight: None, ..s };
         assert!(!serde_json::to_string(&JobOp::Start(none)).unwrap().contains("cpu_weight"));
@@ -2484,6 +2534,21 @@ mod tests {
         assert!(own_uid_map("         0     990          1\n       990     990          1\n"));
         assert!(!own_uid_map("         0          0 4294967295\n"));
         assert!(!own_uid_map(""));
+        // A team tenant's unit: its one namespace line, the whole denylist
+        // (setns too), and the shim told to deny, exactly like an owner's
+        // job without --userns.
+        let mut team = plan();
+        team.restrict_userns = true;
+        team.slice = slice_name(1);
+        let t = systemd_run_argv(&team);
+        assert!(t.iter().any(|x| x == TEAM_RESTRICT_NAMESPACES) && !t.iter().any(|x| x == RESTRICT_USER_NAMESPACES), "{t:?}");
+        assert!(t.iter().any(|x| x == "--setenv=K2_JOB_USERNS=deny-limit"), "{t:?}");
+        let tf: Vec<&String> = t.iter().filter(|x| x.starts_with("SystemCallFilter=")).collect();
+        let pf: Vec<&String> = plain.iter().filter(|x| x.starts_with("SystemCallFilter=")).collect();
+        assert_eq!(tf, pf, "the same denylist for team and own jobs");
+        for n in crate::jobsec::DENIED.iter().chain(crate::jobsec::DENIED_UNLESS_USERNS) {
+            assert!(tf[0].contains(&format!("{n}:EPERM")), "{n}: {tf:?}");
+        }
         // Root's slot check: the owner's slot only.
         assert!(userns_slot_check(true, OWNER_SLOT).is_ok());
         assert!(userns_slot_check(false, 3).is_ok());
@@ -2491,8 +2556,27 @@ mod tests {
             let e = userns_slot_check(true, slot).unwrap_err();
             assert_eq!(e.code, k2_node_proto::userns::codes::USERNS_OWNER_ONLY, "slot {slot}");
         }
+        // --no-addr-filter: only with --userns at network none, no dummies.
+        assert!(no_addr_filter_check(false, false, Network::On, 0).is_ok());
+        assert!(no_addr_filter_check(true, true, Network::None, 0).is_ok());
+        for (u, n, d) in [(false, Network::None, 0), (true, Network::NoLan, 0), (true, Network::On, 0), (true, Network::None, 1)] {
+            let e = no_addr_filter_check(true, u, n, d).unwrap_err();
+            assert_eq!(e.code, k2_node_proto::userns::codes::NO_ADDR_FILTER_INVALID, "{u} {n:?} {d}");
+        }
+        // In the unit: no address filter, the namespace stays, the shim told.
+        let mut p = plan();
+        p.userns = true;
+        p.network = Network::None;
+        let filtered = systemd_run_argv(&p);
+        assert!(filtered.iter().any(|x| x == "IPAddressDeny=any"), "{filtered:?}");
+        p.no_addr_filter = true;
+        let a = systemd_run_argv(&p);
+        assert!(!a.iter().any(|x| x.starts_with("IPAddressDeny") || x.starts_with("IPAddressAllow")), "{a:?}");
+        assert!(a.iter().any(|x| x == "PrivateNetwork=yes"), "the namespace stays: {a:?}");
+        assert!(a.iter().any(|x| x == "--setenv=K2_JOB_NET=lo-only"), "{a:?}");
+        assert!(!filtered.iter().any(|x| x.starts_with("--setenv=K2_JOB_NET")), "{filtered:?}");
         // The wire: absent unless asked.
-        let s = JobStart { key: "k".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: None, cpu_millis: None, stop_grace_secs: 1, tenant: 0, no_lan: false, stdin: false, max_secs: None, job_uid: false, gpu: None, cpu_weight: None, netns_dummies: vec![], userns: false };
+        let s = JobStart { key: "k".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: None, cpu_millis: None, stop_grace_secs: 1, tenant: 0, no_lan: false, stdin: false, max_secs: None, job_uid: false, gpu: None, cpu_weight: None, netns_dummies: vec![], userns: false, no_addr_filter: false };
         assert!(!serde_json::to_string(&s).unwrap().contains("userns"));
         let u = JobStart { userns: true, ..s };
         let t = serde_json::to_string(&JobOp::Start(u.clone())).unwrap();
@@ -2757,6 +2841,7 @@ mod tests {
                 addr: "10.254.254.1/32".into(),
             }],
             userns: false,
+            no_addr_filter: false,
         };
         let text = serde_json::to_string(&JobOp::Start(s.clone())).unwrap();
         assert!(
@@ -3076,9 +3161,9 @@ mod tests {
     fn ops_round_trip_on_the_wire() {
         let ops = [
             JobOp::Ready,
-            JobOp::Start(JobStart { key: "j-g1".into(), root: "/r".into(), rw: vec![], network_none: true, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 2, no_lan: true, stdin: false, max_secs: Some(60), job_uid: false, gpu: None, cpu_weight: None, netns_dummies: vec![], userns: false }),
-            JobOp::Start(JobStart { key: "j-g2".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 0, no_lan: false, stdin: true, max_secs: None, job_uid: true, gpu: None, cpu_weight: None, netns_dummies: vec![], userns: false }),
-            JobOp::Start(JobStart { key: "j-g3".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 1, no_lan: false, stdin: false, max_secs: None, job_uid: false, gpu: Some(k2_node_proto::gpu::GpuAsk::one(k2_node_proto::gpu::GpuVendor::Amd)), cpu_weight: None, netns_dummies: vec![], userns: false }),
+            JobOp::Start(JobStart { key: "j-g1".into(), root: "/r".into(), rw: vec![], network_none: true, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 2, no_lan: true, stdin: false, max_secs: Some(60), job_uid: false, gpu: None, cpu_weight: None, netns_dummies: vec![], userns: false, no_addr_filter: false }),
+            JobOp::Start(JobStart { key: "j-g2".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 0, no_lan: false, stdin: true, max_secs: None, job_uid: true, gpu: None, cpu_weight: None, netns_dummies: vec![], userns: false, no_addr_filter: false }),
+            JobOp::Start(JobStart { key: "j-g3".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 1, no_lan: false, stdin: false, max_secs: None, job_uid: false, gpu: Some(k2_node_proto::gpu::GpuAsk::one(k2_node_proto::gpu::GpuVendor::Amd)), cpu_weight: None, netns_dummies: vec![], userns: false, no_addr_filter: false }),
             JobOp::KeyTaint { node_fp: "a".repeat(64), mark: Some("--dev".into()) },
             JobOp::KeyTaint { node_fp: "a".repeat(64), mark: None },
             JobOp::Tenants,
@@ -3099,7 +3184,7 @@ mod tests {
         let JobOp::Start(s) = old else { panic!() };
         assert_eq!((s.tenant, s.no_lan, s.stdin), (0, false, false));
         // A start without stdin is the 0.46.3 wire, byte for byte.
-        let plain = JobOp::Start(JobStart { key: "k".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: None, cpu_millis: None, stop_grace_secs: 1, tenant: 0, no_lan: false, stdin: false, max_secs: None, job_uid: false, gpu: None, cpu_weight: None, netns_dummies: vec![], userns: false });
+        let plain = JobOp::Start(JobStart { key: "k".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: None, cpu_millis: None, stop_grace_secs: 1, tenant: 0, no_lan: false, stdin: false, max_secs: None, job_uid: false, gpu: None, cpu_weight: None, netns_dummies: vec![], userns: false, no_addr_filter: false });
         let text = serde_json::to_string(&plain).unwrap();
         assert!(!text.contains("stdin") && !text.contains("job_uid") && !text.contains("gpu") && !text.contains("netns"), "{text}");
         // An older executor's Ready (no stdin) reads as "can't relay stdin",

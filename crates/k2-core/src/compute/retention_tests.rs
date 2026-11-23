@@ -273,6 +273,7 @@ fn store_job(conn: &Connection, id: &str, parent: Option<&str>) {
         provenance: None,
         network: None,
         userns: false,
+        no_addr_filter: false,
         with: Vec::new(),
     };
     let ctl = JobCtl { shard: parent.map(|p| ShardRef { parent: p.into(), index: 1, of: 2 }), ..JobCtl::default() };

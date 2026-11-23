@@ -54,7 +54,7 @@ const TABLE_KEYS: &[(&str, &[&str])] = &[
         "names",
         &["product", "short", "company", "lockup", "server", "login"],
     ),
-    ("zones", &["label", "internal"]),
+    ("zones", &["label"]),
     ("control", CONTROL_KEYS),
     ("feeds", &["daemon", "downloads"]),
     ("update", &["keys"]),
@@ -111,8 +111,6 @@ pub struct Fields {
     pub login: String,
     /// `zones.label`: the zone boxes are named under, `<label>.<zone>`.
     pub label_zone: String,
-    /// `zones.internal`: a box also gets a name under our own zone.
-    pub internal_name: bool,
     /// `control.connect`: the Connect control plane.
     pub connect: String,
     /// `control.cert`: the certificate broker's endpoint.
@@ -480,11 +478,6 @@ fn parse_fields(doc: &toml::Table, product: &str, base: Option<&Fields>) -> Resu
         b(|f| &f.label_zone),
         "zones.label",
     )?;
-    let internal_name = inherit(
-        get_bool(doc, "zones", "internal")?,
-        base.map(|f| &f.internal_name),
-        "zones.internal",
-    )?;
     if let Some(t) = opt_table(doc, "control")? {
         let missing: Vec<&str> = CONTROL_KEYS
             .iter()
@@ -608,7 +601,6 @@ fn parse_fields(doc: &toml::Table, product: &str, base: Option<&Fields>) -> Resu
         server,
         login,
         label_zone,
-        internal_name,
         connect,
         cert,
         push,
@@ -961,8 +953,6 @@ pub mod zones {{
     /// The zone a box's name is under, `<label>.<zone>`, until the
     /// enrolment answer names it.
     pub const LABEL: &str = {label:?};
-    /// A box also gets a name under our own zone.
-    pub const INTERNAL_NAME: bool = {internal};
 }}
 
 /// `[control]`: our control endpoints, unless the brand sets its own.
@@ -1059,7 +1049,6 @@ pub mod sew {{
         server = f.server,
         login = f.login,
         label = f.label_zone,
-        internal = f.internal_name,
         connect = f.connect,
         cert = f.cert,
         push = f.push,
@@ -1777,7 +1766,6 @@ login = "Initech Account"
 name = "ab"
 [zones]
 label = "boxes.example.invalid"
-internal = false
 [control]
 connect = "https://connect.example.invalid"
 cert = "https://cert.example.invalid/cert"
@@ -1849,7 +1837,6 @@ call_name = "Hub Calls"
             server: s("Hub Box"),
             login: s("Initech Account"),
             label_zone: s("boxes.example.invalid"),
-            internal_name: false,
             connect: s("https://connect.example.invalid"),
             cert: s("https://cert.example.invalid/cert"),
             push: s("https://push.example.invalid"),
@@ -1883,7 +1870,6 @@ call_name = "Hub Calls"
         for line in [
             "    pub const SHORT: &str = \"Hub\";\n",
             "    pub const LABEL: &str = \"boxes.example.invalid\";\n",
-            "    pub const INTERNAL_NAME: bool = false;\n",
             "    pub const CONNECT: &str = \"https://connect.example.invalid\";\n",
             "    pub const RELAY_HOST: &str = \"relay.example.invalid\";\n",
             "    pub const DAEMON: &str = \"https://updates.example.invalid/daemon-latest.json\";\n",
@@ -1975,7 +1961,7 @@ call_name = "Hub Calls"
         for (i, (from, to, want)) in [
             ("label = \"boxes.example.invalid\"", "label = \"Boxes.Example\"", "zones.label \"Boxes.Example\" must be a domain name"),
             ("label = \"boxes.example.invalid\"", "label = \"example\"", "zones.label \"example\" must be a domain name"),
-            ("internal = false", "internal = \"no\"", "zones.internal must be true or false"),
+            ("label = \"boxes.example.invalid\"", "label = \"boxes.example.invalid\"\ninternal = true", "[zones] holds a key it does not know: internal"),
             ("connect = \"https://connect.example.invalid\"", "connect = \"http://connect.example.invalid\"", "control.connect \"http://connect.example.invalid\" must be an https URL"),
             ("connect = \"https://connect.example.invalid\"", "connect = \"https://connect.example.invalid/a b\"", "control.connect \"https://connect.example.invalid/a b\" must be an https URL"),
             ("connect = \"https://connect.example.invalid\"", "connect = \"https://connect.example.invalid:8443\"", "must be an https URL"),

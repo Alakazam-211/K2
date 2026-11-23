@@ -49,11 +49,10 @@ keys = [
 # minisign lines, colours #RRGGBB; "" means none (no link, or off).
 
 # Where boxes are named. label: the zone a box's name is under
-# (<label>.<zone>) until the enrolment answer names it. internal: a box
-# also gets a name under our own zone.
+# (<label>.<zone>) until the enrolment answer names it. A partner's box
+# has its partner address only, no second name under our zone.
 [zones]
 label = "k2.dev"
-internal = true
 
 # Our control endpoints. A brand that leaves these out uses ours; one that
 # sets [control] sets all six. The bash CLI keeps its own copy of connect

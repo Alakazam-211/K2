@@ -216,10 +216,10 @@ describe('a brand file the build can\'t use stops it, naming the field', () => {
   })
 
   it('reads true and false (the hosted fields use them), and still refuses another bare word', () => {
-    const dir = brandFolder('bools', `${GOOD}[zones]\ninternal = true\n[mail]\npostal = false\n`)
+    const dir = brandFolder('bools', `${GOOD}[mail]\npostal = false\n`)
     expect(run(['renderer', '--print', '--brand', dir])).toContain("export const CLI_NAME: string = 'ab'")
-    const bad = brandFolder('bare-word', `${GOOD}[zones]\ninternal = yes\n`)
-    expect(refused(['renderer', '--print', '--brand', bad])).toContain('zones.internal is not a string, an integer, true or false, or a list of tables: yes')
+    const bad = brandFolder('bare-word', `${GOOD}[mail]\npostal = yes\n`)
+    expect(refused(['renderer', '--print', '--brand', bad])).toContain('mail.postal is not a string, an integer, true or false, or a list of tables: yes')
   })
 })
 

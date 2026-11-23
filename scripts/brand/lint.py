@@ -299,7 +299,7 @@ TABLES = {
     "cli": None,
     "package": None,
     "update": ("keys",),
-    "zones": ("label", "internal"),
+    "zones": ("label",),
     "control": ("connect", "cert", "push", "relay", "relay_list", "web_api"),
     "feeds": ("daemon", "downloads"),
     "machine": ("home", "binary_prefix", "unit_prefix"),
@@ -313,7 +313,7 @@ TABLES = {
 FIELD_SHAPES = {
     "names.short": "name", "names.company": "name", "names.lockup": "name",
     "names.server": "name", "names.login": "name",
-    "zones.label": "domain", "zones.internal": "bool",
+    "zones.label": "domain",
     "control.connect": "url", "control.cert": "url", "control.push": "url",
     "control.relay": "domain", "control.relay_list": "url", "control.web_api": "url",
     "feeds.daemon": "url", "feeds.downloads": "url",
@@ -330,7 +330,7 @@ FIELD_SHAPES = {
 # HOSTED_SOME may not be "" either; the fields in HOSTED_NOT_OURS may not
 # be the default brand's own value.
 HOSTED = (
-    "names.company", "names.login", "zones.label", "zones.internal", "package.update_feed",
+    "names.company", "names.login", "zones.label", "package.update_feed",
     "update.keys", "feeds.daemon", "feeds.downloads", "look.icons", "links.site",
     "links.support_email", "links.support_url", "links.terms", "links.privacy",
     "links.dashboard", "links.feedback", "mail.postal",

@@ -85,12 +85,10 @@ keys = [
     { role = "primary", key_id = "E5A48B9699901B0F", pubkey = "RWQPG5CZlouk5cumw8FmJEvxMK5bNan2q2fBqrqyCWOY7/rp5kSjA9Ri" },
 ]
 
-# Where your boxes are named: <subdomain>.<label>. internal: a box also
-# gets a name under K5's own zone (true or false; ask us which your
-# agreement says).
+# Where your boxes are named: <subdomain>.<label>. That is their only
+# name: a box of yours gets no second name under K5's own zone.
 [zones]
 label = "studio.example.invalid"
-internal = false
 
 # Where your updates come from, besides [package] update_feed: the
 # headless daemon's manifest, and the folder a release's files are in.

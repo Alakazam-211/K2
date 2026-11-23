@@ -46,7 +46,6 @@ keys = [
 # [phone] (xy has no phone app).
 [zones]
 label = "desk.example.invalid"
-internal = false
 
 [feeds]
 daemon = "https://updates.example.invalid/daemon-latest.json"

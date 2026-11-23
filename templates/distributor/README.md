@@ -90,8 +90,7 @@ the build, naming it.
 | `package.bundle_id`, `desktop_id`, `gui_binary` | the app's ids on macOS and Linux | **must** for app builds |
 | `package.update_feed` | the desktop app's update manifest | **must** |
 | `update.keys` | the update keys your build trusts, primary first; never K5's. They sign your daemon, so they are also the trust root of the Sew pins it carries (there is no separate Sew signer). The template's key is a test-only placeholder that `--hosted` refuses | **must**, your own |
-| `zones.label` | the zone your boxes are named under, `<subdomain>.<label>` | **must** |
-| `zones.internal` | `true` or `false`: a box also gets a name under K5's own zone | **must** (your agreement says which) |
+| `zones.label` | the zone your boxes are named under, `<subdomain>.<label>`: their only name (no second name under K5's own zone) | **must** |
 | `control.connect`, `cert`, `push`, `relay`, `relay_list`, `web_api` | Connect, the certificate broker, the push gateway, the relays, the website's API | leave out: they are ours. A brand that sets `[control]` sets all six |
 | `feeds.daemon` | the headless daemon's update manifest | **must** |
 | `feeds.downloads` | the folder a release's files are downloaded from | **must** |

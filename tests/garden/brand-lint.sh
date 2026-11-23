@@ -175,12 +175,12 @@ brand h-bare q8 q8 "Initech Hub"
 lint "$T/h-bare"; [ "$rc" = 0 ] || die "without --hosted the hosted fields are not asked for: $out"; ok
 lint "$T/h-bare" --hosted
 [ "$rc" = 1 ] || die "a bare brand --hosted: $out"
-for f in names.company names.login zones.label zones.internal package.update_feed update.keys \
+for f in names.company names.login zones.label package.update_feed update.keys \
     feeds.daemon feeds.downloads look.icons links.site links.support_email links.support_url \
     links.terms links.privacy links.dashboard links.feedback mail.postal; do
     [[ "$out" == *"field $f: hosted: a hosted box needs it set"* ]] || die "a bare brand --hosted names $f: $out"
 done
-[ "$(printf '%s\n' "$out" | grep -c ': hosted: ')" = 17 ] || die "a bare brand --hosted: 17 fields: $out"; ok
+[ "$(printf '%s\n' "$out" | grep -c ': hosted: ')" = 16 ] || die "a bare brand --hosted: 16 fields: $out"; ok
 # System mail has no fleet-wide sender: left out, it is noreply@{server}.
 [[ "$out" != *"mail.system_from"* ]] || die "mail.system_from is not asked of a hosted brand: $out"; ok
 # A link that may not be none, and a value that is the default brand's own.

@@ -20,8 +20,7 @@ zones.label	"boxes.example.invalid"	ok
 zones.label	"Boxes.example.invalid"	shape
 zones.label	"example"	shape
 zones.label	"boxes.example.in1"	shape
-zones.internal	true	ok
-zones.internal	"yes"	shape
+zones.internal	true	unknown
 control.connect	"https://connect.example.invalid"	ok
 control.relay	-	control
 control.relay_list	-	control

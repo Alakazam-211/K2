@@ -43,11 +43,10 @@ keys = [
 # the names made from the product; K2 rules before any of these changes.
 
 # Where boxes are named. label: the zone a box's name is under
-# (<label>.<zone>) until the enrolment answer names it. internal: a box
-# also gets a name under our own zone.
+# (<label>.<zone>) until the enrolment answer names it. A partner's box
+# has its partner address only, no second name under our zone.
 [zones]
 label = "k2.dev"
-internal = true
 
 # [control] is left out: brand/k2 spells our control endpoints, and an
 # our-brand file may not set them while the bash CLI keeps its own copy

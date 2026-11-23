@@ -162,6 +162,54 @@ fn writes_run_no_hooks() {
     assert!(fx::git(&d, &["log", "-1", "--format=%G?"]) == "N", "unsigned, as libgit2 made them");
 }
 
+/// A 3-way merge on git: K2's merge message, unsigned, no editor, and the
+/// conflict markers in plain `merge` style even when the person's repo
+/// asks for diff3; a merge driver from the repo's attributes is the
+/// person's git's business, but hooks never run.
+#[test]
+fn merge_commit_and_conflicts_on_git() {
+    let d = fx::init("write-merge");
+    write(&d, "a.txt", "a1\n");
+    write(&d, "b.txt", "b1\n");
+    fx::commit_all(&d, "base");
+    fx::git(&d, &["checkout", "-q", "-b", "feature"]);
+    write(&d, "b.txt", "b2 from feature\n");
+    fx::commit_all(&d, "feature");
+    fx::git(&d, &["checkout", "-q", "main"]);
+    write(&d, "a.txt", "a2 from main\n");
+    fx::commit_all(&d, "main");
+    fx::git(&d, &["config", "merge.conflictStyle", "diff3"]);
+    fx::git(&d, &["config", "commit.gpgsign", "true"]);
+    let r = merge_branch(s(&d), "feature").expect("merge");
+    assert!(r.success && r.conflicts.is_empty(), "{r:?}");
+    assert_eq!(fx::git(&d, &["log", "-1", "--format=%s %G?"]), "Merge branch 'feature' N");
+    assert_eq!(fx::git(&d, &["rev-list", "--count", "--merges", "HEAD"]), "1");
+    assert_eq!(std::fs::read_to_string(d.join("b.txt")).expect("b"), "b2 from feature\n");
+
+    // A conflict: listed, markers in merge style, state in progress.
+    let root = fx::git(&d, &["rev-list", "--max-parents=0", "HEAD"]);
+    fx::git(&d, &["checkout", "-q", "-b", "other", &root]);
+    write(&d, "a.txt", "a3 from other\n");
+    fx::commit_all(&d, "other");
+    fx::git(&d, &["checkout", "-q", "main"]);
+    let r = merge_branch(s(&d), "other").expect("merge runs");
+    assert_eq!((r.success, r.conflicts.clone()), (false, vec!["a.txt".to_string()]));
+    let body = std::fs::read_to_string(d.join("a.txt")).expect("a");
+    assert!(body.contains("<<<<<<<") && body.contains(">>>>>>>"), "{body}");
+    assert!(!body.contains("|||||||"), "merge style, not diff3: {body}");
+    assert!(merge_status(s(&d)).expect("status").in_progress);
+    let e = merge_branch(s(&d), "other").expect_err("a merge is in progress");
+    assert!(e.contains("already in progress"), "{e}");
+    resolve_conflict(s(&d), "a.txt", "ours").expect("ours");
+    assert_eq!(std::fs::read_to_string(d.join("a.txt")).expect("a"), "a2 from main\n");
+    assert!(merge_status(s(&d)).expect("status").conflicts.is_empty());
+    abort_merge(s(&d)).expect("abort");
+    assert!(!merge_status(s(&d)).expect("status").in_progress);
+    assert_eq!(fx::git(&d, &["status", "--porcelain"]), "", "clean after abort");
+    assert!(merge_branch(s(&d), "nope").expect_err("missing").contains("not found"));
+    assert!(merge_branch(s(&d), "--abort").expect_err("option-like").contains("not found"));
+}
+
 #[test]
 fn delete_branch_refuses_a_checked_out_branch_and_drops_its_config() {
     let d = fx::init("write-delbranch");
@@ -235,6 +283,7 @@ fn child_writes_without_git() {
     refused("stage all", stage_all(s(&d)));
     refused("commit", commit(s(&d), "x").map(|_| ()));
     refused("delete branch", delete_branch(s(&d), "side"));
+    refused("merge", merge_branch(s(&d), "side").map(|_| ()));
     let fresh = fx::tmp("write-nogit-init");
     refused("init", init_repo(s(&fresh)));
     assert!(!fresh.join(".git").exists());

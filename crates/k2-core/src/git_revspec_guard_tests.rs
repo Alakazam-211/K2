@@ -21,14 +21,9 @@ fn temp(tag: &str) -> PathBuf {
 /// A repo with a.txt in one commit whose message is "fix".
 fn repo_with_fix_commit(tag: &str) -> PathBuf {
     let d = temp(tag);
-    let repo = Repository::init(&d).expect("git init");
+    crate::git_fixture::init_at(&d);
     std::fs::write(d.join("a.txt"), "a1\n").expect("write a.txt");
-    let mut idx = repo.index().expect("index");
-    idx.add_path(Path::new("a.txt")).expect("add a.txt");
-    idx.write().expect("write index");
-    let tree = repo.find_tree(idx.write_tree().expect("write tree")).expect("tree");
-    let sig = git2::Signature::now("K2 Test", "k2-test@example.com").expect("signature");
-    repo.commit(Some("HEAD"), &sig, &sig, "fix", &tree, &[]).expect("commit");
+    crate::git_fixture::commit_all(&d, "fix");
     d
 }
 

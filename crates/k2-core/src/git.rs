@@ -1,4 +1,3 @@
-use git2::{Repository, StatusOptions, BranchType};
 use serde::Serialize;
 
 use crate::gitx::diff::{ChangeKind, FileChange};
@@ -918,60 +917,54 @@ pub struct MergeStatus {
     pub conflicts: Vec<String>,
 }
 
-/// Merge a branch into the current HEAD (used for merging worktree branches into main).
+/// Merge a branch into the current HEAD (used for merging worktree branches
+/// into main). gix reads the state, the branch and the merge base; the
+/// person's git does the merge (fast-forward or a merge commit). git2 used
+/// to do it in-process; since 0.46.18 it needs git (`git_not_installed`
+/// otherwise).
 pub fn merge_branch(repo_path: &str, branch_name: &str) -> Result<MergeResult, String> {
-    let repo = Repository::discover(repo_path).map_err(|e| format!("Not a git repository: {e}"))?;
+    let (repo, workdir) = workdir_of(repo_path)?;
 
     // Validate repository state — reject if another merge/rebase is already in progress
+    use gix::state::InProgress as P;
     match repo.state() {
-        git2::RepositoryState::Clean => {}
-        git2::RepositoryState::Merge => {
+        None => {}
+        Some(P::Merge) => {
             return Err("A merge is already in progress. Resolve conflicts or abort the current merge first.".to_string());
         }
-        git2::RepositoryState::Rebase
-        | git2::RepositoryState::RebaseInteractive
-        | git2::RepositoryState::RebaseMerge => {
+        Some(P::Rebase | P::RebaseInteractive) => {
             return Err("A rebase is in progress. Complete or abort the rebase first.".to_string());
         }
-        git2::RepositoryState::CherryPick => {
+        Some(P::CherryPick | P::CherryPickSequence) => {
             return Err("A cherry-pick is in progress. Complete or abort it first.".to_string());
         }
-        other => {
+        Some(other) => {
             return Err(format!("Repository is in an unsupported state: {:?}", other));
         }
     }
 
-    let branch = repo
-        .find_branch(branch_name, BranchType::Local)
-        .map_err(|e| format!("Branch '{branch_name}' not found: {e}"))?;
+    if branch_name.starts_with('-') {
+        return Err(format!("Branch '{branch_name}' not found"));
+    }
+    let target = crate::gitx::local_branch_tip(&repo, branch_name).ok_or_else(|| format!("Branch '{branch_name}' not found"))?;
+    let head = crate::gitx::head_info(&repo).oid;
+    let base = head.and_then(|h| crate::gitx::merge_base(&repo, h, target));
 
-    let annotated = repo
-        .reference_to_annotated_commit(branch.get())
-        .map_err(|e| format!("Failed to get annotated commit: {e}"))?;
-
-    let (analysis, _) = repo
-        .merge_analysis(&[&annotated])
-        .map_err(|e| format!("Merge analysis failed: {e}"))?;
-
-    if analysis.is_up_to_date() {
+    if head == Some(target) || base == Some(target) {
         return Ok(MergeResult {
             success: true,
             conflicts: Vec::new(),
             merged_files: 0,
         });
     }
+    crate::git_safe::require_git()?;
 
-    if analysis.is_fast_forward() {
+    if head.is_some() && base == head {
         // Fast-forward like `git merge --ff-only`: refuse when it would
-        // overwrite uncommitted work, update the files with a SAFE
-        // checkout (never a forced one), then move HEAD. Uncommitted
-        // changes to files the fast-forward doesn't touch stay as they are.
-        let target_oid = annotated.id();
-        let target_tree = repo
-            .find_commit(target_oid)
-            .and_then(|c| c.tree())
-            .map_err(|e| format!("Failed to read branch '{branch_name}': {e}"))?;
-        let blocked = fast_forward_blockers(&repo, &target_tree)?;
+        // overwrite uncommitted work (K2's own check names the files), then
+        // git moves HEAD and the files. Uncommitted changes to files the
+        // fast-forward doesn't touch stay as they are.
+        let blocked = fast_forward_blockers(&repo, target)?;
         if !blocked.is_empty() {
             return Err(format!(
                 "{}: merging '{branch_name}' would overwrite uncommitted changes in {}; commit or stash them first",
@@ -979,18 +972,17 @@ pub fn merge_branch(repo_path: &str, branch_name: &str) -> Result<MergeResult, S
                 blocked.join(", ")
             ));
         }
-        repo.checkout_tree(target_tree.as_object(), Some(git2::build::CheckoutBuilder::new().safe()))
-            .map_err(|e| {
-                format!(
-                    "{}: merging '{branch_name}' would overwrite uncommitted changes ({e}); commit or stash them first",
+        let o = crate::git_safe::run_write(&workdir, &["merge", "-q", "--ff-only", "--no-edit", branch_name])?;
+        if !o.ok() {
+            let said = o.said();
+            if said.contains("overwritten") {
+                return Err(format!(
+                    "{}: merging '{branch_name}' would overwrite uncommitted changes ({said}); commit or stash them first",
                     refusal::MAIN_HAS_UNCOMMITTED_CHANGES
-                )
-            })?;
-        let mut reference = repo.head().map_err(|e| format!("Failed to get HEAD: {e}"))?;
-        reference
-            .set_target(target_oid, &format!("Fast-forward merge {branch_name}"))
-            .map_err(|e| format!("Failed to fast-forward: {e}"))?;
-
+                ));
+            }
+            return Err(format!("Failed to fast-forward: {said}"));
+        }
         return Ok(MergeResult {
             success: true,
             conflicts: Vec::new(),
@@ -998,88 +990,55 @@ pub fn merge_branch(repo_path: &str, branch_name: &str) -> Result<MergeResult, S
         });
     }
 
-    // Normal merge
-    repo.merge(&[&annotated], None, None)
-        .map_err(|e| format!("Merge failed: {e}"))?;
-
-    // Check for conflicts
-    let index = repo.index().map_err(|e| format!("Failed to get index: {e}"))?;
-    let conflicts: Vec<String> = index
-        .conflicts()
-        .map_err(|e| format!("Failed to check conflicts: {e}"))?
-        .filter_map(|c| c.ok())
-        .filter_map(|c| {
-            c.our
-                .as_ref()
-                .or(c.their.as_ref())
-                .and_then(|entry| String::from_utf8(entry.path.clone()).ok())
-        })
-        .collect();
-
-    if conflicts.is_empty() {
-        // Auto-merge succeeded — create merge commit
-        let sig = repo.signature().map_err(|e| format!("Failed to get signature: {e}"))?;
-        let mut index = repo.index().map_err(|e| format!("Failed to get index: {e}"))?;
-        let tree_oid = index.write_tree().map_err(|e| format!("Failed to write tree: {e}"))?;
-        let tree = repo.find_tree(tree_oid).map_err(|e| format!("Failed to find tree: {e}"))?;
-
-        let head_commit = repo.head()
-            .map_err(|e| format!("Failed to get HEAD: {e}"))?
-            .peel_to_commit()
-            .map_err(|e| format!("Failed to get HEAD commit: {e}"))?;
-        let branch_commit = repo.find_commit(annotated.id())
-            .map_err(|e| format!("Failed to find branch commit: {e}"))?;
-
-        let msg = format!("Merge branch '{branch_name}'");
-        repo.commit(Some("HEAD"), &sig, &sig, &msg, &tree, &[&head_commit, &branch_commit])
-            .map_err(|e| format!("Failed to create merge commit: {e}"))?;
-
-        repo.cleanup_state().map_err(|e| format!("Failed to cleanup merge state: {e}"))?;
-
+    // Normal merge: a merge commit, or conflicts left in the work tree.
+    let msg = format!("Merge branch '{branch_name}'");
+    let o = crate::git_safe::run_write(
+        &workdir,
+        &["merge", "-q", "--no-ff", "--no-edit", "--no-verify", "--no-gpg-sign", "-m", &msg, branch_name],
+    )?;
+    let repo = crate::gitx::discover(&workdir).map_err(|e| format!("Not a git repository: {e}"))?;
+    if o.ok() {
         let summary = diff_summary(repo_path).unwrap_or_default();
-        Ok(MergeResult {
+        return Ok(MergeResult {
             success: true,
             conflicts: Vec::new(),
             merged_files: summary.len() as u32,
-        })
-    } else {
-        Ok(MergeResult {
-            success: false,
-            conflicts,
-            merged_files: 0,
-        })
+        });
     }
+    if repo.state() == Some(P::Merge) {
+        let index = repo.index_or_empty().map_err(|e| format!("Failed to get index: {e}"))?;
+        let conflicts = crate::gitx::conflicted_paths(&index);
+        if !conflicts.is_empty() {
+            return Ok(MergeResult {
+                success: false,
+                conflicts,
+                merged_files: 0,
+            });
+        }
+    }
+    let said = o.said();
+    if said.contains("overwritten") {
+        return Err(format!(
+            "{}: merging '{branch_name}' would overwrite uncommitted changes ({said}); commit or stash them first",
+            refusal::MAIN_HAS_UNCOMMITTED_CHANGES
+        ));
+    }
+    Err(format!("Merge failed: {said}"))
 }
 
 /// Paths with uncommitted changes (staged, unstaged or untracked) that a
 /// fast-forward from HEAD to `target` would write over, sorted.
-fn fast_forward_blockers(repo: &Repository, target: &git2::Tree) -> Result<Vec<String>, String> {
-    let head_tree = repo
-        .head()
-        .and_then(|h| h.peel_to_tree())
-        .map_err(|e| format!("Failed to read HEAD: {e}"))?;
-    let diff = repo
-        .diff_tree_to_tree(Some(&head_tree), Some(target), None)
-        .map_err(|e| format!("Failed to diff for fast-forward: {e}"))?;
-    let mut touched = std::collections::HashSet::new();
-    for d in diff.deltas() {
-        for f in [d.old_file(), d.new_file()] {
-            if let Some(p) = f.path().and_then(|p| p.to_str()) {
-                touched.insert(p.to_string());
-            }
-        }
-    }
-    let mut opts = StatusOptions::new();
-    opts.include_untracked(true).recurse_untracked_dirs(true).include_ignored(false);
-    let statuses = repo
-        .statuses(Some(&mut opts))
-        .map_err(|e| format!("Failed to read status: {e}"))?;
-    let mut blocked: Vec<String> = statuses
-        .iter()
-        .filter(|e| e.status() != git2::Status::CURRENT && !e.status().contains(git2::Status::IGNORED))
-        .filter_map(|e| e.path().map(str::to_string))
-        .filter(|p| touched.contains(p))
+fn fast_forward_blockers(repo: &gix::Repository, target: gix::ObjectId) -> Result<Vec<String>, String> {
+    let head_tree = crate::gitx::head_tree_id(repo).ok_or("Failed to read HEAD")?;
+    let target_tree = crate::gitx::commit_tree_id(repo, target).ok_or("Failed to read the branch")?;
+    let touched: std::collections::HashSet<String> = crate::gitx::diff::tree_to_tree(repo, Some(head_tree), Some(target_tree))
+        .map_err(|e| format!("Failed to diff for fast-forward: {e}"))?
+        .into_iter()
+        .map(|c| c.path)
         .collect();
+    let opts = gstatus::Options { untracked: gstatus::Untracked::Files, staged_renames: false, submodules: true };
+    let rows = gstatus::statuses(repo, opts).map_err(|e| format!("Failed to read status: {e}"))?;
+    let mut blocked: Vec<String> = rows.into_iter().map(|r| r.path).filter(|p| touched.contains(p)).collect();
     blocked.sort();
     blocked.dedup();
     Ok(blocked)
@@ -1104,70 +1063,40 @@ pub fn merge_status(repo_path: &str) -> Result<MergeStatus, String> {
     })
 }
 
-/// Abort an in-progress merge. Refused (`no_merge_in_progress`) when the
-/// repository has no merge in progress: the reset below would otherwise
-/// throw away ordinary uncommitted work.
+/// Abort an in-progress merge (`git merge --abort`). Refused
+/// (`no_merge_in_progress`) when the repository has no merge in progress:
+/// a reset would otherwise throw away ordinary uncommitted work.
 pub fn abort_merge(repo_path: &str) -> Result<(), String> {
-    let repo = Repository::discover(repo_path).map_err(|e| format!("Not a git repository: {e}"))?;
-    if repo.state() != git2::RepositoryState::Merge {
+    let (repo, workdir) = workdir_of(repo_path)?;
+    if repo.state() != Some(gix::state::InProgress::Merge) {
         return Err(format!(
             "{}: there is no merge in progress in {repo_path}; nothing to abort",
             refusal::NO_MERGE_IN_PROGRESS
         ));
     }
-
-    repo.checkout_head(Some(git2::build::CheckoutBuilder::default().force()))
-        .map_err(|e| format!("Failed to reset working tree: {e}"))?;
-
-    repo.cleanup_state().map_err(|e| format!("Failed to cleanup merge state: {e}"))
+    crate::git_safe::run_write_ok(&workdir, "Failed to abort the merge", &["merge", "--abort"])?;
+    Ok(())
 }
 
 /// Resolve a conflict by choosing "ours" or "theirs". `file_path` must be
 /// a file in conflict right now (its exact repo-relative path, so a
 /// pattern never matches); anything else is refused (`not_in_conflict`)
-/// and untouched.
+/// and untouched. git checks out that side and stages the file.
 pub fn resolve_conflict(repo_path: &str, file_path: &str, resolution: &str) -> Result<(), String> {
-    let repo = Repository::discover(repo_path).map_err(|e| format!("Not a git repository: {e}"))?;
-    let workdir = repo.workdir().ok_or("No working directory")?;
-
-    let in_conflict = {
-        let index = repo.index().map_err(|e| format!("Failed to get index: {e}"))?;
-        let found = index
-            .conflicts()
-            .map_err(|e| format!("Failed to check conflicts: {e}"))?
-            .filter_map(|c| c.ok())
-            .any(|c| {
-                [c.ancestor, c.our, c.their]
-                    .iter()
-                    .flatten()
-                    .any(|entry| entry.path.as_slice() == file_path.as_bytes())
-            });
-        found
-    };
-    if !in_conflict {
+    let (repo, workdir) = workdir_of(repo_path)?;
+    let index = repo.index_or_empty().map_err(|e| format!("Failed to get index: {e}"))?;
+    if !crate::gitx::conflicted_paths(&index).iter().any(|p| p == file_path) {
         return Err(format!("{}: {file_path} is not in conflict; nothing to resolve", refusal::NOT_IN_CONFLICT));
     }
-
-    match resolution {
-        "ours" => {
-            // Checkout our version
-            let mut cb = git2::build::CheckoutBuilder::new();
-            cb.path(file_path).force().use_ours(true);
-            repo.checkout_index(None, Some(&mut cb))
-                .map_err(|e| format!("Failed to checkout 'ours': {e}"))?;
-        }
-        "theirs" => {
-            // Checkout their version
-            let mut cb = git2::build::CheckoutBuilder::new();
-            cb.path(file_path).force().use_theirs(true);
-            repo.checkout_index(None, Some(&mut cb))
-                .map_err(|e| format!("Failed to checkout 'theirs': {e}"))?;
-        }
+    let side = match resolution {
+        "ours" => "--ours",
+        "theirs" => "--theirs",
         _ => return Err(format!("Invalid resolution: {resolution} (use 'ours' or 'theirs')")),
-    }
-
+    };
+    crate::git_safe::run_write_ok(&workdir, &format!("Failed to checkout '{resolution}'"), &["checkout", "-q", side, "--", file_path])?;
     // Stage the resolved file
-    stage_file(workdir.to_string_lossy().as_ref(), file_path)
+    crate::git_safe::run_write_ok(&workdir, "Failed to stage the resolved file", &["add", "--", file_path])?;
+    Ok(())
 }
 
 /// Delete a local branch (merged or not). git refuses a branch checked out

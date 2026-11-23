@@ -421,6 +421,91 @@ function useDrawerNow(turn: ThreadTurn | null, holding: boolean): number {
   return now
 }
 
+// ── A calm open ear (0.46.18) ───────────────────────────────────────────
+//
+// Rosson 2026-11-23 (on 0.46.17): "the activity ear, when it's open, is just
+// jumping up and down a lot more", and "if it jumps around in height, it
+// makes it hard to read the messages above." The open ear sized itself to
+// its words on every frame: the step wraps to one, two or three lines as
+// each tool call starts ("Thinking…" → "Running `a long command …`"), goes
+// away once the agent replied, and the tally and subagent lines come and
+// go. The box grows with the ear, and the Thread's list keeps its newest
+// message clear of the box, so every frame moved the messages up or down.
+//
+// Now, while it is open: (1) a burst of frames for the same running turn
+// paints at most once per ZEN_DRAWER_COALESCE_MS; (2) its height only grows
+// during a turn (a floor kept per turn and width; a new turn, a resize or
+// closing it starts again); (3) the step, the tally and the subagent line
+// each stop at a few lines, so the growing has a ceiling. The words are the
+// same. Closed, the ear is one line of fixed height and nothing changes.
+
+/** A burst of frames for one running turn paints once per this (ms). */
+export const ZEN_DRAWER_COALESCE_MS = 120
+/** The open ear's step stops at this many lines (then "…"). */
+export const ZEN_DRAWER_STEP_LINES = 3
+/** The open ear's tally and subagent lines stop at this many lines each. */
+export const ZEN_DRAWER_NOTE_LINES = 2
+
+function clampLines(lines: number): React.CSSProperties {
+  return { display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: lines, overflow: 'hidden' }
+}
+
+/** Both frames of the same running turn (a burst we may hold back). */
+function sameRunningTurn(a: ThreadTurn | null, b: ThreadTurn | null): boolean {
+  return !!a && !!b && a.turnId === b.turnId && a.end === null && b.end === null
+}
+
+/** `turn`, with frames of the same running turn coalesced while `on`: the
+ *  first goes at once, the rest of a burst lands as the newest one at most
+ *  every `ms`. A new turn, an end, or no turn always goes at once. */
+export function useCoalescedTurn(turn: ThreadTurn | null, on: boolean, ms = ZEN_DRAWER_COALESCE_MS): ThreadTurn | null {
+  const shown = useRef(turn)
+  const latest = useRef(turn)
+  const at = useRef(0)
+  const [, wake] = useState(0)
+  latest.current = turn
+  if (turn !== shown.current) {
+    const now = Date.now()
+    if (!on || !sameRunningTurn(shown.current, turn) || now - at.current >= ms) {
+      shown.current = turn
+      at.current = now
+    }
+  }
+  const pending = turn !== shown.current
+  useEffect(() => {
+    if (!pending) return
+    const id = setTimeout(
+      () => {
+        shown.current = latest.current
+        at.current = Date.now()
+        wake((n) => n + 1)
+      },
+      Math.max(0, at.current + ms - Date.now()),
+    )
+    return () => clearTimeout(id)
+  }, [pending, ms])
+  return shown.current
+}
+
+/** The open ear's floor (px) while `key` (turn and width) holds: the tallest
+ *  it has measured, so a frame with fewer lines doesn't shrink it. `null`
+ *  key (closed, or nothing drawn): no floor, and the next open starts anew. */
+function useGrowOnlyHeight(key: string | null, ref: React.RefObject<HTMLElement | null>): number | undefined {
+  const [floor, setFloor] = useState<{ key: string; px: number } | null>(null)
+  useLayoutEffect(() => {
+    if (key === null) {
+      setFloor((f) => (f === null ? f : null))
+      return
+    }
+    const el = ref.current
+    if (!el) return
+    const px = Math.ceil(el.getBoundingClientRect().height)
+    if (!(px > 0)) return
+    setFloor((f) => (f && f.key === key && f.px >= px ? f : { key, px }))
+  })
+  return floor && floor.key === key ? floor.px : undefined
+}
+
 type Phase = 'hidden' | 'in' | 'out'
 
 /** Whether the drawer has anything to show for `turn` now (the
@@ -430,7 +515,7 @@ export function zenDrawerShows(turn: ThreadTurn | null | undefined, now = Date.n
 }
 
 export function ZenActivityDrawer({
-  turn,
+  turn: turnIn,
   onStop,
   attached = true,
   hidden = false,
@@ -448,6 +533,9 @@ export function ZenActivityDrawer({
   /** The clip box's margin, when the caller shares the top edge. */
   margin?: string
 }): React.JSX.Element | null {
+  const [expanded, setExpanded] = useState(readZenDrawerExpanded)
+  // Open: a burst of frames paints once per ZEN_DRAWER_COALESCE_MS.
+  const turn = useCoalescedTurn(turnIn, expanded)
   // The last live state, for the supersede hold (a message sent mid-turn).
   // No turn (a Thread switch, or the server says none runs) or another
   // turn's end drops it: a hold never outlives its own turn.
@@ -472,7 +560,6 @@ export function ZenActivityDrawer({
     return () => clearTimeout(t)
   }, [phase])
 
-  const [expanded, setExpanded] = useState(readZenDrawerExpanded)
   // Expanding or collapsing remounts the dot and the words (other branch).
   const shownLine = line ?? (phase === 'out' ? last.current : null)
   const dotPulses = shownLine?.tone === 'working'
@@ -499,6 +586,11 @@ export function ZenActivityDrawer({
     if (tileRef.current) ro.observe(tileRef.current)
     return () => ro.disconnect()
   }, [mounted])
+
+  // Open, the ear only grows during a turn (no shrink-then-grow per frame).
+  const detailRef = useRef<HTMLSpanElement | null>(null)
+  const floorKey = expanded && display && drawn ? `${drawn.turnId}:${width}` : null
+  const detailFloor = useGrowOnlyHeight(floorKey, detailRef)
 
   if (!display) return null
   const color = TONE[display.tone]
@@ -586,7 +678,12 @@ export function ZenActivityDrawer({
           }}
         >
           {expanded ? (
-            <span data-zen-drawer-detail="" className="flex min-w-0 flex-col" style={{ gap: 1, padding: `6px ${padRight}px 6px 12px` }}>
+            <span
+              ref={detailRef}
+              data-zen-drawer-detail=""
+              className="flex min-w-0 flex-col"
+              style={{ gap: 1, padding: `6px ${padRight}px 6px 12px`, boxSizing: 'border-box', minHeight: detailFloor }}
+            >
               <span className="flex min-w-0 items-center" style={{ gap: 8, fontSize: 13, lineHeight: '18px' }}>
                 {dot}
                 <span data-zen-drawer-head="" className="min-w-0 break-words" style={{ color, fontWeight: 600 }}>
@@ -599,6 +696,7 @@ export function ZenActivityDrawer({
                     data-zen-drawer-step-text=""
                     className={`min-w-0 flex-1 break-words ${d.step.kind === 'thinking' ? 'zen-drawer-pulse-text' : ''}`}
                     style={{
+                      ...clampLines(ZEN_DRAWER_STEP_LINES),
                       animationDelay: d.step.kind === 'thinking' ? wordsDelay : undefined,
                       ...(d.step.kind === 'needs' ? { color: 'var(--zen-needs-you)' } : {}),
                     }}
@@ -613,12 +711,12 @@ export function ZenActivityDrawer({
                 </span>
               ) : null}
               {d.tally ? (
-                <span data-zen-drawer-tally="" className="min-w-0 break-words" style={{ fontSize: 12, lineHeight: '18px', color: 'var(--zen-text-muted)' }}>
+                <span data-zen-drawer-tally="" className="min-w-0 break-words" style={{ ...clampLines(ZEN_DRAWER_NOTE_LINES), fontSize: 12, lineHeight: '18px', color: 'var(--zen-text-muted)' }}>
                   <DetailBits items={d.tallyItems} fallback={d.tally} />
                 </span>
               ) : null}
               {d.children ? (
-                <span data-zen-drawer-children="" className="min-w-0 break-words" style={{ fontSize: 12, lineHeight: '18px', color: 'var(--zen-text-muted)' }}>
+                <span data-zen-drawer-children="" className="min-w-0 break-words" style={{ ...clampLines(ZEN_DRAWER_NOTE_LINES), fontSize: 12, lineHeight: '18px', color: 'var(--zen-text-muted)' }}>
                   <DetailBits items={d.childItems} fallback={d.children} />
                 </span>
               ) : null}

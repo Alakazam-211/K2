@@ -1,3 +1,3 @@
-/*! d3-k2: d3 7.9.0 (ISC, Copyright 2010-2023 Mike Bostock); K2 additions MIT | full text: Third-party notices */
+/*! d3-k2: d3 7.9.0 (ISC AND MIT AND BSD-3-Clause AND Unlicense, Copyright 2010-2023 Mike Bostock); K2 additions MIT | full text: Third-party notices */
 /* K2 glue: d3.csvParse / d3.tsvParse without new Function (sealed widget CSP). */
 (function(){var d3=window.d3;if(!d3||!d3.csvParseRows)return;function mk(parseRows){return function(text,f){var rows=parseRows(text),columns=rows.length?rows.shift():[],out=[],n=0;for(var i=0;i<rows.length;i++){var r=rows[i],o={};for(var j=0;j<columns.length;j++)o[columns[j]]=r[j]||"";if(f){o=f(o,n++,columns);if(o==null)continue}else{n++}out.push(o)}out.columns=columns;return out}}d3.csvParse=mk(d3.csvParseRows);d3.tsvParse=mk(d3.tsvParseRows)})();

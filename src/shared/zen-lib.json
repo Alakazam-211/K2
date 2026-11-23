@@ -48,8 +48,8 @@
       "files": [
         {
           "name": "globe.gl.min.js",
-          "bytes": 1885259,
-          "sha256": "5492be614e11ecf4469f7f696ba9f8c3f8af2cb07f877900961688563904b41d",
+          "bytes": 1885305,
+          "sha256": "8da33fcc1f4b0b2588c32fbb36ddb93a39265845937a7fec1215a209921688f7",
           "upstreamSha256": "2c3e445c04d121215910a89688b96091c8a72071c122a4f830081a39b636c94c"
         }
       ],
@@ -90,14 +90,14 @@
       "files": [
         {
           "name": "pixi.min.js",
-          "bytes": 828398,
-          "sha256": "c852db82c9078233514af3ea0d981e6a1dab45f3b927b69e5b5f972a1c789643",
+          "bytes": 828423,
+          "sha256": "4d313d70579f6a775bf1b5e1894b22146a08544cbb29dfb80baf2dbd806c3cc8",
           "upstreamSha256": "c6d9d4c897b15576cce0055d0ba4382021181c99cdf08a446be9d61e16833db0"
         },
         {
           "name": "unsafe-eval.min.js",
-          "bytes": 15815,
-          "sha256": "577fed1b59eb4c3223a21b79c3af3c741261c17d44e4824fe42b81d1bb2e1f11",
+          "bytes": 15840,
+          "sha256": "0cc148c716bf30ae1bb7ce15d0ff32d11e866687a9e6990baff5b3da99717e03",
           "upstreamSha256": "95b16558c615575f08d6b9e2b518b0edc4d446673b3307d967e2e59fab0464cd"
         }
       ],
@@ -180,14 +180,14 @@
       "files": [
         {
           "name": "d3.min.js",
-          "bytes": 279796,
-          "sha256": "888c42ce7737727a8e545c4955fea5c52a253d65b594ad528d12e6dbb14d8e5b",
+          "bytes": 279835,
+          "sha256": "79214ea3c0b5f199bb009c460aa3dc1b6f90087e1ac60688319376e6a6c3353f",
           "upstreamSha256": "f2094bbf6141b359722c4fe454eb6c4b0f0e42cc10cc7af921fc158fceb86539"
         },
         {
           "name": "d3-k2.js",
-          "bytes": 650,
-          "sha256": "095137444a7240c56f47258f61963bd7985241c7afe09ae65e5659803ee027ef"
+          "bytes": 689,
+          "sha256": "b3203be080da082c576b39504662b095289749460cc2fbe22e893ca9dc0ffd48"
         }
       ],
       "notes": "d3.json/d3.csv fetch over the network and are blocked; parse inline text instead. d3.csvParse and d3.tsvParse are K2 versions with the same results (upstream builds a function from text, which the widget security policy blocks); d3.dsvFormat(…).parse still needs eval, so use its parseRows."
@@ -228,8 +228,8 @@
       "files": [
         {
           "name": "echarts.min.js",
-          "bytes": 1122037,
-          "sha256": "9e5467baad6c8fbd3d33003e8ab156317a1b86c548918eb6e0f674c6c8ee8571",
+          "bytes": 1122095,
+          "sha256": "40ce5a16a8b445ad9feb88d2cc1510c53786b52abda1645a2d86cb4d242e84a5",
           "upstreamSha256": "b66b25aeb4df84e33199dc21694014d336d222cbd9deb0e5a7c14bd6aa0d0fd0"
         }
       ]
@@ -382,8 +382,8 @@
       "files": [
         {
           "name": "Tone.js",
-          "bytes": 345564,
-          "sha256": "537d1a7a705e8e4044a160627de7834cf200a7f60534a2978d3dfb8291c69403",
+          "bytes": 345573,
+          "sha256": "d0262ed50f28e0c2141daa17718c02fee11bd8b6323e2165bb5d0b17d4866015",
           "upstreamSha256": "e290952fa43d9a7a780182a83c6fccf44d79cb7ae2cba102ef1f2b9d98124e22"
         }
       ],
@@ -438,8 +438,8 @@
       "files": [
         {
           "name": "marked.umd.js",
-          "bytes": 47084,
-          "sha256": "7b1cb35cddc5a1ba847bef6a6897c2d070f9d1b89e72c72255050a490d2c35fd",
+          "bytes": 47101,
+          "sha256": "d4f93eaf70333abf96d06de17f14e3fb7b3a2aeccbd7d22f9428f452ff5d9a6b",
           "upstreamSha256": "21568877a938d2c4e7d74e27f18e60da96bb73a68809610ca39216e1efebae62"
         }
       ],

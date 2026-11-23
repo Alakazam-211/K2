@@ -1,4 +1,5 @@
 globe.gl 2.46.2 — licence texts, as shipped upstream.
+SPDX-License-Identifier: MIT AND ISC AND Apache-2.0 AND Unlicense AND 0BSD
 
 ==== globe.gl/LICENSE ====
 

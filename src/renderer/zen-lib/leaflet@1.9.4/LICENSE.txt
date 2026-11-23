@@ -1,4 +1,5 @@
 Leaflet 1.9.4 — licence texts, as shipped upstream.
+SPDX-License-Identifier: BSD-2-Clause
 
 ==== leaflet/LICENSE ====
 

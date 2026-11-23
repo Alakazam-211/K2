@@ -1,4 +1,5 @@
 D3 7.9.0 — licence texts, as shipped upstream.
+SPDX-License-Identifier: ISC AND MIT AND BSD-3-Clause AND Unlicense
 
 ==== d3/LICENSE ====
 

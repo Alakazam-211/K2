@@ -1,4 +1,5 @@
 Phaser 4.2.1 — licence texts, as shipped upstream.
+SPDX-License-Identifier: MIT
 
 ==== phaser/LICENSE.md ====
 

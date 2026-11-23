@@ -1,4 +1,5 @@
 KaTeX 0.18.9 — licence texts, as shipped upstream.
+SPDX-License-Identifier: MIT
 
 ==== katex/LICENSE ====
 

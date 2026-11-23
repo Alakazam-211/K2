@@ -1,4 +1,5 @@
 howler.js 2.2.4 — licence texts, as shipped upstream.
+SPDX-License-Identifier: MIT
 
 ==== howler/LICENSE.md ====
 

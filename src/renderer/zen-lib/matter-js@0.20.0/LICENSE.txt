@@ -1,4 +1,5 @@
 Matter.js 0.20.0 — licence texts, as shipped upstream.
+SPDX-License-Identifier: MIT
 
 ==== matter-js/LICENSE ====
 

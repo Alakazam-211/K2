@@ -1,4 +1,5 @@
 DOMPurify 3.4.17 — licence texts, as shipped upstream.
+SPDX-License-Identifier: Apache-2.0
 
 ==== dompurify/dist/purify.min.js (licence header) ====
 

@@ -1,4 +1,5 @@
 Tone.js 15.1.22 — licence texts, as shipped upstream.
+SPDX-License-Identifier: MIT AND 0BSD
 
 ==== tone/LICENSE.md ====
 

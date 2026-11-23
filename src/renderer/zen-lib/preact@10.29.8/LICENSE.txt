@@ -1,4 +1,5 @@
 Preact + htm 10.29.8 — licence texts, as shipped upstream.
+SPDX-License-Identifier: MIT AND Apache-2.0
 
 ==== preact/LICENSE ====
 

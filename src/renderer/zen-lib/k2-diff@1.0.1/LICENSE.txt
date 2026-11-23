@@ -1,4 +1,5 @@
 K2 diff view (widget kit) 1.0.1 - licence texts. K2's own code (Alakazam Labs), under K2's licence.
+SPDX-License-Identifier: MIT
 
 ==== LICENSE.md (K2) ====
 

@@ -1,4 +1,5 @@
 uPlot 1.6.32 — licence texts, as shipped upstream.
+SPDX-License-Identifier: MIT
 
 ==== uplot/LICENSE ====
 

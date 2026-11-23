@@ -1,4 +1,5 @@
 perfect-freehand 1.2.3 — licence texts, as shipped upstream.
+SPDX-License-Identifier: MIT
 
 ==== perfect-freehand/LICENSE ====
 

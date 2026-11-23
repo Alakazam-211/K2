@@ -1,4 +1,5 @@
 PixiJS 8.21.0 — licence texts, as shipped upstream.
+SPDX-License-Identifier: MIT AND ISC AND BSD-3-Clause
 
 ==== pixi.js/LICENSE ====
 

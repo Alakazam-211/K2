@@ -1,4 +1,5 @@
 Apache ECharts 6.1.0 — licence texts, as shipped upstream.
+SPDX-License-Identifier: Apache-2.0 AND BSD-3-Clause AND 0BSD
 
 ==== echarts/LICENSE ====
 

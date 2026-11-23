@@ -22,7 +22,7 @@ use rusqlite::Connection;
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::panic::Location;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
@@ -109,7 +109,9 @@ impl DbLock {
         let outer = match t0 {
             Some(t0) if prev == 0 => {
                 let acquired = Instant::now();
-                Some(OuterHold { site, waited: acquired.saturating_duration_since(t0), acquired })
+                let waited = acquired.saturating_duration_since(t0);
+                note_wait(waited);
+                Some(OuterHold { site, waited, acquired })
             }
             _ => None,
         };
@@ -134,6 +136,41 @@ impl Drop for DbGuard<'_> {
                 report(o.site, o.waited, held);
             }
         }
+    }
+}
+
+/// Process-wide totals of the waits for the lock (outermost holds only;
+/// none while `K2_DB_LOCK_LOG=0`): what the `[db] waited` lines sample.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct WaitStats {
+    /// Waits of 1 ms or more.
+    pub waits: u64,
+    /// Waits of [`WAIT_LOG_AT`] or more (each would log, quiet window aside).
+    pub logged: u64,
+    /// The time all waits of 1 ms or more took together.
+    pub waited: Duration,
+}
+
+static WAITS: AtomicU64 = AtomicU64::new(0);
+static WAITS_LOGGED: AtomicU64 = AtomicU64::new(0);
+static WAITED_MICROS: AtomicU64 = AtomicU64::new(0);
+
+fn note_wait(waited: Duration) {
+    if waited >= Duration::from_millis(1) {
+        WAITS.fetch_add(1, Ordering::Relaxed);
+        WAITED_MICROS.fetch_add(waited.as_micros() as u64, Ordering::Relaxed);
+        if waited >= WAIT_LOG_AT {
+            WAITS_LOGGED.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
+/// The lock's wait totals since the process started (every [`DbLock`]).
+pub fn wait_stats() -> WaitStats {
+    WaitStats {
+        waits: WAITS.load(Ordering::Relaxed),
+        logged: WAITS_LOGGED.load(Ordering::Relaxed),
+        waited: Duration::from_micros(WAITED_MICROS.load(Ordering::Relaxed)),
     }
 }
 

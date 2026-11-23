@@ -17,8 +17,10 @@
 //! - `agents adopt <ws> <id> <open|fenced>` (daemon): every process of the
 //!   daemon's user left in `<unit>/agents/a-<ws>` (a session that lived
 //!   through an update) into one new scope.
-//! - `agents stop <ws> <id>` / `agents stop-all` (daemon): `systemctl stop`
-//!   for names the classifier accepts, found under the two slices only.
+//! - `agents stop <ws> <id>` / `agents stop-all` (daemon): `systemctl stop
+//!   --no-block` for names the classifier accepts, found under the two
+//!   slices only; then a bounded wait for the cgroups to go (12 s), and
+//!   `systemctl kill --signal=KILL` for any still there.
 //! - `agents layout` (daemon): report only, with the P1 probe run as the
 //!   daemon's user.
 //! - `agents setup` (open) / `agents teardown` (daemon): the slice and
@@ -46,13 +48,15 @@ type J = serde_json::Value;
 /// job is queued (polled; the first look is immediate).
 const MOVE_WAIT_TRIES: u32 = 25;
 const MOVE_WAIT_STEP: Duration = Duration::from_millis(20);
+/// How often `agents stop` looks whether a stopped scope's cgroup is gone.
+const STOP_WAIT_STEP: Duration = Duration::from_millis(50);
 
 pub fn run(ctx: &Ctx, v: &ScopeVerb, who: &Caller) -> HResult<J> {
     match v {
         ScopeVerb::Scope { ws, id, pid, start, kind, caps } => scope(ctx, who, ws, id, *pid, *start, *kind, caps),
         ScopeVerb::Adopt { ws, id, kind } => adopt(ctx, who, ws, id, *kind),
         ScopeVerb::Stop { ws, id } => stop(ctx, ws, id),
-        ScopeVerb::StopAll => stop_all(ctx).map(|n| json!({ "ok": true, "stopped": n })),
+        ScopeVerb::StopAll => stop_all(ctx).map(|(n, k)| json!({ "ok": true, "stopped": n, "killed": k })),
         ScopeVerb::Layout => layout(ctx, who),
         ScopeVerb::Setup => setup(ctx),
         ScopeVerb::Teardown => teardown(ctx),
@@ -229,36 +233,52 @@ fn live_scopes(ctx: &Ctx) -> Vec<(Kind, AgentWs, ScopeId, PathBuf)> {
     v
 }
 
-fn stop(ctx: &Ctx, ws: &AgentWs, id: &ScopeId) -> HResult<J> {
-    let name = scope_name(ws, id);
-    let here = |k: Kind| is_dir(&ctx.p(&cg(&scope_cgroup(k, ws, id))));
-    let Some(kind) = Kind::ALL.into_iter().find(|k| here(*k)) else {
-        return Ok(json!({ "ok": true, "gone": true, "scope": name }));
-    };
-    if let Err(f) = stop_unit(ctx, &name) {
-        // Ended on its own in between: as good as stopped.
-        if here(kind) {
-            return Err(f);
-        }
-    }
-    Ok(json!({ "ok": true, "gone": false, "scope": name, "kind": kind.as_str() }))
-}
-
-/// Stop every scope the classifier accepts under both slices; anchors and
-/// slices keep running. Refuses (after trying them all) when any didn't
-/// stop.
-fn stop_all(ctx: &Ctx) -> HResult<usize> {
-    let scopes = live_scopes(ctx);
+/// Stop `scopes` (name, cgroup dir): `systemctl stop --no-block` each, wait
+/// up to `ctx.agent_stop_wait_ms` for their cgroups to go, then `systemctl
+/// kill --signal=KILL` any still there. A failed call counts only when the
+/// scope is still there after it (one that ended on its own in between is
+/// as good as stopped). `Ok(the names killed)`; refuses, after trying them
+/// all, when any call failed on a scope that is still there.
+fn stop_scopes(ctx: &Ctx, scopes: &[(String, PathBuf)]) -> HResult<Vec<String>> {
     let mut failed = 0;
-    for (_, ws, id, dir) in &scopes {
-        if stop_unit(ctx, &scope_name(ws, id)).is_err() && is_dir(dir) {
-            failed += 1;
+    for (name, _) in scopes {
+        // A refusal here still gets the wait and the kill below.
+        let _ = ctx.run_ok(SYSTEMCTL, &["stop", "--no-block", name], None);
+    }
+    let deadline = std::time::Instant::now() + Duration::from_millis(ctx.agent_stop_wait_ms);
+    while scopes.iter().any(|(_, d)| is_dir(d)) && std::time::Instant::now() < deadline {
+        std::thread::sleep(STOP_WAIT_STEP);
+    }
+    let mut killed = Vec::new();
+    for (name, dir) in scopes.iter().filter(|(_, d)| is_dir(d)) {
+        match ctx.run_ok(SYSTEMCTL, &["kill", "--signal=KILL", name], None) {
+            Ok(_) => killed.push(name.clone()),
+            Err(_) if is_dir(dir) => failed += 1,
+            Err(_) => {}
         }
     }
     if failed > 0 {
-        return Err(Fail::state(format!("agents stop-all: {failed} of {} scopes did not stop", scopes.len())));
+        return Err(Fail::state(format!("agents stop: {failed} of {} scopes did not stop", scopes.len())));
     }
-    Ok(scopes.len())
+    Ok(killed)
+}
+
+fn stop(ctx: &Ctx, ws: &AgentWs, id: &ScopeId) -> HResult<J> {
+    let name = scope_name(ws, id);
+    let dir_of = |k: Kind| ctx.p(&cg(&scope_cgroup(k, ws, id)));
+    let Some(kind) = Kind::ALL.into_iter().find(|k| is_dir(&dir_of(*k))) else {
+        return Ok(json!({ "ok": true, "gone": true, "scope": name }));
+    };
+    let killed = !stop_scopes(ctx, &[(name.clone(), dir_of(kind))])?.is_empty();
+    Ok(json!({ "ok": true, "gone": false, "scope": name, "kind": kind.as_str(), "killed": killed }))
+}
+
+/// Stop every scope the classifier accepts under both slices; anchors and
+/// slices keep running. `Ok((stopped, killed))`.
+fn stop_all(ctx: &Ctx) -> HResult<(usize, usize)> {
+    let scopes: Vec<(String, PathBuf)> = live_scopes(ctx).into_iter().map(|(_, ws, id, d)| (scope_name(&ws, &id), d)).collect();
+    let killed = stop_scopes(ctx, &scopes)?;
+    Ok((scopes.len(), killed.len()))
 }
 
 fn busctl_json(ctx: &Ctx, args: &[&str]) -> Option<serde_json::Value> {
@@ -393,7 +413,7 @@ fn setup(ctx: &Ctx) -> HResult<J> {
 }
 
 fn teardown(ctx: &Ctx) -> HResult<J> {
-    let stopped = stop_all(ctx)?;
+    let (stopped, killed) = stop_all(ctx)?;
     let present: Vec<&str> = Level::ALL
         .iter()
         .map(|l| l.anchor())
@@ -415,5 +435,5 @@ fn teardown(ctx: &Ctx) -> HResult<J> {
     if removed > 0 {
         ctx.run_ok(SYSTEMCTL, &["daemon-reload"], None)?;
     }
-    Ok(json!({ "ok": true, "stopped": stopped, "removed": removed }))
+    Ok(json!({ "ok": true, "stopped": stopped, "killed": killed, "removed": removed }))
 }

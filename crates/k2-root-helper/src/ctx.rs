@@ -207,6 +207,11 @@ pub struct Ctx {
     /// Waits between polls really sleep (production; the real-Postgres
     /// tests). The fake-box tests poll without sleeping.
     pub waits: bool,
+    /// How long `agents stop` / `stop-all` wait for a scope's cgroup to go
+    /// after `systemctl stop --no-block` before `systemctl kill
+    /// --signal=KILL` (12 s in production: the scope's own 10 s
+    /// `TimeoutStopUSec` plus room).
+    pub agent_stop_wait_ms: u64,
     /// Bytes free on a path's filesystem (statvfs in production; tests
     /// pick an answer). Box prep's disk floor reads it (0.46.3 F5).
     pub free_bytes: fn(&Path) -> Result<u64, String>,
@@ -231,6 +236,7 @@ impl Ctx {
             out: RefCell::new(Vec::new()),
             lock_timeout_ms: 30_000,
             waits: true,
+            agent_stop_wait_ms: 12_000,
             free_bytes: crate::mail_data::free_bytes,
         }
     }

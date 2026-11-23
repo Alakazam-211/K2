@@ -46,6 +46,9 @@ pub const PROBE_WS: &str = "probe";
 /// Where `agents setup` may find `sleep` for the anchors, first found wins
 /// (a closed list: never a path from argv or the environment).
 pub const SLEEP_PATHS: &[&str] = &["/usr/bin/sleep", "/bin/sleep"];
+/// Every scope's `TimeoutStopUSec` (10 s): how long systemd waits after
+/// SIGTERM before SIGKILL when a scope is stopped.
+pub const STOP_TIMEOUT_USEC: u64 = 10_000_000;
 /// Most pids one `agents adopt` moves (one old-layout cgroup).
 pub const ADOPT_MAX_PIDS: usize = 4096;
 /// `mem=` bounds, MB.
@@ -210,7 +213,8 @@ impl Caps {
 
 /// The `busctl` argv (after the program) that asks systemd, as root, for
 /// one transient scope: `StartTransientUnit(name, "fail", [Slice, PIDs,
-/// Delegate=false, CollectMode=inactive-or-failed, caps…], [])`. Every
+/// Delegate=false, CollectMode=inactive-or-failed, TimeoutStopUSec=10 s,
+/// caps…], [])`. Every
 /// value is a validated part or a number; nothing from the caller passes
 /// as a property.
 pub fn start_transient_argv(name: &str, kind: Kind, pids: &[u32], caps: &Caps) -> Vec<String> {
@@ -223,6 +227,7 @@ pub fn start_transient_argv(name: &str, kind: Kind, pids: &[u32], caps: &Caps) -
         },
         vec!["Delegate".into(), "b".into(), "false".into()],
         vec!["CollectMode".into(), "s".into(), "inactive-or-failed".into()],
+        vec!["TimeoutStopUSec".into(), "t".into(), STOP_TIMEOUT_USEC.to_string()],
     ];
     if let Some(b) = caps.memory_max() {
         props.push(vec!["MemoryMax".into(), "t".into(), b.to_string()]);

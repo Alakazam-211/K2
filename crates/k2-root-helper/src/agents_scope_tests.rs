@@ -66,6 +66,25 @@ fn scope_box(moves: bool) -> T {
     t
 }
 
+/// systemd ends a stopped scope: `systemctl stop … <name>` removes that
+/// scope's cgroup under either slice.
+fn systemd_stops(t: &T) {
+    let root = t.root.clone();
+    let effect: Rc<dyn Fn(&[String])> = Rc::new(move |args: &[String]| {
+        if args.first().map(String::as_str) == Some("stop") {
+            let name = args.last().cloned().unwrap_or_default();
+            for d in [OPEN_DIR, FENCED_DIR] {
+                let _ = std::fs::remove_dir(under(&root, &format!("{d}/{name}")));
+            }
+        }
+    });
+    t.exec.0.borrow_mut().effects.push((SYSTEMCTL.into(), effect));
+}
+
+fn sv(v: &[&str]) -> Vec<String> {
+    v.iter().map(|s| s.to_string()).collect()
+}
+
 fn json_of(o: &crate::Outcome) -> serde_json::Value {
     serde_json::from_slice(&o.stdout).expect("json answer")
 }
@@ -108,7 +127,7 @@ fn agents_scope_starts_one_transient_unit_with_exactly_these_properties() {
         "ssa(sv)a(sa(sv))",
         SCOPE,
         "fail",
-        "4",
+        "5",
         "Slice",
         "s",
         "k2agents-open.slice",
@@ -122,6 +141,9 @@ fn agents_scope_starts_one_transient_unit_with_exactly_these_properties() {
         "CollectMode",
         "s",
         "inactive-or-failed",
+        "TimeoutStopUSec",
+        "t",
+        "10000000",
         "0",
     ]
     .iter()
@@ -140,10 +162,10 @@ fn agents_scope_caps_become_memory_max_and_cpu_quota_numbers() {
     let calls = busctl_calls(&t);
     assert_eq!(calls.len(), 1, "{calls:?}");
     let a = &calls[0];
-    assert_eq!(a[8], "6", "four fixed properties and the two caps: {a:?}");
+    assert_eq!(a[8], "7", "five fixed properties and the two caps: {a:?}");
     assert_eq!(a[11], "k2agents-fenced.slice");
-    let tail: Vec<&str> = a[a.len() - 7..].iter().map(String::as_str).collect();
-    assert_eq!(tail, ["MemoryMax", "t", "536870912", "CPUQuotaPerSecUSec", "t", "1500000", "0"]);
+    let tail: Vec<&str> = a[a.len() - 10..].iter().map(String::as_str).collect();
+    assert_eq!(tail, ["TimeoutStopUSec", "t", "10000000", "MemoryMax", "t", "536870912", "CPUQuotaPerSecUSec", "t", "1500000", "0"]);
     for tok in a {
         assert!(!tok.contains("mem=") && !tok.contains("cpu=") && !tok.contains('%'), "no caller token passes through: {tok}");
     }
@@ -248,6 +270,8 @@ fn agents_adopt_moves_every_live_process_of_the_old_cgroup_into_one_scope() {
     let i = a.iter().position(|x| *x == "PIDs").expect("PIDs");
     assert_eq!(&a[i..i + 5], ["PIDs", "au", "2", "7101", "7102"]);
     assert!(!a.contains(&"MemoryMax"), "adopt sets no caps: {a:?}");
+    let j = a.iter().position(|x| *x == "TimeoutStopUSec").expect("the stop timeout at birth");
+    assert_eq!(&a[j..j + 3], ["TimeoutStopUSec", "t", "10000000"]);
 }
 
 #[test]
@@ -276,11 +300,24 @@ fn agents_stop_of_a_scope_that_is_gone_is_ok_and_runs_nothing() {
     let v = json_of(&o);
     assert_eq!(v["gone"], true, "{v}");
     assert!(systemctl_calls(&t).is_empty(), "{:?}", systemctl_calls(&t));
+    systemd_stops(&t);
     mkdirs(&t.root, &[&format!("{FENCED_DIR}/{SCOPE}")]);
     let o = t.call(&["agents", "stop", WS, SID]);
     ok(&o);
-    assert_eq!(json_of(&o)["kind"], "fenced");
-    assert_eq!(systemctl_calls(&t), vec![vec!["stop".to_string(), SCOPE.to_string()]]);
+    let v = json_of(&o);
+    assert_eq!((v["kind"].clone(), v["killed"].clone()), (serde_json::json!("fenced"), serde_json::json!(false)), "{v}");
+    assert_eq!(systemctl_calls(&t), vec![sv(&["stop", "--no-block", SCOPE])]);
+}
+
+#[test]
+fn agents_stop_kills_a_scope_still_there_after_the_wait() {
+    let t = scope_box(true);
+    mkdirs(&t.root, &[&format!("{OPEN_DIR}/{SCOPE}")]);
+    let o = t.call(&["agents", "stop", WS, SID]);
+    ok(&o);
+    let v = json_of(&o);
+    assert_eq!(v["killed"], true, "{v}");
+    assert_eq!(systemctl_calls(&t), vec![sv(&["stop", "--no-block", SCOPE]), sv(&["kill", "--signal=KILL", SCOPE])]);
 }
 
 #[test]
@@ -299,10 +336,22 @@ fn agents_stop_all_stops_only_names_the_classifier_accepts() {
         ],
     );
     std::fs::write(t.p(&format!("{OPEN_DIR}/cgroup.procs")), "").unwrap();
+    // systemd ends the first; the second is still there after the wait.
+    let root = t.root.clone();
+    let effect: Rc<dyn Fn(&[String])> = Rc::new(move |args: &[String]| {
+        if args.first().map(String::as_str) == Some("stop") && args.last().map(String::as_str) == Some(SCOPE) {
+            std::fs::remove_dir(under(&root, &format!("{OPEN_DIR}/{SCOPE}"))).unwrap();
+        }
+    });
+    t.exec.0.borrow_mut().effects.push((SYSTEMCTL.into(), effect));
     let o = t.call(&["agents", "stop-all"]);
     ok(&o);
-    assert_eq!(json_of(&o)["stopped"], 2);
-    assert_eq!(systemctl_calls(&t), vec![vec!["stop".to_string(), SCOPE.to_string()], vec!["stop".to_string(), other]]);
+    let v = json_of(&o);
+    assert_eq!((v["stopped"].clone(), v["killed"].clone()), (serde_json::json!(2), serde_json::json!(1)), "{v}");
+    assert_eq!(
+        systemctl_calls(&t),
+        vec![sv(&["stop", "--no-block", SCOPE]), sv(&["stop", "--no-block", &other]), sv(&["kill", "--signal=KILL", &other])]
+    );
 }
 
 fn layout_with_probe(status: i32, stderr: &str) -> (T, serde_json::Value) {
@@ -380,6 +429,7 @@ fn agents_setup_writes_the_units_once_and_teardown_removes_them() {
     assert_eq!(systemctl_calls(&t).last(), Some(&enable));
     assert_eq!(systemctl_calls(&t).iter().filter(|c| c[0] == "daemon-reload").count(), 1);
     // Teardown: scopes first, then the anchors, then the files.
+    systemd_stops(&t);
     mkdirs(&t.root, &[&format!("{OPEN_DIR}/{SCOPE}")]);
     let before = systemctl_calls(&t).len();
     let o = t.call(&["agents", "teardown"]);
@@ -390,14 +440,13 @@ fn agents_setup_writes_the_units_once_and_teardown_removes_them() {
     disable.extend(anchors.iter().map(|s| s.to_string()));
     assert_eq!(
         systemctl_calls(&t)[before..].to_vec(),
-        vec![vec!["stop".to_string(), SCOPE.to_string()], disable, vec!["daemon-reload".to_string()]]
+        vec![sv(&["stop", "--no-block", SCOPE]), disable, vec!["daemon-reload".to_string()]]
     );
     for l in Level::ALL {
         assert!(!t.p(&format!("/etc/systemd/system/{}", l.slice())).exists());
         assert!(!t.p(&format!("/etc/systemd/system/{}", l.anchor())).exists());
     }
     // And again: nothing left to do.
-    std::fs::remove_dir(t.p(&format!("{OPEN_DIR}/{SCOPE}"))).unwrap();
     let before = systemctl_calls(&t).len();
     ok(&t.call(&["agents", "teardown"]));
     assert_eq!(systemctl_calls(&t).len(), before, "idempotent: {:?}", &systemctl_calls(&t)[before..]);

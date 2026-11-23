@@ -332,6 +332,7 @@ fn box_root() -> T {
         out: RefCell::new(Vec::new()),
         lock_timeout_ms: 300,
         waits: false,
+        agent_stop_wait_ms: 300,
         // Plenty by default; the disk-floor tests pick less.
         free_bytes: |_| Ok(u64::MAX),
     };

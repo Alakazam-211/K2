@@ -84,8 +84,15 @@ check "help" 0 "k2 approve verify / show / key-id (no daemon; k2 approve verify 
 # request/status/cancel are the daemon's: with no connection they stop at the gate.
 check "request needs the daemon" 1 "Cannot connect to K2" approve request --to alex --payload x
 
+# No program anywhere the CLI looks: the *_APPROVE_BIN names unset, the
+# front's K5_CLI_SCRIPT_DIR unset, a PATH without one, and the CLI run from
+# a copy alone in a fresh folder (a debug k5-cli finds k2-approve beside
+# itself in target/debug, and the shell looks beside its own file too).
+lone="$(mktemp -d "$tmp/lone.XXXXXX")"
+cp -L "$K2" "$lone/$(basename "$K2")"
 rc=0
-env -u K2_APPROVE_BIN PATH=/usr/bin:/bin HOME="$tmp/home" "$K2" approve verify --approval x --keys y > "$tmp/out" 2>&1 || rc=$?
+env -u K5_APPROVE_BIN -u K2_APPROVE_BIN -u K2SO_APPROVE_BIN -u K5_CLI_SCRIPT_DIR PATH=/usr/bin:/bin HOME="$tmp/home" \
+    "$lone/$(basename "$K2")" approve verify --approval x --keys y > "$tmp/out" 2>&1 || rc=$?
 if [ "$rc" = 2 ] && grep -qF "the k2-approve program isn't installed here" "$tmp/out"; then pass "no program: says how to get it"; else fail "no program" "rc $rc: $(cat "$tmp/out")"; fi
 
 echo

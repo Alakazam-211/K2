@@ -18,6 +18,7 @@ it_sessions  pinned_chat_ensure_integration::planted_shell_on_canonical_key_is_n
 it_sessions  pinned_chat_ensure_integration::tab_empty_spawn_stays_a_shell_and_does_not_steal_project_id  an empty spawn is a login shell
 it_sessions  reaper_close_guard_integration::v2_close_without_reason_does_not_refuse_empty_respawn  an empty spawn is a login shell
 it_sessions  remote_session_shell_integration::shell_spawn_write_read_gate_revoke_disable  a remote-session shell is a login shell
+it_sessions  terminal_read_scope_integration::other_principals_read_as_before_or_not_at_all  reads a remote-session shell, which is a login shell
 it_sessions  v2_spawn_bare_tab_cap::attached_sessions_stop_counting_against_the_cap  fills the cap with login shells
 it_sessions  v2_spawn_bare_tab_cap::bare_tab_cap_refuses_spawn_number_cap_plus_one  fills the cap with login shells
 lib  v2_spawn::tests::close_without_reason_does_not_refuse_empty_spawn  an empty spawn is a login shell

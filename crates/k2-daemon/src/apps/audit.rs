@@ -12,7 +12,15 @@
 //!
 //! **Alerts** (to the App's owning workspace agent, a `k2 msg` wake):
 //! - a denial spike: more than 20 refused calls in 5 minutes (401, 403,
-//!   423, 429 and `pass_wrong_link` only: [`counts_toward_spike`]);
+//!   423, 429 and `pass_wrong_link` only: [`counts_toward_spike`]). A
+//!   signed-in guest's or the App's own permission refusal (403
+//!   `skin_room`, `outside_app_rooms`, `cap_not_granted`, a missing
+//!   capability) counts once per distinct (actor, verb, room, refusal) in
+//!   the window (0.46.18 papercut 7: a page polling a route its role
+//!   lacks is no attack); its repeats raise a separate note at most once
+//!   per App per 5 minutes naming the route, the room and the fix
+//!   ([`repeat_text`]). 401, 423, 429 and `pass_wrong_link` count per call
+//!   as before, and probing many rooms or routes still makes many keys;
 //! - the first successful use of each write verb, gathered into one wake
 //!   per App per [`DIGEST_WINDOW`] (0.46.4, field report C: a test run's login,
 //!   logout and upload were three wakes), and none at all for what one of
@@ -209,7 +217,7 @@ pub fn finish() {
             o.call.result = 101;
         }
     }
-    observe(&o.workspace_id, &o.call, o.upgrade);
+    observe_with(&o.workspace_id, &o.call, o.upgrade, o.hint.as_deref());
     if o.call.result >= 400 {
         let line = Refused { app_id: o.call.app_id.clone(), verb: o.call.verb.clone(), code: o.call.code.clone().unwrap_or_default(), hint: o.hint.take() };
         let _ = sender().lock().unwrap_or_else(|e| e.into_inner()).send(Msg::Refused(line));
@@ -429,6 +437,9 @@ fn writer(rx: Receiver<Msg>) {
 #[derive(Default)]
 struct AlertState {
     denials: HashMap<String, Vec<Instant>>,
+    /// App → (actor, verb, room, refusal) → (first seen, calls) for the
+    /// permission refusals folded in the window ([`permission_refusal`]).
+    folded: HashMap<String, HashMap<(String, String, String, String), (Instant, usize)>>,
     said: HashMap<(String, String), Instant>,
     /// App → workspace (for first-use alerts raised by the writer).
     ws: HashMap<String, String>,
@@ -467,7 +478,42 @@ pub(crate) fn set_app_workspace(app: &str, ws: &str) {
 /// keeps its row and its other alerts, but no spike: an open socket that lost
 /// access makes an older client re-dial about 30 times in 5 minutes, and that
 /// says nothing about who's calling.
+#[cfg(test)]
 fn observe(ws: &str, call: &Call, upgrade: bool) {
+    observe_with(ws, call, upgrade, None)
+}
+
+/// A same refusal repeated this many times in the window gets its note.
+pub const REPEAT_NOTE_AT: usize = 10;
+
+/// What a permission refusal was about (`None`: not one): 403 from a
+/// signed-in guest's or the App's own pass (`guest:…`, `app`), for a room
+/// or a capability its role lacks. `hint` is K2's words on the refusal.
+pub fn permission_refusal(call: &Call, hint: Option<&str>) -> Option<String> {
+    if call.result != 403 || !(call.actor == "app" || call.actor.starts_with("guest:")) {
+        return None;
+    }
+    if let Some(code @ ("skin_room" | "outside_app_rooms" | "cap_not_granted")) = call.code.as_deref() {
+        return Some(code.to_string());
+    }
+    hint.and_then(|h| h.trim().strip_prefix("missing capability ")).map(|cap| format!("missing {}", cap.trim()))
+}
+
+/// The repeated-refusal note (pure).
+pub fn repeat_text(app: &str, actor: &str, verb: &str, room: &str, why: &str, n: usize) -> String {
+    let who = actor.strip_prefix("guest:").map(|g| format!("guest {g}")).unwrap_or_else(|| "the App's own pass".to_string());
+    let room_words = if room.is_empty() { String::new() } else { format!(" in room {room}") };
+    let what = match why.strip_prefix("missing ") {
+        Some(cap) => format!("missing {cap}?"),
+        None => why.to_string(),
+    };
+    format!(
+        "[k2 apps] {app}: {who}: {verb} refused {n}× in 5 minutes{room_words} ({what}). A page asking for what its role lacks, not an attack: \
+         add it with k2 app role room <role> <room> --caps …, or have the page check /api/me before it calls. k2 app audit {app} --denied --since 5m"
+    )
+}
+
+fn observe_with(ws: &str, call: &Call, upgrade: bool, hint: Option<&str>) {
     let app = call.app_id.as_str();
     alerts().lock().unwrap_or_else(|e| e.into_inner()).ws.insert(app.to_string(), ws.to_string());
     if let Some(code) = call.code.as_deref() {
@@ -489,6 +535,26 @@ fn observe(ws: &str, call: &Call, upgrade: bool) {
         }
     }
     if !upgrade && counts_toward_spike(call.result, call.code.as_deref()) {
+        // A permission refusal: once per distinct key toward the spike, its
+        // repeats a note of their own.
+        if let Some(why) = permission_refusal(call, hint) {
+            let room = call.room.as_deref().map(super::routes::ws_handle).unwrap_or_default();
+            let key = (call.actor.clone(), call.verb.clone(), room.clone(), why.clone());
+            let (first, n) = {
+                let mut a = alerts().lock().unwrap_or_else(|e| e.into_inner());
+                let keys = a.folded.entry(app.to_string()).or_default();
+                keys.retain(|_, (t, _)| t.elapsed() < SPIKE_WINDOW);
+                let e = keys.entry(key).or_insert((Instant::now(), 0));
+                e.1 += 1;
+                (e.1 == 1, e.1)
+            };
+            if !first {
+                if n >= REPEAT_NOTE_AT {
+                    alert_once(app, ws, "repeated_refusal", &repeat_text(app, &call.actor, &call.verb, &room, &why, n));
+                }
+                return;
+            }
+        }
         let spike = {
             let mut a = alerts().lock().unwrap_or_else(|e| e.into_inner());
             let v = a.denials.entry(app.to_string()).or_default();
@@ -786,6 +852,57 @@ mod tests {
         assert!(texts.iter().any(|t| t.contains(&loud) && t.contains("refused calls in 5 minutes")), "{texts:?}");
         assert!(!texts.iter().any(|t| t.contains(&quiet)), "{texts:?}");
         super::super::alerts::set_sink(None);
+    }
+
+    fn guest_call(app: &str, verb: &str, room: &str, code: Option<&str>) -> Call {
+        Call { actor: "guest:p-1".to_string(), verb: verb.to_string(), room: Some(room.to_string()), ..call(app, 403, code) }
+    }
+
+    /// 0.46.18 papercut 7: 25 identical permission refusals from a signed-in
+    /// guest (a page polling a route its role lacks) are no spike, and say
+    /// what's missing once; 25 different rooms still spike; 25 wrong
+    /// passwords still spike.
+    #[test]
+    fn a_page_polling_a_route_its_role_lacks_is_a_note_not_a_spike() {
+        let said: std::sync::Arc<Mutex<Vec<String>>> = Default::default();
+        let s = said.clone();
+        super::super::alerts::set_sink(Some(Box::new(move |_: &str, text: &str| s.lock().unwrap().push(text.to_string()))));
+
+        let polling = format!("fold-poll-{}", uuid::Uuid::new_v4());
+        let c = guest_call(&polling, "GET /cli/tickets", "room-a", Some("http_403"));
+        for _ in 0..25 {
+            observe_with("ws-fold", &c, false, Some("missing capability tickets:read"));
+        }
+        assert!(!spiked(&polling), "one page's polling is no spike");
+        let texts = said.lock().unwrap().clone();
+        let notes: Vec<&String> = texts.iter().filter(|t| t.contains(&polling)).collect();
+        assert_eq!(notes.len(), 1, "one note: {notes:?}");
+        assert!(notes[0].contains("GET /cli/tickets refused 10×") && notes[0].contains("missing tickets:read?") && notes[0].contains("k2 app role room"), "{}", notes[0]);
+
+        let probing = format!("fold-probe-{}", uuid::Uuid::new_v4());
+        for i in 0..25 {
+            observe_with("ws-fold", &guest_call(&probing, "GET /cli/thread", &format!("room-{i}"), Some("skin_room")), false, None);
+        }
+        assert!(spiked(&probing), "25 different rooms are still a spike");
+
+        let guessing = format!("fold-401-{}", uuid::Uuid::new_v4());
+        for _ in 0..25 {
+            observe_with("ws-fold", &Call { actor: "guest:p-1".to_string(), ..call(&guessing, 401, Some("invalid_credentials")) }, false, None);
+        }
+        assert!(spiked(&guessing), "wrong passwords count per call");
+        super::super::alerts::set_sink(None);
+    }
+
+    #[test]
+    fn a_permission_refusal_is_a_guests_or_the_apps_403_for_a_room_or_a_capability() {
+        let g = |actor: &str, result: u16, code: Option<&str>| Call { actor: actor.to_string(), ..call("a", result, code) };
+        assert_eq!(permission_refusal(&g("guest:x", 403, Some("skin_room")), None).as_deref(), Some("skin_room"));
+        assert_eq!(permission_refusal(&g("app", 403, Some("outside_app_rooms")), None).as_deref(), Some("outside_app_rooms"));
+        assert_eq!(permission_refusal(&g("guest:x", 403, Some("http_403")), Some("missing capability files:read")).as_deref(), Some("missing files:read"));
+        assert_eq!(permission_refusal(&g("remote", 403, Some("skin_room")), None), None, "only a guest or the App's pass");
+        assert_eq!(permission_refusal(&g("guest:x", 401, Some("skin_room")), None), None);
+        assert_eq!(permission_refusal(&g("guest:x", 403, Some("pass_wrong_link")), None), None);
+        assert_eq!(permission_refusal(&g("guest:x", 403, Some("forbidden")), Some("nope")), None);
     }
 
     #[test]

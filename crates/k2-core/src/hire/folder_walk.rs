@@ -39,6 +39,18 @@ pub(crate) struct Reached {
 /// folder has always been: a sandbox's mirror reads it.
 #[cfg(unix)]
 pub(crate) fn walk(root: &Path, rel: &[OsString], make_last: bool) -> Result<Reached, WalkError> {
+    walk_fd(root, rel, make_last).map(|(_, reached)| reached)
+}
+
+/// [`walk`] to a folder that must already be there, keeping it open: the
+/// fd of the last part, for a write made relative to it (`openat`).
+#[cfg(unix)]
+pub(crate) fn walk_open(root: &Path, rel: &[OsString]) -> Result<std::os::fd::OwnedFd, WalkError> {
+    walk_fd(root, rel, false).map(|(fd, _)| fd)
+}
+
+#[cfg(unix)]
+fn walk_fd(root: &Path, rel: &[OsString], make_last: bool) -> Result<(std::os::fd::OwnedFd, Reached), WalkError> {
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
     use std::os::unix::ffi::OsStrExt;
 
@@ -107,7 +119,7 @@ pub(crate) fn walk(root: &Path, rel: &[OsString], make_last: bool) -> Result<Rea
         cur = next;
         if last {
             let empty = is_empty(&cur).map_err(|e| WalkError::Io(at.clone(), e))?;
-            return Ok(Reached { id: (st.st_dev as u64, st.st_ino as u64), made, empty });
+            return Ok((cur, Reached { id: (st.st_dev as u64, st.st_ino as u64), made, empty }));
         }
     }
     Err(WalkError::NotAFolder(at))

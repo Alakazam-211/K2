@@ -9,7 +9,10 @@
 //! 1. **Resume an active worktree.** Agent has a work item in
 //!    `active/` with a `worktree_path` frontmatter field → launch in
 //!    that worktree, write the task CLAUDE.md, return args with a
-//!    resume-context system prompt.
+//!    resume-context system prompt. The worktree must be under the
+//!    workspace's own `.worktrees/`, reached with no link on the way;
+//!    the folder-trust gate decides first, and CLAUDE.md is written
+//!    only when it passes, never through a link.
 //! 2. **Delegate from inbox.** Agent has work waiting in `inbox/` but
 //!    no active worktree → call
 //!    [`crate::deprecated::delegate::k2_agents_delegate`] (now
@@ -28,8 +31,10 @@
 //! the agent its wakeup.md. This function is the supervised-launch
 //! surface that needs the full decision tree.
 
+use std::collections::HashMap;
+use std::ffi::OsString;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use crate::chat_history;
 use crate::db::schema::WorkspaceSession;
@@ -79,13 +84,17 @@ pub fn k2_agents_build_launch(
                         let fm = parse_frontmatter(&content);
                         if let Some(wt_path) = fm.get("worktree_path") {
                             let branch = fm.get("branch").cloned().unwrap_or_default();
+                            // Only a folder under the workspace's own
+                            // `.worktrees/`, reached by a walk that
+                            // follows no link. Nothing is written yet.
+                            let (base, rel) = worktree_rel(&project_path, wt_path)?;
+                            let wt_dir = open_worktree(&base, &rel)?;
                             let claude_md = compose_agent_wake_context(
                                 &project_path,
                                 &agent_name,
                                 Some(&item),
                             )?;
                             let claude_md_path = PathBuf::from(wt_path).join("CLAUDE.md");
-                            fs::write(&claude_md_path, &claude_md).ok();
 
                             let resume_context = format!(
                                 "{}\n\n## Resuming Work\n\n\
@@ -103,9 +112,20 @@ pub fn k2_agents_build_launch(
                                 item.title
                             );
 
+                            let args = vec![
+                                "--dangerously-skip-permissions".to_string(),
+                                "--append-system-prompt".to_string(),
+                                resume_context,
+                                resume_kickoff,
+                            ];
+                            // The folder-trust gate decides before
+                            // anything is written in the worktree.
+                            ask_folder_gate(&project_path, &command, &args, wt_path)?;
+                            write_task_claude_md(&wt_dir, &claude_md_path, &claude_md)?;
+
                             return Ok(serde_json::json!({
                                 "command": command,
-                                "args": ["--dangerously-skip-permissions", "--append-system-prompt", resume_context, resume_kickoff],
+                                "args": args,
                                 "cwd": wt_path,
                                 "claudeMdPath": claude_md_path.to_string_lossy(),
                                 "agentName": agent_name,
@@ -325,6 +345,168 @@ pub fn k2_agents_build_launch(
         "resumeSession": resume_session,
         "didCompact": should_compact,
     }))
+}
+
+/// Case 1 refusals: the worktree isn't under `<workspace>/.worktrees/`.
+pub const WORKTREE_OUTSIDE_WORKSPACE: &str = "worktree_outside_workspace";
+/// A link, or something that isn't a folder, on the way to the worktree.
+pub const WORKTREE_NOT_A_FOLDER: &str = "worktree_not_a_folder";
+/// Another user could change a folder on the way to the worktree.
+pub const WORKTREE_FOLDER_UNSAFE: &str = "worktree_folder_unsafe";
+/// The worktree folder isn't there.
+pub const WORKTREE_MISSING: &str = "worktree_missing";
+/// `<worktree>/CLAUDE.md` is a link (symbolic, or another name of a file).
+pub const CLAUDE_MD_IS_A_LINK: &str = "claude_md_is_a_link";
+/// The worktree or its CLAUDE.md couldn't be opened or written.
+pub const WORKTREE_WRITE_FAILED: &str = "worktree_write_failed";
+
+/// Where an active work item's `worktree_path` is: the workspace folder it
+/// was matched against (as given, or canonical) and the names from there
+/// down, starting with `.worktrees`. K2 makes every agent worktree at
+/// `<workspace>/.worktrees/<branch>` ([`crate::git::create_worktree`]); a
+/// path anywhere else, a relative one, or one with `..` is refused.
+fn worktree_rel(project_path: &str, wt_path: &str) -> Result<(PathBuf, Vec<OsString>), String> {
+    let refuse = || {
+        format!(
+            "{WORKTREE_OUTSIDE_WORKSPACE}: {wt_path} is not a folder under this workspace's .worktrees/ \
+             ({project_path}/.worktrees); K2 wrote nothing"
+        )
+    };
+    let wt = Path::new(wt_path);
+    if !wt.is_absolute() {
+        return Err(refuse());
+    }
+    let mut bases = vec![PathBuf::from(project_path)];
+    if let Ok(c) = dunce::canonicalize(project_path) {
+        bases.push(c);
+    }
+    for base in bases {
+        let Ok(rest) = wt.strip_prefix(base.join(".worktrees")) else { continue };
+        let mut rel = vec![OsString::from(".worktrees")];
+        for c in rest.components() {
+            match c {
+                Component::Normal(n) => rel.push(n.to_os_string()),
+                _ => return Err(refuse()),
+            }
+        }
+        if rel.len() < 2 {
+            return Err(refuse());
+        }
+        return Ok((base, rel));
+    }
+    Err(refuse())
+}
+
+fn walk_refusal(e: crate::hire::folder_walk::WalkError) -> String {
+    use crate::hire::folder_walk::WalkError;
+    match e {
+        WalkError::NotAFolder(p) => format!(
+            "{WORKTREE_NOT_A_FOLDER}: {} is a link or not a folder; K2 follows no link to a worktree and wrote nothing",
+            p.display()
+        ),
+        WalkError::Unsafe(p) => format!(
+            "{WORKTREE_FOLDER_UNSAFE}: another user can change {}; K2 wrote nothing",
+            p.display()
+        ),
+        WalkError::Missing(p) => format!("{WORKTREE_MISSING}: {} is not there; K2 wrote nothing", p.display()),
+        WalkError::AlreadyThere(p) => format!("{WORKTREE_WRITE_FAILED}: {}; K2 wrote nothing", p.display()),
+        WalkError::Io(p, e) => format!("{WORKTREE_WRITE_FAILED}: {}: {e}; K2 wrote nothing", p.display()),
+    }
+}
+
+/// The worktree folder, opened by a walk from the workspace down `rel`
+/// that opens each part with `O_NOFOLLOW | O_DIRECTORY`
+/// ([`crate::hire::folder_walk::walk_open`]).
+#[cfg(unix)]
+fn open_worktree(base: &Path, rel: &[OsString]) -> Result<std::os::fd::OwnedFd, String> {
+    crate::hire::folder_walk::walk_open(base, rel).map_err(walk_refusal)
+}
+
+/// Not Unix: each part is looked at without following it.
+#[cfg(not(unix))]
+fn open_worktree(base: &Path, rel: &[OsString]) -> Result<PathBuf, String> {
+    crate::hire::folder_walk::walk(base, rel, false).map_err(walk_refusal)?;
+    let mut p = base.to_path_buf();
+    for n in rel {
+        p.push(n);
+    }
+    Ok(p)
+}
+
+/// The folder-trust gate for the worktree, asked the way a harness spawn
+/// asks it ([`crate::cli_folder_trust::gate_harness_spawn`]): a held or
+/// denied folder returns the gate's refusal string (its token turns into
+/// the 409 body in the daemon's response).
+fn ask_folder_gate(project_path: &str, command: &str, args: &[String], wt_path: &str) -> Result<(), String> {
+    let project_id = {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        resolve_project_id(&conn, project_path)
+    };
+    let actor = crate::cli_folder_trust::gate::Actor {
+        project_id,
+        by: "launch".to_string(),
+        tool: Some(command.to_string()),
+        ..Default::default()
+    };
+    crate::cli_folder_trust::gate_harness_spawn(
+        Some(command),
+        args,
+        &HashMap::new(),
+        Some(Path::new(wt_path)),
+        None,
+        &actor,
+    )
+    .map(|_| ())
+    .map_err(|r| r.to_error_string())
+}
+
+/// Write `<worktree>/CLAUDE.md` relative to the worktree's open folder:
+/// `O_NOFOLLOW` (a link there is refused), and a file with another name
+/// (a hard link) or that isn't a plain file is refused before it is cut.
+#[cfg(unix)]
+fn write_task_claude_md(dir: &std::os::fd::OwnedFd, at: &Path, body: &str) -> Result<(), String> {
+    use std::io::Write;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::fs::MetadataExt;
+
+    let failed = |e: std::io::Error| format!("{WORKTREE_WRITE_FAILED}: {}: {e}", at.display());
+    let name = std::ffi::CString::new("CLAUDE.md").map_err(|e| failed(std::io::Error::other(e)))?;
+    let flags = libc::O_WRONLY | libc::O_CREAT | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY | libc::O_CLOEXEC;
+    // SAFETY: a valid dirfd and C string; the fd is owned below.
+    let fd = unsafe { libc::openat(dir.as_raw_fd(), name.as_ptr(), flags, 0o644 as libc::c_uint) };
+    if fd < 0 {
+        let e = std::io::Error::last_os_error();
+        if e.raw_os_error() == Some(libc::ELOOP) {
+            return Err(format!("{CLAUDE_MD_IS_A_LINK}: {} is a link; K2 wrote nothing", at.display()));
+        }
+        return Err(failed(e));
+    }
+    // SAFETY: openat returned a new fd that nothing else owns.
+    let mut f = unsafe { std::fs::File::from_raw_fd(fd) };
+    let meta = f.metadata().map_err(failed)?;
+    if !meta.file_type().is_file() {
+        return Err(format!("{WORKTREE_WRITE_FAILED}: {} is not a plain file; K2 wrote nothing", at.display()));
+    }
+    if meta.nlink() > 1 {
+        return Err(format!(
+            "{CLAUDE_MD_IS_A_LINK}: {} has another name (a hard link); K2 wrote nothing",
+            at.display()
+        ));
+    }
+    f.set_len(0).map_err(failed)?;
+    f.write_all(body.as_bytes()).map_err(failed)
+}
+
+/// Not Unix: the file is looked at without following it, then written.
+#[cfg(not(unix))]
+fn write_task_claude_md(_dir: &PathBuf, at: &Path, body: &str) -> Result<(), String> {
+    if let Ok(m) = fs::symlink_metadata(at) {
+        if m.file_type().is_symlink() {
+            return Err(format!("{CLAUDE_MD_IS_A_LINK}: {} is a link; K2 wrote nothing", at.display()));
+        }
+    }
+    fs::write(at, body).map_err(|e| format!("{WORKTREE_WRITE_FAILED}: {}: {e}", at.display()))
 }
 
 #[cfg(test)]

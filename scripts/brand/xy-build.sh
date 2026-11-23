@@ -85,7 +85,9 @@ step "the bite: planted names fail the judges"
 for plant in 'Run k2 msg k2 hi' 'XY keeps your agents'; do
     rm -rf "$W/bite"
     cp -R "$W/corpus" "$W/bite"
-    first="$(find "$W/bite" -name '*.out' | sort | head -n 1)"
+    # sed reads all of sort's output: head would close the pipe early, and
+    # under pipefail sort's SIGPIPE (141) would end the run.
+    first="$(find "$W/bite" -name '*.out' | sort | sed -n 1p)"
     printf '%s\n' "$plant" >> "$first"
     rc=0
     python3 scripts/brand/output-judges.py --brand brand/xy "$W/bite" > /dev/null 2> "$W/bite.err" || rc=$?

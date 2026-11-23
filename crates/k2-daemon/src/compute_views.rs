@@ -1453,6 +1453,11 @@ pub(crate) fn job_get(who: &Who, params: &HashMap<String, String>) -> R<serde_js
         v["userns"] = true.into();
         v["result"]["userns"] = true.into();
     }
+    // 0.46.18: and no per-job address filter (`--no-addr-filter`).
+    if j.plan().is_some_and(|p| p.no_addr_filter) {
+        v["noAddrFilter"] = true.into();
+        v["result"]["noAddrFilter"] = true.into();
+    }
     // prd-compute-blacksmith-class-v1 T1: a CI check job's failing tests
     // carry their history mark (`new`, `flaky`, `quarantined`, `known`) for
     // `--failures`, and the record's counts. Only once the CI engine

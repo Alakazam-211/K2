@@ -142,7 +142,7 @@ pub(crate) fn named_refusal(
         None => userns_skip(w, owned, grant, None)?,
     };
     if is_userns_skip(code) {
-        return Some(crate::compute_userns_ask::named_refusal(code, node, ws));
+        return Some(crate::compute_userns_ask::named_refusal(code, node, ws, w.no_addr_filter));
     }
     match (code, w.network.as_ref()) {
         (skip::JOB_NETWORK, Some(n)) => Some(
@@ -212,6 +212,7 @@ mod tests {
             gpu_mem: None,
             network,
             userns: false,
+            no_addr_filter: false,
         }
     }
 

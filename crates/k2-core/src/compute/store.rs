@@ -482,10 +482,16 @@ pub struct GrantRow {
     /// only on a node this server owns; `granted_by` / `granted_at` say who
     /// set it and when.
     pub allow_userns: bool,
+    /// 0330 (0.46.18): this workspace's `--userns --network none` jobs may
+    /// ask `--no-addr-filter` on this node (no per-job address filter; the
+    /// job's own loopback-only namespace stays). Owner or Admin only, only
+    /// on a node this server owns, never without `allow_userns` (turning
+    /// that off turns this off too).
+    pub allow_no_addr_filter: bool,
 }
 
 const GRANT_COLS: &str = "node_id, workspace_id, scopes, max_job_secs, max_disk_gb, max_parallel, max_queued, \
-    warm_at, expires_at, granted_by, granted_at, allow_ci, submitter_max_running, allow_gpu, allow_userns";
+    warm_at, expires_at, granted_by, granted_at, allow_ci, submitter_max_running, allow_gpu, allow_userns, allow_no_addr_filter";
 
 fn grant_from_row(r: &Row<'_>) -> rusqlite::Result<GrantRow> {
     Ok(GrantRow {
@@ -504,6 +510,7 @@ fn grant_from_row(r: &Row<'_>) -> rusqlite::Result<GrantRow> {
         submitter_max_running: r.get(12)?,
         allow_gpu: r.get::<_, i64>(13)? != 0,
         allow_userns: r.get::<_, i64>(14)? != 0,
+        allow_no_addr_filter: r.get::<_, i64>(15)? != 0,
     })
 }
 
@@ -526,6 +533,9 @@ pub struct GrantLimits {
     /// `--userns` jobs (0330): `None` keeps what the grant has (a new
     /// grant: off), like `allow_gpu`.
     pub allow_userns: Option<bool>,
+    /// `--no-addr-filter` (0330): `None` keeps what the grant has (a new
+    /// grant: off). Whenever `allow_userns` ends up off, this is off too.
+    pub allow_no_addr_filter: Option<bool>,
 }
 
 pub fn set_grant(
@@ -538,14 +548,17 @@ pub fn set_grant(
 ) -> Result<GrantRow, String> {
     conn.execute(
         "INSERT INTO compute_node_grants (node_id, workspace_id, max_job_secs, max_disk_gb, max_parallel, max_queued, \
-         granted_by, granted_at, allow_ci, submitter_max_running, allow_gpu, allow_userns) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, COALESCE(?9, 0), COALESCE(?10, 0), COALESCE(?11, 0), COALESCE(?12, 0)) \
+         granted_by, granted_at, allow_ci, submitter_max_running, allow_gpu, allow_userns, allow_no_addr_filter) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, COALESCE(?9, 0), COALESCE(?10, 0), COALESCE(?11, 0), COALESCE(?12, 0), \
+         CASE WHEN COALESCE(?12, 0) = 0 THEN 0 ELSE COALESCE(?13, 0) END) \
          ON CONFLICT(node_id, workspace_id) DO UPDATE SET max_job_secs = excluded.max_job_secs, \
          max_disk_gb = excluded.max_disk_gb, max_parallel = excluded.max_parallel, max_queued = excluded.max_queued, \
          granted_by = excluded.granted_by, granted_at = excluded.granted_at, \
          allow_ci = COALESCE(?9, compute_node_grants.allow_ci), \
          submitter_max_running = COALESCE(?10, compute_node_grants.submitter_max_running), \
          allow_gpu = COALESCE(?11, compute_node_grants.allow_gpu), \
-         allow_userns = COALESCE(?12, compute_node_grants.allow_userns)",
+         allow_userns = COALESCE(?12, compute_node_grants.allow_userns), \
+         allow_no_addr_filter = CASE WHEN COALESCE(?12, compute_node_grants.allow_userns) = 0 THEN 0 \
+           ELSE COALESCE(?13, compute_node_grants.allow_no_addr_filter) END",
         params![
             node_id,
             workspace_id,
@@ -558,7 +571,8 @@ pub fn set_grant(
             limits.allow_ci.map(i64::from),
             limits.submitter_max_running,
             limits.allow_gpu.map(i64::from),
-            limits.allow_userns.map(i64::from)
+            limits.allow_userns.map(i64::from),
+            limits.allow_no_addr_filter.map(i64::from)
         ],
     )
     .map_err(|e| e.to_string())?;
@@ -2687,6 +2701,33 @@ mod tests {
         // The stored column itself (0330's), not only the row type.
         let raw: i64 = c.query_row("SELECT allow_userns FROM compute_node_grants WHERE node_id = 'n1' AND workspace_id = 'ws'", [], |r| r.get(0)).unwrap();
         assert_eq!(raw, 0);
+    }
+
+    /// `--no-addr-filter` (0330): off for a new grant, never on without
+    /// `allow_userns` (asked alone on a grant without it: stays off), kept
+    /// when re-granting limits, and turned off with `--no-userns`.
+    #[test]
+    fn allow_no_addr_filter_needs_userns_and_goes_with_it() {
+        let c = conn();
+        insert_pending_node(&c, "n1", "a", "fp", "pem", &labels(), "o", "1", 1).unwrap();
+        let g = set_grant(&c, "n1", "ws", &GrantLimits::default(), "owner", 2).unwrap();
+        assert!(!g.allow_no_addr_filter);
+        let g = set_grant(&c, "n1", "ws", &GrantLimits { allow_no_addr_filter: Some(true), ..Default::default() }, "owner", 3).unwrap();
+        assert!(!g.allow_no_addr_filter, "never without --userns");
+        insert_pending_node(&c, "n2", "b", "fp2", "pem", &labels(), "o", "2", 1).unwrap();
+        let fresh = set_grant(&c, "n2", "ws", &GrantLimits { allow_no_addr_filter: Some(true), ..Default::default() }, "owner", 3).unwrap();
+        assert!(!fresh.allow_no_addr_filter, "a new grant without --userns: off");
+        let g = set_grant(&c, "n1", "ws", &GrantLimits { allow_userns: Some(true), allow_no_addr_filter: Some(true), ..Default::default() }, "owner", 4).unwrap();
+        assert!(g.allow_userns && g.allow_no_addr_filter);
+        assert_eq!(serde_json::to_value(&g).unwrap()["allowNoAddrFilter"], serde_json::json!(true), "the routes show it as allowNoAddrFilter");
+        let g = set_grant(&c, "n1", "ws", &GrantLimits { max_parallel: Some(2), ..Default::default() }, "owner", 5).unwrap();
+        assert!(g.allow_no_addr_filter, "re-granting limits keeps it");
+        let g = set_grant(&c, "n1", "ws", &GrantLimits { allow_no_addr_filter: Some(false), ..Default::default() }, "owner", 6).unwrap();
+        assert!(g.allow_userns && !g.allow_no_addr_filter, "--addr-filter alone leaves --userns");
+        let g = set_grant(&c, "n1", "ws", &GrantLimits { allow_no_addr_filter: Some(true), ..Default::default() }, "owner", 7).unwrap();
+        assert!(g.allow_no_addr_filter, "on again beside the kept --userns");
+        let g = set_grant(&c, "n1", "ws", &GrantLimits { allow_userns: Some(false), ..Default::default() }, "owner", 8).unwrap();
+        assert!(!g.allow_userns && !g.allow_no_addr_filter, "--no-userns takes it too");
     }
 
     fn tiered_job(c: &Connection, id: &str, ws: &str, tier: &str, submitter: &str, key: Option<&str>, at: i64) -> JobRow {

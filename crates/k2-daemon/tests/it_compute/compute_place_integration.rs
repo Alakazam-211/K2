@@ -2793,3 +2793,86 @@ async fn userns_jobs_go_only_to_owned_nodes_granted_and_offering_it() {
     compute_ws::test_detach("u-own");
     compute_ws::test_detach("u-ten");
 }
+
+/// 0.46.18 (`--no-addr-filter`): only with `--userns` and `--network
+/// none` (else `no_addr_filter_invalid`, exit 2); a separate grant the
+/// owner gives only beside `--userns` and only on a node this server owns
+/// (a tenant node: `userns_owner_only`; the agent: refused); a job asking
+/// it goes only where that grant is, the ask rides in the plan, and `get`
+/// shows it. `--no-userns` takes it too.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn no_addr_filter_is_its_own_grant_on_an_owned_node_only() {
+    use k2_core::compute::proto::jobnet::FEATURE_JOB_NETWORK;
+    use k2_core::compute::proto::userns::{FEATURE_JOB_USERNS, FEATURE_NO_ADDR_FILTER};
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let me = seed_ws(&env, "nafws");
+    let agent = passport(&me);
+    let full = |rev: u64| {
+        let mut o = offer(rev, 30, 32, 0);
+        o.features.extend([FEATURE_JOB_NETWORK.to_string(), FEATURE_JOB_USERNS.to_string(), FEATURE_NO_ADDR_FILTER.to_string()]);
+        o
+    };
+    active_node("f-own");
+    grant("f-own", &me, None, 4);
+    let _a = compute_ws::test_attach("f-own", full(1));
+    active_node("f-ten");
+    {
+        let db = k2_core::db::shared();
+        store::set_tenant_of(&db.lock(), "f-ten", "other-server.example").expect("tenant");
+    }
+    grant("f-ten", &me, None, 4);
+    let _b = compute_ws::test_attach("f-ten", full(1));
+    let ask = json!({"userns": true, "network": "none", "noAddrFilter": true});
+    // Not with --userns and --network none: exit 2 at the door.
+    for bad in [json!({"noAddrFilter": true}), json!({"userns": true, "noAddrFilter": true}), json!({"network": "none", "noAddrFilter": true})] {
+        let r = run(d.port, &agent, &me, bad.clone()).await;
+        assert_eq!((r.status, code(&r)), (400, "no_addr_filter_invalid".to_string()), "{bad}: {}", r.body);
+    }
+    // The grant: never without --userns, never on a tenant node, never by the agent.
+    let set = |node: &str, extra: Value| {
+        let mut b = json!({"node": node, "workspace": me.id});
+        for (k, v) in extra.as_object().unwrap() {
+            b[k] = v.clone();
+        }
+        b
+    };
+    let r = post(d.port, "/cli/compute/grants/set", OWNER, set("f-own", json!({"allowNoAddrFilter": true}))).await;
+    assert_eq!((r.status, code(&r)), (400, "no_addr_filter_invalid".to_string()), "{}", r.body);
+    let r = post(d.port, "/cli/compute/grants/set", OWNER, set("f-ten", json!({"allowUserns": true, "allowNoAddrFilter": true}))).await;
+    assert_eq!((r.status, code(&r)), (403, "userns_owner_only".to_string()), "{}", r.body);
+    let r = post(d.port, "/cli/compute/grants/set", &agent, set("f-own", json!({"allowUserns": true, "allowNoAddrFilter": true}))).await;
+    assert_eq!(r.status, 403, "{}", r.body);
+    // --userns alone: a --no-addr-filter job is refused, a plain --userns one runs.
+    let r = post(d.port, "/cli/compute/grants/set", OWNER, set("f-own", json!({"allowUserns": true}))).await;
+    assert_eq!((r.status, j(&r)["grant"]["allowNoAddrFilter"].clone()), (200, json!(false)), "{}", r.body);
+    let r = run(d.port, &agent, &me, ask.clone()).await;
+    assert_eq!((r.status, code(&r)), (403, "userns_not_granted".to_string()), "{}", r.body);
+    assert!(r.body.contains("k2 compute grant f-own --workspace nafws --userns --no-addr-filter"), "{}", r.body);
+    let r = run(d.port, &agent, &me, json!({"userns": true, "network": "none"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let plan = row(j(&r)["job"]["id"].as_str().unwrap()).plan().expect("a plan");
+    assert!(plan.userns && !plan.no_addr_filter);
+    // The owner grants it: on the row, and the job goes to the owned node only.
+    let r = post(d.port, "/cli/compute/grants/set", OWNER, set("f-own", json!({"allowNoAddrFilter": true}))).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!((j(&r)["grant"]["allowUserns"].clone(), j(&r)["grant"]["allowNoAddrFilter"].clone()), (json!(true), json!(true)), "{}", r.body);
+    let r = run(d.port, &agent, &me, ask.clone()).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(node_of(&r), "f-own", "{}", r.body);
+    assert_eq!(j(&r)["placement"]["skipped"]["userns_owner_only"], 1, "the tenant node: {}", r.body);
+    let job = j(&r)["job"]["id"].as_str().unwrap().to_string();
+    let plan = row(&job).plan().expect("a plan");
+    assert!(plan.userns && plan.no_addr_filter);
+    let r = get(d.port, "/cli/compute/jobs/get", &agent, &format!("job={job}")).await;
+    assert_eq!((j(&r)["userns"].clone(), j(&r)["noAddrFilter"].clone()), (json!(true), json!(true)), "{}", r.body);
+    let r = run(d.port, &agent, &me, json!({"node": "f-ten", "userns": true, "network": "none", "noAddrFilter": true})).await;
+    assert_eq!((r.status, code(&r)), (403, "userns_owner_only".to_string()), "named tenant: {}", r.body);
+    // --no-userns takes --no-addr-filter too.
+    let r = post(d.port, "/cli/compute/grants/set", OWNER, set("f-own", json!({"allowUserns": false}))).await;
+    assert_eq!((r.status, j(&r)["grant"]["allowNoAddrFilter"].clone()), (200, json!(false)), "{}", r.body);
+    let r = run(d.port, &agent, &me, ask).await;
+    assert_eq!((r.status, code(&r)), (403, "userns_not_granted".to_string()), "{}", r.body);
+    compute_ws::test_detach("f-own");
+    compute_ws::test_detach("f-ten");
+}

@@ -68,6 +68,7 @@ fn grant_row(node: &str, max_job_secs: i64, max_parallel: i64) -> GrantRow {
         submitter_max_running: 0,
         allow_gpu: false,
         allow_userns: false,
+        allow_no_addr_filter: false,
     }
 }
 
@@ -177,6 +178,7 @@ pub(super) fn want(mem_gb: u64) -> Want {
         gpu_mem: None,
         network: None,
         userns: false,
+        no_addr_filter: false,
     }
 }
 
@@ -1481,13 +1483,13 @@ fn userns_places_only_on_owned_granted_nodes_that_offer_it() {
     // A node never seen online can't say: refused.
     assert_eq!(userns_skip(&w, true, c.grant.as_ref(), None), Some(skip::USERNS_NEEDS_UPDATE));
     // A named node: the named refusals (exit 3), each naming the node.
-    let e = named_refusal(skip::USERNS_OWNER_ONLY, "k2n7", "builder");
+    let e = named_refusal(skip::USERNS_OWNER_ONLY, "k2n7", "builder", false);
     assert_eq!((e.code, e.status), (codes::USERNS_OWNER_ONLY, 403));
     assert!(e.hint.contains("--userns is only for the node owner's own server: this server is a tenant of k2n7, so its jobs can't make user namespaces there"), "{}", e.hint);
-    let e = named_refusal(skip::USERNS_NOT_GRANTED, "k2n7", "builder");
+    let e = named_refusal(skip::USERNS_NOT_GRANTED, "k2n7", "builder", false);
     assert_eq!((e.code, e.status), (codes::USERNS_NOT_GRANTED, 403));
     assert!(e.hint.contains("k2 compute grant k2n7 --workspace builder --userns"), "{}", e.hint);
-    let e = named_refusal(skip::USERNS_NEEDS_UPDATE, "k2n7", "builder");
+    let e = named_refusal(skip::USERNS_NEEDS_UPDATE, "k2n7", "builder", false);
     assert_eq!((e.code, e.status), (codes::USERNS_NEEDS_UPDATE, 409));
     assert!(e.hint.contains("'k2n7' can't") && e.hint.contains("0.46.18"), "{}", e.hint);
     // Auto-placement with none left: the grant first (the fix an owner can
@@ -1513,6 +1515,59 @@ fn userns_places_only_on_owned_granted_nodes_that_offer_it() {
     assert!(skip_words(skip::USERNS_OWNER_ONLY, 1, &w).contains("tenant"));
     assert!(skip_words(skip::USERNS_NOT_GRANTED, 1, &w).contains("--userns"));
     assert!(skip_words(skip::USERNS_NEEDS_UPDATE, 1, &w).contains("too old for --userns"));
+}
+
+/// `--no-addr-filter` (0.46.18): only with `--userns` and `--network none`
+/// (no dummies), else `no_addr_filter_invalid` (exit 2); placed only on a
+/// node this server owns offering `no-addr-filter` too, with a grant that
+/// has `allow_no_addr_filter` beside `allow_userns`. A tenant node never.
+#[test]
+fn no_addr_filter_needs_userns_network_none_its_feature_and_grant() {
+    use crate::compute_job_network::ask_skip;
+    use crate::compute_userns_ask::{from_body, named_refusal, owns};
+    use k2_core::compute::proto::jobnet::{Dummy, JobNet};
+    use k2_core::compute::proto::userns::{codes, FEATURE_JOB_USERNS, FEATURE_NO_ADDR_FILTER};
+    let none = JobNet::none();
+    let body = |x: serde_json::Value| from_body(&x, None);
+    assert_eq!(from_body(&serde_json::json!({}), None).unwrap(), (false, false));
+    assert_eq!(from_body(&serde_json::json!({"userns": true, "noAddrFilter": true}), Some(&none)).unwrap(), (true, true));
+    let dummies = JobNet { dummies: vec![Dummy { name: "d0".into(), addr: "10.254.254.1/32".into() }], ..JobNet::none() };
+    for (why, r) in [
+        ("alone", body(serde_json::json!({"noAddrFilter": true}))),
+        ("without --network none", body(serde_json::json!({"userns": true, "noAddrFilter": true}))),
+        ("without --userns", from_body(&serde_json::json!({"noAddrFilter": true}), Some(&none))),
+        ("with --netns-dummy", from_body(&serde_json::json!({"userns": true, "noAddrFilter": true}), Some(&dummies))),
+    ] {
+        let e = r.expect_err(why);
+        assert_eq!((e.code, e.status), (codes::NO_ADDR_FILTER_INVALID, 400), "{why}");
+        assert!(e.hint.contains("only with --userns and --network none"), "{why}: {}", e.hint);
+    }
+    assert_eq!(body(serde_json::json!({"noAddrFilter": "yes"})).expect_err("a bool").code, k2_core::compute::codes::BAD_REQUEST);
+    let w = Want { userns: true, no_addr_filter: true, network: Some(none.clone()), ..want(2) };
+    let mut c = cand("own", 30, 32, 0, 2);
+    c.offer.features.push(FEATURE_JOB_USERNS.into());
+    c.grant.as_mut().unwrap().allow_userns = true;
+    assert_eq!(ask_skip(&Want { no_addr_filter: false, ..w.clone() }, c.grant.as_ref(), &c.offer, true), None, "--userns alone runs there");
+    assert_eq!(crate::compute_userns_ask::userns_skip(&w, true, c.grant.as_ref(), Some(&c.offer.features)), Some(skip::USERNS_NEEDS_UPDATE), "no no-addr-filter feature");
+    c.offer.features.push(FEATURE_NO_ADDR_FILTER.into());
+    assert_eq!(crate::compute_userns_ask::userns_skip(&w, true, c.grant.as_ref(), Some(&c.offer.features)), Some(skip::USERNS_NOT_GRANTED), "the grant lacks it");
+    c.grant.as_mut().unwrap().allow_no_addr_filter = true;
+    assert_eq!(crate::compute_userns_ask::userns_skip(&w, true, c.grant.as_ref(), Some(&c.offer.features)), None);
+    let mut t = c.clone();
+    t.node.role = "tenant".into();
+    assert_eq!(crate::compute_userns_ask::userns_skip(&w, owns(&t.node), t.grant.as_ref(), Some(&t.offer.features)), Some(skip::USERNS_OWNER_ONLY), "a tenant node never, granted or not");
+    let admin = Want { admin: true, ..w.clone() };
+    assert_eq!(crate::compute_userns_ask::userns_skip(&admin, true, None, Some(&c.offer.features)), Some(skip::USERNS_NOT_GRANTED), "no owner/Admin bypass");
+    assert!(required_features(&w).contains(&FEATURE_NO_ADDR_FILTER));
+    assert!(!required_features(&Want { userns: true, ..want(2) }).contains(&FEATURE_NO_ADDR_FILTER));
+    let mut p = userns_plan(true);
+    p.no_addr_filter = true;
+    assert!(Want::of_job(&JobRow::default(), &p).no_addr_filter, "a move keeps it");
+    let e = named_refusal(skip::USERNS_NOT_GRANTED, "k2n7", "builder", true);
+    assert!(e.hint.contains("k2 compute grant k2n7 --workspace builder --userns --no-addr-filter"), "{}", e.hint);
+    let e = named_refusal(skip::USERNS_NEEDS_UPDATE, "k2n7", "builder", true);
+    assert!(e.hint.starts_with("--no-addr-filter: 'k2n7' can't"), "{}", e.hint);
+    assert!(skip_words(skip::USERNS_NEEDS_UPDATE, 1, &w).contains("--no-addr-filter"));
 }
 
 fn userns_plan(userns: bool) -> Plan {

@@ -1175,7 +1175,7 @@ fn grant_set(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::Val
         .with("node", n.name.clone()));
     }
     // `--userns` jobs (0.46.18): the owner or an Admin, on a node this server owns.
-    let allow_userns = crate::compute_userns_ask::grant_ask(&v, who.is_admin(), mgr, &n, &ws.handle)?;
+    let (allow_userns, allow_no_addr_filter) = crate::compute_userns_ask::grant_ask(&v, who.is_admin(), mgr, &n, &ws.id, &ws.handle)?;
     let limits = store::GrantLimits {
         max_job_secs: n_pos(&v, "maxJobSecs", 60, 7 * 86_400)?,
         max_disk_gb: n_pos(&v, "maxDiskGb", 1, 10_000)?,
@@ -1185,7 +1185,7 @@ fn grant_set(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::Val
         // L3 (prd-compute-job-tiers-v2): 0 = off; absent keeps the grant's.
         submitter_max_running: n_pos(&v, "submitterMaxRunning", 0, 64)?,
         allow_gpu,
-        allow_userns,
+        allow_userns, allow_no_addr_filter,
     };
     let (g, before) = {
         let db = k2_core::db::shared();
@@ -1356,7 +1356,7 @@ fn agents_set(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         allow_ci: None,
         submitter_max_running: None,
         allow_gpu: None,
-        allow_userns: None,
+        allow_userns: None, allow_no_addr_filter: None,
     };
     set_agent_compute(&ws.id, &ws.handle, on, &limits, &who.label()).map_err(|e| no("internal", 500, e))
 }
@@ -1631,7 +1631,7 @@ fn prewarm(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         gpu: None,
         gpu_mem: None,
         network: None,
-        userns: false,
+        userns: false, no_addr_filter: false,
     };
     // Every matching node: each one's package states are reported, and the
     // names their owners must approve go out as ONE batched request (§7.3).
@@ -1871,8 +1871,8 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     // 0.46.15 (`--network none`, `--netns-dummy`): the job's own network,
     // only ever narrower than its node's.
     let network = job_net::from_body(v)?;
-    // 0.46.18 (`--userns`): only where the node's owner granted it (below).
-    let userns = crate::compute_userns_ask::from_body(v)?;
+    // 0.46.18 (`--userns`, `--no-addr-filter`): only where the node's owner granted it (below).
+    let (userns, no_addr_filter) = crate::compute_userns_ask::from_body(v, network.as_ref())?;
     if cache.is_some() && !secret_asks.is_empty() {
         return Err(no(pcache::codes::CACHE_WITH_SECRET, 400, "--cache and --secret don't mix: a job with secret env keeps nothing between runs on the node"));
     }
@@ -1985,7 +1985,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         gpu,
         gpu_mem,
         network,
-        userns,
+        userns, no_addr_filter,
     };
     // `--mem auto` never asks more than the largest node this job could
     // run on allows per job (R1: capped at the node's cap; the job still
@@ -2590,7 +2590,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         // 0.46.15: only ever placed where it runs at that network.
         network: want.network.clone(),
         userns: want.userns, // 0.46.18: only ever placed where it may have it
-        no_addr_filter: false,
+        no_addr_filter: want.no_addr_filter,
     };
     let job = {
         let db = k2_core::db::shared();
@@ -3225,7 +3225,7 @@ fn plan_preview(f: &PlanFacts<'_>) -> serde_json::Value {
     out["placement"] = serde_json::to_value(f.placement).unwrap_or_default();
     out["effective"] = f.effective.cloned().unwrap_or_default();
     out["tier"] = f.tier.as_str().into();
-    // 0.46.15: the job's own network ask, 0.46.18 its `--userns`, only when asked.
+    // 0.46.15: the job's own network ask, 0.46.18 its `--userns` and `--no-addr-filter`.
     crate::compute_userns_ask::plan_view(&mut out, f.want);
     // GPU jobs (0.46.11): the ask, the GPUs there open to this server, and
     // how many are free now (root picks the device at the start).

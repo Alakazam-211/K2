@@ -166,6 +166,10 @@ pub struct Want {
     /// says `--userns` ([`crate::compute_userns_ask`]); no owner/Admin
     /// bypass.
     pub userns: bool,
+    /// 0.46.18 (`--no-addr-filter`, only with `userns` and `--network
+    /// none`): also a node offering `no-addr-filter` and a grant with
+    /// `allow_no_addr_filter`.
+    pub no_addr_filter: bool,
 }
 
 impl Want {
@@ -207,6 +211,7 @@ impl Want {
             gpu_mem: plan.gpu_mem,
             network: plan.network.clone(),
             userns: plan.userns,
+            no_addr_filter: plan.no_addr_filter,
         }
     }
 
@@ -1041,6 +1046,9 @@ pub fn required_features(w: &Want) -> Vec<&'static str> {
     if w.userns {
         f.push(k2_core::compute::proto::userns::FEATURE_JOB_USERNS);
     }
+    if w.no_addr_filter {
+        f.push(k2_core::compute::proto::userns::FEATURE_NO_ADDR_FILTER);
+    }
     f
 }
 
@@ -1849,7 +1857,7 @@ pub fn skip_words(code: &str, n: u32, w: &Want) -> String {
         skip::TOOLS_UNSUPPORTED => "that can't provide a --needs (system Rust: no Rust targets)".to_string(),
         skip::JOB_NETWORK => crate::compute_job_network::skip_words(w),
         skip::USERNS_OWNER_ONLY => "where this server is a tenant (--userns is only for nodes it owns)".to_string(),
-        skip::USERNS_NEEDS_UPDATE => "with a k2-node too old for --userns".to_string(),
+        skip::USERNS_NEEDS_UPDATE => format!("with a k2-node too old for {}", if w.no_addr_filter { "--userns --no-addr-filter" } else { "--userns" }),
         skip::USERNS_NOT_GRANTED => "where your grant doesn't say --userns".to_string(),
         other => other.to_string(),
     };

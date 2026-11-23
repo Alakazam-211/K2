@@ -59,9 +59,8 @@ impl From<SeedError> for BuildFailure {
 
 /// The git HEAD of `folder` when it is a git checkout (litmus L3).
 pub fn git_head(folder: &Path) -> Option<String> {
-    let repo = git2::Repository::discover(folder).ok()?;
-    let head = repo.head().ok()?;
-    head.peel_to_commit().ok().map(|c| c.id().to_string())
+    let repo = crate::gitx::discover(folder).ok()?;
+    crate::gitx::head_info(&repo).oid.map(|o| o.to_string())
 }
 
 /// Validate, store and record. `signer` is `owner`, `user:<name>` or

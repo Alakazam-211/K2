@@ -385,8 +385,8 @@ pub fn review(root: &Path, worktree: Option<&Path>, onto: &str, branch: &str) ->
 }
 
 fn operation_in_progress(root: &Path) -> bool {
-    match git2::Repository::open(root) {
-        Ok(r) => r.state() != git2::RepositoryState::Clean,
+    match crate::gitx::open(root) {
+        Ok(r) => r.state().is_some(),
         Err(_) => false,
     }
 }

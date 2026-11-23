@@ -113,23 +113,30 @@ pub fn rev_key_for_path(path: &str) -> Option<String> {
 /// `(rev_key, repo_root)` for the non-bare repo holding `path`.
 /// `repo_root` is the workdir as git2 reports it, no trailing `/`.
 pub fn repo_key_and_root(path: &str) -> Option<(String, String)> {
-    let repo = Repository::discover(path).ok()?;
+    let repo = crate::gitx::discover(path).ok()?;
     let workdir = repo.workdir()?;
     Some((rev_key(workdir), trim_slash(&workdir.to_string_lossy())))
 }
 
 /// Answers "is this working-tree path git-ignored?" for one repo, so the
 /// watcher can drop edits to build output without re-opening the repo
-/// per path.
-pub struct IgnoreChecker(Repository);
+/// per path. Built per watcher batch, so an edited `.gitignore` counts
+/// from the next batch on, and no repository stays open between batches.
+pub struct IgnoreChecker {
+    excludes: crate::gitx::Excludes,
+    workdir: PathBuf,
+}
 
 impl IgnoreChecker {
     pub fn open(workdir: &Path) -> Option<Self> {
-        Repository::open(workdir).ok().map(Self)
+        let repo = crate::gitx::open(workdir).ok()?;
+        let workdir = repo.workdir()?.to_path_buf();
+        Some(Self { excludes: crate::gitx::Excludes::new(repo)?, workdir })
     }
     /// `rel` is repo-relative. Errors count as not ignored.
-    pub fn is_ignored(&self, rel: &str) -> bool {
-        self.0.is_path_ignored(rel).unwrap_or(false)
+    pub fn is_ignored(&mut self, rel: &str) -> bool {
+        let is_dir = self.workdir.join(rel).is_dir();
+        self.excludes.is_ignored(rel, is_dir)
     }
 }
 
@@ -1262,28 +1269,18 @@ pub(crate) fn pathspec_literal(rel: &str) -> String {
     out
 }
 
-/// The shared git dir: a linked worktree's `<gitdir>/commondir` file
-/// (relative to its git dir), else the git dir itself. (git2 0.19 has no
-/// `Repository::commondir`.)
-fn common_dir(repo: &Repository, gitdir: &Path) -> PathBuf {
-    if repo.is_worktree() {
-        if let Ok(s) = std::fs::read_to_string(gitdir.join("commondir")) {
-            let rel = s.trim();
-            if !rel.is_empty() {
-                let p = gitdir.join(rel);
-                return dunce::canonicalize(&p).unwrap_or(p);
-            }
-        }
-    }
-    gitdir.to_path_buf()
-}
-
 /// The dirs of the non-bare repo holding `path`.
 pub fn repo_dirs(path: &str) -> Option<RepoDirs> {
-    let repo = Repository::discover(path).ok()?;
+    let repo = crate::gitx::discover(path).ok()?;
     let workdir = repo.workdir()?.to_path_buf();
-    let gitdir = repo.path().to_path_buf();
-    let commondir = common_dir(&repo, &gitdir);
+    let gitdir = repo.git_dir().to_path_buf();
+    // The shared git dir (a linked worktree's main `.git`; the git dir
+    // itself for a main checkout), canonical.
+    let commondir = if repo.common_dir() == repo.git_dir() {
+        gitdir.clone()
+    } else {
+        dunce::canonicalize(repo.common_dir()).unwrap_or_else(|_| repo.common_dir().to_path_buf())
+    };
     let alias = dunce::canonicalize(&path)
         .ok()
         .map(|c| (trim_slash(&c.to_string_lossy()), trim_slash(path)))

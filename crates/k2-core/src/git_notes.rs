@@ -320,7 +320,7 @@ pub fn locate(anchor: Option<&str>, start: i64, end: i64, text: &str) -> Option<
 /// left out. `rel` is repo-relative.
 pub fn side_texts(repo_path: &str, rel: &str, side: &str) -> Vec<String> {
     use crate::git_changes::{looks_binary, MAX_BLOB_BYTES};
-    let Ok(repo) = git2::Repository::discover(repo_path) else {
+    let Ok(repo) = crate::gitx::discover(repo_path) else {
         return Vec::new();
     };
     let text_of = |bytes: &[u8]| -> Option<String> {
@@ -330,16 +330,16 @@ pub fn side_texts(repo_path: &str, rel: &str, side: &str) -> Vec<String> {
         String::from_utf8(bytes.to_vec()).ok()
     };
     let index_text = || -> Option<String> {
-        let idx = repo.index().ok()?;
-        let entry = idx.get_path(std::path::Path::new(rel), 0)?;
-        let blob = repo.find_blob(entry.id).ok()?;
-        text_of(blob.content())
+        let idx = repo.index_or_empty().ok()?;
+        let (_, id) = crate::gitx::index_entry(&idx, rel)?;
+        text_of(&crate::gitx::blob_bytes(&repo, id)?)
     };
     let head_text = || -> Option<String> {
-        let tree = repo.head().ok()?.peel_to_tree().ok()?;
-        let entry = tree.get_path(std::path::Path::new(rel)).ok()?;
-        let blob = repo.find_blob(entry.id()).ok()?;
-        text_of(blob.content())
+        let (kind, id) = crate::gitx::tree_entry(&repo, crate::gitx::head_tree_id(&repo)?, rel)?;
+        if kind == crate::gitx::EntryKind::Commit || kind == crate::gitx::EntryKind::Tree {
+            return None;
+        }
+        text_of(&crate::gitx::blob_bytes(&repo, id)?)
     };
     let work_text = || -> Option<String> {
         let full = repo.workdir()?.join(rel);
@@ -362,16 +362,16 @@ pub fn side_texts(repo_path: &str, rel: &str, side: &str) -> Vec<String> {
 /// The git blob id of a side's text as it is now (`new` = the working-tree
 /// file, `old` = HEAD's copy), or None.
 pub fn side_blob_id(repo_path: &str, rel: &str, side: &str) -> Option<String> {
-    let repo = git2::Repository::discover(repo_path).ok()?;
+    let repo = crate::gitx::discover(repo_path).ok()?;
     if side == "old" {
-        let tree = repo.head().ok()?.peel_to_tree().ok()?;
-        return tree.get_path(std::path::Path::new(rel)).ok().map(|e| e.id().to_string());
+        return crate::gitx::tree_entry(&repo, crate::gitx::head_tree_id(&repo)?, rel).map(|(_, id)| id.to_string());
     }
     let full = repo.workdir()?.join(rel);
     if !full.is_file() {
         return None;
     }
-    git2::Oid::hash_file(git2::ObjectType::Blob, &full).ok().map(|o| o.to_string())
+    // Raw bytes, no filters (as git2's `Oid::hash_file`).
+    crate::gitx::hash_file(&full).map(|o| o.to_string())
 }
 
 /// Where a note is now against the texts its side may show: the first

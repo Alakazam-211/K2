@@ -204,7 +204,7 @@ pub fn valid_branch(branch: &str) -> Result<String, String> {
     if b.starts_with('-') {
         return Err(format!("\"{b}\" isn't a valid branch name (it can't start with -)"));
     }
-    if !git2::Reference::is_valid_name(&format!("refs/heads/{b}")) {
+    if !crate::gitx::valid_branch_name(b) {
         return Err(format!("\"{b}\" isn't a valid branch name"));
     }
     Ok(b.to_string())
@@ -326,12 +326,11 @@ pub fn run_all_deferred(force: bool) -> Vec<String> {
     changed
 }
 
-/// Head branch by libgit2 (no git binary needed): for Add workspace while
-/// git doesn't run.
+/// Head branch read with gix (no git binary needed): for Add workspace
+/// while git doesn't run.
 pub fn head_branch_without_cli(path: &str) -> Option<String> {
-    let repo = git2::Repository::discover(path).ok()?;
-    let head = repo.head().ok()?;
-    head.shorthand().map(str::to_string).filter(|s| !s.is_empty() && s != "HEAD")
+    let repo = crate::gitx::discover(path).ok()?;
+    crate::gitx::head_shorthand(&repo).filter(|s| !s.is_empty() && s != "HEAD")
 }
 
 // ── PTY spawns: the agents' note ────────────────────────────────────────

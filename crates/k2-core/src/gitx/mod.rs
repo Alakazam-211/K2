@@ -395,3 +395,7 @@ impl Excludes {
 #[cfg(test)]
 #[path = "gitx_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "callers_tests.rs"]
+mod callers_tests;

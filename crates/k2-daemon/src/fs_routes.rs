@@ -2693,24 +2693,43 @@ fn handle_skin_copy_or_move(body: &[u8], pass: &SkinPass, is_move: bool) -> CliR
     let abs_dest = dest_path.to_string_lossy().to_string();
     // A guest's copy (and a move's copy-then-delete fallback) never
     // follows a link inside a folder: the copy leaves links out and says
-    // how many (`skipped`); the move fallback stops at one.
+    // how many (`skipped`); the move fallback stops at one. Every guest
+    // copy and move writes one audit line: the room, the sources and the
+    // destination as sent, and the entry count (copy: files and folders
+    // written; move: entries moved), or the error.
+    let detail = |entries: &str| {
+        format!("room={} sources={sources:?} dest={dest:?} {entries}", resolved.project_id)
+    };
+    let who = format!("guest:{}", pass.username.trim());
     if is_move {
         match fsc::move_files_no_follow(&abs_sources, &abs_dest) {
             Ok(()) => {
+                crate::thread_attachments::audit("files.move", &who, detail(&format!("entries={}", abs_sources.len())));
                 let mut paths = abs_sources;
                 paths.push(abs_dest);
                 crate::session_events::emit_fs_changed_for_paths(paths);
                 CliResponse::ok_json(r#"{"success":true}"#.to_string())
             }
-            Err(e) => CliResponse::bad_request(e),
+            Err(e) => {
+                crate::thread_attachments::audit("files.move", &who, detail(&format!("entries=0 error={e:?}")));
+                CliResponse::bad_request(e)
+            }
         }
     } else {
         match fsc::copy_files_no_follow(&abs_sources, &abs_dest) {
-            Ok(skipped) => {
+            Ok(count) => {
+                crate::thread_attachments::audit(
+                    "files.copy",
+                    &who,
+                    detail(&format!("entries={} skipped={}", count.copied, count.skipped)),
+                );
                 crate::session_events::emit_fs_changed_for_paths([abs_dest]);
-                CliResponse::ok_json(serde_json::json!({ "success": true, "skipped": skipped }).to_string())
+                CliResponse::ok_json(serde_json::json!({ "success": true, "skipped": count.skipped }).to_string())
             }
-            Err(e) => CliResponse::bad_request(e),
+            Err(e) => {
+                crate::thread_attachments::audit("files.copy", &who, detail(&format!("entries=0 error={e:?}")));
+                CliResponse::bad_request(e)
+            }
         }
     }
 }

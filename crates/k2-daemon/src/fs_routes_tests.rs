@@ -1560,3 +1560,53 @@ fn upload_into_a_new_folder_past_a_link_out_of_the_room_is_refused() {
     }
     std::fs::remove_dir_all(&outside).expect("cleanup outside");
 }
+
+/// Every guest copy and move writes one audit line: the room, the
+/// sources and destination as sent, and the entry count (or the error).
+#[test]
+fn guest_copy_and_move_write_an_audit_line() {
+    let room = config_room("audit");
+    let pass = writer(&room, false);
+    k2_core::test_env::symlink(room.dir.join("notes/a.md"), room.dir.join("notes/near-link.md")).expect("link");
+    std::fs::create_dir_all(room.dir.join("backup")).expect("backup");
+    let lines = |event: &str| -> Vec<String> {
+        let room_tag = format!("room={} ", room.id);
+        k2_core::auth_audit::tail(1000)
+            .expect("audit tail")
+            .into_iter()
+            .filter(|e| e["event"] == event && e["outcome"].as_str().expect("outcome").starts_with(&room_tag))
+            .map(|e| {
+                assert_eq!(e["user"], "guest:guest", "{e}");
+                e["outcome"].as_str().expect("outcome").to_string()
+            })
+            .collect()
+    };
+
+    let body = json_bytes(serde_json::json!({"workspace": room.handle, "sources": ["notes"], "destination": "backup"}));
+    let r = handle_copy_gated(&body, Some(pass.clone()));
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    // notes/ and notes/a.md written; the link left out.
+    assert_eq!(
+        lines("files.copy"),
+        vec![format!("room={} sources=[\"notes\"] dest=\"backup\" entries=2 skipped=1", room.id)]
+    );
+
+    let body = json_bytes(serde_json::json!({"workspace": room.handle, "sources": ["backup/notes/a.md"], "destination": "backup"}));
+    let r = handle_move_gated(&body, Some(pass.clone()));
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    assert_eq!(
+        lines("files.move"),
+        vec![format!("room={} sources=[\"backup/notes/a.md\"] dest=\"backup\" entries=1", room.id)]
+    );
+
+    // A copy that fails in the copy itself is audited with its error.
+    let body = json_bytes(serde_json::json!({"workspace": room.handle, "sources": ["notes/a.md"], "destination": "nowhere"}));
+    let r = handle_copy_gated(&body, Some(pass));
+    assert_eq!(r.status, "400 Bad Request", "{}", r.body);
+    let copies = lines("files.copy");
+    assert_eq!(copies.len(), 2, "{copies:?}");
+    assert!(
+        copies[1].starts_with(&format!("room={} sources=[\"notes/a.md\"] dest=\"nowhere\" entries=0 error=", room.id)),
+        "{copies:?}"
+    );
+}

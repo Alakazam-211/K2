@@ -1243,27 +1243,30 @@ pub fn copy_files(sources: &[String], destination: &str) -> Result<(), String> {
 /// any link inside it. Links, files with other hard links, pipes, sockets
 /// and devices are left out of the copy (`fs_link_free_copy`,
 /// [`OtherEntry::Skip`]); a source that is itself one of those is refused.
-/// Returns how many entries were left out.
+/// Returns how many files and folders were copied and left out.
 ///
 /// [`OtherEntry::Skip`]: crate::fs_link_free_copy::OtherEntry::Skip
-pub fn copy_files_no_follow(sources: &[String], destination: &str) -> Result<u64, String> {
+pub fn copy_files_no_follow(sources: &[String], destination: &str) -> Result<crate::fs_link_free_copy::Counts, String> {
     use crate::fs_link_free_copy as lf;
     let dest = Path::new(destination);
     if !dest.exists() {
         return Err(format!("Destination does not exist: {destination}"));
     }
-    let mut skipped = 0;
+    let mut count = lf::Counts::default();
     for source in sources {
         let src = Path::new(source);
         let md = fs::symlink_metadata(src).map_err(|_| format!("Source does not exist: {source}"))?;
         let target = disambiguate_path(&resolve_destination(src, dest));
         if md.is_dir() {
-            skipped += lf::copy_dir(src, &target, lf::OtherEntry::Skip)?;
+            let c = lf::copy_dir(src, &target, lf::OtherEntry::Skip)?;
+            count.copied += c.copied;
+            count.skipped += c.skipped;
         } else {
             lf::copy_file(src, &target)?;
+            count.copied += 1;
         }
     }
-    Ok(skipped)
+    Ok(count)
 }
 
 pub fn delete(paths: &[String], permanent: bool) -> Result<(), String> {

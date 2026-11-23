@@ -38,14 +38,23 @@ fn refused_text(rel: &Path) -> String {
     )
 }
 
+/// What a copy wrote and what it left out.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Counts {
+    /// Files and folders made in the copy (the top folder included).
+    pub copied: u64,
+    /// Entries left out under [`OtherEntry::Skip`].
+    pub skipped: u64,
+}
+
 /// Copy the folder `src` to the NEW folder `dst` (it must not exist; its
-/// parent must). Returns how many entries were left out ([`OtherEntry::Skip`]).
+/// parent must). Returns what was copied and left out ([`OtherEntry::Skip`]).
 /// On an error the folder made at `dst` is removed.
-pub fn copy_dir(src: &Path, dst: &Path, other: OtherEntry) -> Result<u64, String> {
-    let mut skipped = 0u64;
-    let made = imp::copy_dir(src, dst, other, &mut skipped);
+pub fn copy_dir(src: &Path, dst: &Path, other: OtherEntry) -> Result<Counts, String> {
+    let mut count = Counts::default();
+    let made = imp::copy_dir(src, dst, other, &mut count);
     match made {
-        Ok(()) => Ok(skipped),
+        Ok(()) => Ok(count),
         Err((e, created)) => {
             if created {
                 // `remove_dir_all` never follows a link it meets.
@@ -67,7 +76,7 @@ pub fn copy_file(src: &Path, dst: &Path) -> Result<(), String> {
 
 #[cfg(unix)]
 mod imp {
-    use super::{refused_text, OtherEntry};
+    use super::{refused_text, Counts, OtherEntry};
     use std::collections::HashSet;
     use std::ffi::{CStr, CString, OsString};
     use std::fs::File;
@@ -241,7 +250,7 @@ mod imp {
         rel: &Path,
         other: OtherEntry,
         made: &mut HashSet<(u64, u64)>,
-        skipped: &mut u64,
+        count: &mut Counts,
     ) -> Result<(), String> {
         let names = list(src).map_err(|e| format!("Failed to read directory {}: {e}", rel.display()))?;
         for name in names {
@@ -261,7 +270,7 @@ mod imp {
                 let s = match open_dir_at(src, &c) {
                     Ok(fd) => fd,
                     Err(e) if e.raw_os_error() == Some(libc::ELOOP) || e.raw_os_error() == Some(libc::ENOTDIR) => {
-                        other_entry(&rel_name, other, skipped)?;
+                        other_entry(&rel_name, other, count)?;
                         continue;
                     }
                     Err(e) => return Err(format!("Failed to open {}: {e}", rel_name.display())),
@@ -269,27 +278,31 @@ mod imp {
                 let d = make_dir_at(dst, &c).map_err(|e| format!("Failed to create directory {}: {e}", rel_name.display()))?;
                 let dst_st = fstat(d.as_raw_fd()).map_err(|e| format!("Failed to read {}: {e}", rel_name.display()))?;
                 made.insert(id(&dst_st));
-                walk(s.as_raw_fd(), d.as_raw_fd(), &rel_name, other, made, skipped)?;
+                count.copied += 1;
+                walk(s.as_raw_fd(), d.as_raw_fd(), &rel_name, other, made, count)?;
                 // SAFETY: `d` is an open folder descriptor.
                 check(unsafe { libc::fchmod(d.as_raw_fd(), mode_bits(&st)) })
                     .map_err(|e| format!("Failed to set the mode of {}: {e}", rel_name.display()))?;
             } else if is_kind(&st, libc::S_IFREG) && st.st_nlink == 1 {
                 match open_plain_at(src, &c).map_err(|e| format!("Failed to open {}: {e}", rel_name.display()))? {
-                    Some((mut f, fst)) => copy_open_file(&mut f, dst, &c, mode_bits(&fst))
-                        .map_err(|e| format!("Failed to copy {}: {e}", rel_name.display()))?,
-                    None => other_entry(&rel_name, other, skipped)?,
+                    Some((mut f, fst)) => {
+                        copy_open_file(&mut f, dst, &c, mode_bits(&fst))
+                            .map_err(|e| format!("Failed to copy {}: {e}", rel_name.display()))?;
+                        count.copied += 1;
+                    }
+                    None => other_entry(&rel_name, other, count)?,
                 }
             } else {
-                other_entry(&rel_name, other, skipped)?;
+                other_entry(&rel_name, other, count)?;
             }
         }
         Ok(())
     }
 
-    fn other_entry(rel: &Path, other: OtherEntry, skipped: &mut u64) -> Result<(), String> {
+    fn other_entry(rel: &Path, other: OtherEntry, count: &mut Counts) -> Result<(), String> {
         match other {
             OtherEntry::Skip => {
-                *skipped += 1;
+                count.skipped += 1;
                 Ok(())
             }
             OtherEntry::Refuse => Err(refused_text(rel)),
@@ -297,7 +310,7 @@ mod imp {
     }
 
     /// `(error, made)`: `made` is set once the destination folder exists.
-    pub(super) fn copy_dir(src: &Path, dst: &Path, other: OtherEntry, skipped: &mut u64) -> Walk<()> {
+    pub(super) fn copy_dir(src: &Path, dst: &Path, other: OtherEntry, count: &mut Counts) -> Walk<()> {
         let src_name = PathBuf::from(src.file_name().unwrap_or(src.as_os_str()));
         let s = open_dir(src).map_err(|e| match e.raw_os_error() {
             Some(libc::ELOOP) | Some(libc::ENOTDIR) => (refused_text(&src_name), false),
@@ -314,7 +327,8 @@ mod imp {
         let mut made = HashSet::new();
         let dst_st = fstat(d.as_raw_fd()).map_err(|e| (format!("Failed to read directory: {e}"), true))?;
         made.insert(id(&dst_st));
-        walk(s.as_raw_fd(), d.as_raw_fd(), &src_name, other, &mut made, skipped).map_err(|e| (e, true))?;
+        count.copied += 1;
+        walk(s.as_raw_fd(), d.as_raw_fd(), &src_name, other, &mut made, count).map_err(|e| (e, true))?;
         // SAFETY: `d` is an open folder descriptor.
         check(unsafe { libc::fchmod(d.as_raw_fd(), mode_bits(&src_st)) })
             .map_err(|e| (format!("Failed to set the mode of the copy: {e}"), true))?;
@@ -344,7 +358,7 @@ mod imp {
 
 #[cfg(windows)]
 mod imp {
-    use super::{refused_text, OtherEntry};
+    use super::{refused_text, Counts, OtherEntry};
     use std::collections::HashSet;
     use std::fs::{self, File, OpenOptions};
     use std::io;
@@ -377,17 +391,17 @@ mod imp {
         Ok(())
     }
 
-    fn other_entry(rel: &Path, other: OtherEntry, skipped: &mut u64) -> Result<(), String> {
+    fn other_entry(rel: &Path, other: OtherEntry, count: &mut Counts) -> Result<(), String> {
         match other {
             OtherEntry::Skip => {
-                *skipped += 1;
+                count.skipped += 1;
                 Ok(())
             }
             OtherEntry::Refuse => Err(refused_text(rel)),
         }
     }
 
-    fn walk(src: &Path, dst: &Path, rel: &Path, other: OtherEntry, made: &mut HashSet<PathBuf>, skipped: &mut u64) -> Result<(), String> {
+    fn walk(src: &Path, dst: &Path, rel: &Path, other: OtherEntry, made: &mut HashSet<PathBuf>, count: &mut Counts) -> Result<(), String> {
         let mut names = Vec::new();
         for entry in fs::read_dir(src).map_err(|e| format!("Failed to read directory {}: {e}", rel.display()))? {
             names.push(entry.map_err(|e| format!("Failed to read entry: {e}"))?.file_name());
@@ -400,27 +414,31 @@ mod imp {
                 Err(e) => return Err(format!("Failed to read {}: {e}", rel_name.display())),
             };
             if is_link(&md) {
-                other_entry(&rel_name, other, skipped)?;
+                other_entry(&rel_name, other, count)?;
             } else if md.is_dir() {
                 if made.contains(&s) {
                     continue;
                 }
                 fs::create_dir(&d).map_err(|e| format!("Failed to create directory {}: {e}", rel_name.display()))?;
                 made.insert(d.clone());
-                walk(&s, &d, &rel_name, other, made, skipped)?;
+                count.copied += 1;
+                walk(&s, &d, &rel_name, other, made, count)?;
             } else if md.is_file() {
                 match open_plain(&s).map_err(|e| format!("Failed to open {}: {e}", rel_name.display()))? {
-                    Some(mut f) => copy_open_file(&mut f, &d).map_err(|e| format!("Failed to copy {}: {e}", rel_name.display()))?,
-                    None => other_entry(&rel_name, other, skipped)?,
+                    Some(mut f) => {
+                        copy_open_file(&mut f, &d).map_err(|e| format!("Failed to copy {}: {e}", rel_name.display()))?;
+                        count.copied += 1;
+                    }
+                    None => other_entry(&rel_name, other, count)?,
                 }
             } else {
-                other_entry(&rel_name, other, skipped)?;
+                other_entry(&rel_name, other, count)?;
             }
         }
         Ok(())
     }
 
-    pub(super) fn copy_dir(src: &Path, dst: &Path, other: OtherEntry, skipped: &mut u64) -> Walk<()> {
+    pub(super) fn copy_dir(src: &Path, dst: &Path, other: OtherEntry, count: &mut Counts) -> Walk<()> {
         let src_name = PathBuf::from(src.file_name().unwrap_or(src.as_os_str()));
         let md = fs::symlink_metadata(src).map_err(|e| (format!("Failed to read directory: {e}"), false))?;
         if is_link(&md) || !md.is_dir() {
@@ -429,7 +447,8 @@ mod imp {
         fs::create_dir(dst).map_err(|e| (format!("Failed to create directory: {e}"), false))?;
         let mut made = HashSet::new();
         made.insert(dst.to_path_buf());
-        walk(src, dst, &src_name, other, &mut made, skipped).map_err(|e| (e, true))
+        count.copied += 1;
+        walk(src, dst, &src_name, other, &mut made, count).map_err(|e| (e, true))
     }
 
     pub(super) fn copy_file(src: &Path, dst: &Path, shown: &Path) -> Result<(), String> {
@@ -477,8 +496,9 @@ mod tests {
     fn skip_copies_plain_entries_and_counts_the_links_it_leaves_out() {
         let (root, outside) = tree("skip");
         let dst = root.join("copy");
-        let skipped = copy_dir(&root.join("src"), &dst, OtherEntry::Skip).expect("copy");
-        assert_eq!(skipped, 3);
+        let count = copy_dir(&root.join("src"), &dst, OtherEntry::Skip).expect("copy");
+        // src, a.txt, sub, sub/b.txt; three links left out.
+        assert_eq!(count, Counts { copied: 4, skipped: 3 });
         assert_eq!(fs::read(dst.join("a.txt")).expect("a"), b"a");
         assert_eq!(fs::read(dst.join("sub/b.txt")).expect("b"), b"b");
         for name in ["file-link", "dir-link", "sub/near-link"] {
@@ -505,8 +525,8 @@ mod tests {
         let root = temp("self");
         fs::create_dir_all(root.join("a/sub")).expect("a/sub");
         fs::write(root.join("a/sub/f.txt"), b"f").expect("f");
-        let skipped = copy_dir(&root.join("a"), &root.join("a/sub/a"), OtherEntry::Skip).expect("copy");
-        assert_eq!(skipped, 0);
+        let count = copy_dir(&root.join("a"), &root.join("a/sub/a"), OtherEntry::Skip).expect("copy");
+        assert_eq!(count, Counts { copied: 3, skipped: 0 });
         assert_eq!(fs::read(root.join("a/sub/a/sub/f.txt")).expect("copied"), b"f");
         assert!(fs::symlink_metadata(root.join("a/sub/a/sub/a")).is_err(), "the copy is not copied into itself");
         fs::remove_dir_all(&root).expect("clean");
@@ -532,8 +552,8 @@ mod tests {
         fs::write(outside.join("other.txt"), b"bytes from outside").expect("outside");
         fs::create_dir_all(root.join("src")).expect("src");
         fs::hard_link(outside.join("other.txt"), root.join("src/hard.txt")).expect("hard link");
-        let skipped = copy_dir(&root.join("src"), &root.join("copy"), OtherEntry::Skip).expect("copy");
-        assert_eq!(skipped, 1);
+        let count = copy_dir(&root.join("src"), &root.join("copy"), OtherEntry::Skip).expect("copy");
+        assert_eq!(count, Counts { copied: 1, skipped: 1 });
         assert!(fs::symlink_metadata(root.join("copy/hard.txt")).is_err());
         let err = copy_file(&root.join("src/hard.txt"), &root.join("got")).expect_err("hard link");
         assert!(err.contains("is a link or not a plain file"), "{err}");

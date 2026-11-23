@@ -165,6 +165,65 @@ multiple-versions = "allow"
 deny = [
     # deckcraft's bundled-font crate must be disabled, not licensed.
     { crate = "epaint_default_fonts" },
+    # No C TLS, HTTP or zlib in any shipped tree (Steward, gix S0, 0.46.18):
+    # gix runs on zlib-rs and has no network features here.
+    { crate = "openssl-sys" },
+    { crate = "curl-sys" },
+    { crate = "libz-ng-sys" },
+    # libgit2's bundled zlib, only until git2 leaves the tree (gix S7).
+    { crate = "libz-sys", wrappers = ["libgit2-sys"] },
+    # MPL-2.0, pulled only by gix's forbidden pack-cache-lru-static.
+    { crate = "uluru" },
+]
+
+# gix: pure-Rust features only (prd research-gix-instead-of-libgit2-v1 §4).
+# max-performance / max-control / pack-cache-lru-static pull uluru (MPL);
+# `default` and `extras` carry them and the credential/network stack; no
+# alternative zlib backend; no HTTP or network transport of any kind.
+[[bans.features]]
+crate = "gix"
+deny = [
+    "default",
+    "extras",
+    "max-performance",
+    "max-control",
+    "pack-cache-lru-static",
+    "zlib-sirocco",
+    "credentials",
+    "blocking-network-client",
+    "async-network-client",
+    "async-network-client-async-std",
+    "blocking-http-transport-curl",
+    "blocking-http-transport-curl-openssl",
+    "blocking-http-transport-curl-rustls",
+    "blocking-http-transport-reqwest",
+    "blocking-http-transport-reqwest-native-tls",
+    "blocking-http-transport-reqwest-rust-tls",
+    "blocking-http-transport-reqwest-rust-tls-trust-dns",
+]
+
+[[bans.features]]
+crate = "gix-pack"
+deny = ["pack-cache-lru-static"]
+
+[[bans.features]]
+crate = "gix-zlib"
+deny = ["sirocco"]
+
+[[bans.features]]
+crate = "gix-transport"
+deny = [
+    "blocking-client",
+    "async-client",
+    "http-client",
+    "http-client-curl",
+    "http-client-curl-openssl",
+    "http-client-curl-rust-tls",
+    "http-client-insecure-credentials",
+    "http-client-reqwest",
+    "http-client-reqwest-native-tls",
+    "http-client-reqwest-rust-tls",
+    "http-client-reqwest-rust-tls-trust-dns",
 ]
 
 [sources]

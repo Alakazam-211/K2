@@ -231,9 +231,32 @@ describe('parseFirstRunDoc', () => {
   })
 
   it('a malformed body is a switched-off checklist', () => {
-    const off = { enabled: false, hidden: false, finished: false, rows: [], offer: null, kessel: null, kesselDefaults: null }
+    const off = {
+      enabled: false,
+      hidden: false,
+      finished: false,
+      rows: [],
+      offer: null,
+      kessel: null,
+      kesselDefaults: null,
+      kesselFirstRun: false,
+      kesselSeat: null,
+    }
     expect(parseFirstRunDoc(null)).toEqual(off)
-    expect(parseFirstRunDoc({ enabled: 'yes', rows: 'x', offer: 7, kessel: 'x', kesselDefaults: [] })).toEqual(off)
+    expect(
+      parseFirstRunDoc({ enabled: 'yes', rows: 'x', offer: 7, kessel: 'x', kesselDefaults: [], kesselFirstRun: 'yes', kesselSeat: { exists: 'no' } }),
+    ).toEqual(off)
+  })
+
+  it('reads kesselFirstRun and kesselSeat whatever the switch (Settings → Getting started)', () => {
+    const none = parseFirstRunDoc({ enabled: false, rows: [], kesselFirstRun: false, kesselSeat: { exists: false } })
+    expect(none.kesselSeat).toEqual({ exists: false, workspaceId: null, name: null })
+    expect(none.kesselFirstRun).toBe(false)
+    const seat = parseFirstRunDoc({ enabled: true, rows: [], kesselFirstRun: true, kesselSeat: { exists: true, workspaceId: 'ws-k', name: 'Kay' } })
+    expect(seat.kesselFirstRun).toBe(true)
+    expect(seat.kesselSeat).toEqual({ exists: true, workspaceId: 'ws-k', name: 'Kay' })
+    // exists without an id is no Kessel to open.
+    expect(parseFirstRunDoc({ kesselSeat: { exists: true } }).kesselSeat).toEqual({ exists: false, workspaceId: null, name: null })
   })
 
   it('reads the Kessel fields, the chief_of_staff row, its opens values and the needs_kessel note', () => {

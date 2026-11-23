@@ -248,6 +248,8 @@ pub fn held_by(_dir: &Path, _pid: u32, _uid: u32) -> bool {
 pub struct Bound<'a> {
     pub ws: &'a str,
     pub root_placed: bool,
+    /// B4: placed in its own scope; then only a scope of its agent counts.
+    pub scoped: bool,
 }
 
 /// `bound`: the agent the passport's session is bound to, `None` for a
@@ -262,9 +264,11 @@ pub fn decide_in(bound: Option<Bound>, peer: &PeerAgent, scopes_on: bool, old_la
     let Some(b) = bound else { return Decision::Allow };
     // B4: with scopes on, a bound session is recognised from a scope only,
     // or from the old layout while its agent has survivors listed there.
+    // A scoped session counts only from a scope (N3); the old-layout
+    // exception is for the survivors' own (not scoped) sessions.
     if let PeerAgent::Agent { ws, cgroup, .. } = peer {
         let in_scope = crate::agent_scope::classify_scope(cgroup).is_some();
-        if scopes_on && !in_scope && !old_layout_ok(ws) {
+        if !in_scope && (b.scoped || (scopes_on && !old_layout_ok(ws))) {
             return Decision::Refuse {
                 detail: format!("the passport of agent {} was presented from {}, outside an agent scope", b.ws, peer.describe()),
             };
@@ -604,11 +608,17 @@ pub fn whois(pid: u32) -> serde_json::Value {
         (_, Err(e)) => PeerAgent::Unknown { why: e.clone() },
         (Err(_), Ok(p)) => PeerAgent::Outside { cgroup: p.clone() },
     };
+    // B4: an adopted scope (survivors of an update) is the one place a
+    // process came in other than at its own spawn; whois says so.
+    let scope = cg.as_ref().ok().and_then(|p| crate::agent_scope::classify_scope(p));
+    let adopted = scope.as_ref().map(|(ws, id, _, _)| crate::agent_scope::is_adopted(ws, id));
     serde_json::json!({
         "pid": pid,
         "cgroup": cg.as_ref().ok(),
         "workspaceId": peer.ws(),
         "who": peer.describe(),
+        "scope": scope.as_ref().map(|s| s.3.clone()),
+        "adopted": adopted,
         "rootOwned": matches!(peer, PeerAgent::Agent { root_owned: true, .. }),
         "identity": status_json()["identity"],
         "claim": claim(),
@@ -688,6 +698,8 @@ pub fn status_json() -> serde_json::Value {
             "on": crate::agent_scope::scope_placement(),
             "whyOff": b.why_off,
             "p1": b.p1,
+            "pidMax": b.pid_max,
+            "warning": b.pid_max.filter(|m| *m <= 32_768).map(|m| format!("kernel.pid_max is {m}: process numbers come round again quickly on this box (a session whose number is reused during placement is stopped, never mislabelled); 4194304 is the usual value")),
             "oldLayout": b.old_layout.iter().map(|(ws, why)| serde_json::json!({ "agent": ws, "state": "old layout, not adopted", "why": why })).collect::<Vec<_>>(),
         });
     }
@@ -814,7 +826,7 @@ mod tests {
     fn a_bound_passport_is_accepted_only_from_its_agents_cgroup() {
         let a = classify(LEAF, &format!("{LEAF}/a-A"));
         let b = classify(LEAF, &format!("{LEAF}/a-B"));
-        let user = |ws| Some(Bound { ws, root_placed: false });
+        let user = |ws| Some(Bound { ws, root_placed: false, scoped: false });
         assert_eq!(decide(user("A"), &a), Decision::Allow);
         let Decision::Refuse { detail } = decide(user("B"), &a) else { panic!("B's passport from A's cgroup must be refused") };
         assert!(detail.contains("agent B") && detail.contains("agent A"), "{detail}");
@@ -837,14 +849,14 @@ mod tests {
     fn a_root_placed_session_counts_only_from_a_root_owned_cgroup() {
         let root_a = PeerAgent::Agent { ws: "A".into(), cgroup: format!("{LEAF}/a-A"), root_owned: true };
         let user_a = PeerAgent::Agent { ws: "A".into(), cgroup: format!("{LEAF}/a-A"), root_owned: false };
-        let placed = Some(Bound { ws: "A", root_placed: true });
+        let placed = Some(Bound { ws: "A", root_placed: true, scoped: false });
         assert_eq!(decide(placed, &root_a), Decision::Allow);
         let Decision::Refuse { detail } = decide(placed, &user_a) else { panic!("a K2-user cgroup named a-A is not agent A's") };
         assert!(detail.contains("not root's"), "{detail}");
-        let selfp = Some(Bound { ws: "A", root_placed: false });
+        let selfp = Some(Bound { ws: "A", root_placed: false, scoped: false });
         assert_eq!(decide(selfp, &user_a), Decision::Allow, "placed before the helper: M1's rule");
         assert_eq!(decide(selfp, &root_a), Decision::Allow);
-        assert!(matches!(decide(Some(Bound { ws: "B", root_placed: true }), &root_a), Decision::Refuse { .. }));
+        assert!(matches!(decide(Some(Bound { ws: "B", root_placed: true, scoped: false }), &root_a), Decision::Refuse { .. }));
     }
 
     /// B4 review test 4: with scopes on, a session's passport counts from
@@ -854,7 +866,7 @@ mod tests {
     fn with_scopes_on_a_passport_counts_from_a_scope_or_a_listed_survivor() {
         let scope = PeerAgent::Agent { ws: "A".into(), cgroup: "/k2agents.slice/k2agents-open.slice/k2-agent-A:0123456789abcdef.scope".into(), root_owned: true };
         let old = PeerAgent::Agent { ws: "A".into(), cgroup: format!("{LEAF}/a-A"), root_owned: true };
-        let placed = Some(Bound { ws: "A", root_placed: true });
+        let placed = Some(Bound { ws: "A", root_placed: true, scoped: false });
         let none = |_: &str| false;
         assert_eq!(decide_in(placed, &scope, true, none), Decision::Allow);
         let Decision::Refuse { detail } = decide_in(placed, &old, true, none) else { panic!("an old-layout cgroup with no survivors listed is refused") };
@@ -864,5 +876,22 @@ mod tests {
         assert_eq!(decide_in(placed, &old, false, none), Decision::Allow, "scopes off: M1b's rule");
         let other = PeerAgent::Agent { ws: "B".into(), cgroup: "/k2agents.slice/k2agents-open.slice/k2-agent-B:0123456789abcdef.scope".into(), root_owned: true };
         assert!(matches!(decide_in(placed, &other, true, none), Decision::Refuse { .. }), "another agent's scope");
+    }
+
+    /// B4 fix review N3 (test 2): a scoped session's passport counts only
+    /// from a scope, even from a listed agent's root-owned old cgroup; a
+    /// survivor's own (M1b-placed, not scoped) passport still counts there.
+    #[test]
+    fn a_scoped_session_counts_only_from_a_scope() {
+        let scope = PeerAgent::Agent { ws: "A".into(), cgroup: "/k2agents.slice/k2agents-fenced.slice/k2-agent-A:0123456789abcdef.scope".into(), root_owned: true };
+        let old = PeerAgent::Agent { ws: "A".into(), cgroup: format!("{LEAF}/a-A"), root_owned: true };
+        let scoped = Some(Bound { ws: "A", root_placed: true, scoped: true });
+        let survivor = Some(Bound { ws: "A", root_placed: true, scoped: false });
+        let listed = |w: &str| w == "A";
+        assert_eq!(decide_in(scoped, &scope, true, listed), Decision::Allow);
+        let Decision::Refuse { detail } = decide_in(scoped, &old, true, listed) else { panic!("a scoped passport from the old layout is refused") };
+        assert!(detail.contains("outside an agent scope"), "{detail}");
+        assert!(matches!(decide_in(scoped, &old, false, listed), Decision::Refuse { .. }), "even with scopes off now");
+        assert_eq!(decide_in(survivor, &old, true, listed), Decision::Allow, "the survivor's own passport");
     }
 }

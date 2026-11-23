@@ -199,7 +199,7 @@ pub fn for_spawn(sid: &SessionId, ws: &str, cwd: &str, passthrough: bool, minted
     let (path, fence) = workspace_and_fence(ws);
     let workspace = path.unwrap_or_else(|| PathBuf::from(cwd));
     let iso = agent_cgroup::intent(ws, passthrough, fence, Some(Path::new(&workspace)))?;
-    if iso.identity && minted && !crate::session_token::bind_agent_cgroup(sid, &iso.ws, iso.root_placed) {
+    if iso.identity && minted && !crate::session_token::bind_agent_cgroup(sid, &iso.ws, iso.root_placed, iso.scope.is_some()) {
         log_debug!("[agents] session={sid}: no passport record to bind to agent {}", iso.ws);
     }
     Some(iso)
@@ -231,7 +231,7 @@ pub fn for_job(run_sid: &str, ws: &str, root: &Path, env: &mut std::collections:
         let _g = rt.enter();
         crate::cell_server::serve_cell_at(run_sid.to_string(), sock.clone(), listener, None);
         env.insert("K2_HOOK_SOCK".into(), sock.to_string_lossy().into_owned());
-        if !crate::session_token::bind_agent_cgroup_sid(run_sid, ws, iso.root_placed) {
+        if !crate::session_token::bind_agent_cgroup_sid(run_sid, ws, iso.root_placed, iso.scope.is_some()) {
             return Err("the job's passport is gone".into());
         }
     }
@@ -246,7 +246,8 @@ pub fn bind_from_live_cgroup(sid: &SessionId, pid: u32, ws: Option<&str>) {
         Ok(peer) if peer.ws() == Some(ws) => {
             // M1b: a root-owned cgroup means the root helper placed it.
             let root_owned = matches!(peer, PeerAgent::Agent { root_owned: true, .. });
-            if crate::session_token::bind_agent_cgroup(sid, ws, root_owned) {
+            let scoped = matches!(&peer, PeerAgent::Agent { cgroup, .. } if k2_core::agent_scope::classify_scope(cgroup).is_some());
+            if crate::session_token::bind_agent_cgroup(sid, ws, root_owned, scoped) {
                 log_debug!("[agents] session={sid}: the re-minted passport is bound to agent {ws} (its live cgroup)");
             }
         }
@@ -334,6 +335,7 @@ fn scope_placement_inner(state: &mut k2_core::agent_scope::BoxState) -> Result<(
     let out = crate::root_helper::call(&["agents".to_string(), "layout".to_string()], None)?;
     let v: serde_json::Value = serde_json::from_slice(&out).map_err(|e| format!("agents layout: not JSON: {e}"))?;
     state.p1 = v["p1"].as_str().map(str::to_string);
+    state.pid_max = v["pidMax"].as_u64();
     layout_ready(&v)?;
     k2_core::agent_scope::set_caller(Box::new(|argv: &[String]| {
         let out = crate::root_helper::call(argv, None)?;
@@ -370,7 +372,14 @@ fn adopt_survivors(layout: &serde_json::Value) -> Vec<(String, String)> {
         };
         let kind = plan.kind().as_str().to_string();
         match crate::root_helper::call(&["agents".into(), "adopt".into(), ws.to_string(), plan.id.clone(), kind], None) {
-            Ok(out) => log_debug!("[agents] survivors of agent {ws} adopted into a scope: {}", String::from_utf8_lossy(&out)),
+            Ok(out) => {
+                log_debug!("[agents] survivors of agent {ws} adopted into a scope: {}", String::from_utf8_lossy(&out));
+                // N4: what wasn't moved keeps running outside a scope; listed,
+                // so its sessions don't lose their identity with no line.
+                if let Some(why) = partly_adopted(&out) {
+                    left.push((ws.to_string(), why));
+                }
+            }
             Err(e) => {
                 log_debug!("[agents] survivors of agent {ws} not adopted (they stay in the old layout): {e}");
                 left.push((ws.to_string(), e));
@@ -378,6 +387,15 @@ fn adopt_survivors(layout: &serde_json::Value) -> Vec<(String, String)> {
         }
     }
     left
+}
+
+/// Pure: `agents adopt`'s answer, when it left processes behind
+/// (`notMoved`, `left`): the line for `/boot-status`.
+pub fn partly_adopted(out: &[u8]) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_slice(out).ok()?;
+    let not_moved = v["notMoved"].as_array().map_or(0, Vec::len);
+    let left = v["left"].as_u64().unwrap_or(0) as usize;
+    (not_moved + left > 0).then(|| format!("partly adopted: {} left in the old layout", not_moved + left))
 }
 
 /// Pure: whether `agents layout`'s answer lets scope placement start.
@@ -475,7 +493,7 @@ pub fn check_socket_peer(fd: std::os::fd::RawFd, v: &crate::session_token::Valid
         let _ = (fd, &a);
         (PeerAgent::Unknown { why: "no cgroups here".into() }, None::<u32>)
     };
-    match agent_cgroup::decide(Some(agent_cgroup::Bound { ws: bound, root_placed: v.agent_root_placed }), &peer) {
+    match agent_cgroup::decide(Some(agent_cgroup::Bound { ws: bound, root_placed: v.agent_root_placed, scoped: v.agent_scoped }), &peer) {
         Decision::Allow => None,
         Decision::Refuse { detail } => {
             let detail = match pid {
@@ -886,6 +904,20 @@ pub fn describe(p: &PeerAgent) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// B4 fix review N4 (test 3): an adopt that left processes behind is
+    /// listed for `/boot-status`; a whole one isn't; layout_ready needs P1
+    /// refused and the slices ready.
+    #[test]
+    fn a_partly_adopted_agent_is_listed() {
+        assert_eq!(partly_adopted(br#"{"ok":true,"moved":3,"notMoved":[],"left":2}"#).as_deref(), Some("partly adopted: 2 left in the old layout"));
+        assert_eq!(partly_adopted(br#"{"ok":true,"moved":1,"notMoved":[41],"left":0}"#).as_deref(), Some("partly adopted: 1 left in the old layout"));
+        assert_eq!(partly_adopted(br#"{"ok":true,"moved":3,"notMoved":[],"left":0}"#), None);
+        assert!(layout_ready(&serde_json::json!({"p1": "refused", "ready": true})).is_ok());
+        for bad in [serde_json::json!({"p1": "ALLOWED", "ready": true}), serde_json::json!({"p1": "unknown", "ready": true}), serde_json::json!({"p1": "refused", "ready": false})] {
+            assert!(layout_ready(&bad).is_err(), "{bad}");
+        }
+    }
 
     /// Review F3: the forward carries exactly the passport the socket
     /// validated. The client's own Authorization, Cookie and `token=` (query,

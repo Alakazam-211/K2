@@ -204,6 +204,9 @@ pub struct ValidatedHook {
     /// M1b: the root helper placed the session (only a root-owned cgroup of
     /// that agent counts).
     pub agent_root_placed: bool,
+    /// B4: the root helper placed the session in its own scope (then only
+    /// a scope of that agent counts, with no old-layout exception).
+    pub agent_scoped: bool,
 }
 
 /// A persisted scoped-token claim. The raw secret NEVER touches disk —
@@ -258,6 +261,9 @@ struct TokenRecord {
     /// agent (one the K2 user made again under the name is not).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     agent_root_placed: bool,
+    /// B4: placed in its own scope (`k2agents.slice/…`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    agent_scoped: bool,
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -352,6 +358,7 @@ impl SessionTokenRegistry {
             provider,
             agent_cgroup: None,
             agent_root_placed: false,
+            agent_scoped: false,
         };
         self.records.insert(sid.clone(), record);
         format!("{sid}.{secret}")
@@ -417,16 +424,18 @@ impl SessionTokenRegistry {
             provider: rec.provider,
             agent_cgroup: rec.agent_cgroup.clone(),
             agent_root_placed: rec.agent_root_placed,
+            agent_scoped: rec.agent_scoped,
         })
     }
 
     /// Agent Isolation M1: bind a live session's passport to its agent's
     /// cgroup. `false` when no record names the session.
-    pub fn bind_agent_cgroup(&mut self, sid: &str, ws: &str, root_placed: bool) -> bool {
+    pub fn bind_agent_cgroup(&mut self, sid: &str, ws: &str, root_placed: bool, scoped: bool) -> bool {
         match self.records.get_mut(sid) {
             Some(r) => {
                 r.agent_cgroup = Some(ws.to_string());
                 r.agent_root_placed = root_placed;
+                r.agent_scoped = scoped;
                 true
             }
             None => false,
@@ -1909,14 +1918,14 @@ pub fn workspace_for_session(session_id: &str) -> Option<String> {
 /// Agent Isolation M1: bind a session's passport to its agent's cgroup
 /// (the spawn placed the session there) and persist it, so a restarted
 /// daemon still knows (`hook-sessions.json`).
-pub fn bind_agent_cgroup(session_id: &SessionId, ws: &str, root_placed: bool) -> bool {
-    bind_agent_cgroup_sid(&session_id.to_string(), ws, root_placed)
+pub fn bind_agent_cgroup(session_id: &SessionId, ws: &str, root_placed: bool, scoped: bool) -> bool {
+    bind_agent_cgroup_sid(&session_id.to_string(), ws, root_placed, scoped)
 }
 
 /// [`bind_agent_cgroup`] by selector (a `k2 job` run's `job-<run id>`).
-pub fn bind_agent_cgroup_sid(sid: &str, ws: &str, root_placed: bool) -> bool {
+pub fn bind_agent_cgroup_sid(sid: &str, ws: &str, root_placed: bool, scoped: bool) -> bool {
     let mut g = registry().lock().unwrap_or_else(|e| e.into_inner());
-    let ok = g.bind_agent_cgroup(sid, ws, root_placed);
+    let ok = g.bind_agent_cgroup(sid, ws, root_placed, scoped);
     if ok {
         save_to_disk(&g);
     }

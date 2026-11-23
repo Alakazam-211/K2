@@ -170,6 +170,8 @@ pub struct BoxState {
     /// Workspace ids with sessions in the old layout, and why each wasn't
     /// adopted.
     pub old_layout: Vec<(String, String)>,
+    /// `kernel.pid_max` (`agents layout`): the doctor warns at the old 32768.
+    pub pid_max: Option<u64>,
 }
 
 static BOX_STATE: std::sync::Mutex<Option<BoxState>> = std::sync::Mutex::new(None);
@@ -181,6 +183,23 @@ pub fn set_box_state(st: BoxState) {
 
 pub fn box_state() -> Option<BoxState> {
     BOX_STATE.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// The text the helper sets as an adopted scope's `Description`.
+pub const ADOPTED_DESCRIPTION: &str = "K2 agent scope (adopted)";
+
+/// Whether the scope `k2-agent-<ws>:<id>.scope` was made by `agents adopt`
+/// (its `Description`, read from systemd; `false` on any doubt).
+pub fn is_adopted(ws: &str, id: &str) -> bool {
+    let Some(unit) = scope_name(ws, id) else { return false };
+    crate::bg_proc::command("systemctl")
+        .args(["show", "-p", "Description", "--value", &unit])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .is_some_and(|o| String::from_utf8_lossy(&o.stdout).trim() == ADOPTED_DESCRIPTION)
 }
 
 /// While scope placement is on, a bound session is recognised only from a

@@ -28,7 +28,7 @@ for t in busctl systemd-run systemctl loginctl curl tmux; do
     command -v "$t" >/dev/null || { echo "missing tool: $t" >&2; exit 2; }
 done
 [ -f "/etc/systemd/system/$unit" ] || { echo "no $unit: run agent-isolation-m1b-kernel-tests.sh --setup first" >&2; exit 2; }
-echo "box: $(hostname) · $(. /etc/os-release && echo "$PRETTY_NAME") · kernel $(uname -r) · $(systemctl --version | head -1)"
+echo "box: $(hostname) · $(. /etc/os-release && echo "$PRETTY_NAME") · kernel $(uname -r) · $(systemctl --version | head -1) · kernel.pid_max $(cat /proc/sys/kernel/pid_max)"
 
 ran=0
 row() { echo "row $1: $2"; ran=$((ran + 1)); }
@@ -156,6 +156,22 @@ done
 cg="$(systemctl show -p ControlGroup --value "$unit")"
 tree() { find "/sys/fs/cgroup$cg" -maxdepth 2 -name cgroup.procs -printf '%h ' 2>/dev/null; echo "· owner $(stat -c %U "/sys/fs/cgroup$cg" 2>/dev/null)"; }
 row P4a "before the drop-in: $unit at $cg: $(tree)"
+# N2 (pre-row 1, the sub-cgroup form): can the K2 user have PID 1 put its
+# own pid into a ROOT-owned agent cgroup of the delegated unit
+# (`/agents/a-<other>`)? If yes, M1b's "can't move itself into another
+# agent's cgroup" needs a qualifier until the bus policy.
+sub="/sys/fs/cgroup$cg/agents/a-rowB"
+if [ -d "/sys/fs/cgroup$cg/agents" ]; then
+    sudo mkdir -p "$sub"
+    sleep 300 & own=$!
+    out="$(busctl call org.freedesktop.systemd1 /org/freedesktop/systemd1 org.freedesktop.systemd1.Manager AttachProcessesToUnit ssau "$unit" /agents/a-rowB 1 "$own" 2>&1)"
+    row 1c "attach own pid onto $unit at /agents/a-rowB (owner $(stat -c %U "$sub")) as $user: rc=$? $(echo "$out" | first_line) · now in $(cut -d: -f3 /proc/"$own"/cgroup)"
+    kill "$own" 2>/dev/null
+    sleep 0.5
+    sudo rmdir "$sub" 2>/dev/null
+else
+    row 1c "no agents leaf under $cg (the test daemon made none): not recorded"
+fi
 sudo mkdir -p "$(dirname "$dropin")"
 printf '[Service]\nDelegate=no\nDelegateSubgroup=\n' | sudo tee "$dropin" >/dev/null
 sudo systemctl daemon-reload

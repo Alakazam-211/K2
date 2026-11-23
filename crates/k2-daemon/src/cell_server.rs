@@ -1851,6 +1851,7 @@ mod unix_impl {
                 provider: crate::session_token::Provider::default(),
                 agent_cgroup: None,
                 agent_root_placed: false,
+                agent_scoped: false,
             }
         }
 

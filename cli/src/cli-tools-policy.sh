@@ -630,6 +630,48 @@ _k2_refuse_plain_http() {
     echo "Error: plain http:// only to this computer; use https:// (got: $1)" >&2
     return 2
 }
+# _K2_PY_TLS: which CAs the embedded Python trusts for https, in one place.
+# With neither SSL_CERT_FILE nor SSL_CERT_DIR set (an empty value counts as
+# unset), Python's own default context, as before. With one or both set,
+# only the CAs they name: ssl.create_default_context(cafile=, capath=).
+# That replaces the system trust, as curl, k5 (rustls-native-certs) and an
+# OpenSSL Python already do; Apple's python3 (LibreSSL) ignores the two
+# variables by itself, so without this it trusted only its own file there.
+# The context is made when an https request opens, so a variable naming a
+# file that isn't there fails that request (an OSError), not every call.
+# A verify failure stays urllib's URLError, as before. Every https opener
+# in cli/src uses it: _K2_PY_PROXY_RULE's opener (K2TLSHandler), a block
+# without the rule through k2_tls_install(), and a raw socket through
+# k2_tls_context(). Not exported: the rule carries it, and a block without
+# the rule gets it on its own command line and pops it, as _K5_PY_HTTP.
+_K2_PY_TLS='
+import http.client as _k2_tls_hc, os as _k2_tls_os, ssl as _k2_tls_ssl, urllib.request as _k2_tls_ur
+
+def k2_tls_context():
+    # None: no variable set, so the caller keeps Python'"'"'s default context.
+    f = _k2_tls_os.environ.get("SSL_CERT_FILE") or None
+    d = _k2_tls_os.environ.get("SSL_CERT_DIR") or None
+    if f is None and d is None:
+        return None
+    ctx = _k2_tls_ssl.create_default_context(cafile=f, capath=d)
+    # As http.client sets its own default context up.
+    ctx.set_alpn_protocols(["http/1.1"])
+    if ctx.post_handshake_auth is not None:
+        ctx.post_handshake_auth = True
+    return ctx
+
+class K2TLSHandler(_k2_tls_ur.HTTPSHandler):
+    def https_open(self, req):
+        ctx = k2_tls_context()
+        if ctx is None:
+            return super().https_open(req)
+        return self.do_open(_k2_tls_hc.HTTPSConnection, req, context=ctx)
+
+def k2_tls_install():
+    # For a block that does not run _K2_PY_PROXY_RULE: urllib'"'"'s default
+    # opener, with K2TLSHandler in place of its https handler.
+    _k2_tls_ur.install_opener(_k2_tls_ur.build_opener(K2TLSHandler()))
+'
 # _K2_PY_PROXY_RULE: the same rule for the CLI's embedded Python. Every
 # Python block that calls the daemon runs exec(os.environ["_K2_PY_PROXY_RULE"])
 # first: it installs one urllib opener that skips the proxy for a direct
@@ -641,7 +683,9 @@ _k2_refuse_plain_http() {
 # exit 3, and nothing goes to the place it names (k2_redirect_refused; a
 # block may define its own after running the rule, as k2 clone does).
 # Exported so every python3 the CLI starts can read it. Not a secret.
-_K2_PY_PROXY_RULE='
+# It starts with _K2_PY_TLS (above), so its opener checks certificates the
+# same way.
+_K2_PY_PROXY_RULE="$_K2_PY_TLS"'
 import ipaddress as _k2_ip, sys as _k2_sys, urllib.parse as _k2_up, urllib.request as _k2_ur
 
 def k2_direct(url):
@@ -686,7 +730,7 @@ class _K2NoRedirect(_k2_ur.HTTPRedirectHandler):
         there = "".join(c if c.isprintable() else "?" for c in there)
         k2_redirect_refused("refused: %s answered %s, sending K2 to %s; K2 does not follow a redirect with your token or password, so nothing was sent there" % (here, code, there))
 
-_k2_ur.install_opener(_k2_ur.build_opener(_K2ProxyRule(), _K2NoRedirect()))
+_k2_ur.install_opener(_k2_ur.build_opener(_K2ProxyRule(), _K2NoRedirect(), K2TLSHandler()))
 '
 export _K2_PY_PROXY_RULE
 # A secret for an embedded Python script that is itself read from stdin (a

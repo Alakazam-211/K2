@@ -206,9 +206,10 @@ _connect_device_label() {
 _connect_supabase_sign_in() {
     local email="$1" password="$2"
     printf '%s' "$password" | EMAIL="$email" \
-    SUPA_URL="${_K2_CONNECT_DB_URL_RESOLVED:-$_K2_SUPABASE_URL}" SUPA_KEY="$_K2_SUPABASE_ANON_KEY" K2_UA="$_K2_CONNECT_UA" _K5_PY_HTTP="$_K5_PY_HTTP" _K5_PY_HEADERS="" python3 -c '
+    SUPA_URL="${_K2_CONNECT_DB_URL_RESOLVED:-$_K2_SUPABASE_URL}" SUPA_KEY="$_K2_SUPABASE_ANON_KEY" K2_UA="$_K2_CONNECT_UA" _K2_PY_TLS="$_K2_PY_TLS" _K5_PY_HTTP="$_K5_PY_HTTP" _K5_PY_HEADERS="" python3 -c '
 import json, os, sys, urllib.request, urllib.error
 exec(os.environ.pop("_K5_PY_HTTP"))
+exec(os.environ.pop("_K2_PY_TLS")); k2_tls_install()
 url = os.environ["SUPA_URL"].rstrip("/") + "/auth/v1/token?grant_type=password"
 body = json.dumps({"email": os.environ["EMAIL"], "password": sys.stdin.read()}).encode()
 req = urllib.request.Request(url, data=body, method="POST", headers={
@@ -250,9 +251,10 @@ print(email)
 _connect_list_subdomains() {
     local access="$1"
     # The access token reaches python on stdin, never argv or the environment.
-    printf '%s' "$access" | SUPA_URL="${_K2_CONNECT_DB_URL_RESOLVED:-$_K2_SUPABASE_URL}" SUPA_KEY="$_K2_SUPABASE_ANON_KEY" K2_UA="$_K2_CONNECT_UA" _K5_PY_HTTP="$_K5_PY_HTTP" _K5_PY_HEADERS="" python3 -c '
+    printf '%s' "$access" | SUPA_URL="${_K2_CONNECT_DB_URL_RESOLVED:-$_K2_SUPABASE_URL}" SUPA_KEY="$_K2_SUPABASE_ANON_KEY" K2_UA="$_K2_CONNECT_UA" _K2_PY_TLS="$_K2_PY_TLS" _K5_PY_HTTP="$_K5_PY_HTTP" _K5_PY_HEADERS="" python3 -c '
 import json, os, sys, urllib.request, urllib.error
 exec(os.environ.pop("_K5_PY_HTTP"))
+exec(os.environ.pop("_K2_PY_TLS")); k2_tls_install()
 access = sys.stdin.read()
 url = (
     os.environ["SUPA_URL"].rstrip("/")
@@ -297,9 +299,10 @@ _connect_claim_subdomain() {
     local access="$1" label="$2" device_id="$3" device_label="$4"
     # The access token reaches python on stdin, never argv or the environment.
     printf '%s' "$access" | LABEL="$label" DID="$device_id" DLBL="$device_label" \
-    SUPA_URL="${_K2_CONNECT_DB_URL_RESOLVED:-$_K2_SUPABASE_URL}" SUPA_KEY="$_K2_SUPABASE_ANON_KEY" K2_UA="$_K2_CONNECT_UA" _K5_PY_HTTP="$_K5_PY_HTTP" _K5_PY_HEADERS="" python3 -c '
+    SUPA_URL="${_K2_CONNECT_DB_URL_RESOLVED:-$_K2_SUPABASE_URL}" SUPA_KEY="$_K2_SUPABASE_ANON_KEY" K2_UA="$_K2_CONNECT_UA" _K2_PY_TLS="$_K2_PY_TLS" _K5_PY_HTTP="$_K5_PY_HTTP" _K5_PY_HEADERS="" python3 -c '
 import json, os, sys, urllib.request, urllib.error
 exec(os.environ.pop("_K5_PY_HTTP"))
+exec(os.environ.pop("_K2_PY_TLS")); k2_tls_install()
 access = sys.stdin.read()
 url = os.environ["SUPA_URL"].rstrip("/") + "/rest/v1/rpc/claim_subdomain"
 body = json.dumps({
@@ -721,9 +724,10 @@ cmd_connect_logout() {
     if [ -n "$access" ]; then
         # The access token reaches python on stdin, never argv or the
         # environment.
-        printf '%s' "$access" | SUPA_URL="${_K2_CONNECT_DB_URL_RESOLVED:-$_K2_SUPABASE_URL}" SUPA_KEY="$_K2_SUPABASE_ANON_KEY" K2_UA="$_K2_CONNECT_UA" _K5_PY_HTTP="$_K5_PY_HTTP" _K5_PY_HEADERS="" python3 -c '
+        printf '%s' "$access" | SUPA_URL="${_K2_CONNECT_DB_URL_RESOLVED:-$_K2_SUPABASE_URL}" SUPA_KEY="$_K2_SUPABASE_ANON_KEY" K2_UA="$_K2_CONNECT_UA" _K2_PY_TLS="$_K2_PY_TLS" _K5_PY_HTTP="$_K5_PY_HTTP" _K5_PY_HEADERS="" python3 -c '
 import os, sys, urllib.request
 exec(os.environ.pop("_K5_PY_HTTP"))
+exec(os.environ.pop("_K2_PY_TLS")); k2_tls_install()
 access = sys.stdin.read()
 url = os.environ["SUPA_URL"].rstrip("/") + "/auth/v1/logout"
 req = urllib.request.Request(url, data=b"", method="POST", headers={

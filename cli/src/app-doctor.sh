@@ -2009,13 +2009,14 @@ cmd_app_shell() {
     if [ $# -gt 0 ]; then
         argv_json="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$@")"
     fi
-    K2_SH_BASE="$BASE_URL" K2_SH_TOKEN="$TOKEN" K2_SH_APP="$app" K2_SH_ARGV="$argv_json" python3 -c "$_K2_APP_SHELL_PY"
+    K2_SH_BASE="$BASE_URL" K2_SH_TOKEN="$TOKEN" K2_SH_APP="$app" K2_SH_ARGV="$argv_json" _K2_PY_TLS="$_K2_PY_TLS" python3 -c "$_K2_APP_SHELL_PY"
 }
 
 # The `k2 app shell` WebSocket client (stdlib only). The token rides the
 # Authorization header, never argv or the URL.
 _K2_APP_SHELL_PY='
 import base64, json, os, select, signal, socket, ssl, struct, sys, urllib.parse
+exec(os.environ.pop("_K2_PY_TLS"))
 
 base = os.environ["K2_SH_BASE"]
 tok = os.environ["K2_SH_TOKEN"]
@@ -2037,7 +2038,7 @@ host = u.hostname or "127.0.0.1"
 port = u.port or (443 if u.scheme == "https" else 80)
 s = socket.create_connection((host, port), timeout=15)
 if u.scheme == "https":
-    s = ssl.create_default_context().wrap_socket(s, server_hostname=host)
+    s = (k2_tls_context() or ssl.create_default_context()).wrap_socket(s, server_hostname=host)
 key = base64.b64encode(os.urandom(16)).decode()
 req = ("GET %s HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
        "Sec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\nAuthorization: Bearer %s\r\n\r\n") % (path, host, key, tok)

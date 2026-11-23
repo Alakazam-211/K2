@@ -167,6 +167,9 @@ pub fn get(cx: &mut Cx, j: &Value, full: bool) -> Result<(), Raise> {
     if p::truthy(&g(cx, ln!("if j.get(\"userns\"):"), "userns")?) {
         cx.print("  userns:   allowed (--userns, granted by the node's owner)");
     }
+    if p::truthy(&g(cx, ln!("if j.get(\"noAddrFilter\"):"), "noAddrFilter")?) {
+        cx.print("  address filter: off (--no-addr-filter, granted by the node's owner)");
+    }
     let l = ln!("pl = j.get(\"placement\") or ctl.get(\"placement\") or {}");
     let mut pl = g(cx, l, "placement")?;
     if !p::truthy(&pl) {

@@ -260,6 +260,10 @@ fn read(cx: &mut Cx, body: &[u8], err: &mut String) -> Result<(), Raise> {
     if p::truthy(&cx.at(l, p::get(&v, "userns"))?) {
         err.push_str(&tag("userns: allowed (--userns, granted by the node's owner)\n"));
     }
+    let l = line!("if v.get(\"noAddrFilter\"):");
+    if p::truthy(&cx.at(l, p::get(&v, "noAddrFilter"))?) {
+        err.push_str(&tag("address filter: off (--no-addr-filter, granted by the node's owner)\n"));
+    }
     if !ends.is_empty() {
         err.push_str(&tag(&format!("limits: {}\n", ends.join(" \u{b7} "))));
     }

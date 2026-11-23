@@ -33296,6 +33296,15 @@ Agents:
                                 userns_not_granted, userns_owner_only or
                                 userns_needs_update, exit 3). k2 study compute:
                                 USER NAMESPACES
+                 [--no-addr-filter]  with --userns and --network none only:
+                                no per-job address filter (the job's own
+                                network namespace, loopback only, stays the
+                                wall). For tests that watch packets between
+                                the job's own namespaces. Granted separately
+                                by the node's owner (k2 compute grant <node>
+                                --workspace <w> --no-addr-filter); else
+                                no_addr_filter_invalid (exit 2) or the
+                                --userns codes (exit 3)
                  [--receipt-v2]  the node signs receipt v2 (how and where the job
                                 ran, and its signed self-statement; k2 compute receipt
                                 shows both); only nodes on protocol 9 take it
@@ -33699,7 +33708,8 @@ terminal outside K2, Touch ID / vault password) decides every change:
                    compute:<ws>/lane:<owner>/<lane> --as env
   k2 compute grant <node> --workspace WS [--max-time 2h] [--max-disk 60G]
                    [--max-parallel 1] [--max-queued 10] [--ci|--no-ci] [--gpu|--no-gpu]
-                   [--userns|--no-userns] [--submitter-max-running N]   at most N running jobs per
+                   [--userns|--no-userns] [--no-addr-filter|--addr-filter]
+                   [--submitter-max-running N]   at most N running jobs per
                    submitter on that node (0 = off, the default; CI exempt).
                    Changing --max-parallel or this re-sends the workspace's
                    jobs already waiting in a shared node's queue
@@ -33715,6 +33725,10 @@ terminal outside K2, Touch ID / vault password) decides every change:
                    unshare -U, bubblewrap). The owner or an Admin login only,
                    and only on a node this server owns: never where this
                    server is a tenant (userns_owner_only). No card asks for it
+                   --no-addr-filter: its --userns --network none jobs may also
+                   drop their per-job address filter (granted separately,
+                   only beside --userns; --no-userns takes it too;
+                   --addr-filter takes it away)
                    The owner or an Admin grants. An agent asks for its own
                    grant's limits on a card (no --ci or --gpu; it may leave out
                    --workspace): the refusal ends with k2 permission request
@@ -34379,7 +34393,7 @@ elif verb == "info":
     if v.get("routes"):
         print("routes: " + " ".join(v["routes"]))
     for g in v.get("grants") or []:
-        print("grant: %s  %s/job  %s parallel%s  %s queued  %s GB disk%s%s" % (g.get("workspace"), dur(g["maxJobSecs"]), g["maxParallel"], ("  %s per submitter" % g["submitterMaxRunning"]) if g.get("submitterMaxRunning") else "", g["maxQueued"], g["maxDiskGb"], "  CI allowed" if g.get("allowCi") else "", "  --userns allowed" if g.get("allowUserns") else ""))
+        print("grant: %s  %s/job  %s parallel%s  %s queued  %s GB disk%s%s%s" % (g.get("workspace"), dur(g["maxJobSecs"]), g["maxParallel"], ("  %s per submitter" % g["submitterMaxRunning"]) if g.get("submitterMaxRunning") else "", g["maxQueued"], g["maxDiskGb"], "  CI allowed" if g.get("allowCi") else "", "  --userns allowed" if g.get("allowUserns") else "", "  --no-addr-filter allowed" if g.get("allowNoAddrFilter") else ""))
     for j in v.get("recentJobs") or []:
         print("job %s  %-9s exit %-4s %s" % (j["short"], j["state"], "-" if j.get("exitCode") is None else j["exitCode"], " ".join(j.get("argv") or [])[:60]))
 elif verb == "jobs":
@@ -34449,6 +34463,9 @@ elif verb == "get":
     if j.get("userns"):
         # 0.46.18: the job may make user namespaces (--userns).
         print("  userns:   allowed (--userns, granted by the node\x27s owner)")
+    if j.get("noAddrFilter"):
+        # 0.46.18: no per-job address filter (--no-addr-filter).
+        print("  address filter: off (--no-addr-filter, granted by the node\x27s owner)")
     pl = j.get("placement") or ctl.get("placement") or {}
     if pl.get("mode") == "auto":
         # Auto-placement (0.46.6): where K2 put it and why (a move says so).
@@ -34621,7 +34638,7 @@ elif verb == "grants":
     if not rows:
         print("(no grants)")
     for g in rows:
-        print("%-14s %-20s max %ss/job  %s parallel  %s queued  %s GB disk%s%s  by %s" % (g.get("node"), g.get("workspace"), g["maxJobSecs"], g["maxParallel"], g["maxQueued"], g["maxDiskGb"], "  ci" if g.get("allowCi") else "", "  userns" if g.get("allowUserns") else "", g["grantedBy"]))
+        print("%-14s %-20s max %ss/job  %s parallel  %s queued  %s GB disk%s%s%s  by %s" % (g.get("node"), g.get("workspace"), g["maxJobSecs"], g["maxParallel"], g["maxQueued"], g["maxDiskGb"], "  ci" if g.get("allowCi") else "", "  userns" if g.get("allowUserns") else "", "  no-addr-filter" if g.get("allowNoAddrFilter") else "", g["grantedBy"]))
 elif verb == "usage":
     rows = v.get("usage", [])
     if not rows:
@@ -34921,7 +34938,7 @@ cmd_compute_run() {
     local retry="" raw=0 workspace="" wait=0 wait_failures=0 wait_quiet=0 max_wait="" as_json=0 qtimeout="" retries="" stall="" nshards="" plan=0
     local gate="" tier="" supersede="" submitter="" repo="" cache="" why=""
     local preset="" now=0 cache_required=0 tag="" same_node="" distro="" receipt_v="" gpu="" gpu_mem="" mem_auto="" mem_auto_fb="" cpus_burst=""
-    local network="" strict="" userns=""
+    local network="" strict="" userns="" no_addr_filter=""
     local -a labels=() envs=() needs=() artifacts=() secrets=() withs=() avoids=() onlys=() netns_dummies=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -34973,6 +34990,9 @@ cmd_compute_run() {
             # --userns (0.46.18): this job may make user namespaces, on a
             # node its own server owns whose owner granted its workspace.
             --userns) userns=1; shift ;;
+            # --no-addr-filter (0.46.18): with --userns and --network none
+            # only: no per-job address filter (its own namespace stays).
+            --no-addr-filter) no_addr_filter=1; shift ;;
             # --gate = --tier ci (0.46.5; an older daemon only knows gate,
             # so both go in the body).
             --gate) gate=1; tier="ci"; shift ;;
@@ -35245,7 +35265,7 @@ print(json.dumps(out))' "${withs[@]}")" || exit 2
         K2_CJ_tier="$tier" K2_CJ_why="$why" K2_CJ_supersede="$supersede" K2_CJ_submitter="$submitter" \
         K2_CJ_repo="$repo" K2_CJ_cache="$cache" K2_CJ_with_j="$with_json" \
         K2_CJ_preset="$preset" K2_CJ_now_b="${now#0}" K2_CJ_cacheRequired_b="${cache_required#0}" K2_CJ_tag="$tag" K2_CJ_sameNodeAs="$same_node" K2_CJ_receiptV_n="$receipt_v" \
-        K2_CJ_gpu_j="$gpu_json" K2_CJ_gpuMemBytes_n="$gpu_mem" K2_CJ_network="$network" K2_CJ_netnsDummies_j="$netns_json" K2_CJ_strict_b="$strict" K2_CJ_userns_b="$userns")"
+        K2_CJ_gpu_j="$gpu_json" K2_CJ_gpuMemBytes_n="$gpu_mem" K2_CJ_network="$network" K2_CJ_netnsDummies_j="$netns_json" K2_CJ_strict_b="$strict" K2_CJ_userns_b="$userns" K2_CJ_noAddrFilter_b="$no_addr_filter")"
     [ "$any" = "0" ] && body="$(printf '%s' "$body" | python3 -c 'import json,sys; v=json.load(sys.stdin); v.pop("any", None); print(json.dumps(v))')"
     # The same clientJobId makes a retried POST idempotent.
     local raw_resp attempt=0
@@ -35330,6 +35350,9 @@ if isinstance(nw, dict):
 if v.get("userns"):
     # 0.46.18: the job may make user namespaces there.
     sys.stderr.write("[k2 compute] userns: allowed (--userns, granted by the node\x27s owner)\n")
+if v.get("noAddrFilter"):
+    # 0.46.18: no per-job address filter (its own namespace stays).
+    sys.stderr.write("[k2 compute] address filter: off (--no-addr-filter, granted by the node\x27s owner)\n")
 if ends:
     sys.stderr.write("[k2 compute] limits: %s\n" % " · ".join(ends))
 eff = v.get("effective") or {}
@@ -35644,7 +35667,7 @@ cmd_compute_test() {
             --os|--distro|--arch|--label|--env|--secret|--cpus|--mem|--timeout|--sha|--workspace|--artifact|--artifacts|--queue-timeout|--retries|--stall-timeout|--tier|--why|--supersede|--submitter|--repo|--cache|--with|--preset|--tag|--same-node-as|--avoid|--only|--network|--netns-dummy)
                 _need_value "$@"
                 pass+=("$1" "${2:-}"); shift 2 ;;
-            --detach|-d|--dirty|--exclusive|--receipt-v2|--raw|--json|--no-retry|--retry-interrupted|--no-source|--gate|--critical|--now|--cache-required|--plan|--userns) pass+=("$1"); shift ;;
+            --detach|-d|--dirty|--exclusive|--receipt-v2|--raw|--json|--no-retry|--retry-interrupted|--no-source|--gate|--critical|--now|--cache-required|--plan|--userns|--no-addr-filter) pass+=("$1"); shift ;;
             --gpu=*) pass+=("$1"); shift ;;
             --gpu)
                 case "${2:-}" in
@@ -37554,7 +37577,7 @@ for r in rows:
 }
 
 cmd_compute_grant() {
-    local node="" workspace="" maxt="" maxd="" maxp="" maxq="" allow_ci="" maxsub="" allow_gpu="" allow_userns=""
+    local node="" workspace="" maxt="" maxd="" maxp="" maxq="" allow_ci="" maxsub="" allow_gpu="" allow_userns="" allow_naf=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --workspace) _need_value "$@"; workspace="${2:-}"; shift 2 ;;
@@ -37574,6 +37597,10 @@ cmd_compute_grant() {
             # only, on a node this server owns; absent keeps what it had.
             --userns) allow_userns=1; shift ;;
             --no-userns) allow_userns=0; shift ;;
+            # --no-addr-filter (0.46.18): its own grant, only beside
+            # --userns; --addr-filter takes it away.
+            --no-addr-filter) allow_naf=1; shift ;;
+            --addr-filter) allow_naf=0; shift ;;
             --max-time) maxt="$(_compute_secs "${2:-}")"; shift 2 ;;
             --max-disk) _need_value "$@"; maxd="${2:-}"; maxd="${maxd%[Gg]}"; shift 2 ;;
             --max-parallel) _need_value "$@"; maxp="${2:-}"; shift 2 ;;
@@ -37584,7 +37611,7 @@ cmd_compute_grant() {
     done
     # An agent's session may leave out --workspace: its passport names its
     # own (0.46.17). A person's never may.
-    { [ -n "$node" ] && { [ -n "$workspace" ] || _compute_in_session; }; } || { echo "usage: k2 compute grant <node> --workspace WS [--max-time 2h] [--max-disk 60G] [--max-parallel 1] [--max-queued 10] [--submitter-max-running N] [--ci|--no-ci] [--gpu|--no-gpu] [--userns|--no-userns]" >&2; exit 2; }
+    { [ -n "$node" ] && { [ -n "$workspace" ] || _compute_in_session; }; } || { echo "usage: k2 compute grant <node> --workspace WS [--max-time 2h] [--max-disk 60G] [--max-parallel 1] [--max-queued 10] [--submitter-max-running N] [--ci|--no-ci] [--gpu|--no-gpu] [--userns|--no-userns] [--no-addr-filter|--addr-filter]" >&2; exit 2; }
     local body
     body="$(_compute_json K2_CJ_node="$node" K2_CJ_workspace="$workspace" K2_CJ_maxJobSecs_n="$maxt" \
         K2_CJ_maxDiskGb_n="$maxd" K2_CJ_maxParallel_n="$maxp" K2_CJ_maxQueued_n="$maxq" K2_CJ_submitterMaxRunning_n="$maxsub")"
@@ -37597,13 +37624,16 @@ cmd_compute_grant() {
     if [ -n "$allow_userns" ]; then
         body="$(printf '%s' "$body" | K2_CG_USERNS="$allow_userns" python3 -c 'import json,os,sys; v=json.load(sys.stdin); v["allowUserns"] = os.environ["K2_CG_USERNS"] == "1"; print(json.dumps(v))')"
     fi
+    if [ -n "$allow_naf" ]; then
+        body="$(printf '%s' "$body" | K2_CG_NAF="$allow_naf" python3 -c 'import json,os,sys; v=json.load(sys.stdin); v["allowNoAddrFilter"] = os.environ["K2_CG_NAF"] == "1"; print(json.dumps(v))')"
+    fi
     _compute_call POST /cli/compute/grants/set "$body" tcp
     printf '%s' "$_CP_BODY" | python3 -c '
 import json, sys
 v = json.load(sys.stdin)
 g = v["grant"]
 sub = (", %s running per submitter" % g["submitterMaxRunning"]) if g.get("submitterMaxRunning") else ""
-print("granted %s to %s (max %ss/job, %s parallel%s, %s queued, %s GB disk%s%s%s). %s" % (v["node"], v["workspace"], g["maxJobSecs"], g["maxParallel"], sub, g["maxQueued"], g["maxDiskGb"], ", CI allowed" if g.get("allowCi") else "", ", GPU jobs allowed" if g.get("allowGpu") else "", ", --userns jobs allowed" if g.get("allowUserns") else "", v["note"]))
+print("granted %s to %s (max %ss/job, %s parallel%s, %s queued, %s GB disk%s%s%s%s). %s" % (v["node"], v["workspace"], g["maxJobSecs"], g["maxParallel"], sub, g["maxQueued"], g["maxDiskGb"], ", CI allowed" if g.get("allowCi") else "", ", GPU jobs allowed" if g.get("allowGpu") else "", ", --userns jobs allowed" if g.get("allowUserns") else "", ", --no-addr-filter allowed" if g.get("allowNoAddrFilter") else "", v["note"]))
 if v.get("resent"):
     print("re-sent %d queued job(s) of %s on %s with the new caps (they keep their order)" % (v["resent"], v["workspace"], v["node"]))'
 }
@@ -60720,7 +60750,7 @@ cmd_schema() {
     },
     {
       "name": "compute run",
-      "usage": "k2 compute run [<node>] [--os linux|macos] [--arch A] [--distro ID[@VERSION]] [--label k=v] [--avoid N]... [--only N]... [--preset NAME] [--mem 16G|auto[:8G]] [--cpus N|N+M] [--needs tool@ver,…] [--env K=V]... [--secret NAME[=ENVNAME]]... [--sha REV] [--dirty] [--no-source] [--repo DIR] [--with DIR[@SHA]]... [--cache NAME] [--cache-required] [--timeout D] [--queue-timeout 2h|off] [--stall-timeout 30m|off] [--retries N] [--tag NAME] [--detach | --wait [--failures] [--max-wait 9m] [--quiet]] [--now] [--same-node-as JOB] [--priority --why \"…\"] [--tier standard|priority|batch|ci] [--strict] [--exclusive --why \"…\"] [--gpu [any|amd|intel]] [--gpu-mem 4G] [--network none] [--netns-dummy NAME=ADDR/PREFIX]... [--userns] [--shards N] [--artifact GLOB]... [--plan|--dry-run] [--json] [--workspace WS] -- <command…>",
+      "usage": "k2 compute run [<node>] [--os linux|macos] [--arch A] [--distro ID[@VERSION]] [--label k=v] [--avoid N]... [--only N]... [--preset NAME] [--mem 16G|auto[:8G]] [--cpus N|N+M] [--needs tool@ver,…] [--env K=V]... [--secret NAME[=ENVNAME]]... [--sha REV] [--dirty] [--no-source] [--repo DIR] [--with DIR[@SHA]]... [--cache NAME] [--cache-required] [--timeout D] [--queue-timeout 2h|off] [--stall-timeout 30m|off] [--retries N] [--tag NAME] [--detach | --wait [--failures] [--max-wait 9m] [--quiet]] [--now] [--same-node-as JOB] [--priority --why \"…\"] [--tier standard|priority|batch|ci] [--strict] [--exclusive --why \"…\"] [--gpu [any|amd|intel]] [--gpu-mem 4G] [--network none] [--netns-dummy NAME=ADDR/PREFIX]... [--userns] [--no-addr-filter] [--shards N] [--artifact GLOB]... [--plan|--dry-run] [--json] [--workspace WS] -- <command…>",
       "description": "Run a command on a compute node. No node: K2 picks one of the nodes granted to you and prints where and why; name a node only to pin the job there (a pinned job never moves; still waiting after 15 minutes, it gets one [compute] message naming a node that could start it now). Always pass --mem. Exit: the command's own (attached runs), 2 bad usage, 3 infra with a JSON code on stderr, 130 you detached with Ctrl-C (the job keeps running). --network none (0.46.15): the job gets no network whatever its node's setting (Linux: a network namespace of its own, loopback only; macOS: no remote IP, no DNS); a job can only narrow its network. --netns-dummy (Linux only, at most 4, implies --network none): a dummy interface with that address in the job's own namespace, up before the job starts. A node that can't run it at that network never gets it: job_network_needs_update, exit 3. More: k2 study compute.",
       "args": [{"name": "node", "required": false, "description": "Pin the job to this node (full name or a start that fits only one). Leave it off unless the job needs that machine."}, {"name": "command", "required": true, "description": "After --: the command to run."}],
       "flags": [
@@ -60755,6 +60785,7 @@ cmd_schema() {
         {"name": "--network", "arg": "none", "description": "No network for this job (loopback only), whatever the node's setting; the one value is none (on, no-lan: exit 2, job_network_invalid)."},
         {"name": "--netns-dummy", "arg": "NAME=ADDR/PREFIX", "description": "Linux nodes: a dummy interface in the job's own network namespace, e.g. dummy0=10.254.254.1/32; from k2-node 0.46.17 the first is the IPv4 default route (a browser gets an ICE host candidate; nothing leaves). NAME 1-15 of A-Z a-z 0-9 . _ - (not lo); the address from a private, link-local or test range only. Repeatable, at most 4; implies --network none."},
         {"name": "--userns", "arg": null, "description": "By default a job can't create user namespaces (rootless Podman, unshare -U, bubblewrap). --userns lets this job, if the node's owner granted its workspace that on the node (k2 compute grant <node> --workspace <w> --userns). Only on nodes your own server owns; never on a node where your server is a tenant (else userns_not_granted, userns_owner_only or userns_needs_update, exit 3)."},
+        {"name": "--no-addr-filter", "arg": null, "description": "With --userns and --network none only: no per-job address filter (the job's own network namespace, loopback only, stays the wall). For tests that watch packets between the job's own namespaces. Granted separately by the node's owner (k2 compute grant <node> --workspace <w> --no-addr-filter); else no_addr_filter_invalid (exit 2)."},
         {"name": "--receipt-v2", "arg": null, "description": "The node signs receipt v2; only nodes on protocol 9 take it (preview: ciPreview)."},
         {"name": "--retry-interrupted", "arg": null, "description": "Retry a job that an infrastructure failure interrupted."},
         {"name": "--no-retry", "arg": null, "description": "Never retry (the same as --retries 0)."},
@@ -61664,7 +61695,7 @@ cmd_schema() {
     },
     {
       "name": "compute grant",
-      "usage": "k2 compute grant <node> --workspace WS [--max-time 2h] [--max-disk 60G] [--max-parallel 1] [--max-queued 10] [--submitter-max-running N] [--ci|--no-ci] [--gpu|--no-gpu] [--userns|--no-userns]",
+      "usage": "k2 compute grant <node> --workspace WS [--max-time 2h] [--max-disk 60G] [--max-parallel 1] [--max-queued 10] [--submitter-max-running N] [--ci|--no-ci] [--gpu|--no-gpu] [--userns|--no-userns] [--no-addr-filter|--addr-filter]",
       "description": "Grant a workspace a node, with limits. Owner or admin, or an agent allowed to manage compute nodes; --ci, --gpu and --userns need the owner or an Admin login (--userns only on a node this server owns: userns_owner_only, exit 3, where it is a tenant). Any other agent asks for its own grant's limits (no --ci or --gpu; --workspace may be left out): owner_only (exit 3) ends with k2 permission request compute.grant node=<node> max-time=… --why \"…\".",
       "args": [{"name": "node", "required": true}],
       "flags": [
@@ -61679,7 +61710,9 @@ cmd_schema() {
         {"name": "--gpu", "arg": null, "description": "This workspace may send --gpu jobs; the node's own owner must also turn GPU jobs on for this server."},
         {"name": "--no-gpu", "arg": null, "description": "Take --gpu jobs away."},
         {"name": "--userns", "arg": null, "description": "This workspace's jobs may ask --userns on this node (they may create user namespaces); only on a node this server owns."},
-        {"name": "--no-userns", "arg": null, "description": "Take --userns jobs away."}
+        {"name": "--no-userns", "arg": null, "description": "Take --userns jobs away (and --no-addr-filter with it)."},
+        {"name": "--no-addr-filter", "arg": null, "description": "Its --userns --network none jobs may also drop their per-job address filter; granted separately, only beside --userns."},
+        {"name": "--addr-filter", "arg": null, "description": "Take --no-addr-filter away."}
       ]
     },
     {
@@ -74581,6 +74614,16 @@ USER NAMESPACES (--userns; k2-node 0.46.18 on the node)
     its ask, and never sent if the grant was turned off since.
   - k2 compute get shows "userns: allowed (--userns, granted by the
     node's owner)"; --json: userns: true. k2 compute grants shows it.
+  - --no-addr-filter: with --userns and --network none only (never with
+    --netns-dummy): no per-job address filter, for tests that watch
+    packets between the job's own namespaces. The job's own network
+    namespace (loopback only, no path to the node's interfaces) stays the
+    wall, and the node checks it holds only lo before the job starts.
+    Granted separately, only beside --userns:
+      k2 compute grant <node> --workspace <w> --userns --no-addr-filter
+      k2 compute run --userns --network none --no-addr-filter -- ./pcap-test
+    get: "address filter: off (--no-addr-filter, …)"; --json:
+    noAddrFilter: true. --no-userns takes it too; --addr-filter alone.
 
 IN THE JOB
   The node sets these K2_* variables in every job, and --env can't set
@@ -74830,6 +74873,9 @@ COMMON ERRORS
                          server is a tenant of that node; exit 3
   userns_needs_update    --userns, but no node for you runs it yet (k2-node
                          0.46.18, Linux with its job wall); exit 3
+  no_addr_filter_invalid  --no-addr-filter without --userns and --network
+                         none, or with --netns-dummy; or granted without
+                         --userns; exit 2
 
 SHARED NODES
   A node may serve several K2 servers at once (k2 compute nodes says

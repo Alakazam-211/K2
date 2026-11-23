@@ -509,7 +509,7 @@ elif verb == "info":
     if v.get("routes"):
         print("routes: " + " ".join(v["routes"]))
     for g in v.get("grants") or []:
-        print("grant: %s  %s/job  %s parallel%s  %s queued  %s GB disk%s%s" % (g.get("workspace"), dur(g["maxJobSecs"]), g["maxParallel"], ("  %s per submitter" % g["submitterMaxRunning"]) if g.get("submitterMaxRunning") else "", g["maxQueued"], g["maxDiskGb"], "  CI allowed" if g.get("allowCi") else "", "  --userns allowed" if g.get("allowUserns") else ""))
+        print("grant: %s  %s/job  %s parallel%s  %s queued  %s GB disk%s%s%s" % (g.get("workspace"), dur(g["maxJobSecs"]), g["maxParallel"], ("  %s per submitter" % g["submitterMaxRunning"]) if g.get("submitterMaxRunning") else "", g["maxQueued"], g["maxDiskGb"], "  CI allowed" if g.get("allowCi") else "", "  --userns allowed" if g.get("allowUserns") else "", "  --no-addr-filter allowed" if g.get("allowNoAddrFilter") else ""))
     for j in v.get("recentJobs") or []:
         print("job %s  %-9s exit %-4s %s" % (j["short"], j["state"], "-" if j.get("exitCode") is None else j["exitCode"], " ".join(j.get("argv") or [])[:60]))
 elif verb == "jobs":
@@ -579,6 +579,9 @@ elif verb == "get":
     if j.get("userns"):
         # 0.46.18: the job may make user namespaces (--userns).
         print("  userns:   allowed (--userns, granted by the node\x27s owner)")
+    if j.get("noAddrFilter"):
+        # 0.46.18: no per-job address filter (--no-addr-filter).
+        print("  address filter: off (--no-addr-filter, granted by the node\x27s owner)")
     pl = j.get("placement") or ctl.get("placement") or {}
     if pl.get("mode") == "auto":
         # Auto-placement (0.46.6): where K2 put it and why (a move says so).
@@ -751,7 +754,7 @@ elif verb == "grants":
     if not rows:
         print("(no grants)")
     for g in rows:
-        print("%-14s %-20s max %ss/job  %s parallel  %s queued  %s GB disk%s%s  by %s" % (g.get("node"), g.get("workspace"), g["maxJobSecs"], g["maxParallel"], g["maxQueued"], g["maxDiskGb"], "  ci" if g.get("allowCi") else "", "  userns" if g.get("allowUserns") else "", g["grantedBy"]))
+        print("%-14s %-20s max %ss/job  %s parallel  %s queued  %s GB disk%s%s%s  by %s" % (g.get("node"), g.get("workspace"), g["maxJobSecs"], g["maxParallel"], g["maxQueued"], g["maxDiskGb"], "  ci" if g.get("allowCi") else "", "  userns" if g.get("allowUserns") else "", "  no-addr-filter" if g.get("allowNoAddrFilter") else "", g["grantedBy"]))
 elif verb == "usage":
     rows = v.get("usage", [])
     if not rows:

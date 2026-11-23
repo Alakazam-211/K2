@@ -1,6 +1,7 @@
 //! `k5 compute grant <node> --workspace WS [--max-time 2h] [--max-disk
 //! 60G] [--max-parallel 1] [--max-queued 10] [--submitter-max-running N]
-//! [--ci|--no-ci] [--gpu|--no-gpu] [--userns|--no-userns]`, as `cmd_compute_grant` answers it
+//! [--ci|--no-ci] [--gpu|--no-gpu] [--userns|--no-userns]
+//! [--no-addr-filter|--addr-filter]`, as `cmd_compute_grant` answers it
 //! (`cli/src/compute-access.sh`): one POST to `/cli/compute/grants/set`
 //! over TCP, then the grant in one line (and the queued jobs sent again
 //! with the new caps). A refusal's permission card (`compute.grant`) is
@@ -18,7 +19,7 @@ pub const ENDPOINT: &str = "/cli/compute/grants/set";
 pub const USAGE: &str = concat!(
     "usage: ",
     k2_client::cli_name!(),
-    " compute grant <node> --workspace WS [--max-time 2h] [--max-disk 60G] [--max-parallel 1] [--max-queued 10] [--submitter-max-running N] [--ci|--no-ci] [--gpu|--no-gpu] [--userns|--no-userns]"
+    " compute grant <node> --workspace WS [--max-time 2h] [--max-disk 60G] [--max-parallel 1] [--max-queued 10] [--submitter-max-running N] [--ci|--no-ci] [--gpu|--no-gpu] [--userns|--no-userns] [--no-addr-filter|--addr-filter]"
 );
 
 /// The lines of the shell's Python that raise (`tests` pins them).
@@ -47,6 +48,8 @@ pub struct Ask {
     pub gpu: Option<bool>,
     /// `--userns|--no-userns` (0.46.18).
     pub userns: Option<bool>,
+    /// `--no-addr-filter|--addr-filter` (0.46.18).
+    pub no_addr_filter: Option<bool>,
 }
 
 /// The words after `grant`. `in_session`: `_compute_in_session`.
@@ -105,6 +108,8 @@ pub fn parse(words: &[&str], in_session: bool) -> Words<Ask> {
             "--no-gpu" => a.gpu = Some(false),
             "--userns" => a.userns = Some(true),
             "--no-userns" => a.userns = Some(false),
+            "--no-addr-filter" => a.no_addr_filter = Some(true),
+            "--addr-filter" => a.no_addr_filter = Some(false),
             w if w.starts_with('-') => return Words::Usage(format!("usage: unknown flag '{w}'")),
             w => a.node = w.to_string(),
         }
@@ -202,6 +207,9 @@ pub fn body(a: &Ask) -> Result<String, String> {
     if let Some(userns) = a.userns {
         pairs.push(("allowUserns", Value::Bool(userns)));
     }
+    if let Some(naf) = a.no_addr_filter {
+        pairs.push(("allowNoAddrFilter", Value::Bool(naf)));
+    }
     Ok(dumps(&object(pairs)))
 }
 
@@ -266,9 +274,14 @@ pub fn reader(body: &[u8]) -> Shown {
         } else {
             ""
         };
+        let naf = if get(gp, "allowNoAddrFilter").is_some_and(py::truthy) {
+            ", --no-addr-filter allowed"
+        } else {
+            ""
+        };
         let note = vs("note")?;
         out.push_str(&format!(
-            "granted {node} to {ws} (max {secs}s/job, {par} parallel{sub}, {queued} queued, {disk} GB disk{ci}{gpu}{userns}). {note}\n"
+            "granted {node} to {ws} (max {secs}s/job, {par} parallel{sub}, {queued} queued, {disk} GB disk{ci}{gpu}{userns}{naf}). {note}\n"
         ));
         let resent = match &v {
             Value::Object(vp) => get(vp, "resent").filter(|x| py::truthy(x)),

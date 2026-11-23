@@ -1222,6 +1222,16 @@ USER NAMESPACES (--userns; k2-node 0.46.18 on the node)
     its ask, and never sent if the grant was turned off since.
   - k2 compute get shows "userns: allowed (--userns, granted by the
     node's owner)"; --json: userns: true. k2 compute grants shows it.
+  - --no-addr-filter: with --userns and --network none only (never with
+    --netns-dummy): no per-job address filter, for tests that watch
+    packets between the job's own namespaces. The job's own network
+    namespace (loopback only, no path to the node's interfaces) stays the
+    wall, and the node checks it holds only lo before the job starts.
+    Granted separately, only beside --userns:
+      k2 compute grant <node> --workspace <w> --userns --no-addr-filter
+      k2 compute run --userns --network none --no-addr-filter -- ./pcap-test
+    get: "address filter: off (--no-addr-filter, …)"; --json:
+    noAddrFilter: true. --no-userns takes it too; --addr-filter alone.
 
 IN THE JOB
   The node sets these K2_* variables in every job, and --env can't set
@@ -1471,6 +1481,9 @@ COMMON ERRORS
                          server is a tenant of that node; exit 3
   userns_needs_update    --userns, but no node for you runs it yet (k2-node
                          0.46.18, Linux with its job wall); exit 3
+  no_addr_filter_invalid  --no-addr-filter without --userns and --network
+                         none, or with --netns-dummy; or granted without
+                         --userns; exit 2
 
 SHARED NODES
   A node may serve several K2 servers at once (k2 compute nodes says

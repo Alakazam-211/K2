@@ -41,7 +41,7 @@ const RED: &str = "G1szMW1yZWQbWzBtIGxpbmUNCg==";
 const WARN: &str = "d2FybgcgdHdvCg==";
 
 const PLAN: &str = r#"{"node":"mini","startsNow":false,"queue":{"ahead":2,"blockedBy":{"code":"busy"}},"online":false,"warmSlot":"slot-a 12G","estimate":{"medianSecs":125,"p90Secs":300.5,"samples":7,"basis":"same command"},"warnings":["w1"],"notices":[{"code":"n1"},{"message":"m2"}],"placement":{"mode":"auto","node":"mini","why":"most free","fits":"4 CPUs"},"source":{"checkout":null,"repo":"r","commit":"0123456789abcdef","dirty":{"changed":1,"untracked":0}},"toolsLine":"rust 1.99, cmake 3","limits":{"stallSecs":600,"queueTimeoutSecs":7200,"timeoutSecs":90},"gpu":{"gpus":[{"model":"Radeon"},{"pci":"0000:03"}],"free":1,"mem":{"budgetBytes":4294967296,"watched":false,"countedBytes":1}},"network":{"line":"none","dummies":["d0"]},"effective":{"source":".k2/compute.toml","preset":"ci","os":{"value":"linux","from":"preset"},"mem":{"value":8,"from":"auto (3 runs)"},"needs":{"value":["a","b"],"from":"defaults"},"cpus":{"value":4,"from":"flag"},"tier":{"value":"normal"},"env":{"cpuHints":{"MAKEFLAGS":"-j4","N":4}}},"ranking":[{"node":"mini","state":"idle","etaSecs":0,"etaBasis":"now"},{"node":"big","state":"busy","etaSecs":3600,"etaBasis":"queue"},{"node":"old","state":"offline"}]}"#;
-const PLAN_USERNS: &str = r#"{"node":"n","startsNow":true,"online":true,"placement":{"node":"n","why":"only one"},"source":{"checkout":"workspace","commit":null},"network":{"line":"none"},"userns":true,"effective":{"os":{"value":"linux","from":"defaults"}},"ranking":[{"node":"n","state":"idle"}]}"#;
+const PLAN_USERNS: &str = r#"{"node":"n","startsNow":true,"online":true,"placement":{"node":"n","why":"only one"},"source":{"checkout":"workspace","commit":null},"network":{"line":"none"},"userns":true,"noAddrFilter":true,"effective":{"os":{"value":"linux","from":"defaults"}},"ranking":[{"node":"n","state":"idle"}]}"#;
 const PLAN_NOW: &str = r#"{"node":"n","startsNow":true,"online":true,"placement":{"node":"n","why":"only one"},"source":{"checkout":"workspace","commit":null},"gpu":{"gpus":[],"mem":{"budgetBytes":null}},"effective":{"os":{"value":"macos","from":"defaults"}},"ranking":[{"node":"n","state":"idle"}]}"#;
 
 fn logs(chunks: &str, end: bool, job: &str) -> Reply {
@@ -403,11 +403,32 @@ fn compute_run_detached_and_planned() {
         ),
         case(
             "--userns --plan: the userns line",
-            &["run", "--userns", "--network", "none", "--plan", "--", "podman", "run", "alpine"],
+            &["run", "--userns", "--network", "none", "--no-addr-filter", "--plan", "--", "podman", "run", "alpine"],
             &[],
             vec![ok(PLAN_USERNS)],
             owner_and_port,
             0,
+            1,
+        ),
+        case(
+            "--no-addr-filter (0.46.18): noAddrFilter in the body",
+            &["run", "--no-source", "--userns", "--network", "none", "--no-addr-filter", "--detach", "--", "./pcap-test"],
+            &[],
+            vec![ok(PLAIN)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "--no-addr-filter alone: the server's no_addr_filter_invalid, exit 2",
+            &["run", "--no-addr-filter", "--detach", "--", "x"],
+            &[],
+            vec![Reply::Answer(
+                400,
+                r#"{"error":{"code":"no_addr_filter_invalid","hint":"--no-addr-filter goes only with --userns and --network none"}}"#.into(),
+            )],
+            owner_and_port,
+            2,
             1,
         ),
         case(
@@ -842,6 +863,7 @@ fn compute_test() {
                 "--gpu-mem",
                 "2G",
                 "--userns",
+                "--no-addr-filter",
                 "--detach",
                 "--json",
             ],

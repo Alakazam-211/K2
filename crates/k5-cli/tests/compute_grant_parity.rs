@@ -22,7 +22,7 @@ const HELP: &[&[&str]] = &[
     &["grant", "--help", "mini"],
     &["grant", "mini", "--max-time", "2h", "--ci", "--help"],
 ];
-const GRANTED: &str = r#"{"node":"mini","workspace":"acme","grant":{"maxJobSecs":7200,"maxParallel":2,"maxQueued":10,"maxDiskGb":60,"submitterMaxRunning":1,"allowCi":true,"allowUserns":true},"note":"agents there can run jobs.","resent":2}"#;
+const GRANTED: &str = r#"{"node":"mini","workspace":"acme","grant":{"maxJobSecs":7200,"maxParallel":2,"maxQueued":10,"maxDiskGb":60,"submitterMaxRunning":1,"allowCi":true,"allowUserns":true,"allowNoAddrFilter":true},"note":"agents there can run jobs.","resent":2}"#;
 const PLAIN: &str = r#"{"node":"mini","workspace":"acme","grant":{"maxJobSecs":3600,"maxParallel":1,"maxQueued":10,"maxDiskGb":40},"note":"ok."}"#;
 
 #[test]
@@ -50,11 +50,33 @@ fn compute_grant() {
                 "--ci",
                 "--no-gpu",
                 "--userns",
+                "--no-addr-filter",
             ],
             &[],
             vec![ok(GRANTED)],
             owner_and_port,
             0,
+            1,
+        ),
+        case(
+            "--addr-filter (0.46.18)",
+            &["grant", "mini", "--workspace", "acme", "--addr-filter"],
+            &[],
+            vec![ok(PLAIN)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "--no-addr-filter without --userns: no_addr_filter_invalid, exit 2",
+            &["grant", "mini", "--workspace", "acme", "--no-addr-filter"],
+            &[],
+            vec![Reply::Answer(
+                400,
+                r#"{"error":{"code":"no_addr_filter_invalid","hint":"--no-addr-filter is granted only with --userns"}}"#.into(),
+            )],
+            owner_and_port,
+            2,
             1,
         ),
         case(

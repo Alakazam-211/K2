@@ -122,6 +122,9 @@ pub struct Ask {
     /// `--userns` (0.46.18): the job may make user namespaces, on a node
     /// its own server owns whose owner granted its workspace that.
     pub userns: bool,
+    /// `--no-addr-filter` (0.46.18): with `--userns` and `--network none`
+    /// only (the daemon checks): no per-job address filter.
+    pub no_addr_filter: bool,
     /// `--label` (always an object once read).
     pub labels: Option<Value>,
     /// `--env` (always an object once read).
@@ -297,6 +300,10 @@ pub fn parse(words: &[&str]) -> Option<Words<Ask>> {
             }
             "--userns" => {
                 a.userns = true;
+                i += 1;
+            }
+            "--no-addr-filter" => {
+                a.no_addr_filter = true;
                 i += 1;
             }
             "--gate" => {
@@ -845,6 +852,7 @@ pub fn body(a: &Ask, cwd: &str, repo_dir: &str, ws: &str, client: &str) -> Strin
         ("netnsDummies", a.netns.clone()),
         ("strict", flag(a.strict)),
         ("userns", flag(a.userns)),
+        ("noAddrFilter", flag(a.no_addr_filter)),
     ];
     dumps(&object(
         fields

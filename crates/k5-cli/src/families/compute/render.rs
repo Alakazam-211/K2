@@ -1028,11 +1028,16 @@ fn info(cx: &mut Cx, v: &Value) -> Result<(), Raise> {
         } else {
             ""
         };
+        let naf = if p::truthy(&cx.at(l, p::get(&g, "allowNoAddrFilter"))?) {
+            "  --no-addr-filter allowed"
+        } else {
+            ""
+        };
         let t = cx.at(
             l,
             p::pct(
-                "grant: %s  %s/job  %s parallel%s  %s queued  %s GB disk%s%s",
-                &[ws, s(&d), mp, s(&per), mq, md, s(ci), s(userns)],
+                "grant: %s  %s/job  %s parallel%s  %s queued  %s GB disk%s%s%s",
+                &[ws, s(&d), mp, s(&per), mq, md, s(ci), s(userns), s(naf)],
             ),
         )?;
         cx.print(&t);
@@ -1205,12 +1210,17 @@ fn grants(cx: &mut Cx, v: &Value) -> Result<(), Raise> {
         } else {
             ""
         };
+        let naf = if p::truthy(&cx.at(l, p::get(&g, "allowNoAddrFilter"))?) {
+            "  no-addr-filter"
+        } else {
+            ""
+        };
         let by = cx.at(l, p::idx(&g, "grantedBy"))?;
         let t = cx.at(
             l,
             p::pct(
-                "%-14s %-20s max %ss/job  %s parallel  %s queued  %s GB disk%s%s  by %s",
-                &[node, ws, mj, mp, mq, md, s(ci), s(userns), by],
+                "%-14s %-20s max %ss/job  %s parallel  %s queued  %s GB disk%s%s%s  by %s",
+                &[node, ws, mj, mp, mq, md, s(ci), s(userns), s(naf), by],
             ),
         )?;
         cx.print(&t);

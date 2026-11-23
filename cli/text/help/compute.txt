@@ -210,6 +210,15 @@ Agents:
                                 userns_not_granted, userns_owner_only or
                                 userns_needs_update, exit 3). k2 study compute:
                                 USER NAMESPACES
+                 [--no-addr-filter]  with --userns and --network none only:
+                                no per-job address filter (the job's own
+                                network namespace, loopback only, stays the
+                                wall). For tests that watch packets between
+                                the job's own namespaces. Granted separately
+                                by the node's owner (k2 compute grant <node>
+                                --workspace <w> --no-addr-filter); else
+                                no_addr_filter_invalid (exit 2) or the
+                                --userns codes (exit 3)
                  [--receipt-v2]  the node signs receipt v2 (how and where the job
                                 ran, and its signed self-statement; k2 compute receipt
                                 shows both); only nodes on protocol 9 take it
@@ -613,7 +622,8 @@ terminal outside K2, Touch ID / vault password) decides every change:
                    compute:<ws>/lane:<owner>/<lane> --as env
   k2 compute grant <node> --workspace WS [--max-time 2h] [--max-disk 60G]
                    [--max-parallel 1] [--max-queued 10] [--ci|--no-ci] [--gpu|--no-gpu]
-                   [--userns|--no-userns] [--submitter-max-running N]   at most N running jobs per
+                   [--userns|--no-userns] [--no-addr-filter|--addr-filter]
+                   [--submitter-max-running N]   at most N running jobs per
                    submitter on that node (0 = off, the default; CI exempt).
                    Changing --max-parallel or this re-sends the workspace's
                    jobs already waiting in a shared node's queue
@@ -629,6 +639,10 @@ terminal outside K2, Touch ID / vault password) decides every change:
                    unshare -U, bubblewrap). The owner or an Admin login only,
                    and only on a node this server owns: never where this
                    server is a tenant (userns_owner_only). No card asks for it
+                   --no-addr-filter: its --userns --network none jobs may also
+                   drop their per-job address filter (granted separately,
+                   only beside --userns; --no-userns takes it too;
+                   --addr-filter takes it away)
                    The owner or an Admin grants. An agent asks for its own
                    grant's limits on a card (no --ci or --gpu; it may leave out
                    --workspace): the refusal ends with k2 permission request

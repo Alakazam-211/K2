@@ -1118,7 +1118,19 @@ mod grant_verb {
             panic!("an ask")
         };
         assert_eq!(a.userns, None);
-        assert!(grant::USAGE.ends_with("[--gpu|--no-gpu] [--userns|--no-userns]"));
+        assert!(grant::USAGE.ends_with("[--gpu|--no-gpu] [--userns|--no-userns] [--no-addr-filter|--addr-filter]"));
+        // --no-addr-filter / --addr-filter send allowNoAddrFilter after allowUserns.
+        let Words::Ask(a) = w(&["mini", "--workspace", "acme", "--userns", "--no-addr-filter"], false) else {
+            panic!("an ask")
+        };
+        assert_eq!(
+            grant::body(&a),
+            Ok(r#"{"node": "mini", "workspace": "acme", "allowUserns": true, "allowNoAddrFilter": true}"#.into())
+        );
+        let Words::Ask(a) = w(&["mini", "--workspace", "acme", "--addr-filter"], false) else {
+            panic!("an ask")
+        };
+        assert_eq!(grant::body(&a), Ok(r#"{"node": "mini", "workspace": "acme", "allowNoAddrFilter": false}"#.into()));
         assert_eq!(w(&["mini"], false), Words::Usage(grant::USAGE.into()));
         assert!(matches!(w(&["mini"], true), Words::Ask(Ask { .. })));
         assert_eq!(
@@ -1157,6 +1169,8 @@ mod grant_verb {
         // 0.46.18: --userns on the grant.
         let s = grant::reader(br#"{"node":"mini","workspace":"acme","grant":{"maxJobSecs":7200,"maxParallel":2,"maxQueued":10,"maxDiskGb":60,"allowGpu":true,"allowUserns":true},"note":"n."}"#);
         assert_eq!(s.stdout, "granted mini to acme (max 7200s/job, 2 parallel, 10 queued, 60 GB disk, GPU jobs allowed, --userns jobs allowed). n.\n");
+        let s = grant::reader(br#"{"node":"mini","workspace":"acme","grant":{"maxJobSecs":7200,"maxParallel":2,"maxQueued":10,"maxDiskGb":60,"allowUserns":true,"allowNoAddrFilter":true},"note":"n."}"#);
+        assert_eq!(s.stdout, "granted mini to acme (max 7200s/job, 2 parallel, 10 queued, 60 GB disk, --userns jobs allowed, --no-addr-filter allowed). n.\n");
         let s = grant::reader(br#"{"node":"mini"}"#);
         assert!(
             s.stderr

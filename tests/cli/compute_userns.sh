@@ -12,6 +12,8 @@
 # refusal (userns_owner_only) exits 3 naming the node; `get` prints the
 # userns line only when the job asked; `--plan` prints it; `grants` shows
 # it; the help, `k2 study compute` and the schema name the flag and codes.
+# --no-addr-filter: run/test send noAddrFilter, grant --no-addr-filter /
+# --addr-filter send allowNoAddrFilter, get prints "address filter: off".
 
 set -euo pipefail
 
@@ -62,6 +64,7 @@ class H(BaseHTTPRequestHandler):
             j = {"id": "abcd1234" * 4, "short": "abcd1234", "node": "own-node", "state": "done", "exitCode": 0, "argv": ["true"], "result": {}}
             if q.get("job", [""])[0].startswith("abcd"):
                 j["userns"] = True
+                j["noAddrFilter"] = True
             return self.reply(200, j)
         if u.path == "/cli/compute/grants":
             return self.reply(200, {"grants": [
@@ -87,7 +90,7 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/cli/compute/grants/set":
             if body.get("node") == "shared-node" and body.get("allowUserns"):
                 return self.reply(403, {"error": {"code": "userns_owner_only", "node": "shared-node", "hint": OWNER_ONLY}})
-            g = {"maxJobSecs": 7200, "maxParallel": 1, "maxQueued": 10, "maxDiskGb": 60, "allowCi": False, "allowUserns": bool(body.get("allowUserns"))}
+            g = {"maxJobSecs": 7200, "maxParallel": 1, "maxQueued": 10, "maxDiskGb": 60, "allowCi": False, "allowUserns": bool(body.get("allowUserns")), "allowNoAddrFilter": bool(body.get("allowNoAddrFilter"))}
             return self.reply(200, {"ok": True, "node": body.get("node"), "workspace": body.get("workspace"), "grant": g, "note": "ok", "resent": 0})
         return self.reply(404, {"error": {"code": "not_found", "hint": u.path}})
 
@@ -130,6 +133,25 @@ expect_has "userns_owner_only code" "$err" "userns_owner_only"
 expect_has "it names the reason" "$err" "this server is a tenant of shared-node, so its jobs can't make user namespaces there"
 "$K2" compute test --no-source --workspace builder --userns -- -p x >/dev/null 2>&1 || true
 expect_eq "compute test passes --userns through" "$(last_key userns)" "true"
+
+echo "== --no-addr-filter =="
+"$K2" compute run --no-source --workspace builder --userns --network none --no-addr-filter -- true >/dev/null 2>&1 || true
+expect_eq "--no-addr-filter sends noAddrFilter true" "$(last_key noAddrFilter)" "true"
+expect_eq "... beside userns" "$(last_key userns)" "true"
+"$K2" compute run --no-source --workspace builder --userns --network none -- true >/dev/null 2>&1 || true
+expect_eq "no --no-addr-filter: no key" "$(last_key noAddrFilter)" "null"
+"$K2" compute test --no-source --workspace builder --userns --network none --no-addr-filter -- -p x >/dev/null 2>&1 || true
+expect_eq "compute test passes --no-addr-filter through" "$(last_key noAddrFilter)" "true"
+out="$("$K2" compute grant own-node --workspace builder --userns --no-addr-filter)"
+expect_eq "grant --no-addr-filter sends allowNoAddrFilter true" "$(last_key allowNoAddrFilter)" "true"
+expect_has "the answer says so" "$out" "--userns jobs allowed, --no-addr-filter allowed"
+"$K2" compute grant own-node --workspace builder --addr-filter >/dev/null
+expect_eq "grant --addr-filter sends allowNoAddrFilter false" "$(last_key allowNoAddrFilter)" "false"
+expect_eq "... and leaves --userns alone" "$(last_key allowUserns)" "null"
+out="$("$K2" compute get abcd1234 2>&1)"
+expect_has "get: address filter line" "$out" "address filter: off (--no-addr-filter, granted by the node's owner)"
+expect_has "help: run --no-addr-filter" "$("$K2" compute --help)" "[--no-addr-filter]  with --userns and --network none only"
+expect_has "study: no_addr_filter_invalid" "$("$K2" study compute)" "no_addr_filter_invalid"
 
 echo "== --plan shows it =="
 plan="$("$K2" compute run --no-source --workspace builder --userns --plan -- true 2>&1 || true)"

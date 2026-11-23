@@ -15200,8 +15200,7 @@ WHAT A TEMPLATE IS
   k2 agent hire --template writer --name "Max" --agent codex --dry-run
     Prints the folder (<hire root>/<handle>, here <hire root>/max;
     k2 agent hire-root) and each file, layer and permission with its
-    label: would write · skip · yours, kept; a permission says would
-    grant · card · refused · skip · declined (part 3). Read it first.
+    label: would write · skip · yours, kept (permissions: 3). Read it first.
   Step 2, hire and start it:
   k2 agent hire --template writer --name "Max" --agent codex --launch
     Writes the folder, ROLE.md, starter notes, context layers and
@@ -15241,15 +15240,11 @@ WHAT A TEMPLATE IS
   outside_hire_root. A person hires anywhere.
 
 3. PERMISSIONS: THE HIRER'S REACH DECIDES
-  A template only suggests switches; a hire never gets more than the
-  hirer may give (k2 agent hire --help, PERMISSIONS). Each line says:
-    would grant  the hirer may give it: the owner any, an admin what an
-                 admin can, an agent only what it has (not compute).
-    card         an owner or admin is asked on a card on its Thread.
-    refused      no card can ask for it: the next line says who can turn
-                 it on and how. The hire goes ahead; tell your person.
-    skip / declined   already on / left off with --decline <perm> (kept
-                      off on a re-run too).
+  A hire never gets more than the hirer may give: the owner any switch,
+  an admin what an admin can, an agent only what it has (not compute).
+  Each permission line says would grant, card (an owner or admin is asked
+  on its Thread), refused (the next line says who can; the hire goes
+  ahead), skip, or declined (--decline <perm>; kept off on a re-run).
 
 4. SAVE YOUR OWN SETUP AS A TEMPLATE
   k2 agent template save . --id my-writer --summary "Writes our posts" --dry-run

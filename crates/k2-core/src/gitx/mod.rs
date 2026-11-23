@@ -399,3 +399,7 @@ mod tests;
 #[cfg(test)]
 #[path = "callers_tests.rs"]
 mod callers_tests;
+
+#[cfg(test)]
+#[path = "oracle_tests.rs"]
+mod oracle_tests;

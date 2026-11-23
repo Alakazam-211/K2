@@ -653,7 +653,7 @@ mod probes {
                 "pivot_root" => said(libc::syscall(libc::SYS_pivot_root, 0u64, 0u64)),
                 // ADDR_NO_RANDOMIZE: a change away from the default.
                 "personality_change" => said(libc::syscall(libc::SYS_personality, 0x0040000u64)),
-                "personality_query" => said(libc::syscall(libc::SYS_personality, 0xffff_ffffu64)),
+                "personality_default" => said(libc::syscall(libc::SYS_personality, 0u64)),
                 "max_user_namespaces" => std::fs::read_to_string(super::MAX_USER_NAMESPACES).map(|s| s.trim().to_string()).unwrap_or_else(|e| format!("read:{e}")),
                 other => format!("unknown-probe:{other}"),
             }

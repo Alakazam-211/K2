@@ -120,7 +120,9 @@ fn a_job_is_refused_the_denylist_with_or_without_userns() {
         for p in denied {
             expect("deny", mode, p, "EPERM");
         }
-        expect("persq", mode, "personality_query", "ok");
+        // The default personality stays settable (systemd's LockPersonality
+        // allows only the current one, not even the 0xffffffff query).
+        expect("persd", mode, "personality_default", "ok");
         expect("forkexec", mode, "fork_exec", "ok");
     }
 }

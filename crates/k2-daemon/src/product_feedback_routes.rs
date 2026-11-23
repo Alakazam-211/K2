@@ -1210,6 +1210,11 @@ fn settings_post(c: &Caller, body: &[u8]) -> CliResponse {
             return CliResponse::internal_error(format!("save feedback settings: {e}"));
         }
         audit_changes(c, &before, &s);
+        if agent_keys && !before.agents_asked() {
+            // The first answer: the setup list's agent_reports row and card
+            // go for everyone (`first_run::offers`).
+            crate::first_run_routes::emit_changed(None);
+        }
         if s.enabled {
             // Rows held while it was off may go now.
             drain::kick();

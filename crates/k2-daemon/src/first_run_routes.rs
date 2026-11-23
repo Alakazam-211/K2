@@ -8,7 +8,7 @@
 //! | POST | `/cli/first-run/hide` | | the same body |
 //! | POST | `/cli/first-run/show` | | the same body (hidden, finished and skips cleared) |
 //! | POST | `/cli/first-run/skip` | `{"row": "<id>"}` | the same body |
-//! | POST | `/cli/first-run/offer/dismiss` | | the same body ("Not now" on Meet Kessel, per person) |
+//! | POST | `/cli/first-run/offer/dismiss` | `{offer?}` | the same body ("Not now" on Meet Kessel, per person; `{"offer": "agent_reports"}`: "Ask me later" on the agent-reports card, the row's skip) |
 //! | POST | `/cli/first-run/kessel` | `{tool?, name?, handle?, focusGroup?}` | `{workspaceId, name, path, focusGroupId, …}` |
 //! | POST | `/cli/first-run/chief-of-staff/start` | | `{workspaceId}` |
 //! | POST | `/cli/first-run/chief-of-staff` | `{name, about, tool, focusGroup?}` | `{workspaceId, name, path, focusGroupId, …}` |
@@ -43,9 +43,17 @@
 //! and Chief of Staff stay. 404 `no_kessel` when the server has none. It
 //! isn't behind `kesselFirstRun`: it replays a Kessel that exists.
 //!
+//! **Agent reports** (plan-agent-reports-opt-in-app-v1). The status's
+//! `agent_reports` row and `offers` are `k2_core::first_run`'s. "Ask me
+//! later" on its card is `offer/dismiss` with `{"offer": "agent_reports"}`,
+//! stored as the row's skip (so a Member, who has no such row, gets 400
+//! `unknown_row`), and it works whatever `kesselFirstRun` says. A person's
+//! answer goes to `/cli/product-feedback/settings`, which tells every
+//! socket to re-read the list.
+//!
 //! **Kessel at first run** (prd-setup-checklist-v1 §10, `kessel-first-run-contract.md`):
 //! the last four answer 404 `kessel_first_run_off` while the owner's
-//! `kesselFirstRun` switch is off. `kessel` and `chief-of-staff/start` are a
+//! `kesselFirstRun` switch is off (`offer/dismiss` only for Meet Kessel). `kessel` and `chief-of-staff/start` are a
 //! person's at the Admin floor (the owner token, an Owner or an Admin);
 //! `chief-of-staff` is the one agent-callable route here, honoured only for
 //! **Kessel's own pinned chat**: its passport's workspace is the seat's and its
@@ -201,12 +209,38 @@ fn viewer_for(actor: &Actor) -> Result<Viewer, CliResponse> {
     }
 }
 
+/// Which offer `offer/dismiss` names: none (an empty body, `{}`, or
+/// `meet_kessel`) is Meet Kessel's, as before the agent-reports card.
+fn dismissed_offer(body: &[u8]) -> Result<&'static str, CliResponse> {
+    if body.iter().all(u8::is_ascii_whitespace) {
+        return Ok(first_run::OFFER_MEET_KESSEL);
+    }
+    let usage = || {
+        error(
+            "400 Bad Request",
+            "usage",
+            format!("send {{}} or {{\"offer\": \"{}\" or \"{}\"}}", first_run::OFFER_MEET_KESSEL, first_run::AGENT_REPORTS),
+        )
+    };
+    let v: Value = serde_json::from_slice(body).map_err(|_| usage())?;
+    match v.get("offer") {
+        None | Some(Value::Null) => Ok(first_run::OFFER_MEET_KESSEL),
+        Some(Value::String(o)) if o.trim() == first_run::OFFER_MEET_KESSEL => Ok(first_run::OFFER_MEET_KESSEL),
+        Some(Value::String(o)) if o.trim() == first_run::AGENT_REPORTS => Ok(first_run::AGENT_REPORTS),
+        Some(_) => Err(usage()),
+    }
+}
+
 fn action_for(path: &str, body: &[u8]) -> Result<Option<Action>, CliResponse> {
     Ok(match path {
         STATUS_PATH => None,
         HIDE_PATH => Some(Action::Hide),
         SHOW_PATH => Some(Action::Show),
-        OFFER_DISMISS_PATH => Some(Action::DismissOffer),
+        // "Ask me later" on the agent-reports card is that row's skip.
+        OFFER_DISMISS_PATH => match dismissed_offer(body)? {
+            first_run::AGENT_REPORTS => Some(Action::Skip(first_run::AGENT_REPORTS.to_string())),
+            _ => Some(Action::DismissOffer),
+        },
         SKIP_PATH => {
             let v: Value = serde_json::from_slice(body)
                 .map_err(|e| error("400 Bad Request", "usage", format!("send {{\"row\": \"<id>\"}}: {e}")))?;
@@ -241,7 +275,9 @@ pub fn handle_as(is_post: bool, path: &str, body: &[u8], actor: &Actor, text: bo
     if is_post_only(path) != is_post {
         return CliResponse::method_not_allowed();
     }
-    if is_kessel_route(path) && !k2_core::app_settings::load().kessel_first_run {
+    let agent_reports_dismiss =
+        path == OFFER_DISMISS_PATH && matches!(dismissed_offer(body), Ok(first_run::AGENT_REPORTS));
+    if is_kessel_route(path) && !agent_reports_dismiss && !k2_core::app_settings::load().kessel_first_run {
         return kessel_off();
     }
     if path == COS_PATH {
@@ -1245,12 +1281,12 @@ mod tests {
         let v: Value = serde_json::from_str(&r.body).expect("json");
         assert_eq!(v["enabled"], json!(false), "the switch is off by default");
         let ids: Vec<&str> = v["rows"].as_array().expect("rows").iter().map(|r| r["id"].as_str().expect("id")).collect();
-        assert_eq!(ids, vec!["llm_sign_in", "first_agent", "tunnel", "phone", "own_sign_in"]);
+        assert_eq!(ids, vec!["llm_sign_in", "agent_reports", "first_agent", "tunnel", "phone", "own_sign_in"]);
 
         let r = handle(true, SKIP_PATH, br#"{"row":"tunnel"}"#, &Actor::owner_token());
         assert_eq!(r.status, "200 OK", "{}", r.body);
         let v: Value = serde_json::from_str(&r.body).expect("json");
-        assert_eq!(v["rows"][2], json!({ "id": "tunnel", "state": "skipped", "opens": "tunnel" }));
+        assert_eq!(v["rows"][3], json!({ "id": "tunnel", "state": "skipped", "opens": "tunnel" }));
         let mut saw = false;
         while let Ok(ev) = rx.try_recv() {
             // Other tests in this process may send their own frames.
@@ -1264,7 +1300,7 @@ mod tests {
         let r = handle(true, SHOW_PATH, b"", &Actor::owner_token());
         assert_eq!(r.status, "200 OK", "{}", r.body);
         let v: Value = serde_json::from_str(&r.body).expect("json");
-        assert_eq!(v["rows"][2], json!({ "id": "tunnel", "state": "todo", "opens": "tunnel" }));
+        assert_eq!(v["rows"][3], json!({ "id": "tunnel", "state": "todo", "opens": "tunnel" }));
         assert_eq!(v["finished"], json!(false));
 
         let r = handle(true, SKIP_PATH, br#"{"row":"nope"}"#, &Actor::owner_token());
@@ -1302,7 +1338,11 @@ mod tests {
         assert_eq!(r.content_type, "text/plain; charset=utf-8");
         assert_eq!(
             r.body,
-            "Setup: 0 of 6 done\n  [ ] Install developer tools (The Apple tools include git, which workspaces need: k2 git-tools install)\n  [ ] Sign in to an AI tool\n  [ ] Make your first agent\n  [ ] Link your subdomain\n  [ ] Connect your phone (Away from home, your phone needs your subdomain first.)\n  [ ] Make your own sign-in\nThe app does not show setup lists on this server yet.\n"
+            concat!(
+                "Setup: 0 of 7 done\n  [ ] Install developer tools (The Apple tools include git, which workspaces need: k2 git-tools install)\n  [ ] Sign in to an AI tool\n  [ ] Agent reports: not answered, so agents send none. Answer: ",
+                k2_core::cli_name!(),
+                " setup agent-reports --agents off|cli|all\n  [ ] Make your first agent\n  [ ] Link your subdomain\n  [ ] Connect your phone (Away from home, your phone needs your subdomain first.)\n  [ ] Make your own sign-in\nThe app does not show setup lists on this server yet.\n"
+            )
         );
         let r = handle_as(true, SKIP_PATH, br#"{"row": "dev_tools"}"#, &Actor::owner_token(), true);
         assert_eq!(r.status, "200 OK", "{}", r.body);
@@ -1401,3 +1441,7 @@ mod kessel_tests;
 #[cfg(test)]
 #[path = "first_run_getting_started_tests.rs"]
 mod getting_started_tests;
+
+#[cfg(test)]
+#[path = "first_run_agent_reports_tests.rs"]
+mod agent_reports_tests;

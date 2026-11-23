@@ -345,15 +345,22 @@ pub fn list(body: &[u8], want: &str) -> Shown {
                 } else {
                     " "
                 };
+                // Signed in, but the access token expired: renewed on its
+                // next use (accessNote says by whom).
+                let expired = is(py_get(a, "access", 57)?, "expired");
+                let state = if expired {
+                    "access_expired".to_string()
+                } else {
+                    or_s(py_get(a, "state", 57)?, "-")
+                };
+                let state = ljust(&state, 12);
                 let line = if is(py_get(a, "kind", 57)?, "api_key") {
                     format!(
-                        "  {mark} {} {} API token \u{b7} billed per token",
+                        "  {mark} {} {state} API token \u{b7} billed per token",
                         cut(py_get(a, "label", 58)?, 20, 20, 58)?,
-                        ljust(&or_s(py_get(a, "state", 58)?, "-"), 12)
                     )
                 } else {
                     let label = cut(py_get(a, "label", 61)?, 20, 20, 61)?;
-                    let state = ljust(&or_s(py_get(a, "state", 61)?, "-"), 12);
                     let plan = cut(py_get(a, "plan", 62)?, 8, 8, 62)?;
                     let summary = usage_summary(
                         py_get(a, "usage", 63)?,
@@ -363,6 +370,12 @@ pub fn list(body: &[u8], want: &str) -> Shown {
                     format!("  {mark} {label} {state} {plan} {summary}")
                 };
                 o.line(line.trim_end_matches(py_space));
+                if is(py_get(a, "access", 64)?, "expired") && truthy(py_get(a, "accessNote", 64)?) {
+                    o.line(format!(
+                        "      {}",
+                        py::str_of(ops::index(a, "accessNote", 64)?)
+                    ));
+                }
                 let pins = or_items(py_get(a, "pinnedTo", 65)?, 66)?;
                 if !pins.is_empty() {
                     let mut parts = Vec::new();
@@ -452,6 +465,15 @@ pub fn status(body: &[u8]) -> Shown {
                 ));
             }
         }
+        if truthy(g("access", 8)?) {
+            let access = py::str_of(ops::index(&a, "access", 9)?);
+            let note = if truthy(g("accessNote", 9)?) {
+                format!(" \u{2014} {}", py::str_of(ops::index(&a, "accessNote", 9)?))
+            } else {
+                String::new()
+            };
+            o.line(format!("  {} {access}{note}", ljust("access", 8)));
+        }
         if truthy(g("signInEndsAt", 8)?) {
             let when = local(ops::index(&a, "signInEndsAt", 10)?, "%Y-%m-%d %H:%M %Z", 10)?;
             if truthy(g("signInEndsSoon", 11)?) {
@@ -520,8 +542,19 @@ pub fn refresh(body: &[u8]) -> Shown {
     run(|o| {
         let v = load(body, 3)?;
         for a in or_items(py_get(&v, "accounts", 3)?, 4)? {
-            let state = or_s(py_get(&a, "state", 5)?, "-");
-            o.line(row(&a, state, 5)?);
+            let expired = is(py_get(&a, "access", 5)?, "expired");
+            let state = if expired {
+                "access_expired".to_string()
+            } else {
+                or_s(py_get(&a, "state", 5)?, "-")
+            };
+            o.line(row(&a, state, 6)?);
+            if expired && truthy(py_get(&a, "accessNote", 7)?) {
+                o.line(format!(
+                    "    {}",
+                    py::str_of(ops::index(&a, "accessNote", 8)?)
+                ));
+            }
         }
         Ok(())
     })

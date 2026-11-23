@@ -46,6 +46,10 @@ fn traceback(mut c: VCase) -> VCase {
 
 const LIST: &str = r#"{"tools":[{"tool":"claude","display":"Claude","supported":true,"switchedAt":1700000000,"switchedBy":"rosa","autoNext":{"on":true,"lastLine":"moved at 99%"},"accounts":[{"id":"a1","label":"Work","active":true,"state":"signed_in","plan":"max-plan-long","usage":{"windows":[{"label":"5h","used":0.425},{"label":"week","used":"0.5"}],"error":"timeout"},"usageCheckedAt":9999999999,"pinnedTo":[{"scopeKind":"session","label":"chat one"},{"scopeKind":"workspace","scopeId":"ws9"}],"inUse":true,"detail":"all good","signInEndsSoon":true,"signInEndsAt":1700003600},{"id":"a2","label":"A label that is far too long to fit","kind":"api_key","state":null},{"id":"a3","label":"Home","usage":{"status":"no reading"}}]},{"tool":"codex","display":"Codex","supported":true,"accounts":[]},{"tool":"gemini","supported":true,"subscription":false,"accounts":[]},{"tool":"cursor","display":"Cursor","supported":false}],"airgap":true,"keychainRepairs":[{"service":"Claude Code","holds":"a1","partitions":["teamid:x","apple:"],"command":"security set-key"},{"service":"s2","partitions":[]}],"switchNote":""}"#;
 
+/// A list with an expired access token on a good sign-in (the server
+/// default, with its note), one with no note, an API token, and a fine one.
+const LIST_EXPIRED: &str = r#"{"tools":[{"tool":"claude","display":"Claude","supported":true,"accounts":[{"id":"a1","label":"work","active":true,"state":"signed_in","plan":"max","access":"expired","accessNote":"Its access token expired on 2026-11-16 11:02 UTC. Its sign-in is still good: Claude renews it by itself the next time it runs on this token. Nothing to do.","detail":"d"},{"id":"a2","label":"quiet","state":"signed_in","access":"expired","accessNote":""},{"id":"a3","label":"key","kind":"api_key","state":"ok","access":"expired","accessNote":"n"},{"id":"a4","label":"personal","state":"signed_in","plan":"max","access":"fine","accessNote":"not shown"}]}]}"#;
+
 const STATUS: &str = r#"{"account":{"tool":"claude","label":"Work \"one\"","active":true,"state":"signed_in","detail":"","plan":"max","email":"a@example.com","signInEndsAt":1700003600,"signInEndsSoon":true,"usage":{"windows":[{"label":"5h","used":0.335,"resetsAt":"t1"},{"label":"weekly-window","used":1}]}}}"#;
 
 const SWITCHED: &str = r#"{"switch":{"tool":"claude","to":"a2","fromLabel":"Work","adopted":[{"created":true,"account":"x@example.com","label":"Found","foundUnder":"Work"},{"account":"y@example.com","label":"Mine"}],"needsSignIn":["Old"]},"account":{"label":"Home"},"warnings":["one warning"]}"#;
@@ -215,6 +219,12 @@ fn reads() {
             0,
         ),
         daemon("list, empty", &["accounts", "list"], vec![ok("{}")], 0),
+        daemon(
+            "list, an expired access token: access_expired and who renews it",
+            &["tokens", "list"],
+            vec![ok(LIST_EXPIRED)],
+            0,
+        ),
         daemon("list, large", &["tokens", "list"], vec![ok(big)], 0),
         // covers: llm tokens list --json
         daemon(
@@ -282,6 +292,22 @@ fn reads() {
             &["tokens", "status", "grok", "a/b?"],
             vec![ok(
                 r#"{"account":{"tool":"grok","signInEndsAt":1700003600}}"#,
+            )],
+            0,
+        ),
+        daemon(
+            "status, an expired access token and its note",
+            &["tokens", "status", "claude", "work"],
+            vec![ok(
+                r#"{"account":{"tool":"claude","label":"Work","state":"signed_in","access":"expired","accessNote":"Its access token expired on 2026-11-16 11:02 UTC. Nothing to do."}}"#,
+            )],
+            0,
+        ),
+        daemon(
+            "status, access fine with no note",
+            &["tokens", "status", "claude", "work"],
+            vec![ok(
+                r#"{"account":{"tool":"claude","label":"Work","state":"signed_in","access":"fine","accessNote":null}}"#,
             )],
             0,
         ),
@@ -518,6 +544,14 @@ fn writes() {
             "refresh all",
             &["tokens", "refresh", "--usage"],
             vec![ok(r#"{"accounts":[{"tool":"claude","label":"Work","active":true,"state":"ok"},{}]}"#)],
+            0,
+        ),
+        daemon(
+            "refresh, an expired access token",
+            &["tokens", "refresh"],
+            vec![ok(
+                r#"{"accounts":[{"tool":"claude","label":"Work","active":true,"state":"signed_in","access":"expired","accessNote":"Claude renews it by itself é."},{"tool":"codex","label":"Home","state":"signed_in","access":"expired"},{"tool":"grok","label":"Mine","state":"needs_login","access":"signed_out","accessNote":"x"}]}"#,
+            )],
             0,
         ),
         daemon(

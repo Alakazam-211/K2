@@ -23,13 +23,13 @@ skip crates/k2-core/src/workspace/context_layers.rs agent context files, written
 skip crates/k2-core/src/workspace/skill_regen.rs skill files written for agents (rebrand step B6)
 skip crates/k2-core/src/zen/skill.rs skill files written for agents
 
-601 apps
+600 apps
 371 mail
-202 compute
+193 compute
 160 apps (Sew)
 144 vault
-107 zen
 106 db
+105 zen
 65 other
 60 doc
 45 organization
@@ -42,15 +42,15 @@ skip crates/k2-core/src/zen/skill.rs skill files written for agents
 26 setup
 23 workspace
 20 agent sidecar
-17 agent
 17 desktop
 17 firewall
-16 agent hire
 16 thread
+15 agent
 15 board
 14 domain
 13 clone
 12 heartbeat
+11 agent hire
 11 connect
 11 fed
 11 front

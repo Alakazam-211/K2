@@ -788,46 +788,6 @@ fn blob_only_stats(repo: &gix::Repository, c: &FileChange) -> (u32, u32) {
     }
 }
 
-// ── Index lock retry helper ──────────────────────────────────────────────
-
-/// Maximum retries for index operations when the index is locked by another process.
-const INDEX_LOCK_RETRIES: u32 = 5;
-const INDEX_LOCK_DELAY_MS: u64 = 50;
-
-/// Check if a git2 error is an index lock contention error.
-fn is_index_locked(err: &git2::Error) -> bool {
-    let msg = err.message();
-    msg.contains("index.lock") || msg.contains("is locked") || err.code() == git2::ErrorCode::Locked
-}
-
-/// Retry getting the repository index with lock contention handling.
-pub(crate) fn get_index_with_retry(repo: &Repository) -> Result<git2::Index, String> {
-    for attempt in 0..INDEX_LOCK_RETRIES {
-        match repo.index() {
-            Ok(idx) => return Ok(idx),
-            Err(e) if is_index_locked(&e) && attempt < INDEX_LOCK_RETRIES - 1 => {
-                std::thread::sleep(std::time::Duration::from_millis(INDEX_LOCK_DELAY_MS));
-            }
-            Err(e) => return Err(format!("Failed to get index: {e}")),
-        }
-    }
-    Err("Index locked after retries".to_string())
-}
-
-/// Retry writing the index with lock contention handling.
-pub(crate) fn write_index_with_retry(index: &mut git2::Index) -> Result<(), String> {
-    for attempt in 0..INDEX_LOCK_RETRIES {
-        match index.write() {
-            Ok(()) => return Ok(()),
-            Err(e) if is_index_locked(&e) && attempt < INDEX_LOCK_RETRIES - 1 => {
-                std::thread::sleep(std::time::Duration::from_millis(INDEX_LOCK_DELAY_MS));
-            }
-            Err(e) => return Err(format!("Failed to write index: {e}")),
-        }
-    }
-    Err("Index locked after retries".to_string())
-}
-
 // ── Writes: the person's git (0.46.18) ──────────────────────────────────
 //
 // Every write below runs the installed `git` through

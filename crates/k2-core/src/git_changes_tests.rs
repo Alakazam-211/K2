@@ -595,6 +595,36 @@ fn discard_reports_trash_failure_and_leaves_the_file() {
     assert!(d.join("u.txt").exists());
 }
 
+/// Discard on the person's git: a hostile path never reaches git (refused
+/// first), a submodule is skipped, and a CRLF file under `core.autocrlf`
+/// comes back exactly as git checks it out.
+#[test]
+fn discard_restores_like_git_checkout_and_skips_submodules() {
+    let d = tmp("discard-git");
+    let trash = tmp("discard-git-trash");
+    let repo = init(&d);
+    fx::git(&d, &["config", "core.autocrlf", "true"]);
+    write(&d, "crlf.txt", "one\ntwo\n");
+    let sub = fx::init("discard-git-sub");
+    write(&sub, "s.txt", "s\n");
+    fx::commit_all(&sub, "sub");
+    fx::git(&d, &["-c", "protocol.file.allow=always", "submodule", "add", "-q", s(&sub), "sub"]);
+    commit_all(&repo, "c1");
+    std::fs::remove_file(d.join("crlf.txt")).expect("rm");
+    fx::git(&d, &["checkout", "--", "crlf.txt"]);
+    let checked_out = fs::read(d.join("crlf.txt")).expect("git's checkout");
+    write(&d, "crlf.txt", "changed\r\n");
+    write(&d, "sub/s.txt", "dirty submodule\n");
+    let out = discard(s(&d), &["crlf.txt".to_string(), "sub".to_string()], true, &trash_into(trash.clone())).expect("discard");
+    assert_eq!(fs::read(d.join("crlf.txt")).expect("restored"), checked_out, "restored as git checks it out");
+    assert_eq!(out.restored, vec!["crlf.txt".to_string()]);
+    assert!(out.skipped.iter().any(|k| k.path == "sub" && k.reason == "submodule"), "{out:?}");
+    assert_eq!(fs::read_to_string(d.join("sub/s.txt")).expect("sub"), "dirty submodule\n", "the submodule is untouched");
+    for bad in ["../x", ".git/config", ".GIT/HEAD"] {
+        assert_eq!(discard(s(&d), &[bad.to_string()], true, &trash_into(trash.clone())).expect_err(bad).code, codes::BAD_PATH);
+    }
+}
+
 #[test]
 fn discard_skips_ignored_and_clean_files() {
     let d = tmp("discard-skip");

@@ -20,7 +20,6 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, OnceLock, RwLock};
 
-use git2::{Repository, Status};
 use serde::Serialize;
 
 use crate::gitx::diff::{ChangeKind, FileChange};
@@ -47,6 +46,9 @@ pub mod codes {
     pub const BAD_REF: &str = "bad_ref";
     pub const NOT_FOUND: &str = "not_found";
     pub const CONFLICTED: &str = "conflicted";
+    /// Discard needs the person's git to restore or unstage, and none runs
+    /// here (`crate::git::refusal::GIT_NOT_INSTALLED`).
+    pub const GIT_NOT_INSTALLED: &str = "git_not_installed";
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -241,16 +243,6 @@ fn ensure_inside(workdir: &Path, full: &Path) -> Result<(), ChangesError> {
 
 fn open_gix(path: &str) -> Result<(gix::Repository, PathBuf), ChangesError> {
     let repo = crate::gitx::discover(path)
-        .map_err(|e| ChangesError::new(codes::NOT_A_REPO, format!("not a git repository: {path} ({e})")))?;
-    let workdir = repo
-        .workdir()
-        .map(Path::to_path_buf)
-        .ok_or_else(|| ChangesError::new(codes::NOT_A_REPO, format!("bare repository: {path}")))?;
-    Ok((repo, workdir))
-}
-
-fn open_repo(path: &str) -> Result<(Repository, PathBuf), ChangesError> {
-    let repo = Repository::discover(path)
         .map_err(|e| ChangesError::new(codes::NOT_A_REPO, format!("not a git repository: {path} ({e})")))?;
     let workdir = repo
         .workdir()
@@ -914,7 +906,7 @@ pub fn discard(
             format!("too many files ({} > {MAX_DISCARD_FILES})", files.len()),
         ));
     }
-    let (repo, workdir) = open_repo(path)?;
+    let (repo, workdir) = open_gix(path)?;
     let mut out = DiscardOutcome { rev_key: rev_key(&workdir), ..Default::default() };
 
     // ── validate everything first (all-or-nothing) ──
@@ -927,53 +919,67 @@ pub fn discard(
             rels.push(rel);
         }
     }
-    let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
-    let index_snapshot = repo.index().map_err(|e| ChangesError::internal(format!("read index: {e}")))?;
+    let head_tree = crate::gitx::head_tree_id(&repo);
+    let index = repo.index_or_empty().map_err(|e| ChangesError::internal(format!("read index: {e}")))?;
+    let opts = gstatus::Options { untracked: gstatus::Untracked::Files, staged_renames: false, submodules: true };
+    let by_path: HashMap<String, Flags> = gstatus::statuses(&repo, opts)
+        .map_err(|e| ChangesError::internal(format!("git status failed: {e}")))?
+        .into_iter()
+        .map(|r| (r.path, r.flags))
+        .collect();
+    let mut excludes = crate::gitx::Excludes::new(repo.clone());
+    let mut ignored = |rel: &str, is_dir: bool| excludes.as_mut().is_some_and(|x| x.is_ignored(rel, is_dir));
+    let in_index = |rel: &str| index.entries().iter().any(|e| e.path(&index) == rel.as_bytes());
     let mut plan: Vec<(String, Action)> = Vec::new();
     let mut conflicted = Vec::new();
     for rel in rels {
         let full = workdir.join(&rel);
         let meta = std::fs::symlink_metadata(&full).ok();
         if meta.as_ref().is_some_and(|m| m.is_dir()) {
+            // A submodule's folder: its gitlink is the index entry itself.
+            if in_index(&rel) {
+                out.skipped.push(DiscardSkip { path: rel, reason: "submodule".into() });
+                continue;
+            }
             let prefix = format!("{rel}/");
-            let tracked = index_snapshot.iter().any(|e| String::from_utf8_lossy(&e.path).starts_with(&prefix));
+            let tracked = index.entries().iter().any(|e| e.path(&index).starts_with(prefix.as_bytes()));
             if tracked {
                 return Err(ChangesError::new(
                     codes::BAD_REQUEST,
                     format!("'{rel}' is a directory with tracked files; name the files instead"),
                 ));
             }
-            if repo.is_path_ignored(&rel).unwrap_or(false) {
+            if ignored(&rel, true) {
                 out.skipped.push(DiscardSkip { path: rel, reason: "ignored".into() });
             } else {
                 plan.push((rel, Action::TrashUntracked));
             }
             continue;
         }
-        let status = match repo.status_file(Path::new(&rel)) {
-            Ok(s) => s,
-            Err(_) => {
-                out.skipped.push(DiscardSkip { path: rel, reason: "not found".into() });
-                continue;
-            }
+        let Some(status) = by_path.get(&rel).copied() else {
+            // Not in the status: clean, ignored, or not there at all.
+            let tracked = in_index(&rel);
+            let reason = if tracked {
+                "nothing to discard"
+            } else if meta.is_none() {
+                "not found"
+            } else if ignored(&rel, false) {
+                "ignored"
+            } else {
+                "nothing to discard"
+            };
+            out.skipped.push(DiscardSkip { path: rel, reason: reason.into() });
+            continue;
         };
-        if status.is_conflicted() {
+        if status.contains(Flags::CONFLICTED) {
             conflicted.push(rel);
             continue;
         }
-        if status.is_ignored() {
-            out.skipped.push(DiscardSkip { path: rel, reason: "ignored".into() });
-            continue;
-        }
-        if status.is_wt_new() {
+        if status.contains(Flags::WT_NEW) {
             plan.push((rel, Action::TrashUntracked));
             continue;
         }
-        if status.is_empty() || status == Status::CURRENT {
-            out.skipped.push(DiscardSkip { path: rel, reason: "nothing to discard".into() });
-            continue;
-        }
-        let wt_dirty = status.intersects(Status::WT_MODIFIED | Status::WT_DELETED | Status::WT_TYPECHANGE | Status::WT_RENAMED);
+        let wt_dirty = status.intersects(Flags::WT_MODIFIED | Flags::WT_DELETED | Flags::WT_TYPECHANGE);
         if !include_staged {
             if wt_dirty {
                 plan.push((rel, Action::RestoreFromIndex));
@@ -982,19 +988,12 @@ pub fn discard(
             }
             continue;
         }
-        let in_head = head_tree.as_ref().is_some_and(|t| t.get_path(Path::new(&rel)).is_ok());
-        if in_head {
-            let is_submodule = head_tree
-                .as_ref()
-                .and_then(|t| t.get_path(Path::new(&rel)).ok())
-                .is_some_and(|e| e.kind() == Some(git2::ObjectType::Commit));
-            if is_submodule {
+        match head_tree.and_then(|t| crate::gitx::tree_entry(&repo, t, &rel)) {
+            Some((crate::gitx::EntryKind::Commit, _)) => {
                 out.skipped.push(DiscardSkip { path: rel, reason: "submodule".into() });
-            } else {
-                plan.push((rel, Action::ResetToHead));
             }
-        } else {
-            plan.push((rel, Action::RemoveFromIndex));
+            Some(_) => plan.push((rel, Action::ResetToHead)),
+            None => plan.push((rel, Action::RemoveFromIndex)),
         }
     }
     if !conflicted.is_empty() {
@@ -1003,99 +1002,74 @@ pub fn discard(
             format!("resolve the merge conflict first: {}", conflicted.join(", ")),
         ));
     }
-    drop(index_snapshot);
+    // Restoring and unstaging run the person's git: refuse before anything
+    // moves to the Trash when it isn't installed.
+    if plan.iter().any(|(_, a)| !matches!(a, Action::TrashUntracked)) {
+        crate::git_safe::require_git().map_err(|e| {
+            let hint = e.strip_prefix(&format!("{}: ", crate::git::refusal::GIT_NOT_INSTALLED)).unwrap_or(&e).to_string();
+            ChangesError::new(codes::GIT_NOT_INSTALLED, hint)
+        })?;
+    }
 
     // ── act ──
-    let checkout = |repo: &Repository, rel: &str| -> Result<(), String> {
-        let mut cb = git2::build::CheckoutBuilder::new();
-        // Checkout paths are pathspecs: escape glob characters so a file
-        // named `*.rs` restores only itself.
-        cb.force().path(pathspec_literal(rel));
-        repo.checkout_index(None, Some(&mut cb)).map_err(|e| format!("checkout {rel}: {e}"))
-    };
+    // Every working copy that would be lost is in the Trash before git
+    // writes; git then restores from the index (or HEAD) and edits its own
+    // index.
+    let git = |what: &str, args: &[&str]| crate::git_safe::run_write_ok(&workdir, what, args).map(|_| ());
     for (rel, action) in plan {
         let full = workdir.join(&rel);
         let exists = std::fs::symlink_metadata(&full).is_ok();
         let fail = |out: &mut DiscardOutcome, e: String| out.failed.push(DiscardFail { path: rel.clone(), error: e });
+        let trash_first = |out: &mut DiscardOutcome| -> bool {
+            if !exists {
+                return true;
+            }
+            match trash(&full) {
+                Ok(()) => {
+                    out.trashed.push(rel.clone());
+                    true
+                }
+                Err(e) => {
+                    out.failed.push(DiscardFail { path: rel.clone(), error: e });
+                    false
+                }
+            }
+        };
         match action {
             Action::TrashUntracked => match trash(&full) {
                 Ok(()) => out.trashed.push(rel.clone()),
                 Err(e) => fail(&mut out, e),
             },
             Action::RestoreFromIndex => {
-                if exists {
-                    if let Err(e) = trash(&full) {
-                        fail(&mut out, e);
-                        continue;
-                    }
-                    out.trashed.push(rel.clone());
+                if !trash_first(&mut out) {
+                    continue;
                 }
-                match checkout(&repo, &rel) {
+                match git(&format!("checkout {rel}"), &["checkout", "-q", "--", &rel]) {
                     Ok(()) => out.restored.push(rel.clone()),
                     Err(e) => fail(&mut out, e),
                 }
             }
             Action::ResetToHead => {
-                if exists {
-                    if let Err(e) = trash(&full) {
-                        fail(&mut out, e);
-                        continue;
-                    }
-                    out.trashed.push(rel.clone());
+                if !trash_first(&mut out) {
+                    continue;
                 }
-                let reset = (|| -> Result<bool, String> {
-                    let tree = head_tree.as_ref().ok_or("no HEAD")?;
-                    let entry = tree.get_path(Path::new(&rel)).map_err(|e| e.to_string())?;
-                    let mut index = crate::git::get_index_with_retry(&repo)?;
-                    let changed = index.get_path(Path::new(&rel), 0).map(|e| e.id) != Some(entry.id());
-                    if changed {
-                        let blob = repo.find_blob(entry.id()).map_err(|e| e.to_string())?;
-                        index
-                            .add(&git2::IndexEntry {
-                                ctime: git2::IndexTime::new(0, 0),
-                                mtime: git2::IndexTime::new(0, 0),
-                                dev: 0,
-                                ino: 0,
-                                mode: entry.filemode() as u32,
-                                uid: 0,
-                                gid: 0,
-                                file_size: blob.size() as u32,
-                                id: entry.id(),
-                                flags: 0,
-                                flags_extended: 0,
-                                path: rel.as_bytes().to_vec(),
-                            })
-                            .map_err(|e| e.to_string())?;
-                        crate::git::write_index_with_retry(&mut index)?;
-                    }
-                    Ok(changed)
-                })();
-                match reset {
-                    Ok(changed) => {
-                        if changed {
+                let head_id = head_tree.and_then(|t| crate::gitx::tree_entry(&repo, t, &rel)).map(|e| e.1);
+                let staged = crate::gitx::index_entry(&index, &rel).map(|e| e.1) != head_id;
+                match git(&format!("checkout HEAD {rel}"), &["checkout", "-q", "HEAD", "--", &rel]) {
+                    Ok(()) => {
+                        if staged {
                             out.unstaged.push(rel.clone());
                         }
-                        match checkout(&repo, &rel) {
-                            Ok(()) => out.restored.push(rel.clone()),
-                            Err(e) => fail(&mut out, e),
-                        }
+                        out.restored.push(rel.clone());
                     }
                     Err(e) => fail(&mut out, e),
                 }
             }
             Action::RemoveFromIndex => {
-                if exists {
-                    if let Err(e) = trash(&full) {
-                        fail(&mut out, e);
-                        continue;
-                    }
-                    out.trashed.push(rel.clone());
+                if !trash_first(&mut out) {
+                    continue;
                 }
-                let removed = crate::git::get_index_with_retry(&repo).and_then(|mut index| {
-                    index.remove_path(Path::new(&rel)).map_err(|e| e.to_string())?;
-                    crate::git::write_index_with_retry(&mut index)
-                });
-                match removed {
+                match git(&format!("unstage {rel}"), &["rm", "-q", "--cached", "--ignore-unmatch", "--", &rel]) {
                     Ok(()) => out.unstaged.push(rel.clone()),
                     Err(e) => fail(&mut out, e),
                 }
@@ -1166,18 +1140,6 @@ impl RepoDirs {
     pub fn workdir_forms(&self) -> &[String] {
         &self.workdir_forms
     }
-}
-
-/// A pathspec that matches `rel` literally (`\` before `* ? [ ] \`).
-pub(crate) fn pathspec_literal(rel: &str) -> String {
-    let mut out = String::with_capacity(rel.len());
-    for c in rel.chars() {
-        if matches!(c, '*' | '?' | '[' | ']' | '\\') {
-            out.push('\\');
-        }
-        out.push(c);
-    }
-    out
 }
 
 /// The dirs of the non-bare repo holding `path`.

@@ -238,6 +238,10 @@ fn child_writes_without_git() {
     let fresh = fx::tmp("write-nogit-init");
     refused("init", init_repo(s(&fresh)));
     assert!(!fresh.join(".git").exists());
+    let e = crate::git_changes::discard(s(&d), &["a.txt".to_string()], false, &|_| panic!("nothing goes to the Trash"))
+        .expect_err("discard");
+    assert_eq!(e.code, crate::git_changes::codes::GIT_NOT_INSTALLED, "{e}");
+    assert!(e.hint.contains("this needs git"), "{e}");
     // Reads still work.
     assert_eq!(crate::git::get_changed_files(s(&d)).len(), 1);
 }

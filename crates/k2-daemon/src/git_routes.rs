@@ -61,7 +61,7 @@ fn flag_param(params: &HashMap<String, String>, key: &str) -> bool {
 fn changes_error(e: git_changes::ChangesError) -> CliResponse {
     let status = match e.code {
         git_changes::codes::NOT_FOUND => "404 Not Found",
-        git_changes::codes::CONFLICTED => "409 Conflict",
+        git_changes::codes::CONFLICTED | git_changes::codes::GIT_NOT_INSTALLED => "409 Conflict",
         _ => "400 Bad Request",
     };
     CliResponse {

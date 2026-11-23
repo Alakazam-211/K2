@@ -1268,6 +1268,12 @@ pub fn job_by_id(conn: &Connection, id: &str) -> Option<JobRow> {
 
 /// A job by id or by an unambiguous id prefix (≥ 4 chars), as agents
 /// type the short id the CLI prints.
+///
+/// The prefix is a range on the primary key (`id >= p AND id < p + 0x7f`),
+/// so it is a short index seek, never a scan of the whole jobs table (a
+/// `LIKE p || '%'` can't use the index: 391 ms average under the main lock
+/// on a busy controller, 0.46.17). Job ids are lowercase hex; a prefix
+/// typed in capitals finds them too, as the `LIKE` did.
 pub fn find_job(conn: &Connection, token: &str) -> Option<JobRow> {
     let t = token.trim();
     if let Some(j) = job_by_id(conn, t) {
@@ -1276,14 +1282,13 @@ pub fn find_job(conn: &Connection, token: &str) -> Option<JobRow> {
     if t.len() < 4 || !t.chars().all(|c| c.is_ascii_hexdigit()) {
         return None;
     }
-    let mut stmt = conn
-        .prepare(&format!("SELECT {JOB_COLS} FROM compute_jobs WHERE id LIKE ?1 || '%' LIMIT 2"))
-        .ok()?;
-    let rows: Vec<JobRow> = stmt.query_map(params![t], job_from_row).ok()?.filter_map(Result::ok).collect();
-    if rows.len() == 1 {
-        rows.into_iter().next()
-    } else {
-        None
+    let lo = t.to_ascii_lowercase();
+    let hi = format!("{lo}\u{7f}");
+    let mut stmt = conn.prepare("SELECT id FROM compute_jobs WHERE id >= ?1 AND id < ?2 ORDER BY id LIMIT 2").ok()?;
+    let ids: Vec<String> = stmt.query_map(params![lo, hi], |r| r.get(0)).ok()?.filter_map(Result::ok).collect();
+    match ids.as_slice() {
+        [one] => job_by_id(conn, one),
+        _ => None,
     }
 }
 
@@ -2173,6 +2178,8 @@ mod tests {
         assert_eq!(j.env_names, vec!["RUST_LOG".to_string()]);
         assert_eq!(j.plan().unwrap(), p);
         assert_eq!(find_job(&c, "abcdef01").unwrap().id, j.id);
+        assert_eq!(find_job(&c, "ABCDEF01").unwrap().id, j.id, "a prefix in capitals finds it too");
+        assert_eq!(find_job(&c, &format!("  {}  ", j.id)).unwrap().id, j.id, "the full id, trimmed");
         assert!(find_job(&c, "abc").is_none(), "too short a prefix");
         assert_eq!(job_by_client_id(&c, "ws", "client-0000000001").unwrap().id, j.id);
         assert!(insert_job(
@@ -2190,6 +2197,41 @@ mod tests {
         let r = requeue_new_attempt(&c, &j.id, "retry").unwrap();
         assert_eq!((r.state.as_str(), r.attempt, r.generation, r.exit_code, r.ended_at), ("queued", 2, 2, None, None));
         assert_eq!(jobs_in_states(&c, "n1", &["queued"]).len(), 1);
+    }
+
+    /// A short id finds its one job by a seek on the primary key: two jobs
+    /// sharing the prefix are ambiguous (none), no job is none, and the
+    /// lookup never scans the table (0.46.17: 391 ms a lookup under the lock).
+    #[test]
+    fn find_job_by_prefix_is_an_index_seek_and_refuses_ambiguity() {
+        let c = conn();
+        let ids = ["aaaa1111000000000000000000000001", "aaaa2222000000000000000000000002", "aaab0000000000000000000000000003", "f0000000000000000000000000000004"];
+        for (i, id) in ids.iter().enumerate() {
+            insert_job(
+                &c,
+                &NewJob { plan: &plan(id, "n1", "ws"), client_job_id: &format!("client-prefix-{i}"), session_id: None, request_sha256: "h", detach: false, retry_interrupted: false, ctl: JobCtl::default() },
+            )
+            .unwrap();
+        }
+        assert_eq!(find_job(&c, "aaaa1").unwrap().id, ids[0]);
+        assert_eq!(find_job(&c, "aaaa2222").unwrap().id, ids[1]);
+        assert_eq!(find_job(&c, "aaab").unwrap().id, ids[2], "the next prefix up is its own job");
+        assert_eq!(find_job(&c, "F000").unwrap().id, ids[3], "capitals");
+        assert!(find_job(&c, "aaaa").is_none(), "two jobs share aaaa: ambiguous, none");
+        assert!(find_job(&c, "aaa").is_none(), "too short");
+        assert!(find_job(&c, "bbbb").is_none(), "no job starts with bbbb");
+        assert!(find_job(&c, "ffff").is_none(), "past the last id");
+        assert!(find_job(&c, "aaaa-111").is_none(), "not hex");
+        assert_eq!(find_job(&c, ids[1]).unwrap().id, ids[1], "the exact id first");
+        let plan_rows: Vec<String> = c
+            .prepare("EXPLAIN QUERY PLAN SELECT id FROM compute_jobs WHERE id >= ?1 AND id < ?2 ORDER BY id LIMIT 2")
+            .unwrap()
+            .query_map(params!["aaaa", "aaaa\u{7f}"], |r| r.get::<_, String>(3))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert!(plan_rows.iter().any(|d| d.contains("USING") && d.contains("INDEX") && d.contains("id>?")), "an index seek on id: {plan_rows:?}");
+        assert!(!plan_rows.iter().any(|d| d.starts_with("SCAN")), "never a scan: {plan_rows:?}");
     }
 
     /// Two jobs submitted in the same second: listed in submit order.

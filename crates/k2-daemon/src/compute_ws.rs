@@ -127,11 +127,142 @@ fn follower_recent(job_id: &str) -> bool {
         .is_some_and(|t| t.elapsed() < Duration::from_secs(45))
 }
 
+/// Something in compute changed and the caller can't say which job: wakes
+/// every list-level watcher and every job's waiters.
 pub fn notify_change() {
+    bump_change();
+    ring_job_waiters(|_| true);
+}
+
+/// Job `job_id` changed (its log, its state): wakes the list-level
+/// watchers and that job's own waiters only, never every long-poll.
+pub fn notify_job(job_id: &str) {
+    bump_change();
+    ring_job_waiters(|w| w.jobs.iter().any(|j| j == job_id));
+}
+
+/// Node `node_id`'s queue changed (an offer, a placement, a job end there):
+/// wakes the list-level watchers and the waiters whose answer depends on
+/// that node's queue (a job queued here for it: its position and reason).
+pub fn notify_node(node_id: &str) {
+    bump_change();
+    ring_job_waiters(|w| w.nodes.iter().any(|n| n == node_id));
+}
+
+/// Only the list-level watchers (an artifact transfer moved): no job's
+/// state, log or queue changed.
+fn notify_transfer() {
+    bump_change();
+}
+
+fn bump_change() {
     let (m, cv) = &CHANGE;
     let mut g = m.lock().unwrap_or_else(|p| p.into_inner());
     *g = g.wrapping_add(1);
     cv.notify_all();
+}
+
+/// One long-poll's doorbell: rung (counter up) by the changes it watches.
+#[derive(Default)]
+struct Bell {
+    rung: Mutex<u64>,
+    cv: Condvar,
+}
+
+impl Bell {
+    fn ring(&self) {
+        let mut g = self.rung.lock().unwrap_or_else(|p| p.into_inner());
+        *g = g.wrapping_add(1);
+        self.cv.notify_all();
+    }
+}
+
+/// What one job waiter watches: the jobs whose changes end its wait, and
+/// the nodes whose queue changes do (a queued job's position).
+struct JobWaiter {
+    jobs: Vec<String>,
+    nodes: Vec<String>,
+    bell: Arc<Bell>,
+}
+
+/// The live job waiters (`jobs/get?wait=`, `jobs/logs?wait=`), by key.
+static JOB_WAITERS: Mutex<Option<HashMap<u64, JobWaiter>>> = Mutex::new(None);
+static NEXT_WAITER: AtomicU64 = AtomicU64::new(1);
+
+fn ring_job_waiters(pick: impl Fn(&JobWaiter) -> bool) {
+    let g = JOB_WAITERS.lock().unwrap_or_else(|p| p.into_inner());
+    for w in g.as_ref().into_iter().flat_map(|m| m.values()).filter(|w| pick(w)) {
+        w.bell.ring();
+    }
+}
+
+/// A long-poll on particular jobs: woken by [`notify_job`] for one of its
+/// jobs, [`notify_node`] for one of its nodes, and every [`notify_change`]
+/// (not by another job's log chunk or state). Unregisters on drop.
+///
+/// Use: [`JobWatch::watch`] what the answer depends on, then
+/// [`JobWatch::seen`], read, and [`JobWatch::wait`] with that `seen`, so a
+/// change after the read ends the wait at once.
+pub struct JobWatch {
+    key: u64,
+    bell: Arc<Bell>,
+}
+
+impl JobWatch {
+    pub fn new() -> Self {
+        let key = NEXT_WAITER.fetch_add(1, Ordering::Relaxed);
+        let bell = Arc::new(Bell::default());
+        let mut g = JOB_WAITERS.lock().unwrap_or_else(|p| p.into_inner());
+        g.get_or_insert_with(HashMap::new).insert(key, JobWaiter { jobs: Vec::new(), nodes: Vec::new(), bell: bell.clone() });
+        Self { key, bell }
+    }
+
+    /// Watch these jobs and nodes from now on. Returns whether that
+    /// changed what it watched.
+    pub fn watch(&self, jobs: Vec<String>, nodes: Vec<String>) -> bool {
+        let mut g = JOB_WAITERS.lock().unwrap_or_else(|p| p.into_inner());
+        match g.get_or_insert_with(HashMap::new).get_mut(&self.key) {
+            Some(w) if w.jobs == jobs && w.nodes == nodes => false,
+            Some(w) => {
+                w.jobs = jobs;
+                w.nodes = nodes;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The bell's count now (pass it to [`JobWatch::wait`]).
+    pub fn seen(&self) -> u64 {
+        *self.bell.rung.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Block until the bell rings past `seen`, or `timeout` passes.
+    pub fn wait(&self, seen: u64, timeout: Duration) {
+        let g = self.bell.rung.lock().unwrap_or_else(|p| p.into_inner());
+        let _ = self.bell.cv.wait_timeout_while(g, timeout, |c| *c == seen);
+    }
+}
+
+impl Default for JobWatch {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for JobWatch {
+    fn drop(&mut self) {
+        let mut g = JOB_WAITERS.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(m) = g.as_mut() {
+            m.remove(&self.key);
+        }
+    }
+}
+
+/// Live job waiters (tests).
+#[doc(hidden)]
+pub fn job_waiters_now() -> usize {
+    JOB_WAITERS.lock().unwrap_or_else(|p| p.into_inner()).as_ref().map_or(0, HashMap::len)
 }
 
 /// Current change counter.
@@ -1139,7 +1270,7 @@ fn on_offer(node_id: &str, o: Offer) {
         crate::compute_place::share_changed(&b, share_now.as_ref());
     }
     kick(node_id);
-    notify_change();
+    notify_node(node_id);
 }
 
 // ── the node's queue view (`k2 compute queue`) ───────────────────────
@@ -1206,7 +1337,9 @@ fn on_log(tallies: &mut HashMap<(String, u32), LogTally>, l: LogChunk) {
                 t.flushed = Instant::now();
                 flush_tally(&l.job_id, t);
             }
-            notify_change();
+            // That job's followers only: a chunk is never every long-poll's
+            // business (0.46.17: each chunk woke them all).
+            notify_job(&l.job_id);
         }
         Ok(false) => {}
         Err(e) => log_debug!("[compute] log append {}: {e}", l.job_id),
@@ -2099,8 +2232,10 @@ fn on_state(node_id: &str, s: StateUpdate) {
     if s.state.is_terminal() {
         crate::compute_secrets::belt_disarm(&s.job_id, s.generation);
         kick(node_id);
+        // A slot freed there: its queued jobs' positions may move.
+        notify_node(node_id);
     }
-    notify_change();
+    notify_job(&s.job_id);
 }
 
 /// An end a node's snapshot reported before this server stored that
@@ -2528,7 +2663,7 @@ fn on_artifact_chunk(node_id: &str, c: ArtifactChunk) {
     if let Some(a) = ack {
         send_to(node_id, a);
     }
-    notify_change();
+    notify_transfer();
 }
 
 fn on_artifact_failed(node_id: &str, f: ArtifactFailed) {
@@ -2539,7 +2674,7 @@ fn on_artifact_failed(node_id: &str, f: ArtifactFailed) {
             finish_pull(p, Err((code, msg)));
         }
     });
-    notify_change();
+    notify_transfer();
 }
 
 /// The node's live session, by id (a reconnect is a new one).
@@ -2856,7 +2991,7 @@ pub fn fetch_artifact_wait(
                     b.at = Instant::now();
                 }
             });
-            notify_change();
+            notify_transfer();
         });
     }
     let deadline = Instant::now() + wait;
@@ -3251,44 +3386,52 @@ fn shared_pass(conn: &rusqlite::Connection, node_id: &str, offer: &Offer, view: 
 
 /// The scheduler's current view of a node (for display): position and
 /// reason per queued job.
+///
+/// Reads on a pooled reader ([`k2_core::db::read`]), never the main lock,
+/// and decides outside any lock: a `get` of a queued job runs this on
+/// every check, and under the main lock it held up every UI route
+/// (0.46.17). `kick` acts on it with compare-and-set writes, as before.
 pub fn decision_for(node_id: &str) -> scheduler::Decision {
     let offer = live_view(node_id).2;
     let turns = turns_of(node_id);
-    let db = k2_core::db::shared();
-    let conn = db.lock();
-    let pause = store::node_by_id(&conn, node_id).and_then(|n| n.controller_pause);
-    if let Some((o, v)) = offer.as_ref().filter(|o| share::is_shared(o)).and_then(|o| o.share.as_ref().map(|v| (o, v))) {
-        let pass = shared_pass(&conn, node_id, o, v, &turns, pause.as_deref());
-        let mut waiting = pass.waiting;
-        for (id, r) in pass.fail {
-            waiting.insert(id, (0, r));
-        }
-        let now = compute::now();
-        for j in store::jobs_in_states(&conn, node_id, &["queued"]) {
+    let now = compute::now();
+    let backoff = |queued: &[store::JobRow], waiting: &mut BTreeMap<String, (usize, frames::Refusal)>| {
+        for j in queued {
             if let Some(nb) = j.ctl.not_before.filter(|nb| *nb > now) {
                 let pos = waiting.len() + 1;
                 waiting.insert(j.id.clone(), (pos, frames::Refusal::new("retry_backoff", format!("retrying after an infrastructure failure in {}s", nb - now))));
             }
         }
+    };
+    if let Some((o, v)) = offer.as_ref().filter(|o| share::is_shared(o)).and_then(|o| o.share.as_ref().map(|v| (o, v))) {
+        // The shared pass reads as it goes (grants per job): one snapshot.
+        let (pass, queued) = k2_core::db::read(|conn| {
+            let pause = store::node_by_id(conn, node_id).and_then(|n| n.controller_pause);
+            (shared_pass(conn, node_id, o, v, &turns, pause.as_deref()), store::jobs_in_states(conn, node_id, &["queued"]))
+        });
+        let mut waiting = pass.waiting;
+        for (id, r) in pass.fail {
+            waiting.insert(id, (0, r));
+        }
+        backoff(&queued, &mut waiting);
         return scheduler::Decision { place: None, waiting };
     }
-    let (queue, load) = queued_view_for(&conn, node_id, offer.as_ref());
+    let (pause, queued, active, grants) = k2_core::db::read(|conn| {
+        (
+            store::node_by_id(conn, node_id).and_then(|n| n.controller_pause),
+            store::jobs_in_states(conn, node_id, &["queued"]),
+            store::jobs_in_states(conn, node_id, store::ACTIVE_STATES),
+            store::grants(conn, Some(node_id), None),
+        )
+    });
+    let (queue, load) = queued_view_of(&queued, &active, offer.as_ref());
     let grants: HashMap<String, crate::compute_place::GrantCaps> =
-        store::grants(&conn, Some(node_id), None).into_iter().map(|g| (g.workspace_id.clone(), crate::compute_place::GrantCaps::of(&g))).collect();
+        grants.into_iter().map(|g| (g.workspace_id.clone(), crate::compute_place::GrantCaps::of(&g))).collect();
     let par = |ws: &str| grants.get(ws).map(|c| c.ws).unwrap_or(1);
     let sub = |ws: &str| grants.get(ws).map(|c| c.submitter).unwrap_or(0);
     let caps = scheduler::Limits { grant_max_parallel: &par, submitter_max_running: &sub };
-    let mut d = scheduler::decide_with(compute::now(), &queue, &turns, &load, &caps, offer.as_ref(), pause.as_deref());
-    let now = compute::now();
-    for j in store::jobs_in_states(&conn, node_id, &["queued"]) {
-        if let Some(nb) = j.ctl.not_before.filter(|nb| *nb > now) {
-            let pos = d.waiting.len() + 1;
-            d.waiting.insert(
-                j.id.clone(),
-                (pos, frames::Refusal::new("retry_backoff", format!("retrying after an infrastructure failure in {}s", nb - now))),
-            );
-        }
-    }
+    let mut d = scheduler::decide_with(now, &queue, &turns, &load, &caps, offer.as_ref(), pause.as_deref());
+    backoff(&queued, &mut d.waiting);
     d
 }
 
@@ -3304,18 +3447,32 @@ fn kick_shared(node_id: &str, tx: &mpsc::UnboundedSender<Out>, offer: &Offer) {
     let Some(view) = offer.share.as_ref() else { return };
     let turns = turns_of(node_id);
     let now = compute::now();
-    let pass = {
+    // The pass reads and decides on a pooled reader, never under the main
+    // lock; only the reasons that changed are written under it, each
+    // re-checked there (every send below is compare-and-set too).
+    let pass = k2_core::db::read(|conn| {
+        let pause = store::node_by_id(conn, node_id).and_then(|n| n.controller_pause);
+        shared_pass(conn, node_id, offer, view, &turns, pause.as_deref())
+    });
+    let stale: Vec<(&String, &frames::Refusal)> = {
+        let ids: Vec<&String> = pass.waiting.keys().collect();
+        let rows: HashMap<String, store::JobRow> =
+            k2_core::db::read(|conn| ids.iter().filter_map(|id| store::job_by_id(conn, id)).map(|j| (j.id.clone(), j)).collect());
+        pass.waiting
+            .iter()
+            .filter(|(id, (_, why))| rows.get(*id).is_some_and(|j| j.state == "queued" && j.reason.as_deref() != Some(why.code.as_str())))
+            .map(|(id, (_, why))| (id, why))
+            .collect()
+    };
+    if !stale.is_empty() {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        let pause = store::node_by_id(&conn, node_id).and_then(|n| n.controller_pause);
-        let pass = shared_pass(&conn, node_id, offer, view, &turns, pause.as_deref());
-        for (id, (_, why)) in &pass.waiting {
+        for (id, why) in stale {
             if let Some(j) = store::job_by_id(&conn, id).filter(|j| j.state == "queued" && j.reason.as_deref() != Some(why.code.as_str())) {
                 store::set_job_reason(&conn, &j.id, Some(&why.code), Some(&why.message));
             }
         }
-        pass
-    };
+    }
     let mut failed = Vec::new();
     {
         let db = k2_core::db::shared();
@@ -3369,8 +3526,10 @@ fn kick_shared(node_id: &str, tx: &mpsc::UnboundedSender<Out>, offer: &Offer) {
         note_turn(node_id, &job);
         sent_any = true;
     }
-    if sent_any || !failed.is_empty() {
+    if !failed.is_empty() {
         notify_change();
+    } else if sent_any {
+        notify_node(node_id);
     }
 }
 
@@ -3386,11 +3545,29 @@ pub fn kick(node_id: &str) {
         return kick_shared(node_id, &tx, &o);
     }
     let decision = decision_for(node_id);
-    let failed = {
+    // Only the waiting jobs whose row must change (a fail, a new reason)
+    // are written, under the main lock; which ones is a pooled read, so a
+    // long queue is never walked under the lock on every kick (0.46.17).
+    let touch: Vec<&String> = {
+        let ids: Vec<&String> = decision.waiting.keys().collect();
+        let rows: HashMap<String, store::JobRow> =
+            k2_core::db::read(|conn| ids.iter().filter_map(|id| store::job_by_id(conn, id)).map(|j| (j.id.clone(), j)).collect());
+        decision
+            .waiting
+            .iter()
+            .filter(|(id, (_, why))| {
+                rows.get(*id).is_some_and(|j| j.state == "queued" && (why.code == scheduler::EXCEEDS_NODE_CAPS || j.reason.as_deref() != Some(why.code.as_str())))
+            })
+            .map(|(id, _)| id)
+            .collect()
+    };
+    let failed = if touch.is_empty() {
+        Vec::new()
+    } else {
         let db = k2_core::db::shared();
         let conn = db.lock();
         let mut failed = Vec::new();
-        for (id, (_, why)) in &decision.waiting {
+        for (id, (_, why)) in touch.into_iter().filter_map(|id| decision.waiting.get_key_value(id)) {
             if let Some(j) = store::job_by_id(&conn, id) {
                 // Over the node's caps (queued before this check — e.g. the
                 // first kick after 0.46.1 installs — or the node's policy
@@ -3495,7 +3672,7 @@ pub fn kick(node_id: &str) {
     drop(conn);
     crate::compute_place::note_pending(node_id, &job.id, ask_mem, ask_cpu, offer.as_ref().map(|o| o.revision).unwrap_or(0), compute::now());
     note_turn(node_id, &job);
-    notify_change();
+    notify_node(node_id);
 }
 
 /// The stored plan fitted to the node's features before it is sent (T11,

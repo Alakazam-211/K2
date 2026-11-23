@@ -16,11 +16,7 @@ use crate::compute_ws;
 
 /// The job's attempts, oldest first (the current one last).
 pub(crate) fn list(j: &store::JobRow) -> serde_json::Value {
-    let names: HashMap<String, String> = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        store::list_nodes(&conn, true).into_iter().map(|n| (n.id, n.name)).collect()
-    };
+    let names: HashMap<String, String> = k2_core::db::read(|conn| store::list_nodes(conn, true)).into_iter().map(|n| (n.id, n.name)).collect();
     attempts::list_json(j, &names).into()
 }
 
@@ -85,15 +81,14 @@ pub(crate) fn job_logs(who: &Who, params: &HashMap<String, String>) -> R<serde_j
     let max = params.get("max").and_then(|m| m.parse::<usize>().ok()).unwrap_or(256 * 1024).clamp(1024, 1 << 20);
     let wait = params.get("wait").and_then(|w| w.parse::<u64>().ok()).unwrap_or(0).min(25);
     let deadline = Instant::now() + Duration::from_secs(wait);
+    // Woken by this job's own chunks and state only (never another job's),
+    // and each re-read is a pooled read, never the main lock (0.46.17).
+    let watch = compute_ws::JobWatch::new();
+    watch.watch(vec![j.id.clone()], Vec::new());
     loop {
-        let seen = compute_ws::change_counter();
+        let seen = watch.seen();
         let (recs, next) = logs::read_from(&j.id, generation, cursor, max);
-        let row = {
-            let db = k2_core::db::shared();
-            let conn = db.lock();
-            store::job_by_id(&conn, &j.id)
-        }
-        .ok_or_else(|| no(codes::JOB_NOT_FOUND, 404, "the job vanished"))?;
+        let row = k2_core::db::read(|conn| store::job_by_id(conn, &j.id)).ok_or_else(|| no(codes::JOB_NOT_FOUND, 404, "the job vanished"))?;
         let terminal = row.is_terminal() || row.generation != generation;
         let now = Instant::now();
         if !recs.is_empty() || terminal || now >= deadline {
@@ -127,6 +122,6 @@ pub(crate) fn job_logs(who: &Who, params: &HashMap<String, String>) -> R<serde_j
             }
             return Ok(out);
         }
-        compute_ws::wait_change(seen, deadline - now);
+        watch.wait(seen, deadline - now);
     }
 }

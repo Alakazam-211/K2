@@ -11,18 +11,19 @@ use crate::compute_ws;
 
 /// The parent's shards with their node names, shard 1 first.
 pub fn children(parent: &JobRow) -> Vec<(JobRow, Option<String>)> {
-    let db = k2_core::db::shared();
-    let conn = db.lock();
-    parent
-        .ctl
-        .shards
-        .iter()
-        .filter_map(|id| store::job_by_id(&conn, id))
-        .map(|j| {
-            let name = store::node_by_id(&conn, &j.node_id).map(|n| n.name);
-            (j, name)
-        })
-        .collect()
+    // A pooled read (a waiting `get` of a split run reads this each check).
+    k2_core::db::read(|conn| {
+        parent
+            .ctl
+            .shards
+            .iter()
+            .filter_map(|id| store::job_by_id(conn, id))
+            .map(|j| {
+                let name = store::node_by_id(conn, &j.node_id).map(|n| n.name);
+                (j, name)
+            })
+            .collect()
+    })
 }
 
 /// A shard reached a terminal state: if it was the last one, end the

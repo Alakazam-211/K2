@@ -3553,13 +3553,11 @@ pub(crate) fn pinned_now(who: &Who, ws: &Ws, want: &crate::compute_place::Want, 
 /// node it ran on. Another workspace's job is `job_not_found` (no leak).
 fn same_node_as(ws: &Ws, v: &serde_json::Value) -> R<Option<(store::NodeRow, String)>> {
     let Some(t) = s(v, "sameNodeAs") else { return Ok(None) };
-    let (job, node) = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        let j = store::find_job(&conn, t).filter(|j| j.workspace_id == ws.id);
-        let n = j.as_ref().and_then(|j| store::node_by_id(&conn, &j.node_id));
+    let (job, node) = k2_core::db::read(|conn| {
+        let j = store::find_job(conn, t).filter(|j| j.workspace_id == ws.id);
+        let n = j.as_ref().and_then(|j| store::node_by_id(conn, &j.node_id));
         (j, n)
-    };
+    });
     let Some(j) = job else {
         return Err(no(codes::JOB_NOT_FOUND, 404, format!("--same-node-as: no job '{t}' in workspace {} (k2 compute jobs)", ws.handle)));
     };
@@ -3834,12 +3832,8 @@ pub(crate) fn job_for(who: &Who, token: Option<&str>) -> R<store::JobRow> {
     need_credential(who)?;
     let gate = passport_gate(who)?;
     let t = token.ok_or_else(|| no(codes::BAD_REQUEST, 400, "name a job"))?;
-    let j = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        store::find_job(&conn, t)
-    }
-    .ok_or_else(|| no(codes::JOB_NOT_FOUND, 404, format!("no job '{t}'")))?;
+    // A pooled read: every get/logs/cancel names its job here.
+    let j = k2_core::db::read(|conn| store::find_job(conn, t)).ok_or_else(|| no(codes::JOB_NOT_FOUND, 404, format!("no job '{t}'")))?;
     if gate.as_deref().is_some_and(|ws| ws != j.workspace_id) {
         return Err(no(codes::JOB_NOT_FOUND, 404, format!("no job '{t}'")));
     }

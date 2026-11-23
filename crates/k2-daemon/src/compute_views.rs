@@ -501,11 +501,7 @@ pub(crate) fn node_info(who: &Who, params: &HashMap<String, String>, mgr: Option
 // ── jobs ─────────────────────────────────────────────────────────────
 
 pub(crate) fn job_summary(j: &store::JobRow) -> serde_json::Value {
-    let node = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        store::node_by_id(&conn, &j.node_id).map(|n| n.name)
-    };
+    let node = k2_core::db::read(|conn| store::node_by_id(conn, &j.node_id).map(|n| n.name));
     let mut v = serde_json::to_value(j).unwrap_or_default();
     v["short"] = compute::message::short(&j.id).into();
     v["workspace"] = ws_handle(&j.workspace_id).into();
@@ -603,11 +599,7 @@ fn node_queue_json(j: &store::JobRow, node: Option<&str>) -> serde_json::Value {
 fn node_wait_facts(j: &store::JobRow) -> share::WaitFacts {
     let plan = j.plan();
     let offer = compute_ws::live_view(&j.node_id).2;
-    let active = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        store::jobs_in_states(&conn, &j.node_id, store::ACTIVE_STATES)
-    };
+    let active = k2_core::db::read(|conn| store::jobs_in_states(conn, &j.node_id, store::ACTIVE_STATES));
     let started: Vec<&store::JobRow> = active.iter().filter(|r| !r.node_queued).collect();
     share::WaitFacts {
         asks_cpu_millis: plan.as_ref().and_then(|p| p.limits.cpu_millis),
@@ -802,16 +794,14 @@ pub(crate) fn queue_view(who: &Who, j: &store::JobRow, decision: &scheduler::Dec
     let (pos, why) = decision.waiting.get(&j.id)?;
     let now = compute::now();
     let viewer = who.passport();
-    let (active, queued, grant, node_offer) = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
+    let (active, queued, grant, node_offer) = k2_core::db::read(|conn| {
         (
-            store::jobs_in_states(&conn, &j.node_id, store::ACTIVE_STATES),
-            store::jobs_in_states(&conn, &j.node_id, &["queued"]),
-            store::grant(&conn, &j.node_id, &j.workspace_id),
-            store::node_by_id(&conn, &j.node_id).and_then(|n| n.last_offer),
+            store::jobs_in_states(conn, &j.node_id, store::ACTIVE_STATES),
+            store::jobs_in_states(conn, &j.node_id, &["queued"]),
+            store::grant(conn, &j.node_id, &j.workspace_id),
+            store::node_by_id(conn, &j.node_id).and_then(|n| n.last_offer),
         )
-    };
+    });
     let offer = compute_ws::live_view(&j.node_id).2.or(node_offer);
     let entry = |r: &store::JobRow| job_entry(viewer, r, decision, now);
     let mut ahead: Vec<serde_json::Value> = active.iter().map(&entry).collect();
@@ -932,9 +922,7 @@ pub(crate) fn with_elsewhere(j: &store::JobRow, q: &mut serde_json::Value) {
 
 /// A node's name for a line (its id when it's gone).
 fn node_name_of(node_id: &str) -> String {
-    let db = k2_core::db::shared();
-    let conn = db.lock();
-    store::node_by_id(&conn, node_id).map(|n| n.name).unwrap_or_else(|| node_id.to_string())
+    k2_core::db::read(|conn| store::node_by_id(conn, node_id)).map(|n| n.name).unwrap_or_else(|| node_id.to_string())
 }
 
 /// How long `queue` waits for a node's `queue_view`.
@@ -1189,29 +1177,18 @@ fn job_events(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Valu
     let after = match params.get("after").map(String::as_str).filter(|s| !s.is_empty()) {
         // `last=N`: the newest N events, no waiting.
         None if last.is_some() => -1,
-        None => {
-            let db = k2_core::db::shared();
-            let conn = db.lock();
-            store::last_event_id(&conn)
-        }
+        None => k2_core::db::read(store::last_event_id),
         Some(a) => a.parse::<i64>().map_err(|_| no(codes::BAD_REQUEST, 400, "after is the cursor a previous answer gave (a number)"))?,
     };
     let wait = params.get("wait").and_then(|w| w.parse::<u64>().ok()).unwrap_or(0).min(EVENTS_WAIT_MAX);
     let deadline = Instant::now() + Duration::from_secs(wait);
     loop {
         let seen = compute_ws::change_counter();
-        let rows = {
-            let db = k2_core::db::shared();
-            let conn = db.lock();
-            store::job_events_after(&conn, ws.as_deref(), session.as_deref(), tag, after, last.unwrap_or(200))
-        };
+        // Pooled reads: a waiting stream never takes the main lock.
+        let rows = k2_core::db::read(|conn| store::job_events_after(conn, ws.as_deref(), session.as_deref(), tag, after, last.unwrap_or(200)));
         if after < 0 {
             // Continue from the newest event of all (none of these again).
-            let cursor = {
-                let db = k2_core::db::shared();
-                let conn = db.lock();
-                store::last_event_id(&conn)
-            };
+            let cursor = k2_core::db::read(store::last_event_id);
             let events: Vec<serde_json::Value> = rows.iter().filter_map(job_event_json).collect();
             return Ok(serde_json::json!({"events": events, "cursor": cursor}));
         }
@@ -1337,6 +1314,32 @@ fn wait_fingerprint(j: &store::JobRow) -> (WaitPrint, Vec<WaitPrint>) {
     (one(j), kids)
 }
 
+/// The jobs a waiter on `j` watches: `j` and its shards (a split run's
+/// answer changes with any of theirs).
+fn watched_jobs(j: &store::JobRow) -> Vec<String> {
+    std::iter::once(j.id.clone()).chain(j.ctl.shards.iter().cloned()).collect()
+}
+
+/// The nodes whose queue changes a waiter on `j` must see: the node of
+/// `j` (or of a shard) while it is queued on this server, where its
+/// position comes from that node's queue ([`compute_ws::decision_for`]).
+/// A shard's node is known only once it is read: a split run re-reads on
+/// every change of a shard anyway.
+fn watched_nodes(j: &store::JobRow) -> Vec<String> {
+    let mut nodes = Vec::new();
+    if j.state == "queued" && !j.node_queued && !j.node_id.is_empty() {
+        nodes.push(j.node_id.clone());
+    }
+    if !j.ctl.shards.is_empty() {
+        for (k, _) in crate::compute_shards::children(j) {
+            if k.state == "queued" && !k.node_queued && !k.node_id.is_empty() && !nodes.contains(&k.node_id) {
+                nodes.push(k.node_id);
+            }
+        }
+    }
+    nodes
+}
+
 /// Re-checks of a waiting `get` happen at most this often: the change
 /// counter moves on every log chunk, and a job that prints a lot must not
 /// turn a waiter into a hot loop.
@@ -1353,21 +1356,26 @@ fn wait_for_change(j: store::JobRow, wait: u64) -> R<store::JobRow> {
     compute_ws::touch_follower(&j.id);
     let deadline = Instant::now() + Duration::from_secs(wait);
     let start = wait_fingerprint(&j);
+    // Woken by this job's (and its shards') changes and its node's queue,
+    // never by every compute change; each re-read is a pooled read, never
+    // the main lock (0.46.17: 50 waiters re-took it on every log chunk).
+    let watch = compute_ws::JobWatch::new();
+    watch.watch(watched_jobs(&j), watched_nodes(&j));
     let mut row = j;
     loop {
-        let seen = compute_ws::change_counter();
+        let seen = watch.seen();
         let checked = Instant::now();
-        row = {
-            let db = k2_core::db::shared();
-            let conn = db.lock();
-            store::job_by_id(&conn, &row.id)
-        }
-        .ok_or_else(|| no(codes::JOB_NOT_FOUND, 404, "the job vanished"))?;
+        row = k2_core::db::read(|conn| store::job_by_id(conn, &row.id)).ok_or_else(|| no(codes::JOB_NOT_FOUND, 404, "the job vanished"))?;
         let now = Instant::now();
         if row.is_terminal() || now >= deadline || wait_fingerprint(&row) != start {
             break;
         }
-        compute_ws::wait_change(seen, deadline - now);
+        // It moved, was queued or started: watch what it depends on now,
+        // and check again before waiting.
+        if watch.watch(watched_jobs(&row), watched_nodes(&row)) {
+            continue;
+        }
+        watch.wait(seen, deadline - now);
         let pause = WAIT_RECHECK.saturating_sub(checked.elapsed()).min(deadline.saturating_duration_since(Instant::now()));
         if !pause.is_zero() {
             std::thread::sleep(pause);
@@ -1398,10 +1406,10 @@ pub(crate) fn job_get(who: &Who, params: &HashMap<String, String>) -> R<serde_js
         v["hint"] = h.into();
     }
     // The audit line: who asked for the cancel, and when.
+    // A pooled read: the lookup walks the events table (no index on the
+    // job), up to seconds on a big one, and must never hold the main lock.
     if j.state == "cancelled" || j.reason.as_deref() == Some("cancel_requested") {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        if let Some((by, at)) = store::last_job_event(&conn, &j.id, "job_cancel") {
+        if let Some((by, at)) = k2_core::db::read(|conn| store::last_job_event(conn, &j.id, "job_cancel")) {
             v["cancelledBy"] = serde_json::json!({"by": by, "at": at});
         }
     }
@@ -1444,10 +1452,8 @@ pub(crate) fn job_get(who: &Who, params: &HashMap<String, String>) -> R<serde_js
     // `--failures`, and the record's counts. Only once the CI engine
     // recorded the job (CI on compute on); nothing changes otherwise.
     if compute::ci_enabled() {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        if let Some(rec) = k2_core::ci_tests::recorded(&conn, &j.id) {
-            let marks = k2_core::ci_tests::marks_of_job(&conn, &j.id);
+        let recorded = k2_core::db::read(|conn| k2_core::ci_tests::recorded(conn, &j.id).map(|rec| (rec, k2_core::ci_tests::marks_of_job(conn, &j.id))));
+        if let Some((rec, marks)) = recorded {
             if let Some(result) = v.get_mut("result") {
                 with_test_history(result, &rec, &marks);
             }

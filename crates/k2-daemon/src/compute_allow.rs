@@ -170,9 +170,25 @@ pub(crate) fn fail_queued_off_list(conn: &rusqlite::Connection, node: Option<&st
     failed
 }
 
+/// Is any queued job [`fail_queued_off_list`] would fail there? Reads only.
+fn any_queued_off_list(conn: &rusqlite::Connection, node: Option<&str>, ws: Option<&str>) -> bool {
+    let jobs = store::list_jobs(conn, &store::JobFilter { node_id: node, workspace_id: ws, state: Some("queued"), limit: 500, ..Default::default() });
+    let mut permits: HashMap<String, allow::Permit> = HashMap::new();
+    jobs.iter()
+        .filter(|j| j.state == "queued" && !j.node_id.is_empty())
+        .any(|j| !permits.entry(j.workspace_id.clone()).or_insert_with(|| allow::permit(conn, &j.workspace_id)).allows(&j.node_id))
+}
+
 /// [`fail_queued_off_list`] with its own lock, then the requester's
 /// `[compute]` message for each and one change notice.
 pub(crate) fn sweep_off_list(node: Option<&str>, ws: Option<&str>) -> Vec<String> {
+    // Every kick (every offer of every node) runs this: nearly always
+    // nothing is off a list, so check that on a pooled read and take the
+    // main lock only to fail what is (0.46.17: the whole queue was read
+    // and checked under the lock each time). The failing pass re-checks.
+    if !k2_core::db::read(|conn| any_queued_off_list(conn, node, ws)) {
+        return Vec::new();
+    }
     let failed = {
         let db = k2_core::db::shared();
         let conn = db.lock();

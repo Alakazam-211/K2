@@ -749,3 +749,42 @@ fn a_node_one_release_behind_still_serves_a_fetch() {
     assert_eq!(std::fs::read(path).unwrap(), body);
     test_detach("n-behind");
 }
+
+/// 0.46.17 follow-up: a job's long-poll wakes for its own job's changes,
+/// its node's queue and the catch-all notice, never for another job's log
+/// chunk or another node's offer (every chunk woke every waiter).
+#[test]
+fn a_job_watch_rings_for_its_own_job_and_node_only() {
+    let w = JobWatch::new();
+    assert!(w.watch(vec!["watch-job-x".into()], vec!["watch-node-x".into()]), "the first watch changes what it watches");
+    assert!(!w.watch(vec!["watch-job-x".into()], vec!["watch-node-x".into()]), "the same watch again changes nothing");
+    let seen = w.seen();
+    notify_job("watch-job-y");
+    notify_node("watch-node-y");
+    notify_transfer();
+    assert_eq!(w.seen(), seen, "another job's change, another node's queue and a transfer never ring it");
+    let t = Instant::now();
+    w.wait(seen, Duration::from_millis(60));
+    assert!(t.elapsed() >= Duration::from_millis(50), "nothing rang: the wait runs out ({:?})", t.elapsed());
+    notify_job("watch-job-x");
+    assert!(w.seen() > seen, "its own job rings it");
+    let s2 = w.seen();
+    notify_node("watch-node-x");
+    assert!(w.seen() > s2, "its node's queue rings it");
+    let s3 = w.seen();
+    notify_change();
+    assert!(w.seen() > s3, "the catch-all rings every waiter");
+    // A ring between the read and the wait ends the wait at once.
+    let s4 = w.seen();
+    notify_job("watch-job-x");
+    let t = Instant::now();
+    w.wait(s4, Duration::from_secs(5));
+    assert!(t.elapsed() < Duration::from_secs(1), "a ring after `seen` ends the wait at once ({:?})", t.elapsed());
+    // Every notice still moves the list-level counter (events, pulls).
+    let c = change_counter();
+    notify_job("watch-job-y");
+    assert_ne!(change_counter(), c, "a job's change still wakes the list-level watchers");
+    let live = job_waiters_now();
+    drop(w);
+    assert!(job_waiters_now() < live, "a dropped watch unregisters");
+}

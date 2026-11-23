@@ -30,7 +30,7 @@ import { useFocusGroupsStore } from './focus-groups'
 import { useSettingsStore } from './settings'
 // [ws-switch] — dev-only t0 mark for the pinned-chat retention
 // show→painted metric (read by TerminalPane's [v2-perf] line).
-import { markWorkspaceSwitch } from '@/lib/ws-switch-mark'
+import { markSwitchStage, markSwitchStart } from '@/lib/switch-timing'
 import { applyWorkspaceSwitchFocus } from '@/lib/workspace-switch-focus'
 import { takeHostSelect } from '@/lib/home-pending-select'
 import { primaryScope } from '@/kessel/server-scope'
@@ -809,8 +809,8 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
   // in `setActiveProject` can defer it behind an async modal decision while
   // the common (no-dirty) path runs it synchronously with zero added latency.
   _doSetActiveProject: (id: string | null, afterShown?: () => void) => {
-    // [ws-switch] t0 for the retention show→painted metric (dev-only).
-    markWorkspaceSwitch()
+    // Switch timing t0 (lib/switch-timing.ts; also the retention metric's).
+    markSwitchStart('project', id ?? 'none')
     const state = get()
     const tabsStore = useTabsStore.getState()
 
@@ -840,6 +840,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
         activeProjectId: id,
         activeWorkspaceId: newWorkspaceId
       })
+      markSwitchStage('store')
 
       // Persist for session restore (Phase 2.5 fix #547: gated so a
       // pre-load click doesn't clobber the real last-active values).
@@ -861,6 +862,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
         // store contract stays `=> void`; we chain rather than await so the
         // signature doesn't change for callers.
         void tabsStore.restoreWorkspace(newKey, cwd).then(() => {
+          markSwitchStage('restore')
           ensurePinnedAgentTabForMode(project.agentMode, project.path)
           applyWorkspaceSwitchFocus()
           afterShown?.()
@@ -908,8 +910,8 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
   },
 
   _doSetActiveWorkspace: (projectId: string, workspaceId: string) => {
-    // [ws-switch] t0 for the retention show→painted metric (dev-only).
-    markWorkspaceSwitch()
+    // Switch timing t0 (lib/switch-timing.ts; also the retention metric's).
+    markSwitchStart('workspace', `${projectId}:${workspaceId}`)
     const state = get()
     const tabsStore = useTabsStore.getState()
 
@@ -929,6 +931,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       activeProjectId: projectId,
       activeWorkspaceId: workspaceId
     })
+    markSwitchStage('store')
 
     // Persist for session restore (Phase 2.5 fix #547: gated).
     if (hasLoadedFromDaemon) {
@@ -954,6 +957,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     // what makes the pinned Chat + Inbox (Chat active) appear on first
     // open instead of only after switching away and back.
     void tabsStore.restoreWorkspace(newKey, cwd).then(() => {
+      markSwitchStage('restore')
       if (project) {
         ensurePinnedAgentTabForMode(project.agentMode, project.path)
       }

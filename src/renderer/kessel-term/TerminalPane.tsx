@@ -31,9 +31,14 @@ import { daemonCliGet } from '@/lib/daemon-cli'
 
 import { useKesselConfig } from '../kessel/config-context'
 import { useIsTabVisible } from '@/contexts/TabVisibilityContext'
-// [v2-perf] show_to_painted — dev-only workspace-switch t0 (projects.ts
-// stamps it; no store import so kessel-term stays decoupled).
-import { readWorkspaceSwitchMark } from '@/lib/ws-switch-mark'
+// Switch timing (lib/switch-timing.ts): the switch's click time for
+// [v2-perf] show_to_painted, and this pane's first frame / attach stages
+// (no store import so kessel-term stays decoupled).
+import {
+  markSwitchStageOnPaint,
+  readSwitchStart,
+  switchInFlight,
+} from '@/lib/switch-timing'
 import {
   computeDesiredActive,
   getLastSentActive,
@@ -1248,7 +1253,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // [v2-perf] stage=show_to_painted (dev-only) — the pinned-chat
   // retention win metric. Measures a hidden→visible transition to the
   // next painted frame, plus end-to-end since the last workspace-switch
-  // t0 when one is fresh (projects.ts stamps it via ws-switch-mark). A
+  // t0 when one is fresh (projects.ts stamps it via lib/switch-timing). A
   // retained pane reports sub-frame numbers (portal move + one commit);
   // a parked pane reports the full spawn/WS/snapshot reattach chain.
   // Initial mount is excluded — the existing first_render stages cover it.
@@ -1261,7 +1266,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     // no-ops in prod, leaving only one idle rAF per show transition.
     if (was !== false || !isTabVisible) return
     const t0 = performance.now()
-    const switchT0 = readWorkspaceSwitchMark()
+    const switchT0 = readSwitchStart()
     requestAnimationFrame(() => {
       const painted = performance.now()
       perfLog('show_to_painted', {
@@ -2955,6 +2960,22 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   const terminalOnScreen = !hidePty || revealShown
   terminalOnScreenRef.current = terminalOnScreen
   const webglSurfaceActive = useWebgl && isTabVisible && !settingsOpen && terminalOnScreen
+
+  // Switch timing (lib/switch-timing.ts, k2SwitchTiming): this pane's first
+  // painted frame after a switch, and the frame once its grid socket is up.
+  // Only a pane on screen counts; the first one to paint wins. Always on
+  // (a module check per commit while a switch is in flight).
+  useEffect(() => {
+    if (!isTabVisible || settingsOpen || !terminalOnScreen || !snapshot) return
+    if (!switchInFlight()) return
+    const painter = useWebgl
+      ? painterRef.current?.reusedSurface?.()
+        ? 'webgl-reused'
+        : 'webgl-new'
+      : 'dom'
+    markSwitchStageOnPaint('terminal_frame', `${painter} ${phase.kind}`)
+    if (phase.kind === 'ready') markSwitchStageOnPaint('terminal_live', painter)
+  }, [isTabVisible, settingsOpen, terminalOnScreen, snapshot, phase.kind, useWebgl])
 
   // P4 — a hidden grid stops drawing (`hiddenPaint.ts`): at once if it
   // has never been on screen, else after HIDDEN_PAINT_PAUSE_MS. The

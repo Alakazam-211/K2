@@ -180,6 +180,7 @@ import { useTabsStore } from '@/stores/tabs'
 import { useSettingsStore } from '@/stores/settings'
 import { hasSpareSurface, releaseAllSurfaces } from './webgl/glSurfacePool'
 import { liveAtlasCount, releaseAllAtlases } from './webgl/atlasCache'
+import { getSwitchTimings, markSwitchStart, resetSwitchTimingForTests } from '@/lib/switch-timing'
 
 const REPEAT = 100
 
@@ -452,5 +453,37 @@ describe('a WebGL terminal pane gives its GPU memory back', () => {
     expectOnlyTheEmptiedSpare('both hidden')
     expect(ledger.liveGlContexts()).toBe(1)
     expectNothingAfterIdle()
+  }, 60_000)
+
+  it('a switch to a warm pane: the trace records its first frame, drawn on the handed-over surface', async () => {
+    const two = (shown: 'a' | 'b') => (
+      <>
+        {(['a', 'b'] as const).map((id) => (
+          <TabVisibilityContext.Provider key={id} value={id === shown}>
+            <SessionViewChromeContext.Provider value={chrome}>
+              <TerminalPane terminalId={`warm-${id}`} cwd="/tmp/ws" />
+            </SessionViewChromeContext.Provider>
+          </TabVisibilityContext.Provider>
+        ))}
+      </>
+    )
+    const { rerender } = renderInRoom(room, two('a'))
+    await connected(1)
+    send(0, snapshotFrame('a'))
+    await frame()
+    rerender(two('b'))
+    await connected(2)
+    send(1, snapshotFrame('b'))
+    await frame()
+    // Both have their grid now; the switch back to 'a' is the warm one.
+    resetSwitchTimingForTests()
+    markSwitchStart('workspace', 'p:a')
+    rerender(two('a'))
+    send(0, snapshotFrame('a again'))
+    await frame()
+    const [trace] = getSwitchTimings()
+    expect(trace.stages.terminal_frame, JSON.stringify(trace)).toBeGreaterThanOrEqual(0)
+    expect(trace.notes.terminal_frame).toMatch(/^webgl-reused /)
+    expect(ledger.glContextsMade).toBe(1)
   }, 60_000)
 })

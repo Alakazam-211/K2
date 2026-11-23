@@ -68,6 +68,7 @@ import { scopeMayWrite } from '@/kessel/server-scope'
 // The choice card lives in its own file; Zen and Grok Bots import it from here.
 import { CloneProposalsBanner } from '@/components/CloneToDialog/CloneProposalsBanner'
 import { useThreadComposeExtras } from './threadComposeExtras'
+import { markSwitchStageOnPaint, switchInFlight } from '@/lib/switch-timing'
 export { ChoiceCard, choiceLetter } from './ChoiceCard'
 
 // Sender pictures read the projects, presence and Home avatar stores: loaded
@@ -299,6 +300,13 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
   useLayoutEffect(() => {
     onFill?.(fill)
   }, [onFill, fill])
+  // Switch timing (lib/switch-timing.ts): the first frame this Thread drew
+  // its messages (or its empty start) after a switch, from the cached copy
+  // or the server's read.
+  useEffect(() => {
+    if (!active || !isTabVisible || fill === 'loading' || !switchInFlight()) return
+    markSwitchStageOnPaint('thread_paint', `${fill} ${visible.length}`)
+  }, [active, isTabVisible, fill, visible.length])
   // Rows get stable callbacks (the memoized rows compare them by identity):
   // the latest hook functions through refs.
   const answerRef = useRef(answer)

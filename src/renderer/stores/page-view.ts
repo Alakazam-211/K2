@@ -18,6 +18,7 @@
 
 import { create } from 'zustand'
 import { readWikiViewPref, writeWikiViewPref, type WikiView } from '@/lib/wiki-view-pref'
+import { markSwitchStageOnPaint, markSwitchStart } from '@/lib/switch-timing'
 
 // 'orgChart' (prd-org-chart-v1 §6.5): an overlay page, shown only while the
 // server's Org Chart switch is on (Settings → Org Chart).
@@ -109,7 +110,7 @@ interface PageViewState {
   setWikiView: (view: WikiView) => void
 }
 
-export const usePageViewStore = create<PageViewState>((set) => ({
+export const usePageViewStore = create<PageViewState>((set, get) => ({
   page: readStartPage(),
   wikiProjectPath: null,
   wikiReturnPage: 'agents',
@@ -122,6 +123,10 @@ export const usePageViewStore = create<PageViewState>((set) => ({
   },
   setPage: (page) => {
     pageChosen = true
+    // Switch timing (lib/switch-timing.ts): a page change is a switch; the
+    // workspace it selects (page-selection.ts) joins it in the same task.
+    const from = get().page
+    if (from !== page) markSwitchStart('page', `${from} -> ${page}`)
     set((s) => ({
       page,
       // Leaving wiki clears the bound workspace path so a later open
@@ -129,6 +134,7 @@ export const usePageViewStore = create<PageViewState>((set) => ({
       wikiProjectPath: page === 'wiki' ? s.wikiProjectPath : null,
       wikiReturnPage: page === 'wiki' && s.page !== 'wiki' ? s.page : s.wikiReturnPage,
     }))
+    if (from !== page) markSwitchStageOnPaint('page_paint', page)
   },
   openWiki: (projectPath, opts) => {
     pageChosen = true

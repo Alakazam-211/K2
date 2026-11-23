@@ -673,7 +673,7 @@ mod tests {
         let stamp = rest[..rest.find(' ').expect("stamp")].to_string();
 
         let wt = dir.join(".worktrees").join("wt-resume");
-        fs::create_dir_all(&wt).unwrap();
+        mkdirs_0755(&dir, &wt);
         let active = crate::workspace::scheduler::agent_work_dir(&path, "scout", "active");
         fs::create_dir_all(&active).unwrap();
         fs::write(
@@ -710,6 +710,21 @@ mod tests {
 
     // ── Case 1: an active work item's worktree ───────────────────────
 
+    /// Make `to` and set every folder from `root` down to it to 0755, so
+    /// the tests never depend on the umask (the walk refuses a folder
+    /// another user could write).
+    fn mkdirs_0755(root: &Path, to: &Path) {
+        fs::create_dir_all(to).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for d in to.ancestors().take_while(|d| d.starts_with(root)) {
+                fs::set_permissions(d, fs::Permissions::from_mode(0o755))
+                    .unwrap_or_else(|e| panic!("chmod {}: {e}", d.display()));
+            }
+        }
+    }
+
     /// A workspace under a temp HOME (so the folder-trust gate runs for
     /// real), with the agent's AGENT.md on disk.
     struct Ws {
@@ -720,7 +735,14 @@ mod tests {
     fn ws_under_temp_home(agent: &str) -> Ws {
         let home = crate::test_env::TempHome::new();
         crate::db::init_for_tests();
-        let root = dunce::canonicalize(home.path()).unwrap().join(format!("ws-{}", Uuid::new_v4().simple()));
+        let home_dir = dunce::canonicalize(home.path()).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&home_dir, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let root = home_dir.join(format!("ws-{}", Uuid::new_v4().simple()));
+        mkdirs_0755(&home_dir, &root);
         fs::create_dir_all(root.join(".k2so/agent")).unwrap();
         fs::write(
             root.join(".k2so/agent/AGENT.md"),
@@ -762,7 +784,7 @@ mod tests {
     fn case1_worktree_under_dot_worktrees_launches_and_writes_claude_md() {
         let ws = ws_under_temp_home("scout");
         let wt = ws.root.join(".worktrees").join("feat");
-        fs::create_dir_all(&wt).unwrap();
+        mkdirs_0755(&ws.root, &wt);
         put_active_item(&ws.root, "scout", &wt);
 
         let v = launch_in(&ws.root, "scout").expect("a worktree under .worktrees/ launches");
@@ -793,7 +815,7 @@ mod tests {
     fn case1_worktree_inside_the_workspace_but_not_under_dot_worktrees_is_refused() {
         let ws = ws_under_temp_home("scout");
         let wt = ws.root.join("src").join("wt");
-        fs::create_dir_all(&wt).unwrap();
+        mkdirs_0755(&ws.root, &wt);
         put_active_item(&ws.root, "scout", &wt);
 
         let e = launch_in(&ws.root, "scout").expect_err("only <workspace>/.worktrees/ holds worktrees");
@@ -804,9 +826,9 @@ mod tests {
     #[test]
     fn case1_dot_dot_in_the_worktree_path_is_refused() {
         let ws = ws_under_temp_home("scout");
-        fs::create_dir_all(ws.root.join(".worktrees")).unwrap();
+        mkdirs_0755(&ws.root, &ws.root.join(".worktrees"));
         let wt = ws.root.join(".worktrees").join("..").join("src");
-        fs::create_dir_all(ws.root.join("src")).unwrap();
+        mkdirs_0755(&ws.root, &ws.root.join("src"));
         put_active_item(&ws.root, "scout", &wt);
 
         let e = launch_in(&ws.root, "scout").expect_err("`..` leaves .worktrees/");
@@ -818,7 +840,7 @@ mod tests {
     fn case1_held_folder_writes_nothing_and_the_launch_is_refused() {
         let ws = ws_under_temp_home("scout");
         let wt = ws.root.join(".worktrees").join("risky");
-        fs::create_dir_all(wt.join(".claude")).unwrap();
+        mkdirs_0755(&ws.root, &wt.join(".claude"));
         fs::write(wt.join(".claude/settings.json"), RISKY_HOOK).unwrap();
         put_active_item(&ws.root, "scout", &wt);
 
@@ -839,7 +861,7 @@ mod tests {
     fn case1_link_at_claude_md_is_refused_and_its_target_is_untouched() {
         let ws = ws_under_temp_home("scout");
         let wt = ws.root.join(".worktrees").join("linked");
-        fs::create_dir_all(&wt).unwrap();
+        mkdirs_0755(&ws.root, &wt);
         let target = ws.root.join("target.txt");
         fs::write(&target, "original").unwrap();
         std::os::unix::fs::symlink(&target, wt.join("CLAUDE.md")).unwrap();
@@ -856,7 +878,7 @@ mod tests {
     fn case1_hard_link_at_claude_md_is_refused_and_its_other_name_is_untouched() {
         let ws = ws_under_temp_home("scout");
         let wt = ws.root.join(".worktrees").join("hard");
-        fs::create_dir_all(&wt).unwrap();
+        mkdirs_0755(&ws.root, &wt);
         let other = ws.root.join("other.txt");
         fs::write(&other, "original").unwrap();
         fs::hard_link(&other, wt.join("CLAUDE.md")).unwrap();
@@ -872,8 +894,8 @@ mod tests {
     fn case1_link_on_the_way_to_the_worktree_is_refused_and_nothing_is_written() {
         let ws = ws_under_temp_home("scout");
         let outside = ws.root.parent().unwrap().join(format!("outside-{}", Uuid::new_v4().simple()));
-        fs::create_dir_all(&outside).unwrap();
-        fs::create_dir_all(ws.root.join(".worktrees")).unwrap();
+        mkdirs_0755(&outside, &outside);
+        mkdirs_0755(&ws.root, &ws.root.join(".worktrees"));
         std::os::unix::fs::symlink(&outside, ws.root.join(".worktrees").join("via-link")).unwrap();
         put_active_item(&ws.root, "scout", &ws.root.join(".worktrees").join("via-link"));
 
@@ -888,7 +910,7 @@ mod tests {
     fn case1_dot_worktrees_itself_a_link_is_refused() {
         let ws = ws_under_temp_home("scout");
         let outside = ws.root.parent().unwrap().join(format!("outside-{}", Uuid::new_v4().simple()));
-        fs::create_dir_all(outside.join("feat")).unwrap();
+        mkdirs_0755(&outside, &outside.join("feat"));
         std::os::unix::fs::symlink(&outside, ws.root.join(".worktrees")).unwrap();
         put_active_item(&ws.root, "scout", &ws.root.join(".worktrees").join("feat"));
 

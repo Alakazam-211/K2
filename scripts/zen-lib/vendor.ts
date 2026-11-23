@@ -23,6 +23,7 @@ import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, extname, join, resolve } from 'node:path'
 
+import { copyrightLines, copyrightPart, glueBanner, hasBanner, libraryBanner } from './banners.mjs'
 import { LIBS, type LibFile, type LibSpec, type StyleSource } from './libs'
 import { replaceZenLibNotice } from '../../src/renderer/lib/zen/zen-lib-notice'
 import { zenLibInlineProblem, zenLibInlineSafe } from '../../src/renderer/lib/zen/zen-lib-inline'
@@ -161,8 +162,29 @@ async function bundle(lib: LibSpec, file: { name: string; bundle: string }): Pro
     const m = /(?:^|\/)node_modules\/((?:@[^/]+\/)?[^/]+)\//.exec(input)
     if (m) bundledPackages.add(m[1])
   }
-  const text = out.outputFiles[0].text
-  return `/*! ${lib.title} ${lib.version} (${lib.license}), pre-bundled for K2 as a classic script; global ${lib.global}. */\n${text}`
+  // The licence banner goes in front of this (withBanner).
+  return `/* Pre-bundled for K2 as a classic script; global ${lib.global}. */\n${out.outputFiles[0].text}`
+}
+
+/** Every served file starts with a licence banner (the Kessel Steward's
+ *  ruling; scripts/zen-lib/banners.mjs says what one is, and
+ *  scripts/zen-lib/check-banners.mjs checks the output). An upstream build
+ *  that already starts with one is kept as is. One without gets a line in
+ *  front, its own comment kept after it:
+ *  `/*! <id> <version> | <licence> | <copyright> | full text: Third-party
+ *  notices`, closed. K2's esbuild bundles get the same line; K2's glue and
+ *  style files name the upstream they carry, with K2's part MIT. K2's own
+ *  kit files carry their own banner. The copyright comes from the licence
+ *  text this script writes to LICENSE.txt, the file the third-party
+ *  notices list ships. */
+function withBanner(lib: LibSpec, f: LibFile, text: string, copyright: string): string {
+  const meta = { id: lib.id, version: lib.version, license: lib.license, copyright }
+  let out: string
+  if ('own' in f || ('copy' in f && hasBanner(text, lib.id, lib.license))) out = text
+  else if ('copy' in f || 'bundle' in f) out = `${libraryBanner(meta)}\n${text}`
+  else out = `${glueBanner({ ...meta, file: f.name, title: lib.title })}\n${text}`
+  if (!hasBanner(out, lib.id, lib.license)) die(`${lib.id}@${lib.version}/${f.name}: no licence banner naming ${lib.id} and ${lib.license} in its first lines`)
+  return out
 }
 
 /** K2's own files (`own` libraries), read from the checked-in folder before
@@ -314,11 +336,15 @@ for (const lib of LIBS) {
   mkdirSync(dir, { recursive: true })
 
   bundledPackages = new Set<string>()
+  // The library's own licence texts: the start of its LICENSE.txt, and
+  // where its banners' copyright lines come from.
+  const ownLicence = await licenseText(lib)
+  const copyright = copyrightPart(ownLicence, lib.title.replace(/\s*\(.*\)$/, ''))
   const files: ZenLibEntry['files'] = []
   if (lib.source === 'bundled') {
     if (!lib.files.length) die(`${key}: a bundled library needs files`)
     for (const f of lib.files) {
-      const text = inlineSafe(lib, f.name, await fileText(lib, f))
+      const text = inlineSafe(lib, f.name, withBanner(lib, f, await fileText(lib, f), copyright))
       const buf = Buffer.from(text, 'utf8')
       writeFileSync(join(dir, f.name), buf)
       // 0.46.5 (copy detection, vs-live L11): a copied npm file also records
@@ -341,7 +367,12 @@ for (const lib of LIBS) {
     die(`${key}: licence "${lib.license}" is not on the shippable list; flag it, don't guess`)
   }
 
-  const lic = (await licenseText(lib)) + dependencyLicences(lib)
+  const lic = ownLicence + dependencyLicences(lib)
+  // The banners and the notices list must not disagree: every copyright
+  // line a banner names is in the LICENSE.txt the notices ship.
+  for (const line of copyrightLines(ownLicence)) {
+    if (!normalize(lic).includes(normalize(line))) die(`${key}: banner copyright "${line}" is not in its LICENSE.txt`)
+  }
   // Each `; `-separated part (a `name: ` prefix aside) must appear in the
   // licence text, so the NOTICE line never invents an attribution.
   for (const part of lib.copyright.split('; ').map((p) => p.replace(/^[\w.-]+: /, ''))) {

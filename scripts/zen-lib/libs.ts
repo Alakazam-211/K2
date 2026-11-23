@@ -18,6 +18,9 @@
 //   OFL-1.1, MPL-2.0 as an option). p5.js is LGPL (R4: dropped). No GSAP.
 // - `copyright` must appear word for word in the licence text the vendor
 //   script writes (the NOTICE line is checked against it).
+// - Every file the daemon serves starts with a licence banner naming the
+//   id and the SPDX licence (scripts/zen-lib/banners.mjs; the vendor
+//   script writes it, scripts/zen-lib/check-banners.mjs checks it).
 // - 0.46.5 (prd-widget-size-and-shared-libs-v1 WL6, vs-live L3): one entry
 //   per LINE (the major; 0.minor below 1.0). A patch replaces its line's
 //   entry in place (K2 updates patches inside a line); a new major is a new
@@ -162,7 +165,8 @@ export const LIBS: LibSpec[] = [
   {
     id: 'three',
     version: '0.186.0',
-    fingerprints: ['Three.js Authors', '/*! three.js '],
+    // '/*! three.js ' is K2's banner before the licence banners; '/*! three 0.' after.
+    fingerprints: ['Three.js Authors', '/*! three.js ', '/*! three 0.'],
     title: 'three.js',
     global: 'THREE',
     license: 'MIT',

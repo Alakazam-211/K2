@@ -147,6 +147,12 @@ function makeGl(canvas: HTMLCanvasElement): { gl: Record<string, unknown>; state
     texParameteri: noop,
     texImage2D: (...args: unknown[]) => {
       if (state.lost || !boundTexture) return
+      // texImage2D(target, level, internal, width, height, border, format, type, pixels)
+      // sizes from its own arguments; the 6-argument form from its source.
+      if (args.length >= 9) {
+        state.textureBytes.set(boundTexture, Number(args[3]) * Number(args[4]) * 4)
+        return
+      }
       const src = args[args.length - 1] as { width?: number; height?: number }
       state.textureBytes.set(boundTexture, (src.width ?? 0) * (src.height ?? 0) * 4)
     },

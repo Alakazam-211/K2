@@ -75,9 +75,15 @@ export interface PainterFrame {
 }
 
 export interface TerminalPainter {
-  /** Attach to the canvas element the pane rendered. Creates the GL
-   *  context; a missing WebGL2 fires `onFatal` (→ DOM fallback). */
-  mount(canvas: HTMLCanvasElement): void
+  /** A canvas: attach to it and own it (its context is created here and
+   *  released on dispose). Any other element (TerminalPane's host): put a
+   *  canvas in it, the spare surface's when there is one, and give the
+   *  surface back as the spare on dispose (glSurfacePool); the glyph
+   *  atlas is the font's shared one (atlasCache). A missing WebGL2 fires
+   *  `onFatal` (→ DOM fallback). */
+  mount(target: HTMLElement): void
+  /** Host mode: did this mount take the spare surface? */
+  reusedSurface?(): boolean
   /** Font/DPR change → rebuild the glyph atlas + device grid. */
   setMetrics(m: PainterMetrics): void
   /** Draw one frame. Idempotent; cheap when nothing changed. Grid

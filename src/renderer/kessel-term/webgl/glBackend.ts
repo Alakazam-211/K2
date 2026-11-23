@@ -38,6 +38,10 @@ export interface PainterBackend {
    *  off the atlas version by the caller — xterm's dead-simple
    *  upload, no partial updates. */
   uploadAtlas(source: TexImageSource): void
+  /** Shrink the atlas texture to 1x1 (the surface is parked as a spare,
+   *  glSurfacePool): its GPU memory goes back now; the next frame
+   *  uploads the page again. */
+  trimAtlasTexture?(): void
   /** Instanced glyph pass: fixed cell slots, GLYPH_FLOATS floats per
    *  instance (see packFrame.ts for the layout); one draw. */
   drawGlyphs(
@@ -320,6 +324,11 @@ export function createWebgl2Backend(
     uploadAtlas(source: TexImageSource): void {
       gl.bindTexture(gl.TEXTURE_2D, atlasTexture)
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source)
+    },
+
+    trimAtlasTexture(): void {
+      gl.bindTexture(gl.TEXTURE_2D, atlasTexture)
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
     },
 
     drawGlyphs(

@@ -5,7 +5,12 @@
 // test-utils/gpu-ledger; only the pane's I/O boundaries are mocked (the
 // same set as TerminalPane.hiddenPaint.test.tsx). Each trigger repeats 100×
 // and what the GPU process would hold must come back to baseline: a hidden,
-// parked or closed pane holds no context, no drawing buffer and no atlas.
+// parked or closed pane holds no context, no drawing buffer and no atlas of
+// its own. 0.46.18 (switch speed): the surface a pane gives back is kept as
+// the ONE spare (emptied: 1x1 buffer, 1x1 atlas texture) for the next pane
+// to show, and the font's atlas is shared, so a show builds nothing. The
+// spare and an unused atlas are freed after a while (glSurfacePool.test,
+// atlasCache.test); here `releaseIdle()` stands in for that wait.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, waitFor } from '@testing-library/react'
@@ -173,8 +178,16 @@ import { TerminalPane } from './TerminalPane'
 import { renderInRoom, fixedStore, testRoom } from '@/test-utils/room'
 import { useTabsStore } from '@/stores/tabs'
 import { useSettingsStore } from '@/stores/settings'
+import { hasSpareSurface, releaseAllSurfaces } from './webgl/glSurfacePool'
+import { liveAtlasCount, releaseAllAtlases } from './webgl/atlasCache'
 
 const REPEAT = 100
+
+/** The idle timers firing: the spare surface and unused atlases go. */
+function releaseIdle(): void {
+  releaseAllSurfaces()
+  releaseAllAtlases()
+}
 
 const room = testRoom({
   tabs: useTabsStore,
@@ -227,6 +240,7 @@ beforeEach(() => {
 afterEach(() => {
   HTMLElement.prototype.getBoundingClientRect = realRect
   cleanup()
+  releaseIdle()
   ledger.restore()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
@@ -298,35 +312,60 @@ async function paintedPane() {
   return r
 }
 
+/** What a pane holds once nothing is on screen: at most the one spare,
+ *  emptied (out of the document, 1x1 buffer, 1x1 atlas texture), and the
+ *  font's one idle atlas page. */
+function expectOnlyTheEmptiedSpare(at: string): void {
+  expect(glCanvas(), `${at}: no canvas left in the document`).toBeNull()
+  expect(ledger.liveGlContexts(), `${at}: ${ledger.summary()}`).toBeLessThanOrEqual(1)
+  expect(ledger.drawingBufferBytes(), `${at}: ${ledger.summary()}`).toBeLessThanOrEqual(4)
+  expect(ledger.textureBytes(), `${at}: ${ledger.summary()}`).toBeLessThanOrEqual(4)
+  expect(atlasPages(), at).toBeLessThanOrEqual(1)
+}
+
+/** After the idle wait: nothing at all. */
+function expectNothingAfterIdle(): void {
+  releaseIdle()
+  expect(ledger.liveGlContexts(), ledger.summary()).toBe(0)
+  expect(ledger.drawingBufferBytes()).toBe(0)
+  expect(ledger.liveGlObjects()).toBe(0)
+  expect(ledger.canvas2dBytes(), ledger.summary()).toBe(0)
+  expect(atlasPages()).toBe(0)
+  expect(liveAtlasCount()).toBe(0)
+}
+
 describe('a WebGL terminal pane gives its GPU memory back', () => {
-  it(`hiding and showing the tab ${REPEAT}×: hidden holds nothing, shown holds one context`, async () => {
+  it(`hiding and showing the tab ${REPEAT}×: hidden keeps only the emptied spare, a show builds nothing`, async () => {
     const { rerender } = await paintedPane()
     const shown = { objects: ledger.liveGlObjects(), texture: ledger.textureBytes() }
     for (let i = 0; i < REPEAT; i++) {
       rerender(pane(false))
-      expect(ledger.liveGlContexts(), `hidden #${i}: ${ledger.summary()}`).toBe(0)
-      expect(ledger.drawingBufferBytes()).toBe(0)
-      expect(ledger.canvas2dBytes(), `hidden #${i}: ${ledger.summary()}`).toBe(0)
-      expect(atlasPages()).toBe(0)
+      expectOnlyTheEmptiedSpare(`hidden #${i}`)
+      expect(hasSpareSurface()).toBe(true)
       rerender(pane(true))
       send(0, snapshotFrame(`show ${i}`))
     }
     await frame()
     expect(ledger.liveGlContexts(), ledger.summary()).toBe(1)
+    // One context for the whole run: every show took the spare back.
+    expect(ledger.glContextsMade).toBe(1)
     expect(ledger.liveGlObjects()).toBe(shown.objects)
     expect(ledger.textureBytes()).toBe(shown.texture)
     expect(atlasPages()).toBe(1)
+    rerender(pane(false))
+    expectNothingAfterIdle()
   })
 
   it(`opening and closing Settings over it ${REPEAT}×: same`, async () => {
     await paintedPane()
     for (let i = 0; i < REPEAT; i++) {
       act(() => useSettingsStore.setState({ settingsOpen: true }))
-      expect(ledger.liveGlContexts(), `settings open #${i}: ${ledger.summary()}`).toBe(0)
+      expectOnlyTheEmptiedSpare(`settings open #${i}`)
       act(() => useSettingsStore.setState({ settingsOpen: false }))
     }
     await frame()
     expect(ledger.liveGlContexts(), ledger.summary()).toBe(1)
+    expect(ledger.glContextsMade).toBe(1)
     expect(atlasPages()).toBe(1)
   })
 
@@ -340,11 +379,12 @@ describe('a WebGL terminal pane gives its GPU memory back', () => {
     await frame()
     expect(ledger.liveGlContexts()).toBe(1)
     expect(atlasPages()).toBe(1)
+    expect(liveAtlasCount()).toBe(1)
     const page = document.querySelector<HTMLCanvasElement>('[data-k2-atlas-page]')!
     expect(ledger.canvas2dBytes(), ledger.summary()).toBe(page.width * page.height * 4)
   })
 
-  it(`opening and closing the tab ${REPEAT}×: nothing left behind`, async () => {
+  it(`opening and closing the tab ${REPEAT}×: only the emptied spare is left, then nothing`, async () => {
     for (let i = 0; i < REPEAT; i++) {
       const r = renderInRoom(room, pane(true))
       await connected(i + 1)
@@ -352,13 +392,10 @@ describe('a WebGL terminal pane gives its GPU memory back', () => {
       await frame()
       expect(glCanvas()).toBeTruthy()
       r.unmount()
+      expectOnlyTheEmptiedSpare(`closed #${i}`)
     }
-    expect(ledger.glContextsMade).toBe(REPEAT)
-    expect(ledger.liveGlContexts(), ledger.summary()).toBe(0)
-    expect(ledger.drawingBufferBytes()).toBe(0)
-    expect(ledger.liveGlObjects()).toBe(0)
-    expect(ledger.canvas2dBytes(), ledger.summary()).toBe(0)
-    expect(atlasPages()).toBe(0)
+    expect(ledger.glContextsMade).toBe(1)
+    expectNothingAfterIdle()
   }, 60_000)
 
   it('many tabs, each shown once then parked: only the visible one holds a context', async () => {
@@ -382,9 +419,38 @@ describe('a WebGL terminal pane gives its GPU memory back', () => {
       await connected(i + 1)
       send(i, snapshotFrame(`tab ${i}`))
       await frame()
+      // The switch handed the one context over: no spare is left behind.
       expect(ledger.liveGlContexts(), `tab ${i} shown: ${ledger.summary()}`).toBe(1)
+      expect(hasSpareSurface()).toBe(false)
+      expect(document.querySelectorAll('[data-terminal-webgl-canvas]').length).toBe(1)
     }
-    expect(ledger.glContextsMade).toBe(TABS)
+    expect(ledger.glContextsMade).toBe(1)
     expect(atlasPages()).toBe(1)
+  }, 60_000)
+
+  it('two panes on screen at once each get a context; hiding both keeps one spare', async () => {
+    const both = (visible: boolean) => (
+      <>
+        {['left', 'right'].map((id) => (
+          <TabVisibilityContext.Provider key={id} value={visible}>
+            <SessionViewChromeContext.Provider value={chrome}>
+              <TerminalPane terminalId={id} cwd="/tmp/ws" />
+            </SessionViewChromeContext.Provider>
+          </TabVisibilityContext.Provider>
+        ))}
+      </>
+    )
+    const { rerender } = renderInRoom(room, both(true))
+    await connected(2)
+    send(0, snapshotFrame('left'))
+    send(1, snapshotFrame('right'))
+    await frame()
+    expect(ledger.liveGlContexts(), ledger.summary()).toBe(2)
+    // Same font: one atlas between them.
+    expect(atlasPages()).toBe(1)
+    rerender(both(false))
+    expectOnlyTheEmptiedSpare('both hidden')
+    expect(ledger.liveGlContexts()).toBe(1)
+    expectNothingAfterIdle()
   }, 60_000)
 })

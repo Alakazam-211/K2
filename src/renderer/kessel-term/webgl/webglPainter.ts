@@ -20,6 +20,13 @@ import {
 } from './glBackend'
 import { FrameBuffers, packFrame, prewarmRows, RowCache } from './packFrame'
 import { GlyphAtlas } from './glyphAtlas'
+import { acquireAtlas, releaseAtlas } from './atlasCache'
+import {
+  adoptSurface,
+  parkSurface,
+  takeSpareSurface,
+  type GlSurface,
+} from './glSurfacePool'
 import { createContextLossTracker } from './contextLoss'
 import {
   TEXT_GAMMA_LIGHT,
@@ -86,6 +93,13 @@ export function createWebglPainter(
   /** Last frame drawn — replayed after a successful context restore
    *  (nothing upstream re-renders until the next snapshot/scroll). */
   let lastFrame: PainterFrame | null = null
+  /** Host mode (`mount(host)`, what TerminalPane uses): the canvas and its
+   *  context come from the spare surface when there is one and go back to
+   *  it on dispose (glSurfacePool), and the atlas is the font's shared one
+   *  (atlasCache). Canvas mode (`mount(canvas)`) owns both, as before. */
+  let shared = false
+  let surface: GlSurface | null = null
+  let reusedSurface = false
 
   const cache = new RowCache()
   const buffers = new FrameBuffers()
@@ -195,6 +209,7 @@ export function createWebglPainter(
       if (disposed || !canvas) return
       backend?.dispose()
       backend = createBackend(canvas)
+      if (surface && backend) surface.backend = backend
       if (!backend) {
         fatal('webgl2-restore-reinit-failed')
         return
@@ -223,38 +238,86 @@ export function createWebglPainter(
     lossTracker.handleRestored()
   }
 
+  /** Clear a tiny buffer to a known color and read it back. Catches
+   *  contexts that "work" but never present real pixels (the historical
+   *  WKWebView failure mode). Once per context, never on reuse. */
+  const sanityProbe = (el: HTMLCanvasElement, be: PainterBackend): boolean => {
+    el.width = 4
+    el.height = 4
+    be.resize(4, 4)
+    be.beginFrame(SANITY_COLOR)
+    const px = be.readPixel(1, 1)
+    const ok =
+      px !== null &&
+      Math.abs(px[0] - ((SANITY_COLOR >> 16) & 0xff)) <= 2 &&
+      Math.abs(px[1] - ((SANITY_COLOR >> 8) & 0xff)) <= 2 &&
+      Math.abs(px[2] - (SANITY_COLOR & 0xff)) <= 2
+    // Collapse the probe buffer so no colored speck shows before the
+    // first real frame sizes the canvas.
+    if (ok) {
+      el.width = 0
+      el.height = 0
+    }
+    return ok
+  }
+
   return {
-    mount(el: HTMLCanvasElement): void {
+    mount(target: HTMLElement): void {
       if (disposed) return
+      if (target instanceof HTMLCanvasElement) {
+        canvas = target
+        canvas.addEventListener('webglcontextlost', onContextLost)
+        canvas.addEventListener('webglcontextrestored', onContextRestored)
+        backend = createBackend(canvas)
+        if (!backend) {
+          fatal('webgl2-unavailable')
+          return
+        }
+        if (!sanityProbe(canvas, backend)) fatal('webgl2-sanity-readback-failed')
+        return
+      }
+      // Host mode: take the spare surface (context and programs already
+      // built and probed) or build one, and put its canvas in the host.
+      shared = true
+      const spare = takeSpareSurface()
+      reusedSurface = spare !== null
+      let el: HTMLCanvasElement
+      if (spare) {
+        el = spare.canvas
+        backend = spare.backend
+        surface = spare
+      } else {
+        el = document.createElement('canvas')
+        backend = createBackend(el)
+      }
       canvas = el
-      canvas.addEventListener('webglcontextlost', onContextLost)
-      canvas.addEventListener('webglcontextrestored', onContextRestored)
-      backend = createBackend(canvas)
+      el.setAttribute('data-terminal-webgl-canvas', '')
+      el.style.display = 'block'
+      el.style.pointerEvents = 'none'
+      el.addEventListener('webglcontextlost', onContextLost)
+      el.addEventListener('webglcontextrestored', onContextRestored)
       if (!backend) {
         fatal('webgl2-unavailable')
         return
       }
-      // Sanity probe: clear a tiny buffer to a known color and read it
-      // back. Catches contexts that "work" but never present real
-      // pixels (the historical WKWebView failure mode).
-      canvas.width = 4
-      canvas.height = 4
-      backend.resize(4, 4)
-      backend.beginFrame(SANITY_COLOR)
-      const px = backend.readPixel(1, 1)
-      const ok =
-        px !== null &&
-        Math.abs(px[0] - ((SANITY_COLOR >> 16) & 0xff)) <= 2 &&
-        Math.abs(px[1] - ((SANITY_COLOR >> 8) & 0xff)) <= 2 &&
-        Math.abs(px[2] - (SANITY_COLOR & 0xff)) <= 2
-      if (!ok) {
-        fatal('webgl2-sanity-readback-failed')
-        return
+      if (!spare) {
+        if (!sanityProbe(el, backend)) {
+          fatal('webgl2-sanity-readback-failed')
+          return
+        }
+        surface = { canvas: el, backend }
+        adoptSurface(surface)
       }
-      // Collapse the probe buffer so no colored speck shows before
-      // the first real frame sizes the canvas.
-      canvas.width = 0
-      canvas.height = 0
+      // A reused surface's atlas texture was trimmed and its buffer is 0x0:
+      // the first frame uploads and sizes again.
+      uploadedAtlasVersion = -1
+      canvasW = 0
+      canvasH = 0
+      target.appendChild(el)
+    },
+
+    reusedSurface(): boolean {
+      return reusedSurface
     },
 
     setMetrics(m: PainterMetrics): void {
@@ -270,14 +333,23 @@ export function createWebglPainter(
       // changes deliberately do NOT land here (color is
       // per-instance; the atlas is colorless — brief §1.3's win over
       // xterm's rebuild-on-theme).
-      atlas?.dispose()
-      atlas = new GlyphAtlas({
+      const cfg = {
         deviceCellW,
         deviceCellH,
         fontFamily: m.fontFamily,
         fontDevicePx: Math.round(m.fontSize * m.dpr),
-      })
-      atlas.warmUp()
+      }
+      if (shared) {
+        // The font's shared atlas, acquired before the old one is let go
+        // so an unchanged font keeps its atlas.
+        const next = acquireAtlas(cfg)
+        if (atlas) releaseAtlas(atlas)
+        atlas = next
+      } else {
+        atlas?.dispose()
+        atlas = new GlyphAtlas(cfg)
+        atlas.warmUp()
+      }
       uploadedAtlasVersion = -1
       cache.clear()
       // Force a canvas re-size on the next render.
@@ -304,18 +376,38 @@ export function createWebglPainter(
         canvas.removeEventListener('webglcontextlost', onContextLost)
         canvas.removeEventListener('webglcontextrestored', onContextRestored)
       }
-      // The pane renders a fresh canvas for every painter, so this one's
-      // context is released, not just emptied: drawing buffer shrunk and
-      // the context lost, freed in the GPU process now (not at GC).
-      if (backend) backend.dispose({ release: true })
-      else if (canvas) {
-        canvas.width = 0
-        canvas.height = 0
+      if (shared) {
+        // Host mode: a healthy surface becomes the spare (emptied, out of
+        // the document, freed if nobody takes it soon); a broken one is
+        // freed now.
+        if (surface && backend && !fatalFired && lossTracker.state === 'live') {
+          surface.backend = backend
+          parkSurface(surface)
+        } else {
+          canvas?.remove()
+          if (backend) backend.dispose({ release: true })
+          else if (canvas) {
+            canvas.width = 0
+            canvas.height = 0
+          }
+        }
+        if (atlas) releaseAtlas(atlas)
+      } else {
+        // Canvas mode: the pane renders a fresh canvas for every painter,
+        // so this one's context is released, not just emptied: drawing
+        // buffer shrunk and the context lost, freed in the GPU process now
+        // (not at GC).
+        if (backend) backend.dispose({ release: true })
+        else if (canvas) {
+          canvas.width = 0
+          canvas.height = 0
+        }
+        atlas?.dispose()
       }
+      surface = null
       backend = null
       canvas = null
       lastFrame = null
-      atlas?.dispose()
       atlas = null
       cache.clear()
     },

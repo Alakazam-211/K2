@@ -2862,7 +2862,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // layout effects in dependency order (create → metrics → render)
   // so the first snapshot paints in the same commit that mounts the
   // canvas.
-  const webglCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  const webglHostRef = useRef<HTMLDivElement | null>(null)
   const painterRef = useRef<TerminalPainter | null>(null)
   // Live WebGL text-weight: per-style value from the style store
   // (Settings → Styles). Must participate in the theme object so
@@ -3012,15 +3012,17 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
 
   useLayoutEffect(() => {
     if (!webglSurfaceActive) return
-    const canvas = webglCanvasRef.current
-    if (!canvas) return
+    const host = webglHostRef.current
+    if (!host) return
     const painter = createWebglPainter()
     painter.onFatal((reason) => {
       // Demote THIS pane to the DOM strip. Context-lost-unrestored can
       // recover on the next show (see effect above); other fatals stick.
       setPainterFatal(reason)
     })
-    painter.mount(canvas)
+    // Host mode: the spare surface (the context the pane that just hid
+    // gave back) when there is one, and the font's shared atlas.
+    painter.mount(host)
     painterRef.current = painter
     lastPaintedRef.current.snapshot = null
     return () => {
@@ -5642,16 +5644,18 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
              DOM rows. Scrolling is painted internally (fraction
              uniform), not via translateY. pointer-events stay on the
              container — the canvas is inert like the row divs.
-             Rendered only while the GL surface is live: every show gets
-             a fresh element and every hide releases the old one's
-             context (webglPainter dispose), so a hidden or parked pane
-             holds no drawing buffer and no slot in WebKit's 16-context
-             list. */
+             Rendered only while the GL surface is live: a hidden or
+             parked pane holds no drawing buffer and no context. Its
+             surface becomes the one spare (emptied) that the next pane
+             to show takes (glSurfacePool), so a switch moves one
+             context instead of losing one and building another. The
+             painter puts the canvas in this host; React never owns it,
+             so it can move between panes. */
           webglSurfaceActive ? (
-            <canvas
-              ref={webglCanvasRef}
-              data-terminal-webgl-canvas=""
-              style={{ display: 'block', pointerEvents: 'none' }}
+            <div
+              ref={webglHostRef}
+              data-terminal-webgl-host=""
+              style={{ display: 'contents' }}
             />
           ) : null
         ) : (

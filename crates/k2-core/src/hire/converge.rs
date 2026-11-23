@@ -95,11 +95,10 @@ pub struct ConvergeAuthority {
     /// exist yet, in any spelling, and must not be a registered workspace.
     /// See [`create_only_path`] and [`claim_new_folder`].
     pub create_only: bool,
-    /// prd-agent-templates-v1 T3 (security review): an API key's template
-    /// hire must make a NEW workspace: the folder may not exist (or must be
-    /// empty and unregistered), so a key can't apply a template (and its
-    /// permissions) to an existing workspace. Re-applying stays a person's.
-    /// An agent's hire is [`Self::create_only`].
+    /// An API key's template hire must make a NEW workspace: the folder may
+    /// not exist (or must be empty and unregistered), so a key can't apply a
+    /// template (and its permissions) to an existing workspace. Re-applying
+    /// stays a person's. An agent's hire is [`Self::create_only`].
     pub new_only: bool,
 }
 

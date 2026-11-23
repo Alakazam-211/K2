@@ -6,7 +6,7 @@
 #      passport is a real main session) hires a Developer. Boss can't give
 #      compute.use, permission cards are on, and the new agent has no
 #      Thread yet: the plan says "card" and cardsPending names compute.use;
-#      the daemon keeps it (0309); no request exists yet.
+#      the daemon keeps it (0330); no request exists yet.
 #   2. Dev edits its own template.lock to ask for more: no effect.
 #   3. The new agent's first chat starts (the same start every session
 #      passes, v2_session_map::register): the card is filed on THAT agent's

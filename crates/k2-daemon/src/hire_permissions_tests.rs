@@ -1,6 +1,6 @@
 //! The permissions step of a template hire (prd-agent-templates-v1 §9, T3):
 //! reach per hirer through the real hire doors, declines and cards held by
-//! the daemon (0309, never the agent's own lock), cards filed at the first
+//! the daemon (0330, never the agent's own lock), cards filed at the first
 //! start, new folders only for agents and keys, compute never passed on by
 //! an agent, and the audit. Lib tests never flip the process cards switch
 //! (lane B's rule): a test sets it for its own thread
@@ -377,7 +377,7 @@ fn an_agent_passes_on_only_what_it_holds_never_owner_switches_or_compute() {
 /// An agent and an API key make a new workspace only: never its own, a
 /// peer's, or a folder with something in it. An agent's hire is main's
 /// create-only passport hire (`owner_only`, any folder that exists, an empty
-/// one too); a key's template hire is T3's `existing_workspace` (an empty,
+/// one too); a key's template hire is `existing_workspace` (an empty,
 /// unregistered folder is new). A key's plain converge of a workspace it was
 /// granted stays as it was.
 #[test]
@@ -421,9 +421,9 @@ fn agents_and_keys_hire_only_into_a_new_folder() {
 }
 
 /// A shell tab in a cell hires as its agent, so it is held to the agent's
-/// rule (T3 re-review B): only inside the hire root, only into a new
-/// folder, never its own workspace or a peer's. An agent can type into a
-/// shell tab it opened.
+/// rule: only inside the hire root, only into a new folder, never its own
+/// workspace or a peer's (`owner_only`, main's passport hire). An agent can
+/// type into a shell tab it opened.
 #[test]
 fn a_shell_tab_hires_only_into_a_new_folder_under_the_hire_root() {
     let _home = k2_core::test_env::TempHome::new();
@@ -436,9 +436,9 @@ fn a_shell_tab_hires_only_into_a_new_folder_under_the_hire_root() {
     assert_eq!(st, 200, "{v}");
     for path in [ws_path(&ws), peer] {
         let (st, e) = cli(shell.clone(), json!({ "template": "writer", "path": path, "launch": false }));
-        assert_eq!((st, e["error"]["code"].as_str()), (403, Some("existing_workspace")), "{path}: {e}");
+        assert_eq!((st, e["error"]["code"].as_str()), (403, Some("owner_only")), "{path}: {e}");
         let (st, e) = cli(shell.clone(), json!({ "path": path, "name": "Again" }));
-        assert_eq!((st, e["error"]["code"].as_str()), (403, Some("existing_workspace")), "{path} plain: {e}");
+        assert_eq!((st, e["error"]["code"].as_str()), (403, Some("owner_only")), "{path} plain: {e}");
     }
     // Beside the hire root, not inside it.
     let away = root.parent().unwrap().join(uniq("away")).to_string_lossy().into_owned();

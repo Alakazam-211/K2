@@ -1,5 +1,5 @@
 //! What a template hire left for later, held by the daemon (migration 0330;
-//! prd-agent-templates-v1 T3, after the security review).
+//! agent templates, the permissions step).
 //!
 //! - **card:** a suggested switch the hirer couldn't give, asked of a
 //!   person on a permission card. `pending` while the new agent has no

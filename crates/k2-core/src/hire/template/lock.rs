@@ -31,7 +31,7 @@ pub struct TemplateLock {
     #[serde(default)]
     pub granted: Vec<String>,
     /// Suggestions asked of a person on a card (T3). A copy for people to
-    /// read: the daemon decides from its own record (0309), never this.
+    /// read: the daemon decides from its own record (0330), never this.
     #[serde(default)]
     pub carded: Vec<String>,
     /// Files the agent had changed when an upgrade came: kept, with the new

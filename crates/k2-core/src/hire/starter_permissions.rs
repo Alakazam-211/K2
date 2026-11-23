@@ -29,7 +29,7 @@
 //!   passes on only the standing switches it holds itself, never an
 //!   Owner-floor one, and never `compute.use` (the hire would get every
 //!   machine, wider than the hirer's own grants): the Chief of Staff asks
-//!   for compute on a card (0.46.15, T3 security review).
+//!   for compute on a card.
 //! - **No silent widening.** K2 never widens either list on upgrade: these
 //!   are applied once, when the agent is made.
 //!

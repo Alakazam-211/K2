@@ -1,5 +1,5 @@
 -- 0330: what a template hire left for later, held by the daemon
--- (prd-agent-templates-v1 T3, after the security review). Two kinds:
+-- (agent templates, the permissions step). Two kinds:
 --   card      a switch the hirer couldn't give, asked of a person on a
 --             permission card: `pending` until the new agent first starts
 --             (it had no Thread at the hire), then `filed` (with the

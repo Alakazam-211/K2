@@ -814,7 +814,7 @@ pub fn apply_with(req: &ApplyRequest, caller: &HireCaller, auth: &ConvergeAuthor
         Some(p) => converge::expand_hire_path(p)?,
         None => default_path(req, &tpl, auth)?,
     };
-    // T3: a key's template hire makes a new workspace only, inside its
+    // A key's template hire makes a new workspace only, inside its
     // root; the dry run says so too, and converge checks both again.
     if auth.new_only {
         converge::check_new_folder(caller, &path)?;

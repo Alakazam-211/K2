@@ -28,8 +28,7 @@ use serde_json::json;
 use crate::permission::actions::Answerer;
 
 /// Standing switches an agent never passes on, even one it holds
-/// (prd-agent-templates-v1 T3, security review): `compute.use` would hand
-/// the hire every machine with default limits, wider than the hirer's own
+/// `compute.use` would hand the hire every machine with default limits, wider than the hirer's own
 /// grants, so a person is asked instead (a card, or Settings).
 pub(crate) const AGENT_NEVER_PASSES: &[&str] = &["compute.use"];
 

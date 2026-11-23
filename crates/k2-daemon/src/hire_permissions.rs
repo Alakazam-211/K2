@@ -269,7 +269,7 @@ pub(crate) fn step_with(inp: &StepIn<'_>, cards_on: bool) -> Result<StepOut, Hir
     let hirer = hirer_of(inp.caller);
     let target = target_of(inp.path);
     let handle = handle_for(inp.path, target.as_ref());
-    // The daemon's record of earlier hires of this workspace (0309), never
+    // The daemon's record of earlier hires of this workspace (0330), never
     // the agent's own lock: what was declined, and what was asked.
     // A failed read stops the hire (never an empty list).
     let (held_declines, asked) = match target.as_ref() {
@@ -494,7 +494,7 @@ fn switch_row(inp: &StepIn<'_>, ctx: &RowCtx<'_>, action: &str, out: &mut StepOu
 }
 
 /// Ask a person on a card: now when the agent has a Thread, else recorded
-/// in the daemon (0309) and filed at its first start. A dry run only says so.
+/// in the daemon (0330) and filed at its first start. A dry run only says so.
 fn card(inp: &StepIn<'_>, t: Option<&Target>, action: &str, c: Cant, out: &mut StepOut) {
     if inp.dry_run {
         out.rows.push(Decision::new(action, "card", Some(format!("{}; a person is asked on a card", c.why)), None));
@@ -624,7 +624,7 @@ fn record(inp: &StepIn<'_>, t: &Option<Target>, action: &str, result: &str, card
 // ── cards waiting for the first start ───────────────────────────────
 
 /// File the cards a hire left for this workspace's first start, from the
-/// daemon's record (0309; the agent's own lock is never read), once its
+/// daemon's record (0330; the agent's own lock is never read), once its
 /// Thread exists and while it may ask for cards (the server's switch and
 /// its own, as the hire left it). Each one is claimed before it is filed,
 /// so it goes once. `false`: nothing filed now (none waiting, no Thread

@@ -65,6 +65,11 @@ pub fn init_at(dir: &Path) {
     git(dir, &["config", "user.name", "K2 Test"]);
     git(dir, &["config", "user.email", "k2-test@example.com"]);
     git(dir, &["config", "commit.gpgsign", "false"]);
+    // K2's own writes run the person's git with their global and system
+    // config (Git for Windows ships core.autocrlf=true); pin line endings in
+    // the repo so fixtures check out the same bytes on every machine. A
+    // test about autocrlf sets it itself.
+    git(dir, &["config", "core.autocrlf", "false"]);
 }
 
 pub fn write(dir: &Path, rel: &str, body: impl AsRef<[u8]>) {

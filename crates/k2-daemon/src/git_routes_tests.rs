@@ -45,6 +45,10 @@ fn repo(tag: &str) -> PathBuf {
     // Commits made by the daemon's `git::commit` read the repo config.
     git(&d, &["config", "user.name", "K2 Test"]);
     git(&d, &["config", "user.email", "k2-test@example.com"]);
+    // K2's writes run the person's git with their system config (Git for
+    // Windows ships core.autocrlf=true there); pin line endings in the
+    // repo so the checked-out bytes are the same on every machine.
+    git(&d, &["config", "core.autocrlf", "false"]);
     std::fs::write(d.join("a.txt"), "one\ntwo\n").expect("a");
     git(&d, &["add", "-A"]);
     git(&d, &["commit", "-q", "-m", "init"]);

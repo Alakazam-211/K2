@@ -55,6 +55,8 @@ job="$(printf '%s\n' "$out" | sed -n 's/.*k2 compute wait \([0-9a-f]*\).*/\1/p' 
     || { echo "b4-prerows: FAIL: build job $job did not finish (k2 compute logs $job)" >&2; exit 1; }
 "$k2" compute fetch "$job" --out "$work" --over-relay </dev/null >/dev/null
 art="$work/iso-art"
+# This checkout's rows script (a fix to it needs no rebuild of the rest).
+cp "$repo/scripts/agent-isolation-b4-prerows.sh" "$art/"
 
 remote="iso-prerows-${sha:0:12}"
 ssh "${ssh_opts[@]}" "$host" "rm -rf ~/$remote && mkdir -p ~/$remote"

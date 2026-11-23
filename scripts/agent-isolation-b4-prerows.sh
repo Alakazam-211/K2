@@ -48,9 +48,7 @@ sudo systemd-run --quiet --collect --scope --slice="$slice" --unit=k2isorow-sibl
 sib_wrap=$!
 sib=""
 for _ in $(seq 1 50); do
-    sib="$(systemctl show -p MainPID --value k2isorow-sibling.scope 2>/dev/null)"
-    [ -n "$sib" ] && [ "$sib" != 0 ] && break
-    sib="$(pgrep -u "$uid" -f '^sleep 600$' | head -1)"
+    sib="$(head -1 /sys/fs/cgroup/$slice/k2isorow-sibling.scope/cgroup.procs 2>/dev/null)"
     [ -n "$sib" ] && break
     sleep 0.1
 done

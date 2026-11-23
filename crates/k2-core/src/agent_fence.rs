@@ -347,6 +347,14 @@ pub fn open_for_agent(r: &AgentReach, path: &Path) -> Result<(std::fs::File, Pat
     if !meta.is_file() {
         return Err(format!("{} isn't a regular file", path.display()));
     }
+    // M2 review: a hard link made before the fence went on is a second name
+    // for a file the fence may not reach; a fenced agent's file has one.
+    {
+        use std::os::unix::fs::MetadataExt;
+        if r.fenced && meta.nlink() > 1 {
+            return Err(format!("{} has more than one name (a hard link), and this agent's folder fence is on: copy it first", path.display()));
+        }
+    }
     let real = fd_path(&f).ok_or_else(|| format!("{}: can't read where the opened file is", path.display()))?;
     if let Some(why) = resolved_refusal(r, &real, path) {
         return Err(why);
@@ -952,6 +960,13 @@ mod tests {
         // SAFETY: a NUL-terminated path.
         assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
         assert!(open_for_agent(&r, &fifo).unwrap_err().contains("regular file"));
+        // A hard link made before the fence went on: refused for a fenced
+        // agent, read for an unfenced one (its courtesy check is the path).
+        std::fs::write(ws.join("one"), "ONE").unwrap();
+        std::fs::hard_link(ws.join("one"), ws.join("two")).unwrap();
+        assert!(open_for_agent(&r, &ws.join("two")).unwrap_err().contains("more than one name"));
+        let open = AgentReach { fenced: false, ..r };
+        assert!(open_for_agent(&open, &ws.join("two")).is_ok());
         let _ = std::fs::remove_dir_all(&root);
     }
 

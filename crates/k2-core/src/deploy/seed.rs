@@ -252,6 +252,7 @@ pub fn build_excludes(manifest_exclude: &[String]) -> BTreeSet<String> {
 
 fn copy_tree(src: &Path, dst: &Path, exclude: &BTreeSet<String>, ignore: Option<&ignore::gitignore::Gitignore>) -> Result<(), SeedError> {
     fs::create_dir_all(dst).map_err(|e| SeedError::new(codes::SEED_INVALID, format!("mkdir {}: {e}", dst.display())))?;
+    let src_c = fs::canonicalize(src).map_err(|e| SeedError::new(codes::SEED_INVALID, format!("{}: {e}", src.display())))?;
     walk_ignoring(src, src, exclude, ignore, &mut |rel, meta, path| {
         let to = dst.join(rel);
         let ft = meta.file_type();
@@ -268,13 +269,44 @@ fn copy_tree(src: &Path, dst: &Path, exclude: &BTreeSet<String>, ignore: Option<
             #[cfg(not(unix))]
             return Err(SeedError::new(codes::SEED_INVALID, "symlinks in Seeds need a Unix host"));
         } else if ft.is_file() {
-            fs::copy(path, &to).map_err(err)?;
-            set_mode(&to, if is_exec(meta) { 0o755 } else { 0o644 })?;
+            // M2 review G3: the walk's lstat said "file"; the copy reads the
+            // file it opens (never through a link, and only inside the folder),
+            // so a swap after the walk copies nothing from outside.
+            let mut from = open_inside(path, &src_c).map_err(err)?;
+            let exec = from.metadata().map(|m| is_exec(&m)).map_err(err)?;
+            let mut out = fs::File::create(&to).map_err(err)?;
+            std::io::copy(&mut from, &mut out).map_err(err)?;
+            drop(out);
+            set_mode(&to, if exec { 0o755 } else { 0o644 })?;
         } else {
             return Err(SeedError::new(codes::SEED_INVALID, format!("{} is not a file, folder or symlink", rel.display())));
         }
         Ok(())
     })
+}
+
+/// Open `path` for reading only if it is a regular file (the last name is
+/// never followed) and the file opened is inside `root` (read back from the
+/// handle). Never blocks on a FIFO.
+#[cfg(unix)]
+fn open_inside(path: &Path, root: &Path) -> std::io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let f = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC | libc::O_NOCTTY)
+        .open(path)?;
+    if !f.metadata()?.is_file() {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "not a regular file"));
+    }
+    match crate::agent_fence::fd_path(&f) {
+        Some(real) if real.starts_with(root) => Ok(f),
+        _ => Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "the file opened is outside the folder")),
+    }
+}
+
+#[cfg(not(unix))]
+fn open_inside(path: &Path, _root: &Path) -> std::io::Result<fs::File> {
+    fs::File::open(path)
 }
 
 #[cfg(unix)]
@@ -741,6 +773,29 @@ mod tests {
         .collect();
         let got: Vec<String> = largest_of(m).into_iter().map(|p| p.path).collect();
         assert_eq!(got, vec![".next/cache", "node_modules", "server.js"]);
+    }
+
+    /// M2 review G3: the copy reads the file it opens: a name that became a
+    /// link (after the walk saw a file), or a file reached through a folder
+    /// that became a link out, is not copied.
+    #[cfg(unix)]
+    #[test]
+    fn the_folder_copy_reads_only_files_it_opened_inside() {
+        let base = std::env::temp_dir().join(format!("k2-seed-open-{}-{}", std::process::id(), uuid::Uuid::new_v4().simple()));
+        let root = base.join("site");
+        let outside = base.join("outside");
+        fs::create_dir_all(root.join("sub")).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("secret"), "S").unwrap();
+        fs::write(root.join("page.html"), "P").unwrap();
+        let root_c = fs::canonicalize(&root).unwrap();
+        assert!(open_inside(&root.join("page.html"), &root_c).is_ok(), "its own file");
+        std::os::unix::fs::symlink(outside.join("secret"), root.join("swapped")).unwrap();
+        assert!(open_inside(&root.join("swapped"), &root_c).is_err(), "a name that is a link");
+        fs::remove_dir_all(root.join("sub")).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("sub")).unwrap();
+        assert!(open_inside(&root.join("sub/secret"), &root_c).is_err(), "through a folder that became a link out");
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]

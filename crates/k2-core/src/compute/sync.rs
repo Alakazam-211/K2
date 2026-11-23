@@ -63,6 +63,16 @@ pub fn workspace_repo_root(ws_dir: &Path, fenced: bool) -> Result<PathBuf, Strin
                     dir.display()
                 ));
             }
+            // M2 review G2 (stopgap until the repo-reading git steps run under
+            // the agent's fence): git follows links inside its own folder
+            // (objects, packs, refs), so a fenced workspace's git folders
+            // hold none.
+            if let Some(link) = first_link_in(&d) {
+                return Err(format!(
+                    "the workspace's {what} holds a link ({}), and its folder fence is on, so K2 won't ship it",
+                    link.display()
+                ));
+            }
             for alt in ["objects/info/alternates", "objects/info/http-alternates"] {
                 if d.join(alt).exists() {
                     return Err(format!(
@@ -74,6 +84,24 @@ pub fn workspace_repo_root(ws_dir: &Path, fenced: bool) -> Result<PathBuf, Strin
         }
     }
     Ok(root)
+}
+
+/// The first symlink anywhere under `dir` (by `lstat`, never followed).
+fn first_link_in(dir: &Path) -> Option<PathBuf> {
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        for e in rd.flatten() {
+            let Ok(ft) = e.file_type() else { continue };
+            if ft.is_symlink() {
+                return Some(e.path());
+            }
+            if ft.is_dir() {
+                stack.push(e.path());
+            }
+        }
+    }
+    None
 }
 
 /// The repo's own git dir (`.git`, or the folder a `.git` file names).
@@ -724,6 +752,7 @@ mod tests {
 
     /// M2 (S0): a workspace nested in a larger repo ships that repo only
     /// while its folder fence is off; fenced, only a repo of its own.
+    #[cfg(unix)]
     #[test]
     fn a_fenced_workspace_ships_only_its_own_repo() {
         let d = temp("fencedroot");
@@ -753,6 +782,14 @@ mod tests {
         std::fs::write(borrow.join(".git/objects/info/alternates"), format!("{}\n", other.join(".git/objects").display())).unwrap();
         let e = workspace_repo_root(&borrow, true).unwrap_err();
         assert!(e.contains("borrows objects"), "{e}");
+        // Review G2: a ref (or objects) inside the git folder linked to
+        // another repo's: refused while fenced.
+        let linked = d.join("linked");
+        nested(&linked, "l.rs");
+        std::os::unix::fs::symlink(other.join(".git/refs/heads"), linked.join(".git/refs/theirs")).unwrap();
+        assert!(workspace_repo_root(&linked, false).is_ok(), "unfenced: as before");
+        let e = workspace_repo_root(&linked, true).unwrap_err();
+        assert!(e.contains("holds a link"), "{e}");
         let _ = std::fs::remove_dir_all(&d);
     }
 

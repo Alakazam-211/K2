@@ -578,6 +578,8 @@ fn a_fenced_agent_links_no_outside_file_in() {
     d.start();
     let (a_id, a_ws) = d.workspace("A");
     let (_b_id, b_ws) = d.workspace("B");
+    // A hard link made before the fence went on (by anyone unfenced).
+    std::fs::hard_link(b_ws.join("README.md"), a_ws.join("premade")).unwrap();
     d.set_fence(&a_id, true);
     let ssh = d.home.join(".ssh");
     std::fs::create_dir_all(&ssh).unwrap();
@@ -589,6 +591,7 @@ ln {b}/README.md {a}/hl2 2> {a}/e2; echo "hardlink_sibling_rc $? $(cat {a}/e2)" 
 ln -s {key} {a}/sl 2> {a}/e3; cat {a}/sl > /dev/null 2> {a}/e4; echo "symlink_read_rc $? $(cat {a}/e4)" >> $R
 code=$(curl -s -o {a}/o1 -w '%{{http_code}}' --unix-socket "$K2_HOOK_SOCK" -X POST -H "Authorization: Bearer $K2_HOOK_TOKEN" -H 'Content-Type: application/x-www-form-urlencoded' --data "workspace={a_id}&path={a}/sl&wake=false" http://localhost/cli/inbox/deliver); echo "deliver_symlink $code $(cut -c1-200 {a}/o1)" >> $R
 code=$(curl -s -o {a}/o2 -w '%{{http_code}}' --unix-socket "$K2_HOOK_SOCK" -X POST -H "Authorization: Bearer $K2_HOOK_TOKEN" -H 'Content-Type: application/x-www-form-urlencoded' --data "workspace={a_id}&path={key}&wake=false" http://localhost/cli/inbox/deliver); echo "deliver_key $code $(cut -c1-200 {a}/o2)" >> $R
+code=$(curl -s -o {a}/o3 -w '%{{http_code}}' --unix-socket "$K2_HOOK_SOCK" -X POST -H "Authorization: Bearer $K2_HOOK_TOKEN" -H 'Content-Type: application/x-www-form-urlencoded' --data "workspace={a_id}&path={a}/premade&wake=false" http://localhost/cli/inbox/deliver); echo "deliver_premade $code $(cut -c1-200 {a}/o3)" >> $R
 echo "done" >> $R; exec sleep 3600
 "#,
         a = a_ws.display(),
@@ -604,7 +607,7 @@ echo "done" >> $R; exec sleep 3600
     assert!(!r["hardlink_sibling_rc"].starts_with("0"), "a hard link to a sibling's file is refused: {}", r["hardlink_sibling_rc"]);
     assert!(!a_ws.join("hl").exists() && !a_ws.join("hl2").exists(), "no hard link was made");
     assert!(denied(&r["symlink_read_rc"]), "a symlink out can't be read: {}", r["symlink_read_rc"]);
-    for row in ["deliver_symlink", "deliver_key"] {
+    for row in ["deliver_symlink", "deliver_key", "deliver_premade"] {
         assert!(r[row].starts_with("403") && r[row].contains("path_out_of_reach"), "{row}: the daemon refuses: {}", r[row]);
     }
     let inbox = a_ws.join(".k2/inbox");

@@ -555,6 +555,7 @@ async fn async_main() {
     k2_core::agent_cgroup::init();
     // M1b: root-owned agent cgroups when the root helper places them.
     crate::agent_isolation::register_root_placement();
+    crate::agent_isolation::sweep_agent_reads();
     // App box prep: the nft table and io.cost don't survive a reboot.
     // Re-apply on a prepared box (Linux, preview on, helper protocol 6).
     crate::apps::box_prep::spawn_boot_reapply();

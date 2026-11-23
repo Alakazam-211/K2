@@ -735,6 +735,27 @@ pub fn owner_in(params: &std::collections::HashMap<String, String>) -> bool {
     params.get("token").is_some_and(|t| !owner.is_empty() && ct_eq(t.trim(), owner))
 }
 
+/// Why agent `ws`'s next session couldn't be fenced (`default_view`'s
+/// refusal), or `None`.
+pub fn fence_problem(ws: &str, workspace: &Path) -> Option<String> {
+    let home = k2_core::paths::home_dir()?;
+    let k2_home = k2_core::paths::k2_home();
+    let tmp = k2_home.join("agents").join(ws).join("tmp");
+    let env = std::collections::BTreeMap::new();
+    k2_core::agent_fence::default_view(&k2_core::agent_fence::ViewInputs { home: &home, k2_home: &k2_home, workspace, tmp_dir: &tmp, env: &env }).err()
+}
+
+/// At boot: the daemon's copies of files it read for agents
+/// (`~/.k2/run/agent-reads`) don't outlive a crash (M2 review N1).
+pub fn sweep_agent_reads() {
+    let dir = k2_core::paths::k2_home().join("run").join("agent-reads");
+    match std::fs::remove_dir_all(&dir) {
+        Ok(()) => log_debug!("[agents] swept {}", dir.display()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => log_debug!("[agents] WARN sweep {}: {e}", dir.display()),
+    }
+}
+
 /// `GET /cli/agent-whois?pid=N` (owner only): which agent owns `pid`.
 pub fn handle_whois(params: &std::collections::HashMap<String, String>, is_owner: bool, is_post: bool) -> crate::cli_response::CliResponse {
     use crate::cli_response::CliResponse;
@@ -753,6 +774,13 @@ pub fn handle_whois(params: &std::collections::HashMap<String, String>, is_owner
         let (path, fence) = workspace_and_fence(&ws);
         v["workspace"] = serde_json::json!(path);
         v["fence"] = serde_json::json!(fence);
+        // M2 review: a fenced agent whose next session can't be fenced (its
+        // workspace's .git names a git folder outside it) says why here.
+        if let (true, Some(p)) = (fence, path.as_ref()) {
+            if let Some(why) = fence_problem(&ws, p) {
+                v["fenceRefused"] = serde_json::json!(why);
+            }
+        }
     }
     answer("200 OK", v)
 }

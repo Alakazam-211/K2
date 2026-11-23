@@ -465,7 +465,10 @@ async fn serve(args: Args) -> Result<(), String> {
     let gw = Arc::new(Gateway {
         upstream_host: host,
         app: args.app,
-        root: args.root,
+        // M2 review G1: the App's folder is resolved once, here; every file is
+        // then opened and checked against this, never a root resolved again
+        // per request (a folder swapped for a link after start serves nothing).
+        root: args.root.map(|r| dunce::canonicalize(&r).unwrap_or(r)),
         sessions: Mutex::new(HashMap::new()),
         frame_lines: args.frame.header_lines(),
     });
@@ -1246,13 +1249,14 @@ fn read_static_file(root: &Path, url_path: &str) -> Result<(String, Vec<u8>), ()
     if rel.contains('\0') || rel.split('/').any(|c| c == "..") {
         return Err(());
     }
+    // `root` is the folder as resolved at start (`Gateway::root`), never
+    // resolved again here.
     let joined = root.join(rel);
     let canon = dunce::canonicalize(&joined).map_err(|_| ())?;
-    let root_c = dunce::canonicalize(&root).map_err(|_| ())?;
-    if !canon.starts_with(&root_c) {
+    if !canon.starts_with(root) {
         return Err(());
     }
-    let bytes = read_inside(&canon, &root_c)?;
+    let bytes = read_inside(&canon, root)?;
     let ext = canon
         .extension()
         .and_then(|s| s.to_str())
@@ -1710,13 +1714,19 @@ mod tests {
         std::fs::write(root.join("index.html"), "<p>hi</p>").unwrap();
         std::os::unix::fs::symlink(secret_dir.join("daemon.token"), root.join("token.txt")).unwrap();
         std::os::unix::fs::symlink(&secret_dir, root.join("assets/out")).unwrap();
-        assert!(read_static_file(&root, "/index.html").is_ok(), "its own page");
-        assert!(read_static_file(&root, "/token.txt").is_err(), "a link to a file outside");
-        assert!(read_static_file(&root, "/assets/out/daemon.token").is_err(), "a link to a folder outside");
-        // The handle check: the name inside, the opened file outside.
         let root_c = dunce::canonicalize(&root).unwrap();
+        assert!(read_static_file(&root_c, "/index.html").is_ok(), "its own page");
+        assert!(read_static_file(&root_c, "/token.txt").is_err(), "a link to a file outside");
+        assert!(read_static_file(&root_c, "/assets/out/daemon.token").is_err(), "a link to a folder outside");
+        // The handle check: the name inside, the opened file outside.
         assert!(read_inside(&root.join("token.txt"), &root_c).is_err(), "checked where it opened");
         assert_eq!(read_inside(&root_c.join("index.html"), &root_c).unwrap(), b"<p>hi</p>");
+        // Review G1: the folder swapped for a link out after start (the
+        // gateway holds the folder as resolved then): nothing is served.
+        std::fs::remove_dir_all(&root).unwrap();
+        std::os::unix::fs::symlink(&secret_dir, &root).unwrap();
+        assert!(read_static_file(&root_c, "/daemon.token").is_err(), "the swapped folder serves nothing");
+        let _ = std::fs::remove_file(&root);
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -1728,6 +1738,8 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
         std::fs::create_dir_all(root.join("assets")).expect("assets dir");
+        // The gateway holds its folder resolved (`Gateway::root`).
+        let root = dunce::canonicalize(&root).unwrap();
         let cases = [
             ("index.html", "text/html; charset=utf-8"),
             ("assets/a.css", "text/css; charset=utf-8"),

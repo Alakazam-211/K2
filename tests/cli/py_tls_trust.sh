@@ -56,11 +56,17 @@ expect_has "the rule carries the helper" "$_K2_PY_PROXY_RULE" "def k2_tls_contex
 expect_has "the rule's opener uses K2TLSHandler" "$_K2_PY_PROXY_RULE" "K2TLSHandler()))"
 export _K2_PY_TLS _K2_PY_PROXY_RULE
 
-# Two throwaway CAs; a leaf for localhost signed by the first.
+# Two throwaway CAs; a leaf for localhost signed by the first. Each CA is
+# a real one (basicConstraints CA:TRUE, keyUsage keyCertSign): Python 3.13
+# and newer verify strictly and refuse a CA without keyUsage. Made from a
+# CSR self-signed with an extfile, which OpenSSL and LibreSSL both take.
 mkdir -p "$W/tls" "$W/certdir"
+printf 'basicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash\n' >"$W/tls/ca.ext"
 for ca in ca other; do
-    openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj "/CN=Acme throwaway $ca CA" \
-        -keyout "$W/tls/$ca.key" -out "$W/tls/$ca.pem" >>"$W/tls/log" 2>&1 \
+    openssl req -new -newkey rsa:2048 -nodes -subj "/CN=Acme throwaway $ca CA" \
+        -keyout "$W/tls/$ca.key" -out "$W/tls/$ca.csr" >>"$W/tls/log" 2>&1 \
+        && openssl x509 -req -in "$W/tls/$ca.csr" -signkey "$W/tls/$ca.key" -days 2 \
+            -extfile "$W/tls/ca.ext" -out "$W/tls/$ca.pem" >>"$W/tls/log" 2>&1 \
         || { cat "$W/tls/log" >&2; echo "FAIL: openssl could not make the $ca CA" >&2; exit 1; }
 done
 printf 'subjectAltName=DNS:localhost\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n' >"$W/tls/leaf.ext"

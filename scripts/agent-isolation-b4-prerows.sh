@@ -28,7 +28,7 @@ for t in busctl systemd-run systemctl loginctl curl tmux; do
     command -v "$t" >/dev/null || { echo "missing tool: $t" >&2; exit 2; }
 done
 [ -f "/etc/systemd/system/$unit" ] || { echo "no $unit: run agent-isolation-m1b-kernel-tests.sh --setup first" >&2; exit 2; }
-echo "box: $(hostname) · $(. /etc/os-release && echo "$PRETTY_NAME") · kernel $(uname -r) · $(systemctl --version | head -1) · kernel.pid_max $(cat /proc/sys/kernel/pid_max)"
+echo "box: $(hostname) · $(. /etc/os-release && echo "$PRETTY_NAME") · kernel $(uname -r) · $(systemctl --version | head -1) · kernel.pid_max $(cat /proc/sys/kernel/pid_max) · kernel.apparmor_restrict_unprivileged_unconfined $(cat /proc/sys/kernel/apparmor_restrict_unprivileged_unconfined 2>/dev/null || echo absent) · kernel.apparmor_restrict_unprivileged_userns $(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo absent)"
 
 ran=0
 row() { echo "row $1: $2"; ran=$((ran + 1)); }

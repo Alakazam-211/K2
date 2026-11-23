@@ -664,6 +664,9 @@ pub fn converge(
     let mut steps_out: Vec<StepReport> = Vec::new();
 
     if existing.is_none() && auth.create_only {
+        if let Some(root) = auth.new_workspace_root.as_deref() {
+            super::root::ensure_root(root)?;
+        }
         claim_new_folder(&path)?;
         steps_out.push(done("create-dir"));
         match crate::workspace::lifecycle::open_workspace_ex(&path, !no_wiki, seed_agents_md, fanout) {

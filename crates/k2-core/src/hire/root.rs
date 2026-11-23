@@ -181,12 +181,67 @@ pub fn unsafe_folder_on_the_way(_dir: &Path) -> Option<PathBuf> {
 }
 
 /// Make a hire root (or a key's folder in it) and the folders above it when
-/// it isn't there yet, before a hire walks down from it.
+/// it isn't there yet, before a hire walks down from it. Each folder made
+/// here is the server user's with mode 0700, set after it is made (never
+/// left to the umask). A folder that is there already keeps its mode; the
+/// owner-and-mode check reports one another user could change.
 pub fn ensure_root(root: &Path) -> Result<(), HireError> {
     if root.is_dir() {
         return Ok(());
     }
-    std::fs::create_dir_all(root).map_err(|e| HireError::usage(format!("make the hire root {}: {e}", root.display())))
+    let mut missing = Vec::new();
+    let mut cur = root.to_path_buf();
+    while std::fs::symlink_metadata(&cur).is_err() {
+        missing.push(cur.clone());
+        match cur.parent() {
+            Some(p) => cur = p.to_path_buf(),
+            None => break,
+        }
+    }
+    for dir in missing.iter().rev() {
+        make_private_dir(dir)?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn make_private_dir(dir: &Path) -> Result<(), HireError> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::DirBuilderExt;
+    let fail = |e: std::io::Error| HireError::usage(format!("make the hire root {}: {e}", dir.display()));
+    match std::fs::DirBuilder::new().mode(0o700).create(dir) {
+        Ok(()) => {}
+        // Made by someone else since: left as it is (the check reports it).
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Ok(()),
+        Err(e) => return Err(fail(e)),
+    }
+    let c = std::ffi::CString::new(dir.as_os_str().as_bytes()).map_err(|_| HireError::usage("a hire root path can't hold a NUL"))?;
+    // SAFETY: a valid C string; the fd is owned below.
+    let fd = unsafe { libc::open(c.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC) };
+    if fd < 0 {
+        return Err(fail(std::io::Error::last_os_error()));
+    }
+    // SAFETY: open returned a new fd that nothing else owns.
+    let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+    // SAFETY: a valid fd; stat is plain data.
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fchmod(fd.as_raw_fd(), 0o700) } != 0 || unsafe { libc::fstat(fd.as_raw_fd(), &mut st) } != 0 {
+        return Err(fail(std::io::Error::last_os_error()));
+    }
+    if st.st_uid != server_uid() {
+        return Err(unsafe_folder_error(dir));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn make_private_dir(dir: &Path) -> Result<(), HireError> {
+    match std::fs::create_dir(dir) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(e) => Err(HireError::usage(format!("make the hire root {}: {e}", dir.display()))),
+    }
 }
 
 /// `hire_root_unsafe` when another user could change a folder on the way
@@ -312,6 +367,48 @@ mod tests {
         assert!(changeable_by_others(me, 0o40775, me, false), "group writable");
         assert!(changeable_by_others(me, 0o40757, me, false), "world writable");
         assert!(changeable_by_others(0, 0o41777, me, true), "sticky and world writable (/tmp)");
+    }
+
+    /// The umask, put back on drop.
+    #[cfg(unix)]
+    struct Umask(libc::mode_t);
+
+    #[cfg(unix)]
+    impl Drop for Umask {
+        fn drop(&mut self) {
+            // SAFETY: umask has no preconditions.
+            unsafe { libc::umask(self.0) };
+        }
+    }
+
+    /// With a umask that leaves group write on, every folder the daemon
+    /// makes for a hire root is still the server user's with mode 0700, and
+    /// the root passes the owner-and-mode check; a root that is there
+    /// already keeps its mode.
+    #[cfg(unix)]
+    #[test]
+    fn a_hire_root_the_daemon_makes_is_0700_whatever_the_umask() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let home = crate::test_env::TempHome::new();
+        std::fs::set_permissions(home.path(), std::fs::Permissions::from_mode(0o700)).expect("chmod home");
+        let top = home.path().join("made");
+        let root = top.join("by").join("k2-agents");
+        {
+            // SAFETY: umask has no preconditions.
+            let _umask = Umask(unsafe { libc::umask(0o002) });
+            ensure_root(&root).expect("make the root");
+        }
+        for d in [&top, &top.join("by"), &root] {
+            let m = std::fs::symlink_metadata(d).expect("stat");
+            assert_eq!(m.permissions().mode() & 0o7777, 0o700, "{}", d.display());
+            assert_eq!(m.uid(), server_uid(), "{}", d.display());
+        }
+        assert!(check_root_safe(&root).is_ok());
+        let kept = home.path().join("kept");
+        std::fs::create_dir(&kept).expect("mkdir");
+        std::fs::set_permissions(&kept, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        ensure_root(&kept).expect("there already");
+        assert_eq!(std::fs::metadata(&kept).expect("stat").permissions().mode() & 0o7777, 0o755, "an existing root keeps its mode");
     }
 
     #[test]

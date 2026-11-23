@@ -41,4 +41,7 @@ the person runs `k2 clone approve <id>` from their own terminal (or approves in
 K2). The confirms ask whoever is at that terminal. They are not a security
 boundary against programs run as the same user: a program such as script or
 expect can answer them.
+An https server's certificate is checked against the CAs this computer
+trusts. SSL_CERT_FILE or SSL_CERT_DIR, when set, replace them, as with
+curl: only the CAs they name are trusted.
 Exit: 0 ok · 2 bad usage · 3 refused or unreachable · 130 stopped (Ctrl-C).

@@ -22,7 +22,13 @@ fn body(words: &[&str]) -> (String, String) {
 }
 
 fn source() -> String {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/app-wallet.sh");
+    shell_file("app-wallet.sh")
+}
+
+fn shell_file(name: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../cli/src")
+        .join(name);
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
 }
 
@@ -31,11 +37,31 @@ fn the_shell_hands_these_on() {
     for w in [
         &["user", "add", "bob", "--test"] as &[&str],
         &["grant", "hooks", "retry", "o1", "-h"],
+        &["grant", "hooks", "help"],
+        &["grant", "hooks", "retry", "o1", "help"],
+        &["grant", "hook", "log", "--json", "--help"],
         &["front-door", "direct", "--ui-port", "\u{663}"],
     ] {
         assert_eq!(ask(w), Ok(Ask::Shell), "{w:?}");
     }
     assert!(matches!(ask(&["grant", "hooks"]), Ok(Ask::Hooks(_))));
+    // After a bare `--` none of them is help (`_app_says_help`): the
+    // action is `--`, the usage error.
+    for w in [
+        &["grant", "hooks", "--", "help"] as &[&str],
+        &["grant", "hooks", "--", "-h"],
+    ] {
+        assert_eq!(
+            ask(w),
+            Err(Stop::line(hooks::USAGE.to_string(), Exit::Error)),
+            "{w:?}"
+        );
+    }
+    // The shell's helper, as its source spells it.
+    let src = shell_file("talk-and-workspace.sh");
+    let gate = "_app_grant_hooks() {\n";
+    let help = "    if _app_says_help \"$@\"; then\n        echo \"Usage: k2 app grant hooks ";
+    assert!(src.contains(gate) && src.contains(help));
 }
 
 #[test]

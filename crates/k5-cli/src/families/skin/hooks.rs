@@ -5,8 +5,8 @@
 //! `cli_post_json`, [`super::send`]), `_skin_die_if_err`, `--json` as it
 //! came where the verb takes it, then the shell's Python line for line.
 //!
-//! `-h` or `--help` anywhere is the shell's (it prints the usage and
-//! sends nothing).
+//! `-h`, `--help` or the word `help` before a bare `--` is the shell's
+//! (`_app_says_help`: it prints the usage and sends nothing).
 
 use super::{raw_line, send, Req, Stop};
 use crate::exit::Exit;
@@ -62,9 +62,13 @@ fn stop(line: &str) -> Stop {
     Stop::line(line.to_string(), Exit::Error)
 }
 
-/// The words after `hooks`. `None`: a help form (the shell's).
+/// The words after `hooks`. `None`: a help form (the shell's
+/// `_app_says_help`: `-h`, `--help` or `help` before a bare `--`).
 pub fn parse(words: &[&str]) -> Option<Result<Ask, Stop>> {
-    if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
+    if crate::dashdash::before(words)
+        .iter()
+        .any(|w| matches!(*w, "-h" | "--help" | "help"))
+    {
         return None;
     }
     let (action, rest) = match words.first() {

@@ -383,6 +383,148 @@ pub fn check_new_workspace_root(path: &str, auth: &ConvergeAuthority) -> Result<
     Err(HireError::new(403, "outside_hire_root", hint))
 }
 
+/// A key's refusal for a link (or a file) below its root.
+fn key_link_refusal(at: &Path, root: &Path) -> HireError {
+    HireError::new(
+        403,
+        "outside_hire_root",
+        format!(
+            "{} is a link or not a folder: an API key's hire names a real folder inside the hire root {}, with no links below the root",
+            at.display(),
+            root.display()
+        ),
+    )
+}
+
+/// Split a key's folder at its root: the root's real path and the plain
+/// names below it. The first part of `path` that is the root (in any
+/// spelling) ends the owner's part; everything after it is checked.
+fn below_root(path: &Path, root: &Path) -> Result<(PathBuf, Vec<std::ffi::OsString>), HireError> {
+    let outside = || {
+        HireError::new(
+            403,
+            "outside_hire_root",
+            format!("{} is not a folder inside the hire root {}", path.display(), root.display()),
+        )
+    };
+    let root_real = super::root::resolve_existing_prefix(root);
+    let parts: Vec<Component> = path.components().collect();
+    let mut cur = PathBuf::new();
+    for (i, part) in parts.iter().enumerate() {
+        cur.push(part);
+        if super::root::resolve_existing_prefix(&cur) != root_real {
+            continue;
+        }
+        let mut rel = Vec::new();
+        for p in &parts[i + 1..] {
+            match p {
+                Component::Normal(n) => rel.push(n.to_os_string()),
+                Component::CurDir => {}
+                _ => return Err(outside()),
+            }
+        }
+        if rel.is_empty() {
+            break;
+        }
+        return Ok((root_real, rel));
+    }
+    Err(outside())
+}
+
+/// No link anywhere below the root, looked at without following it. Stops
+/// at the first part that isn't there yet.
+fn refuse_links_below(root_real: &Path, rel: &[std::ffi::OsString]) -> Result<(), HireError> {
+    let mut at = root_real.to_path_buf();
+    for name in rel {
+        at.push(name);
+        match fs::symlink_metadata(&at) {
+            Ok(m) if m.file_type().is_symlink() || !m.is_dir() => return Err(key_link_refusal(&at, root_real)),
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(HireError::usage(format!("{}: {e}", at.display()))),
+        }
+    }
+    Ok(())
+}
+
+fn walk_refusal(e: super::folder_walk::WalkError, root_real: &Path) -> HireError {
+    use super::folder_walk::WalkError;
+    match e {
+        WalkError::NotAFolder(at) | WalkError::Missing(at) => key_link_refusal(&at, root_real),
+        WalkError::Unsafe(at) => super::root::unsafe_folder_error(&at),
+        WalkError::AlreadyThere(at) => HireError::new(
+            403,
+            "existing_workspace",
+            format!("{} appeared while this hire was making it: pick another folder", at.display()),
+        ),
+        WalkError::Io(at, e) => HireError::usage(format!("{}: {e}", at.display())),
+    }
+}
+
+/// An API key's hire of a folder that isn't registered: made the way an
+/// agent's is (no links below the key's root, the folder made in one step)
+/// or, when it is there already, taken on through a walk from the root
+/// that refuses links; never a folder another user could change, and for
+/// a template hire only an empty one. Registered only while the path still
+/// walks to that same folder. Returns the registered path.
+fn key_folder(
+    path: &str,
+    root: &Path,
+    new_only: bool,
+    register: &dyn Fn(&str) -> Result<String, String>,
+    steps_out: &mut Vec<StepReport>,
+) -> Result<String, HireError> {
+    let (root_real, rel) = below_root(Path::new(path), root)?;
+    refuse_links_below(&root_real, &rel)?;
+    let target = rel.iter().fold(root_real.clone(), |p, n| p.join(n));
+    let target_s = target.to_string_lossy().into_owned();
+    let make = match fs::symlink_metadata(&target) {
+        Ok(_) => false,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
+        Err(e) => return Err(HireError::usage(format!("{}: {e}", target.display()))),
+    };
+    // Only a folder this hire made goes again, and only while it is empty
+    // (`remove_dir` never follows a link).
+    let undo = |made: bool| {
+        if made {
+            let _ = fs::remove_dir(&target);
+        }
+    };
+    let first = super::folder_walk::walk(&root_real, &rel, make).map_err(|e| walk_refusal(e, &root_real))?;
+    if new_only && !first.made && !first.empty {
+        return Err(HireError::new(
+            403,
+            "existing_workspace",
+            format!("{target_s} already exists: an API key hires only into a new, empty folder (leave out <dir> for <hire root>/<handle>)"),
+        ));
+    }
+    steps_out.push(if first.made { done("create-dir") } else { skipped("create-dir", "exists") });
+    #[cfg(test)]
+    test_hook::run(test_hook::Stage::BeforeRegister, &target_s);
+    let same = || super::folder_walk::walk(&root_real, &rel, false).map(|r| r.id == first.id);
+    match same() {
+        Ok(true) => {}
+        Ok(false) | Err(_) => {
+            undo(first.made);
+            return Err(key_link_refusal(&target, &root_real));
+        }
+    }
+    if let Err(e) = register(&target_s) {
+        undo(first.made);
+        if crate::workspace::lifecycle::is_already_registered(&e) {
+            return Err(HireError::new(403, "existing_workspace", format!("{target_s} is already a workspace: an API key's hire makes or takes on a folder that isn't one")));
+        }
+        return Err(HireError::usage(e));
+    }
+    // Registered: still the folder the walk opened, or the registration goes.
+    if !matches!(same(), Ok(true)) {
+        let _ = crate::workspace::lifecycle::remove_workspace_db_only(&target_s);
+        return Err(key_link_refusal(&target, &root_real));
+    }
+    steps_out.push(done("register-workspace"));
+    Ok(target_s)
+}
+
 /// The authority checks that need only the request (before any write).
 pub fn check_db_access(
     caller: &HireCaller,
@@ -437,7 +579,7 @@ pub fn converge(
     caller: &HireCaller,
     auth: &ConvergeAuthority,
 ) -> Result<ConvergeOutcome, HireError> {
-    let (path, existing) = if auth.create_only {
+    let (mut path, existing) = if auth.create_only {
         (create_only_path(&req.path)?, None)
     } else {
         let expanded = expand_hire_path(&req.path)?;
@@ -445,6 +587,12 @@ pub fn converge(
             Some((registered, row)) => (registered, Some(row)),
             None => (expanded, None),
         }
+    };
+    // An API key's hire of a folder that isn't a workspace yet: its own
+    // branch below (a plain converge of a granted workspace stays as it was).
+    let key_root = match (caller.api_key_id(), auth.new_workspace_root.as_deref()) {
+        (Some(_), Some(root)) if existing.is_none() && !auth.create_only => Some(root.to_path_buf()),
+        _ => None,
     };
     // First: a key's template hire makes a new workspace only (an agent's
     // hire is create_only, above).
@@ -525,14 +673,17 @@ pub fn converge(
                 return Err(HireError::usage(e));
             }
         }
-    } else if existing.is_none() {
+    } else if let Some(root) = key_root.as_deref() {
         #[cfg(test)]
         test_hook::run(test_hook::Stage::AfterChecks, &path);
+        let register = |p: &str| crate::workspace::lifecycle::open_workspace_ex(p, !no_wiki, seed_agents_md, fanout);
+        path = key_folder(&path, root, auth.new_only, &register, &mut steps_out)?;
+        changed = true;
+        created = true;
+    } else if existing.is_none() {
         let dir_exists = Path::new(&path).exists();
         let result = if dir_exists {
             steps_out.push(skipped("create-dir", "exists"));
-            #[cfg(test)]
-            test_hook::run(test_hook::Stage::BeforeRegister, &path);
             crate::workspace::lifecycle::open_workspace_ex(&path, !no_wiki, seed_agents_md, fanout)
         } else {
             if let Some(parent) = Path::new(&path).parent() {
@@ -541,8 +692,6 @@ pub fn converge(
                 }
             }
             steps_out.push(done("create-dir"));
-            #[cfg(test)]
-            test_hook::run(test_hook::Stage::BeforeRegister, &path);
             crate::workspace::lifecycle::create_workspace_ex(&path, !no_wiki, seed_agents_md, fanout)
         };
         match result {

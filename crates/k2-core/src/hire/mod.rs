@@ -33,6 +33,7 @@ pub mod apply;
 pub mod apps;
 pub mod converge;
 pub mod deliveries;
+mod folder_walk;
 pub mod ledger;
 pub mod limits;
 pub mod links;

@@ -104,6 +104,33 @@ pub fn base_dir(sub_folder: Option<&str>) -> Result<PathBuf, HireError> {
     }
 }
 
+/// Can a user other than the server's change a folder with this owner and
+/// mode? Only the server's user (and root, when `root_ok`) may own it, and
+/// no group or other write bit may be set, sticky or not: the sticky bit
+/// stops another user deleting a name, not making the one a hire is about
+/// to use.
+#[cfg_attr(not(unix), allow(dead_code))]
+pub(crate) fn changeable_by_others(uid: u32, mode: u32, me: u32, root_ok: bool) -> bool {
+    let owned = uid == me || (root_ok && uid == 0);
+    !owned || mode & 0o022 != 0
+}
+
+/// The server's user (the effective uid).
+#[cfg(unix)]
+pub(crate) fn server_uid() -> u32 {
+    // SAFETY: geteuid has no preconditions.
+    unsafe { libc::geteuid() }
+}
+
+/// `hire_root_unsafe`: `dir` can be changed by another user.
+pub fn unsafe_folder_error(dir: &Path) -> HireError {
+    HireError::new(
+        403,
+        "hire_root_unsafe",
+        format!("{} can be changed by another user: make it yours and not group or world writable (chmod go-w)", dir.display()),
+    )
+}
+
 /// Is `path` (absolute, normalized or not yet existing) strictly inside
 /// `base`? Lexical check after resolving the deepest existing ancestor, so
 /// a symlink inside the root can't point the new folder outside it.
@@ -143,6 +170,22 @@ pub(crate) fn resolve_existing_prefix(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The folder rule on its own (no chown as a plain user): another
+    /// owner, a group or other write bit (sticky too) is refused; root may
+    /// own a folder above the hire's own.
+    #[test]
+    fn a_folder_another_user_can_change() {
+        let me = 501;
+        assert!(!changeable_by_others(me, 0o40700, me, false), "mine, 0700");
+        assert!(!changeable_by_others(me, 0o40755, me, false), "mine, 0755");
+        assert!(changeable_by_others(502, 0o40700, me, true), "another user's");
+        assert!(changeable_by_others(0, 0o40755, me, false), "root's, where only mine will do");
+        assert!(!changeable_by_others(0, 0o40755, me, true), "root's, above the folder");
+        assert!(changeable_by_others(me, 0o40775, me, false), "group writable");
+        assert!(changeable_by_others(me, 0o40757, me, false), "world writable");
+        assert!(changeable_by_others(0, 0o41777, me, true), "sticky and world writable (/tmp)");
+    }
 
     #[test]
     fn sub_folder_rules() {

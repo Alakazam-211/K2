@@ -1377,4 +1377,132 @@ mod tests {
         assert_eq!(v["sandbox"], serde_json::json!("none"), "body={}", resp.body);
         assert!(live.is_some(), "the plain spawn started a session");
     }
+
+    /// One `k2 terminal spawn --agent <a> --command <command>` in `ws`:
+    /// the answer, and the live session under the agent's name (taken out
+    /// of the map; the caller kills it).
+    #[cfg(unix)]
+    fn spawn_command(ws: &str, command: &str) -> (CliResponse, Option<std::sync::Arc<k2_core::terminal::daemon_pty::DaemonPtySession>>) {
+        let agent = format!("agent-cmdline-{}", uuid::Uuid::new_v4().simple());
+        let params = HashMap::from([
+            ("agent".to_string(), agent.clone()),
+            ("command".to_string(), command.to_string()),
+            ("cwd".to_string(), ws.to_string()),
+        ]);
+        let resp = handle_terminal_spawn(&params, ws);
+        (resp, crate::v2_session_map::unregister(&agent))
+    }
+
+    #[cfg(unix)]
+    fn wait_for_file(p: &std::path::Path) -> String {
+        let t = std::time::Instant::now();
+        loop {
+            if let Ok(s) = std::fs::read_to_string(p) {
+                if !s.is_empty() {
+                    return s;
+                }
+            }
+            assert!(t.elapsed() < std::time::Duration::from_secs(20), "{} never written", p.display());
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+    }
+
+    /// 0.46.18: `k2 terminal spawn --command` runs a full command line
+    /// (arguments, a pipe, quotes) in the login shell; one word (a path)
+    /// still starts as the program itself. Before, the whole string was
+    /// argv[0] and every command with an argument failed with ENOENT
+    /// (`v2 spawn failed: ptyd spawn: enoent` on the ptyd path). This is the
+    /// in-process path (`terminal.ptyd` off); k2-core's `ptyd_backend`
+    /// runs the same command lines through k2-ptyd. An agent CLI hidden in
+    /// a command line is still refused by the test spawn guard.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn terminal_spawn_runs_a_full_command_line_in_process() {
+        let _ = k2_core::db::init_for_tests();
+        let home = crate::test_support::TempHome::new();
+        k2_core::app_settings::update(serde_json::json!({ "terminal": { "ptyd": "off" } })).expect("terminal.ptyd off");
+        assert_eq!(
+            k2_core::terminal::ptyd::Switch::resolve(),
+            k2_core::terminal::ptyd::Switch::Off,
+            "in-process path (unset K2_PTYD for this test)"
+        );
+        let ws = home.path().join(format!("ws-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&ws).expect("workspace folder");
+        let ws = dunce::canonicalize(&ws).expect("canonical folder");
+        let ws_str = ws.to_string_lossy().into_owned();
+        let m = |name: &str| ws.join(name);
+        let ok = |resp: &CliResponse, what: &str| {
+            assert_eq!(resp.status, "200 OK", "{what}: body={}", resp.body);
+        };
+
+        // The reported line: before, `ptyd spawn: enoent` / ENOENT.
+        let (resp, s) = spawn_command(&ws_str, "/bin/echo hi");
+        ok(&resp, "/bin/echo hi");
+        if let Some(s) = s {
+            s.kill();
+        }
+
+        // Arguments only.
+        let (resp, s) = spawn_command(&ws_str, &format!("touch '{}'", m("multi").display()));
+        ok(&resp, "multi-word");
+        wait_for_file_to_exist(&m("multi"));
+        if let Some(s) = s {
+            s.kill();
+        }
+
+        // The session runs the login shell with `-lc <the command line>`.
+        let (resp, s) = spawn_command(&ws_str, "sleep 30");
+        ok(&resp, "sleep 30");
+        let s = s.expect("sleep is still running");
+        let program = s.program.clone().expect("a program");
+        assert!(std::path::Path::new(&program).is_absolute(), "the login shell by path: {program}");
+        assert_eq!(s.args, vec!["-lc".to_string(), "sleep 30".to_string()]);
+        s.kill();
+
+        // A pipe.
+        let (resp, s) = spawn_command(&ws_str, &format!("echo piped | tr a-z A-Z > '{}'", m("pipe").display()));
+        ok(&resp, "pipe");
+        assert_eq!(wait_for_file(&m("pipe")).trim(), "PIPED");
+        if let Some(s) = s {
+            s.kill();
+        }
+
+        // Quotes, both kinds.
+        let (resp, s) = spawn_command(&ws_str, &format!("printf '%s|%s' \"a b\" 'c d' > '{}'", m("quotes").display()));
+        ok(&resp, "quotes");
+        assert_eq!(wait_for_file(&m("quotes")), "a b|c d");
+        if let Some(s) = s {
+            s.kill();
+        }
+
+        // One word, a path: started as the program itself, no shell.
+        let script = m("one-word.sh");
+        k2_core::test_env::write_executable(&script, &format!("#!/bin/sh\necho one > '{}'\nexec sleep 30\n", m("one").display()));
+        let script_s = script.to_string_lossy().into_owned();
+        let (resp, s) = spawn_command(&ws_str, &script_s);
+        ok(&resp, "single-word path");
+        assert_eq!(wait_for_file(&m("one")).trim(), "one");
+        let s = s.expect("the script is still running");
+        assert_eq!(s.program.as_deref(), Some(script_s.as_str()), "one word is the program");
+        assert!(s.args.is_empty(), "no args: {:?}", s.args);
+        s.kill();
+
+        // An agent CLI inside a command line: still refused, nothing runs.
+        let (resp, s) = spawn_command(&ws_str, "claude --foo");
+        if let Some(s) = s.as_ref() {
+            s.kill();
+        }
+        assert_ne!(resp.status, "200 OK", "body={}", resp.body);
+        assert!(resp.body.contains("refusing") && resp.body.contains("claude"), "body={}", resp.body);
+        assert!(s.is_none(), "a refused agent CLI starts no session");
+    }
+
+    #[cfg(unix)]
+    fn wait_for_file_to_exist(p: &std::path::Path) {
+        let t = std::time::Instant::now();
+        while !p.exists() {
+            assert!(t.elapsed() < std::time::Duration::from_secs(20), "{} never created", p.display());
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+    }
 }

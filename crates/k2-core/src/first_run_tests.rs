@@ -575,7 +575,8 @@ fn restart_clears_hidden_finished_skips_and_the_offer_dismissal_for_this_person_
     let p = people();
     let f = offer_facts();
     let admin = Viewer::Login(Role::Admin);
-    apply_on(&conn, &p, "julie", admin, &f, true, &Action::Skip("tunnel".into()), 1).expect("skip");
+    // phone: a row an Admin sees (tunnel is the owner's and Owners' only).
+    apply_on(&conn, &p, "julie", admin, &f, true, &Action::Skip("phone".into()), 1).expect("skip");
     apply_on(&conn, &p, "julie", admin, &f, true, &Action::DismissOffer, 2).expect("dismiss");
     apply_on(&conn, &p, "julie", admin, &f, true, &Action::Hide, 3).expect("hide");
     apply_on(&conn, &p, OWNER, Viewer::OwnerToken, &f, true, &Action::DismissOffer, 4).expect("owner dismiss");

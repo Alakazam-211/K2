@@ -347,6 +347,34 @@ fn files_but_the_lock(dir: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     out
 }
 
+/// K2's own bookkeeping markers in a workspace's `.k2/`, written by its
+/// background regen whenever a workspace is touched (the AGENTS.md generate
+/// flag, the skill regen stamp), on a timer of their own after Kessel is
+/// made. They are not Kessel's notes, chats or permissions, and the welcome
+/// never writes them, so the check leaves them out by name.
+const K2_MARKERS: &[&str] = &[".agents-md-generate", ".last-skill-regen"];
+
+fn is_k2_marker(rel: &str) -> bool {
+    Path::new(rel).file_name().and_then(|n| n.to_str()).is_some_and(|n| K2_MARKERS.contains(&n))
+}
+
+/// Paths (relative to the folder's parent) that were added, removed or
+/// changed between two snapshots, with which.
+fn changed_files(before: &BTreeMap<PathBuf, Vec<u8>>, after: &BTreeMap<PathBuf, Vec<u8>>) -> Vec<(String, &'static str)> {
+    let mut out = Vec::new();
+    for (p, b) in before {
+        match after.get(p) {
+            None => out.push((p.to_string_lossy().into_owned(), "removed")),
+            Some(a) if a != b => out.push((p.to_string_lossy().into_owned(), "changed")),
+            Some(_) => {}
+        }
+    }
+    for p in after.keys().filter(|p| !before.contains_key(*p)) {
+        out.push((p.to_string_lossy().into_owned(), "added"));
+    }
+    out
+}
+
 fn hellos_for(handle: &str) -> Vec<String> {
     crate::template_hello::TEST_HELLOS
         .lock()
@@ -414,7 +442,10 @@ fn the_welcome_is_sent_once_per_call_from_the_lock_and_nothing_else_changes() {
         ..l.clone()
     };
     assert_eq!(strip(&after), strip(&before), "only the hello's fields moved");
-    assert_eq!(files_but_the_lock(Path::new(&path)), files, "notes and every other file untouched");
+    let changed = changed_files(&files, &files_but_the_lock(Path::new(&path)));
+    eprintln!("welcome: files that differ from before, K2's own markers included: {changed:?}");
+    let person_visible: Vec<&String> = changed.iter().filter(|(p, _)| !is_k2_marker(p)).map(|(p, _)| p).collect();
+    assert!(person_visible.is_empty(), "notes and every other file untouched: {changed:?}");
     assert_eq!(workspaces(), count, "nothing made");
     let seat_after = {
         let db = k2_core::db::shared();

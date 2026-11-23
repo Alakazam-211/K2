@@ -52,13 +52,12 @@ pub(crate) fn walk(root: &Path, rel: &[OsString], make_last: bool) -> Result<Rea
     // SAFETY: open returned a new fd that nothing else owns.
     let mut cur = unsafe { OwnedFd::from_raw_fd(fd) };
     let mut at = root.to_path_buf();
-    let mut made = false;
     let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
     for (i, name) in rel.iter().enumerate() {
         at.push(name);
         let last = i + 1 == rel.len();
         let cn = std::ffi::CString::new(name.as_bytes()).map_err(|_| WalkError::NotAFolder(at.clone()))?;
-        made = false;
+        let mut made = false;
         let mut made_here = false;
         if last && make_last {
             // SAFETY: a valid dirfd and C string.

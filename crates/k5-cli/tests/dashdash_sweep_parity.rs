@@ -431,11 +431,12 @@ fn named() -> Vec<(char, String)> {
 
 /// The families whose shell still prints a Python traceback on some line
 /// of this sweep: a reader that can't read the stub's plain 200 raises.
-/// Each is a bug to fix as `ci` was (0.46.18: one plain line on stderr,
-/// exit 1), and a fixed family comes off this list. A family not on it
+/// Each is a bug to fix as `ci`, `doc`, `organization` and `compute` were
+/// (0.46.18: the family's own plain error on stderr, exit 1), and a fixed
+/// family comes off this list. A family not on it
 /// that prints a traceback fails, and so does a listed one that no longer
 /// prints any, so the list stays exact.
-const TRACEBACK_FAMILIES: &[&str] = &["app", "compute", "doc", "organization"];
+const TRACEBACK_FAMILIES: &[&str] = &["app"];
 
 /// Whether a side printed a Python traceback.
 fn has_traceback(g: &Got) -> bool {

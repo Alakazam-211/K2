@@ -523,9 +523,10 @@ fn printed(client: &mut Client, closing: &mut Closing, endpoint: &str, call: Cal
     }
 }
 
-/// `read`'s Python on what the call printed: the lines, or `None` when it
-/// raised (it printed nothing before).
-fn read_lines(body: &[u8]) -> Option<String> {
+/// `read`'s Python on what the call printed: the lines (and a capped
+/// read's note on stderr), or `None` when it raised (it printed nothing
+/// before).
+fn read_lines(body: &[u8]) -> Option<Shown> {
     let text = String::from_utf8_lossy(body);
     let Ok(Value::Object(pairs)) = json::parse(&text) else {
         return None;
@@ -539,14 +540,23 @@ fn read_lines(body: &[u8]) -> Option<String> {
         out.push_str(&py::str_of(&l));
         out.push('\n');
     }
-    Some(out)
+    let mut shown = Shown::out(out);
+    // A `lines=` over the server's cap: its note, on stderr (fd 3) after
+    // the lines.
+    if let Some(note @ Value::Str(_)) = super::get(&pairs, "note") {
+        shown.stderr = format!("{READ_NOTE}{}\n", py::str_of(note));
+    }
+    Some(shown)
 }
+
+/// What `read`'s Python puts before the server's note.
+pub const READ_NOTE: &str = concat!(cli_name!(), " terminal read: ");
 
 fn read(client: &mut Client, closing: &mut Closing, id: &str, lines: &str) -> Exit {
     let q = format!("id={}&lines={lines}", quote(id));
     let piped = request_piped_tcp(client, closing, READ, &[q.as_str()]);
-    if let Some(text) = read_lines(&piped.body) {
-        let shown = Shown::out(text).print();
+    if let Some(lines) = read_lines(&piped.body) {
+        let shown = lines.print();
         if shown != Exit::Ok {
             return shown;
         }
@@ -558,6 +568,21 @@ fn read(client: &mut Client, closing: &mut Closing, id: &str, lines: &str) -> Ex
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A capped read: the lines, then the server's note on stderr.
+    #[test]
+    fn a_capped_read_s_note() {
+        let shown = read_lines(br#"{"lines":["a"],"capped":{"asked":9000,"max":5000},"note":"n"}"#)
+            .unwrap();
+        assert_eq!(shown.stdout, "a\n");
+        assert_eq!(shown.stderr, format!("{READ_NOTE}n\n"));
+        assert_eq!(shown.exit, Exit::Ok);
+        assert_eq!(
+            read_lines(br#"{"lines":["a"],"note":1}"#).unwrap().stderr,
+            ""
+        );
+        assert!(read_lines(br#"{"lines":3,"note":"n"}"#).is_none());
+    }
 
     #[test]
     fn the_words() {

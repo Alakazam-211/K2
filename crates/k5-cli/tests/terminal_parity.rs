@@ -442,6 +442,26 @@ fn read() {
             1,
         ),
         case(
+            "a read over the cap: the lines, then the note on stderr",
+            &["read", "t1", "--lines", "90000"],
+            &[],
+            vec![ok(
+                r#"{"lines":["one"],"capped":{"asked":90000,"max":5000},"note":"lines capped at 5000 (asked 90000) é"}"#,
+            )],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "a note that isn't a string is not printed",
+            &["read", "t1"],
+            &[],
+            vec![ok(r#"{"lines":["one"],"note":5}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
             "--lines, a word skipped",
             &["read", "t1", "--x", "--lines", "5"],
             &[],

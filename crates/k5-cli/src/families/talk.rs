@@ -700,7 +700,17 @@ fn terminal_read(
     let first = tcp_get(client, closing, READ, &q, true);
     if first.exit == Exit::Ok {
         if let Some(text) = screen::terminal_lines(&first.body) {
-            return write_out(&text);
+            write_out(&text)?;
+            match screen::terminal_note(&first.body) {
+                None => return Ok(()),
+                Some(Some(note)) => {
+                    out::stderr_line(&note);
+                    return Ok(());
+                }
+                // The note's write raised: the Python fails after the
+                // lines, and the shell asks again.
+                Some(None) => {}
+            }
         }
     }
     // The second `cli_request`, in the main shell.

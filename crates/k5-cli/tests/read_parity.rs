@@ -339,6 +339,26 @@ fn read_answers_as_the_shell_does() {
             1,
         ),
         case(
+            "a read over the cap: the lines, then the note on stderr",
+            &["acme", "--lines", "90000"],
+            &[],
+            vec![ok(
+                r#"{"lines":["one"],"capped":{"asked":90000,"max":5000},"note":"lines capped at 5000 (asked 90000) é"}"#,
+            )],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "a note that isn't a string is not printed",
+            &["acme"],
+            &[],
+            vec![ok(r#"{"lines":["one"],"note":[1]}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
             "a text error",
             &["acme"],
             &[],

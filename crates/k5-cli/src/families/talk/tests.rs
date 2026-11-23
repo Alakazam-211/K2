@@ -145,6 +145,17 @@ fn the_screen_readers_do_what_the_pythons_do() {
     );
     assert_eq!(terminal_lines(br#"{"lines":3}"#), None);
     assert_eq!(terminal_lines(b"nope"), None);
+    // A capped read's note: on stderr after the lines; only a string is one.
+    assert_eq!(
+        screen::terminal_note(br#"{"lines":["a"],"note":"capped at 5000"}"#),
+        Some(Some(format!(
+            "{}capped at 5000",
+            crate::families::terminal::READ_NOTE
+        )))
+    );
+    assert_eq!(screen::terminal_note(br#"{"lines":["a"],"note":5}"#), None);
+    assert_eq!(screen::terminal_note(br#"{"lines":["a"]}"#), None);
+    assert_eq!(screen::terminal_note(br#"{"note":"\ud800"}"#), Some(None));
     assert_eq!(classify(br#"{"is_hitl":1,"source":"x|y"}"#), "true|x|y");
     assert_eq!(classify(br#"{"source":"s"}"#), "null|s");
     assert_eq!(classify(br#"{"is_hitl":false,"source":3}"#), "");

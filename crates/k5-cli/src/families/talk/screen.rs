@@ -155,6 +155,21 @@ pub fn terminal_lines(body: &[u8]) -> Option<String> {
     Some(out)
 }
 
+/// A capped read's note in `cmd_terminal_read`'s answer (the lines were
+/// read first): `None` when there is none (not a string), `Some(None)`
+/// where its `os.write(3, (...).encode())` raises (a lone surrogate),
+/// else the line it writes on stderr (without its newline).
+pub fn terminal_note(body: &[u8]) -> Option<Option<String>> {
+    let d = json::parse(&String::from_utf8_lossy(body)).ok()?;
+    match get(&d, "note")? {
+        Some(Value::Str(t)) => Some(
+            t.as_str()
+                .map(|s| format!("{}{s}", super::super::terminal::READ_NOTE)),
+        ),
+        _ => None,
+    }
+}
+
 /// The tab bar's line test.
 fn is_tab_bar(line: &str) -> bool {
     (line.contains('☐') || line.contains('☒'))

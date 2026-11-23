@@ -464,8 +464,16 @@ pub fn reader(body: &[u8]) -> Shown {
         stdout.push_str(&py::str_of(item));
         stdout.push('\n');
     }
-    Shown::out(stdout)
+    let mut shown = Shown::out(stdout);
+    // A `lines=` over the server's cap: its note, on stderr after the lines.
+    if let Some(note @ Value::Str(_)) = get(pairs, "note") {
+        shown.stderr = format!("{NOTE}{}\n", py::str_of(note));
+    }
+    shown
 }
+
+/// What the shell's Python puts before the server's note.
+pub const NOTE: &str = concat!(cli_name!(), " read: ");
 
 /// A one-code-point string, half of a surrogate pair too.
 fn code_point(cp: u32) -> Text {
@@ -577,7 +585,13 @@ mod tests {
         assert_eq!(line(17), "sys.stderr.write(str(err) + '\\n')");
         assert_eq!(line(PY_LINES), "for line in data.get('lines', []):");
         assert_eq!(line(20), "print(line)");
-        assert_eq!(lines.len(), 20);
+        assert_eq!(line(21), "if isinstance(data.get('note'), str):");
+        assert_eq!(line(22), "sys.stdout.flush()");
+        assert_eq!(
+            line(23),
+            "sys.stderr.write('k2 read: ' + data['note'] + '\\n')"
+        );
+        assert_eq!(lines.len(), 23);
     }
 
     fn ask(workspace: &str, lines: &str, agent: &str, session: &str) -> Option<Ask> {
@@ -700,6 +714,18 @@ mod tests {
         );
         assert_eq!(f(r#"{"lines":[]}"#), ok(""));
         assert_eq!(f(r#"{"x":1}"#), ok(""));
+        // A read over the cap: the lines, then the note on stderr.
+        assert_eq!(
+            f(r#"{"lines":["a"],"capped":{"asked":9000,"max":5000},"note":"capped at 5000 é"}"#),
+            Shown {
+                stdout: "a\n".into(),
+                stderr: format!("{NOTE}capped at 5000 é\n"),
+                exit: Exit::Ok
+            }
+        );
+        // Only a string is a note.
+        assert_eq!(f(r#"{"lines":["a"],"note":5}"#), ok("a\n"));
+        assert_eq!(f(r#"{"lines":["a"],"note":null}"#), ok("a\n"));
         assert_eq!(f(r#"{"lines":"ab"}"#), ok("a\nb\n"));
         assert_eq!(f(r#"{"lines":{"k":1,"j":2}}"#), ok("k\nj\n"));
         assert_eq!(f(r#"{"lines":["é \t"]}"#), ok("é \t\n"));

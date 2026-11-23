@@ -9,7 +9,16 @@ fn row(id: &'static str, state: State, opens: Option<&'static str>, note: Option
 }
 
 fn status(rows: Vec<Row>) -> Status {
-    Status { enabled: true, hidden: false, finished: false, rows, kessel: None, newly_finished: false }
+    Status {
+        enabled: true,
+        hidden: false,
+        finished: false,
+        rows,
+        kessel: None,
+        kessel_first_run: false,
+        kessel_seat: crate::first_run::KesselSeat::default(),
+        newly_finished: false,
+    }
 }
 
 fn kessel(offer: bool, live: bool) -> Option<KesselStatus> {

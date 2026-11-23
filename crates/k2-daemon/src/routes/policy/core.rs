@@ -508,7 +508,12 @@ pub(super) const ROWS: &[Route] = &[
     post("/cli/first-run/chief-of-staff/start", Admin),
     post("/cli/first-run/hide", Member),
     post("/cli/first-run/kessel", Admin),
+    // Settings → Getting started (plan-getting-started-settings-v1): Kessel's
+    // welcome again is Admin's; restart is the person's own (turning the
+    // owner's switches on inside it is checked in the handler).
+    post("/cli/first-run/kessel/welcome", Admin),
     post("/cli/first-run/offer/dismiss", Member),
+    post("/cli/first-run/restart", Member),
     post("/cli/first-run/show", Member),
     post("/cli/first-run/skip", Member),
     get("/cli/first-run/status", Member),

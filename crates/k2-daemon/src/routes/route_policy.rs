@@ -1644,6 +1644,7 @@ mod tests {
             ("POST", "/cli/first-run/hide"),
             ("POST", "/cli/first-run/show"),
             ("POST", "/cli/first-run/skip"),
+            ("POST", "/cli/first-run/restart"),
         ];
         for (method, p) in routes {
             let row = lookup(p).unwrap_or_else(|| panic!("{p} is not classified"));
@@ -1691,6 +1692,7 @@ mod tests {
             ("/cli/first-run/kessel", Floor::Admin),
             ("/cli/first-run/chief-of-staff/start", Floor::Admin),
             ("/cli/first-run/chief-of-staff", Floor::NoLogin),
+            ("/cli/first-run/kessel/welcome", Floor::Admin),
         ];
         for (p, floor) in rows {
             let row = lookup(p).unwrap_or_else(|| panic!("{p} is not classified"));
@@ -1710,7 +1712,7 @@ mod tests {
             let owner = session("rp_kessel_owner", Role::Owner);
             let gate = |tok: &str, p: &str| status(&role_gate("POST", p, &format!("token={tok}"), OWNER));
             assert_eq!(gate(&member, "/cli/first-run/offer/dismiss"), "pass");
-            for p in ["/cli/first-run/kessel", "/cli/first-run/chief-of-staff/start"] {
+            for p in ["/cli/first-run/kessel", "/cli/first-run/chief-of-staff/start", "/cli/first-run/kessel/welcome"] {
                 assert_eq!(gate(&member, p), "403 Forbidden", "a Member on {p}");
                 assert_eq!(gate(&admin, p), "pass", "an Admin on {p}");
             }

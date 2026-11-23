@@ -34,6 +34,12 @@
 //! fresh install has no cutoff, so everyone starts unfinished. Making a row
 //! for such a person (hide, skip) keeps them finished.
 //!
+//! **Settings → Getting started** (plan-getting-started-settings-v1): every
+//! status also carries `kesselFirstRun` (the owner's switch) and
+//! `kesselSeat` (`{exists, workspaceId?, name?}`, whatever the switch), so
+//! the tab draws its state from one read; and [`Action::Restart`] is
+//! `show` plus the "Not now" on Meet Kessel cleared.
+//!
 //! **Kessel at first run** (prd-setup-checklist-v1 §10, `kessel-first-run-contract.md`),
 //! all behind the owner's `kesselFirstRun` switch (off by default, on for a new server). On, the
 //! status also carries `offer` ("meet_kessel" while a tool is signed in, there is
@@ -134,6 +140,13 @@ pub struct Status {
     /// `offer`, `kessel` and `kesselDefaults`, present only while `kesselFirstRun` is on.
     #[serde(flatten)]
     pub kessel: Option<KesselStatus>,
+    /// The owner's `kesselFirstRun` switch, sent either way (Settings →
+    /// Getting started).
+    #[serde(rename = "kesselFirstRun")]
+    pub kessel_first_run: bool,
+    /// The server's Kessel, sent either way (Settings → Getting started).
+    #[serde(rename = "kesselSeat")]
+    pub kessel_seat: KesselSeat,
     /// This call wrote `finished_at` (the route sends `first_run_changed`).
     #[serde(skip)]
     pub newly_finished: bool,
@@ -157,6 +170,28 @@ pub struct KesselView {
     pub workspace_id: String,
     pub name: String,
     pub path: String,
+}
+
+/// `kesselSeat` on the wire: whether the server has a live Kessel, and
+/// which, whatever `kesselFirstRun` says. (`kessel` is the switch-on
+/// contract's, absent while it's off.)
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KesselSeat {
+    pub exists: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+impl KesselSeat {
+    pub fn of(live: Option<&crate::orchestrator::Live>) -> Self {
+        match live {
+            Some(l) => KesselSeat { exists: true, workspace_id: Some(l.workspace_id.clone()), name: Some(l.name.clone()) },
+            None => KesselSeat::default(),
+        }
+    }
 }
 
 /// What the Kessel sheet starts from: "Kessel", `kessel`, `<hire root>/kessel`.
@@ -324,6 +359,9 @@ pub enum Action {
     Skip(String),
     /// "Not now" on the "Meet Kessel" offer: stored for this person, kept by `show`.
     DismissOffer,
+    /// Settings → Getting started's "Start setup again": what `Show` does,
+    /// and the "Not now" on Meet Kessel cleared too.
+    Restart,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -537,7 +575,16 @@ pub fn status_on(
         finished = true;
         newly_finished = true;
     }
-    Ok(Status { enabled, hidden, finished, rows, kessel, newly_finished })
+    Ok(Status {
+        enabled,
+        hidden,
+        finished,
+        rows,
+        kessel,
+        kessel_first_run: facts.kessel_first_run,
+        kessel_seat: KesselSeat::of(facts.kessel.as_ref()),
+        newly_finished,
+    })
 }
 
 /// The `offer`, `kessel` and `kesselDefaults` part, `None` while `kesselFirstRun` is off.
@@ -609,8 +656,22 @@ pub fn apply_on(
                 params![person, now],
             )?;
         }
+        Action::Restart => restart_on(conn, people, person, now)?,
     }
     status_on(conn, people, person, viewer, facts, enabled, now)
+}
+
+/// Start `person`'s setup again ([`Action::Restart`]): hidden, finished,
+/// skips and the "Not now" on Meet Kessel cleared. Also run for a Member
+/// whose ask the owner or an admin said yes to (`first_run_routes`).
+pub fn restart_on(conn: &Connection, people: &People, person: &str, now: i64) -> Result<(), Error> {
+    ensure_record(conn, people, person, now)?;
+    conn.execute(
+        "UPDATE first_run_person SET hidden_at = NULL, finished_at = NULL, skipped_json = '[]', offer_dismissed_at = NULL \
+         WHERE person_key = ?1",
+        params![person],
+    )?;
+    Ok(())
 }
 
 /// Live paired phones for `person`: the owner's are every linked login's

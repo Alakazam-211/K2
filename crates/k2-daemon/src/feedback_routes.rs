@@ -661,6 +661,50 @@ pub(crate) fn file_permission_notice(
     Ok(item)
 }
 
+/// A person's ask the daemon files for them (Settings → Getting started:
+/// a Member asks the owner to turn the setup list on). The core of
+/// `k2 tickets ask --assign`: a `question` with `options`, on `project_id`,
+/// asked by `asker`, assigned to `assignees` only, with the same created
+/// event, push and board frame. No brief.
+pub(crate) fn file_person_ask(
+    project_id: &str,
+    asker: &str,
+    title: &str,
+    body: &str,
+    options: &[String],
+    assignees: &[String],
+) -> Result<feedback::FeedbackItem, String> {
+    let mut item = feedback::create(feedback::NewFeedback {
+        project_id: project_id.to_string(),
+        agent_name: asker.to_string(),
+        kind: "question".to_string(),
+        title: title.to_string(),
+        body: Some(body.to_string()),
+        options: (!options.is_empty()).then(|| options.to_vec()),
+        priority: 3,
+        ..Default::default()
+    })?;
+    let people = k2_core::feedback_brief::clean_assignees(assignees);
+    if !people.is_empty() {
+        item = feedback::set_assignees(&item.id, &people)?;
+    }
+    let (_, path) = project_name_path(&item.project_id);
+    k2_core::agent_hooks::emit(
+        k2_core::agent_hooks::HookEvent::FeedbackCreated,
+        serde_json::json!({
+            "id": item.id,
+            "projectPath": path,
+            "title": item.title,
+            "kind": item.kind,
+            "priority": item.priority,
+            "agentName": item.agent_name,
+        }),
+    );
+    crate::push_routes::notify_feedback_created(&item.agent_name, &item.id, &item.assignees);
+    emit_ticket_changed(&item, CHANGE_CREATED, None);
+    Ok(item)
+}
+
 fn file_notice_for(
     project_id: &str,
     agent_name: &str,

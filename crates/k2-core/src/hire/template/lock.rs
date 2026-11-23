@@ -114,6 +114,32 @@ pub fn take_pending_hello(workspace: &str) -> Result<Option<String>, HireError> 
     Ok(Some(text))
 }
 
+/// The welcome again (Settings → Getting started's "Start Kessel's welcome
+/// again", plan-getting-started-settings-v1): the template's hello
+/// re-rendered with the values this lock kept (`vars`, then `answers` for
+/// a name `vars` lacks), `hello_sent_at` set now and a hello still pending
+/// cleared (this send is it, so a later start never sends a second). Nothing
+/// else in the lock or the workspace changes, and nothing is made or hired.
+/// `Ok(None)`: no lock, or its template has no hello.
+pub fn replay_hello(workspace: &str) -> Result<Option<String>, HireError> {
+    let _g = HELLO_TAKE.lock().unwrap_or_else(|p| p.into_inner());
+    let Some(mut l) = read(workspace)? else { return Ok(None) };
+    let tpl = super::resolve(&l.id)?;
+    let Some(hello) = tpl.meta.hello.as_ref() else { return Ok(None) };
+    let mut vars = l.vars.clone();
+    for (k, v) in &l.answers {
+        vars.entry(k.clone()).or_insert_with(|| v.clone());
+    }
+    let text = super::render::render(&hello.brief, &vars).trim().to_string();
+    if text.is_empty() {
+        return Ok(None);
+    }
+    l.hello_pending = None;
+    l.hello_sent_at = Some(super::super::now_secs());
+    write(workspace, &l)?;
+    Ok(Some(text))
+}
+
 impl TemplateLock {
     /// Equal ignoring when and by whom (a re-apply that changes nothing
     /// else leaves the file alone).

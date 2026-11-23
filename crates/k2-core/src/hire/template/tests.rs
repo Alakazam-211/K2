@@ -332,6 +332,33 @@ fn template_hello_waits_in_the_lock_and_is_taken_once() {
     assert!(lock::take_pending_hello(&p2).unwrap().is_none());
 }
 
+/// Settings → Getting started: the welcome again is the template's hello
+/// rendered from the lock's kept values, every time it's asked, with
+/// `hello_sent_at` moved and a pending hello cleared; nothing else in the
+/// lock changes. No lock: nothing.
+#[test]
+fn template_hello_replay_renders_from_the_lock_and_moves_only_hello_sent_at() {
+    let home = setup();
+    let path = ws(&home, "replay");
+    let mut r = req("writer", &path);
+    r.name = Some("Max".into());
+    apply(&r, &HireCaller::Owner).expect("apply");
+    let first = lock::read(&path).unwrap().unwrap();
+    assert!(first.hello_pending.is_some());
+    let again = lock::replay_hello(&path).unwrap().expect("replayed");
+    assert!(again.contains("Say hello") && !again.contains("{{"), "{again}");
+    assert_eq!(Some(again.as_str()), first.hello_pending.as_deref(), "the same words the first create rendered");
+    let after = lock::read(&path).unwrap().unwrap();
+    assert!(after.hello_pending.is_none() && after.hello_sent_at.is_some(), "{after:?}");
+    assert!(!lock::has_pending_hello(&path), "a later start sends nothing more");
+    let strip = |l: &TemplateLock| TemplateLock { hello_pending: None, hello_sent_at: None, ..l.clone() };
+    assert_eq!(strip(&after), strip(&first), "nothing else in the lock changed");
+    assert_eq!(lock::replay_hello(&path).unwrap().as_deref(), Some(again.as_str()), "each ask sends it again");
+    let bare = ws(&home, "bare");
+    std::fs::create_dir_all(&bare).unwrap();
+    assert!(lock::replay_hello(&bare).unwrap().is_none(), "no lock, no hello");
+}
+
 /// Every built-in hired with no `about`: the "focus on" line is dropped
 /// whole, no placeholder is left, and the shared block's rules are there.
 #[test]

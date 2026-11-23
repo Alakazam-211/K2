@@ -12,6 +12,36 @@
 //! | POST | `/cli/first-run/kessel` | `{tool?, name?, handle?, focusGroup?}` | `{workspaceId, name, path, focusGroupId, …}` |
 //! | POST | `/cli/first-run/chief-of-staff/start` | | `{workspaceId}` |
 //! | POST | `/cli/first-run/chief-of-staff` | `{name, about, tool, focusGroup?}` | `{workspaceId, name, path, focusGroupId, …}` |
+//! | POST | `/cli/first-run/restart` | `{kessel?: bool}` | the status body (Settings → Getting started's "Start setup again") |
+//! | POST | `/cli/first-run/kessel/welcome` | | `{workspaceId, sent: true}` |
+//!
+//! **Settings → Getting started** (plan-getting-started-settings-v1). The
+//! status also carries `kesselFirstRun` and `kesselSeat` whatever the switch.
+//! `restart` is a person's at the Member floor:
+//! - the owner token, an Owner or an Admin: turns the owner's
+//!   `setupChecklist` on (and `kesselFirstRun` with `kessel: true`) through
+//!   the settings write, so `first_run_changed` and the settings frame go out
+//!   as for any write, with one Access Audit line per switch naming who
+//!   (an Admin may turn these two on here, though the settings write keeps
+//!   them the Owner's); then their own list starts again
+//!   ([`first_run::Action::Restart`]: `show`, and the "Not now" on Meet
+//!   Kessel cleared);
+//! - a Member: the same for their own list while the setup list is on.
+//!   While it's off they can't turn it on, so the owner is asked: a ticket
+//!   assigned to the owner on the owner notices' workspace (Owners and
+//!   Admins see it), "<member> asks to turn on the setup list", with one
+//!   option, "Start setup again"; one open ticket per Member (a second press
+//!   says so). The answer is 403 `role_required` with `asked: {ticketId,
+//!   already}`. When the owner token, an Owner or an Admin picks that option
+//!   or marks the ticket Resolved ([`after_ticket_write`]), the list goes on,
+//!   that Member's setup starts again and the ticket closes with a note.
+//!
+//! `kessel/welcome` is Admin's: Kessel's template hello again, re-rendered
+//! from its template lock (`lock::replay_hello`), sent the way a first start
+//! sends it (Kessel is started if it isn't running), `hello_sent_at` moved.
+//! It never makes, re-hires or changes Kessel: its notes, chats, permissions
+//! and Chief of Staff stay. 404 `no_kessel` when the server has none. It
+//! isn't behind `kesselFirstRun`: it replays a Kessel that exists.
 //!
 //! **Kessel at first run** (prd-setup-checklist-v1 §10, `kessel-first-run-contract.md`):
 //! the last four answer 404 `kessel_first_run_off` while the owner's
@@ -47,6 +77,7 @@
 //! skip, dismiss and finish; to everyone when Kessel or the Chief of Staff is
 //! made (with `projects_changed`).
 
+use k2_core::cli_name;
 use k2_core::first_run::{self, Action, Viewer};
 use k2_core::notify_prefs::People;
 use serde_json::{json, Value};
@@ -64,6 +95,14 @@ pub const OFFER_DISMISS_PATH: &str = "/cli/first-run/offer/dismiss";
 pub const KESSEL_PATH: &str = "/cli/first-run/kessel";
 pub const COS_START_PATH: &str = "/cli/first-run/chief-of-staff/start";
 pub const COS_PATH: &str = "/cli/first-run/chief-of-staff";
+pub const RESTART_PATH: &str = "/cli/first-run/restart";
+pub const KESSEL_WELCOME_PATH: &str = "/cli/first-run/kessel/welcome";
+
+/// The one option on a Member's ask, and what saying yes to it picks.
+pub const START_AGAIN: &str = "Start setup again";
+
+/// A Member's ask's title, after their name.
+pub const ASK_TITLE_TAIL: &str = " asks to turn on the setup list";
 
 /// What `chief-of-staff/start` posts into Kessel's Thread, as the person.
 pub const COS_START_TEXT: &str = "Let's hire my Chief of Staff.";
@@ -77,12 +116,24 @@ pub const MAX_BODY: usize = 4 * 1024;
 pub fn is_route(path: &str) -> bool {
     matches!(
         path,
-        STATUS_PATH | HIDE_PATH | SHOW_PATH | SKIP_PATH | OFFER_DISMISS_PATH | KESSEL_PATH | COS_START_PATH | COS_PATH
+        STATUS_PATH
+            | HIDE_PATH
+            | SHOW_PATH
+            | SKIP_PATH
+            | OFFER_DISMISS_PATH
+            | KESSEL_PATH
+            | COS_START_PATH
+            | COS_PATH
+            | RESTART_PATH
+            | KESSEL_WELCOME_PATH
     )
 }
 
 pub fn is_post_only(path: &str) -> bool {
-    matches!(path, HIDE_PATH | SHOW_PATH | SKIP_PATH | OFFER_DISMISS_PATH | KESSEL_PATH | COS_START_PATH | COS_PATH)
+    matches!(
+        path,
+        HIDE_PATH | SHOW_PATH | SKIP_PATH | OFFER_DISMISS_PATH | KESSEL_PATH | COS_START_PATH | COS_PATH | RESTART_PATH | KESSEL_WELCOME_PATH
+    )
 }
 
 /// The Kessel routes, which answer 404 while `kesselFirstRun` is off.
@@ -206,15 +257,35 @@ pub fn handle_as(is_post: bool, path: &str, body: &[u8], actor: &Actor, text: bo
         Err(r) => return r,
     };
     if path == KESSEL_PATH || path == COS_START_PATH {
-        if !matches!(viewer, Viewer::OwnerToken | Viewer::Login(k2_core::connect_users::Role::Admin | k2_core::connect_users::Role::Owner)) {
+        if !manages(viewer) {
             return error("403 Forbidden", "role_required", "making Kessel needs the owner, an Owner or an Admin login");
         }
         return if path == KESSEL_PATH { handle_kessel(body, actor, text) } else { handle_cos_start(actor) };
+    }
+    if path == KESSEL_WELCOME_PATH {
+        if !manages(viewer) {
+            return error("403 Forbidden", "role_required", "starting Kessel's welcome again needs the owner, an Owner or an Admin login");
+        }
+        return handle_kessel_welcome(actor, text);
+    }
+    if path == RESTART_PATH {
+        return handle_restart(body, actor, person, viewer, text);
     }
     let action = match action_for(path, body) {
         Ok(a) => a,
         Err(r) => return r,
     };
+    status_answer(person, viewer, action, text)
+}
+
+/// The owner token, an Owner or an Admin login.
+fn manages(viewer: Viewer) -> bool {
+    matches!(viewer, Viewer::OwnerToken | Viewer::Login(k2_core::connect_users::Role::Admin | k2_core::connect_users::Role::Owner))
+}
+
+/// The status for `person` after `action` (none: a read), as JSON or
+/// `k2 setup`'s lines; `first_run_changed` to them when it changed.
+fn status_answer(person: String, viewer: Viewer, action: Option<Action>, text: bool) -> CliResponse {
     let people = match People::load() {
         Ok(p) => p,
         Err(e) => return error("500 Internal Server Error", "store", e),
@@ -256,6 +327,267 @@ pub fn handle_as(is_post: bool, path: &str, body: &[u8], actor: &Actor, text: bo
         Ok(body) => CliResponse::ok_json(body),
         Err(e) => error("500 Internal Server Error", "serialize", e),
     }
+}
+
+// ── Settings → Getting started (plan-getting-started-settings-v1) ──────
+
+/// One Member's ask filed at a time, so "one open ticket per Member" holds.
+static ASK_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
+/// Who did it, as the Access Audit and the settings write name them.
+fn by_label(actor: &Actor) -> String {
+    if actor.owner_token {
+        "owner-token".to_string()
+    } else {
+        format!("user:{}", actor.login)
+    }
+}
+
+/// `POST /cli/first-run/restart {kessel?}` (module docs).
+fn handle_restart(body: &[u8], actor: &Actor, person: String, viewer: Viewer, text: bool) -> CliResponse {
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let kessel = match v.get("kessel") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => return error("400 Bad Request", "usage", "kessel is true or false"),
+    };
+    let settings = k2_core::app_settings::load();
+    if manages(viewer) {
+        let mut keys: Vec<&'static str> = Vec::new();
+        if !settings.setup_checklist {
+            keys.push("setupChecklist");
+        }
+        if kessel && !settings.kessel_first_run {
+            keys.push("kesselFirstRun");
+        }
+        if let Err(r) = turn_on(&keys, actor) {
+            return r;
+        }
+    } else {
+        if kessel && !settings.kessel_first_run {
+            return error("403 Forbidden", "role_required", "turning Kessel on needs the owner, an Owner or an Admin login");
+        }
+        if !settings.setup_checklist {
+            return ask_the_owner(actor);
+        }
+    }
+    status_answer(person, viewer, Some(Action::Restart), text)
+}
+
+/// Turn the owner's setup switches on through the settings write (the
+/// same path as any write: `first_run_changed`, the settings frame), then
+/// one Access Audit line per switch naming who. The route already checked
+/// the caller is the owner token, an Owner or an Admin; it may only turn
+/// these two on, so the write goes as the Owner's.
+fn turn_on(keys: &[&'static str], actor: &Actor) -> Result<(), CliResponse> {
+    if keys.is_empty() {
+        return Ok(());
+    }
+    let partial: serde_json::Map<String, Value> = keys.iter().map(|k| ((*k).to_string(), Value::Bool(true))).collect();
+    let by = by_label(actor);
+    let r = crate::settings_routes::handle_settings_update_as(
+        Value::Object(partial).to_string().as_bytes(),
+        crate::settings_routes::SettingsActor::Owner,
+        &by,
+    );
+    if !r.status.starts_with('2') {
+        return Err(r);
+    }
+    for k in keys {
+        audit("first-run-switch", &by, format!("{k} on"));
+    }
+    Ok(())
+}
+
+/// The audit sentinel the owner's notices are filed on: Owners and Admins
+/// see its tickets, a Member never does.
+fn ask_workspace() -> &'static str {
+    k2_core::db::AUDIT_SENTINEL_IDS[0]
+}
+
+/// A Member's ask (module docs): the ticket's place, kind, title and option.
+pub fn is_setup_ask(item: &k2_core::feedback::FeedbackItem) -> bool {
+    item.project_id == ask_workspace()
+        && item.kind == "question"
+        && item.title.ends_with(ASK_TITLE_TAIL)
+        && item.options.as_deref() == Some(&[START_AGAIN.to_string()][..])
+}
+
+/// `login`'s ask still open (waiting, answered or under discussion).
+fn open_ask(login: &str) -> Result<Option<k2_core::feedback::FeedbackItem>, String> {
+    let items = k2_core::feedback::list_for_project(ask_workspace(), &k2_core::feedback::ListFilter::Open)?;
+    Ok(items.into_iter().find(|i| is_setup_ask(i) && i.agent_name == login))
+}
+
+/// What the ticket says, for the owner or an admin.
+fn ask_body(name: &str) -> String {
+    format!(
+        "{name} pressed Start setup again in Settings → Getting started, but the setup list is off on this server, \
+         and only the owner or an admin can turn it on.\n\n\
+         Start setup again turns the setup list on for everyone here and starts {name}'s setup again. \
+         Marking this ticket Resolved does the same; Dismissed leaves the list off."
+    )
+}
+
+/// A Member pressed Start setup again while the list is off: ask the owner
+/// on a ticket, once while it's open. 403 `role_required` either way.
+fn ask_the_owner(actor: &Actor) -> CliResponse {
+    let login = actor.login.clone();
+    let _one = ASK_LOCK.lock();
+    let (ticket, already) = match open_ask(&login) {
+        Ok(Some(t)) => (t, true),
+        Ok(None) => {
+            let people = People::load().unwrap_or(People { users: Vec::new(), linked: Vec::new() });
+            let name = k2_core::person_name::effective(&login, &people).display_name;
+            let filed = crate::feedback_routes::file_person_ask(
+                ask_workspace(),
+                &login,
+                &format!("{name}{ASK_TITLE_TAIL}"),
+                &ask_body(&name),
+                &[START_AGAIN.to_string()],
+                &[k2_core::notify_prefs::OWNER.to_string()],
+            );
+            match filed {
+                Ok(t) => {
+                    audit("first-run-ask", &by_label(actor), format!("ticket {}", t.id));
+                    (t, false)
+                }
+                Err(e) => return error("500 Internal Server Error", "store", e),
+            }
+        }
+        Err(e) => return error("500 Internal Server Error", "store", e),
+    };
+    let hint = if already {
+        "only the owner or an admin can turn the setup list on. You asked already: the ticket is still open, and your setup starts again here when they say yes"
+    } else {
+        "only the owner or an admin can turn the setup list on, so they were asked on a ticket. Your setup starts again here when they say yes"
+    };
+    CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: json!({
+            "ok": false,
+            "error": { "code": "role_required", "hint": hint },
+            "asked": { "ticketId": ticket.id, "already": already },
+        })
+        .to_string(),
+    }
+}
+
+/// The ticket routes' person arm ran `path` (`/cli/feedback/answer`,
+/// `comment` or `resolve`) with `body` for `actor` and answered `resp`.
+/// When that said yes to a Member's ask (its option picked, or the ticket
+/// Resolved) and `actor` is the owner token, an Owner or an Admin: the
+/// setup list goes on, that Member's setup starts again, and the ticket
+/// closes with a note. Anything else: nothing.
+pub fn after_ticket_write(path: &str, body: &[u8], resp: &CliResponse, actor: &Actor) {
+    if !resp.status.starts_with('2')
+        || !matches!(path, "/cli/feedback/answer" | "/cli/feedback/comment" | "/cli/feedback/resolve")
+    {
+        return;
+    }
+    let Some(id) = serde_json::from_slice::<Value>(body).ok().and_then(|v| v.get("id").and_then(Value::as_str).map(str::to_string)) else {
+        return;
+    };
+    let Ok(full) = k2_core::feedback::resolve_id_prefix(&id) else { return };
+    let Some(item) = k2_core::feedback::get_item(&full) else { return };
+    if !is_setup_ask(&item) {
+        return;
+    }
+    let yes = item.status == "resolved" || (item.status == "answered" && item.answer.as_deref().map(str::trim) == Some(START_AGAIN));
+    if !yes {
+        return;
+    }
+    let viewer = match viewer_for(actor) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    if !manages(viewer) {
+        k2_core::log_debug!("[first-run] {} said yes to {} but can't turn the list on", by_label(actor), item.id);
+        return;
+    }
+    if let Err(e) = grant_ask(&item, actor) {
+        k2_core::log_debug!("[first-run] ask {}: {e}", item.id);
+    }
+}
+
+/// Yes to `item` (a Member's ask) from `actor`, who may turn the list on.
+fn grant_ask(item: &k2_core::feedback::FeedbackItem, actor: &Actor) -> Result<(), String> {
+    if !k2_core::app_settings::load().setup_checklist {
+        turn_on(&["setupChecklist"], actor).map_err(|r| format!("{} {}", r.status, r.body))?;
+    }
+    let login = item.agent_name.clone();
+    let people = People::load()?;
+    // A login removed since it asked has no list to start again.
+    let person = people.user(&login).and_then(|_| people.login_person_key(&login));
+    let name = k2_core::person_name::effective(&login, &people).display_name;
+    if let Some(person) = &person {
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            first_run::restart_on(&conn, &people, person, chrono::Utc::now().timestamp()).map_err(|e| e.to_string())?;
+        }
+        emit_changed(Some(person.clone()));
+    }
+    audit("first-run-ask-yes", &by_label(actor), format!("{login} ticket {}", item.id));
+    let author = if actor.owner_token {
+        k2_core::person_name::sender_identity_now(k2_core::person_name::Sender::OwnerToken)
+    } else {
+        actor.login.clone()
+    };
+    let note = match person {
+        Some(_) => format!("The setup list is on, and {name}'s setup starts again."),
+        None => format!("The setup list is on. {name} is no longer a login here, so there was no list to start again."),
+    };
+    crate::feedback_routes::close_notice(&item.id, &author, &note).map(|_| ())
+}
+
+/// 404 when the server has no Kessel.
+fn no_kessel() -> CliResponse {
+    error(
+        "404 Not Found",
+        "no_kessel",
+        concat!("this server has no Kessel, so there is no welcome to send again (", cli_name!(), " setup restart --kessel, then ", cli_name!(), " setup kessel)"),
+    )
+}
+
+/// `POST /cli/first-run/kessel/welcome` (module docs): Kessel's hello
+/// again, from its lock only. Nothing is made, re-hired or changed.
+fn handle_kessel_welcome(actor: &Actor, text: bool) -> CliResponse {
+    let kessel = match seat_kessel() {
+        Ok(Some(k)) => k,
+        Ok(None) => return no_kessel(),
+        Err(r) => return r,
+    };
+    let hello = match k2_core::hire::template::lock::replay_hello(&kessel.path) {
+        Ok(Some(h)) => h,
+        Ok(None) => {
+            return error(
+                "409 Conflict",
+                "no_welcome",
+                format!("{}'s folder has no template lock with a hello to send again ({}); nothing was changed", kessel.name, kessel.path),
+            )
+        }
+        Err(e) => return hire_error(&e),
+    };
+    let handle = handle_of(&kessel.workspace_id);
+    let (caller, from) = if actor.owner_token {
+        (k2_core::hire::HireCaller::Owner, k2_core::person_name::sender_identity_now(k2_core::person_name::Sender::OwnerToken))
+    } else {
+        (k2_core::hire::HireCaller::Login { username: actor.login.clone() }, actor.login.clone())
+    };
+    crate::template_hello::send(&kessel.path, &handle, hello, None, from, crate::hire_routes::Sender::from_hire_caller(&caller, None));
+    audit("first-run-kessel-welcome", &by_label(actor), format!("ok {handle}"));
+    if text {
+        return CliResponse::ok_text(format!(
+            concat!("{} is starting its welcome again on its Thread: ", cli_name!(), " thread {}\n"),
+            kessel.name, handle
+        ));
+    }
+    CliResponse::ok_json(json!({ "ok": true, "workspaceId": kessel.workspace_id, "sent": true }).to_string())
 }
 
 // ── Kessel at first run (prd-setup-checklist-v1 §10) ─────────────────────
@@ -1053,3 +1385,7 @@ mod tests {
 #[cfg(test)]
 #[path = "first_run_kessel_tests.rs"]
 mod kessel_tests;
+
+#[cfg(test)]
+#[path = "first_run_getting_started_tests.rs"]
+mod getting_started_tests;

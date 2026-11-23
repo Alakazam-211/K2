@@ -375,7 +375,9 @@ fn the_wire_shape_is_the_contracts() {
                 { "id": "tunnel", "state": "todo", "opens": "tunnel" },
                 { "id": "phone", "state": "todo", "opens": "tunnel", "note": "needs_tunnel" },
                 { "id": "own_sign_in", "state": "todo", "opens": "owner_account_prompt" }
-            ]
+            ],
+            "kesselFirstRun": false,
+            "kesselSeat": { "exists": false }
         })
     );
 }
@@ -563,6 +565,64 @@ fn dismissing_the_offer_is_per_person_and_show_keeps_it() {
     let s = apply_on(&conn, &p, "julie", admin, &f, true, &Action::Show, 9).expect("show");
     assert_eq!(s.kessel.expect("on").offer, None, "show brings the list back, not the offer");
     assert_eq!(load_record(&conn, "julie").expect("load").expect("row").offer_dismissed_at, Some(5));
+}
+
+/// Settings → Getting started: Restart is Show plus the "Not now" on Meet
+/// Kessel cleared, for this person only.
+#[test]
+fn restart_clears_hidden_finished_skips_and_the_offer_dismissal_for_this_person_only() {
+    let conn = db();
+    let p = people();
+    let f = offer_facts();
+    let admin = Viewer::Login(Role::Admin);
+    apply_on(&conn, &p, "julie", admin, &f, true, &Action::Skip("tunnel".into()), 1).expect("skip");
+    apply_on(&conn, &p, "julie", admin, &f, true, &Action::DismissOffer, 2).expect("dismiss");
+    apply_on(&conn, &p, "julie", admin, &f, true, &Action::Hide, 3).expect("hide");
+    apply_on(&conn, &p, OWNER, Viewer::OwnerToken, &f, true, &Action::DismissOffer, 4).expect("owner dismiss");
+    conn.execute("UPDATE first_run_person SET finished_at = 5 WHERE person_key = 'julie'", []).expect("finish");
+    let s = apply_on(&conn, &p, "julie", admin, &f, true, &Action::Restart, 6).expect("restart");
+    assert!(!s.hidden && !s.finished, "{s:?}");
+    assert!(s.rows.iter().all(|r| r.state != State::Skipped), "{:?}", s.rows);
+    assert_eq!(s.kessel.expect("on").offer, Some(OFFER_MEET_KESSEL), "the offer is back");
+    let rec = load_record(&conn, "julie").expect("load").expect("row");
+    assert_eq!((rec.hidden_at, rec.finished_at, rec.offer_dismissed_at), (None, None, None));
+    assert!(rec.skipped.is_empty());
+    assert_eq!(load_record(&conn, OWNER).expect("load").expect("row").offer_dismissed_at, Some(4), "the owner's stays");
+}
+
+/// `restart_on` makes the record of a person who had none, unfinished even
+/// on a server already in use (the cutoff would count them finished).
+#[test]
+fn restart_on_a_person_with_no_record_leaves_them_unfinished_despite_the_cutoff() {
+    let conn = db();
+    let p = people();
+    conn.execute("INSERT OR REPLACE INTO first_run_meta (id, existing_cutoff) VALUES (1, ?1)", [Utc::now().timestamp()]).expect("cutoff");
+    let member = Viewer::Login(Role::Member);
+    let before = status_on(&conn, &p, "anna", member, &Facts::default(), true, 1).expect("status");
+    assert!(before.finished, "an older login counts as finished on a server in use");
+    restart_on(&conn, &p, "anna", 2).expect("restart");
+    let after = status_on(&conn, &p, "anna", member, &Facts::default(), true, 3).expect("status");
+    assert!(!after.finished && !after.hidden, "{after:?}");
+}
+
+/// `kesselFirstRun` and `kesselSeat` ride every status, whatever the switch.
+#[test]
+fn the_status_carries_the_kessel_switch_and_seat_either_way() {
+    let conn = db();
+    let p = people();
+    let off = Facts { has_agent: true, ..Facts::default() };
+    let v = serde_json::to_value(status_on(&conn, &p, OWNER, Viewer::OwnerToken, &off, false, 1).expect("off")).expect("json");
+    assert_eq!(v["kesselFirstRun"], serde_json::json!(false), "{v}");
+    assert_eq!(v["kesselSeat"], serde_json::json!({ "exists": false }), "{v}");
+    let with = Facts { kessel: Some(kessel_live()), ..off.clone() };
+    let v = serde_json::to_value(status_on(&conn, &p, "anna", Viewer::Login(Role::Member), &with, false, 2).expect("off")).expect("json");
+    assert_eq!(v["kesselSeat"], serde_json::json!({ "exists": true, "workspaceId": "w-kessel", "name": "Kessel" }), "{v}");
+    assert!(v.get("kessel").is_none(), "the switch-on contract's key stays away: {v}");
+    let on = Facts { kessel_first_run: true, ..with };
+    let v = serde_json::to_value(status_on(&conn, &p, OWNER, Viewer::OwnerToken, &on, true, 3).expect("on")).expect("json");
+    assert_eq!(v["kesselFirstRun"], serde_json::json!(true));
+    assert_eq!(v["kesselSeat"]["exists"], serde_json::json!(true));
+    assert_eq!(v["kessel"]["workspaceId"], serde_json::json!("w-kessel"));
 }
 
 #[test]

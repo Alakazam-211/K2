@@ -57,6 +57,7 @@ pub mod cli;
 pub mod creds;
 pub mod agent_cgroup;
 pub mod agent_scope;
+pub mod agent_scope_policy;
 pub mod desktop;
 pub mod engine;
 pub mod k2_auth;

@@ -646,6 +646,11 @@ fn agents_leaf_check(v: Option<&J>) -> Check {
             Some(GUARD_FIX),
         );
     }
+    // Agent Isolation B4: with the owner's scopes on, the unit is not
+    // delegated and there is no leaf by design.
+    if v["scopeMode"] == true {
+        return c("agentsLeaf", "ok", format!("no agents' leaf: {}", v["why"].as_str().unwrap_or("scope mode")), None);
+    }
     if v["on"] != true {
         return c(
             "agentsLeaf",
@@ -1461,6 +1466,11 @@ mod tests {
         assert_eq!(status_of(&d, "agentsLeaf"), "warn");
         assert_eq!(d["ready"], true, "a soft finding: {d:#}");
         assert!(d.to_string().contains("--cores-mem-min"), "{d}");
+        // Scope mode: no leaf by design, no box prep hint.
+        f.agents_leaf = Some(json!({"on": false, "why": "scope mode: the owner turned on root-owned agent scopes", "scopeMode": true}));
+        let d = doctor(&f);
+        assert_eq!(status_of(&d, "agentsLeaf"), "ok", "{d}");
+        assert!(d.to_string().contains("scope mode"), "{d}");
     }
 
     /// 0.46.16: the doctor says not ok when a restart would crash-loop

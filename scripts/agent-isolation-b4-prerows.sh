@@ -8,8 +8,13 @@
 # Isolation test boxes only. It starts transient units in a test slice
 # (`k2isorow.slice`, removed at the end), turns the K2 user's lingering on
 # and back to how it was (P2, P3), and puts a `Delegate=no` drop-in on the
-# test daemon unit for P4 (removed at the end). Needs: Linux, cgroup v2,
-# systemd, sudo, busctl, curl, tmux (P7, in the kernel test).
+# test daemon unit for P4 (removed at the end). Then (H rows) it installs
+# `agents setup`'s bus policy (/etc/dbus-1/system.d/k2-agents.conf, for
+# this user) and its `Delegate=no` drop-in on the test unit, and reruns
+# rows 1c and 2 with only the policy, after daemon-reload, after a plain
+# restart and after a full stop and start; both files are removed and the
+# bus reloaded at the end. Needs: Linux, cgroup v2, systemd, sudo, busctl,
+# curl, tmux (P7, in the kernel test).
 #
 # usage: scripts/agent-isolation-b4-prerows.sh <artifact-dir>
 #   <artifact-dir> as for agent-isolation-m1b-kernel-tests.sh (run its
@@ -28,6 +33,11 @@ for t in busctl systemd-run systemctl loginctl curl tmux; do
     command -v "$t" >/dev/null || { echo "missing tool: $t" >&2; exit 2; }
 done
 [ -f "/etc/systemd/system/$unit" ] || { echo "no $unit: run agent-isolation-m1b-kernel-tests.sh --setup first" >&2; exit 2; }
+# The H rows' files: agents setup's names (k2_root_proto::agent_scope_policy).
+policy=/etc/dbus-1/system.d/k2-agents.conf
+hdropin="/etc/systemd/system/$unit.d/zz-k2-agents-delegate.conf"
+[ ! -e "$policy" ] || { echo "$policy is there already: not a clean test box" >&2; exit 2; }
+[ ! -e "$hdropin" ] || { echo "$hdropin is there already: not a clean test box" >&2; exit 2; }
 echo "box: $(hostname) · $(. /etc/os-release && echo "$PRETTY_NAME") · kernel $(uname -r) · $(systemctl --version | head -1) · kernel.pid_max $(cat /proc/sys/kernel/pid_max) · kernel.apparmor_restrict_unprivileged_unconfined $(cat /proc/sys/kernel/apparmor_restrict_unprivileged_unconfined 2>/dev/null || echo absent) · kernel.apparmor_restrict_unprivileged_userns $(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo absent)"
 
 ran=0
@@ -35,9 +45,11 @@ row() { echo "row $1: $2"; ran=$((ran + 1)); }
 first_line() { tr '\n' ' ' | cut -c1-300; }
 linger_was="$(loginctl show-user "$user" -p Linger --value 2>/dev/null || echo no)"
 dropin="/etc/systemd/system/$unit.d/b4-prerow-delegate.conf"
+bus_reload() { sudo busctl call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus ReloadConfig; }
 cleanup() {
     sudo systemctl stop "$slice" 2>/dev/null || true
-    sudo rm -f "$dropin"
+    sudo rm -f "$dropin" "$hdropin"
+    if [ -e "$policy" ]; then sudo rm -f "$policy"; bus_reload >/dev/null 2>&1 || true; fi
     sudo systemctl daemon-reload
     if [ "$linger_was" = yes ]; then sudo loginctl enable-linger "$user"; else sudo loginctl disable-linger "$user"; fi
 }
@@ -205,10 +217,144 @@ sudo systemctl start "$unit"
 sleep 3
 cg="$(systemctl show -p ControlGroup --value "$unit")"
 row P4d "after a full stop and start: $(tree) · inode $(stat -c %i "/sys/fs/cgroup$cg" 2>/dev/null)"
+
+# H. agents setup's two controls on the test unit (kernel rows 1c and 2
+#    again, design "Kernel rows run 2026-11-23"): the bus policy denies this
+#    user systemd's process moves; the drop-in takes the unit off
+#    delegation. Each step records what 1c and 2 do now. The texts are
+#    exactly what the helper writes (a k2-root-proto test keeps them equal).
+policy_text() {
+    cat <<'POLICY' | sed "s/user=\"k2-row-user\"/user=\"$user\"/"
+<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <!-- K2 agent scopes: the K2 daemon's user may not ask systemd to move processes
+       between units. Written by k2-root-helper `agents setup`, removed by `agents teardown`. -->
+  <policy user="k2-row-user">
+    <deny send_destination="org.freedesktop.systemd1" send_interface="org.freedesktop.systemd1.Manager" send_member="AttachProcessesToUnit"/>
+    <deny send_destination="org.freedesktop.systemd1" send_interface="org.freedesktop.systemd1.Service" send_member="AttachProcesses"/>
+    <deny send_destination="org.freedesktop.systemd1" send_interface="org.freedesktop.systemd1.Socket" send_member="AttachProcesses"/>
+    <deny send_destination="org.freedesktop.systemd1" send_interface="org.freedesktop.systemd1.Mount" send_member="AttachProcesses"/>
+    <deny send_destination="org.freedesktop.systemd1" send_interface="org.freedesktop.systemd1.Swap" send_member="AttachProcesses"/>
+    <deny send_destination="org.freedesktop.systemd1" send_interface="org.freedesktop.systemd1.Slice" send_member="AttachProcesses"/>
+    <deny send_destination="org.freedesktop.systemd1" send_interface="org.freedesktop.systemd1.Scope" send_member="AttachProcesses"/>
+    <deny send_destination="org.freedesktop.systemd1" send_member="AttachProcessesToUnit"/>
+    <deny send_destination="org.freedesktop.systemd1" send_member="AttachProcesses"/>
+  </policy>
+</busconfig>
+POLICY
+}
+dropin_text() {
+    cat <<'DROPIN'
+# K2 agent scopes (k2-root-helper `agents setup`): the daemon's unit is not delegated,
+# so systemd refuses to move processes into it. Applies fully after a full stop and
+# start of the unit (the daemon and k2-ptyd). Removed by `agents teardown`.
+[Service]
+Delegate=no
+DelegateSubgroup=
+DROPIN
+}
+# The full stop and start `layout on` names (KillMode=process: stop leaves
+# ptyd; the kill ends it), then wait for the test daemon.
+full_restart() {
+    sudo systemctl stop "$unit" && sudo systemctl kill --kill-whom=all --signal=KILL "$unit" 2>/dev/null
+    sleep 1
+    rm -f "$port_file" "$persist/home/.k2/daemon.ready"
+    sudo systemctl start "$unit"
+    wait_ready
+}
+wait_ready() {
+    for _ in $(seq 1 120); do
+        port="$(cat "$port_file" 2>/dev/null || true)"
+        [ -n "$port" ] && curl -s "http://127.0.0.1:$port/boot-status" | grep -q '"ready"' && return 0
+        sleep 1
+    done
+    echo "the test daemon did not come up" >&2
+    return 1
+}
+state() {
+    cg="$(systemctl show -p ControlGroup --value "$unit")"
+    echo "Delegate=$(systemctl show -p Delegate --value "$unit") · DelegateSubgroup=$(systemctl show -p DelegateSubgroup --value "$unit") · NeedDaemonReload=$(systemctl show -p NeedDaemonReload --value "$unit") · $(tree)"
+}
+# Row 1c: this user asks PID 1 to put its own pid into a root-made
+# /agents/a-rowB of the unit.
+try_1c() {
+    cg="$(systemctl show -p ControlGroup --value "$unit")"
+    local sub="/sys/fs/cgroup$cg/agents/a-rowB" out rc own
+    sudo mkdir -p "$sub"
+    sleep 300 & own=$!
+    out="$(busctl call org.freedesktop.systemd1 /org/freedesktop/systemd1 org.freedesktop.systemd1.Manager AttachProcessesToUnit ssau "$unit" /agents/a-rowB 1 "$own" 2>&1)"
+    rc=$?
+    row "$1" "attach own pid onto $unit at /agents/a-rowB (owner $(stat -c %U "$sub" 2>/dev/null)) as $user: rc=$rc $(echo "$out" | first_line) · now in $(cut -d: -f3 /proc/"$own"/cgroup)"
+    kill "$own" 2>/dev/null
+    sleep 0.5
+    sudo rmdir "$sub" 2>/dev/null
+}
+# Row 2: this user's manager asked to move a fresh sibling out of its
+# root-made system scope.
+try_2() {
+    local name="k2isorow-sib-$1" s="" out rc
+    sudo systemd-run --quiet --collect --scope --slice="$slice" --unit="$name" --uid="$uid" sleep 600 &
+    for _ in $(seq 1 50); do
+        s="$(head -1 "/sys/fs/cgroup/$slice/$name.scope/cgroup.procs" 2>/dev/null)"
+        [ -n "$s" ] && break
+        sleep 0.1
+    done
+    if [ -z "$s" ]; then
+        row "$1" "no sibling process: not recorded"
+        return
+    fi
+    out="$(busctl --user call org.freedesktop.systemd1 /org/freedesktop/systemd1 org.freedesktop.systemd1.Manager StartTransientUnit 'ssa(sv)a(sa(sv))' "k2isorow-move-$1.scope" fail 1 PIDs au 1 "$s" 0 2>&1)"
+    rc=$?
+    sleep 0.5
+    row "$1" "user manager StartTransientUnit PIDs=[sibling]: rc=$rc $(echo "$out" | first_line) · sibling now in $(cut -d: -f3 /proc/"$s"/cgroup)"
+    systemctl --user stop "k2isorow-move-$1.scope" 2>/dev/null
+    sudo systemctl stop "$name.scope" 2>/dev/null
+}
+
+# H0. Back to the delegated unit (P4's drop-in out, a full stop and start),
+#     and the bite: 1c and 2 as before any control.
+sudo rm -f "$dropin"
+sudo systemctl daemon-reload
+full_restart
+row H0 "the unit delegated again: $(state)"
+try_1c 1c-before
+try_2 2-before
+# H1. The bus policy alone (no drop-in yet), the bus reloaded.
+policy_text | sudo tee "$policy" >/dev/null
+out="$(bus_reload 2>&1)"
+row H1 "bus policy for $user installed, ReloadConfig: rc=$? $(echo "$out" | first_line) · bus $(systemctl show -p Id --value dbus.service 2>/dev/null) · $(state)"
+try_1c 1c-policy
+try_2 2-policy
+# H2. The drop-in, daemon-reload, no restart (the daemon and ptyd keep
+#     running in the delegated cgroup).
+sudo mkdir -p "$(dirname "$hdropin")"
+dropin_text | sudo tee "$hdropin" >/dev/null
+sudo systemctl daemon-reload
+row H2 "drop-in + daemon-reload, no restart: $(state)"
+try_1c 1c-after-reload
+try_2 2-after-reload
+# H3. A plain restart (ptyd alive: the cgroup stays the user's).
+sudo systemctl restart "$unit"
+sleep 3
+row H3 "after a plain restart (ptyd alive): $(state)"
+try_1c 1c-after-restart
+try_2 2-after-restart
+# H4. The full stop and start: the cgroup is root's.
+full_restart
+row H4 "after a full stop and start: $(state)"
+try_1c 1c-after-full
+try_2 2-after-full
+# H5. Both removed, both reloaded.
+sudo rm -f "$policy" "$hdropin"
+out="$(bus_reload 2>&1)"
+rc=$?
+sudo systemctl daemon-reload
+row H5 "policy and drop-in removed, ReloadConfig: rc=$rc $(echo "$out" | first_line) · $(ls "$policy" "$hdropin" 2>&1 | first_line)"
 sudo systemctl stop "$unit"
 sudo systemctl kill --signal=KILL "$unit" 2>/dev/null
 
 kill "$sib_wrap" 2>/dev/null
 echo "rows recorded: $ran"
 [ "$fenced_ok" = 1 ] || { echo "the fenced-session rows (4, P2, P7) did not run" >&2; exit 1; }
-[ "$ran" -ge 12 ] || { echo "fewer rows than expected ran" >&2; exit 1; }
+[ "$ran" -ge 34 ] || { echo "fewer rows than expected ran" >&2; exit 1; }

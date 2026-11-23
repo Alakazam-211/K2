@@ -310,6 +310,8 @@ pub mod agent_isolation;
 // Agent Isolation M2 B4: the owner's switch for root-owned agent scopes
 // (`k2 agent isolation layout on|off|status`).
 pub mod agent_isolation_layout;
+// … the daemon unit's delegation and the bus policy (kernel rows 1c, 2, P4).
+pub mod agent_isolation_delegation;
 // A /cli/* request over 5 s (or still running at 30 s) logs one line.
 pub mod slow_request;
 // gzip for JSON that leaves this machine; ETag/304 on the projects list.

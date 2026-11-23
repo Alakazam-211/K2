@@ -83,6 +83,9 @@ fn scope_box_full(moves: bool, reused: &[u32], extra: &[u32]) -> T {
         if has("Delegate") {
             return out(r#"{"type":"b","data":true}"#);
         }
+        if has("ReloadConfig") {
+            return out("");
+        }
         ExecOut { status: 1, stdout: vec![], stderr: b"unexpected busctl call".to_vec() }
     });
     t.exec.0.borrow_mut().programs.insert(BUSCTL.into(), busctl);
@@ -673,3 +676,6 @@ fn agents_setup_refuses_without_a_sleep_program() {
     assert!(o.stderr.contains("no sleep program"), "{}", o.stderr);
     assert!(!t.p("/etc/systemd/system/k2agents.slice").exists());
 }
+
+#[path = "agents_scope_policy_tests.rs"]
+mod policy_tests;

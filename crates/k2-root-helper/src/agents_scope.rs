@@ -35,7 +35,8 @@
 //! - `agents layout` (daemon): report only, with the P1 probe run as the
 //!   daemon's user.
 //! - `agents setup` / `agents teardown` (daemon): the slice and anchor
-//!   units.
+//!   units, the bus policy and the daemon unit's `Delegate=no` drop-in
+//!   (`agents_scope_policy`).
 
 use std::ffi::OsStr;
 use std::io::Read;
@@ -81,8 +82,8 @@ pub fn run(ctx: &Ctx, v: &ScopeVerb, who: &Caller) -> HResult<J> {
         ScopeVerb::Stop { ws, id } => stop(ctx, ws, id),
         ScopeVerb::StopAll => stop_all(ctx),
         ScopeVerb::Layout => layout(ctx, who),
-        ScopeVerb::Setup => setup(ctx),
-        ScopeVerb::Teardown => teardown(ctx),
+        ScopeVerb::Setup => setup(ctx, who),
+        ScopeVerb::Teardown => teardown(ctx, who),
     }
 }
 
@@ -612,7 +613,7 @@ fn layout(ctx: &Ctx, who: &Caller) -> HResult<J> {
         let d = ctx.p(&cg(&l.cgroup()));
         let present = is_dir(&d);
         let owner = if present { owner_of(&d).ok() } else { None };
-        let root_owned = owner == Some(0) && (!ctx.real_owners || is_cgroup2(&d));
+        let root_owned = owner == Some(ctx.root_uid) && (!ctx.real_owners || is_cgroup2(&d));
         ready &= present && root_owned;
         slices.insert(l.slice().into(), json!({ "present": present, "rootOwned": root_owned, "owner": owner }));
         let state = ctx
@@ -670,7 +671,12 @@ fn layout(ctx: &Ctx, who: &Caller) -> HResult<J> {
     }
     let (p1, p1_err) = probe(ctx, &entry.user);
     ready &= p1 == Probe::Refused;
-    Ok(json!({
+    // Rows 1c, 2 and P4: the bus policy and the drop-in in place, and the
+    // unit not delegated (off, or pending its full restart).
+    let delegate = delegate_of(ctx, &entry.unit);
+    let (policy_ready, policy) = crate::agents_scope_policy::report(ctx, &entry, delegate, unit_owner);
+    ready &= policy_ready;
+    let mut v = json!({
         "ok": p1 != Probe::Allowed,
         "ready": ready,
         "slices": slices,
@@ -678,19 +684,24 @@ fn layout(ctx: &Ctx, who: &Caller) -> HResult<J> {
         "unit": {
             "name": entry.unit,
             "cgroup": unit,
-            "delegate": delegate_of(ctx, &entry.unit),
+            "delegate": delegate,
             "cgroupOwner": unit_owner,
-            "cgroupRootOwned": unit_owner == Some(0),
+            "cgroupRootOwned": unit_owner == Some(ctx.root_uid),
         },
         "scopes": scopes,
         "survivors": survivors,
         "pidMax": pid_max,
         "p1": p1.as_str(),
         "p1Detail": if p1 == Probe::Refused { String::new() } else { p1_err },
-    }))
+    });
+    if let Some(m) = v.as_object_mut() {
+        m.extend(policy);
+    }
+    Ok(v)
 }
 
-fn setup(ctx: &Ctx) -> HResult<J> {
+fn setup(ctx: &Ctx, who: &Caller) -> HResult<J> {
+    let entry = crate::daemon_unit::caller_entry(ctx, who)?;
     let sleep = SLEEP_PATHS
         .iter()
         .copied()
@@ -702,16 +713,23 @@ fn setup(ctx: &Ctx) -> HResult<J> {
     for (name, text) in &files {
         changed |= crate::apps::put(ctx, &sysd, name, text.as_bytes())?;
     }
-    if changed {
+    // Rows 1c, 2 and P4: the bus policy and the daemon unit's drop-in.
+    let policy = crate::agents_scope_policy::install(ctx, &entry)?;
+    if changed || policy.delegate_dropin {
         ctx.run_ok(SYSTEMCTL, &["daemon-reload"], None)?;
     }
     let anchors: Vec<&str> = Level::ALL.iter().map(|l| l.anchor()).collect();
     let mut a = vec!["enable", "--now"];
     a.extend(&anchors);
     ctx.run_ok(SYSTEMCTL, &a, None)?;
+    if policy.bus_policy {
+        crate::agents_scope_policy::reload_bus(ctx).map_err(|f| Fail::state(format!("agents setup: the bus policy is written, but {}", f.msg)))?;
+    }
     Ok(json!({
         "ok": true,
-        "changed": changed,
+        "changed": changed || policy.bus_policy || policy.delegate_dropin,
+        "busPolicyChanged": policy.bus_policy,
+        "delegateDropinChanged": policy.delegate_dropin,
         "sleep": sleep,
         "slices": Level::ALL.iter().map(|l| l.slice()).collect::<Vec<_>>(),
         "anchors": anchors,
@@ -720,8 +738,13 @@ fn setup(ctx: &Ctx) -> HResult<J> {
 
 /// Uninstall: every scope stopped (waiting is fine here, unlike `stop`),
 /// the anchors disabled, `k2agents.slice` stopped (best effort), the six
-/// files removed. `ok` is false when a scope is still there at the end.
-fn teardown(ctx: &Ctx) -> HResult<J> {
+/// unit files, the daemon unit's drop-in and the bus policy removed, then
+/// systemd and the bus reloaded. `ok` is false when a scope is still there
+/// at the end or the bus did not reload.
+fn teardown(ctx: &Ctx, who: &Caller) -> HResult<J> {
+    // The caller passed the daemon check; its entry names the unit. The
+    // policy file goes even without it.
+    let entry = crate::daemon_unit::caller_entry(ctx, who).ok();
     let scopes = live_scope_dirs(ctx);
     let (killed, _) = stop_and_wait(ctx, &scopes);
     let present: Vec<&str> = Level::ALL
@@ -743,12 +766,17 @@ fn teardown(ctx: &Ctx) -> HResult<J> {
             }
         }
     }
-    if removed > 0 {
+    let policy = crate::agents_scope_policy::remove(ctx, entry.as_ref())?;
+    if removed > 0 || policy.delegate_dropin {
         ctx.run_ok(SYSTEMCTL, &["daemon-reload"], None)?;
     }
+    let bus_reload = if policy.bus_policy { Some(crate::agents_scope_policy::reload_bus(ctx).map_err(|f| f.msg)) } else { None };
     let still: Vec<String> = scopes.iter().filter(|(_, d)| is_dir(d)).map(|(n, _)| n.clone()).collect();
     Ok(json!({
-        "ok": still.is_empty(),
+        "ok": still.is_empty() && !matches!(bus_reload, Some(Err(_))),
+        "busPolicyRemoved": policy.bus_policy,
+        "delegateDropinRemoved": policy.delegate_dropin,
+        "busReloadError": bus_reload.and_then(Result::err),
         "stopped": scopes.len(),
         "killed": killed.len(),
         "stillThere": still,

@@ -276,11 +276,21 @@ pub fn register_root_placement() {
     }
     // B4 first: a scope per session when the helper serves it and its
     // slices are set up (`agents layout`). Else M1b as before.
-    match register_scope_placement() {
+    let scopes_off = match register_scope_placement() {
         Ok(()) => return,
-        Err(why) => log_debug!("[agents] agent scopes not used: {why}"),
-    }
+        Err(why) => {
+            log_debug!("[agents] agent scopes not used: {why}");
+            why
+        }
+    };
     if let Err(why) = agent_cgroup::availability() {
+        // Scope mode leaves the unit undelegated (no agents' leaf): say why
+        // the scopes aren't placed, not why there is no leaf.
+        let why = if k2_core::agents_leaf::scope_mode() {
+            format!("agent scopes are not placed ({scopes_off}); with scopes turned on the daemon's unit is not delegated, so there is no agents' leaf to fall back to")
+        } else {
+            why
+        };
         agent_cgroup::set_no_placer(why);
         return;
     }
@@ -491,7 +501,9 @@ pub fn layout_ready(v: &serde_json::Value) -> Result<(), String> {
         return Err(format!("the server user's own transient unit in an agents slice was not refused (p1: {})", v["p1"]));
     }
     if v["ready"].as_bool() != Some(true) {
-        return Err(format!("the agents slices aren't set up (agents layout: {v})"));
+        // The bus policy, the unit's drop-in and its delegation first
+        // (kernel rows 1c, 2, P4), then the slices.
+        return Err(crate::agent_isolation_delegation::not_ready_reason(v));
     }
     Ok(())
 }

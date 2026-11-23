@@ -15,7 +15,12 @@
 //!   or this computer's own prompt where it has one). Then `agents setup`,
 //!   `agents layout` (must be ready, P1 refused), the setting, and scope
 //!   placement from now on: new sessions, job runs and services each get a
-//!   scope at their next start; running sessions keep their place. An
+//!   scope at their next start; running sessions keep their place. Setup
+//!   also writes the bus policy and the daemon unit's `Delegate=no`
+//!   drop-in: until a full stop and start of the unit (the daemon and
+//!   k2-ptyd) its delegation reads `pending-full-restart`, and the answer
+//!   names that command with the sessions it would end
+//!   (`agent_isolation_delegation`). An
 //!   Admin login can't give the owner check, so it can't turn this on. An
 //!   agent asking gets the `agent.isolation-layout` card's line.
 //! - **off** — the owner only (it loosens isolation; as with the folder
@@ -84,6 +89,9 @@ pub(crate) trait Host {
     fn stop_placing(&self);
     /// Scopes are being placed now.
     fn placing(&self) -> bool;
+    /// The agent sessions running now (a full restart of the daemon's unit
+    /// would end them all).
+    fn running_sessions(&self) -> usize;
 }
 
 /// This daemon: the root helper and `k2_core::agent_scope`.
@@ -126,6 +134,10 @@ impl Host for Live {
 
     fn placing(&self) -> bool {
         agent_scope::scope_placement()
+    }
+
+    fn running_sessions(&self) -> usize {
+        crate::v2_session_map::snapshot().len()
     }
 }
 
@@ -352,6 +364,9 @@ fn turn_on(host: &dyn Host, who: &Who, token: Option<&str>, ingress: &str) -> Cl
             "setting": "on",
             "appliesTo": "new sessions, job runs and services: each gets its own root-owned scope at its next start. Running sessions keep their place until they restart",
             "agentsInOldLayout": old,
+            "busPolicy": crate::agent_isolation_delegation::bus_policy(&layout),
+            "delegation": crate::agent_isolation_delegation::delegation(&layout),
+            "fullRestart": crate::agent_isolation_delegation::full_restart(&layout, host.running_sessions()),
             "setup": setup,
             "layout": layout,
         }),
@@ -488,6 +503,14 @@ fn status(host: &dyn Host, who: &Who) -> CliResponse {
         Err(e) => (None, Some(e)),
     };
     let placing = host.placing();
+    let delegation = layout.as_ref().map(|l| {
+        (
+            crate::agent_isolation_delegation::bus_policy(l).map(str::to_string),
+            crate::agent_isolation_delegation::delegation(l).map(str::to_string),
+            crate::agent_isolation_delegation::full_restart(l, host.running_sessions()),
+        )
+    });
+    let (bus_policy, delegation, full_restart) = delegation.unwrap_or_default();
     let choice = agent_scope::owner_choice();
     let b = agent_scope::box_state().unwrap_or_default();
     let why_off = if placing {
@@ -511,6 +534,9 @@ fn status(host: &dyn Host, who: &Who) -> CliResponse {
             "p1": b.p1,
             "pidMax": b.pid_max,
             "oldLayout": b.old_layout.iter().map(|(ws, why)| json!({ "agent": ws, "why": why })).collect::<Vec<_>>(),
+            "busPolicy": bus_policy,
+            "delegation": delegation,
+            "fullRestart": full_restart,
             "layout": layout,
             "layoutError": layout_error,
         }),

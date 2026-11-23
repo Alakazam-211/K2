@@ -189,7 +189,9 @@
 //!   an update, every process into one new scope), `agents stop <ws> <id>`,
 //!   `agents stop-all`, `agents layout` (report only, with the P1 probe run
 //!   as the daemon's user), and `agents setup` / `agents teardown` (the
-//!   slice and anchor units). Under `namespaces.agentscope`,
+//!   slice and anchor units, the bus policy that denies the daemon's user
+//!   systemd's process moves, and the daemon unit's `Delegate=no` drop-in:
+//!   `crate::agent_scope_policy`). Under `namespaces.agentscope`,
 //!   [`AGENTSCOPE_MIN_PROTOCOL`]; an 18 helper refuses the argv, so the
 //!   daemon keeps M1b's layout (`agents place`).
 //!   Never 20 before 19 ships.

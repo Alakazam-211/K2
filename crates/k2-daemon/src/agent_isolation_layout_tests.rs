@@ -22,6 +22,7 @@ struct Stub {
     placing: Cell<bool>,
     started: RefCell<Option<Value>>,
     stopped: Cell<bool>,
+    sessions: Cell<usize>,
 }
 
 impl Stub {
@@ -33,6 +34,7 @@ impl Stub {
             placing: Cell::new(false),
             started: RefCell::new(None),
             stopped: Cell::new(false),
+            sessions: Cell::new(0),
         }
     }
     fn calls(&self) -> Vec<String> {
@@ -59,6 +61,9 @@ impl Host for Stub {
     }
     fn placing(&self) -> bool {
         self.placing.get()
+    }
+    fn running_sessions(&self) -> usize {
+        self.sessions.get()
     }
 }
 
@@ -88,6 +93,10 @@ fn ready_layout(scopes: Value, survivors: Value) -> Value {
         "anchors": { "k2agents-anchor.service": { "active": true, "state": "active" } },
         "scopes": scopes,
         "survivors": survivors,
+        "busPolicy": "present",
+        "delegateDropin": "present",
+        "delegation": "off",
+        "unit": { "name": "k2-daemon.service", "delegate": false },
     })
 }
 
@@ -399,4 +408,46 @@ fn the_card_is_the_owners_and_the_click_is_not_the_owner_check() {
     assert!(r.spec.words.consequences.contains("agent isolation layout on yourself"), "{}", r.spec.words.consequences);
     let w = &r.spec.walls[0];
     assert_eq!(w.route_prefix, ROUTE);
+}
+
+/// Kernel rows 1c, 2 and P4: `on` with the unit's delegation pending its
+/// full restart says so, names the command and the sessions it ends;
+/// status shows the bus policy and the delegation; a layout without the
+/// bus policy is not ready, with the reason.
+#[test]
+fn on_names_the_full_restart_while_delegation_is_pending_and_status_shows_it() {
+    let _home = crate::test_support::TempHome::new();
+    let _p = Presence::offers(Some(presence::LOCAL_AUTH), true);
+    let mut layout = ready_layout(json!([]), json!([]));
+    layout["delegation"] = json!("pending-full-restart");
+    layout["fullRestart"] = json!("the helper's command");
+    let host = Stub::new(&[("setup", json!({ "ok": true })), ("layout", layout.clone())]);
+    host.sessions.set(4);
+    let (s, v) = post(&host, Caller::Owner, json!({ "mode": "on" }));
+    assert_eq!(s, 200, "{v}");
+    assert_eq!((v["busPolicy"].as_str(), v["delegation"].as_str()), (Some("present"), Some("pending-full-restart")), "{v}");
+    assert_eq!((v["fullRestart"]["needed"].as_bool(), v["fullRestart"]["endsSessions"].as_u64()), (Some(true), Some(4)), "{v}");
+    assert_eq!(v["fullRestart"]["command"], "the helper's command", "{v}");
+    assert!(v["fullRestart"]["message"].as_str().expect("message").contains("k2-ptyd"), "{v}");
+
+    let (s, v) = post(&host, Caller::Owner, json!({ "mode": "status" }));
+    assert_eq!(s, 200, "{v}");
+    assert_eq!((v["busPolicy"].as_str(), v["delegation"].as_str()), (Some("present"), Some("pending-full-restart")), "{v}");
+    assert_eq!(v["fullRestart"]["endsSessions"], 4, "{v}");
+
+    // Delegation off: nothing to restart.
+    let host = Stub::new(&[("layout", ready_layout(json!([]), json!([])))]);
+    let (_, v) = post(&host, Caller::Owner, json!({ "mode": "status" }));
+    assert_eq!((v["delegation"].as_str(), &v["fullRestart"]), (Some("off"), &Value::Null), "{v}");
+
+    // No bus policy: not ready, and the hint says which file.
+    let mut bad = ready_layout(json!([]), json!([]));
+    bad["ready"] = json!(false);
+    bad["busPolicy"] = json!("missing");
+    let host = Stub::new(&[("setup", json!({ "ok": true })), ("layout", bad)]);
+    agent_scope::set_owner_choice(false, "owner").expect("off");
+    let (s, v) = post(&host, Caller::Owner, json!({ "mode": "on" }));
+    assert_eq!((s, code_of(&v)), (409, "layout_not_ready"), "{v}");
+    assert!(v.pointer("/error/hint").and_then(Value::as_str).expect("hint").contains("bus policy"), "{v}");
+    assert!(host.started.borrow().is_none());
 }

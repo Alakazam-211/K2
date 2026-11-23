@@ -35,6 +35,17 @@
 //! budget is 75% of the box's memory by default; the owner sets another in
 //! the daemon's environment: `K2_AGENTS_MEMORY_HIGH=6G|60%|max`.
 //!
+//! **Scope mode (Agent Isolation M2 B4).** When the owner turned the root
+//! helper's scopes on (`k2 agent isolation layout on`), each agent session
+//! runs in its own root-owned scope under `k2agents.slice`, and the
+//! helper's `Delegate=no` drop-in takes the daemon's unit off delegation
+//! (kernel rows 1c, 2, P4). Then there is no agents' leaf and nothing to
+//! split: [`init`] says so quietly ([`SCOPE_MODE`]) instead of asking for
+//! box prep, and while the unit's cgroup is still the server user's (until
+//! a full stop and start) it turns the unit cgroup's controllers off, so a
+//! plain restart can place the daemon in the unit's own cgroup (with
+//! `DelegateSubgroup=` cleared, systemd starts it there).
+//!
 //! Only on Linux, only in a **system** unit whose cgroup systemd handed to
 //! the daemon (`Delegate=yes` chowns it to the unit's user). Anywhere else
 //! (macOS, a container, no box prep, a user-scope daemon, root) it does
@@ -164,24 +175,33 @@ impl Guard {
 }
 
 /// The parts of `systemctl show <unit> -p DelegateSubgroup -p ExecStopPost
-/// -p Slice -p ControlGroup` the leaf needs.
+/// -p Slice -p ControlGroup -p Delegate` the leaf needs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnitShow {
     pub guard: Guard,
+    /// The unit's `Delegate=` as systemd holds it (after the last
+    /// daemon-reload); `None` when not shown.
+    pub delegate: Option<bool>,
     /// The unit's configured `Slice=` (after the last daemon-reload).
     pub slice: Option<String>,
     /// Where the unit runs now.
     pub control_group: Option<String>,
 }
 
-pub const SHOW_PROPS: &[&str] = &["DelegateSubgroup", "ExecStopPost", "Slice", "ControlGroup"];
+pub const SHOW_PROPS: &[&str] = &["DelegateSubgroup", "ExecStopPost", "Slice", "ControlGroup", "Delegate"];
 
 pub fn parse_show(text: &str) -> UnitShow {
     let mut sub = false;
     let mut post = false;
-    let (mut slice, mut cg) = (None, None);
+    let (mut slice, mut cg, mut delegate) = (None, None, None);
     for l in text.lines() {
-        if let Some(v) = l.strip_prefix("DelegateSubgroup=") {
+        if let Some(v) = l.strip_prefix("Delegate=") {
+            delegate = match v.trim() {
+                "yes" => Some(true),
+                "no" => Some(false),
+                _ => None,
+            };
+        } else if let Some(v) = l.strip_prefix("DelegateSubgroup=") {
             sub |= v.trim() == DAEMON_LEAF;
         } else if let Some(v) = l.strip_prefix("ExecStopPost=") {
             post |= v.contains(CLEAR_MARK);
@@ -192,7 +212,7 @@ pub fn parse_show(text: &str) -> UnitShow {
         }
     }
     let guard = if sub { Guard::Subgroup } else if post { Guard::StopClear } else { Guard::None };
-    UnitShow { guard, slice, control_group: cg }
+    UnitShow { guard, delegate, slice, control_group: cg }
 }
 
 /// The guard as box prep's drop-in states it (when `systemctl show` can't
@@ -494,6 +514,29 @@ pub fn setup_with(
     Ok(l)
 }
 
+/// Why there is no agents' leaf in scope mode (see the module doc).
+pub const SCOPE_MODE: &str = "scope mode: the owner turned on root-owned agent scopes (k2agents.slice), so the daemon's unit \
+     is not delegated and has no agents' leaf; each agent session gets its own scope when the root helper places it";
+
+/// Scope mode with the unit not delegated (`Delegate=no` loaded): no
+/// leaf, nothing split. While the unit's cgroup is still `uid`'s (the
+/// drop-in waits for a full stop and start), its controllers go off so a
+/// plain restart can place the main process in it. The reason, for
+/// [`status_json`].
+pub fn scope_mode_with(cg: &dyn Cg, fs_root: &Path, self_path: &str, uid: u32) -> String {
+    let Some(rel) = unit_base(self_path) else { return SCOPE_MODE.into() };
+    let base = fs_root.join(rel.trim_start_matches('/'));
+    if !cg.exists(&base.join("cgroup.subtree_control")) || cg.owner(&base).ok() != Some(uid) {
+        return SCOPE_MODE.into();
+    }
+    match disarm_with(cg, &base) {
+        Ok(true) => crate::log_debug!("[agents] scope mode: turned the unit cgroup's controllers off so a plain restart can start the daemon in it"),
+        Ok(false) => {}
+        Err(e) => crate::log_debug!("[agents] WARN scope mode: the unit cgroup's controllers could not be turned off ({e}); a plain restart may fail until a full stop and start"),
+    }
+    format!("{SCOPE_MODE} (the unit's cgroup stays the server user's until a full stop and start of the unit)")
+}
+
 /// [`setup_with`] on the real file system with the old signature's shape
 /// (kept for callers that know their guard).
 pub fn setup_at(fs_root: &Path, self_path: &str, uid: u32, memory_high: &str, guard: Guard) -> Result<Leaves, String> {
@@ -553,6 +596,8 @@ struct State {
     base: Option<PathBuf>,
     unit: Option<String>,
     leaves: Result<Leaves, String>,
+    /// Scope mode: no leaf by design ([`SCOPE_MODE`]).
+    scope_mode: bool,
 }
 
 static STATE: OnceLock<State> = OnceLock::new();
@@ -575,7 +620,7 @@ fn unit_show(unit: &str) -> UnitShow {
         None => {
             let f = format!("/etc/systemd/system/{unit}.d/{GUARD_DROPIN}");
             let guard = std::fs::read_to_string(f).map(|t| guard_from_dropin(&t)).unwrap_or(Guard::None);
-            UnitShow { guard, slice: None, control_group: None }
+            UnitShow { guard, delegate: None, slice: None, control_group: None }
         }
     }
 }
@@ -584,12 +629,13 @@ fn unit_show(unit: &str) -> UnitShow {
 /// delegated, guarded system unit. Never fails the boot.
 pub fn init() {
     let st = STATE.get_or_init(|| {
-        let mut st = State { base: None, unit: None, leaves: Err("Linux only".into()) };
+        let mut st = State { base: None, unit: None, leaves: Err("Linux only".into()), scope_mode: false };
         if !cfg!(target_os = "linux") {
             return st;
         }
         let mut base = None;
         let mut unit = None;
+        let mut scope_mode = false;
         let leaves = (|| {
             let text = std::fs::read_to_string("/proc/self/cgroup").map_err(|e| format!("/proc/self/cgroup: {e}"))?;
             let path = parse_self_cgroup(&text).ok_or("no cgroup v2 path")?;
@@ -602,12 +648,20 @@ pub fn init() {
             let uid = unsafe { libc::geteuid() };
             #[cfg(not(unix))]
             let uid = 0;
-            let guard = unit.as_deref().map(|u| unit_show(u).guard).unwrap_or(Guard::None);
+            let show = unit.as_deref().map(unit_show);
+            // B4: the owner's scopes on and the helper's Delegate=no
+            // loaded: no leaf (outside scope mode, as before).
+            if crate::agent_scope::owner_choice() == crate::agent_scope::OwnerChoice::On && show.as_ref().and_then(|s| s.delegate) == Some(false) {
+                scope_mode = true;
+                return Err(scope_mode_with(&RealCg, Path::new("/sys/fs/cgroup"), &path, uid));
+            }
+            let guard = show.map(|s| s.guard).unwrap_or(Guard::None);
             setup_at(Path::new("/sys/fs/cgroup"), &path, uid, &high, guard)
         })();
-        st = State { base, unit, leaves };
+        st = State { base, unit, leaves, scope_mode };
         match &st.leaves {
             Ok(l) => crate::log_debug!("[agents] agent sessions get their own leaf {} (memory.high {})", l.base.join(AGENTS_LEAF).display(), l.memory_high),
+            Err(e) if st.scope_mode => crate::log_debug!("[agents] {e}"),
             Err(e) => crate::log_debug!("[agents] no agents leaf: {e}"),
         }
         st
@@ -650,11 +704,17 @@ pub fn leaves() -> Result<Leaves, String> {
     }
 }
 
+/// Scope mode: no agents' leaf by design ([`SCOPE_MODE`]).
+pub fn scope_mode() -> bool {
+    STATE.get().is_some_and(|s| s.scope_mode)
+}
+
 /// The leaf, or why there is none (cheap: `k2 app resources` reads it).
 pub fn status_json() -> serde_json::Value {
-    match STATE.get().map(|s| &s.leaves) {
-        Some(Ok(l)) => serde_json::json!({ "on": true, "leaf": l.base.join(AGENTS_LEAF), "memoryHigh": l.memory_high }),
-        Some(Err(e)) => serde_json::json!({ "on": false, "why": e }),
+    match STATE.get().map(|s| (&s.leaves, s.scope_mode)) {
+        Some((Ok(l), _)) => serde_json::json!({ "on": true, "leaf": l.base.join(AGENTS_LEAF), "memoryHigh": l.memory_high }),
+        Some((Err(e), true)) => serde_json::json!({ "on": false, "why": e, "scopeMode": true }),
+        Some((Err(e), false)) => serde_json::json!({ "on": false, "why": e }),
         None => serde_json::json!({ "on": false, "why": "not set up (the daemon sets it up at boot)" }),
     }
 }
@@ -1189,6 +1249,31 @@ mod tests {
         std::mem::forget(other);
     }
 
+    /// Scope mode (B4): a unit still the daemon user's after the
+    /// `Delegate=no` drop-in and a plain restart gets its controllers
+    /// turned off (so the next plain restart works) and no leaf; a unit
+    /// already root's is left alone. Never split, never a box prep hint.
+    #[test]
+    fn scope_mode_makes_no_leaf_and_keeps_the_unit_restartable() {
+        let cg = FakeCg::new(UID);
+        let procs = FakeProcs::default();
+        procs.add(100, 1, "k2-daemon");
+        systemd_start(&cg, Guard::Subgroup, 100).unwrap();
+        setup_with(&cg, &procs, &cg.root, &self_path(Guard::Subgroup), UID, "max", Guard::Subgroup).expect("split before scopes");
+        let base = cg.root.join(UNIT.trim_start_matches('/'));
+        assert!(!controllers(&cg, &base).is_empty(), "the split turned controllers on");
+        let why = scope_mode_with(&cg, &cg.root, &self_path(Guard::Subgroup), UID);
+        assert!(why.starts_with(SCOPE_MODE) && why.contains("full stop and start"), "{why}");
+        assert!(!why.contains("box prepare"), "{why}");
+        assert!(controllers(&cg, &base).is_empty(), "controllers off: a plain restart can use the unit's cgroup");
+        // The unit's cgroup is root's (after a full stop and start): untouched.
+        let other = FakeCg { root: cg.root.clone(), uid: UID + 1 };
+        other.write(&base.join("cgroup.subtree_control"), "+memory").unwrap();
+        assert_eq!(scope_mode_with(&other, &cg.root, &self_path(Guard::Subgroup), UID), SCOPE_MODE);
+        assert_eq!(controllers(&other, &base), vec!["memory".to_string()]);
+        std::mem::forget(other);
+    }
+
     #[test]
     fn unit_show_dropins_and_slices() {
         let shown = "DelegateSubgroup=daemon\nExecStopPost=\nSlice=k2cores.slice\nControlGroup=/system.slice/k2-daemon.service\n";
@@ -1207,6 +1292,10 @@ mod tests {
         assert_eq!(guard_from_dropin("# DelegateSubgroup=daemon\n[Service]\n"), Guard::None);
         assert_eq!(guard_from_dropin("[Service]\nExecStopPost=+-/bin/sh -c 'x' k2-agents-leaf-clear\n"), Guard::StopClear);
         assert_eq!(guard_from_dropin("[Service]\nExecStartPre=+-/bin/sh -c 'x' k2-agents-leaf-clear\n"), Guard::None, "only after a stop");
+        assert_eq!(parse_show(shown).delegate, None, "not shown");
+        assert_eq!(parse_show("Delegate=no\nDelegateSubgroup=\n").delegate, Some(false));
+        assert_eq!(parse_show("Delegate=yes\nDelegateSubgroup=daemon\n").delegate, Some(true));
+        assert!(SHOW_PROPS.contains(&"Delegate"));
         assert_eq!(slice_of("/a.slice/a-b.slice/x.service").as_deref(), Some("a-b.slice"));
         assert_eq!(slice_of("/x.service").as_deref(), Some("-.slice"));
         assert_eq!(slice_of("x"), None);

@@ -20,6 +20,7 @@
 
 pub mod agents;
 pub mod agents_scope;
+pub mod agents_scope_policy;
 pub mod apps;
 pub mod caller;
 pub mod core;

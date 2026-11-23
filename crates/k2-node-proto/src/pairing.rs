@@ -113,7 +113,7 @@ impl EnrollString {
     pub fn matches_controller(&self, full_fp: &str) -> bool {
         let full = full_fp.trim().to_ascii_lowercase();
         full.len() == 64
-            && ct_eq(full[..FP_PREFIX_LEN].as_bytes(), self.controller_fp_prefix.as_bytes())
+            && ct_eq(&full.as_bytes()[..FP_PREFIX_LEN], self.controller_fp_prefix.as_bytes())
     }
 }
 

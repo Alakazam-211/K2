@@ -261,6 +261,10 @@ pub(crate) fn handle_v1_hire(principal: &V1Principal, body: &[u8]) -> CliRespons
                         .into(),
                 ),
                 create_only: false,
+                // T3: a key's template hire (and its permissions step) makes
+                // a new workspace only; a plain converge of a granted one
+                // stays as it was.
+                new_only: req.template.as_deref().is_some_and(|t| !t.trim().is_empty()),
             };
             (caller, auth, door.limits.map(|l| (p.id.clone(), l)))
         }

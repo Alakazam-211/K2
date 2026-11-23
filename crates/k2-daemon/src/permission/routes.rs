@@ -356,6 +356,12 @@ fn not_cardable(id: &str) -> Option<CliResponse> {
 // ── POST /cli/permission/request ────────────────────────────────────
 
 fn request(workspace_id: &str, session_id: &str, body: &Map<String, Value>) -> CliResponse {
+    request_as(workspace_id, session_id, body, None)
+}
+
+/// [`request`], audited as `audit_as = (actor, via)` when K2 files it for
+/// someone else (a hire: the hirer, `hire:<template>`), not the agent.
+fn request_as(workspace_id: &str, session_id: &str, body: &Map<String, Value>, audit_as: Option<(&str, &str)>) -> CliResponse {
     let now = k2_core::overlay::now_secs();
     let Some(action_id) = str_field(body, "action") else {
         return err(400, code::BAD_ACTION, concat!("name the action: ", cli_name!(), " permission request <action> (see ", cli_name!(), " permission list)"));
@@ -528,7 +534,10 @@ fn request(workspace_id: &str, session_id: &str, body: &Map<String, Value>) -> C
         }
     };
     let stored = store::get(req.id.as_str()).ok().flatten().unwrap_or(req);
-    answer::audit(k2_core::permission::audit_event::REQUEST, &format!("agent:{}", present::workspace_handle(workspace_id)), "passport", &stored);
+    match audit_as {
+        Some((actor, via)) => answer::audit(k2_core::permission::audit_event::REQUEST, actor, via, &stored),
+        None => answer::audit(k2_core::permission::audit_event::REQUEST, &format!("agent:{}", present::workspace_handle(workspace_id)), "passport", &stored),
+    }
     ok(json!({
         "id": stored.display_id(),
         "status": "pending",
@@ -589,16 +598,18 @@ pub(crate) fn raise_card(workspace_id: &str, session_id: &str, action: &str, par
 
 /// File a permission card for a new agent's suggested switch
 /// (prd-agent-templates-v1 §9, T3): the hire's permissions step asks a
-/// person for what its hirer couldn't give. The agent is the asker, on its
+/// person for what its hirer couldn't give. The card is on the agent's
 /// pinned Thread, under the usual limits; an open card for the same switch
-/// is found, not doubled (`already_pending`). The caller checks the
-/// server's switch: a hire may ask before the agent's own "Can ask for
-/// permission cards" is on (the hire, not the agent, is asking).
-pub(crate) fn raise_hire_card(workspace_id: &str, action: &str, why: &str) -> (u16, Value) {
+/// is found, not doubled (`already_pending`). The audit names the hirer and
+/// the template that suggested it (`hirer`, `hire:<template>`), not the
+/// agent. The caller checks both switches (the server's and the agent's
+/// own, as the hire left it).
+pub(crate) fn raise_hire_card(workspace_id: &str, action: &str, why: &str, hirer: &str, template: &str) -> (u16, Value) {
     let mut body = Map::new();
     body.insert("action".into(), json!(action));
     body.insert("why".into(), json!(why));
-    let r = request(workspace_id, "", &body);
+    let via = format!("hire:{template}");
+    let r = request_as(workspace_id, "", &body, Some((hirer, &via)));
     let status = r.status.split_whitespace().next().and_then(|c| c.parse().ok()).unwrap_or(500);
     (status, serde_json::from_str(&r.body).unwrap_or(Value::Null))
 }

@@ -69,6 +69,10 @@ pub struct ConvergeRequest {
     /// §6 step 4, T3).
     #[serde(default)]
     pub decline_permissions: Option<Vec<String>>,
+    /// A re-apply by a person: suggestions declined at an earlier hire that
+    /// they name again (`--allow`). Without it a decline holds.
+    #[serde(default)]
+    pub allow_permissions: Option<Vec<String>>,
     /// The door grants its own starter set (the first-run routes). Never
     /// read from a request body.
     #[serde(skip)]
@@ -91,11 +95,17 @@ pub struct ConvergeAuthority {
     /// exist yet, in any spelling, and must not be a registered workspace.
     /// See [`create_only_path`] and [`claim_new_folder`].
     pub create_only: bool,
+    /// prd-agent-templates-v1 T3 (security review): an API key's template
+    /// hire must make a NEW workspace: the folder may not exist (or must be
+    /// empty and unregistered), so a key can't apply a template (and its
+    /// permissions) to an existing workspace. Re-applying stays a person's.
+    /// An agent's hire is [`Self::create_only`].
+    pub new_only: bool,
 }
 
 impl ConvergeAuthority {
     pub fn unrestricted() -> Self {
-        Self { new_workspace_root: None, may_create: true, max_db: None, create_refusal: None, create_only: false }
+        Self { new_workspace_root: None, may_create: true, max_db: None, create_refusal: None, create_only: false, new_only: false }
     }
 
     /// An agent passport's hire: creates a new workspace inside the hire
@@ -103,6 +113,31 @@ impl ConvergeAuthority {
     pub fn create_only() -> Result<Self, HireError> {
         Ok(Self { create_only: true, new_workspace_root: Some(super::root::hire_root()?), ..Self::unrestricted() })
     }
+}
+
+/// [`ConvergeAuthority::new_only`]: refuse a folder that is a registered
+/// workspace, or exists with anything in it.
+pub fn check_new_folder(caller: &HireCaller, path: &str) -> Result<(), HireError> {
+    let who = if caller.is_agent() { "an agent" } else { "an API key" };
+    if lookup_project_row(path).is_some() {
+        return Err(HireError::new(
+            403,
+            "existing_workspace",
+            format!("{path} is already a workspace: {who} hires only into a new folder. Re-applying a template to an existing agent is a person's (k2 agent hire <dir> --template <id> from their own terminal)"),
+        ));
+    }
+    let p = Path::new(path);
+    if p.exists() {
+        let empty = p.is_dir() && fs::read_dir(p).map(|mut d| d.next().is_none()).unwrap_or(false);
+        if !empty {
+            return Err(HireError::new(
+                403,
+                "existing_workspace",
+                format!("{path} already exists: {who} hires only into a new, empty folder (leave out <dir> for <hire root>/<handle>)"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// One reported step (`{step, status, reason?}`); statuses are `done`,
@@ -412,6 +447,11 @@ pub fn converge(
             None => (expanded, None),
         }
     };
+    // First: a key's template hire makes a new workspace only (an agent's
+    // hire is create_only, above).
+    if auth.new_only {
+        check_new_folder(caller, &path)?;
+    }
     let template = req.template.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let persona = req.persona.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let persona_raw = req.persona_raw.as_deref().filter(|s| !s.trim().is_empty());
@@ -426,12 +466,17 @@ pub fn converge(
             let answers = super::template::bind_answers(&tpl, &req.answers.clone().unwrap_or_default())?;
             let declined = super::template::permissions::clean_declined(&req.decline_permissions.clone().unwrap_or_default());
             super::template::permissions::check_declined(&tpl, &declined)?;
+            let allowed = super::template::permissions::clean_declined(&req.allow_permissions.clone().unwrap_or_default());
+            super::template::permissions::check_allowed(&tpl, &allowed, &declined)?;
             super::template::apply::check_lock(&path, &tpl)?;
-            Some((tpl, vars, answers, declined))
+            Some((tpl, vars, answers, declined, allowed))
         }
         None => {
             if req.decline_permissions.as_ref().is_some_and(|d| !d.is_empty()) {
                 return Err(HireError::usage("declinePermissions goes with a template (--template <id>)"));
+            }
+            if req.allow_permissions.as_ref().is_some_and(|d| !d.is_empty()) {
+                return Err(HireError::usage("allowPermissions goes with a template (--template <id>)"));
             }
             if req.params.as_ref().is_some_and(|p| !p.is_empty()) {
                 return Err(HireError::usage("params go with a template (--template <id>)"));
@@ -519,7 +564,7 @@ pub fn converge(
     }
 
     let mut template_out = None;
-    if let Some((tpl, vars, answers, declined)) = tpl.as_ref() {
+    if let Some((tpl, vars, answers, declined, allowed)) = tpl.as_ref() {
         // The template writes the persona (and its starters, layers, lock)
         // before the name and preset steps below.
         let display = match req.name.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
@@ -547,6 +592,7 @@ pub fn converge(
             tool_chosen: req.preset.as_deref().is_some_and(|s| !s.trim().is_empty()),
             model_chosen: req.default_model.as_deref().is_some_and(|s| !s.trim().is_empty()),
             declined,
+            allowed,
             permissions_by_door: req.permissions_by_door,
         })?;
         changed |= out.changed;

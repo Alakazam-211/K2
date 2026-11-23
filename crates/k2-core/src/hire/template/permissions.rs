@@ -21,7 +21,9 @@
 //! reported as `suggest`, and nothing is granted.
 //!
 //! Re-applying a template only turns on switches that are still off and
-//! allowed; it never turns one off, and never asks twice on a card.
+//! allowed; it never turns one off, and never asks twice on a card. What
+//! was asked or declined is the daemon's record (`hire::permission_records`),
+//! never the agent's own `template.lock`.
 
 use std::sync::OnceLock;
 
@@ -72,11 +74,12 @@ pub struct StepIn<'a> {
     pub cards: bool,
     /// `suggest`, sets expanded.
     pub suggested: &'a [String],
-    /// What the person unticked (action ids, or [`CARDS_ROW`]).
+    /// What the person unticked (action ids, or [`CARDS_ROW`]). A decline
+    /// from an earlier hire is the daemon's record, not this list.
     pub declined: &'a [String],
-    /// Asked on a card by an earlier apply (the lock's `carded`): never
-    /// asked again.
-    pub asked_before: &'a [String],
+    /// Suggestions a person names again on a re-apply (`--allow`): a
+    /// decline recorded at an earlier hire no longer holds for these.
+    pub allowed: &'a [String],
     pub dry_run: bool,
 }
 
@@ -138,12 +141,26 @@ pub fn targets(cards: bool, suggested: &[String]) -> Vec<String> {
 /// A declined id must be one this template suggests (a typo would
 /// otherwise grant what the person meant to leave off).
 pub fn check_declined(tpl: &Template, declined: &[String]) -> Result<(), HireError> {
-    let allowed = targets(tpl.meta.permissions.cards, &tpl.suggested());
-    for d in declined {
-        if !allowed.iter().any(|a| a == d.trim()) {
-            let list = if allowed.is_empty() { "nothing".to_string() } else { allowed.join(", ") };
+    check_ids(tpl, declined, "--decline")
+}
+
+/// `--allow` ids: suggested by the template, and not declined in the same
+/// call.
+pub fn check_allowed(tpl: &Template, allowed: &[String], declined: &[String]) -> Result<(), HireError> {
+    check_ids(tpl, allowed, "--allow")?;
+    if let Some(both) = allowed.iter().find(|a| declined.contains(a)) {
+        return Err(HireError::usage(format!("{both} is both --allow and --decline: pick one")));
+    }
+    Ok(())
+}
+
+fn check_ids(tpl: &Template, ids: &[String], flag: &str) -> Result<(), HireError> {
+    let suggested = targets(tpl.meta.permissions.cards, &tpl.suggested());
+    for d in ids {
+        if !suggested.iter().any(|a| a == d.trim()) {
+            let list = if suggested.is_empty() { "nothing".to_string() } else { suggested.join(", ") };
             return Err(HireError::usage(format!(
-                "--decline {d}: the {} template doesn't suggest it; it suggests: {list}",
+                "{flag} {d}: the {} template doesn't suggest it; it suggests: {list}",
                 tpl.meta.name
             )));
         }
@@ -179,7 +196,7 @@ mod tests {
                 cards: true,
                 suggested: &suggested,
                 declined: &declined,
-                asked_before: &[],
+                allowed: &[],
                 dry_run: true,
             },
             None,

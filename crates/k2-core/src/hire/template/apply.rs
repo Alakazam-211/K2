@@ -53,6 +53,9 @@ pub struct ApplyRequest {
     /// Suggested permissions the person unticked on the Review step (action
     /// ids, or `permission-cards`). Empty: every suggestion is decided.
     pub declined: Vec<String>,
+    /// Suggestions a person names again on a re-apply, past a decline
+    /// recorded at an earlier hire (`--allow`).
+    pub allowed: Vec<String>,
     /// The door grants its own starter set (the first-run routes): the
     /// permission rows stay `suggest` and nothing is granted here.
     pub permissions_by_door: bool,
@@ -213,6 +216,8 @@ pub struct StepInput<'a> {
     pub model_chosen: bool,
     /// Suggested permissions the person unticked ([`ApplyRequest::declined`]).
     pub declined: &'a [String],
+    /// [`ApplyRequest::allowed`].
+    pub allowed: &'a [String],
     /// [`ApplyRequest::permissions_by_door`].
     pub permissions_by_door: bool,
 }
@@ -609,24 +614,18 @@ pub fn workspace_steps(inp: &StepInput<'_>) -> Result<WorkspaceOutcome, HireErro
     }
 
     // Permissions (T3): the hirer's reach decides each suggestion. Never
-    // turns one off; never asks twice on a card.
+    // turns one off; never asks twice on a card. What was asked or declined
+    // before is the daemon's record (`hire::permission_records`); the lock's
+    // lists below are a copy for people to read, never read back.
     let suggested = t.suggested();
-    let asked_before: Vec<String> = prev.as_ref().map(|l| l.carded.clone()).unwrap_or_default();
-    // A decline is remembered: a re-apply leaves it off too.
-    let mut declined: Vec<String> = prev.as_ref().map(|l| l.declined.clone()).unwrap_or_default();
-    for d in inp.declined {
-        if !declined.contains(d) {
-            declined.push(d.clone());
-        }
-    }
     let step_in = super::permissions::StepIn {
         caller: inp.caller,
         path: inp.path,
         template_name: &t.meta.name,
         cards: t.meta.permissions.cards,
         suggested: &suggested,
-        declined: &declined,
-        asked_before: &asked_before,
+        declined: inp.declined,
+        allowed: inp.allowed,
         dry_run: dry,
     };
     let decided = if inp.permissions_by_door {
@@ -647,8 +646,8 @@ pub fn workspace_steps(inp: &StepInput<'_>) -> Result<WorkspaceOutcome, HireErro
         cards: t.meta.permissions.cards,
         suggested: suggested.clone(),
         granted: union(prev.as_ref().map(|l| l.granted.clone()).unwrap_or_default(), &decided.granted),
-        carded: union(asked_before.clone(), &decided.carded),
-        cards_pending: union(prev.as_ref().map(|l| l.cards_pending.clone()).unwrap_or_default(), &decided.cards_pending),
+        carded: union(prev.as_ref().map(|l| l.carded.clone()).unwrap_or_default(), &decided.carded),
+        cards_pending: decided.cards_pending.clone(),
         refused: decided.refused.clone(),
         declined: decided.rows.iter().filter(|r| r.status == "declined").map(|r| r.target.clone()).collect(),
     };
@@ -674,8 +673,6 @@ pub fn workspace_steps(inp: &StepInput<'_>) -> Result<WorkspaceOutcome, HireErro
         suggested: permissions.suggested.clone(),
         granted: permissions.granted.clone(),
         carded: permissions.carded.clone(),
-        cards_pending: permissions.cards_pending.clone(),
-        declined: declined.clone(),
         kept: prev.as_ref().map(|l| l.kept.clone()).unwrap_or_default(),
         files,
         // What the text was rendered with: the first apply's, kept after.
@@ -808,6 +805,8 @@ pub fn apply_with(req: &ApplyRequest, caller: &HireCaller, auth: &ConvergeAuthor
     let answers = super::bind_answers(&tpl, &req.answers)?;
     let declined = super::permissions::clean_declined(&req.declined);
     super::permissions::check_declined(&tpl, &declined)?;
+    let allowed = super::permissions::clean_declined(&req.allowed);
+    super::permissions::check_allowed(&tpl, &allowed, &declined)?;
     // An agent's hire only ever creates: the path is checked (and a dry
     // run refused) the same way the real hire checks it.
     let path = match req.path.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
@@ -815,7 +814,12 @@ pub fn apply_with(req: &ApplyRequest, caller: &HireCaller, auth: &ConvergeAuthor
         Some(p) => converge::expand_hire_path(p)?,
         None => default_path(req, &tpl, auth)?,
     };
-    if auth.create_only {
+    // T3: a key's template hire makes a new workspace only, inside its
+    // root; the dry run says so too, and converge checks both again.
+    if auth.new_only {
+        converge::check_new_folder(caller, &path)?;
+    }
+    if auth.create_only || converge::lookup_project_row(&path).is_none() {
         converge::check_new_workspace_root(&path, auth)?;
     }
     check_lock(&path, &tpl)?;
@@ -858,6 +862,7 @@ pub fn apply_with(req: &ApplyRequest, caller: &HireCaller, auth: &ConvergeAuthor
             tool_chosen: req.tool.as_deref().is_some_and(|s| !s.trim().is_empty()),
             model_chosen: req.model.as_deref().is_some_and(|s| !s.trim().is_empty()),
             declined: &declined,
+            allowed: &allowed,
             permissions_by_door: req.permissions_by_door,
         })?;
         rows.extend(out.rows);
@@ -896,6 +901,7 @@ pub fn apply_with(req: &ApplyRequest, caller: &HireCaller, auth: &ConvergeAuthor
         no_agents_md: Some(req.no_agents_md),
         fanout: Some(req.fanout),
         decline_permissions: Some(declined),
+        allow_permissions: Some(allowed),
         permissions_by_door: req.permissions_by_door,
         ..Default::default()
     };

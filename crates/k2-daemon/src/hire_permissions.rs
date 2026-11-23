@@ -47,6 +47,7 @@ use k2_core::permission::catalog::{Floor, Grant};
 use serde_json::json;
 
 use crate::permission::actions::{switches, Answerer, Applied, Check, Ctx};
+use k2_core::hire::permission_records as records;
 
 /// The audit event (and `hire_events` action) for every decision.
 pub(crate) const AUDIT_EVENT: &str = "agent-hire-permission";
@@ -59,7 +60,25 @@ pub fn install() {
 /// The installed step: the server's own Beta switch decides whether cards
 /// can be filed.
 fn step(inp: &StepIn<'_>) -> StepOut {
-    step_with(inp, k2_core::permission::gate::server_on())
+    step_with(inp, server_cards_on())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Lib tests never flip the process switch (lane B's rule): a test sets
+    /// the server's cards switch for its own thread here instead.
+    pub(crate) static TEST_SERVER_CARDS: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// The server's permission cards (Beta) switch.
+fn server_cards_on() -> bool {
+    #[cfg(test)]
+    {
+        if let Some(on) = TEST_SERVER_CARDS.with(|c| c.get()) {
+            return on;
+        }
+    }
+    k2_core::permission::gate::server_on()
 }
 
 /// Who hires, as far as reach goes.
@@ -167,6 +186,9 @@ fn may_give(h: &Hirer, action: &str, floor: Floor) -> Result<(), Cant> {
             _ => Ok(()),
         },
         Hirer::Agent { workspace_id } => {
+            if crate::first_run_grants::AGENT_NEVER_PASSES.contains(&action) {
+                return Err(cant("not_passable", "an agent can't pass on compute: its machines and limits are its own"));
+            }
             let Some(switch) = standing_switch(action).filter(|_| !owner_floor(action) && floor == Floor::Admin) else {
                 return Err(cant("not_passable", "an agent can't pass this one on"));
             };
@@ -186,26 +208,87 @@ pub(crate) fn step_with(inp: &StepIn<'_>, cards_on: bool) -> StepOut {
     let hirer = hirer_of(inp.caller);
     let target = target_of(inp.path);
     let handle = handle_for(inp.path, target.as_ref());
+    // The daemon's record of earlier hires of this workspace (0309), never
+    // the agent's own lock: what was declined, and what was asked.
+    let (held_declines, asked) = match target.as_ref() {
+        Some(t) => {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            (records::declined(&conn, &t.id), records::asked(&conn, &t.id))
+        }
+        None => (Vec::new(), Vec::new()),
+    };
+    let mut ctx = RowCtx {
+        hirer: &hirer,
+        t: target.as_ref(),
+        handle: &handle,
+        cards_on,
+        // A card is filed for the new agent only while it may ask for cards
+        // (the cards row below may turn that on).
+        agent_asks: cards_on && target.as_ref().is_some_and(|t| k2_core::permission::gate::agent_switch_on(&t.id)),
+        asked: &asked,
+    };
     let mut out = StepOut::default();
     for want in targets(inp.cards, inp.suggested) {
+        let named_again = inp.allowed.contains(&want);
         if inp.declined.contains(&want) {
             out.rows.push(Decision::new(want.clone(), "declined", Some("left off at hire; a re-run leaves it off too".into()), None));
+            if let (false, Some(t)) = (inp.dry_run, target.as_ref()) {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                if let Err(e) = records::record_declined(&conn, &t.id, &want, inp.template_name, &inp.caller.actor(), now()) {
+                    k2_core::log_debug!("[hire-permissions] {}: {e}", t.handle);
+                }
+            }
             record(inp, &target, &want, "declined", None);
             continue;
         }
+        if held_declines.contains(&want) {
+            if !named_again {
+                out.rows.push(Decision::new(want.clone(), "declined", Some("declined at an earlier hire; name it with --allow to decide it again".into()), None));
+                continue;
+            }
+            if let (false, Some(t)) = (inp.dry_run, target.as_ref()) {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                if let Err(e) = records::undecline(&conn, &t.id, &want) {
+                    k2_core::log_debug!("[hire-permissions] {}: {e}", t.handle);
+                }
+            }
+            record(inp, &target, &want, "allowed-again", None);
+        }
         if want == CARDS_ROW {
-            cards_row(inp, &hirer, target.as_ref(), &handle, cards_on, &mut out);
+            cards_row(inp, &mut ctx, &mut out);
         } else {
-            switch_row(inp, &hirer, target.as_ref(), &handle, &want, cards_on, &mut out);
+            switch_row(inp, &ctx, &want, &mut out);
         }
     }
     out
 }
 
+/// What every row of one apply shares.
+struct RowCtx<'a> {
+    hirer: &'a Hirer,
+    t: Option<&'a Target>,
+    handle: &'a str,
+    /// The server's permission cards (Beta).
+    cards_on: bool,
+    /// The new agent may ask for cards after this apply (a card is filed
+    /// for it only then).
+    agent_asks: bool,
+    /// Switches asked on a card at an earlier hire (the daemon's record).
+    asked: &'a [String],
+}
+
+fn now() -> i64 {
+    chrono::Utc::now().timestamp()
+}
+
 /// "Can ask for permission cards" for the new agent (`cards = true`).
-fn cards_row(inp: &StepIn<'_>, h: &Hirer, t: Option<&Target>, handle: &str, cards_on: bool, out: &mut StepOut) {
+fn cards_row(inp: &StepIn<'_>, ctx: &mut RowCtx<'_>, out: &mut StepOut) {
     const SETTING: &str = "Can ask for permission cards";
-    if !cards_on {
+    let (h, t, handle) = (ctx.hirer, ctx.t, ctx.handle);
+    if !ctx.cards_on {
         out.rows.push(Decision::new(CARDS_ROW, "skip", Some("permission cards are off on this server".into()), None));
         return;
     }
@@ -232,6 +315,7 @@ fn cards_row(inp: &StepIn<'_>, h: &Hirer, t: Option<&Target>, handle: &str, card
     if inp.dry_run {
         out.rows.push(Decision::new(CARDS_ROW, "grant", None, None));
         out.granted.push(CARDS_ROW.into());
+        ctx.agent_asks = true;
         return;
     }
     let Some(t) = t else {
@@ -253,6 +337,7 @@ fn cards_row(inp: &StepIn<'_>, h: &Hirer, t: Option<&Target>, handle: &str, card
         Ok(()) => {
             out.rows.push(Decision::new(CARDS_ROW, "done", None, None));
             out.granted.push(CARDS_ROW.into());
+            ctx.agent_asks = true;
             record(inp, &Some(t.clone()), CARDS_ROW, "granted", None);
         }
         Err(c) => refuse(out, c),
@@ -260,7 +345,8 @@ fn cards_row(inp: &StepIn<'_>, h: &Hirer, t: Option<&Target>, handle: &str, card
 }
 
 /// One suggested standing switch.
-fn switch_row(inp: &StepIn<'_>, h: &Hirer, t: Option<&Target>, handle: &str, action: &str, cards_on: bool, out: &mut StepOut) {
+fn switch_row(inp: &StepIn<'_>, ctx: &RowCtx<'_>, action: &str, out: &mut StepOut) {
+    let (h, t, handle) = (ctx.hirer, ctx.t, ctx.handle);
     let Some(reg) = crate::permission::actions::find(action) else {
         let hint = format!("K2 doesn't know the permission {action}; check the template (k2 agent template show <id>).");
         out.rows.push(Decision::new(action, "refused", Some("unknown permission".into()), Some(hint.clone())));
@@ -269,7 +355,7 @@ fn switch_row(inp: &StepIn<'_>, h: &Hirer, t: Option<&Target>, handle: &str, act
         return;
     };
     let spec = reg.spec;
-    let ctx = t.map(|t| Ctx { workspace_id: t.id.clone(), workspace_handle: t.handle.clone(), params: Default::default() });
+    let actx = t.map(|t| Ctx { workspace_id: t.id.clone(), workspace_handle: t.handle.clone(), params: Default::default() });
     let hint = refused_hint(action, spec.words.setting, spec.settings.path, spec.floor, handle);
     let refuse = |out: &mut StepOut, code: &str, why: String| {
         out.rows.push(Decision::new(action, "refused", Some(why), Some(hint.clone())));
@@ -279,8 +365,8 @@ fn switch_row(inp: &StepIn<'_>, h: &Hirer, t: Option<&Target>, handle: &str, act
     if spec.grant != Grant::Standing || spec.params.iter().any(|p| p.required) {
         return refuse(out, "needs_person", "it needs a person to choose its value".into());
     }
-    if let Some(ctx) = ctx.as_ref() {
-        match (reg.check)(ctx) {
+    if let Some(actx) = actx.as_ref() {
+        match (reg.check)(actx) {
             Check::AlreadyDone => {
                 out.rows.push(Decision::new(action, "skip", Some("already on".into()), None));
                 return;
@@ -296,8 +382,8 @@ fn switch_row(inp: &StepIn<'_>, h: &Hirer, t: Option<&Target>, handle: &str, act
             out.granted.push(action.into());
             return;
         }
-        Ok(()) => match (h, t, ctx.as_ref()) {
-            (Hirer::Person { who, .. }, Some(_), Some(ctx)) => match (reg.apply)(ctx, who, None) {
+        Ok(()) => match (h, t, actx.as_ref()) {
+            (Hirer::Person { who, .. }, Some(_), Some(actx)) => match (reg.apply)(actx, who, None) {
                 Applied::Done { .. } => Ok(()),
                 Applied::Refused { code, message } => Err(cant(&code, message)),
             },
@@ -315,31 +401,47 @@ fn switch_row(inp: &StepIn<'_>, h: &Hirer, t: Option<&Target>, handle: &str, act
             out.granted.push(action.into());
             record(inp, &t.cloned(), action, "granted", None);
         }
-        // Asked by an earlier apply: never twice.
-        Err(_) if inp.asked_before.iter().any(|a| a == action) => {
+        // Asked at an earlier hire (the daemon's record): never twice.
+        Err(_) if ctx.asked.iter().any(|a| a == action) => {
             out.rows.push(Decision::new(action, "card", Some("asked on a card already".into()), None));
         }
-        Err(c) if cards_on => card(inp, t, action, c, out),
+        Err(c) if ctx.cards_on && ctx.agent_asks => card(inp, t, action, c, out),
+        Err(c) if ctx.cards_on => refuse(out, &c.code, format!("{}; the new agent can't ask for permission cards", c.why)),
         Err(c) => refuse(out, &c.code, format!("{}; permission cards are off on this server", c.why)),
     }
 }
 
-/// Ask a person on a card: now when the agent has a Thread, else on its
-/// first start. A dry run only says so.
+/// Ask a person on a card: now when the agent has a Thread, else recorded
+/// in the daemon (0309) and filed at its first start. A dry run only says so.
 fn card(inp: &StepIn<'_>, t: Option<&Target>, action: &str, c: Cant, out: &mut StepOut) {
     if inp.dry_run {
         out.rows.push(Decision::new(action, "card", Some(format!("{}; a person is asked on a card", c.why)), None));
         out.carded.push(action.into());
         return;
     }
-    let Some(t) = t else { return };
+    let Some(t) = t else {
+        // A real apply always has its workspace; say so if it doesn't.
+        let hint = "the new agent isn't registered, so no card could be filed; run the hire again".to_string();
+        out.rows.push(Decision::new(action, "refused", Some(format!("{}; the agent isn't registered", c.why)), Some(hint.clone())));
+        out.refused.push(Refusal { action: action.into(), code: "not_registered".into(), hint });
+        record(inp, &None, action, "refused:not_registered", None);
+        return;
+    };
+    let hirer = inp.caller.actor();
     if crate::overlay_routes::pinned_chat_of(&t.id).is_some() {
-        let why = card_why(inp.template_name);
-        let (status, v) = crate::permission::routes::raise_hire_card(&t.id, action, &why);
+        let (status, v) = crate::permission::routes::raise_hire_card(&t.id, action, &card_why(inp.template_name), &hirer, inp.template_name);
         if status == 200 {
+            let id = v["id"].as_str().map(str::to_string);
+            {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                if let Err(e) = records::record_card(&conn, &t.id, action, false, inp.template_name, &hirer, id.as_deref(), now()) {
+                    k2_core::log_debug!("[hire-permissions] {}: {e}", t.handle);
+                }
+            }
             out.rows.push(Decision::new(action, "card", Some(format!("{}; a person is asked on its Thread", c.why)), None));
             out.carded.push(action.into());
-            record(inp, &Some(t.clone()), action, &format!("carded:{}", c.code), v["id"].as_str());
+            record(inp, &Some(t.clone()), action, &format!("carded:{}", c.code), id.as_deref());
             return;
         }
         let code = v.pointer("/error/code").and_then(|x| x.as_str()).unwrap_or("card_refused").to_string();
@@ -347,6 +449,18 @@ fn card(inp: &StepIn<'_>, t: Option<&Target>, action: &str, c: Cant, out: &mut S
         out.rows.push(Decision::new(action, "refused", Some(format!("{}; the card could not be filed", c.why)), Some(hint.clone())));
         out.refused.push(Refusal { action: action.into(), code: code.clone(), hint });
         record(inp, &Some(t.clone()), action, &format!("refused:{code}"), None);
+        return;
+    }
+    let stored = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        records::record_card(&conn, &t.id, action, true, inp.template_name, &hirer, None, now())
+    };
+    if let Err(e) = stored {
+        let hint = format!("K2 couldn't keep the card for the agent's first start ({e}); run the hire again");
+        out.rows.push(Decision::new(action, "refused", Some(format!("{}; the card couldn't be kept", c.why)), Some(hint.clone())));
+        out.refused.push(Refusal { action: action.into(), code: "store".into(), hint });
+        record(inp, &Some(t.clone()), action, "refused:store", None);
         return;
     }
     out.rows.push(Decision::new(action, "card", Some(format!("{}; a person is asked on its Thread when it first starts", c.why)), None));
@@ -427,44 +541,70 @@ fn record(inp: &StepIn<'_>, t: &Option<Target>, action: &str, result: &str, card
 
 // ── cards waiting for the first start ───────────────────────────────
 
-/// File the cards a hire left for this workspace's first start, once its
-/// Thread exists. `false`: nothing to file yet (no pending cards, no Thread,
-/// or the server's permission cards are off: they stay in the lock for a
-/// later start).
+/// File the cards a hire left for this workspace's first start, from the
+/// daemon's record (0309; the agent's own lock is never read), once its
+/// Thread exists and while it may ask for cards (the server's switch and
+/// its own, as the hire left it). Each one is claimed before it is filed,
+/// so it goes once. `false`: nothing filed now (none waiting, no Thread
+/// yet, or cards off: they wait for a later start).
 // Called from the first-start hook, which is off in unit tests.
 #[cfg_attr(test, allow(dead_code))]
 pub(crate) fn file_pending_cards(workspace_id: &str) -> bool {
-    file_pending_cards_with(workspace_id, k2_core::permission::gate::server_on())
+    file_pending_cards_with(workspace_id, server_cards_on())
+}
+
+/// Any card waiting for this workspace (a cheap check for the hook).
+#[cfg_attr(test, allow(dead_code))]
+fn has_pending(workspace_id: &str) -> bool {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    !records::pending_cards(&conn, workspace_id).is_empty()
 }
 
 /// [`file_pending_cards`] with the server's switch given (lib tests).
 pub(crate) fn file_pending_cards_with(workspace_id: &str, cards_on: bool) -> bool {
     let Some(t) = crate::sidecar_routes::workspace_by_id(workspace_id) else { return false };
-    if !cards_on || !k2_core::hire::template::lock::has_pending_cards(&t.path) || crate::overlay_routes::pinned_chat_of(&t.id).is_none() {
+    if !cards_on || !k2_core::permission::gate::agent_switch_on(&t.id) || crate::overlay_routes::pinned_chat_of(&t.id).is_none() {
         return false;
     }
-    let taken = match k2_core::hire::template::lock::take_pending_cards(&t.path) {
-        Ok(v) => v,
-        Err(e) => {
-            k2_core::log_debug!("[hire-permissions] {}: {}", t.handle, e.hint);
-            return false;
-        }
+    let pending = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        records::pending_cards(&conn, &t.id)
     };
-    let name = k2_core::hire::template::lock::read(&t.path)
-        .ok()
-        .flatten()
-        .and_then(|l| k2_core::hire::template::resolve(&l.id).ok().map(|tpl| tpl.meta.name.clone()))
-        .unwrap_or_else(|| "agent".into());
-    for action in taken {
-        let (status, v) = crate::permission::routes::raise_hire_card(&t.id, &action, &card_why(&name));
-        let result = if status == 200 {
-            format!("card-filed {action} {} card={}", t.handle, v["id"].as_str().unwrap_or(""))
-        } else {
-            format!("card-refused:{} {action} {}", v.pointer("/error/code").and_then(|x| x.as_str()).unwrap_or("refused"), t.handle)
+    let mut filed = false;
+    for p in pending {
+        let claimed = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            records::claim(&conn, p.id, now())
         };
-        crate::hire_routes::audit(AUDIT_EVENT, &format!("agent:{}", t.handle), &result);
+        if !claimed {
+            continue;
+        }
+        let (status, v) = crate::permission::routes::raise_hire_card(&t.id, &p.action, &card_why(&p.template), &p.hirer, &p.template);
+        let card = (status == 200).then(|| v["id"].as_str().unwrap_or("").to_string());
+        let result = match &card {
+            Some(_) => "card-filed".to_string(),
+            None => format!("card-refused:{}", v.pointer("/error/code").and_then(|x| x.as_str()).unwrap_or("refused")),
+        };
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            if let Err(e) = records::finish(&conn, p.id, card.as_deref()) {
+                k2_core::log_debug!("[hire-permissions] {}: {e}", t.handle);
+            }
+            let detail = json!({ "workspaceId": t.id, "handle": t.handle, "template": p.template, "card": card, "at": "first-start" });
+            k2_core::hire::ledger::event_by(&conn, AUDIT_EVENT, &p.hirer, &result, Some(&p.action), Some(&detail));
+        }
+        let mut outcome = format!("{result} {} {}", p.action, t.handle);
+        if let Some(c) = card.as_deref() {
+            outcome.push_str(&format!(" card={c}"));
+        }
+        crate::hire_routes::audit(AUDIT_EVENT, &p.hirer, &outcome);
+        filed = true;
     }
-    true
+    filed
 }
 
 /// The first-start hook's body: wait (off the caller's thread) for the
@@ -473,15 +613,11 @@ pub(crate) fn file_pending_cards_with(workspace_id: &str, cards_on: bool) -> boo
 // Called from the first-start hook, which is off in unit tests.
 #[cfg_attr(test, allow(dead_code))]
 pub(crate) fn file_pending_cards_when_ready(workspace_id: &str) {
-    let path = match crate::sidecar_routes::workspace_by_id(workspace_id) {
-        Some(w) => w.path,
-        None => return,
-    };
-    if !k2_core::permission::gate::server_on() || !k2_core::hire::template::lock::has_pending_cards(&path) {
+    if !server_cards_on() || !has_pending(workspace_id) {
         return;
     }
     for _ in 0..150 {
-        if file_pending_cards(workspace_id) {
+        if file_pending_cards(workspace_id) || !has_pending(workspace_id) {
             return;
         }
         std::thread::sleep(std::time::Duration::from_secs(2));

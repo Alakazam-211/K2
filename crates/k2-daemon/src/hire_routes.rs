@@ -1195,6 +1195,7 @@ fn cli_template_hire(
         fanout: req.fanout.unwrap_or(false),
         // T3: what the person unticked on the Review step (`--decline`).
         declined: req.decline_permissions.clone().unwrap_or_default(),
+        allowed: req.allow_permissions.clone().unwrap_or_default(),
         permissions_by_door: false,
     };
     let has = |s: &Option<String>| s.as_deref().is_some_and(|s| !s.trim().is_empty());

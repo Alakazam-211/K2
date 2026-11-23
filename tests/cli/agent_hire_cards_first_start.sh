@@ -5,12 +5,13 @@
 #   1. An agent ("Boss", its pinned chat started on a shim harness, so its
 #      passport is a real main session) hires a Developer. Boss can't give
 #      compute.use, permission cards are on, and the new agent has no
-#      Thread yet: the plan says "card", the lock keeps compute.use in
-#      cards_pending, and no request exists yet.
-#   2. The new agent's first chat starts (the same start every session
+#      Thread yet: the plan says "card" and cardsPending names compute.use;
+#      the daemon keeps it (0309); no request exists yet.
+#   2. Dev edits its own template.lock to ask for more: no effect.
+#   3. The new agent's first chat starts (the same start every session
 #      passes, v2_session_map::register): the card is filed on THAT agent's
-#      Thread, for exactly the switches the lock held, and the lock clears.
-#   3. A second start files nothing more.
+#      Thread, for exactly the switch the daemon kept, and nothing else.
+#   4. A second start files nothing more.
 #
 # Sandbox daemon under a temp HOME (worktree build), air-gapped; the agent
 # programs are shims that only read their input. Never touches ~/.k2.
@@ -74,9 +75,9 @@ pending_for() {
     curl -s "http://127.0.0.1:$K2SO_PORT/cli/permission/pending?token=$K2SO_TOKEN" \
         | jq -c --arg a "$1" '[.requests[] | select(.agent == $a)]'
 }
-lock_pending() { sed -n 's/^cards_pending = //p' "$1/.k2/agent/template.lock"; }
 
 echo "== Boss: an agent that may hire, with its pinned chat running =="
+k2 agent hire-root set "$SANDBOX_HOME/agents" >/dev/null || fail "hire root"
 BOSS="$SANDBOX_HOME/work/boss-$RANDOM$RANDOM"
 mkdir -p "$SANDBOX_HOME/work"
 k2 agent hire "$BOSS" --name "Boss" --json >"$SANDBOX_HOME/boss.json" || fail "hire Boss: $(cat "$SANDBOX_HOME/boss.json")"
@@ -102,10 +103,16 @@ rows() { jq -c '[.actions[] | select(.step == "apply-template") | .rows[] | sele
     || fail "Boss passes on its cards switch; compute.use is a card: $(rows)"
 jq -e '.actions[] | select(.step == "apply-template") | .rows[] | select(.target == "compute.use") | .reason | test("when it first starts")' <<<"$hired" >/dev/null \
     || fail "the card waits for the first start: $hired"
-[ "$(lock_pending "$DEV")" = '["compute.use"]' ] || fail "the lock keeps it: $(cat "$DEV/.k2/agent/template.lock")"
+[ "$(jq -c '.actions[] | select(.step == "apply-template") | .permissions.cardsPending' <<<"$hired")" = '["compute.use"]' ] \
+    || fail "cardsPending names it: $hired"
 [ "$(pending_for dev)" = "[]" ] || fail "nothing filed before Dev has a Thread: $(pending_for dev)"
 [ "$(starts_in "$DEV")" = 0 ] || fail "the hire started nothing"
-ok "card waiting in the lock, nothing filed yet"
+ok "card waiting in the daemon, nothing filed yet"
+
+echo "== Dev edits its own lock to ask for more: no effect =="
+lockf="$DEV/.k2/agent/template.lock"
+{ printf 'cards_pending = ["organization.manage", "vault.manage"]\n'; cat "$lockf"; } >"$lockf.new" && mv "$lockf.new" "$lockf"
+ok "lock edited"
 
 echo "== Dev's first start files exactly that card, on Dev's Thread =="
 k2 agent restart "$DEV" --harness claude --json >/dev/null || fail "start Dev's chat"
@@ -116,10 +123,10 @@ for i in $(seq 1 300); do
     [ "$got" != "[]" ] && break
     sleep 0.2
 done
-[ "$(jq -c '[.[].action]' <<<"$got")" = '["compute.use"]' ] || fail "exactly the lock's switches: $got"
+sleep 3
+got="$(pending_for dev)"
+[ "$(jq -c '[.[].action]' <<<"$got")" = '["compute.use"]' ] || fail "exactly the switch the daemon kept, nothing from the lock: $got"
 [ "$(jq -r '.[0].addr' <<<"$got")" = "dev" ] || fail "on Dev's own Thread: $got"
-[ -z "$(lock_pending "$DEV")" ] || fail "the lock clears once filed: $(cat "$DEV/.k2/agent/template.lock")"
-grep -q '"compute.use"' <(sed -n 's/^carded = //p' "$DEV/.k2/agent/template.lock") || fail "the lock still says it was asked"
 ok "filed on Dev's Thread at its first start"
 
 echo "== a second start files nothing more =="

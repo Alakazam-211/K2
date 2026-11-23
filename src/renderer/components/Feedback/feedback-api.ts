@@ -108,6 +108,11 @@ export interface FeedbackShow extends FeedbackItem {
   comments: FeedbackComment[]
   /** That project's `workspace_sessions.session_id` (pinned conversation). */
   canonicalSessionId?: string | null
+  /** Who may pick each option of a ticket on the owner notices' workspace
+   *  (`{ "<option>": ["owner", "admin"] }`), e.g. a Member's ask to turn the
+   *  setup list on. Absent on every other ticket, whose options stay hidden
+   *  there. */
+  optionRoles?: Record<string, string[]> | null
 }
 
 /** Minimal slice of the projects store the fan-out needs. */
@@ -360,6 +365,33 @@ export function quickAnswerOptions(
     .map((o) => collapseWs(o))
     .filter(Boolean)
     .map((o) => ({ answer: o, label: o, detail: o }))
+}
+
+/** Who is looking at a ticket, for options that say who may pick them. */
+export type TicketViewerRole = 'owner' | 'admin' | 'member' | 'agent'
+
+/** The viewer's role from `auth/whoami`: the owner token or an Owner login
+ *  is `owner`, an Admin login `admin`, any other login `member`. */
+export function ticketViewerRole(who: { owner?: unknown; role?: unknown } | null | undefined): TicketViewerRole | null {
+  if (!who) return null
+  if (who.owner === true || who.role === 'owner') return 'owner'
+  if (who.role === 'admin') return 'admin'
+  return 'member'
+}
+
+/** The options of an owner-notice ticket this viewer may pick: only those
+ *  the daemon's `optionRoles` lists for the viewer's role. No roles (every
+ *  other ticket), no role, an agent: none, as before. */
+export function noticeOptionsFor(
+  item: { options: string[] | null; optionRoles?: Record<string, string[]> | null },
+  role: TicketViewerRole | null,
+): QuickAnswerOption[] {
+  const roles = item.optionRoles
+  if (!roles || !role || role === 'agent') return []
+  return quickAnswerOptions(item, null).filter((o) => {
+    const allowed = roles[o.answer]
+    return Array.isArray(allowed) && allowed.includes(role)
+  })
 }
 
 // ── List scope: Waiting on me / Mine / All ────────────────────────────────

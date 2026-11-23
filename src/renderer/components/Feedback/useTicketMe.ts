@@ -13,6 +13,8 @@ import { myAssigneeNames } from './feedback-api'
 
 export interface TicketWhoami {
   owner?: boolean
+  /** The login's role (`owner`, `admin`, `member`). */
+  role?: string | null
   username?: string | null
   /** The daemon's "me" assignee names (lower-cased); absent on older daemons. */
   ticketMe?: string[]

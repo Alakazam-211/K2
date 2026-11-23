@@ -56,6 +56,7 @@ import { PriorityBadge, StatusBadge, StatusMark } from './badges'
 import { BriefFrame, useBriefThemeKey } from './BriefFrame'
 import { cardAssigneeNames, isViewer } from './TicketCard'
 import { TicketAgentRail } from './TicketAgentRail'
+import { NoticeQuickAnswers } from './NoticeQuickAnswers'
 import type { TicketPatch } from './TicketThreadPane'
 import { ticketThreadOn } from './ticket-thread-contract'
 import { SelectableRegion, clearStuckBodyUserSelect } from '@/components/common/SelectableText'
@@ -555,6 +556,10 @@ export function FeedbackItemView({
           onChanged={onChanged}
           tabGutter={asDrawer && !drawerOpen}
         />
+        {/* An owner notice whose options say who may pick them (a Member's
+            ask): the picks this viewer may make, here, since such a ticket
+            has no discussion rail. */}
+        {unlinked && item?.optionRoles ? <NoticeQuickAnswers item={item} onChanged={onChanged} /> : null}
         {asDrawer && !drawerOpen && (
           // The closed drawer's tab, inside the pane by its right edge, in a
           // gutter the report keeps clear (DISCUSSION_TAB_GUTTER), so it

@@ -505,7 +505,7 @@ pub fn wrap(
 ) -> Result<(String, Vec<String>, String), String> {
     use crate::agent_fence::{default_view, fence_env, landlock_abi, ExecSpec, ViewInputs, ARG};
     let helper = exec_helper().ok_or("the daemon has no exec helper for isolated sessions")?;
-    let mut spec = ExecSpec { v: 1, cgroup: None, wait_cgroup: None, fence: None, unset: Vec::new(), set: Default::default() };
+    let mut spec = ExecSpec { v: 1, cgroup: None, wait_cgroup: None, fence: None, unset: Vec::new(), set: Default::default(), sockblock: None };
     if iso.identity && crate::agent_scope::scope_placement() {
         // B4: the helper makes the scope around the waiting exec helper.
         let plan = iso.scope.as_ref().ok_or("agent isolation: no scope id for this session")?;
@@ -537,6 +537,15 @@ pub fn wrap(
         let view = default_view(&ViewInputs { home: &home, k2_home: &k2_home, workspace: ws, tmp_dir: &tmp, env: &env, own_secrets: iso.secrets_dir.as_deref() })?;
         spec.fence = Some(view);
         fence_env(&mut spec, &tmp);
+        // M2: the Unix-socket block (record by default, `K2_AGENT_SOCKBLOCK`).
+        // The session names its hook socket and temp folder as the rule does.
+        if let Some(b) = crate::agent_sockblock::spec_for(tmp.parent().unwrap_or(&tmp), &tmp, env.get("K2_HOOK_SOCK").map(String::as_str)) {
+            if let Some(h) = &b.hook_sock {
+                spec.set.insert("K2_HOOK_SOCK".into(), h.clone());
+            }
+            spec.set.insert("TMPDIR".into(), b.tmp_dir.clone());
+            spec.sockblock = Some(b);
+        }
     }
     let json = crate::agent_fence::spec_json(&spec)?;
     let mut argv = vec![ARG.to_string(), "--".to_string(), program];
@@ -720,6 +729,7 @@ pub fn status_json() -> serde_json::Value {
             "oldLayout": b.old_layout.iter().map(|(ws, why)| serde_json::json!({ "agent": ws, "state": "old layout, not adopted", "why": why })).collect::<Vec<_>>(),
         });
     }
+    v["sockblock"] = crate::agent_sockblock::status_json();
     v["landlock"] = match landlock {
         Ok(n) => serde_json::json!({ "abi": n }),
         Err(e) => serde_json::json!({ "abi": null, "why": e }),

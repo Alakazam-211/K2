@@ -50,6 +50,8 @@ pub mod agents_leaf;
 pub mod agent_cgroup;
 pub mod agent_scope;
 pub mod agent_fence;
+// Agent Isolation M2: the Unix-socket block for fenced sessions.
+pub mod agent_sockblock;
 // prd-daemon-activity-and-thread-working-v1 S2: the per-session activity
 // row and state machine (pure; the daemon's `activity_store` owns rows).
 pub mod activity;

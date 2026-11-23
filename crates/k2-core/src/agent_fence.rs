@@ -64,6 +64,10 @@ pub struct ExecSpec {
     /// Variables set before `exec`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub set: BTreeMap<String, String>,
+    /// M2: the Unix-socket block (fenced sessions only): the helper stays
+    /// as the session's supervisor ([`crate::agent_sockblock`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sockblock: Option<crate::agent_sockblock::BlockSpec>,
 }
 
 /// One fence: the paths the agent may open. Paths that don't exist are
@@ -976,6 +980,21 @@ pub fn run_from_args(args: &[std::ffi::OsString]) -> i32 {
             return refuse(format!("its agent cgroup: {e}"));
         }
     }
+    // M2: the Unix-socket block's log and temp folder handle are opened
+    // before the fence (the log is outside the view); only with a fence.
+    #[cfg(target_os = "linux")]
+    let block = match (spec.sockblock.as_ref(), spec.fence.is_some()) {
+        (Some(b), true) => match crate::agent_sockblock::supervisor::prepare(b) {
+            Ok(p) => p,
+            Err(e) => return refuse(format!("its Unix-socket block: {e}")),
+        },
+        (Some(_), false) => return refuse("a Unix-socket block without a folder fence".into()),
+        (None, _) => None,
+    };
+    #[cfg(not(target_os = "linux"))]
+    if spec.sockblock.is_some() {
+        return refuse("the Unix-socket block is Linux only".into());
+    }
     if let Some(view) = spec.fence.as_ref() {
         if let Err(e) = apply_fence(view) {
             return refuse(format!("its folder fence: {e}"));
@@ -986,6 +1005,11 @@ pub fn run_from_args(args: &[std::ffi::OsString]) -> i32 {
         use std::os::unix::process::CommandExt;
         // The program's environment: this one minus the plan and the
         // fence's drops, plus its settings (this process's own stays put).
+        // Under the block the program is the supervisor's child, in this
+        // session (never one of its own: it keeps the terminal).
+        #[cfg(target_os = "linux")]
+        let mut c = if block.is_some() { crate::bg_proc::command_keeping_session(argv[0]) } else { crate::bg_proc::command(argv[0]) };
+        #[cfg(not(target_os = "linux"))]
         let mut c = crate::bg_proc::command(argv[0]);
         c.args(&argv[1..]).env_remove(ENV_SPEC);
         for k in &spec.unset {
@@ -993,6 +1017,10 @@ pub fn run_from_args(args: &[std::ffi::OsString]) -> i32 {
         }
         for (k, v) in &spec.set {
             c.env(k, v);
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(p) = block {
+            return crate::agent_sockblock::supervisor::run(p, c);
         }
         let e = c.exec();
         eprintln!("{}: {}: {e}", crate::brand::PRODUCT_NAME, argv[0].to_string_lossy());
@@ -1187,10 +1215,10 @@ mod tests {
     #[test]
     fn a_view_too_large_to_hand_over_is_refused() {
         let view = FenceView { rw: vec![], ro: (0..5000).map(|n| format!("/tmp/an-entry-with-a-fairly-long-name-{n:05}")).collect(), required: vec![] };
-        let spec = ExecSpec { v: 1, cgroup: None, wait_cgroup: None, fence: Some(view), unset: vec![], set: BTreeMap::new() };
+        let spec = ExecSpec { v: 1, cgroup: None, wait_cgroup: None, fence: Some(view), unset: vec![], set: BTreeMap::new(), sockblock: None };
         let e = spec_json(&spec).expect_err("refused");
         assert!(e.contains("5000 rules") && e.contains("doesn't start"), "{e}");
-        let small = ExecSpec { v: 1, cgroup: None, wait_cgroup: None, fence: Some(FenceView::default()), unset: vec![], set: BTreeMap::new() };
+        let small = ExecSpec { v: 1, cgroup: None, wait_cgroup: None, fence: Some(FenceView::default()), unset: vec![], set: BTreeMap::new(), sockblock: None };
         assert!(spec_json(&small).is_ok());
     }
 
@@ -1409,7 +1437,7 @@ mod tests {
 
     #[test]
     fn the_fence_env_drops_the_owners_agents_and_sets_tmpdir() {
-        let mut spec = ExecSpec { v: 1, cgroup: None, wait_cgroup: None, fence: None, unset: vec![], set: BTreeMap::new() };
+        let mut spec = ExecSpec { v: 1, cgroup: None, wait_cgroup: None, fence: None, unset: vec![], set: BTreeMap::new(), sockblock: None };
         fence_env(&mut spec, Path::new("/home/k2/.k2/agents/a/tmp"));
         assert!(spec.unset.iter().any(|k| k == "SSH_AUTH_SOCK"));
         assert_eq!(spec.set["TMPDIR"], "/home/k2/.k2/agents/a/tmp");
@@ -1418,7 +1446,7 @@ mod tests {
 
     #[test]
     fn the_spec_round_trips() {
-        let spec = ExecSpec { v: 1, cgroup: Some("/sys/fs/cgroup/x/agents/a-1".into()), wait_cgroup: None, fence: None, unset: vec![], set: BTreeMap::new() };
+        let spec = ExecSpec { v: 1, cgroup: Some("/sys/fs/cgroup/x/agents/a-1".into()), wait_cgroup: None, fence: None, unset: vec![], set: BTreeMap::new(), sockblock: None };
         let j = serde_json::to_string(&spec).unwrap();
         assert_eq!(serde_json::from_str::<ExecSpec>(&j).unwrap(), spec);
         assert!(!j.contains("fence") && !j.contains("unset"), "no fence keys when off: {j}");

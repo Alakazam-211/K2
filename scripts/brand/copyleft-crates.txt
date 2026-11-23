@@ -1,0 +1,14 @@
+# Crates a private white-label build can't ship, and bundled C we accept.
+# scripts/brand/licence-gate.sh reads it. It refuses a partner brand's
+# build (any brand id but k2 and k5) when the tag's Cargo.lock holds a
+# refused crate. K5's own builds only get a report.
+#
+# A refused crate, three fields split by " | ":
+#   crate | why a private white-label build can't ship it | what lifts it
+# An allowed crate (never refused; the gate names it in its report):
+#   allowed crate | its licence | the ruling
+# The refusal prints all three fields. Take a refused row out only when
+# what lifts it has landed and the crate is gone from Cargo.lock.
+libgit2-sys | libgit2 is GPL-2.0 with a linking exception and its xdiff part is LGPL-2.1, statically linked: accepted in public builds only, until gix (owner ruling) | the gix migration lands (K5 replaces libgit2 with gitoxide)
+allowed pg_query | PostgreSQL License | accepted everywhere (owner ruling)
+allowed libsqlite3-sys | SQLite is public domain | accepted everywhere (owner ruling)

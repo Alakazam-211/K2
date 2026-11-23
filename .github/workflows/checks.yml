@@ -188,6 +188,9 @@ jobs:
       - name: Ceiling-zero gate on scratch repos
         run: bash tests/garden/ceiling-zero-gate.sh
 
+      - name: Licence gate on fixture lockfiles
+        run: bash tests/garden/licence-gate.sh
+
       - name: The brand mark is static data (only its reader reads it)
         run: bash scripts/brand/mark-static-gate.sh
 

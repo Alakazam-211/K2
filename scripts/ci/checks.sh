@@ -16,7 +16,8 @@
 #               pinned tools, the allow-list rules and a canary (checks.yml
 #               audit; prd-security-sweep-0464-v1 SS14), and cargo deny:
 #               the root deny.toml against every shipped crate
-#   brand-xy    the CI brand (brand/xy): cargo check with K2_BRAND_DIR,
+#   brand-xy    the CI brand (brand/xy): the licence gate's report (never
+#               a refusal here), cargo check with K2_BRAND_DIR,
 #               the k5 binary built for it, and the output judges on what
 #               it prints (scripts/brand/xy-build.sh: in a folder of its
 #               own under $TMPDIR, after a free-disk check, removed on
@@ -84,6 +85,7 @@ part_web() {
     step "brand gate on broken trees";             bash tests/garden/brand-gate.sh
     step "brand output judges on small corpora";   bash tests/garden/brand-output-judges.sh
     step "ceiling-zero gate on scratch repos";     bash tests/garden/ceiling-zero-gate.sh
+    step "licence gate on fixture lockfiles";      bash tests/garden/licence-gate.sh
     step "the brand mark is static data (only its reader reads it)"; bash scripts/brand/mark-static-gate.sh
     step "release brand-mark check on made-up binaries"; bash tests/garden/brand-mark.sh
     step "brand name policy (brand.sh lint), offline"; bash tests/garden/brand-lint.sh
@@ -257,6 +259,9 @@ part_rust_test() {
 }
 
 part_brand_xy() {
+    # Report only: what a partner pipeline's licence gate says on this tree.
+    step "the xy brand: licence gate (report only)"
+    bash scripts/brand/licence-gate.sh --brand xy --report
     step "the xy brand: name policy, check, build, brand mark, output judges"
     bash scripts/brand/xy-build.sh
 }

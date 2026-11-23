@@ -104,6 +104,8 @@ pub(crate) fn on_session_registered(key: &str, program: Option<&str>) {
         let key = key.to_string();
         if let Err(e) = crate::rt::spawn("template-hello-start", move || {
             launch_hello(&key);
+            // T3: the cards a hire couldn't file (no Thread then).
+            crate::hire_permissions::file_pending_cards_when_ready(&key);
         }) {
             k2_core::log_debug!("[template-hello] check not started: {e}");
         }

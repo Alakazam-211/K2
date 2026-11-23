@@ -510,6 +510,7 @@ async fn async_main() {
     // Agent templates (prd-agent-templates-v1 AT6): the loader checks each
     // template's `suggest` against the V1 action catalog, which lives here.
     crate::hire_routes::install_template_action_check();
+    crate::hire_permissions::install();
     // Garden access lists (prd-garden-access-v1; always on from 0.46.3,
     // Rosson 2026-10-23: no switch). On in this process from here; the
     // one-time upgrade pass runs after the database is up (below).

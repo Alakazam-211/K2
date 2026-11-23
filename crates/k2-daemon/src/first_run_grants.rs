@@ -107,7 +107,7 @@ pub(crate) fn switch_on(id: &str, switch: &str) -> bool {
 
 /// Write one switch on, in-process (the agent-hirer path): the same single
 /// writers `handle_access` and `/cli/agents-create-connections` use.
-fn write_on(t: &Target, switch: &str, by: &str) -> Result<(), String> {
+pub(crate) fn write_on(t: &Target, switch: &str, by: &str) -> Result<(), String> {
     use k2_core::workspace::settings as ws;
     match switch {
         "agents_manage" => ws::set_agents_can_manage_agents(&t.id, true)?,

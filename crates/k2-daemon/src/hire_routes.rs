@@ -12,7 +12,9 @@
 //! /cli (owner token, Connect logins, agent passports where noted):
 //!   POST /cli/agents/hire          `k2 agent hire <dir>` (converge one path; passports too:
 //!                                  the main session, with "Let this agent hire agents" on,
-//!                                  and a passport only ever creates a new workspace)
+//!                                  and a passport only ever creates a new workspace, inside
+//!                                  the hire root; a template's suggested switches go through
+//!                                  `hire_permissions`)
 //!   GET  /cli/agents/hire-root     the owner-set hire root; POST sets it (Owner)
 //!   POST /cli/agent-instances/hire  the recipe (Admin)
 //!   GET  /cli/agent-instances       every hire (Admin)
@@ -1191,6 +1193,9 @@ fn cli_template_hire(
         no_wiki: req.no_wiki.unwrap_or(false),
         no_agents_md: req.no_agents_md.unwrap_or(false),
         fanout: req.fanout.unwrap_or(false),
+        // T3: what the person unticked on the Review step (`--decline`).
+        declined: req.decline_permissions.clone().unwrap_or_default(),
+        permissions_by_door: false,
     };
     let has = |s: &Option<String>| s.as_deref().is_some_and(|s| !s.trim().is_empty());
     if has(&req.persona) || has(&req.persona_raw) {

@@ -587,6 +587,22 @@ pub(crate) fn raise_card(workspace_id: &str, session_id: &str, action: &str, par
     (status, serde_json::from_str(&r.body).unwrap_or(Value::Null))
 }
 
+/// File a permission card for a new agent's suggested switch
+/// (prd-agent-templates-v1 §9, T3): the hire's permissions step asks a
+/// person for what its hirer couldn't give. The agent is the asker, on its
+/// pinned Thread, under the usual limits; an open card for the same switch
+/// is found, not doubled (`already_pending`). The caller checks the
+/// server's switch: a hire may ask before the agent's own "Can ask for
+/// permission cards" is on (the hire, not the agent, is asking).
+pub(crate) fn raise_hire_card(workspace_id: &str, action: &str, why: &str) -> (u16, Value) {
+    let mut body = Map::new();
+    body.insert("action".into(), json!(action));
+    body.insert("why".into(), json!(why));
+    let r = request(workspace_id, "", &body);
+    let status = r.status.split_whitespace().next().and_then(|c| c.parse().ok()).unwrap_or(500);
+    (status, serde_json::from_str(&r.body).unwrap_or(Value::Null))
+}
+
 /// The same ask as `POST /cli/permission/request`, for a passport its door
 /// already classified (`k2 db request-read`, 0.46.17,
 /// `db_read_routes`). The caller checks the gate first.

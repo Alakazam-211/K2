@@ -1053,6 +1053,8 @@ fn handle_kessel(body: &[u8], actor: &Actor, text: bool) -> CliResponse {
     req.name = Some(name.clone());
     req.handle = Some(handle);
     req.tool = Some(tool.clone());
+    // This route grants Kessel's starter set itself (first_run_grants).
+    req.permissions_by_door = true;
     // A folder the `kessel` template made before (its lock names `kessel`) is
     // Kessel's again: a Kessel whose workspace was deleted is made in place.
     let report = match k2_core::hire::template::apply(&req, &caller) {
@@ -1219,6 +1221,8 @@ pub fn handle_chief_of_staff_as(body: &[u8], caller: &crate::sidecar_routes::Cal
     req.params.insert("about".into(), about);
     req.params.insert("kessel".into(), kessel_handle.clone());
     req.params.insert("person".into(), seat_person());
+    // This route passes on the starter set Kessel holds (first_run_grants).
+    req.permissions_by_door = true;
     let report = match k2_core::hire::template::apply(&req, &caller) {
         Ok(r) => r,
         Err(e) => return apply_error(&e, format!("{path} is already there: ask your person for another name")),

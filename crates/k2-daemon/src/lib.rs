@@ -261,6 +261,8 @@ pub mod stash_routes;
 pub mod first_run_routes;
 /// Kessel at first run: granting the Kessel and Chief of Staff starter sets.
 pub(crate) mod first_run_grants;
+/// prd-agent-templates-v1 T3: the permissions step of a template hire.
+pub(crate) mod hire_permissions;
 /// post-idempotency-v1 (0.46.8): `clientMsgId` on Thread and project chat posts.
 pub mod client_msg_id;
 /// Idempotent sends (0.46.15): `idempotency_key` on `k2 msg`, tray

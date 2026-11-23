@@ -222,6 +222,35 @@ const OWNER_ONLY_KEYS: &[&str] = &[
     "docsSaveImmediately",
 ];
 
+/// The owner's setup switches an Admin may turn ON, never off (Settings →
+/// Getting started, plan-getting-started-settings-v1): the one, narrow
+/// exception to [`OWNER_ONLY_KEYS`] for an Admin. Only the value `true`
+/// passes; `false`, anything else, or any other Owner-only key beside them
+/// is the usual atomic 403. The write names the Admin (`by`).
+const ADMIN_MAY_TURN_ON: &[&str] = &["setupChecklist", "kesselFirstRun"];
+
+/// `key` is one of [`ADMIN_MAY_TURN_ON`], sent as `true` by an Admin.
+fn admin_turns_on(actor: SettingsActor, key: &str, partial: &serde_json::Value) -> bool {
+    actor == SettingsActor::Admin && ADMIN_MAY_TURN_ON.contains(&key) && partial.get(key) == Some(&serde_json::Value::Bool(true))
+}
+
+/// One Access Audit line for each setup switch this write flipped, naming
+/// who (`by`): `first-run-switch`, `setupChecklist on`.
+fn audit_setup_switches(was: (bool, bool), now: &k2_core::app_settings::AppSettings, by: &str) {
+    for (key, before, after) in [("setupChecklist", was.0, now.setup_checklist), ("kesselFirstRun", was.1, now.kessel_first_run)] {
+        if before != after {
+            k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+                "first-run-switch",
+                by,
+                format!("{key} {}", if after { "on" } else { "off" }),
+                "-",
+                "-",
+                "cli",
+            ));
+        }
+    }
+}
+
 /// Who is writing settings, resolved by the dispatcher from the request
 /// credential: the owner token or an Owner login, an Admin login, or any
 /// other accepted login (Member).
@@ -568,7 +597,10 @@ pub fn handle_settings_update_as(body: &[u8], actor: SettingsActor, by: &str) ->
         ));
     }
     if actor != SettingsActor::Owner {
-        if let Some(gated) = OWNER_ONLY_KEYS.iter().find(|k| partial.get(**k).is_some()) {
+        if let Some(gated) = OWNER_ONLY_KEYS.iter().find(|k| partial.get(**k).is_some() && !admin_turns_on(actor, **k, &partial)) {
+            if actor == SettingsActor::Admin && ADMIN_MAY_TURN_ON.contains(gated) {
+                return forbidden(format!("an Admin may only turn \"{gated}\" on; anything else requires the Owner role"));
+            }
             return forbidden(format!("updating \"{gated}\" requires the Owner role"));
         }
     }
@@ -621,8 +653,15 @@ pub fn handle_settings_update_as(body: &[u8], actor: SettingsActor, by: &str) ->
     let cores_touched = partial.get(k2_core::docs_cores::SETTING_KEY).is_some();
     let voice_touched = ["voiceRoomsPreview", "voiceRoomsCount", "homeChat", "homeChatPush", "homeChatPushPreviews"].iter().any(|k| partial.get(*k).is_some());
     let checklist_touched = partial.get("setupChecklist").is_some() || partial.get("kesselFirstRun").is_some();
+    let setup_was = checklist_touched.then(|| {
+        let s = k2_core::app_settings::load();
+        (s.setup_checklist, s.kessel_first_run)
+    });
     match k2_core::app_settings::update(partial) {
         Ok(merged) => {
+            if let Some(was) = setup_was {
+                audit_setup_switches(was, &merged, by);
+            }
             // Sync the federation master switch into the running process so the
             // /cli/federation/* gate flips immediately (no restart) when the K2
             // Connect toggle changes it. Env-var force-on still wins in enabled().

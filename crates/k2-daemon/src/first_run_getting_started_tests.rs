@@ -427,3 +427,131 @@ fn the_welcome_is_sent_once_per_call_from_the_lock_and_nothing_else_changes() {
     }
     assert!(audited("first-run-kessel-welcome", "julie", &handle), "{:?}", audit_lines());
 }
+
+// ── An Admin turns the two switches on, never off, as themselves ─────────
+
+fn settings_write(body: Value, actor: crate::settings_routes::SettingsActor, by: &str) -> CliResponse {
+    crate::settings_routes::handle_settings_update_as(body.to_string().as_bytes(), actor, by)
+}
+
+#[test]
+fn an_admin_may_only_turn_the_two_switches_on_through_the_settings_route() {
+    use crate::settings_routes::SettingsActor;
+    let _e = env(false, false);
+    // Off, anything but true, or another Owner-only key beside them: 403,
+    // nothing written.
+    for bad in [
+        json!({ "setupChecklist": false }),
+        json!({ "kesselFirstRun": false }),
+        json!({ "setupChecklist": "yes" }),
+        json!({ "kesselFirstRun": 1 }),
+        json!({ "setupChecklist": true, "airgap": true }),
+        json!({ "kesselFirstRun": true, "listenLan": true }),
+    ] {
+        let r = settings_write(bad.clone(), SettingsActor::Admin, "user:julie");
+        assert_eq!(r.status, "403 Forbidden", "{bad}: {}", r.body);
+        assert_eq!(switches(), (false, false), "{bad}: nothing written");
+    }
+    let s = k2_core::app_settings::load();
+    assert!(!s.airgap && !s.listen_lan, "no other Owner-only key moved");
+    let r = settings_write(json!({ "setupChecklist": false }), SettingsActor::Member, "user:anna");
+    assert_eq!(r.status, "403 Forbidden", "a Member never");
+    let r = settings_write(json!({ "setupChecklist": true }), SettingsActor::Member, "user:anna");
+    assert_eq!(r.status, "403 Forbidden", "a Member never, on either");
+
+    // On: allowed, and the change names the Admin.
+    let r = settings_write(json!({ "setupChecklist": true, "kesselFirstRun": true }), SettingsActor::Admin, "user:julie");
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    assert_eq!(switches(), (true, true));
+    assert!(audited("first-run-switch", "julie", "setupChecklist on"), "{:?}", audit_lines());
+    assert!(audited("first-run-switch", "julie", "kesselFirstRun on"), "{:?}", audit_lines());
+    // And never back off.
+    for off in [json!({ "setupChecklist": false }), json!({ "kesselFirstRun": false })] {
+        let r = settings_write(off.clone(), SettingsActor::Admin, "user:julie");
+        assert_eq!(r.status, "403 Forbidden", "{off}");
+        assert!(r.body.contains("only turn"), "{}", r.body);
+    }
+    assert_eq!(switches(), (true, true));
+    // The Owner still may, and is named.
+    let r = settings_write(json!({ "setupChecklist": false }), SettingsActor::Owner, "owner-token");
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    assert!(audited("first-run-switch", "owner-token", "setupChecklist off"), "{:?}", audit_lines());
+}
+
+/// The restart route only ever writes these two keys, only `true`; every
+/// other field of its body is ignored (only `kessel` is read).
+#[test]
+fn the_restart_route_writes_only_the_two_switches_on_and_ignores_the_rest_of_the_body() {
+    let _e = env(false, false);
+    let julie = login("julie", Role::Admin);
+    let r = post(
+        RESTART_PATH,
+        json!({ "kessel": true, "airgap": true, "listenLan": true, "setupChecklist": false, "kesselFirstRun": false, "apiEnabled": true }),
+        &julie,
+    );
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    assert_eq!(switches(), (true, true), "on, whatever else the body said");
+    let s = k2_core::app_settings::load();
+    assert!(!s.airgap && !s.listen_lan && !s.api_enabled, "nothing else moved");
+    // Never off through the route: kessel false leaves Kessel on.
+    let r = post(RESTART_PATH, json!({ "kessel": false }), &julie);
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    assert_eq!(switches(), (true, true));
+    // The change record names the Admin, not the Owner.
+    let lines: Vec<String> = audit_lines().into_iter().filter(|l| l.contains("first-run-switch")).collect();
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert!(lines.iter().all(|l| l.contains("julie") && !l.contains("owner")), "{lines:?}");
+}
+
+#[test]
+fn a_passport_never_reaches_restart_or_welcome() {
+    for p in [RESTART_PATH, KESSEL_WELCOME_PATH] {
+        assert!(!crate::session_token::is_agent_verb(p), "{p}: an agent's passport is on the first-run denylist");
+        let r = refuse_outside_person_arm(p, true).expect("door");
+        assert_eq!((r.status, code(&r).as_str()), ("403 Forbidden", "first_run_person_only"), "{p}");
+    }
+}
+
+// ── The one click on the ticket ──────────────────────────────────────────
+
+#[test]
+fn the_ask_says_who_may_pick_its_option_and_other_tickets_say_nothing() {
+    let _e = env(false, false);
+    let anna = login("anna", Role::Member);
+    let id = json_of(&post(RESTART_PATH, json!({}), &anna))["asked"]["ticketId"].as_str().expect("ticket").to_string();
+    let show = |id: &str| {
+        let params: std::collections::HashMap<String, String> = [("id".to_string(), id.to_string())].into_iter().collect();
+        let r = crate::feedback_routes::dispatch("/cli/feedback/show", &params).expect("show");
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        json_of(&r)
+    };
+    assert_eq!(show(&id)["optionRoles"], json!({ START_AGAIN: ["owner", "admin"] }));
+    let other = crate::feedback_routes::file_person_ask(
+        k2_core::db::AUDIT_SENTINEL_IDS[0],
+        "disk-watch",
+        "Disk / 90% full",
+        "b",
+        &["Clean up".to_string()],
+        &["owner".to_string()],
+    )
+    .expect("file");
+    assert!(show(&other.id).get("optionRoles").is_none(), "an owner notice without roles keeps its options hidden");
+}
+
+/// The app's click is `feedback/comment` with `optionPick`: the comment
+/// core records the option as the answer, then the person arm's hook runs
+/// with the credential's actor. An Admin's pick names the Admin.
+#[test]
+fn an_admins_pick_in_the_app_turns_the_list_on_as_the_admin() {
+    let _e = env(false, false);
+    let julie = login("julie", Role::Admin);
+    let anna = login("anna", Role::Member);
+    let id = json_of(&post(RESTART_PATH, json!({}), &anna))["asked"]["ticketId"].as_str().expect("ticket").to_string();
+    k2_core::feedback::record_answer(&id, START_AGAIN).expect("pick");
+    let body = json!({ "id": id, "body": START_AGAIN, "optionPick": true }).to_string();
+    after_ticket_write("/cli/feedback/comment", body.as_bytes(), &ok(), &julie);
+    assert_eq!(switches(), (true, false));
+    assert!(audited("first-run-switch", "julie", "setupChecklist on"), "{:?}", audit_lines());
+    assert!(!audit_lines().iter().any(|l| l.contains("first-run-switch") && l.contains("owner")), "the Admin, never the Owner");
+    assert_eq!(status_for(&anna)["finished"], json!(false));
+}

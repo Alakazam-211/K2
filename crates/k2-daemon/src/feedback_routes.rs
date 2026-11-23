@@ -947,6 +947,13 @@ fn show_json(
             "canonicalSessionId".to_string(),
             serde_json::json!(canonical_session_id(&item.project_id)),
         );
+        // Who may pick each option on an owner notice (Settings → Getting
+        // started: a Member's ask). People only; absent everywhere else.
+        if pass.is_none() {
+            if let Some(roles) = crate::first_run_routes::option_roles(item) {
+                map.insert("optionRoles".to_string(), roles);
+            }
+        }
         map.insert(
             "comments".to_string(),
             serde_json::json!(comments

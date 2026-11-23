@@ -377,29 +377,39 @@ fn handle_restart(body: &[u8], actor: &Actor, person: String, viewer: Viewer, te
     status_answer(person, viewer, Some(Action::Restart), text)
 }
 
-/// Turn the owner's setup switches on through the settings write (the
-/// same path as any write: `first_run_changed`, the settings frame), then
-/// one Access Audit line per switch naming who. The route already checked
-/// the caller is the owner token, an Owner or an Admin; it may only turn
-/// these two on, so the write goes as the Owner's.
+/// Turn the owner's setup switches on through the settings write as the
+/// caller (the same path as any write: `first_run_changed`, the settings
+/// frame, and the `first-run-switch` audit line naming who). Only these
+/// keys, only `true`: an Admin passes the settings write's narrow
+/// allowance for exactly that, and nothing else of the body reaches it.
 fn turn_on(keys: &[&'static str], actor: &Actor) -> Result<(), CliResponse> {
     if keys.is_empty() {
         return Ok(());
     }
+    use crate::settings_routes::SettingsActor;
+    let who = if actor.owner_token {
+        SettingsActor::Owner
+    } else {
+        match k2_core::connect_users::role_for_user(&actor.login) {
+            Some(k2_core::connect_users::Role::Owner) => SettingsActor::Owner,
+            Some(k2_core::connect_users::Role::Admin) => SettingsActor::Admin,
+            _ => return Err(error("403 Forbidden", "role_required", "turning the setup list on needs the owner, an Owner or an Admin login")),
+        }
+    };
     let partial: serde_json::Map<String, Value> = keys.iter().map(|k| ((*k).to_string(), Value::Bool(true))).collect();
-    let by = by_label(actor);
-    let r = crate::settings_routes::handle_settings_update_as(
-        Value::Object(partial).to_string().as_bytes(),
-        crate::settings_routes::SettingsActor::Owner,
-        &by,
-    );
+    let r = crate::settings_routes::handle_settings_update_as(Value::Object(partial).to_string().as_bytes(), who, &by_label(actor));
     if !r.status.starts_with('2') {
         return Err(r);
     }
-    for k in keys {
-        audit("first-run-switch", &by, format!("{k} on"));
-    }
     Ok(())
+}
+
+/// Who may pick each option of a ticket on the owner notices' workspace,
+/// for the Tickets UI (`optionRoles` on `feedback/show`): a Member's ask's
+/// "Start setup again" is the owner's and an Admin's. `None` for every
+/// other ticket, whose options stay hidden there as before.
+pub fn option_roles(item: &k2_core::feedback::FeedbackItem) -> Option<Value> {
+    is_setup_ask(item).then(|| json!({ START_AGAIN: ["owner", "admin"] }))
 }
 
 /// The audit sentinel the owner's notices are filed on: Owners and Admins
@@ -478,7 +488,9 @@ fn ask_the_owner(actor: &Actor) -> CliResponse {
 }
 
 /// The ticket routes' person arm ran `path` (`/cli/feedback/answer`,
-/// `comment` or `resolve`) with `body` for `actor` and answered `resp`.
+/// `comment` or `resolve`) with `body` for `actor` and answered `resp`
+/// (`actor` comes from the credential, never the body; the app's one click
+/// on the ticket is a `comment` with `optionPick`).
 /// When that said yes to a Member's ask (its option picked, or the ticket
 /// Resolved) and `actor` is the owner token, an Owner or an Admin: the
 /// setup list goes on, that Member's setup starts again, and the ticket

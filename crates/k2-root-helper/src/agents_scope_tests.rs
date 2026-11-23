@@ -37,7 +37,14 @@ fn scope_box(moves: bool) -> T {
 /// As [`scope_box`]; a pid in `reused` is another process by the time
 /// systemd moves it (its start time changes with the move).
 fn scope_box_with(moves: bool, reused: &[u32]) -> T {
+    scope_box_full(moves, reused, &[])
+}
+
+/// As [`scope_box_with`]; `extra` pids are listed in every new scope too
+/// (another process systemd put there).
+fn scope_box_full(moves: bool, reused: &[u32], extra: &[u32]) -> T {
     let reused: Vec<String> = reused.iter().map(u32::to_string).collect();
+    let extra: Vec<String> = extra.iter().map(u32::to_string).collect();
     let t = box_root();
     mkdirs(&t.root, &[&format!("/proc/{DAEMON_PID}"), &format!("/sys/fs/cgroup{UNIT}/daemon"), OPEN_DIR, FENCED_DIR]);
     std::fs::write(t.p(&format!("/proc/{DAEMON_PID}/cgroup")), format!("0::{UNIT}/daemon\n")).unwrap();
@@ -52,6 +59,10 @@ fn scope_box_with(moves: bool, reused: &[u32]) -> T {
             let n: usize = args[i + 2].parse().expect("count");
             let rel = format!("/k2agents.slice/{slice}/{name}");
             std::fs::create_dir_all(under(&root, &format!("/sys/fs/cgroup{rel}"))).unwrap();
+            let mut listed: Vec<String> = if moves { args[i + 3..i + 3 + n].to_vec() } else { vec![] };
+            listed.extend(extra.iter().cloned());
+            let procs: String = listed.iter().map(|p| format!("{p}\n")).collect();
+            std::fs::write(under(&root, &format!("/sys/fs/cgroup{rel}/cgroup.procs")), procs).unwrap();
             if moves {
                 for p in &args[i + 3..i + 3 + n] {
                     let f = under(&root, &format!("/proc/{p}/cgroup"));
@@ -143,7 +154,7 @@ fn agents_scope_starts_one_transient_unit_with_exactly_these_properties() {
         "ssa(sv)a(sa(sv))",
         SCOPE,
         "fail",
-        "5",
+        "6",
         "Slice",
         "s",
         "k2agents-open.slice",
@@ -160,6 +171,9 @@ fn agents_scope_starts_one_transient_unit_with_exactly_these_properties() {
         "TimeoutStopUSec",
         "t",
         "10000000",
+        "Description",
+        "s",
+        "K2 agent scope",
         "0",
     ]
     .iter()
@@ -178,10 +192,13 @@ fn agents_scope_caps_become_memory_max_and_cpu_quota_numbers() {
     let calls = busctl_calls(&t);
     assert_eq!(calls.len(), 1, "{calls:?}");
     let a = &calls[0];
-    assert_eq!(a[8], "7", "five fixed properties and the two caps: {a:?}");
+    assert_eq!(a[8], "8", "six fixed properties and the two caps: {a:?}");
     assert_eq!(a[11], "k2agents-fenced.slice");
-    let tail: Vec<&str> = a[a.len() - 10..].iter().map(String::as_str).collect();
-    assert_eq!(tail, ["TimeoutStopUSec", "t", "10000000", "MemoryMax", "t", "536870912", "CPUQuotaPerSecUSec", "t", "1500000", "0"]);
+    let tail: Vec<&str> = a[a.len() - 13..].iter().map(String::as_str).collect();
+    assert_eq!(
+        tail,
+        ["TimeoutStopUSec", "t", "10000000", "Description", "s", "K2 agent scope", "MemoryMax", "t", "536870912", "CPUQuotaPerSecUSec", "t", "1500000", "0"]
+    );
     for tok in a {
         assert!(!tok.contains("mem=") && !tok.contains("cpu=") && !tok.contains('%'), "no caller token passes through: {tok}");
     }
@@ -262,7 +279,7 @@ fn agents_scope_stops_the_scope_when_the_process_did_not_land_in_it() {
     let o = call_v(&t, &scope_argv("open", &[]));
     assert_ne!(o.code, exit::OK);
     assert!(o.stderr.contains("not in its scope"), "{}", o.stderr);
-    assert_eq!(systemctl_calls(&t), vec![vec!["stop".to_string(), SCOPE.to_string()]]);
+    assert_eq!(systemctl_calls(&t), vec![sv(&["stop", "--no-block", SCOPE])]);
 }
 
 /// Review R3: systemd got a number; the process in the scope is another
@@ -273,7 +290,22 @@ fn agents_scope_stops_the_scope_when_the_start_time_changed_during_the_move() {
     let o = call_v(&t, &scope_argv("open", &[]));
     assert_ne!(o.code, exit::OK);
     assert!(o.stderr.contains("start time changed during the move"), "{}", o.stderr);
-    assert_eq!(systemctl_calls(&t), vec![vec!["stop".to_string(), SCOPE.to_string()]]);
+    assert_eq!(systemctl_calls(&t), vec![sv(&["stop", "--no-block", SCOPE])]);
+}
+
+/// Review N1: the scope lists a process besides the one checked.
+#[test]
+fn agents_scope_refuses_when_the_scope_lists_another_process() {
+    let t = scope_box_full(true, &[], &[7300]);
+    let o = call_v(&t, &scope_argv("open", &[]));
+    assert_ne!(o.code, exit::OK);
+    assert!(o.stderr.contains("a process other than the one checked"), "{}", o.stderr);
+    assert_eq!(systemctl_calls(&t), vec![sv(&["stop", "--no-block", SCOPE])]);
+    let audit = t.audit.0.borrow();
+    let line = audit.iter().find(|l| l.contains("scope_member_mismatch")).expect("a loud audit line");
+    let v: serde_json::Value = serde_json::from_str(line).unwrap();
+    assert_eq!((v["ws"].clone(), v["scope"].clone()), (serde_json::json!(WS), serde_json::json!(SCOPE)), "{v}");
+    assert_eq!(v["pids"][0]["pid"], 7300, "{v}");
 }
 
 /// The old cgroup with `pids` listed and each one a process of `ruid`.
@@ -325,6 +357,41 @@ fn agents_adopt_refuses_the_daemons_own_process_or_ptyd_in_the_old_cgroup() {
     assert!(busctl_calls(&t).is_empty(), "{:?}", busctl_calls(&t));
 }
 
+/// Review N1: a held process dies before the move; its number comes back
+/// as another process with a new start time, and systemd moves that one
+/// into the scope. The check looks at the scope, so adopt refuses it.
+#[test]
+fn agents_adopt_refuses_a_number_that_died_and_came_back_as_another_process() {
+    let t = scope_box_with(true, &[7102]);
+    old_cgroup(&t, &[7101, 7102], K2_UID);
+    // Gone before the move (its held handle reports it), back after it.
+    t.procs.0.borrow_mut().dead.insert(7102);
+    let o = t.call(&["agents", "adopt", WS, SID, "open"]);
+    assert_ne!(o.code, exit::OK);
+    assert!(o.stderr.contains("\"mismatched\":[7102]"), "{}", o.stderr);
+    assert!(o.stderr.contains("surviving sessions in it end too"), "{}", o.stderr);
+    assert_eq!(systemctl_calls(&t), vec![sv(&["stop", "--no-block", SCOPE])]);
+    let audit = t.audit.0.borrow();
+    let line = audit.iter().find(|l| l.contains("scope_member_mismatch")).expect("a loud audit line");
+    let v: serde_json::Value = serde_json::from_str(line).unwrap();
+    assert_eq!(v["pids"], serde_json::json!([{"pid": 7102, "startBefore": START, "startNow": START + 7}]), "{v}");
+}
+
+/// A child a survivor forked after the move is in the scope too: adopted.
+#[test]
+fn agents_adopt_accepts_a_child_of_a_checked_process() {
+    let t = scope_box_full(true, &[], &[7150]);
+    old_cgroup(&t, &[7101], K2_UID);
+    t.procs.0.borrow_mut().procs.insert(7150, P { exe: "/bin/sh".into(), exe_owner: 0, ppid: 7101, ruid: K2_UID, sid: 7101 });
+    ok(&t.call(&["agents", "adopt", WS, SID, "open"]));
+    // An unrelated one is not.
+    let t = scope_box_full(true, &[], &[7151]);
+    old_cgroup(&t, &[7101], K2_UID);
+    t.procs.0.borrow_mut().procs.insert(7151, P { exe: "/bin/sh".into(), exe_owner: 0, ppid: 1, ruid: K2_UID, sid: 7151 });
+    let o = t.call(&["agents", "adopt", WS, SID, "open"]);
+    assert!(o.code != exit::OK && o.stderr.contains("\"mismatched\":[7151]"), "{}", o.stderr);
+}
+
 /// Review R3 for adopt: a moved number that is another process by then is
 /// refused and named; the scope is stopped.
 #[test]
@@ -334,7 +401,7 @@ fn agents_adopt_refuses_and_names_a_pid_whose_start_time_changed() {
     let o = t.call(&["agents", "adopt", WS, SID, "open"]);
     assert_ne!(o.code, exit::OK);
     assert!(o.stderr.contains("\"mismatched\":[7102]"), "{}", o.stderr);
-    assert_eq!(systemctl_calls(&t), vec![vec!["stop".to_string(), SCOPE.to_string()]]);
+    assert_eq!(systemctl_calls(&t), vec![sv(&["stop", "--no-block", SCOPE])]);
 }
 
 #[test]
@@ -359,7 +426,7 @@ fn agents_adopt_moves_every_live_process_of_the_old_cgroup_into_one_scope() {
     assert_eq!(&a[i..i + 5], ["PIDs", "au", "2", "7101", "7102"]);
     assert!(!a.contains(&"MemoryMax"), "adopt sets no caps: {a:?}");
     let j = a.iter().position(|x| *x == "TimeoutStopUSec").expect("the stop timeout at birth");
-    assert_eq!(&a[j..j + 3], ["TimeoutStopUSec", "t", "10000000"]);
+    assert_eq!(&a[j..j + 6], ["TimeoutStopUSec", "t", "10000000", "Description", "s", "K2 agent scope (adopted)"]);
 }
 
 #[test]
@@ -445,8 +512,11 @@ fn layout_with_probe(status: i32, stderr: &str) -> (T, serde_json::Value) {
     mkdirs(&t.root, &[&format!("{OPEN_DIR}/{SCOPE}"), &format!("/sys/fs/cgroup{UNIT}/agents/a-ws-old")]);
     std::fs::write(t.p(&format!("{OPEN_DIR}/{SCOPE}/cgroup.procs")), "7000\n7001\n").unwrap();
     std::fs::write(t.p(&format!("/sys/fs/cgroup{UNIT}/agents/a-ws-old/cgroup.procs")), "7200\n").unwrap();
+    mkdirs(&t.root, &["/proc/sys/kernel"]);
+    std::fs::write(t.p("/proc/sys/kernel/pid_max"), "4194304\n").unwrap();
     {
         let mut e = t.exec.0.borrow_mut();
+        e.rules.push((SYSTEMCTL.into(), "Description".into(), ExecOut { status: 0, stdout: b"K2 agent scope (adopted)\n".to_vec(), stderr: vec![] }));
         e.answers.insert(RUNUSER.into(), ExecOut { status, stdout: vec![], stderr: stderr.as_bytes().to_vec() });
         e.rules.push((SYSTEMCTL.into(), "is-active".into(), ExecOut { status: 0, stdout: b"active\n".to_vec(), stderr: vec![] }));
     }
@@ -465,7 +535,8 @@ fn agents_layout_reports_p1_refused_when_systemd_says_no() {
     assert_eq!(v["anchors"]["k2agents-fenced-anchor.service"]["active"], true, "{v}");
     assert_eq!(v["unit"]["delegate"], true, "{v}");
     assert_eq!(v["unit"]["cgroup"], UNIT, "{v}");
-    assert_eq!(v["scopes"], serde_json::json!([{"ws": WS, "id": SID, "kind": "open", "pids": 2}]), "{v}");
+    assert_eq!(v["scopes"], serde_json::json!([{"ws": WS, "id": SID, "kind": "open", "pids": 2, "adopted": true}]), "{v}");
+    assert_eq!(v["pidMax"], 4_194_304, "{v}");
     assert_eq!(v["survivors"][0]["ws"], "ws-old", "{v}");
     assert_eq!(v["survivors"][0]["pids"], 1, "{v}");
     assert_eq!(v["survivors"][0]["owner"], t.ctx.root_uid, "{v}");
@@ -481,7 +552,7 @@ fn agents_layout_reports_p1_refused_when_systemd_says_no() {
     assert_eq!(&a[13..], ["--", "true"]);
     // Report only: nothing started or stopped.
     assert!(busctl_calls(&t).iter().all(|c| !c.iter().any(|x| x == "StartTransientUnit")));
-    assert!(systemctl_calls(&t).iter().all(|c| c[0] == "is-active"), "{:?}", systemctl_calls(&t));
+    assert!(systemctl_calls(&t).iter().all(|c| c[0] == "is-active" || c[0] == "show"), "{:?}", systemctl_calls(&t));
 }
 
 #[test]

@@ -11,16 +11,22 @@
 //!   delegated. The kind's slice must exist and be root's. Then root asks
 //!   systemd (`StartTransientUnit`, mode `fail`) for
 //!   `k2-agent-<ws>:<id>.scope` with `PIDs=[pid]`, `Delegate=false`,
-//!   `CollectMode=inactive-or-failed`, a 10 s stop timeout and the caps as
-//!   numbers, and checks `/proc/<pid>/cgroup` names that scope while the
-//!   held process lives and its start time is still `<start>`; otherwise
-//!   the scope is stopped and the call refused.
+//!   `CollectMode=inactive-or-failed`, a 10 s stop timeout, a fixed
+//!   `Description` and the caps as numbers. After the move the scope's own
+//!   `cgroup.procs` (root's, read through a handle) must list exactly that
+//!   pid, still held, alive and started at `<start>`; otherwise the scope
+//!   is stopped (`--no-block`), the mismatch audited, and the call
+//!   refused.
 //! - `agents adopt <ws> <id> <open|fenced>` (daemon): every process of the
 //!   daemon's user left in a **root-owned** `<unit>/agents/a-<ws>` (a
 //!   session M1b placed that lived through an update) into one new scope.
 //!   The folder and its `cgroup.procs` are read through one handle; a
 //!   folder the server user owns is never adopted (anyone of that user
-//!   could have written into it).
+//!   could have written into it). After the move every pid the new
+//!   scope lists must be one the helper holds, alive, with the start time
+//!   read before the move (or a child such a process forked since); else
+//!   the whole scope is stopped, which ends that agent's surviving
+//!   sessions too.
 //! - `agents stop <ws> <id>` / `agents stop-all` (daemon): `systemctl stop
 //!   --no-block` for names the classifier accepts, found under the two
 //!   slices only, and an answer at once: the helper's lock is never held
@@ -39,7 +45,7 @@ use std::time::Duration;
 use k2_root_proto::agent_cgroup::{argv1, pid_ok, start_of_stat, AgentWs, AGENTS_LEAF, DAEMON_LEAF, EXEC_HELPER_ARG, PREFIX};
 use k2_root_proto::agent_scope::{
     classify_probe, may_scope_from, parse_scope_name, probe_scope_name, scope_cgroup, scope_name, slice_cgroup, start_transient_argv, unit_files,
-    Caps, Kind, Level, Probe, ScopeId, ScopeVerb, ADOPT_MAX_PIDS, OPEN_SLICE, SLEEP_PATHS, TOP_SLICE,
+    Caps, Kind, Level, Probe, ScopeId, ScopeVerb, ADOPT_MAX_PIDS, ADOPTED_DESCRIPTION, OPEN_SLICE, SLEEP_PATHS, TOP_SLICE,
 };
 use k2_root_proto::apps::ENV;
 use k2_root_proto::creds::{parse_unit_path, BUSCTL};
@@ -62,8 +68,11 @@ const STOP_WAIT_STEP: Duration = Duration::from_millis(50);
 const AFTER_KILL_WAIT: Duration = Duration::from_millis(1000);
 /// ptyd's process name (= k2-core `agents_leaf`'s check): never adopted.
 const PTYD_COMM: &str = "k2-ptyd";
-/// Most bytes read from one old cgroup's `cgroup.procs`.
+/// Most bytes read from one cgroup's `cgroup.procs`.
 const PROCS_CAP: u64 = 1 << 20;
+/// How many parents up an adopted scope's unlisted pid may be from a
+/// checked one (a child a survivor forked after the move).
+const CHILD_HOPS: usize = 64;
 
 pub fn run(ctx: &Ctx, v: &ScopeVerb, who: &Caller) -> HResult<J> {
     match v {
@@ -134,8 +143,8 @@ fn held_exec(ctx: &Ctx, unit: &str, ws: &AgentWs, pid: u32, start: u64, uid: u32
 }
 
 /// `StartTransientUnit` as root over the system bus.
-fn start_scope(ctx: &Ctx, name: &str, kind: Kind, pids: &[u32], caps: &Caps) -> HResult<()> {
-    let args = start_transient_argv(name, kind, pids, caps);
+fn start_scope(ctx: &Ctx, name: &str, kind: Kind, pids: &[u32], caps: &Caps, adopted: bool) -> HResult<()> {
+    let args = start_transient_argv(name, kind, pids, caps, adopted);
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     ctx.run_ok(BUSCTL, &refs, None)
         .map(|_| ())
@@ -157,14 +166,44 @@ fn wait_moved(ctx: &Ctx, pids: &[u32], want: &str) -> Vec<u32> {
     moved
 }
 
-/// A scope this call just made and is refusing: ended at once (its
-/// processes are this call's to end).
-fn stop_unit(ctx: &Ctx, name: &str) -> HResult<()> {
-    ctx.run_ok(SYSTEMCTL, &["stop", name], None).map(|_| ())
-}
-
+/// `systemctl stop --no-block`: every stop outside `teardown`, the failure
+/// paths too, so nothing waits for a scope to end under the helper's lock.
 fn stop_no_block(ctx: &Ctx, name: &str) -> HResult<()> {
     ctx.run_ok(SYSTEMCTL, &["stop", "--no-block", name], None).map(|_| ())
+}
+
+/// One pid the new scope lists that isn't the process the helper checked.
+struct Mismatch {
+    pid: u32,
+    start_before: Option<u64>,
+    start_now: Option<u64>,
+}
+
+/// The loud line for a scope stopped because a pid in it is not the
+/// process checked before the move (review N1): every pid with both start
+/// times, the workspace and the scope, on the helper's audit sink.
+fn audit_mismatch(ctx: &Ctx, verb: &str, ws: &AgentWs, name: &str, found: &[Mismatch]) {
+    let pids: Vec<J> = found.iter().map(|m| json!({ "pid": m.pid, "startBefore": m.start_before, "startNow": m.start_now })).collect();
+    let line = json!({
+        "ns": "agents",
+        "verb": format!("agents {verb}"),
+        "event": "scope_member_mismatch",
+        "result": "scope_stopped",
+        "ws": ws.as_str(),
+        "scope": name,
+        "pids": pids,
+    });
+    ctx.audit.line(&line.to_string());
+}
+
+/// The new scope's members, read through a handle (no link followed) on
+/// its root-owned cgroup; `None` when it can't be read or isn't root's.
+fn scope_members(ctx: &Ctx, kind: Kind, ws: &AgentWs, id: &ScopeId) -> Option<Vec<u32>> {
+    let c = read_cgroup(ctx, &cg(&scope_cgroup(kind, ws, id))).ok()??;
+    if !c.root_owned(ctx) {
+        return None;
+    }
+    c.pids.iter().map(|p| pid_ok(p)).collect()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -174,34 +213,55 @@ fn scope(ctx: &Ctx, who: &Caller, ws: &AgentWs, id: &ScopeId, pid: u32, start: u
     require_slice(ctx, kind)?;
     let name = scope_name(ws, id);
     let want = scope_cgroup(kind, ws, id);
-    start_scope(ctx, &name, kind, &[pid], caps)?;
+    start_scope(ctx, &name, kind, &[pid], caps, false)?;
     let placed = wait_moved(ctx, &[pid], &want) == [pid];
-    // systemd got a number: the process in the scope must still be the one
-    // that started at `start` (review R3).
-    let same = placed && start_now(ctx, pid) == Some(start);
-    if !placed || !held.alive() || !same {
-        let _ = stop_unit(ctx, &name);
-        return Err(Fail::state(if !placed {
-            "agents scope refused: the process is not in its scope after the start (scope stopped)"
+    if !placed {
+        let _ = stop_no_block(ctx, &name);
+        return Err(Fail::state("agents scope refused: the process is not in its scope after the start (scope stopped)"));
+    }
+    // systemd got a number (review R3, N1): the scope must hold exactly the
+    // process checked, still alive and started at `start`.
+    let members = scope_members(ctx, kind, ws, id);
+    let mut found: Vec<Mismatch> = Vec::new();
+    match &members {
+        None => found.push(Mismatch { pid, start_before: Some(start), start_now: None }),
+        Some(list) => {
+            for p in list {
+                let now = start_now(ctx, *p);
+                if *p != pid || !held.alive() || now != Some(start) {
+                    found.push(Mismatch { pid: *p, start_before: (*p == pid).then_some(start), start_now: now });
+                }
+            }
+            if !list.contains(&pid) {
+                found.push(Mismatch { pid, start_before: Some(start), start_now: start_now(ctx, pid) });
+            }
+        }
+    }
+    if !found.is_empty() {
+        let _ = stop_no_block(ctx, &name);
+        audit_mismatch(ctx, "scope", ws, &name, &found);
+        return Err(Fail::state(if members.is_none() {
+            "agents scope refused: the scope's member list can't be read as root's (scope stopped)"
         } else if !held.alive() {
             "agents scope refused: the process exited during the move (scope stopped)"
-        } else {
+        } else if found.iter().all(|m| m.pid == pid) {
             "agents scope refused: the process's start time changed during the move (scope stopped)"
+        } else {
+            "agents scope refused: the scope holds a process other than the one checked (scope stopped)"
         }));
     }
     Ok(json!({ "ok": true, "cgroup": want, "pid": pid, "scope": name, "kind": kind.as_str() }))
 }
 
-/// An old-layout cgroup as read through one handle: who owns the folder and
-/// its `cgroup.procs` (each `fstat`ed on the open handle), and the pids
-/// listed.
-struct OldCgroup {
+/// A cgroup as read through one handle: who owns the folder and its
+/// `cgroup.procs` (each `fstat`ed on the open handle), and the pids listed.
+struct CgroupRead {
     owner: u32,
     procs_owner: u32,
     pids: Vec<String>,
 }
 
-impl OldCgroup {
+impl CgroupRead {
     fn root_owned(&self, ctx: &Ctx) -> bool {
         self.owner == ctx.root_uid && self.procs_owner == ctx.root_uid
     }
@@ -210,7 +270,7 @@ impl OldCgroup {
 /// Open `abs` (every component without following a link, `O_DIRECTORY`),
 /// `fstat` it, open `cgroup.procs` beneath that handle (no link), `fstat`
 /// it and read it. `Ok(None)` when the folder is not there.
-fn read_old(ctx: &Ctx, abs: &str) -> HResult<Option<OldCgroup>> {
+fn read_cgroup(ctx: &Ctx, abs: &str) -> HResult<Option<CgroupRead>> {
     let d = match ctx.dir(abs) {
         Ok(d) => d,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -223,7 +283,7 @@ fn read_old(ctx: &Ctx, abs: &str) -> HResult<Option<OldCgroup>> {
         .ok_or_else(|| Fail::state("agents adopt refused: the old-layout cgroup has no cgroup.procs"))?;
     let mut text = String::new();
     f.take(PROCS_CAP).read_to_string(&mut text).map_err(|e| Fail::io_err("read the old cgroup's cgroup.procs", e))?;
-    Ok(Some(OldCgroup { owner: st.st_uid, procs_owner: pst.st_uid, pids: text.split_whitespace().map(str::to_string).collect() }))
+    Ok(Some(CgroupRead { owner: st.st_uid, procs_owner: pst.st_uid, pids: text.split_whitespace().map(str::to_string).collect() }))
 }
 
 /// Pids that are never adopted: the caller (the daemon's main process),
@@ -241,7 +301,7 @@ fn adopt(ctx: &Ctx, who: &Caller, ws: &AgentWs, id: &ScopeId, kind: Kind) -> HRe
     let (_, unit, uid) = daemon_unit(ctx, who)?;
     require_slice(ctx, kind)?;
     let old_rel = format!("{unit}/{AGENTS_LEAF}/{}", ws.cgroup_name());
-    let old = read_old(ctx, &cg(&old_rel))?.ok_or_else(|| Fail::state("agents adopt refused: no old-layout cgroup for this workspace"))?;
+    let old = read_cgroup(ctx, &cg(&old_rel))?.ok_or_else(|| Fail::state("agents adopt refused: no old-layout cgroup for this workspace"))?;
     // Review R1: only a cgroup root made (M1b's helper-placed ones). One
     // the server user owns may hold anything that user put there.
     if !old.root_owned(ctx) {
@@ -283,22 +343,26 @@ fn adopt(ctx: &Ctx, who: &Caller, ws: &AgentWs, id: &ScopeId, kind: Kind) -> HRe
     let pids: Vec<u32> = held.iter().map(|(p, _, _)| *p).collect();
     let name = scope_name(ws, id);
     let want = scope_cgroup(kind, ws, id);
-    start_scope(ctx, &name, kind, &pids, &Caps::default())?;
+    start_scope(ctx, &name, kind, &pids, &Caps::default(), true)?;
     let alive: Vec<u32> = held.iter().filter(|(_, h, _)| h.alive()).map(|(p, _, _)| *p).collect();
     let moved = wait_moved(ctx, &alive, &want);
     if moved.is_empty() {
-        let _ = stop_unit(ctx, &name);
+        let _ = stop_no_block(ctx, &name);
         return Err(Fail::state("agents adopt refused: no process is in the new scope after the start (scope stopped)"));
     }
-    // Review R3: a number systemd moved must still be the process read
-    // before the move.
-    let mismatched: Vec<u32> =
-        held.iter().filter(|(p, _, s)| moved.contains(p) && start_now(ctx, *p) != Some(*s)).map(|(p, _, _)| *p).collect();
-    if !mismatched.is_empty() {
-        let _ = stop_unit(ctx, &name);
-        let list: Vec<String> = mismatched.iter().map(u32::to_string).collect();
+    // Review R3, N1: check the scope, not our list. Every pid it holds must
+    // be one the helper held, still alive, with the start time read before
+    // the move; or a child one of those forked since (its parent chain
+    // reaches a checked pid inside the scope). A number that died before
+    // the move and came back as another process is caught here too.
+    let found = adopt_mismatches(ctx, &held, scope_members(ctx, kind, ws, id));
+    if !found.is_empty() {
+        let _ = stop_no_block(ctx, &name);
+        audit_mismatch(ctx, "adopt", ws, &name, &found);
+        let list: Vec<String> = found.iter().map(|m| m.pid.to_string()).collect();
         return Err(Fail::state(format!(
-            "agents adopt refused: \"mismatched\":[{}] (start time changed during the move; scope stopped)",
+            "agents adopt refused: \"mismatched\":[{}] (not the processes checked before the move); the scope is stopped, \
+             so this agent's surviving sessions in it end too",
             list.join(",")
         )));
     }
@@ -315,6 +379,48 @@ fn adopt(ctx: &Ctx, who: &Caller, ws: &AgentWs, id: &ScopeId, kind: Kind) -> HRe
         "mismatched": [],
         "left": left,
     }))
+}
+
+/// The adopted scope's members that aren't the processes checked before
+/// the move (see `adopt`). Unreadable members are one mismatch (pid 0).
+fn adopt_mismatches(ctx: &Ctx, held: &[(u32, Box<dyn ProcHandle>, u64)], members: Option<Vec<u32>>) -> Vec<Mismatch> {
+    let Some(list) = members else {
+        return vec![Mismatch { pid: 0, start_before: None, start_now: None }];
+    };
+    let checked: Vec<u32> = held
+        .iter()
+        .filter(|(p, h, s)| list.contains(p) && h.alive() && start_now(ctx, *p) == Some(*s))
+        .map(|(p, _, _)| *p)
+        .collect();
+    let mut found = Vec::new();
+    for p in &list {
+        if checked.contains(p) {
+            continue;
+        }
+        let before = held.iter().find(|(q, _, _)| q == p).map(|(_, _, s)| *s);
+        // A held number that failed the check is never "a child".
+        let child = before.is_none() && {
+            let mut cur = *p as i32;
+            let mut ok = false;
+            for _ in 0..CHILD_HOPS {
+                match ctx.procs.ppid_of(cur) {
+                    Some(pp) if pp > 1 && list.contains(&(pp as u32)) => {
+                        if checked.contains(&(pp as u32)) {
+                            ok = true;
+                            break;
+                        }
+                        cur = pp;
+                    }
+                    _ => break,
+                }
+            }
+            ok
+        };
+        if !child {
+            found.push(Mismatch { pid: *p, start_before: before, start_now: start_now(ctx, *p) });
+        }
+    }
+    found
 }
 
 /// Every agent scope under both slices: (kind, ws, id, its cgroup dir).
@@ -482,8 +588,26 @@ fn layout(ctx: &Ctx, who: &Caller) -> HResult<J> {
     let unit_owner = owner_of(&unit_dir).ok();
     let scopes: Vec<J> = live_scopes(ctx)
         .into_iter()
-        .map(|(k, ws, id, d)| json!({ "ws": ws.as_str(), "id": id.as_str(), "kind": k.as_str(), "pids": pids_in(&d).len() }))
+        .map(|(k, ws, id, d)| {
+            let name = scope_name(&ws, &id);
+            let desc = ctx
+                .exec
+                .run(SYSTEMCTL, &["show".to_string(), "-p".to_string(), "Description".to_string(), "--value".to_string(), name], None)
+                .ok()
+                .filter(|o| o.status == 0)
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+            json!({
+                "ws": ws.as_str(),
+                "id": id.as_str(),
+                "kind": k.as_str(),
+                "pids": pids_in(&d).len(),
+                "adopted": desc.as_deref() == Some(ADOPTED_DESCRIPTION),
+            })
+        })
         .collect();
+    // The pid range (review N1): with the old 32768 a number comes back
+    // soon enough to matter.
+    let pid_max: Option<u64> = std::fs::read_to_string(ctx.p("/proc/sys/kernel/pid_max")).ok().and_then(|t| t.trim().parse().ok());
     let mut survivors = Vec::new();
     if let Ok(rd) = std::fs::read_dir(unit_dir.join(AGENTS_LEAF)) {
         let mut names: Vec<String> = rd.flatten().filter_map(|e| e.file_name().into_string().ok()).collect();
@@ -491,7 +615,7 @@ fn layout(ctx: &Ctx, who: &Caller) -> HResult<J> {
         for n in names {
             let Some(ws) = n.strip_prefix(PREFIX).and_then(AgentWs::parse) else { continue };
             let rel = format!("{unit}/{AGENTS_LEAF}/{n}");
-            let Ok(Some(old)) = read_old(ctx, &cg(&rel)) else { continue };
+            let Ok(Some(old)) = read_cgroup(ctx, &cg(&rel)) else { continue };
             if !old.pids.is_empty() {
                 survivors.push(json!({
                     "ws": ws.as_str(),
@@ -519,6 +643,7 @@ fn layout(ctx: &Ctx, who: &Caller) -> HResult<J> {
         },
         "scopes": scopes,
         "survivors": survivors,
+        "pidMax": pid_max,
         "p1": p1.as_str(),
         "p1Detail": if p1 == Probe::Refused { String::new() } else { p1_err },
     }))

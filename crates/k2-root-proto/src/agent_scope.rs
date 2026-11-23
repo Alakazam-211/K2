@@ -49,6 +49,11 @@ pub const SLEEP_PATHS: &[&str] = &["/usr/bin/sleep", "/bin/sleep"];
 /// Every scope's `TimeoutStopUSec` (10 s): how long systemd waits after
 /// SIGTERM before SIGKILL when a scope is stopped.
 pub const STOP_TIMEOUT_USEC: u64 = 10_000_000;
+/// A scope's `Description` at birth: fixed text, never the caller's. An
+/// adopted scope says so, so `agents layout` can show the one way a
+/// process reached a scope without `agents scope`'s checks on it.
+pub const SCOPE_DESCRIPTION: &str = "K2 agent scope";
+pub const ADOPTED_DESCRIPTION: &str = "K2 agent scope (adopted)";
 /// Most pids one `agents adopt` moves (one old-layout cgroup).
 pub const ADOPT_MAX_PIDS: usize = 4096;
 /// `mem=` bounds, MB.
@@ -219,10 +224,10 @@ impl Caps {
 /// The `busctl` argv (after the program) that asks systemd, as root, for
 /// one transient scope: `StartTransientUnit(name, "fail", [Slice, PIDs,
 /// Delegate=false, CollectMode=inactive-or-failed, TimeoutStopUSec=10 s,
-/// caps…], [])`. Every
-/// value is a validated part or a number; nothing from the caller passes
-/// as a property.
-pub fn start_transient_argv(name: &str, kind: Kind, pids: &[u32], caps: &Caps) -> Vec<String> {
+/// Description (fixed: [`SCOPE_DESCRIPTION`], or [`ADOPTED_DESCRIPTION`] when
+/// `adopted`), caps…], [])`. Every value is a validated part, a fixed
+/// string or a number; nothing from the caller passes as a property.
+pub fn start_transient_argv(name: &str, kind: Kind, pids: &[u32], caps: &Caps, adopted: bool) -> Vec<String> {
     let mut props: Vec<Vec<String>> = vec![
         vec!["Slice".into(), "s".into(), kind.slice().into()],
         {
@@ -233,6 +238,7 @@ pub fn start_transient_argv(name: &str, kind: Kind, pids: &[u32], caps: &Caps) -
         vec!["Delegate".into(), "b".into(), "false".into()],
         vec!["CollectMode".into(), "s".into(), "inactive-or-failed".into()],
         vec!["TimeoutStopUSec".into(), "t".into(), STOP_TIMEOUT_USEC.to_string()],
+        vec!["Description".into(), "s".into(), (if adopted { ADOPTED_DESCRIPTION } else { SCOPE_DESCRIPTION }).into()],
     ];
     if let Some(b) = caps.memory_max() {
         props.push(vec!["MemoryMax".into(), "t".into(), b.to_string()]);

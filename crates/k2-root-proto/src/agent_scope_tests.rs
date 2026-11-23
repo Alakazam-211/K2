@@ -176,6 +176,8 @@ fn agent_scope_caps_take_bounded_numbers_only() {
 
 #[test]
 fn agent_scope_start_transient_argv_is_exact() {
+    // k2-core compares a scope's Description with these, byte for byte.
+    assert_eq!((SCOPE_DESCRIPTION, ADOPTED_DESCRIPTION), ("K2 agent scope", "K2 agent scope (adopted)"));
     let n = "k2-agent-abc:0123456789abcdef.scope";
     let want: Vec<&str> = vec![
         "call",
@@ -186,7 +188,7 @@ fn agent_scope_start_transient_argv_is_exact() {
         "ssa(sv)a(sa(sv))",
         n,
         "fail",
-        "5",
+        "6",
         "Slice",
         "s",
         "k2agents-open.slice",
@@ -203,10 +205,13 @@ fn agent_scope_start_transient_argv_is_exact() {
         "TimeoutStopUSec",
         "t",
         "10000000",
+        "Description",
+        "s",
+        "K2 agent scope",
         "0",
     ];
-    assert_eq!(start_transient_argv(n, Kind::Open, &[4242], &Caps::default()), want);
-    let capped = start_transient_argv(n, Kind::Fenced, &[7, 8], &Caps { mem_mb: Some(512), cpu_pct: Some(150) });
+    assert_eq!(start_transient_argv(n, Kind::Open, &[4242], &Caps::default(), false), want);
+    let capped = start_transient_argv(n, Kind::Fenced, &[7, 8], &Caps { mem_mb: Some(512), cpu_pct: Some(150) }, true);
     let want: Vec<&str> = vec![
         "call",
         "org.freedesktop.systemd1",
@@ -216,7 +221,7 @@ fn agent_scope_start_transient_argv_is_exact() {
         "ssa(sv)a(sa(sv))",
         n,
         "fail",
-        "7",
+        "8",
         "Slice",
         "s",
         "k2agents-fenced.slice",
@@ -234,6 +239,9 @@ fn agent_scope_start_transient_argv_is_exact() {
         "TimeoutStopUSec",
         "t",
         "10000000",
+        "Description",
+        "s",
+        "K2 agent scope (adopted)",
         "MemoryMax",
         "t",
         "536870912",
